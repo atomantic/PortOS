@@ -28,7 +28,9 @@ import Drawer from '../components/Drawer';
 import { ImageGenTab } from '../components/settings/ImageGenTab';
 import MediaCard from '../components/media/MediaCard';
 import MediaLightbox from '../components/media/MediaLightbox';
+import StylePresetPicker from '../components/media/StylePresetPicker';
 import { normalizeVideo } from '../components/media/normalize';
+import { composeStyledPrompt } from '../lib/composeStyledPrompt';
 import {
   Film, Sparkles, Settings as SettingsIcon, RefreshCw, AlertTriangle,
   Dice5, X, Upload, Type, Image as ImageIcon, GitBranch, ListPlus,
@@ -100,6 +102,7 @@ export default function VideoGen() {
   const [mode, setMode] = useState(incomingSourceImage ? 'image' : 'text');
   const [prompt, setPrompt] = useState(incomingPrompt || '');
   const [negativePrompt, setNegativePrompt] = useState(incomingNegativePrompt || '');
+  const [stylePreset, setStylePreset] = useState(null);
   const [modelId, setModelId] = useState('');
   const [width, setWidth] = useState(768);
   const [height, setHeight] = useState(512);
@@ -328,23 +331,26 @@ export default function VideoGen() {
 
   // Snapshot the current form into a generate-payload. Used both by the
   // inline Generate button and by enqueue, so the two paths stay in lockstep.
-  const buildGeneratePayload = () => ({
-    prompt: prompt.trim(),
-    negativePrompt: negativePrompt.trim() || '',
-    modelId,
-    width, height,
-    numFrames,
-    fps,
-    steps: steps || '',
-    guidanceScale: guidanceScale || '',
-    seed: seed || '',
-    tiling,
-    disableAudio: disableAudio ? 'true' : 'false',
-    mode,
-    sourceImageFile: (mode === 'image' || mode === 'fflf' || mode === 'extend') ? (sourceImageFile || '') : '',
-    sourceImage: (mode === 'image' || mode === 'fflf') ? (sourceImageUpload || '') : '',
-    lastImageFile: mode === 'fflf' ? (lastImageFile || '') : '',
-  });
+  const buildGeneratePayload = () => {
+    const composed = composeStyledPrompt(prompt, negativePrompt, stylePreset);
+    return {
+      prompt: composed.prompt,
+      negativePrompt: composed.negativePrompt,
+      modelId,
+      width, height,
+      numFrames,
+      fps,
+      steps: steps || '',
+      guidanceScale: guidanceScale || '',
+      seed: seed || '',
+      tiling,
+      disableAudio: disableAudio ? 'true' : 'false',
+      mode,
+      sourceImageFile: (mode === 'image' || mode === 'fflf' || mode === 'extend') ? (sourceImageFile || '') : '',
+      sourceImage: (mode === 'image' || mode === 'fflf') ? (sourceImageUpload || '') : '',
+      lastImageFile: mode === 'fflf' ? (lastImageFile || '') : '',
+    };
+  };
 
   // Run a single payload through the SSE pipeline. Returns a promise that
   // resolves when the job completes (or rejects on error / cancel). Shared
@@ -627,6 +633,11 @@ export default function VideoGen() {
 
       <form onSubmit={handleGenerate} className="grid grid-cols-1 lg:grid-cols-[3fr_2fr] gap-4">
         <div className="bg-port-card border border-port-border rounded-xl p-4 space-y-3">
+          <StylePresetPicker
+            value={stylePreset?.id || ''}
+            onChange={setStylePreset}
+            disabled={generating}
+          />
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-medium text-gray-400 mb-1">Prompt</label>

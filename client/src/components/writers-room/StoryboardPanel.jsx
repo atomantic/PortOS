@@ -8,10 +8,11 @@ import toast from '../ui/Toast';
 import {
   listWritersRoomAnalyses,
   getWritersRoomAnalysis,
-  listWritersRoomStylePresets,
 } from '../../services/apiWritersRoom';
-import { getSettings, updateSettings } from '../../services/apiSystem';
+import { getSettings, updateSettings, listImageStylePresets } from '../../services/apiSystem';
 import { listImageModels, cancelImageGen } from '../../services/apiImageVideo';
+import BackendChipStrip from '../media/BackendChipStrip';
+import { deriveAvailableBackends, IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
 import { timeAgo } from '../../utils/formatters';
 import useMounted from '../../hooks/useMounted';
 import SceneCard from './SceneCard';
@@ -28,6 +29,16 @@ import {
 } from './sceneCardHelpers';
 
 const SCRIPT_STAGE = 'writers-room-script';
+
+function groupPresetsByCategory(presets) {
+  const map = new Map();
+  for (const p of presets) {
+    const cat = p.category || 'Other';
+    if (!map.has(cat)) map.set(cat, []);
+    map.get(cat).push(p);
+  }
+  return Array.from(map.entries());
+}
 
 export const STORYBOARD_TAB = {
   CHARACTERS: 'characters',
@@ -74,7 +85,14 @@ export default function StoryboardPanel({
   const [imageCfg, setImageCfg] = useState(WR_IMAGE_DEFAULTS);
   const [models, setModels] = useState([]);
   const [stylePresets, setStylePresets] = useState([]);
+  const [sysSettings, setSysSettings] = useState(null);
   const mountedRef = useMounted();
+  // External SD-API doesn't emit the SSE progress that SceneCard's socket bus
+  // consumes — restrict storyboard renders to Local + Codex.
+  const availableBackends = useMemo(
+    () => deriveAvailableBackends(sysSettings, { excludeExternal: true }),
+    [sysSettings],
+  );
 
   const imageStyle = work.imageStyle || EMPTY_IMAGE_STYLE;
   const activeDraft = (work.drafts || []).find((d) => d.id === work.activeDraftVersionId);
@@ -84,10 +102,11 @@ export default function StoryboardPanel({
     Promise.all([
       getSettings().catch(() => ({})),
       listImageModels().catch(() => []),
-      listWritersRoomStylePresets().catch(() => []),
-    ]).then(([sysSettings, modelList, presets]) => {
+      listImageStylePresets().catch(() => []),
+    ]).then(([s, modelList, presets]) => {
       if (cancelled) return;
-      setImageCfg(readWrImageSettings(sysSettings));
+      setSysSettings(s);
+      setImageCfg(readWrImageSettings(s));
       setModels(Array.isArray(modelList) ? modelList : []);
       setStylePresets(Array.isArray(presets) ? presets : []);
     });
@@ -319,6 +338,7 @@ export default function StoryboardPanel({
           <ConfigTab
             imageCfg={imageCfg}
             models={models}
+            availableBackends={availableBackends}
             onCfgChange={persistCfg}
             stylePresets={stylePresets}
             imageStyle={imageStyle}
@@ -633,7 +653,7 @@ function BoardsTab({
 }
 
 // ─── Config (image gen + style + Adapt LLM) ───────────────────────────────
-function ConfigTab({ imageCfg, models, onCfgChange, stylePresets, imageStyle, onStyleChange }) {
+function ConfigTab({ imageCfg, models, availableBackends, onCfgChange, stylePresets, imageStyle, onStyleChange }) {
   return (
     <div className="px-3 py-3 space-y-4">
       <section className="space-y-1.5">
@@ -651,7 +671,7 @@ function ConfigTab({ imageCfg, models, onCfgChange, stylePresets, imageStyle, on
       </section>
       <section className="space-y-1.5 pt-3 border-t border-port-border">
         <div className="text-[12px] font-semibold text-gray-200">Image generation</div>
-        <ImageGenSettingsRow cfg={imageCfg} models={models} onChange={onCfgChange} />
+        <ImageGenSettingsRow cfg={imageCfg} models={models} availableBackends={availableBackends} onChange={onCfgChange} />
       </section>
     </div>
   );
@@ -966,11 +986,13 @@ function WorldStyleRow({ value, presets, onChange }) {
         className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-[11px] text-gray-200"
       >
         <option value={STYLE_ID.NONE}>None — use scene visualPrompt only</option>
-        <optgroup label="Presets">
-          {presets.map((p) => (
-            <option key={p.id} value={p.id}>{p.label}</option>
-          ))}
-        </optgroup>
+        {groupPresetsByCategory(presets).map(([cat, items]) => (
+          <optgroup key={cat} label={cat}>
+            {items.map((p) => (
+              <option key={p.id} value={p.id}>{p.label}</option>
+            ))}
+          </optgroup>
+        ))}
         <option value={STYLE_ID.CUSTOM}>Custom</option>
       </select>
       {value.presetId !== STYLE_ID.NONE && (
@@ -1016,27 +1038,52 @@ const RES_PRESETS = [
   { label: '1024×1024 (1:1)', width: 1024, height: 1024 },
 ];
 
-function ImageGenSettingsRow({ cfg, models, onChange }) {
+function ImageGenSettingsRow({ cfg, models, availableBackends = [], onChange }) {
   const presetMatch = RES_PRESETS.find((p) => p.width === cfg.width && p.height === cfg.height);
   const currentModel = models.find((m) => m.id === cfg.modelId);
   const inputCls = 'w-full mt-0.5 bg-port-bg border border-port-border rounded px-2 py-1 text-[11px] text-gray-200 focus:border-port-accent outline-none';
   const labelCls = 'text-[9px] uppercase tracking-wider text-gray-500';
+  // Codex's built-in image_gen tool picks model/steps/seed internally — hide
+  // those knobs in codex mode so the user doesn't tune values that won't apply.
+  const isCodexMode = cfg.mode === IMAGE_GEN_MODE.CODEX;
   return (
     <div className="space-y-1.5">
+      {availableBackends.length > 1 && (
+        <div>
+          <span className={labelCls}>Backend</span>
+          <div className="mt-0.5">
+            <BackendChipStrip
+              availableBackends={availableBackends}
+              value={cfg.mode}
+              onChange={(id) => onChange({ ...cfg, mode: id })}
+              size="sm"
+              ariaLabel="Image gen backend"
+              titlePrefix="Render storyboard scenes via"
+            />
+          </div>
+          {isCodexMode && (
+            <p className="text-[9px] text-gray-500 mt-1">
+              Codex's <code className="text-gray-400">$imagegen</code> skill renders via your logged-in Codex session. Model, steps, and seed are picked by Codex itself.
+            </p>
+          )}
+        </div>
+      )}
       <div className="grid grid-cols-2 gap-1.5">
-        <label className="block">
-          <span className={labelCls}>Image model</span>
-          <select
-            value={cfg.modelId}
-            onChange={(e) => onChange({ ...cfg, modelId: e.target.value })}
-            className={inputCls}
-          >
-            {models.length === 0 && <option value={cfg.modelId}>{cfg.modelId}</option>}
-            {models.map((m) => (
-              <option key={m.id} value={m.id}>{m.name || m.id}</option>
-            ))}
-          </select>
-        </label>
+        {!isCodexMode && (
+          <label className="block">
+            <span className={labelCls}>Image model</span>
+            <select
+              value={cfg.modelId}
+              onChange={(e) => onChange({ ...cfg, modelId: e.target.value })}
+              className={inputCls}
+            >
+              {models.length === 0 && <option value={cfg.modelId}>{cfg.modelId}</option>}
+              {models.map((m) => (
+                <option key={m.id} value={m.id}>{m.name || m.id}</option>
+              ))}
+            </select>
+          </label>
+        )}
         <label className="block">
           <span className={labelCls}>Resolution</span>
           <select
@@ -1055,41 +1102,43 @@ function ImageGenSettingsRow({ cfg, models, onChange }) {
           </select>
         </label>
       </div>
-      <div className="grid grid-cols-2 gap-1.5">
-        <label className="block">
-          <span className={labelCls}>
-            Steps {currentModel?.steps && <span className="normal-case text-gray-600">(default {currentModel.steps})</span>}
-          </span>
-          <input
-            type="number" min={1} max={150}
-            value={cfg.steps}
-            onChange={(e) => onChange({ ...cfg, steps: e.target.value })}
-            placeholder={String(currentModel?.steps || 'auto')}
-            className={inputCls}
-          />
-        </label>
-        <label className="block">
-          <span className={labelCls}>Seed</span>
-          <div className="flex items-stretch gap-1 mt-0.5">
+      {!isCodexMode && (
+        <div className="grid grid-cols-2 gap-1.5">
+          <label className="block">
+            <span className={labelCls}>
+              Steps {currentModel?.steps && <span className="normal-case text-gray-600">(default {currentModel.steps})</span>}
+            </span>
             <input
-              type="number"
-              value={cfg.seed}
-              onChange={(e) => onChange({ ...cfg, seed: e.target.value })}
-              placeholder="random"
-              className="flex-1 bg-port-bg border border-port-border rounded px-2 py-1 text-[11px] text-gray-200 focus:border-port-accent outline-none"
+              type="number" min={1} max={150}
+              value={cfg.steps}
+              onChange={(e) => onChange({ ...cfg, steps: e.target.value })}
+              placeholder={String(currentModel?.steps || 'auto')}
+              className={inputCls}
             />
-            <button
-              type="button"
-              onClick={() => onChange({ ...cfg, seed: randomSeed() })}
-              className="px-1.5 text-gray-500 hover:text-port-accent border border-port-border rounded"
-              title="Randomize seed"
-              aria-label="Randomize seed"
-            >
-              <Dice5 size={11} />
-            </button>
-          </div>
-        </label>
-      </div>
+          </label>
+          <label className="block">
+            <span className={labelCls}>Seed</span>
+            <div className="flex items-stretch gap-1 mt-0.5">
+              <input
+                type="number"
+                value={cfg.seed}
+                onChange={(e) => onChange({ ...cfg, seed: e.target.value })}
+                placeholder="random"
+                className="flex-1 bg-port-bg border border-port-border rounded px-2 py-1 text-[11px] text-gray-200 focus:border-port-accent outline-none"
+              />
+              <button
+                type="button"
+                onClick={() => onChange({ ...cfg, seed: randomSeed() })}
+                className="px-1.5 text-gray-500 hover:text-port-accent border border-port-border rounded"
+                title="Randomize seed"
+                aria-label="Randomize seed"
+              >
+                <Dice5 size={11} />
+              </button>
+            </div>
+          </label>
+        </div>
+      )}
     </div>
   );
 }

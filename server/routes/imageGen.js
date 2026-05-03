@@ -30,8 +30,11 @@ import {
 } from '../lib/pythonSetup.js';
 import { PATHS, ensureDir } from '../lib/fileUtils.js';
 import { join, basename, resolve as resolvePath, sep as PATH_SEP } from 'node:path';
+import { STYLE_PRESETS } from '../lib/writersRoomStylePresets.js';
 
 const router = Router();
+
+router.get('/style-presets', (_req, res) => res.json(STYLE_PRESETS));
 
 const generateSchema = z.object({
   prompt: z.string().min(1).max(2000),

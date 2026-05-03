@@ -2,9 +2,6 @@ import { request } from './apiCore.js';
 
 const enc = encodeURIComponent;
 
-// Style presets — curated reference data for the world-style picker.
-export const listWritersRoomStylePresets = () => request('/writers-room/style-presets');
-
 // Folders
 export const listWritersRoomFolders = () => request('/writers-room/folders');
 export const createWritersRoomFolder = (data) => request('/writers-room/folders', {

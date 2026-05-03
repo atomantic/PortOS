@@ -127,6 +127,19 @@ export const generateImage = (data) => request('/image-gen/generate', {
   method: 'POST',
   body: JSON.stringify(data)
 });
+// Curated style presets — code-static on the server, so cache the in-flight
+// promise and reuse it for the lifetime of the page. Eliminates the repeat
+// fetch when the user navigates ImageGen → VideoGen → Writers Room.
+let stylePresetsPromise = null;
+export const listImageStylePresets = () => {
+  if (!stylePresetsPromise) {
+    stylePresetsPromise = request('/image-gen/style-presets').catch((err) => {
+      stylePresetsPromise = null;
+      throw err;
+    });
+  }
+  return stylePresetsPromise;
+};
 export const generateAvatar = (data) => request('/image-gen/avatar', {
   method: 'POST',
   body: JSON.stringify(data)
