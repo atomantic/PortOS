@@ -888,7 +888,7 @@ export default function Layout() {
             location.pathname.startsWith('/city') ||
             /^\/apps\/[^/]+/.test(location.pathname);
           return (
-            <main id="main-content" className={`flex-1 ${isFullWidth ? 'overflow-hidden' : 'overflow-auto p-4 md:p-6'}`}>
+            <main id="main-content" className={`flex-1 min-h-0 ${isFullWidth ? 'relative overflow-hidden' : 'overflow-auto p-4 md:p-6'}`}>
               <Outlet />
             </main>
           );
