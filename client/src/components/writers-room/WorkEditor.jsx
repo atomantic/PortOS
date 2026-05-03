@@ -228,7 +228,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   // back out by simply not saving. Characters refreshes the bible cache so
   // the storyboard's prompt enrichment picks up new profiles immediately.
   const runAnalysis = useCallback(async (kind) => {
-    if (runningKind) return;
+    if (runningKind) return false;
     setRunningKind(kind);
     const snapshot = await runWritersRoomAnalysis(work.id, { kind }).catch((err) => {
       if (mountedRef.current) toast.error(`${ANALYSIS_LABELS[kind] || kind} failed: ${err.message}`);
@@ -236,13 +236,13 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
     });
     if (!mountedRef.current) {
       setRunningKind(null);
-      return;
+      return false;
     }
     setRunningKind(null);
-    if (!snapshot) return;
+    if (!snapshot) return false;
     if (snapshot.status === 'failed') {
       toast.error(`${ANALYSIS_LABELS[kind] || kind} failed: ${snapshot.error || 'unknown'}`);
-      return;
+      return false;
     }
     toast.success(`${ANALYSIS_LABELS[kind] || kind} complete`);
     if (kind === 'characters' && Array.isArray(snapshot.result?.mergedProfiles)) {
@@ -255,7 +255,20 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
       setBody(snapshot.result.formattedBody);
       toast('Format applied to draft buffer — save to persist', { icon: '💾' });
     }
+    return true;
   }, [runningKind, work.id]);
+
+  // Sequential pipeline for the 3-step storyboard setup. Run characters →
+  // settings → script in order so each later step has the earlier bible to
+  // reference. Bails on first failure (the failed step's toast already fired).
+  const runFullPipeline = useCallback(async () => {
+    if (runningKind) return;
+    const okChars = await runAnalysis('characters');
+    if (!okChars || !mountedRef.current) return;
+    const okSettings = await runAnalysis('settings');
+    if (!okSettings || !mountedRef.current) return;
+    await runAnalysis('script');
+  }, [runAnalysis, runningKind]);
 
   const applyFormatText = (text) => {
     setBody(text);
@@ -509,7 +522,11 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
             onJumpToScene={jumpToScene}
             onDebug={handleDebug}
             onRunAdapt={() => runAnalysis(ANALYSIS_KIND.SCRIPT)}
+            onRunCharacters={() => runAnalysis(ANALYSIS_KIND.CHARACTERS)}
+            onRunSettings={() => runAnalysis(ANALYSIS_KIND.SETTINGS)}
+            onRunFullPipeline={runFullPipeline}
             runningAdapt={runningKind === ANALYSIS_KIND.SCRIPT}
+            runningKind={runningKind}
             readingTheme={readingTheme}
             activeSceneId={activeSceneId}
             onStyleChange={commitImageStyle}
