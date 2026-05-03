@@ -860,15 +860,6 @@ export default function Layout() {
             </NavLink>
             <ThemeModeToggle />
             <VoiceToggleButton />
-            <NotificationDropdown
-              notifications={notifications}
-              unreadCount={unreadCount}
-              onMarkAsRead={markAsRead}
-              onMarkAllAsRead={markAllAsRead}
-              onRemove={removeNotification}
-              onClearAll={clearAll}
-              position="top"
-            />
           </div>
         </header>
 
