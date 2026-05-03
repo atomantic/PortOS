@@ -66,7 +66,7 @@ export function matchSceneCharacters(sceneCharacterNames = [], charByKey) {
 // Match server's normalizeSlugline in services/writersRoom/settings.js — the
 // pair has to agree byte-for-byte or the bible's match keys won't line up
 // with the live scene matching here.
-export const normSlugline = (s) => String(s || '')
+export const normalizeSlugline = (s) => String(s || '')
   .toUpperCase()
   .replace(/[—–-]/g, ' ')
   .replace(/[.,:;]/g, '')
@@ -76,7 +76,7 @@ export const normSlugline = (s) => String(s || '')
 export function buildSettingByKey(allSettings) {
   const map = new Map();
   for (const setting of allSettings || []) {
-    const key = normSlugline(setting.slugline || setting.name);
+    const key = normalizeSlugline(setting.slugline || setting.name);
     if (!key) continue;
     map.set(key, setting);
   }
@@ -85,7 +85,7 @@ export function buildSettingByKey(allSettings) {
 
 export function matchSceneSetting(sceneSlugline, settingByKey) {
   if (!sceneSlugline) return null;
-  return settingByKey?.get(normSlugline(sceneSlugline)) || null;
+  return settingByKey?.get(normalizeSlugline(sceneSlugline)) || null;
 }
 
 const PROMPT_MAX = 1900;
@@ -149,9 +149,3 @@ export function buildScenePrompt(workTitle, scene, matchedCharacters, worldStyle
   if (visual) segs.push(visual);
   return segs.filter(Boolean).join(' ').slice(0, PROMPT_MAX);
 }
-
-// Backward-compatible alias — older callers (and tests) used the previous
-// name. New code should use `buildScenePrompt` so the setting param is
-// discoverable.
-export const buildScenePromptWithCharacters = (workTitle, scene, matchedCharacters, worldStyle = '') =>
-  buildScenePrompt(workTitle, scene, matchedCharacters, worldStyle, null);

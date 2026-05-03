@@ -111,12 +111,13 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   // mirror their lists here so the storyboard's image-prompt enrichment picks
   // up edits immediately.
   useEffect(() => {
-    listWritersRoomCharacters(work.id)
-      .then((list) => setCharacters(list || []))
-      .catch(() => setCharacters([]));
-    listWritersRoomSettings(work.id)
-      .then((list) => setSettings(list || []))
-      .catch(() => setSettings([]));
+    Promise.all([
+      listWritersRoomCharacters(work.id).catch(() => []),
+      listWritersRoomSettings(work.id).catch(() => []),
+    ]).then(([chars, sets]) => {
+      setCharacters(chars || []);
+      setSettings(sets || []);
+    });
   }, [work.id]);
 
   const dirty = body !== savedBody;
@@ -263,11 +264,11 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   // reference. Bails on first failure (the failed step's toast already fired).
   const runFullPipeline = useCallback(async () => {
     if (runningKind) return;
-    const okChars = await runAnalysis('characters');
+    const okChars = await runAnalysis(ANALYSIS_KIND.CHARACTERS);
     if (!okChars || !mountedRef.current) return;
-    const okSettings = await runAnalysis('settings');
+    const okSettings = await runAnalysis(ANALYSIS_KIND.SETTINGS);
     if (!okSettings || !mountedRef.current) return;
-    await runAnalysis('script');
+    await runAnalysis(ANALYSIS_KIND.SCRIPT);
   }, [runAnalysis, runningKind]);
 
   const applyFormatText = (text) => {

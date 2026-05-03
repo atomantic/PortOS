@@ -507,14 +507,16 @@ export async function runAnalysis(workId, { kind } = {}) {
       weather: s.weather,
       recurringDetails: s.recurringDetails,
     });
-    if (kind === 'characters' || kind === 'script') {
-      const existing = await listCharacters(workId);
-      variables.existingCharactersJson = JSON.stringify(existing.map(trimCharacter), null, 2);
-    }
-    if (kind === 'settings' || kind === 'script') {
-      const existing = await listSettings(workId);
-      variables.existingSettingsJson = JSON.stringify(existing.map(trimSetting), null, 2);
-    }
+    // For 'script' both bibles load — fire them in parallel so the script
+    // pipeline doesn't pay two sequential disk reads. For 'characters' or
+    // 'settings' alone Promise.all is degenerate (one element) but the shape
+    // keeps the call site uniform.
+    const [existingChars, existingSets] = await Promise.all([
+      (kind === 'characters' || kind === 'script') ? listCharacters(workId) : null,
+      (kind === 'settings' || kind === 'script') ? listSettings(workId) : null,
+    ]);
+    if (existingChars) variables.existingCharactersJson = JSON.stringify(existingChars.map(trimCharacter));
+    if (existingSets) variables.existingSettingsJson = JSON.stringify(existingSets.map(trimSetting));
 
     const temperature = kind === 'format' ? 0.2 : 0.4;
     const { content, model: usedModel, providerId: usedProvider } = await callAI(stage, variables, temperature);
