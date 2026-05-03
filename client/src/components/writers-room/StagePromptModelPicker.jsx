@@ -43,6 +43,13 @@ export default function StagePromptModelPicker({ stageName, label = 'Stage LLM',
     if (!res.ok) toast.error(`Failed to save ${label}: ${await res.text().catch(() => res.statusText)}`);
   };
 
+  // Hooks must run in the same order every render — keep useMemo above the
+  // early-return guards or React's hooks-rule check fires.
+  const modelsForProvider = useMemo(() => {
+    const p = providers.find((pr) => pr.id === stage?.provider);
+    return p ? (p.models || [p.defaultModel]).filter(Boolean) : [];
+  }, [providers, stage?.provider]);
+
   if (!loaded) return null;
   if (!stage) {
     return (
@@ -53,10 +60,6 @@ export default function StagePromptModelPicker({ stageName, label = 'Stage LLM',
   }
 
   const isSpecific = !!stage.provider;
-  const modelsForProvider = useMemo(() => {
-    const p = providers.find((pr) => pr.id === stage.provider);
-    return p ? (p.models || [p.defaultModel]).filter(Boolean) : [];
-  }, [providers, stage.provider]);
 
   const switchToTier = () => {
     if (!isSpecific) return;
