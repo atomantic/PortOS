@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import {
   Image as ImageIcon,
   Loader2,
@@ -22,7 +22,7 @@ import {
   normCharKey,
 } from './sceneCardHelpers';
 
-export default function SceneCard({
+const SceneCard = forwardRef(function SceneCard({
   scene,
   workId,
   analysisId,
@@ -35,7 +35,7 @@ export default function SceneCard({
   isActive = false,
   onJumpToProse = null,
   onDebug = null,
-}) {
+}, ref) {
   const light = readingTheme === 'light';
   const matchedCharacters = useMemo(
     () => matchSceneCharacters(scene.characters, charByKey),
@@ -167,6 +167,16 @@ export default function SceneCard({
       setGenStatus('done');
     }
   };
+
+  // Expose generate() to the parent so the storyboard can batch-trigger
+  // renders (e.g. auto-queue every missing image after Adapt completes).
+  // canGenerate() returns false for cards that already have an image, are
+  // mid-render, or lack a visualPrompt — the parent uses this to skip
+  // ineligible scenes silently.
+  useImperativeHandle(ref, () => ({
+    generate,
+    canGenerate: () => genStatus === 'idle' && !!scene.visualPrompt?.trim(),
+  }), [genStatus, scene.visualPrompt]);
 
   const progressPct = progress?.progress != null ? Math.round(progress.progress * 100) : null;
   const view = progress?.currentImage ? 'live'
@@ -320,7 +330,9 @@ export default function SceneCard({
       )}
     </div>
   );
-}
+});
+
+export default SceneCard;
 
 function DebugMenuItem({ icon: Icon, label, onClick }) {
   return (

@@ -79,13 +79,43 @@ export default function StoryboardPanel({
   }, [loadLatestScript]);
 
   // Refetch when Adapt completes — parent toggles runningAdapt true→false.
+  // Also flag this as a freshly-finished Adapt so the next latestScript
+  // load triggers an auto-queue of every missing image render.
   const prevRunning = useRef(runningAdapt);
+  const justFinishedAdaptRef = useRef(false);
   useEffect(() => {
     if (prevRunning.current && !runningAdapt) {
+      justFinishedAdaptRef.current = true;
       loadLatestScript();
     }
     prevRunning.current = runningAdapt;
   }, [runningAdapt, loadLatestScript]);
+
+  // Refs to each SceneCard's imperative API so we can call .generate() on
+  // every card without each card needing to know whether it's auto-queued.
+  // Map keyed by sceneId — replaced wholesale on each script load.
+  const sceneRefs = useRef({});
+
+  // Auto-queue every missing image when latestScript updates *because* of a
+  // just-finished Adapt run. requestAnimationFrame defers until the cards
+  // have actually mounted with the new scenes — useImperativeHandle has to
+  // commit before .canGenerate()/.generate() exist on the refs.
+  useEffect(() => {
+    if (!latestScript || !justFinishedAdaptRef.current) return;
+    justFinishedAdaptRef.current = false;
+    const handle = requestAnimationFrame(() => {
+      let queued = 0;
+      for (const sceneId in sceneRefs.current) {
+        const handle = sceneRefs.current[sceneId];
+        if (handle?.canGenerate?.()) {
+          handle.generate();
+          queued += 1;
+        }
+      }
+      if (queued > 0) toast.success(`Queued ${queued} scene render${queued === 1 ? '' : 's'}`);
+    });
+    return () => cancelAnimationFrame(handle);
+  }, [latestScript]);
 
   const persistCfg = useCallback(async (next) => {
     setImageCfg(next);
@@ -169,6 +199,10 @@ export default function StoryboardPanel({
           return (
             <SceneCard
               key={sceneId}
+              ref={(handle) => {
+                if (handle) sceneRefs.current[sceneId] = handle;
+                else delete sceneRefs.current[sceneId];
+              }}
               scene={{ ...scene, id: sceneId }}
               workId={work.id}
               analysisId={latestScript.id}
