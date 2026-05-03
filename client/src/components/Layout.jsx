@@ -726,7 +726,7 @@ export default function Layout() {
 
         {/* Footer with version and notifications */}
         <div className={`border-t border-port-border ${collapsed ? 'lg:flex lg:justify-center lg:p-2 p-4' : 'p-4'}`}>
-          <div className={`flex items-center ${collapsed ? 'lg:flex-col lg:justify-center lg:gap-1' : 'justify-between'}`}>
+          <div className={`flex flex-col items-center gap-2 sm:flex-row sm:gap-0 ${collapsed ? 'lg:flex-col lg:justify-center lg:gap-1' : 'sm:justify-between'}`}>
             <span className={`text-sm text-gray-500 ${collapsed ? 'lg:hidden' : ''}`}>
               v{__APP_VERSION__}
             </span>
