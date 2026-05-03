@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { NotebookPen, Timer, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { NotebookPen, PanelLeftOpen } from 'lucide-react';
 import LibraryPane from '../components/writers-room/LibraryPane';
 import WorkEditor from '../components/writers-room/WorkEditor';
 import ExercisePanel from '../components/writers-room/ExercisePanel';
@@ -121,18 +121,7 @@ export default function WritersRoom() {
       <div className="flex items-center gap-3 px-4 py-3 border-b border-port-border bg-port-card">
         <NotebookPen className="w-5 h-5 text-port-accent" />
         <h1 className="text-xl font-bold text-white">Writers Room</h1>
-        <span className="text-xs text-gray-500 hidden md:inline">Folders, works, drafts, and write-for-10 sprints</span>
-        <button
-          onClick={() => setShowExercise((s) => !s)}
-          className={`ml-auto flex items-center gap-1 px-3 py-1 text-xs rounded ${
-            showExercise ? 'bg-port-accent text-white' : 'bg-port-bg border border-port-border text-gray-300 hover:text-white'
-          }`}
-          aria-pressed={showExercise}
-          aria-label="Toggle write-for-10 exercise sidebar"
-          title="Toggle exercise sidebar"
-        >
-          <Timer size={12} /> Write for 10
-        </button>
+        <span className="text-xs text-gray-500 hidden md:inline ml-auto">Folders, works, drafts, storyboard, and write-for-10 sprints</span>
       </div>
 
       <div
@@ -175,7 +164,12 @@ export default function WritersRoom() {
             </div>
           )}
           {!loadingWork && activeWork && (
-            <WorkEditor work={activeWork} onChange={handleWorkChange} />
+            <WorkEditor
+              work={activeWork}
+              onChange={handleWorkChange}
+              onToggleExercise={() => setShowExercise((s) => !s)}
+              exerciseOpen={showExercise}
+            />
           )}
         </main>
 

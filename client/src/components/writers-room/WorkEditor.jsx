@@ -1,31 +1,47 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Save, GitCommit, Clock, FileText, Sparkles, ListTree, Sun, Moon } from 'lucide-react';
+import {
+  Save,
+  GitCommit,
+  Sun,
+  Moon,
+  MoreHorizontal,
+  Clapperboard,
+  Sparkles,
+  FileSignature,
+  Users,
+  ListTree,
+  Clock,
+  History,
+  Timer,
+  PenLine,
+  Check,
+  Loader2,
+} from 'lucide-react';
 import toast from '../ui/Toast';
+import Drawer from '../Drawer';
 import {
   saveWritersRoomDraft,
   snapshotWritersRoomDraft,
   setWritersRoomActiveDraft,
   updateWritersRoomWork,
+  runWritersRoomAnalysis,
+  listWritersRoomCharacters,
 } from '../../services/apiWritersRoom';
-import { KIND_LABELS, STATUS_LABELS } from './labels';
+import { STATUS_LABELS } from './labels';
 import { countWords } from '../../utils/formatters';
-import AiPanel from './AiPanel';
-
-const SIDEBAR_TABS = [
-  { id: 'ai', label: 'AI', Icon: Sparkles },
-  { id: 'outline', label: 'Outline', Icon: ListTree },
-  { id: 'versions', label: 'Versions', Icon: Clock },
-];
+import StoryboardPanel from './StoryboardPanel';
+import CharactersBible from './CharactersBible';
+import AnalysisHistory from './AnalysisHistory';
 
 const SIDEBAR_WIDTH_KEY = 'wr.sidebarWidth';
 const SIDEBAR_DEFAULT = 480;
-const SIDEBAR_MIN = 280;
-const SIDEBAR_MAX_FRACTION = 0.7; // never let the sidebar eat more than 70% of the work area
+const SIDEBAR_MIN = 320;
+const SIDEBAR_MAX_FRACTION = 0.6;
 const READING_THEME_KEY = 'wr.readingTheme';
+
 function readReadingTheme() {
   if (typeof window === 'undefined') return 'dark';
-  const v = window.localStorage.getItem(READING_THEME_KEY);
-  return v === 'light' ? 'light' : 'dark';
+  return window.localStorage.getItem(READING_THEME_KEY) === 'light' ? 'light' : 'dark';
 }
 
 function readSidebarWidth() {
@@ -39,22 +55,32 @@ function persistSidebarWidth(width) {
   try { window.localStorage.setItem(SIDEBAR_WIDTH_KEY, String(Math.round(width))); } catch {}
 }
 
-export default function WorkEditor({ work, onChange }) {
+const ANALYSIS_LABELS = {
+  script: 'Adapt',
+  characters: 'Characters',
+  evaluate: 'Editorial pass',
+  format: 'Format pass',
+};
+
+export default function WorkEditor({ work, onChange, onToggleExercise, exerciseOpen }) {
   const [body, setBody] = useState(work.activeDraftBody || '');
   const [title, setTitle] = useState(work.title);
-  const [sidebarTab, setSidebarTab] = useState('ai');
-  // Optimistic mirror of work.status — the dropdown reads this so a status
-  // change shows immediately, even before the PATCH round-trip resolves and
-  // the parent re-renders with the new prop. Synced from the prop whenever
-  // the prop changes (both work-id swap AND any time the parent updates).
   const [status, setStatus] = useState(work.status);
   const [savedBody, setSavedBody] = useState(work.activeDraftBody || '');
   const [saving, setSaving] = useState(false);
+  const [readingTheme, setReadingTheme] = useState(readReadingTheme);
+  const [characters, setCharacters] = useState([]);
+  const [runningKind, setRunningKind] = useState(null); // 'script' | 'characters' | 'evaluate' | 'format'
+  const [drawer, setDrawer] = useState(null); // 'outline' | 'versions' | 'characters' | 'history' | null
+  const [overflowOpen, setOverflowOpen] = useState(false);
+  const [mobileTab, setMobileTab] = useState('writing'); // 'writing' | 'storyboard'
+  const [activeSceneId, setActiveSceneId] = useState(null);
+
   const textareaRef = useRef(null);
+  const overflowRef = useRef(null);
 
   // Rehydrate body/title when the parent swaps the active work OR switches to
-  // a different draft version of the same work. Both can change without the
-  // work id changing (version-switch keeps work.id, swaps activeDraftVersionId).
+  // a different draft version of the same work.
   const prevKey = useRef({ id: work.id, draftId: work.activeDraftVersionId });
   useEffect(() => {
     const key = { id: work.id, draftId: work.activeDraftVersionId };
@@ -65,31 +91,30 @@ export default function WorkEditor({ work, onChange }) {
     setTitle(work.title);
   }, [work.id, work.activeDraftVersionId, work.activeDraftBody, work.title]);
 
-  // Keep the optimistic status + title in sync with the source of truth —
-  // separate from the rehydration effect so a PATCH that comes back via the
-  // parent's onChange still updates the input even if no other field moved.
-  // The "is the user actively editing" guard isn't needed for status (single
-  // click) but title commits on blur, so the user can never be mid-edit when
-  // a title prop change arrives.
   useEffect(() => { setStatus(work.status); }, [work.status]);
   useEffect(() => { setTitle(work.title); }, [work.title]);
+
+  // Load character bible for the active work — passed into the storyboard so
+  // physicalDescription gets injected into per-scene image prompts. The
+  // CharactersBible drawer is the canonical editor; we re-fetch when it
+  // notifies us via onCharactersChange.
+  useEffect(() => {
+    listWritersRoomCharacters(work.id)
+      .then((list) => setCharacters(list || []))
+      .catch(() => setCharacters([]));
+  }, [work.id]);
 
   const dirty = body !== savedBody;
   const wordCount = useMemo(() => countWords(body), [body]);
 
-  // Skip post-await setState if the editor unmounted (rapid work-switch or
-  // page nav while a save / snapshot / status PATCH is in flight).
   const mountedRef = useRef(true);
   useEffect(() => {
     mountedRef.current = true;
     return () => { mountedRef.current = false; };
   }, []);
 
-  // Refs let the once-bound keydown listener read the freshest body/saving
-  // values without re-registering on every keystroke. The savingRef gate is
-  // synchronous (unlike the `saving` state which only updates after React
-  // re-renders), so rapid Cmd+S key-repeats can't slip past the guard and
-  // queue overlapping save requests.
+  // Saving uses refs so the once-bound key listener reads fresh values
+  // without re-registering on every keystroke.
   const savingRef = useRef(false);
   const handleSaveRef = useRef(null);
   handleSaveRef.current = async () => {
@@ -121,6 +146,17 @@ export default function WorkEditor({ work, onChange }) {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
+  // Close the overflow menu on outside click — keeping it open while the
+  // user clicks something else would feel sticky.
+  useEffect(() => {
+    if (!overflowOpen) return;
+    const onClick = (e) => {
+      if (!overflowRef.current?.contains(e.target)) setOverflowOpen(false);
+    };
+    window.addEventListener('mousedown', onClick);
+    return () => window.removeEventListener('mousedown', onClick);
+  }, [overflowOpen]);
+
   const handleSnapshot = async () => {
     if (dirty) {
       toast('Save before snapshotting', { icon: '⚠️' });
@@ -142,20 +178,17 @@ export default function WorkEditor({ work, onChange }) {
       return null;
     });
     if (!updated || !mountedRef.current) return;
-    // Adopt the server-normalized title (e.g. trim() applied by the Zod
-    // schema) — otherwise `title !== work.title` stays true on every blur
-    // and the next focus-out re-PATCHes with the same un-normalized value.
     if (updated.title !== title) setTitle(updated.title);
     onChange?.({ ...updated, activeDraftBody: body });
   };
 
   const commitStatus = async (next) => {
     if (next === status) return;
-    setStatus(next); // optimistic — survives a re-render before the PATCH resolves
+    setStatus(next);
     const updated = await updateWritersRoomWork(work.id, { status: next }).catch((err) => {
       if (mountedRef.current) {
         toast.error(`Status save failed: ${err.message}`);
-        setStatus(work.status); // roll back on failure
+        setStatus(work.status);
       }
       return null;
     });
@@ -165,9 +198,6 @@ export default function WorkEditor({ work, onChange }) {
   const switchToDraft = async (draftId) => {
     if (draftId === work.activeDraftVersionId) return;
     if (dirty) {
-      // Switching versions while the editor has unsaved edits would discard
-      // them when the rehydration effect replaces `body` with the server
-      // version. Block the switch and ask the user to settle the buffer.
       toast('Save or snapshot before switching versions', { icon: '⚠️' });
       return;
     }
@@ -176,32 +206,118 @@ export default function WorkEditor({ work, onChange }) {
       return null;
     });
     if (!updated || !mountedRef.current) return;
-    // PATCH /works/:id/versions/:draftId now returns manifest + activeDraftBody
-    // in one round-trip, so no separate reload is needed.
     onChange?.(updated);
+  };
+
+  // Shared analysis runner — the storyboard, overflow menu, and per-scene
+  // debug menu all funnel through here so we get one toast + state pattern.
+  // Format pass replaces the prose buffer (apply-on-success) — the user can
+  // back out by simply not saving. Characters refreshes the bible cache so
+  // the storyboard's prompt enrichment picks up new profiles immediately.
+  const runAnalysis = useCallback(async (kind) => {
+    if (runningKind) return;
+    setRunningKind(kind);
+    const snapshot = await runWritersRoomAnalysis(work.id, { kind }).catch((err) => {
+      if (mountedRef.current) toast.error(`${ANALYSIS_LABELS[kind] || kind} failed: ${err.message}`);
+      return null;
+    });
+    if (!mountedRef.current) {
+      setRunningKind(null);
+      return;
+    }
+    setRunningKind(null);
+    if (!snapshot) return;
+    if (snapshot.status === 'failed') {
+      toast.error(`${ANALYSIS_LABELS[kind] || kind} failed: ${snapshot.error || 'unknown'}`);
+      return;
+    }
+    toast.success(`${ANALYSIS_LABELS[kind] || kind} complete`);
+    if (kind === 'characters' && Array.isArray(snapshot.result?.mergedProfiles)) {
+      setCharacters(snapshot.result.mergedProfiles);
+    }
+    if (kind === 'format' && snapshot.result?.formattedBody) {
+      setBody(snapshot.result.formattedBody);
+      toast('Format applied to draft buffer — save to persist', { icon: '💾' });
+    }
+  }, [runningKind, work.id]);
+
+  const applyFormatText = (text) => {
+    setBody(text);
+    toast('Applied to editor — save to persist', { icon: '💾' });
   };
 
   const activeDraft = useMemo(
     () => work.drafts?.find((d) => d.id === work.activeDraftVersionId),
     [work.drafts, work.activeDraftVersionId]
   );
+  const activeHash = activeDraft?.contentHash || null;
 
-  // Drag-to-resize sidebar — width is per-user via localStorage so the choice
-  // sticks across reloads. The handle is desktop-only; the mobile stack ignores
-  // sidebarWidth (the aside renders as a row beneath the editor).
+  // Click-to-jump from a storyboard card → scroll the prose textarea so the
+  // scene's heading is visible. The Adapt LLM often paraphrases the user's
+  // headings (e.g. user wrote `## Chapter 1`, LLM emits "Scene 1 — The Curry
+  // Burns"), so we try a few candidates in order:
+  //   1. Common markdown prefixes + the LLM heading
+  //   2. Raw LLM heading
+  //   3. First chunk of scene.summary or scene.action — these often quote
+  //      actual prose phrases
+  //   4. Proportional scrollTop based on the scene's index in the storyboard
+  //      (sceneIndex / totalScenes) — guarantees we land somewhere reasonable
+  //      even when nothing matches.
+  // setSelectionRange + focus uses the browser's caret-into-view scroll;
+  // setting scrollTop afterward guarantees we land "near" the line in cases
+  // where the browser doesn't re-scroll an already-visible caret.
+  const jumpToScene = useCallback((scene, sceneIndex = -1, totalScenes = 0) => {
+    const ta = textareaRef.current;
+    if (!ta || !scene || !body) return;
+    setActiveSceneId(scene.id || null);
+    setMobileTab('writing');
+    const heading = scene.heading || '';
+    let idx = -1;
+    for (const prefix of ['## ', '### ', '# ', '']) {
+      if (!heading) break;
+      idx = body.indexOf(prefix + heading);
+      if (idx >= 0) break;
+    }
+    if (idx < 0) {
+      // Try a chunk of the scene's summary or action — the LLM may have
+      // pulled from real prose phrases.
+      for (const candidate of [scene.summary, scene.action]) {
+        if (!candidate) continue;
+        const snippet = String(candidate).trim().slice(0, 40);
+        if (!snippet) continue;
+        idx = body.indexOf(snippet);
+        if (idx >= 0) break;
+      }
+    }
+    let target;
+    if (idx >= 0) {
+      ta.focus();
+      ta.setSelectionRange(idx, idx);
+      const fraction = idx / body.length;
+      target = Math.max(0, fraction * (ta.scrollHeight - ta.clientHeight));
+    } else if (totalScenes > 0 && sceneIndex >= 0) {
+      // Last resort: position by scene index in the storyboard.
+      const fraction = sceneIndex / totalScenes;
+      target = Math.max(0, fraction * (ta.scrollHeight - ta.clientHeight));
+    } else {
+      return;
+    }
+    ta.scrollTop = target;
+  }, [body]);
+
+  // Per-scene Debug menu actions from SceneCard — for now everything except
+  // "Jump to prose" (handled directly via onJumpToProse) opens the most
+  // relevant drawer. Scoping AI tools to a single scene is a follow-up.
+  const handleDebug = useCallback(({ kind, scene }) => {
+    if (scene) setActiveSceneId(scene.id || null);
+    if (kind === 'check-characters') setDrawer('characters');
+    else if (kind === 'editorial') setDrawer('history');
+    else if (kind === 'why-image') setDrawer('history');
+  }, []);
+
+  // Drag-to-resize sidebar (desktop only).
   const splitRef = useRef(null);
   const [sidebarWidth, setSidebarWidth] = useState(readSidebarWidth);
-  const [readingTheme, setReadingTheme] = useState(readReadingTheme);
-  const toggleReadingTheme = useCallback(() => {
-    setReadingTheme((prev) => {
-      const next = prev === 'dark' ? 'light' : 'dark';
-      try { window.localStorage.setItem(READING_THEME_KEY, next); } catch {}
-      return next;
-    });
-  }, []);
-  // Mirror sidebarWidth into a ref so the once-bound mousemove/mouseup effect
-  // reads the freshest value at release time without re-registering on every
-  // pixel of drag (200px drag = ~200 add/remove pairs otherwise).
   const sidebarWidthRef = useRef(sidebarWidth);
   useEffect(() => { sidebarWidthRef.current = sidebarWidth; }, [sidebarWidth]);
   const dragStartRef = useRef(null);
@@ -219,7 +335,6 @@ export default function WorkEditor({ work, onChange }) {
       if (!dragStartRef.current) return;
       const { startX, startWidth, containerWidth } = dragStartRef.current;
       const max = Math.max(SIDEBAR_MIN + 1, containerWidth * SIDEBAR_MAX_FRACTION);
-      // Dragging left grows the right-hand sidebar; dragging right shrinks it.
       const next = Math.min(max, Math.max(SIDEBAR_MIN, startWidth - (e.clientX - startX)));
       setSidebarWidth(next);
     };
@@ -235,8 +350,6 @@ export default function WorkEditor({ work, onChange }) {
     return () => {
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
-      // If the component unmounts mid-drag, restore body styles so the page
-      // doesn't keep the col-resize cursor / no-select state forever.
       if (dragStartRef.current) {
         document.body.style.cursor = '';
         document.body.style.userSelect = '';
@@ -245,26 +358,36 @@ export default function WorkEditor({ work, onChange }) {
     };
   }, []);
 
+  const toggleReadingTheme = useCallback(() => {
+    setReadingTheme((prev) => {
+      const next = prev === 'dark' ? 'light' : 'dark';
+      try { window.localStorage.setItem(READING_THEME_KEY, next); } catch {}
+      return next;
+    });
+  }, []);
+
+  const closeOverflowAnd = (fn) => () => { setOverflowOpen(false); fn?.(); };
+
   return (
     <div className="flex flex-col h-full">
-      <div className="flex flex-wrap items-center gap-2 px-4 py-3 border-b border-port-border bg-port-card">
+      {/* Header — title + status on left, primary actions + overflow on right */}
+      <div className="flex flex-wrap items-center gap-2 px-4 py-2 border-b border-port-border bg-port-card">
         <input
           value={title}
           onChange={(e) => setTitle(e.target.value)}
           onBlur={commitTitle}
           onKeyDown={(e) => { if (e.key === 'Enter') e.target.blur(); }}
-          className="bg-transparent text-lg font-bold text-white border-none focus:outline-none focus:bg-port-bg/50 px-1 rounded flex-1 min-w-[200px]"
+          className="bg-transparent text-base font-semibold text-white border-none focus:outline-none focus:bg-port-bg/50 px-1 rounded flex-1 min-w-[180px]"
           aria-label="Work title"
         />
         <select
           value={status}
           onChange={(e) => commitStatus(e.target.value)}
-          className="bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-gray-300"
+          className="bg-port-bg border border-port-border rounded px-2 py-1 text-[11px] text-gray-300"
           aria-label="Status"
         >
           {Object.entries(STATUS_LABELS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
         </select>
-        <span className="text-xs text-gray-500 px-2 py-1 bg-port-bg/50 rounded">{KIND_LABELS[work.kind]}</span>
         <button
           onClick={handleSave}
           disabled={!dirty || saving}
@@ -283,29 +406,63 @@ export default function WorkEditor({ work, onChange }) {
         >
           <GitCommit size={12} /> Snapshot
         </button>
-        <button
-          onClick={toggleReadingTheme}
-          className="flex items-center gap-1 px-2 py-1 text-xs rounded bg-port-bg border border-port-border text-gray-300 hover:text-white"
-          title={readingTheme === 'dark' ? 'Switch to light reading theme' : 'Switch to dark reading theme'}
-          aria-label="Toggle reading theme"
-          aria-pressed={readingTheme === 'light'}
-        >
-          {readingTheme === 'dark' ? <Sun size={12} /> : <Moon size={12} />}
-        </button>
+        <div className="relative" ref={overflowRef}>
+          <button
+            onClick={() => setOverflowOpen((v) => !v)}
+            className="flex items-center justify-center px-2 py-1 text-xs rounded bg-port-bg border border-port-border text-gray-300 hover:text-white"
+            aria-label="Work menu"
+            aria-expanded={overflowOpen}
+            title="Work menu"
+          >
+            <MoreHorizontal size={14} />
+          </button>
+          {overflowOpen && (
+            <div className="absolute right-0 top-full mt-1 z-30 w-60 rounded-md border border-port-border bg-port-card shadow-xl py-1 text-xs">
+              <MenuSection label="AI">
+                <MenuItem icon={Clapperboard} label="Run Adapt (rebuild storyboard)" running={runningKind === 'script'} onClick={closeOverflowAnd(() => runAnalysis('script'))} />
+                <MenuItem icon={Users} label="Refresh characters" running={runningKind === 'characters'} onClick={closeOverflowAnd(() => runAnalysis('characters'))} />
+                <MenuItem icon={Sparkles} label="Editorial pass" running={runningKind === 'evaluate'} onClick={closeOverflowAnd(() => runAnalysis('evaluate'))} />
+                <MenuItem icon={FileSignature} label="Format pass" running={runningKind === 'format'} onClick={closeOverflowAnd(() => runAnalysis('format'))} />
+              </MenuSection>
+              <MenuSection label="Open">
+                <MenuItem icon={ListTree} label="Outline" onClick={closeOverflowAnd(() => setDrawer('outline'))} />
+                <MenuItem icon={Clock} label="Versions" onClick={closeOverflowAnd(() => setDrawer('versions'))} />
+                <MenuItem icon={Users} label="Characters" badge={characters.length || null} onClick={closeOverflowAnd(() => setDrawer('characters'))} />
+                <MenuItem icon={History} label="Analysis history" onClick={closeOverflowAnd(() => setDrawer('history'))} />
+              </MenuSection>
+              <MenuSection label="View">
+                <MenuItem
+                  icon={readingTheme === 'dark' ? Sun : Moon}
+                  label={readingTheme === 'dark' ? 'Light reading theme' : 'Dark reading theme'}
+                  onClick={closeOverflowAnd(toggleReadingTheme)}
+                />
+                {onToggleExercise && (
+                  <MenuItem
+                    icon={Timer}
+                    label={exerciseOpen ? 'Hide Write for 10' : 'Write for 10'}
+                    onClick={closeOverflowAnd(onToggleExercise)}
+                    active={exerciseOpen}
+                  />
+                )}
+              </MenuSection>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Mobile-only Writing/Storyboard toggle — desktop renders both side-by-side. */}
+      <div className="lg:hidden flex border-b border-port-border bg-port-bg/40 shrink-0">
+        <MobileTab active={mobileTab === 'writing'} onClick={() => setMobileTab('writing')} icon={PenLine} label="Writing" />
+        <MobileTab active={mobileTab === 'storyboard'} onClick={() => setMobileTab('storyboard')} icon={Clapperboard} label="Storyboard" />
       </div>
 
       <div ref={splitRef} className="flex-1 flex flex-col lg:flex-row min-h-0">
-        <div className="relative min-h-0 flex-[2] lg:flex-1">
+        <div className={`relative min-h-0 flex-1 ${mobileTab === 'storyboard' ? 'hidden lg:block' : 'block'}`}>
           <textarea
             ref={textareaRef}
             value={body}
             onChange={(e) => setBody(e.target.value)}
             placeholder="Start writing… Use # Chapter, ## Scene, ### Beat headings to outline."
-            // The theme system applies `background: var(--port-input-bg) !important`
-            // to every textarea, so a regular Tailwind `bg-...` class can't win.
-            // Override --port-input-bg inline (the !important rule then resolves
-            // to our value), and set the matching text color the same way for
-            // visual consistency across themes.
             style={readingTheme === 'light'
               ? { '--port-input-bg': 'var(--wr-reading-paper)', color: '#1a1a1a' }
               : undefined}
@@ -329,7 +486,7 @@ export default function WorkEditor({ work, onChange }) {
             persistSidebarWidth(SIDEBAR_DEFAULT);
           }}
           role="separator"
-          aria-label="Resize AI sidebar"
+          aria-label="Resize storyboard sidebar"
           aria-orientation="vertical"
           title="Drag to resize · double-click to reset"
           className="hidden lg:block w-1 shrink-0 cursor-col-resize bg-port-border hover:bg-port-accent/60 active:bg-port-accent transition-colors"
@@ -337,78 +494,145 @@ export default function WorkEditor({ work, onChange }) {
 
         <aside
           style={{ '--sidebar-w': `${sidebarWidth}px` }}
-          className="border-t lg:border-t-0 border-port-border bg-port-card/60 flex flex-col text-xs min-h-0 w-full flex-1 lg:flex-initial lg:w-[var(--sidebar-w)] lg:shrink-0">
-          <div className="flex border-b border-port-border bg-port-bg/40">
-            {SIDEBAR_TABS.map(({ id, label, Icon }) => (
-              <button
-                key={id}
-                onClick={() => setSidebarTab(id)}
-                className={`flex-1 flex items-center justify-center gap-1 px-2 py-2 text-[11px] border-b-2 ${
-                  sidebarTab === id
-                    ? 'border-port-accent text-white'
-                    : 'border-transparent text-gray-500 hover:text-gray-300'
-                }`}
-                aria-pressed={sidebarTab === id}
-              >
-                <Icon size={11} /> {label}
-              </button>
-            ))}
-          </div>
-          <div className="flex-1 overflow-y-auto px-3 py-3">
-            {sidebarTab === 'ai' && (
-              <AiPanel
-                work={work}
-                readingTheme={readingTheme}
-                onApplyFormat={(text) => {
-                  // Don't autosave — keeps a bad format pass from overwriting
-                  // the on-disk draft without an explicit Save.
-                  setBody(text);
-                  toast('Applied to editor — save to persist', { icon: '💾' });
-                }}
-              />
-            )}
-            {sidebarTab === 'outline' && (
-              <ul className="space-y-0.5">
-                {(activeDraft?.segmentIndex || []).map((seg) => (
-                  <li key={seg.id} className="flex items-center gap-1 text-gray-400 truncate">
-                    <FileText size={10} className="shrink-0" />
-                    <span className={`truncate ${seg.kind === 'chapter' ? 'text-white' : seg.kind === 'scene' ? 'text-gray-300' : 'pl-3'}`}>
-                      {seg.heading}
-                    </span>
-                    <span className="ml-auto text-[10px] text-gray-600">{seg.wordCount}</span>
-                  </li>
-                ))}
-                {(!activeDraft?.segmentIndex || activeDraft.segmentIndex.length === 0) && (
-                  <li className="text-gray-600 italic">No segments yet — use # Chapter / ## Scene headings to outline.</li>
-                )}
-              </ul>
-            )}
-            {sidebarTab === 'versions' && (
-              <ul className="space-y-1">
-                {(work.drafts || []).slice().reverse().map((draft) => {
-                  const isActive = draft.id === work.activeDraftVersionId;
-                  return (
-                    <li key={draft.id}>
-                      <button
-                        onClick={() => switchToDraft(draft.id)}
-                        className={`w-full flex items-center justify-between gap-2 px-2 py-1 rounded text-left ${
-                          isActive ? 'bg-port-accent/20 text-port-accent' : 'text-gray-400 hover:bg-port-bg hover:text-white'
-                        }`}
-                      >
-                        <span className="flex items-center gap-1 truncate">
-                          <Clock size={10} />
-                          {draft.label}
-                        </span>
-                        <span className="text-[10px] text-gray-500">{draft.wordCount}w</span>
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </div>
+          className={`border-t lg:border-t-0 border-port-border bg-port-card/60 flex flex-col text-xs min-h-0 w-full flex-1 lg:flex-initial lg:w-[var(--sidebar-w)] lg:shrink-0 ${
+            mobileTab === 'writing' ? 'hidden lg:flex' : 'flex'
+          }`}
+        >
+          <StoryboardPanel
+            work={work}
+            characters={characters}
+            onJumpToScene={jumpToScene}
+            onDebug={handleDebug}
+            onRunAdapt={() => runAnalysis('script')}
+            runningAdapt={runningKind === 'script'}
+            readingTheme={readingTheme}
+            activeSceneId={activeSceneId}
+          />
         </aside>
       </div>
+
+      {/* Slide-over drawers — only one open at a time */}
+      <Drawer open={drawer === 'outline'} onClose={() => setDrawer(null)} title="Outline">
+        <OutlineList activeDraft={activeDraft} onClose={() => setDrawer(null)} />
+      </Drawer>
+      <Drawer open={drawer === 'versions'} onClose={() => setDrawer(null)} title="Versions">
+        <VersionsList work={work} dirty={dirty} onSwitch={(id) => { switchToDraft(id); setDrawer(null); }} />
+      </Drawer>
+      <Drawer open={drawer === 'characters'} onClose={() => setDrawer(null)} title="Characters">
+        <CharactersBible
+          workId={work.id}
+          characters={characters}
+          onCharactersChange={setCharacters}
+          readingTheme={readingTheme}
+        />
+      </Drawer>
+      <Drawer open={drawer === 'history'} onClose={() => setDrawer(null)} title="Analysis history">
+        <AnalysisHistory work={work} activeHash={activeHash} onApplyFormat={applyFormatText} />
+      </Drawer>
     </div>
   );
 }
+
+function MenuSection({ label, children }) {
+  return (
+    <div className="py-1 border-b border-port-border last:border-b-0">
+      <div className="px-3 pt-1 pb-0.5 text-[9px] uppercase tracking-wider text-gray-500">{label}</div>
+      {children}
+    </div>
+  );
+}
+
+function MenuItem({ icon: Icon, label, onClick, running = false, active = false, badge = null }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={running}
+      className={`w-full flex items-center gap-2 px-3 py-1.5 text-left text-[11px] hover:bg-port-bg disabled:opacity-50 ${
+        active ? 'text-port-accent' : 'text-gray-300'
+      }`}
+    >
+      {running
+        ? <Loader2 size={11} className="animate-spin text-port-accent" />
+        : <Icon size={11} className={active ? 'text-port-accent' : 'text-gray-500'} />
+      }
+      <span className="flex-1">{label}</span>
+      {badge != null && <span className="text-[10px] text-gray-500">{badge}</span>}
+    </button>
+  );
+}
+
+function MobileTab({ active, onClick, icon: Icon, label }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`flex-1 flex items-center justify-center gap-1.5 py-2 text-[12px] border-b-2 ${
+        active ? 'border-port-accent text-white' : 'border-transparent text-gray-500 hover:text-gray-300'
+      }`}
+    >
+      <Icon size={13} /> {label}
+    </button>
+  );
+}
+
+function OutlineList({ activeDraft, onClose }) {
+  const segs = activeDraft?.segmentIndex || [];
+  if (segs.length === 0) {
+    return (
+      <div className="text-xs text-gray-500 italic">
+        No segments yet. Use # Chapter / ## Scene / ### Beat headings in the prose to populate the outline.
+      </div>
+    );
+  }
+  return (
+    <ul className="space-y-1 text-xs">
+      {segs.map((seg) => (
+        <li key={seg.id} className="flex items-center gap-2 text-gray-400">
+          <span className={`flex-1 truncate ${seg.kind === 'chapter' ? 'text-white font-semibold' : seg.kind === 'scene' ? 'text-gray-300' : 'pl-3 text-gray-500'}`}>
+            {seg.heading}
+          </span>
+          <span className="text-[10px] text-gray-600">{seg.wordCount}w</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function VersionsList({ work, dirty, onSwitch }) {
+  const drafts = (work.drafts || []).slice().reverse();
+  if (drafts.length === 0) {
+    return <div className="text-xs text-gray-500 italic">No versions yet. Click Snapshot in the header to create one.</div>;
+  }
+  return (
+    <>
+      {dirty && (
+        <div className="mb-2 px-2 py-1.5 text-[11px] border border-port-warning/40 bg-port-warning/5 text-port-warning rounded">
+          Save or snapshot before switching versions — unsaved edits will be lost.
+        </div>
+      )}
+      <ul className="space-y-1 text-xs">
+        {drafts.map((draft) => {
+          const isActive = draft.id === work.activeDraftVersionId;
+          return (
+            <li key={draft.id}>
+              <button
+                onClick={() => onSwitch(draft.id)}
+                disabled={isActive}
+                className={`w-full flex items-center justify-between gap-2 px-2 py-1.5 rounded text-left ${
+                  isActive ? 'bg-port-accent/20 text-port-accent cursor-default' : 'text-gray-400 hover:bg-port-bg hover:text-white'
+                }`}
+              >
+                <span className="flex items-center gap-2 truncate">
+                  {isActive ? <Check size={11} /> : <Clock size={11} />}
+                  {draft.label}
+                </span>
+                <span className="text-[10px] text-gray-500">{draft.wordCount}w</span>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </>
+  );
+}
+
