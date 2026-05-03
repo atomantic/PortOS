@@ -32,8 +32,13 @@ import {
   listCharacters, createCharacter, updateCharacter, deleteCharacter,
 } from '../services/writersRoom/characters.js';
 import { addItem as addCollectionItem, ERR_DUPLICATE } from '../services/mediaCollections.js';
+import { STYLE_PRESETS } from '../lib/writersRoomStylePresets.js';
 
 const router = Router();
+
+// Curated world-style presets for image gen — code-shipped reference data,
+// not user-mutable, so a simple GET is enough.
+router.get('/style-presets', (_req, res) => res.json(STYLE_PRESETS));
 
 // ---------- folders ----------
 

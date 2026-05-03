@@ -52,17 +52,19 @@ export function matchSceneCharacters(sceneCharacterNames = [], charByKey) {
 const PROMPT_MAX = 1900;
 
 // scene.visualPrompt is the load-bearing part of the image prompt — it must
-// always survive truncation. Reserve room for title + visual prompt first,
-// then fit the "Featuring" block into whatever is left, dropping characters
-// one-by-one if needed.
-export function buildScenePromptWithCharacters(workTitle, scene, matchedCharacters) {
+// always survive truncation. Reserve room for style + title + visual prompt
+// first, then fit the "Featuring" block into whatever is left, dropping
+// characters one-by-one if needed. The world style goes FIRST because
+// diffusion models weight early tokens heaviest.
+export function buildScenePromptWithCharacters(workTitle, scene, matchedCharacters, worldStyle = '') {
+  const stylePart = worldStyle && worldStyle.trim() ? `${worldStyle.trim()}. ` : '';
   const titlePart = workTitle ? `${workTitle}. ` : '';
   const visual = scene.visualPrompt || '';
   const featuringFragments = (matchedCharacters || [])
     .filter((c) => c.physicalDescription && c.physicalDescription.trim())
     .map((c) => `${c.name}: ${c.physicalDescription.trim()}`);
   const PREFIX = 'Featuring — ';
-  const reserveForVisual = titlePart.length + visual.length + 1;
+  const reserveForVisual = stylePart.length + titlePart.length + visual.length + 1;
   let budget = PROMPT_MAX - reserveForVisual - PREFIX.length;
   const fitFragments = [];
   for (const frag of featuringFragments) {
@@ -71,7 +73,9 @@ export function buildScenePromptWithCharacters(workTitle, scene, matchedCharacte
     fitFragments.push(frag);
     budget -= cost;
   }
-  const segs = [titlePart.trim()];
+  const segs = [];
+  if (stylePart) segs.push(stylePart.trim());
+  if (titlePart) segs.push(titlePart.trim());
   if (fitFragments.length > 0) segs.push(`${PREFIX}${fitFragments.join(' ')}`);
   if (visual) segs.push(visual);
   return segs.filter(Boolean).join(' ').slice(0, PROMPT_MAX);

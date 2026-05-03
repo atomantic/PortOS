@@ -28,6 +28,7 @@ export default function SceneCard({
   analysisId,
   workTitle,
   imageCfg = WR_IMAGE_DEFAULTS,
+  imageStyle = null,
   initialImage = null,
   readingTheme = 'dark',
   charByKey = null,
@@ -142,9 +143,10 @@ export default function SceneCard({
     setError(null);
     setProgress(null);
     setGenerated(null);
-    const prompt = buildScenePromptWithCharacters(workTitle, scene, matchedCharacters);
+    const prompt = buildScenePromptWithCharacters(workTitle, scene, matchedCharacters, imageStyle?.prompt || '');
     const res = await generateImage({
       prompt,
+      negativePrompt: imageStyle?.negativePrompt || '',
       modelId: imageCfg.modelId,
       mode: imageCfg.mode,
       width: imageCfg.width,

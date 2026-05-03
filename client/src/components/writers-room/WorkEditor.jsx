@@ -175,6 +175,17 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
     onChange?.({ ...updated, activeDraftBody: body });
   };
 
+  const commitImageStyle = async (next) => {
+    const updated = await updateWritersRoomWork(work.id, { imageStyle: next }).catch((err) => {
+      if (mountedRef.current) toast.error(`Style save failed: ${err.message}`);
+      return null;
+    });
+    if (updated && mountedRef.current) {
+      onChange?.({ ...updated, activeDraftBody: body });
+      toast.success(next.presetId === 'none' ? 'World style cleared' : 'World style saved');
+    }
+  };
+
   const commitStatus = async (next) => {
     if (next === status) return;
     setStatus(next);
@@ -486,6 +497,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
             runningAdapt={runningKind === ANALYSIS_KIND.SCRIPT}
             readingTheme={readingTheme}
             activeSceneId={activeSceneId}
+            onStyleChange={commitImageStyle}
           />
         </aside>
       </div>

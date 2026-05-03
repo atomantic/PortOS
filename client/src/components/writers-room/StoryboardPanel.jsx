@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Clapperboard, Loader2, RefreshCcw, Settings as SettingsIcon, AlertTriangle } from 'lucide-react';
+import { Clapperboard, Loader2, RefreshCcw, Settings as SettingsIcon, AlertTriangle, Palette, Check } from 'lucide-react';
 import toast from '../ui/Toast';
 import {
   listWritersRoomAnalyses,
   getWritersRoomAnalysis,
+  listWritersRoomStylePresets,
 } from '../../services/apiWritersRoom';
 import { getSettings, updateSettings } from '../../services/apiSystem';
 import { listImageModels } from '../../services/apiImageVideo';
@@ -16,6 +17,8 @@ import {
   readWrImageSettings,
 } from './sceneCardHelpers';
 
+const EMPTY_STYLE = { presetId: 'none', prompt: '', negativePrompt: '' };
+
 export default function StoryboardPanel({
   work,
   characters = [],
@@ -25,23 +28,29 @@ export default function StoryboardPanel({
   runningAdapt = false,
   readingTheme = 'dark',
   activeSceneId = null,
+  onStyleChange,
 }) {
   const [latestScript, setLatestScript] = useState(null);
   const [loading, setLoading] = useState(false);
   const [imageCfg, setImageCfg] = useState(WR_IMAGE_DEFAULTS);
   const [models, setModels] = useState([]);
   const [showSettings, setShowSettings] = useState(false);
+  const [stylePresets, setStylePresets] = useState([]);
   const mountedRef = useMounted();
+
+  const imageStyle = work.imageStyle || EMPTY_STYLE;
 
   useEffect(() => {
     let cancelled = false;
     Promise.all([
       getSettings().catch(() => ({})),
       listImageModels().catch(() => []),
-    ]).then(([settings, modelList]) => {
+      listWritersRoomStylePresets().catch(() => []),
+    ]).then(([settings, modelList, presets]) => {
       if (cancelled) return;
       setImageCfg(readWrImageSettings(settings));
       setModels(Array.isArray(modelList) ? modelList : []);
+      setStylePresets(Array.isArray(presets) ? presets : []);
     });
     return () => { cancelled = true; };
   }, []);
@@ -103,6 +112,15 @@ export default function StoryboardPanel({
             {scenes.length} scene{scenes.length === 1 ? '' : 's'} · {timeAgo(latestScript.completedAt || latestScript.createdAt, 'never')}
           </span>
         )}
+        {imageStyle.presetId !== 'none' && (
+          <button
+            onClick={() => setShowSettings((v) => !v)}
+            className="text-port-accent/80 hover:text-port-accent flex items-center gap-1 text-[10px]"
+            title="World style applied — click to edit"
+          >
+            <Palette size={11} /> {styleChip(imageStyle, stylePresets)}
+          </button>
+        )}
         <button
           onClick={() => setShowSettings((v) => !v)}
           className="ml-auto text-gray-500 hover:text-white"
@@ -114,7 +132,12 @@ export default function StoryboardPanel({
       </div>
 
       {showSettings && (
-        <div className="px-3 py-2 border-b border-port-border bg-port-card/30 shrink-0">
+        <div className="px-3 py-2 border-b border-port-border bg-port-card/30 shrink-0 space-y-3">
+          <WorldStyleRow
+            value={imageStyle}
+            presets={stylePresets}
+            onChange={onStyleChange}
+          />
           <ImageGenSettingsRow cfg={imageCfg} models={models} onChange={persistCfg} />
         </div>
       )}
@@ -150,6 +173,7 @@ export default function StoryboardPanel({
               analysisId={latestScript.id}
               workTitle={work.title}
               imageCfg={imageCfg}
+              imageStyle={imageStyle}
               initialImage={sceneImages[sceneId] || null}
               readingTheme={readingTheme}
               charByKey={charByKey}
@@ -200,6 +224,124 @@ function StaleBanner({ onRunAdapt, runningAdapt }) {
         {runningAdapt ? <Loader2 size={10} className="animate-spin" /> : <RefreshCcw size={10} />}
         Re-run
       </button>
+    </div>
+  );
+}
+
+function styleChip(style, presets) {
+  if (!style || style.presetId === 'none') return null;
+  if (style.presetId === 'custom') return 'Custom style';
+  const p = presets.find((x) => x.id === style.presetId);
+  return p?.label || style.presetId;
+}
+
+// World style picker — dropdown of curated presets + Custom + None.
+// Selecting a preset fills the prompt textarea; the user can edit it freely
+// from there, which flips the presetId to 'custom' the moment text diverges.
+// Saves are debounced into a single PATCH on blur (not per-keystroke) — the
+// onChange contract is "give me the next imageStyle" not "save it now."
+function WorldStyleRow({ value, presets, onChange }) {
+  const [draftPrompt, setDraftPrompt] = useState(value.prompt || '');
+  const [draftNeg, setDraftNeg] = useState(value.negativePrompt || '');
+
+  // Pull the saved value down when the work id swaps (or anything else that
+  // replaces the value object identity from the parent).
+  useEffect(() => {
+    setDraftPrompt(value.prompt || '');
+    setDraftNeg(value.negativePrompt || '');
+  }, [value.presetId, value.prompt, value.negativePrompt]);
+
+  const pickPreset = (presetId) => {
+    if (presetId === 'none') {
+      onChange?.({ presetId: 'none', prompt: '', negativePrompt: '' });
+      return;
+    }
+    if (presetId === 'custom') {
+      // Keep whatever's in the textarea — just flip the discriminator.
+      onChange?.({ presetId: 'custom', prompt: draftPrompt, negativePrompt: draftNeg });
+      return;
+    }
+    const preset = presets.find((p) => p.id === presetId);
+    if (!preset) return;
+    onChange?.({ presetId: preset.id, prompt: preset.prompt, negativePrompt: preset.negativePrompt });
+  };
+
+  const commitDraft = () => {
+    if (draftPrompt === value.prompt && draftNeg === value.negativePrompt) return;
+    // If the user edited a preset's text, flip to 'custom' so the dropdown
+    // reflects that the prompt no longer matches the curated preset.
+    const matchingPreset = presets.find((p) => p.id === value.presetId);
+    const stillMatchesPreset = matchingPreset
+      && matchingPreset.prompt === draftPrompt
+      && matchingPreset.negativePrompt === draftNeg;
+    onChange?.({
+      presetId: stillMatchesPreset ? value.presetId : 'custom',
+      prompt: draftPrompt,
+      negativePrompt: draftNeg,
+    });
+  };
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between">
+        <span className="text-[9px] uppercase tracking-wider text-gray-500 flex items-center gap-1">
+          <Palette size={10} /> World style
+        </span>
+        {value.presetId !== 'none' && (
+          <button
+            type="button"
+            onClick={() => pickPreset('none')}
+            className="text-[9px] text-gray-500 hover:text-port-error"
+            title="Clear style"
+          >
+            Clear
+          </button>
+        )}
+      </div>
+      <select
+        value={value.presetId}
+        onChange={(e) => pickPreset(e.target.value)}
+        className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-[11px] text-gray-200"
+      >
+        <option value="none">None — use scene visualPrompt only</option>
+        <optgroup label="Presets">
+          {presets.map((p) => (
+            <option key={p.id} value={p.id}>{p.label}</option>
+          ))}
+        </optgroup>
+        <option value="custom">Custom</option>
+      </select>
+      {value.presetId !== 'none' && (
+        <>
+          <label className="block">
+            <span className="text-[9px] uppercase tracking-wider text-gray-500">
+              Style prompt {value.presetId === 'custom' && <Check size={9} className="inline text-port-accent" />}
+            </span>
+            <textarea
+              value={draftPrompt}
+              onChange={(e) => setDraftPrompt(e.target.value)}
+              onBlur={commitDraft}
+              rows={3}
+              placeholder="cinematic still, anamorphic lens…"
+              className="w-full mt-0.5 bg-port-bg border border-port-border rounded px-2 py-1 text-[11px] text-gray-200 font-sans resize-y"
+            />
+          </label>
+          <label className="block">
+            <span className="text-[9px] uppercase tracking-wider text-gray-500">Negative prompt (optional)</span>
+            <textarea
+              value={draftNeg}
+              onChange={(e) => setDraftNeg(e.target.value)}
+              onBlur={commitDraft}
+              rows={2}
+              placeholder="cartoon, low quality…"
+              className="w-full mt-0.5 bg-port-bg border border-port-border rounded px-2 py-1 text-[11px] text-gray-200 font-sans resize-y"
+            />
+          </label>
+          <div className="text-[10px] text-gray-500">
+            Style is prepended to every scene's image prompt. Re-render scenes to see the change.
+          </div>
+        </>
+      )}
     </div>
   );
 }

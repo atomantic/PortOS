@@ -313,7 +313,7 @@ export async function createWork({ folderId = null, title, kind = 'short-story' 
 
 export async function updateWork(id, patch) {
   const manifest = await getWork(id);
-  const allowed = ['title', 'folderId', 'kind', 'status'];
+  const allowed = ['title', 'folderId', 'kind', 'status', 'imageStyle'];
   const next = { ...manifest, updatedAt: nowIso() };
   for (const key of allowed) {
     if (patch[key] === undefined) continue;
