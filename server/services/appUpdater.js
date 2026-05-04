@@ -19,7 +19,7 @@ function runCommand(cmd, args, cwd) {
       if (!settled) {
         settled = true;
         if (IS_WIN32 && child.pid) {
-          spawn('taskkill', ['/T', '/F', '/PID', String(child.pid)], { stdio: 'ignore' }).unref();
+          spawn('taskkill', ['/T', '/F', '/PID', String(child.pid)], { stdio: 'ignore', windowsHide: true }).unref();
         } else {
           child.kill('SIGTERM');
         }
@@ -29,11 +29,14 @@ function runCommand(cmd, args, cwd) {
     child.stdout.on('data', d => { stdout += d; if (stdout.length > MAX_OUTPUT_BYTES) stdout = stdout.slice(-MAX_OUTPUT_BYTES); });
     child.stderr.on('data', d => { stderr += d; if (stderr.length > MAX_OUTPUT_BYTES) stderr = stderr.slice(-MAX_OUTPUT_BYTES); });
     child.on('close', code => {
-      if (!settled) { settled = true; clearTimeout(timer); }
-      if (code !== 0) reject(new Error(stderr.trim() || `${cmd} exited with code ${code}`));
-      else resolve({ stdout, stderr });
+      if (!settled) {
+        settled = true;
+        clearTimeout(timer);
+        if (code !== 0) reject(new Error(stderr.trim() || `${cmd} exited with code ${code}`));
+        else resolve({ stdout, stderr });
+      }
     });
-    child.on('error', err => { if (!settled) { settled = true; clearTimeout(timer); } reject(err); });
+    child.on('error', err => { if (!settled) { settled = true; clearTimeout(timer); reject(err); } });
   });
 }
 

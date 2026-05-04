@@ -644,7 +644,7 @@ router.post('/:id/build', loadApp, asyncHandler(async (req, res) => {
     throw new ServerError(`Build command '${cmd}' is not allowed. Allowed: ${[...ALLOWED_BUILD_CMDS].join(', ')}`, { status: 400, code: 'INVALID_BUILD_COMMAND' });
   }
 
-  if (WIN_CMD_SHIMS.has(cmd) && args.some(a => SHELL_UNSAFE_RE.test(a))) {
+  if (needsShell(cmd) && args.some(a => SHELL_UNSAFE_RE.test(a))) {
     throw new ServerError('Build command args contain shell-unsafe characters', { status: 400, code: 'INVALID_BUILD_COMMAND' });
   }
 
@@ -782,15 +782,14 @@ const IS_WIN32 = process.platform === 'win32';
 // native binaries (xcodebuild, swift, make, cargo).
 const WIN_CMD_SHIMS = new Set(['npm', 'npx']);
 const needsShell = (cmd) => IS_WIN32 && WIN_CMD_SHIMS.has(cmd);
-// Characters cmd.exe interprets as metacharacters when shell:true is active.
-// Validate args for any command that uses a shell shim (npm/npx) so malicious
-// buildCommand strings like "npm run build&whoami" are rejected at parse time.
-const SHELL_UNSAFE_RE = /[&|<>;`$\\^%!]/;
+// Actual cmd.exe metacharacters (& | < > ^ % ! and grouping parens).
+// Validated only when shell is active (needsShell guard at call site).
+const SHELL_UNSAFE_RE = /[&|<>^%!()]/;
 // On Windows, SIGTERM kills cmd.exe but orphans its child (npm). Use taskkill
 // /T /F to terminate the whole process tree.
 const killProc = (child) => {
   if (IS_WIN32 && child.pid) {
-    spawn('taskkill', ['/T', '/F', '/PID', String(child.pid)], { stdio: 'ignore' }).unref();
+    spawn('taskkill', ['/T', '/F', '/PID', String(child.pid)], { stdio: 'ignore', windowsHide: true }).unref();
   } else {
     child.kill('SIGTERM');
   }
