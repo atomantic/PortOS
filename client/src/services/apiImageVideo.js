@@ -7,7 +7,13 @@ export const listImageModels = () => request('/image-gen/models');
 export const listLoras = () => request('/image-gen/loras');
 export const listImageGallery = () => request('/image-gen/gallery');
 export const getActiveImageJob = () => request('/image-gen/active');
-export const cancelImageGen = () => request('/image-gen/cancel', { method: 'POST' });
+// cancelImageGen({ all: true }) cancels every queued/running image job.
+// cancelImageGen({ jobId }) cancels a specific job. Plain cancelImageGen()
+// cancels the most-recent queued/running job (legacy behavior).
+export const cancelImageGen = (opts = {}) => request('/image-gen/cancel', {
+  method: 'POST',
+  body: JSON.stringify(opts),
+});
 export const deleteImage = (filename) => request(`/image-gen/${encodeURIComponent(filename)}`, { method: 'DELETE' });
 export const setImageHidden = (filename, hidden) => request(`/image-gen/${encodeURIComponent(filename)}/visibility`, {
   method: 'POST',
@@ -25,6 +31,7 @@ export const setVideoHidden = (id, hidden) => request(`/video-gen/history/${enco
   body: JSON.stringify({ hidden }),
 });
 export const extractLastFrame = (id) => request(`/video-gen/last-frame/${encodeURIComponent(id)}`, { method: 'POST' });
+export const upscaleVideo = (id) => request(`/video-gen/upscale/${encodeURIComponent(id)}`, { method: 'POST' });
 export const stitchVideos = (videoIds) => request('/video-gen/stitch', {
   method: 'POST',
   body: JSON.stringify({ videoIds }),

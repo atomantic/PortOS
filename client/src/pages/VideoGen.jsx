@@ -14,6 +14,8 @@
  *             frame, so when both are provided the last is ignored)
  *   - extend: pick a previous render → its last frame becomes the source
  *             image for a new image-to-video generation
+ *   - a2v:    audio-to-video (uploaded WAV/MP3 drives the video's motion +
+ *             audio track) — dgrauet/ltx2 runtime only
  *
  * Batch queue: client-side serial executor. The form's "Add to queue" button
  * appends a job to the queue (preserving the current params). When no job is
@@ -28,10 +30,12 @@ import Drawer from '../components/Drawer';
 import { ImageGenTab } from '../components/settings/ImageGenTab';
 import MediaCard from '../components/media/MediaCard';
 import MediaLightbox from '../components/media/MediaLightbox';
+import StylePresetPicker from '../components/media/StylePresetPicker';
 import { normalizeVideo } from '../components/media/normalize';
+import { composeStyledPrompt } from '../lib/composeStyledPrompt';
 import {
   Film, Sparkles, Settings as SettingsIcon, RefreshCw, AlertTriangle,
-  Dice5, X, Upload, Type, Image as ImageIcon, GitBranch, ListPlus,
+  Dice5, X, Upload, Type, Image as ImageIcon, GitBranch, ListPlus, Music,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import BrailleSpinner from '../components/BrailleSpinner';
@@ -39,6 +43,7 @@ import BatchQueuePanel from '../components/media/BatchQueuePanel';
 import {
   getVideoGenStatus, generateVideo, cancelVideoGen,
   listVideoHistory, deleteVideoHistoryItem, setVideoHidden, extractLastFrame,
+  upscaleVideo,
   listImageGallery,
 } from '../services/api';
 import { randomSeed, safeParseJSON } from '../lib/genUtils';
@@ -54,7 +59,13 @@ const RESOLUTIONS = [
   { label: '768×768 (1:1)', w: 768, h: 768 },
 ];
 
-const FRAME_OPTIONS = [25, 49, 73, 97, 121, 145, 169, 193, 217, 241];
+// Values follow LTX-2's 8k+1 latent boundary so the model doesn't silently
+// snap. 241 = 10s @ 24fps is the comfortable single-pass ceiling on 48 GB
+// at standard widths; the higher options (265–481) push past that and may
+// swap or OOM at 1280×704. For reliable clips longer than ~10s, use Extend
+// mode (renders past a source video, conditioning on its full latent) —
+// see the hint under the Frames dropdown.
+const FRAME_OPTIONS = [25, 49, 73, 97, 121, 145, 169, 193, 217, 241, 265, 313, 361, 481];
 const FPS_OPTIONS = [16, 24, 30];
 const TILING_OPTIONS = [
   { value: 'auto', label: 'Auto (recommended)' },
@@ -68,6 +79,7 @@ const MODES = [
   { id: 'image',  label: 'Image',  icon: ImageIcon,  desc: 'Image-to-video (start frame)' },
   { id: 'fflf',   label: 'FFLF',   icon: GitBranch,  desc: 'First frame + last frame' },
   { id: 'extend', label: 'Extend', icon: Film,       desc: 'Continue from a prior render' },
+  { id: 'a2v',    label: 'Audio',  icon: Music,      desc: 'Audio-to-video (audio drives motion + sync)' },
 ];
 
 const newQueueId = () =>
@@ -100,24 +112,37 @@ export default function VideoGen() {
   const [mode, setMode] = useState(incomingSourceImage ? 'image' : 'text');
   const [prompt, setPrompt] = useState(incomingPrompt || '');
   const [negativePrompt, setNegativePrompt] = useState(incomingNegativePrompt || '');
+  const [stylePreset, setStylePreset] = useState(null);
   const [modelId, setModelId] = useState('');
   const [width, setWidth] = useState(768);
   const [height, setHeight] = useState(512);
   const [numFrames, setNumFrames] = useState(121);
   const [fps, setFps] = useState(24);
+  const [chunks, setChunks] = useState(1);
   const [steps, setSteps] = useState('');
   const [guidanceScale, setGuidanceScale] = useState('');
   const [seed, setSeed] = useState('');
   const [tiling, setTiling] = useState('auto');
   const [disableAudio, setDisableAudio] = useState(false);
+  // "No music" appends a soundscape constraint at submit time. LTX-2
+  // conditions audio on prompt text — adding "no music, no soundtrack"
+  // pushes the model toward ambient/diegetic sound (footsteps, room tone)
+  // and away from generated background music, which is hard to remove
+  // cleanly in post. Source: phosphene LTX-2 prompting guide.
+  const [noMusic, setNoMusic] = useState(false);
   const [sourceImageFile, setSourceImageFile] = useState(incomingSourceImage || null);
   const [sourceImageUpload, setSourceImageUpload] = useState(null);
   const [lastImageFile, setLastImageFile] = useState(null);
+  const [lastImageUpload, setLastImageUpload] = useState(null);
   const [extendFromVideoId, setExtendFromVideoId] = useState('');
   const [extendingFrame, setExtendingFrame] = useState(false);
+  // a2v mode — direct audio upload only (no gallery for audio yet). The File
+  // is sent as multipart field name 'audioFile'; the server stages it under
+  // data/uploads, then the python helper passes it to AudioToVideoPipeline.
+  const [audioFile, setAudioFile] = useState(null);
 
-  // Image gallery for the FFLF end-frame picker (gallery only — no upload
-  // for the second image so the multipart parser stays single-file).
+  // Image gallery — used by both the start and end frame pickers so the
+  // user can pull from any prior render in either slot.
   const [imageGallery, setImageGallery] = useState([]);
 
   // Re-sync when ImageGen pipes a new image via ?sourceImageFile=...
@@ -149,9 +174,9 @@ export default function VideoGen() {
   const [showHidden, setShowHidden] = useState(false);
   const navigate = useNavigate();
 
-  // Object URL for the currently-selected upload File so we can render a
-  // real preview before the file ever hits the server. Revoked on change /
-  // unmount so the blob is released.
+  // Object URLs for the currently-selected upload Files so we can render
+  // real previews before the files ever hit the server. Revoked on change /
+  // unmount so the blobs are released.
   const [sourceUploadUrl, setSourceUploadUrl] = useState(null);
   useEffect(() => {
     if (!(sourceImageUpload instanceof File)) { setSourceUploadUrl(null); return; }
@@ -159,6 +184,13 @@ export default function VideoGen() {
     setSourceUploadUrl(url);
     return () => URL.revokeObjectURL(url);
   }, [sourceImageUpload]);
+  const [lastUploadUrl, setLastUploadUrl] = useState(null);
+  useEffect(() => {
+    if (!(lastImageUpload instanceof File)) { setLastUploadUrl(null); return; }
+    const url = URL.createObjectURL(lastImageUpload);
+    setLastUploadUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [lastImageUpload]);
 
   const refreshHistory = useCallback(() => {
     listVideoHistory().then((items) => setHistory(Array.isArray(items) ? items : [])).catch(() => {});
@@ -185,6 +217,27 @@ export default function VideoGen() {
     });
     if (result) toast.success(nextHidden ? 'Video hidden' : 'Video unhidden');
   };
+  // Track which history item is being upscaled so the same MediaCard's
+  // "Upscale" button disables and shows a "working" state. Storing the id
+  // (not a boolean) lets us also surface the spinner on the right tile when
+  // the user fires multiple upscales in succession; only one runs at a time
+  // because ffmpeg is single-flight on the server.
+  const [upscalingId, setUpscalingId] = useState(null);
+  const handleUpscaleHistory = async (item) => {
+    if (upscalingId) return;
+    setUpscalingId(item.id);
+    toast.info?.('Upscaling 2× — typically 10-30s…');
+    const result = await upscaleVideo(item.id).catch((err) => {
+      toast.error(err.message || 'Upscale failed');
+      return null;
+    });
+    setUpscalingId(null);
+    if (result?.video) {
+      setHistory((h) => [result.video, ...h]);
+      toast.success('Upscaled 2×');
+    }
+  };
+
   const handleContinueHistory = async (item) => {
     const { filename } = await extractLastFrame(item.id).catch((err) => {
       toast.error(err.message || 'Failed to extract last frame');
@@ -258,30 +311,61 @@ export default function VideoGen() {
       setSearchParams(next, { replace: true });
     }
   };
-  const clearLastImage = () => setLastImageFile(null);
+  const clearLastImage = () => {
+    setLastImageFile(null);
+    setLastImageUpload(null);
+  };
 
   // Switching mode resets the now-irrelevant fields so a stale choice from
   // a prior mode can't sneak into the next generation. (Prompt/seed/etc.
   // carry over because they apply to all modes.)
   const handleModeChange = (next) => {
     setMode(next);
+    // Audio is only meaningful in a2v mode — drop it on every other switch
+    // so a stale upload from a prior pick doesn't sneak into a non-a2v post.
+    if (next !== 'a2v') setAudioFile(null);
     if (next === 'text') {
       clearSourceImage();
-      setLastImageFile(null);
+      clearLastImage();
       setExtendFromVideoId('');
     } else if (next === 'image') {
-      setLastImageFile(null);
+      clearLastImage();
       setExtendFromVideoId('');
     } else if (next === 'fflf') {
       setExtendFromVideoId('');
     } else if (next === 'extend') {
-      setLastImageFile(null);
+      clearLastImage();
       // Drop any source image carried over from a prior mode — extend will
       // populate sourceImageFile fresh from the picked video's last frame
       // via handleExtendPick. Without this, switching from image/fflf into
       // extend leaves a stale source that gets silently submitted alongside
       // an empty extendFromVideoId.
       clearSourceImage();
+    } else if (next === 'a2v') {
+      // a2v takes audio only — buildGeneratePayload omits sourceImageFile +
+      // sourceImage in this mode, so dropping them here keeps state honest
+      // (no stale image survives in the form to imply it's being used).
+      // The python helper supports an optional first-frame image, but the
+      // UI doesn't expose it yet (see PR description "Out of scope"). Once
+      // we add a gallery-pick path for the first frame, restore the source-
+      // image state pass-through here.
+      clearSourceImage();
+      clearLastImage();
+      setExtendFromVideoId('');
+      // disableAudio strips the output audio track — in a2v mode that would
+      // remove the user's uploaded audio, defeating the mode entirely.
+      // noMusic appends a prompt constraint for text-conditioned audio gen;
+      // a2v uses uploaded audio so the constraint is meaningless there too.
+      setDisableAudio(false);
+      setNoMusic(false);
+      // Auto-select the smallest (first) ltx2-runtime model so the user
+      // doesn't land on a blocked state. Only fires when the current model
+      // can't handle a2v — if they already have a dgrauet model selected
+      // we leave it alone.
+      if (currentModel?.runtime !== 'ltx2') {
+        const ltx2Model = models.find((m) => m.runtime === 'ltx2');
+        if (ltx2Model) setModelId(ltx2Model.id);
+      }
     }
   };
 
@@ -308,6 +392,15 @@ export default function VideoGen() {
       setExtendingFrame(false);
       return;
     }
+    // ltx2 runtime: native ExtendPipeline conditions on the entire source
+    // video's latent, so we DON'T need a last-frame PNG. Skip the ffmpeg
+    // extract roundtrip — the route resolves the video id to a disk path
+    // server-side. Saves ~1s per pick + avoids the i2v fallback when the
+    // extract fails.
+    if (currentModel?.runtime === 'ltx2') {
+      setExtendingFrame(false);
+      return;
+    }
     setExtendingFrame(true);
     const res = await extractLastFrame(videoId).catch((err) => {
       toast.error(err.message || 'Failed to extract last frame');
@@ -328,23 +421,46 @@ export default function VideoGen() {
 
   // Snapshot the current form into a generate-payload. Used both by the
   // inline Generate button and by enqueue, so the two paths stay in lockstep.
-  const buildGeneratePayload = () => ({
-    prompt: prompt.trim(),
-    negativePrompt: negativePrompt.trim() || '',
-    modelId,
-    width, height,
-    numFrames,
-    fps,
-    steps: steps || '',
-    guidanceScale: guidanceScale || '',
-    seed: seed || '',
-    tiling,
-    disableAudio: disableAudio ? 'true' : 'false',
-    mode,
-    sourceImageFile: (mode === 'image' || mode === 'fflf' || mode === 'extend') ? (sourceImageFile || '') : '',
-    sourceImage: (mode === 'image' || mode === 'fflf') ? (sourceImageUpload || '') : '',
-    lastImageFile: mode === 'fflf' ? (lastImageFile || '') : '',
-  });
+  const buildGeneratePayload = () => {
+    const composed = composeStyledPrompt(prompt, negativePrompt, stylePreset);
+    // Append "no music, no soundtrack" only when the toggle is on AND audio
+    // generation is itself active — there's no point steering audio output
+    // when audio is disabled outright. Idempotent: if the user already
+    // typed "no music" we avoid double-appending.
+    const promptOut = (noMusic && !disableAudio && !/no music/i.test(composed.prompt))
+      ? `${composed.prompt}\n\nno music, no soundtrack`
+      : composed.prompt;
+    return {
+      prompt: promptOut,
+      negativePrompt: composed.negativePrompt,
+      modelId,
+      width, height,
+      numFrames,
+      fps,
+      steps: steps || '',
+      guidanceScale: guidanceScale || '',
+      seed: seed || '',
+      tiling,
+      disableAudio: disableAudio ? 'true' : 'false',
+      mode,
+      // ltx2-extend bypasses the last-frame i2v path: we send the source
+      // video's history id directly so the server resolves it to a disk
+      // path and routes through ExtendPipeline. Legacy extend (mlx_video)
+      // still uses sourceImageFile populated from extractLastFrame.
+      sourceImageFile: (mode === 'image' || mode === 'fflf'
+        || (mode === 'extend' && currentModel?.runtime !== 'ltx2'))
+        ? (sourceImageFile || '') : '',
+      sourceImage: (mode === 'image' || mode === 'fflf') ? (sourceImageUpload || '') : '',
+      lastImageFile: mode === 'fflf' ? (lastImageFile || '') : '',
+      lastImage: mode === 'fflf' ? (lastImageUpload || '') : '',
+      extendFromVideoId: (mode === 'extend' && currentModel?.runtime === 'ltx2')
+        ? (extendFromVideoId || '') : '',
+      // Audio File goes through under the multipart field 'audioFile'. Server
+      // routes it to the durable uploads dir and into the a2v helper.
+      audioFile: mode === 'a2v' ? (audioFile || '') : '',
+      chunks: chunks > 1 ? chunks : '',
+    };
+  };
 
   // Run a single payload through the SSE pipeline. Returns a promise that
   // resolves when the job completes (or rejects on error / cancel). Shared
@@ -443,8 +559,17 @@ export default function VideoGen() {
   // is empty and the request would silently fall back to T2V while still
   // sending mode='extend'. Block submit/enqueue until the extend frame is
   // actually ready (and unblocks the disabled state on the buttons too).
-  const extendModeBlocked = mode === 'extend'
-    && (extendingFrame || !extendFromVideoId || !sourceImageFile);
+  // ltx2-extend doesn't need a frame extraction — the route resolves the
+  // video id directly. Block only on extendFromVideoId being unset (and on
+  // legacy runtime, also wait for the extracted frame).
+  const extendModeBlocked = mode === 'extend' && (
+    !extendFromVideoId
+    || (currentModel?.runtime !== 'ltx2' && (extendingFrame || !sourceImageFile))
+  );
+  // a2v requires an audio upload AND an ltx2-runtime model — the legacy
+  // mlx_video runtime has no audio-conditioned pipeline. Block submit when
+  // either is missing so the request fails the form, not the worker.
+  const a2vModeBlocked = mode === 'a2v' && (!audioFile || currentModel?.runtime !== 'ltx2');
 
   const handleGenerate = async (e) => {
     e?.preventDefault?.();
@@ -453,22 +578,26 @@ export default function VideoGen() {
     // Without these guards the user could press Enter in the prompt
     // textarea and fire a request the disabled button would otherwise
     // have prevented.
-    if (!prompt.trim() || generating || (status && status.connected === false) || extendModeBlocked) return;
+    if (!prompt.trim() || generating || (status && status.connected === false) || extendModeBlocked || a2vModeBlocked) return;
     await runGeneration(buildGeneratePayload()).catch(() => {});
   };
 
   const handleEnqueue = () => {
-    if (!prompt.trim() || (status && status.connected === false) || extendModeBlocked) return;
+    if (!prompt.trim() || (status && status.connected === false) || extendModeBlocked || a2vModeBlocked) return;
     const payload = buildGeneratePayload();
-    // Strip the File blob for snapshot — re-using a File across multiple
-    // queued submissions is fine, but we need a stable JSON-ish summary
-    // for the queue UI display. Hold the File in `_blob` separately.
-    const { sourceImage, ...summary } = payload;
+    // Strip File blobs for snapshot — re-using a File across multiple queued
+    // submissions is fine, but we need a stable JSON-ish summary for the
+    // queue UI display. Hold the Files in `_blobs` separately.
+    const { sourceImage, lastImage, audioFile: audioBlob, ...summary } = payload;
     setQueue((q) => [...q, {
       id: newQueueId(),
       status: 'pending',
       params: summary,
-      _blob: sourceImage instanceof File ? sourceImage : null,
+      _blobs: {
+        sourceImage: sourceImage instanceof File ? sourceImage : null,
+        lastImage: lastImage instanceof File ? lastImage : null,
+        audioFile: audioBlob instanceof File ? audioBlob : null,
+      },
       enqueuedAt: Date.now(),
     }]);
     toast.success('Added to queue');
@@ -499,7 +628,9 @@ export default function VideoGen() {
     setRunningQueueId(next.id);
     setQueue((q) => q.map((item) => item.id === next.id ? { ...item, status: 'running', startedAt: Date.now() } : item));
     const payload = { ...next.params };
-    if (next._blob) payload.sourceImage = next._blob;
+    if (next._blobs?.sourceImage) payload.sourceImage = next._blobs.sourceImage;
+    if (next._blobs?.lastImage) payload.lastImage = next._blobs.lastImage;
+    if (next._blobs?.audioFile) payload.audioFile = next._blobs.audioFile;
     let busyRetry = false;
     let busyRetryTimer = null;
     runGeneration(payload).then((res) => {
@@ -553,7 +684,79 @@ export default function VideoGen() {
   };
 
   const notConnected = status && status.connected === false;
-  const canEnqueue = prompt.trim() && !notConnected && !extendModeBlocked;
+  const canEnqueue = prompt.trim() && !notConnected && !extendModeBlocked && !a2vModeBlocked;
+
+  // Symmetric frame picker for the FFLF + image modes. Each slot accepts
+  // EITHER a gallery filename OR a fresh upload; the preview renders
+  // whichever is currently set, and clearing either one snaps the slot back
+  // to the dual upload+gallery picker. Defined inline because it closes
+  // over imageGallery and the per-slot state — extracting it as a real
+  // component would mean prop-drilling 6+ values for no real reuse.
+  const renderFramePanel = ({
+    label,
+    file,
+    upload,
+    uploadUrl,
+    onPickGallery,
+    onUpload,
+    onClear,
+    alt,
+    advisoryNote,
+  }) => {
+    // Clear button shows as soon as the user picks anything (state-only).
+    // Preview gates on `uploadUrl` instead of the raw `upload` File because
+    // the object URL is generated in a useEffect — without this, the render
+    // between "user picked a file" and "useEffect ran" would mount an
+    // <img src={null}> for one frame.
+    const hasSelection = !!(file || upload);
+    const canPreview = !!(file || uploadUrl);
+    return (
+      <div className="border border-port-border/50 rounded-lg p-2 space-y-1.5">
+        <div className="flex items-center justify-between">
+          <span className="text-[11px] font-medium text-gray-400">{label}</span>
+          {hasSelection && (
+            <button type="button" onClick={onClear} className="text-[11px] text-port-error hover:underline">Clear</button>
+          )}
+        </div>
+        {canPreview ? (
+          <ImagePreview
+            src={file ? `/data/images/${file}` : uploadUrl}
+            alt={alt}
+            label={file || upload?.name}
+          />
+        ) : (
+          <div className="space-y-1.5">
+            <select
+              value=""
+              onChange={(e) => onPickGallery(e.target.value || null)}
+              aria-label={`${label} — pick from gallery`}
+              className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
+            >
+              <option value="">Pick from gallery…</option>
+              {imageGallery.filter((img) => !img.hidden).slice(0, 50).map((img) => (
+                <option key={img.filename} value={img.filename}>{img.filename}</option>
+              ))}
+            </select>
+            <label className="flex items-center gap-2 text-[11px] text-gray-400 cursor-pointer hover:text-white">
+              <Upload className="w-3.5 h-3.5" />
+              <span className="truncate">Upload an image</span>
+              <input
+                type="file"
+                accept="image/*"
+                onChange={(e) => onUpload(e.target.files?.[0] || null)}
+                className="hidden"
+              />
+            </label>
+          </div>
+        )}
+        {advisoryNote && (
+          <p className="text-[10px] text-gray-500 leading-snug" title={advisoryNote.title}>
+            {advisoryNote.text}
+          </p>
+        )}
+      </div>
+    );
+  };
 
   return (
     <div className="space-y-3">
@@ -627,6 +830,11 @@ export default function VideoGen() {
 
       <form onSubmit={handleGenerate} className="grid grid-cols-1 lg:grid-cols-[3fr_2fr] gap-4">
         <div className="bg-port-card border border-port-border rounded-xl p-4 space-y-3">
+          <StylePresetPicker
+            value={stylePreset?.id || ''}
+            onChange={setStylePreset}
+            disabled={generating}
+          />
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-medium text-gray-400 mb-1">Prompt</label>
@@ -652,69 +860,90 @@ export default function VideoGen() {
 
           {(mode === 'image' || mode === 'fflf') && (
             <div className={`grid gap-2 ${mode === 'fflf' ? 'grid-cols-1 sm:grid-cols-2' : 'grid-cols-1'}`}>
-              <div className="border border-port-border/50 rounded-lg p-2 space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-medium text-gray-400">
-                    {mode === 'fflf' ? 'First frame' : 'Source image'}
-                  </span>
-                  {(sourceImageFile || sourceImageUpload) && (
-                    <button type="button" onClick={clearSourceImage} className="text-[11px] text-port-error hover:underline">Clear</button>
-                  )}
-                </div>
-                {(sourceImageFile || sourceUploadUrl) ? (
-                  <ImagePreview
-                    src={sourceImageFile ? `/data/images/${sourceImageFile}` : sourceUploadUrl}
-                    alt="Source"
-                    label={sourceImageFile || sourceImageUpload?.name}
-                  />
-                ) : (
-                  <label className="flex items-center gap-2 text-[11px] text-gray-400 cursor-pointer hover:text-white">
-                    <Upload className="w-3.5 h-3.5" />
-                    <span className="truncate">Upload an image</span>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={(e) => {
-                        const file = e.target.files?.[0] || null;
-                        // Clear any gallery pick + URL param when an upload is
-                        // chosen — otherwise the preview keeps rendering the
-                        // old gallery image (src prefers sourceImageFile) while
-                        // the POST sends `req.file` from the upload, which
-                        // looks like the wrong image was used.
-                        if (file && (sourceImageFile || incomingSourceImage)) clearSourceImage();
-                        setSourceImageUpload(file);
-                      }}
-                      className="hidden"
-                    />
-                  </label>
+              {renderFramePanel({
+                label: mode === 'fflf' ? 'First frame' : 'Source image',
+                file: sourceImageFile,
+                upload: sourceImageUpload,
+                uploadUrl: sourceUploadUrl,
+                onPickGallery: (filename) => {
+                  // Switching to a gallery pick must drop any pending upload
+                  // and the deep-link URL param; otherwise the next render
+                  // would still POST the stale upload (req.files wins) while
+                  // the preview shows the gallery image.
+                  setSourceImageUpload(null);
+                  if (incomingSourceImage) {
+                    const next = new URLSearchParams(searchParams);
+                    next.delete('sourceImageFile');
+                    setSearchParams(next, { replace: true });
+                  }
+                  setSourceImageFile(filename);
+                },
+                onUpload: (file) => {
+                  // Clear any gallery pick + URL param when an upload is
+                  // chosen — otherwise the preview keeps rendering the old
+                  // gallery image while the POST sends the upload.
+                  if (file && (sourceImageFile || incomingSourceImage)) clearSourceImage();
+                  setSourceImageUpload(file);
+                },
+                onClear: clearSourceImage,
+                alt: 'Source',
+              })}
+              {mode === 'fflf' && renderFramePanel({
+                label: 'Last frame',
+                file: lastImageFile,
+                upload: lastImageUpload,
+                uploadUrl: lastUploadUrl,
+                onPickGallery: (filename) => {
+                  setLastImageUpload(null);
+                  setLastImageFile(filename);
+                },
+                onUpload: (file) => {
+                  if (file && lastImageFile) setLastImageFile(null);
+                  setLastImageUpload(file);
+                },
+                onClear: clearLastImage,
+                alt: 'End frame',
+                advisoryNote: {
+                  text: 'Experimental — last frame is advisory.',
+                  title: 'FFLF backend support is experimental — LTX/mlx_video uses the start frame and treats the last frame as advisory.',
+                },
+              })}
+            </div>
+          )}
+
+          {mode === 'a2v' && (
+            <div className="border border-port-border/50 rounded-lg p-2 space-y-1.5">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-medium text-gray-400">Audio (drives motion + sync)</span>
+                {audioFile && (
+                  <button type="button" onClick={() => setAudioFile(null)} className="text-[11px] text-port-error hover:underline">Clear</button>
                 )}
               </div>
-              {mode === 'fflf' && (
-                <div className="border border-port-border/50 rounded-lg p-2 space-y-1.5">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[11px] font-medium text-gray-400">Last frame</span>
-                    {lastImageFile && (
-                      <button type="button" onClick={clearLastImage} className="text-[11px] text-port-error hover:underline">Clear</button>
-                    )}
-                  </div>
-                  {lastImageFile ? (
-                    <ImagePreview src={`/data/images/${lastImageFile}`} alt="End frame" label={lastImageFile} />
-                  ) : (
-                    <select
-                      value=""
-                      onChange={(e) => setLastImageFile(e.target.value || null)}
-                      className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
-                    >
-                      <option value="">Pick from gallery…</option>
-                      {imageGallery.filter((img) => !img.hidden).slice(0, 50).map((img) => (
-                        <option key={img.filename} value={img.filename}>{img.filename}</option>
-                      ))}
-                    </select>
-                  )}
-                  <p className="text-[10px] text-gray-500 leading-snug" title="FFLF backend support is experimental — LTX/mlx_video uses the start frame and treats the last frame as advisory.">
-                    Experimental — last frame is advisory.
-                  </p>
+              {audioFile ? (
+                <div className="flex items-center gap-2 text-[11px] text-gray-300">
+                  <Music className="w-3.5 h-3.5 text-port-accent" />
+                  <span className="truncate" title={audioFile.name}>{audioFile.name}</span>
+                  <span className="text-gray-500">{(audioFile.size / 1024 / 1024).toFixed(2)} MB</span>
                 </div>
+              ) : (
+                <label className="flex items-center gap-2 text-[11px] text-gray-400 cursor-pointer hover:text-white">
+                  <Upload className="w-3.5 h-3.5" />
+                  <span className="truncate">Upload audio (WAV / MP3 / M4A)</span>
+                  <input
+                    type="file"
+                    accept="audio/*"
+                    onChange={(e) => setAudioFile(e.target.files?.[0] || null)}
+                    className="hidden"
+                  />
+                </label>
+              )}
+              <p className="text-[10px] text-gray-500 leading-snug">
+                Audio length should match {`${(numFrames / fps).toFixed(1)}s`} (frames ÷ fps). Longer clips are trimmed to fit; shorter clips fail.
+              </p>
+              {currentModel?.runtime !== 'ltx2' && (
+                <p className="text-[11px] text-port-warning">
+                  a2v requires an ltx2-runtime model — switch the Model dropdown to one of the dgrauet entries.
+                </p>
               )}
             </div>
           )}
@@ -790,6 +1019,28 @@ export default function VideoGen() {
               >
                 {FRAME_OPTIONS.map((f) => <option key={f} value={f}>{f} ({(f / fps).toFixed(1)}s @ {fps}fps)</option>)}
               </select>
+              {numFrames > 241 && (
+                <p className="text-[10px] text-gray-500 leading-snug mt-1">
+                  Past 241 frames a single-pass render may swap or OOM at 48 GB. For reliable longer clips, render up to ~10s and then use <strong>Extend</strong> on the result — it conditions on the source's full latent rather than a single last frame.
+                </p>
+              )}
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-gray-400 mb-1" title="Chain N renders end-to-end. Each chunk's last frame seeds the next, then they're stitched into one clip. Wall time scales linearly with chunks.">
+                Chunks
+              </label>
+              <select
+                value={chunks}
+                onChange={(e) => setChunks(Number(e.target.value))}
+                className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
+              >
+                {[1, 2, 3, 4, 5, 6, 7, 8].map((n) => (
+                  <option key={n} value={n}>
+                    {n === 1 ? '1 (single)' : `${n} (~${((n * numFrames) / fps).toFixed(0)}s total)`}
+                  </option>
+                ))}
+              </select>
             </div>
 
             <div>
@@ -861,15 +1112,32 @@ export default function VideoGen() {
               </select>
             </div>
 
-            <label className="col-span-2 sm:col-span-3 flex items-center gap-2 text-xs text-gray-400 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={disableAudio}
-                onChange={(e) => setDisableAudio(e.target.checked)}
-                className="rounded"
-              />
-              Disable audio (LTX-2 only — speeds up generation)
-            </label>
+            {mode !== 'a2v' && (
+              <label className="col-span-2 sm:col-span-3 flex items-center gap-2 text-xs text-gray-400 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={disableAudio}
+                  onChange={(e) => setDisableAudio(e.target.checked)}
+                  className="rounded"
+                />
+                Disable audio (LTX-2 only — speeds up generation)
+              </label>
+            )}
+            {mode !== 'a2v' && (
+              <label
+                className={`col-span-2 sm:col-span-3 flex items-center gap-2 text-xs cursor-pointer ${disableAudio ? 'text-gray-600 cursor-not-allowed' : 'text-gray-400'}`}
+                title="LTX-2 conditions audio on the prompt — appending 'no music, no soundtrack' at submit time pushes the model toward ambient/diegetic sound only"
+              >
+                <input
+                  type="checkbox"
+                  checked={noMusic}
+                  disabled={disableAudio}
+                  onChange={(e) => setNoMusic(e.target.checked)}
+                  className="rounded"
+                />
+                No music — keep ambient/diegetic sound only (LTX-2)
+              </label>
+            )}
           </div>
 
           <div className="flex flex-wrap items-center gap-2 pt-1">
@@ -884,9 +1152,15 @@ export default function VideoGen() {
             ) : (
               <button
                 type="submit"
-                disabled={!prompt.trim() || notConnected || extendModeBlocked}
+                disabled={!prompt.trim() || notConnected || extendModeBlocked || a2vModeBlocked}
                 className="flex items-center gap-2 px-4 py-2 bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg min-h-[40px]"
-                title={extendModeBlocked ? 'Pick a prior render and wait for the last frame to extract before generating' : undefined}
+                title={
+                  extendModeBlocked ? 'Pick a prior render and wait for the last frame to extract before generating'
+                    : a2vModeBlocked ? (currentModel?.runtime !== 'ltx2'
+                      ? 'a2v mode requires an ltx2-runtime model — pick one from the Model dropdown'
+                      : 'Pick an audio file before generating')
+                    : undefined
+                }
               >
                 <Sparkles className="w-4 h-4" /> Generate
               </button>
@@ -977,6 +1251,7 @@ export default function VideoGen() {
                   item={item}
                   onPreview={() => setPreview(item)}
                   onContinue={() => handleContinueHistory(v)}
+                  onUpscale={() => handleUpscaleHistory(v)}
                   onDelete={() => handleDeleteHistory(v)}
                   onToggleHidden={() => handleToggleHistoryHidden(v)}
                 />

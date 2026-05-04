@@ -53,6 +53,55 @@ if (!existsSync(dataDir)) {
   console.log('✅ Data directory already exists, ensured subdirectories and files');
 }
 
+// Merge new top-level entries from data.sample's structured JSON files into
+// the user's existing copies, leaving customized entries untouched. Without
+// this, only file-level "missing → copy" propagation runs above, so a new
+// prompt stage or shared variable added to data.sample/prompts/ never
+// reaches an existing install whose stage-config.json or variables.json
+// already exists. Each merge target points at one top-level dict-shaped key
+// (`stages` for stage-config.json, `variables` for variables.json) and the
+// merger adds entries the user is missing without overwriting anything they
+// have. Caveat: if a user deliberately deleted a starter entry it WILL come
+// back on the next run — that's the documented trade-off vs. silent drift.
+const JSON_MERGE_TARGETS = [
+  { relPath: 'prompts/stage-config.json', mergeKey: 'stages' },
+  { relPath: 'prompts/variables.json',    mergeKey: 'variables' },
+];
+
+const mergeJsonStarter = (relPath, mergeKey) => {
+  const samplePath = join(sampleDir, relPath);
+  const dataPath = join(dataDir, relPath);
+  if (!existsSync(samplePath) || !existsSync(dataPath)) return;
+  let sample, data;
+  try {
+    sample = JSON.parse(readFileSync(samplePath, 'utf8'));
+    data = JSON.parse(readFileSync(dataPath, 'utf8'));
+  } catch (err) {
+    console.log(`⚠️ Skipping JSON merge for ${relPath}: ${err.message}`);
+    return;
+  }
+  const sampleEntries = sample?.[mergeKey];
+  if (!sampleEntries || typeof sampleEntries !== 'object' || Array.isArray(sampleEntries)) return;
+  if (!data[mergeKey] || typeof data[mergeKey] !== 'object' || Array.isArray(data[mergeKey])) {
+    data[mergeKey] = {};
+  }
+  const added = [];
+  for (const [key, value] of Object.entries(sampleEntries)) {
+    if (!(key in data[mergeKey])) {
+      data[mergeKey][key] = value;
+      added.push(key);
+    }
+  }
+  if (added.length > 0) {
+    writeFileSync(dataPath, JSON.stringify(data, null, 2) + '\n');
+    console.log(`📝 ${relPath}: merged ${added.length} new ${mergeKey} ${added.length === 1 ? 'entry' : 'entries'} (${added.join(', ')})`);
+  }
+};
+
+for (const { relPath, mergeKey } of JSON_MERGE_TARGETS) {
+  mergeJsonStarter(relPath, mergeKey);
+}
+
 // Ensure migrations directory exists (not in data.sample, needed for both fresh and existing installs)
 const migrationsDir = join(dataDir, 'migrations');
 if (!existsSync(migrationsDir)) {

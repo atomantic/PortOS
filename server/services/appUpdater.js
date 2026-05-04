@@ -5,29 +5,40 @@ import { readFile } from 'fs/promises';
 import * as gitService from './git.js';
 import * as pm2Service from './pm2.js';
 
-/**
- * Run a command and return stdout/stderr
- */
-const MAX_OUTPUT_BYTES = 64 * 1024; // 64KB tail per stream
+const IS_WIN32 = process.platform === 'win32';
+const WIN_CMD_SHIMS = new Set(['npm', 'npx']);
+const needsShell = (cmd) => IS_WIN32 && WIN_CMD_SHIMS.has(cmd);
+const MAX_OUTPUT_BYTES = 64 * 1024;
+const CMD_TIMEOUT_MS = 5 * 60 * 1000;
 
 function runCommand(cmd, args, cwd) {
   return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, { cwd, shell: false, windowsHide: true });
+    const child = spawn(cmd, args, { cwd, shell: needsShell(cmd), windowsHide: true });
     let stdout = '';
     let stderr = '';
-    child.stdout.on('data', d => {
-      stdout += d;
-      if (stdout.length > MAX_OUTPUT_BYTES) stdout = stdout.slice(-MAX_OUTPUT_BYTES);
-    });
-    child.stderr.on('data', d => {
-      stderr += d;
-      if (stderr.length > MAX_OUTPUT_BYTES) stderr = stderr.slice(-MAX_OUTPUT_BYTES);
-    });
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        if (IS_WIN32 && child.pid) {
+          spawn('taskkill', ['/T', '/F', '/PID', String(child.pid)], { stdio: 'ignore', windowsHide: true }).on('error', () => {}).unref();
+        } else {
+          child.kill('SIGTERM');
+        }
+        reject(new Error(`${cmd} timed out after ${CMD_TIMEOUT_MS / 1000}s`));
+      }
+    }, CMD_TIMEOUT_MS);
+    child.stdout.on('data', d => { stdout += d; if (stdout.length > MAX_OUTPUT_BYTES) stdout = stdout.slice(-MAX_OUTPUT_BYTES); });
+    child.stderr.on('data', d => { stderr += d; if (stderr.length > MAX_OUTPUT_BYTES) stderr = stderr.slice(-MAX_OUTPUT_BYTES); });
     child.on('close', code => {
-      if (code !== 0) reject(new Error(stderr.trim() || `${cmd} exited with code ${code}`));
-      else resolve({ stdout, stderr });
+      if (!settled) {
+        settled = true;
+        clearTimeout(timer);
+        if (code !== 0) reject(new Error(stderr.trim() || `${cmd} exited with code ${code}`));
+        else resolve({ stdout, stderr });
+      }
     });
-    child.on('error', reject);
+    child.on('error', err => { if (!settled) { settled = true; clearTimeout(timer); reject(err); } });
   });
 }
 
@@ -63,14 +74,12 @@ async function _doUpdate(app, emit) {
   const dir = app.repoPath;
   const steps = [];
 
-  // Step 1: Git pull
   emit('git-pull', 'running', 'Pulling latest changes...');
   const pullResult = await gitService.pull(dir);
   const pullMsg = pullResult.output?.trim() || 'Up to date';
   emit('git-pull', 'done', pullMsg);
   steps.push({ step: 'git-pull', success: true, message: pullMsg });
 
-  // Step 2: Install deps for each subdir that has package.json
   for (const sub of ['', 'client', 'server', 'admin']) {
     const subDir = sub ? join(dir, sub) : dir;
     if (existsSync(join(subDir, 'package.json'))) {
@@ -83,7 +92,6 @@ async function _doUpdate(app, emit) {
     }
   }
 
-  // Step 3: Run setup if available
   const pkgPath = join(dir, 'package.json');
   if (existsSync(pkgPath)) {
     const pkg = JSON.parse(await readFile(pkgPath, 'utf-8'));
@@ -95,7 +103,6 @@ async function _doUpdate(app, emit) {
     }
   }
 
-  // Step 4: Restart PM2 processes
   const processNames = app.pm2ProcessNames || [];
   if (processNames.length > 0) {
     emit('restart', 'running', 'Restarting app...');

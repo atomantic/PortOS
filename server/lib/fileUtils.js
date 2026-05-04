@@ -54,7 +54,6 @@ export const PATHS = {
   digests: join(__lib_dirname, '../../data/cos/digests'),
   promptSkills: join(__lib_dirname, '../../data/prompts/skills'),
   promptSkillsJobs: join(__lib_dirname, '../../data/prompts/skills/jobs'),
-  cosEvolution: join(__lib_dirname, '../../data/cos/evolution'),
   decisions: join(__lib_dirname, '../../data/cos/decisions'),
   telegram: join(__lib_dirname, '../../data/telegram'),
   templates: join(__lib_dirname, '../../data/prompts/templates'),

@@ -301,28 +301,39 @@ export async function syncAllBrainData({ dryRun = false } = {}) {
 }
 
 // ─── Event Handlers ─────────────────────────────────────────────────────────
-// Entity stores emit "{type}:changed" with the full store data object { records: { id: {...} } }
-// JSONL stores emit "{type}:added" with a single record
+// Entity stores emit "{type}:upserted" / "{type}:deleted" with the single
+// affected record. (An earlier version listened to the store-wide
+// "{type}:changed" event and re-synced every record on each write — which
+// triggered O(N) memory updates and embedding rebuilds for every brain item
+// added. The journals path was fixed first; this is the same fix for the
+// JSON entity stores.)
+// JSONL stores still emit "{type}:added" with a single record.
 
-async function handleEntityChanged(brainType, storeData) {
-  if (!storeData?.records) return;
-  const map = await loadBridgeMap();
-  for (const [id, record] of Object.entries(storeData.records)) {
-    if (record.archived) {
-      // Archive the mapped CoS memory if one exists
-      const key = bridgeKey(brainType, id);
-      const memoryId = map[key];
-      if (memoryId) {
-        memory.updateMemory(memoryId, { status: 'archived' }).catch(err => {
-          console.error(`❌ Brain bridge archive failed for ${brainType}/${id}: ${err.message}`);
-        });
-      }
-      continue;
+async function handleEntityUpserted(brainType, { id, record }) {
+  if (!id || !record) return;
+  if (record.archived) {
+    const map = await loadBridgeMap();
+    const memoryId = map[bridgeKey(brainType, id)];
+    if (memoryId) {
+      memory.updateMemory(memoryId, { status: 'archived' }).catch(err => {
+        console.error(`❌ Brain bridge archive failed for ${brainType}/${id}: ${err.message}`);
+      });
     }
-    syncBrainRecord(brainType, { id, ...record }).catch(err => {
-      console.error(`❌ Brain bridge sync failed for ${brainType}/${id}: ${err.message}`);
-    });
+    return;
   }
+  syncBrainRecord(brainType, record).catch(err => {
+    console.error(`❌ Brain bridge sync failed for ${brainType}/${id}: ${err.message}`);
+  });
+}
+
+async function handleEntityDeleted(brainType, { id }) {
+  if (!id) return;
+  const map = await loadBridgeMap();
+  const memoryId = map[bridgeKey(brainType, id)];
+  if (!memoryId) return;
+  memory.updateMemory(memoryId, { status: 'archived' }).catch(err => {
+    console.error(`❌ Brain bridge delete-archive failed for ${brainType}/${id}: ${err.message}`);
+  });
 }
 
 function handleJsonlAdded(brainType, record) {
@@ -340,9 +351,11 @@ function handleJsonlAdded(brainType, record) {
  * are automatically mirrored to the CoS memory system.
  */
 export function initBridge() {
-  // Entity store changes
+  // Entity store changes — listen to per-record events so a single create/update
+  // doesn't fan out to re-sync every existing record (and rebuild every embedding).
   for (const type of ['people', 'projects', 'ideas', 'admin', 'memories']) {
-    brainEvents.on(`${type}:changed`, (data) => handleEntityChanged(type, data));
+    brainEvents.on(`${type}:upserted`, (payload) => handleEntityUpserted(type, payload));
+    brainEvents.on(`${type}:deleted`, (payload) => handleEntityDeleted(type, payload));
   }
 
   // JSONL appends (digests, reviews)

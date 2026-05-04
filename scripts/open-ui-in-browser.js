@@ -103,3 +103,4 @@ if (!res.ok) {
 }
 
 console.log(`🌐 Opened ${TARGET_URL} in PortOS browser`);
+process.exit(0);

@@ -3,7 +3,8 @@ import AppTile from '../../AppTile';
 import { SchematicLabel, MicroGlyph } from '../../micrographics';
 
 export default function AppsGridWidget({ dashboardState }) {
-  const { apps, sortedApps, refetch } = dashboardState;
+  const { apps, sortedApps, activeApps, refetch } = dashboardState;
+  const archivedCount = apps.length - activeApps.length;
   if (apps.length === 0) {
     return (
       <div className="relative bg-port-card border border-port-border rounded-xl p-8 sm:p-12 text-center">
@@ -29,10 +30,15 @@ export default function AppsGridWidget({ dashboardState }) {
     );
   }
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3">
-      {sortedApps.map((app) => (
-        <AppTile key={app.id} app={app} onUpdate={refetch} />
-      ))}
+    <div className="space-y-2">
+      <p className="text-xs text-gray-500">
+        {activeApps.length} app{activeApps.length !== 1 ? 's' : ''} registered{archivedCount > 0 ? ` (${archivedCount} archived)` : ''}
+      </p>
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6 gap-3">
+        {sortedApps.map((app) => (
+          <AppTile key={app.id} app={app} onUpdate={refetch} />
+        ))}
+      </div>
     </div>
   );
 }

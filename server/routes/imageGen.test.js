@@ -199,6 +199,78 @@ describe('Image Gen Routes', () => {
       expect(response.body.error).toMatch(/not configured/i);
       expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
     });
+
+    // Codex mode now goes through the mediaJobQueue (codex lane), so a
+    // burst of writers-room storyboard renders queues against itself
+    // instead of failing the second-and-onwards calls with 409
+    // IMAGE_GEN_BUSY.
+    it('codex mode enqueues through mediaJobQueue and returns queued status', async () => {
+      getSettings.mockResolvedValueOnce({
+        imageGen: { mode: 'codex', codex: { enabled: true, codexPath: '/usr/local/bin/codex', model: 'gpt-5.4' } },
+      });
+      mediaJobQueue.enqueueJob.mockReturnValueOnce({ jobId: 'queued-codex-001', position: 1, status: 'queued' });
+
+      const response = await request(app)
+        .post('/api/image-gen/generate')
+        .send({ prompt: 'a tavern at dusk' });
+
+      expect(response.status).toBe(200);
+      expect(response.body.status).toBe('queued');
+      expect(response.body.mode).toBe('codex');
+      expect(response.body.model).toBe('gpt-5.4');
+      expect(response.body.jobId).toBe('queued-codex-001');
+      expect(response.body.path).toBe('/data/images/queued-codex-001.png');
+      expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'image',
+        params: expect.objectContaining({
+          mode: 'codex',
+          codexPath: '/usr/local/bin/codex',
+          model: 'gpt-5.4',
+          prompt: 'a tavern at dusk',
+        }),
+      }));
+      // Synchronous generateImage MUST NOT be called in codex mode either —
+      // the queue takes ownership.
+      expect(imageGen.generateImage).not.toHaveBeenCalled();
+    });
+
+    // Per-request codex override: even when the saved default is external,
+    // an explicit `mode: 'codex'` on the payload (e.g. the writers-room
+    // storyboard chip strip) flips into queue mode so renders serialize.
+    it('per-request mode=codex override enqueues even when settings default is external', async () => {
+      getSettings.mockResolvedValueOnce({
+        imageGen: { mode: 'external', codex: { enabled: true, model: 'gpt-5.4' } },
+      });
+      mediaJobQueue.enqueueJob.mockReturnValueOnce({ jobId: 'queued-codex-002', position: 2, status: 'queued' });
+
+      const response = await request(app)
+        .post('/api/image-gen/generate')
+        .send({ prompt: 'a wizard tower', mode: 'codex' });
+
+      expect(response.status).toBe(200);
+      expect(response.body.status).toBe('queued');
+      expect(response.body.mode).toBe('codex');
+      expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'image',
+        params: expect.objectContaining({ mode: 'codex' }),
+      }));
+      expect(imageGen.generateImage).not.toHaveBeenCalled();
+    });
+
+    // Codex with the toggle off rejects up-front rather than enqueueing.
+    it('codex mode with disabled toggle returns 400 CODEX_IMAGEGEN_DISABLED', async () => {
+      getSettings.mockResolvedValueOnce({
+        imageGen: { mode: 'codex', codex: { enabled: false } },
+      });
+
+      const response = await request(app)
+        .post('/api/image-gen/generate')
+        .send({ prompt: 'a fox' });
+
+      expect(response.status).toBe(400);
+      expect(response.body.error).toMatch(/disabled/i);
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+    });
   });
 
   describe('POST /api/image-gen/avatar', () => {
@@ -256,6 +328,23 @@ describe('Image Gen Routes', () => {
       const response = await request(app).post('/api/image-gen/cancel');
       expect(response.status).toBe(200);
       expect(response.body.ok).toBe(true);
+    });
+
+    it('POST /cancel { all: true } cancels every queued/running image job', async () => {
+      mediaJobQueue.listJobs.mockReturnValueOnce([
+        { id: 'a', status: 'running' },
+        { id: 'b', status: 'queued' },
+        { id: 'c', status: 'queued' },
+      ]);
+      const response = await request(app).post('/api/image-gen/cancel').send({ all: true });
+      expect(response.status).toBe(200);
+      expect(response.body.ok).toBe(true);
+      expect(response.body.attempted).toBe(3);
+      expect(mediaJobQueue.cancelJob).toHaveBeenCalledTimes(3);
+      // Queued jobs cancelled before the running one — slot doesn't refill mid-loop.
+      expect(mediaJobQueue.cancelJob.mock.calls.map((c) => c[0])).toEqual(['b', 'c', 'a']);
+      // Belt-and-braces: legacy single-process cancel also poked.
+      expect(imageGen.cancel).toHaveBeenCalled();
     });
   });
 });

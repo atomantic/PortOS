@@ -3,7 +3,8 @@ import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import EventEmitter from 'events';
 import { ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
-import { NON_PM2_TYPES } from './streamingDetect.js';
+import { NON_PM2_TYPES, usesPm2 } from './streamingDetect.js';
+import { listProcesses } from './pm2.js';
 import { SELF_IMPROVEMENT_TASK_TYPES } from './taskSchedule.js';
 import { sanitizeTaskMetadata } from '../lib/validation.js';
 import { PORTS } from '../lib/ports.js';
@@ -172,6 +173,59 @@ export async function getAllApps({ includeArchived = true } = {}) {
  */
 export async function getActiveApps() {
   return getAllApps({ includeArchived: false });
+}
+
+/**
+ * Summarize PM2-managed app status for dashboards.
+ *
+ * Only counts apps whose `type` is PM2-runnable (Express services, etc.).
+ * Native projects (Xcode, iOS, macOS) have no detectable runtime state and
+ * are reported separately under `unmanaged` so callers can show context
+ * without inflating the running denominator.
+ */
+export async function getAppStatusSummary() {
+  const apps = await getAllApps({ includeArchived: false });
+
+  const pm2Apps = apps.filter(a => usesPm2(a.type));
+  const unmanaged = apps.length - pm2Apps.length;
+
+  // Group by pm2Home so each unique home is queried at most once
+  const homeGroups = new Map();
+  for (const app of pm2Apps) {
+    const home = app.pm2Home || null;
+    if (!homeGroups.has(home)) homeGroups.set(home, []);
+    homeGroups.get(home).push(app);
+  }
+
+  const procMaps = new Map();
+  for (const home of homeGroups.keys()) {
+    const procs = await listProcesses(home).catch(() => []);
+    procMaps.set(home, new Map(procs.map(p => [p.name, p])));
+  }
+
+  let online = 0;
+  let stopped = 0;
+  let notStarted = 0;
+  for (const app of pm2Apps) {
+    const procMap = procMaps.get(app.pm2Home || null) || new Map();
+    const names = app.pm2ProcessNames || [];
+    if (names.length === 0) {
+      notStarted++;
+      continue;
+    }
+    const statuses = names.map(n => procMap.get(n)?.status || 'not_found');
+    if (statuses.some(s => s === 'online')) online++;
+    else if (statuses.some(s => s === 'stopped')) stopped++;
+    else notStarted++;
+  }
+
+  return {
+    total: pm2Apps.length,
+    online,
+    stopped,
+    notStarted,
+    unmanaged
+  };
 }
 
 /**

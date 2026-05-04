@@ -22,7 +22,6 @@ Comprehensive upgrade from reactive task executor to proactive autonomous agent 
 | `server/services/localThinking.js` | Local model completions |
 | `server/services/thinkingLevels.js` | Dynamic model selection |
 | `server/services/contextUpgrader.js` | Complexity analysis for model upgrade |
-| `server/services/cosEvolution.js` | Self-evolution and model changes |
 
 ## Features
 

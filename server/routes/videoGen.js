@@ -13,8 +13,9 @@ import { randomUUID } from 'crypto';
 import { join, basename, resolve as resolvePath, sep as PATH_SEP, extname } from 'path';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { uploadSingle } from '../lib/multipart.js';
+import { uploadFields } from '../lib/multipart.js';
 import { PATHS, ensureDir } from '../lib/fileUtils.js';
+import { safeUnder } from '../lib/ffmpeg.js';
 import { getSettings } from '../services/settings.js';
 import {
   listVideoModels,
@@ -24,14 +25,26 @@ import {
   setHistoryItemHidden,
   extractLastFrame,
   stitchVideos,
+  upscaleHistoryItem,
 } from '../services/videoGen/local.js';
 import { enqueueJob, attachSseClient, cancelJob, listJobs } from '../services/mediaJobQueue/index.js';
 
 const router = Router();
 
-const sourceImageUpload = uploadSingle('sourceImage', {
-  limits: { fileSize: 50 * 1024 * 1024 },
-  fileFilter: (_req, file, cb) => cb(null, file.mimetype.startsWith('image/')),
+// FFLF accepts up to two image uploads (start and end frame); a2v takes
+// one audio upload (audioFile). 100MB covers audio cases too (LTX-2's a2v
+// expects only seconds of audio in practice). Per-fieldname mime filter
+// rejects mismatched parts up-front so a stray .mp4 drag-drop can't get
+// staged under any of these fields.
+const frameImageUpload = uploadFields(['sourceImage', 'lastImage', 'audioFile'], {
+  limits: { fileSize: 100 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const isImageField = file.fieldname === 'sourceImage' || file.fieldname === 'lastImage';
+    const isAudioField = file.fieldname === 'audioFile';
+    const okImage = isImageField && file.mimetype.startsWith('image/');
+    const okAudio = isAudioField && file.mimetype.startsWith('audio/');
+    cb(null, okImage || okAudio);
+  },
 });
 
 // Multipart bodies arrive as strings; coerce numerics in the schema. The
@@ -62,14 +75,23 @@ const generateBodySchema = z.object({
   tiling: z.enum(['auto', 'none', 'spatial', 'temporal']).optional(),
   disableAudio: z.union([z.boolean(), z.literal('true'), z.literal('false')]).optional(),
   sourceImageFile: z.string().max(512).optional(),
-  // FFLF mode end-frame target. Gallery-pick only (no upload field) so the
-  // multipart parser stays single-file. Users wanting a fresh end-frame
-  // image can generate or upload it via Image Gen first, then reference
-  // its basename here.
+  // Gallery-pick filename for the FFLF end-frame. The end-frame can also
+  // arrive as a multipart `lastImage` upload (handled below) — when both
+  // are present the upload wins, mirroring the sourceImage/sourceImageFile
+  // precedence on the start-frame side.
   lastImageFile: z.string().max(512).optional(),
   // UI mode hint — backend only uses it for logging/branching; absence
   // falls back to inferring (sourceImage→i2v, no source→t2v).
-  mode: z.enum(['text', 'image', 'fflf', 'extend']).optional(),
+  mode: z.enum(['text', 'image', 'fflf', 'extend', 'a2v']).optional(),
+  // Chain N renders end-to-end: each chunk's last frame becomes the next
+  // chunk's start frame, then ffmpeg concats them into one clip. 1..8 to
+  // keep the worst-case wall time bounded (8 × ~5min ≈ 40min on M3 Max).
+  chunks: optionalNum(1, 8, 'chunks'),
+  // History id of a prior render to extend natively (ltx2 runtime only —
+  // routes through ExtendPipeline.extend_from_video which conditions on
+  // the entire source video's latent rather than a single last frame).
+  // The legacy chained-i2v path keeps using sourceImageFile.
+  extendFromVideoId: z.string().uuid().optional(),
 });
 
 router.get('/status', asyncHandler(async (_req, res) => {
@@ -112,16 +134,19 @@ const resolveGalleryImage = (name) => {
   }
 };
 
-router.post('/', sourceImageUpload, asyncHandler(async (req, res) => {
-  // Pre-enqueue cleanup hook: every throw path below MUST drop the multipart
-  // temp upload (Multer wrote it before this handler ran). Without this a
-  // configuration/validation error leaks the upload in the OS temp dir.
-  const cleanupTempUpload = async () => {
-    if (req.file?.path) await unlink(req.file.path).catch(() => {});
+router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
+  // Pre-enqueue cleanup hook: every throw path below MUST drop ALL multipart
+  // temp uploads (the parser wrote them before this handler ran). Without
+  // this a configuration/validation error leaks files in the OS temp dir.
+  const uploads = req.files || {};
+  const cleanupTempUploads = async () => {
+    for (const f of Object.values(uploads)) {
+      if (f?.path) await unlink(f.path).catch(() => {});
+    }
   };
   const parsed = generateBodySchema.safeParse(req.body);
   if (!parsed.success) {
-    await cleanupTempUpload();
+    await cleanupTempUploads();
     throw new ServerError(`Validation failed: ${parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join(', ')}`, { status: 400, code: 'VALIDATION_ERROR' });
   }
   const body = parsed.data;
@@ -132,61 +157,175 @@ router.post('/', sourceImageUpload, asyncHandler(async (req, res) => {
   // surface the failure asynchronously on SSE — which then pollutes the
   // persisted queue with a doomed entry.
   if (!pythonPath) {
-    await cleanupTempUpload();
+    await cleanupTempUploads();
     throw new ServerError(
       'Local video generation is not configured (settings.imageGen.local.pythonPath is missing).',
       { status: 400, code: 'VIDEO_GEN_NOT_CONFIGURED' },
     );
   }
+  // Resolve the effective model up front — both the modelId-exists check
+  // below AND the a2v runtime guard further down need the model entry,
+  // and listVideoModels() is the kind of thing test mocks easily get out
+  // of sync if called twice.
+  const knownModels = listVideoModels();
+  const effectiveModelId = body.modelId || defaultVideoModelId();
+  const effectiveModel = knownModels.find((m) => m.id === effectiveModelId);
   // Validate modelId synchronously (when supplied). Without this the queue
   // would happily accept a typo'd modelId and fail asynchronously inside
   // the worker — leaving a persisted, doomed queue entry.
-  if (body.modelId) {
-    const known = listVideoModels();
-    if (!known.some((m) => m.id === body.modelId)) {
-      await cleanupTempUpload();
-      throw new ServerError(
-        `Unknown modelId: ${body.modelId}`,
-        { status: 400, code: 'VIDEO_GEN_UNKNOWN_MODEL' },
-      );
-    }
+  if (body.modelId && !effectiveModel) {
+    await cleanupTempUploads();
+    throw new ServerError(
+      `Unknown modelId: ${body.modelId}`,
+      { status: 400, code: 'VIDEO_GEN_UNKNOWN_MODEL' },
+    );
   }
 
-  let sourceImagePath = null;
-  let uploadedTempPath = null;
-  if (req.file) {
-    // Copy the multipart upload into a durable location under data/uploads
-    // before enqueueing. The Multer temp file lives in the OS temp dir —
-    // which gets reaped by macOS on reboot, and might be missing entirely
-    // when the queue replays a persisted `queued` job after a server
-    // restart. Copying here gives the worker a stable path that survives
-    // restarts; the worker unlinks it on completion or cancel.
-    await ensureDir(PATHS.uploads);
-    const ext = extname(req.file.originalname || req.file.path) || '.bin';
-    const durablePath = join(PATHS.uploads, `video-source-${randomUUID()}${ext}`);
-    // copyFile can throw on disk-full / permission errors. If it does we
-    // need to clean up: drop the multipart temp upload AND the half-written
-    // durablePath (copyFile may have created a zero-byte sentinel before
-    // bailing). Without this, a failed POST leaks files in /tmp + data/uploads.
+  // Track every durable file we've already copied into PATHS.uploads so a
+  // *later* staging failure can roll them back. Without this, staging
+  // sourceImage successfully then failing on lastImage would leave the
+  // sourceImage durable copy orphaned (the job is never enqueued, so the
+  // worker's cleanup never runs).
+  const stagedDurablePaths = [];
+  const cleanupAllStaged = async () => {
+    for (const p of stagedDurablePaths) await unlink(p).catch(() => {});
+    await cleanupTempUploads();
+  };
+
+  // Stage a multipart upload into data/uploads so the queue worker can find
+  // it after a server restart — the OS temp dir gets reaped on reboot, and a
+  // persisted `queued` job may replay long after the original POST. Worker
+  // unlinks the durable file when the job completes or cancels. Throws
+  // ServerError on copy failure (and cleans up every staged file + multipart
+  // temp upload so a mid-flight failure doesn't leak under /tmp + data/uploads).
+  const stageUploadDurable = async (file, kind) => {
+    const ext = extname(file.originalname || file.path) || '.bin';
+    const durablePath = join(PATHS.uploads, `video-${kind}-${randomUUID()}${ext}`);
     try {
-      await copyFile(req.file.path, durablePath);
+      await copyFile(file.path, durablePath);
     } catch (err) {
       await unlink(durablePath).catch(() => {});
-      await cleanupTempUpload();
+      await cleanupAllStaged();
       throw new ServerError(
         `Failed to stage upload to durable location: ${err.message}`,
         { status: 500, code: 'VIDEO_GEN_UPLOAD_STAGE_FAILED' },
       );
     }
-    await unlink(req.file.path).catch(() => {});
-    sourceImagePath = durablePath;
-    uploadedTempPath = durablePath;
+    await unlink(file.path).catch(() => {});
+    stagedDurablePaths.push(durablePath);
+    return durablePath;
+  };
+
+  // Resolution precedence on each frame side: a fresh upload always wins over
+  // a gallery filename so users can override a stale gallery pick by dropping
+  // in a new file without first clearing the picker.
+  //
+  // Cleanup plumbing: `uploadedTempPath` (single, legacy) is RESERVED for the
+  // start-frame upload — that field shape is what already-persisted jobs from
+  // before this route change carry, so keeping its semantics stable means
+  // those replays still clean up correctly. Every additional upload (today:
+  // just `lastImage`) flows through `uploadedTempPaths` as an array. The
+  // worker walks both fields when unlinking on terminal events.
+  // Mode/upload pairing checks BEFORE staging so a rejected request only
+  // unlinks the OS temp file (cheap) instead of also unlinking a freshly-
+  // copied 100MB durable file under data/uploads (wasted disk I/O on every
+  // bad request).
+  if (body.mode === 'a2v' && !uploads.audioFile) {
+    await cleanupAllStaged();
+    throw new ServerError(
+      'a2v mode requires an audioFile upload (multipart field name: audioFile).',
+      { status: 400, code: 'VIDEO_GEN_AUDIO_REQUIRED' },
+    );
+  }
+  if (uploads.audioFile && body.mode !== 'a2v') {
+    await cleanupAllStaged();
+    throw new ServerError(
+      `audioFile upload is only valid with mode='a2v' (got mode='${body.mode || 'unset'}').`,
+      { status: 400, code: 'VIDEO_GEN_AUDIO_MODE_MISMATCH' },
+    );
+  }
+  // a2v needs the dgrauet runtime — the legacy mlx_video pipeline has no
+  // audio-conditioned mode. The worker also catches this in buildArgs (with
+  // A2V_REQUIRES_LTX2), but checking here keeps the route's "fail fast
+  // before enqueue" contract so a bad modelId can't pollute the persisted
+  // queue with a doomed entry.
+  if (body.mode === 'a2v' && effectiveModel && effectiveModel.runtime !== 'ltx2') {
+    await cleanupAllStaged();
+    throw new ServerError(
+      `a2v mode requires an ltx2-runtime model. Model "${effectiveModelId}" runs on "${effectiveModel.runtime || 'mlx_video'}".`,
+      { status: 400, code: 'A2V_REQUIRES_LTX2' },
+    );
+  }
+
+  let sourceImagePath = null;
+  let lastImagePath = null;
+  let audioFilePath = null;
+  let uploadedTempPath = null;
+  const extraUploadedTempPaths = [];
+  if (uploads.sourceImage || uploads.lastImage || uploads.audioFile) {
+    // Ensure the durable uploads dir exists before staging. Wrapped in
+    // try/catch so a permission/disk failure here still cleans up the
+    // multipart temp uploads instead of leaking them in the OS temp dir.
+    try {
+      await ensureDir(PATHS.uploads);
+    } catch (err) {
+      await cleanupAllStaged();
+      throw new ServerError(
+        `Failed to prepare uploads directory: ${err.message}`,
+        { status: 500, code: 'VIDEO_GEN_UPLOADS_DIR_FAILED' },
+      );
+    }
+  }
+  if (uploads.sourceImage) {
+    sourceImagePath = await stageUploadDurable(uploads.sourceImage, 'source');
+    uploadedTempPath = sourceImagePath;
   } else if (body.sourceImageFile) {
     sourceImagePath = resolveGalleryImage(body.sourceImageFile);
   }
+  if (uploads.lastImage) {
+    lastImagePath = await stageUploadDurable(uploads.lastImage, 'last');
+    extraUploadedTempPaths.push(lastImagePath);
+  } else if (body.lastImageFile) {
+    // Same path-traversal guard as the start frame.
+    lastImagePath = resolveGalleryImage(body.lastImageFile);
+  }
+  if (uploads.audioFile) {
+    // a2v: audio file rides through the same durable-staging path as the
+    // image uploads. Cleanup tracking via extraUploadedTempPaths so the
+    // worker drops it on terminal events the same way it drops lastImage.
+    audioFilePath = await stageUploadDurable(uploads.audioFile, 'audio');
+    extraUploadedTempPaths.push(audioFilePath);
+  }
 
-  // FFLF end-frame: gallery-pick only. Same path-traversal guard.
-  const lastImagePath = body.lastImageFile ? resolveGalleryImage(body.lastImageFile) : null;
+  // Native extend (ltx2 runtime): resolve the history id to a video file
+  // path under data/videos/ and forward it as extendFromVideoPath. Reject
+  // a missing/tampered id rather than silently falling back to t2v —
+  // surfaces a clear error to the user instead of producing wrong content.
+  let extendFromVideoPath = null;
+  if (body.extendFromVideoId) {
+    const history = await loadHistory();
+    const videoEntry = history.find((h) => h.id === body.extendFromVideoId);
+    if (!videoEntry) {
+      // cleanupAllStaged covers durable copies that may have been written
+      // before this validation point — extend mode and image uploads are
+      // mutually exclusive in the UI but the route doesn't enforce that,
+      // so be defensive.
+      await cleanupAllStaged();
+      throw new ServerError(
+        `extendFromVideoId not found in history: ${body.extendFromVideoId}`,
+        { status: 404, code: 'EXTEND_SOURCE_NOT_FOUND' },
+      );
+    }
+    const candidate = safeUnder(PATHS.videos, videoEntry.filename);
+    if (!candidate || !existsSync(candidate)) {
+      await cleanupAllStaged();
+      throw new ServerError(
+        `extendFromVideoId resolved to a missing file: ${videoEntry.filename}`,
+        { status: 404, code: 'EXTEND_SOURCE_FILE_MISSING' },
+      );
+    }
+    extendFromVideoPath = candidate;
+  }
 
   // Enqueue rather than spawn synchronously — the mediaJobQueue worker will
   // run this when no other render is in flight. Caller never sees BUSY.
@@ -207,19 +346,20 @@ router.post('/', sourceImageUpload, asyncHandler(async (req, res) => {
       tiling: body.tiling || 'auto',
       disableAudio: body.disableAudio === true || body.disableAudio === 'true',
       sourceImagePath,
+      audioFilePath,
       uploadedTempPath,
+      uploadedTempPaths: extraUploadedTempPaths,
       lastImagePath,
+      extendFromVideoPath,
       mode: body.mode,
       imageStrength: body.imageStrength,
+      chunks: body.chunks ?? 1,
     },
   });
   // Match the legacy response shape (jobId, generationId, filename, model,
   // mode) so existing client code keeps working; add status+position for
-  // the queue. Resolve the effective model NOW — when modelId is omitted
-  // the worker will default it inside generateVideo, but the response
-  // needs to surface what the gallery / history will record.
-  const effectiveModel = body.modelId || defaultVideoModelId();
-  res.json({ jobId, generationId: jobId, filename: `${jobId}.mp4`, model: effectiveModel, mode: 'local', status, position });
+  // the queue. effectiveModelId was resolved at the top of the handler.
+  res.json({ jobId, generationId: jobId, filename: `${jobId}.mp4`, model: effectiveModelId, mode: 'local', status, position });
 }));
 
 router.get('/:jobId/events', (req, res) => {
@@ -272,10 +412,31 @@ router.post('/last-frame/:id', asyncHandler(async (req, res) => {
   res.json(await extractLastFrame(req.params.id));
 }));
 
+// History ids are produced by crypto.randomUUID(), so validate them as
+// proper UUIDs rather than the looser /^[a-f0-9-]{36}$/ pattern (which
+// happily accepts e.g. 36 hyphens). Matches the .uuid() usage in the
+// other route schemas.
+const historyIdSchema = z.string().uuid('invalid history id');
+
+const failValidation = (parsed) => {
+  throw new ServerError(`Validation failed: ${parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join(', ')}`, { status: 400, code: 'VALIDATION_ERROR' });
+};
+
+router.post('/upscale/:id', asyncHandler(async (req, res) => {
+  const parsed = historyIdSchema.safeParse(req.params.id);
+  if (!parsed.success) failValidation(parsed);
+  const entry = await upscaleHistoryItem(parsed.data);
+  res.json({ ok: true, video: entry });
+}));
+
+const stitchBodySchema = z.object({
+  videoIds: z.array(historyIdSchema).min(2).max(20),
+});
+
 router.post('/stitch', asyncHandler(async (req, res) => {
-  const ids = req.body?.videoIds;
-  if (!Array.isArray(ids)) throw new ServerError('videoIds array required', { status: 400, code: 'VALIDATION_ERROR' });
-  const stitched = await stitchVideos(ids);
+  const parsed = stitchBodySchema.safeParse(req.body || {});
+  if (!parsed.success) failValidation(parsed);
+  const stitched = await stitchVideos(parsed.data.videoIds);
   res.json({ ok: true, video: stitched });
 }));
 

@@ -57,29 +57,29 @@ export function GeneralTab() {
 
   return (
     <div className="space-y-6">
-      <div className="bg-port-card border border-port-border rounded-lg p-6">
+      <div className="bg-port-card border border-port-border rounded-lg p-4 sm:p-6">
         <h3 className="text-lg font-semibold text-white mb-4">Interface Theme</h3>
         <ThemePickerPanel />
       </div>
 
-      <div className="bg-port-card border border-port-border rounded-lg p-6">
+      <div className="bg-port-card border border-port-border rounded-lg p-4 sm:p-6">
         <h3 className="text-lg font-semibold text-white mb-4">Timezone</h3>
         <p className="text-sm text-gray-400 mb-4">
           Used for job scheduling (cron expressions & scheduled times) and briefing dates.
         </p>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
           <input
             type="text"
             value={timezone}
             onChange={e => setTimezone(e.target.value)}
             placeholder={detectedTz}
-            className="flex-1 max-w-xs px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
+            className="w-full sm:flex-1 sm:max-w-xs min-w-0 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
             list="tz-list"
           />
           <button
             onClick={() => handleSave(timezone)}
             disabled={saving}
-            className="px-4 py-2 bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded-lg text-sm transition-colors disabled:opacity-50"
+            className="inline-flex items-center justify-center min-h-[40px] px-4 py-2 bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded-lg text-sm transition-colors disabled:opacity-50 whitespace-nowrap"
           >
             <Save size={14} className="inline mr-1" />
             {saving ? 'Saving...' : 'Save'}
@@ -88,14 +88,15 @@ export function GeneralTab() {
             <button
               onClick={() => handleSave(detectedTz)}
               disabled={saving}
-              className="px-3 py-2 text-sm text-gray-400 hover:text-white transition-colors"
+              className="inline-flex items-center justify-center min-h-[40px] px-3 py-2 text-sm text-gray-400 hover:text-white transition-colors truncate"
+              title={`Use detected: ${detectedTz}`}
             >
-              Use detected: {detectedTz}
+              <span className="truncate">Use detected: {detectedTz}</span>
             </button>
           )}
         </div>
         {timezone && timezone !== detectedTz && (
-          <p className="text-xs text-gray-500 mt-2">
+          <p className="text-xs text-gray-500 mt-2 break-all">
             Browser detected: {detectedTz}
           </p>
         )}

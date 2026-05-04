@@ -20,17 +20,21 @@ import { optionalUpload } from '../lib/multipart.js';
 import * as imageGen from '../services/imageGen/index.js';
 import { local, IMAGE_GEN_MODES } from '../services/imageGen/index.js';
 import { enqueueJob, attachSseClient as attachQueueSseClient, cancelJob, listJobs } from '../services/mediaJobQueue/index.js';
-import { getSettings } from '../services/settings.js';
+import { getSettings, saveSettings } from '../services/settings.js';
+import { getHfToken, HF_TOKEN_REGEX } from '../lib/hfToken.js';
 import { getImageModels, isFlux2 } from '../lib/mediaModels.js';
 import {
   REQUIRED_PACKAGES, detectPython, checkPackages, installPackages,
   isExternallyManaged, createVenv, isAllowedPython, pipNameFor,
-  resolveFlux2Python, FLUX2_VENV_DEFAULT,
+  resolveFlux2Python, FLUX2_VENV_DEFAULT, installFlux2Venv, isFlux2VenvHealthy,
 } from '../lib/pythonSetup.js';
 import { PATHS, ensureDir } from '../lib/fileUtils.js';
 import { join, basename, resolve as resolvePath, sep as PATH_SEP } from 'node:path';
+import { STYLE_PRESETS } from '../lib/writersRoomStylePresets.js';
 
 const router = Router();
+
+router.get('/style-presets', (_req, res) => res.json(STYLE_PRESETS));
 
 const generateSchema = z.object({
   prompt: z.string().min(1).max(2000),
@@ -106,6 +110,20 @@ router.get('/active', asyncHandler(async (_req, res) => {
   res.json({ activeJob: await imageGen.getActiveJob() });
 }));
 
+// Shape returned for any image-gen job that goes through the mediaJobQueue
+// (local + codex). Kept in one place so the two enqueue branches below stay
+// in sync — the client's polling/SSE hooks key off these fields.
+const queuedImageResponse = ({ jobId, position, status, mode, model }) => ({
+  jobId,
+  generationId: jobId,
+  filename: `${jobId}.png`,
+  path: `/data/images/${jobId}.png`,
+  mode,
+  model,
+  status,
+  position,
+});
+
 router.post('/generate', initImageUpload, asyncHandler(async (req, res) => {
   const data = validateRequest(generateSchema, coerceFormFields(req.body));
   // Resolve init image source: uploaded file > gallery filename. The local
@@ -142,12 +160,36 @@ router.post('/generate', initImageUpload, asyncHandler(async (req, res) => {
   if (uploadedInitTempPath) {
     res.on('close', () => { unlink(uploadedInitTempPath).catch(() => {}); });
   }
-  // Mode resolution: explicit per-request override > settings default. Only
-  // local-mode goes through the mediaJobQueue (it's the GPU-bound backend that
-  // used to throw BUSY). External and Codex backends remain synchronous —
-  // they don't share Metal/MLX resources so no queue is needed.
+  // Local + codex both go through mediaJobQueue (separate lanes — codex
+  // doesn't share MLX). External SD-API stays synchronous: it's a remote
+  // call with no local single-flight constraint to absorb.
   const settings = await getSettings();
   const mode = data.mode || settings.imageGen?.mode || 'external';
+  if (mode === 'codex') {
+    // Reject up-front rather than enqueueing a doomed job — codex is gated
+    // behind an explicit toggle since not every Codex account has access to
+    // the image_gen tool.
+    const c = settings.imageGen?.codex || {};
+    if (!c.enabled) {
+      throw new ServerError(
+        'Codex Imagegen is disabled — enable it in Settings → Image Gen first',
+        { status: 400, code: 'CODEX_IMAGEGEN_DISABLED' },
+      );
+    }
+    const queued = enqueueJob({
+      kind: 'image',
+      // `mode: 'codex'` is the queue's discriminator — laneForJob() routes
+      // codex jobs to the codex lane, and runJob's image branch dispatches
+      // to imageGen/codex.js when it sees this flag.
+      params: {
+        mode: 'codex',
+        codexPath: c.codexPath,
+        model: c.model,
+        ...data,
+      },
+    });
+    return res.json(queuedImageResponse({ ...queued, mode: 'codex', model: c.model || null }));
+  }
   if (mode === 'local') {
     const py = settings.imageGen?.local?.pythonPath || null;
     // Pre-validate config: mflux models need pythonPath, FLUX.2 doesn't
@@ -172,25 +214,18 @@ router.post('/generate', initImageUpload, asyncHandler(async (req, res) => {
         { status: 400, code: 'IMAGE_GEN_NOT_CONFIGURED' },
       );
     }
-    const { jobId, position, status } = enqueueJob({
+    const queued = enqueueJob({
       kind: 'image',
       params: { pythonPath: py, ...data },
     });
-    // Surface the effective model so the response matches the
-    // non-queued path's `model` field. Use the same `selectedModel`
-    // resolution as the validation block above so the response reflects
-    // the actual fallback chain (caller modelId → 'dev' → allModels[0])
-    // rather than just the requested id.
-    return res.json({
-      jobId,
-      generationId: jobId,
-      filename: `${jobId}.png`,
-      path: `/data/images/${jobId}.png`,
+    // Resolve the effective model the same way the validation block above
+    // does so the response reflects the actual fallback chain (caller
+    // modelId → 'dev' → allModels[0]) rather than just the requested id.
+    return res.json(queuedImageResponse({
+      ...queued,
       mode: 'local',
       model: selectedModel?.id || data.modelId || 'dev',
-      status,
-      position,
-    });
+    }));
   }
   res.json(await imageGen.generateImage(data));
 }));
@@ -226,16 +261,33 @@ router.get('/:jobId/events', (req, res) => {
 
 router.post('/cancel', asyncHandler(async (req, res) => {
   // Cancel selection rules, in priority order:
-  //   1. Explicit body.jobId — cancel that queued/running local image job.
+  //   1. body.all === true — cancel every queued/running image job. Used by
+  //      the writers-room storyboard "Cancel renders" CTA, which can have
+  //      20+ scene renders in flight at once.
+  //   2. Explicit body.jobId — cancel that queued/running local image job.
   //      Required for users with multiple in-flight renders.
-  //   2. No jobId — cancel the newest queued/running local image job (most
+  //   3. No jobId — cancel the newest queued/running local image job (most
   //      recent activity wins, matching the user's last "submit" gesture).
-  //   3. No queue match — fall through to the codex-mode cancel.
+  //   4. No queue match — fall through to the codex-mode cancel.
   const requestedJobId = typeof req.body?.jobId === 'string' && req.body.jobId.trim()
     ? req.body.jobId.trim()
     : undefined;
   const cancellable = listJobs({ kind: 'image' })
     .filter((j) => j.status === 'queued' || j.status === 'running');
+  if (req.body?.all === true) {
+    // Cancel queued first so the running job's slot doesn't get refilled the
+    // moment we cancel it. Settle individually so one stale job doesn't
+    // block the rest. cancellable is already a fresh filter() result.
+    const ordered = cancellable.sort((a, b) => {
+      if (a.status === b.status) return 0;
+      return a.status === 'queued' ? -1 : 1;
+    });
+    const results = await Promise.all(ordered.map((j) => cancelJob(j.id).catch((err) => ({ ok: false, error: err.message }))));
+    // Belt-and-braces: also poke the legacy single-process cancel so any
+    // in-flight gen outside the queue (codex sync mode) gets stopped.
+    imageGen.cancel();
+    return res.json({ ok: true, canceled: results.filter((r) => r?.ok).length, attempted: results.length });
+  }
   if (requestedJobId) {
     const target = cancellable.find((j) => j.id === requestedJobId);
     if (target) return res.json(await cancelJob(target.id));
@@ -262,27 +314,87 @@ router.get('/setup/python', asyncHandler(async (_req, res) => {
   res.json({ path });
 }));
 
+// SSE-driven FLUX.2 venv bootstrap. Replaces the "drop to a shell and run
+// INSTALL_FLUX2=1 bash scripts/setup-image-video.sh" friction with an in-app
+// install: the client opens an EventSource, gets staged progress events
+// (detect → venv → upgrade-pip → install → verify), and either finishes or
+// surfaces a clear error. Runs the install logic in-process via
+// installFlux2Venv() so we get structured `stage` events the UI can animate
+// against, instead of having to parse bash output.
+//
+// In-flight singleton: a rapid double-click would otherwise race two pip
+// processes against the same venv directory. resolveFlux2Python() can't
+// gate the second click — the first install hasn't created the python yet.
+let flux2InstallInFlight = null;
+
+router.get('/setup/flux2-install', asyncHandler(async (req, res) => {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+  });
+  const send = (event) => {
+    if (!res.writableEnded) res.write(`data: ${JSON.stringify(event)}\n\n`);
+  };
+  const safeEnd = () => { if (!res.writableEnded) res.end(); };
+
+  // Skip only when the venv binary AND the import work — a half-broken venv
+  // (binary present, packages missing from a killed mid-install) needs to
+  // re-run the install, not be reported as ready.
+  if (await isFlux2VenvHealthy()) {
+    send({ type: 'stage', stage: 'verify', message: 'FLUX.2 venv already installed.' });
+    send({ type: 'complete', message: 'Already installed — nothing to do.' });
+    return safeEnd();
+  }
+  if (flux2InstallInFlight) {
+    send({ type: 'error', message: 'Another FLUX.2 install is already running. Wait for it to finish or restart PortOS.' });
+    return safeEnd();
+  }
+
+  const { promise, kill } = installFlux2Venv(send);
+  flux2InstallInFlight = promise;
+  promise
+    .catch((err) => send({ type: 'error', message: err?.message || 'Unknown installer failure' }))
+    .finally(() => {
+      flux2InstallInFlight = null;
+      safeEnd();
+    });
+
+  // Cancel the install if the client navigates away mid-bootstrap. A torch
+  // install is a multi-GB download and would otherwise keep running invisibly.
+  req.on('close', () => { kill(); safeEnd(); });
+}));
+
 // Used by the FLUX.2 model picker: surface a banner when the gated repo's
 // license hasn't been accepted (HF_TOKEN missing) and the runner is set up.
-router.get('/setup/flux2-status', (_req, res) => {
-  // huggingface_hub reads HF_TOKEN (preferred) and the legacy
-  // HUGGINGFACEHUB_API_TOKEN / HUGGINGFACE_HUB_TOKEN names. Earlier rev of
-  // this code used HUGGING_FACE_HUB_TOKEN (extra underscore) which doesn't
-  // match what the library actually checks.
-  const hasToken = !!(
-    process.env.HF_TOKEN ||
-    process.env.HUGGINGFACE_HUB_TOKEN ||
-    process.env.HUGGINGFACEHUB_API_TOKEN
-  );
+// `venvInstalled` reflects functional health (binary AND packages import) —
+// a half-broken venv would otherwise hide the install banner forever.
+router.get('/setup/flux2-status', asyncHandler(async (_req, res) => {
+  const [token, healthy] = await Promise.all([getHfToken(), isFlux2VenvHealthy()]);
   const venvPython = resolveFlux2Python();
   res.json({
-    hfTokenPresent: hasToken,
-    venvInstalled: !!venvPython,
+    hfTokenPresent: !!token,
+    venvInstalled: healthy,
     venvPath: venvPython,
     expectedVenvPath: FLUX2_VENV_DEFAULT,
     licenseUrl: 'https://huggingface.co/black-forest-labs/FLUX.2-klein-4B',
   });
+}));
+
+// Save the HF token from the inline form on the Image Gen page. settings.json
+// is the canonical location (single-user app behind Tailscale — see CLAUDE.md).
+const flux2TokenSchema = z.object({
+  token: z.string().regex(HF_TOKEN_REGEX, 'Token must look like `hf_…`').max(200),
 });
+router.post('/setup/flux2-token', asyncHandler(async (req, res) => {
+  const { token } = validateRequest(flux2TokenSchema, req.body || {});
+  const settings = await getSettings();
+  await saveSettings({
+    ...settings,
+    imageGen: { ...(settings.imageGen || {}), hfToken: token.trim() },
+  });
+  res.json({ ok: true, hfTokenPresent: true });
+}));
 
 const checkSchema = z.object({ pythonPath: z.string().min(1) });
 

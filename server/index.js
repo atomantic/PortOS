@@ -83,6 +83,7 @@ import videoGenRoutes from './routes/videoGen.js';
 import videoTimelineRoutes from './routes/videoTimeline.js';
 import mediaJobsRoutes from './routes/mediaJobs.js';
 import creativeDirectorRoutes from './routes/creativeDirector.js';
+import writersRoomRoutes from './routes/writersRoom.js';
 import { initMediaJobQueue } from './services/mediaJobQueue/index.js';
 import { recoverInFlightProjects } from './services/creativeDirector/recovery.js';
 import imageVideoModelsRoutes from './routes/imageVideoModels.js';
@@ -112,6 +113,7 @@ import { startUpdateScheduler, recordUpdateResult, clearStaleUpdateInProgress, g
 import { restoreLoops } from './services/loops.js';
 import { startBrainScheduler } from './services/brainScheduler.js';
 import { recoverStuckClassifications } from './services/brain.js';
+import { recoverStuckAnalyses } from './services/writersRoom/evaluator.js';
 import { initBridge as initBrainMemoryBridge } from './services/brainMemoryBridge.js';
 import { initDrillCache } from './services/meatspacePostDrillCache.js';
 import { createAIToolkit } from 'portos-ai-toolkit/server';
@@ -320,6 +322,7 @@ app.use('/api/video-gen', videoGenRoutes);
 app.use('/api/video-timeline', videoTimelineRoutes);
 app.use('/api/media-jobs', mediaJobsRoutes);
 app.use('/api/creative-director', creativeDirectorRoutes);
+app.use('/api/writers-room', writersRoomRoutes);
 app.use('/api/image-video/models', imageVideoModelsRoutes);
 // AUTOMATIC1111-compatible surface for tailnet clients — gated by
 // settings.imageGen.expose.a1111 so it returns 403 unless the user opted in.
@@ -343,6 +346,7 @@ try {
 
 // Recover any inbox entries stuck in 'classifying' from a previous crash/restart
 recoverStuckClassifications().catch(err => console.error(`❌ Brain recovery failed: ${err.message}`));
+recoverStuckAnalyses().catch(err => console.error(`❌ Writers Room recovery failed: ${err.message}`));
 // Initialize brain scheduler for daily digests and weekly reviews
 startBrainScheduler();
 // Initialize brain→memory bridge (mirrors brain data into CoS memory for semantic search)

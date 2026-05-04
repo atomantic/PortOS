@@ -14,6 +14,7 @@ const save = async (settings) => {
 };
 
 export const getSettings = load;
+export const saveSettings = save;
 
 export const updateSettings = async (patch) => {
   const current = await load();

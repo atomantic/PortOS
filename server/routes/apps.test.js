@@ -404,6 +404,22 @@ describe('Apps Routes', () => {
       expect(response.status).toBe(404);
     });
 
+    it.skipIf(process.platform !== 'win32')('should reject build command args containing shell-unsafe metacharacters', async () => {
+      const mockApp = {
+        id: 'app-001',
+        name: 'Test App',
+        repoPath: process.cwd(), // real path so pathExists check passes
+        buildCommand: 'npm run build&whoami',
+        pm2ProcessNames: ['test-app']
+      };
+      appsService.getAppById.mockResolvedValue(mockApp);
+
+      const response = await request(app).post('/api/apps/app-001/build');
+
+      expect(response.status).toBe(400);
+      expect(response.body.code).toBe('INVALID_BUILD_COMMAND');
+    });
+
     it('should reject build commands not starting with npm or npx', async () => {
       const mockApp = {
         id: 'app-001',

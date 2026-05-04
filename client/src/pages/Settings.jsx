@@ -48,17 +48,21 @@ export default function Settings() {
   };
 
   return (
-    <div className="space-y-6">
-      <h1 className="text-2xl font-bold text-white">Settings</h1>
+    <div className="flex flex-col h-full">
+      <div className="flex items-center gap-3 p-4 border-b border-port-border">
+        <h1 className="text-2xl font-bold text-white">Settings</h1>
+      </div>
 
-      <div className="flex gap-1 border-b border-port-border">
+      <div className="flex border-b border-port-border overflow-x-auto" role="tablist">
         {TABS.map(({ id, label }) => (
           <button
             key={id}
             onClick={() => handleTabChange(id)}
-            className={`px-4 py-2 text-sm font-medium transition-colors border-b-2 -mb-px ${
+            role="tab"
+            aria-selected={activeTab === id}
+            className={`px-4 py-3 text-sm font-medium transition-colors whitespace-nowrap border-b-2 -mb-px ${
               activeTab === id
-                ? 'text-port-accent border-port-accent'
+                ? 'text-port-accent border-port-accent bg-port-accent/5'
                 : 'text-gray-400 border-transparent hover:text-white hover:border-port-border'
             }`}
           >
@@ -67,7 +71,9 @@ export default function Settings() {
         ))}
       </div>
 
-      {renderTabContent()}
+      <div className="flex-1 overflow-auto p-4">
+        {renderTabContent()}
+      </div>
     </div>
   );
 }

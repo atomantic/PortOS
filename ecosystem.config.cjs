@@ -57,8 +57,20 @@ module.exports = {
         PATH: process.env.PATH // Inherit PATH for git/node access in child processes
       },
       watch: ['server'],
-      watch_delay: 300000, // 5 min delay before restarting on file changes
-      ignore_watch: ['**/node_modules', '**/*.test.js', '**/*package-lock*'],
+      watch_delay: 60000, // 1 min debounce before restarting on file changes
+      // Defense in depth — `watch: ['server']` already scopes the watcher to
+      // the server/ subtree, so writes to data/ at repo root don't fire it.
+      // Belt + suspenders: explicitly ignore runtime data, logs, and the
+      // tmpdir-style scratch paths a render might (mis)route into the tree.
+      ignore_watch: [
+        '**/node_modules',
+        '**/*.test.js',
+        '**/*package-lock*',
+        '**/data/**',
+        '**/logs/**',
+        '**/.cache/**',
+        '**/portos-stepwise-*/**',
+      ],
       max_memory_restart: '2G'
     },
     {

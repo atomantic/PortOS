@@ -17,9 +17,11 @@ export default function DeployPanel({ appId, appName }) {
   const { output, isDeploying, error, result, startDeploy, clearDeploy } = useAppDeploy();
   const [showOptions, setShowOptions] = useState(false);
   const [selectedFlags, setSelectedFlags] = useState([]);
+  const [dismissed, setDismissed] = useState(false);
   const outputRef = useRef(null);
   const rafRef = useRef(null);
-  const isOpen = isDeploying || output.length > 0 || error || result;
+  const hasState = isDeploying || output.length > 0 || error || result;
+  const isOpen = hasState && !dismissed;
 
   // Throttled auto-scroll via rAF
   useEffect(() => {
@@ -32,6 +34,14 @@ export default function DeployPanel({ appId, appName }) {
   }, [output]);
 
   useEffect(() => () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); }, []);
+
+  // Esc to dismiss the modal (deploy keeps running in the background)
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKey = (e) => { if (e.key === 'Escape') setDismissed(true); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isOpen]);
 
   const toggleFlag = (flag) => {
     setSelectedFlags(prev => {
@@ -47,7 +57,22 @@ export default function DeployPanel({ appId, appName }) {
 
   const handleDeploy = () => {
     setShowOptions(false);
+    setDismissed(false);
+    // If a deploy is already running and the modal was dismissed, just reopen it
+    // instead of triggering another deploy (the backend would reject as duplicate).
+    if (isDeploying) return;
     startDeploy(appId, selectedFlags);
+  };
+
+  const handleClose = () => {
+    if (isDeploying) {
+      // Hide the modal but keep state — deploy continues server-side.
+      setDismissed(true);
+    } else {
+      // Deploy is finished; clear state so the panel resets.
+      clearDeploy();
+      setDismissed(false);
+    }
   };
 
   return (
@@ -55,11 +80,13 @@ export default function DeployPanel({ appId, appName }) {
       <div className="inline-flex rounded-lg overflow-hidden border border-port-border">
         <button
           onClick={handleDeploy}
-          disabled={isDeploying}
-          className="px-2 py-1 bg-purple-500/20 text-purple-400 hover:bg-purple-500/30 transition-colors disabled:opacity-50 flex items-center gap-1"
+          className="px-2 py-1 bg-purple-500/20 text-purple-400 hover:bg-purple-500/30 transition-colors flex items-center gap-1"
+          title={isDeploying && dismissed ? 'Show deploy output' : undefined}
         >
           <Rocket size={14} className={isDeploying ? 'animate-pulse' : ''} />
-          <span className="text-xs">{isDeploying ? 'Deploying...' : 'Deploy'}</span>
+          <span className="text-xs">
+            {isDeploying ? (dismissed ? 'View deploy…' : 'Deploying…') : 'Deploy'}
+          </span>
         </button>
         <button
           onClick={() => setShowOptions(prev => !prev)}
@@ -95,7 +122,10 @@ export default function DeployPanel({ appId, appName }) {
       )}
 
       {isOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          onClick={(e) => { if (e.target === e.currentTarget) handleClose(); }}
+        >
           <div className="bg-port-bg border border-port-border rounded-xl shadow-2xl w-full max-w-3xl max-h-[80vh] flex flex-col">
             <div className="flex items-center justify-between px-4 py-3 border-b border-port-border">
               <div className="flex items-center gap-2">
@@ -103,11 +133,14 @@ export default function DeployPanel({ appId, appName }) {
                 <span className="text-sm font-medium text-white">Deploy: {appName}</span>
                 {isDeploying && <BrailleSpinner text="" className="text-xs text-purple-400" />}
               </div>
-              {!isDeploying && (
-                <button onClick={clearDeploy} className="text-gray-400 hover:text-white transition-colors">
-                  <X size={16} />
-                </button>
-              )}
+              <button
+                onClick={handleClose}
+                className="text-gray-400 hover:text-white transition-colors"
+                title={isDeploying ? 'Hide (deploy keeps running)' : 'Close'}
+                aria-label={isDeploying ? 'Hide deploy output' : 'Close deploy panel'}
+              >
+                <X size={16} />
+              </button>
             </div>
 
             <div

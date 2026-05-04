@@ -274,7 +274,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
           {expanded ? 'Fewer options' : 'More options'}
         </button>
         {expanded && (
-          <div className="space-y-3 pt-1">
+          <div className="space-y-2 pt-1">
             {renderFullFormFields()}
           </div>
         )}
@@ -331,7 +331,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
         </div>
       )}
 
-      <div className="space-y-3">
+      <div className="space-y-2">
         <div>
           <label htmlFor="task-description" className="sr-only">Task description (required)</label>
           <input
@@ -363,8 +363,8 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
             showRepoPath
           />
         )}
-        <div className="grid grid-cols-2 sm:flex sm:items-center gap-x-4 gap-y-2 sm:gap-4 sm:flex-wrap">
-          <label className="flex items-center gap-2 cursor-pointer select-none min-h-[44px]">
+        <div className="grid grid-cols-2 sm:flex sm:items-center gap-x-4 gap-y-1 sm:flex-wrap">
+          <label className="flex items-center gap-2 cursor-pointer select-none py-1">
             <input
               type="checkbox"
               checked={enhancePrompt}
@@ -376,7 +376,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
               Enhance
             </span>
           </label>
-          <label className="flex items-center gap-2 cursor-pointer select-none whitespace-nowrap min-h-[44px]">
+          <label className="flex items-center gap-2 cursor-pointer select-none whitespace-nowrap py-1">
             <input
               type="checkbox"
               checked={useWorktree}
@@ -391,7 +391,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
               Worktree
             </span>
           </label>
-          <label className="flex items-center gap-2 cursor-pointer select-none whitespace-nowrap min-h-[44px]">
+          <label className="flex items-center gap-2 cursor-pointer select-none whitespace-nowrap py-1">
             <input
               type="checkbox"
               checked={openPR}
@@ -404,7 +404,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
               Open PR
             </span>
           </label>
-          <label className="flex items-center gap-2 cursor-pointer select-none whitespace-nowrap min-h-[44px]">
+          <label className="flex items-center gap-2 cursor-pointer select-none whitespace-nowrap py-1">
             <input
               type="checkbox"
               checked={simplify}
@@ -416,7 +416,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
               Simplify
             </span>
           </label>
-          <label className="flex items-center gap-2 cursor-pointer select-none whitespace-nowrap min-h-[44px]">
+          <label className="flex items-center gap-2 cursor-pointer select-none whitespace-nowrap py-1">
             <input
               type="checkbox"
               checked={reviewLoop}
@@ -429,7 +429,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
             </span>
           </label>
           {appHasJira && (
-            <label className="flex items-center gap-2 cursor-pointer select-none whitespace-nowrap min-h-[44px]">
+            <label className="flex items-center gap-2 cursor-pointer select-none whitespace-nowrap py-1">
               <input
                 type="checkbox"
                 checked={createJiraTicket}

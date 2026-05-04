@@ -7,6 +7,7 @@ const FALLBACK_CONTEXT = {
   theme: THEMES[DEFAULT_THEME_ID],
   themeList: THEME_LIST,
   setTheme: () => {},
+  toggleMode: () => {},
 };
 
 const ThemeContext = createContext(null);

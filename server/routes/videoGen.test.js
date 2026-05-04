@@ -7,7 +7,11 @@ vi.mock('../services/settings.js', () => ({
 }));
 
 vi.mock('../services/videoGen/local.js', () => ({
-  listVideoModels: vi.fn(() => [{ id: 'ltx2_unified', name: 'LTX-2 Unified' }]),
+  // The route checks `runtime` on the default model when validating a2v —
+  // include it so the a2v happy-path tests don't trip the A2V_REQUIRES_LTX2
+  // guard. Tests that need to exercise the legacy runtime override the mock
+  // per-test via mockReturnValueOnce.
+  listVideoModels: vi.fn(() => [{ id: 'ltx2_unified', name: 'LTX-2 Unified', runtime: 'ltx2' }]),
   defaultVideoModelId: vi.fn(() => 'ltx2_unified'),
   loadHistory: vi.fn(async () => []),
   deleteHistoryItem: vi.fn(async (id) => ({ ok: true, id })),
@@ -16,6 +20,7 @@ vi.mock('../services/videoGen/local.js', () => ({
   setHistoryItemHidden: vi.fn(async (id, hidden) => ({ ok: true, id, hidden })),
   extractLastFrame: vi.fn(),
   stitchVideos: vi.fn(),
+  upscaleHistoryItem: vi.fn(),
 }));
 
 // Render submissions go through the mediaJobQueue. Mock its surface so the
@@ -27,14 +32,33 @@ vi.mock('../services/mediaJobQueue/index.js', () => ({
   listJobs: vi.fn(() => []),
 }));
 
+// Pending file metadata for tests that need to simulate an upload. Tests set
+// this via `setPendingUpload({ fieldname, ... })` before issuing the request;
+// the mocked uploadFields middleware reads it off the holder, attaches it as
+// req.files keyed by fieldname, and clears it. Mutable wrapper avoids
+// reaching into vi mock internals.
+const pendingUpload = { current: null };
+const setPendingUpload = (file) => { pendingUpload.current = file; };
+
 vi.mock('../lib/multipart.js', () => ({
-  // Bypass the multipart parser for unit tests — handler treats req.file as
-  // optional, and we exercise the no-upload path here.
-  uploadSingle: () => (_req, _res, next) => next(),
+  // Bypass the streaming parser. If a test set a pending upload via
+  // setPendingUpload(), inject it under req.files keyed by fieldname so the
+  // route exercises the upload-staging path; otherwise pass through.
+  uploadFields: () => (req, _res, next) => {
+    if (pendingUpload.current) {
+      const f = pendingUpload.current;
+      req.files = { [f.fieldname]: f };
+      pendingUpload.current = null;
+    }
+    next();
+  },
 }));
 
 vi.mock('../lib/fileUtils.js', () => ({
-  PATHS: { images: '/mock/images' },
+  PATHS: { images: '/mock/images', videos: '/mock/videos', uploads: '/mock/uploads' },
+  // Route awaits ensureDir before staging the upload; no-op for tests since
+  // we mock copyFile too.
+  ensureDir: vi.fn(async () => {}),
 }));
 
 vi.mock('fs', () => ({
@@ -44,7 +68,12 @@ vi.mock('fs', () => ({
   // gallery-image plumbing tests to pass.
   statSync: vi.fn(() => ({ isFile: () => true })),
 }));
-vi.mock('fs/promises', () => ({ unlink: vi.fn(async () => {}) }));
+vi.mock('fs/promises', () => ({
+  unlink: vi.fn(async () => {}),
+  // The route stages multipart uploads to data/uploads/ via copyFile. Stub
+  // the copy so tests that simulate req.file don't actually touch disk.
+  copyFile: vi.fn(async () => {}),
+}));
 
 import * as videoGenService from '../services/videoGen/local.js';
 import * as mediaJobQueue from '../services/mediaJobQueue/index.js';
@@ -57,6 +86,9 @@ describe('videoGen routes', () => {
     app.use(express.json());
     app.use('/api/video-gen', videoGenRoutes);
     vi.clearAllMocks();
+    // Reset the upload holder so a test that set a pending upload but
+    // bailed before the route consumed it can't leak into the next test.
+    pendingUpload.current = null;
   });
 
   describe('GET /status', () => {
@@ -73,7 +105,7 @@ describe('videoGen routes', () => {
     it('returns the static catalog', async () => {
       const r = await request(app).get('/api/video-gen/models');
       expect(r.status).toBe(200);
-      expect(r.body).toEqual([{ id: 'ltx2_unified', name: 'LTX-2 Unified' }]);
+      expect(r.body).toEqual([{ id: 'ltx2_unified', name: 'LTX-2 Unified', runtime: 'ltx2' }]);
     });
   });
 
@@ -152,6 +184,84 @@ describe('videoGen routes', () => {
       }));
     });
 
+    it('forwards chunks > 1 so the queue dispatches the chain orchestrator', async () => {
+      const r = await request(app).post('/api/video-gen/').send({
+        prompt: 'a long shot',
+        chunks: 4,
+      });
+      expect(r.status).toBe(200);
+      expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'video',
+        params: expect.objectContaining({ chunks: 4 }),
+      }));
+    });
+
+    it('coerces chunks=1 (and missing) to 1 — the non-chained path', async () => {
+      const r = await request(app).post('/api/video-gen/').send({
+        prompt: 'a single render',
+      });
+      expect(r.status).toBe(200);
+      expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'video',
+        params: expect.objectContaining({ chunks: 1 }),
+      }));
+    });
+
+    it('rejects chunks above the 1..8 cap', async () => {
+      const r = await request(app).post('/api/video-gen/').send({
+        prompt: 'too long',
+        chunks: 99,
+      });
+      expect(r.status).toBe(400);
+      expect(r.body.error).toMatch(/chunks/i);
+    });
+
+    it('forwards extendFromVideoId by resolving to a real disk path under data/videos/', async () => {
+      const id = '11111111-1111-4111-8111-111111111111';
+      const videoSvc = await import('../services/videoGen/local.js');
+      videoSvc.loadHistory.mockResolvedValueOnce([{ id, filename: `${id}.mp4` }]);
+      const r = await request(app).post('/api/video-gen/').send({
+        prompt: 'continue the scene',
+        mode: 'extend',
+        extendFromVideoId: id,
+      });
+      expect(r.status).toBe(200);
+      expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'video',
+        params: expect.objectContaining({
+          mode: 'extend',
+          // The route resolves the id to an absolute path under PATHS.videos
+          // (mocked to /mock/images for these tests; videos root is taken
+          // from PATHS.videos which is also /mock-rooted).
+          extendFromVideoPath: expect.stringContaining(`${id}.mp4`),
+        }),
+      }));
+    });
+
+    it('returns 404 when extendFromVideoId is not in history', async () => {
+      const id = '22222222-2222-4222-8222-222222222222';
+      const videoSvc = await import('../services/videoGen/local.js');
+      videoSvc.loadHistory.mockResolvedValueOnce([]); // empty history
+      const r = await request(app).post('/api/video-gen/').send({
+        prompt: 'continue',
+        mode: 'extend',
+        extendFromVideoId: id,
+      });
+      expect(r.status).toBe(404);
+      expect(r.body.error).toMatch(/not found in history/i);
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+    });
+
+    it('rejects malformed extendFromVideoId at the schema layer', async () => {
+      const r = await request(app).post('/api/video-gen/').send({
+        prompt: 'continue',
+        mode: 'extend',
+        extendFromVideoId: 'not-a-uuid',
+      });
+      expect(r.status).toBe(400);
+      expect(r.body.error).toMatch(/extendFromVideoId/i);
+    });
+
     it('rejects an unknown mode value', async () => {
       const r = await request(app).post('/api/video-gen/').send({
         prompt: 'a cat',
@@ -159,6 +269,99 @@ describe('videoGen routes', () => {
       });
       expect(r.status).toBe(400);
       expect(r.body.error).toMatch(/mode/i);
+    });
+
+    // a2v mode requires an audio upload. Without one the route fails fast
+    // with VIDEO_GEN_AUDIO_REQUIRED (400) instead of queueing a job that
+    // would fail late on the python helper's audio_path check.
+    it('rejects a2v without an audio upload (VIDEO_GEN_AUDIO_REQUIRED)', async () => {
+      const r = await request(app).post('/api/video-gen/').send({
+        prompt: 'beat-synced dancer',
+        mode: 'a2v',
+      });
+      expect(r.status).toBe(400);
+      expect(r.body.error).toMatch(/audioFile/i);
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+    });
+
+    // Audio upload present + mode='a2v': route stages the audio under
+    // data/uploads/ and forwards the staged audioFilePath into enqueue
+    // params. The python helper picks it up via --audio.
+    it('stages audioFile upload and forwards audioFilePath for a2v mode', async () => {
+      setPendingUpload({
+        fieldname: 'audioFile',
+        path: '/tmp/upload-fake.wav',
+        originalname: 'beats.wav',
+        mimetype: 'audio/wav',
+        size: 1234,
+      });
+      const r = await request(app).post('/api/video-gen/').send({
+        prompt: 'beat-synced dancer',
+        mode: 'a2v',
+      });
+      expect(r.status).toBe(200);
+      expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'video',
+        params: expect.objectContaining({
+          mode: 'a2v',
+          // audio is staged into PATHS.uploads with the video-audio prefix
+          audioFilePath: expect.stringMatching(/\/mock\/uploads\/video-audio-.*\.wav$/),
+          // and threaded into uploadedTempPaths (array) for worker cleanup —
+          // uploadedTempPath (singular) stays reserved for the start-frame
+          // upload so legacy persisted jobs replay correctly.
+          uploadedTempPaths: expect.arrayContaining([
+            expect.stringMatching(/\/mock\/uploads\/video-audio-.*\.wav$/),
+          ]),
+        }),
+      }));
+    });
+
+    // a2v on a non-ltx2 model would fail later inside the worker
+    // (buildArgs throws A2V_REQUIRES_LTX2). The route catches it up front so
+    // a typo / stale UI state doesn't pollute the persisted queue with a
+    // doomed entry.
+    it('rejects mode=a2v paired with a non-ltx2 modelId (A2V_REQUIRES_LTX2)', async () => {
+      // Override the default ltx2-runtime model with a legacy mlx_video entry
+      // for this single request.
+      videoGenService.listVideoModels.mockReturnValueOnce([
+        { id: 'ltx_legacy', name: 'LTX legacy', runtime: 'mlx_video' },
+      ]);
+      setPendingUpload({
+        fieldname: 'audioFile',
+        path: '/tmp/upload-fake.wav',
+        originalname: 'beats.wav',
+        mimetype: 'audio/wav',
+        size: 1234,
+      });
+      const r = await request(app).post('/api/video-gen/').send({
+        prompt: 'beat-synced dancer',
+        mode: 'a2v',
+        modelId: 'ltx_legacy',
+      });
+      expect(r.status).toBe(400);
+      expect(r.body.error).toMatch(/ltx2-runtime/i);
+      expect(r.body.code).toBe('A2V_REQUIRES_LTX2');
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+    });
+
+    // Defense-in-depth: an audio upload paired with the wrong mode would
+    // otherwise be silently dropped (queued as text-to-video). Reject so
+    // the caller can't accidentally pay for the wrong generation path.
+    it('rejects audioFile upload paired with a non-a2v mode (VIDEO_GEN_AUDIO_MODE_MISMATCH)', async () => {
+      setPendingUpload({
+        fieldname: 'audioFile',
+        path: '/tmp/upload-fake.wav',
+        originalname: 'beats.wav',
+        mimetype: 'audio/wav',
+        size: 1234,
+      });
+      const r = await request(app).post('/api/video-gen/').send({
+        prompt: 'a cat',
+        mode: 'text',
+      });
+      expect(r.status).toBe(400);
+      expect(r.body.error).toMatch(/a2v/i);
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
     });
 
     // Pre-enqueue config validation: without pythonPath the queue would
@@ -259,18 +462,60 @@ describe('videoGen routes', () => {
   });
 
   describe('POST /stitch', () => {
+    const validId = (n) => `aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaa${n}`;
+
     it('rejects when videoIds is not an array', async () => {
       const r = await request(app).post('/api/video-gen/stitch').send({ videoIds: 'not-array' });
       expect(r.status).toBe(400);
-      expect(r.body.error).toMatch(/array/i);
+    });
+
+    it('rejects when videoIds contains malformed history ids', async () => {
+      const r = await request(app).post('/api/video-gen/stitch').send({ videoIds: ['../etc/passwd', 'b'] });
+      expect(r.status).toBe(400);
+    });
+
+    it('rejects when videoIds has fewer than 2 entries', async () => {
+      const r = await request(app).post('/api/video-gen/stitch').send({ videoIds: [validId(1)] });
+      expect(r.status).toBe(400);
     });
 
     it('proxies array of ids to stitchVideos and wraps result', async () => {
       videoGenService.stitchVideos.mockResolvedValue({ id: 's1', filename: 's1.mp4' });
-      const r = await request(app).post('/api/video-gen/stitch').send({ videoIds: ['a', 'b'] });
+      const r = await request(app).post('/api/video-gen/stitch').send({ videoIds: [validId(1), validId(2)] });
       expect(r.status).toBe(200);
       expect(r.body.ok).toBe(true);
       expect(r.body.video.id).toBe('s1');
+      expect(videoGenService.stitchVideos).toHaveBeenCalledWith([validId(1), validId(2)]);
+    });
+  });
+
+  describe('POST /upscale/:id', () => {
+    const validHistoryId = 'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaa1';
+    const otherValidId = 'bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbb2';
+
+    it('rejects history ids that do not match the UUID shape', async () => {
+      const r = await request(app).post('/api/video-gen/upscale/not-a-uuid').send({});
+      expect(r.status).toBe(400);
+      expect(videoGenService.upscaleHistoryItem).not.toHaveBeenCalled();
+    });
+
+    it('forwards id to upscaleHistoryItem and wraps the new entry', async () => {
+      const upscaled = { id: otherValidId, filename: `${otherValidId}.mp4`, width: 1536, height: 1024, upscaledFrom: validHistoryId };
+      videoGenService.upscaleHistoryItem.mockResolvedValue(upscaled);
+      const r = await request(app).post(`/api/video-gen/upscale/${validHistoryId}`).send({});
+      expect(r.status).toBe(200);
+      expect(r.body.ok).toBe(true);
+      expect(r.body.video).toEqual(upscaled);
+      expect(videoGenService.upscaleHistoryItem).toHaveBeenCalledWith(validHistoryId);
+    });
+
+    it('returns the ServerError status when the service rejects', async () => {
+      videoGenService.upscaleHistoryItem.mockRejectedValue(
+        Object.assign(new Error('Video not found'), { status: 404, code: 'NOT_FOUND' }),
+      );
+      const r = await request(app).post(`/api/video-gen/upscale/${validHistoryId}`).send({});
+      expect(r.status).toBe(404);
+      expect(r.body.error).toMatch(/not found/i);
     });
   });
 });

@@ -9,6 +9,7 @@
 #   PYTHON_BIN     Python 3 binary to use (default: python3)
 #   PORTOS_DATA    Path to PortOS data dir (default: ./data, resolved from $REPO_ROOT)
 #   INSTALL_VIDEO  '1' to also install mlx_video for LTX video generation (default: 1 on macOS, 0 on Windows)
+#   INSTALL_LTX2   '1' to also clone + uv-sync dgrauet/ltx-2-mlx at ~/.portos/ltx-2-mlx for the second-gen LTX-2.3 pipeline (proper keyframe interpolation, true video extend, audio-to-video). Default: 1 on macOS, 0 elsewhere.
 #   INSTALL_FLUX2  '1' to also bootstrap a separate venv at ~/.portos/venv-flux2 for FLUX.2-klein (default: 1 on macOS, 0 elsewhere)
 
 set -euo pipefail
@@ -69,6 +70,60 @@ if [[ "$INSTALL_VIDEO" == "1" ]]; then
       diffusers \
       accelerate
   fi
+fi
+
+INSTALL_LTX2="${INSTALL_LTX2:-$(is_macos && echo 1 || echo 0)}"
+
+if [[ "$INSTALL_LTX2" == "1" ]]; then
+  # dgrauet/ltx-2-mlx: a more capable community port of LTX-2.3 with
+  # proper KeyframeInterpolationPipeline (true FFLF), video Extend (not
+  # last-frame conditioning), retake, ic-lora, audio-to-video.
+  # Requires Python 3.11+ and ships as a multi-package monorepo we sync
+  # via `uv sync --all-extras` from a local clone. Lives at
+  # ~/.portos/ltx-2-mlx/ (sibling to the FLUX.2 venv pattern).
+  #
+  # The notapalindrome `mlx-video-with-audio` install above is unaffected
+  # — both pipelines coexist; dispatch is per-model via media-models.json's
+  # `runtime` field (`mlx_video` vs `ltx2`).
+  if ! have uv; then
+    echo "❌ INSTALL_LTX2=1 requires the 'uv' Python installer. Install with:" >&2
+    echo "   curl -LsSf https://astral.sh/uv/install.sh | sh" >&2
+    exit 1
+  fi
+  if ! have git; then
+    echo "❌ INSTALL_LTX2=1 requires git." >&2
+    exit 1
+  fi
+  LTX2_DIR="${HOME}/.portos/ltx-2-mlx"
+  LTX2_PY="${LTX2_DIR}/.venv/bin/python3"
+  mkdir -p "${HOME}/.portos"
+  if [[ ! -d "${LTX2_DIR}/.git" ]]; then
+    echo "📦 Cloning dgrauet/ltx-2-mlx into ${LTX2_DIR}..."
+    git clone --depth=1 https://github.com/dgrauet/ltx-2-mlx.git "${LTX2_DIR}"
+  else
+    echo "ℹ️  ltx-2-mlx clone exists at ${LTX2_DIR}; skipping clone."
+  fi
+  # Force Python 3.11 — ltx-core-mlx pins requires-python>=3.11 and the
+  # macOS bundled python3 is sometimes 3.10. uv resolves this for us when
+  # the env doesn't already exist.
+  if [[ ! -x "${LTX2_PY}" ]]; then
+    echo "📦 Creating ltx-2-mlx venv with Python 3.11..."
+    (cd "${LTX2_DIR}" && uv venv --python 3.11)
+  fi
+  # `uv sync` is idempotent — already-installed packages are no-ops. The
+  # repo's uv.lock pins mlx==0.31.1, which is the safe version (mlx 0.31.2
+  # silently regressed audio peaks by ~22 dB; phosphene hit this and ships
+  # the same pin). Skip --all-extras — we don't need the trainer or dev
+  # extras for inference, and the trainer extra pulls another package we
+  # have no use for.
+  echo "📦 Syncing ltx-2-mlx packages (uv sync, no extras)..."
+  (cd "${LTX2_DIR}" && uv sync)
+  if ! "${LTX2_PY}" -c "import ltx_pipelines_mlx" 2>/dev/null; then
+    echo "❌ ltx-2-mlx synced but 'import ltx_pipelines_mlx' failed." >&2
+    echo "   Re-run with: rm -rf ${LTX2_DIR}/.venv && bash $0" >&2
+    exit 1
+  fi
+  echo "✅ ltx-2-mlx venv ready: ${LTX2_PY}"
 fi
 
 INSTALL_FLUX2="${INSTALL_FLUX2:-$(is_macos && echo 1 || echo 0)}"
@@ -138,6 +193,9 @@ echo "   Python:    $PYTHON_PATH"
 echo "   HF cache:  ~/.cache/huggingface (HF default)"
 echo "   LoRAs:     ${PORTOS_DATA}/loras"
 echo "   Videos:    ${PORTOS_DATA}/videos"
+if [[ "$INSTALL_LTX2" == "1" ]]; then
+  echo "   LTX-2.3:   ${HOME}/.portos/ltx-2-mlx/.venv/bin/python3 (separate venv, dgrauet pipeline)"
+fi
 if [[ "$INSTALL_FLUX2" == "1" ]]; then
   echo "   FLUX.2:    ${HOME}/.portos/venv-flux2/bin/python3 (separate venv)"
   echo ""

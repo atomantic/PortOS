@@ -1,4 +1,4 @@
-import { Trash2, Download, Film, Image as ImageIcon, Sparkles, Eye, EyeOff } from 'lucide-react';
+import { Trash2, Download, Film, Image as ImageIcon, Sparkles, Eye, EyeOff, Maximize2 } from 'lucide-react';
 import AddToCollectionMenu from './AddToCollectionMenu';
 
 // Single card used everywhere a generated image/video appears in a grid:
@@ -13,6 +13,7 @@ export default function MediaCard({
   onRemix,
   onSendToVideo,
   onContinue,
+  onUpscale,
   onDelete,
   onToggleHidden,
   selectionLabel = null, // e.g. "1", "2" — shown as the stitch order badge
@@ -50,6 +51,9 @@ export default function MediaCard({
         )}
         {item.stitchedFrom && (
           <span className="absolute top-1.5 right-1.5 text-[9px] px-1 py-0.5 bg-port-success/80 text-white rounded">stitched</span>
+        )}
+        {item.upscaledFrom && (
+          <span className="absolute top-1.5 right-1.5 text-[9px] px-1 py-0.5 bg-port-accent/80 text-white rounded">2×</span>
         )}
       </button>
       <div className="p-2 space-y-1.5">
@@ -92,6 +96,16 @@ export default function MediaCard({
                 title="Use last frame as Image Gen source"
               >
                 <ImageIcon className="w-3 h-3" /> Continue
+              </button>
+            )}
+            {isVideo && onUpscale && !item.upscaledFrom && (
+              <button
+                type="button"
+                onClick={() => onUpscale(item)}
+                className="px-1.5 py-1 bg-port-border hover:bg-port-border/70 text-white text-[10px] rounded flex items-center justify-center"
+                title="Upscale 2× (Lanczos, ~10s)"
+              >
+                <Maximize2 className="w-3 h-3" />
               </button>
             )}
             {showCollectionMenu && <AddToCollectionMenu item={item} />}

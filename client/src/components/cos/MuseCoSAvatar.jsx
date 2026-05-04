@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { AGENT_STATES } from './constants';
 import CoSAvatarOrbitControls from './CoSAvatarOrbitControls';
 import CoSAvatarFrame from './CoSAvatarFrame';
+import CoSBackgroundCamera from './CoSBackgroundCamera';
 
 const MODEL_URL = '/api/avatar/model.glb';
 
@@ -125,12 +126,14 @@ function StateEffects({ color, state }) {
   return <Sparkles count={15} scale={3} size={1.5} speed={0.3} color={color} />;
 }
 
-function Scene({ state, speaking }) {
+function Scene({ state, speaking, background }) {
   const stateConfig = AGENT_STATES[state] || AGENT_STATES.sleeping;
   const color = stateConfig.color;
 
   return (
     <>
+      <CoSBackgroundCamera enabled={background} z={3.3} />
+
       <ambientLight intensity={0.25} />
       <pointLight position={[2, 3, 4]} intensity={0.6} color={color} />
       <pointLight position={[-2, 1, 3]} intensity={0.3} color="#f472b6" />
@@ -144,9 +147,9 @@ function Scene({ state, speaking }) {
   );
 }
 
-function MissingModelHint() {
+function MissingModelHint({ background = false }) {
   return (
-    <div className="relative w-full max-w-[8rem] lg:max-w-[12rem] aspect-[5/6] flex flex-col items-center justify-center rounded-lg border border-port-border bg-port-card/60 text-center p-3">
+    <div className={`${background ? 'relative w-full h-full min-h-full' : 'relative w-full max-w-[8rem] lg:max-w-[12rem] aspect-[5/6]'} flex flex-col items-center justify-center rounded-lg border border-port-border bg-port-card/60 text-center p-3`}>
       <div className="text-3xl mb-2">🎭</div>
       <div className="text-xs font-semibold text-slate-200 mb-1">No avatar model</div>
       <div className="text-[10px] text-slate-400 mb-1.5">Drop a GLB at</div>
@@ -157,15 +160,15 @@ function MissingModelHint() {
   );
 }
 
-function LoadingPlaceholder() {
+function LoadingPlaceholder({ background = false }) {
   return (
-    <div className="relative w-full max-w-[8rem] lg:max-w-[12rem] aspect-[5/6] flex items-center justify-center">
+    <div className={`${background ? 'relative w-full h-full min-h-full' : 'relative w-full max-w-[8rem] lg:max-w-[12rem] aspect-[5/6]'} flex items-center justify-center`}>
       <div className="text-xs text-slate-500 animate-pulse">loading…</div>
     </div>
   );
 }
 
-export default function MuseCoSAvatar({ state, speaking }) {
+export default function MuseCoSAvatar({ state, speaking, background = false }) {
   // null = checking, true = GLB present, false = missing
   const [modelPresent, setModelPresent] = useState(null);
 
@@ -181,18 +184,18 @@ export default function MuseCoSAvatar({ state, speaking }) {
     return () => { cancelled = true; };
   }, []);
 
-  if (modelPresent === null) return <LoadingPlaceholder />;
-  if (!modelPresent) return <MissingModelHint />;
+  if (modelPresent === null) return <LoadingPlaceholder background={background} />;
+  if (!modelPresent) return <MissingModelHint background={background} />;
 
   return (
-    <CoSAvatarFrame label="Muse 3D avatar. Drag to rotate.">
+    <CoSAvatarFrame label="Muse 3D avatar. Drag to rotate." background={background}>
       <Canvas
         camera={{ position: [0, 0, 3.3], fov: 45 }}
-        style={{ background: 'transparent' }}
+        style={{ width: '100%', height: '100%', background: 'transparent' }}
         gl={{ alpha: true, antialias: true }}
       >
         <Suspense fallback={null}>
-          <Scene state={state} speaking={speaking} />
+          <Scene state={state} speaking={speaking} background={background} />
         </Suspense>
       </Canvas>
     </CoSAvatarFrame>

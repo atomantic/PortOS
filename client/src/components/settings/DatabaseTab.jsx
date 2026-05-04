@@ -232,7 +232,7 @@ export function DatabaseTab() {
 
   return (
     <div className="space-y-4">
-      <div className="bg-port-card border border-port-border rounded-xl p-6 space-y-5">
+      <div className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6 space-y-5">
         {/* Connection summary */}
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">

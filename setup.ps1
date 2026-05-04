@@ -1,6 +1,9 @@
 # PortOS Setup Script for Windows PowerShell
 $ErrorActionPreference = "Stop"
 
+$RootDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+Set-Location $RootDir
+
 Write-Host "===================================" -ForegroundColor Cyan
 Write-Host "  PortOS Setup" -ForegroundColor Cyan
 Write-Host "===================================" -ForegroundColor Cyan
@@ -22,9 +25,17 @@ if ($majorVersion -lt 18) {
     exit 1
 }
 Write-Host "Found Node.js v$nodeVersion" -ForegroundColor Green
-
-# Install dependencies
 Write-Host ""
+
+# Update submodules (slash-do and any others)
+Write-Host "Updating submodules..." -ForegroundColor Yellow
+git submodule update --init --recursive
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+Write-Host ""
+
+# Install dependencies — use Push-Location instead of --prefix so npm doesn't
+# create a directory symlink (root package into sub-package node_modules), which
+# requires Developer Mode or admin rights on Windows.
 Write-Host "Installing dependencies..." -ForegroundColor Yellow
 
 Write-Host "  Installing root dependencies..."
@@ -43,15 +54,34 @@ npm install
 if ($LASTEXITCODE -ne 0) { Pop-Location; exit $LASTEXITCODE }
 Pop-Location
 
-# Run setup scripts
+Write-Host "  Installing autofixer dependencies..."
+Push-Location autofixer
+npm install
+if ($LASTEXITCODE -ne 0) { Pop-Location; exit $LASTEXITCODE }
+Pop-Location
+
+# Rebuild native bindings
 Write-Host ""
-Write-Host "Setting up data directory..." -ForegroundColor Yellow
-npm run setup
+Write-Host "Rebuilding esbuild & node-pty..." -ForegroundColor Yellow
+node client/node_modules/esbuild/install.js
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+node server/node_modules/esbuild/install.js
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+npm rebuild node-pty --prefix server
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+# Run data setup scripts
 Write-Host ""
+Write-Host "Setting up data directory..." -ForegroundColor Yellow
+node scripts/setup-data.js
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+node scripts/setup-db.js
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+node scripts/setup-browser.js
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 # Optional Ghostty setup
+Write-Host ""
 $setupGhostty = Read-Host "Set up Ghostty terminal themes? (y/N)"
 if ($setupGhostty -match '^[Yy]$') {
     node scripts/setup-ghostty.js

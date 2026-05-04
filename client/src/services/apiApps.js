@@ -67,6 +67,7 @@ export const bulkUpdateAppTaskTypeOverride = (taskType, { enabled }) => request(
   body: JSON.stringify({ enabled })
 });
 export const detectAppIcons = () => request('/apps/detect-icons', { method: 'POST' });
+export const detectAppIcon = (id) => request(`/apps/${id}/detect-icon`, { method: 'POST' });
 export const getAppLogs = (id, lines = 100, processName) => {
   const params = new URLSearchParams({ lines: String(lines) });
   if (processName) params.set('process', processName);

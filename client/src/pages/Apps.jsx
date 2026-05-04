@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { ExternalLink, Play, Square, RotateCcw, FolderOpen, Terminal, Code, RefreshCw, Wrench, Archive, ArchiveRestore, Ticket, Download, Hammer, Smartphone, Image } from 'lucide-react';
+import { ExternalLink, Play, Square, RotateCcw, FolderOpen, Terminal, Code, RefreshCw, Wrench, Archive, ArchiveRestore, Ticket, Download, Hammer, Smartphone } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import AppIcon from '../components/AppIcon';
 import BrailleSpinner from '../components/BrailleSpinner';
@@ -127,16 +127,6 @@ export default function Apps() {
     toast.success(`${app.name} unarchived - included in COS tasks`);
   };
 
-  const [detectingIcons, setDetectingIcons] = useState(false);
-  const handleDetectIcons = async () => {
-    setDetectingIcons(true);
-    const result = await api.detectAppIcons().catch(() => null);
-    setDetectingIcons(false);
-    if (result) {
-      toast.success(`Detected icons for ${result.detected} of ${result.total} apps`);
-    }
-  };
-
   // Filter apps based on archive status
   const activeApps = apps.filter(app => !app.archived);
   const archivedApps = apps.filter(app => app.archived);
@@ -160,15 +150,6 @@ export default function Apps() {
           <p className="text-gray-500 text-sm sm:text-base">Manage registered applications</p>
         </div>
         <div className="flex items-center gap-3">
-          <button
-            onClick={handleDetectIcons}
-            disabled={detectingIcons}
-            className="px-3 py-2 rounded-lg text-sm flex items-center gap-2 bg-port-border text-gray-400 hover:text-white transition-colors disabled:opacity-50"
-            title="Detect app icons from project directories"
-          >
-            <Image size={16} />
-            {detectingIcons ? 'Detecting...' : 'Detect Icons'}
-          </button>
           {/* Archive Toggle */}
           {archivedApps.length > 0 && (
             <button
@@ -187,7 +168,7 @@ export default function Apps() {
             to="/apps/create"
             className="px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors text-center"
           >
-            + Add App
+            + Add
           </Link>
         </div>
       </div>
@@ -289,29 +270,29 @@ export default function Apps() {
                           <button
                             onClick={() => handleStop(app)}
                             disabled={actionLoading[app.id]}
-                            className="px-3 py-1.5 bg-port-error/20 text-port-error hover:bg-port-error/30 transition-colors disabled:opacity-50 flex items-center gap-1 focus:outline-hidden focus:ring-2 focus:ring-port-error"
+                            className="px-3 py-1.5 bg-port-error/20 text-port-error enabled:hover:bg-port-error/30 transition-colors disabled:opacity-50 flex items-center gap-1 focus:outline-hidden focus:ring-2 focus:ring-port-error"
                             aria-label={`Stop ${app.name}`}
                             aria-busy={actionLoading[app.id] === 'stop'}
                           >
                             <Square size={14} aria-hidden="true" />
-                            <span className="text-xs">Stop</span>
+                            <span className="text-xs">{actionLoading[app.id] === 'stop' ? 'Stopping...' : 'Stop'}</span>
                           </button>
                           <button
                             onClick={() => handleRestart(app)}
                             disabled={actionLoading[app.id]}
-                            className="px-3 py-1.5 bg-port-warning/20 text-port-warning hover:bg-port-warning/30 transition-colors disabled:opacity-50 border-l border-port-border flex items-center gap-1 focus:outline-hidden focus:ring-2 focus:ring-port-warning"
+                            className="px-3 py-1.5 bg-port-warning/20 text-port-warning enabled:hover:bg-port-warning/30 transition-colors disabled:opacity-50 border-l border-port-border flex items-center gap-1 focus:outline-hidden focus:ring-2 focus:ring-port-warning"
                             aria-label={`Restart ${app.name}`}
                             aria-busy={actionLoading[app.id] === 'restart'}
                           >
                             <RotateCcw size={14} aria-hidden="true" className={actionLoading[app.id] === 'restart' ? 'animate-spin' : ''} />
-                            <span className="text-xs">Restart</span>
+                            <span className="text-xs">{actionLoading[app.id] === 'restart' ? 'Restarting...' : 'Restart'}</span>
                           </button>
                         </>
                       ) : (
                         <button
                           onClick={() => handleStart(app)}
                           disabled={actionLoading[app.id]}
-                          className="px-3 py-1.5 bg-port-success/20 text-port-success hover:bg-port-success/30 transition-colors disabled:opacity-50 flex items-center gap-1 focus:outline-hidden focus:ring-2 focus:ring-port-success"
+                          className="px-3 py-1.5 bg-port-success/20 text-port-success enabled:hover:bg-port-success/30 transition-colors disabled:opacity-50 flex items-center gap-1 focus:outline-hidden focus:ring-2 focus:ring-port-success"
                           aria-label={`Start ${app.name}`}
                           aria-busy={actionLoading[app.id] === 'start'}
                         >
@@ -322,26 +303,30 @@ export default function Apps() {
                     </div>
                     )}
 
-                    {/* Launch buttons */}
-                    {app.uiPort && app.overallStatus === 'online' && (
-                      <button
-                        onClick={() => window.open(`${window.location.protocol}//${window.location.hostname}:${app.uiPort}`, '_blank')}
-                        className="px-3 py-1.5 bg-port-accent/20 text-port-accent hover:bg-port-accent/30 transition-colors rounded-lg border border-port-border flex items-center gap-1"
-                        aria-label={`Launch ${app.name} UI`}
-                      >
-                        <ExternalLink size={14} aria-hidden="true" />
-                        <span className="text-xs">Launch</span>
-                      </button>
-                    )}
-                    {app.devUiPort && app.overallStatus === 'online' && (
-                      <button
-                        onClick={() => window.open(`${window.location.protocol}//${window.location.hostname}:${app.devUiPort}`, '_blank')}
-                        className="px-3 py-1.5 bg-port-warning/20 text-port-warning hover:bg-port-warning/30 transition-colors rounded-lg border border-port-border flex items-center gap-1"
-                        aria-label={`Launch ${app.name} Dev UI`}
-                      >
-                        <ExternalLink size={14} aria-hidden="true" />
-                        <span className="text-xs">Dev UI</span>
-                      </button>
+                    {/* Launch buttons grouped together */}
+                    {app.overallStatus === 'online' && (app.uiPort || app.devUiPort) && (
+                      <div className="inline-flex rounded-lg overflow-hidden border border-port-border divide-x divide-port-border">
+                        {app.uiPort && (
+                          <button
+                            onClick={() => window.open(`${window.location.protocol}//${window.location.hostname}:${app.uiPort}`, '_blank')}
+                            className="px-3 py-1.5 bg-port-accent/20 text-port-accent enabled:hover:bg-port-accent/30 transition-colors flex items-center gap-1"
+                            aria-label={`Launch ${app.name} UI`}
+                          >
+                            <ExternalLink size={14} aria-hidden="true" />
+                            <span className="text-xs">Launch</span>
+                          </button>
+                        )}
+                        {app.devUiPort && (
+                          <button
+                            onClick={() => window.open(`${window.location.protocol}//${window.location.hostname}:${app.devUiPort}`, '_blank')}
+                            className="px-3 py-1.5 bg-port-warning/20 text-port-warning enabled:hover:bg-port-warning/30 transition-colors flex items-center gap-1"
+                            aria-label={`Launch ${app.name} Dev UI`}
+                          >
+                            <ExternalLink size={14} aria-hidden="true" />
+                            <span className="text-xs">Dev UI</span>
+                          </button>
+                        )}
+                      </div>
                     )}
 
                     {/* Edit/Delete Actions */}
@@ -552,7 +537,7 @@ export default function Apps() {
                         <button
                           onClick={() => handleBuild(app)}
                           disabled={building[app.id]}
-                          className="px-3 py-1.5 bg-port-warning/20 text-port-warning hover:bg-port-warning/30 rounded-lg text-xs flex items-center gap-1 disabled:opacity-50"
+                          className="px-3 py-1.5 bg-port-warning/20 text-port-warning enabled:hover:bg-port-warning/30 transition-colors rounded-lg text-xs flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
                           aria-label={`Build production UI: ${app.buildCommand}`}
                         >
                           <Hammer size={14} aria-hidden="true" className={building[app.id] ? 'animate-bounce' : ''} />

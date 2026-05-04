@@ -32,12 +32,19 @@ const DEFAULT_REGISTRY = {
   _doc: 'PortOS media model registry. Edit to add models, tune defaults, or switch the text encoder. Restart the server to apply changes.',
   video: {
     macos: [
-      { id: 'ltx2_unified',       name: 'LTX-2 Unified (~42 GB)',          repo: 'notapalindrome/ltx2-mlx-av',     steps: 30, guidance: 3.0 },
-      { id: 'ltx23_unified',      name: 'LTX-2.3 Unified Beta (~48 GB)',   repo: 'notapalindrome/ltx23-mlx-av',    steps: 25, guidance: 3.0 },
-      { id: 'ltx23_distilled_q4', name: 'LTX-2.3 Distilled Q4 (~22 GB)',   repo: 'notapalindrome/ltx23-mlx-av-q4', steps: 25, guidance: 3.0 },
+      // notapalindrome's mlx-video-with-audio runtime — single PyPI package,
+      // T2V/I2V only, FFLF degrades to last-frame conditioning (one --image arg).
+      { id: 'ltx2_unified',       name: 'LTX-2 Unified (~42 GB)',          repo: 'notapalindrome/ltx2-mlx-av',     runtime: 'mlx_video', steps: 30, guidance: 3.0 },
+      { id: 'ltx23_unified',      name: 'LTX-2.3 Unified Beta (~48 GB)',   repo: 'notapalindrome/ltx23-mlx-av',    runtime: 'mlx_video', steps: 25, guidance: 3.0 },
+      { id: 'ltx23_distilled_q4', name: 'LTX-2.3 Distilled Q4 (~22 GB)',   repo: 'notapalindrome/ltx23-mlx-av-q4', runtime: 'mlx_video', steps: 25, guidance: 3.0 },
+      // dgrauet's ltx-2-mlx runtime — true KeyframeInterpolationPipeline,
+      // native video Extend, audio→video. Requires a separate venv synced
+      // via `INSTALL_LTX2=1 bash scripts/setup-image-video.sh`.
+      { id: 'ltx23_dgrauet_q4',   name: 'LTX-2.3 dgrauet Q4 (~16 GB, true keyframes)', repo: 'dgrauet/ltx-2.3-mlx-q4', runtime: 'ltx2', steps: 8, guidance: 3.0 },
+      { id: 'ltx23_dgrauet_q8',   name: 'LTX-2.3 dgrauet Q8 (~25 GB, true keyframes)', repo: 'dgrauet/ltx-2.3-mlx-q8', runtime: 'ltx2', steps: 8, guidance: 3.0 },
     ],
     windows: [
-      { id: 'ltx_video', name: 'LTX-Video 0.9.5 — T2V + I2V (~9.5 GB, auto-downloads)', steps: 25, guidance: 3.0 },
+      { id: 'ltx_video', name: 'LTX-Video 0.9.5 — T2V + I2V (~9.5 GB, auto-downloads)', runtime: 'mlx_video', steps: 25, guidance: 3.0 },
     ],
     defaultMacos: 'ltx23_distilled_q4',
     defaultWindows: 'ltx_video',
@@ -152,6 +159,35 @@ const upgradeImageEntries = (list) => {
 
 export const isFlux2 = (model) => model?.runner === 'flux2';
 
+// Append video models whose id is in DEFAULT_REGISTRY but missing from the
+// user's saved list. Lets us roll out new pipelines (e.g. the dgrauet ltx2
+// runtime) to existing installs without forcing users to hand-edit
+// data/media-models.json. Preserves any user customisations for ids they
+// already have (we only ADD new entries; we don't overwrite existing).
+const appendMissingVideoEntries = (userList, defaults) => {
+  if (!Array.isArray(userList)) return defaults;
+  if (!Array.isArray(defaults)) return userList;
+  const haveIds = new Set(userList.map((e) => e?.id).filter((id) => typeof id === 'string'));
+  const missing = defaults.filter((e) => typeof e?.id === 'string' && !haveIds.has(e.id));
+  if (!missing.length) return userList;
+  return [...userList, ...missing];
+};
+
+// Existing installs predate the `runtime` field on video entries — fill it
+// with 'mlx_video' (the legacy default) for known-legacy ids so the
+// dispatch in videoGen/local.js routes them through `python -m
+// mlx_video.generate_av` rather than treating undefined as ltx2.
+const LEGACY_MLX_VIDEO_IDS = new Set(['ltx2_unified', 'ltx23_unified', 'ltx23_distilled_q4', 'ltx_video']);
+const backfillRuntime = (list) => {
+  if (!Array.isArray(list)) return list;
+  return list.map((entry) => {
+    if (!isPlainObject(entry) || typeof entry.id !== 'string') return entry;
+    if (typeof entry.runtime === 'string' && entry.runtime.length > 0) return entry;
+    if (LEGACY_MLX_VIDEO_IDS.has(entry.id)) return { ...entry, runtime: 'mlx_video' };
+    return entry;
+  });
+};
+
 const normalizeRegistry = (parsed) => {
   const safe = isPlainObject(parsed) ? parsed : {};
   const safeVideo = isPlainObject(safe.video) ? safe.video : {};
@@ -163,8 +199,8 @@ const normalizeRegistry = (parsed) => {
     video: {
       ...DEFAULT_REGISTRY.video,
       ...safeVideo,
-      macos: arrayOrDefault(safeVideo.macos, DEFAULT_REGISTRY.video.macos),
-      windows: arrayOrDefault(safeVideo.windows, DEFAULT_REGISTRY.video.windows),
+      macos: backfillRuntime(appendMissingVideoEntries(safeVideo.macos, DEFAULT_REGISTRY.video.macos)),
+      windows: backfillRuntime(appendMissingVideoEntries(safeVideo.windows, DEFAULT_REGISTRY.video.windows)),
     },
   };
 };

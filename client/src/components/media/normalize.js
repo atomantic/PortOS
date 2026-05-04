@@ -37,6 +37,7 @@ export function normalizeVideo(v) {
     numFrames: v.numFrames,
     fps: v.fps,
     stitchedFrom: v.stitchedFrom,
+    upscaledFrom: v.upscaledFrom,
     createdAt: v.createdAt,
     hidden: !!v.hidden,
     raw: v,

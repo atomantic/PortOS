@@ -99,6 +99,10 @@ export const getBrowserPages = () => request('/browser/pages');
 export const getBrowserVersion = () => request('/browser/version');
 export const getBrowserLogs = (lines = 50) => request(`/browser/logs?lines=${lines}`);
 export const getBrowserDownloads = () => request('/browser/downloads');
+export const deleteBrowserDownload = (name) =>
+  request(`/browser/downloads/${encodeURIComponent(name)}`, { method: 'DELETE' });
+export const browserDownloadUrl = (name) =>
+  `/api/browser/downloads/${encodeURIComponent(name)}`;
 export const navigateBrowser = (url) => request('/browser/navigate', {
   method: 'POST',
   body: JSON.stringify({ url })
@@ -123,6 +127,19 @@ export const generateImage = (data) => request('/image-gen/generate', {
   method: 'POST',
   body: JSON.stringify(data)
 });
+// Curated style presets — code-static on the server, so cache the in-flight
+// promise and reuse it for the lifetime of the page. Eliminates the repeat
+// fetch when the user navigates ImageGen → VideoGen → Writers Room.
+let stylePresetsPromise = null;
+export const listImageStylePresets = () => {
+  if (!stylePresetsPromise) {
+    stylePresetsPromise = request('/image-gen/style-presets').catch((err) => {
+      stylePresetsPromise = null;
+      throw err;
+    });
+  }
+  return stylePresetsPromise;
+};
 export const generateAvatar = (data) => request('/image-gen/avatar', {
   method: 'POST',
   body: JSON.stringify(data)

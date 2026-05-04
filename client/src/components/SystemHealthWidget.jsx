@@ -221,27 +221,45 @@ const SystemHealthWidget = memo(function SystemHealthWidget() {
           </div>
         </div>
 
-        {/* Apps */}
-        <div className="bg-port-bg/50 rounded-lg p-3">
+        {/* Services — PM2-managed apps; native (Xcode/iOS) projects shown as "+N native" */}
+        <div
+          className="bg-port-bg/50 rounded-lg p-3"
+          title="PM2-managed apps online vs. total. Native projects (Xcode, iOS) have no detectable runtime and are listed separately."
+        >
           <div className="flex items-center gap-2 mb-1">
             <Zap size={14} className="text-amber-400" />
-            <span className="text-xs text-gray-500">Apps</span>
+            <span className="text-xs text-gray-500">Services</span>
           </div>
-          <div className="text-lg sm:text-xl font-bold text-white">
-            {apps.online}
-            <span className="text-sm font-normal text-gray-500">/{apps.total}</span>
-          </div>
-          <div className="flex items-center gap-1 text-xs text-gray-500">
-            {apps.stopped > 0 ? (
-              <span>{apps.stopped} stopped</span>
-            ) : apps.notStarted > 0 ? (
-              <span>{apps.notStarted} offline</span>
-            ) : apps.online === apps.total ? (
-              <span className="text-port-success">All online</span>
-            ) : (
-              <span>Ready</span>
-            )}
-          </div>
+          {apps.total > 0 ? (
+            <>
+              <div className="text-lg sm:text-xl font-bold text-white">
+                {apps.online}
+                <span className="text-sm font-normal text-gray-500">/{apps.total}</span>
+              </div>
+              <div className="flex items-center gap-1 text-xs text-gray-500">
+                {apps.online === apps.total ? (
+                  <span className="text-port-success">All running</span>
+                ) : apps.stopped > 0 ? (
+                  <span>{apps.stopped} stopped</span>
+                ) : apps.notStarted > 0 ? (
+                  <span>{apps.notStarted} not running</span>
+                ) : null}
+                {apps.unmanaged > 0 && (
+                  <span className="text-gray-500">
+                    {(apps.online === apps.total || apps.stopped > 0 || apps.notStarted > 0) ? ' · ' : ''}
+                    +{apps.unmanaged} native
+                  </span>
+                )}
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="text-lg sm:text-xl font-bold text-gray-500">—</div>
+              <div className="text-xs text-gray-500">
+                {apps.unmanaged > 0 ? `${apps.unmanaged} native only` : 'No apps'}
+              </div>
+            </>
+          )}
         </div>
 
         {/* Disk Usage */}

@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { AGENT_STATES } from './constants';
 import CoSAvatarOrbitControls from './CoSAvatarOrbitControls';
 import CoSAvatarFrame from './CoSAvatarFrame';
+import CoSBackgroundCamera from './CoSBackgroundCamera';
 
 // Holographic wireframe skull/head geometry
 function CyberHead({ color, state, speaking }) {
@@ -398,12 +399,14 @@ function GroundGlow({ color }) {
   );
 }
 
-function Scene({ state, speaking }) {
+function Scene({ state, speaking, background }) {
   const stateConfig = AGENT_STATES[state] || AGENT_STATES.sleeping;
   const color = stateConfig.color;
 
   return (
     <>
+      <CoSBackgroundCamera enabled={background} z={3.5} />
+
       {/* Lighting */}
       <ambientLight intensity={0.1} />
       <pointLight position={[2, 3, 4]} intensity={0.5} color={color} />
@@ -433,15 +436,15 @@ function Scene({ state, speaking }) {
   );
 }
 
-export default function CyberCoSAvatar({ state, speaking }) {
+export default function CyberCoSAvatar({ state, speaking, background = false }) {
   return (
-    <CoSAvatarFrame label="Cyber 3D avatar. Drag to rotate.">
+    <CoSAvatarFrame label="Cyber 3D avatar. Drag to rotate." background={background}>
       <Canvas
         camera={{ position: [0, 0, 3.5], fov: 45 }}
-        style={{ background: 'transparent' }}
+        style={{ width: '100%', height: '100%', background: 'transparent' }}
         gl={{ alpha: true, antialias: true }}
       >
-        <Scene state={state} speaking={speaking} />
+        <Scene state={state} speaking={speaking} background={background} />
       </Canvas>
     </CoSAvatarFrame>
   );
