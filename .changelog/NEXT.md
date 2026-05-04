@@ -2,6 +2,7 @@
 
 ## Fixed
 
+- `update.sh` no longer hangs after "PortOS restarted" — the browser-open script now exits explicitly instead of waiting for Node's undici connection pool to drain.
 - Writers-room storyboard renders queued through Codex now wait their turn instead of erroring with "A Codex generation is already in progress" when you fire a second render before the first finishes. Codex jobs run on their own queue lane, so they don't block (and aren't blocked by) local image or video renders.
 
 ## Added
