@@ -476,6 +476,42 @@ html[data-port-theme-mode="day"] [class~="border-slate-700/50"] {
   border-color: rgb(var(--port-border) / calc(var(--port-border-alpha) * 1.4)) !important;
 }
 
+/* Solid dark gray backgrounds (cards, modals, panels) — without these, pages
+   like DataDog/Jira/GitHub render dark cards under day-mode dark text. */
+html[data-port-theme-mode="day"] :is(.bg-gray-800, .bg-zinc-800, .bg-neutral-800, .bg-slate-800) {
+  background-color: rgb(var(--port-card) / var(--port-card-alpha)) !important;
+}
+
+html[data-port-theme-mode="day"] :is(.bg-gray-900, .bg-zinc-900, .bg-neutral-900, .bg-slate-900) {
+  background-color: rgb(var(--port-bg) / var(--port-bg-alpha)) !important;
+}
+
+/* Mid-gray surfaces — input wells, badges, secondary buttons, sub-sections.
+   Map to control-bg so they stay visually distinct from cards. */
+html[data-port-theme-mode="day"] :is(.bg-gray-700, .bg-zinc-700, .bg-neutral-700, .bg-slate-700, .bg-gray-600, .bg-zinc-600, .bg-neutral-600, .bg-slate-600) {
+  background-color: var(--port-control-bg) !important;
+}
+
+html[data-port-theme-mode="day"] :is(.bg-gray-500, .bg-zinc-500, .bg-neutral-500, .bg-slate-500) {
+  background-color: var(--port-control-bg-hover) !important;
+}
+
+html[data-port-theme-mode="day"] [class~="hover:bg-gray-800"]:hover,
+html[data-port-theme-mode="day"] [class~="hover:bg-gray-900"]:hover {
+  background-color: rgb(var(--port-card) / calc(var(--port-card-alpha) * 0.85)) !important;
+}
+
+html[data-port-theme-mode="day"] [class~="hover:bg-gray-500"]:hover,
+html[data-port-theme-mode="day"] [class~="hover:bg-gray-600"]:hover,
+html[data-port-theme-mode="day"] [class~="hover:bg-gray-700"]:hover {
+  background-color: var(--port-control-bg-hover) !important;
+}
+
+/* Borders — gray-500/600/800 used on inputs, dividers, button outlines. */
+html[data-port-theme-mode="day"] :is(.border-gray-500, .border-gray-600, .border-gray-800, .border-zinc-700, .border-zinc-800, .border-slate-800) {
+  border-color: rgb(var(--port-border) / calc(var(--port-border-alpha) * 1.4)) !important;
+}
+
 html[data-port-theme-mode="day"] [class~="border-indigo-500/20"],
 html[data-port-theme-mode="day"] [class~="border-indigo-500/30"],
 html[data-port-theme-mode="day"] [class~="border-indigo-500/40"] {
