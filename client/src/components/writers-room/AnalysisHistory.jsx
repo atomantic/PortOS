@@ -1,12 +1,15 @@
 import { useEffect, useState } from 'react';
-import { AlertTriangle, Check, Clapperboard, FileSignature, Loader2, RotateCcw, Sparkles, Users } from 'lucide-react';
+import { AlertTriangle, Check, Clapperboard, FileSignature, Loader2, MapPin, RotateCcw, Sparkles, Users } from 'lucide-react';
 import toast from '../ui/Toast';
 import { listWritersRoomAnalyses, getWritersRoomAnalysis } from '../../services/apiWritersRoom';
 import { timeAgo } from '../../utils/formatters';
 import useMounted from '../../hooks/useMounted';
 
-const KIND_ICON = { evaluate: Sparkles, format: FileSignature, script: Clapperboard, characters: Users };
-const KIND_LABEL = { evaluate: 'Evaluate', format: 'Format', script: 'Adapt', characters: 'Characters' };
+// Icon + label maps must include every kind from `ANALYSIS_KINDS`. Adding a
+// new analysis kind without registering it here would render the history row
+// with the fallback (raw kind string), so keep these two maps in sync.
+const KIND_ICON = { evaluate: Sparkles, format: FileSignature, script: Clapperboard, characters: Users, settings: MapPin };
+const KIND_LABEL = { evaluate: 'Evaluate', format: 'Format', script: 'Adapt', characters: 'Characters', settings: 'Settings' };
 
 const SEVERITY_COLOR = {
   major: 'text-port-error border-port-error/40',

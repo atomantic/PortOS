@@ -10,8 +10,12 @@ export function composeStyledPrompt(userPrompt, userNegative, preset) {
   if (!preset) return { prompt, negativePrompt: negative };
   const stylePart = (preset.prompt || '').trim();
   const styleNeg = (preset.negativePrompt || '').trim();
+  // Avoid trailing ". " when only one of the two parts is non-empty so the
+  // composed prompt is clean and deterministic regardless of which input
+  // is missing.
+  const composedPrompt = stylePart && prompt ? `${stylePart}. ${prompt}` : (stylePart || prompt);
   return {
-    prompt: stylePart ? `${stylePart}. ${prompt}` : prompt,
+    prompt: composedPrompt,
     negativePrompt: [negative, styleNeg].filter(Boolean).join(', '),
   };
 }

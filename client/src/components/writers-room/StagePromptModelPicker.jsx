@@ -30,7 +30,14 @@ export default function StagePromptModelPicker({ stageName, label = 'Stage LLM',
 
   const persist = async (next) => {
     setSaving(true);
-    setStage((prev) => ({ ...prev, ...next }));
+    // Snapshot previous stage so a non-OK response can roll back the
+    // optimistic update — otherwise the UI would keep showing a
+    // provider/model that wasn't actually persisted server-side.
+    let prevStage = null;
+    setStage((prev) => {
+      prevStage = prev;
+      return { ...prev, ...next };
+    });
     const res = await fetch(`/api/prompts/${encodeURIComponent(stageName)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -40,7 +47,10 @@ export default function StagePromptModelPicker({ stageName, label = 'Stage LLM',
       }),
     });
     setSaving(false);
-    if (!res.ok) toast.error(`Failed to save ${label}: ${await res.text().catch(() => res.statusText)}`);
+    if (!res.ok) {
+      setStage(prevStage);
+      toast.error(`Failed to save ${label}: ${await res.text().catch(() => res.statusText)}`);
+    }
   };
 
   // Hooks must run in the same order every render — keep useMemo above the

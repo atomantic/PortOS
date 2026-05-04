@@ -17,7 +17,7 @@ import { join, basename } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import { promisify } from 'util';
-import { ensureDir, PATHS, readJSONFile, atomicWrite } from '../../lib/fileUtils.js';
+import { ensureDir, PATHS, readJSONFile, atomicWrite, UUID_RE } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { videoGenEvents } from './events.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, PYTHON_NOISE_RE } from '../../lib/sseUtils.js';
@@ -486,12 +486,17 @@ export async function stitchVideos(videoIds) {
 // missing-input / ffmpeg / file-system failure so the route can map it to
 // a clean HTTP status.
 export async function upscaleHistoryItem(historyId) {
+  // Validate the input arg first — failing here surfaces a clean 400 even if
+  // the history file happens to contain a record with a malformed id, and
+  // it short-circuits the loadHistory I/O for obviously-bogus requests.
+  // Use the shared strict UUID regex (the prior /^[a-f0-9-]{36}$/i pattern
+  // accepted non-UUID 36-char strings like all-hyphens).
+  if (typeof historyId !== 'string' || !UUID_RE.test(historyId)) {
+    throw new ServerError('Invalid history id', { status: 400, code: 'VALIDATION_ERROR' });
+  }
   const history = await loadHistory();
   const item = history.find((h) => h.id === historyId);
   if (!item) throw new ServerError('Video not found', { status: 404, code: 'NOT_FOUND' });
-  if (!/^[a-f0-9-]{36}$/i.test(item.id)) {
-    throw new ServerError('Invalid history id', { status: 400, code: 'VALIDATION_ERROR' });
-  }
   if (item.upscaledFrom) {
     throw new ServerError('Cannot upscale an already-upscaled video', { status: 400, code: 'ALREADY_UPSCALED' });
   }
