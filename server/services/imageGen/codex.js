@@ -137,6 +137,9 @@ export async function generateImage({ codexPath, model, prompt, width, height, n
   return {
     jobId, filename, path: `/data/images/${filename}`, generationId: jobId,
     mode: 'codex', model: model || null,
+    // Async callers gate UI state on `status`; without 'running' they flip
+    // to 'done' before the PNG lands. SSE / socket 'completed' fires later.
+    status: 'running',
   };
 }
 

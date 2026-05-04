@@ -20,9 +20,38 @@ vi.mock('../services/writersRoom/local.js', () => ({
   createExercise: vi.fn(async (data) => ({ id: 'wr-ex-new', ...data })),
   finishExercise: vi.fn(async (id) => ({ id, status: 'finished' })),
   discardExercise: vi.fn(async (id) => ({ id, status: 'discarded' })),
+  ensureWorkMediaCollection: vi.fn(async () => ({ id: 'col-1' })),
+}));
+
+vi.mock('../services/writersRoom/characters.js', () => ({
+  listCharacters: vi.fn(async () => [{ id: 'wr-char-1', name: 'Aria' }]),
+  createCharacter: vi.fn(async (workId, data) => ({ id: 'wr-char-new', name: data.name })),
+  updateCharacter: vi.fn(async (workId, charId, data) => ({ id: charId, ...data })),
+  deleteCharacter: vi.fn(async () => ({ ok: true })),
+}));
+
+vi.mock('../services/writersRoom/settings.js', () => ({
+  listSettings: vi.fn(async () => [{ id: 'wr-setting-1', slugline: 'INT. KITCHEN — NIGHT' }]),
+  createSetting: vi.fn(async (workId, data) => ({ id: 'wr-setting-new', ...data })),
+  updateSetting: vi.fn(async (workId, settingId, data) => ({ id: settingId, ...data })),
+  deleteSetting: vi.fn(async () => ({ ok: true })),
+}));
+
+vi.mock('../services/writersRoom/evaluator.js', () => ({
+  runAnalysis: vi.fn(),
+  listAnalyses: vi.fn(async () => []),
+  getAnalysis: vi.fn(),
+  attachSceneImage: vi.fn(async () => ({})),
+}));
+
+vi.mock('../services/mediaCollections.js', () => ({
+  addItem: vi.fn(async () => ({ ok: true })),
+  ERR_DUPLICATE: 'ERR_DUPLICATE',
 }));
 
 import * as svc from '../services/writersRoom/local.js';
+import * as charSvc from '../services/writersRoom/characters.js';
+import * as settingsSvc from '../services/writersRoom/settings.js';
 import writersRoomRoutes from './writersRoom.js';
 
 describe('writersRoom routes', () => {
@@ -146,6 +175,107 @@ describe('writersRoom routes', () => {
       const r = await request(app).post('/api/writers-room/exercises/wr-ex-1/discard');
       expect(r.status).toBe(200);
       expect(svc.discardExercise).toHaveBeenCalledWith('wr-ex-1');
+    });
+  });
+
+  describe('characters', () => {
+    it('GET /works/:id/characters returns the bible', async () => {
+      const r = await request(app).get('/api/writers-room/works/wr-work-1/characters');
+      expect(r.status).toBe(200);
+      expect(r.body[0].id).toBe('wr-char-1');
+      expect(charSvc.listCharacters).toHaveBeenCalledWith('wr-work-1');
+    });
+
+    it('POST /works/:id/characters rejects empty name (schema validation)', async () => {
+      const r = await request(app).post('/api/writers-room/works/wr-work-1/characters').send({ name: '' });
+      expect(r.status).toBe(400);
+      expect(charSvc.createCharacter).not.toHaveBeenCalled();
+    });
+
+    it('POST /works/:id/characters rejects extra/unknown fields (strict schema)', async () => {
+      const r = await request(app)
+        .post('/api/writers-room/works/wr-work-1/characters')
+        .send({ name: 'Mila', wat: 'not allowed' });
+      expect(r.status).toBe(400);
+    });
+
+    it('POST /works/:id/characters accepts a valid payload', async () => {
+      const r = await request(app)
+        .post('/api/writers-room/works/wr-work-1/characters')
+        .send({ name: 'Mila', physicalDescription: 'tall, copper hair' });
+      expect(r.status).toBe(201);
+      expect(charSvc.createCharacter).toHaveBeenCalledWith('wr-work-1', {
+        name: 'Mila',
+        physicalDescription: 'tall, copper hair',
+      });
+    });
+
+    it('PATCH /works/:id/characters/:characterId forwards a partial update', async () => {
+      const r = await request(app)
+        .patch('/api/writers-room/works/wr-work-1/characters/wr-char-1')
+        .send({ role: 'protagonist' });
+      expect(r.status).toBe(200);
+      expect(charSvc.updateCharacter).toHaveBeenCalledWith('wr-work-1', 'wr-char-1', { role: 'protagonist' });
+    });
+
+    it('PATCH /works/:id/characters/:characterId rejects empty name', async () => {
+      const r = await request(app)
+        .patch('/api/writers-room/works/wr-work-1/characters/wr-char-1')
+        .send({ name: '   ' });
+      expect(r.status).toBe(400);
+    });
+
+    it('DELETE /works/:id/characters/:characterId forwards to the service', async () => {
+      const r = await request(app).delete('/api/writers-room/works/wr-work-1/characters/wr-char-1');
+      expect(r.status).toBe(200);
+      expect(charSvc.deleteCharacter).toHaveBeenCalledWith('wr-work-1', 'wr-char-1');
+    });
+  });
+
+  describe('settings', () => {
+    it('GET /works/:id/settings returns the bible', async () => {
+      const r = await request(app).get('/api/writers-room/works/wr-work-1/settings');
+      expect(r.status).toBe(200);
+      expect(r.body[0].id).toBe('wr-setting-1');
+      expect(settingsSvc.listSettings).toHaveBeenCalledWith('wr-work-1');
+    });
+
+    it('POST /works/:id/settings rejects payload missing both slugline and name', async () => {
+      const r = await request(app).post('/api/writers-room/works/wr-work-1/settings').send({});
+      expect(r.status).toBe(400);
+      expect(settingsSvc.createSetting).not.toHaveBeenCalled();
+    });
+
+    it('POST /works/:id/settings accepts slugline-only payload', async () => {
+      const r = await request(app)
+        .post('/api/writers-room/works/wr-work-1/settings')
+        .send({ slugline: 'INT. KITCHEN — NIGHT', description: 'cozy' });
+      expect(r.status).toBe(201);
+      expect(settingsSvc.createSetting).toHaveBeenCalledWith('wr-work-1', {
+        slugline: 'INT. KITCHEN — NIGHT',
+        description: 'cozy',
+      });
+    });
+
+    it('POST /works/:id/settings rejects unknown extra fields', async () => {
+      const r = await request(app)
+        .post('/api/writers-room/works/wr-work-1/settings')
+        .send({ slugline: 'INT. ATTIC — DUSK', tags: ['a'] });
+      expect(r.status).toBe(400);
+    });
+
+    it('PATCH /works/:id/settings/:settingId forwards a partial update', async () => {
+      const r = await request(app)
+        .patch('/api/writers-room/works/wr-work-1/settings/wr-setting-1')
+        .send({ palette: 'amber and ochre' });
+      expect(r.status).toBe(200);
+      expect(settingsSvc.updateSetting).toHaveBeenCalledWith('wr-work-1', 'wr-setting-1', { palette: 'amber and ochre' });
+    });
+
+    it('DELETE /works/:id/settings/:settingId forwards to the service', async () => {
+      const r = await request(app).delete('/api/writers-room/works/wr-work-1/settings/wr-setting-1');
+      expect(r.status).toBe(200);
+      expect(settingsSvc.deleteSetting).toHaveBeenCalledWith('wr-work-1', 'wr-setting-1');
     });
   });
 });

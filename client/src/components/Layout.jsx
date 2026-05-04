@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Outlet, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
   Home,
@@ -318,6 +318,28 @@ export default function Layout() {
   });
   const [mobileOpen, setMobileOpen] = useState(false);
   const [expandedSections, setExpandedSections] = useState({});
+  // Collapsed-sidebar flyout: hovering or focusing a section icon opens a
+  // fixed-position popover to the right listing the section's children, so the
+  // user can reach siblings (e.g. Writers Room from Create) without expanding
+  // the whole sidebar. Tracks which section is open and the icon's screen rect.
+  const [flyoutSection, setFlyoutSection] = useState(null);
+  const [flyoutPos, setFlyoutPos] = useState({ top: 0, left: 0 });
+  const flyoutCloseTimer = useRef(null);
+  const openFlyout = useCallback((event, label) => {
+    clearTimeout(flyoutCloseTimer.current);
+    const rect = event.currentTarget.getBoundingClientRect();
+    setFlyoutPos({ top: rect.top, left: rect.right + 4 });
+    setFlyoutSection(label);
+  }, []);
+  const scheduleCloseFlyout = useCallback(() => {
+    clearTimeout(flyoutCloseTimer.current);
+    flyoutCloseTimer.current = setTimeout(() => setFlyoutSection(null), 180);
+  }, []);
+  const cancelCloseFlyout = useCallback(() => clearTimeout(flyoutCloseTimer.current), []);
+  useEffect(() => () => clearTimeout(flyoutCloseTimer.current), []);
+  // Close any open flyout immediately on navigation so a stale popover doesn't
+  // hang over the next page.
+  useEffect(() => { setFlyoutSection(null); }, [location.pathname]);
 
   // Subscribe to server error notifications
   useErrorNotifications();
@@ -519,14 +541,24 @@ export default function Layout() {
         : 'text-gray-400 hover:text-white hover:bg-port-border/50'
     }`;
 
+    const hasChildrenForFlyout = collapsed && Array.isArray(item.children) && item.children.length > 0;
+
     return (
       <div key={item.label} className="mx-2 min-w-0">
-        <div className={`flex items-stretch min-w-0 ${collapsed ? 'lg:justify-center' : ''}`}>
+        <div
+          className={`flex items-stretch min-w-0 ${collapsed ? 'lg:justify-center' : ''}`}
+          onMouseEnter={hasChildrenForFlyout ? (e) => openFlyout(e, item.label) : undefined}
+          onMouseLeave={hasChildrenForFlyout ? scheduleCloseFlyout : undefined}
+          onFocus={hasChildrenForFlyout ? (e) => openFlyout(e, item.label) : undefined}
+          onBlur={hasChildrenForFlyout ? scheduleCloseFlyout : undefined}
+        >
           <button
             type="button"
             onClick={navigateToSection}
             className={`flex-1 min-w-0 ${sectionRowClasses} ${collapsed ? 'lg:justify-center lg:px-2' : 'justify-between'}`}
             title={collapsed ? item.label : undefined}
+            aria-haspopup={hasChildrenForFlyout ? 'menu' : undefined}
+            aria-expanded={hasChildrenForFlyout ? flyoutSection === item.label : undefined}
           >
             <div className="flex items-center gap-3 min-w-0">
               <div className="relative">
@@ -680,7 +712,7 @@ export default function Layout() {
           {/* Mobile close button */}
           <button
             onClick={() => setMobileOpen(false)}
-            className="lg:hidden p-1 text-gray-500 hover:text-white"
+            className="lg:hidden inline-flex items-center justify-center min-w-[40px] min-h-[40px] rounded-lg text-gray-500 hover:text-white"
             aria-label="Close sidebar"
           >
             <span aria-hidden="true">✕</span>
@@ -693,15 +725,15 @@ export default function Layout() {
         </nav>
 
         {/* Footer with version and notifications */}
-        <div className={`p-4 border-t border-port-border ${collapsed ? 'lg:flex lg:justify-center' : ''}`}>
-          <div className={`flex items-center ${collapsed ? 'lg:justify-center' : 'justify-between'}`}>
+        <div className={`border-t border-port-border ${collapsed ? 'lg:flex lg:justify-center lg:p-2 p-4' : 'p-4'}`}>
+          <div className={`flex flex-col items-center gap-2 sm:flex-row sm:gap-0 ${collapsed ? 'lg:flex-col lg:justify-center lg:gap-1' : 'sm:justify-between'}`}>
             <span className={`text-sm text-gray-500 ${collapsed ? 'lg:hidden' : ''}`}>
               v{__APP_VERSION__}
             </span>
-            <div className="flex items-center gap-1">
+            <div className={`flex items-center gap-1 ${collapsed ? 'lg:flex-col' : ''}`}>
               <NavLink
                 to="/ambient"
-                className={`p-1.5 rounded-lg transition-colors ${collapsed ? 'lg:hidden' : ''} ${
+                className={`inline-flex items-center justify-center min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 sm:p-1.5 rounded-lg transition-colors ${collapsed ? 'lg:hidden' : ''} ${
                   isActive('/ambient')
                     ? 'text-port-accent'
                     : 'text-gray-500 hover:text-white'
@@ -726,13 +758,87 @@ export default function Layout() {
         </div>
       </aside>
 
+      {/* Collapsed-sidebar section flyout — fixed-position so it escapes the
+          nav scroller's overflow clipping. Opens on hover/focus of a section
+          icon when the sidebar is collapsed; lists the section's children so
+          siblings (e.g. Writers Room under Create) stay reachable without
+          fully expanding the sidebar. */}
+      {collapsed && flyoutSection && (() => {
+        const item = resolvedNavItems.find((i) => i.label === flyoutSection);
+        if (!item || !item.children || item.children.length === 0) return null;
+        return (
+          <div
+            role="menu"
+            aria-label={`${item.label} pages`}
+            onMouseEnter={cancelCloseFlyout}
+            onMouseLeave={scheduleCloseFlyout}
+            onFocus={cancelCloseFlyout}
+            onBlur={scheduleCloseFlyout}
+            style={{ top: flyoutPos.top, left: flyoutPos.left, position: 'fixed' }}
+            className="hidden lg:block z-[60] min-w-[200px] bg-port-card border border-port-border rounded-lg shadow-2xl py-1"
+          >
+            <div className="px-3 py-1.5 text-[10px] uppercase text-gray-500 tracking-wider border-b border-port-border mb-1">
+              {item.label}
+            </div>
+            {item.children.map((child, childIndex) => {
+              if (child.separator) {
+                return <div key={`flyout-sep-${childIndex}`} className="mx-3 my-1 border-t border-port-border" />;
+              }
+              const ChildIcon = child.icon;
+              if (child.external) {
+                const childHref = child.dynamicHost
+                  ? `${window.location.protocol}//${window.location.hostname}${child.href.replace('//', '')}`
+                  : child.href;
+                return (
+                  <a
+                    key={`flyout-${child.href}`}
+                    href={childHref}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    role="menuitem"
+                    onClick={() => setFlyoutSection(null)}
+                    className="flex items-center justify-between gap-3 px-3 py-2 text-sm text-gray-300 hover:text-white hover:bg-port-border/50 min-w-0"
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <ChildIcon size={16} aria-hidden="true" />
+                      <span className="min-w-0 truncate">{child.label}</span>
+                    </div>
+                    <ExternalLink size={12} className="text-gray-500" />
+                  </a>
+                );
+              }
+              const childActive = child.end
+                ? location.pathname === child.to
+                : isActive(child.to);
+              return (
+                <NavLink
+                  key={`flyout-${child.to}`}
+                  to={child.to}
+                  end={child.end}
+                  role="menuitem"
+                  onClick={() => setFlyoutSection(null)}
+                  className={`flex items-center gap-3 px-3 py-2 text-sm min-w-0 ${
+                    childActive
+                      ? 'bg-port-accent/10 text-port-accent'
+                      : 'text-gray-300 hover:text-white hover:bg-port-border/50'
+                  }`}
+                >
+                  <ChildIcon size={16} className="shrink-0" aria-hidden="true" />
+                  <span className="min-w-0 truncate">{child.label}</span>
+                </NavLink>
+              );
+            })}
+          </div>
+        );
+      })()}
+
       {/* Main area */}
       <div className={`flex-1 flex flex-col min-w-0 max-w-full transition-all duration-300 ${collapsed ? 'lg:ml-16' : 'lg:ml-56'}`}>
         {/* Mobile header */}
-        <header className="lg:hidden flex items-center justify-between px-3 py-2 border-b border-port-border bg-port-card">
+        <header className="lg:hidden flex items-center justify-between px-2 py-1.5 border-b border-port-border bg-port-card">
           <button
             onClick={() => setMobileOpen(true)}
-            className="p-1.5 -ml-1 text-gray-400 hover:text-white"
+            className="inline-flex items-center justify-center min-w-[40px] min-h-[40px] -ml-1 rounded-lg text-gray-400 hover:text-white"
             aria-label="Open navigation menu"
             aria-expanded={mobileOpen}
           >
@@ -742,29 +848,20 @@ export default function Layout() {
             <Logo size={22} className="shrink-0" />
             <span className="font-bold text-sm text-port-accent">PortOS</span>
           </div>
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-0.5">
             <NavLink
               to="/ambient"
-              className={`p-1.5 rounded-lg transition-colors ${
+              className={`inline-flex items-center justify-center min-w-[40px] min-h-[40px] rounded-lg transition-colors ${
                 isActive('/ambient')
                   ? 'text-port-accent'
                   : 'text-gray-500 hover:text-white'
               }`}
               aria-label="Ambient display"
             >
-              <Monitor size={16} />
+              <Monitor size={18} />
             </NavLink>
             <ThemeModeToggle />
             <VoiceToggleButton />
-            <NotificationDropdown
-              notifications={notifications}
-              unreadCount={unreadCount}
-              onMarkAsRead={markAsRead}
-              onMarkAllAsRead={markAllAsRead}
-              onRemove={removeNotification}
-              onClearAll={clearAll}
-              position="top"
-            />
           </div>
         </header>
 
@@ -793,7 +890,7 @@ export default function Layout() {
             location.pathname.startsWith('/city') ||
             /^\/apps\/[^/]+/.test(location.pathname);
           return (
-            <main id="main-content" className={`flex-1 ${isFullWidth ? 'overflow-hidden' : 'overflow-auto p-4 md:p-6'}`}>
+            <main id="main-content" className={`flex-1 min-h-0 ${isFullWidth ? 'relative overflow-hidden' : 'overflow-auto p-4 md:p-6'}`}>
               <Outlet />
             </main>
           );

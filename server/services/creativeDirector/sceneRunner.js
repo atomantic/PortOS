@@ -32,7 +32,7 @@ import { join, basename, resolve as resolvePath, sep as PATH_SEP } from 'path';
 import { existsSync } from 'fs';
 import { PATHS } from '../../lib/fileUtils.js';
 import { presetToRenderParams } from '../../lib/creativeDirectorPresets.js';
-import { extractEvaluationFrames, safeUnder } from '../../lib/ffmpeg.js';
+import { extractEvaluationFrames, safeUnder, verifyVideoPlayable } from '../../lib/ffmpeg.js';
 import { extractLastFrame } from '../videoGen/local.js';
 import { enqueueJob, mediaJobEvents } from '../mediaJobQueue/index.js';
 import { getSettings } from '../settings.js';
@@ -206,6 +206,19 @@ async function handleRenderCompleted(projectId, sceneId, jobId) {
   // video into the project's collection, and let the orchestrator advance.
   // No Claude task spawned, so a smoke run completes in render time only.
   if (fresh.autoAcceptScenes === true) {
+    // Sanity-check the rendered file BEFORE marking accepted: a black /
+    // zero-byte / unreadable render exits the queue with code 0 in some
+    // ffmpeg+mlx_video failure modes, which would otherwise sail through
+    // auto-accept and pollute the collection with broken videos.
+    const videoPath = safeUnder(PATHS.videos, `${jobId}.mp4`);
+    const sanity = videoPath
+      ? await verifyVideoPlayable(videoPath)
+      : { ok: false, reason: `unsafe video path for jobId ${jobId}` };
+    if (!sanity.ok) {
+      console.log(`⚠️ CD auto-accept sanity check failed for ${sceneId} (${jobId.slice(0, 8)}): ${sanity.reason}`);
+      await handleRenderFailed(projectId, sceneId, `auto-accept sanity check failed: ${sanity.reason}`);
+      return;
+    }
     await updateScene(projectId, sceneId, {
       status: 'accepted',
       renderedJobId: jobId,

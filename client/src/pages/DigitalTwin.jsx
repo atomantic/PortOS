@@ -84,14 +84,14 @@ export default function DigitalTwin() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-full">
+      <div className="absolute inset-0 flex items-center justify-center">
         <BrailleSpinner text="Loading" />
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="absolute inset-0 flex flex-col">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between p-4 gap-3 border-b border-port-border">
         <div className="flex items-center gap-3">

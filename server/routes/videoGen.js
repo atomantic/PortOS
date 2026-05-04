@@ -24,6 +24,7 @@ import {
   setHistoryItemHidden,
   extractLastFrame,
   stitchVideos,
+  upscaleHistoryItem,
 } from '../services/videoGen/local.js';
 import { enqueueJob, attachSseClient, cancelJob, listJobs } from '../services/mediaJobQueue/index.js';
 
@@ -272,10 +273,31 @@ router.post('/last-frame/:id', asyncHandler(async (req, res) => {
   res.json(await extractLastFrame(req.params.id));
 }));
 
+// History ids are produced by crypto.randomUUID(), so validate them as
+// proper UUIDs rather than the looser /^[a-f0-9-]{36}$/ pattern (which
+// happily accepts e.g. 36 hyphens). Matches the .uuid() usage in the
+// other route schemas.
+const historyIdSchema = z.string().uuid('invalid history id');
+
+const failValidation = (parsed) => {
+  throw new ServerError(`Validation failed: ${parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join(', ')}`, { status: 400, code: 'VALIDATION_ERROR' });
+};
+
+router.post('/upscale/:id', asyncHandler(async (req, res) => {
+  const parsed = historyIdSchema.safeParse(req.params.id);
+  if (!parsed.success) failValidation(parsed);
+  const entry = await upscaleHistoryItem(parsed.data);
+  res.json({ ok: true, video: entry });
+}));
+
+const stitchBodySchema = z.object({
+  videoIds: z.array(historyIdSchema).min(2).max(20),
+});
+
 router.post('/stitch', asyncHandler(async (req, res) => {
-  const ids = req.body?.videoIds;
-  if (!Array.isArray(ids)) throw new ServerError('videoIds array required', { status: 400, code: 'VALIDATION_ERROR' });
-  const stitched = await stitchVideos(ids);
+  const parsed = stitchBodySchema.safeParse(req.body || {});
+  if (!parsed.success) failValidation(parsed);
+  const stitched = await stitchVideos(parsed.data.videoIds);
   res.json({ ok: true, video: stitched });
 }));
 

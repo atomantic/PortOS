@@ -257,5 +257,22 @@ describe('Image Gen Routes', () => {
       expect(response.status).toBe(200);
       expect(response.body.ok).toBe(true);
     });
+
+    it('POST /cancel { all: true } cancels every queued/running image job', async () => {
+      mediaJobQueue.listJobs.mockReturnValueOnce([
+        { id: 'a', status: 'running' },
+        { id: 'b', status: 'queued' },
+        { id: 'c', status: 'queued' },
+      ]);
+      const response = await request(app).post('/api/image-gen/cancel').send({ all: true });
+      expect(response.status).toBe(200);
+      expect(response.body.ok).toBe(true);
+      expect(response.body.attempted).toBe(3);
+      expect(mediaJobQueue.cancelJob).toHaveBeenCalledTimes(3);
+      // Queued jobs cancelled before the running one — slot doesn't refill mid-loop.
+      expect(mediaJobQueue.cancelJob.mock.calls.map((c) => c[0])).toEqual(['b', 'c', 'a']);
+      // Belt-and-braces: legacy single-process cancel also poked.
+      expect(imageGen.cancel).toHaveBeenCalled();
+    });
   });
 });

@@ -13,6 +13,7 @@ import MediaLightbox from '../components/media/MediaLightbox';
 import { normalizeImage, normalizeVideo } from '../components/media/normalize';
 import {
   listVideoHistory, deleteVideoHistoryItem, extractLastFrame, stitchVideos,
+  upscaleVideo,
   listImageGallery, deleteImage,
 } from '../services/api';
 
@@ -112,6 +113,22 @@ export default function MediaHistory() {
     navigate(`/media/image?${params}`);
   };
 
+  const [upscalingId, setUpscalingId] = useState(null);
+  const handleUpscale = async (item) => {
+    if (upscalingId) return;
+    setUpscalingId(item.id);
+    toast.info?.('Upscaling 2× — typically 10-30s…');
+    const result = await upscaleVideo(item.id).catch((err) => {
+      toast.error(err.message || 'Upscale failed');
+      return null;
+    });
+    setUpscalingId(null);
+    if (result?.video) {
+      setItems((all) => [normalizeVideo(result.video), ...all]);
+      toast.success('Upscaled 2×');
+    }
+  };
+
   const handleSendToVideo = (item) => {
     const params = new URLSearchParams({ sourceImageFile: item.filename });
     if (item.prompt && item.prompt !== '(no prompt)') params.set('prompt', item.prompt);
@@ -194,6 +211,7 @@ export default function MediaHistory() {
                 onRemix={!stitchMode ? handleRemix : undefined}
                 onSendToVideo={!stitchMode ? handleSendToVideo : undefined}
                 onContinue={!stitchMode ? handleContinue : undefined}
+                onUpscale={!stitchMode && it.kind === 'video' ? handleUpscale : undefined}
                 onDelete={!stitchMode ? handleDelete : undefined}
                 selectionLabel={idx !== -1 ? idx + 1 : null}
                 selected={idx !== -1}

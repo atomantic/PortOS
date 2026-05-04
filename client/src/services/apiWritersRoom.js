@@ -56,6 +56,43 @@ export const attachWritersRoomSceneImage = (workId, analysisId, payload) =>
     body: JSON.stringify(payload),
   });
 
+// Characters (editable bible — separate from immutable analysis snapshots)
+export const listWritersRoomCharacters = (workId) =>
+  request(`/writers-room/works/${enc(workId)}/characters`);
+export const createWritersRoomCharacter = (workId, data) =>
+  request(`/writers-room/works/${enc(workId)}/characters`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+export const updateWritersRoomCharacter = (workId, characterId, patch) =>
+  request(`/writers-room/works/${enc(workId)}/characters/${enc(characterId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  });
+export const deleteWritersRoomCharacter = (workId, characterId) =>
+  request(`/writers-room/works/${enc(workId)}/characters/${enc(characterId)}`, {
+    method: 'DELETE',
+  });
+
+// Settings / world bible (editable, persists across analysis runs, drives
+// scene image gen via slugline match in SceneCard)
+export const listWritersRoomSettings = (workId) =>
+  request(`/writers-room/works/${enc(workId)}/settings`);
+export const createWritersRoomSetting = (workId, data) =>
+  request(`/writers-room/works/${enc(workId)}/settings`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+export const updateWritersRoomSetting = (workId, settingId, patch) =>
+  request(`/writers-room/works/${enc(workId)}/settings/${enc(settingId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  });
+export const deleteWritersRoomSetting = (workId, settingId) =>
+  request(`/writers-room/works/${enc(workId)}/settings/${enc(settingId)}`, {
+    method: 'DELETE',
+  });
+
 // Exercises
 export const listWritersRoomExercises = (workId) => {
   const qs = workId ? `?workId=${enc(workId)}` : '';

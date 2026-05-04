@@ -177,7 +177,7 @@ export default function AppDetailView() {
                   <button
                     onClick={handleStop}
                     disabled={actionLoading}
-                    className="px-2 py-1 bg-port-error/20 text-port-error hover:bg-port-error/30 transition-colors disabled:opacity-50 flex items-center gap-1"
+                    className="px-2 py-1 bg-port-error/20 text-port-error enabled:hover:bg-port-error/30 transition-colors disabled:opacity-50 flex items-center gap-1"
                   >
                     <Square size={14} />
                     <span className="text-xs">Stop</span>
@@ -185,17 +185,17 @@ export default function AppDetailView() {
                   <button
                     onClick={handleRestart}
                     disabled={actionLoading}
-                    className="px-2 py-1 bg-port-warning/20 text-port-warning hover:bg-port-warning/30 transition-colors disabled:opacity-50 border-l border-port-border flex items-center gap-1"
+                    className="px-2 py-1 bg-port-warning/20 text-port-warning enabled:hover:bg-port-warning/30 transition-colors disabled:opacity-50 border-l border-port-border flex items-center gap-1"
                   >
                     <RotateCcw size={14} className={actionLoading === 'restart' ? 'animate-spin' : ''} />
-                    <span className="text-xs">Restart</span>
+                    <span className="text-xs">{actionLoading === 'restart' ? 'Restarting...' : 'Restart'}</span>
                   </button>
                 </>
               ) : (
                 <button
                   onClick={handleStart}
                   disabled={actionLoading}
-                  className="px-2 py-1 bg-port-success/20 text-port-success hover:bg-port-success/30 transition-colors disabled:opacity-50 flex items-center gap-1"
+                  className="px-2 py-1 bg-port-success/20 text-port-success enabled:hover:bg-port-success/30 transition-colors disabled:opacity-50 flex items-center gap-1"
                 >
                   <Play size={14} />
                   <span className="text-xs">{actionLoading === 'start' ? 'Starting...' : 'Start'}</span>
@@ -203,53 +203,65 @@ export default function AppDetailView() {
               )}
             </div>
             )}
-            {/* Launch buttons. When https is present, it's primary and http becomes a
-                muted sibling. Self-app uses current origin to avoid scheme mismatch. */}
+            {/* Launch buttons grouped together. When https is present, it's primary and http
+                becomes a muted sibling. Self-app uses current origin to avoid scheme mismatch. */}
             {(() => {
               if (app.overallStatus !== 'online') return null;
               const { https, http, dev } = getLaunchUrls(app);
               const httpIsSecondary = Boolean(https);
+              const launchButtons = [];
+              if (https) {
+                launchButtons.push(
+                  <button
+                    key="https"
+                    onClick={() => window.open(https, '_blank')}
+                    className="px-2 py-1 bg-port-accent/20 text-port-accent enabled:hover:bg-port-accent/30 transition-colors flex items-center gap-1"
+                  >
+                    <ExternalLink size={14} />
+                    <span className="text-xs">Launch (HTTPS)</span>
+                  </button>
+                );
+              }
+              if (http) {
+                launchButtons.push(
+                  <button
+                    key="http"
+                    onClick={() => window.open(http, '_blank')}
+                    className={`px-2 py-1 transition-colors flex items-center gap-1 ${
+                      httpIsSecondary
+                        ? 'bg-port-border/30 text-gray-300 enabled:hover:bg-port-border/50'
+                        : 'bg-port-accent/20 text-port-accent enabled:hover:bg-port-accent/30'
+                    }`}
+                  >
+                    <ExternalLink size={14} />
+                    <span className="text-xs">{httpIsSecondary ? 'HTTP' : 'Launch'}</span>
+                  </button>
+                );
+              }
+              if (dev) {
+                launchButtons.push(
+                  <button
+                    key="dev"
+                    onClick={() => window.open(dev, '_blank')}
+                    className="px-2 py-1 bg-port-warning/20 text-port-warning enabled:hover:bg-port-warning/30 transition-colors flex items-center gap-1"
+                  >
+                    <ExternalLink size={14} />
+                    <span className="text-xs">Dev UI</span>
+                  </button>
+                );
+              }
+              if (launchButtons.length === 0) return null;
               return (
-                <>
-                  {https && (
-                    <button
-                      onClick={() => window.open(https, '_blank')}
-                      className="px-2 py-1 bg-port-accent/20 text-port-accent hover:bg-port-accent/30 transition-colors rounded-lg border border-port-border flex items-center gap-1"
-                    >
-                      <ExternalLink size={14} />
-                      <span className="text-xs">Launch (HTTPS)</span>
-                    </button>
-                  )}
-                  {http && (
-                    <button
-                      onClick={() => window.open(http, '_blank')}
-                      className={`px-2 py-1 transition-colors rounded-lg border border-port-border flex items-center gap-1 ${
-                        httpIsSecondary
-                          ? 'bg-port-border/30 text-gray-300 hover:bg-port-border/50'
-                          : 'bg-port-accent/20 text-port-accent hover:bg-port-accent/30'
-                      }`}
-                    >
-                      <ExternalLink size={14} />
-                      <span className="text-xs">{httpIsSecondary ? 'HTTP' : 'Launch'}</span>
-                    </button>
-                  )}
-                  {dev && (
-                    <button
-                      onClick={() => window.open(dev, '_blank')}
-                      className="px-2 py-1 bg-port-warning/20 text-port-warning hover:bg-port-warning/30 transition-colors rounded-lg border border-port-border flex items-center gap-1"
-                    >
-                      <ExternalLink size={14} />
-                      <span className="text-xs">Dev UI</span>
-                    </button>
-                  )}
-                </>
+                <div className="inline-flex rounded-lg overflow-hidden border border-port-border divide-x divide-port-border">
+                  {launchButtons}
+                </div>
               );
             })()}
             {app.buildCommand && (
               <button
                 onClick={handleBuild}
                 disabled={buildLoading}
-                className="px-2 py-1 bg-port-warning/20 text-port-warning hover:bg-port-warning/30 transition-colors rounded-lg border border-port-border flex items-center gap-1 disabled:opacity-50"
+                className="px-2 py-1 bg-port-warning/20 text-port-warning enabled:hover:bg-port-warning/30 transition-colors rounded-lg border border-port-border flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
                 aria-label={`Build production UI: ${app.buildCommand}`}
               >
                 <Hammer size={14} className={buildLoading ? 'animate-bounce' : ''} />

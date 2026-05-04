@@ -21,6 +21,20 @@
       "returnsJson": true,
       "variables": []
     },
+    "writers-room-characters": {
+      "name": "Writers Room — Character Profiles",
+      "description": "Extract a character bible from a Writers Room draft: name, aliases, role, image-gen-ready physical description, personality, and background. Preserves user edits and flags fields the prose does not yet support so the writer knows what to add.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "writers-room-settings": {
+      "name": "Writers Room — Setting / World Bible",
+      "description": "Extract a setting/world bible from a Writers Room draft: per-location descriptions keyed by screenplay slugline (palette, era, weather, recurring details). Storyboard scenes match their slugline back to a setting and inject its description into the image prompt for visual continuity.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
     "cd-treatment": {
       "name": "Creative Director — Treatment",
       "description": "Plan a long-form generated-video project: write the logline, synopsis, and scene-by-scene treatment.",

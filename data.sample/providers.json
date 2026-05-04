@@ -55,14 +55,16 @@
       "type": "cli",
       "command": "gemini",
       "args": [],
-      "models": ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-2.5-pro"],
-      "defaultModel": "gemini-2.5-flash-lite",
-      "lightModel": "gemini-2.5-flash-lite",
-      "mediumModel": "gemini-2.5-flash",
-      "heavyModel": "gemini-2.5-pro",
+      "models": ["gemini-3.1-pro", "gemini-3-flash", "gemini-2.5-pro", "gemini-2.5-flash"],
+      "defaultModel": "gemini-2.5-flash",
+      "lightModel": "gemini-2.5-flash",
+      "mediumModel": "gemini-3-flash",
+      "heavyModel": "gemini-3.1-pro",
       "timeout": 300000,
       "enabled": true,
-      "envVars": {}
+      "envVars": {
+        "GEMINI_SANDBOX": "false"
+      }
     },
     "lmstudio": {
       "id": "lmstudio",

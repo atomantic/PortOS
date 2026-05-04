@@ -59,9 +59,9 @@ router.get('/health/details', asyncHandler(async (req, res) => {
   const startTime = Date.now();
 
   // Gather data in parallel
-  const [pm2Processes, allApps, cosStatus, self, dbHealth, version, diskStats, memStats, thresholds] = await Promise.all([
+  const [pm2Processes, appStatusSummary, cosStatus, self, dbHealth, version, diskStats, memStats, thresholds] = await Promise.all([
     listProcesses().catch(() => []),
-    apps.getAllApps({ includeArchived: false }).catch(() => []),
+    apps.getAppStatusSummary().catch(() => ({ total: 0, online: 0, stopped: 0, notStarted: 0, unmanaged: 0 })),
     cos.getStatus().catch(() => null),
     getSelf().catch(() => null),
     checkHealth().catch(() => ({ connected: false, hasSchema: false, error: 'Health check failed' })),
@@ -108,13 +108,10 @@ router.get('/health/details', asyncHandler(async (req, res) => {
     unstableRestarts: pm2Processes.reduce((sum, p) => sum + (p.unstableRestarts || 0), 0)
   };
 
-  // App status summary
-  const appStats = {
-    total: allApps.length,
-    online: allApps.filter(a => a.overallStatus === 'online').length,
-    stopped: allApps.filter(a => a.overallStatus === 'stopped').length,
-    notStarted: allApps.filter(a => a.overallStatus === 'not_started' || a.overallStatus === 'not_found').length
-  };
+  // App status summary — PM2-managed apps only (Xcode/iOS-native projects
+  // have no detectable runtime state, so they're tracked under `unmanaged`
+  // and excluded from the running denominator)
+  const appStats = appStatusSummary;
 
   // Determine overall health status
   let overallHealth = 'healthy';

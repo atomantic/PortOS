@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { ServerError } from './errorHandler.js';
 import { ASPECT_RATIOS, QUALITIES, PROJECT_STATUSES, SCENE_STATUSES } from './creativeDirectorPresets.js';
 import { WORK_KINDS, WORK_STATUSES, ANALYSIS_KINDS } from './writersRoomPresets.js';
+import { ALL_STYLE_IDS, STYLE_ID } from './writersRoomStylePresets.js';
 
 // =============================================================================
 // AGENT PERSONALITY SCHEMAS
@@ -492,11 +493,22 @@ export const writersRoomWorkCreateSchema = z.object({
   folderId: wrIdNullable.optional()
 }).strict();
 
+export const writersRoomImageStyleSchema = z.object({
+  // 'none' (no style applied), 'custom' (user-authored prompt with no preset),
+  // or one of the curated preset ids. The resolved prompt text lives on the
+  // work — picking a preset later doesn't retroactively change historical
+  // works' rendering.
+  presetId: z.enum(ALL_STYLE_IDS).default(STYLE_ID.NONE),
+  prompt: z.string().max(2000).default(''),
+  negativePrompt: z.string().max(2000).default(''),
+}).strict();
+
 export const writersRoomWorkUpdateSchema = z.object({
   title: z.string().trim().min(1).max(300).optional(),
   kind: writersRoomWorkKindSchema.optional(),
   status: writersRoomWorkStatusSchema.optional(),
-  folderId: wrIdNullable.optional()
+  folderId: wrIdNullable.optional(),
+  imageStyle: writersRoomImageStyleSchema.optional(),
 }).strict();
 
 export const writersRoomDraftSaveSchema = z.object({
@@ -521,6 +533,54 @@ export const writersRoomExerciseFinishSchema = z.object({
 
 export const writersRoomAnalysisCreateSchema = z.object({
   kind: z.enum(ANALYSIS_KINDS)
+}).strict();
+
+// Character profile fields are all optional on update so the UI can PATCH
+// one field at a time. `name` accepts trimmed non-empty when present; all
+// other text fields tolerate '' so the writer can deliberately blank a field
+// out and have the next analysis re-fill it.
+const wrCharTextField = z.string().max(2000);
+export const writersRoomCharacterCreateSchema = z.object({
+  name: z.string().trim().min(1).max(200),
+  aliases: z.array(z.string().trim().min(1).max(200)).max(20).optional(),
+  role: wrCharTextField.optional(),
+  physicalDescription: wrCharTextField.optional(),
+  personality: wrCharTextField.optional(),
+  background: wrCharTextField.optional(),
+  notes: wrCharTextField.optional(),
+}).strict();
+export const writersRoomCharacterUpdateSchema = z.object({
+  name: z.string().trim().min(1).max(200).optional(),
+  aliases: z.array(z.string().trim().min(1).max(200)).max(20).optional(),
+  role: wrCharTextField.optional(),
+  physicalDescription: wrCharTextField.optional(),
+  personality: wrCharTextField.optional(),
+  background: wrCharTextField.optional(),
+  notes: wrCharTextField.optional(),
+}).strict();
+
+const wrSettingTextField = z.string().max(2000);
+export const writersRoomSettingCreateSchema = z.object({
+  name: z.string().trim().max(200).optional(),
+  slugline: z.string().trim().max(200).optional(),
+  description: wrSettingTextField.optional(),
+  palette: wrSettingTextField.optional(),
+  era: wrSettingTextField.optional(),
+  weather: wrSettingTextField.optional(),
+  recurringDetails: wrSettingTextField.optional(),
+  notes: wrSettingTextField.optional(),
+}).strict().refine((v) => (v.name && v.name.trim()) || (v.slugline && v.slugline.trim()), {
+  message: 'Setting requires either a slugline or a name',
+});
+export const writersRoomSettingUpdateSchema = z.object({
+  name: z.string().trim().max(200).optional(),
+  slugline: z.string().trim().max(200).optional(),
+  description: wrSettingTextField.optional(),
+  palette: wrSettingTextField.optional(),
+  era: wrSettingTextField.optional(),
+  weather: wrSettingTextField.optional(),
+  recurringDetails: wrSettingTextField.optional(),
+  notes: wrSettingTextField.optional(),
 }).strict();
 
 // =============================================================================

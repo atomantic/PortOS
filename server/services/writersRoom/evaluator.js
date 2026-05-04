@@ -5,38 +5,81 @@
  */
 
 import { join } from 'path';
-import { randomUUID } from 'crypto';
 import { spawn } from 'child_process';
-import { readFile, readdir } from 'fs/promises';
+import { readFile, readdir, rm } from 'fs/promises';
 import { PATHS, atomicWrite, ensureDir, safeJSONParse } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { stripCodeFences } from '../../lib/aiProvider.js';
-import { getActiveProvider } from '../providers.js';
-import { buildPrompt } from '../promptService.js';
+import { getActiveProvider, getProviderById } from '../providers.js';
+import { buildPrompt, getStage } from '../promptService.js';
 import { ANALYSIS_KINDS } from '../../lib/writersRoomPresets.js';
 import { getWorkWithBody } from './local.js';
+import { listCharacters, mergeExtractedCharacters } from './characters.js';
+import { listSettings, mergeExtractedSettings } from './settings.js';
+import { nowIso, badRequest, notFound, assertValidWorkId } from './_shared.js';
 
 export { ANALYSIS_KINDS };
 
 const KIND_META = {
-  evaluate: { stage: 'writers-room-evaluate', returnsJson: true },
-  format:   { stage: 'writers-room-format',   returnsJson: false },
-  script:   { stage: 'writers-room-script',   returnsJson: true },
+  evaluate:   { stage: 'writers-room-evaluate',   returnsJson: true },
+  format:     { stage: 'writers-room-format',     returnsJson: false },
+  script:     { stage: 'writers-room-script',     returnsJson: true },
+  characters: { stage: 'writers-room-characters', returnsJson: true },
+  settings:   { stage: 'writers-room-settings',   returnsJson: true },
 };
 
-const ANALYSIS_ID_RE = /^wr-analysis-[0-9a-f-]+$/i;
+// Analysis id == kind. Each work keeps at most one snapshot per kind on disk
+// (re-running a kind overwrites the previous snapshot via atomicWrite).
+const isValidAnalysisId = (id) => typeof id === 'string' && ANALYSIS_KINDS.includes(id);
+const LEGACY_ANALYSIS_ID_RE = /^wr-analysis-[0-9a-f-]+$/i;
 
 const root = () => join(PATHS.data, 'writers-room');
-const analysisDir = (workId) => join(root(), 'works', workId, 'analysis');
+const analysisDir = (workId) => {
+  // Defense-in-depth: refuse path-traversal-shaped workIds before
+  // interpolating them into the on-disk path. Mirrors the guard in
+  // characters.js / settings.js.
+  assertValidWorkId(workId);
+  return join(root(), 'works', workId, 'analysis');
+};
 const analysisPath = (workId, id) => join(analysisDir(workId), `${id}.json`);
-
-function nowIso() { return new Date().toISOString(); }
-function badRequest(msg) { return new ServerError(msg, { status: 400, code: 'VALIDATION_ERROR' }); }
-function notFound(what) { return new ServerError(`${what} not found`, { status: 404, code: 'NOT_FOUND' }); }
 
 // ---------- LLM invocation ----------
 
-async function resolveProvider() {
+// Tier names used in stage configs (PromptManager UI). Map to the provider's
+// configured per-tier model id; an unset tier falls back to defaultModel so
+// stages with `model: 'heavy'` still run on providers that don't break out tiers.
+const TIER_TO_MODEL_KEY = {
+  default: 'defaultModel',
+  quick: 'lightModel',
+  coding: 'mediumModel',
+  heavy: 'heavyModel',
+};
+
+function isTierName(model) {
+  return typeof model === 'string' && model in TIER_TO_MODEL_KEY;
+}
+
+function resolveModel(provider, stageModel) {
+  if (!stageModel) return provider.defaultModel || null;
+  if (isTierName(stageModel)) {
+    return provider[TIER_TO_MODEL_KEY[stageModel]] || provider.defaultModel || null;
+  }
+  return stageModel;
+}
+
+// Stage config can pin a specific provider via `stage.provider`. When set we
+// must use that provider (or fail) — falling back to the active provider would
+// silently route the call through whatever's currently selected, defeating the
+// whole point of the per-stage override.
+async function resolveProviderForStage(stage) {
+  if (stage?.provider) {
+    const pinned = await getProviderById(stage.provider).catch(() => null);
+    if (pinned?.enabled) return pinned;
+    throw new ServerError(
+      `Stage provider "${stage.provider}" is not available — re-pick a provider in Prompts or the Storyboard settings`,
+      { status: 503, code: 'STAGE_PROVIDER_UNAVAILABLE' }
+    );
+  }
   const active = await getActiveProvider().catch(() => null);
   if (active?.enabled) return active;
   throw new ServerError('No AI provider available', { status: 503, code: 'NO_PROVIDER' });
@@ -63,23 +106,56 @@ async function callApiProvider(provider, model, prompt, temperature) {
   return data.choices?.[0]?.message?.content || '';
 }
 
+// Each CLI needs a different incantation to run non-interactively from a
+// server process. Get it wrong and the CLI either hangs waiting for a TTY or
+// exits with "Error: stdin is not a terminal". Mirrors `runner.js` /
+// `agentCliSpawning.js` so the writers-room path agrees with how PortOS
+// already spawns these CLIs everywhere else.
+function buildCliInvocation(provider, model) {
+  const baseArgs = [...(provider.args || [])];
+  if (provider.headlessArgs?.length) baseArgs.push(...provider.headlessArgs);
+
+  switch (provider.id) {
+    case 'gemini-cli': {
+      const args = [...baseArgs];
+      if (!args.includes('--output-format') && !args.includes('-o')) {
+        args.push('--output-format', 'text');
+      }
+      if (model) args.push('--model', model);
+      return { args, promptViaStdin: false };
+    }
+    case 'codex': {
+      // `codex exec -` reads the prompt from stdin. Without `exec` codex
+      // launches its REPL and bails with "Error: stdin is not a terminal".
+      const args = [...baseArgs, 'exec'];
+      if (model) args.push('--model', model);
+      args.push('-');
+      return { args, promptViaStdin: true };
+    }
+    case 'claude-code':
+    case 'claude-code-bedrock': {
+      const args = [...baseArgs, '-p', '-'];
+      if (model) args.push('--model', model);
+      return { args, promptViaStdin: true };
+    }
+    default: {
+      const args = [...baseArgs];
+      if (model) args.push('--model', model);
+      return { args, promptViaStdin: true };
+    }
+  }
+}
+
 function callCliProvider(provider, model, prompt) {
   return new Promise((resolve, reject) => {
-    const args = [...(provider.args || [])];
-    if (provider.headlessArgs?.length) args.push(...provider.headlessArgs);
-    const isGeminiCli = provider.id === 'gemini-cli';
-    if (isGeminiCli && !args.includes('--output-format') && !args.includes('-o')) {
-      args.push('--output-format', 'text');
-    }
-    if (model) args.push('--model', model);
-    // Send the prose via stdin for non-gemini CLIs — adapted-screenplay drafts
-    // can run tens of thousands of characters once headings and dialogue are
-    // inlined, well past argv ceilings on macOS/Linux.
-    const usingStdin = !isGeminiCli;
-    if (isGeminiCli) args.push('--prompt', prompt);
+    const { args, promptViaStdin } = buildCliInvocation(provider, model);
+    // gemini-cli takes the prompt as a flag because its non-interactive mode
+    // requires `--prompt` plus stdio: ['ignore', ...]. Every other CLI accepts
+    // the prompt on stdin, which dodges argv ceilings on long drafts.
+    if (!promptViaStdin) args.push('--prompt', prompt);
     const child = spawn(provider.command, args, {
       env: (() => { const e = { ...process.env, ...provider.envVars }; delete e.CLAUDECODE; return e; })(),
-      stdio: [usingStdin ? 'pipe' : 'ignore', 'pipe', 'pipe'],
+      stdio: [promptViaStdin ? 'pipe' : 'ignore', 'pipe', 'pipe'],
       shell: false,
       windowsHide: true,
     });
@@ -94,19 +170,23 @@ function callCliProvider(provider, model, prompt) {
     child.on('close', (code) => {
       clearTimeout(killer);
       if (code === 0) resolve(output);
-      else reject(new Error(`CLI exited with code ${code}${output ? ': ' + output.slice(0, 500) : ''}`));
+      // Tail the output rather than head — CLI banners/transcripts come first
+      // and the actual error/stack lives at the end. 500 chars of header was
+      // hiding real failures (e.g. provider auth errors) under a Codex banner.
+      else reject(new Error(`CLI exited with code ${code}${output ? ': ' + output.slice(-2000) : ''}`));
     });
     child.on('error', (err) => { clearTimeout(killer); reject(err); });
-    if (usingStdin) child.stdin.end(prompt);
+    if (promptViaStdin) child.stdin.end(prompt);
   });
 }
 
 async function callAI(stageName, variables, temperature) {
-  const provider = await resolveProvider();
+  const stage = getStage(stageName);
+  const provider = await resolveProviderForStage(stage);
   const prompt = await buildPrompt(stageName, variables);
-  let model = provider.defaultModel;
+  let model = resolveModel(provider, stage?.model);
   if (provider.id === 'gemini-cli' && !model) {
-    model = provider.lightModel || 'gemini-2.5-flash-lite';
+    model = provider.lightModel || 'gemini-2.5-flash';
   }
   console.log(`📝 wr eval: ${provider.id} / ${model || '(default)'} / ${stageName}`);
   if (provider.type === 'api') {
@@ -149,6 +229,25 @@ const SHAPERS = {
       suggestions: Array.isArray(parsed.suggestions) ? parsed.suggestions.filter((s) => s && typeof s === 'object') : [],
     };
   },
+  characters: (raw) => {
+    const parsed = extractJson(raw);
+    const list = Array.isArray(parsed.characters) ? parsed.characters : [];
+    return {
+      characters: list
+        .filter((c) => c && typeof c === 'object' && typeof c.name === 'string' && c.name.trim())
+        .map((c) => ({
+          name: c.name.trim(),
+          aliases: Array.isArray(c.aliases) ? c.aliases.filter((a) => typeof a === 'string') : [],
+          role: typeof c.role === 'string' ? c.role : '',
+          physicalDescription: typeof c.physicalDescription === 'string' ? c.physicalDescription : '',
+          personality: typeof c.personality === 'string' ? c.personality : '',
+          background: typeof c.background === 'string' ? c.background : '',
+          firstAppearance: typeof c.firstAppearance === 'string' ? c.firstAppearance : null,
+          evidence: Array.isArray(c.evidence) ? c.evidence.filter((e) => typeof e === 'string') : [],
+          missingFromProse: Array.isArray(c.missingFromProse) ? c.missingFromProse.filter((m) => typeof m === 'string') : [],
+        })),
+    };
+  },
   script: (raw) => {
     const parsed = extractJson(raw);
     const scenes = Array.isArray(parsed.scenes) ? parsed.scenes : [];
@@ -168,6 +267,26 @@ const SHAPERS = {
       })),
     };
   },
+  settings: (raw) => {
+    const parsed = extractJson(raw);
+    const list = Array.isArray(parsed.settings) ? parsed.settings : [];
+    return {
+      settings: list
+        .filter((s) => s && typeof s === 'object' && (typeof s.slugline === 'string' || typeof s.name === 'string'))
+        .map((s) => ({
+          slugline: typeof s.slugline === 'string' ? s.slugline.trim() : '',
+          name: typeof s.name === 'string' ? s.name.trim() : '',
+          description: typeof s.description === 'string' ? s.description : '',
+          palette: typeof s.palette === 'string' ? s.palette : '',
+          era: typeof s.era === 'string' ? s.era : '',
+          weather: typeof s.weather === 'string' ? s.weather : '',
+          recurringDetails: typeof s.recurringDetails === 'string' ? s.recurringDetails : '',
+          firstAppearance: typeof s.firstAppearance === 'string' ? s.firstAppearance : null,
+          evidence: Array.isArray(s.evidence) ? s.evidence.filter((e) => typeof e === 'string') : [],
+          missingFromProse: Array.isArray(s.missingFromProse) ? s.missingFromProse.filter((m) => typeof m === 'string') : [],
+        })),
+    };
+  },
 };
 
 // ---------- storage ----------
@@ -179,7 +298,7 @@ async function listAnalysisIds(workId) {
   return entries
     .filter((e) => e.isFile() && e.name.endsWith('.json'))
     .map((e) => e.name.replace(/\.json$/, ''))
-    .filter((id) => ANALYSIS_ID_RE.test(id));
+    .filter(isValidAnalysisId);
 }
 
 async function loadAnalysis(workId, id) {
@@ -222,7 +341,7 @@ export async function listAnalyses(workId) {
 }
 
 export async function getAnalysis(workId, id) {
-  if (!ANALYSIS_ID_RE.test(id)) throw badRequest('Invalid analysis id');
+  if (!isValidAnalysisId(id)) throw badRequest('Invalid analysis id');
   const a = await loadAnalysis(workId, id);
   if (!a) throw notFound('Analysis');
   return a;
@@ -234,7 +353,7 @@ export async function getAnalysis(workId, id) {
 // list because the LLM occasionally drifts (regenerated analyses can have
 // different scene ids) and overwriting an old key is harmless.
 export async function attachSceneImage(workId, id, { sceneId, filename, jobId, prompt }) {
-  if (!ANALYSIS_ID_RE.test(id)) throw badRequest('Invalid analysis id');
+  if (!isValidAnalysisId(id)) throw badRequest('Invalid analysis id');
   if (typeof sceneId !== 'string' || !sceneId.trim()) throw badRequest('sceneId required');
   if (typeof filename !== 'string' || !filename.trim()) throw badRequest('filename required');
   const a = await loadAnalysis(workId, id);
@@ -257,35 +376,75 @@ export async function attachSceneImage(workId, id, { sceneId, filename, jobId, p
 
 // ---------- startup recovery ----------
 
+// Walk every wr-analysis-<uuid>.json file in a work's analysis dir, group by
+// kind, keep the latest per kind (by completedAt|createdAt), rewrite as
+// <kind>.json, and delete the legacy files. Idempotent — once a work has
+// been migrated the dir contains only <kind>.json so this is a noop.
+async function migrateLegacyAnalyses(workId) {
+  const dir = analysisDir(workId);
+  const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
+  const legacy = entries
+    .filter((e) => e.isFile() && e.name.endsWith('.json'))
+    .map((e) => e.name.replace(/\.json$/, ''))
+    .filter((id) => LEGACY_ANALYSIS_ID_RE.test(id));
+  if (legacy.length === 0) return 0;
+  const loaded = (await Promise.all(legacy.map(async (id) => {
+    const path = join(dir, `${id}.json`);
+    const content = await readFile(path, 'utf-8').catch(() => null);
+    if (content === null) return null;
+    const parsed = safeJSONParse(content, null, { allowArray: false, logError: true, context: path });
+    return parsed ? { id, snapshot: parsed } : null;
+  }))).filter(Boolean);
+
+  const latestPerKind = new Map();
+  for (const { snapshot } of loaded) {
+    if (!ANALYSIS_KINDS.includes(snapshot.kind)) continue;
+    const ts = snapshot.completedAt || snapshot.createdAt || '';
+    const prev = latestPerKind.get(snapshot.kind);
+    if (!prev || ts > prev.ts) latestPerKind.set(snapshot.kind, { snapshot, ts });
+  }
+
+  for (const [kind, { snapshot }] of latestPerKind) {
+    await saveAnalysis(workId, { ...snapshot, id: kind });
+  }
+  await Promise.all(legacy.map((id) => rm(join(dir, `${id}.json`)).catch(() => {})));
+  return legacy.length;
+}
+
 /**
- * Mark any `running` snapshots as `failed`. A server restart kills in-flight
- * LLM calls but the pre-call snapshot is already on disk, so without this the
- * UI would spin forever on a phantom row. Idempotent; called fire-and-forget
- * at boot.
+ * Boot-time housekeeping for analyses:
+ *   1. Migrate any legacy wr-analysis-<uuid>.json snapshots into the per-kind
+ *      layout (one snapshot per kind, file named <kind>.json).
+ *   2. Mark any `running` snapshots as `failed` — a server restart kills
+ *      in-flight LLM calls but the pre-call snapshot is already on disk, so
+ *      without this the UI would spin forever on a phantom row.
+ * Idempotent; called fire-and-forget at boot.
  */
 export async function recoverStuckAnalyses() {
   const worksRoot = join(root(), 'works');
   const workEntries = await readdir(worksRoot, { withFileTypes: true }).catch(() => []);
-  const counts = await Promise.all(
+  let migrated = 0;
+  let recovered = 0;
+  await Promise.all(
     workEntries
       .filter((e) => e.isDirectory())
       .map(async (entry) => {
+        migrated += await migrateLegacyAnalyses(entry.name).catch(() => 0);
         const ids = await listAnalysisIds(entry.name).catch(() => []);
-        const results = await Promise.all(ids.map(async (id) => {
+        await Promise.all(ids.map(async (id) => {
           const a = await loadAnalysis(entry.name, id);
-          if (a?.status !== 'running') return 0;
+          if (a?.status !== 'running') return;
           await saveAnalysis(entry.name, {
             ...a,
             status: 'failed',
             error: 'Server restarted while this analysis was running',
             completedAt: nowIso(),
           });
-          return 1;
+          recovered += 1;
         }));
-        return results.reduce((s, n) => s + n, 0);
       })
   );
-  const recovered = counts.reduce((s, n) => s + n, 0);
+  if (migrated > 0) console.log(`📝 wr: migrated ${migrated} legacy analysis file(s) to per-kind layout`);
   if (recovered > 0) console.log(`📝 wr: recovered ${recovered} stuck analysis snapshot(s) on boot`);
 }
 
@@ -301,7 +460,7 @@ export async function runAnalysis(workId, { kind } = {}) {
     throw badRequest('Cannot analyze an empty draft — write some prose first');
   }
   const draft = (manifest.drafts || []).find((d) => d.id === manifest.activeDraftVersionId);
-  const id = `wr-analysis-${randomUUID()}`;
+  const id = kind;
   const baseSnapshot = {
     id,
     workId,
@@ -333,15 +492,55 @@ export async function runAnalysis(workId, { kind } = {}) {
       draftBody: body,
       returnsJson,
     };
+    // Strip down each bible to the fields the prompts care about — no ids,
+    // timestamps, or source markers. Same shape goes to both the bible's own
+    // re-extraction (preserve-user-edits) AND to script (Adapt) so it can
+    // cite canonical names + descriptions in visualPrompt fields.
+    const trimCharacter = (c) => ({
+      name: c.name,
+      aliases: c.aliases,
+      role: c.role,
+      physicalDescription: c.physicalDescription,
+      personality: c.personality,
+      background: c.background,
+    });
+    const trimSetting = (s) => ({
+      name: s.name,
+      slugline: s.slugline,
+      description: s.description,
+      palette: s.palette,
+      era: s.era,
+      weather: s.weather,
+      recurringDetails: s.recurringDetails,
+    });
+    // For 'script' both bibles load — fire them in parallel so the script
+    // pipeline doesn't pay two sequential disk reads. For 'characters' or
+    // 'settings' alone Promise.all is degenerate (one element) but the shape
+    // keeps the call site uniform.
+    const [existingChars, existingSets] = await Promise.all([
+      (kind === 'characters' || kind === 'script') ? listCharacters(workId) : null,
+      (kind === 'settings' || kind === 'script') ? listSettings(workId) : null,
+    ]);
+    if (existingChars) variables.existingCharactersJson = JSON.stringify(existingChars.map(trimCharacter));
+    if (existingSets) variables.existingSettingsJson = JSON.stringify(existingSets.map(trimSetting));
+
     const temperature = kind === 'format' ? 0.2 : 0.4;
     const { content, model: usedModel, providerId: usedProvider } = await callAI(stage, variables, temperature);
     const result = SHAPERS[kind](content);
+    let mergedProfiles = null;
+    if (kind === 'characters') {
+      mergedProfiles = await mergeExtractedCharacters(workId, result.characters || []);
+    } else if (kind === 'settings') {
+      mergedProfiles = await mergeExtractedSettings(workId, result.settings || []);
+    }
     const finished = {
       ...baseSnapshot,
       status: 'succeeded',
       providerId: usedProvider,
       model: usedModel,
-      result,
+      result: mergedProfiles
+        ? { ...result, mergedProfiles }
+        : result,
       rawResponse: content,
       completedAt: nowIso(),
     };

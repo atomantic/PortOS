@@ -14,13 +14,17 @@ import Drawer from '../components/Drawer';
 import { ImageGenTab } from '../components/settings/ImageGenTab';
 import MediaCard from '../components/media/MediaCard';
 import MediaLightbox from '../components/media/MediaLightbox';
+import StylePresetPicker from '../components/media/StylePresetPicker';
+import BackendChipStrip from '../components/media/BackendChipStrip';
 import { normalizeImage } from '../components/media/normalize';
 import Flux2InstallModal from '../components/imageGen/Flux2InstallModal';
 import Flux2TokenBanner from '../components/imageGen/Flux2TokenBanner';
 import {
   Image as ImageIcon, Sparkles, Download, RefreshCw, Settings as SettingsIcon,
-  Dice5, AlertTriangle, X, Film, Cloud, Cpu, Terminal
+  Dice5, AlertTriangle, X, Film,
 } from 'lucide-react';
+import { composeStyledPrompt } from '../lib/composeStyledPrompt';
+import { deriveAvailableBackends, IMAGE_GEN_MODE } from '../lib/imageGenBackends';
 import toast from '../components/ui/Toast';
 import BrailleSpinner from '../components/BrailleSpinner';
 import { useImageGenProgress } from '../hooks/useImageGenProgress';
@@ -94,6 +98,7 @@ export default function ImageGen() {
 
   const [prompt, setPrompt] = useState('');
   const [negativePrompt, setNegativePrompt] = useState(DEFAULT_NEGATIVE);
+  const [stylePreset, setStylePreset] = useState(null);
   const [modelId, setModelId] = useState('');
   const [width, setWidth] = useState(1024);
   const [height, setHeight] = useState(1024);
@@ -175,25 +180,16 @@ export default function ImageGen() {
     listImageGallery().then(setGallery).catch(() => {});
   }, []);
 
-  // Settings load — derives the chip strip and the initial selectedMode.
   // Re-runnable so the Settings drawer can trigger a refresh on close
   // without forcing a full page reload.
   const reloadBackends = useCallback(() => {
     return getSettings().then((s) => {
-      const ig = s?.imageGen || {};
-      const externalUrl = (ig.external?.sdapiUrl || ig.sdapiUrl || '').trim();
-      const pyPath = (ig.local?.pythonPath || '').trim();
-      const codexOn = ig.codex?.enabled === true;
-      const backends = [];
-      if (externalUrl) backends.push({ id: 'external', label: 'External', icon: Cloud });
-      if (pyPath) backends.push({ id: 'local', label: 'Local', icon: Cpu });
-      if (codexOn) backends.push({ id: 'codex', label: 'Codex', icon: Terminal });
+      const backends = deriveAvailableBackends(s);
       setAvailableBackends(backends);
-      const saved = ig.mode || 'external';
-      // Prefer the saved default if viable. If the user just disabled the
-      // currently-selected backend, fall through to the first viable one
-      // (so a freshly-configured setup or a just-toggled provider Just
-      // Works without forcing a reload).
+      const saved = s?.imageGen?.mode || IMAGE_GEN_MODE.EXTERNAL;
+      // If the user just disabled the currently-selected backend, fall
+      // through to the first viable one — a just-toggled provider should
+      // Just Work without a page reload.
       setSelectedMode((prev) => {
         if (prev && backends.find((b) => b.id === prev)) return prev;
         if (backends.find((b) => b.id === saved)) return saved;
@@ -398,14 +394,15 @@ export default function ImageGen() {
   // POST — the user keeps watching the active render and the new submission
   // sits in the server queue until the active one finishes.
   const submitGenerationPayload = async () => {
+    const composed = composeStyledPrompt(prompt, negativePrompt, stylePreset);
     const payload = isCodexMode ? {
-      prompt: prompt.trim(),
-      negativePrompt: negativePrompt.trim() || undefined,
+      prompt: composed.prompt,
+      negativePrompt: composed.negativePrompt || undefined,
       width, height,
       mode: 'codex',
     } : {
-      prompt: prompt.trim(),
-      negativePrompt: negativePrompt.trim() || undefined,
+      prompt: composed.prompt,
+      negativePrompt: composed.negativePrompt || undefined,
       modelId: modelId || undefined,
       width, height,
       steps: steps ? Number(steps) : undefined,
@@ -530,9 +527,10 @@ export default function ImageGen() {
       if (isAsyncMode) {
         await startLocalGeneration();
       } else {
+        const composed = composeStyledPrompt(prompt, negativePrompt, stylePreset);
         const payload = {
-          prompt: prompt.trim(),
-          negativePrompt: negativePrompt.trim() || undefined,
+          prompt: composed.prompt,
+          negativePrompt: composed.negativePrompt || undefined,
           width, height,
           steps: steps ? Number(steps) : 25,
           cfgScale,
@@ -597,6 +595,9 @@ export default function ImageGen() {
   };
 
   const handleRemix = (img) => {
+    // Preset was already folded into the recorded prompt at submit time;
+    // clear the picker so the user sees what actually produced the image.
+    setStylePreset(null);
     if (img.prompt) setPrompt(img.prompt);
     if (img.negativePrompt || img.negative_prompt) setNegativePrompt(img.negativePrompt || img.negative_prompt);
     if (img.seed != null) setSeed(String(img.seed));
@@ -649,21 +650,13 @@ export default function ImageGen() {
             <span className="text-gray-500">Checking…</span>
           )}
           {availableBackends.length > 1 && (
-            <div className="inline-flex items-center gap-1 p-0.5 border border-port-border rounded-full bg-port-bg" role="group" aria-label="Backend">
-              {availableBackends.map(({ id, label, icon: Icon }) => (
-                <button
-                  key={id}
-                  type="button"
-                  onClick={() => setSelectedMode(id)}
-                  disabled={statusLoading}
-                  className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs transition-colors disabled:opacity-50 ${effectiveMode === id ? 'bg-port-accent text-white' : 'text-gray-400 hover:text-white hover:bg-port-border/40'}`}
-                  title={`Use ${label} for the next render`}
-                >
-                  <Icon className="w-3 h-3" />
-                  {label}
-                </button>
-              ))}
-            </div>
+            <BackendChipStrip
+              availableBackends={availableBackends}
+              value={effectiveMode}
+              onChange={setSelectedMode}
+              disabled={statusLoading}
+              titlePrefix="Use"
+            />
           )}
         </div>
         <div className="flex items-center gap-1">
@@ -688,6 +681,11 @@ export default function ImageGen() {
 
       <form onSubmit={handleGenerate} className="grid grid-cols-1 lg:grid-cols-[3fr_2fr] gap-4">
         <div className="bg-port-card border border-port-border rounded-xl p-4 space-y-3">
+          <StylePresetPicker
+            value={stylePreset?.id || ''}
+            onChange={setStylePreset}
+            disabled={statusLoading}
+          />
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-medium text-gray-400 mb-1">Prompt</label>

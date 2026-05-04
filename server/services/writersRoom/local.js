@@ -20,6 +20,7 @@ import { readFile, rm, readdir } from 'fs/promises';
 import { PATHS, atomicWrite, ensureDir, readJSONFile, safeJSONParse } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { WORK_KINDS, WORK_STATUSES } from '../../lib/writersRoomPresets.js';
+import { nowIso, badRequest, notFound, WORK_ID_RE, assertValidWorkId } from './_shared.js';
 
 // Paths are resolved lazily so tests can swap PATHS.data via vi.mock without
 // the module-load snapshot freezing them at import time.
@@ -28,23 +29,10 @@ const foldersFile = () => join(root(), 'folders.json');
 const exercisesFile = () => join(root(), 'exercises.json');
 const worksDir = () => join(root(), 'works');
 
-const WORK_ID_RE = /^wr-work-[0-9a-f-]+$/i;
 const DRAFT_ID_RE = /^wr-draft-[0-9a-f-]+$/i;
 
-function nowIso() {
-  return new Date().toISOString();
-}
-
-function notFound(what) {
-  return new ServerError(`${what} not found`, { status: 404, code: 'NOT_FOUND' });
-}
-
-function badRequest(message) {
-  return new ServerError(message, { status: 400, code: 'VALIDATION_ERROR' });
-}
-
 function workDir(workId) {
-  if (!WORK_ID_RE.test(workId)) throw badRequest('Invalid work id');
+  assertValidWorkId(workId);
   return join(worksDir(), workId);
 }
 
@@ -324,7 +312,7 @@ export async function createWork({ folderId = null, title, kind = 'short-story' 
 
 export async function updateWork(id, patch) {
   const manifest = await getWork(id);
-  const allowed = ['title', 'folderId', 'kind', 'status'];
+  const allowed = ['title', 'folderId', 'kind', 'status', 'imageStyle'];
   const next = { ...manifest, updatedAt: nowIso() };
   for (const key of allowed) {
     if (patch[key] === undefined) continue;

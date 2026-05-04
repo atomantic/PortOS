@@ -1057,7 +1057,7 @@ describe('brain service', () => {
         command: 'gemini',
         args: [],
         timeout: 50
-        // defaultModel deliberately unset — exercises the flash-lite fallback
+        // defaultModel deliberately unset — exercises the flash fallback
       });
       spawn.mockReturnValue(createMockChild(validDigestJson));
 
@@ -1076,7 +1076,7 @@ describe('brain service', () => {
       // Thinking-model fallback
       const modelIdx = args.indexOf('--model');
       expect(modelIdx).toBeGreaterThanOrEqual(0);
-      expect(args[modelIdx + 1]).toBe('gemini-2.5-flash-lite');
+      expect(args[modelIdx + 1]).toBe('gemini-2.5-flash');
 
       // Prompt delivered via flag (not positional) so gemini-cli stays non-interactive
       const promptIdx = args.indexOf('--prompt');
@@ -1084,7 +1084,7 @@ describe('brain service', () => {
       expect(args[promptIdx + 1]).toBe('test prompt');
     });
 
-    it('honors an explicit model override instead of the flash-lite fallback', async () => {
+    it('honors an explicit model override instead of the flash fallback', async () => {
       getProviderById.mockResolvedValue({
         id: 'gemini-cli',
         enabled: true,
@@ -1103,14 +1103,16 @@ describe('brain service', () => {
       expect(args[modelIdx + 1]).toBe('gemini-2.5-pro');
     });
 
-    it('prefers provider.lightModel over the hard-coded flash-lite fallback when defaultModel is unset', async () => {
+    it('prefers provider.lightModel over the hard-coded flash fallback when defaultModel is unset', async () => {
       getProviderById.mockResolvedValue({
         id: 'gemini-cli',
         enabled: true,
         type: 'cli',
         command: 'gemini',
         args: [],
-        lightModel: 'gemini-2.5-flash',
+        // Use a different model from the hard-coded fallback so the test
+        // proves lightModel wins, not that both happened to be the same string.
+        lightModel: 'gemini-3-flash',
         timeout: 50
         // defaultModel deliberately unset — lightModel should win over the hard-coded default
       });
@@ -1120,7 +1122,7 @@ describe('brain service', () => {
 
       const args = spawn.mock.calls[0][1];
       const modelIdx = args.indexOf('--model');
-      expect(args[modelIdx + 1]).toBe('gemini-2.5-flash');
+      expect(args[modelIdx + 1]).toBe('gemini-3-flash');
     });
 
     it('does not duplicate --output-format when provider args already specify it', async () => {
@@ -1130,7 +1132,7 @@ describe('brain service', () => {
         type: 'cli',
         command: 'gemini',
         args: ['--output-format', 'json'],
-        defaultModel: 'gemini-2.5-flash-lite',
+        defaultModel: 'gemini-2.5-flash',
         timeout: 50
       });
       spawn.mockReturnValue(createMockChild(validDigestJson));
@@ -1165,7 +1167,7 @@ describe('brain service', () => {
 
       expect(storedDigest).toBeTruthy();
       expect(storedDigest.ai.providerId).toBe('gemini-cli');
-      expect(storedDigest.ai.modelId).toBe('gemini-2.5-flash-lite');
+      expect(storedDigest.ai.modelId).toBe('gemini-2.5-flash');
     });
 
     it('uses positional prompt (not --prompt) for non-gemini CLI providers', async () => {

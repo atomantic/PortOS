@@ -22,8 +22,13 @@ vi.mock('./taskSchedule.js', () => ({
   SELF_IMPROVEMENT_TASK_TYPES: [],
 }));
 
+vi.mock('./pm2.js', () => ({
+  listProcesses: vi.fn().mockResolvedValue([]),
+}));
+
 import { readJSONFile } from '../lib/fileUtils.js';
-import { getReservedPorts, invalidateCache, PORTOS_APP_ID } from './apps.js';
+import { listProcesses } from './pm2.js';
+import { getAppStatusSummary, getReservedPorts, invalidateCache, PORTOS_APP_ID } from './apps.js';
 
 describe('getReservedPorts', () => {
   beforeEach(() => {
@@ -113,5 +118,140 @@ describe('getReservedPorts', () => {
     expect(reserved).not.toContain(70000);
     expect(reserved).not.toContain(-1);
     expect(reserved.every(p => Number.isInteger(p) && p >= 1 && p <= 65535)).toBe(true);
+  });
+});
+
+describe('getAppStatusSummary', () => {
+  beforeEach(() => {
+    invalidateCache();
+    vi.clearAllMocks();
+  });
+
+  it('counts only PM2-managed apps in total and tracks native projects separately', async () => {
+    readJSONFile.mockResolvedValue({
+      apps: {
+        [PORTOS_APP_ID]: {
+          name: 'PortOS',
+          type: 'express',
+          pm2ProcessNames: ['portos-server']
+        },
+        'svc-a': {
+          name: 'svc-a',
+          type: 'express',
+          pm2ProcessNames: ['svc-a']
+        },
+        'svc-b': {
+          name: 'svc-b',
+          type: 'express',
+          pm2ProcessNames: ['svc-b']
+        },
+        'ios-app': {
+          name: 'iOS App',
+          type: 'ios-native'
+        },
+        'xcode-app': {
+          name: 'Xcode App',
+          type: 'xcode'
+        }
+      }
+    });
+    listProcesses.mockResolvedValue([
+      { name: 'portos-server', status: 'online' },
+      { name: 'svc-a', status: 'stopped' }
+      // svc-b is missing → not_found → notStarted
+    ]);
+
+    const summary = await getAppStatusSummary();
+    expect(summary).toEqual({
+      total: 3,
+      online: 1,
+      stopped: 1,
+      notStarted: 1,
+      unmanaged: 2
+    });
+  });
+
+  it('returns zero counts when no apps are registered (native or otherwise)', async () => {
+    readJSONFile.mockResolvedValue({
+      apps: {
+        [PORTOS_APP_ID]: {
+          name: 'PortOS',
+          type: 'express',
+          pm2ProcessNames: ['portos-server']
+        }
+      }
+    });
+    listProcesses.mockResolvedValue([{ name: 'portos-server', status: 'online' }]);
+
+    const summary = await getAppStatusSummary();
+    expect(summary).toEqual({
+      total: 1,
+      online: 1,
+      stopped: 0,
+      notStarted: 0,
+      unmanaged: 0
+    });
+  });
+
+  it('queries each unique pm2Home only once', async () => {
+    readJSONFile.mockResolvedValue({
+      apps: {
+        [PORTOS_APP_ID]: {
+          name: 'PortOS',
+          type: 'express',
+          pm2ProcessNames: ['portos-server']
+        },
+        'shared-home-a': {
+          name: 'a',
+          type: 'express',
+          pm2ProcessNames: ['a']
+        },
+        'shared-home-b': {
+          name: 'b',
+          type: 'express',
+          pm2ProcessNames: ['b']
+        },
+        'custom-home': {
+          name: 'c',
+          type: 'express',
+          pm2Home: '/tmp/other-pm2',
+          pm2ProcessNames: ['c']
+        }
+      }
+    });
+    listProcesses.mockImplementation(async (home) => {
+      if (home === '/tmp/other-pm2') return [{ name: 'c', status: 'online' }];
+      return [
+        { name: 'portos-server', status: 'online' },
+        { name: 'a', status: 'online' },
+        { name: 'b', status: 'stopped' }
+      ];
+    });
+
+    const summary = await getAppStatusSummary();
+    expect(listProcesses).toHaveBeenCalledTimes(2);
+    expect(summary).toMatchObject({ total: 4, online: 3, stopped: 1, notStarted: 0, unmanaged: 0 });
+  });
+
+  it('skips archived apps', async () => {
+    readJSONFile.mockResolvedValue({
+      apps: {
+        [PORTOS_APP_ID]: {
+          name: 'PortOS',
+          type: 'express',
+          pm2ProcessNames: ['portos-server']
+        },
+        'old-app': {
+          name: 'old',
+          type: 'express',
+          pm2ProcessNames: ['old'],
+          archived: true
+        }
+      }
+    });
+    listProcesses.mockResolvedValue([{ name: 'portos-server', status: 'online' }]);
+
+    const summary = await getAppStatusSummary();
+    expect(summary.total).toBe(1);
   });
 });

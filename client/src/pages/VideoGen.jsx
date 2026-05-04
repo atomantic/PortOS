@@ -28,7 +28,9 @@ import Drawer from '../components/Drawer';
 import { ImageGenTab } from '../components/settings/ImageGenTab';
 import MediaCard from '../components/media/MediaCard';
 import MediaLightbox from '../components/media/MediaLightbox';
+import StylePresetPicker from '../components/media/StylePresetPicker';
 import { normalizeVideo } from '../components/media/normalize';
+import { composeStyledPrompt } from '../lib/composeStyledPrompt';
 import {
   Film, Sparkles, Settings as SettingsIcon, RefreshCw, AlertTriangle,
   Dice5, X, Upload, Type, Image as ImageIcon, GitBranch, ListPlus,
@@ -39,6 +41,7 @@ import BatchQueuePanel from '../components/media/BatchQueuePanel';
 import {
   getVideoGenStatus, generateVideo, cancelVideoGen,
   listVideoHistory, deleteVideoHistoryItem, setVideoHidden, extractLastFrame,
+  upscaleVideo,
   listImageGallery,
 } from '../services/api';
 import { randomSeed, safeParseJSON } from '../lib/genUtils';
@@ -100,6 +103,7 @@ export default function VideoGen() {
   const [mode, setMode] = useState(incomingSourceImage ? 'image' : 'text');
   const [prompt, setPrompt] = useState(incomingPrompt || '');
   const [negativePrompt, setNegativePrompt] = useState(incomingNegativePrompt || '');
+  const [stylePreset, setStylePreset] = useState(null);
   const [modelId, setModelId] = useState('');
   const [width, setWidth] = useState(768);
   const [height, setHeight] = useState(512);
@@ -110,6 +114,12 @@ export default function VideoGen() {
   const [seed, setSeed] = useState('');
   const [tiling, setTiling] = useState('auto');
   const [disableAudio, setDisableAudio] = useState(false);
+  // "No music" appends a soundscape constraint at submit time. LTX-2
+  // conditions audio on prompt text — adding "no music, no soundtrack"
+  // pushes the model toward ambient/diegetic sound (footsteps, room tone)
+  // and away from generated background music, which is hard to remove
+  // cleanly in post. Source: phosphene LTX-2 prompting guide.
+  const [noMusic, setNoMusic] = useState(false);
   const [sourceImageFile, setSourceImageFile] = useState(incomingSourceImage || null);
   const [sourceImageUpload, setSourceImageUpload] = useState(null);
   const [lastImageFile, setLastImageFile] = useState(null);
@@ -185,6 +195,27 @@ export default function VideoGen() {
     });
     if (result) toast.success(nextHidden ? 'Video hidden' : 'Video unhidden');
   };
+  // Track which history item is being upscaled so the same MediaCard's
+  // "Upscale" button disables and shows a "working" state. Storing the id
+  // (not a boolean) lets us also surface the spinner on the right tile when
+  // the user fires multiple upscales in succession; only one runs at a time
+  // because ffmpeg is single-flight on the server.
+  const [upscalingId, setUpscalingId] = useState(null);
+  const handleUpscaleHistory = async (item) => {
+    if (upscalingId) return;
+    setUpscalingId(item.id);
+    toast.info?.('Upscaling 2× — typically 10-30s…');
+    const result = await upscaleVideo(item.id).catch((err) => {
+      toast.error(err.message || 'Upscale failed');
+      return null;
+    });
+    setUpscalingId(null);
+    if (result?.video) {
+      setHistory((h) => [result.video, ...h]);
+      toast.success('Upscaled 2×');
+    }
+  };
+
   const handleContinueHistory = async (item) => {
     const { filename } = await extractLastFrame(item.id).catch((err) => {
       toast.error(err.message || 'Failed to extract last frame');
@@ -328,23 +359,33 @@ export default function VideoGen() {
 
   // Snapshot the current form into a generate-payload. Used both by the
   // inline Generate button and by enqueue, so the two paths stay in lockstep.
-  const buildGeneratePayload = () => ({
-    prompt: prompt.trim(),
-    negativePrompt: negativePrompt.trim() || '',
-    modelId,
-    width, height,
-    numFrames,
-    fps,
-    steps: steps || '',
-    guidanceScale: guidanceScale || '',
-    seed: seed || '',
-    tiling,
-    disableAudio: disableAudio ? 'true' : 'false',
-    mode,
-    sourceImageFile: (mode === 'image' || mode === 'fflf' || mode === 'extend') ? (sourceImageFile || '') : '',
-    sourceImage: (mode === 'image' || mode === 'fflf') ? (sourceImageUpload || '') : '',
-    lastImageFile: mode === 'fflf' ? (lastImageFile || '') : '',
-  });
+  const buildGeneratePayload = () => {
+    const composed = composeStyledPrompt(prompt, negativePrompt, stylePreset);
+    // Append "no music, no soundtrack" only when the toggle is on AND audio
+    // generation is itself active — there's no point steering audio output
+    // when audio is disabled outright. Idempotent: if the user already
+    // typed "no music" we avoid double-appending.
+    const promptOut = (noMusic && !disableAudio && !/no music/i.test(composed.prompt))
+      ? `${composed.prompt}\n\nno music, no soundtrack`
+      : composed.prompt;
+    return {
+      prompt: promptOut,
+      negativePrompt: composed.negativePrompt,
+      modelId,
+      width, height,
+      numFrames,
+      fps,
+      steps: steps || '',
+      guidanceScale: guidanceScale || '',
+      seed: seed || '',
+      tiling,
+      disableAudio: disableAudio ? 'true' : 'false',
+      mode,
+      sourceImageFile: (mode === 'image' || mode === 'fflf' || mode === 'extend') ? (sourceImageFile || '') : '',
+      sourceImage: (mode === 'image' || mode === 'fflf') ? (sourceImageUpload || '') : '',
+      lastImageFile: mode === 'fflf' ? (lastImageFile || '') : '',
+    };
+  };
 
   // Run a single payload through the SSE pipeline. Returns a promise that
   // resolves when the job completes (or rejects on error / cancel). Shared
@@ -627,6 +668,11 @@ export default function VideoGen() {
 
       <form onSubmit={handleGenerate} className="grid grid-cols-1 lg:grid-cols-[3fr_2fr] gap-4">
         <div className="bg-port-card border border-port-border rounded-xl p-4 space-y-3">
+          <StylePresetPicker
+            value={stylePreset?.id || ''}
+            onChange={setStylePreset}
+            disabled={generating}
+          />
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div>
               <label className="block text-xs font-medium text-gray-400 mb-1">Prompt</label>
@@ -870,6 +916,19 @@ export default function VideoGen() {
               />
               Disable audio (LTX-2 only — speeds up generation)
             </label>
+            <label
+              className={`col-span-2 sm:col-span-3 flex items-center gap-2 text-xs cursor-pointer ${disableAudio ? 'text-gray-600 cursor-not-allowed' : 'text-gray-400'}`}
+              title="LTX-2 conditions audio on the prompt — appending 'no music, no soundtrack' at submit time pushes the model toward ambient/diegetic sound only"
+            >
+              <input
+                type="checkbox"
+                checked={noMusic}
+                disabled={disableAudio}
+                onChange={(e) => setNoMusic(e.target.checked)}
+                className="rounded"
+              />
+              No music — keep ambient/diegetic sound only (LTX-2)
+            </label>
           </div>
 
           <div className="flex flex-wrap items-center gap-2 pt-1">
@@ -977,6 +1036,7 @@ export default function VideoGen() {
                   item={item}
                   onPreview={() => setPreview(item)}
                   onContinue={() => handleContinueHistory(v)}
+                  onUpscale={() => handleUpscaleHistory(v)}
                   onDelete={() => handleDeleteHistory(v)}
                   onToggleHidden={() => handleToggleHistoryHidden(v)}
                 />

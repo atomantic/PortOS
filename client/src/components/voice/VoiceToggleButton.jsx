@@ -53,7 +53,7 @@ export default function VoiceToggleButton({ className = '' }) {
     <button
       type="button"
       onClick={toggle}
-      className={`p-1.5 rounded-lg transition-colors ${
+      className={`inline-flex items-center justify-center min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 sm:p-1.5 rounded-lg transition-colors ${
         engaged ? 'text-port-accent' : 'text-gray-500 hover:text-white'
       } ${className}`}
       title={engaged ? 'Hide voice agent controls' : 'Engage voice agent controls'}
