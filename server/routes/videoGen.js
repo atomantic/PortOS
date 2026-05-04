@@ -223,6 +223,20 @@ router.post('/', mediaUpload, asyncHandler(async (req, res) => {
       { status: 400, code: 'VIDEO_GEN_AUDIO_REQUIRED' },
     );
   }
+  // Inverse guard: if an audio file was uploaded but `mode` is missing or
+  // is anything other than 'a2v', the job would be queued with audioFilePath
+  // set and mode=undefined, and generateVideo() would treat it as plain
+  // text-to-video — silently dropping the audio. Reject so the caller can't
+  // accidentally pay for the wrong generation. (We deliberately do NOT
+  // auto-infer mode='a2v' from the audio upload — explicit-is-better than
+  // magic, and the UI always sets mode when sending audio.)
+  if (audioFilePath && body.mode !== 'a2v') {
+    await cleanupTempUpload();
+    throw new ServerError(
+      `audioFile upload requires mode: 'a2v' (received mode: ${body.mode || '<none>'}).`,
+      { status: 400, code: 'VIDEO_GEN_AUDIO_MODE_MISMATCH' },
+    );
+  }
 
   // FFLF end-frame: gallery-pick only. Same path-traversal guard.
   const lastImagePath = body.lastImageFile ? resolveGalleryImage(body.lastImageFile) : null;
