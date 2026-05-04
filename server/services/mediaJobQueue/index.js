@@ -175,6 +175,11 @@ export async function initMediaJobQueue() {
         // never delete a file the job merely referenced (gallery image,
         // prior render, etc).
         safeUnlinkUpload(j.params?.uploadedTempPath);
+        if (Array.isArray(j.params?.uploadedTempPaths)) {
+          for (const p of j.params.uploadedTempPaths) {
+            safeUnlinkUpload(p);
+          }
+        }
       } else if (j.status === 'queued') {
         queue.push({ ...j });
       } else {
@@ -422,6 +427,17 @@ async function runJob(job) {
     console.log(`⚠️ media-job [${job.id.slice(0, 8)}] uploadedTempPath outside PATHS.uploads — nulled before gen invoke: ${safeParams.uploadedTempPath}`);
     safeParams.uploadedTempPath = null;
   }
+  if (safeParams.audioFilePath && (typeof safeParams.audioFilePath !== 'string' || !isUnderUploadsRoot(safeParams.audioFilePath))) {
+    console.log(`⚠️ media-job [${job.id.slice(0, 8)}] audioFilePath outside PATHS.uploads — nulled before gen invoke: ${safeParams.audioFilePath}`);
+    safeParams.audioFilePath = null;
+  }
+  if (Array.isArray(safeParams.uploadedTempPaths)) {
+    safeParams.uploadedTempPaths = safeParams.uploadedTempPaths.filter((p) => {
+      if (typeof p === 'string' && isUnderUploadsRoot(p)) return true;
+      console.log(`⚠️ media-job [${job.id.slice(0, 8)}] uploadedTempPaths entry outside PATHS.uploads — rejected before gen invoke: ${p}`);
+      return false;
+    });
+  }
 
   const emitter = job.kind === 'video' ? videoGenEvents : imageGenEvents;
   const dispatcher = makeGenDispatcher(emitter, job, handlers);
@@ -463,21 +479,37 @@ async function runJob(job) {
 
   try {
     if (job.kind === 'video') {
-      const { generateVideo } = await import('../videoGen/local.js');
-      await generateVideo({ ...safeParams, jobId: job.id });
+      if (safeParams.chunks > 1) {
+        const { generateChainedVideo } = await import('../videoGen/local.js');
+        await generateChainedVideo({ ...safeParams, jobId: job.id });
+      } else {
+        const { generateVideo } = await import('../videoGen/local.js');
+        await generateVideo({ ...safeParams, jobId: job.id });
+      }
     } else if (job.kind === 'image') {
-      const { generateImage } = await import('../imageGen/local.js');
-      await generateImage({ ...safeParams, jobId: job.id });
+      if (safeParams.mode === 'codex') {
+        const { generateImage } = await import('../imageGen/codex.js');
+        await generateImage({ ...safeParams, jobId: job.id });
+      } else {
+        const { generateImage } = await import('../imageGen/local.js');
+        await generateImage({ ...safeParams, jobId: job.id });
+      }
     } else {
       throw new Error(`Unknown job kind: ${job.kind}`);
     }
   } catch (err) {
-    // generateVideo / generateImage threw before reaching their proc.on
-    // cleanup hooks (e.g. PYTHON not configured, validation fail). Clean up
-    // multipart upload temp files the route handed us so they don't leak
-    // under data/uploads. safeUnlinkUpload constrains the delete to
-    // PATHS.uploads as defense-in-depth against corrupted persisted params.
+    // generateVideo / generateChainedVideo / generateImage threw before
+    // reaching their proc.on cleanup hooks (e.g. PYTHON not configured,
+    // validation fail). Clean up multipart upload temp files the route
+    // handed us so they don't leak under data/uploads.
+    // safeUnlinkUpload constrains the delete to PATHS.uploads as
+    // defense-in-depth against corrupted persisted params.
     await safeUnlinkUpload(job.params?.uploadedTempPath);
+    if (Array.isArray(job.params?.uploadedTempPaths)) {
+      for (const p of job.params.uploadedTempPaths) {
+        await safeUnlinkUpload(p);
+      }
+    }
     handlers.failed({ error: err.message });
   }
 
@@ -527,6 +559,11 @@ export async function cancelJob(jobId) {
     // uploads dir doesn't accumulate. safeUnlinkUpload constrains the
     // delete to PATHS.uploads.
     await safeUnlinkUpload(job.params?.uploadedTempPath);
+    if (Array.isArray(job.params?.uploadedTempPaths)) {
+      for (const p of job.params.uploadedTempPaths) {
+        await safeUnlinkUpload(p);
+      }
+    }
     job.status = 'canceled';
     // Persist the cancel reason on the job so a late SSE reconnect (after
     // the live SSE entry was cleaned up) can synthesize the same terminal
@@ -561,8 +598,13 @@ export async function cancelJob(jobId) {
       const { cancel } = await import('../videoGen/local.js');
       cancel();
     } else if (running.kind === 'image') {
-      const { cancel } = await import('../imageGen/local.js');
-      cancel();
+      if (running.params?.mode === 'codex') {
+        const { cancel } = await import('../imageGen/codex.js');
+        cancel();
+      } else {
+        const { cancel } = await import('../imageGen/local.js');
+        cancel();
+      }
     }
     console.log(`🛑 media-job [${jobId.slice(0, 8)}] cancel signal sent (was running)`);
     return { ok: true, status: 'canceling' };

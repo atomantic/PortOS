@@ -31,8 +31,9 @@
 import { join, basename, resolve as resolvePath, sep as PATH_SEP } from 'path';
 import { existsSync } from 'fs';
 import { PATHS } from '../../lib/fileUtils.js';
+import { verifyVideoPlayable } from '../../lib/ffmpeg.js';
 import { presetToRenderParams } from '../../lib/creativeDirectorPresets.js';
-import { extractLastFrame } from '../videoGen/local.js';
+import { extractLastFrame, sampleEvaluationFrames } from '../videoGen/local.js';
 import { enqueueJob, mediaJobEvents } from '../mediaJobQueue/index.js';
 import { getSettings } from '../settings.js';
 import { updateScene, getProject } from './local.js';
@@ -205,6 +206,13 @@ async function handleRenderCompleted(projectId, sceneId, jobId) {
   // video into the project's collection, and let the orchestrator advance.
   // No Claude task spawned, so a smoke run completes in render time only.
   if (fresh.autoAcceptScenes === true) {
+    const videoPath = join(PATHS.videos, `${jobId}.mp4`);
+    const playable = await verifyVideoPlayable(videoPath);
+    if (!playable.ok) {
+      console.log(`❌ CD auto-accept: video unplayable for ${jobId.slice(0, 8)}: ${playable.reason}`);
+      await handleRenderFailed(projectId, sceneId, 'video file unplayable');
+      return;
+    }
     await updateScene(projectId, sceneId, {
       status: 'accepted',
       renderedJobId: jobId,
@@ -224,11 +232,13 @@ async function handleRenderCompleted(projectId, sceneId, jobId) {
     await advanceAfterSceneSettled(projectId);
     return;
   }
+  const evaluationFrames = await sampleEvaluationFrames(jobId);
   await updateScene(projectId, sceneId, {
     status: 'evaluating',
     renderedJobId: jobId,
+    ...(evaluationFrames.length > 0 && { evaluationFrames }),
   });
-  await enqueueEvaluateTask(fresh, scene);
+  await enqueueEvaluateTask(fresh, { ...scene, renderedJobId: jobId, status: 'evaluating', ...(evaluationFrames.length > 0 && { evaluationFrames }) });
 }
 
 async function handleRenderCanceled(projectId, sceneId) {

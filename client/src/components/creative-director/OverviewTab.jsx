@@ -1,6 +1,20 @@
 import { Link } from 'react-router-dom';
+import { useState } from 'react';
+import { updateCreativeDirectorProject } from '../../services/apiCreativeDirector.js';
+import toast from '../ui/Toast';
 
 export default function OverviewTab({ project }) {
+  const [disableAudio, setDisableAudio] = useState(project.disableAudio ?? true);
+
+  const handleAudioToggle = async (e) => {
+    const next = e.target.checked;
+    setDisableAudio(next);
+    updateCreativeDirectorProject(project.id, { disableAudio: next })
+      .catch((err) => {
+        setDisableAudio(!next);
+        toast.error(err.message || 'Failed to update audio setting');
+      });
+  };
   const collectionLink = `/media/collections/${project.collectionId}`;
   const final = project.finalVideoId
     ? <Link to={`/media/history?selected=${project.finalVideoId}`} className="text-port-accent">{project.finalVideoId}</Link>
@@ -15,6 +29,20 @@ export default function OverviewTab({ project }) {
         <Field label="Model" value={project.modelId} />
         <Field label="Target duration" value={`${project.targetDurationSeconds}s (~${Math.round(project.targetDurationSeconds / 60)} min)`} />
         <Field label="Starting image" value={project.startingImageFile || '—'} />
+        <div className="grid grid-cols-3 gap-2 text-sm">
+          <div className="text-port-text-muted">Audio</div>
+          <div className="col-span-2">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={disableAudio}
+                onChange={handleAudioToggle}
+                className="accent-port-accent"
+              />
+              <span className="text-port-text">Disable audio</span>
+            </label>
+          </div>
+        </div>
         <Field label="Collection" value={<Link to={collectionLink} className="text-port-accent">{project.collectionId}</Link>} />
         <Field label="Final video" value={final} />
         {project.timelineProjectId && (

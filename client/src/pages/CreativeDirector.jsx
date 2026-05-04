@@ -39,6 +39,7 @@ export default function CreativeDirector() {
     styleSpec: '',
     userStory: '',
     startingImageFile: '',
+    disableAudio: true,
   });
 
   const fetchProjects = useCallback(() => {
@@ -71,6 +72,7 @@ export default function CreativeDirector() {
       styleSpec: form.styleSpec,
       userStory: form.userStory || null,
       startingImageFile: form.startingImageFile || null,
+      disableAudio: form.disableAudio,
     };
     try {
       const created = await createCreativeDirectorProject(payload);
@@ -226,6 +228,15 @@ export default function CreativeDirector() {
               />
             </label>
           </div>
+          <label className="flex items-center gap-2 text-sm cursor-pointer">
+            <input
+              type="checkbox"
+              checked={form.disableAudio}
+              onChange={(e) => setForm({ ...form, disableAudio: e.target.checked })}
+              className="accent-port-accent"
+            />
+            <span className="text-port-text-muted">Disable audio</span>
+          </label>
           <label className="block text-sm">
             <span className="text-port-text-muted">Style spec</span>
             <textarea

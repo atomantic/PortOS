@@ -483,10 +483,6 @@ export default function ImageGen() {
           es.close();
           reject(new Error(msg.reason || 'Canceled'));
         }
-        if (msg.type === 'canceled') {
-          es.close();
-          reject(new Error(msg.reason || 'Canceled'));
-        }
       };
       es.onerror = () => {
         es.close();
