@@ -77,19 +77,73 @@ The GitHub Actions release workflow (`.github/workflows/release.yml`) automatica
    - Adds version header, release date, and diff link
    - Commits the version bump + finalized changelog
 
-## Best Practices
+## Style Rules
 
-### Do:
-- Update the changelog **as you work**
-- Use clear, descriptive entries
-- Group related changes together
-- Explain the "why" not just the "what"
+Release notes are read by end users — not by the developer who wrote the change.
+Write so a non-PortOS-developer can understand what changed and decide whether
+they care about this release.
 
-### Don't:
-- Create versioned changelog files manually (use `/do:release`)
-- Bump the version manually — only `/do:release` does that
-- Use vague descriptions like "various improvements"
-- Leave placeholder or TODO content
+### Do
+- **One sentence per change.** Two if a meaningful "why" needs to land. Major
+  features may warrant a short paragraph, never a code review.
+- **Lead with the user-visible effect.** "App deploy modal can be dismissed
+  while a deploy is running" — not "DeployPanel.jsx now renders an X button
+  unconditionally."
+- **Use plain product language.** Page names ("Apps page header"), feature
+  names ("Writers Room"), button labels ("+ Add"), and concrete UI elements
+  are fine. Internal identifiers are not.
+- **Group related entries.** When a single feature spans many sub-bullets
+  (e.g. ten Writers Room changes), introduce it once with a short paragraph
+  and follow with terse bullets, rather than ten separate paragraph entries.
+- **Update the changelog as you work** so detail doesn't have to be
+  reconstructed at release time.
+
+### Don't
+- **No file paths, module names, function names, route paths, or CSS class
+  names.** If you find yourself writing `server/services/foo.js`,
+  `composeStyledPrompt`, or `flex-col gap-2`, stop and rewrite from the user's
+  point of view.
+- **No "Touched:" / "New file:" / "Removed:" footers.** Those belong in commit
+  messages, PRs, or `git log`.
+- **No internal data shapes.** "Each Work now carries `imageStyle = { presetId,
+  prompt, negativePrompt }`" should be "Each Writers Room work can pin a world
+  style preset that prefixes every scene's image prompt."
+- **No deep technical rationale.** React StrictMode race details, diffusion
+  token weighting, ffmpeg filter graphs, and Zod schema names belong in commit
+  bodies / PR descriptions, not release notes.
+- **No `/do:release` meta**. Don't reference the changelog tooling itself.
+- **Don't create versioned changelog files manually** (use `/do:release`).
+- **Don't bump the version manually** — only `/do:release` does that.
+- **Don't leave vague entries** like "various improvements" or "general fixes."
+
+### Style Examples
+
+**Bad** (what verbose entries actually look like — file paths, paragraph length, internal API):
+
+> **Mobile sidebar footer — version + icons no longer overflow the nav.** The
+> expanded sidebar drawer footer rendered the version label and four 40×40
+> touch-target icons (Ambient, theme toggle, voice toggle, notifications) on a
+> single `flex justify-between` row. On mobile the sidebar is `w-56` (224px)…
+> Touched: `client/src/components/Layout.jsx`.
+
+**Good** (one sentence, user perspective, no internals):
+
+> Mobile navigation drawer footer no longer clips the notification bell.
+
+**Bad** (multi-paragraph code review with module names):
+
+> **Writers Room — vertical Storyboard companion + UX cleanup.** The
+> AI/Outline/Versions tabbed sidebar is replaced with an always-on
+> `StoryboardPanel`… New files: `StoryboardPanel.jsx`, `SceneCard.jsx`,
+> `CharactersBible.jsx`. Touched: `client/src/components/writers-room/WorkEditor.jsx`…
+
+**Good** (intro paragraph + terse bullets, all user-facing language):
+
+> **Writers Room storyboard.** The right column is now an always-on storyboard
+> showing each scene as a card with image, slugline, summary, and character
+> chips. Click a card to jump to that scene in your prose; per-card overflow
+> menu adds *Why this image / Check characters / Editorial pass / Jump to prose*.
+> Mobile gets a Writing/Storyboard toggle instead of a stacked layout.
 
 ## Maintenance
 
