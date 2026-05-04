@@ -4,7 +4,7 @@
 
 // Mirror of server/lib/writersRoomStylePresets.js — kept in sync manually
 // since client and server are separate bundles. Curated preset ids come from
-// the /api/writers-room/style-presets endpoint at runtime; only the two
+// the /api/image-gen/style-presets endpoint at runtime; only the two
 // special discriminators live here.
 export const STYLE_ID = { NONE: 'none', CUSTOM: 'custom' };
 export const EMPTY_IMAGE_STYLE = { presetId: STYLE_ID.NONE, prompt: '', negativePrompt: '' };

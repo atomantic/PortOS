@@ -164,7 +164,17 @@ export const verifyVideoPlayable = async (videoPath) => {
   if (!existsSync(videoPath)) {
     return { ok: false, reason: `video file missing: ${videoPath}` };
   }
-  const size = statSync(videoPath).size;
+  // statSync is wrapped because the file can be unlinked or made
+  // inaccessible between the existsSync check above and the stat call (a
+  // TOCTOU race during cleanup or external file moves). We want a clean
+  // structured `{ ok: false, reason }` instead of an unhandled throw that
+  // would surface as a 500.
+  let size = 0;
+  try {
+    size = statSync(videoPath).size;
+  } catch (err) {
+    return { ok: false, reason: `video file unreadable: ${err.message}` };
+  }
   if (!size || size <= 0) {
     return { ok: false, reason: 'video file is empty (0 bytes)' };
   }

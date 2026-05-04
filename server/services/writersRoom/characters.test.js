@@ -117,6 +117,35 @@ describe('writers room — characters merge', () => {
     expect(merged[0].physicalDescription).toBe('late fifties, gray suit, bald, sharp jaw');
   });
 
+  it('does not duplicate when later batch entries use a new character\'s alias as their name', async () => {
+    // Simulates an extraction batch where the model first introduces a
+    // character with aliases, then references the same character by an
+    // alias as the `name` of a later entry. Both must resolve to one
+    // canonical profile — no duplicate.
+    const id = await newWork();
+    const merged = await mergeExtractedCharacters(id, [
+      { name: 'Mr. Voss', aliases: ['Voss', 'The Director'], role: 'antagonist' },
+      { name: 'The Director', physicalDescription: 'late fifties, gray suit' },
+    ]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].name).toBe('Mr. Voss');
+    expect(merged[0].physicalDescription).toBe('late fifties, gray suit');
+  });
+
+  it('does not duplicate when an existing character has aliases filled in mid-batch', async () => {
+    // An existing character with no aliases gets aliases filled by the
+    // first incoming entry; a later entry in the same batch references the
+    // character via one of those aliases. Must resolve to the same record.
+    const id = await newWork();
+    await createCharacter(id, { name: 'Aria' });
+    const merged = await mergeExtractedCharacters(id, [
+      { name: 'aria', aliases: ['Ari', 'A.'] },
+      { name: 'Ari', physicalDescription: 'thirties, athletic' },
+    ]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].physicalDescription).toBe('thirties, athletic');
+  });
+
   it('refreshes prose-derived metadata even when text fields are preserved', async () => {
     const id = await newWork();
     const c = await createCharacter(id, { name: 'Aria', physicalDescription: 'kept' });

@@ -161,14 +161,23 @@ export async function mergeExtractedSettings(workId, extracted) {
   if (!Array.isArray(extracted)) return listSettings(workId);
   const state = await loadFile(workId);
   const byKey = new Map();
-  for (const s of state.settings) {
-    const key = normalizeSlugline(s.slugline || s.name);
-    if (key) byKey.set(key, s);
-  }
+  // Index a setting under BOTH its normalized slugline and its normalized
+  // name so an extracted entry that references the location via either
+  // identifier resolves to one canonical record. Indexing by only one of
+  // those keys lets a slugline-only incoming entry collide with a name-only
+  // existing entry (or vice versa) and create a duplicate setting.
+  const indexSetting = (s) => {
+    const slugKey = normalizeSlugline(s.slugline);
+    const nameKey = normalizeSlugline(s.name);
+    if (slugKey) byKey.set(slugKey, s);
+    if (nameKey) byKey.set(nameKey, s);
+  };
+  for (const s of state.settings) indexSetting(s);
   for (const incoming of extracted) {
     if (!incoming || (!incoming.slugline && !incoming.name)) continue;
-    const key = normalizeSlugline(incoming.slugline || incoming.name);
-    const existing = byKey.get(key);
+    const slugKey = normalizeSlugline(incoming.slugline);
+    const nameKey = normalizeSlugline(incoming.name);
+    const existing = (slugKey && byKey.get(slugKey)) || (nameKey && byKey.get(nameKey)) || null;
     if (existing) {
       for (const field of ['description', 'palette', 'era', 'weather', 'recurringDetails']) {
         if (isBlank(existing[field]) && !isBlank(incoming[field])) {
@@ -177,6 +186,9 @@ export async function mergeExtractedSettings(workId, extracted) {
       }
       if (isBlank(existing.name) && !isBlank(incoming.name)) {
         existing.name = String(incoming.name).trim();
+        // Re-index now that name is populated so a subsequent entry in the
+        // same batch keyed by that name resolves to this record.
+        indexSetting(existing);
       }
       existing.firstAppearance = incoming.firstAppearance ?? existing.firstAppearance ?? null;
       existing.evidence = Array.isArray(incoming.evidence) ? incoming.evidence : (existing.evidence || []);
@@ -199,7 +211,7 @@ export async function mergeExtractedSettings(workId, extracted) {
         source: 'ai',
       };
       state.settings.push(profile);
-      byKey.set(normalizeSlugline(profile.slugline || profile.name), profile);
+      indexSetting(profile);
     }
   }
   await saveFile(workId, state);

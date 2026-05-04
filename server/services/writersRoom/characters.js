@@ -153,12 +153,18 @@ export async function mergeExtractedCharacters(workId, extracted) {
   if (!Array.isArray(extracted)) return listCharacters(workId);
   const state = await loadFile(workId);
   const byKey = new Map();
-  for (const c of state.characters) {
-    byKey.set(normalizeName(c.name), c);
+  // Index every character by its name AND every alias so a later batch entry
+  // referencing the same person via any of those tokens resolves to one
+  // canonical profile (no duplicates).
+  const indexCharacter = (c) => {
+    const nameKey = normalizeName(c.name);
+    if (nameKey) byKey.set(nameKey, c);
     for (const alias of c.aliases || []) {
-      byKey.set(normalizeName(alias), c);
+      const aliasKey = normalizeName(alias);
+      if (aliasKey) byKey.set(aliasKey, c);
     }
-  }
+  };
+  for (const c of state.characters) indexCharacter(c);
   for (const incoming of extracted) {
     if (!incoming || !incoming.name) continue;
     const key = normalizeName(incoming.name);
@@ -173,6 +179,11 @@ export async function mergeExtractedCharacters(workId, extracted) {
       }
       if (isBlank(existing.aliases) && Array.isArray(incoming.aliases)) {
         existing.aliases = incoming.aliases.map((a) => String(a).trim()).filter(Boolean);
+        // Re-index this character under its newly-filled aliases so later
+        // entries in the same batch that reference the character via one of
+        // those aliases resolve to this profile instead of being inserted
+        // as a duplicate.
+        indexCharacter(existing);
       }
       existing.firstAppearance = incoming.firstAppearance ?? existing.firstAppearance ?? null;
       existing.evidence = Array.isArray(incoming.evidence) ? incoming.evidence : (existing.evidence || []);
@@ -194,7 +205,10 @@ export async function mergeExtractedCharacters(workId, extracted) {
         source: 'ai',
       };
       state.characters.push(profile);
-      byKey.set(normalizeName(profile.name), profile);
+      // Index the new profile under both its name and any aliases so a
+      // later entry in this batch that uses one of those aliases as its
+      // `name` matches this character instead of creating a second one.
+      indexCharacter(profile);
     }
   }
   await saveFile(workId, state);
