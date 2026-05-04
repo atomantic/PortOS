@@ -6,12 +6,14 @@ import * as gitService from './git.js';
 import * as pm2Service from './pm2.js';
 
 const IS_WIN32 = process.platform === 'win32';
+const WIN_CMD_SHIMS = new Set(['npm', 'npx']);
+const needsShell = (cmd) => IS_WIN32 && WIN_CMD_SHIMS.has(cmd);
 const MAX_OUTPUT_BYTES = 64 * 1024;
 const CMD_TIMEOUT_MS = 5 * 60 * 1000;
 
 function runCommand(cmd, args, cwd) {
   return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, { cwd, shell: IS_WIN32 && ['npm', 'npx'].includes(cmd), windowsHide: true });
+    const child = spawn(cmd, args, { cwd, shell: needsShell(cmd), windowsHide: true });
     let stdout = '';
     let stderr = '';
     let settled = false;
