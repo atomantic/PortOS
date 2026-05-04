@@ -325,9 +325,15 @@ export default function VideoGen() {
       // an empty extendFromVideoId.
       clearSourceImage();
     } else if (next === 'a2v') {
-      // a2v takes audio + optional first-frame image. Drop FFLF end-frame +
-      // extend pick so they don't get silently submitted; keep the source
-      // image (acts as i2v conditioning when present).
+      // a2v takes audio only — buildGeneratePayload omits sourceImageFile +
+      // sourceImage in this mode, so dropping them here keeps state honest
+      // (no stale image survives in the form to imply it's being used).
+      // The python helper supports an optional first-frame image, but the
+      // UI doesn't expose it yet (see PR description "Out of scope") because
+      // the multipart parser only accepts one file per request. Once we add
+      // a gallery-pick path for the first frame, restore the source-image
+      // state pass-through here.
+      clearSourceImage();
       setLastImageFile(null);
       setExtendFromVideoId('');
     }
