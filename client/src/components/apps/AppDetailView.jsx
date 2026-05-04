@@ -16,6 +16,7 @@ import DocumentsTab from './tabs/DocumentsTab';
 import GitTab from './tabs/GitTab';
 import GsdTab from './tabs/GsdTab';
 import ProcessesTab from './tabs/ProcessesTab';
+import DatadogTab from './tabs/DatadogTab';
 import UpdateTab from './tabs/UpdateTab';
 
 export default function AppDetailView() {
@@ -91,8 +92,12 @@ export default function AppDetailView() {
   };
 
   const visibleTabs = useMemo(() =>
-    APP_DETAIL_TABS.filter(t => t.id !== 'update' || app?.id === api.PORTOS_APP_ID),
-    [app?.id]
+    APP_DETAIL_TABS.filter(t => {
+      if (t.id === 'update') return app?.id === api.PORTOS_APP_ID;
+      if (t.id === 'datadog') return app?.datadog?.enabled;
+      return true;
+    }),
+    [app?.id, app?.datadog?.enabled]
   );
 
   if (loading) {
@@ -120,6 +125,8 @@ export default function AppDetailView() {
         return <TasksTab appId={appId} />;
       case 'automation':
         return <AutomationTab appId={appId} appName={app.name} />;
+      case 'datadog':
+        return <DatadogTab app={app} />;
       case 'documents':
         return <DocumentsTab appId={appId} repoPath={app.repoPath} />;
       case 'git':
