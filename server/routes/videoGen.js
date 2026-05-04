@@ -273,15 +273,27 @@ router.post('/last-frame/:id', asyncHandler(async (req, res) => {
   res.json(await extractLastFrame(req.params.id));
 }));
 
+const historyIdSchema = z.string().regex(/^[a-f0-9-]{36}$/i, 'invalid history id');
+
+const failValidation = (parsed) => {
+  throw new ServerError(`Validation failed: ${parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join(', ')}`, { status: 400, code: 'VALIDATION_ERROR' });
+};
+
 router.post('/upscale/:id', asyncHandler(async (req, res) => {
-  const entry = await upscaleHistoryItem(req.params.id);
+  const parsed = historyIdSchema.safeParse(req.params.id);
+  if (!parsed.success) failValidation(parsed);
+  const entry = await upscaleHistoryItem(parsed.data);
   res.json({ ok: true, video: entry });
 }));
 
+const stitchBodySchema = z.object({
+  videoIds: z.array(historyIdSchema).min(2).max(20),
+});
+
 router.post('/stitch', asyncHandler(async (req, res) => {
-  const ids = req.body?.videoIds;
-  if (!Array.isArray(ids)) throw new ServerError('videoIds array required', { status: 400, code: 'VALIDATION_ERROR' });
-  const stitched = await stitchVideos(ids);
+  const parsed = stitchBodySchema.safeParse(req.body || {});
+  if (!parsed.success) failValidation(parsed);
+  const stitched = await stitchVideos(parsed.data.videoIds);
   res.json({ ok: true, video: stitched });
 }));
 

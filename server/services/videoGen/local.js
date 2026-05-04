@@ -492,6 +492,9 @@ export async function upscaleHistoryItem(historyId) {
   if (!/^[a-f0-9-]{36}$/i.test(item.id)) {
     throw new ServerError('Invalid history id', { status: 400, code: 'VALIDATION_ERROR' });
   }
+  if (item.upscaledFrom) {
+    throw new ServerError('Cannot upscale an already-upscaled video', { status: 400, code: 'ALREADY_UPSCALED' });
+  }
   const sourcePath = safeUnder(PATHS.videos, item.filename);
   if (!sourcePath) throw new ServerError('Invalid video filename', { status: 400, code: 'VALIDATION_ERROR' });
   if (!existsSync(sourcePath)) throw new ServerError('Video file not found on disk', { status: 404, code: 'NOT_FOUND' });

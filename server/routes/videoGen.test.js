@@ -260,37 +260,58 @@ describe('videoGen routes', () => {
   });
 
   describe('POST /stitch', () => {
+    const validId = (n) => `aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaa${n}`;
+
     it('rejects when videoIds is not an array', async () => {
       const r = await request(app).post('/api/video-gen/stitch').send({ videoIds: 'not-array' });
       expect(r.status).toBe(400);
-      expect(r.body.error).toMatch(/array/i);
+    });
+
+    it('rejects when videoIds contains malformed history ids', async () => {
+      const r = await request(app).post('/api/video-gen/stitch').send({ videoIds: ['../etc/passwd', 'b'] });
+      expect(r.status).toBe(400);
+    });
+
+    it('rejects when videoIds has fewer than 2 entries', async () => {
+      const r = await request(app).post('/api/video-gen/stitch').send({ videoIds: [validId(1)] });
+      expect(r.status).toBe(400);
     });
 
     it('proxies array of ids to stitchVideos and wraps result', async () => {
       videoGenService.stitchVideos.mockResolvedValue({ id: 's1', filename: 's1.mp4' });
-      const r = await request(app).post('/api/video-gen/stitch').send({ videoIds: ['a', 'b'] });
+      const r = await request(app).post('/api/video-gen/stitch').send({ videoIds: [validId(1), validId(2)] });
       expect(r.status).toBe(200);
       expect(r.body.ok).toBe(true);
       expect(r.body.video.id).toBe('s1');
+      expect(videoGenService.stitchVideos).toHaveBeenCalledWith([validId(1), validId(2)]);
     });
   });
 
   describe('POST /upscale/:id', () => {
+    const validHistoryId = 'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaa1';
+    const otherValidId = 'bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbb2';
+
+    it('rejects history ids that do not match the UUID shape', async () => {
+      const r = await request(app).post('/api/video-gen/upscale/not-a-uuid').send({});
+      expect(r.status).toBe(400);
+      expect(videoGenService.upscaleHistoryItem).not.toHaveBeenCalled();
+    });
+
     it('forwards id to upscaleHistoryItem and wraps the new entry', async () => {
-      const upscaled = { id: 'new-id', filename: 'new-id.mp4', width: 1536, height: 1024, upscaledFrom: 'orig-id' };
+      const upscaled = { id: otherValidId, filename: `${otherValidId}.mp4`, width: 1536, height: 1024, upscaledFrom: validHistoryId };
       videoGenService.upscaleHistoryItem.mockResolvedValue(upscaled);
-      const r = await request(app).post('/api/video-gen/upscale/orig-id').send({});
+      const r = await request(app).post(`/api/video-gen/upscale/${validHistoryId}`).send({});
       expect(r.status).toBe(200);
       expect(r.body.ok).toBe(true);
       expect(r.body.video).toEqual(upscaled);
-      expect(videoGenService.upscaleHistoryItem).toHaveBeenCalledWith('orig-id');
+      expect(videoGenService.upscaleHistoryItem).toHaveBeenCalledWith(validHistoryId);
     });
 
     it('returns the ServerError status when the service rejects', async () => {
       videoGenService.upscaleHistoryItem.mockRejectedValue(
         Object.assign(new Error('Video not found'), { status: 404, code: 'NOT_FOUND' }),
       );
-      const r = await request(app).post('/api/video-gen/upscale/missing').send({});
+      const r = await request(app).post(`/api/video-gen/upscale/${validHistoryId}`).send({});
       expect(r.status).toBe(404);
       expect(r.body.error).toMatch(/not found/i);
     });

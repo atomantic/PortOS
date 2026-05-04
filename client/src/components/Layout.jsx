@@ -772,6 +772,8 @@ export default function Layout() {
             aria-label={`${item.label} pages`}
             onMouseEnter={cancelCloseFlyout}
             onMouseLeave={scheduleCloseFlyout}
+            onFocus={cancelCloseFlyout}
+            onBlur={scheduleCloseFlyout}
             style={{ top: flyoutPos.top, left: flyoutPos.left, position: 'fixed' }}
             className="hidden lg:block z-[60] min-w-[200px] bg-port-card border border-port-border rounded-lg shadow-2xl py-1"
           >
