@@ -29,15 +29,14 @@ export default function StagePromptModelPicker({ stageName, label = 'Stage LLM',
   }, [stageName]);
 
   const persist = async (next) => {
+    // Snapshot the previous stage from the current closure value BEFORE
+    // calling setStage. Capturing inside the setStage updater is unsafe
+    // under React 18 concurrent rendering / StrictMode — updaters can be
+    // re-run or deferred, leaving the side-effect-captured snapshot
+    // unreliable. The closure value is stable for this call.
+    const prevStage = stage;
     setSaving(true);
-    // Snapshot previous stage so a non-OK response can roll back the
-    // optimistic update — otherwise the UI would keep showing a
-    // provider/model that wasn't actually persisted server-side.
-    let prevStage = null;
-    setStage((prev) => {
-      prevStage = prev;
-      return { ...prev, ...next };
-    });
+    setStage((prev) => ({ ...prev, ...next }));
     const res = await fetch(`/api/prompts/${encodeURIComponent(stageName)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -48,6 +47,8 @@ export default function StagePromptModelPicker({ stageName, label = 'Stage LLM',
     });
     setSaving(false);
     if (!res.ok) {
+      // Roll back the optimistic update so the picker UI doesn't show a
+      // provider/model that wasn't actually persisted server-side.
       setStage(prevStage);
       toast.error(`Failed to save ${label}: ${await res.text().catch(() => res.statusText)}`);
     }
