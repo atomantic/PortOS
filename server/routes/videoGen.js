@@ -31,12 +31,20 @@ import { enqueueJob, attachSseClient, cancelJob, listJobs } from '../services/me
 
 const router = Router();
 
-// FFLF accepts up to two image uploads (start and end frame). The 50MB cap
-// applies per-file; image-only filter rejects non-image parts up-front so a
-// stray .mp4 drag-drop can't get staged as a "source image".
-const frameImageUpload = uploadFields(['sourceImage', 'lastImage'], {
-  limits: { fileSize: 50 * 1024 * 1024 },
-  fileFilter: (_req, file, cb) => cb(null, file.mimetype.startsWith('image/')),
+// FFLF accepts up to two image uploads (start and end frame); a2v takes
+// one audio upload (audioFile). 100MB covers audio cases too (LTX-2's a2v
+// expects only seconds of audio in practice). Per-fieldname mime filter
+// rejects mismatched parts up-front so a stray .mp4 drag-drop can't get
+// staged under any of these fields.
+const frameImageUpload = uploadFields(['sourceImage', 'lastImage', 'audioFile'], {
+  limits: { fileSize: 100 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const isImageField = file.fieldname === 'sourceImage' || file.fieldname === 'lastImage';
+    const isAudioField = file.fieldname === 'audioFile';
+    const okImage = isImageField && file.mimetype.startsWith('image/');
+    const okAudio = isAudioField && file.mimetype.startsWith('audio/');
+    cb(null, okImage || okAudio);
+  },
 });
 
 // Multipart bodies arrive as strings; coerce numerics in the schema. The
@@ -74,7 +82,7 @@ const generateBodySchema = z.object({
   lastImageFile: z.string().max(512).optional(),
   // UI mode hint — backend only uses it for logging/branching; absence
   // falls back to inferring (sourceImage→i2v, no source→t2v).
-  mode: z.enum(['text', 'image', 'fflf', 'extend']).optional(),
+  mode: z.enum(['text', 'image', 'fflf', 'extend', 'a2v']).optional(),
   // Chain N renders end-to-end: each chunk's last frame becomes the next
   // chunk's start frame, then ffmpeg concats them into one clip. 1..8 to
   // keep the worst-case wall time bounded (8 × ~5min ≈ 40min on M3 Max).
@@ -155,18 +163,22 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
       { status: 400, code: 'VIDEO_GEN_NOT_CONFIGURED' },
     );
   }
+  // Resolve the effective model up front — both the modelId-exists check
+  // below AND the a2v runtime guard further down need the model entry,
+  // and listVideoModels() is the kind of thing test mocks easily get out
+  // of sync if called twice.
+  const knownModels = listVideoModels();
+  const effectiveModelId = body.modelId || defaultVideoModelId();
+  const effectiveModel = knownModels.find((m) => m.id === effectiveModelId);
   // Validate modelId synchronously (when supplied). Without this the queue
   // would happily accept a typo'd modelId and fail asynchronously inside
   // the worker — leaving a persisted, doomed queue entry.
-  if (body.modelId) {
-    const known = listVideoModels();
-    if (!known.some((m) => m.id === body.modelId)) {
-      await cleanupTempUploads();
-      throw new ServerError(
-        `Unknown modelId: ${body.modelId}`,
-        { status: 400, code: 'VIDEO_GEN_UNKNOWN_MODEL' },
-      );
-    }
+  if (body.modelId && !effectiveModel) {
+    await cleanupTempUploads();
+    throw new ServerError(
+      `Unknown modelId: ${body.modelId}`,
+      { status: 400, code: 'VIDEO_GEN_UNKNOWN_MODEL' },
+    );
   }
 
   // Track every durable file we've already copied into PATHS.uploads so a
@@ -214,11 +226,43 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
   // those replays still clean up correctly. Every additional upload (today:
   // just `lastImage`) flows through `uploadedTempPaths` as an array. The
   // worker walks both fields when unlinking on terminal events.
+  // Mode/upload pairing checks BEFORE staging so a rejected request only
+  // unlinks the OS temp file (cheap) instead of also unlinking a freshly-
+  // copied 100MB durable file under data/uploads (wasted disk I/O on every
+  // bad request).
+  if (body.mode === 'a2v' && !uploads.audioFile) {
+    await cleanupAllStaged();
+    throw new ServerError(
+      'a2v mode requires an audioFile upload (multipart field name: audioFile).',
+      { status: 400, code: 'VIDEO_GEN_AUDIO_REQUIRED' },
+    );
+  }
+  if (uploads.audioFile && body.mode !== 'a2v') {
+    await cleanupAllStaged();
+    throw new ServerError(
+      `audioFile upload is only valid with mode='a2v' (got mode='${body.mode || 'unset'}').`,
+      { status: 400, code: 'VIDEO_GEN_AUDIO_MODE_MISMATCH' },
+    );
+  }
+  // a2v needs the dgrauet runtime — the legacy mlx_video pipeline has no
+  // audio-conditioned mode. The worker also catches this in buildArgs (with
+  // A2V_REQUIRES_LTX2), but checking here keeps the route's "fail fast
+  // before enqueue" contract so a bad modelId can't pollute the persisted
+  // queue with a doomed entry.
+  if (body.mode === 'a2v' && effectiveModel && effectiveModel.runtime !== 'ltx2') {
+    await cleanupAllStaged();
+    throw new ServerError(
+      `a2v mode requires an ltx2-runtime model. Model "${effectiveModelId}" runs on "${effectiveModel.runtime || 'mlx_video'}".`,
+      { status: 400, code: 'A2V_REQUIRES_LTX2' },
+    );
+  }
+
   let sourceImagePath = null;
   let lastImagePath = null;
+  let audioFilePath = null;
   let uploadedTempPath = null;
   const extraUploadedTempPaths = [];
-  if (uploads.sourceImage || uploads.lastImage) {
+  if (uploads.sourceImage || uploads.lastImage || uploads.audioFile) {
     // Ensure the durable uploads dir exists before staging. Wrapped in
     // try/catch so a permission/disk failure here still cleans up the
     // multipart temp uploads instead of leaking them in the OS temp dir.
@@ -244,6 +288,13 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
   } else if (body.lastImageFile) {
     // Same path-traversal guard as the start frame.
     lastImagePath = resolveGalleryImage(body.lastImageFile);
+  }
+  if (uploads.audioFile) {
+    // a2v: audio file rides through the same durable-staging path as the
+    // image uploads. Cleanup tracking via extraUploadedTempPaths so the
+    // worker drops it on terminal events the same way it drops lastImage.
+    audioFilePath = await stageUploadDurable(uploads.audioFile, 'audio');
+    extraUploadedTempPaths.push(audioFilePath);
   }
 
   // Native extend (ltx2 runtime): resolve the history id to a video file
@@ -295,6 +346,7 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
       tiling: body.tiling || 'auto',
       disableAudio: body.disableAudio === true || body.disableAudio === 'true',
       sourceImagePath,
+      audioFilePath,
       uploadedTempPath,
       uploadedTempPaths: extraUploadedTempPaths,
       lastImagePath,
@@ -306,11 +358,8 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
   });
   // Match the legacy response shape (jobId, generationId, filename, model,
   // mode) so existing client code keeps working; add status+position for
-  // the queue. Resolve the effective model NOW — when modelId is omitted
-  // the worker will default it inside generateVideo, but the response
-  // needs to surface what the gallery / history will record.
-  const effectiveModel = body.modelId || defaultVideoModelId();
-  res.json({ jobId, generationId: jobId, filename: `${jobId}.mp4`, model: effectiveModel, mode: 'local', status, position });
+  // the queue. effectiveModelId was resolved at the top of the handler.
+  res.json({ jobId, generationId: jobId, filename: `${jobId}.mp4`, model: effectiveModelId, mode: 'local', status, position });
 }));
 
 router.get('/:jobId/events', (req, res) => {

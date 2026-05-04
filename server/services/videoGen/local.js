@@ -87,7 +87,7 @@ export const saveHistory = (h) => atomicWrite(HISTORY_FILE, h);
 // The helper lives in the ltx-2-mlx venv (so its `import ltx_pipelines_mlx`
 // resolves) but the script file lives in the PortOS repo so updates ship
 // with PortOS releases instead of the user's HF cache.
-const buildLtx2Args = ({ model, prompt, negativePrompt, width, height, numFrames, fps, steps, guidance, seed, sourceImagePath, lastImagePath, extendFromVideoPath, mode, disableAudio, outputPath, textEncoderRepo }) => {
+const buildLtx2Args = ({ model, prompt, negativePrompt, width, height, numFrames, fps, steps, guidance, seed, sourceImagePath, lastImagePath, extendFromVideoPath, audioFilePath, mode, disableAudio, outputPath, textEncoderRepo }) => {
   if (!existsSync(LTX2_VENV_PYTHON)) {
     throw new ServerError(
       `ltx-2-mlx venv not found at ${LTX2_VENV_PYTHON}. Run \`INSTALL_LTX2=1 bash scripts/setup-image-video.sh\` to install.`,
@@ -99,10 +99,14 @@ const buildLtx2Args = ({ model, prompt, negativePrompt, width, height, numFrames
   // source video's latent (motion + visual content) rather than just the
   // last frame. Falls back to i2v only if the caller supplied no source
   // video (e.g., the chained-render orchestrator already handed us a frame).
+  // When mode is omitted, infer i2v from a present sourceImagePath — matches
+  // the route schema's documented "absence falls back to inferring" behavior.
   const wantsNativeExtend = mode === 'extend' && !!extendFromVideoPath;
   const helperMode = mode === 'fflf' ? 'fflf'
+    : mode === 'a2v' ? 'a2v'
     : wantsNativeExtend ? 'extend'
     : mode === 'image' || mode === 'extend' ? 'image'
+    : (!mode && sourceImagePath) ? 'image'
     : 'text';
   if (helperMode === 'fflf' && (!sourceImagePath || !lastImagePath)) {
     throw new ServerError(
@@ -115,6 +119,14 @@ const buildLtx2Args = ({ model, prompt, negativePrompt, width, height, numFrames
       `Extend source video not found on disk: ${extendFromVideoPath}`,
       { status: 400, code: 'LTX2_EXTEND_SOURCE_MISSING' },
     );
+  }
+  if (helperMode === 'a2v') {
+    if (!audioFilePath || !existsSync(audioFilePath)) {
+      throw new ServerError(
+        `Audio file not found on disk for a2v mode: ${audioFilePath || '(missing)'}`,
+        { status: 400, code: 'LTX2_A2V_AUDIO_MISSING' },
+      );
+    }
   }
   // Stage-2 OOM clamp on the keyframe pipeline.
   //
@@ -175,15 +187,28 @@ const buildLtx2Args = ({ model, prompt, negativePrompt, width, height, numFrames
     args.push('--extend-frames', String(extendLatents));
     args.push('--extend-direction', 'after');
   }
+  if (helperMode === 'a2v') {
+    args.push('--audio', audioFilePath);
+    // Optional first-frame conditioning — when the user supplied a source
+    // image, AudioToVideoPipeline conditions frame 0 the same way I2V does
+    // so motion + audio sync to the chosen still.
+    if (sourceImagePath) args.push('--image', sourceImagePath);
+  }
   return { bin: LTX2_VENV_PYTHON, args };
 };
 
-const buildArgs = ({ pythonPath, modelId, model, prompt, negativePrompt, width, height, numFrames, fps, steps, guidance, seed, tiling, disableAudio, sourceImagePath, lastImagePath, extendFromVideoPath, mode, imageStrength, textEncoderRepo, outputPath }) => {
+const buildArgs = ({ pythonPath, modelId, model, prompt, negativePrompt, width, height, numFrames, fps, steps, guidance, seed, tiling, disableAudio, sourceImagePath, lastImagePath, extendFromVideoPath, audioFilePath, mode, imageStrength, textEncoderRepo, outputPath }) => {
   // Route to the dgrauet/ltx-2-mlx helper when the model declares the new
   // runtime. Existing notapalindrome models default to runtime: 'mlx_video'
   // (or undefined in legacy registries — see backfillRuntime in mediaModels.js).
   if (model.runtime === 'ltx2') {
-    return buildLtx2Args({ model, prompt, negativePrompt, width, height, numFrames, fps, steps, guidance, seed, sourceImagePath, lastImagePath, extendFromVideoPath, mode, disableAudio, outputPath, textEncoderRepo });
+    return buildLtx2Args({ model, prompt, negativePrompt, width, height, numFrames, fps, steps, guidance, seed, sourceImagePath, lastImagePath, extendFromVideoPath, audioFilePath, mode, disableAudio, outputPath, textEncoderRepo });
+  }
+  if (mode === 'a2v') {
+    throw new ServerError(
+      'a2v mode is only supported on the ltx2 runtime. Pick a model with runtime: "ltx2" in data/media-models.json.',
+      { status: 400, code: 'A2V_REQUIRES_LTX2' },
+    );
   }
   if (IS_WIN) {
     const scriptPath = join(PATHS.root, 'scripts', 'generate_win.py');
@@ -237,7 +262,7 @@ const buildArgs = ({ pythonPath, modelId, model, prompt, negativePrompt, width, 
   return { bin: pythonPath, args };
 };
 
-export async function generateVideo({ pythonPath, prompt, negativePrompt = '', modelId = defaultVideoModelId(), width = 768, height = 512, numFrames = 121, fps = 24, steps, guidanceScale, seed, tiling = 'auto', disableAudio = false, sourceImagePath = null, uploadedTempPath = null, uploadedTempPaths = [], lastImagePath = null, extendFromVideoPath = null, mode = null, imageStrength = null, jobId: providedJobId = null }) {
+export async function generateVideo({ pythonPath, prompt, negativePrompt = '', modelId = defaultVideoModelId(), width = 768, height = 512, numFrames = 121, fps = 24, steps, guidanceScale, seed, tiling = 'auto', disableAudio = false, sourceImagePath = null, uploadedTempPath = null, uploadedTempPaths = [], lastImagePath = null, extendFromVideoPath = null, audioFilePath = null, mode = null, imageStrength = null, jobId: providedJobId = null }) {
   if (!pythonPath) throw new ServerError('Python path not configured — set it in Settings > Image Gen', { status: 400, code: 'VIDEO_GEN_NOT_CONFIGURED' });
   if (!prompt?.trim()) throw new ServerError('Prompt is required', { status: 400, code: 'VALIDATION_ERROR' });
   // Single-flight is now enforced by the mediaJobQueue worker upstream — only
@@ -312,7 +337,7 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   const job = { ...meta, clients: [], status: 'running' };
   jobs.set(jobId, job);
 
-  const { bin, args } = buildArgs({ pythonPath, modelId, model, prompt, negativePrompt, width: w, height: h, numFrames: parsedNumFrames, fps: parsedFps, steps: actualSteps, guidance: actualGuidance, seed: actualSeed, tiling, disableAudio, sourceImagePath: resolvedSourceImage, lastImagePath: resolvedLastImage, extendFromVideoPath, mode, imageStrength: actualImageStrength, textEncoderRepo: actualTextEncoderRepo, outputPath });
+  const { bin, args } = buildArgs({ pythonPath, modelId, model, prompt, negativePrompt, width: w, height: h, numFrames: parsedNumFrames, fps: parsedFps, steps: actualSteps, guidance: actualGuidance, seed: actualSeed, tiling, disableAudio, sourceImagePath: resolvedSourceImage, lastImagePath: resolvedLastImage, extendFromVideoPath, audioFilePath, mode, imageStrength: actualImageStrength, textEncoderRepo: actualTextEncoderRepo, outputPath });
 
   console.log(`🎬 Generating video [${jobId.slice(0, 8)}]: ${modelId} ${w}x${h} frames=${parsedNumFrames} steps=${actualSteps}`);
   videoGenEvents.emit('started', { generationId: jobId, totalSteps: actualSteps, ...meta });
@@ -350,6 +375,12 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
     if (resizedLastTempPath) unlink(resizedLastTempPath).catch(() => {});
     if (uploadedTempPath) unlink(uploadedTempPath).catch(() => {});
     for (const p of uploadedTempPaths) unlink(p).catch(() => {});
+    // Defensive: a direct caller (bypassing the route) may pass audioFilePath
+    // without also threading it through uploadedTempPaths. Unlink it here too —
+    // double-unlink on the route's path is harmless (catch swallows ENOENT).
+    if (audioFilePath && !uploadedTempPaths.includes(audioFilePath)) {
+      unlink(audioFilePath).catch(() => {});
+    }
     closeJobAfterDelay(jobs, jobId);
   });
 
@@ -423,6 +454,12 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
     // every i2v request leaves a file in os.tmpdir() forever.
     if (uploadedTempPath) await unlink(uploadedTempPath).catch(() => {});
     for (const p of uploadedTempPaths) await unlink(p).catch(() => {});
+    // Defensive: catch audioFilePath too in case a direct caller passed it
+    // without threading through uploadedTempPaths. Skip when the route
+    // already covered it (extraUploadedTempPaths.push(audioFilePath)).
+    if (audioFilePath && !uploadedTempPaths.includes(audioFilePath)) {
+      await unlink(audioFilePath).catch(() => {});
+    }
 
     if (code !== 0) {
       job.status = 'error';

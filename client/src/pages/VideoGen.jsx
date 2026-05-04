@@ -14,6 +14,8 @@
  *             frame, so when both are provided the last is ignored)
  *   - extend: pick a previous render → its last frame becomes the source
  *             image for a new image-to-video generation
+ *   - a2v:    audio-to-video (uploaded WAV/MP3 drives the video's motion +
+ *             audio track) — dgrauet/ltx2 runtime only
  *
  * Batch queue: client-side serial executor. The form's "Add to queue" button
  * appends a job to the queue (preserving the current params). When no job is
@@ -33,7 +35,7 @@ import { normalizeVideo } from '../components/media/normalize';
 import { composeStyledPrompt } from '../lib/composeStyledPrompt';
 import {
   Film, Sparkles, Settings as SettingsIcon, RefreshCw, AlertTriangle,
-  Dice5, X, Upload, Type, Image as ImageIcon, GitBranch, ListPlus,
+  Dice5, X, Upload, Type, Image as ImageIcon, GitBranch, ListPlus, Music,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import BrailleSpinner from '../components/BrailleSpinner';
@@ -71,6 +73,7 @@ const MODES = [
   { id: 'image',  label: 'Image',  icon: ImageIcon,  desc: 'Image-to-video (start frame)' },
   { id: 'fflf',   label: 'FFLF',   icon: GitBranch,  desc: 'First frame + last frame' },
   { id: 'extend', label: 'Extend', icon: Film,       desc: 'Continue from a prior render' },
+  { id: 'a2v',    label: 'Audio',  icon: Music,      desc: 'Audio-to-video (audio drives motion + sync)' },
 ];
 
 const newQueueId = () =>
@@ -127,6 +130,10 @@ export default function VideoGen() {
   const [lastImageUpload, setLastImageUpload] = useState(null);
   const [extendFromVideoId, setExtendFromVideoId] = useState('');
   const [extendingFrame, setExtendingFrame] = useState(false);
+  // a2v mode — direct audio upload only (no gallery for audio yet). The File
+  // is sent as multipart field name 'audioFile'; the server stages it under
+  // data/uploads, then the python helper passes it to AudioToVideoPipeline.
+  const [audioFile, setAudioFile] = useState(null);
 
   // Image gallery — used by both the start and end frame pickers so the
   // user can pull from any prior render in either slot.
@@ -308,6 +315,9 @@ export default function VideoGen() {
   // carry over because they apply to all modes.)
   const handleModeChange = (next) => {
     setMode(next);
+    // Audio is only meaningful in a2v mode — drop it on every other switch
+    // so a stale upload from a prior pick doesn't sneak into a non-a2v post.
+    if (next !== 'a2v') setAudioFile(null);
     if (next === 'text') {
       clearSourceImage();
       clearLastImage();
@@ -325,6 +335,17 @@ export default function VideoGen() {
       // extend leaves a stale source that gets silently submitted alongside
       // an empty extendFromVideoId.
       clearSourceImage();
+    } else if (next === 'a2v') {
+      // a2v takes audio only — buildGeneratePayload omits sourceImageFile +
+      // sourceImage in this mode, so dropping them here keeps state honest
+      // (no stale image survives in the form to imply it's being used).
+      // The python helper supports an optional first-frame image, but the
+      // UI doesn't expose it yet (see PR description "Out of scope"). Once
+      // we add a gallery-pick path for the first frame, restore the source-
+      // image state pass-through here.
+      clearSourceImage();
+      clearLastImage();
+      setExtendFromVideoId('');
     }
   };
 
@@ -414,6 +435,9 @@ export default function VideoGen() {
       lastImage: mode === 'fflf' ? (lastImageUpload || '') : '',
       extendFromVideoId: (mode === 'extend' && currentModel?.runtime === 'ltx2')
         ? (extendFromVideoId || '') : '',
+      // Audio File goes through under the multipart field 'audioFile'. Server
+      // routes it to the durable uploads dir and into the a2v helper.
+      audioFile: mode === 'a2v' ? (audioFile || '') : '',
       chunks: chunks > 1 ? chunks : '',
     };
   };
@@ -522,6 +546,10 @@ export default function VideoGen() {
     !extendFromVideoId
     || (currentModel?.runtime !== 'ltx2' && (extendingFrame || !sourceImageFile))
   );
+  // a2v requires an audio upload AND an ltx2-runtime model — the legacy
+  // mlx_video runtime has no audio-conditioned pipeline. Block submit when
+  // either is missing so the request fails the form, not the worker.
+  const a2vModeBlocked = mode === 'a2v' && (!audioFile || currentModel?.runtime !== 'ltx2');
 
   const handleGenerate = async (e) => {
     e?.preventDefault?.();
@@ -530,17 +558,17 @@ export default function VideoGen() {
     // Without these guards the user could press Enter in the prompt
     // textarea and fire a request the disabled button would otherwise
     // have prevented.
-    if (!prompt.trim() || generating || (status && status.connected === false) || extendModeBlocked) return;
+    if (!prompt.trim() || generating || (status && status.connected === false) || extendModeBlocked || a2vModeBlocked) return;
     await runGeneration(buildGeneratePayload()).catch(() => {});
   };
 
   const handleEnqueue = () => {
-    if (!prompt.trim() || (status && status.connected === false) || extendModeBlocked) return;
+    if (!prompt.trim() || (status && status.connected === false) || extendModeBlocked || a2vModeBlocked) return;
     const payload = buildGeneratePayload();
     // Strip File blobs for snapshot — re-using a File across multiple queued
     // submissions is fine, but we need a stable JSON-ish summary for the
     // queue UI display. Hold the Files in `_blobs` separately.
-    const { sourceImage, lastImage, ...summary } = payload;
+    const { sourceImage, lastImage, audioFile: audioBlob, ...summary } = payload;
     setQueue((q) => [...q, {
       id: newQueueId(),
       status: 'pending',
@@ -548,6 +576,7 @@ export default function VideoGen() {
       _blobs: {
         sourceImage: sourceImage instanceof File ? sourceImage : null,
         lastImage: lastImage instanceof File ? lastImage : null,
+        audioFile: audioBlob instanceof File ? audioBlob : null,
       },
       enqueuedAt: Date.now(),
     }]);
@@ -581,6 +610,7 @@ export default function VideoGen() {
     const payload = { ...next.params };
     if (next._blobs?.sourceImage) payload.sourceImage = next._blobs.sourceImage;
     if (next._blobs?.lastImage) payload.lastImage = next._blobs.lastImage;
+    if (next._blobs?.audioFile) payload.audioFile = next._blobs.audioFile;
     let busyRetry = false;
     let busyRetryTimer = null;
     runGeneration(payload).then((res) => {
@@ -634,7 +664,7 @@ export default function VideoGen() {
   };
 
   const notConnected = status && status.connected === false;
-  const canEnqueue = prompt.trim() && !notConnected && !extendModeBlocked;
+  const canEnqueue = prompt.trim() && !notConnected && !extendModeBlocked && !a2vModeBlocked;
 
   // Symmetric frame picker for the FFLF + image modes. Each slot accepts
   // EITHER a gallery filename OR a fresh upload; the preview renders
@@ -861,6 +891,43 @@ export default function VideoGen() {
             </div>
           )}
 
+          {mode === 'a2v' && (
+            <div className="border border-port-border/50 rounded-lg p-2 space-y-1.5">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-medium text-gray-400">Audio (drives motion + sync)</span>
+                {audioFile && (
+                  <button type="button" onClick={() => setAudioFile(null)} className="text-[11px] text-port-error hover:underline">Clear</button>
+                )}
+              </div>
+              {audioFile ? (
+                <div className="flex items-center gap-2 text-[11px] text-gray-300">
+                  <Music className="w-3.5 h-3.5 text-port-accent" />
+                  <span className="truncate" title={audioFile.name}>{audioFile.name}</span>
+                  <span className="text-gray-500">{(audioFile.size / 1024 / 1024).toFixed(2)} MB</span>
+                </div>
+              ) : (
+                <label className="flex items-center gap-2 text-[11px] text-gray-400 cursor-pointer hover:text-white">
+                  <Upload className="w-3.5 h-3.5" />
+                  <span className="truncate">Upload audio (WAV / MP3 / M4A)</span>
+                  <input
+                    type="file"
+                    accept="audio/*"
+                    onChange={(e) => setAudioFile(e.target.files?.[0] || null)}
+                    className="hidden"
+                  />
+                </label>
+              )}
+              <p className="text-[10px] text-gray-500 leading-snug">
+                Audio length should match {`${(numFrames / fps).toFixed(1)}s`} (frames ÷ fps). Longer clips are trimmed to fit; shorter clips fail.
+              </p>
+              {currentModel?.runtime !== 'ltx2' && (
+                <p className="text-[11px] text-port-warning">
+                  a2v requires an ltx2-runtime model — switch the Model dropdown to one of the dgrauet entries.
+                </p>
+              )}
+            </div>
+          )}
+
           {mode === 'extend' && (
             <div className="border border-port-border/50 rounded-lg p-2 space-y-1.5">
               <div className="flex items-center justify-between">
@@ -1056,9 +1123,15 @@ export default function VideoGen() {
             ) : (
               <button
                 type="submit"
-                disabled={!prompt.trim() || notConnected || extendModeBlocked}
+                disabled={!prompt.trim() || notConnected || extendModeBlocked || a2vModeBlocked}
                 className="flex items-center gap-2 px-4 py-2 bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg min-h-[40px]"
-                title={extendModeBlocked ? 'Pick a prior render and wait for the last frame to extract before generating' : undefined}
+                title={
+                  extendModeBlocked ? 'Pick a prior render and wait for the last frame to extract before generating'
+                    : a2vModeBlocked ? (currentModel?.runtime !== 'ltx2'
+                      ? 'a2v mode requires an ltx2-runtime model — pick one from the Model dropdown'
+                      : 'Pick an audio file before generating')
+                    : undefined
+                }
               >
                 <Sparkles className="w-4 h-4" /> Generate
               </button>
