@@ -99,11 +99,14 @@ const buildLtx2Args = ({ model, prompt, negativePrompt, width, height, numFrames
   // source video's latent (motion + visual content) rather than just the
   // last frame. Falls back to i2v only if the caller supplied no source
   // video (e.g., the chained-render orchestrator already handed us a frame).
+  // When mode is omitted, infer i2v from a present sourceImagePath — matches
+  // the route schema's documented "absence falls back to inferring" behavior.
   const wantsNativeExtend = mode === 'extend' && !!extendFromVideoPath;
   const helperMode = mode === 'fflf' ? 'fflf'
     : mode === 'a2v' ? 'a2v'
     : wantsNativeExtend ? 'extend'
     : mode === 'image' || mode === 'extend' ? 'image'
+    : (!mode && sourceImagePath) ? 'image'
     : 'text';
   if (helperMode === 'fflf' && (!sourceImagePath || !lastImagePath)) {
     throw new ServerError(
@@ -372,6 +375,12 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
     if (resizedLastTempPath) unlink(resizedLastTempPath).catch(() => {});
     if (uploadedTempPath) unlink(uploadedTempPath).catch(() => {});
     for (const p of uploadedTempPaths) unlink(p).catch(() => {});
+    // Defensive: a direct caller (bypassing the route) may pass audioFilePath
+    // without also threading it through uploadedTempPaths. Unlink it here too —
+    // double-unlink on the route's path is harmless (catch swallows ENOENT).
+    if (audioFilePath && !uploadedTempPaths.includes(audioFilePath)) {
+      unlink(audioFilePath).catch(() => {});
+    }
     closeJobAfterDelay(jobs, jobId);
   });
 
@@ -445,6 +454,12 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
     // every i2v request leaves a file in os.tmpdir() forever.
     if (uploadedTempPath) await unlink(uploadedTempPath).catch(() => {});
     for (const p of uploadedTempPaths) await unlink(p).catch(() => {});
+    // Defensive: catch audioFilePath too in case a direct caller passed it
+    // without threading through uploadedTempPaths. Skip when the route
+    // already covered it (extraUploadedTempPaths.push(audioFilePath)).
+    if (audioFilePath && !uploadedTempPaths.includes(audioFilePath)) {
+      await unlink(audioFilePath).catch(() => {});
+    }
 
     if (code !== 0) {
       job.status = 'error';
