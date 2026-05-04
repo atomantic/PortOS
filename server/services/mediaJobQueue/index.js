@@ -1,12 +1,17 @@
 /**
- * Media Job Queue — single-worker FIFO for image + video gen jobs.
+ * Media Job Queue — two-lane FIFO for image + video gen jobs.
  *
- * Why this exists: video gen (mlx_video) and image gen (mflux/diffusers) both
- * spawn heavy GPU/Metal child processes. Running two simultaneously OOMs the
- * machine, so the gen modules used to throw 409 BUSY when one was already in
- * flight. That made any agent-driven pipeline (e.g. Creative Director) need
+ * Why this exists: video gen (mlx_video) and local image gen (mflux/diffusers)
+ * both spawn heavy GPU/Metal child processes. Running two simultaneously OOMs
+ * the machine, so the gen modules used to throw 409 BUSY when one was already
+ * in flight. That made any agent-driven pipeline (e.g. Creative Director) need
  * to retry/backoff. This queue serializes submissions so callers always get
  * an immediate `queued` ack and watch progress via SSE.
+ *
+ * Lanes: GPU jobs (video + local image) drain serially through `running` since
+ * they share the MLX runtime. Codex image jobs run in a parallel `codexRunning`
+ * lane — they shell out to an external CLI and don't compete for GPU memory,
+ * so a long video render never blocks a Codex storyboard generation.
  *
  * Scope: gates `videoGen/local#generateVideo` (always) and
  * `imageGen/local#generateImage` (only when imageGen mode === 'local'). The
@@ -495,7 +500,7 @@ async function runJob(job) {
     safeParams.audioFilePath = null;
   }
   safeParams.uploadedTempPaths = normalizeTempPaths(safeParams.uploadedTempPaths).filter((p) => {
-    if (safeUnder(PATHS.uploads, p)) return true;
+    if (isUnderUploadsRoot(p)) return true;
     console.log(`⚠️ media-job [${job.id.slice(0, 8)}] uploadedTempPaths entry outside PATHS.uploads — rejected before gen invoke: ${p}`);
     return false;
   });

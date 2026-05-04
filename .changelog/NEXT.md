@@ -16,11 +16,23 @@
 - **Morse code trainer** in POST — Koch-method Copy mode (listen → type, 90% accuracy unlocks the next letter) and a Send mode that decodes spacebar/touch keying into text. Native Web Audio, Farnsworth timing, configurable WPM/tone. Reachable from the POST launcher header, the sidebar, ⌘K, and voice.
 - **Morse trainer side widget** with a binary tree visualization that highlights the live keying path (DAH-left, DIT-right), three reference views (Tree / Length / List), a tap-anywhere practice key, and a real-time decoded log. Spacebar keying is intercepted in capture phase so it doesn't trigger the voice FAB push-to-talk hotkey while on the morse page.
 - **Video Gen mode switch + batch queue** — a segmented control selects Text / Image / FFLF (first-frame + last-frame) / Extend (continue from a prior render). Mode-specific input panels (start image, end image, prior-video picker) replace the always-on source image upload. A new "Add to queue" button enqueues the current configuration; the batch-queue panel runs jobs serially with per-item status (pending / running / complete / error), inline error messages, and a clear-finished action that removes completed and errored items.
+- **Video Gen "Chunks" control (1–8)** chains multiple renders into a single longer clip. Each chunk's last frame seeds the next, and the final output is stitched into one file. Intermediate chunks are hidden in history by default so the gallery shows only the finished result.
+- **Two new high-capability video models** ("dgrauet Q4" and "dgrauet Q8") on a more capable runtime that supports true keyframe interpolation (FFLF that respects both start AND end frames), native video extend, and audio-to-video. Run the setup script with the `INSTALL_LTX2` flag to install them. The existing models keep working unchanged; pick the new "dgrauet" entries from the model dropdown to use the new pipeline. On systems with 48 GB of RAM or less, the server automatically clamps FFLF frame counts to a memory-safe budget.
+- **"Extend" mode on the new dgrauet models** uses true latent video extension — conditioned on the entire source video's motion and visual content — instead of just continuing from the last frame. The visible motion stall at scene boundaries is gone; extensions continue naturally from the source. Legacy models keep using the previous last-frame method.
+- **New "Audio" mode in Video Gen** renders a clip whose motion and on-screen audio sync to an uploaded audio track (WAV / MP3 / M4A). Drop in a 4–8 second clip, write a directive prompt, and the model drives the video to match the audio. Requires one of the new dgrauet models.
 
 ## Changed
 
 - **Image Gen and Video Gen layouts tightened for above-the-fold density.** Form and preview now render side-by-side on wider screens instead of stacking, so more of the page is usable without scrolling. Previews are capped so they no longer dominate the viewport, the prompt and negative-prompt fields sit in two columns on medium+ screens, and section headers are more compact. Status text is hoisted into the Generate button row; video Download moved into the preview header for parity with Image Gen.
 - **Worktree policy clarified** in developer documentation: TUI sessions edit the main repo directly; worktrees are reserved for unattended CoS sub-agents.
+- Video Gen frame picker now goes up to 481 frames (~20s at 24fps); options past 241 frames (~10s) show a hint recommending Extend mode for reliable long renders at 48 GB.
+- Switching to Audio mode now automatically selects the smallest compatible model when the current model doesn't support audio-to-video, instead of landing on a blocked state with a warning. The warning still appears if you manually pick an incompatible model while in Audio mode.
+- "Disable audio" and "No music" checkboxes are hidden in Audio mode and their state is reset on entry — both are irrelevant when audio comes from an uploaded file rather than being generated.
+- Video Gen FFLF mode now offers the same dual control on both the first-frame and last-frame slots — pick from your image gallery or upload a fresh image — instead of the previous upload-only first frame and gallery-only last frame.
+- Release workflow no longer silently skips creating the GitHub Release when something else pushed the version tag before the workflow ran.
+- Chief of Staff 3D avatars (Cyber, Sigil, Esoteric, Nexus, Muse) now fill the agent panel as a full-bleed background, with the title, status, and controls overlaying the scene instead of sharing a column with it.
+- Autonomy level buttons in the CoS Config tab now use higher-contrast active states so the selected level is obvious at a glance.
+- Quick Task form checkboxes (Enhance, Worktree, Open PR, Simplify, Review Loop, JIRA) are tighter — vertical padding around each checkbox is reduced so the form fits more comfortably in the dashboard widget without dead whitespace.
 
 ## Fixed
 
@@ -45,22 +57,3 @@
 - **`update.sh` no longer hangs after "PortOS restarted"** — the browser-open step now exits immediately rather than waiting for an internal connection pool to drain.
 - **`update.sh` now fully resets the process manager before restarting**, fixing crashes where a stale daemon retained a cached path from a different project that no longer existed.
 - Writers-room storyboard renders queued through Codex now wait their turn instead of erroring with "A Codex generation is already in progress" when you fire a second render before the first finishes. Codex jobs run on their own queue lane, so they don't block (and aren't blocked by) local image or video renders.
-
-## Added
-
-- **Video Gen "Chunks" control (1–8)** chains multiple renders into a single longer clip. Each chunk's last frame seeds the next, and the final output is stitched into one file. Intermediate chunks are hidden in history by default so the gallery shows only the finished result.
-- **Two new high-capability video models** ("dgrauet Q4" and "dgrauet Q8") on a more capable runtime that supports true keyframe interpolation (FFLF that respects both start AND end frames), native video extend, and audio-to-video. Run the setup script with the `INSTALL_LTX2` flag to install them. The existing models keep working unchanged; pick the new "dgrauet" entries from the model dropdown to use the new pipeline. On systems with 48 GB of RAM or less, the server automatically clamps FFLF frame counts to a memory-safe budget.
-- **"Extend" mode on the new dgrauet models** uses true latent video extension — conditioned on the entire source video's motion and visual content — instead of just continuing from the last frame. The visible motion stall at scene boundaries is gone; extensions continue naturally from the source. Legacy models keep using the previous last-frame method.
-- **New "Audio" mode in Video Gen** renders a clip whose motion and on-screen audio sync to an uploaded audio track (WAV / MP3 / M4A). Drop in a 4–8 second clip, write a directive prompt, and the model drives the video to match the audio. Requires one of the new dgrauet models.
-
-## Changed
-
-- Video Gen frame picker now goes up to 481 frames (~20s at 24fps); options past 241 frames (~10s) show a hint recommending Extend mode for reliable long renders at 48 GB.
-- Switching to Audio mode now automatically selects the smallest compatible model when the current model doesn't support audio-to-video, instead of landing on a blocked state with a warning. The warning still appears if you manually pick an incompatible model while in Audio mode.
-- "Disable audio" and "No music" checkboxes are hidden in Audio mode and their state is reset on entry — both are irrelevant when audio comes from an uploaded file rather than being generated.
-- Video Gen FFLF mode now offers the same dual control on both the first-frame and last-frame slots — pick from your image gallery or upload a fresh image — instead of the previous upload-only first frame and gallery-only last frame.
-- Release workflow no longer silently skips creating the GitHub Release when something else pushed the version tag before the workflow ran.
-- Release-notes style guide tightened — entries should be one sentence per change in user-facing language, not code-review prose with file paths and internal symbols.
-- Chief of Staff 3D avatars (Cyber, Sigil, Esoteric, Nexus, Muse) now fill the agent panel as a full-bleed background, with the title, status, and controls overlaying the scene instead of sharing a column with it.
-- Autonomy level buttons in the CoS Config tab now use higher-contrast active states so the selected level is obvious at a glance.
-- Quick Task form checkboxes (Enhance, Worktree, Open PR, Simplify, Review Loop, JIRA) are tighter — vertical padding around each checkbox is reduced so the form fits more comfortably in the dashboard widget without dead whitespace.
