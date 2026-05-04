@@ -19,8 +19,14 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 
+// fieldName accepts either a string (single accepted file field) or an array
+// of strings (any one of which is the accepted file field). Mutually-exclusive
+// uploads — e.g. videoGen's `sourceImage` (image mode) vs. `audioFile` (a2v
+// mode) — pass the array form so a single middleware handles both without
+// chaining two parsers (which can't share the streamed request body).
 export function uploadSingle(fieldName, { limits = {}, fileFilter } = {}) {
   const maxSize = limits.fileSize ?? Infinity;
+  const fieldNames = Array.isArray(fieldName) ? fieldName : [fieldName];
 
   return (req, res, next) => {
     const ct = req.headers['content-type'] || '';
@@ -38,7 +44,7 @@ export function uploadSingle(fieldName, { limits = {}, fileFilter } = {}) {
       err.status = 400; err.code = 'INVALID_CONTENT_TYPE';
       return next(err);
     }
-    streamMultipart(req, bm[1], fieldName, maxSize, fileFilter, next);
+    streamMultipart(req, bm[1], fieldNames, maxSize, fileFilter, next);
   };
 }
 
@@ -54,7 +60,7 @@ export function optionalUpload(fieldName, opts) {
   };
 }
 
-function streamMultipart(req, boundary, fileFieldName, maxSize, fileFilter, next) {
+function streamMultipart(req, boundary, fileFieldNames, maxSize, fileFilter, next) {
   const PART_DELIM = Buffer.from('\r\n--' + boundary);
   const FIRST_DELIM = Buffer.from('--' + boundary);
   const HEADER_END = Buffer.from('\r\n\r\n');
@@ -142,11 +148,11 @@ function streamMultipart(req, boundary, fileFieldName, maxSize, fileFilter, next
     currentFilename = filenameMatch?.[1];
 
     if (currentFilename != null && currentFilename !== '') {
-      isMatchingFile = currentName === fileFieldName;
+      isMatchingFile = fileFieldNames.includes(currentName);
       const mimeMatch = headerStr.match(/Content-Type:\s*([^\r\n]+)/i);
       currentFileMimetype = mimeMatch ? mimeMatch[1].trim() : 'application/octet-stream';
       if (isMatchingFile) {
-        const fileMeta = { originalname: currentFilename, mimetype: currentFileMimetype };
+        const fileMeta = { fieldname: currentName, originalname: currentFilename, mimetype: currentFileMimetype };
 
         if (fileFilter) {
           // CONTRACT: fileFilter MUST call its `cb` synchronously. We read
@@ -233,11 +239,12 @@ function streamMultipart(req, boundary, fileFieldName, maxSize, fileFilter, next
         const size = bytesWritten;
         const filename = currentFilename;
         const mimetype = currentFileMimetype || 'application/octet-stream';
+        const fieldname = currentName;
         writeStream = null;
         writePath = null;
         pendingFlush += 1;
         ws.end(() => {
-          fileResult = { path, originalname: filename, mimetype, size };
+          fileResult = { fieldname, path, originalname: filename, mimetype, size };
           pendingFlush -= 1;
           cb();
           // If 'end' arrived while we were still flushing, finalize now.

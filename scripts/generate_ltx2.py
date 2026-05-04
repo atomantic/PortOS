@@ -22,6 +22,7 @@ Modes:
   image  → ImageToVideoPipeline.generate_and_save (--image)
   fflf   → KeyframeInterpolationPipeline.generate_and_save (--image start, --last-image end)
   extend → ExtendPipeline.extend_from_video (--extend-from-video, --extend-frames, --direction)
+  a2v    → AudioToVideoPipeline.generate_and_save (--audio, optional --image)
 
 Output: writes the rendered .mp4 to --output. Emits a final JSON line on
 stdout ({"video_path": "<output>"}) so the Node parent can read the result
@@ -53,7 +54,7 @@ def emit_download(msg: str) -> None:
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="PortOS ltx-2-mlx bridge")
-    p.add_argument("--mode", required=True, choices=["text", "image", "fflf", "extend"])
+    p.add_argument("--mode", required=True, choices=["text", "image", "fflf", "extend", "a2v"])
     p.add_argument("--prompt", required=True)
     p.add_argument("--negative-prompt", default="")
     p.add_argument("--output", required=True, help="Output .mp4 path")
@@ -85,6 +86,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--extend-frames", type=int, default=2,
                    help="Number of latent frames to add (extend mode); 1 latent ≈ 8 pixel frames")
     p.add_argument("--extend-direction", choices=["before", "after"], default="after")
+    p.add_argument("--audio", default=None, help="Source audio path (a2v mode) — WAV/MP3/etc.")
+    p.add_argument("--audio-start", type=float, default=0.0,
+                   help="Start offset in seconds into the audio file (a2v mode).")
     p.add_argument("--no-audio", action="store_true",
                    help="Strip audio from output. The dgrauet pipeline always generates A/V; "
                         "we re-mux without the audio stream when requested.")
@@ -213,6 +217,43 @@ def run_extend(args: argparse.Namespace) -> str:
     return pipe._decode_and_save_video(video_latent, audio_latent, args.output)
 
 
+def run_a2v(args: argparse.Namespace) -> str:
+    """Audio-to-video — generate a clip whose motion + audio track sync to an
+    input WAV/MP3. Two-stage pipeline (dev model + CFG at half-res, then
+    distilled-LoRA refine at full-res), so it shares the same dev_transformer +
+    distilled_lora layout as fflf — a fully-distilled-only repo will fail
+    here for the same reason it fails for fflf.
+
+    The pipeline always emits A/V; --no-audio re-muxes after to drop audio,
+    but doing that for a2v is unusual (the audio is the conditioning input).
+    --image is optional: when provided, conditions the FIRST frame the same
+    way ImageToVideoPipeline does, so motion + audio sync to a chosen still.
+    """
+    from ltx_pipelines_mlx import AudioToVideoPipeline
+    if not args.audio:
+        raise SystemExit("--audio is required for a2v mode")
+    emit_status(f"Loading A2V pipeline ({args.model})…")
+    emit_stage(1, 0, 1, "Loading model")
+    pipe = AudioToVideoPipeline(model_dir=args.model, gemma_model_id=args.gemma)
+    emit_stage(1, 1, 1, "Loaded")
+    emit_status(f"Generating A2V from {Path(args.audio).name}…")
+    return pipe.generate_and_save(
+        prompt=args.prompt,
+        output_path=args.output,
+        audio_path=args.audio,
+        image=args.image,
+        height=args.height,
+        width=args.width,
+        num_frames=args.num_frames,
+        fps=args.fps,
+        seed=args.seed,
+        stage1_steps=args.steps,
+        stage2_steps=args.stage2_steps,
+        cfg_scale=args.cfg_scale if args.cfg_scale is not None else 3.0,
+        audio_start_time=args.audio_start,
+    )
+
+
 def maybe_strip_audio(output_path: str) -> None:
     """Remux the output without the audio stream when --no-audio is set.
 
@@ -254,6 +295,7 @@ def main() -> int:
         "image": run_image,
         "fflf": run_fflf,
         "extend": run_extend,
+        "a2v": run_a2v,
     }
     runner = runners[args.mode]
     saved_path = runner(args)

@@ -31,9 +31,17 @@ import { enqueueJob, attachSseClient, cancelJob, listJobs } from '../services/me
 
 const router = Router();
 
-const sourceImageUpload = uploadSingle('sourceImage', {
-  limits: { fileSize: 50 * 1024 * 1024 },
-  fileFilter: (_req, file, cb) => cb(null, file.mimetype.startsWith('image/')),
+// Single uploader handles both sourceImage (image/fflf modes) and audioFile
+// (a2v mode). They're mutually exclusive per request — the parser keeps the
+// first matching file part and discards bytes for any other file fields, so
+// this is safe even if a malformed client sends both.
+const mediaUpload = uploadSingle(['sourceImage', 'audioFile'], {
+  limits: { fileSize: 100 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const okImage = file.fieldname === 'sourceImage' && file.mimetype.startsWith('image/');
+    const okAudio = file.fieldname === 'audioFile' && file.mimetype.startsWith('audio/');
+    cb(null, okImage || okAudio);
+  },
 });
 
 // Multipart bodies arrive as strings; coerce numerics in the schema. The
@@ -71,7 +79,7 @@ const generateBodySchema = z.object({
   lastImageFile: z.string().max(512).optional(),
   // UI mode hint — backend only uses it for logging/branching; absence
   // falls back to inferring (sourceImage→i2v, no source→t2v).
-  mode: z.enum(['text', 'image', 'fflf', 'extend']).optional(),
+  mode: z.enum(['text', 'image', 'fflf', 'extend', 'a2v']).optional(),
   // Chain N renders end-to-end: each chunk's last frame becomes the next
   // chunk's start frame, then ffmpeg concats them into one clip. 1..8 to
   // keep the worst-case wall time bounded (8 × ~5min ≈ 40min on M3 Max).
@@ -123,7 +131,7 @@ const resolveGalleryImage = (name) => {
   }
 };
 
-router.post('/', sourceImageUpload, asyncHandler(async (req, res) => {
+router.post('/', mediaUpload, asyncHandler(async (req, res) => {
   // Pre-enqueue cleanup hook: every throw path below MUST drop the multipart
   // temp upload (Multer wrote it before this handler ran). Without this a
   // configuration/validation error leaks the upload in the OS temp dir.
@@ -164,6 +172,7 @@ router.post('/', sourceImageUpload, asyncHandler(async (req, res) => {
   }
 
   let sourceImagePath = null;
+  let audioFilePath = null;
   let uploadedTempPath = null;
   if (req.file) {
     // Copy the multipart upload into a durable location under data/uploads
@@ -174,7 +183,9 @@ router.post('/', sourceImageUpload, asyncHandler(async (req, res) => {
     // restarts; the worker unlinks it on completion or cancel.
     await ensureDir(PATHS.uploads);
     const ext = extname(req.file.originalname || req.file.path) || '.bin';
-    const durablePath = join(PATHS.uploads, `video-source-${randomUUID()}${ext}`);
+    const isAudio = req.file.fieldname === 'audioFile';
+    const prefix = isAudio ? 'video-audio' : 'video-source';
+    const durablePath = join(PATHS.uploads, `${prefix}-${randomUUID()}${ext}`);
     // copyFile can throw on disk-full / permission errors. If it does we
     // need to clean up: drop the multipart temp upload AND the half-written
     // durablePath (copyFile may have created a zero-byte sentinel before
@@ -190,10 +201,25 @@ router.post('/', sourceImageUpload, asyncHandler(async (req, res) => {
       );
     }
     await unlink(req.file.path).catch(() => {});
-    sourceImagePath = durablePath;
+    if (isAudio) {
+      audioFilePath = durablePath;
+    } else {
+      sourceImagePath = durablePath;
+    }
     uploadedTempPath = durablePath;
   } else if (body.sourceImageFile) {
     sourceImagePath = resolveGalleryImage(body.sourceImageFile);
+  }
+
+  // a2v mode requires an audio upload — fail fast at the route boundary so
+  // the UI gets a clear 400 instead of a queued job that fails late on the
+  // python helper's "audio_path is required" check.
+  if (body.mode === 'a2v' && !audioFilePath) {
+    await cleanupTempUpload();
+    throw new ServerError(
+      'a2v mode requires an audioFile upload (multipart field name: audioFile).',
+      { status: 400, code: 'VIDEO_GEN_AUDIO_REQUIRED' },
+    );
   }
 
   // FFLF end-frame: gallery-pick only. Same path-traversal guard.
@@ -244,6 +270,7 @@ router.post('/', sourceImageUpload, asyncHandler(async (req, res) => {
       tiling: body.tiling || 'auto',
       disableAudio: body.disableAudio === true || body.disableAudio === 'true',
       sourceImagePath,
+      audioFilePath,
       uploadedTempPath,
       lastImagePath,
       extendFromVideoPath,
