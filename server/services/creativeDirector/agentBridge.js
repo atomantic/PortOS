@@ -78,14 +78,14 @@ async function persistAndEmit({ id, runId, record }, project, kind, sceneId) {
 }
 
 export async function enqueueTreatmentTask(project) {
-  const context = buildTreatmentPrompt(project);
+  const context = await buildTreatmentPrompt(project);
   const built = buildTaskRecord(project, 'treatment', null, context);
   return persistAndEmit(built, project, 'treatment', null);
 }
 
 export async function enqueueEvaluateTask(project, scene) {
   if (!scene) throw new Error('enqueueEvaluateTask: scene is required');
-  const context = buildEvaluatePrompt(project, scene);
+  const context = await buildEvaluatePrompt(project, scene);
   const built = buildTaskRecord(project, 'evaluate', scene, context);
   return persistAndEmit(built, project, 'evaluate', scene.sceneId);
 }
