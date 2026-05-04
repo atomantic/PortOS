@@ -236,9 +236,9 @@ async function handleRenderCompleted(projectId, sceneId, jobId) {
   await updateScene(projectId, sceneId, {
     status: 'evaluating',
     renderedJobId: jobId,
-    ...(evaluationFrames.length > 0 && { evaluationFrames }),
+    evaluationFrames,
   });
-  await enqueueEvaluateTask(fresh, { ...scene, renderedJobId: jobId, status: 'evaluating', ...(evaluationFrames.length > 0 && { evaluationFrames }) });
+  await enqueueEvaluateTask(fresh, { ...scene, renderedJobId: jobId, status: 'evaluating', evaluationFrames });
 }
 
 async function handleRenderCanceled(projectId, sceneId) {

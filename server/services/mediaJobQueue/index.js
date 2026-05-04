@@ -10,8 +10,9 @@
  *
  * Scope: gates `videoGen/local#generateVideo` (always) and
  * `imageGen/local#generateImage` (only when imageGen mode === 'local'). The
- * external/codex image-gen backends bypass the queue — they don't share the
- * MLX runtime so they can run concurrently with anything in the queue.
+ * external/codex image-gen backend runs in a separate concurrent lane — Codex
+ * jobs don't share the MLX runtime so they can run alongside GPU jobs without
+ * OOMing the machine.
  *
  * Persistence: data/media-jobs.json holds queued + running + recently-finished
  * jobs. On boot, any 'running' is reclassified as 'failed (interrupted by
@@ -75,11 +76,14 @@ export const JOB_STATUSES = Object.freeze(['queued', 'running', 'completed', 'fa
 
 export const mediaJobEvents = new EventEmitter();
 
-// Live state. Single worker → at most one job in `running` at a time. `queue`
+// Live state. GPU jobs: at most one in `running` at a time. Codex image jobs
+// (`kind === 'image' && params.mode === 'codex'`) run in a separate concurrent
+// lane (`codexRunning`) because they don't share the MLX runtime. `queue`
 // holds pending jobs in submission order. `archive` holds recently-finished
 // jobs (visible for ~24h via /api/media-jobs?status=completed).
 const queue = [];
 let running = null;
+let codexRunning = null;
 const archive = [];
 
 // jobId → entry consumed by lib/sseUtils.js#{broadcastSse,attachSseClient,
@@ -95,6 +99,7 @@ let initPromise = null;
 
 function findJob(jobId) {
   if (running && running.id === jobId) return running;
+  if (codexRunning && codexRunning.id === jobId) return codexRunning;
   const inQueue = queue.find((j) => j.id === jobId);
   if (inQueue) return inQueue;
   return archive.find((j) => j.id === jobId) || null;
@@ -107,6 +112,7 @@ export function getJob(jobId) {
 export function listJobs({ status, kind, owner } = {}) {
   const all = [
     ...(running ? [running] : []),
+    ...(codexRunning ? [codexRunning] : []),
     ...queue,
     ...archive,
   ];
@@ -141,6 +147,7 @@ async function persistImpl() {
   archive.push(...trimmedArchive);
   const live = [
     ...(running ? [running] : []),
+    ...(codexRunning ? [codexRunning] : []),
     ...queue,
     ...archive,
   ];
@@ -232,11 +239,48 @@ function startWorker() {
 
 async function drainLoop() {
   while (true) {
-    if (running || queue.length === 0) {
+    // Codex lane: runs concurrently with GPU jobs. Fire-and-forget so the loop
+    // can immediately proceed to check the GPU slot without blocking.
+    const nextCodex = !codexRunning && queue.find((j) => j.kind === 'image' && j.params?.mode === 'codex');
+    if (nextCodex) {
+      queue.splice(queue.indexOf(nextCodex), 1);
+      nextCodex.status = 'running';
+      nextCodex.startedAt = new Date().toISOString();
+      nextCodex.position = 1;
+      codexRunning = nextCodex;
+      recomputeQueuePositions();
+      persist().catch((e) => console.log(`⚠️ mediaJobQueue persist on codex start failed: ${e.message}`));
+      broadcastSse(ensureSseEntry(nextCodex.id), { type: 'started', kind: nextCodex.kind });
+      mediaJobEvents.emit('started', nextCodex);
+      console.log(`▶️  media-job [${nextCodex.id.slice(0, 8)}] codex started`);
+      runJob(nextCodex)
+        .catch((err) => {
+          console.log(`❌ media-job [${nextCodex.id.slice(0, 8)}] codex runJob threw: ${err.message}`);
+          if (nextCodex.status === 'running') {
+            nextCodex.status = 'failed';
+            nextCodex.error = `runJob threw: ${err.message}`;
+            nextCodex.completedAt = new Date().toISOString();
+            broadcastSse(ensureSseEntry(nextCodex.id), { type: 'error', error: nextCodex.error });
+            closeJobAfterDelay(sseJobs, nextCodex.id);
+            mediaJobEvents.emit('failed', nextCodex);
+          }
+        })
+        .finally(() => {
+          codexRunning = null;
+          archive.push(nextCodex);
+          recomputeQueuePositions();
+          persist().catch((e) => console.log(`⚠️ mediaJobQueue persist on codex done failed: ${e.message}`));
+        });
+    }
+
+    // GPU lane: serialized — at most one video or local-image job at a time.
+    const nonCodexPending = queue.some((j) => !(j.kind === 'image' && j.params?.mode === 'codex'));
+    if (running || !nonCodexPending) {
       await sleep(150);
       continue;
     }
-    const job = queue.shift();
+    const job = queue.find((j) => !(j.kind === 'image' && j.params?.mode === 'codex'));
+    queue.splice(queue.indexOf(job), 1);
     job.status = 'running';
     job.startedAt = new Date().toISOString();
     // The running job is always slot 1 in the overall pipeline. Without
@@ -452,7 +496,9 @@ async function runJob(job) {
   // `watchdogMs(envValue, defaultMs)` helper that parses the env-var
   // overrides. Both lived as `watchdogMs` previously and made the call
   // site easy to misread.
-  const watchdogTimeoutMs = job.kind === 'video' ? WATCHDOG_VIDEO_MS : WATCHDOG_IMAGE_MS;
+  const watchdogTimeoutMs = job.kind === 'video'
+    ? WATCHDOG_VIDEO_MS * Math.max(1, Number(safeParams.chunks) || 1)
+    : WATCHDOG_IMAGE_MS;
   watchdogTimer = setTimeout(async () => {
     // Two-stage status guard: first check stops us if the gen settled
     // before the timer fired. The await on the dynamic import below opens
@@ -464,6 +510,7 @@ async function runJob(job) {
     if (job.status !== 'running') return;
     const importer = job.kind === 'video'
       ? import('../videoGen/local.js')
+      : job.kind === 'image' && job.params?.mode === 'codex' ? import('../imageGen/codex.js')
       : job.kind === 'image' ? import('../imageGen/local.js') : null;
     const mod = importer ? await importer : null;
     if (job.status !== 'running') return;
@@ -533,10 +580,13 @@ export function enqueueJob({ kind, params, owner = null }) {
     status: 'queued',
     queuedAt: new Date().toISOString(),
     params,
-    // position counts "where you sit in the overall pipeline" — the running
-    // job (if any) occupies slot 1, then queued jobs follow. So the second
-    // submission while one is running sits at position 2.
-    position: queue.length + (running ? 1 : 0) + 1,
+    // position counts "where you sit in the overall pipeline" — a running
+    // job (GPU or Codex lane) occupies slot 1, then queued jobs follow.
+    // Use the lane-appropriate running slot so Codex jobs don't inflate
+    // their own position by counting the GPU slot as occupied (and vice-versa).
+    position: queue.length + (
+      (kind === 'image' && params?.mode === 'codex') ? (codexRunning ? 1 : 0) : (running ? 1 : 0)
+    ) + 1,
   };
   queue.push(job);
   const sseEntry = ensureSseEntry(id);
@@ -588,17 +638,19 @@ export async function cancelJob(jobId) {
     console.log(`🛑 media-job [${jobId.slice(0, 8)}] canceled (was queued)`);
     return { ok: true, status: 'canceled' };
   }
-  if (running && running.id === jobId) {
+  // Check both the GPU slot and the Codex slot for a running-cancel.
+  const runningJob = (running?.id === jobId ? running : null) ?? (codexRunning?.id === jobId ? codexRunning : null);
+  if (runningJob) {
     // Flag the job so the dispatcher's `failed` handler treats the SIGTERM-
     // induced failure as `canceled` rather than `failed`. Without this the
     // job would land in archive with status='failed' and listing by
     // status='canceled' would be empty for running cancels.
-    running.cancelRequested = true;
-    if (running.kind === 'video') {
+    runningJob.cancelRequested = true;
+    if (runningJob.kind === 'video') {
       const { cancel } = await import('../videoGen/local.js');
       cancel();
-    } else if (running.kind === 'image') {
-      if (running.params?.mode === 'codex') {
+    } else if (runningJob.kind === 'image') {
+      if (runningJob.params?.mode === 'codex') {
         const { cancel } = await import('../imageGen/codex.js');
         cancel();
       } else {
@@ -681,6 +733,7 @@ function sleep(ms) {
 export function __resetForTests() {
   queue.length = 0;
   running = null;
+  codexRunning = null;
   archive.length = 0;
   sseJobs.clear();
   workerStarted = false;

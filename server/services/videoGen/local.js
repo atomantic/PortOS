@@ -22,7 +22,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { videoGenEvents } from './events.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, PYTHON_NOISE_RE } from '../../lib/sseUtils.js';
 import { getVideoModels, getDefaultVideoModelId, getTextEncoderRepo } from '../../lib/mediaModels.js';
-import { findFfmpeg, safeUnder, generateThumbnail, optimizeForStreaming, upscaleVideo2x } from '../../lib/ffmpeg.js';
+import { findFfmpeg, findFfprobe, safeUnder, generateThumbnail, optimizeForStreaming, upscaleVideo2x } from '../../lib/ffmpeg.js';
 
 // Path to the dgrauet/ltx-2-mlx venv populated by `INSTALL_LTX2=1
 // scripts/setup-image-video.sh`. Used when a model entry has
@@ -775,8 +775,9 @@ export async function sampleEvaluationFrames(jobId, count = 5) {
   await ensureDir(PATHS.videoThumbnails);
 
   // Probe total frame count — fast metadata path first, slow counted fallback.
+  const ffprobe = await findFfprobe();
+  if (!ffprobe) return [];
   const probe = async (countFrames) => {
-    const ffprobe = ffmpeg.replace(/ffmpeg(\.exe)?$/, `ffprobe$1`);
     const args = [
       '-v', 'error',
       ...(countFrames ? ['-count_frames'] : []),
@@ -991,6 +992,13 @@ export async function deleteHistoryItem(id) {
   if (item.thumbnail) {
     const thumbFile = safeUnder(PATHS.videoThumbnails, item.thumbnail);
     if (thumbFile) await unlink(thumbFile).catch(() => {});
+  }
+  // Delete evaluation frame thumbnails written by sampleEvaluationFrames:
+  // `${jobId}-f1.jpg` … `${jobId}-f9.jpg` (max count in sampleEvaluationFrames is 5,
+  // but 9 is a safe upper bound to catch any future increase).
+  for (let i = 1; i <= 9; i++) {
+    const frameFile = safeUnder(PATHS.videoThumbnails, `${id}-f${i}.jpg`);
+    if (frameFile) await unlink(frameFile).catch(() => {});
   }
   await saveHistory(history.filter((h) => h.id !== id));
   console.log(`🗑️ Deleted video: ${item.filename}`);

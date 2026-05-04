@@ -112,7 +112,10 @@ export async function advanceAfterSceneSettled(projectId) {
     // the start route pre-flips new projects to `planning` before calling
     // startCreativeDirectorProject, so checking status here would cause
     // brand-new projects to get stuck (treatment task never enqueued).
-    if (inflightTreatment.has(projectId)) return;
+    const hasInflightTreatmentRun = (project.runs || []).some(
+      (r) => r.kind === 'treatment' && r.status !== 'completed' && r.status !== 'failed'
+    );
+    if (hasInflightTreatmentRun || inflightTreatment.has(projectId)) return;
     inflightTreatment.add(projectId);
     await updateProject(project.id, { status: 'planning' })
       .catch((e) => { inflightTreatment.delete(projectId); throw e; });

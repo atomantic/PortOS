@@ -1,10 +1,14 @@
 import { Link } from 'react-router-dom';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { updateCreativeDirectorProject } from '../../services/apiCreativeDirector.js';
 import toast from '../ui/Toast';
 
 export default function OverviewTab({ project }) {
   const [disableAudio, setDisableAudio] = useState(project.disableAudio ?? true);
+
+  useEffect(() => {
+    setDisableAudio(project.disableAudio ?? true);
+  }, [project.disableAudio]);
 
   const handleAudioToggle = async (e) => {
     const next = e.target.checked;
