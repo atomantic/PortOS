@@ -210,7 +210,7 @@ async function handleRenderCompleted(projectId, sceneId, jobId) {
     const playable = await verifyVideoPlayable(videoPath);
     if (!playable.ok) {
       console.log(`❌ CD auto-accept: video unplayable for ${jobId.slice(0, 8)}: ${playable.reason}`);
-      await handleRenderFailed(projectId, sceneId, 'video file unplayable');
+      await handleRenderFailed(projectId, sceneId, playable.reason || 'video file unplayable');
       return;
     }
     await updateScene(projectId, sceneId, {

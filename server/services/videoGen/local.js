@@ -796,7 +796,9 @@ export async function sampleEvaluationFrames(jobId, count = 5) {
   // Evenly-spaced indices, including first and last, deduped.
   const positions = total <= count
     ? Array.from({ length: total }, (_, i) => i)
-    : Array.from({ length: count }, (_, i) => Math.round((i * (total - 1)) / (count - 1)));
+    : count <= 1
+      ? [0]  // single frame: always take the first
+      : Array.from({ length: count }, (_, i) => Math.round((i * (total - 1)) / (count - 1)));
   const indices = Array.from(new Set(positions));
 
   // Build select expression. Wrap in single quotes so ffmpeg's filter parser

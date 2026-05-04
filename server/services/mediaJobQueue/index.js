@@ -237,94 +237,69 @@ function startWorker() {
   });
 }
 
-async function drainLoop() {
-  while (true) {
-    // Codex lane: runs concurrently with GPU jobs. Fire-and-forget so the loop
-    // can immediately proceed to check the GPU slot without blocking.
-    const nextCodex = !codexRunning && queue.find((j) => j.kind === 'image' && j.params?.mode === 'codex');
-    if (nextCodex) {
-      queue.splice(queue.indexOf(nextCodex), 1);
-      nextCodex.status = 'running';
-      nextCodex.startedAt = new Date().toISOString();
-      nextCodex.position = 1;
-      codexRunning = nextCodex;
-      recomputeQueuePositions();
-      persist().catch((e) => console.log(`⚠️ mediaJobQueue persist on codex start failed: ${e.message}`));
-      broadcastSse(ensureSseEntry(nextCodex.id), { type: 'started', kind: nextCodex.kind });
-      mediaJobEvents.emit('started', nextCodex);
-      console.log(`▶️  media-job [${nextCodex.id.slice(0, 8)}] codex started`);
-      runJob(nextCodex)
-        .catch((err) => {
-          console.log(`❌ media-job [${nextCodex.id.slice(0, 8)}] codex runJob threw: ${err.message}`);
-          if (nextCodex.status === 'running') {
-            nextCodex.status = 'failed';
-            nextCodex.error = `runJob threw: ${err.message}`;
-            nextCodex.completedAt = new Date().toISOString();
-            broadcastSse(ensureSseEntry(nextCodex.id), { type: 'error', error: nextCodex.error });
-            closeJobAfterDelay(sseJobs, nextCodex.id);
-            mediaJobEvents.emit('failed', nextCodex);
-          }
-        })
-        .finally(() => {
-          codexRunning = null;
-          archive.push(nextCodex);
-          recomputeQueuePositions();
-          persist().catch((e) => console.log(`⚠️ mediaJobQueue persist on codex done failed: ${e.message}`));
-        });
-    }
-
-    // GPU lane: serialized — at most one video or local-image job at a time.
-    const nonCodexPending = queue.some((j) => !(j.kind === 'image' && j.params?.mode === 'codex'));
-    if (running || !nonCodexPending) {
-      await sleep(150);
-      continue;
-    }
-    const job = queue.find((j) => !(j.kind === 'image' && j.params?.mode === 'codex'));
-    queue.splice(queue.indexOf(job), 1);
-    job.status = 'running';
-    job.startedAt = new Date().toISOString();
-    // The running job is always slot 1 in the overall pipeline. Without
-    // this, a job dequeued from position 2 (queued behind another job that
-    // just finished) would keep its old position=2 even while running, and
-    // /api/media-jobs would show "running, 2 in queue" when it's really 1.
-    job.position = 1;
+// Both lanes use fire-and-forget so the poll loop is never blocked by a
+// running job. This lets a Codex job that arrives while a GPU render is in
+// flight be picked up immediately on the next 150 ms tick instead of having
+// to wait for the entire GPU job to finish first.
+function startLaneJob(job, { isCodex }) {
+  queue.splice(queue.indexOf(job), 1);
+  job.status = 'running';
+  job.startedAt = new Date().toISOString();
+  job.position = 1;
+  if (isCodex) {
+    codexRunning = job;
+  } else {
     running = job;
-    // Recompute positions for everyone still queued AND broadcast the new
-    // position over SSE so clients listening to /:jobId/events see "you are
-    // now #2" instead of staying frozen at the original enqueue-time slot.
-    recomputeQueuePositions();
-    persist().catch((e) => console.log(`⚠️ mediaJobQueue persist on start failed: ${e.message}`));
-    broadcastSse(ensureSseEntry(job.id), { type: 'started', kind: job.kind });
-    mediaJobEvents.emit('started', job);
-    console.log(`▶️  media-job [${job.id.slice(0, 8)}] ${job.kind} started`);
-    // The worker loop is a top-level fire-and-forget — if runJob throws
-    // unexpectedly (an unhandled emitter / listener edge case, etc.), an
-    // uncaught error here would terminate the loop and freeze the queue
-    // until the next enqueueJob re-armed startWorker. Catch + recover so a
-    // single bad job can't kill the worker.
+  }
+  recomputeQueuePositions();
+  persist().catch((e) => console.log(`⚠️ mediaJobQueue persist on ${isCodex ? 'codex' : 'gpu'} start failed: ${e.message}`));
+  broadcastSse(ensureSseEntry(job.id), { type: 'started', kind: job.kind });
+  mediaJobEvents.emit('started', job);
+  console.log(`▶️  media-job [${job.id.slice(0, 8)}] ${isCodex ? 'codex' : job.kind} started`);
+
+  const label = isCodex ? 'codex' : job.kind;
+  (async () => {
     try {
       await runJob(job);
     } catch (err) {
-      console.log(`❌ media-job [${job.id.slice(0, 8)}] runJob threw: ${err.message}`);
+      // runJob threw before its own terminal handlers ran (e.g. PYTHON
+      // not configured). Recover so a single bad job can't freeze its lane.
+      console.log(`❌ media-job [${job.id.slice(0, 8)}] ${label} runJob threw: ${err.message}`);
       if (job.status === 'running') {
         job.status = 'failed';
         job.error = `runJob threw: ${err.message}`;
         job.completedAt = new Date().toISOString();
         broadcastSse(ensureSseEntry(job.id), { type: 'error', error: job.error });
-        // Mirror the in-job failed path: schedule SSE cleanup so this rare
-        // recovery doesn't leak the sseJobs entry + open clients forever.
         closeJobAfterDelay(sseJobs, job.id);
         mediaJobEvents.emit('failed', job);
       }
     }
-    running = null;
+    if (isCodex) {
+      codexRunning = null;
+    } else {
+      running = null;
+    }
     archive.push(job);
-    // Now that running is cleared, every queued job has shifted up one slot.
-    // Recompute immediately so /api/media-jobs and any subsequent persist()
-    // see accurate positions even before the next dequeue, and broadcast
-    // the new position to each waiting client.
     recomputeQueuePositions();
-    persist().catch((e) => console.log(`⚠️ mediaJobQueue persist on done failed: ${e.message}`));
+    persist().catch((e) => console.log(`⚠️ mediaJobQueue persist on ${label} done failed: ${e.message}`));
+  })();
+}
+
+async function drainLoop() {
+  while (true) {
+    // Codex lane: concurrent with GPU lane.
+    if (!codexRunning) {
+      const nextCodex = queue.find((j) => j.kind === 'image' && j.params?.mode === 'codex');
+      if (nextCodex) startLaneJob(nextCodex, { isCodex: true });
+    }
+
+    // GPU lane: serialized — at most one video or local-image job at a time.
+    if (!running) {
+      const nextGpu = queue.find((j) => !(j.kind === 'image' && j.params?.mode === 'codex'));
+      if (nextGpu) startLaneJob(nextGpu, { isCodex: false });
+    }
+
+    await sleep(150);
   }
 }
 
@@ -334,7 +309,20 @@ async function drainLoop() {
 // /:jobId/events would keep showing the position from its original enqueue
 // frame even after the line ahead of it cleared.
 function recomputeQueuePositions() {
-  queue.forEach((q, i) => {
+  const isCodexJob = (j) => j.kind === 'image' && j.params?.mode === 'codex';
+  const codexJobs = queue.filter(isCodexJob);
+  const gpuJobs = queue.filter((j) => !isCodexJob(j));
+
+  codexJobs.forEach((q, i) => {
+    const newPosition = i + 1 + (codexRunning ? 1 : 0);
+    if (q.position !== newPosition) {
+      q.position = newPosition;
+      const entry = sseJobs.get(q.id);
+      if (entry) broadcastSse(entry, { type: 'queued', position: newPosition });
+    }
+  });
+
+  gpuJobs.forEach((q, i) => {
     const newPosition = i + 1 + (running ? 1 : 0);
     if (q.position !== newPosition) {
       q.position = newPosition;
@@ -580,13 +568,14 @@ export function enqueueJob({ kind, params, owner = null }) {
     status: 'queued',
     queuedAt: new Date().toISOString(),
     params,
-    // position counts "where you sit in the overall pipeline" — a running
-    // job (GPU or Codex lane) occupies slot 1, then queued jobs follow.
-    // Use the lane-appropriate running slot so Codex jobs don't inflate
-    // their own position by counting the GPU slot as occupied (and vice-versa).
-    position: queue.length + (
-      (kind === 'image' && params?.mode === 'codex') ? (codexRunning ? 1 : 0) : (running ? 1 : 0)
-    ) + 1,
+    // position counts "where you sit in your lane" — a running job in the
+    // same lane occupies slot 1, then same-lane queued jobs follow. Codex
+    // jobs only count Codex ahead-of-them; GPU jobs only count GPU jobs.
+    position: (() => {
+      const isCodex = kind === 'image' && params?.mode === 'codex';
+      const laneQueue = queue.filter((j) => (j.kind === 'image' && j.params?.mode === 'codex') === isCodex);
+      return laneQueue.length + (isCodex ? (codexRunning ? 1 : 0) : (running ? 1 : 0)) + 1;
+    })(),
   };
   queue.push(job);
   const sseEntry = ensureSseEntry(id);

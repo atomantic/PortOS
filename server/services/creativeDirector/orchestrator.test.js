@@ -5,6 +5,7 @@ import { presetToRenderParams } from '../../lib/creativeDirectorPresets.js';
 // Mocks for advanceAfterSceneSettled integration test.
 const mockRunSceneRender = vi.fn(async () => undefined);
 const mockUpdateProject = vi.fn(async () => undefined);
+const mockEnqueueTreatmentTask = vi.fn(async () => undefined);
 
 vi.mock('./local.js', () => ({
   getProject: vi.fn(),
@@ -20,7 +21,7 @@ vi.mock('./stitchRunner.js', () => ({
 }));
 
 vi.mock('./agentBridge.js', () => ({
-  enqueueTreatmentTask: vi.fn(async () => undefined),
+  enqueueTreatmentTask: (...args) => mockEnqueueTreatmentTask(...args),
 }));
 
 import * as localMod from './local.js';
@@ -222,6 +223,7 @@ describe('advanceAfterSceneSettled', () => {
   beforeEach(() => {
     mockRunSceneRender.mockClear();
     mockUpdateProject.mockClear();
+    mockEnqueueTreatmentTask.mockClear();
   });
 
   it('picks scene-2 (lowest-order pending) when scene-1 is accepted and scenes 2-6 are pending', async () => {
@@ -236,5 +238,65 @@ describe('advanceAfterSceneSettled', () => {
     expect(mockRunSceneRender).toHaveBeenCalledTimes(1);
     const [, sceneArg] = mockRunSceneRender.mock.calls[0];
     expect(sceneArg.sceneId).toBe('scene-2');
+  });
+
+  it('enqueues treatment when project.treatment is null and status is "planning" (start route pre-flip)', async () => {
+    // The start route sets status='planning' before calling
+    // startCreativeDirectorProject, so advanceAfterSceneSettled must NOT
+    // skip treatment enqueue just because status is already 'planning'.
+    const project = { id: 'cd-planning', status: 'planning', finalVideoId: null, treatment: null, runs: [] };
+    // getProject called twice: initial fetch + fresh fetch inside the treatment branch.
+    localMod.getProject
+      .mockResolvedValueOnce(project)
+      .mockResolvedValueOnce(project);
+
+    await advanceAfterSceneSettled(project.id);
+
+    expect(mockEnqueueTreatmentTask).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT enqueue a second treatment when a treatment run is already in-flight (persisted runs[] check)', async () => {
+    const project = {
+      id: 'cd-inflight',
+      status: 'planning',
+      finalVideoId: null,
+      treatment: null,
+      runs: [{ kind: 'treatment', status: 'running' }],
+    };
+    localMod.getProject.mockResolvedValueOnce(project);
+
+    await advanceAfterSceneSettled(project.id);
+
+    expect(mockEnqueueTreatmentTask).not.toHaveBeenCalled();
+  });
+
+  it('skips treatment when inflightTreatment in-memory set already has the projectId (concurrent call dedup)', async () => {
+    // Simulate a concurrent call by firing two advances in parallel.
+    // The first resolves slowly so the second enters while the first holds
+    // the inflightTreatment lock. Both calls see treatment=null, but only
+    // one should enqueue.
+    let firstEnqueueResolve;
+    mockEnqueueTreatmentTask.mockImplementationOnce(
+      () => new Promise((resolve) => { firstEnqueueResolve = resolve; })
+    );
+
+    const project = { id: 'cd-concurrent', status: 'rendering', finalVideoId: null, treatment: null, runs: [] };
+    // Each call to getProject returns the same base project (no inflight run).
+    localMod.getProject.mockResolvedValue(project);
+
+    const first = advanceAfterSceneSettled(project.id);
+    // Let the first call fully reach enqueueTreatmentTask before starting the
+    // second. There are 3 awaits (getProject, updateProject, getProject) before
+    // the enqueue call, so we drain via a macrotask which flushes all pending
+    // microtask chains regardless of how many levels deep they are.
+    await new Promise((r) => setTimeout(r, 10));
+
+    const second = advanceAfterSceneSettled(project.id);
+
+    // Unblock the first enqueue so both promises can settle.
+    firstEnqueueResolve();
+    await Promise.all([first, second]);
+
+    expect(mockEnqueueTreatmentTask).toHaveBeenCalledTimes(1);
   });
 });

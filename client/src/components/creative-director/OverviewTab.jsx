@@ -3,7 +3,7 @@ import { useState, useEffect } from 'react';
 import { updateCreativeDirectorProject } from '../../services/apiCreativeDirector.js';
 import toast from '../ui/Toast';
 
-export default function OverviewTab({ project }) {
+export default function OverviewTab({ project, onProjectUpdate }) {
   const [disableAudio, setDisableAudio] = useState(project.disableAudio ?? true);
 
   useEffect(() => {
@@ -14,6 +14,7 @@ export default function OverviewTab({ project }) {
     const next = e.target.checked;
     setDisableAudio(next);
     updateCreativeDirectorProject(project.id, { disableAudio: next })
+      .then(() => onProjectUpdate?.({ disableAudio: next }))
       .catch((err) => {
         setDisableAudio(!next);
         toast.error(err.message || 'Failed to update audio setting');
