@@ -56,6 +56,17 @@ function isUnderUploadsRoot(p) {
   return pathResolve(p).startsWith(uploadsRoot);
 }
 
+// Normalize `uploadedTempPaths` to an array regardless of how it arrived
+// in persisted params. Handles three cases:
+//   - Array  → use as-is (normal path)
+//   - string → wrap in array (legacy/corrupt single-string serialization)
+//   - other  → treat as empty (null, undefined, corrupt non-string)
+function normalizeTempPaths(p) {
+  if (Array.isArray(p)) return p;
+  if (typeof p === 'string' && p.length > 0) return [p];
+  return [];
+}
+
 // Defense-in-depth helper for cleaning up staged multipart uploads. Job
 // params are persisted (and replayed on boot), so a corrupted media-jobs.json
 // or a buggy caller could otherwise feed an arbitrary path into unlink().
@@ -73,6 +84,17 @@ async function safeUnlinkUpload(path) {
 
 export const JOB_KINDS = Object.freeze(['video', 'image']);
 export const JOB_STATUSES = Object.freeze(['queued', 'running', 'completed', 'failed', 'canceled']);
+
+// Returns a Promise that resolves to the gen module for the given job's
+// provider (video/local, imageGen/local, or imageGen/codex). Single source
+// of provider-dispatch truth — used by the watchdog, runJob, and cancelJob
+// so a new provider addition is one edit instead of three.
+function getGenModuleForJob(job) {
+  if (job.kind === 'video') return import('../videoGen/local.js');
+  if (job.kind === 'image' && job.params?.mode === 'codex') return import('../imageGen/codex.js');
+  if (job.kind === 'image') return import('../imageGen/local.js');
+  return Promise.resolve(null);
+}
 
 export const mediaJobEvents = new EventEmitter();
 
@@ -182,10 +204,8 @@ export async function initMediaJobQueue() {
         // never delete a file the job merely referenced (gallery image,
         // prior render, etc).
         safeUnlinkUpload(j.params?.uploadedTempPath);
-        if (Array.isArray(j.params?.uploadedTempPaths)) {
-          for (const p of j.params.uploadedTempPaths) {
-            safeUnlinkUpload(p);
-          }
+        for (const p of normalizeTempPaths(j.params?.uploadedTempPaths)) {
+          safeUnlinkUpload(p);
         }
       } else if (j.status === 'queued') {
         queue.push({ ...j });
@@ -196,8 +216,19 @@ export async function initMediaJobQueue() {
     // The persisted `position` reflects the previous process' queue layout
     // (which may have included a now-failed running job). Recompute against
     // the current queue so /api/media-jobs and the initial SSE `queued`
-    // event report accurate slots.
-    queue.forEach((q, i) => { q.position = i + 1; });
+    // event report accurate slots. Positions are lane-scoped: Codex image
+    // jobs and GPU jobs each get their own counter so a queued Codex job
+    // behind a running GPU job is restored as position 1 (not position 2).
+    const isCodexJob = (j) => j.kind === 'image' && j.params?.mode === 'codex';
+    let codexCounter = 0;
+    let gpuCounter = 0;
+    for (const q of queue) {
+      if (isCodexJob(q)) {
+        q.position = ++codexCounter;
+      } else {
+        q.position = ++gpuCounter;
+      }
+    }
     if (persistedJobs.length) {
       console.log(`📦 mediaJobQueue restored: ${queue.length} queued, ${archive.length} archived`);
     }
@@ -496,11 +527,7 @@ async function runJob(job) {
     // current activeProcess; once handlers.failed marks this job
     // terminal, runJob's await exits and the worker advances).
     if (job.status !== 'running') return;
-    const importer = job.kind === 'video'
-      ? import('../videoGen/local.js')
-      : job.kind === 'image' && job.params?.mode === 'codex' ? import('../imageGen/codex.js')
-      : job.kind === 'image' ? import('../imageGen/local.js') : null;
-    const mod = importer ? await importer : null;
+    const mod = await getGenModuleForJob(job);
     if (job.status !== 'running') return;
     console.log(`⏱️ media-job [${job.id.slice(0, 8)}] watchdog fired after ${watchdogTimeoutMs}ms — marking failed`);
     // Cancel BEFORE marking failed — that ordering keeps the SIGTERM
@@ -513,24 +540,14 @@ async function runJob(job) {
   watchdogTimer.unref?.();
 
   try {
-    if (job.kind === 'video') {
-      if (safeParams.chunks > 1) {
-        const { generateChainedVideo } = await import('../videoGen/local.js');
-        await generateChainedVideo({ ...safeParams, jobId: job.id });
-      } else {
-        const { generateVideo } = await import('../videoGen/local.js');
-        await generateVideo({ ...safeParams, jobId: job.id });
-      }
-    } else if (job.kind === 'image') {
-      if (safeParams.mode === 'codex') {
-        const { generateImage } = await import('../imageGen/codex.js');
-        await generateImage({ ...safeParams, jobId: job.id });
-      } else {
-        const { generateImage } = await import('../imageGen/local.js');
-        await generateImage({ ...safeParams, jobId: job.id });
-      }
+    const mod = await getGenModuleForJob(job);
+    if (!mod) throw new Error(`Unknown job kind: ${job.kind}`);
+    if (job.kind === 'video' && safeParams.chunks > 1) {
+      await mod.generateChainedVideo({ ...safeParams, jobId: job.id });
+    } else if (job.kind === 'video') {
+      await mod.generateVideo({ ...safeParams, jobId: job.id });
     } else {
-      throw new Error(`Unknown job kind: ${job.kind}`);
+      await mod.generateImage({ ...safeParams, jobId: job.id });
     }
   } catch (err) {
     // generateVideo / generateChainedVideo / generateImage threw before
@@ -540,10 +557,8 @@ async function runJob(job) {
     // safeUnlinkUpload constrains the delete to PATHS.uploads as
     // defense-in-depth against corrupted persisted params.
     await safeUnlinkUpload(job.params?.uploadedTempPath);
-    if (Array.isArray(job.params?.uploadedTempPaths)) {
-      for (const p of job.params.uploadedTempPaths) {
-        await safeUnlinkUpload(p);
-      }
+    for (const p of normalizeTempPaths(job.params?.uploadedTempPaths)) {
+      await safeUnlinkUpload(p);
     }
     handlers.failed({ error: err.message });
   }
@@ -598,10 +613,8 @@ export async function cancelJob(jobId) {
     // uploads dir doesn't accumulate. safeUnlinkUpload constrains the
     // delete to PATHS.uploads.
     await safeUnlinkUpload(job.params?.uploadedTempPath);
-    if (Array.isArray(job.params?.uploadedTempPaths)) {
-      for (const p of job.params.uploadedTempPaths) {
-        await safeUnlinkUpload(p);
-      }
+    for (const p of normalizeTempPaths(job.params?.uploadedTempPaths)) {
+      await safeUnlinkUpload(p);
     }
     job.status = 'canceled';
     // Persist the cancel reason on the job so a late SSE reconnect (after
@@ -635,18 +648,8 @@ export async function cancelJob(jobId) {
     // job would land in archive with status='failed' and listing by
     // status='canceled' would be empty for running cancels.
     runningJob.cancelRequested = true;
-    if (runningJob.kind === 'video') {
-      const { cancel } = await import('../videoGen/local.js');
-      cancel();
-    } else if (runningJob.kind === 'image') {
-      if (runningJob.params?.mode === 'codex') {
-        const { cancel } = await import('../imageGen/codex.js');
-        cancel();
-      } else {
-        const { cancel } = await import('../imageGen/local.js');
-        cancel();
-      }
-    }
+    const mod = await getGenModuleForJob(runningJob);
+    if (mod?.cancel) mod.cancel();
     console.log(`🛑 media-job [${jobId.slice(0, 8)}] cancel signal sent (was running)`);
     return { ok: true, status: 'canceling' };
   }

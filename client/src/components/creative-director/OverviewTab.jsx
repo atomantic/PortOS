@@ -4,13 +4,13 @@ import { updateCreativeDirectorProject } from '../../services/apiCreativeDirecto
 import toast from '../ui/Toast';
 
 export default function OverviewTab({ project, onProjectUpdate }) {
-  const [disableAudio, setDisableAudio] = useState(project.disableAudio ?? true);
+  const [disableAudio, setDisableAudio] = useState(project.disableAudio === true);
 
   useEffect(() => {
-    setDisableAudio(project.disableAudio ?? true);
+    setDisableAudio(project.disableAudio === true);
   }, [project.disableAudio]);
 
-  const handleAudioToggle = async (e) => {
+  const handleAudioToggle = (e) => {
     const next = e.target.checked;
     setDisableAudio(next);
     updateCreativeDirectorProject(project.id, { disableAudio: next })

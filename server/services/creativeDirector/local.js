@@ -42,7 +42,7 @@ export async function getProject(id) {
   return all.find((p) => p.id === id) || null;
 }
 
-export async function createProject({ name, aspectRatio, quality, modelId, targetDurationSeconds, styleSpec = '', startingImageFile = null, userStory = null, disableAudio = false, autoAcceptScenes = false }) {
+export async function createProject({ name, aspectRatio, quality, modelId, targetDurationSeconds, styleSpec = '', startingImageFile = null, userStory = null, disableAudio = true, autoAcceptScenes = false }) {
   const id = `cd-${randomUUID()}`;
   const now = new Date().toISOString();
 

@@ -232,7 +232,10 @@ async function handleRenderCompleted(projectId, sceneId, jobId) {
     await advanceAfterSceneSettled(projectId);
     return;
   }
-  const evaluationFrames = await sampleEvaluationFrames(jobId);
+  const evaluationFrames = await sampleEvaluationFrames(jobId).catch((err) => {
+    console.error(`❌ CD sampleEvaluationFrames failed for ${jobId.slice(0, 8)}: ${err.message}`);
+    return [];
+  });
   await updateScene(projectId, sceneId, {
     status: 'evaluating',
     renderedJobId: jobId,

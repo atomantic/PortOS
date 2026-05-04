@@ -22,7 +22,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { videoGenEvents } from './events.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, PYTHON_NOISE_RE } from '../../lib/sseUtils.js';
 import { getVideoModels, getDefaultVideoModelId, getTextEncoderRepo } from '../../lib/mediaModels.js';
-import { findFfmpeg, findFfprobe, safeUnder, generateThumbnail, optimizeForStreaming, upscaleVideo2x } from '../../lib/ffmpeg.js';
+import { findFfmpeg, safeUnder, generateThumbnail, optimizeForStreaming, upscaleVideo2x, extractEvaluationFrames } from '../../lib/ffmpeg.js';
 
 // Path to the dgrauet/ltx-2-mlx venv populated by `INSTALL_LTX2=1
 // scripts/setup-image-video.sh`. Used when a model entry has
@@ -757,71 +757,15 @@ export async function extractLastFrame(historyId) {
 }
 
 // Sample N evenly-spaced frames from a video for multi-frame LLM evaluation.
-// Returns an array of thumbnail basenames written to PATHS.videoThumbnails,
-// named `<jobId>-f<N>.jpg` (1-indexed in timeline order). Returns [] when
-// ffmpeg/ffprobe is missing, the video has no readable frame count, or the
-// extraction fails — callers fall back to the single-thumbnail prompt path.
-//
-// The select-filter approach uses one ffmpeg invocation rather than N spawns
-// (5 seeks is slower than one pass with a compound select expression). The
-// `-vsync vfr` flag prevents the image2 muxer from padding output to input
-// fps (which would re-emit each matching frame repeatedly, breaking the 1:1
-// frame-to-file mapping).
+// Thin wrapper around the canonical lib/ffmpeg.js helper `extractEvaluationFrames`
+// that derives the video path from the jobId so call-sites don't need to know
+// the storage layout. Returns [] on any failure — callers fall back to the
+// single-thumbnail prompt path.
 export async function sampleEvaluationFrames(jobId, count = 5) {
   const videoPath = join(PATHS.videos, `${jobId}.mp4`);
   if (!existsSync(videoPath)) return [];
-  const ffmpeg = await findFfmpeg();
-  if (!ffmpeg) return [];
-  await ensureDir(PATHS.videoThumbnails);
-
-  // Probe total frame count — fast metadata path first, slow counted fallback.
-  const ffprobe = await findFfprobe();
-  if (!ffprobe) return [];
-  const probe = async (countFrames) => {
-    const args = [
-      '-v', 'error',
-      ...(countFrames ? ['-count_frames'] : []),
-      '-select_streams', 'v:0',
-      '-show_entries', `stream=${countFrames ? 'nb_read_frames' : 'nb_frames'}`,
-      '-of', 'default=nokey=1:noprint_wrappers=1',
-      videoPath,
-    ];
-    const { stdout } = await execFileAsync(ffprobe, args, { timeout: 15000 }).catch(() => ({ stdout: '' }));
-    const n = parseInt((stdout || '').trim(), 10);
-    return Number.isFinite(n) && n > 0 ? n : null;
-  };
-  const total = (await probe(false)) ?? (await probe(true));
-  if (!total || total < 1) return [];
-
-  // Evenly-spaced indices, including first and last, deduped.
-  const positions = total <= count
-    ? Array.from({ length: total }, (_, i) => i)
-    : count <= 1
-      ? [0]  // single frame: always take the first
-      : Array.from({ length: count }, (_, i) => Math.round((i * (total - 1)) / (count - 1)));
-  const indices = Array.from(new Set(positions));
-
-  // Build select expression. Wrap in single quotes so ffmpeg's filter parser
-  // treats commas inside `eq(n,X)` as expression args, not filter-chain
-  // separators. Use `-vsync vfr` so image2 muxer emits exactly one file per
-  // matched frame without fps-padding repeats.
-  const expr = indices.map((i) => `eq(n,${i})`).join('+');
-  const outPattern = join(PATHS.videoThumbnails, `${jobId}-f%d.jpg`);
-  const ok = await new Promise((resolve) => {
-    const proc = spawn(ffmpeg, [
-      '-i', videoPath,
-      '-vf', `select='${expr}'`,
-      '-vsync', 'vfr',
-      '-q:v', '5',
-      '-y',
-      outPattern,
-    ], { stdio: 'ignore' });
-    proc.on('close', (code) => resolve(code === 0));
-    proc.on('error', () => resolve(false));
-  });
-  if (!ok) return [];
-  const filenames = indices.map((_, i) => `${jobId}-f${i + 1}.jpg`);
-  console.log(`🎞️ CD sampled ${filenames.length} evaluation frames for ${jobId.slice(0, 8)}`);
+  const filenames = await extractEvaluationFrames(videoPath, jobId, count);
+  if (filenames.length) console.log(`🎞️ CD sampled ${filenames.length} evaluation frames for ${jobId.slice(0, 8)}`);
   return filenames;
 }
 

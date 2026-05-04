@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Bot } from 'lucide-react';
 import { extractKind } from './ActiveAgentsBanner.jsx';
@@ -9,6 +10,34 @@ const STATUS_BADGE = {
   accepted: 'bg-port-success/30 text-port-success',
   failed: 'bg-port-error/30 text-port-error',
 };
+
+// Renders the preview area for a scene that has a rendered video.
+// Tries the thumbnail first; if it 404s (ffmpeg missing/failed), falls back
+// to an inline <video> so the user can still inspect the render.
+function ScenePreview({ jobId, label }) {
+  const [thumbFailed, setThumbFailed] = useState(false);
+  const videoSrc = `/data/videos/${jobId}.mp4`;
+  return (
+    <a href={videoSrc} target="_blank" rel="noopener noreferrer" className="block bg-port-bg aspect-video">
+      {thumbFailed ? (
+        <video
+          src={videoSrc}
+          preload="metadata"
+          muted
+          playsInline
+          className="w-full h-full object-cover"
+        />
+      ) : (
+        <img
+          src={`/data/video-thumbnails/${jobId}.jpg`}
+          alt={label}
+          className="w-full h-full object-cover"
+          onError={() => setThumbFailed(true)}
+        />
+      )}
+    </a>
+  );
+}
 
 export default function SegmentsTab({ project, activeAgents = [] }) {
   const scenes = project.treatment?.scenes;
@@ -55,14 +84,7 @@ export default function SegmentsTab({ project, activeAgents = [] }) {
         return (
           <div key={s.sceneId} className={`bg-port-card border rounded overflow-hidden ${isInflight ? 'border-port-accent/60' : 'border-port-border'}`}>
             {s.renderedJobId ? (
-              <a href={`/data/videos/${s.renderedJobId}.mp4`} target="_blank" rel="noopener noreferrer" className="block bg-port-bg aspect-video">
-                <img
-                  src={`/data/video-thumbnails/${s.renderedJobId}.jpg`}
-                  alt={`Scene ${s.order + 1}`}
-                  className="w-full h-full object-cover"
-                  onError={(e) => { e.currentTarget.style.display = 'none'; }}
-                />
-              </a>
+              <ScenePreview jobId={s.renderedJobId} label={`Scene ${s.order + 1}`} />
             ) : (
               <div className="bg-port-bg aspect-video flex items-center justify-center text-port-text-muted text-xs">
                 {isInflight ? (
