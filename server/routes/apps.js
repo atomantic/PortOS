@@ -656,18 +656,17 @@ router.post('/:id/build', loadApp, asyncHandler(async (req, res) => {
     if (await pathExists(join(subDir, 'package.json'))) {
       const label = sub || 'root';
       console.log(`📦 Installing ${label} dependencies for ${app.name}`);
-      const INSTALL_TIMEOUT_MS = 3 * 60 * 1000; // 3 minutes
       const installResult = await new Promise((resolve) => {
-        const child = spawn(resolveCmd('npm'), ['install'], { cwd: subDir, windowsHide: true });
+        const child = spawn('npm', ['install'], { cwd: subDir, windowsHide: true, shell: IS_WIN32 });
         let stdout = '';
         let stderr = '';
         let settled = false;
-        const MAX = 16 * 1024;
+        const MAX = 64 * 1024;
         const timer = setTimeout(() => {
           if (!settled) { settled = true; child.kill('SIGTERM'); resolve({ success: false, exitCode: -1, output: `npm install timed out after ${INSTALL_TIMEOUT_MS / 1000}s` }); }
         }, INSTALL_TIMEOUT_MS);
-        child.stdout.on('data', d => { if (stdout.length < MAX) stdout += d; });
-        child.stderr.on('data', d => { if (stderr.length < MAX) stderr += d; });
+        child.stdout.on('data', d => { stdout += d; if (stdout.length > MAX) stdout = stdout.slice(-MAX); });
+        child.stderr.on('data', d => { stderr += d; if (stderr.length > MAX) stderr = stderr.slice(-MAX); });
         child.on('close', exitCode => { if (!settled) { settled = true; clearTimeout(timer); resolve({ success: exitCode === 0, exitCode, output: (stderr.trim() || stdout.trim()).slice(0, 1024) }); } });
         child.on('error', err => { if (!settled) { settled = true; clearTimeout(timer); resolve({ success: false, exitCode: -1, output: err.message }); } });
       });
@@ -679,9 +678,8 @@ router.post('/:id/build', loadApp, asyncHandler(async (req, res) => {
     }
   }
 
-  const BUILD_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
   const result = await new Promise((resolve) => {
-    const child = spawn(resolveCmd(cmd), args, { cwd: app.repoPath, windowsHide: true });
+    const child = spawn(cmd, args, { cwd: app.repoPath, windowsHide: true, shell: IS_WIN32 });
     let stdout = '';
     let stderr = '';
     let settled = false;
@@ -774,9 +772,9 @@ const ALLOWED_BUILD_CMDS = new Set([
   'cargo'       // Rust
 ]);
 
-// On Windows, Node-based CLI tools resolve to .cmd shims
-const WIN_CMD_SHIMS = new Set(['npm', 'npx']);
-const resolveCmd = (cmd) => process.platform === 'win32' && WIN_CMD_SHIMS.has(cmd) ? `${cmd}.cmd` : cmd;
+const IS_WIN32 = process.platform === 'win32';
+const INSTALL_TIMEOUT_MS = 3 * 60 * 1000;
+const BUILD_TIMEOUT_MS = 5 * 60 * 1000;
 
 // Allowlist of safe editor commands
 // Security: Only allow known-safe editor commands to prevent arbitrary code execution
