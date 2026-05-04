@@ -518,6 +518,14 @@ async function runJob(job) {
     console.log(`⚠️ media-job [${job.id.slice(0, 8)}] uploadedTempPath outside PATHS.uploads — nulled before gen invoke: ${safeParams.uploadedTempPath}`);
     safeParams.uploadedTempPath = null;
   }
+  // a2v: audioFilePath is fed straight to the python helper as --audio, so
+  // a corrupted/hand-edited persisted job that points it at /etc/secrets
+  // could make the worker open arbitrary local files. Same constraint as
+  // uploadedTempPath — null it if it doesn't resolve under PATHS.uploads.
+  if (safeParams.audioFilePath && (typeof safeParams.audioFilePath !== 'string' || !isUnderUploadsRoot(safeParams.audioFilePath))) {
+    console.log(`⚠️ media-job [${job.id.slice(0, 8)}] audioFilePath outside PATHS.uploads — nulled before gen invoke: ${safeParams.audioFilePath}`);
+    safeParams.audioFilePath = null;
+  }
   if (Array.isArray(safeParams.uploadedTempPaths)) {
     const filtered = safeParams.uploadedTempPaths.filter((p) => {
       if (typeof p === 'string' && isUnderUploadsRoot(p)) return true;

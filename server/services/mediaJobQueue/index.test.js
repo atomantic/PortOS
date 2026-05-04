@@ -255,6 +255,23 @@ describe('mediaJobQueue', () => {
     await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'completed');
   });
 
+  it('pre-gen sanitizer nulls audioFilePath that resolves outside PATHS.uploads', async () => {
+    // a2v: audioFilePath flows directly into the python helper as --audio.
+    // A hand-edited persisted job pointing it at /etc/secrets would otherwise
+    // make the worker open arbitrary local files; the same uploads-root
+    // guard applied to uploadedTempPath must apply here too.
+    const job = mediaJobQueue.enqueueJob({
+      kind: 'video',
+      params: { prompt: 'beats', mode: 'a2v', audioFilePath: '/etc/passwd' },
+    });
+    await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
+    const callArgs = stubs.generateVideo.mock.calls[0][0];
+    expect(callArgs.audioFilePath).toBeNull();
+
+    videoGenEvents.emit('completed', { generationId: job.jobId, filename: `${job.jobId}.mp4` });
+    await waitFor(() => mediaJobQueue.getJob(job.jobId).status === 'completed');
+  });
+
   it('watchdog fires and marks the job failed when gen never emits a terminal event', async () => {
     // Use a very short watchdog for this test by overriding the env var before
     // the module is loaded. Re-import the module with MEDIA_JOB_WATCHDOG_VIDEO_MS=50.

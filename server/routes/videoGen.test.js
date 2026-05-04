@@ -86,6 +86,9 @@ describe('videoGen routes', () => {
     app.use(express.json());
     app.use('/api/video-gen', videoGenRoutes);
     vi.clearAllMocks();
+    // Reset the upload holder so a test that set a pending upload but
+    // bailed before the route consumed it can't leak into the next test.
+    pendingUpload.current = null;
   });
 
   describe('GET /status', () => {
