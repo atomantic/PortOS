@@ -5,6 +5,7 @@ import toast from '../ui/Toast';
 
 export default function OverviewTab({ project, onProjectUpdate }) {
   const [disableAudio, setDisableAudio] = useState(project.disableAudio === true);
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     setDisableAudio(project.disableAudio === true);
@@ -13,12 +14,14 @@ export default function OverviewTab({ project, onProjectUpdate }) {
   const handleAudioToggle = (e) => {
     const next = e.target.checked;
     setDisableAudio(next);
+    setSaving(true);
     updateCreativeDirectorProject(project.id, { disableAudio: next })
       .then(() => onProjectUpdate?.({ disableAudio: next }))
       .catch((err) => {
         setDisableAudio(!next);
         toast.error(err.message || 'Failed to update audio setting');
-      });
+      })
+      .finally(() => setSaving(false));
   };
   const collectionLink = `/media/collections/${project.collectionId}`;
   const final = project.finalVideoId
@@ -42,6 +45,7 @@ export default function OverviewTab({ project, onProjectUpdate }) {
                 type="checkbox"
                 checked={disableAudio}
                 onChange={handleAudioToggle}
+                disabled={saving}
                 className="accent-port-accent"
               />
               <span className="text-port-text">Disable audio</span>

@@ -11,10 +11,10 @@ describe('presetToRenderParams', () => {
     }
   });
 
-  it('does not throw for legacy 1:1-small and returns same dims as 1:1', () => {
+  it('does not throw for legacy 1:1-small and returns original 384×384 dims', () => {
     const legacy = presetToRenderParams({ aspectRatio: '1:1-small', quality: 'draft', durationSeconds: 3 });
-    const current = presetToRenderParams({ aspectRatio: '1:1', quality: 'draft', durationSeconds: 3 });
-    expect(legacy).toEqual(current);
+    expect(legacy.width).toBe(384);
+    expect(legacy.height).toBe(384);
   });
 
   it('throws for truly unknown aspectRatio', () => {

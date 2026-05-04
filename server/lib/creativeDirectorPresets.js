@@ -15,7 +15,7 @@ export const ASPECT_PRESETS = Object.freeze({
   '16:9':     { width: 768, height: 432 },
   '9:16':     { width: 432, height: 768 },
   '1:1':      { width: 512, height: 512 },
-  '1:1-small': { width: 512, height: 512 }, // Legacy alias — pre-removal smoke-test fixture
+  '1:1-small': { width: 384, height: 384 }, // Legacy alias — pre-removal smoke-test fixture
 });
 
 // `steps` and `guidance` are mlx_video knobs. `fps` is the render frame

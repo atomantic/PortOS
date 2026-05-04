@@ -494,13 +494,11 @@ async function runJob(job) {
     console.log(`⚠️ media-job [${job.id.slice(0, 8)}] audioFilePath outside PATHS.uploads — nulled before gen invoke: ${safeParams.audioFilePath}`);
     safeParams.audioFilePath = null;
   }
-  if (Array.isArray(safeParams.uploadedTempPaths)) {
-    safeParams.uploadedTempPaths = safeParams.uploadedTempPaths.filter((p) => {
-      if (typeof p === 'string' && isUnderUploadsRoot(p)) return true;
-      console.log(`⚠️ media-job [${job.id.slice(0, 8)}] uploadedTempPaths entry outside PATHS.uploads — rejected before gen invoke: ${p}`);
-      return false;
-    });
-  }
+  safeParams.uploadedTempPaths = normalizeTempPaths(safeParams.uploadedTempPaths).filter((p) => {
+    if (safeUnder(PATHS.uploads, p)) return true;
+    console.log(`⚠️ media-job [${job.id.slice(0, 8)}] uploadedTempPaths entry outside PATHS.uploads — rejected before gen invoke: ${p}`);
+    return false;
+  });
 
   const emitter = job.kind === 'video' ? videoGenEvents : imageGenEvents;
   const dispatcher = makeGenDispatcher(emitter, job, handlers);

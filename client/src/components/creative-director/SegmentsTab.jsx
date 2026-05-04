@@ -1,6 +1,5 @@
-import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Bot } from 'lucide-react';
+import { Bot, ExternalLink } from 'lucide-react';
 import { extractKind } from './ActiveAgentsBanner.jsx';
 
 const STATUS_BADGE = {
@@ -12,30 +11,34 @@ const STATUS_BADGE = {
 };
 
 // Renders the preview area for a scene that has a rendered video.
-// Tries the thumbnail first; if it 404s (ffmpeg missing/failed), falls back
-// to an inline <video> so the user can still inspect the render.
+// Uses <video controls poster> so the thumbnail is shown when idle and the
+// user can play the clip in-tab without leaving the page. The browser handles
+// a missing poster (ffmpeg/thumbnail not generated) by showing its own blank
+// poster — controls remain fully accessible either way.
 function ScenePreview({ jobId, label }) {
-  const [thumbFailed, setThumbFailed] = useState(false);
   const videoSrc = `/data/videos/${jobId}.mp4`;
+  const posterSrc = `/data/video-thumbnails/${jobId}.jpg`;
   return (
-    <a href={videoSrc} target="_blank" rel="noopener noreferrer" className="block bg-port-bg aspect-video">
-      {thumbFailed ? (
-        <video
-          src={videoSrc}
-          preload="metadata"
-          muted
-          playsInline
-          className="w-full h-full object-cover"
-        />
-      ) : (
-        <img
-          src={`/data/video-thumbnails/${jobId}.jpg`}
-          alt={label}
-          className="w-full h-full object-cover"
-          onError={() => setThumbFailed(true)}
-        />
-      )}
-    </a>
+    <div className="relative bg-port-bg aspect-video">
+      <video
+        src={videoSrc}
+        poster={posterSrc}
+        controls
+        preload="metadata"
+        playsInline
+        aria-label={label}
+        className="w-full h-full object-cover"
+      />
+      <a
+        href={videoSrc}
+        target="_blank"
+        rel="noopener noreferrer"
+        title="Open video in new tab"
+        className="absolute top-1 right-1 p-1 rounded bg-black/50 text-white hover:bg-black/80"
+      >
+        <ExternalLink className="w-3 h-3" />
+      </a>
+    </div>
   );
 }
 
