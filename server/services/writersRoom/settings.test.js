@@ -64,6 +64,15 @@ describe('writers room — settings CRUD', () => {
     expect(await listSettings(id)).toEqual([]);
   });
 
+  it('rejects path-traversal-shaped work ids on every read/write helper', async () => {
+    // Mirrors the characters.js guard. Every helper that interpolates
+    // workId into the on-disk path must refuse a traversal-shaped id
+    // with a 400 before any I/O happens.
+    await expect(listSettings('../../etc')).rejects.toThrow(/work id/i);
+    await expect(createSetting('../../etc', { slugline: 'X' })).rejects.toThrow(/work id/i);
+    await expect(mergeExtractedSettings('../../etc', [{ slugline: 'X' }])).rejects.toThrow(/work id/i);
+  });
+
   it('rejects creating a setting with neither slugline nor name', async () => {
     const id = await newWork();
     await expect(createSetting(id, {})).rejects.toThrow(/slugline or a name/i);

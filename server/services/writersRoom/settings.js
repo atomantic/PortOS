@@ -13,12 +13,18 @@
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { PATHS, atomicWrite, ensureDir, readJSONFile } from '../../lib/fileUtils.js';
-import { nowIso, badRequest, notFound } from './_shared.js';
+import { nowIso, badRequest, notFound, assertValidWorkId } from './_shared.js';
 
 const SETTING_ID_RE = /^wr-setting-[0-9a-f-]+$/i;
 
 const root = () => join(PATHS.data, 'writers-room');
-const settingsFile = (workId) => join(root(), 'works', workId, 'settings.json');
+const settingsFile = (workId) => {
+  // Defense-in-depth: refuse path-traversal-shaped workIds before
+  // interpolating them into the on-disk path. Routes already validate, but
+  // this module is also called directly from analysis-merge code paths.
+  assertValidWorkId(workId);
+  return join(root(), 'works', workId, 'settings.json');
+};
 
 const EDITABLE_FIELDS = ['name', 'slugline', 'description', 'palette', 'era', 'weather', 'recurringDetails', 'notes'];
 
@@ -69,6 +75,7 @@ async function loadFile(workId) {
 }
 
 async function saveFile(workId, state) {
+  assertValidWorkId(workId);
   await ensureDir(join(root(), 'works', workId));
   await atomicWrite(settingsFile(workId), { ...state, updatedAt: nowIso() });
 }

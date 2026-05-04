@@ -15,12 +15,19 @@
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { PATHS, atomicWrite, ensureDir, readJSONFile } from '../../lib/fileUtils.js';
-import { nowIso, badRequest, notFound } from './_shared.js';
+import { nowIso, badRequest, notFound, assertValidWorkId } from './_shared.js';
 
 const CHAR_ID_RE = /^wr-char-[0-9a-f-]+$/i;
 
 const root = () => join(PATHS.data, 'writers-room');
-const charsFile = (workId) => join(root(), 'works', workId, 'characters.json');
+const charsFile = (workId) => {
+  // Defense-in-depth: the route layer validates the URL parameter, but this
+  // module is also imported directly (e.g. by mergeExtractedCharacters from
+  // the analysis pipeline). Refusing path-traversal-shaped ids here makes
+  // workId-as-filesystem-path safe regardless of caller.
+  assertValidWorkId(workId);
+  return join(root(), 'works', workId, 'characters.json');
+};
 
 const EDITABLE_FIELDS = ['name', 'aliases', 'role', 'physicalDescription', 'personality', 'background', 'notes'];
 
@@ -61,6 +68,7 @@ async function loadFile(workId) {
 }
 
 async function saveFile(workId, state) {
+  assertValidWorkId(workId);
   await ensureDir(join(root(), 'works', workId));
   await atomicWrite(charsFile(workId), { ...state, updatedAt: nowIso() });
 }

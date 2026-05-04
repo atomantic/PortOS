@@ -16,7 +16,7 @@ import { ANALYSIS_KINDS } from '../../lib/writersRoomPresets.js';
 import { getWorkWithBody } from './local.js';
 import { listCharacters, mergeExtractedCharacters } from './characters.js';
 import { listSettings, mergeExtractedSettings } from './settings.js';
-import { nowIso, badRequest, notFound } from './_shared.js';
+import { nowIso, badRequest, notFound, assertValidWorkId } from './_shared.js';
 
 export { ANALYSIS_KINDS };
 
@@ -34,7 +34,13 @@ const isValidAnalysisId = (id) => typeof id === 'string' && ANALYSIS_KINDS.inclu
 const LEGACY_ANALYSIS_ID_RE = /^wr-analysis-[0-9a-f-]+$/i;
 
 const root = () => join(PATHS.data, 'writers-room');
-const analysisDir = (workId) => join(root(), 'works', workId, 'analysis');
+const analysisDir = (workId) => {
+  // Defense-in-depth: refuse path-traversal-shaped workIds before
+  // interpolating them into the on-disk path. Mirrors the guard in
+  // characters.js / settings.js.
+  assertValidWorkId(workId);
+  return join(root(), 'works', workId, 'analysis');
+};
 const analysisPath = (workId, id) => join(analysisDir(workId), `${id}.json`);
 
 // ---------- LLM invocation ----------

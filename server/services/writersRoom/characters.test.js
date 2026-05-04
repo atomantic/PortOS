@@ -42,6 +42,15 @@ describe('writers room — characters CRUD', () => {
     expect(await listCharacters(id)).toEqual([]);
   });
 
+  it('rejects path-traversal-shaped work ids on every read/write helper', async () => {
+    // Every public helper interpolates workId into an on-disk path; a
+    // crafted id like '../../etc' must be refused with a 400 before any
+    // filesystem access. This protects callers that bypass the route layer.
+    await expect(listCharacters('../../etc')).rejects.toThrow(/work id/i);
+    await expect(createCharacter('../../etc', { name: 'X' })).rejects.toThrow(/work id/i);
+    await expect(mergeExtractedCharacters('../../etc', [{ name: 'X' }])).rejects.toThrow(/work id/i);
+  });
+
   it('rejects creating without a name', async () => {
     const id = await newWork();
     await expect(createCharacter(id, { name: '   ' })).rejects.toThrow(/name required/i);
