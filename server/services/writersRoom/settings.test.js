@@ -188,6 +188,36 @@ describe('writers room — settings merge', () => {
     expect(updated.firstAppearance).toBe('Chapter 2');
   });
 
+  it('back-fills slugline on a name-only existing setting when extraction supplies one', async () => {
+    // User created a setting via name only ("The Atrium"). A later analysis
+    // pass extracts the same place with a slugline. The merge MUST
+    // back-fill `slugline` so storyboard scenes can match this entry by
+    // slugline; otherwise setting injection silently fails.
+    const id = await newWork();
+    const s = await createSetting(id, { name: 'The Atrium' });
+    expect(s.slugline).toBe('');
+    const merged = await mergeExtractedSettings(id, [{
+      slugline: 'INT. THE ATRIUM — DAY',
+      name: 'The Atrium',
+      description: 'glass dome, copper rails',
+    }]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].slugline).toBe('INT. THE ATRIUM — DAY');
+    expect(merged[0].description).toBe('glass dome, copper rails');
+  });
+
+  it('re-indexes after slugline back-fill so a later batch entry keyed by slugline matches', async () => {
+    const id = await newWork();
+    await createSetting(id, { name: 'The Vault' });
+    const merged = await mergeExtractedSettings(id, [
+      { slugline: 'INT. THE VAULT — NIGHT', name: 'The Vault', description: 'heavy steel doors' },
+      { slugline: 'INT. THE VAULT — NIGHT', palette: 'pewter and oxblood' },
+    ]);
+    expect(merged).toHaveLength(1);
+    expect(merged[0].description).toBe('heavy steel doors');
+    expect(merged[0].palette).toBe('pewter and oxblood');
+  });
+
   it('does not duplicate within a single batch when a new entry is referenced by both slugline and name', async () => {
     // Within ONE merge call, the AI introduces a new setting with both
     // slugline and a distinct name, then a later entry in the same batch

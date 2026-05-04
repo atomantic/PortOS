@@ -197,6 +197,15 @@ export async function mergeExtractedSettings(workId, extracted) {
         // same batch keyed by that name resolves to this record.
         indexSetting(existing);
       }
+      // Back-fill slugline when the existing record was created name-only
+      // (typical for hand-edited entries). Without this, a storyboard scene's
+      // slugline can never match this setting record so setting injection
+      // silently no-ops even though the merge correctly de-duped. Re-index
+      // afterward so later batch entries keyed by the new slugline resolve.
+      if (isBlank(existing.slugline) && !isBlank(incoming.slugline)) {
+        existing.slugline = String(incoming.slugline).trim();
+        indexSetting(existing);
+      }
       existing.firstAppearance = incoming.firstAppearance ?? existing.firstAppearance ?? null;
       existing.evidence = Array.isArray(incoming.evidence) ? incoming.evidence : (existing.evidence || []);
       existing.missingFromProse = Array.isArray(incoming.missingFromProse) ? incoming.missingFromProse : [];

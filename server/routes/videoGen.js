@@ -273,7 +273,11 @@ router.post('/last-frame/:id', asyncHandler(async (req, res) => {
   res.json(await extractLastFrame(req.params.id));
 }));
 
-const historyIdSchema = z.string().regex(/^[a-f0-9-]{36}$/i, 'invalid history id');
+// History ids are produced by crypto.randomUUID(), so validate them as
+// proper UUIDs rather than the looser /^[a-f0-9-]{36}$/ pattern (which
+// happily accepts e.g. 36 hyphens). Matches the .uuid() usage in the
+// other route schemas.
+const historyIdSchema = z.string().uuid('invalid history id');
 
 const failValidation = (parsed) => {
   throw new ServerError(`Validation failed: ${parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join(', ')}`, { status: 400, code: 'VALIDATION_ERROR' });
