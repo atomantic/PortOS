@@ -2,6 +2,12 @@ import { describe, it, expect, vi } from 'vitest';
 import { Readable } from 'stream';
 import { uploadSingle } from './multipart.js';
 
+// Mock fs/promises.unlink so the TOO_MANY_FILES test can assert that the
+// already-finalized first temp file is unlinked when the parser rejects
+// the second accepted file part. Without this assertion the regression
+// would silently reintroduce the /tmp leak the guard was added to fix.
+vi.mock('fs/promises', () => ({ unlink: vi.fn(async () => {}) }));
+
 vi.mock('fs', () => ({
   createWriteStream: () => {
     const chunks = [];
@@ -139,14 +145,16 @@ describe('uploadSingle multipart parser', () => {
     vi.doUnmock('fs');
   });
 
-  it('rejects a second accepted file part (TOO_MANY_FILES) without leaking the first temp file', async () => {
+  it('rejects a second accepted file part (TOO_MANY_FILES) and unlinks the first temp file', async () => {
     // With multi-fieldname uploads (e.g. videoGen's sourceImage|audioFile),
     // a malicious or buggy client could send both parts in one request. The
     // parser used to silently overwrite fileResult with the second file,
     // leaving the first temp file orphaned in /tmp. The TOO_MANY_FILES
     // guard rejects the request before the second part is opened, and
-    // calls fail() so the first part's writeStream gets destroyed +
-    // unlinked.
+    // fail() unlinks the already-finalized first temp file so /tmp doesn't
+    // leak on every rejected request.
+    const fsPromises = await import('fs/promises');
+    fsPromises.unlink.mockClear();
     const req = makeMultipartReq([
       { name: 'sourceImage', filename: 'a.png', contentType: 'image/png', body: Buffer.from([0x89, 0x50]) },
       { name: 'audioFile', filename: 'b.wav', contentType: 'audio/wav', body: Buffer.from([0xde, 0xad]) },
@@ -157,6 +165,13 @@ describe('uploadSingle multipart parser', () => {
     expect(captured).toBeTruthy();
     expect(captured.code).toBe('TOO_MANY_FILES');
     expect(captured.status).toBe(400);
+    // The first part's tmp file (already finalized into fileResult.path
+    // before the second part was seen) MUST be unlinked. The path is a
+    // crypto-random `upload-<uuid>.png` under os.tmpdir(); we just assert
+    // unlink was called with something matching that shape.
+    expect(fsPromises.unlink).toHaveBeenCalledWith(
+      expect.stringMatching(/upload-[0-9a-f-]+\.png$/),
+    );
   });
 
   it('rejects requests without the multipart Content-Type', async () => {
