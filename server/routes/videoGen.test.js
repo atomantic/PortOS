@@ -28,14 +28,31 @@ vi.mock('../services/mediaJobQueue/index.js', () => ({
   listJobs: vi.fn(() => []),
 }));
 
+// Pending file metadata for tests that need to simulate `req.file`. Tests set
+// this via `setPendingUpload({ ... })` before issuing the request; the mocked
+// uploadSingle middleware reads it off the holder, attaches it as req.file,
+// and clears it. Mutable wrapper avoids reaching into vi mock internals.
+const pendingUpload = { current: null };
+const setPendingUpload = (file) => { pendingUpload.current = file; };
+
 vi.mock('../lib/multipart.js', () => ({
-  // Bypass the multipart parser for unit tests — handler treats req.file as
-  // optional, and we exercise the no-upload path here.
-  uploadSingle: () => (_req, _res, next) => next(),
+  // Bypass the streaming parser. If a test set a pending upload via
+  // setPendingUpload(), inject it as req.file so the route exercises the
+  // upload-staging path; otherwise pass through (no-upload path).
+  uploadSingle: () => (req, _res, next) => {
+    if (pendingUpload.current) {
+      req.file = pendingUpload.current;
+      pendingUpload.current = null;
+    }
+    next();
+  },
 }));
 
 vi.mock('../lib/fileUtils.js', () => ({
-  PATHS: { images: '/mock/images', videos: '/mock/videos' },
+  PATHS: { images: '/mock/images', videos: '/mock/videos', uploads: '/mock/uploads' },
+  // Route awaits ensureDir before staging the upload; no-op for tests since
+  // we mock copyFile too.
+  ensureDir: vi.fn(async () => {}),
 }));
 
 vi.mock('fs', () => ({
@@ -45,7 +62,12 @@ vi.mock('fs', () => ({
   // gallery-image plumbing tests to pass.
   statSync: vi.fn(() => ({ isFile: () => true })),
 }));
-vi.mock('fs/promises', () => ({ unlink: vi.fn(async () => {}) }));
+vi.mock('fs/promises', () => ({
+  unlink: vi.fn(async () => {}),
+  // The route stages multipart uploads to data/uploads/ via copyFile. Stub
+  // the copy so tests that simulate req.file don't actually touch disk.
+  copyFile: vi.fn(async () => {}),
+}));
 
 import * as videoGenService from '../services/videoGen/local.js';
 import * as mediaJobQueue from '../services/mediaJobQueue/index.js';
@@ -238,6 +260,67 @@ describe('videoGen routes', () => {
       });
       expect(r.status).toBe(400);
       expect(r.body.error).toMatch(/mode/i);
+    });
+
+    // a2v mode requires an audio upload. Without one the route fails fast
+    // with VIDEO_GEN_AUDIO_REQUIRED (400) instead of queueing a job that
+    // would fail late on the python helper's audio_path check.
+    it('rejects a2v without an audio upload (VIDEO_GEN_AUDIO_REQUIRED)', async () => {
+      const r = await request(app).post('/api/video-gen/').send({
+        prompt: 'beat-synced dancer',
+        mode: 'a2v',
+      });
+      expect(r.status).toBe(400);
+      expect(r.body.error).toMatch(/audioFile/i);
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+    });
+
+    // Audio upload present + mode='a2v': route stages the audio under
+    // data/uploads/ and forwards the staged audioFilePath into enqueue
+    // params. The python helper picks it up via --audio.
+    it('stages audioFile upload and forwards audioFilePath for a2v mode', async () => {
+      setPendingUpload({
+        fieldname: 'audioFile',
+        path: '/tmp/upload-fake.wav',
+        originalname: 'beats.wav',
+        mimetype: 'audio/wav',
+        size: 1234,
+      });
+      const r = await request(app).post('/api/video-gen/').send({
+        prompt: 'beat-synced dancer',
+        mode: 'a2v',
+      });
+      expect(r.status).toBe(200);
+      expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'video',
+        params: expect.objectContaining({
+          mode: 'a2v',
+          // audio is staged into PATHS.uploads with the video-audio prefix
+          audioFilePath: expect.stringMatching(/\/mock\/uploads\/video-audio-.*\.wav$/),
+          // and threaded into uploadedTempPath for worker cleanup
+          uploadedTempPath: expect.stringMatching(/\/mock\/uploads\/video-audio-.*\.wav$/),
+        }),
+      }));
+    });
+
+    // Defense-in-depth: an audio upload paired with the wrong mode would
+    // otherwise be silently dropped (queued as text-to-video). Reject so
+    // the caller can't accidentally pay for the wrong generation path.
+    it('rejects audioFile upload paired with a non-a2v mode (VIDEO_GEN_AUDIO_MODE_MISMATCH)', async () => {
+      setPendingUpload({
+        fieldname: 'audioFile',
+        path: '/tmp/upload-fake.wav',
+        originalname: 'beats.wav',
+        mimetype: 'audio/wav',
+        size: 1234,
+      });
+      const r = await request(app).post('/api/video-gen/').send({
+        prompt: 'a cat',
+        mode: 'text',
+      });
+      expect(r.status).toBe(400);
+      expect(r.body.error).toMatch(/a2v/i);
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
     });
 
     // Pre-enqueue config validation: without pythonPath the queue would
