@@ -14,6 +14,8 @@
  *             frame, so when both are provided the last is ignored)
  *   - extend: pick a previous render → its last frame becomes the source
  *             image for a new image-to-video generation
+ *   - a2v:    audio-to-video (uploaded WAV/MP3 drives the video's motion +
+ *             audio track) — dgrauet/ltx2 runtime only
  *
  * Batch queue: client-side serial executor. The form's "Add to queue" button
  * appends a job to the queue (preserving the current params). When no job is

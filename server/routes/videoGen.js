@@ -32,9 +32,11 @@ import { enqueueJob, attachSseClient, cancelJob, listJobs } from '../services/me
 const router = Router();
 
 // Single uploader handles both sourceImage (image/fflf modes) and audioFile
-// (a2v mode). They're mutually exclusive per request — the parser keeps the
-// first matching file part and discards bytes for any other file fields, so
-// this is safe even if a malformed client sends both.
+// (a2v mode). The UI never sends both in one request, so the parser's
+// "last matching file wins" behavior is fine in practice; a malformed client
+// that did send both would only leak the first part's tmp file (gets reaped
+// on reboot) and the route's fileFilter ensures whatever survives is the
+// correct content-type for its claimed fieldname.
 const mediaUpload = uploadSingle(['sourceImage', 'audioFile'], {
   limits: { fileSize: 100 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
