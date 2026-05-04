@@ -163,18 +163,22 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
       { status: 400, code: 'VIDEO_GEN_NOT_CONFIGURED' },
     );
   }
+  // Resolve the effective model up front — both the modelId-exists check
+  // below AND the a2v runtime guard further down need the model entry,
+  // and listVideoModels() is the kind of thing test mocks easily get out
+  // of sync if called twice.
+  const knownModels = listVideoModels();
+  const effectiveModelId = body.modelId || defaultVideoModelId();
+  const effectiveModel = knownModels.find((m) => m.id === effectiveModelId);
   // Validate modelId synchronously (when supplied). Without this the queue
   // would happily accept a typo'd modelId and fail asynchronously inside
   // the worker — leaving a persisted, doomed queue entry.
-  if (body.modelId) {
-    const known = listVideoModels();
-    if (!known.some((m) => m.id === body.modelId)) {
-      await cleanupTempUploads();
-      throw new ServerError(
-        `Unknown modelId: ${body.modelId}`,
-        { status: 400, code: 'VIDEO_GEN_UNKNOWN_MODEL' },
-      );
-    }
+  if (body.modelId && !effectiveModel) {
+    await cleanupTempUploads();
+    throw new ServerError(
+      `Unknown modelId: ${body.modelId}`,
+      { status: 400, code: 'VIDEO_GEN_UNKNOWN_MODEL' },
+    );
   }
 
   // Track every durable file we've already copied into PATHS.uploads so a
@@ -238,6 +242,18 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
     throw new ServerError(
       `audioFile upload is only valid with mode='a2v' (got mode='${body.mode || 'unset'}').`,
       { status: 400, code: 'VIDEO_GEN_AUDIO_MODE_MISMATCH' },
+    );
+  }
+  // a2v needs the dgrauet runtime — the legacy mlx_video pipeline has no
+  // audio-conditioned mode. The worker also catches this in buildArgs (with
+  // A2V_REQUIRES_LTX2), but checking here keeps the route's "fail fast
+  // before enqueue" contract so a bad modelId can't pollute the persisted
+  // queue with a doomed entry.
+  if (body.mode === 'a2v' && effectiveModel && effectiveModel.runtime !== 'ltx2') {
+    await cleanupAllStaged();
+    throw new ServerError(
+      `a2v mode requires an ltx2-runtime model. Model "${effectiveModelId}" runs on "${effectiveModel.runtime || 'mlx_video'}".`,
+      { status: 400, code: 'A2V_REQUIRES_LTX2' },
     );
   }
 
@@ -342,11 +358,8 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
   });
   // Match the legacy response shape (jobId, generationId, filename, model,
   // mode) so existing client code keeps working; add status+position for
-  // the queue. Resolve the effective model NOW — when modelId is omitted
-  // the worker will default it inside generateVideo, but the response
-  // needs to surface what the gallery / history will record.
-  const effectiveModel = body.modelId || defaultVideoModelId();
-  res.json({ jobId, generationId: jobId, filename: `${jobId}.mp4`, model: effectiveModel, mode: 'local', status, position });
+  // the queue. effectiveModelId was resolved at the top of the handler.
+  res.json({ jobId, generationId: jobId, filename: `${jobId}.mp4`, model: effectiveModelId, mode: 'local', status, position });
 }));
 
 router.get('/:jobId/events', (req, res) => {

@@ -7,7 +7,11 @@ vi.mock('../services/settings.js', () => ({
 }));
 
 vi.mock('../services/videoGen/local.js', () => ({
-  listVideoModels: vi.fn(() => [{ id: 'ltx2_unified', name: 'LTX-2 Unified' }]),
+  // The route checks `runtime` on the default model when validating a2v —
+  // include it so the a2v happy-path tests don't trip the A2V_REQUIRES_LTX2
+  // guard. Tests that need to exercise the legacy runtime override the mock
+  // per-test via mockReturnValueOnce.
+  listVideoModels: vi.fn(() => [{ id: 'ltx2_unified', name: 'LTX-2 Unified', runtime: 'ltx2' }]),
   defaultVideoModelId: vi.fn(() => 'ltx2_unified'),
   loadHistory: vi.fn(async () => []),
   deleteHistoryItem: vi.fn(async (id) => ({ ok: true, id })),
@@ -28,10 +32,11 @@ vi.mock('../services/mediaJobQueue/index.js', () => ({
   listJobs: vi.fn(() => []),
 }));
 
-// Pending file metadata for tests that need to simulate `req.file`. Tests set
-// this via `setPendingUpload({ ... })` before issuing the request; the mocked
-// uploadSingle middleware reads it off the holder, attaches it as req.file,
-// and clears it. Mutable wrapper avoids reaching into vi mock internals.
+// Pending file metadata for tests that need to simulate an upload. Tests set
+// this via `setPendingUpload({ fieldname, ... })` before issuing the request;
+// the mocked uploadFields middleware reads it off the holder, attaches it as
+// req.files keyed by fieldname, and clears it. Mutable wrapper avoids
+// reaching into vi mock internals.
 const pendingUpload = { current: null };
 const setPendingUpload = (file) => { pendingUpload.current = file; };
 
@@ -97,7 +102,7 @@ describe('videoGen routes', () => {
     it('returns the static catalog', async () => {
       const r = await request(app).get('/api/video-gen/models');
       expect(r.status).toBe(200);
-      expect(r.body).toEqual([{ id: 'ltx2_unified', name: 'LTX-2 Unified' }]);
+      expect(r.body).toEqual([{ id: 'ltx2_unified', name: 'LTX-2 Unified', runtime: 'ltx2' }]);
     });
   });
 
@@ -306,6 +311,34 @@ describe('videoGen routes', () => {
           ]),
         }),
       }));
+    });
+
+    // a2v on a non-ltx2 model would fail later inside the worker
+    // (buildArgs throws A2V_REQUIRES_LTX2). The route catches it up front so
+    // a typo / stale UI state doesn't pollute the persisted queue with a
+    // doomed entry.
+    it('rejects mode=a2v paired with a non-ltx2 modelId (A2V_REQUIRES_LTX2)', async () => {
+      // Override the default ltx2-runtime model with a legacy mlx_video entry
+      // for this single request.
+      videoGenService.listVideoModels.mockReturnValueOnce([
+        { id: 'ltx_legacy', name: 'LTX legacy', runtime: 'mlx_video' },
+      ]);
+      setPendingUpload({
+        fieldname: 'audioFile',
+        path: '/tmp/upload-fake.wav',
+        originalname: 'beats.wav',
+        mimetype: 'audio/wav',
+        size: 1234,
+      });
+      const r = await request(app).post('/api/video-gen/').send({
+        prompt: 'beat-synced dancer',
+        mode: 'a2v',
+        modelId: 'ltx_legacy',
+      });
+      expect(r.status).toBe(400);
+      expect(r.body.error).toMatch(/ltx2-runtime/i);
+      expect(r.body.code).toBe('A2V_REQUIRES_LTX2');
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
     });
 
     // Defense-in-depth: an audio upload paired with the wrong mode would
