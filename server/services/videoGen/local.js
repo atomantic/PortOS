@@ -237,7 +237,7 @@ const buildArgs = ({ pythonPath, modelId, model, prompt, negativePrompt, width, 
   return { bin: pythonPath, args };
 };
 
-export async function generateVideo({ pythonPath, prompt, negativePrompt = '', modelId = defaultVideoModelId(), width = 768, height = 512, numFrames = 121, fps = 24, steps, guidanceScale, seed, tiling = 'auto', disableAudio = false, sourceImagePath = null, uploadedTempPath = null, lastImagePath = null, extendFromVideoPath = null, mode = null, imageStrength = null, jobId: providedJobId = null }) {
+export async function generateVideo({ pythonPath, prompt, negativePrompt = '', modelId = defaultVideoModelId(), width = 768, height = 512, numFrames = 121, fps = 24, steps, guidanceScale, seed, tiling = 'auto', disableAudio = false, sourceImagePath = null, uploadedTempPath = null, uploadedTempPaths = [], lastImagePath = null, extendFromVideoPath = null, mode = null, imageStrength = null, jobId: providedJobId = null }) {
   if (!pythonPath) throw new ServerError('Python path not configured — set it in Settings > Image Gen', { status: 400, code: 'VIDEO_GEN_NOT_CONFIGURED' });
   if (!prompt?.trim()) throw new ServerError('Prompt is required', { status: 400, code: 'VALIDATION_ERROR' });
   // Single-flight is now enforced by the mediaJobQueue worker upstream — only
@@ -349,6 +349,7 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
     if (resizedSrcTempPath) unlink(resizedSrcTempPath).catch(() => {});
     if (resizedLastTempPath) unlink(resizedLastTempPath).catch(() => {});
     if (uploadedTempPath) unlink(uploadedTempPath).catch(() => {});
+    for (const p of uploadedTempPaths) unlink(p).catch(() => {});
     closeJobAfterDelay(jobs, jobId);
   });
 
@@ -421,6 +422,7 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
     // Cleanup the original multipart upload temp file too — without this,
     // every i2v request leaves a file in os.tmpdir() forever.
     if (uploadedTempPath) await unlink(uploadedTempPath).catch(() => {});
+    for (const p of uploadedTempPaths) await unlink(p).catch(() => {});
 
     if (code !== 0) {
       job.status = 'error';
@@ -538,6 +540,7 @@ export async function generateChainedVideo({ chunks, jobId: outerJobId, ...rest 
       // copy under data/uploads). Later chunks use a frame extracted from a
       // prior render, which lives under data/images.
       uploadedTempPath: i === 0 ? rest.uploadedTempPath : null,
+      uploadedTempPaths: i === 0 ? (rest.uploadedTempPaths || []) : [],
       mode: i === 0 ? firstMode : 'image',
       // After the first chunk, drop FFLF-style last image — chained continuation
       // is single-conditioned on the previous chunk's tail frame.

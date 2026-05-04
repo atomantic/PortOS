@@ -29,9 +29,9 @@ vi.mock('../services/mediaJobQueue/index.js', () => ({
 }));
 
 vi.mock('../lib/multipart.js', () => ({
-  // Bypass the multipart parser for unit tests — handler treats req.file as
-  // optional, and we exercise the no-upload path here.
-  uploadSingle: () => (_req, _res, next) => next(),
+  // Bypass the multipart parser for unit tests — the handler treats req.files
+  // as optional, and we exercise the no-upload path here.
+  uploadFields: () => (_req, _res, next) => next(),
 }));
 
 vi.mock('../lib/fileUtils.js', () => ({

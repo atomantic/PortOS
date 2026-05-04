@@ -124,11 +124,12 @@ export default function VideoGen() {
   const [sourceImageFile, setSourceImageFile] = useState(incomingSourceImage || null);
   const [sourceImageUpload, setSourceImageUpload] = useState(null);
   const [lastImageFile, setLastImageFile] = useState(null);
+  const [lastImageUpload, setLastImageUpload] = useState(null);
   const [extendFromVideoId, setExtendFromVideoId] = useState('');
   const [extendingFrame, setExtendingFrame] = useState(false);
 
-  // Image gallery for the FFLF end-frame picker (gallery only — no upload
-  // for the second image so the multipart parser stays single-file).
+  // Image gallery — used by both the start and end frame pickers so the
+  // user can pull from any prior render in either slot.
   const [imageGallery, setImageGallery] = useState([]);
 
   // Re-sync when ImageGen pipes a new image via ?sourceImageFile=...
@@ -160,9 +161,9 @@ export default function VideoGen() {
   const [showHidden, setShowHidden] = useState(false);
   const navigate = useNavigate();
 
-  // Object URL for the currently-selected upload File so we can render a
-  // real preview before the file ever hits the server. Revoked on change /
-  // unmount so the blob is released.
+  // Object URLs for the currently-selected upload Files so we can render
+  // real previews before the files ever hit the server. Revoked on change /
+  // unmount so the blobs are released.
   const [sourceUploadUrl, setSourceUploadUrl] = useState(null);
   useEffect(() => {
     if (!(sourceImageUpload instanceof File)) { setSourceUploadUrl(null); return; }
@@ -170,6 +171,13 @@ export default function VideoGen() {
     setSourceUploadUrl(url);
     return () => URL.revokeObjectURL(url);
   }, [sourceImageUpload]);
+  const [lastUploadUrl, setLastUploadUrl] = useState(null);
+  useEffect(() => {
+    if (!(lastImageUpload instanceof File)) { setLastUploadUrl(null); return; }
+    const url = URL.createObjectURL(lastImageUpload);
+    setLastUploadUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [lastImageUpload]);
 
   const refreshHistory = useCallback(() => {
     listVideoHistory().then((items) => setHistory(Array.isArray(items) ? items : [])).catch(() => {});
@@ -290,7 +298,10 @@ export default function VideoGen() {
       setSearchParams(next, { replace: true });
     }
   };
-  const clearLastImage = () => setLastImageFile(null);
+  const clearLastImage = () => {
+    setLastImageFile(null);
+    setLastImageUpload(null);
+  };
 
   // Switching mode resets the now-irrelevant fields so a stale choice from
   // a prior mode can't sneak into the next generation. (Prompt/seed/etc.
@@ -299,15 +310,15 @@ export default function VideoGen() {
     setMode(next);
     if (next === 'text') {
       clearSourceImage();
-      setLastImageFile(null);
+      clearLastImage();
       setExtendFromVideoId('');
     } else if (next === 'image') {
-      setLastImageFile(null);
+      clearLastImage();
       setExtendFromVideoId('');
     } else if (next === 'fflf') {
       setExtendFromVideoId('');
     } else if (next === 'extend') {
-      setLastImageFile(null);
+      clearLastImage();
       // Drop any source image carried over from a prior mode — extend will
       // populate sourceImageFile fresh from the picked video's last frame
       // via handleExtendPick. Without this, switching from image/fflf into
@@ -400,6 +411,7 @@ export default function VideoGen() {
         ? (sourceImageFile || '') : '',
       sourceImage: (mode === 'image' || mode === 'fflf') ? (sourceImageUpload || '') : '',
       lastImageFile: mode === 'fflf' ? (lastImageFile || '') : '',
+      lastImage: mode === 'fflf' ? (lastImageUpload || '') : '',
       extendFromVideoId: (mode === 'extend' && currentModel?.runtime === 'ltx2')
         ? (extendFromVideoId || '') : '',
       chunks: chunks > 1 ? chunks : '',
@@ -525,15 +537,18 @@ export default function VideoGen() {
   const handleEnqueue = () => {
     if (!prompt.trim() || (status && status.connected === false) || extendModeBlocked) return;
     const payload = buildGeneratePayload();
-    // Strip the File blob for snapshot — re-using a File across multiple
-    // queued submissions is fine, but we need a stable JSON-ish summary
-    // for the queue UI display. Hold the File in `_blob` separately.
-    const { sourceImage, ...summary } = payload;
+    // Strip File blobs for snapshot — re-using a File across multiple queued
+    // submissions is fine, but we need a stable JSON-ish summary for the
+    // queue UI display. Hold the Files in `_blobs` separately.
+    const { sourceImage, lastImage, ...summary } = payload;
     setQueue((q) => [...q, {
       id: newQueueId(),
       status: 'pending',
       params: summary,
-      _blob: sourceImage instanceof File ? sourceImage : null,
+      _blobs: {
+        sourceImage: sourceImage instanceof File ? sourceImage : null,
+        lastImage: lastImage instanceof File ? lastImage : null,
+      },
       enqueuedAt: Date.now(),
     }]);
     toast.success('Added to queue');
@@ -564,7 +579,8 @@ export default function VideoGen() {
     setRunningQueueId(next.id);
     setQueue((q) => q.map((item) => item.id === next.id ? { ...item, status: 'running', startedAt: Date.now() } : item));
     const payload = { ...next.params };
-    if (next._blob) payload.sourceImage = next._blob;
+    if (next._blobs?.sourceImage) payload.sourceImage = next._blobs.sourceImage;
+    if (next._blobs?.lastImage) payload.lastImage = next._blobs.lastImage;
     let busyRetry = false;
     let busyRetryTimer = null;
     runGeneration(payload).then((res) => {
@@ -619,6 +635,71 @@ export default function VideoGen() {
 
   const notConnected = status && status.connected === false;
   const canEnqueue = prompt.trim() && !notConnected && !extendModeBlocked;
+
+  // Symmetric frame picker for the FFLF + image modes. Each slot accepts
+  // EITHER a gallery filename OR a fresh upload; the preview renders
+  // whichever is currently set, and clearing either one snaps the slot back
+  // to the dual upload+gallery picker. Defined inline because it closes
+  // over imageGallery and the per-slot state — extracting it as a real
+  // component would mean prop-drilling 6+ values for no real reuse.
+  const renderFramePanel = ({
+    label,
+    file,
+    upload,
+    uploadUrl,
+    onPickGallery,
+    onUpload,
+    onClear,
+    alt,
+    advisoryNote,
+  }) => {
+    const hasSelection = !!(file || upload);
+    return (
+      <div className="border border-port-border/50 rounded-lg p-2 space-y-1.5">
+        <div className="flex items-center justify-between">
+          <span className="text-[11px] font-medium text-gray-400">{label}</span>
+          {hasSelection && (
+            <button type="button" onClick={onClear} className="text-[11px] text-port-error hover:underline">Clear</button>
+          )}
+        </div>
+        {hasSelection ? (
+          <ImagePreview
+            src={file ? `/data/images/${file}` : uploadUrl}
+            alt={alt}
+            label={file || upload?.name}
+          />
+        ) : (
+          <div className="space-y-1.5">
+            <select
+              value=""
+              onChange={(e) => onPickGallery(e.target.value || null)}
+              className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
+            >
+              <option value="">Pick from gallery…</option>
+              {imageGallery.filter((img) => !img.hidden).slice(0, 50).map((img) => (
+                <option key={img.filename} value={img.filename}>{img.filename}</option>
+              ))}
+            </select>
+            <label className="flex items-center gap-2 text-[11px] text-gray-400 cursor-pointer hover:text-white">
+              <Upload className="w-3.5 h-3.5" />
+              <span className="truncate">Upload an image</span>
+              <input
+                type="file"
+                accept="image/*"
+                onChange={(e) => onUpload(e.target.files?.[0] || null)}
+                className="hidden"
+              />
+            </label>
+          </div>
+        )}
+        {advisoryNote && (
+          <p className="text-[10px] text-gray-500 leading-snug" title={advisoryNote.title}>
+            {advisoryNote.text}
+          </p>
+        )}
+      </div>
+    );
+  };
 
   return (
     <div className="space-y-3">
@@ -722,70 +803,54 @@ export default function VideoGen() {
 
           {(mode === 'image' || mode === 'fflf') && (
             <div className={`grid gap-2 ${mode === 'fflf' ? 'grid-cols-1 sm:grid-cols-2' : 'grid-cols-1'}`}>
-              <div className="border border-port-border/50 rounded-lg p-2 space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-medium text-gray-400">
-                    {mode === 'fflf' ? 'First frame' : 'Source image'}
-                  </span>
-                  {(sourceImageFile || sourceImageUpload) && (
-                    <button type="button" onClick={clearSourceImage} className="text-[11px] text-port-error hover:underline">Clear</button>
-                  )}
-                </div>
-                {(sourceImageFile || sourceUploadUrl) ? (
-                  <ImagePreview
-                    src={sourceImageFile ? `/data/images/${sourceImageFile}` : sourceUploadUrl}
-                    alt="Source"
-                    label={sourceImageFile || sourceImageUpload?.name}
-                  />
-                ) : (
-                  <label className="flex items-center gap-2 text-[11px] text-gray-400 cursor-pointer hover:text-white">
-                    <Upload className="w-3.5 h-3.5" />
-                    <span className="truncate">Upload an image</span>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={(e) => {
-                        const file = e.target.files?.[0] || null;
-                        // Clear any gallery pick + URL param when an upload is
-                        // chosen — otherwise the preview keeps rendering the
-                        // old gallery image (src prefers sourceImageFile) while
-                        // the POST sends `req.file` from the upload, which
-                        // looks like the wrong image was used.
-                        if (file && (sourceImageFile || incomingSourceImage)) clearSourceImage();
-                        setSourceImageUpload(file);
-                      }}
-                      className="hidden"
-                    />
-                  </label>
-                )}
-              </div>
-              {mode === 'fflf' && (
-                <div className="border border-port-border/50 rounded-lg p-2 space-y-1.5">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[11px] font-medium text-gray-400">Last frame</span>
-                    {lastImageFile && (
-                      <button type="button" onClick={clearLastImage} className="text-[11px] text-port-error hover:underline">Clear</button>
-                    )}
-                  </div>
-                  {lastImageFile ? (
-                    <ImagePreview src={`/data/images/${lastImageFile}`} alt="End frame" label={lastImageFile} />
-                  ) : (
-                    <select
-                      value=""
-                      onChange={(e) => setLastImageFile(e.target.value || null)}
-                      className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
-                    >
-                      <option value="">Pick from gallery…</option>
-                      {imageGallery.filter((img) => !img.hidden).slice(0, 50).map((img) => (
-                        <option key={img.filename} value={img.filename}>{img.filename}</option>
-                      ))}
-                    </select>
-                  )}
-                  <p className="text-[10px] text-gray-500 leading-snug" title="FFLF backend support is experimental — LTX/mlx_video uses the start frame and treats the last frame as advisory.">
-                    Experimental — last frame is advisory.
-                  </p>
-                </div>
-              )}
+              {renderFramePanel({
+                label: mode === 'fflf' ? 'First frame' : 'Source image',
+                file: sourceImageFile,
+                upload: sourceImageUpload,
+                uploadUrl: sourceUploadUrl,
+                onPickGallery: (filename) => {
+                  // Switching to a gallery pick must drop any pending upload
+                  // and the deep-link URL param; otherwise the next render
+                  // would still POST the stale upload (req.files wins) while
+                  // the preview shows the gallery image.
+                  setSourceImageUpload(null);
+                  if (incomingSourceImage) {
+                    const next = new URLSearchParams(searchParams);
+                    next.delete('sourceImageFile');
+                    setSearchParams(next, { replace: true });
+                  }
+                  setSourceImageFile(filename);
+                },
+                onUpload: (file) => {
+                  // Clear any gallery pick + URL param when an upload is
+                  // chosen — otherwise the preview keeps rendering the old
+                  // gallery image while the POST sends the upload.
+                  if (file && (sourceImageFile || incomingSourceImage)) clearSourceImage();
+                  setSourceImageUpload(file);
+                },
+                onClear: clearSourceImage,
+                alt: 'Source',
+              })}
+              {mode === 'fflf' && renderFramePanel({
+                label: 'Last frame',
+                file: lastImageFile,
+                upload: lastImageUpload,
+                uploadUrl: lastUploadUrl,
+                onPickGallery: (filename) => {
+                  setLastImageUpload(null);
+                  setLastImageFile(filename);
+                },
+                onUpload: (file) => {
+                  if (file && lastImageFile) setLastImageFile(null);
+                  setLastImageUpload(file);
+                },
+                onClear: clearLastImage,
+                alt: 'End frame',
+                advisoryNote: {
+                  text: 'Experimental — last frame is advisory.',
+                  title: 'FFLF backend support is experimental — LTX/mlx_video uses the start frame and treats the last frame as advisory.',
+                },
+              })}
             </div>
           )}
 

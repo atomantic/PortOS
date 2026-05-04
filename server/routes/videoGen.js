@@ -13,7 +13,7 @@ import { randomUUID } from 'crypto';
 import { join, basename, resolve as resolvePath, sep as PATH_SEP, extname } from 'path';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { uploadSingle } from '../lib/multipart.js';
+import { uploadFields } from '../lib/multipart.js';
 import { PATHS, ensureDir } from '../lib/fileUtils.js';
 import { safeUnder } from '../lib/ffmpeg.js';
 import { getSettings } from '../services/settings.js';
@@ -31,7 +31,10 @@ import { enqueueJob, attachSseClient, cancelJob, listJobs } from '../services/me
 
 const router = Router();
 
-const sourceImageUpload = uploadSingle('sourceImage', {
+// FFLF accepts up to two image uploads (start and end frame). The 50MB cap
+// applies per-file; image-only filter rejects non-image parts up-front so a
+// stray .mp4 drag-drop can't get staged as a "source image".
+const frameImageUpload = uploadFields(['sourceImage', 'lastImage'], {
   limits: { fileSize: 50 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => cb(null, file.mimetype.startsWith('image/')),
 });
@@ -64,10 +67,10 @@ const generateBodySchema = z.object({
   tiling: z.enum(['auto', 'none', 'spatial', 'temporal']).optional(),
   disableAudio: z.union([z.boolean(), z.literal('true'), z.literal('false')]).optional(),
   sourceImageFile: z.string().max(512).optional(),
-  // FFLF mode end-frame target. Gallery-pick only (no upload field) so the
-  // multipart parser stays single-file. Users wanting a fresh end-frame
-  // image can generate or upload it via Image Gen first, then reference
-  // its basename here.
+  // Gallery-pick filename for the FFLF end-frame. The end-frame can also
+  // arrive as a multipart `lastImage` upload (handled below) — when both
+  // are present the upload wins, mirroring the sourceImage/sourceImageFile
+  // precedence on the start-frame side.
   lastImageFile: z.string().max(512).optional(),
   // UI mode hint — backend only uses it for logging/branching; absence
   // falls back to inferring (sourceImage→i2v, no source→t2v).
@@ -123,16 +126,19 @@ const resolveGalleryImage = (name) => {
   }
 };
 
-router.post('/', sourceImageUpload, asyncHandler(async (req, res) => {
-  // Pre-enqueue cleanup hook: every throw path below MUST drop the multipart
-  // temp upload (Multer wrote it before this handler ran). Without this a
-  // configuration/validation error leaks the upload in the OS temp dir.
-  const cleanupTempUpload = async () => {
-    if (req.file?.path) await unlink(req.file.path).catch(() => {});
+router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
+  // Pre-enqueue cleanup hook: every throw path below MUST drop ALL multipart
+  // temp uploads (the parser wrote them before this handler ran). Without
+  // this a configuration/validation error leaks files in the OS temp dir.
+  const uploads = req.files || {};
+  const cleanupTempUploads = async () => {
+    for (const f of Object.values(uploads)) {
+      if (f?.path) await unlink(f.path).catch(() => {});
+    }
   };
   const parsed = generateBodySchema.safeParse(req.body);
   if (!parsed.success) {
-    await cleanupTempUpload();
+    await cleanupTempUploads();
     throw new ServerError(`Validation failed: ${parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join(', ')}`, { status: 400, code: 'VALIDATION_ERROR' });
   }
   const body = parsed.data;
@@ -143,7 +149,7 @@ router.post('/', sourceImageUpload, asyncHandler(async (req, res) => {
   // surface the failure asynchronously on SSE — which then pollutes the
   // persisted queue with a doomed entry.
   if (!pythonPath) {
-    await cleanupTempUpload();
+    await cleanupTempUploads();
     throw new ServerError(
       'Local video generation is not configured (settings.imageGen.local.pythonPath is missing).',
       { status: 400, code: 'VIDEO_GEN_NOT_CONFIGURED' },
@@ -155,7 +161,7 @@ router.post('/', sourceImageUpload, asyncHandler(async (req, res) => {
   if (body.modelId) {
     const known = listVideoModels();
     if (!known.some((m) => m.id === body.modelId)) {
-      await cleanupTempUpload();
+      await cleanupTempUploads();
       throw new ServerError(
         `Unknown modelId: ${body.modelId}`,
         { status: 400, code: 'VIDEO_GEN_UNKNOWN_MODEL' },
@@ -163,41 +169,54 @@ router.post('/', sourceImageUpload, asyncHandler(async (req, res) => {
     }
   }
 
-  let sourceImagePath = null;
-  let uploadedTempPath = null;
-  if (req.file) {
-    // Copy the multipart upload into a durable location under data/uploads
-    // before enqueueing. The Multer temp file lives in the OS temp dir —
-    // which gets reaped by macOS on reboot, and might be missing entirely
-    // when the queue replays a persisted `queued` job after a server
-    // restart. Copying here gives the worker a stable path that survives
-    // restarts; the worker unlinks it on completion or cancel.
-    await ensureDir(PATHS.uploads);
-    const ext = extname(req.file.originalname || req.file.path) || '.bin';
-    const durablePath = join(PATHS.uploads, `video-source-${randomUUID()}${ext}`);
-    // copyFile can throw on disk-full / permission errors. If it does we
-    // need to clean up: drop the multipart temp upload AND the half-written
-    // durablePath (copyFile may have created a zero-byte sentinel before
-    // bailing). Without this, a failed POST leaks files in /tmp + data/uploads.
+  // Stage a multipart upload into data/uploads so the queue worker can find
+  // it after a server restart — the OS temp dir gets reaped on reboot, and a
+  // persisted `queued` job may replay long after the original POST. Worker
+  // unlinks the durable file when the job completes or cancels. Throws
+  // ServerError on copy failure (and cleans up every staged temp upload so a
+  // mid-flight failure doesn't leak files under /tmp + data/uploads).
+  const stageUploadDurable = async (file, kind) => {
+    const ext = extname(file.originalname || file.path) || '.bin';
+    const durablePath = join(PATHS.uploads, `video-${kind}-${randomUUID()}${ext}`);
     try {
-      await copyFile(req.file.path, durablePath);
+      await copyFile(file.path, durablePath);
     } catch (err) {
       await unlink(durablePath).catch(() => {});
-      await cleanupTempUpload();
+      await cleanupTempUploads();
       throw new ServerError(
         `Failed to stage upload to durable location: ${err.message}`,
         { status: 500, code: 'VIDEO_GEN_UPLOAD_STAGE_FAILED' },
       );
     }
-    await unlink(req.file.path).catch(() => {});
-    sourceImagePath = durablePath;
-    uploadedTempPath = durablePath;
+    await unlink(file.path).catch(() => {});
+    return durablePath;
+  };
+
+  // Resolution precedence on each frame side: a fresh upload always wins over
+  // a gallery filename so users can override a stale gallery pick by dropping
+  // in a new file without first clearing the picker.
+  let sourceImagePath = null;
+  let lastImagePath = null;
+  const stagedUploads = [];
+  if (uploads.sourceImage || uploads.lastImage) await ensureDir(PATHS.uploads);
+  if (uploads.sourceImage) {
+    sourceImagePath = await stageUploadDurable(uploads.sourceImage, 'source');
+    stagedUploads.push(sourceImagePath);
   } else if (body.sourceImageFile) {
     sourceImagePath = resolveGalleryImage(body.sourceImageFile);
   }
-
-  // FFLF end-frame: gallery-pick only. Same path-traversal guard.
-  const lastImagePath = body.lastImageFile ? resolveGalleryImage(body.lastImageFile) : null;
+  if (uploads.lastImage) {
+    lastImagePath = await stageUploadDurable(uploads.lastImage, 'last');
+    stagedUploads.push(lastImagePath);
+  } else if (body.lastImageFile) {
+    // Same path-traversal guard as the start frame.
+    lastImagePath = resolveGalleryImage(body.lastImageFile);
+  }
+  // Worker cleans up every staged temp file on terminal events. The legacy
+  // `uploadedTempPath` field stays single (start-frame upload, if any) so
+  // already-persisted jobs from before this route change still replay
+  // cleanly; everything else flows through the array.
+  const [uploadedTempPath = null, ...extraUploadedTempPaths] = stagedUploads;
 
   // Native extend (ltx2 runtime): resolve the history id to a video file
   // path under data/videos/ and forward it as extendFromVideoPath. Reject
@@ -245,6 +264,7 @@ router.post('/', sourceImageUpload, asyncHandler(async (req, res) => {
       disableAudio: body.disableAudio === true || body.disableAudio === 'true',
       sourceImagePath,
       uploadedTempPath,
+      uploadedTempPaths: extraUploadedTempPaths,
       lastImagePath,
       extendFromVideoPath,
       mode: body.mode,

@@ -80,6 +80,17 @@ async function safeUnlinkUpload(path) {
   await unlink(path).catch(() => {});
 }
 
+// Walks both `uploadedTempPath` (single, start-frame upload) and
+// `uploadedTempPaths` (array, additional staged uploads such as the FFLF
+// lastImage) so cleanup paths stay agnostic to which fields contributed.
+async function safeUnlinkAllUploads(params) {
+  if (!params) return;
+  await safeUnlinkUpload(params.uploadedTempPath);
+  if (Array.isArray(params.uploadedTempPaths)) {
+    for (const p of params.uploadedTempPaths) await safeUnlinkUpload(p);
+  }
+}
+
 export const JOB_KINDS = Object.freeze(['video', 'image']);
 export const JOB_STATUSES = Object.freeze(['queued', 'running', 'completed', 'failed', 'canceled']);
 
@@ -222,11 +233,11 @@ export async function initMediaJobQueue() {
         archive.push(failed);
         restartedFailedIds.push(failed.id);
         // The failed job will never reach the worker's cleanup, so any
-        // multipart upload it staged into data/uploads would leak forever.
-        // safeUnlinkUpload constrains the delete to PATHS.uploads so we
+        // multipart uploads it staged into data/uploads would leak forever.
+        // safeUnlinkAllUploads constrains each delete to PATHS.uploads so we
         // never delete a file the job merely referenced (gallery image,
         // prior render, etc).
-        safeUnlinkUpload(j.params?.uploadedTempPath);
+        safeUnlinkAllUploads(j.params);
       } else if (j.status === 'queued') {
         queue.push({ ...j });
       } else {
@@ -491,15 +502,27 @@ async function runJob(job) {
     },
   };
 
-  // Thread #1: sanitize uploadedTempPath before passing params to the gen
+  // Thread #1: sanitize uploadedTempPath(s) before passing params to the gen
   // module. Even though safeUnlinkUpload guards the *delete* path, the gen
   // module receives the raw job.params spread and could itself act on a
-  // corrupted path from a hand-edited media-jobs.json. Null it out here if
-  // it doesn't resolve under PATHS.uploads so the constraint holds end-to-end.
+  // corrupted path from a hand-edited media-jobs.json. Null/strip anything
+  // that doesn't resolve under PATHS.uploads so the constraint holds end-to-end.
   const safeParams = { ...job.params };
   if (safeParams.uploadedTempPath && (typeof safeParams.uploadedTempPath !== 'string' || !isUnderUploadsRoot(safeParams.uploadedTempPath))) {
     console.log(`⚠️ media-job [${job.id.slice(0, 8)}] uploadedTempPath outside PATHS.uploads — nulled before gen invoke: ${safeParams.uploadedTempPath}`);
     safeParams.uploadedTempPath = null;
+  }
+  if (Array.isArray(safeParams.uploadedTempPaths)) {
+    const filtered = safeParams.uploadedTempPaths.filter((p) => {
+      if (typeof p === 'string' && isUnderUploadsRoot(p)) return true;
+      console.log(`⚠️ media-job [${job.id.slice(0, 8)}] uploadedTempPaths entry outside PATHS.uploads — dropped before gen invoke: ${p}`);
+      return false;
+    });
+    safeParams.uploadedTempPaths = filtered;
+  } else if (safeParams.uploadedTempPaths != null) {
+    // Persisted as a non-array (corrupted JSON) — drop it rather than feed
+    // a non-iterable into the worker's cleanup loop.
+    safeParams.uploadedTempPaths = [];
   }
 
   const emitter = job.kind === 'video' ? videoGenEvents : imageGenEvents;
@@ -565,10 +588,10 @@ async function runJob(job) {
   } catch (err) {
     // generateVideo / generateImage threw before reaching their proc.on
     // cleanup hooks (e.g. PYTHON not configured, validation fail). Clean up
-    // multipart upload temp files the route handed us so they don't leak
-    // under data/uploads. safeUnlinkUpload constrains the delete to
-    // PATHS.uploads as defense-in-depth against corrupted persisted params.
-    await safeUnlinkUpload(job.params?.uploadedTempPath);
+    // every multipart upload temp file the route handed us so they don't
+    // leak under data/uploads. safeUnlinkAllUploads constrains each delete
+    // to PATHS.uploads as defense-in-depth against corrupted persisted params.
+    await safeUnlinkAllUploads(job.params);
     handlers.failed({ error: err.message });
   }
 
@@ -615,12 +638,12 @@ export async function cancelJob(jobId) {
   const queueIdx = queue.findIndex((j) => j.id === jobId);
   if (queueIdx >= 0) {
     const [job] = queue.splice(queueIdx, 1);
-    // Multipart uploads (e.g. /api/video-gen with an image) hand us a path
-    // staged under PATHS.uploads. If we drop the job before it starts,
-    // runJob never gets a chance to delete it — clean up here so the
-    // uploads dir doesn't accumulate. safeUnlinkUpload constrains the
-    // delete to PATHS.uploads.
-    await safeUnlinkUpload(job.params?.uploadedTempPath);
+    // Multipart uploads (e.g. /api/video-gen with an image — start frame,
+    // end frame, or both) are staged under PATHS.uploads. If we drop the
+    // job before it starts, runJob never gets a chance to delete them —
+    // clean up here so the uploads dir doesn't accumulate. Each delete is
+    // constrained to PATHS.uploads.
+    await safeUnlinkAllUploads(job.params);
     job.status = 'canceled';
     // Persist the cancel reason on the job so a late SSE reconnect (after
     // the live SSE entry was cleaned up) can synthesize the same terminal
