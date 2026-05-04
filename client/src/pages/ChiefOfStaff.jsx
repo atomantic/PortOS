@@ -40,6 +40,8 @@ import {
 } from '../components/cos';
 import { resolveDynamicAvatar } from '../components/cos/constants';
 
+const CANVAS_AVATAR_STYLES = new Set(['cyber', 'sigil', 'esoteric', 'nexus', 'muse']);
+
 export default function ChiefOfStaff() {
   const { tab } = useParams();
   const navigate = useNavigate();
@@ -416,6 +418,27 @@ export default function ChiefOfStaff() {
     el.scrollBy({ left: direction === 'left' ? -scrollAmount : scrollAmount, behavior: 'smooth' });
   }, []);
 
+  const hasCanvasAvatar = CANVAS_AVATAR_STYLES.has(avatarStyle);
+
+  const renderAvatar = (background = false) => {
+    if (avatarStyle === 'cyber') {
+      return <CyberCoSAvatar state={agentState} speaking={speaking} background={background} />;
+    }
+    if (avatarStyle === 'sigil') {
+      return <SigilCoSAvatar state={agentState} speaking={speaking} background={background} />;
+    }
+    if (avatarStyle === 'esoteric') {
+      return <EsotericCoSAvatar state={agentState} speaking={speaking} background={background} />;
+    }
+    if (avatarStyle === 'nexus') {
+      return <NexusCoSAvatar state={agentState} speaking={speaking} background={background} />;
+    }
+    if (avatarStyle === 'muse') {
+      return <MuseCoSAvatar state={agentState} speaking={speaking} background={background} />;
+    }
+    return <CoSCharacter state={agentState} speaking={speaking} />;
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -568,11 +591,11 @@ export default function ChiefOfStaff() {
           {/* Collapsible Content */}
           <div
             id="cos-agent-panel"
-            className={`${agentPanelCollapsed ? 'hidden' : 'flex'} lg:flex flex-1 min-w-0`}
+            className={`${agentPanelCollapsed ? 'hidden' : 'flex'} lg:flex min-w-0 relative overflow-hidden ${hasCanvasAvatar ? 'flex-none min-h-[180px] sm:min-h-[190px] md:min-h-[190px] lg:h-[min(460px,calc(100vh-1rem))] xl:h-[min(620px,calc(100vh-1rem))]' : 'flex-1'}`}
           >
             {/* Background Effects */}
             <div
-              className="absolute inset-0 pointer-events-none"
+              className="absolute inset-0 z-0 pointer-events-none"
               style={{
                 background: `
                   radial-gradient(circle at 50% 20%, rgba(99, 102, 241, 0.1) 0%, transparent 50%),
@@ -581,8 +604,14 @@ export default function ChiefOfStaff() {
               }}
             />
 
-            {/* Avatar Column - half width on mobile, full on desktop */}
-            <div className="flex-1 min-w-0 lg:flex-none flex flex-col items-center p-2 lg:p-8 relative z-10">
+            {hasCanvasAvatar && (
+              <div className="absolute inset-0 z-[1] -translate-x-16 -translate-y-1 sm:translate-x-0 sm:-translate-y-6 md:-translate-y-8 lg:-translate-y-28 xl:-translate-y-36">
+                {renderAvatar(true)}
+              </div>
+            )}
+
+            {/* Avatar UI overlays the full-width canvas stage for 3D styles. */}
+            <div className={`${hasCanvasAvatar ? 'absolute inset-y-0 left-0 w-[46%] lg:relative lg:inset-auto lg:w-full lg:flex-none p-2 sm:p-3 lg:p-8' : 'relative flex-1 min-w-0 lg:flex-none p-2 lg:p-8'} min-w-0 flex flex-col items-center z-10`}>
               <div className="hidden lg:block text-sm font-semibold tracking-widest uppercase text-slate-400 mb-1 font-mono">
                 Digital Assistant
               </div>
@@ -598,22 +627,12 @@ export default function ChiefOfStaff() {
                 Chief of Staff
               </h1>
 
-              {avatarStyle === 'cyber'
-                ? <CyberCoSAvatar state={agentState} speaking={speaking} />
-                : avatarStyle === 'sigil'
-                  ? <SigilCoSAvatar state={agentState} speaking={speaking} />
-                : avatarStyle === 'esoteric'
-                  ? <EsotericCoSAvatar state={agentState} speaking={speaking} />
-                : avatarStyle === 'nexus'
-                  ? <NexusCoSAvatar state={agentState} speaking={speaking} />
-                : avatarStyle === 'muse'
-                  ? <MuseCoSAvatar state={agentState} speaking={speaking} />
-                : <CoSCharacter state={agentState} speaking={speaking} />
-              }
+              {!hasCanvasAvatar && renderAvatar()}
+              {hasCanvasAvatar && <div className="flex-none h-[5.75rem] sm:h-[4rem] md:h-[3rem] lg:h-[11rem] xl:h-[12rem]" aria-hidden="true" />}
               <div className="hidden lg:block">
                 <StateLabel state={agentState} />
               </div>
-              <div className="hidden sm:block">
+              <div className={`${hasCanvasAvatar ? 'sm:-mt-4 md:-mt-6 lg:mt-0' : ''} hidden sm:block`}>
                 <StatusBubble message={statusMessage} countdown={evalCountdown} />
               </div>
               <div className="hidden lg:block">
@@ -621,7 +640,7 @@ export default function ChiefOfStaff() {
               </div>
 
               {/* Control Buttons */}
-              <div className="flex items-center gap-1.5 sm:gap-3 mt-2 lg:mt-6">
+              <div className={`${hasCanvasAvatar ? 'hidden lg:flex lg:mt-6' : 'flex mt-2 lg:mt-6'} items-center gap-1.5 sm:gap-3`}>
                 {status?.running ? (
                   <button
                     onClick={handleStop}
@@ -645,7 +664,7 @@ export default function ChiefOfStaff() {
             </div>
 
             {/* Mobile Stats Grid - shows core stats in compact 2-column layout */}
-            <div className="flex-1 grid grid-cols-2 gap-1.5 p-2 lg:hidden relative z-10 content-center">
+            <div className={`${hasCanvasAvatar ? 'ml-[46%] w-[54%] flex-none self-start content-start' : 'flex-1 content-center'} grid grid-cols-2 gap-1.5 p-2 lg:hidden relative z-10`}>
               <StatCard
                 label="Active"
                 value={activeAgentCount}
@@ -671,10 +690,10 @@ export default function ChiefOfStaff() {
                 icon={<AlertCircle className={`w-4 h-4 ${hasIssues ? 'text-port-error' : 'text-gray-500'}`} />}
                 compact
               />
-              {/* Learning Health - spans 2 columns on mobile for visibility */}
+              {/* Learning Health */}
               <button
                 onClick={() => navigate('/cos/learning')}
-                className={`col-span-2 bg-port-card/80 border rounded px-2 py-1.5 flex items-center gap-2 transition-all ${
+                className={`bg-port-card/80 border rounded px-2 py-1.5 flex items-center gap-2 transition-all ${
                   learningSummary?.status === 'critical' ? 'border-port-error shadow-md shadow-port-error/20' :
                   learningSummary?.status === 'warning' ? 'border-port-warning' :
                   'border-port-border'
@@ -689,7 +708,7 @@ export default function ChiefOfStaff() {
                 <div className="flex-1 min-w-0">
                   <div className="text-[10px] text-gray-500">Learning</div>
                   <div className="text-sm font-bold text-white flex items-center gap-2">
-                    {learningSummary?.overallSuccessRate != null ? `${learningSummary.overallSuccessRate}% success` : 'No data'}
+                    {learningSummary?.overallSuccessRate != null ? `${learningSummary.overallSuccessRate}%` : 'No data'}
                     {learningSummary?.skipped > 0 && (
                       <span className="text-[9px] text-port-error font-normal">
                         ({learningSummary.skipped} skipped)
@@ -698,6 +717,31 @@ export default function ChiefOfStaff() {
                   </div>
                 </div>
               </button>
+              {status?.running ? (
+                <button
+                  onClick={handleStop}
+                  className="bg-red-500/20 hover:bg-red-500/30 text-red-400 border border-red-400/30 rounded px-2 py-1.5 flex items-center gap-2 transition-colors min-h-[52px]"
+                  aria-label="Stop Chief of Staff agent"
+                >
+                  <Square size={16} className="shrink-0" aria-hidden="true" />
+                  <div className="flex-1 min-w-0 text-left">
+                    <div className="text-[10px] text-gray-600">Agent</div>
+                    <div className="text-sm font-bold text-red-600">Stop</div>
+                  </div>
+                </button>
+              ) : (
+                <button
+                  onClick={handleStart}
+                  className="bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-500 border border-emerald-500/30 rounded px-2 py-1.5 flex items-center gap-2 transition-colors min-h-[52px]"
+                  aria-label="Start Chief of Staff agent"
+                >
+                  <Play size={16} className="shrink-0" aria-hidden="true" />
+                  <div className="flex-1 min-w-0 text-left">
+                    <div className="text-[10px] text-emerald-600/80">Agent</div>
+                    <div className="text-sm font-bold">Start</div>
+                  </div>
+                </button>
+              )}
             </div>
           </div>
         </div>

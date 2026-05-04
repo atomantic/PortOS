@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { AGENT_STATES } from './constants';
 import CoSAvatarOrbitControls from './CoSAvatarOrbitControls';
 import CoSAvatarFrame from './CoSAvatarFrame';
+import CoSBackgroundCamera from './CoSBackgroundCamera';
 
 function SigilCore({ color, state, speaking }) {
   const coreRef = useRef();
@@ -248,7 +249,7 @@ function ScanBeam({ color, state }) {
   );
 }
 
-function Scene({ state, speaking }) {
+function Scene({ state, speaking, background }) {
   const stateConfig = AGENT_STATES[state] || AGENT_STATES.sleeping;
   const color = stateConfig.color;
 
@@ -258,6 +259,8 @@ function Scene({ state, speaking }) {
 
   return (
     <>
+      <CoSBackgroundCamera enabled={background} y={0.1} z={3.7} />
+
       <ambientLight intensity={0.08} />
       <pointLight position={[2.2, 2.8, 3.2]} intensity={0.6} color={color} />
       <pointLight position={[-2.5, -1.5, 3]} intensity={0.35} color="#8b5cf6" />
@@ -281,17 +284,16 @@ function Scene({ state, speaking }) {
   );
 }
 
-export default function SigilCoSAvatar({ state, speaking }) {
+export default function SigilCoSAvatar({ state, speaking, background = false }) {
   return (
-    <CoSAvatarFrame label="Sigil 3D avatar. Drag to rotate.">
+    <CoSAvatarFrame label="Sigil 3D avatar. Drag to rotate." background={background}>
       <Canvas
         camera={{ position: [0, 0.1, 3.7], fov: 45 }}
-        style={{ background: 'transparent' }}
+        style={{ width: '100%', height: '100%', background: 'transparent' }}
         gl={{ alpha: true, antialias: true }}
       >
-        <Scene state={state} speaking={speaking} />
+        <Scene state={state} speaking={speaking} background={background} />
       </Canvas>
     </CoSAvatarFrame>
   );
 }
-
