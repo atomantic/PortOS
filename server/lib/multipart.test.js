@@ -171,6 +171,28 @@ describe('multipart parser', () => {
     expect(req.files?.lastImage).toBeUndefined();
   });
 
+  it('exposes fieldname on the fileFilter meta so per-field MIME rules work', async () => {
+    // Regression: videoGen.js dispatches on file.fieldname to enforce
+    // image/* on sourceImage|lastImage and audio/* on audioFile. Dropping
+    // fieldname from fileMeta silently rejects every audio (and image)
+    // upload as "File type not allowed".
+    const seen = [];
+    const req = makeMultipartReq([
+      { name: 'audioFile', filename: 'song.mp3', contentType: 'audio/mpeg', body: Buffer.from([0x01]) },
+    ]);
+    await new Promise((resolve, reject) => {
+      const mw = uploadFields(['sourceImage', 'audioFile'], {
+        fileFilter: (_req, file, cb) => {
+          seen.push({ fieldname: file.fieldname, mimetype: file.mimetype });
+          cb(null, true);
+        },
+      });
+      mw(req, {}, (err) => err ? reject(err) : resolve());
+    });
+    expect(seen).toEqual([{ fieldname: 'audioFile', mimetype: 'audio/mpeg' }]);
+    expect(req.files?.audioFile?.originalname).toBe('song.mp3');
+  });
+
   it('rejects requests without the multipart Content-Type', async () => {
     const stream = Readable.from(['nope']);
     stream.headers = { 'content-type': 'application/json' };

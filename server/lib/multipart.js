@@ -196,7 +196,10 @@ function streamMultipart(req, boundary, acceptedNames, maxSize, fileFilter, next
       const mimeMatch = headerStr.match(/Content-Type:\s*([^\r\n]+)/i);
       currentFileMimetype = mimeMatch ? mimeMatch[1].trim() : 'application/octet-stream';
       if (isMatchingFile) {
-        const fileMeta = { originalname: currentFilename, mimetype: currentFileMimetype };
+        // `fieldname` matches multer's API contract — videoGen.js's filter
+        // dispatches on it to enforce per-field MIME rules (image/* on
+        // sourceImage|lastImage, audio/* on audioFile).
+        const fileMeta = { fieldname: currentName, originalname: currentFilename, mimetype: currentFileMimetype };
 
         if (fileFilter) {
           // CONTRACT: fileFilter MUST call its `cb` synchronously. We read

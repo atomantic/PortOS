@@ -2,6 +2,7 @@
 
 ## Fixed
 
+- Video Gen audio uploads (a2v mode) were rejected with "File type not allowed" even for valid MP3/WAV files — the multipart parser was missing `fieldname` on the file metadata it passed to the upload filter, so every per-field MIME check silently evaluated to false. Fixed by including `fieldname` in the parser's file metadata, matching multer's API contract.
 - `update.sh` no longer hangs after "PortOS restarted" — the browser-open script now exits explicitly instead of waiting for Node's undici connection pool to drain.
 - `update.sh` now kills the PM2 daemon (not just stops apps) before restarting, fixing crashes where a stale daemon cached a `ProcessContainerFork.js` path from a different project's Yarn PnP zip cache.
 - Writers-room storyboard renders queued through Codex now wait their turn instead of erroring with "A Codex generation is already in progress" when you fire a second render before the first finishes. Codex jobs run on their own queue lane, so they don't block (and aren't blocked by) local image or video renders.
@@ -15,6 +16,9 @@
 
 ## Changed
 
+- Video Gen frame picker now goes up to 481 frames (~20s at 24fps); options past 241 frames (~10s) show a hint recommending Extend mode for reliable long renders at 48 GB.
+- Switching to Audio mode now automatically selects the smallest dgrauet model (Q4) when the current model doesn't support a2v, instead of landing on a blocked state with a warning. The warning still appears if you manually pick a non-ltx2 model while in Audio mode.
+- "Disable audio" and "No music" checkboxes are hidden in Audio mode and their state is reset on entry — both are irrelevant when audio comes from an uploaded file rather than being generated.
 - Video Gen FFLF mode now offers the same dual control on both the first-frame and last-frame slots — pick from your image gallery or upload a fresh image — instead of the previous upload-only first frame and gallery-only last frame.
 - Release workflow no longer silently skips creating the GitHub Release when something else pushed the version tag before the workflow ran.
 - Release-notes style guide tightened — entries should be one sentence per change in user-facing language, not code-review prose with file paths and internal symbols.

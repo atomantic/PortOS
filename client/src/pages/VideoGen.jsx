@@ -59,7 +59,13 @@ const RESOLUTIONS = [
   { label: '768×768 (1:1)', w: 768, h: 768 },
 ];
 
-const FRAME_OPTIONS = [25, 49, 73, 97, 121, 145, 169, 193, 217, 241];
+// Values follow LTX-2's 8k+1 latent boundary so the model doesn't silently
+// snap. 241 = 10s @ 24fps is the comfortable single-pass ceiling on 48 GB
+// at standard widths; the higher options (265–481) push past that and may
+// swap or OOM at 1280×704. For reliable clips longer than ~10s, use Extend
+// mode (renders past a source video, conditioning on its full latent) —
+// see the hint under the Frames dropdown.
+const FRAME_OPTIONS = [25, 49, 73, 97, 121, 145, 169, 193, 217, 241, 265, 313, 361, 481];
 const FPS_OPTIONS = [16, 24, 30];
 const TILING_OPTIONS = [
   { value: 'auto', label: 'Auto (recommended)' },
@@ -346,6 +352,20 @@ export default function VideoGen() {
       clearSourceImage();
       clearLastImage();
       setExtendFromVideoId('');
+      // disableAudio strips the output audio track — in a2v mode that would
+      // remove the user's uploaded audio, defeating the mode entirely.
+      // noMusic appends a prompt constraint for text-conditioned audio gen;
+      // a2v uses uploaded audio so the constraint is meaningless there too.
+      setDisableAudio(false);
+      setNoMusic(false);
+      // Auto-select the smallest (first) ltx2-runtime model so the user
+      // doesn't land on a blocked state. Only fires when the current model
+      // can't handle a2v — if they already have a dgrauet model selected
+      // we leave it alone.
+      if (currentModel?.runtime !== 'ltx2') {
+        const ltx2Model = models.find((m) => m.runtime === 'ltx2');
+        if (ltx2Model) setModelId(ltx2Model.id);
+      }
     }
   };
 
@@ -999,6 +1019,11 @@ export default function VideoGen() {
               >
                 {FRAME_OPTIONS.map((f) => <option key={f} value={f}>{f} ({(f / fps).toFixed(1)}s @ {fps}fps)</option>)}
               </select>
+              {numFrames > 241 && (
+                <p className="text-[10px] text-gray-500 leading-snug mt-1">
+                  Past 241 frames a single-pass render may swap or OOM at 48 GB. For reliable longer clips, render up to ~10s and then use <strong>Extend</strong> on the result — it conditions on the source's full latent rather than a single last frame.
+                </p>
+              )}
             </div>
 
             <div>
@@ -1087,28 +1112,32 @@ export default function VideoGen() {
               </select>
             </div>
 
-            <label className="col-span-2 sm:col-span-3 flex items-center gap-2 text-xs text-gray-400 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={disableAudio}
-                onChange={(e) => setDisableAudio(e.target.checked)}
-                className="rounded"
-              />
-              Disable audio (LTX-2 only — speeds up generation)
-            </label>
-            <label
-              className={`col-span-2 sm:col-span-3 flex items-center gap-2 text-xs cursor-pointer ${disableAudio ? 'text-gray-600 cursor-not-allowed' : 'text-gray-400'}`}
-              title="LTX-2 conditions audio on the prompt — appending 'no music, no soundtrack' at submit time pushes the model toward ambient/diegetic sound only"
-            >
-              <input
-                type="checkbox"
-                checked={noMusic}
-                disabled={disableAudio}
-                onChange={(e) => setNoMusic(e.target.checked)}
-                className="rounded"
-              />
-              No music — keep ambient/diegetic sound only (LTX-2)
-            </label>
+            {mode !== 'a2v' && (
+              <label className="col-span-2 sm:col-span-3 flex items-center gap-2 text-xs text-gray-400 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={disableAudio}
+                  onChange={(e) => setDisableAudio(e.target.checked)}
+                  className="rounded"
+                />
+                Disable audio (LTX-2 only — speeds up generation)
+              </label>
+            )}
+            {mode !== 'a2v' && (
+              <label
+                className={`col-span-2 sm:col-span-3 flex items-center gap-2 text-xs cursor-pointer ${disableAudio ? 'text-gray-600 cursor-not-allowed' : 'text-gray-400'}`}
+                title="LTX-2 conditions audio on the prompt — appending 'no music, no soundtrack' at submit time pushes the model toward ambient/diegetic sound only"
+              >
+                <input
+                  type="checkbox"
+                  checked={noMusic}
+                  disabled={disableAudio}
+                  onChange={(e) => setNoMusic(e.target.checked)}
+                  className="rounded"
+                />
+                No music — keep ambient/diegetic sound only (LTX-2)
+              </label>
+            )}
           </div>
 
           <div className="flex flex-wrap items-center gap-2 pt-1">
