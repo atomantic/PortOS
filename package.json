@@ -33,7 +33,7 @@
     "smoke": "node scripts/smoke-boot.js"
   },
   "devDependencies": {
-    "pm2": "6.0.14"
+    "pm2": "7.0.1"
   },
   "overrides": {
     "path-to-regexp": "8.4.2",
