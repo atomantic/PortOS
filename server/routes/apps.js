@@ -789,7 +789,7 @@ const SHELL_UNSAFE_RE = /[&|<>^%!()]/;
 // /T /F to terminate the whole process tree.
 const killProc = (child) => {
   if (IS_WIN32 && child.pid) {
-    spawn('taskkill', ['/T', '/F', '/PID', String(child.pid)], { stdio: 'ignore', windowsHide: true }).unref();
+    spawn('taskkill', ['/T', '/F', '/PID', String(child.pid)], { stdio: 'ignore', windowsHide: true }).on('error', () => {}).unref();
   } else {
     child.kill('SIGTERM');
   }

@@ -19,7 +19,7 @@ function runCommand(cmd, args, cwd) {
       if (!settled) {
         settled = true;
         if (IS_WIN32 && child.pid) {
-          spawn('taskkill', ['/T', '/F', '/PID', String(child.pid)], { stdio: 'ignore', windowsHide: true }).unref();
+          spawn('taskkill', ['/T', '/F', '/PID', String(child.pid)], { stdio: 'ignore', windowsHide: true }).on('error', () => {}).unref();
         } else {
           child.kill('SIGTERM');
         }
