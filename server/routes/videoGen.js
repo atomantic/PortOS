@@ -222,6 +222,25 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
   // those replays still clean up correctly. Every additional upload (today:
   // just `lastImage`) flows through `uploadedTempPaths` as an array. The
   // worker walks both fields when unlinking on terminal events.
+  // Mode/upload pairing checks BEFORE staging so a rejected request only
+  // unlinks the OS temp file (cheap) instead of also unlinking a freshly-
+  // copied 100MB durable file under data/uploads (wasted disk I/O on every
+  // bad request).
+  if (body.mode === 'a2v' && !uploads.audioFile) {
+    await cleanupAllStaged();
+    throw new ServerError(
+      'a2v mode requires an audioFile upload (multipart field name: audioFile).',
+      { status: 400, code: 'VIDEO_GEN_AUDIO_REQUIRED' },
+    );
+  }
+  if (uploads.audioFile && body.mode !== 'a2v') {
+    await cleanupAllStaged();
+    throw new ServerError(
+      `audioFile upload is only valid with mode='a2v' (got mode='${body.mode || 'unset'}').`,
+      { status: 400, code: 'VIDEO_GEN_AUDIO_MODE_MISMATCH' },
+    );
+  }
+
   let sourceImagePath = null;
   let lastImagePath = null;
   let audioFilePath = null;
@@ -260,28 +279,6 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
     // worker drops it on terminal events the same way it drops lastImage.
     audioFilePath = await stageUploadDurable(uploads.audioFile, 'audio');
     extraUploadedTempPaths.push(audioFilePath);
-  }
-
-  // a2v mode requires an audio upload — fail fast at the route boundary so
-  // the UI gets a clear 400 instead of a queued job that fails late on the
-  // python helper's "audio_path is required" check.
-  if (body.mode === 'a2v' && !audioFilePath) {
-    await cleanupAllStaged();
-    throw new ServerError(
-      'a2v mode requires an audioFile upload (multipart field name: audioFile).',
-      { status: 400, code: 'VIDEO_GEN_AUDIO_REQUIRED' },
-    );
-  }
-  // Inverse guard: an audio upload paired with anything other than a2v would
-  // otherwise be silently dropped (the service ignores audioFilePath unless
-  // mode === 'a2v'), which means the user pays for a t2v render they didn't
-  // ask for. Reject so the caller can fix their request.
-  if (audioFilePath && body.mode !== 'a2v') {
-    await cleanupAllStaged();
-    throw new ServerError(
-      `audioFile upload is only valid with mode='a2v' (got mode='${body.mode || 'unset'}').`,
-      { status: 400, code: 'VIDEO_GEN_AUDIO_MODE_MISMATCH' },
-    );
   }
 
   // Native extend (ltx2 runtime): resolve the history id to a video file
