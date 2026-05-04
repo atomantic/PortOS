@@ -92,6 +92,24 @@ describe('writers room — settings CRUD', () => {
     await deleteSetting(id, s.id);
     expect(await listSettings(id)).toHaveLength(0);
   });
+
+  it('rejects an update that would leave both slugline and name blank (name-only created)', async () => {
+    // Setting was created via name only — slugline=''. Blanking the name
+    // would leave the record unaddressable; the update must reject.
+    const id = await newWork();
+    const s = await createSetting(id, { name: 'The Glass Atrium' });
+    await expect(updateSetting(id, s.id, { name: '' })).rejects.toThrow(/slugline or name/i);
+  });
+
+  it('rejects an update that would leave both slugline and name blank (slugline-only created)', async () => {
+    const id = await newWork();
+    const s = await createSetting(id, { slugline: 'INT. ATTIC — DUSK' });
+    // Note: createSetting auto-fills name from slugline when name is omitted,
+    // so we explicitly clear name first via update, then attempt to clear
+    // slugline. The combined-blank invariant must still fire.
+    await updateSetting(id, s.id, { name: '' });
+    await expect(updateSetting(id, s.id, { slugline: '' })).rejects.toThrow(/slugline or name/i);
+  });
 });
 
 describe('writers room — settings merge', () => {

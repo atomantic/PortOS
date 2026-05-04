@@ -121,7 +121,6 @@ export async function updateSetting(workId, settingId, patch = {}) {
     if (patch[field] === undefined) continue;
     if (field === 'slugline' || field === 'name') {
       const newVal = String(patch[field] || '').trim();
-      if (field === 'slugline' && !newVal && !next.name) throw badRequest('Setting needs slugline or name');
       const key = normalizeSlugline(newVal);
       if (key) {
         const conflict = state.settings.some((s) => s.id !== settingId && normalizeSlugline(s.slugline || s.name) === key);
@@ -131,6 +130,14 @@ export async function updateSetting(workId, settingId, patch = {}) {
     } else {
       next[field] = patch[field];
     }
+  }
+  // Enforce the same invariant as `createSetting`: at least one of
+  // `slugline` / `name` must be non-empty. Without this final check, a
+  // PATCH that blanks the only non-empty identifier (e.g. a name-only
+  // setting receiving `{ name: '' }`, or a slugline-only setting being
+  // sent `{ slugline: '' }`) would silently leave the setting unaddressable.
+  if (!next.slugline && !next.name) {
+    throw badRequest('Setting needs slugline or name');
   }
   next.source = 'user';
   next.updatedAt = nowIso();
