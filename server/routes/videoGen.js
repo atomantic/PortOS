@@ -32,10 +32,10 @@ import { enqueueJob, attachSseClient, cancelJob, listJobs } from '../services/me
 const router = Router();
 
 // Single uploader handles both sourceImage (image/fflf modes) and audioFile
-// (a2v mode). The UI never sends both in one request, so the parser's
-// "last matching file wins" behavior is fine in practice; a malformed client
-// that did send both would only leak the first part's tmp file (gets reaped
-// on reboot) and the route's fileFilter ensures whatever survives is the
+// (a2v mode). The UI never sends both in one request; if a malformed client
+// did, the parser now rejects with TOO_MANY_FILES (400) and unlinks the
+// already-staged first part — see uploadSingle() in lib/multipart.js. The
+// route's fileFilter ensures whichever single file survives matches the
 // correct content-type for its claimed fieldname.
 const mediaUpload = uploadSingle(['sourceImage', 'audioFile'], {
   limits: { fileSize: 100 * 1024 * 1024 },
@@ -135,10 +135,16 @@ const resolveGalleryImage = (name) => {
 
 router.post('/', mediaUpload, asyncHandler(async (req, res) => {
   // Pre-enqueue cleanup hook: every throw path below MUST drop the multipart
-  // temp upload (Multer wrote it before this handler ran). Without this a
+  // temp upload (parser wrote it before this handler ran). Without this a
   // configuration/validation error leaks the upload in the OS temp dir.
+  // After the staging step has run, also unlinks the durable copy under
+  // PATHS.uploads — staging happens before the a2v/mode validation guards,
+  // so a rejected request would otherwise leak a video-source-* or
+  // video-audio-* file in data/uploads/ on top of the OS temp file.
+  let stagedUploadPath = null;
   const cleanupTempUpload = async () => {
     if (req.file?.path) await unlink(req.file.path).catch(() => {});
+    if (stagedUploadPath) await unlink(stagedUploadPath).catch(() => {});
   };
   const parsed = generateBodySchema.safeParse(req.body);
   if (!parsed.success) {
@@ -209,6 +215,9 @@ router.post('/', mediaUpload, asyncHandler(async (req, res) => {
       sourceImagePath = durablePath;
     }
     uploadedTempPath = durablePath;
+    // Mirror into the closure so cleanupTempUpload() unlinks this if a
+    // post-staging validation guard rejects the request before enqueue.
+    stagedUploadPath = durablePath;
   } else if (body.sourceImageFile) {
     sourceImagePath = resolveGalleryImage(body.sourceImageFile);
   }
