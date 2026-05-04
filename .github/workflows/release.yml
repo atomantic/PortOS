@@ -33,10 +33,12 @@ jobs:
         id: package-version
         run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
 
-      - name: Check if tag exists
-        id: tag-check
+      - name: Check if release exists
+        id: release-check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if git rev-parse "v${{ steps.package-version.outputs.version }}" >/dev/null 2>&1; then
+          if gh release view "v${{ steps.package-version.outputs.version }}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
             echo "exists=true" >> $GITHUB_OUTPUT
           else
             echo "exists=false" >> $GITHUB_OUTPUT
@@ -44,7 +46,7 @@ jobs:
 
       - name: Generate changelog
         id: changelog
-        if: steps.tag-check.outputs.exists == 'false'
+        if: steps.release-check.outputs.exists == 'false'
         run: |
           VERSION="${{ steps.package-version.outputs.version }}"
           MAJOR_MINOR=$(echo $VERSION | cut -d. -f1-2)
@@ -89,7 +91,7 @@ jobs:
           echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Create Release
-        if: steps.tag-check.outputs.exists == 'false'
+        if: steps.release-check.outputs.exists == 'false'
         uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ steps.package-version.outputs.version }}
@@ -101,7 +103,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Archive changelog on main
-        if: steps.tag-check.outputs.exists == 'false'
+        if: steps.release-check.outputs.exists == 'false'
         run: |
           CURRENT_VERSION=${{ steps.package-version.outputs.version }}
           MAJOR=$(echo $CURRENT_VERSION | cut -d. -f1)
