@@ -23,25 +23,41 @@ const STATUS_BADGE = {
 // onError-hides-tile behavior) instead of leaving a broken control.
 function ScenePreview({ jobId, label }) {
   const [missing, setMissing] = useState(false);
+  // `attempt` is bumped manually by the user-clickable Retry button below
+  // (and indirectly by the jobId reset effect — a re-render with the same
+  // jobId would otherwise leave a transient load error stuck for the rest
+  // of the session). Each bump remounts <video> via the keyed `?retry=N`
+  // suffix so the browser re-fetches instead of using its cached error.
+  const [attempt, setAttempt] = useState(0);
   // Reset the missing flag when jobId changes so a re-rendered scene gets
   // a fresh load attempt instead of inheriting the prior scene's "media
-  // missing" state. Also lets a transient load failure heal on the next
-  // poll-driven refresh once the asset comes back online.
+  // missing" state. attempt resets too so the cache-busting param starts
+  // fresh per scene.
   useEffect(() => {
     setMissing(false);
+    setAttempt(0);
   }, [jobId]);
-  const videoSrc = `/data/videos/${jobId}.mp4`;
-  const posterSrc = `/data/video-thumbnails/${jobId}.jpg`;
+  const cacheBust = attempt > 0 ? `?retry=${attempt}` : '';
+  const videoSrc = `/data/videos/${jobId}.mp4${cacheBust}`;
+  const posterSrc = `/data/video-thumbnails/${jobId}.jpg${cacheBust}`;
   if (missing) {
     return (
-      <div className="bg-port-bg aspect-video flex items-center justify-center text-port-text-muted text-xs">
-        media missing
+      <div className="bg-port-bg aspect-video flex flex-col items-center justify-center text-port-text-muted text-xs gap-2">
+        <span>media missing</span>
+        <button
+          type="button"
+          onClick={() => { setMissing(false); setAttempt((a) => a + 1); }}
+          className="px-2 py-0.5 rounded border border-port-border hover:bg-port-card text-port-text"
+        >
+          Retry
+        </button>
       </div>
     );
   }
   return (
     <div className="relative bg-port-bg aspect-video">
       <video
+        key={attempt}
         src={videoSrc}
         poster={posterSrc}
         controls

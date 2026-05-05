@@ -58,7 +58,13 @@ export async function recoverInFlightProjects() {
   const needsCleanup = projects.filter(
     (p) => RECOVERABLE_STATUSES.has(p.status) || CLEANUP_ONLY_STATUSES.has(p.status),
   );
-  if (!needsCleanup.length) return { resumed: 0 };
+  if (!needsCleanup.length) {
+    // Must resolve the gate even on the no-op path or cos.init's
+    // resetOrphanedTasks await would sit on its 5s timeout for nothing
+    // every daemon start/auto-start.
+    resolveRecoveryDone();
+    return { resumed: 0 };
+  }
 
   const { advanceAfterSceneSettled } = await import('./completionHook.js');
   let resumed = 0;
