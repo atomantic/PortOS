@@ -253,8 +253,20 @@ async function handleRenderCompleted(projectId, sceneId, jobId, opts = {}) {
     const videoPath = join(PATHS.videos, `${jobId}.mp4`);
     const playable = await verifyVideoPlayable(videoPath);
     if (!playable.ok) {
-      console.log(`❌ CD auto-accept: video unplayable for ${jobId.slice(0, 8)}: ${playable.reason}`);
-      await handleRenderFailed(projectId, sceneId, playable.reason || 'video file unplayable');
+      const reason = playable.reason || 'video file unplayable';
+      console.log(`❌ CD auto-accept: video unplayable for ${jobId.slice(0, 8)}: ${reason} — failing smoke project directly (retrying would waste renders; a broken render must not produce a green smoke result).`);
+      await updateScene(projectId, sceneId, {
+        status: 'failed',
+        evaluation: {
+          accepted: false,
+          notes: `Render failed: ${reason}`,
+          sampledAt: new Date().toISOString(),
+        },
+      });
+      await updateProject(projectId, {
+        status: 'failed',
+        failureReason: `unplayable render detected: ${reason}`,
+      }).catch((e) => console.log(`⚠️ CD updateProject(failed) for ${projectId} failed: ${e.message}`));
       return;
     }
     await updateScene(projectId, sceneId, {

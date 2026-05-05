@@ -136,7 +136,7 @@ export async function advanceAfterSceneSettled(projectId) {
     return;
   }
 
-  const scenes = (project.treatment.scenes || []).slice().sort((a, b) => a.order - b.order);
+  let scenes = (project.treatment.scenes || []).slice().sort((a, b) => a.order - b.order);
 
   // Resume-after-pause path: a scene left in `evaluating` with a
   // renderedJobId set means handleRenderCompleted persisted the render
@@ -174,6 +174,14 @@ export async function advanceAfterSceneSettled(projectId) {
         sampledAt: new Date().toISOString(),
       },
     }).catch((e) => console.log(`⚠️ CD wedge-reset for ${w.sceneId} failed: ${e.message}`));
+  }
+  // Re-read scenes so the subsequent orphan/pending/inflight checks see the
+  // updated statuses — the wedge-reset writes above are not reflected in the
+  // in-memory `scenes` slice we sorted at the top of this function.
+  if (wedged.length > 0) {
+    const refreshed = await getProject(project.id);
+    if (!refreshed) return;
+    scenes = (refreshed.treatment?.scenes || []).slice().sort((a, b) => a.order - b.order);
   }
   const orphanedEvaluating = scenes.find((s) =>
     s.status === 'evaluating' &&
