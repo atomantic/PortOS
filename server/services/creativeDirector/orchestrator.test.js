@@ -9,6 +9,11 @@ const mockUpdateScene = vi.fn(async () => undefined);
 const mockEnqueueTreatmentTask = vi.fn(async () => undefined);
 const mockEnqueueEvaluateTask = vi.fn(async () => undefined);
 const mockSampleEvaluationFrames = vi.fn(async () => []);
+// fs.existsSync is consulted on (a) every persisted evaluationFrame to detect
+// frames deleted under us, and (b) the rendered .mp4 itself to differentiate
+// "video deleted while paused" (fail scene) from "transient ffmpeg failure"
+// (bail and retry). Tests override per-call with mockReturnValueOnce.
+const mockExistsSync = vi.fn(() => false);
 
 vi.mock('./local.js', () => ({
   getProject: vi.fn(),
@@ -32,6 +37,11 @@ vi.mock('./agentBridge.js', () => ({
 vi.mock('../videoGen/local.js', () => ({
   sampleEvaluationFrames: (...args) => mockSampleEvaluationFrames(...args),
 }));
+
+vi.mock('fs', async () => {
+  const actual = await vi.importActual('fs');
+  return { ...actual, existsSync: (...args) => mockExistsSync(...args) };
+});
 
 import * as localMod from './local.js';
 import { advanceAfterSceneSettled } from './completionHook.js';
@@ -236,6 +246,7 @@ describe('advanceAfterSceneSettled', () => {
     mockEnqueueTreatmentTask.mockClear();
     mockEnqueueEvaluateTask.mockClear();
     mockSampleEvaluationFrames.mockReset().mockResolvedValue([]);
+    mockExistsSync.mockReset().mockReturnValue(false);
   });
 
   it('picks scene-2 (lowest-order pending) when scene-1 is accepted and scenes 2-6 are pending', async () => {
@@ -358,6 +369,115 @@ describe('advanceAfterSceneSettled', () => {
     expect(sceneArg.renderedJobId).toBe('22222222-2222-4222-8222-222222222222');
     // Should NOT fall through to runSceneRender for the next pending scene —
     // resume must finish the orphaned evaluate first.
+    expect(mockRunSceneRender).not.toHaveBeenCalled();
+  });
+
+  it('fails the orphan scene AND advances to the next pending scene when frame sampling returns 0 frames and the rendered video is gone (deleted-while-paused)', async () => {
+    // The deleted-video branch in resume must do TWO things:
+    //   1. Mark the orphaned scene `failed` (it can't be evaluated).
+    //   2. Nudge the orchestrator forward — otherwise the project sits in
+    //      `rendering` forever because updateScene goes through local.js
+    //      directly, not the route handler that auto-calls advance.
+    const project = {
+      id: 'cd-deleted-video',
+      status: 'rendering',
+      finalVideoId: null,
+      treatment: {
+        scenes: [
+          { sceneId: 'scene-1', order: 0, status: 'evaluating', renderedJobId: '11111111-1111-4111-8111-111111111111', evaluationFrames: [] },
+          { sceneId: 'scene-2', order: 1, status: 'pending' },
+        ],
+      },
+      runs: [
+        { kind: 'evaluate', sceneId: 'scene-1', status: 'completed' },
+      ],
+    };
+    // After the deleted-video branch fails the orphan scene, the
+    // implementation tail-recurses into advanceAfterSceneSettled. Reflect the
+    // failure in the mock so the recursive call sees scene-1 as 'failed'
+    // (not 'evaluating') and falls through to the nextPending branch instead
+    // of re-entering the orphan branch indefinitely. The third+ call serves
+    // the runSceneRender re-read.
+    const projectAfterFail = {
+      ...project,
+      treatment: {
+        ...project.treatment,
+        scenes: [
+          { ...project.treatment.scenes[0], status: 'failed' },
+          project.treatment.scenes[1],
+        ],
+      },
+    };
+    localMod.getProject
+      .mockResolvedValueOnce(project)
+      .mockResolvedValue(projectAfterFail);
+    // sampleEvaluationFrames returns [] (deleted video / extraction failure).
+    mockSampleEvaluationFrames.mockResolvedValue([]);
+    // existsSync returns false for every check — simulating that the .mp4
+    // is gone from disk (the deleted-video case).
+    mockExistsSync.mockReturnValue(false);
+
+    await advanceAfterSceneSettled(project.id);
+
+    // Scene-1 was failed with the right notes.
+    expect(mockUpdateScene).toHaveBeenCalledWith(
+      'cd-deleted-video',
+      'scene-1',
+      expect.objectContaining({
+        status: 'failed',
+        evaluation: expect.objectContaining({
+          accepted: false,
+          notes: expect.stringContaining('rendered video was deleted'),
+        }),
+      }),
+    );
+    // Evaluator must NOT be enqueued — there are no frames.
+    expect(mockEnqueueEvaluateTask).not.toHaveBeenCalled();
+    // After the tail-recursion, the orchestrator advanced to scene-2 (the
+    // next pending scene) instead of leaving the project stuck.
+    expect(mockRunSceneRender).toHaveBeenCalled();
+    const renderedScene = mockRunSceneRender.mock.calls.at(-1)[1];
+    expect(renderedScene.sceneId).toBe('scene-2');
+  });
+
+  it('does NOT fail the orphan scene when frame sampling returns 0 frames but the rendered video is still on disk (transient ffmpeg failure → retry)', async () => {
+    // sampleEvaluationFrames also returns [] for non-fatal failures: ffmpeg
+    // missing on PATH, ffprobe miscount, transient I/O. In those cases the
+    // render is recoverable, so the resume path must NOT fail the scene —
+    // it should bail and let a future nudge retry sampling.
+    const project = {
+      id: 'cd-transient-ffmpeg',
+      status: 'rendering',
+      finalVideoId: null,
+      treatment: {
+        scenes: [
+          { sceneId: 'scene-1', order: 0, status: 'evaluating', renderedJobId: '22222222-2222-4222-8222-222222222222', evaluationFrames: [] },
+          { sceneId: 'scene-2', order: 1, status: 'pending' },
+        ],
+      },
+      runs: [
+        { kind: 'evaluate', sceneId: 'scene-1', status: 'completed' },
+      ],
+    };
+    localMod.getProject.mockResolvedValue(project);
+    // Sampling returns [] (failure of some kind).
+    mockSampleEvaluationFrames.mockResolvedValue([]);
+    // existsSync(videoPath) → true: the rendered .mp4 is still on disk, so
+    // the empty frames must be a transient ffmpeg/ffprobe failure.
+    mockExistsSync.mockImplementation((p) => typeof p === 'string' && p.endsWith('.mp4'));
+
+    await advanceAfterSceneSettled(project.id);
+
+    // Scene must NOT be marked failed — the render is recoverable.
+    expect(mockUpdateScene).not.toHaveBeenCalledWith(
+      'cd-transient-ffmpeg',
+      'scene-1',
+      expect.objectContaining({ status: 'failed' }),
+    );
+    // Evaluator must NOT fire (we have no frames to send it).
+    expect(mockEnqueueEvaluateTask).not.toHaveBeenCalled();
+    // And the orchestrator must NOT skip past scene-1 to render scene-2 —
+    // bailing leaves scene-1 in `evaluating` so the next nudge retries.
     expect(mockRunSceneRender).not.toHaveBeenCalled();
   });
 
