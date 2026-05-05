@@ -496,6 +496,27 @@ html[data-port-theme-mode="day"] :is(.bg-gray-500, .bg-zinc-500, .bg-neutral-500
   background-color: var(--port-control-bg-hover) !important;
 }
 
+html[data-port-theme-mode="day"] [class~="bg-gray-800/30"],
+html[data-port-theme-mode="day"] [class~="bg-gray-800/40"],
+html[data-port-theme-mode="day"] [class~="bg-gray-800/50"],
+html[data-port-theme-mode="day"] [class~="bg-gray-800/60"],
+html[data-port-theme-mode="day"] [class~="bg-gray-800/70"],
+html[data-port-theme-mode="day"] [class~="bg-slate-800/80"] {
+  background-color: rgb(var(--port-card) / 0.55) !important;
+}
+
+html[data-port-theme-mode="day"] [class~="bg-gray-700/40"],
+html[data-port-theme-mode="day"] [class~="bg-gray-600/20"],
+html[data-port-theme-mode="day"] [class~="bg-gray-600/30"] {
+  background-color: var(--port-control-bg) !important;
+}
+
+html[data-port-theme-mode="day"] [class~="bg-gray-500/10"],
+html[data-port-theme-mode="day"] [class~="bg-gray-500/15"],
+html[data-port-theme-mode="day"] [class~="bg-gray-500/20"] {
+  background-color: rgb(var(--port-card) / 0.25) !important;
+}
+
 html[data-port-theme-mode="day"] [class~="hover:bg-gray-800"]:hover,
 html[data-port-theme-mode="day"] [class~="hover:bg-gray-900"]:hover {
   background-color: rgb(var(--port-card) / calc(var(--port-card-alpha) * 0.85)) !important;
