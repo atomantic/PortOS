@@ -719,6 +719,7 @@ export default function ChiefOfStaff() {
               </button>
               {status?.running ? (
                 <button
+                  type="button"
                   onClick={handleStop}
                   className="bg-red-500/20 hover:bg-red-500/30 text-red-400 border border-red-400/30 rounded px-2 py-1.5 flex items-center gap-2 transition-colors min-h-[52px]"
                   aria-label="Stop Chief of Staff agent"
@@ -731,6 +732,7 @@ export default function ChiefOfStaff() {
                 </button>
               ) : (
                 <button
+                  type="button"
                   onClick={handleStart}
                   className="bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-500 border border-emerald-500/30 rounded px-2 py-1.5 flex items-center gap-2 transition-colors min-h-[52px]"
                   aria-label="Start Chief of Staff agent"

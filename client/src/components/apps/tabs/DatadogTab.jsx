@@ -90,6 +90,7 @@ export default function DatadogTab({ app }) {
             {TIME_RANGES.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
           </select>
           <button
+            type="button"
             onClick={fetchErrors}
             disabled={loading}
             aria-label="Refresh errors"
@@ -134,6 +135,7 @@ export default function DatadogTab({ app }) {
                 className="bg-port-card border border-port-border rounded-lg overflow-hidden"
               >
                 <button
+                  type="button"
                   onClick={() => setExpandedErrorId(expanded ? null : errId)}
                   aria-expanded={expanded}
                   className="w-full text-left px-4 py-3 hover:bg-port-border/30 transition-colors"
