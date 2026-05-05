@@ -346,5 +346,44 @@ describe('Image Gen Routes', () => {
       // Belt-and-braces: legacy single-process cancel also poked.
       expect(imageGen.cancel).toHaveBeenCalled();
     });
+
+    it('POST /cancel (no jobId) picks the most-recently-submitted job by queuedAt — NOT the listJobs() ordering', async () => {
+      // listJobs() returns jobs in queue-internal order: gpuRunning first,
+      // then codexRunning, then queue. Without explicit queuedAt sorting, a
+      // bare `/cancel` (the user's "stop the last thing I submitted" gesture)
+      // would target the gpuRunning job — even when the user just queued a
+      // newer Codex job that should be the cancel target. The route must
+      // tie-break by queuedAt DESC so the newest submit always wins.
+      mediaJobQueue.listJobs.mockReturnValueOnce([
+        // listJobs ordering: gpu-running first (oldest submit, started long ago).
+        { id: 'gpu-running', status: 'running', queuedAt: '2026-05-05T08:00:00Z' },
+        // Codex job queued AFTER the GPU job started — this is the "most
+        // recent submit" and should be the cancel target.
+        { id: 'codex-newest', status: 'queued', queuedAt: '2026-05-05T08:30:00Z' },
+        // Older queued job, should NOT be picked.
+        { id: 'queued-older', status: 'queued', queuedAt: '2026-05-05T08:15:00Z' },
+      ]);
+      const response = await request(app).post('/api/image-gen/cancel').send({});
+      expect(response.status).toBe(200);
+      // The newest-submit (codex-newest at 08:30) wins — not 'gpu-running'
+      // (which appeared first in listJobs) and not 'queued-older'.
+      expect(mediaJobQueue.cancelJob).toHaveBeenCalledTimes(1);
+      expect(mediaJobQueue.cancelJob.mock.calls[0][0]).toBe('codex-newest');
+    });
+
+    it('POST /cancel (explicit jobId) cancels exactly that job and skips queuedAt selection', async () => {
+      // When a jobId is provided, the route must cancel THAT job — even if a
+      // newer queued job exists. This locks in that explicit selection wins
+      // over the queuedAt fallback (writers-room "cancel this scene").
+      mediaJobQueue.listJobs.mockReturnValueOnce([
+        { id: 'newest', status: 'queued', queuedAt: '2026-05-05T08:30:00Z' },
+        { id: 'middle', status: 'queued', queuedAt: '2026-05-05T08:20:00Z' },
+        { id: 'oldest', status: 'running', queuedAt: '2026-05-05T08:00:00Z' },
+      ]);
+      const response = await request(app).post('/api/image-gen/cancel').send({ jobId: 'middle' });
+      expect(response.status).toBe(200);
+      expect(mediaJobQueue.cancelJob).toHaveBeenCalledTimes(1);
+      expect(mediaJobQueue.cancelJob.mock.calls[0][0]).toBe('middle');
+    });
   });
 });
