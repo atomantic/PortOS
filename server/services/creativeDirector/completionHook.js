@@ -142,9 +142,16 @@ export async function advanceAfterSceneSettled(projectId) {
   // here so the existing rendered clip isn't wasted on a pointless
   // re-render. Skip if a fresh evaluate run is already in flight (don't
   // double-enqueue mid-resume).
+  // jobIds in the queue are crypto.randomUUID(); accept the lowercase-hex
+  // UUID v4 shape and reject anything else. Persisted scene.renderedJobId
+  // is editable via PATCH /:id/scenes/:sceneId so a crafted payload could
+  // otherwise make ffmpeg/ffprobe read+write outside PATHS.videos /
+  // PATHS.video-thumbnails. (sampleEvaluationFrames builds paths via
+  // string concat, not via PATHS.join + safety check.)
+  const isSafeJobId = (id) => typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id);
   const orphanedEvaluating = scenes.find((s) =>
     s.status === 'evaluating' &&
-    s.renderedJobId &&
+    isSafeJobId(s.renderedJobId) &&
     !(project.runs || []).some(
       (r) => r.kind === 'evaluate' && r.sceneId === s.sceneId && r.status !== 'completed' && r.status !== 'failed',
     ),

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { Bot, ExternalLink } from 'lucide-react';
 import { extractKind } from './ActiveAgentsBanner.jsx';
@@ -23,6 +23,13 @@ const STATUS_BADGE = {
 // onError-hides-tile behavior) instead of leaving a broken control.
 function ScenePreview({ jobId, label }) {
   const [missing, setMissing] = useState(false);
+  // Reset the missing flag when jobId changes so a re-rendered scene gets
+  // a fresh load attempt instead of inheriting the prior scene's "media
+  // missing" state. Also lets a transient load failure heal on the next
+  // poll-driven refresh once the asset comes back online.
+  useEffect(() => {
+    setMissing(false);
+  }, [jobId]);
   const videoSrc = `/data/videos/${jobId}.mp4`;
   const posterSrc = `/data/video-thumbnails/${jobId}.jpg`;
   if (missing) {

@@ -10,10 +10,15 @@ export default function OverviewTab({ project, onProjectUpdate }) {
   // toggles audio and navigates to a different CD project before the PATCH
   // resolves, the late `.then()` would otherwise call onProjectUpdate on
   // the now-different project and silently overwrite its local state.
+  // We also reset `saving` on project switch — otherwise the new project
+  // inherits the stuck-true flag (the prior project's PATCH cleanup is
+  // gated on the old id and never runs the .finally for this instance),
+  // leaving the new project's audio checkbox permanently disabled.
   const projectIdRef = useRef(project.id);
   useEffect(() => {
     projectIdRef.current = project.id;
     setDisableAudio(project.disableAudio === true);
+    setSaving(false);
   }, [project.id, project.disableAudio]);
 
   const handleAudioToggle = (e) => {
