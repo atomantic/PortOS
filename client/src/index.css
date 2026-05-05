@@ -528,6 +528,14 @@ html[data-port-theme-mode="day"] [class~="hover:bg-gray-700"]:hover {
   background-color: var(--port-control-bg-hover) !important;
 }
 
+html[data-port-theme-mode="day"] [class~="hover:bg-gray-500/20"]:hover {
+  background-color: rgb(var(--port-card) / 0.25) !important;
+}
+
+html[data-port-theme-mode="day"] [class~="hover:bg-slate-800/80"]:hover {
+  background-color: rgb(var(--port-card) / 0.7) !important;
+}
+
 /* Borders — gray-500/600/800 used on inputs, dividers, button outlines. */
 html[data-port-theme-mode="day"] :is(.border-gray-500, .border-gray-600, .border-gray-800, .border-zinc-700, .border-zinc-800, .border-slate-800) {
   border-color: rgb(var(--port-border) / calc(var(--port-border-alpha) * 1.4)) !important;
