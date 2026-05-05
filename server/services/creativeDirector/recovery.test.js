@@ -128,8 +128,20 @@ describe('recoverInFlightProjects', () => {
     expect(mockUpdateTask).toHaveBeenCalledTimes(2);
     // taskType MUST be 'internal' — CD tasks are added via addTask(record, 'internal').
     // Passing 'cos' would write to the wrong file and silently strip approval flags.
-    expect(mockUpdateTask).toHaveBeenCalledWith('task-treatment-abc', { status: 'failed' }, 'internal');
-    expect(mockUpdateTask).toHaveBeenCalledWith('task-eval-def', { status: 'failed' }, 'internal');
+    // status MUST be 'completed' — generateTasksMarkdown only serializes
+    // pending/in_progress/blocked/completed; writing 'failed' would drop
+    // the task from COS-TASKS.md entirely. Metadata audit-trails the
+    // restart so the orphan-task reset still finds nothing to retry.
+    expect(mockUpdateTask).toHaveBeenCalledWith(
+      'task-treatment-abc',
+      expect.objectContaining({ status: 'completed', metadata: expect.objectContaining({ interruptedByRestart: 'true' }) }),
+      'internal',
+    );
+    expect(mockUpdateTask).toHaveBeenCalledWith(
+      'task-eval-def',
+      expect.objectContaining({ status: 'completed', metadata: expect.objectContaining({ interruptedByRestart: 'true' }) }),
+      'internal',
+    );
   });
 
   it('cleans up paused projects but does NOT auto-advance them', async () => {

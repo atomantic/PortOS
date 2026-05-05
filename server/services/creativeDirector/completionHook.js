@@ -99,6 +99,13 @@ export async function handleCreativeDirectorCompletion(task, agentId, success) {
 // the corresponding async work returns or on failure.
 const inflightTreatment = new Set();
 const inflightStitch = new Set();
+// Resume-after-pause path enqueues an evaluator for an orphaned
+// 'evaluating' scene. recordRun isn't persisted until the agentBridge
+// writes the run row, so two concurrent advance() calls (e.g. user
+// clicks Resume + a stale completionHook fires) could both observe the
+// scene as orphaned and double-enqueue. Per-projectId+sceneId set
+// closes that window in the same way inflightTreatment/inflightStitch do.
+const inflightEvaluator = new Set();
 
 export async function advanceAfterSceneSettled(projectId) {
   const project = await getProject(projectId);
@@ -143,29 +150,46 @@ export async function advanceAfterSceneSettled(projectId) {
     ),
   );
   if (orphanedEvaluating) {
-    if (project.status !== 'rendering') {
-      await updateProject(project.id, { status: 'rendering' });
-    }
-    // Re-sample evaluation frames if they weren't captured during the
-    // original completion path (pause landed before frame sampling).
-    let frames = orphanedEvaluating.evaluationFrames || [];
-    if (!frames.length) {
-      frames = await sampleEvaluationFrames(orphanedEvaluating.renderedJobId)
-        .catch((err) => {
-          console.error(`❌ CD resume sampleEvaluationFrames failed for ${orphanedEvaluating.renderedJobId.slice(0, 8)}: ${err.message}`);
-          return [];
-        });
-      if (frames.length) {
-        await updateScene(project.id, orphanedEvaluating.sceneId, { evaluationFrames: frames });
+    const evalKey = `${project.id}:${orphanedEvaluating.sceneId}`;
+    if (inflightEvaluator.has(evalKey)) return;
+    inflightEvaluator.add(evalKey);
+    try {
+      if (project.status !== 'rendering') {
+        await updateProject(project.id, { status: 'rendering' });
       }
+      // Re-sample evaluation frames if they weren't captured during the
+      // original completion path (pause landed before frame sampling).
+      let frames = orphanedEvaluating.evaluationFrames || [];
+      if (!frames.length) {
+        frames = await sampleEvaluationFrames(orphanedEvaluating.renderedJobId)
+          .catch((err) => {
+            console.error(`❌ CD resume sampleEvaluationFrames failed for ${orphanedEvaluating.renderedJobId.slice(0, 8)}: ${err.message}`);
+            return [];
+          });
+        if (frames.length) {
+          await updateScene(project.id, orphanedEvaluating.sceneId, { evaluationFrames: frames });
+        }
+      }
+      // Pause race re-check after the expensive frame-sampling step. The
+      // user could re-pause the project mid-resume; without this the
+      // evaluator would fire against a now-paused project, which is
+      // exactly the race the render-completion path already guards
+      // against. Bail without enqueueing — the next Resume click will
+      // pick up the freshly-sampled frames since we just persisted them.
+      const recheck = await getProject(project.id);
+      if (recheck?.status === 'paused' || recheck?.status === 'failed') {
+        console.log(`⏸️  CD resume: project ${project.id} flipped to ${recheck.status} during frame sampling — skipping evaluator enqueue (next resume will reuse the sampled frames).`);
+        return;
+      }
+      console.log(`▶️  CD resume: re-firing evaluator for orphaned 'evaluating' scene ${orphanedEvaluating.sceneId} on project ${project.id} (renderedJobId preserved from pre-pause render).`);
+      const sceneRefreshed = recheck?.treatment?.scenes?.find((s) => s.sceneId === orphanedEvaluating.sceneId);
+      if (recheck && sceneRefreshed) {
+        await enqueueEvaluateTask(recheck, { ...sceneRefreshed, evaluationFrames: frames });
+      }
+      return;
+    } finally {
+      inflightEvaluator.delete(evalKey);
     }
-    console.log(`▶️  CD resume: re-firing evaluator for orphaned 'evaluating' scene ${orphanedEvaluating.sceneId} on project ${project.id} (renderedJobId preserved from pre-pause render).`);
-    const refreshed = await getProject(project.id);
-    const sceneRefreshed = refreshed?.treatment?.scenes?.find((s) => s.sceneId === orphanedEvaluating.sceneId);
-    if (refreshed && sceneRefreshed) {
-      await enqueueEvaluateTask(refreshed, { ...sceneRefreshed, evaluationFrames: frames });
-    }
-    return;
   }
 
   // Find next pending scene. nextPendingScene returns the lowest-order

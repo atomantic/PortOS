@@ -73,10 +73,20 @@ export async function recoverInFlightProjects() {
     // cos.js#updateTask, strip approval flags from internal task entries
     // (only 'internal' preserves them), silently auto-approving unrelated
     // internal tasks across a CD recovery cycle.
+    //
+    // status MUST be one of generateTasksMarkdown's supported terminal
+    // values (pending/in_progress/blocked/completed) — writing 'failed'
+    // would make the parser drop the task from COS-TASKS.md entirely on
+    // the next write. Use 'completed' with a metadata audit note so the
+    // task is properly retired (preventing orphan re-spawn) without
+    // being silently deleted.
     const staleRuns = (project.runs || []).filter((r) => r.status === 'running');
     for (const run of staleRuns) {
       if (run.taskId) {
-        await updateTask(run.taskId, { status: 'failed' }, 'internal')
+        await updateTask(run.taskId, {
+          status: 'completed',
+          metadata: { interruptedByRestart: 'true', recoveredAt: completedAt },
+        }, 'internal')
           .catch((e) => console.log(`⚠️ CD recovery: retire internal task ${run.taskId} for ${project.id} failed: ${e.message}`));
       }
       await updateRun(project.id, run.runId, {
