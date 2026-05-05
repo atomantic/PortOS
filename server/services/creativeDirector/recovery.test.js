@@ -7,6 +7,7 @@ const mockUpdateRun = vi.fn();
 const mockAdvance = vi.fn();
 const mockListJobs = vi.fn();
 const mockCancelJob = vi.fn();
+const mockUpdateTask = vi.fn();
 
 vi.mock('./local.js', () => ({
   listProjects: (...args) => mockListProjects(...args),
@@ -23,6 +24,10 @@ vi.mock('../mediaJobQueue/index.js', () => ({
   cancelJob: (...args) => mockCancelJob(...args),
 }));
 
+vi.mock('../cos.js', () => ({
+  updateTask: (...args) => mockUpdateTask(...args),
+}));
+
 const { recoverInFlightProjects } = await import('./recovery.js');
 
 beforeEach(() => {
@@ -32,6 +37,7 @@ beforeEach(() => {
   mockAdvance.mockReset().mockResolvedValue(undefined);
   mockListJobs.mockReset().mockReturnValue([]);
   mockCancelJob.mockReset().mockResolvedValue({ ok: true, status: 'canceled' });
+  mockUpdateTask.mockReset().mockResolvedValue({ ok: true });
 });
 
 describe('recoverInFlightProjects', () => {
@@ -66,10 +72,10 @@ describe('recoverInFlightProjects', () => {
     expect(mockCancelJob).toHaveBeenCalledWith('job-orphan-2');
   });
 
-  it('does NOT cancel queued jobs for recovering (non-paused) projects', async () => {
-    // Auto-advance flow re-enqueues fresh renders; canceling here would be
-    // double work and might race with the new enqueue. Only paused gets
-    // the orphan-cancel treatment.
+  it('also cancels queued jobs for recovering (non-paused) projects to prevent double-render races', async () => {
+    // Recovery resets stuck scenes to `pending` and advance() will enqueue
+    // a fresh render — leaving the prior queued job alive would race two
+    // completions for the same `cd:<projectId>:<sceneId>` owner.
     mockListProjects.mockResolvedValue([
       { id: 'cd-rendering', status: 'rendering', treatment: { scenes: [] }, runs: [] },
     ]);
@@ -77,7 +83,29 @@ describe('recoverInFlightProjects', () => {
       { id: 'job-orphan', status: 'queued', owner: 'cd:cd-rendering:scene-1' },
     ]);
     await recoverInFlightProjects();
-    expect(mockCancelJob).not.toHaveBeenCalled();
+    expect(mockCancelJob).toHaveBeenCalledWith('job-orphan');
+  });
+
+  it('retires the underlying CoS task for each stale run so cos.js#resetOrphanedTasks does not respawn it', async () => {
+    // Without retiring the CoS task, cos.js sees `in_progress` task rows
+    // on boot and respawns them — racing the fresh treatment/evaluate task
+    // recovery's advance() will enqueue.
+    mockListProjects.mockResolvedValue([
+      {
+        id: 'cd-1',
+        status: 'planning',
+        treatment: null,
+        runs: [
+          { runId: 'run-1', taskId: 'task-treatment-abc', kind: 'treatment', status: 'running' },
+          { runId: 'run-2', taskId: 'task-eval-def', kind: 'evaluate', sceneId: 's1', status: 'running' },
+          { runId: 'run-3', taskId: null, kind: 'evaluate', sceneId: 's2', status: 'running' }, // missing taskId — skip
+        ],
+      },
+    ]);
+    await recoverInFlightProjects();
+    expect(mockUpdateTask).toHaveBeenCalledTimes(2);
+    expect(mockUpdateTask).toHaveBeenCalledWith('task-treatment-abc', { status: 'failed' }, 'cos');
+    expect(mockUpdateTask).toHaveBeenCalledWith('task-eval-def', { status: 'failed' }, 'cos');
   });
 
   it('cleans up paused projects but does NOT auto-advance them', async () => {

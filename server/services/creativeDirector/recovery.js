@@ -27,6 +27,7 @@
 
 import { listProjects, updateScene, updateRun } from './local.js';
 import { listJobs, cancelJob } from '../mediaJobQueue/index.js';
+import { updateTask } from '../cos.js';
 
 // Projects that should be auto-advanced on boot — the user expects them to
 // keep running.
@@ -59,12 +60,18 @@ export async function recoverInFlightProjects() {
     if (stuck.length) {
       console.log(`🔄 CD recovery: ${project.id} reset ${stuck.length} stuck scene(s) to pending`);
     }
-    // Reap stale `running` agent-run rows. The agent task behind them died
-    // with the previous process, so leaving them as `running` makes the
-    // persisted-runs guard in advanceAfterSceneSettled treat the project
-    // as still in flight and refuse to enqueue a replacement.
+    // Reap stale `running` agent-run rows AND retire the underlying CoS
+    // task. The agent task behind each run died with the previous process,
+    // but cos.js#resetOrphanedTasks would otherwise see `in_progress` task
+    // rows on boot and respawn them — racing the fresh treatment/evaluate
+    // task this recovery path will cause to enqueue. Mark the CoS task
+    // failed first so the orphan-task reset finds nothing to retry.
     const staleRuns = (project.runs || []).filter((r) => r.status === 'running');
     for (const run of staleRuns) {
+      if (run.taskId) {
+        await updateTask(run.taskId, { status: 'failed' }, 'cos')
+          .catch((e) => console.log(`⚠️ CD recovery: retire CoS task ${run.taskId} for ${project.id} failed: ${e.message}`));
+      }
       await updateRun(project.id, run.runId, {
         status: 'failed',
         completedAt,
@@ -74,23 +81,25 @@ export async function recoverInFlightProjects() {
     if (staleRuns.length) {
       console.log(`🔄 CD recovery: ${project.id} reaped ${staleRuns.length} stale running run(s)`);
     }
-    // Cancel any media-queue jobs owned by a paused project that
-    // initMediaJobQueue() restored from disk in `queued` state. Without
-    // this, the worker would dequeue and run them on boot, burning GPU on
-    // a project the user explicitly stopped — and then stranding the
-    // result, since the in-memory completion listener died with the prior
-    // process. (Running jobs were already reclassified failed by the
-    // queue's own boot recovery, so we only need to handle queued.)
-    if (CLEANUP_ONLY_STATUSES.has(project.status)) {
-      const orphaned = listJobs({ status: 'queued' })
-        .filter((j) => typeof j.owner === 'string' && j.owner.startsWith(`cd:${project.id}:`));
-      for (const job of orphaned) {
-        await cancelJob(job.id)
-          .catch((e) => console.log(`⚠️ CD recovery: cancel orphaned queued job ${job.id} for ${project.id} failed: ${e.message}`));
-      }
-      if (orphaned.length) {
-        console.log(`🔄 CD recovery: ${project.id} canceled ${orphaned.length} orphaned queued job(s)`);
-      }
+    // Cancel any media-queue jobs owned by this project that
+    // initMediaJobQueue() restored from disk in `queued` state. Two
+    // reasons: (1) For paused projects the user explicitly stopped, the
+    // queued render shouldn't burn GPU on resume. (2) For recovering
+    // projects (planning/rendering/stitching) the recovery path resets
+    // their scenes to `pending` and advance() will enqueue a fresh render
+    // — leaving the prior queued job alive would race two completions for
+    // the same `cd:<projectId>:<sceneId>` owner. Always cancel BEFORE the
+    // advance call below so the new enqueue can't collide. (Running jobs
+    // were already reclassified failed by the queue's own boot recovery,
+    // so we only need to handle queued here.)
+    const orphaned = listJobs({ status: 'queued' })
+      .filter((j) => typeof j.owner === 'string' && j.owner.startsWith(`cd:${project.id}:`));
+    for (const job of orphaned) {
+      await cancelJob(job.id)
+        .catch((e) => console.log(`⚠️ CD recovery: cancel orphaned queued job ${job.id} for ${project.id} failed: ${e.message}`));
+    }
+    if (orphaned.length) {
+      console.log(`🔄 CD recovery: ${project.id} canceled ${orphaned.length} orphaned queued job(s)`);
     }
     // Only auto-advance projects the user expects to still be running.
     // `paused` projects skip this — the cleanup above is enough to make a

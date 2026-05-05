@@ -36,7 +36,7 @@ import { presetToRenderParams } from '../../lib/creativeDirectorPresets.js';
 import { extractLastFrame, sampleEvaluationFrames } from '../videoGen/local.js';
 import { enqueueJob, mediaJobEvents } from '../mediaJobQueue/index.js';
 import { getSettings } from '../settings.js';
-import { updateScene, getProject } from './local.js';
+import { updateScene, updateProject, getProject } from './local.js';
 import { enqueueEvaluateTask } from './agentBridge.js';
 
 const MAX_SCENE_RETRIES = 3;
@@ -229,8 +229,13 @@ async function handleRenderCompleted(projectId, sceneId, jobId, opts = {}) {
     // surfacing the regression. Mark terminal directly and let the
     // completion hook decide what to do next.
     if (opts.continuationFellBack && scene.useContinuationFromPrior) {
-      const reason = 'continuation requested but fell back to text-to-video';
-      console.log(`❌ CD auto-accept: scene ${sceneId} ${reason} — failing terminally (no retry) so the smoke regression is visible immediately.`);
+      const reason = `scene ${sceneId} requested continuation but fell back to text-to-video`;
+      console.log(`❌ CD auto-accept: ${reason} — failing the entire smoke project so the regression is visible immediately (one accepted scene + later failures would still stitch + complete and hide this).`);
+      // Failing only the scene isn't enough: advanceAfterSceneSettled keeps
+      // going as long as at least one scene was accepted, which would then
+      // stitch the surviving clips into a `complete` project and report the
+      // smoke run as green even though i2v chaining is provably broken.
+      // Fail the whole project so the smoke fixture goes red.
       await updateScene(projectId, sceneId, {
         status: 'failed',
         evaluation: {
@@ -239,8 +244,10 @@ async function handleRenderCompleted(projectId, sceneId, jobId, opts = {}) {
           sampledAt: new Date().toISOString(),
         },
       });
-      const { advanceAfterSceneSettled } = await import('./completionHook.js');
-      await advanceAfterSceneSettled(projectId);
+      await updateProject(projectId, {
+        status: 'failed',
+        failureReason: `i2v continuation regression detected: ${reason}`,
+      }).catch((e) => console.log(`⚠️ CD updateProject(failed) for ${projectId} failed: ${e.message}`));
       return;
     }
     const videoPath = join(PATHS.videos, `${jobId}.mp4`);
