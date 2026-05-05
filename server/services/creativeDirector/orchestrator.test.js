@@ -356,9 +356,12 @@ describe('advanceAfterSceneSettled', () => {
     };
     // getProject called twice in this branch: initial fetch + post-sample re-check.
     localMod.getProject.mockResolvedValue(project);
-    // existsSync returns false in tests (f1.jpg isn't on disk), so
-    // sampleEvaluationFrames will be called. Simulate a successful re-sample
-    // so the evaluator is enqueued rather than the scene being failed.
+    // The resume path now verifies the rendered .mp4 is still on disk
+    // BEFORE deciding to re-sample; let it through. The persisted frame
+    // (f1.jpg) is intentionally NOT on disk (existsSync defaults to
+    // false for everything else), so sampleEvaluationFrames runs.
+    // Simulate a successful re-sample so the evaluator is enqueued.
+    mockExistsSync.mockImplementation((p) => typeof p === 'string' && p.endsWith('.mp4'));
     mockSampleEvaluationFrames.mockResolvedValueOnce(['f1.jpg']);
 
     await advanceAfterSceneSettled(project.id);
@@ -372,9 +375,12 @@ describe('advanceAfterSceneSettled', () => {
     expect(mockRunSceneRender).not.toHaveBeenCalled();
   });
 
-  it('fails the orphan scene AND advances to the next pending scene when frame sampling returns 0 frames and the rendered video is gone (deleted-while-paused)', async () => {
+  it('fails the orphan scene AND advances to the next pending scene when the rendered .mp4 is missing (deleted-while-paused)', async () => {
     // The deleted-video branch in resume must do TWO things:
-    //   1. Mark the orphaned scene `failed` (it can't be evaluated).
+    //   1. Mark the orphaned scene `failed` (the evaluator's
+    //      multi-frame and single-thumbnail fallback BOTH need the .mp4
+    //      and its thumbnail, all of which are unlinked together by
+    //      videoGen/local#deleteHistoryItem — none can recover).
     //   2. Nudge the orchestrator forward — otherwise the project sits in
     //      `rendering` forever because updateScene goes through local.js
     //      directly, not the route handler that auto-calls advance.
@@ -440,11 +446,16 @@ describe('advanceAfterSceneSettled', () => {
     expect(renderedScene.sceneId).toBe('scene-2');
   });
 
-  it('does NOT fail the orphan scene when frame sampling returns 0 frames but the rendered video is still on disk (transient ffmpeg failure → retry)', async () => {
-    // sampleEvaluationFrames also returns [] for non-fatal failures: ffmpeg
-    // missing on PATH, ffprobe miscount, transient I/O. In those cases the
-    // render is recoverable, so the resume path must NOT fail the scene —
-    // it should bail and let a future nudge retry sampling.
+  it('enqueues the evaluator with empty frames (single-thumbnail fallback) when frame sampling returns 0 but the rendered video is still on disk', async () => {
+    // sampleEvaluationFrames returns [] for non-fatal failures: ffmpeg
+    // missing on PATH, ffprobe miscount, transient I/O. The cd-evaluate
+    // template has a `{{^multiFrame}}` branch that falls back to the
+    // single thumbnail at /data/video-thumbnails/{renderedJobId}.jpg —
+    // the same fallback the normal render-completion path relies on. The
+    // resume path must mirror that behavior (hand off whatever frames it
+    // got, even an empty array) instead of bailing, otherwise the
+    // project sits in `rendering` with an orphaned `evaluating` scene
+    // and no automatic way back to progress from the UI.
     const project = {
       id: 'cd-transient-ffmpeg',
       status: 'rendering',
@@ -474,11 +485,81 @@ describe('advanceAfterSceneSettled', () => {
       'scene-1',
       expect.objectContaining({ status: 'failed' }),
     );
-    // Evaluator must NOT fire (we have no frames to send it).
-    expect(mockEnqueueEvaluateTask).not.toHaveBeenCalled();
-    // And the orchestrator must NOT skip past scene-1 to render scene-2 —
-    // bailing leaves scene-1 in `evaluating` so the next nudge retries.
+    // Evaluator IS enqueued — empty frames go through the
+    // single-thumbnail fallback path in the prompt template.
+    expect(mockEnqueueEvaluateTask).toHaveBeenCalledTimes(1);
+    const [, sceneArg] = mockEnqueueEvaluateTask.mock.calls[0];
+    expect(sceneArg.sceneId).toBe('scene-1');
+    expect(sceneArg.evaluationFrames).toEqual([]);
+    // Resume must not skip past scene-1 to render scene-2 — the orphan
+    // evaluator is owning that slot.
     expect(mockRunSceneRender).not.toHaveBeenCalled();
+  });
+
+  it('fails the orphan scene when the cached evaluationFrames are still on disk but the rendered .mp4 is gone (video-deleted-while-paused, frames-survive)', async () => {
+    // The MP4 existence check must run BEFORE the frame-cache check,
+    // because the evaluator (multi-frame OR single-thumbnail fallback)
+    // both reference the .mp4 by its renderedJobId. If the user deleted
+    // the rendered video while the project was paused but the cached
+    // evaluationFrames thumbnails happened to survive (deleteHistoryItem
+    // swallows unlink errors), the old code would happily enqueue the
+    // evaluator and the scene could be accepted — only for the later
+    // stitch step to fail on the missing input file.
+    const project = {
+      id: 'cd-mp4-gone-frames-stay',
+      status: 'rendering',
+      finalVideoId: null,
+      treatment: {
+        scenes: [
+          { sceneId: 'scene-1', order: 0, status: 'evaluating', renderedJobId: '33333333-3333-4333-8333-333333333333', evaluationFrames: ['f1.jpg', 'f2.jpg', 'f3.jpg'] },
+          { sceneId: 'scene-2', order: 1, status: 'pending' },
+        ],
+      },
+      runs: [
+        { kind: 'evaluate', sceneId: 'scene-1', status: 'completed' },
+      ],
+    };
+    const projectAfterFail = {
+      ...project,
+      treatment: {
+        ...project.treatment,
+        scenes: [
+          { ...project.treatment.scenes[0], status: 'failed' },
+          project.treatment.scenes[1],
+        ],
+      },
+    };
+    localMod.getProject
+      .mockResolvedValueOnce(project)
+      .mockResolvedValue(projectAfterFail);
+    // Frame thumbnails are on disk (allFramesExist would return true), but
+    // the .mp4 is gone — only existsSync calls for the frame .jpg paths
+    // return true; the .mp4 check returns false.
+    mockExistsSync.mockImplementation((p) => typeof p === 'string' && p.endsWith('.jpg'));
+
+    await advanceAfterSceneSettled(project.id);
+
+    // Scene-1 was failed because the .mp4 is gone, even though the
+    // cached frames were still on disk.
+    expect(mockUpdateScene).toHaveBeenCalledWith(
+      'cd-mp4-gone-frames-stay',
+      'scene-1',
+      expect.objectContaining({
+        status: 'failed',
+        evaluation: expect.objectContaining({
+          accepted: false,
+          notes: expect.stringContaining('rendered video was deleted'),
+        }),
+      }),
+    );
+    // Evaluator must NOT fire — its inputs (.mp4 and the thumbnail) are
+    // gone, regardless of whether the cached frames survived.
+    expect(mockEnqueueEvaluateTask).not.toHaveBeenCalled();
+    // Sampling is also skipped — we bailed before that step.
+    expect(mockSampleEvaluationFrames).not.toHaveBeenCalled();
+    // Tail-advance moves the orchestrator forward to scene-2.
+    expect(mockRunSceneRender).toHaveBeenCalled();
+    expect(mockRunSceneRender.mock.calls.at(-1)[1].sceneId).toBe('scene-2');
   });
 
   it('rejects + fails orphaned-evaluating scenes whose renderedJobId is not a UUID (path-traversal guard, wedge prevention)', async () => {

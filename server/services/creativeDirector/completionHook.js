@@ -196,6 +196,48 @@ export async function advanceAfterSceneSettled(projectId) {
       if (project.status !== 'rendering') {
         await updateProject(project.id, { status: 'rendering' });
       }
+      // Verify the rendered .mp4 file is still on disk BEFORE deciding what
+      // to do about frames. The video file is the prerequisite for every
+      // evaluator branch: the multi-frame path reads the sampled frames
+      // (which only exist because the video does), and the
+      // single-thumbnail fallback (`{{^multiFrame}}` in cd-evaluate.md)
+      // reads `/data/video-thumbnails/{renderedJobId}.jpg`. If the user
+      // deleted the rendered video while the project was paused, all
+      // three artifacts are gone (videoGen/local#deleteHistoryItem unlinks
+      // the .mp4, its thumbnail, AND every `${jobId}-fN.jpg` evaluation
+      // frame in one shot). If we don't catch this here — even when the
+      // CACHED `evaluationFrames` array still happens to be on disk — the
+      // evaluator may accept the scene, only for the later stitch to
+      // crash on a missing input file.
+      const videoStillExists = existsSync(join(PATHS.videos, `${orphanedEvaluating.renderedJobId}.mp4`));
+      if (!videoStillExists) {
+        console.log(`❌ CD resume: rendered video missing for scene ${orphanedEvaluating.sceneId} on ${project.id} — video deleted while paused, marking scene failed`);
+        let sceneFailed = false;
+        await updateScene(project.id, orphanedEvaluating.sceneId, {
+          status: 'failed',
+          evaluation: {
+            accepted: false,
+            notes: 'Evaluation frames unavailable: rendered video was deleted while project was paused.',
+            sampledAt: new Date().toISOString(),
+          },
+        })
+          .then(() => { sceneFailed = true; })
+          .catch((e) => console.log(`⚠️ CD scene fail-deleted-video for ${orphanedEvaluating.sceneId} failed: ${e.message}`));
+        if (!sceneFailed) {
+          // updateScene errored; don't recurse, otherwise the same orphan
+          // would be re-detected next pass with no progress.
+          return;
+        }
+        // Release the per-scene evaluator lock manually so the recursive
+        // advance below isn't short-circuited by the inflightEvaluator
+        // guard at the top of this branch. The `finally` will delete()
+        // it a second time, which is a no-op on Set. The recursion
+        // re-fetches the project; since the scene is now 'failed', the
+        // orphan check won't re-match and the function falls through to
+        // nextPending / project-failure / stitch logic.
+        inflightEvaluator.delete(evalKey);
+        return advanceAfterSceneSettled(project.id);
+      }
       // Re-sample evaluation frames if they weren't captured during the
       // original completion path (pause landed before frame sampling) OR
       // if any of the persisted frame files is missing on disk. Frames
@@ -212,47 +254,15 @@ export async function advanceAfterSceneSettled(projectId) {
             console.error(`❌ CD resume sampleEvaluationFrames failed for ${orphanedEvaluating.renderedJobId.slice(0, 8)}: ${err.message}`);
             return [];
           });
-        if (frames.length === 0) {
-          // sampleEvaluationFrames returns [] for ANY extraction failure —
-          // not only when the underlying video was deleted. Differentiate
-          // by checking the rendered video file ourselves: if it's gone,
-          // the render is unrecoverable and the scene must be failed; if
-          // it's still on disk, treat this as a transient ffmpeg/ffprobe
-          // failure (no ffmpeg on PATH, probe miscount, transient I/O)
-          // and bail without failing so a later resume / nudge retries.
-          const videoStillExists = existsSync(join(PATHS.videos, `${orphanedEvaluating.renderedJobId}.mp4`));
-          if (videoStillExists) {
-            console.log(`⚠️ CD resume: frame sampling returned 0 frames for scene ${orphanedEvaluating.sceneId} on ${project.id} but rendered video is still on disk — leaving scene 'evaluating' for retry on next nudge`);
-            return;
-          }
-          console.log(`❌ CD resume: rendered video missing for scene ${orphanedEvaluating.sceneId} on ${project.id} — video deleted while paused, marking scene failed`);
-          let sceneFailed = false;
-          await updateScene(project.id, orphanedEvaluating.sceneId, {
-            status: 'failed',
-            evaluation: {
-              accepted: false,
-              notes: 'Evaluation frames unavailable: rendered video was deleted while project was paused.',
-              sampledAt: new Date().toISOString(),
-            },
-          })
-            .then(() => { sceneFailed = true; })
-            .catch((e) => console.log(`⚠️ CD scene fail-deleted-video for ${orphanedEvaluating.sceneId} failed: ${e.message}`));
-          if (!sceneFailed) {
-            // updateScene errored; don't recurse, otherwise the same
-            // orphan would be re-detected next pass with no progress.
-            return;
-          }
-          // Release the per-scene evaluator lock manually so the
-          // recursive advance below isn't short-circuited by the
-          // `inflightEvaluator.has(evalKey)` guard at the top of this
-          // branch. The `finally` will delete() it a second time,
-          // which is a no-op on Set. The recursion re-fetches the
-          // project; since the scene is now 'failed', the orphan
-          // check won't re-match and the function falls through to
-          // nextPending / project-failure / stitch logic.
-          inflightEvaluator.delete(evalKey);
-          return advanceAfterSceneSettled(project.id);
-        }
+        // sampleEvaluationFrames can return [] for non-fatal reasons
+        // (ffmpeg missing on PATH, ffprobe miscount, transient I/O). The
+        // video file is still on disk (we checked above), so the
+        // evaluator template's single-thumbnail fallback path
+        // (`{{^multiFrame}}` in cd-evaluate.md) can still produce a
+        // verdict against `/data/video-thumbnails/{renderedJobId}.jpg`.
+        // Mirror the normal render-completion path (sceneRunner.js): hand
+        // off whatever frames we got, even an empty array, rather than
+        // bailing here and leaving the project wedged in `rendering`.
         await updateScene(project.id, orphanedEvaluating.sceneId, { evaluationFrames: frames });
       }
       // Pause race re-check after the expensive frame-sampling step. The

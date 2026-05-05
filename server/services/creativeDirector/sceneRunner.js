@@ -92,6 +92,13 @@ export async function runSceneRender(project, scene) {
   // broken.
   let sourceImageFile = scene.sourceImageFile || null;
   let continuationFellBack = false;
+  // Track whether `sourceImageFile` was assigned via the continuation
+  // branch (vs. being a user-supplied scene.sourceImageFile). If it
+  // was, and the path-resolution step below later drops it as missing
+  // or invalid, we need to flag continuationFellBack — otherwise the
+  // smoke-test autoAccept path silently reports a green render even
+  // though the actual i2v chaining never engaged.
+  let continuationSourceFromExtract = false;
   if (scene.useContinuationFromPrior) {
     const fresh = await getProject(project.id);
     const priorScene = (fresh?.treatment?.scenes || [])
@@ -104,6 +111,7 @@ export async function runSceneRender(project, scene) {
       });
       if (lf?.filename) {
         sourceImageFile = lf.filename;
+        continuationSourceFromExtract = true;
       } else {
         console.log(`⚠️ CD scene ${scene.sceneId} requested continuation but last-frame extract failed — falling back to text-to-video`);
         continuationFellBack = true;
@@ -137,6 +145,16 @@ export async function runSceneRender(project, scene) {
         console.log(`⚠️ CD scene ${scene.sceneId} sourceImageFile not found on disk: ${sourceImageFile}`);
       }
     }
+  }
+  // If the continuation branch above produced a sourceImageFile but the
+  // path-resolution step just dropped it (file missing, dot-segment, or
+  // outside PATHS.images), the render will silently fall through to
+  // text-to-video. Surface that as a continuation fallback so the
+  // smoke-test autoAccept guard still catches it — otherwise the test
+  // could report a green render that proves nothing about i2v chaining.
+  if (continuationSourceFromExtract && !sourceImagePath) {
+    console.log(`⚠️ CD scene ${scene.sceneId} continuation last-frame resolved to no file — flagging as fallback`);
+    continuationFellBack = true;
   }
 
   const renderParams = presetToRenderParams({
