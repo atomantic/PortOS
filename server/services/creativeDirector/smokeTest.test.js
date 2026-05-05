@@ -36,6 +36,12 @@ describe('createSmokeTestProject', () => {
     expect(project.quality).toBe('draft');
     expect(project.targetDurationSeconds).toBe(6);
     expect(project.treatment.scenes).toHaveLength(3);
+    // Lock per-scene durations so a future tweak (e.g. 2s → 3s) gets caught.
+    // Smoke run total compute is O(scenes × duration² × resolution²) — drift
+    // here makes the health check silently expensive without anyone noticing.
+    for (const scene of project.treatment.scenes) {
+      expect(scene.durationSeconds).toBe(2);
+    }
   });
 
   it('scene 1 is text-to-video (no continuation, no source image)', async () => {

@@ -276,28 +276,28 @@ async function handleRenderCompleted(projectId, sceneId, jobId, opts = {}) {
     await advanceAfterSceneSettled(projectId);
     return;
   }
-  // Helper: revert the scene to `pending` so resume() picks it up.
-  // resume() → advanceAfterSceneSettled() only re-fires `pending` scenes,
-  // so an orphaned `evaluating` row would silently strand the project
-  // (later scenes still pending → advance moves on; if this was the last,
-  // the project hangs forever waiting for an evaluate task that never
-  // enqueues). Re-rendering on resume is wasteful but bounded; never
-  // advancing is fatal.
-  const revertSceneForResume = async (statusLabel) => {
+  // Helper: persist the completed render and skip the evaluator. The
+  // pause/fail-aware path keeps the scene in `evaluating` with the
+  // renderedJobId set so resume can pick up evaluation directly without
+  // re-rendering. completionHook#advanceAfterSceneSettled detects
+  // orphaned `evaluating` scenes (renderedJobId set, no live evaluate
+  // run in runs[]) and re-fires the evaluator — closing the loop without
+  // wasting the rendered clip.
+  const skipEvaluatorForPause = async (statusLabel, frames) => {
     await updateScene(projectId, sceneId, {
-      status: 'pending',
-      renderedJobId: null,
-      evaluationFrames: [],
+      status: 'evaluating',
+      renderedJobId: jobId,
+      evaluationFrames: frames,
     });
-    console.log(`⏸️  CD project ${projectId} is ${statusLabel} — skipping evaluator enqueue for scene ${sceneId} and reverting it to pending so resume can re-render cleanly.`);
+    console.log(`⏸️  CD project ${projectId} is ${statusLabel} — render landed during pause; persisting renderedJobId on scene ${sceneId} and deferring evaluator to resume.`);
   };
   // Pre-frame-sample status check: a user pause that landed while the
   // render was in flight should short-circuit BEFORE we burn ffprobe +
-  // ffmpeg cycles writing throwaway thumbnails. The post-frame check
-  // below catches a pause that lands during sampling.
+  // ffmpeg cycles writing throwaway thumbnails. Frames will be sampled
+  // on resume by advanceAfterSceneSettled instead.
   const preFrames = await getProject(projectId);
   if (preFrames?.status === 'paused' || preFrames?.status === 'failed') {
-    await revertSceneForResume(preFrames.status);
+    await skipEvaluatorForPause(preFrames.status, []);
     return;
   }
   const evaluationFrames = await sampleEvaluationFrames(jobId).catch((err) => {
@@ -311,7 +311,7 @@ async function handleRenderCompleted(projectId, sceneId, jobId, opts = {}) {
   // run on work the user explicitly canceled.
   const postFrames = await getProject(projectId);
   if (postFrames?.status === 'paused' || postFrames?.status === 'failed') {
-    await revertSceneForResume(postFrames.status);
+    await skipEvaluatorForPause(postFrames.status, evaluationFrames);
     return;
   }
   await updateScene(projectId, sceneId, {

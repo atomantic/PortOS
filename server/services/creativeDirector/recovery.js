@@ -25,7 +25,7 @@
  *      fresh evaluate task, runs the stitch, etc.
  */
 
-import { listProjects, updateScene, updateRun } from './local.js';
+import { listProjects, updateScene, updateRun, updateProject } from './local.js';
 import { listJobs, cancelJob } from '../mediaJobQueue/index.js';
 import { updateTask } from '../cos.js';
 
@@ -121,6 +121,17 @@ export async function recoverInFlightProjects() {
     // `paused` projects skip this — the cleanup above is enough to make a
     // future Resume click work.
     if (RECOVERABLE_STATUSES.has(project.status)) {
+      // Special case: a project that was mid-stitch when the server died
+      // still has status='stitching'. advanceAfterSceneSettled exits
+      // early when it sees that status (its stitch dedup guard), so it
+      // would never re-fire runStitch. Flip back to 'rendering' so the
+      // function re-evaluates from scratch — it'll find all scenes
+      // accepted, no inflight, no finalVideoId, and call runStitch
+      // (which sets status back to 'stitching' itself before starting).
+      if (project.status === 'stitching' && !project.finalVideoId) {
+        await updateProject(project.id, { status: 'rendering' })
+          .catch((e) => console.log(`⚠️ CD recovery: reset stitching→rendering for ${project.id} failed: ${e.message}`));
+      }
       advanceAfterSceneSettled(project.id)
         .catch((e) => console.log(`⚠️ CD recovery: advance for ${project.id} failed: ${e.message}`));
       resumed += 1;

@@ -4,6 +4,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const mockListProjects = vi.fn();
 const mockUpdateScene = vi.fn();
 const mockUpdateRun = vi.fn();
+const mockUpdateProject = vi.fn();
 const mockAdvance = vi.fn();
 const mockListJobs = vi.fn();
 const mockCancelJob = vi.fn();
@@ -13,6 +14,7 @@ vi.mock('./local.js', () => ({
   listProjects: (...args) => mockListProjects(...args),
   updateScene: (...args) => mockUpdateScene(...args),
   updateRun: (...args) => mockUpdateRun(...args),
+  updateProject: (...args) => mockUpdateProject(...args),
 }));
 
 vi.mock('./completionHook.js', () => ({
@@ -38,6 +40,7 @@ beforeEach(() => {
   mockListJobs.mockReset().mockReturnValue([]);
   mockCancelJob.mockReset().mockResolvedValue({ ok: true, status: 'canceled' });
   mockUpdateTask.mockReset().mockResolvedValue({ ok: true });
+  mockUpdateProject.mockReset().mockResolvedValue({ ok: true });
 });
 
 describe('recoverInFlightProjects', () => {
@@ -185,16 +188,37 @@ describe('recoverInFlightProjects', () => {
     expect(mockAdvance).toHaveBeenCalledWith('cd-1');
   });
 
-  it('resumes stitching-state projects (final concat interrupted)', async () => {
+  it('resumes stitching-state projects (final concat interrupted) by flipping back to rendering first', async () => {
+    // advanceAfterSceneSettled bails out early when status === 'stitching'
+    // (its in-flight stitch dedup guard), so without flipping the status
+    // back to 'rendering' here the recovery would silently leave the
+    // project frozen at "all scenes accepted, no finalVideoId, never
+    // re-stitched" — needing manual JSON edits to escape.
     mockListProjects.mockResolvedValue([
       {
         id: 'cd-1',
         status: 'stitching',
+        finalVideoId: null,
         treatment: { scenes: [{ sceneId: 's1', status: 'accepted', renderedJobId: 'job-1' }] },
       },
     ]);
     const result = await recoverInFlightProjects();
     expect(result.resumed).toBe(1);
+    expect(mockUpdateProject).toHaveBeenCalledWith('cd-1', { status: 'rendering' });
+    expect(mockAdvance).toHaveBeenCalledWith('cd-1');
+  });
+
+  it('does NOT flip stitching → rendering when finalVideoId is already set (stitch already finished, just status not flipped)', async () => {
+    mockListProjects.mockResolvedValue([
+      {
+        id: 'cd-1',
+        status: 'stitching',
+        finalVideoId: 'final-job-1',
+        treatment: { scenes: [{ sceneId: 's1', status: 'accepted', renderedJobId: 'job-1' }] },
+      },
+    ]);
+    await recoverInFlightProjects();
+    expect(mockUpdateProject).not.toHaveBeenCalled();
     expect(mockAdvance).toHaveBeenCalledWith('cd-1');
   });
 

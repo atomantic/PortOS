@@ -22,10 +22,11 @@
  * that case).
  */
 
-import { getProject, updateProject, updateRun, recordRun } from './local.js';
-import { enqueueTreatmentTask } from './agentBridge.js';
+import { getProject, updateProject, updateScene, updateRun, recordRun } from './local.js';
+import { enqueueTreatmentTask, enqueueEvaluateTask } from './agentBridge.js';
 import { runSceneRender } from './sceneRunner.js';
 import { runStitch } from './stitchRunner.js';
+import { sampleEvaluationFrames } from '../videoGen/local.js';
 
 export async function handleCreativeDirectorCompletion(task, agentId, success) {
   const meta = task?.metadata?.creativeDirector;
@@ -125,13 +126,54 @@ export async function advanceAfterSceneSettled(projectId) {
     return;
   }
 
+  const scenes = (project.treatment.scenes || []).slice().sort((a, b) => a.order - b.order);
+
+  // Resume-after-pause path: a scene left in `evaluating` with a
+  // renderedJobId set means handleRenderCompleted persisted the render
+  // (the user paused before the evaluator could be enqueued, or recovery
+  // reaped the live evaluate task on restart). Re-fire the evaluator
+  // here so the existing rendered clip isn't wasted on a pointless
+  // re-render. Skip if a fresh evaluate run is already in flight (don't
+  // double-enqueue mid-resume).
+  const orphanedEvaluating = scenes.find((s) =>
+    s.status === 'evaluating' &&
+    s.renderedJobId &&
+    !(project.runs || []).some(
+      (r) => r.kind === 'evaluate' && r.sceneId === s.sceneId && r.status !== 'completed' && r.status !== 'failed',
+    ),
+  );
+  if (orphanedEvaluating) {
+    if (project.status !== 'rendering') {
+      await updateProject(project.id, { status: 'rendering' });
+    }
+    // Re-sample evaluation frames if they weren't captured during the
+    // original completion path (pause landed before frame sampling).
+    let frames = orphanedEvaluating.evaluationFrames || [];
+    if (!frames.length) {
+      frames = await sampleEvaluationFrames(orphanedEvaluating.renderedJobId)
+        .catch((err) => {
+          console.error(`❌ CD resume sampleEvaluationFrames failed for ${orphanedEvaluating.renderedJobId.slice(0, 8)}: ${err.message}`);
+          return [];
+        });
+      if (frames.length) {
+        await updateScene(project.id, orphanedEvaluating.sceneId, { evaluationFrames: frames });
+      }
+    }
+    console.log(`▶️  CD resume: re-firing evaluator for orphaned 'evaluating' scene ${orphanedEvaluating.sceneId} on project ${project.id} (renderedJobId preserved from pre-pause render).`);
+    const refreshed = await getProject(project.id);
+    const sceneRefreshed = refreshed?.treatment?.scenes?.find((s) => s.sceneId === orphanedEvaluating.sceneId);
+    if (refreshed && sceneRefreshed) {
+      await enqueueEvaluateTask(refreshed, { ...sceneRefreshed, evaluationFrames: frames });
+    }
+    return;
+  }
+
   // Find next pending scene. nextPendingScene returns the lowest-order
   // scene whose status is pending/rendering/evaluating — but since
   // sceneRunner sets status='rendering' the moment it kicks off, and
   // 'evaluating' once the render completes, we want the lowest-order scene
   // whose status is exactly 'pending' (i.e. not yet started OR
   // re-requested by the evaluator).
-  const scenes = (project.treatment.scenes || []).slice().sort((a, b) => a.order - b.order);
   const nextPending = scenes.find((s) => s.status === 'pending');
   if (nextPending) {
     if (project.status !== 'rendering') {

@@ -1,27 +1,43 @@
 import { Link } from 'react-router-dom';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { updateCreativeDirectorProject } from '../../services/apiCreativeDirector.js';
 import toast from '../ui/Toast';
 
 export default function OverviewTab({ project, onProjectUpdate }) {
   const [disableAudio, setDisableAudio] = useState(project.disableAudio === true);
   const [saving, setSaving] = useState(false);
-
+  // Track the project id this tab is currently mounted for. If the user
+  // toggles audio and navigates to a different CD project before the PATCH
+  // resolves, the late `.then()` would otherwise call onProjectUpdate on
+  // the now-different project and silently overwrite its local state.
+  const projectIdRef = useRef(project.id);
   useEffect(() => {
+    projectIdRef.current = project.id;
     setDisableAudio(project.disableAudio === true);
-  }, [project.disableAudio]);
+  }, [project.id, project.disableAudio]);
 
   const handleAudioToggle = (e) => {
     const next = e.target.checked;
     setDisableAudio(next);
     setSaving(true);
-    updateCreativeDirectorProject(project.id, { disableAudio: next })
-      .then(() => onProjectUpdate?.({ disableAudio: next }))
+    const requestProjectId = project.id;
+    updateCreativeDirectorProject(requestProjectId, { disableAudio: next })
+      .then(() => {
+        if (projectIdRef.current === requestProjectId) {
+          onProjectUpdate?.({ disableAudio: next });
+        }
+      })
       .catch((err) => {
-        setDisableAudio(!next);
+        if (projectIdRef.current === requestProjectId) {
+          setDisableAudio(!next);
+        }
         toast.error(err.message || 'Failed to update audio setting');
       })
-      .finally(() => setSaving(false));
+      .finally(() => {
+        if (projectIdRef.current === requestProjectId) {
+          setSaving(false);
+        }
+      });
   };
   const collectionLink = `/media/collections/${project.collectionId}`;
   const final = project.finalVideoId

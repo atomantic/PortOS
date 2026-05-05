@@ -293,7 +293,18 @@ router.post('/cancel', asyncHandler(async (req, res) => {
     if (target) return res.json(await cancelJob(target.id));
     // jobId not in our queue — fall through (could be a codex job).
   } else if (cancellable.length) {
-    return res.json(await cancelJob(cancellable[cancellable.length - 1].id));
+    // "Most recent activity" — explicitly sort by latest timestamp instead
+    // of relying on listJobs() ordering (which puts gpuRunning before
+    // codexRunning, then queue, then archive). With two live image lanes
+    // active (local + codex) the previous `cancellable.length - 1` would
+    // pick the last-listed instead of the genuinely-latest job, often
+    // canceling the wrong render.
+    const latestFirst = [...cancellable].sort((a, b) => {
+      const ta = new Date(a.startedAt || a.queuedAt || 0).getTime();
+      const tb = new Date(b.startedAt || b.queuedAt || 0).getTime();
+      return tb - ta;
+    });
+    return res.json(await cancelJob(latestFirst[0].id));
   }
   const cancelled = imageGen.cancel();
   res.json({ ok: cancelled });
