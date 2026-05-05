@@ -345,6 +345,10 @@ describe('advanceAfterSceneSettled', () => {
     };
     // getProject called twice in this branch: initial fetch + post-sample re-check.
     localMod.getProject.mockResolvedValue(project);
+    // existsSync returns false in tests (f1.jpg isn't on disk), so
+    // sampleEvaluationFrames will be called. Simulate a successful re-sample
+    // so the evaluator is enqueued rather than the scene being failed.
+    mockSampleEvaluationFrames.mockResolvedValueOnce(['f1.jpg']);
 
     await advanceAfterSceneSettled(project.id);
 

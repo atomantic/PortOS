@@ -15,16 +15,27 @@ export default function OverviewTab({ project, onProjectUpdate }) {
   // gated on the old id and never runs the .finally for this instance),
   // leaving the new project's audio checkbox permanently disabled.
   const projectIdRef = useRef(project.id);
+  // Guards prop-driven resets while a PATCH is in flight. A stale poll
+  // response arriving before the PATCH resolves would otherwise call
+  // setSaving(false) and roll back the optimistic toggle.
+  const savingRef = useRef(false);
   useEffect(() => {
     projectIdRef.current = project.id;
     setDisableAudio(project.disableAudio === true);
     setSaving(false);
-  }, [project.id, project.disableAudio]);
+    savingRef.current = false;
+  }, [project.id]);
+  useEffect(() => {
+    if (!savingRef.current) {
+      setDisableAudio(project.disableAudio === true);
+    }
+  }, [project.disableAudio]);
 
   const handleAudioToggle = (e) => {
     const next = e.target.checked;
     setDisableAudio(next);
     setSaving(true);
+    savingRef.current = true;
     const requestProjectId = project.id;
     updateCreativeDirectorProject(requestProjectId, { disableAudio: next })
       .then(() => {
@@ -39,6 +50,7 @@ export default function OverviewTab({ project, onProjectUpdate }) {
         toast.error(err.message || 'Failed to update audio setting');
       })
       .finally(() => {
+        savingRef.current = false;
         if (projectIdRef.current === requestProjectId) {
           setSaving(false);
         }

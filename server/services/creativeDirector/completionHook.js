@@ -212,6 +212,21 @@ export async function advanceAfterSceneSettled(projectId) {
             console.error(`❌ CD resume sampleEvaluationFrames failed for ${orphanedEvaluating.renderedJobId.slice(0, 8)}: ${err.message}`);
             return [];
           });
+        if (frames.length === 0) {
+          // Video was deleted while the project was paused — thumbnails are gone
+          // too. Enqueueing the evaluator with no frames would send it a broken
+          // image URL. Fail the scene so the orchestrator can advance past it.
+          console.log(`❌ CD resume: no evaluation frames for scene ${orphanedEvaluating.sceneId} on ${project.id} — video deleted while paused, marking scene failed`);
+          await updateScene(project.id, orphanedEvaluating.sceneId, {
+            status: 'failed',
+            evaluation: {
+              accepted: false,
+              notes: 'Evaluation frames unavailable: rendered video was deleted while project was paused.',
+              sampledAt: new Date().toISOString(),
+            },
+          }).catch((e) => console.log(`⚠️ CD scene fail-deleted-video for ${orphanedEvaluating.sceneId} failed: ${e.message}`));
+          return;
+        }
         await updateScene(project.id, orphanedEvaluating.sceneId, { evaluationFrames: frames });
       }
       // Pause race re-check after the expensive frame-sampling step. The
