@@ -68,11 +68,15 @@ export async function runStitch(projectId) {
 
     const { jobId } = await renderTimelineProject(timeline.id);
 
-    // Poll video-history.json for an entry tagged with our timelineProjectId.
-    // The timeline service appends a history entry at the end of a successful
-    // render with `timelineProjectId` set, so when we see it the mp4 is on
-    // disk. In parallel, check the job's in-memory status so an ffmpeg failure
-    // breaks out of the loop within seconds instead of waiting 30 minutes.
+    // Poll video-history.json for an entry whose id matches THIS render's
+    // jobId. Match strictly on jobId — not on timelineProjectId — because
+    // when we reuse an existing timeline project (recovery path), an older
+    // successful render from a previous attempt could still be in history
+    // tagged with the same timelineProjectId. Picking that up here would
+    // mark the CD project complete with a stale finalVideoId while the
+    // fresh render is still running. The timeline service writes its
+    // history entry with `id: jobId` (videoTimeline/local.js), so jobId
+    // alone uniquely identifies the current render's output.
     const deadline = Date.now() + FINAL_RENDER_TIMEOUT_MS;
     let finalEntry = null;
     while (Date.now() < deadline) {
@@ -87,7 +91,7 @@ export async function runStitch(projectId) {
       }
 
       const history = await loadHistory().catch(() => []);
-      finalEntry = history.find((h) => h.id === jobId || h.timelineProjectId === timeline.id);
+      finalEntry = history.find((h) => h.id === jobId);
       if (finalEntry) break;
       await sleep(FINAL_RENDER_POLL_MS);
     }
