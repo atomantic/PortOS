@@ -64,13 +64,20 @@ export async function recoverInFlightProjects() {
     // task. The agent task behind each run died with the previous process,
     // but cos.js#resetOrphanedTasks would otherwise see `in_progress` task
     // rows on boot and respawn them — racing the fresh treatment/evaluate
-    // task this recovery path will cause to enqueue. Mark the CoS task
-    // failed first so the orphan-task reset finds nothing to retry.
+    // task this recovery path will cause to enqueue. Mark the task failed
+    // first so the orphan-task reset finds nothing to retry.
+    //
+    // taskType MUST be 'internal' here — CD treatment/evaluate tasks are
+    // added by agentBridge#persistAndEmit via `addTask(record, 'internal',
+    // …)`. Passing 'cos' would write to the wrong file AND, per
+    // cos.js#updateTask, strip approval flags from internal task entries
+    // (only 'internal' preserves them), silently auto-approving unrelated
+    // internal tasks across a CD recovery cycle.
     const staleRuns = (project.runs || []).filter((r) => r.status === 'running');
     for (const run of staleRuns) {
       if (run.taskId) {
-        await updateTask(run.taskId, { status: 'failed' }, 'cos')
-          .catch((e) => console.log(`⚠️ CD recovery: retire CoS task ${run.taskId} for ${project.id} failed: ${e.message}`));
+        await updateTask(run.taskId, { status: 'failed' }, 'internal')
+          .catch((e) => console.log(`⚠️ CD recovery: retire internal task ${run.taskId} for ${project.id} failed: ${e.message}`));
       }
       await updateRun(project.id, run.runId, {
         status: 'failed',
@@ -82,24 +89,33 @@ export async function recoverInFlightProjects() {
       console.log(`🔄 CD recovery: ${project.id} reaped ${staleRuns.length} stale running run(s)`);
     }
     // Cancel any media-queue jobs owned by this project that
-    // initMediaJobQueue() restored from disk in `queued` state. Two
-    // reasons: (1) For paused projects the user explicitly stopped, the
-    // queued render shouldn't burn GPU on resume. (2) For recovering
-    // projects (planning/rendering/stitching) the recovery path resets
-    // their scenes to `pending` and advance() will enqueue a fresh render
-    // — leaving the prior queued job alive would race two completions for
-    // the same `cd:<projectId>:<sceneId>` owner. Always cancel BEFORE the
-    // advance call below so the new enqueue can't collide. (Running jobs
-    // were already reclassified failed by the queue's own boot recovery,
-    // so we only need to handle queued here.)
-    const orphaned = listJobs({ status: 'queued' })
-      .filter((j) => typeof j.owner === 'string' && j.owner.startsWith(`cd:${project.id}:`));
+    // initMediaJobQueue() restored from disk. Two reasons: (1) For paused
+    // projects the user explicitly stopped, the queued render shouldn't
+    // burn GPU on resume. (2) For recovering projects (planning/rendering/
+    // stitching) the recovery path resets their scenes to `pending` and
+    // advance() will enqueue a fresh render — leaving the prior job alive
+    // would race two completions for the same `cd:<projectId>:<sceneId>`
+    // owner.
+    //
+    // We must cancel BOTH queued AND running, not just queued. The queue
+    // worker is started by initMediaJobQueue() (see server/index.js boot
+    // order) and dequeues restored jobs immediately — by the time this
+    // recovery path runs, what was `queued` on disk may already have
+    // transitioned to `running` in memory. Cancelling running CD jobs
+    // here SIGTERMs the gen process so the freshly-enqueued render
+    // doesn't have to compete for GPU memory with a doomed sibling.
+    // (Jobs reclassified `failed (interrupted by restart)` by the queue's
+    // own boot recovery are already terminal and listJobs returns them
+    // archived — they won't match either filter.)
+    const orphaned = listJobs()
+      .filter((j) => typeof j.owner === 'string' && j.owner.startsWith(`cd:${project.id}:`))
+      .filter((j) => j.status === 'queued' || j.status === 'running');
     for (const job of orphaned) {
       await cancelJob(job.id)
-        .catch((e) => console.log(`⚠️ CD recovery: cancel orphaned queued job ${job.id} for ${project.id} failed: ${e.message}`));
+        .catch((e) => console.log(`⚠️ CD recovery: cancel orphaned ${job.status} job ${job.id} for ${project.id} failed: ${e.message}`));
     }
     if (orphaned.length) {
-      console.log(`🔄 CD recovery: ${project.id} canceled ${orphaned.length} orphaned queued job(s)`);
+      console.log(`🔄 CD recovery: ${project.id} canceled ${orphaned.length} orphaned job(s) (mix of queued + already-dequeued)`);
     }
     // Only auto-advance projects the user expects to still be running.
     // `paused` projects skip this — the cleanup above is enough to make a

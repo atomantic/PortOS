@@ -86,6 +86,25 @@ describe('recoverInFlightProjects', () => {
     expect(mockCancelJob).toHaveBeenCalledWith('job-orphan');
   });
 
+  it('cancels orphaned jobs that have already moved from queued → running by the time recovery runs', async () => {
+    // initMediaJobQueue() starts the worker before recovery executes, so
+    // restored queued jobs may already be running when listJobs() is
+    // called here. Recovery must SIGTERM those too via cancelJob — not
+    // just queued — otherwise the dead-listener render keeps burning GPU
+    // and the freshly-enqueued sibling fights it for memory.
+    mockListProjects.mockResolvedValue([
+      { id: 'cd-rendering', status: 'rendering', treatment: { scenes: [] }, runs: [] },
+    ]);
+    mockListJobs.mockReturnValue([
+      { id: 'job-running', status: 'running', owner: 'cd:cd-rendering:scene-1' },
+      { id: 'job-completed', status: 'completed', owner: 'cd:cd-rendering:scene-2' }, // terminal — must NOT cancel
+      { id: 'job-failed', status: 'failed', owner: 'cd:cd-rendering:scene-3' }, // terminal — must NOT cancel
+    ]);
+    await recoverInFlightProjects();
+    expect(mockCancelJob).toHaveBeenCalledTimes(1);
+    expect(mockCancelJob).toHaveBeenCalledWith('job-running');
+  });
+
   it('retires the underlying CoS task for each stale run so cos.js#resetOrphanedTasks does not respawn it', async () => {
     // Without retiring the CoS task, cos.js sees `in_progress` task rows
     // on boot and respawns them — racing the fresh treatment/evaluate task
@@ -104,8 +123,10 @@ describe('recoverInFlightProjects', () => {
     ]);
     await recoverInFlightProjects();
     expect(mockUpdateTask).toHaveBeenCalledTimes(2);
-    expect(mockUpdateTask).toHaveBeenCalledWith('task-treatment-abc', { status: 'failed' }, 'cos');
-    expect(mockUpdateTask).toHaveBeenCalledWith('task-eval-def', { status: 'failed' }, 'cos');
+    // taskType MUST be 'internal' — CD tasks are added via addTask(record, 'internal').
+    // Passing 'cos' would write to the wrong file and silently strip approval flags.
+    expect(mockUpdateTask).toHaveBeenCalledWith('task-treatment-abc', { status: 'failed' }, 'internal');
+    expect(mockUpdateTask).toHaveBeenCalledWith('task-eval-def', { status: 'failed' }, 'internal');
   });
 
   it('cleans up paused projects but does NOT auto-advance them', async () => {

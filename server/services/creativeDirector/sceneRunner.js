@@ -276,28 +276,42 @@ async function handleRenderCompleted(projectId, sceneId, jobId, opts = {}) {
     await advanceAfterSceneSettled(projectId);
     return;
   }
-  const evaluationFrames = await sampleEvaluationFrames(jobId).catch((err) => {
-    console.error(`❌ CD sampleEvaluationFrames failed for ${jobId.slice(0, 8)}: ${err.message}`);
-    return [];
-  });
-  // Re-check project status before fanning out to the evaluator. A user
-  // pause that landed while the render was still in flight would otherwise
-  // continue spending agent time on the evaluate task.
-  const postRender = await getProject(projectId);
-  if (postRender?.status === 'paused' || postRender?.status === 'failed') {
-    // Reset the scene to `pending` instead of leaving it in `evaluating`.
-    // resume() → advanceAfterSceneSettled() only picks up `pending` scenes,
-    // so an orphaned `evaluating` row would silently strand the project
-    // (later scenes still pending → advance moves on; if this was the last,
-    // the project hangs forever waiting for an evaluate task that never
-    // gets enqueued). Re-rendering is wasteful but bounded; never advancing
-    // is fatal.
+  // Helper: revert the scene to `pending` so resume() picks it up.
+  // resume() → advanceAfterSceneSettled() only re-fires `pending` scenes,
+  // so an orphaned `evaluating` row would silently strand the project
+  // (later scenes still pending → advance moves on; if this was the last,
+  // the project hangs forever waiting for an evaluate task that never
+  // enqueues). Re-rendering on resume is wasteful but bounded; never
+  // advancing is fatal.
+  const revertSceneForResume = async (statusLabel) => {
     await updateScene(projectId, sceneId, {
       status: 'pending',
       renderedJobId: null,
       evaluationFrames: [],
     });
-    console.log(`⏸️  CD project ${projectId} is ${postRender.status} — skipping evaluator enqueue for scene ${sceneId} and reverting it to pending so resume can re-render cleanly.`);
+    console.log(`⏸️  CD project ${projectId} is ${statusLabel} — skipping evaluator enqueue for scene ${sceneId} and reverting it to pending so resume can re-render cleanly.`);
+  };
+  // Pre-frame-sample status check: a user pause that landed while the
+  // render was in flight should short-circuit BEFORE we burn ffprobe +
+  // ffmpeg cycles writing throwaway thumbnails. The post-frame check
+  // below catches a pause that lands during sampling.
+  const preFrames = await getProject(projectId);
+  if (preFrames?.status === 'paused' || preFrames?.status === 'failed') {
+    await revertSceneForResume(preFrames.status);
+    return;
+  }
+  const evaluationFrames = await sampleEvaluationFrames(jobId).catch((err) => {
+    console.error(`❌ CD sampleEvaluationFrames failed for ${jobId.slice(0, 8)}: ${err.message}`);
+    return [];
+  });
+  // Re-check immediately before the agent-task enqueue. Single-user
+  // single-instance app per CLAUDE.md, but pause IS a real user action
+  // and the API roundtrip can land between this read and the enqueue
+  // below. The cost of one extra read is trivial vs. spending an agent
+  // run on work the user explicitly canceled.
+  const postFrames = await getProject(projectId);
+  if (postFrames?.status === 'paused' || postFrames?.status === 'failed') {
+    await revertSceneForResume(postFrames.status);
     return;
   }
   await updateScene(projectId, sceneId, {
