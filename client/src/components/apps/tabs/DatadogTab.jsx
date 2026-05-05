@@ -39,7 +39,7 @@ export default function DatadogTab({ app }) {
     setFetchFailed(false);
     const range = TIME_RANGES.find(r => r.value === timeRange);
     const fromTime = new Date(Date.now() - range.ms).toISOString();
-    const result = await api.searchDatadogErrors(dd.instanceId, dd.serviceName, dd.environment || 'production', fromTime).catch(err => {
+    const result = await api.searchDatadogErrors(dd.instanceId, dd.serviceName, dd.environment || 'production', fromTime, { signal: controller.signal, silent: true }).catch(err => {
       if (err.name === 'AbortError') return 'aborted';
       return null;
     });
@@ -84,6 +84,7 @@ export default function DatadogTab({ app }) {
           <select
             value={timeRange}
             onChange={e => setTimeRange(e.target.value)}
+            aria-label="Error time range"
             className="px-3 py-1.5 bg-port-bg border border-port-border rounded-lg text-sm text-white focus:border-port-accent focus:outline-hidden"
           >
             {TIME_RANGES.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
@@ -114,7 +115,10 @@ export default function DatadogTab({ app }) {
         </div>
       ) : (
         <div className="space-y-2">
-          <p className="text-sm text-gray-400">{errors.length} error{errors.length !== 1 ? 's' : ''} found</p>
+          <p className="text-sm text-gray-400">
+            {errors.length} error{errors.length !== 1 ? 's' : ''} found
+            {errors.length >= 100 && <span className="text-port-warning ml-1">(results may be truncated)</span>}
+          </p>
           {errors.map((err, idx) => {
             const attrs = err.attributes || {};
             const errId = err.id || attrs.timestamp || `${attrs.message}-${idx}`;
@@ -131,6 +135,7 @@ export default function DatadogTab({ app }) {
               >
                 <button
                   onClick={() => setExpandedErrorId(expanded ? null : errId)}
+                  aria-expanded={expanded}
                   className="w-full text-left px-4 py-3 hover:bg-port-border/30 transition-colors"
                 >
                   <div className="flex items-start gap-3">

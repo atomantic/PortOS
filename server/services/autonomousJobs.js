@@ -288,12 +288,13 @@ Phase 2 — Check Errors:
    - Identify new errors (by fingerprint/message hash)
 
 Phase 3 — File Issues and Queue Fixes:
-5. For genuinely new errors where app has jira.enabled = true:
-   - Create a JIRA ticket with labels ["datadog-auto", "cos-detected"]:
+5. For each genuinely new error:
+   - Update the error cache with the new fingerprint (always, regardless of JIRA config)
+   - If app has jira.enabled = true AND jira.instanceId AND jira.projectKey are set:
+     Create a JIRA ticket with labels ["datadog-auto", "cos-detected"]:
      POST /api/jira/instances/:instanceId/tickets with projectKey, summary, description, issueType: "Bug", labels
    - Create a CoS task to fix the error in an isolated worktree:
-     POST /api/cos/tasks with useWorktree: true, the error stack trace, JIRA ticket reference, and instructions to implement fix + open PR
-   - Update the error cache with new fingerprint
+     POST /api/cos/tasks with useWorktree: true, the error stack trace, JIRA ticket reference (if created), and instructions to implement fix + open PR
 
 Phase 4 — Report:
 6. Generate a summary report covering:
@@ -430,6 +431,7 @@ let initPromise = null
  */
 async function initJobs() {
   await ensureDir(DATA_DIR)
+  await syncSkillTemplatesFromSample()
 
   const loaded = await readJSONFile(JOBS_FILE, null)
   if (!loaded) {
@@ -446,6 +448,24 @@ async function initJobs() {
     await saveJobs(merged)
   }
   return merged
+}
+
+async function syncSkillTemplatesFromSample() {
+  if (!PATHS.root) return
+  const sampleDir = join(PATHS.root, 'data.sample', 'prompts', 'skills', 'jobs')
+  if (!existsSync(sampleDir)) return
+  await ensureDir(JOBS_SKILLS_DIR)
+  const files = await readdir(sampleDir).catch(() => [])
+  for (const file of files) {
+    if (!file.endsWith('.md')) continue
+    const destPath = join(JOBS_SKILLS_DIR, file)
+    const sampleContent = await readFile(join(sampleDir, file), 'utf-8').catch(() => null)
+    if (!sampleContent) continue
+    const existingContent = await readFile(destPath, 'utf-8').catch(() => null)
+    if (!existingContent || existingContent === sampleContent) continue
+    await writeFile(destPath, sampleContent)
+    console.log(`📝 Updated job skill template: ${file}`)
+  }
 }
 
 /**
@@ -603,8 +623,8 @@ function mergeWithDefaults(loaded) {
         existing.type = defaultJob.type
         existing.scriptHandler = defaultJob.scriptHandler
       }
-      if (defaultJob.scheduledTime && existing.scheduledTime !== defaultJob.scheduledTime) {
-        existing.scheduledTime = defaultJob.scheduledTime
+      if (defaultJob.promptTemplate && existing.promptTemplate !== defaultJob.promptTemplate) {
+        existing.promptTemplate = defaultJob.promptTemplate
       }
     }
   }

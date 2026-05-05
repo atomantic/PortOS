@@ -29,8 +29,11 @@ You are acting as my Chief of Staff, monitoring DataDog for new application erro
 
 ### Phase 3 — File Issues and Queue Fixes
 
-3. **Create JIRA tickets for new errors**
-   - For each genuinely new error where the app has `jira.enabled === true`:
+3. **Update the error cache**
+   - For each genuinely new error (regardless of JIRA config), add its fingerprint to `/data/cos/datadog-errors.json`
+
+4. **Create JIRA tickets for new errors** (only if fully configured)
+   - For each new error where the app has `jira.enabled === true` AND `jira.instanceId` AND `jira.projectKey` are set:
      - Create a JIRA ticket:
        ```
        POST /api/jira/instances/:instanceId/tickets
@@ -42,8 +45,9 @@ You are acting as my Chief of Staff, monitoring DataDog for new application erro
          "labels": ["datadog-auto", "cos-detected"]
        }
        ```
+   - Skip JIRA ticket creation if `instanceId` or `projectKey` is missing
 
-4. **Create CoS fix tasks**
+5. **Create CoS fix tasks**
    - For each new error, create a CoS task that will:
      - Work in an isolated worktree of the app's repo
      - Analyze the error stack trace and identify the root cause
@@ -54,7 +58,7 @@ You are acting as my Chief of Staff, monitoring DataDog for new application erro
      ```
      POST /api/cos/tasks
      Body: {
-       "description": "[Auto-Fix] DD Error in <app.name>: <error message>\n\nJIRA: <ticket key>\nStack trace: <stack>\n\nInstructions:\n1. Clone/worktree the repo at <app.repoPath>\n2. Analyze the error and identify root cause\n3. Implement a fix\n4. Run tests\n5. Open a PR referencing the JIRA ticket",
+       "description": "[Auto-Fix] DD Error in <app.name>: <error message>\n\nJIRA: <ticket key if created>\nStack trace: <stack>\n\nInstructions:\n1. Clone/worktree the repo at <app.repoPath>\n2. Analyze the error and identify root cause\n3. Implement a fix\n4. Run tests\n5. Open a PR referencing the JIRA ticket (if one was created)",
        "priority": "HIGH",
        "type": "internal",
        "app": "<app.id>",
@@ -62,9 +66,6 @@ You are acting as my Chief of Staff, monitoring DataDog for new application erro
        "openPR": true
      }
      ```
-
-5. **Update the error cache**
-   - Add new error fingerprints to `/data/cos/datadog-errors.json`
 
 ### Phase 4 — Report
 

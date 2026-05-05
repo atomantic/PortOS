@@ -160,10 +160,11 @@ export const deleteTool = (id) => request(`/tools/${id}`, { method: 'DELETE' });
 
 // DataDog
 export const getDatadogInstances = () => request('/datadog/instances');
-export const searchDatadogErrors = (instanceId, serviceName, environment, fromTime) =>
+export const searchDatadogErrors = (instanceId, serviceName, environment, fromTime, options) =>
   request(`/datadog/instances/${instanceId}/search-errors`, {
     method: 'POST',
-    body: JSON.stringify({ serviceName, environment, fromTime })
+    body: JSON.stringify({ serviceName, environment, fromTime }),
+    ...options
   });
 
 // JIRA
