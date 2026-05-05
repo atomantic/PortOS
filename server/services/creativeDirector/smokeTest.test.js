@@ -15,6 +15,12 @@ vi.mock('../mediaCollections.js', () => ({
   createCollection: vi.fn(async () => ({ id: 'col-smoke' })),
 }));
 
+// Mock the platform-default model resolver — real one reads
+// data/media-models.json which doesn't exist in tests.
+vi.mock('../../lib/mediaModels.js', () => ({
+  getDefaultVideoModelId: () => 'ltx23_distilled_q4',
+}));
+
 const { createSmokeTestProject } = await import('./smokeTest.js');
 
 beforeEach(() => {

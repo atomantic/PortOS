@@ -357,11 +357,13 @@ describe('advanceAfterSceneSettled', () => {
     expect(mockRunSceneRender).not.toHaveBeenCalled();
   });
 
-  it('rejects orphaned-evaluating scenes whose renderedJobId is not a UUID (path-traversal guard)', async () => {
+  it('rejects + fails orphaned-evaluating scenes whose renderedJobId is not a UUID (path-traversal guard, wedge prevention)', async () => {
     // scene.renderedJobId is editable via PATCH; a tampered value must NOT
     // be accepted into the resume path because sampleEvaluationFrames builds
-    // ffmpeg paths via string concat. Resume should fall through to the
-    // pending-scene branch and re-render scene-3 instead.
+    // ffmpeg paths via string concat. The scene must also be MARKED FAILED
+    // — silently skipping it would leave it `evaluating` forever, and the
+    // inflight check at the bottom of advanceAfterSceneSettled would
+    // block every future advance call, wedging the whole project.
     const project = {
       id: 'cd-tamper',
       status: 'rendering',
@@ -377,6 +379,15 @@ describe('advanceAfterSceneSettled', () => {
     localMod.getProject.mockResolvedValue(project);
     await advanceAfterSceneSettled(project.id);
     expect(mockEnqueueEvaluateTask).not.toHaveBeenCalled();
+    // The wedged scene must be reset to `failed` so it doesn't block
+    // future advances.
+    expect(mockUpdateScene).toHaveBeenCalledWith(
+      'cd-tamper',
+      'scene-2',
+      expect.objectContaining({ status: 'failed' }),
+    );
+    // After failing the wedged scene, advance still falls through to
+    // render the next pending scene.
     expect(mockRunSceneRender).toHaveBeenCalledTimes(1);
     expect(mockRunSceneRender.mock.calls[0][1].sceneId).toBe('scene-3');
   });

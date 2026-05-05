@@ -22,11 +22,14 @@
  * that case).
  */
 
+import { existsSync } from 'fs';
+import { join } from 'path';
 import { getProject, updateProject, updateScene, updateRun, recordRun } from './local.js';
 import { enqueueTreatmentTask, enqueueEvaluateTask } from './agentBridge.js';
 import { runSceneRender } from './sceneRunner.js';
 import { runStitch } from './stitchRunner.js';
 import { sampleEvaluationFrames } from '../videoGen/local.js';
+import { PATHS } from '../../lib/fileUtils.js';
 
 export async function handleCreativeDirectorCompletion(task, agentId, success) {
   const meta = task?.metadata?.creativeDirector;
@@ -149,12 +152,33 @@ export async function advanceAfterSceneSettled(projectId) {
   // PATHS.video-thumbnails. (sampleEvaluationFrames builds paths via
   // string concat, not via PATHS.join + safety check.)
   const isSafeJobId = (id) => typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id);
+  const noLiveEvaluateRun = (s) => !(project.runs || []).some(
+    (r) => r.kind === 'evaluate' && r.sceneId === s.sceneId && r.status !== 'completed' && r.status !== 'failed',
+  );
+  // Reset any 'evaluating' scenes whose renderedJobId is unsafe (tampered
+  // PATCH, missing, etc.) — without this they'd stay 'evaluating' forever
+  // and the inflight check at the bottom of the function would block
+  // every future advance() call, wedging the project. Mark them failed
+  // so the orchestrator can either fall through to the next scene or
+  // mark the whole project failed if no scene was ever accepted.
+  const wedged = scenes.filter((s) =>
+    s.status === 'evaluating' && !isSafeJobId(s.renderedJobId) && noLiveEvaluateRun(s),
+  );
+  for (const w of wedged) {
+    console.log(`❌ CD scene ${w.sceneId} on ${project.id} is 'evaluating' with an unsafe renderedJobId (${JSON.stringify(w.renderedJobId)}) — marking failed to prevent project wedge.`);
+    await updateScene(project.id, w.sceneId, {
+      status: 'failed',
+      evaluation: {
+        accepted: false,
+        notes: 'Scene wedged: invalid renderedJobId in persisted state. Re-render to recover.',
+        sampledAt: new Date().toISOString(),
+      },
+    }).catch((e) => console.log(`⚠️ CD wedge-reset for ${w.sceneId} failed: ${e.message}`));
+  }
   const orphanedEvaluating = scenes.find((s) =>
     s.status === 'evaluating' &&
     isSafeJobId(s.renderedJobId) &&
-    !(project.runs || []).some(
-      (r) => r.kind === 'evaluate' && r.sceneId === s.sceneId && r.status !== 'completed' && r.status !== 'failed',
-    ),
+    noLiveEvaluateRun(s),
   );
   if (orphanedEvaluating) {
     const evalKey = `${project.id}:${orphanedEvaluating.sceneId}`;
@@ -165,17 +189,22 @@ export async function advanceAfterSceneSettled(projectId) {
         await updateProject(project.id, { status: 'rendering' });
       }
       // Re-sample evaluation frames if they weren't captured during the
-      // original completion path (pause landed before frame sampling).
+      // original completion path (pause landed before frame sampling) OR
+      // if any of the persisted frame files is missing on disk. Frames
+      // can disappear if the user deleted the underlying video from
+      // history while the project was paused — videoGen/local#deleteVideo
+      // unlinks `${jobId}-fN.jpg` thumbnails as part of its cleanup.
+      // Without this on-disk check, the evaluator would receive broken
+      // image paths and reject every render with "frame not found".
       let frames = orphanedEvaluating.evaluationFrames || [];
-      if (!frames.length) {
+      const allFramesExist = frames.length > 0 && frames.every((f) => existsSync(join(PATHS.videoThumbnails, f)));
+      if (!allFramesExist) {
         frames = await sampleEvaluationFrames(orphanedEvaluating.renderedJobId)
           .catch((err) => {
             console.error(`❌ CD resume sampleEvaluationFrames failed for ${orphanedEvaluating.renderedJobId.slice(0, 8)}: ${err.message}`);
             return [];
           });
-        if (frames.length) {
-          await updateScene(project.id, orphanedEvaluating.sceneId, { evaluationFrames: frames });
-        }
+        await updateScene(project.id, orphanedEvaluating.sceneId, { evaluationFrames: frames });
       }
       // Pause race re-check after the expensive frame-sampling step. The
       // user could re-pause the project mid-resume; without this the

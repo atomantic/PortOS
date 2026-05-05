@@ -60,14 +60,17 @@ describe('recoverInFlightProjects', () => {
     // Without this, initMediaJobQueue() would happily restart a queued
     // render whose owner=cd:<projectId>:<sceneId> belongs to a paused
     // project, burning GPU on work the user explicitly stopped.
+    // Use a queuedAt well in the past so the recovery-window filter
+    // treats them as pre-recovery snapshot entries.
+    const longAgo = new Date(Date.now() - 600000).toISOString();
     mockListProjects.mockResolvedValue([
       { id: 'cd-paused', status: 'paused', treatment: { scenes: [] }, runs: [] },
     ]);
     mockListJobs.mockReturnValue([
-      { id: 'job-orphan-1', status: 'queued', owner: 'cd:cd-paused:scene-2' },
-      { id: 'job-orphan-2', status: 'queued', owner: 'cd:cd-paused:scene-3' },
-      { id: 'job-other', status: 'queued', owner: 'cd:cd-other:scene-1' },
-      { id: 'job-no-owner', status: 'queued', owner: null },
+      { id: 'job-orphan-1', status: 'queued', owner: 'cd:cd-paused:scene-2', queuedAt: longAgo },
+      { id: 'job-orphan-2', status: 'queued', owner: 'cd:cd-paused:scene-3', queuedAt: longAgo },
+      { id: 'job-other', status: 'queued', owner: 'cd:cd-other:scene-1', queuedAt: longAgo },
+      { id: 'job-no-owner', status: 'queued', owner: null, queuedAt: longAgo },
     ]);
     await recoverInFlightProjects();
     expect(mockCancelJob).toHaveBeenCalledTimes(2);
@@ -75,15 +78,36 @@ describe('recoverInFlightProjects', () => {
     expect(mockCancelJob).toHaveBeenCalledWith('job-orphan-2');
   });
 
+  it('skips orphan-cancel for jobs queued AFTER recovery started (user resumed mid-recovery)', async () => {
+    // recoverInFlightProjects is fire-and-forget — the user can click
+    // Resume on a paused project and enqueue a fresh render between the
+    // listProjects() snapshot and this orphan-cancel loop. That fresh
+    // job has queuedAt > recoveryStartedAt and must NOT be canceled.
+    const veryRecentFuture = new Date(Date.now() + 60000).toISOString(); // queued "after" recovery start
+    const longAgo = new Date(Date.now() - 600000).toISOString();
+    mockListProjects.mockResolvedValue([
+      { id: 'cd-paused', status: 'paused', treatment: { scenes: [] }, runs: [] },
+    ]);
+    mockListJobs.mockReturnValue([
+      { id: 'job-stale', status: 'queued', owner: 'cd:cd-paused:scene-1', queuedAt: longAgo },
+      { id: 'job-fresh', status: 'queued', owner: 'cd:cd-paused:scene-2', queuedAt: veryRecentFuture },
+    ]);
+    await recoverInFlightProjects();
+    expect(mockCancelJob).toHaveBeenCalledTimes(1);
+    expect(mockCancelJob).toHaveBeenCalledWith('job-stale');
+    expect(mockCancelJob).not.toHaveBeenCalledWith('job-fresh');
+  });
+
   it('also cancels queued jobs for recovering (non-paused) projects to prevent double-render races', async () => {
     // Recovery resets stuck scenes to `pending` and advance() will enqueue
     // a fresh render — leaving the prior queued job alive would race two
     // completions for the same `cd:<projectId>:<sceneId>` owner.
+    const longAgo = new Date(Date.now() - 600000).toISOString();
     mockListProjects.mockResolvedValue([
       { id: 'cd-rendering', status: 'rendering', treatment: { scenes: [] }, runs: [] },
     ]);
     mockListJobs.mockReturnValue([
-      { id: 'job-orphan', status: 'queued', owner: 'cd:cd-rendering:scene-1' },
+      { id: 'job-orphan', status: 'queued', owner: 'cd:cd-rendering:scene-1', queuedAt: longAgo },
     ]);
     await recoverInFlightProjects();
     expect(mockCancelJob).toHaveBeenCalledWith('job-orphan');
@@ -95,13 +119,14 @@ describe('recoverInFlightProjects', () => {
     // called here. Recovery must SIGTERM those too via cancelJob — not
     // just queued — otherwise the dead-listener render keeps burning GPU
     // and the freshly-enqueued sibling fights it for memory.
+    const longAgo = new Date(Date.now() - 600000).toISOString();
     mockListProjects.mockResolvedValue([
       { id: 'cd-rendering', status: 'rendering', treatment: { scenes: [] }, runs: [] },
     ]);
     mockListJobs.mockReturnValue([
-      { id: 'job-running', status: 'running', owner: 'cd:cd-rendering:scene-1' },
-      { id: 'job-completed', status: 'completed', owner: 'cd:cd-rendering:scene-2' }, // terminal — must NOT cancel
-      { id: 'job-failed', status: 'failed', owner: 'cd:cd-rendering:scene-3' }, // terminal — must NOT cancel
+      { id: 'job-running', status: 'running', owner: 'cd:cd-rendering:scene-1', queuedAt: longAgo },
+      { id: 'job-completed', status: 'completed', owner: 'cd:cd-rendering:scene-2', queuedAt: longAgo }, // terminal — must NOT cancel
+      { id: 'job-failed', status: 'failed', owner: 'cd:cd-rendering:scene-3', queuedAt: longAgo }, // terminal — must NOT cancel
     ]);
     await recoverInFlightProjects();
     expect(mockCancelJob).toHaveBeenCalledTimes(1);

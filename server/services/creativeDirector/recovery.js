@@ -54,6 +54,13 @@ const CLEANUP_ONLY_STATUSES = new Set(['paused']);
 const STUCK_SCENE_STATUSES = new Set(['rendering', 'evaluating']);
 
 export async function recoverInFlightProjects() {
+  // Stamp the recovery start so we can distinguish boot-snapshot jobs
+  // (queued by the dead worker before restart, must be canceled) from
+  // jobs the user enqueued AFTER recovery began (e.g. clicked Resume
+  // mid-recovery — the new job must NOT be canceled as an "orphan").
+  // recoverInFlightProjects runs fire-and-forget from index.js and the
+  // user can interact during that window.
+  const recoveryStartedAt = Date.now();
   const projects = await listProjects();
   const needsCleanup = projects.filter(
     (p) => RECOVERABLE_STATUSES.has(p.status) || CLEANUP_ONLY_STATUSES.has(p.status),
@@ -136,15 +143,26 @@ export async function recoverInFlightProjects() {
     // (Jobs reclassified `failed (interrupted by restart)` by the queue's
     // own boot recovery are already terminal and listJobs returns them
     // archived — they won't match either filter.)
+    //
+    // Filter to jobs queued BEFORE recovery started — recoverInFlightProjects
+    // runs fire-and-forget from index.js, so the user can have already
+    // clicked Resume on a paused project and enqueued a fresh render
+    // while we're iterating projects here. queuedAt > recoveryStartedAt
+    // means it's a brand-new user-initiated job, not a stale snapshot
+    // entry, and canceling it would silently kill the user's action.
     const orphaned = listJobs()
       .filter((j) => typeof j.owner === 'string' && j.owner.startsWith(`cd:${project.id}:`))
-      .filter((j) => j.status === 'queued' || j.status === 'running');
+      .filter((j) => j.status === 'queued' || j.status === 'running')
+      .filter((j) => {
+        const qa = new Date(j.queuedAt || 0).getTime();
+        return qa > 0 && qa < recoveryStartedAt;
+      });
     for (const job of orphaned) {
       await cancelJob(job.id)
         .catch((e) => console.log(`⚠️ CD recovery: cancel orphaned ${job.status} job ${job.id} for ${project.id} failed: ${e.message}`));
     }
     if (orphaned.length) {
-      console.log(`🔄 CD recovery: ${project.id} canceled ${orphaned.length} orphaned job(s) (mix of queued + already-dequeued)`);
+      console.log(`🔄 CD recovery: ${project.id} canceled ${orphaned.length} orphaned job(s) (mix of queued + already-dequeued, all from pre-recovery snapshot)`);
     }
     // Only auto-advance projects the user expects to still be running.
     // `paused` projects skip this — the cleanup above is enough to make a

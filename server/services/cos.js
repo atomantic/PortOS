@@ -164,12 +164,14 @@ export async function start() {
   // mark them `completed`, racing two agents on the same project. The
   // promise resolves whether recovery ran successfully, was a no-op (no
   // mid-flight projects), or wasn't called at all (markRecoveryDone is
-  // exposed for that case). 5s ceiling so a stuck recovery can't block
-  // the daemon from coming up.
+  // exposed for that case). 60s ceiling — recovery on a healthy boot
+  // resolves in <100ms, but we'd rather pay a slow-boot tax than reopen
+  // the duplicate-agent race when initMediaJobQueue or earlier startup
+  // steps stall.
   const { cdRecoveryDone } = await import('./creativeDirector/recovery.js');
   await Promise.race([
     cdRecoveryDone,
-    new Promise((resolve) => setTimeout(resolve, 5000)),
+    new Promise((resolve) => setTimeout(resolve, 60000)),
   ]);
 
   // Then reset any orphaned in_progress tasks (no running agent)

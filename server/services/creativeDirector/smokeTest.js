@@ -26,6 +26,7 @@
  */
 
 import { createProject, setTreatment } from './local.js';
+import { getDefaultVideoModelId } from '../../lib/mediaModels.js';
 
 const SMOKE_SCENES = [
   {
@@ -66,21 +67,26 @@ const SMOKE_TREATMENT = {
   scenes: SMOKE_SCENES,
 };
 
-const SMOKE_DEFAULTS = {
+// Resolve at call time, not at module load — getDefaultVideoModelId reads
+// the per-platform registry (data/media-models.json) and returns the
+// active default for the current OS. Hardcoding `ltx23_distilled_q4`
+// (macOS-only) made the smoke run fail with "Unknown video model" on
+// Windows. Callers can still override modelId via the overrides arg.
+const buildSmokeDefaults = () => ({
   name: 'CD smoke test (colored ball)',
   // Use the 384×384 legacy preset (kept in ASPECT_PRESETS specifically for
   // this fixture) — at 3 × 2s scenes that's roughly 63% fewer pixel-frames
   // than 1:1 (512×512) × 3s, keeping the health check cheap to run.
   aspectRatio: '1:1-small',
   quality: 'draft',
-  modelId: 'ltx23_distilled_q4',
+  modelId: getDefaultVideoModelId(),
   targetDurationSeconds: 6,
   styleSpec: 'Plain white background, single rubber ball, no text, no people. Flat lighting, centered framing.',
   startingImageFile: null,
   userStory: null,
   disableAudio: true,
   autoAcceptScenes: true,
-};
+});
 
 /**
  * Create a fresh smoke-test project with a pre-filled treatment. The
@@ -90,8 +96,9 @@ const SMOKE_DEFAULTS = {
  * Pure orchestration — no HTTP, no UI, no agent spawns.
  */
 export async function createSmokeTestProject(overrides = {}) {
-  const project = await createProject({ ...SMOKE_DEFAULTS, ...overrides });
+  const defaults = buildSmokeDefaults();
+  const project = await createProject({ ...defaults, ...overrides });
   const withTreatment = await setTreatment(project.id, SMOKE_TREATMENT);
-  console.log(`🧪 CD smoke project ready: ${withTreatment.id} (${withTreatment.scenes?.length ?? withTreatment.treatment?.scenes?.length ?? 0} scenes, autoAcceptScenes=${withTreatment.autoAcceptScenes ?? SMOKE_DEFAULTS.autoAcceptScenes}, disableAudio=${withTreatment.disableAudio ?? SMOKE_DEFAULTS.disableAudio})`);
+  console.log(`🧪 CD smoke project ready: ${withTreatment.id} (${withTreatment.scenes?.length ?? withTreatment.treatment?.scenes?.length ?? 0} scenes, model=${withTreatment.modelId}, autoAcceptScenes=${withTreatment.autoAcceptScenes ?? defaults.autoAcceptScenes}, disableAudio=${withTreatment.disableAudio ?? defaults.disableAudio})`);
   return withTreatment;
 }
