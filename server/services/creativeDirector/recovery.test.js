@@ -3,11 +3,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 // Mocks must be declared before importing the module under test.
 const mockListProjects = vi.fn();
 const mockUpdateScene = vi.fn();
+const mockUpdateRun = vi.fn();
 const mockAdvance = vi.fn();
 
 vi.mock('./local.js', () => ({
   listProjects: (...args) => mockListProjects(...args),
   updateScene: (...args) => mockUpdateScene(...args),
+  updateRun: (...args) => mockUpdateRun(...args),
 }));
 
 vi.mock('./completionHook.js', () => ({
@@ -19,6 +21,7 @@ const { recoverInFlightProjects } = await import('./recovery.js');
 beforeEach(() => {
   mockListProjects.mockReset();
   mockUpdateScene.mockReset().mockResolvedValue(undefined);
+  mockUpdateRun.mockReset().mockResolvedValue(undefined);
   mockAdvance.mockReset().mockResolvedValue(undefined);
 });
 
@@ -79,6 +82,38 @@ describe('recoverInFlightProjects', () => {
     ]);
     const result = await recoverInFlightProjects();
     expect(result.resumed).toBe(1);
+    expect(mockAdvance).toHaveBeenCalledWith('cd-1');
+  });
+
+  it('reaps stale running runs[] rows so the persisted-runs guard does not block re-enqueue', async () => {
+    // Regression: a project that restarted mid-treatment still has a
+    // persisted `runs: [{ kind: 'treatment', status: 'running' }]` from
+    // before the crash. Without reaping, advanceAfterSceneSettled's
+    // hasInflightTreatmentRun guard would treat this as another worker on
+    // it and refuse to enqueue a replacement, leaving the project frozen.
+    mockListProjects.mockResolvedValue([
+      {
+        id: 'cd-1',
+        status: 'planning',
+        treatment: null,
+        runs: [
+          { runId: 'run-completed', kind: 'treatment', status: 'completed' },
+          { runId: 'run-stale-1', kind: 'treatment', status: 'running' },
+          { runId: 'run-stale-2', kind: 'evaluate', sceneId: 's1', status: 'running' },
+        ],
+      },
+    ]);
+    const result = await recoverInFlightProjects();
+    expect(result.resumed).toBe(1);
+    expect(mockUpdateRun).toHaveBeenCalledTimes(2);
+    expect(mockUpdateRun).toHaveBeenCalledWith('cd-1', 'run-stale-1', expect.objectContaining({
+      status: 'failed',
+      failureReason: 'interrupted by restart',
+    }));
+    expect(mockUpdateRun).toHaveBeenCalledWith('cd-1', 'run-stale-2', expect.objectContaining({
+      status: 'failed',
+      failureReason: 'interrupted by restart',
+    }));
     expect(mockAdvance).toHaveBeenCalledWith('cd-1');
   });
 

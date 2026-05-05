@@ -255,7 +255,14 @@ describe('advanceAfterSceneSettled', () => {
     expect(mockEnqueueTreatmentTask).toHaveBeenCalledTimes(1);
   });
 
-  it('does NOT enqueue a second treatment when a treatment run is already in-flight (persisted runs[] check)', async () => {
+  it('does NOT enqueue a second treatment when a treatment run is already in-flight (persisted runs[] check, live worker)', async () => {
+    // Covers the LIVE concurrent-worker case: a treatment task is genuinely
+    // running in another agent. The post-restart case where this row is
+    // stale is handled separately by recovery.js, which reaps stale
+    // `running` rows before calling advanceAfterSceneSettled — so by the
+    // time advance runs after a restart, this guard sees `failed` instead
+    // of `running` and proceeds to enqueue. See recovery.test.js for that
+    // path.
     const project = {
       id: 'cd-inflight',
       status: 'planning',
