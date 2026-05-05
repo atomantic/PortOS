@@ -27,18 +27,28 @@
 
 import { listProjects, updateScene, updateRun } from './local.js';
 
+// Projects that should be auto-advanced on boot — the user expects them to
+// keep running.
 const RECOVERABLE_STATUSES = new Set(['planning', 'rendering', 'stitching']);
+// Projects whose stale state still needs cleanup but should NOT auto-advance
+// on boot. `paused` is here because the user pressed Pause; we still need to
+// wipe the dead in-flight state behind the pause so Resume picks up cleanly,
+// but we don't want to fire a fresh agent task before the user clicks
+// Resume themselves.
+const CLEANUP_ONLY_STATUSES = new Set(['paused']);
 const STUCK_SCENE_STATUSES = new Set(['rendering', 'evaluating']);
 
 export async function recoverInFlightProjects() {
   const projects = await listProjects();
-  const recoverable = projects.filter((p) => RECOVERABLE_STATUSES.has(p.status));
-  if (!recoverable.length) return { resumed: 0 };
+  const needsCleanup = projects.filter(
+    (p) => RECOVERABLE_STATUSES.has(p.status) || CLEANUP_ONLY_STATUSES.has(p.status),
+  );
+  if (!needsCleanup.length) return { resumed: 0 };
 
   const { advanceAfterSceneSettled } = await import('./completionHook.js');
   let resumed = 0;
   const completedAt = new Date().toISOString();
-  for (const project of recoverable) {
+  for (const project of needsCleanup) {
     const scenes = project.treatment?.scenes || [];
     const stuck = scenes.filter((s) => STUCK_SCENE_STATUSES.has(s.status));
     for (const scene of stuck) {
@@ -63,9 +73,14 @@ export async function recoverInFlightProjects() {
     if (staleRuns.length) {
       console.log(`🔄 CD recovery: ${project.id} reaped ${staleRuns.length} stale running run(s)`);
     }
-    advanceAfterSceneSettled(project.id)
-      .catch((e) => console.log(`⚠️ CD recovery: advance for ${project.id} failed: ${e.message}`));
-    resumed += 1;
+    // Only auto-advance projects the user expects to still be running.
+    // `paused` projects skip this — the cleanup above is enough to make a
+    // future Resume click work.
+    if (RECOVERABLE_STATUSES.has(project.status)) {
+      advanceAfterSceneSettled(project.id)
+        .catch((e) => console.log(`⚠️ CD recovery: advance for ${project.id} failed: ${e.message}`));
+      resumed += 1;
+    }
   }
   console.log(`🔄 CD recovery: resumed ${resumed} in-flight project(s)`);
   return { resumed };

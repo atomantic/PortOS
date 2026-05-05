@@ -26,17 +26,39 @@ beforeEach(() => {
 });
 
 describe('recoverInFlightProjects', () => {
-  it('skips terminal and draft projects', async () => {
+  it('skips terminal and draft projects entirely', async () => {
     mockListProjects.mockResolvedValue([
       { id: 'cd-1', status: 'complete', treatment: { scenes: [{ sceneId: 's1', status: 'accepted' }] } },
       { id: 'cd-2', status: 'failed', treatment: { scenes: [{ sceneId: 's1', status: 'failed' }] } },
       { id: 'cd-3', status: 'draft', treatment: null },
-      { id: 'cd-4', status: 'paused', treatment: null },
     ]);
     const result = await recoverInFlightProjects();
     expect(result.resumed).toBe(0);
     expect(mockAdvance).not.toHaveBeenCalled();
     expect(mockUpdateScene).not.toHaveBeenCalled();
+  });
+
+  it('cleans up paused projects but does NOT auto-advance them', async () => {
+    // The user pressed Pause; we still need to wipe dead in-flight scene
+    // state and stale running runs so a future Resume click finds a clean
+    // slate. But we must NOT fire advance — that would burn agent time
+    // before the user explicitly clicks Resume.
+    mockListProjects.mockResolvedValue([
+      {
+        id: 'cd-paused',
+        status: 'paused',
+        treatment: { scenes: [{ sceneId: 's1', status: 'evaluating' }] },
+        runs: [{ runId: 'run-stale', kind: 'evaluate', sceneId: 's1', status: 'running' }],
+      },
+    ]);
+    const result = await recoverInFlightProjects();
+    expect(result.resumed).toBe(0);
+    expect(mockUpdateScene).toHaveBeenCalledWith('cd-paused', 's1', { status: 'pending' });
+    expect(mockUpdateRun).toHaveBeenCalledWith('cd-paused', 'run-stale', expect.objectContaining({
+      status: 'failed',
+      failureReason: 'interrupted by restart',
+    }));
+    expect(mockAdvance).not.toHaveBeenCalled();
   });
 
   it('resets stuck rendering/evaluating scenes to pending and advances', async () => {

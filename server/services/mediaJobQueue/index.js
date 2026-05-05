@@ -13,11 +13,13 @@
  * lane — they shell out to an external CLI and don't compete for GPU memory,
  * so a long video render never blocks a Codex storyboard generation.
  *
- * Scope: gates `videoGen/local#generateVideo` (always) and
- * `imageGen/local#generateImage` (only when imageGen mode === 'local'). The
- * external/codex image-gen backend runs in a separate concurrent lane — Codex
- * jobs don't share the MLX runtime so they can run alongside GPU jobs without
- * OOMing the machine.
+ * Scope: gates `videoGen/local#generateVideo` (always),
+ * `imageGen/local#generateImage` (when imageGen mode === 'local'), and
+ * `imageGen/codex#generateImage` (when mode === 'codex') in a separate
+ * concurrent lane — Codex doesn't share the MLX runtime so it runs alongside
+ * GPU jobs without OOMing the machine. External SD-API mode bypasses the
+ * queue entirely — it's a remote call with no local single-flight
+ * constraint to absorb.
  *
  * Persistence: data/media-jobs.json holds queued + running + recently-finished
  * jobs. On boot, any 'running' is reclassified as 'failed (interrupted by

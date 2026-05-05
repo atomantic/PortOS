@@ -222,9 +222,25 @@ async function handleRenderCompleted(projectId, sceneId, jobId, opts = {}) {
     // unextractable), we MUST fail here. Otherwise the smoke test would
     // report green even when continuation chaining is broken — exactly the
     // regression this fixture is supposed to catch.
+    //
+    // Bypass handleRenderFailed: that function retries up to
+    // MAX_SCENE_RETRIES, and a broken last-frame extraction will fail the
+    // same way every retry — burning three more full renders before
+    // surfacing the regression. Mark terminal directly and let the
+    // completion hook decide what to do next.
     if (opts.continuationFellBack && scene.useContinuationFromPrior) {
-      console.log(`❌ CD auto-accept: scene ${sceneId} requested continuation but fell back to text-to-video — failing the smoke run instead of silently passing.`);
-      await handleRenderFailed(projectId, sceneId, 'continuation requested but fell back to text-to-video');
+      const reason = 'continuation requested but fell back to text-to-video';
+      console.log(`❌ CD auto-accept: scene ${sceneId} ${reason} — failing terminally (no retry) so the smoke regression is visible immediately.`);
+      await updateScene(projectId, sceneId, {
+        status: 'failed',
+        evaluation: {
+          accepted: false,
+          notes: `Render failed: ${reason}`,
+          sampledAt: new Date().toISOString(),
+        },
+      });
+      const { advanceAfterSceneSettled } = await import('./completionHook.js');
+      await advanceAfterSceneSettled(projectId);
       return;
     }
     const videoPath = join(PATHS.videos, `${jobId}.mp4`);
@@ -262,6 +278,16 @@ async function handleRenderCompleted(projectId, sceneId, jobId, opts = {}) {
     renderedJobId: jobId,
     evaluationFrames,
   });
+  // Re-check project status before fanning out to the evaluator. A user
+  // pause that landed while the render was still in flight would otherwise
+  // continue spending agent time on the evaluate task. The scene stays in
+  // `evaluating` so resume can pick it back up — recovery.js resets it to
+  // pending, which retriggers render + evaluate cleanly.
+  const postRender = await getProject(projectId);
+  if (postRender?.status === 'paused' || postRender?.status === 'failed') {
+    console.log(`⏸️  CD project ${projectId} is ${postRender.status} — skipping evaluator enqueue for scene ${sceneId} (render landed after pause).`);
+    return;
+  }
   await enqueueEvaluateTask(fresh, { ...scene, renderedJobId: jobId, status: 'evaluating', evaluationFrames });
 }
 
