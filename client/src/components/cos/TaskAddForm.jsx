@@ -64,6 +64,13 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
   // Get models for selected provider
   const selectedProvider = providers?.find(p => p.id === newTask.provider);
   const availableModels = selectedProvider?.models || [];
+  const providerModelNote = selectedProvider
+    ? selectedProvider.command === 'codex'
+      ? 'Codex uses the model configured in ~/.codex/config.toml.'
+      : selectedProvider.type === 'cli'
+        ? `${selectedProvider.name} uses its CLI configured default model.`
+        : 'No models are configured. PortOS will use the provider default.'
+    : '';
 
   // Apply template to form
   const applyTemplate = useCallback(async (template) => {
@@ -458,7 +465,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
               ))}
             </select>
           </div>
-          {availableModels.length > 0 && (
+          {availableModels.length > 0 ? (
             <div className="flex-1">
               <label htmlFor="task-model" className="sr-only">AI model</label>
               <select
@@ -473,7 +480,11 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
                 ))}
               </select>
             </div>
-          )}
+          ) : selectedProvider ? (
+            <div className="flex-1 px-3 py-2 min-h-[44px] bg-port-bg border border-port-border rounded-lg text-xs text-gray-400 flex items-center">
+              {providerModelNote}
+            </div>
+          ) : null}
         </div>
         {/* Screenshot and Attachment Upload */}
         <div className="flex items-center gap-3 flex-wrap">
