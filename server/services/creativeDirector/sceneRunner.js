@@ -331,6 +331,15 @@ async function handleRenderCompleted(projectId, sceneId, jobId, opts = {}) {
     renderedJobId: jobId,
     evaluationFrames,
   });
+  // Final pause guard: close the async gap between the postFrames check above
+  // and the enqueue below. The scene is already persisted in 'evaluating' with
+  // renderedJobId set, so advanceAfterSceneSettled's resume path will pick it
+  // up correctly on the next Resume click — no further action needed here.
+  const postUpdate = await getProject(projectId);
+  if (postUpdate?.status === 'paused' || postUpdate?.status === 'failed') {
+    console.log(`⏸️  CD project ${projectId} is ${postUpdate.status} — paused during updateScene; renderedJobId persisted on scene ${sceneId}, deferring evaluator to resume.`);
+    return;
+  }
   await enqueueEvaluateTask(fresh, { ...scene, renderedJobId: jobId, status: 'evaluating', evaluationFrames });
 }
 

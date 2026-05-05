@@ -506,6 +506,10 @@ async function runJob(job) {
     console.log(`⚠️ media-job [${job.id.slice(0, 8)}] uploadedTempPaths entry outside PATHS.uploads — rejected before gen invoke: ${p}`);
     return false;
   });
+  // Clamp chunks to the same 1-8 bound the route enforces on new submissions.
+  // Replayed jobs read params from media-jobs.json which could be hand-edited
+  // to an out-of-range value, bypassing the route-layer Zod validation.
+  safeParams.chunks = Math.min(8, Math.max(1, Math.trunc(Number(safeParams.chunks) || 1)));
 
   const emitter = job.kind === 'video' ? videoGenEvents : imageGenEvents;
   const dispatcher = makeGenDispatcher(emitter, job, handlers);
