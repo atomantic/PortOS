@@ -82,7 +82,16 @@ export async function runSceneRender(project, scene) {
   //    last frame and use that as the source.
   //  - else if scene.sourceImageFile set → use that file.
   //  - else → text-to-video (no source).
+  //
+  // `continuationFellBack` records that the scene asked for i2v continuation
+  // but we couldn't honor it (prior scene's last frame missing/unextractable
+  // or no accepted prior scene at all) and silently degraded to text-to-
+  // video. The autoAccept path uses this to fail the scene instead of
+  // accepting a render that proves nothing about the i2v chaining mechanics
+  // — otherwise the smoke test would report green even when continuation is
+  // broken.
   let sourceImageFile = scene.sourceImageFile || null;
+  let continuationFellBack = false;
   if (scene.useContinuationFromPrior) {
     const fresh = await getProject(project.id);
     const priorScene = (fresh?.treatment?.scenes || [])
@@ -97,9 +106,11 @@ export async function runSceneRender(project, scene) {
         sourceImageFile = lf.filename;
       } else {
         console.log(`⚠️ CD scene ${scene.sceneId} requested continuation but last-frame extract failed — falling back to text-to-video`);
+        continuationFellBack = true;
       }
     } else {
       console.log(`⚠️ CD scene ${scene.sceneId} requested continuation but no prior accepted scene exists — falling back`);
+      continuationFellBack = true;
     }
   }
 
@@ -166,7 +177,7 @@ export async function runSceneRender(project, scene) {
   const onCompleted = async (job) => {
     if (job.id !== jobId) return;
     cleanup();
-    await handleRenderCompleted(project.id, scene.sceneId, jobId);
+    await handleRenderCompleted(project.id, scene.sceneId, jobId, { continuationFellBack });
   };
   const onFailed = async (job) => {
     if (job.id !== jobId) return;
@@ -195,7 +206,7 @@ export async function runSceneRender(project, scene) {
   return jobId;
 }
 
-async function handleRenderCompleted(projectId, sceneId, jobId) {
+async function handleRenderCompleted(projectId, sceneId, jobId, opts = {}) {
   console.log(`✅ CD scene render done: ${projectId} / ${sceneId} → ${jobId.slice(0, 8)}`);
   const fresh = await getProject(projectId);
   if (!fresh) return;
@@ -206,6 +217,16 @@ async function handleRenderCompleted(projectId, sceneId, jobId) {
   // video into the project's collection, and let the orchestrator advance.
   // No Claude task spawned, so a smoke run completes in render time only.
   if (fresh.autoAcceptScenes === true) {
+    // If the scene asked for i2v continuation but the runner silently fell
+    // back to text-to-video (prior render's last frame was missing or
+    // unextractable), we MUST fail here. Otherwise the smoke test would
+    // report green even when continuation chaining is broken — exactly the
+    // regression this fixture is supposed to catch.
+    if (opts.continuationFellBack && scene.useContinuationFromPrior) {
+      console.log(`❌ CD auto-accept: scene ${sceneId} requested continuation but fell back to text-to-video — failing the smoke run instead of silently passing.`);
+      await handleRenderFailed(projectId, sceneId, 'continuation requested but fell back to text-to-video');
+      return;
+    }
     const videoPath = join(PATHS.videos, `${jobId}.mp4`);
     const playable = await verifyVideoPlayable(videoPath);
     if (!playable.ok) {

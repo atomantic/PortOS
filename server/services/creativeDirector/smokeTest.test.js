@@ -32,9 +32,9 @@ describe('createSmokeTestProject', () => {
     const project = await createSmokeTestProject();
     expect(project.disableAudio).toBe(true);
     expect(project.autoAcceptScenes).toBe(true);
-    expect(project.aspectRatio).toBe('1:1');
+    expect(project.aspectRatio).toBe('1:1-small');
     expect(project.quality).toBe('draft');
-    expect(project.targetDurationSeconds).toBe(9);
+    expect(project.targetDurationSeconds).toBe(6);
     expect(project.treatment.scenes).toHaveLength(3);
   });
 

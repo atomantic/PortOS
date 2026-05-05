@@ -50,6 +50,9 @@ export default function OverviewTab({ project, onProjectUpdate }) {
               />
               <span className="text-port-text">Disable audio</span>
             </label>
+            <div className="text-xs text-port-text-muted mt-1">
+              Applies to future scene renders only — already-rendered scenes keep their original audio.
+            </div>
           </div>
         </div>
         <Field label="Collection" value={<Link to={collectionLink} className="text-port-accent">{project.collectionId}</Link>} />

@@ -1,9 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { presetToRenderParams, ASPECT_PRESETS, QUALITY_PRESETS } from './creativeDirectorPresets.js';
+import { presetToRenderParams, ASPECT_PRESETS, QUALITY_PRESETS, ASPECT_RATIOS } from './creativeDirectorPresets.js';
 
 describe('presetToRenderParams', () => {
   it('returns valid params for all current aspect ratios', () => {
-    for (const aspectRatio of ['16:9', '9:16', '1:1']) {
+    // Iterate the exported enum so a newly added ratio is automatically
+    // covered without having to remember to update this test.
+    expect(ASPECT_RATIOS.length).toBeGreaterThan(0);
+    for (const aspectRatio of ASPECT_RATIOS) {
       const params = presetToRenderParams({ aspectRatio, quality: 'standard', durationSeconds: 3 });
       expect(params).toMatchObject({ width: expect.any(Number), height: expect.any(Number), fps: expect.any(Number) });
       expect(params.numFrames % 8).toBe(0);

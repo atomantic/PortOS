@@ -19,7 +19,7 @@
  *                                                  continuation doesn't
  *                                                  drift)
  *
- * Result: ~9s total runtime, no LLM in the loop after the project is
+ * Result: ~6s of generated video, no LLM in the loop after the project is
  * created, audio rendering disabled. Use as a fast E2E health check after
  * touching anything in the CD pipeline (sceneRunner, mediaJobQueue,
  * completionHook, stitchRunner).
@@ -34,7 +34,7 @@ const SMOKE_SCENES = [
     intent: 'Establish: a red ball bouncing on a plain white background.',
     prompt: 'A red rubber ball bouncing up and down on a plain white background. Simple flat lighting, centered framing, slow gentle bounce, no other objects.',
     negativePrompt: 'text, watermark, blur, motion blur, multiple balls, complex background, shadows, people',
-    durationSeconds: 3,
+    durationSeconds: 2,
     useContinuationFromPrior: false,
     sourceImageFile: null,
   },
@@ -44,7 +44,7 @@ const SMOKE_SCENES = [
     intent: 'Color change: the same bouncing ball is now blue. Tests that the i2v render honors a prompt-driven color change while preserving the bouncing motion seeded by scene 1\'s last frame.',
     prompt: 'A blue rubber ball bouncing up and down on a plain white background. Simple flat lighting, centered framing, slow gentle bounce, no other objects.',
     negativePrompt: 'text, watermark, blur, motion blur, multiple balls, complex background, shadows, people, red',
-    durationSeconds: 3,
+    durationSeconds: 2,
     useContinuationFromPrior: true,
     sourceImageFile: null,
   },
@@ -54,7 +54,7 @@ const SMOKE_SCENES = [
     intent: 'Pure continuation: same blue ball, same scene. Tests that i2v chaining holds visual identity across a same-prompt continuation step.',
     prompt: 'A blue rubber ball bouncing up and down on a plain white background. Simple flat lighting, centered framing, slow gentle bounce, no other objects.',
     negativePrompt: 'text, watermark, blur, motion blur, multiple balls, complex background, shadows, people, red',
-    durationSeconds: 3,
+    durationSeconds: 2,
     useContinuationFromPrior: true,
     sourceImageFile: null,
   },
@@ -68,10 +68,13 @@ const SMOKE_TREATMENT = {
 
 const SMOKE_DEFAULTS = {
   name: 'CD smoke test (colored ball)',
-  aspectRatio: '1:1',
+  // Use the 384×384 legacy preset (kept in ASPECT_PRESETS specifically for
+  // this fixture) — at 3 × 2s scenes that's roughly 63% fewer pixel-frames
+  // than 1:1 (512×512) × 3s, keeping the health check cheap to run.
+  aspectRatio: '1:1-small',
   quality: 'draft',
   modelId: 'ltx23_distilled_q4',
-  targetDurationSeconds: 9,
+  targetDurationSeconds: 6,
   styleSpec: 'Plain white background, single rubber ball, no text, no people. Flat lighting, centered framing.',
   startingImageFile: null,
   userStory: null,

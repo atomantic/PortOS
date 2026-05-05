@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Bot, ExternalLink } from 'lucide-react';
 import { extractKind } from './ActiveAgentsBanner.jsx';
@@ -15,9 +16,22 @@ const STATUS_BADGE = {
 // user can play the clip in-tab without leaving the page. The browser handles
 // a missing poster (ffmpeg/thumbnail not generated) by showing its own blank
 // poster — controls remain fully accessible either way.
+//
+// `renderedJobId` survives even after the underlying mp4 is deleted from
+// history, so the <video> can fail to load. We track that with onError and
+// fall back to a "missing media" placeholder (matches the prior <a><img>
+// onError-hides-tile behavior) instead of leaving a broken control.
 function ScenePreview({ jobId, label }) {
+  const [missing, setMissing] = useState(false);
   const videoSrc = `/data/videos/${jobId}.mp4`;
   const posterSrc = `/data/video-thumbnails/${jobId}.jpg`;
+  if (missing) {
+    return (
+      <div className="bg-port-bg aspect-video flex items-center justify-center text-port-text-muted text-xs">
+        media missing
+      </div>
+    );
+  }
   return (
     <div className="relative bg-port-bg aspect-video">
       <video
@@ -27,6 +41,7 @@ function ScenePreview({ jobId, label }) {
         preload="none"
         playsInline
         aria-label={label}
+        onError={() => setMissing(true)}
         className="w-full h-full object-cover"
       />
       <a
