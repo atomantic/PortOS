@@ -8,6 +8,7 @@ export const getAppTypeLabel = (type) =>
 export const APP_DETAIL_TABS = [
   { id: 'overview', label: 'Overview' },
   { id: 'automation', label: 'Automation' },
+  { id: 'datadog', label: 'DataDog' },
   { id: 'documents', label: 'Documents' },
   { id: 'git', label: 'Git' },
   { id: 'gsd', label: 'GSD' },

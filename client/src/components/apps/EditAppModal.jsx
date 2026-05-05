@@ -632,6 +632,7 @@ export default function EditAppModal({ app, onClose, onSave }) {
                             className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
                             placeholder="e.g., my-app-service"
                           />
+                          <p className="text-xs text-gray-500 mt-1">The &quot;service&quot; tag your app reports to DataDog RUM/APM (not the Application ID)</p>
                         </div>
 
                         <div>
@@ -643,6 +644,7 @@ export default function EditAppModal({ app, onClose, onSave }) {
                             className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
                             placeholder="e.g., production"
                           />
+                          <p className="text-xs text-gray-500 mt-1">The &quot;env&quot; tag (e.g., production, qa, staging)</p>
                         </div>
                       </>
                     )}

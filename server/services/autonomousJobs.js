@@ -268,13 +268,13 @@ Write the briefing in a concise, actionable format. Save it as a CoS report. Not
     category: 'datadog-error-monitor',
     interval: 'daily',
     intervalMs: DAY,
-    scheduledTime: '00:00',
+    scheduledTime: '08:00',
     enabled: false,
     priority: 'MEDIUM',
     autonomyLevel: 'manager',
     promptTemplate: `[Autonomous Job] DataDog Error Monitor
 
-You are acting as my Chief of Staff, monitoring DataDog for new application errors.
+You are acting as my Chief of Staff, monitoring DataDog for new application errors and orchestrating fixes.
 
 Phase 1 — Discover:
 1. Call GET /api/apps to get all managed apps
@@ -287,17 +287,22 @@ Phase 2 — Check Errors:
    - Compare results against the error cache in /data/cos/datadog-errors.json
    - Identify new errors (by fingerprint/message hash)
 
-Phase 3 — Act on New Errors:
-5. For each new error:
-   - Create a CoS task describing the error and the app it affects
-   - If the app also has jira.enabled = true, create a JIRA ticket for the error
-   - Update the error cache with the new error fingerprint
+Phase 3 — File Issues and Queue Fixes:
+5. For each genuinely new error:
+   - Update the error cache with the new fingerprint (always, regardless of JIRA config)
+   - If app has jira.enabled = true AND jira.instanceId AND jira.projectKey are set:
+     Create a JIRA ticket with labels ["datadog-auto", "cos-detected"]:
+     POST /api/jira/instances/:instanceId/tickets with projectKey, summary, description, issueType: "Bug", labels
+   - Create a CoS task to fix the error in an isolated worktree:
+     POST /api/cos/tasks with type: "internal", useWorktree: true, openPR: true, the error stack trace, JIRA ticket reference (if created), and instructions to implement fix + open PR
 
 Phase 4 — Report:
 6. Generate a summary report covering:
    - Apps checked and error counts
-   - New errors found and tasks/tickets created
-   - Recurring errors that are increasing in frequency`,
+   - New errors vs already-known errors
+   - JIRA tickets created
+   - CoS fix tasks queued
+   - Recurring errors increasing in frequency`,
     lastRun: null,
     runCount: 0,
     createdAt: null,
@@ -426,6 +431,7 @@ let initPromise = null
  */
 async function initJobs() {
   await ensureDir(DATA_DIR)
+  await syncSkillTemplatesFromSample()
 
   const loaded = await readJSONFile(JOBS_FILE, null)
   if (!loaded) {
@@ -442,6 +448,24 @@ async function initJobs() {
     await saveJobs(merged)
   }
   return merged
+}
+
+async function syncSkillTemplatesFromSample() {
+  if (!PATHS.root) return
+  const sampleDir = join(PATHS.root, 'data.sample', 'prompts', 'skills', 'jobs')
+  if (!existsSync(sampleDir)) return
+  await ensureDir(JOBS_SKILLS_DIR)
+  const files = await readdir(sampleDir).catch(() => [])
+  for (const file of files) {
+    if (!file.endsWith('.md')) continue
+    const destPath = join(JOBS_SKILLS_DIR, file)
+    const existingContent = await readFile(destPath, 'utf-8').catch(() => null)
+    if (existingContent) continue
+    const sampleContent = await readFile(join(sampleDir, file), 'utf-8').catch(() => null)
+    if (!sampleContent) continue
+    await writeFile(destPath, sampleContent)
+    console.log(`📝 Seeded missing job skill template: ${file}`)
+  }
 }
 
 /**
