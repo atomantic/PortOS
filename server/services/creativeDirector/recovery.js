@@ -29,6 +29,19 @@ import { listProjects, updateScene, updateRun, updateProject } from './local.js'
 import { listJobs, cancelJob } from '../mediaJobQueue/index.js';
 import { updateTask } from '../cos.js';
 
+// Boot-time coordination: cos.js eagerly calls resetOrphanedTasks() during
+// module import, which would respawn stale CD treatment/evaluate tasks
+// BEFORE recoverInFlightProjects() has had a chance to retire them via
+// updateTask. Two concurrent agents would then race on the same project.
+// Expose a promise that cos.init() awaits before its first
+// resetOrphanedTasks call, so the order is always:
+//   1. recoverInFlightProjects retires stale CD tasks (status='completed').
+//   2. cos.resetOrphanedTasks runs and finds nothing CD-related to respawn.
+let resolveRecoveryDone;
+export const cdRecoveryDone = new Promise((resolve) => {
+  resolveRecoveryDone = resolve;
+});
+
 // Projects that should be auto-advanced on boot — the user expects them to
 // keep running.
 const RECOVERABLE_STATUSES = new Set(['planning', 'rendering', 'stitching']);
@@ -148,5 +161,13 @@ export async function recoverInFlightProjects() {
     }
   }
   console.log(`🔄 CD recovery: resumed ${resumed} in-flight project(s)`);
+  resolveRecoveryDone();
   return { resumed };
+}
+
+// Test/resume helper: callers that don't run recoverInFlightProjects (unit
+// tests, scripts) should still resolve the gate so any await on
+// cdRecoveryDone in cos.init doesn't hang forever. Idempotent.
+export function markRecoveryDone() {
+  resolveRecoveryDone();
 }

@@ -158,6 +158,20 @@ export async function start() {
     emitLog('info', `Cleaned up ${cleanedAgents} orphaned agent(s)`);
   }
 
+  // Wait for Creative Director boot recovery to finish retiring stale CD
+  // tasks before we reset orphans. Without this gate, resetOrphanedTasks
+  // would respawn stale CD treatment/evaluate tasks before recovery can
+  // mark them `completed`, racing two agents on the same project. The
+  // promise resolves whether recovery ran successfully, was a no-op (no
+  // mid-flight projects), or wasn't called at all (markRecoveryDone is
+  // exposed for that case). 5s ceiling so a stuck recovery can't block
+  // the daemon from coming up.
+  const { cdRecoveryDone } = await import('./creativeDirector/recovery.js');
+  await Promise.race([
+    cdRecoveryDone,
+    new Promise((resolve) => setTimeout(resolve, 5000)),
+  ]);
+
   // Then reset any orphaned in_progress tasks (no running agent)
   await resetOrphanedTasks();
 

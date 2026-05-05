@@ -5,11 +5,15 @@ import { presetToRenderParams } from '../../lib/creativeDirectorPresets.js';
 // Mocks for advanceAfterSceneSettled integration test.
 const mockRunSceneRender = vi.fn(async () => undefined);
 const mockUpdateProject = vi.fn(async () => undefined);
+const mockUpdateScene = vi.fn(async () => undefined);
 const mockEnqueueTreatmentTask = vi.fn(async () => undefined);
+const mockEnqueueEvaluateTask = vi.fn(async () => undefined);
+const mockSampleEvaluationFrames = vi.fn(async () => []);
 
 vi.mock('./local.js', () => ({
   getProject: vi.fn(),
   updateProject: (...args) => mockUpdateProject(...args),
+  updateScene: (...args) => mockUpdateScene(...args),
 }));
 
 vi.mock('./sceneRunner.js', () => ({
@@ -22,6 +26,11 @@ vi.mock('./stitchRunner.js', () => ({
 
 vi.mock('./agentBridge.js', () => ({
   enqueueTreatmentTask: (...args) => mockEnqueueTreatmentTask(...args),
+  enqueueEvaluateTask: (...args) => mockEnqueueEvaluateTask(...args),
+}));
+
+vi.mock('../videoGen/local.js', () => ({
+  sampleEvaluationFrames: (...args) => mockSampleEvaluationFrames(...args),
 }));
 
 import * as localMod from './local.js';
@@ -223,7 +232,10 @@ describe('advanceAfterSceneSettled', () => {
   beforeEach(() => {
     mockRunSceneRender.mockClear();
     mockUpdateProject.mockClear();
+    mockUpdateScene.mockClear();
     mockEnqueueTreatmentTask.mockClear();
+    mockEnqueueEvaluateTask.mockClear();
+    mockSampleEvaluationFrames.mockReset().mockResolvedValue([]);
   });
 
   it('picks scene-2 (lowest-order pending) when scene-1 is accepted and scenes 2-6 are pending', async () => {
@@ -305,5 +317,67 @@ describe('advanceAfterSceneSettled', () => {
     await Promise.all([first, second]);
 
     expect(mockEnqueueTreatmentTask).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-fires the evaluator for an orphaned `evaluating` scene with renderedJobId set (resume-after-pause path)', async () => {
+    // The render-completion path persists renderedJobId + status='evaluating'
+    // when a pause lands during frame sampling, then bails without enqueuing
+    // the evaluator. On resume, advanceAfterSceneSettled must detect the
+    // orphan (renderedJobId set, no live evaluate run in runs[]) and re-fire
+    // the evaluator instead of falling through to runSceneRender — otherwise
+    // the user pays for a full re-render of work that already completed.
+    const project = {
+      id: 'cd-orphan-eval',
+      status: 'rendering',
+      finalVideoId: null,
+      treatment: {
+        scenes: [
+          { sceneId: 'scene-1', order: 0, status: 'accepted', renderedJobId: '11111111-1111-4111-8111-111111111111' },
+          { sceneId: 'scene-2', order: 1, status: 'evaluating', renderedJobId: '22222222-2222-4222-8222-222222222222', evaluationFrames: ['f1.jpg'] },
+          { sceneId: 'scene-3', order: 2, status: 'pending' },
+        ],
+      },
+      runs: [
+        // Prior evaluate run was reaped by recovery (status='completed') —
+        // there is no LIVE evaluate run, so the resume path should fire.
+        { kind: 'evaluate', sceneId: 'scene-2', status: 'completed' },
+      ],
+    };
+    // getProject called twice in this branch: initial fetch + post-sample re-check.
+    localMod.getProject.mockResolvedValue(project);
+
+    await advanceAfterSceneSettled(project.id);
+
+    expect(mockEnqueueEvaluateTask).toHaveBeenCalledTimes(1);
+    const [, sceneArg] = mockEnqueueEvaluateTask.mock.calls[0];
+    expect(sceneArg.sceneId).toBe('scene-2');
+    expect(sceneArg.renderedJobId).toBe('22222222-2222-4222-8222-222222222222');
+    // Should NOT fall through to runSceneRender for the next pending scene —
+    // resume must finish the orphaned evaluate first.
+    expect(mockRunSceneRender).not.toHaveBeenCalled();
+  });
+
+  it('rejects orphaned-evaluating scenes whose renderedJobId is not a UUID (path-traversal guard)', async () => {
+    // scene.renderedJobId is editable via PATCH; a tampered value must NOT
+    // be accepted into the resume path because sampleEvaluationFrames builds
+    // ffmpeg paths via string concat. Resume should fall through to the
+    // pending-scene branch and re-render scene-3 instead.
+    const project = {
+      id: 'cd-tamper',
+      status: 'rendering',
+      finalVideoId: null,
+      treatment: {
+        scenes: [
+          { sceneId: 'scene-2', order: 1, status: 'evaluating', renderedJobId: '../../../etc/passwd' },
+          { sceneId: 'scene-3', order: 2, status: 'pending' },
+        ],
+      },
+      runs: [],
+    };
+    localMod.getProject.mockResolvedValue(project);
+    await advanceAfterSceneSettled(project.id);
+    expect(mockEnqueueEvaluateTask).not.toHaveBeenCalled();
+    expect(mockRunSceneRender).toHaveBeenCalledTimes(1);
+    expect(mockRunSceneRender.mock.calls[0][1].sceneId).toBe('scene-3');
   });
 });

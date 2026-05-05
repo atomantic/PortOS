@@ -460,7 +460,14 @@ ensureSelf()
     // their renders as 'failed (interrupted by restart)'; this nudges the
     // orchestrator so projects don't sit frozen waiting for listeners that
     // no longer exist. Doesn't block startup.
-    recoverInFlightProjects().catch((e) => console.log(`⚠️ CD boot recovery failed: ${e.message}`));
+    // recoverInFlightProjects resolves cdRecoveryDone on success. On any
+    // failure path here, explicitly resolve it so cos.init's gate doesn't
+    // hit the 5s timeout fallback for nothing.
+    recoverInFlightProjects().catch(async (e) => {
+      console.log(`⚠️ CD boot recovery failed: ${e.message}`);
+      const { markRecoveryDone } = await import('./services/creativeDirector/recovery.js');
+      markRecoveryDone();
+    });
   })
   .then(() => {
     // Start server only after sync log + media job queue are initialized.
