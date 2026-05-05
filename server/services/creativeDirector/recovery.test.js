@@ -5,6 +5,8 @@ const mockListProjects = vi.fn();
 const mockUpdateScene = vi.fn();
 const mockUpdateRun = vi.fn();
 const mockAdvance = vi.fn();
+const mockListJobs = vi.fn();
+const mockCancelJob = vi.fn();
 
 vi.mock('./local.js', () => ({
   listProjects: (...args) => mockListProjects(...args),
@@ -16,6 +18,11 @@ vi.mock('./completionHook.js', () => ({
   advanceAfterSceneSettled: (...args) => mockAdvance(...args),
 }));
 
+vi.mock('../mediaJobQueue/index.js', () => ({
+  listJobs: (...args) => mockListJobs(...args),
+  cancelJob: (...args) => mockCancelJob(...args),
+}));
+
 const { recoverInFlightProjects } = await import('./recovery.js');
 
 beforeEach(() => {
@@ -23,6 +30,8 @@ beforeEach(() => {
   mockUpdateScene.mockReset().mockResolvedValue(undefined);
   mockUpdateRun.mockReset().mockResolvedValue(undefined);
   mockAdvance.mockReset().mockResolvedValue(undefined);
+  mockListJobs.mockReset().mockReturnValue([]);
+  mockCancelJob.mockReset().mockResolvedValue({ ok: true, status: 'canceled' });
 });
 
 describe('recoverInFlightProjects', () => {
@@ -36,6 +45,39 @@ describe('recoverInFlightProjects', () => {
     expect(result.resumed).toBe(0);
     expect(mockAdvance).not.toHaveBeenCalled();
     expect(mockUpdateScene).not.toHaveBeenCalled();
+  });
+
+  it('cancels orphaned queued media-jobs owned by paused projects', async () => {
+    // Without this, initMediaJobQueue() would happily restart a queued
+    // render whose owner=cd:<projectId>:<sceneId> belongs to a paused
+    // project, burning GPU on work the user explicitly stopped.
+    mockListProjects.mockResolvedValue([
+      { id: 'cd-paused', status: 'paused', treatment: { scenes: [] }, runs: [] },
+    ]);
+    mockListJobs.mockReturnValue([
+      { id: 'job-orphan-1', status: 'queued', owner: 'cd:cd-paused:scene-2' },
+      { id: 'job-orphan-2', status: 'queued', owner: 'cd:cd-paused:scene-3' },
+      { id: 'job-other', status: 'queued', owner: 'cd:cd-other:scene-1' },
+      { id: 'job-no-owner', status: 'queued', owner: null },
+    ]);
+    await recoverInFlightProjects();
+    expect(mockCancelJob).toHaveBeenCalledTimes(2);
+    expect(mockCancelJob).toHaveBeenCalledWith('job-orphan-1');
+    expect(mockCancelJob).toHaveBeenCalledWith('job-orphan-2');
+  });
+
+  it('does NOT cancel queued jobs for recovering (non-paused) projects', async () => {
+    // Auto-advance flow re-enqueues fresh renders; canceling here would be
+    // double work and might race with the new enqueue. Only paused gets
+    // the orphan-cancel treatment.
+    mockListProjects.mockResolvedValue([
+      { id: 'cd-rendering', status: 'rendering', treatment: { scenes: [] }, runs: [] },
+    ]);
+    mockListJobs.mockReturnValue([
+      { id: 'job-orphan', status: 'queued', owner: 'cd:cd-rendering:scene-1' },
+    ]);
+    await recoverInFlightProjects();
+    expect(mockCancelJob).not.toHaveBeenCalled();
   });
 
   it('cleans up paused projects but does NOT auto-advance them', async () => {

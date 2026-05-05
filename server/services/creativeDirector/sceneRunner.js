@@ -273,21 +273,31 @@ async function handleRenderCompleted(projectId, sceneId, jobId, opts = {}) {
     console.error(`❌ CD sampleEvaluationFrames failed for ${jobId.slice(0, 8)}: ${err.message}`);
     return [];
   });
+  // Re-check project status before fanning out to the evaluator. A user
+  // pause that landed while the render was still in flight would otherwise
+  // continue spending agent time on the evaluate task.
+  const postRender = await getProject(projectId);
+  if (postRender?.status === 'paused' || postRender?.status === 'failed') {
+    // Reset the scene to `pending` instead of leaving it in `evaluating`.
+    // resume() → advanceAfterSceneSettled() only picks up `pending` scenes,
+    // so an orphaned `evaluating` row would silently strand the project
+    // (later scenes still pending → advance moves on; if this was the last,
+    // the project hangs forever waiting for an evaluate task that never
+    // gets enqueued). Re-rendering is wasteful but bounded; never advancing
+    // is fatal.
+    await updateScene(projectId, sceneId, {
+      status: 'pending',
+      renderedJobId: null,
+      evaluationFrames: [],
+    });
+    console.log(`⏸️  CD project ${projectId} is ${postRender.status} — skipping evaluator enqueue for scene ${sceneId} and reverting it to pending so resume can re-render cleanly.`);
+    return;
+  }
   await updateScene(projectId, sceneId, {
     status: 'evaluating',
     renderedJobId: jobId,
     evaluationFrames,
   });
-  // Re-check project status before fanning out to the evaluator. A user
-  // pause that landed while the render was still in flight would otherwise
-  // continue spending agent time on the evaluate task. The scene stays in
-  // `evaluating` so resume can pick it back up — recovery.js resets it to
-  // pending, which retriggers render + evaluate cleanly.
-  const postRender = await getProject(projectId);
-  if (postRender?.status === 'paused' || postRender?.status === 'failed') {
-    console.log(`⏸️  CD project ${projectId} is ${postRender.status} — skipping evaluator enqueue for scene ${sceneId} (render landed after pause).`);
-    return;
-  }
   await enqueueEvaluateTask(fresh, { ...scene, renderedJobId: jobId, status: 'evaluating', evaluationFrames });
 }
 
