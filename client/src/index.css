@@ -512,6 +512,14 @@ html[data-port-theme-mode="day"] :is(.border-gray-500, .border-gray-600, .border
   border-color: rgb(var(--port-border) / calc(var(--port-border-alpha) * 1.4)) !important;
 }
 
+html[data-port-theme-mode="day"] [class~="border-gray-500/30"],
+html[data-port-theme-mode="day"] [class~="border-gray-600/40"],
+html[data-port-theme-mode="day"] [class~="border-slate-500/40"],
+html[data-port-theme-mode="day"] [class~="border-slate-500/50"],
+html[data-port-theme-mode="day"] [class~="border-zinc-500/40"] {
+  border-color: rgb(var(--port-border) / calc(var(--port-border-alpha) * 0.7)) !important;
+}
+
 html[data-port-theme-mode="day"] [class~="border-indigo-500/20"],
 html[data-port-theme-mode="day"] [class~="border-indigo-500/30"],
 html[data-port-theme-mode="day"] [class~="border-indigo-500/40"] {
