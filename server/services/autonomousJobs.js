@@ -294,7 +294,7 @@ Phase 3 — File Issues and Queue Fixes:
      Create a JIRA ticket with labels ["datadog-auto", "cos-detected"]:
      POST /api/jira/instances/:instanceId/tickets with projectKey, summary, description, issueType: "Bug", labels
    - Create a CoS task to fix the error in an isolated worktree:
-     POST /api/cos/tasks with useWorktree: true, the error stack trace, JIRA ticket reference (if created), and instructions to implement fix + open PR
+     POST /api/cos/tasks with type: "internal", useWorktree: true, openPR: true, the error stack trace, JIRA ticket reference (if created), and instructions to implement fix + open PR
 
 Phase 4 — Report:
 6. Generate a summary report covering:
@@ -459,12 +459,12 @@ async function syncSkillTemplatesFromSample() {
   for (const file of files) {
     if (!file.endsWith('.md')) continue
     const destPath = join(JOBS_SKILLS_DIR, file)
+    const existingContent = await readFile(destPath, 'utf-8').catch(() => null)
+    if (existingContent) continue
     const sampleContent = await readFile(join(sampleDir, file), 'utf-8').catch(() => null)
     if (!sampleContent) continue
-    const existingContent = await readFile(destPath, 'utf-8').catch(() => null)
-    if (!existingContent || existingContent === sampleContent) continue
     await writeFile(destPath, sampleContent)
-    console.log(`📝 Updated job skill template: ${file}`)
+    console.log(`📝 Seeded missing job skill template: ${file}`)
   }
 }
 
@@ -622,9 +622,6 @@ function mergeWithDefaults(loaded) {
       if (defaultJob.type && existing.type !== defaultJob.type) {
         existing.type = defaultJob.type
         existing.scriptHandler = defaultJob.scriptHandler
-      }
-      if (defaultJob.promptTemplate && existing.promptTemplate !== defaultJob.promptTemplate) {
-        existing.promptTemplate = defaultJob.promptTemplate
       }
     }
   }

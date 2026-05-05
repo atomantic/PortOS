@@ -117,8 +117,10 @@ export default function AppDetailView() {
     );
   }
 
+  const effectiveTab = visibleTabs.some(t => t.id === activeTab) ? activeTab : 'overview';
+
   const renderTab = () => {
-    switch (activeTab) {
+    switch (effectiveTab) {
       case 'overview':
         return <OverviewTab app={app} onRefresh={fetchApp} />;
       case 'tasks':
@@ -288,7 +290,7 @@ export default function AppDetailView() {
               key={t.id}
               onClick={() => navigate(`/apps/${appId}/${t.id}`)}
               className={`px-4 py-2 text-sm font-medium whitespace-nowrap border-b-2 transition-colors ${
-                activeTab === t.id
+                effectiveTab === t.id
                   ? 'border-port-accent text-port-accent'
                   : 'border-transparent text-gray-400 hover:text-white hover:border-gray-600'
               }`}

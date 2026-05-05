@@ -77,7 +77,7 @@ export default function DatadogTab({ app }) {
           <h2 className="text-lg font-semibold text-white">DataDog Errors</h2>
           <p className="text-sm text-gray-400">
             Service: <span className="text-gray-300">{dd.serviceName}</span>
-            {dd.environment && <> &middot; Env: <span className="text-gray-300">{dd.environment}</span></>}
+            {' '}&middot; Env: <span className="text-gray-300">{dd.environment || 'production'}</span>
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -161,9 +161,9 @@ export default function DatadogTab({ app }) {
                     <pre className="text-xs text-gray-300 whitespace-pre-wrap break-words max-h-64 overflow-auto">
                       {JSON.stringify(attrs, null, 2)}
                     </pre>
-                    {attrs.attributes?.['dd.trace_id'] && (
+                    {attrs.attributes?.['dd.trace_id'] && ddSite && (
                       <a
-                        href={`https://${(ddSite || 'app.datadoghq.com').replace(/^api\./, 'app.')}/apm/trace/${attrs.attributes['dd.trace_id']}`}
+                        href={`https://${ddSite.replace(/^api\./, 'app.')}/apm/trace/${attrs.attributes['dd.trace_id']}`}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="inline-flex items-center gap-1 mt-2 text-xs text-port-accent hover:underline"
