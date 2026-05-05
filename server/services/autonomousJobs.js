@@ -603,6 +603,9 @@ function mergeWithDefaults(loaded) {
         existing.type = defaultJob.type
         existing.scriptHandler = defaultJob.scriptHandler
       }
+      if (defaultJob.scheduledTime && existing.scheduledTime !== defaultJob.scheduledTime) {
+        existing.scheduledTime = defaultJob.scheduledTime
+      }
     }
   }
 

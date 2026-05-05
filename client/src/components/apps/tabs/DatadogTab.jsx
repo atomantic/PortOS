@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { RefreshCw, AlertTriangle, Clock, ExternalLink } from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
 import * as api from '../../../services/api';
@@ -16,17 +16,35 @@ export default function DatadogTab({ app }) {
   const [fetchFailed, setFetchFailed] = useState(false);
   const [timeRange, setTimeRange] = useState('24h');
   const [expandedErrorId, setExpandedErrorId] = useState(null);
+  const [ddSite, setDdSite] = useState(null);
+  const abortRef = useRef(null);
 
   const dd = app?.datadog;
   const configured = dd?.enabled && dd?.instanceId && dd?.serviceName;
 
+  useEffect(() => {
+    if (!dd?.instanceId) return;
+    api.getDatadogInstances().then(res => {
+      const inst = (res.instances || {})[dd.instanceId];
+      if (inst?.site) setDdSite(inst.site);
+    }).catch(() => {});
+  }, [dd?.instanceId]);
+
   const fetchErrors = useCallback(async () => {
     if (!dd?.enabled || !dd?.instanceId || !dd?.serviceName) { setLoading(false); return; }
+    if (abortRef.current) abortRef.current.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
     setLoading(true);
     setFetchFailed(false);
     const range = TIME_RANGES.find(r => r.value === timeRange);
     const fromTime = new Date(Date.now() - range.ms).toISOString();
-    const result = await api.searchDatadogErrors(dd.instanceId, dd.serviceName, dd.environment || 'production', fromTime).catch(() => null);
+    const result = await api.searchDatadogErrors(dd.instanceId, dd.serviceName, dd.environment || 'production', fromTime).catch(err => {
+      if (err.name === 'AbortError') return 'aborted';
+      return null;
+    });
+    if (controller.signal.aborted) return;
+    if (result === 'aborted') return;
     if (result) {
       setErrors(result.data || []);
     } else {
@@ -37,6 +55,7 @@ export default function DatadogTab({ app }) {
 
   useEffect(() => {
     fetchErrors();
+    return () => { if (abortRef.current) abortRef.current.abort(); };
   }, [fetchErrors]);
 
   if (!configured) {
@@ -72,6 +91,7 @@ export default function DatadogTab({ app }) {
           <button
             onClick={fetchErrors}
             disabled={loading}
+            aria-label="Refresh errors"
             className="p-2 bg-port-bg border border-port-border rounded-lg text-gray-400 hover:text-white hover:border-port-accent transition-colors disabled:opacity-50"
           >
             <RefreshCw size={16} className={loading ? 'animate-spin' : ''} />
@@ -138,7 +158,7 @@ export default function DatadogTab({ app }) {
                     </pre>
                     {attrs.attributes?.['dd.trace_id'] && (
                       <a
-                        href={`https://app.datadoghq.com/apm/trace/${attrs.attributes['dd.trace_id']}`}
+                        href={`https://${(ddSite || 'app.datadoghq.com').replace(/^api\./, 'app.')}/apm/trace/${attrs.attributes['dd.trace_id']}`}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="inline-flex items-center gap-1 mt-2 text-xs text-port-accent hover:underline"

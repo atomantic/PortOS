@@ -57,13 +57,9 @@ You are acting as my Chief of Staff, monitoring DataDog for new application erro
        "description": "[Auto-Fix] DD Error in <app.name>: <error message>\n\nJIRA: <ticket key>\nStack trace: <stack>\n\nInstructions:\n1. Clone/worktree the repo at <app.repoPath>\n2. Analyze the error and identify root cause\n3. Implement a fix\n4. Run tests\n5. Open a PR referencing the JIRA ticket",
        "priority": "HIGH",
        "type": "internal",
-       "appId": "<app.id>",
-       "metadata": {
-         "source": "datadog-error-monitor",
-         "jiraTicket": "<ticket key>",
-         "errorFingerprint": "<fingerprint>",
-         "useWorktree": true
-       }
+       "app": "<app.id>",
+       "useWorktree": true,
+       "openPR": true
      }
      ```
 
