@@ -29,12 +29,15 @@ export async function createRun(options) {
  */
 function buildCliArgs(provider) {
   const providerId = provider?.id || '';
+  const effectiveDefaultModel = providerId === 'codex' && provider.defaultModel === 'codex-configured-default'
+    ? null
+    : provider.defaultModel;
 
   // Codex CLI: `codex exec -` reads prompt from stdin, --model for model
   if (providerId === 'codex') {
     const args = [...(provider.args || []), 'exec'];
-    if (provider.defaultModel) {
-      args.push('--model', provider.defaultModel);
+    if (effectiveDefaultModel) {
+      args.push('--model', effectiveDefaultModel);
     }
     args.push('-'); // stdin marker
     return args;

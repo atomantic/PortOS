@@ -305,6 +305,7 @@ def run_extend(args: argparse.Namespace) -> str:
         pipe._loaded = False
         aggressive_cleanup()
     pipe._load_decoders()
+    bind_output_fps(pipe, args.fps)
     return pipe._decode_and_save_video(video_latent, audio_latent, args.output)
 
 

@@ -116,6 +116,22 @@ const DATA_DIR = PATHS.cos
 const JOBS_FILE = join(DATA_DIR, 'autonomous-jobs.json')
 const JOBS_SKILLS_DIR = PATHS.promptSkillsJobs
 const withLock = createMutex()
+const DEFAULT_JOB_SYNC_FIELDS = [
+  'name',
+  'description',
+  'category',
+  'interval',
+  'intervalMs',
+  'scheduledTime',
+  'cronExpression',
+  'priority',
+  'autonomyLevel',
+  'type',
+  'scriptHandler',
+  'promptTemplate',
+  'command',
+  'triggerAction'
+]
 
 /**
  * Map job IDs to their skill template filenames
@@ -618,10 +634,15 @@ function mergeWithDefaults(loaded) {
         updatedAt: now
       })
     } else {
-      // Sync type/scriptHandler from defaults so persisted jobs become script jobs
-      if (defaultJob.type && existing.type !== defaultJob.type) {
-        existing.type = defaultJob.type
-        existing.scriptHandler = defaultJob.scriptHandler
+      let changed = false
+      for (const field of DEFAULT_JOB_SYNC_FIELDS) {
+        if (Object.hasOwn(defaultJob, field) && existing[field] !== defaultJob[field]) {
+          existing[field] = defaultJob[field]
+          changed = true
+        }
+      }
+      if (changed) {
+        existing.updatedAt = now
       }
     }
   }

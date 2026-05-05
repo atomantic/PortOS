@@ -9,7 +9,7 @@
 #   PYTHON_BIN     Python 3 binary to use (default: python3)
 #   PORTOS_DATA    Path to PortOS data dir (default: ./data, resolved from $REPO_ROOT)
 #   INSTALL_VIDEO  '1' to also install mlx_video for LTX video generation (default: 1 on macOS, 0 on Windows)
-#   INSTALL_LTX2   '1' to also clone + uv-sync dgrauet/ltx-2-mlx at ~/.portos/ltx-2-mlx for the second-gen LTX-2.3 pipeline (proper keyframe interpolation, true video extend, audio-to-video). Default: 1 on macOS, 0 elsewhere.
+#   INSTALL_LTX2   '1' to also clone + uv-sync dgrauet/ltx-2-mlx at ~/.portos/ltx-2-mlx for the second-gen LTX-2.3 pipeline (proper keyframe interpolation, true video extend, audio-to-video). Default: 0; opt in with INSTALL_LTX2=1.
 #   INSTALL_FLUX2  '1' to also bootstrap a separate venv at ~/.portos/venv-flux2 for FLUX.2-klein (default: 1 on macOS, 0 elsewhere)
 
 set -euo pipefail
@@ -72,7 +72,7 @@ if [[ "$INSTALL_VIDEO" == "1" ]]; then
   fi
 fi
 
-INSTALL_LTX2="${INSTALL_LTX2:-$(is_macos && echo 1 || echo 0)}"
+INSTALL_LTX2="${INSTALL_LTX2:-0}"
 
 if [[ "$INSTALL_LTX2" == "1" ]]; then
   # dgrauet/ltx-2-mlx: a more capable community port of LTX-2.3 with

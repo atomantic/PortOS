@@ -232,12 +232,13 @@ export function createStreamJsonParser() {
  */
 export function buildCliSpawnConfig(provider, model) {
   const providerId = provider?.id || 'claude-code';
+  const effectiveModel = providerId === 'codex' && model === 'codex-configured-default' ? null : model;
 
   // Codex CLI uses different invocation pattern
   if (providerId === 'codex') {
     const args = ['exec'];
-    if (model) {
-      args.push('--model', model);
+    if (effectiveModel) {
+      args.push('--model', effectiveModel);
     }
     return {
       command: provider?.command || 'codex',
@@ -268,8 +269,8 @@ export function buildCliSpawnConfig(provider, model) {
     '--include-partial-messages',       // Include incremental text deltas
     ...(provider?.args || []),          // User-configured provider args
   ];
-  if (model) {
-    args.push('--model', model);
+  if (effectiveModel) {
+    args.push('--model', effectiveModel);
   }
 
   return {

@@ -288,6 +288,43 @@ describe('autonomousJobs', () => {
       expect(jobs.find(j => j.id === 'job-github-repo-maintenance')).toBeDefined()
       expect(jobs.find(j => j.id === 'job-brain-review')).toBeDefined()
     })
+
+    it('existing default jobs receive updated shipped settings without resetting runtime state', async () => {
+      readJSONFile.mockResolvedValue({
+        version: 1,
+        lastUpdated: '2025-01-01T00:00:00.000Z',
+        jobs: [
+          {
+            id: 'job-datadog-error-monitor',
+            name: 'DataDog Error Monitor',
+            description: 'Old description',
+            category: 'datadog-error-monitor',
+            interval: 'weekly',
+            intervalMs: 7 * 24 * 60 * 60 * 1000,
+            scheduledTime: '09:00',
+            enabled: true,
+            priority: 'LOW',
+            autonomyLevel: 'manager',
+            promptTemplate: 'Old Datadog prompt',
+            lastRun: '2025-01-02T00:00:00.000Z',
+            runCount: 7,
+            createdAt: '2025-01-01T00:00:00.000Z',
+            updatedAt: '2025-01-01T00:00:00.000Z'
+          }
+        ]
+      })
+
+      const jobs = await getAllJobs()
+      const datadog = jobs.find(j => j.id === 'job-datadog-error-monitor')
+
+      expect(datadog.scheduledTime).toBe('08:00')
+      expect(datadog.interval).toBe('daily')
+      expect(datadog.priority).toBe('MEDIUM')
+      expect(datadog.promptTemplate).toContain('/api/datadog/instances/:instanceId/search-errors')
+      expect(datadog.enabled).toBe(true)
+      expect(datadog.lastRun).toBe('2025-01-02T00:00:00.000Z')
+      expect(datadog.runCount).toBe(7)
+    })
   })
 
   describe('getAllJobs', () => {
