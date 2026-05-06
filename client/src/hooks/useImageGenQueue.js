@@ -273,10 +273,11 @@ export default function useImageGenQueue() {
     cancelFallbackTimersRef.current.set('all', t);
   }, [patch]);
 
-  // 'canceling' is in-flight from the user's perspective — the row stays
-  // visible while we wait for the server's terminal event, so count it as
-  // active for the dock's "Rendering N scenes" label.
-  const runningCount = queue.filter((q) => q.status === 'queued' || q.status === 'running' || q.status === 'canceling').length;
+  // Decouple status counts from any specific UI string. Consumers compute
+  // their own labels — the dock distinguishes "Rendering N" vs "Canceling N".
+  const renderingCount = queue.filter((q) => q.status === 'queued' || q.status === 'running').length;
+  const cancelingCount = queue.filter((q) => q.status === 'canceling').length;
+  const activeCount = renderingCount + cancelingCount;
 
-  return { queue, runningCount, register, stopOne, stopAll };
+  return { queue, renderingCount, cancelingCount, activeCount, register, stopOne, stopAll };
 }

@@ -119,7 +119,15 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   // Live image-gen queue scoped to this page. SceneCard calls
   // queueRegister({jobId, sceneId, sceneLabel}) on render kickoff so the dock
   // can label rows; the hook subscribes to image-gen:* socket events globally.
-  const { queue: renderQueue, runningCount: renderRunningCount, register: queueRegister, stopAll: queueStopAll, stopOne: queueStopOne } = useImageGenQueue();
+  const {
+    queue: renderQueue,
+    renderingCount: renderRenderingCount,
+    cancelingCount: renderCancelingCount,
+    activeCount: renderActiveCount,
+    register: queueRegister,
+    stopAll: queueStopAll,
+    stopOne: queueStopOne,
+  } = useImageGenQueue();
 
   // View mode (Edit | Read) is URL-driven so it deep-links and survives reloads.
   // ?view=read switches to ProseReader; default is the existing textarea.
@@ -145,11 +153,21 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   // so the popover doesn't flicker when the cursor crosses a token.
   const popOpenTimerRef = useRef(null);
   const popCloseTimerRef = useRef(null);
+  // Mirror of `pop?.pinned` so callbacks can read pinned state without
+  // re-binding (and so setPop updaters stay pure — StrictMode replays the
+  // updater and would emit duplicate setHotRef side effects otherwise).
+  const popPinnedRef = useRef(false);
+  useEffect(() => { popPinnedRef.current = !!pop?.pinned; }, [pop?.pinned]);
 
   // Pass the anchor ELEMENT down (not a frozen DOMRect) so the popover can
   // re-read getBoundingClientRect on scroll/resize and stay attached to its
   // token. A captured rect goes stale the moment the user scrolls.
+  // While pinned, hover-driven opens are ignored — the user explicitly
+  // pinned the popover and shouldn't see it ripped out from under them as
+  // the cursor crosses other tokens. They have to click the X (or press
+  // Escape) before another token can open a new popover.
   const handleTokenEnter = useCallback(({ kind, refId, anchor }) => {
+    if (popPinnedRef.current) return;
     if (popCloseTimerRef.current) {
       clearTimeout(popCloseTimerRef.current);
       popCloseTimerRef.current = null;
@@ -170,11 +188,6 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   // pinned). When pinned, the popover stays visible and the cross-link
   // highlights (SceneCard chips / bible rows) must stay lit too — clearing
   // hotRef there would leave the popover orphaned from its visual targets.
-  // We snapshot the pinned bit out of `pop` BEFORE the setPop call so the
-  // setPop updater stays a pure function (StrictMode replays the updater
-  // and would emit duplicate setHotRef side effects otherwise).
-  const popPinnedRef = useRef(false);
-  useEffect(() => { popPinnedRef.current = !!pop?.pinned; }, [pop?.pinned]);
   const scheduleClose = useCallback(() => {
     if (popCloseTimerRef.current) {
       clearTimeout(popCloseTimerRef.current);
@@ -735,6 +748,8 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
                 onTokenEnter={handleTokenEnter}
                 onTokenLeave={handleTokenLeave}
                 onTokenClick={handleTokenClick}
+                onSceneEnter={setHotScene}
+                onSceneLeave={() => setHotScene(null)}
               />
             </div>
           ) : (
@@ -826,7 +841,9 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
 
       <WritersRoomDock
         queue={renderQueue}
-        runningCount={renderRunningCount}
+        renderingCount={renderRenderingCount}
+        cancelingCount={renderCancelingCount}
+        activeCount={renderActiveCount}
         onStopAll={queueStopAll}
         onStopOne={queueStopOne}
       />

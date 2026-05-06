@@ -77,6 +77,7 @@ export default function ProseReader({
   onTokenLeave,
   onTokenClick,
   onSceneEnter,
+  onSceneLeave,
 }) {
   const sections = useMemo(() => {
     const nodes = splitBody(body);
@@ -112,6 +113,7 @@ export default function ProseReader({
               id={sec.sceneId ? `scene-anchor-${sec.sceneId}` : undefined}
               data-scene-id={sec.sceneId || undefined}
               onMouseEnter={sec.sceneId ? () => onSceneEnter?.(sec.sceneId) : undefined}
+              onMouseLeave={sec.sceneId ? () => onSceneLeave?.(sec.sceneId) : undefined}
               className={`mb-8 transition-colors ${
                 isHot ? 'bg-port-accent/[0.05] -mx-3 px-3 py-2 rounded' : ''
               }`}

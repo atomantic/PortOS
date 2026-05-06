@@ -7,11 +7,23 @@ import { Loader2, Square, Check, AlertTriangle } from 'lucide-react';
 // Mounted at WritersRoom layer (per page) — NOT in the global Layout footer.
 // Kept narrow so it doesn't dominate the page when one or two scenes are
 // rendering, expands inline as more queue up.
-export default function WritersRoomDock({ queue = [], runningCount = 0, onStopAll, onStopOne }) {
+export default function WritersRoomDock({
+  queue = [],
+  renderingCount = 0,
+  cancelingCount = 0,
+  activeCount = renderingCount + cancelingCount,
+  onStopAll,
+  onStopOne,
+}) {
   if (!queue.length) return null;
-  const statusLabel = runningCount > 0
-    ? `Rendering ${runningCount} scene${runningCount === 1 ? '' : 's'}`
-    : 'Renders complete';
+  // Three distinct user-facing states, in priority order: actively rendering
+  // → canceling → done. Showing "Rendering N" while N jobs are canceling
+  // would be misleading.
+  const statusLabel = renderingCount > 0
+    ? `Rendering ${renderingCount} scene${renderingCount === 1 ? '' : 's'}`
+    : cancelingCount > 0
+      ? `Canceling ${cancelingCount} scene${cancelingCount === 1 ? '' : 's'}…`
+      : 'Renders complete';
   return (
     <section
       aria-label="Image render queue"
@@ -19,7 +31,7 @@ export default function WritersRoomDock({ queue = [], runningCount = 0, onStopAl
     >
       <div className="flex items-center gap-3 px-3 py-2 max-w-7xl mx-auto">
         <div className="flex items-center gap-2 shrink-0">
-          {runningCount > 0
+          {activeCount > 0
             ? <Loader2 size={12} className="animate-spin text-port-accent" />
             : <Check size={12} className="text-port-success" />
           }
@@ -37,7 +49,9 @@ export default function WritersRoomDock({ queue = [], runningCount = 0, onStopAl
         <div className="flex-1 min-w-0 flex items-center gap-2 overflow-x-auto">
           {queue.map((q) => <DockItem key={q.jobId} item={q} onStop={onStopOne} />)}
         </div>
-        {runningCount > 0 && (
+        {/* Only offer Stop-all while rows are still actively rendering — once
+            everything is canceling there's nothing left to stop. */}
+        {renderingCount > 0 && (
           <button
             type="button"
             onClick={onStopAll}
