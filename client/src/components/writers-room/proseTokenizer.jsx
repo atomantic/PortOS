@@ -116,14 +116,30 @@ export function renderTokenized(text, {
     const isHot = hotRef && hotRef.refId === a.refId && hotRef.kind === a.kind;
     const hotClass = isHot ? (light ? 'bg-port-accent/20' : 'bg-port-accent/15') : '';
     out.push(
+      // Inline interactive token: rendered as a focusable span with role=button
+      // (a real <button> would break inline text flow / paragraph wrapping in
+      // some browsers). Keyboard users can Tab to it and press Enter/Space to
+      // open the popover (same effect as a click), and Escape closes it via
+      // the existing window-level handler in ProseTokenPopover.
       <span
         key={`t${i}`}
         data-wr-token={a.kind}
         data-wr-ref={a.refId}
-        className={`${baseClass} ${hotClass} px-px rounded-sm`}
+        role="button"
+        tabIndex={0}
+        aria-label={`${a.kind === 'char' ? 'Character' : a.kind === 'place' ? 'Setting' : 'Object'}: ${a.label}`}
+        className={`${baseClass} ${hotClass} px-px rounded-sm cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-port-accent focus-visible:ring-offset-1`}
         onMouseEnter={(ev) => onTokenEnter?.({ kind: a.kind, refId: a.refId, label: a.label, anchor: ev.currentTarget })}
         onMouseLeave={() => onTokenLeave?.()}
+        onFocus={(ev) => onTokenEnter?.({ kind: a.kind, refId: a.refId, label: a.label, anchor: ev.currentTarget })}
+        onBlur={() => onTokenLeave?.()}
         onClick={(ev) => {
+          ev.stopPropagation();
+          onTokenClick?.({ kind: a.kind, refId: a.refId, label: a.label, anchor: ev.currentTarget });
+        }}
+        onKeyDown={(ev) => {
+          if (ev.key !== 'Enter' && ev.key !== ' ') return;
+          ev.preventDefault();
           ev.stopPropagation();
           onTokenClick?.({ kind: a.kind, refId: a.refId, label: a.label, anchor: ev.currentTarget });
         }}

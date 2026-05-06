@@ -600,11 +600,13 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
         >
           {Object.entries(STATUS_LABELS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
         </select>
-        <div className="flex items-center bg-port-bg border border-port-border rounded p-0.5" role="tablist" aria-label="View mode">
+        {/* Two-state toggle, not a true tablist (no separate panels keyed off
+            tab id, no roving tabindex, no arrow-key cycling). aria-pressed is
+            the semantically correct primitive for an on/off-style toggle pair. */}
+        <div className="flex items-center bg-port-bg border border-port-border rounded p-0.5" role="group" aria-label="View mode">
           <button
             type="button"
-            role="tab"
-            aria-selected={viewMode === 'edit'}
+            aria-pressed={viewMode === 'edit'}
             onClick={() => setViewMode('edit')}
             className={`flex items-center gap-1 px-2 py-0.5 text-[11px] rounded ${
               viewMode === 'edit' ? 'bg-port-card text-white' : 'text-gray-400 hover:text-gray-200'
@@ -615,8 +617,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
           </button>
           <button
             type="button"
-            role="tab"
-            aria-selected={viewMode === 'read'}
+            aria-pressed={viewMode === 'read'}
             onClick={() => setViewMode('read')}
             className={`flex items-center gap-1 px-2 py-0.5 text-[11px] rounded ${
               viewMode === 'read' ? 'bg-port-card text-white' : 'text-gray-400 hover:text-gray-200'

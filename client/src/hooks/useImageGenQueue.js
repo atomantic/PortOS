@@ -175,21 +175,29 @@ export default function useImageGenQueue() {
     orphanEventsRef.current.clear();
   }, []);
 
-  // Mark a row as canceling, then issue cancel to the server. On success, prune
-  // the row. On failure, surface the error and revert so the user can retry —
-  // dropping the row before confirming would orphan the in-flight job from
-  // the dock UI.
+  // Mark a row as canceling, then issue cancel to the server. On success,
+  // prune the row. On failure, surface the error and restore each row's
+  // PRIOR status (stashed on the entry as `_prevStatus`) so a queued job
+  // doesn't get incorrectly flipped to running, and an already-completed
+  // job doesn't get resurrected. Only revert rows that are still
+  // 'canceling' — a real socket event (running/done/error) arriving in the
+  // interim wins.
   const stopOne = useCallback(async (jobId) => {
     if (!jobId) return;
-    patch((prev) => prev.map((q) => (q.jobId === jobId ? { ...q, status: 'canceling' } : q)));
+    patch((prev) => prev.map((q) => (
+      q.jobId === jobId
+        ? { ...q, status: 'canceling', _prevStatus: q.status }
+        : q
+    )));
     const err = await cancelImageGen({ jobId }).then(() => null).catch((e) => e);
     if (err) {
       toast.error(`Cancel failed: ${err.message || err}`);
-      patch((prev) => prev.map((q) => (
-        q.jobId === jobId && q.status === 'canceling'
-          ? { ...q, status: 'running' }
-          : q
-      )));
+      patch((prev) => prev.map((q) => {
+        if (q.jobId !== jobId || q.status !== 'canceling') return q;
+        const restored = { ...q, status: q._prevStatus || 'running' };
+        delete restored._prevStatus;
+        return restored;
+      }));
       return;
     }
     patch((prev) => prev.filter((q) => q.jobId !== jobId));
@@ -198,13 +206,18 @@ export default function useImageGenQueue() {
   const stopAll = useCallback(async () => {
     patch((prev) => prev.map((q) => (
       q.status === 'queued' || q.status === 'running'
-        ? { ...q, status: 'canceling' }
+        ? { ...q, status: 'canceling', _prevStatus: q.status }
         : q
     )));
     const err = await cancelImageGen({ all: true }).then(() => null).catch((e) => e);
     if (err) {
       toast.error(`Cancel all failed: ${err.message || err}`);
-      patch((prev) => prev.map((q) => (q.status === 'canceling' ? { ...q, status: 'running' } : q)));
+      patch((prev) => prev.map((q) => {
+        if (q.status !== 'canceling') return q;
+        const restored = { ...q, status: q._prevStatus || 'running' };
+        delete restored._prevStatus;
+        return restored;
+      }));
       return;
     }
     patch((prev) => prev.filter((q) => q.status !== 'canceling'));
