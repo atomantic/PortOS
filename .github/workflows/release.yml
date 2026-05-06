@@ -33,10 +33,12 @@ jobs:
         id: package-version
         run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
 
-      - name: Check if tag exists
-        id: tag-check
+      - name: Check if release exists
+        id: release-check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if git rev-parse "v${{ steps.package-version.outputs.version }}" >/dev/null 2>&1; then
+          if gh release view "v${{ steps.package-version.outputs.version }}" --repo "${{ github.repository }}" >/dev/null 2>&1; then
             echo "exists=true" >> $GITHUB_OUTPUT
           else
             echo "exists=false" >> $GITHUB_OUTPUT
@@ -44,7 +46,7 @@ jobs:
 
       - name: Generate changelog
         id: changelog
-        if: steps.tag-check.outputs.exists == 'false'
+        if: steps.release-check.outputs.exists == 'false'
         run: |
           VERSION="${{ steps.package-version.outputs.version }}"
           MAJOR_MINOR=$(echo $VERSION | cut -d. -f1-2)
@@ -89,7 +91,7 @@ jobs:
           echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Create Release
-        if: steps.tag-check.outputs.exists == 'false'
+        if: steps.release-check.outputs.exists == 'false'
         uses: softprops/action-gh-release@v3
         with:
           tag_name: v${{ steps.package-version.outputs.version }}
@@ -101,7 +103,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Archive changelog on main
-        if: steps.tag-check.outputs.exists == 'false'
         run: |
           CURRENT_VERSION=${{ steps.package-version.outputs.version }}
           MAJOR=$(echo $CURRENT_VERSION | cut -d. -f1)
@@ -115,6 +116,16 @@ jobs:
             # Archive directly on main so release never diverges
             git fetch origin main
             git checkout main
+
+            # After switching to main: re-check whether the pattern file is
+            # actually present. A prior workflow run that archived but failed
+            # before pushing back to release leaves the file present on the
+            # release branch (initial check) but absent on main (already moved).
+            # Skip cleanly in that case.
+            if [ ! -f "$PATTERN_FILE" ]; then
+              echo "Changelog already archived on main — nothing to do"
+              exit 0
+            fi
 
             git mv "$PATTERN_FILE" "$VERSIONED_FILE"
             sed -i.bak "s/v${MAJOR_MINOR}\.x/v${CURRENT_VERSION}/g; s/${MAJOR_MINOR}\.x/${CURRENT_VERSION}/g; s/YYYY-MM-DD/$(date +%Y-%m-%d)/g" "$VERSIONED_FILE"

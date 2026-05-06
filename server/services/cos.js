@@ -158,6 +158,22 @@ export async function start() {
     emitLog('info', `Cleaned up ${cleanedAgents} orphaned agent(s)`);
   }
 
+  // Wait for Creative Director boot recovery to finish retiring stale CD
+  // tasks before we reset orphans. Without this gate, resetOrphanedTasks
+  // would respawn stale CD treatment/evaluate tasks before recovery can
+  // mark them `completed`, racing two agents on the same project. The
+  // promise resolves whether recovery ran successfully, was a no-op (no
+  // mid-flight projects), or wasn't called at all (markRecoveryDone is
+  // exposed for that case). 60s ceiling — recovery on a healthy boot
+  // resolves in <100ms, but we'd rather pay a slow-boot tax than reopen
+  // the duplicate-agent race when initMediaJobQueue or earlier startup
+  // steps stall.
+  const { cdRecoveryDone } = await import('./creativeDirector/recovery.js');
+  await Promise.race([
+    cdRecoveryDone,
+    new Promise((resolve) => setTimeout(resolve, 60000)),
+  ]);
+
   // Then reset any orphaned in_progress tasks (no running agent)
   await resetOrphanedTasks();
 
@@ -3050,6 +3066,6 @@ async function init() {
 // Initialize asynchronously — vitest sets NODE_ENV=test by default, so this
 // skips eager init (and its listeners/timers) in unit tests and avoids
 // circular-import side effects.
-if (process.env.NODE_ENV !== 'test') {
+if (process.env.NODE_ENV !== 'test' && process.env.VITEST !== 'true') {
   init();
 }

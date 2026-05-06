@@ -110,6 +110,20 @@ router.get('/active', asyncHandler(async (_req, res) => {
   res.json({ activeJob: await imageGen.getActiveJob() });
 }));
 
+// Shape returned for any image-gen job that goes through the mediaJobQueue
+// (local + codex). Kept in one place so the two enqueue branches below stay
+// in sync — the client's polling/SSE hooks key off these fields.
+const queuedImageResponse = ({ jobId, position, status, mode, model }) => ({
+  jobId,
+  generationId: jobId,
+  filename: `${jobId}.png`,
+  path: `/data/images/${jobId}.png`,
+  mode,
+  model,
+  status,
+  position,
+});
+
 router.post('/generate', initImageUpload, asyncHandler(async (req, res) => {
   const data = validateRequest(generateSchema, coerceFormFields(req.body));
   // Resolve init image source: uploaded file > gallery filename. The local
@@ -138,6 +152,9 @@ router.post('/generate', initImageUpload, asyncHandler(async (req, res) => {
   // Strip the route-only `initImageFile` field — providers expect `initImagePath`.
   delete data.initImageFile;
   if (initImagePath) data.initImagePath = initImagePath;
+  if (data.guidance == null && data.cfgScale != null) {
+    data.guidance = data.cfgScale;
+  }
 
   // Multer's tmp upload is no longer needed once we've copied it into
   // PATHS.images. Use res.on('close') so the temp file is cleaned up whether
@@ -146,12 +163,36 @@ router.post('/generate', initImageUpload, asyncHandler(async (req, res) => {
   if (uploadedInitTempPath) {
     res.on('close', () => { unlink(uploadedInitTempPath).catch(() => {}); });
   }
-  // Mode resolution: explicit per-request override > settings default. Only
-  // local-mode goes through the mediaJobQueue (it's the GPU-bound backend that
-  // used to throw BUSY). External and Codex backends remain synchronous —
-  // they don't share Metal/MLX resources so no queue is needed.
+  // Local + codex both go through mediaJobQueue (separate lanes — codex
+  // doesn't share MLX). External SD-API stays synchronous: it's a remote
+  // call with no local single-flight constraint to absorb.
   const settings = await getSettings();
   const mode = data.mode || settings.imageGen?.mode || 'external';
+  if (mode === 'codex') {
+    // Reject up-front rather than enqueueing a doomed job — codex is gated
+    // behind an explicit toggle since not every Codex account has access to
+    // the image_gen tool.
+    const c = settings.imageGen?.codex || {};
+    if (!c.enabled) {
+      throw new ServerError(
+        'Codex Imagegen is disabled — enable it in Settings → Image Gen first',
+        { status: 400, code: 'CODEX_IMAGEGEN_DISABLED' },
+      );
+    }
+    const queued = enqueueJob({
+      kind: 'image',
+      // `mode: 'codex'` is the queue's discriminator — laneForJob() routes
+      // codex jobs to the codex lane, and runJob's image branch dispatches
+      // to imageGen/codex.js when it sees this flag.
+      params: {
+        mode: 'codex',
+        codexPath: c.codexPath,
+        model: c.model,
+        ...data,
+      },
+    });
+    return res.json(queuedImageResponse({ ...queued, mode: 'codex', model: c.model || null }));
+  }
   if (mode === 'local') {
     const py = settings.imageGen?.local?.pythonPath || null;
     // Pre-validate config: mflux models need pythonPath, FLUX.2 doesn't
@@ -176,25 +217,18 @@ router.post('/generate', initImageUpload, asyncHandler(async (req, res) => {
         { status: 400, code: 'IMAGE_GEN_NOT_CONFIGURED' },
       );
     }
-    const { jobId, position, status } = enqueueJob({
+    const queued = enqueueJob({
       kind: 'image',
       params: { pythonPath: py, ...data },
     });
-    // Surface the effective model so the response matches the
-    // non-queued path's `model` field. Use the same `selectedModel`
-    // resolution as the validation block above so the response reflects
-    // the actual fallback chain (caller modelId → 'dev' → allModels[0])
-    // rather than just the requested id.
-    return res.json({
-      jobId,
-      generationId: jobId,
-      filename: `${jobId}.png`,
-      path: `/data/images/${jobId}.png`,
+    // Resolve the effective model the same way the validation block above
+    // does so the response reflects the actual fallback chain (caller
+    // modelId → 'dev' → allModels[0]) rather than just the requested id.
+    return res.json(queuedImageResponse({
+      ...queued,
       mode: 'local',
       model: selectedModel?.id || data.modelId || 'dev',
-      status,
-      position,
-    });
+    }));
   }
   res.json(await imageGen.generateImage(data));
 }));
@@ -262,7 +296,18 @@ router.post('/cancel', asyncHandler(async (req, res) => {
     if (target) return res.json(await cancelJob(target.id));
     // jobId not in our queue — fall through (could be a codex job).
   } else if (cancellable.length) {
-    return res.json(await cancelJob(cancellable[cancellable.length - 1].id));
+    // "Most recent submit" — explicitly sort by queuedAt DESC instead of
+    // relying on listJobs() ordering (which puts gpuRunning before
+    // codexRunning, then queue, then archive). queuedAt is the user's
+    // actual submit timestamp; startedAt would mis-order an older queued
+    // job that just dequeued ahead of a more-recently-submitted job
+    // still waiting in queue.
+    const latestSubmitFirst = [...cancellable].sort((a, b) => {
+      const ta = new Date(a.queuedAt || 0).getTime();
+      const tb = new Date(b.queuedAt || 0).getTime();
+      return tb - ta;
+    });
+    return res.json(await cancelJob(latestSubmitFirst[0].id));
   }
   const cancelled = imageGen.cancel();
   res.json({ ok: cancelled });

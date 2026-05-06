@@ -94,12 +94,48 @@ function Safe-Install {
     exit 1
 }
 
-# Pull latest — ensure we're on a branch first (old updater may have left
-# the repo in detached HEAD after checking out a tag)
+# Pull latest — always switch to main (detached HEAD or feature branch both
+# need to land on main before pulling, or the version won't advance). The
+# rest of the script (install, build, restart) runs on main so the app
+# starts on the freshly-pulled revision. Local edits on the original branch
+# are stashed first so checkout doesn't abort, and we leave them in the
+# stash list afterward — the user can restore with `git stash pop` after
+# the update completes (we don't auto-pop because the rest of the script
+# needs to keep running with main's contents).
 Step "git-pull" "running" "Pulling latest changes..."
 $headRef = git symbolic-ref -q HEAD 2>$null
-if (-not $headRef) {
-    Write-SafeHost "⚠️  Detached HEAD detected — checking out main branch" -ForegroundColor Yellow
+$currentBranch = if ($headRef) { $headRef -replace "refs/heads/", "" } else { "" }
+$stashedForBranch = ""
+$stashedForCommit = ""
+if ($currentBranch -ne "main") {
+    $hasChanges = $false
+    git diff --quiet 2>$null
+    if ($LASTEXITCODE -ne 0) { $hasChanges = $true }
+    if (-not $hasChanges) {
+        git diff --cached --quiet 2>$null
+        if ($LASTEXITCODE -ne 0) { $hasChanges = $true }
+    }
+    if (-not $hasChanges) {
+        $untracked = git ls-files --others --exclude-standard
+        if ($untracked) { $hasChanges = $true }
+    }
+    if ($hasChanges) {
+        $branchLabel = if ($currentBranch) { $currentBranch } else { "detached HEAD" }
+        Write-SafeHost "⚠️  Stashing local changes from '$branchLabel' so checkout can proceed" -ForegroundColor Yellow
+        Invoke-Logged git stash push -u -m "portos-update-$([int][double]::Parse((Get-Date -UFormat %s)))"
+        if ($LASTEXITCODE -eq 0) {
+            $stashedForBranch = $branchLabel
+            # Capture the original commit SHA so detached-HEAD users can return
+            # to the exact tree their stash was taken from.
+            $stashedForCommit = git rev-parse HEAD
+        }
+    }
+    if (-not $currentBranch) {
+        $detachedCommit = git rev-parse --short HEAD
+        Write-SafeHost "⚠️  On detached HEAD (commit $detachedCommit) — switching to main for update" -ForegroundColor Yellow
+    } else {
+        Write-SafeHost "⚠️  On branch '$currentBranch' — switching to main for update" -ForegroundColor Yellow
+    }
     Invoke-Logged git checkout main
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
@@ -115,9 +151,16 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Step "submodules" "done" "Submodules updated"
 Write-SafeHost ""
 
-# Stop PM2 apps to release file locks before updating
+# Kill PM2 daemon entirely — pm2 stop/restart only signal app processes but
+# leave the daemon alive. If the daemon was originally launched from a different
+# project, it can cache a stale ProcessContainerFork.js path and crash future
+# fork() calls with MODULE_NOT_FOUND. Killing the daemon mirrors update.sh and
+# forces a fresh launch from this checkout on restart.
 Step "pm2-stop" "running" "Stopping PortOS apps..."
-Invoke-Logged npm run pm2:stop
+Invoke-Logged node ./node_modules/pm2/bin/pm2 kill
+if ($LASTEXITCODE -ne 0) {
+    Write-SafeHost "⚠️  PM2 daemon was not running or could not be killed; continuing update" -ForegroundColor Yellow
+}
 Step "pm2-stop" "done" "Apps stopped"
 Write-SafeHost ""
 
@@ -233,3 +276,13 @@ Write-SafeHost "===================================" -ForegroundColor Green
 Write-SafeHost "  ✅ Update Complete!" -ForegroundColor Green
 Write-SafeHost "===================================" -ForegroundColor Green
 Write-SafeHost ""
+
+if ($stashedForBranch) {
+    Write-SafeHost "ℹ️  Your local changes from '$stashedForBranch' were stashed for the update." -ForegroundColor Cyan
+    if ($stashedForBranch -eq "detached HEAD") {
+        Write-SafeHost "    To restore them: git checkout $stashedForCommit; git stash pop" -ForegroundColor Cyan
+    } else {
+        Write-SafeHost "    To restore them: git checkout '$stashedForBranch'; git stash pop" -ForegroundColor Cyan
+    }
+    Write-SafeHost "    The stash entry is at the top of 'git stash list'." -ForegroundColor Cyan
+}

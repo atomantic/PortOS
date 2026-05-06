@@ -7,6 +7,7 @@ import CronInput from '../../CronInput';
 import { AGENT_OPTIONS, toggleAppMetadataOverride, agentOptionButtonClass } from '../constants';
 import { isCronExpression, describeCron } from '../../../utils/cronHelpers';
 import ToggleSwitch from '../../ToggleSwitch';
+import { filterSelectableModels } from '../../../utils/providers';
 
 const INTERVAL_LABELS = {
   rotation: 'Rotation',
@@ -194,7 +195,7 @@ function PipelineStageConfig({ taskType, config, providers, onUpdate, updating, 
       <div className="space-y-3">
         {stages.map((stage, i) => {
           const stageProvider = providers?.find(p => p.id === stage.providerId);
-          const stageModels = stageProvider?.models || [];
+          const stageModels = filterSelectableModels(stageProvider?.models);
           return (
             <div key={i} className="bg-port-card border border-port-border rounded-lg p-3">
               <div className="flex items-center gap-2 mb-3">
@@ -353,7 +354,7 @@ function GlobalConfigControls({ taskType, config, onUpdate, onTrigger, onReset, 
   };
 
   const selectedProvider = providers?.find(p => p.id === (selectedProviderId || ''));
-  const availableModels = selectedProvider?.models || [];
+  const availableModels = filterSelectableModels(selectedProvider?.models);
   const status = config.status || {};
 
   return (

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { Readable } from 'stream';
-import { uploadSingle } from './multipart.js';
+import { uploadSingle, uploadFields } from './multipart.js';
 
 vi.mock('fs', () => ({
   createWriteStream: () => {
@@ -58,7 +58,7 @@ const runMiddleware = (req) => new Promise((resolve, reject) => {
   mw(req, {}, (err) => err ? reject(err) : resolve());
 });
 
-describe('uploadSingle multipart parser', () => {
+describe('multipart parser', () => {
   it('parses text fields into req.body when no file is present', async () => {
     const req = makeMultipartReq([
       { name: 'prompt', body: 'a cat' },
@@ -137,6 +137,60 @@ describe('uploadSingle multipart parser', () => {
     expect(req.file?.originalname).toBe('a.png');
     expect(req.body.prompt).toBe('after-file');
     vi.doUnmock('fs');
+  });
+
+  it('uploadFields collects two file parts into req.files keyed by field name', async () => {
+    const req = makeMultipartReq([
+      { name: 'prompt', body: 'morph between two scenes' },
+      { name: 'sourceImage', filename: 'first.png', contentType: 'image/png', body: Buffer.from([0x89, 0x50, 0x4e, 0x47]) },
+      { name: 'lastImage', filename: 'last.png', contentType: 'image/png', body: Buffer.from([0x89, 0x50, 0x4e, 0x47]) },
+    ]);
+    await new Promise((resolve, reject) => {
+      const mw = uploadFields(['sourceImage', 'lastImage'], { limits: { fileSize: 1024 * 1024 } });
+      mw(req, {}, (err) => err ? reject(err) : resolve());
+    });
+    expect(req.body.prompt).toBe('morph between two scenes');
+    expect(req.files).toBeDefined();
+    expect(req.files.sourceImage?.originalname).toBe('first.png');
+    expect(req.files.lastImage?.originalname).toBe('last.png');
+    // The single-file back-compat field should not appear when uploadFields is used.
+    expect(req.file).toBeUndefined();
+  });
+
+  it('uploadFields silently drops a file part whose name is not in the accepted set', async () => {
+    const req = makeMultipartReq([
+      { name: 'sourceImage', filename: 'good.png', contentType: 'image/png', body: Buffer.from([0xaa]) },
+      { name: 'unrelated',    filename: 'bad.png',  contentType: 'image/png', body: Buffer.from([0xbb]) },
+    ]);
+    await new Promise((resolve, reject) => {
+      const mw = uploadFields(['sourceImage', 'lastImage']);
+      mw(req, {}, (err) => err ? reject(err) : resolve());
+    });
+    expect(req.files?.sourceImage?.originalname).toBe('good.png');
+    expect(req.files?.unrelated).toBeUndefined();
+    expect(req.files?.lastImage).toBeUndefined();
+  });
+
+  it('exposes fieldname on the fileFilter meta so per-field MIME rules work', async () => {
+    // Regression: videoGen.js dispatches on file.fieldname to enforce
+    // image/* on sourceImage|lastImage and audio/* on audioFile. Dropping
+    // fieldname from fileMeta silently rejects every audio (and image)
+    // upload as "File type not allowed".
+    const seen = [];
+    const req = makeMultipartReq([
+      { name: 'audioFile', filename: 'song.mp3', contentType: 'audio/mpeg', body: Buffer.from([0x01]) },
+    ]);
+    await new Promise((resolve, reject) => {
+      const mw = uploadFields(['sourceImage', 'audioFile'], {
+        fileFilter: (_req, file, cb) => {
+          seen.push({ fieldname: file.fieldname, mimetype: file.mimetype });
+          cb(null, true);
+        },
+      });
+      mw(req, {}, (err) => err ? reject(err) : resolve());
+    });
+    expect(seen).toEqual([{ fieldname: 'audioFile', mimetype: 'audio/mpeg' }]);
+    expect(req.files?.audioFile?.originalname).toBe('song.mp3');
   });
 
   it('rejects requests without the multipart Content-Type', async () => {

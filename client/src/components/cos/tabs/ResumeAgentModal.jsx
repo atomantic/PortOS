@@ -2,6 +2,7 @@ import { useState, useRef } from 'react';
 import { X, CheckCircle, AlertCircle, RotateCcw, Image, Loader2 } from 'lucide-react';
 import { processScreenshotUploads } from '../../../utils/fileUpload';
 import toast from '../../ui/Toast';
+import { filterSelectableModels } from '../../../utils/providers';
 
 export default function ResumeAgentModal({ agent, taskType = 'user', providers, apps, onSubmit, onClose }) {
   const taskDescription = agent.metadata?.taskDescription || agent.taskId || 'Resume previous task';
@@ -43,7 +44,7 @@ export default function ResumeAgentModal({ agent, taskType = 'user', providers, 
   };
 
   const selectedProvider = providers?.find(p => p.id === formData.provider);
-  const availableModels = selectedProvider?.models || [];
+  const availableModels = filterSelectableModels(selectedProvider?.models);
 
   const submittingRef = useRef(false);
   const handleSubmit = async (e) => {

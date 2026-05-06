@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Cpu, Zap, MessageSquare, Eye } from 'lucide-react';
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
+import { filterSelectableModels } from '../../../utils/providers';
 import BrailleSpinner from '../../BrailleSpinner';
 import { PERSONALITY_STYLES, DEFAULT_PERSONALITY, DEFAULT_AVATAR, PLATFORM_TYPES, ACCOUNT_STATUSES } from '../constants';
 
@@ -148,7 +149,7 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
 
   const getModelsForProvider = (providerId) => {
     const p = providers.find(pr => pr.id === providerId);
-    return p?.models || [];
+    return filterSelectableModels(p?.models);
   };
 
   const buildAiConfig = (config) => {

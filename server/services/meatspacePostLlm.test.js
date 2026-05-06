@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import EventEmitter from 'events';
 
 // Mock providers before importing the module
 vi.mock('./providers.js', () => ({
@@ -6,7 +7,13 @@ vi.mock('./providers.js', () => ({
   getProviderById: vi.fn()
 }));
 
+vi.mock('child_process', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, spawn: vi.fn() };
+});
+
 import { getActiveProvider, getProviderById } from './providers.js';
+import { spawn } from 'child_process';
 import {
   LLM_DRILL_TYPES,
   generateLlmDrill,
@@ -503,5 +510,65 @@ describe('AI response parsing', () => {
     });
 
     await expect(generateWordAssociation({ count: 1 })).rejects.toThrow();
+  });
+});
+
+// =============================================================================
+// CODEX SENTINEL — CLI spawn path
+// =============================================================================
+
+describe('CLI provider — codex sentinel model', () => {
+  function createMockChild(stdoutPayload) {
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.kill = vi.fn();
+    setImmediate(() => {
+      child.stdout.emit('data', Buffer.from(stdoutPayload));
+      child.emit('close', 0);
+    });
+    return child;
+  }
+
+  it('omits --model flag when defaultModel is the codex sentinel', async () => {
+    getActiveProvider.mockResolvedValue({
+      id: 'codex',
+      enabled: true,
+      type: 'cli',
+      command: 'codex',
+      args: [],
+      defaultModel: 'codex-configured-default',
+      timeout: 5000
+    });
+    spawn.mockReturnValue(createMockChild(JSON.stringify({
+      questions: [{ prompt: 'river', hints: '' }]
+    })));
+
+    await generateWordAssociation({ count: 1 });
+
+    const [, args] = spawn.mock.calls.at(-1);
+    expect(args).not.toContain('--model');
+  });
+
+  it('passes --model normally for non-sentinel CLI models', async () => {
+    getActiveProvider.mockResolvedValue({
+      id: 'codex',
+      enabled: true,
+      type: 'cli',
+      command: 'codex',
+      args: [],
+      defaultModel: 'o4-mini',
+      timeout: 5000
+    });
+    spawn.mockReturnValue(createMockChild(JSON.stringify({
+      questions: [{ prompt: 'river', hints: '' }]
+    })));
+
+    await generateWordAssociation({ count: 1 });
+
+    const [, args] = spawn.mock.calls.at(-1);
+    const modelIdx = args.indexOf('--model');
+    expect(modelIdx).toBeGreaterThanOrEqual(0);
+    expect(args[modelIdx + 1]).toBe('o4-mini');
   });
 });

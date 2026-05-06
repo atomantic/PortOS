@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import toast from '../components/ui/Toast';
 import * as api from '../services/api';
 import socket from '../services/socket';
+import { filterSelectableModels } from '../utils/providers';
 
 export default function AIProviders() {
   const [providers, setProviders] = useState([]);
@@ -260,8 +261,8 @@ export default function AIProviders() {
                       {provider.type === 'api' && (
                         <p>Endpoint: <code className="text-gray-300">{provider.endpoint}</code></p>
                       )}
-                      {provider.models?.length > 0 && (
-                        <p>Models: {provider.models.slice(0, 3).join(', ')}{provider.models.length > 3 ? ` +${provider.models.length - 3}` : ''}</p>
+                      {filterSelectableModels(provider.models).length > 0 && (
+                        <p>Models: {filterSelectableModels(provider.models).slice(0, 3).join(', ')}{filterSelectableModels(provider.models).length > 3 ? ` +${filterSelectableModels(provider.models).length - 3}` : ''}</p>
                       )}
                       {provider.envVars && Object.keys(provider.envVars).length > 0 && (
                         <div className="mt-0.5">

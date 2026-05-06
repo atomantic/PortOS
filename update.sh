@@ -59,11 +59,29 @@ safe_install() {
   return 1
 }
 
-# Pull latest — ensure we're on a branch first (old updater may have left
-# the repo in detached HEAD after checking out a tag)
+# Pull latest — always switch to main (detached HEAD or feature branch both
+# need to land on main before pulling, or the version won't advance). The
+# rest of the script (install, build, restart) runs on main so the app
+# starts on the freshly-pulled revision. Local edits on the original branch
+# are stashed first so checkout doesn't abort, and we leave them in the
+# stash list afterward — the user can restore with `git stash pop` after
+# the update completes (we don't auto-pop because the rest of the script
+# needs to keep running with main's contents).
 step "git-pull" "running" "Pulling latest changes..."
-if ! git symbolic-ref -q HEAD >/dev/null 2>&1; then
-  log "⚠️  Detached HEAD detected — checking out main branch"
+current_branch=$(git symbolic-ref -q --short HEAD 2>/dev/null || echo "")
+stashed_for_branch=""
+stashed_for_commit=""
+if [ "$current_branch" != "main" ]; then
+  if ! git diff --quiet || ! git diff --cached --quiet || [ -n "$(git ls-files --others --exclude-standard)" ]; then
+    log "⚠️  Stashing local changes from '${current_branch:-detached HEAD}' so checkout can proceed"
+    if run git stash push -u -m "portos-update-$(date +%s)"; then
+      stashed_for_branch="${current_branch:-detached HEAD}"
+      # Capture the original commit SHA so detached-HEAD users can return
+      # to the exact tree their stash was taken from.
+      stashed_for_commit=$(git rev-parse HEAD)
+    fi
+  fi
+  log "⚠️  On branch '${current_branch:-detached HEAD}' — switching to main for update"
   run git checkout main
 fi
 run git pull --rebase --autostash
@@ -76,9 +94,13 @@ run git submodule update --init --recursive
 step "submodules" "done" "Submodules updated"
 log ""
 
-# Stop PM2 apps to release file locks before updating
+# Kill PM2 daemon entirely — pm2 stop/restart only signal app processes but
+# leave the daemon alive. If the daemon was originally launched from a different
+# project (e.g. a Yarn PnP zip cache), it caches a stale ProcessContainerFork.js
+# path and all subsequent fork() calls crash with MODULE_NOT_FOUND. Killing the
+# daemon forces a fresh launch from our local node_modules on restart.
 step "pm2-stop" "running" "Stopping PortOS apps..."
-run npm run pm2:stop || true
+run node ./node_modules/pm2/bin/pm2 kill || true
 step "pm2-stop" "done" "Apps stopped"
 log ""
 
@@ -180,3 +202,13 @@ log "==================================="
 log "  ✅ Update Complete!"
 log "==================================="
 log ""
+
+if [ -n "$stashed_for_branch" ]; then
+  log "ℹ️  Your local changes from '$stashed_for_branch' were stashed for the update."
+  if [ "$stashed_for_branch" = "detached HEAD" ]; then
+    log "    To restore them: git checkout $stashed_for_commit && git stash pop"
+  else
+    log "    To restore them: git checkout '$stashed_for_branch' && git stash pop"
+  fi
+  log "    The stash entry is at the top of 'git stash list'."
+fi

@@ -114,6 +114,7 @@ async function callApiProvider(provider, model, prompt, temperature) {
 function buildCliInvocation(provider, model) {
   const baseArgs = [...(provider.args || [])];
   if (provider.headlessArgs?.length) baseArgs.push(...provider.headlessArgs);
+  const effectiveModel = provider.id === 'codex' && model === 'codex-configured-default' ? null : model;
 
   switch (provider.id) {
     case 'gemini-cli': {
@@ -121,26 +122,26 @@ function buildCliInvocation(provider, model) {
       if (!args.includes('--output-format') && !args.includes('-o')) {
         args.push('--output-format', 'text');
       }
-      if (model) args.push('--model', model);
+      if (effectiveModel) args.push('--model', effectiveModel);
       return { args, promptViaStdin: false };
     }
     case 'codex': {
       // `codex exec -` reads the prompt from stdin. Without `exec` codex
       // launches its REPL and bails with "Error: stdin is not a terminal".
       const args = [...baseArgs, 'exec'];
-      if (model) args.push('--model', model);
+      if (effectiveModel) args.push('--model', effectiveModel);
       args.push('-');
       return { args, promptViaStdin: true };
     }
     case 'claude-code':
     case 'claude-code-bedrock': {
       const args = [...baseArgs, '-p', '-'];
-      if (model) args.push('--model', model);
+      if (effectiveModel) args.push('--model', effectiveModel);
       return { args, promptViaStdin: true };
     }
     default: {
       const args = [...baseArgs];
-      if (model) args.push('--model', model);
+      if (effectiveModel) args.push('--model', effectiveModel);
       return { args, promptViaStdin: true };
     }
   }

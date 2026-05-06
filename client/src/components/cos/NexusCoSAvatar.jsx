@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { AGENT_STATES } from './constants';
 import CoSAvatarOrbitControls from './CoSAvatarOrbitControls';
 import CoSAvatarFrame from './CoSAvatarFrame';
+import CoSBackgroundCamera from './CoSBackgroundCamera';
 
 // Central brain-like neural core
 function NeuralCore({ color, state, speaking }) {
@@ -332,7 +333,7 @@ function StatusRing({ color, state }) {
   );
 }
 
-function Scene({ state, speaking }) {
+function Scene({ state, speaking, background }) {
   const stateConfig = AGENT_STATES[state] || AGENT_STATES.sleeping;
   const color = stateConfig.color;
 
@@ -341,6 +342,8 @@ function Scene({ state, speaking }) {
 
   return (
     <>
+      <CoSBackgroundCamera enabled={background} y={0.2} z={3.5} />
+
       <ambientLight intensity={0.1} />
       <pointLight position={[3, 2, 3]} intensity={0.6} color={color} />
       <pointLight position={[-2, -2, 2]} intensity={0.3} color="#6366f1" />
@@ -366,15 +369,15 @@ function Scene({ state, speaking }) {
   );
 }
 
-export default function NexusCoSAvatar({ state, speaking }) {
+export default function NexusCoSAvatar({ state, speaking, background = false }) {
   return (
-    <CoSAvatarFrame label="Nexus 3D avatar. Drag to rotate.">
+    <CoSAvatarFrame label="Nexus 3D avatar. Drag to rotate." background={background}>
       <Canvas
         camera={{ position: [0, 0.2, 3.5], fov: 45 }}
-        style={{ background: 'transparent' }}
+        style={{ width: '100%', height: '100%', background: 'transparent' }}
         gl={{ alpha: true, antialias: true }}
       >
-        <Scene state={state} speaking={speaking} />
+        <Scene state={state} speaking={speaking} background={background} />
       </Canvas>
     </CoSAvatarFrame>
   );

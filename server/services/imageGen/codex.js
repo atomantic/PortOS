@@ -83,17 +83,22 @@ export async function checkConnection({ codexPath } = {}) {
 
 const SESSION_ID_RE = /^session id:\s*([0-9a-f-]{36})/im;
 
-export async function generateImage({ codexPath, model, prompt, width, height, negativePrompt }) {
+export async function generateImage({ codexPath, model, prompt, width, height, negativePrompt, jobId: providedJobId = null }) {
   if (!prompt?.trim()) {
     throw new ServerError('Prompt is required', { status: 400, code: 'VALIDATION_ERROR' });
   }
+  // The mediaJobQueue serializes codex jobs in their own lane and passes
+  // its job id in via `providedJobId`, so concurrent queued calls never reach
+  // here while activeProcess is set. The 409 below is defense-in-depth for
+  // legacy direct callers (voice tool, avatar route) that still bypass the
+  // queue.
   if (activeProcess) {
     throw new ServerError('A Codex generation is already in progress — cancel it before starting another', { status: 409, code: 'IMAGE_GEN_BUSY' });
   }
 
   await ensureDir(PATHS.images);
 
-  const jobId = randomUUID();
+  const jobId = providedJobId || randomUUID();
   const filename = `${jobId}.png`;
   const outputPath = join(PATHS.images, filename);
 

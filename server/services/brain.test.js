@@ -1189,5 +1189,23 @@ describe('brain service', () => {
       expect(args).not.toContain('--output-format');
       expect(args[args.length - 1]).toBe('test prompt');
     });
+
+    it('omits --model entirely when defaultModel is the codex sentinel', async () => {
+      getProviderById.mockResolvedValue({
+        id: 'codex',
+        enabled: true,
+        type: 'cli',
+        command: 'codex',
+        args: [],
+        defaultModel: 'codex-configured-default',
+        timeout: 50
+      });
+      spawn.mockReturnValue(createMockChild(validDigestJson));
+
+      await runDailyDigest('codex');
+
+      const args = spawn.mock.calls[0][1];
+      expect(args).not.toContain('--model');
+    });
   });
 });

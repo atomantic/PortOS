@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createStreamJsonParser } from './agentCliSpawning.js';
+import { buildCliSpawnConfig, createStreamJsonParser } from './agentCliSpawning.js';
 
 // Helper: feed the parser a sequence of stream-json lines
 function runStream(parser, events) {
@@ -83,5 +83,19 @@ describe('createStreamJsonParser.getFinalResult', () => {
     ]);
 
     expect(parser.getFinalResult()).toBe('Done. All tests pass.');
+  });
+});
+
+describe('buildCliSpawnConfig', () => {
+  it('omits --model for Codex configured-default sentinel', () => {
+    const config = buildCliSpawnConfig({ id: 'codex', command: 'codex' }, 'codex-configured-default');
+
+    expect(config.args).toEqual(['exec']);
+  });
+
+  it('passes explicit Codex model selections through', () => {
+    const config = buildCliSpawnConfig({ id: 'codex', command: 'codex' }, 'gpt-5.4');
+
+    expect(config.args).toEqual(['exec', '--model', 'gpt-5.4']);
   });
 });

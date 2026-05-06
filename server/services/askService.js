@@ -29,6 +29,7 @@ import { getCharacter } from './character.js';
 import { getEvents as getCalendarEvents } from './calendarSync.js';
 import { tokenize as bm25Tokenize, STOP_WORDS } from '../lib/bm25.js';
 import { VALID_MODES as STORAGE_VALID_MODES } from './askConversations.js';
+import { resolveCliModel } from '../lib/providerModels.js';
 
 // Re-export so the route can keep importing modes via askService — but
 // askConversations is the source of truth (it owns the persistence schema).
@@ -510,11 +511,12 @@ async function* streamCompletion(provider, model, prompt, signal) {
   const { spawn } = await import('child_process');
   const args = [...(provider.args || [])];
   if (provider.headlessArgs?.length) args.push(...provider.headlessArgs);
+  const cliModel = resolveCliModel(model);
   if (provider.id === 'gemini-cli') {
     if (!args.includes('--output-format') && !args.includes('-o')) args.push('--output-format', 'text');
-    if (model) args.push('--model', model);
-  } else if (model) {
-    args.push('--model', model);
+    if (cliModel) args.push('--model', cliModel);
+  } else if (cliModel) {
+    args.push('--model', cliModel);
   }
   const out = await new Promise((resolve, reject) => {
     let buf = '';

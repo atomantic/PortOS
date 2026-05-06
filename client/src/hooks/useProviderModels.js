@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import * as api from '../services/api';
+import { filterSelectableModels } from '../utils/providers';
 
 /**
  * Hook for loading AI providers and managing two-step provider > model selection.
@@ -36,7 +37,7 @@ export default function useProviderModels({ filter } = {}) {
   );
 
   const availableModels = useMemo(
-    () => (currentProvider?.models || [currentProvider?.defaultModel]).filter(Boolean),
+    () => filterSelectableModels(currentProvider?.models || [currentProvider?.defaultModel]),
     [currentProvider]
   );
 

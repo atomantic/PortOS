@@ -164,6 +164,21 @@ describe('Image Gen Routes', () => {
       expect(imageGen.generateImage).not.toHaveBeenCalled();
     });
 
+    it('local mode maps cfgScale to guidance before enqueueing', async () => {
+      getSettings.mockResolvedValueOnce({ imageGen: { mode: 'local', local: { pythonPath: '/usr/bin/python3' } } });
+      mediaJobQueue.enqueueJob.mockReturnValueOnce({ jobId: 'queued-job-cfg', position: 1, status: 'queued' });
+
+      const response = await request(app)
+        .post('/api/image-gen/generate')
+        .send({ prompt: 'a fox in a forest', cfgScale: 6.5 });
+
+      expect(response.status).toBe(200);
+      expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'image',
+        params: expect.objectContaining({ cfgScale: 6.5, guidance: 6.5 }),
+      }));
+    });
+
     // The per-request `mode` override flips into queue mode even when the
     // saved default is external — protects against future regressions where
     // someone hard-codes settings.imageGen.mode as the only mode source.
@@ -197,6 +212,78 @@ describe('Image Gen Routes', () => {
 
       expect(response.status).toBe(400);
       expect(response.body.error).toMatch(/not configured/i);
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+    });
+
+    // Codex mode now goes through the mediaJobQueue (codex lane), so a
+    // burst of writers-room storyboard renders queues against itself
+    // instead of failing the second-and-onwards calls with 409
+    // IMAGE_GEN_BUSY.
+    it('codex mode enqueues through mediaJobQueue and returns queued status', async () => {
+      getSettings.mockResolvedValueOnce({
+        imageGen: { mode: 'codex', codex: { enabled: true, codexPath: '/usr/local/bin/codex', model: 'gpt-5.4' } },
+      });
+      mediaJobQueue.enqueueJob.mockReturnValueOnce({ jobId: 'queued-codex-001', position: 1, status: 'queued' });
+
+      const response = await request(app)
+        .post('/api/image-gen/generate')
+        .send({ prompt: 'a tavern at dusk' });
+
+      expect(response.status).toBe(200);
+      expect(response.body.status).toBe('queued');
+      expect(response.body.mode).toBe('codex');
+      expect(response.body.model).toBe('gpt-5.4');
+      expect(response.body.jobId).toBe('queued-codex-001');
+      expect(response.body.path).toBe('/data/images/queued-codex-001.png');
+      expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'image',
+        params: expect.objectContaining({
+          mode: 'codex',
+          codexPath: '/usr/local/bin/codex',
+          model: 'gpt-5.4',
+          prompt: 'a tavern at dusk',
+        }),
+      }));
+      // Synchronous generateImage MUST NOT be called in codex mode either —
+      // the queue takes ownership.
+      expect(imageGen.generateImage).not.toHaveBeenCalled();
+    });
+
+    // Per-request codex override: even when the saved default is external,
+    // an explicit `mode: 'codex'` on the payload (e.g. the writers-room
+    // storyboard chip strip) flips into queue mode so renders serialize.
+    it('per-request mode=codex override enqueues even when settings default is external', async () => {
+      getSettings.mockResolvedValueOnce({
+        imageGen: { mode: 'external', codex: { enabled: true, model: 'gpt-5.4' } },
+      });
+      mediaJobQueue.enqueueJob.mockReturnValueOnce({ jobId: 'queued-codex-002', position: 2, status: 'queued' });
+
+      const response = await request(app)
+        .post('/api/image-gen/generate')
+        .send({ prompt: 'a wizard tower', mode: 'codex' });
+
+      expect(response.status).toBe(200);
+      expect(response.body.status).toBe('queued');
+      expect(response.body.mode).toBe('codex');
+      expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'image',
+        params: expect.objectContaining({ mode: 'codex' }),
+      }));
+      expect(imageGen.generateImage).not.toHaveBeenCalled();
+    });
+
+    // Codex with the toggle off rejects up-front rather than enqueueing.
+    it('codex mode with disabled toggle returns 400 CODEX_IMAGEGEN_DISABLED', async () => {
+      getSettings.mockResolvedValueOnce({
+        imageGen: { mode: 'codex', codex: { enabled: false } },
+      });
+
+      const response = await request(app)
+        .post('/api/image-gen/generate')
+        .send({ prompt: 'a fox' });
+
+      expect(response.status).toBe(400);
+      expect(response.body.error).toMatch(/disabled/i);
       expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
     });
   });
@@ -273,6 +360,45 @@ describe('Image Gen Routes', () => {
       expect(mediaJobQueue.cancelJob.mock.calls.map((c) => c[0])).toEqual(['b', 'c', 'a']);
       // Belt-and-braces: legacy single-process cancel also poked.
       expect(imageGen.cancel).toHaveBeenCalled();
+    });
+
+    it('POST /cancel (no jobId) picks the most-recently-submitted job by queuedAt — NOT the listJobs() ordering', async () => {
+      // listJobs() returns jobs in queue-internal order: gpuRunning first,
+      // then codexRunning, then queue. Without explicit queuedAt sorting, a
+      // bare `/cancel` (the user's "stop the last thing I submitted" gesture)
+      // would target the gpuRunning job — even when the user just queued a
+      // newer Codex job that should be the cancel target. The route must
+      // tie-break by queuedAt DESC so the newest submit always wins.
+      mediaJobQueue.listJobs.mockReturnValueOnce([
+        // listJobs ordering: gpu-running first (oldest submit, started long ago).
+        { id: 'gpu-running', status: 'running', queuedAt: '2026-05-05T08:00:00Z' },
+        // Codex job queued AFTER the GPU job started — this is the "most
+        // recent submit" and should be the cancel target.
+        { id: 'codex-newest', status: 'queued', queuedAt: '2026-05-05T08:30:00Z' },
+        // Older queued job, should NOT be picked.
+        { id: 'queued-older', status: 'queued', queuedAt: '2026-05-05T08:15:00Z' },
+      ]);
+      const response = await request(app).post('/api/image-gen/cancel').send({});
+      expect(response.status).toBe(200);
+      // The newest-submit (codex-newest at 08:30) wins — not 'gpu-running'
+      // (which appeared first in listJobs) and not 'queued-older'.
+      expect(mediaJobQueue.cancelJob).toHaveBeenCalledTimes(1);
+      expect(mediaJobQueue.cancelJob.mock.calls[0][0]).toBe('codex-newest');
+    });
+
+    it('POST /cancel (explicit jobId) cancels exactly that job and skips queuedAt selection', async () => {
+      // When a jobId is provided, the route must cancel THAT job — even if a
+      // newer queued job exists. This locks in that explicit selection wins
+      // over the queuedAt fallback (writers-room "cancel this scene").
+      mediaJobQueue.listJobs.mockReturnValueOnce([
+        { id: 'newest', status: 'queued', queuedAt: '2026-05-05T08:30:00Z' },
+        { id: 'middle', status: 'queued', queuedAt: '2026-05-05T08:20:00Z' },
+        { id: 'oldest', status: 'running', queuedAt: '2026-05-05T08:00:00Z' },
+      ]);
+      const response = await request(app).post('/api/image-gen/cancel').send({ jobId: 'middle' });
+      expect(response.status).toBe(200);
+      expect(mediaJobQueue.cancelJob).toHaveBeenCalledTimes(1);
+      expect(mediaJobQueue.cancelJob.mock.calls[0][0]).toBe('middle');
     });
   });
 });

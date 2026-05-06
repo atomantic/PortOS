@@ -15,6 +15,7 @@ import { getActiveProvider, getProviderById } from './providers.js';
 import { buildPrompt } from './promptService.js';
 import { validate } from '../lib/validation.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
+import { resolveCliModel } from '../lib/providerModels.js';
 import {
   classifierOutputSchema,
   digestOutputSchema,
@@ -75,8 +76,9 @@ async function callAI(promptStageName, variables, providerOverride, modelOverrid
       if (isGeminiCli && !args.includes('--output-format') && !args.includes('-o')) {
         args.push('--output-format', 'text');
       }
-      if (model) {
-        args.push('--model', model);
+      const cliModel = resolveCliModel(model);
+      if (cliModel) {
+        args.push('--model', cliModel);
       }
       if (isGeminiCli) {
         args.push('--prompt', prompt);

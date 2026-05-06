@@ -16,6 +16,7 @@ import DocumentsTab from './tabs/DocumentsTab';
 import GitTab from './tabs/GitTab';
 import GsdTab from './tabs/GsdTab';
 import ProcessesTab from './tabs/ProcessesTab';
+import DatadogTab from './tabs/DatadogTab';
 import UpdateTab from './tabs/UpdateTab';
 
 export default function AppDetailView() {
@@ -91,8 +92,12 @@ export default function AppDetailView() {
   };
 
   const visibleTabs = useMemo(() =>
-    APP_DETAIL_TABS.filter(t => t.id !== 'update' || app?.id === api.PORTOS_APP_ID),
-    [app?.id]
+    APP_DETAIL_TABS.filter(t => {
+      if (t.id === 'update') return app?.id === api.PORTOS_APP_ID;
+      if (t.id === 'datadog') return app?.datadog?.enabled;
+      return true;
+    }),
+    [app?.id, app?.datadog?.enabled]
   );
 
   if (loading) {
@@ -112,14 +117,18 @@ export default function AppDetailView() {
     );
   }
 
+  const effectiveTab = visibleTabs.some(t => t.id === activeTab) ? activeTab : 'overview';
+
   const renderTab = () => {
-    switch (activeTab) {
+    switch (effectiveTab) {
       case 'overview':
         return <OverviewTab app={app} onRefresh={fetchApp} />;
       case 'tasks':
         return <TasksTab appId={appId} />;
       case 'automation':
         return <AutomationTab appId={appId} appName={app.name} />;
+      case 'datadog':
+        return <DatadogTab app={app} />;
       case 'documents':
         return <DocumentsTab appId={appId} repoPath={app.repoPath} />;
       case 'git':
@@ -281,7 +290,7 @@ export default function AppDetailView() {
               key={t.id}
               onClick={() => navigate(`/apps/${appId}/${t.id}`)}
               className={`px-4 py-2 text-sm font-medium whitespace-nowrap border-b-2 transition-colors ${
-                activeTab === t.id
+                effectiveTab === t.id
                   ? 'border-port-accent text-port-accent'
                   : 'border-transparent text-gray-400 hover:text-white hover:border-gray-600'
               }`}

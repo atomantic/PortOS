@@ -15,6 +15,7 @@ import {
   createProject as createTimelineProject,
   updateProject as updateTimelineProject,
   renderProject as renderTimelineProject,
+  getProject as getTimelineProject,
   getRenderJobStatus,
 } from '../videoTimeline/local.js';
 import { loadHistory } from '../videoGen/local.js';
@@ -42,17 +43,40 @@ export async function runStitch(projectId) {
   console.log(`🎬 CD stitch starting: ${projectId} (${clips.length} clips)`);
 
   try {
-    const timeline = await createTimelineProject(`${project.name} — Final Cut`);
+    // Reuse the previously-created timeline project if one exists. Without
+    // this, a server crash or restart between createTimelineProject and the
+    // final render's history landing would create a fresh timeline project
+    // every recovery cycle, leaking orphaned entries into video-projects.json
+    // and the Timeline UI. We still re-write the clips list (scenes may have
+    // been re-rendered between attempts) before re-rendering. If the
+    // persisted timelineProjectId points to a deleted/missing project, fall
+    // through and create a new one.
+    let timeline = null;
+    if (project.timelineProjectId) {
+      timeline = await getTimelineProject(project.timelineProjectId).catch(() => null);
+      if (timeline) {
+        console.log(`🔁 CD stitch: reusing timeline project ${timeline.id.slice(0, 8)} from prior attempt for ${projectId}`);
+      } else {
+        console.log(`🆕 CD stitch: persisted timelineProjectId for ${projectId} is missing — creating a fresh timeline project`);
+      }
+    }
+    if (!timeline) {
+      timeline = await createTimelineProject(`${project.name} — Final Cut`);
+      await updateProject(projectId, { timelineProjectId: timeline.id });
+    }
     await updateTimelineProject(timeline.id, { clips });
-    await updateProject(projectId, { timelineProjectId: timeline.id });
 
     const { jobId } = await renderTimelineProject(timeline.id);
 
-    // Poll video-history.json for an entry tagged with our timelineProjectId.
-    // The timeline service appends a history entry at the end of a successful
-    // render with `timelineProjectId` set, so when we see it the mp4 is on
-    // disk. In parallel, check the job's in-memory status so an ffmpeg failure
-    // breaks out of the loop within seconds instead of waiting 30 minutes.
+    // Poll video-history.json for an entry whose id matches THIS render's
+    // jobId. Match strictly on jobId — not on timelineProjectId — because
+    // when we reuse an existing timeline project (recovery path), an older
+    // successful render from a previous attempt could still be in history
+    // tagged with the same timelineProjectId. Picking that up here would
+    // mark the CD project complete with a stale finalVideoId while the
+    // fresh render is still running. The timeline service writes its
+    // history entry with `id: jobId` (videoTimeline/local.js), so jobId
+    // alone uniquely identifies the current render's output.
     const deadline = Date.now() + FINAL_RENDER_TIMEOUT_MS;
     let finalEntry = null;
     while (Date.now() < deadline) {
@@ -67,7 +91,7 @@ export async function runStitch(projectId) {
       }
 
       const history = await loadHistory().catch(() => []);
-      finalEntry = history.find((h) => h.id === jobId || h.timelineProjectId === timeline.id);
+      finalEntry = history.find((h) => h.id === jobId);
       if (finalEntry) break;
       await sleep(FINAL_RENDER_POLL_MS);
     }

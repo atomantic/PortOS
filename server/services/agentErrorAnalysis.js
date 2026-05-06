@@ -32,6 +32,17 @@ export const ERROR_PATTERNS = [
     })
   },
   {
+    pattern: /(?:model:\s*)?["']?([A-Za-z0-9._:-]+)["']?\s+model is not supported|model\s+["']?([A-Za-z0-9._:-]+)["']?.*not supported/i,
+    category: 'model-not-supported',
+    actionable: true,
+    extract: (match, output, task, model) => ({
+      message: `Model "${match[1] || match[2] || model || 'configured model'}" is not supported`,
+      suggestedFix: 'Update the provider model configuration or leave the model blank so the CLI can use its own configured default.',
+      affectedModel: match[1] || match[2] || model,
+      configuredModel: model
+    })
+  },
+  {
     pattern: /API Error: 401|authentication|unauthorized/i,
     category: 'auth-error',
     actionable: true,
@@ -392,6 +403,14 @@ export const ERROR_PATTERNS = [
   }
 ];
 
+function getFailureAnalysisWindow(output) {
+  return output
+    .split('\n')
+    .filter(l => l.trim())
+    .slice(-200)
+    .join('\n');
+}
+
 /**
  * Analyze agent failure output and categorize the error.
  */
@@ -406,10 +425,12 @@ export function analyzeAgentFailure(output, task, model) {
     };
   }
 
+  const analysisOutput = getFailureAnalysisWindow(output);
+
   for (const errorDef of ERROR_PATTERNS) {
-    const match = output.match(errorDef.pattern);
+    const match = analysisOutput.match(errorDef.pattern);
     if (match) {
-      const extracted = errorDef.extract(match, output, task, model);
+      const extracted = errorDef.extract(match, analysisOutput, task, model);
       return {
         category: errorDef.category,
         actionable: errorDef.actionable,

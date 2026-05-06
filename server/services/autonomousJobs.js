@@ -116,6 +116,26 @@ const DATA_DIR = PATHS.cos
 const JOBS_FILE = join(DATA_DIR, 'autonomous-jobs.json')
 const JOBS_SKILLS_DIR = PATHS.promptSkillsJobs
 const withLock = createMutex()
+// Fields that are code contracts — always overwrite on restart so runtime
+// stays consistent with the shipped implementation.
+const JOB_STRUCTURAL_FIELDS = ['type', 'scriptHandler']
+
+// Fields that ship with a default but are user-editable via PUT /api/cos/jobs/:id.
+// Only written when the field is absent on the stored job (first-time population).
+const JOB_ADDITIVE_FIELDS = [
+  'name',
+  'description',
+  'category',
+  'interval',
+  'intervalMs',
+  'scheduledTime',
+  'cronExpression',
+  'priority',
+  'autonomyLevel',
+  'promptTemplate',
+  'command',
+  'triggerAction'
+]
 
 /**
  * Map job IDs to their skill template filenames
@@ -268,13 +288,13 @@ Write the briefing in a concise, actionable format. Save it as a CoS report. Not
     category: 'datadog-error-monitor',
     interval: 'daily',
     intervalMs: DAY,
-    scheduledTime: '00:00',
+    scheduledTime: '08:00',
     enabled: false,
     priority: 'MEDIUM',
     autonomyLevel: 'manager',
     promptTemplate: `[Autonomous Job] DataDog Error Monitor
 
-You are acting as my Chief of Staff, monitoring DataDog for new application errors.
+You are acting as my Chief of Staff, monitoring DataDog for new application errors and orchestrating fixes.
 
 Phase 1 — Discover:
 1. Call GET /api/apps to get all managed apps
@@ -287,17 +307,22 @@ Phase 2 — Check Errors:
    - Compare results against the error cache in /data/cos/datadog-errors.json
    - Identify new errors (by fingerprint/message hash)
 
-Phase 3 — Act on New Errors:
-5. For each new error:
-   - Create a CoS task describing the error and the app it affects
-   - If the app also has jira.enabled = true, create a JIRA ticket for the error
-   - Update the error cache with the new error fingerprint
+Phase 3 — File Issues and Queue Fixes:
+5. For each genuinely new error:
+   - Update the error cache with the new fingerprint (always, regardless of JIRA config)
+   - If app has jira.enabled = true AND jira.instanceId AND jira.projectKey are set:
+     Create a JIRA ticket with labels ["datadog-auto", "cos-detected"]:
+     POST /api/jira/instances/:instanceId/tickets with projectKey, summary, description, issueType: "Bug", labels
+   - Create a CoS task to fix the error in an isolated worktree:
+     POST /api/cos/tasks with type: "internal", useWorktree: true, openPR: true, the error stack trace, JIRA ticket reference (if created), and instructions to implement fix + open PR
 
 Phase 4 — Report:
 6. Generate a summary report covering:
    - Apps checked and error counts
-   - New errors found and tasks/tickets created
-   - Recurring errors that are increasing in frequency`,
+   - New errors vs already-known errors
+   - JIRA tickets created
+   - CoS fix tasks queued
+   - Recurring errors increasing in frequency`,
     lastRun: null,
     runCount: 0,
     createdAt: null,
@@ -426,6 +451,7 @@ let initPromise = null
  */
 async function initJobs() {
   await ensureDir(DATA_DIR)
+  await syncSkillTemplatesFromSample()
 
   const loaded = await readJSONFile(JOBS_FILE, null)
   if (!loaded) {
@@ -435,13 +461,59 @@ async function initJobs() {
     return initial
   }
 
-  const jobCountBefore = loaded.jobs.length
-  const merged = mergeWithDefaults(loaded)
+  const { data: merged, dirty } = mergeWithDefaults(loaded)
   const migrated = await migrateScriptsState(merged)
-  if (!migrated && merged.jobs.length !== jobCountBefore) {
+  if (migrated || dirty) {
     await saveJobs(merged)
   }
   return merged
+}
+
+async function syncSkillTemplatesFromSample() {
+  if (!PATHS.root) return
+  const sampleDir = join(PATHS.root, 'data.sample', 'prompts', 'skills', 'jobs')
+  if (!existsSync(sampleDir)) return
+  await ensureDir(JOBS_SKILLS_DIR)
+  const shippedDir = join(JOBS_SKILLS_DIR, '.shipped')
+  await ensureDir(shippedDir)
+  const files = await readdir(sampleDir).catch(() => [])
+  for (const file of files) {
+    if (!file.endsWith('.md')) continue
+    const destPath = join(JOBS_SKILLS_DIR, file)
+    const shippedPath = join(shippedDir, file)
+    const sampleContent = await readFile(join(sampleDir, file), 'utf-8').catch(() => null)
+    if (!sampleContent) continue
+    const existingContent = await readFile(destPath, 'utf-8').catch(() => null)
+    if (!existingContent) {
+      // Case a: fresh install — seed file and record shipped snapshot
+      await writeFile(destPath, sampleContent)
+      await writeFile(shippedPath, sampleContent)
+      console.log(`📝 Seeded missing skill template: ${file}`)
+      continue
+    }
+    if (existingContent === sampleContent) {
+      // Case b: file already matches sample — ensure .shipped is current
+      const shippedContent = await readFile(shippedPath, 'utf-8').catch(() => null)
+      if (shippedContent !== sampleContent) await writeFile(shippedPath, sampleContent)
+      continue
+    }
+    const shippedContent = await readFile(shippedPath, 'utf-8').catch(() => null)
+    if (existingContent === shippedContent) {
+      // Case c: file matches last-shipped snapshot but sample has changed — safe to update
+      await writeFile(destPath, sampleContent)
+      await writeFile(shippedPath, sampleContent)
+      console.log(`🔄 Updated unmodified skill template: ${file}`)
+    } else {
+      // Case d: for installs upgrading from a pre-.shipped release, any existing
+      // skill file that doesn't match the current sample lands here. In reality
+      // the file might just be the previous shipped version — we can't tell without
+      // history. We choose preservation: the user's file (whether intentional
+      // customization or a stale shipped copy) stays in place. Users who want the
+      // new template can delete the file and restart so the seeder re-creates it
+      // from data.sample/.
+      console.log(`ℹ️ Preserving user-modified skill template: ${file}`)
+    }
+  }
 }
 
 /**
@@ -456,7 +528,8 @@ async function loadJobs() {
   await initPromise
   const loaded = await readJSONFile(JOBS_FILE, null)
   if (!loaded) return createDefaultJobsData()
-  return mergeWithDefaults(loaded)
+  const { data } = mergeWithDefaults(loaded)
+  return data
 }
 
 /**
@@ -569,6 +642,11 @@ function createDefaultJobsData() {
     lastUpdated: now,
     jobs: DEFAULT_JOBS.map(j => ({
       ...j,
+      _shippedDefaults: Object.fromEntries(
+        JOB_ADDITIVE_FIELDS
+          .filter(f => Object.hasOwn(j, f))
+          .map(f => [f, j[f]])
+      ),
       createdAt: now,
       updatedAt: now
     }))
@@ -576,11 +654,66 @@ function createDefaultJobsData() {
 }
 
 /**
- * Merge loaded data with defaults (add any missing default jobs)
+ * Apply additive fields from a default job onto an existing persisted job using a
+ * shipped-defaults snapshot so that un-customized fields receive future updates
+ * while user customizations are always preserved.
+ *
+ * Returns true if any field (including _shippedDefaults) changed.
+ */
+function applyAdditiveFields(existing, defaultJob) {
+  if (!existing._shippedDefaults) existing._shippedDefaults = {}
+  let changed = false
+
+  for (const field of JOB_ADDITIVE_FIELDS) {
+    if (!Object.hasOwn(defaultJob, field)) continue
+
+    if (!Object.hasOwn(existing, field)) {
+      // Brand-new field — set value and snapshot
+      existing[field] = defaultJob[field]
+      existing._shippedDefaults[field] = defaultJob[field]
+      changed = true
+      continue
+    }
+
+    const snapshot = existing._shippedDefaults[field]
+    if (snapshot === undefined) {
+      // Pre-snapshot bootstrap: this job predates the _shippedDefaults mechanism,
+      // so we have no way to distinguish "user customized this field" from "user
+      // matches the previous shipped default". We bootstrap _shippedDefaults to
+      // the CURRENT shipped value as a one-shot transition: existing installs hold
+      // whatever value they had until the user explicitly edits the field via the UI
+      // (which preserves customization) or until a future release ships a new default
+      // — at which point the snapshot comparison works normally.
+      //
+      // Trade-off: existing installs may hold older defaults indefinitely. Users who
+      // want fresh shipped defaults can edit + revert the field via the UI, or delete
+      // the job entirely so the next merge re-seeds it from scratch.
+      existing._shippedDefaults[field] = defaultJob[field]
+      changed = true
+      continue
+    }
+
+    if (existing[field] === snapshot && existing[field] !== defaultJob[field]) {
+      // User hasn't touched this field — propagate the new shipped default
+      existing[field] = defaultJob[field]
+      existing._shippedDefaults[field] = defaultJob[field]
+      changed = true
+    }
+    // else: value already matches new default (no-op), or user customized (preserve)
+  }
+  return changed
+}
+
+/**
+ * Merge loaded data with defaults (add any missing default jobs).
+ * Returns { data, dirty } where dirty is true if any structural or additive change
+ * was made that requires the caller to persist the result.
  */
 function mergeWithDefaults(loaded) {
   // Migration: remove jobs moved to Schedule system
+  const countBefore = loaded.jobs.length
   loaded.jobs = loaded.jobs.filter(j => j.id !== 'job-pr-reviewer' && j.id !== 'job-jira-sprint-manager')
+  let dirty = loaded.jobs.length !== countBefore
 
   const existingById = new Map(loaded.jobs.map(j => [j.id, j]))
   const now = new Date().toISOString()
@@ -590,19 +723,35 @@ function mergeWithDefaults(loaded) {
     if (!existing) {
       loaded.jobs.push({
         ...defaultJob,
+        _shippedDefaults: Object.fromEntries(
+          JOB_ADDITIVE_FIELDS
+            .filter(f => Object.hasOwn(defaultJob, f))
+            .map(f => [f, defaultJob[f]])
+        ),
         createdAt: now,
         updatedAt: now
       })
-    } else {
-      // Sync type/scriptHandler from defaults so persisted jobs become script jobs
-      if (defaultJob.type && existing.type !== defaultJob.type) {
-        existing.type = defaultJob.type
-        existing.scriptHandler = defaultJob.scriptHandler
+      dirty = true
+      continue
+    }
+    let changed = false
+    // Structural fields: always sync — these are code contracts, not user prefs
+    for (const field of JOB_STRUCTURAL_FIELDS) {
+      if (Object.hasOwn(defaultJob, field) && existing[field] !== defaultJob[field]) {
+        existing[field] = defaultJob[field]
+        changed = true
       }
+    }
+    // Additive fields: snapshot-aware merge — propagates updates to untouched fields,
+    // preserves user customizations
+    if (applyAdditiveFields(existing, defaultJob)) changed = true
+    if (changed) {
+      existing.updatedAt = now
+      dirty = true
     }
   }
 
-  return loaded
+  return { data: loaded, dirty }
 }
 
 /**
@@ -1412,5 +1561,7 @@ export {
   isShellJob,
   executeShellJob,
   getAllowedCommands,
-  validateCommand
+  validateCommand,
+  syncSkillTemplatesFromSample,
+  initJobs
 }

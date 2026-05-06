@@ -10,20 +10,20 @@ import useProviderModels from '../../../hooks/useProviderModels';
 // Color classes for autonomy level buttons
 const LEVEL_COLORS = {
   green: {
-    base: 'border-green-500/30 bg-green-500/10 text-green-400 hover:bg-green-500/20',
-    active: 'ring-2 ring-green-500 border-green-500 bg-green-500/20'
+    base: 'border-green-500/40 bg-green-500/5 text-green-600 hover:bg-green-500/10',
+    active: 'ring-2 ring-green-600 border-green-600 bg-green-500 text-white shadow-sm'
   },
   blue: {
     base: 'border-blue-500/30 bg-blue-500/10 text-blue-400 hover:bg-blue-500/20',
-    active: 'ring-2 ring-blue-500 border-blue-500 bg-blue-500/20'
+    active: 'ring-2 ring-blue-600 border-blue-600 bg-blue-500 text-white shadow-sm'
   },
   yellow: {
     base: 'border-yellow-500/30 bg-yellow-500/10 text-yellow-400 hover:bg-yellow-500/20',
-    active: 'ring-2 ring-yellow-500 border-yellow-500 bg-yellow-500/20'
+    active: 'ring-2 ring-yellow-500 border-yellow-500 bg-yellow-400 text-yellow-950 shadow-sm'
   },
   red: {
     base: 'border-red-500/30 bg-red-500/10 text-red-400 hover:bg-red-500/20',
-    active: 'ring-2 ring-red-500 border-red-500 bg-red-500/20'
+    active: 'ring-2 ring-red-600 border-red-600 bg-red-500 text-white shadow-sm'
   }
 };
 

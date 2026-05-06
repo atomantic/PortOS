@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import toast from '../ui/Toast';
 import ProviderModelSelector from '../ProviderModelSelector';
+import { filterSelectableModels } from '../../utils/providers';
 
 /**
  * Inline picker for a prompt stage's provider+model. Mirrors the Tier/Specific
@@ -58,7 +59,7 @@ export default function StagePromptModelPicker({ stageName, label = 'Stage LLM',
   // early-return guards or React's hooks-rule check fires.
   const modelsForProvider = useMemo(() => {
     const p = providers.find((pr) => pr.id === stage?.provider);
-    return p ? (p.models || [p.defaultModel]).filter(Boolean) : [];
+    return p ? filterSelectableModels(p.models || [p.defaultModel]) : [];
   }, [providers, stage?.provider]);
 
   if (!loaded) return null;
@@ -80,7 +81,7 @@ export default function StagePromptModelPicker({ stageName, label = 'Stage LLM',
     if (isSpecific) return;
     const first = providers[0];
     if (!first) return;
-    persist({ provider: first.id, model: first.defaultModel || (first.models || [])[0] || '' });
+    persist({ provider: first.id, model: first.defaultModel || filterSelectableModels(first.models)[0] || '' });
   };
 
   return (
@@ -128,7 +129,7 @@ export default function StagePromptModelPicker({ stageName, label = 'Stage LLM',
           availableModels={modelsForProvider}
           onProviderChange={(id) => {
             const p = providers.find((pr) => pr.id === id);
-            persist({ provider: id, model: p?.defaultModel || (p?.models || [])[0] || '' });
+            persist({ provider: id, model: p?.defaultModel || filterSelectableModels(p?.models)[0] || '' });
           }}
           onModelChange={(model) => persist({ provider: stage.provider, model })}
           compact

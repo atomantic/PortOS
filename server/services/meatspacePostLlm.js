@@ -11,6 +11,7 @@
 
 import { spawn } from 'child_process';
 import { getActiveProvider, getProviderById } from './providers.js';
+import { resolveCliModel } from '../lib/providerModels.js';
 
 export const LLM_DRILL_TYPES = [
   'word-association',
@@ -49,7 +50,8 @@ async function callAI(prompt, providerId, model) {
     return new Promise((resolve, reject) => {
       const args = [...(provider.args || [])];
       if (provider.headlessArgs?.length) args.push(...provider.headlessArgs);
-      if (selectedModel) args.push('--model', selectedModel);
+      const cliModel = resolveCliModel(selectedModel);
+      if (cliModel) args.push('--model', cliModel);
       args.push(prompt);
       let output = '';
       let settled = false;

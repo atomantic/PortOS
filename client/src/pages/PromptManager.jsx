@@ -3,6 +3,7 @@ import { FileText, Variable, RefreshCw, Save, Plus, Trash2, Eye, Briefcase } fro
 import toast from '../components/ui/Toast';
 import BrailleSpinner from '../components/BrailleSpinner';
 import ProviderModelSelector from '../components/ProviderModelSelector';
+import { filterSelectableModels } from '../utils/providers';
 
 export default function PromptManager() {
   const [tab, setTab] = useState('stages');
@@ -235,7 +236,7 @@ export default function PromptManager() {
 
   const getModelsForProvider = (providerId) => {
     const p = providers.find(pr => pr.id === providerId);
-    return p ? (p.models || [p.defaultModel]).filter(Boolean) : [];
+    return p ? filterSelectableModels(p.models || [p.defaultModel]) : [];
   };
 
   if (loading) {

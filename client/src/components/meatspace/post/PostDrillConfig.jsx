@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { ArrowLeft, Save, Brain } from 'lucide-react';
 import { updatePostConfig, getProviders } from '../../../services/api';
 import toast from '../../ui/Toast';
+import { filterSelectableModels } from '../../../utils/providers';
 
 const DRILL_META = {
   'doubling-chain': {
@@ -151,7 +152,7 @@ export default function PostDrillConfig({ config, onSaved, onBack }) {
   }
 
   const selectedProvider = providers.find(p => p.id === llmProviderId);
-  const availableModels = selectedProvider?.models || [];
+  const availableModels = filterSelectableModels(selectedProvider?.models);
 
   async function handleSave() {
     setSaving(true);

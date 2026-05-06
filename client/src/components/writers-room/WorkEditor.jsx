@@ -67,7 +67,7 @@ function readSidebarWidth() {
 }
 
 function persistSidebarWidth(width) {
-  try { window.localStorage.setItem(SIDEBAR_WIDTH_KEY, String(Math.round(width))); } catch {}
+  try { window.localStorage.setItem(SIDEBAR_WIDTH_KEY, String(Math.round(width))); } catch { return undefined; }
 }
 
 function readSidebarTab() {
@@ -389,7 +389,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   const toggleReadingTheme = useCallback(() => {
     setReadingTheme((prev) => {
       const next = prev === 'dark' ? 'light' : 'dark';
-      try { window.localStorage.setItem(READING_THEME_KEY, next); } catch {}
+      try { window.localStorage.setItem(READING_THEME_KEY, next); } catch { return next; }
       return next;
     });
   }, []);
@@ -637,4 +637,3 @@ function VersionsList({ work, dirty, onSwitch }) {
     </>
   );
 }
-

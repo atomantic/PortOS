@@ -764,13 +764,18 @@ export const creativeDirectorProjectCreateSchema = z.object({
 // Update is restricted to a few editable fields. modelId / aspectRatio /
 // quality / targetDurationSeconds are locked at creation — changing them
 // mid-project would invalidate already-rendered segments.
+//
+// Server-managed fields (timelineProjectId, runs, treatment) are
+// intentionally NOT in this schema. timelineProjectId is set only by
+// stitchRunner.js — accepting it in PATCH payloads would let a client
+// point a CD project at an unrelated user timeline project, which the
+// next stitch would silently overwrite via updateTimelineProject.
 export const creativeDirectorProjectUpdateSchema = z.object({
   name: z.string().min(1).max(200).optional(),
   styleSpec: z.string().max(5000).optional(),
   userStory: z.string().max(10000).nullable().optional(),
   status: z.enum(PROJECT_STATUSES).optional(),
   finalVideoId: z.string().max(64).nullable().optional(),
-  timelineProjectId: z.string().max(64).nullable().optional(),
   failureReason: z.string().max(500).nullable().optional(),
   // Toggleable post-creation — only affects future scene renders.
   disableAudio: z.boolean().optional(),

@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
+import { filterSelectableModels } from '../../../utils/providers';
 
 const statusIcons = {
   pending: <Clock size={16} aria-hidden="true" className="text-yellow-500" />,
@@ -120,7 +121,7 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
 
   // Get models for selected provider in edit mode
   const editProvider = providers?.find(p => p.id === editData.provider);
-  const editModels = editProvider?.models || [];
+  const editModels = filterSelectableModels(editProvider?.models);
 
   // Calculate duration estimate for pending tasks
   // Uses P80 estimate when available for more realistic time predictions

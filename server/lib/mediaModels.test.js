@@ -260,4 +260,153 @@ describe('mediaModels registry', () => {
     expect(getDefaultVideoModelId()).toBe('works');
     logSpy.mockRestore();
   });
+
+  // _shippedDefaults — editable-registry contract tests
+
+  it('fresh install: all default video models present; _shippedDefaults populated', async () => {
+    // No file exists yet → seedIfMissing writes DEFAULT_REGISTRY, then
+    // normalizeRegistry runs over it and sets _shippedDefaults.
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const { loadMediaModels } = await import('./mediaModels.js');
+    const reg = loadMediaModels();
+    // All built-in macos models should be present
+    const { DEFAULT_VIDEO_MODEL_IDS } = await import('./mediaModels.js').then(async (m) => {
+      // We don't export the ids directly, so read them from the registry itself
+      const r = m.loadMediaModels();
+      return { DEFAULT_VIDEO_MODEL_IDS: r.video.macos.map((e) => e.id) };
+    });
+    for (const id of DEFAULT_VIDEO_MODEL_IDS) {
+      expect(reg.video.macos.some((e) => e.id === id)).toBe(true);
+    }
+    // _shippedDefaults should be populated
+    expect(reg._shippedDefaults?.video?.macos?.length).toBeGreaterThan(0);
+    // Disk should now contain _shippedDefaults
+    const onDisk = JSON.parse(readFileSync(registryFile, 'utf-8'));
+    expect(onDisk._shippedDefaults?.video?.macos?.length).toBeGreaterThan(0);
+    logSpy.mockRestore();
+  });
+
+  it('user-deleted built-in video model is NOT re-added on subsequent load', async () => {
+    const platformKey = process.platform === 'win32' ? 'windows' : 'macos';
+    const otherKey = process.platform === 'win32' ? 'macos' : 'windows';
+    // Simulate a registry that already has _shippedDefaults (post-bootstrap)
+    // but is missing one model the user deleted (ltx2_unified).
+    const deletedId = 'ltx2_unified';
+    const remainingMacos = [
+      { id: 'ltx23_unified', name: 'LTX-2.3 Unified Beta (~48 GB)', runtime: 'mlx_video', steps: 25, guidance: 3.0 },
+      { id: 'ltx23_distilled_q4', name: 'LTX-2.3 Distilled Q4 (~22 GB)', runtime: 'mlx_video', steps: 25, guidance: 3.0 },
+      { id: 'ltx23_dgrauet_q4', name: 'LTX-2.3 dgrauet Q4', runtime: 'ltx2', steps: 8, guidance: 3.0 },
+      { id: 'ltx23_dgrauet_q8', name: 'LTX-2.3 dgrauet Q8', runtime: 'ltx2', steps: 8, guidance: 3.0 },
+    ];
+    const shippedMacosIds = [deletedId, ...remainingMacos.map((e) => e.id)];
+    writeFileSync(registryFile, JSON.stringify({
+      video: {
+        [platformKey]: platformKey === 'macos' ? remainingMacos : [{ id: 'ltx_video', name: 'LTX', runtime: 'mlx_video', steps: 25, guidance: 3.0 }],
+        [otherKey]: [],
+        defaultMacos: 'ltx23_distilled_q4',
+        defaultWindows: 'ltx_video',
+      },
+      image: [],
+      textEncoders: [{ id: 't', label: 't', repo: 'r' }],
+      selectedTextEncoder: 't',
+      _shippedDefaults: {
+        video: {
+          macos: shippedMacosIds,
+          windows: ['ltx_video'],
+        },
+      },
+    }));
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const { loadMediaModels } = await import('./mediaModels.js');
+    const reg = loadMediaModels();
+    // The deleted model must NOT be back
+    expect(reg.video.macos.some((e) => e.id === deletedId)).toBe(false);
+    // The shipped id must still be tracked
+    expect(reg._shippedDefaults.video.macos).toContain(deletedId);
+    logSpy.mockRestore();
+  });
+
+  it('new built-in id not in _shippedDefaults is added AND recorded', async () => {
+    const platformKey = process.platform === 'win32' ? 'windows' : 'macos';
+    const otherKey = process.platform === 'win32' ? 'macos' : 'windows';
+    // Simulate a registry that pre-dates a newly-shipped model: _shippedDefaults
+    // exists but does NOT include 'ltx23_dgrauet_q8' (as if it shipped later).
+    const existingMacos = [
+      { id: 'ltx2_unified', name: 'LTX-2 Unified', runtime: 'mlx_video', steps: 30, guidance: 3.0 },
+      { id: 'ltx23_unified', name: 'LTX-2.3 Unified', runtime: 'mlx_video', steps: 25, guidance: 3.0 },
+      { id: 'ltx23_distilled_q4', name: 'LTX-2.3 Q4', runtime: 'mlx_video', steps: 25, guidance: 3.0 },
+      { id: 'ltx23_dgrauet_q4', name: 'LTX-2.3 dgrauet Q4', runtime: 'ltx2', steps: 8, guidance: 3.0 },
+    ];
+    // _shippedDefaults does NOT include ltx23_dgrauet_q8
+    const shippedMacosIds = existingMacos.map((e) => e.id);
+    writeFileSync(registryFile, JSON.stringify({
+      video: {
+        [platformKey]: platformKey === 'macos' ? existingMacos : [{ id: 'ltx_video', name: 'LTX', runtime: 'mlx_video', steps: 25, guidance: 3.0 }],
+        [otherKey]: [],
+        defaultMacos: 'ltx23_distilled_q4',
+        defaultWindows: 'ltx_video',
+      },
+      image: [],
+      textEncoders: [{ id: 't', label: 't', repo: 'r' }],
+      selectedTextEncoder: 't',
+      _shippedDefaults: {
+        video: {
+          macos: shippedMacosIds,
+          windows: ['ltx_video'],
+        },
+      },
+    }));
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const { loadMediaModels } = await import('./mediaModels.js');
+    const reg = loadMediaModels();
+    // ltx23_dgrauet_q8 is a current DEFAULT_REGISTRY entry not yet shipped →
+    // should be added to the user's list
+    expect(reg.video.macos.some((e) => e.id === 'ltx23_dgrauet_q8')).toBe(true);
+    // And should now be recorded in _shippedDefaults
+    expect(reg._shippedDefaults.video.macos).toContain('ltx23_dgrauet_q8');
+    // Persisted to disk
+    const onDisk = JSON.parse(readFileSync(registryFile, 'utf-8'));
+    expect(onDisk._shippedDefaults.video.macos).toContain('ltx23_dgrauet_q8');
+    logSpy.mockRestore();
+  });
+
+  it('user deletes a model that was newly added; deletion survives next load', async () => {
+    const platformKey = process.platform === 'win32' ? 'windows' : 'macos';
+    const otherKey = process.platform === 'win32' ? 'macos' : 'windows';
+    // _shippedDefaults includes ltx23_dgrauet_q8 (it was added in a prior
+    // load), but the user has now removed it from their video list.
+    const userMacos = [
+      { id: 'ltx2_unified', name: 'LTX-2 Unified', runtime: 'mlx_video', steps: 30, guidance: 3.0 },
+      { id: 'ltx23_unified', name: 'LTX-2.3 Unified', runtime: 'mlx_video', steps: 25, guidance: 3.0 },
+      { id: 'ltx23_distilled_q4', name: 'LTX-2.3 Q4', runtime: 'mlx_video', steps: 25, guidance: 3.0 },
+      { id: 'ltx23_dgrauet_q4', name: 'LTX-2.3 dgrauet Q4', runtime: 'ltx2', steps: 8, guidance: 3.0 },
+      // ltx23_dgrauet_q8 intentionally absent
+    ];
+    const shippedMacosIds = [...userMacos.map((e) => e.id), 'ltx23_dgrauet_q8'];
+    writeFileSync(registryFile, JSON.stringify({
+      video: {
+        [platformKey]: platformKey === 'macos' ? userMacos : [{ id: 'ltx_video', name: 'LTX', runtime: 'mlx_video', steps: 25, guidance: 3.0 }],
+        [otherKey]: [],
+        defaultMacos: 'ltx23_distilled_q4',
+        defaultWindows: 'ltx_video',
+      },
+      image: [],
+      textEncoders: [{ id: 't', label: 't', repo: 'r' }],
+      selectedTextEncoder: 't',
+      _shippedDefaults: {
+        video: {
+          macos: shippedMacosIds,
+          windows: ['ltx_video'],
+        },
+      },
+    }));
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const { loadMediaModels } = await import('./mediaModels.js');
+    const reg = loadMediaModels();
+    // Deletion must be respected — model NOT re-added
+    expect(reg.video.macos.some((e) => e.id === 'ltx23_dgrauet_q8')).toBe(false);
+    // The id stays in _shippedDefaults so future loads also honour the deletion
+    expect(reg._shippedDefaults.video.macos).toContain('ltx23_dgrauet_q8');
+    logSpy.mockRestore();
+  });
 });

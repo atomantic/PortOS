@@ -19,23 +19,14 @@
  *                                                  continuation doesn't
  *                                                  drift)
  *
- * Result: ~6s total runtime at 384×384 (1:1-small hidden preset), no LLM
- * in the loop after the project is created, audio rendering disabled. Use
- * as a fast E2E health check after touching anything in the CD pipeline
- * (sceneRunner, mediaJobQueue, completionHook, stitchRunner).
- *
- * Cost knobs the smoke test deliberately picks:
- *   - aspectRatio '1:1-small' (384×384, ~44% fewer pixels than 1:1's
- *     512×512) — hidden from the user-facing dropdown via ASPECT_RATIOS,
- *     valid in ASPECT_PRESETS so render params resolve.
- *   - quality 'draft' (8 denoising steps, 24fps).
- *   - durationSeconds 2 per scene → numFrames rounds to 48 per scene.
- *   - 3 scenes (T2V baseline, color-change continuation, pure
- *     continuation) — all three earn their keep verifying distinct
- *     pipeline behaviors.
+ * Result: ~6s of generated video, no LLM in the loop after the project is
+ * created, audio rendering disabled. Use as a fast E2E health check after
+ * touching anything in the CD pipeline (sceneRunner, mediaJobQueue,
+ * completionHook, stitchRunner).
  */
 
 import { createProject, setTreatment } from './local.js';
+import { getDefaultVideoModelId } from '../../lib/mediaModels.js';
 
 const SMOKE_SCENES = [
   {
@@ -76,18 +67,26 @@ const SMOKE_TREATMENT = {
   scenes: SMOKE_SCENES,
 };
 
-const SMOKE_DEFAULTS = {
+// Resolve at call time, not at module load — getDefaultVideoModelId reads
+// the per-platform registry (data/media-models.json) and returns the
+// active default for the current OS. Hardcoding `ltx23_distilled_q4`
+// (macOS-only) made the smoke run fail with "Unknown video model" on
+// Windows. Callers can still override modelId via the overrides arg.
+const buildSmokeDefaults = () => ({
   name: 'CD smoke test (colored ball)',
+  // Use the 384×384 legacy preset (kept in ASPECT_PRESETS specifically for
+  // this fixture) — at 3 × 2s scenes that's roughly 63% fewer pixel-frames
+  // than 1:1 (512×512) × 3s, keeping the health check cheap to run.
   aspectRatio: '1:1-small',
   quality: 'draft',
-  modelId: 'ltx23_distilled_q4',
+  modelId: getDefaultVideoModelId(),
   targetDurationSeconds: 6,
   styleSpec: 'Plain white background, single rubber ball, no text, no people. Flat lighting, centered framing.',
   startingImageFile: null,
   userStory: null,
   disableAudio: true,
   autoAcceptScenes: true,
-};
+});
 
 /**
  * Create a fresh smoke-test project with a pre-filled treatment. The
@@ -97,8 +96,9 @@ const SMOKE_DEFAULTS = {
  * Pure orchestration — no HTTP, no UI, no agent spawns.
  */
 export async function createSmokeTestProject(overrides = {}) {
-  const project = await createProject({ ...SMOKE_DEFAULTS, ...overrides });
+  const defaults = buildSmokeDefaults();
+  const project = await createProject({ ...defaults, ...overrides });
   const withTreatment = await setTreatment(project.id, SMOKE_TREATMENT);
-  console.log(`🧪 CD smoke project ready: ${withTreatment.id} (${withTreatment.scenes?.length ?? withTreatment.treatment?.scenes?.length ?? 0} scenes, autoAcceptScenes=${withTreatment.autoAcceptScenes ?? SMOKE_DEFAULTS.autoAcceptScenes}, disableAudio=${withTreatment.disableAudio ?? SMOKE_DEFAULTS.disableAudio})`);
+  console.log(`🧪 CD smoke project ready: ${withTreatment.id} (${withTreatment.scenes?.length ?? withTreatment.treatment?.scenes?.length ?? 0} scenes, model=${withTreatment.modelId}, autoAcceptScenes=${withTreatment.autoAcceptScenes ?? defaults.autoAcceptScenes}, disableAudio=${withTreatment.disableAudio ?? defaults.disableAudio})`);
   return withTreatment;
 }

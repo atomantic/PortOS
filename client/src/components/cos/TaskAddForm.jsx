@@ -5,6 +5,14 @@ import AppContextPicker from '../AppContextPicker';
 import * as api from '../../services/api';
 import { processScreenshotUploads, processAttachmentUploads } from '../../utils/fileUpload';
 import { formatBytes } from '../../utils/formatters';
+import { filterSelectableModels } from '../../utils/providers';
+
+const isCodexProvider = (provider) => {
+  if (!provider) return false;
+  if (provider.id === 'codex') return true;
+  const commandName = String(provider.command || '').split(/[\\/]/).pop().replace(/\.(exe|cmd|bat)$/i, '');
+  return commandName === 'codex';
+};
 
 export default function TaskAddForm({ providers, apps, onTaskAdded, compact = false, defaultExpanded = false, defaultApp = '' }) {
   const [newTask, setNewTask] = useState({ description: '', model: '', provider: '', app: defaultApp });
@@ -63,7 +71,14 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
 
   // Get models for selected provider
   const selectedProvider = providers?.find(p => p.id === newTask.provider);
-  const availableModels = selectedProvider?.models || [];
+  const availableModels = filterSelectableModels(selectedProvider?.models);
+  const providerModelNote = selectedProvider
+    ? isCodexProvider(selectedProvider)
+      ? 'Codex uses the model configured in ~/.codex/config.toml.'
+      : selectedProvider.type === 'cli'
+        ? `${selectedProvider.name} uses its CLI configured default model.`
+        : 'No models are configured. PortOS will use the provider default.'
+    : '';
 
   // Apply template to form
   const applyTemplate = useCallback(async (template) => {
@@ -274,7 +289,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
           {expanded ? 'Fewer options' : 'More options'}
         </button>
         {expanded && (
-          <div className="space-y-3 pt-1">
+          <div className="space-y-2 pt-1">
             {renderFullFormFields()}
           </div>
         )}
@@ -331,7 +346,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
         </div>
       )}
 
-      <div className="space-y-3">
+      <div className="space-y-2">
         <div>
           <label htmlFor="task-description" className="sr-only">Task description (required)</label>
           <input
@@ -363,8 +378,8 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
             showRepoPath
           />
         )}
-        <div className="grid grid-cols-2 sm:flex sm:items-center gap-x-4 gap-y-2 sm:gap-4 sm:flex-wrap">
-          <label className="flex items-center gap-2 cursor-pointer select-none min-h-[44px]">
+        <div className="grid grid-cols-2 sm:flex sm:items-center gap-x-4 gap-y-1 sm:flex-wrap">
+          <label className="flex items-center gap-2 cursor-pointer select-none py-1">
             <input
               type="checkbox"
               checked={enhancePrompt}
@@ -376,7 +391,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
               Enhance
             </span>
           </label>
-          <label className="flex items-center gap-2 cursor-pointer select-none whitespace-nowrap min-h-[44px]">
+          <label className="flex items-center gap-2 cursor-pointer select-none whitespace-nowrap py-1">
             <input
               type="checkbox"
               checked={useWorktree}
@@ -391,7 +406,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
               Worktree
             </span>
           </label>
-          <label className="flex items-center gap-2 cursor-pointer select-none whitespace-nowrap min-h-[44px]">
+          <label className="flex items-center gap-2 cursor-pointer select-none whitespace-nowrap py-1">
             <input
               type="checkbox"
               checked={openPR}
@@ -404,7 +419,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
               Open PR
             </span>
           </label>
-          <label className="flex items-center gap-2 cursor-pointer select-none whitespace-nowrap min-h-[44px]">
+          <label className="flex items-center gap-2 cursor-pointer select-none whitespace-nowrap py-1">
             <input
               type="checkbox"
               checked={simplify}
@@ -416,7 +431,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
               Simplify
             </span>
           </label>
-          <label className="flex items-center gap-2 cursor-pointer select-none whitespace-nowrap min-h-[44px]">
+          <label className="flex items-center gap-2 cursor-pointer select-none whitespace-nowrap py-1">
             <input
               type="checkbox"
               checked={reviewLoop}
@@ -429,7 +444,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
             </span>
           </label>
           {appHasJira && (
-            <label className="flex items-center gap-2 cursor-pointer select-none whitespace-nowrap min-h-[44px]">
+            <label className="flex items-center gap-2 cursor-pointer select-none whitespace-nowrap py-1">
               <input
                 type="checkbox"
                 checked={createJiraTicket}
@@ -458,7 +473,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
               ))}
             </select>
           </div>
-          {availableModels.length > 0 && (
+          {availableModels.length > 0 ? (
             <div className="flex-1">
               <label htmlFor="task-model" className="sr-only">AI model</label>
               <select
@@ -473,7 +488,11 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
                 ))}
               </select>
             </div>
-          )}
+          ) : selectedProvider ? (
+            <div className="flex-1 px-3 py-2 min-h-[44px] bg-port-bg border border-port-border rounded-lg text-xs text-gray-400 flex items-center">
+              {providerModelNote}
+            </div>
+          ) : null}
         </div>
         {/* Screenshot and Attachment Upload */}
         <div className="flex items-center gap-3 flex-wrap">

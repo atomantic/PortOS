@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import EventEmitter from 'events';
 
 // All upstream services are mocked so the unit under test is the
 // orchestration logic itself: parallel retrieval, ranking, prompt assembly,
@@ -8,6 +9,11 @@ vi.mock('./providers.js', () => ({
   getActiveProvider: vi.fn(),
   getProviderById: vi.fn(),
 }));
+
+vi.mock('child_process', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, spawn: vi.fn() };
+});
 
 vi.mock('./memoryBackend.js', () => ({
   hybridSearchMemories: vi.fn(),
@@ -40,6 +46,7 @@ vi.mock('./calendarSync.js', () => ({
   getEvents: vi.fn(),
 }));
 
+const { spawn } = await import('child_process');
 const memoryBackend = await import('./memoryBackend.js');
 const memoryEmbeddings = await import('./memoryEmbeddings.js');
 const brainStorage = await import('./brainStorage.js');
@@ -237,5 +244,70 @@ describe('runAsk', () => {
     // Expect one sources event then a terminating error.
     expect(events.find((e) => e.type === 'error')).toBeDefined();
     expect(events.find((e) => e.type === 'done')).toBeUndefined();
+  });
+
+  it('omits --model flag when effectiveModel is the codex sentinel (CLI provider)', async () => {
+    providers.getActiveProvider.mockResolvedValue({
+      id: 'codex',
+      type: 'cli',
+      enabled: true,
+      command: 'codex',
+      args: [],
+      defaultModel: 'codex-configured-default',
+      timeout: 5000,
+    });
+
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.stdin = { on: vi.fn(), end: vi.fn() };
+    child.kill = vi.fn();
+    setImmediate(() => {
+      child.stdout.emit('data', Buffer.from('answer text'));
+      child.emit('close', 0);
+    });
+    spawn.mockReturnValue(child);
+
+    const events = [];
+    for await (const evt of askService.runAsk({ question: 'test question' })) {
+      events.push(evt);
+    }
+
+    const [, args] = spawn.mock.calls.at(-1);
+    expect(args).not.toContain('--model');
+    expect(events.find((e) => e.type === 'done')).toBeDefined();
+  });
+
+  it('passes --model normally for non-sentinel CLI models (CLI provider)', async () => {
+    providers.getActiveProvider.mockResolvedValue({
+      id: 'codex',
+      type: 'cli',
+      enabled: true,
+      command: 'codex',
+      args: [],
+      defaultModel: 'o4-mini',
+      timeout: 5000,
+    });
+
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.stdin = { on: vi.fn(), end: vi.fn() };
+    child.kill = vi.fn();
+    setImmediate(() => {
+      child.stdout.emit('data', Buffer.from('answer text'));
+      child.emit('close', 0);
+    });
+    spawn.mockReturnValue(child);
+
+    const events = [];
+    for await (const evt of askService.runAsk({ question: 'test question' })) {
+      events.push(evt);
+    }
+
+    const [, args] = spawn.mock.calls.at(-1);
+    const modelIdx = args.indexOf('--model');
+    expect(modelIdx).toBeGreaterThanOrEqual(0);
+    expect(args[modelIdx + 1]).toBe('o4-mini');
   });
 });

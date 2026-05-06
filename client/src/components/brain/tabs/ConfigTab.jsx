@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import * as api from '../../../services/api';
+import { filterSelectableModels } from '../../../utils/providers';
 import {Settings,
   Save,
   Zap,
@@ -88,7 +89,7 @@ export default function ConfigTab({ onRefresh }) {
   const getAvailableModels = () => {
     if (!selectedProvider) return [];
     const provider = providers.find(p => p.id === selectedProvider);
-    return provider?.models || [];
+    return filterSelectableModels(provider?.models);
   };
 
   const hasChanges = () => {
@@ -162,8 +163,8 @@ export default function ConfigTab({ onRefresh }) {
                 const newProvider = providers.find(p => p.id === e.target.value);
                 if (newProvider?.defaultModel) {
                   setSelectedModel(newProvider.defaultModel);
-                } else if (newProvider?.models?.length > 0) {
-                  setSelectedModel(newProvider.models[0]);
+                } else if (filterSelectableModels(newProvider?.models).length > 0) {
+                  setSelectedModel(filterSelectableModels(newProvider.models)[0]);
                 } else {
                   setSelectedModel('');
                 }

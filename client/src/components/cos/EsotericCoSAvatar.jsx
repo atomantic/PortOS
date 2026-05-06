@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { AGENT_STATES } from './constants';
 import CoSAvatarOrbitControls from './CoSAvatarOrbitControls';
 import CoSAvatarFrame from './CoSAvatarFrame';
+import CoSBackgroundCamera from './CoSBackgroundCamera';
 
 // Central mystical core - an artifact of unknown origin
 function EsotericCore({ color, state, speaking }) {
@@ -177,12 +178,14 @@ function FloatingRunes({ color }) {
 }
 
 
-function Scene({ state, speaking }) {
+function Scene({ state, speaking, background }) {
   const stateConfig = AGENT_STATES[state] || AGENT_STATES.sleeping;
   const color = stateConfig.color;
 
   return (
     <>
+      <CoSBackgroundCamera enabled={background} z={5} />
+
       <ambientLight intensity={0.2} />
       <pointLight position={[10, 10, 10]} intensity={1} color={color} />
       <pointLight position={[-10, -10, -10]} intensity={0.5} color="#4c1d95" />
@@ -200,15 +203,15 @@ function Scene({ state, speaking }) {
   );
 }
 
-export default function EsotericCoSAvatar({ state, speaking }) {
+export default function EsotericCoSAvatar({ state, speaking, background = false }) {
   return (
-    <CoSAvatarFrame label="Esoteric 3D avatar. Drag to rotate.">
+    <CoSAvatarFrame label="Esoteric 3D avatar. Drag to rotate." background={background}>
       <Canvas
         camera={{ position: [0, 0, 5], fov: 45 }}
-        style={{ background: 'transparent' }}
+        style={{ width: '100%', height: '100%', background: 'transparent' }}
         gl={{ alpha: true, antialias: true }}
       >
-        <Scene state={state} speaking={speaking} />
+        <Scene state={state} speaking={speaking} background={background} />
       </Canvas>
     </CoSAvatarFrame>
   );

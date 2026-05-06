@@ -664,6 +664,10 @@ router.post('/:id/build', loadApp, asyncHandler(async (req, res) => {
     throw new ServerError(`Build command '${cmd}' is not allowed. Allowed: ${[...ALLOWED_BUILD_CMDS].join(', ')}`, { status: 400, code: 'INVALID_BUILD_COMMAND' });
   }
 
+  if (needsShell(cmd) && args.some(a => SHELL_UNSAFE_RE.test(a))) {
+    throw new ServerError('Build command args contain shell-unsafe characters', { status: 400, code: 'INVALID_BUILD_COMMAND' });
+  }
+
   console.log(`🔨 Building ${app.name}: ${buildCommand}`);
 
   // Install dependencies before building (root + common subdirs) - skip for non-Node apps
@@ -676,32 +680,30 @@ router.post('/:id/build', loadApp, asyncHandler(async (req, res) => {
     if (await pathExists(join(subDir, 'package.json'))) {
       const label = sub || 'root';
       console.log(`📦 Installing ${label} dependencies for ${app.name}`);
-      const INSTALL_TIMEOUT_MS = 3 * 60 * 1000; // 3 minutes
       const installResult = await new Promise((resolve) => {
-        const child = spawn(resolveCmd('npm'), ['install'], { cwd: subDir, windowsHide: true });
+        const child = spawn('npm', ['install'], { cwd: subDir, windowsHide: true, shell: needsShell('npm') });
         let stdout = '';
         let stderr = '';
         let settled = false;
-        const MAX = 16 * 1024;
+        const MAX = 64 * 1024;
         const timer = setTimeout(() => {
-          if (!settled) { settled = true; child.kill('SIGTERM'); resolve({ success: false, exitCode: -1, output: `npm install timed out after ${INSTALL_TIMEOUT_MS / 1000}s` }); }
+          if (!settled) { settled = true; killProc(child); resolve({ success: false, exitCode: -1, output: `npm install timed out after ${INSTALL_TIMEOUT_MS / 1000}s` }); }
         }, INSTALL_TIMEOUT_MS);
-        child.stdout.on('data', d => { if (stdout.length < MAX) stdout += d; });
-        child.stderr.on('data', d => { if (stderr.length < MAX) stderr += d; });
-        child.on('close', exitCode => { if (!settled) { settled = true; clearTimeout(timer); resolve({ success: exitCode === 0, exitCode, output: (stderr.trim() || stdout.trim()).slice(0, 1024) }); } });
+        child.stdout.on('data', d => { stdout += d; if (stdout.length > MAX) stdout = stdout.slice(-MAX); });
+        child.stderr.on('data', d => { stderr += d; if (stderr.length > MAX) stderr = stderr.slice(-MAX); });
+        child.on('close', exitCode => { if (!settled) { settled = true; clearTimeout(timer); resolve({ success: exitCode === 0, exitCode, output: (stderr.trim() || stdout.trim()).slice(-1024) }); } });
         child.on('error', err => { if (!settled) { settled = true; clearTimeout(timer); resolve({ success: false, exitCode: -1, output: err.message }); } });
       });
       if (!installResult.success) {
-        console.log(`❌ npm install (${label}) exit=${installResult.exitCode}: ${installResult.output.slice(0, 300)}`);
+        console.log(`❌ npm install (${label}) exit=${installResult.exitCode}: ${installResult.output.slice(-300)}`);
         await logAction('build', app.id, app.name, { buildCommand, step: `npm install (${label})` }, false);
         throw new ServerError(`npm install failed (${label}) exit=${installResult.exitCode}: ${installResult.output}`, { status: 500, code: 'INSTALL_FAILED' });
       }
     }
   }
 
-  const BUILD_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
   const result = await new Promise((resolve) => {
-    const child = spawn(resolveCmd(cmd), args, { cwd: app.repoPath, windowsHide: true });
+    const child = spawn(cmd, args, { cwd: app.repoPath, windowsHide: true, shell: needsShell(cmd) });
     let stdout = '';
     let stderr = '';
     let settled = false;
@@ -709,8 +711,10 @@ router.post('/:id/build', loadApp, asyncHandler(async (req, res) => {
     const timer = setTimeout(() => {
       if (!settled) {
         settled = true;
-        child.kill('SIGTERM');
-        resolve({ success: false, stderr: `Build timed out after ${BUILD_TIMEOUT_MS / 1000}s`, code: -1 });
+        killProc(child);
+        const timeoutMsg = `Build timed out after ${BUILD_TIMEOUT_MS / 1000}s`;
+        const tail = (stderr.trim() || stdout.trim()).slice(-512);
+        resolve({ success: false, stderr: timeoutMsg, code: -1, output: tail ? `${timeoutMsg} — last output: ${tail}` : timeoutMsg });
       }
     }, BUILD_TIMEOUT_MS);
     child.stdout.on('data', d => {
@@ -725,7 +729,7 @@ router.post('/:id/build', loadApp, asyncHandler(async (req, res) => {
       if (!settled) {
         settled = true;
         clearTimeout(timer);
-        const output = (stderr.trim() || stdout.trim()).slice(0, 1024);
+        const output = (stderr.trim() || stdout.trim()).slice(-1024);
         resolve({ success: code === 0, stdout: stdout.trim(), stderr: stderr.trim(), code, signal, output });
       }
     });
@@ -794,9 +798,26 @@ const ALLOWED_BUILD_CMDS = new Set([
   'cargo'       // Rust
 ]);
 
-// On Windows, Node-based CLI tools resolve to .cmd shims
+const IS_WIN32 = process.platform === 'win32';
+// npm/npx are .cmd shims on Windows — enable shell only for these so cmd.exe
+// can resolve them, without enabling shell metacharacter interpretation for
+// native binaries (xcodebuild, swift, make, cargo).
 const WIN_CMD_SHIMS = new Set(['npm', 'npx']);
-const resolveCmd = (cmd) => process.platform === 'win32' && WIN_CMD_SHIMS.has(cmd) ? `${cmd}.cmd` : cmd;
+const needsShell = (cmd) => IS_WIN32 && WIN_CMD_SHIMS.has(cmd);
+// Actual cmd.exe metacharacters (& | < > ^ % ! and grouping parens).
+// Validated only when shell is active (needsShell guard at call site).
+const SHELL_UNSAFE_RE = /[&|<>^%!()]/;
+// On Windows, SIGTERM kills cmd.exe but orphans its child (npm). Use taskkill
+// /T /F to terminate the whole process tree.
+const killProc = (child) => {
+  if (IS_WIN32 && child.pid) {
+    spawn('taskkill', ['/T', '/F', '/PID', String(child.pid)], { stdio: 'ignore', windowsHide: true }).on('error', () => {}).unref();
+  } else {
+    child.kill('SIGTERM');
+  }
+};
+const INSTALL_TIMEOUT_MS = 3 * 60 * 1000;
+const BUILD_TIMEOUT_MS = 5 * 60 * 1000;
 
 // Allowlist of safe editor commands
 // Security: Only allow known-safe editor commands to prevent arbitrary code execution

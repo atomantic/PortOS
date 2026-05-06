@@ -16,6 +16,7 @@ import { existsSync } from 'fs';
 import http from 'http';
 import { Server as SocketServer } from 'socket.io';
 import { ensureDir, PATHS } from '../lib/fileUtils.js';
+import { createCodexStderrFormatter } from '../lib/codexCliOutput.js';
 
 const ROOT_DIR = PATHS.root;
 const STATE_FILE = join(PATHS.cos, 'runner-state.json');
@@ -471,6 +472,8 @@ app.post('/spawn', async (req, res) => {
   // Detect if stream-json format is active (Claude CLI with streaming)
   const isStreamJson = spawnArgs.includes('stream-json');
   const streamParser = isStreamJson ? createStreamJsonParser() : null;
+  const isCodexCli = basename(command).replace(/\.exe$/i, '') === 'codex';
+  const codexStderrFormatter = isCodexCli ? createCodexStderrFormatter(prompt) : null;
 
   // Store in memory
   activeAgents.set(agentId, {
@@ -481,6 +484,7 @@ app.post('/spawn', async (req, res) => {
     outputBuffer: '',
     rawStreamBuffer: '',
     streamParser,
+    codexStderrFormatter,
     workspacePath: cwd
   });
 
@@ -515,11 +519,18 @@ app.post('/spawn', async (req, res) => {
 
   // Handle stderr
   claudeProcess.stderr.on('data', (data) => {
-    const text = `[stderr] ${data.toString()}`;
     const agent = activeAgents.get(agentId);
-    if (agent) {
-      agent.outputBuffer += text;
+    if (agent?.codexStderrFormatter) {
+      const lines = agent.codexStderrFormatter.processChunk(data.toString());
+      for (const line of lines) {
+        agent.outputBuffer += line + '\n';
+        emitToServer('agent:output', { agentId, text: line + '\n' });
+      }
+      return;
     }
+
+    const text = `[stderr] ${data.toString()}`;
+    if (agent) agent.outputBuffer += text;
     emitToServer('agent:output', { agentId, text });
   });
 
@@ -546,6 +557,13 @@ app.post('/spawn', async (req, res) => {
       const finalResult = agent.streamParser.getFinalResult();
       if (finalResult) {
         agent.outputBuffer = finalResult;
+      }
+    }
+    if (agent?.codexStderrFormatter) {
+      const remaining = agent.codexStderrFormatter.flush();
+      for (const line of remaining) {
+        agent.outputBuffer += line + '\n';
+        emitToServer('agent:output', { agentId, text: line + '\n' });
       }
     }
 

@@ -22,10 +22,14 @@
  * that case).
  */
 
-import { getProject, updateProject, updateRun, recordRun } from './local.js';
-import { enqueueTreatmentTask } from './agentBridge.js';
+import { existsSync } from 'fs';
+import { join } from 'path';
+import { getProject, updateProject, updateScene, updateRun, recordRun } from './local.js';
+import { enqueueTreatmentTask, enqueueEvaluateTask } from './agentBridge.js';
 import { runSceneRender } from './sceneRunner.js';
 import { runStitch } from './stitchRunner.js';
+import { sampleEvaluationFrames } from '../videoGen/local.js';
+import { PATHS } from '../../lib/fileUtils.js';
 
 export async function handleCreativeDirectorCompletion(task, agentId, success) {
   const meta = task?.metadata?.creativeDirector;
@@ -98,6 +102,13 @@ export async function handleCreativeDirectorCompletion(task, agentId, success) {
 // the corresponding async work returns or on failure.
 const inflightTreatment = new Set();
 const inflightStitch = new Set();
+// Resume-after-pause path enqueues an evaluator for an orphaned
+// 'evaluating' scene. recordRun isn't persisted until the agentBridge
+// writes the run row, so two concurrent advance() calls (e.g. user
+// clicks Resume + a stale completionHook fires) could both observe the
+// scene as orphaned and double-enqueue. Per-projectId+sceneId set
+// closes that window in the same way inflightTreatment/inflightStitch do.
+const inflightEvaluator = new Set();
 
 export async function advanceAfterSceneSettled(projectId) {
   const project = await getProject(projectId);
@@ -106,19 +117,16 @@ export async function advanceAfterSceneSettled(projectId) {
 
   // No treatment yet → enqueue treatment task.
   if (!project.treatment) {
-    // Skip if a treatment run is already mid-flight (its run row stays
-    // 'running' until the agent's completion hook fires) OR our in-memory
-    // dedup set has this project (covers the updateProject→enqueueTreatmentTask
-    // window between two concurrent advance calls in this process).
-    //
-    // Note: we deliberately do NOT bail just because status === 'planning'.
-    // The route pre-flips `draft`/`paused`/`failed` projects to 'planning'
-    // before calling start, so a status check would short-circuit the very
-    // first Start click and leave the project stuck with no runs and no task.
-    const runningTreatment = (project.runs || []).some(
-      (r) => r.kind === 'treatment' && r.status === 'running',
+    // Skip if our in-memory dedup set has this project — covers the
+    // updateProject→enqueueTreatmentTask window between two concurrent
+    // advance calls. The `planning` status check is intentionally omitted:
+    // the start route pre-flips new projects to `planning` before calling
+    // startCreativeDirectorProject, so checking status here would cause
+    // brand-new projects to get stuck (treatment task never enqueued).
+    const hasInflightTreatmentRun = (project.runs || []).some(
+      (r) => r.kind === 'treatment' && r.status !== 'completed' && r.status !== 'failed'
     );
-    if (runningTreatment || inflightTreatment.has(projectId)) return;
+    if (hasInflightTreatmentRun || inflightTreatment.has(projectId)) return;
     inflightTreatment.add(projectId);
     await updateProject(project.id, { status: 'planning' })
       .catch((e) => { inflightTreatment.delete(projectId); throw e; });
@@ -128,13 +136,163 @@ export async function advanceAfterSceneSettled(projectId) {
     return;
   }
 
+  let scenes = (project.treatment.scenes || []).slice().sort((a, b) => a.order - b.order);
+
+  // Resume-after-pause path: a scene left in `evaluating` with a
+  // renderedJobId set means handleRenderCompleted persisted the render
+  // (the user paused before the evaluator could be enqueued, or recovery
+  // reaped the live evaluate task on restart). Re-fire the evaluator
+  // here so the existing rendered clip isn't wasted on a pointless
+  // re-render. Skip if a fresh evaluate run is already in flight (don't
+  // double-enqueue mid-resume).
+  // jobIds in the queue are crypto.randomUUID(); accept the lowercase-hex
+  // UUID v4 shape and reject anything else. Persisted scene.renderedJobId
+  // is editable via PATCH /:id/scenes/:sceneId so a crafted payload could
+  // otherwise make ffmpeg/ffprobe read+write outside PATHS.videos /
+  // PATHS.video-thumbnails. (sampleEvaluationFrames builds paths via
+  // string concat, not via PATHS.join + safety check.)
+  const isSafeJobId = (id) => typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id);
+  const noLiveEvaluateRun = (s) => !(project.runs || []).some(
+    (r) => r.kind === 'evaluate' && r.sceneId === s.sceneId && r.status !== 'completed' && r.status !== 'failed',
+  );
+  // Reset any 'evaluating' scenes whose renderedJobId is unsafe (tampered
+  // PATCH, missing, etc.) — without this they'd stay 'evaluating' forever
+  // and the inflight check at the bottom of the function would block
+  // every future advance() call, wedging the project. Mark them failed
+  // so the orchestrator can either fall through to the next scene or
+  // mark the whole project failed if no scene was ever accepted.
+  const wedged = scenes.filter((s) =>
+    s.status === 'evaluating' && !isSafeJobId(s.renderedJobId) && noLiveEvaluateRun(s),
+  );
+  for (const w of wedged) {
+    console.log(`❌ CD scene ${w.sceneId} on ${project.id} is 'evaluating' with an unsafe renderedJobId (${JSON.stringify(w.renderedJobId)}) — marking failed to prevent project wedge.`);
+    await updateScene(project.id, w.sceneId, {
+      status: 'failed',
+      evaluation: {
+        accepted: false,
+        notes: 'Scene wedged: invalid renderedJobId in persisted state. Re-render to recover.',
+        sampledAt: new Date().toISOString(),
+      },
+    }).catch((e) => console.log(`⚠️ CD wedge-reset for ${w.sceneId} failed: ${e.message}`));
+  }
+  // Re-read scenes so the subsequent orphan/pending/inflight checks see the
+  // updated statuses — the wedge-reset writes above are not reflected in the
+  // in-memory `scenes` slice we sorted at the top of this function.
+  if (wedged.length > 0) {
+    const refreshed = await getProject(project.id);
+    if (!refreshed) return;
+    scenes = (refreshed.treatment?.scenes || []).slice().sort((a, b) => a.order - b.order);
+  }
+  const orphanedEvaluating = scenes.find((s) =>
+    s.status === 'evaluating' &&
+    isSafeJobId(s.renderedJobId) &&
+    noLiveEvaluateRun(s),
+  );
+  if (orphanedEvaluating) {
+    const evalKey = `${project.id}:${orphanedEvaluating.sceneId}`;
+    if (inflightEvaluator.has(evalKey)) return;
+    inflightEvaluator.add(evalKey);
+    try {
+      if (project.status !== 'rendering') {
+        await updateProject(project.id, { status: 'rendering' });
+      }
+      // Verify the rendered .mp4 file is still on disk BEFORE deciding what
+      // to do about frames. The video file is the prerequisite for every
+      // evaluator branch: the multi-frame path reads the sampled frames
+      // (which only exist because the video does), and the
+      // single-thumbnail fallback (`{{^multiFrame}}` in cd-evaluate.md)
+      // reads `/data/video-thumbnails/{renderedJobId}.jpg`. If the user
+      // deleted the rendered video while the project was paused, all
+      // three artifacts are gone (videoGen/local#deleteHistoryItem unlinks
+      // the .mp4, its thumbnail, AND every `${jobId}-fN.jpg` evaluation
+      // frame in one shot). If we don't catch this here — even when the
+      // CACHED `evaluationFrames` array still happens to be on disk — the
+      // evaluator may accept the scene, only for the later stitch to
+      // crash on a missing input file.
+      const videoStillExists = existsSync(join(PATHS.videos, `${orphanedEvaluating.renderedJobId}.mp4`));
+      if (!videoStillExists) {
+        console.log(`❌ CD resume: rendered video missing for scene ${orphanedEvaluating.sceneId} on ${project.id} — video deleted while paused, marking scene failed`);
+        let sceneFailed = false;
+        await updateScene(project.id, orphanedEvaluating.sceneId, {
+          status: 'failed',
+          evaluation: {
+            accepted: false,
+            notes: 'Evaluation frames unavailable: rendered video was deleted while project was paused.',
+            sampledAt: new Date().toISOString(),
+          },
+        })
+          .then(() => { sceneFailed = true; })
+          .catch((e) => console.log(`⚠️ CD scene fail-deleted-video for ${orphanedEvaluating.sceneId} failed: ${e.message}`));
+        if (!sceneFailed) {
+          // updateScene errored; don't recurse, otherwise the same orphan
+          // would be re-detected next pass with no progress.
+          return;
+        }
+        // Release the per-scene evaluator lock manually so the recursive
+        // advance below isn't short-circuited by the inflightEvaluator
+        // guard at the top of this branch. The `finally` will delete()
+        // it a second time, which is a no-op on Set. The recursion
+        // re-fetches the project; since the scene is now 'failed', the
+        // orphan check won't re-match and the function falls through to
+        // nextPending / project-failure / stitch logic.
+        inflightEvaluator.delete(evalKey);
+        return advanceAfterSceneSettled(project.id);
+      }
+      // Re-sample evaluation frames if they weren't captured during the
+      // original completion path (pause landed before frame sampling) OR
+      // if any of the persisted frame files is missing on disk. Frames
+      // can disappear if the user deleted the underlying video from
+      // history while the project was paused — videoGen/local#deleteVideo
+      // unlinks `${jobId}-fN.jpg` thumbnails as part of its cleanup.
+      // Without this on-disk check, the evaluator would receive broken
+      // image paths and reject every render with "frame not found".
+      let frames = orphanedEvaluating.evaluationFrames || [];
+      const allFramesExist = frames.length > 0 && frames.every((f) => existsSync(join(PATHS.videoThumbnails, f)));
+      if (!allFramesExist) {
+        frames = await sampleEvaluationFrames(orphanedEvaluating.renderedJobId)
+          .catch((err) => {
+            console.error(`❌ CD resume sampleEvaluationFrames failed for ${orphanedEvaluating.renderedJobId.slice(0, 8)}: ${err.message}`);
+            return [];
+          });
+        // sampleEvaluationFrames can return [] for non-fatal reasons
+        // (ffmpeg missing on PATH, ffprobe miscount, transient I/O). The
+        // video file is still on disk (we checked above), so the
+        // evaluator template's single-thumbnail fallback path
+        // (`{{^multiFrame}}` in cd-evaluate.md) can still produce a
+        // verdict against `/data/video-thumbnails/{renderedJobId}.jpg`.
+        // Mirror the normal render-completion path (sceneRunner.js): hand
+        // off whatever frames we got, even an empty array, rather than
+        // bailing here and leaving the project wedged in `rendering`.
+        await updateScene(project.id, orphanedEvaluating.sceneId, { evaluationFrames: frames });
+      }
+      // Pause race re-check after the expensive frame-sampling step. The
+      // user could re-pause the project mid-resume; without this the
+      // evaluator would fire against a now-paused project, which is
+      // exactly the race the render-completion path already guards
+      // against. Bail without enqueueing — the next Resume click will
+      // pick up the freshly-sampled frames since we just persisted them.
+      const recheck = await getProject(project.id);
+      if (recheck?.status === 'paused' || recheck?.status === 'failed') {
+        console.log(`⏸️  CD resume: project ${project.id} flipped to ${recheck.status} during frame sampling — skipping evaluator enqueue (next resume will reuse the sampled frames).`);
+        return;
+      }
+      console.log(`▶️  CD resume: re-firing evaluator for orphaned 'evaluating' scene ${orphanedEvaluating.sceneId} on project ${project.id} (renderedJobId preserved from pre-pause render).`);
+      const sceneRefreshed = recheck?.treatment?.scenes?.find((s) => s.sceneId === orphanedEvaluating.sceneId);
+      if (recheck && sceneRefreshed) {
+        await enqueueEvaluateTask(recheck, { ...sceneRefreshed, evaluationFrames: frames });
+      }
+      return;
+    } finally {
+      inflightEvaluator.delete(evalKey);
+    }
+  }
+
   // Find next pending scene. nextPendingScene returns the lowest-order
   // scene whose status is pending/rendering/evaluating — but since
   // sceneRunner sets status='rendering' the moment it kicks off, and
   // 'evaluating' once the render completes, we want the lowest-order scene
   // whose status is exactly 'pending' (i.e. not yet started OR
   // re-requested by the evaluator).
-  const scenes = (project.treatment.scenes || []).slice().sort((a, b) => a.order - b.order);
   const nextPending = scenes.find((s) => s.status === 'pending');
   if (nextPending) {
     if (project.status !== 'rendering') {

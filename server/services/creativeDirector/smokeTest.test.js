@@ -15,6 +15,12 @@ vi.mock('../mediaCollections.js', () => ({
   createCollection: vi.fn(async () => ({ id: 'col-smoke' })),
 }));
 
+// Mock the platform-default model resolver — real one reads
+// data/media-models.json which doesn't exist in tests.
+vi.mock('../../lib/mediaModels.js', () => ({
+  getDefaultVideoModelId: () => 'ltx23_distilled_q4',
+}));
+
 const { createSmokeTestProject } = await import('./smokeTest.js');
 
 beforeEach(() => {
@@ -32,13 +38,13 @@ describe('createSmokeTestProject', () => {
     const project = await createSmokeTestProject();
     expect(project.disableAudio).toBe(true);
     expect(project.autoAcceptScenes).toBe(true);
-    // Hidden small preset (384×384) keeps smoke renders fast — present in
-    // ASPECT_PRESETS but intentionally absent from ASPECT_RATIOS so the UI
-    // doesn't expose it.
     expect(project.aspectRatio).toBe('1:1-small');
     expect(project.quality).toBe('draft');
     expect(project.targetDurationSeconds).toBe(6);
     expect(project.treatment.scenes).toHaveLength(3);
+    // Lock per-scene durations so a future tweak (e.g. 2s → 3s) gets caught.
+    // Smoke run total compute is O(scenes × duration² × resolution²) — drift
+    // here makes the health check silently expensive without anyone noticing.
     for (const scene of project.treatment.scenes) {
       expect(scene.durationSeconds).toBe(2);
     }

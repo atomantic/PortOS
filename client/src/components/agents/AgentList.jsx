@@ -5,6 +5,7 @@ import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
 import * as api from '../../services/api';
 import { PERSONALITY_STYLES, DEFAULT_PERSONALITY, DEFAULT_AVATAR } from './constants';
+import { filterSelectableModels } from '../../utils/providers';
 
 export default function AgentList() {
   const [agents, setAgents] = useState([]);
@@ -79,7 +80,7 @@ export default function AgentList() {
   }, [formData.personality.topics, formData.personality.quirks]);
 
   const selectedProvider = providers.find(p => p.id === selectedProviderId);
-  const availableModels = selectedProvider?.models || [];
+  const availableModels = filterSelectableModels(selectedProvider?.models);
 
   const handleGenerate = async () => {
     setGenerating(true);

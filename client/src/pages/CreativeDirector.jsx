@@ -227,18 +227,16 @@ export default function CreativeDirector() {
                 maxLength={256}
               />
             </label>
-            <label className="flex items-center gap-2 text-sm md:col-span-2">
-              <input
-                type="checkbox"
-                checked={!form.disableAudio}
-                onChange={(e) => setForm({ ...form, disableAudio: !e.target.checked })}
-              />
-              <span className="text-port-text-muted">
-                Generate audio for each scene
-                <span className="text-port-text-muted/70"> (off by default — current models produce inconsistent audio)</span>
-              </span>
-            </label>
           </div>
+          <label className="flex items-center gap-2 text-sm cursor-pointer">
+            <input
+              type="checkbox"
+              checked={form.disableAudio}
+              onChange={(e) => setForm({ ...form, disableAudio: e.target.checked })}
+              className="accent-port-accent"
+            />
+            <span className="text-port-text-muted">Disable audio</span>
+          </label>
           <label className="block text-sm">
             <span className="text-port-text-muted">Style spec</span>
             <textarea
