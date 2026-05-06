@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ExternalLink, X } from 'lucide-react';
 
 // ProseTokenPopover — single fixed-position card driven by hover events from
@@ -9,13 +9,30 @@ import { ExternalLink, X } from 'lucide-react';
 // Hover semantics: 200ms open delay, 150ms close grace handled by the parent
 // (WorkEditor) — this component just renders or doesn't.
 
-function clampToViewport(rect) {
+// Conservative height estimate for the popover. The actual rendered height
+// varies (rows/missing/aliases) but is bounded by a hard CSS ceiling on
+// content; using a single number keeps the math simple and avoids a
+// measure→reposition flicker. Refined post-mount via ResizeObserver in the
+// component body.
+const POPOVER_EST_HEIGHT = 220;
+const POPOVER_WIDTH = 320;
+const GAP = 6;
+const EDGE_PAD = 8;
+
+function clampToViewport(rect, measuredHeight) {
   if (!rect) return null;
   const W = window.innerWidth;
   const H = window.innerHeight;
-  const w = 320;
-  const left = Math.max(8, Math.min(W - w - 8, rect.left));
-  const top = rect.bottom + 6 + w / 2 > H ? Math.max(8, rect.top - 12 - 200) : rect.bottom + 6;
+  const w = POPOVER_WIDTH;
+  const h = measuredHeight && measuredHeight > 0 ? measuredHeight : POPOVER_EST_HEIGHT;
+  const left = Math.max(EDGE_PAD, Math.min(W - w - EDGE_PAD, rect.left));
+  // Flip above the token when there isn't room below for the popover height
+  // (was incorrectly comparing against w/2).
+  const wouldOverflowBelow = rect.bottom + GAP + h > H - EDGE_PAD;
+  const flipped = wouldOverflowBelow && rect.top - GAP - h >= EDGE_PAD;
+  const top = flipped
+    ? rect.top - GAP - h
+    : Math.min(rect.bottom + GAP, Math.max(EDGE_PAD, H - EDGE_PAD - h));
   return { left, top, width: w };
 }
 
@@ -76,13 +93,37 @@ export default function ProseTokenPopover({
   objects = [],
   onOpenProfile,
   onClose,
+  onPopoverEnter,
+  onPopoverLeave,
 }) {
   const [pos, setPos] = useState(null);
+  const cardRef = useRef(null);
 
   useEffect(() => {
     if (!open || !anchor) { setPos(null); return; }
     setPos(clampToViewport(anchor));
   }, [open, anchor]);
+
+  // After mount, measure the actual rendered height and reposition once so
+  // the flip threshold matches reality (the initial estimate can be ~50px off
+  // for popovers with lots of fields or many missing chips).
+  useEffect(() => {
+    if (!open || !anchor || !cardRef.current) return undefined;
+    const measured = cardRef.current.offsetHeight;
+    const next = clampToViewport(anchor, measured);
+    if (next && (next.top !== pos?.top || next.left !== pos?.left)) {
+      setPos(next);
+    }
+    return undefined;
+  }, [open, anchor, refId, kind, pos?.top, pos?.left]);
+
+  const handleMouseEnter = useCallback(() => {
+    onPopoverEnter?.();
+  }, [onPopoverEnter]);
+  const handleMouseLeave = useCallback(() => {
+    if (pinned) return;
+    onPopoverLeave?.();
+  }, [pinned, onPopoverLeave]);
 
   // Close on Escape when pinned (mirrors the dropdown patterns in this folder).
   useEffect(() => {
@@ -103,11 +144,12 @@ export default function ProseTokenPopover({
 
   return (
     <div
+      ref={cardRef}
       role="tooltip"
       style={{ left: pos.left, top: pos.top, width: pos.width, position: 'fixed' }}
       className="z-40 bg-port-card border border-port-border rounded-lg shadow-2xl p-3 text-xs text-gray-200"
-      onMouseEnter={() => { /* keep open while hovered */ }}
-      onMouseLeave={() => { if (!pinned) onClose?.(); }}
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
     >
       <div className="flex items-center gap-2 mb-2">
         <span className={`w-2 h-2 rounded-full ${KIND_DOT[kind] || 'bg-gray-400'}`} />

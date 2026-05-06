@@ -168,6 +168,26 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
       setHotRef(null);
     }, 150);
   }, []);
+  // Cursor crossed from token onto the popover itself: cancel the pending
+  // close so the user can click links inside without it dismissing on them.
+  const handlePopoverEnter = useCallback(() => {
+    if (popCloseTimerRef.current) {
+      clearTimeout(popCloseTimerRef.current);
+      popCloseTimerRef.current = null;
+    }
+    if (popOpenTimerRef.current) {
+      clearTimeout(popOpenTimerRef.current);
+      popOpenTimerRef.current = null;
+    }
+  }, []);
+  // Cursor left the popover (and didn't go back to a token): schedule the
+  // same 150ms grace close as token-leave.
+  const handlePopoverLeave = useCallback(() => {
+    popCloseTimerRef.current = setTimeout(() => {
+      setPop((prev) => (prev?.pinned ? prev : null));
+      setHotRef(null);
+    }, 150);
+  }, []);
   const handleTokenClick = useCallback(({ kind, refId, anchor }) => {
     if (popOpenTimerRef.current) clearTimeout(popOpenTimerRef.current);
     if (popCloseTimerRef.current) clearTimeout(popCloseTimerRef.current);
@@ -745,6 +765,8 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
         objects={objects}
         onOpenProfile={handleOpenProfile}
         onClose={handlePopClose}
+        onPopoverEnter={handlePopoverEnter}
+        onPopoverLeave={handlePopoverLeave}
       />
 
       <WritersRoomDock
