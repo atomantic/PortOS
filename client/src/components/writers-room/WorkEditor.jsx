@@ -694,7 +694,18 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
         <MobileTab active={mobileTab === MOBILE_TAB.STORYBOARD} onClick={() => setMobileTab(MOBILE_TAB.STORYBOARD)} icon={Clapperboard} label="Storyboard" />
       </div>
 
-      <div ref={splitRef} className="flex-1 flex flex-col lg:flex-row min-h-0">
+      {/*
+        When the render dock is visible (queue non-empty) it's `position: fixed`
+        at the bottom of the viewport. Add a conservative bottom inset to the
+        split so the dock doesn't overlap the textarea, the Read view, the
+        word-count overlay, or the storyboard scroll area. Tracks the dock's
+        own measured height (~52px); a few px of slack is fine.
+      */}
+      <div
+        ref={splitRef}
+        className="flex-1 flex flex-col lg:flex-row min-h-0"
+        style={renderQueue.length ? { paddingBottom: 56 } : undefined}
+      >
         <div className={`relative min-h-0 flex-1 ${mobileTab === MOBILE_TAB.STORYBOARD ? 'hidden lg:block' : 'block'}`}>
           {viewMode === 'read' ? (
             <div ref={readerRef} className="w-full h-full">

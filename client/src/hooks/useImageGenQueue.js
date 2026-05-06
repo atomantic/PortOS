@@ -121,19 +121,26 @@ export default function useImageGenQueue() {
   // Apply an event's state delta to the queue. If the matching jobId hasn't
   // been registered yet, stash the merged delta in orphanEventsRef so the
   // eventual register() call can replay it.
+  //
+  // We probe the ref FIRST (no array allocation, no setState) and only call
+  // patch() when there's a match. Without this guard, every global
+  // `image-gen:*` event from anywhere in the app would force a rerender of
+  // the Writers Room page even when the jobId is irrelevant.
   const applyEvent = useCallback((jobId, delta, terminal = false) => {
     if (!jobId) return;
-    let matched = false;
-    patch((prev) => prev.map((q) => {
-      if (q.jobId !== jobId) return q;
-      matched = true;
-      return { ...q, ...delta };
-    }));
-    if (!matched) {
+    const idx = queueRef.current.findIndex((q) => q.jobId === jobId);
+    if (idx < 0) {
       stashOrphan(jobId, delta);
-    } else if (terminal) {
-      schedulePrune(jobId);
+      return;
     }
+    patch((prev) => {
+      const i = prev.findIndex((q) => q.jobId === jobId);
+      if (i < 0) return prev;
+      const copy = prev.slice();
+      copy[i] = { ...copy[i], ...delta };
+      return copy;
+    });
+    if (terminal) schedulePrune(jobId);
   }, [patch, schedulePrune, stashOrphan]);
 
   useEffect(() => {
@@ -175,13 +182,22 @@ export default function useImageGenQueue() {
     orphanEventsRef.current.clear();
   }, []);
 
-  // Mark a row as canceling, then issue cancel to the server. On success,
-  // prune the row. On failure, surface the error and restore each row's
-  // PRIOR status (stashed on the entry as `_prevStatus`) so a queued job
-  // doesn't get incorrectly flipped to running, and an already-completed
-  // job doesn't get resurrected. Only revert rows that are still
-  // 'canceling' — a real socket event (running/done/error) arriving in the
-  // interim wins.
+  // Hard cutoff: if the server never confirms cancellation with a terminal
+  // event, fall back to pruning the canceling row so the dock doesn't pin a
+  // phantom row indefinitely.
+  const CANCEL_FALLBACK_MS = 5000;
+
+  // Mark a row as canceling, then issue cancel to the server. On a successful
+  // cancel HTTP response, KEEP the row in 'canceling' state and let the
+  // eventual image-gen:failed/completed terminal event prune it via
+  // schedulePrune — that way a still-actively-canceling job stays visible to
+  // the user, and the terminal event isn't treated as an orphan (which would
+  // otherwise buffer it for 30s in the orphan map).
+  // On HTTP failure, surface the error and restore each row's PRIOR status
+  // (stashed on the entry as `_prevStatus`) so a queued job doesn't get
+  // incorrectly flipped to running, and an already-completed job doesn't get
+  // resurrected. Only revert rows that are still 'canceling' — a real socket
+  // event arriving in the interim wins.
   const stopOne = useCallback(async (jobId) => {
     if (!jobId) return;
     patch((prev) => prev.map((q) => (
@@ -200,7 +216,11 @@ export default function useImageGenQueue() {
       }));
       return;
     }
-    patch((prev) => prev.filter((q) => q.jobId !== jobId));
+    // Server accepted; arm a fallback prune in case the terminal event
+    // never arrives.
+    setTimeout(() => {
+      patch((prev) => prev.filter((q) => !(q.jobId === jobId && q.status === 'canceling')));
+    }, CANCEL_FALLBACK_MS);
   }, [patch]);
 
   const stopAll = useCallback(async () => {
@@ -220,10 +240,15 @@ export default function useImageGenQueue() {
       }));
       return;
     }
-    patch((prev) => prev.filter((q) => q.status !== 'canceling'));
+    setTimeout(() => {
+      patch((prev) => prev.filter((q) => q.status !== 'canceling'));
+    }, CANCEL_FALLBACK_MS);
   }, [patch]);
 
-  const runningCount = queue.filter((q) => q.status === 'queued' || q.status === 'running').length;
+  // 'canceling' is in-flight from the user's perspective — the row stays
+  // visible while we wait for the server's terminal event, so count it as
+  // active for the dock's "Rendering N scenes" label.
+  const runningCount = queue.filter((q) => q.status === 'queued' || q.status === 'running' || q.status === 'canceling').length;
 
   return { queue, runningCount, register, stopOne, stopAll };
 }
