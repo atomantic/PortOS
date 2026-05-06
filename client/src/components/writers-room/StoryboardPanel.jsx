@@ -12,7 +12,7 @@ import {
   getWritersRoomAnalysis,
 } from '../../services/apiWritersRoom';
 import { getSettings, updateSettings, listImageStylePresets } from '../../services/apiSystem';
-import { listImageModels, cancelImageGen } from '../../services/apiImageVideo';
+import { listImageModels } from '../../services/apiImageVideo';
 import BackendChipStrip from '../media/BackendChipStrip';
 import { deriveAvailableBackends, IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
 import { timeAgo } from '../../utils/formatters';
@@ -213,47 +213,6 @@ export default function StoryboardPanel({
   // Map keyed by sceneId — replaced wholesale on each script load.
   const sceneRefs = useRef({});
 
-  // Track which scenes are actively rendering so the Boards tab can show a
-  // "Cancel renders" CTA. SceneCard fires onRunningChange when its local
-  // genStatus toggles. Storing the Set as state (not ref) so the count
-  // re-renders the cancel button reactively.
-  const [runningSceneIds, setRunningSceneIds] = useState(() => new Set());
-  const handleSceneRunningChange = useCallback((sceneId, running) => {
-    setRunningSceneIds((prev) => {
-      const has = prev.has(sceneId);
-      if (running === has) return prev;
-      const next = new Set(prev);
-      if (running) next.add(sceneId);
-      else next.delete(sceneId);
-      return next;
-    });
-  }, []);
-  // Drop stale running-scene entries when the script reloads — old sceneIds
-  // may not exist in the new render.
-  useEffect(() => {
-    setRunningSceneIds(new Set());
-  }, [latestScript?.id]);
-
-  const cancelAllRenders = useCallback(async () => {
-    if (runningSceneIds.size === 0) return;
-    // Issue server cancel first so background work actually stops, then wipe
-    // local state on every running card so the UI returns to idle without
-    // waiting for the cancellation socket events to round-trip.
-    await cancelImageGen({ all: true }).catch((err) => {
-      toast.error(`Cancel failed: ${err.message}`);
-    });
-    // Reset every previously-running card unconditionally — if a
-    // cancellation 'failed' socket event raced ahead and flipped the card to
-    // 'error', isRunning() would return false, but we still want the card
-    // back at idle so the user can retry. cancel() is idempotent.
-    const total = runningSceneIds.size;
-    for (const sceneId of runningSceneIds) {
-      sceneRefs.current[sceneId]?.cancel?.();
-    }
-    setRunningSceneIds(new Set());
-    if (total > 0) toast(`Stopped ${total} render${total === 1 ? '' : 's'}`, { icon: '🛑' });
-  }, [runningSceneIds]);
-
   // Auto-queue every missing image when latestScript updates *because* of a
   // just-finished Adapt run. requestAnimationFrame defers until the cards
   // have actually mounted with the new scenes — useImperativeHandle has to
@@ -397,7 +356,6 @@ export default function StoryboardPanel({
             sceneRefs={sceneRefs}
             onJumpToScene={onJumpToScene}
             onDebug={onDebug}
-            onSceneRunningChange={handleSceneRunningChange}
             onRunAdapt={onRunAdapt}
             onRunCharacters={onRunCharacters}
             onRunSettings={onRunSettings}
@@ -619,7 +577,6 @@ function BoardsTab({
   sceneRefs,
   onJumpToScene,
   onDebug,
-  onSceneRunningChange,
   onRunAdapt,
   onRunCharacters,
   onRunSettings,
@@ -723,7 +680,6 @@ function BoardsTab({
             isActive={sceneId === activeSceneId}
             onJumpToProse={onJumpToScene ? () => onJumpToScene(scene, i, scenes.length) : null}
             onDebug={onDebug}
-            onRunningChange={onSceneRunningChange}
             hotRef={hotRef}
             onHoverEnter={onSceneHover ? () => onSceneHover(sceneId) : null}
             onHoverLeave={onSceneHover ? () => onSceneHover(null) : null}

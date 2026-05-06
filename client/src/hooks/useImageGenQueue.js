@@ -17,6 +17,11 @@ export default function useImageGenQueue() {
   // closures. setQueue is only called via patch().
   const queueRef = useRef([]);
   const pruneTimersRef = useRef(new Map());
+  // Race-buffer: image-gen:* events can arrive BEFORE register() — the
+  // server emits started/progress while the HTTP response is still in
+  // flight, so SceneCard learns the jobId after the events. Stash the
+  // latest state for unknown jobIds so register() can replay it.
+  const orphanEventsRef = useRef(new Map());
 
   const patch = useCallback((updater) => {
     const next = updater(queueRef.current);
@@ -36,9 +41,14 @@ export default function useImageGenQueue() {
 
   const register = useCallback(({ jobId, sceneId, sceneLabel }) => {
     if (!jobId) return;
+    // Replay any events that arrived before this jobId was registered, so
+    // the row starts in its true current state (often already 'running' or
+    // even 'done' for fast renders) instead of stale 'queued'.
+    const orphan = orphanEventsRef.current.get(jobId);
+    orphanEventsRef.current.delete(jobId);
     patch((prev) => {
       const idx = prev.findIndex((q) => q.jobId === jobId);
-      const entry = {
+      const base = {
         jobId,
         sceneId: sceneId || null,
         sceneLabel: sceneLabel || 'Scene',
@@ -47,42 +57,56 @@ export default function useImageGenQueue() {
         eta: null,
         registeredAt: Date.now(),
       };
+      const entry = orphan ? { ...base, ...orphan } : base;
       if (idx < 0) return [...prev, entry];
       const copy = [...prev];
       copy[idx] = { ...copy[idx], ...entry };
       return copy;
     });
-  }, [patch]);
+    // If the orphan stream already saw a terminal event, prune the row
+    // shortly so the dock doesn't pin a phantom done/error indefinitely.
+    if (orphan && (orphan.status === 'done' || orphan.status === 'error')) {
+      schedulePrune(jobId);
+    }
+  }, [patch, schedulePrune]);
+
+  // Apply an event's state delta to the queue. If the matching jobId hasn't
+  // been registered yet, stash the merged delta in orphanEventsRef so the
+  // eventual register() call can replay it.
+  const applyEvent = useCallback((jobId, delta, terminal = false) => {
+    if (!jobId) return;
+    let matched = false;
+    patch((prev) => prev.map((q) => {
+      if (q.jobId !== jobId) return q;
+      matched = true;
+      return { ...q, ...delta };
+    }));
+    if (!matched) {
+      const prior = orphanEventsRef.current.get(jobId) || {};
+      orphanEventsRef.current.set(jobId, { ...prior, ...delta });
+    } else if (terminal) {
+      schedulePrune(jobId);
+    }
+  }, [patch, schedulePrune]);
 
   useEffect(() => {
     const onStarted = (data) => {
-      patch((prev) => prev.map((q) => q.jobId === data.generationId
-        ? { ...q, status: 'running', totalSteps: data.totalSteps ?? null }
-        : q));
+      applyEvent(data.generationId, { status: 'running', totalSteps: data.totalSteps ?? null });
     };
     const onProgress = (data) => {
-      patch((prev) => prev.map((q) => q.jobId === data.generationId
-        ? {
-            ...q,
-            status: 'running',
-            progress: data.progress ?? q.progress ?? 0,
-            eta: data.eta ?? q.eta ?? null,
-            step: data.step ?? q.step ?? 0,
-            totalSteps: data.totalSteps ?? q.totalSteps ?? null,
-          }
-        : q));
+      applyEvent(data.generationId, {
+        status: 'running',
+        progress: data.progress ?? 0,
+        eta: data.eta ?? null,
+        step: data.step ?? 0,
+        totalSteps: data.totalSteps ?? null,
+      });
     };
     const onCompleted = (data) => {
-      patch((prev) => prev.map((q) => q.jobId === data.generationId
-        ? { ...q, status: 'done', progress: 1 }
-        : q));
-      schedulePrune(data.generationId);
+      applyEvent(data.generationId, { status: 'done', progress: 1 }, true);
     };
     const onFailed = (data) => {
-      patch((prev) => prev.map((q) => q.jobId === data.generationId
-        ? { ...q, status: 'error', error: data.error || data.message || null }
-        : q));
-      schedulePrune(data.generationId);
+      applyEvent(data.generationId, { status: 'error', error: data.error || data.message || null }, true);
     };
     socket.on('image-gen:started', onStarted);
     socket.on('image-gen:progress', onProgress);
@@ -94,7 +118,7 @@ export default function useImageGenQueue() {
       socket.off('image-gen:completed', onCompleted);
       socket.off('image-gen:failed', onFailed);
     };
-  }, [patch, schedulePrune]);
+  }, [applyEvent]);
 
   useEffect(() => () => {
     for (const t of pruneTimersRef.current.values()) clearTimeout(t);

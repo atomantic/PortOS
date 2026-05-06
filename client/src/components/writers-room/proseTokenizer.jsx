@@ -90,6 +90,7 @@ export function tokenizeParagraph(text, entries) {
 }
 
 export function renderTokenized(text, {
+  entries = null,
   characters = [],
   settings = [],
   objects = [],
@@ -99,8 +100,11 @@ export function renderTokenized(text, {
   onTokenClick,
   light = false,
 } = {}) {
-  const entries = buildTokenIndex({ characters, settings, objects });
-  const annotations = tokenizeParagraph(text, entries);
+  // Prefer the caller's pre-built index (paid once per bibles change). Fall
+  // back to building per-call when only raw bible arrays are passed — handy
+  // for ad-hoc renders, but not what ProseReader does.
+  const idx = entries || buildTokenIndex({ characters, settings, objects });
+  const annotations = tokenizeParagraph(text, idx);
   if (!annotations.length) return <Fragment>{text}</Fragment>;
   const out = [];
   let pos = 0;

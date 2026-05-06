@@ -37,7 +37,6 @@ const SceneCard = forwardRef(function SceneCard({
   isActive = false,
   onJumpToProse = null,
   onDebug = null,
-  onRunningChange = null,
   hotRef = null,
   onHoverEnter = null,
   onHoverLeave = null,
@@ -75,14 +74,6 @@ const SceneCard = forwardRef(function SceneCard({
   }, [initialImage?.filename]);
 
   useClickOutside(debugMenuRef, showDebugMenu, () => setShowDebugMenu(false));
-
-  useEffect(() => {
-    onRunningChange?.(scene.id, genStatus === 'running');
-    // Unmount cleanup — without this a card that disappears while running
-    // (e.g. scene removed from a re-Adapt) leaves a stale entry in the
-    // parent's running-scene set, which inflates the "Rendering N…" count.
-    return () => onRunningChange?.(scene.id, false);
-  }, [scene.id, genStatus, onRunningChange]);
 
   useEffect(() => {
     const onStarted = (data) => {

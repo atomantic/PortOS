@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { renderTokenized } from './proseTokenizer';
+import { renderTokenized, useTokenEntries } from './proseTokenizer';
 
 // Splits a markdown-flavored body into a flat list of nodes:
 //   { kind: 'heading', level, text }  ← lines that start with #, ##, ###
@@ -83,14 +83,11 @@ export default function ProseReader({
     return groupIntoSections(nodes, scenes);
   }, [body, scenes]);
 
-  // Tokens version key — invalidates the renderTokenized memo when
-  // characters/settings/objects change in a way that affects matches.
-  const tokensVersion = useMemo(() => {
-    const charSig = characters.map((c) => `${c.id}:${(c.aliases || []).join(',')}:${c.name || ''}`).join('|');
-    const setSig = settings.map((s) => `${s.id}:${s.slugline || ''}:${s.name || ''}`).join('|');
-    const objSig = objects.map((o) => `${o.id}:${(o.aliases || []).join(',')}:${o.name || ''}`).join('|');
-    return `${charSig}#${setSig}#${objSig}`;
-  }, [characters, settings, objects]);
+  // Build the token-match index once per (characters, settings, objects)
+  // change instead of rebuilding per paragraph. ProseReader passes the
+  // pre-built `entries` to renderTokenized so each paragraph only pays the
+  // O(text × entries) scan cost, not the index-build cost.
+  const entries = useTokenEntries({ characters, settings, objects });
 
   const light = readingTheme === 'light';
 
@@ -144,10 +141,7 @@ export default function ProseReader({
                 return (
                   <p key={j} className="mb-4 whitespace-pre-wrap text-pretty">
                     {renderTokenized(b.text, {
-                      characters,
-                      settings,
-                      objects,
-                      tokensVersion,
+                      entries,
                       hotRef,
                       onTokenEnter,
                       onTokenLeave,
