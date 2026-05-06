@@ -153,10 +153,18 @@ export default function ProseTokenPopover({
   const missing = Array.isArray(profile.missingFromProse) ? profile.missingFromProse : [];
   const aliases = Array.isArray(profile.aliases) ? profile.aliases.filter(Boolean) : [];
 
+  // Use role="dialog" because the popover contains interactive controls
+  // (Close button when pinned, Open profile button always). role="tooltip"
+  // is only correct for non-interactive descriptive content.
+  // aria-modal=false: this popover doesn't trap focus or block the page; it's
+  // a non-modal floating panel.
+  const a11yLabel = `${KIND_LABEL[kind] || 'Profile'}: ${profile.name || profile.slugline || ''}`;
   return (
     <div
       ref={cardRef}
-      role="tooltip"
+      role="dialog"
+      aria-modal="false"
+      aria-label={a11yLabel}
       style={{ left: pos.left, top: pos.top, width: pos.width, position: 'fixed' }}
       className="z-40 bg-port-card border border-port-border rounded-lg shadow-2xl p-3 text-xs text-gray-200"
       onMouseEnter={handleMouseEnter}

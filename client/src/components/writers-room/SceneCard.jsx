@@ -52,6 +52,19 @@ const SceneCard = forwardRef(function SceneCard({
     () => matchSceneSetting(scene.slugline, settingByKey),
     [scene.slugline, settingByKey]
   );
+  // Per-chip lookup map — name/alias keys → matched character profile. Built
+  // once so the chip render is O(1) per chip instead of an O(chars × aliases)
+  // .find()+.some() scan for every chip on every render. Big casts can have
+  // dozens of aliases per character; the inner double-loop showed up in
+  // perf traces.
+  const chipProfileByKey = useMemo(() => {
+    const map = new Map();
+    for (const profile of matchedCharacters) {
+      map.set(normCharKey(profile.name), profile);
+      for (const alias of profile.aliases || []) map.set(normCharKey(alias), profile);
+    }
+    return map;
+  }, [matchedCharacters]);
   const [genStatus, setGenStatus] = useState(initialImage ? 'done' : 'idle');
   const [generated, setGenerated] = useState(initialImage
     ? { path: `/data/images/${initialImage.filename}`, jobId: initialImage.jobId, prompt: initialImage.prompt }
@@ -223,8 +236,11 @@ const SceneCard = forwardRef(function SceneCard({
     ? (light ? 'bg-port-accent/10 text-gray-900' : 'bg-port-accent/[0.06]')
     : (light ? 'bg-[var(--wr-reading-paper)] text-gray-900' : 'bg-port-card/40');
 
-  // hotRef shape: {kind, refId} or null. Char/object hot states ring the
-  // matching name chip; place hot state rings the slugline.
+  // hotRef shape: {kind, refId} or null. Char hot state rings the matching
+  // name chip; place hot state rings the slugline. Object hot state has no
+  // SceneCard surface today (no per-scene object chip) — it only highlights
+  // the matching ObjectsBible row in the sidebar; if a scene-card object
+  // affordance is added later, plumb a hotObjectId here.
   const hotCharId = hotRef?.kind === 'char' ? hotRef.refId : null;
   const hotPlaceId = hotRef?.kind === 'place' ? hotRef.refId : null;
 
@@ -350,10 +366,7 @@ const SceneCard = forwardRef(function SceneCard({
       {scene.characters?.length > 0 && (
         <div className="flex flex-wrap gap-1">
           {scene.characters.map((c, i) => {
-            const matchedProfile = matchedCharacters.find((m) => {
-              if (normCharKey(m.name) === normCharKey(c)) return true;
-              return (m.aliases || []).some((a) => normCharKey(a) === normCharKey(c));
-            });
+            const matchedProfile = chipProfileByKey.get(normCharKey(c)) || null;
             const isMatched = !!matchedProfile;
             const isHot = isMatched && hotCharId && matchedProfile.id === hotCharId;
             return (

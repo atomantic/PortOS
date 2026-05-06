@@ -9,10 +9,12 @@ import { Loader2, Square, Check, AlertTriangle } from 'lucide-react';
 // rendering, expands inline as more queue up.
 export default function WritersRoomDock({ queue = [], runningCount = 0, onStopAll, onStopOne }) {
   if (!queue.length) return null;
+  const statusLabel = runningCount > 0
+    ? `Rendering ${runningCount} scene${runningCount === 1 ? '' : 's'}`
+    : 'Renders complete';
   return (
-    <div
-      role="status"
-      aria-live="polite"
+    <section
+      aria-label="Image render queue"
       className="fixed bottom-0 left-0 right-0 z-30 border-t border-port-border bg-port-card/95 backdrop-blur-sm shadow-[0_-4px_18px_-8px_rgba(0,0,0,0.6)]"
     >
       <div className="flex items-center gap-3 px-3 py-2 max-w-7xl mx-auto">
@@ -21,11 +23,15 @@ export default function WritersRoomDock({ queue = [], runningCount = 0, onStopAl
             ? <Loader2 size={12} className="animate-spin text-port-accent" />
             : <Check size={12} className="text-port-success" />
           }
-          <span className="text-[11px] font-semibold text-white">
-            {runningCount > 0
-              ? `Rendering ${runningCount} scene${runningCount === 1 ? '' : 's'}`
-              : 'Renders complete'
-            }
+          {/* aria-live lives on this small non-interactive label only — putting
+              it on the dock container made screen readers re-announce the
+              cancel buttons every progress tick. */}
+          <span
+            role="status"
+            aria-live="polite"
+            className="text-[11px] font-semibold text-white"
+          >
+            {statusLabel}
           </span>
         </div>
         <div className="flex-1 min-w-0 flex items-center gap-2 overflow-x-auto">
@@ -42,7 +48,7 @@ export default function WritersRoomDock({ queue = [], runningCount = 0, onStopAl
           </button>
         )}
       </div>
-    </div>
+    </section>
   );
 }
 
