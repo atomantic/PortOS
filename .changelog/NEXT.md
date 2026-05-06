@@ -2,6 +2,10 @@
 
 ## Added
 
+### Image Cleaner (Dev Tools)
+
+New `/devtools/image-clean` page strips C2PA provenance metadata and median-filters pixel-level noise from `gpt-image-1` / Codex output. Drag-and-drop or browse-to-upload PNG/JPEG/WebP images (up to 50MB), pick a cleaning level (`light` = median(1), `aggressive` = median(3) + sharpen), and download the re-encoded result. Side-by-side before/after preview with size delta, dimensions, format, and a "C2PA stripped" badge when the source PNG carried a `caBX` chunk. Backed by a new `POST /api/image-clean` route powered by `sharp`, with magic-byte format sniffing so client-supplied MIME types aren't trusted. Reachable via `⌘K` and voice (`ui_navigate`) through new `nav.devtools.image-clean` manifest entry.
+
 ### Writers Room — Read view + cross-linked storyboard
 
 A new `?view=read` mode for the Writers Room editor renders prose with scene anchors, inline character/setting/object highlighting, and hover tooltips that show extracted profile details. Hovering a token in the prose rings the matching chip on its scene card and the matching row in the bible; clicking jumps the sidebar to the right tab. Hovering a scene card flashes the matching scene marker in the prose.

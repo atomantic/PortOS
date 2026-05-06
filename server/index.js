@@ -25,6 +25,7 @@ import usageRoutes from './routes/usage.js';
 import screenshotsRoutes from './routes/screenshots.js';
 import attachmentsRoutes from './routes/attachments.js';
 import uploadsRoutes from './routes/uploads.js';
+import imageCleanRoutes from './routes/imageClean.js';
 import agentsRoutes from './routes/agents.js';
 import agentPersonalitiesRoutes from './routes/agentPersonalities.js';
 import platformAccountsRoutes from './routes/platformAccounts.js';
@@ -269,6 +270,7 @@ app.use('/api/attachments', attachmentsRoutes);
 app.use('/api/backup', backupRoutes);
 app.use('/api/database', databaseRoutes);
 app.use('/api/uploads', uploadsRoutes);
+app.use('/api/image-clean', imageCleanRoutes);
 // Agent Personalities feature routes (must be before /api/agents to avoid route conflicts)
 app.use('/api/agents/personalities', agentPersonalitiesRoutes);
 app.use('/api/agents/accounts', platformAccountsRoutes);

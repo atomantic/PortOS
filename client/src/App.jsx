@@ -39,6 +39,7 @@ const Messages = lazyWithReload(() => import('./pages/Messages'));
 const Goals = lazyWithReload(() => import('./pages/Goals'));
 const OpenClawPage = lazyWithReload(() => import('./pages/OpenClaw'));
 const Submodules = lazyWithReload(() => import('./pages/Submodules'));
+const ImageClean = lazyWithReload(() => import('./pages/ImageClean'));
 const ChiefOfStaff = lazyWithReload(() => import('./pages/ChiefOfStaff'));
 const Ask = lazyWithReload(() => import('./pages/Ask'));
 const MediaGen = lazyWithReload(() => import('./pages/MediaGen'));
@@ -128,6 +129,7 @@ export default function App() {
           <Route path="devtools/datadog" element={<DataDog />} />
           <Route path="devtools/github" element={<GitHub />} />
           <Route path="devtools/history" element={<HistoryPage />} />
+          <Route path="devtools/image-clean" element={<ImageClean />} />
           <Route path="devtools/runs" element={<RunsHistoryPage />} />
           <Route path="devtools/runner" element={<RunnerPage />} />
           <Route path="devtools/submodules" element={<Submodules />} />
