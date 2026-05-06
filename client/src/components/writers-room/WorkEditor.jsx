@@ -107,8 +107,10 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   // onScenesChange so ProseReader can mark scene boundaries in Read view.
   const [latestScenes, setLatestScenes] = useState([]);
   // Token popover state. `pop.kind`/`pop.refId` identify the hovered token,
-  // `pop.anchor` is a DOMRect captured at hover time. `pinned` keeps the
-  // popover open after click so the user can move into it (e.g. to click
+  // `pop.anchorEl` is the DOM ELEMENT (not a frozen DOMRect) — the popover
+  // re-reads getBoundingClientRect on each reflow so it tracks the token
+  // through scrolling and viewport resizes. `pinned` keeps the popover
+  // open after click so the user can move into it (e.g. to click
   // "Open profile") without it dismissing.
   const [pop, setPop] = useState(null);
   // Cross-link hot states: `hotRef` ({kind,refId}) ties prose tokens to

@@ -174,7 +174,11 @@ export async function mergeExtractedObjects(workId, extracted) {
         existing.aliases = incoming.aliases.map((a) => String(a).trim()).filter(Boolean);
         indexObject(existing);
       }
-      existing.firstAppearance = incoming.firstAppearance ?? existing.firstAppearance ?? null;
+      // firstAppearance is prose-derived metadata that the latest analysis
+      // run is authoritative for: replace verbatim, including explicit null
+      // (the object may no longer have a clear first scene after edits, and
+      // pinning the stale value would mislead the bible).
+      existing.firstAppearance = incoming.firstAppearance ?? null;
       existing.evidence = Array.isArray(incoming.evidence) ? incoming.evidence : (existing.evidence || []);
       existing.missingFromProse = Array.isArray(incoming.missingFromProse) ? incoming.missingFromProse : [];
       existing.updatedAt = nowIso();

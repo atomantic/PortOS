@@ -3,7 +3,10 @@ import { ExternalLink, X } from 'lucide-react';
 
 // ProseTokenPopover — single fixed-position card driven by hover events from
 // inline tokens in ProseReader. Stateless w.r.t. open/close: WorkEditor passes
-// `anchor` (a DOMRect-or-null), `kind`, `refId`. We resolve refId against the
+// `anchorEl` (the token's DOM element-or-null), `kind`, `refId`. The popover
+// re-reads getBoundingClientRect on every reflow (scroll, resize, content
+// height change) so the card stays attached to the token rather than
+// freezing at the rect captured on hover. We resolve refId against the
 // characters/settings/objects lists prop'd in.
 //
 // Hover semantics: 200ms open delay, 150ms close grace handled by the parent
