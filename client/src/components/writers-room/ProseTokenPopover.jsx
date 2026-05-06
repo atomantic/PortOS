@@ -12,8 +12,9 @@ import { ExternalLink, X } from 'lucide-react';
 // Conservative height estimate for the popover. The actual rendered height
 // varies (rows/missing/aliases) but is bounded by a hard CSS ceiling on
 // content; using a single number keeps the math simple and avoids a
-// measure→reposition flicker. Refined post-mount via ResizeObserver in the
-// component body.
+// measure→reposition flicker. A ResizeObserver in the component body
+// refines the position any time the popover's actual height changes
+// post-mount (font load, dynamic content, viewport changes).
 const POPOVER_EST_HEIGHT = 220;
 const POPOVER_WIDTH = 320;
 const GAP = 6;
@@ -104,18 +105,28 @@ export default function ProseTokenPopover({
     setPos(clampToViewport(anchor));
   }, [open, anchor]);
 
-  // After mount, measure the actual rendered height and reposition once so
-  // the flip threshold matches reality (the initial estimate can be ~50px off
-  // for popovers with lots of fields or many missing chips).
+  // Once the popover has rendered, observe its actual size and reposition
+  // whenever the height changes (font load, dynamic content, viewport
+  // resize). The initial estimate-based pos avoids a first-paint flicker.
   useEffect(() => {
     if (!open || !anchor || !cardRef.current) return undefined;
-    const measured = cardRef.current.offsetHeight;
-    const next = clampToViewport(anchor, measured);
-    if (next && (next.top !== pos?.top || next.left !== pos?.left)) {
-      setPos(next);
-    }
-    return undefined;
-  }, [open, anchor, refId, kind, pos?.top, pos?.left]);
+    const el = cardRef.current;
+    const reflow = () => {
+      const measured = el.offsetHeight;
+      const next = clampToViewport(anchor, measured);
+      if (!next) return;
+      setPos((prev) => (
+        prev && next.top === prev.top && next.left === prev.left && next.width === prev.width
+          ? prev
+          : next
+      ));
+    };
+    reflow();
+    if (typeof ResizeObserver === 'undefined') return undefined;
+    const ro = new ResizeObserver(reflow);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [open, anchor, refId, kind]);
 
   const handleMouseEnter = useCallback(() => {
     onPopoverEnter?.();

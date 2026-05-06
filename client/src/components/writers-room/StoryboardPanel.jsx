@@ -668,6 +668,7 @@ function BoardsTab({
               else delete sceneRefs.current[sceneId];
             }}
             scene={{ ...scene, id: sceneId }}
+            sceneNumber={i + 1}
             workId={work.id}
             analysisId={latestScript.id}
             workTitle={work.title}

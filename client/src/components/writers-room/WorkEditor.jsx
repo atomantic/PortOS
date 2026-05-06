@@ -194,14 +194,34 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
     const rect = anchor?.getBoundingClientRect?.() || null;
     setPop({ kind, refId, anchor: rect, pinned: true });
   }, []);
-  const handlePopClose = useCallback(() => setPop(null), []);
-  const handleOpenProfile = useCallback(({ kind }) => {
+  // Closing the popover (whether by Escape, X click, or auto-leave) must also
+  // drop the hot-state and any pending hover timers; otherwise SceneCard chips
+  // and bible rows can stay highlighted indefinitely after the cursor has
+  // moved on.
+  const clearPopTimers = useCallback(() => {
+    if (popOpenTimerRef.current) {
+      clearTimeout(popOpenTimerRef.current);
+      popOpenTimerRef.current = null;
+    }
+    if (popCloseTimerRef.current) {
+      clearTimeout(popCloseTimerRef.current);
+      popCloseTimerRef.current = null;
+    }
+  }, []);
+  const handlePopClose = useCallback(() => {
+    clearPopTimers();
     setPop(null);
+    setHotRef(null);
+  }, [clearPopTimers]);
+  const handleOpenProfile = useCallback(({ kind }) => {
+    clearPopTimers();
+    setPop(null);
+    setHotRef(null);
     if (kind === 'char') setSidebarTab(STORYBOARD_TAB.CHARACTERS);
     else if (kind === 'place') setSidebarTab(STORYBOARD_TAB.WORLD);
     else if (kind === 'object' && STORYBOARD_TAB.OBJECTS) setSidebarTab(STORYBOARD_TAB.OBJECTS);
     setMobileTab(MOBILE_TAB.STORYBOARD);
-  }, []);
+  }, [clearPopTimers]);
 
   useEffect(() => () => {
     if (popOpenTimerRef.current) clearTimeout(popOpenTimerRef.current);

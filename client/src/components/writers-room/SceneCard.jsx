@@ -25,6 +25,7 @@ import {
 
 const SceneCard = forwardRef(function SceneCard({
   scene,
+  sceneNumber = null,
   workId,
   analysisId,
   workTitle,
@@ -164,10 +165,19 @@ const SceneCard = forwardRef(function SceneCard({
     if (!res) return;
     jobIdRef.current = res.jobId || res.generationId || null;
     if (jobIdRef.current && onRenderStart) {
+      // The script-shaper output doesn't include a `number` field; the
+      // canonical 1-based index is passed from StoryboardPanel as
+      // sceneNumber. Fall back to scene.number for any external caller
+      // that does set it, then to a generic label.
+      const num = scene.number ?? sceneNumber;
+      const numLabel = Number.isFinite(num) ? `S${String(num).padStart(2, '0')}` : '';
+      const sceneLabel = `${numLabel} ${scene.heading || ''}`.trim()
+        || scene.heading
+        || 'Scene';
       onRenderStart({
         jobId: jobIdRef.current,
         sceneId: scene.id,
-        sceneLabel: `S${String(scene.number ?? '').padStart(2, '0')} ${scene.heading || ''}`.trim() || (scene.heading || 'Scene'),
+        sceneLabel,
       });
     }
     setGenerated({ path: res.path, jobId: res.jobId, prompt });
