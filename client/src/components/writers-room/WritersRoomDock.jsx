@@ -58,6 +58,7 @@ function DockItem({ item, onStop }) {
   const tone =
     status === 'error' ? 'border-port-error/60 text-port-error'
     : status === 'done' ? 'border-port-success/60 text-port-success'
+    : status === 'canceling' ? 'border-port-warning/60 text-port-warning'
     : status === 'running' ? 'border-port-accent/60 text-gray-200'
     : 'border-port-border text-gray-300';
   return (
@@ -69,6 +70,9 @@ function DockItem({ item, onStop }) {
           <span className="text-[10px] tabular-nums text-gray-400">{pct}%</span>
           {eta != null && <span className="text-[10px] text-gray-500">~{Math.max(0, Math.round(eta))}s</span>}
         </>
+      )}
+      {status === 'canceling' && (
+        <span className="text-[9px] uppercase tracking-wider text-port-warning">Canceling…</span>
       )}
       {status === 'done' && <Check size={10} />}
       {status === 'error' && <AlertTriangle size={10} />}

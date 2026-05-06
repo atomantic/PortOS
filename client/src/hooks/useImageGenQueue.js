@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import socket from '../services/socket';
 import { cancelImageGen } from '../services/apiImageVideo';
+import toast from '../components/ui/Toast';
 
 // useImageGenQueue — work-scoped live queue of in-flight image renders.
 //
@@ -174,15 +175,39 @@ export default function useImageGenQueue() {
     orphanEventsRef.current.clear();
   }, []);
 
+  // Mark a row as canceling, then issue cancel to the server. On success, prune
+  // the row. On failure, surface the error and revert so the user can retry —
+  // dropping the row before confirming would orphan the in-flight job from
+  // the dock UI.
   const stopOne = useCallback(async (jobId) => {
     if (!jobId) return;
-    await cancelImageGen({ jobId }).catch(() => {});
+    patch((prev) => prev.map((q) => (q.jobId === jobId ? { ...q, status: 'canceling' } : q)));
+    const err = await cancelImageGen({ jobId }).then(() => null).catch((e) => e);
+    if (err) {
+      toast.error(`Cancel failed: ${err.message || err}`);
+      patch((prev) => prev.map((q) => (
+        q.jobId === jobId && q.status === 'canceling'
+          ? { ...q, status: 'running' }
+          : q
+      )));
+      return;
+    }
     patch((prev) => prev.filter((q) => q.jobId !== jobId));
   }, [patch]);
 
   const stopAll = useCallback(async () => {
-    await cancelImageGen({ all: true }).catch(() => {});
-    patch((prev) => prev.filter((q) => q.status !== 'queued' && q.status !== 'running'));
+    patch((prev) => prev.map((q) => (
+      q.status === 'queued' || q.status === 'running'
+        ? { ...q, status: 'canceling' }
+        : q
+    )));
+    const err = await cancelImageGen({ all: true }).then(() => null).catch((e) => e);
+    if (err) {
+      toast.error(`Cancel all failed: ${err.message || err}`);
+      patch((prev) => prev.map((q) => (q.status === 'canceling' ? { ...q, status: 'running' } : q)));
+      return;
+    }
+    patch((prev) => prev.filter((q) => q.status !== 'canceling'));
   }, [patch]);
 
   const runningCount = queue.filter((q) => q.status === 'queued' || q.status === 'running').length;

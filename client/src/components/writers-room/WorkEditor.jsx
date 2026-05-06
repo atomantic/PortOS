@@ -158,16 +158,29 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
       setPop({ kind, refId, anchor: rect, pinned: false });
     }, 200);
   }, []);
+  // Schedule the 150ms grace close. Idempotent: clears any existing close
+  // timer first so rapid enter/leave events can't pile up multiple pending
+  // timeouts that fire later and clear pop/hotRef unexpectedly. The timer
+  // also nulls its own ref after firing so external clearTimeouts on a stale
+  // id are a no-op.
+  const scheduleClose = useCallback(() => {
+    if (popCloseTimerRef.current) {
+      clearTimeout(popCloseTimerRef.current);
+      popCloseTimerRef.current = null;
+    }
+    popCloseTimerRef.current = setTimeout(() => {
+      popCloseTimerRef.current = null;
+      setPop((prev) => (prev?.pinned ? prev : null));
+      setHotRef(null);
+    }, 150);
+  }, []);
   const handleTokenLeave = useCallback(() => {
     if (popOpenTimerRef.current) {
       clearTimeout(popOpenTimerRef.current);
       popOpenTimerRef.current = null;
     }
-    popCloseTimerRef.current = setTimeout(() => {
-      setPop((prev) => (prev?.pinned ? prev : null));
-      setHotRef(null);
-    }, 150);
-  }, []);
+    scheduleClose();
+  }, [scheduleClose]);
   // Cursor crossed from token onto the popover itself: cancel the pending
   // close so the user can click links inside without it dismissing on them.
   const handlePopoverEnter = useCallback(() => {
@@ -183,11 +196,8 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   // Cursor left the popover (and didn't go back to a token): schedule the
   // same 150ms grace close as token-leave.
   const handlePopoverLeave = useCallback(() => {
-    popCloseTimerRef.current = setTimeout(() => {
-      setPop((prev) => (prev?.pinned ? prev : null));
-      setHotRef(null);
-    }, 150);
-  }, []);
+    scheduleClose();
+  }, [scheduleClose]);
   const handleTokenClick = useCallback(({ kind, refId, anchor }) => {
     if (popOpenTimerRef.current) clearTimeout(popOpenTimerRef.current);
     if (popCloseTimerRef.current) clearTimeout(popCloseTimerRef.current);
