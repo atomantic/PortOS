@@ -112,10 +112,13 @@ export default function ProseTokenPopover({
   // scroll-induced position drift is corrected. Listens for window scroll
   // (capture, so any scrolling ancestor triggers it) and resize so a pinned
   // popover stays attached to its token even as the user scrolls the prose.
+  // Reflow is throttled via requestAnimationFrame so a fast scrollwheel
+  // can't queue dozens of layout reads per frame; the scroll listener is
+  // passive so it doesn't block scrolling itself.
   useEffect(() => {
     if (!open || !anchorEl || !cardRef.current) return undefined;
     const el = cardRef.current;
-    const reflow = () => {
+    const doReflow = () => {
       const rect = anchorEl.getBoundingClientRect();
       const measured = el.offsetHeight;
       const next = clampToViewport(rect, measured);
@@ -126,17 +129,27 @@ export default function ProseTokenPopover({
           : next
       ));
     };
-    reflow();
+    let rafHandle = 0;
+    const reflow = () => {
+      if (rafHandle) return;
+      rafHandle = requestAnimationFrame(() => {
+        rafHandle = 0;
+        doReflow();
+      });
+    };
+    doReflow();
     let ro = null;
     if (typeof ResizeObserver !== 'undefined') {
       ro = new ResizeObserver(reflow);
       ro.observe(el);
     }
-    window.addEventListener('scroll', reflow, true);
+    const scrollOpts = { capture: true, passive: true };
+    window.addEventListener('scroll', reflow, scrollOpts);
     window.addEventListener('resize', reflow);
     return () => {
+      if (rafHandle) cancelAnimationFrame(rafHandle);
       if (ro) ro.disconnect();
-      window.removeEventListener('scroll', reflow, true);
+      window.removeEventListener('scroll', reflow, scrollOpts);
       window.removeEventListener('resize', reflow);
     };
   }, [open, anchorEl, refId, kind]);

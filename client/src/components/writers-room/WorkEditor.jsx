@@ -170,6 +170,11 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   // pinned). When pinned, the popover stays visible and the cross-link
   // highlights (SceneCard chips / bible rows) must stay lit too — clearing
   // hotRef there would leave the popover orphaned from its visual targets.
+  // We snapshot the pinned bit out of `pop` BEFORE the setPop call so the
+  // setPop updater stays a pure function (StrictMode replays the updater
+  // and would emit duplicate setHotRef side effects otherwise).
+  const popPinnedRef = useRef(false);
+  useEffect(() => { popPinnedRef.current = !!pop?.pinned; }, [pop?.pinned]);
   const scheduleClose = useCallback(() => {
     if (popCloseTimerRef.current) {
       clearTimeout(popCloseTimerRef.current);
@@ -177,12 +182,10 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
     }
     popCloseTimerRef.current = setTimeout(() => {
       popCloseTimerRef.current = null;
-      setPop((prev) => {
-        if (prev?.pinned) return prev;
-        // Only drop hotRef when we actually close the popover.
-        setHotRef(null);
-        return null;
-      });
+      const isPinned = popPinnedRef.current;
+      if (isPinned) return;
+      setPop(null);
+      setHotRef(null);
     }, 150);
   }, []);
   const handleTokenLeave = useCallback(() => {

@@ -36,6 +36,11 @@ export default function useImageGenQueue() {
   // (LRU eviction) so unrelated global image-gen events don't accumulate.
   const orphanEventsRef = useRef(new Map());
   const orphanTimersRef = useRef(new Map());
+  // Tracks the post-cancel fallback prune timers. Stored so unmount can
+  // clear them (avoids "setState on unmounted hook" warnings) and so a real
+  // terminal socket event can supersede the fallback. Keyed: 'all' for
+  // Stop-all, jobId for Stop-one.
+  const cancelFallbackTimersRef = useRef(new Map());
 
   const patch = useCallback((updater) => {
     const next = updater(queueRef.current);
@@ -140,7 +145,16 @@ export default function useImageGenQueue() {
       copy[i] = { ...copy[i], ...delta };
       return copy;
     });
-    if (terminal) schedulePrune(jobId);
+    if (terminal) {
+      // A real terminal event supersedes any post-cancel fallback timer for
+      // this job.
+      const fallback = cancelFallbackTimersRef.current.get(jobId);
+      if (fallback) {
+        clearTimeout(fallback);
+        cancelFallbackTimersRef.current.delete(jobId);
+      }
+      schedulePrune(jobId);
+    }
   }, [patch, schedulePrune, stashOrphan]);
 
   useEffect(() => {
@@ -180,6 +194,8 @@ export default function useImageGenQueue() {
     for (const t of orphanTimersRef.current.values()) clearTimeout(t);
     orphanTimersRef.current.clear();
     orphanEventsRef.current.clear();
+    for (const t of cancelFallbackTimersRef.current.values()) clearTimeout(t);
+    cancelFallbackTimersRef.current.clear();
   }, []);
 
   // Hard cutoff: if the server never confirms cancellation with a terminal
@@ -217,10 +233,16 @@ export default function useImageGenQueue() {
       return;
     }
     // Server accepted; arm a fallback prune in case the terminal event
-    // never arrives.
-    setTimeout(() => {
+    // never arrives. Tracked in cancelFallbackTimersRef so unmount cleans
+    // it up — without that we could setState on an unmounted hook if the
+    // user navigates away within the 5s window.
+    const existing = cancelFallbackTimersRef.current.get(jobId);
+    if (existing) clearTimeout(existing);
+    const t = setTimeout(() => {
+      cancelFallbackTimersRef.current.delete(jobId);
       patch((prev) => prev.filter((q) => !(q.jobId === jobId && q.status === 'canceling')));
     }, CANCEL_FALLBACK_MS);
+    cancelFallbackTimersRef.current.set(jobId, t);
   }, [patch]);
 
   const stopAll = useCallback(async () => {
@@ -240,9 +262,15 @@ export default function useImageGenQueue() {
       }));
       return;
     }
-    setTimeout(() => {
+    // One fallback timer for the whole batch — repeated Stop-all clicks
+    // shouldn't pile up timeouts.
+    const existing = cancelFallbackTimersRef.current.get('all');
+    if (existing) clearTimeout(existing);
+    const t = setTimeout(() => {
+      cancelFallbackTimersRef.current.delete('all');
       patch((prev) => prev.filter((q) => q.status !== 'canceling'));
     }, CANCEL_FALLBACK_MS);
+    cancelFallbackTimersRef.current.set('all', t);
   }, [patch]);
 
   // 'canceling' is in-flight from the user's perspective — the row stays
