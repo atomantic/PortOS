@@ -195,7 +195,7 @@ function PipelineStageConfig({ taskType, config, providers, onUpdate, updating, 
       <div className="space-y-3">
         {stages.map((stage, i) => {
           const stageProvider = providers?.find(p => p.id === stage.providerId);
-          const stageModels = stageProvider?.models || [];
+          const stageModels = filterSelectableModels(stageProvider?.models);
           return (
             <div key={i} className="bg-port-card border border-port-border rounded-lg p-3">
               <div className="flex items-center gap-2 mb-3">

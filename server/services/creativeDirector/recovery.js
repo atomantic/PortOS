@@ -80,11 +80,19 @@ export async function recoverInFlightProjects() {
     const scenes = project.treatment?.scenes || [];
     const stuck = scenes.filter((s) => STUCK_SCENE_STATUSES.has(s.status));
     for (const scene of stuck) {
+      // Paused projects with a completed render (renderedJobId set) retain their
+      // `evaluating` status so completionHook's resume path can re-fire the
+      // evaluator against the existing clip instead of forcing a full re-render.
+      // Resetting these to `pending` would discard the already-rendered video.
+      if (project.status === 'paused' && scene.renderedJobId) continue;
       await updateScene(project.id, scene.sceneId, { status: 'pending' })
         .catch((e) => console.log(`⚠️ CD recovery: reset scene ${scene.sceneId} of ${project.id} failed: ${e.message}`));
     }
-    if (stuck.length) {
-      console.log(`🔄 CD recovery: ${project.id} reset ${stuck.length} stuck scene(s) to pending`);
+    const resetCount = stuck.filter(
+      (s) => !(project.status === 'paused' && s.renderedJobId),
+    ).length;
+    if (resetCount) {
+      console.log(`🔄 CD recovery: ${project.id} reset ${resetCount} stuck scene(s) to pending`);
     }
     // Reap stale `running` agent-run rows AND retire the underlying CoS
     // task. The agent task behind each run died with the previous process,

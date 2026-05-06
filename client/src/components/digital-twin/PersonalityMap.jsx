@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Brain, RefreshCw, AlertCircle } from 'lucide-react';
 import * as api from '../../services/api';
 import toast from '../ui/Toast';
+import { filterSelectableModels } from '../../utils/providers';
 
 const BIG_FIVE_LABELS = {
   O: { name: 'Openness', low: 'Practical', high: 'Curious' },
@@ -122,7 +123,7 @@ export default function PersonalityMap({ traits, confidence, providers, onAnalyz
               className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm min-w-[200px]"
             >
               {providers?.map(p => (
-                (p.models || [p.defaultModel]).filter(Boolean).map(model => (
+                (filterSelectableModels(p.models).length > 0 ? filterSelectableModels(p.models) : [p.defaultModel]).filter(Boolean).map(model => (
                   <option key={`${p.id}:${model}`} value={`${p.id}:${model}`}>
                     {p.name} - {model}
                   </option>

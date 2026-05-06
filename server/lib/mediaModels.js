@@ -202,9 +202,18 @@ const backfillRuntime = (list) => {
 // Build the initial shippedIds set for one platform on first encounter
 // (no _shippedDefaults field yet).
 //
-// When the user has an array for this platform we treat the union of their ids
-// and the default ids as "already shipped" — this preserves any deletions they
-// made before _shippedDefaults was introduced, without re-adding removed entries.
+// Pre-snapshot bootstrap: existing installs without _shippedDefaults can't
+// distinguish "user explicitly removed this built-in" from "this built-in
+// is new in this release". We choose to UNION the user's current ids with
+// the current default ids, treating both as "already shipped". That preserves
+// any deletions the user made before this feature existed, at the cost of new
+// built-in models in this release also being marked as shipped — so they won't
+// appear on this install until the user edits data/media-models.json directly.
+//
+// Trade-off favors data preservation over feature visibility: a user who curated
+// their model list won't have it silently re-populated. Users who want the new
+// built-ins can delete media-models.json and restart to re-seed from scratch,
+// or add the entries manually.
 //
 // When the platform key is absent from their registry (e.g. the whole `video`
 // section is missing), we return an empty set so the defaults are treated as

@@ -8,18 +8,20 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
-import { Trash2, Image as ImageIcon, Film } from 'lucide-react';
+import { AlertTriangle, Trash2, Image as ImageIcon, Film } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import { listCachedModels, deleteCachedModel, deleteLora } from '../services/api';
 
 export default function MediaModels() {
   const [data, setData] = useState({ models: [], loras: [], hubDir: '', diskUsage: {} });
   const [busy, setBusy] = useState(null);
+  const [error, setError] = useState(null);
 
   const refresh = useCallback(() => {
+    setError(null);
     listCachedModels()
       .then(setData)
-      .catch(() => setData({ models: [], loras: [], hubDir: '', diskUsage: {} }));
+      .catch(err => setError(err?.message || 'Failed to load media models'));
   }, []);
 
   useEffect(() => { refresh(); }, [refresh]);
@@ -45,6 +47,18 @@ export default function MediaModels() {
       .catch((err) => toast.error(err.message || 'Delete failed'))
       .finally(() => setBusy(null));
   };
+
+  if (error) {
+    return (
+      <div className="p-6 text-center">
+        <AlertTriangle size={32} className="mx-auto text-port-warning mb-3" />
+        <p className="text-gray-400 mb-3">Couldn't load media models: {error}</p>
+        <button type="button" onClick={refresh} className="px-4 py-2 bg-port-card border border-port-border rounded-lg text-white hover:bg-port-bg">
+          Retry
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">

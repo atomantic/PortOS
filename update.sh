@@ -70,11 +70,15 @@ safe_install() {
 step "git-pull" "running" "Pulling latest changes..."
 current_branch=$(git symbolic-ref -q --short HEAD 2>/dev/null || echo "")
 stashed_for_branch=""
+stashed_for_commit=""
 if [ "$current_branch" != "main" ]; then
   if ! git diff --quiet || ! git diff --cached --quiet || [ -n "$(git ls-files --others --exclude-standard)" ]; then
     log "⚠️  Stashing local changes from '${current_branch:-detached HEAD}' so checkout can proceed"
     if run git stash push -u -m "portos-update-$(date +%s)"; then
       stashed_for_branch="${current_branch:-detached HEAD}"
+      # Capture the original commit SHA so detached-HEAD users can return
+      # to the exact tree their stash was taken from.
+      stashed_for_commit=$(git rev-parse HEAD)
     fi
   fi
   log "⚠️  On branch '${current_branch:-detached HEAD}' — switching to main for update"
@@ -201,6 +205,10 @@ log ""
 
 if [ -n "$stashed_for_branch" ]; then
   log "ℹ️  Your local changes from '$stashed_for_branch' were stashed for the update."
-  log "    To restore them: git checkout '$stashed_for_branch' && git stash pop"
+  if [ "$stashed_for_branch" = "detached HEAD" ]; then
+    log "    To restore them: git checkout $stashed_for_commit && git stash pop"
+  else
+    log "    To restore them: git checkout '$stashed_for_branch' && git stash pop"
+  fi
   log "    The stash entry is at the top of 'git stash list'."
 fi

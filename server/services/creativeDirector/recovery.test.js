@@ -291,6 +291,67 @@ describe('recoverInFlightProjects', () => {
     expect(mockAdvance).toHaveBeenCalledWith('cd-1');
   });
 
+  it('preserves evaluating+renderedJobId scenes for paused projects (resume path reuses existing clip)', async () => {
+    // Regression: recovery used to reset ALL evaluating scenes to `pending`,
+    // including paused ones with a valid renderedJobId. That discarded the
+    // already-rendered clip and forced a full re-render on Resume, even though
+    // completionHook's orphaned-evaluating path can reuse the existing video.
+    mockListProjects.mockResolvedValue([
+      {
+        id: 'cd-paused',
+        status: 'paused',
+        treatment: {
+          scenes: [
+            { sceneId: 's1', status: 'evaluating', renderedJobId: 'abc-123-def-456-ghi-789-jkl-000' },
+          ],
+        },
+        runs: [],
+      },
+    ]);
+    await recoverInFlightProjects();
+    // Scene must NOT be reset — the renderedJobId is present and the project is paused.
+    expect(mockUpdateScene).not.toHaveBeenCalled();
+  });
+
+  it('still resets evaluating scenes for paused projects when there is no renderedJobId', async () => {
+    // A paused scene without a renderedJobId has no render to resume from —
+    // resetting to `pending` is correct so a full re-render happens on Resume.
+    mockListProjects.mockResolvedValue([
+      {
+        id: 'cd-paused',
+        status: 'paused',
+        treatment: {
+          scenes: [
+            { sceneId: 's1', status: 'evaluating' }, // no renderedJobId
+          ],
+        },
+        runs: [],
+      },
+    ]);
+    await recoverInFlightProjects();
+    expect(mockUpdateScene).toHaveBeenCalledWith('cd-paused', 's1', { status: 'pending' });
+  });
+
+  it('resets evaluating scenes for active (non-paused) projects regardless of renderedJobId', async () => {
+    // Active projects need their in-flight listeners re-attached — even if a
+    // render finished, the evaluate task died with the server and the whole
+    // scene should restart from the render step.
+    mockListProjects.mockResolvedValue([
+      {
+        id: 'cd-rendering',
+        status: 'rendering',
+        treatment: {
+          scenes: [
+            { sceneId: 's1', status: 'evaluating', renderedJobId: 'abc-123-def-456-ghi-789-jkl-000' },
+          ],
+        },
+        runs: [],
+      },
+    ]);
+    await recoverInFlightProjects();
+    expect(mockUpdateScene).toHaveBeenCalledWith('cd-rendering', 's1', { status: 'pending' });
+  });
+
   it('handles multiple projects independently', async () => {
     mockListProjects.mockResolvedValue([
       {

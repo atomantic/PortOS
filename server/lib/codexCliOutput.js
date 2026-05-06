@@ -1,6 +1,10 @@
 const STARTUP_FIELD_RE = /^(workdir|model|provider|approval|sandbox|reasoning effort|reasoning summaries|session id):/i;
 const RUNTIME_SIGNAL_RE = /^(ERROR:|exec\s+)/i;
 const ERROR_SIGNAL_RE = /\b(invalid_request_error|not logged in|api key|unauthorized|forbidden|rate.?limit|quota exceeded|model .*not supported|billing|subscription)\b/i;
+// Network and system error patterns that agentErrorAnalysis.js classifies but
+// ERROR_SIGNAL_RE doesn't cover. These are safe to match post-prompt-boundary
+// because they're OS-level tokens unlikely to appear in normal prompt text.
+const NETWORK_SIGNAL_RE = /\b(ECONNREFUSED|ETIMEDOUT|ENOENT|EACCES|EPIPE|ENETUNREACH|connection (?:refused|reset)|socket hang up|network (?:error|unreachable)|connect (?:timed out|timeout))\b/i;
 
 function shouldDropCodexLine(trimmed) {
   if (!trimmed) return true;
@@ -57,7 +61,7 @@ export function createCodexStderrFormatter(userPrompt = '') {
     // failures (e.g. "not logged in", "unauthorized") become the
     // first-emitted runtime line even without an ERROR: prefix.
     const isRuntimeSignal = RUNTIME_SIGNAL_RE.test(trimmed)
-      || (crossedPromptBoundary && ERROR_SIGNAL_RE.test(trimmed));
+      || (crossedPromptBoundary && (ERROR_SIGNAL_RE.test(trimmed) || NETWORK_SIGNAL_RE.test(trimmed)));
     if (suppressCommandOutput && !isRuntimeSignal) return null;
     if (!sawRuntimeOutput && !isRuntimeSignal) return null;
     if (isRuntimeSignal) sawRuntimeOutput = true;

@@ -117,6 +117,16 @@ jobs:
             git fetch origin main
             git checkout main
 
+            # After switching to main: re-check whether the pattern file is
+            # actually present. A prior workflow run that archived but failed
+            # before pushing back to release leaves the file present on the
+            # release branch (initial check) but absent on main (already moved).
+            # Skip cleanly in that case.
+            if [ ! -f "$PATTERN_FILE" ]; then
+              echo "Changelog already archived on main — nothing to do"
+              exit 0
+            fi
+
             git mv "$PATTERN_FILE" "$VERSIONED_FILE"
             sed -i.bak "s/v${MAJOR_MINOR}\.x/v${CURRENT_VERSION}/g; s/${MAJOR_MINOR}\.x/${CURRENT_VERSION}/g; s/YYYY-MM-DD/$(date +%Y-%m-%d)/g" "$VERSIONED_FILE"
             rm "${VERSIONED_FILE}.bak"

@@ -6,6 +6,7 @@ import * as api from '../services/api';
 import socket from '../services/socket';
 import { processScreenshotUploads } from '../utils/fileUpload';
 import BrailleSpinner from '../components/BrailleSpinner';
+import { filterSelectableModels } from '../utils/providers';
 
 export function RunnerPage() {
   const location = useLocation();
@@ -363,13 +364,13 @@ ${prompt.trim()}`;
             </select>
 
             {/* Model */}
-            {currentProvider?.models?.length > 0 && (
+            {filterSelectableModels(currentProvider?.models).length > 0 && (
               <select
                 value={selectedModel}
                 onChange={(e) => setSelectedModel(e.target.value)}
                 className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
               >
-                {currentProvider.models.map(m => (
+                {filterSelectableModels(currentProvider.models).map(m => (
                   <option key={m} value={m}>{m}</option>
                 ))}
               </select>

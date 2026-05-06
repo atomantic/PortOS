@@ -504,7 +504,13 @@ async function syncSkillTemplatesFromSample() {
       await writeFile(shippedPath, sampleContent)
       console.log(`🔄 Updated unmodified skill template: ${file}`)
     } else {
-      // Case d: user has customized the file — leave it alone
+      // Case d: for installs upgrading from a pre-.shipped release, any existing
+      // skill file that doesn't match the current sample lands here. In reality
+      // the file might just be the previous shipped version — we can't tell without
+      // history. We choose preservation: the user's file (whether intentional
+      // customization or a stale shipped copy) stays in place. Users who want the
+      // new template can delete the file and restart so the seeder re-creates it
+      // from data.sample/.
       console.log(`ℹ️ Preserving user-modified skill template: ${file}`)
     }
   }
@@ -671,9 +677,17 @@ function applyAdditiveFields(existing, defaultJob) {
 
     const snapshot = existing._shippedDefaults[field]
     if (snapshot === undefined) {
-      // Pre-snapshot job: bootstrap snapshot to the current shipped default.
-      // Value is preserved (we can't distinguish user-edit from old shipped value).
-      // On the NEXT release the snapshot will exist and comparisons will work correctly.
+      // Pre-snapshot bootstrap: this job predates the _shippedDefaults mechanism,
+      // so we have no way to distinguish "user customized this field" from "user
+      // matches the previous shipped default". We bootstrap _shippedDefaults to
+      // the CURRENT shipped value as a one-shot transition: existing installs hold
+      // whatever value they had until the user explicitly edits the field via the UI
+      // (which preserves customization) or until a future release ships a new default
+      // — at which point the snapshot comparison works normally.
+      //
+      // Trade-off: existing installs may hold older defaults indefinitely. Users who
+      // want fresh shipped defaults can edit + revert the field via the UI, or delete
+      // the job entirely so the next merge re-seeds it from scratch.
       existing._shippedDefaults[field] = defaultJob[field]
       changed = true
       continue

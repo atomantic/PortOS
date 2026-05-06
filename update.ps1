@@ -106,6 +106,7 @@ Step "git-pull" "running" "Pulling latest changes..."
 $headRef = git symbolic-ref -q HEAD 2>$null
 $currentBranch = if ($headRef) { $headRef -replace "refs/heads/", "" } else { "" }
 $stashedForBranch = ""
+$stashedForCommit = ""
 if ($currentBranch -ne "main") {
     $hasChanges = $false
     git diff --quiet 2>$null
@@ -122,7 +123,12 @@ if ($currentBranch -ne "main") {
         $branchLabel = if ($currentBranch) { $currentBranch } else { "detached HEAD" }
         Write-SafeHost "⚠️  Stashing local changes from '$branchLabel' so checkout can proceed" -ForegroundColor Yellow
         Invoke-Logged git stash push -u -m "portos-update-$([int][double]::Parse((Get-Date -UFormat %s)))"
-        if ($LASTEXITCODE -eq 0) { $stashedForBranch = $branchLabel }
+        if ($LASTEXITCODE -eq 0) {
+            $stashedForBranch = $branchLabel
+            # Capture the original commit SHA so detached-HEAD users can return
+            # to the exact tree their stash was taken from.
+            $stashedForCommit = git rev-parse HEAD
+        }
     }
     if (-not $currentBranch) {
         $detachedCommit = git rev-parse --short HEAD
@@ -273,6 +279,10 @@ Write-SafeHost ""
 
 if ($stashedForBranch) {
     Write-SafeHost "ℹ️  Your local changes from '$stashedForBranch' were stashed for the update." -ForegroundColor Cyan
-    Write-SafeHost "    To restore them: git checkout '$stashedForBranch'; git stash pop" -ForegroundColor Cyan
+    if ($stashedForBranch -eq "detached HEAD") {
+        Write-SafeHost "    To restore them: git checkout $stashedForCommit; git stash pop" -ForegroundColor Cyan
+    } else {
+        Write-SafeHost "    To restore them: git checkout '$stashedForBranch'; git stash pop" -ForegroundColor Cyan
+    }
     Write-SafeHost "    The stash entry is at the top of 'git stash list'." -ForegroundColor Cyan
 }

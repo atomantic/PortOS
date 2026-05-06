@@ -164,4 +164,91 @@ not logged in
 
     expect(lines).toEqual(['not logged in']);
   });
+
+  it('emits ECONNREFUSED errors — matches both RUNTIME_SIGNAL_RE (Error:) and NETWORK_SIGNAL_RE', () => {
+    const formatter = createCodexStderrFormatter();
+
+    const lines = formatter.processChunk(`Reading prompt from stdin...
+OpenAI Codex v0.125.0 (research preview)
+--------
+workdir: /repo
+model: gpt-4o
+provider: openai
+approval: never
+sandbox: workspace-write
+session id: abc
+--------
+user
+Some normal prompt.
+Error: ECONNREFUSED 127.0.0.1:11434
+`);
+
+    expect(lines).toEqual(['Error: ECONNREFUSED 127.0.0.1:11434']);
+  });
+
+  it('emits plain "socket hang up" via NETWORK_SIGNAL_RE after prompt boundary', () => {
+    const formatter = createCodexStderrFormatter();
+
+    const lines = formatter.processChunk(`Reading prompt from stdin...
+OpenAI Codex v0.125.0 (research preview)
+--------
+workdir: /repo
+model: gpt-4o
+provider: openai
+approval: never
+sandbox: workspace-write
+session id: abc
+--------
+user
+Some normal prompt.
+socket hang up
+`);
+
+    expect(lines).toEqual(['socket hang up']);
+  });
+
+  it('emits plain "connect timeout" via NETWORK_SIGNAL_RE after prompt boundary', () => {
+    const formatter = createCodexStderrFormatter();
+
+    const lines = formatter.processChunk(`Reading prompt from stdin...
+OpenAI Codex v0.125.0 (research preview)
+--------
+workdir: /repo
+model: gpt-4o
+provider: openai
+approval: never
+sandbox: workspace-write
+session id: abc
+--------
+user
+Some normal prompt.
+connect timeout after 30s
+`);
+
+    expect(lines).toEqual(['connect timeout after 30s']);
+  });
+
+  it('still drops "connection refused" that appears in user-prompt zone (promptLineSet filter)', () => {
+    // A prompt containing "connection refused" must NOT leak — the promptLineSet.has check
+    // fires before ERROR_SIGNAL_RE / NETWORK_SIGNAL_RE, so exact-match prompt lines are
+    // dropped regardless of network keyword content.
+    const userPrompt = 'Why does the server say connection refused on port 8080?';
+    const formatter = createCodexStderrFormatter(userPrompt);
+
+    const lines = formatter.processChunk(`Reading prompt from stdin...
+OpenAI Codex v0.125.0 (research preview)
+--------
+workdir: /repo
+model: gpt-4o
+provider: openai
+approval: never
+sandbox: workspace-write
+session id: abc
+--------
+user
+Why does the server say connection refused on port 8080?
+`);
+
+    expect(lines).toEqual([]);
+  });
 });
