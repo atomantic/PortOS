@@ -16,6 +16,7 @@ import { ANALYSIS_KINDS } from '../../lib/writersRoomPresets.js';
 import { getWorkWithBody } from './local.js';
 import { listCharacters, mergeExtractedCharacters } from './characters.js';
 import { listSettings, mergeExtractedSettings } from './settings.js';
+import { listObjects, mergeExtractedObjects } from './objects.js';
 import { nowIso, badRequest, notFound, assertValidWorkId } from './_shared.js';
 
 export { ANALYSIS_KINDS };
@@ -26,6 +27,7 @@ const KIND_META = {
   script:     { stage: 'writers-room-script',     returnsJson: true },
   characters: { stage: 'writers-room-characters', returnsJson: true },
   settings:   { stage: 'writers-room-settings',   returnsJson: true },
+  objects:    { stage: 'writers-room-objects',    returnsJson: true },
 };
 
 // Analysis id == kind. Each work keeps at most one snapshot per kind on disk
@@ -288,6 +290,23 @@ const SHAPERS = {
         })),
     };
   },
+  objects: (raw) => {
+    const parsed = extractJson(raw);
+    const list = Array.isArray(parsed.objects) ? parsed.objects : [];
+    return {
+      objects: list
+        .filter((o) => o && typeof o === 'object' && typeof o.name === 'string' && o.name.trim())
+        .map((o) => ({
+          name: o.name.trim(),
+          aliases: Array.isArray(o.aliases) ? o.aliases.filter((a) => typeof a === 'string') : [],
+          description: typeof o.description === 'string' ? o.description : '',
+          significance: typeof o.significance === 'string' ? o.significance : '',
+          firstAppearance: typeof o.firstAppearance === 'string' ? o.firstAppearance : null,
+          evidence: Array.isArray(o.evidence) ? o.evidence.filter((e) => typeof e === 'string') : [],
+          missingFromProse: Array.isArray(o.missingFromProse) ? o.missingFromProse.filter((m) => typeof m === 'string') : [],
+        })),
+    };
+  },
 };
 
 // ---------- storage ----------
@@ -518,12 +537,20 @@ export async function runAnalysis(workId, { kind } = {}) {
     // pipeline doesn't pay two sequential disk reads. For 'characters' or
     // 'settings' alone Promise.all is degenerate (one element) but the shape
     // keeps the call site uniform.
-    const [existingChars, existingSets] = await Promise.all([
+    const trimObject = (o) => ({
+      name: o.name,
+      aliases: o.aliases,
+      description: o.description,
+      significance: o.significance,
+    });
+    const [existingChars, existingSets, existingObjs] = await Promise.all([
       (kind === 'characters' || kind === 'script') ? listCharacters(workId) : null,
       (kind === 'settings' || kind === 'script') ? listSettings(workId) : null,
+      (kind === 'objects' || kind === 'script') ? listObjects(workId) : null,
     ]);
     if (existingChars) variables.existingCharactersJson = JSON.stringify(existingChars.map(trimCharacter));
     if (existingSets) variables.existingSettingsJson = JSON.stringify(existingSets.map(trimSetting));
+    if (existingObjs) variables.existingObjectsJson = JSON.stringify(existingObjs.map(trimObject));
 
     const temperature = kind === 'format' ? 0.2 : 0.4;
     const { content, model: usedModel, providerId: usedProvider } = await callAI(stage, variables, temperature);
@@ -533,6 +560,8 @@ export async function runAnalysis(workId, { kind } = {}) {
       mergedProfiles = await mergeExtractedCharacters(workId, result.characters || []);
     } else if (kind === 'settings') {
       mergedProfiles = await mergeExtractedSettings(workId, result.settings || []);
+    } else if (kind === 'objects') {
+      mergedProfiles = await mergeExtractedObjects(workId, result.objects || []);
     }
     const finished = {
       ...baseSnapshot,

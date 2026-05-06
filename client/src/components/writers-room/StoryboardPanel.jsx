@@ -2,8 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   Clapperboard, Loader2, RefreshCcw, AlertTriangle, Palette, Check, Dice5, Cpu,
-  Users, MapPin as MapPinIcon, ArrowRight, ListTree, SlidersHorizontal, Square,
-  Settings as SettingsIcon,
+  Users, MapPin as MapPinIcon, ArrowRight, ListTree, SlidersHorizontal,
+  Settings as SettingsIcon, Package,
 } from 'lucide-react';
 import { randomSeed } from '../../lib/genUtils';
 import toast from '../ui/Toast';
@@ -23,6 +23,7 @@ import SceneCard from './SceneCard';
 import StagePromptModelPicker from './StagePromptModelPicker';
 import CharactersBible from './CharactersBible';
 import SettingsBible from './SettingsBible';
+import ObjectsBible from './ObjectsBible';
 import {
   WR_IMAGE_DEFAULTS,
   buildCharByKey,
@@ -47,6 +48,7 @@ function groupPresetsByCategory(presets) {
 export const STORYBOARD_TAB = {
   CHARACTERS: 'characters',
   WORLD: 'world',
+  OBJECTS: 'objects',
   SCENES: 'scenes',
   BOARDS: 'boards',
   CONFIG: 'config',
@@ -57,6 +59,7 @@ export const STORYBOARD_TAB_VALUES = Object.values(TAB);
 const RUN_LABEL = {
   characters: 'Refreshing characters',
   settings: 'Refreshing world',
+  objects: 'Refreshing objects',
   script: 'Running Adapt',
   evaluate: 'Editorial pass',
   format: 'Format pass',
@@ -79,6 +82,13 @@ export default function StoryboardPanel({
   onStyleChange,
   onCharactersChange,
   onSettingsChange,
+  onScenesChange,
+  objects = [],
+  onObjectsChange,
+  onRunObjects,
+  hotRef = null,
+  onSceneHover,
+  onSceneRenderStart,
   tab,
   onTabChange,
 }) {
@@ -295,6 +305,16 @@ export default function StoryboardPanel({
   const scenes = latestScript?.result?.scenes || [];
   const sceneImages = latestScript?.sceneImages || {};
 
+  // Surface the scene list up to WorkEditor (for ProseReader anchors). Fires
+  // every time latestScript changes, including the initial null load.
+  useEffect(() => {
+    onScenesChange?.(scenes);
+    // We intentionally key on latestScript identity rather than scenes (which
+    // is recreated each render) — array identity changes coincide with the
+    // analysis snapshot changing.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [latestScript]);
+
   return (
     <div className="flex flex-col h-full">
       <TabNav
@@ -303,6 +323,7 @@ export default function StoryboardPanel({
         runningKind={runningKind}
         charactersCount={characters.length}
         settingsCount={settings.length}
+        objectsCount={objects.length}
         scenesCount={scenesCount}
         boardsCount={scenes.length}
       />
@@ -325,6 +346,7 @@ export default function StoryboardPanel({
             running={runningKind === 'characters'}
             anyRunning={!!runningKind}
             readingTheme={readingTheme}
+            hotRefId={hotRef?.kind === 'char' ? hotRef.refId : null}
           />
         )}
         {tab === TAB.WORLD && (
@@ -337,6 +359,20 @@ export default function StoryboardPanel({
             running={runningKind === 'settings'}
             anyRunning={!!runningKind}
             readingTheme={readingTheme}
+            hotRefId={hotRef?.kind === 'place' ? hotRef.refId : null}
+          />
+        )}
+        {tab === TAB.OBJECTS && (
+          <BibleTab
+            kind="objects"
+            workId={work.id}
+            items={objects}
+            onItemsChange={onObjectsChange}
+            onRefresh={onRunObjects}
+            running={runningKind === 'objects'}
+            anyRunning={!!runningKind}
+            readingTheme={readingTheme}
+            hotRefId={hotRef?.kind === 'object' ? hotRef.refId : null}
           />
         )}
         {tab === TAB.SCENES && (
@@ -371,8 +407,9 @@ export default function StoryboardPanel({
             readingTheme={readingTheme}
             activeSceneId={activeSceneId}
             onOpenConfig={() => setTab(TAB.CONFIG)}
-            runningRenderCount={runningSceneIds.size}
-            onCancelRenders={cancelAllRenders}
+            hotRef={hotRef}
+            onSceneHover={onSceneHover}
+            onSceneRenderStart={onSceneRenderStart}
           />
         )}
         {tab === TAB.CONFIG && (
@@ -402,12 +439,14 @@ function TabNav({
   runningKind,
   charactersCount,
   settingsCount,
+  objectsCount,
   scenesCount,
   boardsCount,
 }) {
   const tabs = [
     { id: TAB.CHARACTERS, label: 'Characters', icon: Users,        count: charactersCount, runningWhen: 'characters' },
     { id: TAB.WORLD,      label: 'World',      icon: MapPinIcon,   count: settingsCount,   runningWhen: 'settings' },
+    { id: TAB.OBJECTS,    label: 'Objects',    icon: Package,      count: objectsCount,    runningWhen: 'objects' },
     { id: TAB.SCENES,     label: 'Scenes',     icon: ListTree,     count: scenesCount,     runningWhen: null },
     { id: TAB.BOARDS,     label: 'Boards',     icon: Clapperboard, count: boardsCount,     runningWhen: 'script' },
     { id: TAB.CONFIG,     label: 'Config',     icon: SlidersHorizontal, count: null,       runningWhen: null },
@@ -465,9 +504,17 @@ const BIBLE_KINDS = {
     propName: 'settings',
     changeProp: 'onSettingsChange',
   },
+  objects: {
+    label: 'Recurring objects',
+    sub: 'Symbolic / recurring items the prose returns to',
+    refreshNoun: 'objects',
+    Component: ObjectsBible,
+    propName: 'objects',
+    changeProp: 'onObjectsChange',
+  },
 };
 
-function BibleTab({ kind, workId, items, onItemsChange, onRefresh, running, anyRunning, readingTheme }) {
+function BibleTab({ kind, workId, items, onItemsChange, onRefresh, running, anyRunning, readingTheme, hotRefId = null }) {
   const meta = BIBLE_KINDS[kind];
   const Bible = meta.Component;
   const bibleProps = {
@@ -475,6 +522,7 @@ function BibleTab({ kind, workId, items, onItemsChange, onRefresh, running, anyR
     [meta.propName]: items,
     [meta.changeProp]: onItemsChange,
     readingTheme,
+    hotRefId,
   };
   return (
     <div className="px-3 py-3 space-y-3">
@@ -581,29 +629,14 @@ function BoardsTab({
   readingTheme,
   activeSceneId,
   onOpenConfig,
-  runningRenderCount = 0,
-  onCancelRenders,
+  hotRef = null,
+  onSceneHover,
+  onSceneRenderStart,
 }) {
   return (
     <div className="px-3 py-3 space-y-2">
-      {runningRenderCount > 0 && (
-        <div className="flex items-center justify-between gap-2 px-2.5 py-1.5 mb-1 border border-port-warning/40 bg-port-warning/5 rounded text-[11px]">
-          <div className="flex items-center gap-2 min-w-0">
-            <Loader2 size={11} className="animate-spin text-port-warning shrink-0" />
-            <span className="text-port-warning truncate">
-              Rendering {runningRenderCount} scene{runningRenderCount === 1 ? '' : 's'}…
-            </span>
-          </div>
-          <button
-            type="button"
-            onClick={onCancelRenders}
-            className="shrink-0 flex items-center gap-1 px-2 py-1 bg-port-error/15 border border-port-error/40 text-port-error rounded text-[10px] hover:bg-port-error/25"
-            title="Cancel every queued and in-flight scene render"
-          >
-            <Square size={10} /> Stop all
-          </button>
-        </div>
-      )}
+      {/* Live rendering status moved to the page-level WritersRoomDock so it's
+          visible from any tab, not just Boards. */}
       {latestScript && (
         <div className="flex items-center gap-2 pb-2 text-[10px] text-gray-500">
           <span>{scenes.length} scene{scenes.length === 1 ? '' : 's'} · {timeAgo(latestScript.completedAt || latestScript.createdAt, 'never')}</span>
@@ -691,6 +724,10 @@ function BoardsTab({
             onJumpToProse={onJumpToScene ? () => onJumpToScene(scene, i, scenes.length) : null}
             onDebug={onDebug}
             onRunningChange={onSceneRunningChange}
+            hotRef={hotRef}
+            onHoverEnter={onSceneHover ? () => onSceneHover(sceneId) : null}
+            onHoverLeave={onSceneHover ? () => onSceneHover(null) : null}
+            onRenderStart={onSceneRenderStart}
           />
         );
       })}

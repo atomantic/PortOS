@@ -1,71 +1,65 @@
 import { useEffect, useState } from 'react';
-import { AlertTriangle, Check, Loader2, Pencil, Plus, Trash2, X } from 'lucide-react';
+import { AlertTriangle, Check, Loader2, Package, Pencil, Plus, Trash2, X } from 'lucide-react';
 import toast from '../ui/Toast';
 import {
-  listWritersRoomCharacters,
-  createWritersRoomCharacter,
-  updateWritersRoomCharacter,
-  deleteWritersRoomCharacter,
+  listWritersRoomObjects,
+  createWritersRoomObject,
+  updateWritersRoomObject,
+  deleteWritersRoomObject,
 } from '../../services/apiWritersRoom';
 import useMounted from '../../hooks/useMounted';
 
-const CHARACTER_FIELDS = [
-  { key: 'aliases',             label: 'Aliases',              placeholder: 'nicknames, titles (comma-separated)',                                                                  kind: 'csv' },
-  { key: 'role',                label: 'Role',                 placeholder: 'protagonist, mentor, antagonist…',                                                                     kind: 'text' },
-  { key: 'physicalDescription', label: 'Physical description', placeholder: 'Age, build, hair, eyes, distinctive features, signature wardrobe. Used directly in image-gen prompts.', kind: 'multiline' },
-  { key: 'personality',         label: 'Personality',          placeholder: 'Temperament, voice, quirks',                                                                           kind: 'multiline' },
-  { key: 'background',          label: 'Background',           placeholder: 'Who they are, where they come from',                                                                   kind: 'multiline' },
-  { key: 'notes',               label: 'Notes',                placeholder: 'Anything else worth tracking',                                                                         kind: 'multiline' },
+const OBJECT_FIELDS = [
+  { key: 'description',  label: 'Description',  placeholder: 'Material, color, condition, distinguishing marks. Used in image-gen prompts when this object appears in a scene.', kind: 'multiline', rows: 3 },
+  { key: 'significance', label: 'Significance', placeholder: 'Why does this object matter? What does it represent? How does its meaning evolve across scenes?',                  kind: 'multiline', rows: 2 },
+  { key: 'notes',        label: 'Notes',        placeholder: 'Anything else worth tracking',                                                                                     kind: 'multiline', rows: 2 },
 ];
 
-// Editable character bible — persistent across analysis runs and consumed by
-// image gen to inject physicalDescription into per-scene prompts.
-//
-// Controlled vs. uncontrolled: caller may pass `characters` to keep multiple
-// mounts in sync (e.g. drawer + storyboard chip count). When omitted we fetch
-// and own the list so this can stand alone.
-export default function CharactersBible({ workId, characters: charactersProp, onCharactersChange, readingTheme = 'dark', hotRefId = null }) {
-  const [internalCharacters, setInternalCharacters] = useState(charactersProp || []);
-  const characters = charactersProp ?? internalCharacters;
+// Editable recurring-objects bible. Mirrors CharactersBible / SettingsBible.
+// Distinct from analysis snapshots — this is the canonical roster that
+// survives across `objects` analysis runs and accepts hand-edits.
+export default function ObjectsBible({ workId, objects: objectsProp, onObjectsChange, readingTheme = 'dark', hotRefId = null }) {
+  const [internalObjects, setInternalObjects] = useState(objectsProp || []);
+  const objects = objectsProp ?? internalObjects;
   const [editingId, setEditingId] = useState(null);
   const [creating, setCreating] = useState(false);
   const [loading, setLoading] = useState(false);
   const mountedRef = useMounted();
 
   useEffect(() => {
-    if (charactersProp) return;
+    if (objectsProp) return;
     if (!workId) return;
     setLoading(true);
-    listWritersRoomCharacters(workId)
-      .then((list) => { if (mountedRef.current) setInternalCharacters(list); })
-      .catch(() => { if (mountedRef.current) setInternalCharacters([]); })
+    listWritersRoomObjects(workId)
+      .then((list) => { if (mountedRef.current) setInternalObjects(list); })
+      .catch(() => { if (mountedRef.current) setInternalObjects([]); })
       .finally(() => { if (mountedRef.current) setLoading(false); });
-  }, [workId, charactersProp, mountedRef]);
+  }, [workId, objectsProp, mountedRef]);
 
   const upsert = (next) => {
     const update = (prev) => {
-      const idx = prev.findIndex((c) => c.id === next.id);
+      const idx = prev.findIndex((o) => o.id === next.id);
       const sorted = (arr) => arr.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
       if (idx < 0) return sorted([...prev, next]);
       const copy = [...prev];
       copy[idx] = next;
       return sorted(copy);
     };
-    setInternalCharacters(update);
-    onCharactersChange?.(update(characters));
+    setInternalObjects(update);
+    onObjectsChange?.(update(objects));
   };
 
   const removeOne = (id) => {
-    const next = characters.filter((c) => c.id !== id);
-    setInternalCharacters(next);
-    onCharactersChange?.(next);
+    const next = objects.filter((o) => o.id !== id);
+    setInternalObjects(next);
+    onObjectsChange?.(next);
   };
 
   return (
     <div className="text-xs">
       <div className="flex items-center justify-between mb-2">
         <div className="text-[11px] text-gray-500">
-          {characters.length} character{characters.length === 1 ? '' : 's'} · Edits persist across re-runs and feed image gen.
+          {objects.length} object{objects.length === 1 ? '' : 's'} · Recurring symbolic items extracted from prose.
         </div>
         <button
           onClick={() => { setCreating(true); setEditingId(null); }}
@@ -75,52 +69,52 @@ export default function CharactersBible({ workId, characters: charactersProp, on
         </button>
       </div>
 
-      {loading && characters.length === 0 && (
+      {loading && objects.length === 0 && (
         <div className="text-gray-500 italic">Loading…</div>
       )}
 
-      {!loading && characters.length === 0 && !creating && (
+      {!loading && objects.length === 0 && !creating && (
         <div className="text-gray-500 italic px-1 mb-2">
-          No profiles yet. Click "Refresh from prose" above to extract them, or add one manually.
+          No recurring objects yet. Click "Refresh from prose" above to extract them, or add one manually.
         </div>
       )}
 
       {creating && (
-        <CharacterEditor
+        <ObjectEditor
           workId={workId}
-          character={null}
-          onSaved={(c) => { upsert(c); setCreating(false); }}
+          object={null}
+          onSaved={(o) => { upsert(o); setCreating(false); }}
           onCancel={() => setCreating(false)}
         />
       )}
 
       <ul className="space-y-1.5">
-        {characters.map((c) => {
-          const isEditing = editingId === c.id;
+        {objects.map((o) => {
+          const isEditing = editingId === o.id;
           if (isEditing) {
             return (
-              <li key={c.id}>
-                <CharacterEditor
+              <li key={o.id}>
+                <ObjectEditor
                   workId={workId}
-                  character={c}
+                  object={o}
                   onSaved={(updated) => { upsert(updated); setEditingId(null); }}
-                  onDeleted={() => { removeOne(c.id); setEditingId(null); }}
+                  onDeleted={() => { removeOne(o.id); setEditingId(null); }}
                   onCancel={() => setEditingId(null)}
                 />
               </li>
             );
           }
-          const isHot = hotRefId === c.id;
+          const isHot = hotRefId === o.id;
           return (
             <li
-              key={c.id}
+              key={o.id}
               className={`border rounded transition-all ${
                 isHot
                   ? 'border-port-accent ring-2 ring-port-accent/40 shadow-[0_0_0_3px_rgba(59,130,246,0.08)]'
                   : 'border-port-border'
               }`}
             >
-              <CharacterRow character={c} onEdit={() => setEditingId(c.id)} readingTheme={readingTheme} />
+              <ObjectRow object={o} onEdit={() => setEditingId(o.id)} readingTheme={readingTheme} />
             </li>
           );
         })}
@@ -129,51 +123,54 @@ export default function CharactersBible({ workId, characters: charactersProp, on
   );
 }
 
-function CharacterRow({ character, onEdit, readingTheme }) {
+function ObjectRow({ object, onEdit, readingTheme }) {
   const light = readingTheme === 'light';
-  const blanks = CHARACTER_FIELDS.filter((f) => {
-    if (f.key === 'notes' || f.key === 'aliases') return false;
-    return !String(character[f.key] || '').trim();
+  const blanks = OBJECT_FIELDS.filter((f) => {
+    if (f.key === 'notes') return false;
+    return !String(object[f.key] || '').trim();
   });
   return (
     <div className="px-3 py-2">
       <div className="flex items-start gap-2">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className={`font-semibold ${light ? 'text-gray-900' : 'text-white'}`}>{character.name}</span>
-            {character.role && (
-              <span className="text-[9px] uppercase tracking-wider text-port-accent">{character.role}</span>
+            <Package size={11} className="text-amber-400 shrink-0" />
+            <span className={`font-semibold ${light ? 'text-gray-900' : 'text-white'}`}>{object.name}</span>
+            {object.aliases?.length > 0 && (
+              <span className="text-[10px] text-gray-500 truncate">aka {object.aliases.join(', ')}</span>
             )}
-            {character.source === 'ai' && (
+            {object.source === 'ai' && (
               <span className="text-[9px] text-gray-500" title="Created by AI extraction — edit to mark as user-curated">ai</span>
             )}
-            {character.aliases?.length > 0 && (
-              <span className="text-[10px] text-gray-500 truncate">aka {character.aliases.join(', ')}</span>
-            )}
           </div>
-          {character.physicalDescription ? (
+          {object.description ? (
             <div className={`text-[11px] mt-0.5 ${light ? 'text-gray-700' : 'text-gray-400'}`}>
-              {character.physicalDescription}
+              {object.description}
             </div>
           ) : (
-            <div className="text-[11px] mt-0.5 text-port-warning italic">No physical description — image gen will use scene context only</div>
+            <div className="text-[11px] mt-0.5 text-port-warning italic">No description yet</div>
+          )}
+          {object.significance && (
+            <div className="text-[10px] text-gray-500 mt-1">
+              <span className="uppercase tracking-wider text-[9px]">Significance:</span> {object.significance}
+            </div>
           )}
           {blanks.length > 0 && (
             <div className="text-[10px] text-port-warning mt-1 flex items-center gap-1">
               <AlertTriangle size={9} /> Missing: {blanks.map((f) => f.label.toLowerCase()).join(', ')}
             </div>
           )}
-          {character.missingFromProse?.length > 0 && (
+          {object.missingFromProse?.length > 0 && (
             <div className="text-[10px] text-gray-500 mt-1">
-              <span className="uppercase tracking-wider text-[9px]">Prose gaps:</span> {character.missingFromProse.join(', ')}
+              <span className="uppercase tracking-wider text-[9px]">Prose gaps:</span> {object.missingFromProse.join(', ')}
             </div>
           )}
         </div>
         <button
           onClick={onEdit}
           className="text-gray-500 hover:text-port-accent shrink-0"
-          title="Edit profile"
-          aria-label={`Edit ${character.name}`}
+          title="Edit object"
+          aria-label={`Edit ${object.name}`}
         >
           <Pencil size={11} />
         </button>
@@ -182,13 +179,14 @@ function CharacterRow({ character, onEdit, readingTheme }) {
   );
 }
 
-function CharacterEditor({ workId, character, onSaved, onDeleted, onCancel }) {
-  const isCreate = !character;
+function ObjectEditor({ workId, object, onSaved, onDeleted, onCancel }) {
+  const isCreate = !object;
   const [draft, setDraft] = useState(() => {
-    const seed = { name: character?.name || '' };
-    for (const f of CHARACTER_FIELDS) {
-      seed[f.key] = f.kind === 'csv' ? (character?.[f.key] || []).join(', ') : (character?.[f.key] || '');
-    }
+    const seed = {
+      name: object?.name || '',
+      aliases: (object?.aliases || []).join(', '),
+    };
+    for (const f of OBJECT_FIELDS) seed[f.key] = object?.[f.key] || '';
     return seed;
   });
   const [saving, setSaving] = useState(false);
@@ -201,15 +199,14 @@ function CharacterEditor({ workId, character, onSaved, onDeleted, onCancel }) {
       return;
     }
     setSaving(true);
-    const payload = { name: draft.name.trim() };
-    for (const f of CHARACTER_FIELDS) {
-      payload[f.key] = f.kind === 'csv'
-        ? draft[f.key].split(',').map((s) => s.trim()).filter(Boolean)
-        : draft[f.key];
-    }
+    const payload = {
+      name: draft.name.trim(),
+      aliases: draft.aliases.split(',').map((a) => a.trim()).filter(Boolean),
+    };
+    for (const f of OBJECT_FIELDS) payload[f.key] = draft[f.key];
     const result = await (isCreate
-      ? createWritersRoomCharacter(workId, payload)
-      : updateWritersRoomCharacter(workId, character.id, payload)
+      ? createWritersRoomObject(workId, payload)
+      : updateWritersRoomObject(workId, object.id, payload)
     ).catch((err) => {
       toast.error(`Save failed: ${err.message}`);
       return null;
@@ -221,15 +218,15 @@ function CharacterEditor({ workId, character, onSaved, onDeleted, onCancel }) {
   };
 
   const remove = async () => {
-    if (!character) return;
+    if (!object) return;
     setSaving(true);
-    const ok = await deleteWritersRoomCharacter(workId, character.id).then(() => true).catch((err) => {
+    const ok = await deleteWritersRoomObject(workId, object.id).then(() => true).catch((err) => {
       toast.error(`Delete failed: ${err.message}`);
       return false;
     });
     setSaving(false);
     if (ok) {
-      toast.success(`${character.name} removed`);
+      toast.success(`${object.name} removed`);
       onDeleted?.();
     }
   };
@@ -242,8 +239,9 @@ function CharacterEditor({ workId, character, onSaved, onDeleted, onCancel }) {
         <input
           value={draft.name}
           onChange={set('name')}
-          placeholder="Character name"
-          className={`${inputCls} font-semibold`}
+          placeholder="the letter, the fedora, her grandmother's locket…"
+          className={inputCls}
+          autoFocus
         />
         <button
           onClick={onCancel}
@@ -254,11 +252,15 @@ function CharacterEditor({ workId, character, onSaved, onDeleted, onCancel }) {
           <X size={12} />
         </button>
       </div>
-      {CHARACTER_FIELDS.map((f) => (
+      <label className="block">
+        <span className="text-[9px] uppercase tracking-wider text-gray-500">Aliases (comma-separated)</span>
+        <input value={draft.aliases} onChange={set('aliases')} placeholder="the envelope, the note" className={inputCls} />
+      </label>
+      {OBJECT_FIELDS.map((f) => (
         <label key={f.key} className="block">
           <span className="text-[9px] uppercase tracking-wider text-gray-500">{f.label}</span>
           {f.kind === 'multiline' ? (
-            <textarea value={draft[f.key]} onChange={set(f.key)} placeholder={f.placeholder} rows={f.key === 'physicalDescription' ? 3 : 2} className={`${inputCls} font-sans resize-y`} />
+            <textarea value={draft[f.key]} onChange={set(f.key)} placeholder={f.placeholder} rows={f.rows || 2} className={`${inputCls} font-sans resize-y`} />
           ) : (
             <input value={draft[f.key]} onChange={set(f.key)} placeholder={f.placeholder} className={inputCls} />
           )}

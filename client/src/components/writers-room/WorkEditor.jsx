@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   Save,
   GitCommit,
@@ -16,6 +17,8 @@ import {
   PenLine,
   Check,
   Loader2,
+  BookOpen,
+  Pencil,
 } from 'lucide-react';
 import toast from '../ui/Toast';
 import Drawer from '../Drawer';
@@ -29,13 +32,18 @@ import {
   runWritersRoomAnalysis,
   listWritersRoomCharacters,
   listWritersRoomSettings,
+  listWritersRoomObjects,
 } from '../../services/apiWritersRoom';
 import { STATUS_LABELS } from './labels';
 import { countWords } from '../../utils/formatters';
 import StoryboardPanel, { STORYBOARD_TAB, STORYBOARD_TAB_VALUES } from './StoryboardPanel';
 import AnalysisHistory from './AnalysisHistory';
+import ProseReader from './ProseReader';
+import ProseTokenPopover from './ProseTokenPopover';
+import WritersRoomDock from './WritersRoomDock';
+import useImageGenQueue from '../../hooks/useImageGenQueue';
 
-const ANALYSIS_KIND = { SCRIPT: 'script', CHARACTERS: 'characters', SETTINGS: 'settings', EVALUATE: 'evaluate', FORMAT: 'format' };
+const ANALYSIS_KIND = { SCRIPT: 'script', CHARACTERS: 'characters', SETTINGS: 'settings', OBJECTS: 'objects', EVALUATE: 'evaluate', FORMAT: 'format' };
 const DRAWER = { VERSIONS: 'versions', HISTORY: 'history' };
 const MOBILE_TAB = { WRITING: 'writing', STORYBOARD: 'storyboard' };
 
@@ -43,6 +51,7 @@ const ANALYSIS_LABELS = {
   [ANALYSIS_KIND.SCRIPT]: 'Adapt',
   [ANALYSIS_KIND.CHARACTERS]: 'Characters',
   [ANALYSIS_KIND.SETTINGS]: 'Settings',
+  [ANALYSIS_KIND.OBJECTS]: 'Objects',
   [ANALYSIS_KIND.EVALUATE]: 'Editorial pass',
   [ANALYSIS_KIND.FORMAT]: 'Format pass',
 };
@@ -87,19 +96,125 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   const [readingTheme, setReadingTheme] = useState(readReadingTheme);
   const [characters, setCharacters] = useState([]);
   const [settings, setSettings] = useState([]);
+  const [objects, setObjects] = useState([]);
   const [runningKind, setRunningKind] = useState(null);
   const [drawer, setDrawer] = useState(null);
   const [overflowOpen, setOverflowOpen] = useState(false);
   const [mobileTab, setMobileTab] = useState(MOBILE_TAB.WRITING);
   const [activeSceneId, setActiveSceneId] = useState(null);
   const [sidebarTab, setSidebarTab] = useState(readSidebarTab);
+  // Scenes from the latest script analysis — populated by StoryboardPanel via
+  // onScenesChange so ProseReader can mark scene boundaries in Read view.
+  const [latestScenes, setLatestScenes] = useState([]);
+  // Token popover state. `pop.kind`/`pop.refId` identify the hovered token,
+  // `pop.anchor` is a DOMRect captured at hover time. `pinned` keeps the
+  // popover open after click so the user can move into it (e.g. to click
+  // "Open profile") without it dismissing.
+  const [pop, setPop] = useState(null);
+  // Cross-link hot states: `hotRef` ({kind,refId}) ties prose tokens to
+  // SceneCard chips and to bible rows; `hotScene` ties SceneCard hover to
+  // the matching ProseReader section. Both are nullable.
+  const [hotRef, setHotRef] = useState(null);
+  const [hotScene, setHotScene] = useState(null);
+  // Live image-gen queue scoped to this page. SceneCard calls
+  // queueRegister({jobId, sceneId, sceneLabel}) on render kickoff so the dock
+  // can label rows; the hook subscribes to image-gen:* socket events globally.
+  const { queue: renderQueue, runningCount: renderRunningCount, register: queueRegister, stopAll: queueStopAll, stopOne: queueStopOne } = useImageGenQueue();
+
+  // View mode (Edit | Read) is URL-driven so it deep-links and survives reloads.
+  // ?view=read switches to ProseReader; default is the existing textarea.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const viewMode = searchParams.get('view') === 'read' ? 'read' : 'edit';
+  const setViewMode = useCallback((mode) => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      if (mode === 'read') next.set('view', 'read'); else next.delete('view');
+      return next;
+    }, { replace: true });
+  }, [setSearchParams]);
 
   useEffect(() => {
     try { window.localStorage.setItem(SIDEBAR_TAB_KEY, sidebarTab); } catch { /* sandboxed storage */ }
   }, [sidebarTab]);
 
   const textareaRef = useRef(null);
+  const readerRef = useRef(null);
   const overflowRef = useRef(null);
+  const scrollAnimRef = useRef(null);
+  // Hover-delay timers for the prose-token popover. 200ms open, 150ms close
+  // so the popover doesn't flicker when the cursor crosses a token.
+  const popOpenTimerRef = useRef(null);
+  const popCloseTimerRef = useRef(null);
+
+  const handleTokenEnter = useCallback(({ kind, refId, anchor }) => {
+    if (popCloseTimerRef.current) {
+      clearTimeout(popCloseTimerRef.current);
+      popCloseTimerRef.current = null;
+    }
+    if (popOpenTimerRef.current) clearTimeout(popOpenTimerRef.current);
+    setHotRef({ kind, refId });
+    const rect = anchor?.getBoundingClientRect?.() || null;
+    popOpenTimerRef.current = setTimeout(() => {
+      setPop({ kind, refId, anchor: rect, pinned: false });
+    }, 200);
+  }, []);
+  const handleTokenLeave = useCallback(() => {
+    if (popOpenTimerRef.current) {
+      clearTimeout(popOpenTimerRef.current);
+      popOpenTimerRef.current = null;
+    }
+    popCloseTimerRef.current = setTimeout(() => {
+      setPop((prev) => (prev?.pinned ? prev : null));
+      setHotRef(null);
+    }, 150);
+  }, []);
+  const handleTokenClick = useCallback(({ kind, refId, anchor }) => {
+    if (popOpenTimerRef.current) clearTimeout(popOpenTimerRef.current);
+    if (popCloseTimerRef.current) clearTimeout(popCloseTimerRef.current);
+    const rect = anchor?.getBoundingClientRect?.() || null;
+    setPop({ kind, refId, anchor: rect, pinned: true });
+  }, []);
+  const handlePopClose = useCallback(() => setPop(null), []);
+  const handleOpenProfile = useCallback(({ kind }) => {
+    setPop(null);
+    if (kind === 'char') setSidebarTab(STORYBOARD_TAB.CHARACTERS);
+    else if (kind === 'place') setSidebarTab(STORYBOARD_TAB.WORLD);
+    else if (kind === 'object' && STORYBOARD_TAB.OBJECTS) setSidebarTab(STORYBOARD_TAB.OBJECTS);
+    setMobileTab(MOBILE_TAB.STORYBOARD);
+  }, []);
+
+  useEffect(() => () => {
+    if (popOpenTimerRef.current) clearTimeout(popOpenTimerRef.current);
+    if (popCloseTimerRef.current) clearTimeout(popCloseTimerRef.current);
+  }, []);
+
+  const smoothScrollTextarea = useCallback((ta, targetTop, ms = 220) => {
+    if (!ta) return;
+    if (scrollAnimRef.current) {
+      cancelAnimationFrame(scrollAnimRef.current);
+      scrollAnimRef.current = null;
+    }
+    const startTop = ta.scrollTop;
+    const delta = targetTop - startTop;
+    if (Math.abs(delta) < 1) { ta.scrollTop = targetTop; return; }
+    const startTs = performance.now();
+    const ease = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+    const step = (ts) => {
+      const elapsed = ts - startTs;
+      const t = Math.min(1, elapsed / ms);
+      ta.scrollTop = startTop + delta * ease(t);
+      if (t < 1) {
+        scrollAnimRef.current = requestAnimationFrame(step);
+      } else {
+        scrollAnimRef.current = null;
+      }
+    };
+    scrollAnimRef.current = requestAnimationFrame(step);
+  }, []);
+
+  useEffect(() => () => {
+    if (scrollAnimRef.current) cancelAnimationFrame(scrollAnimRef.current);
+  }, []);
 
   // Rehydrate body/title when the parent swaps the active work OR switches to
   // a different draft version of the same work.
@@ -123,9 +238,11 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
     Promise.all([
       listWritersRoomCharacters(work.id).catch(() => []),
       listWritersRoomSettings(work.id).catch(() => []),
-    ]).then(([chars, sets]) => {
+      listWritersRoomObjects(work.id).catch(() => []),
+    ]).then(([chars, sets, objs]) => {
       setCharacters(chars || []);
       setSettings(sets || []);
+      setObjects(objs || []);
     });
   }, [work.id]);
 
@@ -261,6 +378,9 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
     if (kind === 'settings' && Array.isArray(snapshot.result?.mergedProfiles)) {
       setSettings(snapshot.result.mergedProfiles);
     }
+    if (kind === 'objects' && Array.isArray(snapshot.result?.mergedProfiles)) {
+      setObjects(snapshot.result.mergedProfiles);
+    }
     if (kind === 'format' && snapshot.result?.formattedBody) {
       setBody(snapshot.result.formattedBody);
       toast('Format applied to draft buffer — save to persist', { icon: '💾' });
@@ -296,10 +416,24 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   // always re-scroll on focus alone if the caret was already visible, so we
   // always set scrollTop explicitly after focusing.
   const jumpToScene = useCallback((scene, sceneIndex = -1, totalScenes = 0) => {
-    const ta = textareaRef.current;
-    if (!ta || !scene || !body) return;
+    if (!scene) return;
     setActiveSceneId(scene.id || null);
     setMobileTab(MOBILE_TAB.WRITING);
+
+    // Read view: each scene section has a stable DOM anchor — scrollIntoView
+    // is the natural fit and animates by default in modern browsers.
+    if (viewMode === 'read' && scene.id) {
+      const reader = readerRef.current;
+      const el = reader?.querySelector?.(`#scene-anchor-${CSS.escape(scene.id)}`);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        return;
+      }
+      // Fall through to the textarea path if the section wasn't found.
+    }
+
+    const ta = textareaRef.current;
+    if (!ta || !body) return;
     const heading = scene.heading || '';
     let idx = -1;
     for (const prefix of ['## ', '### ', '# ', '']) {
@@ -328,8 +462,8 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
     } else {
       return;
     }
-    ta.scrollTop = target;
-  }, [body]);
+    smoothScrollTextarea(ta, target);
+  }, [body, viewMode, smoothScrollTextarea]);
 
   // Per-scene Debug menu actions — until scoped tools land, route to the
   // most relevant tab/drawer.
@@ -416,6 +550,32 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
         >
           {Object.entries(STATUS_LABELS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
         </select>
+        <div className="flex items-center bg-port-bg border border-port-border rounded p-0.5" role="tablist" aria-label="View mode">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={viewMode === 'edit'}
+            onClick={() => setViewMode('edit')}
+            className={`flex items-center gap-1 px-2 py-0.5 text-[11px] rounded ${
+              viewMode === 'edit' ? 'bg-port-card text-white' : 'text-gray-400 hover:text-gray-200'
+            }`}
+            title="Edit prose (textarea)"
+          >
+            <Pencil size={11} /> Edit
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={viewMode === 'read'}
+            onClick={() => setViewMode('read')}
+            className={`flex items-center gap-1 px-2 py-0.5 text-[11px] rounded ${
+              viewMode === 'read' ? 'bg-port-card text-white' : 'text-gray-400 hover:text-gray-200'
+            }`}
+            title="Read view with scene anchors"
+          >
+            <BookOpen size={11} /> Read
+          </button>
+        </div>
         <button
           onClick={handleSave}
           disabled={!dirty || saving}
@@ -485,19 +645,38 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
 
       <div ref={splitRef} className="flex-1 flex flex-col lg:flex-row min-h-0">
         <div className={`relative min-h-0 flex-1 ${mobileTab === MOBILE_TAB.STORYBOARD ? 'hidden lg:block' : 'block'}`}>
-          <textarea
-            ref={textareaRef}
-            value={body}
-            onChange={(e) => setBody(e.target.value)}
-            placeholder="Start writing… Use # Chapter, ## Scene, ### Beat headings to outline."
-            style={readingTheme === 'light'
-              ? { '--port-input-bg': 'var(--wr-reading-paper)', color: '#1a1a1a' }
-              : undefined}
-            className="w-full h-full resize-none px-6 py-6 font-serif text-base leading-relaxed focus:outline-none"
-            spellCheck
-          />
+          {viewMode === 'read' ? (
+            <div ref={readerRef} className="w-full h-full">
+              <ProseReader
+                body={body}
+                scenes={latestScenes}
+                characters={characters}
+                settings={settings}
+                objects={objects}
+                readingTheme={readingTheme}
+                activeSceneId={activeSceneId}
+                hotRef={hotRef}
+                hotScene={hotScene}
+                onTokenEnter={handleTokenEnter}
+                onTokenLeave={handleTokenLeave}
+                onTokenClick={handleTokenClick}
+              />
+            </div>
+          ) : (
+            <textarea
+              ref={textareaRef}
+              value={body}
+              onChange={(e) => setBody(e.target.value)}
+              placeholder="Start writing… Use # Chapter, ## Scene, ### Beat headings to outline."
+              style={readingTheme === 'light'
+                ? { '--port-input-bg': 'var(--wr-reading-paper)', color: '#1a1a1a' }
+                : undefined}
+              className="w-full h-full resize-none px-6 py-6 font-serif text-base leading-relaxed focus:outline-none"
+              spellCheck
+            />
+          )}
           <div
-            className={`absolute bottom-2 right-3 flex items-center gap-3 text-[11px] px-2 py-1 rounded ${
+            className={`absolute bottom-2 right-3 flex items-center gap-3 text-[11px] px-2 py-1 rounded pointer-events-none ${
               readingTheme === 'light' ? 'text-gray-700 bg-[var(--wr-reading-paper)]/85' : 'text-gray-500 bg-port-bg/80'
             }`}
           >
@@ -529,8 +708,12 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
             work={work}
             characters={characters}
             settings={settings}
+            objects={objects}
             onCharactersChange={setCharacters}
             onSettingsChange={setSettings}
+            onObjectsChange={setObjects}
+            onRunObjects={() => runAnalysis(ANALYSIS_KIND.OBJECTS)}
+            onScenesChange={setLatestScenes}
             onJumpToScene={jumpToScene}
             onDebug={handleDebug}
             onRunAdapt={() => runAnalysis(ANALYSIS_KIND.SCRIPT)}
@@ -542,11 +725,34 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
             readingTheme={readingTheme}
             activeSceneId={activeSceneId}
             onStyleChange={commitImageStyle}
+            hotRef={hotRef}
+            onSceneHover={setHotScene}
+            onSceneRenderStart={queueRegister}
             tab={sidebarTab}
             onTabChange={setSidebarTab}
           />
         </aside>
       </div>
+
+      <ProseTokenPopover
+        open={!!pop}
+        pinned={!!pop?.pinned}
+        anchor={pop?.anchor || null}
+        kind={pop?.kind}
+        refId={pop?.refId}
+        characters={characters}
+        settings={settings}
+        objects={objects}
+        onOpenProfile={handleOpenProfile}
+        onClose={handlePopClose}
+      />
+
+      <WritersRoomDock
+        queue={renderQueue}
+        runningCount={renderRunningCount}
+        onStopAll={queueStopAll}
+        onStopOne={queueStopOne}
+      />
 
       <Drawer open={drawer === DRAWER.VERSIONS} onClose={() => setDrawer(null)} title="Versions">
         <VersionsList work={work} dirty={dirty} onSwitch={(id) => { switchToDraft(id); setDrawer(null); }} />

@@ -38,6 +38,10 @@ const SceneCard = forwardRef(function SceneCard({
   onJumpToProse = null,
   onDebug = null,
   onRunningChange = null,
+  hotRef = null,
+  onHoverEnter = null,
+  onHoverLeave = null,
+  onRenderStart = null,
 }, ref) {
   const light = readingTheme === 'light';
   const matchedCharacters = useMemo(
@@ -48,15 +52,6 @@ const SceneCard = forwardRef(function SceneCard({
     () => matchSceneSetting(scene.slugline, settingByKey),
     [scene.slugline, settingByKey]
   );
-  const matchedNameKeys = useMemo(() => {
-    const keys = new Set();
-    for (const c of matchedCharacters) {
-      keys.add(normCharKey(c.name));
-      for (const a of c.aliases || []) keys.add(normCharKey(a));
-    }
-    return keys;
-  }, [matchedCharacters]);
-
   const [genStatus, setGenStatus] = useState(initialImage ? 'done' : 'idle');
   const [generated, setGenerated] = useState(initialImage
     ? { path: `/data/images/${initialImage.filename}`, jobId: initialImage.jobId, prompt: initialImage.prompt }
@@ -177,6 +172,13 @@ const SceneCard = forwardRef(function SceneCard({
     });
     if (!res) return;
     jobIdRef.current = res.jobId || res.generationId || null;
+    if (jobIdRef.current && onRenderStart) {
+      onRenderStart({
+        jobId: jobIdRef.current,
+        sceneId: scene.id,
+        sceneLabel: `S${String(scene.number ?? '').padStart(2, '0')} ${scene.heading || ''}`.trim() || (scene.heading || 'Scene'),
+      });
+    }
     setGenerated({ path: res.path, jobId: res.jobId, prompt });
     if (res.status !== 'queued' && res.status !== 'running') {
       setGenStatus('done');
@@ -214,15 +216,23 @@ const SceneCard = forwardRef(function SceneCard({
     : 'placeholder';
 
   const cardBorder = isActive
-    ? 'border-port-accent shadow-[0_0_0_1px_rgba(59,130,246,0.5)]'
+    ? 'border-port-accent ring-2 ring-port-accent/20 shadow-[0_0_0_3px_rgba(59,130,246,0.08)]'
     : light ? 'border-gray-300' : 'border-port-border';
+  const cardBg = isActive
+    ? (light ? 'bg-port-accent/10 text-gray-900' : 'bg-port-accent/[0.06]')
+    : (light ? 'bg-[var(--wr-reading-paper)] text-gray-900' : 'bg-port-card/40');
+
+  // hotRef shape: {kind, refId} or null. Char/object hot states ring the
+  // matching name chip; place hot state rings the slugline.
+  const hotCharId = hotRef?.kind === 'char' ? hotRef.refId : null;
+  const hotPlaceId = hotRef?.kind === 'place' ? hotRef.refId : null;
 
   return (
     <div
       data-scene-id={scene.id}
-      className={`border rounded-lg p-2 space-y-1.5 transition-colors ${cardBorder} ${
-        light ? 'bg-[var(--wr-reading-paper)] text-gray-900' : 'bg-port-card/40'
-      }`}
+      onMouseEnter={onHoverEnter || undefined}
+      onMouseLeave={onHoverLeave || undefined}
+      className={`border rounded-lg p-2 space-y-1.5 transition-colors ${cardBorder} ${cardBg}`}
     >
       <div className="flex items-start gap-2">
         <button
@@ -236,7 +246,13 @@ const SceneCard = forwardRef(function SceneCard({
             {scene.heading}
           </div>
           {scene.slugline && (
-            <div className="text-[10px] text-port-accent uppercase tracking-wide truncate">
+            <div
+              className={`text-[10px] uppercase tracking-wide truncate transition-all ${
+                hotPlaceId && matchedSetting?.id === hotPlaceId
+                  ? 'text-white bg-port-accent/30 ring-1 ring-port-accent rounded px-1 -mx-1'
+                  : 'text-port-accent'
+              }`}
+            >
               {scene.slugline}
             </div>
           )}
@@ -333,15 +349,22 @@ const SceneCard = forwardRef(function SceneCard({
       {scene.characters?.length > 0 && (
         <div className="flex flex-wrap gap-1">
           {scene.characters.map((c, i) => {
-            const isMatched = matchedNameKeys.has(normCharKey(c));
+            const matchedProfile = matchedCharacters.find((m) => {
+              if (normCharKey(m.name) === normCharKey(c)) return true;
+              return (m.aliases || []).some((a) => normCharKey(a) === normCharKey(c));
+            });
+            const isMatched = !!matchedProfile;
+            const isHot = isMatched && hotCharId && matchedProfile.id === hotCharId;
             return (
               <span
                 key={i}
                 title={isMatched ? 'Profile linked' : 'No matching profile'}
-                className={`px-1.5 py-0.5 border rounded text-[9px] uppercase tracking-wider ${
-                  isMatched
-                    ? 'border-port-accent text-port-accent bg-port-accent/10'
-                    : light ? 'bg-white border-gray-300 text-gray-700' : 'bg-port-bg border-port-border'
+                className={`px-1.5 py-0.5 border rounded text-[9px] uppercase tracking-wider transition-all ${
+                  isHot
+                    ? 'border-port-accent text-white bg-port-accent/30 ring-1 ring-port-accent'
+                    : isMatched
+                      ? 'border-port-accent text-port-accent bg-port-accent/10'
+                      : light ? 'bg-white border-gray-300 text-gray-700' : 'bg-port-bg border-port-border'
                 }`}>
                 {c}
               </span>

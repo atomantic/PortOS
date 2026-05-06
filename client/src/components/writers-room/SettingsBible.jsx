@@ -24,7 +24,7 @@ const SETTING_FIELDS = [
 // Controlled vs. uncontrolled: caller may pass `settings` to keep multiple
 // mounts in sync (e.g. drawer + storyboard chip count). When omitted we fetch
 // and own the list so this can stand alone.
-export default function SettingsBible({ workId, settings: settingsProp, onSettingsChange, readingTheme = 'dark' }) {
+export default function SettingsBible({ workId, settings: settingsProp, onSettingsChange, readingTheme = 'dark', hotRefId = null }) {
   const [internalSettings, setInternalSettings] = useState(settingsProp || []);
   const settings = settingsProp ?? internalSettings;
   const [editingId, setEditingId] = useState(null);
@@ -110,8 +110,16 @@ export default function SettingsBible({ workId, settings: settingsProp, onSettin
               </li>
             );
           }
+          const isHot = hotRefId === s.id;
           return (
-            <li key={s.id} className="border border-port-border rounded">
+            <li
+              key={s.id}
+              className={`border rounded transition-all ${
+                isHot
+                  ? 'border-port-accent ring-2 ring-port-accent/40 shadow-[0_0_0_3px_rgba(59,130,246,0.08)]'
+                  : 'border-port-border'
+              }`}
+            >
               <SettingRow setting={s} onEdit={() => setEditingId(s.id)} readingTheme={readingTheme} />
             </li>
           );

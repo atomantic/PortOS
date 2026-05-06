@@ -583,6 +583,22 @@ export const writersRoomSettingUpdateSchema = z.object({
   notes: wrSettingTextField.optional(),
 }).strict();
 
+const wrObjectTextField = z.string().max(2000);
+export const writersRoomObjectCreateSchema = z.object({
+  name: z.string().trim().min(1).max(200),
+  aliases: z.array(z.string().trim().min(1).max(200)).max(20).optional(),
+  description: wrObjectTextField.optional(),
+  significance: wrObjectTextField.optional(),
+  notes: wrObjectTextField.optional(),
+}).strict();
+export const writersRoomObjectUpdateSchema = z.object({
+  name: z.string().trim().min(1).max(200).optional(),
+  aliases: z.array(z.string().trim().min(1).max(200)).max(20).optional(),
+  description: wrObjectTextField.optional(),
+  significance: wrObjectTextField.optional(),
+  notes: wrObjectTextField.optional(),
+}).strict();
+
 // =============================================================================
 // FEATURE AGENT SCHEMAS
 // =============================================================================
