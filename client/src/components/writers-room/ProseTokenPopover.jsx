@@ -86,7 +86,7 @@ const KIND_LABEL = {
 export default function ProseTokenPopover({
   open,
   pinned,
-  anchor,
+  anchorEl,
   kind,
   refId,
   characters = [],
@@ -101,19 +101,24 @@ export default function ProseTokenPopover({
   const cardRef = useRef(null);
 
   useEffect(() => {
-    if (!open || !anchor) { setPos(null); return; }
-    setPos(clampToViewport(anchor));
-  }, [open, anchor]);
+    if (!open || !anchorEl) { setPos(null); return; }
+    setPos(clampToViewport(anchorEl.getBoundingClientRect()));
+  }, [open, anchorEl]);
 
   // Once the popover has rendered, observe its actual size and reposition
   // whenever the height changes (font load, dynamic content, viewport
   // resize). The initial estimate-based pos avoids a first-paint flicker.
+  // Also re-reads the anchor's live getBoundingClientRect on every reflow so
+  // scroll-induced position drift is corrected. Listens for window scroll
+  // (capture, so any scrolling ancestor triggers it) and resize so a pinned
+  // popover stays attached to its token even as the user scrolls the prose.
   useEffect(() => {
-    if (!open || !anchor || !cardRef.current) return undefined;
+    if (!open || !anchorEl || !cardRef.current) return undefined;
     const el = cardRef.current;
     const reflow = () => {
+      const rect = anchorEl.getBoundingClientRect();
       const measured = el.offsetHeight;
-      const next = clampToViewport(anchor, measured);
+      const next = clampToViewport(rect, measured);
       if (!next) return;
       setPos((prev) => (
         prev && next.top === prev.top && next.left === prev.left && next.width === prev.width
@@ -122,11 +127,19 @@ export default function ProseTokenPopover({
       ));
     };
     reflow();
-    if (typeof ResizeObserver === 'undefined') return undefined;
-    const ro = new ResizeObserver(reflow);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [open, anchor, refId, kind]);
+    let ro = null;
+    if (typeof ResizeObserver !== 'undefined') {
+      ro = new ResizeObserver(reflow);
+      ro.observe(el);
+    }
+    window.addEventListener('scroll', reflow, true);
+    window.addEventListener('resize', reflow);
+    return () => {
+      if (ro) ro.disconnect();
+      window.removeEventListener('scroll', reflow, true);
+      window.removeEventListener('resize', reflow);
+    };
+  }, [open, anchorEl, refId, kind]);
 
   const handleMouseEnter = useCallback(() => {
     onPopoverEnter?.();

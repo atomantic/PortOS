@@ -146,6 +146,9 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   const popOpenTimerRef = useRef(null);
   const popCloseTimerRef = useRef(null);
 
+  // Pass the anchor ELEMENT down (not a frozen DOMRect) so the popover can
+  // re-read getBoundingClientRect on scroll/resize and stay attached to its
+  // token. A captured rect goes stale the moment the user scrolls.
   const handleTokenEnter = useCallback(({ kind, refId, anchor }) => {
     if (popCloseTimerRef.current) {
       clearTimeout(popCloseTimerRef.current);
@@ -153,9 +156,8 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
     }
     if (popOpenTimerRef.current) clearTimeout(popOpenTimerRef.current);
     setHotRef({ kind, refId });
-    const rect = anchor?.getBoundingClientRect?.() || null;
     popOpenTimerRef.current = setTimeout(() => {
-      setPop({ kind, refId, anchor: rect, pinned: false });
+      setPop({ kind, refId, anchorEl: anchor, pinned: false });
     }, 200);
   }, []);
   // Schedule the 150ms grace close. Idempotent: clears any existing close
@@ -163,6 +165,11 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   // timeouts that fire later and clear pop/hotRef unexpectedly. The timer
   // also nulls its own ref after firing so external clearTimeouts on a stale
   // id are a no-op.
+  //
+  // hotRef is only cleared when the popover actually closes (i.e. it wasn't
+  // pinned). When pinned, the popover stays visible and the cross-link
+  // highlights (SceneCard chips / bible rows) must stay lit too — clearing
+  // hotRef there would leave the popover orphaned from its visual targets.
   const scheduleClose = useCallback(() => {
     if (popCloseTimerRef.current) {
       clearTimeout(popCloseTimerRef.current);
@@ -170,8 +177,12 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
     }
     popCloseTimerRef.current = setTimeout(() => {
       popCloseTimerRef.current = null;
-      setPop((prev) => (prev?.pinned ? prev : null));
-      setHotRef(null);
+      setPop((prev) => {
+        if (prev?.pinned) return prev;
+        // Only drop hotRef when we actually close the popover.
+        setHotRef(null);
+        return null;
+      });
     }, 150);
   }, []);
   const handleTokenLeave = useCallback(() => {
@@ -201,8 +212,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   const handleTokenClick = useCallback(({ kind, refId, anchor }) => {
     if (popOpenTimerRef.current) clearTimeout(popOpenTimerRef.current);
     if (popCloseTimerRef.current) clearTimeout(popCloseTimerRef.current);
-    const rect = anchor?.getBoundingClientRect?.() || null;
-    setPop({ kind, refId, anchor: rect, pinned: true });
+    setPop({ kind, refId, anchorEl: anchor, pinned: true });
   }, []);
   // Closing the popover (whether by Escape, X click, or auto-leave) must also
   // drop the hot-state and any pending hover timers; otherwise SceneCard chips
@@ -799,7 +809,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
       <ProseTokenPopover
         open={!!pop}
         pinned={!!pop?.pinned}
-        anchor={pop?.anchor || null}
+        anchorEl={pop?.anchorEl || null}
         kind={pop?.kind}
         refId={pop?.refId}
         characters={characters}
