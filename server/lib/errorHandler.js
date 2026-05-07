@@ -28,6 +28,18 @@ export class ServerError extends Error {
  * Wrap async route handlers to catch errors and emit Socket.IO events
  * Also sends error response to client
  */
+/**
+ * Translate a Zod safeParse() failure into the standard `Validation failed:`
+ * ServerError shape that the rest of PortOS speaks. Pass the result of
+ * `schema.safeParse(...)` after confirming `.success === false`.
+ */
+export function failValidation(parsed) {
+  throw new ServerError(
+    `Validation failed: ${parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join(', ')}`,
+    { status: 400, code: 'VALIDATION_ERROR' },
+  );
+}
+
 export function asyncHandler(fn) {
   return (req, res, next) => {
     Promise.resolve(fn(req, res, next)).catch((err) => {

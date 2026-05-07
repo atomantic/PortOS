@@ -16,6 +16,7 @@ import DocumentsTab from './tabs/DocumentsTab';
 import GitTab from './tabs/GitTab';
 import GsdTab from './tabs/GsdTab';
 import ProcessesTab from './tabs/ProcessesTab';
+import ReferencesTab from './tabs/ReferencesTab';
 import DatadogTab from './tabs/DatadogTab';
 import UpdateTab from './tabs/UpdateTab';
 
@@ -137,6 +138,8 @@ export default function AppDetailView() {
         return <GsdTab appId={appId} repoPath={app.repoPath} />;
       case 'processes':
         return <ProcessesTab pm2ProcessNames={app.pm2ProcessNames} />;
+      case 'references':
+        return <ReferencesTab appId={appId} appName={app.name} />;
       case 'update':
         if (app.id !== api.PORTOS_APP_ID) {
           return (

@@ -178,6 +178,30 @@ export const datadogConfigSchema = z.object({
   environment: z.string().optional()
 });
 
+// Reference-repo entry. Each app can list upstream repos it borrows code from;
+// the `reference-watch` scheduled task fetches each one, finds commits since
+// `lastReviewedSha`, and produces a REFERENCE_REVIEW.md proposal in the app's
+// repo. `notes` is the free-text "what we use from this repo" field — fed
+// into the review prompt so the agent knows which features in our app are
+// load-bearing for the watch.
+export const referenceRepoSchema = z.object({
+  id: z.string().min(1).max(64),
+  name: z.string().min(1).max(120),
+  // Either a clonable URL (https://github.com/owner/repo or git@…) or a
+  // local path. The service detects which by checking for "://" / "@".
+  repoUrl: z.string().min(1).max(500),
+  branch: z.string().max(120).optional().default('main'),
+  lastReviewedSha: z.string().length(40).nullable().optional(),
+  lastCheckedAt: z.string().datetime().nullable().optional(),
+  notes: z.string().max(4000).optional().default(''),
+  // Last action's outcome — used by the UI to highlight refs needing
+  // attention. 'needs-clone' means the managed clone hasn't been
+  // initialized yet (first run will populate it).
+  status: z.enum(['ok', 'checking', 'error', 'needs-clone']).optional().default('needs-clone'),
+  lastError: z.string().max(2000).nullable().optional(),
+  createdAt: z.string().datetime().optional()
+});
+
 // App schema for registration/update
 export const appSchema = z.object({
   name: z.string().min(1).max(100),
@@ -210,7 +234,32 @@ export const appSchema = z.object({
   defaultUseWorktree: z.boolean().optional(),
   defaultOpenPR: z.boolean().optional(),
   jira: jiraConfigSchema.optional().nullable(),
-  datadog: datadogConfigSchema.optional().nullable()
+  datadog: datadogConfigSchema.optional().nullable(),
+  // Upstream code we borrow from. The reference-watch scheduled task scans
+  // each ref since its lastReviewedSha and produces a REFERENCE_REVIEW.md
+  // proposal in this app's repo.
+  referenceRepos: z.array(referenceRepoSchema).optional()
+});
+
+// Used by routes that POST a NEW reference repo (id/createdAt are server-
+// assigned, lastReviewedSha/lastCheckedAt populate after the first check).
+export const referenceRepoCreateSchema = z.object({
+  name: z.string().min(1).max(120),
+  repoUrl: z.string().min(1).max(500),
+  branch: z.string().max(120).optional(),
+  notes: z.string().max(4000).optional()
+});
+
+// Patch schema — every field optional (note: NOT lastReviewedSha; that's
+// updated by the service layer after a successful check).
+export const referenceRepoUpdateSchema = z.object({
+  name: z.string().min(1).max(120).optional(),
+  repoUrl: z.string().min(1).max(500).optional(),
+  branch: z.string().max(120).optional(),
+  notes: z.string().max(4000).optional(),
+  // Allow the UI to manually pin lastReviewedSha (e.g. "I read these
+  // commits already, mark them reviewed without spawning an agent").
+  lastReviewedSha: z.string().length(40).nullable().optional()
 });
 
 // Partial schema for updates

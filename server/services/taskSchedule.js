@@ -897,7 +897,76 @@ Repository: {repoPath}
 
 ## Review Checklist
 
-{reviewChecklist}`
+{reviewChecklist}`,
+
+  'reference-watch': `[Improvement: {appName}] Reference Repo Review
+
+You are reviewing upstream commits from one or more reference repositories that
+{appName} borrows code or ideas from. Your job is to PROPOSE adoptions, not
+implement them. Read-only mode — do NOT modify {appName}'s source.
+
+Repository: {repoPath}
+
+## References
+
+{referenceData}
+
+## What to do
+
+For each reference above:
+
+1. For every commit in the "Commits to review" list, read its diff via
+   \`git -C <source clone path> show <sha>\` (the path is in the reference's
+   block above). For commits with many files, focus on diffs that match the
+   "What we use from this repo" notes — they're the load-bearing intersection.
+
+2. Decide whether the change is worth adopting in {appName}. Use these
+   criteria, in priority order:
+   - Does it fix a bug we'd hit too? (high priority)
+   - Does it expose a capability we artificially restrict? (e.g. exposing a
+     library API that we're already using a constrained subset of)
+   - Does it improve performance / correctness on a code path we share?
+   - Is it a docs / install / packaging fix specific to upstream's distribution
+     model? (skip — those rarely apply)
+
+3. Write a single \`REFERENCE_REVIEW.md\` at the root of {repoPath} with this
+   structure:
+
+   \`\`\`markdown
+   # Reference Review — <today's date>
+
+   ## Summary
+
+   <1-3 sentences: what's the gist across all refs?>
+
+   ## Adopt — high value
+
+   For each commit you'd recommend pulling in:
+   - **<short title>** — \`<sha>\` from <ref name>
+     - Why it matters for {appName}: <1-2 sentences tied to our notes>
+     - What to change: <specific files + functions, e.g. server/services/foo.js
+       buildArgs() — accept new arg, plumb to subprocess>
+     - Estimated scope: <small / medium / large>
+
+   ## Maybe — needs human call
+
+   <commits where the value is real but the fit is unclear; what to ask>
+
+   ## Skip — not for us
+
+   <commits we should explicitly NOT adopt + one-line reason each>
+
+   ## Per-reference SHA pointers
+
+   - <ref name>: latest reviewed in this report = \`<head sha>\`
+   \`\`\`
+
+4. Do NOT create branches, commits, PRs, or any code edits. The user reviews
+   REFERENCE_REVIEW.md and decides what to implement.
+
+5. Once REFERENCE_REVIEW.md is written, your final assistant message must be a
+   2-3 sentence summary of how many commits you reviewed and how many you
+   marked Adopt vs. Maybe vs. Skip.`
 };
 
 // Prompt versions — bump when a default prompt changes so existing instances auto-upgrade.
@@ -1280,7 +1349,11 @@ export const SELF_IMPROVEMENT_TASK_TYPES = [
   'accessibility', 'branch-cleanup', 'console-errors', 'dependency-updates', 'documentation',
   'ui-bugs', 'mobile-responsive', 'feature-ideas', 'error-handling',
   'typing', 'release-check', 'pr-reviewer', 'code-reviewer-a', 'code-reviewer-b',
-  'jira-sprint-manager', 'jira-status-report', 'do-replan'
+  'jira-sprint-manager', 'jira-status-report', 'do-replan',
+  // Watches `referenceRepos` configured on the app — fetches each upstream
+  // repo, finds commits since lastReviewedSha, and writes a propose-only
+  // REFERENCE_REVIEW.md with adoption recommendations to the app's repo.
+  'reference-watch'
 ];
 
 // Shared config for code-reviewer-a and code-reviewer-b (two instances for independent provider/model configuration)
@@ -1307,7 +1380,11 @@ const DEFAULT_TASK_INTERVALS = {
   'code-reviewer-b':     { ...CODE_REVIEWER_INTERVAL },
   'jira-sprint-manager': { type: INTERVAL_TYPES.DAILY, enabled: false, weekdaysOnly: true, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: true, openPR: true, simplify: true } },
   'jira-status-report':  { type: INTERVAL_TYPES.WEEKLY, enabled: false, weekdaysOnly: true, providerId: null, model: null, prompt: null, taskMetadata: { readOnly: true } },
-  'do-replan':           { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: true, openPR: true } }
+  'do-replan':           { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: true, openPR: true } },
+  // Read-only by default — the agent's job is to propose, not implement.
+  // Worktree off because the task body itself reads from data/cos/reference-repos
+  // (managed clones the user can't accidentally clobber).
+  'reference-watch':     { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { readOnly: true } }
 };
 
 /**

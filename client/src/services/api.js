@@ -5,6 +5,7 @@ export * from './apiCore.js';
 export * from './apiHealth.js';
 export * from './apiSystem.js';
 export * from './apiApps.js';
+export * from './apiReferenceRepos.js';
 export * from './apiPorts.js';
 export * from './apiScaffold.js';
 export * from './apiProviders.js';
