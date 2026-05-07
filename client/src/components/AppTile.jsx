@@ -43,7 +43,7 @@ const AppTile = memo(function AppTile({ app, onUpdate }) {
           <div className={`w-8 h-8 rounded-[22%] shrink-0 overflow-hidden ${
             app.appIconPath ? '' : `flex items-center justify-center ${app.archived ? 'bg-port-border/50 text-gray-500' : 'bg-port-border text-port-accent'}`
           }`} aria-hidden="true">
-            <AppIcon icon={app.icon || 'package'} appId={app.id} hasAppIcon={!!app.appIconPath} size={18} />
+            <AppIcon icon={app.icon || 'package'} appId={app.id} hasAppIcon={!!app.appIconPath} size={18} fillContainer />
           </div>
           <div className="min-w-0">
             <div className="flex items-center gap-1.5">
