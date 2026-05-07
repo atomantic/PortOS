@@ -249,26 +249,27 @@ export const appSchema = z.object({
 
 // Used by routes that POST a NEW reference repo (id/createdAt are server-
 // assigned, lastReviewedSha/lastCheckedAt populate after the first check).
+// `.trim()` runs before `min(1)` so a name/repoUrl that's just whitespace
+// fails validation rather than slipping through and producing confusing
+// git failures downstream — matches the project convention used elsewhere
+// in this file.
 export const referenceRepoCreateSchema = z.object({
-  name: z.string().min(1).max(120),
-  repoUrl: z.string().min(1).max(500),
-  branch: z.string().max(120).optional(),
+  name: z.string().trim().min(1).max(120),
+  repoUrl: z.string().trim().min(1).max(500),
+  branch: z.string().trim().max(120).optional(),
   notes: z.string().max(4000).optional()
 });
 
 // Patch schema — every field optional. `lastReviewedSha` is also accepted
 // here so the UI's "mark as reviewed" button (and the post-check service
-// path) can pin a SHA. The service still validates the SHA shape and
-// (for markReferenceRepoReviewed) verifies it exists in the clone.
+// path) can pin a SHA. Same trim-before-min-length convention as the
+// create schema. lastReviewedSha is hex-validated so a bad PATCH can't
+// persist a non-SHA into apps.json.
 export const referenceRepoUpdateSchema = z.object({
-  name: z.string().min(1).max(120).optional(),
-  repoUrl: z.string().min(1).max(500).optional(),
-  branch: z.string().max(120).optional(),
+  name: z.string().trim().min(1).max(120).optional(),
+  repoUrl: z.string().trim().min(1).max(500).optional(),
+  branch: z.string().trim().max(120).optional(),
   notes: z.string().max(4000).optional(),
-  // Allow the UI to manually pin lastReviewedSha (e.g. "I read these
-  // commits already, mark them reviewed without spawning an agent").
-  // Same case-insensitive hex validation as referenceRepoSchema so a bad
-  // PATCH can't persist a non-SHA into apps.json.
   lastReviewedSha: z.string().regex(/^[0-9a-f]{40}$/i, 'must be a 40-char hex SHA').nullable().optional()
 });
 

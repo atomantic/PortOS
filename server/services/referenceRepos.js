@@ -225,7 +225,15 @@ export async function updateReferenceRepo(appId, refId, patch) {
   // resetting status/lastError/etc. Trim the same string fields that
   // addReferenceRepo() trims so we don't end up with mismatched shapes
   // (e.g. " main " as a branch name causing confusing git failures).
-  // lastReviewedSha is a regex-validated 40-char SHA, no trim.
+  //
+  // Defensive SHA validation: the route's Zod schema already hex-validates
+  // lastReviewedSha, but a non-route caller (CoS task runner, future
+  // internal API) could bypass that and persist garbage. Re-check here so
+  // the service contract is self-enforcing. null clears the SHA cleanly
+  // and is allowed.
+  if (patch.lastReviewedSha !== undefined && patch.lastReviewedSha !== null && !SHA_RE.test(patch.lastReviewedSha)) {
+    throw new ServerError(`lastReviewedSha must be a 40-char hex SHA: ${patch.lastReviewedSha}`, { status: 400, code: 'REFERENCE_REPO_BAD_SHA' });
+  }
   const TRIMMED_KEYS = new Set(['name', 'repoUrl', 'branch', 'notes']);
   const updated = { ...refs[idx] };
   for (const key of ['name', 'repoUrl', 'branch', 'notes', 'lastReviewedSha']) {
