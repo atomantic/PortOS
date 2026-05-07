@@ -409,14 +409,22 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
       if (typeof kf.path !== 'string' || !kf.path) {
         throw new ServerError(`keyframes[${i}].path must be a non-empty string`, { status: 400, code: 'KEYFRAME_INVALID_SHAPE' });
       }
-      if (!Number.isFinite(Number(kf.index))) {
-        throw new ServerError(`keyframes[${i}].index must be a finite number: got ${kf.index}`, { status: 400, code: 'KEYFRAME_INVALID_SHAPE' });
+      // The Python helper enforces `index` is an int; a float or numeric
+      // string here would crash mid-render. Coerce + verify integerness
+      // up-front so non-route callers (tests, persisted queue replays)
+      // get a clear 400 instead of a Python traceback.
+      const n = Number(kf.index);
+      if (!Number.isInteger(n)) {
+        throw new ServerError(`keyframes[${i}].index must be an integer: got ${kf.index}`, { status: 400, code: 'KEYFRAME_INVALID_SHAPE' });
       }
     });
     const results = await Promise.all(keyframes.map((kf, i) => resizeImage(kf.path, `kf${i}`)));
     resolvedKeyframes = results.map((r, i) => {
       if (r.tempPath) resizedKeyframeTempPaths.push(r.tempPath);
-      return { path: r.resolved, index: keyframes[i].index };
+      // Normalize index to a real Number so the JSON we hand to the
+      // Python helper is unambiguous (no '5' string sneaking through
+      // from a multipart form).
+      return { path: r.resolved, index: Number(keyframes[i].index) };
     });
   }
 

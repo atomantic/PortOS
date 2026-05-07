@@ -95,6 +95,22 @@ const redactUrlCreds = (s) => {
 };
 const redactArgsForError = (args) => args.map(redactUrlCreds);
 
+// Reject any HTTPS URL with credentials in userinfo (e.g.
+// `https://token@host/repo` or `https://user:token@host/repo`). Throws a
+// 400 ServerError on rejection so route handlers don't need to repeat the
+// check. scp-style `git@host:repo` is NOT credentials (SSH key auth) and
+// is allowed through. Used by both addReferenceRepo (ingest) and
+// updateReferenceRepo (PATCH) so a tokened URL can't sneak in either way.
+const rejectCredentialedUrl = (url) => {
+  if (typeof url !== 'string') return;
+  if (/^\w+:\/\/[^\s/@]+@/.test(url)) {
+    throw new ServerError(
+      'repoUrl must not embed credentials in the URL (e.g. https://token@host/repo). Configure git credentials separately (credential helper, SSH keys).',
+      { status: 400, code: 'REFERENCE_REPO_URL_HAS_CREDS' },
+    );
+  }
+};
+
 // Patterns that indicate the user's config is wrong (so the right HTTP
 // status is 4xx, not 5xx). Order matters — first match wins. Codes here
 // surface to the UI via `lastError`, so the strings are user-facing.
@@ -235,20 +251,8 @@ export async function listReferenceRepos(appId) {
 export async function addReferenceRepo(appId, { name, repoUrl, branch, notes }) {
   const app = await getAppById(appId);
   if (!app) throw new ServerError(`App not found: ${appId}`, { status: 404, code: 'APP_NOT_FOUND' });
-  // Reject HTTPS URLs that embed credentials in the userinfo portion
-  // (e.g. `https://user:token@host/repo.git` or `https://token@host/repo`).
-  // Silent-stripping was tempting but a user pasting a token deserves to
-  // know we noticed — they should configure a git credential helper
-  // instead. scp-style `git@host:repo` is NOT credentials — that's just
-  // the SSH user; auth is via key. Whitelist that shape explicitly by
-  // matching only `scheme://user...@` patterns.
   const trimmedUrl = repoUrl.trim();
-  if (/^\w+:\/\/[^\s/@]+@/.test(trimmedUrl)) {
-    throw new ServerError(
-      'repoUrl must not embed credentials in the URL (e.g. https://token@host/repo). Configure git credentials separately (credential helper, SSH keys).',
-      { status: 400, code: 'REFERENCE_REPO_URL_HAS_CREDS' },
-    );
-  }
+  rejectCredentialedUrl(trimmedUrl);
   const existing = Array.isArray(app.referenceRepos) ? app.referenceRepos : [];
   const ref = {
     id: uuidv4(),
@@ -284,6 +288,12 @@ export async function updateReferenceRepo(appId, refId, patch) {
   // and is allowed.
   if (patch.lastReviewedSha !== undefined && patch.lastReviewedSha !== null && !SHA_RE.test(patch.lastReviewedSha)) {
     throw new ServerError(`lastReviewedSha must be a 40-char hex SHA: ${patch.lastReviewedSha}`, { status: 400, code: 'REFERENCE_REPO_BAD_SHA' });
+  }
+  // PATCH must enforce the same credential-in-URL rejection as POST —
+  // otherwise a user could sidestep the ingest check by editing the URL
+  // afterwards and persisting `https://token@host/repo` into apps.json.
+  if (typeof patch.repoUrl === 'string') {
+    rejectCredentialedUrl(patch.repoUrl.trim());
   }
   // When a SHA is being pinned, verify it actually resolves to a commit
   // in the clone. Without this, a PATCH could persist a syntactically valid
