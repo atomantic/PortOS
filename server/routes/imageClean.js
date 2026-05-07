@@ -133,7 +133,9 @@ router.post('/', asyncHandler(async (req, res) => {
   // sharp does not by default). resolveWithObject gives us output dimensions
   // (post-rotation), avoiding a second decode for metadata.
   // Wrap sharp errors (truncated/corrupt buffer that still passed the magic-byte
-  // sniff) into a 400 so bad client input doesn't surface as a 500.
+  // sniff) into a 400 so bad client input doesn't surface as a 500. Log the
+  // underlying libvips message server-side but return a stable, sanitized
+  // message to the client so internal details don't leak in API responses.
   const base = sharp(buffer, { limitInputPixels: MAX_PIXELS }).rotate();
   let cleaned;
   let info;
@@ -141,7 +143,8 @@ router.post('/', asyncHandler(async (req, res) => {
     ({ data: cleaned, info } = await applyEncoder(applyDenoise(base, level), format)
       .toBuffer({ resolveWithObject: true }));
   } catch (err) {
-    throw new ServerError(`Failed to decode ${format} image: ${err.message}`, {
+    console.error(`❌ image-clean decode failed (${format}): ${err.message}`);
+    throw new ServerError('Invalid or corrupt image', {
       status: 400,
       code: 'INVALID_IMAGE',
     });

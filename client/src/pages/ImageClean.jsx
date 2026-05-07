@@ -193,12 +193,11 @@ export default function ImageClean() {
               key={opt}
               type="button"
               onClick={() => handleLevelChange(opt)}
-              disabled={busy}
               className={`px-3 py-1.5 rounded-lg text-sm transition-colors capitalize ${
                 level === opt
                   ? 'bg-port-accent text-white'
                   : 'bg-port-bg border border-port-border text-gray-400 hover:text-white'
-              } disabled:opacity-50`}
+              }`}
             >
               {opt}
             </button>
