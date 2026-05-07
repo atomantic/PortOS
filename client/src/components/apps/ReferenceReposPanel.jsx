@@ -11,10 +11,17 @@ import * as api from '../../services/api';
  */
 export default function ReferenceReposPanel({ appId, appName, compact = false, initialRefs = null }) {
   const [refs, setRefs] = useState(initialRefs || []);
-  // Skip the initial fetch when the parent already handed us the list — the
-  // global summary page reads referenceRepos off /api/apps and would
-  // otherwise issue an N+1 GET per app on mount.
-  const [loading, setLoading] = useState(initialRefs == null);
+  // Two distinct loading states:
+  //   - `initialLoading` is true only on the very first fetch (mount); the
+  //     panel renders a placeholder while it's true. Stays false after
+  //     that, even on subsequent refreshes.
+  //   - `refreshing` is true during post-mutation re-fetches. The panel
+  //     keeps the list visible during refresh so per-row state (an
+  //     unsaved notes draft, an expanded commit list <details>) doesn't
+  //     get unmounted and lost every time the user clicks Check or
+  //     Mark-reviewed.
+  const [initialLoading, setInitialLoading] = useState(initialRefs == null);
+  const [refreshing, setRefreshing] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
   // Per-ref UI state — keyed by ref id. Holds the in-progress check snapshot
   // (commit list) so the user can see what's queued before marking-as-reviewed.
@@ -30,7 +37,7 @@ export default function ReferenceReposPanel({ appId, appName, compact = false, i
   // than "no refs configured" appearing when the server hiccups.
   const [fetchError, setFetchError] = useState(null);
   const fetch = useCallback(async () => {
-    setLoading(true);
+    setRefreshing(true);
     const res = await api.listReferenceRepos(appId).catch((e) => ({ __error: e?.message || 'Failed to load references' }));
     if (res && res.__error) {
       setFetchError(res.__error);
@@ -38,7 +45,8 @@ export default function ReferenceReposPanel({ appId, appName, compact = false, i
       setFetchError(null);
       setRefs(res?.referenceRepos || []);
     }
-    setLoading(false);
+    setRefreshing(false);
+    setInitialLoading(false);
   }, [appId]);
 
   // Fetch on mount unless the parent seeded us with initialRefs. After
@@ -126,7 +134,7 @@ export default function ReferenceReposPanel({ appId, appName, compact = false, i
     fetch();
   };
 
-  if (loading) {
+  if (initialLoading) {
     return <div className="text-gray-400 text-sm">Loading references…</div>;
   }
 
@@ -137,6 +145,7 @@ export default function ReferenceReposPanel({ appId, appName, compact = false, i
           <div>
             <h3 className="text-sm font-semibold text-white flex items-center gap-2">
               <GitBranch size={14} /> Reference Repos
+              {refreshing && <RefreshCw size={11} className="animate-spin text-gray-500" />}
             </h3>
             <p className="text-xs text-gray-500 mt-0.5">
               Upstream repos {appName} watches for clean-room reimplementation. The <code className="text-port-accent">reference-watch</code> task fetches each weekly and proposes features/fixes worth re-building in our own code via <code>REFERENCE_REVIEW.md</code>.

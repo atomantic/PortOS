@@ -218,16 +218,35 @@ const fetchHead = async (ref) => {
  * ref tip. Returned shape is JSON-friendly so the UI / agent prompt can
  * render it directly.
  */
+// Hard cap on commits returned per check. Without this, a ref left
+// unreviewed for a long time (a year of upstream activity, e.g. ~3000
+// commits) generates an oversized agent prompt, a huge UI payload, and
+// a slow git log. 200 is plenty for the agent to prioritize commits
+// against the user's notes; the user can pin lastReviewedSha forward
+// to drop older items if needed.
+const COMMIT_LIST_CAP = 200;
+
+// Returns { commits, truncated, totalCommitCount } where:
+//   - commits.length <= COMMIT_LIST_CAP
+//   - truncated is true when totalCommitCount > COMMIT_LIST_CAP
+//   - totalCommitCount is null when truncation isn't possible (no sinceSha)
 const listCommits = async (cwd, sinceSha, headRef) => {
   if (!sinceSha) {
     // No prior review — surface only the most recent 25 commits to keep
-    // the agent prompt bounded. The UI tells the user they can pin a
-    // SHA manually if they want to start from a specific point.
+    // the first-scan prompt bounded. The UI tells the user they can pin
+    // a SHA manually if they want to start from a specific point.
     const out = await runGit(cwd, ['log', '-n', '25', '--pretty=format:%H%x09%an%x09%ae%x09%aI%x09%s', headRef]);
-    return parseCommitLog(out);
+    return { commits: parseCommitLog(out), truncated: false, totalCommitCount: null };
   }
-  const out = await runGit(cwd, ['log', '--pretty=format:%H%x09%an%x09%ae%x09%aI%x09%s', `${sinceSha}..${headRef}`]);
-  return parseCommitLog(out);
+  // For incremental scans we DO know the total — check it cheaply with
+  // `rev-list --count` so the UI can show "showing 200 of N" honestly,
+  // then fetch only the most recent COMMIT_LIST_CAP entries.
+  const range = `${sinceSha}..${headRef}`;
+  const totalRaw = await runGit(cwd, ['rev-list', '--count', range]);
+  const totalCommitCount = Number(totalRaw) || 0;
+  const out = await runGit(cwd, ['log', '-n', String(COMMIT_LIST_CAP), '--pretty=format:%H%x09%an%x09%ae%x09%aI%x09%s', range]);
+  const commits = parseCommitLog(out);
+  return { commits, truncated: totalCommitCount > COMMIT_LIST_CAP, totalCommitCount };
 };
 
 const parseCommitLog = (raw) => {
@@ -392,13 +411,20 @@ export async function checkReferenceRepo(appId, refId) {
   let originalError = null;
   try {
     const { cwd, head, headRef } = await fetchHead(ref);
-    const commits = await listCommits(cwd, ref.lastReviewedSha, headRef);
+    const { commits, truncated, totalCommitCount } = await listCommits(cwd, ref.lastReviewedSha, headRef);
     snapshot = {
       head,
       headShort: SHORT_SHA(head),
       sinceSha: ref.lastReviewedSha,
       sinceShort: SHORT_SHA(ref.lastReviewedSha),
+      // Visible-on-this-page count, capped by COMMIT_LIST_CAP.
       commitCount: commits.length,
+      // True when more commits exist upstream than we returned. UI shows
+      // "X of Y new" when this is set.
+      truncated,
+      // The full count (only available for incremental scans). null on
+      // first scan since we don't pay for an extra rev-list there.
+      totalCommitCount,
       commits,
       cwd,
       branch: ref.branch || 'main',
@@ -476,7 +502,14 @@ export function formatReferenceForPrompt(ref, snapshot) {
   lines.push(`- Repo: ${redactUrlCreds(ref.repoUrl)}`);
   lines.push(`- Branch: ${ref.branch || 'main'}`);
   lines.push(`- Last reviewed: ${SHORT_SHA(ref.lastReviewedSha) || '(none — first scan)'}`);
-  lines.push(`- Current head: ${snapshot.headShort} (${snapshot.commitCount} new commits)`);
+  // When truncated, surface "showing X of Y" so the agent knows it's
+  // looking at a head-end slice (most recent COMMIT_LIST_CAP commits).
+  // Older commits are still in the upstream; user can pin a SHA forward
+  // to drop them or run another check after reviewing this batch.
+  const countLabel = snapshot.truncated
+    ? `${snapshot.commitCount} of ${snapshot.totalCommitCount} new commits — older ones omitted; review these first then pin SHA forward`
+    : `${snapshot.commitCount} new commits`;
+  lines.push(`- Current head: ${snapshot.headShort} (${countLabel})`);
   if (ref.notes) {
     lines.push('');
     // User-provided context: how the app relates to this upstream — what

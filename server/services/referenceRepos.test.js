@@ -219,9 +219,12 @@ describe('checkReferenceRepo', () => {
       .mockReturnValueOnce({ stdout: '' });                           // log
 
     await svc.checkReferenceRepo('app-1', 'r1');
-    // git log args should be [..., 'log', '--pretty…', '<sinceSha>..<headRef>']
-    const logCall = execGitMock.mock.calls[2][0];
-    const range = logCall[logCall.length - 1];
+    // After rev-parse, listCommits runs `rev-list --count <range>` before
+    // `log -n N <range>`. Both end with the same range arg, so checking
+    // the last positional in either call confirms the SHA gets plumbed
+    // through to git as a strict <sinceSha>..<headRef> bound.
+    const rangeCall = execGitMock.mock.calls[2][0];
+    const range = rangeCall[rangeCall.length - 1];
     expect(range).toBe(`${'c'.repeat(40)}..origin/main`);
   });
 
