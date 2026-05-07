@@ -58,14 +58,22 @@ function isPngChunkType(buf, offset) {
   return true;
 }
 
+// Real PNGs have well under 50 chunks. Cap the walk so a buffer crafted with
+// the PNG signature followed by many tiny ASCII-typed zero-length chunks can't
+// force millions of iterations at the 40MiB input limit.
+const MAX_PNG_CHUNKS = 10000;
+
 // Walks PNG chunks once for the `caBX` provenance chunk emitted by gpt-image-1.
 // Sharp's default re-encode drops it; we detect it explicitly so the response
-// can flag what was stripped. Bails on invalid chunk type or truncated chunk —
-// a buffer that only matches the PNG signature but is otherwise garbage could
-// otherwise trigger millions of loop iterations (CPU/event-loop DoS).
+// can flag what was stripped. Bails on invalid chunk type, truncated chunk, or
+// chunk-count overrun — a buffer that only matches the PNG signature but is
+// otherwise garbage could otherwise trigger millions of loop iterations
+// (CPU/event-loop DoS).
 function pngHasC2PA(buf) {
   let offset = 8;
+  let count = 0;
   while (offset + 8 <= buf.length) {
+    if (++count > MAX_PNG_CHUNKS) return false;
     if (!isPngChunkType(buf, offset + 4)) return false;
     const length = buf.readUInt32BE(offset);
     if (offset + 8 + length + 4 > buf.length) return false;
@@ -133,9 +141,11 @@ router.post('/', asyncHandler(async (req, res) => {
   // sharp does not by default). resolveWithObject gives us output dimensions
   // (post-rotation), avoiding a second decode for metadata.
   // Wrap sharp errors (truncated/corrupt buffer that still passed the magic-byte
-  // sniff) into a 400 so bad client input doesn't surface as a 500. Log the
-  // underlying libvips message server-side but return a stable, sanitized
-  // message to the client so internal details don't leak in API responses.
+  // sniff) into a 400 so bad client input doesn't surface as a 500. Pass the
+  // libvips reason through context.details so asyncHandler logs it once
+  // (instead of an extra console.error duplicating its own log line) — the
+  // sanitized client-facing message stays generic so libvips internals don't
+  // leak in the API response or socket broadcast.
   const base = sharp(buffer, { limitInputPixels: MAX_PIXELS }).rotate();
   let cleaned;
   let info;
@@ -143,10 +153,10 @@ router.post('/', asyncHandler(async (req, res) => {
     ({ data: cleaned, info } = await applyEncoder(applyDenoise(base, level), format)
       .toBuffer({ resolveWithObject: true }));
   } catch (err) {
-    console.error(`❌ image-clean decode failed (${format}): ${err.message}`);
     throw new ServerError('Invalid or corrupt image', {
       status: 400,
       code: 'INVALID_IMAGE',
+      context: { details: { format, reason: err.message } },
     });
   }
 

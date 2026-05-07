@@ -112,6 +112,30 @@ describe('POST /api/image-clean', () => {
     expect(elapsed).toBeLessThan(1000);
   });
 
+  it('caps the chunk walk so a PNG-sig buffer of zero-length ASCII-typed chunks bails fast', async () => {
+    // Adversarial input: valid PNG signature + many tiny chunks with valid
+    // ASCII chunk types (so isPngChunkType passes) but length=0. Without a
+    // chunk-count cap, the walker would iterate ~3.5M times for a 40MiB
+    // payload. With MAX_PNG_CHUNKS=10000, it bails after 10000 iterations.
+    const pngSig = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const oneChunk = Buffer.concat([
+      Buffer.from([0x00, 0x00, 0x00, 0x00]), // length=0
+      Buffer.from('ABCD', 'ascii'),           // valid chunk type bytes
+      Buffer.from([0x00, 0x00, 0x00, 0x00]), // CRC (unchecked)
+    ]);
+    // 20000 chunks > MAX_PNG_CHUNKS=10000 — proves the cap fires.
+    const fake = Buffer.concat([pngSig, Buffer.concat(Array(20000).fill(oneChunk))]);
+    const start = Date.now();
+    const res = await request(buildApp())
+      .post('/api/image-clean')
+      .send({ data: fake.toString('base64') });
+    const elapsed = Date.now() - start;
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_IMAGE');
+    expect(elapsed).toBeLessThan(1500);
+  });
+
   it('rejects unsupported formats with UNSUPPORTED_FORMAT', async () => {
     const garbage = Buffer.from('not an image at all').toString('base64');
     const res = await request(buildApp())
