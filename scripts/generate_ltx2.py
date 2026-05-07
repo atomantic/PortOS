@@ -102,6 +102,11 @@ def parse_args() -> argparse.Namespace:
                    help="Distilled-LoRA fusion strength (default 1.0, matches dgrauet's CLI).")
     p.add_argument("--image", default=None, help="Source/start frame (image, fflf modes)")
     p.add_argument("--last-image", default=None, help="End frame (fflf mode)")
+    p.add_argument("--keyframes-json", default=None,
+                   help="Multi-keyframe interpolation: JSON-encoded list of {path,index} dicts "
+                        "(length >= 2, indices strictly ascending in [0, num_frames-1]). When "
+                        "set, fflf mode uses these instead of --image/--last-image — unlocks "
+                        "N>2 keyframes for cross-shot continuity, character anchoring, etc.")
     p.add_argument("--extend-from-video", default=None, help="Source video path (extend mode)")
     p.add_argument("--extend-frames", type=int, default=2,
                    help="Number of latent frames to add (extend mode); 1 latent ≈ 8 pixel frames")
@@ -225,16 +230,65 @@ def run_image(args: argparse.Namespace) -> str:
     )
 
 
-def run_fflf(args: argparse.Namespace) -> str:
-    """Keyframe interpolation — true FFLF (start + end frame conditioning).
+def _resolve_keyframes(args: argparse.Namespace) -> tuple[list[str], list[int]]:
+    """Decide between multi-keyframe (--keyframes-json) and legacy 2-keyframe.
 
-    Pixel frame indices: keyframe 0 anchors at frame 0, keyframe 1 at the
-    LAST pixel frame (num_frames - 1). num_frames must be 8k+1 (LTX latent
-    boundary) — the panel UI already enforces this via FRAME_OPTIONS.
+    Multi-keyframe wins when --keyframes-json is non-empty. Validation is
+    strict so agent bugs surface here before any GPU work.
+    """
+    last_pixel_frame = args.num_frames - 1
+    if args.keyframes_json:
+        try:
+            raw = json.loads(args.keyframes_json)
+        except json.JSONDecodeError as e:
+            raise SystemExit(f"--keyframes-json is not valid JSON: {e}")
+        if not isinstance(raw, list) or len(raw) < 2:
+            raise SystemExit("--keyframes-json must be a list of length >= 2")
+        images: list[str] = []
+        indices: list[int] = []
+        for i, kf in enumerate(raw):
+            if not isinstance(kf, dict) or "path" not in kf or "index" not in kf:
+                raise SystemExit(f"keyframe[{i}] must be an object with 'path' and 'index'")
+            path = kf["path"]
+            idx = kf["index"]
+            if not isinstance(path, str) or not path:
+                raise SystemExit(f"keyframe[{i}].path must be a non-empty string")
+            if not isinstance(idx, int) or isinstance(idx, bool):
+                raise SystemExit(f"keyframe[{i}].index must be an int")
+            if not Path(path).exists():
+                raise SystemExit(f"keyframe[{i}].path does not exist: {path}")
+            if idx < 0 or idx > last_pixel_frame:
+                raise SystemExit(
+                    f"keyframe[{i}].index {idx} out of range [0, {last_pixel_frame}]"
+                )
+            if indices and idx <= indices[-1]:
+                raise SystemExit(
+                    f"keyframe indices must be strictly ascending; got {indices[-1]} then {idx}"
+                )
+            images.append(path)
+            indices.append(idx)
+        return images, indices
+    if not args.image or not args.last_image:
+        raise SystemExit(
+            "fflf mode requires either --keyframes-json or both --image and --last-image"
+        )
+    return [args.image, args.last_image], [0, last_pixel_frame]
+
+
+def run_fflf(args: argparse.Namespace) -> str:
+    """Keyframe interpolation — N keyframes at arbitrary frame indices.
+
+    Pixel frame indices map to LTX's latent grid; num_frames must be 8k+1
+    (LTX latent boundary) — the panel UI enforces this via FRAME_OPTIONS.
+
+    Two callers:
+      - Legacy FFLF (--image start, --last-image end at [0, num_frames-1])
+      - Multi-keyframe (--keyframes-json with N>=2 anchor points). Agent SDK
+        uses this for character continuity, cross-shot anchoring, and
+        compositional control.
     """
     from ltx_pipelines_mlx import KeyframeInterpolationPipeline
-    if not args.image or not args.last_image:
-        raise SystemExit("--image and --last-image are required for fflf mode")
+    keyframe_images, keyframe_indices = _resolve_keyframes(args)
     # Keyframe interpolation needs the dev (non-distilled) transformer +
     # the distilled LoRA fused on top for stage 2. Defaults match the file
     # names in dgrauet/ltx-2.3-mlx-q4 and dgrauet/ltx-2.3-mlx-q8 — caller
@@ -252,13 +306,12 @@ def run_fflf(args: argparse.Namespace) -> str:
         distilled_lora_strength=args.lora_strength,
     )
     emit_stage(1, 1, 1, "Loaded")
-    emit_status("Interpolating between keyframes…")
-    last_pixel_frame = args.num_frames - 1
+    emit_status(f"Interpolating between {len(keyframe_images)} keyframes at indices {keyframe_indices}…")
     return pipe.generate_and_save(
         prompt=args.prompt,
         output_path=args.output,
-        keyframe_images=[args.image, args.last_image],
-        keyframe_indices=[0, last_pixel_frame],
+        keyframe_images=keyframe_images,
+        keyframe_indices=keyframe_indices,
         height=args.height,
         width=args.width,
         num_frames=args.num_frames,

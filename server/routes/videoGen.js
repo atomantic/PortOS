@@ -12,7 +12,7 @@ import { copyFile, unlink } from 'fs/promises';
 import { randomUUID } from 'crypto';
 import { join, basename, resolve as resolvePath, sep as PATH_SEP, extname } from 'path';
 import { z } from 'zod';
-import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
 import { uploadFields } from '../lib/multipart.js';
 import { PATHS, ensureDir } from '../lib/fileUtils.js';
 import { safeUnder } from '../lib/ffmpeg.js';
@@ -111,6 +111,24 @@ const generateBodySchema = z.object({
   // the entire source video's latent rather than a single last frame).
   // The legacy chained-i2v path keeps using sourceImageFile.
   extendFromVideoId: z.string().uuid().optional(),
+  // Multi-keyframe interpolation (ltx2 + mode='fflf'). Each entry pins one
+  // gallery image at a specific pixel-frame index. Indices must be strictly
+  // ascending and within [0, numFrames-1]. When set, overrides the legacy
+  // sourceImageFile/lastImageFile pair. Multipart bodies arrive as a string,
+  // so the preprocess parses JSON before zod sees it.
+  keyframes: z.preprocess(
+    (v) => {
+      if (v == null || v === '') return undefined;
+      if (typeof v === 'string') {
+        try { return JSON.parse(v); } catch { return v; }
+      }
+      return v;
+    },
+    z.array(z.object({
+      file: z.string().min(1).max(512),
+      index: z.number().int().min(0).max(1023),
+    })).min(2).max(8).optional(),
+  ),
 });
 
 router.get('/status', asyncHandler(async (_req, res) => {
@@ -316,6 +334,59 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
     extraUploadedTempPaths.push(audioFilePath);
   }
 
+  // Multi-keyframe interpolation: resolve each gallery filename to an
+  // absolute path under PATHS.images via the same path-traversal guard as
+  // sourceImageFile. Reject up-front when any reference can't be resolved
+  // so the queue doesn't accept a doomed job. Only valid for fflf mode +
+  // single-chunk renders (the chain orchestrator pins keyframes only on
+  // chunk 0; chaining ≥2 chunks with N keyframes has no defined semantic).
+  let resolvedKeyframes = null;
+  if (body.keyframes && body.keyframes.length >= 2) {
+    if (body.mode && body.mode !== 'fflf') {
+      await cleanupAllStaged();
+      throw new ServerError(
+        `keyframes is only valid with mode='fflf' (got mode='${body.mode}').`,
+        { status: 400, code: 'KEYFRAMES_MODE_MISMATCH' },
+      );
+    }
+    if (body.chunks != null && Number(body.chunks) > 1) {
+      await cleanupAllStaged();
+      throw new ServerError(
+        'keyframes cannot be combined with chunks > 1 — keyframes anchor a single clip.',
+        { status: 400, code: 'KEYFRAMES_CHUNKS_CONFLICT' },
+      );
+    }
+    resolvedKeyframes = [];
+    let prevIndex = -1;
+    for (let i = 0; i < body.keyframes.length; i++) {
+      const kf = body.keyframes[i];
+      const path = resolveGalleryImage(kf.file);
+      if (!path) {
+        await cleanupAllStaged();
+        throw new ServerError(
+          `keyframes[${i}].file not found in gallery: ${kf.file}`,
+          { status: 400, code: 'KEYFRAME_GALLERY_MISS' },
+        );
+      }
+      if (kf.index <= prevIndex) {
+        await cleanupAllStaged();
+        throw new ServerError(
+          `keyframes indices must be strictly ascending; got ${prevIndex} then ${kf.index}`,
+          { status: 400, code: 'KEYFRAME_INDICES_NOT_ASCENDING' },
+        );
+      }
+      if (body.numFrames != null && kf.index > Number(body.numFrames) - 1) {
+        await cleanupAllStaged();
+        throw new ServerError(
+          `keyframes[${i}].index ${kf.index} >= numFrames ${body.numFrames}`,
+          { status: 400, code: 'KEYFRAME_INDEX_OUT_OF_RANGE' },
+        );
+      }
+      resolvedKeyframes.push({ path, index: kf.index });
+      prevIndex = kf.index;
+    }
+  }
+
   // Native extend (ltx2 runtime): resolve the history id to a video file
   // path under data/videos/ and forward it as extendFromVideoPath. Reject
   // a missing/tampered id rather than silently falling back to t2v —
@@ -371,6 +442,7 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
       uploadedTempPath,
       uploadedTempPaths: extraUploadedTempPaths,
       lastImagePath,
+      keyframes: resolvedKeyframes,
       extendFromVideoPath,
       mode: body.mode,
       imageStrength: body.imageStrength,
@@ -438,10 +510,6 @@ router.post('/last-frame/:id', asyncHandler(async (req, res) => {
 // happily accepts e.g. 36 hyphens). Matches the .uuid() usage in the
 // other route schemas.
 const historyIdSchema = z.string().uuid('invalid history id');
-
-const failValidation = (parsed) => {
-  throw new ServerError(`Validation failed: ${parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join(', ')}`, { status: 400, code: 'VALIDATION_ERROR' });
-};
 
 router.post('/upscale/:id', asyncHandler(async (req, res) => {
   const parsed = historyIdSchema.safeParse(req.params.id);

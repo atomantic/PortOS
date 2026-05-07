@@ -235,6 +235,109 @@ describe('videoGen routes', () => {
       }));
     });
 
+    it('forwards multi-keyframe array (resolved to gallery paths) under params.keyframes', async () => {
+      const r = await request(app).post('/api/video-gen/').send({
+        prompt: 'four-pose shot',
+        mode: 'fflf',
+        numFrames: 121,
+        keyframes: [
+          { file: 'pose-a.png', index: 0 },
+          { file: 'pose-b.png', index: 40 },
+          { file: 'pose-c.png', index: 80 },
+          { file: 'pose-d.png', index: 120 },
+        ],
+      });
+      expect(r.status).toBe(200);
+      expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'video',
+        params: expect.objectContaining({
+          mode: 'fflf',
+          keyframes: [
+            { path: '/mock/images/pose-a.png', index: 0 },
+            { path: '/mock/images/pose-b.png', index: 40 },
+            { path: '/mock/images/pose-c.png', index: 80 },
+            { path: '/mock/images/pose-d.png', index: 120 },
+          ],
+        }),
+      }));
+    });
+
+    it('parses keyframes when sent as a JSON-encoded string (multipart bodies)', async () => {
+      const r = await request(app).post('/api/video-gen/').send({
+        prompt: 'multipart-style submission',
+        mode: 'fflf',
+        numFrames: 49,
+        keyframes: JSON.stringify([
+          { file: 'a.png', index: 0 },
+          { file: 'b.png', index: 48 },
+        ]),
+      });
+      expect(r.status).toBe(200);
+      expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({
+        params: expect.objectContaining({
+          keyframes: [
+            { path: '/mock/images/a.png', index: 0 },
+            { path: '/mock/images/b.png', index: 48 },
+          ],
+        }),
+      }));
+    });
+
+    it('rejects keyframes when paired with mode != fflf', async () => {
+      const r = await request(app).post('/api/video-gen/').send({
+        prompt: 'wrong mode',
+        mode: 'image',
+        keyframes: [
+          { file: 'a.png', index: 0 },
+          { file: 'b.png', index: 24 },
+        ],
+      });
+      expect(r.status).toBe(400);
+      expect(r.body.error).toMatch(/keyframes is only valid with mode='fflf'/);
+    });
+
+    it('rejects keyframes when chunks > 1 (no defined chained semantic)', async () => {
+      const r = await request(app).post('/api/video-gen/').send({
+        prompt: 'chained keyframes',
+        mode: 'fflf',
+        chunks: 3,
+        keyframes: [
+          { file: 'a.png', index: 0 },
+          { file: 'b.png', index: 24 },
+        ],
+      });
+      expect(r.status).toBe(400);
+      expect(r.body.error).toMatch(/keyframes cannot be combined with chunks/);
+    });
+
+    it('rejects keyframes when an index is outside [0, numFrames-1]', async () => {
+      const r = await request(app).post('/api/video-gen/').send({
+        prompt: 'out of range index',
+        mode: 'fflf',
+        numFrames: 25,
+        keyframes: [
+          { file: 'a.png', index: 0 },
+          { file: 'b.png', index: 25 }, // == numFrames, must be < numFrames
+        ],
+      });
+      expect(r.status).toBe(400);
+      expect(r.body.error).toMatch(/>= numFrames/);
+    });
+
+    it('rejects keyframes with non-ascending indices', async () => {
+      const r = await request(app).post('/api/video-gen/').send({
+        prompt: 'bad order',
+        mode: 'fflf',
+        numFrames: 121,
+        keyframes: [
+          { file: 'a.png', index: 50 },
+          { file: 'b.png', index: 30 }, // < previous
+        ],
+      });
+      expect(r.status).toBe(400);
+      expect(r.body.error).toMatch(/strictly ascending/);
+    });
+
     it('forwards chunks > 1 so the queue dispatches the chain orchestrator', async () => {
       const r = await request(app).post('/api/video-gen/').send({
         prompt: 'a long shot',
