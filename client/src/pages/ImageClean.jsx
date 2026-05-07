@@ -71,7 +71,10 @@ export default function ImageClean() {
     setBusy(false);
     if (!objectUrl) return;
     resultUrlRef.current = objectUrl;
-    setResult({ ...cleaned, objectUrl });
+    // Drop `cleaned.data` (the full base64 payload) before storing — keeping it
+    // alongside the blob URL would double the in-memory image footprint.
+    const { data: _omit, ...meta } = cleaned;
+    setResult({ ...meta, objectUrl });
     toast.success(cleaned.c2paStripped ? 'C2PA provenance stripped' : 'Image cleaned');
   }, []);
 
