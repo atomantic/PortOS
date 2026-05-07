@@ -1,3 +1,4 @@
+- **Day-mode chip legibility**: Pastel chip text (Worktree, Simplify, BookLoom, model badge, BTW, "main", PR, Review, etc.) used 300/400/500 Tailwind tones designed for dark mode and were unreadable on cream/white day-mode themes (Phosphor Paper, Drafting Paper, Lumen Glass Day, Classic Noon). Added `[data-port-theme-mode="day"]` overrides that remap each hue to its 700-tone (yellow → 800) so chips keep their semantic color but read clearly on light backgrounds.
 # Unreleased
 
 ## Added

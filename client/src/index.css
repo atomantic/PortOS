@@ -570,6 +570,65 @@ html[data-port-theme-mode="day"] [class~="text-indigo-400/70"] {
   color: rgb(var(--port-accent)) !important;
 }
 
+/* Day-mode chip text colors. The 300/400/500 Tailwind tones are designed
+   for dark-mode chips (e.g. `bg-cyan-500/20 text-cyan-400`) — on the cream
+   / white day backgrounds they wash out to near-invisible. Remap to the
+   700 (or 800 for yellow, which stays warm at 700) tone in the same hue
+   family so each chip keeps its semantic color but reads clearly. */
+html[data-port-theme-mode="day"] [class~="text-cyan-300"],
+html[data-port-theme-mode="day"] [class~="text-cyan-400"],
+html[data-port-theme-mode="day"] [class~="text-cyan-500"] { color: rgb(14 116 144) !important; }
+html[data-port-theme-mode="day"] [class~="text-sky-400"] { color: rgb(3 105 161) !important; }
+html[data-port-theme-mode="day"] [class~="text-blue-300"],
+html[data-port-theme-mode="day"] [class~="text-blue-400"] { color: rgb(29 78 216) !important; }
+html[data-port-theme-mode="day"] [class~="text-purple-300"],
+html[data-port-theme-mode="day"] [class~="text-purple-400"],
+html[data-port-theme-mode="day"] [class~="text-purple-500"] { color: rgb(126 34 206) !important; }
+html[data-port-theme-mode="day"] [class~="text-violet-300"],
+html[data-port-theme-mode="day"] [class~="text-violet-400"] { color: rgb(109 40 217) !important; }
+html[data-port-theme-mode="day"] [class~="text-fuchsia-400"] { color: rgb(162 28 175) !important; }
+html[data-port-theme-mode="day"] [class~="text-pink-400"],
+html[data-port-theme-mode="day"] [class~="text-pink-500"] { color: rgb(190 24 93) !important; }
+html[data-port-theme-mode="day"] [class~="text-rose-400"] { color: rgb(190 18 60) !important; }
+html[data-port-theme-mode="day"] [class~="text-red-300"],
+html[data-port-theme-mode="day"] [class~="text-red-400"],
+html[data-port-theme-mode="day"] [class~="text-red-500"] { color: rgb(185 28 28) !important; }
+html[data-port-theme-mode="day"] [class~="text-orange-300"],
+html[data-port-theme-mode="day"] [class~="text-orange-400"] { color: rgb(194 65 12) !important; }
+html[data-port-theme-mode="day"] [class~="text-amber-300"],
+html[data-port-theme-mode="day"] [class~="text-amber-400"],
+html[data-port-theme-mode="day"] [class~="text-amber-500"] { color: rgb(180 83 9) !important; }
+html[data-port-theme-mode="day"] [class~="text-yellow-300"],
+html[data-port-theme-mode="day"] [class~="text-yellow-400"],
+html[data-port-theme-mode="day"] [class~="text-yellow-500"] { color: rgb(133 77 14) !important; }
+html[data-port-theme-mode="day"] [class~="text-lime-400"] { color: rgb(77 124 15) !important; }
+html[data-port-theme-mode="day"] [class~="text-green-300"],
+html[data-port-theme-mode="day"] [class~="text-green-400"],
+html[data-port-theme-mode="day"] [class~="text-green-500"] { color: rgb(21 128 61) !important; }
+html[data-port-theme-mode="day"] [class~="text-emerald-300"],
+html[data-port-theme-mode="day"] [class~="text-emerald-400"],
+html[data-port-theme-mode="day"] [class~="text-emerald-500"] { color: rgb(4 120 87) !important; }
+html[data-port-theme-mode="day"] [class~="text-teal-400"] { color: rgb(15 118 110) !important; }
+
+/* hover: variants used on chips and buttons */
+html[data-port-theme-mode="day"] [class~="hover:text-cyan-300"]:hover,
+html[data-port-theme-mode="day"] [class~="hover:text-cyan-400"]:hover { color: rgb(14 116 144) !important; }
+html[data-port-theme-mode="day"] [class~="hover:text-blue-300"]:hover,
+html[data-port-theme-mode="day"] [class~="hover:text-blue-400"]:hover { color: rgb(29 78 216) !important; }
+html[data-port-theme-mode="day"] [class~="hover:text-purple-300"]:hover,
+html[data-port-theme-mode="day"] [class~="hover:text-purple-400"]:hover { color: rgb(126 34 206) !important; }
+html[data-port-theme-mode="day"] [class~="hover:text-pink-400"]:hover { color: rgb(190 24 93) !important; }
+html[data-port-theme-mode="day"] [class~="hover:text-red-300"]:hover,
+html[data-port-theme-mode="day"] [class~="hover:text-red-400"]:hover { color: rgb(185 28 28) !important; }
+html[data-port-theme-mode="day"] [class~="hover:text-orange-400"]:hover { color: rgb(194 65 12) !important; }
+html[data-port-theme-mode="day"] [class~="hover:text-amber-400"]:hover { color: rgb(180 83 9) !important; }
+html[data-port-theme-mode="day"] [class~="hover:text-yellow-300"]:hover,
+html[data-port-theme-mode="day"] [class~="hover:text-yellow-400"]:hover,
+html[data-port-theme-mode="day"] [class~="hover:text-yellow-500"]:hover { color: rgb(133 77 14) !important; }
+html[data-port-theme-mode="day"] [class~="hover:text-green-400"]:hover { color: rgb(21 128 61) !important; }
+html[data-port-theme-mode="day"] [class~="hover:text-emerald-400"]:hover { color: rgb(4 120 87) !important; }
+html[data-port-theme-mode="day"] [class~="hover:text-teal-400"]:hover { color: rgb(15 118 110) !important; }
+
 /* === Lumen Glass Day === */
 html[data-port-theme="lumen-glass-day"] :is(.bg-port-card, [class~="bg-port-card/50"]):is(.border, .rounded, .rounded-lg, .rounded-xl, .rounded-2xl) {
   border-color: rgb(var(--port-border) / 0.22) !important;
