@@ -178,6 +178,37 @@ export const datadogConfigSchema = z.object({
   environment: z.string().optional()
 });
 
+// Reference-repo entry. Each app can list upstream repos it watches for
+// clean-room reimplementation;
+// the `reference-watch` scheduled task fetches each one, finds commits since
+// `lastReviewedSha`, and produces a REFERENCE_REVIEW.md proposal in the app's
+// repo. `notes` is the free-text "what we use from this repo" field — fed
+// into the review prompt so the agent knows which features in our app are
+// load-bearing for the watch.
+export const referenceRepoSchema = z.object({
+  id: z.string().min(1).max(64),
+  name: z.string().min(1).max(120),
+  // Either a clonable URL (https://github.com/owner/repo or scp-style
+  // user@host:owner/repo.git) or a local filesystem path. The service
+  // detects remote URLs by matching `scheme://` or scp-style
+  // `user@host:path` (see isLocalPath in services/referenceRepos.js);
+  // anything else is treated as a local path.
+  repoUrl: z.string().min(1).max(500),
+  branch: z.string().max(120).optional().default('main'),
+  // 40-char hex SHA (case-insensitive), or null (no review yet). Validating
+  // hex here rather than just length means a bogus PATCH like 'g'.repeat(40)
+  // fails fast at the API instead of producing confusing git failures later.
+  lastReviewedSha: z.string().regex(/^[0-9a-f]{40}$/i, 'must be a 40-char hex SHA').nullable().optional(),
+  lastCheckedAt: z.string().datetime().nullable().optional(),
+  notes: z.string().max(4000).optional().default(''),
+  // Last action's outcome — used by the UI to highlight refs needing
+  // attention. 'needs-clone' means the managed clone hasn't been
+  // initialized yet (first run will populate it).
+  status: z.enum(['ok', 'checking', 'error', 'needs-clone']).optional().default('needs-clone'),
+  lastError: z.string().max(2000).nullable().optional(),
+  createdAt: z.string().datetime().optional()
+});
+
 // App schema for registration/update
 export const appSchema = z.object({
   name: z.string().min(1).max(100),
@@ -211,9 +242,43 @@ export const appSchema = z.object({
   defaultOpenPR: z.boolean().optional(),
   jira: jiraConfigSchema.optional().nullable(),
   datadog: datadogConfigSchema.optional().nullable()
+  // referenceRepos is INTENTIONALLY not part of the create/update API
+  // surface. createApp() doesn't persist it and updateApp() (via the
+  // omit() in appUpdateSchema) ignores it — the dedicated
+  // /api/apps/:appId/reference-repos endpoints own the lifecycle so
+  // server-managed fields (status, lastError, createdAt) can't be
+  // clobbered through the generic apps API.
 });
 
-// Partial schema for updates
+// Used by routes that POST a NEW reference repo (id/createdAt are server-
+// assigned, lastReviewedSha/lastCheckedAt populate after the first check).
+// `.trim()` runs before `min(1)` so a name/repoUrl that's just whitespace
+// fails validation rather than slipping through and producing confusing
+// git failures downstream — matches the project convention used elsewhere
+// in this file.
+export const referenceRepoCreateSchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  repoUrl: z.string().trim().min(1).max(500),
+  branch: z.string().trim().max(120).optional(),
+  notes: z.string().max(4000).optional()
+});
+
+// Patch schema — every field optional. `lastReviewedSha` is also accepted
+// here so the UI's "mark as reviewed" button (and the post-check service
+// path) can pin a SHA. Same trim-before-min-length convention as the
+// create schema. lastReviewedSha is hex-validated so a bad PATCH can't
+// persist a non-SHA into apps.json.
+export const referenceRepoUpdateSchema = z.object({
+  name: z.string().trim().min(1).max(120).optional(),
+  repoUrl: z.string().trim().min(1).max(500).optional(),
+  branch: z.string().trim().max(120).optional(),
+  notes: z.string().max(4000).optional(),
+  lastReviewedSha: z.string().regex(/^[0-9a-f]{40}$/i, 'must be a 40-char hex SHA').nullable().optional()
+});
+
+// Partial schema for updates. referenceRepos is intentionally absent
+// from appSchema (see comment there) so it can't sneak in via PUT
+// either — all ref CRUD goes through /api/apps/:appId/reference-repos.
 export const appUpdateSchema = appSchema.partial();
 
 // Provider schema

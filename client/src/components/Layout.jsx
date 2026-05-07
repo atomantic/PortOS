@@ -264,6 +264,7 @@ const navItems = [
       { to: '/post/wordplay', label: 'Wordplay', icon: MessageCircle },
     ]
   },
+  { to: '/reference-repos', label: 'Reference Repos', icon: GitBranch, single: true },
   {
     label: 'Settings',
     icon: Settings,

@@ -12,7 +12,7 @@ import { copyFile, unlink } from 'fs/promises';
 import { randomUUID } from 'crypto';
 import { join, basename, resolve as resolvePath, sep as PATH_SEP, extname } from 'path';
 import { z } from 'zod';
-import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
 import { uploadFields } from '../lib/multipart.js';
 import { PATHS, ensureDir } from '../lib/fileUtils.js';
 import { safeUnder } from '../lib/ffmpeg.js';
@@ -26,6 +26,7 @@ import {
   extractLastFrame,
   stitchVideos,
   upscaleHistoryItem,
+  DEFAULT_NUM_FRAMES,
 } from '../services/videoGen/local.js';
 import { enqueueJob, attachSseClient, cancelJob, listJobs } from '../services/mediaJobQueue/index.js';
 
@@ -79,13 +80,21 @@ const optionalNum = (min, max, label) => z.preprocess(
   (v) => v == null || v === '' ? undefined : Number(v),
   z.number().refine((n) => n >= min && n <= max, `${label} ${min}..${max}`).optional(),
 );
+// numFrames and chunks must be integers. Multipart bodies send `'121'` as
+// a string and `'121.5'` would silently coerce to 121.5 — feed that into
+// keyframe-index range checks and the maximum becomes a fractional bound,
+// not an integer one. Reject up front.
+const optionalInt = (min, max, label) => z.preprocess(
+  (v) => v == null || v === '' ? undefined : Number(v),
+  z.number().int().refine((n) => n >= min && n <= max, `${label} ${min}..${max}`).optional(),
+);
 const generateBodySchema = z.object({
   prompt: z.string().min(1).max(2000),
   negativePrompt: z.string().max(2000).optional(),
   modelId: z.string().max(64).optional(),
   width: optionalNum(64, 2048, 'width'),
   height: optionalNum(64, 2048, 'height'),
-  numFrames: optionalNum(1, 1024, 'numFrames'),
+  numFrames: optionalInt(1, 1024, 'numFrames'),
   fps: optionalNum(1, 60, 'fps'),
   steps: optionalNum(1, 200, 'steps'),
   guidanceScale: optionalNum(0, 30, 'guidanceScale'),
@@ -105,12 +114,30 @@ const generateBodySchema = z.object({
   // Chain N renders end-to-end: each chunk's last frame becomes the next
   // chunk's start frame, then ffmpeg concats them into one clip. 1..8 to
   // keep the worst-case wall time bounded (8 × ~5min ≈ 40min on M3 Max).
-  chunks: optionalNum(1, 8, 'chunks'),
+  chunks: optionalInt(1, 8, 'chunks'),
   // History id of a prior render to extend natively (ltx2 runtime only —
   // routes through ExtendPipeline.extend_from_video which conditions on
   // the entire source video's latent rather than a single last frame).
   // The legacy chained-i2v path keeps using sourceImageFile.
   extendFromVideoId: z.string().uuid().optional(),
+  // Multi-keyframe interpolation (ltx2 + mode='fflf'). Each entry pins one
+  // gallery image at a specific pixel-frame index. Indices must be strictly
+  // ascending and within [0, numFrames-1]. When set, overrides the legacy
+  // sourceImageFile/lastImageFile pair. Multipart bodies arrive as a string,
+  // so the preprocess parses JSON before zod sees it.
+  keyframes: z.preprocess(
+    (v) => {
+      if (v == null || v === '') return undefined;
+      if (typeof v === 'string') {
+        try { return JSON.parse(v); } catch { return v; }
+      }
+      return v;
+    },
+    z.array(z.object({
+      file: z.string().min(1).max(512),
+      index: z.number().int().min(0).max(1023),
+    })).min(2).max(8).optional(),
+  ),
 });
 
 router.get('/status', asyncHandler(async (_req, res) => {
@@ -166,7 +193,7 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
   const parsed = generateBodySchema.safeParse(req.body);
   if (!parsed.success) {
     await cleanupTempUploads();
-    throw new ServerError(`Validation failed: ${parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join(', ')}`, { status: 400, code: 'VALIDATION_ERROR' });
+    failValidation(parsed);
   }
   const body = parsed.data;
   const s = await getSettings();
@@ -316,6 +343,96 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
     extraUploadedTempPaths.push(audioFilePath);
   }
 
+  // Multi-keyframe interpolation: resolve each gallery filename to an
+  // absolute path under PATHS.images via the same path-traversal guard as
+  // sourceImageFile. Reject up-front when any reference can't be resolved
+  // so the queue doesn't accept a doomed job. Only valid for fflf mode +
+  // single-chunk renders (the chain orchestrator pins keyframes only on
+  // chunk 0; chaining ≥2 chunks with N keyframes has no defined semantic).
+  let resolvedKeyframes = null;
+  if (body.keyframes && body.keyframes.length >= 2) {
+    if (body.mode && body.mode !== 'fflf') {
+      await cleanupAllStaged();
+      throw new ServerError(
+        `keyframes is only valid with mode='fflf' (got mode='${body.mode}').`,
+        { status: 400, code: 'KEYFRAMES_MODE_MISMATCH' },
+      );
+    }
+    // Reject mixing keyframes with the legacy 2-keyframe inputs — the
+    // worker would silently ignore sourceImage/lastImage when keyframes is
+    // present, but staging/resizing them anyway is wasted work and the
+    // ambiguity (which one wins?) bites callers later. Force the user to
+    // pick one shape per request. Covers both upload paths and the
+    // gallery-resolved file fields.
+    if (sourceImagePath || lastImagePath || body.sourceImageFile || body.lastImageFile) {
+      await cleanupAllStaged();
+      throw new ServerError(
+        'keyframes cannot be combined with sourceImage / lastImage inputs — pass each anchor frame as a keyframes[] entry instead.',
+        { status: 400, code: 'KEYFRAMES_LEGACY_INPUTS_CONFLICT' },
+      );
+    }
+    // Multi-keyframe FFLF is an LTX-2 primitive — the legacy mlx_video
+    // pipeline has no equivalent. Mirror the a2v guard above so a bad
+    // modelId can't enqueue a doomed job that will only fail in the
+    // worker (with KEYFRAMES_REQUIRE_LTX2).
+    if (effectiveModel && effectiveModel.runtime !== 'ltx2') {
+      await cleanupAllStaged();
+      throw new ServerError(
+        `keyframes mode requires an ltx2-runtime model. Model "${effectiveModelId}" runs on "${effectiveModel.runtime || 'mlx_video'}".`,
+        { status: 400, code: 'KEYFRAMES_REQUIRE_LTX2' },
+      );
+    }
+    // Default mode to 'fflf' when keyframes is set without an explicit mode —
+    // otherwise local.js#buildLtx2Args resolves helperMode to 'text' and the
+    // keyframes silently disappear.
+    if (!body.mode) body.mode = 'fflf';
+    if (body.chunks != null && Number(body.chunks) > 1) {
+      await cleanupAllStaged();
+      throw new ServerError(
+        'keyframes cannot be combined with chunks > 1 — keyframes anchor a single clip.',
+        { status: 400, code: 'KEYFRAMES_CHUNKS_CONFLICT' },
+      );
+    }
+    // Validate keyframe indices against the *effective* numFrames so a
+    // request with no explicit `numFrames` (which falls back to the
+    // generateVideo default of 121) still rejects out-of-range indices
+    // up-front instead of failing late inside the worker / Python helper.
+    // Keep this in sync with the default in services/videoGen/local.js.
+    const effectiveNumFrames = body.numFrames != null ? Number(body.numFrames) : DEFAULT_NUM_FRAMES;
+    resolvedKeyframes = [];
+    let prevIndex = -1;
+    for (let i = 0; i < body.keyframes.length; i++) {
+      const kf = body.keyframes[i];
+      const path = resolveGalleryImage(kf.file);
+      if (!path) {
+        await cleanupAllStaged();
+        throw new ServerError(
+          `keyframes[${i}].file not found in gallery: ${kf.file}`,
+          { status: 400, code: 'KEYFRAME_GALLERY_MISS' },
+        );
+      }
+      if (kf.index <= prevIndex) {
+        await cleanupAllStaged();
+        throw new ServerError(
+          `keyframes indices must be strictly ascending; got ${prevIndex} then ${kf.index}`,
+          { status: 400, code: 'KEYFRAME_INDICES_NOT_ASCENDING' },
+        );
+      }
+      if (kf.index > effectiveNumFrames - 1) {
+        await cleanupAllStaged();
+        const numFramesLabel = body.numFrames != null
+          ? `numFrames ${body.numFrames}`
+          : `default numFrames ${DEFAULT_NUM_FRAMES}`;
+        throw new ServerError(
+          `keyframes[${i}].index ${kf.index} >= ${numFramesLabel}`,
+          { status: 400, code: 'KEYFRAME_INDEX_OUT_OF_RANGE' },
+        );
+      }
+      resolvedKeyframes.push({ path, index: kf.index });
+      prevIndex = kf.index;
+    }
+  }
+
   // Native extend (ltx2 runtime): resolve the history id to a video file
   // path under data/videos/ and forward it as extendFromVideoPath. Reject
   // a missing/tampered id rather than silently falling back to t2v —
@@ -371,6 +488,7 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
       uploadedTempPath,
       uploadedTempPaths: extraUploadedTempPaths,
       lastImagePath,
+      keyframes: resolvedKeyframes,
       extendFromVideoPath,
       mode: body.mode,
       imageStrength: body.imageStrength,
@@ -438,10 +556,6 @@ router.post('/last-frame/:id', asyncHandler(async (req, res) => {
 // happily accepts e.g. 36 hyphens). Matches the .uuid() usage in the
 // other route schemas.
 const historyIdSchema = z.string().uuid('invalid history id');
-
-const failValidation = (parsed) => {
-  throw new ServerError(`Validation failed: ${parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join(', ')}`, { status: 400, code: 'VALIDATION_ERROR' });
-};
 
 router.post('/upscale/:id', asyncHandler(async (req, res) => {
   const parsed = historyIdSchema.safeParse(req.params.id);

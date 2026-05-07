@@ -13,6 +13,7 @@ export const APP_DETAIL_TABS = [
   { id: 'git', label: 'Git' },
   { id: 'gsd', label: 'GSD' },
   { id: 'processes', label: 'Processes' },
+  { id: 'references', label: 'References' },
   { id: 'tasks', label: 'Tasks' },
   { id: 'update', label: 'Update' },
 ];
