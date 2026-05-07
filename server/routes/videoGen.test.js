@@ -283,6 +283,21 @@ describe('videoGen routes', () => {
       }));
     });
 
+    it("defaults mode to 'fflf' when keyframes is set without an explicit mode", async () => {
+      const r = await request(app).post('/api/video-gen/').send({
+        prompt: 'mode-default coercion',
+        numFrames: 49,
+        keyframes: [
+          { file: 'a.png', index: 0 },
+          { file: 'b.png', index: 48 },
+        ],
+      });
+      expect(r.status).toBe(200);
+      expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({
+        params: expect.objectContaining({ mode: 'fflf' }),
+      }));
+    });
+
     it('rejects keyframes when paired with mode != fflf', async () => {
       const r = await request(app).post('/api/video-gen/').send({
         prompt: 'wrong mode',

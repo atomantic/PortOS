@@ -9,9 +9,12 @@ import * as api from '../../services/api';
  * read-only-ish mode (`compact={true}` hides the "Add" form so the
  * global summary stays a summary).
  */
-export default function ReferenceReposPanel({ appId, appName, compact = false }) {
-  const [refs, setRefs] = useState([]);
-  const [loading, setLoading] = useState(true);
+export default function ReferenceReposPanel({ appId, appName, compact = false, initialRefs = null }) {
+  const [refs, setRefs] = useState(initialRefs || []);
+  // Skip the initial fetch when the parent already handed us the list — the
+  // global summary page reads referenceRepos off /api/apps and would
+  // otherwise issue an N+1 GET per app on mount.
+  const [loading, setLoading] = useState(initialRefs == null);
   const [showAdd, setShowAdd] = useState(false);
   // Per-ref UI state — keyed by ref id. Holds the in-progress check snapshot
   // (commit list) so the user can see what's queued before marking-as-reviewed.
@@ -26,7 +29,13 @@ export default function ReferenceReposPanel({ appId, appName, compact = false })
     setLoading(false);
   }, [appId]);
 
-  useEffect(() => { fetch(); }, [fetch]);
+  // Fetch on mount unless the parent seeded us with initialRefs. After
+  // any local mutation we re-fetch unconditionally to pick up server-side
+  // status updates (lastCheckedAt, lastError).
+  const initialRefsProvided = initialRefs != null;
+  useEffect(() => {
+    if (!initialRefsProvided) fetch();
+  }, [fetch, initialRefsProvided]);
 
   const handleAdd = async (form) => {
     const created = await api.addReferenceRepo(appId, form).catch((e) => { toast.error(e.message || 'Add failed'); return null; });

@@ -74,7 +74,7 @@ export default function ReferenceRepos() {
                 Manage <ExternalLink size={12} />
               </Link>
             </div>
-            <ReferenceReposPanel appId={app.id} appName={app.name} compact />
+            <ReferenceReposPanel appId={app.id} appName={app.name} compact initialRefs={app.referenceRepos} />
           </div>
         ))
       )}

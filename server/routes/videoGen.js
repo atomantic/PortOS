@@ -349,6 +349,10 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
         { status: 400, code: 'KEYFRAMES_MODE_MISMATCH' },
       );
     }
+    // Default mode to 'fflf' when keyframes is set without an explicit mode —
+    // otherwise local.js#buildLtx2Args resolves helperMode to 'text' and the
+    // keyframes silently disappear.
+    if (!body.mode) body.mode = 'fflf';
     if (body.chunks != null && Number(body.chunks) > 1) {
       await cleanupAllStaged();
       throw new ServerError(
