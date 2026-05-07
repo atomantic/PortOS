@@ -54,18 +54,25 @@ export default function ImageClean() {
     });
     // Drop responses from a stale click — newer reclean is in flight.
     if (myRequestId !== requestIdRef.current) return;
-    setBusy(false);
-    if (cleaned) {
-      const objectUrl = await buildResultUrl(cleaned);
-      // Bail if a newer reclean started while we were decoding.
-      if (myRequestId !== requestIdRef.current) {
-        URL.revokeObjectURL(objectUrl);
-        return;
-      }
-      resultUrlRef.current = objectUrl;
-      setResult({ ...cleaned, objectUrl });
-      toast.success(cleaned.c2paStripped ? 'C2PA provenance stripped' : 'Image cleaned');
+    if (!cleaned) {
+      setBusy(false);
+      return;
     }
+    // Keep busy=true through the decode — for large images the base64→Blob
+    // conversion is non-trivial and the spinner should stay visible.
+    const objectUrl = await buildResultUrl(cleaned).catch((err) => {
+      toast.error(err.message || 'Failed to decode cleaned image');
+      return null;
+    });
+    if (myRequestId !== requestIdRef.current) {
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+      return;
+    }
+    setBusy(false);
+    if (!objectUrl) return;
+    resultUrlRef.current = objectUrl;
+    setResult({ ...cleaned, objectUrl });
+    toast.success(cleaned.c2paStripped ? 'C2PA provenance stripped' : 'Image cleaned');
   }, []);
 
   const handleFile = async (file) => {
