@@ -22,15 +22,30 @@ export default function ImageClean() {
   const fileInputRef = useRef(null);
   const requestIdRef = useRef(0);
   const previewUrlRef = useRef(null);
+  const resultUrlRef = useRef(null);
 
   // Revoke any outstanding blob URL on unmount so we don't leak.
   useEffect(() => () => {
     if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
+    if (resultUrlRef.current) URL.revokeObjectURL(resultUrlRef.current);
   }, []);
+
+  // Decode the cleaned-image base64 once into a blob URL so the After preview
+  // and the download link don't each carry a multi-MB data: string.
+  const buildResultUrl = (cleaned) => {
+    const bin = atob(cleaned.data);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i += 1) bytes[i] = bin.charCodeAt(i);
+    return URL.createObjectURL(new Blob([bytes], { type: cleaned.mimeType }));
+  };
 
   const runClean = useCallback(async (base64, lvl) => {
     const myRequestId = ++requestIdRef.current;
     setBusy(true);
+    if (resultUrlRef.current) {
+      URL.revokeObjectURL(resultUrlRef.current);
+      resultUrlRef.current = null;
+    }
     setResult(null);
     const cleaned = await api.cleanImage(base64, lvl).catch((err) => {
       toast.error(err.message || 'Failed to clean image');
@@ -40,7 +55,9 @@ export default function ImageClean() {
     if (myRequestId !== requestIdRef.current) return;
     setBusy(false);
     if (cleaned) {
-      setResult(cleaned);
+      const objectUrl = buildResultUrl(cleaned);
+      resultUrlRef.current = objectUrl;
+      setResult({ ...cleaned, objectUrl });
       toast.success(cleaned.c2paStripped ? 'C2PA provenance stripped' : 'Image cleaned');
     }
   }, []);
@@ -106,6 +123,10 @@ export default function ImageClean() {
     if (previewUrlRef.current) {
       URL.revokeObjectURL(previewUrlRef.current);
       previewUrlRef.current = null;
+    }
+    if (resultUrlRef.current) {
+      URL.revokeObjectURL(resultUrlRef.current);
+      resultUrlRef.current = null;
     }
     setOriginal(null);
     setResult(null);
@@ -220,7 +241,7 @@ export default function ImageClean() {
                 {busy && <BrailleSpinner text="Cleaning" />}
                 {!busy && result && (
                   <img
-                    src={`data:${result.mimeType};base64,${result.data}`}
+                    src={result.objectUrl}
                     alt="Cleaned"
                     className="max-w-full max-h-[480px] object-contain"
                   />
@@ -261,7 +282,7 @@ export default function ImageClean() {
           <div className="flex flex-wrap gap-2">
             {result && (
               <a
-                href={`data:${result.mimeType};base64,${result.data}`}
+                href={result.objectUrl}
                 download={downloadName}
                 className="px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors flex items-center gap-2"
               >

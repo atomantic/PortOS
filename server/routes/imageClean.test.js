@@ -19,7 +19,7 @@ let webpFixture;
 let pngWithC2PA;
 
 beforeAll(async () => {
-  // 1×1 fixtures sized just large enough to round-trip through sharp.
+  // 4×4 fixtures sized just large enough to round-trip through sharp.
   const baseInput = {
     create: { width: 4, height: 4, channels: 3, background: { r: 200, g: 100, b: 50 } },
   };

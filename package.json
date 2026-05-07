@@ -20,7 +20,7 @@
     "pm2:startup": "node ./node_modules/pm2/bin/pm2 startup",
     "install:all": "npm run setup",
     "migrations": "node scripts/run-migrations.js",
-    "setup": "git submodule update --init --recursive && npm install && npm install --prefix client && npm install --prefix server && npm install --prefix autofixer && node client/node_modules/esbuild/install.js && node server/node_modules/esbuild/install.js && npm rebuild node-pty --prefix server && node scripts/setup-data.js && node scripts/setup-db.js && node scripts/setup-browser.js",
+    "setup": "git submodule update --init --recursive && npm install && npm install --prefix client && npm install --prefix server && npm install --prefix autofixer && node client/node_modules/esbuild/install.js && node server/node_modules/esbuild/install.js && npm rebuild node-pty sharp --prefix server && node scripts/setup-data.js && node scripts/setup-db.js && node scripts/setup-browser.js",
     "setup:data": "node scripts/setup-data.js",
     "setup:db": "node scripts/setup-db.js",
     "setup:browser": "node scripts/setup-browser.js",

@@ -109,11 +109,22 @@ router.post('/', asyncHandler(async (req, res) => {
 
   // Single sharp instance, .clone()-ed so metadata + transform share one decode
   // instead of decoding the buffer twice.
+  // Wrap sharp errors (truncated/corrupt buffer that still passed the magic-byte
+  // sniff) into a 400 so bad client input doesn't surface as a 500.
   const base = sharp(buffer);
-  const [meta, cleaned] = await Promise.all([
-    base.clone().metadata(),
-    applyEncoder(applyDenoise(base.clone(), level), format).toBuffer(),
-  ]);
+  let meta;
+  let cleaned;
+  try {
+    [meta, cleaned] = await Promise.all([
+      base.clone().metadata(),
+      applyEncoder(applyDenoise(base.clone(), level), format).toBuffer(),
+    ]);
+  } catch (err) {
+    throw new ServerError(`Failed to decode ${format} image: ${err.message}`, {
+      status: 400,
+      code: 'INVALID_IMAGE',
+    });
+  }
 
   console.log(`🧼 Image cleaned: ${format} ${buffer.length}B → ${cleaned.length}B (level=${level}, c2pa=${c2paStripped})`);
 
