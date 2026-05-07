@@ -103,10 +103,16 @@ const buildLtx2Args = ({ model, prompt, negativePrompt, width, height, numFrames
   // the route schema's documented "absence falls back to inferring" behavior.
   const wantsNativeExtend = mode === 'extend' && !!extendFromVideoPath;
   const hasMultiKeyframes = Array.isArray(keyframes) && keyframes.length >= 2;
+  // When `mode` is omitted but multi-keyframes are supplied, infer fflf so a
+  // direct caller (test, script) doesn't get a silent text-only render with
+  // their keyframes dropped on the floor. The route handler always sets
+  // mode='fflf' when keyframes are present, but defense-in-depth here covers
+  // callers that bypass the route (e.g. Writers Room batch dispatch).
   const helperMode = mode === 'fflf' ? 'fflf'
     : mode === 'a2v' ? 'a2v'
     : wantsNativeExtend ? 'extend'
     : mode === 'image' || mode === 'extend' ? 'image'
+    : (!mode && hasMultiKeyframes) ? 'fflf'
     : (!mode && sourceImagePath) ? 'image'
     : 'text';
   if (helperMode === 'fflf' && !hasMultiKeyframes && (!sourceImagePath || !lastImagePath)) {

@@ -194,7 +194,10 @@ export const referenceRepoSchema = z.object({
   // anything else is treated as a local path.
   repoUrl: z.string().min(1).max(500),
   branch: z.string().max(120).optional().default('main'),
-  lastReviewedSha: z.string().length(40).nullable().optional(),
+  // 40-char hex SHA (case-insensitive), or null (no review yet). Validating
+  // hex here rather than just length means a bogus PATCH like 'g'.repeat(40)
+  // fails fast at the API instead of producing confusing git failures later.
+  lastReviewedSha: z.string().regex(/^[0-9a-f]{40}$/i, 'must be a 40-char hex SHA').nullable().optional(),
   lastCheckedAt: z.string().datetime().nullable().optional(),
   notes: z.string().max(4000).optional().default(''),
   // Last action's outcome — used by the UI to highlight refs needing
@@ -264,7 +267,9 @@ export const referenceRepoUpdateSchema = z.object({
   notes: z.string().max(4000).optional(),
   // Allow the UI to manually pin lastReviewedSha (e.g. "I read these
   // commits already, mark them reviewed without spawning an agent").
-  lastReviewedSha: z.string().length(40).nullable().optional()
+  // Same case-insensitive hex validation as referenceRepoSchema so a bad
+  // PATCH can't persist a non-SHA into apps.json.
+  lastReviewedSha: z.string().regex(/^[0-9a-f]{40}$/i, 'must be a 40-char hex SHA').nullable().optional()
 });
 
 // Partial schema for updates

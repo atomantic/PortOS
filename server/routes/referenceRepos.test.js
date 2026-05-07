@@ -89,6 +89,15 @@ describe('reference repos routes', () => {
       });
       expect(r.status).toBe(400);
     });
+
+    it('rejects 40-char non-hex lastReviewedSha (validation regex)', async () => {
+      // Length-only validation would accept 'g'.repeat(40) and persist it,
+      // then `git log <bad>..HEAD` would fail later in a confusing way.
+      const r = await request(app).patch('/api/apps/app-1/reference-repos/r1').send({
+        lastReviewedSha: 'g'.repeat(40),
+      });
+      expect(r.status).toBe(400);
+    });
   });
 
   describe('DELETE /:refId', () => {

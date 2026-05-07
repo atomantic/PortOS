@@ -257,6 +257,8 @@ describe('isLocalPath', () => {
     expect(isLocalPath('git@github.com:owner/repo.git')).toBe(false);
     // scp-style with non-github user@host shape — must still be remote
     expect(isLocalPath('user@example.com:owner/repo.git')).toBe(false);
+    // scp-style with NO user (`host:path`) — git accepts these too
+    expect(isLocalPath('github.com:owner/repo.git')).toBe(false);
   });
 
   it('classifies absolute paths and ~-paths as local', () => {
@@ -264,8 +266,10 @@ describe('isLocalPath', () => {
     expect(isLocalPath('/Users/me/phosphene')).toBe(true);
     expect(isLocalPath('~/phosphene')).toBe(true);
     expect(isLocalPath('./phosphene')).toBe(true);
-    // Windows drive paths must NOT be treated as scp-style remotes
+    // Windows drive paths must NOT be treated as scp-style remotes —
+    // single-char host segment + path starting with `\` or `/`.
     expect(isLocalPath('C:\\Users\\me\\phosphene')).toBe(true);
+    expect(isLocalPath('C:/Users/me/phosphene')).toBe(true);
   });
 });
 

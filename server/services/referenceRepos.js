@@ -50,19 +50,24 @@ const SHORT_SHA = (sha) => (sha && SHA_RE.test(sha) ? sha.slice(0, 8) : null);
 
 const cloneDir = (refId) => join(REFERENCE_REPOS_ROOT, refId);
 
-// scp-style remotes: `user@host:owner/repo[.git]`. Different from a Windows
-// path like `C:\foo` because the part before `:` must be `user@host` shaped
-// (no slash, must contain `@`), and the part after `:` must NOT start with
-// `\` (which would make it a Windows drive). This matches how git itself
-// detects scp-like syntax in `connect.c`.
-const SCP_REMOTE_RE = /^[^/@:]+@[^/@:]+:[^\\].*/;
+// scp-style remotes — git accepts both `user@host:path` and the bare
+// `host:path` form. Disambiguating from a Windows drive path (`C:\foo`,
+// `C:/foo`) requires that the segment before `:` look like a hostname
+// (contain a `.` OR be longer than 1 char), and the segment AFTER `:`
+// must NOT start with `\` or `/` followed by a single drive-letter-y char.
+// This matches how git itself parses scp-syntax in `connect.c`. Examples:
+//   git@github.com:owner/repo.git   → remote (matches scp with user)
+//   github.com:owner/repo.git       → remote (matches scp without user)
+//   C:\Users\me\repo                → local (host-segment is single char)
+//   C:/Users/me/repo                → local (same; segment after `:` is `/`)
+const SCP_REMOTE_RE = /^([^/@:]+@)?[^/@:]*[.][^/@:]*:[^\\/].*$|^([^/@:]+@)[^/@:]+:[^\\/].*$/;
 
 const isLocalPath = (urlOrPath) => {
   if (!urlOrPath) return false;
-  // scheme:// and scp-style `user@host:path` are remote; everything else
-  // (including ~ and absolute paths) is local. The user can pass
-  // `/Users/.../phosphene` to skip the clone and reuse an existing
-  // working tree.
+  // scheme:// and scp-style remotes (`user@host:path` and bare `host:path`)
+  // are remote; everything else (including ~ and absolute paths) is local.
+  // The user can pass `/Users/.../phosphene` or `~/phosphene` to skip the
+  // clone and reuse an existing working tree.
   if (urlOrPath.includes('://')) return false;
   if (SCP_REMOTE_RE.test(urlOrPath)) return false;
   return true;

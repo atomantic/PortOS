@@ -19,7 +19,10 @@ export default function ReferenceReposPanel({ appId, appName, compact = false, i
   // Per-ref UI state — keyed by ref id. Holds the in-progress check snapshot
   // (commit list) so the user can see what's queued before marking-as-reviewed.
   const [snapshots, setSnapshots] = useState({});
-  const [checkingId, setCheckingId] = useState(null);
+  // Track concurrent in-flight checks per-ref. Using a Set so two adjacent
+  // rows can both spin without one row's completion clearing the other's
+  // spinner. RefRow reads checking via `checkingIds.has(ref.id)`.
+  const [checkingIds, setCheckingIds] = useState(() => new Set());
   const [editingNotesId, setEditingNotesId] = useState(null);
 
   const fetch = useCallback(async () => {
@@ -68,12 +71,14 @@ export default function ReferenceReposPanel({ appId, appName, compact = false, i
   };
 
   const handleCheck = async (ref) => {
-    setCheckingId(ref.id);
+    // Add this ref's id to the in-flight set so its spinner stays on
+    // while it runs, even if a different ref's check completes first.
+    setCheckingIds((prev) => { const n = new Set(prev); n.add(ref.id); return n; });
     const snap = await api.checkReferenceRepo(appId, ref.id).catch((e) => {
       toast.error(e.message || 'Check failed');
       return null;
     });
-    setCheckingId(null);
+    setCheckingIds((prev) => { const n = new Set(prev); n.delete(ref.id); return n; });
     if (!snap) { fetch(); return; }
     setSnapshots((prev) => ({ ...prev, [ref.id]: snap }));
     toast.success(`${ref.name}: ${snap.commitCount} new commit${snap.commitCount === 1 ? '' : 's'}`);
@@ -152,7 +157,7 @@ export default function ReferenceReposPanel({ appId, appName, compact = false, i
               key={ref.id}
               reference={ref}
               snapshot={snapshots[ref.id]}
-              checking={checkingId === ref.id}
+              checking={checkingIds.has(ref.id)}
               editingNotes={editingNotesId === ref.id}
               onCheck={() => handleCheck(ref)}
               onMarkReviewed={() => handleMarkReviewed(ref)}
