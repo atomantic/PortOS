@@ -60,7 +60,7 @@ const CONTENT_TYPES = {
 // endpoint's strict `default-src 'none'` CSP, so they are unusable as app icons
 // even though the file exists. Skip them and let detection fall through to a
 // sibling PNG/raster file. Inline data: URIs are fine.
-async function isUsableSvg(filePath) {
+export async function isUsableSvg(filePath) {
   const content = await readFile(filePath, 'utf-8').catch(() => null);
   if (content === null) return false;
   const externalImage = /<image\b[^>]*\b(?:xlink:)?href\s*=\s*['"](?!data:)/i;

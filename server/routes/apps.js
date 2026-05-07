@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { spawn } from 'child_process';
 import { readFile, writeFile, stat, access, mkdir } from 'fs/promises';
-import { join, resolve } from 'path';
+import { join, resolve, extname } from 'path';
 import { PATHS } from '../lib/fileUtils.js';
 import * as appsService from '../services/apps.js';
 import { notifyAppsChanged, PORTOS_APP_ID } from '../services/apps.js';
@@ -16,7 +16,7 @@ import { parseCronToNextRun } from '../services/eventScheduler.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 import { parseEcosystemFromPath, usesPm2 } from '../services/streamingDetect.js';
-import { detectAppIcon, getIconContentType } from '../services/appIconDetect.js';
+import { detectAppIcon, getIconContentType, isUsableSvg } from '../services/appIconDetect.js';
 import { hasDeployScript } from '../services/appDeployer.js';
 import { checkScripts, installScripts, XCODE_SCRIPT_NAMES } from '../services/xcodeScripts.js';
 
@@ -277,11 +277,19 @@ router.post('/:id/upgrade-tls', loadApp, asyncHandler(async (req, res) => {
 router.get('/:id/icon', loadApp, asyncHandler(async (req, res) => {
   const app = req.loadedApp;
 
-  // Use stored appIconPath, or detect on-the-fly
+  // Use stored appIconPath, or detect on-the-fly. Stored SVGs that embed an
+  // external <image href="..."> render blank under the route's `default-src
+  // 'none'` CSP, so re-detect when the cached path is an unusable SVG (e.g.
+  // PortOS's own favicon.svg, which wraps a /portos-logo.png reference) —
+  // otherwise installs that resolved an icon BEFORE the detector learned to
+  // skip these stay broken until the user manually re-detects.
   let iconPath = app.appIconPath;
-  if (!iconPath || !await pathExists(iconPath)) {
+  const stale =
+    !iconPath ||
+    !await pathExists(iconPath) ||
+    (extname(iconPath).toLowerCase() === '.svg' && !await isUsableSvg(iconPath));
+  if (stale) {
     iconPath = await detectAppIcon(app.repoPath, app.type);
-    // Persist the detected path for future requests
     if (iconPath && iconPath !== app.appIconPath) {
       await appsService.updateApp(app.id, { appIconPath: iconPath });
     }
@@ -992,8 +1000,13 @@ router.post('/:id/refresh-config', loadApp, asyncHandler(async (req, res) => {
     updates.uiPort = deriveUiPort(updates.uiPort, updates.apiPort, updates.devUiPort || app.devUiPort);
   }
 
-  // Detect app icon if not already set
-  if (!app.appIconPath || !await pathExists(app.appIconPath)) {
+  // Detect app icon if not already set, missing on disk, or stored as an
+  // unusable external-image SVG (won't render under the icon route's CSP).
+  const iconStale =
+    !app.appIconPath ||
+    !await pathExists(app.appIconPath) ||
+    (extname(app.appIconPath).toLowerCase() === '.svg' && !await isUsableSvg(app.appIconPath));
+  if (iconStale) {
     const detectedIcon = await detectAppIcon(app.repoPath, app.type);
     if (detectedIcon) updates.appIconPath = detectedIcon;
   }

@@ -43,7 +43,8 @@ vi.mock('../services/appUpdater.js', () => ({
 
 vi.mock('../services/appIconDetect.js', () => ({
   detectAppIcon: vi.fn(),
-  getIconContentType: vi.fn()
+  getIconContentType: vi.fn(),
+  isUsableSvg: vi.fn().mockResolvedValue(true)
 }));
 
 vi.mock('../services/cos.js', () => ({
@@ -76,7 +77,7 @@ import * as appsService from '../services/apps.js';
 import * as pm2Service from '../services/pm2.js';
 import * as history from '../services/history.js';
 import * as streamingDetect from '../services/streamingDetect.js';
-import { detectAppIcon, getIconContentType } from '../services/appIconDetect.js';
+import { detectAppIcon, getIconContentType, isUsableSvg } from '../services/appIconDetect.js';
 import { installScripts } from '../services/xcodeScripts.js';
 import { writeFileSync, mkdirSync, rmSync } from 'fs';
 import { join } from 'path';
@@ -630,6 +631,28 @@ describe('Apps Routes', () => {
         .set('If-None-Match', `W/"other-etag", ${etag}, W/"another"`);
 
       expect(second.status).toBe(304);
+    });
+
+    it('redetects when stored path is an unusable SVG (external <image href>) so PortOS-style icons recover', async () => {
+      // Simulate the bad-state PortOS install: appIconPath stored as an SVG
+      // that exists on disk but embeds <image href="/portos-logo.png"> — CSP
+      // blocks the embed, so it renders blank. The route must re-detect.
+      const badSvgPath = join(iconDir, 'favicon.svg');
+      const goodPngPath = join(iconDir, 'redetected.png');
+      writeFileSync(badSvgPath, '<svg><image href="/logo.png"/></svg>');
+      writeFileSync(goodPngPath, 'fake-png-data');
+      appsService.getAppById.mockResolvedValue({
+        ...mockApp,
+        appIconPath: badSvgPath,
+      });
+      isUsableSvg.mockResolvedValueOnce(false);
+      detectAppIcon.mockResolvedValueOnce(goodPngPath);
+
+      const response = await request(app).get('/api/apps/app-001/icon');
+
+      expect(response.status).toBe(200);
+      expect(detectAppIcon).toHaveBeenCalledWith('/tmp/test', undefined);
+      expect(appsService.updateApp).toHaveBeenCalledWith('app-001', { appIconPath: goodPngPath });
     });
   });
 
