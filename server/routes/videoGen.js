@@ -349,6 +349,17 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
         { status: 400, code: 'KEYFRAMES_MODE_MISMATCH' },
       );
     }
+    // Multi-keyframe FFLF is an LTX-2 primitive — the legacy mlx_video
+    // pipeline has no equivalent. Mirror the a2v guard above so a bad
+    // modelId can't enqueue a doomed job that will only fail in the
+    // worker (with KEYFRAMES_REQUIRE_LTX2).
+    if (effectiveModel && effectiveModel.runtime !== 'ltx2') {
+      await cleanupAllStaged();
+      throw new ServerError(
+        `keyframes mode requires an ltx2-runtime model. Model "${effectiveModelId}" runs on "${effectiveModel.runtime || 'mlx_video'}".`,
+        { status: 400, code: 'KEYFRAMES_REQUIRE_LTX2' },
+      );
+    }
     // Default mode to 'fflf' when keyframes is set without an explicit mode —
     // otherwise local.js#buildLtx2Args resolves helperMode to 'text' and the
     // keyframes silently disappear.

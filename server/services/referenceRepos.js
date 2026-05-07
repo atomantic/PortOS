@@ -16,6 +16,7 @@
  */
 
 import { existsSync } from 'fs';
+import { homedir } from 'os';
 import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { ensureDir, PATHS } from '../lib/fileUtils.js';
@@ -25,6 +26,17 @@ import {
   getAppById,
   updateApp,
 } from './apps.js';
+
+// `path.join(homedir(), '/.foo')` discards the homedir because of the leading
+// slash, so we strip the `~/` prefix (or `~`) before joining. Same shape as
+// the helper in lib/mediaModels.js — kept inline here to avoid pulling in the
+// rest of that module just for one helper.
+const expandHome = (p) => {
+  if (!p || typeof p !== 'string' || !p.startsWith('~')) return p;
+  if (p === '~') return homedir();
+  if (p.startsWith('~/')) return join(homedir(), p.slice(2));
+  return p;
+};
 
 const REFERENCE_REPOS_ROOT = join(PATHS.data, 'cos', 'reference-repos');
 
@@ -78,12 +90,13 @@ const redactArgsForError = (args) => args.map(redactUrlCreds);
 const runGit = async (cwd, args, { timeoutMs = 60_000 } = {}) => {
   const result = await execGit(args, cwd, { timeout: timeoutMs }).catch((err) => ({ error: err }));
   if (result.error) {
-    // Log full detail server-side; surface a credential-redacted message in
-    // the thrown error so persisted `lastError` / API responses can't leak
-    // tokens embedded in the repo URL.
-    console.error(`❌ git ${args.join(' ')} (cwd=${cwd}) failed: ${result.error.message}`);
+    // Redact `user:token@host` userinfo and scp-style `user@host` from BOTH
+    // the persisted/thrown message AND the server log line — credentials
+    // embedded in repoUrl must not land anywhere they could later be read
+    // (logs, persisted lastError, or API responses).
     const safeArgs = redactArgsForError(args);
     const safeMessage = redactUrlCreds(String(result.error.message || ''));
+    console.error(`❌ git ${safeArgs.join(' ')} (cwd=${cwd}) failed: ${safeMessage}`);
     throw new ServerError(`git ${safeArgs.join(' ')}: ${safeMessage}`, { status: 500, code: 'REFERENCE_REPO_GIT_FAILED' });
   }
   return String(result.stdout || '').trim();
@@ -93,10 +106,11 @@ const runGit = async (cwd, args, { timeoutMs = 60_000 } = {}) => {
  * Resolve the working directory for a ref. For URL-based refs we use the
  * managed clone path under data/cos/reference-repos/<refId>/; for local
  * refs (user-supplied path), we shell directly into that path so the user
- * can keep using their normal working tree.
+ * can keep using their normal working tree. `~` in a local path is
+ * expanded so cwd ends up on the actual filesystem path.
  */
 const workingDirectory = (ref) => (
-  isLocalPath(ref.repoUrl) ? ref.repoUrl : cloneDir(ref.id)
+  isLocalPath(ref.repoUrl) ? expandHome(ref.repoUrl) : cloneDir(ref.id)
 );
 
 /**
@@ -105,10 +119,11 @@ const workingDirectory = (ref) => (
  */
 const ensureClone = async (ref) => {
   if (isLocalPath(ref.repoUrl)) {
-    if (!existsSync(ref.repoUrl)) {
+    const localPath = expandHome(ref.repoUrl);
+    if (!existsSync(localPath)) {
       throw new ServerError(`Local reference path not found: ${ref.repoUrl}`, { status: 400, code: 'REFERENCE_REPO_LOCAL_MISSING' });
     }
-    return ref.repoUrl;
+    return localPath;
   }
   await ensureDir(REFERENCE_REPOS_ROOT);
   const dest = cloneDir(ref.id);
@@ -208,8 +223,10 @@ export async function updateReferenceRepo(appId, refId, patch) {
     if (patch[key] !== undefined) updated[key] = patch[key];
   }
   // Manual SHA pin counts as a review — record the time so "last reviewed"
-  // doesn't silently lie.
-  if (patch.lastReviewedSha !== undefined) {
+  // doesn't silently lie. Skip the bump when the SHA is being CLEARED
+  // (lastReviewedSha=null), otherwise "last checked" would look fresh
+  // immediately after a reset.
+  if (typeof patch.lastReviewedSha === 'string' && SHA_RE.test(patch.lastReviewedSha)) {
     updated.lastCheckedAt = new Date().toISOString();
   }
   const next = [...refs];

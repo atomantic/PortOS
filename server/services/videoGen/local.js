@@ -152,6 +152,21 @@ const buildLtx2Args = ({ model, prompt, negativePrompt, width, height, numFrames
       const safeRaw = Math.floor(pixelBudget / (Number(width) * Number(height)));
       const safeLatent = Math.max(1, Math.floor((safeRaw - 1) / 8));
       const safeFrames = safeLatent * 8 + 1;
+      // Multi-keyframe renders pin specific pixel-frame indices — clamping
+      // numFrames below `max(keyframe.index)` would either drop a keyframe
+      // or hand the Python helper an out-of-range index that hard-fails
+      // mid-render. Surface a 400 with a clear "raise FFLF_LTX2_PIXEL_BUDGET
+      // or lower resolution" message instead of silently clamping.
+      if (hasMultiKeyframes) {
+        const maxKfIndex = keyframes.reduce((max, kf) => Math.max(max, Number(kf.index)), 0);
+        if (maxKfIndex > safeFrames - 1) {
+          throw new ServerError(
+            `Multi-keyframe render exceeds the FFLF/ltx2 pixel budget: ${width}×${height}×${numFrames} > ${pixelBudget} pixel-frames, but max keyframe index is ${maxKfIndex} (would clamp to ${safeFrames} frames). Lower resolution or raise FFLF_LTX2_PIXEL_BUDGET.`,
+            { status: 400, code: 'LTX2_FFLF_PIXEL_BUDGET_EXCEEDED' },
+          );
+        }
+        // Otherwise the keyframes still fit — clamp is safe.
+      }
       console.log(`⚠️  FFLF/ltx2 numFrames clamped ${numFrames} → ${safeFrames} to fit pixel budget ${pixelBudget} (export FFLF_LTX2_PIXEL_BUDGET=<n> to raise)`);
       numFrames = safeFrames;
     }

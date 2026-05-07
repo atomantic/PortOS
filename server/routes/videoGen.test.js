@@ -339,6 +339,25 @@ describe('videoGen routes', () => {
       expect(r.body.error).toMatch(/>= numFrames/);
     });
 
+    it('rejects keyframes paired with a non-ltx2 modelId (KEYFRAMES_REQUIRE_LTX2)', async () => {
+      // Multi-keyframe FFLF is an LTX-2 primitive — the route must reject
+      // up-front rather than enqueue and let the worker fail asynchronously.
+      videoGenService.listVideoModels.mockReturnValueOnce([
+        { id: 'ltx_legacy', name: 'LTX legacy', runtime: 'mlx_video' },
+      ]);
+      const r = await request(app).post('/api/video-gen/').send({
+        prompt: 'multi-keyframe on the wrong runtime',
+        modelId: 'ltx_legacy',
+        keyframes: [
+          { file: 'a.png', index: 0 },
+          { file: 'b.png', index: 24 },
+        ],
+      });
+      expect(r.status).toBe(400);
+      expect(r.body.code).toBe('KEYFRAMES_REQUIRE_LTX2');
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+    });
+
     it('rejects keyframes with index > default numFrames when numFrames is omitted', async () => {
       // generateVideo() defaults numFrames to 121 — the route must reject
       // out-of-range indices up-front instead of letting them queue and
