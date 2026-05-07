@@ -358,6 +358,37 @@ describe('videoGen routes', () => {
       expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
     });
 
+    it('rejects keyframes paired with sourceImageFile (KEYFRAMES_LEGACY_INPUTS_CONFLICT)', async () => {
+      // Mixing keyframes with the legacy 2-keyframe inputs has ambiguous
+      // precedence — force callers to pick one shape per request so the
+      // worker doesn't silently drop one.
+      const r = await request(app).post('/api/video-gen/').send({
+        prompt: 'ambiguous inputs',
+        sourceImageFile: 'first.png',
+        keyframes: [
+          { file: 'a.png', index: 0 },
+          { file: 'b.png', index: 24 },
+        ],
+      });
+      expect(r.status).toBe(400);
+      expect(r.body.code).toBe('KEYFRAMES_LEGACY_INPUTS_CONFLICT');
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+    });
+
+    it('rejects keyframes paired with lastImageFile (KEYFRAMES_LEGACY_INPUTS_CONFLICT)', async () => {
+      const r = await request(app).post('/api/video-gen/').send({
+        prompt: 'ambiguous inputs 2',
+        lastImageFile: 'last.png',
+        keyframes: [
+          { file: 'a.png', index: 0 },
+          { file: 'b.png', index: 24 },
+        ],
+      });
+      expect(r.status).toBe(400);
+      expect(r.body.code).toBe('KEYFRAMES_LEGACY_INPUTS_CONFLICT');
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+    });
+
     it('rejects keyframes with index > default numFrames when numFrames is omitted', async () => {
       // generateVideo() defaults numFrames to 121 — the route must reject
       // out-of-range indices up-front instead of letting them queue and

@@ -56,7 +56,13 @@ export default function ReferenceReposPanel({ appId, appName, compact = false, i
       return;
     }
     pendingDeleteRef.current = { id: null, expiresAt: 0 };
-    await api.deleteReferenceRepo(appId, ref.id).catch((e) => toast.error(e.message || 'Delete failed'));
+    // Only mutate local state on success — otherwise the row vanishes from
+    // the UI while the server still has the ref, leaving the user confused
+    // about why "delete failed" appeared next to a now-empty list.
+    const ok = await api.deleteReferenceRepo(appId, ref.id)
+      .then(() => true)
+      .catch((e) => { toast.error(e.message || 'Delete failed'); return false; });
+    if (!ok) return;
     setRefs((prev) => prev.filter((r) => r.id !== ref.id));
     setSnapshots((prev) => { const n = { ...prev }; delete n[ref.id]; return n; });
   };
@@ -81,14 +87,27 @@ export default function ReferenceReposPanel({ appId, appName, compact = false, i
       toast.error('Run "Check now" first to fetch the latest head SHA.');
       return;
     }
-    await api.markReferenceRepoReviewed(appId, ref.id, sha).catch((e) => toast.error(e.message || 'Mark reviewed failed'));
+    // Only show the success toast / clear the snapshot on a successful
+    // PATCH. Otherwise the UI claims the ref was reviewed while the server
+    // still has the old lastReviewedSha — which gets confusing fast since
+    // the next "Check" rediscovers the same commits.
+    const ok = await api.markReferenceRepoReviewed(appId, ref.id, sha)
+      .then(() => true)
+      .catch((e) => { toast.error(e.message || 'Mark reviewed failed'); return false; });
+    if (!ok) return;
     toast.success(`Marked ${ref.name} reviewed up to ${sha.slice(0, 8)}`);
     setSnapshots((prev) => { const n = { ...prev }; delete n[ref.id]; return n; });
     fetch();
   };
 
   const handleSaveNotes = async (ref, nextNotes) => {
-    await api.updateReferenceRepo(appId, ref.id, { notes: nextNotes }).catch((e) => toast.error(e.message || 'Update failed'));
+    // Keep the editor open on a failed PATCH — losing the user's draft on
+    // a transient network blip is the worst possible outcome here. They
+    // can re-click Save, or click Cancel to discard.
+    const ok = await api.updateReferenceRepo(appId, ref.id, { notes: nextNotes })
+      .then(() => true)
+      .catch((e) => { toast.error(e.message || 'Update failed'); return false; });
+    if (!ok) return;
     setEditingNotesId(null);
     fetch();
   };

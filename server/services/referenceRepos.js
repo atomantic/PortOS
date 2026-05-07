@@ -217,10 +217,18 @@ export async function updateReferenceRepo(appId, refId, patch) {
   const idx = refs.findIndex((r) => r.id === refId);
   if (idx < 0) throw new ServerError(`Reference repo not found: ${refId}`, { status: 404, code: 'REFERENCE_REPO_NOT_FOUND' });
   // Allow only known fields through — guards against a bad client payload
-  // resetting status/lastError/etc.
+  // resetting status/lastError/etc. Trim the same string fields that
+  // addReferenceRepo() trims so we don't end up with mismatched shapes
+  // (e.g. " main " as a branch name causing confusing git failures).
+  // lastReviewedSha is a regex-validated 40-char SHA, no trim.
+  const TRIMMED_KEYS = new Set(['name', 'repoUrl', 'branch', 'notes']);
   const updated = { ...refs[idx] };
   for (const key of ['name', 'repoUrl', 'branch', 'notes', 'lastReviewedSha']) {
-    if (patch[key] !== undefined) updated[key] = patch[key];
+    if (patch[key] !== undefined) {
+      updated[key] = (TRIMMED_KEYS.has(key) && typeof patch[key] === 'string')
+        ? patch[key].trim()
+        : patch[key];
+    }
   }
   // Manual SHA pin counts as a review — record the time so "last reviewed"
   // doesn't silently lie. Skip the bump when the SHA is being CLEARED

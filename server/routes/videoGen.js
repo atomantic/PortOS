@@ -349,6 +349,19 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
         { status: 400, code: 'KEYFRAMES_MODE_MISMATCH' },
       );
     }
+    // Reject mixing keyframes with the legacy 2-keyframe inputs — the
+    // worker would silently ignore sourceImage/lastImage when keyframes is
+    // present, but staging/resizing them anyway is wasted work and the
+    // ambiguity (which one wins?) bites callers later. Force the user to
+    // pick one shape per request. Covers both upload paths and the
+    // gallery-resolved file fields.
+    if (sourceImagePath || lastImagePath || body.sourceImageFile || body.lastImageFile) {
+      await cleanupAllStaged();
+      throw new ServerError(
+        'keyframes cannot be combined with sourceImage / lastImage inputs — pass each anchor frame as a keyframes[] entry instead.',
+        { status: 400, code: 'KEYFRAMES_LEGACY_INPUTS_CONFLICT' },
+      );
+    }
     // Multi-keyframe FFLF is an LTX-2 primitive — the legacy mlx_video
     // pipeline has no equivalent. Mirror the a2v guard above so a bad
     // modelId can't enqueue a doomed job that will only fail in the

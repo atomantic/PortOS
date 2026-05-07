@@ -122,6 +122,32 @@ describe('updateReferenceRepo', () => {
     await expect(svc.updateReferenceRepo('app-1', 'r99', { name: 'b' }))
       .rejects.toThrow(/Reference repo not found/);
   });
+
+  it('trims string fields (name/repoUrl/branch/notes) just like addReferenceRepo', async () => {
+    // Without trimming, " main " as a branch causes confusing git failures
+    // and " https://github.com/...  " in repoUrl would mismatch addRef shape.
+    seedApp('app-1', [{ id: 'r1', name: 'old', repoUrl: 'u', branch: 'main', notes: '', status: 'ok' }]);
+    const updated = await svc.updateReferenceRepo('app-1', 'r1', {
+      name: '  spaced  ',
+      branch: '  develop  ',
+      repoUrl: '  https://x/y.git  ',
+      notes: '  some notes  ',
+    });
+    expect(updated.name).toBe('spaced');
+    expect(updated.branch).toBe('develop');
+    expect(updated.repoUrl).toBe('https://x/y.git');
+    expect(updated.notes).toBe('some notes');
+  });
+
+  it('does not bump lastCheckedAt when lastReviewedSha is cleared to null', async () => {
+    // Clearing the SHA pin (lastReviewedSha=null) is a "reset", not a "review" —
+    // bumping lastCheckedAt would make the UI show a fresh-looking timestamp
+    // immediately after a reset, which is misleading.
+    seedApp('app-1', [{ id: 'r1', name: 'p', repoUrl: 'u', branch: 'main', lastReviewedSha: 'a'.repeat(40), lastCheckedAt: '2026-01-01T00:00:00Z', status: 'ok' }]);
+    const updated = await svc.updateReferenceRepo('app-1', 'r1', { lastReviewedSha: null });
+    expect(updated.lastReviewedSha).toBeNull();
+    expect(updated.lastCheckedAt).toBe('2026-01-01T00:00:00Z'); // unchanged
+  });
 });
 
 describe('deleteReferenceRepo', () => {
