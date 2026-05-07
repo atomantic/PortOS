@@ -355,6 +355,25 @@ export async function updateReferenceRepo(appId, refId, patch) {
       }
     }
   }
+  // If repoUrl is changing on a URL-based ref with an existing managed
+  // clone, point the clone's origin remote at the new URL — otherwise
+  // subsequent fetches keep pulling from the old URL and the ref appears
+  // stuck. Skipped when: same URL, ref is local-path (no managed clone),
+  // or no clone exists yet (next check will clone fresh).
+  const oldRef = refs[idx];
+  if (typeof patch.repoUrl === 'string' && patch.repoUrl.trim() !== oldRef.repoUrl && !isLocalPath(patch.repoUrl)) {
+    const dest = cloneDir(oldRef.id);
+    if (existsSync(join(dest, '.git'))) {
+      const result = await execGit(['remote', 'set-url', 'origin', patch.repoUrl.trim()], dest, { timeout: 10_000 })
+        .catch((err) => ({ error: err }));
+      if (result && result.error) {
+        // Don't fail the patch outright — the user can manually delete
+        // and re-add the ref to recover. But surface a warning so the
+        // next check doesn't silently fetch from the old URL.
+        console.warn(`⚠️ Failed to update origin remote for ref "${oldRef.name}": ${redactUrlCreds(result.error.message || '')}. Next check may use the previous URL — delete and re-add the ref to recover.`);
+      }
+    }
+  }
   const TRIMMED_KEYS = new Set(['name', 'repoUrl', 'branch', 'notes']);
   const updated = { ...refs[idx] };
   for (const key of ['name', 'repoUrl', 'branch', 'notes', 'lastReviewedSha']) {

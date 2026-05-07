@@ -460,7 +460,32 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   const job = { ...meta, clients: [], status: 'running' };
   jobs.set(jobId, job);
 
-  const { bin, args } = buildArgs({ pythonPath, modelId, model, prompt, negativePrompt, width: w, height: h, numFrames: parsedNumFrames, fps: parsedFps, steps: actualSteps, guidance: actualGuidance, seed: actualSeed, tiling, disableAudio, sourceImagePath: resolvedSourceImage, lastImagePath: resolvedLastImage, keyframes: resolvedKeyframes, extendFromVideoPath, audioFilePath, mode, imageStrength: actualImageStrength, textEncoderRepo: actualTextEncoderRepo, outputPath });
+  // buildArgs now throws synchronously on multi-keyframe pixel-budget
+  // overflow and a few other validation paths — without this guard the
+  // job would stay "running" forever in the jobs map and the resized
+  // temp files would leak (the spawn close-handler that normally cleans
+  // them up never runs because we never spawned). Mirror the cleanup
+  // logic of the spawn-error handler so failure modes converge.
+  let bin, args;
+  try {
+    ({ bin, args } = buildArgs({ pythonPath, modelId, model, prompt, negativePrompt, width: w, height: h, numFrames: parsedNumFrames, fps: parsedFps, steps: actualSteps, guidance: actualGuidance, seed: actualSeed, tiling, disableAudio, sourceImagePath: resolvedSourceImage, lastImagePath: resolvedLastImage, keyframes: resolvedKeyframes, extendFromVideoPath, audioFilePath, mode, imageStrength: actualImageStrength, textEncoderRepo: actualTextEncoderRepo, outputPath }));
+  } catch (err) {
+    job.status = 'error';
+    const reason = err.message || 'Failed to build video gen args';
+    console.log(`❌ Video generation buildArgs error [${jobId.slice(0, 8)}]: ${reason}`);
+    broadcastSse(job, { type: 'error', error: reason });
+    videoGenEvents.emit('failed', { generationId: jobId, error: reason });
+    if (resizedSrcTempPath) unlink(resizedSrcTempPath).catch(() => {});
+    if (resizedLastTempPath) unlink(resizedLastTempPath).catch(() => {});
+    for (const p of resizedKeyframeTempPaths) unlink(p).catch(() => {});
+    if (uploadedTempPath) unlink(uploadedTempPath).catch(() => {});
+    for (const p of uploadedTempPaths) unlink(p).catch(() => {});
+    if (audioFilePath && !uploadedTempPaths.includes(audioFilePath)) {
+      unlink(audioFilePath).catch(() => {});
+    }
+    closeJobAfterDelay(jobs, jobId);
+    throw err;
+  }
 
   console.log(`🎬 Generating video [${jobId.slice(0, 8)}]: ${modelId} ${w}x${h} frames=${parsedNumFrames} steps=${actualSteps}`);
   videoGenEvents.emit('started', { generationId: jobId, totalSteps: actualSteps, ...meta });
