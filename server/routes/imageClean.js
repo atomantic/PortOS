@@ -47,13 +47,28 @@ function detectFormat(buf) {
   return null;
 }
 
+// PNG chunk type bytes must be ASCII letters per the PNG spec (RFC 2083 §3.2).
+// Validating this lets us bail out of the walker on garbage payloads that
+// happen to start with the PNG signature, instead of looping millions of times.
+function isPngChunkType(buf, offset) {
+  for (let i = 0; i < 4; i++) {
+    const b = buf[offset + i];
+    if (!((b >= 0x41 && b <= 0x5a) || (b >= 0x61 && b <= 0x7a))) return false;
+  }
+  return true;
+}
+
 // Walks PNG chunks once for the `caBX` provenance chunk emitted by gpt-image-1.
 // Sharp's default re-encode drops it; we detect it explicitly so the response
-// can flag what was stripped.
+// can flag what was stripped. Bails on invalid chunk type or truncated chunk —
+// a buffer that only matches the PNG signature but is otherwise garbage could
+// otherwise trigger millions of loop iterations (CPU/event-loop DoS).
 function pngHasC2PA(buf) {
   let offset = 8;
   while (offset + 8 <= buf.length) {
+    if (!isPngChunkType(buf, offset + 4)) return false;
     const length = buf.readUInt32BE(offset);
+    if (offset + 8 + length + 4 > buf.length) return false;
     const type = buf.toString('ascii', offset + 4, offset + 8);
     if (type === 'caBX') return true;
     if (type === 'IEND') return false;

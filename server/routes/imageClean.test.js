@@ -93,6 +93,25 @@ describe('POST /api/image-clean', () => {
     expect(res.body.c2paStripped).toBe(true);
   });
 
+  it('bails on PNG-signature buffers with garbage chunk data instead of looping', async () => {
+    // PNG magic bytes followed by zero-filled garbage. Without an early bailout,
+    // pngHasC2PA would walk in 12-byte steps through ~40MiB of zeros (~3.3M
+    // iterations) before sharp's decode failure surfaces. This test asserts the
+    // request resolves quickly with INVALID_IMAGE rather than timing out.
+    const pngSig = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const garbage = Buffer.alloc(1024); // zeros — chunk type bytes will be 0x00
+    const fake = Buffer.concat([pngSig, garbage]);
+    const start = Date.now();
+    const res = await request(buildApp())
+      .post('/api/image-clean')
+      .send({ data: fake.toString('base64') });
+    const elapsed = Date.now() - start;
+
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('INVALID_IMAGE');
+    expect(elapsed).toBeLessThan(1000);
+  });
+
   it('rejects unsupported formats with UNSUPPORTED_FORMAT', async () => {
     const garbage = Buffer.from('not an image at all').toString('base64');
     const res = await request(buildApp())
