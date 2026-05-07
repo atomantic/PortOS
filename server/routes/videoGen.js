@@ -360,6 +360,13 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
         { status: 400, code: 'KEYFRAMES_CHUNKS_CONFLICT' },
       );
     }
+    // Validate keyframe indices against the *effective* numFrames so a
+    // request with no explicit `numFrames` (which falls back to the
+    // generateVideo default of 121) still rejects out-of-range indices
+    // up-front instead of failing late inside the worker / Python helper.
+    // Keep this in sync with the default in services/videoGen/local.js.
+    const DEFAULT_NUM_FRAMES = 121;
+    const effectiveNumFrames = body.numFrames != null ? Number(body.numFrames) : DEFAULT_NUM_FRAMES;
     resolvedKeyframes = [];
     let prevIndex = -1;
     for (let i = 0; i < body.keyframes.length; i++) {
@@ -379,10 +386,13 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
           { status: 400, code: 'KEYFRAME_INDICES_NOT_ASCENDING' },
         );
       }
-      if (body.numFrames != null && kf.index > Number(body.numFrames) - 1) {
+      if (kf.index > effectiveNumFrames - 1) {
         await cleanupAllStaged();
+        const numFramesLabel = body.numFrames != null
+          ? `numFrames ${body.numFrames}`
+          : `default numFrames ${DEFAULT_NUM_FRAMES}`;
         throw new ServerError(
-          `keyframes[${i}].index ${kf.index} >= numFrames ${body.numFrames}`,
+          `keyframes[${i}].index ${kf.index} >= ${numFramesLabel}`,
           { status: 400, code: 'KEYFRAME_INDEX_OUT_OF_RANGE' },
         );
       }

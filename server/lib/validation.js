@@ -187,8 +187,11 @@ export const datadogConfigSchema = z.object({
 export const referenceRepoSchema = z.object({
   id: z.string().min(1).max(64),
   name: z.string().min(1).max(120),
-  // Either a clonable URL (https://github.com/owner/repo or git@…) or a
-  // local path. The service detects which by checking for "://" / "@".
+  // Either a clonable URL (https://github.com/owner/repo or scp-style
+  // user@host:owner/repo.git) or a local filesystem path. The service
+  // detects remote URLs by matching `scheme://` or scp-style
+  // `user@host:path` (see isLocalPath in services/referenceRepos.js);
+  // anything else is treated as a local path.
   repoUrl: z.string().min(1).max(500),
   branch: z.string().max(120).optional().default('main'),
   lastReviewedSha: z.string().length(40).nullable().optional(),
@@ -250,8 +253,10 @@ export const referenceRepoCreateSchema = z.object({
   notes: z.string().max(4000).optional()
 });
 
-// Patch schema — every field optional (note: NOT lastReviewedSha; that's
-// updated by the service layer after a successful check).
+// Patch schema — every field optional. `lastReviewedSha` is also accepted
+// here so the UI's "mark as reviewed" button (and the post-check service
+// path) can pin a SHA. The service still validates the SHA shape and
+// (for markReferenceRepoReviewed) verifies it exists in the clone.
 export const referenceRepoUpdateSchema = z.object({
   name: z.string().min(1).max(120).optional(),
   repoUrl: z.string().min(1).max(500).optional(),

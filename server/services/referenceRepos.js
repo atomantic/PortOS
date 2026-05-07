@@ -38,13 +38,39 @@ const SHORT_SHA = (sha) => (sha && SHA_RE.test(sha) ? sha.slice(0, 8) : null);
 
 const cloneDir = (refId) => join(REFERENCE_REPOS_ROOT, refId);
 
+// scp-style remotes: `user@host:owner/repo[.git]`. Different from a Windows
+// path like `C:\foo` because the part before `:` must be `user@host` shaped
+// (no slash, must contain `@`), and the part after `:` must NOT start with
+// `\` (which would make it a Windows drive). This matches how git itself
+// detects scp-like syntax in `connect.c`.
+const SCP_REMOTE_RE = /^[^/@:]+@[^/@:]+:[^\\].*/;
+
 const isLocalPath = (urlOrPath) => {
   if (!urlOrPath) return false;
-  // git@host: and scheme:// are remote; everything else (including ~ and
-  // absolute paths) is local. The user can pass `/Users/.../phosphene` to
-  // skip the clone and reuse an existing working tree.
-  return !urlOrPath.includes('://') && !urlOrPath.startsWith('git@');
+  // scheme:// and scp-style `user@host:path` are remote; everything else
+  // (including ~ and absolute paths) is local. The user can pass
+  // `/Users/.../phosphene` to skip the clone and reuse an existing
+  // working tree.
+  if (urlOrPath.includes('://')) return false;
+  if (SCP_REMOTE_RE.test(urlOrPath)) return false;
+  return true;
 };
+
+// Strip userinfo (`user:token@`) from URL-shaped args so a bad HTTPS remote
+// doesn't surface its embedded PAT in the persisted `lastError` field (which
+// the UI renders verbatim). Also catches scp-style `user@host:path` — but
+// keeps the host so the user can still see what failed.
+const redactUrlCreds = (s) => {
+  if (typeof s !== 'string') return s;
+  // scheme://user:token@host/...  → scheme://host/...
+  let out = s.replace(/(\w+:\/\/)[^\s/@]+@/g, '$1');
+  // user@host:path  → host:path  (scp-style only, no scheme)
+  if (!out.includes('://')) {
+    out = out.replace(/(^|\s)[^\s/@:]+@([^\s/@:]+:[^\s]+)/g, '$1$2');
+  }
+  return out;
+};
+const redactArgsForError = (args) => args.map(redactUrlCreds);
 
 // Wrap the shared execGit helper so the rest of this module gets the same
 // `(cwd, args) => stdout` shape it had before — and so any git failure here
@@ -52,7 +78,13 @@ const isLocalPath = (urlOrPath) => {
 const runGit = async (cwd, args, { timeoutMs = 60_000 } = {}) => {
   const result = await execGit(args, cwd, { timeout: timeoutMs }).catch((err) => ({ error: err }));
   if (result.error) {
-    throw new ServerError(`git ${args.join(' ')}: ${result.error.message}`, { status: 500, code: 'REFERENCE_REPO_GIT_FAILED' });
+    // Log full detail server-side; surface a credential-redacted message in
+    // the thrown error so persisted `lastError` / API responses can't leak
+    // tokens embedded in the repo URL.
+    console.error(`❌ git ${args.join(' ')} (cwd=${cwd}) failed: ${result.error.message}`);
+    const safeArgs = redactArgsForError(args);
+    const safeMessage = redactUrlCreds(String(result.error.message || ''));
+    throw new ServerError(`git ${safeArgs.join(' ')}: ${safeMessage}`, { status: 500, code: 'REFERENCE_REPO_GIT_FAILED' });
   }
   return String(result.stdout || '').trim();
 };
@@ -217,6 +249,7 @@ export async function checkReferenceRepo(appId, refId) {
   let snapshot;
   let nextStatus = 'ok';
   let nextError = null;
+  let originalError = null;
   try {
     const { cwd, head, headRef } = await fetchHead(ref);
     const commits = await listCommits(cwd, ref.lastReviewedSha, headRef);
@@ -233,6 +266,7 @@ export async function checkReferenceRepo(appId, refId) {
   } catch (err) {
     nextStatus = 'error';
     nextError = err instanceof ServerError ? err.message : String(err.message || err);
+    originalError = err;
   }
   // Persist status + lastCheckedAt regardless of success — UI surfaces the
   // error inline so the user can fix bad URL / branch.
@@ -241,6 +275,16 @@ export async function checkReferenceRepo(appId, refId) {
     : r));
   await updateApp(appId, { referenceRepos: next });
   if (nextStatus === 'error') {
+    // Preserve the original ServerError's status/code (e.g. 400
+    // REFERENCE_REPO_LOCAL_MISSING) so user-fixable config problems don't
+    // become opaque 500s. Fall back to a generic 500 only for truly
+    // unexpected errors.
+    if (originalError instanceof ServerError) {
+      throw new ServerError(originalError.message, {
+        status: originalError.status,
+        code: originalError.code || 'REFERENCE_REPO_CHECK_FAILED',
+      });
+    }
     throw new ServerError(nextError, { status: 500, code: 'REFERENCE_REPO_CHECK_FAILED' });
   }
   return snapshot;
@@ -249,12 +293,30 @@ export async function checkReferenceRepo(appId, refId) {
 /**
  * Mark a ref as reviewed up to the given SHA — called after a CoS
  * sub-agent finishes producing REFERENCE_REVIEW.md, or by the UI's
- * "mark as reviewed" button. SHA must match a real commit on the ref's
- * branch (verified via rev-parse against the managed clone).
+ * "mark as reviewed" button. SHA must match a real commit visible from
+ * the ref's working tree (verified via `git cat-file -e <sha>^{commit}`
+ * against the managed clone or the user-supplied local path).
  */
 export async function markReferenceRepoReviewed(appId, refId, sha) {
   if (!SHA_RE.test(sha || '')) {
     throw new ServerError(`Invalid SHA: ${sha}`, { status: 400, code: 'REFERENCE_REPO_BAD_SHA' });
+  }
+  const app = await getAppById(appId);
+  if (!app) throw new ServerError(`App not found: ${appId}`, { status: 404, code: 'APP_NOT_FOUND' });
+  const refs = Array.isArray(app.referenceRepos) ? app.referenceRepos : [];
+  const ref = refs.find((r) => r.id === refId);
+  if (!ref) throw new ServerError(`Reference repo not found: ${refId}`, { status: 404, code: 'REFERENCE_REPO_NOT_FOUND' });
+  // Make sure the clone exists, then verify the SHA resolves to a real
+  // commit object. `cat-file -e <sha>^{commit}` exits non-zero (and our
+  // execGit wrapper rejects) if the object is missing or not a commit.
+  const cwd = await ensureClone(ref);
+  const verify = await execGit(['cat-file', '-e', `${sha}^{commit}`], cwd, { timeout: 10_000 })
+    .catch((err) => ({ error: err }));
+  if (verify && verify.error) {
+    throw new ServerError(
+      `SHA ${sha.slice(0, 8)} not found in reference repo "${ref.name}"`,
+      { status: 400, code: 'REFERENCE_REPO_SHA_NOT_FOUND' },
+    );
   }
   return updateReferenceRepo(appId, refId, { lastReviewedSha: sha });
 }

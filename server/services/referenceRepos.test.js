@@ -223,6 +223,26 @@ describe('checkReferenceRepo', () => {
   });
 });
 
+describe('isLocalPath', () => {
+  it('classifies https / ssh-scheme / scp-style URLs as remote', () => {
+    const { isLocalPath } = svc.__test;
+    expect(isLocalPath('https://github.com/owner/repo.git')).toBe(false);
+    expect(isLocalPath('ssh://git@github.com/owner/repo.git')).toBe(false);
+    expect(isLocalPath('git@github.com:owner/repo.git')).toBe(false);
+    // scp-style with non-github user@host shape — must still be remote
+    expect(isLocalPath('user@example.com:owner/repo.git')).toBe(false);
+  });
+
+  it('classifies absolute paths and ~-paths as local', () => {
+    const { isLocalPath } = svc.__test;
+    expect(isLocalPath('/Users/me/phosphene')).toBe(true);
+    expect(isLocalPath('~/phosphene')).toBe(true);
+    expect(isLocalPath('./phosphene')).toBe(true);
+    // Windows drive paths must NOT be treated as scp-style remotes
+    expect(isLocalPath('C:\\Users\\me\\phosphene')).toBe(true);
+  });
+});
+
 describe('formatReferenceForPrompt', () => {
   it('renders a Markdown chunk with notes + commit list', () => {
     const ref = { id: 'r1', name: 'phosphene', repoUrl: 'https://github.com/x/y.git', branch: 'main', lastReviewedSha: null, notes: 'video gen' };
@@ -256,10 +276,27 @@ describe('markReferenceRepoReviewed', () => {
     await expect(svc.markReferenceRepoReviewed('app-1', 'r1', 'too-short')).rejects.toThrow(/Invalid SHA/);
   });
 
-  it('persists lastReviewedSha + lastCheckedAt on a valid 40-char SHA', async () => {
-    seedApp('app-1', [{ id: 'r1', name: 'p', repoUrl: 'u', branch: 'main', lastReviewedSha: null }]);
+  it('persists lastReviewedSha + lastCheckedAt on a valid SHA verified in the clone', async () => {
+    // Local-path ref so ensureClone() is a no-op other than the existsSync
+    // check; cat-file -e succeeds → SHA is treated as verified.
+    seedApp('app-1', [{ id: 'r1', name: 'p', repoUrl: '/Users/me/phosphene', branch: 'main', lastReviewedSha: null }]);
+    existsMock.mockImplementation((p) => p === '/Users/me/phosphene');
+    execGitMock.mockReturnValueOnce({ stdout: '' }); // git cat-file -e <sha>^{commit}
     const out = await svc.markReferenceRepoReviewed('app-1', 'r1', 'a'.repeat(40));
     expect(out.lastReviewedSha).toBe('a'.repeat(40));
     expect(out.lastCheckedAt).toBeTruthy();
+    // Verify the actual git call shape so a future refactor can't silently
+    // drop SHA verification.
+    expect(execGitMock.mock.calls[0][0]).toEqual(['cat-file', '-e', `${'a'.repeat(40)}^{commit}`]);
+  });
+
+  it('rejects when the SHA does not resolve to a commit in the clone', async () => {
+    seedApp('app-1', [{ id: 'r1', name: 'p', repoUrl: '/Users/me/phosphene', branch: 'main', lastReviewedSha: null }]);
+    existsMock.mockImplementation((p) => p === '/Users/me/phosphene');
+    execGitMock.mockReturnValueOnce({ error: new Error('fatal: Not a valid object name') });
+    await expect(svc.markReferenceRepoReviewed('app-1', 'r1', 'a'.repeat(40)))
+      .rejects.toThrow(/not found in reference repo/);
+    // SHA must NOT have been persisted on a failed verification.
+    expect(mockApps.get('app-1').referenceRepos[0].lastReviewedSha).toBeNull();
   });
 });

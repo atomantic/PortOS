@@ -339,6 +339,22 @@ describe('videoGen routes', () => {
       expect(r.body.error).toMatch(/>= numFrames/);
     });
 
+    it('rejects keyframes with index > default numFrames when numFrames is omitted', async () => {
+      // generateVideo() defaults numFrames to 121 — the route must reject
+      // out-of-range indices up-front instead of letting them queue and
+      // fail late inside the worker / Python helper.
+      const r = await request(app).post('/api/video-gen/').send({
+        prompt: 'no numframes specified',
+        mode: 'fflf',
+        keyframes: [
+          { file: 'a.png', index: 0 },
+          { file: 'b.png', index: 500 }, // way past default of 121
+        ],
+      });
+      expect(r.status).toBe(400);
+      expect(r.body.error).toMatch(/default numFrames 121/);
+    });
+
     it('rejects keyframes with non-ascending indices', async () => {
       const r = await request(app).post('/api/video-gen/').send({
         prompt: 'bad order',
