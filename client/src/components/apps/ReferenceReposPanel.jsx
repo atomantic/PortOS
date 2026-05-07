@@ -25,10 +25,19 @@ export default function ReferenceReposPanel({ appId, appName, compact = false, i
   const [checkingIds, setCheckingIds] = useState(() => new Set());
   const [editingNotesId, setEditingNotesId] = useState(null);
 
+  // Track an explicit fetch error separately from `refs` so a transient
+  // failure doesn't blank the list — stale-but-valid is far better UX
+  // than "no refs configured" appearing when the server hiccups.
+  const [fetchError, setFetchError] = useState(null);
   const fetch = useCallback(async () => {
     setLoading(true);
-    const res = await api.listReferenceRepos(appId).catch(() => null);
-    setRefs(res?.referenceRepos || []);
+    const res = await api.listReferenceRepos(appId).catch((e) => ({ __error: e?.message || 'Failed to load references' }));
+    if (res && res.__error) {
+      setFetchError(res.__error);
+    } else {
+      setFetchError(null);
+      setRefs(res?.referenceRepos || []);
+    }
     setLoading(false);
   }, [appId]);
 
@@ -144,6 +153,12 @@ export default function ReferenceReposPanel({ appId, appName, compact = false, i
 
       {showAdd && !compact && (
         <AddRefForm onSubmit={handleAdd} onCancel={() => setShowAdd(false)} />
+      )}
+
+      {fetchError && (
+        <div className="bg-port-error/10 border border-port-error/40 text-port-error text-xs rounded p-2 inline-flex items-center gap-2">
+          <AlertCircle size={12} /> Failed to refresh references: {fetchError}. Showing last known data.
+        </div>
       )}
 
       {refs.length === 0 ? (

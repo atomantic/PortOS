@@ -19,12 +19,22 @@ import ReferenceReposPanel from '../components/apps/ReferenceReposPanel';
 export default function ReferenceRepos() {
   const [apps, setApps] = useState([]);
   const [loading, setLoading] = useState(true);
+  // Distinguish "fetch failed" from "no apps configured" — without this
+  // the empty-state message ("No apps have reference repos configured")
+  // shows up on every transient server hiccup, which is misleading and
+  // sends users hunting for a configuration mistake that doesn't exist.
+  const [fetchError, setFetchError] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const all = await api.getApps().catch(() => []);
+      const all = await api.getApps().catch((e) => ({ __error: e?.message || 'Failed to load apps' }));
       if (cancelled) return;
+      if (all && all.__error) {
+        setFetchError(all.__error);
+        setLoading(false);
+        return;
+      }
       const withRefs = (all || []).filter((a) => Array.isArray(a.referenceRepos) && a.referenceRepos.length > 0);
       withRefs.sort((a, b) => {
         if (a.id === PORTOS_APP_ID) return -1;
@@ -52,7 +62,11 @@ export default function ReferenceRepos() {
         </p>
       </div>
 
-      {apps.length === 0 ? (
+      {fetchError ? (
+        <div className="bg-port-error/10 border border-port-error/40 rounded-lg p-4 text-port-error text-sm">
+          Failed to load apps: {fetchError}. Refresh to retry.
+        </div>
+      ) : apps.length === 0 ? (
         <div className="bg-port-card border border-port-border rounded-lg p-8 text-center text-gray-400">
           <p className="mb-2">No apps have reference repos configured yet.</p>
           <p className="text-sm text-gray-500">

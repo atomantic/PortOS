@@ -370,6 +370,17 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   //    status, but the diffusers pipeline only reads --image — the script
   //    never opens the last-frame file, so no resize is needed there either.
   const lastImageWillBeUsed = !!lastImagePath && !IS_WIN && mode === 'fflf' && !sourceImagePath;
+  // A non-null `keyframes` that ISN'T a length-≥2 array is malformed —
+  // fail fast instead of silently dropping it (which would produce an
+  // unexpected text/i2v render with the user's anchors ignored). The
+  // route guarantees the array shape, but non-route callers (tests,
+  // persisted queue replays) could pass a stray scalar/empty array.
+  if (keyframes != null && !(Array.isArray(keyframes) && keyframes.length >= 2)) {
+    throw new ServerError(
+      `keyframes must be null OR an array of length >= 2; got ${Array.isArray(keyframes) ? `array(length=${keyframes.length})` : typeof keyframes}`,
+      { status: 400, code: 'KEYFRAME_INVALID_SHAPE' },
+    );
+  }
   const hasMultiKeyframes = Array.isArray(keyframes) && keyframes.length >= 2;
   const ffmpeg = (sourceImagePath || lastImageWillBeUsed || hasMultiKeyframes) ? await findFfmpeg() : null;
   const resizeImage = async (srcPath, tag) => {

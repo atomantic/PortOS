@@ -313,9 +313,25 @@ export async function updateReferenceRepo(appId, refId, patch) {
       const verify = await execGit(['cat-file', '-e', `${patch.lastReviewedSha}^{commit}`], dest, { timeout: 10_000 })
         .catch((err) => ({ error: err }));
       if (verify && verify.error) {
+        // `cat-file -e` exits non-zero for two distinct reasons: (a) the
+        // object isn't there, and (b) the repo is corrupt / unreadable /
+        // permissions / timeout. The user-facing fix is different in each
+        // case — distinguish via stderr text so the UI can show actionable
+        // detail.
+        const msg = String(verify.error.message || '').toLowerCase();
+        const looksLikeMissing = /not a valid object|missing|does not exist|bad object|unable to read tree/.test(msg);
+        if (looksLikeMissing) {
+          throw new ServerError(
+            `lastReviewedSha ${patch.lastReviewedSha.slice(0, 8)} not found in reference repo "${ref.name}"`,
+            { status: 400, code: 'REFERENCE_REPO_SHA_NOT_FOUND' },
+          );
+        }
+        // Anything else (permission denied, corrupt index, timeout) — surface
+        // the underlying message so the user can act on it. Redact in case
+        // the error includes the URL with credentials.
         throw new ServerError(
-          `lastReviewedSha ${patch.lastReviewedSha.slice(0, 8)} not found in reference repo "${ref.name}"`,
-          { status: 400, code: 'REFERENCE_REPO_SHA_NOT_FOUND' },
+          `Failed to verify lastReviewedSha against reference repo "${ref.name}": ${redactUrlCreds(verify.error.message || 'unknown git error')}`,
+          { status: 500, code: 'REFERENCE_REPO_SHA_VERIFY_FAILED' },
         );
       }
     }
