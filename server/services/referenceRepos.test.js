@@ -42,8 +42,10 @@ vi.mock('../lib/execGit.js', () => ({
 // already exists. Default to false so first-touch goes through clone path;
 // individual tests override.
 const existsMock = vi.fn(() => false);
+const statMock = vi.fn(() => ({ isDirectory: () => true }));
 vi.mock('fs', () => ({
   existsSync: (p) => existsMock(p),
+  statSync: (p) => statMock(p),
 }));
 
 // ─── module under test (after mocks) ─────────────────────────────────────────
@@ -236,7 +238,7 @@ describe('checkReferenceRepo', () => {
 
   it('skips clone+fetch for local-path refs and reads SHA via rev-parse on the user path', async () => {
     seedApp('app-1', [{ id: 'r1', name: 'p', repoUrl: '/Users/me/phosphene', branch: 'main', lastReviewedSha: null }]);
-    existsMock.mockImplementation((p) => p === '/Users/me/phosphene'); // user path exists
+    existsMock.mockImplementation((p) => p === '/Users/me/phosphene' || p === '/Users/me/phosphene/.git'); // user path + git dir exist
     execGitMock
       .mockReturnValueOnce({ stdout: 'e'.repeat(40) })                // rev-parse main
       .mockReturnValueOnce({ stdout: '' });                           // log
@@ -310,7 +312,7 @@ describe('markReferenceRepoReviewed', () => {
     // Local-path ref so ensureClone() is a no-op other than the existsSync
     // check; cat-file -e succeeds → SHA is treated as verified.
     seedApp('app-1', [{ id: 'r1', name: 'p', repoUrl: '/Users/me/phosphene', branch: 'main', lastReviewedSha: null }]);
-    existsMock.mockImplementation((p) => p === '/Users/me/phosphene');
+    existsMock.mockImplementation((p) => p === '/Users/me/phosphene' || p === '/Users/me/phosphene/.git');
     execGitMock.mockReturnValueOnce({ stdout: '' }); // git cat-file -e <sha>^{commit}
     const out = await svc.markReferenceRepoReviewed('app-1', 'r1', 'a'.repeat(40));
     expect(out.lastReviewedSha).toBe('a'.repeat(40));
@@ -322,7 +324,7 @@ describe('markReferenceRepoReviewed', () => {
 
   it('rejects when the SHA does not resolve to a commit in the clone', async () => {
     seedApp('app-1', [{ id: 'r1', name: 'p', repoUrl: '/Users/me/phosphene', branch: 'main', lastReviewedSha: null }]);
-    existsMock.mockImplementation((p) => p === '/Users/me/phosphene');
+    existsMock.mockImplementation((p) => p === '/Users/me/phosphene' || p === '/Users/me/phosphene/.git');
     execGitMock.mockReturnValueOnce({ error: new Error('fatal: Not a valid object name') });
     await expect(svc.markReferenceRepoReviewed('app-1', 'r1', 'a'.repeat(40)))
       .rejects.toThrow(/not found in reference repo/);

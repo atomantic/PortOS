@@ -26,6 +26,7 @@ import {
   extractLastFrame,
   stitchVideos,
   upscaleHistoryItem,
+  DEFAULT_NUM_FRAMES,
 } from '../services/videoGen/local.js';
 import { enqueueJob, attachSseClient, cancelJob, listJobs } from '../services/mediaJobQueue/index.js';
 
@@ -79,13 +80,21 @@ const optionalNum = (min, max, label) => z.preprocess(
   (v) => v == null || v === '' ? undefined : Number(v),
   z.number().refine((n) => n >= min && n <= max, `${label} ${min}..${max}`).optional(),
 );
+// numFrames and chunks must be integers. Multipart bodies send `'121'` as
+// a string and `'121.5'` would silently coerce to 121.5 — feed that into
+// keyframe-index range checks and the maximum becomes a fractional bound,
+// not an integer one. Reject up front.
+const optionalInt = (min, max, label) => z.preprocess(
+  (v) => v == null || v === '' ? undefined : Number(v),
+  z.number().int().refine((n) => n >= min && n <= max, `${label} ${min}..${max}`).optional(),
+);
 const generateBodySchema = z.object({
   prompt: z.string().min(1).max(2000),
   negativePrompt: z.string().max(2000).optional(),
   modelId: z.string().max(64).optional(),
   width: optionalNum(64, 2048, 'width'),
   height: optionalNum(64, 2048, 'height'),
-  numFrames: optionalNum(1, 1024, 'numFrames'),
+  numFrames: optionalInt(1, 1024, 'numFrames'),
   fps: optionalNum(1, 60, 'fps'),
   steps: optionalNum(1, 200, 'steps'),
   guidanceScale: optionalNum(0, 30, 'guidanceScale'),
@@ -105,7 +114,7 @@ const generateBodySchema = z.object({
   // Chain N renders end-to-end: each chunk's last frame becomes the next
   // chunk's start frame, then ffmpeg concats them into one clip. 1..8 to
   // keep the worst-case wall time bounded (8 × ~5min ≈ 40min on M3 Max).
-  chunks: optionalNum(1, 8, 'chunks'),
+  chunks: optionalInt(1, 8, 'chunks'),
   // History id of a prior render to extend natively (ltx2 runtime only —
   // routes through ExtendPipeline.extend_from_video which conditions on
   // the entire source video's latent rather than a single last frame).
@@ -184,7 +193,7 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
   const parsed = generateBodySchema.safeParse(req.body);
   if (!parsed.success) {
     await cleanupTempUploads();
-    throw new ServerError(`Validation failed: ${parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join(', ')}`, { status: 400, code: 'VALIDATION_ERROR' });
+    failValidation(parsed);
   }
   const body = parsed.data;
   const s = await getSettings();
@@ -389,7 +398,6 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
     // generateVideo default of 121) still rejects out-of-range indices
     // up-front instead of failing late inside the worker / Python helper.
     // Keep this in sync with the default in services/videoGen/local.js.
-    const DEFAULT_NUM_FRAMES = 121;
     const effectiveNumFrames = body.numFrames != null ? Number(body.numFrames) : DEFAULT_NUM_FRAMES;
     resolvedKeyframes = [];
     let prevIndex = -1;

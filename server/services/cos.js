@@ -1957,7 +1957,11 @@ async function generateManagedAppImprovementTaskForType(taskType, app, state, { 
     .replace(/\{appName\}/g, app.name)
     .replace(/\{repoPath\}/g, app.repoPath)
     .replace(/\{appId\}/g, app.id)
-    .replace(/\{referenceData\}/g, referenceDataBlock);
+    // Use a replacer function — String.replace with a replacement STRING
+    // interprets `$&`, `$1`, etc. as backreferences. Commit subjects/authors
+    // legitimately contain `$` (env-var docs, prices, awk snippets) and
+    // would get mangled. The function form passes the value verbatim.
+    .replace(/\{referenceData\}/g, () => referenceDataBlock);
 
   applyAppWorktreeDefault(metadata, app);
 

@@ -15,7 +15,7 @@
  * never has to clone manually; first `check` initializes the clone.
  */
 
-import { existsSync } from 'fs';
+import { existsSync, statSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
@@ -52,15 +52,18 @@ const cloneDir = (refId) => join(REFERENCE_REPOS_ROOT, refId);
 
 // scp-style remotes — git accepts both `user@host:path` and the bare
 // `host:path` form. Disambiguating from a Windows drive path (`C:\foo`,
-// `C:/foo`) requires that the segment before `:` look like a hostname
-// (contain a `.` OR be longer than 1 char), and the segment AFTER `:`
-// must NOT start with `\` or `/` followed by a single drive-letter-y char.
+// `C:/foo`) requires the segment before `:` to be longer than one char
+// (excluding Windows drive letters). The segment after `:` must NOT start
+// with `\` or `/` (excluding `C:\path` / `C:/path` style local paths).
 // This matches how git itself parses scp-syntax in `connect.c`. Examples:
-//   git@github.com:owner/repo.git   → remote (matches scp with user)
-//   github.com:owner/repo.git       → remote (matches scp without user)
-//   C:\Users\me\repo                → local (host-segment is single char)
+//   git@github.com:owner/repo.git   → remote (scp with user, dotted host)
+//   github.com:owner/repo.git       → remote (scp without user, dotted host)
+//   gitserver:owner/repo.git        → remote (scp without user, intranet host
+//                                     with no dot — common on internal forges)
+//   user@gitserver:owner/repo.git   → remote (scp with user, host has no dot)
+//   C:\Users\me\repo                → local (host-segment single char)
 //   C:/Users/me/repo                → local (same; segment after `:` is `/`)
-const SCP_REMOTE_RE = /^([^/@:]+@)?[^/@:]*[.][^/@:]*:[^\\/].*$|^([^/@:]+@)[^/@:]+:[^\\/].*$/;
+const SCP_REMOTE_RE = /^([^/@:]+@)?[^/@:]{2,}:[^\\/].*$/;
 
 const isLocalPath = (urlOrPath) => {
   if (!urlOrPath) return false;
@@ -89,6 +92,16 @@ const redactUrlCreds = (s) => {
 };
 const redactArgsForError = (args) => args.map(redactUrlCreds);
 
+// Patterns that indicate the user's config is wrong (so the right HTTP
+// status is 4xx, not 5xx). Order matters — first match wins. Codes here
+// surface to the UI via `lastError`, so the strings are user-facing.
+const GIT_USER_ERROR_PATTERNS = [
+  { pattern: /authentication failed|could not read username|terminal prompts disabled/i, code: 'REFERENCE_REPO_AUTH_FAILED', status: 400 },
+  { pattern: /could not resolve host|repository not found|not found\.\s*$/i, code: 'REFERENCE_REPO_NOT_FOUND_REMOTE', status: 400 },
+  { pattern: /unknown revision|bad revision|unknown ref/i, code: 'REFERENCE_REPO_BAD_REF', status: 400 },
+  { pattern: /not a git repository/i, code: 'REFERENCE_REPO_NOT_A_REPO', status: 400 },
+];
+
 // Wrap the shared execGit helper so the rest of this module gets the same
 // `(cwd, args) => stdout` shape it had before — and so any git failure here
 // surfaces as a typed ServerError instead of a bare Error.
@@ -102,7 +115,13 @@ const runGit = async (cwd, args, { timeoutMs = 60_000 } = {}) => {
     const safeArgs = redactArgsForError(args);
     const safeMessage = redactUrlCreds(String(result.error.message || ''));
     console.error(`❌ git ${safeArgs.join(' ')} (cwd=${cwd}) failed: ${safeMessage}`);
-    throw new ServerError(`git ${safeArgs.join(' ')}: ${safeMessage}`, { status: 500, code: 'REFERENCE_REPO_GIT_FAILED' });
+    // Map well-known stderr patterns to 4xx so the UI/route layer can
+    // distinguish "fix your config" from "server problem". checkReferenceRepo
+    // preserves these codes when re-throwing.
+    const userError = GIT_USER_ERROR_PATTERNS.find((p) => p.pattern.test(safeMessage));
+    const status = userError ? userError.status : 500;
+    const code = userError ? userError.code : 'REFERENCE_REPO_GIT_FAILED';
+    throw new ServerError(`git ${safeArgs.join(' ')}: ${safeMessage}`, { status, code });
   }
   return String(result.stdout || '').trim();
 };
@@ -127,6 +146,19 @@ const ensureClone = async (ref) => {
     const localPath = expandHome(ref.repoUrl);
     if (!existsSync(localPath)) {
       throw new ServerError(`Local reference path not found: ${ref.repoUrl}`, { status: 400, code: 'REFERENCE_REPO_LOCAL_MISSING' });
+    }
+    // A regular file (or symlink to one) at the path will surface later as
+    // an opaque "not a git repository" error from `git rev-parse`. Catch it
+    // here with a clear message so the user knows to fix the URL.
+    let stat;
+    try { stat = statSync(localPath); } catch {
+      throw new ServerError(`Local reference path not accessible: ${ref.repoUrl}`, { status: 400, code: 'REFERENCE_REPO_LOCAL_INACCESSIBLE' });
+    }
+    if (!stat.isDirectory()) {
+      throw new ServerError(`Local reference path is not a directory: ${ref.repoUrl}`, { status: 400, code: 'REFERENCE_REPO_LOCAL_NOT_DIR' });
+    }
+    if (!existsSync(join(localPath, '.git'))) {
+      throw new ServerError(`Local reference path is not a git working tree (no .git): ${ref.repoUrl}`, { status: 400, code: 'REFERENCE_REPO_LOCAL_NOT_GIT' });
     }
     return localPath;
   }
@@ -233,6 +265,31 @@ export async function updateReferenceRepo(appId, refId, patch) {
   // and is allowed.
   if (patch.lastReviewedSha !== undefined && patch.lastReviewedSha !== null && !SHA_RE.test(patch.lastReviewedSha)) {
     throw new ServerError(`lastReviewedSha must be a 40-char hex SHA: ${patch.lastReviewedSha}`, { status: 400, code: 'REFERENCE_REPO_BAD_SHA' });
+  }
+  // When a SHA is being pinned, verify it actually resolves to a commit
+  // in the clone. Without this, a PATCH could persist a syntactically valid
+  // but nonexistent SHA, and the next `checkReferenceRepo` would die in
+  // `git log <bad>..HEAD` with a confusing "unknown revision" error.
+  // Skipped when clearing (null) — that always succeeds — and when the
+  // ref has never been cloned yet (fresh add + manual SHA pin), since
+  // ensureClone would clone the entire repo just to verify a SHA the user
+  // is asserting they already know about.
+  if (typeof patch.lastReviewedSha === 'string' && SHA_RE.test(patch.lastReviewedSha)) {
+    const ref = refs[idx];
+    const dest = isLocalPath(ref.repoUrl) ? expandHome(ref.repoUrl) : cloneDir(ref.id);
+    const cloneExists = isLocalPath(ref.repoUrl)
+      ? existsSync(join(dest, '.git'))
+      : existsSync(join(dest, '.git'));
+    if (cloneExists) {
+      const verify = await execGit(['cat-file', '-e', `${patch.lastReviewedSha}^{commit}`], dest, { timeout: 10_000 })
+        .catch((err) => ({ error: err }));
+      if (verify && verify.error) {
+        throw new ServerError(
+          `lastReviewedSha ${patch.lastReviewedSha.slice(0, 8)} not found in reference repo "${ref.name}"`,
+          { status: 400, code: 'REFERENCE_REPO_SHA_NOT_FOUND' },
+        );
+      }
+    }
   }
   const TRIMMED_KEYS = new Set(['name', 'repoUrl', 'branch', 'notes']);
   const updated = { ...refs[idx] };

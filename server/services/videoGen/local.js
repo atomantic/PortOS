@@ -164,7 +164,20 @@ const buildLtx2Args = ({ model, prompt, negativePrompt, width, height, numFrames
       // mid-render. Surface a 400 with a clear "raise FFLF_LTX2_PIXEL_BUDGET
       // or lower resolution" message instead of silently clamping.
       if (hasMultiKeyframes) {
-        const maxKfIndex = keyframes.reduce((max, kf) => Math.max(max, Number(kf.index)), 0);
+        // Reject non-numeric indices upfront — Math.max(..., NaN) is NaN,
+        // which would silently bypass the safeFrames guard below and let
+        // the Python helper hard-fail with an opaque error mid-render.
+        const indices = keyframes.map((kf, i) => {
+          const n = Number(kf.index);
+          if (!Number.isFinite(n)) {
+            throw new ServerError(
+              `keyframes[${i}].index is not a finite number: ${kf.index}`,
+              { status: 400, code: 'LTX2_KEYFRAME_INVALID' },
+            );
+          }
+          return n;
+        });
+        const maxKfIndex = Math.max(...indices);
         if (maxKfIndex > safeFrames - 1) {
           throw new ServerError(
             `Multi-keyframe render exceeds the FFLF/ltx2 pixel budget: ${width}×${height}×${numFrames} > ${pixelBudget} pixel-frames, but max keyframe index is ${maxKfIndex} (would clamp to ${safeFrames} frames). Lower resolution or raise FFLF_LTX2_PIXEL_BUDGET.`,
@@ -300,7 +313,13 @@ const buildArgs = ({ pythonPath, modelId, model, prompt, negativePrompt, width, 
   return { bin: pythonPath, args };
 };
 
-export async function generateVideo({ pythonPath, prompt, negativePrompt = '', modelId = defaultVideoModelId(), width = 768, height = 512, numFrames = 121, fps = 24, steps, guidanceScale, seed, tiling = 'auto', disableAudio = false, sourceImagePath = null, uploadedTempPath = null, uploadedTempPaths = [], lastImagePath = null, keyframes = null, extendFromVideoPath = null, audioFilePath = null, mode = null, imageStrength = null, hidden = false, jobId: providedJobId = null }) {
+// Default frame count for LTX renders, matching the 8k+1 latent-boundary
+// the model wants. Exported so the route layer can validate keyframe
+// indices against the same effective number of frames the service will
+// use (avoiding drift between two hardcoded constants).
+export const DEFAULT_NUM_FRAMES = 121;
+
+export async function generateVideo({ pythonPath, prompt, negativePrompt = '', modelId = defaultVideoModelId(), width = 768, height = 512, numFrames = DEFAULT_NUM_FRAMES, fps = 24, steps, guidanceScale, seed, tiling = 'auto', disableAudio = false, sourceImagePath = null, uploadedTempPath = null, uploadedTempPaths = [], lastImagePath = null, keyframes = null, extendFromVideoPath = null, audioFilePath = null, mode = null, imageStrength = null, hidden = false, jobId: providedJobId = null }) {
   uploadedTempPaths = Array.isArray(uploadedTempPaths) ? uploadedTempPaths : [];
   if (!pythonPath) throw new ServerError('Python path not configured — set it in Settings > Image Gen', { status: 400, code: 'VIDEO_GEN_NOT_CONFIGURED' });
   if (!prompt?.trim()) throw new ServerError('Prompt is required', { status: 400, code: 'VALIDATION_ERROR' });
@@ -398,7 +417,10 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
     fps: parsedFps,
     filename,
     createdAt: new Date().toISOString(),
-    mode: mode || (sourceImagePath ? 'image' : 'text'),
+    // History mode reflects the EFFECTIVE mode — buildLtx2Args infers fflf
+    // from `keyframes` even when caller omitted `mode`, so without this the
+    // history entry would say 'text' for a multi-keyframe render.
+    mode: mode || (hasMultiKeyframes ? 'fflf' : sourceImagePath ? 'image' : 'text'),
     ...(hidden ? { hidden: true } : {}),
   };
   const job = { ...meta, clients: [], status: 'running' };

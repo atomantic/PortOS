@@ -21,6 +21,9 @@ vi.mock('../services/videoGen/local.js', () => ({
   extractLastFrame: vi.fn(),
   stitchVideos: vi.fn(),
   upscaleHistoryItem: vi.fn(),
+  // Mirrors the real export — keeps the route's keyframe-range check in
+  // sync with whatever the service actually defaults to.
+  DEFAULT_NUM_FRAMES: 121,
 }));
 
 // Render submissions go through the mediaJobQueue. Mock its surface so the
