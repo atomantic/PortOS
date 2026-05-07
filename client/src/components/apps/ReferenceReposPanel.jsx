@@ -96,7 +96,16 @@ export default function ReferenceReposPanel({ appId, appName, compact = false, i
       return null;
     });
     setCheckingIds((prev) => { const n = new Set(prev); n.delete(ref.id); return n; });
-    if (!snap) { fetch(); return; }
+    if (!snap) {
+      // Clear any stale snapshot — the user just saw a check failure, so
+      // leaving a previous commit list expandable would mislead them into
+      // thinking the listed commits are still the most recent unreviewed
+      // ones (they may not be; the failed check might've been triggered
+      // by upstream HEAD moving).
+      setSnapshots((prev) => { const n = { ...prev }; delete n[ref.id]; return n; });
+      fetch();
+      return;
+    }
     setSnapshots((prev) => ({ ...prev, [ref.id]: snap }));
     toast.success(`${ref.name}: ${snap.commitCount} new commit${snap.commitCount === 1 ? '' : 's'}`);
     fetch();

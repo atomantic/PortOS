@@ -51,7 +51,22 @@ const SHA_RE = /^[0-9a-f]{40}$/i;
 
 const SHORT_SHA = (sha) => (sha && SHA_RE.test(sha) ? sha.slice(0, 8) : null);
 
-const cloneDir = (refId) => join(REFERENCE_REPOS_ROOT, refId);
+// addReferenceRepo always assigns refIds via uuidv4(), but apps.json is a
+// hand-editable JSON file — a corrupted or maliciously-edited entry could
+// set `id` to "../.." and have cloneDir escape REFERENCE_REPOS_ROOT,
+// letting git operations read/write arbitrary paths under PATHS.data.
+// Enforce a strict id format here so the assumption "refId is a safe
+// path segment" holds at every callsite.
+const REF_ID_RE = /^[A-Za-z0-9_-]+$/;
+const cloneDir = (refId) => {
+  if (typeof refId !== 'string' || !REF_ID_RE.test(refId)) {
+    throw new ServerError(
+      `Reference repo id has an invalid format (must match ${REF_ID_RE.source}): ${refId}`,
+      { status: 500, code: 'REFERENCE_REPO_BAD_ID' },
+    );
+  }
+  return join(REFERENCE_REPOS_ROOT, refId);
+};
 
 // scp-style remotes — git accepts both `user@host:path` and the bare
 // `host:path` form. Disambiguating from a Windows drive path (`C:\foo`,
