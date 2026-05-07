@@ -398,6 +398,21 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   const resizedKeyframeTempPaths = [];
   let resolvedKeyframes = null;
   if (hasMultiKeyframes) {
+    // The route validates shape, but a non-route caller (test, persisted
+    // queue replay, future internal API) could pass malformed entries.
+    // Fail fast with a clear error instead of letting `undefined` paths
+    // flow into ffmpeg or the Python helper, where the failure is opaque.
+    keyframes.forEach((kf, i) => {
+      if (!kf || typeof kf !== 'object') {
+        throw new ServerError(`keyframes[${i}] must be an object: got ${typeof kf}`, { status: 400, code: 'KEYFRAME_INVALID_SHAPE' });
+      }
+      if (typeof kf.path !== 'string' || !kf.path) {
+        throw new ServerError(`keyframes[${i}].path must be a non-empty string`, { status: 400, code: 'KEYFRAME_INVALID_SHAPE' });
+      }
+      if (!Number.isFinite(Number(kf.index))) {
+        throw new ServerError(`keyframes[${i}].index must be a finite number: got ${kf.index}`, { status: 400, code: 'KEYFRAME_INVALID_SHAPE' });
+      }
+    });
     const results = await Promise.all(keyframes.map((kf, i) => resizeImage(kf.path, `kf${i}`)));
     resolvedKeyframes = results.map((r, i) => {
       if (r.tempPath) resizedKeyframeTempPaths.push(r.tempPath);

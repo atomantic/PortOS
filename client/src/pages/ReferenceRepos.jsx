@@ -48,7 +48,7 @@ export default function ReferenceRepos() {
           <GitBranch size={22} /> Reference Repos
         </h1>
         <p className="text-sm text-gray-400 mt-1">
-          Upstream repos each app borrows code from. The <code className="text-port-accent">reference-watch</code> task in CoS scans these on a schedule and writes adoption proposals to <code>REFERENCE_REVIEW.md</code> in the app's repo. Add/remove from each app's References tab.
+          Upstream repos each app watches for clean-room reimplementation. The <code className="text-port-accent">reference-watch</code> task in CoS scans them on a schedule and writes <code>REFERENCE_REVIEW.md</code> proposals describing features and fixes worth re-building in our own code. We track upstream commits — we don't copy upstream code. Add/remove from each app's References tab.
         </p>
       </div>
 

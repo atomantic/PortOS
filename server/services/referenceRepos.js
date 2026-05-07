@@ -1,7 +1,10 @@
 /**
  * Reference Repos service.
  *
- * Each PortOS-managed app can list upstream repos it borrows code from
+ * Each PortOS-managed app can list upstream repos it watches for clean-room
+ * reimplementation — the agent reads upstream commits and proposes which
+ * features/fixes are worth re-building in the app's OWN code, never
+ * copying upstream verbatim.
  * (e.g., PortOS itself watches `phosphene` for video-gen ideas). The
  * `reference-watch` scheduled task asks this service to fetch each ref
  * and find commits since `lastReviewedSha`. The CoS sub-agent then
@@ -179,8 +182,10 @@ const ensureClone = async (ref) => {
 const fetchHead = async (ref) => {
   const cwd = await ensureClone(ref);
   const branch = ref.branch || 'main';
-  // Use `git fetch origin <branch>` and read the new ref via FETCH_HEAD.
-  // For local-path refs we still need fetch to be a no-op-safe call.
+  // For URL-based refs, fetch the latest from origin so rev-parse picks
+  // up new commits. Local-path refs are the user's own working tree —
+  // skip fetch (the user manages their tree directly) and read the
+  // branch tip in place.
   if (!isLocalPath(ref.repoUrl)) {
     await runGit(cwd, ['fetch', '--prune', 'origin', branch]);
   }
@@ -230,11 +235,25 @@ export async function listReferenceRepos(appId) {
 export async function addReferenceRepo(appId, { name, repoUrl, branch, notes }) {
   const app = await getAppById(appId);
   if (!app) throw new ServerError(`App not found: ${appId}`, { status: 404, code: 'APP_NOT_FOUND' });
+  // Reject HTTPS URLs that embed credentials in the userinfo portion
+  // (e.g. `https://user:token@host/repo.git` or `https://token@host/repo`).
+  // Silent-stripping was tempting but a user pasting a token deserves to
+  // know we noticed — they should configure a git credential helper
+  // instead. scp-style `git@host:repo` is NOT credentials — that's just
+  // the SSH user; auth is via key. Whitelist that shape explicitly by
+  // matching only `scheme://user...@` patterns.
+  const trimmedUrl = repoUrl.trim();
+  if (/^\w+:\/\/[^\s/@]+@/.test(trimmedUrl)) {
+    throw new ServerError(
+      'repoUrl must not embed credentials in the URL (e.g. https://token@host/repo). Configure git credentials separately (credential helper, SSH keys).',
+      { status: 400, code: 'REFERENCE_REPO_URL_HAS_CREDS' },
+    );
+  }
   const existing = Array.isArray(app.referenceRepos) ? app.referenceRepos : [];
   const ref = {
     id: uuidv4(),
     name: name.trim(),
-    repoUrl: repoUrl.trim(),
+    repoUrl: trimmedUrl,
     branch: (branch || 'main').trim(),
     notes: (notes || '').trim(),
     lastReviewedSha: null,
@@ -425,13 +444,20 @@ export async function markReferenceRepoReviewed(appId, refId, sha) {
 export function formatReferenceForPrompt(ref, snapshot) {
   const lines = [];
   lines.push(`## Reference: ${ref.name}`);
-  lines.push(`- Repo: ${ref.repoUrl}`);
+  // Redact userinfo before emitting into the prompt — even though we strip
+  // credentials at ingest now, older entries persisted before that fix may
+  // still carry tokens in apps.json.
+  lines.push(`- Repo: ${redactUrlCreds(ref.repoUrl)}`);
   lines.push(`- Branch: ${ref.branch || 'main'}`);
   lines.push(`- Last reviewed: ${SHORT_SHA(ref.lastReviewedSha) || '(none — first scan)'}`);
   lines.push(`- Current head: ${snapshot.headShort} (${snapshot.commitCount} new commits)`);
   if (ref.notes) {
     lines.push('');
-    lines.push(`### What we use from this repo`);
+    // User-provided context: how the app relates to this upstream — what
+    // features the app maintains in its own code, what bugs to watch for,
+    // what areas of upstream are out of scope. The agent uses this to
+    // prioritize commits and decide what's worth reimplementing.
+    lines.push('### Context (user-supplied — how this app relates to the repo)');
     lines.push(ref.notes);
   }
   if (snapshot.commits.length === 0) {

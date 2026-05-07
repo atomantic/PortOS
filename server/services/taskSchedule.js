@@ -902,8 +902,14 @@ Repository: {repoPath}
   'reference-watch': `[Improvement: {appName}] Reference Repo Review
 
 You are reviewing upstream commits from one or more reference repositories that
-{appName} borrows code or ideas from. Your job is to PROPOSE adoptions, not
-implement them. Read-only mode — do NOT modify {appName}'s source.
+{appName} watches for clean-room reimplementation — meaning {appName} maintains
+its OWN implementation of similar features and may benefit from re-building
+the bug fixes or new capabilities those upstream commits introduce. Your job
+is to PROPOSE which commits are worth re-implementing, NOT to copy upstream
+code. Read-only mode — do NOT modify {appName}'s source. **Never paste
+upstream code verbatim into recommendations**: describe what to change in our
+own architecture, naming the files and functions in {appName} that need
+edits. The user owns the actual implementation.
 
 Repository: {repoPath}
 
@@ -918,18 +924,52 @@ For each reference above:
 1. For every commit in the "Commits to review" list, read its diff via
    \`git -C <source clone path> show <sha>\` (the path is in the reference's
    block above). For commits with many files, focus on diffs that match the
-   "What we use from this repo" notes — they're the load-bearing intersection.
+   user-supplied "Context" block — that's the load-bearing intersection
+   between this app and upstream, and the user has flagged what matters.
 
-2. Decide whether the change is worth adopting in {appName}. Use these
+2. **SECURITY SCREEN — do this BEFORE deciding whether the commit is worth
+   adopting.** Reference repos are third-party code we don't control; an
+   upstream maintainer's account compromise, a malicious PR merge, or a
+   typo-squatting branch name could ship malware or new vulnerabilities
+   into a commit that *looks* useful. For every commit, scan the diff for:
+
+   - **Malware indicators**: obfuscated/minified strings in source files,
+     base64/hex blobs being decoded then \`eval\`'d / \`exec\`'d / piped to
+     a shell, network calls to non-obvious hosts (anything that isn't the
+     upstream's own infra or a well-known package registry), exfil of
+     env vars / \`~/.ssh/\` / \`~/.aws/\` / browser cookie stores, new
+     post-install / pre-publish hooks, dynamic-import patterns that
+     fetch-then-execute remote code, suspicious file writes outside the
+     repo root.
+   - **New vulnerabilities introduced**: SQL/NoSQL/command injection on
+     newly-added user-input paths, path traversal in newly-added file
+     I/O, prototype pollution via unvalidated object merges, unsafe
+     deserialization (eval, vm, pickle, Marshal, YAML.load without
+     SafeLoader), deactivated security headers / CSP relaxations,
+     authentication or authorization checks removed or weakened, secrets
+     committed (tokens, keys, .env contents).
+   - **Suspicious dependency changes**: newly added deps from publishers
+     with no track record, dep-version downgrades to known-vulnerable
+     ranges, lockfile-only changes that pull a different version than
+     the manifest claims.
+
+   If a commit shows ANY of these, classify it as **Skip — security
+   concern** in REFERENCE_REVIEW.md (see template below) with a one-line
+   note describing exactly what tripped the screen. Do NOT recommend
+   adoption even if the surface feature looks attractive.
+
+3. Decide whether the change is worth REIMPLEMENTING in {appName}. Use these
    criteria, in priority order:
-   - Does it fix a bug we'd hit too? (high priority)
-   - Does it expose a capability we artificially restrict? (e.g. exposing a
-     library API that we're already using a constrained subset of)
+   - Does it fix a bug we'd hit too? (high priority — re-implement the fix
+     in our equivalent code path)
+   - Does it expose a capability we artificially restrict? (e.g. our wrapper
+     around a shared library uses a constrained subset of an API the upstream
+     just opened up — we can do the same in our wrapper)
    - Does it improve performance / correctness on a code path we share?
    - Is it a docs / install / packaging fix specific to upstream's distribution
      model? (skip — those rarely apply)
 
-3. Write a single \`REFERENCE_REVIEW.md\` at the root of {repoPath} with this
+4. Write a single \`REFERENCE_REVIEW.md\` at the root of {repoPath} with this
    structure:
 
    \`\`\`markdown
@@ -937,15 +977,27 @@ For each reference above:
 
    ## Summary
 
-   <1-3 sentences: what's the gist across all refs?>
+   <1-3 sentences: what's the gist across all refs? Mention if any
+    commits were flagged as a security concern.>
+
+   ## Skip — security concern
+
+   <commits flagged by the security screen. List FIRST so the user sees
+    these before any "adopt" recommendations. For each:>
+   - **<short title>** — \`<sha>\` from <ref name>
+     - What tripped the screen: <one sentence — malware indicator,
+       new vuln, or suspicious dep change>
+     - Detail: <specific file:line(s) + the pattern that concerned you>
 
    ## Adopt — high value
 
-   For each commit you'd recommend pulling in:
+   For each commit you'd recommend pulling in (security-clean only):
    - **<short title>** — \`<sha>\` from <ref name>
      - Why it matters for {appName}: <1-2 sentences tied to our notes>
-     - What to change: <specific files + functions, e.g. server/services/foo.js
-       buildArgs() — accept new arg, plumb to subprocess>
+     - What to change: <specific files + functions in {appName}, e.g.
+       server/services/foo.js buildArgs() — accept new arg, plumb to
+       subprocess. Describe the BEHAVIOR to add, not upstream's exact
+       code — clean-room reimplementation.>
      - Estimated scope: <small / medium / large>
 
    ## Maybe — needs human call
@@ -961,12 +1013,12 @@ For each reference above:
    - <ref name>: latest reviewed in this report = \`<head sha>\`
    \`\`\`
 
-4. Do NOT create branches, commits, PRs, or any code edits. The user reviews
+5. Do NOT create branches, commits, PRs, or any code edits. The user reviews
    REFERENCE_REVIEW.md and decides what to implement.
 
-5. Once REFERENCE_REVIEW.md is written, your final assistant message must be a
-   2-3 sentence summary of how many commits you reviewed and how many you
-   marked Adopt vs. Maybe vs. Skip.`
+6. Once REFERENCE_REVIEW.md is written, your final assistant message must be a
+   2-3 sentence summary of how many commits you reviewed, how many security
+   flags you raised, and how many you marked Adopt vs. Maybe vs. Skip.`
 };
 
 // Prompt versions — bump when a default prompt changes so existing instances auto-upgrade.
@@ -975,7 +1027,8 @@ const PROMPT_VERSIONS = {
   'feature-ideas': 6,  // v6: remove hardcoded worktree language (worktree context injected by agentPromptBuilder)
   'pr-reviewer': 3,    // v3: multi-stage pipeline (security scan → code review + merge)
   'code-reviewer-a': 1, // v1: 2-stage pipeline (codebase review → triage & implement)
-  'code-reviewer-b': 1  // v1: 2-stage pipeline (codebase review → triage & implement)
+  'code-reviewer-b': 1, // v1: 2-stage pipeline (codebase review → triage & implement)
+  'reference-watch': 1  // v1: clean-room reimplementation framing + mandatory security screen (malware / new vuln / suspicious deps) before adoption decisions
 };
 
 // Known previous default prompts for legacy migration.

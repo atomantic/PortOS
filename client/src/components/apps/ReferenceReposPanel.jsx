@@ -130,7 +130,7 @@ export default function ReferenceReposPanel({ appId, appName, compact = false, i
               <GitBranch size={14} /> Reference Repos
             </h3>
             <p className="text-xs text-gray-500 mt-0.5">
-              Upstream repos {appName} borrows from. The <code className="text-port-accent">reference-watch</code> task fetches each weekly and proposes adoptions in <code>REFERENCE_REVIEW.md</code>.
+              Upstream repos {appName} watches for clean-room reimplementation. The <code className="text-port-accent">reference-watch</code> task fetches each weekly and proposes features/fixes worth re-building in our own code via <code>REFERENCE_REVIEW.md</code>.
             </p>
           </div>
           <button

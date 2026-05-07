@@ -288,7 +288,7 @@ describe('formatReferenceForPrompt', () => {
     };
     const out = svc.formatReferenceForPrompt(ref, snapshot);
     expect(out).toContain('## Reference: phosphene');
-    expect(out).toContain('What we use from this repo');
+    expect(out).toContain('Context (user-supplied');
     expect(out).toContain('video gen');
     expect(out).toContain('aaaaaaaa');
     expect(out).toContain('add new feature');

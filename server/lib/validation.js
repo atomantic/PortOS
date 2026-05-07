@@ -178,7 +178,8 @@ export const datadogConfigSchema = z.object({
   environment: z.string().optional()
 });
 
-// Reference-repo entry. Each app can list upstream repos it borrows code from;
+// Reference-repo entry. Each app can list upstream repos it watches for
+// clean-room reimplementation;
 // the `reference-watch` scheduled task fetches each one, finds commits since
 // `lastReviewedSha`, and produces a REFERENCE_REVIEW.md proposal in the app's
 // repo. `notes` is the free-text "what we use from this repo" field — fed
@@ -241,9 +242,10 @@ export const appSchema = z.object({
   defaultOpenPR: z.boolean().optional(),
   jira: jiraConfigSchema.optional().nullable(),
   datadog: datadogConfigSchema.optional().nullable(),
-  // Upstream code we borrow from. The reference-watch scheduled task scans
-  // each ref since its lastReviewedSha and produces a REFERENCE_REVIEW.md
-  // proposal in this app's repo.
+  // Upstream repos this app tracks for clean-room reimplementation.
+  // The reference-watch scheduled task scans each ref since its
+  // lastReviewedSha and produces a REFERENCE_REVIEW.md proposal in this
+  // app's repo describing what's worth re-building in our own code.
   referenceRepos: z.array(referenceRepoSchema).optional()
 });
 
@@ -273,8 +275,12 @@ export const referenceRepoUpdateSchema = z.object({
   lastReviewedSha: z.string().regex(/^[0-9a-f]{40}$/i, 'must be a 40-char hex SHA').nullable().optional()
 });
 
-// Partial schema for updates
-export const appUpdateSchema = appSchema.partial();
+// Partial schema for updates. referenceRepos is omitted so PUT /api/apps/:id
+// can't overwrite the array (that would bypass the dedicated
+// /api/apps/:id/reference-repos endpoints, which manage server-controlled
+// fields like status/lastError/createdAt — direct PUT could clobber those
+// or inject garbage). All ref CRUD goes through the dedicated routes.
+export const appUpdateSchema = appSchema.partial().omit({ referenceRepos: true });
 
 // Provider schema
 export const providerSchema = z.object({
