@@ -113,8 +113,9 @@ describe('POST /api/image-clean', () => {
   });
 
   it('rejects oversized base64 payloads with FILE_TOO_LARGE before decoding', async () => {
-    // Sized to exceed the pre-decode cap (~53.3MB) but stay under the 55mb
-    // body parser ceiling so the route handler runs (not express's 413).
+    // Sized (in MiB) to exceed the pre-decode base64 cap (~53.3 MiB, derived
+    // from MAX_INPUT_BYTES = 40 MiB) but stay under the 55 MiB body parser
+    // ceiling so the route handler runs (not express's 413).
     const tooBig = 'A'.repeat(54 * 1024 * 1024);
     const res = await request(buildApp())
       .post('/api/image-clean')

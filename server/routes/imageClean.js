@@ -9,12 +9,17 @@ import { validateRequest } from '../lib/validation.js';
 
 const router = Router();
 
-// 40MB decoded ⇒ ~53.3MB base64 + small JSON overhead, fits under the 55mb
-// global body parser limit in server/index.js. Keep these aligned — raising
-// the decoded cap requires raising the body parser limit too.
+// All sizes here are MiB (1024*1024). 40 MiB decoded → ~53.3 MiB base64 (4*ceil(n/3))
+// + small JSON envelope, which fits under the 55mb (= 55 MiB) body parser limit
+// in server/index.js. Keep these aligned — raising the decoded cap requires
+// raising the body parser limit too.
 const MAX_INPUT_BYTES = 40 * 1024 * 1024;
 // Reject oversized payloads before allocating the decoded Buffer.
 const MAX_BASE64_CHARS = Math.ceil((MAX_INPUT_BYTES * 4) / 3) + 4;
+// Cap decoded pixel count to prevent decompression-bomb images: a small payload
+// can declare gigantic dimensions and OOM the process during sharp decode. ~96MP
+// covers reasonable photos (12000×8000) without allowing pathological inputs.
+const MAX_PIXELS = 96 * 1000 * 1000;
 
 export const CLEAN_LEVELS = ['light', 'aggressive'];
 
@@ -111,7 +116,7 @@ router.post('/', asyncHandler(async (req, res) => {
   // instead of decoding the buffer twice.
   // Wrap sharp errors (truncated/corrupt buffer that still passed the magic-byte
   // sniff) into a 400 so bad client input doesn't surface as a 500.
-  const base = sharp(buffer);
+  const base = sharp(buffer, { limitInputPixels: MAX_PIXELS });
   let meta;
   let cleaned;
   try {

@@ -31,12 +31,13 @@ export default function ImageClean() {
   }, []);
 
   // Decode the cleaned-image base64 once into a blob URL so the After preview
-  // and the download link don't each carry a multi-MB data: string.
-  const buildResultUrl = (cleaned) => {
-    const bin = atob(cleaned.data);
-    const bytes = new Uint8Array(bin.length);
-    for (let i = 0; i < bin.length; i += 1) bytes[i] = bin.charCodeAt(i);
-    return URL.createObjectURL(new Blob([bytes], { type: cleaned.mimeType }));
+  // and the download link don't each carry a multi-MB data: string. Use
+  // fetch().blob() so the base64 → bytes conversion happens in native browser
+  // code instead of a JS atob loop that would block the main thread for large
+  // images.
+  const buildResultUrl = async (cleaned) => {
+    const blob = await fetch(`data:${cleaned.mimeType};base64,${cleaned.data}`).then((r) => r.blob());
+    return URL.createObjectURL(blob);
   };
 
   const runClean = useCallback(async (base64, lvl) => {
@@ -55,7 +56,12 @@ export default function ImageClean() {
     if (myRequestId !== requestIdRef.current) return;
     setBusy(false);
     if (cleaned) {
-      const objectUrl = buildResultUrl(cleaned);
+      const objectUrl = await buildResultUrl(cleaned);
+      // Bail if a newer reclean started while we were decoding.
+      if (myRequestId !== requestIdRef.current) {
+        URL.revokeObjectURL(objectUrl);
+        return;
+      }
       resultUrlRef.current = objectUrl;
       setResult({ ...cleaned, objectUrl });
       toast.success(cleaned.c2paStripped ? 'C2PA provenance stripped' : 'Image cleaned');
@@ -68,11 +74,15 @@ export default function ImageClean() {
       toast.error(`File exceeds ${MAX_BYTES / 1024 / 1024}MB limit`);
       return;
     }
-    // Some drag sources leave file.type empty — fall back to extension. The
-    // server still does a magic-byte sniff and is the source of truth.
-    const typeOk = file.type ? ALLOWED_MIME.test(file.type) : true;
-    const extOk = ALLOWED_EXT.test(file.name || '');
-    if (!typeOk || !extOk) {
+    // Server-side magic-byte sniff is the source of truth. Only fail-fast in the
+    // client when BOTH MIME and extension are present and clearly not supported
+    // — missing/empty values (common on drag from the file system) fall through
+    // to the server.
+    const hasMime = !!file.type;
+    const hasExt = /\./.test(file.name || '');
+    const mimeOk = hasMime ? ALLOWED_MIME.test(file.type) : null;
+    const extOk = hasExt ? ALLOWED_EXT.test(file.name) : null;
+    if (mimeOk === false && extOk === false) {
       toast.error('Only PNG, JPEG, and WebP images are supported');
       return;
     }
