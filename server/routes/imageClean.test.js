@@ -133,4 +133,25 @@ describe('POST /api/image-clean', () => {
     expect(res.status).toBe(400);
     expect(res.body.code).toBe('VALIDATION_ERROR');
   });
+
+  it('auto-orients images via EXIF Orientation tag', async () => {
+    // Build a 4×8 JPEG, then re-emit with EXIF Orientation=6 (rotate 90° CW)
+    // embedded via withMetadata. After the route's auto-orient, the output
+    // should be 8×4 — i.e., width/height swapped.
+    const raw = await sharp({
+      create: { width: 4, height: 8, channels: 3, background: { r: 100, g: 150, b: 200 } },
+    }).jpeg().toBuffer();
+    const oriented = await sharp(raw)
+      .withMetadata({ orientation: 6 })
+      .jpeg()
+      .toBuffer();
+
+    const res = await request(buildApp())
+      .post('/api/image-clean')
+      .send({ data: oriented.toString('base64') });
+
+    expect(res.status).toBe(200);
+    expect(res.body.width).toBe(8);
+    expect(res.body.height).toBe(4);
+  });
 });

@@ -23,6 +23,11 @@ export default function ImageClean() {
   const requestIdRef = useRef(0);
   const previewUrlRef = useRef(null);
   const resultUrlRef = useRef(null);
+  // Mirror `level` so handleFile can read the user's CURRENT choice after the
+  // readFileAsBase64 await — otherwise the closure captures the level at the
+  // moment the upload started and a mid-read level switch would be ignored.
+  const levelRef = useRef(level);
+  useEffect(() => { levelRef.current = level; }, [level]);
 
   // Revoke any outstanding blob URL on unmount so we don't leak.
   useEffect(() => () => {
@@ -115,7 +120,7 @@ export default function ImageClean() {
       size: file.size,
       name: file.name,
     });
-    runClean(base64, level);
+    runClean(base64, levelRef.current);
   };
 
   const handleLevelChange = (newLevel) => {

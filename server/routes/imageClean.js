@@ -112,18 +112,19 @@ router.post('/', asyncHandler(async (req, res) => {
 
   const c2paStripped = format === 'png' && pngHasC2PA(buffer);
 
-  // Single sharp instance, .clone()-ed so metadata + transform share one decode
-  // instead of decoding the buffer twice.
+  // Single decode for both EXIF auto-orient + denoise/encode. .rotate() with no
+  // args applies the EXIF Orientation tag so the cleaned pixels match what the
+  // browser showed in the Before preview (browsers honor EXIF orientation but
+  // sharp does not by default). resolveWithObject gives us output dimensions
+  // (post-rotation), avoiding a second decode for metadata.
   // Wrap sharp errors (truncated/corrupt buffer that still passed the magic-byte
   // sniff) into a 400 so bad client input doesn't surface as a 500.
-  const base = sharp(buffer, { limitInputPixels: MAX_PIXELS });
-  let meta;
+  const base = sharp(buffer, { limitInputPixels: MAX_PIXELS }).rotate();
   let cleaned;
+  let info;
   try {
-    [meta, cleaned] = await Promise.all([
-      base.clone().metadata(),
-      applyEncoder(applyDenoise(base.clone(), level), format).toBuffer(),
-    ]);
+    ({ data: cleaned, info } = await applyEncoder(applyDenoise(base, level), format)
+      .toBuffer({ resolveWithObject: true }));
   } catch (err) {
     throw new ServerError(`Failed to decode ${format} image: ${err.message}`, {
       status: 400,
@@ -140,8 +141,8 @@ router.post('/', asyncHandler(async (req, res) => {
     level,
     sizeBefore: buffer.length,
     sizeAfter: cleaned.length,
-    width: meta.width || null,
-    height: meta.height || null,
+    width: info.width || null,
+    height: info.height || null,
     c2paStripped,
   });
 }));
