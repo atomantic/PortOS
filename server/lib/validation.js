@@ -241,12 +241,13 @@ export const appSchema = z.object({
   defaultUseWorktree: z.boolean().optional(),
   defaultOpenPR: z.boolean().optional(),
   jira: jiraConfigSchema.optional().nullable(),
-  datadog: datadogConfigSchema.optional().nullable(),
-  // Upstream repos this app tracks for clean-room reimplementation.
-  // The reference-watch scheduled task scans each ref since its
-  // lastReviewedSha and produces a REFERENCE_REVIEW.md proposal in this
-  // app's repo describing what's worth re-building in our own code.
-  referenceRepos: z.array(referenceRepoSchema).optional()
+  datadog: datadogConfigSchema.optional().nullable()
+  // referenceRepos is INTENTIONALLY not part of the create/update API
+  // surface. createApp() doesn't persist it and updateApp() (via the
+  // omit() in appUpdateSchema) ignores it — the dedicated
+  // /api/apps/:appId/reference-repos endpoints own the lifecycle so
+  // server-managed fields (status, lastError, createdAt) can't be
+  // clobbered through the generic apps API.
 });
 
 // Used by routes that POST a NEW reference repo (id/createdAt are server-
@@ -275,12 +276,10 @@ export const referenceRepoUpdateSchema = z.object({
   lastReviewedSha: z.string().regex(/^[0-9a-f]{40}$/i, 'must be a 40-char hex SHA').nullable().optional()
 });
 
-// Partial schema for updates. referenceRepos is omitted so PUT /api/apps/:id
-// can't overwrite the array (that would bypass the dedicated
-// /api/apps/:id/reference-repos endpoints, which manage server-controlled
-// fields like status/lastError/createdAt — direct PUT could clobber those
-// or inject garbage). All ref CRUD goes through the dedicated routes.
-export const appUpdateSchema = appSchema.partial().omit({ referenceRepos: true });
+// Partial schema for updates. referenceRepos is intentionally absent
+// from appSchema (see comment there) so it can't sneak in via PUT
+// either — all ref CRUD goes through /api/apps/:appId/reference-repos.
+export const appUpdateSchema = appSchema.partial();
 
 // Provider schema
 export const providerSchema = z.object({
