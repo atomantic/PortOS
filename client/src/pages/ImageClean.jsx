@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import { Eraser, Upload, Download, ShieldCheck } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import BrailleSpinner from '../components/BrailleSpinner';
@@ -6,17 +6,27 @@ import * as api from '../services/api';
 import { formatBytes } from '../utils/formatters';
 import { readFileAsBase64 } from '../utils/fileUpload';
 
-const MAX_BYTES = 50 * 1024 * 1024;
+// Keep aligned with MAX_INPUT_BYTES in server/routes/imageClean.js — both are
+// sized so the base64+JSON envelope fits under the 55mb body parser cap.
+const MAX_BYTES = 40 * 1024 * 1024;
 const CLEAN_LEVELS = ['light', 'aggressive'];
+const ALLOWED_EXT = /\.(png|jpe?g|webp)$/i;
+const ALLOWED_MIME = /^image\/(png|jpe?g|webp)$/i;
 
 export default function ImageClean() {
   const [level, setLevel] = useState('light');
-  const [original, setOriginal] = useState(null); // { dataUri, base64, size, name }
+  const [original, setOriginal] = useState(null); // { previewUrl, base64, size, name }
   const [result, setResult] = useState(null);
   const [busy, setBusy] = useState(false);
   const [dragActive, setDragActive] = useState(false);
   const fileInputRef = useRef(null);
   const requestIdRef = useRef(0);
+  const previewUrlRef = useRef(null);
+
+  // Revoke any outstanding blob URL on unmount so we don't leak.
+  useEffect(() => () => {
+    if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
+  }, []);
 
   const runClean = useCallback(async (base64, lvl) => {
     const myRequestId = ++requestIdRef.current;
@@ -41,7 +51,11 @@ export default function ImageClean() {
       toast.error(`File exceeds ${MAX_BYTES / 1024 / 1024}MB limit`);
       return;
     }
-    if (!/^image\/(png|jpe?g|webp)$/i.test(file.type)) {
+    // Some drag sources leave file.type empty — fall back to extension. The
+    // server still does a magic-byte sniff and is the source of truth.
+    const typeOk = file.type ? ALLOWED_MIME.test(file.type) : true;
+    const extOk = ALLOWED_EXT.test(file.name || '');
+    if (!typeOk || !extOk) {
       toast.error('Only PNG, JPEG, and WebP images are supported');
       return;
     }
@@ -52,8 +66,14 @@ export default function ImageClean() {
       return;
     }
 
+    // Use a blob URL for the Before preview so we don't double the in-memory
+    // image (base64 string + data URI string). Revoke any previous URL first.
+    if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
+    const previewUrl = URL.createObjectURL(file);
+    previewUrlRef.current = previewUrl;
+
     setOriginal({
-      dataUri: `data:${file.type};base64,${base64}`,
+      previewUrl,
       base64,
       size: file.size,
       name: file.name,
@@ -83,6 +103,10 @@ export default function ImageClean() {
 
   const handleReset = () => {
     requestIdRef.current++;
+    if (previewUrlRef.current) {
+      URL.revokeObjectURL(previewUrlRef.current);
+      previewUrlRef.current = null;
+    }
     setOriginal(null);
     setResult(null);
     setBusy(false);
@@ -164,7 +188,7 @@ export default function ImageClean() {
           <p className="text-white mb-2">
             {dragActive ? 'Drop image here' : 'Drag and drop an image here'}
           </p>
-          <p className="text-gray-500 text-sm mb-4">PNG, JPEG, or WebP (max 50MB)</p>
+          <p className="text-gray-500 text-sm mb-4">PNG, JPEG, or WebP (max 40MB)</p>
           <button
             onClick={() => fileInputRef.current?.click()}
             className="px-4 py-2 bg-port-accent/20 hover:bg-port-accent/30 text-port-accent rounded-lg transition-colors"
@@ -183,7 +207,7 @@ export default function ImageClean() {
                 <span className="text-xs text-gray-500">{formatBytes(original.size)}</span>
               </div>
               <div className="p-4 flex items-center justify-center bg-port-bg/50 min-h-[200px]">
-                <img src={original.dataUri} alt="Original" className="max-w-full max-h-[480px] object-contain" />
+                <img src={original.previewUrl} alt="Original" className="max-w-full max-h-[480px] object-contain" />
               </div>
             </div>
 

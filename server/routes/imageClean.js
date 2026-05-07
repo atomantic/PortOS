@@ -9,7 +9,12 @@ import { validateRequest } from '../lib/validation.js';
 
 const router = Router();
 
-const MAX_INPUT_BYTES = 50 * 1024 * 1024;
+// 40MB decoded ⇒ ~53.3MB base64 + small JSON overhead, fits under the 55mb
+// global body parser limit in server/index.js. Keep these aligned — raising
+// the decoded cap requires raising the body parser limit too.
+const MAX_INPUT_BYTES = 40 * 1024 * 1024;
+// Reject oversized payloads before allocating the decoded Buffer.
+const MAX_BASE64_CHARS = Math.ceil((MAX_INPUT_BYTES * 4) / 3) + 4;
 
 export const CLEAN_LEVELS = ['light', 'aggressive'];
 
@@ -58,13 +63,12 @@ const MIME_TYPES = {
   webp: 'image/webp',
 };
 
-function buildPipeline(buffer, format, level) {
-  let pipeline = sharp(buffer);
-  if (level === 'light') {
-    pipeline = pipeline.median(1);
-  } else {
-    pipeline = pipeline.median(3).sharpen();
-  }
+function applyDenoise(pipeline, level) {
+  if (level === 'light') return pipeline.median(1);
+  return pipeline.median(3).sharpen();
+}
+
+function applyEncoder(pipeline, format) {
   if (format === 'png') return pipeline.png({ compressionLevel: 9 });
   if (format === 'jpeg') return pipeline.jpeg({ quality: 92, mozjpeg: true });
   return pipeline.webp({ quality: 92 });
@@ -72,6 +76,15 @@ function buildPipeline(buffer, format, level) {
 
 router.post('/', asyncHandler(async (req, res) => {
   const { data, level } = validateRequest(cleanBodySchema, req.body);
+
+  // Cap by base64 length BEFORE allocating the decoded Buffer so an oversized
+  // payload doesn't briefly balloon RSS.
+  if (data.length > MAX_BASE64_CHARS) {
+    throw new ServerError(`Image exceeds ${MAX_INPUT_BYTES / 1024 / 1024}MB limit`, {
+      status: 400,
+      code: 'FILE_TOO_LARGE',
+    });
+  }
 
   const buffer = Buffer.from(data, 'base64');
   if (buffer.length === 0) {
@@ -94,9 +107,12 @@ router.post('/', asyncHandler(async (req, res) => {
 
   const c2paStripped = format === 'png' && pngHasC2PA(buffer);
 
+  // Single sharp instance, .clone()-ed so metadata + transform share one decode
+  // instead of decoding the buffer twice.
+  const base = sharp(buffer);
   const [meta, cleaned] = await Promise.all([
-    sharp(buffer).metadata(),
-    buildPipeline(buffer, format, level).toBuffer(),
+    base.clone().metadata(),
+    applyEncoder(applyDenoise(base.clone(), level), format).toBuffer(),
   ]);
 
   console.log(`🧼 Image cleaned: ${format} ${buffer.length}B → ${cleaned.length}B (level=${level}, c2pa=${c2paStripped})`);
