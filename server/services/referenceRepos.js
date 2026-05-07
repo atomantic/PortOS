@@ -350,9 +350,10 @@ export async function updateReferenceRepo(appId, refId, patch) {
   ) {
     const ref = refs[idx];
     const dest = isLocalPath(ref.repoUrl) ? expandHome(ref.repoUrl) : cloneDir(ref.id);
-    const cloneExists = isLocalPath(ref.repoUrl)
-      ? existsSync(join(dest, '.git'))
-      : existsSync(join(dest, '.git'));
+    // Same .git-existence check applies to both URL-based managed clones
+    // and user-supplied local paths (ensureClone validates `.git` for local
+    // refs too), so no per-branch logic needed.
+    const cloneExists = existsSync(join(dest, '.git'));
     if (cloneExists) {
       const verify = await execGit(['cat-file', '-e', `${patch.lastReviewedSha}^{commit}`], dest, { timeout: 10_000 })
         .catch((err) => ({ error: err }));
