@@ -153,6 +153,9 @@ export default function ImageClean() {
       URL.revokeObjectURL(resultUrlRef.current);
       resultUrlRef.current = null;
     }
+    // Clear the input so picking the same file again still fires onChange
+    // (browsers suppress onChange when the value is unchanged).
+    if (fileInputRef.current) fileInputRef.current.value = '';
     setOriginal(null);
     setResult(null);
     setBusy(false);
@@ -224,7 +227,11 @@ export default function ImageClean() {
             ref={fileInputRef}
             type="file"
             accept="image/png,image/jpeg,image/webp"
-            onChange={(e) => handleFile(e.target.files?.[0])}
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              e.target.value = '';
+              handleFile(file);
+            }}
             className="sr-only"
             tabIndex={-1}
             aria-hidden="true"
