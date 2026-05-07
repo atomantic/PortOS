@@ -333,11 +333,21 @@ export async function updateReferenceRepo(appId, refId, patch) {
   // in the clone. Without this, a PATCH could persist a syntactically valid
   // but nonexistent SHA, and the next `checkReferenceRepo` would die in
   // `git log <bad>..HEAD` with a confusing "unknown revision" error.
-  // Skipped when clearing (null) — that always succeeds — and when the
-  // ref has never been cloned yet (fresh add + manual SHA pin), since
-  // ensureClone would clone the entire repo just to verify a SHA the user
-  // is asserting they already know about.
-  if (typeof patch.lastReviewedSha === 'string' && SHA_RE.test(patch.lastReviewedSha)) {
+  // Skipped when:
+  //   - clearing (null) — that always succeeds
+  //   - the ref has never been cloned yet (fresh add + manual SHA pin)
+  //   - the same PATCH is also changing repoUrl: the clone hasn't been
+  //     re-fetched against the new origin yet, so its commits reflect
+  //     the OLD repo. Verifying against stale state would produce
+  //     misleading results (false positives where the SHA happens to
+  //     exist in the old repo, or false negatives where it doesn't).
+  //     Let the next checkReferenceRepo surface any real mismatch.
+  const repoUrlChanging = typeof patch.repoUrl === 'string' && patch.repoUrl.trim() !== refs[idx].repoUrl;
+  if (
+    typeof patch.lastReviewedSha === 'string'
+    && SHA_RE.test(patch.lastReviewedSha)
+    && !repoUrlChanging
+  ) {
     const ref = refs[idx];
     const dest = isLocalPath(ref.repoUrl) ? expandHome(ref.repoUrl) : cloneDir(ref.id);
     const cloneExists = isLocalPath(ref.repoUrl)
