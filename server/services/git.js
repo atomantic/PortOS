@@ -722,11 +722,19 @@ export async function getDefaultBranch(dir, { allowRemote = true } = {}) {
 export async function getRepoBranches(dir) {
   // Check origin/HEAD first (fast, local-only)
   const symRef = await execGitSafe(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], dir);
-  let baseBranch = symRef.stdout?.trim() ? symRef.stdout.trim().replace(/^origin\//, '') : null;
+  let baseBranch = null;
+  if (symRef.stdout?.trim()) {
+    const candidate = symRef.stdout.trim().replace(/^origin\//, '');
+    // Verify the ref actually exists (origin/HEAD could be stale)
+    const verify = await execGitSafe(['rev-parse', '--verify', `refs/remotes/origin/${candidate}`], dir);
+    if (verify.exitCode === 0 || verify.stdout?.trim()) {
+      baseBranch = candidate;
+    }
+  }
 
   // Get local branches once — reused for both base fallback and dev detection
-  const result = await execGit(['branch', '--list'], dir, { ignoreExitCode: true });
-  const branches = result.stdout.trim().split('\n').map(b => b.replace(/^\*?\s+/, ''));
+  const result = await execGitSafe(['branch', '--list'], dir);
+  const branches = (result.stdout || '').trim().split('\n').map(b => b.replace(/^\*?\s+/, '')).filter(Boolean);
 
   if (!baseBranch) {
     if (branches.includes('main')) baseBranch = 'main';

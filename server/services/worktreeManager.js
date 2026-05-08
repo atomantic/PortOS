@@ -301,13 +301,16 @@ export async function mergeBaseIntoFeatureWorktree(featureAgentId, baseBranch) {
   const worktreePath = join(WORKTREES_DIR, '..', 'feature-agents', featureAgentId, 'worktree');
   if (!existsSync(worktreePath)) return { merged: false, reason: 'worktree-missing' };
 
-  await execGit(['fetch', 'origin'], worktreePath).catch(err => {
-    console.log(`⚠️ Fetch failed for feature agent ${featureAgentId}: ${err.message}`);
-  });
+  const fetchOk = await execGit(['fetch', 'origin'], worktreePath)
+    .then(() => true)
+    .catch(err => {
+      console.log(`⚠️ Fetch failed for feature agent ${featureAgentId}: ${err.message}`);
+      return false;
+    });
 
   if (!baseBranch) {
     const { getDefaultBranch } = await import('./git.js');
-    baseBranch = await getDefaultBranch(worktreePath).catch(() => null) || 'main';
+    baseBranch = await getDefaultBranch(worktreePath, { allowRemote: fetchOk }).catch(() => null) || 'main';
   }
   // Verify origin/<baseBranch> exists; if not, re-detect before giving up
   let remoteBranchValid = await execGit(['rev-parse', `origin/${baseBranch}`], worktreePath, { ignoreExitCode: true })
