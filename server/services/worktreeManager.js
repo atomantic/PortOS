@@ -220,9 +220,14 @@ export async function createPersistentWorktree(featureAgentId, sourceWorkspace, 
     baseBranch = await getDefaultBranch(sourceWorkspace) || 'main';
   }
 
+  // Verify the base branch exists locally or on the remote; fall back to HEAD if not
   const baseRef = await execGit(['rev-parse', `origin/${baseBranch}`], sourceWorkspace)
     .then(() => `origin/${baseBranch}`)
-    .catch(() => baseBranch);
+    .catch(async () => {
+      const localExists = (await execGit(['branch', '--list', baseBranch], sourceWorkspace, { ignoreExitCode: true })).stdout.trim();
+      if (localExists) return baseBranch;
+      return 'HEAD';
+    });
 
   // Check if branch already exists (local or remote)
   const localBranchExists = (await execGit(['branch', '--list', branchName], sourceWorkspace)).stdout.trim();
@@ -283,6 +288,12 @@ export async function mergeBaseIntoFeatureWorktree(featureAgentId, baseBranch) {
   if (!baseBranch) {
     const { getDefaultBranch } = await import('./git.js');
     baseBranch = await getDefaultBranch(worktreePath) || 'main';
+  }
+  // Verify origin/<baseBranch> exists before attempting merge
+  const remoteBranchValid = await execGit(['rev-parse', `origin/${baseBranch}`], worktreePath, { ignoreExitCode: true })
+    .then(r => r.exitCode === 0);
+  if (!remoteBranchValid) {
+    return { merged: false, reason: `origin/${baseBranch} not found` };
   }
   const result = await execGit(['merge', `origin/${baseBranch}`, '--no-edit'], worktreePath)
     .then(() => ({ merged: true }))

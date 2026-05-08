@@ -678,29 +678,39 @@ export function extractAgentSummary(output) {
   return summary;
 }
 
-export async function getDefaultBranch(dir) {
+export async function getDefaultBranch(dir, { allowRemote = true } = {}) {
   const symRef = await execGitSafe(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], dir);
   if (symRef.stdout?.trim()) {
     return symRef.stdout.trim().replace(/^origin\//, '');
   }
 
-  // origin/HEAD not set locally — ask the remote
-  await execGitSafe(['remote', 'set-head', 'origin', '--auto'], dir);
-  const symRef2 = await execGitSafe(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], dir);
-  if (symRef2.stdout?.trim()) {
-    return symRef2.stdout.trim().replace(/^origin\//, '');
+  // origin/HEAD not set locally — ask the remote (best-effort, short timeout)
+  if (allowRemote) {
+    await execGitSafe(['remote', 'set-head', 'origin', '--auto'], dir, { timeout: 5000 });
+    const symRef2 = await execGitSafe(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], dir);
+    if (symRef2.stdout?.trim()) {
+      return symRef2.stdout.trim().replace(/^origin\//, '');
+    }
   }
 
+  // Fall back to local branch detection
   const result = await execGit(['branch', '--list'], dir, { ignoreExitCode: true });
   const branches = result.stdout.trim().split('\n').map(b => b.replace(/^\*?\s+/, ''));
   if (branches.includes('main')) return 'main';
   if (branches.includes('master')) return 'master';
 
+  // Last resort: use the currently checked-out branch
+  const head = await execGitSafe(['rev-parse', '--abbrev-ref', 'HEAD'], dir);
+  if (head.stdout?.trim() && head.stdout.trim() !== 'HEAD') {
+    return head.stdout.trim();
+  }
+
   return null;
 }
 
 /**
- * Detect base and dev branches from local branch list
+ * Detect base and dev branches via origin/HEAD (with remote auto-detection fallback)
+ * and local branch list. May contact the remote if origin/HEAD is unset.
  * @returns {{ baseBranch: string|null, devBranch: string|null }}
  */
 export async function getRepoBranches(dir) {
