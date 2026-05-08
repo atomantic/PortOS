@@ -291,7 +291,8 @@ export async function mergeBaseIntoFeatureWorktree(featureAgentId, baseBranch) {
   }
   // Verify origin/<baseBranch> exists before attempting merge
   const remoteBranchValid = await execGit(['rev-parse', `origin/${baseBranch}`], worktreePath, { ignoreExitCode: true })
-    .then(r => r.exitCode === 0);
+    .then(r => r.exitCode === 0)
+    .catch(() => false);
   if (!remoteBranchValid) {
     return { merged: false, reason: `origin/${baseBranch} not found` };
   }

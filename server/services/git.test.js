@@ -233,3 +233,4 @@ describe('extractAgentSummary', () => {
     expect(summary).not.toContain('🔧');
   });
 });
+
