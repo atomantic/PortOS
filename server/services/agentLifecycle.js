@@ -1308,7 +1308,7 @@ export async function spawnMergeRecoveryTask(cleanupWarnings, agentId, task, app
       context: `An agent pushed branch "${staleBranch}" to ${sourceWorkspace} but automated ${reqWord} creation failed. `
         + `Investigate by: (1) checking if a ${reqWord} already exists for this branch: "${listCmd}"; `
         + `(2) if no ${reqWord} exists, review the branch changes and create one: "${createCmd}"; `
-        + `(3) if the branch is stale or changes are already on main, delete the remote branch: "git push origin --delete ${staleBranch}". `
+        + `(3) if the branch is stale or changes are already on ${targetBase}, delete the remote branch: "git push origin --delete ${staleBranch}". `
         + `Original agent: ${agentId}, original task: ${task?.description || 'unknown'}.`,
       useWorktree: false,
     }, 'user').catch(err => {

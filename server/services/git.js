@@ -709,12 +709,12 @@ export async function getDefaultBranch(dir, { allowRemote = true } = {}) {
 }
 
 /**
- * Detect base and dev branches via origin/HEAD (with remote auto-detection fallback)
- * and local branch list. May contact the remote if origin/HEAD is unset.
+ * Detect base and dev branches from local refs (origin/HEAD, local branch list).
+ * Does not contact the remote — safe for latency-sensitive request paths.
  * @returns {{ baseBranch: string|null, devBranch: string|null }}
  */
 export async function getRepoBranches(dir) {
-  const baseBranch = await getDefaultBranch(dir);
+  const baseBranch = await getDefaultBranch(dir, { allowRemote: false });
   const result = await execGit(['branch', '--list'], dir, { ignoreExitCode: true });
   const branches = result.stdout.trim().split('\n').map(b => b.replace(/^\*?\s+/, ''));
   return {
