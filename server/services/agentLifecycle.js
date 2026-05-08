@@ -1156,7 +1156,7 @@ export async function cleanupAgentWorktree(agentId, success, { openPR = false, r
     if (pushResult) {
       const targetBranch = branchInfo.baseBranch || 'main';
       const taskDesc = description || 'CoS automated task';
-      const prTitle = taskDesc.replace(/[\r\n]+/g, ' ').trim().substring(0, 100);
+      const prTitle = taskDesc.split(/[\r\n]/)[0].trim().substring(0, 100);
 
       const prBody = await git.generatePRDescription(worktreePath, targetBranch, worktreeBranch, agentOutput);
 
@@ -1265,15 +1265,16 @@ export async function spawnMergeRecoveryTask(cleanupWarnings, agentId, task, app
   const appId = task?.metadata?.app;
 
   if (isMergeFail) {
+    const defaultBr = await git.getDefaultBranch(sourceWorkspace).catch(() => null) || 'main';
     addTask({
       description: `${RECOVERY_TASK_PREFIX} Resolve merge conflict and clean up stale branch ${staleBranch} in ${appName}`,
       priority: 'HIGH',
       app: appId,
       isRecovery: true,
-      context: `An agent failed to auto-merge branch "${staleBranch}" back to main in ${sourceWorkspace}. `
-        + `Resolve this by: (1) checking if the branch's changes are already on main (superseded by other commits), `
+      context: `An agent failed to auto-merge branch "${staleBranch}" back to ${defaultBr} in ${sourceWorkspace}. `
+        + `Resolve this by: (1) checking if the branch's changes are already on ${defaultBr} (superseded by other commits), `
         + `and if so, delete the branch with "git branch -D ${staleBranch}"; `
-        + `(2) if the changes are NOT on main, attempt "git merge ${staleBranch} --no-edit" from main, resolve any conflicts, and commit; `
+        + `(2) if the changes are NOT on ${defaultBr}, attempt "git merge ${staleBranch} --no-edit" from ${defaultBr}, resolve any conflicts, and commit; `
         + `(3) after merging or determining the branch is stale, delete it with "git branch -D ${staleBranch}". `
         + `Original agent: ${agentId}, original task: ${task?.description || 'unknown'}.`,
       useWorktree: false,
@@ -1285,15 +1286,19 @@ export async function spawnMergeRecoveryTask(cleanupWarnings, agentId, task, app
     // PR/MR creation failed — spawn an agent to investigate and retry. Pick gh vs
     // glab based on the repo's forge so the recovery agent gets commands that
     // actually work against this remote.
-    const { cli } = await git.resolveForgeForRepo(sourceWorkspace).catch(() => ({ cli: 'gh' }));
+    const [{ cli }, detectedBase] = await Promise.all([
+      git.resolveForgeForRepo(sourceWorkspace).catch(() => ({ cli: 'gh' })),
+      git.getDefaultBranch(sourceWorkspace).catch(() => null)
+    ]);
+    const targetBase = detectedBase || 'main';
     const isGitLab = cli === 'glab';
     const reqWord = isGitLab ? 'MR' : 'PR';
     const listCmd = isGitLab
       ? `glab mr list --source-branch ${staleBranch}`
       : `gh pr list --head ${staleBranch}`;
     const createCmd = isGitLab
-      ? `glab mr create --source-branch ${staleBranch} --target-branch main --title '...' --description '...'`
-      : `gh pr create --head ${staleBranch} --base main --title '...' --body '...'`;
+      ? `glab mr create --source-branch ${staleBranch} --target-branch ${targetBase} --title '...' --description '...'`
+      : `gh pr create --head ${staleBranch} --base ${targetBase} --title '...' --body '...'`;
 
     addTask({
       description: `${RECOVERY_TASK_PREFIX} Investigate and retry failed ${reqWord} for branch ${staleBranch} in ${appName}`,

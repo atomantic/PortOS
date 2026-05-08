@@ -48,14 +48,14 @@ export async function createWorktree(agentId, sourceWorkspace, taskId, options =
     console.log(`⚠️ Worktree fetch failed (will use local refs): ${err.message}`);
   });
 
-  // Determine the base: explicit option > detected default branch > current HEAD
+  // Determine the base: explicit option > remote default branch > current HEAD
   let baseBranch = options.baseBranch;
   if (!baseBranch) {
-    const mainExists = (await execGit(['branch', '--list', 'main'], sourceWorkspace)).stdout.trim();
-    const masterExists = (await execGit(['branch', '--list', 'master'], sourceWorkspace)).stdout.trim();
-    if (mainExists) baseBranch = 'main';
-    else if (masterExists) baseBranch = 'master';
-    else baseBranch = (await execGit(['rev-parse', '--abbrev-ref', 'HEAD'], sourceWorkspace)).stdout.trim();
+    const { getDefaultBranch } = await import('./git.js');
+    baseBranch = await getDefaultBranch(sourceWorkspace);
+    if (!baseBranch) {
+      baseBranch = (await execGit(['rev-parse', '--abbrev-ref', 'HEAD'], sourceWorkspace)).stdout.trim();
+    }
   }
 
   // Prefer the remote ref (freshest state) if available
@@ -206,7 +206,7 @@ export async function removeWorktree(agentId, sourceWorkspace, branchName, optio
  * Create a persistent worktree for a feature agent.
  * Unlike regular worktrees, these persist across runs.
  */
-export async function createPersistentWorktree(featureAgentId, sourceWorkspace, branchName, baseBranch = 'main') {
+export async function createPersistentWorktree(featureAgentId, sourceWorkspace, branchName, baseBranch) {
   const FA_WORKTREES = join(WORKTREES_DIR, '..', 'feature-agents', featureAgentId, 'worktree');
 
   await ensureDir(join(WORKTREES_DIR, '..', 'feature-agents', featureAgentId));
@@ -214,6 +214,11 @@ export async function createPersistentWorktree(featureAgentId, sourceWorkspace, 
   await execGit(['fetch', 'origin'], sourceWorkspace).catch(err => {
     console.log(`⚠️ Persistent worktree fetch failed: ${err.message}`);
   });
+
+  if (!baseBranch) {
+    const { getDefaultBranch } = await import('./git.js');
+    baseBranch = await getDefaultBranch(sourceWorkspace) || 'main';
+  }
 
   const baseRef = await execGit(['rev-parse', `origin/${baseBranch}`], sourceWorkspace)
     .then(() => `origin/${baseBranch}`)
@@ -267,13 +272,18 @@ export async function removePersistentWorktree(featureAgentId, sourceWorkspace, 
 /**
  * Merge base branch into a persistent feature agent worktree before a run
  */
-export async function mergeBaseIntoFeatureWorktree(featureAgentId, baseBranch = 'main') {
+export async function mergeBaseIntoFeatureWorktree(featureAgentId, baseBranch) {
   const worktreePath = join(WORKTREES_DIR, '..', 'feature-agents', featureAgentId, 'worktree');
   if (!existsSync(worktreePath)) return { merged: false, reason: 'worktree-missing' };
 
   await execGit(['fetch', 'origin'], worktreePath).catch(err => {
     console.log(`⚠️ Fetch failed for feature agent ${featureAgentId}: ${err.message}`);
   });
+
+  if (!baseBranch) {
+    const { getDefaultBranch } = await import('./git.js');
+    baseBranch = await getDefaultBranch(worktreePath) || 'main';
+  }
   const result = await execGit(['merge', `origin/${baseBranch}`, '--no-edit'], worktreePath)
     .then(() => ({ merged: true }))
     .catch(async (err) => {

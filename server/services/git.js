@@ -678,15 +678,37 @@ export function extractAgentSummary(output) {
   return summary;
 }
 
+export async function getDefaultBranch(dir) {
+  const symRef = await execGitSafe(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], dir);
+  if (symRef.stdout?.trim()) {
+    return symRef.stdout.trim().replace(/^origin\//, '');
+  }
+
+  // origin/HEAD not set locally — ask the remote
+  await execGitSafe(['remote', 'set-head', 'origin', '--auto'], dir);
+  const symRef2 = await execGitSafe(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], dir);
+  if (symRef2.stdout?.trim()) {
+    return symRef2.stdout.trim().replace(/^origin\//, '');
+  }
+
+  const result = await execGit(['branch', '--list'], dir, { ignoreExitCode: true });
+  const branches = result.stdout.trim().split('\n').map(b => b.replace(/^\*?\s+/, ''));
+  if (branches.includes('main')) return 'main';
+  if (branches.includes('master')) return 'master';
+
+  return null;
+}
+
 /**
  * Detect base and dev branches from local branch list
  * @returns {{ baseBranch: string|null, devBranch: string|null }}
  */
 export async function getRepoBranches(dir) {
+  const baseBranch = await getDefaultBranch(dir);
   const result = await execGit(['branch', '--list'], dir, { ignoreExitCode: true });
   const branches = result.stdout.trim().split('\n').map(b => b.replace(/^\*?\s+/, ''));
   return {
-    baseBranch: branches.includes('main') ? 'main' : branches.includes('master') ? 'master' : null,
+    baseBranch,
     devBranch: branches.includes('dev') ? 'dev' : branches.includes('develop') ? 'develop' : null
   };
 }

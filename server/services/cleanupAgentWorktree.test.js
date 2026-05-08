@@ -156,6 +156,7 @@ vi.mock('./jira.js', () => ({
 vi.mock('./git.js', () => ({
   push: vi.fn(),
   getRepoBranches: vi.fn(),
+  getDefaultBranch: vi.fn().mockResolvedValue('main'),
   createPR: vi.fn(),
   generatePRDescription: vi.fn(),
   deleteBranch: vi.fn().mockResolvedValue(undefined),
@@ -334,6 +335,18 @@ describe('cleanupAgentWorktree - openPR path', () => {
 
     expect(git.createPR).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
       title: 'A'.repeat(100)
+    }));
+  });
+
+  it('should use only first line of multiline description for PR title', async () => {
+    const multilineDesc = '[Improvement: grace] Error Handling\n\nAnalyze the codebase:\n\nRepository: /Users/foo/grace';
+    git.push.mockResolvedValue(undefined);
+    git.createPR.mockResolvedValue({ success: true, url: 'https://github.com/test/repo/pull/7' });
+
+    await cleanupAgentWorktree('agent-1', true, { openPR: true, description: multilineDesc });
+
+    expect(git.createPR).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+      title: '[Improvement: grace] Error Handling'
     }));
   });
 
