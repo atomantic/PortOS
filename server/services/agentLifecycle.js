@@ -1154,7 +1154,10 @@ export async function cleanupAgentWorktree(agentId, success, { openPR = false, r
     ]);
 
     if (pushResult) {
-      const targetBranch = branchInfo.baseBranch || 'main';
+      let targetBranch = branchInfo.baseBranch;
+      if (!targetBranch) {
+        targetBranch = await git.getDefaultBranch(sourceWorkspace, { allowRemote: false }).catch(() => null) || 'main';
+      }
       const taskDesc = description || 'CoS automated task';
       const firstLine = taskDesc.split(/[\r\n]/).find(l => l.trim()) || taskDesc;
       const prTitle = firstLine.trim().substring(0, 100) || 'CoS automated task';

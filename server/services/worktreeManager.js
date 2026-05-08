@@ -44,15 +44,18 @@ export async function createWorktree(agentId, sourceWorkspace, taskId, options =
   const worktreePath = join(WORKTREES_DIR, agentId);
 
   // Fetch latest from origin so we base off up-to-date refs
-  await execGit(['fetch', 'origin'], sourceWorkspace).catch(err => {
-    console.log(`⚠️ Worktree fetch failed (will use local refs): ${err.message}`);
-  });
+  const fetchSucceeded = await execGit(['fetch', 'origin'], sourceWorkspace)
+    .then(() => true)
+    .catch(err => {
+      console.log(`⚠️ Worktree fetch failed (will use local refs): ${err.message}`);
+      return false;
+    });
 
   // Determine the base: explicit option > remote default branch > current HEAD
   let baseBranch = options.baseBranch;
   if (!baseBranch) {
     const { getDefaultBranch } = await import('./git.js');
-    baseBranch = await getDefaultBranch(sourceWorkspace).catch(() => null);
+    baseBranch = await getDefaultBranch(sourceWorkspace, { allowRemote: fetchSucceeded }).catch(() => null);
     if (!baseBranch) {
       baseBranch = (await execGit(['rev-parse', '--abbrev-ref', 'HEAD'], sourceWorkspace)).stdout.trim();
     }
@@ -211,13 +214,16 @@ export async function createPersistentWorktree(featureAgentId, sourceWorkspace, 
 
   await ensureDir(join(WORKTREES_DIR, '..', 'feature-agents', featureAgentId));
 
-  await execGit(['fetch', 'origin'], sourceWorkspace).catch(err => {
-    console.log(`⚠️ Persistent worktree fetch failed: ${err.message}`);
-  });
+  const fetchOk = await execGit(['fetch', 'origin'], sourceWorkspace)
+    .then(() => true)
+    .catch(err => {
+      console.log(`⚠️ Persistent worktree fetch failed: ${err.message}`);
+      return false;
+    });
 
   if (!baseBranch) {
     const { getDefaultBranch } = await import('./git.js');
-    baseBranch = await getDefaultBranch(sourceWorkspace).catch(() => null) || 'main';
+    baseBranch = await getDefaultBranch(sourceWorkspace, { allowRemote: fetchOk }).catch(() => null) || 'main';
   }
 
   // Verify the base branch exists locally or on the remote; fall back to HEAD if not
