@@ -52,7 +52,7 @@ export async function createWorktree(agentId, sourceWorkspace, taskId, options =
   let baseBranch = options.baseBranch;
   if (!baseBranch) {
     const { getDefaultBranch } = await import('./git.js');
-    baseBranch = await getDefaultBranch(sourceWorkspace);
+    baseBranch = await getDefaultBranch(sourceWorkspace).catch(() => null);
     if (!baseBranch) {
       baseBranch = (await execGit(['rev-parse', '--abbrev-ref', 'HEAD'], sourceWorkspace)).stdout.trim();
     }
@@ -217,7 +217,7 @@ export async function createPersistentWorktree(featureAgentId, sourceWorkspace, 
 
   if (!baseBranch) {
     const { getDefaultBranch } = await import('./git.js');
-    baseBranch = await getDefaultBranch(sourceWorkspace) || 'main';
+    baseBranch = await getDefaultBranch(sourceWorkspace).catch(() => null) || 'main';
   }
 
   // Verify the base branch exists locally or on the remote; fall back to HEAD if not
@@ -287,7 +287,7 @@ export async function mergeBaseIntoFeatureWorktree(featureAgentId, baseBranch) {
 
   if (!baseBranch) {
     const { getDefaultBranch } = await import('./git.js');
-    baseBranch = await getDefaultBranch(worktreePath) || 'main';
+    baseBranch = await getDefaultBranch(worktreePath).catch(() => null) || 'main';
   }
   // Verify origin/<baseBranch> exists before attempting merge
   const remoteBranchValid = await execGit(['rev-parse', `origin/${baseBranch}`], worktreePath, { ignoreExitCode: true })

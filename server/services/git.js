@@ -711,12 +711,23 @@ export async function getDefaultBranch(dir, { allowRemote = true } = {}) {
 /**
  * Detect base and dev branches from local refs (origin/HEAD, local branch list).
  * Does not contact the remote — safe for latency-sensitive request paths.
+ * Computes the branch list once and reuses it for both base and dev detection.
  * @returns {{ baseBranch: string|null, devBranch: string|null }}
  */
 export async function getRepoBranches(dir) {
-  const baseBranch = await getDefaultBranch(dir, { allowRemote: false });
+  // Check origin/HEAD first (fast, local-only)
+  const symRef = await execGitSafe(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], dir);
+  let baseBranch = symRef.stdout?.trim() ? symRef.stdout.trim().replace(/^origin\//, '') : null;
+
+  // Get local branches once — reused for both base fallback and dev detection
   const result = await execGit(['branch', '--list'], dir, { ignoreExitCode: true });
   const branches = result.stdout.trim().split('\n').map(b => b.replace(/^\*?\s+/, ''));
+
+  if (!baseBranch) {
+    if (branches.includes('main')) baseBranch = 'main';
+    else if (branches.includes('master')) baseBranch = 'master';
+  }
+
   return {
     baseBranch,
     devBranch: branches.includes('dev') ? 'dev' : branches.includes('develop') ? 'develop' : null

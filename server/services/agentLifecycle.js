@@ -1156,7 +1156,8 @@ export async function cleanupAgentWorktree(agentId, success, { openPR = false, r
     if (pushResult) {
       const targetBranch = branchInfo.baseBranch || 'main';
       const taskDesc = description || 'CoS automated task';
-      const prTitle = taskDesc.split(/[\r\n]/)[0].trim().substring(0, 100);
+      const firstLine = taskDesc.split(/[\r\n]/).find(l => l.trim()) || taskDesc;
+      const prTitle = firstLine.trim().substring(0, 100) || 'CoS automated task';
 
       const prBody = await git.generatePRDescription(worktreePath, targetBranch, worktreeBranch, agentOutput);
 
