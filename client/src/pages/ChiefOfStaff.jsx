@@ -420,6 +420,91 @@ export default function ChiefOfStaff() {
 
   const hasCanvasAvatar = CANVAS_AVATAR_STYLES.has(avatarStyle);
 
+  // Compact stats card grid — rendered both inside the desktop CoS sidebar and
+  // the mobile compressed header so the metrics always live "inside" CoS.
+  const statsGridCards = (
+    <>
+      <StatCard
+        label="Active"
+        value={activeAgentCount}
+        icon={<Cpu className="w-4 h-4 text-port-accent" />}
+        active={activeAgentCount > 0}
+        compact
+      />
+      <StatCard
+        label="Pending"
+        value={pendingTaskCount}
+        icon={<Clock className="w-4 h-4 text-yellow-500" />}
+        compact
+      />
+      <StatCard
+        label="Done"
+        value={status?.stats?.tasksCompleted || 0}
+        icon={<CheckCircle className="w-4 h-4 text-port-success" />}
+        compact
+      />
+      <StatCard
+        label="Issues"
+        value={health?.issues?.length || 0}
+        icon={<AlertCircle className={`w-4 h-4 ${hasIssues ? 'text-port-error' : 'text-gray-500'}`} />}
+        compact
+      />
+      <button
+        onClick={() => navigate('/cos/learning')}
+        className={`bg-port-card/80 border rounded px-2 py-1.5 flex items-center gap-2 transition-all ${
+          learningSummary?.status === 'critical' ? 'border-port-error shadow-md shadow-port-error/20' :
+          learningSummary?.status === 'warning' ? 'border-port-warning' :
+          'border-port-border'
+        }`}
+      >
+        <Brain className={`w-4 h-4 shrink-0 ${
+          learningSummary?.status === 'critical' ? 'text-port-error' :
+          learningSummary?.status === 'warning' ? 'text-port-warning' :
+          learningSummary?.status === 'good' ? 'text-purple-400' :
+          'text-gray-500'
+        }`} />
+        <div className="flex-1 min-w-0 text-left">
+          <div className="text-[10px] text-gray-500">Learning</div>
+          <div className="text-sm font-bold text-white flex items-center gap-2">
+            {learningSummary?.overallSuccessRate != null ? `${learningSummary.overallSuccessRate}%` : 'No data'}
+            {learningSummary?.skipped > 0 && (
+              <span className="text-[9px] text-port-error font-normal">
+                ({learningSummary.skipped} skipped)
+              </span>
+            )}
+          </div>
+        </div>
+      </button>
+      {status?.running ? (
+        <button
+          type="button"
+          onClick={handleStop}
+          className="bg-red-500/20 hover:bg-red-500/30 text-red-400 border border-red-400/30 rounded px-2 py-1.5 flex items-center gap-2 transition-colors min-h-[52px]"
+          aria-label="Stop Chief of Staff agent"
+        >
+          <Square size={16} className="shrink-0" aria-hidden="true" />
+          <div className="flex-1 min-w-0 text-left">
+            <div className="text-[10px] text-gray-600">Agent</div>
+            <div className="text-sm font-bold text-red-600">Stop</div>
+          </div>
+        </button>
+      ) : (
+        <button
+          type="button"
+          onClick={handleStart}
+          className="bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-500 border border-emerald-500/30 rounded px-2 py-1.5 flex items-center gap-2 transition-colors min-h-[52px]"
+          aria-label="Start Chief of Staff agent"
+        >
+          <Play size={16} className="shrink-0" aria-hidden="true" />
+          <div className="flex-1 min-w-0 text-left">
+            <div className="text-[10px] text-emerald-600/80">Agent</div>
+            <div className="text-sm font-bold">Start</div>
+          </div>
+        </button>
+      )}
+    </>
+  );
+
   const renderAvatar = (background = false) => {
     if (avatarStyle === 'cyber') {
       return <CyberCoSAvatar state={agentState} speaking={speaking} background={background} />;
@@ -611,12 +696,12 @@ export default function ChiefOfStaff() {
             )}
 
             {/* Avatar UI overlays the full-width canvas stage for 3D styles. */}
-            <div className={`${hasCanvasAvatar ? 'absolute inset-y-0 left-0 w-[46%] lg:relative lg:inset-auto lg:w-full lg:flex-none p-2 sm:p-3 lg:p-8' : 'relative flex-1 min-w-0 lg:flex-none p-2 lg:p-8'} min-w-0 flex flex-col items-center z-10`}>
+            <div className={`${hasCanvasAvatar ? 'absolute inset-y-0 left-0 w-[46%] lg:relative lg:inset-auto lg:w-full lg:flex-none lg:h-full p-2 sm:p-3 lg:px-4 lg:py-6' : 'relative flex-1 min-w-0 lg:flex-none lg:h-full p-2 lg:px-4 lg:py-6'} min-w-0 flex flex-col items-center z-10`}>
               <div className="hidden lg:block text-sm font-semibold tracking-widest uppercase text-slate-400 mb-1 font-mono">
                 Digital Assistant
               </div>
               <h1
-                className="hidden lg:block text-lg sm:text-xl lg:text-3xl font-bold mb-2 lg:mb-8"
+                className="hidden lg:block text-lg sm:text-xl lg:text-2xl xl:text-3xl font-bold mb-2 lg:mb-4"
                 style={{
                   background: 'linear-gradient(135deg, #6366f1, #8b5cf6, #06b6d4)',
                   WebkitBackgroundClip: 'text',
@@ -635,115 +720,22 @@ export default function ChiefOfStaff() {
               <div className={`${hasCanvasAvatar ? 'sm:-mt-4 md:-mt-6 lg:mt-0' : ''} hidden sm:block`}>
                 <StatusBubble message={statusMessage} countdown={evalCountdown} />
               </div>
-              <div className="hidden lg:block">
-                {status?.running && <EventLog logs={eventLogs} />}
+
+              {/* Desktop Stats Grid - integrated into CoS sidebar (matches mobile compressed layout) */}
+              <div className="hidden lg:grid grid-cols-2 gap-1.5 w-full mt-3 relative z-10">
+                {statsGridCards}
               </div>
 
-              {/* Control Buttons */}
-              <div className={`${hasCanvasAvatar ? 'hidden lg:flex lg:mt-6' : 'flex mt-2 lg:mt-6'} items-center gap-1.5 sm:gap-3`}>
-                {status?.running ? (
-                  <button
-                    onClick={handleStop}
-                    className="flex items-center gap-1 sm:gap-2 px-2 sm:px-4 py-1 sm:py-2 text-xs sm:text-base bg-red-500/20 hover:bg-red-500/30 text-red-400 rounded-lg transition-colors min-h-[40px]"
-                    aria-label="Stop Chief of Staff agent"
-                  >
-                    <Square size={12} className="sm:w-4 sm:h-4" aria-hidden="true" />
-                    Stop
-                  </button>
-                ) : (
-                  <button
-                    onClick={handleStart}
-                    className="flex items-center gap-1 sm:gap-2 px-2 sm:px-4 py-1 sm:py-2 text-xs sm:text-base bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 rounded-lg transition-colors min-h-[40px]"
-                    aria-label="Start Chief of Staff agent"
-                  >
-                    <Play size={12} className="sm:w-4 sm:h-4" aria-hidden="true" />
-                    Start
-                  </button>
-                )}
-              </div>
+              {status?.running && (
+                <div className="hidden lg:flex flex-1 min-h-0 w-full flex-col">
+                  <EventLog logs={eventLogs} />
+                </div>
+              )}
             </div>
 
             {/* Mobile Stats Grid - shows core stats in compact 2-column layout */}
             <div className={`${hasCanvasAvatar ? 'ml-[46%] w-[54%] flex-none self-start content-start' : 'flex-1 content-center'} grid grid-cols-2 gap-1.5 p-2 lg:hidden relative z-10`}>
-              <StatCard
-                label="Active"
-                value={activeAgentCount}
-                icon={<Cpu className="w-4 h-4 text-port-accent" />}
-                active={activeAgentCount > 0}
-                compact
-              />
-              <StatCard
-                label="Pending"
-                value={pendingTaskCount}
-                icon={<Clock className="w-4 h-4 text-yellow-500" />}
-                compact
-              />
-              <StatCard
-                label="Done"
-                value={status?.stats?.tasksCompleted || 0}
-                icon={<CheckCircle className="w-4 h-4 text-port-success" />}
-                compact
-              />
-              <StatCard
-                label="Issues"
-                value={health?.issues?.length || 0}
-                icon={<AlertCircle className={`w-4 h-4 ${hasIssues ? 'text-port-error' : 'text-gray-500'}`} />}
-                compact
-              />
-              {/* Learning Health */}
-              <button
-                onClick={() => navigate('/cos/learning')}
-                className={`bg-port-card/80 border rounded px-2 py-1.5 flex items-center gap-2 transition-all ${
-                  learningSummary?.status === 'critical' ? 'border-port-error shadow-md shadow-port-error/20' :
-                  learningSummary?.status === 'warning' ? 'border-port-warning' :
-                  'border-port-border'
-                }`}
-              >
-                <Brain className={`w-4 h-4 shrink-0 ${
-                  learningSummary?.status === 'critical' ? 'text-port-error' :
-                  learningSummary?.status === 'warning' ? 'text-port-warning' :
-                  learningSummary?.status === 'good' ? 'text-purple-400' :
-                  'text-gray-500'
-                }`} />
-                <div className="flex-1 min-w-0">
-                  <div className="text-[10px] text-gray-500">Learning</div>
-                  <div className="text-sm font-bold text-white flex items-center gap-2">
-                    {learningSummary?.overallSuccessRate != null ? `${learningSummary.overallSuccessRate}%` : 'No data'}
-                    {learningSummary?.skipped > 0 && (
-                      <span className="text-[9px] text-port-error font-normal">
-                        ({learningSummary.skipped} skipped)
-                      </span>
-                    )}
-                  </div>
-                </div>
-              </button>
-              {status?.running ? (
-                <button
-                  type="button"
-                  onClick={handleStop}
-                  className="bg-red-500/20 hover:bg-red-500/30 text-red-400 border border-red-400/30 rounded px-2 py-1.5 flex items-center gap-2 transition-colors min-h-[52px]"
-                  aria-label="Stop Chief of Staff agent"
-                >
-                  <Square size={16} className="shrink-0" aria-hidden="true" />
-                  <div className="flex-1 min-w-0 text-left">
-                    <div className="text-[10px] text-gray-600">Agent</div>
-                    <div className="text-sm font-bold text-red-600">Stop</div>
-                  </div>
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={handleStart}
-                  className="bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-500 border border-emerald-500/30 rounded px-2 py-1.5 flex items-center gap-2 transition-colors min-h-[52px]"
-                  aria-label="Start Chief of Staff agent"
-                >
-                  <Play size={16} className="shrink-0" aria-hidden="true" />
-                  <div className="flex-1 min-w-0 text-left">
-                    <div className="text-[10px] text-emerald-600/80">Agent</div>
-                    <div className="text-sm font-bold">Start</div>
-                  </div>
-                </button>
-              )}
+              {statsGridCards}
             </div>
           </div>
         </div>
@@ -752,8 +744,9 @@ export default function ChiefOfStaff() {
       {/* Content Panel */}
       <div className="flex-1 min-h-0 min-w-0 flex flex-col overflow-hidden">
         <div className="overflow-y-auto p-3 lg:p-4">
-        {/* Stats Bar - hidden on mobile for SVG mode (shown in avatar panel instead) */}
-        <div className={`grid grid-cols-5 gap-1.5 sm:gap-2 lg:gap-3 mb-3 sm:mb-4 lg:mb-6 ${avatarStyle !== 'ascii' ? 'hidden lg:grid' : ''}`}>
+        {/* Stats Bar - hidden for SVG/canvas modes (now integrated into CoS sidebar);
+            ascii/terminal mode keeps it because TerminalCoSPanel doesn't host the cards. */}
+        <div className={`grid grid-cols-5 gap-1.5 sm:gap-2 lg:gap-3 mb-3 sm:mb-4 lg:mb-6 ${avatarStyle !== 'ascii' ? 'hidden' : ''}`}>
           <StatCard
             label="Active"
             value={activeAgentCount}
@@ -808,12 +801,6 @@ export default function ChiefOfStaff() {
             )}
           </button>
         </div>
-
-        {/* Actionable Insights - priority items requiring attention */}
-        {activeTab === 'tasks' && <ActionableInsightsBanner onTaskUnblocked={handleTaskUnblocked} />}
-
-        {/* Quick Summary - at-a-glance stats on tasks tab only */}
-        {activeTab === 'tasks' && <QuickSummary />}
 
         {/* Tabs - scrollable with arrow navigation */}
         <div className="relative mb-4 lg:mb-6">
@@ -878,6 +865,10 @@ export default function ChiefOfStaff() {
         )}
         {activeTab === 'tasks' && (
           <div role="tabpanel" id="tabpanel-tasks" aria-labelledby="tab-tasks">
+            {/* Tasks-only widgets live under the tab nav so they don't stretch above
+                tabs that don't surface this data. */}
+            <ActionableInsightsBanner onTaskUnblocked={handleTaskUnblocked} />
+            <QuickSummary />
             <TasksTab tasks={tasks} onRefresh={fetchData} providers={providers} apps={apps} />
           </div>
         )}

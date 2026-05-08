@@ -214,10 +214,10 @@ export default function Apps() {
                     >
                       <span aria-hidden="true" className={`inline-block transition-transform ${expandedId === app.id ? 'rotate-90' : ''}`}>▶</span>
                     </button>
-                    <div className={`w-8 h-8 rounded shrink-0 overflow-hidden ${
+                    <div className={`w-8 h-8 rounded-[22%] shrink-0 overflow-hidden ${
                       app.appIconPath ? '' : `flex items-center justify-center ${app.archived ? 'bg-port-border/50 text-gray-500' : 'bg-port-border text-port-accent'}`
                     }`}>
-                      <AppIcon icon={app.icon || 'package'} appId={app.id} hasAppIcon={!!app.appIconPath} size={18} />
+                      <AppIcon icon={app.icon || 'package'} appId={app.id} hasAppIcon={!!app.appIconPath} size={18} fillContainer />
                     </div>
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">

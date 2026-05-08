@@ -2,8 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   Clapperboard, Loader2, RefreshCcw, AlertTriangle, Palette, Check, Dice5, Cpu,
-  Users, MapPin as MapPinIcon, ArrowRight, ListTree, SlidersHorizontal, Square,
-  Settings as SettingsIcon,
+  Users, MapPin as MapPinIcon, ArrowRight, ListTree, SlidersHorizontal,
+  Settings as SettingsIcon, Package,
 } from 'lucide-react';
 import { randomSeed } from '../../lib/genUtils';
 import toast from '../ui/Toast';
@@ -12,7 +12,7 @@ import {
   getWritersRoomAnalysis,
 } from '../../services/apiWritersRoom';
 import { getSettings, updateSettings, listImageStylePresets } from '../../services/apiSystem';
-import { listImageModels, cancelImageGen } from '../../services/apiImageVideo';
+import { listImageModels } from '../../services/apiImageVideo';
 import BackendChipStrip from '../media/BackendChipStrip';
 import { deriveAvailableBackends, IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
 import { timeAgo } from '../../utils/formatters';
@@ -23,6 +23,7 @@ import SceneCard from './SceneCard';
 import StagePromptModelPicker from './StagePromptModelPicker';
 import CharactersBible from './CharactersBible';
 import SettingsBible from './SettingsBible';
+import ObjectsBible from './ObjectsBible';
 import {
   WR_IMAGE_DEFAULTS,
   buildCharByKey,
@@ -47,6 +48,7 @@ function groupPresetsByCategory(presets) {
 export const STORYBOARD_TAB = {
   CHARACTERS: 'characters',
   WORLD: 'world',
+  OBJECTS: 'objects',
   SCENES: 'scenes',
   BOARDS: 'boards',
   CONFIG: 'config',
@@ -57,6 +59,7 @@ export const STORYBOARD_TAB_VALUES = Object.values(TAB);
 const RUN_LABEL = {
   characters: 'Refreshing characters',
   settings: 'Refreshing world',
+  objects: 'Refreshing objects',
   script: 'Running Adapt',
   evaluate: 'Editorial pass',
   format: 'Format pass',
@@ -79,6 +82,13 @@ export default function StoryboardPanel({
   onStyleChange,
   onCharactersChange,
   onSettingsChange,
+  onScenesChange,
+  objects = [],
+  onObjectsChange,
+  onRunObjects,
+  hotRef = null,
+  onSceneHover,
+  onSceneRenderStart,
   tab,
   onTabChange,
 }) {
@@ -203,47 +213,6 @@ export default function StoryboardPanel({
   // Map keyed by sceneId — replaced wholesale on each script load.
   const sceneRefs = useRef({});
 
-  // Track which scenes are actively rendering so the Boards tab can show a
-  // "Cancel renders" CTA. SceneCard fires onRunningChange when its local
-  // genStatus toggles. Storing the Set as state (not ref) so the count
-  // re-renders the cancel button reactively.
-  const [runningSceneIds, setRunningSceneIds] = useState(() => new Set());
-  const handleSceneRunningChange = useCallback((sceneId, running) => {
-    setRunningSceneIds((prev) => {
-      const has = prev.has(sceneId);
-      if (running === has) return prev;
-      const next = new Set(prev);
-      if (running) next.add(sceneId);
-      else next.delete(sceneId);
-      return next;
-    });
-  }, []);
-  // Drop stale running-scene entries when the script reloads — old sceneIds
-  // may not exist in the new render.
-  useEffect(() => {
-    setRunningSceneIds(new Set());
-  }, [latestScript?.id]);
-
-  const cancelAllRenders = useCallback(async () => {
-    if (runningSceneIds.size === 0) return;
-    // Issue server cancel first so background work actually stops, then wipe
-    // local state on every running card so the UI returns to idle without
-    // waiting for the cancellation socket events to round-trip.
-    await cancelImageGen({ all: true }).catch((err) => {
-      toast.error(`Cancel failed: ${err.message}`);
-    });
-    // Reset every previously-running card unconditionally — if a
-    // cancellation 'failed' socket event raced ahead and flipped the card to
-    // 'error', isRunning() would return false, but we still want the card
-    // back at idle so the user can retry. cancel() is idempotent.
-    const total = runningSceneIds.size;
-    for (const sceneId of runningSceneIds) {
-      sceneRefs.current[sceneId]?.cancel?.();
-    }
-    setRunningSceneIds(new Set());
-    if (total > 0) toast(`Stopped ${total} render${total === 1 ? '' : 's'}`, { icon: '🛑' });
-  }, [runningSceneIds]);
-
   // Auto-queue every missing image when latestScript updates *because* of a
   // just-finished Adapt run. requestAnimationFrame defers until the cards
   // have actually mounted with the new scenes — useImperativeHandle has to
@@ -295,6 +264,16 @@ export default function StoryboardPanel({
   const scenes = latestScript?.result?.scenes || [];
   const sceneImages = latestScript?.sceneImages || {};
 
+  // Surface the scene list up to WorkEditor (for ProseReader anchors). Fires
+  // every time latestScript changes, including the initial null load.
+  useEffect(() => {
+    onScenesChange?.(scenes);
+    // We intentionally key on latestScript identity rather than scenes (which
+    // is recreated each render) — array identity changes coincide with the
+    // analysis snapshot changing.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [latestScript]);
+
   return (
     <div className="flex flex-col h-full">
       <TabNav
@@ -303,6 +282,7 @@ export default function StoryboardPanel({
         runningKind={runningKind}
         charactersCount={characters.length}
         settingsCount={settings.length}
+        objectsCount={objects.length}
         scenesCount={scenesCount}
         boardsCount={scenes.length}
       />
@@ -325,6 +305,7 @@ export default function StoryboardPanel({
             running={runningKind === 'characters'}
             anyRunning={!!runningKind}
             readingTheme={readingTheme}
+            hotRefId={hotRef?.kind === 'char' ? hotRef.refId : null}
           />
         )}
         {tab === TAB.WORLD && (
@@ -337,6 +318,20 @@ export default function StoryboardPanel({
             running={runningKind === 'settings'}
             anyRunning={!!runningKind}
             readingTheme={readingTheme}
+            hotRefId={hotRef?.kind === 'place' ? hotRef.refId : null}
+          />
+        )}
+        {tab === TAB.OBJECTS && (
+          <BibleTab
+            kind="objects"
+            workId={work.id}
+            items={objects}
+            onItemsChange={onObjectsChange}
+            onRefresh={onRunObjects}
+            running={runningKind === 'objects'}
+            anyRunning={!!runningKind}
+            readingTheme={readingTheme}
+            hotRefId={hotRef?.kind === 'object' ? hotRef.refId : null}
           />
         )}
         {tab === TAB.SCENES && (
@@ -361,7 +356,6 @@ export default function StoryboardPanel({
             sceneRefs={sceneRefs}
             onJumpToScene={onJumpToScene}
             onDebug={onDebug}
-            onSceneRunningChange={handleSceneRunningChange}
             onRunAdapt={onRunAdapt}
             onRunCharacters={onRunCharacters}
             onRunSettings={onRunSettings}
@@ -371,8 +365,9 @@ export default function StoryboardPanel({
             readingTheme={readingTheme}
             activeSceneId={activeSceneId}
             onOpenConfig={() => setTab(TAB.CONFIG)}
-            runningRenderCount={runningSceneIds.size}
-            onCancelRenders={cancelAllRenders}
+            hotRef={hotRef}
+            onSceneHover={onSceneHover}
+            onSceneRenderStart={onSceneRenderStart}
           />
         )}
         {tab === TAB.CONFIG && (
@@ -402,12 +397,14 @@ function TabNav({
   runningKind,
   charactersCount,
   settingsCount,
+  objectsCount,
   scenesCount,
   boardsCount,
 }) {
   const tabs = [
     { id: TAB.CHARACTERS, label: 'Characters', icon: Users,        count: charactersCount, runningWhen: 'characters' },
     { id: TAB.WORLD,      label: 'World',      icon: MapPinIcon,   count: settingsCount,   runningWhen: 'settings' },
+    { id: TAB.OBJECTS,    label: 'Objects',    icon: Package,      count: objectsCount,    runningWhen: 'objects' },
     { id: TAB.SCENES,     label: 'Scenes',     icon: ListTree,     count: scenesCount,     runningWhen: null },
     { id: TAB.BOARDS,     label: 'Boards',     icon: Clapperboard, count: boardsCount,     runningWhen: 'script' },
     { id: TAB.CONFIG,     label: 'Config',     icon: SlidersHorizontal, count: null,       runningWhen: null },
@@ -465,9 +462,17 @@ const BIBLE_KINDS = {
     propName: 'settings',
     changeProp: 'onSettingsChange',
   },
+  objects: {
+    label: 'Recurring objects',
+    sub: 'Symbolic / recurring items the prose returns to',
+    refreshNoun: 'objects',
+    Component: ObjectsBible,
+    propName: 'objects',
+    changeProp: 'onObjectsChange',
+  },
 };
 
-function BibleTab({ kind, workId, items, onItemsChange, onRefresh, running, anyRunning, readingTheme }) {
+function BibleTab({ kind, workId, items, onItemsChange, onRefresh, running, anyRunning, readingTheme, hotRefId = null }) {
   const meta = BIBLE_KINDS[kind];
   const Bible = meta.Component;
   const bibleProps = {
@@ -475,6 +480,7 @@ function BibleTab({ kind, workId, items, onItemsChange, onRefresh, running, anyR
     [meta.propName]: items,
     [meta.changeProp]: onItemsChange,
     readingTheme,
+    hotRefId,
   };
   return (
     <div className="px-3 py-3 space-y-3">
@@ -571,7 +577,6 @@ function BoardsTab({
   sceneRefs,
   onJumpToScene,
   onDebug,
-  onSceneRunningChange,
   onRunAdapt,
   onRunCharacters,
   onRunSettings,
@@ -581,29 +586,14 @@ function BoardsTab({
   readingTheme,
   activeSceneId,
   onOpenConfig,
-  runningRenderCount = 0,
-  onCancelRenders,
+  hotRef = null,
+  onSceneHover,
+  onSceneRenderStart,
 }) {
   return (
     <div className="px-3 py-3 space-y-2">
-      {runningRenderCount > 0 && (
-        <div className="flex items-center justify-between gap-2 px-2.5 py-1.5 mb-1 border border-port-warning/40 bg-port-warning/5 rounded text-[11px]">
-          <div className="flex items-center gap-2 min-w-0">
-            <Loader2 size={11} className="animate-spin text-port-warning shrink-0" />
-            <span className="text-port-warning truncate">
-              Rendering {runningRenderCount} scene{runningRenderCount === 1 ? '' : 's'}…
-            </span>
-          </div>
-          <button
-            type="button"
-            onClick={onCancelRenders}
-            className="shrink-0 flex items-center gap-1 px-2 py-1 bg-port-error/15 border border-port-error/40 text-port-error rounded text-[10px] hover:bg-port-error/25"
-            title="Cancel every queued and in-flight scene render"
-          >
-            <Square size={10} /> Stop all
-          </button>
-        </div>
-      )}
+      {/* Live rendering status moved to the page-level WritersRoomDock so it's
+          visible from any tab, not just Boards. */}
       {latestScript && (
         <div className="flex items-center gap-2 pb-2 text-[10px] text-gray-500">
           <span>{scenes.length} scene{scenes.length === 1 ? '' : 's'} · {timeAgo(latestScript.completedAt || latestScript.createdAt, 'never')}</span>
@@ -678,6 +668,7 @@ function BoardsTab({
               else delete sceneRefs.current[sceneId];
             }}
             scene={{ ...scene, id: sceneId }}
+            sceneNumber={i + 1}
             workId={work.id}
             analysisId={latestScript.id}
             workTitle={work.title}
@@ -690,7 +681,10 @@ function BoardsTab({
             isActive={sceneId === activeSceneId}
             onJumpToProse={onJumpToScene ? () => onJumpToScene(scene, i, scenes.length) : null}
             onDebug={onDebug}
-            onRunningChange={onSceneRunningChange}
+            hotRef={hotRef}
+            onHoverEnter={onSceneHover ? () => onSceneHover(sceneId) : null}
+            onHoverLeave={onSceneHover ? () => onSceneHover(null) : null}
+            onRenderStart={onSceneRenderStart}
           />
         );
       })}

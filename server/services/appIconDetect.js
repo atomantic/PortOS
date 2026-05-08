@@ -10,22 +10,29 @@ import { safeJSONParse } from '../lib/fileUtils.js';
 const ICON_SEARCH_PATHS = [
   // Web app favicons/logos
   'public/favicon.svg',
+  'public/apple-touch-icon.png',
   'public/favicon.png',
   'public/favicon.ico',
   'public/logo.svg',
   'public/logo.png',
   'public/icon.svg',
   'public/icon.png',
-  'public/logo192.png',
+  'public/icon-512.png',
+  'public/icon-192.png',
   'public/logo512.png',
+  'public/logo192.png',
   'client/public/favicon.svg',
+  'client/public/apple-touch-icon.png',
   'client/public/favicon.png',
   'client/public/favicon.ico',
   'client/public/logo.svg',
   'client/public/logo.png',
-  'client/public/logo192.png',
+  'client/public/icon-512.png',
+  'client/public/icon-192.png',
   'client/public/logo512.png',
+  'client/public/logo192.png',
   'static/favicon.svg',
+  'static/apple-touch-icon.png',
   'static/favicon.png',
   'static/favicon.ico',
   // Electron / desktop
@@ -48,6 +55,17 @@ const CONTENT_TYPES = {
   '.icns': 'image/x-icns',
   '.webp': 'image/webp',
 };
+
+// SVGs that embed an external <image href="..."> won't render under the icon
+// endpoint's strict `default-src 'none'` CSP, so they are unusable as app icons
+// even though the file exists. Skip them and let detection fall through to a
+// sibling PNG/raster file. Inline data: URIs are fine.
+export async function isUsableSvg(filePath) {
+  const content = await readFile(filePath, 'utf-8').catch(() => null);
+  if (content === null) return false;
+  const externalImage = /<image\b[^>]*\b(?:xlink:)?href\s*=\s*['"](?!data:)/i;
+  return !externalImage.test(content);
+}
 
 /**
  * Find the best Xcode AppIcon image from an asset catalog.
@@ -164,7 +182,9 @@ export async function detectAppIcon(repoPath, appType) {
   // Check well-known paths
   for (const relPath of ICON_SEARCH_PATHS) {
     const fullPath = join(repoPath, relPath);
-    if (existsSync(fullPath)) return fullPath;
+    if (!existsSync(fullPath)) continue;
+    if (extname(fullPath).toLowerCase() === '.svg' && !await isUsableSvg(fullPath)) continue;
+    return fullPath;
   }
 
   // For any project type, also try Xcode icon detection as a fallback

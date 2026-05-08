@@ -234,7 +234,7 @@ export default function VideoGen() {
   const handleUpscaleHistory = async (item) => {
     if (upscalingId) return;
     setUpscalingId(item.id);
-    toast.info?.('Upscaling 2× — typically 10-30s…');
+    toast.loading('Upscaling 2× — typically 10-30s…');
     const result = await upscaleVideo(item.id).catch((err) => {
       toast.error(err.message || 'Upscale failed');
       return null;
@@ -546,7 +546,7 @@ export default function VideoGen() {
           setGenerating(false);
           setStatusMsg(msg.reason || 'Canceled');
           es.close();
-          toast.info?.(msg.reason || 'Render canceled');
+          toast(msg.reason || 'Render canceled');
           settleReject(new Error(msg.reason || 'Canceled'));
         }
       };
@@ -1272,7 +1272,7 @@ export default function VideoGen() {
               <Link to="/media/history" className="text-xs text-port-accent hover:underline">View all →</Link>
             )}
           </div>
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
             {visibleHistory.slice(0, 6).map((v) => {
               const item = normalizeVideo(v);
               return (
@@ -1302,7 +1302,7 @@ export default function VideoGen() {
             <span className="text-xs text-gray-500">{showHidden ? '▾' : '▸'}</span>
           </button>
           {showHidden && (
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
               {hiddenHistory.map((v) => {
                 const item = normalizeVideo(v);
                 return (

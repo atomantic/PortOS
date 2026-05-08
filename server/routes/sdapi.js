@@ -149,8 +149,8 @@ router.get('/progress', asyncHandler(async (_req, res) => {
 // (e.g. defaulting steps=999 from a preset) and we want a clear 400 instead
 // of letting bad values through to the dispatcher.
 const txt2imgSchema = z.object({
-  prompt: z.string().min(1).max(2000),
-  negative_prompt: z.string().max(2000).optional().nullable(),
+  prompt: z.string().min(1).max(8000),
+  negative_prompt: z.string().max(8000).optional().nullable(),
   width: z.number().int().min(64).max(2048).optional(),
   height: z.number().int().min(64).max(2048).optional(),
   steps: z.number().int().min(1).max(150).optional(),

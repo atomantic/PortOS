@@ -4,6 +4,14 @@ Archive of completed work. For active roadmap, see [PLAN.md](./PLAN.md). For pro
 
 ---
 
+## 2026-05-06
+
+- **Creative Director — multi-frame evaluator sampling** — `extractEvaluationFrames` in `server/lib/ffmpeg.js` probes total frames and writes 5 timeline-tagged samples; `sceneRunner.handleRenderCompleted` calls it before evaluator enqueue; `buildEvaluatePrompt` lists every frame with explicit late-intent guidance. Falls back to single thumbnail on extraction failure.
+- **Creative Director — auto-accept watchdog** — `verifyVideoPlayable()` in `server/lib/ffmpeg.js` checks file-exists / size > 0 / ffprobe-can-read-at-least-1-frame before marking auto-accept; failures route through `handleRenderFailed` honoring `MAX_SCENE_RETRIES`.
+- **Creative Director — smoke-test cost reduction** — `durationSeconds` 3s→2s + hidden `1:1-small` (384×384) aspect preset for the smoke fixture; ~63% pixel-frame cost reduction.
+- **LTX-2.3 audio-to-video (a2v)** — `run_a2v` invokes `AudioToVideoPipeline.generate_and_save` with `--audio` (WAV/MP3) and optional first-frame conditioning. Multipart `uploadFields(['sourceImage','lastImage','audioFile'])`, `mode='a2v'` enum, fail-fast guards (`VIDEO_GEN_AUDIO_REQUIRED`, `VIDEO_GEN_AUDIO_MODE_MISMATCH`, `A2V_REQUIRES_LTX2`), client tile + audio picker, queue-boundary `audioFilePath` sanitization.
+- **LTX-2.3 native video Extend on dgrauet** — `helperMode='extend'` + `extendFromVideoPath` threading in `videoGen/local.js`, `extendFromVideoId` in `routes/videoGen.js`, client routes Extend to native dgrauet path when model runtime='ltx2'. Legacy chained-i2v retained for `mlx_video` runtime. Tests cover route id resolution.
+
 ## 2026-04-28
 
 - **Better Audit follow-up — bugs/perf/test quality** — Added `AbortSignal.timeout` to remaining fetch sites (`aiDetect.js`, `meatspacePostLlm.js`, `memoryEmbeddings.js` ×3, `telegramBridge.js`); fixed `httpClient.js` abort-listener leak via cleanup + `{ once: true }`; fixed `MessageDetail.jsx` iframe `load` listener leak via `{ once: true }`; parallelized `feeds.js` refresh with `Promise.allSettled` over `fetchAndParseFeed`; replaced vacuous `usage.test.js` typeof checks with real streak-calculation assertions; `cosRunnerClient.test.js` now uses `.rejects.toThrow` for capacity/spawn/kill/terminate paths; `subAgentSpawner.test.js` imports the real `selectModelForTask` instead of re-implementing it; added `loops.test.js`.

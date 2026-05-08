@@ -51,7 +51,11 @@ BTW.md
 # Browser service node_modules (code is committed)
 browser/node_modules/
 
-# Workspace sub-package lock files (root package-lock.json is canonical)
+# Sub-package lock files. Root package.json does NOT declare these as
+# workspaces; `npm run setup` runs `npm install --prefix <pkg>` for each,
+# generating their own lockfiles locally. The root package-lock.json only
+# tracks root devDependencies (pm2) — the `client`/`server` entries you may
+# see there are stale `extraneous: true` leftovers and are not authoritative.
 browser/package-lock.json
 client/package-lock.json
 server/package-lock.json

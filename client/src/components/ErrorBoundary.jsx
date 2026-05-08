@@ -1,5 +1,6 @@
 import { Component } from 'react';
 import { AlertTriangle } from 'lucide-react';
+import { isStaleChunkError, reloadOnceForStaleChunk } from '../utils/staleChunkReload';
 
 export default class ErrorBoundary extends Component {
   constructor(props) {
@@ -12,6 +13,7 @@ export default class ErrorBoundary extends Component {
   }
 
   componentDidCatch(error, errorInfo) {
+    if (isStaleChunkError(error) && reloadOnceForStaleChunk()) return;
     console.error(`💥 React Error: ${error.message}`, errorInfo);
   }
 
@@ -23,8 +25,8 @@ export default class ErrorBoundary extends Component {
             <div className="flex items-center justify-center mb-4">
               <AlertTriangle size={32} className="text-port-error" />
             </div>
-            <h1 className="text-xl font-bold text-white text-center mb-2">Something went wrong</h1>
-            <p className="text-gray-400 text-sm text-center mb-4">
+            <h1 className="text-xl font-bold text-port-text text-center mb-2">Something went wrong</h1>
+            <p className="text-port-text-muted text-sm text-center mb-4">
               An unexpected error occurred. Please try refreshing the page.
             </p>
             {this.state.error && (
@@ -36,7 +38,7 @@ export default class ErrorBoundary extends Component {
             )}
             <button
               onClick={() => window.location.reload()}
-              className="w-full px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors"
+              className="w-full px-4 py-2 bg-port-accent hover:bg-port-accent/80 text-port-on-accent rounded-lg transition-colors"
             >
               Refresh Page
             </button>

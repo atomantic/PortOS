@@ -93,6 +93,25 @@ export const deleteWritersRoomSetting = (workId, settingId) =>
     method: 'DELETE',
   });
 
+// Objects bible (editable; recurring symbolic / physical items extracted by
+// the Adapt+Objects pass — letters, hats, keepsakes, McGuffins).
+export const listWritersRoomObjects = (workId) =>
+  request(`/writers-room/works/${enc(workId)}/objects`);
+export const createWritersRoomObject = (workId, data) =>
+  request(`/writers-room/works/${enc(workId)}/objects`, {
+    method: 'POST',
+    body: JSON.stringify(data),
+  });
+export const updateWritersRoomObject = (workId, objectId, patch) =>
+  request(`/writers-room/works/${enc(workId)}/objects/${enc(objectId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  });
+export const deleteWritersRoomObject = (workId, objectId) =>
+  request(`/writers-room/works/${enc(workId)}/objects/${enc(objectId)}`, {
+    method: 'DELETE',
+  });
+
 // Exercises
 export const listWritersRoomExercises = (workId) => {
   const qs = workId ? `?workId=${enc(workId)}` : '';

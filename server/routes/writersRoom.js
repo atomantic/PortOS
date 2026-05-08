@@ -19,6 +19,8 @@ import {
   writersRoomCharacterUpdateSchema,
   writersRoomSettingCreateSchema,
   writersRoomSettingUpdateSchema,
+  writersRoomObjectCreateSchema,
+  writersRoomObjectUpdateSchema,
 } from '../lib/validation.js';
 import {
   listFolders, createFolder, deleteFolder,
@@ -36,6 +38,9 @@ import {
 import {
   listSettings, createSetting, updateSetting, deleteSetting,
 } from '../services/writersRoom/settings.js';
+import {
+  listObjects, createObject, updateObject, deleteObject,
+} from '../services/writersRoom/objects.js';
 import { addItem as addCollectionItem, ERR_DUPLICATE } from '../services/mediaCollections.js';
 
 const router = Router();
@@ -190,6 +195,26 @@ router.patch('/works/:id/settings/:settingId', asyncHandler(async (req, res) => 
 
 router.delete('/works/:id/settings/:settingId', asyncHandler(async (req, res) => {
   res.json(await deleteSetting(req.params.id, req.params.settingId));
+}));
+
+// ---------- objects (recurring symbolic items) ----------
+
+router.get('/works/:id/objects', asyncHandler(async (req, res) => {
+  res.json(await listObjects(req.params.id));
+}));
+
+router.post('/works/:id/objects', asyncHandler(async (req, res) => {
+  const data = validateRequest(writersRoomObjectCreateSchema, req.body || {});
+  res.status(201).json(await createObject(req.params.id, data));
+}));
+
+router.patch('/works/:id/objects/:objectId', asyncHandler(async (req, res) => {
+  const data = validateRequest(writersRoomObjectUpdateSchema, req.body || {});
+  res.json(await updateObject(req.params.id, req.params.objectId, data));
+}));
+
+router.delete('/works/:id/objects/:objectId', asyncHandler(async (req, res) => {
+  res.json(await deleteObject(req.params.id, req.params.objectId));
 }));
 
 // Persist a scene→generated-image link on the analysis snapshot, AND mirror

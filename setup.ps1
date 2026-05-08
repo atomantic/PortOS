@@ -62,12 +62,12 @@ Pop-Location
 
 # Rebuild native bindings
 Write-Host ""
-Write-Host "Rebuilding esbuild & node-pty..." -ForegroundColor Yellow
+Write-Host "Rebuilding esbuild, node-pty & sharp..." -ForegroundColor Yellow
 node client/node_modules/esbuild/install.js
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 node server/node_modules/esbuild/install.js
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-npm rebuild node-pty --prefix server
+npm rebuild node-pty sharp --prefix server
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 # Run data setup scripts

@@ -112,10 +112,10 @@ safe_install server
 safe_install autofixer
 
 # Run trusted install scripts skipped by ignore-scripts=true in .npmrc
-log "🔧 Rebuilding esbuild & node-pty..."
+log "🔧 Rebuilding esbuild, node-pty & sharp..."
 run node client/node_modules/esbuild/install.js
 run node server/node_modules/esbuild/install.js
-run npm rebuild node-pty --prefix server
+run npm rebuild node-pty sharp --prefix server
 log ""
 
 # Verify critical dependencies exist

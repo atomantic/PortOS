@@ -76,6 +76,7 @@ import {
   Mic,
   Rss,
   Archive,
+  Eraser,
   Sun,
   Moon
 } from 'lucide-react';
@@ -206,6 +207,7 @@ const navItems = [
       { to: '/feature-agents', label: 'Feature Agents', icon: Wand2 },
       { to: '/devtools/github', label: 'GitHub', icon: Github },
       { to: '/devtools/history', label: 'History', icon: History },
+      { to: '/devtools/image-clean', label: 'Image Cleaner', icon: Eraser },
       { to: '/devtools/jira', label: 'JIRA', icon: Ticket },
       { to: '/devtools/jira/reports', label: 'JIRA Reports', icon: FileText },
       { to: '/shell', label: 'Shell', icon: SquareTerminal },
@@ -264,6 +266,7 @@ const navItems = [
       { to: '/post/wordplay', label: 'Wordplay', icon: MessageCircle },
     ]
   },
+  { to: '/reference-repos', label: 'Reference Repos', icon: GitBranch, single: true },
   {
     label: 'Settings',
     icon: Settings,

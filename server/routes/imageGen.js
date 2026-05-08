@@ -37,8 +37,8 @@ const router = Router();
 router.get('/style-presets', (_req, res) => res.json(STYLE_PRESETS));
 
 const generateSchema = z.object({
-  prompt: z.string().min(1).max(2000),
-  negativePrompt: z.string().max(2000).optional(),
+  prompt: z.string().min(1).max(8000),
+  negativePrompt: z.string().max(8000).optional(),
   // Per-request backend override. If omitted, the dispatcher uses
   // `imageGen.mode` from settings.json.
   mode: z.enum(IMAGE_GEN_MODES).optional(),

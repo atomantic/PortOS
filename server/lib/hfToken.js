@@ -2,19 +2,34 @@
 // over env vars so the user can update from the UI without restarting PortOS.
 // huggingface_hub reads HF_TOKEN / HUGGINGFACE_HUB_TOKEN /
 // HUGGINGFACEHUB_API_TOKEN — surface all three when injecting into spawn env.
+// Final fallback reads ~/.cache/huggingface/token (written by `hf auth login`)
+// so the FLUX.2 banner doesn't nag users who already authenticated via the CLI.
 
+import { readFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { getSettings } from '../services/settings.js';
+
+const HF_CLI_TOKEN_PATH = join(homedir(), '.cache', 'huggingface', 'token');
+
+async function readHfCliToken() {
+  const buf = await readFile(HF_CLI_TOKEN_PATH, 'utf8').catch(() => null);
+  const trimmed = buf?.trim();
+  return trimmed || null;
+}
 
 export async function getHfToken() {
   const settings = await getSettings();
   const stored = settings?.imageGen?.hfToken?.trim?.();
   if (stored) return stored;
-  return (
+  const envToken = (
     process.env.HF_TOKEN ||
     process.env.HUGGINGFACE_HUB_TOKEN ||
     process.env.HUGGINGFACEHUB_API_TOKEN ||
     null
   );
+  if (envToken) return envToken;
+  return await readHfCliToken();
 }
 
 // Spread into a child_process spawn `env` to give the Python child whichever

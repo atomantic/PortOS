@@ -1914,10 +1914,54 @@ async function generateManagedAppImprovementTaskForType(taskType, app, state, { 
   const promptTemplate = metadata.pipeline?.stages
     ? await taskSchedule.getStagePrompt(taskType, 0)
     : await taskSchedule.getTaskPrompt(taskType);
+
+  // reference-watch: dynamically inject {referenceData} — a Markdown chunk
+  // describing each ref configured on the app + commits since lastReviewedSha.
+  // The check itself fetches each upstream and persists status/lastError, so
+  // a bad URL surfaces in the UI even if the agent dispatch is skipped below.
+  let referenceDataBlock = '';
+  if (taskType === 'reference-watch') {
+    const refs = Array.isArray(app.referenceRepos) ? app.referenceRepos : [];
+    if (refs.length === 0) {
+      emitLog('info', `Skipping reference-watch for ${app.name}: no reference repos configured`, { appId: app.id });
+      return null;
+    }
+    const referenceRepos = await import('./referenceRepos.js');
+    const blocks = [];
+    let anySuccessWithCommits = false;
+    for (const ref of refs) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        const snapshot = await referenceRepos.checkReferenceRepo(app.id, ref.id);
+        if (snapshot.commitCount > 0) {
+          blocks.push(referenceRepos.formatReferenceForPrompt(ref, snapshot));
+          anySuccessWithCommits = true;
+        }
+      } catch (err) {
+        emitLog('warn', `Reference check failed for ${ref.name}: ${err.message}`, { appId: app.id, refId: ref.id });
+        blocks.push(`## Reference: ${ref.name}\n\n_Check failed: ${err.message}_`);
+      }
+    }
+    // Don't burn an agent dispatch when there's nothing actionable —
+    // either every ref is up-to-date OR every ref errored. Errored refs
+    // already surfaced their lastError in the UI via checkReferenceRepo,
+    // so the user can fix configs without an agent involved.
+    if (!anySuccessWithCommits) {
+      emitLog('info', `Skipping reference-watch for ${app.name}: no refs produced reviewable commits`, { appId: app.id });
+      return null;
+    }
+    referenceDataBlock = blocks.join('\n\n---\n\n');
+  }
+
   const description = promptTemplate
     .replace(/\{appName\}/g, app.name)
     .replace(/\{repoPath\}/g, app.repoPath)
-    .replace(/\{appId\}/g, app.id);
+    .replace(/\{appId\}/g, app.id)
+    // Use a replacer function — String.replace with a replacement STRING
+    // interprets `$&`, `$1`, etc. as backreferences. Commit subjects/authors
+    // legitimately contain `$` (env-var docs, prices, awk snippets) and
+    // would get mangled. The function form passes the value verbatim.
+    .replace(/\{referenceData\}/g, () => referenceDataBlock);
 
   applyAppWorktreeDefault(metadata, app);
 

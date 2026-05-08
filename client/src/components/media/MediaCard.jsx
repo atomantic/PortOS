@@ -67,22 +67,22 @@ export default function MediaCard({
           {item.seed != null && <span className="px-1.5 py-0.5 bg-port-border text-gray-400 rounded">seed {item.seed}</span>}
         </div>
         {!hideActions && (
-          <div className="flex gap-1">
+          <div className="flex flex-wrap gap-1">
             {!isVideo && onRemix && (
               <button
                 type="button"
                 onClick={() => onRemix(item)}
-                className="flex-1 px-1.5 py-1 bg-port-accent/20 hover:bg-port-accent/40 text-port-accent text-[10px] rounded flex items-center justify-center gap-1"
+                className="flex-1 min-w-0 px-1.5 py-1 bg-port-accent/20 hover:bg-port-accent/40 text-port-accent text-[10px] rounded flex items-center justify-center gap-1"
                 title="Reuse settings"
               >
-                <Sparkles className="w-3 h-3" /> Remix
+                <Sparkles className="w-3 h-3 shrink-0" /> <span className="truncate">Remix</span>
               </button>
             )}
             {!isVideo && onSendToVideo && (
               <button
                 type="button"
                 onClick={() => onSendToVideo(item)}
-                className="flex-1 px-1.5 py-1 bg-port-success/20 hover:bg-port-success/40 text-port-success text-[10px] rounded flex items-center justify-center"
+                className="shrink-0 px-1.5 py-1 bg-port-success/20 hover:bg-port-success/40 text-port-success text-[10px] rounded flex items-center justify-center"
                 title="Send to Video"
               >
                 <Film className="w-3 h-3" />
@@ -92,17 +92,17 @@ export default function MediaCard({
               <button
                 type="button"
                 onClick={() => onContinue(item)}
-                className="flex-1 px-1.5 py-1 bg-port-accent/20 hover:bg-port-accent/40 text-port-accent text-[10px] rounded flex items-center justify-center gap-1"
+                className="flex-1 min-w-0 px-1.5 py-1 bg-port-accent/20 hover:bg-port-accent/40 text-port-accent text-[10px] rounded flex items-center justify-center gap-1"
                 title="Use last frame as Image Gen source"
               >
-                <ImageIcon className="w-3 h-3" /> Continue
+                <ImageIcon className="w-3 h-3 shrink-0" /> <span className="truncate">Continue</span>
               </button>
             )}
             {isVideo && onUpscale && !item.upscaledFrom && (
               <button
                 type="button"
                 onClick={() => onUpscale(item)}
-                className="px-1.5 py-1 bg-port-border hover:bg-port-border/70 text-white text-[10px] rounded flex items-center justify-center"
+                className="shrink-0 px-1.5 py-1 bg-port-border hover:bg-port-border/70 text-white text-[10px] rounded flex items-center justify-center"
                 title="Upscale 2× (Lanczos, ~10s)"
               >
                 <Maximize2 className="w-3 h-3" />
@@ -112,7 +112,7 @@ export default function MediaCard({
             <a
               href={downloadUrl}
               download
-              className="px-1.5 py-1 bg-port-border hover:bg-port-border/70 text-white text-[10px] rounded flex items-center justify-center"
+              className="shrink-0 px-1.5 py-1 bg-port-border hover:bg-port-border/70 text-white text-[10px] rounded flex items-center justify-center"
               title="Download"
             >
               <Download className="w-3 h-3" />
@@ -121,7 +121,7 @@ export default function MediaCard({
               <button
                 type="button"
                 onClick={() => onToggleHidden(item)}
-                className="px-1.5 py-1 bg-port-border hover:bg-port-border/70 text-white text-[10px] rounded flex items-center justify-center"
+                className="shrink-0 px-1.5 py-1 bg-port-border hover:bg-port-border/70 text-white text-[10px] rounded flex items-center justify-center"
                 title={item.hidden ? 'Unhide (move out of hidden section)' : 'Hide (move to hidden section)'}
               >
                 {item.hidden ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
@@ -131,7 +131,7 @@ export default function MediaCard({
               <button
                 type="button"
                 onClick={() => onDelete(item)}
-                className="px-1.5 py-1 bg-port-error/20 hover:bg-port-error/40 text-port-error text-[10px] rounded flex items-center justify-center"
+                className="shrink-0 px-1.5 py-1 bg-port-error/20 hover:bg-port-error/40 text-port-error text-[10px] rounded flex items-center justify-center"
                 title="Delete"
               >
                 <Trash2 className="w-3 h-3" />

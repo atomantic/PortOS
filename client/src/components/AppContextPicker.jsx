@@ -14,6 +14,9 @@ export default function AppContextPicker({
   repoLabel = 'Repository'
 }) {
   const selectedApp = apps.find(app => app.id === value);
+  const sortedApps = [...apps].sort((a, b) =>
+    (a?.name || '').localeCompare(b?.name || '', undefined, { sensitivity: 'base' })
+  );
 
   const content = (
     <div className="space-y-2">
@@ -24,7 +27,7 @@ export default function AppContextPicker({
         aria-label={ariaLabel || label || placeholder}
       >
         {includeDefaultOption && <option value="">{placeholder}</option>}
-        {apps.map(app => (
+        {sortedApps.map(app => (
           <option key={app.id} value={app.id}>{app.name}</option>
         ))}
       </select>

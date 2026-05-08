@@ -173,25 +173,32 @@ function getAppIconUrl(appId) {
   return `${base}/api/apps/${appId}/icon`;
 }
 
-export default function AppIcon({ icon, appId, hasAppIcon, size = 24, className = '', ariaLabel }) {
+export default function AppIcon({ icon, appId, hasAppIcon, size = 24, className = '', ariaLabel, fillContainer = false }) {
   const [imgError, setImgError] = useState(false);
 
-  // Show real app icon image if the app has one detected
+  // Show real app icon image if the app has one detected. When fillContainer is
+  // set, the consumer has wrapped us in a sized + clipped tile (e.g. w-8 h-8
+  // rounded-[22%] overflow-hidden) and wants the image to fill that tile so
+  // the squircle mask applies to all four corners — otherwise the image sits
+  // top-left at `size` and the wrapper's other three corners look blank.
   if (hasAppIcon && appId && !imgError) {
-    const sizeStyle = { width: size, height: size, minWidth: size, minHeight: size };
+    const wrapperClass = fillContainer ? 'block w-full h-full' : 'inline-block';
+    const wrapperStyle = fillContainer
+      ? undefined
+      : { width: size, height: size, minWidth: size, minHeight: size };
     const imgEl = (
       <img
         src={getAppIconUrl(appId)}
         alt={ariaLabel || ''}
-        className={`w-full h-full rounded object-cover ${className}`}
+        className={`w-full h-full rounded-[22%] object-cover ${className}`}
         onError={() => setImgError(true)}
       />
     );
 
     if (ariaLabel) {
-      return <span role="img" aria-label={ariaLabel} className="inline-block" style={sizeStyle}>{imgEl}</span>;
+      return <span role="img" aria-label={ariaLabel} className={wrapperClass} style={wrapperStyle}>{imgEl}</span>;
     }
-    return <span aria-hidden="true" className="inline-block" style={sizeStyle}>{imgEl}</span>;
+    return <span aria-hidden="true" className={wrapperClass} style={wrapperStyle}>{imgEl}</span>;
   }
 
   // Fall back to SVG icon

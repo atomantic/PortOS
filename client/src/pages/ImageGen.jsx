@@ -259,6 +259,31 @@ export default function ImageGen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
 
+  // Remix payload from Media History (?prompt=…&modelId=…&seed=…). Populate
+  // form state once on mount, then strip the params so a hot-reload or back-
+  // nav doesn't re-clobber edits the user has made since.
+  useEffect(() => {
+    const remixKeys = ['prompt', 'negativePrompt', 'modelId', 'width', 'height', 'seed', 'steps', 'guidance', 'quantize'];
+    const present = remixKeys.filter((k) => searchParams.get(k) != null);
+    if (present.length === 0) return;
+    const get = (k) => searchParams.get(k);
+    if (get('prompt')) setPrompt(get('prompt'));
+    if (get('negativePrompt')) setNegativePrompt(get('negativePrompt'));
+    if (get('modelId')) setModelId(get('modelId'));
+    if (get('width')) setWidth(Number(get('width')));
+    if (get('height')) setHeight(Number(get('height')));
+    if (get('seed') != null) setSeed(get('seed'));
+    if (get('steps')) setSteps(get('steps'));
+    if (get('guidance')) setGuidance(get('guidance'));
+    if (get('quantize')) setQuantize(get('quantize'));
+    setSearchParams((prev) => {
+      const n = new URLSearchParams(prev);
+      remixKeys.forEach((k) => n.delete(k));
+      return n;
+    }, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Strip EXIF orientation by re-encoding the image with rotation baked into
   // the pixels. Browsers honor EXIF when rendering <img>, so the upload
   // thumbnail looks right — but mflux/PIL reads raw pixels and ignores EXIF,
@@ -1061,7 +1086,7 @@ export default function ImageGen() {
               <Link to="/media/history" className="text-xs text-port-accent hover:underline">View all →</Link>
             )}
           </div>
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
             {visibleGallery.slice(0, 6).map((img) => {
               const item = normalizeImage(img);
               return (
@@ -1091,7 +1116,7 @@ export default function ImageGen() {
             <span className="text-xs text-gray-500">{showHidden ? '▾' : '▸'}</span>
           </button>
           {showHidden && (
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
               {hiddenGallery.map((img) => {
                 const item = normalizeImage(img);
                 return (

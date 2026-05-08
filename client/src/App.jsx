@@ -6,18 +6,14 @@ import BrailleSpinner from './components/BrailleSpinner';
 import Dashboard from './pages/Dashboard';
 import Apps from './pages/Apps';
 import Ambient from './pages/Ambient';
+import { isStaleChunkError, reloadOnceForStaleChunk } from './utils/staleChunkReload';
 
-// Auto-reload on stale chunk errors (e.g., after a rebuild changes chunk hashes)
-// Uses sessionStorage to prevent infinite reload loops (max 1 reload per session)
+// Auto-reload on stale chunk errors (e.g., after a rebuild changes chunk hashes).
+// Detection covers Chrome / Firefox / Safari variants — see staleChunkReload.js.
 const lazyWithReload = (importFn) => lazy(() =>
   importFn().catch(err => {
-    if (err.message?.includes('MIME type') || err.message?.includes('Failed to fetch dynamically imported module')) {
-      const key = 'lazyReloadAttempted';
-      if (!sessionStorage.getItem(key)) {
-        sessionStorage.setItem(key, '1');
-        window.location.reload();
-        return new Promise(() => {}); // hang until reload completes
-      }
+    if (isStaleChunkError(err) && reloadOnceForStaleChunk()) {
+      return new Promise(() => {}); // hang until reload completes
     }
     throw err;
   })
@@ -36,6 +32,7 @@ const DataDog = lazyWithReload(() => import('./pages/DataDog'));
 const GitHub = lazyWithReload(() => import('./pages/GitHub'));
 const CyberCity = lazyWithReload(() => import('./pages/CyberCity'));
 const AppDetail = lazyWithReload(() => import('./pages/AppDetail'));
+const ReferenceRepos = lazyWithReload(() => import('./pages/ReferenceRepos'));
 const FeatureAgents = lazyWithReload(() => import('./pages/FeatureAgents'));
 const FeatureAgentDetail = lazyWithReload(() => import('./pages/FeatureAgentDetail'));
 const CalendarPage = lazyWithReload(() => import('./pages/Calendar'));
@@ -43,6 +40,7 @@ const Messages = lazyWithReload(() => import('./pages/Messages'));
 const Goals = lazyWithReload(() => import('./pages/Goals'));
 const OpenClawPage = lazyWithReload(() => import('./pages/OpenClaw'));
 const Submodules = lazyWithReload(() => import('./pages/Submodules'));
+const ImageClean = lazyWithReload(() => import('./pages/ImageClean'));
 const ChiefOfStaff = lazyWithReload(() => import('./pages/ChiefOfStaff'));
 const Ask = lazyWithReload(() => import('./pages/Ask'));
 const MediaGen = lazyWithReload(() => import('./pages/MediaGen'));
@@ -128,10 +126,12 @@ export default function App() {
         <Route path="/" element={<Layout />}>
           <Route index element={<Dashboard />} />
           <Route path="apps" element={<Apps />} />
+          <Route path="reference-repos" element={<ReferenceRepos />} />
           <Route path="devtools" element={<Navigate to="/devtools/runs" replace />} />
           <Route path="devtools/datadog" element={<DataDog />} />
           <Route path="devtools/github" element={<GitHub />} />
           <Route path="devtools/history" element={<HistoryPage />} />
+          <Route path="devtools/image-clean" element={<ImageClean />} />
           <Route path="devtools/runs" element={<RunsHistoryPage />} />
           <Route path="devtools/runner" element={<RunnerPage />} />
           <Route path="devtools/submodules" element={<Submodules />} />

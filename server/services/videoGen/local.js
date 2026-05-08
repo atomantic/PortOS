@@ -87,7 +87,7 @@ export const saveHistory = (h) => atomicWrite(HISTORY_FILE, h);
 // The helper lives in the ltx-2-mlx venv (so its `import ltx_pipelines_mlx`
 // resolves) but the script file lives in the PortOS repo so updates ship
 // with PortOS releases instead of the user's HF cache.
-const buildLtx2Args = ({ model, prompt, negativePrompt, width, height, numFrames, fps, steps, guidance, seed, sourceImagePath, lastImagePath, extendFromVideoPath, audioFilePath, mode, imageStrength, disableAudio, outputPath, textEncoderRepo }) => {
+const buildLtx2Args = ({ model, prompt, negativePrompt, width, height, numFrames, fps, steps, guidance, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, mode, imageStrength, disableAudio, outputPath, textEncoderRepo }) => {
   if (!existsSync(LTX2_VENV_PYTHON)) {
     throw new ServerError(
       `ltx-2-mlx venv not found at ${LTX2_VENV_PYTHON}. Run \`INSTALL_LTX2=1 bash scripts/setup-image-video.sh\` to install.`,
@@ -102,15 +102,22 @@ const buildLtx2Args = ({ model, prompt, negativePrompt, width, height, numFrames
   // When mode is omitted, infer i2v from a present sourceImagePath — matches
   // the route schema's documented "absence falls back to inferring" behavior.
   const wantsNativeExtend = mode === 'extend' && !!extendFromVideoPath;
+  const hasMultiKeyframes = Array.isArray(keyframes) && keyframes.length >= 2;
+  // When `mode` is omitted but multi-keyframes are supplied, infer fflf so a
+  // direct caller (test, script) doesn't get a silent text-only render with
+  // their keyframes dropped on the floor. The route handler always sets
+  // mode='fflf' when keyframes are present, but defense-in-depth here covers
+  // callers that bypass the route (e.g. Writers Room batch dispatch).
   const helperMode = mode === 'fflf' ? 'fflf'
     : mode === 'a2v' ? 'a2v'
     : wantsNativeExtend ? 'extend'
     : mode === 'image' || mode === 'extend' ? 'image'
+    : (!mode && hasMultiKeyframes) ? 'fflf'
     : (!mode && sourceImagePath) ? 'image'
     : 'text';
-  if (helperMode === 'fflf' && (!sourceImagePath || !lastImagePath)) {
+  if (helperMode === 'fflf' && !hasMultiKeyframes && (!sourceImagePath || !lastImagePath)) {
     throw new ServerError(
-      'FFLF mode on the ltx2 runtime requires BOTH a start image (sourceImagePath) and an end image (lastImagePath).',
+      'FFLF mode on the ltx2 runtime requires either a keyframes array (length >= 2) or BOTH a start image and an end image.',
       { status: 400, code: 'LTX2_FFLF_MISSING_KEYFRAMES' },
     );
   }
@@ -151,6 +158,34 @@ const buildLtx2Args = ({ model, prompt, negativePrompt, width, height, numFrames
       const safeRaw = Math.floor(pixelBudget / (Number(width) * Number(height)));
       const safeLatent = Math.max(1, Math.floor((safeRaw - 1) / 8));
       const safeFrames = safeLatent * 8 + 1;
+      // Multi-keyframe renders pin specific pixel-frame indices — clamping
+      // numFrames below `max(keyframe.index)` would either drop a keyframe
+      // or hand the Python helper an out-of-range index that hard-fails
+      // mid-render. Surface a 400 with a clear "raise FFLF_LTX2_PIXEL_BUDGET
+      // or lower resolution" message instead of silently clamping.
+      if (hasMultiKeyframes) {
+        // Reject non-numeric indices upfront — Math.max(..., NaN) is NaN,
+        // which would silently bypass the safeFrames guard below and let
+        // the Python helper hard-fail with an opaque error mid-render.
+        const indices = keyframes.map((kf, i) => {
+          const n = Number(kf.index);
+          if (!Number.isFinite(n)) {
+            throw new ServerError(
+              `keyframes[${i}].index is not a finite number: ${kf.index}`,
+              { status: 400, code: 'LTX2_KEYFRAME_INVALID' },
+            );
+          }
+          return n;
+        });
+        const maxKfIndex = Math.max(...indices);
+        if (maxKfIndex > safeFrames - 1) {
+          throw new ServerError(
+            `Multi-keyframe render exceeds the FFLF/ltx2 pixel budget: ${width}×${height}×${numFrames} > ${pixelBudget} pixel-frames, but max keyframe index is ${maxKfIndex} (would clamp to ${safeFrames} frames). Lower resolution or raise FFLF_LTX2_PIXEL_BUDGET.`,
+            { status: 400, code: 'LTX2_FFLF_PIXEL_BUDGET_EXCEEDED' },
+          );
+        }
+        // Otherwise the keyframes still fit — clamp is safe.
+      }
       console.log(`⚠️  FFLF/ltx2 numFrames clamped ${numFrames} → ${safeFrames} to fit pixel budget ${pixelBudget} (export FFLF_LTX2_PIXEL_BUDGET=<n> to raise)`);
       numFrames = safeFrames;
     }
@@ -175,8 +210,17 @@ const buildLtx2Args = ({ model, prompt, negativePrompt, width, height, numFrames
   if (disableAudio) args.push('--no-audio');
   if (helperMode === 'image' && sourceImagePath) args.push('--image', sourceImagePath);
   if (helperMode === 'fflf') {
-    args.push('--image', sourceImagePath);
-    args.push('--last-image', lastImagePath);
+    if (hasMultiKeyframes) {
+      // Emit the helper's JSON contract — the path field is the resized image
+      // on disk (already cropped to (width, height) by generateVideo). The
+      // helper reads paths verbatim, so any mismatch here is unrecoverable.
+      args.push('--keyframes-json', JSON.stringify(
+        keyframes.map((kf) => ({ path: kf.path, index: kf.index })),
+      ));
+    } else {
+      args.push('--image', sourceImagePath);
+      args.push('--last-image', lastImagePath);
+    }
   }
   if (helperMode === 'extend') {
     args.push('--extend-from-video', extendFromVideoPath);
@@ -198,12 +242,18 @@ const buildLtx2Args = ({ model, prompt, negativePrompt, width, height, numFrames
   return { bin: LTX2_VENV_PYTHON, args };
 };
 
-const buildArgs = ({ pythonPath, modelId, model, prompt, negativePrompt, width, height, numFrames, fps, steps, guidance, seed, tiling, disableAudio, sourceImagePath, lastImagePath, extendFromVideoPath, audioFilePath, mode, imageStrength, textEncoderRepo, outputPath }) => {
+const buildArgs = ({ pythonPath, modelId, model, prompt, negativePrompt, width, height, numFrames, fps, steps, guidance, seed, tiling, disableAudio, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, mode, imageStrength, textEncoderRepo, outputPath }) => {
   // Route to the dgrauet/ltx-2-mlx helper when the model declares the new
   // runtime. Existing notapalindrome models default to runtime: 'mlx_video'
   // (or undefined in legacy registries — see backfillRuntime in mediaModels.js).
   if (model.runtime === 'ltx2') {
-    return buildLtx2Args({ model, prompt, negativePrompt, width, height, numFrames, fps, steps, guidance, seed, sourceImagePath, lastImagePath, extendFromVideoPath, audioFilePath, mode, imageStrength, disableAudio, outputPath, textEncoderRepo });
+    return buildLtx2Args({ model, prompt, negativePrompt, width, height, numFrames, fps, steps, guidance, seed, sourceImagePath, lastImagePath, keyframes, extendFromVideoPath, audioFilePath, mode, imageStrength, disableAudio, outputPath, textEncoderRepo });
+  }
+  if (Array.isArray(keyframes) && keyframes.length >= 2) {
+    throw new ServerError(
+      'Multi-keyframe mode (keyframes array) is only supported on the ltx2 runtime. Pick a model with runtime: "ltx2" in data/media-models.json.',
+      { status: 400, code: 'KEYFRAMES_REQUIRE_LTX2' },
+    );
   }
   if (mode === 'a2v') {
     throw new ServerError(
@@ -263,7 +313,13 @@ const buildArgs = ({ pythonPath, modelId, model, prompt, negativePrompt, width, 
   return { bin: pythonPath, args };
 };
 
-export async function generateVideo({ pythonPath, prompt, negativePrompt = '', modelId = defaultVideoModelId(), width = 768, height = 512, numFrames = 121, fps = 24, steps, guidanceScale, seed, tiling = 'auto', disableAudio = false, sourceImagePath = null, uploadedTempPath = null, uploadedTempPaths = [], lastImagePath = null, extendFromVideoPath = null, audioFilePath = null, mode = null, imageStrength = null, hidden = false, jobId: providedJobId = null }) {
+// Default frame count for LTX renders, matching the 8k+1 latent-boundary
+// the model wants. Exported so the route layer can validate keyframe
+// indices against the same effective number of frames the service will
+// use (avoiding drift between two hardcoded constants).
+export const DEFAULT_NUM_FRAMES = 121;
+
+export async function generateVideo({ pythonPath, prompt, negativePrompt = '', modelId = defaultVideoModelId(), width = 768, height = 512, numFrames = DEFAULT_NUM_FRAMES, fps = 24, steps, guidanceScale, seed, tiling = 'auto', disableAudio = false, sourceImagePath = null, uploadedTempPath = null, uploadedTempPaths = [], lastImagePath = null, keyframes = null, extendFromVideoPath = null, audioFilePath = null, mode = null, imageStrength = null, hidden = false, jobId: providedJobId = null }) {
   uploadedTempPaths = Array.isArray(uploadedTempPaths) ? uploadedTempPaths : [];
   if (!pythonPath) throw new ServerError('Python path not configured — set it in Settings > Image Gen', { status: 400, code: 'VIDEO_GEN_NOT_CONFIGURED' });
   if (!prompt?.trim()) throw new ServerError('Prompt is required', { status: 400, code: 'VALIDATION_ERROR' });
@@ -314,7 +370,19 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   //    status, but the diffusers pipeline only reads --image — the script
   //    never opens the last-frame file, so no resize is needed there either.
   const lastImageWillBeUsed = !!lastImagePath && !IS_WIN && mode === 'fflf' && !sourceImagePath;
-  const ffmpeg = (sourceImagePath || lastImageWillBeUsed) ? await findFfmpeg() : null;
+  // A non-null `keyframes` that ISN'T a length-≥2 array is malformed —
+  // fail fast instead of silently dropping it (which would produce an
+  // unexpected text/i2v render with the user's anchors ignored). The
+  // route guarantees the array shape, but non-route callers (tests,
+  // persisted queue replays) could pass a stray scalar/empty array.
+  if (keyframes != null && !(Array.isArray(keyframes) && keyframes.length >= 2)) {
+    throw new ServerError(
+      `keyframes must be null OR an array of length >= 2; got ${Array.isArray(keyframes) ? `array(length=${keyframes.length})` : typeof keyframes}`,
+      { status: 400, code: 'KEYFRAME_INVALID_SHAPE' },
+    );
+  }
+  const hasMultiKeyframes = Array.isArray(keyframes) && keyframes.length >= 2;
+  const ffmpeg = (sourceImagePath || lastImageWillBeUsed || hasMultiKeyframes) ? await findFfmpeg() : null;
   const resizeImage = async (srcPath, tag) => {
     if (!srcPath || !ffmpeg) return { resolved: srcPath, tempPath: null };
     const resizedPath = join(tmpdir(), `resized-${tag}-${jobId}.png`);
@@ -334,6 +402,42 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   const { resolved: resolvedLastImage, tempPath: resizedLastTempPath } = lastImageWillBeUsed
     ? await resizeImage(lastImagePath, 'last')
     : { resolved: lastImagePath, tempPath: null };
+  // Resize each multi-keyframe image to the target resolution (the helper
+  // requires exact W×H, same as i2v). Indices pass through unchanged.
+  // Each ffmpeg subprocess is independent — fan out so 8 keyframes don't
+  // serialize behind 7 unrelated ffmpeg startups.
+  const resizedKeyframeTempPaths = [];
+  let resolvedKeyframes = null;
+  if (hasMultiKeyframes) {
+    // The route validates shape, but a non-route caller (test, persisted
+    // queue replay, future internal API) could pass malformed entries.
+    // Fail fast with a clear error instead of letting `undefined` paths
+    // flow into ffmpeg or the Python helper, where the failure is opaque.
+    keyframes.forEach((kf, i) => {
+      if (!kf || typeof kf !== 'object') {
+        throw new ServerError(`keyframes[${i}] must be an object: got ${typeof kf}`, { status: 400, code: 'KEYFRAME_INVALID_SHAPE' });
+      }
+      if (typeof kf.path !== 'string' || !kf.path) {
+        throw new ServerError(`keyframes[${i}].path must be a non-empty string`, { status: 400, code: 'KEYFRAME_INVALID_SHAPE' });
+      }
+      // The Python helper enforces `index` is an int; a float or numeric
+      // string here would crash mid-render. Coerce + verify integerness
+      // up-front so non-route callers (tests, persisted queue replays)
+      // get a clear 400 instead of a Python traceback.
+      const n = Number(kf.index);
+      if (!Number.isInteger(n)) {
+        throw new ServerError(`keyframes[${i}].index must be an integer: got ${kf.index}`, { status: 400, code: 'KEYFRAME_INVALID_SHAPE' });
+      }
+    });
+    const results = await Promise.all(keyframes.map((kf, i) => resizeImage(kf.path, `kf${i}`)));
+    resolvedKeyframes = results.map((r, i) => {
+      if (r.tempPath) resizedKeyframeTempPaths.push(r.tempPath);
+      // Normalize index to a real Number so the JSON we hand to the
+      // Python helper is unambiguous (no '5' string sneaking through
+      // from a multipart form).
+      return { path: r.resolved, index: Number(keyframes[i].index) };
+    });
+  }
 
   const meta = {
     id: jobId,
@@ -347,13 +451,41 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
     fps: parsedFps,
     filename,
     createdAt: new Date().toISOString(),
-    mode: mode || (sourceImagePath ? 'image' : 'text'),
+    // History mode reflects the EFFECTIVE mode — buildLtx2Args infers fflf
+    // from `keyframes` even when caller omitted `mode`, so without this the
+    // history entry would say 'text' for a multi-keyframe render.
+    mode: mode || (hasMultiKeyframes ? 'fflf' : sourceImagePath ? 'image' : 'text'),
     ...(hidden ? { hidden: true } : {}),
   };
   const job = { ...meta, clients: [], status: 'running' };
   jobs.set(jobId, job);
 
-  const { bin, args } = buildArgs({ pythonPath, modelId, model, prompt, negativePrompt, width: w, height: h, numFrames: parsedNumFrames, fps: parsedFps, steps: actualSteps, guidance: actualGuidance, seed: actualSeed, tiling, disableAudio, sourceImagePath: resolvedSourceImage, lastImagePath: resolvedLastImage, extendFromVideoPath, audioFilePath, mode, imageStrength: actualImageStrength, textEncoderRepo: actualTextEncoderRepo, outputPath });
+  // buildArgs now throws synchronously on multi-keyframe pixel-budget
+  // overflow and a few other validation paths — without this guard the
+  // job would stay "running" forever in the jobs map and the resized
+  // temp files would leak (the spawn close-handler that normally cleans
+  // them up never runs because we never spawned). Mirror the cleanup
+  // logic of the spawn-error handler so failure modes converge.
+  let bin, args;
+  try {
+    ({ bin, args } = buildArgs({ pythonPath, modelId, model, prompt, negativePrompt, width: w, height: h, numFrames: parsedNumFrames, fps: parsedFps, steps: actualSteps, guidance: actualGuidance, seed: actualSeed, tiling, disableAudio, sourceImagePath: resolvedSourceImage, lastImagePath: resolvedLastImage, keyframes: resolvedKeyframes, extendFromVideoPath, audioFilePath, mode, imageStrength: actualImageStrength, textEncoderRepo: actualTextEncoderRepo, outputPath }));
+  } catch (err) {
+    job.status = 'error';
+    const reason = err.message || 'Failed to build video gen args';
+    console.log(`❌ Video generation buildArgs error [${jobId.slice(0, 8)}]: ${reason}`);
+    broadcastSse(job, { type: 'error', error: reason });
+    videoGenEvents.emit('failed', { generationId: jobId, error: reason });
+    if (resizedSrcTempPath) unlink(resizedSrcTempPath).catch(() => {});
+    if (resizedLastTempPath) unlink(resizedLastTempPath).catch(() => {});
+    for (const p of resizedKeyframeTempPaths) unlink(p).catch(() => {});
+    if (uploadedTempPath) unlink(uploadedTempPath).catch(() => {});
+    for (const p of uploadedTempPaths) unlink(p).catch(() => {});
+    if (audioFilePath && !uploadedTempPaths.includes(audioFilePath)) {
+      unlink(audioFilePath).catch(() => {});
+    }
+    closeJobAfterDelay(jobs, jobId);
+    throw err;
+  }
 
   console.log(`🎬 Generating video [${jobId.slice(0, 8)}]: ${modelId} ${w}x${h} frames=${parsedNumFrames} steps=${actualSteps}`);
   videoGenEvents.emit('started', { generationId: jobId, totalSteps: actualSteps, ...meta });
@@ -389,6 +521,7 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
     // ENOENT/permission errors leak files in os.tmpdir().
     if (resizedSrcTempPath) unlink(resizedSrcTempPath).catch(() => {});
     if (resizedLastTempPath) unlink(resizedLastTempPath).catch(() => {});
+    for (const p of resizedKeyframeTempPaths) unlink(p).catch(() => {});
     if (uploadedTempPath) unlink(uploadedTempPath).catch(() => {});
     for (const p of uploadedTempPaths) unlink(p).catch(() => {});
     // Defensive: a direct caller (bypassing the route) may pass audioFilePath
@@ -466,6 +599,7 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
     // (macOS /var → /private/var) so startsWith() can silently miss.
     if (resizedSrcTempPath) await unlink(resizedSrcTempPath).catch(() => {});
     if (resizedLastTempPath) await unlink(resizedLastTempPath).catch(() => {});
+    for (const p of resizedKeyframeTempPaths) await unlink(p).catch(() => {});
     // Cleanup the original multipart upload temp file too — without this,
     // every i2v request leaves a file in os.tmpdir() forever.
     if (uploadedTempPath) await unlink(uploadedTempPath).catch(() => {});
@@ -613,6 +747,11 @@ export async function generateChainedVideo({ chunks, jobId: outerJobId, ...rest 
       // is single-conditioned on the previous chunk's tail frame (or full video
       // for extend mode).
       lastImagePath: i === 0 ? rest.lastImagePath : null,
+      // Multi-keyframe interpolation only makes sense for the first chunk
+      // (the user pinned specific frame indices in a single clip). Subsequent
+      // chunks fall through to the image-chain path, conditioning on the
+      // prior chunk's tail frame.
+      keyframes: i === 0 ? rest.keyframes : null,
     }).catch((err) => {
       detach();
       reject(err);

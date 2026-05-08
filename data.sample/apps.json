@@ -21,6 +21,7 @@
       ],
       "envFile": ".env",
       "icon": "portos",
+      "appIconPath": "__PORTOS_ROOT__/client/public/portos-logo.png",
       "editorCommand": "code .",
       "createdAt": "2024-01-01T00:00:00.000Z",
       "updatedAt": "2024-01-01T00:00:00.000Z",
