@@ -681,7 +681,10 @@ export function extractAgentSummary(output) {
 export async function getDefaultBranch(dir, { allowRemote = true } = {}) {
   const symRef = await execGitSafe(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], dir);
   if (symRef.stdout?.trim()) {
-    return symRef.stdout.trim().replace(/^origin\//, '');
+    const branch = symRef.stdout.trim().replace(/^origin\//, '');
+    // Verify the ref actually exists (origin/HEAD could be stale)
+    const verify = await execGitSafe(['rev-parse', '--verify', `refs/remotes/origin/${branch}`], dir);
+    if (verify.exitCode === 0 || verify.stdout?.trim()) return branch;
   }
 
   // origin/HEAD not set locally — ask the remote (best-effort, short timeout)
@@ -689,7 +692,9 @@ export async function getDefaultBranch(dir, { allowRemote = true } = {}) {
     await execGitSafe(['remote', 'set-head', 'origin', '--auto'], dir, { timeout: 5000 });
     const symRef2 = await execGitSafe(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], dir);
     if (symRef2.stdout?.trim()) {
-      return symRef2.stdout.trim().replace(/^origin\//, '');
+      const branch2 = symRef2.stdout.trim().replace(/^origin\//, '');
+      const verify2 = await execGitSafe(['rev-parse', '--verify', `refs/remotes/origin/${branch2}`], dir);
+      if (verify2.exitCode === 0 || verify2.stdout?.trim()) return branch2;
     }
   }
 

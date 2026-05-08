@@ -243,6 +243,9 @@ export async function createPersistentWorktree(featureAgentId, sourceWorkspace, 
         const localOk = (await execGit(['branch', '--list', detected], sourceWorkspace, { ignoreExitCode: true })).stdout.trim();
         if (localOk) return detected;
       }
+      // All detection failed — use HEAD and update baseBranch to reflect reality
+      const headBranch = (await execGit(['rev-parse', '--abbrev-ref', 'HEAD'], sourceWorkspace, { ignoreExitCode: true })).stdout.trim();
+      baseBranch = headBranch && headBranch !== 'HEAD' ? headBranch : baseBranch;
       return 'HEAD';
     });
 

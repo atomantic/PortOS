@@ -24,6 +24,9 @@ describe('getDefaultBranch', () => {
       if (args[0] === 'symbolic-ref' && args.includes('refs/remotes/origin/HEAD')) {
         return Promise.resolve({ stdout: 'origin/main', stderr: '', exitCode: 0 });
       }
+      if (args[0] === 'rev-parse' && args.includes('--verify')) {
+        return Promise.resolve({ stdout: 'abc123', stderr: '', exitCode: 0 });
+      }
       return Promise.reject(new Error('unexpected'));
     });
 
@@ -35,6 +38,9 @@ describe('getDefaultBranch', () => {
     execGit.mockImplementation((args) => {
       if (args[0] === 'symbolic-ref') {
         return Promise.resolve({ stdout: 'origin/develop', stderr: '', exitCode: 0 });
+      }
+      if (args[0] === 'rev-parse' && args.includes('--verify')) {
+        return Promise.resolve({ stdout: 'abc123', stderr: '', exitCode: 0 });
       }
       return Promise.reject(new Error('unexpected'));
     });
