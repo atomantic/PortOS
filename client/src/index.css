@@ -570,44 +570,85 @@ html[data-port-theme-mode="day"] [class~="text-indigo-400/70"] {
   color: rgb(var(--port-accent)) !important;
 }
 
-/* Day-mode chip text colors. The 300/400/500 Tailwind tones are designed
-   for dark-mode chips (e.g. `bg-cyan-500/20 text-cyan-400`) — on the cream
-   / white day backgrounds they wash out to near-invisible. Remap to the
-   700 (or 800 for yellow, which stays warm at 700) tone in the same hue
-   family so each chip keeps its semantic color but reads clearly. */
+/* Day-mode chip + action-button text colors. The 100–500 Tailwind tones are
+   designed for dark-mode surfaces (e.g. `bg-cyan-500/20 text-cyan-400`, or
+   `bg-purple-600/30 text-purple-200`) — on the cream / white day backgrounds
+   they wash out to near-invisible and make enabled action buttons look
+   disabled. Remap to the 700 (or 800 for yellow, which stays warm at 700)
+   tone in the same hue family so each chip / button keeps its semantic color
+   but reads clearly. The 100/200 tints are remapped to the same dark target
+   as 300/400/500 so the only visible difference between an enabled and a
+   disabled button is the explicit `disabled:opacity-50` (or similar). */
+html[data-port-theme-mode="day"] [class~="text-cyan-100"],
+html[data-port-theme-mode="day"] [class~="text-cyan-200"],
 html[data-port-theme-mode="day"] [class~="text-cyan-300"],
 html[data-port-theme-mode="day"] [class~="text-cyan-400"],
 html[data-port-theme-mode="day"] [class~="text-cyan-500"] { color: rgb(14 116 144) !important; }
+html[data-port-theme-mode="day"] [class~="text-sky-100"],
+html[data-port-theme-mode="day"] [class~="text-sky-200"],
+html[data-port-theme-mode="day"] [class~="text-sky-300"],
 html[data-port-theme-mode="day"] [class~="text-sky-400"] { color: rgb(3 105 161) !important; }
+html[data-port-theme-mode="day"] [class~="text-blue-100"],
+html[data-port-theme-mode="day"] [class~="text-blue-200"],
 html[data-port-theme-mode="day"] [class~="text-blue-300"],
 html[data-port-theme-mode="day"] [class~="text-blue-400"] { color: rgb(29 78 216) !important; }
+html[data-port-theme-mode="day"] [class~="text-indigo-100"],
+html[data-port-theme-mode="day"] [class~="text-indigo-200"],
+html[data-port-theme-mode="day"] [class~="text-indigo-300"] { color: rgb(55 48 163) !important; }
+html[data-port-theme-mode="day"] [class~="text-purple-100"],
+html[data-port-theme-mode="day"] [class~="text-purple-200"],
 html[data-port-theme-mode="day"] [class~="text-purple-300"],
 html[data-port-theme-mode="day"] [class~="text-purple-400"],
 html[data-port-theme-mode="day"] [class~="text-purple-500"] { color: rgb(126 34 206) !important; }
+html[data-port-theme-mode="day"] [class~="text-violet-100"],
+html[data-port-theme-mode="day"] [class~="text-violet-200"],
 html[data-port-theme-mode="day"] [class~="text-violet-300"],
 html[data-port-theme-mode="day"] [class~="text-violet-400"] { color: rgb(109 40 217) !important; }
+html[data-port-theme-mode="day"] [class~="text-fuchsia-200"],
+html[data-port-theme-mode="day"] [class~="text-fuchsia-300"],
 html[data-port-theme-mode="day"] [class~="text-fuchsia-400"] { color: rgb(162 28 175) !important; }
+html[data-port-theme-mode="day"] [class~="text-pink-100"],
+html[data-port-theme-mode="day"] [class~="text-pink-200"],
+html[data-port-theme-mode="day"] [class~="text-pink-300"],
 html[data-port-theme-mode="day"] [class~="text-pink-400"],
 html[data-port-theme-mode="day"] [class~="text-pink-500"] { color: rgb(190 24 93) !important; }
+html[data-port-theme-mode="day"] [class~="text-rose-200"],
+html[data-port-theme-mode="day"] [class~="text-rose-300"],
 html[data-port-theme-mode="day"] [class~="text-rose-400"] { color: rgb(190 18 60) !important; }
+html[data-port-theme-mode="day"] [class~="text-red-100"],
+html[data-port-theme-mode="day"] [class~="text-red-200"],
 html[data-port-theme-mode="day"] [class~="text-red-300"],
 html[data-port-theme-mode="day"] [class~="text-red-400"],
 html[data-port-theme-mode="day"] [class~="text-red-500"] { color: rgb(185 28 28) !important; }
+html[data-port-theme-mode="day"] [class~="text-orange-100"],
+html[data-port-theme-mode="day"] [class~="text-orange-200"],
 html[data-port-theme-mode="day"] [class~="text-orange-300"],
 html[data-port-theme-mode="day"] [class~="text-orange-400"] { color: rgb(194 65 12) !important; }
+html[data-port-theme-mode="day"] [class~="text-amber-100"],
+html[data-port-theme-mode="day"] [class~="text-amber-200"],
 html[data-port-theme-mode="day"] [class~="text-amber-300"],
 html[data-port-theme-mode="day"] [class~="text-amber-400"],
 html[data-port-theme-mode="day"] [class~="text-amber-500"] { color: rgb(180 83 9) !important; }
+html[data-port-theme-mode="day"] [class~="text-yellow-100"],
+html[data-port-theme-mode="day"] [class~="text-yellow-200"],
 html[data-port-theme-mode="day"] [class~="text-yellow-300"],
 html[data-port-theme-mode="day"] [class~="text-yellow-400"],
 html[data-port-theme-mode="day"] [class~="text-yellow-500"] { color: rgb(133 77 14) !important; }
+html[data-port-theme-mode="day"] [class~="text-lime-200"],
+html[data-port-theme-mode="day"] [class~="text-lime-300"],
 html[data-port-theme-mode="day"] [class~="text-lime-400"] { color: rgb(77 124 15) !important; }
+html[data-port-theme-mode="day"] [class~="text-green-100"],
+html[data-port-theme-mode="day"] [class~="text-green-200"],
 html[data-port-theme-mode="day"] [class~="text-green-300"],
 html[data-port-theme-mode="day"] [class~="text-green-400"],
 html[data-port-theme-mode="day"] [class~="text-green-500"] { color: rgb(21 128 61) !important; }
+html[data-port-theme-mode="day"] [class~="text-emerald-100"],
+html[data-port-theme-mode="day"] [class~="text-emerald-200"],
 html[data-port-theme-mode="day"] [class~="text-emerald-300"],
 html[data-port-theme-mode="day"] [class~="text-emerald-400"],
 html[data-port-theme-mode="day"] [class~="text-emerald-500"] { color: rgb(4 120 87) !important; }
+html[data-port-theme-mode="day"] [class~="text-teal-200"],
+html[data-port-theme-mode="day"] [class~="text-teal-300"],
 html[data-port-theme-mode="day"] [class~="text-teal-400"] { color: rgb(15 118 110) !important; }
 
 /* hover: variants used on chips and buttons */
