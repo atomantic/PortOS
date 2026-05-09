@@ -13,7 +13,9 @@
 
 import { executeApiRun, executeCliRun, createRun } from './runner.js';
 import { getActiveProvider, getProviderById } from './providers.js';
-import { WORLD_CATEGORIES } from './worldBuilder.js';
+import { WORLD_CATEGORIES, PROMPT_FRAGMENT_MAX } from './worldBuilder.js';
+
+const LABEL_MAX = 80;
 
 const EXPANSION_PROMPT = `You are a world-building prompt engineer for a Stable-Diffusion-style image generation pipeline. You will turn the user's starter idea into a structured prompt set that produces a visually consistent universe across many renders.
 
@@ -99,14 +101,26 @@ const extractJson = (raw) => {
   const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/);
   if (fence) s = fence[1].trim();
   // Extract the first complete brace-balanced { … } block — guards against
-  // preamble ("Here is…") and trailing junk after the JSON object.
+  // preamble ("Here is…") and trailing junk after the JSON object. The scan
+  // is string-aware so braces inside JSON string values (e.g. a prompt that
+  // contains "{" or "}") don't unbalance the depth counter.
   const start = s.indexOf('{');
   if (start !== -1) {
     let depth = 0;
+    let inString = false;
+    let escaped = false;
     let end = -1;
     for (let i = start; i < s.length; i += 1) {
-      if (s[i] === '{') depth += 1;
-      else if (s[i] === '}') {
+      const ch = s[i];
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (ch === '\\') escaped = true;
+        else if (ch === '"') inString = false;
+        continue;
+      }
+      if (ch === '"') { inString = true; continue; }
+      if (ch === '{') depth += 1;
+      else if (ch === '}') {
         depth -= 1;
         if (depth === 0) { end = i; break; }
       }
@@ -130,10 +144,13 @@ const normalizeCategories = (raw) => {
       variations: variations.map((v) => {
         if (typeof v === 'string') {
           const trimmed = v.trim();
-          return { label: trimmed.slice(0, 80), prompt: trimmed };
+          return {
+            label: trimmed.slice(0, LABEL_MAX),
+            prompt: trimmed.slice(0, PROMPT_FRAGMENT_MAX),
+          };
         }
-        const label = typeof v?.label === 'string' ? v.label.trim().slice(0, 80) : '';
-        const prompt = typeof v?.prompt === 'string' ? v.prompt.trim() : '';
+        const label = typeof v?.label === 'string' ? v.label.trim().slice(0, LABEL_MAX) : '';
+        const prompt = typeof v?.prompt === 'string' ? v.prompt.trim().slice(0, PROMPT_FRAGMENT_MAX) : '';
         return { label, prompt };
       }).filter((v) => v.label && v.prompt),
     };
@@ -166,8 +183,10 @@ export async function expandWorldTemplate({ starterPrompt, providerId, model } =
   const raw = await callLLM(provider, selectedModel, fullPrompt);
   const parsed = extractJson(raw);
 
-  const stylePrompt = typeof parsed.stylePrompt === 'string' ? parsed.stylePrompt.trim() : '';
-  const negativePrompt = typeof parsed.negativePrompt === 'string' ? parsed.negativePrompt.trim() : '';
+  const stylePrompt = typeof parsed.stylePrompt === 'string'
+    ? parsed.stylePrompt.trim().slice(0, PROMPT_FRAGMENT_MAX) : '';
+  const negativePrompt = typeof parsed.negativePrompt === 'string'
+    ? parsed.negativePrompt.trim().slice(0, PROMPT_FRAGMENT_MAX) : '';
   const categories = normalizeCategories(parsed.categories || {});
   const totalVariations = WORLD_CATEGORIES.reduce((n, k) => n + (categories[k]?.variations?.length || 0), 0);
   console.log(`🌍 World Builder expansion complete — ${totalVariations} variations across ${WORLD_CATEGORIES.length} categories`);

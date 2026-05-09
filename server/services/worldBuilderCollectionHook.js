@@ -14,20 +14,19 @@
 import { mediaJobEvents } from './mediaJobQueue/index.js';
 import { addItem, ERR_DUPLICATE } from './mediaCollections.js';
 
-let initialized = false;
+let registeredHandler = null;
 
 export function initWorldBuilderCollectionHook() {
   // Idempotent: a stray double-init (test reload, future refactor) would
   // otherwise register two listeners and double-file every completed image.
-  if (initialized) return;
-  initialized = true;
+  if (registeredHandler) return;
 
   // EventEmitter does not await async listeners and does not catch their
   // rejections — any throw here would surface as an unhandled promise
   // rejection (process-killing on Node ≥15). Use a sync listener that
   // launches an async IIFE with a top-level catch so this bookkeeping
   // miss can never crash the server or fail the user's render.
-  mediaJobEvents.on('completed', (job) => {
+  registeredHandler = (job) => {
     void (async () => {
       if (!job || job.kind !== 'image') return;
       const tag = job.params?.worldRun;
@@ -52,9 +51,18 @@ export function initWorldBuilderCollectionHook() {
       // Last-resort net for synchronous throws (unexpected job shape, etc).
       console.log(`⚠️ world-builder collection hook crashed: ${err?.message || err}`);
     });
-  });
+  };
+  mediaJobEvents.on('completed', registeredHandler);
   console.log('🌍 World Builder collection hook initialized');
 }
 
-// Test-only reset hook so suites that re-init can do so cleanly.
-export const __testing = { reset: () => { initialized = false; } };
+// Test-only reset hook so suites that re-init can do so cleanly. Removes the
+// previously registered listener so re-init doesn't leak handlers.
+export const __testing = {
+  reset: () => {
+    if (registeredHandler) {
+      mediaJobEvents.off('completed', registeredHandler);
+      registeredHandler = null;
+    }
+  },
+};
