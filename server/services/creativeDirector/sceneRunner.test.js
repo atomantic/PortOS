@@ -55,7 +55,7 @@ describe('creativeDirectorSceneSchema — imageStrength', () => {
     expect(creativeDirectorSceneSchema.safeParse({ ...baseScene, imageStrength: 1 }).success).toBe(true);
   });
 
-  it('accepts null imageStrength (use renderer default)', () => {
+  it('accepts null imageStrength (use default behavior)', () => {
     const result = creativeDirectorSceneSchema.safeParse({ ...baseScene, imageStrength: null });
     expect(result.success).toBe(true);
     expect(result.data.imageStrength).toBe(null);
@@ -86,7 +86,7 @@ describe('creativeDirectorSceneUpdateSchema — imageStrength', () => {
     expect(result.data.imageStrength).toBe(0.6);
   });
 
-  it('lets the evaluator clear imageStrength back to renderer default', () => {
+  it('lets the evaluator clear imageStrength back to default behavior', () => {
     const result = creativeDirectorSceneUpdateSchema.safeParse({
       status: 'pending',
       imageStrength: null,

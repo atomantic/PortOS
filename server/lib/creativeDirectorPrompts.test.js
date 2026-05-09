@@ -201,7 +201,7 @@ describe('buildEvaluatePrompt — imageStrength surfacing', () => {
     expect(out).toContain('Image strength: default');
   });
 
-  it('treats null imageStrength like unset (use renderer default)', async () => {
+  it('treats null imageStrength like unset (use defaults)', async () => {
     const out = await buildEvaluatePrompt(baseProject, {
       ...baseScene,
       evaluationFrames: [],
