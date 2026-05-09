@@ -61,8 +61,8 @@ const sanitizeVariation = (raw) => {
 };
 
 const sanitizeCategory = (raw) => {
-  // Per-category structure: { variations: [{ label, prompt }] }. Cap at 50
-  // entries per bucket so a runaway LLM can't blow up the world template.
+  // Per-category structure: { variations: [{ label, prompt }] }. Cap so a
+  // runaway LLM can't blow up the world template; matches the route schema.
   if (!raw || typeof raw !== 'object') return { variations: [] };
   const variations = [];
   if (Array.isArray(raw.variations)) {
@@ -70,7 +70,7 @@ const sanitizeCategory = (raw) => {
       const s = sanitizeVariation(v);
       if (!s) continue;
       variations.push(s);
-      if (variations.length >= 50) break;
+      if (variations.length >= VARIATIONS_PER_CATEGORY_MAX) break;
     }
   }
   return { variations };
