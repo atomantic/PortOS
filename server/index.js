@@ -86,6 +86,8 @@ import videoTimelineRoutes from './routes/videoTimeline.js';
 import mediaJobsRoutes from './routes/mediaJobs.js';
 import creativeDirectorRoutes from './routes/creativeDirector.js';
 import writersRoomRoutes from './routes/writersRoom.js';
+import worldBuilderRoutes from './routes/worldBuilder.js';
+import { initWorldBuilderCollectionHook } from './services/worldBuilderCollectionHook.js';
 import { initMediaJobQueue } from './services/mediaJobQueue/index.js';
 import { recoverInFlightProjects } from './services/creativeDirector/recovery.js';
 import imageVideoModelsRoutes from './routes/imageVideoModels.js';
@@ -327,6 +329,7 @@ app.use('/api/video-timeline', videoTimelineRoutes);
 app.use('/api/media-jobs', mediaJobsRoutes);
 app.use('/api/creative-director', creativeDirectorRoutes);
 app.use('/api/writers-room', writersRoomRoutes);
+app.use('/api/world-builder', worldBuilderRoutes);
 app.use('/api/image-video/models', imageVideoModelsRoutes);
 // AUTOMATIC1111-compatible surface for tailnet clients — gated by
 // settings.imageGen.expose.a1111 so it returns 403 unless the user opted in.
@@ -458,6 +461,11 @@ app.use(errorMiddleware);
 ensureSelf()
   .then(() => initSyncLog())
   .then(() => initMediaJobQueue())
+  .then(() => {
+    // World Builder needs the media job queue running before it can listen
+    // for `completed` events — so initialize the hook here.
+    initWorldBuilderCollectionHook();
+  })
   .then(() => {
     // Fire-and-forget — resume any Creative Director projects that were mid-
     // flight when the server died. The queue reload above just reclassified
