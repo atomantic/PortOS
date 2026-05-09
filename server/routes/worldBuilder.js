@@ -42,7 +42,7 @@ const variationSchema = z.object({
   prompt: z.string().trim().min(1).max(svc.PROMPT_FRAGMENT_MAX),
 });
 const categoryShape = z.object({
-  variations: z.array(variationSchema).max(50),
+  variations: z.array(variationSchema).max(svc.VARIATIONS_PER_CATEGORY_MAX),
 }).optional();
 const categoriesSchema = z.object(
   Object.fromEntries(svc.WORLD_CATEGORIES.map((c) => [c, categoryShape])),
@@ -78,7 +78,7 @@ const expandSchema = z.object({
 });
 
 // `selection` per category: 'all' or array of variation labels.
-const selectionValueSchema = z.union([z.literal('all'), z.array(z.string().trim().min(1).max(svc.VARIATION_LABEL_MAX)).max(50)]);
+const selectionValueSchema = z.union([z.literal('all'), z.array(z.string().trim().min(1).max(svc.VARIATION_LABEL_MAX)).max(svc.VARIATIONS_PER_CATEGORY_MAX)]);
 const selectionSchema = z.object(
   Object.fromEntries(svc.WORLD_CATEGORIES.map((c) => [c, selectionValueSchema.optional()])),
 ).partial();

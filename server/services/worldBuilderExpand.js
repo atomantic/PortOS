@@ -13,7 +13,7 @@
 
 import { executeApiRun, executeCliRun, createRun } from './runner.js';
 import { getActiveProvider, getProviderById } from './providers.js';
-import { WORLD_CATEGORIES, PROMPT_FRAGMENT_MAX } from './worldBuilder.js';
+import { WORLD_CATEGORIES, PROMPT_FRAGMENT_MAX, VARIATIONS_PER_CATEGORY_MAX } from './worldBuilder.js';
 
 const LABEL_MAX = 80;
 
@@ -141,7 +141,9 @@ const normalizeCategories = (raw) => {
     if (Array.isArray(node)) variations = node;
     else if (Array.isArray(node?.variations)) variations = node.variations;
     out[key] = {
-      variations: variations.map((v) => {
+      // Clamp to the same per-category cap the route schema enforces (50)
+      // so a runaway LLM response can't bloat /expand output.
+      variations: variations.slice(0, VARIATIONS_PER_CATEGORY_MAX).map((v) => {
         if (typeof v === 'string') {
           const trimmed = v.trim();
           return {

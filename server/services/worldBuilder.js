@@ -34,6 +34,7 @@ const MAX_RUN_JOB_IDS = 10000;
 export const STARTER_PROMPT_MAX = 4000;
 export const PROMPT_FRAGMENT_MAX = 2000;
 export const VARIATION_LABEL_MAX = 120;
+export const VARIATIONS_PER_CATEGORY_MAX = 50;
 
 // Five canonical buckets the UI surfaces. Stored on the template so a
 // future template type (e.g. "creatures") only needs adding here. Order
