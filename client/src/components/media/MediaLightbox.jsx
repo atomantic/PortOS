@@ -52,6 +52,10 @@ export default function MediaLightbox({ item, onClose, onRemix, onSendToVideo, o
         className="relative bg-port-card border border-port-border rounded-xl overflow-hidden max-w-6xl w-full max-h-[92vh] flex flex-col md:flex-row"
         onClick={(e) => e.stopPropagation()}
         role="presentation"
+        // Pin card/border alpha to 1 inside this focused modal so glass-style themes
+        // (Lumen Glass Day, Pastel Dawn, etc.) render an opaque panel against the
+        // bg-black/90 overlay — the translucent default makes button text illegible.
+        style={{ '--port-card-alpha': 1, '--port-border-alpha': 1 }}
       >
         <div className="flex-1 bg-black flex items-center justify-center min-h-0">
           {isVideo ? (
@@ -126,7 +130,7 @@ export default function MediaLightbox({ item, onClose, onRemix, onSendToVideo, o
               <button
                 type="button"
                 onClick={() => { onRemix(item); onClose(); }}
-                className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs bg-port-accent/20 hover:bg-port-accent/40 text-port-accent rounded"
+                className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs bg-port-accent text-white hover:opacity-90 rounded"
               >
                 <Sparkles className="w-3.5 h-3.5" /> Remix
               </button>
@@ -135,7 +139,7 @@ export default function MediaLightbox({ item, onClose, onRemix, onSendToVideo, o
               <button
                 type="button"
                 onClick={() => { onSendToVideo(item); onClose(); }}
-                className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs bg-port-success/20 hover:bg-port-success/40 text-port-success rounded"
+                className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs bg-port-success text-white hover:opacity-90 rounded"
               >
                 <Film className="w-3.5 h-3.5" /> Send to Video
               </button>
@@ -144,7 +148,7 @@ export default function MediaLightbox({ item, onClose, onRemix, onSendToVideo, o
               <button
                 type="button"
                 onClick={() => { onContinue(item); onClose(); }}
-                className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs bg-port-accent/20 hover:bg-port-accent/40 text-port-accent rounded"
+                className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs bg-port-accent text-white hover:opacity-90 rounded"
               >
                 <ImageIcon className="w-3.5 h-3.5" /> Continue
               </button>
