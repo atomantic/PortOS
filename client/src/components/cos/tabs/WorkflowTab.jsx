@@ -123,6 +123,8 @@ function StageColumn({ stage, nodes, allNodes, hoveredId, setHoveredId }) {
   const palette = STAGE_COLORS[stage.id] || STAGE_COLORS.ambient;
   if (nodes.length === 0) return null;
 
+  const hoveredNode = hoveredId ? allNodes.find(n => n.id === hoveredId) : null;
+
   return (
     <div className="flex flex-col gap-2 min-w-[12rem] flex-shrink-0">
       <div className={`rounded-md border ${palette.ring} ${palette.bg} px-3 py-2`}>
@@ -142,7 +144,7 @@ function StageColumn({ stage, nodes, allNodes, hoveredId, setHoveredId }) {
             node={node}
             allNodes={allNodes}
             onHover={setHoveredId}
-            isHighlighted={hoveredId === node.id || nodeReferences(node, hoveredId)}
+            isHighlighted={hoveredId === node.id || nodeReferences(node, hoveredId, hoveredNode)}
           />
         ))}
       </div>
@@ -150,12 +152,17 @@ function StageColumn({ stage, nodes, allNodes, hoveredId, setHoveredId }) {
   );
 }
 
-// Highlight nodes that depend on the hovered node (i.e., the hovered node is one of their
-// runAfter prerequisites). Bidirectional highlighting (also lighting up a hovered node's own
-// prerequisites) is handled separately when the dependent node is hovered.
-function nodeReferences(node, hoveredId) {
+// Highlight nodes that participate in a runAfter relationship with the hovered node — both
+// directions. `node` is highlighted when:
+//   - `node` declares `hoveredId` as one of its `runAfter` prerequisites (downstream), OR
+//   - `node` is itself one of the hovered node's `runAfter` prerequisites (upstream).
+// `node` is the candidate being styled; `hoveredNode` is the full node currently under the
+// pointer (so we can read its `runAfter` list).
+function nodeReferences(node, hoveredId, hoveredNode) {
   if (!hoveredId) return false;
-  return node.runAfter.some(t => `task:${t}` === hoveredId);
+  if (node.runAfter.some(t => `task:${t}` === hoveredId)) return true;
+  if (hoveredNode && hoveredNode.runAfter.some(t => `task:${t}` === node.id)) return true;
+  return false;
 }
 
 function StageArrow() {
