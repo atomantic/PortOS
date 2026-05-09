@@ -161,7 +161,13 @@ vi.mock('./git.js', () => ({
   generatePRDescription: vi.fn(),
   deleteBranch: vi.fn().mockResolvedValue(undefined),
   requestCopilotReview: vi.fn().mockResolvedValue({ success: true }),
-  resolveForgeForRepo: vi.fn().mockResolvedValue({ cli: 'gh', env: process.env, host: 'github.com', owner: null, account: null })
+  resolveForgeForRepo: vi.fn().mockResolvedValue({ cli: 'gh', env: process.env, host: 'github.com', owner: null, account: null }),
+  parsePullRequestUrl: vi.fn((url) => {
+    // Minimal stand-in: extract host/owner/repo/number from GitHub PR URLs
+    const match = url?.match?.(/^https:\/\/([^/]+)\/([^/]+)\/([^/]+)\/(?:pull|merge_requests|-\/merge_requests)\/(\d+)/);
+    if (!match) return null;
+    return { host: match[1], owner: match[2], repo: match[3], number: Number(match[4]) };
+  })
 }));
 
 vi.mock('./runner.js', () => ({
@@ -172,7 +178,7 @@ vi.mock('./runner.js', () => ({
 
 // --- Import the function under test and the mocked dependencies ---
 
-import { cleanupAgentWorktree, spawnMergeRecoveryTask } from './subAgentSpawner.js';
+import { cleanupAgentWorktree, spawnMergeRecoveryTask, spawnReviewLoopFollowUp } from './subAgentSpawner.js';
 import { getAgent, addTask } from './cos.js';
 import { removeWorktree } from './worktreeManager.js';
 import * as git from './git.js';
@@ -455,6 +461,148 @@ describe('cleanupAgentWorktree - openPR path', () => {
 
     expect(warnings.some(w => w.includes('Copilot review'))).toBe(false);
     expect(removeWorktree).toHaveBeenCalled();
+  });
+
+  // --- Review-loop follow-up spawn tests (the user-reported bug:
+  //     "they are only handling one review loop and then finishing,
+  //      they are not continuing the loop ... until ready to merge") ---
+
+  it('should spawn a review-loop follow-up task after a successful Copilot review request on a GitHub PR', async () => {
+    git.push.mockResolvedValue(undefined);
+    git.createPR.mockResolvedValue({ success: true, url: 'https://github.com/test/repo/pull/42' });
+    git.requestCopilotReview.mockResolvedValue({ success: true });
+    addTask.mockResolvedValue({ id: 'sys-rl-x' });
+
+    await cleanupAgentWorktree('agent-1', true, {
+      openPR: true,
+      requestCopilotReview: true,
+      description: 'Build the thing',
+      originalTask: { id: 'task-orig', priority: 'HIGH', metadata: { app: 'sparsetree' }, description: 'Build the thing' }
+    });
+
+    expect(addTask).toHaveBeenCalledTimes(1);
+    const [followUp, taskType, opts] = addTask.mock.calls[0];
+    expect(taskType).toBe('internal');
+    expect(opts).toEqual({ raw: true });
+    expect(followUp.metadata.reviewLoopFollowUp).toBe(true);
+    expect(followUp.metadata.reviewLoopPRUrl).toBe('https://github.com/test/repo/pull/42');
+    expect(followUp.metadata.reviewLoopPRBranch).toBe('cos/task-abc123');
+    expect(followUp.metadata.reviewLoopPRNumber).toBe(42);
+    expect(followUp.metadata.reviewLoopPROwner).toBe('test');
+    expect(followUp.metadata.reviewLoopPRRepo).toBe('repo');
+    expect(followUp.metadata.existingBranch).toBe('cos/task-abc123');
+    expect(followUp.metadata.useWorktree).toBe(true);
+    expect(followUp.metadata.openPR).toBe(false); // must not chain another PR
+    expect(followUp.metadata.reviewLoop).toBe(false); // must not chain another loop
+    expect(followUp.metadata.sourceTaskId).toBe('task-orig');
+    expect(followUp.metadata.sourceAgentId).toBe('agent-1');
+    expect(followUp.priority).toBe('HIGH');
+    expect(followUp.autoApproved).toBe(true);
+  });
+
+  it('should NOT spawn a review-loop follow-up when Copilot review request fails', async () => {
+    git.push.mockResolvedValue(undefined);
+    git.createPR.mockResolvedValue({ success: true, url: 'https://github.com/test/repo/pull/43' });
+    git.requestCopilotReview.mockResolvedValue({ success: false, error: 'gh exited 1' });
+
+    await cleanupAgentWorktree('agent-1', true, {
+      openPR: true, requestCopilotReview: true, description: 'X',
+      originalTask: { id: 'task-orig', metadata: {}, description: 'X' }
+    });
+
+    // No follow-up because the initial review never landed — nothing to wait on
+    expect(addTask).not.toHaveBeenCalled();
+    expect(removeWorktree).toHaveBeenCalled();
+  });
+
+  it('should NOT spawn a review-loop follow-up on non-GitHub forges (Copilot is GitHub-only)', async () => {
+    git.push.mockResolvedValue(undefined);
+    git.createPR.mockResolvedValue({ success: true, url: 'https://gitlab.com/group/proj/-/merge_requests/12' });
+    git.requestCopilotReview.mockResolvedValue({ success: true, skipped: true });
+
+    await cleanupAgentWorktree('agent-1', true, {
+      openPR: true, requestCopilotReview: true, description: 'X',
+      originalTask: { id: 'task-orig', metadata: {}, description: 'X' }
+    });
+
+    expect(addTask).not.toHaveBeenCalled();
+    expect(removeWorktree).toHaveBeenCalled();
+  });
+
+  it('should NOT spawn a review-loop follow-up when requestCopilotReview is false', async () => {
+    git.push.mockResolvedValue(undefined);
+    git.createPR.mockResolvedValue({ success: true, url: 'https://github.com/test/repo/pull/44' });
+
+    await cleanupAgentWorktree('agent-1', true, {
+      openPR: true, requestCopilotReview: false, description: 'X',
+      originalTask: { id: 'task-orig', metadata: {}, description: 'X' }
+    });
+
+    expect(git.requestCopilotReview).not.toHaveBeenCalled();
+    expect(addTask).not.toHaveBeenCalled();
+  });
+
+  // --- skipMerge tests for review-loop follow-up cleanup ---
+
+  it('should pass merge: false in the auto-merge fallback when skipMerge is true (review-loop follow-up cleanup)', async () => {
+    // The follow-up agent already merged via `gh pr merge`; re-merging the worktree
+    // branch into source workspace would duplicate the squashed commits.
+    await cleanupAgentWorktree('agent-1', true, { openPR: false, skipMerge: true });
+
+    expect(removeWorktree).toHaveBeenCalledWith(
+      'agent-1', '/mock/workspace', 'cos/task-abc123', { merge: false }
+    );
+  });
+
+  it('should still pass merge: true in the auto-merge fallback when skipMerge is false on success', async () => {
+    await cleanupAgentWorktree('agent-1', true, { openPR: false, skipMerge: false });
+
+    expect(removeWorktree).toHaveBeenCalledWith(
+      'agent-1', '/mock/workspace', 'cos/task-abc123', { merge: true }
+    );
+  });
+});
+
+describe('spawnReviewLoopFollowUp', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    addTask.mockResolvedValue({ id: 'sys-rl-x' });
+  });
+
+  it('should not spawn when prUrl is missing', async () => {
+    const result = await spawnReviewLoopFollowUp({
+      originalAgentId: 'agent-1', originalTask: { id: 'task-1' },
+      prUrl: null, prBranch: 'cos/x/agent-1', sourceWorkspace: '/ws'
+    });
+    expect(result).toBeNull();
+    expect(addTask).not.toHaveBeenCalled();
+  });
+
+  it('should not spawn when prBranch is missing', async () => {
+    const result = await spawnReviewLoopFollowUp({
+      originalAgentId: 'agent-1', originalTask: { id: 'task-1' },
+      prUrl: 'https://github.com/o/r/pull/1', prBranch: null, sourceWorkspace: '/ws'
+    });
+    expect(result).toBeNull();
+    expect(addTask).not.toHaveBeenCalled();
+  });
+
+  it('should skip spawning for GitLab MR URLs (Copilot is GitHub-only)', async () => {
+    const result = await spawnReviewLoopFollowUp({
+      originalAgentId: 'agent-1', originalTask: { id: 'task-1' },
+      prUrl: 'https://gitlab.com/group/proj/-/merge_requests/5', prBranch: 'feat/x', sourceWorkspace: '/ws'
+    });
+    expect(result).toBeNull();
+    expect(addTask).not.toHaveBeenCalled();
+  });
+
+  it('should default priority to MEDIUM when originalTask omits it', async () => {
+    await spawnReviewLoopFollowUp({
+      originalAgentId: 'agent-1',
+      originalTask: { id: 'task-1', metadata: {}, description: 'X' },
+      prUrl: 'https://github.com/o/r/pull/9', prBranch: 'cos/task-1/agent-1', sourceWorkspace: '/ws'
+    });
+    expect(addTask.mock.calls[0][0].priority).toBe('MEDIUM');
   });
 });
 

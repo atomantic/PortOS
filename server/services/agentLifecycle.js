@@ -379,13 +379,21 @@ export async function spawnAgentForTask(task) {
     }
 
     if (explicitWorktree && !jiraBranchName) {
+      const existingBranch = task.metadata?.existingBranch || null;
       const { baseBranch: detectedBase } = await git.getRepoBranches(workspacePath).catch(() => ({ baseBranch: null }));
-      emitLog('info', `🌳 Worktree requested for task ${task.id} — creating isolated worktree from ${detectedBase || 'default branch'}`, {
-        taskId: task.id, app: task.metadata?.app, baseBranch: detectedBase
-      });
+      if (existingBranch) {
+        emitLog('info', `🌳 Worktree requested for task ${task.id} on existing branch ${existingBranch}`, {
+          taskId: task.id, app: task.metadata?.app, branch: existingBranch
+        });
+      } else {
+        emitLog('info', `🌳 Worktree requested for task ${task.id} — creating isolated worktree from ${detectedBase || 'default branch'}`, {
+          taskId: task.id, app: task.metadata?.app, baseBranch: detectedBase
+        });
+      }
 
       worktreeInfo = await createWorktree(agentId, workspacePath, task.id, {
-        baseBranch: detectedBase || undefined
+        baseBranch: detectedBase || undefined,
+        existingBranch: existingBranch || undefined
       }).catch(err => {
         emitLog('warn', `🌳 Worktree creation failed, using shared workspace: ${err.message}`, { taskId: task.id });
         return null;
@@ -1087,11 +1095,17 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
   if (!jiraBranch) {
     const taskOpenPR = isTruthyMeta(agent.task?.metadata?.openPR);
     const taskReviewLoop = isTruthyMeta(agent.task?.metadata?.reviewLoop);
+    // Review-loop follow-up agents already merged via `gh pr merge` in the agent
+    // body — re-merging the worktree branch into the source workspace would
+    // duplicate the squashed commits, so suppress the auto-merge fallback.
+    const taskReviewLoopFollowUp = isTruthyMeta(agent.task?.metadata?.reviewLoopFollowUp);
     const cleanupWarnings = await cleanupAgentWorktree(agentId, success, {
       openPR: taskOpenPR,
       requestCopilotReview: taskOpenPR && taskReviewLoop,
+      skipMerge: taskReviewLoopFollowUp,
       description: task?.description,
-      agentOutput: outputBuffer
+      agentOutput: outputBuffer,
+      originalTask: task
     });
 
     if (cleanupWarnings?.length > 0) {
@@ -1125,10 +1139,15 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
  * Clean up a worktree for a completed agent.
  * Reads worktree metadata from the agent's registered state and removes the worktree.
  * When openPR is true, pushes the branch and creates a PR instead of auto-merging.
- * When requestCopilotReview is also true, requests a Copilot code review on the new PR.
+ * When requestCopilotReview is also true, requests an initial Copilot review on the new
+ * PR and spawns a follow-up internal task that runs the full /do:rpr loop and merges
+ * once the review is clean — that follow-up is the part the user expects to "keep
+ * looping until ready to merge."
+ * When skipMerge is true (review-loop follow-up agents), the cleanup never auto-merges
+ * the worktree branch into the source workspace because `gh pr merge` already handled it.
  * Otherwise, merges the worktree branch back to the source branch on success.
  */
-export async function cleanupAgentWorktree(agentId, success, { openPR = false, requestCopilotReview: shouldRequestCopilot = false, description = null, agentOutput = null } = {}) {
+export async function cleanupAgentWorktree(agentId, success, { openPR = false, requestCopilotReview: shouldRequestCopilot = false, skipMerge = false, description = null, agentOutput = null, originalTask = null } = {}) {
   const { getAgent: getAgentState } = await import('./cos.js');
   const agentState = await getAgentState(agentId).catch(() => null);
   if (!agentState?.metadata?.isWorktree) return [];
@@ -1208,17 +1227,39 @@ export async function cleanupAgentWorktree(agentId, success, { openPR = false, r
       const cliName = prResult.cli || 'gh';
       emitLog('success', `🌳 Created PR: ${prResult.url} (${cliName}${prResult.account ? ` authed as ${prResult.account}` : ''})`, { agentId, branchName: worktreeBranch, cli: prResult.cli, account: prResult.account, owner: prResult.owner, host: prResult.host });
 
+      let copilotReviewOk = false;
+      let copilotReviewSkipped = false;
       if (shouldRequestCopilot) {
         const reviewResult = await git.requestCopilotReview(worktreePath, prResult.url).catch(err => ({ success: false, error: err.message }));
         if (reviewResult.success && reviewResult.skipped) {
           // Non-GitHub forge (e.g. GitLab MR) — Copilot reviewer doesn't exist there. Log info, no warning.
           emitLog('info', `🤖 Skipping Copilot review request for ${prResult.url} (non-GitHub forge)`, { agentId, prUrl: prResult.url });
+          copilotReviewSkipped = true;
         } else if (reviewResult.success) {
           emitLog('success', `🤖 Requested Copilot review on ${prResult.url}`, { agentId, prUrl: prResult.url });
+          copilotReviewOk = true;
         } else {
           emitLog('warn', `🤖 Failed to request Copilot review on ${prResult.url}: ${reviewResult.error}`, { agentId, prUrl: prResult.url });
           warnings.push(`Copilot review request failed for ${prResult.url}: ${reviewResult.error}`);
         }
+      }
+
+      // Spawn the review-loop follow-up agent that runs /do:rpr until clean and merges.
+      // Without this, the loop stops after the initial review request — the user-reported
+      // "they only handle one review loop and then finish" bug.
+      // Only spawn for GitHub PRs (Copilot reviewer is GitHub-only) and only when the
+      // initial review request succeeded — otherwise the follow-up has nothing to wait for.
+      if (shouldRequestCopilot && copilotReviewOk && !copilotReviewSkipped) {
+        await spawnReviewLoopFollowUp({
+          originalAgentId: agentId,
+          originalTask,
+          prUrl: prResult.url,
+          prBranch: worktreeBranch,
+          sourceWorkspace
+        }).catch(err => {
+          emitLog('warn', `🤖 Failed to spawn review-loop follow-up for ${prResult.url}: ${err.message}`, { agentId, prUrl: prResult.url });
+          warnings.push(`Review-loop follow-up spawn failed for ${prResult.url}: ${err.message}`);
+        });
       }
 
       const result = await removeWorktree(agentId, sourceWorkspace, worktreeBranch, { merge: false }).catch(err => {
@@ -1235,17 +1276,88 @@ export async function cleanupAgentWorktree(agentId, success, { openPR = false, r
     return warnings;
   }
 
-  // Default: auto-merge on success, just cleanup on failure
-  emitLog('info', `🌳 Cleaning up worktree for agent ${agentId} (merge: ${success})`, {
-    agentId, branchName: worktreeBranch, merge: success
+  // Default: auto-merge on success, just cleanup on failure.
+  // Review-loop follow-up agents pass skipMerge: true because gh pr merge already
+  // handled the merge upstream — re-merging the worktree branch into the local
+  // source workspace would duplicate the squashed commits.
+  const shouldMerge = success && !skipMerge;
+  emitLog('info', `🌳 Cleaning up worktree for agent ${agentId} (merge: ${shouldMerge})`, {
+    agentId, branchName: worktreeBranch, merge: shouldMerge
   });
 
-  const result = await removeWorktree(agentId, sourceWorkspace, worktreeBranch, { merge: success }).catch(err => {
+  const result = await removeWorktree(agentId, sourceWorkspace, worktreeBranch, { merge: shouldMerge }).catch(err => {
     emitLog('warn', `🌳 Worktree cleanup failed for ${agentId}: ${err.message}`, { agentId });
     return { warnings: [`Worktree cleanup failed: ${err.message}`] };
   });
   warnings.push(...(result?.warnings || []));
   return warnings;
+}
+
+/**
+ * Spawn an internal follow-up task that runs the Copilot review-and-fix loop
+ * (per /do:rpr) on the just-created PR until it has zero unresolved comments,
+ * then merges the PR. This is what makes the user-facing "review loop" actually
+ * loop — the original agent only requests the *initial* Copilot review and
+ * exits; without this follow-up, the loop ends after one iteration and the PR
+ * is never merged.
+ *
+ * The follow-up task uses an isolated worktree attached to the existing PR
+ * branch (via createWorktree's `existingBranch` option) so it can fix-and-push
+ * without trampling concurrent agents.
+ */
+export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, prUrl, prBranch, sourceWorkspace }) {
+  if (!prUrl || !prBranch) return null;
+
+  const parsedPr = git.parsePullRequestUrl(prUrl);
+  // Copilot loop is only meaningful on GitHub — on other forges, skip silently
+  if (parsedPr && parsedPr.host && parsedPr.host !== 'github.com') return null;
+
+  const appId = originalTask?.metadata?.app || null;
+  const sourceTaskDesc = originalTask?.description || 'CoS automated task';
+  const firstLine = sourceTaskDesc.split(/[\r\n]/).find(l => l.trim()) || sourceTaskDesc;
+  const followUpTitle = `[Review Loop] ${firstLine.trim().substring(0, 80)} (${prUrl})`;
+
+  const followUpTaskId = `sys-rl-${Date.now().toString(36)}`;
+  const followUpTask = {
+    id: followUpTaskId,
+    status: 'pending',
+    priority: (originalTask?.priority || 'MEDIUM').toUpperCase(),
+    priorityValue: 2,
+    description: followUpTitle,
+    metadata: {
+      app: appId,
+      // useWorktree is required so the follow-up runs in isolation; existingBranch
+      // tells createWorktree to attach to the PR branch instead of cutting a new one.
+      useWorktree: true,
+      existingBranch: prBranch,
+      // openPR/reviewLoop must stay false so cleanup doesn't try to create another PR
+      // or request another initial review (the agent itself drives the loop)
+      openPR: false,
+      reviewLoop: false,
+      simplify: false,
+      // Marker flags consumed by the agent prompt + completion handler
+      reviewLoopFollowUp: true,
+      reviewLoopPRUrl: prUrl,
+      reviewLoopPRBranch: prBranch,
+      reviewLoopPRNumber: parsedPr?.number ?? null,
+      reviewLoopPRHost: parsedPr?.host ?? null,
+      reviewLoopPROwner: parsedPr?.owner ?? null,
+      reviewLoopPRRepo: parsedPr?.repo ?? null,
+      sourceTaskId: originalTask?.id || null,
+      sourceAgentId: originalAgentId || null,
+      // skipCommitCheck: this task may exit cleanly with zero new commits if the
+      // initial Copilot review came back clean. Don't false-positive that as failure.
+      readOnly: false
+    },
+    autoApproved: true,
+    section: 'pending'
+  };
+
+  await addTask(followUpTask, 'internal', { raw: true });
+  emitLog('info', `🔁 Spawned Copilot review-loop follow-up task ${followUpTaskId} for PR ${prUrl}`, {
+    taskId: followUpTaskId, prUrl, prBranch, sourceAgentId: originalAgentId, sourceTaskId: originalTask?.id
+  });
+  return followUpTask;
 }
 
 /**

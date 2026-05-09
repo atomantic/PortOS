@@ -29,6 +29,7 @@ import {
   AgentsTab,
   JobsTab,
   ScheduleTab,
+  WorkflowTab,
   DigestTab,
   GsdTab,
   ProductivityTab,
@@ -885,6 +886,11 @@ export default function ChiefOfStaff() {
         {activeTab === 'schedule' && (
           <div role="tabpanel" id="tabpanel-schedule" aria-labelledby="tab-schedule">
             <ScheduleTab apps={apps} />
+          </div>
+        )}
+        {activeTab === 'workflow' && (
+          <div role="tabpanel" id="tabpanel-workflow" aria-labelledby="tab-workflow">
+            <WorkflowTab />
           </div>
         )}
         {activeTab === 'digest' && (

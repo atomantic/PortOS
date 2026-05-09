@@ -28,19 +28,23 @@ const AUTO_GENERATED_LOCKFILES = ['package-lock.json', 'yarn.lock', 'pnpm-lock.y
  * For managed apps, the worktree is based on the latest remote default branch
  * (main/master) to ensure a clean starting point free from other agents' changes.
  *
+ * When `options.existingBranch` is provided, the worktree tracks that pre-existing
+ * branch instead of creating a new one — used for the Copilot review-loop follow-up
+ * agent that needs to address comments on a PR branch the previous agent just pushed.
+ *
  * @param {string} agentId - The agent identifier (used for branch/directory naming)
  * @param {string} sourceWorkspace - The original git repository path
  * @param {string} taskId - Task identifier (included in branch name for traceability)
  * @param {object} options - Optional configuration
  * @param {string} options.baseBranch - Branch to base the worktree on (auto-detected if omitted)
- * @returns {{ worktreePath: string, branchName: string, baseBranch: string }} paths for the new worktree
+ * @param {string} options.existingBranch - Pre-existing branch to attach (creates from origin/<branch> if no local copy)
+ * @returns {{ worktreePath: string, branchName: string, baseBranch: string|null, existingBranch?: boolean }} paths for the new worktree
  */
 export async function createWorktree(agentId, sourceWorkspace, taskId, options = {}) {
   if (!existsSync(WORKTREES_DIR)) {
     await ensureDir(WORKTREES_DIR);
   }
 
-  const branchName = `cos/${taskId}/${agentId}`;
   const worktreePath = join(WORKTREES_DIR, agentId);
 
   // Fetch latest from origin so we base off up-to-date refs
@@ -50,6 +54,23 @@ export async function createWorktree(agentId, sourceWorkspace, taskId, options =
       console.log(`⚠️ Worktree fetch failed (will use local refs): ${err.message}`);
       return false;
     });
+
+  // Existing-branch path: attach the worktree to a branch that already lives on
+  // the remote (e.g. the PR branch from the previous agent in a review loop).
+  if (options.existingBranch) {
+    const branchName = options.existingBranch;
+    const localExists = (await execGit(['branch', '--list', branchName], sourceWorkspace, { ignoreExitCode: true })).stdout.trim();
+    if (localExists) {
+      await execGit(['worktree', 'add', worktreePath, branchName], sourceWorkspace);
+    } else {
+      // Use -B (force-create) so we don't fail if a stale local ref exists; track origin
+      await execGit(['worktree', 'add', '-B', branchName, worktreePath, `origin/${branchName}`], sourceWorkspace);
+    }
+    console.log(`🌳 Created worktree for ${agentId} at ${worktreePath} on existing branch ${branchName}`);
+    return { worktreePath, branchName, baseBranch: null, existingBranch: true };
+  }
+
+  const branchName = `cos/${taskId}/${agentId}`;
 
   // Determine the base: explicit option > remote default branch > current HEAD
   let baseBranch = options.baseBranch;

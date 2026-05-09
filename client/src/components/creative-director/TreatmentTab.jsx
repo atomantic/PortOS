@@ -37,6 +37,7 @@ export default function TreatmentTab({ project }) {
                 </div>
                 <span className="text-xs text-port-text-muted">
                   {s.durationSeconds}s {s.useContinuationFromPrior ? '· continues' : s.sourceImageFile ? '· from image' : '· text-to-video'}
+                  {typeof s.imageStrength === 'number' && ` · str ${s.imageStrength}`}
                 </span>
               </div>
               <pre className="whitespace-pre-wrap text-xs text-port-text-muted font-mono mt-2">{s.prompt}</pre>

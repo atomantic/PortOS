@@ -872,6 +872,13 @@ export const creativeDirectorSceneSchema = z.object({
   durationSeconds: z.number().min(1).max(10),
   useContinuationFromPrior: z.boolean().default(false),
   sourceImageFile: safeBasename.nullable().optional(),
+  // How strongly the source image conditions the i2v render. 1.0 = preserve
+  // source closely; lower values give the model more freedom to drift.
+  // Null lets the runtime pick — `sceneRunner.js` applies 0.85 as the
+  // default for continuation scenes (anchors the next clip to the prior
+  // last-frame so renders don't drift hard), and leaves it null otherwise
+  // (mlx_video / dgrauet uses its own default).
+  imageStrength: z.number().min(0).max(1).nullable().optional(),
   status: z.enum(SCENE_STATUSES).default('pending'),
   retryCount: z.number().int().min(0).max(10).default(0),
   renderedJobId: z.string().max(64).nullable().optional(),
@@ -899,6 +906,10 @@ export const creativeDirectorSceneUpdateSchema = z.object({
   retryCount: z.number().int().min(0).max(10).optional(),
   renderedJobId: z.string().max(64).nullable().optional(),
   prompt: z.string().min(1).max(8000).optional(),
+  // Evaluator may adjust per-scene strength on retry — e.g. drop from
+  // 0.85 → 0.6 when the seed image is too dominant or raise toward 1.0
+  // when continuation drifted.
+  imageStrength: z.number().min(0).max(1).nullable().optional(),
   evaluation: z.object({
     score: z.number().min(0).max(1).optional(),
     notes: z.string().max(2000).optional(),

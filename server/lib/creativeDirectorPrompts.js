@@ -105,6 +105,11 @@ function buildEvaluateView(project, scene) {
     : (scene.sourceImageFile
         ? `seeded from image \`${scene.sourceImageFile}\``
         : 'text-to-video');
+  // Surface the per-scene imageStrength so the evaluator can see what the
+  // current setting was (and whether to nudge it on retry). Continuation
+  // scenes default to 0.85 in sceneRunner; for the prompt we show the
+  // explicit value (if any) so the agent can reason about the actual knob.
+  const hasImageStrength = typeof scene.imageStrength === 'number';
   return {
     project: buildProjectView(project),
     aspect,
@@ -119,6 +124,8 @@ function buildEvaluateView(project, scene) {
       nextRetryCount,
       positionLabel,
       strategy,
+      hasImageStrength,
+      imageStrength: hasImageStrength ? scene.imageStrength : null,
     },
     render: renderParams,
     multiFrame: frames.length >= 2,

@@ -181,3 +181,32 @@ describe('buildEvaluatePrompt — scene metadata', () => {
     expect(out).toContain('Strategy: seeded from image `hero.png`');
   });
 });
+
+describe('buildEvaluatePrompt — imageStrength surfacing', () => {
+  it('shows the explicit imageStrength when the scene has one set', async () => {
+    const out = await buildEvaluatePrompt(baseProject, {
+      ...baseScene,
+      evaluationFrames: [],
+      imageStrength: 0.6,
+    });
+    expect(out).toContain('Image strength: 0.6');
+    expect(out).not.toContain('Image strength: default');
+  });
+
+  it('falls back to "default" wording when imageStrength is unset', async () => {
+    const out = await buildEvaluatePrompt(baseProject, {
+      ...baseScene,
+      evaluationFrames: [],
+    });
+    expect(out).toContain('Image strength: default');
+  });
+
+  it('treats null imageStrength like unset (use defaults)', async () => {
+    const out = await buildEvaluatePrompt(baseProject, {
+      ...baseScene,
+      evaluationFrames: [],
+      imageStrength: null,
+    });
+    expect(out).toContain('Image strength: default');
+  });
+});

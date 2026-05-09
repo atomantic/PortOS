@@ -23,6 +23,8 @@ Your ONLY job is to evaluate a freshly-rendered scene and decide whether it work
 - Render prompt: {{scene.promptJson}}
 - Render: `{{render.width}}×{{render.height}}`, {{render.numFrames}} frames @ {{render.fps}}fps
 - Strategy: {{scene.strategy}}
+{{#scene.hasImageStrength}}- Image strength: {{scene.imageStrength}} (0–1; higher = stick closer to source image){{/scene.hasImageStrength}}
+{{^scene.hasImageStrength}}- Image strength: default (continuation: 0.85; otherwise renderer default){{/scene.hasImageStrength}}
 - Retry count: {{scene.retryCount}} (max 3)
 - Rendered video: `/data/videos/{{scene.renderedJobId}}.mp4`
 {{#multiFrame}}
@@ -83,7 +85,7 @@ Content-Type: application/json
 ```
 Do NOT issue this POST for the retry or failed branches below — rejected renders should not enter the collection.
 
-**If the render misses the mark and retries are still available** (`retryCount < 3`): tweak the prompt and request a re-render. The server will run the new render and then send you back here for another evaluation.
+**If the render misses the mark and retries are still available** (`retryCount < 3`): tweak the prompt and request a re-render. The server will run the new render and then send you back here for another evaluation. You may also adjust `imageStrength` (0.0–1.0) on i2v scenes — drop it (e.g. 0.85 → 0.6) when the seed image is dominating and the prompt isn't expressed; raise it (e.g. → 0.95) when continuation drifted too far from the prior scene. Omit `imageStrength` from the PATCH to leave it unchanged.
 ```json
 {
   "status": "pending",
