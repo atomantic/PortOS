@@ -559,7 +559,6 @@ const finishCalibration = () => {
   const floor = samples[Math.floor(samples.length * 0.5)] ?? samples[samples.length - 1];
   offRms = Math.max(VAD.minOffRms, floor * 2.0);
   onRms = Math.min(VAD.maxOnRms, Math.max(VAD.minOnRms, floor * 4.0, offRms * 2));
-  // eslint-disable-next-line no-console
   console.log(`🎙️  [vad] calibrated floor=${floor.toFixed(4)} → on=${onRms.toFixed(4)} off=${offRms.toFixed(4)}`);
 };
 
@@ -591,7 +590,6 @@ const handleFrame = (frame) => {
 
   if (VAD.debug && now - lastDebugLogAt > 250) {
     lastDebugLogAt = now;
-    // eslint-disable-next-line no-console
     console.log(`[vad] state=${vadState} rms=${rms.toFixed(4)} on=${onRms.toFixed(4)} off=${offRms.toFixed(4)} tts=${isTtsActive()}`);
   }
 
@@ -764,7 +762,6 @@ const SpeechRecognition = typeof window !== 'undefined'
 
 let webSpeechRecognition = null;
 let webSpeechShouldListen = false;
-let webSpeechCallbacks = null;
 // Chrome fires onend immediately when a mic error, OS permission flicker, or
 // driver glitch prevents recognition from ever binding. Blindly calling
 // start() from onend in that state hot-loops the CPU. Count consecutive
@@ -861,7 +858,6 @@ export const startWebSpeechCapture = ({ language, ...callbacks } = {}) => {
 
   webSpeechRecognition = recognition;
   webSpeechShouldListen = true;
-  webSpeechCallbacks = callbacks;
   webSpeechRestartFailures = 0;
   recognition.start();
 };
@@ -875,7 +871,6 @@ export const stopWebSpeechCapture = () => {
     webSpeechRecognition.stop();
     webSpeechRecognition = null;
   }
-  webSpeechCallbacks = null;
 };
 
 export const isWebSpeechCapturing = () => webSpeechShouldListen;

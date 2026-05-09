@@ -5,7 +5,6 @@ import toast from '../components/ui/Toast';
 import * as api from '../services/api';
 import socket from '../services/socket';
 import { processScreenshotUploads } from '../utils/fileUpload';
-import BrailleSpinner from '../components/BrailleSpinner';
 import { filterSelectableModels } from '../utils/providers';
 
 export function RunnerPage() {

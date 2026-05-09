@@ -45,6 +45,7 @@ import {
   compareSnapshotsInputSchema
 } from '../lib/digitalTwinValidation.js';
 import * as timeCapsuleService from '../services/timeCapsule.js';
+import { UUID_RE } from '../lib/fileUtils.js';
 
 const router = Router();
 
@@ -666,7 +667,7 @@ router.post('/snapshots', asyncHandler(async (req, res) => {
  */
 router.get('/snapshots/:id', asyncHandler(async (req, res) => {
   const { id } = req.params;
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+  if (!UUID_RE.test(id)) {
     throw new ServerError('Invalid snapshot ID', { status: 400 });
   }
   const snapshot = await timeCapsuleService.getSnapshot(id);
@@ -682,7 +683,7 @@ router.get('/snapshots/:id', asyncHandler(async (req, res) => {
  */
 router.delete('/snapshots/:id', asyncHandler(async (req, res) => {
   const { id } = req.params;
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+  if (!UUID_RE.test(id)) {
     throw new ServerError('Invalid snapshot ID', { status: 400 });
   }
   const deleted = await timeCapsuleService.deleteSnapshot(id);
