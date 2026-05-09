@@ -34,7 +34,7 @@ export function initWorldBuilderCollectionHook() {
           // expected when batchPerVariation > 1 and the gen output collides;
           // anything else is a real bookkeeping miss worth logging.
           if (err?.code === ERR_DUPLICATE) return true;
-          console.log(`⚠️ world-builder collection hook failed for ${filename}: ${err.message}`);
+          console.log(`⚠️ world-builder collection hook failed for ${filename}: ${err?.message || String(err)}`);
           return false;
         });
       if (added) {

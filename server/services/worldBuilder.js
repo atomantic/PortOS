@@ -4,7 +4,7 @@
  * Stores user-created "world templates" — sci-fi/fantasy/etc. universe
  * descriptions expanded by an LLM into a structured prompt set:
  *
- *   - styleTemplate (positive style fragment + negative prompt)
+ *   - stylePrompt + negativePrompt (positive style fragment + negative prompt)
  *   - categories: landscapes / environments / characters / structures / vehicles
  *     (each with a list of `variations` — short prompt fragments)
  *
@@ -266,7 +266,7 @@ export function compilePrompts(world, options = {}) {
           label: variation.label,
           prompt,
           negativePrompt,
-          variationIndex: i,
+          batchIndex: i,
         });
       }
     }

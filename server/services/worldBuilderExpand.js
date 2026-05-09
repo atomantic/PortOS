@@ -72,7 +72,7 @@ async function callLLM(provider, model, prompt) {
             resolve(text);
           }
         },
-        provider.timeout || 300000,
+        provider.timeout ?? 300000,
       ).catch(reject);
     } else {
       executeApiRun(
@@ -98,9 +98,21 @@ const extractJson = (raw) => {
   // Strip ```json fences if present.
   const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/);
   if (fence) s = fence[1].trim();
-  // Find the first { … } block — guards against preamble like "Here is…".
-  const obj = s.match(/\{[\s\S]*\}/);
-  if (obj) s = obj[0];
+  // Extract the first complete brace-balanced { … } block — guards against
+  // preamble ("Here is…") and trailing junk after the JSON object.
+  const start = s.indexOf('{');
+  if (start !== -1) {
+    let depth = 0;
+    let end = -1;
+    for (let i = start; i < s.length; i += 1) {
+      if (s[i] === '{') depth += 1;
+      else if (s[i] === '}') {
+        depth -= 1;
+        if (depth === 0) { end = i; break; }
+      }
+    }
+    if (end !== -1) s = s.slice(start, end + 1);
+  }
   return JSON.parse(s);
 };
 
@@ -116,11 +128,13 @@ const normalizeCategories = (raw) => {
     else if (Array.isArray(node?.variations)) variations = node.variations;
     out[key] = {
       variations: variations.map((v) => {
-        if (typeof v === 'string') return { label: v.slice(0, 80), prompt: v };
-        return {
-          label: typeof v?.label === 'string' ? v.label : '',
-          prompt: typeof v?.prompt === 'string' ? v.prompt : '',
-        };
+        if (typeof v === 'string') {
+          const trimmed = v.trim();
+          return { label: trimmed.slice(0, 80), prompt: trimmed };
+        }
+        const label = typeof v?.label === 'string' ? v.label.trim().slice(0, 80) : '';
+        const prompt = typeof v?.prompt === 'string' ? v.prompt.trim() : '';
+        return { label, prompt };
       }).filter((v) => v.label && v.prompt),
     };
   }
