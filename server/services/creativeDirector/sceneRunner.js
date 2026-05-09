@@ -43,15 +43,17 @@ const MAX_SCENE_RETRIES = 3;
 
 // Default i2v conditioning strength applied when the scene asks for
 // continuation but the agent didn't pin a value. mlx_video maps strength to
-// mask=(1.0 - strength), so 0.85 keeps the prior scene's last frame as a
-// strong seed (composition / palette / subject hold) while still leaving
-// room for the prompt to drive motion. Without this default, mlx_video
-// falls back to its own 1.0 and renders drift hard from the seed when the
-// prompt nudges the scene in a new direction (the "blue ball continuation
-// generates a totally new scene" symptom from PLAN.md). Picked at 0.85
-// rather than 1.0 because pinning the seed too tightly produces nearly
-// frozen video — there has to be enough denoising headroom for the
-// promptable motion to actually happen.
+// mask=(1.0 - strength), so 1.0 fully preserves the source latent (= nearly
+// frozen reference frame) and 0.0 fully denoises (= text-to-video, source
+// ignored). Leaving the value unset lets mlx_video's own 1.0 default kick in,
+// which over-constrains the render against the seed; the prompt has no
+// denoising headroom to drive motion, so continuation scenes either freeze
+// or — when the prompt fights the seed hard — fall apart in unpredictable
+// ways (the "blue ball continuation generates a totally new scene that
+// loosely starts from the seed" symptom from PLAN.md). 0.85 keeps the prior
+// scene's last frame as a strong seed (composition / palette / subject
+// hold) while still leaving enough denoising headroom for the prompt to
+// drive promptable motion across the scene.
 const DEFAULT_CONTINUATION_IMAGE_STRENGTH = 0.85;
 
 /**

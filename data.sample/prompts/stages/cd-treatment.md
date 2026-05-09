@@ -59,7 +59,7 @@ Content-Type: application/json
       "useContinuationFromPrior": false,
       "sourceImageFile": {{startingImageFileLiteral}}
     },
-    { "sceneId": "scene-2", "order": 1, ..., "useContinuationFromPrior": true, "imageStrength": 0.85 },
+    { "sceneId": "scene-2", "order": 1, ..., "useContinuationFromPrior": true },
     { "sceneId": "scene-3", "order": 2, ..., "useContinuationFromPrior": true, "imageStrength": 0.6 }
   ]
 }

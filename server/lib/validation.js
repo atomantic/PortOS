@@ -874,12 +874,13 @@ export const creativeDirectorSceneSchema = z.object({
   sourceImageFile: safeBasename.nullable().optional(),
   // i2v conditioning strength. mlx_video maps this to mask = 1.0 - strength,
   // so 1.0 preserves the source latent (= near-frozen reference) and 0.0
-  // fully denoises (= text-to-video, source ignored). Continuation renders
-  // were drifting hard from the seed when this stayed unset (mlx_video
-  // default is 1.0 but the agent prompt may steer the scene away from the
-  // seed). Surfacing it as a per-scene knob lets the agent pin around 0.85
-  // for tight continuations or drop lower when the prompt deliberately
-  // changes subject.
+  // fully denoises (= text-to-video, source ignored). Leaving this unset
+  // hands control to mlx_video's own 1.0 default, which over-constrains the
+  // render against the seed — continuation scenes either freeze or, when
+  // the prompt fights the seed, produce the "loosely starts from the seed"
+  // failure mode noted in PLAN.md. Surfacing it as a per-scene knob lets
+  // the agent pin around 0.85 for tight-but-promptable continuations or
+  // drop lower when the prompt deliberately changes subject.
   imageStrength: z.number().min(0).max(1).nullable().optional(),
   status: z.enum(SCENE_STATUSES).default('pending'),
   retryCount: z.number().int().min(0).max(10).default(0),
