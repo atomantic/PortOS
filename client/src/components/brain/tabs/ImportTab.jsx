@@ -13,6 +13,7 @@ import {Upload,
 import * as api from '../../../services/api';
 import toast from '../../ui/Toast';
 import BrailleSpinner from '../../BrailleSpinner';
+import { formatBytes } from '../../../utils/formatters';
 
 // Sources we plan to support. Only `available` ones are clickable.
 const SOURCES = [
@@ -51,15 +52,6 @@ const STEPS = [
   { id: 'run', label: 'Import' },
   { id: 'done', label: 'Done' }
 ];
-
-const formatBytes = (bytes) => {
-  if (!bytes) return '0 B';
-  const units = ['B', 'KB', 'MB', 'GB'];
-  let i = 0;
-  let n = bytes;
-  while (n >= 1024 && i < units.length - 1) { n /= 1024; i += 1; }
-  return `${n.toFixed(n < 10 ? 1 : 0)} ${units[i]}`;
-};
 
 const formatDate = (iso) => {
   if (!iso) return '—';

@@ -59,7 +59,7 @@ export default function MediaCollectionDetail() {
     setVideosById(new Map((videos || []).map((v) => [v.id, v])));
     setLoading(false);
   };
-  useEffect(() => { refresh(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [id]);
+  useEffect(() => { refresh();   }, [id]);
 
   const items = useMemo(
     () => collection ? hydrate(collection, imagesByName, videosById) : [],
