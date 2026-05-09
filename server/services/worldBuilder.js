@@ -170,14 +170,28 @@ export async function updateWorld(id, patch = {}) {
   const idx = state.worlds.findIndex((w) => w.id === id);
   if (idx < 0) throw makeErr(`World not found: ${id}`, ERR_NOT_FOUND);
   const cur = state.worlds[idx];
+
+  // Merge `categories` per-key — a partial PATCH that only includes
+  // `landscapes` must NOT wipe characters/structures/etc. Whole categories
+  // not present in the patch are kept as-is from the current world.
+  const mergedCategories = 'categories' in patch
+    ? { ...cur.categories, ...(patch.categories || {}) }
+    : cur.categories;
+
+  // Merge `llm` field-by-field — sending only `{ provider }` shouldn't
+  // clear `model` and vice versa.
+  const mergedLlm = 'llm' in patch
+    ? { ...(cur.llm || {}), ...(patch.llm || {}) }
+    : cur.llm;
+
   const merged = sanitizeTemplate({
     ...cur,
     ...('name' in patch ? { name: patch.name } : {}),
     ...('starterPrompt' in patch ? { starterPrompt: patch.starterPrompt } : {}),
     ...('stylePrompt' in patch ? { stylePrompt: patch.stylePrompt } : {}),
     ...('negativePrompt' in patch ? { negativePrompt: patch.negativePrompt } : {}),
-    ...('categories' in patch ? { categories: patch.categories } : {}),
-    ...('llm' in patch ? { llm: patch.llm } : {}),
+    categories: mergedCategories,
+    llm: mergedLlm,
     updatedAt: new Date().toISOString(),
   });
   if (!merged) throw makeErr('Invalid world payload', ERR_VALIDATION);

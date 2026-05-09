@@ -332,7 +332,12 @@ export default function WorldBuilder() {
             <div>
               <label className="text-xs text-gray-400 mb-1 block">LLM for expansion</label>
               <select
-                value={draft.llm?.provider || activeProviderId || ''}
+                // Bind to `?? ''` (NOT `|| activeProviderId || ''`) — when
+                // provider is null/unset, the empty value should select the
+                // "Active provider" option, not silently switch the dropdown
+                // to the active provider's explicit option (which would
+                // misrepresent saved state as a pinned provider).
+                value={draft.llm?.provider ?? ''}
                 onChange={(e) => updateDraft({ llm: { ...draft.llm, provider: e.target.value || null, model: null } })}
                 className="w-full bg-port-bg border border-port-border rounded px-2 py-2 text-white text-sm min-h-[40px]"
               >
@@ -505,8 +510,14 @@ function CategoryEditor({ category, variations, onChange }) {
   };
 
   const saveEdit = () => {
+    const label = editLabel.trim();
+    const prompt = editPrompt.trim();
+    // Mirror addVariation()'s validation — server-side sanitize would drop
+    // a blank entry on save/reload, so refuse rather than store ghost rows
+    // the user can't see why they vanished.
+    if (!label || !prompt) return;
     const next = [...variations];
-    next[editIdx] = { label: editLabel.trim().slice(0, 120), prompt: editPrompt.trim().slice(0, 2000) };
+    next[editIdx] = { label: label.slice(0, 120), prompt: prompt.slice(0, 2000) };
     onChange(next);
     setEditIdx(null);
   };

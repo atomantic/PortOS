@@ -15,25 +15,35 @@ import { mediaJobEvents } from './mediaJobQueue/index.js';
 import { addItem, ERR_DUPLICATE } from './mediaCollections.js';
 
 export function initWorldBuilderCollectionHook() {
-  mediaJobEvents.on('completed', async (job) => {
-    if (!job || job.kind !== 'image') return;
-    const tag = job.params?.worldRun;
-    if (!tag?.collectionId) return;
-    const filename = job.result?.filename;
-    if (!filename || typeof filename !== 'string') return;
-    const added = await addItem(tag.collectionId, { kind: 'image', ref: filename })
-      .then(() => true)
-      .catch((err) => {
-        // A duplicate (same filename rendered twice in the same run) is
-        // expected when batchPerVariation > 1 and the gen output collides;
-        // anything else is a real bookkeeping miss worth logging.
-        if (err?.code === ERR_DUPLICATE) return true;
-        console.log(`⚠️ world-builder collection hook failed for ${filename}: ${err.message}`);
-        return false;
-      });
-    if (added) {
-      console.log(`🌍 world-builder run=${tag.runId?.slice(0, 8)} category=${tag.category} → ${filename}`);
-    }
+  // EventEmitter does not await async listeners and does not catch their
+  // rejections — any throw here would surface as an unhandled promise
+  // rejection (process-killing on Node ≥15). Use a sync listener that
+  // launches an async IIFE with a top-level catch so this bookkeeping
+  // miss can never crash the server or fail the user's render.
+  mediaJobEvents.on('completed', (job) => {
+    void (async () => {
+      if (!job || job.kind !== 'image') return;
+      const tag = job.params?.worldRun;
+      if (!tag?.collectionId) return;
+      const filename = job.result?.filename;
+      if (!filename || typeof filename !== 'string') return;
+      const added = await addItem(tag.collectionId, { kind: 'image', ref: filename })
+        .then(() => true)
+        .catch((err) => {
+          // A duplicate (same filename rendered twice in the same run) is
+          // expected when batchPerVariation > 1 and the gen output collides;
+          // anything else is a real bookkeeping miss worth logging.
+          if (err?.code === ERR_DUPLICATE) return true;
+          console.log(`⚠️ world-builder collection hook failed for ${filename}: ${err.message}`);
+          return false;
+        });
+      if (added) {
+        console.log(`🌍 world-builder run=${tag.runId?.slice(0, 8)} category=${tag.category} → ${filename}`);
+      }
+    })().catch((err) => {
+      // Last-resort net for synchronous throws (unexpected job shape, etc).
+      console.log(`⚠️ world-builder collection hook crashed: ${err?.message || err}`);
+    });
   });
   console.log('🌍 World Builder collection hook initialized');
 }
