@@ -234,6 +234,9 @@ export const toggleCosJob = (id) => request(`/cos/jobs/${id}/toggle`, { method: 
 export const triggerCosJob = (id) => request(`/cos/jobs/${id}/trigger`, { method: 'POST' });
 export const deleteCosJob = (id) => request(`/cos/jobs/${id}`, { method: 'DELETE' });
 
+// Workflow visualizer — canonical scheduled-task ordering across tasks + jobs
+export const getCosWorkflow = () => request('/cos/workflow');
+
 // Feature Agents
 export const getFeatureAgents = () => request('/feature-agents');
 export const getFeatureAgent = (id) => request(`/feature-agents/${id}`);

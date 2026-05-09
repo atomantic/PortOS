@@ -2,6 +2,8 @@
 
 ## Added
 
+- **Workflow tab in Chief of Staff with canonical project-maintenance ordering.** A new `/cos/workflow` page (and a `Workflow` tab in the CoS panel) renders the full set of scheduled tasks and autonomous jobs as a left-to-right pipeline grouped into seven canonical stages — Hygiene → Review → Plan → Audit → Build → Report → Ambient — so it's obvious which work happens before which. Each card surfaces its own schedule, last-run time, run count, enabled state, and live "due / waiting / disabled / waiting-on-dependencies" badge, plus inline `runAfter` arrows showing hard prerequisites. Backed by a new `GET /api/cos/workflow` endpoint and `server/services/workflow.js` with stage definitions, gate state for jobs, and dependency edges. Two default `runAfter` wirings ship with this: `do-replan` runs after `pr-reviewer` and `branch-cleanup` (so the plan reflects merged reality), and `feature-ideas` runs after `do-replan` (so new feature work lands on a fresh plan). Both can be overridden per task or per app from the existing Schedule tab.
+
 - **Dismissible AI Recommendations on the Learning tab.** Each recommendation in the Chief of Staff Learning Analytics panel now has an X to dismiss it. Dismissals persist to `data/cos/dismissed-recommendations.json` and are filtered out of future loads. For count-based alerts (e.g., "unknown errors occurred 74 times"), the dismissal records the count snapshot and only re-surfaces if the count grows materially worse (≥1.5× and at least +20). Rate-based recommendations stay dismissed until restored. A "Show dismissed" expander lets you restore individual entries or clear them all.
 
 ## Fixed

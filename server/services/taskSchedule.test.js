@@ -375,8 +375,9 @@ describe('taskSchedule', () => {
     it('should run daily task when enough time has passed', async () => {
       const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString()
 
+      // Explicit runAfter: [] overrides the feature-ideas default that depends on do-replan
       mockSchedule({
-        tasks: { 'feature-ideas': { type: 'daily', enabled: true, providerId: null, model: null, prompt: null } },
+        tasks: { 'feature-ideas': { type: 'daily', enabled: true, providerId: null, model: null, prompt: null, runAfter: [] } },
         executions: { 'task:feature-ideas': { lastRun: twoDaysAgo, count: 1, perApp: {} } }
       })
 
@@ -389,13 +390,45 @@ describe('taskSchedule', () => {
       const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString()
 
       mockSchedule({
-        tasks: { 'feature-ideas': { type: 'daily', enabled: true, providerId: null, model: null, prompt: null } },
+        tasks: { 'feature-ideas': { type: 'daily', enabled: true, providerId: null, model: null, prompt: null, runAfter: [] } },
         executions: { 'task:feature-ideas': { lastRun: oneHourAgo, count: 5, perApp: {} } }
       })
 
       const result = await shouldRunTask('feature-ideas')
       expect(result.shouldRun).toBe(false)
       expect(result.reason).toContain('daily-cooldown')
+    })
+
+    it('feature-ideas waits on do-replan (runAfter default)', async () => {
+      const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString()
+
+      // Default runAfter:['do-replan'] kicks in since the test doesn't override it
+      mockSchedule({
+        tasks: { 'feature-ideas': { type: 'daily', enabled: true, providerId: null, model: null, prompt: null } },
+        executions: { 'task:feature-ideas': { lastRun: twoDaysAgo, count: 1, perApp: {} } }
+      })
+
+      const result = await shouldRunTask('feature-ideas')
+      expect(result.shouldRun).toBe(false)
+      expect(result.reason).toBe('waiting-on-dependencies')
+      expect(result.pendingDeps).toContain('do-replan')
+    })
+
+    it('feature-ideas runs when do-replan has run since its last run', async () => {
+      const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString()
+      const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+
+      mockSchedule({
+        tasks: { 'feature-ideas': { type: 'daily', enabled: true, providerId: null, model: null, prompt: null } },
+        executions: {
+          'task:feature-ideas': { lastRun: twoDaysAgo, count: 1, perApp: {} },
+          'task:do-replan':     { lastRun: oneDayAgo, count: 1, perApp: {} }
+        }
+      })
+
+      const result = await shouldRunTask('feature-ideas')
+      expect(result.shouldRun).toBe(true)
+      expect(result.reason).toContain('daily-due')
     })
   })
 
