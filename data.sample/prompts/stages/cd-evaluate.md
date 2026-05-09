@@ -98,6 +98,8 @@ Do NOT issue this POST for the retry or failed branches below — rejected rende
 }
 ```
 
+If the failure mode is i2v continuation drift (the prompt was a continuation but the render either drifted hard from the seed OR froze too tightly to it), you may also include `"imageStrength": 0.0–1.0` in the PATCH to tighten or loosen the seed coupling for the retry. Higher values (0.85–0.95) hold the seed tighter; lower values (0.5–0.7) let the prompt drive more change. Omit for prompt-only retries.
+
 **If retries are exhausted** (`retryCount >= 3`) and the render is still not acceptable, give up on this scene:
 ```json
 {

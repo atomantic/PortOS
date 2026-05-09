@@ -34,7 +34,8 @@ The user did not supply a story. Invent one that suits the style spec and target
 1. Design a story arc that fits ~{{project.targetDurationSeconds}}s of total runtime. Think in scenes that are 1–10 seconds each (most should be 4–6s; reserve short ones for cuts and long ones for held shots).
 2. Each scene should have a clear visual intent and a render prompt that incorporates the style spec.
 3. Decide for each scene whether it continues from the previous scene's last frame (`useContinuationFromPrior: true`) or starts from a new image (`useContinuationFromPrior: false`, optionally with a `sourceImageFile` basename if you want to seed from a specific gallery image). Scene 1 either uses the project starting image (if provided — copy its filename into `sourceImageFile`) or starts as text-to-video.
-4. Don't pad with filler; if the natural arc is shorter than the target, that's fine — produce fewer scenes.
+4. For continuation scenes (or any scene with a `sourceImageFile`), optionally set `imageStrength` (0.0–1.0) to control how tightly the render holds to the seed image. **1.0 = nearly frozen seed, 0.0 = ignore the seed entirely (text-to-video).** When the prompt continues the same shot/subject, leave it unset (server applies a sensible 0.85 default for continuation). When the prompt deliberately changes subject or moves to a new shot, drop it to ~0.55–0.7 so the render can break away from the seed. Omit the field for text-to-video scenes — it has no effect there.
+5. Don't pad with filler; if the natural arc is shorter than the target, that's fine — produce fewer scenes.
 
 ## Output contract
 
@@ -58,7 +59,8 @@ Content-Type: application/json
       "useContinuationFromPrior": false,
       "sourceImageFile": {{startingImageFileLiteral}}
     },
-    { "sceneId": "scene-2", "order": 1, ..., "useContinuationFromPrior": true }
+    { "sceneId": "scene-2", "order": 1, ..., "useContinuationFromPrior": true, "imageStrength": 0.85 },
+    { "sceneId": "scene-3", "order": 2, ..., "useContinuationFromPrior": true, "imageStrength": 0.6 }
   ]
 }
 ```

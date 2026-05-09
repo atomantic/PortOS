@@ -872,6 +872,15 @@ export const creativeDirectorSceneSchema = z.object({
   durationSeconds: z.number().min(1).max(10),
   useContinuationFromPrior: z.boolean().default(false),
   sourceImageFile: safeBasename.nullable().optional(),
+  // i2v conditioning strength. mlx_video maps this to mask = 1.0 - strength,
+  // so 1.0 preserves the source latent (= near-frozen reference) and 0.0
+  // fully denoises (= text-to-video, source ignored). Continuation renders
+  // were drifting hard from the seed when this stayed unset (mlx_video
+  // default is 1.0 but the agent prompt may steer the scene away from the
+  // seed). Surfacing it as a per-scene knob lets the agent pin around 0.85
+  // for tight continuations or drop lower when the prompt deliberately
+  // changes subject.
+  imageStrength: z.number().min(0).max(1).nullable().optional(),
   status: z.enum(SCENE_STATUSES).default('pending'),
   retryCount: z.number().int().min(0).max(10).default(0),
   renderedJobId: z.string().max(64).nullable().optional(),
@@ -899,6 +908,10 @@ export const creativeDirectorSceneUpdateSchema = z.object({
   retryCount: z.number().int().min(0).max(10).optional(),
   renderedJobId: z.string().max(64).nullable().optional(),
   prompt: z.string().min(1).max(8000).optional(),
+  // The evaluator may tweak imageStrength on retry — e.g. raise it when the
+  // continuation drifted off the seed, or drop it when the prompt asked for
+  // a deliberate scene change but mlx_video froze too tightly to the seed.
+  imageStrength: z.number().min(0).max(1).nullable().optional(),
   evaluation: z.object({
     score: z.number().min(0).max(1).optional(),
     notes: z.string().max(2000).optional(),

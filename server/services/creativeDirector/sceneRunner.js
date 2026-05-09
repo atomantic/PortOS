@@ -41,6 +41,19 @@ import { enqueueEvaluateTask } from './agentBridge.js';
 
 const MAX_SCENE_RETRIES = 3;
 
+// Default i2v conditioning strength applied when the scene asks for
+// continuation but the agent didn't pin a value. mlx_video maps strength to
+// mask=(1.0 - strength), so 0.85 keeps the prior scene's last frame as a
+// strong seed (composition / palette / subject hold) while still leaving
+// room for the prompt to drive motion. Without this default, mlx_video
+// falls back to its own 1.0 and renders drift hard from the seed when the
+// prompt nudges the scene in a new direction (the "blue ball continuation
+// generates a totally new scene" symptom from PLAN.md). Picked at 0.85
+// rather than 1.0 because pinning the seed too tightly produces nearly
+// frozen video — there has to be enough denoising headroom for the
+// promptable motion to actually happen.
+const DEFAULT_CONTINUATION_IMAGE_STRENGTH = 0.85;
+
 /**
  * Kick off a render for a single scene. Returns the jobId; the caller does
  * not need to await completion — the listener installed here will spawn
@@ -163,6 +176,22 @@ export async function runSceneRender(project, scene) {
     durationSeconds: scene.durationSeconds,
   });
 
+  // Resolve imageStrength: explicit per-scene value wins; otherwise apply
+  // the continuation default when (and only when) i2v chaining actually
+  // engaged for this render. We gate on `continuationSourceFromExtract` (not
+  // just `useContinuationFromPrior`) so a scene that asked for continuation
+  // but fell back to text-to-video doesn't get the strength forced onto a
+  // T2V render where the param is meaningless and would burn an arg slot.
+  // For non-continuation i2v (`scene.sourceImageFile` set directly), leave
+  // imageStrength null so mlx_video's own default (1.0) applies — matches
+  // pre-existing behavior.
+  let imageStrength = null;
+  if (scene.imageStrength != null) {
+    imageStrength = Number(scene.imageStrength);
+  } else if (continuationSourceFromExtract && sourceImagePath) {
+    imageStrength = DEFAULT_CONTINUATION_IMAGE_STRENGTH;
+  }
+
   const params = {
     pythonPath,
     prompt: scene.prompt,
@@ -177,6 +206,7 @@ export async function runSceneRender(project, scene) {
     tiling: 'auto',
     sourceImagePath,
     mode: sourceImagePath ? 'image' : 'text',
+    imageStrength,
     // Smoke-test / dev knob: skips the mlx_video audio-gen pass to cut
     // wall-clock per scene roughly in half. Project-level so every scene
     // in the project inherits the same setting.
