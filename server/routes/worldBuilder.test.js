@@ -48,6 +48,7 @@ vi.mock('../services/mediaCollections.js', () => ({
   createCollection: vi.fn(async ({ name }) => ({ id: 'col-1', name, items: [] })),
   addItem: vi.fn(),
   ERR_DUPLICATE: 'DUPLICATE',
+  NAME_MAX_LENGTH: 80,
 }));
 
 vi.mock('../lib/mediaModels.js', () => ({

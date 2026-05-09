@@ -20,7 +20,7 @@ import * as svc from '../services/worldBuilder.js';
 import { expandWorldTemplate } from '../services/worldBuilderExpand.js';
 import { enqueueJob } from '../services/mediaJobQueue/index.js';
 import { getSettings } from '../services/settings.js';
-import { createCollection } from '../services/mediaCollections.js';
+import { createCollection, NAME_MAX_LENGTH as COLLECTION_NAME_MAX } from '../services/mediaCollections.js';
 import { getImageModels, isFlux2 } from '../lib/mediaModels.js';
 
 const router = Router();
@@ -86,7 +86,7 @@ const selectionSchema = z.object(
 const renderSchema = z.object({
   // Optional friendly name for the resulting collection. If omitted, server
   // synthesizes "World: <name> (timestamp)".
-  collectionName: z.string().trim().min(1).max(svc.NAME_MAX_LENGTH).optional(),
+  collectionName: z.string().trim().min(1).max(COLLECTION_NAME_MAX).optional(),
   // Image-gen knobs — these mirror /api/image-gen/generate so the user can
   // pick mode/size/steps without bouncing to the Image page first.
   mode: z.enum(['external', 'local', 'codex']).optional(),
@@ -196,7 +196,7 @@ router.post('/:id/render', asyncHandler(async (req, res) => {
   const collectionName = body.collectionName?.trim()
     || `World: ${world.name} — ${new Date().toISOString().slice(0, 16).replace('T', ' ')}`;
   const collection = await createCollection({
-    name: collectionName.slice(0, svc.NAME_MAX_LENGTH),
+    name: collectionName.slice(0, COLLECTION_NAME_MAX),
     description: `World Builder run for "${world.name}" (${compiled.length} prompts)`,
   });
 

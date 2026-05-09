@@ -28,6 +28,9 @@ export const ERR_VALIDATION = 'VALIDATION_ERROR';
 const makeErr = (message, code) => Object.assign(new Error(message), { code });
 
 export const NAME_MAX_LENGTH = 100;
+// A render can enqueue up to 5 categories × 50 variations × 20 batchPerVariation
+// = 5000 jobs. Cap at 10k to leave headroom against future bumps to those caps.
+const MAX_RUN_JOB_IDS = 10000;
 export const STARTER_PROMPT_MAX = 4000;
 export const PROMPT_FRAGMENT_MAX = 2000;
 export const VARIATION_LABEL_MAX = 120;
@@ -113,7 +116,7 @@ const sanitizeRun = (raw) => {
     id: raw.id,
     worldId: raw.worldId,
     collectionId: isStr(raw.collectionId) ? raw.collectionId : null,
-    jobIds: Array.isArray(raw.jobIds) ? raw.jobIds.filter(isStr).slice(0, 1000) : [],
+    jobIds: Array.isArray(raw.jobIds) ? raw.jobIds.filter(isStr).slice(0, MAX_RUN_JOB_IDS) : [],
     promptCount: Number.isFinite(raw.promptCount) ? raw.promptCount : 0,
     createdAt: isStr(raw.createdAt) ? raw.createdAt : new Date().toISOString(),
   };
