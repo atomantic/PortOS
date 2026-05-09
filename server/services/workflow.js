@@ -127,6 +127,9 @@ function buildItemStageMap() {
  *     runAfter, gate, blocked }
  * - edges: explicit runAfter dependencies and inter-stage flow hints
  *   { from, to, kind: 'depends-on' | 'stage-flow' }
+ *   `depends-on` edges connect node ids (`task:foo` → `task:bar`).
+ *   `stage-flow` edges connect entries in the `stages` list (bare stage ids
+ *   like `plan` → `build`); they have no corresponding entries in `nodes`.
  */
 export async function getWorkflowGraph() {
   const [scheduleStatus, jobs] = await Promise.all([
@@ -173,11 +176,16 @@ export async function getWorkflowGraph() {
     }
   }
 
-  // Job nodes — include gate metadata and last-known evaluation
+  // Job nodes — include gate metadata and last-known evaluation. Gate checks may perform I/O
+  // (inbox counts, goals lookups, etc.), so run them in parallel rather than sequentially.
   const gateIds = new Set(getRegisteredGates());
-  for (const job of jobs) {
+  const gateResults = await Promise.all(
+    jobs.map(job => (gateIds.has(job.id) ? checkGateSafe(job.id) : Promise.resolve(null)))
+  );
+  for (let i = 0; i < jobs.length; i++) {
+    const job = jobs[i];
     const stageId = itemStage.get(`job:${job.id}`) || 'ambient';
-    const gateInfo = gateIds.has(job.id) ? await checkGateSafe(job.id) : null;
+    const gateInfo = gateResults[i];
     nodes.push({
       id: `job:${job.id}`,
       kind: 'job',
@@ -202,14 +210,15 @@ export async function getWorkflowGraph() {
   }
 
   // Stage-flow edges — chain stages in canonical order so the visualizer can
-  // render a left-to-right pipeline. Skip empty stages.
+  // render a left-to-right pipeline. Skip empty stages. These edges target bare
+  // stage ids (matching the `stages` list), not node ids.
   const populatedStages = WORKFLOW_STAGES.filter(stage =>
     nodes.some(n => n.stage === stage.id)
   );
   for (let i = 0; i < populatedStages.length - 1; i++) {
     edges.push({
-      from: `stage:${populatedStages[i].id}`,
-      to: `stage:${populatedStages[i + 1].id}`,
+      from: populatedStages[i].id,
+      to: populatedStages[i + 1].id,
       kind: 'stage-flow'
     });
   }

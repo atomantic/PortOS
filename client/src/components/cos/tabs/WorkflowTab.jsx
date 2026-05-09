@@ -49,10 +49,17 @@ function NodeCard({ node, allNodes, onHover, isHighlighted }) {
   const badge = statusBadge(node);
   const Icon = node.kind === 'job' ? Bot : GitBranch;
 
-  // Map runAfter task IDs to nodes for richer hover hints
+  // Map runAfter task IDs to nodes for richer hover hints. When the node is blocked on
+  // unmet dependencies, mark which prereqs are still outstanding so the user can see at
+  // a glance which gate hasn't cleared yet.
+  const pendingSet = new Set(Array.isArray(node.pendingDeps) ? node.pendingDeps : []);
   const deps = node.runAfter
-    .map(t => allNodes.find(n => n.id === `task:${t}`))
+    .map(t => {
+      const dep = allNodes.find(n => n.id === `task:${t}`);
+      return dep ? { ...dep, pending: pendingSet.has(t) } : null;
+    })
     .filter(Boolean);
+  const isWaitingOnDeps = node.blocked === 'waiting-on-dependencies';
 
   return (
     <div
@@ -83,16 +90,23 @@ function NodeCard({ node, allNodes, onHover, isHighlighted }) {
 
       {node.runAfter.length > 0 && (
         <div className="mt-1.5 flex flex-wrap gap-1">
-          {deps.map(dep => (
-            <span
-              key={dep.id}
-              className="inline-flex items-center gap-1 text-[10px] text-gray-500"
-              title={`Runs after ${dep.label}`}
-            >
-              <ArrowRight className="w-2.5 h-2.5" />
-              {dep.label}
-            </span>
-          ))}
+          {deps.map(dep => {
+            const highlightPending = isWaitingOnDeps && dep.pending;
+            return (
+              <span
+                key={dep.id}
+                className={`inline-flex items-center gap-1 text-[10px] ${
+                  highlightPending ? 'text-port-warning font-medium' : 'text-gray-500'
+                }`}
+                title={highlightPending
+                  ? `Pending — ${dep.label} hasn't run since this task last ran`
+                  : `Runs after ${dep.label}`}
+              >
+                <ArrowRight className="w-2.5 h-2.5" />
+                {dep.label}{highlightPending ? ' ⏳' : ''}
+              </span>
+            );
+          })}
         </div>
       )}
 
@@ -136,11 +150,12 @@ function StageColumn({ stage, nodes, allNodes, hoveredId, setHoveredId }) {
   );
 }
 
-// Highlight nodes that reference (or are referenced by) the hovered node
+// Highlight nodes that depend on the hovered node (i.e., the hovered node is one of their
+// runAfter prerequisites). Bidirectional highlighting (also lighting up a hovered node's own
+// prerequisites) is handled separately when the dependent node is hovered.
 function nodeReferences(node, hoveredId) {
   if (!hoveredId) return false;
-  if (node.runAfter.some(t => `task:${t}` === hoveredId)) return true;
-  return false;
+  return node.runAfter.some(t => `task:${t}` === hoveredId);
 }
 
 function StageArrow() {

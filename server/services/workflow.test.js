@@ -146,7 +146,7 @@ describe('getWorkflowGraph', () => {
 
     const graph = await getWorkflowGraph();
     const stageEdges = graph.edges.filter(e => e.kind === 'stage-flow');
-    expect(stageEdges).toEqual([{ from: 'stage:plan', to: 'stage:build', kind: 'stage-flow' }]);
+    expect(stageEdges).toEqual([{ from: 'plan', to: 'build', kind: 'stage-flow' }]);
   });
 
   it('includes gate state for jobs that have a registered gate', async () => {
