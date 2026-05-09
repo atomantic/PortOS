@@ -53,6 +53,11 @@ async function callLLM(provider, model, prompt) {
   });
   return new Promise((resolve, reject) => {
     let text = '';
+    // Both executeCliRun / executeApiRun are async — they can reject before
+    // onComplete ever fires (ensureDir/read/write failures, toolkit not
+    // initialized, provider errors). Without a rejection handler the awaiter
+    // would hang forever and Node would log an unhandledRejection. Forward
+    // the rejection through `reject` so callLLM() always settles.
     if (isCliProvider(provider)) {
       executeCliRun(
         runId,
@@ -68,7 +73,7 @@ async function callLLM(provider, model, prompt) {
           }
         },
         provider.timeout || 300000,
-      );
+      ).catch(reject);
     } else {
       executeApiRun(
         runId,
@@ -82,7 +87,7 @@ async function callLLM(provider, model, prompt) {
           if (result?.error) reject(new Error(result.error));
           else resolve(text);
         },
-      );
+      ).catch(reject);
     }
   });
 }

@@ -20,7 +20,7 @@ import * as svc from '../services/worldBuilder.js';
 import { expandWorldTemplate } from '../services/worldBuilderExpand.js';
 import { enqueueJob } from '../services/mediaJobQueue/index.js';
 import { getSettings } from '../services/settings.js';
-import { createCollection, addItem } from '../services/mediaCollections.js';
+import { createCollection } from '../services/mediaCollections.js';
 import { getImageModels, isFlux2 } from '../lib/mediaModels.js';
 
 const router = Router();
@@ -155,6 +155,16 @@ router.post('/:id/render', asyncHandler(async (req, res) => {
   const settings = await getSettings();
   const mode = body.mode || settings.imageGen?.mode || 'external';
 
+  // Reject `external` mode upfront — batch rendering against a remote SD-API
+  // would block this request for the entire batch, and we don't want to leave
+  // an orphaned media collection behind when we discover this mid-loop below.
+  if (mode !== 'local' && mode !== 'codex') {
+    throw new ServerError(
+      'Batch render requires local or codex mode — switch image-gen mode in Settings → Image Gen',
+      { status: 400, code: 'WORLD_BUILDER_EXTERNAL_UNSUPPORTED' },
+    );
+  }
+
   // Mirror the upfront validation /api/image-gen/generate does so a doomed
   // batch fails before any jobs land in the queue.
   if (mode === 'codex' && !settings.imageGen?.codex?.enabled) {
@@ -192,12 +202,17 @@ router.post('/:id/render', asyncHandler(async (req, res) => {
 
   const runId = randomUUID();
   const jobIds = [];
+  // Map cfgScale → guidance the same way /api/image-gen/generate does. The
+  // mediaJobQueue calls imageGen/local.generateImage() directly (not the
+  // dispatcher), so without this mapping the World Builder UI's CFG control
+  // would silently no-op for local renders.
+  const guidance = body.guidance ?? body.cfgScale;
   const baseParams = {
     width: body.width,
     height: body.height,
     steps: body.steps,
     cfgScale: body.cfgScale,
-    guidance: body.guidance,
+    guidance,
   };
 
   for (const item of compiled) {
@@ -225,22 +240,13 @@ router.post('/:id/render', asyncHandler(async (req, res) => {
       jobIds.push(queued.jobId);
       continue;
     }
-    if (mode === 'local') {
-      const py = settings.imageGen?.local?.pythonPath || null;
-      const queued = enqueueJob({
-        kind: 'image',
-        params: { pythonPath: py, modelId: body.modelId, ...params },
-      });
-      jobIds.push(queued.jobId);
-      continue;
-    }
-    // External SD-API: no queue. Skip — batch rendering against a remote
-    // SD-API would block this request for the entire batch. Surface the
-    // mismatch to the user with a clear error.
-    throw new ServerError(
-      'Batch render requires local or codex mode — switch image-gen mode in Settings → Image Gen',
-      { status: 400, code: 'WORLD_BUILDER_EXTERNAL_UNSUPPORTED' },
-    );
+    // mode === 'local' (validated upfront).
+    const py = settings.imageGen?.local?.pythonPath || null;
+    const queued = enqueueJob({
+      kind: 'image',
+      params: { pythonPath: py, modelId: body.modelId, ...params },
+    });
+    jobIds.push(queued.jobId);
   }
 
   const run = await svc.recordRun({
