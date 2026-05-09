@@ -291,7 +291,6 @@ export default function VideoGen() {
       })
       .catch(() => setStatus({ connected: false, reason: 'Status check failed' }))
       .finally(() => setStatusLoading(false));
-     
   }, []);
 
   useEffect(() => {
