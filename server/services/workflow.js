@@ -158,7 +158,12 @@ export async function getWorkflowGraph() {
       runCount: info.runCount || 0,
       runAfter,
       gate: null,
-      blocked: info.status?.shouldRun === false ? info.status.reason : null,
+      // Only true gating reasons (waiting on hard prerequisites) are surfaced as `blocked`
+      // — that field drives warning styling in the UI. Other shouldRun=false states (cooldown,
+      // weekday-only, disabled-for-app, etc.) are exposed via `statusReason` so the UI can
+      // render them as neutral "waiting" rather than a warning.
+      blocked: info.status?.reason === 'waiting-on-dependencies' ? info.status.reason : null,
+      statusReason: info.status?.shouldRun === false ? info.status.reason : null,
       shouldRun: info.status?.shouldRun === true,
       pendingDeps: info.status?.pendingDeps || []
     });

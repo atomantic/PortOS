@@ -4,7 +4,8 @@ import * as api from '../../../services/api';
 import { timeAgo } from '../../../utils/formatters';
 import { describeCron } from '../../../utils/cronHelpers';
 
-// Stage palette — matches port-* tokens used elsewhere
+// Stage palette — matches port-* tokens used elsewhere.
+// Keys are stage ids from the server's WORKFLOW_STAGES; ordering is server-driven (graph.stages).
 const STAGE_COLORS = {
   hygiene:  { ring: 'border-cyan-500/40',    bg: 'bg-cyan-500/5',    text: 'text-cyan-300',     dot: 'bg-cyan-500' },
   review:   { ring: 'border-purple-500/40',  bg: 'bg-purple-500/5',  text: 'text-purple-300',   dot: 'bg-purple-500' },
@@ -14,8 +15,6 @@ const STAGE_COLORS = {
   report:   { ring: 'border-pink-500/40',    bg: 'bg-pink-500/5',    text: 'text-pink-300',     dot: 'bg-pink-500' },
   ambient:  { ring: 'border-gray-600/40',    bg: 'bg-gray-600/5',    text: 'text-gray-400',     dot: 'bg-gray-500' }
 };
-
-const STAGE_ORDER = ['hygiene', 'review', 'plan', 'audit', 'build', 'report', 'ambient'];
 
 function describeSchedule(node) {
   const s = node.schedule || {};
@@ -173,8 +172,8 @@ export default function WorkflowTab() {
 
   useEffect(() => { fetchGraph(); }, [fetchGraph]);
 
-  // Stages enriched with their nodes, in canonical order, only including those that have content.
-  // Keeps node ordering stable: enabled first, then alphabetical.
+  // Stages enriched with their nodes, in canonical order from the server, only including those
+  // that have content. Keeps node ordering stable: enabled first, then alphabetical.
   const populatedStages = useMemo(() => {
     if (!graph) return [];
     const byStage = new Map();
@@ -185,11 +184,13 @@ export default function WorkflowTab() {
     for (const list of byStage.values()) {
       list.sort((a, b) => (a.enabled === b.enabled ? a.label.localeCompare(b.label) : a.enabled ? -1 : 1));
     }
-    return STAGE_ORDER
-      .map(id => {
-        const stage = graph.stages.find(s => s.id === id);
-        const nodes = byStage.get(id) || [];
-        return stage && nodes.length > 0 ? { ...stage, nodes } : null;
+    // graph.stages is already returned in canonical order; sort defensively by `order` in case
+    // a future server change emits them unordered.
+    const orderedStages = [...graph.stages].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+    return orderedStages
+      .map(stage => {
+        const nodes = byStage.get(stage.id) || [];
+        return nodes.length > 0 ? { ...stage, nodes } : null;
       })
       .filter(Boolean);
   }, [graph]);
@@ -204,9 +205,10 @@ export default function WorkflowTab() {
         <div>
           <h2 className="text-xl font-semibold text-white">Workflow</h2>
           <p className="text-sm text-gray-400 mt-1 max-w-2xl">
-            Canonical project-maintenance pipeline. Each stage runs only after the previous one
-            has cleared, so new feature work lands on top of a clean repo and a fresh plan.
-            Tasks below show their own schedule and dependency state.
+            Recommended project-maintenance pipeline. Stages are a visualization of how scheduled
+            tasks fit together — each task still runs on its own schedule. Hard execution gates
+            are enforced only by per-task <span className="font-mono text-gray-300">runAfter</span> dependencies (and per-job gates),
+            not by stage ordering.
           </p>
         </div>
         <div className="flex items-center gap-2">
