@@ -14,7 +14,14 @@
 import { mediaJobEvents } from './mediaJobQueue/index.js';
 import { addItem, ERR_DUPLICATE } from './mediaCollections.js';
 
+let initialized = false;
+
 export function initWorldBuilderCollectionHook() {
+  // Idempotent: a stray double-init (test reload, future refactor) would
+  // otherwise register two listeners and double-file every completed image.
+  if (initialized) return;
+  initialized = true;
+
   // EventEmitter does not await async listeners and does not catch their
   // rejections — any throw here would surface as an unhandled promise
   // rejection (process-killing on Node ≥15). Use a sync listener that
@@ -27,18 +34,19 @@ export function initWorldBuilderCollectionHook() {
       if (!tag?.collectionId) return;
       const filename = job.result?.filename;
       if (!filename || typeof filename !== 'string') return;
-      const added = await addItem(tag.collectionId, { kind: 'image', ref: filename })
-        .then(() => true)
+      const status = await addItem(tag.collectionId, { kind: 'image', ref: filename })
+        .then(() => 'added')
         .catch((err) => {
           // A duplicate (same filename rendered twice in the same run) is
-          // expected when batchPerVariation > 1 and the gen output collides;
-          // anything else is a real bookkeeping miss worth logging.
-          if (err?.code === ERR_DUPLICATE) return true;
+          // expected when batchPerVariation > 1 and the gen output collides.
+          if (err?.code === ERR_DUPLICATE) return 'duplicate';
           console.log(`⚠️ world-builder collection hook failed for ${filename}: ${err?.message || String(err)}`);
-          return false;
+          return 'failed';
         });
-      if (added) {
+      if (status === 'added') {
         console.log(`🌍 world-builder run=${tag.runId?.slice(0, 8)} category=${tag.category} → ${filename}`);
+      } else if (status === 'duplicate') {
+        console.log(`🌍 world-builder run=${tag.runId?.slice(0, 8)} category=${tag.category} duplicate skipped: ${filename}`);
       }
     })().catch((err) => {
       // Last-resort net for synchronous throws (unexpected job shape, etc).
@@ -47,3 +55,6 @@ export function initWorldBuilderCollectionHook() {
   });
   console.log('🌍 World Builder collection hook initialized');
 }
+
+// Test-only reset hook so suites that re-init can do so cleanly.
+export const __testing = { reset: () => { initialized = false; } };
