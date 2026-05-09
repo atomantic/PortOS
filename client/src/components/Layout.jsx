@@ -78,7 +78,8 @@ import {
   Archive,
   Eraser,
   Sun,
-  Moon
+  Moon,
+  Workflow as WorkflowIcon
 } from 'lucide-react';
 /* global __APP_VERSION__ */
 import Logo from './Logo';
@@ -169,7 +170,8 @@ const navItems = [
       { to: '/cos/memory', label: 'Memory', icon: Brain },
       { to: '/cos/schedule', label: 'Schedule', icon: Clock },
       { to: '/cos/productivity', label: 'Streaks', icon: Flame },
-      { to: '/cos/tasks', label: 'Tasks', icon: FileText }
+      { to: '/cos/tasks', label: 'Tasks', icon: FileText },
+      { to: '/cos/workflow', label: 'Workflow', icon: WorkflowIcon }
     ]
   },
   {

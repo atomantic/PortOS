@@ -12,6 +12,7 @@ import scheduleRoutes from './cosScheduleRoutes.js';
 import jobRoutes from './cosJobRoutes.js';
 import templateRoutes from './cosTemplateRoutes.js';
 import insightRoutes from './cosInsightRoutes.js';
+import workflowRoutes from './cosWorkflowRoutes.js';
 
 const router = Router();
 
@@ -24,5 +25,6 @@ router.use(scheduleRoutes);
 router.use(jobRoutes);
 router.use(templateRoutes);
 router.use(insightRoutes);
+router.use(workflowRoutes);
 
 export default router;
