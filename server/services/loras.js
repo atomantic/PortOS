@@ -25,7 +25,6 @@ import { ServerError } from '../lib/errorHandler.js';
 import { PATHS } from '../lib/fileUtils.js';
 import {
   applyDownloadToken,
-  buildAuthHeaders,
   buildSidecar,
   fetchCivitaiModel,
   parseCivitaiUrl,
@@ -40,15 +39,23 @@ const SIDECAR_SUFFIX = '.metadata.json';
 const sidecarPath = (loraFilename) => join(PATHS.loras, `${loraFilename}${SIDECAR_SUFFIX}`);
 
 // Reads the sidecar JSON next to a LoRA file. Returns `null` when the
-// sidecar is absent or unparseable — calling code can fall back to filename
-// inference for legacy LoRAs the user dropped in manually pre-Civitai.
+// sidecar is absent — calling code can fall back to filename inference for
+// legacy LoRAs the user dropped in manually pre-Civitai. Permissions /
+// I/O / parse errors get logged so an unreadable sidecar doesn't masquerade
+// as a "legacy LoRA" in the manager UI.
 export const readSidecar = async (filename) => {
-  const raw = await readFile(sidecarPath(filename), 'utf-8').catch(() => null);
+  const path = sidecarPath(filename);
+  const raw = await readFile(path, 'utf-8').catch((err) => {
+    if (err?.code === 'ENOENT') return null;
+    console.log(`⚠️ LoRA sidecar unreadable [${filename}]: ${err?.code || err?.message || err}`);
+    return null;
+  });
   if (raw == null) return null;
-  // JSON.parse can throw on malformed sidecars — treat them as absent
-  // rather than crashing the list endpoint.
   let parsed = null;
-  try { parsed = JSON.parse(raw); } catch { return null; }
+  try { parsed = JSON.parse(raw); } catch (err) {
+    console.log(`⚠️ LoRA sidecar malformed JSON [${filename}]: ${err?.message || err}`);
+    return null;
+  }
   return parsed && typeof parsed === 'object' ? parsed : null;
 };
 
@@ -168,7 +175,12 @@ const downloadToFile = async (url, destPath, { fetchImpl = fetch, headers = {} }
     await rm(tmpPath, { force: true }).catch(() => {});
     throw err;
   });
-  await rename(tmpPath, destPath);
+  // rename can also fail (cross-device, locked dest, AV scan, low disk) —
+  // wrap separately so the .partial doesn't leak in any failure mode.
+  await rename(tmpPath, destPath).catch(async (err) => {
+    await rm(tmpPath, { force: true }).catch(() => {});
+    throw err;
+  });
 };
 
 // Install a LoRA from a Civitai URL. Returns the new sidecar JSON so the
@@ -185,7 +197,11 @@ export const installFromCivitai = async (input, { fetchImpl = fetch } = {}) => {
       { status: 422, code: 'CIVITAI_NO_DOWNLOAD' },
     );
   }
-  if (model?.type && model.type !== 'LORA' && model.type !== 'LoCon' && model.type !== 'LyCORIS') {
+  // Civitai's `type` casing varies in the wild (LORA / Lora / lora) and the
+  // family includes LoCon / LyCORIS / DoRA / LoHA — all of which load
+  // through diffusers' lora pipeline. Refuse only true non-LoRA checkpoints.
+  const ALLOWED_LORA_TYPES = new Set(['lora', 'locon', 'lycoris', 'dora', 'loha']);
+  if (model?.type && !ALLOWED_LORA_TYPES.has(String(model.type).toLowerCase())) {
     throw new ServerError(
       `Civitai model "${model.name}" is type "${model.type}", not a LoRA — refusing to install`,
       { status: 400, code: 'CIVITAI_NOT_A_LORA' },
@@ -209,10 +225,14 @@ export const installFromCivitai = async (input, { fetchImpl = fetch } = {}) => {
   await mkdir(PATHS.loras, { recursive: true });
 
   console.log(`📥 Installing Civitai LoRA: ${model.name} v${version.id} → ${filename} (${file.sizeKB ? Math.round(file.sizeKB / 1024) + ' MB' : 'size unknown'})`);
+  // Authenticate downloads via `?token=` only — the Authorization header
+  // doesn't survive the 302 to CDN, AND sending both means the token also
+  // ends up in CDN access logs. The metadata fetch (fetchCivitaiModel)
+  // still uses the header since /api/v1/* doesn't redirect.
   const tokenized = applyDownloadToken(file.downloadUrl, apiKey);
   await downloadToFile(tokenized, destPath, {
     fetchImpl,
-    headers: { 'User-Agent': 'PortOS/civitai-installer', ...buildAuthHeaders(apiKey) },
+    headers: { 'User-Agent': 'PortOS/civitai-installer' },
   });
 
   const sidecar = buildSidecar({ model, version, file, filename });

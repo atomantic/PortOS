@@ -65,7 +65,7 @@ export const cancel = () => {
   return true;
 };
 
-export const buildArgs = ({ pythonPath, model, prompt, negativePrompt, width, height, steps, guidance, seed, quantize, outputPath, loraPaths, loraScales, stepwiseDir, initImagePath, initImageStrength }) => {
+export const buildArgs = ({ pythonPath, model, prompt, negativePrompt, width, height, steps, guidance, seed, quantize, outputPath, loraPaths = [], loraScales = [], stepwiseDir, initImagePath, initImageStrength }) => {
   const modelId = model?.id;
   if (isZImage(model)) {
     if (!model.repo) {

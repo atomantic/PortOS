@@ -53,7 +53,10 @@ router.post('/auth/civitai', asyncHandler(async (req, res) => {
 router.delete('/auth/civitai', asyncHandler(async (_req, res) => {
   const current = await getSettings();
   const next = { ...current };
-  if (next.civitai && typeof next.civitai === 'object') {
+  // typeof === 'object' is true for arrays — guard explicitly so a
+  // legacy/malformed `civitai: ['x']` value doesn't get spread into
+  // `{ '0': 'x', apiKey: undefined }`.
+  if (next.civitai && typeof next.civitai === 'object' && !Array.isArray(next.civitai)) {
     const { apiKey: _omit, ...rest } = next.civitai;
     next.civitai = rest;
   }

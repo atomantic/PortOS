@@ -155,7 +155,7 @@ describe('installFromCivitai', () => {
       throw new Error(`unexpected fetch: ${url}`);
     };
     const sidecar = await lorasService.installFromCivitai({ url: 'https://civitai.red/models/2600698/realstagram' }, { fetchImpl });
-    expect(sidecar.filename).toMatch(/^lora-RealStagram-v7\.safetensors$/);
+    expect(sidecar.filename).toBe('lora-realstagram-v7.safetensors');
     expect(sidecar.civitai.modelId).toBe(2600698);
     expect(sidecar.civitai.versionId).toBe(7);
     expect(sidecar.runnerFamily).toBe('mflux');
@@ -179,10 +179,24 @@ describe('installFromCivitai', () => {
     ).rejects.toThrow(/not a LoRA/);
   });
 
+  it('accepts LoRA-family types case-insensitively (DoRA, Lora, lycoris)', async () => {
+    // Civitai's `type` casing isn't stable in the wild — DoRA / LoHA / Lora
+    // / lower-case variants are all the same family from diffusers' POV.
+    const fetchImpl = async (url) => {
+      if (url.startsWith('https://civitai.com/api/v1/models/')) {
+        return { ok: true, status: 200, json: async () => ({ ...FAKE_MODEL, type: 'DoRA' }) };
+      }
+      const stream = new ReadableStream({ start(c) { c.enqueue(new Uint8Array(Buffer.from('w'))); c.close(); } });
+      return { ok: true, status: 200, body: stream };
+    };
+    const sidecar = await lorasService.installFromCivitai({ url: 'https://civitai.com/models/2600698' }, { fetchImpl });
+    expect(sidecar.civitai.type).toBe('DoRA');
+  });
+
   it('refuses to clobber an already-installed file', async () => {
     const fs = await import('fs/promises');
     await fs.mkdir(tmpLoras, { recursive: true });
-    await fs.writeFile(join(tmpLoras, 'lora-RealStagram-v7.safetensors'), 'pre-existing');
+    await fs.writeFile(join(tmpLoras, 'lora-realstagram-v7.safetensors'), 'pre-existing');
     const fetchImpl = async (url) => {
       if (url.startsWith('https://civitai.com/api/v1/models/')) return { ok: true, status: 200, json: async () => FAKE_MODEL };
       throw new Error(`should not download: ${url}`);

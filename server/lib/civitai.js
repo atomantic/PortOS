@@ -53,18 +53,25 @@ export const parseCivitaiUrl = (raw) => {
   const bareId = trimmed.match(/^(?:civitai:)?(\d{1,12})$/);
   if (bareId) return { modelId: bareId[1], versionId: null };
 
-  // URL.parse can throw on malformed input — wrap in a guard rather than try/catch.
   if (!/^https?:\/\//i.test(trimmed)) {
     throw new ServerError(
       `Civitai URL must start with http(s):// — got "${trimmed.slice(0, 60)}"`,
       { status: 400, code: 'CIVITAI_BAD_URL' },
     );
   }
+  // The regex above accepts the http(s) prefix shape, but malformed
+  // hostnames / brackets / encoded segments still throw `TypeError: Invalid
+  // URL` from the constructor. Convert to a 400 ServerError so callers get
+  // the expected error contract instead of a 500.
   let parsed;
-  // URL constructor throws on truly malformed inputs; the regex above already
-  // accepted the http(s) prefix shape so this is the catch-all for invalid
-  // hostnames / ports / encoded segments.
-  parsed = new URL(trimmed);
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    throw new ServerError(
+      `Malformed URL: "${trimmed.slice(0, 60)}"`,
+      { status: 400, code: 'CIVITAI_BAD_URL' },
+    );
+  }
   if (!CIVITAI_HOSTS.has(parsed.hostname.toLowerCase())) {
     throw new ServerError(
       `Not a Civitai URL: ${parsed.hostname}`,
@@ -210,7 +217,7 @@ export const buildSidecar = ({ model, version, file, filename }) => {
     },
     runnerFamily: baseModelToRunner(baseModel),  // 'mflux' | 'flux2' | 'z-image' | null
     triggerWords: Array.isArray(version?.trainedWords) ? version.trainedWords : [],
-    recommendedScale: typeof version?.settings?.strength === 'number' ? version.settings.strength : 1.0,
+    recommendedScale: Number.isFinite(version?.settings?.strength) ? version.settings.strength : 1.0,
     file: {
       sizeKB: file?.sizeKB ?? null,
       hashes: file?.hashes || {},
@@ -222,13 +229,17 @@ export const buildSidecar = ({ model, version, file, filename }) => {
 };
 
 // Sanitize a model name into a safe filename slug. Civitai model names can
-// contain `/`, `\`, weird unicode, etc. — we want a portable filename that
-// also keeps the .safetensors extension predictable. Limits length to keep
-// the path well under most filesystems' 255-byte cap (the sidecar adds
-// `.metadata.json` and the project may add prefixes).
+// contain `/`, `\`, weird unicode, mixed case, etc. — we want a portable
+// filename that also keeps the .safetensors extension predictable. Limits
+// length to keep the path well under most filesystems' 255-byte cap (the
+// sidecar adds `.metadata.json` and the project may add prefixes).
+// Lowercased so the same model installed on macOS/Windows (case-insensitive)
+// and Linux (case-sensitive) collides identically — `existsSync()` then
+// reliably catches "already installed."
 export const slugifyForFilename = (name) => {
   const safe = String(name || 'lora')
     .normalize('NFKD')
+    .toLowerCase()
     .replace(/[^\w\-.]+/g, '-')   // anything that isn't a word char, dash, or dot → dash
     .replace(/-+/g, '-')           // collapse runs
     .replace(/^[-.]+|[-.]+$/g, '') // trim leading/trailing dashes/dots

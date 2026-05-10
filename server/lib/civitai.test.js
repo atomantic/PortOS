@@ -42,6 +42,12 @@ describe('parseCivitaiUrl', () => {
   it('rejects non-numeric modelVersionId', () => {
     expect(() => parseCivitaiUrl('https://civitai.com/models/123?modelVersionId=abc')).toThrow(/numeric/);
   });
+  it('converts URL constructor TypeError into a CIVITAI_BAD_URL ServerError', () => {
+    // `new URL('https://[malformed')` throws TypeError("Invalid URL").
+    // The function must surface a 400 ServerError, not let the TypeError
+    // bubble as a 500.
+    expect(() => parseCivitaiUrl('https://[malformed')).toThrow(/Malformed URL/);
+  });
 });
 
 describe('baseModelToRunner', () => {
@@ -149,8 +155,8 @@ describe('buildAuthHeaders / applyDownloadToken', () => {
 
 describe('slugifyForFilename', () => {
   it('strips path-unsafe chars', () => {
-    expect(slugifyForFilename('Real / Stagram')).toBe('Real-Stagram');
-    expect(slugifyForFilename('Foo!@#Bar')).toBe('Foo-Bar');
+    expect(slugifyForFilename('Real / Stagram')).toBe('real-stagram');
+    expect(slugifyForFilename('Foo!@#Bar')).toBe('foo-bar');
   });
   it('caps length at 80 chars', () => {
     const long = 'a'.repeat(200);
@@ -220,5 +226,16 @@ describe('buildSidecar', () => {
     expect(sc.recommendedScale).toBe(1.0);
     expect(sc.triggerWords).toEqual([]);
     expect(sc.previewImageUrl).toBe(null);
+  });
+  it('rejects NaN as a recommended scale (Number.isFinite guard)', () => {
+    // `typeof NaN === 'number'` would silently pass, persisting NaN into
+    // the sidecar; downstream multiplies by NaN producing black images.
+    const sc = buildSidecar({
+      model: { id: 1, name: 'X' },
+      version: { id: 2, baseModel: 'Flux.1 D', settings: { strength: NaN } },
+      file: {},
+      filename: 'x.safetensors',
+    });
+    expect(sc.recommendedScale).toBe(1.0);
   });
 });

@@ -37,9 +37,8 @@ export default function MediaJobsQueue({ kind, recentLimit = 5, className = '' }
     return () => clearInterval(t);
   }, [fetchJobs]);
 
-  const handleCancel = async (id) => {
-    try {
-      await cancelMediaJob(id);
+  const handleCancel = (id) => cancelMediaJob(id)
+    .then(() => {
       // Optimistic update: queued jobs flip to 'canceled' immediately (the
       // worker won't pick them up). For running jobs leave the server status
       // alone and track a UI-only `cancelRequested` flag — the next poll
@@ -50,10 +49,8 @@ export default function MediaJobsQueue({ kind, recentLimit = 5, className = '' }
         return { ...j, cancelRequested: true };
       }));
       toast.success('Cancel requested');
-    } catch (err) {
-      toast.error(err.message || 'Cancel failed');
-    }
-  };
+    })
+    .catch((err) => toast.error(err?.message || 'Cancel failed'));
 
   const live = jobs.filter((j) => j.status === 'queued' || j.status === 'running');
   const recent = jobs.filter((j) => j.status !== 'queued' && j.status !== 'running').slice(0, recentLimit);
