@@ -21,12 +21,14 @@ import Flux2InstallModal from '../components/imageGen/Flux2InstallModal';
 import Flux2TokenBanner from '../components/imageGen/Flux2TokenBanner';
 import ImageGenControls from '../components/imageGen/ImageGenControls';
 import MediaJobsQueue from '../components/media/MediaJobsQueue';
+import { useMediaCompletionRefresh } from '../hooks/useMediaCompletionRefresh';
 import {
   Image as ImageIcon, Sparkles, Download, RefreshCw, Settings as SettingsIcon,
   AlertTriangle, X, Film,
 } from 'lucide-react';
 import { composeStyledPrompt } from '../lib/composeStyledPrompt';
 import { deriveAvailableBackends, IMAGE_GEN_MODE } from '../lib/imageGenBackends';
+import { getMediaNavProps } from '../lib/mediaNavigation';
 import toast from '../components/ui/Toast';
 import BrailleSpinner from '../components/BrailleSpinner';
 import { useImageGenProgress } from '../hooks/useImageGenProgress';
@@ -190,6 +192,7 @@ export default function ImageGen() {
   const refreshGallery = useCallback(() => {
     listImageGallery().then(setGallery).catch(() => {});
   }, []);
+  useMediaCompletionRefresh({ onImageCompleted: refreshGallery });
 
   // Re-runnable so the Settings drawer can trigger a refresh on close
   // without forcing a full page reload.
@@ -446,6 +449,11 @@ export default function ImageGen() {
     visibleGallery: gallery.filter((img) => !img.hidden),
     hiddenGallery: gallery.filter((img) => img.hidden),
   }), [gallery]);
+  const previewItems = useMemo(() => [
+    ...visibleGallery.map(normalizeImage),
+    ...(showHidden ? hiddenGallery.map(normalizeImage) : []),
+  ], [visibleGallery, hiddenGallery, showHidden]);
+  const previewNavProps = getMediaNavProps(previewItems, preview, setPreview);
 
   // Snapshots current form state into a server payload + POSTs it to the
   // mediaJobQueue. Returns the queue's response ({ jobId, position, ... }).
@@ -1081,7 +1089,7 @@ export default function ImageGen() {
                 <MediaCard
                   key={item.key}
                   item={item}
-                  onPreview={() => setPreview(img)}
+                  onPreview={() => setPreview(item)}
                   onRemix={() => handleRemix(img)}
                   onSendToVideo={() => sendToVideo(img)}
                   onDelete={() => handleDelete(img.filename)}
@@ -1111,7 +1119,7 @@ export default function ImageGen() {
                   <MediaCard
                     key={item.key}
                     item={item}
-                    onPreview={() => setPreview(img)}
+                    onPreview={() => setPreview(item)}
                     onRemix={() => handleRemix(img)}
                     onSendToVideo={() => sendToVideo(img)}
                     onDelete={() => handleDelete(img.filename)}
@@ -1125,14 +1133,12 @@ export default function ImageGen() {
       )}
 
       <MediaLightbox
-        item={preview ? normalizeImage(preview) : null}
+        item={preview}
         onClose={() => setPreview(null)}
-        // Guard against the click landing after the lightbox close path has
-        // already nulled `preview` — without this the closure throws on
-        // preview.filename access.
-        onRemix={() => preview && handleRemix(preview)}
-        onSendToVideo={() => preview?.filename && sendToVideo(preview)}
-        onClean={(_item, level) => handleClean(preview, level)}
+        onRemix={(item) => item?.raw && handleRemix(item.raw)}
+        onSendToVideo={(item) => item?.raw?.filename && sendToVideo(item.raw)}
+        onClean={(item, level) => handleClean(item?.raw, level)}
+        {...previewNavProps}
       />
 
 

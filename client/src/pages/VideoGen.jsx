@@ -41,6 +41,7 @@ import toast from '../components/ui/Toast';
 import BrailleSpinner from '../components/BrailleSpinner';
 import BatchQueuePanel from '../components/media/BatchQueuePanel';
 import MediaJobsQueue from '../components/media/MediaJobsQueue';
+import { useMediaCompletionRefresh } from '../hooks/useMediaCompletionRefresh';
 import {
   getVideoGenStatus, generateVideo, cancelVideoGen,
   listVideoHistory, deleteVideoHistoryItem, setVideoHidden, extractLastFrame,
@@ -48,6 +49,7 @@ import {
   listImageGallery,
 } from '../services/api';
 import { randomSeed, safeParseJSON } from '../lib/genUtils';
+import { getMediaNavProps } from '../lib/mediaNavigation';
 
 const RESOLUTIONS = [
   { label: '512×320 (16:10)', w: 512, h: 320 },
@@ -204,6 +206,7 @@ export default function VideoGen() {
   const refreshHistory = useCallback(() => {
     listVideoHistory().then((items) => setHistory(Array.isArray(items) ? items : [])).catch(() => {});
   }, []);
+  useMediaCompletionRefresh({ onVideoCompleted: refreshHistory });
   useEffect(() => { refreshHistory(); }, [refreshHistory]);
   useEffect(() => { listImageGallery().then(setImageGallery).catch(() => {}); }, []);
 
@@ -211,6 +214,11 @@ export default function VideoGen() {
     visibleHistory: history.filter((v) => !v.hidden),
     hiddenHistory: history.filter((v) => v.hidden),
   }), [history]);
+  const previewItems = useMemo(() => [
+    ...visibleHistory.map(normalizeVideo),
+    ...(showHidden ? hiddenHistory.map(normalizeVideo) : []),
+  ], [visibleHistory, hiddenHistory, showHidden]);
+  const previewNavProps = getMediaNavProps(previewItems, preview, setPreview);
 
   const handleDeleteHistory = async (item) => {
     await deleteVideoHistoryItem(item.id).catch((err) => toast.error(err.message || 'Delete failed'));
@@ -1327,6 +1335,7 @@ export default function VideoGen() {
         item={preview}
         onClose={() => setPreview(null)}
         onContinue={(item) => handleContinueHistory(item.raw)}
+        {...previewNavProps}
       />
 
       <Drawer open={settingsOpen} onClose={closeSettings} title="Media Generation Settings">

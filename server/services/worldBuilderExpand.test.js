@@ -189,6 +189,7 @@ describe('worldBuilderExpand.normalizeCompositeSheets', () => {
     ]);
     expect(out).toEqual([
       {
+        kind: 'reference_sheet',
         label: 'Gas-Giant Drifters costume sheet',
         prompt: 'Create a clean illustrated costume reference sheet with five figures, material swatches, fasteners, accessories, color palette strip, and simple floating-platform background.',
       },
@@ -198,8 +199,32 @@ describe('worldBuilderExpand.normalizeCompositeSheets', () => {
   it('coerces string sheets into label/prompt pairs', () => {
     const out = normalizeCompositeSheets(['Canopy Symbiotes reference board']);
     expect(out).toEqual([
-      { label: 'Canopy Symbiotes reference board', prompt: 'Canopy Symbiotes reference board' },
+      { kind: 'reference_sheet', label: 'Canopy Symbiotes reference board', prompt: 'Canopy Symbiotes reference board' },
     ]);
+  });
+
+  it('preserves world pitch poster board kind', () => {
+    const out = normalizeCompositeSheets([
+      {
+        kind: 'world_pitch_poster',
+        label: 'World summary concept pitch poster',
+        prompt: 'Create a cinematic world summary concept pitch poster with hero panorama, inset environments, culture callouts, palette, materials, light atmosphere, and theme icons.',
+      },
+    ]);
+    expect(out).toEqual([
+      {
+        kind: 'world_pitch_poster',
+        label: 'World summary concept pitch poster',
+        prompt: 'Create a cinematic world summary concept pitch poster with hero panorama, inset environments, culture callouts, palette, materials, light atmosphere, and theme icons.',
+      },
+    ]);
+  });
+
+  it('falls back to reference_sheet for unknown kinds', () => {
+    const out = normalizeCompositeSheets([
+      { kind: 'bogus_kind', label: 'Mystery board', prompt: 'A board of unknown lineage with figures, palette, materials, and atmosphere.' },
+    ]);
+    expect(out[0].kind).toBe('reference_sheet');
   });
 });
 
@@ -210,6 +235,8 @@ describe('worldBuilderExpand.EXPANSION_PROMPT', () => {
     expect(EXPANSION_PROMPT).toContain('clothing guides');
     expect(EXPANSION_PROMPT).toContain('raider_clans');
     expect(EXPANSION_PROMPT).toContain('compositeSheets');
+    expect(EXPANSION_PROMPT).toContain('world_pitch_poster');
+    expect(EXPANSION_PROMPT).toContain('world summary concept pitch poster');
     expect(EXPANSION_PROMPT).toContain('materials swatches');
   });
 });

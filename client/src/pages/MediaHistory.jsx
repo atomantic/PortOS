@@ -11,6 +11,8 @@ import toast from '../components/ui/Toast';
 import MediaCard from '../components/media/MediaCard';
 import MediaLightbox from '../components/media/MediaLightbox';
 import { normalizeImage, normalizeVideo } from '../components/media/normalize';
+import { useMediaCompletionRefresh } from '../hooks/useMediaCompletionRefresh';
+import { getMediaNavProps } from '../lib/mediaNavigation';
 import {
   listVideoHistory, deleteVideoHistoryItem, extractLastFrame, stitchVideos,
   upscaleVideo,
@@ -34,8 +36,8 @@ export default function MediaHistory() {
   const [stitching, setStitching] = useState(false);
   const [preview, setPreview] = useState(null);
 
-  const refresh = useCallback(async () => {
-    setLoading(true);
+  const refresh = useCallback(async ({ silent = false } = {}) => {
+    if (!silent) setLoading(true);
     const [images, videos] = await Promise.all([
       listImageGallery().catch(() => []),
       listVideoHistory().catch(() => []),
@@ -49,6 +51,10 @@ export default function MediaHistory() {
   }, []);
 
   useEffect(() => { refresh(); }, [refresh]);
+  useMediaCompletionRefresh({
+    onImageCompleted: () => refresh({ silent: true }),
+    onVideoCompleted: () => refresh({ silent: true }),
+  });
 
   // Precompute the searchable haystack per item once per items list — keystrokes
   // then only re-run token .includes() against a cached string instead of
@@ -82,6 +88,7 @@ export default function MediaHistory() {
     () => filter === 'all' ? searched : searched.filter(i => i.kind === filter),
     [searched, filter]
   );
+  const previewNavProps = getMediaNavProps(filtered, preview, setPreview);
   const counts = useMemo(() => {
     const c = { all: 0, image: 0, video: 0 };
     for (const i of searched) {
@@ -289,6 +296,7 @@ export default function MediaHistory() {
         onRemix={handleRemix}
         onSendToVideo={handleSendToVideo}
         onContinue={handleContinue}
+        {...previewNavProps}
       />
     </div>
   );

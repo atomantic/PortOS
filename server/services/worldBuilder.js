@@ -9,9 +9,9 @@
  *     like landscapes / characters / vehicles, but open to project-specific
  *     buckets like colonies, factions, species, clothing_styles, or raider_clans
  *     (each with a list of `variations` — short prompt fragments)
- *   - compositeSheets: complete board/reference-sheet prompts that combine
- *     several buckets into one image, e.g. a colony costume guide with lineup,
- *     materials, fasteners, accessories, and palette
+ *   - compositeSheets: complete board/poster prompts that combine several
+ *     buckets into one image, e.g. a colony costume guide or a world summary
+ *     concept pitch poster
  *
  * From those pieces the route can compile a flat list of full prompts and
  * enqueue them as image-gen jobs, all tagged with the same `worldId` and
@@ -42,6 +42,10 @@ export const COMPOSITE_PROMPT_MAX = 4000;
 export const VARIATION_LABEL_MAX = 120;
 export const VARIATIONS_PER_CATEGORY_MAX = 50;
 export const COMPOSITE_SHEETS_MAX = 50;
+export const COMPOSITE_SHEET_KINDS = Object.freeze([
+  'reference_sheet',
+  'world_pitch_poster',
+]);
 export const WORLD_CATEGORY_KEY_MAX = 64;
 export const WORLD_CATEGORY_COUNT_MAX = 30;
 
@@ -86,7 +90,8 @@ const sanitizeCompositeSheet = (raw) => {
   const label = trimTo(raw.label, VARIATION_LABEL_MAX);
   const prompt = trimTo(raw.prompt, COMPOSITE_PROMPT_MAX);
   if (!label || !prompt) return null;
-  return { label, prompt };
+  const kind = COMPOSITE_SHEET_KINDS.includes(raw.kind) ? raw.kind : 'reference_sheet';
+  return { kind, label, prompt };
 };
 
 const sanitizeCategory = (raw) => {
@@ -373,9 +378,12 @@ export function compilePrompts(world, options = {}) {
       : sheets.filter((s) => Array.isArray(sheetSelection) && sheetSelection.some((label) => label.toLowerCase() === s.label.toLowerCase()));
     for (const sheet of filteredSheets) {
       const prompt = [stylePart, sheet.prompt].filter(Boolean).join(', ');
+      const category = sheet.kind === 'world_pitch_poster'
+        ? 'world_pitch_posters'
+        : 'composite_sheets';
       for (let i = 0; i < batchPerVariation; i += 1) {
         compiled.push({
-          category: 'composite_sheets',
+          category,
           label: sheet.label,
           prompt,
           negativePrompt,

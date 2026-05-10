@@ -31,7 +31,8 @@ vi.mock('../services/worldBuilderExpand.js', () => ({
       vehicles: { variations: [] },
     },
     compositeSheets: [
-      { label: 'Mock costume sheet', prompt: 'mocked complete costume reference sheet with lineup, materials, fasteners, palette' },
+      { kind: 'reference_sheet', label: 'Mock costume sheet', prompt: 'mocked complete costume reference sheet with lineup, materials, fasteners, palette' },
+      { kind: 'world_pitch_poster', label: 'Mock world pitch poster', prompt: 'mocked world summary concept pitch poster with hero panorama, inset cultures, palette, materials, and theme icons' },
     ],
     llm: { provider: 'anthropic', model: 'claude' },
   })),
@@ -122,7 +123,22 @@ describe('world-builder routes', () => {
       });
     expect(res.status).toBe(201);
     expect(res.body.compositeSheets).toHaveLength(1);
+    expect(res.body.compositeSheets[0].kind).toBe('reference_sheet');
     expect(res.body.compositeSheets[0].label).toBe('Gas-Giant Drifters sheet');
+  });
+
+  it('POST / accepts world pitch poster composite prompts', async () => {
+    const res = await request(buildApp())
+      .post('/api/world-builder')
+      .send({
+        name: 'Pitch Posters',
+        compositeSheets: [
+          { kind: 'world_pitch_poster', label: 'World summary concept pitch poster', prompt: 'Create a cinematic world summary concept pitch poster with hero panorama, inset environments, cultures, creatures, visual language strip, color palette, materials, light atmosphere, and theme icons.' },
+        ],
+      });
+    expect(res.status).toBe(201);
+    expect(res.body.compositeSheets).toHaveLength(1);
+    expect(res.body.compositeSheets[0].kind).toBe('world_pitch_poster');
   });
 
   it('POST / rejects missing name', async () => {
@@ -159,7 +175,7 @@ describe('world-builder routes', () => {
     expect(res.status).toBe(200);
     expect(res.body.stylePrompt).toContain('moebius scifi');
     expect(res.body.categories.landscapes.variations).toHaveLength(1);
-    expect(res.body.compositeSheets).toHaveLength(1);
+    expect(res.body.compositeSheets).toHaveLength(2);
     expect(res.body.llm.provider).toBe('anthropic');
   });
 

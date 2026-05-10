@@ -74,6 +74,15 @@ const DEFAULT_RENDER_OPTS = {
   batchPerVariation: 1,
 };
 
+// Mirror of COMPOSITE_SHEET_KINDS in server/services/worldBuilder.js — keep
+// in sync when adding kinds.
+const COMPOSITE_BOARD_KINDS = [
+  { value: 'reference_sheet', label: 'Reference sheet' },
+  { value: 'world_pitch_poster', label: 'World pitch poster' },
+];
+
+const compositeKindLabel = (kind) => COMPOSITE_BOARD_KINDS.find((k) => k.value === kind)?.label || 'Reference sheet';
+
 const emptyTemplate = () => ({
   name: '',
   starterPrompt: '',
@@ -273,11 +282,11 @@ export default function WorldBuilder() {
           const without = prev.filter((w) => w.id !== updated.id);
           return [updated, ...without];
         });
-        toast.success(`Expanded into ${total} variations and ${expandedDraft.compositeSheets?.length || 0} sheets — saved`);
+        toast.success(`Expanded into ${total} variations and ${expandedDraft.compositeSheets?.length || 0} boards — saved`);
         return;
       }
     }
-    toast.success(`Expanded into ${total} variations and ${expandedDraft.compositeSheets?.length || 0} sheets — review then Save`);
+    toast.success(`Expanded into ${total} variations and ${expandedDraft.compositeSheets?.length || 0} boards — review then Save`);
   };
 
   const handleRender = async () => {
@@ -489,7 +498,7 @@ export default function WorldBuilder() {
               Expand starter → variations
             </button>
             <span className="text-xs text-gray-500">
-              {totalVariations} variation{totalVariations === 1 ? '' : 's'} across {categoryKeys.length} categories · {totalSheets} composite sheet{totalSheets === 1 ? '' : 's'}
+              {totalVariations} variation{totalVariations === 1 ? '' : 's'} across {categoryKeys.length} categories · {totalSheets} composite board{totalSheets === 1 ? '' : 's'}
             </span>
           </div>
         </header>
@@ -596,7 +605,7 @@ export default function WorldBuilder() {
                 onChange={(e) => setRenderOpts((r) => ({ ...r, promptMode: e.target.value }))}
                 className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent min-h-[40px]"
               >
-                <option value="sheets" disabled={totalSheets === 0}>Composite sheets ({totalSheets})</option>
+                <option value="sheets" disabled={totalSheets === 0}>Composite boards ({totalSheets})</option>
                 <option value="variations" disabled={totalVariations === 0}>Atomic variations ({totalVariations})</option>
                 <option value="all" disabled={totalSheets + totalVariations === 0}>Everything ({totalSheets + totalVariations})</option>
               </select>
@@ -689,9 +698,11 @@ function renderPromptCount(world, promptMode = 'variations') {
 
 function CompositeSheetsEditor({ sheets, onChange }) {
   const [adding, setAdding] = useState(false);
+  const [newKind, setNewKind] = useState('reference_sheet');
   const [newLabel, setNewLabel] = useState('');
   const [newPrompt, setNewPrompt] = useState('');
   const [editIdx, setEditIdx] = useState(null);
+  const [editKind, setEditKind] = useState('reference_sheet');
   const [editLabel, setEditLabel] = useState('');
   const [editPrompt, setEditPrompt] = useState('');
 
@@ -699,7 +710,8 @@ function CompositeSheetsEditor({ sheets, onChange }) {
     const label = newLabel.trim();
     const prompt = newPrompt.trim();
     if (!label || !prompt) return;
-    onChange([...sheets, { label: label.slice(0, 120), prompt: prompt.slice(0, COMPOSITE_PROMPT_MAX) }]);
+    onChange([...sheets, { kind: newKind, label: label.slice(0, 120), prompt: prompt.slice(0, COMPOSITE_PROMPT_MAX) }]);
+    setNewKind('reference_sheet');
     setNewLabel('');
     setNewPrompt('');
     setAdding(false);
@@ -709,6 +721,7 @@ function CompositeSheetsEditor({ sheets, onChange }) {
 
   const startEdit = (idx, sheet) => {
     setEditIdx(idx);
+    setEditKind(sheet.kind || 'reference_sheet');
     setEditLabel(sheet.label);
     setEditPrompt(sheet.prompt);
   };
@@ -718,7 +731,7 @@ function CompositeSheetsEditor({ sheets, onChange }) {
     const prompt = editPrompt.trim();
     if (!label || !prompt) return;
     const next = [...sheets];
-    next[editIdx] = { label: label.slice(0, 120), prompt: prompt.slice(0, COMPOSITE_PROMPT_MAX) };
+    next[editIdx] = { kind: editKind, label: label.slice(0, 120), prompt: prompt.slice(0, COMPOSITE_PROMPT_MAX) };
     onChange(next);
     setEditIdx(null);
   };
@@ -727,7 +740,7 @@ function CompositeSheetsEditor({ sheets, onChange }) {
     <section className="bg-port-card border border-port-border rounded p-4 flex flex-col gap-3">
       <div className="flex items-center justify-between gap-2">
         <h2 className="text-sm font-semibold text-white">
-          Composite sheets
+          Composite boards
           <span className="ml-2 text-xs text-gray-500">{sheets.length}</span>
         </h2>
         <button
@@ -739,17 +752,28 @@ function CompositeSheetsEditor({ sheets, onChange }) {
       </div>
       {adding && (
         <div className="bg-port-bg border border-port-border rounded p-2 flex flex-col gap-2">
+          <select
+            value={newKind}
+            onChange={(e) => setNewKind(e.target.value)}
+            className="bg-port-card border border-port-border rounded px-2 py-1 text-white text-sm min-h-[40px]"
+          >
+            {COMPOSITE_BOARD_KINDS.map((kind) => (
+              <option key={kind.value} value={kind.value}>{kind.label}</option>
+            ))}
+          </select>
           <input
             value={newLabel}
             onChange={(e) => setNewLabel(e.target.value)}
-            placeholder="Gas-Giant Drifters costume sheet"
+            placeholder={newKind === 'world_pitch_poster' ? 'World summary concept pitch poster' : 'Gas-Giant Drifters costume sheet'}
             className="bg-port-card border border-port-border rounded px-2 py-1 text-white text-sm"
             maxLength={120}
           />
           <textarea
             value={newPrompt}
             onChange={(e) => setNewPrompt(e.target.value)}
-            placeholder="Create a clean illustrated costume reference sheet..."
+            placeholder={newKind === 'world_pitch_poster'
+              ? 'Create a cinematic world summary concept pitch poster with a hero panorama, inset environments, cultures, creatures, visual language, palette, materials, and theme icons...'
+              : 'Create a clean illustrated costume reference sheet...'}
             className="bg-port-card border border-port-border rounded px-2 py-1 text-white text-sm"
             rows={6}
             maxLength={COMPOSITE_PROMPT_MAX}
@@ -763,7 +787,12 @@ function CompositeSheetsEditor({ sheets, onChange }) {
               Save
             </button>
             <button
-              onClick={() => { setAdding(false); setNewLabel(''); setNewPrompt(''); }}
+              onClick={() => {
+                setAdding(false);
+                setNewKind('reference_sheet');
+                setNewLabel('');
+                setNewPrompt('');
+              }}
               className="text-xs px-2 py-1 bg-port-bg hover:bg-port-border text-gray-300 rounded min-h-[40px] sm:min-h-0"
             >
               Cancel
@@ -772,13 +801,22 @@ function CompositeSheetsEditor({ sheets, onChange }) {
         </div>
       )}
       {sheets.length === 0 ? (
-        <p className="text-xs text-gray-500">No composite sheets yet.</p>
+        <p className="text-xs text-gray-500">No composite boards yet.</p>
       ) : (
         <ul className="flex flex-col gap-1.5 max-h-96 overflow-y-auto">
           {sheets.map((sheet, idx) => (
             <li key={`${sheet.label}-${idx}`} className="bg-port-bg border border-port-border rounded p-2 text-sm">
               {editIdx === idx ? (
                 <div className="flex flex-col gap-1">
+                  <select
+                    value={editKind}
+                    onChange={(e) => setEditKind(e.target.value)}
+                    className="bg-port-card border border-port-border rounded px-2 py-1 text-white text-sm min-h-[40px]"
+                  >
+                    {COMPOSITE_BOARD_KINDS.map((kind) => (
+                      <option key={kind.value} value={kind.value}>{kind.label}</option>
+                    ))}
+                  </select>
                   <input
                     value={editLabel}
                     onChange={(e) => setEditLabel(e.target.value)}
@@ -800,7 +838,12 @@ function CompositeSheetsEditor({ sheets, onChange }) {
               ) : (
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex-1 min-w-0">
-                    <div className="text-white font-medium truncate">{sheet.label}</div>
+                    <div className="flex items-center gap-2">
+                      <div className="text-white font-medium truncate">{sheet.label}</div>
+                      <span className="shrink-0 text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-port-accent/10 text-port-accent border border-port-accent/20">
+                        {compositeKindLabel(sheet.kind)}
+                      </span>
+                    </div>
                     <div className="text-xs text-gray-400 line-clamp-3">{sheet.prompt}</div>
                   </div>
                   <div className="flex items-center gap-1 shrink-0">

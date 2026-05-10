@@ -79,7 +79,18 @@ describe('worldBuilder service', () => {
       ],
     });
     expect(w.compositeSheets).toEqual([
-      { label: 'Gas-Giant Drifters costume sheet', prompt: 'Create a clean illustrated costume reference sheet with five figures, materials swatches, fasteners, accessories, and color palette strip.' },
+      { kind: 'reference_sheet', label: 'Gas-Giant Drifters costume sheet', prompt: 'Create a clean illustrated costume reference sheet with five figures, materials swatches, fasteners, accessories, and color palette strip.' },
+    ]);
+  });
+
+  it('createWorld persists world pitch poster prompts separately from categories', async () => {
+    const w = await seedWorld({
+      compositeSheets: [
+        { kind: 'world_pitch_poster', label: 'World summary concept pitch poster', prompt: 'Create a cinematic world summary concept pitch poster with hero panorama, inset environments, cultures, creatures, visual language, color palette, materials, light atmosphere, and theme icons.' },
+      ],
+    });
+    expect(w.compositeSheets).toEqual([
+      { kind: 'world_pitch_poster', label: 'World summary concept pitch poster', prompt: 'Create a cinematic world summary concept pitch poster with hero panorama, inset environments, cultures, creatures, visual language, color palette, materials, light atmosphere, and theme icons.' },
     ]);
   });
 
@@ -199,6 +210,21 @@ describe('worldBuilder service', () => {
         category: 'composite_sheets',
         label: 'Canopy Symbiotes sheet',
         prompt: 'moebius linework, scavengers reign palette, clean costume reference sheet, lineup, materials, fasteners, palette',
+      });
+    });
+
+    it('tags world pitch poster prompts separately from reference sheets', async () => {
+      const w = await seedWorld({
+        categories: {},
+        compositeSheets: [
+          { kind: 'world_pitch_poster', label: 'World pitch poster', prompt: 'cinematic world summary pitch poster, hero panorama, inset cultures, palette, themes' },
+        ],
+      });
+      const compiled = svc.compilePrompts(w, { promptMode: 'sheets' });
+      expect(compiled).toHaveLength(1);
+      expect(compiled[0]).toMatchObject({
+        category: 'world_pitch_posters',
+        label: 'World pitch poster',
       });
     });
 

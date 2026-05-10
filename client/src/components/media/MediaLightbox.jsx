@@ -1,5 +1,8 @@
-import { useEffect, useState } from 'react';
-import { X, Copy, Sparkles, Film, Image as ImageIcon, Download, Eraser } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import {
+  X, Copy, Sparkles, Film, Image as ImageIcon, Download, Eraser,
+  ChevronLeft, ChevronRight,
+} from 'lucide-react';
 import toast from '../ui/Toast';
 
 // Mirror of CLEAN_LEVELS in server/routes/imageClean.js. If the server adds a
@@ -8,16 +11,46 @@ const CLEAN_LEVEL_LABELS = { light: 'Light', aggressive: 'Aggressive' };
 
 // onClean(item, level) — optional. Returning a rejected promise keeps the
 // lightbox open (e.g. on error) so the user can retry.
-export default function MediaLightbox({ item, onClose, onRemix, onSendToVideo, onContinue, onClean }) {
+export default function MediaLightbox({
+  item,
+  onClose,
+  onRemix,
+  onSendToVideo,
+  onContinue,
+  onClean,
+  onPrevious,
+  onNext,
+  hasPrevious = false,
+  hasNext = false,
+}) {
   const [cleaning, setCleaning] = useState(null);
+  // Read callbacks from refs so the keydown listener doesn't re-subscribe on
+  // every parent render (callers pass inline arrows; the lightbox parent re-
+  // renders constantly while media-gen events stream in).
+  const callbacksRef = useRef({ onClose, onPrevious, onNext });
+  useEffect(() => { callbacksRef.current = { onClose, onPrevious, onNext }; });
   useEffect(() => {
     if (!item) return;
-    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    const onKey = (e) => {
+      const cb = callbacksRef.current;
+      if (e.key === 'Escape') {
+        cb.onClose();
+        return;
+      }
+      if (e.key === 'ArrowLeft' && hasPrevious && cb.onPrevious) {
+        e.preventDefault();
+        cb.onPrevious();
+      }
+      if (e.key === 'ArrowRight' && hasNext && cb.onNext) {
+        e.preventDefault();
+        cb.onNext();
+      }
+    };
     window.addEventListener('keydown', onKey);
     const prev = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     return () => { window.removeEventListener('keydown', onKey); document.body.style.overflow = prev; };
-  }, [item, onClose]);
+  }, [item, hasPrevious, hasNext]);
 
   if (!item) return null;
   const isVideo = item.kind === 'video';
@@ -51,6 +84,28 @@ export default function MediaLightbox({ item, onClose, onRemix, onSendToVideo, o
       onClick={onClose}
       onKeyDown={(e) => e.key === 'Escape' && onClose()}
     >
+      {hasPrevious && (
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onPrevious?.(); }}
+          className="absolute left-3 md:left-5 top-1/2 -translate-y-1/2 z-10 p-2.5 rounded-full bg-black/55 text-white border border-white/15 hover:bg-black/75 focus:outline-none focus:ring-2 focus:ring-port-accent"
+          aria-label="Previous media"
+          title="Previous"
+        >
+          <ChevronLeft className="w-6 h-6" />
+        </button>
+      )}
+      {hasNext && (
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onNext?.(); }}
+          className="absolute right-3 md:right-5 top-1/2 -translate-y-1/2 z-10 p-2.5 rounded-full bg-black/55 text-white border border-white/15 hover:bg-black/75 focus:outline-none focus:ring-2 focus:ring-port-accent"
+          aria-label="Next media"
+          title="Next"
+        >
+          <ChevronRight className="w-6 h-6" />
+        </button>
+      )}
       <div
         className="relative bg-port-card border border-port-border rounded-xl overflow-hidden max-w-6xl w-full max-h-[92vh] flex flex-col md:flex-row"
         onClick={(e) => e.stopPropagation()}

@@ -42,6 +42,7 @@ const variationSchema = z.object({
   prompt: z.string().trim().min(1).max(svc.PROMPT_FRAGMENT_MAX),
 });
 const compositeSheetSchema = z.object({
+  kind: z.enum(svc.COMPOSITE_SHEET_KINDS).optional(),
   label: z.string().trim().min(1).max(svc.VARIATION_LABEL_MAX),
   prompt: z.string().trim().min(1).max(svc.COMPOSITE_PROMPT_MAX),
 });
