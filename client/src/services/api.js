@@ -40,6 +40,7 @@ export * from './apiImageVideo.js';
 export * from './apiMediaJobs.js';
 export * from './apiWritersRoom.js';
 export * from './apiWorldBuilder.js';
+export * from './apiPipeline.js';
 
 // Default export for simplified imports (get/post/put/delete helpers)
 export { default } from './apiCore.js';

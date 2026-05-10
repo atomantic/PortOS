@@ -193,6 +193,7 @@ const navItems = [
     defaultTo: '/media',
     children: [
       { to: '/media', label: 'Media Gen', icon: Layers },
+      { to: '/pipeline', label: 'Pipeline', icon: WorkflowIcon },
       { to: '/world-builder', label: 'World Builder', icon: Globe },
       { to: '/writers-room', label: 'Writers Room', icon: NotebookPen }
     ]
@@ -886,6 +887,7 @@ export default function Layout() {
             location.pathname.startsWith('/meatspace') ||
             location.pathname.startsWith('/media') ||
             location.pathname.startsWith('/messages') ||
+            location.pathname.startsWith('/pipeline/issues/') ||
             location.pathname.startsWith('/post') ||
             location.pathname === '/review' ||
             location.pathname.startsWith('/settings') ||

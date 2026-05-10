@@ -185,6 +185,34 @@
       "model": "default",
       "returnsJson": true,
       "variables": []
+    },
+    "pipeline-idea-expansion": {
+      "name": "Pipeline — Idea / Beat Sheet",
+      "description": "Turn a rough seed idea for one issue or episode into a tight beat sheet with logline, theme, beats, setting, and any new characters. Spine for prose, comic script, TV script, and storyboard stages.",
+      "model": "default",
+      "returnsJson": false,
+      "variables": []
+    },
+    "pipeline-prose": {
+      "name": "Pipeline — Prose Draft",
+      "description": "Draft an 800–1500 word short-story version of one issue/episode from the beat sheet. Includes H2 scene breaks so downstream comic and TV adaptations have stable anchor points.",
+      "model": "default",
+      "returnsJson": false,
+      "variables": []
+    },
+    "pipeline-comic-script": {
+      "name": "Pipeline — Comic Book Script",
+      "description": "Adapt the prose draft into a Marvel/DC house-format comic-book issue script (page → panel → description / caption / dialogue / SFX). One of two parallel script stages, both downstream of prose.",
+      "model": "default",
+      "returnsJson": false,
+      "variables": []
+    },
+    "pipeline-tv-script": {
+      "name": "Pipeline — TV Teleplay",
+      "description": "Adapt the prose draft into a single-episode TV teleplay with sluglines, present-tense action, dialogue, and act breaks. One of two parallel script stages, both downstream of prose.",
+      "model": "default",
+      "returnsJson": false,
+      "variables": []
     }
   }
 }

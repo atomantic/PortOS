@@ -109,3 +109,23 @@ All dependencies audited and justified (2026-04-28). 0 removals. See [docs/DEPS.
 - **Major Dependency Upgrades** — React 19, Zod 4, PM2 6, Vite 8.
 - **Dynamic Skill Marketplace** — Self-generating skill templates from task patterns.
 - **Workflow tab Phase 2** — drag-and-drop ordering of stages, custom user-defined stages, per-app workflow overrides. Builds on the new `/cos/workflow` pipeline.
+
+---
+
+## Pipeline — Deferred
+
+Skeleton landed in `server/services/pipeline/` + `client/src/pages/Pipeline*.jsx`. Items below were scoped out of MVP and live here so they don't evaporate:
+
+- [ ] **Wire `episodeVideo` stage to Creative Director.** `POST /api/pipeline/issues/:id/stages/episodeVideo/visual` currently returns 501. Refactor `server/services/creativeDirector/sceneRunner.js` + `orchestrator.js` to expose a `runSceneForExternalCaller(projectId, sceneId)` helper, then have `visualStages.js` use it for per-scene video + stitch. Persist `cdProjectId` + `videoPath` into `stages.episodeVideo`.
+- [ ] **Wire `storyboards` scene-video rendering** through the same CD handoff once episodeVideo lands. Each scene already records `imageJobId`; add optional `sceneVideoJobId`.
+- [ ] **Rich-text editor for prose stage.** Currently a plain `<textarea>` in `client/src/components/pipeline/stages/ProseStage.jsx`. Either reuse `client/src/components/writers-room/` editor, or pick a minimal markdown editor.
+- [ ] **Versioning / diff view per stage.** No history right now — regenerating overwrites. Could persist last N `lastRunId` snapshots and offer a diff modal.
+- [ ] **"Auto-run everything including video" button.** MVP auto-run stops after the text stages (idea → prose → comic+TV scripts) to avoid burning GPU minutes on un-reviewed content. Add this once `episodeVideo` is wired.
+- [ ] **RunwayML / third-party video provider integration.** Stubs are commented in `server/services/videoGen/`. Once that abstraction lands, the Pipeline's episodeVideo stage should expose a provider picker (local LTX vs Runway vs …).
+- [ ] **Series-arc grouping (Series → Arc → Issue).** MVP collapses arc into series; some narratives want a 3-issue arc that nests inside the series and shares its own arc-bible. Add an `arc` field on issues or a parallel `data/pipeline-arcs.json`.
+- [ ] **Comic-book PDF export.** Once `stages.comicPages` carries enough panel data + rendered images, export a print-ready PDF.
+- [ ] **Voice-controlled stage advancement.** "Next stage", "rerun comic script" via the existing voice agent. Register pipeline stage navigation actions in `server/services/voice/tools.js`.
+- [ ] **Recent-issues dynamic children under the Pipeline sidebar entry.** Currently Pipeline is a single sidebar link; could mirror Apps' `dynamic: 'apps'` pattern in `client/src/components/Layout.jsx`.
+- [ ] **AI-assisted panel/scene prompt generation.** Reserve `pipeline-comic-panel-image-prompt.md` and `pipeline-storyboard-image-prompt.md` template files for a future "AI: turn the script fragment into N image-gen prompts" button on the ComicPages and Storyboards stages.
+- [ ] **Per-panel/scene image progress in the Pipeline UI.** Right now ComicPages and Storyboards record `jobId` but don't subscribe to the media-job SSE for live preview. Tie into the existing per-job progress hook so each panel shows live render thumbnails.
+- [ ] **Background auto-run resumption.** If the server restarts mid auto-run, the in-memory `runs` map in `autoRunner.js` is lost — the issue is left in `status: running` with no SSE attachable. Add a startup hook that scans for issues in `running` state and either clears them to `needs-review` or resumes them.
