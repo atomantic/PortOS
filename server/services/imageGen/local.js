@@ -444,6 +444,18 @@ export async function generateImage({ pythonPath, prompt, negativePrompt = '', m
         const proseIdx = lines.findIndex((l, i) => i > structIdx && l.startsWith('❌'));
         userMessage = proseIdx >= 0 ? lines[proseIdx].replace(/^❌\s*/, '') : null;
       }
+      // Heuristic detection for non-USER_ERROR failures we can still
+      // surface actionably. mflux's entry-point shim breaks when a partial
+      // package upgrade leaves user-site at the right version number but
+      // with stale file layout — Python imports the wrong `mflux/` first.
+      // Easier to spot at the source than to teach the user to read pip diffs.
+      if (!userMessage) {
+        const mfluxBroken = lines.some((l) => /ModuleNotFoundError: No module named 'mflux\.models\.flux\.cli'/.test(l));
+        if (mfluxBroken) {
+          userKind = 'mflux_install_corrupted';
+          userMessage = 'Your mflux install is corrupted (entry-point shim and package layout out of sync). Repair with: `pip uninstall -y mflux && pip install --user --force-reinstall --no-cache-dir --no-deps mflux`. If you use conda, run the same in your conda env\'s pip.';
+        }
+      }
       const tail = lines.slice(-10).join('\n');
       const errorText = userMessage
         ? `${userMessage}\n\n(diagnostic) ${reason}`
