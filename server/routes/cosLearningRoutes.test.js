@@ -20,7 +20,11 @@ vi.mock('../services/taskLearning.js', () => ({
   recalculateModelTierMetrics: vi.fn(),
   recalculateDurationStats: vi.fn(),
   getConfidenceLevels: vi.fn(),
-  getTaskTypeConfidence: vi.fn()
+  getTaskTypeConfidence: vi.fn(),
+  getDismissedRecommendations: vi.fn(),
+  dismissRecommendation: vi.fn(),
+  restoreRecommendation: vi.fn(),
+  clearDismissedRecommendations: vi.fn()
 }));
 
 vi.mock('../services/weeklyDigest.js', () => ({
@@ -229,6 +233,83 @@ describe('CoS Learning Routes', () => {
 
       expect(response.status).toBe(200);
       expect(taskLearning.getPromptImprovementRecommendations).toHaveBeenCalledWith('deploy');
+    });
+  });
+
+  describe('GET /api/cos/learning/recommendations/dismissed', () => {
+    it('should return dismissed recommendations list', async () => {
+      taskLearning.getDismissedRecommendations.mockResolvedValue([
+        { id: 'error-pattern:unknown', dismissedAt: '2026-05-07T00:00:00.000Z', snapshot: { kind: 'count', value: 74 } }
+      ]);
+
+      const response = await request(app).get('/api/cos/learning/recommendations/dismissed');
+
+      expect(response.status).toBe(200);
+      expect(response.body.count).toBe(1);
+      expect(response.body.dismissed[0].id).toBe('error-pattern:unknown');
+    });
+
+    it('should not be intercepted by the :taskType handler', async () => {
+      taskLearning.getDismissedRecommendations.mockResolvedValue([]);
+
+      await request(app).get('/api/cos/learning/recommendations/dismissed');
+
+      expect(taskLearning.getDismissedRecommendations).toHaveBeenCalled();
+      expect(taskLearning.getPromptImprovementRecommendations).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('POST /api/cos/learning/recommendations/dismiss', () => {
+    it('should dismiss a recommendation by id and snapshot', async () => {
+      taskLearning.dismissRecommendation.mockResolvedValue({ id: 'error-pattern:unknown', dismissed: true });
+
+      const response = await request(app)
+        .post('/api/cos/learning/recommendations/dismiss')
+        .send({ id: 'error-pattern:unknown', snapshot: { kind: 'count', value: 74 } });
+
+      expect(response.status).toBe(200);
+      expect(response.body.dismissed).toBe(true);
+      expect(taskLearning.dismissRecommendation).toHaveBeenCalledWith('error-pattern:unknown', { kind: 'count', value: 74 });
+    });
+
+    it('should return 400 when id is missing', async () => {
+      const response = await request(app)
+        .post('/api/cos/learning/recommendations/dismiss')
+        .send({});
+
+      expect(response.status).toBe(400);
+    });
+  });
+
+  describe('POST /api/cos/learning/recommendations/restore', () => {
+    it('should restore a dismissed recommendation', async () => {
+      taskLearning.restoreRecommendation.mockResolvedValue({ id: 'error-pattern:unknown', restored: true });
+
+      const response = await request(app)
+        .post('/api/cos/learning/recommendations/restore')
+        .send({ id: 'error-pattern:unknown' });
+
+      expect(response.status).toBe(200);
+      expect(response.body.restored).toBe(true);
+    });
+
+    it('should return 400 when id is missing', async () => {
+      const response = await request(app)
+        .post('/api/cos/learning/recommendations/restore')
+        .send({});
+
+      expect(response.status).toBe(400);
+    });
+  });
+
+  describe('POST /api/cos/learning/recommendations/clear-dismissed', () => {
+    it('should clear all dismissed recommendations', async () => {
+      taskLearning.clearDismissedRecommendations.mockResolvedValue({ cleared: true });
+
+      const response = await request(app).post('/api/cos/learning/recommendations/clear-dismissed');
+
+      expect(response.status).toBe(200);
+      expect(response.body.cleared).toBe(true);
     });
   });
 

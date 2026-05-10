@@ -9,7 +9,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
-import { listJobs, getJob, cancelJob, JOB_KINDS, JOB_STATUSES } from '../services/mediaJobQueue/index.js';
+import { listJobs, getJob, cancelJob, cancelQueuedJobs, JOB_KINDS, JOB_STATUSES } from '../services/mediaJobQueue/index.js';
 
 const router = Router();
 
@@ -82,6 +82,15 @@ router.post('/:id/cancel', asyncHandler(async (req, res) => {
     const status = result.code === 'ALREADY_TERMINAL' ? 409 : 404;
     throw new ServerError(result.error || 'Cancel failed', { status, code: result.code || 'NOT_FOUND' });
   }
+  res.json(result);
+}));
+
+// Bulk-cancel every queued job (running jobs are left alone — they need a
+// per-id POST to trigger the SIGTERM path). Optional ?kind=image|video filter.
+const cancelQueuedSchema = z.object({ kind: z.enum(JOB_KINDS).optional() });
+router.post('/cancel-queued', asyncHandler(async (req, res) => {
+  const { kind } = validateRequest(cancelQueuedSchema, req.query);
+  const result = await cancelQueuedJobs({ kind });
   res.json(result);
 }));
 

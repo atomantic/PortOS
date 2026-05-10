@@ -41,6 +41,19 @@ import { enqueueEvaluateTask } from './agentBridge.js';
 
 const MAX_SCENE_RETRIES = 3;
 
+// Default image strength when an i2v continuation scene has no explicit
+// per-scene `imageStrength`. Anchors the next clip to the prior last-frame
+// hard enough to preserve scene geometry (subject, camera, palette) while
+// still allowing motion. Lower values let the model drift; higher values
+// can cause near-still frames. 0.85 lands near the sweet spot in practice.
+export const DEFAULT_CONTINUATION_IMAGE_STRENGTH = 0.85;
+
+export function resolveImageStrength({ explicit, isContinuation }) {
+  if (explicit != null) return explicit;
+  if (isContinuation) return DEFAULT_CONTINUATION_IMAGE_STRENGTH;
+  return null;
+}
+
 /**
  * Kick off a render for a single scene. Returns the jobId; the caller does
  * not need to await completion — the listener installed here will spawn
@@ -163,6 +176,17 @@ export async function runSceneRender(project, scene) {
     durationSeconds: scene.durationSeconds,
   });
 
+  // Resolve effective image strength. Continuation renders that don't pin a
+  // strength tend to drift hard from the seed (a "blue ball" continuation
+  // generates a totally new scene that loosely starts from the seed) — so
+  // anchor i2v continuation scenes at 0.85 by default. Explicit per-scene
+  // values from the treatment / evaluator override the default; null
+  // outside continuation lets the renderer apply its own default.
+  const effectiveImageStrength = resolveImageStrength({
+    explicit: scene.imageStrength,
+    isContinuation: continuationSourceFromExtract && !!sourceImagePath,
+  });
+
   const params = {
     pythonPath,
     prompt: scene.prompt,
@@ -177,6 +201,7 @@ export async function runSceneRender(project, scene) {
     tiling: 'auto',
     sourceImagePath,
     mode: sourceImagePath ? 'image' : 'text',
+    imageStrength: effectiveImageStrength,
     // Smoke-test / dev knob: skips the mlx_video audio-gen pass to cut
     // wall-clock per scene roughly in half. Project-level so every scene
     // in the project inherits the same setting.

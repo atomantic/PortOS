@@ -27,7 +27,7 @@ import { hfTokenEnv } from '../../lib/hfToken.js';
 
 const IS_WIN = process.platform === 'win32';
 
-import { getImageModels, isFlux2 } from '../../lib/mediaModels.js';
+import { getImageModels, isFlux2, isZImage, isErnie } from '../../lib/mediaModels.js';
 
 export const IMAGE_MODELS = Object.fromEntries(getImageModels().map((m) => [m.id, m]));
 
@@ -65,8 +65,48 @@ export const cancel = () => {
   return true;
 };
 
-export const buildArgs = ({ pythonPath, model, prompt, negativePrompt, width, height, steps, guidance, seed, quantize, outputPath, loraPaths, loraScales, stepwiseDir, initImagePath, initImageStrength }) => {
+export const buildArgs = ({ pythonPath, model, prompt, negativePrompt, width, height, steps, guidance, seed, quantize, outputPath, loraPaths = [], loraScales = [], stepwiseDir, initImagePath, initImageStrength }) => {
   const modelId = model?.id;
+  if (isZImage(model) || isErnie(model)) {
+    if (!model.repo) {
+      throw new ServerError(
+        `${isErnie(model) ? 'ERNIE' : 'Z-Image'} model "${modelId}" is missing the 'repo' field in data/media-models.json`,
+        { status: 500, code: isErnie(model) ? 'IMAGE_GEN_ERNIE_MISCONFIGURED' : 'IMAGE_GEN_Z_IMAGE_MISCONFIGURED' },
+      );
+    }
+    // Z-Image / ERNIE both reuse the FLUX.2 venv (same diffusers + torch
+    // stack, no extra setup). Same not-installed error code so the UI's
+    // existing "run setup" CTA fires for any of these runners.
+    const torchPython = resolveFlux2Python();
+    if (!torchPython) {
+      throw new ServerError(
+        `Image-gen torch venv not found. Run \`INSTALL_FLUX2=1 bash scripts/setup-image-video.sh\` to bootstrap it (expected at ${FLUX2_VENV_DEFAULT}). FLUX.2, Z-Image, and ERNIE share this venv.`,
+        { status: 400, code: 'IMAGE_GEN_FLUX2_NOT_INSTALLED' },
+      );
+    }
+    const scriptPath = join(PATHS.root, 'scripts', 'z_image_turbo.py');
+    const args = [
+      scriptPath,
+      '--model', modelId,
+      '--repo', model.repo,
+      '--prompt', prompt,
+      '--height', String(height),
+      '--width', String(width),
+      '--steps', String(steps),
+      '--guidance', String(guidance ?? 1.0),
+      '--seed', String(seed),
+      '--output', outputPath,
+    ];
+    if (negativePrompt) args.push('--negative-prompt', negativePrompt);
+    if (initImagePath) args.push('--image-path', initImagePath);
+    if (initImagePath && initImageStrength != null) args.push('--image-strength', String(initImageStrength));
+    if (stepwiseDir) args.push('--stepwise-image-output-dir', stepwiseDir);
+    if (loraPaths?.length) args.push('--lora-paths', ...loraPaths);
+    if (loraScales?.length) args.push('--lora-scales', ...loraScales.map(String));
+    if (model.pipelineClass) args.push('--pipeline-class', String(model.pipelineClass));
+    if (model.usePromptEnhancer) args.push('--use-pe');
+    return { bin: torchPython, args };
+  }
   if (isFlux2(model)) {
     if (!model.repo) {
       throw new ServerError(
@@ -124,6 +164,8 @@ export const buildArgs = ({ pythonPath, model, prompt, negativePrompt, width, he
     if (initImagePath) args.push('--image-path', initImagePath);
     if (initImagePath && initImageStrength != null) args.push('--image-strength', String(initImageStrength));
     if (stepwiseDir) args.push('--stepwise-image-output-dir', stepwiseDir);
+    if (loraPaths?.length) args.push('--lora-paths', ...loraPaths);
+    if (loraScales?.length) args.push('--lora-scales', ...loraScales.map(String));
     return { bin: flux2Python, args };
   }
 
@@ -172,18 +214,18 @@ export async function generateImage({ pythonPath, prompt, negativePrompt = '', m
   // entries broken on the OTHER platform (e.g. 'windows' on a macOS box).
   const model = getImageModels().find((m) => m.id === modelId);
   if (!model) throw new ServerError(`Unknown or unsupported model: ${modelId}`, { status: 400, code: 'VALIDATION_ERROR' });
-  if (!isFlux2(model) && !pythonPath) {
+  // Both flux2 and z-image runners resolve their own Python via the FLUX.2
+  // venv — only the legacy mflux/imagine_win path needs the user-configured
+  // Settings > Image Gen pythonPath.
+  if (!isFlux2(model) && !isZImage(model) && !isErnie(model) && !pythonPath) {
     throw new ServerError('Python path not configured — set it in Settings > Image Gen', { status: 400, code: 'IMAGE_GEN_NOT_CONFIGURED' });
   }
-  // FLUX.2 runner doesn't apply LoRAs yet — reject up-front so the user
-  // doesn't end up with a metadata sidecar that records LoRAs the renderer
-  // silently dropped.
-  if (isFlux2(model) && (loraFilenames.length > 0 || loraPaths.length > 0)) {
-    throw new ServerError(
-      'LoRAs are not supported for FLUX.2 models yet — clear the LoRA selection or pick a Flux 1 model.',
-      { status: 400, code: 'IMAGE_GEN_FLUX2_LORA_UNSUPPORTED' },
-    );
-  }
+  // FLUX.2 and Z-Image runners now load LoRAs via diffusers'
+  // pipe.load_lora_weights — but only LoRAs trained against the matching
+  // base model will produce sensible output. The LoRA picker UI uses the
+  // sidecar's `runnerFamily` field to filter; we don't enforce here so a
+  // user can deliberately experiment with off-family weights and see what
+  // happens (the runner will surface a shape-mismatch error from diffusers).
 
   await ensureDir(PATHS.images);
   await ensureDir(PATHS.loras);
@@ -193,7 +235,18 @@ export async function generateImage({ pythonPath, prompt, negativePrompt = '', m
   const outputPath = join(PATHS.images, filename);
   const actualSeed = seed != null && seed !== '' ? Number(seed) : Math.floor(Math.random() * 2147483647);
   const actualSteps = steps ? Number(steps) : model.steps;
-  const actualGuidance = guidance != null && guidance !== '' ? Number(guidance) : model.guidance;
+  // Step-wise distilled models (Schnell / FLUX.2 Klein / Z-Image-Turbo) ignore
+  // any guidance scale > 1.0 internally; passing a real value just produces a
+  // "Guidance scale X is ignored for step-wise distilled models." warning on
+  // every render. Clamp to ≤1.0 (rather than hard-pin to 1.0) so registry
+  // entries that intentionally use 0.0 — e.g. Flux.1 Schnell, where the mflux
+  // runner historically *omits* --guidance entirely on 0 — keep their existing
+  // behavior. The clamp keeps FLUX.2 / Z-Image / ERNIE quiet while leaving
+  // sub-1.0 values (including 0.0) untouched.
+  const requestedGuidance = guidance != null && guidance !== '' ? Number(guidance) : model.guidance;
+  const actualGuidance = model.cfgDisabled
+    ? Math.min(1.0, Number.isFinite(requestedGuidance) ? requestedGuidance : 1.0)
+    : requestedGuidance;
   // The new client-side surface sends `loraFilenames` (basenames only); the
   // server resolves them against PATHS.loras. `loraPaths` is kept as a
   // back-compat input for old gallery sidecars that stored absolute paths
@@ -244,9 +297,17 @@ export async function generateImage({ pythonPath, prompt, negativePrompt = '', m
 
   const proc = spawn(bin, args, { env: { ...process.env, ...(await hfTokenEnv()) }, stdio: ['ignore', 'pipe', 'pipe'] });
   activeProcess = proc;
-  // Without an 'error' handler, a missing/non-executable pythonPath would
-  // crash the server with an unhandled error event.
+  // Spawn ENOENT (missing/non-executable pythonPath) fires BOTH 'error' and
+  // 'close' on Node — without this guard, a typo'd pythonPath emits two
+  // 'failed' events to imageGenEvents and two SSE error frames to the
+  // client. The mediaJobQueue's terminate() is idempotent on the first, but
+  // the duplicate noise still confuses anything else listening. Track
+  // whether we've finalized so the close handler can detect "already
+  // handled" and skip the second emit.
+  let finalized = false;
   proc.on('error', (err) => {
+    if (finalized) return;
+    finalized = true;
     job.status = 'error';
     const reason = `Failed to spawn ${bin}: ${err.message}`;
     console.log(`❌ Image generation spawn error [${jobId.slice(0, 8)}]: ${reason}`);
@@ -320,6 +381,10 @@ export async function generateImage({ pythonPath, prompt, negativePrompt = '', m
   const handleLine = (line) => {
     const trimmed = line.trim();
     if (!trimmed || PYTHON_NOISE_RE.test(trimmed)) return true;
+    // Heartbeat — any non-noise line resets the queue's idle watchdog so
+    // first-run multi-GB HF downloads don't trip the timeout when
+    // tqdm is slow to update during connection-establishment.
+    imageGenEvents.emit('activity', { generationId: jobId });
 
     if (trimmed.startsWith('STAGE:')) {
       const rest = trimmed.slice(6); // strip 'STAGE:'
@@ -372,6 +437,12 @@ export async function generateImage({ pythonPath, prompt, negativePrompt = '', m
   });
 
   proc.on('close', async (code, signal) => {
+    // Guard against the spawn-ENOENT path where 'error' already finalized
+    // the job. Node fires 'error' THEN 'close' (with code -2/null signal)
+    // for a missing binary, and re-running the failure path here would
+    // emit a second 'failed' event + second SSE error frame.
+    if (finalized) return;
+    finalized = true;
     activeProcess = null;
     activeJob = null;
     if (watcher) { try { watcher.close(); } catch { /* ignore */ } }
@@ -395,6 +466,18 @@ export async function generateImage({ pythonPath, prompt, negativePrompt = '', m
         userRepo = rest.join(':') || null;
         const proseIdx = lines.findIndex((l, i) => i > structIdx && l.startsWith('❌'));
         userMessage = proseIdx >= 0 ? lines[proseIdx].replace(/^❌\s*/, '') : null;
+      }
+      // Heuristic detection for non-USER_ERROR failures we can still
+      // surface actionably. mflux's entry-point shim breaks when a partial
+      // package upgrade leaves user-site at the right version number but
+      // with stale file layout — Python imports the wrong `mflux/` first.
+      // Easier to spot at the source than to teach the user to read pip diffs.
+      if (!userMessage) {
+        const mfluxBroken = lines.some((l) => /ModuleNotFoundError: No module named 'mflux\.models\.flux\.cli'/.test(l));
+        if (mfluxBroken) {
+          userKind = 'mflux_install_corrupted';
+          userMessage = 'Your mflux install is corrupted (entry-point shim and package layout out of sync). Repair with: `pip uninstall -y mflux && pip install --user --force-reinstall --no-cache-dir --no-deps mflux`. If you use conda, run the same in your conda env\'s pip.';
+        }
       }
       const tail = lines.slice(-10).join('\n');
       const errorText = userMessage
@@ -428,6 +511,30 @@ export async function generateImage({ pythonPath, prompt, negativePrompt = '', m
   return { jobId, filename, path: `/data/images/${filename}`, generationId: jobId, mode: 'local', model: modelId, seed: actualSeed };
 }
 
+// Validate a gallery filename: PNG-only, basename only, no path separators.
+// `.endsWith('.png')` already rejects `.` and `..` so substring-`..` matching
+// would over-reject legitimate names like `my..render.png`. Throws a 400 so
+// callers don't have to repeat the check.
+export function assertGalleryFilename(filename) {
+  if (!filename || !filename.endsWith('.png')
+      || filename.includes('/') || filename.includes('\\')) {
+    throw new ServerError('Invalid filename', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+}
+
+// Returns `{ path, metadata }`. `path` is the resolved sidecar location, or
+// the preferred Portos location on miss — callers writing back land at the
+// canonical path automatically.
+export async function readImageSidecar(filename) {
+  const portosSidecar = join(PATHS.images, filename.replace('.png', '.metadata.json'));
+  const altSidecar = join(PATHS.images, `${filename}.metadata.json`);
+  for (const path of [portosSidecar, altSidecar]) {
+    const raw = await readFile(path, 'utf-8').catch(() => null);
+    if (raw != null) return { path, metadata: safeJSONParse(raw, {}) };
+  }
+  return { path: portosSidecar, metadata: {} };
+}
+
 export async function listGallery() {
   if (!existsSync(PATHS.images)) return [];
   const files = await readdir(PATHS.images);
@@ -436,15 +543,7 @@ export async function listGallery() {
     const fullPath = join(PATHS.images, f);
     const s = await stat(fullPath).catch(() => null);
     if (!s) return null;
-    // Try our sidecar first, fall back to mflux's own .metadata.json shape.
-    const portosSidecar = join(PATHS.images, f.replace('.png', '.metadata.json'));
-    const altSidecar = join(PATHS.images, `${f}.metadata.json`);
-    const path = existsSync(portosSidecar) ? portosSidecar : (existsSync(altSidecar) ? altSidecar : null);
-    let metadata = {};
-    if (path) {
-      const raw = await readFile(path, 'utf-8').catch(() => null);
-      if (raw) metadata = safeJSONParse(raw, {});
-    }
+    const { metadata } = await readImageSidecar(f);
     return {
       filename: f,
       path: `/data/images/${f}`,
@@ -456,9 +555,7 @@ export async function listGallery() {
 }
 
 export async function deleteImage(filename) {
-  if (!filename.endsWith('.png') || filename.includes('/') || filename.includes('\\') || filename.includes('..')) {
-    throw new ServerError('Invalid filename', { status: 400, code: 'VALIDATION_ERROR' });
-  }
+  assertGalleryFilename(filename);
   await unlink(join(PATHS.images, filename)).catch(() => {});
   await unlink(join(PATHS.images, filename.replace('.png', '.metadata.json'))).catch(() => {});
   await unlink(join(PATHS.images, `${filename}.metadata.json`)).catch(() => {});
@@ -467,17 +564,11 @@ export async function deleteImage(filename) {
 }
 
 export async function setImageHidden(filename, hidden) {
-  if (!filename.endsWith('.png') || filename.includes('/') || filename.includes('\\') || filename.includes('..')) {
-    throw new ServerError('Invalid filename', { status: 400, code: 'VALIDATION_ERROR' });
-  }
-  const portosSidecar = join(PATHS.images, filename.replace('.png', '.metadata.json'));
-  const altSidecar = join(PATHS.images, `${filename}.metadata.json`);
-  const sidecarPath = existsSync(portosSidecar) ? portosSidecar : (existsSync(altSidecar) ? altSidecar : portosSidecar);
-  const raw = await readFile(sidecarPath, 'utf-8').catch(() => null);
-  const meta = raw ? safeJSONParse(raw, {}) : {};
-  meta.hidden = !!hidden;
-  await writeFile(sidecarPath, JSON.stringify(meta, null, 2));
-  return { ok: true, hidden: meta.hidden };
+  assertGalleryFilename(filename);
+  const { path: sidecarPath, metadata } = await readImageSidecar(filename);
+  metadata.hidden = !!hidden;
+  await writeFile(sidecarPath, JSON.stringify(metadata, null, 2));
+  return { ok: true, hidden: metadata.hidden };
 }
 
 // Returns just `{ filename, name }` — clients send `filename` back in the

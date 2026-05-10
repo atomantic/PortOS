@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { AlertTriangle, Check, Clapperboard, FileSignature, Loader2, MapPin, RotateCcw, Sparkles, Users } from 'lucide-react';
+import { AlertTriangle, Check, Clapperboard, FileSignature, MapPin, RotateCcw, Sparkles, Users } from 'lucide-react';
 import toast from '../ui/Toast';
 import { listWritersRoomAnalyses, getWritersRoomAnalysis } from '../../services/apiWritersRoom';
 import { timeAgo } from '../../utils/formatters';

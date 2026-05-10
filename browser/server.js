@@ -1,15 +1,15 @@
 import { spawn } from 'child_process';
 import { createServer } from 'http';
 import { readFile, mkdir } from 'fs/promises';
-import { resolve, dirname } from 'path';
+import { resolve, dirname, join } from 'path';
 import { fileURLToPath } from 'url';
-import { platform } from 'os';
+import { platform, homedir } from 'os';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = resolve(__dirname, '..');
 const CONFIG_FILE = resolve(PROJECT_ROOT, 'data', 'browser-config.json');
 const DEFAULT_PROFILE_DIR = resolve(PROJECT_ROOT, 'data', 'browser-profile');
-const DEFAULT_DOWNLOAD_DIR = resolve(PROJECT_ROOT, 'data', 'browser-downloads');
+const DEFAULT_DOWNLOAD_DIR = join(homedir(), 'Downloads');
 
 const CDP_PORT = parseInt(process.env.CDP_PORT || '5556', 10);
 const HEALTH_PORT = parseInt(process.env.PORT || '5557', 10);

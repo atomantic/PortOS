@@ -52,7 +52,7 @@ const DEFAULT_REGISTRY = {
   image: [
     // mflux runner — MLX-only, Flux 1 (dev/schnell). `runner` defaults to 'mflux'.
     { id: 'dev',              name: 'Flux 1 Dev',      steps: 20, guidance: 3.5 },
-    { id: 'schnell',          name: 'Flux 1 Schnell',  steps: 4,  guidance: 0   },
+    { id: 'schnell',          name: 'Flux 1 Schnell',  steps: 4,  guidance: 0,   cfgDisabled: true },
     // flux2 runner — PyTorch + diffusers + MPS (Apple Silicon) or CUDA (Win/Linux).
     // Models are quantized to fit on consumer hardware; tokenizer comes from the
     // gated base repo, so users must accept the license at huggingface.co and
@@ -66,6 +66,7 @@ const DEFAULT_REGISTRY = {
       tokenizerRepo: 'black-forest-labs/FLUX.2-klein-4B',
       steps: 8,
       guidance: 3.5,
+      cfgDisabled: true,
     },
     {
       id: 'flux2-klein-9b',
@@ -76,6 +77,7 @@ const DEFAULT_REGISTRY = {
       tokenizerRepo: 'black-forest-labs/FLUX.2-klein-9B',
       steps: 8,
       guidance: 3.5,
+      cfgDisabled: true,
     },
     {
       id: 'flux2-klein-4b-int8',
@@ -86,6 +88,56 @@ const DEFAULT_REGISTRY = {
       basePipelineRepo: 'black-forest-labs/FLUX.2-klein-4B',
       steps: 8,
       guidance: 3.5,
+      cfgDisabled: true,
+    },
+    // z-image runner — Apache 2.0, ungated, reuses the FLUX.2 venv. Turbo
+    // distillation runs ~8 steps with CFG disabled (guidance 1.0).
+    {
+      id: 'z-image-turbo-bf16',
+      name: 'Z-Image-Turbo (bf16, ~13 GB)',
+      runner: 'z-image',
+      repo: 'Tongyi-MAI/Z-Image-Turbo',
+      steps: 8,
+      guidance: 1.0,
+      cfgDisabled: true,
+    },
+    // ernie runner — Baidu's ERNIE-Image (8B DiT). Apache 2.0, ungated,
+    // reuses the FLUX.2 venv. Pipeline class isn't in AutoPipelineForText2Image's
+    // registry yet so we pass `pipelineClass: 'ErnieImagePipeline'` for
+    // explicit dispatch. `usePromptEnhancer` activates the built-in PE module.
+    {
+      id: 'ernie-image',
+      name: 'ERNIE-Image (~16 GB @ bf16, 50 steps)',
+      runner: 'ernie',
+      repo: 'baidu/ERNIE-Image',
+      pipelineClass: 'ErnieImagePipeline',
+      usePromptEnhancer: true,
+      steps: 50,
+      guidance: 4.0,
+    },
+    {
+      id: 'ernie-image-turbo',
+      name: 'ERNIE-Image-Turbo (~16 GB @ bf16, 8 steps)',
+      runner: 'ernie',
+      repo: 'baidu/ERNIE-Image-Turbo',
+      pipelineClass: 'ErnieImagePipeline',
+      usePromptEnhancer: true,
+      steps: 8,
+      guidance: 1.0,
+      cfgDisabled: true,
+    },
+    {
+      id: 'z-image-turbo-quant',
+      name: 'Z-Image-Turbo (community quantized)',
+      runner: 'z-image',
+      repo: '',
+      steps: 8,
+      guidance: 1.0,
+      cfgDisabled: true,
+      // Hidden from the UI until the user picks a community quant repo and
+      // clears this flag. Keeping the entry here gives them a copy-paste
+      // template instead of having to remember the schema.
+      broken: true,
     },
   ],
   textEncoders: [
@@ -157,18 +209,49 @@ const upgradeImageEntries = (list) => {
   });
 };
 
-export const isFlux2 = (model) => model?.runner === 'flux2';
+// IDs whose underlying pipeline is step-wise distilled (Flux Schnell, FLUX.2
+// Klein, Z-Image-Turbo). For these models, classifier-free guidance is fixed
+// internally and any user-supplied guidance scale is silently ignored — the
+// diffusers runner literally prints "Guidance scale X is ignored for step-
+// wise distilled models." into the log on every render. Surface this as an
+// explicit flag on each registry entry so the UI can hide the Guidance input
+// and the runners can skip passing the flag.
+const CFG_DISABLED_IDS = new Set([
+  'schnell',
+  'flux2-klein-4b',
+  'flux2-klein-9b',
+  'flux2-klein-4b-int8',
+  'z-image-turbo-bf16',
+  'z-image-turbo-quant',
+  'ernie-image-turbo',
+]);
 
-// Append video models that are genuinely new in this release (not in
+const backfillCfgDisabled = (list) => {
+  if (!Array.isArray(list)) return list;
+  return list.map((entry) => {
+    if (!isPlainObject(entry) || typeof entry.id !== 'string') return entry;
+    if ('cfgDisabled' in entry) return entry; // user override (true OR false) wins
+    if (!CFG_DISABLED_IDS.has(entry.id)) return entry;
+    return { ...entry, cfgDisabled: true };
+  });
+};
+
+export const isFlux2 = (model) => model?.runner === 'flux2';
+export const isZImage = (model) => model?.runner === 'z-image';
+export const isErnie = (model) => model?.runner === 'ernie';
+export const isCfgDisabled = (model) => model?.cfgDisabled === true;
+
+// Append models that are genuinely new in this release (not in
 // _shippedDefaults) to the user's list, while respecting deletions the user
 // already made. Returns both the merged entry list and the newly-added ids so
-// the caller can record them in _shippedDefaults.
+// the caller can record them in _shippedDefaults. Used for both video and
+// image lists — the deletion-survives-upgrade contract is identical.
 //
 // Semantics:
 //   - id already in userList             → keep as-is (user customisations intact)
 //   - id in shippedIds but not userList  → user explicitly deleted it; skip
 //   - id NOT in shippedIds               → genuinely new built-in; add + record
-const appendNewlyShippedVideoEntries = (userList, defaultList, shippedIds) => {
+const appendNewlyShippedEntries = (userList, defaultList, shippedIds) => {
   const safeList = Array.isArray(userList) ? userList : [];
   const safeDefaults = Array.isArray(defaultList) ? defaultList : [];
   const userIds = new Set(safeList.map((e) => e?.id).filter((id) => typeof id === 'string'));
@@ -183,7 +266,6 @@ const appendNewlyShippedVideoEntries = (userList, defaultList, shippedIds) => {
   }
   return { entries: result, newlyShipped };
 };
-
 // Existing installs predate the `runtime` field on video entries — fill it
 // with 'mlx_video' (the legacy default) for known-legacy ids so the
 // dispatch in videoGen/local.js routes them through `python -m
@@ -231,25 +313,26 @@ const normalizeRegistry = (parsed) => {
   const safe = isPlainObject(parsed) ? parsed : {};
   const safeVideo = isPlainObject(safe.video) ? safe.video : {};
 
-  // _shippedDefaults tracks which built-in video ids have ever been delivered
+  // _shippedDefaults tracks which built-in ids have ever been delivered
   // to this install, so we can distinguish "user deleted it" from "genuinely
-  // new in this release".
+  // new in this release". Tracked separately for video (per-platform) and
+  // image (single list — image entries cover both platforms).
   const shippedVideo = isPlainObject(safe._shippedDefaults?.video) ? safe._shippedDefaults.video : null;
-  const isBootstrap = shippedVideo === null;
+  const isVideoBootstrap = shippedVideo === null;
 
-  const shippedMacosIds = isBootstrap
+  const shippedMacosIds = isVideoBootstrap
     ? bootstrapShippedIds(safeVideo.macos, DEFAULT_REGISTRY.video.macos)
     : new Set(arrayOrDefault(shippedVideo.macos, []));
-  const shippedWindowsIds = isBootstrap
+  const shippedWindowsIds = isVideoBootstrap
     ? bootstrapShippedIds(safeVideo.windows, DEFAULT_REGISTRY.video.windows)
     : new Set(arrayOrDefault(shippedVideo.windows, []));
 
-  const macosResult = appendNewlyShippedVideoEntries(
+  const macosResult = appendNewlyShippedEntries(
     safeVideo.macos,
     DEFAULT_REGISTRY.video.macos,
     shippedMacosIds,
   );
-  const windowsResult = appendNewlyShippedVideoEntries(
+  const windowsResult = appendNewlyShippedEntries(
     safeVideo.windows,
     DEFAULT_REGISTRY.video.windows,
     shippedWindowsIds,
@@ -260,10 +343,41 @@ const normalizeRegistry = (parsed) => {
     windows: [...shippedWindowsIds, ...windowsResult.newlyShipped],
   };
 
+  // Image upgrade path. Same shape as video, single list. The flux2 upgrade
+  // (upgradeImageEntries) runs first so legacy `broken: 'macos'` entries get
+  // promoted to runner-aware ones before the new-entry append step looks at
+  // their ids. Skips bootstrap union when the image key was missing entirely
+  // (treat as fresh install — let the new entries land).
+  const shippedImage = isPlainObject(safe._shippedDefaults?.image) ? safe._shippedDefaults.image : null;
+  const isImageBootstrap = shippedImage === null;
+  const upgradedImage = backfillCfgDisabled(
+    upgradeImageEntries(arrayOrDefault(safe.image, DEFAULT_REGISTRY.image)),
+  );
+  // Image bootstrap deliberately uses userIds ONLY (not union with defaults).
+  // Image is getting `_shippedDefaults` for the first time in this release, so
+  // there's no prior history of deletions to preserve via the union trick the
+  // video side uses. Pre-existing installs will pick up the new built-ins
+  // (z-image-turbo-*, etc.) on next boot. Subsequent loads use the persisted
+  // list so user deletions stick.
+  const upgradedImageIds = (Array.isArray(upgradedImage) ? upgradedImage : [])
+    .map((e) => e?.id)
+    .filter((id) => typeof id === 'string');
+  const shippedImageIds = isImageBootstrap
+    ? new Set(upgradedImageIds)
+    : new Set(arrayOrDefault(shippedImage.list, []));
+  const imageResult = appendNewlyShippedEntries(
+    upgradedImage,
+    DEFAULT_REGISTRY.image,
+    shippedImageIds,
+  );
+  const updatedShippedImage = {
+    list: [...shippedImageIds, ...imageResult.newlyShipped],
+  };
+
   return {
     ...DEFAULT_REGISTRY,
     ...safe,
-    image: upgradeImageEntries(arrayOrDefault(safe.image, DEFAULT_REGISTRY.image)),
+    image: imageResult.entries,
     textEncoders: arrayOrDefault(safe.textEncoders, DEFAULT_REGISTRY.textEncoders),
     video: {
       ...DEFAULT_REGISTRY.video,
@@ -274,6 +388,7 @@ const normalizeRegistry = (parsed) => {
     _shippedDefaults: {
       ...(safe._shippedDefaults || {}),
       video: updatedShippedVideo,
+      image: updatedShippedImage,
     },
   };
 };
@@ -299,15 +414,22 @@ export const loadMediaModels = () => {
   // ids (bootstrap run or a new built-in model shipped in this release). This
   // ensures user deletions survive the next server restart.
   if (readOk) {
-    const parsedShipped = isPlainObject(parsed._shippedDefaults?.video)
+    const parsedShippedVideo = isPlainObject(parsed._shippedDefaults?.video)
       ? parsed._shippedDefaults.video
       : null;
-    const normalizedShipped = cached._shippedDefaults.video;
-    const changed =
-      parsedShipped === null ||
-      normalizedShipped.macos.length !== (parsedShipped.macos?.length ?? 0) ||
-      normalizedShipped.windows.length !== (parsedShipped.windows?.length ?? 0);
-    if (changed) {
+    const parsedShippedImage = isPlainObject(parsed._shippedDefaults?.image)
+      ? parsed._shippedDefaults.image
+      : null;
+    const normalizedVideo = cached._shippedDefaults.video;
+    const normalizedImage = cached._shippedDefaults.image;
+    const videoChanged =
+      parsedShippedVideo === null ||
+      normalizedVideo.macos.length !== (parsedShippedVideo.macos?.length ?? 0) ||
+      normalizedVideo.windows.length !== (parsedShippedVideo.windows?.length ?? 0);
+    const imageChanged =
+      parsedShippedImage === null ||
+      normalizedImage.list.length !== (parsedShippedImage.list?.length ?? 0);
+    if (videoChanged || imageChanged) {
       writeFileSync(REGISTRY_FILE, JSON.stringify(cached, null, 2) + '\n');
       console.log(`📝 Updated media model registry _shippedDefaults: ${REGISTRY_FILE}`);
     }

@@ -2,7 +2,6 @@ import { useState, useEffect, useCallback } from 'react';
 import {Archive,
   Plus,
   Trash2,
-  Eye,
   GitCompare,
   Calendar,
   FileText,

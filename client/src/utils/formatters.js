@@ -97,14 +97,17 @@ export function timeAgo(dateStr, fallback = 'never') {
  * Format bytes as a human-readable string
  * @param {number} bytes - Size in bytes
  * @param {number} decimals - Number of decimal places
- * @returns {string} Formatted size (e.g., "1.5 KB", "2.3 MB")
+ * @returns {string} Formatted size (e.g., "1.5 KB", "2.3 MB", "4.2 TB")
  */
 export function formatBytes(bytes, decimals = 1) {
   if (!bytes || bytes === 0) return '0 B';
 
   const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB'];
+  // Clamp the unit index so values larger than the largest defined unit
+  // still render with a known suffix (e.g. multi-PB import archives) rather
+  // than `undefined`.
+  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(k)), sizes.length - 1);
 
   return `${parseFloat((bytes / Math.pow(k, i)).toFixed(decimals))} ${sizes[i]}`;
 }

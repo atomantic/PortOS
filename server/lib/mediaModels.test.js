@@ -1,7 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, mkdtempSync, rmSync, writeFileSync, readFileSync } from 'fs';
 import { tmpdir, homedir } from 'os';
-import { join } from 'path';
+import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname_self = dirname(fileURLToPath(import.meta.url));
+const SAMPLE_REGISTRY_PATH = join(__dirname_self, '..', '..', 'data.sample', 'media-models.json');
 
 let tmpDir;
 let registryFile;
@@ -16,6 +20,21 @@ beforeEach(() => {
 afterEach(() => {
   delete process.env.PORTOS_MEDIA_MODELS_FILE;
   rmSync(tmpDir, { recursive: true, force: true });
+});
+
+// data.sample/media-models.json must mirror the in-code DEFAULT_REGISTRY so
+// `npm run setup:data` (which copies data.sample → data on fresh installs)
+// produces the same starting state as the runtime `seedIfMissing()` fallback.
+// Compares the seed file to a freshly-bootstrapped registry with
+// _shippedDefaults stripped (that's a runtime-only field).
+describe('data.sample seed file', () => {
+  it('matches the runtime-seeded DEFAULT_REGISTRY', async () => {
+    const sample = JSON.parse(readFileSync(SAMPLE_REGISTRY_PATH, 'utf-8'));
+    const { loadMediaModels } = await import('./mediaModels.js');
+    const live = loadMediaModels();
+    const { _shippedDefaults: _omit, ...liveSeed } = live;
+    expect(sample).toEqual(liveSeed);
+  });
 });
 
 describe('mediaModels registry', () => {
@@ -367,6 +386,79 @@ describe('mediaModels registry', () => {
     // Persisted to disk
     const onDisk = JSON.parse(readFileSync(registryFile, 'utf-8'));
     expect(onDisk._shippedDefaults.video.macos).toContain('ltx23_dgrauet_q8');
+    logSpy.mockRestore();
+  });
+
+  // Image-side _shippedDefaults — same contract as video, but tracked as a
+  // single list (image entries are platform-agnostic).
+
+  it('fresh install: z-image and flux2 entries seeded; _shippedDefaults.image populated', async () => {
+    const { loadMediaModels, getImageModels } = await import('./mediaModels.js');
+    loadMediaModels();
+    const ids = getImageModels().map((m) => m.id);
+    expect(ids).toContain('z-image-turbo-bf16');
+    expect(ids).toContain('flux2-klein-4b');
+    // Quantized z-image stub is gated off behind broken:true until the user
+    // fills in a community repo, so it shouldn't appear in the platform list.
+    expect(ids).not.toContain('z-image-turbo-quant');
+    const onDisk = JSON.parse(readFileSync(registryFile, 'utf-8'));
+    expect(onDisk._shippedDefaults?.image?.list?.length).toBeGreaterThan(0);
+    expect(onDisk._shippedDefaults.image.list).toContain('z-image-turbo-bf16');
+  });
+
+  it('existing install without _shippedDefaults.image gains the new z-image entries on upgrade', async () => {
+    // Simulate a pre-z-image registry: only flux2 and Flux 1 entries, no
+    // _shippedDefaults.image at all.
+    writeFileSync(registryFile, JSON.stringify({
+      video: { macos: [], windows: [], defaultMacos: 'x', defaultWindows: 'x' },
+      image: [
+        { id: 'dev', name: 'Flux 1 Dev', steps: 20, guidance: 3.5 },
+        { id: 'schnell', name: 'Flux 1 Schnell', steps: 4, guidance: 0 },
+      ],
+      textEncoders: [{ id: 't', label: 't', repo: 'r' }],
+      selectedTextEncoder: 't',
+      _shippedDefaults: { video: { macos: [], windows: [] } }, // image key missing
+    }));
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const { loadMediaModels, getImageModels } = await import('./mediaModels.js');
+    const reg = loadMediaModels();
+    const ids = getImageModels().map((m) => m.id);
+    // New z-image entry must be present after upgrade
+    expect(ids).toContain('z-image-turbo-bf16');
+    // Pre-existing user entries preserved
+    expect(ids).toContain('dev');
+    expect(ids).toContain('schnell');
+    // _shippedDefaults.image written out
+    expect(reg._shippedDefaults.image.list).toContain('z-image-turbo-bf16');
+    expect(reg._shippedDefaults.image.list).toContain('dev');
+    const onDisk = JSON.parse(readFileSync(registryFile, 'utf-8'));
+    expect(onDisk._shippedDefaults.image.list).toContain('z-image-turbo-bf16');
+    logSpy.mockRestore();
+  });
+
+  it('user deletion of z-image entry survives next load', async () => {
+    // _shippedDefaults.image already records z-image-turbo-bf16, but the user
+    // has removed it from their image list.
+    writeFileSync(registryFile, JSON.stringify({
+      video: { macos: [], windows: [], defaultMacos: 'x', defaultWindows: 'x' },
+      image: [
+        { id: 'dev', name: 'Flux 1 Dev', steps: 20, guidance: 3.5 },
+        // z-image-turbo-bf16 deliberately absent
+      ],
+      textEncoders: [{ id: 't', label: 't', repo: 'r' }],
+      selectedTextEncoder: 't',
+      _shippedDefaults: {
+        video: { macos: [], windows: [] },
+        image: { list: ['dev', 'z-image-turbo-bf16', 'flux2-klein-4b', 'flux2-klein-9b', 'flux2-klein-4b-int8', 'schnell', 'z-image-turbo-quant'] },
+      },
+    }));
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const { loadMediaModels, getImageModels } = await import('./mediaModels.js');
+    const reg = loadMediaModels();
+    const ids = getImageModels().map((m) => m.id);
+    expect(ids).not.toContain('z-image-turbo-bf16');
+    // Still recorded in _shippedDefaults so subsequent loads also honour the deletion
+    expect(reg._shippedDefaults.image.list).toContain('z-image-turbo-bf16');
     logSpy.mockRestore();
   });
 

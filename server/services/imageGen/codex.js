@@ -121,7 +121,7 @@ export async function generateImage({ codexPath, model, prompt, width, height, n
   const meta = {
     id: jobId, prompt: prompt.trim(), negativePrompt: negativePrompt || '',
     width: width ? Number(width) : null, height: height ? Number(height) : null,
-    filename, mode: 'codex', model: model || null,
+    filename, mode: 'codex', model: model || 'codex',
     createdAt: new Date().toISOString(),
   };
   const job = { ...meta, clients: [], status: 'running' };

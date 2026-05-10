@@ -1,20 +1,56 @@
-import { useEffect } from 'react';
-import { X, Copy, Sparkles, Film, Image as ImageIcon, Download } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import {
+  X, Copy, Sparkles, Film, Image as ImageIcon, Download, Eraser,
+  ChevronLeft, ChevronRight,
+} from 'lucide-react';
 import toast from '../ui/Toast';
 
-// Full-screen preview for a normalized media item (image or video). Shows the
-// media on the left, all generation settings on the right with copy buttons
-// for the prompts, plus contextual actions (Remix, Send to Video, Continue
-// from last frame). Esc + backdrop click close. Caller wires action handlers.
-export default function MediaLightbox({ item, onClose, onRemix, onSendToVideo, onContinue }) {
+// Mirror of CLEAN_LEVELS in server/routes/imageClean.js. If the server adds a
+// new level, drop a label here and the pill renders automatically.
+const CLEAN_LEVEL_LABELS = { light: 'Light', aggressive: 'Aggressive' };
+
+// onClean(item, level) — optional. Returning a rejected promise keeps the
+// lightbox open (e.g. on error) so the user can retry.
+export default function MediaLightbox({
+  item,
+  onClose,
+  onRemix,
+  onSendToVideo,
+  onContinue,
+  onClean,
+  onPrevious,
+  onNext,
+  hasPrevious = false,
+  hasNext = false,
+}) {
+  const [cleaning, setCleaning] = useState(null);
+  // Read callbacks from refs so the keydown listener doesn't re-subscribe on
+  // every parent render (callers pass inline arrows; the lightbox parent re-
+  // renders constantly while media-gen events stream in).
+  const callbacksRef = useRef({ onClose, onPrevious, onNext });
+  useEffect(() => { callbacksRef.current = { onClose, onPrevious, onNext }; });
   useEffect(() => {
     if (!item) return;
-    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    const onKey = (e) => {
+      const cb = callbacksRef.current;
+      if (e.key === 'Escape') {
+        cb.onClose();
+        return;
+      }
+      if (e.key === 'ArrowLeft' && hasPrevious && cb.onPrevious) {
+        e.preventDefault();
+        cb.onPrevious();
+      }
+      if (e.key === 'ArrowRight' && hasNext && cb.onNext) {
+        e.preventDefault();
+        cb.onNext();
+      }
+    };
     window.addEventListener('keydown', onKey);
     const prev = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     return () => { window.removeEventListener('keydown', onKey); document.body.style.overflow = prev; };
-  }, [item, onClose]);
+  }, [item, hasPrevious, hasNext]);
 
   if (!item) return null;
   const isVideo = item.kind === 'video';
@@ -48,10 +84,36 @@ export default function MediaLightbox({ item, onClose, onRemix, onSendToVideo, o
       onClick={onClose}
       onKeyDown={(e) => e.key === 'Escape' && onClose()}
     >
+      {hasPrevious && (
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onPrevious?.(); }}
+          className="absolute left-3 md:left-5 top-1/2 -translate-y-1/2 z-10 p-2.5 rounded-full bg-black/55 text-white border border-white/15 hover:bg-black/75 focus:outline-none focus:ring-2 focus:ring-port-accent"
+          aria-label="Previous media"
+          title="Previous"
+        >
+          <ChevronLeft className="w-6 h-6" />
+        </button>
+      )}
+      {hasNext && (
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onNext?.(); }}
+          className="absolute right-3 md:right-5 top-1/2 -translate-y-1/2 z-10 p-2.5 rounded-full bg-black/55 text-white border border-white/15 hover:bg-black/75 focus:outline-none focus:ring-2 focus:ring-port-accent"
+          aria-label="Next media"
+          title="Next"
+        >
+          <ChevronRight className="w-6 h-6" />
+        </button>
+      )}
       <div
         className="relative bg-port-card border border-port-border rounded-xl overflow-hidden max-w-6xl w-full max-h-[92vh] flex flex-col md:flex-row"
         onClick={(e) => e.stopPropagation()}
         role="presentation"
+        // Pin card/border alpha to 1 inside this focused modal so glass-style themes
+        // (Lumen Glass Day, Pastel Dawn, etc.) render an opaque panel against the
+        // bg-black/90 overlay — the translucent default makes button text illegible.
+        style={{ '--port-card-alpha': 1, '--port-border-alpha': 1 }}
       >
         <div className="flex-1 bg-black flex items-center justify-center min-h-0">
           {isVideo ? (
@@ -126,7 +188,7 @@ export default function MediaLightbox({ item, onClose, onRemix, onSendToVideo, o
               <button
                 type="button"
                 onClick={() => { onRemix(item); onClose(); }}
-                className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs bg-port-accent/20 hover:bg-port-accent/40 text-port-accent rounded"
+                className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs bg-port-accent text-white hover:opacity-90 rounded"
               >
                 <Sparkles className="w-3.5 h-3.5" /> Remix
               </button>
@@ -135,16 +197,51 @@ export default function MediaLightbox({ item, onClose, onRemix, onSendToVideo, o
               <button
                 type="button"
                 onClick={() => { onSendToVideo(item); onClose(); }}
-                className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs bg-port-success/20 hover:bg-port-success/40 text-port-success rounded"
+                className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs bg-port-success text-white hover:opacity-90 rounded"
               >
                 <Film className="w-3.5 h-3.5" /> Send to Video
               </button>
+            )}
+            {!isVideo && onClean && (
+              <div
+                className="flex items-stretch rounded overflow-hidden border border-port-border"
+                role="group"
+                aria-label="Clean image"
+              >
+                <span className="flex items-center gap-1 px-2 py-1.5 text-xs bg-port-border/40 text-gray-300">
+                  <Eraser className="w-3.5 h-3.5" /> Clean
+                </span>
+                {Object.entries(CLEAN_LEVEL_LABELS).map(([level, label]) => (
+                  <button
+                    key={level}
+                    type="button"
+                    disabled={cleaning != null}
+                    onClick={async () => {
+                      if (cleaning) return;
+                      setCleaning(level);
+                      let ok = false;
+                      try {
+                        await onClean(item, level);
+                        ok = true;
+                      } catch {
+                        // Caller toasts its own error; stay open so the user can retry.
+                      } finally {
+                        setCleaning(null);
+                      }
+                      if (ok) onClose();
+                    }}
+                    className={`px-2 py-1.5 text-xs border-l border-port-border text-white hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed ${level === 'aggressive' ? 'bg-port-warning/80' : 'bg-port-border/70'}`}
+                  >
+                    {cleaning === level ? '…' : label}
+                  </button>
+                ))}
+              </div>
             )}
             {isVideo && onContinue && (
               <button
                 type="button"
                 onClick={() => { onContinue(item); onClose(); }}
-                className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs bg-port-accent/20 hover:bg-port-accent/40 text-port-accent rounded"
+                className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs bg-port-accent text-white hover:opacity-90 rounded"
               >
                 <ImageIcon className="w-3.5 h-3.5" /> Continue
               </button>

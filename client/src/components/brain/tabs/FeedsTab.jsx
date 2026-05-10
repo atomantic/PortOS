@@ -7,9 +7,7 @@ import {
   ExternalLink,
   Trash2,
   CheckCheck,
-  Circle,
-  ChevronRight,
-  X
+  Circle
 } from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
 import toast from '../../ui/Toast';

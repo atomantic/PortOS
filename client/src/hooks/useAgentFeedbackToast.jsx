@@ -47,7 +47,7 @@ function AgentFeedbackToast({ t, agentData, onFeedback }) {
   }, [expanded, output.length, loadingOutput, agentId]);
 
   return (
-    <div className={`flex flex-col gap-2 transition-all ${expanded ? 'w-[480px]' : 'max-w-xs'}`}>
+    <div className={`flex flex-col gap-2 transition-all ${expanded ? 'w-full sm:w-[480px] max-w-[calc(100vw-2rem)]' : 'max-w-xs'}`}>
       {/* Header */}
       <div className="flex items-center gap-2">
         <span className={success ? 'text-green-500' : 'text-red-500'}>

@@ -195,3 +195,144 @@ describe('imageGen local.buildArgs flux2 dispatch', () => {
     expect(args).toContain('--quantize');
   });
 });
+
+describe('imageGen local.buildArgs z-image dispatch', () => {
+  beforeEach(() => {
+    mockResolveFlux2Python.mockReset();
+  });
+
+  const baseInput = {
+    pythonPath: '/usr/bin/python3', // unused for z-image but kept in shape
+    prompt: 'a green dragon',
+    negativePrompt: '',
+    width: 1024,
+    height: 1024,
+    steps: 8,
+    guidance: 1.0,
+    seed: 99,
+    quantize: '8',
+    outputPath: '/tmp/out.png',
+    loraPaths: [],
+    loraScales: [],
+    stepwiseDir: '/tmp/stepwise',
+    initImagePath: null,
+    initImageStrength: null,
+  };
+
+  it('routes z-image models to the FLUX.2 venv + z_image_turbo.py', () => {
+    mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
+    const { bin, args } = buildArgs({
+      ...baseInput,
+      model: {
+        id: 'z-image-turbo-bf16',
+        runner: 'z-image',
+        repo: 'Tongyi-MAI/Z-Image-Turbo',
+      },
+    });
+    expect(bin).toBe('/fake/venv-flux2/bin/python3');
+    expect(args[0]).toMatch(/scripts[/\\]z_image_turbo\.py$/);
+    expect(args).toContain('--repo');
+    expect(args[args.indexOf('--repo') + 1]).toBe('Tongyi-MAI/Z-Image-Turbo');
+    expect(args).toContain('--prompt');
+    expect(args[args.indexOf('--prompt') + 1]).toBe('a green dragon');
+    expect(args).toContain('--guidance');
+    expect(args[args.indexOf('--guidance') + 1]).toBe('1');
+    // No --metadata flag: local.js writes the canonical sidecar itself.
+    expect(args).not.toContain('--metadata');
+    // Stepwise dir threads through.
+    expect(args).toContain('--stepwise-image-output-dir');
+    expect(args[args.indexOf('--stepwise-image-output-dir') + 1]).toBe('/tmp/stepwise');
+    // Z-Image doesn't take FLUX.2's quantization/tokenizer/base flags.
+    expect(args).not.toContain('--quantization');
+    expect(args).not.toContain('--tokenizer-repo');
+    expect(args).not.toContain('--base-pipeline-repo');
+  });
+
+  it('throws a setup hint when the FLUX.2 venv is missing for z-image', () => {
+    mockResolveFlux2Python.mockReturnValue(null);
+    expect(() => buildArgs({
+      ...baseInput,
+      model: { id: 'z-image-turbo-bf16', runner: 'z-image', repo: 'Tongyi-MAI/Z-Image-Turbo' },
+    })).toThrow(/INSTALL_FLUX2=1/);
+  });
+
+  it('throws when a z-image model is missing repo', () => {
+    mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
+    expect(() => buildArgs({
+      ...baseInput,
+      model: { id: 'z-image-broken', runner: 'z-image' },
+    })).toThrow(/missing the 'repo' field/);
+  });
+
+  it('throws when a z-image model has empty repo string', () => {
+    mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
+    expect(() => buildArgs({
+      ...baseInput,
+      model: { id: 'z-image-quant', runner: 'z-image', repo: '' },
+    })).toThrow(/missing the 'repo' field/);
+  });
+
+  it('passes init-image args for z-image i2i', () => {
+    mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
+    const { args } = buildArgs({
+      ...baseInput,
+      initImagePath: '/safe/path/init.png',
+      initImageStrength: 0.6,
+      model: {
+        id: 'z-image-turbo-bf16',
+        runner: 'z-image',
+        repo: 'Tongyi-MAI/Z-Image-Turbo',
+      },
+    });
+    expect(args).toContain('--image-path');
+    expect(args[args.indexOf('--image-path') + 1]).toBe('/safe/path/init.png');
+    expect(args).toContain('--image-strength');
+    expect(args[args.indexOf('--image-strength') + 1]).toBe('0.6');
+  });
+
+  it('passes negative prompt only when non-empty', () => {
+    mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
+    const { args: withoutNeg } = buildArgs({
+      ...baseInput,
+      model: { id: 'z-image-turbo-bf16', runner: 'z-image', repo: 'Tongyi-MAI/Z-Image-Turbo' },
+    });
+    expect(withoutNeg).not.toContain('--negative-prompt');
+    const { args: withNeg } = buildArgs({
+      ...baseInput,
+      negativePrompt: 'blurry',
+      model: { id: 'z-image-turbo-bf16', runner: 'z-image', repo: 'Tongyi-MAI/Z-Image-Turbo' },
+    });
+    expect(withNeg).toContain('--negative-prompt');
+    expect(withNeg[withNeg.indexOf('--negative-prompt') + 1]).toBe('blurry');
+  });
+
+  it('routes ERNIE models through the same script with --pipeline-class + --use-pe', () => {
+    mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
+    const { bin, args } = buildArgs({
+      ...baseInput,
+      model: {
+        id: 'ernie-image',
+        runner: 'ernie',
+        repo: 'baidu/ERNIE-Image',
+        pipelineClass: 'ErnieImagePipeline',
+        usePromptEnhancer: true,
+      },
+    });
+    expect(bin).toBe('/fake/venv-flux2/bin/python3');
+    expect(args[0]).toMatch(/scripts[/\\]z_image_turbo\.py$/);
+    expect(args).toContain('--pipeline-class');
+    expect(args[args.indexOf('--pipeline-class') + 1]).toBe('ErnieImagePipeline');
+    expect(args).toContain('--use-pe');
+    expect(args[args.indexOf('--repo') + 1]).toBe('baidu/ERNIE-Image');
+  });
+
+  it('omits --pipeline-class and --use-pe when the registry entry doesn\'t set them', () => {
+    mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
+    const { args } = buildArgs({
+      ...baseInput,
+      model: { id: 'z-image-turbo-bf16', runner: 'z-image', repo: 'Tongyi-MAI/Z-Image-Turbo' },
+    });
+    expect(args).not.toContain('--pipeline-class');
+    expect(args).not.toContain('--use-pe');
+  });
+});

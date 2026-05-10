@@ -19,6 +19,10 @@ export const setImageHidden = (filename, hidden) => request(`/image-gen/${encode
   method: 'POST',
   body: JSON.stringify({ hidden }),
 });
+export const cleanGalleryImage = (filename, level = 'light') => request(`/image-gen/${encodeURIComponent(filename)}/clean`, {
+  method: 'POST',
+  body: JSON.stringify({ level }),
+});
 
 // Video gen
 export const getVideoGenStatus = () => request('/video-gen/status');
@@ -116,3 +120,36 @@ export const removeMediaCollectionItem = (id, key) => request(`/media/collection
 export const listCachedModels = () => request('/image-video/models');
 export const deleteCachedModel = (dirName) => request(`/image-video/models/hf/${encodeURIComponent(dirName)}`, { method: 'DELETE' });
 export const deleteLora = (filename) => request(`/image-video/models/lora/${encodeURIComponent(filename)}`, { method: 'DELETE' });
+
+// LoRA manager — Civitai-aware list/install/patch/delete. Reads sidecar
+// metadata so the manager UI can show trigger words, base model, recommended
+// scale, preview thumbnail. Used by /media/loras and the Image Gen LoRA picker.
+export const listLorasFull = () => request('/loras');
+// `silent: true` suppresses the auto-toast in apiCore so the page can route
+// CIVITAI_AUTH errors into the in-UI key prompt instead of a fire-and-forget
+// red toast the user can't act on.
+export const installLoraFromCivitai = ({ url, silent = false } = {}) => request('/loras/install', {
+  method: 'POST',
+  body: JSON.stringify({ url }),
+  silent,
+});
+
+// Civitai LoRA suggestions per runner family. Cached server-side for 1h.
+// Pass `force: true` to bust the cache and re-fetch from Civitai.
+export const getCivitaiSuggestions = ({ force = false } = {}) =>
+  request(`/loras/suggestions${force ? '?force=1' : ''}`);
+
+// Civitai auth — read/save/clear the API key. The key never round-trips back
+// to the client; the GET only returns `{ hasKey, source }`.
+export const getCivitaiAuth = () => request('/loras/auth/civitai');
+export const setCivitaiAuth = (apiKey) => request('/loras/auth/civitai', {
+  method: 'POST',
+  body: JSON.stringify({ apiKey }),
+});
+export const clearCivitaiAuth = () => request('/loras/auth/civitai', { method: 'DELETE' });
+export const getLora = (filename) => request(`/loras/${encodeURIComponent(filename)}`);
+export const patchLora = (filename, patch) => request(`/loras/${encodeURIComponent(filename)}`, {
+  method: 'PATCH',
+  body: JSON.stringify(patch),
+});
+export const deleteLoraFull = (filename) => request(`/loras/${encodeURIComponent(filename)}`, { method: 'DELETE' });

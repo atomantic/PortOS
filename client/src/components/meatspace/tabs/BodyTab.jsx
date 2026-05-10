@@ -121,8 +121,8 @@ export default function BodyTab() {
             <h4 className="text-sm font-medium text-gray-300 mb-3">
               {editingEyeIdx != null ? 'Edit Eye Exam' : 'New Eye Exam'}
             </h4>
-            <div className="grid grid-cols-7 gap-2 mb-3">
-              <div>
+            <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2 mb-3">
+              <div className="col-span-2 sm:col-span-4 lg:col-span-1">
                 <label htmlFor="eye-date" className="text-xs text-gray-500">Date</label>
                 <input id="eye-date" type="date" value={eyeForm.date}
                   onChange={e => setEyeForm(f => ({ ...f, date: e.target.value }))}

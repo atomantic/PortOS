@@ -169,14 +169,17 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   // Build worktree context section if applicable
   const willOpenPR = isTruthyMetaFn(task.metadata?.openPR);
   const willReviewLoop = isTruthyMetaFn(task.metadata?.reviewLoop);
+  const isWorktreeOnExistingBranch = worktreeInfo?.existingBranch === true;
   const worktreeSection = worktreeInfo ? `
 ## Git Worktree Context
 You are working in an **isolated git worktree** to avoid conflicts with other agents working concurrently.
-- **Branch**: \`${worktreeInfo.branchName}\`
+- **Branch**: \`${worktreeInfo.branchName}\`${isWorktreeOnExistingBranch ? ' *(pre-existing PR branch)*' : ''}
 - **Worktree Path**: \`${worktreeInfo.worktreePath}\`
 ${worktreeInfo.baseBranch ? `- **Based on**: \`${worktreeInfo.baseBranch}\` (latest from origin)` : ''}
 
-**Important**: Commit your changes to this branch.${willOpenPR ? ' When your task completes, the system will push this branch and open a pull request against the default branch — do NOT push or open a PR yourself.' : ' Your commits will be automatically merged back to the main development branch when your task completes.'} Do NOT manually switch branches or modify the worktree configuration.
+**Important**: ${isWorktreeOnExistingBranch
+    ? 'Commit and **push** any review-fix commits to this branch — the PR points at it, so pushed commits are how Copilot sees your fixes. Use `git pull --rebase` before pushing if needed.'
+    : `Commit your changes to this branch.${willOpenPR ? ' When your task completes, the system will push this branch and open a pull request against the default branch — do NOT push or open a PR yourself.' : ' Your commits will be automatically merged back to the main development branch when your task completes.'}`} Do NOT manually switch branches or modify the worktree configuration.
 ` : '';
 
   // Build pipeline context section if this is a pipeline stage
@@ -210,8 +213,54 @@ After completing your work and before committing, run \`/simplify\` to review th
   // PR URL.
   const reviewLoopSection = willReviewLoop && willOpenPR ? `
 ## Code Review
-After your task completes, the system will request a Copilot code review automatically for GitHub PRs (the step is skipped for GitLab MRs and other non-GitHub forges). You do not need to open the PR or trigger the review yourself — focus on producing high-quality, well-tested code so the review pass goes cleanly.
+After your task completes, the system will request a Copilot code review automatically for GitHub PRs (the step is skipped for GitLab MRs and other non-GitHub forges). The system will then spawn a follow-up agent that runs the full review-and-fix loop until Copilot returns zero comments and merges the PR. You do not need to open the PR, trigger the review, or address feedback yourself — focus on producing high-quality, well-tested code so the review pass goes cleanly.
 ` : '';
+
+  // Build review-loop follow-up section. This is the agent that addresses Copilot's
+  // feedback iteratively and merges the PR — spawned by the previous agent's cleanup
+  // hook (see spawnReviewLoopFollowUp in agentLifecycle.js). It needs the full /do:rpr
+  // procedure inlined because the agent runs in a one-shot session and won't trigger
+  // a slash command itself.
+  const isReviewLoopFollowUp = isTruthyMetaFn(task.metadata?.reviewLoopFollowUp);
+  let reviewLoopFollowUpSection = '';
+  if (isReviewLoopFollowUp) {
+    const prUrl = task.metadata?.reviewLoopPRUrl || '';
+    const prBranch = task.metadata?.reviewLoopPRBranch || '';
+    const prNumber = task.metadata?.reviewLoopPRNumber ?? '';
+    const prOwner = task.metadata?.reviewLoopPROwner ?? '';
+    const prRepo = task.metadata?.reviewLoopPRRepo ?? '';
+    const sourceTaskId = task.metadata?.sourceTaskId || 'unknown';
+    const rprBody = await loadSlashdoFile('rpr').catch(() => null);
+
+    reviewLoopFollowUpSection = `
+## Review-Loop Follow-up (PRIMARY OBJECTIVE)
+A previous agent finished implementing the work for source task **${sourceTaskId}** and opened **PR ${prUrl}** on branch \`${prBranch}\`. The system has already requested an initial Copilot code review. **Your job is to drive the review-and-fix loop to completion and merge the PR.**
+
+**Run this loop UNTIL the PR has zero unresolved Copilot comments OR you hit the iteration cap of 10:**
+
+1. Wait for the latest Copilot review to complete (poll every 5–15s, max 5 minutes per round).
+2. If there are unresolved review threads, fix them in this worktree, run the project's tests, commit (\`feat:\`/\`fix:\` prefix, no Co-Authored-By), push, and resolve the addressed threads.
+3. Re-request a Copilot review.
+4. Repeat from step 1.
+5. When Copilot returns "0 comments" / no unresolved threads, merge the PR with:
+   \`\`\`bash
+   gh pr merge "${prUrl}" --squash --auto --delete-branch
+   \`\`\`
+   ${prOwner && prRepo && prNumber ? `(Equivalent: \`gh pr merge ${prNumber} --repo ${prOwner}/${prRepo} --squash --auto --delete-branch\`.)` : ''}
+6. Exit. Do **not** run \`/do:push\` or open a new PR — the merge handles everything. The system will clean up your worktree on exit (no auto-merge will be re-attempted because \`gh pr merge\` already merged on the remote).
+
+**Hard stop:** if the loop hasn't converged after 10 iterations, post a PR comment summarising the unresolved blockers and exit. Do not loop indefinitely.
+
+**Repeated comments:** If a new Copilot round only re-raises feedback you intentionally rejected (with a reply explaining why), treat that round as clean and move on to merge.
+
+PR Details:
+- **URL**: ${prUrl}
+- **Branch**: \`${prBranch}\`
+${prNumber !== '' ? `- **Number**: ${prNumber}` : ''}
+${prOwner && prRepo ? `- **Repo**: ${prOwner}/${prRepo}` : ''}
+- **Source task**: ${sourceTaskId}
+${rprBody ? `\n### /do:rpr Reference (full procedure)\n\n${rprBody}\n` : ''}`;
+  }
 
   // Build JIRA context section if applicable
   const jiraSection = task.metadata?.jiraTicketId ? `
@@ -260,8 +309,12 @@ ${task.metadata.jiraBranch ? 'Commit your changes to this branch. Do NOT switch 
     }
   }
 
-  // Try to use the prompt template system
-  const promptData = await buildPrompt('cos-agent-briefing', {
+  // Try to use the prompt template system. Skip the template path for
+  // review-loop follow-up agents because the user-side template usually
+  // predates the {{reviewLoopFollowUpSection}} placeholder; the built-in
+  // fallback is the source of truth for that section, and silently dropping
+  // it would leave the agent with no instructions and the loop would not run.
+  const promptData = isReviewLoopFollowUp ? null : await buildPrompt('cos-agent-briefing', {
     task,
     config,
     memorySection,
@@ -272,6 +325,7 @@ ${task.metadata.jiraBranch ? 'Commit your changes to this branch. Do NOT switch 
     jiraSection,
     simplifySection,
     reviewLoopSection,
+    reviewLoopFollowUpSection,
     compactionSection,
     skillSection,
     planningContextSection,
@@ -306,6 +360,7 @@ ${pipelineSection}
 ${jiraSection}
 ${simplifySection}
 ${reviewLoopSection}
+${reviewLoopFollowUpSection}
 ${compactionSection}
 ${skillSection ? `## Task-Type Skill Guidelines\n\n${skillSection}\n` : ''}${toolsSection ? `\n${toolsSection}\n` : ''}${planningContextSection}
 ## Instructions

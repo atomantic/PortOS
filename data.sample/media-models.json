@@ -1,0 +1,165 @@
+{
+  "_doc": "PortOS media model registry. Edit to add models, tune defaults, or switch the text encoder. Restart the server to apply changes.",
+  "video": {
+    "macos": [
+      {
+        "id": "ltx2_unified",
+        "name": "LTX-2 Unified (~42 GB)",
+        "repo": "notapalindrome/ltx2-mlx-av",
+        "runtime": "mlx_video",
+        "steps": 30,
+        "guidance": 3
+      },
+      {
+        "id": "ltx23_unified",
+        "name": "LTX-2.3 Unified Beta (~48 GB)",
+        "repo": "notapalindrome/ltx23-mlx-av",
+        "runtime": "mlx_video",
+        "steps": 25,
+        "guidance": 3
+      },
+      {
+        "id": "ltx23_distilled_q4",
+        "name": "LTX-2.3 Distilled Q4 (~22 GB)",
+        "repo": "notapalindrome/ltx23-mlx-av-q4",
+        "runtime": "mlx_video",
+        "steps": 25,
+        "guidance": 3
+      },
+      {
+        "id": "ltx23_dgrauet_q4",
+        "name": "LTX-2.3 dgrauet Q4 (~16 GB, true keyframes)",
+        "repo": "dgrauet/ltx-2.3-mlx-q4",
+        "runtime": "ltx2",
+        "steps": 8,
+        "guidance": 3
+      },
+      {
+        "id": "ltx23_dgrauet_q8",
+        "name": "LTX-2.3 dgrauet Q8 (~25 GB, true keyframes)",
+        "repo": "dgrauet/ltx-2.3-mlx-q8",
+        "runtime": "ltx2",
+        "steps": 8,
+        "guidance": 3
+      }
+    ],
+    "windows": [
+      {
+        "id": "ltx_video",
+        "name": "LTX-Video 0.9.5 — T2V + I2V (~9.5 GB, auto-downloads)",
+        "runtime": "mlx_video",
+        "steps": 25,
+        "guidance": 3
+      }
+    ],
+    "defaultMacos": "ltx23_distilled_q4",
+    "defaultWindows": "ltx_video"
+  },
+  "image": [
+    {
+      "id": "dev",
+      "name": "Flux 1 Dev",
+      "steps": 20,
+      "guidance": 3.5
+    },
+    {
+      "id": "schnell",
+      "name": "Flux 1 Schnell",
+      "steps": 4,
+      "guidance": 0,
+      "cfgDisabled": true
+    },
+    {
+      "id": "flux2-klein-4b",
+      "name": "Flux 2 Klein 4B (SDNQ 4-bit, ~8 GB @ 512px)",
+      "runner": "flux2",
+      "quantization": "sdnq",
+      "repo": "Disty0/FLUX.2-klein-4B-SDNQ-4bit-dynamic",
+      "tokenizerRepo": "black-forest-labs/FLUX.2-klein-4B",
+      "steps": 8,
+      "guidance": 3.5,
+      "cfgDisabled": true
+    },
+    {
+      "id": "flux2-klein-9b",
+      "name": "Flux 2 Klein 9B (SDNQ 4-bit, ~12 GB — needs 32+ GB RAM)",
+      "runner": "flux2",
+      "quantization": "sdnq",
+      "repo": "Disty0/FLUX.2-klein-9B-SDNQ-4bit-dynamic-svd-r32",
+      "tokenizerRepo": "black-forest-labs/FLUX.2-klein-9B",
+      "steps": 8,
+      "guidance": 3.5,
+      "cfgDisabled": true
+    },
+    {
+      "id": "flux2-klein-4b-int8",
+      "name": "Flux 2 Klein 4B (Int8, ~16 GB)",
+      "runner": "flux2",
+      "quantization": "int8",
+      "repo": "aydin99/FLUX.2-klein-4B-int8",
+      "basePipelineRepo": "black-forest-labs/FLUX.2-klein-4B",
+      "steps": 8,
+      "guidance": 3.5,
+      "cfgDisabled": true
+    },
+    {
+      "id": "z-image-turbo-bf16",
+      "name": "Z-Image-Turbo (bf16, ~13 GB)",
+      "runner": "z-image",
+      "repo": "Tongyi-MAI/Z-Image-Turbo",
+      "steps": 8,
+      "guidance": 1,
+      "cfgDisabled": true
+    },
+    {
+      "id": "ernie-image",
+      "name": "ERNIE-Image (~16 GB @ bf16, 50 steps)",
+      "runner": "ernie",
+      "repo": "baidu/ERNIE-Image",
+      "pipelineClass": "ErnieImagePipeline",
+      "usePromptEnhancer": true,
+      "steps": 50,
+      "guidance": 4
+    },
+    {
+      "id": "ernie-image-turbo",
+      "name": "ERNIE-Image-Turbo (~16 GB @ bf16, 8 steps)",
+      "runner": "ernie",
+      "repo": "baidu/ERNIE-Image-Turbo",
+      "pipelineClass": "ErnieImagePipeline",
+      "usePromptEnhancer": true,
+      "steps": 8,
+      "guidance": 1,
+      "cfgDisabled": true
+    },
+    {
+      "id": "z-image-turbo-quant",
+      "name": "Z-Image-Turbo (community quantized)",
+      "runner": "z-image",
+      "repo": "",
+      "steps": 8,
+      "guidance": 1,
+      "cfgDisabled": true,
+      "broken": true
+    }
+  ],
+  "textEncoders": [
+    {
+      "id": "gemma-4bit",
+      "label": "Gemma 3 12B 4-bit (smallest, ~7 GB)",
+      "repo": "mlx-community/gemma-3-12b-it-4bit"
+    },
+    {
+      "id": "gemma-qat-4bit",
+      "label": "Gemma 3 12B QAT 4-bit (better, ~8 GB, LM Studio)",
+      "repo": "mlx-community/gemma-3-12b-it-qat-4bit",
+      "localPath": "~/.lmstudio/models/mlx-community/gemma-3-12b-it-qat-4bit"
+    },
+    {
+      "id": "gemma-bf16",
+      "label": "Gemma 3 12B bf16 (default, best quality, ~24 GB)",
+      "repo": "mlx-community/gemma-3-12b-it-bf16"
+    }
+  ],
+  "selectedTextEncoder": "gemma-bf16"
+}

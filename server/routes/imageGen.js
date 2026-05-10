@@ -22,7 +22,7 @@ import { local, IMAGE_GEN_MODES } from '../services/imageGen/index.js';
 import { enqueueJob, attachSseClient as attachQueueSseClient, cancelJob, listJobs } from '../services/mediaJobQueue/index.js';
 import { getSettings, saveSettings } from '../services/settings.js';
 import { getHfToken, HF_TOKEN_REGEX } from '../lib/hfToken.js';
-import { getImageModels, isFlux2 } from '../lib/mediaModels.js';
+import { getImageModels, isFlux2, isZImage, isErnie } from '../lib/mediaModels.js';
 import {
   REQUIRED_PACKAGES, detectPython, checkPackages, installPackages,
   isExternallyManaged, createVenv, isAllowedPython, pipNameFor,
@@ -30,7 +30,9 @@ import {
 } from '../lib/pythonSetup.js';
 import { PATHS, ensureDir } from '../lib/fileUtils.js';
 import { join, basename, resolve as resolvePath, sep as PATH_SEP } from 'node:path';
+import { readFile, writeFile } from 'fs/promises';
 import { STYLE_PRESETS } from '../lib/writersRoomStylePresets.js';
+import { cleanImageBuffer, CLEAN_LEVELS } from './imageClean.js';
 
 const router = Router();
 
@@ -211,7 +213,7 @@ router.post('/generate', initImageUpload, asyncHandler(async (req, res) => {
     const selectedModel = allModels.find((m) => m.id === data.modelId)
       ?? allModels.find((m) => m.id === 'dev')
       ?? allModels[0];
-    if (selectedModel && !isFlux2(selectedModel) && !py) {
+    if (selectedModel && !isFlux2(selectedModel) && !isZImage(selectedModel) && !isErnie(selectedModel) && !py) {
       throw new ServerError(
         'Local image generation is not configured (settings.imageGen.local.pythonPath is missing).',
         { status: 400, code: 'IMAGE_GEN_NOT_CONFIGURED' },
@@ -319,6 +321,72 @@ router.delete('/:filename', asyncHandler(async (req, res) => {
 
 router.post('/:filename/visibility', asyncHandler(async (req, res) => {
   res.json(await local.setImageHidden(req.params.filename, !!req.body?.hidden));
+}));
+
+router.post('/:filename/clean', asyncHandler(async (req, res) => {
+  const { level } = validateRequest(
+    z.object({ level: z.enum(CLEAN_LEVELS).optional().default('light') }),
+    req.body,
+  );
+  const filename = req.params.filename;
+  local.assertGalleryFilename(filename);
+
+  const sourcePath = join(PATHS.images, filename);
+  const [buffer, { metadata: sourceMeta }] = await Promise.all([
+    readFile(sourcePath).catch((err) => {
+      if (err.code === 'ENOENT') throw new ServerError('Image not found', { status: 404, code: 'NOT_FOUND' });
+      throw err;
+    }),
+    local.readImageSidecar(filename),
+  ]);
+
+  const result = await cleanImageBuffer(buffer, level);
+  if (result.format !== 'png') {
+    throw new ServerError('Gallery images must be PNG', { status: 400, code: 'UNSUPPORTED_FORMAT' });
+  }
+
+  const base = filename.slice(0, -'.png'.length);
+  const outFilename = `${base}_clean-${level}.png`;
+  const outPath = join(PATHS.images, outFilename);
+  const sidecarPath = join(PATHS.images, `${base}_clean-${level}.metadata.json`);
+
+  const createdAt = new Date().toISOString();
+  // Strip `hidden` so a clean of a hidden source still surfaces in the gallery
+  // — cleaning is a deliberate user action that implies wanting to see the result.
+  // Strip `filename`/`id` so listGallery's `...metadata` spread doesn't overwrite
+  // the disk-derived filename for the cleaned copy with the source's filename.
+  const { hidden: _hidden, filename: _srcFilename, id: _srcId, ...sourceMetaForCleaned } = sourceMeta;
+  const cleanedMeta = {
+    ...sourceMetaForCleaned,
+    createdAt,
+    cleanedFrom: filename,
+    cleanLevel: level,
+    c2paStripped: result.c2paStripped,
+  };
+
+  await Promise.all([
+    writeFile(outPath, result.data),
+    writeFile(sidecarPath, JSON.stringify(cleanedMeta, null, 2)),
+  ]);
+
+  console.log(`🧼 Cleaned ${filename} → ${outFilename} (level=${level}, ${result.sizeBefore}B → ${result.sizeAfter}B, c2pa=${result.c2paStripped})`);
+
+  // sourceMeta first so explicit fields below win on key collisions (the
+  // cleaned copy's createdAt must reflect the cleaning, not the original).
+  res.json({
+    ...sourceMetaForCleaned,
+    filename: outFilename,
+    path: `/data/images/${outFilename}`,
+    createdAt,
+    sizeBefore: result.sizeBefore,
+    sizeAfter: result.sizeAfter,
+    sizeBytes: result.sizeAfter,
+    width: result.width,
+    height: result.height,
+    cleanedFrom: filename,
+    cleanLevel: level,
+    c2paStripped: result.c2paStripped,
+  });
 }));
 
 // --- Local-mode setup automation ---

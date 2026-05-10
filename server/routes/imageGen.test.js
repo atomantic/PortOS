@@ -215,6 +215,33 @@ describe('Image Gen Routes', () => {
       expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
     });
 
+    // z-image and ernie use the FLUX.2 venv — they must NOT require pythonPath.
+    it('local mode with z-image model and missing pythonPath still enqueues (exempted)', async () => {
+      getSettings.mockResolvedValueOnce({ imageGen: { mode: 'local' } }); // no pythonPath
+      mediaJobQueue.enqueueJob.mockReturnValueOnce({ jobId: 'mock-image-job', position: 1, status: 'queued' });
+
+      const response = await request(app)
+        .post('/api/image-gen/generate')
+        .send({ prompt: 'a fox in a forest', modelId: 'z-image-turbo-bf16' });
+
+      expect(response.status).toBe(200);
+      expect(response.body.status).toBe('queued');
+      expect(mediaJobQueue.enqueueJob).toHaveBeenCalled();
+    });
+
+    it('local mode with ernie model and missing pythonPath still enqueues (exempted)', async () => {
+      getSettings.mockResolvedValueOnce({ imageGen: { mode: 'local' } }); // no pythonPath
+      mediaJobQueue.enqueueJob.mockReturnValueOnce({ jobId: 'mock-image-job', position: 1, status: 'queued' });
+
+      const response = await request(app)
+        .post('/api/image-gen/generate')
+        .send({ prompt: 'a wizard tower', modelId: 'ernie-image' });
+
+      expect(response.status).toBe(200);
+      expect(response.body.status).toBe('queued');
+      expect(mediaJobQueue.enqueueJob).toHaveBeenCalled();
+    });
+
     // Codex mode now goes through the mediaJobQueue (codex lane), so a
     // burst of writers-room storyboard renders queues against itself
     // instead of failing the second-and-onwards calls with 409

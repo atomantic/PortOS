@@ -50,11 +50,12 @@ const MediaHistory = lazyWithReload(() => import('./pages/MediaHistory'));
 const MediaCollections = lazyWithReload(() => import('./pages/MediaCollections'));
 const MediaCollectionDetail = lazyWithReload(() => import('./pages/MediaCollectionDetail'));
 const MediaModels = lazyWithReload(() => import('./pages/MediaModels'));
+const Loras = lazyWithReload(() => import('./pages/Loras'));
+const WorldBuilder = lazyWithReload(() => import('./pages/WorldBuilder'));
 const VideoTimeline = lazyWithReload(() => import('./pages/VideoTimeline'));
 const VideoTimelineEditor = lazyWithReload(() => import('./pages/VideoTimelineEditor'));
 const CreativeDirector = lazyWithReload(() => import('./pages/CreativeDirector'));
 const CreativeDirectorDetail = lazyWithReload(() => import('./pages/CreativeDirectorDetail'));
-const RenderQueue = lazyWithReload(() => import('./pages/RenderQueue'));
 const CreateApp = lazyWithReload(() => import('./pages/CreateApp'));
 const Templates = lazyWithReload(() => import('./pages/Templates'));
 const PromptManager = lazyWithReload(() => import('./pages/PromptManager'));
@@ -198,10 +199,11 @@ export default function App() {
             <Route path="creative-director" element={<CreativeDirector />} />
             <Route path="creative-director/:id" element={<Navigate to="overview" replace />} />
             <Route path="creative-director/:id/:tab" element={<CreativeDirectorDetail />} />
-            <Route path="queue" element={<RenderQueue />} />
             <Route path="timeline" element={<VideoTimeline />} />
             <Route path="timeline/:projectId" element={<VideoTimelineEditor />} />
             <Route path="models" element={<MediaModels />} />
+            <Route path="loras" element={<Loras />} />
+            <Route path="world-builder" element={<WorldBuilder />} />
           </Route>
           <Route path="image-gen" element={<RedirectWithSearch to="/media/image" />} />
           <Route path="video-gen" element={<RedirectWithSearch to="/media/video" />} />

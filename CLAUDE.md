@@ -167,6 +167,7 @@ port-error: #ef4444
 - **Changelog**: Append entries to `.changelog/NEXT.md` during development; `/do:release` (Claude Code slash command) finalizes it into a versioned file
 - **Versioning**: Version in `package.json` reflects the last release. Do not bump during development — `/do:release` handles version bumps
 - After each feature or bug fix, run `/simplify` and then commit and push code
+- **Capture deferred work before finishing.** If during a task you identify a refactor, cleanup, abstraction, or enhancement that you decide *not* to do (out of scope, risk, time), append it to `PLAN.md` as a `- [ ]` item under the most relevant section (or a new sub-heading) with enough specificity that it can be picked up cold — file paths, line numbers, why it was skipped. Examples: code-review findings rated "skip for this PR," `/simplify` items deferred for scope, "we should also do X but later." Don't end a session with these living only in chat — they evaporate.
 - If we have created enough commits to wrap up a feature or issue to warrant a production release, pull the latest main and release branches and then run `/do:release` from main
 
 See `.changelog/README.md` for detailed format and best practices.

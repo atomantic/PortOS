@@ -19,35 +19,48 @@ import BackendChipStrip from '../components/media/BackendChipStrip';
 import { normalizeImage } from '../components/media/normalize';
 import Flux2InstallModal from '../components/imageGen/Flux2InstallModal';
 import Flux2TokenBanner from '../components/imageGen/Flux2TokenBanner';
+import ImageGenControls from '../components/imageGen/ImageGenControls';
+import MediaJobsQueue from '../components/media/MediaJobsQueue';
+import { useMediaCompletionRefresh } from '../hooks/useMediaCompletionRefresh';
 import {
   Image as ImageIcon, Sparkles, Download, RefreshCw, Settings as SettingsIcon,
-  Dice5, AlertTriangle, X, Film,
+  AlertTriangle, X, Film,
 } from 'lucide-react';
 import { composeStyledPrompt } from '../lib/composeStyledPrompt';
 import { deriveAvailableBackends, IMAGE_GEN_MODE } from '../lib/imageGenBackends';
+import { getMediaNavProps } from '../lib/mediaNavigation';
 import toast from '../components/ui/Toast';
 import BrailleSpinner from '../components/BrailleSpinner';
 import { useImageGenProgress } from '../hooks/useImageGenProgress';
 import {
-  getImageGenStatus, generateImage, listImageModels, listLoras, listImageGallery,
-  cancelImageGen, deleteImage, setImageHidden, getActiveImageJob, getSettings,
+  getImageGenStatus, generateImage, listImageModels, listLorasFull, listImageGallery,
+  cancelImageGen, deleteImage, setImageHidden, cleanGalleryImage, getActiveImageJob, getSettings,
   buildFormData, listMediaJobs,
 } from '../services/api';
-import { randomSeed, safeParseJSON } from '../lib/genUtils';
-
-const RESOLUTIONS = [
-  { label: '512×512', w: 512, h: 512 },
-  { label: '768×512', w: 768, h: 512 },
-  { label: '512×768', w: 512, h: 768 },
-  { label: '768×768', w: 768, h: 768 },
-  { label: '1024×1024', w: 1024, h: 1024 },
-  { label: '832×1216 (Flux portrait)', w: 832, h: 1216 },
-  { label: '1216×832 (Flux landscape)', w: 1216, h: 832 },
-  { label: '1024×576 (16:9)', w: 1024, h: 576 },
-  { label: '576×1024 (9:16)', w: 576, h: 1024 },
-];
+import { safeParseJSON } from '../lib/genUtils';
 
 const DEFAULT_NEGATIVE = 'blurry, low quality, distorted, deformed, ugly, watermark, text, signature';
+
+// Append LoRA trigger words to a prompt comma-separated, skipping any
+// already present. Compares against comma-separated prompt segments rather
+// than raw substrings so a short trigger like "cat" doesn't false-match
+// inside "concatenate". Civitai triggers are often phrases that themselves
+// contain spaces, so the match is whole-segment, case-insensitive.
+const appendTriggerWords = (prompt, words) => {
+  const list = (Array.isArray(words) ? words : [])
+    .filter((w) => typeof w === 'string' && w.trim())
+    .map((w) => w.trim());
+  if (!list.length) return prompt;
+  const segments = String(prompt || '')
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+  const fresh = list.filter((w) => !segments.includes(w.toLowerCase()));
+  if (!fresh.length) return prompt;
+  const trimmed = String(prompt || '').trim();
+  const sep = !trimmed ? '' : trimmed.endsWith(',') ? ' ' : ', ';
+  return `${trimmed}${sep}${fresh.join(', ')}`;
+};
 
 // User-facing labels for STAGE markers emitted by FLUX.2 (and any future
 // runner). The keys match what `flux2_macos.py` prints; unknown stages fall
@@ -179,6 +192,7 @@ export default function ImageGen() {
   const refreshGallery = useCallback(() => {
     listImageGallery().then(setGallery).catch(() => {});
   }, []);
+  useMediaCompletionRefresh({ onImageCompleted: refreshGallery });
 
   // Re-runnable so the Settings drawer can trigger a refresh on close
   // without forcing a full page reload.
@@ -204,7 +218,9 @@ export default function ImageGen() {
       setModels(m);
       if (m.length && !modelId) setModelId(m[0].id);
     }).catch(() => {});
-    listLoras().then(setAvailableLoras).catch(() => {});
+    // Use the richer /api/loras surface so the picker can show trigger
+    // words + recommended scale + Civitai-derived runnerFamily.
+    listLorasFull().then(setAvailableLoras).catch(() => {});
     refreshGallery();
     reloadBackends();
     // Resume an in-flight job so the user can navigate away mid-render and
@@ -258,6 +274,30 @@ export default function ImageGen() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams]);
+
+  // ?lora=<filename> preselects a LoRA when the user clicks "Test" on the
+  // /media/loras manager page. Defers until availableLoras has loaded so the
+  // metadata (recommendedScale, name, triggerWords) is available; once applied,
+  // strip the param so a refresh doesn't keep re-adding the LoRA. Also
+  // auto-appends the LoRA's trigger words to the prompt — the user came from
+  // "Test this" so the intent is "show me what this LoRA does," and most
+  // LoRAs only fire correctly when their trigger words are in the prompt.
+  useEffect(() => {
+    const fromUrl = searchParams.get('lora');
+    if (!fromUrl || !availableLoras.length) return;
+    const match = availableLoras.find((l) => l.filename === fromUrl);
+    if (!match) return;
+    setSelectedLoras((prev) => prev.find((s) => s.filename === fromUrl) ? prev : [...prev, {
+      filename: match.filename,
+      name: match.name,
+      scale: typeof match.recommendedScale === 'number' ? match.recommendedScale : 1.0,
+    }]);
+    if (match.triggerWords?.length) {
+      setPrompt((p) => appendTriggerWords(p, match.triggerWords));
+    }
+    setSearchParams((prev) => { const next = new URLSearchParams(prev); next.delete('lora'); return next; }, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, availableLoras]);
 
   // Remix payload from Media History (?prompt=…&modelId=…&seed=…). Populate
   // form state once on mount, then strip the params so a hot-reload or back-
@@ -334,9 +374,14 @@ export default function ImageGen() {
   }, [settingsOpen, reloadBackends]);
 
   const currentModel = models.find((m) => m.id === modelId);
-  const matchedResolution = RESOLUTIONS.find((r) => r.w === width && r.h === height);
-  const resolutionLabel = matchedResolution?.label || `${width}×${height}`;
   const isFlux2Model = currentModel?.runner === 'flux2';
+  // mflux is the default runner for entries with no explicit `runner` field.
+  // Used to filter the LoRA picker so users only see compatible weights for
+  // the selected model. LoRAs with `runnerFamily === null` (legacy / unknown
+  // base) are shown too with a warning indicator — the runner may still
+  // accept them, or surface a clear error.
+  const currentRunnerFamily = currentModel?.runner || 'mflux';
+  const compatibleLoras = availableLoras.filter((l) => !l.runnerFamily || l.runnerFamily === currentRunnerFamily);
 
   const refreshFlux2Status = useCallback((signal) => {
     return fetch('/api/image-gen/setup/flux2-status', { signal })
@@ -404,13 +449,11 @@ export default function ImageGen() {
     visibleGallery: gallery.filter((img) => !img.hidden),
     hiddenGallery: gallery.filter((img) => img.hidden),
   }), [gallery]);
-
-  const handleResolutionChange = (e) => {
-    const r = RESOLUTIONS.find((r) => r.label === e.target.value);
-    if (r) { setWidth(r.w); setHeight(r.h); }
-  };
-
-  const handleRandomSeed = () => setSeed(randomSeed());
+  const previewItems = useMemo(() => [
+    ...visibleGallery.map(normalizeImage),
+    ...(showHidden ? hiddenGallery.map(normalizeImage) : []),
+  ], [visibleGallery, hiddenGallery, showHidden]);
+  const previewNavProps = getMediaNavProps(previewItems, preview, setPreview);
 
   // Snapshots current form state into a server payload + POSTs it to the
   // mediaJobQueue. Returns the queue's response ({ jobId, position, ... }).
@@ -609,6 +652,16 @@ export default function ImageGen() {
     if (result) toast.success(nextHidden ? 'Image hidden' : 'Image unhidden');
   };
 
+  const handleClean = async (img, level) => {
+    if (!img?.filename) throw new Error('Missing filename');
+    const cleaned = await cleanGalleryImage(img.filename, level).catch((err) => {
+      toast.error(err.message || 'Failed to clean image');
+      throw err;
+    });
+    setGallery((g) => [cleaned, ...g.filter((x) => x.filename !== cleaned.filename)]);
+    toast.success(`Cleaned (${level}) → ${cleaned.filename}`);
+  };
+
   const sendToVideo = (img) => {
     if (!img?.filename) return;
     const params = new URLSearchParams({ sourceImageFile: img.filename });
@@ -655,7 +708,11 @@ export default function ImageGen() {
     <div className="space-y-3">
       <div className="flex items-center justify-between gap-2 text-xs">
         <div className="flex items-center gap-2 flex-wrap">
-          {status ? (
+          {statusLoading ? (
+            <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-full border border-port-border bg-port-card text-gray-400">
+              <RefreshCw className="w-3 h-3 animate-spin" /> Checking {effectiveMode}…
+            </span>
+          ) : status ? (
             <span className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-full border ${
               status.connected
                 ? 'border-port-success/40 bg-port-success/10 text-port-success'
@@ -680,6 +737,7 @@ export default function ImageGen() {
               value={effectiveMode}
               onChange={setSelectedMode}
               disabled={statusLoading}
+              loadingId={statusLoading ? effectiveMode : null}
               titlePrefix="Use"
             />
           )}
@@ -760,161 +818,97 @@ export default function ImageGen() {
             />
           )}
 
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-            {isLocalMode && models.length > 0 && (
-              <div>
-                <label className="block text-xs font-medium text-gray-400 mb-1">Model</label>
-                <select
-                  value={modelId}
-                  onChange={(e) => { setModelId(e.target.value); setSteps(''); setGuidance(''); }}
-                  disabled={statusLoading}
-                  className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
-                >
-                  {models.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-                </select>
-              </div>
-            )}
+          <ImageGenControls
+            mode={effectiveMode}
+            models={models}
+            modelId={modelId}
+            // Reset steps + guidance when switching models so the placeholder
+            // (model defaults) takes effect instead of leaking the previous
+            // model's tuned values onto the new one.
+            onModelChange={(id) => { setModelId(id); setSteps(''); setGuidance(''); }}
+            width={width} height={height}
+            onResolutionChange={(w, h) => { setWidth(w); setHeight(h); }}
+            steps={steps} onStepsChange={setSteps}
+            guidance={guidance} onGuidanceChange={setGuidance}
+            cfgScale={cfgScale} onCfgScaleChange={setCfgScale}
+            quantize={quantize} onQuantizeChange={setQuantize}
+            seed={seed} onSeedChange={setSeed}
+            showSeed
+            disabled={statusLoading}
+          />
 
+          {isLocalMode && availableLoras.length > 0 && (
             <div>
-              <label className="block text-xs font-medium text-gray-400 mb-1">Resolution</label>
-              <select
-                value={resolutionLabel}
-                onChange={handleResolutionChange}
-                disabled={statusLoading}
-                className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
-              >
-                {RESOLUTIONS.map((r) => <option key={r.label} value={r.label}>{r.label}</option>)}
-                {!matchedResolution && <option value={resolutionLabel}>{resolutionLabel} (custom)</option>}
-              </select>
-            </div>
-
-            {/* Codex's built-in image_gen tool ignores seed/steps/guidance —
-                only the prompt + (optional) resolution hint matter. Hide
-                irrelevant knobs in that mode. */}
-            {!isCodexMode && (
-              <div>
-                <label className="block text-xs font-medium text-gray-400 mb-1">Seed</label>
-                <div className="flex items-center gap-1">
-                  <input
-                    type="number"
-                    value={seed}
-                    onChange={(e) => setSeed(e.target.value)}
-                    disabled={statusLoading}
-                    placeholder="Random"
-                    className="flex-1 bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
-                  />
-                  <button
-                    type="button"
-                    onClick={handleRandomSeed}
-                    disabled={statusLoading}
-                    className="p-2 text-gray-400 hover:text-white border border-port-border rounded-lg hover:bg-port-border/50 disabled:opacity-50 min-h-[40px] min-w-[40px] flex items-center justify-center"
-                    title="Randomize seed"
-                  >
-                    <Dice5 className="w-4 h-4" />
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {!isCodexMode && (
-              <div>
-                <label className="block text-xs font-medium text-gray-400 mb-1">
-                  Steps {currentModel?.steps && `(default: ${currentModel.steps})`}
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-xs font-medium text-gray-400">
+                  LoRAs <span className="text-gray-600 font-normal">({compatibleLoras.length}/{availableLoras.length} compatible)</span>
                 </label>
-                <input
-                  type="number" min={1} max={150}
-                  value={steps}
-                  onChange={(e) => setSteps(e.target.value)}
-                  placeholder={String(currentModel?.steps || 25)}
-                  disabled={statusLoading}
-                  className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
-                />
+                <Link to="/media/loras" className="text-[11px] text-port-accent hover:underline">Manage →</Link>
               </div>
-            )}
-
-            {!isCodexMode && (isLocalMode ? (
-              <>
-                <div>
-                  <label className="block text-xs font-medium text-gray-400 mb-1">
-                    Guidance {currentModel?.guidance != null && `(default: ${currentModel.guidance})`}
-                  </label>
-                  <input
-                    type="number" min={0} max={20} step={0.5}
-                    value={guidance}
-                    onChange={(e) => setGuidance(e.target.value)}
-                    placeholder={String(currentModel?.guidance ?? '')}
-                    disabled={statusLoading}
-                    className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
-                  />
-                </div>
-                {!isFlux2Model && (
-                  <div>
-                    <label className="block text-xs font-medium text-gray-400 mb-1">Quantize (bits)</label>
-                    <select
-                      value={quantize}
-                      onChange={(e) => setQuantize(e.target.value)}
-                      disabled={statusLoading}
-                      className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
-                    >
-                      {['3', '4', '5', '6', '8'].map((q) => <option key={q} value={q}>{q}-bit{q === '8' ? ' (default)' : q === '4' ? ' (fast)' : ''}</option>)}
-                    </select>
-                  </div>
-                )}
-              </>
-            ) : (
-              <div>
-                <label className="block text-xs font-medium text-gray-400 mb-1">CFG Scale ({cfgScale})</label>
-                <input
-                  type="range" min={1} max={20} step={0.5}
-                  value={cfgScale}
-                  disabled={statusLoading}
-                  onChange={(e) => setCfgScale(Number(e.target.value))}
-                  className="w-full accent-port-accent"
-                />
-              </div>
-            ))}
-          </div>
-
-          {isLocalMode && !isFlux2Model && availableLoras.length > 0 && (
-            <div>
-              <label className="block text-xs font-medium text-gray-400 mb-1">LoRAs</label>
-              <div className="space-y-1.5 max-h-32 overflow-y-auto pr-1">
-                {availableLoras.map((lora) => {
-                  const selected = selectedLoras.find((s) => s.filename === lora.filename);
-                  return (
-                    <div key={lora.filename} className="flex items-center gap-2">
-                      <label className="flex items-center gap-2 cursor-pointer flex-1 min-w-0">
-                        <input
-                          type="checkbox"
-                          checked={!!selected}
-                          disabled={statusLoading}
-                          onChange={(e) => {
-                            if (e.target.checked) setSelectedLoras((p) => [...p, { filename: lora.filename, name: lora.name, scale: 1.0 }]);
-                            else setSelectedLoras((p) => p.filter((s) => s.filename !== lora.filename));
-                          }}
-                          className="rounded"
-                        />
-                        <span className="text-xs text-gray-300 truncate">{lora.name}</span>
-                      </label>
-                      {selected && (
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs text-gray-500">Scale</span>
+              {compatibleLoras.length === 0 ? (
+                <p className="text-xs text-gray-500 italic">No LoRAs match this model's runner. Install one matching <code>{currentRunnerFamily}</code> on the LoRAs page.</p>
+              ) : (
+                <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
+                  {compatibleLoras.map((lora) => {
+                    const selected = selectedLoras.find((s) => s.filename === lora.filename);
+                    const recommended = typeof lora.recommendedScale === 'number' ? lora.recommendedScale : 1.0;
+                    return (
+                      <div key={lora.filename} className="flex items-center gap-2">
+                        <label className="flex items-center gap-2 cursor-pointer flex-1 min-w-0">
                           <input
-                            type="number" min={0} max={2} step={0.1}
-                            value={selected.scale}
+                            type="checkbox"
+                            checked={!!selected}
                             disabled={statusLoading}
                             onChange={(e) => {
-                              const scale = parseFloat(e.target.value) || 0;
-                              setSelectedLoras((p) => p.map((s) => s.filename === lora.filename ? { ...s, scale } : s));
+                              if (e.target.checked) setSelectedLoras((p) => [...p, { filename: lora.filename, name: lora.name, scale: recommended }]);
+                              else setSelectedLoras((p) => p.filter((s) => s.filename !== lora.filename));
                             }}
-                            className="w-20 bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-gray-200"
+                            className="rounded"
                           />
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
+                          <span className="text-xs text-gray-300 truncate flex-1" title={(lora.triggerWords || []).length ? `Trigger words: ${lora.triggerWords.join(', ')}` : lora.name}>
+                            {lora.name}
+                            {/* baseModel suffix disambiguates multiple installed
+                                versions of the same model (e.g. ZImageBase vs
+                                ZImageTurbo, both mapping to 'z-image' family). */}
+                            {lora.civitai?.baseModel && (
+                              <span className="ml-1.5 text-[10px] text-gray-600 font-mono">[{lora.civitai.baseModel}]</span>
+                            )}
+                            {(lora.triggerWords || []).length > 0 && (
+                              <span className="ml-2 text-[10px] text-gray-500 font-mono">{lora.triggerWords.slice(0, 2).join(', ')}{lora.triggerWords.length > 2 ? '…' : ''}</span>
+                            )}
+                          </span>
+                        </label>
+                        {selected && (
+                          <div className="flex items-center gap-2">
+                            {(lora.triggerWords || []).length > 0 && (
+                              <button
+                                type="button"
+                                onClick={() => setPrompt((p) => appendTriggerWords(p, lora.triggerWords))}
+                                disabled={statusLoading}
+                                title={`Append to prompt: ${lora.triggerWords.join(', ')}`}
+                                className="text-[11px] px-2 py-1 rounded bg-port-accent/10 text-port-accent border border-port-accent/30 hover:bg-port-accent/20 disabled:opacity-50 whitespace-nowrap"
+                              >
+                                + trigger
+                              </button>
+                            )}
+                            <span className="text-xs text-gray-500" title={`Recommended: ${recommended.toFixed(2)}`}>Scale</span>
+                            <input
+                              type="number" min={0} max={2} step={0.1}
+                              value={selected.scale}
+                              disabled={statusLoading}
+                              onChange={(e) => {
+                                const scale = parseFloat(e.target.value) || 0;
+                                setSelectedLoras((p) => p.map((s) => s.filename === lora.filename ? { ...s, scale } : s));
+                              }}
+                              className="w-20 bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-gray-200"
+                            />
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
 
@@ -1078,22 +1072,24 @@ export default function ImageGen() {
         </div>
       </form>
 
+      <MediaJobsQueue kind="image" />
+
       {visibleGallery.length > 0 && (
         <div className="bg-port-card border border-port-border rounded-xl p-4 space-y-2">
           <div className="flex items-center justify-between">
-            <h2 className="text-xs font-medium text-gray-400 uppercase tracking-wide">Recent renders ({Math.min(visibleGallery.length, 6)} of {visibleGallery.length})</h2>
-            {visibleGallery.length > 6 && (
+            <h2 className="text-xs font-medium text-gray-400 uppercase tracking-wide">Recent renders ({Math.min(visibleGallery.length, 5)} of {visibleGallery.length})</h2>
+            {visibleGallery.length > 5 && (
               <Link to="/media/history" className="text-xs text-port-accent hover:underline">View all →</Link>
             )}
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
-            {visibleGallery.slice(0, 6).map((img) => {
+            {visibleGallery.slice(0, 5).map((img) => {
               const item = normalizeImage(img);
               return (
                 <MediaCard
                   key={item.key}
                   item={item}
-                  onPreview={() => setPreview(img)}
+                  onPreview={() => setPreview(item)}
                   onRemix={() => handleRemix(img)}
                   onSendToVideo={() => sendToVideo(img)}
                   onDelete={() => handleDelete(img.filename)}
@@ -1123,7 +1119,7 @@ export default function ImageGen() {
                   <MediaCard
                     key={item.key}
                     item={item}
-                    onPreview={() => setPreview(img)}
+                    onPreview={() => setPreview(item)}
                     onRemix={() => handleRemix(img)}
                     onSendToVideo={() => sendToVideo(img)}
                     onDelete={() => handleDelete(img.filename)}
@@ -1137,13 +1133,12 @@ export default function ImageGen() {
       )}
 
       <MediaLightbox
-        item={preview ? normalizeImage(preview) : null}
+        item={preview}
         onClose={() => setPreview(null)}
-        // Guard against the click landing after the lightbox close path has
-        // already nulled `preview` — without this the closure throws on
-        // preview.filename access.
-        onRemix={() => preview && handleRemix(preview)}
-        onSendToVideo={() => preview?.filename && sendToVideo(preview)}
+        onRemix={(item) => item?.raw && handleRemix(item.raw)}
+        onSendToVideo={(item) => item?.raw?.filename && sendToVideo(item.raw)}
+        onClean={(item, level) => handleClean(item?.raw, level)}
+        {...previewNavProps}
       />
 
 

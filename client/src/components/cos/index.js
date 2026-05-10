@@ -28,6 +28,7 @@ export { default as TasksTab } from './tabs/TasksTab';
 export { default as AgentsTab } from './tabs/AgentsTab';
 export { default as JobsTab } from './tabs/JobsTab';
 export { default as ScheduleTab } from './tabs/ScheduleTab';
+export { default as WorkflowTab } from './tabs/WorkflowTab';
 export { default as LearningTab } from './tabs/LearningTab';
 export { default as MemoryTab } from './tabs/MemoryTab';
 export { default as HealthTab } from './tabs/HealthTab';

@@ -21,7 +21,9 @@ import {
   Shield,
   ShieldCheck,
   ShieldAlert,
-  ShieldQuestion
+  ShieldQuestion,
+  X,
+  Undo2
 } from 'lucide-react';
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
@@ -34,6 +36,8 @@ export default function LearningTab() {
   const [durations, setDurations] = useState(null);
   const [routing, setRouting] = useState(null);
   const [confidence, setConfidence] = useState(null);
+  const [dismissed, setDismissed] = useState([]);
+  const [showDismissed, setShowDismissed] = useState(false);
   const [loading, setLoading] = useState(true);
   const [backfilling, setBackfilling] = useState(false);
   const [resettingType, setResettingType] = useState(null);
@@ -49,13 +53,14 @@ export default function LearningTab() {
 
   const loadData = useCallback(async () => {
     setLoading(true);
-    const [learningData, performanceData, skippedData, durationsData, routingData, confidenceData] = await Promise.all([
+    const [learningData, performanceData, skippedData, durationsData, routingData, confidenceData, dismissedData] = await Promise.all([
       api.getCosLearning().catch(() => null),
       api.getCosLearningPerformance().catch(() => null),
       api.getCosLearningSkipped().catch(() => null),
       api.getCosLearningDurations().catch(() => null),
       api.getCosLearningRouting().catch(() => null),
-      api.getCosLearningConfidence().catch(() => null)
+      api.getCosLearningConfidence().catch(() => null),
+      api.getDismissedCosRecommendations().catch(() => null)
     ]);
     setLearning(learningData);
     setPerformance(performanceData);
@@ -63,8 +68,43 @@ export default function LearningTab() {
     setDurations(durationsData);
     setRouting(routingData);
     setConfidence(confidenceData);
+    setDismissed(dismissedData?.dismissed || []);
     setLoading(false);
   }, []);
+
+  const handleDismissRec = useCallback(async (rec) => {
+    // Optimistic update — remove from active recommendations immediately
+    setLearning(prev => prev ? {
+      ...prev,
+      recommendations: (prev.recommendations || []).filter(r => r.id !== rec.id)
+    } : prev);
+    setDismissed(prev => [{ id: rec.id, dismissedAt: new Date().toISOString(), snapshot: rec.snapshot ?? null }, ...prev]);
+    const result = await api.dismissCosRecommendation(rec.id, rec.snapshot ?? null).catch(() => null);
+    if (!result?.dismissed) {
+      toast.error('Failed to dismiss recommendation');
+      await loadData();
+      return;
+    }
+    toast.success('Dismissed — won\'t alert again unless the situation worsens');
+  }, [loadData]);
+
+  const handleRestoreRec = useCallback(async (id) => {
+    setDismissed(prev => prev.filter(d => d.id !== id));
+    const result = await api.restoreCosRecommendation(id).catch(() => null);
+    if (!result?.restored) {
+      toast.error('Failed to restore recommendation');
+    }
+    await loadData();
+  }, [loadData]);
+
+  const handleClearDismissed = useCallback(async () => {
+    setDismissed([]);
+    const result = await api.clearDismissedCosRecommendations().catch(() => null);
+    if (!result?.cleared) {
+      toast.error('Failed to clear dismissed list');
+    }
+    await loadData();
+  }, [loadData]);
 
   useEffect(() => {
     loadData();
@@ -220,33 +260,102 @@ export default function LearningTab() {
           </div>
 
           {/* Recommendations */}
-          {learning.recommendations?.length > 0 && (
+          {(learning.recommendations?.length > 0 || dismissed.length > 0) && (
             <div className="bg-gradient-to-r from-purple-500/10 to-blue-500/10 border border-purple-500/30 rounded-lg p-4">
-              <h4 className="text-sm font-medium text-white mb-3 flex items-center gap-2">
-                <Zap size={14} className="text-yellow-400" />
-                AI Recommendations
-              </h4>
-              <div className="space-y-2">
-                {learning.recommendations.map((rec, idx) => (
-                  <div
-                    key={idx}
-                    className={`text-sm p-2 rounded flex items-start gap-2 ${
-                      rec.type === 'warning' ? 'bg-yellow-500/10 text-yellow-400' :
-                      rec.type === 'action' ? 'bg-red-500/10 text-red-400' :
-                      rec.type === 'optimization' ? 'bg-green-500/10 text-green-400' :
-                      rec.type === 'suggestion' ? 'bg-blue-500/10 text-blue-400' :
-                      'bg-gray-500/10 text-gray-400'
-                    }`}
+              <div className="flex items-center justify-between mb-3">
+                <h4 className="text-sm font-medium text-white flex items-center gap-2">
+                  <Zap size={14} className="text-yellow-400" />
+                  AI Recommendations
+                </h4>
+                {dismissed.length > 0 && (
+                  <button
+                    onClick={() => setShowDismissed(prev => !prev)}
+                    className="text-xs text-gray-400 hover:text-white flex items-center gap-1"
+                    title={showDismissed ? 'Hide dismissed' : 'Show dismissed'}
                   >
-                    {rec.type === 'warning' && <AlertTriangle size={14} className="mt-0.5 shrink-0" />}
-                    {rec.type === 'action' && <XCircle size={14} className="mt-0.5 shrink-0" />}
-                    {rec.type === 'optimization' && <CheckCircle size={14} className="mt-0.5 shrink-0" />}
-                    {rec.type === 'suggestion' && <Zap size={14} className="mt-0.5 shrink-0" />}
-                    {rec.type === 'info' && <Target size={14} className="mt-0.5 shrink-0" />}
-                    <span>{rec.message}</span>
-                  </div>
-                ))}
+                    {showDismissed ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                    {dismissed.length} dismissed
+                  </button>
+                )}
               </div>
+              {learning.recommendations?.length > 0 ? (
+                <div className="space-y-2">
+                  {learning.recommendations.map((rec) => (
+                    <div
+                      key={rec.id || rec.message}
+                      className={`text-sm p-2 rounded flex items-start gap-2 ${
+                        rec.type === 'warning' ? 'bg-yellow-500/10 text-yellow-400' :
+                        rec.type === 'action' ? 'bg-red-500/10 text-red-400' :
+                        rec.type === 'optimization' ? 'bg-green-500/10 text-green-400' :
+                        rec.type === 'suggestion' ? 'bg-blue-500/10 text-blue-400' :
+                        'bg-gray-500/10 text-gray-400'
+                      }`}
+                    >
+                      {rec.type === 'warning' && <AlertTriangle size={14} className="mt-0.5 shrink-0" />}
+                      {rec.type === 'action' && <XCircle size={14} className="mt-0.5 shrink-0" />}
+                      {rec.type === 'optimization' && <CheckCircle size={14} className="mt-0.5 shrink-0" />}
+                      {rec.type === 'suggestion' && <Zap size={14} className="mt-0.5 shrink-0" />}
+                      {rec.type === 'info' && <Target size={14} className="mt-0.5 shrink-0" />}
+                      <span className="flex-1">{rec.message}</span>
+                      {rec.id && (
+                        <button
+                          onClick={() => handleDismissRec(rec)}
+                          className="opacity-60 hover:opacity-100 transition-opacity shrink-0 -my-2 -mr-1 p-2 min-h-[40px] min-w-[40px] flex items-center justify-center"
+                          title="Dismiss — won't show again unless this situation worsens significantly"
+                          aria-label={`Dismiss recommendation: ${rec.message}`}
+                        >
+                          <X size={14} />
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-xs text-gray-500 italic">No active recommendations.</p>
+              )}
+              {showDismissed && dismissed.length > 0 && (
+                <div className="mt-3 pt-3 border-t border-port-border">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs text-gray-500">
+                      Dismissed (will re-alert only if the underlying situation gets significantly worse)
+                    </span>
+                    <button
+                      onClick={handleClearDismissed}
+                      className="text-xs text-port-accent hover:text-port-accent/80"
+                    >
+                      Clear all
+                    </button>
+                  </div>
+                  <div className="space-y-1">
+                    {dismissed.map((d) => (
+                      <div
+                        key={d.id}
+                        className="text-xs p-2 rounded bg-port-bg/50 flex items-center justify-between gap-2 text-gray-500"
+                      >
+                        <div className="flex-1 min-w-0">
+                          <div className="font-mono truncate">{d.id}</div>
+                          {d.dismissedAt && (
+                            <div className="text-gray-600 text-[10px]">
+                              dismissed {new Date(d.dismissedAt).toLocaleString()}
+                              {d.snapshot?.value !== undefined && (
+                                <span> · snapshot: {d.snapshot.value}{d.snapshot.kind === 'rate' ? '%' : ''}</span>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                        <button
+                          onClick={() => handleRestoreRec(d.id)}
+                          className="text-port-accent hover:text-port-accent/80 flex items-center gap-1 shrink-0 px-2 py-1 min-h-[40px]"
+                          title="Restore this recommendation"
+                        >
+                          <Undo2 size={12} />
+                          Restore
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 

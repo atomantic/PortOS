@@ -678,15 +678,71 @@ export function extractAgentSummary(output) {
   return summary;
 }
 
+export async function getDefaultBranch(dir, { allowRemote = true } = {}) {
+  const symRef = await execGitSafe(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], dir);
+  if (symRef.stdout?.trim()) {
+    const branch = symRef.stdout.trim().replace(/^origin\//, '');
+    // Verify the ref actually exists (origin/HEAD could be stale)
+    const verify = await execGitSafe(['rev-parse', '--verify', `refs/remotes/origin/${branch}`], dir);
+    if (verify.exitCode === 0 || verify.stdout?.trim()) return branch;
+  }
+
+  // origin/HEAD not set locally — ask the remote (best-effort, short timeout)
+  if (allowRemote) {
+    await execGitSafe(['remote', 'set-head', 'origin', '--auto'], dir, { timeout: 5000 });
+    const symRef2 = await execGitSafe(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], dir);
+    if (symRef2.stdout?.trim()) {
+      const branch2 = symRef2.stdout.trim().replace(/^origin\//, '');
+      const verify2 = await execGitSafe(['rev-parse', '--verify', `refs/remotes/origin/${branch2}`], dir);
+      if (verify2.exitCode === 0 || verify2.stdout?.trim()) return branch2;
+    }
+  }
+
+  // Fall back to local branch detection
+  const result = await execGitSafe(['branch', '--list'], dir);
+  const branches = (result.stdout || '').trim().split('\n').map(b => b.replace(/^\*?\s+/, '')).filter(Boolean);
+  if (branches.includes('main')) return 'main';
+  if (branches.includes('master')) return 'master';
+
+  // Last resort: use the currently checked-out branch
+  const head = await execGitSafe(['rev-parse', '--abbrev-ref', 'HEAD'], dir);
+  if (head.stdout?.trim() && head.stdout.trim() !== 'HEAD') {
+    return head.stdout.trim();
+  }
+
+  return null;
+}
+
 /**
- * Detect base and dev branches from local branch list
+ * Detect base and dev branches from local refs (origin/HEAD, local branch list).
+ * Does not contact the remote — safe for latency-sensitive request paths.
+ * Computes the branch list once and reuses it for both base and dev detection.
  * @returns {{ baseBranch: string|null, devBranch: string|null }}
  */
 export async function getRepoBranches(dir) {
-  const result = await execGit(['branch', '--list'], dir, { ignoreExitCode: true });
-  const branches = result.stdout.trim().split('\n').map(b => b.replace(/^\*?\s+/, ''));
+  // Check origin/HEAD first (fast, local-only)
+  const symRef = await execGitSafe(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'], dir);
+  let baseBranch = null;
+  if (symRef.stdout?.trim()) {
+    const candidate = symRef.stdout.trim().replace(/^origin\//, '');
+    // Verify the ref actually exists (origin/HEAD could be stale)
+    const verify = await execGitSafe(['rev-parse', '--verify', `refs/remotes/origin/${candidate}`], dir);
+    if (verify.exitCode === 0 || verify.stdout?.trim()) {
+      baseBranch = candidate;
+    }
+  }
+
+  // Get local branches once — reused for both base fallback and dev detection
+  const result = await execGitSafe(['branch', '--list'], dir);
+  const branches = (result.stdout || '').trim().split('\n').map(b => b.replace(/^\*?\s+/, '')).filter(Boolean);
+
+  if (!baseBranch) {
+    if (branches.includes('main')) baseBranch = 'main';
+    else if (branches.includes('master')) baseBranch = 'master';
+  }
+
   return {
-    baseBranch: branches.includes('main') ? 'main' : branches.includes('master') ? 'master' : null,
+    baseBranch,
     devBranch: branches.includes('dev') ? 'dev' : branches.includes('develop') ? 'develop' : null
   };
 }

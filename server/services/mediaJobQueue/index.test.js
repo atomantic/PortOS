@@ -118,6 +118,53 @@ describe('mediaJobQueue', () => {
     expect(mediaJobQueue.listJobs({ status: 'running' })).toHaveLength(1);
   });
 
+  it('cancelQueuedJobs drops every queued job, leaves running ones alone', async () => {
+    // Block the worker so subsequent enqueues stay queued.
+    let resolveBlocker;
+    stubs.generateVideo.mockImplementation(() => new Promise((r) => { resolveBlocker = r; }));
+    const blocker = mediaJobQueue.enqueueJob({ kind: 'video', params: {} });
+    const a = mediaJobQueue.enqueueJob({ kind: 'video', params: {} });
+    const b = mediaJobQueue.enqueueJob({ kind: 'image', params: {} });
+    const c = mediaJobQueue.enqueueJob({ kind: 'video', params: {} });
+
+    await flush();
+
+    // No filter: every queued job (a, b, c) cancels; running blocker is untouched.
+    const r = await mediaJobQueue.cancelQueuedJobs();
+    expect(r.canceled).toBe(3);
+    expect(mediaJobQueue.getJob(a.jobId).status).toBe('canceled');
+    expect(mediaJobQueue.getJob(b.jobId).status).toBe('canceled');
+    expect(mediaJobQueue.getJob(c.jobId).status).toBe('canceled');
+    expect(mediaJobQueue.getJob(blocker.jobId).status).toBe('running');
+
+    videoGenEvents.emit('failed', { generationId: blocker.jobId, error: 'cleanup' });
+    if (resolveBlocker) resolveBlocker();
+    await flush();
+  });
+
+  it('cancelQueuedJobs respects a kind filter', async () => {
+    let resolveBlocker;
+    stubs.generateVideo.mockImplementation(() => new Promise((r) => { resolveBlocker = r; }));
+    const blocker = mediaJobQueue.enqueueJob({ kind: 'video', params: {} });
+    const v = mediaJobQueue.enqueueJob({ kind: 'video', params: {} });
+    const i = mediaJobQueue.enqueueJob({ kind: 'image', params: {} });
+
+    await flush();
+
+    const r = await mediaJobQueue.cancelQueuedJobs({ kind: 'video' });
+    expect(r.canceled).toBe(1);
+    expect(mediaJobQueue.getJob(v.jobId).status).toBe('canceled');
+    // Image queued job is left in the queue (still 'queued', not canceled).
+    expect(mediaJobQueue.getJob(i.jobId).status).toBe('queued');
+    expect(mediaJobQueue.getJob(blocker.jobId).status).toBe('running');
+
+    // Cleanup the leftover queued image + the running blocker.
+    await mediaJobQueue.cancelJob(i.jobId);
+    videoGenEvents.emit('failed', { generationId: blocker.jobId, error: 'cleanup' });
+    if (resolveBlocker) resolveBlocker();
+    await flush();
+  });
+
   it('cancelJob drops a queued job before it starts', async () => {
     // Block the worker by making the first job hang — generateVideo never
     // resolves, so subsequent enqueues stay queued for cancellation.

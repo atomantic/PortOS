@@ -11,6 +11,7 @@ import { promisify } from 'util';
 import { randomUUID } from 'crypto';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { homedir } from 'os';
 
 const execFileAsync = promisify(execFile);
 const IS_WIN = process.platform === 'win32';
@@ -50,7 +51,7 @@ export const PATHS = {
   worktrees: join(__lib_dirname, '../../data/cos/worktrees'),
   repos: join(__lib_dirname, '../../data/repos'),
   browserProfile: join(__lib_dirname, '../../data/browser-profile'),
-  browserDownloads: join(__lib_dirname, '../../data/browser-downloads'),
+  browserDownloads: join(homedir(), 'Downloads'),
   digests: join(__lib_dirname, '../../data/cos/digests'),
   promptSkills: join(__lib_dirname, '../../data/prompts/skills'),
   promptSkillsJobs: join(__lib_dirname, '../../data/prompts/skills/jobs'),

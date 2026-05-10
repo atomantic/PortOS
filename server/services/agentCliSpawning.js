@@ -575,11 +575,14 @@ export async function spawnDirectly(agentId, task, prompt, workspacePath, model,
 
     // Clean up worktree if agent was using one
     const directOpenPR = isTruthyMetaFn(task.metadata?.openPR);
+    const directReviewLoopFollowUp = isTruthyMetaFn(task.metadata?.reviewLoopFollowUp);
     await cleanupWorktreeFn(agentId, success, {
       openPR: directOpenPR,
       requestCopilotReview: directOpenPR && isTruthyMetaFn(task.metadata?.reviewLoop),
+      skipMerge: directReviewLoopFollowUp,
       description: task.description,
-      agentOutput: outputBuffer
+      agentOutput: outputBuffer,
+      originalTask: task
     });
 
     unregisterSpawnedAgent(agentData?.pid || claudeProcess.pid);

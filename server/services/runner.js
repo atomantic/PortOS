@@ -18,9 +18,9 @@ export function setAIToolkit(toolkit, config = {}) {
 
 export async function createRun(options) {
   if (!aiToolkitInstance) throw new Error('AI Toolkit not initialized');
-  const result = await aiToolkitInstance.services.runner.createRun(options);
-  console.log(`🤖 AI run [${options.source || 'unknown'}]: ${result.provider.name}/${result.metadata.model}`);
-  return result;
+  // The toolkit's runner emits its own "🤖 AI run [source]: provider/model"
+  // line — don't duplicate it here.
+  return aiToolkitInstance.services.runner.createRun(options);
 }
 
 /**

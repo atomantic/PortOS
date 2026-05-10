@@ -18,6 +18,7 @@ const withLock = createMutex();
 const DATA_DIR = PATHS.cos;
 const LEARNING_FILE = join(DATA_DIR, 'learning.json');
 const AGENTS_DIR = join(DATA_DIR, 'agents');
+const DISMISSED_RECS_FILE = join(DATA_DIR, 'dismissed-recommendations.json');
 
 /**
  * Calculate ETA-oriented duration stats from success-only metrics with fallback.
@@ -325,6 +326,7 @@ export async function recordTaskCompletion(agent, task) {
  */
 export async function getLearningInsights() {
   const data = await loadLearningData();
+  const dismissed = await loadDismissedRecommendations();
 
   // Calculate overall success rate
   const overallSuccessRate = data.totals.completed > 0
@@ -390,37 +392,70 @@ export async function getLearningInsights() {
       modelEffectiveness,
       recentUnknownErrors: data.recentUnknownErrors || []
     },
-    recommendations: generateRecommendations(data, bestPerforming, worstPerforming, commonErrors)
+    recommendations: generateRecommendations(data, bestPerforming, worstPerforming, commonErrors, dismissed)
   };
+}
+
+/**
+ * Decide whether a previously-dismissed recommendation should re-surface.
+ * For count-based metrics (e.g., error occurrences) we re-alert when the
+ * count has grown materially beyond the dismissal snapshot. For rate-based
+ * metrics, dismissal is permanent until the user restores — flips the other
+ * direction usually mean the recommendation type itself no longer applies
+ * (and a different recommendation will be generated instead).
+ */
+function shouldResurface(dismissedEntry, currentSnapshot) {
+  if (!dismissedEntry) return true;
+  const prev = dismissedEntry.snapshot;
+  if (!prev || !currentSnapshot) return false;
+  if (prev.kind !== currentSnapshot.kind) return true;
+  if (prev.kind === 'count') {
+    const prevValue = Number(prev.value) || 0;
+    const currentValue = Number(currentSnapshot.value) || 0;
+    return currentValue >= Math.max(prevValue * 1.5, prevValue + 20);
+  }
+  return false;
+}
+
+function pushIfActive(recommendations, dismissed, rec) {
+  const dismissedEntry = dismissed[rec.id];
+  if (dismissedEntry && !shouldResurface(dismissedEntry, rec.snapshot)) return;
+  recommendations.push(rec);
 }
 
 /**
  * Generate actionable recommendations based on learning data
  */
-function generateRecommendations(data, bestPerforming, worstPerforming, commonErrors) {
+function generateRecommendations(data, bestPerforming, worstPerforming, commonErrors, dismissed = {}) {
   const recommendations = [];
 
   // Recommend focusing on high-success task types
   if (bestPerforming.length > 0 && bestPerforming[0].successRate >= 90) {
-    recommendations.push({
+    pushIfActive(recommendations, dismissed, {
+      id: `top-perf:${bestPerforming[0].type}`,
       type: 'optimization',
-      message: `${bestPerforming[0].type} tasks have ${bestPerforming[0].successRate}% success rate - consider increasing frequency`
+      message: `${bestPerforming[0].type} tasks have ${bestPerforming[0].successRate}% success rate - consider increasing frequency`,
+      snapshot: { kind: 'rate', value: bestPerforming[0].successRate }
     });
   }
 
   // Warn about low-success task types
   if (worstPerforming.length > 0 && worstPerforming[0].successRate < 50 && worstPerforming[0].completed >= 5) {
-    recommendations.push({
+    pushIfActive(recommendations, dismissed, {
+      id: `worst-perf:${worstPerforming[0].type}`,
       type: 'warning',
-      message: `${worstPerforming[0].type} tasks have only ${worstPerforming[0].successRate}% success rate - may need prompt improvements`
+      message: `${worstPerforming[0].type} tasks have only ${worstPerforming[0].successRate}% success rate - may need prompt improvements`,
+      snapshot: { kind: 'rate', value: worstPerforming[0].successRate }
     });
   }
 
   // Check for recurring errors
   if (commonErrors.length > 0 && commonErrors[0].count >= 3) {
-    recommendations.push({
+    pushIfActive(recommendations, dismissed, {
+      id: `error-pattern:${commonErrors[0].category}`,
       type: 'action',
-      message: `"${commonErrors[0].category}" errors occurred ${commonErrors[0].count} times - investigate root cause`
+      message: `"${commonErrors[0].category}" errors occurred ${commonErrors[0].count} times - investigate root cause`,
+      snapshot: { kind: 'count', value: commonErrors[0].count }
     });
   }
 
@@ -431,9 +466,11 @@ function generateRecommendations(data, bestPerforming, worstPerforming, commonEr
   if (lightTier && lightTier.completed > 0) {
     const lightSuccessRate = Math.round((lightTier.succeeded / lightTier.completed) * 100);
     if (lightSuccessRate < 70) {
-      recommendations.push({
+      pushIfActive(recommendations, dismissed, {
+        id: 'tier-low-success:light',
         type: 'suggestion',
-        message: `Light model (haiku) has ${lightSuccessRate}% success rate - consider routing more tasks to medium tier`
+        message: `Light model (haiku) has ${lightSuccessRate}% success rate - consider routing more tasks to medium tier`,
+        snapshot: { kind: 'rate', value: lightSuccessRate }
       });
     }
   }
@@ -441,14 +478,77 @@ function generateRecommendations(data, bestPerforming, worstPerforming, commonEr
   if (heavyTier && heavyTier.completed > 10) {
     const heavySuccessRate = Math.round((heavyTier.succeeded / heavyTier.completed) * 100);
     if (heavySuccessRate >= 95) {
-      recommendations.push({
+      pushIfActive(recommendations, dismissed, {
+        id: 'tier-excellent:heavy',
         type: 'info',
-        message: `Heavy model (opus) has ${heavySuccessRate}% success rate - excellent for complex tasks`
+        message: `Heavy model (opus) has ${heavySuccessRate}% success rate - excellent for complex tasks`,
+        snapshot: { kind: 'rate', value: heavySuccessRate }
       });
     }
   }
 
   return recommendations;
+}
+
+/**
+ * Load dismissed recommendations map: { [id]: { dismissedAt, snapshot } }
+ */
+async function loadDismissedRecommendations() {
+  await ensureDir(DATA_DIR);
+  return await readJSONFile(DISMISSED_RECS_FILE, {});
+}
+
+async function saveDismissedRecommendations(map) {
+  await atomicWrite(DISMISSED_RECS_FILE, map);
+}
+
+/**
+ * Mark a recommendation as dismissed. Stores a snapshot so we can re-surface
+ * if the underlying situation worsens significantly.
+ */
+export async function dismissRecommendation(id, snapshot = null) {
+  return withLock(async () => {
+    const map = await loadDismissedRecommendations();
+    map[id] = {
+      dismissedAt: new Date().toISOString(),
+      snapshot
+    };
+    await saveDismissedRecommendations(map);
+    return { id, dismissed: true };
+  });
+}
+
+/**
+ * Restore a single previously-dismissed recommendation.
+ */
+export async function restoreRecommendation(id) {
+  return withLock(async () => {
+    const map = await loadDismissedRecommendations();
+    if (!map[id]) return { id, restored: false };
+    delete map[id];
+    await saveDismissedRecommendations(map);
+    return { id, restored: true };
+  });
+}
+
+/**
+ * Clear all dismissed recommendations.
+ */
+export async function clearDismissedRecommendations() {
+  return withLock(async () => {
+    await saveDismissedRecommendations({});
+    return { cleared: true };
+  });
+}
+
+/**
+ * List dismissed recommendations as an array sorted by dismissedAt desc.
+ */
+export async function getDismissedRecommendations() {
+  const map = await loadDismissedRecommendations();
+  return Object.entries(map)
+    .map(([id, entry]) => ({ id, ...entry }))
+    .sort((a, b) => (b.dismissedAt || '').localeCompare(a.dismissedAt || ''));
 }
 
 /**

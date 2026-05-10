@@ -40,6 +40,8 @@ import {
 import toast from '../components/ui/Toast';
 import BrailleSpinner from '../components/BrailleSpinner';
 import BatchQueuePanel from '../components/media/BatchQueuePanel';
+import MediaJobsQueue from '../components/media/MediaJobsQueue';
+import { useMediaCompletionRefresh } from '../hooks/useMediaCompletionRefresh';
 import {
   getVideoGenStatus, generateVideo, cancelVideoGen,
   listVideoHistory, deleteVideoHistoryItem, setVideoHidden, extractLastFrame,
@@ -47,6 +49,7 @@ import {
   listImageGallery,
 } from '../services/api';
 import { randomSeed, safeParseJSON } from '../lib/genUtils';
+import { getMediaNavProps } from '../lib/mediaNavigation';
 
 const RESOLUTIONS = [
   { label: '512×320 (16:10)', w: 512, h: 320 },
@@ -203,6 +206,7 @@ export default function VideoGen() {
   const refreshHistory = useCallback(() => {
     listVideoHistory().then((items) => setHistory(Array.isArray(items) ? items : [])).catch(() => {});
   }, []);
+  useMediaCompletionRefresh({ onVideoCompleted: refreshHistory });
   useEffect(() => { refreshHistory(); }, [refreshHistory]);
   useEffect(() => { listImageGallery().then(setImageGallery).catch(() => {}); }, []);
 
@@ -210,6 +214,11 @@ export default function VideoGen() {
     visibleHistory: history.filter((v) => !v.hidden),
     hiddenHistory: history.filter((v) => v.hidden),
   }), [history]);
+  const previewItems = useMemo(() => [
+    ...visibleHistory.map(normalizeVideo),
+    ...(showHidden ? hiddenHistory.map(normalizeVideo) : []),
+  ], [visibleHistory, hiddenHistory, showHidden]);
+  const previewNavProps = getMediaNavProps(previewItems, preview, setPreview);
 
   const handleDeleteHistory = async (item) => {
     await deleteVideoHistoryItem(item.id).catch((err) => toast.error(err.message || 'Delete failed'));
@@ -291,7 +300,6 @@ export default function VideoGen() {
       })
       .catch(() => setStatus({ connected: false, reason: 'Status check failed' }))
       .finally(() => setStatusLoading(false));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -1264,16 +1272,18 @@ export default function VideoGen() {
         )}
       />
 
+      <MediaJobsQueue kind="video" />
+
       {visibleHistory.length > 0 && (
         <div className="bg-port-card border border-port-border rounded-xl p-4 space-y-2">
           <div className="flex items-center justify-between">
-            <h2 className="text-xs font-medium text-gray-400 uppercase tracking-wide">Recent renders ({Math.min(visibleHistory.length, 6)} of {visibleHistory.length})</h2>
-            {visibleHistory.length > 6 && (
+            <h2 className="text-xs font-medium text-gray-400 uppercase tracking-wide">Recent renders ({Math.min(visibleHistory.length, 5)} of {visibleHistory.length})</h2>
+            {visibleHistory.length > 5 && (
               <Link to="/media/history" className="text-xs text-port-accent hover:underline">View all →</Link>
             )}
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
-            {visibleHistory.slice(0, 6).map((v) => {
+            {visibleHistory.slice(0, 5).map((v) => {
               const item = normalizeVideo(v);
               return (
                 <MediaCard
@@ -1325,6 +1335,7 @@ export default function VideoGen() {
         item={preview}
         onClose={() => setPreview(null)}
         onContinue={(item) => handleContinueHistory(item.raw)}
+        {...previewNavProps}
       />
 
       <Drawer open={settingsOpen} onClose={closeSettings} title="Media Generation Settings">

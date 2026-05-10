@@ -5,7 +5,7 @@ import {
   Cpu, HardDrive, Activity, Bot, MonitorSmartphone, Tag,
   ArrowUpRight, ArrowDownLeft, ArrowLeftRight,
   Database, Brain, CheckCircle2, AlertCircle, Clock,
-  RefreshCcw, RefreshCcwDot, Timer,
+  RefreshCcw, Timer,
   Target, Sword, Fingerprint, HeartPulse, ChevronDown, ChevronRight,
   Lock, Globe, Info
 } from 'lucide-react';

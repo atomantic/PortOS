@@ -447,7 +447,12 @@ async function runJob(job) {
   let watchdogTimer;
   function terminate(state, apply) {
     if (job.status !== 'running') return;
-    clearTimeout(watchdogTimer);
+    // setInterval now (was setTimeout) — using clearInterval to match the new
+    // API. (Node accepts either clearTimeout or clearInterval on the same
+    // Timeout handle, so this is purely stylistic.)
+    clearInterval(watchdogTimer);
+    emitter.off?.('activity', onActivity);
+    emitter.off?.('progress', onActivity);
     apply(job);
     job.status = state;
     job.completedAt = new Date().toISOString();
@@ -515,37 +520,63 @@ async function runJob(job) {
   const dispatcher = makeGenDispatcher(emitter, job, handlers);
   dispatcher.attach();
 
-  // Thread #2: per-job watchdog — fires if the gen never emits a terminal
-  // event (hung child process or emitter regression). On trigger it marks
-  // the job failed via the normal handlers path (SSE + mediaJobEvents +
-  // persistence all fire) and best-effort cancels the underlying process
-  // so the queue can make forward progress.
-  // Renamed from `watchdogMs` to avoid shadowing the top-level
-  // `watchdogMs(envValue, defaultMs)` helper that parses the env-var
-  // overrides. Both lived as `watchdogMs` previously and made the call
-  // site easy to misread.
-  const watchdogTimeoutMs = job.kind === 'video'
+  // Thread #2: per-job idle watchdog — fires when the gen has been silent
+  // for the configured window. Switched from "max wall time" to "max idle"
+  // because first-run downloads of multi-GB models (Z-Image-Turbo ~13 GB,
+  // ERNIE-Image ~16 GB) routinely exceed any sensible total-time bound,
+  // but the runner emits stderr lines (tqdm / STAGE markers / status
+  // prose) regularly while it's actually working. Any non-noise line in
+  // imageGen/videoGen/local.js#handleLine emits 'activity' which resets
+  // lastActivityAt; only true hangs (process wedged, no output) trip it.
+  const idleTimeoutMs = job.kind === 'video'
     ? WATCHDOG_VIDEO_MS * Math.max(1, Number(safeParams.chunks) || 1)
     : WATCHDOG_IMAGE_MS;
-  watchdogTimer = setTimeout(async () => {
-    // Two-stage status guard: first check stops us if the gen settled
-    // before the timer fired. The await on the dynamic import below opens
-    // a window during which a natural completion / failure could land —
-    // re-check after the await so we don't fire `handlers.failed` and
-    // SIGTERM the *next* job's child (cancel() targets the gen module's
-    // current activeProcess; once handlers.failed marks this job
-    // terminal, runJob's await exits and the worker advances).
+  let lastActivityAt = Date.now();
+  const onActivity = (e) => {
+    if (e?.generationId === job.id) lastActivityAt = Date.now();
+  };
+  emitter.on('activity', onActivity);
+  // Treat real progress events as activity too — covers the (rare) case
+  // where a runner emits structured progress without going through
+  // handleLine (e.g. a future direct emit).
+  emitter.on('progress', onActivity);
+  // setInterval with an async tick can overlap if the await
+  // (getGenModuleForJob → dynamic import) takes longer than the interval.
+  // Without this guard, two ticks could both pass the post-await
+  // status check and both call mod.cancel() + handlers.failed(). The
+  // terminal sink in terminate() is idempotent, but mod.cancel() being
+  // called twice racing with the SIGKILL escalation is messy. Track an
+  // inFlight flag so only one tick is ever past the await at a time.
+  let watchdogInFlight = false;
+  watchdogTimer = setInterval(async () => {
+    if (watchdogInFlight) return;
     if (job.status !== 'running') return;
-    const mod = await getGenModuleForJob(job);
-    if (job.status !== 'running') return;
-    console.log(`⏱️ media-job [${job.id.slice(0, 8)}] watchdog fired after ${watchdogTimeoutMs}ms — marking failed`);
-    // Cancel BEFORE marking failed — that ordering keeps the SIGTERM
-    // pointed at *this* job's child. The gen module will then emit its
-    // own 'failed' event, but the terminate() guard makes it a no-op.
-    if (mod?.cancel) mod.cancel();
-    handlers.failed({ error: `watchdog timeout: job exceeded ${watchdogTimeoutMs}ms` });
-  }, watchdogTimeoutMs);
-  // Ensure the timer doesn't keep Node alive after the job settles.
+    const idleFor = Date.now() - lastActivityAt;
+    if (idleFor < idleTimeoutMs) return;
+    watchdogInFlight = true;
+    // try/catch is mandatory here: this body is the listener for an
+    // EventEmitter-like setInterval — a rejected await inside an async
+    // callback escapes as an unhandled promise rejection (process-killing
+    // on Node ≥15). getGenModuleForJob does a dynamic import and can
+    // realistically reject under disk pressure / hot-reload / a stale
+    // module cache. Route any failure through handlers.failed so the
+    // queue still settles, and reset inFlight in finally.
+    try {
+      const mod = await getGenModuleForJob(job);
+      if (job.status !== 'running') return;
+      console.log(`⏱️ media-job [${job.id.slice(0, 8)}] watchdog fired after ${idleFor}ms idle (limit ${idleTimeoutMs}ms) — marking failed`);
+      if (mod?.cancel) mod.cancel();
+      handlers.failed({ error: `watchdog timeout: no runner output for ${Math.round(idleFor / 1000)}s (limit ${Math.round(idleTimeoutMs / 1000)}s)` });
+    } catch (err) {
+      // Don't take down the server over a watchdog tick that couldn't
+      // resolve the gen module. Log and let the next tick retry — if
+      // job.status is still 'running', the next idle check will fire
+      // again (and may succeed once the import cache stabilizes).
+      console.log(`⚠️ media-job [${job.id.slice(0, 8)}] watchdog tick errored: ${err?.message || err}`);
+    } finally {
+      watchdogInFlight = false;
+    }
+  }, Math.min(30_000, Math.max(25, Math.floor(idleTimeoutMs / 4))));
   watchdogTimer.unref?.();
 
   try {
@@ -609,6 +640,26 @@ export function enqueueJob({ kind, params, owner = null }) {
   startWorker();
   console.log(`📥 media-job [${id.slice(0, 8)}] ${kind} queued (position ${job.position})`);
   return { jobId: id, position: job.position, status: 'queued' };
+}
+
+// Bulk-cancel every queued job (optionally filtered by kind: 'image' | 'video').
+// Running jobs are left alone — they have to be canceled individually with
+// cancelJob(id) so the SIGTERM path runs. Returns the count of jobs that were
+// dropped from the queue.
+export async function cancelQueuedJobs({ kind } = {}) {
+  // Snapshot the IDs before cancel — cancelJob mutates the queue array, and
+  // we don't want our iteration to skip entries when prior splices shift
+  // indexes. The cancelJob path already handles upload cleanup, archive
+  // push, position recompute, and SSE broadcast, so reuse it.
+  const ids = queue
+    .filter((j) => !kind || j.kind === kind)
+    .map((j) => j.id);
+  let canceled = 0;
+  for (const id of ids) {
+    const r = await cancelJob(id);
+    if (r?.ok) canceled += 1;
+  }
+  return { canceled };
 }
 
 // Cancel: drops a queued job, or sends SIGTERM to a running gen process.

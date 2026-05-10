@@ -121,6 +121,38 @@ router.get('/learning/recommendations', asyncHandler(async (req, res) => {
   });
 }));
 
+// GET /api/cos/learning/recommendations/dismissed - List dismissed AI recommendations
+router.get('/learning/recommendations/dismissed', asyncHandler(async (req, res) => {
+  const dismissed = await taskLearning.getDismissedRecommendations();
+  res.json({ count: dismissed.length, dismissed });
+}));
+
+// POST /api/cos/learning/recommendations/dismiss - Dismiss an AI recommendation
+router.post('/learning/recommendations/dismiss', asyncHandler(async (req, res) => {
+  const { id, snapshot } = req.body || {};
+  if (!id || typeof id !== 'string') {
+    throw new ServerError('Recommendation id is required', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  const result = await taskLearning.dismissRecommendation(id, snapshot ?? null);
+  res.json(result);
+}));
+
+// POST /api/cos/learning/recommendations/restore - Restore a dismissed recommendation
+router.post('/learning/recommendations/restore', asyncHandler(async (req, res) => {
+  const { id } = req.body || {};
+  if (!id || typeof id !== 'string') {
+    throw new ServerError('Recommendation id is required', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  const result = await taskLearning.restoreRecommendation(id);
+  res.json(result);
+}));
+
+// POST /api/cos/learning/recommendations/clear-dismissed - Clear all dismissals
+router.post('/learning/recommendations/clear-dismissed', asyncHandler(async (req, res) => {
+  const result = await taskLearning.clearDismissedRecommendations();
+  res.json(result);
+}));
+
 // GET /api/cos/learning/recommendations/:taskType - Get detailed recommendations for specific task type
 router.get('/learning/recommendations/:taskType', asyncHandler(async (req, res) => {
   const { taskType } = req.params;

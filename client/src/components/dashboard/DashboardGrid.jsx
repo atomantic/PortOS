@@ -250,45 +250,36 @@ export default function DashboardGrid({ items, editable, onChange, renderItem })
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dragGhost ? 'active' : 'idle', items, onChange, containerWidth]);
 
-  // Mobile fallback: stack widgets full-width in source order. Uses CSS flow
-  // (no absolute positioning) so the layout adapts to widget content height.
-  if (isMobile) {
-    return (
-      <div ref={containerRef} className="space-y-4">
-        {items.map((item) => (
-          <div key={item.id} className="w-full">
-            {renderItem(item)}
-          </div>
-        ))}
-      </div>
-    );
-  }
-
-  const colWidth = getColWidth(containerWidth);
+  // Single render tree across mobile and desktop — only the className/style
+  // toggle. If we returned a different JSX shape per mode (separate mobile
+  // branch with shallower wrappers), React would unmount every widget on the
+  // breakpoint cross, wiping in-progress form input. Rotating an iPhone from
+  // portrait (~390px) to landscape (~844px) crosses MOBILE_BREAKPOINT_PX, so
+  // structural divergence here = "my Quick Capture text vanished when I
+  // rotated." Keep the wrapper depth identical and let CSS handle the rest.
+  const colWidth = isMobile ? 0 : getColWidth(containerWidth);
+  const showDragHandles = editable && !isMobile && containerWidth > 0;
 
   return (
     <div
       ref={containerRef}
-      className="relative w-full"
-      style={{ height: containerWidth ? containerHeight : 'auto', minHeight: '4rem' }}
+      className={isMobile ? 'space-y-4' : 'relative w-full'}
+      style={isMobile ? undefined : { height: containerWidth ? containerHeight : 'auto', minHeight: '4rem' }}
     >
       {items.map((item) => {
-        const isDragging = dragGhost?.id === item.id;
-        const renderRect = rectFor(item, colWidth);
+        const isDragging = !isMobile && dragGhost?.id === item.id;
+        const itemStyle = isMobile ? undefined : rectFor(item, colWidth);
+        const itemClass = isMobile
+          ? 'w-full'
+          : `absolute ${isDragging ? 'opacity-40' : ''} ${dragGhost ? '' : 'transition-[left,top,width,height] duration-150'}`;
+        const innerClass = isMobile
+          ? 'relative'
+          : `relative w-full h-full overflow-hidden rounded-xl ${editable ? 'ring-1 ring-port-border' : ''}`;
         return (
-          <div
-            key={item.id}
-            className={`absolute ${isDragging ? 'opacity-40' : ''} ${dragGhost ? '' : 'transition-[left,top,width,height] duration-150'}`}
-            style={{
-              left: renderRect.left,
-              top: renderRect.top,
-              width: renderRect.width,
-              height: renderRect.height,
-            }}
-          >
-            <div className={`relative w-full h-full overflow-hidden rounded-xl ${editable ? 'ring-1 ring-port-border' : ''}`}>
+          <div key={item.id} className={itemClass} style={itemStyle}>
+            <div className={innerClass}>
               {renderItem(item)}
-              {editable && containerWidth > 0 && (
+              {showDragHandles && (
                 <>
                   <DragHandle
                     kind="move" item={item} icon={GripVertical} onStart={startDrag}
@@ -308,7 +299,7 @@ export default function DashboardGrid({ items, editable, onChange, renderItem })
       {/* Drop preview during drag — outline showing where the item will
           land after snap. Pointer-events:none so it never intercepts the
           gesture. */}
-      {dragGhost && containerWidth > 0 && (
+      {!isMobile && dragGhost && containerWidth > 0 && (
         <div
           className="absolute pointer-events-none border-2 border-dashed border-port-accent rounded-xl bg-port-accent/10 z-30"
           style={rectFor(dragGhost, colWidth)}

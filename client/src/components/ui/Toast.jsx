@@ -103,7 +103,7 @@ export function Toaster({ position = 'bottom-right', toastOptions = {} }) {
         const iconStr = t.icon ?? (t.type !== 'default' ? TYPE_ICON[t.type] : null);
         const iconClass = t.type !== 'default' ? TYPE_CLASS[t.type] : '';
         return (
-          <div key={t.id} style={style} className="pointer-events-auto flex items-start gap-2 shadow-lg text-sm max-w-[520px] bg-port-card border border-port-border">
+          <div key={t.id} style={style} className="pointer-events-auto flex items-start gap-2 shadow-lg text-sm max-w-[calc(100vw-2rem)] sm:max-w-[520px] bg-port-card border border-port-border">
             {iconStr && <span className={`shrink-0 ${iconClass}`}>{iconStr}</span>}
             <div className="flex-1 min-w-0">
               {typeof t.content === 'function' ? t.content({ id: t.id }) : <span>{t.content}</span>}

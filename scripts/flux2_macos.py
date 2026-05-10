@@ -25,6 +25,8 @@ import inspect
 import json
 import os
 import sys
+import threading
+from contextlib import contextmanager
 from pathlib import Path
 
 # Must precede `import torch` — enables the fast-math kernel path on MPS,
@@ -33,6 +35,34 @@ os.environ.setdefault("PYTORCH_MPS_FAST_MATH", "1")
 
 import torch
 from PIL import Image
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lora_utils import apply_loras  # noqa: E402
+
+
+@contextmanager
+def heartbeat(stage: str, interval: float = 20.0):
+    # Diffusers' from_pretrained on a fully-cached 10-25 GB model is silent
+    # for several minutes (mmap + weight assignment, no tqdm), which trips the
+    # JS-side idle watchdog (default 5min). Emit a non-noise stderr line every
+    # `interval` seconds so handleLine() in imageGen/local.js sees activity
+    # and resets lastActivityAt. True hangs (GIL-pinned C extension, no I/O)
+    # still trip the watchdog because the heartbeat thread can't print either.
+    stop = threading.Event()
+
+    def beat():
+        elapsed = 0
+        while not stop.wait(interval):
+            elapsed += int(interval)
+            print(f"STAGE:{stage}:heartbeat:{elapsed}s", file=sys.stderr, flush=True)
+
+    t = threading.Thread(target=beat, daemon=True)
+    t.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        t.join(timeout=interval + 1)
 
 
 def pick_device(requested: str) -> str:
@@ -103,17 +133,20 @@ def load_pipeline_sdnq(repo: str, tokenizer_repo: str, device: str, dtype):
     # ~8 GB SDNQ-quantized weights download — flagged as `download-pipeline`.
     print(f"STAGE:download-tokenizer:{tokenizer_repo}", file=sys.stderr, flush=True)
     print(f"🔧 sdnq: tokenizer ← {tokenizer_repo}", file=sys.stderr)
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_repo, subfolder="tokenizer", use_fast=False)
+    with heartbeat("loading-tokenizer"):
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_repo, subfolder="tokenizer", use_fast=False)
     print(f"STAGE:download-pipeline:{repo}", file=sys.stderr, flush=True)
     print(f"🔧 sdnq: pipeline ← {repo}", file=sys.stderr)
-    pipe = Flux2KleinPipeline.from_pretrained(
-        repo,
-        tokenizer=tokenizer,
-        torch_dtype=dtype,
-        low_cpu_mem_usage=True,
-    )
+    with heartbeat("loading-pipeline"):
+        pipe = Flux2KleinPipeline.from_pretrained(
+            repo,
+            tokenizer=tokenizer,
+            torch_dtype=dtype,
+            low_cpu_mem_usage=True,
+        )
     print("STAGE:move-to-device", file=sys.stderr, flush=True)
-    pipe.to(device)
+    with heartbeat("move-to-device"):
+        pipe.to(device)
     return pipe
 
 
@@ -130,12 +163,14 @@ def load_pipeline_int8(repo: str, base_repo: str, device: str, dtype):
 
     print(f"STAGE:download-int8-snapshot:{repo}", file=sys.stderr, flush=True)
     print(f"🔧 int8: snapshot ← {repo}", file=sys.stderr)
-    model_path = snapshot_download(repo)
+    with heartbeat("downloading-snapshot"):
+        model_path = snapshot_download(repo)
 
     print("STAGE:load-transformer", file=sys.stderr, flush=True)
     print("🔧 int8: transformer …", file=sys.stderr)
-    qtransformer = QuantizedFlux2Transformer2DModel.from_pretrained(model_path)
-    qtransformer.to(device=device, dtype=dtype)
+    with heartbeat("loading-transformer"):
+        qtransformer = QuantizedFlux2Transformer2DModel.from_pretrained(model_path)
+        qtransformer.to(device=device, dtype=dtype)
 
     print("STAGE:load-text-encoder", file=sys.stderr, flush=True)
     print("🔧 int8: text encoder …", file=sys.stderr)
@@ -143,30 +178,32 @@ def load_pipeline_int8(repo: str, base_repo: str, device: str, dtype):
     # (Qwen3ForCausalLM here). transformers>=4.51 ships Qwen3 in-tree so we
     # don't need trust_remote_code; passing it would let a maliciously edited
     # model registry point at a repo that executes arbitrary Python at load.
-    config = AutoConfig.from_pretrained(f"{model_path}/text_encoder")
-    with init_empty_weights():
-        text_encoder = AutoModelForCausalLM.from_config(config)
-    with open(f"{model_path}/text_encoder/quanto_qmap.json", "r") as f:
-        te_qmap = json.load(f)
-    te_state = load_file(f"{model_path}/text_encoder/model.safetensors")
-    requantize(text_encoder, state_dict=te_state, quantization_map=te_qmap)
-    text_encoder.eval()
-    text_encoder.to(device, dtype=dtype)
+    with heartbeat("loading-text-encoder"):
+        config = AutoConfig.from_pretrained(f"{model_path}/text_encoder")
+        with init_empty_weights():
+            text_encoder = AutoModelForCausalLM.from_config(config)
+        with open(f"{model_path}/text_encoder/quanto_qmap.json", "r") as f:
+            te_qmap = json.load(f)
+        te_state = load_file(f"{model_path}/text_encoder/model.safetensors")
+        requantize(text_encoder, state_dict=te_state, quantization_map=te_qmap)
+        text_encoder.eval()
+        text_encoder.to(device, dtype=dtype)
 
-    tokenizer = AutoTokenizer.from_pretrained(f"{model_path}/tokenizer")
+        tokenizer = AutoTokenizer.from_pretrained(f"{model_path}/tokenizer")
 
     print(f"🔧 int8: VAE/scheduler ← {base_repo}", file=sys.stderr)
-    pipe = Flux2KleinPipeline.from_pretrained(
-        base_repo,
-        transformer=None,
-        text_encoder=None,
-        tokenizer=None,
-        torch_dtype=dtype,
-    )
-    pipe.transformer = qtransformer._wrapped
-    pipe.text_encoder = text_encoder
-    pipe.tokenizer = tokenizer
-    pipe.to(device)
+    with heartbeat("loading-vae-scheduler"):
+        pipe = Flux2KleinPipeline.from_pretrained(
+            base_repo,
+            transformer=None,
+            text_encoder=None,
+            tokenizer=None,
+            torch_dtype=dtype,
+        )
+        pipe.transformer = qtransformer._wrapped
+        pipe.text_encoder = text_encoder
+        pipe.tokenizer = tokenizer
+        pipe.to(device)
     return pipe
 
 
@@ -221,6 +258,15 @@ def make_stepwise_callback(stepwise_dir: str, pipe, height: int, width: int):
     shift = getattr(vae.config, "shift_factor", None)
     if shift is None:
         shift = 0.0
+    # Capture VAE weight dtype + device so the callback can align the scaled
+    # latents before decode — pipelines sometimes keep latents in float32
+    # while the VAE is bfloat16 (which errors with "Input type (float) and
+    # bias type (c10::BFloat16) should be the same").
+    try:
+        vae_param = next(vae.parameters())
+        vae_dtype, vae_device = vae_param.dtype, vae_param.device
+    except StopIteration:
+        vae_dtype, vae_device = None, None
 
     fired = {"count": 0, "saved": 0}
 
@@ -241,7 +287,10 @@ def make_stepwise_callback(stepwise_dir: str, pipe, height: int, width: int):
             # (B, C, H, W). Skip unpack if it's already 4-D (future-proof).
             if latents.dim() == 3:
                 latents = _unpack_flux2_latents(latents, height, width)
-            decoded = vae.decode(latents / scaling + shift, return_dict=False)[0]
+            scaled = latents / scaling + shift
+            if vae_dtype is not None and (scaled.dtype != vae_dtype or scaled.device != vae_device):
+                scaled = scaled.to(device=vae_device, dtype=vae_dtype)
+            decoded = vae.decode(scaled, return_dict=False)[0]
             decoded = (decoded.clamp(-1, 1) + 1) / 2
             arr = (decoded[0].float().cpu().permute(1, 2, 0).numpy() * 255).astype("uint8")
             img = Image.fromarray(arr)
@@ -281,6 +330,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--image-strength", type=float, default=None, help="0..1 i2i denoise strength")
     p.add_argument("--stepwise-image-output-dir", default=None)
     p.add_argument("--device", default="auto", choices=["auto", "mps", "cuda", "cpu"])
+    p.add_argument("--lora-paths", nargs="*", default=[], help="absolute paths to LoRA .safetensors files")
+    p.add_argument("--lora-scales", nargs="*", default=[], help="scale per LoRA, parallel to --lora-paths")
     return p.parse_args()
 
 
@@ -307,6 +358,7 @@ def main() -> None:
         sys.exit(64)
 
     apply_memory_optimizations(pipe)
+    apply_loras(pipe, args.lora_paths or [], args.lora_scales or [])
 
     seed = args.seed if args.seed is not None else int(torch.randint(0, 2**31 - 1, (1,)).item())
     generator = make_generator(device, seed)

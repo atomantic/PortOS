@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Pencil, Star } from 'lucide-react';
 import toast from '../components/ui/Toast';
@@ -43,7 +43,7 @@ export default function MediaCollectionDetail() {
   const [nameDraft, setNameDraft] = useState('');
   const [preview, setPreview] = useState(null);
 
-  const refresh = async () => {
+  const refresh = useCallback(async () => {
     setLoading(true);
     const [c, images, videos] = await Promise.all([
       getMediaCollection(id).catch((err) => {
@@ -58,8 +58,8 @@ export default function MediaCollectionDetail() {
     setImagesByName(new Map((images || []).map((i) => [i.filename, i])));
     setVideosById(new Map((videos || []).map((v) => [v.id, v])));
     setLoading(false);
-  };
-  useEffect(() => { refresh(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [id]);
+  }, [id]);
+  useEffect(() => { refresh(); }, [refresh]);
 
   const items = useMemo(
     () => collection ? hydrate(collection, imagesByName, videosById) : [],

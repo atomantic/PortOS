@@ -116,6 +116,16 @@ export const getCosLearningSummary = (options) => request('/cos/learning/summary
 export const getCosLearningConfidence = () => request('/cos/learning/confidence');
 export const backfillCosLearning = () => request('/cos/learning/backfill', { method: 'POST' });
 export const resetCosTaskTypeLearning = (taskType) => request(`/cos/learning/reset/${encodeURIComponent(taskType)}`, { method: 'POST' });
+export const getDismissedCosRecommendations = () => request('/cos/learning/recommendations/dismissed');
+export const dismissCosRecommendation = (id, snapshot) => request('/cos/learning/recommendations/dismiss', {
+  method: 'POST',
+  body: JSON.stringify({ id, snapshot })
+});
+export const restoreCosRecommendation = (id) => request('/cos/learning/recommendations/restore', {
+  method: 'POST',
+  body: JSON.stringify({ id })
+});
+export const clearDismissedCosRecommendations = () => request('/cos/learning/recommendations/clear-dismissed', { method: 'POST' });
 
 // CoS Quick Task Templates
 export const getCosTaskTemplates = () => request('/cos/templates');
@@ -223,6 +233,9 @@ export const updateCosJob = (id, data) => request(`/cos/jobs/${id}`, {
 export const toggleCosJob = (id) => request(`/cos/jobs/${id}/toggle`, { method: 'POST' });
 export const triggerCosJob = (id) => request(`/cos/jobs/${id}/trigger`, { method: 'POST' });
 export const deleteCosJob = (id) => request(`/cos/jobs/${id}`, { method: 'DELETE' });
+
+// Workflow visualizer — canonical scheduled-task ordering across tasks + jobs
+export const getCosWorkflow = () => request('/cos/workflow');
 
 // Feature Agents
 export const getFeatureAgents = () => request('/feature-agents');

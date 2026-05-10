@@ -151,7 +151,8 @@ router.post('/branch-comparison', asyncHandler(async (req, res) => {
     throw new ServerError('path is required', { status: 400, code: 'VALIDATION_ERROR' });
   }
 
-  const result = await git.getBranchComparison(path, base || 'main', head || 'dev');
+  const baseBranch = base || await git.getDefaultBranch(path, { allowRemote: false }).catch(() => null) || 'main';
+  const result = await git.getBranchComparison(path, baseBranch, head || 'dev');
   res.json(result);
 }));
 

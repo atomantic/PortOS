@@ -1,0 +1,270 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+const fileStore = new Map();
+
+vi.mock('../lib/fileUtils.js', () => ({
+  PATHS: { data: '/mock/data' },
+  ensureDir: vi.fn().mockResolvedValue(undefined),
+  atomicWrite: vi.fn(async (path, data) => { fileStore.set(path, data); }),
+  readJSONFile: vi.fn(async (path, fallback) => (fileStore.has(path) ? fileStore.get(path) : fallback)),
+}));
+
+let uuidCounter = 0;
+vi.mock('crypto', async () => {
+  const actual = await vi.importActual('crypto');
+  return { ...actual, randomUUID: () => `uuid-${++uuidCounter}` };
+});
+
+const svc = await import('./worldBuilder.js');
+
+const seedWorld = async (overrides = {}) => svc.createWorld({
+  name: 'Moebius SciFi',
+  starterPrompt: 'moebius and scavengers reign meets prophet',
+  stylePrompt: 'moebius linework, scavengers reign palette',
+  negativePrompt: 'blurry, lowres',
+  categories: {
+    landscapes: { variations: [
+      { label: 'Crystal Canyon', prompt: 'crystalline canyon, alien sun' },
+      { label: 'Sand Sea', prompt: 'endless sand sea, dunes' },
+    ] },
+    characters: { variations: [
+      { label: 'Scavenger', prompt: 'lone scavenger figure, weathered cloak' },
+    ] },
+  },
+  ...overrides,
+});
+
+describe('worldBuilder service', () => {
+  beforeEach(() => {
+    fileStore.clear();
+    uuidCounter = 0;
+  });
+
+  it('listWorlds returns [] for fresh state', async () => {
+    expect(await svc.listWorlds()).toEqual([]);
+  });
+
+  it('createWorld persists with sanitized categories', async () => {
+    const w = await seedWorld();
+    expect(w.id).toBe('uuid-1');
+    expect(w.name).toBe('Moebius SciFi');
+    // All five categories materialized even when only two were provided.
+    for (const c of svc.WORLD_CATEGORIES) {
+      expect(w.categories[c]).toBeDefined();
+      expect(Array.isArray(w.categories[c].variations)).toBe(true);
+    }
+    expect(w.categories.landscapes.variations).toHaveLength(2);
+    expect(w.categories.characters.variations).toHaveLength(1);
+    expect(w.categories.environments.variations).toHaveLength(0);
+  });
+
+  it('createWorld preserves custom world-building categories', async () => {
+    const w = await seedWorld({
+      categories: {
+        'Clothing Styles': { variations: [{ label: 'Rib-Cage Nomads', prompt: 'reference sheet, layered sailcloth, bone toggles' }] },
+        factions: { variations: [{ label: 'Wake Jackals', prompt: 'spare raider kit, patched pressure masks' }] },
+      },
+    });
+    expect(w.categories.clothing_styles.variations).toEqual([
+      { label: 'Rib-Cage Nomads', prompt: 'reference sheet, layered sailcloth, bone toggles' },
+    ]);
+    expect(w.categories.factions.variations).toHaveLength(1);
+    expect(w.categories.landscapes.variations).toHaveLength(0);
+  });
+
+  it('createWorld persists composite sheet prompts separately from categories', async () => {
+    const w = await seedWorld({
+      compositeSheets: [
+        { label: 'Gas-Giant Drifters costume sheet', prompt: 'Create a clean illustrated costume reference sheet with five figures, materials swatches, fasteners, accessories, and color palette strip.' },
+      ],
+    });
+    expect(w.compositeSheets).toEqual([
+      { kind: 'reference_sheet', label: 'Gas-Giant Drifters costume sheet', prompt: 'Create a clean illustrated costume reference sheet with five figures, materials swatches, fasteners, accessories, and color palette strip.' },
+    ]);
+  });
+
+  it('createWorld persists world pitch poster prompts separately from categories', async () => {
+    const w = await seedWorld({
+      compositeSheets: [
+        { kind: 'world_pitch_poster', label: 'World summary concept pitch poster', prompt: 'Create a cinematic world summary concept pitch poster with hero panorama, inset environments, cultures, creatures, visual language, color palette, materials, light atmosphere, and theme icons.' },
+      ],
+    });
+    expect(w.compositeSheets).toEqual([
+      { kind: 'world_pitch_poster', label: 'World summary concept pitch poster', prompt: 'Create a cinematic world summary concept pitch poster with hero panorama, inset environments, cultures, creatures, visual language, color palette, materials, light atmosphere, and theme icons.' },
+    ]);
+  });
+
+  it('createWorld rejects empty name', async () => {
+    await expect(svc.createWorld({ name: '' })).rejects.toThrow(/name is required/);
+  });
+
+  it('updateWorld merges partial patches', async () => {
+    const w = await seedWorld();
+    const patched = await svc.updateWorld(w.id, { name: 'Renamed', stylePrompt: 'new style' });
+    expect(patched.name).toBe('Renamed');
+    expect(patched.stylePrompt).toBe('new style');
+    // Untouched fields preserved.
+    expect(patched.starterPrompt).toBe(w.starterPrompt);
+    expect(patched.categories.landscapes.variations).toHaveLength(2);
+  });
+
+  it('updateWorld throws NOT_FOUND for unknown id', async () => {
+    await expect(svc.updateWorld('no-such', { name: 'X' })).rejects.toMatchObject({ code: svc.ERR_NOT_FOUND });
+  });
+
+  it('deleteWorld removes the world and its runs', async () => {
+    const w = await seedWorld();
+    await svc.recordRun({
+      id: 'run-1', worldId: w.id, collectionId: 'col-1', jobIds: ['j1'], promptCount: 3,
+    });
+    expect((await svc.listRuns(w.id))).toHaveLength(1);
+    await svc.deleteWorld(w.id);
+    expect(await svc.listWorlds()).toEqual([]);
+    expect(await svc.listRuns(w.id)).toEqual([]);
+  });
+
+  describe('compilePrompts', () => {
+    it('returns one prompt per variation across selected categories with style prefix', async () => {
+      const w = await seedWorld();
+      const compiled = svc.compilePrompts(w);
+      // 2 landscapes + 1 character = 3 (other categories empty)
+      expect(compiled).toHaveLength(3);
+      expect(compiled[0].prompt).toBe('moebius linework, scavengers reign palette, crystalline canyon, alien sun');
+      expect(compiled[0].category).toBe('landscapes');
+      expect(compiled[0].label).toBe('Crystal Canyon');
+      expect(compiled[0].negativePrompt).toBe('blurry, lowres');
+    });
+
+    it('includes custom categories by default', async () => {
+      const w = await seedWorld({
+        categories: {
+          colonies: { variations: [{ label: 'Canopy Symbiotes', prompt: 'leaf-fiber clothing reference sheet, sap resin closures' }] },
+        },
+      });
+      const compiled = svc.compilePrompts(w);
+      expect(compiled).toHaveLength(1);
+      expect(compiled[0]).toMatchObject({
+        category: 'colonies',
+        label: 'Canopy Symbiotes',
+      });
+    });
+
+    it('respects batchPerVariation', async () => {
+      const w = await seedWorld();
+      const compiled = svc.compilePrompts(w, { batchPerVariation: 3 });
+      expect(compiled).toHaveLength(9); // 3 variations × 3 batch
+      expect(compiled.filter((c) => c.label === 'Crystal Canyon')).toHaveLength(3);
+    });
+
+    it('selection: array filters by label (case-insensitive)', async () => {
+      const w = await seedWorld();
+      const compiled = svc.compilePrompts(w, {
+        selection: { landscapes: ['crystal canyon'], characters: 'all' },
+      });
+      // 1 landscape (filtered) + 1 character (all) = 2
+      expect(compiled).toHaveLength(2);
+      expect(compiled.map((c) => c.label).sort()).toEqual(['Crystal Canyon', 'Scavenger']);
+    });
+
+    it('selection: missing key skips category', async () => {
+      const w = await seedWorld();
+      const compiled = svc.compilePrompts(w, { selection: { landscapes: 'all' } });
+      expect(compiled).toHaveLength(2);
+      expect(compiled.every((c) => c.category === 'landscapes')).toBe(true);
+    });
+
+    it('selection supports custom category keys', async () => {
+      const w = await seedWorld({
+        categories: {
+          raider_clans: { variations: [
+            { label: 'Wake Jackals', prompt: 'clean scavenger raider outfit board' },
+            { label: 'Hull Vultures', prompt: 'pressure-ring pirate boarding gear' },
+          ] },
+        },
+      });
+      const compiled = svc.compilePrompts(w, { selection: { raider_clans: ['wake jackals'] } });
+      expect(compiled).toHaveLength(1);
+      expect(compiled[0].label).toBe('Wake Jackals');
+    });
+
+    it('clamps batchPerVariation to 1..20', async () => {
+      const w = await seedWorld();
+      // 0 → 1
+      expect(svc.compilePrompts(w, { batchPerVariation: 0 })).toHaveLength(3);
+      // 100 → 20
+      const big = svc.compilePrompts(w, { batchPerVariation: 100 });
+      expect(big).toHaveLength(60); // 3 × 20
+    });
+
+    it('can compile composite sheets without atomic variations', async () => {
+      const w = await seedWorld({
+        categories: {},
+        compositeSheets: [
+          { label: 'Canopy Symbiotes sheet', prompt: 'clean costume reference sheet, lineup, materials, fasteners, palette' },
+          { label: 'Gas-Giant Drifters sheet', prompt: 'clean costume reference sheet, pressure collars, clips, palette' },
+        ],
+      });
+      const compiled = svc.compilePrompts(w, { promptMode: 'sheets' });
+      expect(compiled).toHaveLength(2);
+      expect(compiled[0]).toMatchObject({
+        category: 'composite_sheets',
+        label: 'Canopy Symbiotes sheet',
+        prompt: 'moebius linework, scavengers reign palette, clean costume reference sheet, lineup, materials, fasteners, palette',
+      });
+    });
+
+    it('tags world pitch poster prompts separately from reference sheets', async () => {
+      const w = await seedWorld({
+        categories: {},
+        compositeSheets: [
+          { kind: 'world_pitch_poster', label: 'World pitch poster', prompt: 'cinematic world summary pitch poster, hero panorama, inset cultures, palette, themes' },
+        ],
+      });
+      const compiled = svc.compilePrompts(w, { promptMode: 'sheets' });
+      expect(compiled).toHaveLength(1);
+      expect(compiled[0]).toMatchObject({
+        category: 'world_pitch_posters',
+        label: 'World pitch poster',
+      });
+    });
+
+    it('can compile atomic variations and composite sheets together', async () => {
+      const w = await seedWorld({
+        compositeSheets: [
+          { label: 'Gas-Giant Drifters sheet', prompt: 'clean costume reference sheet, pressure collars, clips, palette' },
+        ],
+      });
+      const compiled = svc.compilePrompts(w, { promptMode: 'all' });
+      expect(compiled).toHaveLength(4); // 3 atomic variations + 1 composite
+      expect(compiled.map((p) => p.category)).toContain('composite_sheets');
+    });
+  });
+
+  describe('sanitizers', () => {
+    it('drops malformed variations on read', async () => {
+      // Manually plant invalid state — sanitizeTemplate strips it on read.
+      fileStore.set('/mock/data/world-builder.json', {
+        worlds: [{
+          id: 'w1',
+          name: 'X',
+          starterPrompt: '',
+          stylePrompt: '',
+          negativePrompt: '',
+          categories: {
+            landscapes: { variations: [
+              { label: 'Good', prompt: 'good prompt' },
+              { label: '', prompt: 'no label' },
+              { label: 'No prompt', prompt: '' },
+              null,
+            ] },
+          },
+          createdAt: '2024-01-01T00:00:00Z',
+        }],
+        runs: [],
+      });
+      const list = await svc.listWorlds();
+      expect(list[0].categories.landscapes.variations).toHaveLength(1);
+      expect(list[0].categories.landscapes.variations[0].label).toBe('Good');
+    });
+  });
+});

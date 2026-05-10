@@ -5,7 +5,11 @@
 
 // Filters Python child noise (HF/torch/bitsandbytes/xformers warnings, deprecation
 // notices, etc.) that would otherwise drown the user's view of real progress.
-export const PYTHON_NOISE_RE = /xformers|xFormers|triton|Triton|bitsandbytes|Please reinstall|Memory-efficient|Set XFORMERS|FutureWarning|UserWarning|DeprecationWarning|torch\.distributed|Unable to import.*torchao|Skipping import of cpp|NOTE: Redirects/i;
+// `^\[transformers\]` covers transformers' custom logger output (e.g.
+// "[transformers] `Siglip2ImageProcessorFast` is deprecated...").
+// `\bis deprecated\b` covers generic deprecation prose without a Warning
+// suffix that wouldn't match `DeprecationWarning`.
+export const PYTHON_NOISE_RE = /xformers|xFormers|triton|Triton|bitsandbytes|Please reinstall|Memory-efficient|Set XFORMERS|FutureWarning|UserWarning|DeprecationWarning|torch\.distributed|Unable to import.*torchao|Skipping import of cpp|NOTE: Redirects|^\[transformers\]|\bis deprecated\b/i;
 
 // Late-connecting EventSource clients sometimes re-attach during the brief
 // window between `complete` and the route teardown. Hold the SSE list open

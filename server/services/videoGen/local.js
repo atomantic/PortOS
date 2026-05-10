@@ -542,6 +542,8 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
     const line = raw.trim();
     if (!line) return true;
     if (PYTHON_NOISE_RE.test(line)) return true;
+    // Heartbeat for the queue's idle watchdog (see imageGen/local.js).
+    videoGenEvents.emit('activity', { generationId: jobId });
     if (line.startsWith('STATUS:')) {
       broadcastSse(job, { type: 'status', message: line.slice(7) });
       return true;
@@ -899,8 +901,32 @@ export async function extractLastFrame(historyId) {
       return null;
     }
   };
+  // Sidecar carries the source video's prompt + provenance so the extracted
+  // frame surfaces in the gallery with searchable metadata. Cache-hit path
+  // calls this too so frames extracted before this change get backfilled.
+  // `wx` flag makes the create-if-missing race-free — EEXIST is the no-op.
+  const sidecarPath = join(PATHS.images, frameFilename.replace('.png', '.metadata.json'));
+  const writeSidecar = async () => {
+    const meta = {
+      filename: frameFilename,
+      prompt: item.prompt,
+      negativePrompt: item.negativePrompt,
+      modelId: item.modelId,
+      width: item.width,
+      height: item.height,
+      seed: item.seed,
+      extractedFromVideoId: item.id,
+      extractedFromVideoFilename: item.filename,
+      extractedAt: 'last-frame',
+      kind: 'extracted-frame',
+      createdAt: new Date().toISOString(),
+    };
+    await writeFile(sidecarPath, JSON.stringify(meta, null, 2), { flag: 'wx' }).catch(() => {});
+  };
+
   const cachedSize = safeStatSize(framePath);
   if (cachedSize != null && cachedSize > 0) {
+    await writeSidecar();
     return { filename: frameFilename, path: `/data/images/${frameFilename}` };
   }
   if (cachedSize === 0) await unlink(framePath).catch(() => {});
@@ -925,6 +951,7 @@ export async function extractLastFrame(historyId) {
         if (writtenSize === 0) await unlink(framePath).catch(() => {});
         return reject(new ServerError('Failed to extract last frame', { status: 500, code: 'FFMPEG_FAILED' }));
       }
+      await writeSidecar();
       console.log(`🎞️ Extracted last frame: ${frameFilename}`);
       resolve({ filename: frameFilename, path: `/data/images/${frameFilename}` });
     });

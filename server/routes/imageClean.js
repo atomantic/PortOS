@@ -102,20 +102,16 @@ function applyEncoder(pipeline, format) {
   return pipeline.webp({ quality: 92 });
 }
 
-router.post('/', asyncHandler(async (req, res) => {
-  const { data, level } = validateRequest(cleanBodySchema, req.body);
-
-  // Cap by base64 length BEFORE allocating the decoded Buffer so an oversized
-  // payload doesn't briefly balloon RSS.
-  if (data.length > MAX_BASE64_CHARS) {
-    throw new ServerError(`Image exceeds ${MAX_INPUT_BYTES / 1024 / 1024}MB limit`, {
+// Throws ServerError (400) on invalid input so callers get a consistent
+// status instead of a sharp stack trace surfacing as a 500.
+export async function cleanImageBuffer(buffer, level = 'light') {
+  if (!CLEAN_LEVELS.includes(level)) {
+    throw new ServerError(`Invalid clean level "${level}" (expected one of: ${CLEAN_LEVELS.join(', ')})`, {
       status: 400,
-      code: 'FILE_TOO_LARGE',
+      code: 'VALIDATION_ERROR',
     });
   }
-
-  const buffer = Buffer.from(data, 'base64');
-  if (buffer.length === 0) {
+  if (!Buffer.isBuffer(buffer) || buffer.length === 0) {
     throw new ServerError('Decoded payload is empty', { status: 400, code: 'VALIDATION_ERROR' });
   }
   if (buffer.length > MAX_INPUT_BYTES) {
@@ -140,38 +136,58 @@ router.post('/', asyncHandler(async (req, res) => {
   // browser showed in the Before preview (browsers honor EXIF orientation but
   // sharp does not by default). resolveWithObject gives us output dimensions
   // (post-rotation), avoiding a second decode for metadata.
-  // Wrap sharp errors (truncated/corrupt buffer that still passed the magic-byte
-  // sniff) into a 400 so bad client input doesn't surface as a 500. Pass the
-  // libvips reason through context.details so asyncHandler logs it once
-  // (instead of an extra console.error duplicating its own log line) — the
-  // sanitized client-facing message stays generic so libvips internals don't
-  // leak in the API response or socket broadcast.
   const base = sharp(buffer, { limitInputPixels: MAX_PIXELS }).rotate();
-  let cleaned;
-  let info;
   try {
-    ({ data: cleaned, info } = await applyEncoder(applyDenoise(base, level), format)
-      .toBuffer({ resolveWithObject: true }));
+    const { data, info } = await applyEncoder(applyDenoise(base, level), format)
+      .toBuffer({ resolveWithObject: true });
+    return {
+      data,
+      format,
+      mimeType: MIME_TYPES[format],
+      sizeBefore: buffer.length,
+      sizeAfter: data.length,
+      width: info.width || null,
+      height: info.height || null,
+      c2paStripped,
+    };
   } catch (err) {
+    // Wrap sharp errors (truncated/corrupt buffer that still passed the
+    // magic-byte sniff) into a 400 so bad input doesn't surface as a 500.
     throw new ServerError('Invalid or corrupt image', {
       status: 400,
       code: 'INVALID_IMAGE',
       context: { details: { format, reason: err.message } },
     });
   }
+}
 
-  console.log(`🧼 Image cleaned: ${format} ${buffer.length}B → ${cleaned.length}B (level=${level}, c2pa=${c2paStripped})`);
+router.post('/', asyncHandler(async (req, res) => {
+  const { data, level } = validateRequest(cleanBodySchema, req.body);
+
+  // Cap by base64 length BEFORE allocating the decoded Buffer so an oversized
+  // payload doesn't briefly balloon RSS.
+  if (data.length > MAX_BASE64_CHARS) {
+    throw new ServerError(`Image exceeds ${MAX_INPUT_BYTES / 1024 / 1024}MB limit`, {
+      status: 400,
+      code: 'FILE_TOO_LARGE',
+    });
+  }
+
+  const buffer = Buffer.from(data, 'base64');
+  const result = await cleanImageBuffer(buffer, level);
+
+  console.log(`🧼 Image cleaned: ${result.format} ${result.sizeBefore}B → ${result.sizeAfter}B (level=${level}, c2pa=${result.c2paStripped})`);
 
   res.json({
-    data: cleaned.toString('base64'),
-    mimeType: MIME_TYPES[format],
-    format,
+    data: result.data.toString('base64'),
+    mimeType: result.mimeType,
+    format: result.format,
     level,
-    sizeBefore: buffer.length,
-    sizeAfter: cleaned.length,
-    width: info.width || null,
-    height: info.height || null,
-    c2paStripped,
+    sizeBefore: result.sizeBefore,
+    sizeAfter: result.sizeAfter,
+    width: result.width,
+    height: result.height,
+    c2paStripped: result.c2paStripped,
   });
 }));
 
