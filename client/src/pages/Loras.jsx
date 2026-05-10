@@ -207,7 +207,7 @@ export default function Loras() {
           </div>
         )}
         {loras.length > 0 && (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
             {loras.map((lora) => (
               <LoraCard key={lora.filename} lora={lora} onDelete={() => handleDelete(lora.filename)} deleting={deleting === lora.filename} />
             ))}
@@ -272,7 +272,7 @@ function SuggestionsSection({ label, hint, cards, installedFilenames, installing
         <span className="text-xs text-gray-600">{cards.length}</span>
       </div>
       {hint && <p className="text-xs text-gray-500 mb-2">{hint}</p>}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
         {cards.map((card) => (
           <SuggestionCard
             key={`${card.modelId}-${card.versionId}`}
@@ -296,15 +296,15 @@ function SuggestionCard({ card, installed, installing, onInstall }) {
   return (
     <div className="bg-port-card border border-port-border rounded-lg overflow-hidden flex flex-col">
       {card.previewImageUrl ? (
-        <img src={card.previewImageUrl} alt="" className="w-full h-56 object-cover bg-port-bg" loading="lazy" referrerPolicy="no-referrer" />
+        <img src={card.previewImageUrl} alt="" className="w-full h-64 object-cover bg-port-bg" loading="lazy" referrerPolicy="no-referrer" />
       ) : (
-        <div className="w-full h-56 bg-port-bg flex items-center justify-center text-gray-700">
+        <div className="w-full h-64 bg-port-bg flex items-center justify-center text-gray-700">
           <Sparkles size={32} />
         </div>
       )}
       <div className="p-3 flex-1 flex flex-col gap-2">
         <div className="flex items-start justify-between gap-2">
-          <h4 className="font-semibold text-white text-sm truncate flex-1" title={card.name}>{card.name}</h4>
+          <h4 className="font-semibold text-white text-sm flex-1 break-words">{card.name}</h4>
           {card.curated && (
             <span className="text-[10px] px-1.5 py-0.5 rounded bg-port-warning/20 text-port-warning border border-port-warning/30 whitespace-nowrap">curated</span>
           )}
@@ -318,7 +318,7 @@ function SuggestionCard({ card, installed, installing, onInstall }) {
             ))}
           </div>
         )}
-        {card.note && <p className="text-[11px] text-gray-400 italic line-clamp-2">{card.note}</p>}
+        {card.note && <p className="text-[11px] text-gray-400 italic break-words">{card.note}</p>}
         {card.samplePrompt && (
           <details className="text-[11px] text-gray-500">
             <summary className="cursor-pointer hover:text-gray-300">Sample prompt</summary>
@@ -501,18 +501,18 @@ function LoraCard({ lora, onDelete, deleting }) {
         <img
           src={lora.previewImageUrl}
           alt=""
-          className="w-full h-48 object-cover bg-port-bg"
+          className="w-full h-64 object-cover bg-port-bg"
           loading="lazy"
           referrerPolicy="no-referrer"
         />
       ) : (
-        <div className="w-full h-48 bg-port-bg flex items-center justify-center text-gray-700">
+        <div className="w-full h-64 bg-port-bg flex items-center justify-center text-gray-700">
           <Sparkles size={32} />
         </div>
       )}
       <div className="p-3 flex-1 flex flex-col">
         <div className="flex items-start justify-between gap-2 mb-2">
-          <h3 className="font-semibold text-white text-sm truncate flex-1" title={lora.name}>{lora.name}</h3>
+          <h3 className="font-semibold text-white text-sm flex-1 break-words">{lora.name}</h3>
           <span className={`text-[10px] px-2 py-0.5 rounded border whitespace-nowrap ${badgeClass}`} title={civitai?.baseModel || 'Unknown'}>
             {familyLabel}
           </span>
