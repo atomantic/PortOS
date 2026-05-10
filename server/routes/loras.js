@@ -10,6 +10,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler } from '../lib/errorHandler.js';
+import { validateRequest } from '../lib/validation.js';
 import {
   deleteLora,
   getLora,
@@ -53,7 +54,7 @@ router.get('/auth/civitai', asyncHandler(async (_req, res) => {
 
 const authPostSchema = z.object({ apiKey: z.string().min(1).max(256) });
 router.post('/auth/civitai', asyncHandler(async (req, res) => {
-  const { apiKey } = authPostSchema.parse(req.body);
+  const { apiKey } = validateRequest(authPostSchema, req.body);
   // Manual deep-merge so future civitai sub-fields don't get clobbered by
   // updateSettings' shallow-merge contract.
   const current = await getSettings();
@@ -87,7 +88,7 @@ const installSchema = z.object({
 });
 
 router.post('/install', asyncHandler(async (req, res) => {
-  const data = installSchema.parse(req.body);
+  const data = validateRequest(installSchema, req.body);
   const sidecar = await installFromCivitai(data);
   res.status(201).json(sidecar);
 }));
@@ -108,7 +109,7 @@ const patchSchema = z.object({
 });
 
 router.patch('/:filename', asyncHandler(async (req, res) => {
-  const patch = patchSchema.parse(req.body);
+  const patch = validateRequest(patchSchema, req.body);
   const next = await patchLoraSidecar(req.params.filename, patch);
   res.json(next);
 }));
