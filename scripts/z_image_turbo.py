@@ -18,6 +18,8 @@ import inspect
 import json
 import os
 import sys
+import threading
+from contextlib import contextmanager
 from pathlib import Path
 
 os.environ.setdefault("PYTORCH_MPS_FAST_MATH", "1")
@@ -27,6 +29,31 @@ from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lora_utils import apply_loras  # noqa: E402
+
+
+@contextmanager
+def heartbeat(stage: str, interval: float = 20.0):
+    # Diffusers' from_pretrained on a fully-cached 10-25 GB model is silent
+    # for several minutes (mmap + weight assignment, no tqdm), which trips the
+    # JS-side idle watchdog (default 5min). Emit a non-noise stderr line every
+    # `interval` seconds so handleLine() in imageGen/local.js sees activity
+    # and resets lastActivityAt. True hangs (GIL-pinned C extension, no I/O)
+    # still trip the watchdog because the heartbeat thread can't print either.
+    stop = threading.Event()
+
+    def beat():
+        elapsed = 0
+        while not stop.wait(interval):
+            elapsed += int(interval)
+            print(f"STAGE:{stage}:heartbeat:{elapsed}s", file=sys.stderr, flush=True)
+
+    t = threading.Thread(target=beat, daemon=True)
+    t.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        t.join(timeout=interval + 1)
 
 
 def pick_device(requested: str) -> str:
@@ -60,21 +87,23 @@ def load_pipeline(repo: str, device: str, dtype, pipeline_class: str = ""):
 
     print(f"STAGE:download-pipeline:{repo}", file=sys.stderr, flush=True)
     print(f"🔧 diffusers runner: pipeline ← {repo} (class={pipeline_class or 'auto'})", file=sys.stderr)
-    if pipeline_class:
-        cls = getattr(diffusers, pipeline_class, None)
-        if cls is None:
-            print(f"❌ Unknown diffusers pipeline class: {pipeline_class}", file=sys.stderr)
-            sys.exit(2)
-        pipe = cls.from_pretrained(repo, torch_dtype=dtype, low_cpu_mem_usage=True)
-    else:
-        from diffusers import AutoPipelineForText2Image
-        pipe = AutoPipelineForText2Image.from_pretrained(
-            repo,
-            torch_dtype=dtype,
-            low_cpu_mem_usage=True,
-        )
+    with heartbeat("loading-pipeline"):
+        if pipeline_class:
+            cls = getattr(diffusers, pipeline_class, None)
+            if cls is None:
+                print(f"❌ Unknown diffusers pipeline class: {pipeline_class}", file=sys.stderr)
+                sys.exit(2)
+            pipe = cls.from_pretrained(repo, torch_dtype=dtype, low_cpu_mem_usage=True)
+        else:
+            from diffusers import AutoPipelineForText2Image
+            pipe = AutoPipelineForText2Image.from_pretrained(
+                repo,
+                torch_dtype=dtype,
+                low_cpu_mem_usage=True,
+            )
     print("STAGE:move-to-device", file=sys.stderr, flush=True)
-    pipe.to(device)
+    with heartbeat("move-to-device"):
+        pipe.to(device)
     return pipe
 
 
@@ -114,6 +143,17 @@ def make_stepwise_callback(stepwise_dir: str, pipe, height: int, width: int):
     vae = pipe.vae
     scaling = getattr(vae.config, "scaling_factor", 1.0) or 1.0
     shift = getattr(vae.config, "shift_factor", 0.0) or 0.0
+    # ERNIE keeps latents in float32 even when the pipeline was loaded with
+    # torch_dtype=bfloat16, so `vae.decode(latents / scaling + shift)` feeds
+    # float32 into a bfloat16 VAE and errors with "Input type (float) and
+    # bias type (c10::BFloat16) should be the same". Capture the VAE's actual
+    # weight dtype + device once so the callback can align the scaled latents
+    # before decode.
+    try:
+        vae_param = next(vae.parameters())
+        vae_dtype, vae_device = vae_param.dtype, vae_param.device
+    except StopIteration:
+        vae_dtype, vae_device = None, None
 
     fired = {"count": 0, "saved": 0}
 
@@ -132,7 +172,10 @@ def make_stepwise_callback(stepwise_dir: str, pipe, height: int, width: int):
                 # Some pipelines return packed latents. Skip preview rather
                 # than guess the unpack shape — the final image still saves.
                 return callback_kwargs
-            decoded = vae.decode(latents / scaling + shift, return_dict=False)[0]
+            scaled = latents / scaling + shift
+            if vae_dtype is not None and (scaled.dtype != vae_dtype or scaled.device != vae_device):
+                scaled = scaled.to(device=vae_device, dtype=vae_dtype)
+            decoded = vae.decode(scaled, return_dict=False)[0]
             decoded = (decoded.clamp(-1, 1) + 1) / 2
             arr = (decoded[0].float().cpu().permute(1, 2, 0).numpy() * 255).astype("uint8")
             img = Image.fromarray(arr)
