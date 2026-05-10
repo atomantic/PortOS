@@ -101,6 +101,31 @@ const DEFAULT_REGISTRY = {
       guidance: 1.0,
       cfgDisabled: true,
     },
+    // ernie runner — Baidu's ERNIE-Image (8B DiT). Apache 2.0, ungated,
+    // reuses the FLUX.2 venv. Pipeline class isn't in AutoPipelineForText2Image's
+    // registry yet so we pass `pipelineClass: 'ErnieImagePipeline'` for
+    // explicit dispatch. `usePromptEnhancer` activates the built-in PE module.
+    {
+      id: 'ernie-image',
+      name: 'ERNIE-Image (~16 GB @ bf16, 50 steps)',
+      runner: 'ernie',
+      repo: 'baidu/ERNIE-Image',
+      pipelineClass: 'ErnieImagePipeline',
+      usePromptEnhancer: true,
+      steps: 50,
+      guidance: 4.0,
+    },
+    {
+      id: 'ernie-image-turbo',
+      name: 'ERNIE-Image-Turbo (~16 GB @ bf16, 8 steps)',
+      runner: 'ernie',
+      repo: 'baidu/ERNIE-Image-Turbo',
+      pipelineClass: 'ErnieImagePipeline',
+      usePromptEnhancer: true,
+      steps: 8,
+      guidance: 1.0,
+      cfgDisabled: true,
+    },
     {
       id: 'z-image-turbo-quant',
       name: 'Z-Image-Turbo (community quantized)',
@@ -198,6 +223,7 @@ const CFG_DISABLED_IDS = new Set([
   'flux2-klein-4b-int8',
   'z-image-turbo-bf16',
   'z-image-turbo-quant',
+  'ernie-image-turbo',
 ]);
 
 const backfillCfgDisabled = (list) => {
@@ -212,6 +238,7 @@ const backfillCfgDisabled = (list) => {
 
 export const isFlux2 = (model) => model?.runner === 'flux2';
 export const isZImage = (model) => model?.runner === 'z-image';
+export const isErnie = (model) => model?.runner === 'ernie';
 export const isCfgDisabled = (model) => model?.cfgDisabled === true;
 
 // Append models that are genuinely new in this release (not in

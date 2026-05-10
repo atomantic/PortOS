@@ -65,6 +65,11 @@ describe('baseModelToRunner', () => {
     expect(baseModelToRunner('Z-Image Turbo')).toBe('z-image');
     expect(baseModelToRunner('zimage')).toBe('z-image');
   });
+  it('maps ERNIE-Image variants to ernie', () => {
+    expect(baseModelToRunner('Ernie-Image')).toBe('ernie');
+    expect(baseModelToRunner('ERNIE-Image-Turbo')).toBe('ernie');
+    expect(baseModelToRunner('ernieimage')).toBe('ernie');
+  });
   it('returns null for unsupported families', () => {
     expect(baseModelToRunner('SDXL 1.0')).toBe(null);
     expect(baseModelToRunner('SD 1.5')).toBe(null);

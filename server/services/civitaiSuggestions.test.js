@@ -100,6 +100,45 @@ describe('getSuggestions', () => {
     expect(calls).toBeGreaterThan(callsAfterFirst);
   });
 
+  it('curated card produces a per-runner-family installs map (one entry per family, first version wins)', async () => {
+    const fetchImpl = async (url) => {
+      const m = url.match(/api\/v1\/models\/(\d+)$/);
+      if (m) {
+        const id = Number(m[1]);
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            ...buildModel(id, 'Multi', 'Flux.1 D'),
+            modelVersions: [
+              // Most recent (first) per family wins. Two flux2 versions —
+              // only the first should be in installs.flux2.
+              { id: 100, baseModel: 'Flux.2', files: [{ name: 'a.safetensors', primary: true, sizeKB: 1024 }] },
+              { id: 99, baseModel: 'Flux.2', files: [{ name: 'older.safetensors', primary: true, sizeKB: 900 }] },
+              { id: 80, baseModel: 'Z-Image', files: [{ name: 'z.safetensors', primary: true, sizeKB: 800 }] },
+              { id: 70, baseModel: 'Ernie-Image', files: [{ name: 'e.safetensors', primary: true, sizeKB: 700 }] },
+              { id: 60, baseModel: 'Flux.1 D', files: [{ name: 'f1.safetensors', primary: true, sizeKB: 600 }] },
+              // Unsupported base — shouldn't appear in installs
+              { id: 50, baseModel: 'SDXL 1.0', files: [{ name: 's.safetensors', primary: true, sizeKB: 500 }] },
+            ],
+          }),
+        };
+      }
+      return { ok: true, status: 200, json: async () => ({ items: [] }) };
+    };
+    const out = await svc.getSuggestions({ fetchImpl });
+    const card = out.curated[0];
+    expect(card.installs).toBeDefined();
+    expect(card.installs.flux2.versionId).toBe(100); // first match wins
+    expect(card.installs['z-image'].versionId).toBe(80);
+    expect(card.installs.ernie.versionId).toBe(70);
+    expect(card.installs.mflux.versionId).toBe(60);
+    // Unsupported base model excluded
+    expect(card.installs.sdxl).toBeUndefined();
+    // installUrl carries modelVersionId so the install path picks the right version
+    expect(card.installs.flux2.installUrl).toMatch(/modelVersionId=100/);
+  });
+
   it('curated card derives runnerFamilies from ALL the model versions', async () => {
     const fetchImpl = async (url) => {
       const m = url.match(/api\/v1\/models\/(\d+)$/);

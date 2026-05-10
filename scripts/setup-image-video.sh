@@ -210,6 +210,7 @@ fi
 if [[ "$INSTALL_FLUX2" == "1" ]]; then
   echo "   FLUX.2:    ${HOME}/.portos/venv-flux2/bin/python3 (separate venv)"
   echo "   Z-Image:   reuses the FLUX.2 venv (Apache 2.0, no HF login needed)"
+  echo "   ERNIE:     reuses the FLUX.2 venv (Apache 2.0, no HF login needed)"
   echo ""
   echo "⚠️  FLUX.2-klein needs HF auth: accept the license at"
   echo "    https://huggingface.co/black-forest-labs/FLUX.2-klein-4B"

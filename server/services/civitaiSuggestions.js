@@ -21,7 +21,7 @@ import {
 import { resolveCivitaiKey } from './loras.js';
 
 const TTL_MS = 60 * 60 * 1000; // 1 hour
-const RUNNER_FAMILIES = ['mflux', 'flux2', 'z-image'];
+const RUNNER_FAMILIES = ['mflux', 'flux2', 'z-image', 'ernie'];
 
 // Hand-curated picks that always lead the suggestion panel regardless of
 // whether they crack Civitai's "Most Downloaded" leaderboard. Compat per
@@ -78,24 +78,40 @@ const buildCard = (model) => {
   };
 };
 
-// For a curated entry: walk all `modelVersions[]` (not just the primary)
-// to collect every runner family the model has a published version for.
-// `runnerFamilies` on the returned card is what the UI uses to badge
-// "works on Flux 1, Flux 2, Z-Image."
+// For a curated entry: walk every modelVersions[] entry (not just the
+// primary) and build a per-runner-family install map. The UI renders one
+// "Install for X" button per entry — clicking it installs the family-
+// specific version, not whatever version happens to be most recent overall.
+//
+// Civitai authors typically publish multiple versions of the same model
+// (one per base model — Flux.1 D, Flux.2 Klein 9B, Z-Image-Turbo, ERNIE,
+// etc.). We pick the FIRST (most-recent in API order) version per family
+// so users get the latest re-train without picking versions by hand.
 const buildCuratedCard = (model, note) => {
   const card = buildCard(model);
   if (!card) return null;
   const versions = Array.isArray(model?.modelVersions) ? model.modelVersions : [];
-  const families = new Set();
+  const installs = {};
   for (const v of versions) {
     const fam = baseModelToRunner(v?.baseModel);
-    if (fam) families.add(fam);
+    if (!fam || installs[fam]) continue; // first match wins per family
+    const files = Array.isArray(v.files) ? v.files : [];
+    const safetensors = files.filter((f) => /\.safetensors$/i.test(f?.name || ''));
+    if (!safetensors.length) continue; // no installable file for this family
+    const file = safetensors.find((f) => f.primary) || safetensors[0];
+    installs[fam] = {
+      versionId: v.id,
+      baseModel: v.baseModel || null,
+      sizeKB: file.sizeKB ?? null,
+      installUrl: model?.id ? `https://civitai.com/models/${model.id}?modelVersionId=${v.id}` : null,
+    };
   }
   return {
     ...card,
     note: note || '',
     curated: true,
-    runnerFamilies: [...families],
+    runnerFamilies: Object.keys(installs),
+    installs,
   };
 };
 

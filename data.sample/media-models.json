@@ -112,6 +112,27 @@
       "cfgDisabled": true
     },
     {
+      "id": "ernie-image",
+      "name": "ERNIE-Image (~16 GB @ bf16, 50 steps)",
+      "runner": "ernie",
+      "repo": "baidu/ERNIE-Image",
+      "pipelineClass": "ErnieImagePipeline",
+      "usePromptEnhancer": true,
+      "steps": 50,
+      "guidance": 4
+    },
+    {
+      "id": "ernie-image-turbo",
+      "name": "ERNIE-Image-Turbo (~16 GB @ bf16, 8 steps)",
+      "runner": "ernie",
+      "repo": "baidu/ERNIE-Image-Turbo",
+      "pipelineClass": "ErnieImagePipeline",
+      "usePromptEnhancer": true,
+      "steps": 8,
+      "guidance": 1,
+      "cfgDisabled": true
+    },
+    {
       "id": "z-image-turbo-quant",
       "name": "Z-Image-Turbo (community quantized)",
       "runner": "z-image",

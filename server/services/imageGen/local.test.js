@@ -305,4 +305,34 @@ describe('imageGen local.buildArgs z-image dispatch', () => {
     expect(withNeg).toContain('--negative-prompt');
     expect(withNeg[withNeg.indexOf('--negative-prompt') + 1]).toBe('blurry');
   });
+
+  it('routes ERNIE models through the same script with --pipeline-class + --use-pe', () => {
+    mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
+    const { bin, args } = buildArgs({
+      ...baseInput,
+      model: {
+        id: 'ernie-image',
+        runner: 'ernie',
+        repo: 'baidu/ERNIE-Image',
+        pipelineClass: 'ErnieImagePipeline',
+        usePromptEnhancer: true,
+      },
+    });
+    expect(bin).toBe('/fake/venv-flux2/bin/python3');
+    expect(args[0]).toMatch(/scripts[/\\]z_image_turbo\.py$/);
+    expect(args).toContain('--pipeline-class');
+    expect(args[args.indexOf('--pipeline-class') + 1]).toBe('ErnieImagePipeline');
+    expect(args).toContain('--use-pe');
+    expect(args[args.indexOf('--repo') + 1]).toBe('baidu/ERNIE-Image');
+  });
+
+  it('omits --pipeline-class and --use-pe when the registry entry doesn\'t set them', () => {
+    mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
+    const { args } = buildArgs({
+      ...baseInput,
+      model: { id: 'z-image-turbo-bf16', runner: 'z-image', repo: 'Tongyi-MAI/Z-Image-Turbo' },
+    });
+    expect(args).not.toContain('--pipeline-class');
+    expect(args).not.toContain('--use-pe');
+  });
 });

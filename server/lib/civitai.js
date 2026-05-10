@@ -32,6 +32,7 @@ export const baseModelToRunner = (baseModel) => {
   if (b.startsWith('flux.1') || b.startsWith('flux 1') || b === 'flux1') return 'mflux';
   if (b.startsWith('flux.2') || b.startsWith('flux 2') || b === 'flux2') return 'flux2';
   if (b.startsWith('z-image') || b.startsWith('zimage') || b.startsWith('z image')) return 'z-image';
+  if (b.startsWith('ernie-image') || b.startsWith('ernie image') || b.startsWith('ernieimage') || b === 'ernie') return 'ernie';
   // SDXL / SD1.5 / Pony / Illustrious / etc. — none currently supported by
   // any PortOS runner. Surfacing them in the UI as "incompatible" is more
   // useful than hiding them entirely.
@@ -258,6 +259,7 @@ const RUNNER_TO_BASE_MODELS = {
   mflux: ['Flux.1 D', 'Flux.1 S'],
   flux2: ['Flux.2'],
   'z-image': ['Z-Image'],
+  ernie: ['Ernie-Image', 'ERNIE-Image'],
 };
 
 // Search Civitai for LoRA-family models targeting the given runner family.

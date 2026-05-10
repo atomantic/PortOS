@@ -51,19 +51,28 @@ def make_generator(device: str, seed: int) -> torch.Generator:
     return torch.Generator().manual_seed(int(seed))
 
 
-def load_pipeline(repo: str, device: str, dtype):
-    # AutoPipelineForText2Image reads the repo's model_index.json and resolves
-    # the right pipeline class — works for ZImagePipeline as well as community
-    # quantized ports that subclass it.
-    from diffusers import AutoPipelineForText2Image
+def load_pipeline(repo: str, device: str, dtype, pipeline_class: str = ""):
+    # When the registry pins a pipeline class (e.g. ErnieImagePipeline,
+    # which isn't yet in AutoPipelineForText2Image's registry) load it
+    # directly. Falls back to AutoPipelineForText2Image so Z-Image-Turbo
+    # and any future registered model continues to work without a flag.
+    import diffusers
 
     print(f"STAGE:download-pipeline:{repo}", file=sys.stderr, flush=True)
-    print(f"🔧 z-image: pipeline ← {repo}", file=sys.stderr)
-    pipe = AutoPipelineForText2Image.from_pretrained(
-        repo,
-        torch_dtype=dtype,
-        low_cpu_mem_usage=True,
-    )
+    print(f"🔧 diffusers runner: pipeline ← {repo} (class={pipeline_class or 'auto'})", file=sys.stderr)
+    if pipeline_class:
+        cls = getattr(diffusers, pipeline_class, None)
+        if cls is None:
+            print(f"❌ Unknown diffusers pipeline class: {pipeline_class}", file=sys.stderr)
+            sys.exit(2)
+        pipe = cls.from_pretrained(repo, torch_dtype=dtype, low_cpu_mem_usage=True)
+    else:
+        from diffusers import AutoPipelineForText2Image
+        pipe = AutoPipelineForText2Image.from_pretrained(
+            repo,
+            torch_dtype=dtype,
+            low_cpu_mem_usage=True,
+        )
     print("STAGE:move-to-device", file=sys.stderr, flush=True)
     pipe.to(device)
     return pipe
@@ -162,6 +171,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--device", default="auto", choices=["auto", "mps", "cuda", "cpu"])
     p.add_argument("--lora-paths", nargs="*", default=[], help="absolute paths to LoRA .safetensors files")
     p.add_argument("--lora-scales", nargs="*", default=[], help="scale per LoRA, parallel to --lora-paths")
+    p.add_argument("--pipeline-class", default="", help="optional explicit diffusers pipeline class (e.g. ErnieImagePipeline)")
+    p.add_argument("--use-pe", action="store_true", help="enable the prompt enhancer (ERNIE-Image's use_pe kwarg)")
     return p.parse_args()
 
 
@@ -171,7 +182,7 @@ def main() -> None:
     device = pick_device(args.device)
     dtype = torch.bfloat16 if device in ("mps", "cuda") else torch.float32
 
-    pipe = load_pipeline(args.repo, device, dtype)
+    pipe = load_pipeline(args.repo, device, dtype, pipeline_class=args.pipeline_class)
 
     init_image = None
     if args.image_path:
@@ -223,6 +234,11 @@ def main() -> None:
             vae.disable_tiling()
         if args.image_strength is not None and "strength" in accepted:
             pipe_kwargs["strength"] = float(args.image_strength)
+    # ERNIE-Image's prompt enhancer — only pass when the loaded pipeline
+    # exposes the kwarg (signature filter keeps Z-Image and other models
+    # unaffected).
+    if args.use_pe and "use_pe" in accepted:
+        pipe_kwargs["use_pe"] = True
 
     print("STAGE:inference", file=sys.stderr, flush=True)
     print(

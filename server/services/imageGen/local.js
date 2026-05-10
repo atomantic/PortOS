@@ -27,7 +27,7 @@ import { hfTokenEnv } from '../../lib/hfToken.js';
 
 const IS_WIN = process.platform === 'win32';
 
-import { getImageModels, isFlux2, isZImage } from '../../lib/mediaModels.js';
+import { getImageModels, isFlux2, isZImage, isErnie } from '../../lib/mediaModels.js';
 
 export const IMAGE_MODELS = Object.fromEntries(getImageModels().map((m) => [m.id, m]));
 
@@ -67,20 +67,20 @@ export const cancel = () => {
 
 export const buildArgs = ({ pythonPath, model, prompt, negativePrompt, width, height, steps, guidance, seed, quantize, outputPath, loraPaths = [], loraScales = [], stepwiseDir, initImagePath, initImageStrength }) => {
   const modelId = model?.id;
-  if (isZImage(model)) {
+  if (isZImage(model) || isErnie(model)) {
     if (!model.repo) {
       throw new ServerError(
-        `Z-Image model "${modelId}" is missing the 'repo' field in data/media-models.json`,
-        { status: 500, code: 'IMAGE_GEN_Z_IMAGE_MISCONFIGURED' },
+        `${isErnie(model) ? 'ERNIE' : 'Z-Image'} model "${modelId}" is missing the 'repo' field in data/media-models.json`,
+        { status: 500, code: isErnie(model) ? 'IMAGE_GEN_ERNIE_MISCONFIGURED' : 'IMAGE_GEN_Z_IMAGE_MISCONFIGURED' },
       );
     }
-    // Z-Image reuses the FLUX.2 venv — same diffusers/torch stack, no extra
-    // setup step. Same not-installed error code as flux2 so the UI's existing
-    // "run setup" CTA fires for both runners.
-    const zImagePython = resolveFlux2Python();
-    if (!zImagePython) {
+    // Z-Image / ERNIE both reuse the FLUX.2 venv (same diffusers + torch
+    // stack, no extra setup). Same not-installed error code so the UI's
+    // existing "run setup" CTA fires for any of these runners.
+    const torchPython = resolveFlux2Python();
+    if (!torchPython) {
       throw new ServerError(
-        `Image-gen torch venv not found. Run \`INSTALL_FLUX2=1 bash scripts/setup-image-video.sh\` to bootstrap it (expected at ${FLUX2_VENV_DEFAULT}). Z-Image and FLUX.2 share this venv.`,
+        `Image-gen torch venv not found. Run \`INSTALL_FLUX2=1 bash scripts/setup-image-video.sh\` to bootstrap it (expected at ${FLUX2_VENV_DEFAULT}). FLUX.2, Z-Image, and ERNIE share this venv.`,
         { status: 400, code: 'IMAGE_GEN_FLUX2_NOT_INSTALLED' },
       );
     }
@@ -103,7 +103,9 @@ export const buildArgs = ({ pythonPath, model, prompt, negativePrompt, width, he
     if (stepwiseDir) args.push('--stepwise-image-output-dir', stepwiseDir);
     if (loraPaths?.length) args.push('--lora-paths', ...loraPaths);
     if (loraScales?.length) args.push('--lora-scales', ...loraScales.map(String));
-    return { bin: zImagePython, args };
+    if (model.pipelineClass) args.push('--pipeline-class', String(model.pipelineClass));
+    if (model.usePromptEnhancer) args.push('--use-pe');
+    return { bin: torchPython, args };
   }
   if (isFlux2(model)) {
     if (!model.repo) {
@@ -215,7 +217,7 @@ export async function generateImage({ pythonPath, prompt, negativePrompt = '', m
   // Both flux2 and z-image runners resolve their own Python via the FLUX.2
   // venv — only the legacy mflux/imagine_win path needs the user-configured
   // Settings > Image Gen pythonPath.
-  if (!isFlux2(model) && !isZImage(model) && !pythonPath) {
+  if (!isFlux2(model) && !isZImage(model) && !isErnie(model) && !pythonPath) {
     throw new ServerError('Python path not configured — set it in Settings > Image Gen', { status: 400, code: 'IMAGE_GEN_NOT_CONFIGURED' });
   }
   // FLUX.2 and Z-Image runners now load LoRAs via diffusers'

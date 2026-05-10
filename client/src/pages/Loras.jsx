@@ -26,11 +26,13 @@ const RUNNER_LABEL = {
   mflux: 'Flux 1',
   flux2: 'Flux 2',
   'z-image': 'Z-Image',
+  ernie: 'ERNIE',
 };
 const RUNNER_BADGE_CLASS = {
   mflux: 'bg-port-accent/20 text-port-accent border-port-accent/30',
   flux2: 'bg-purple-600/20 text-purple-300 border-purple-500/30',
   'z-image': 'bg-emerald-600/20 text-emerald-300 border-emerald-500/30',
+  ernie: 'bg-amber-600/20 text-amber-300 border-amber-500/30',
 };
 
 export default function Loras() {
@@ -184,10 +186,13 @@ export default function Loras() {
         installedFilenames={new Set(loras.map((l) => l.filename))}
         installingSuggestionKey={installingSuggestion}
         onRefresh={() => refreshSuggestions({ force: true })}
-        onInstall={async (card) => {
-          const key = `${card.modelId}-${card.versionId}`;
+        onInstall={async (card, url, versionId) => {
+          // Curated cards pass a family-specific (url, versionId); non-curated
+          // cards omit versionId and we fall back to the card's primary.
+          const vid = versionId ?? card.versionId;
+          const key = `${card.modelId}-${vid}`;
           setInstallingSuggestion(key);
-          await performInstall(card.installUrl);
+          await performInstall(url || card.installUrl);
           setInstallingSuggestion(null);
         }}
       />
@@ -226,6 +231,7 @@ function SuggestionsPanel({ suggestions, loading, installedFilenames, installing
     { key: 'mflux', label: 'Top for Flux 1', cards: runners.mflux || [], hint: 'Most-downloaded LoRAs trained against Flux.1 D / Flux.1 S.' },
     { key: 'flux2', label: 'Top for Flux 2', cards: runners.flux2 || [], hint: 'Most-downloaded LoRAs trained against Flux.2 Klein.' },
     { key: 'z-image', label: 'Top for Z-Image', cards: runners['z-image'] || [], hint: 'Z-Image LoRAs are still rare on Civitai — expect a sparse list.' },
+    { key: 'ernie', label: 'Top for ERNIE', cards: runners.ernie || [], hint: 'ERNIE-Image LoRAs are still rare on Civitai — expect a sparse list.' },
   ];
   return (
     <div className="space-y-4">
@@ -277,9 +283,9 @@ function SuggestionsSection({ label, hint, cards, installedFilenames, installing
           <SuggestionCard
             key={`${card.modelId}-${card.versionId}`}
             card={card}
-            installed={[...installedFilenames].some((f) => f.includes(`-v${card.versionId}.safetensors`))}
-            installing={installingSuggestionKey === `${card.modelId}-${card.versionId}`}
-            onInstall={() => onInstall(card)}
+            installedFilenames={installedFilenames}
+            installingSuggestionKey={installingSuggestionKey}
+            onInstall={onInstall}
           />
         ))}
       </div>
@@ -287,12 +293,20 @@ function SuggestionsSection({ label, hint, cards, installedFilenames, installing
   );
 }
 
-const RUNNER_LABELS_SHORT = { mflux: 'Flux 1', flux2: 'Flux 2', 'z-image': 'Z-Image' };
+const RUNNER_LABELS_SHORT = { mflux: 'Flux 1', flux2: 'Flux 2', 'z-image': 'Z-Image', ernie: 'ERNIE' };
 
-function SuggestionCard({ card, installed, installing, onInstall }) {
-  const families = Array.isArray(card.runnerFamilies) && card.runnerFamilies.length
-    ? card.runnerFamilies
-    : (card.runnerFamily ? [card.runnerFamily] : []);
+function SuggestionCard({ card, installedFilenames, installingSuggestionKey, onInstall }) {
+  const installs = card.curated && card.installs && Object.keys(card.installs).length > 0 ? card.installs : null;
+  // Badges: prefer the installs map's keys (per-family with versions), else
+  // the runnerFamilies array, else the single primary-version family.
+  const badgeFamilies = installs
+    ? Object.keys(installs)
+    : (Array.isArray(card.runnerFamilies) && card.runnerFamilies.length
+      ? card.runnerFamilies
+      : (card.runnerFamily ? [card.runnerFamily] : []));
+  const isInstalled = (versionId) => versionId != null
+    && [...installedFilenames].some((f) => f.includes(`-v${versionId}.safetensors`));
+  const isInstalling = (versionId) => installingSuggestionKey === `${card.modelId}-${versionId}`;
   return (
     <div className="bg-port-card border border-port-border rounded-lg overflow-hidden flex flex-col">
       {card.previewImageUrl ? (
@@ -309,9 +323,9 @@ function SuggestionCard({ card, installed, installing, onInstall }) {
             <span className="text-[10px] px-1.5 py-0.5 rounded bg-port-warning/20 text-port-warning border border-port-warning/30 whitespace-nowrap">curated</span>
           )}
         </div>
-        {families.length > 0 && (
+        {badgeFamilies.length > 0 && !installs && (
           <div className="flex flex-wrap gap-1">
-            {families.map((f) => (
+            {badgeFamilies.map((f) => (
               <span key={f} className={`text-[10px] px-1.5 py-0.5 rounded border whitespace-nowrap ${RUNNER_BADGE_CLASS[f] || 'bg-gray-600/20 text-gray-300 border-gray-500/30'}`}>
                 {RUNNER_LABELS_SHORT[f] || f}
               </span>
@@ -329,27 +343,55 @@ function SuggestionCard({ card, installed, installing, onInstall }) {
           {card.creator && <span className="truncate" title={card.creator}>by {card.creator}</span>}
           {typeof card.downloads === 'number' && <span>↓ {card.downloads.toLocaleString()}</span>}
         </div>
-        <div className="flex items-center gap-2">
-          {installed ? (
-            <button disabled className="flex-1 bg-port-success/20 text-port-success border border-port-success/30 px-3 py-1.5 rounded text-xs font-medium flex items-center justify-center gap-1">
-              <Check size={12} /> Installed
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={onInstall}
-              disabled={installing}
-              className="flex-1 bg-port-accent text-white px-3 py-1.5 rounded text-xs font-medium hover:bg-port-accent/90 disabled:opacity-50"
-            >
-              {installing ? 'Installing…' : 'Quick install'}
-            </button>
-          )}
-          {card.civitaiUrl && (
-            <a href={card.civitaiUrl} target="_blank" rel="noopener noreferrer" className="text-gray-400 hover:text-gray-200 p-1.5 rounded hover:bg-port-bg" title="Open on Civitai">
-              <ExternalLink size={12} />
-            </a>
-          )}
-        </div>
+        {installs ? (
+          <div className="flex flex-col gap-1">
+            <p className="text-[10px] uppercase tracking-wide text-gray-500">Install for</p>
+            <div className="flex flex-wrap gap-1.5">
+              {Object.entries(installs).map(([family, info]) => {
+                const installed = isInstalled(info.versionId);
+                const installing = isInstalling(info.versionId);
+                const baseClass = installed
+                  ? 'bg-port-success/20 text-port-success border-port-success/30'
+                  : (RUNNER_BADGE_CLASS[family] || 'bg-port-accent/20 text-port-accent border-port-accent/30');
+                return (
+                  <button
+                    key={family}
+                    type="button"
+                    onClick={() => onInstall(card, info.installUrl, info.versionId)}
+                    disabled={installed || installing}
+                    title={installed ? 'Already installed' : `Install ${info.baseModel || family} version`}
+                    className={`text-[11px] px-2 py-1 rounded border flex items-center gap-1 ${baseClass} hover:brightness-125 disabled:opacity-60 disabled:cursor-not-allowed`}
+                  >
+                    {installed ? <Check size={11} /> : null}
+                    {installing ? 'Installing…' : (RUNNER_LABELS_SHORT[family] || family)}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-center gap-2">
+            {isInstalled(card.versionId) ? (
+              <button disabled className="flex-1 bg-port-success/20 text-port-success border border-port-success/30 px-3 py-1.5 rounded text-xs font-medium flex items-center justify-center gap-1">
+                <Check size={12} /> Installed
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => onInstall(card, card.installUrl, card.versionId)}
+                disabled={isInstalling(card.versionId)}
+                className="flex-1 bg-port-accent text-white px-3 py-1.5 rounded text-xs font-medium hover:bg-port-accent/90 disabled:opacity-50"
+              >
+                {isInstalling(card.versionId) ? 'Installing…' : 'Quick install'}
+              </button>
+            )}
+          </div>
+        )}
+        {card.civitaiUrl && (
+          <a href={card.civitaiUrl} target="_blank" rel="noopener noreferrer" className="text-[10px] text-gray-500 hover:text-gray-300 inline-flex items-center gap-1 self-start" title="Open on Civitai">
+            <ExternalLink size={11} /> View on Civitai
+          </a>
+        )}
       </div>
     </div>
   );
