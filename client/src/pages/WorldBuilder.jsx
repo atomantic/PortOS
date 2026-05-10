@@ -229,7 +229,14 @@ export default function WorldBuilder() {
       return;
     }
     const id = selectedId;
-    await deleteWorld(id).catch((e) => toast.error(`Delete failed: ${e.message}`));
+    // Only update local UI + show success toast when the server confirmed the
+    // delete. Otherwise the user would see both a red "Delete failed" toast
+    // AND a green "World deleted" toast, with the world apparently gone from
+    // the sidebar even though it's still on disk.
+    const ok = await deleteWorld(id)
+      .then(() => true)
+      .catch((e) => { toast.error(`Delete failed: ${e.message}`); return false; });
+    if (!ok) return;
     setWorlds((prev) => prev.filter((w) => w.id !== id));
     setSelectedId(null);
     setDraft(emptyTemplate());
