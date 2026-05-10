@@ -255,11 +255,16 @@ export const buildSidecar = ({ model, version, file, filename }) => {
 // Civitai's search endpoint expects. Civitai uses %20-encoded display names
 // (`Flux.1 D`, `Flux.1 S`, `Flux.2`, etc.). The Z-Image ecosystem on Civitai
 // is nascent — searches there often return zero; the UI handles that.
+// Civitai's `baseModels` display names — these are the literal strings the
+// search endpoint accepts; sending anything else returns zero results.
+// Discovered by inspecting modelVersions[].baseModel on multi-base-model
+// LoRAs (e.g. model 1155749). Civitai is inconsistent about hyphens and
+// per-variant naming, so each runner family lists every accepted alias.
 const RUNNER_TO_BASE_MODELS = {
   mflux: ['Flux.1 D', 'Flux.1 S'],
-  flux2: ['Flux.2'],
-  'z-image': ['Z-Image'],
-  ernie: ['Ernie-Image', 'ERNIE-Image'],
+  flux2: ['Flux.2 Klein 4B', 'Flux.2 Klein 9B'],
+  'z-image': ['ZImageBase', 'ZImageTurbo'],
+  ernie: ['Ernie'],
 };
 
 // Search Civitai for LoRA-family models targeting the given runner family.

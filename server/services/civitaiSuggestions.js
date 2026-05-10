@@ -170,7 +170,7 @@ const fetchSuggestionsFor = async (runnerFamily, { fetchImpl, limit, force = fal
 //   - runners:  per-family top-N from Civitai's search endpoint
 // Never throws on partial failure — a Z-Image search returning zero or a
 // transient curated 404 shouldn't kill the whole panel.
-export const getSuggestions = async ({ fetchImpl, limit = 12, force = false } = {}) => {
+export const getSuggestions = async ({ fetchImpl, limit = 4, force = false } = {}) => {
   const [curated, runnerEntries] = await Promise.all([
     getCurated({ fetchImpl, force }),
     Promise.all(RUNNER_FAMILIES.map(async (family) => {

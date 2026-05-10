@@ -228,10 +228,13 @@ function SuggestionsPanel({ suggestions, loading, installedFilenames, installing
   const runners = suggestions?.runners || {};
   const sections = [
     { key: 'curated', label: 'Curated picks', cards: curated, hint: 'Hand-picked LoRAs that work across multiple base models.' },
-    { key: 'mflux', label: 'Top for Flux 1', cards: runners.mflux || [], hint: 'Most-downloaded LoRAs trained against Flux.1 D / Flux.1 S.' },
-    { key: 'flux2', label: 'Top for Flux 2', cards: runners.flux2 || [], hint: 'Most-downloaded LoRAs trained against Flux.2 Klein.' },
-    { key: 'z-image', label: 'Top for Z-Image', cards: runners['z-image'] || [], hint: 'Z-Image LoRAs are still rare on Civitai — expect a sparse list.' },
-    { key: 'ernie', label: 'Top for ERNIE', cards: runners.ernie || [], hint: 'ERNIE-Image LoRAs are still rare on Civitai — expect a sparse list.' },
+    // The four runner-family sections always render, even when Civitai
+    // search returns zero — `alwaysShow` lets the user see all four
+    // headers at a glance instead of silently collapsing the empty ones.
+    { key: 'mflux',   label: 'Top for Flux 1',  cards: runners.mflux || [],     hint: 'Most-downloaded LoRAs trained against Flux.1 D / Flux.1 S.', alwaysShow: true },
+    { key: 'flux2',   label: 'Top for Flux 2',  cards: runners.flux2 || [],     hint: 'Most-downloaded LoRAs trained against Flux.2 Klein 4B / 9B.', alwaysShow: true },
+    { key: 'z-image', label: 'Top for Z-Image', cards: runners['z-image'] || [], hint: 'Most-downloaded LoRAs trained against Z-Image / Z-Image-Turbo.', alwaysShow: true },
+    { key: 'ernie',   label: 'Top for ERNIE',   cards: runners.ernie || [],     hint: 'Most-downloaded LoRAs trained against ERNIE-Image.', alwaysShow: true },
   ];
   return (
     <div className="space-y-4">
@@ -260,6 +263,7 @@ function SuggestionsPanel({ suggestions, loading, installedFilenames, installing
           label={section.label}
           hint={section.hint}
           cards={section.cards}
+          alwaysShow={section.alwaysShow}
           installedFilenames={installedFilenames}
           installingSuggestionKey={installingSuggestionKey}
           onInstall={onInstall}
@@ -269,26 +273,31 @@ function SuggestionsPanel({ suggestions, loading, installedFilenames, installing
   );
 }
 
-function SuggestionsSection({ label, hint, cards, installedFilenames, installingSuggestionKey, onInstall }) {
-  if (!cards || cards.length === 0) return null;
+function SuggestionsSection({ label, hint, cards, alwaysShow = false, installedFilenames, installingSuggestionKey, onInstall }) {
+  const list = cards || [];
+  if (list.length === 0 && !alwaysShow) return null;
   return (
     <div>
       <div className="flex items-baseline gap-3 mb-2">
         <h3 className="text-sm font-medium text-gray-300">{label}</h3>
-        <span className="text-xs text-gray-600">{cards.length}</span>
+        <span className="text-xs text-gray-600">{list.length}</span>
       </div>
       {hint && <p className="text-xs text-gray-500 mb-2">{hint}</p>}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
-        {cards.map((card) => (
-          <SuggestionCard
-            key={`${card.modelId}-${card.versionId}`}
-            card={card}
-            installedFilenames={installedFilenames}
-            installingSuggestionKey={installingSuggestionKey}
-            onInstall={onInstall}
-          />
-        ))}
-      </div>
+      {list.length === 0 ? (
+        <p className="text-xs text-gray-600 italic">No LoRAs found on Civitai for this base model yet.</p>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+          {list.map((card) => (
+            <SuggestionCard
+              key={`${card.modelId}-${card.versionId}`}
+              card={card}
+              installedFilenames={installedFilenames}
+              installingSuggestionKey={installingSuggestionKey}
+              onInstall={onInstall}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
