@@ -353,7 +353,9 @@ router.post('/:filename/clean', asyncHandler(async (req, res) => {
   const createdAt = new Date().toISOString();
   // Strip `hidden` so a clean of a hidden source still surfaces in the gallery
   // — cleaning is a deliberate user action that implies wanting to see the result.
-  const { hidden: _hidden, ...sourceMetaForCleaned } = sourceMeta;
+  // Strip `filename`/`id` so listGallery's `...metadata` spread doesn't overwrite
+  // the disk-derived filename for the cleaned copy with the source's filename.
+  const { hidden: _hidden, filename: _srcFilename, id: _srcId, ...sourceMetaForCleaned } = sourceMeta;
   const cleanedMeta = {
     ...sourceMetaForCleaned,
     createdAt,
