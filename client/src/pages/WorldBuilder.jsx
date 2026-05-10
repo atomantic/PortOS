@@ -17,7 +17,7 @@ import toast from '../components/ui/Toast';
 import {
   listWorlds, getWorld, createWorld, updateWorld, deleteWorld, expandWorld,
   renderWorld, listWorldRuns, getProviders, WORLD_CATEGORIES,
-  listImageModels, getSettings,
+  WORLD_CATEGORY_KEY_MAX, COMPOSITE_PROMPT_MAX, listImageModels, getSettings,
 } from '../services/api';
 import BackendChipStrip from '../components/media/BackendChipStrip';
 import ImageGenControls from '../components/imageGen/ImageGenControls';
@@ -31,6 +31,35 @@ const CATEGORY_LABELS = {
   vehicles: 'Vehicles',
 };
 
+const normalizeCategoryKey = (raw) => (raw || '')
+  .trim()
+  .toLowerCase()
+  .replace(/&/g, ' and ')
+  .replace(/[^a-z0-9]+/g, '_')
+  .replace(/^_+|_+$/g, '')
+  .replace(/_{2,}/g, '_')
+  .slice(0, WORLD_CATEGORY_KEY_MAX);
+
+const humanizeCategory = (key) => CATEGORY_LABELS[key]
+  || key.replace(/_/g, ' ').replace(/\b\w/g, (ch) => ch.toUpperCase());
+
+const ensureDraftCategories = (categories = {}) => ({
+  ...Object.fromEntries(WORLD_CATEGORIES.map((c) => [c, { variations: [] }])),
+  ...(categories || {}),
+});
+
+const getCategoryKeys = (categories = {}) => {
+  const seen = new Set();
+  const keys = [];
+  for (const key of [...WORLD_CATEGORIES, ...Object.keys(categories || {})]) {
+    const normalized = normalizeCategoryKey(key);
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    keys.push(normalized);
+  }
+  return keys;
+};
+
 // Default per-render knobs. Mirrors the Image Gen page's default chip.
 const DEFAULT_RENDER_OPTS = {
   width: 1024,
@@ -41,6 +70,7 @@ const DEFAULT_RENDER_OPTS = {
   quantize: '8',
   modelId: '',
   mode: '',
+  promptMode: 'variations',
   batchPerVariation: 1,
 };
 
@@ -49,7 +79,8 @@ const emptyTemplate = () => ({
   starterPrompt: '',
   stylePrompt: '',
   negativePrompt: '',
-  categories: Object.fromEntries(WORLD_CATEGORIES.map((c) => [c, { variations: [] }])),
+  categories: ensureDraftCategories(),
+  compositeSheets: [],
   llm: { provider: null, model: null },
 });
 
@@ -70,6 +101,7 @@ export default function WorldBuilder() {
   // The draft is the editable copy of the currently-selected world. New
   // worlds start as a draft with no id; saving creates the persisted record.
   const [draft, setDraft] = useState(emptyTemplate());
+  const [newCategoryName, setNewCategoryName] = useState('');
 
   // Per-page render knobs. Persisted to localStorage so the user's
   // preferred batch size sticks across visits.
@@ -133,9 +165,10 @@ export default function WorldBuilder() {
       if (w) {
         setDraft({
           ...w,
-          // Ensure all five categories exist in the draft so the editor
-          // grid renders even if the LLM skipped one.
-          categories: Object.fromEntries(WORLD_CATEGORIES.map((c) => [c, w.categories?.[c] || { variations: [] }])),
+          // Ensure starter buckets exist, but preserve custom buckets returned
+          // by the LLM or added by the user.
+          categories: ensureDraftCategories(w.categories),
+          compositeSheets: w.compositeSheets || [],
           llm: w.llm || { provider: null, model: null },
         });
       }
@@ -162,6 +195,7 @@ export default function WorldBuilder() {
       stylePrompt: draft.stylePrompt || '',
       negativePrompt: draft.negativePrompt || '',
       categories: draft.categories,
+      compositeSheets: draft.compositeSheets || [],
       llm: draft.llm || {},
     };
     const result = selectedId
@@ -211,11 +245,15 @@ export default function WorldBuilder() {
       ...draft,
       stylePrompt: result.stylePrompt || draft.stylePrompt,
       negativePrompt: result.negativePrompt || draft.negativePrompt,
-      categories: Object.fromEntries(WORLD_CATEGORIES.map((c) => [c, result.categories?.[c] || { variations: [] }])),
+      categories: ensureDraftCategories(result.categories),
+      compositeSheets: result.compositeSheets || draft.compositeSheets || [],
       llm: result.llm || draft.llm,
     };
     setDraft(expandedDraft);
-    const total = WORLD_CATEGORIES.reduce((n, k) => n + (result.categories?.[k]?.variations?.length || 0), 0);
+    const total = totalVariationCount(expandedDraft);
+    if (expandedDraft.compositeSheets?.length) {
+      setRenderOpts((r) => ({ ...r, promptMode: 'sheets' }));
+    }
     // Auto-persist expansion if the world is already saved — otherwise the
     // user clicks Render and hits "No prompts to render" because the disk
     // copy still has empty categories. New (unsaved) drafts still need a
@@ -227,6 +265,7 @@ export default function WorldBuilder() {
         stylePrompt: expandedDraft.stylePrompt || '',
         negativePrompt: expandedDraft.negativePrompt || '',
         categories: expandedDraft.categories,
+        compositeSheets: expandedDraft.compositeSheets || [],
         llm: expandedDraft.llm || {},
       }).catch((e) => { toast.error(`Auto-save after expand failed: ${e.message}`); return null; });
       if (updated) {
@@ -234,11 +273,11 @@ export default function WorldBuilder() {
           const without = prev.filter((w) => w.id !== updated.id);
           return [updated, ...without];
         });
-        toast.success(`Expanded into ${total} variations — saved`);
+        toast.success(`Expanded into ${total} variations and ${expandedDraft.compositeSheets?.length || 0} sheets — saved`);
         return;
       }
     }
-    toast.success(`Expanded into ${total} variations — review then Save`);
+    toast.success(`Expanded into ${total} variations and ${expandedDraft.compositeSheets?.length || 0} sheets — review then Save`);
   };
 
   const handleRender = async () => {
@@ -246,9 +285,9 @@ export default function WorldBuilder() {
       toast.error('Save the world first');
       return;
     }
-    const total = totalVariationCount(draft);
+    const total = renderPromptCount(draft, renderOpts.promptMode);
     if (!total) {
-      toast.error('No variations — expand the template first');
+      toast.error('No prompts — expand the template first');
       return;
     }
     const effectiveMode = renderOpts.mode || defaultMode || undefined;
@@ -267,6 +306,7 @@ export default function WorldBuilder() {
       guidance: numericOrUndef(renderOpts.guidance),
       cfgScale: numericOrUndef(renderOpts.cfgScale),
       quantize: renderOpts.quantize || undefined,
+      promptMode: renderOpts.promptMode || 'variations',
       batchPerVariation: renderOpts.batchPerVariation,
     }).catch((e) => { toast.error(`Render failed: ${e.message}`); return null; });
     setRendering(false);
@@ -281,6 +321,28 @@ export default function WorldBuilder() {
     ...d,
     categories: { ...d.categories, [cat]: { variations } },
   }));
+  const updateCompositeSheets = (sheets) => setDraft((d) => ({ ...d, compositeSheets: sheets }));
+  const addCategory = () => {
+    const key = normalizeCategoryKey(newCategoryName);
+    if (!key) {
+      toast.error('Use letters or numbers for the category name');
+      return;
+    }
+    if (draft.categories?.[key]) {
+      toast.error('Category already exists');
+      return;
+    }
+    setDraft((d) => ({
+      ...d,
+      categories: { ...d.categories, [key]: { variations: [] } },
+    }));
+    setNewCategoryName('');
+  };
+  const removeCategory = (cat) => setDraft((d) => {
+    const next = { ...d.categories };
+    delete next[cat];
+    return { ...d, categories: ensureDraftCategories(next) };
+  });
 
   const providerLabel = (id) => providers.find((p) => p.id === id)?.name || id || '—';
   const providerModels = useMemo(() => {
@@ -288,7 +350,10 @@ export default function WorldBuilder() {
     return p?.models || [];
   }, [providers, activeProviderId, draft.llm?.provider]);
 
+  const categoryKeys = getCategoryKeys(draft.categories);
   const totalVariations = totalVariationCount(draft);
+  const totalSheets = draft.compositeSheets?.length || 0;
+  const renderTotal = renderPromptCount(draft, renderOpts.promptMode);
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-[260px_1fr] gap-4">
@@ -424,7 +489,7 @@ export default function WorldBuilder() {
               Expand starter → variations
             </button>
             <span className="text-xs text-gray-500">
-              {totalVariations} variation{totalVariations === 1 ? '' : 's'} across {WORLD_CATEGORIES.length} categories
+              {totalVariations} variation{totalVariations === 1 ? '' : 's'} across {categoryKeys.length} categories · {totalSheets} composite sheet{totalSheets === 1 ? '' : 's'}
             </span>
           </div>
         </header>
@@ -457,14 +522,46 @@ export default function WorldBuilder() {
           </div>
         </section>
 
+        <CompositeSheetsEditor
+          sheets={draft.compositeSheets || []}
+          onChange={updateCompositeSheets}
+        />
+
         {/* Categories */}
+        <section className="bg-port-card border border-port-border rounded p-4 flex flex-col gap-3">
+          <div className="flex items-end justify-between gap-3 flex-wrap">
+            <div>
+              <h2 className="text-sm font-semibold text-white">Prompt categories</h2>
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                type="text"
+                value={newCategoryName}
+                onChange={(e) => setNewCategoryName(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') addCategory(); }}
+                placeholder="colonies, factions, species"
+                className="w-44 bg-port-bg border border-port-border rounded px-2 py-2 text-white text-sm focus:outline-none focus:border-port-accent"
+                maxLength={WORLD_CATEGORY_KEY_MAX}
+              />
+              <button
+                onClick={addCategory}
+                disabled={!newCategoryName.trim()}
+                className="px-3 py-2 bg-port-accent/15 hover:bg-port-accent/25 disabled:opacity-50 text-port-accent rounded flex items-center gap-1 min-h-[40px]"
+              >
+                <Plus size={14} /> Add
+              </button>
+            </div>
+          </div>
+        </section>
         <section className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          {WORLD_CATEGORIES.map((cat) => (
+          {categoryKeys.map((cat) => (
             <CategoryEditor
               key={cat}
               category={cat}
               variations={draft.categories?.[cat]?.variations || []}
+              canRemove={!WORLD_CATEGORIES.includes(cat)}
               onChange={(next) => updateCategory(cat, next)}
+              onRemove={() => removeCategory(cat)}
             />
           ))}
         </section>
@@ -491,6 +588,20 @@ export default function WorldBuilder() {
               to enable batch render.
             </p>
           )}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-400 mb-1">Prompt set</label>
+              <select
+                value={renderOpts.promptMode || 'variations'}
+                onChange={(e) => setRenderOpts((r) => ({ ...r, promptMode: e.target.value }))}
+                className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent min-h-[40px]"
+              >
+                <option value="sheets" disabled={totalSheets === 0}>Composite sheets ({totalSheets})</option>
+                <option value="variations" disabled={totalVariations === 0}>Atomic variations ({totalVariations})</option>
+                <option value="all" disabled={totalSheets + totalVariations === 0}>Everything ({totalSheets + totalVariations})</option>
+              </select>
+            </div>
+          </div>
           <ImageGenControls
             mode={renderOpts.mode || defaultMode || 'local'}
             models={imageModels}
@@ -510,7 +621,7 @@ export default function WorldBuilder() {
           />
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
             <div>
-              <label className="block text-xs font-medium text-gray-400 mb-1">Renders per variation</label>
+              <label className="block text-xs font-medium text-gray-400 mb-1">Renders per prompt</label>
               <input
                 type="number" min={1} max={20}
                 value={renderOpts.batchPerVariation ?? 1}
@@ -525,11 +636,11 @@ export default function WorldBuilder() {
           <div className="flex items-center gap-2 flex-wrap">
             <button
               onClick={handleRender}
-              disabled={rendering || !selectedId || totalVariations === 0 || availableBackends.length === 0}
+              disabled={rendering || !selectedId || renderTotal === 0 || availableBackends.length === 0}
               className="px-4 py-2 bg-port-accent hover:bg-port-accent/90 disabled:opacity-50 text-white rounded flex items-center gap-2 min-h-[40px]"
             >
               {rendering ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />}
-              Render {totalVariations * (renderOpts.batchPerVariation || 1)} image{totalVariations * (renderOpts.batchPerVariation || 1) === 1 ? '' : 's'}
+              Render {renderTotal * (renderOpts.batchPerVariation || 1)} image{renderTotal * (renderOpts.batchPerVariation || 1) === 1 ? '' : 's'}
             </button>
           </div>
           {!selectedId && <p className="text-xs text-gray-500">Save the world first to enable rendering.</p>}
@@ -565,10 +676,160 @@ export default function WorldBuilder() {
 }
 
 function totalVariationCount(world) {
-  return WORLD_CATEGORIES.reduce((n, c) => n + (world.categories?.[c]?.variations?.length || 0), 0);
+  return getCategoryKeys(world.categories).reduce((n, c) => n + (world.categories?.[c]?.variations?.length || 0), 0);
 }
 
-function CategoryEditor({ category, variations, onChange }) {
+function renderPromptCount(world, promptMode = 'variations') {
+  const variations = totalVariationCount(world);
+  const sheets = world.compositeSheets?.length || 0;
+  if (promptMode === 'sheets') return sheets;
+  if (promptMode === 'all') return variations + sheets;
+  return variations;
+}
+
+function CompositeSheetsEditor({ sheets, onChange }) {
+  const [adding, setAdding] = useState(false);
+  const [newLabel, setNewLabel] = useState('');
+  const [newPrompt, setNewPrompt] = useState('');
+  const [editIdx, setEditIdx] = useState(null);
+  const [editLabel, setEditLabel] = useState('');
+  const [editPrompt, setEditPrompt] = useState('');
+
+  const addSheet = () => {
+    const label = newLabel.trim();
+    const prompt = newPrompt.trim();
+    if (!label || !prompt) return;
+    onChange([...sheets, { label: label.slice(0, 120), prompt: prompt.slice(0, COMPOSITE_PROMPT_MAX) }]);
+    setNewLabel('');
+    setNewPrompt('');
+    setAdding(false);
+  };
+
+  const removeAt = (idx) => onChange(sheets.filter((_, i) => i !== idx));
+
+  const startEdit = (idx, sheet) => {
+    setEditIdx(idx);
+    setEditLabel(sheet.label);
+    setEditPrompt(sheet.prompt);
+  };
+
+  const saveEdit = () => {
+    const label = editLabel.trim();
+    const prompt = editPrompt.trim();
+    if (!label || !prompt) return;
+    const next = [...sheets];
+    next[editIdx] = { label: label.slice(0, 120), prompt: prompt.slice(0, COMPOSITE_PROMPT_MAX) };
+    onChange(next);
+    setEditIdx(null);
+  };
+
+  return (
+    <section className="bg-port-card border border-port-border rounded p-4 flex flex-col gap-3">
+      <div className="flex items-center justify-between gap-2">
+        <h2 className="text-sm font-semibold text-white">
+          Composite sheets
+          <span className="ml-2 text-xs text-gray-500">{sheets.length}</span>
+        </h2>
+        <button
+          onClick={() => setAdding((v) => !v)}
+          className="text-xs px-2 py-1 bg-port-accent/15 hover:bg-port-accent/25 text-port-accent rounded flex items-center gap-1 min-h-[40px] sm:min-h-0"
+        >
+          <Plus size={12} /> Add
+        </button>
+      </div>
+      {adding && (
+        <div className="bg-port-bg border border-port-border rounded p-2 flex flex-col gap-2">
+          <input
+            value={newLabel}
+            onChange={(e) => setNewLabel(e.target.value)}
+            placeholder="Gas-Giant Drifters costume sheet"
+            className="bg-port-card border border-port-border rounded px-2 py-1 text-white text-sm"
+            maxLength={120}
+          />
+          <textarea
+            value={newPrompt}
+            onChange={(e) => setNewPrompt(e.target.value)}
+            placeholder="Create a clean illustrated costume reference sheet..."
+            className="bg-port-card border border-port-border rounded px-2 py-1 text-white text-sm"
+            rows={6}
+            maxLength={COMPOSITE_PROMPT_MAX}
+          />
+          <div className="flex items-center gap-2">
+            <button
+              onClick={addSheet}
+              disabled={!newLabel.trim() || !newPrompt.trim()}
+              className="text-xs px-2 py-1 bg-port-accent hover:bg-port-accent/90 disabled:opacity-50 text-white rounded min-h-[40px] sm:min-h-0"
+            >
+              Save
+            </button>
+            <button
+              onClick={() => { setAdding(false); setNewLabel(''); setNewPrompt(''); }}
+              className="text-xs px-2 py-1 bg-port-bg hover:bg-port-border text-gray-300 rounded min-h-[40px] sm:min-h-0"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+      {sheets.length === 0 ? (
+        <p className="text-xs text-gray-500">No composite sheets yet.</p>
+      ) : (
+        <ul className="flex flex-col gap-1.5 max-h-96 overflow-y-auto">
+          {sheets.map((sheet, idx) => (
+            <li key={`${sheet.label}-${idx}`} className="bg-port-bg border border-port-border rounded p-2 text-sm">
+              {editIdx === idx ? (
+                <div className="flex flex-col gap-1">
+                  <input
+                    value={editLabel}
+                    onChange={(e) => setEditLabel(e.target.value)}
+                    className="bg-port-card border border-port-border rounded px-2 py-1 text-white text-sm"
+                    maxLength={120}
+                  />
+                  <textarea
+                    value={editPrompt}
+                    onChange={(e) => setEditPrompt(e.target.value)}
+                    rows={8}
+                    className="bg-port-card border border-port-border rounded px-2 py-1 text-white text-sm"
+                    maxLength={COMPOSITE_PROMPT_MAX}
+                  />
+                  <div className="flex gap-2">
+                    <button onClick={saveEdit} className="text-xs px-2 py-1 bg-port-accent text-white rounded min-h-[40px] sm:min-h-0">Save</button>
+                    <button onClick={() => setEditIdx(null)} className="text-xs px-2 py-1 bg-port-bg text-gray-300 rounded min-h-[40px] sm:min-h-0">Cancel</button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-white font-medium truncate">{sheet.label}</div>
+                    <div className="text-xs text-gray-400 line-clamp-3">{sheet.prompt}</div>
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button
+                      onClick={() => startEdit(idx, sheet)}
+                      className="p-1 text-gray-400 hover:text-port-accent rounded"
+                      title="Edit"
+                    >
+                      <Edit3 size={14} />
+                    </button>
+                    <button
+                      onClick={() => removeAt(idx)}
+                      className="p-1 text-gray-400 hover:text-red-400 rounded"
+                      title="Remove"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+                </div>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+function CategoryEditor({ category, variations, canRemove = false, onChange, onRemove }) {
   const [adding, setAdding] = useState(false);
   const [newLabel, setNewLabel] = useState('');
   const [newPrompt, setNewPrompt] = useState('');
@@ -611,15 +872,26 @@ function CategoryEditor({ category, variations, onChange }) {
     <div className="bg-port-card border border-port-border rounded p-3">
       <div className="flex items-center justify-between mb-2">
         <h3 className="text-sm font-semibold text-white capitalize">
-          {CATEGORY_LABELS[category] || category}
+          {humanizeCategory(category)}
           <span className="ml-2 text-xs text-gray-500">{variations.length}</span>
         </h3>
-        <button
-          onClick={() => setAdding((v) => !v)}
-          className="text-xs px-2 py-1 bg-port-accent/15 hover:bg-port-accent/25 text-port-accent rounded flex items-center gap-1 min-h-[40px] sm:min-h-0"
-        >
-          <Plus size={12} /> Add
-        </button>
+        <div className="flex items-center gap-1">
+          {canRemove && (
+            <button
+              onClick={onRemove}
+              className="p-1 text-gray-400 hover:text-red-400 rounded"
+              title="Remove category"
+            >
+              <Trash2 size={14} />
+            </button>
+          )}
+          <button
+            onClick={() => setAdding((v) => !v)}
+            className="text-xs px-2 py-1 bg-port-accent/15 hover:bg-port-accent/25 text-port-accent rounded flex items-center gap-1 min-h-[40px] sm:min-h-0"
+          >
+            <Plus size={12} /> Add
+          </button>
+        </div>
       </div>
       {adding && (
         <div className="bg-port-bg border border-port-border rounded p-2 mb-2 flex flex-col gap-2">
@@ -712,4 +984,3 @@ function CategoryEditor({ category, variations, onChange }) {
     </div>
   );
 }
-

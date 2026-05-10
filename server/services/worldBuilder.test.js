@@ -58,6 +58,31 @@ describe('worldBuilder service', () => {
     expect(w.categories.environments.variations).toHaveLength(0);
   });
 
+  it('createWorld preserves custom world-building categories', async () => {
+    const w = await seedWorld({
+      categories: {
+        'Clothing Styles': { variations: [{ label: 'Rib-Cage Nomads', prompt: 'reference sheet, layered sailcloth, bone toggles' }] },
+        factions: { variations: [{ label: 'Wake Jackals', prompt: 'spare raider kit, patched pressure masks' }] },
+      },
+    });
+    expect(w.categories.clothing_styles.variations).toEqual([
+      { label: 'Rib-Cage Nomads', prompt: 'reference sheet, layered sailcloth, bone toggles' },
+    ]);
+    expect(w.categories.factions.variations).toHaveLength(1);
+    expect(w.categories.landscapes.variations).toHaveLength(0);
+  });
+
+  it('createWorld persists composite sheet prompts separately from categories', async () => {
+    const w = await seedWorld({
+      compositeSheets: [
+        { label: 'Gas-Giant Drifters costume sheet', prompt: 'Create a clean illustrated costume reference sheet with five figures, materials swatches, fasteners, accessories, and color palette strip.' },
+      ],
+    });
+    expect(w.compositeSheets).toEqual([
+      { label: 'Gas-Giant Drifters costume sheet', prompt: 'Create a clean illustrated costume reference sheet with five figures, materials swatches, fasteners, accessories, and color palette strip.' },
+    ]);
+  });
+
   it('createWorld rejects empty name', async () => {
     await expect(svc.createWorld({ name: '' })).rejects.toThrow(/name is required/);
   });
@@ -99,6 +124,20 @@ describe('worldBuilder service', () => {
       expect(compiled[0].negativePrompt).toBe('blurry, lowres');
     });
 
+    it('includes custom categories by default', async () => {
+      const w = await seedWorld({
+        categories: {
+          colonies: { variations: [{ label: 'Canopy Symbiotes', prompt: 'leaf-fiber clothing reference sheet, sap resin closures' }] },
+        },
+      });
+      const compiled = svc.compilePrompts(w);
+      expect(compiled).toHaveLength(1);
+      expect(compiled[0]).toMatchObject({
+        category: 'colonies',
+        label: 'Canopy Symbiotes',
+      });
+    });
+
     it('respects batchPerVariation', async () => {
       const w = await seedWorld();
       const compiled = svc.compilePrompts(w, { batchPerVariation: 3 });
@@ -123,6 +162,20 @@ describe('worldBuilder service', () => {
       expect(compiled.every((c) => c.category === 'landscapes')).toBe(true);
     });
 
+    it('selection supports custom category keys', async () => {
+      const w = await seedWorld({
+        categories: {
+          raider_clans: { variations: [
+            { label: 'Wake Jackals', prompt: 'clean scavenger raider outfit board' },
+            { label: 'Hull Vultures', prompt: 'pressure-ring pirate boarding gear' },
+          ] },
+        },
+      });
+      const compiled = svc.compilePrompts(w, { selection: { raider_clans: ['wake jackals'] } });
+      expect(compiled).toHaveLength(1);
+      expect(compiled[0].label).toBe('Wake Jackals');
+    });
+
     it('clamps batchPerVariation to 1..20', async () => {
       const w = await seedWorld();
       // 0 → 1
@@ -130,6 +183,34 @@ describe('worldBuilder service', () => {
       // 100 → 20
       const big = svc.compilePrompts(w, { batchPerVariation: 100 });
       expect(big).toHaveLength(60); // 3 × 20
+    });
+
+    it('can compile composite sheets without atomic variations', async () => {
+      const w = await seedWorld({
+        categories: {},
+        compositeSheets: [
+          { label: 'Canopy Symbiotes sheet', prompt: 'clean costume reference sheet, lineup, materials, fasteners, palette' },
+          { label: 'Gas-Giant Drifters sheet', prompt: 'clean costume reference sheet, pressure collars, clips, palette' },
+        ],
+      });
+      const compiled = svc.compilePrompts(w, { promptMode: 'sheets' });
+      expect(compiled).toHaveLength(2);
+      expect(compiled[0]).toMatchObject({
+        category: 'composite_sheets',
+        label: 'Canopy Symbiotes sheet',
+        prompt: 'moebius linework, scavengers reign palette, clean costume reference sheet, lineup, materials, fasteners, palette',
+      });
+    });
+
+    it('can compile atomic variations and composite sheets together', async () => {
+      const w = await seedWorld({
+        compositeSheets: [
+          { label: 'Gas-Giant Drifters sheet', prompt: 'clean costume reference sheet, pressure collars, clips, palette' },
+        ],
+      });
+      const compiled = svc.compilePrompts(w, { promptMode: 'all' });
+      expect(compiled).toHaveLength(4); // 3 atomic variations + 1 composite
+      expect(compiled.map((p) => p.category)).toContain('composite_sheets');
     });
   });
 

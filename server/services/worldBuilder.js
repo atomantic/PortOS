@@ -5,8 +5,13 @@
  * descriptions expanded by an LLM into a structured prompt set:
  *
  *   - stylePrompt + negativePrompt (positive style fragment + negative prompt)
- *   - categories: landscapes / environments / characters / structures / vehicles
+ *   - categories: named prompt buckets, seeded with common world-art buckets
+ *     like landscapes / characters / vehicles, but open to project-specific
+ *     buckets like colonies, factions, species, clothing_styles, or raider_clans
  *     (each with a list of `variations` — short prompt fragments)
+ *   - compositeSheets: complete board/reference-sheet prompts that combine
+ *     several buckets into one image, e.g. a colony costume guide with lineup,
+ *     materials, fasteners, accessories, and palette
  *
  * From those pieces the route can compile a flat list of full prompts and
  * enqueue them as image-gen jobs, all tagged with the same `worldId` and
@@ -33,12 +38,16 @@ export const NAME_MAX_LENGTH = 100;
 const MAX_RUN_JOB_IDS = 10000;
 export const STARTER_PROMPT_MAX = 4000;
 export const PROMPT_FRAGMENT_MAX = 2000;
+export const COMPOSITE_PROMPT_MAX = 4000;
 export const VARIATION_LABEL_MAX = 120;
 export const VARIATIONS_PER_CATEGORY_MAX = 50;
+export const COMPOSITE_SHEETS_MAX = 50;
+export const WORLD_CATEGORY_KEY_MAX = 64;
+export const WORLD_CATEGORY_COUNT_MAX = 30;
 
-// Five canonical buckets the UI surfaces. Stored on the template so a
-// future template type (e.g. "creatures") only needs adding here. Order
-// is the user-facing display order.
+// Starter buckets the UI surfaces for a fresh world. They remain for
+// compatibility, but saved templates may carry any additional sanitized
+// category keys the LLM or user creates.
 export const WORLD_CATEGORIES = Object.freeze([
   'landscapes',
   'environments',
@@ -52,10 +61,30 @@ const DEFAULT_STATE = { worlds: [], runs: [] };
 const isStr = (v) => typeof v === 'string';
 const trimTo = (v, max) => (isStr(v) ? v.trim().slice(0, max) : '');
 
+export const normalizeCategoryKey = (raw) => {
+  if (!isStr(raw)) return '';
+  return raw
+    .trim()
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .replace(/_{2,}/g, '_')
+    .slice(0, WORLD_CATEGORY_KEY_MAX);
+};
+
 const sanitizeVariation = (raw) => {
   if (!raw || typeof raw !== 'object') return null;
   const label = trimTo(raw.label, VARIATION_LABEL_MAX);
   const prompt = trimTo(raw.prompt, PROMPT_FRAGMENT_MAX);
+  if (!label || !prompt) return null;
+  return { label, prompt };
+};
+
+const sanitizeCompositeSheet = (raw) => {
+  if (!raw || typeof raw !== 'object') return null;
+  const label = trimTo(raw.label, VARIATION_LABEL_MAX);
+  const prompt = trimTo(raw.prompt, COMPOSITE_PROMPT_MAX);
   if (!label || !prompt) return null;
   return { label, prompt };
 };
@@ -76,6 +105,55 @@ const sanitizeCategory = (raw) => {
   return { variations };
 };
 
+const mergeCategories = (base, next) => {
+  const merged = { ...base };
+  for (const [key, category] of Object.entries(next)) {
+    const current = merged[key]?.variations || [];
+    const incoming = category?.variations || [];
+    merged[key] = { variations: [...current, ...incoming].slice(0, VARIATIONS_PER_CATEGORY_MAX) };
+  }
+  return merged;
+};
+
+export const sanitizeCategories = (raw = {}) => {
+  const categories = Object.fromEntries(WORLD_CATEGORIES.map((key) => [key, { variations: [] }]));
+  if (!raw || typeof raw !== 'object') return categories;
+
+  let customCount = WORLD_CATEGORIES.length;
+  for (const [rawKey, rawCategory] of Object.entries(raw)) {
+    const key = normalizeCategoryKey(rawKey);
+    if (!key) continue;
+    if (!categories[key] && customCount >= WORLD_CATEGORY_COUNT_MAX) continue;
+    if (!categories[key]) customCount += 1;
+    Object.assign(categories, mergeCategories(categories, { [key]: sanitizeCategory(rawCategory) }));
+  }
+  return categories;
+};
+
+export const getWorldCategoryKeys = (categories = {}) => {
+  const seen = new Set();
+  const keys = [];
+  for (const key of [...WORLD_CATEGORIES, ...Object.keys(categories || {})]) {
+    const normalized = normalizeCategoryKey(key);
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    keys.push(normalized);
+  }
+  return keys;
+};
+
+export const sanitizeCompositeSheets = (raw = []) => {
+  if (!Array.isArray(raw)) return [];
+  const sheets = [];
+  for (const sheet of raw) {
+    const sanitized = sanitizeCompositeSheet(sheet);
+    if (!sanitized) continue;
+    sheets.push(sanitized);
+    if (sheets.length >= COMPOSITE_SHEETS_MAX) break;
+  }
+  return sheets;
+};
+
 const sanitizeTemplate = (raw) => {
   if (!raw || typeof raw !== 'object') return null;
   if (!isStr(raw.id) || !raw.id) return null;
@@ -84,10 +162,8 @@ const sanitizeTemplate = (raw) => {
   const starterPrompt = trimTo(raw.starterPrompt, STARTER_PROMPT_MAX);
   const stylePrompt = trimTo(raw.stylePrompt, PROMPT_FRAGMENT_MAX);
   const negativePrompt = trimTo(raw.negativePrompt, PROMPT_FRAGMENT_MAX);
-  const categories = {};
-  for (const key of WORLD_CATEGORIES) {
-    categories[key] = sanitizeCategory(raw.categories?.[key]);
-  }
+  const categories = sanitizeCategories(raw.categories || {});
+  const compositeSheets = sanitizeCompositeSheets(raw.compositeSheets || []);
   const llm = raw.llm && typeof raw.llm === 'object'
     ? {
       provider: trimTo(raw.llm.provider, 80) || null,
@@ -103,6 +179,7 @@ const sanitizeTemplate = (raw) => {
     stylePrompt,
     negativePrompt,
     categories,
+    compositeSheets,
     llm,
     createdAt,
     updatedAt,
@@ -160,6 +237,7 @@ export async function createWorld(input = {}) {
     stylePrompt: input.stylePrompt || '',
     negativePrompt: input.negativePrompt || '',
     categories: input.categories || {},
+    compositeSheets: input.compositeSheets || [],
     llm: input.llm || {},
     createdAt: now,
     updatedAt: now,
@@ -194,6 +272,7 @@ export async function updateWorld(id, patch = {}) {
     ...('starterPrompt' in patch ? { starterPrompt: patch.starterPrompt } : {}),
     ...('stylePrompt' in patch ? { stylePrompt: patch.stylePrompt } : {}),
     ...('negativePrompt' in patch ? { negativePrompt: patch.negativePrompt } : {}),
+    ...('compositeSheets' in patch ? { compositeSheets: patch.compositeSheets } : {}),
     categories: mergedCategories,
     llm: mergedLlm,
     updatedAt: new Date().toISOString(),
@@ -245,29 +324,59 @@ export async function listRuns(worldId = null) {
  *   batchPerVariation: how many renders per variation (1..20)
  */
 export function compilePrompts(world, options = {}) {
-  if (!world || !world.categories) return [];
+  if (!world) return [];
+  const promptMode = ['variations', 'sheets', 'all'].includes(options.promptMode)
+    ? options.promptMode
+    : 'variations';
   const selection = options.selection && typeof options.selection === 'object'
     ? options.selection
-    : Object.fromEntries(WORLD_CATEGORIES.map((c) => [c, 'all']));
+    : Object.fromEntries(getWorldCategoryKeys(world.categories).map((c) => [c, 'all']));
+  const normalizedSelection = {};
+  for (const [key, value] of Object.entries(selection)) {
+    const normalized = normalizeCategoryKey(key);
+    if (normalized) normalizedSelection[normalized] = value;
+  }
   const batchPerVariation = Math.max(1, Math.min(20, Number(options.batchPerVariation) || 1));
 
   const stylePart = world.stylePrompt?.trim();
   const negativePrompt = world.negativePrompt?.trim() || '';
   const compiled = [];
 
-  for (const category of WORLD_CATEGORIES) {
-    const sel = selection[category];
-    if (!sel) continue;
-    const variations = world.categories[category]?.variations || [];
-    const filtered = sel === 'all'
-      ? variations
-      : variations.filter((v) => Array.isArray(sel) && sel.some((s) => s.toLowerCase() === v.label.toLowerCase()));
-    for (const variation of filtered) {
-      const prompt = [stylePart, variation.prompt].filter(Boolean).join(', ');
+  if (promptMode === 'variations' || promptMode === 'all') {
+    for (const category of getWorldCategoryKeys(normalizedSelection)) {
+      const sel = normalizedSelection[category];
+      if (!sel) continue;
+      const variations = world.categories?.[category]?.variations || [];
+      const filtered = sel === 'all'
+        ? variations
+        : variations.filter((v) => Array.isArray(sel) && sel.some((s) => s.toLowerCase() === v.label.toLowerCase()));
+      for (const variation of filtered) {
+        const prompt = [stylePart, variation.prompt].filter(Boolean).join(', ');
+        for (let i = 0; i < batchPerVariation; i += 1) {
+          compiled.push({
+            category,
+            label: variation.label,
+            prompt,
+            negativePrompt,
+            batchIndex: i,
+          });
+        }
+      }
+    }
+  }
+
+  if (promptMode === 'sheets' || promptMode === 'all') {
+    const sheetSelection = options.sheetSelection || 'all';
+    const sheets = world.compositeSheets || [];
+    const filteredSheets = sheetSelection === 'all'
+      ? sheets
+      : sheets.filter((s) => Array.isArray(sheetSelection) && sheetSelection.some((label) => label.toLowerCase() === s.label.toLowerCase()));
+    for (const sheet of filteredSheets) {
+      const prompt = [stylePart, sheet.prompt].filter(Boolean).join(', ');
       for (let i = 0; i < batchPerVariation; i += 1) {
         compiled.push({
-          category,
-          label: variation.label,
+          category: 'composite_sheets',
+          label: sheet.label,
           prompt,
           negativePrompt,
           batchIndex: i,

@@ -6,7 +6,7 @@
  *   GET    /api/world-builder/:id                    → World
  *   PATCH  /api/world-builder/:id                    → World
  *   DELETE /api/world-builder/:id                    → { id }
- *   POST   /api/world-builder/expand                 → { stylePrompt, negativePrompt, categories, llm }
+ *   POST   /api/world-builder/expand                 → { stylePrompt, negativePrompt, categories, compositeSheets, llm }
  *   POST   /api/world-builder/:id/render             → { runId, collectionId, jobIds, promptCount }
  *   GET    /api/world-builder/:id/runs               → Run[]
  */
@@ -41,12 +41,19 @@ const variationSchema = z.object({
   label: z.string().trim().min(1).max(svc.VARIATION_LABEL_MAX),
   prompt: z.string().trim().min(1).max(svc.PROMPT_FRAGMENT_MAX),
 });
+const compositeSheetSchema = z.object({
+  label: z.string().trim().min(1).max(svc.VARIATION_LABEL_MAX),
+  prompt: z.string().trim().min(1).max(svc.COMPOSITE_PROMPT_MAX),
+});
 const categoryShape = z.object({
   variations: z.array(variationSchema).max(svc.VARIATIONS_PER_CATEGORY_MAX),
-}).optional();
-const categoriesSchema = z.object(
-  Object.fromEntries(svc.WORLD_CATEGORIES.map((c) => [c, categoryShape])),
-).partial();
+});
+const categoriesSchema = z.record(
+  z.string().trim().min(1).max(svc.WORLD_CATEGORY_KEY_MAX),
+  categoryShape,
+).refine((categories) => Object.keys(categories).length <= svc.WORLD_CATEGORY_COUNT_MAX, {
+  message: `categories cannot exceed ${svc.WORLD_CATEGORY_COUNT_MAX} buckets`,
+});
 
 const llmSchema = z.object({
   provider: z.string().trim().max(80).nullable().optional(),
@@ -59,6 +66,7 @@ const createSchema = z.object({
   stylePrompt: z.string().trim().max(svc.PROMPT_FRAGMENT_MAX).optional().default(''),
   negativePrompt: z.string().trim().max(svc.PROMPT_FRAGMENT_MAX).optional().default(''),
   categories: categoriesSchema.optional(),
+  compositeSheets: z.array(compositeSheetSchema).max(svc.COMPOSITE_SHEETS_MAX).optional(),
   llm: llmSchema,
 });
 
@@ -68,6 +76,7 @@ const patchSchema = z.object({
   stylePrompt: z.string().trim().max(svc.PROMPT_FRAGMENT_MAX).optional(),
   negativePrompt: z.string().trim().max(svc.PROMPT_FRAGMENT_MAX).optional(),
   categories: categoriesSchema.optional(),
+  compositeSheets: z.array(compositeSheetSchema).max(svc.COMPOSITE_SHEETS_MAX).optional(),
   llm: llmSchema,
 }).refine((p) => Object.keys(p).length > 0, { message: 'patch must include at least one field' });
 
@@ -79,9 +88,12 @@ const expandSchema = z.object({
 
 // `selection` per category: 'all' or array of variation labels.
 const selectionValueSchema = z.union([z.literal('all'), z.array(z.string().trim().min(1).max(svc.VARIATION_LABEL_MAX)).max(svc.VARIATIONS_PER_CATEGORY_MAX)]);
-const selectionSchema = z.object(
-  Object.fromEntries(svc.WORLD_CATEGORIES.map((c) => [c, selectionValueSchema.optional()])),
-).partial();
+const selectionSchema = z.record(
+  z.string().trim().min(1).max(svc.WORLD_CATEGORY_KEY_MAX),
+  selectionValueSchema,
+).refine((selection) => Object.keys(selection).length <= svc.WORLD_CATEGORY_COUNT_MAX, {
+  message: `selection cannot exceed ${svc.WORLD_CATEGORY_COUNT_MAX} buckets`,
+});
 
 const renderSchema = z.object({
   // Optional friendly name for the resulting collection. If omitted, server
@@ -98,8 +110,10 @@ const renderSchema = z.object({
   guidance: z.number().min(0).max(30).optional(),
   quantize: z.enum(['3', '4', '5', '6', '8']).optional(),
   // Per-variation render count and per-category subset.
+  promptMode: z.enum(['variations', 'sheets', 'all']).optional().default('variations'),
   batchPerVariation: z.number().int().min(1).max(20).optional().default(1),
   selection: selectionSchema.optional(),
+  sheetSelection: z.union([z.literal('all'), z.array(z.string().trim().min(1).max(svc.VARIATION_LABEL_MAX)).max(svc.COMPOSITE_SHEETS_MAX)]).optional(),
 });
 
 router.get('/', asyncHandler(async (_req, res) => {
@@ -144,11 +158,13 @@ router.post('/:id/render', asyncHandler(async (req, res) => {
   const world = await svc.getWorld(req.params.id).catch((err) => { throw mapServiceError(err); });
 
   const compiled = svc.compilePrompts(world, {
+    promptMode: body.promptMode,
     selection: body.selection,
+    sheetSelection: body.sheetSelection,
     batchPerVariation: body.batchPerVariation,
   });
   if (!compiled.length) {
-    throw new ServerError('No prompts to render — add variations or expand the template first', {
+    throw new ServerError('No prompts to render — add variations or composite sheets first', {
       status: 400, code: 'WORLD_BUILDER_EMPTY',
     });
   }

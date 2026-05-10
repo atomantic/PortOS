@@ -1,6 +1,8 @@
 import { request } from './apiCore.js';
 
 export const WORLD_CATEGORIES = ['landscapes', 'environments', 'characters', 'structures', 'vehicles'];
+export const WORLD_CATEGORY_KEY_MAX = 64;
+export const COMPOSITE_PROMPT_MAX = 4000;
 
 export const listWorlds = () => request('/world-builder');
 export const getWorld = (id) => request(`/world-builder/${encodeURIComponent(id)}`);

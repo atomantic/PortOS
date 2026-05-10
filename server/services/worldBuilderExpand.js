@@ -4,7 +4,7 @@
  * Takes a starter prompt like:
  *   "moebius and scavengers reign meets Prophet inspired sci fi universe"
  * and asks the chosen LLM to return a structured JSON blob:
- *   { stylePrompt, negativePrompt, categories: { landscapes: { variations: [{ label, prompt }] }, ... } }
+ *   { stylePrompt, negativePrompt, categories: { ... }, compositeSheets: [{ label, prompt }] }
  *
  * The LLM choice is per-call: caller passes { providerId, model }. If
  * either is missing we fall back to the active provider / its default
@@ -13,7 +13,14 @@
 
 import { executeApiRun, executeCliRun, createRun } from './runner.js';
 import { getActiveProvider, getProviderById } from './providers.js';
-import { WORLD_CATEGORIES, PROMPT_FRAGMENT_MAX, VARIATIONS_PER_CATEGORY_MAX } from './worldBuilder.js';
+import {
+  WORLD_CATEGORIES,
+  PROMPT_FRAGMENT_MAX,
+  COMPOSITE_PROMPT_MAX,
+  VARIATIONS_PER_CATEGORY_MAX,
+  sanitizeCategories,
+  sanitizeCompositeSheets,
+} from './worldBuilder.js';
 import { ServerError } from '../lib/errorHandler.js';
 
 const LABEL_MAX = 80;
@@ -28,8 +35,11 @@ Return a SINGLE JSON object. NO markdown, NO commentary. The object MUST have th
 
 - stylePrompt:    string. A single comma-separated style fragment (lighting, color palette, render quality, artist references) that will be PREFIXED to every variation prompt. Keep under 400 characters. No subject nouns — those go in variations.
 - negativePrompt: string. Comma-separated tokens to avoid (e.g. "blurry, lowres, watermark, extra fingers"). Tailor to the world's aesthetic.
-- categories: object with these EXACT keys:
+- categories: object. Atomic reusable buckets. Use snake_case keys. Start from these common buckets when useful:
 ${WORLD_CATEGORIES.map((c) => `    - ${c}`).join('\n')}
+  Add, remove, or rename buckets to fit the user's actual world-building task. Do not force every project into the starter buckets.
+  Useful extra buckets include colonies, factions, tribes, species, cultures, clothing_styles, material_palettes, fasteners_and_closures, tools, rituals, raider_clans, vehicles, settlements, and artifacts.
+- compositeSheets: array. Complete, ready-to-render reference-board prompts. Each item has { "label": string, "prompt": string up to 4000 chars }. These are NOT atomic fragments; each prompt must describe one complete sheet that combines multiple buckets into a single image.
 
 Each category value is an object containing a "variations" array. Each variation has the shape { "label": string (max 80 chars), "prompt": string (max 400 chars, comma-separated tokens describing ONE specific subject in this category) }. Concrete example for one category:
     "landscapes": { "variations": [
@@ -38,12 +48,19 @@ Each category value is an object containing a "variations" array. Each variation
     ] }
 Do NOT use \`[...]\`, \`…\`, or any other placeholder/elision tokens — every array MUST contain real variation objects.
 
+Concrete compositeSheets example:
+    { "label": "Gas-Giant Drifters costume sheet", "prompt": "Create a clean illustrated costume reference sheet for Gas-Giant Drifters, a human colony living on floating platforms and balloon settlements high in a gas giant atmosphere. Show a simplified character lineup with five figures: kite child, storm scout, main hero, sky elder, and rig worker. Include material swatches for sailcloth, balloon-skin, rubberized algae fabric, salvaged foil, flex-ceramic patches, storm-glass lenses, braided tether cord, and copper wire ornament. Include fastener/accessory icons for buckles, spring clips, pressure rings, carabiner hooks, breathing collar, goggles, tether belt, strapped sky boots, and wind streamer tabs. Include a color strip: storm blue, saffron, hot coral, orange, slate gray, cream, electric cyan, copper, cloud white. Minimal readable layout, elegant negative space, light background hints of balloon platforms and storm clouds, not baroque, not hyper-detailed." }
+
 # Rules
-- Generate 6-10 variations per category. They must be visually distinct from each other but stylistically consistent with the world.
+- Generate 5-12 categories total, choosing the buckets that serve the starter idea. Generate 4-10 variations per category. They must be visually distinct from each other but stylistically consistent with the world.
+- Generate 3-8 compositeSheets when the starter idea involves clothing systems, colonies, factions, cultures, species, vehicles, settlements, props, or other grouped visual-design systems.
 - "label" is a short name a human can recognize (e.g. "Crystalline canyon basin", "Scavenger walker mech").
 - "prompt" describes the SUBJECT only — the stylePrompt is automatically prepended at render time, so do NOT repeat style tokens in each variation.
 - Do not include camera/aspect tokens; the renderer adds those.
 - Ground the world in the references provided. If the starter mentions specific artists, comics, films, games, or moods, weave them into stylePrompt.
+- If the user asks for style sheets, reference sheets, clothing guides, materials, colonies, factions, tribes, species, or pirate/raider groups, create specific categories for the atomic facts AND create compositeSheets for the complete boards.
+- For colony clothing systems, include functional details like fasteners, closures, textile/material logic, silhouettes, class/role markers, weather or pressure adaptations, and culturally specific ornamentation.
+- Composite sheet prompts must include a clear board structure: title/subject, 4-6 figure lineup roles, materials swatches, fasteners/accessories icons, color palette strip, background hint, and simplicity constraints such as minimal readable layout, fewer tiny objects, clean silhouettes, not baroque, not hyper-detailed.
 - Output JUST the JSON object. No prose before or after.`;
 
 const isCliProvider = (provider) => provider?.type === 'cli';
@@ -184,7 +201,7 @@ const extractJson = (raw) => {
   const candidates = findBalancedBlocks(s);
   if (!candidates.length) candidates.push(s);
   const isExpansionShape = (o) => o && typeof o === 'object'
-    && (typeof o.stylePrompt === 'string' || typeof o.negativePrompt === 'string' || (o.categories && typeof o.categories === 'object'));
+    && (typeof o.stylePrompt === 'string' || typeof o.negativePrompt === 'string' || (o.categories && typeof o.categories === 'object') || Array.isArray(o.compositeSheets));
   let firstParsed;
   let lastErr;
   let lastPreview = s;
@@ -216,10 +233,12 @@ const extractJson = (raw) => {
 const normalizeCategories = (raw) => {
   // The LLM occasionally returns variations as a flat array of strings or
   // skips the wrapping `{ variations: [...] }` object. Coerce both shapes
-  // here so the world template stays consistent.
+  // here so the world template stays consistent. Preserve custom buckets
+  // (e.g. colonies, factions, clothing_styles) instead of forcing everything
+  // into the starter categories.
   const out = {};
-  for (const key of WORLD_CATEGORIES) {
-    const node = raw?.[key];
+  const rawEntries = raw && typeof raw === 'object' ? Object.entries(raw) : [];
+  for (const [key, node] of rawEntries) {
     let variations = [];
     if (Array.isArray(node)) variations = node;
     else if (Array.isArray(node?.variations)) variations = node.variations;
@@ -240,12 +259,24 @@ const normalizeCategories = (raw) => {
       }).filter((v) => v.label && v.prompt),
     };
   }
-  return out;
+  return sanitizeCategories(out);
 };
+
+const normalizeCompositeSheets = (raw) => sanitizeCompositeSheets(
+  Array.isArray(raw)
+    ? raw.map((sheet) => {
+      if (typeof sheet === 'string') {
+        const trimmed = sheet.trim();
+        return { label: trimmed.slice(0, LABEL_MAX), prompt: trimmed.slice(0, COMPOSITE_PROMPT_MAX) };
+      }
+      return sheet;
+    })
+    : [],
+);
 
 /**
  * Expand a starter prompt into a structured world template draft.
- * Returns { stylePrompt, negativePrompt, categories, llm: { provider, model } }.
+ * Returns { stylePrompt, negativePrompt, categories, compositeSheets, llm: { provider, model } }.
  *
  * @param {object} options
  * @param {string} options.starterPrompt
@@ -271,17 +302,18 @@ export async function expandWorldTemplate({ starterPrompt, providerId, model } =
   // for the full transcript.
   console.log(`🌍 World Builder raw response — runId=${runId} length=${raw?.length || 0}`);
   const parsed = extractJson(raw);
-  console.log(`🌍 World Builder parsed JSON — keys=[${Object.keys(parsed || {}).join(',')}] categoryKeys=[${Object.keys(parsed?.categories || {}).join(',')}]`);
+  console.log(`🌍 World Builder parsed JSON — keys=[${Object.keys(parsed || {}).join(',')}] categoryKeys=[${Object.keys(parsed?.categories || {}).join(',')}] compositeSheets=${Array.isArray(parsed?.compositeSheets) ? parsed.compositeSheets.length : 0}`);
 
   const stylePrompt = typeof parsed.stylePrompt === 'string'
     ? parsed.stylePrompt.trim().slice(0, PROMPT_FRAGMENT_MAX) : '';
   const negativePrompt = typeof parsed.negativePrompt === 'string'
     ? parsed.negativePrompt.trim().slice(0, PROMPT_FRAGMENT_MAX) : '';
   const categories = normalizeCategories(parsed.categories || {});
-  const perCat = WORLD_CATEGORIES.map((k) => `${k}=${categories[k]?.variations?.length || 0}`).join(' ');
-  const totalVariations = WORLD_CATEGORIES.reduce((n, k) => n + (categories[k]?.variations?.length || 0), 0);
-  console.log(`🌍 World Builder expansion complete — runId=${runId} ${totalVariations} variations (${perCat})`);
-  if (totalVariations === 0) {
+  const compositeSheets = normalizeCompositeSheets(parsed.compositeSheets || []);
+  const perCat = Object.keys(categories).map((k) => `${k}=${categories[k]?.variations?.length || 0}`).join(' ');
+  const totalVariations = Object.values(categories).reduce((n, c) => n + (c?.variations?.length || 0), 0);
+  console.log(`🌍 World Builder expansion complete — runId=${runId} ${totalVariations} variations, ${compositeSheets.length} composite sheets (${perCat})`);
+  if (totalVariations === 0 && compositeSheets.length === 0) {
     console.warn(`⚠️ World Builder expansion produced 0 variations — inspect data/runs/${runId}/output.txt for the raw LLM response`);
   }
 
@@ -289,9 +321,10 @@ export async function expandWorldTemplate({ starterPrompt, providerId, model } =
     stylePrompt,
     negativePrompt,
     categories,
+    compositeSheets,
     llm: { provider: provider.id, model: selectedModel || null },
   };
 }
 
 // Export for tests.
-export const __testing = { extractJson, normalizeCategories, EXPANSION_PROMPT };
+export const __testing = { extractJson, normalizeCategories, normalizeCompositeSheets, EXPANSION_PROMPT };

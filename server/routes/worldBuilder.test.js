@@ -30,6 +30,9 @@ vi.mock('../services/worldBuilderExpand.js', () => ({
       structures: { variations: [] },
       vehicles: { variations: [] },
     },
+    compositeSheets: [
+      { label: 'Mock costume sheet', prompt: 'mocked complete costume reference sheet with lineup, materials, fasteners, palette' },
+    ],
     llm: { provider: 'anthropic', model: 'claude' },
   })),
 }));
@@ -93,6 +96,35 @@ describe('world-builder routes', () => {
     );
   });
 
+  it('POST / accepts dynamic world-building categories', async () => {
+    const res = await request(buildApp())
+      .post('/api/world-builder')
+      .send({
+        name: 'Colonies',
+        categories: {
+          colonies: { variations: [{ label: 'Canopy Symbiotes', prompt: 'leaf fiber outfit reference sheet' }] },
+          raider_clans: { variations: [{ label: 'Wake Jackals', prompt: 'simple scavenger pirate kit' }] },
+        },
+      });
+    expect(res.status).toBe(201);
+    expect(res.body.categories.colonies.variations).toHaveLength(1);
+    expect(res.body.categories.raider_clans.variations[0].label).toBe('Wake Jackals');
+  });
+
+  it('POST / accepts composite sheet prompts', async () => {
+    const res = await request(buildApp())
+      .post('/api/world-builder')
+      .send({
+        name: 'Sheets',
+        compositeSheets: [
+          { label: 'Gas-Giant Drifters sheet', prompt: 'Create a clean illustrated costume reference sheet with five figures, material swatches, fasteners, accessories, and palette strip.' },
+        ],
+      });
+    expect(res.status).toBe(201);
+    expect(res.body.compositeSheets).toHaveLength(1);
+    expect(res.body.compositeSheets[0].label).toBe('Gas-Giant Drifters sheet');
+  });
+
   it('POST / rejects missing name', async () => {
     const res = await request(buildApp())
       .post('/api/world-builder')
@@ -127,6 +159,7 @@ describe('world-builder routes', () => {
     expect(res.status).toBe(200);
     expect(res.body.stylePrompt).toContain('moebius scifi');
     expect(res.body.categories.landscapes.variations).toHaveLength(1);
+    expect(res.body.compositeSheets).toHaveLength(1);
     expect(res.body.llm.provider).toBe('anthropic');
   });
 
@@ -152,6 +185,40 @@ describe('world-builder routes', () => {
     const runs = await request(app).get(`/api/world-builder/${created.body.id}/runs`);
     expect(runs.body).toHaveLength(1);
     expect(runs.body[0].promptCount).toBe(6);
+  });
+
+  it('POST /:id/render queues custom category prompts', async () => {
+    const app = buildApp();
+    const created = await request(app).post('/api/world-builder').send({
+      name: 'Clothing',
+      stylePrompt: 'moebius, clean reference sheet',
+      categories: {
+        clothing_styles: { variations: [{ label: 'Gas-Giant Drifters', prompt: 'buckles, clips, pressure rings' }] },
+      },
+    });
+    const res = await request(app)
+      .post(`/api/world-builder/${created.body.id}/render`)
+      .send({ mode: 'local', selection: { clothing_styles: 'all' } });
+    expect(res.status).toBe(200);
+    expect(res.body.promptCount).toBe(1);
+    expect(res.body.jobIds).toHaveLength(1);
+  });
+
+  it('POST /:id/render queues composite sheet prompts', async () => {
+    const app = buildApp();
+    const created = await request(app).post('/api/world-builder').send({
+      name: 'Composite Clothing',
+      stylePrompt: 'moebius, clean reference sheet',
+      compositeSheets: [
+        { label: 'Gas-Giant Drifters sheet', prompt: 'complete costume reference sheet, five figures, material swatches, pressure rings, palette strip' },
+      ],
+    });
+    const res = await request(app)
+      .post(`/api/world-builder/${created.body.id}/render`)
+      .send({ mode: 'local', promptMode: 'sheets' });
+    expect(res.status).toBe(200);
+    expect(res.body.promptCount).toBe(1);
+    expect(res.body.jobIds).toHaveLength(1);
   });
 
   it('POST /:id/render rejects when no variations exist', async () => {

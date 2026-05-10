@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { __testing } from './worldBuilderExpand.js';
 import { WORLD_CATEGORIES } from './worldBuilder.js';
 
-const { extractJson, normalizeCategories } = __testing;
+const { extractJson, normalizeCategories, normalizeCompositeSheets, EXPANSION_PROMPT } = __testing;
 
 describe('worldBuilderExpand.extractJson', () => {
   it('parses a raw JSON object', () => {
@@ -162,17 +162,54 @@ describe('worldBuilderExpand.normalizeCategories', () => {
     ]);
   });
 
-  it('ignores unknown categories not in WORLD_CATEGORIES', () => {
+  it('preserves custom categories beyond WORLD_CATEGORIES', () => {
     const out = normalizeCategories({
       landscapes: { variations: [{ label: 'A', prompt: 'a' }] },
-      bogus: { variations: [{ label: 'X', prompt: 'x' }] },
+      'Raider / Pirate Clans': { variations: [{ label: 'Wake Jackals', prompt: 'spare moebius scavenger raiders' }] },
     });
     expect(out.landscapes.variations).toHaveLength(1);
-    expect(out.bogus).toBeUndefined();
+    expect(out.raider_pirate_clans.variations).toEqual([
+      { label: 'Wake Jackals', prompt: 'spare moebius scavenger raiders' },
+    ]);
   });
 
   it('treats a non-object category as empty variations (not a crash)', () => {
     const out = normalizeCategories({ characters: 'not an object' });
     expect(out.characters).toEqual({ variations: [] });
+  });
+});
+
+describe('worldBuilderExpand.normalizeCompositeSheets', () => {
+  it('keeps complete composite reference-sheet prompts', () => {
+    const out = normalizeCompositeSheets([
+      {
+        label: 'Gas-Giant Drifters costume sheet',
+        prompt: 'Create a clean illustrated costume reference sheet with five figures, material swatches, fasteners, accessories, color palette strip, and simple floating-platform background.',
+      },
+    ]);
+    expect(out).toEqual([
+      {
+        label: 'Gas-Giant Drifters costume sheet',
+        prompt: 'Create a clean illustrated costume reference sheet with five figures, material swatches, fasteners, accessories, color palette strip, and simple floating-platform background.',
+      },
+    ]);
+  });
+
+  it('coerces string sheets into label/prompt pairs', () => {
+    const out = normalizeCompositeSheets(['Canopy Symbiotes reference board']);
+    expect(out).toEqual([
+      { label: 'Canopy Symbiotes reference board', prompt: 'Canopy Symbiotes reference board' },
+    ]);
+  });
+});
+
+describe('worldBuilderExpand.EXPANSION_PROMPT', () => {
+  it('allows dynamic world-building buckets and reference-sheet domains', () => {
+    expect(EXPANSION_PROMPT).toContain('Add, remove, or rename buckets');
+    expect(EXPANSION_PROMPT).toContain('colonies, factions, tribes, species');
+    expect(EXPANSION_PROMPT).toContain('clothing guides');
+    expect(EXPANSION_PROMPT).toContain('raider_clans');
+    expect(EXPANSION_PROMPT).toContain('compositeSheets');
+    expect(EXPANSION_PROMPT).toContain('materials swatches');
   });
 });
