@@ -507,32 +507,38 @@ async function saveDismissedRecommendations(map) {
  * if the underlying situation worsens significantly.
  */
 export async function dismissRecommendation(id, snapshot = null) {
-  const map = await loadDismissedRecommendations();
-  map[id] = {
-    dismissedAt: new Date().toISOString(),
-    snapshot
-  };
-  await saveDismissedRecommendations(map);
-  return { id, dismissed: true };
+  return withLock(async () => {
+    const map = await loadDismissedRecommendations();
+    map[id] = {
+      dismissedAt: new Date().toISOString(),
+      snapshot
+    };
+    await saveDismissedRecommendations(map);
+    return { id, dismissed: true };
+  });
 }
 
 /**
  * Restore a single previously-dismissed recommendation.
  */
 export async function restoreRecommendation(id) {
-  const map = await loadDismissedRecommendations();
-  if (!map[id]) return { id, restored: false };
-  delete map[id];
-  await saveDismissedRecommendations(map);
-  return { id, restored: true };
+  return withLock(async () => {
+    const map = await loadDismissedRecommendations();
+    if (!map[id]) return { id, restored: false };
+    delete map[id];
+    await saveDismissedRecommendations(map);
+    return { id, restored: true };
+  });
 }
 
 /**
  * Clear all dismissed recommendations.
  */
 export async function clearDismissedRecommendations() {
-  await saveDismissedRecommendations({});
-  return { cleared: true };
+  return withLock(async () => {
+    await saveDismissedRecommendations({});
+    return { cleared: true };
+  });
 }
 
 /**
