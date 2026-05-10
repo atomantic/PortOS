@@ -172,8 +172,19 @@ export const deleteLora = async (filename) => {
 // patch so callers can't trample those.
 export const patchLoraSidecar = async (filename, patch) => {
   assertSafeLoraFilename(filename);
-  if (!existsSync(join(PATHS.loras, filename))) {
+  const filePath = join(PATHS.loras, filename);
+  if (!existsSync(filePath)) {
     throw new ServerError(`LoRA not found: ${filename}`, { status: 404, code: 'NOT_FOUND' });
+  }
+  // Match getLora/deleteLora: refuse non-regular files (directory named
+  // foo.safetensors, dangling symlink, etc.) so we don't quietly create a
+  // sidecar for an entry that listLoras() will then filter out.
+  const s = await stat(filePath).catch(() => null);
+  if (!s || !s.isFile()) {
+    throw new ServerError(
+      `Cannot patch "${filename}": not a regular file`,
+      { status: 400, code: 'INVALID_LORA_FILE' },
+    );
   }
   const current = (await readSidecar(filename)) || { filename };
   const next = { ...current, ...patch, filename };
@@ -240,7 +251,7 @@ const downloadToFile = async (url, destPath, { fetchImpl = fetch, headers = {} ,
   }
   if (linkErr.code === 'EEXIST') {
     await rm(tmpPath, { force: true }).catch(() => {});
-    const basename_ = destPath.split('/').pop();
+    const basename_ = basename(destPath);
     throw new ServerError(
       `Already installed: ${basename_}. Delete it first or pick a different version.`,
       { status: 409, code: 'CIVITAI_ALREADY_INSTALLED' },
@@ -253,7 +264,7 @@ const downloadToFile = async (url, destPath, { fetchImpl = fetch, headers = {} ,
   // path above.
   if (existsSync(destPath)) {
     await rm(tmpPath, { force: true }).catch(() => {});
-    const basename_ = destPath.split('/').pop();
+    const basename_ = basename(destPath);
     throw new ServerError(
       `Already installed: ${basename_}. Delete it first or pick a different version.`,
       { status: 409, code: 'CIVITAI_ALREADY_INSTALLED' },
