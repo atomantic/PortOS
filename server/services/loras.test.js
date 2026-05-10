@@ -79,6 +79,45 @@ describe('listLoras', () => {
     expect(list[0].filename).toBe('lora-broken.safetensors');
     expect(list[0].runnerFamily).toBe(null);
   });
+
+  it('re-derives runnerFamily from civitai.baseModel at read time (heals stale sidecars)', async () => {
+    // Simulates a LoRA whose sidecar was written before baseModelToRunner()
+    // recognized 'Ernie' — `runnerFamily` was stored as null at install
+    // time. After the mapping update, listLoras must NOT trust the cached
+    // null and must re-derive from the still-correct civitai.baseModel
+    // (otherwise this LoRA leaks into every runner's compat filter).
+    const fs = await import('fs/promises');
+    await fs.mkdir(tmpLoras, { recursive: true });
+    await fs.writeFile(join(tmpLoras, 'lora-stale-v1.safetensors'), 'w');
+    await fs.writeFile(join(tmpLoras, 'lora-stale-v1.safetensors.metadata.json'), JSON.stringify({
+      filename: 'lora-stale-v1.safetensors',
+      name: 'Stale Ernie LoRA',
+      runnerFamily: null,                      // ← stale value from old install
+      civitai: { baseModel: 'Ernie' },         // ← still-correct baseModel
+      triggerWords: [],
+      installedAt: '2026-05-09T00:00:00.000Z',
+    }));
+    const list = await lorasService.listLoras();
+    const stale = list.find((l) => l.filename === 'lora-stale-v1.safetensors');
+    expect(stale.runnerFamily).toBe('ernie');
+  });
+
+  it('falls back to stored runnerFamily when civitai.baseModel is absent (legacy LoRAs)', async () => {
+    // User-dropped LoRA pre-Civitai integration: no civitai block at all,
+    // just whatever runnerFamily someone may have hand-edited in. Read
+    // path must respect that rather than coerce to null.
+    const fs = await import('fs/promises');
+    await fs.mkdir(tmpLoras, { recursive: true });
+    await fs.writeFile(join(tmpLoras, 'lora-handcrafted.safetensors'), 'w');
+    await fs.writeFile(join(tmpLoras, 'lora-handcrafted.safetensors.metadata.json'), JSON.stringify({
+      filename: 'lora-handcrafted.safetensors',
+      name: 'Handcrafted',
+      runnerFamily: 'mflux',
+    }));
+    const list = await lorasService.listLoras();
+    const lora = list.find((l) => l.filename === 'lora-handcrafted.safetensors');
+    expect(lora.runnerFamily).toBe('mflux');
+  });
 });
 
 describe('deleteLora', () => {

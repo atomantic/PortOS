@@ -26,6 +26,7 @@ import { ServerError } from '../lib/errorHandler.js';
 import { PATHS } from '../lib/fileUtils.js';
 import {
   applyDownloadToken,
+  baseModelToRunner,
   buildSidecar,
   fetchCivitaiModel,
   normalizeCivitaiImageUrl,
@@ -92,6 +93,15 @@ export const listLoras = async () => {
     if (!s || !s.isFile()) return null;
     const sidecar = await readSidecar(filename);
     const fallbackName = filename.replace(/^lora-/, '').replace(/\.safetensors$/, '');
+    // Re-derive runnerFamily from civitai.baseModel at read time so
+    // sidecars written before a baseModelToRunner() mapping update (e.g.
+    // an install before 'Ernie' was a recognized base) don't permanently
+    // show as runnerFamily=null and leak across compat filters. Falls
+    // back to the stored value for legacy LoRAs without civitai metadata.
+    const baseModel = sidecar?.civitai?.baseModel;
+    const runnerFamily = baseModel
+      ? baseModelToRunner(baseModel)
+      : (sidecar?.runnerFamily || null);
     return {
       filename,
       name: sidecar?.name || fallbackName,
@@ -99,7 +109,7 @@ export const listLoras = async () => {
       installedAt: sidecar?.installedAt || s.birthtime?.toISOString?.() || null,
       // sidecar fields surfaced for the picker / manager UI:
       civitai: sidecar?.civitai || null,
-      runnerFamily: sidecar?.runnerFamily || null,
+      runnerFamily,
       triggerWords: sidecar?.triggerWords || [],
       // Coerce non-finite values (NaN, Infinity, missing/malformed sidecar
       // fields) to the default — `?? 1.0` alone wouldn't catch NaN.
