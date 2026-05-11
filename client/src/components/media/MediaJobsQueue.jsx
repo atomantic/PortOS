@@ -13,6 +13,21 @@ const STATUS_BADGE = {
 
 const KIND_ICON = { video: Film, image: ImageIcon };
 
+// Compact "engine / model" badge so a failed row tells the user *what* failed,
+// not just that it failed. Codex jobs carry `params.model`; local image/video
+// jobs carry `params.modelId`. Trims long HF repo paths to the tail segment.
+function modelLabel(params) {
+  if (!params) return null;
+  if (params.mode === 'codex') {
+    const m = (params.model || '').trim();
+    return m ? `codex / ${m}` : 'codex';
+  }
+  const id = (params.modelId || '').trim();
+  if (!id) return 'local';
+  const tail = id.includes('/') ? id.slice(id.lastIndexOf('/') + 1) : id;
+  return `local / ${tail}`;
+}
+
 // Embeds the live render queue inline on the Image / Video gen pages so the
 // user can watch in-flight jobs (and cancel them) without leaving the page.
 // Completed jobs are excluded from the recent reel — those render as preview
@@ -184,6 +199,11 @@ function JobRow({ job, onCancel, onRetry, onRunNow, onDelete }) {
             <div className="text-sm font-medium truncate">
               <span className="font-mono">{job.id.slice(0, 8)}</span>
               <span className="text-port-text-muted"> · {job.kind}</span>
+              {modelLabel(job.params) && (
+                <span className="text-port-text-muted" title={job.params.model || job.params.modelId || ''}>
+                  {' · '}{modelLabel(job.params)}
+                </span>
+              )}
               {job.position && job.status === 'queued' && (
                 <span className="text-port-text-muted"> · #{job.position} in queue</span>
               )}
