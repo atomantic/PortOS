@@ -836,6 +836,9 @@ export function __resetForTests() {
   sseJobs.clear();
   workerStarted = false;
   initPromise = null;
+  // Reset the lane limit too — a test that called setCodexParallelLimit(N)
+  // otherwise leaks N into subsequent tests and makes ordering matter.
+  codexParallelLimit = CODEX_PARALLEL_DEFAULT;
   // Reset the persist chain so a leftover rejection from a previous test's
   // ENOENT writes doesn't poison subsequent persist() calls.
   persistChain = Promise.resolve();

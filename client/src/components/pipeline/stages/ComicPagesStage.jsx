@@ -13,7 +13,15 @@ export default function ComicPagesStage({ issue, onStageUpdate }) {
   const stage = issue.stages?.comicPages || { status: 'empty', pages: [] };
   const [pages, setPages] = useState(stage.pages || []);
   const [savingIdx, setSavingIdx] = useState(null);
-  const [renderingPage, setRenderingPage] = useState(null);
+  // Per-page in-flight state. Codex can render multiple pages in parallel, so
+  // tracking a single index would flip the spinner off the wrong button when
+  // the first request finished while a second was still pending.
+  const [renderingPages, setRenderingPages] = useState(() => new Set());
+  const markRendering = (pi, on) => setRenderingPages((prev) => {
+    const next = new Set(prev);
+    if (on) next.add(pi); else next.delete(pi);
+    return next;
+  });
   const [extracting, setExtracting] = useState(false);
 
   const comicScriptReady = !!(issue.stages?.comicScript?.output || '').trim();
@@ -81,12 +89,12 @@ export default function ComicPagesStage({ issue, onStageUpdate }) {
       toast.error('Add at least one panel description first');
       return;
     }
-    setRenderingPage(pi);
+    markRendering(pi, true);
     const result = await generatePipelineComicPage(issue.id, pi).catch((err) => {
       toast.error(err.message || 'Failed to enqueue page render');
       return null;
     });
-    setRenderingPage(null);
+    markRendering(pi, false);
     if (!result) return;
     if (result.issue) {
       const next = result.issue.stages?.comicPages?.pages || [];
@@ -164,11 +172,11 @@ export default function ComicPagesStage({ issue, onStageUpdate }) {
                   <button
                     type="button"
                     onClick={() => handleGeneratePage(pi)}
-                    disabled={renderingPage === pi || !(page.panels?.length > 0)}
+                    disabled={renderingPages.has(pi) || !(page.panels?.length > 0)}
                     title="Render the entire page as one image — recommended for Codex / cloud image models. Local models will produce draft-quality results."
                     className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-port-accent text-white text-xs font-medium hover:bg-port-accent/90 disabled:opacity-40 disabled:cursor-not-allowed"
                   >
-                    {renderingPage === pi
+                    {renderingPages.has(pi)
                       ? <Loader2 size={12} className="animate-spin" />
                       : <ImagePlus size={12} />}
                     Generate page
