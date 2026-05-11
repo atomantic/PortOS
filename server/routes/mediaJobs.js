@@ -9,7 +9,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
-import { listJobs, getJob, cancelJob, cancelQueuedJobs, enqueueJob, runJobNow, JOB_KINDS, JOB_STATUSES } from '../services/mediaJobQueue/index.js';
+import { listJobs, getJob, cancelJob, cancelQueuedJobs, enqueueJob, removeArchivedJob, runJobNow, JOB_KINDS, JOB_STATUSES } from '../services/mediaJobQueue/index.js';
 
 const router = Router();
 
@@ -125,6 +125,10 @@ router.post('/:id/retry', asyncHandler(async (req, res) => {
     );
   }
   const result = enqueueJob({ kind: job.kind, params: job.params, owner: job.owner });
+  // Drop the original failed/canceled row from archive — the new job inherits
+  // its work, and leaving both visible just lets users keep clicking Retry on
+  // the dead row and stacking duplicate jobs.
+  removeArchivedJob(job.id);
   res.json({ ...result, retriedFrom: job.id });
 }));
 

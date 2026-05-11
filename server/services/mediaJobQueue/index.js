@@ -385,6 +385,22 @@ async function drainLoop() {
   }
 }
 
+// Drop a job from the archive (e.g. after a successful retry — the old failed
+// row shouldn't keep cluttering the recent-reel UI now that a fresh job has
+// inherited its work). Returns true if removed, false if the id wasn't found
+// or was still live. Live jobs are deliberately left alone — the caller
+// should cancel them first.
+export function removeArchivedJob(jobId) {
+  const idx = archive.findIndex((j) => j.id === jobId);
+  if (idx < 0) return false;
+  archive.splice(idx, 1);
+  // Clear any lingering SSE entry so attachSseClient stops synthesizing a
+  // terminal frame for the now-dropped id.
+  sseJobs.delete(jobId);
+  persist().catch((e) => console.log(`⚠️ mediaJobQueue persist on archive prune failed: ${e.message}`));
+  return true;
+}
+
 // "Run now" bypass — start a queued codex job immediately even if the lane is
 // at its limit. GPU jobs are rejected (single MLX runtime would OOM).
 export function runJobNow(jobId) {

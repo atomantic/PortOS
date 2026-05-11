@@ -12,6 +12,7 @@ const stubs = {
   cancelJob: vi.fn(async (id) => (jobStore.has(id) ? { ok: true, status: 'canceled' } : { ok: false, code: 'NOT_FOUND' })),
   cancelQueuedJobs: vi.fn(async () => ({ canceled: 0 })),
   runJobNow: vi.fn(() => ({ ok: false, code: 'NOT_FOUND' })),
+  removeArchivedJob: vi.fn((id) => jobStore.delete(id)),
 };
 vi.mock('../services/mediaJobQueue/index.js', () => ({
   JOB_KINDS: ['video', 'image'],
@@ -22,6 +23,7 @@ vi.mock('../services/mediaJobQueue/index.js', () => ({
   cancelJob: (...args) => stubs.cancelJob(...args),
   cancelQueuedJobs: (...args) => stubs.cancelQueuedJobs(...args),
   runJobNow: (...args) => stubs.runJobNow(...args),
+  removeArchivedJob: (...args) => stubs.removeArchivedJob(...args),
 }));
 
 const mediaJobsRouter = (await import('./mediaJobs.js')).default;
@@ -65,6 +67,10 @@ describe('mediaJobs routes', () => {
     expect(stubs.enqueueJob).toHaveBeenCalledWith({
       kind: 'image', owner: 'cd-1', params: { prompt: 'a cat', mode: 'codex' },
     });
+    // The original failed row is dropped from the archive so the UI doesn't
+    // keep a clickable Retry button next to a job whose work was already
+    // inherited by the freshly-enqueued one.
+    expect(stubs.removeArchivedJob).toHaveBeenCalledWith('j-img');
   });
 
   it('POST /:id/retry 409s with JOB_RETRY_TEMP_UPLOAD when the job referenced an uploadedTempPath', async () => {

@@ -69,6 +69,10 @@ export default function MediaJobsQueue({ kind, recentLimit = 10, className = '' 
   const handleRetry = (id) => retryMediaJob(id)
     .then(({ jobId }) => {
       toast.success(`Re-queued as ${jobId.slice(0, 8)}`);
+      // Optimistic: drop the original failed/canceled row immediately. The
+      // server's retry endpoint already prunes it from the archive, but the
+      // next 3s poll would otherwise leave the stale row + button visible.
+      setJobs((prev) => prev.filter((j) => j.id !== id));
       fetchJobs();
     })
     .catch((err) => toast.error(err?.message || 'Retry failed'));
