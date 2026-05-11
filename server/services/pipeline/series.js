@@ -13,7 +13,12 @@
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { PATHS, atomicWrite, readJSONFile, ensureDir } from '../../lib/fileUtils.js';
-import { sanitizeBibleList, BIBLE_LIMITS, BIBLE_KIND, isStr, trimTo } from '../../lib/storyBible.js';
+import {
+  sanitizeBibleList, mergeExtractedBible,
+  BIBLE_LIMITS, BIBLE_KIND, BIBLE_FIELD,
+  isStr, trimTo,
+} from '../../lib/storyBible.js';
+import { extractBible } from '../../lib/bibleExtractor.js';
 
 // Lazy resolution — PATHS.data may not be available at module-load time
 // (e.g. tests that swap it through a Proxy mock).
@@ -144,6 +149,58 @@ export async function updateSeries(id, patch = {}) {
   state.series[idx] = merged;
   await writeState(state);
   return merged;
+}
+
+/**
+ * Run bible extraction across the requested kinds and merge results into a
+ * series. The route layer used to thread extract → merge → patch itself,
+ * which made `mergeExtractedBible` a route-layer concern. Lifting it here
+ * gives the route a 3-line call and lets future consumers (re-sync from
+ * Writers Room, batch bible refresh, etc) reuse the same orchestration.
+ *
+ * @param {string} seriesId
+ * @param {object} opts
+ * @param {string[]} opts.kinds        BIBLE_KIND values to run (defaults to all three)
+ * @param {string} opts.corpus         prose body to extract from
+ * @param {boolean} [opts.parallel]    fan out the kinds concurrently (HTTP-API providers only)
+ * @param {string} [opts.providerOverride]
+ * @returns {Promise<{ series, results }>} results is keyed by BIBLE_FIELD (e.g. `characters`)
+ */
+export async function extractAndMergeIntoSeries(seriesId, opts = {}) {
+  const series = await getSeries(seriesId);
+  const kinds = (opts.kinds && opts.kinds.length)
+    ? opts.kinds
+    : [BIBLE_KIND.CHARACTER, BIBLE_KIND.SETTING, BIBLE_KIND.OBJECT];
+  if (!isStr(opts.corpus) || !opts.corpus.trim()) {
+    throw makeErr('extractAndMergeIntoSeries: corpus is required', ERR_VALIDATION);
+  }
+
+  const runOne = (kind) => extractBible({
+    kind,
+    corpus: opts.corpus,
+    existing: series[BIBLE_FIELD[kind]] || [],
+    context: { series: { id: series.id, name: series.name } },
+    providerOverride: opts.providerOverride,
+    source: `pipeline-bible-${kind}`,
+  }).then((result) => ({ kind, result }));
+
+  const completed = opts.parallel
+    ? await Promise.all(kinds.map(runOne))
+    : await kinds.reduce(async (acc, kind) => [...(await acc), await runOne(kind)], Promise.resolve([]));
+
+  const results = {};
+  const patch = {};
+  for (const { kind, result } of completed) {
+    const field = BIBLE_FIELD[kind];
+    patch[field] = mergeExtractedBible(series[field] || [], result.extracted, kind);
+    results[field] = {
+      extracted: result.extracted, runId: result.runId,
+      providerId: result.providerId, model: result.model,
+    };
+  }
+
+  const updated = await updateSeries(series.id, patch);
+  return { series: updated, results };
 }
 
 export async function deleteSeries(id) {

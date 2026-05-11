@@ -33,9 +33,8 @@ import * as autoRunner from '../services/pipeline/autoRunner.js';
 import { enqueueVisualImage } from '../services/pipeline/visualStages.js';
 import { startEpisodeVideoForIssue, ERR_NO_STORYBOARDS } from '../services/pipeline/episodeVideo.js';
 import { ASPECT_RATIOS, QUALITIES } from '../lib/creativeDirectorPresets.js';
-import { extractBible } from '../lib/bibleExtractor.js';
 import { extractScenes, SOURCE_KIND } from '../lib/sceneExtractor.js';
-import { mergeExtractedBible, BIBLE_KIND, BIBLE_FIELD } from '../lib/storyBible.js';
+import { BIBLE_KIND } from '../lib/storyBible.js';
 
 const router = Router();
 
@@ -235,6 +234,8 @@ router.patch('/series/:id', asyncHandler(async (req, res) => {
 
 router.post('/series/:id/extract-bible', asyncHandler(async (req, res) => {
   const body = validateRequest(extractBibleSchema, req.body ?? {});
+  // Validate series exists up front so a typo returns 404 instead of bubbling
+  // out of the service-layer call below.
   const series = await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
 
   let corpus = (body.corpus || '').trim();
@@ -251,34 +252,15 @@ router.post('/series/:id/extract-bible', asyncHandler(async (req, res) => {
     }
   }
 
-  // Extract per-kind. Sequential by default — safe for CLI providers that
-  // serialize at the session. Parallel when explicitly requested by the
-  // caller (HTTP-API providers can fan out without session collisions).
-  // Merge always runs after all extractions complete; series.<field> is read
-  // once at top of the route, so there's no race on the merge baseline.
-  const runOne = (kind) => extractBible({
-    kind,
+  // Delegate the extract → merge → patch chain to the service layer so
+  // mergeExtractedBible stays a service-internal concern.
+  const result = await seriesSvc.extractAndMergeIntoSeries(series.id, {
+    kinds: body.kinds,
     corpus,
-    existing: series[BIBLE_FIELD[kind]] || [],
-    context: { series: { id: series.id, name: series.name } },
+    parallel: body.parallel,
     providerOverride: body.providerOverride,
-    source: `pipeline-bible-${kind}`,
-  }).then((result) => ({ kind, result }));
-
-  const completed = body.parallel
-    ? await Promise.all(body.kinds.map(runOne))
-    : await body.kinds.reduce(async (acc, kind) => [...(await acc), await runOne(kind)], Promise.resolve([]));
-
-  const results = {};
-  const patch = {};
-  for (const { kind, result } of completed) {
-    const field = BIBLE_FIELD[kind];
-    patch[field] = mergeExtractedBible(series[field] || [], result.extracted, kind);
-    results[field] = { extracted: result.extracted, runId: result.runId, providerId: result.providerId, model: result.model };
-  }
-
-  const updated = await seriesSvc.updateSeries(series.id, patch).catch((err) => { throw mapServiceError(err); });
-  res.json({ series: updated, results });
+  }).catch((err) => { throw mapServiceError(err); });
+  res.json(result);
 }));
 
 router.delete('/series/:id', asyncHandler(async (req, res) => {
