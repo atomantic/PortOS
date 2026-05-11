@@ -173,6 +173,32 @@ ${JSON.stringify({ prompt: 'painted owl portrait', negativePrompt: 'blurry', rat
     })).rejects.toMatchObject({ code: 'PROVIDER_DISABLED', status: 400 });
   });
 
+  it('ignores per-call model override for non-Codex CLIs since the runner cannot apply it', async () => {
+    // runner.js#buildCliArgs only translates defaultModel into a --model flag
+    // for codex. For claude-code / gemini-cli the per-call override would be
+    // silently dropped, so the response model must reflect what'll actually
+    // run (the provider's configured default), not the user's selection.
+    providers.getProviderById.mockResolvedValue({
+      id: 'claude-code',
+      type: 'cli',
+      enabled: true,
+      defaultModel: 'claude-baked-in',
+    });
+    mockRunnerSuccess(runner.executeCliRun, JSON.stringify({
+      prompt: 'x', negativePrompt: '', rationale: '', changes: [],
+    }));
+
+    const result = await refineMediaPrompt({
+      kind: 'image',
+      prompt: 'p',
+      feedback: 'f',
+      providerId: 'claude-code',
+      model: 'user-selected-model-the-runner-will-ignore',
+    });
+
+    expect(result.model).toBe('claude-baked-in');
+  });
+
   it('falls back to provider.models[0] when defaultModel is absent (API provider)', async () => {
     providers.getProviderById.mockResolvedValue({
       id: 'openai', type: 'api', enabled: true, models: ['gpt-from-list'],

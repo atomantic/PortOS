@@ -176,12 +176,18 @@ export async function refineMediaPrompt({
     );
   }
 
-  // CLI providers (codex, claude-code) drive the model through provider.command
-  // / provider.args rather than a per-call name, so an empty model is fine.
-  // For API providers, fall back through defaultModel → first entry in models[]
-  // so configs that list available models without pinning a default still work
-  // (mirrors the resolution chain in server/lib/stageRunner.js).
-  const selectedModel = model || provider.defaultModel || provider.models?.[0] || '';
+  // Resolve the model that'll actually run. For API + Codex CLI, the runner
+  // honors the per-call `model` override. For other CLI providers (claude-code,
+  // gemini-cli), `runner.js#buildCliArgs` ignores per-call model and runs
+  // whatever's baked into provider.args / provider.defaultModel — so reporting
+  // the user-requested model in the response/run-record would lie about which
+  // model produced the output. Fall back through defaultModel → models[0] for
+  // those providers so the returned `model` reflects reality. (PLAN.md tracks
+  // extending buildCliArgs to honor per-call model for all CLI providers.)
+  const honorsModelOverride = provider.type === 'api' || provider.id === 'codex';
+  const selectedModel = honorsModelOverride
+    ? (model || provider.defaultModel || provider.models?.[0] || '')
+    : (provider.defaultModel || provider.models?.[0] || '');
   if (!selectedModel && provider.type === 'api') {
     throw new ServerError('Model is required for prompt refinement', { status: 400, code: 'MODEL_REQUIRED' });
   }
