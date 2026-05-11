@@ -305,7 +305,12 @@ function startWorker() {
 // flight be picked up immediately on the next 150 ms tick instead of having
 // to wait for the entire GPU job to finish first.
 function startLaneJob(job, { isCodex }) {
-  queue.splice(queue.indexOf(job), 1);
+  // Guard against indexOf=-1 → splice(-1, 1) silently dropping the LAST queued
+  // job. Today the call sites (drainLoop + runJobNow) can't double-promote a
+  // job thanks to JS's single-threaded event loop, but the guard removes a
+  // footgun if those call patterns ever change.
+  const idx = queue.indexOf(job);
+  if (idx >= 0) queue.splice(idx, 1);
   job.status = 'running';
   job.startedAt = new Date().toISOString();
   job.position = 1;
