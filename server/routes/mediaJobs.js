@@ -132,6 +132,24 @@ router.post('/:id/retry', asyncHandler(async (req, res) => {
   res.json({ ...result, retriedFrom: job.id });
 }));
 
+// Delete a terminal job from the failed/canceled archive. Live jobs
+// (queued/running) are rejected — those need cancel first. Returns 404 for
+// unknown ids so the UI can prune optimistically without worrying about a
+// race with another tab pruning the same row.
+router.delete('/:id', asyncHandler(async (req, res) => {
+  const job = getJob(req.params.id);
+  if (!job) throw new ServerError('Not found', { status: 404, code: 'NOT_FOUND' });
+  if (job.status === 'queued' || job.status === 'running') {
+    throw new ServerError(
+      `Job is still ${job.status} — cancel it before deleting`,
+      { status: 409, code: 'JOB_NOT_TERMINAL' },
+    );
+  }
+  const removed = removeArchivedJob(req.params.id);
+  if (!removed) throw new ServerError('Not found', { status: 404, code: 'NOT_FOUND' });
+  res.json({ ok: true });
+}));
+
 // Promote a queued Codex job past the lane's parallel limit. GPU jobs are
 // rejected — they serialize on the single MLX runtime.
 router.post('/:id/run-now', asyncHandler(async (req, res) => {

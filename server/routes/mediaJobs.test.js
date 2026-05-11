@@ -137,4 +137,26 @@ describe('mediaJobs routes', () => {
     expect(r.status).toBe(404);
     expect(r.body.code).toBe('NOT_FOUND');
   });
+
+  it('DELETE /:id removes a terminal job from the archive', async () => {
+    jobStore.set('j-old', { id: 'j-old', kind: 'image', owner: null, status: 'failed', params: {} });
+    const r = await request(makeApp()).delete('/api/media-jobs/j-old');
+    expect(r.status).toBe(200);
+    expect(r.body.ok).toBe(true);
+    expect(stubs.removeArchivedJob).toHaveBeenCalledWith('j-old');
+  });
+
+  it('DELETE /:id 409s for queued/running jobs', async () => {
+    jobStore.set('j-live', { id: 'j-live', kind: 'image', owner: null, status: 'running', params: {} });
+    const r = await request(makeApp()).delete('/api/media-jobs/j-live');
+    expect(r.status).toBe(409);
+    expect(r.body.code).toBe('JOB_NOT_TERMINAL');
+    expect(stubs.removeArchivedJob).not.toHaveBeenCalled();
+  });
+
+  it('DELETE /:id 404s for unknown ids', async () => {
+    const r = await request(makeApp()).delete('/api/media-jobs/nope');
+    expect(r.status).toBe(404);
+    expect(r.body.code).toBe('NOT_FOUND');
+  });
 });

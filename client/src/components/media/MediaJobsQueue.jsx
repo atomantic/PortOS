@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, useCallback } from 'react';
 import { ListOrdered, Image as ImageIcon, Film, X, RefreshCw, ChevronDown, ChevronRight, Trash2, RotateCw, Zap } from 'lucide-react';
 import toast from '../ui/Toast';
-import { listMediaJobs, cancelMediaJob, cancelQueuedMediaJobs, retryMediaJob, runMediaJobNow } from '../../services/apiMediaJobs.js';
+import { listMediaJobs, cancelMediaJob, cancelQueuedMediaJobs, deleteMediaJob, retryMediaJob, runMediaJobNow } from '../../services/apiMediaJobs.js';
 
 const STATUS_BADGE = {
   queued: 'bg-port-border text-port-text-muted',
@@ -83,6 +83,12 @@ export default function MediaJobsQueue({ kind, recentLimit = 10, className = '' 
       fetchJobs();
     })
     .catch((err) => toast.error(err?.message || 'Run-now failed'));
+
+  const handleDelete = (id) => deleteMediaJob(id)
+    .then(() => {
+      setJobs((prev) => prev.filter((j) => j.id !== id));
+    })
+    .catch((err) => toast.error(err?.message || 'Delete failed'));
   const headerLabel = kind ? `${kind === 'image' ? 'Image' : 'Video'} Render Queue` : 'Render Queue';
 
   const handleClearQueued = () => {
@@ -144,7 +150,7 @@ export default function MediaJobsQueue({ kind, recentLimit = 10, className = '' 
               {showRecent ? 'Hide' : 'Show'} failed / canceled ({recent.length})
             </button>
           )}
-          {showRecent && recent.map((j) => <JobRow key={j.id} job={j} onCancel={handleCancel} onRetry={handleRetry} />)}
+          {showRecent && recent.map((j) => <JobRow key={j.id} job={j} onCancel={handleCancel} onRetry={handleRetry} onDelete={handleDelete} />)}
         </div>
       )}
     </div>
@@ -159,10 +165,13 @@ function formatCounts(live, recent, failedCount) {
   return parts.join(' • ');
 }
 
-function JobRow({ job, onCancel, onRetry, onRunNow }) {
+function JobRow({ job, onCancel, onRetry, onRunNow, onDelete }) {
   const Icon = KIND_ICON[job.kind] || Film;
   const canCancel = job.status === 'queued' || job.status === 'running';
   const canRetry = (job.status === 'failed' || job.status === 'canceled') && typeof onRetry === 'function';
+  // Delete only on terminal rows — live jobs go through Cancel.
+  const canDelete = (job.status === 'failed' || job.status === 'canceled' || job.status === 'completed')
+    && typeof onDelete === 'function';
   // Run-now is codex-only — GPU jobs serialize on the single MLX runtime.
   const isQueuedCodex = job.status === 'queued' && job.kind === 'image' && job.params?.mode === 'codex';
   const canRunNow = isQueuedCodex && typeof onRunNow === 'function';
@@ -217,6 +226,16 @@ function JobRow({ job, onCancel, onRetry, onRunNow }) {
             >
               <RotateCw className="w-3 h-3" />
               <span>Retry</span>
+            </button>
+          )}
+          {canDelete && (
+            <button
+              onClick={() => onDelete(job.id)}
+              className="flex items-center gap-1 px-2 py-1 bg-port-bg border border-port-border rounded text-xs text-gray-500 hover:text-port-error hover:border-port-error/50"
+              title="Remove this row from the history"
+              aria-label="Delete from history"
+            >
+              <Trash2 className="w-3 h-3" />
             </button>
           )}
         </div>

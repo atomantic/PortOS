@@ -11,6 +11,10 @@ export const getMediaJob = (id) => request(`/media-jobs/${encodeURIComponent(id)
 
 export const cancelMediaJob = (id) => request(`/media-jobs/${encodeURIComponent(id)}/cancel`, { method: 'POST' });
 
+// Delete a terminal (failed / canceled / completed) job from the archive.
+// Live jobs are rejected with 409 — use cancelMediaJob for those.
+export const deleteMediaJob = (id) => request(`/media-jobs/${encodeURIComponent(id)}`, { method: 'DELETE' });
+
 // Re-enqueue a terminal job (typically `failed`) with the same kind/params/
 // owner. Returns the new `{ jobId, position, status, retriedFrom }`.
 export const retryMediaJob = (id) => request(`/media-jobs/${encodeURIComponent(id)}/retry`, { method: 'POST' });
