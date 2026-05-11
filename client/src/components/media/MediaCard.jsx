@@ -42,9 +42,6 @@ export default function MediaCard({
             {isVideo ? <Film className="w-10 h-10" /> : <ImageIcon className="w-10 h-10" />}
           </div>
         )}
-        <span className="absolute bottom-1 right-1 text-[9px] px-1.5 py-0.5 bg-black/70 text-white rounded uppercase tracking-wide">
-          {isVideo ? 'Video' : 'Image'}
-        </span>
         {selectionLabel != null && (
           <div className="absolute top-1.5 left-1.5 w-5 h-5 rounded-full bg-port-accent text-white text-[10px] font-bold flex items-center justify-center">
             {selectionLabel}

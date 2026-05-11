@@ -15,3 +15,8 @@ export const cancelMediaJob = (id) => request(`/media-jobs/${encodeURIComponent(
 // Returns { canceled: <count> }. Running jobs need per-id cancelMediaJob.
 export const cancelQueuedMediaJobs = ({ kind } = {}) =>
   request(`/media-jobs/cancel-queued${kind ? `?kind=${encodeURIComponent(kind)}` : ''}`, { method: 'POST' });
+
+export const refineMediaPrompt = (data) => request('/media-jobs/refine-prompt', {
+  method: 'POST',
+  body: JSON.stringify(data),
+});

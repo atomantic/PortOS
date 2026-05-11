@@ -528,6 +528,24 @@ describe('Codex lane', () => {
     );
   });
 
+  it('lets multiple Codex jobs run concurrently (lane is not single-slot)', async () => {
+    // Both codex jobs hang indefinitely so we can observe two in-flight.
+    stubs.generateImageCodex.mockImplementation(() => new Promise(() => {}));
+
+    const a = mediaJobQueue.enqueueJob({ kind: 'image', params: { prompt: 'a', mode: 'codex' } });
+    const b = mediaJobQueue.enqueueJob({ kind: 'image', params: { prompt: 'b', mode: 'codex' } });
+
+    // Both should reach 'running' — under the old single-slot lane only one could.
+    await waitFor(() => mediaJobQueue.listJobs({ status: 'running' }).filter((j) => j.params?.mode === 'codex').length === 2);
+
+    expect(mediaJobQueue.getJob(a.jobId).status).toBe('running');
+    expect(mediaJobQueue.getJob(b.jobId).status).toBe('running');
+
+    imageGenEvents.emit('failed', { generationId: a.jobId, error: 'cleanup' });
+    imageGenEvents.emit('failed', { generationId: b.jobId, error: 'cleanup' });
+    await flush();
+  });
+
   it('queued Codex job reports position within the Codex lane (not counting GPU jobs)', async () => {
     // GPU job hangs so the GPU slot is occupied but separate from the Codex lane.
     stubs.generateVideo.mockImplementation(() => new Promise(() => {}));

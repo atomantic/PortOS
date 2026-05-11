@@ -4,6 +4,7 @@ import {
   ChevronLeft, ChevronRight, Maximize2, Minimize2,
 } from 'lucide-react';
 import toast from '../ui/Toast';
+import PromptRefineModal from './PromptRefineModal';
 
 // Mirror of CLEAN_LEVELS in server/routes/imageClean.js. If the server adds a
 // new level, drop a label here and the pill renders automatically.
@@ -31,6 +32,7 @@ export default function MediaLightbox({
   const [cleaning, setCleaning] = useState(null);
   const [fullScreen, setFullScreen] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [refineOpen, setRefineOpen] = useState(false);
   const touchStart = useRef({ x: null, y: null });
   // Read callbacks from refs so the keydown listener doesn't re-subscribe on
   // every parent render (callers pass inline arrows; the lightbox parent re-
@@ -42,6 +44,7 @@ export default function MediaLightbox({
     const onKey = (e) => {
       const cb = callbacksRef.current;
       if (e.key === 'Escape') {
+        if (refineOpen) { setRefineOpen(false); return; }
         if (fullScreen && drawerOpen) { setDrawerOpen(false); return; }
         if (fullScreen) { setFullScreen(false); return; }
         cb.onClose();
@@ -64,11 +67,11 @@ export default function MediaLightbox({
     const prev = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     return () => { window.removeEventListener('keydown', onKey); document.body.style.overflow = prev; };
-  }, [item, hasPrevious, hasNext, fullScreen, drawerOpen]);
+  }, [item, hasPrevious, hasNext, fullScreen, drawerOpen, refineOpen]);
 
   // Reset drawer when item changes (swipe forwards w/ settings open shouldn't
   // carry the open state to the next image — feels jumpy).
-  useEffect(() => { setDrawerOpen(false); }, [item?.key]);
+  useEffect(() => { setDrawerOpen(false); setRefineOpen(false); }, [item?.key]);
 
   if (!item) return null;
   const isVideo = item.kind === 'video';
@@ -209,9 +212,11 @@ export default function MediaLightbox({
             cleaning={cleaning}
             setCleaning={setCleaning}
             copy={copy}
+            onRefine={() => setRefineOpen(true)}
           />
         )}
       </div>
+      <PromptRefineModal item={item} open={refineOpen} onClose={() => setRefineOpen(false)} />
     </div>
   );
 }
@@ -219,7 +224,7 @@ export default function MediaLightbox({
 function SettingsPane({
   item, meta, isVideo, fullScreen,
   onClose, onPrimaryClose, onRemix, onSendToVideo, onContinue, onClean,
-  cleaning, setCleaning, copy,
+  cleaning, setCleaning, copy, onRefine,
 }) {
   const asideClasses = fullScreen
     ? 'absolute top-0 right-0 bottom-0 w-full sm:w-96 z-20 bg-port-card border-l border-port-border flex flex-col shadow-2xl'
@@ -301,6 +306,15 @@ function SettingsPane({
       </div>
 
       <footer className="flex flex-wrap gap-1.5 p-3 border-t border-port-border">
+        {onRefine && item.prompt && item.prompt !== '(no prompt)' && (
+          <button
+            type="button"
+            onClick={onRefine}
+            className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs bg-port-accent/80 text-white hover:opacity-90 rounded"
+          >
+            <Sparkles className="w-3.5 h-3.5" /> Refine Prompt
+          </button>
+        )}
         {!isVideo && onRemix && (
           <button
             type="button"

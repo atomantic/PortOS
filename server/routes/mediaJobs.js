@@ -10,6 +10,7 @@ import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import { listJobs, getJob, cancelJob, cancelQueuedJobs, JOB_KINDS, JOB_STATUSES } from '../services/mediaJobQueue/index.js';
+import { refineMediaPrompt } from '../services/mediaPromptRefiner.js';
 
 const router = Router();
 
@@ -17,6 +18,16 @@ const listQuerySchema = z.object({
   status: z.enum(JOB_STATUSES).optional(),
   kind: z.enum(JOB_KINDS).optional(),
   owner: z.string().max(256).optional(),
+});
+
+const refinePromptSchema = z.object({
+  kind: z.enum(JOB_KINDS),
+  prompt: z.string().min(1).max(8000),
+  negativePrompt: z.string().max(8000).optional(),
+  feedback: z.string().min(1).max(3000),
+  providerId: z.string().min(1).max(128),
+  model: z.string().max(256).optional(),
+  renderConfig: z.record(z.any()).optional(),
 });
 
 // Sanitize a job before serialization. The internal job record carries
@@ -67,6 +78,11 @@ router.get('/', asyncHandler(async (req, res) => {
     return tb - ta;
   });
   res.json([...live, ...terminal].map(sanitizeJob));
+}));
+
+router.post('/refine-prompt', asyncHandler(async (req, res) => {
+  const data = validateRequest(refinePromptSchema, req.body);
+  res.json(await refineMediaPrompt(data));
 }));
 
 router.get('/:id', asyncHandler(async (req, res) => {

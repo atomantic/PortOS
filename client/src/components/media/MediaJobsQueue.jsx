@@ -125,9 +125,16 @@ export default function MediaJobsQueue({ kind, recentLimit = 5, className = '' }
   );
 }
 
+// Codex image jobs run in their own concurrent lane (mirrors `isCodexJob` in
+// server/services/mediaJobQueue/index.js) — label them as such so the queue
+// makes it visually obvious which jobs share the local GPU and which dispatch
+// out to OpenAI in parallel.
+const isCodexJob = (j) => j?.kind === 'image' && j?.params?.mode === 'codex';
+
 function JobRow({ job, onCancel }) {
   const Icon = KIND_ICON[job.kind] || Film;
   const canCancel = job.status === 'queued' || job.status === 'running';
+  const laneLabel = isCodexJob(job) ? 'codex' : job.kind;
   return (
     <div className="bg-port-bg border border-port-border rounded p-2.5">
       <div className="flex items-center justify-between gap-3">
@@ -136,7 +143,7 @@ function JobRow({ job, onCancel }) {
           <div className="min-w-0">
             <div className="text-sm font-medium truncate">
               <span className="font-mono">{job.id.slice(0, 8)}</span>
-              <span className="text-port-text-muted"> · {job.kind}</span>
+              <span className="text-port-text-muted"> · {laneLabel}</span>
               {job.position && job.status === 'queued' && (
                 <span className="text-port-text-muted"> · #{job.position} in queue</span>
               )}

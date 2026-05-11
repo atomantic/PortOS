@@ -98,7 +98,7 @@ export const JOB_STATUSES = Object.freeze(['queued', 'running', 'completed', 'fa
 // so a new provider addition is one edit instead of three.
 function getGenModuleForJob(job) {
   if (job.kind === 'video') return import('../videoGen/local.js');
-  if (job.kind === 'image' && job.params?.mode === 'codex') return import('../imageGen/codex.js');
+  if (isCodexJob(job)) return import('../imageGen/codex.js');
   if (job.kind === 'image') return import('../imageGen/local.js');
   return Promise.resolve(null);
 }
@@ -107,13 +107,18 @@ export const mediaJobEvents = new EventEmitter();
 
 // Live state. GPU jobs: at most one in `running` at a time. Codex image jobs
 // (`kind === 'image' && params.mode === 'codex'`) run in a separate concurrent
-// lane (`codexRunning`) because they don't share the MLX runtime. `queue`
-// holds pending jobs in submission order. `archive` holds recently-finished
-// jobs (visible for ~24h via /api/media-jobs?status=completed).
+// lane that allows MAX_CODEX_CONCURRENT in flight at once — Codex is an
+// external CLI call to OpenAI's image API, so there's no local-resource
+// constraint forcing serialization. `queue` holds pending jobs in submission
+// order. `archive` holds recently-finished jobs (visible for ~24h via
+// /api/media-jobs?status=completed).
+const MAX_CODEX_CONCURRENT = Math.max(1, Number(process.env.MEDIA_CODEX_CONCURRENCY) || 4);
 const queue = [];
 let running = null;
-let codexRunning = null;
+const codexRunning = new Map(); // jobId → job
 const archive = [];
+
+export const isCodexJob = (j) => j?.kind === 'image' && j?.params?.mode === 'codex';
 
 // jobId → entry consumed by lib/sseUtils.js#{broadcastSse,attachSseClient,
 // closeJobAfterDelay}. Each entry carries `clients: []` and `lastPayload`,
@@ -128,7 +133,7 @@ let initPromise = null;
 
 function findJob(jobId) {
   if (running && running.id === jobId) return running;
-  if (codexRunning && codexRunning.id === jobId) return codexRunning;
+  if (codexRunning.has(jobId)) return codexRunning.get(jobId);
   const inQueue = queue.find((j) => j.id === jobId);
   if (inQueue) return inQueue;
   return archive.find((j) => j.id === jobId) || null;
@@ -141,7 +146,7 @@ export function getJob(jobId) {
 export function listJobs({ status, kind, owner } = {}) {
   const all = [
     ...(running ? [running] : []),
-    ...(codexRunning ? [codexRunning] : []),
+    ...codexRunning.values(),
     ...queue,
     ...archive,
   ];
@@ -176,7 +181,7 @@ async function persistImpl() {
   archive.push(...trimmedArchive);
   const live = [
     ...(running ? [running] : []),
-    ...(codexRunning ? [codexRunning] : []),
+    ...codexRunning.values(),
     ...queue,
     ...archive,
   ];
@@ -226,7 +231,6 @@ export async function initMediaJobQueue() {
     // event report accurate slots. Positions are lane-scoped: Codex image
     // jobs and GPU jobs each get their own counter so a queued Codex job
     // behind a running GPU job is restored as position 1 (not position 2).
-    const isCodexJob = (j) => j.kind === 'image' && j.params?.mode === 'codex';
     let codexCounter = 0;
     let gpuCounter = 0;
     for (const q of queue) {
@@ -285,7 +289,7 @@ function startLaneJob(job, { isCodex }) {
   job.startedAt = new Date().toISOString();
   job.position = 1;
   if (isCodex) {
-    codexRunning = job;
+    codexRunning.set(job.id, job);
   } else {
     running = job;
   }
@@ -313,7 +317,7 @@ function startLaneJob(job, { isCodex }) {
       }
     }
     if (isCodex) {
-      codexRunning = null;
+      codexRunning.delete(job.id);
     } else {
       running = null;
     }
@@ -325,15 +329,18 @@ function startLaneJob(job, { isCodex }) {
 
 async function drainLoop() {
   while (true) {
-    // Codex lane: concurrent with GPU lane.
-    if (!codexRunning) {
-      const nextCodex = queue.find((j) => j.kind === 'image' && j.params?.mode === 'codex');
-      if (nextCodex) startLaneJob(nextCodex, { isCodex: true });
+    // Codex lane: concurrent up to MAX_CODEX_CONCURRENT — Codex calls OpenAI
+    // out-of-process, so multiple jobs can run in parallel without contending
+    // for the local GPU. Start as many as the cap allows in one tick.
+    while (codexRunning.size < MAX_CODEX_CONCURRENT) {
+      const nextCodex = queue.find(isCodexJob);
+      if (!nextCodex) break;
+      startLaneJob(nextCodex, { isCodex: true });
     }
 
     // GPU lane: serialized — at most one video or local-image job at a time.
     if (!running) {
-      const nextGpu = queue.find((j) => !(j.kind === 'image' && j.params?.mode === 'codex'));
+      const nextGpu = queue.find((j) => !isCodexJob(j));
       if (nextGpu) startLaneJob(nextGpu, { isCodex: false });
     }
 
@@ -347,12 +354,11 @@ async function drainLoop() {
 // /:jobId/events would keep showing the position from its original enqueue
 // frame even after the line ahead of it cleared.
 function recomputeQueuePositions() {
-  const isCodexJob = (j) => j.kind === 'image' && j.params?.mode === 'codex';
   const codexJobs = queue.filter(isCodexJob);
   const gpuJobs = queue.filter((j) => !isCodexJob(j));
 
   codexJobs.forEach((q, i) => {
-    const newPosition = i + 1 + (codexRunning ? 1 : 0);
+    const newPosition = i + 1 + codexRunning.size;
     if (q.position !== newPosition) {
       q.position = newPosition;
       const entry = sseJobs.get(q.id);
@@ -447,9 +453,6 @@ async function runJob(job) {
   let watchdogTimer;
   function terminate(state, apply) {
     if (job.status !== 'running') return;
-    // setInterval now (was setTimeout) — using clearInterval to match the new
-    // API. (Node accepts either clearTimeout or clearInterval on the same
-    // Timeout handle, so this is purely stylistic.)
     clearInterval(watchdogTimer);
     emitter.off?.('activity', onActivity);
     emitter.off?.('progress', onActivity);
@@ -627,9 +630,9 @@ export function enqueueJob({ kind, params, owner = null }) {
     // same lane occupies slot 1, then same-lane queued jobs follow. Codex
     // jobs only count Codex ahead-of-them; GPU jobs only count GPU jobs.
     position: (() => {
-      const isCodex = kind === 'image' && params?.mode === 'codex';
-      const laneQueue = queue.filter((j) => (j.kind === 'image' && j.params?.mode === 'codex') === isCodex);
-      return laneQueue.length + (isCodex ? (codexRunning ? 1 : 0) : (running ? 1 : 0)) + 1;
+      const isCodex = isCodexJob({ kind, params });
+      const laneQueue = queue.filter((j) => isCodexJob(j) === isCodex);
+      return laneQueue.length + (isCodex ? codexRunning.size : (running ? 1 : 0)) + 1;
     })(),
   };
   queue.push(job);
@@ -701,7 +704,7 @@ export async function cancelJob(jobId) {
     return { ok: true, status: 'canceled' };
   }
   // Check both the GPU slot and the Codex slot for a running-cancel.
-  const runningJob = (running?.id === jobId ? running : null) ?? (codexRunning?.id === jobId ? codexRunning : null);
+  const runningJob = (running?.id === jobId ? running : null) ?? codexRunning.get(jobId) ?? null;
   if (runningJob) {
     // Flag the job so the dispatcher's `failed` handler treats the SIGTERM-
     // induced failure as `canceled` rather than `failed`. Without this the
@@ -785,7 +788,7 @@ function sleep(ms) {
 export function __resetForTests() {
   queue.length = 0;
   running = null;
-  codexRunning = null;
+  codexRunning.clear();
   archive.length = 0;
   sseJobs.clear();
   workerStarted = false;
