@@ -88,6 +88,25 @@ export const extractPipelineStoryboardScenes = (issueId, { from, providerOverrid
     body: JSON.stringify({ from, providerOverride, force }),
   });
 
+// Auto-fill the comicPages stage's pages[] by deterministically parsing the
+// issue's stages.comicScript.output (Marvel/DC-format markdown). Pass
+// `force: true` to replace existing hand-curated pages.
+export const extractPipelineComicPages = (issueId, { force } = {}) =>
+  request(`/pipeline/issues/${encodeURIComponent(issueId)}/stages/comicPages/extract-pages`, {
+    method: 'POST',
+    body: JSON.stringify({ force }),
+  });
+
+// Render a full comic page (multi-panel layout in one image) — the default
+// for cloud image models (Codex / Google), draft-quality for local models.
+// Server persists the returned jobId on stages.comicPages.pages[pageIndex].
+// Returns { jobId, mode, prompt, pageIndex, issue, stage }.
+export const generatePipelineComicPage = (issueId, pageIndex, opts = {}) =>
+  request(`/pipeline/issues/${encodeURIComponent(issueId)}/stages/comicPages/pages/${encodeURIComponent(pageIndex)}/render`, {
+    method: 'POST',
+    body: JSON.stringify(opts),
+  });
+
 // ---- Seasons (Phase 2 of Story Arc Planning) ----
 export const listPipelineSeasons = (seriesId) =>
   request(`/pipeline/series/${encodeURIComponent(seriesId)}/seasons`);

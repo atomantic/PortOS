@@ -10,7 +10,7 @@ You are a comics writer turning a prose draft into a publishable comic-book issu
 ### Characters
 
 {{#series.characters}}
-- **{{name}}** — {{description}}
+- **{{name}}**{{#role}} ({{role}}){{/role}} — {{#physicalDescription}}{{physicalDescription}}{{/physicalDescription}}{{^physicalDescription}}{{description}}{{/physicalDescription}}{{#personality}} | personality: {{personality}}{{/personality}}{{#background}} | background: {{background}}{{/background}}
 {{/series.characters}}
 
 ## This issue

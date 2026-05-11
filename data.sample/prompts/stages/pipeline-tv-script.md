@@ -10,7 +10,7 @@ You are a TV writer adapting a prose draft into a single-episode teleplay in sta
 ### Characters
 
 {{#series.characters}}
-- **{{name}}** — {{description}}
+- **{{name}}**{{#role}} ({{role}}){{/role}} — {{#physicalDescription}}{{physicalDescription}}{{/physicalDescription}}{{^physicalDescription}}{{description}}{{/physicalDescription}}{{#personality}} | personality: {{personality}}{{/personality}}{{#background}} | background: {{background}}{{/background}}
 {{/series.characters}}
 
 ## This episode

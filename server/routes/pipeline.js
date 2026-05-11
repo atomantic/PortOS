@@ -37,10 +37,11 @@ import * as seasonsSvc from '../services/pipeline/seasons.js';
 import * as arcPlanner from '../services/pipeline/arcPlanner.js';
 import { generateStage } from '../services/pipeline/textStages.js';
 import * as autoRunner from '../services/pipeline/autoRunner.js';
-import { enqueueVisualImage } from '../services/pipeline/visualStages.js';
+import { enqueueVisualImage, enqueueVisualComicPage } from '../services/pipeline/visualStages.js';
 import { startEpisodeVideoForIssue, ERR_NO_STORYBOARDS } from '../services/pipeline/episodeVideo.js';
 import { ASPECT_RATIOS, QUALITIES } from '../lib/creativeDirectorPresets.js';
 import { extractScenes, SOURCE_KIND } from '../lib/sceneExtractor.js';
+import { parseComicScript } from '../lib/comicScriptParser.js';
 import { BIBLE_KIND } from '../lib/storyBible.js';
 import { ARC_LIMITS, ARC_STATUSES, SEASON_STATUSES } from '../lib/storyArc.js';
 
@@ -229,6 +230,21 @@ const visualGenerateSchema = z.object({
   guidance: z.number().min(0).max(30).optional(),
 });
 
+// Full-comic-page render: same knobs as panel render minus `description` /
+// `slugline` (the prompt is built server-side from the page's panels[] so it
+// stays in sync with whatever the script-extractor produced).
+const comicPageRenderSchema = z.object({
+  negativePrompt: z.string().trim().max(2000).optional(),
+  extraStyle: z.string().trim().max(2000).optional(),
+  mode: z.enum(['local', 'codex']).optional(),
+  modelId: z.string().trim().max(64).optional(),
+  width: z.number().int().min(64).max(2048).optional(),
+  height: z.number().int().min(64).max(2048).optional(),
+  steps: z.number().int().min(1).max(150).optional(),
+  cfgScale: z.number().min(0).max(30).optional(),
+  guidance: z.number().min(0).max(30).optional(),
+});
+
 const episodeVideoSchema = z.object({
   aspectRatio: z.enum(ASPECT_RATIOS).optional(),
   quality: z.enum(QUALITIES).optional(),
@@ -245,6 +261,10 @@ const episodeVideoSchema = z.object({
 const extractScenesSchema = z.object({
   from: z.enum([SOURCE_KIND.PROSE, SOURCE_KIND.TV_SCRIPT]).optional().default(SOURCE_KIND.TV_SCRIPT),
   providerOverride: z.string().trim().max(80).optional(),
+  force: z.boolean().optional(),
+});
+
+const extractComicPagesSchema = z.object({
   force: z.boolean().optional(),
 });
 
@@ -586,6 +606,84 @@ router.post('/issues/:id/stages/storyboards/extract-scenes', asyncHandler(async 
     sceneCount: storyboardScenes.length,
     sourceKind,
   });
+}));
+
+router.post('/issues/:id/stages/comicPages/extract-pages', asyncHandler(async (req, res) => {
+  const body = validateRequest(extractComicPagesSchema, req.body ?? {});
+  const issue = await issuesSvc.getIssue(req.params.id).catch((err) => { throw mapServiceError(err); });
+
+  const source = (issue.stages?.comicScript?.output || '').trim();
+  if (!source) {
+    throw new ServerError(
+      `Cannot extract pages — issue's comicScript stage is empty`,
+      { status: 400, code: 'PIPELINE_NO_SOURCE_FOR_PAGE_EXTRACT' },
+    );
+  }
+
+  const existing = Array.isArray(issue.stages?.comicPages?.pages) ? issue.stages.comicPages.pages : [];
+  if (existing.length > 0 && !body.force) {
+    throw new ServerError(
+      `Comic pages already has ${existing.length} page${existing.length === 1 ? '' : 's'} — pass { force: true } to replace`,
+      { status: 409, code: 'PIPELINE_COMIC_PAGES_NOT_EMPTY' },
+    );
+  }
+
+  const { pages } = parseComicScript(source);
+
+  const { issue: updatedIssue, stage } = await issuesSvc.updateStage(issue.id, 'comicPages', {
+    status: pages.length ? 'ready' : 'empty',
+    pages,
+    errorMessage: '',
+  });
+
+  const panelCount = pages.reduce((n, p) => n + (p.panels?.length || 0), 0);
+  res.json({
+    issue: updatedIssue,
+    stage,
+    pageCount: pages.length,
+    panelCount,
+  });
+}));
+
+// Render a full comic page (multi-panel layout in one image) — the
+// recommended default for cloud-class image models (Codex, Google Imagen);
+// local diffusion models can render this but tend to produce draft-quality
+// pages, so the per-panel `/visual` endpoint remains the fallback.
+//
+// Persists the returned jobId on stages.comicPages.pages[pageIndex].imageJobId
+// so the UI can show the page-level render alongside the per-panel renders.
+router.post('/issues/:id/stages/comicPages/pages/:pageIndex/render', asyncHandler(async (req, res) => {
+  const pageIndex = Number(req.params.pageIndex);
+  if (!Number.isInteger(pageIndex) || pageIndex < 0) {
+    throw new ServerError('pageIndex must be a non-negative integer', {
+      status: 400, code: 'PIPELINE_COMIC_PAGE_BAD_INDEX',
+    });
+  }
+  const body = validateRequest(comicPageRenderSchema, req.body ?? {});
+
+  // Validate the page exists up front so we skip the enqueue work entirely
+  // when the index is bad. The service also throws ServerError(404) for the
+  // same case (defense in depth — any other caller still gets a clean 404),
+  // but checking here avoids loading the bible context just to error out.
+  const issue = await issuesSvc.getIssue(req.params.id).catch((err) => { throw mapServiceError(err); });
+  const pages = Array.isArray(issue.stages?.comicPages?.pages) ? [...issue.stages.comicPages.pages] : [];
+  if (!pages[pageIndex]) {
+    throw new ServerError(
+      `pageIndex ${pageIndex} out of range — comicPages has ${pages.length} page${pages.length === 1 ? '' : 's'}`,
+      { status: 404, code: 'PIPELINE_COMIC_PAGE_NOT_FOUND' },
+    );
+  }
+
+  const result = await enqueueVisualComicPage(req.params.id, { pageIndex, ...body })
+    .catch((err) => { throw mapServiceError(err); });
+
+  // Persist the jobId on the page so a reload still shows the in-flight render.
+  pages[pageIndex] = { ...pages[pageIndex], imageJobId: result.jobId, prompt: result.prompt };
+  const { issue: updatedIssue, stage } = await issuesSvc.updateStage(req.params.id, 'comicPages', {
+    status: 'edited',
+    pages,
+  });
+  res.json({ ...result, issue: updatedIssue, stage });
 }));
 
 router.post('/issues/:id/stages/:stageId/visual', asyncHandler(async (req, res) => {

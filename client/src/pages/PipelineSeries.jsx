@@ -95,7 +95,12 @@ export default function PipelineSeries() {
   };
 
   const handleAddCharacter = () => {
-    patchSeries({ characters: [...(series.characters || []), { name: '', description: '' }] });
+    patchSeries({
+      characters: [
+        ...(series.characters || []),
+        { name: '', role: '', physicalDescription: '', personality: '', background: '' },
+      ],
+    });
   };
   const handleUpdateCharacter = (i, patch) => {
     const next = [...series.characters];
@@ -130,7 +135,7 @@ export default function PipelineSeries() {
     : 'grid grid-cols-1 lg:grid-cols-[360px_minmax(0,1fr)] gap-4 lg:gap-6';
 
   return (
-    <div className="p-4 md:p-6 space-y-4">
+    <div className="space-y-4">
       <div className="flex items-center gap-3 flex-wrap">
         <Link to="/pipeline" className="inline-flex items-center gap-1 text-sm text-gray-400 hover:text-white">
           <ArrowLeft size={14} /> All Series
@@ -306,13 +311,20 @@ function BibleSidebar({ series, worlds, patchSeries, onAddCharacter, onUpdateCha
         ) : (
           <ul className="space-y-2">
             {series.characters.map((c, i) => (
-              <li key={i} className="space-y-1">
+              <li key={i} className="space-y-1 pb-2 border-b border-port-border/40 last:border-b-0 last:pb-0">
                 <div className="flex gap-2 items-center">
                   <input
-                    value={c.name}
+                    value={c.name || ''}
                     onChange={(e) => onUpdateCharacter(i, { name: e.target.value })}
                     placeholder="Name"
                     className="flex-1 px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm"
+                    maxLength={200}
+                  />
+                  <input
+                    value={c.role || ''}
+                    onChange={(e) => onUpdateCharacter(i, { role: e.target.value })}
+                    placeholder="Role"
+                    className="w-24 px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-xs"
                     maxLength={200}
                   />
                   <button
@@ -324,11 +336,28 @@ function BibleSidebar({ series, worlds, patchSeries, onAddCharacter, onUpdateCha
                     <Trash2 size={12} />
                   </button>
                 </div>
-                <input
-                  value={c.description}
-                  onChange={(e) => onUpdateCharacter(i, { description: e.target.value })}
-                  placeholder="Physical description + role"
-                  className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-xs"
+                <textarea
+                  value={c.physicalDescription || ''}
+                  onChange={(e) => onUpdateCharacter(i, { physicalDescription: e.target.value })}
+                  placeholder="Physical description — age, build, hair, eyes, wardrobe; drives image-gen"
+                  rows={3}
+                  className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-xs resize-y"
+                  maxLength={2000}
+                />
+                <textarea
+                  value={c.personality || ''}
+                  onChange={(e) => onUpdateCharacter(i, { personality: e.target.value })}
+                  placeholder="Personality — temperament, voice, quirks"
+                  rows={2}
+                  className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-xs resize-y"
+                  maxLength={2000}
+                />
+                <textarea
+                  value={c.background || ''}
+                  onChange={(e) => onUpdateCharacter(i, { background: e.target.value })}
+                  placeholder="Background — who they are, where they come from"
+                  rows={2}
+                  className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-xs resize-y"
                   maxLength={2000}
                 />
               </li>

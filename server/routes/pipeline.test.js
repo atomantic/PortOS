@@ -62,6 +62,13 @@ vi.mock('../services/pipeline/visualStages.js', () => ({
     mode: 'local',
     prompt: `style, ${opts.description}`,
   })),
+  enqueueVisualComicPage: vi.fn(async (_issueId, opts) => ({
+    jobId: `page-job-${++uuidCounter}`,
+    mode: 'local',
+    // Match the real service contract: pageNumber is 1-based (pageIndex + 1).
+    prompt: `comic-page prompt for page ${opts.pageIndex + 1}`,
+    pageIndex: opts.pageIndex,
+  })),
 }));
 
 // The episode-video handoff creates a CD project; stub it so the route test
@@ -473,6 +480,164 @@ describe('pipeline routes', () => {
     expect(r.body.sceneCount).toBe(1);
     expect(r.body.stage.scenes[0].description).toBe('fresh scene');
     spy.mockRestore();
+  });
+
+  // ---- comicPages/extract-pages ----
+
+  it('POST /issues/:id/stages/comicPages/extract-pages 400s when comicScript is empty', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    const r = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/comicPages/extract-pages`)
+      .send({});
+    expect(r.status).toBe(400);
+    expect(r.body.code || r.body.error).toMatch(/PIPELINE_NO_SOURCE_FOR_PAGE_EXTRACT|empty/i);
+  });
+
+  it('POST /issues/:id/stages/comicPages/extract-pages 409s when comicPages already has pages (no force)', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
+      stages: {
+        comicScript: { status: 'ready', output: '## Page 1\n\n### Panel 1\n\n**Description:** x\n' },
+        comicPages: { pages: [{ panels: [{ description: 'pre-existing', caption: '', dialogue: [], sfx: '' }] }] },
+      },
+    });
+    const r = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/comicPages/extract-pages`)
+      .send({});
+    expect(r.status).toBe(409);
+    expect(r.body.code || r.body.error).toMatch(/PIPELINE_COMIC_PAGES_NOT_EMPTY|force/i);
+  });
+
+  it('POST /issues/:id/stages/comicPages/extract-pages parses comicScript output and persists pages', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    const script = [
+      '## Page 1',
+      '',
+      '### Panel 1',
+      '',
+      '**Description:** A wide-shot of the foundry.',
+      '**Caption:** The city woke late.',
+      '**Dialogue:** ALICE: It\'s quiet.',
+      '**SFX:** (none)',
+      '',
+      '### Panel 2',
+      '',
+      '**Description:** Close on a hand.',
+      '**Caption:** (none)',
+      '**Dialogue:** (none)',
+      '**SFX:** TINK',
+      '',
+      '## Page 2',
+      '',
+      '### Panel 1',
+      '',
+      '**Description:** A door swings open.',
+      '**Caption:** (none)',
+      '**Dialogue:** (none)',
+      '**SFX:** (none)',
+    ].join('\n');
+    await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
+      stages: { comicScript: { status: 'ready', output: script } },
+    });
+    const r = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/comicPages/extract-pages`)
+      .send({});
+    expect(r.status).toBe(200);
+    expect(r.body.pageCount).toBe(2);
+    expect(r.body.panelCount).toBe(3);
+    expect(r.body.stage.status).toBe('ready');
+    expect(r.body.stage.pages).toHaveLength(2);
+    expect(r.body.stage.pages[0].panels).toHaveLength(2);
+    // (none) sentinels normalized to '' / [] per the parser docstring
+    expect(r.body.stage.pages[0].panels[0].sfx).toBe('');
+    expect(r.body.stage.pages[0].panels[1].caption).toBe('');
+    expect(r.body.stage.pages[0].panels[1].dialogue).toEqual([]);
+    expect(r.body.stage.pages[0].panels[0].dialogue[0]).toEqual({ character: 'ALICE', line: 'It\'s quiet.' });
+  });
+
+  it('POST /issues/:id/stages/comicPages/extract-pages with force=true replaces existing pages', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
+      stages: {
+        comicScript: { status: 'ready', output: '## Page 1\n\n### Panel 1\n\n**Description:** Fresh.\n**Caption:** (none)\n**Dialogue:** (none)\n**SFX:** (none)\n' },
+        comicPages: { pages: [{ panels: [{ description: 'stale' }] }] },
+      },
+    });
+    const r = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/comicPages/extract-pages`)
+      .send({ force: true });
+    expect(r.status).toBe(200);
+    expect(r.body.pageCount).toBe(1);
+    expect(r.body.stage.pages[0].panels[0].description).toBe('Fresh.');
+  });
+
+  // ---- comicPages/pages/:pageIndex/render ----
+
+  it('POST /issues/:id/stages/comicPages/pages/:pageIndex/render 400s for a non-integer pageIndex', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    const r = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/comicPages/pages/abc/render`)
+      .send({});
+    expect(r.status).toBe(400);
+    expect(r.body.code || r.body.error).toMatch(/PIPELINE_COMIC_PAGE_BAD_INDEX|integer/i);
+  });
+
+  it('POST /issues/:id/stages/comicPages/pages/:pageIndex/render persists imageJobId + prompt onto the target page', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
+      stages: {
+        comicPages: {
+          pages: [
+            { panels: [{ description: 'p1', caption: '', dialogue: [], sfx: '' }] },
+            { panels: [{ description: 'p2', caption: '', dialogue: [], sfx: '' }] },
+          ],
+        },
+      },
+    });
+    const r = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/comicPages/pages/1/render`)
+      .send({});
+    expect(r.status).toBe(200);
+    expect(r.body.jobId).toMatch(/^page-job-/);
+    // pageNumber is pageIndex + 1, so /pages/1/render renders the *2nd* page.
+    expect(r.body.prompt).toMatch(/page 2/);
+    expect(r.body.stage.pages[1].imageJobId).toBe(r.body.jobId);
+    expect(r.body.stage.pages[1].prompt).toBe(r.body.prompt);
+    // Other page untouched
+    expect(r.body.stage.pages[0].imageJobId).toBeUndefined();
+    expect(r.body.stage.status).toBe('edited');
+  });
+
+  it('POST /issues/:id/stages/comicPages/pages/:pageIndex/render 404s when pageIndex is out of range', async () => {
+    // The service throws on out-of-range pageIndex; the route validates the
+    // page exists up front and returns 404 instead of letting the service
+    // bubble a generic Error.
+    const visualStages = await import('../services/pipeline/visualStages.js');
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
+      stages: { comicPages: { pages: [] } },
+    });
+    const r = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/comicPages/pages/99/render`)
+      .send({});
+    expect(r.status).toBe(404);
+    expect(r.body.code || r.body.error).toMatch(/PIPELINE_COMIC_PAGE_NOT_FOUND|out of range/i);
+    // Enqueue is never reached when the page doesn't exist.
+    expect(visualStages.enqueueVisualComicPage).not.toHaveBeenCalled();
   });
 
   // -----------------------

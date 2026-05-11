@@ -76,7 +76,7 @@ export default function Pipeline() {
   };
 
   return (
-    <div className="p-4 md:p-6 max-w-5xl">
+    <div>
       <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
         <div className="flex items-center gap-3">
           <WorkflowIcon className="w-6 h-6 text-port-accent" />

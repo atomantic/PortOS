@@ -29,36 +29,72 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { imageGenEvents } from '../imageGenEvents.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
 
-// 5 minutes — built-in `image_gen` typically returns in 30–90s, but xhigh
-// reasoning + a queued model can run longer. Bigger than the SD-API timeout
-// because we have no progress signal to short-circuit early on.
-const CODEX_TIMEOUT_MS = 5 * 60 * 1000;
+// 20 minutes — built-in `image_gen` typically returns in 30–90s, but with the
+// parallel codex lane several renders share OpenAI throughput and a single
+// generation can easily push past 5 minutes (xhigh reasoning, queued model,
+// or an over-subscribed batch). Env-overridable for power users who want a
+// tighter cap. Bigger than the SD-API timeout because there's no progress
+// signal to short-circuit early on. Keep this in rough sync with
+// WATCHDOG_CODEX_MS in mediaJobQueue/index.js so the queue's watchdog and
+// the child's wall-clock cap fire on a similar budget.
+const CODEX_TIMEOUT_MS = (() => {
+  const n = Number(process.env.CODEX_TIMEOUT_MS);
+  return Number.isFinite(n) && n > 0 ? n : 20 * 60 * 1000;
+})();
 
 const DEFAULT_BIN = 'codex';
 
 const codexImagesDir = (sessionId) =>
   join(homedir(), '.codex', 'generated_images', sessionId);
 
-// Per-job clients: jobId -> { clients, status, lastPayload, ... }. Same
+// Per-job state — keyed by jobId so multiple codex renders can run in
+// parallel under the mediaJobQueue's configurable lane limit. Same client
 // shape as imageGen/local.js so attachSseClient/broadcastSse just work.
 const jobs = new Map();
-let activeProcess = null;
-let activeJob = null;
+const activeProcs = new Map();
+const activeJobs = new Map();
 
-export const getActiveJob = () => activeJob;
+// Returns the most-recently-started job — used by status surfaces and the
+// settings test-render; not safe for cancel routing under parallel use.
+export const getActiveJob = () => {
+  const entries = [...activeJobs.values()];
+  return entries.length ? entries[entries.length - 1] : null;
+};
 
 export const attachSseClient = (jobId, res) => attachSse(jobs, jobId, res);
 
-export const cancel = () => {
-  if (!activeProcess) return false;
-  const proc = activeProcess;
+const sigtermWithEscalation = (id, proc) => {
   proc.kill('SIGTERM');
   setTimeout(() => {
-    if (activeProcess === proc && proc.exitCode === null && proc.signalCode === null) {
+    if (activeProcs.get(id) === proc && proc.exitCode === null && proc.signalCode === null) {
       console.log(`⚠️ codex child didn't exit on SIGTERM — escalating to SIGKILL`);
       proc.kill('SIGKILL');
     }
   }, 5000);
+};
+
+// Cancel one specific codex render. jobId is required — with parallel codex
+// renders an "anonymous cancel" is genuinely destructive (would nuke every
+// in-flight render), so callers have to be explicit. Use `cancelAll()` for
+// the legacy "stop everything" path that the imageGen.cancel() dispatcher
+// wires up.
+export const cancel = (jobId) => {
+  if (!jobId) {
+    throw new Error("codex.cancel requires a jobId — use codex.cancelAll() to terminate every in-flight render");
+  }
+  const proc = activeProcs.get(jobId);
+  if (!proc) return false;
+  sigtermWithEscalation(jobId, proc);
+  return true;
+};
+
+// Bulk terminate every in-flight codex render. Only used by the imageGen
+// dispatcher's "cancel everything" route — the per-job mediaJobQueue path
+// always passes a specific jobId to `cancel()`.
+export const cancelAll = () => {
+  const entries = [...activeProcs.entries()];
+  if (entries.length === 0) return false;
+  for (const [id, proc] of entries) sigtermWithEscalation(id, proc);
   return true;
 };
 
@@ -87,15 +123,6 @@ export async function generateImage({ codexPath, model, prompt, width, height, n
   if (!prompt?.trim()) {
     throw new ServerError('Prompt is required', { status: 400, code: 'VALIDATION_ERROR' });
   }
-  // The mediaJobQueue serializes codex jobs in their own lane and passes
-  // its job id in via `providedJobId`, so concurrent queued calls never reach
-  // here while activeProcess is set. The 409 below is defense-in-depth for
-  // legacy direct callers (voice tool, avatar route) that still bypass the
-  // queue.
-  if (activeProcess) {
-    throw new ServerError('A Codex generation is already in progress — cancel it before starting another', { status: 409, code: 'IMAGE_GEN_BUSY' });
-  }
-
   await ensureDir(PATHS.images);
 
   const jobId = providedJobId || randomUUID();
@@ -132,7 +159,7 @@ export async function generateImage({ codexPath, model, prompt, width, height, n
 
   console.log(`🎨 Generating image [${jobId.slice(0, 8)}] codex: ${prompt.slice(0, 60)}…`);
   imageGenEvents.emit('started', { generationId: jobId, totalSteps: 1 });
-  activeJob = { ...meta, generationId: jobId, totalSteps: 1, step: 0, progress: 0, currentImage: null };
+  activeJobs.set(jobId, { ...meta, generationId: jobId, totalSteps: 1, step: 0, progress: 0, currentImage: null });
   broadcastSse(job, { type: 'status', message: 'Spawning codex…' });
 
   // generateImage returns a job descriptor synchronously; the actual codex
@@ -153,13 +180,13 @@ export async function generateImage({ codexPath, model, prompt, width, height, n
 
 async function runCodex(job, jobId, bin, args, outputPath, filename, meta) {
   const proc = spawn(bin, args, { shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
-  activeProcess = proc;
+  activeProcs.set(jobId, proc);
 
   let sessionId = null;
   let stderrTail = '';
   const STDERR_TAIL_BYTES = 32 * 1024;
   let timeoutTimer = setTimeout(() => {
-    if (activeProcess === proc) {
+    if (activeProcs.get(jobId) === proc) {
       console.log(`⏱️ codex timed out after ${CODEX_TIMEOUT_MS}ms [${jobId.slice(0, 8)}]`);
       proc.kill('SIGTERM');
       setTimeout(() => { if (proc.exitCode === null) proc.kill('SIGKILL'); }, 5000);
@@ -240,11 +267,8 @@ async function runCodex(job, jobId, bin, args, outputPath, filename, meta) {
       const sidecar = join(PATHS.images, `${jobId}.metadata.json`);
       await writeFile(sidecar, JSON.stringify({ ...meta, codexSessionId: sessionId }, null, 2)).catch(() => {});
       job.status = 'complete';
-      // Only clear if still ours — a userland cancel that started a
-      // newer job could have replaced these references while our
-      // harvest was running.
-      if (activeProcess === proc) activeProcess = null;
-      if (activeJob && activeJob.generationId === jobId) activeJob = null;
+      if (activeProcs.get(jobId) === proc) activeProcs.delete(jobId);
+      activeJobs.delete(jobId);
       console.log(`✅ Image generated [${jobId.slice(0, 8)}]: ${filename} (codex)`);
       const result = { filename, path: `/data/images/${filename}` };
       broadcastSse(job, { type: 'complete', result });
@@ -265,12 +289,9 @@ const finalizeError = (job, jobId, proc, reason) => {
   // both paths reach finalizeError. Without this guard, listeners would
   // see duplicate 'failed' events.
   if (job.status === 'error' || job.status === 'complete') return;
-  // Clear activeProcess only if it's still the proc we own. Without
-  // this, a single bad codexPath would permanently lock the provider
-  // into 409 BUSY (the 'close' handler also clears it on success path).
-  if (proc == null || activeProcess === proc) activeProcess = null;
+  if (proc == null || activeProcs.get(jobId) === proc) activeProcs.delete(jobId);
   job.status = 'error';
-  if (activeJob && activeJob.generationId === jobId) activeJob = null;
+  activeJobs.delete(jobId);
   console.log(`❌ codex image generation failed [${jobId.slice(0, 8)}]: ${reason.split('\n')[0]}`);
   broadcastSse(job, { type: 'error', error: reason });
   imageGenEvents.emit('failed', { generationId: jobId, error: reason });
