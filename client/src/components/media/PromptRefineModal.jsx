@@ -132,7 +132,7 @@ export default function PromptRefineModal({ item, open, onClose }) {
     <div
       className="fixed inset-0 z-[70] bg-black/80 flex items-center justify-center p-4"
       onClick={onClose}
-      aria-hidden="true"
+      role="presentation"
     >
       <section
         className="w-full max-w-3xl max-h-[90vh] overflow-hidden bg-port-card border border-port-border rounded-xl shadow-2xl flex flex-col"
