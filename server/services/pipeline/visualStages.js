@@ -51,9 +51,9 @@ const loadBibleContext = async (issueId) => {
 
 const enqueueImageJob = ({ prompt, world, settings, options, mode, owner, logLine }) => {
   // Merge user + world negatives — mirrors composeStyledPrompt's preset
-  // negative handling so the world's global avoids stay enforced even when
-  // the caller supplies their own additions. Deduplicated by token so a
-  // user repeating a world negative doesn't double-weight it.
+  // negative handling so the world's global negative-prompt terms stay in
+  // effect even when the caller supplies their own additions. Deduplicated
+  // by token so a user repeating a world negative doesn't double-weight it.
   const userNeg = (options.negativePrompt || '').trim();
   const worldNeg = (world?.negativePrompt || '').trim();
   const negativeTokens = [userNeg, worldNeg]
