@@ -209,7 +209,11 @@ export async function refineMediaPrompt({
     // can contain user prompts or other sensitive content; the persisted
     // run artifact at `data/runs/<runId>/output.txt` already captures the
     // full response for offline debugging.
-    console.warn(`⚠️ media-prompt-refine [${provider.id}/${selectedModel || 'default'} runId=${runId}] parse failed: ${e.message} (response size: ${(text || '').length} chars) — full output at data/runs/${runId}/output.txt`);
+    // Log the runId so operators can locate the full response — the actual
+    // path depends on the runner's configured data dir, so let the Runs UI /
+    // tooling resolve the artifact rather than printing a path that may be
+    // wrong when dataDir isn't the default.
+    console.warn(`⚠️ media-prompt-refine [${provider.id}/${selectedModel || 'default'} runId=${runId}] parse failed: ${e.message} (response size: ${(text || '').length} chars)`);
     throw new ServerError(e.message, { status: 502, code: 'PROMPT_REFINE_BAD_JSON' });
   }
 

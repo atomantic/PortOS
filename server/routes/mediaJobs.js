@@ -47,8 +47,12 @@ const refinePromptSchema = z.object({
       // JSON.stringify throws on BigInt / circular refs. z.record(z.any())
       // doesn't reject those at parse time, so wrap the size check so a
       // bad payload surfaces as VALIDATION_ERROR (400), not a 500.
+      // Measure with the same pretty-printed format the refiner inlines
+      // into the LLM prompt (`JSON.stringify(obj, null, 2)`); minified
+      // measurement would under-count, letting an indented blob slip past
+      // the cap and still inflate the prompt.
       let size;
-      try { size = Buffer.byteLength(JSON.stringify(obj), 'utf8'); }
+      try { size = Buffer.byteLength(JSON.stringify(obj, null, 2), 'utf8'); }
       catch { return false; }
       return size <= RENDER_CONFIG_MAX_BYTES;
     }, {
