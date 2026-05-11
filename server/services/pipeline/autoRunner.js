@@ -19,6 +19,7 @@ import { randomUUID } from 'crypto';
 import { broadcastSse, attachSseClient, closeJobAfterDelay } from '../../lib/sseUtils.js';
 import { generateStage } from './textStages.js';
 import { getIssue, updateIssue } from './issues.js';
+import { startEpisodeVideoForIssue, ERR_NO_STORYBOARDS } from './episodeVideo.js';
 
 // runs: Map<issueId, { runId, clients[], lastPayload, cancelRequested, startedAt }>
 const runs = new Map();
@@ -86,8 +87,37 @@ export async function startAutoRunTextStages(issueId, options = {}) {
         ]);
       }
 
-      const status = record.cancelRequested ? 'needs-review' : 'needs-review';
-      await updateIssue(issueId, { status }).catch(() => null);
+      // Optional Stage 4: episode video. Gated behind `includeVideo: true` so
+      // the default auto-run still stops before burning GPU minutes. The CD
+      // pipeline runs entirely server-side and takes minutes per scene — we
+      // fire-and-forget the kickoff and surface the cdProjectId via SSE so
+      // the UI can switch to polling the CD project for progress.
+      if (options.includeVideo && !record.cancelRequested) {
+        broadcast(issueId, { type: 'stage:start', stage: 'episodeVideo' });
+        const kickoff = await startEpisodeVideoForIssue(issueId, {
+          aspectRatio: options.aspectRatio,
+          quality: options.quality,
+          modelId: options.modelId,
+        }).catch((err) => {
+          if (err?.code === ERR_NO_STORYBOARDS) {
+            broadcast(issueId, { type: 'skip', stage: 'episodeVideo', reason: 'storyboards stage has no scenes — fill it in first' });
+            return null;
+          }
+          broadcast(issueId, { type: 'stage:error', stage: 'episodeVideo', error: (err?.message || String(err)).slice(0, 500) });
+          return null;
+        });
+        if (kickoff) {
+          broadcast(issueId, {
+            type: 'stage:complete',
+            stage: 'episodeVideo',
+            cdProjectId: kickoff.cdProjectId,
+            scenes: kickoff.scenes,
+            reused: kickoff.reused,
+          });
+        }
+      }
+
+      await updateIssue(issueId, { status: 'needs-review' }).catch(() => null);
       broadcast(issueId, {
         type: record.cancelRequested ? 'canceled' : 'complete',
         runId,
@@ -127,6 +157,33 @@ async function runStageIfNeeded(issueId, stageId, options) {
     status: stage.status,
     length: stage.output?.length || 0,
   });
+}
+
+/**
+ * Boot-time recovery for issues stuck in `status: 'running'`.
+ *
+ * The in-memory `runs` map is lost on server restart — there's no way to
+ * reattach SSE to the dead run, and the issue would remain stuck in
+ * `running` forever (the UI shows a spinner that never resolves).
+ *
+ * On boot, walk every issue and demote any `running` to `needs-review` (the
+ * same terminal state a normal-completion path lands on). Idempotent. Fires
+ * as a fire-and-forget side effect; failures are logged but never escalated
+ * — the listIssues call has its own error handling and an exception here
+ * shouldn't block server startup.
+ *
+ * Mirrors writers-room/evaluator.js#recoverStuckAnalyses.
+ */
+export async function recoverStuckAutoRuns() {
+  const { listIssues } = await import('./issues.js');
+  const all = await listIssues().catch(() => []);
+  const stuck = all.filter((i) => i.status === 'running');
+  if (stuck.length === 0) return 0;
+  for (const issue of stuck) {
+    await updateIssue(issue.id, { status: 'needs-review' }).catch(() => null);
+  }
+  console.log(`📝 pipeline: recovered ${stuck.length} stuck auto-run${stuck.length === 1 ? '' : 's'} on boot`);
+  return stuck.length;
 }
 
 // Export internals for tests.

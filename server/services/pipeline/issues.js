@@ -22,7 +22,8 @@ import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { PATHS, atomicWrite, readJSONFile, ensureDir } from '../../lib/fileUtils.js';
 
-const STATE_PATH = join(PATHS.data, 'pipeline-issues.json');
+// Lazy resolution — see series.js for context.
+const statePath = () => join(PATHS.data, 'pipeline-issues.json');
 
 export const ERR_NOT_FOUND = 'PIPELINE_ISSUE_NOT_FOUND';
 export const ERR_VALIDATION = 'PIPELINE_ISSUE_VALIDATION';
@@ -70,6 +71,14 @@ const sanitizeStage = (raw) => {
   };
 };
 
+// Episode-video render settings the user chose at kickoff time. Persisted
+// on the stage so a page reload doesn't reset them to the defaults — the
+// restart flow can render the same pickers populated with the user's
+// previous choice. The CD project itself owns the authoritative values once
+// rendering starts; these are the *requested* settings for the next start.
+const ASPECT_RATIO_VALUES = new Set(['16:9', '9:16', '1:1']);
+const QUALITY_VALUES = new Set(['draft', 'standard', 'high']);
+
 const sanitizeVisualStage = (raw) => {
   // Visual stages keep arbitrary structured artifact lists. Sanitize the
   // wrapper but pass through known shapes.
@@ -80,6 +89,8 @@ const sanitizeVisualStage = (raw) => {
     scenes: Array.isArray(raw?.scenes) ? raw.scenes.slice(0, 200) : [],
     cdProjectId: isStr(raw?.cdProjectId) && raw.cdProjectId ? raw.cdProjectId : null,
     videoPath: isStr(raw?.videoPath) && raw.videoPath ? raw.videoPath : null,
+    aspectRatio: ASPECT_RATIO_VALUES.has(raw?.aspectRatio) ? raw.aspectRatio : null,
+    quality: QUALITY_VALUES.has(raw?.quality) ? raw.quality : null,
   };
 };
 
@@ -114,13 +125,13 @@ const sanitizeIssue = (raw) => {
 
 async function readState() {
   await ensureDir(PATHS.data);
-  const raw = await readJSONFile(STATE_PATH, { issues: [] }, { logError: false });
+  const raw = await readJSONFile(statePath(), { issues: [] }, { logError: false });
   const issues = Array.isArray(raw.issues) ? raw.issues.map(sanitizeIssue).filter(Boolean) : [];
   return { issues };
 }
 
 async function writeState(state) {
-  await atomicWrite(STATE_PATH, state);
+  await atomicWrite(statePath(), state);
 }
 
 export async function listIssues({ seriesId = null } = {}) {

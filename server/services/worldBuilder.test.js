@@ -129,7 +129,9 @@ describe('worldBuilder service', () => {
       const compiled = svc.compilePrompts(w);
       // 2 landscapes + 1 character = 3 (other categories empty)
       expect(compiled).toHaveLength(3);
-      expect(compiled[0].prompt).toBe('moebius linework, scavengers reign palette, crystalline canyon, alien sun');
+      // Style prefix uses `. ` separator (composeStyledPrompt convention,
+      // shared with the scenePrompt composer in the client).
+      expect(compiled[0].prompt).toBe('moebius linework, scavengers reign palette. crystalline canyon, alien sun');
       expect(compiled[0].category).toBe('landscapes');
       expect(compiled[0].label).toBe('Crystal Canyon');
       expect(compiled[0].negativePrompt).toBe('blurry, lowres');
@@ -209,7 +211,7 @@ describe('worldBuilder service', () => {
       expect(compiled[0]).toMatchObject({
         category: 'composite_sheets',
         label: 'Canopy Symbiotes sheet',
-        prompt: 'moebius linework, scavengers reign palette, clean costume reference sheet, lineup, materials, fasteners, palette',
+        prompt: 'moebius linework, scavengers reign palette. clean costume reference sheet, lineup, materials, fasteners, palette',
       });
     });
 

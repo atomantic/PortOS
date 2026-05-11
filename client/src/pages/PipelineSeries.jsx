@@ -8,7 +8,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
 import {
-  ArrowLeft, Plus, Save, Trash2, Loader2, ChevronRight, Workflow as WorkflowIcon, Globe,
+  ArrowLeft, Plus, Save, Trash2, Loader2, ChevronRight, Workflow as WorkflowIcon, Globe, NotebookPen,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import {
@@ -135,6 +135,15 @@ export default function PipelineSeries() {
         </Link>
         <WorkflowIcon className="w-5 h-5 text-port-accent ml-2" />
         <h1 className="text-xl font-bold text-white truncate">{series.name || 'Untitled series'}</h1>
+        {series.writersRoomWorkId ? (
+          <Link
+            to={`/writers-room/works/${encodeURIComponent(series.writersRoomWorkId)}`}
+            className="ml-2 inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-gray-400 hover:text-white border border-port-border bg-port-card"
+            title="Open the Writers Room draft this series was promoted from"
+          >
+            <NotebookPen size={12} /> Writers Room
+          </Link>
+        ) : null}
         <button
           type="button"
           onClick={handleSave}

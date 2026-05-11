@@ -25,6 +25,7 @@
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { PATHS, atomicWrite, readJSONFile, ensureDir } from '../lib/fileUtils.js';
+import { composeStyledPrompt } from '../lib/composeStyledPrompt.js';
 
 const STATE_PATH = join(PATHS.data, 'world-builder.json');
 
@@ -343,8 +344,10 @@ export function compilePrompts(world, options = {}) {
   }
   const batchPerVariation = Math.max(1, Math.min(20, Number(options.batchPerVariation) || 1));
 
-  const stylePart = world.stylePrompt?.trim();
-  const negativePrompt = world.negativePrompt?.trim() || '';
+  const stylePreset = {
+    prompt: world.stylePrompt?.trim() || '',
+    negativePrompt: world.negativePrompt?.trim() || '',
+  };
   const compiled = [];
 
   if (promptMode === 'variations' || promptMode === 'all') {
@@ -356,7 +359,7 @@ export function compilePrompts(world, options = {}) {
         ? variations
         : variations.filter((v) => Array.isArray(sel) && sel.some((s) => s.toLowerCase() === v.label.toLowerCase()));
       for (const variation of filtered) {
-        const prompt = [stylePart, variation.prompt].filter(Boolean).join(', ');
+        const { prompt, negativePrompt } = composeStyledPrompt(variation.prompt, '', stylePreset);
         for (let i = 0; i < batchPerVariation; i += 1) {
           compiled.push({
             category,
@@ -377,7 +380,7 @@ export function compilePrompts(world, options = {}) {
       ? sheets
       : sheets.filter((s) => Array.isArray(sheetSelection) && sheetSelection.some((label) => label.toLowerCase() === s.label.toLowerCase()));
     for (const sheet of filteredSheets) {
-      const prompt = [stylePart, sheet.prompt].filter(Boolean).join(', ');
+      const { prompt, negativePrompt } = composeStyledPrompt(sheet.prompt, '', stylePreset);
       const category = sheet.kind === 'world_pitch_poster'
         ? 'world_pitch_posters'
         : 'composite_sheets';

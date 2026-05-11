@@ -35,6 +35,7 @@ export default function TextStagePanel({
   seedPlaceholder,
   outputPlaceholder,
   generateLabel = 'Generate',
+  extraActions = null,
 }) {
   const stage = issue.stages?.[stageId] || { status: 'empty', input: '', output: '' };
   const [draftOutput, setDraftOutput] = useState(stage.output || '');
@@ -98,6 +99,7 @@ export default function TextStagePanel({
           ) : null}
         </div>
         <div className="flex items-center gap-2">
+          {extraActions}
           <button
             type="button"
             onClick={handleSave}

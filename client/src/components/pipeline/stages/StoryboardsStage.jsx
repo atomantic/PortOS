@@ -7,15 +7,34 @@
  * is deferred — see PLAN.md "Pipeline — Deferred".
  */
 
-import { useState } from 'react';
-import { Plus, Trash2, Sparkles, Loader2 } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Plus, Trash2, Sparkles, Loader2, Wand2 } from 'lucide-react';
 import toast from '../../ui/Toast';
-import { generatePipelineVisualImage, updatePipelineIssue } from '../../../services/api';
+import {
+  generatePipelineVisualImage,
+  updatePipelineIssue,
+  extractPipelineStoryboardScenes,
+} from '../../../services/api';
 
 export default function StoryboardsStage({ issue, onStageUpdate }) {
   const stage = issue.stages?.storyboards || { status: 'empty', scenes: [] };
   const [scenes, setScenes] = useState(stage.scenes || []);
   const [savingIdx, setSavingIdx] = useState(null);
+  const [extractingFrom, setExtractingFrom] = useState(null);
+  // Holds the active arm-timer id so an unmount or a fresh arm clears the
+  // pending disarm — otherwise the 5s callback fires setExtractingFrom on
+  // an unmounted component (React warning + small leak).
+  const armTimerRef = useRef(null);
+  useEffect(() => () => {
+    if (armTimerRef.current) clearTimeout(armTimerRef.current);
+  }, []);
+
+  const tvScriptReady = !!(issue.stages?.tvScript?.output || '').trim();
+  const proseReady = !!(issue.stages?.prose?.output || '').trim();
+  // Any non-null, non-arm value means an extract POST is in flight — both
+  // buttons must lock out concurrent submits so racing requests can't
+  // overwrite each other's results (last-write-wins).
+  const extractInFlight = !!extractingFrom && !extractingFrom.startsWith('arm:');
 
   const persist = async (nextScenes) => {
     setScenes(nextScenes);
@@ -35,6 +54,44 @@ export default function StoryboardsStage({ issue, onStageUpdate }) {
     setScenes(next);
   };
 
+  // Replace-existing confirm uses a two-click arm pattern (no window.confirm
+  // per CLAUDE.md, no shared confirm-modal primitive in the pipeline yet).
+  // First click on a button when scenes is non-empty arms it (label flips to
+  // "Click again to replace"). Second click within 5s fires the extract.
+  const onExtractClick = async (from) => {
+    const armKey = `arm:${from}`;
+    const needsConfirm = scenes.length > 0;
+
+    if (needsConfirm && extractingFrom !== armKey) {
+      setExtractingFrom(armKey);
+      toast.warning(`This will replace ${scenes.length} existing scene${scenes.length === 1 ? '' : 's'}. Click again to confirm.`);
+      if (armTimerRef.current) clearTimeout(armTimerRef.current);
+      armTimerRef.current = setTimeout(() => {
+        armTimerRef.current = null;
+        setExtractingFrom((cur) => (cur === armKey ? null : cur));
+      }, 5000);
+      return;
+    }
+    // Second click landed within the arm window — cancel the pending disarm
+    // so the post-await `setExtractingFrom(null)` is the only state flip.
+    if (armTimerRef.current) {
+      clearTimeout(armTimerRef.current);
+      armTimerRef.current = null;
+    }
+
+    setExtractingFrom(from);
+    const result = await extractPipelineStoryboardScenes(issue.id, { from, force: true }).catch((err) => {
+      toast.error(err.message || 'Scene extraction failed');
+      return null;
+    });
+    setExtractingFrom(null);
+    if (!result) return;
+    const next = result.stage?.scenes || [];
+    setScenes(next);
+    onStageUpdate?.('storyboards', result.stage, result.issue);
+    toast.success(`Extracted ${result.sceneCount} scene${result.sceneCount === 1 ? '' : 's'}`);
+  };
+
   const handleGenerate = async (i) => {
     const scene = scenes[i];
     if (!scene.description?.trim()) {
@@ -44,6 +101,7 @@ export default function StoryboardsStage({ issue, onStageUpdate }) {
     setSavingIdx(i);
     const result = await generatePipelineVisualImage(issue.id, 'storyboards', {
       description: scene.description,
+      slugline: scene.slugline || '',
     }).catch((err) => {
       toast.error(err.message || 'Failed to enqueue image');
       return null;
@@ -61,16 +119,42 @@ export default function StoryboardsStage({ issue, onStageUpdate }) {
         <div>
           <h2 className="text-lg font-semibold text-white">Storyboards</h2>
           <p className="text-xs text-gray-500 mt-1">
-            One image per scene, fed by the TV script. Use sluglines to keep parity with the teleplay. Scene-video rendering through Creative Director is deferred.
+            One image per scene, fed by the TV script. Use sluglines to keep parity with the teleplay. Stitch the final episode in the Episode Video stage once the storyboards are ready.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={addScene}
-          className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-port-card border border-port-border text-white text-sm hover:border-port-accent/50"
-        >
-          <Plus size={14} /> Add scene
-        </button>
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            type="button"
+            onClick={() => onExtractClick('tvScript')}
+            disabled={!tvScriptReady || extractInFlight}
+            title={tvScriptReady ? 'Parse the teleplay sluglines into structured scenes' : 'Generate the TV script first'}
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-port-card border border-port-border text-white text-sm hover:border-port-accent/50 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {extractingFrom === 'tvScript'
+              ? <Loader2 size={14} className="animate-spin" />
+              : <Wand2 size={14} />}
+            {extractingFrom === 'arm:tvScript' ? 'Click again to replace' : 'From TV script'}
+          </button>
+          <button
+            type="button"
+            onClick={() => onExtractClick('prose')}
+            disabled={!proseReady || extractInFlight}
+            title={proseReady ? 'Break the prose into paragraph-grain scenes' : 'Generate the prose first'}
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-port-card border border-port-border text-white text-sm hover:border-port-accent/50 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {extractingFrom === 'prose'
+              ? <Loader2 size={14} className="animate-spin" />
+              : <Wand2 size={14} />}
+            {extractingFrom === 'arm:prose' ? 'Click again to replace' : 'From prose'}
+          </button>
+          <button
+            type="button"
+            onClick={addScene}
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-port-card border border-port-border text-white text-sm hover:border-port-accent/50"
+          >
+            <Plus size={14} /> Add scene
+          </button>
+        </div>
       </div>
 
       {scenes.length === 0 ? (

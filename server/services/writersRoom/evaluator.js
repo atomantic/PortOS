@@ -5,13 +5,14 @@
  */
 
 import { join } from 'path';
-import { spawn } from 'child_process';
 import { readFile, readdir, rm } from 'fs/promises';
 import { PATHS, atomicWrite, ensureDir, safeJSONParse } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { stripCodeFences } from '../../lib/aiProvider.js';
-import { getActiveProvider, getProviderById } from '../providers.js';
-import { buildPrompt, getStage } from '../promptService.js';
+import { runStagedLLM } from '../../lib/stageRunner.js';
+import { extractBible } from '../../lib/bibleExtractor.js';
+import { extractScenes, SOURCE_KIND } from '../../lib/sceneExtractor.js';
+import { BIBLE_KIND } from '../../lib/storyBible.js';
 import { ANALYSIS_KINDS } from '../../lib/writersRoomPresets.js';
 import { getWorkWithBody } from './local.js';
 import { listCharacters, mergeExtractedCharacters } from './characters.js';
@@ -45,171 +46,13 @@ const analysisDir = (workId) => {
 };
 const analysisPath = (workId, id) => join(analysisDir(workId), `${id}.json`);
 
-// ---------- LLM invocation ----------
-
-// Tier names used in stage configs (PromptManager UI). Map to the provider's
-// configured per-tier model id; an unset tier falls back to defaultModel so
-// stages with `model: 'heavy'` still run on providers that don't break out tiers.
-const TIER_TO_MODEL_KEY = {
-  default: 'defaultModel',
-  quick: 'lightModel',
-  coding: 'mediumModel',
-  heavy: 'heavyModel',
-};
-
-function isTierName(model) {
-  return typeof model === 'string' && model in TIER_TO_MODEL_KEY;
-}
-
-function resolveModel(provider, stageModel) {
-  if (!stageModel) return provider.defaultModel || null;
-  if (isTierName(stageModel)) {
-    return provider[TIER_TO_MODEL_KEY[stageModel]] || provider.defaultModel || null;
-  }
-  return stageModel;
-}
-
-// Stage config can pin a specific provider via `stage.provider`. When set we
-// must use that provider (or fail) — falling back to the active provider would
-// silently route the call through whatever's currently selected, defeating the
-// whole point of the per-stage override.
-async function resolveProviderForStage(stage) {
-  if (stage?.provider) {
-    const pinned = await getProviderById(stage.provider).catch(() => null);
-    if (pinned?.enabled) return pinned;
-    throw new ServerError(
-      `Stage provider "${stage.provider}" is not available — re-pick a provider in Prompts or the Storyboard settings`,
-      { status: 503, code: 'STAGE_PROVIDER_UNAVAILABLE' }
-    );
-  }
-  const active = await getActiveProvider().catch(() => null);
-  if (active?.enabled) return active;
-  throw new ServerError('No AI provider available', { status: 503, code: 'NO_PROVIDER' });
-}
-
-async function callApiProvider(provider, model, prompt, temperature) {
-  const headers = { 'Content-Type': 'application/json' };
-  if (provider.apiKey) headers['Authorization'] = `Bearer ${provider.apiKey}`;
-  const response = await fetch(`${provider.endpoint}/chat/completions`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({
-      model,
-      messages: [{ role: 'user', content: prompt }],
-      temperature,
-    }),
-    signal: AbortSignal.timeout(provider.timeout || 300000),
-  });
-  if (!response.ok) {
-    const text = await response.text().catch(() => '');
-    throw new Error(`AI API error: ${response.status} - ${text.slice(0, 500)}`);
-  }
-  const data = await response.json();
-  return data.choices?.[0]?.message?.content || '';
-}
-
-// Each CLI needs a different incantation to run non-interactively from a
-// server process. Get it wrong and the CLI either hangs waiting for a TTY or
-// exits with "Error: stdin is not a terminal". Mirrors `runner.js` /
-// `agentCliSpawning.js` so the writers-room path agrees with how PortOS
-// already spawns these CLIs everywhere else.
-function buildCliInvocation(provider, model) {
-  const baseArgs = [...(provider.args || [])];
-  if (provider.headlessArgs?.length) baseArgs.push(...provider.headlessArgs);
-  const effectiveModel = provider.id === 'codex' && model === 'codex-configured-default' ? null : model;
-
-  switch (provider.id) {
-    case 'gemini-cli': {
-      const args = [...baseArgs];
-      if (!args.includes('--output-format') && !args.includes('-o')) {
-        args.push('--output-format', 'text');
-      }
-      if (effectiveModel) args.push('--model', effectiveModel);
-      return { args, promptViaStdin: false };
-    }
-    case 'codex': {
-      // `codex exec -` reads the prompt from stdin. Without `exec` codex
-      // launches its REPL and bails with "Error: stdin is not a terminal".
-      const args = [...baseArgs, 'exec'];
-      if (effectiveModel) args.push('--model', effectiveModel);
-      args.push('-');
-      return { args, promptViaStdin: true };
-    }
-    case 'claude-code':
-    case 'claude-code-bedrock': {
-      const args = [...baseArgs, '-p', '-'];
-      if (effectiveModel) args.push('--model', effectiveModel);
-      return { args, promptViaStdin: true };
-    }
-    default: {
-      const args = [...baseArgs];
-      if (effectiveModel) args.push('--model', effectiveModel);
-      return { args, promptViaStdin: true };
-    }
-  }
-}
-
-function callCliProvider(provider, model, prompt) {
-  return new Promise((resolve, reject) => {
-    const { args, promptViaStdin } = buildCliInvocation(provider, model);
-    // gemini-cli takes the prompt as a flag because its non-interactive mode
-    // requires `--prompt` plus stdio: ['ignore', ...]. Every other CLI accepts
-    // the prompt on stdin, which dodges argv ceilings on long drafts.
-    if (!promptViaStdin) args.push('--prompt', prompt);
-    const child = spawn(provider.command, args, {
-      env: (() => { const e = { ...process.env, ...provider.envVars }; delete e.CLAUDECODE; return e; })(),
-      stdio: [promptViaStdin ? 'pipe' : 'ignore', 'pipe', 'pipe'],
-      shell: false,
-      windowsHide: true,
-    });
-    let output = '';
-    child.stdout.on('data', (d) => { output += d.toString(); });
-    child.stderr.on('data', (d) => { output += d.toString(); });
-    const timeoutMs = provider.timeout || 300000;
-    const killer = setTimeout(() => {
-      child.kill('SIGKILL');
-      reject(new Error(`CLI AI call timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
-    child.on('close', (code) => {
-      clearTimeout(killer);
-      if (code === 0) resolve(output);
-      // Tail the output rather than head — CLI banners/transcripts come first
-      // and the actual error/stack lives at the end. 500 chars of header was
-      // hiding real failures (e.g. provider auth errors) under a Codex banner.
-      else reject(new Error(`CLI exited with code ${code}${output ? ': ' + output.slice(-2000) : ''}`));
-    });
-    child.on('error', (err) => { clearTimeout(killer); reject(err); });
-    if (promptViaStdin) child.stdin.end(prompt);
-  });
-}
-
-async function callAI(stageName, variables, temperature) {
-  const stage = getStage(stageName);
-  const provider = await resolveProviderForStage(stage);
-  const prompt = await buildPrompt(stageName, variables);
-  let model = resolveModel(provider, stage?.model);
-  if (provider.id === 'gemini-cli' && !model) {
-    model = provider.lightModel || 'gemini-2.5-flash';
-  }
-  console.log(`📝 wr eval: ${provider.id} / ${model || '(default)'} / ${stageName}`);
-  if (provider.type === 'api') {
-    const content = await callApiProvider(provider, model, prompt, temperature);
-    return { content, model: model || null, providerId: provider.id };
-  }
-  if (provider.type === 'cli') {
-    const content = await callCliProvider(provider, model, prompt);
-    return { content, model: model || null, providerId: provider.id };
-  }
-  throw new Error(`Unsupported provider type: ${provider.type}`);
-}
-
 // ---------- response parsing ----------
 
 function extractJson(text) {
   if (!text || typeof text !== 'string') throw new Error('Empty AI response');
   let str = stripCodeFences(text);
   // Some providers prepend explanation text; pull the first balanced object/array.
-  const objMatch = str.match(/[\{\[][\s\S]*[\}\]]/);
+  const objMatch = str.match(/[{[][\s\S]*[\]}]/);
   if (objMatch) str = objMatch[0];
   return JSON.parse(str);
 }
@@ -232,82 +75,17 @@ const SHAPERS = {
       suggestions: Array.isArray(parsed.suggestions) ? parsed.suggestions.filter((s) => s && typeof s === 'object') : [],
     };
   },
-  characters: (raw) => {
-    const parsed = extractJson(raw);
-    const list = Array.isArray(parsed.characters) ? parsed.characters : [];
-    return {
-      characters: list
-        .filter((c) => c && typeof c === 'object' && typeof c.name === 'string' && c.name.trim())
-        .map((c) => ({
-          name: c.name.trim(),
-          aliases: Array.isArray(c.aliases) ? c.aliases.filter((a) => typeof a === 'string') : [],
-          role: typeof c.role === 'string' ? c.role : '',
-          physicalDescription: typeof c.physicalDescription === 'string' ? c.physicalDescription : '',
-          personality: typeof c.personality === 'string' ? c.personality : '',
-          background: typeof c.background === 'string' ? c.background : '',
-          firstAppearance: typeof c.firstAppearance === 'string' ? c.firstAppearance : null,
-          evidence: Array.isArray(c.evidence) ? c.evidence.filter((e) => typeof e === 'string') : [],
-          missingFromProse: Array.isArray(c.missingFromProse) ? c.missingFromProse.filter((m) => typeof m === 'string') : [],
-        })),
-    };
-  },
-  script: (raw) => {
-    const parsed = extractJson(raw);
-    const scenes = Array.isArray(parsed.scenes) ? parsed.scenes : [];
-    return {
-      title: typeof parsed.title === 'string' ? parsed.title : null,
-      logline: typeof parsed.logline === 'string' ? parsed.logline : null,
-      scenes: scenes.map((s, i) => ({
-        id: typeof s.id === 'string' ? s.id : `scene-${String(i + 1).padStart(2, '0')}`,
-        heading: typeof s.heading === 'string' ? s.heading : `Scene ${i + 1}`,
-        slugline: typeof s.slugline === 'string' ? s.slugline : null,
-        summary: typeof s.summary === 'string' ? s.summary : '',
-        characters: Array.isArray(s.characters) ? s.characters.filter((c) => typeof c === 'string') : [],
-        action: typeof s.action === 'string' ? s.action : '',
-        dialogue: Array.isArray(s.dialogue) ? s.dialogue.filter((d) => d && typeof d === 'object') : [],
-        visualPrompt: typeof s.visualPrompt === 'string' ? s.visualPrompt : '',
-        sourceSegmentIds: Array.isArray(s.sourceSegmentIds) ? s.sourceSegmentIds.filter((id) => typeof id === 'string') : [],
-      })),
-    };
-  },
-  settings: (raw) => {
-    const parsed = extractJson(raw);
-    const list = Array.isArray(parsed.settings) ? parsed.settings : [];
-    return {
-      settings: list
-        .filter((s) => s && typeof s === 'object' && (typeof s.slugline === 'string' || typeof s.name === 'string'))
-        .map((s) => ({
-          slugline: typeof s.slugline === 'string' ? s.slugline.trim() : '',
-          name: typeof s.name === 'string' ? s.name.trim() : '',
-          description: typeof s.description === 'string' ? s.description : '',
-          palette: typeof s.palette === 'string' ? s.palette : '',
-          era: typeof s.era === 'string' ? s.era : '',
-          weather: typeof s.weather === 'string' ? s.weather : '',
-          recurringDetails: typeof s.recurringDetails === 'string' ? s.recurringDetails : '',
-          firstAppearance: typeof s.firstAppearance === 'string' ? s.firstAppearance : null,
-          evidence: Array.isArray(s.evidence) ? s.evidence.filter((e) => typeof e === 'string') : [],
-          missingFromProse: Array.isArray(s.missingFromProse) ? s.missingFromProse.filter((m) => typeof m === 'string') : [],
-        })),
-    };
-  },
-  objects: (raw) => {
-    const parsed = extractJson(raw);
-    const list = Array.isArray(parsed.objects) ? parsed.objects : [];
-    return {
-      objects: list
-        .filter((o) => o && typeof o === 'object' && typeof o.name === 'string' && o.name.trim())
-        .map((o) => ({
-          name: o.name.trim(),
-          aliases: Array.isArray(o.aliases) ? o.aliases.filter((a) => typeof a === 'string') : [],
-          description: typeof o.description === 'string' ? o.description : '',
-          significance: typeof o.significance === 'string' ? o.significance : '',
-          firstAppearance: typeof o.firstAppearance === 'string' ? o.firstAppearance : null,
-          evidence: Array.isArray(o.evidence) ? o.evidence.filter((e) => typeof e === 'string') : [],
-          missingFromProse: Array.isArray(o.missingFromProse) ? o.missingFromProse.filter((m) => typeof m === 'string') : [],
-        })),
-    };
-  },
+  // characters / settings / objects route through `extractBible`,
+  // and `script` routes through `extractScenes` — no per-kind shaper here.
 };
+
+const BIBLE_ANALYSIS = Object.freeze({
+  characters: { kind: BIBLE_KIND.CHARACTER, list: listCharacters, merge: mergeExtractedCharacters },
+  settings:   { kind: BIBLE_KIND.SETTING,   list: listSettings,   merge: mergeExtractedSettings },
+  objects:    { kind: BIBLE_KIND.OBJECT,    list: listObjects,    merge: mergeExtractedObjects },
+});
+
+const isBibleKind = (k) => k in BIBLE_ANALYSIS;
 
 // ---------- storage ----------
 
@@ -501,76 +279,73 @@ export async function runAnalysis(workId, { kind } = {}) {
   // back in one round-trip. A failure mid-call is persisted as a `failed`
   // snapshot so partial work never silently disappears.
   try {
-    const variables = {
-      work: {
-        id: manifest.id,
-        title: manifest.title,
-        kind: manifest.kind,
-        status: manifest.status,
-        wordCount: draft?.wordCount || 0,
-      },
-      draftBody: body,
-      returnsJson,
+    const workCtx = {
+      id: manifest.id,
+      title: manifest.title,
+      kind: manifest.kind,
+      status: manifest.status,
+      wordCount: draft?.wordCount || 0,
     };
-    // Strip down each bible to the fields the prompts care about — no ids,
-    // timestamps, or source markers. Same shape goes to both the bible's own
-    // re-extraction (preserve-user-edits) AND to script (Adapt) so it can
-    // cite canonical names + descriptions in visualPrompt fields.
-    const trimCharacter = (c) => ({
-      name: c.name,
-      aliases: c.aliases,
-      role: c.role,
-      physicalDescription: c.physicalDescription,
-      personality: c.personality,
-      background: c.background,
-    });
-    const trimSetting = (s) => ({
-      name: s.name,
-      slugline: s.slugline,
-      description: s.description,
-      palette: s.palette,
-      era: s.era,
-      weather: s.weather,
-      recurringDetails: s.recurringDetails,
-    });
-    // For 'script' both bibles load — fire them in parallel so the script
-    // pipeline doesn't pay two sequential disk reads. For 'characters' or
-    // 'settings' alone Promise.all is degenerate (one element) but the shape
-    // keeps the call site uniform.
-    const trimObject = (o) => ({
-      name: o.name,
-      aliases: o.aliases,
-      description: o.description,
-      significance: o.significance,
-    });
-    const [existingChars, existingSets, existingObjs] = await Promise.all([
-      (kind === 'characters' || kind === 'script') ? listCharacters(workId) : null,
-      (kind === 'settings' || kind === 'script') ? listSettings(workId) : null,
-      (kind === 'objects' || kind === 'script') ? listObjects(workId) : null,
-    ]);
-    if (existingChars) variables.existingCharactersJson = JSON.stringify(existingChars.map(trimCharacter));
-    if (existingSets) variables.existingSettingsJson = JSON.stringify(existingSets.map(trimSetting));
-    if (existingObjs) variables.existingObjectsJson = JSON.stringify(existingObjs.map(trimObject));
 
-    const temperature = kind === 'format' ? 0.2 : 0.4;
-    const { content, model: usedModel, providerId: usedProvider } = await callAI(stage, variables, temperature);
-    const result = SHAPERS[kind](content);
-    let mergedProfiles = null;
-    if (kind === 'characters') {
-      mergedProfiles = await mergeExtractedCharacters(workId, result.characters || []);
-    } else if (kind === 'settings') {
-      mergedProfiles = await mergeExtractedSettings(workId, result.settings || []);
-    } else if (kind === 'objects') {
-      mergedProfiles = await mergeExtractedObjects(workId, result.objects || []);
+    if (isBibleKind(kind)) {
+      const { kind: bibleKind, list, merge } = BIBLE_ANALYSIS[kind];
+      const existing = await list(workId);
+      const { extracted, runId, providerId, model } = await extractBible({
+        kind: bibleKind,
+        corpus: body,
+        existing,
+        context: { work: workCtx, returnsJson },
+        source: `writers-room-${kind}`,
+      });
+      const mergedProfiles = await merge(workId, extracted);
+      const finished = {
+        ...baseSnapshot,
+        status: 'succeeded',
+        providerId, model,
+        result: { [kind]: extracted, mergedProfiles },
+        rawResponse: JSON.stringify({ [kind]: extracted }),
+        runId,
+        completedAt: nowIso(),
+      };
+      await saveAnalysis(workId, finished);
+      return finished;
     }
+
+    if (kind === 'script') {
+      const [characters, settings, objects] = await Promise.all([
+        listCharacters(workId), listSettings(workId), listObjects(workId),
+      ]);
+      const { extracted, runId, providerId, model } = await extractScenes({
+        source: body,
+        sourceKind: SOURCE_KIND.PROSE,
+        characters, settings, objects,
+        work: workCtx,
+        tag: 'writers-room-script',
+      });
+      const finished = {
+        ...baseSnapshot,
+        status: 'succeeded',
+        providerId, model,
+        result: extracted,
+        rawResponse: JSON.stringify(extracted),
+        runId,
+        completedAt: nowIso(),
+      };
+      await saveAnalysis(workId, finished);
+      return finished;
+    }
+
+    const variables = { work: workCtx, draftBody: body, returnsJson };
+    const { content, model: usedModel, providerId: usedProvider } = await runStagedLLM(stage, variables, {
+      source: `writers-room-${kind}`,
+    });
+    const result = SHAPERS[kind](content);
     const finished = {
       ...baseSnapshot,
       status: 'succeeded',
       providerId: usedProvider,
       model: usedModel,
-      result: mergedProfiles
-        ? { ...result, mergedProfiles }
-        : result,
+      result,
       rawResponse: content,
       completedAt: nowIso(),
     };

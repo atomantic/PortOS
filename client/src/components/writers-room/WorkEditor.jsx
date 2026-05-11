@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import {
   Save,
   GitCommit,
@@ -19,6 +19,8 @@ import {
   Loader2,
   BookOpen,
   Pencil,
+  Film,
+  ExternalLink,
 } from 'lucide-react';
 import toast from '../ui/Toast';
 import Drawer from '../Drawer';
@@ -33,6 +35,7 @@ import {
   listWritersRoomCharacters,
   listWritersRoomSettings,
   listWritersRoomObjects,
+  promoteWritersRoomWorkToPipeline,
 } from '../../services/apiWritersRoom';
 import { STATUS_LABELS } from './labels';
 import { countWords } from '../../utils/formatters';
@@ -86,8 +89,10 @@ function readSidebarTab() {
 }
 
 export default function WorkEditor({ work, onChange, onToggleExercise, exerciseOpen }) {
+  const navigate = useNavigate();
   const [body, setBody] = useState(work.activeDraftBody || '');
   const [title, setTitle] = useState(work.title);
+  const [promoting, setPromoting] = useState(false);
   // Optimistic mirror of work.status so the dropdown changes show immediately
   // before the PATCH round-trip resolves. Re-synced from the prop when it changes.
   const [status, setStatus] = useState(work.status);
@@ -376,6 +381,31 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
     if (!updated || !mountedRef.current) return;
     onChange?.({ ...updated, activeDraftBody: body });
     toast.success(`Created ${updated.drafts[updated.drafts.length - 1].label}`);
+  };
+
+  const handlePromoteToPipeline = async () => {
+    if (dirty) {
+      toast('Save before promoting', { icon: '⚠️' });
+      return;
+    }
+    setPromoting(true);
+    const result = await promoteWritersRoomWorkToPipeline(work.id).catch((err) => {
+      if (mountedRef.current) toast.error(err.message || 'Promote failed');
+      return null;
+    });
+    if (mountedRef.current) setPromoting(false);
+    if (!result) return;
+    toast.success(result.reused ? 'Opening existing pipeline issue' : 'Pipeline series + issue created');
+    // Optimistic update so the menu flips to "Open in pipeline" instantly.
+    // The server route returns the full manifest (including the link fields)
+    // on the next GET, so a return-visit to this work will also see the link.
+    onChange?.({ ...work, pipelineSeriesId: result.series.id, pipelineIssueId: result.issue.id });
+    navigate(`/pipeline/issues/${encodeURIComponent(result.issue.id)}/prose`);
+  };
+
+  const handleOpenInPipeline = () => {
+    if (!work.pipelineIssueId) return;
+    navigate(`/pipeline/issues/${encodeURIComponent(work.pipelineIssueId)}/prose`);
   };
 
   const commitTitle = async () => {
@@ -695,6 +725,11 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
               <MenuSection label="Open">
                 <MenuItem icon={Clock} label="Versions" onClick={closeOverflowAnd(() => setDrawer(DRAWER.VERSIONS))} />
                 <MenuItem icon={History} label="Analysis history" onClick={closeOverflowAnd(() => setDrawer(DRAWER.HISTORY))} />
+                {work.pipelineSeriesId ? (
+                  <MenuItem icon={ExternalLink} label="Open in pipeline" onClick={closeOverflowAnd(handleOpenInPipeline)} />
+                ) : (
+                  <MenuItem icon={Film} label={promoting ? 'Promoting…' : 'Promote to pipeline'} running={promoting} onClick={closeOverflowAnd(handlePromoteToPipeline)} />
+                )}
               </MenuSection>
               <MenuSection label="View">
                 <MenuItem
