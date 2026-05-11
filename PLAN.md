@@ -143,6 +143,127 @@ Items below are ordered by dependency: each later item builds on earlier ones. L
 
 ---
 
+## Pipeline — Story Arc Planning + Series Page Redesign
+
+Today the PipelineSeries page (`client/src/pages/PipelineSeries.jsx`) is constrained to `max-w-5xl` and presents a single vertical scroll: bible metadata → characters → "Issues / Episodes" list with a one-line "New issue" input at the bottom. On a wide screen most of the viewport is wasted whitespace, and the only way to seed an issue is "type a title, click New, repeat." For a 24-episode show with a 3-season arc this is the wrong primitive — users want to plan the *whole arc* first, decide on the season/volume count, and only then drill into per-episode work.
+
+This initiative adds a structural Arc → Season(s) → Issue hierarchy and the LLM scaffolding to plan top-down. Supersedes the prior "Series-arc grouping" backlog item. Ship in phases so each phase is independently reviewable.
+
+### Phase 1 — Series page layout redesign (no schema change)
+
+The bible/style/world panels move to a left sidebar; the right side becomes the structural canvas. Drop the `max-w-5xl` cap; use a responsive 2-column grid (`grid-cols-1 lg:grid-cols-[360px_minmax(0,1fr)]`) so the page actually uses the viewport at wider widths.
+
+- Left sidebar (sticky, scroll-internal): NAME / TARGET FORMAT / LOGLINE / TARGET ISSUE COUNT / PREMISE / STYLE NOTES / LINKED WORLD / CHARACTERS. This is the "bible" — high-density inputs the user references but doesn't edit constantly.
+- Right canvas: Today this is just "Issues / Episodes" — Phase 2 fills it with the Arc tree. For Phase 1 it gets a card-grid view of existing issues (each card showing number / title / status / last-updated / a thumbnail of the most-recent storyboards image) instead of the current text list.
+- Collapsible left sidebar (so the canvas can expand to full width when the user is deep in episode work). Persists in localStorage like the existing Layout sidebar collapse.
+- Mobile: stays single-column, sidebar reflows above the canvas.
+
+Files: `client/src/pages/PipelineSeries.jsx`. No new server work.
+
+### Phase 2 — Arc + Season schema (Series → Arc → Season → Issue)
+
+Three new shapes; both stored on the existing `data/pipeline-series.json` (no new files — the arc is part of the series bible).
+
+```js
+// series.arc — overall multi-season story spine, optional
+{
+  logline: string,        // one-sentence arc pitch
+  summary: string,        // ~500 words: act structure, season-by-season turning points
+  themes: string[],
+  protagonistArc: string, // character growth across all seasons
+  status: 'draft' | 'verified',
+}
+// series.seasons[] — ordered list of seasons/volumes
+{
+  id: 'sea-<uuid>',
+  number: 1,
+  title: string,
+  logline: string,
+  synopsis: string,       // ~200 words
+  episodeCountTarget: 8,  // user-set target; actual issues may differ
+  themes: string[],
+  endingHook: string,     // the line/image that pulls into season N+1
+  status: 'draft' | 'verified' | 'in-production' | 'complete',
+}
+// issue.seasonId (existing issue schema gains an optional pointer)
+{
+  ...existing fields,
+  seasonId: 'sea-...' | null,  // null for ungrouped issues (back-compat)
+  arcPosition: number | null,  // ordinal within the season — drives auto-sort
+}
+```
+
+- New `seasons` field on the series sanitizer with `sanitizeSeasonList()` in a new `server/lib/storyArc.js` (mirrors `storyBible.js` — canonical shape + sanitization + merge helpers).
+- Issue sanitizer gains `seasonId` + `arcPosition` (back-compat: existing un-grouped issues keep `seasonId: null`).
+- Service helpers: `listSeasons(seriesId)`, `createSeason(seriesId, input)`, `updateSeason(seriesId, seasonId, patch)`, `deleteSeason(seriesId, seasonId, { reassignTo: seasonId | null })` (reassigns child issues to a sibling or to null on delete).
+- No DB migration needed — JSON files take additive fields cleanly.
+
+Files: `server/lib/storyArc.js` (new), `server/services/pipeline/series.js`, `server/services/pipeline/issues.js`, `server/services/pipeline/seasons.js` (new), `server/routes/pipeline.js`. Route additions: `POST/PATCH/DELETE /api/pipeline/series/:id/seasons[/:seasonId]`. Tests follow the same pattern as `seriesService.test.js`.
+
+### Phase 3 — LLM-assisted arc generation (new stage prompts)
+
+Three new staged-LLM prompts in `data.sample/prompts/stages/`:
+
+- **`pipeline-arc-overview`** (returns JSON `{ logline, summary, themes, protagonistArc, seasonOutlines: [{ number, title, logline, endingHook, episodeCountTarget }] }`). Inputs: series bible (name, logline, premise, characters, target format, target issue count). The model proposes a top-level arc + season breakdown. Default `model: 'heavy'` since this is the most expensive single call in the pipeline (reasoning over the full series scope).
+- **`pipeline-season-episodes`** (returns JSON `{ episodes: [{ number, title, logline, synopsis, primaryCharacters, arcRole }] }`). Inputs: series bible + chosen season's outline + prior seasons' synopses (for continuity context). Generates the per-episode breakdown for one season. Called per-season so a user can revise season N's outline without re-generating earlier seasons.
+- **`pipeline-arc-verify`** (returns JSON `{ issues: [{ severity, location, problem, suggestion }] }`). Inputs: full arc + all seasons + all issues. Sanity-checks for: character arcs that contradict across seasons, dropped subplots, episode-count mismatch vs. arc weight, unresolved hooks at the series finale.
+
+Reuses the shared `stageRunner.js` so each call is replayable from `/runs`. All three stages register in `stage-config.json` and get the `_partials` treatment for the bible-deference block (same as `pipeline-extract-scenes.md`).
+
+Service: `server/services/pipeline/arcPlanner.js` exposing `generateArcOverview(seriesId)`, `generateSeasonEpisodes(seriesId, seasonId, { force })`, `verifyArc(seriesId)`. Each returns `{ result, runId, providerId, model }` and the caller persists via `updateSeries`/`createSeason`/`createIssue` chains.
+
+Routes: `POST /api/pipeline/series/:id/arc/generate`, `POST /api/pipeline/series/:id/seasons/:seasonId/episodes/generate`, `POST /api/pipeline/series/:id/arc/verify`.
+
+### Phase 4 — Arc canvas UI (right-side replacement)
+
+The Phase 1 card-grid evolves into a vertical Arc → Season → Episode tree:
+
+```
+┌─ Arc ──────────────────────────────────────┐
+│ Logline: "..."                             │
+│ Themes: [betrayal] [legacy]                │
+│ [Edit arc]  [Verify arc]  [Regenerate]     │
+└────────────────────────────────────────────┘
+
+▶ Season 1 — "The Choir Awakens"           [12 episodes]
+   Episode 1 — "First Light"               [draft]
+   Episode 2 — "Hollow Bones"              [ready]
+   ...
+   [+ Add episode]  [Generate episodes (LLM)]
+
+▶ Season 2 — "Diaspora"                    [8 episodes]
+   ...
+
+[+ Add season]  [Generate arc (LLM)]
+```
+
+- Each season collapsible (`<details>` semantics) — collapsed seasons show season # + title + episode count badge; expanded seasons show the issue rows + the "generate season" action.
+- "Generate arc" runs `pipeline-arc-overview` and seeds `series.arc` + `series.seasons[]` after a preview/confirm modal (same two-click-arm pattern as the storyboards extractor).
+- "Generate episodes" on a season runs `pipeline-season-episodes` and creates the issue records with `seasonId` set + `arcPosition` numbered sequentially.
+- "Verify arc" surfaces findings inline as a sidebar list with severity badges, click-through to the offending season/episode.
+- Drag-and-drop to reorder episodes within a season + move between seasons (updates `arcPosition` + `seasonId`). Deferrable to Phase 4b.
+
+Files: `client/src/components/pipeline/ArcCanvas.jsx` (new), per-season `<SeasonRow>` + per-issue `<IssueRow>` subcomponents. Replaces today's flat "Issues / Episodes" list at the bottom of PipelineSeries.
+
+### Phase 5 — Cross-season continuity hooks (deferrable)
+
+Once seasons exist, the per-episode prose/script stages can inject "previous episode arc state" + "where we are in this season" into the prompt context automatically — the LLM stops re-inventing where the characters left off. New variable on issue prompts: `seasonContext` = the season's synopsis + the last 1–3 episodes' loglines. Plumbed through the existing `series` / `issue` prompt context object in textStages.js. Small once Phases 2–4 land; the work is mostly prompt-template edits.
+
+### Out of scope / explicitly not doing
+
+- Per-season independent media collections (one folder per season). The collection model is already per-series; per-season splits add UX complexity without clear value.
+- Multi-series arcs (a season that spans two related series). Single-series scope keeps the data model flat and the LLM context bounded.
+- Auto-promoting an existing flat list of issues into seasons. Users opt in via the "Generate arc" action; existing issues stay un-grouped (`seasonId: null`) until the user moves them.
+
+### Suggested PR sequence
+
+1. **Phase 1** standalone — pure UI refactor, no schema change. Easy review.
+2. **Phase 2** standalone — schema + service + route + tests. No UI yet.
+3. **Phase 3 + Phase 4 together** — the LLM prompts only have user value once the canvas surfaces them.
+4. **Phase 5** standalone — small prompt-context follow-up.
+
+---
+
 ## Pipeline — Deferred
 
 Skeleton landed in `server/services/pipeline/` + `client/src/pages/Pipeline*.jsx`. The core text-to-video creative pipeline is now wired end-to-end (idea → prose → scripts → storyboards → episode video via CD handoff). Items below were scoped out and live here so they don't evaporate:
@@ -154,7 +275,7 @@ Skeleton landed in `server/services/pipeline/` + `client/src/pages/Pipeline*.jsx
 - [x] **Episode-video aspectRatio / quality picker on the UI** — shipped. Inline `aspectRatio` + `quality` dropdowns on EpisodeVideoStage's pre-kickoff toolbar, plumbed through to the existing route. modelId picker deferred until the video model registry exposes a flagged-stable list for the UI to read.
 - [x] **Extract `ScenePreview` + shared CD status helpers** — shipped. New `client/src/components/creative-director/ScenePreview.jsx` owns the `<video controls poster>` + onError-missing-media + Retry + cache-bust idiom; `sceneStatus.js` exports `SCENE_STATUS`, `SCENE_STATUS_BADGE`, `SCENE_STATUS_LABEL`, `getSceneStatusBadge()`, `PROJECT_STATUS_LABEL`. SegmentsTab + EpisodeVideoStage both consume the shared components — EpisodeVideoStage's final-video render now has the missing-onError fallback for free (was hand-rolled and missing it). Side fix: the slim `?slim=1` CD projection was returning `scene.id` but CD scenes are keyed by `sceneId`; corrected the projection + its test fixture.
 - [x] **Slim `GET /creative-director/:id?slim=1` endpoint** — shipped. Drops the unbounded `runs[]` history + full treatment text; returns just `{ id, status, updatedAt, finalVideoId, failureReason, treatment: { scenes: [{ id, order, status }] } }`. EpisodeVideoStage's 4s poll now passes `{ slim: true }` to the client API. 2 new route tests.
-- [ ] **Series-arc grouping (Series → Arc → Issue).** MVP collapses arc into series; some narratives want a 3-issue arc that nests inside the series and shares its own arc-bible. Add an `arc` field on issues or a parallel `data/pipeline-arcs.json`.
+- [ ] **Series-arc grouping (Series → Arc → Issue).** Superseded by the "Pipeline — Story Arc Planning + Series Page Redesign" section below. Drop this entry once that initiative ships its Phase 1.
 - [ ] **Comic-book PDF export.** Once `stages.comicPages` carries enough panel data + rendered images, export a print-ready PDF.
 - [ ] **Voice-controlled stage advancement.** "Next stage", "rerun comic script" via the existing voice agent. Register pipeline stage navigation actions in `server/services/voice/tools.js`.
 - [ ] **Recent-issues dynamic children under the Pipeline sidebar entry.** Currently Pipeline is a single sidebar link; could mirror Apps' `dynamic: 'apps'` pattern in `client/src/components/Layout.jsx`. **Wrinkle:** Apps is a TOP-LEVEL nav entry; Pipeline lives 2 levels deep under Create. The existing `renderNavItem`'s child render is flat — it emits a NavLink per child and ignores `child.children`. Needs either (a) recursive child render (cleaner, but bigger UX questions: indentation/collapsibility/auto-expand-depth) or (b) promoting Pipeline to a top-level nav entry (changes IA; might be the right call once it has its own subnav anyway). Attempted in this PR, backed out as out-of-scope.
