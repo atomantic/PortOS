@@ -56,21 +56,25 @@ module.exports = {
         ...(pgMode === 'file' ? { MEMORY_BACKEND: 'file' } : {}),
         PATH: process.env.PATH // Inherit PATH for git/node access in child processes
       },
-      watch: ['server'],
-      watch_delay: 60000, // 1 min debounce before restarting on file changes
-      // Defense in depth — `watch: ['server']` already scopes the watcher to
-      // the server/ subtree, so writes to data/ at repo root don't fire it.
-      // Belt + suspenders: explicitly ignore runtime data, logs, and the
-      // tmpdir-style scratch paths a render might (mis)route into the tree.
-      ignore_watch: [
-        '**/node_modules',
-        '**/*.test.js',
-        '**/*package-lock*',
-        '**/data/**',
-        '**/logs/**',
-        '**/.cache/**',
-        '**/portos-stepwise-*/**',
-      ],
+      // Filewatch is OFF for portos-server. The image gen path (codex / local
+      // MLX / external) writes lots of files: the rendered PNG, a sidecar
+      // metadata JSON, atomic-renamed media-jobs.json, plus per-job temp
+      // scratch. Even with `watch: ['server']` + a broad ignore_watch list,
+      // chokidar occasionally races on the atomic rename target (write to
+      // tmp → rename onto final path) and fires a change event for a path
+      // that the ignore globs *should* have excluded. The symptom in the
+      // wild is "SIGINT received" 5–30s after an image render completes,
+      // killing in-flight jobs.
+      //
+      // Code edits are picked up by a manual `pm2 restart ecosystem.config.cjs`
+      // — that's the documented workflow anyway (pm2 restart doesn't rebuild
+      // the client; you need npm run build / npm start). So losing the
+      // auto-restart-on-save behavior costs nothing in practice.
+      //
+      // To re-enable for ad-hoc dev work: flip this to `watch: ['server']`
+      // and add `'**/data/**'` (plus `'**/node_modules'`, `'**/logs/**'`,
+      // `'**/.cache/**'`, `'**/portos-stepwise-*/**'`) to `ignore_watch`.
+      watch: false,
       max_memory_restart: '2G'
     },
     {
