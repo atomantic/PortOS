@@ -143,7 +143,7 @@ export default function PipelineIssue() {
   const StageComponent = STAGE_COMPONENTS[stageId];
 
   return (
-    <div className="flex flex-col h-full max-w-6xl">
+    <div className="flex flex-col h-full">
       {/* Header */}
       <div className="p-4 md:p-6 border-b border-port-border space-y-3">
         <div className="flex items-center gap-3 flex-wrap text-sm">

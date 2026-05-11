@@ -670,6 +670,21 @@ html[data-port-theme-mode="day"] [class~="hover:text-green-400"]:hover { color: 
 html[data-port-theme-mode="day"] [class~="hover:text-emerald-400"]:hover { color: rgb(4 120 87) !important; }
 html[data-port-theme-mode="day"] [class~="hover:text-teal-400"]:hover { color: rgb(15 118 110) !important; }
 
+/* hover variants of near-white utilities — without these, hover:text-white on a
+ * gray-on-light element flashes pure white-on-light and becomes unreadable
+ * (e.g. <summary>Summary</summary> in ArcCanvas). Mirrors the base remap above. */
+html[data-port-theme-mode="day"] [class~="hover:text-white"]:hover,
+html[data-port-theme-mode="day"] [class~="hover:text-zinc-50"]:hover,
+html[data-port-theme-mode="day"] [class~="hover:text-zinc-100"]:hover,
+html[data-port-theme-mode="day"] [class~="hover:text-neutral-50"]:hover,
+html[data-port-theme-mode="day"] [class~="hover:text-neutral-100"]:hover,
+html[data-port-theme-mode="day"] [class~="hover:text-gray-50"]:hover,
+html[data-port-theme-mode="day"] [class~="hover:text-gray-100"]:hover,
+html[data-port-theme-mode="day"] [class~="hover:text-slate-50"]:hover,
+html[data-port-theme-mode="day"] [class~="hover:text-slate-100"]:hover {
+  color: rgb(var(--port-text)) !important;
+}
+
 /* === Lumen Glass Day === */
 html[data-port-theme="lumen-glass-day"] :is(.bg-port-card, [class~="bg-port-card/50"]):is(.border, .rounded, .rounded-lg, .rounded-xl, .rounded-2xl) {
   border-color: rgb(var(--port-border) / 0.22) !important;

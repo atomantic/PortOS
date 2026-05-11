@@ -1,7 +1,7 @@
-import { useEffect, useState, useCallback } from 'react';
-import { ListOrdered, Image as ImageIcon, Film, X, RefreshCw, ChevronDown, ChevronRight, Trash2 } from 'lucide-react';
+import { useEffect, useMemo, useState, useCallback } from 'react';
+import { ListOrdered, Image as ImageIcon, Film, X, RefreshCw, ChevronDown, ChevronRight, Trash2, RotateCw, Zap } from 'lucide-react';
 import toast from '../ui/Toast';
-import { listMediaJobs, cancelMediaJob, cancelQueuedMediaJobs } from '../../services/apiMediaJobs.js';
+import { listMediaJobs, cancelMediaJob, cancelQueuedMediaJobs, retryMediaJob, runMediaJobNow } from '../../services/apiMediaJobs.js';
 
 const STATUS_BADGE = {
   queued: 'bg-port-border text-port-text-muted',
@@ -15,12 +15,9 @@ const KIND_ICON = { video: Film, image: ImageIcon };
 
 // Embeds the live render queue inline on the Image / Video gen pages so the
 // user can watch in-flight jobs (and cancel them) without leaving the page.
-//
-// Props:
-//   kind        — 'image' | 'video' | undefined (no filter; shows both)
-//   recentLimit — how many recent rows to show (default 5)
-//   className   — extra classes on the outer card
-export default function MediaJobsQueue({ kind, recentLimit = 5, className = '' }) {
+// Completed jobs are excluded from the recent reel — those render as preview
+// cards on the gen page already, so listing them here is duplicate noise.
+export default function MediaJobsQueue({ kind, recentLimit = 10, className = '' }) {
   const [jobs, setJobs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showRecent, setShowRecent] = useState(false);
@@ -52,9 +49,36 @@ export default function MediaJobsQueue({ kind, recentLimit = 5, className = '' }
     })
     .catch((err) => toast.error(err?.message || 'Cancel failed'));
 
-  const live = jobs.filter((j) => j.status === 'queued' || j.status === 'running');
-  const recent = jobs.filter((j) => j.status !== 'queued' && j.status !== 'running').slice(0, recentLimit);
-  const queuedCount = live.filter((j) => j.status === 'queued').length;
+  const { live, recent, queuedCount, failedCount } = useMemo(() => {
+    const liveJobs = [];
+    const recentJobs = [];
+    let queued = 0;
+    let failed = 0;
+    for (const j of jobs) {
+      if (j.status === 'queued' || j.status === 'running') {
+        liveJobs.push(j);
+        if (j.status === 'queued') queued += 1;
+      } else if ((j.status === 'failed' || j.status === 'canceled') && recentJobs.length < recentLimit) {
+        recentJobs.push(j);
+        if (j.status === 'failed') failed += 1;
+      }
+    }
+    return { live: liveJobs, recent: recentJobs, queuedCount: queued, failedCount: failed };
+  }, [jobs, recentLimit]);
+
+  const handleRetry = (id) => retryMediaJob(id)
+    .then(({ jobId }) => {
+      toast.success(`Re-queued as ${jobId.slice(0, 8)}`);
+      fetchJobs();
+    })
+    .catch((err) => toast.error(err?.message || 'Retry failed'));
+
+  const handleRunNow = (id) => runMediaJobNow(id)
+    .then(() => {
+      toast.success('Started in parallel');
+      fetchJobs();
+    })
+    .catch((err) => toast.error(err?.message || 'Run-now failed'));
   const headerLabel = kind ? `${kind === 'image' ? 'Image' : 'Video'} Render Queue` : 'Render Queue';
 
   const handleClearQueued = () => {
@@ -75,9 +99,7 @@ export default function MediaJobsQueue({ kind, recentLimit = 5, className = '' }
         <div className="flex items-center gap-2 min-w-0">
           <ListOrdered className="w-4 h-4 text-port-accent shrink-0" />
           <h2 className="text-xs font-medium text-gray-400 uppercase tracking-wide truncate">{headerLabel}</h2>
-          <span className="text-xs text-port-text-muted">
-            {live.length} active{recent.length > 0 ? ` • ${recent.length} recent` : ''}
-          </span>
+          <span className="text-xs text-port-text-muted">{formatCounts(live, recent, failedCount)}</span>
         </div>
         <div className="flex items-center gap-1 shrink-0">
           {queuedCount > 0 && (
@@ -106,7 +128,7 @@ export default function MediaJobsQueue({ kind, recentLimit = 5, className = '' }
         <div className="text-port-text-muted text-xs">No {kind || 'media'} renders queued.</div>
       ) : (
         <div className="space-y-2">
-          {live.map((j) => <JobRow key={j.id} job={j} onCancel={handleCancel} />)}
+          {live.map((j) => <JobRow key={j.id} job={j} onCancel={handleCancel} onRetry={handleRetry} onRunNow={handleRunNow} />)}
 
           {recent.length > 0 && (
             <button
@@ -115,19 +137,31 @@ export default function MediaJobsQueue({ kind, recentLimit = 5, className = '' }
               className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-300 pt-1"
             >
               {showRecent ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-              {showRecent ? 'Hide' : 'Show'} recent ({recent.length})
+              {showRecent ? 'Hide' : 'Show'} failed / canceled ({recent.length})
             </button>
           )}
-          {showRecent && recent.map((j) => <JobRow key={j.id} job={j} onCancel={handleCancel} />)}
+          {showRecent && recent.map((j) => <JobRow key={j.id} job={j} onCancel={handleCancel} onRetry={handleRetry} />)}
         </div>
       )}
     </div>
   );
 }
 
-function JobRow({ job, onCancel }) {
+function formatCounts(live, recent, failedCount) {
+  const parts = [`${live.length} active`];
+  if (failedCount > 0) parts.push(`${failedCount} failed`);
+  const canceledCount = recent.length - failedCount;
+  if (canceledCount > 0) parts.push(`${canceledCount} canceled`);
+  return parts.join(' • ');
+}
+
+function JobRow({ job, onCancel, onRetry, onRunNow }) {
   const Icon = KIND_ICON[job.kind] || Film;
   const canCancel = job.status === 'queued' || job.status === 'running';
+  const canRetry = (job.status === 'failed' || job.status === 'canceled') && typeof onRetry === 'function';
+  // Run-now is codex-only — GPU jobs serialize on the single MLX runtime.
+  const isQueuedCodex = job.status === 'queued' && job.kind === 'image' && job.params?.mode === 'codex';
+  const canRunNow = isQueuedCodex && typeof onRunNow === 'function';
   return (
     <div className="bg-port-bg border border-port-border rounded p-2.5">
       <div className="flex items-center justify-between gap-3">
@@ -152,6 +186,16 @@ function JobRow({ job, onCancel }) {
           {job.cancelRequested && (
             <span className="text-xs text-port-warning" title="Cancellation requested — waiting for worker">cancelling…</span>
           )}
+          {canRunNow && (
+            <button
+              onClick={() => onRunNow(job.id)}
+              className="flex items-center gap-1 px-2 py-1 bg-port-bg border border-port-border rounded text-xs text-gray-300 hover:text-port-warning hover:border-port-warning/50"
+              title="Run now — start in parallel with currently-running jobs (bypasses the configured codex parallel limit for this one job)"
+            >
+              <Zap className="w-3 h-3" />
+              <span>Run now</span>
+            </button>
+          )}
           {canCancel && !job.cancelRequested && (
             <button
               onClick={() => onCancel(job.id)}
@@ -159,6 +203,16 @@ function JobRow({ job, onCancel }) {
               title="Cancel"
             >
               <X className="w-3 h-3" />
+            </button>
+          )}
+          {canRetry && (
+            <button
+              onClick={() => onRetry(job.id)}
+              className="flex items-center gap-1 px-2 py-1 bg-port-bg border border-port-border rounded text-xs text-gray-300 hover:text-port-accent hover:border-port-accent/50"
+              title="Re-queue this job with the same params"
+            >
+              <RotateCw className="w-3 h-3" />
+              <span>Retry</span>
             </button>
           )}
         </div>

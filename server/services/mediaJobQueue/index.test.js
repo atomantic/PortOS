@@ -130,11 +130,12 @@ describe('mediaJobQueue', () => {
     await flush();
 
     // No filter: every queued job (a, b, c) cancels; running blocker is untouched.
+    // Canceled jobs are deleted (not archived), so getJob returns null for them.
     const r = await mediaJobQueue.cancelQueuedJobs();
     expect(r.canceled).toBe(3);
-    expect(mediaJobQueue.getJob(a.jobId).status).toBe('canceled');
-    expect(mediaJobQueue.getJob(b.jobId).status).toBe('canceled');
-    expect(mediaJobQueue.getJob(c.jobId).status).toBe('canceled');
+    expect(mediaJobQueue.getJob(a.jobId)).toBeNull();
+    expect(mediaJobQueue.getJob(b.jobId)).toBeNull();
+    expect(mediaJobQueue.getJob(c.jobId)).toBeNull();
     expect(mediaJobQueue.getJob(blocker.jobId).status).toBe('running');
 
     videoGenEvents.emit('failed', { generationId: blocker.jobId, error: 'cleanup' });
@@ -153,7 +154,8 @@ describe('mediaJobQueue', () => {
 
     const r = await mediaJobQueue.cancelQueuedJobs({ kind: 'video' });
     expect(r.canceled).toBe(1);
-    expect(mediaJobQueue.getJob(v.jobId).status).toBe('canceled');
+    // Canceled jobs are deleted (not archived), so v is no longer findable.
+    expect(mediaJobQueue.getJob(v.jobId)).toBeNull();
     // Image queued job is left in the queue (still 'queued', not canceled).
     expect(mediaJobQueue.getJob(i.jobId).status).toBe('queued');
     expect(mediaJobQueue.getJob(blocker.jobId).status).toBe('running');
@@ -178,8 +180,8 @@ describe('mediaJobQueue', () => {
     const result = await mediaJobQueue.cancelJob(target.jobId);
     expect(result.ok).toBe(true);
     expect(result.status).toBe('canceled');
-    const job = mediaJobQueue.getJob(target.jobId);
-    expect(job.status).toBe('canceled');
+    // Canceled jobs are deleted (not archived), so getJob returns null.
+    expect(mediaJobQueue.getJob(target.jobId)).toBeNull();
 
     // Unblock the first one for cleanup.
     videoGenEvents.emit('failed', { generationId: blocker.jobId, error: 'cleanup' });

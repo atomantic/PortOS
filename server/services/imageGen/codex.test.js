@@ -132,11 +132,15 @@ describe('codex provider — generateImage', () => {
     await expect(codex.generateImage({ prompt: '   ' })).rejects.toThrow(/Prompt is required/);
   });
 
-  it('refuses concurrent generations (returns 409 ALREADY_RUNNING)', async () => {
-    await codex.generateImage({ prompt: 'one' });
-    await expect(codex.generateImage({ prompt: 'two' })).rejects.toThrow(/already in progress/);
-    spawnCalls[0].child.exitCode = 1;
-    spawnCalls[0].child.emit('close', 1, null);
+  it('allows concurrent generations (parallel codex lane)', async () => {
+    const a = await codex.generateImage({ prompt: 'one' });
+    const b = await codex.generateImage({ prompt: 'two' });
+    expect(a.jobId).not.toBe(b.jobId);
+    expect(spawnCalls.length).toBe(2);
+    for (const c of spawnCalls) {
+      c.child.exitCode = 1;
+      c.child.emit('close', 1, null);
+    }
     await flush();
   });
 });

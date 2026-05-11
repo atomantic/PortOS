@@ -11,6 +11,15 @@ export const getMediaJob = (id) => request(`/media-jobs/${encodeURIComponent(id)
 
 export const cancelMediaJob = (id) => request(`/media-jobs/${encodeURIComponent(id)}/cancel`, { method: 'POST' });
 
+// Re-enqueue a terminal job (typically `failed`) with the same kind/params/
+// owner. Returns the new `{ jobId, position, status, retriedFrom }`.
+export const retryMediaJob = (id) => request(`/media-jobs/${encodeURIComponent(id)}/retry`, { method: 'POST' });
+
+// "Run now" — promote a queued Codex image job past the parallel limit and
+// start it immediately alongside the currently-running jobs. Only valid for
+// queued codex jobs; the server 400s for GPU jobs (single MLX runtime).
+export const runMediaJobNow = (id) => request(`/media-jobs/${encodeURIComponent(id)}/run-now`, { method: 'POST' });
+
 // Bulk-cancel every queued (not running) job, optionally scoped to a kind.
 // Returns { canceled: <count> }. Running jobs need per-id cancelMediaJob.
 export const cancelQueuedMediaJobs = ({ kind } = {}) =>

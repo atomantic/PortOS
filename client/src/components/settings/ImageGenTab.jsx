@@ -24,6 +24,12 @@ const CODEX_TOOL_ID = 'codex-imagegen';
 const DEFAULT_TEST_PROMPT = 'a small cyberpunk fox sitting on a neon-lit rooftop at night, cinematic, highly detailed';
 const normalizeUrl = (url) => (url || '').trim().replace(/\/+$/, '');
 
+// Mirrors server-side CODEX_PARALLEL_{DEFAULT,MAX}. Higher concurrency burns
+// OpenAI credits non-linearly on big batches — the server hard-caps too.
+const CODEX_PARALLEL_MIN = 1;
+const CODEX_PARALLEL_MAX = 10;
+const clampParallel = (n) => Math.max(CODEX_PARALLEL_MIN, Math.min(CODEX_PARALLEL_MAX, Math.floor(Number(n) || 1)));
+
 export function ImageGenTab() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -38,11 +44,12 @@ export function ImageGenTab() {
   const [codexEnabled, setCodexEnabled] = useState(false);
   const [codexPath, setCodexPath] = useState('');
   const [codexModel, setCodexModel] = useState('');
+  const [codexParallelLimit, setCodexParallelLimit] = useState(1);
 
   // Snapshot of saved values so we can show the "dirty" state
   const [saved, setSaved] = useState({
     mode: 'external', sdapiUrl: '', pythonPath: '', exposeA1111: false,
-    codexEnabled: false, codexPath: '', codexModel: '',
+    codexEnabled: false, codexPath: '', codexModel: '', codexParallelLimit: 1,
   });
 
   const [status, setStatus] = useState(null);
@@ -71,6 +78,7 @@ export function ImageGenTab() {
         const cxEnabled = cx.enabled === true;
         const cxPath = cx.codexPath || '';
         const cxModel = cx.model || '';
+        const cxParallel = clampParallel(cx.parallelLimit);
         setMode(m);
         setSdapiUrl(url);
         setPythonPath(py);
@@ -78,9 +86,11 @@ export function ImageGenTab() {
         setCodexEnabled(cxEnabled);
         setCodexPath(cxPath);
         setCodexModel(cxModel);
+        setCodexParallelLimit(cxParallel);
         setSaved({
           mode: m, sdapiUrl: url, pythonPath: py, exposeA1111: expose,
           codexEnabled: cxEnabled, codexPath: cxPath, codexModel: cxModel,
+          codexParallelLimit: cxParallel,
         });
         setToolRegistered(tools.some((t) => t.id === SDAPI_TOOL_ID));
         setCodexToolRegistered(tools.some((t) => t.id === CODEX_TOOL_ID));
@@ -103,19 +113,21 @@ export function ImageGenTab() {
     || exposeA1111 !== saved.exposeA1111
     || codexEnabled !== saved.codexEnabled
     || codexPath !== saved.codexPath
-    || codexModel !== saved.codexModel;
+    || codexModel !== saved.codexModel
+    || codexParallelLimit !== saved.codexParallelLimit;
 
   const handleSave = async () => {
     setSaving(true);
     const url = normalizeUrl(sdapiUrl) || undefined;
     const cxPath = codexPath?.trim() || undefined;
     const cxModel = codexModel?.trim() || undefined;
+    const cxParallel = clampParallel(codexParallelLimit);
     const patch = {
       imageGen: {
         mode,
         external: { sdapiUrl: url },
         local: { pythonPath: pythonPath || undefined },
-        codex: { enabled: codexEnabled, codexPath: cxPath, model: cxModel },
+        codex: { enabled: codexEnabled, codexPath: cxPath, model: cxModel, parallelLimit: cxParallel },
         expose: { a1111: exposeA1111 },
         // Keep the legacy field populated so anything still reading
         // `imageGen.sdapiUrl` directly stays working.
@@ -131,7 +143,9 @@ export function ImageGenTab() {
       setSaved({
         mode, sdapiUrl: url || '', pythonPath, exposeA1111,
         codexEnabled, codexPath: cxPath || '', codexModel: cxModel || '',
+        codexParallelLimit: cxParallel,
       });
+      if (cxParallel !== codexParallelLimit) setCodexParallelLimit(cxParallel);
       // Reflect the normalization back into the inputs so what the user
       // sees matches what was saved.
       if (cxPath !== codexPath) setCodexPath(cxPath || '');
@@ -404,6 +418,28 @@ export function ImageGenTab() {
                 placeholder="gpt-5.4"
               />
               <p className="text-xs text-gray-500 mt-1">Passed as <code>codex exec -m &lt;model&gt;</code>. Leave empty to use Codex's default.</p>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-400 mb-1">Parallel render limit</label>
+              <input
+                type="number"
+                min={CODEX_PARALLEL_MIN}
+                max={CODEX_PARALLEL_MAX}
+                step={1}
+                value={codexParallelLimit}
+                onChange={(e) => setCodexParallelLimit(clampParallel(e.target.value))}
+                className="w-24 bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                How many Codex renders the queue runs in parallel. Default <code>{CODEX_PARALLEL_MIN}</code>. Hard capped at <code>{CODEX_PARALLEL_MAX}</code>.
+                Higher values let large batches finish faster but burn OpenAI credits non-linearly — a runaway 10-wide
+                batch can rack up real money in minutes.
+                {codexParallelLimit > 5 && (
+                  <span className="block mt-1 text-port-warning">
+                    ⚠️ {codexParallelLimit} concurrent renders can burn credits quickly during a long batch. Watch usage.
+                  </span>
+                )}
+              </p>
             </div>
           </div>
         )}

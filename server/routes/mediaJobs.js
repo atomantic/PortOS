@@ -9,7 +9,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
-import { listJobs, getJob, cancelJob, cancelQueuedJobs, JOB_KINDS, JOB_STATUSES } from '../services/mediaJobQueue/index.js';
+import { listJobs, getJob, cancelJob, cancelQueuedJobs, enqueueJob, runJobNow, JOB_KINDS, JOB_STATUSES } from '../services/mediaJobQueue/index.js';
 
 const router = Router();
 
@@ -84,6 +84,33 @@ router.post('/:id/cancel', asyncHandler(async (req, res) => {
     // again on a job that already finished.
     const status = result.code === 'ALREADY_TERMINAL' ? 409 : 404;
     throw new ServerError(result.error || 'Cancel failed', { status, code: result.code || 'NOT_FOUND' });
+  }
+  res.json(result);
+}));
+
+// Re-enqueue a terminal job with the same kind/params/owner. Uses the
+// server-side params (not the UI-sanitized version) so paths stripped for
+// transport still ride into the new job.
+router.post('/:id/retry', asyncHandler(async (req, res) => {
+  const job = getJob(req.params.id);
+  if (!job) throw new ServerError('Not found', { status: 404, code: 'NOT_FOUND' });
+  if (job.status === 'queued' || job.status === 'running') {
+    throw new ServerError(
+      `Job is still ${job.status} — cancel it before retrying`,
+      { status: 409, code: 'JOB_NOT_TERMINAL' },
+    );
+  }
+  const result = enqueueJob({ kind: job.kind, params: job.params, owner: job.owner });
+  res.json({ ...result, retriedFrom: job.id });
+}));
+
+// Promote a queued Codex job past the lane's parallel limit. GPU jobs are
+// rejected — they serialize on the single MLX runtime.
+router.post('/:id/run-now', asyncHandler(async (req, res) => {
+  const result = runJobNow(req.params.id);
+  if (!result.ok) {
+    const status = result.code === 'NOT_FOUND' ? 404 : 400;
+    throw new ServerError(result.error || 'Run-now failed', { status, code: result.code });
   }
   res.json(result);
 }));
