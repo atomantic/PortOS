@@ -242,8 +242,10 @@ export async function initMediaJobQueue() {
         // multipart upload it staged into data/uploads would leak forever.
         // safeUnlinkUpload constrains the delete to PATHS.uploads so we
         // never delete a file the job merely referenced (gallery image,
-        // prior render, etc).
+        // prior render, etc). audioFilePath is the same kind of staged
+        // upload (a2v/voice/video jobs) — needs the same cleanup.
         safeUnlinkUpload(j.params?.uploadedTempPath);
+        safeUnlinkUpload(j.params?.audioFilePath);
         for (const p of normalizeTempPaths(j.params?.uploadedTempPaths)) {
           safeUnlinkUpload(p);
         }
@@ -681,8 +683,10 @@ async function runJob(job) {
     // validation fail). Clean up multipart upload temp files the route
     // handed us so they don't leak under data/uploads.
     // safeUnlinkUpload constrains the delete to PATHS.uploads as
-    // defense-in-depth against corrupted persisted params.
+    // defense-in-depth against corrupted persisted params. audioFilePath
+    // is the same kind of staged upload (a2v jobs) — clean it up too.
     await safeUnlinkUpload(job.params?.uploadedTempPath);
+    await safeUnlinkUpload(job.params?.audioFilePath);
     for (const p of normalizeTempPaths(job.params?.uploadedTempPaths)) {
       await safeUnlinkUpload(p);
     }
@@ -757,8 +761,11 @@ export async function cancelJob(jobId) {
     // staged under PATHS.uploads. If we drop the job before it starts,
     // runJob never gets a chance to delete it — clean up here so the
     // uploads dir doesn't accumulate. safeUnlinkUpload constrains the
-    // delete to PATHS.uploads.
+    // delete to PATHS.uploads. audioFilePath is the same kind of staged
+    // upload (a2v/voice/video jobs) and would otherwise leak when the user
+    // cancels before the job starts.
     await safeUnlinkUpload(job.params?.uploadedTempPath);
+    await safeUnlinkUpload(job.params?.audioFilePath);
     for (const p of normalizeTempPaths(job.params?.uploadedTempPaths)) {
       await safeUnlinkUpload(p);
     }
