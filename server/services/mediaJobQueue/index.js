@@ -112,7 +112,13 @@ export const mediaJobEvents = new EventEmitter();
 // constraint forcing serialization. `queue` holds pending jobs in submission
 // order. `archive` holds recently-finished jobs (visible for ~24h via
 // /api/media-jobs?status=completed).
-const MAX_CODEX_CONCURRENT = Math.max(1, Number(process.env.MEDIA_CODEX_CONCURRENCY) || 4);
+// Truncate to integer so a fractional env value (e.g. "2.7") doesn't let the
+// `while (codexRunning.size < cap)` loop overshoot — `1 < 2.7 < 3 < 2.7` is
+// false but `2 < 2.7` is true, so a naive Number() cap of 2.7 would admit 3 jobs.
+const MAX_CODEX_CONCURRENT = (() => {
+  const n = Math.trunc(Number(process.env.MEDIA_CODEX_CONCURRENCY));
+  return Number.isFinite(n) && n >= 1 ? n : 4;
+})();
 const queue = [];
 let running = null;
 const codexRunning = new Map(); // jobId → job

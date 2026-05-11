@@ -158,10 +158,19 @@ export async function refineMediaPrompt({
   if (!provider) {
     throw new ServerError('Provider not found', { status: 404, code: 'PROVIDER_NOT_FOUND' });
   }
+  if (provider.enabled === false) {
+    throw new ServerError(
+      `Provider "${provider.name || provider.id}" is disabled — enable it in Settings → Providers first`,
+      { status: 400, code: 'PROVIDER_DISABLED' },
+    );
+  }
 
   // CLI providers (codex, claude-code) drive the model through provider.command
   // / provider.args rather than a per-call name, so an empty model is fine.
-  const selectedModel = model || provider.defaultModel || '';
+  // For API providers, fall back through defaultModel → first entry in models[]
+  // so configs that list available models without pinning a default still work
+  // (mirrors the resolution chain in server/lib/stageRunner.js).
+  const selectedModel = model || provider.defaultModel || provider.models?.[0] || '';
   if (!selectedModel && provider.type === 'api') {
     throw new ServerError('Model is required for prompt refinement', { status: 400, code: 'MODEL_REQUIRED' });
   }

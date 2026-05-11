@@ -20,6 +20,12 @@ const listQuerySchema = z.object({
   owner: z.string().max(256).optional(),
 });
 
+// renderConfig is inlined into the LLM prompt via JSON.stringify, so an
+// unbounded object would inflate token cost / latency. Cap the serialized
+// payload at 4 KB — that's well above any legitimate render-config (which
+// is typically <500 bytes) but stops a malicious or buggy caller from
+// shipping arbitrarily nested objects through the refiner.
+const RENDER_CONFIG_MAX_BYTES = 4096;
 const refinePromptSchema = z.object({
   kind: z.enum(JOB_KINDS),
   prompt: z.string().min(1).max(8000),
@@ -27,7 +33,11 @@ const refinePromptSchema = z.object({
   feedback: z.string().min(1).max(3000),
   providerId: z.string().min(1).max(128),
   model: z.string().max(256).optional(),
-  renderConfig: z.record(z.any()).optional(),
+  renderConfig: z.record(z.any())
+    .refine((obj) => JSON.stringify(obj).length <= RENDER_CONFIG_MAX_BYTES, {
+      message: `renderConfig serialized size must be ≤ ${RENDER_CONFIG_MAX_BYTES} bytes`,
+    })
+    .optional(),
 });
 
 // Sanitize a job before serialization. The internal job record carries

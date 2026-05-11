@@ -30,7 +30,9 @@ function getRenderConfig(item) {
     numFrames: item.numFrames,
     fps: item.fps,
     steps: raw.steps,
-    guidanceScale: raw.guidanceScale || raw.guidance,
+    // Nullish coalescing — a deliberate `0` guidanceScale is valid for some
+    // video models and must survive the round-trip back into the queued payload.
+    guidanceScale: raw.guidanceScale ?? raw.guidance,
     seed: raw.seed,
     tiling: raw.tiling,
     disableAudio: raw.disableAudio,

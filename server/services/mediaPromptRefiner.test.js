@@ -161,6 +161,36 @@ ${JSON.stringify({ prompt: 'painted owl portrait', negativePrompt: 'blurry', rat
     })).rejects.toMatchObject({ code: 'MODEL_REQUIRED', status: 400 });
   });
 
+  it('rejects disabled providers', async () => {
+    providers.getProviderById.mockResolvedValue({
+      id: 'openai', type: 'api', enabled: false, defaultModel: 'gpt-test',
+    });
+    await expect(refineMediaPrompt({
+      kind: 'image',
+      prompt: 'x',
+      feedback: 'y',
+      providerId: 'openai',
+    })).rejects.toMatchObject({ code: 'PROVIDER_DISABLED', status: 400 });
+  });
+
+  it('falls back to provider.models[0] when defaultModel is absent (API provider)', async () => {
+    providers.getProviderById.mockResolvedValue({
+      id: 'openai', type: 'api', enabled: true, models: ['gpt-from-list'],
+    });
+    mockRunnerSuccess(runner.executeApiRun, JSON.stringify({
+      prompt: 'x', negativePrompt: '', rationale: '', changes: [],
+    }));
+
+    const result = await refineMediaPrompt({
+      kind: 'image',
+      prompt: 'p',
+      feedback: 'f',
+      providerId: 'openai',
+    });
+
+    expect(result.model).toBe('gpt-from-list');
+  });
+
   it('throws when the provider is unknown', async () => {
     providers.getProviderById.mockResolvedValue(null);
     await expect(refineMediaPrompt({
