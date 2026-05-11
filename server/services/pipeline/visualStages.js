@@ -18,6 +18,7 @@ import { getSettings } from '../settings.js';
 import { getSeries } from './series.js';
 import { getIssue, VISUAL_STAGE_IDS } from './issues.js';
 import { getWorld } from '../worldBuilder.js';
+import { ServerError } from '../../lib/errorHandler.js';
 import { buildScenePrompt, buildSettingByKey, matchSceneSetting } from '../../lib/scenePrompt.js';
 import { composeStyledPrompt } from '../../lib/composeStyledPrompt.js';
 
@@ -31,9 +32,11 @@ const applyWorldStyle = (prompt, world) => {
   return composeStyledPrompt(prompt, '', { prompt: world.stylePrompt, negativePrompt: '' }).prompt;
 };
 
-const resolveMode = (options, settings) =>
-  SUPPORTED_MODES.has(options.mode) ? options.mode
-    : (SUPPORTED_MODES.has(settings.imageGen?.mode) ? settings.imageGen.mode : 'local');
+const resolveMode = (options, settings) => {
+  if (SUPPORTED_MODES.has(options.mode)) return options.mode;
+  const settingsMode = settings?.imageGen?.mode;
+  return SUPPORTED_MODES.has(settingsMode) ? settingsMode : 'local';
+};
 
 const loadBibleContext = async (issueId) => {
   const issueChain = (async () => {
@@ -118,21 +121,33 @@ export function composeComicPagePrompt({ series, world, page, pageNumber, extraS
 export async function enqueueVisualComicPage(issueId, options = {}) {
   const pageIndex = Number(options.pageIndex);
   if (!Number.isInteger(pageIndex) || pageIndex < 0) {
-    throw new Error('enqueueVisualComicPage: pageIndex must be a non-negative integer');
+    throw new ServerError('pageIndex must be a non-negative integer', {
+      status: 400, code: 'PIPELINE_COMIC_PAGE_BAD_INDEX',
+    });
   }
   const { issue, settings, series, world } = await loadBibleContext(issueId);
   const pages = Array.isArray(issue.stages?.comicPages?.pages) ? issue.stages.comicPages.pages : [];
   const page = pages[pageIndex];
-  if (!page) throw new Error(`enqueueVisualComicPage: page index ${pageIndex} out of range (have ${pages.length})`);
+  if (!page) {
+    throw new ServerError(`page index ${pageIndex} out of range (have ${pages.length})`, {
+      status: 404, code: 'PIPELINE_COMIC_PAGE_NOT_FOUND',
+    });
+  }
   if (!Array.isArray(page.panels) || page.panels.length === 0) {
-    throw new Error('enqueueVisualComicPage: page has no panels');
+    throw new ServerError('page has no panels — add at least one panel description before rendering', {
+      status: 400, code: 'PIPELINE_COMIC_PAGE_NO_PANELS',
+    });
   }
 
   const mode = resolveMode(options, settings);
   const prompt = composeComicPagePrompt({
     series, world, page, pageNumber: pageIndex + 1, extraStyle: options.extraStyle,
   });
-  if (!prompt) throw new Error('enqueueVisualComicPage: prompt is empty');
+  if (!prompt) {
+    throw new ServerError('comic-page prompt is empty (no description text in any panel)', {
+      status: 400, code: 'PIPELINE_COMIC_PAGE_EMPTY_PROMPT',
+    });
+  }
 
   const jobId = enqueueImageJob({
     prompt, world, settings, options, mode,
@@ -151,7 +166,9 @@ export async function enqueueVisualComicPage(issueId, options = {}) {
  */
 export async function enqueueVisualImage(issueId, stageId, options = {}) {
   if (!VISUAL_STAGE_IDS.includes(stageId)) {
-    throw new Error(`enqueueVisualImage: not a visual stage: ${stageId}`);
+    throw new ServerError(`not a visual stage: ${stageId}`, {
+      status: 400, code: 'PIPELINE_VISUAL_BAD_STAGE',
+    });
   }
   const { settings, series, world } = await loadBibleContext(issueId);
   const mode = resolveMode(options, settings);
@@ -162,7 +179,11 @@ export async function enqueueVisualImage(issueId, stageId, options = {}) {
     extraStyle: options.extraStyle,
     world,
   });
-  if (!prompt) throw new Error('enqueueVisualImage: prompt is empty (no description, no style)');
+  if (!prompt) {
+    throw new ServerError('visual prompt is empty (no description, no style)', {
+      status: 400, code: 'PIPELINE_VISUAL_EMPTY_PROMPT',
+    });
+  }
 
   const jobId = enqueueImageJob({
     prompt, world, settings, options, mode,
