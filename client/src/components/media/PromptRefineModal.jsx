@@ -168,13 +168,19 @@ export default function PromptRefineModal({ item, open, onClose }) {
         </header>
 
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
-          <textarea
-            value={feedback}
-            onChange={(e) => setFeedback(e.target.value)}
-            placeholder="What should change about this render?"
-            rows={4}
-            className="w-full bg-port-bg border border-port-border rounded-lg p-3 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-port-accent resize-y"
-          />
+          <div>
+            <label htmlFor="prompt-refine-feedback" className="block text-[11px] uppercase tracking-wide text-gray-500 mb-1">
+              Feedback
+            </label>
+            <textarea
+              id="prompt-refine-feedback"
+              value={feedback}
+              onChange={(e) => setFeedback(e.target.value)}
+              placeholder="What should change about this render?"
+              rows={4}
+              className="w-full bg-port-bg border border-port-border rounded-lg p-3 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-port-accent resize-y"
+            />
+          </div>
 
           <ProviderModelSelector
             providers={providers}

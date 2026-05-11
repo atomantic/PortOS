@@ -35,7 +35,13 @@ const refinePromptSchema = z.object({
   negativePrompt: z.string().trim().max(8000).optional(),
   feedback: z.string().trim().min(1).max(3000),
   providerId: z.string().trim().min(1).max(128),
-  model: z.string().max(256).optional(),
+  // Empty/whitespace model → undefined so the refiner's defaultModel /
+  // models[0] fallback chain kicks in, instead of a whitespace string
+  // bypassing the MODEL_REQUIRED guard and reaching the provider.
+  model: z.string().max(256).optional().transform((s) => {
+    const v = (s ?? '').trim();
+    return v.length > 0 ? v : undefined;
+  }),
   renderConfig: z.record(z.any())
     .refine((obj) => {
       // JSON.stringify throws on BigInt / circular refs. z.record(z.any())
