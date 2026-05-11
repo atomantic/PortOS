@@ -62,7 +62,13 @@ export default function ComicPagesStage({ issue, onStageUpdate }) {
   };
   const [extractArmed, fireExtract] = useArmedAction(runExtract);
   const onExtractClick = () => {
-    if (pages.length > 0 && !extractArmed) {
+    // Nothing to clobber on a fresh stage — extract immediately. The two-click
+    // arm exists only to guard a destructive replace of existing pages.
+    if (pages.length === 0) {
+      runExtract();
+      return;
+    }
+    if (!extractArmed) {
       toast.warning(`This will replace ${pages.length} existing page${pages.length === 1 ? '' : 's'}. Click again to confirm.`);
     }
     fireExtract();

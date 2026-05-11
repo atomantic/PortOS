@@ -660,22 +660,30 @@ router.post('/issues/:id/stages/comicPages/pages/:pageIndex/render', asyncHandle
     });
   }
   const body = validateRequest(comicPageRenderSchema, req.body ?? {});
+
+  // Validate the page exists up front so an out-of-range index returns a clean
+  // 404 instead of bubbling the service's generic Error (which mapServiceError
+  // doesn't translate). Also lets us skip the enqueue work entirely when the
+  // index is bad.
+  const issue = await issuesSvc.getIssue(req.params.id).catch((err) => { throw mapServiceError(err); });
+  const pages = Array.isArray(issue.stages?.comicPages?.pages) ? [...issue.stages.comicPages.pages] : [];
+  if (!pages[pageIndex]) {
+    throw new ServerError(
+      `pageIndex ${pageIndex} out of range — comicPages has ${pages.length} page${pages.length === 1 ? '' : 's'}`,
+      { status: 404, code: 'PIPELINE_COMIC_PAGE_NOT_FOUND' },
+    );
+  }
+
   const result = await enqueueVisualComicPage(req.params.id, { pageIndex, ...body })
     .catch((err) => { throw mapServiceError(err); });
 
   // Persist the jobId on the page so a reload still shows the in-flight render.
-  const issue = await issuesSvc.getIssue(req.params.id).catch((err) => { throw mapServiceError(err); });
-  const pages = Array.isArray(issue.stages?.comicPages?.pages) ? [...issue.stages.comicPages.pages] : [];
-  if (pages[pageIndex]) {
-    pages[pageIndex] = { ...pages[pageIndex], imageJobId: result.jobId, prompt: result.prompt };
-    const { issue: updatedIssue, stage } = await issuesSvc.updateStage(req.params.id, 'comicPages', {
-      status: 'edited',
-      pages,
-    });
-    res.json({ ...result, issue: updatedIssue, stage });
-    return;
-  }
-  res.json(result);
+  pages[pageIndex] = { ...pages[pageIndex], imageJobId: result.jobId, prompt: result.prompt };
+  const { issue: updatedIssue, stage } = await issuesSvc.updateStage(req.params.id, 'comicPages', {
+    status: 'edited',
+    pages,
+  });
+  res.json({ ...result, issue: updatedIssue, stage });
 }));
 
 router.post('/issues/:id/stages/:stageId/visual', asyncHandler(async (req, res) => {

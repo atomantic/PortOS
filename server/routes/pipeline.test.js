@@ -65,7 +65,9 @@ vi.mock('../services/pipeline/visualStages.js', () => ({
   enqueueVisualComicPage: vi.fn(async (_issueId, opts) => ({
     jobId: `page-job-${++uuidCounter}`,
     mode: 'local',
-    prompt: `comic-page prompt for page ${opts.pageIndex}`,
+    // Match the real service contract: pageNumber is 1-based (pageIndex + 1).
+    prompt: `comic-page prompt for page ${opts.pageIndex + 1}`,
+    pageIndex: opts.pageIndex,
   })),
 }));
 
@@ -609,7 +611,8 @@ describe('pipeline routes', () => {
       .send({});
     expect(r.status).toBe(200);
     expect(r.body.jobId).toMatch(/^page-job-/);
-    expect(r.body.prompt).toMatch(/page 1/);
+    // pageNumber is pageIndex + 1, so /pages/1/render renders the *2nd* page.
+    expect(r.body.prompt).toMatch(/page 2/);
     expect(r.body.stage.pages[1].imageJobId).toBe(r.body.jobId);
     expect(r.body.stage.pages[1].prompt).toBe(r.body.prompt);
     // Other page untouched
@@ -617,9 +620,11 @@ describe('pipeline routes', () => {
     expect(r.body.stage.status).toBe('edited');
   });
 
-  it('POST /issues/:id/stages/comicPages/pages/:pageIndex/render returns the bare result when pageIndex is out of range', async () => {
-    // The route still enqueues the render but skips the page-level persist
-    // (there is no page at that index). Just return the enqueue result.
+  it('POST /issues/:id/stages/comicPages/pages/:pageIndex/render 404s when pageIndex is out of range', async () => {
+    // The service throws on out-of-range pageIndex; the route validates the
+    // page exists up front and returns 404 instead of letting the service
+    // bubble a generic Error.
+    const visualStages = await import('../services/pipeline/visualStages.js');
     const app = makeApp();
     const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
     const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
@@ -629,10 +634,10 @@ describe('pipeline routes', () => {
     const r = await request(app)
       .post(`/api/pipeline/issues/${iss.body.id}/stages/comicPages/pages/99/render`)
       .send({});
-    expect(r.status).toBe(200);
-    expect(r.body.jobId).toMatch(/^page-job-/);
-    // No `stage` payload because the page index didn't resolve to a page
-    expect(r.body.stage).toBeUndefined();
+    expect(r.status).toBe(404);
+    expect(r.body.code || r.body.error).toMatch(/PIPELINE_COMIC_PAGE_NOT_FOUND|out of range/i);
+    // Enqueue is never reached when the page doesn't exist.
+    expect(visualStages.enqueueVisualComicPage).not.toHaveBeenCalled();
   });
 
   // -----------------------
