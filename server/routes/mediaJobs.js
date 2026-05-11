@@ -88,6 +88,20 @@ router.post('/:id/cancel', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
+// Params that point at multipart-staged temp files under PATHS.uploads. The
+// gen modules unlink these on completion/failure, so a job that ran is no
+// longer retryable from the persisted params alone (the files are gone, or
+// — worse — could collide with a fresh upload at the same path).
+const TEMP_UPLOAD_PARAMS = ['uploadedTempPath', 'uploadedTempPaths', 'audioFilePath'];
+function hasTempUploadParam(params) {
+  if (!params) return false;
+  return TEMP_UPLOAD_PARAMS.some((k) => {
+    const v = params[k];
+    if (Array.isArray(v)) return v.length > 0;
+    return typeof v === 'string' && v.length > 0;
+  });
+}
+
 // Re-enqueue a terminal job with the same kind/params/owner. Uses the
 // server-side params (not the UI-sanitized version) so paths stripped for
 // transport still ride into the new job.
@@ -98,6 +112,16 @@ router.post('/:id/retry', asyncHandler(async (req, res) => {
     throw new ServerError(
       `Job is still ${job.status} — cancel it before retrying`,
       { status: 409, code: 'JOB_NOT_TERMINAL' },
+    );
+  }
+  // Reject retry when the original job referenced a multipart-staged upload —
+  // the gen modules unlink those files on completion/failure, so re-enqueueing
+  // would either fail with a missing-file error or, worse, act on a stale path
+  // that's since been reused by a different upload.
+  if (hasTempUploadParam(job.params)) {
+    throw new ServerError(
+      'Job referenced an uploaded file that has since been cleaned up — re-submit the original request with the file attached instead of retrying',
+      { status: 409, code: 'JOB_RETRY_TEMP_UPLOAD' },
     );
   }
   const result = enqueueJob({ kind: job.kind, params: job.params, owner: job.owner });
