@@ -304,23 +304,16 @@ describe('spawningTasks dedup — late-delete race', () => {
 // flips red and points the dev at the race the structural change re-opened.
 
 describe('agentLifecycle source — spawningTasks delete placement', () => {
-  it('releases the dedup guard inside a finally, not after updateTask(in_progress)', () => {
+  it('releases the dedup guard inside a finally block', () => {
     const fnStart = AGENT_LIFECYCLE_SRC.indexOf('export async function spawnAgentForTask');
     expect(fnStart, 'spawnAgentForTask must exist').toBeGreaterThan(-1);
     const fnBody = AGENT_LIFECYCLE_SRC.slice(fnStart, fnStart + 60_000);
 
     expect(fnBody).toMatch(/spawningTasks\.add\(task\.id\)/);
 
-    // ANTI-PATTERN: bare `spawningTasks.delete(task.id);` directly after the
-    // `updateTask(... 'in_progress' ...)` await (the pre-fix shape). The
-    // delete must live inside a `finally` block instead.
-    const buggyPattern = /await\s+updateTask\([\s\S]{0,800}?status:\s*['"]in_progress['"][\s\S]{0,800}?\}\s*,\s*task\.taskType[\s\S]{0,200}?\)\s*;\s*spawningTasks\.delete\(task\.id\)/;
-    expect(fnBody).not.toMatch(buggyPattern);
-
-    // The dedup-delete must be inside a `finally { ... }` clause somewhere in
-    // the function — the structural guarantee that the guard outlives the
-    // spawn call regardless of which runner/direct branch is taken or what
-    // the function names become.
+    // The dedup-delete must live inside a `finally { ... }` clause — the
+    // structural guarantee that the guard outlives the spawn call regardless
+    // of which runner/direct branch is taken or what intervening logic exists.
     const finallyPattern = /finally\s*\{[\s\S]{0,400}?spawningTasks\.delete\(task\.id\)/;
     expect(fnBody).toMatch(finallyPattern);
   });

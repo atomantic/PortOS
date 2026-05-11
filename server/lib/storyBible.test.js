@@ -314,9 +314,6 @@ function characterStore() {
   return createBibleStore({
     kind: BIBLE_KIND.CHARACTER,
     idPrefix: 'wr-char-',
-    idRegex: /^wr-char-[0-9a-f-]+$/i,
-    fileName: 'characters.json',
-    listKey: 'characters',
     dedupKey: (entry) => normalizeBibleName(entry?.name),
     primaryFields: ['name'],
     editableFields: ['aliases', 'role', 'physicalDescription'],
@@ -331,9 +328,6 @@ function settingStore() {
   return createBibleStore({
     kind: BIBLE_KIND.SETTING,
     idPrefix: 'wr-setting-',
-    idRegex: /^wr-setting-[0-9a-f-]+$/i,
-    fileName: 'settings.json',
-    listKey: 'settings',
     dedupKey: (entry) => normalizeSlugline(entry?.slugline || entry?.name || ''),
     primaryFields: ['slugline', 'name'],
     editableFields: ['description', 'palette'],

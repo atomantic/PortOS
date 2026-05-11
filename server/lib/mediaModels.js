@@ -448,6 +448,12 @@ export const getVideoModels = () => {
 
 export const getDefaultVideoModelId = () => {
   const reg = loadMediaModels();
+  // Note: defaultMacos / defaultWindows may legitimately point at a model
+  // flagged `deprecated: true` — the dgrauet (non-deprecated) runtime
+  // requires an opt-in venv (`INSTALL_LTX2=1 bash scripts/setup-image-video.sh`),
+  // so the shipped default must stay on a model that works out of the box.
+  // The UI dropdowns surface dgrauet at the top via the `Legacy` optgroup
+  // pattern; user-driven migration > auto-rolling forward.
   const configuredId = IS_WIN ? reg.video.defaultWindows : reg.video.defaultMacos;
   // Validate against the platform's available (non-broken) list — a typo or
   // a model marked broken on this platform would otherwise surface as

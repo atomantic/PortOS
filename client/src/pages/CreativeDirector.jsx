@@ -45,7 +45,10 @@ export default function CreativeDirector() {
   const fetchProjects = useCallback(() => {
     listCreativeDirectorProjects()
       .then((data) => { setProjects(data || []); setLoading(false); })
-      .catch(() => setLoading(false));
+      .catch((err) => {
+        toast.error(err?.message || 'Failed to load Creative Director projects');
+        setLoading(false);
+      });
   }, []);
 
   useEffect(() => {

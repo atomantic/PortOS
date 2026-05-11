@@ -102,9 +102,9 @@ export default function EpisodeVideoStage({ issue, onStageUpdate }) {
       // tore the in-flight progress UI off the page even though the
       // previous CD project was still rendering.
       setCdProject(null);
-      toast.success(`Restarted: ${result.cdProjectId.slice(0, 8)}`);
+      toast.success(`Restarted: ${result.cdProjectId?.slice(0, 8) ?? '?'}`);
     } else if (result.reused) {
-      toast.success(`Reusing in-flight CD project ${result.cdProjectId.slice(0, 8)}`);
+      toast.success(`Reusing in-flight CD project ${result.cdProjectId?.slice(0, 8) ?? '?'}`);
     } else {
       toast.success(`Queued ${result.scenes} scene${result.scenes === 1 ? '' : 's'}`);
     }
