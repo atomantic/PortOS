@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, useCallback } from 'react';
-import { ListOrdered, Image as ImageIcon, Film, X, RefreshCw, ChevronDown, ChevronRight, Trash2, RotateCw, Zap } from 'lucide-react';
+import { ListOrdered, Image as ImageIcon, Film, X, RefreshCw, ChevronDown, ChevronRight, Trash2, RotateCw, Zap, Pencil } from 'lucide-react';
 import toast from '../ui/Toast';
 import { listMediaJobs, cancelMediaJob, cancelQueuedMediaJobs, deleteMediaJob, retryMediaJob, runMediaJobNow } from '../../services/apiMediaJobs.js';
 
@@ -81,9 +81,12 @@ export default function MediaJobsQueue({ kind, recentLimit = 10, className = '' 
     return { live: liveJobs, recent: recentJobs, queuedCount: queued, failedCount: failed };
   }, [jobs, recentLimit]);
 
-  const handleRetry = (id) => retryMediaJob(id)
+  // Accepts optional `overrides` so the inline Edit form can patch prompt /
+  // negativePrompt / model / dimensions before the re-enqueue. No overrides =
+  // same behavior as the plain Retry button.
+  const handleRetry = (id, overrides = null) => retryMediaJob(id, overrides)
     .then(({ jobId }) => {
-      toast.success(`Re-queued as ${jobId.slice(0, 8)}`);
+      toast.success(`Re-queued as ${jobId.slice(0, 8)}${overrides ? ' (edited)' : ''}`);
       // Optimistic: drop the original failed/canceled row immediately. The
       // server's retry endpoint already prunes it from the archive, but the
       // next 3s poll would otherwise leave the stale row + button visible.
@@ -190,6 +193,9 @@ function JobRow({ job, onCancel, onRetry, onRunNow, onDelete }) {
   // Run-now is codex-only — GPU jobs serialize on the single MLX runtime.
   const isQueuedCodex = job.status === 'queued' && job.kind === 'image' && job.params?.mode === 'codex';
   const canRunNow = isQueuedCodex && typeof onRunNow === 'function';
+  // Inline edit form for retry-with-overrides.
+  const [editing, setEditing] = useState(false);
+  const canEdit = canRetry;
   return (
     <div className="bg-port-bg border border-port-border rounded p-2.5">
       <div className="flex items-center justify-between gap-3">
@@ -238,6 +244,16 @@ function JobRow({ job, onCancel, onRetry, onRunNow, onDelete }) {
               <X className="w-3 h-3" />
             </button>
           )}
+          {canEdit && (
+            <button
+              onClick={() => setEditing((s) => !s)}
+              className={`flex items-center gap-1 px-2 py-1 bg-port-bg border rounded text-xs ${editing ? 'border-port-accent/60 text-port-accent' : 'border-port-border text-gray-500 hover:text-gray-300 hover:border-port-border'}`}
+              title="Edit prompt / config, then retry"
+              aria-label="Edit and retry"
+            >
+              <Pencil className="w-3 h-3" />
+            </button>
+          )}
           {canRetry && (
             <button
               onClick={() => onRetry(job.id)}
@@ -268,6 +284,124 @@ function JobRow({ job, onCancel, onRetry, onRunNow, onDelete }) {
         {job.startedAt && ` · started ${new Date(job.startedAt).toLocaleTimeString()}`}
         {job.completedAt && ` · finished ${new Date(job.completedAt).toLocaleTimeString()}`}
       </div>
+      {editing && (
+        <EditRetryForm
+          job={job}
+          onSubmit={(overrides) => {
+            setEditing(false);
+            onRetry(job.id, overrides);
+          }}
+          onCancel={() => setEditing(false)}
+        />
+      )}
     </div>
+  );
+}
+
+// Inline form for the Edit-and-retry flow. Shows the fields the server's
+// retry override schema accepts (prompt, negative, model, dimensions, steps)
+// and submits only the keys the user actually changed — leaving unchanged
+// fields out of the patch so the original job's values ride through.
+function EditRetryForm({ job, onSubmit, onCancel }) {
+  const p = job.params || {};
+  const isCodex = p.mode === 'codex';
+  const [prompt, setPrompt] = useState(p.prompt || '');
+  const [negativePrompt, setNegativePrompt] = useState(p.negativePrompt || '');
+  const [model, setModel] = useState(p.model || '');
+  const [modelId, setModelId] = useState(p.modelId || '');
+  const [width, setWidth] = useState(p.width ?? '');
+  const [height, setHeight] = useState(p.height ?? '');
+  const [steps, setSteps] = useState(p.steps ?? '');
+
+  const submit = (e) => {
+    e.preventDefault();
+    const overrides = {};
+    const trimEq = (a, b) => (a || '').trim() === (b || '').trim();
+    const numEq = (a, b) => (a === '' ? null : Number(a)) === (b ?? null);
+    if (!trimEq(prompt, p.prompt) && prompt.trim()) overrides.prompt = prompt.trim();
+    if (!trimEq(negativePrompt, p.negativePrompt)) overrides.negativePrompt = negativePrompt.trim();
+    if (isCodex && !trimEq(model, p.model)) overrides.model = model.trim();
+    if (!isCodex && !trimEq(modelId, p.modelId)) overrides.modelId = modelId.trim();
+    if (!numEq(width, p.width) && width !== '') overrides.width = Number(width);
+    if (!numEq(height, p.height) && height !== '') overrides.height = Number(height);
+    if (!numEq(steps, p.steps) && steps !== '') overrides.steps = Number(steps);
+    onSubmit(Object.keys(overrides).length ? overrides : null);
+  };
+
+  return (
+    <form onSubmit={submit} className="mt-3 pt-3 border-t border-port-border space-y-2">
+      <label className="block text-[10px] uppercase tracking-wide text-port-text-muted">Prompt</label>
+      <textarea
+        value={prompt}
+        onChange={(e) => setPrompt(e.target.value)}
+        rows={3}
+        className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-xs"
+        maxLength={8000}
+      />
+      <label className="block text-[10px] uppercase tracking-wide text-port-text-muted">Negative prompt</label>
+      <textarea
+        value={negativePrompt}
+        onChange={(e) => setNegativePrompt(e.target.value)}
+        rows={2}
+        className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-xs"
+        maxLength={8000}
+      />
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        <div className="col-span-2">
+          <label className="block text-[10px] uppercase tracking-wide text-port-text-muted">{isCodex ? 'Codex model' : 'Model id'}</label>
+          <input
+            type="text"
+            value={isCodex ? model : modelId}
+            onChange={(e) => (isCodex ? setModel(e.target.value) : setModelId(e.target.value))}
+            placeholder={isCodex ? 'leave empty for default' : 'e.g. z-image-turbo-bf16'}
+            className="w-full px-2 py-1 bg-port-bg border border-port-border rounded text-white text-xs"
+            maxLength={200}
+          />
+        </div>
+        <div>
+          <label className="block text-[10px] uppercase tracking-wide text-port-text-muted">Width</label>
+          <input
+            type="number" min={64} max={4096} step={8}
+            value={width}
+            onChange={(e) => setWidth(e.target.value)}
+            className="w-full px-2 py-1 bg-port-bg border border-port-border rounded text-white text-xs"
+          />
+        </div>
+        <div>
+          <label className="block text-[10px] uppercase tracking-wide text-port-text-muted">Height</label>
+          <input
+            type="number" min={64} max={4096} step={8}
+            value={height}
+            onChange={(e) => setHeight(e.target.value)}
+            className="w-full px-2 py-1 bg-port-bg border border-port-border rounded text-white text-xs"
+          />
+        </div>
+        <div>
+          <label className="block text-[10px] uppercase tracking-wide text-port-text-muted">Steps</label>
+          <input
+            type="number" min={1} max={200} step={1}
+            value={steps}
+            onChange={(e) => setSteps(e.target.value)}
+            className="w-full px-2 py-1 bg-port-bg border border-port-border rounded text-white text-xs"
+          />
+        </div>
+      </div>
+      <div className="flex items-center justify-end gap-2 pt-1">
+        <button
+          type="button"
+          onClick={onCancel}
+          className="px-3 py-1 text-xs text-port-text-muted hover:text-white"
+        >
+          Cancel
+        </button>
+        <button
+          type="submit"
+          className="inline-flex items-center gap-1 px-3 py-1 bg-port-accent text-white text-xs rounded hover:bg-port-accent/90"
+        >
+          <RotateCw className="w-3 h-3" />
+          Retry with changes
+        </button>
+      </div>
+    </form>
   );
 }

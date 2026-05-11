@@ -73,6 +73,48 @@ describe('mediaJobs routes', () => {
     expect(stubs.removeArchivedJob).toHaveBeenCalledWith('j-img');
   });
 
+  it('POST /:id/retry merges body.params overrides onto the original params', async () => {
+    jobStore.set('j-edit', {
+      id: 'j-edit', kind: 'image', owner: null, status: 'failed',
+      params: {
+        prompt: 'old prompt', negativePrompt: 'old neg',
+        mode: 'codex', model: 'gpt-image-1', width: 512, height: 512, steps: 30,
+        // a non-whitelisted internal field — must ride through unchanged
+        codexPath: '/usr/local/bin/codex',
+      },
+    });
+    const r = await request(makeApp())
+      .post('/api/media-jobs/j-edit/retry')
+      .send({ params: { prompt: 'new prompt', width: 1024, model: 'gpt-image-1' } });
+    expect(r.status).toBe(200);
+    // overridden fields take the new value; non-overridden fields inherit;
+    // non-whitelisted internal fields are preserved untouched.
+    expect(stubs.enqueueJob).toHaveBeenCalledWith({
+      kind: 'image', owner: null,
+      params: {
+        prompt: 'new prompt', negativePrompt: 'old neg',
+        mode: 'codex', model: 'gpt-image-1', width: 1024, height: 512, steps: 30,
+        codexPath: '/usr/local/bin/codex',
+      },
+    });
+  });
+
+  it('POST /:id/retry rejects override fields outside the whitelist', async () => {
+    jobStore.set('j-bad', {
+      id: 'j-bad', kind: 'image', owner: null, status: 'failed',
+      params: { prompt: 'x', mode: 'codex' },
+    });
+    // pythonPath is not in the override schema; zod strips unknown keys, so
+    // the enqueue should still happen but pythonPath must NOT have leaked
+    // through.
+    const r = await request(makeApp())
+      .post('/api/media-jobs/j-bad/retry')
+      .send({ params: { prompt: 'x', pythonPath: '/tmp/evil' } });
+    expect(r.status).toBe(200);
+    const call = stubs.enqueueJob.mock.calls[0][0];
+    expect(call.params.pythonPath).toBeUndefined();
+  });
+
   it('POST /:id/retry 409s with JOB_RETRY_TEMP_UPLOAD when the job referenced an uploadedTempPath', async () => {
     jobStore.set('j-up', {
       id: 'j-up', kind: 'video', owner: null, status: 'completed',

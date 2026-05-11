@@ -102,9 +102,35 @@ function hasTempUploadParam(params) {
   });
 }
 
-// Re-enqueue a terminal job with the same kind/params/owner. Uses the
-// server-side params (not the UI-sanitized version) so paths stripped for
-// transport still ride into the new job.
+// Whitelist of params the UI can edit on retry. Anything else (python paths,
+// session ids, internal flags) rides through unchanged from the original
+// job.params so a user can't escape the server's runtime config from the
+// retry path. Keep this set small and user-facing.
+const RETRY_OVERRIDE_SCHEMA = z.object({
+  prompt: z.string().trim().min(1).max(8000).optional(),
+  negativePrompt: z.string().trim().max(8000).optional(),
+  model: z.string().trim().max(200).optional(),
+  modelId: z.string().trim().max(200).optional(),
+  width: z.number().int().min(64).max(4096).optional(),
+  height: z.number().int().min(64).max(4096).optional(),
+  steps: z.number().int().min(1).max(200).optional(),
+  guidance: z.number().min(0).max(30).optional(),
+  guidanceScale: z.number().min(0).max(30).optional(),
+  cfgScale: z.number().min(0).max(30).optional(),
+  seed: z.number().int().optional(),
+  numFrames: z.number().int().min(1).max(2000).optional(),
+  fps: z.number().int().min(1).max(120).optional(),
+}).partial();
+
+const retryBodySchema = z.object({
+  params: RETRY_OVERRIDE_SCHEMA.optional(),
+}).optional();
+
+// Re-enqueue a terminal job. Optional `body.params` overrides specific
+// user-facing fields (prompt, model, dimensions, etc.) so a user can edit
+// a failed job's config in the UI before retrying without losing the rest
+// of the original params. Non-listed params (interpreter paths, session ids)
+// always inherit from the original job.
 router.post('/:id/retry', asyncHandler(async (req, res) => {
   const job = getJob(req.params.id);
   if (!job) throw new ServerError('Not found', { status: 404, code: 'NOT_FOUND' });
@@ -124,7 +150,10 @@ router.post('/:id/retry', asyncHandler(async (req, res) => {
       { status: 409, code: 'JOB_RETRY_TEMP_UPLOAD' },
     );
   }
-  const result = enqueueJob({ kind: job.kind, params: job.params, owner: job.owner });
+  const body = validateRequest(retryBodySchema, req.body ?? {}) ?? {};
+  const overrides = body.params ?? {};
+  const params = { ...job.params, ...overrides };
+  const result = enqueueJob({ kind: job.kind, params, owner: job.owner });
   // Drop the original failed/canceled row from archive — the new job inherits
   // its work, and leaving both visible just lets users keep clicking Retry on
   // the dead row and stacking duplicate jobs.

@@ -549,7 +549,17 @@ let shuttingDown = false;
 const shutdown = async (signal) => {
   if (shuttingDown) return;
   shuttingDown = true;
-  console.log(`🛑 Received ${signal} - shutting down gracefully`);
+  // Diagnostic context for the shutdown trigger. ppid tells us whether the
+  // signal came from PM2 (parent is the PM2 god process), a TTY (parent is
+  // the user's shell), or some external orchestrator. pm_* env vars are set
+  // by PM2 so their presence + a matching ppid is the smoking gun.
+  const pid = process.pid;
+  const ppid = process.ppid;
+  const tty = process.stdin.isTTY ? 'tty' : 'no-tty';
+  const pmId = process.env.pm_id ?? process.env.PM2_ID ?? '<not set>';
+  const pmExecPath = process.env.pm_exec_path ?? '<not set>';
+  console.log(`🛑 Received ${signal} - shutting down gracefully (pid=${pid} ppid=${ppid} ${tty} pm_id=${pmId})`);
+  if (pmExecPath !== '<not set>') console.log(`   ↳ launched by PM2: pm_exec_path=${pmExecPath}`);
 
   const forceExitTimer = setTimeout(() => {
     console.error('⚠️ Graceful shutdown timed out, forcing exit');
