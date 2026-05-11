@@ -22,7 +22,8 @@ import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { PATHS, atomicWrite, readJSONFile, ensureDir } from '../../lib/fileUtils.js';
 
-const STATE_PATH = join(PATHS.data, 'pipeline-issues.json');
+// Lazy resolution — see series.js for context.
+const statePath = () => join(PATHS.data, 'pipeline-issues.json');
 
 export const ERR_NOT_FOUND = 'PIPELINE_ISSUE_NOT_FOUND';
 export const ERR_VALIDATION = 'PIPELINE_ISSUE_VALIDATION';
@@ -114,13 +115,13 @@ const sanitizeIssue = (raw) => {
 
 async function readState() {
   await ensureDir(PATHS.data);
-  const raw = await readJSONFile(STATE_PATH, { issues: [] }, { logError: false });
+  const raw = await readJSONFile(statePath(), { issues: [] }, { logError: false });
   const issues = Array.isArray(raw.issues) ? raw.issues.map(sanitizeIssue).filter(Boolean) : [];
   return { issues };
 }
 
 async function writeState(state) {
-  await atomicWrite(STATE_PATH, state);
+  await atomicWrite(statePath(), state);
 }
 
 export async function listIssues({ seriesId = null } = {}) {

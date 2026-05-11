@@ -17,18 +17,28 @@ import { enqueueJob } from '../mediaJobQueue/index.js';
 import { getSettings } from '../settings.js';
 import { getSeries } from './series.js';
 import { getIssue, VISUAL_STAGE_IDS } from './issues.js';
+import { buildScenePrompt, buildSettingByKey, matchSceneSetting } from '../../lib/scenePrompt.js';
 
 const SUPPORTED_MODES = new Set(['local', 'codex']);
 
-/**
- * Build an image-gen prompt for a pipeline visual element by combining a
- * caller-supplied scene/panel description with the series' style notes.
- * Keeps the style fragment short — the description provides the subject.
- */
-export function composeVisualPrompt({ series, description, extraStyle = '' }) {
-  const style = [series?.styleNotes, extraStyle].map((s) => (s || '').trim()).filter(Boolean).join(', ');
-  const subject = (description || '').trim();
-  return [style, subject].filter(Boolean).join(', ');
+// Build a pipeline image-gen prompt; delegates to the shared `buildScenePrompt`
+// so Pipeline + Writers Room renders agree byte-for-byte.
+//
+// Pipeline storyboard scenes don't yet carry a per-scene `characters[]`
+// list — once the scene extractor (PLAN item 5) populates it, callers will
+// pass `matchedCharacters` to selectively inject the cast. Until then we
+// inject none, so a 30-character series doesn't pollute every render with
+// the entire bible.
+export function composeVisualPrompt({ series, description, slugline = '', extraStyle = '', settingByKey = null, matchedCharacters = [] }) {
+  const worldStyle = [series?.styleNotes, extraStyle].map((s) => (s || '').trim()).filter(Boolean).join(', ');
+  const map = settingByKey || buildSettingByKey(series?.settings);
+  return buildScenePrompt(
+    series?.name || '',
+    { visualPrompt: description || '', slugline },
+    matchedCharacters,
+    worldStyle,
+    matchSceneSetting(slugline, map),
+  );
 }
 
 /**
@@ -46,9 +56,8 @@ export async function enqueueVisualImage(issueId, stageId, options = {}) {
   if (!VISUAL_STAGE_IDS.includes(stageId)) {
     throw new Error(`enqueueVisualImage: not a visual stage: ${stageId}`);
   }
-  const issue = await getIssue(issueId);
+  const [issue, settings] = await Promise.all([getIssue(issueId), getSettings()]);
   const series = await getSeries(issue.seriesId);
-  const settings = await getSettings();
 
   const mode = SUPPORTED_MODES.has(options.mode) ? options.mode
     : (SUPPORTED_MODES.has(settings.imageGen?.mode) ? settings.imageGen.mode : 'local');
@@ -56,7 +65,8 @@ export async function enqueueVisualImage(issueId, stageId, options = {}) {
   const prompt = composeVisualPrompt({
     series,
     description: options.description,
-    extraStyle: options.extraStyle || '',
+    slugline: options.slugline,
+    extraStyle: options.extraStyle,
   });
   if (!prompt) throw new Error('enqueueVisualImage: prompt is empty (no description, no style)');
 

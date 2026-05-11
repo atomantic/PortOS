@@ -33,6 +33,18 @@ vi.mock('./textStages.js', async () => {
   };
 });
 
+// Mock the episode-video handoff so the coordinator test stays focused on
+// the text-stage chain and doesn't transitively load the CD module graph
+// (which hits services/appActivity.js at import time and needs PATHS.cos).
+const videoKickoffs = [];
+vi.mock('./episodeVideo.js', () => ({
+  ERR_NO_STORYBOARDS: 'PIPELINE_EPISODE_NO_STORYBOARDS',
+  startEpisodeVideoForIssue: vi.fn(async (issueId, opts) => {
+    videoKickoffs.push({ issueId, opts });
+    return { cdProjectId: `cd-mock-${issueId.slice(0, 6)}`, scenes: 2, reused: false };
+  }),
+}));
+
 const seriesSvc = await import('./series.js');
 const issuesSvc = await import('./issues.js');
 const autoRunner = await import('./autoRunner.js');
@@ -110,6 +122,29 @@ describe('pipeline auto-runner', () => {
     expect(second.alreadyRunning).toBe(true);
     expect(second.runId).toBe(first.runId);
     await waitFor(() => generated.length === 4);
+  });
+
+  it('does NOT kick off episodeVideo by default', async () => {
+    const { issue } = await seed();
+    await autoRunner.startAutoRunTextStages(issue.id);
+    await waitFor(() => generated.length === 4);
+    // Give the coordinator's terminal broadcast a chance to land.
+    await waitFor(() => {
+      const run = autoRunner.__testing.runs.get(issue.id);
+      return run?.lastPayload?.type === 'complete';
+    });
+    expect(videoKickoffs).toHaveLength(0);
+  });
+
+  it('kicks off episodeVideo when includeVideo:true', async () => {
+    const { issue } = await seed();
+    await issuesSvc.updateStage(issue.id, 'storyboards', {
+      status: 'edited',
+      scenes: [{ description: 'a scene' }, { description: 'another' }],
+    });
+    await autoRunner.startAutoRunTextStages(issue.id, { includeVideo: true });
+    await waitFor(() => videoKickoffs.length === 1, { timeoutMs: 2000 });
+    expect(videoKickoffs[0].issueId).toBe(issue.id);
   });
 
   it('cancelAutoRun stops the chain between stages', async () => {

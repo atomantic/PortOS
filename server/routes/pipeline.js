@@ -31,6 +31,11 @@ import * as issuesSvc from '../services/pipeline/issues.js';
 import { generateStage } from '../services/pipeline/textStages.js';
 import * as autoRunner from '../services/pipeline/autoRunner.js';
 import { enqueueVisualImage } from '../services/pipeline/visualStages.js';
+import { startEpisodeVideoForIssue, ERR_NO_STORYBOARDS } from '../services/pipeline/episodeVideo.js';
+import { ASPECT_RATIOS, QUALITIES } from '../lib/creativeDirectorPresets.js';
+import { extractBible } from '../lib/bibleExtractor.js';
+import { extractScenes, SOURCE_KIND } from '../lib/sceneExtractor.js';
+import { mergeExtractedBible, BIBLE_KIND, BIBLE_FIELD } from '../lib/storyBible.js';
 
 const router = Router();
 
@@ -39,6 +44,7 @@ const SERVICE_ERROR_STATUS = {
   [seriesSvc.ERR_VALIDATION]: 400,
   [issuesSvc.ERR_NOT_FOUND]: 404,
   [issuesSvc.ERR_VALIDATION]: 400,
+  [ERR_NO_STORYBOARDS]: 400,
 };
 
 const mapServiceError = (err) => {
@@ -49,10 +55,23 @@ const mapServiceError = (err) => {
 
 // ---- Series schemas ----
 
+// Bible entries are sanitized server-side via the canonical shape in
+// `server/lib/storyBible.js`; the route schema is intentionally permissive
+// (max length only) so additive fields don't require a schema migration.
+const bibleEntrySchema = z.record(z.string(), z.any());
+
 const characterSchema = z.object({
   id: z.string().trim().max(80).optional(),
   name: z.string().trim().min(1).max(seriesSvc.CHARACTER_NAME_MAX),
-  description: z.string().trim().max(seriesSvc.CHARACTER_DESCRIPTION_MAX).optional().default(''),
+  // Back-compat: pre-DRY shape used `description`. Both fields are accepted
+  // and the canonical sanitizer normalizes them to `physicalDescription`.
+  description: z.string().trim().max(seriesSvc.CHARACTER_DESCRIPTION_MAX).optional(),
+  physicalDescription: z.string().trim().max(seriesSvc.CHARACTER_DESCRIPTION_MAX).optional(),
+  aliases: z.array(z.string().trim().min(1).max(100)).max(12).optional(),
+  role: z.string().trim().max(200).optional(),
+  personality: z.string().trim().max(2000).optional(),
+  background: z.string().trim().max(2000).optional(),
+  notes: z.string().trim().max(4000).optional(),
   imageRefs: z.array(z.string().trim().min(1).max(seriesSvc.IMAGE_REF_MAX))
     .max(seriesSvc.IMAGE_REFS_PER_CHARACTER_MAX).optional(),
 });
@@ -62,7 +81,10 @@ const seriesCreateSchema = z.object({
   logline: z.string().trim().max(seriesSvc.LOGLINE_MAX).optional().default(''),
   premise: z.string().trim().max(seriesSvc.PREMISE_MAX).optional().default(''),
   worldId: z.string().trim().max(seriesSvc.WORLD_ID_MAX).nullable().optional(),
-  characters: z.array(characterSchema).max(seriesSvc.CHARACTERS_PER_SERIES_MAX).optional(),
+  writersRoomWorkId: z.string().trim().max(seriesSvc.WRITERS_ROOM_WORK_ID_MAX).nullable().optional(),
+  characters: z.array(characterSchema).max(seriesSvc.BIBLE_ENTRIES_PER_SERIES_MAX).optional(),
+  settings: z.array(bibleEntrySchema).max(seriesSvc.BIBLE_ENTRIES_PER_SERIES_MAX).optional(),
+  objects: z.array(bibleEntrySchema).max(seriesSvc.BIBLE_ENTRIES_PER_SERIES_MAX).optional(),
   styleNotes: z.string().trim().max(seriesSvc.STYLE_NOTES_MAX).optional().default(''),
   targetFormat: z.enum(seriesSvc.TARGET_FORMATS).optional(),
   issueCountTarget: z.number().int().min(0).max(seriesSvc.ISSUE_COUNT_TARGET_MAX).optional(),
@@ -73,7 +95,10 @@ const seriesPatchSchema = z.object({
   logline: z.string().trim().max(seriesSvc.LOGLINE_MAX).optional(),
   premise: z.string().trim().max(seriesSvc.PREMISE_MAX).optional(),
   worldId: z.string().trim().max(seriesSvc.WORLD_ID_MAX).nullable().optional(),
-  characters: z.array(characterSchema).max(seriesSvc.CHARACTERS_PER_SERIES_MAX).optional(),
+  writersRoomWorkId: z.string().trim().max(seriesSvc.WRITERS_ROOM_WORK_ID_MAX).nullable().optional(),
+  characters: z.array(characterSchema).max(seriesSvc.BIBLE_ENTRIES_PER_SERIES_MAX).optional(),
+  settings: z.array(bibleEntrySchema).max(seriesSvc.BIBLE_ENTRIES_PER_SERIES_MAX).optional(),
+  objects: z.array(bibleEntrySchema).max(seriesSvc.BIBLE_ENTRIES_PER_SERIES_MAX).optional(),
   styleNotes: z.string().trim().max(seriesSvc.STYLE_NOTES_MAX).optional(),
   targetFormat: z.enum(seriesSvc.TARGET_FORMATS).optional(),
   issueCountTarget: z.number().int().min(0).max(seriesSvc.ISSUE_COUNT_TARGET_MAX).optional(),
@@ -108,7 +133,12 @@ const issuePatchSchema = z.object({
   title: z.string().trim().min(1).max(issuesSvc.TITLE_MAX).optional(),
   number: z.number().int().min(1).max(9999).optional(),
   status: z.enum(issuesSvc.ISSUE_STATUSES).optional(),
-  stages: z.record(z.string(), z.union([stageInputSchema, visualStageInputSchema])).optional(),
+  // Use visualStageInputSchema as the union arm so visual-stage payloads keep
+  // their `scenes` / `pages` / `cdProjectId` / `videoPath` fields. The schema
+  // is a superset of stageInputSchema (those four are optional additions), so
+  // text-stage patches still validate. Z.union picks the first schema that
+  // succeeds — stageInputSchema first would silently strip the visual fields.
+  stages: z.record(z.string(), z.union([visualStageInputSchema, stageInputSchema])).optional(),
 }).refine((p) => Object.keys(p).length > 0, { message: 'patch must include at least one field' });
 
 const generateSchema = z.object({
@@ -119,6 +149,8 @@ const generateSchema = z.object({
 
 const visualGenerateSchema = z.object({
   description: z.string().trim().min(1).max(8000),
+  // Matched against the series settings bible when present.
+  slugline: z.string().trim().max(200).optional(),
   negativePrompt: z.string().trim().max(2000).optional(),
   extraStyle: z.string().trim().max(2000).optional(),
   mode: z.enum(['local', 'codex']).optional(),
@@ -130,10 +162,46 @@ const visualGenerateSchema = z.object({
   guidance: z.number().min(0).max(30).optional(),
 });
 
+const episodeVideoSchema = z.object({
+  aspectRatio: z.enum(ASPECT_RATIOS).optional(),
+  quality: z.enum(QUALITIES).optional(),
+  modelId: z.string().trim().max(64).optional(),
+  force: z.boolean().optional(),
+});
+
+// Source for scene extraction: which text stage to read from (`prose` →
+// granular paragraph-grain breakdown via `writers-room-script`; `tvScript`
+// → slugline-grain parse via `pipeline-extract-scenes`). `force` overrides
+// the "you have N hand-curated scenes already" guard.
+// Enum values match `SOURCE_KIND` verbatim so the route forwards `body.from`
+// straight through — same string also names the issue's text stage.
+const extractScenesSchema = z.object({
+  from: z.enum([SOURCE_KIND.PROSE, SOURCE_KIND.TV_SCRIPT]).optional().default(SOURCE_KIND.TV_SCRIPT),
+  providerOverride: z.string().trim().max(80).optional(),
+  force: z.boolean().optional(),
+});
+
+// Source: `issueId` (pulls `stages.prose.output`) OR explicit `corpus` text.
+const extractBibleSchema = z.object({
+  kinds: z.array(z.enum([BIBLE_KIND.CHARACTER, BIBLE_KIND.SETTING, BIBLE_KIND.OBJECT]))
+    .min(1).max(3).optional()
+    .default([BIBLE_KIND.CHARACTER, BIBLE_KIND.SETTING, BIBLE_KIND.OBJECT]),
+  issueId: z.string().trim().max(64).optional(),
+  corpus: z.string().min(1).max(issuesSvc.STAGE_OUTPUT_MAX).optional(),
+  providerOverride: z.string().trim().max(80).optional(),
+}).refine((p) => p.issueId || p.corpus, { message: 'extract requires either `issueId` or `corpus`' });
+
 const autoRunSchema = z.object({
   providerId: z.string().trim().max(80).optional(),
   model: z.string().trim().max(200).optional(),
   force: z.boolean().optional(),
+  // Optional opt-in to extend the auto-run past text stages: kicks off the
+  // episodeVideo handoff to Creative Director once scripts are done. Burns
+  // GPU minutes, so default is off.
+  includeVideo: z.boolean().optional(),
+  aspectRatio: z.enum(ASPECT_RATIOS).optional(),
+  quality: z.enum(QUALITIES).optional(),
+  modelId: z.string().trim().max(64).optional(),
 });
 
 // =====================
@@ -158,6 +226,45 @@ router.patch('/series/:id', asyncHandler(async (req, res) => {
   const body = validateRequest(seriesPatchSchema, req.body ?? {});
   const s = await seriesSvc.updateSeries(req.params.id, body).catch((err) => { throw mapServiceError(err); });
   res.json(s);
+}));
+
+router.post('/series/:id/extract-bible', asyncHandler(async (req, res) => {
+  const body = validateRequest(extractBibleSchema, req.body ?? {});
+  const series = await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
+
+  let corpus = (body.corpus || '').trim();
+  if (!corpus) {
+    const issue = await issuesSvc.getIssue(body.issueId).catch((err) => { throw mapServiceError(err); });
+    if (issue.seriesId !== series.id) {
+      throw new ServerError('Issue does not belong to this series', { status: 400, code: 'PIPELINE_ISSUE_SERIES_MISMATCH' });
+    }
+    corpus = (issue.stages?.prose?.output || '').trim();
+    if (!corpus) {
+      throw new ServerError('Issue has no prose to extract from — generate the prose stage first', {
+        status: 400, code: 'PIPELINE_NO_PROSE_FOR_EXTRACTION',
+      });
+    }
+  }
+
+  // Sequential — see PLAN item 4b for the opt-in parallel mode follow-up.
+  const results = {};
+  const patch = {};
+  for (const kind of body.kinds) {
+    const field = BIBLE_FIELD[kind];
+    const result = await extractBible({
+      kind,
+      corpus,
+      existing: series[field] || [],
+      context: { series: { id: series.id, name: series.name } },
+      providerOverride: body.providerOverride,
+      source: `pipeline-bible-${kind}`,
+    });
+    patch[field] = mergeExtractedBible(series[field] || [], result.extracted, kind);
+    results[field] = { extracted: result.extracted, runId: result.runId, providerId: result.providerId, model: result.model };
+  }
+
+  const updated = await seriesSvc.updateSeries(series.id, patch).catch((err) => { throw mapServiceError(err); });
+  res.json({ series: updated, results });
 }));
 
 router.delete('/series/:id', asyncHandler(async (req, res) => {
@@ -216,6 +323,72 @@ router.post('/issues/:id/stages/:stageId/generate', asyncHandler(async (req, res
   res.json(result);
 }));
 
+// Auto-fill stages.storyboards.scenes[] from a text stage. Reads the issue's
+// prose (paragraph-grain) or tvScript (slugline-grain) output, runs the
+// shared scene extractor, and replaces stages.storyboards.scenes with the
+// result mapped to the storyboards UI shape (visualPrompt → description).
+router.post('/issues/:id/stages/storyboards/extract-scenes', asyncHandler(async (req, res) => {
+  const body = validateRequest(extractScenesSchema, req.body ?? {});
+  const issue = await issuesSvc.getIssue(req.params.id).catch((err) => { throw mapServiceError(err); });
+  const series = await seriesSvc.getSeries(issue.seriesId).catch((err) => { throw mapServiceError(err); });
+
+  const sourceKind = body.from;
+  const source = (issue.stages?.[sourceKind]?.output || '').trim();
+  if (!source) {
+    throw new ServerError(
+      `Cannot extract scenes — issue's ${sourceKind} stage is empty`,
+      { status: 400, code: 'PIPELINE_NO_SOURCE_FOR_SCENE_EXTRACT' },
+    );
+  }
+
+  const existing = Array.isArray(issue.stages?.storyboards?.scenes) ? issue.stages.storyboards.scenes : [];
+  if (existing.length > 0 && !body.force) {
+    throw new ServerError(
+      `Storyboards already has ${existing.length} scene${existing.length === 1 ? '' : 's'} — pass { force: true } to replace`,
+      { status: 409, code: 'PIPELINE_STORYBOARDS_NOT_EMPTY' },
+    );
+  }
+
+  const result = await extractScenes({
+    source,
+    sourceKind,
+    characters: series.characters || [],
+    settings: series.settings || [],
+    objects: series.objects || [],
+    work: { title: issue.title, kind: 'tv-episode' },
+    series: { name: series.name, styleNotes: series.styleNotes },
+    issue: { number: issue.number, title: issue.title },
+    providerOverride: body.providerOverride,
+    tag: `pipeline-storyboards-extract-${sourceKind}`,
+  });
+
+  // Adapt canonical scene shape to the pipeline storyboards UI shape: alias
+  // `visualPrompt → description` (the textarea binding) and reset the per-scene
+  // image-gen job fields. Rich fields (heading/summary/dialogue/...) ride along.
+  const storyboardScenes = result.extracted.scenes.map((s) => ({
+    ...s,
+    description: s.visualPrompt || '',
+    imageJobId: null,
+    prompt: null,
+  }));
+  const { issue: updatedIssue, stage } = await issuesSvc.updateStage(issue.id, 'storyboards', {
+    status: storyboardScenes.length ? 'ready' : 'empty',
+    scenes: storyboardScenes,
+    lastRunId: result.runId,
+    errorMessage: '',
+  });
+
+  res.json({
+    issue: updatedIssue,
+    stage,
+    runId: result.runId,
+    providerId: result.providerId,
+    model: result.model,
+    sceneCount: storyboardScenes.length,
+    sourceKind,
+  });
+}));
+
 router.post('/issues/:id/stages/:stageId/visual', asyncHandler(async (req, res) => {
   const { id, stageId } = req.params;
   if (!issuesSvc.VISUAL_STAGE_IDS.includes(stageId)) {
@@ -225,10 +398,10 @@ router.post('/issues/:id/stages/:stageId/visual', asyncHandler(async (req, res) 
     );
   }
   if (stageId === 'episodeVideo') {
-    throw new ServerError(
-      'Episode-video stitching via Pipeline is not yet implemented — manually trigger from Creative Director for now.',
-      { status: 501, code: 'PIPELINE_NOT_IMPLEMENTED' },
-    );
+    const body = validateRequest(episodeVideoSchema, req.body ?? {});
+    const result = await startEpisodeVideoForIssue(id, body).catch((err) => { throw mapServiceError(err); });
+    res.json(result);
+    return;
   }
   const body = validateRequest(visualGenerateSchema, req.body ?? {});
   const result = await enqueueVisualImage(id, stageId, body).catch((err) => { throw mapServiceError(err); });

@@ -27,6 +27,16 @@ export const deleteWritersRoomWork = (id) => request(`/writers-room/works/${enc(
   method: 'DELETE',
 });
 
+// Pipeline bridge: create a pipeline series + first issue from this work
+// (transfers prose, bibles, and the latest script-analysis scenes). Idempotent
+// — if the work is already linked, returns the existing series + issue
+// (reused=true) unless { force: true } is passed.
+export const promoteWritersRoomWorkToPipeline = (id, { force } = {}) =>
+  request(`/writers-room/works/${enc(id)}/promote-to-pipeline`, {
+    method: 'POST',
+    body: JSON.stringify({ force }),
+  });
+
 // Drafts
 export const saveWritersRoomDraft = (id, body) => request(`/writers-room/works/${enc(id)}/draft`, {
   method: 'PUT',

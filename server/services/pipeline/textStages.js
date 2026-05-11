@@ -14,9 +14,7 @@
  * boundary in autoRunner.js, which routes failures through a finalizer.
  */
 
-import { buildPrompt } from '../promptService.js';
-import { getActiveProvider, getProviderById } from '../providers.js';
-import { executeApiRun, executeCliRun, createRun } from '../runner.js';
+import { runStagedLLM } from '../../lib/stageRunner.js';
 import { getSeries } from './series.js';
 import { getIssue, updateStage, TEXT_STAGE_IDS } from './issues.js';
 
@@ -26,55 +24,6 @@ const STAGE_TO_TEMPLATE = Object.freeze({
   comicScript: 'pipeline-comic-script',
   tvScript: 'pipeline-tv-script',
 });
-
-const isCliProvider = (provider) => provider?.type === 'cli';
-
-// Wraps executeCliRun / executeApiRun as a Promise. Mirrors the pattern in
-// worldBuilderExpand.js#callLLM — both runner entry points are async and can
-// reject before onComplete fires, so we forward those rejections through the
-// outer Promise instead of letting them surface as unhandledRejection.
-async function callLLM(provider, model, prompt) {
-  const { runId } = await createRun({
-    providerId: provider.id,
-    model,
-    prompt,
-    source: 'pipeline-text-stage',
-  });
-  return new Promise((resolve, reject) => {
-    let text = '';
-    if (isCliProvider(provider)) {
-      executeCliRun(
-        runId,
-        provider,
-        prompt,
-        process.cwd(),
-        (chunk) => { text += chunk; },
-        (result) => {
-          if (result?.error || result?.success === false) {
-            reject(new Error(result?.error || 'CLI execution failed'));
-          } else {
-            resolve({ text, runId });
-          }
-        },
-        provider.timeout ?? 300000,
-      ).catch(reject);
-    } else {
-      executeApiRun(
-        runId,
-        provider,
-        model,
-        prompt,
-        process.cwd(),
-        [],
-        (data) => { text += typeof data === 'string' ? data : (data?.text || ''); },
-        (result) => {
-          if (result?.error) reject(new Error(result.error));
-          else resolve({ text, runId });
-        },
-      ).catch(reject);
-    }
-  });
-}
 
 /**
  * Build the variable bag fed into the stage template. Includes the series
@@ -134,28 +83,17 @@ export async function generateStage(issueId, stageId, options = {}) {
   await updateStage(issueId, stageId, { status: 'generating', errorMessage: '' });
 
   const ctx = buildStageContext({ series, issue, stageId, seedInput: options.seedInput });
-  const prompt = await buildPrompt(template, ctx);
-
-  let provider = options.providerId ? await getProviderById(options.providerId).catch(() => null) : null;
-  if (!provider) provider = await getActiveProvider();
-  if (!provider) {
-    await updateStage(issueId, stageId, {
-      status: 'error',
-      errorMessage: 'No AI provider available',
-    });
-    throw new Error('No AI provider available for pipeline text stage');
-  }
-  const model = options.model || provider.defaultModel || provider.models?.[0] || null;
-
-  console.log(`📝 Pipeline stage — issue=${issueId.slice(0, 8)} stage=${stageId} provider=${provider.name}/${model || 'default'}`);
 
   // Catch only at this boundary so the stage record persists the failure
   // before the error bubbles to the caller — without this, an LLM throw
   // would leave the stage stuck in `generating` forever.
-  let text;
-  let runId;
+  let result;
   try {
-    ({ text, runId } = await callLLM(provider, model, prompt));
+    result = await runStagedLLM(template, ctx, {
+      providerOverride: options.providerId,
+      modelOverride: options.model,
+      source: 'pipeline-text-stage',
+    });
   } catch (err) {
     await updateStage(issueId, stageId, {
       status: 'error',
@@ -164,16 +102,16 @@ export async function generateStage(issueId, stageId, options = {}) {
     throw err;
   }
 
-  const output = (text || '').trim();
+  const output = (result.content || '').trim();
   const { issue: updatedIssue, stage } = await updateStage(issueId, stageId, {
     status: output ? 'ready' : 'error',
     output,
-    lastRunId: runId,
+    lastRunId: result.runId,
     errorMessage: output ? '' : 'LLM returned empty response',
   });
 
-  console.log(`✅ Pipeline stage — issue=${issueId.slice(0, 8)} stage=${stageId} runId=${runId} length=${output.length}`);
-  return { issue: updatedIssue, stage, runId };
+  console.log(`✅ Pipeline stage — issue=${issueId.slice(0, 8)} stage=${stageId} runId=${result.runId} length=${output.length}`);
+  return { issue: updatedIssue, stage, runId: result.runId };
 }
 
 // Export internals for tests.

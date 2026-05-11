@@ -10,7 +10,10 @@
  * `templateEngine === 'mustache'` semantics still hold; we extend them.
  */
 
+import { join } from 'path';
 import { applyTemplate } from '../lib/promptTemplate.js';
+import { expandPartials } from '../lib/promptPartials.js';
+import { PATHS } from '../lib/fileUtils.js';
 
 // This will be initialized by server/index.js and set via setAIToolkit()
 let aiToolkitInstance = null;
@@ -79,8 +82,16 @@ export async function buildPrompt(stageName, data = {}) {
   const prompts = aiToolkitInstance.services.prompts;
   const stage = prompts.getStage(stageName);
   if (!stage) throw new Error(`Stage ${stageName} not found`);
-  const template = await prompts.getStageTemplate(stageName);
-  if (!template) throw new Error(`Template for ${stageName} not found`);
+  const rawTemplate = await prompts.getStageTemplate(stageName);
+  if (!rawTemplate) throw new Error(`Template for ${stageName} not found`);
+  // Expand `{{> partial-name }}` references against data/prompts/_partials/
+  // BEFORE the variable+section pass so a partial can carry its own
+  // {{variables}} that resolve against the same render context as the
+  // including template. Cheap when no partials are referenced — the expander
+  // short-circuits on a missing `{{>` sentinel.
+  const template = await expandPartials(rawTemplate, {
+    partialsDir: join(PATHS.data, 'prompts', '_partials'),
+  });
   // Auto-merge stage-declared shared variables (variables.json) into the
   // render context so templates can reference `{{schemaSnippet}}` etc.
   // without callers having to know which named variables their stage uses.

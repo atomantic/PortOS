@@ -22,10 +22,11 @@ vi.mock('../providers.js', () => ({
     id: 'mock-provider',
     name: 'Mock',
     type: 'api',
+    enabled: true,
     defaultModel: 'mock-model',
   })),
   getProviderById: vi.fn(async (id) => (id === 'mock-provider' ? {
-    id, name: 'Mock', type: 'api', defaultModel: 'mock-model',
+    id, name: 'Mock', type: 'api', enabled: true, defaultModel: 'mock-model',
   } : null)),
 }));
 
@@ -46,6 +47,9 @@ vi.mock('../runner.js', () => ({
 vi.mock('../promptService.js', () => ({
   // Don't truncate — the prior-stages assertion looks at the rendered ctx.
   buildPrompt: vi.fn(async (stageName, ctx) => `RENDERED:${stageName}:${JSON.stringify(ctx)}`),
+  // stageRunner now reads stage.provider/stage.model — return null so it
+  // falls through to the active provider in the mocked providers module.
+  getStage: vi.fn(() => null),
 }));
 
 const issuesSvc = await import('./issues.js');

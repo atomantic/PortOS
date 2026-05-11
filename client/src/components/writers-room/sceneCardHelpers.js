@@ -1,6 +1,15 @@
-// Shared scene/character helpers used by both the storyboard sidebar and the
-// (legacy) inline script result. Lives in its own module so SceneCard can be
-// imported wherever scenes are rendered without dragging the whole AI panel.
+// Per-work scene-card defaults; composer + bible matchers re-exported from
+// the shared scenePrompt module.
+
+export {
+  buildScenePrompt,
+  buildCharByKey,
+  matchSceneCharacters,
+  buildSettingByKey,
+  matchSceneSetting,
+  normalizeSlugline,
+  normCharKey,
+} from '../../lib/scenePrompt';
 
 // Mirror of server/lib/writersRoomStylePresets.js — kept in sync manually
 // since client and server are separate bundles. Curated preset ids come from
@@ -33,119 +42,4 @@ export function readWrImageSettings(settings) {
     steps: stored.steps != null && stored.steps !== '' ? String(stored.steps) : '',
     seed: stored.seed != null && stored.seed !== '' ? String(stored.seed) : '',
   };
-}
-
-// LLM scene lists use bare names ("ARIA"), profiles may use full names
-// ("Aria Reyes") or "the bartender" — strip leading "the " and lowercase so
-// either side resolves to the same key.
-export const normCharKey = (s) => String(s || '').trim().toLowerCase().replace(/^the\s+/, '');
-
-export function buildCharByKey(allCharacters) {
-  const map = new Map();
-  for (const profile of allCharacters || []) {
-    map.set(normCharKey(profile.name), profile);
-    for (const alias of profile.aliases || []) map.set(normCharKey(alias), profile);
-  }
-  return map;
-}
-
-export function matchSceneCharacters(sceneCharacterNames = [], charByKey) {
-  if (!Array.isArray(sceneCharacterNames) || !sceneCharacterNames.length) return [];
-  const matched = [];
-  const seen = new Set();
-  for (const name of sceneCharacterNames) {
-    const profile = charByKey?.get(normCharKey(name));
-    if (profile && !seen.has(profile.id)) {
-      matched.push(profile);
-      seen.add(profile.id);
-    }
-  }
-  return matched;
-}
-
-// Match server's normalizeSlugline in services/writersRoom/settings.js — the
-// pair has to agree byte-for-byte or the bible's match keys won't line up
-// with the live scene matching here.
-export const normalizeSlugline = (s) => String(s || '')
-  .toUpperCase()
-  .replace(/[—–-]/g, ' ')
-  .replace(/[.,:;]/g, '')
-  .replace(/\s+/g, ' ')
-  .trim();
-
-export function buildSettingByKey(allSettings) {
-  const map = new Map();
-  for (const setting of allSettings || []) {
-    const key = normalizeSlugline(setting.slugline || setting.name);
-    if (!key) continue;
-    map.set(key, setting);
-  }
-  return map;
-}
-
-export function matchSceneSetting(sceneSlugline, settingByKey) {
-  if (!sceneSlugline) return null;
-  return settingByKey?.get(normalizeSlugline(sceneSlugline)) || null;
-}
-
-const PROMPT_MAX = 1900;
-
-// Build the final image-gen prompt with priority order (diffusion models
-// weight earlier tokens heaviest):
-//   1. worldStyle preset (cinematic / film-noir / etc.) — broadest aesthetic
-//   2. workTitle — gives the model story-context cues
-//   3. setting baseline (description / palette / recurring details) — the place
-//   4. Featuring — char1: desc, char2: desc — the subjects
-//   5. scene.visualPrompt — what's NEW this beat
-//
-// Truncation priority is the inverse: visualPrompt survives unconditionally,
-// then setting baseline, then characters. Style + title are short so they're
-// always kept. Featuring drops characters one-by-one to fit; setting drops
-// secondary fields (palette, recurring) before description.
-export function buildScenePrompt(workTitle, scene, matchedCharacters, worldStyle = '', matchedSetting = null) {
-  const stylePart = worldStyle && worldStyle.trim() ? `${worldStyle.trim()}. ` : '';
-  const titlePart = workTitle ? `${workTitle}. ` : '';
-  const visual = scene.visualPrompt || '';
-
-  const settingFrags = matchedSetting ? [
-    matchedSetting.description?.trim() || '',
-    matchedSetting.palette ? `Palette: ${matchedSetting.palette.trim()}.` : '',
-    matchedSetting.recurringDetails?.trim() || '',
-  ].filter(Boolean) : [];
-
-  const featuringFragments = (matchedCharacters || [])
-    .filter((c) => c.physicalDescription && c.physicalDescription.trim())
-    .map((c) => `${c.name}: ${c.physicalDescription.trim()}`);
-
-  const PREFIX = 'Featuring — ';
-  const reserveCore = stylePart.length + titlePart.length + visual.length + 4;
-  let budget = PROMPT_MAX - reserveCore;
-
-  // Setting first claim on remaining budget (place baseline > characters
-  // for visual continuity across scenes).
-  const settingFit = [];
-  for (const frag of settingFrags) {
-    const cost = (settingFit.length === 0 ? 0 : 1) + frag.length;
-    if (cost > budget) break;
-    settingFit.push(frag);
-    budget -= cost;
-  }
-
-  // Then characters fill what's left, prefix included.
-  budget -= PREFIX.length;
-  const charFit = [];
-  for (const frag of featuringFragments) {
-    const cost = (charFit.length === 0 ? 0 : 1) + frag.length;
-    if (cost > budget) break;
-    charFit.push(frag);
-    budget -= cost;
-  }
-
-  const segs = [];
-  if (stylePart) segs.push(stylePart.trim());
-  if (titlePart) segs.push(titlePart.trim());
-  if (settingFit.length > 0) segs.push(settingFit.join(' '));
-  if (charFit.length > 0) segs.push(`${PREFIX}${charFit.join(' ')}`);
-  if (visual) segs.push(visual);
-  return segs.filter(Boolean).join(' ').slice(0, PROMPT_MAX);
 }

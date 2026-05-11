@@ -19,6 +19,7 @@ import { randomUUID } from 'crypto';
 import { broadcastSse, attachSseClient, closeJobAfterDelay } from '../../lib/sseUtils.js';
 import { generateStage } from './textStages.js';
 import { getIssue, updateIssue } from './issues.js';
+import { startEpisodeVideoForIssue, ERR_NO_STORYBOARDS } from './episodeVideo.js';
 
 // runs: Map<issueId, { runId, clients[], lastPayload, cancelRequested, startedAt }>
 const runs = new Map();
@@ -86,8 +87,37 @@ export async function startAutoRunTextStages(issueId, options = {}) {
         ]);
       }
 
-      const status = record.cancelRequested ? 'needs-review' : 'needs-review';
-      await updateIssue(issueId, { status }).catch(() => null);
+      // Optional Stage 4: episode video. Gated behind `includeVideo: true` so
+      // the default auto-run still stops before burning GPU minutes. The CD
+      // pipeline runs entirely server-side and takes minutes per scene — we
+      // fire-and-forget the kickoff and surface the cdProjectId via SSE so
+      // the UI can switch to polling the CD project for progress.
+      if (options.includeVideo && !record.cancelRequested) {
+        broadcast(issueId, { type: 'stage:start', stage: 'episodeVideo' });
+        const kickoff = await startEpisodeVideoForIssue(issueId, {
+          aspectRatio: options.aspectRatio,
+          quality: options.quality,
+          modelId: options.modelId,
+        }).catch((err) => {
+          if (err?.code === ERR_NO_STORYBOARDS) {
+            broadcast(issueId, { type: 'skip', stage: 'episodeVideo', reason: 'storyboards stage has no scenes — fill it in first' });
+            return null;
+          }
+          broadcast(issueId, { type: 'stage:error', stage: 'episodeVideo', error: (err?.message || String(err)).slice(0, 500) });
+          return null;
+        });
+        if (kickoff) {
+          broadcast(issueId, {
+            type: 'stage:complete',
+            stage: 'episodeVideo',
+            cdProjectId: kickoff.cdProjectId,
+            scenes: kickoff.scenes,
+            reused: kickoff.reused,
+          });
+        }
+      }
+
+      await updateIssue(issueId, { status: 'needs-review' }).catch(() => null);
       broadcast(issueId, {
         type: record.cancelRequested ? 'canceled' : 'complete',
         runId,

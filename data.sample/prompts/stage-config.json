@@ -213,6 +213,13 @@
       "model": "default",
       "returnsJson": false,
       "variables": []
+    },
+    "pipeline-extract-scenes": {
+      "name": "Pipeline — Extract Scenes from TV Teleplay",
+      "description": "Parse an already-formatted TV teleplay into a structured scenes[] list (one entry per slugline) the storyboards stage can render. Defers to character / setting bibles for canonical names and slugline reuse.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
     }
   }
 }

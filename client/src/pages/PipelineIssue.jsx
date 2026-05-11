@@ -99,16 +99,18 @@ export default function PipelineIssue() {
     }
   }, [latest, issueId]);
 
-  const handleAutoRun = async () => {
+  const handleAutoRun = async (opts = {}) => {
     setAutoRunStarting(true);
-    const res = await startPipelineAutoRunText(issueId, {}).catch((err) => {
+    const res = await startPipelineAutoRunText(issueId, opts).catch((err) => {
       toast.error(err.message || 'Failed to start auto-run');
       return null;
     });
     setAutoRunStarting(false);
     if (!res) return;
     setAutoRunActive(true);
-    toast.success(res.alreadyRunning ? 'Auto-run already in progress' : 'Auto-run started');
+    toast.success(res.alreadyRunning
+      ? 'Auto-run already in progress'
+      : (opts.includeVideo ? 'Auto-run started (with video)' : 'Auto-run started'));
   };
 
   const handleCancelAutoRun = async () => {
@@ -174,13 +176,23 @@ export default function PipelineIssue() {
             )}
             <button
               type="button"
-              onClick={handleAutoRun}
+              onClick={() => handleAutoRun({})}
               disabled={autoRunStarting || autoRunActive}
               className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-port-accent text-white text-sm font-medium disabled:opacity-50"
               title="Run idea → prose → (comic script + TV script) end to end"
             >
               {autoRunStarting || autoRunActive ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
-              Auto-run text stages
+              Auto-run text
+            </button>
+            <button
+              type="button"
+              onClick={() => handleAutoRun({ includeVideo: true })}
+              disabled={autoRunStarting || autoRunActive}
+              className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-port-card border border-port-accent/40 text-white text-sm font-medium disabled:opacity-50 hover:bg-port-accent/10"
+              title="Run text stages and then kick off episode video via Creative Director (burns GPU)"
+            >
+              {autoRunStarting || autoRunActive ? <Loader2 size={14} className="animate-spin" /> : <Clapperboard size={14} />}
+              Run everything (incl. video)
             </button>
           </div>
         </div>
@@ -188,7 +200,9 @@ export default function PipelineIssue() {
         {autoRunActive && latest ? (
           <div className="text-xs text-gray-400">
             {latest.type === 'stage:start' && <>Generating <span className="text-white">{PIPELINE_STAGE_LABELS[latest.stage]}</span>…</>}
-            {latest.type === 'stage:complete' && <>{PIPELINE_STAGE_LABELS[latest.stage]} ready ({latest.length} chars)</>}
+            {latest.type === 'stage:complete' && latest.stage === 'episodeVideo' && <>{PIPELINE_STAGE_LABELS[latest.stage]} kicked off — {latest.scenes} scene{latest.scenes === 1 ? '' : 's'} queued in Creative Director</>}
+            {latest.type === 'stage:complete' && latest.stage !== 'episodeVideo' && <>{PIPELINE_STAGE_LABELS[latest.stage]} ready ({latest.length} chars)</>}
+            {latest.type === 'stage:error' && <>{PIPELINE_STAGE_LABELS[latest.stage]} error — {latest.error}</>}
             {latest.type === 'skip' && <>{PIPELINE_STAGE_LABELS[latest.stage]} skipped — {latest.reason}</>}
             {latest.type === 'start' && <>Starting auto-run…</>}
           </div>
@@ -222,7 +236,7 @@ export default function PipelineIssue() {
       {/* Active stage panel */}
       <div className="flex-1 overflow-auto p-4 md:p-6">
         {StageComponent ? (
-          <StageComponent issue={issue} series={series} onStageUpdate={handleStageUpdate} />
+          <StageComponent issue={issue} series={series} onStageUpdate={handleStageUpdate} onSeriesUpdate={setSeries} />
         ) : (
           <div className="text-gray-500 text-sm">Unknown stage.</div>
         )}

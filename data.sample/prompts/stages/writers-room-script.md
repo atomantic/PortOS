@@ -8,24 +8,7 @@ You are a script supervisor breaking a piece of prose into the smallest visualiz
 - Kind: {{work.kind}}
 - Word count: {{work.wordCount}}
 
-## Character bible (canonical descriptions — defer to these)
-
-Each scene's image-gen prompt has to describe characters physically (image models don't know your story). When the prose names a character that has an entry below, write `visualPrompt` to match the bible's `physicalDescription` rather than re-improvising. If the bible is empty, fall back to the prose. Do **not** invent contradictory details.
-
-```json
-{{existingCharactersJson}}
-```
-
-## Setting bible (canonical locations — defer to these)
-
-When a scene's slugline matches a `slugline` below (case-insensitive, ignoring punctuation), the storyboard pipeline auto-injects the entry's `description` / `palette` / `recurringDetails` into the final image prompt. So:
-
-- **Reuse the same slugline string** from the bible verbatim when the scene takes place in that location — even minor wording drift breaks the match.
-- Don't restate the setting's baseline description inside `visualPrompt`; the pipeline will prepend it. Use `visualPrompt` for what's *new this beat* (blocking, lighting *changes* from the room's baseline, character action, time-of-day shifts).
-
-```json
-{{existingSettingsJson}}
-```
+{{> bible-deference }}
 
 ## Source prose
 
@@ -59,28 +42,4 @@ Do NOT merge to "tighten the arc" or "avoid padding." More cards is better — t
 - **`visualPrompt`** — a self-contained image-gen prompt (~30–60 words) describing the scene as a still frame: subjects, location, lighting, mood, camera framing, time of day. Bake in genre/era cues from the prose. Do NOT reference characters by name — describe them physically so an image model with no story context can render them.
 - **`sourceSegmentIds`** — keep empty unless the prose uses explicit `# Chapter` / `## Scene` markdown headings, in which case attribute each generated scene to the heading id like `seg-001`.
 
-## Output contract
-
-Return ONLY valid JSON matching this shape — no prose, no markdown fence, no commentary:
-
-```json
-{
-  "title": "string (the work title or your suggested screenplay title)",
-  "logline": "string (one-sentence pitch)",
-  "scenes": [
-    {
-      "id": "scene-01",
-      "heading": "Scene 1 — Title",
-      "slugline": "INT. KITCHEN — NIGHT",
-      "summary": "string",
-      "characters": ["NAME", ...],
-      "action": "string",
-      "dialogue": [
-        { "character": "NAME", "line": "string" }
-      ],
-      "visualPrompt": "string",
-      "sourceSegmentIds": ["seg-001"]
-    }
-  ]
-}
-```
+{{> scene-output-contract }}

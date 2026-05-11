@@ -8,14 +8,22 @@
  */
 
 import { useState } from 'react';
-import { Plus, Trash2, Sparkles, Loader2 } from 'lucide-react';
+import { Plus, Trash2, Sparkles, Loader2, Wand2 } from 'lucide-react';
 import toast from '../../ui/Toast';
-import { generatePipelineVisualImage, updatePipelineIssue } from '../../../services/api';
+import {
+  generatePipelineVisualImage,
+  updatePipelineIssue,
+  extractPipelineStoryboardScenes,
+} from '../../../services/api';
 
 export default function StoryboardsStage({ issue, onStageUpdate }) {
   const stage = issue.stages?.storyboards || { status: 'empty', scenes: [] };
   const [scenes, setScenes] = useState(stage.scenes || []);
   const [savingIdx, setSavingIdx] = useState(null);
+  const [extractingFrom, setExtractingFrom] = useState(null);
+
+  const tvScriptReady = !!(issue.stages?.tvScript?.output || '').trim();
+  const proseReady = !!(issue.stages?.prose?.output || '').trim();
 
   const persist = async (nextScenes) => {
     setScenes(nextScenes);
@@ -35,6 +43,36 @@ export default function StoryboardsStage({ issue, onStageUpdate }) {
     setScenes(next);
   };
 
+  // Replace-existing confirm uses a two-click arm pattern (no window.confirm
+  // per CLAUDE.md, no shared confirm-modal primitive in the pipeline yet).
+  // First click on a button when scenes is non-empty arms it (label flips to
+  // "Click again to replace"). Second click within 5s fires the extract.
+  const onExtractClick = async (from) => {
+    const armKey = `arm:${from}`;
+    const needsConfirm = scenes.length > 0;
+
+    if (needsConfirm && extractingFrom !== armKey) {
+      setExtractingFrom(armKey);
+      toast.warning(`This will replace ${scenes.length} existing scene${scenes.length === 1 ? '' : 's'}. Click again to confirm.`);
+      setTimeout(() => {
+        setExtractingFrom((cur) => (cur === armKey ? null : cur));
+      }, 5000);
+      return;
+    }
+
+    setExtractingFrom(from);
+    const result = await extractPipelineStoryboardScenes(issue.id, { from, force: true }).catch((err) => {
+      toast.error(err.message || 'Scene extraction failed');
+      return null;
+    });
+    setExtractingFrom(null);
+    if (!result) return;
+    const next = result.stage?.scenes || [];
+    setScenes(next);
+    onStageUpdate?.('storyboards', result.stage, result.issue);
+    toast.success(`Extracted ${result.sceneCount} scene${result.sceneCount === 1 ? '' : 's'}`);
+  };
+
   const handleGenerate = async (i) => {
     const scene = scenes[i];
     if (!scene.description?.trim()) {
@@ -44,6 +82,7 @@ export default function StoryboardsStage({ issue, onStageUpdate }) {
     setSavingIdx(i);
     const result = await generatePipelineVisualImage(issue.id, 'storyboards', {
       description: scene.description,
+      slugline: scene.slugline || '',
     }).catch((err) => {
       toast.error(err.message || 'Failed to enqueue image');
       return null;
@@ -64,13 +103,39 @@ export default function StoryboardsStage({ issue, onStageUpdate }) {
             One image per scene, fed by the TV script. Use sluglines to keep parity with the teleplay. Scene-video rendering through Creative Director is deferred.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={addScene}
-          className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-port-card border border-port-border text-white text-sm hover:border-port-accent/50"
-        >
-          <Plus size={14} /> Add scene
-        </button>
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            type="button"
+            onClick={() => onExtractClick('tvScript')}
+            disabled={!tvScriptReady || extractingFrom === 'tvScript'}
+            title={tvScriptReady ? 'Parse the teleplay sluglines into structured scenes' : 'Generate the TV script first'}
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-port-card border border-port-border text-white text-sm hover:border-port-accent/50 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {extractingFrom === 'tvScript'
+              ? <Loader2 size={14} className="animate-spin" />
+              : <Wand2 size={14} />}
+            {extractingFrom === 'arm:tvScript' ? 'Click again to replace' : 'From TV script'}
+          </button>
+          <button
+            type="button"
+            onClick={() => onExtractClick('prose')}
+            disabled={!proseReady || extractingFrom === 'prose'}
+            title={proseReady ? 'Break the prose into paragraph-grain scenes' : 'Generate the prose first'}
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-port-card border border-port-border text-white text-sm hover:border-port-accent/50 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {extractingFrom === 'prose'
+              ? <Loader2 size={14} className="animate-spin" />
+              : <Wand2 size={14} />}
+            {extractingFrom === 'arm:prose' ? 'Click again to replace' : 'From prose'}
+          </button>
+          <button
+            type="button"
+            onClick={addScene}
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-port-card border border-port-border text-white text-sm hover:border-port-accent/50"
+          >
+            <Plus size={14} /> Add scene
+          </button>
+        </div>
       </div>
 
       {scenes.length === 0 ? (
