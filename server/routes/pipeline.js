@@ -182,6 +182,10 @@ const extractScenesSchema = z.object({
 });
 
 // Source: `issueId` (pulls `stages.prose.output`) OR explicit `corpus` text.
+// `parallel: true` runs the three bible kinds concurrently (~3× wall-clock
+// speedup on HTTP-API providers like OpenAI/Anthropic/LM Studio HTTP).
+// Default stays sequential — safe for CLI providers that serialize at the
+// session anyway (codex / claude-code / gemini-cli).
 const extractBibleSchema = z.object({
   kinds: z.array(z.enum([BIBLE_KIND.CHARACTER, BIBLE_KIND.SETTING, BIBLE_KIND.OBJECT]))
     .min(1).max(3).optional()
@@ -189,6 +193,7 @@ const extractBibleSchema = z.object({
   issueId: z.string().trim().max(64).optional(),
   corpus: z.string().min(1).max(issuesSvc.STAGE_OUTPUT_MAX).optional(),
   providerOverride: z.string().trim().max(80).optional(),
+  parallel: z.boolean().optional(),
 }).refine((p) => p.issueId || p.corpus, { message: 'extract requires either `issueId` or `corpus`' });
 
 const autoRunSchema = z.object({
@@ -246,19 +251,28 @@ router.post('/series/:id/extract-bible', asyncHandler(async (req, res) => {
     }
   }
 
-  // Sequential — see PLAN item 4b for the opt-in parallel mode follow-up.
+  // Extract per-kind. Sequential by default — safe for CLI providers that
+  // serialize at the session. Parallel when explicitly requested by the
+  // caller (HTTP-API providers can fan out without session collisions).
+  // Merge always runs after all extractions complete; series.<field> is read
+  // once at top of the route, so there's no race on the merge baseline.
+  const runOne = (kind) => extractBible({
+    kind,
+    corpus,
+    existing: series[BIBLE_FIELD[kind]] || [],
+    context: { series: { id: series.id, name: series.name } },
+    providerOverride: body.providerOverride,
+    source: `pipeline-bible-${kind}`,
+  }).then((result) => ({ kind, result }));
+
+  const completed = body.parallel
+    ? await Promise.all(body.kinds.map(runOne))
+    : await body.kinds.reduce(async (acc, kind) => [...(await acc), await runOne(kind)], Promise.resolve([]));
+
   const results = {};
   const patch = {};
-  for (const kind of body.kinds) {
+  for (const { kind, result } of completed) {
     const field = BIBLE_FIELD[kind];
-    const result = await extractBible({
-      kind,
-      corpus,
-      existing: series[field] || [],
-      context: { series: { id: series.id, name: series.name } },
-      providerOverride: body.providerOverride,
-      source: `pipeline-bible-${kind}`,
-    });
     patch[field] = mergeExtractedBible(series[field] || [], result.extracted, kind);
     results[field] = { extracted: result.extracted, runId: result.runId, providerId: result.providerId, model: result.model };
   }

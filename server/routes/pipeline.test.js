@@ -256,6 +256,59 @@ describe('pipeline routes', () => {
     spy.mockRestore();
   });
 
+  it('POST /series/:id/extract-bible with parallel:true fans all kinds out concurrently', async () => {
+    // Track interleaving by recording per-call start + finish times. In
+    // parallel mode all starts come before any finish; sequential mode has
+    // finish[N] before start[N+1].
+    const extractor = await import('../lib/bibleExtractor.js');
+    const events = [];
+    const spy = vi.spyOn(extractor, 'extractBible').mockImplementation(async ({ kind }) => {
+      events.push({ kind, event: 'start' });
+      await new Promise((r) => setTimeout(r, 30));
+      events.push({ kind, event: 'finish' });
+      return { extracted: [], runId: `run-${kind}`, providerId: 'mock', model: 'mock-model' };
+    });
+
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const r = await request(app)
+      .post(`/api/pipeline/series/${ser.body.id}/extract-bible`)
+      .send({ corpus: 'x', parallel: true });
+
+    expect(r.status).toBe(200);
+    expect(spy).toHaveBeenCalledTimes(3);
+    // Parallel guarantee: every start fired before the first finish.
+    const firstFinishIdx = events.findIndex((e) => e.event === 'finish');
+    const startsBeforeFirstFinish = events.slice(0, firstFinishIdx).filter((e) => e.event === 'start').length;
+    expect(startsBeforeFirstFinish).toBe(3);
+    spy.mockRestore();
+  });
+
+  it('POST /series/:id/extract-bible defaults to sequential (CLI-provider safe)', async () => {
+    const extractor = await import('../lib/bibleExtractor.js');
+    const events = [];
+    const spy = vi.spyOn(extractor, 'extractBible').mockImplementation(async ({ kind }) => {
+      events.push({ kind, event: 'start' });
+      await new Promise((r) => setTimeout(r, 10));
+      events.push({ kind, event: 'finish' });
+      return { extracted: [], runId: `run-${kind}`, providerId: 'mock', model: 'mock-model' };
+    });
+
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const r = await request(app)
+      .post(`/api/pipeline/series/${ser.body.id}/extract-bible`)
+      .send({ corpus: 'x' });
+
+    expect(r.status).toBe(200);
+    expect(spy).toHaveBeenCalledTimes(3);
+    // Sequential: each kind finishes before the next one starts. The events
+    // array must alternate start, finish, start, finish, start, finish.
+    const eventTypes = events.map((e) => e.event);
+    expect(eventTypes).toEqual(['start', 'finish', 'start', 'finish', 'start', 'finish']);
+    spy.mockRestore();
+  });
+
   // ---- storyboards/extract-scenes ----
 
   it('POST /issues/:id/stages/storyboards/extract-scenes 400s when the source stage is empty', async () => {
