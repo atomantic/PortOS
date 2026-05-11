@@ -529,21 +529,31 @@ describe('Codex lane', () => {
   });
 
   it('lets multiple Codex jobs run concurrently (lane is not single-slot)', async () => {
-    // Both codex jobs hang indefinitely so we can observe two in-flight.
-    stubs.generateImageCodex.mockImplementation(() => new Promise(() => {}));
+    // MAX_CODEX_CONCURRENT is computed at module import time from the env, so
+    // pin it explicitly here in case a CI/local shell sets MEDIA_CODEX_CONCURRENCY=1.
+    const prevEnv = process.env.MEDIA_CODEX_CONCURRENCY;
+    process.env.MEDIA_CODEX_CONCURRENCY = '4';
+    try {
+      await importFresh();
+      // Both codex jobs hang indefinitely so we can observe two in-flight.
+      stubs.generateImageCodex.mockImplementation(() => new Promise(() => {}));
 
-    const a = mediaJobQueue.enqueueJob({ kind: 'image', params: { prompt: 'a', mode: 'codex' } });
-    const b = mediaJobQueue.enqueueJob({ kind: 'image', params: { prompt: 'b', mode: 'codex' } });
+      const a = mediaJobQueue.enqueueJob({ kind: 'image', params: { prompt: 'a', mode: 'codex' } });
+      const b = mediaJobQueue.enqueueJob({ kind: 'image', params: { prompt: 'b', mode: 'codex' } });
 
-    // Both should reach 'running' — under the old single-slot lane only one could.
-    await waitFor(() => mediaJobQueue.listJobs({ status: 'running' }).filter((j) => j.params?.mode === 'codex').length === 2);
+      // Both should reach 'running' — under the old single-slot lane only one could.
+      await waitFor(() => mediaJobQueue.listJobs({ status: 'running' }).filter((j) => j.params?.mode === 'codex').length === 2);
 
-    expect(mediaJobQueue.getJob(a.jobId).status).toBe('running');
-    expect(mediaJobQueue.getJob(b.jobId).status).toBe('running');
+      expect(mediaJobQueue.getJob(a.jobId).status).toBe('running');
+      expect(mediaJobQueue.getJob(b.jobId).status).toBe('running');
 
-    imageGenEvents.emit('failed', { generationId: a.jobId, error: 'cleanup' });
-    imageGenEvents.emit('failed', { generationId: b.jobId, error: 'cleanup' });
-    await flush();
+      imageGenEvents.emit('failed', { generationId: a.jobId, error: 'cleanup' });
+      imageGenEvents.emit('failed', { generationId: b.jobId, error: 'cleanup' });
+      await flush();
+    } finally {
+      if (prevEnv === undefined) delete process.env.MEDIA_CODEX_CONCURRENCY;
+      else process.env.MEDIA_CODEX_CONCURRENCY = prevEnv;
+    }
   });
 
   it('queued Codex job reports position within the Codex lane (not counting GPU jobs)', async () => {

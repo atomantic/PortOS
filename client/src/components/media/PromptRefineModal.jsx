@@ -132,16 +132,19 @@ export default function PromptRefineModal({ item, open, onClose }) {
     <div
       className="fixed inset-0 z-[70] bg-black/80 flex items-center justify-center p-4"
       onClick={onClose}
-      role="presentation"
+      aria-hidden="true"
     >
       <section
         className="w-full max-w-3xl max-h-[90vh] overflow-hidden bg-port-card border border-port-border rounded-xl shadow-2xl flex flex-col"
         onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="prompt-refine-title"
       >
         <header className="flex items-center justify-between gap-3 px-4 py-3 border-b border-port-border">
           <div className="flex items-center gap-2 min-w-0">
             <Sparkles className="w-4 h-4 text-port-accent shrink-0" />
-            <h2 className="text-sm font-semibold text-white">Refine Prompt</h2>
+            <h2 id="prompt-refine-title" className="text-sm font-semibold text-white">Refine Prompt</h2>
           </div>
           <button
             type="button"

@@ -34,7 +34,7 @@ const refinePromptSchema = z.object({
   providerId: z.string().min(1).max(128),
   model: z.string().max(256).optional(),
   renderConfig: z.record(z.any())
-    .refine((obj) => JSON.stringify(obj).length <= RENDER_CONFIG_MAX_BYTES, {
+    .refine((obj) => Buffer.byteLength(JSON.stringify(obj), 'utf8') <= RENDER_CONFIG_MAX_BYTES, {
       message: `renderConfig serialized size must be ≤ ${RENDER_CONFIG_MAX_BYTES} bytes`,
     })
     .optional(),
