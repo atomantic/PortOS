@@ -29,10 +29,18 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { imageGenEvents } from '../imageGenEvents.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
 
-// 5 minutes — built-in `image_gen` typically returns in 30–90s, but xhigh
-// reasoning + a queued model can run longer. Bigger than the SD-API timeout
-// because we have no progress signal to short-circuit early on.
-const CODEX_TIMEOUT_MS = 5 * 60 * 1000;
+// 20 minutes — built-in `image_gen` typically returns in 30–90s, but with the
+// parallel codex lane several renders share OpenAI throughput and a single
+// generation can easily push past 5 minutes (xhigh reasoning, queued model,
+// or an over-subscribed batch). Env-overridable for power users who want a
+// tighter cap. Bigger than the SD-API timeout because there's no progress
+// signal to short-circuit early on. Keep this in rough sync with
+// WATCHDOG_CODEX_MS in mediaJobQueue/index.js so the queue's watchdog and
+// the child's wall-clock cap fire on a similar budget.
+const CODEX_TIMEOUT_MS = (() => {
+  const n = Number(process.env.CODEX_TIMEOUT_MS);
+  return Number.isFinite(n) && n > 0 ? n : 20 * 60 * 1000;
+})();
 
 const DEFAULT_BIN = 'codex';
 

@@ -57,6 +57,12 @@ const watchdogMs = (envValue, defaultMs) => {
 };
 const WATCHDOG_VIDEO_MS = watchdogMs(process.env.MEDIA_JOB_WATCHDOG_VIDEO_MS, 30 * 60 * 1000);
 const WATCHDOG_IMAGE_MS = watchdogMs(process.env.MEDIA_JOB_WATCHDOG_IMAGE_MS, 5 * 60 * 1000);
+// Codex jobs are silent until completion — no per-step output to reset the
+// idle watchdog. With parallel codex renders sharing OpenAI throughput, a
+// single render can easily exceed 5 minutes wall-clock, so the image-kind
+// default trips false positives. 20 minutes covers a slow generation +
+// queueing delay, and is env-overridable when batch limits change.
+const WATCHDOG_CODEX_MS = watchdogMs(process.env.MEDIA_JOB_WATCHDOG_CODEX_MS, 20 * 60 * 1000);
 
 // Returns true if `p` resolves strictly under PATHS.uploads. Shared by
 // safeUnlinkUpload (cleanup) and the pre-gen sanitizer (Thread #1 guard).
@@ -600,9 +606,11 @@ async function runJob(job) {
   // prose) regularly while it's actually working. Any non-noise line in
   // imageGen/videoGen/local.js#handleLine emits 'activity' which resets
   // lastActivityAt; only true hangs (process wedged, no output) trip it.
-  const idleTimeoutMs = job.kind === 'video'
-    ? WATCHDOG_VIDEO_MS * Math.max(1, Number(safeParams.chunks) || 1)
-    : WATCHDOG_IMAGE_MS;
+  const idleTimeoutMs = (() => {
+    if (job.kind === 'video') return WATCHDOG_VIDEO_MS * Math.max(1, Number(safeParams.chunks) || 1);
+    if (isCodexJob(job)) return WATCHDOG_CODEX_MS;
+    return WATCHDOG_IMAGE_MS;
+  })();
   let lastActivityAt = Date.now();
   const onActivity = (e) => {
     if (e?.generationId === job.id) lastActivityAt = Date.now();
