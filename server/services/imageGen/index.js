@@ -124,12 +124,14 @@ export const attachSseClient = (jobId, res) => {
 };
 
 export const cancel = () => {
-  // Each provider enforces its own single-job invariant independently, so
-  // both can have a job in flight simultaneously. Cancel them all and
-  // return whether anything was actually cancelled — short-circuiting on
-  // the first hit would orphan a codex job whenever local is active.
+  // The "stop everything" dispatcher — invoked by routes/imageGen.js's
+  // `/cancel` fallback when no specific jobId or queue entry is targeted.
+  // local has at most one in-flight, codex can have N (parallel lane), so
+  // codex's bulk variant is the right one here. Return whether anything
+  // was actually cancelled — short-circuiting on the first hit would
+  // orphan a codex job whenever local is also active.
   const localCancelled = local.cancel();
-  const codexCancelled = codex.cancel();
+  const codexCancelled = codex.cancelAll();
   return localCancelled || codexCancelled;
 };
 

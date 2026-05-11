@@ -97,9 +97,16 @@ export function composeComicPagePrompt({ series, world, page, pageNumber, extraS
     const parts = [`Panel ${idx}: ${(p.description || '').trim() || 'continuation of previous beat'}.`];
     if (p.caption && p.caption.trim()) parts.push(`Caption: "${p.caption.trim()}".`);
     if (Array.isArray(p.dialogue) && p.dialogue.length > 0) {
+      // Trim first so whitespace-only character / line fields don't pass the
+      // truthy guard and emit malformed `: ""` entries. Drop dialogue rows
+      // whose line is empty — they have nothing for the artist to render.
       const dlg = p.dialogue
-        .map((d) => `${(d.character || 'CHAR').trim()}: "${(d.line || '').trim()}"`)
-        .filter((s) => s.includes(':'))
+        .map((d) => {
+          const character = (d.character || '').trim() || 'CHAR';
+          const line = (d.line || '').trim();
+          return line ? `${character}: "${line}"` : null;
+        })
+        .filter(Boolean)
         .join(' / ');
       if (dlg) parts.push(`Dialogue: ${dlg}.`);
     }

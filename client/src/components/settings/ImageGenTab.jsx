@@ -24,11 +24,12 @@ const CODEX_TOOL_ID = 'codex-imagegen';
 const DEFAULT_TEST_PROMPT = 'a small cyberpunk fox sitting on a neon-lit rooftop at night, cinematic, highly detailed';
 const normalizeUrl = (url) => (url || '').trim().replace(/\/+$/, '');
 
-// Mirrors server-side CODEX_PARALLEL_{DEFAULT,MAX}. Higher concurrency burns
-// OpenAI credits non-linearly on big batches — the server hard-caps too.
-const CODEX_PARALLEL_MIN = 1;
-const CODEX_PARALLEL_MAX = 10;
-const clampParallel = (n) => Math.max(CODEX_PARALLEL_MIN, Math.min(CODEX_PARALLEL_MAX, Math.floor(Number(n) || 1)));
+// Fallback bounds used until /api/settings has been fetched once. The server
+// is the source of truth (returns `imageGen.codex.parallelLimitBounds` with
+// the real min/max/default), so these only matter for the first paint.
+const PARALLEL_FALLBACK = { min: 1, max: 10, default: 1 };
+const clampParallel = (n, bounds = PARALLEL_FALLBACK) =>
+  Math.max(bounds.min, Math.min(bounds.max, Math.floor(Number(n) || bounds.default)));
 
 export function ImageGenTab() {
   const [loading, setLoading] = useState(true);
@@ -45,6 +46,10 @@ export function ImageGenTab() {
   const [codexPath, setCodexPath] = useState('');
   const [codexModel, setCodexModel] = useState('');
   const [codexParallelLimit, setCodexParallelLimit] = useState(1);
+  // Server-authoritative bounds for the parallel-limit input. Populated from
+  // /api/settings's `imageGen.codex.parallelLimitBounds`; falls back to local
+  // constants until the first fetch resolves.
+  const [parallelBounds, setParallelBounds] = useState(PARALLEL_FALLBACK);
 
   // Snapshot of saved values so we can show the "dirty" state
   const [saved, setSaved] = useState({
@@ -78,7 +83,11 @@ export function ImageGenTab() {
         const cxEnabled = cx.enabled === true;
         const cxPath = cx.codexPath || '';
         const cxModel = cx.model || '';
-        const cxParallel = clampParallel(cx.parallelLimit);
+        const bounds = cx.parallelLimitBounds && Number.isFinite(cx.parallelLimitBounds.max)
+          ? cx.parallelLimitBounds
+          : PARALLEL_FALLBACK;
+        setParallelBounds(bounds);
+        const cxParallel = clampParallel(cx.parallelLimit, bounds);
         setMode(m);
         setSdapiUrl(url);
         setPythonPath(py);
@@ -121,7 +130,7 @@ export function ImageGenTab() {
     const url = normalizeUrl(sdapiUrl) || undefined;
     const cxPath = codexPath?.trim() || undefined;
     const cxModel = codexModel?.trim() || undefined;
-    const cxParallel = clampParallel(codexParallelLimit);
+    const cxParallel = clampParallel(codexParallelLimit, parallelBounds);
     const patch = {
       imageGen: {
         mode,
@@ -423,18 +432,18 @@ export function ImageGenTab() {
               <label className="block text-xs font-medium text-gray-400 mb-1">Parallel render limit</label>
               <input
                 type="number"
-                min={CODEX_PARALLEL_MIN}
-                max={CODEX_PARALLEL_MAX}
+                min={parallelBounds.min}
+                max={parallelBounds.max}
                 step={1}
                 value={codexParallelLimit}
-                onChange={(e) => setCodexParallelLimit(clampParallel(e.target.value))}
+                onChange={(e) => setCodexParallelLimit(clampParallel(e.target.value, parallelBounds))}
                 className="w-24 bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
               />
               <p className="text-xs text-gray-500 mt-1">
-                How many Codex renders the queue runs in parallel. Default <code>{CODEX_PARALLEL_MIN}</code>. Hard capped at <code>{CODEX_PARALLEL_MAX}</code>.
-                Higher values let large batches finish faster but burn OpenAI credits non-linearly — a runaway 10-wide
+                How many Codex renders the queue runs in parallel. Default <code>{parallelBounds.default}</code>. Hard capped at <code>{parallelBounds.max}</code>.
+                Higher values let large batches finish faster but burn OpenAI credits non-linearly — a runaway {parallelBounds.max}-wide
                 batch can rack up real money in minutes.
-                {codexParallelLimit > 5 && (
+                {codexParallelLimit > Math.ceil(parallelBounds.max / 2) && (
                   <span className="block mt-1 text-port-warning">
                     ⚠️ {codexParallelLimit} concurrent renders can burn credits quickly during a long batch. Watch usage.
                   </span>

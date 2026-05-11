@@ -119,6 +119,7 @@ let running = null;
 const codexRunning = [];
 const archive = [];
 
+export const CODEX_PARALLEL_MIN = 1;
 export const CODEX_PARALLEL_MAX = 10;
 export const CODEX_PARALLEL_DEFAULT = 1;
 let codexParallelLimit = CODEX_PARALLEL_DEFAULT;

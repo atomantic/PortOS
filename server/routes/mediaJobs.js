@@ -156,8 +156,12 @@ router.post('/:id/retry', asyncHandler(async (req, res) => {
   const result = enqueueJob({ kind: job.kind, params, owner: job.owner });
   // Drop the original failed/canceled row from archive — the new job inherits
   // its work, and leaving both visible just lets users keep clicking Retry on
-  // the dead row and stacking duplicate jobs.
-  removeArchivedJob(job.id);
+  // the dead row and stacking duplicate jobs. If the prune returns false the
+  // archive doesn't have this id (unusual — getJob() found it above), so log
+  // a warning instead of silently masking duplicate history.
+  if (!removeArchivedJob(job.id)) {
+    console.log(`⚠️ media-job [${job.id.slice(0, 8)}] retry: archive prune found nothing to drop — old row may persist in /api/media-jobs`);
+  }
   res.json({ ...result, retriedFrom: job.id });
 }));
 

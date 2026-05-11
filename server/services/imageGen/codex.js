@@ -55,22 +55,38 @@ export const getActiveJob = () => {
 
 export const attachSseClient = (jobId, res) => attachSse(jobs, jobId, res);
 
-// Optional jobId targets a specific running render; no arg kills every active
-// codex child.
-export const cancel = (jobId = null) => {
-  const targets = jobId
-    ? (activeProcs.has(jobId) ? [[jobId, activeProcs.get(jobId)]] : [])
-    : [...activeProcs.entries()];
-  if (targets.length === 0) return false;
-  for (const [id, proc] of targets) {
-    proc.kill('SIGTERM');
-    setTimeout(() => {
-      if (activeProcs.get(id) === proc && proc.exitCode === null && proc.signalCode === null) {
-        console.log(`⚠️ codex child didn't exit on SIGTERM — escalating to SIGKILL`);
-        proc.kill('SIGKILL');
-      }
-    }, 5000);
+const sigtermWithEscalation = (id, proc) => {
+  proc.kill('SIGTERM');
+  setTimeout(() => {
+    if (activeProcs.get(id) === proc && proc.exitCode === null && proc.signalCode === null) {
+      console.log(`⚠️ codex child didn't exit on SIGTERM — escalating to SIGKILL`);
+      proc.kill('SIGKILL');
+    }
+  }, 5000);
+};
+
+// Cancel one specific codex render. jobId is required — with parallel codex
+// renders an "anonymous cancel" is genuinely destructive (would nuke every
+// in-flight render), so callers have to be explicit. Use `cancelAll()` for
+// the legacy "stop everything" path that the imageGen.cancel() dispatcher
+// wires up.
+export const cancel = (jobId) => {
+  if (!jobId) {
+    throw new Error("codex.cancel requires a jobId — use codex.cancelAll() to terminate every in-flight render");
   }
+  const proc = activeProcs.get(jobId);
+  if (!proc) return false;
+  sigtermWithEscalation(jobId, proc);
+  return true;
+};
+
+// Bulk terminate every in-flight codex render. Only used by the imageGen
+// dispatcher's "cancel everything" route — the per-job mediaJobQueue path
+// always passes a specific jobId to `cancel()`.
+export const cancelAll = () => {
+  const entries = [...activeProcs.entries()];
+  if (entries.length === 0) return false;
+  for (const [id, proc] of entries) sigtermWithEscalation(id, proc);
   return true;
 };
 
