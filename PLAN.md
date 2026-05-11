@@ -6,8 +6,9 @@ For project goals, see [GOALS.md](./GOALS.md). For completed work, see [DONE.md]
 
 ## Next Up
 
-1. **Voice agent next power-ups** — `ui_read` (extract visible page text so "what does this say?" works without hand-navigation), destructive-action confirmation gate (pause and require spoken "confirm" when `ui_click` matches `/delete|remove|discard|reset|clear/i`), proactive CoS speech (server-pushed voice with quiet-hours policy + barge-in contract).
-2. **God-file test coverage** — `cos.js` (3115 lines) and `agentLifecycle.js` (1446 lines) still have no test sibling. Add tests for `evaluateTasks` priority ordering + `dequeueNextTask` capacity guards (cos), and `spawnAgentForTask` + `handleAgentCompletion` error recovery (agentLifecycle). Both files are still growing — `agentLifecycle.js` is +11 LOC since last replan; add coverage before further surgery.
+1. **Pipeline — Story Arc Planning + Series Page Redesign** — Phase 1 (Series page layout refactor: left-sidebar bible + right card-grid canvas, drop `max-w-5xl` cap, collapsible sidebar persisted to localStorage) starts immediately. Full multi-phase spec lives below under "Pipeline — Story Arc Planning + Series Page Redesign."
+2. **Voice agent next power-ups** — `ui_read` (extract visible page text so "what does this say?" works without hand-navigation), destructive-action confirmation gate (pause and require spoken "confirm" when `ui_click` matches `/delete|remove|discard|reset|clear/i`), proactive CoS speech (server-pushed voice with quiet-hours policy + barge-in contract).
+3. **God-file test coverage** — `cos.js` (3115 lines) and `agentLifecycle.js` (1446 lines) still have no test sibling. Add tests for `evaluateTasks` priority ordering + `dequeueNextTask` capacity guards (cos), and `spawnAgentForTask` + `handleAgentCompletion` error recovery (agentLifecycle). Both files are still growing — `agentLifecycle.js` is +11 LOC since last replan; add coverage before further surgery.
 
 ## Backlog
 

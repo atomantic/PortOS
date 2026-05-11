@@ -1,5 +1,9 @@
 # Unreleased Changes
 
+## Changed
+
+- **Pipeline Series page — two-pane layout.** PipelineSeries (`/pipeline/series/:id`) drops its `max-w-5xl` cap and splits into a sticky left bible sidebar + right card-grid canvas at `lg+`. The bible inputs (name / format / logline / target issue count / premise / style notes / world / characters) live in the sidebar; issues/episodes render as a responsive card grid (1/2/3/4 cols across breakpoints) showing number, status badge, title (line-clamped), and `updated <timeAgo>`. Sidebar collapses to a 48px rail via a panel toggle (state persists in `localStorage` under `portos-pipeline-series-sidebar-collapsed`) so the canvas can use the full viewport when you're deep in episode work. Mobile (< lg) stays single-column with the sidebar reflowing above the canvas. Phase 1 of the Pipeline Story-Arc Planning initiative — pure UI refactor, no schema or API change; subsequent phases evolve the card grid into an Arc → Season → Episode tree.
+
 ## Added
 
 - **Prompt template partials** — PortOS prompts now support Mustache-style `{{> partial-name }}` includes. Files in `data/prompts/_partials/` get inlined into stage templates at render time (recursive, with cycle detection + loud missing-partial errors). First two partials cover the duplicated bible-deference preamble and the scenes-JSON output contract that were copy-pasted across `writers-room-script.md` and `pipeline-extract-scenes.md`. Both prompts now reference the shared partials — future tweaks to "defer to canonical character names" or "this is the scenes[] JSON shape" land in one place. Step 7 of the Writers Room ↔ Pipeline DRY unification.

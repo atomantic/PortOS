@@ -1,16 +1,23 @@
 /**
  * Pipeline — Series detail page.
  *
- * Edit the series bible (name, logline, premise, worldId, styleNotes,
- * targetFormat, characters) and manage child issues/episodes.
+ * Two-pane layout (Phase 1 of the Story Arc Planning redesign):
+ *   - Left  : bible sidebar (name, logline, premise, characters, style, world). Sticky,
+ *             internally scrollable, collapsible into a hairline rail at lg+. State
+ *             persists in localStorage under PIPELINE_SIDEBAR_KEY.
+ *   - Right : structural canvas — today a card grid of issues/episodes; in subsequent
+ *             phases it becomes the Arc → Season → Episode tree.
+ * Mobile (< lg): single column, sidebar reflows above canvas.
  */
 
 import { useEffect, useState } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
 import {
-  ArrowLeft, Plus, Save, Trash2, Loader2, ChevronRight, Workflow as WorkflowIcon, Globe, NotebookPen,
+  ArrowLeft, Plus, Save, Trash2, Loader2, Workflow as WorkflowIcon, Globe, NotebookPen,
+  PanelLeftClose, PanelLeftOpen,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
+import { timeAgo } from '../utils/formatters';
 import {
   getPipelineSeries, updatePipelineSeries,
   listPipelineIssues, createPipelineIssue, deletePipelineIssue,
@@ -25,6 +32,8 @@ const STATUS_COLORS = {
   shipped: 'text-port-success bg-port-success/10',
 };
 
+const PIPELINE_SIDEBAR_KEY = 'portos-pipeline-series-sidebar-collapsed';
+
 export default function PipelineSeries() {
   const { seriesId } = useParams();
   const navigate = useNavigate();
@@ -35,6 +44,9 @@ export default function PipelineSeries() {
   const [saving, setSaving] = useState(false);
   const [newIssueTitle, setNewIssueTitle] = useState('');
   const [armedIssueId, setArmedIssueId] = useState(null);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    return localStorage.getItem(PIPELINE_SIDEBAR_KEY) === 'true';
+  });
 
   useEffect(() => {
     let canceled = false;
@@ -57,6 +69,14 @@ export default function PipelineSeries() {
       .finally(() => { if (!canceled) setLoading(false); });
     return () => { canceled = true; };
   }, [seriesId, navigate]);
+
+  const toggleSidebar = () => {
+    setSidebarCollapsed((prev) => {
+      const next = !prev;
+      localStorage.setItem(PIPELINE_SIDEBAR_KEY, String(next));
+      return next;
+    });
+  };
 
   const patchSeries = (patch) => setSeries((prev) => ({ ...prev, ...patch }));
 
@@ -127,8 +147,16 @@ export default function PipelineSeries() {
   if (loading) return <div className="p-6 text-gray-500 text-sm">Loading series…</div>;
   if (!series) return null;
 
+  // Tailwind doesn't accept arbitrary classes via interpolation, so the grid
+  // template flips between collapsed-rail (48px) and expanded (360px) via two
+  // explicit class strings. `minmax(0,1fr)` is required on the canvas column
+  // so long titles in cards don't push the layout horizontally.
+  const gridCls = sidebarCollapsed
+    ? 'grid grid-cols-1 lg:grid-cols-[48px_minmax(0,1fr)] gap-4 lg:gap-6'
+    : 'grid grid-cols-1 lg:grid-cols-[360px_minmax(0,1fr)] gap-4 lg:gap-6';
+
   return (
-    <div className="p-4 md:p-6 max-w-5xl space-y-6">
+    <div className="p-4 md:p-6 space-y-4">
       <div className="flex items-center gap-3 flex-wrap">
         <Link to="/pipeline" className="inline-flex items-center gap-1 text-sm text-gray-400 hover:text-white">
           <ArrowLeft size={14} /> All Series
@@ -155,184 +183,251 @@ export default function PipelineSeries() {
         </button>
       </div>
 
-      <section className="p-4 bg-port-card border border-port-border rounded-lg space-y-4">
-        <h2 className="text-xs uppercase tracking-wider text-gray-500">Bible</h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <Field label="Name">
-            <input
-              value={series.name || ''}
-              onChange={(e) => patchSeries({ name: e.target.value })}
-              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
-              maxLength={200}
-            />
-          </Field>
-          <Field label="Target format">
-            <select
-              value={series.targetFormat || 'comic+tv'}
-              onChange={(e) => patchSeries({ targetFormat: e.target.value })}
-              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
-            >
-              {PIPELINE_TARGET_FORMATS.map((tf) => <option key={tf} value={tf}>{tf}</option>)}
-            </select>
-          </Field>
-          <Field label="Logline">
-            <input
-              value={series.logline || ''}
-              onChange={(e) => patchSeries({ logline: e.target.value })}
-              placeholder="One-sentence pitch"
-              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
-              maxLength={500}
-            />
-          </Field>
-          <Field label="Target issue count">
-            <input
-              type="number"
-              min={0}
-              max={999}
-              value={series.issueCountTarget || 0}
-              onChange={(e) => patchSeries({ issueCountTarget: parseInt(e.target.value, 10) || 0 })}
-              className="w-32 px-3 py-2 bg-port-bg border border-port-border rounded text-white"
-            />
-          </Field>
-        </div>
-
-        <Field label="Premise (the bible — fed into every stage's prompt context)">
-          <textarea
-            value={series.premise || ''}
-            onChange={(e) => patchSeries({ premise: e.target.value })}
-            rows={5}
-            className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
-            maxLength={8000}
-            placeholder="Longer free-form premise. World, tone, central conflict, hooks. Fed verbatim into every issue's stage prompts."
-          />
-        </Field>
-
-        <Field label="Style notes (tonal / visual)">
-          <textarea
-            value={series.styleNotes || ''}
-            onChange={(e) => patchSeries({ styleNotes: e.target.value })}
-            rows={3}
-            className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
-            maxLength={4000}
-            placeholder="moebius linework, washed sepia, slow zooms, ambient drones. Reused as the visual prefix for every image-gen call from this series."
-          />
-        </Field>
-
-        <Field label="Linked World (from World Builder)">
-          <div className="flex items-center gap-2">
-            <select
-              value={series.worldId || ''}
-              onChange={(e) => patchSeries({ worldId: e.target.value || null })}
-              className="flex-1 px-3 py-2 bg-port-bg border border-port-border rounded text-white"
-            >
-              <option value="">— None —</option>
-              {worlds.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
-            </select>
-            <Link
-              to={series.worldId ? `/world-builder` : '/world-builder'}
-              className="inline-flex items-center gap-1 text-xs text-port-accent hover:underline whitespace-nowrap"
-            >
-              <Globe size={12} />
-              {series.worldId ? 'Open World Builder' : 'Create a world'}
-            </Link>
-          </div>
-        </Field>
-
-        <div>
-          <div className="flex items-center justify-between mb-2">
-            <h3 className="text-xs uppercase tracking-wider text-gray-500">Characters</h3>
+      <div className={gridCls}>
+        <aside className="lg:sticky lg:top-4 lg:self-start lg:max-h-[calc(100vh-2rem)] lg:overflow-y-auto">
+          {sidebarCollapsed ? (
             <button
               type="button"
-              onClick={handleAddCharacter}
-              className="inline-flex items-center gap-1 text-xs text-port-accent hover:underline"
+              onClick={toggleSidebar}
+              className="hidden lg:flex w-12 h-12 items-center justify-center rounded-lg border border-port-border bg-port-card text-gray-400 hover:text-white hover:border-port-accent/40"
+              title="Show series bible"
+              aria-label="Expand series bible sidebar"
             >
-              <Plus size={12} /> Add character
+              <PanelLeftOpen size={16} />
             </button>
-          </div>
-          {(series.characters || []).length === 0 ? (
-            <p className="text-xs text-gray-600 italic">No characters yet — the bible has more bite once a few are defined.</p>
           ) : (
-            <ul className="space-y-2">
-              {series.characters.map((c, i) => (
-                <li key={i} className="flex gap-2 items-start">
+            <BibleSidebar
+              series={series}
+              worlds={worlds}
+              patchSeries={patchSeries}
+              onAddCharacter={handleAddCharacter}
+              onUpdateCharacter={handleUpdateCharacter}
+              onRemoveCharacter={handleRemoveCharacter}
+              onCollapse={toggleSidebar}
+            />
+          )}
+        </aside>
+
+        <main className="min-w-0">
+          <section>
+            <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+              <h2 className="text-sm font-semibold text-white">Issues / Episodes</h2>
+              <form onSubmit={handleCreateIssue} className="flex items-center gap-2">
+                <input
+                  value={newIssueTitle}
+                  onChange={(e) => setNewIssueTitle(e.target.value)}
+                  placeholder="Issue title…"
+                  className="w-56 px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm"
+                  maxLength={300}
+                />
+                <button
+                  type="submit"
+                  disabled={!newIssueTitle.trim()}
+                  className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-port-accent text-white text-sm font-medium disabled:opacity-40"
+                >
+                  <Plus size={14} /> New issue
+                </button>
+              </form>
+            </div>
+            {issues.length === 0 ? (
+              <p className="text-xs text-gray-600 italic">No issues yet. Create the first one to start the pipeline.</p>
+            ) : (
+              <ul className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-3">
+                {issues.map((iss) => (
+                  <IssueCard
+                    key={iss.id}
+                    issue={iss}
+                    armed={armedIssueId === iss.id}
+                    onDelete={() => handleDeleteIssue(iss)}
+                  />
+                ))}
+              </ul>
+            )}
+          </section>
+        </main>
+      </div>
+    </div>
+  );
+}
+
+function BibleSidebar({ series, worlds, patchSeries, onAddCharacter, onUpdateCharacter, onRemoveCharacter, onCollapse }) {
+  return (
+    <section className="p-4 bg-port-card border border-port-border rounded-lg space-y-4">
+      <div className="flex items-center justify-between">
+        <h2 className="text-xs uppercase tracking-wider text-gray-500">Bible</h2>
+        <button
+          type="button"
+          onClick={onCollapse}
+          className="hidden lg:inline-flex p-1.5 rounded text-gray-500 hover:text-white hover:bg-port-bg"
+          title="Collapse bible sidebar"
+          aria-label="Collapse bible sidebar"
+        >
+          <PanelLeftClose size={14} />
+        </button>
+      </div>
+
+      <Field label="Name">
+        <input
+          value={series.name || ''}
+          onChange={(e) => patchSeries({ name: e.target.value })}
+          className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
+          maxLength={200}
+        />
+      </Field>
+      <Field label="Target format">
+        <select
+          value={series.targetFormat || 'comic+tv'}
+          onChange={(e) => patchSeries({ targetFormat: e.target.value })}
+          className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
+        >
+          {PIPELINE_TARGET_FORMATS.map((tf) => <option key={tf} value={tf}>{tf}</option>)}
+        </select>
+      </Field>
+      <Field label="Logline">
+        <input
+          value={series.logline || ''}
+          onChange={(e) => patchSeries({ logline: e.target.value })}
+          placeholder="One-sentence pitch"
+          className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
+          maxLength={500}
+        />
+      </Field>
+      <Field label="Target issue count">
+        <input
+          type="number"
+          min={0}
+          max={999}
+          value={series.issueCountTarget || 0}
+          onChange={(e) => patchSeries({ issueCountTarget: parseInt(e.target.value, 10) || 0 })}
+          className="w-32 px-3 py-2 bg-port-bg border border-port-border rounded text-white"
+        />
+      </Field>
+
+      <Field label="Premise (the bible — fed into every stage's prompt context)">
+        <textarea
+          value={series.premise || ''}
+          onChange={(e) => patchSeries({ premise: e.target.value })}
+          rows={5}
+          className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
+          maxLength={8000}
+          placeholder="Longer free-form premise. World, tone, central conflict, hooks. Fed verbatim into every issue's stage prompts."
+        />
+      </Field>
+
+      <Field label="Style notes (tonal / visual)">
+        <textarea
+          value={series.styleNotes || ''}
+          onChange={(e) => patchSeries({ styleNotes: e.target.value })}
+          rows={3}
+          className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
+          maxLength={4000}
+          placeholder="moebius linework, washed sepia, slow zooms, ambient drones. Reused as the visual prefix for every image-gen call from this series."
+        />
+      </Field>
+
+      <Field label="Linked World (from World Builder)">
+        <div className="flex items-center gap-2">
+          <select
+            value={series.worldId || ''}
+            onChange={(e) => patchSeries({ worldId: e.target.value || null })}
+            className="flex-1 px-3 py-2 bg-port-bg border border-port-border rounded text-white"
+          >
+            <option value="">— None —</option>
+            {worlds.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+          </select>
+          <Link
+            to={series.worldId ? `/world-builder` : '/world-builder'}
+            className="inline-flex items-center gap-1 text-xs text-port-accent hover:underline whitespace-nowrap"
+          >
+            <Globe size={12} />
+            {series.worldId ? 'Open' : 'Create'}
+          </Link>
+        </div>
+      </Field>
+
+      <div>
+        <div className="flex items-center justify-between mb-2">
+          <h3 className="text-xs uppercase tracking-wider text-gray-500">Characters</h3>
+          <button
+            type="button"
+            onClick={onAddCharacter}
+            className="inline-flex items-center gap-1 text-xs text-port-accent hover:underline"
+          >
+            <Plus size={12} /> Add
+          </button>
+        </div>
+        {(series.characters || []).length === 0 ? (
+          <p className="text-xs text-gray-600 italic">No characters yet — the bible has more bite once a few are defined.</p>
+        ) : (
+          <ul className="space-y-2">
+            {series.characters.map((c, i) => (
+              <li key={i} className="space-y-1">
+                <div className="flex gap-2 items-center">
                   <input
                     value={c.name}
-                    onChange={(e) => handleUpdateCharacter(i, { name: e.target.value })}
+                    onChange={(e) => onUpdateCharacter(i, { name: e.target.value })}
                     placeholder="Name"
-                    className="w-44 px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm"
-                    maxLength={200}
-                  />
-                  <input
-                    value={c.description}
-                    onChange={(e) => handleUpdateCharacter(i, { description: e.target.value })}
-                    placeholder="Physical description + role (e.g. weathered foundry surveyor, 50s, slate-grey hair)"
                     className="flex-1 px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm"
-                    maxLength={2000}
+                    maxLength={200}
                   />
                   <button
                     type="button"
-                    onClick={() => handleRemoveCharacter(i)}
-                    className="text-gray-500 hover:text-port-error p-2"
+                    onClick={() => onRemoveCharacter(i)}
+                    className="text-gray-500 hover:text-port-error p-1.5"
                     aria-label="Remove character"
                   >
-                    <Trash2 size={14} />
+                    <Trash2 size={12} />
                   </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      </section>
-
-      <section>
-        <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
-          <h2 className="text-sm font-semibold text-white">Issues / Episodes</h2>
-          <form onSubmit={handleCreateIssue} className="flex items-center gap-2">
-            <input
-              value={newIssueTitle}
-              onChange={(e) => setNewIssueTitle(e.target.value)}
-              placeholder="Issue title…"
-              className="w-56 px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm"
-              maxLength={300}
-            />
-            <button
-              type="submit"
-              disabled={!newIssueTitle.trim()}
-              className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-port-accent text-white text-sm font-medium disabled:opacity-40"
-            >
-              <Plus size={14} /> New issue
-            </button>
-          </form>
-        </div>
-        {issues.length === 0 ? (
-          <p className="text-xs text-gray-600 italic">No issues yet. Create the first one to start the pipeline.</p>
-        ) : (
-          <ul className="space-y-2">
-            {issues.map((iss) => (
-              <li key={iss.id} className="flex items-center justify-between gap-3 p-3 bg-port-card border border-port-border rounded-lg hover:border-port-accent/40">
-                <Link to={`/pipeline/issues/${iss.id}/idea`} className="flex items-center gap-3 flex-1 min-w-0">
-                  <span className="text-xs text-gray-500 w-10 shrink-0">#{iss.number}</span>
-                  <span className="text-white truncate">{iss.title}</span>
-                  <span className={`text-[10px] uppercase tracking-wider px-2 py-0.5 rounded ${STATUS_COLORS[iss.status] || STATUS_COLORS.draft}`}>
-                    {iss.status}
-                  </span>
-                </Link>
-                <button
-                  type="button"
-                  onClick={() => handleDeleteIssue(iss)}
-                  className={`p-2 ${armedIssueId === iss.id ? 'text-port-error' : 'text-gray-500 hover:text-port-error'}`}
-                  aria-label={armedIssueId === iss.id ? `Confirm delete issue ${iss.title}` : `Delete issue ${iss.title}`}
-                  title={armedIssueId === iss.id ? 'Click again to confirm' : 'Delete issue'}
-                >
-                  <Trash2 size={14} />
-                </button>
-                <ChevronRight size={14} className="text-gray-600" />
+                </div>
+                <input
+                  value={c.description}
+                  onChange={(e) => onUpdateCharacter(i, { description: e.target.value })}
+                  placeholder="Physical description + role"
+                  className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-xs"
+                  maxLength={2000}
+                />
               </li>
             ))}
           </ul>
         )}
-      </section>
-    </div>
+      </div>
+    </section>
+  );
+}
+
+function IssueCard({ issue, armed, onDelete }) {
+  return (
+    <li className="relative group bg-port-card border border-port-border rounded-lg hover:border-port-accent/40 transition-colors">
+      <Link
+        to={`/pipeline/issues/${issue.id}/idea`}
+        className="block p-3 space-y-2"
+      >
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-xs text-gray-500 font-mono">#{issue.number}</span>
+          <span className={`text-[10px] uppercase tracking-wider px-2 py-0.5 rounded ${STATUS_COLORS[issue.status] || STATUS_COLORS.draft}`}>
+            {issue.status}
+          </span>
+        </div>
+        <div className="text-sm text-white line-clamp-2 leading-snug min-h-[2.5rem]">
+          {issue.title || 'Untitled'}
+        </div>
+        <div className="text-[10px] text-gray-500">
+          updated {timeAgo(issue.updatedAt)}
+        </div>
+      </Link>
+      <button
+        type="button"
+        onClick={onDelete}
+        className={`absolute top-2 right-2 p-1.5 rounded transition-opacity ${armed
+          ? 'text-port-error opacity-100 bg-port-bg/80'
+          : 'text-gray-500 hover:text-port-error opacity-0 group-hover:opacity-100 focus:opacity-100'
+        }`}
+        aria-label={armed ? `Confirm delete issue ${issue.title}` : `Delete issue ${issue.title}`}
+        title={armed ? 'Click again to confirm' : 'Delete issue'}
+      >
+        <Trash2 size={12} />
+      </button>
+    </li>
   );
 }
 
