@@ -287,9 +287,22 @@ function lookupExisting(map, incoming, keyFields) {
   return null;
 }
 
+// Sort key per kind. Settings can legitimately have an empty `name` while
+// `slugline` is the primary identifier (scene-matcher keys on it), so a
+// pure name-sort drifts all slugline-only entries to the top of the list
+// AND diverges from `writersRoom/settings.js#listSettings` which uses
+// `slugline || name`. Characters / objects always have a name; key on it.
+const sortKey = (kind) => (entry) => {
+  if (kind === BIBLE_KIND.SETTING) return (entry.slugline || entry.name || '').toLowerCase();
+  return (entry.name || '').toLowerCase();
+};
+
 /**
  * Merge AI-extracted entries into a bible array. Mutates and returns
- * `existing`, sorted by name. Per-kind rules in `MERGE_CONFIG`:
+ * `existing`, sorted by the kind-specific key (`slugline || name` for
+ * settings, `name` for characters/objects — matches the per-kind list
+ * helpers so callers don't observe an ordering flip after a merge).
+ * Per-kind rules in `MERGE_CONFIG`:
  *   - match by case-insensitive name/alias/slugline
  *   - user-editable fields fill only when blank on the existing entry
  *   - prose-derived fields (firstAppearance/evidence/missingFromProse)
@@ -298,8 +311,9 @@ function lookupExisting(map, incoming, keyFields) {
  */
 export function mergeExtractedBible(existing, incoming, kind, { idPrefix = DEFAULT_ID_PREFIX[kind] } = {}) {
   if (!Array.isArray(existing)) existing = [];
+  const keyOf = sortKey(kind);
   if (!Array.isArray(incoming)) {
-    return [...existing].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    return [...existing].sort((a, b) => keyOf(a).localeCompare(keyOf(b)));
   }
   const cfg = MERGE_CONFIG[kind];
   if (!cfg) throw new Error(`mergeExtractedBible: unknown kind "${kind}"`);
@@ -348,5 +362,5 @@ export function mergeExtractedBible(existing, incoming, kind, { idPrefix = DEFAU
     }
   }
 
-  return existing.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  return existing.sort((a, b) => keyOf(a).localeCompare(keyOf(b)));
 }

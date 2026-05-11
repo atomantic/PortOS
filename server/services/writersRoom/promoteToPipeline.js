@@ -24,7 +24,6 @@ import { listObjects } from './objects.js';
 import { getAnalysis } from './evaluator.js';
 import * as seriesSvc from '../pipeline/series.js';
 import * as issuesSvc from '../pipeline/issues.js';
-import { badRequest, notFound } from './_shared.js';
 
 export const ERR_NO_DRAFT_BODY = 'WR_PROMOTE_NO_DRAFT_BODY';
 

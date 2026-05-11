@@ -74,9 +74,20 @@ function awaitRunnerCall({ provider, model, prompt, runId, source }) {
   return new Promise((resolve, reject) => {
     let text = '';
     if (provider.type === 'cli') {
+      // executeCliRun reads `provider.defaultModel` for both the CLI args
+      // (`buildCliArgs(provider)`) and the run-started metadata hook. The
+      // toolkit's CLI entry doesn't accept a separate model param, so to
+      // honor a stage-level model override (or a tier-name resolution like
+      // `model: 'heavy'`) we hand it a shallow clone with the resolved
+      // model in `defaultModel`. Without this, `runStagedLLM(..., { modelOverride: 'codex-mini' })`
+      // would silently fall back to the provider's stock default AND the
+      // run record would log the wrong model.
+      const providerForCli = model && model !== provider.defaultModel
+        ? { ...provider, defaultModel: model }
+        : provider;
       executeCliRun(
         runId,
-        provider,
+        providerForCli,
         prompt,
         process.cwd(),
         (chunk) => { text += chunk; },
@@ -87,7 +98,7 @@ function awaitRunnerCall({ provider, model, prompt, runId, source }) {
             resolve(text);
           }
         },
-        provider.timeout ?? 300000,
+        providerForCli.timeout ?? 300000,
       ).catch(reject);
     } else if (provider.type === 'api') {
       executeApiRun(

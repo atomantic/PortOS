@@ -218,6 +218,42 @@ describe('storyBible — mergeExtractedBible (settings)', () => {
     expect(merged.length).toBe(1);
     expect(merged[0].recurringDetails).toBe('jukebox');
   });
+
+  // Settings can legitimately have an empty `name` (slugline is the primary
+  // identifier). Sorting by `name` would float every slugline-only entry to
+  // the top AND diverge from `writersRoom/settings.js#listSettings`'s
+  // `slugline || name` order. Keep the merge sort kind-aware so the API is
+  // consistent and callers don't observe an ordering flip after a merge.
+  it('sorts settings by slugline (or name as fallback), not by name alone', () => {
+    const existing = [
+      sanitizeSetting({ id: 's1', slugline: 'INT. ZINC FOUNDRY — NIGHT' }),
+      sanitizeSetting({ id: 's2', name: 'Alpha Lab' }),                        // name-only
+      sanitizeSetting({ id: 's3', slugline: 'EXT. BEACH — DAWN' }),
+    ];
+    const merged = mergeExtractedBible(existing, [], 'setting');
+    // Keys (slugline || name) → 'alpha lab', 'ext. beach — dawn', 'int. zinc foundry — night'
+    expect(merged.map((e) => e.slugline || e.name)).toEqual([
+      'Alpha Lab',
+      'EXT. BEACH — DAWN',
+      'INT. ZINC FOUNDRY — NIGHT',
+    ]);
+  });
+
+  it('character/object merges still sort by name (regression guard)', () => {
+    const chars = [
+      sanitizeCharacter({ id: 'c1', name: 'Zara', physicalDescription: 'tall' }),
+      sanitizeCharacter({ id: 'c2', name: 'Alice', physicalDescription: 'short' }),
+    ];
+    const mergedChars = mergeExtractedBible(chars, [], 'character');
+    expect(mergedChars.map((e) => e.name)).toEqual(['Alice', 'Zara']);
+
+    const objs = [
+      sanitizeObject({ id: 'o1', name: 'Zenith Coin' }),
+      sanitizeObject({ id: 'o2', name: 'Amulet' }),
+    ];
+    const mergedObjs = mergeExtractedBible(objs, [], 'object');
+    expect(mergedObjs.map((e) => e.name)).toEqual(['Amulet', 'Zenith Coin']);
+  });
 });
 
 describe('storyBible — mergeExtractedBible (objects)', () => {
