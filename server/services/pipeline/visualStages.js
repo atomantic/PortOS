@@ -140,14 +140,12 @@ export async function enqueueVisualComicPage(issueId, options = {}) {
   }
 
   const mode = resolveMode(options, settings);
+  // composeComicPagePrompt only returns '' when panels.length === 0, which is
+  // already rejected above. The "(continuation of previous beat)" placeholder
+  // covers panels with no description, so the prompt is non-empty by here.
   const prompt = composeComicPagePrompt({
     series, world, page, pageNumber: pageIndex + 1, extraStyle: options.extraStyle,
   });
-  if (!prompt) {
-    throw new ServerError('comic-page prompt is empty (no description text in any panel)', {
-      status: 400, code: 'PIPELINE_COMIC_PAGE_EMPTY_PROMPT',
-    });
-  }
 
   const jobId = enqueueImageJob({
     prompt, world, settings, options, mode,

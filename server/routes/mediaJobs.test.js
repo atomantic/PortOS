@@ -106,4 +106,29 @@ describe('mediaJobs routes', () => {
     expect(r.status).toBe(200);
     expect(stubs.enqueueJob).toHaveBeenCalledOnce();
   });
+
+  it('POST /:id/run-now starts a queued Codex job past the parallel limit', async () => {
+    stubs.runJobNow.mockReturnValueOnce({ ok: true, status: 'running' });
+    const r = await request(makeApp()).post('/api/media-jobs/j-codex/run-now').send({});
+    expect(r.status).toBe(200);
+    expect(r.body.status).toBe('running');
+    expect(stubs.runJobNow).toHaveBeenCalledWith('j-codex');
+  });
+
+  it('POST /:id/run-now 400s for non-Codex (GPU) jobs', async () => {
+    stubs.runJobNow.mockReturnValueOnce({
+      ok: false, code: 'NOT_CODEX',
+      error: 'Only Codex image jobs can be run-now; GPU jobs serialize on the MLX runtime',
+    });
+    const r = await request(makeApp()).post('/api/media-jobs/j-gpu/run-now').send({});
+    expect(r.status).toBe(400);
+    expect(r.body.code).toBe('NOT_CODEX');
+  });
+
+  it('POST /:id/run-now 404s for unknown / not-queued ids', async () => {
+    // Default stub returns NOT_FOUND
+    const r = await request(makeApp()).post('/api/media-jobs/nope/run-now').send({});
+    expect(r.status).toBe(404);
+    expect(r.body.code).toBe('NOT_FOUND');
+  });
 });
