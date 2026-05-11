@@ -23,7 +23,6 @@ import { buildSettingByKey } from '../../lib/scenePrompt.js';
 import { getSettings } from '../settings.js';
 
 export const ERR_NO_STORYBOARDS = 'PIPELINE_EPISODE_NO_STORYBOARDS';
-export const ERR_INVALID_SCENE = 'PIPELINE_EPISODE_INVALID_SCENE';
 const makeErr = (message, code) => Object.assign(new Error(message), { code });
 
 const DEFAULT_SCENE_DURATION = 3;

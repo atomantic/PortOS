@@ -100,7 +100,7 @@ export default function StoryboardsStage({ issue, onStageUpdate }) {
         <div>
           <h2 className="text-lg font-semibold text-white">Storyboards</h2>
           <p className="text-xs text-gray-500 mt-1">
-            One image per scene, fed by the TV script. Use sluglines to keep parity with the teleplay. Scene-video rendering through Creative Director is deferred.
+            One image per scene, fed by the TV script. Use sluglines to keep parity with the teleplay. Stitch the final episode in the Episode Video stage once the storyboards are ready.
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">

@@ -396,9 +396,9 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
     if (mountedRef.current) setPromoting(false);
     if (!result) return;
     toast.success(result.reused ? 'Opening existing pipeline issue' : 'Pipeline series + issue created');
-    // Reflect the new link in the parent so the menu flips to "Open in pipeline"
-    // without a full reload. The work prop comes from getWritersRoomWork which
-    // doesn't echo the link fields yet — patch in just what the menu needs.
+    // Optimistic update so the menu flips to "Open in pipeline" instantly.
+    // The server route returns the full manifest (including the link fields)
+    // on the next GET, so a return-visit to this work will also see the link.
     onChange?.({ ...work, pipelineSeriesId: result.series.id, pipelineIssueId: result.issue.id });
     navigate(`/pipeline/issues/${encodeURIComponent(result.issue.id)}/prose`);
   };
