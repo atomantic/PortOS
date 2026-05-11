@@ -34,8 +34,16 @@ const refinePromptSchema = z.object({
   providerId: z.string().min(1).max(128),
   model: z.string().max(256).optional(),
   renderConfig: z.record(z.any())
-    .refine((obj) => Buffer.byteLength(JSON.stringify(obj), 'utf8') <= RENDER_CONFIG_MAX_BYTES, {
-      message: `renderConfig serialized size must be ≤ ${RENDER_CONFIG_MAX_BYTES} bytes`,
+    .refine((obj) => {
+      // JSON.stringify throws on BigInt / circular refs. z.record(z.any())
+      // doesn't reject those at parse time, so wrap the size check so a
+      // bad payload surfaces as VALIDATION_ERROR (400), not a 500.
+      let size;
+      try { size = Buffer.byteLength(JSON.stringify(obj), 'utf8'); }
+      catch { return false; }
+      return size <= RENDER_CONFIG_MAX_BYTES;
+    }, {
+      message: `renderConfig must be JSON-serializable and ≤ ${RENDER_CONFIG_MAX_BYTES} bytes`,
     })
     .optional(),
 });
