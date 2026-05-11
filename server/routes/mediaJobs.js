@@ -28,10 +28,13 @@ const listQuerySchema = z.object({
 const RENDER_CONFIG_MAX_BYTES = 4096;
 const refinePromptSchema = z.object({
   kind: z.enum(JOB_KINDS),
-  prompt: z.string().min(1).max(8000),
-  negativePrompt: z.string().max(8000).optional(),
-  feedback: z.string().min(1).max(3000),
-  providerId: z.string().min(1).max(128),
+  // Trim before length check — without trim, "   " would slip past min(1)
+  // and arrive at the refiner where it'd be cleaned to an empty string, then
+  // surface as a confusing "LLM returned an empty prompt" error.
+  prompt: z.string().trim().min(1).max(8000),
+  negativePrompt: z.string().trim().max(8000).optional(),
+  feedback: z.string().trim().min(1).max(3000),
+  providerId: z.string().trim().min(1).max(128),
   model: z.string().max(256).optional(),
   renderConfig: z.record(z.any())
     .refine((obj) => {

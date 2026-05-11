@@ -138,7 +138,11 @@ export default function PromptRefineModal({ item, open, onClose }) {
   return (
     <div
       className="fixed inset-0 z-[70] bg-black/80 flex items-center justify-center p-4"
-      onClick={onClose}
+      // Stop the click before the underlying MediaLightbox backdrop sees it —
+      // both layers wire onClick={onClose} on the backdrop, and without
+      // stopPropagation a single backdrop click would dismiss the refine modal
+      // AND close the lightbox underneath it.
+      onClick={(e) => { e.stopPropagation(); onClose(); }}
       role="presentation"
     >
       <section
