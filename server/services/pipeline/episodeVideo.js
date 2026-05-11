@@ -83,13 +83,13 @@ export async function startEpisodeVideoForIssue(issueId, options = {}) {
 
   const existing = issue.stages?.episodeVideo?.cdProjectId;
   if (existing && !options.force) {
-    // Compute a scenes count from the current storyboards so callers
-    // (autoRunner SSE broadcast, UI status copy) see a stable shape between
-    // the fresh-start and reuse paths. Empty descriptions are filtered
-    // because buildTreatmentFromStoryboards skips them when constructing
-    // the actual CD treatment.
+    // Mirror buildTreatmentFromStoryboards exactly so the reuse-path scenes
+    // count matches what the existing CD treatment actually holds: filter
+    // empty descriptions AND cap at MAX_SCENES. SSE / UI status messaging
+    // stays consistent between fresh-start and reuse paths.
     const scenes = (issue.stages?.storyboards?.scenes || [])
-      .filter((s) => (s?.description || '').trim().length > 0).length;
+      .filter((s) => (s?.description || '').trim().length > 0)
+      .slice(0, MAX_SCENES).length;
     return { cdProjectId: existing, reused: true, scenes };
   }
 

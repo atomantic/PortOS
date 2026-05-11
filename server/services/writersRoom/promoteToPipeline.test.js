@@ -140,7 +140,6 @@ describe('promoteWorkToPipeline', () => {
     // first series but a DIFFERENT (unrelated) series' issue. Mirrors a
     // manual edit, partial delete, or migration bug.
     const strayerSeries = await seriesSvc.createSeries({ name: 'Strayer' });
-    const issuesSvc = await import('../pipeline/issues.js');
     const strayerIssue = await issuesSvc.createIssue({ seriesId: strayerSeries.id, title: 'Stray' });
     await wrLocal.linkToPipeline(work.id, { seriesId: first.series.id, issueId: strayerIssue.id });
 
