@@ -33,6 +33,7 @@ import {
 } from '../lib/validation.js';
 import * as seriesSvc from '../services/pipeline/series.js';
 import * as issuesSvc from '../services/pipeline/issues.js';
+import * as seasonsSvc from '../services/pipeline/seasons.js';
 import { generateStage } from '../services/pipeline/textStages.js';
 import * as autoRunner from '../services/pipeline/autoRunner.js';
 import { enqueueVisualImage } from '../services/pipeline/visualStages.js';
@@ -40,6 +41,7 @@ import { startEpisodeVideoForIssue, ERR_NO_STORYBOARDS } from '../services/pipel
 import { ASPECT_RATIOS, QUALITIES } from '../lib/creativeDirectorPresets.js';
 import { extractScenes, SOURCE_KIND } from '../lib/sceneExtractor.js';
 import { BIBLE_KIND } from '../lib/storyBible.js';
+import { ARC_LIMITS, ARC_STATUSES, SEASON_STATUSES } from '../lib/storyArc.js';
 
 const router = Router();
 
@@ -48,6 +50,9 @@ const SERVICE_ERROR_STATUS = {
   [seriesSvc.ERR_VALIDATION]: 400,
   [issuesSvc.ERR_NOT_FOUND]: 404,
   [issuesSvc.ERR_VALIDATION]: 400,
+  [seasonsSvc.ERR_NOT_FOUND]: 404,
+  [seasonsSvc.ERR_VALIDATION]: 400,
+  [seasonsSvc.ERR_REASSIGN_TARGET]: 400,
   [ERR_NO_STORYBOARDS]: 400,
 };
 
@@ -87,6 +92,31 @@ const objectSchema = objectBibleCreateSchema.extend({
   id: z.string().trim().max(80).optional(),
 }).passthrough();
 
+// Arc + Season — phase 2 of Story Arc Planning. The arc lives on the series
+// record itself; seasons get their own resource so the route layer can take
+// per-record CRUD without forcing the caller to PATCH the whole series.
+const arcSchema = z.object({
+  logline: z.string().trim().max(ARC_LIMITS.LOGLINE_MAX).optional().default(''),
+  summary: z.string().trim().max(ARC_LIMITS.SUMMARY_MAX).optional().default(''),
+  protagonistArc: z.string().trim().max(ARC_LIMITS.PROTAGONIST_ARC_MAX).optional().default(''),
+  themes: z.array(z.string().trim().min(1).max(ARC_LIMITS.THEME_MAX))
+    .max(ARC_LIMITS.THEMES_PER_ARC_MAX).optional(),
+  status: z.enum(ARC_STATUSES).optional(),
+});
+
+const seasonSchema = z.object({
+  id: z.string().trim().min(1).max(64).optional(),
+  number: z.number().int().min(0).max(ARC_LIMITS.SEASON_NUMBER_MAX).optional(),
+  title: z.string().trim().max(ARC_LIMITS.SEASON_TITLE_MAX).optional(),
+  logline: z.string().trim().max(ARC_LIMITS.SEASON_LOGLINE_MAX).optional(),
+  synopsis: z.string().trim().max(ARC_LIMITS.SEASON_SYNOPSIS_MAX).optional(),
+  episodeCountTarget: z.number().int().min(0).max(ARC_LIMITS.SEASON_EPISODE_COUNT_MAX).optional(),
+  themes: z.array(z.string().trim().min(1).max(ARC_LIMITS.THEME_MAX))
+    .max(ARC_LIMITS.THEMES_PER_ARC_MAX).optional(),
+  endingHook: z.string().trim().max(ARC_LIMITS.SEASON_ENDING_HOOK_MAX).optional(),
+  status: z.enum(SEASON_STATUSES).optional(),
+}).passthrough();
+
 const seriesCreateSchema = z.object({
   name: z.string().trim().min(1).max(seriesSvc.NAME_MAX),
   logline: z.string().trim().max(seriesSvc.LOGLINE_MAX).optional().default(''),
@@ -96,6 +126,8 @@ const seriesCreateSchema = z.object({
   characters: z.array(characterSchema).max(seriesSvc.BIBLE_ENTRIES_PER_SERIES_MAX).optional(),
   settings: z.array(settingSchema).max(seriesSvc.BIBLE_ENTRIES_PER_SERIES_MAX).optional(),
   objects: z.array(objectSchema).max(seriesSvc.BIBLE_ENTRIES_PER_SERIES_MAX).optional(),
+  arc: arcSchema.nullable().optional(),
+  seasons: z.array(seasonSchema).max(ARC_LIMITS.SEASONS_PER_SERIES_MAX).optional(),
   styleNotes: z.string().trim().max(seriesSvc.STYLE_NOTES_MAX).optional().default(''),
   targetFormat: z.enum(seriesSvc.TARGET_FORMATS).optional(),
   issueCountTarget: z.number().int().min(0).max(seriesSvc.ISSUE_COUNT_TARGET_MAX).optional(),
@@ -110,10 +142,26 @@ const seriesPatchSchema = z.object({
   characters: z.array(characterSchema).max(seriesSvc.BIBLE_ENTRIES_PER_SERIES_MAX).optional(),
   settings: z.array(settingSchema).max(seriesSvc.BIBLE_ENTRIES_PER_SERIES_MAX).optional(),
   objects: z.array(objectSchema).max(seriesSvc.BIBLE_ENTRIES_PER_SERIES_MAX).optional(),
+  arc: arcSchema.nullable().optional(),
+  seasons: z.array(seasonSchema).max(ARC_LIMITS.SEASONS_PER_SERIES_MAX).optional(),
   styleNotes: z.string().trim().max(seriesSvc.STYLE_NOTES_MAX).optional(),
   targetFormat: z.enum(seriesSvc.TARGET_FORMATS).optional(),
   issueCountTarget: z.number().int().min(0).max(seriesSvc.ISSUE_COUNT_TARGET_MAX).optional(),
 }).refine((p) => Object.keys(p).length > 0, { message: 'patch must include at least one field' });
+
+// Season-resource schemas: dedicated CRUD on a sibling resource so the
+// client can edit one season without resending the whole series patch.
+const seasonCreateSchema = seasonSchema.refine(
+  (p) => (p.title && p.title.trim().length > 0) || (Number.isFinite(p.number) && p.number > 0),
+  { message: 'season requires a non-empty title or a number > 0' },
+);
+const seasonPatchSchema = seasonSchema.refine(
+  (p) => Object.keys(p).length > 0,
+  { message: 'patch must include at least one field' },
+);
+const seasonDeleteSchema = z.object({
+  reassignTo: z.string().trim().min(1).max(64).nullable().optional(),
+});
 
 // ---- Issue schemas ----
 
@@ -146,6 +194,10 @@ const issuePatchSchema = z.object({
   title: z.string().trim().min(1).max(issuesSvc.TITLE_MAX).optional(),
   number: z.number().int().min(1).max(9999).optional(),
   status: z.enum(issuesSvc.ISSUE_STATUSES).optional(),
+  // Phase 2 of Story Arc Planning: optional pointer back to a season +
+  // ordinal within that season. `null` clears the assignment.
+  seasonId: z.string().trim().min(1).max(issuesSvc.SEASON_ID_MAX).nullable().optional(),
+  arcPosition: z.number().int().min(0).max(issuesSvc.ARC_POSITION_MAX).nullable().optional(),
   // Use visualStageInputSchema as the union arm so visual-stage payloads keep
   // their `scenes` / `pages` / `cdProjectId` / `videoPath` fields. The schema
   // is a superset of stageInputSchema (those four are optional additions), so
@@ -294,6 +346,44 @@ router.post('/series/:id/issues', asyncHandler(async (req, res) => {
   const body = validateRequest(issueCreateSchema, req.body ?? {});
   const created = await issuesSvc.createIssue({ ...body, seriesId: req.params.id });
   res.status(201).json(created);
+}));
+
+// =====================
+// Season routes — Phase 2 of Story Arc Planning. Seasons live inside
+// `series.seasons[]` but get their own resource so a single-season edit
+// doesn't have to re-PATCH the entire series record.
+// =====================
+
+router.get('/series/:id/seasons', asyncHandler(async (req, res) => {
+  const seasons = await seasonsSvc.listSeasons(req.params.id)
+    .catch((err) => { throw mapServiceError(err); });
+  res.json(seasons);
+}));
+
+router.post('/series/:id/seasons', asyncHandler(async (req, res) => {
+  await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
+  const body = validateRequest(seasonCreateSchema, req.body ?? {});
+  const created = await seasonsSvc.createSeason(req.params.id, body)
+    .catch((err) => { throw mapServiceError(err); });
+  res.status(201).json(created);
+}));
+
+router.patch('/series/:id/seasons/:seasonId', asyncHandler(async (req, res) => {
+  const body = validateRequest(seasonPatchSchema, req.body ?? {});
+  const updated = await seasonsSvc.updateSeason(req.params.id, req.params.seasonId, body)
+    .catch((err) => { throw mapServiceError(err); });
+  res.json(updated);
+}));
+
+router.delete('/series/:id/seasons/:seasonId', asyncHandler(async (req, res) => {
+  // Reassign target arrives via the request body so HTTP DELETE stays valid;
+  // a query-param fallback would invite the same content twice in different
+  // shapes. Body is optional — omitting it un-groups every child issue.
+  const body = validateRequest(seasonDeleteSchema, req.body ?? {});
+  const result = await seasonsSvc.deleteSeason(req.params.id, req.params.seasonId, {
+    reassignTo: body.reassignTo ?? null,
+  }).catch((err) => { throw mapServiceError(err); });
+  res.json(result);
 }));
 
 // =====================

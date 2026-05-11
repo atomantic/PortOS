@@ -460,4 +460,129 @@ describe('pipeline routes', () => {
     expect(r.body.stage.scenes[0].description).toBe('fresh scene');
     spy.mockRestore();
   });
+
+  // -----------------------
+  // Season routes (Phase 2 of Story Arc Planning)
+  // -----------------------
+
+  it('GET /series/:id/seasons returns [] for a fresh series', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const r = await request(app).get(`/api/pipeline/series/${ser.body.id}/seasons`);
+    expect(r.status).toBe(200);
+    expect(r.body).toEqual([]);
+  });
+
+  it('GET /series/:id/seasons 404s for unknown series', async () => {
+    const app = makeApp();
+    const r = await request(app).get('/api/pipeline/series/ser-nope/seasons');
+    expect(r.status).toBe(404);
+  });
+
+  it('POST /series/:id/seasons creates a season and auto-numbers it', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const r1 = await request(app).post(`/api/pipeline/series/${ser.body.id}/seasons`).send({ title: 'Pilot' });
+    expect(r1.status).toBe(201);
+    expect(r1.body.id).toMatch(/^sea-/);
+    expect(r1.body.number).toBe(1);
+    const r2 = await request(app).post(`/api/pipeline/series/${ser.body.id}/seasons`).send({ title: 'Aftermath' });
+    expect(r2.body.number).toBe(2);
+  });
+
+  it('POST /series/:id/seasons rejects entry with neither title nor number', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const r = await request(app).post(`/api/pipeline/series/${ser.body.id}/seasons`).send({});
+    expect(r.status).toBe(400);
+  });
+
+  it('PATCH /series/:id/seasons/:seasonId updates fields', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const sea = await request(app).post(`/api/pipeline/series/${ser.body.id}/seasons`).send({ title: 'Pilot' });
+    const r = await request(app)
+      .patch(`/api/pipeline/series/${ser.body.id}/seasons/${sea.body.id}`)
+      .send({ logline: 'L1', status: 'verified' });
+    expect(r.status).toBe(200);
+    expect(r.body.logline).toBe('L1');
+    expect(r.body.status).toBe('verified');
+    expect(r.body.title).toBe('Pilot');
+  });
+
+  it('PATCH /series/:id/seasons/:seasonId 404s for unknown season', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const r = await request(app)
+      .patch(`/api/pipeline/series/${ser.body.id}/seasons/sea-nope`)
+      .send({ title: 'x' });
+    expect(r.status).toBe(404);
+  });
+
+  it('DELETE /series/:id/seasons/:seasonId un-groups child issues by default', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const sea = await request(app).post(`/api/pipeline/series/${ser.body.id}/seasons`).send({ title: 'Pilot' });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'Ep 1' });
+    await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({ seasonId: sea.body.id, arcPosition: 1 });
+
+    const r = await request(app).delete(`/api/pipeline/series/${ser.body.id}/seasons/${sea.body.id}`).send({});
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({ id: sea.body.id, reassignedIssueCount: 1, reassignedTo: null });
+
+    const reloaded = await request(app).get(`/api/pipeline/issues/${iss.body.id}`);
+    expect(reloaded.body.seasonId).toBe(null);
+  });
+
+  it('DELETE /series/:id/seasons/:seasonId reassigns child issues to reassignTo sibling', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const a = await request(app).post(`/api/pipeline/series/${ser.body.id}/seasons`).send({ title: 'Pilot' });
+    const b = await request(app).post(`/api/pipeline/series/${ser.body.id}/seasons`).send({ title: 'Hiatus' });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'Ep 1' });
+    await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({ seasonId: a.body.id });
+
+    const r = await request(app).delete(`/api/pipeline/series/${ser.body.id}/seasons/${a.body.id}`)
+      .send({ reassignTo: b.body.id });
+    expect(r.status).toBe(200);
+    expect(r.body.reassignedTo).toBe(b.body.id);
+
+    const reloaded = await request(app).get(`/api/pipeline/issues/${iss.body.id}`);
+    expect(reloaded.body.seasonId).toBe(b.body.id);
+  });
+
+  it('DELETE /series/:id/seasons/:seasonId 400s when reassignTo points at non-existent sibling', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const sea = await request(app).post(`/api/pipeline/series/${ser.body.id}/seasons`).send({ title: 'Pilot' });
+    const r = await request(app).delete(`/api/pipeline/series/${ser.body.id}/seasons/${sea.body.id}`)
+      .send({ reassignTo: 'sea-ghost' });
+    expect(r.status).toBe(400);
+  });
+
+  it('PATCH /issues/:id accepts seasonId + arcPosition', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const sea = await request(app).post(`/api/pipeline/series/${ser.body.id}/seasons`).send({ title: 'Pilot' });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'Ep 1' });
+    const r = await request(app).patch(`/api/pipeline/issues/${iss.body.id}`)
+      .send({ seasonId: sea.body.id, arcPosition: 3 });
+    expect(r.status).toBe(200);
+    expect(r.body.seasonId).toBe(sea.body.id);
+    expect(r.body.arcPosition).toBe(3);
+  });
+
+  it('PATCH /series/:id accepts arc payload', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const r = await request(app).patch(`/api/pipeline/series/${ser.body.id}`).send({
+      arc: { logline: 'Big-picture pitch', themes: ['legacy', 'betrayal'], status: 'draft' },
+    });
+    expect(r.status).toBe(200);
+    expect(r.body.arc).toMatchObject({
+      logline: 'Big-picture pitch',
+      themes: ['legacy', 'betrayal'],
+      status: 'draft',
+    });
+  });
 });

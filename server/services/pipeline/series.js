@@ -18,6 +18,7 @@ import {
   BIBLE_LIMITS, BIBLE_KIND, BIBLE_FIELD,
   isStr, trimTo,
 } from '../../lib/storyBible.js';
+import { sanitizeArc, sanitizeSeasonList } from '../../lib/storyArc.js';
 import { extractBible } from '../../lib/bibleExtractor.js';
 
 // Lazy resolution — PATHS.data may not be available at module-load time
@@ -68,6 +69,11 @@ const sanitizeSeries = (raw) => {
     characters: sanitizeBibleList(raw.characters, BIBLE_KIND.CHARACTER),
     settings: sanitizeBibleList(raw.settings, BIBLE_KIND.SETTING),
     objects: sanitizeBibleList(raw.objects, BIBLE_KIND.OBJECT),
+    // Phase 2 of Story Arc Planning: optional multi-season story spine + the
+    // ordered season list. Both default to empty so existing series.json
+    // files migrate forward without a writer pass — first save backfills.
+    arc: sanitizeArc(raw.arc),
+    seasons: sanitizeSeasonList(raw.seasons),
     styleNotes: trimTo(raw.styleNotes, STYLE_NOTES_MAX),
     targetFormat,
     issueCountTarget,
@@ -114,6 +120,8 @@ export async function createSeries(input = {}) {
     characters: input.characters || [],
     settings: input.settings || [],
     objects: input.objects || [],
+    arc: input.arc || null,
+    seasons: input.seasons || [],
     styleNotes: input.styleNotes || '',
     targetFormat: input.targetFormat || 'comic+tv',
     issueCountTarget: input.issueCountTarget || 0,
@@ -140,6 +148,8 @@ export async function updateSeries(id, patch = {}) {
     ...('characters' in patch ? { characters: patch.characters } : {}),
     ...('settings' in patch ? { settings: patch.settings } : {}),
     ...('objects' in patch ? { objects: patch.objects } : {}),
+    ...('arc' in patch ? { arc: patch.arc } : {}),
+    ...('seasons' in patch ? { seasons: patch.seasons } : {}),
     ...('styleNotes' in patch ? { styleNotes: patch.styleNotes } : {}),
     ...('targetFormat' in patch ? { targetFormat: patch.targetFormat } : {}),
     ...('issueCountTarget' in patch ? { issueCountTarget: patch.issueCountTarget } : {}),

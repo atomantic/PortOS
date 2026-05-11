@@ -31,6 +31,10 @@ const makeErr = (message, code) => Object.assign(new Error(message), { code });
 
 export const TITLE_MAX = 300;
 export const SERIES_ID_MAX = 64;
+export const SEASON_ID_MAX = 64;
+// Issues fall back to position 0 when un-numbered; the cap keeps a runaway
+// LLM payload from inflating the field unbounded.
+export const ARC_POSITION_MAX = 9999;
 export const STAGE_INPUT_MAX = 200_000;   // ~200kB — fits a long prose draft
 export const STAGE_OUTPUT_MAX = 400_000;  // ~400kB — fits a long comic script
 export const STAGE_NOTES_MAX = 4000;
@@ -111,12 +115,23 @@ const sanitizeIssue = (raw) => {
   const status = ISSUE_STATUSES.includes(raw.status) ? raw.status : 'draft';
   const createdAt = isStr(raw.createdAt) ? raw.createdAt : new Date().toISOString();
   const updatedAt = isStr(raw.updatedAt) ? raw.updatedAt : createdAt;
+  // Phase 2 of Story Arc Planning: optional pointer back into the parent
+  // series' arc tree. `null` is the back-compat default — every pre-existing
+  // issue stays un-grouped until the user (or LLM-arc-generation) assigns it.
+  const seasonId = isStr(raw.seasonId) && raw.seasonId
+    ? trimTo(raw.seasonId, SEASON_ID_MAX)
+    : null;
+  const arcPosition = Number.isFinite(raw.arcPosition)
+    ? Math.max(0, Math.min(ARC_POSITION_MAX, Math.floor(raw.arcPosition)))
+    : null;
   return {
     id: raw.id,
     seriesId: trimTo(raw.seriesId, SERIES_ID_MAX),
     number,
     title,
     status,
+    seasonId,
+    arcPosition,
     stages: sanitizeStages(raw.stages || {}),
     createdAt,
     updatedAt,
@@ -195,6 +210,8 @@ export async function updateIssue(id, patch = {}) {
     ...('title' in patch ? { title: patch.title } : {}),
     ...('number' in patch ? { number: patch.number } : {}),
     ...('status' in patch ? { status: patch.status } : {}),
+    ...('seasonId' in patch ? { seasonId: patch.seasonId } : {}),
+    ...('arcPosition' in patch ? { arcPosition: patch.arcPosition } : {}),
     stages: mergedStages,
     updatedAt: new Date().toISOString(),
   });

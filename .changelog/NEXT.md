@@ -1,5 +1,9 @@
 # Unreleased Changes
 
+## Added
+
+- **Pipeline — series-arc + season schema.** Series records gain two new optional fields: `series.arc` (logline, summary, themes, protagonistArc, status) for the overall multi-season story spine, and `series.seasons[]` for the ordered season/volume list. Issues gain optional `seasonId` + `arcPosition` pointers so an issue can be slotted into a specific season at a specific ordinal. Backed by a new `server/lib/storyArc.js` (canonical shapes + sanitizers, sibling to `storyBible.js`) and a new `server/services/pipeline/seasons.js` service that handles delete-with-reassign so removing a season cleanly re-points or un-groups child issues. Routes: `GET / POST /series/:id/seasons`, `PATCH / DELETE /series/:id/seasons/:seasonId`. Pure additive — existing series files round-trip unchanged. Phase 2 of the Story Arc Planning initiative; no UI yet (Phase 4 builds the arc canvas on top of this).
+
 ## Changed
 
 - **Pipeline Series page — two-pane layout.** PipelineSeries (`/pipeline/series/:id`) drops its `max-w-5xl` cap and splits into a sticky left bible sidebar + right card-grid canvas at `lg+`. The bible inputs (name / format / logline / target issue count / premise / style notes / world / characters) live in the sidebar; issues/episodes render as a responsive card grid (1/2/3/4 cols across breakpoints) showing number, status badge, title (line-clamped), and `updated <timeAgo>`. Sidebar collapses to a 48px rail via a panel toggle (state persists in `localStorage` under `portos-pipeline-series-sidebar-collapsed`) so the canvas can use the full viewport when you're deep in episode work. Mobile (< lg) stays single-column with the sidebar reflowing above the canvas. Phase 1 of the Pipeline Story-Arc Planning initiative — pure UI refactor, no schema or API change; subsequent phases evolve the card grid into an Arc → Season → Episode tree.
