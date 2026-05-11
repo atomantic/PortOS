@@ -508,7 +508,6 @@ export async function spawnAgentForTask(task) {
       console.error(`❌ Failed to mark task ${task.id} as in_progress: ${err.message}`);
       return null;
     });
-  spawningTasks.delete(task.id);
   if (!updateResult) {
     cleanupOnError('Failed to update task status');
     return null;
@@ -524,16 +523,28 @@ export async function spawnAgentForTask(task) {
 
   emitLog('success', `Spawning agent for task ${task.id}`, { agentId, model: selectedModel, mode: useRunner ? 'runner' : 'direct', cli: cliConfig.command, lane: laneName, worktree: !!worktreeInfo });
 
-  // Use CoS Runner if available, otherwise spawn directly
-  if (useRunner) {
-    return spawnViaRunner(agentId, task, { prompt, workspacePath, model: selectedModel, provider, runId, cliConfig, executionId: toolExecution.id, laneName });
+  // Dedup-window fix: keep the `spawningTasks` guard active across the actual
+  // spawn call, not just up to the in_progress flip. Deleting between
+  // `updateTask` and `spawnViaRunner`/`spawnDirectly` opened a window where a
+  // concurrent `spawnAgentForTask(task)` call (e.g. a re-fired `task:ready`
+  // from a follow-up scheduler tick) saw an empty set and a task whose
+  // registered agent hadn't yet been queued to the runner, and proceeded to
+  // spawn a second agent for the same task id. Awaiting the spawn before
+  // releasing the guard — inside try/finally so a throw still releases —
+  // closes that race. release() must NOT run here on the success path; the
+  // lane is released by the agent-completion handler when the work finishes.
+  try {
+    if (useRunner) {
+      return await spawnViaRunner(agentId, task, { prompt, workspacePath, model: selectedModel, provider, runId, cliConfig, executionId: toolExecution.id, laneName });
+    }
+    // Direct spawn mode (fallback)
+    return await spawnDirectly(agentId, task, prompt, workspacePath, selectedModel, provider, runId, cliConfig, agentDir, toolExecution.id, laneName, {
+      cleanupWorktreeFn: cleanupAgentWorktree,
+      isTruthyMetaFn: isTruthyMeta
+    });
+  } finally {
+    spawningTasks.delete(task.id);
   }
-
-  // Direct spawn mode (fallback)
-  return spawnDirectly(agentId, task, prompt, workspacePath, selectedModel, provider, runId, cliConfig, agentDir, toolExecution.id, laneName, {
-    cleanupWorktreeFn: cleanupAgentWorktree,
-    isTruthyMetaFn: isTruthyMeta
-  });
 }
 
 /**
