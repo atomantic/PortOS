@@ -134,7 +134,14 @@ async function runRefinePrompt(provider, model, prompt) {
       }
     };
     if (provider.type === 'cli') {
-      const providerForCli = model && model !== provider.defaultModel
+      // `runner.js#buildCliArgs` only translates `provider.defaultModel` into
+      // a `--model` flag for `codex` today; `claude-code` and `gemini-cli`
+      // ignore it and run with whatever model is baked into provider.args.
+      // Override defaultModel only when it'll actually take effect — otherwise
+      // we'd lie to the caller about which model ran. (PLAN.md tracks the
+      // shared-infra fix to extend buildCliArgs to all CLI providers.)
+      const canOverrideModel = provider.id === 'codex';
+      const providerForCli = canOverrideModel && model && model !== provider.defaultModel
         ? { ...provider, defaultModel: model }
         : provider;
       executeCliRun(runId, providerForCli, prompt, process.cwd(), onData, onComplete, provider.timeout ?? 300000).catch(reject);
@@ -189,7 +196,11 @@ export async function refineMediaPrompt({
   try {
     parsed = extractRefinementJson(text || '');
   } catch (e) {
-    console.warn(`⚠️ media-prompt-refine [${provider.id}/${selectedModel || 'default'}] parse failed: ${e.message} — raw head: ${(text || '').slice(0, 400).replace(/\s+/g, ' ')}`);
+    // Log only the response size + error reason, not the raw body. The body
+    // can contain user prompts or other sensitive content; the persisted
+    // run artifact at `data/runs/<runId>/output.txt` already captures the
+    // full response for offline debugging.
+    console.warn(`⚠️ media-prompt-refine [${provider.id}/${selectedModel || 'default'}] parse failed: ${e.message} (response size: ${(text || '').length} chars)`);
     throw new ServerError(e.message, { status: 502, code: 'PROMPT_REFINE_BAD_JSON' });
   }
 
