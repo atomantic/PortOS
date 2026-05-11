@@ -34,10 +34,32 @@ router.get('/', asyncHandler(async (_req, res) => {
   res.json(await listProjects());
 }));
 
+// Slim projection of a project for polling consumers (pipeline EpisodeVideoStage
+// polls every 4s; the full project carries an unbounded `runs[]` history that
+// grows with every render operation). The shape covers exactly what the
+// polling UI consumes: id, status, updatedAt (change-detect key), per-scene
+// id/order/status, finalVideoId, failureReason.
+function slimProject(p) {
+  return {
+    id: p.id,
+    status: p.status,
+    updatedAt: p.updatedAt,
+    finalVideoId: p.finalVideoId || null,
+    failureReason: p.failureReason || null,
+    treatment: {
+      scenes: (p.treatment?.scenes || []).map((s) => ({
+        id: s.id,
+        order: s.order,
+        status: s.status,
+      })),
+    },
+  };
+}
+
 router.get('/:id', asyncHandler(async (req, res) => {
   const p = await getProject(req.params.id);
   if (!p) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
-  res.json(p);
+  res.json(req.query.slim === '1' ? slimProject(p) : p);
 }));
 
 router.post('/', asyncHandler(async (req, res) => {

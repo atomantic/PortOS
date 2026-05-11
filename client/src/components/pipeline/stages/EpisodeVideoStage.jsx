@@ -56,7 +56,7 @@ export default function EpisodeVideoStage({ issue, onStageUpdate }) {
     };
     const fetchOnce = async () => {
       if (document.hidden) return;
-      const p = await getCreativeDirectorProject(cdProjectId).catch((err) => {
+      const p = await getCreativeDirectorProject(cdProjectId, { slim: true }).catch((err) => {
         if (!cancelled) console.log(`pipeline:episode poll error ${err.message}`);
         return null;
       });

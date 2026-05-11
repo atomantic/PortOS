@@ -52,6 +52,53 @@ describe('creativeDirector routes', () => {
       expect(r.status).toBe(200);
       expect(r.body.id).toBe('cd-1');
     });
+
+    it('with ?slim=1 drops runs[] + full treatment, keeps poll-essential fields', async () => {
+      cdService.getProject.mockResolvedValue({
+        id: 'cd-1', name: 'A', status: 'rendering', updatedAt: '2026-05-10T10:00:00Z',
+        finalVideoId: null, failureReason: null,
+        styleSpec: 'big blob of style notes that polling consumers do not need',
+        runs: Array.from({ length: 50 }, (_, i) => ({ id: `run-${i}`, prompt: 'big payload' })),
+        treatment: {
+          logline: 'big logline text',
+          synopsis: 'big synopsis text',
+          scenes: [
+            { id: 's1', order: 0, status: 'accepted', intent: 'long intent text', visualPrompt: 'long prompt' },
+            { id: 's2', order: 1, status: 'rendering', intent: 'longer text', visualPrompt: 'longer prompt' },
+          ],
+        },
+      });
+      const r = await request(app).get('/api/creative-director/cd-1?slim=1');
+      expect(r.status).toBe(200);
+      expect(r.body).toEqual({
+        id: 'cd-1',
+        status: 'rendering',
+        updatedAt: '2026-05-10T10:00:00Z',
+        finalVideoId: null,
+        failureReason: null,
+        treatment: {
+          scenes: [
+            { id: 's1', order: 0, status: 'accepted' },
+            { id: 's2', order: 1, status: 'rendering' },
+          ],
+        },
+      });
+      expect(r.body.runs).toBeUndefined();
+      expect(r.body.styleSpec).toBeUndefined();
+      expect(r.body.treatment.logline).toBeUndefined();
+      expect(r.body.treatment.scenes[0].intent).toBeUndefined();
+    });
+
+    it('slim mode tolerates a project with no treatment (empty scenes array)', async () => {
+      cdService.getProject.mockResolvedValue({
+        id: 'cd-2', status: 'draft', updatedAt: 'now',
+      });
+      const r = await request(app).get('/api/creative-director/cd-2?slim=1');
+      expect(r.status).toBe(200);
+      expect(r.body.treatment).toEqual({ scenes: [] });
+      expect(r.body.finalVideoId).toBeNull();
+      expect(r.body.failureReason).toBeNull();
+    });
   });
 
   describe('POST /', () => {
