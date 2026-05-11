@@ -401,9 +401,15 @@ export function removeArchivedJob(jobId) {
   const idx = archive.findIndex((j) => j.id === jobId);
   if (idx < 0) return false;
   archive.splice(idx, 1);
-  // Clear any lingering SSE entry so attachSseClient stops synthesizing a
-  // terminal frame for the now-dropped id.
-  sseJobs.delete(jobId);
+  // End any SSE clients still attached within the SSE_CLEANUP_DELAY_MS grace
+  // window before dropping the entry — a bare `sseJobs.delete()` here would
+  // leave their HTTP responses dangling because closeJobAfterDelay's pending
+  // timer would find no entry to drain when it fires.
+  const sseEntry = sseJobs.get(jobId);
+  if (sseEntry) {
+    for (const c of sseEntry.clients) c.end();
+    sseJobs.delete(jobId);
+  }
   persist().catch((e) => console.log(`⚠️ mediaJobQueue persist on archive prune failed: ${e.message}`));
   return true;
 }

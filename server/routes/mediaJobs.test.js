@@ -99,6 +99,21 @@ describe('mediaJobs routes', () => {
     });
   });
 
+  it('POST /:id/retry treats empty model/modelId override as "keep original" rather than clobbering with ""', async () => {
+    jobStore.set('j-clear', {
+      id: 'j-clear', kind: 'image', owner: null, status: 'failed',
+      params: { prompt: 'cat', modelId: 'sdxl-base', steps: 30 },
+    });
+    const r = await request(makeApp())
+      .post('/api/media-jobs/j-clear/retry')
+      .send({ params: { modelId: '   ', steps: 40 } });
+    expect(r.status).toBe(200);
+    const call = stubs.enqueueJob.mock.calls[0][0];
+    // modelId stays at the original — empty/whitespace override drops out.
+    expect(call.params.modelId).toBe('sdxl-base');
+    expect(call.params.steps).toBe(40);
+  });
+
   it('POST /:id/retry rejects override fields outside the whitelist', async () => {
     jobStore.set('j-bad', {
       id: 'j-bad', kind: 'image', owner: null, status: 'failed',

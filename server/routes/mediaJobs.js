@@ -106,11 +106,21 @@ function hasTempUploadParam(params) {
 // session ids, internal flags) rides through unchanged from the original
 // job.params so a user can't escape the server's runtime config from the
 // retry path. Keep this set small and user-facing.
+//
+// String fields use a transform that collapses trimmed empty strings to
+// `undefined` — without that, an empty `modelId` (e.g. user cleared the
+// input) would override the original job's modelId with "" and the gen
+// would fail with "Unknown or unsupported model". Returning undefined makes
+// the override fall through to the original value at merge time.
+const emptyToUndef = (s) => {
+  const v = (s ?? '').trim();
+  return v.length > 0 ? v : undefined;
+};
 const RETRY_OVERRIDE_SCHEMA = z.object({
   prompt: z.string().trim().min(1).max(8000).optional(),
   negativePrompt: z.string().trim().max(8000).optional(),
-  model: z.string().trim().max(200).optional(),
-  modelId: z.string().trim().max(200).optional(),
+  model: z.string().max(200).optional().transform(emptyToUndef),
+  modelId: z.string().max(200).optional().transform(emptyToUndef),
   width: z.number().int().min(64).max(4096).optional(),
   height: z.number().int().min(64).max(4096).optional(),
   steps: z.number().int().min(1).max(200).optional(),
@@ -151,7 +161,13 @@ router.post('/:id/retry', asyncHandler(async (req, res) => {
     );
   }
   const body = validateRequest(retryBodySchema, req.body ?? {}) ?? {};
-  const overrides = body.params ?? {};
+  // Strip undefined override values before merging — Zod's emptyToUndef
+  // transform turns "" → undefined for model/modelId, and a naive spread
+  // would still set those keys to undefined on the merged params (clobbering
+  // the original job's values). Filtering keeps unchanged fields intact.
+  const overrides = Object.fromEntries(
+    Object.entries(body.params ?? {}).filter(([, v]) => v !== undefined),
+  );
   const params = { ...job.params, ...overrides };
   const result = enqueueJob({ kind: job.kind, params, owner: job.owner });
   // Drop the original failed/canceled row from archive — the new job inherits
