@@ -85,6 +85,11 @@ export default function PromptRefineModal({ item, open, onClose }) {
   const canRefine = feedback.trim() && selectedProviderId && !refining;
   const canQueue = hasResult && refinedPrompt.trim() && !queueing;
 
+  // refineMediaPrompt + generateImage go through services/apiCore#request(),
+  // which already toasts on non-2xx responses. Don't toast again from the
+  // modal's catch on those paths — that'd produce duplicate notifications.
+  // generateVideo uses raw fetch (multipart, see apiImageVideo.js) and does
+  // NOT auto-toast, so the video catch still needs its own toast.
   const runRefine = async () => {
     if (!canRefine) return;
     setRefining(true);
@@ -104,8 +109,8 @@ export default function PromptRefineModal({ item, open, onClose }) {
       setRefinedPrompt(result.prompt || '');
       setRefinedNegative(result.negativePrompt || '');
       setRationale(result.rationale || '');
-    } catch (err) {
-      toast.error(err.message || 'Prompt refinement failed');
+    } catch {
+      // request() already toasted the server's error message.
     } finally {
       setRefining(false);
     }
@@ -122,7 +127,9 @@ export default function PromptRefineModal({ item, open, onClose }) {
       toast.success(result.position ? `Queued #${result.position}` : 'Render queued');
       onClose();
     } catch (err) {
-      toast.error(err.message || 'Failed to queue render');
+      // generateImage routes through request() which already toasts; only
+      // surface a toast for the raw-fetch video path.
+      if (item.kind === 'video') toast.error(err.message || 'Failed to queue render');
     } finally {
       setQueueing(false);
     }

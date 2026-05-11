@@ -161,7 +161,11 @@ export async function refineMediaPrompt({
   model,
   renderConfig = {},
 }) {
-  const provider = await getProviderById(providerId).catch(() => null);
+  // Let real failures (providers.json unreadable, toolkit not initialized)
+  // bubble through the centralized error handler as 5xx. getProviderById
+  // returns null for not-found, which is what 404 PROVIDER_NOT_FOUND is for —
+  // don't swallow other rejections into that 404.
+  const provider = await getProviderById(providerId);
   if (!provider) {
     throw new ServerError('Provider not found', { status: 404, code: 'PROVIDER_NOT_FOUND' });
   }
