@@ -4,28 +4,22 @@ import { Film, ExternalLink, Loader2, Sparkles, AlertCircle, CheckCircle2 } from
 import toast from '../../ui/Toast';
 import { generatePipelineVisualImage } from '../../../services/api';
 import { getCreativeDirectorProject } from '../../../services/apiCreativeDirector';
+import { getSceneStatusBadge, PROJECT_STATUS_LABEL } from '../../creative-director/sceneStatus';
+import ScenePreview from '../../creative-director/ScenePreview';
 
 const POLL_INTERVAL_MS = 4000;
 
 const isTerminalProjectStatus = (s) => s === 'complete' || s === 'failed';
 
+// Extra labels EpisodeVideoStage uses beyond the shared scene-status map —
+// these are CD project statuses specific to the long-form pipeline (planning,
+// stitching, paused). Fall through to PROJECT_STATUS_LABEL for the shared ones.
 const STATUS_LABEL = {
-  draft: 'Preparing',
+  ...PROJECT_STATUS_LABEL,
   planning: 'Planning',
-  rendering: 'Rendering',
   stitching: 'Stitching final cut',
-  complete: 'Complete',
   paused: 'Paused',
-  failed: 'Failed',
 };
-
-function sceneStatusBadge(status) {
-  if (status === 'accepted') return { text: 'done', cls: 'bg-port-success/20 text-port-success' };
-  if (status === 'rendering') return { text: 'rendering', cls: 'bg-port-accent/20 text-port-accent' };
-  if (status === 'evaluating') return { text: 'checking', cls: 'bg-port-warning/20 text-port-warning' };
-  if (status === 'failed') return { text: 'failed', cls: 'bg-port-error/20 text-port-error' };
-  return { text: 'pending', cls: 'bg-port-border text-gray-400' };
-}
 
 export default function EpisodeVideoStage({ issue, onStageUpdate }) {
   const stage = issue.stages?.episodeVideo || {};
@@ -225,7 +219,7 @@ export default function EpisodeVideoStage({ issue, onStageUpdate }) {
               </div>
               <ul className="flex flex-wrap gap-1.5 pt-1">
                 {sortedScenes.map((s) => {
-                  const badge = sceneStatusBadge(s.status);
+                  const badge = getSceneStatusBadge(s.status);
                   return (
                     <li
                       key={s.sceneId}
@@ -242,24 +236,9 @@ export default function EpisodeVideoStage({ issue, onStageUpdate }) {
 
           {isComplete && finalVideoId && (
             <div className="space-y-2 pt-1">
-              <video
-                src={`/data/videos/${finalVideoId}.mp4`}
-                poster={`/data/video-thumbnails/${finalVideoId}.jpg`}
-                controls
-                preload="metadata"
-                playsInline
-                className="w-full rounded-lg bg-port-bg"
-              />
-              <div className="flex items-center justify-between text-xs text-gray-500">
+              <ScenePreview jobId={finalVideoId} label="Final episode video" />
+              <div className="text-xs text-gray-500">
                 <span className="font-mono">final {finalVideoId.slice(0, 8)}</span>
-                <a
-                  href={`/data/videos/${finalVideoId}.mp4`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-port-accent hover:underline inline-flex items-center gap-1"
-                >
-                  Open <ExternalLink size={10} />
-                </a>
               </div>
             </div>
           )}

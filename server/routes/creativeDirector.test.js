@@ -63,8 +63,8 @@ describe('creativeDirector routes', () => {
           logline: 'big logline text',
           synopsis: 'big synopsis text',
           scenes: [
-            { id: 's1', order: 0, status: 'accepted', intent: 'long intent text', visualPrompt: 'long prompt' },
-            { id: 's2', order: 1, status: 'rendering', intent: 'longer text', visualPrompt: 'longer prompt' },
+            { sceneId: 's1', order: 0, status: 'accepted', intent: 'long intent text', visualPrompt: 'long prompt' },
+            { sceneId: 's2', order: 1, status: 'rendering', intent: 'longer text', visualPrompt: 'longer prompt' },
           ],
         },
       });
@@ -78,8 +78,8 @@ describe('creativeDirector routes', () => {
         failureReason: null,
         treatment: {
           scenes: [
-            { id: 's1', order: 0, status: 'accepted' },
-            { id: 's2', order: 1, status: 'rendering' },
+            { sceneId: 's1', order: 0, status: 'accepted' },
+            { sceneId: 's2', order: 1, status: 'rendering' },
           ],
         },
       });

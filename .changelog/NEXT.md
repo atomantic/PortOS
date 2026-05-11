@@ -24,4 +24,5 @@
 
 ## Fixed
 
+- Pipeline EpisodeVideoStage final-video render no longer breaks when the underlying mp4 is missing — both surfaces (Creative Director SegmentsTab + Pipeline EpisodeVideoStage) now route through a shared `ScenePreview` component with the onError-missing-media fallback + Retry + cache-bust pattern.
 - Render Queue UI now lists jobs in execution order (running first, then queue position ascending) instead of mixing a long-running job into the middle of newer queued batches. The route was sorting all jobs by `startedAt || queuedAt` DESC, which slotted an active job below a fresher batch.

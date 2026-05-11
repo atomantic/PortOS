@@ -37,8 +37,9 @@ router.get('/', asyncHandler(async (_req, res) => {
 // Slim projection of a project for polling consumers (pipeline EpisodeVideoStage
 // polls every 4s; the full project carries an unbounded `runs[]` history that
 // grows with every render operation). The shape covers exactly what the
-// polling UI consumes: id, status, updatedAt (change-detect key), per-scene
-// id/order/status, finalVideoId, failureReason.
+// polling UI consumes: status, updatedAt (change-detect key), per-scene
+// sceneId/order/status, finalVideoId, failureReason. `sceneId` (not `id`) is
+// the canonical scene identifier per services/creativeDirector/local.js.
 function slimProject(p) {
   return {
     id: p.id,
@@ -48,7 +49,7 @@ function slimProject(p) {
     failureReason: p.failureReason || null,
     treatment: {
       scenes: (p.treatment?.scenes || []).map((s) => ({
-        id: s.id,
+        sceneId: s.sceneId,
         order: s.order,
         status: s.status,
       })),
