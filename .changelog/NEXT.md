@@ -24,5 +24,6 @@
 
 ## Fixed
 
+- Pipeline issues no longer get stuck in `status: 'running'` after a server restart mid auto-run. Boot now walks every issue and demotes any `running` to `needs-review` (the same terminal state a normal completion lands on) — the UI shows the issue as needing attention instead of spinning forever waiting for SSE that will never arrive.
 - Pipeline EpisodeVideoStage final-video render no longer breaks when the underlying mp4 is missing — both surfaces (Creative Director SegmentsTab + Pipeline EpisodeVideoStage) now route through a shared `ScenePreview` component with the onError-missing-media fallback + Retry + cache-bust pattern.
 - Render Queue UI now lists jobs in execution order (running first, then queue position ascending) instead of mixing a long-running job into the middle of newer queued batches. The route was sorting all jobs by `startedAt || queuedAt` DESC, which slotted an active job below a fresher batch.

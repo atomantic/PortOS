@@ -180,4 +180,29 @@ describe('pipeline auto-runner', () => {
     const finalRun = autoRunner.__testing.runs.get(issue.id);
     expect(finalRun?.lastPayload?.type).toBe('canceled');
   });
+
+  describe('recoverStuckAutoRuns', () => {
+    it('demotes any issue in status: running to needs-review on boot', async () => {
+      const series = await seriesSvc.createSeries({ name: 'S' });
+      const a = await issuesSvc.createIssue({ seriesId: series.id, title: 'Stuck A' });
+      const b = await issuesSvc.createIssue({ seriesId: series.id, title: 'Stuck B' });
+      const c = await issuesSvc.createIssue({ seriesId: series.id, title: 'Not stuck' });
+      await issuesSvc.updateIssue(a.id, { status: 'running' });
+      await issuesSvc.updateIssue(b.id, { status: 'running' });
+      await issuesSvc.updateIssue(c.id, { status: 'needs-review' });
+
+      const count = await autoRunner.recoverStuckAutoRuns();
+      expect(count).toBe(2);
+
+      expect((await issuesSvc.getIssue(a.id)).status).toBe('needs-review');
+      expect((await issuesSvc.getIssue(b.id)).status).toBe('needs-review');
+      // Already-terminal issue is left untouched
+      expect((await issuesSvc.getIssue(c.id)).status).toBe('needs-review');
+    });
+
+    it('returns 0 when no issues are stuck (idempotent — safe to call on every boot)', async () => {
+      const count = await autoRunner.recoverStuckAutoRuns();
+      expect(count).toBe(0);
+    });
+  });
 });

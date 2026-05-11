@@ -159,5 +159,32 @@ async function runStageIfNeeded(issueId, stageId, options) {
   });
 }
 
+/**
+ * Boot-time recovery for issues stuck in `status: 'running'`.
+ *
+ * The in-memory `runs` map is lost on server restart — there's no way to
+ * reattach SSE to the dead run, and the issue would remain stuck in
+ * `running` forever (the UI shows a spinner that never resolves).
+ *
+ * On boot, walk every issue and demote any `running` to `needs-review` (the
+ * same terminal state a normal-completion path lands on). Idempotent. Fires
+ * as a fire-and-forget side effect; failures are logged but never escalated
+ * — the listIssues call has its own error handling and an exception here
+ * shouldn't block server startup.
+ *
+ * Mirrors writers-room/evaluator.js#recoverStuckAnalyses.
+ */
+export async function recoverStuckAutoRuns() {
+  const { listIssues } = await import('./issues.js');
+  const all = await listIssues().catch(() => []);
+  const stuck = all.filter((i) => i.status === 'running');
+  if (stuck.length === 0) return 0;
+  for (const issue of stuck) {
+    await updateIssue(issue.id, { status: 'needs-review' }).catch(() => null);
+  }
+  console.log(`📝 pipeline: recovered ${stuck.length} stuck auto-run${stuck.length === 1 ? '' : 's'} on boot`);
+  return stuck.length;
+}
+
 // Export internals for tests.
 export const __testing = { runs };
