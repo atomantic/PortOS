@@ -30,6 +30,8 @@ export default function EpisodeVideoStage({ issue, onStageUpdate }) {
   const [cdProject, setCdProject] = useState(null);
   const [submitting, setSubmitting] = useState(false);
   const [confirmRestart, setConfirmRestart] = useState(false);
+  const [aspectRatio, setAspectRatio] = useState('16:9');
+  const [quality, setQuality] = useState('standard');
   const intervalRef = useRef(null);
 
   // Single polling effect keyed only on cdProjectId so a status flip doesn't
@@ -78,7 +80,9 @@ export default function EpisodeVideoStage({ issue, onStageUpdate }) {
     setConfirmRestart(false);
     if (force) setCdProject(null);
     setSubmitting(true);
-    const result = await generatePipelineVisualImage(issue.id, 'episodeVideo', force ? { force: true } : {}).catch((err) => {
+    const payload = { aspectRatio, quality };
+    if (force) payload.force = true;
+    const result = await generatePipelineVisualImage(issue.id, 'episodeVideo', payload).catch((err) => {
       toast.error(err.message || (force ? 'Failed to restart episode render' : 'Failed to start episode render'));
       return null;
     });
@@ -122,16 +126,42 @@ export default function EpisodeVideoStage({ issue, onStageUpdate }) {
           </div>
         </div>
         {!cdProjectId ? (
-          <button
-            type="button"
-            onClick={() => submit({ force: false })}
-            disabled={submitting || !usableScenes.length}
-            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-port-accent text-white text-sm disabled:opacity-50"
-            title={!usableScenes.length ? 'Add storyboard scenes with descriptions first' : ''}
-          >
-            {submitting ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
-            Generate Episode ({usableScenes.length} scene{usableScenes.length === 1 ? '' : 's'})
-          </button>
+          <div className="flex items-center gap-2 flex-wrap">
+            <select
+              value={aspectRatio}
+              onChange={(e) => setAspectRatio(e.target.value)}
+              disabled={submitting}
+              aria-label="Aspect ratio"
+              title="Aspect ratio for the rendered scenes"
+              className="bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-gray-300"
+            >
+              <option value="16:9">16:9</option>
+              <option value="9:16">9:16</option>
+              <option value="1:1">1:1</option>
+            </select>
+            <select
+              value={quality}
+              onChange={(e) => setQuality(e.target.value)}
+              disabled={submitting}
+              aria-label="Render quality"
+              title="Render quality — higher = slower + more GPU time"
+              className="bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-gray-300"
+            >
+              <option value="draft">draft</option>
+              <option value="standard">standard</option>
+              <option value="high">high</option>
+            </select>
+            <button
+              type="button"
+              onClick={() => submit({ force: false })}
+              disabled={submitting || !usableScenes.length}
+              className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-port-accent text-white text-sm disabled:opacity-50"
+              title={!usableScenes.length ? 'Add storyboard scenes with descriptions first' : ''}
+            >
+              {submitting ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+              Generate Episode ({usableScenes.length} scene{usableScenes.length === 1 ? '' : 's'})
+            </button>
+          </div>
         ) : confirmRestart ? (
           <div className="inline-flex items-center gap-2">
             <span className="text-xs text-port-warning">Start a new CD project?</span>
