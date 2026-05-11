@@ -7,7 +7,7 @@
  * is deferred — see PLAN.md "Pipeline — Deferred".
  */
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Plus, Trash2, Sparkles, Loader2, Wand2 } from 'lucide-react';
 import toast from '../../ui/Toast';
 import {
@@ -21,6 +21,13 @@ export default function StoryboardsStage({ issue, onStageUpdate }) {
   const [scenes, setScenes] = useState(stage.scenes || []);
   const [savingIdx, setSavingIdx] = useState(null);
   const [extractingFrom, setExtractingFrom] = useState(null);
+  // Holds the active arm-timer id so an unmount or a fresh arm clears the
+  // pending disarm — otherwise the 5s callback fires setExtractingFrom on
+  // an unmounted component (React warning + small leak).
+  const armTimerRef = useRef(null);
+  useEffect(() => () => {
+    if (armTimerRef.current) clearTimeout(armTimerRef.current);
+  }, []);
 
   const tvScriptReady = !!(issue.stages?.tvScript?.output || '').trim();
   const proseReady = !!(issue.stages?.prose?.output || '').trim();
@@ -54,10 +61,18 @@ export default function StoryboardsStage({ issue, onStageUpdate }) {
     if (needsConfirm && extractingFrom !== armKey) {
       setExtractingFrom(armKey);
       toast.warning(`This will replace ${scenes.length} existing scene${scenes.length === 1 ? '' : 's'}. Click again to confirm.`);
-      setTimeout(() => {
+      if (armTimerRef.current) clearTimeout(armTimerRef.current);
+      armTimerRef.current = setTimeout(() => {
+        armTimerRef.current = null;
         setExtractingFrom((cur) => (cur === armKey ? null : cur));
       }, 5000);
       return;
+    }
+    // Second click landed within the arm window — cancel the pending disarm
+    // so the post-await `setExtractingFrom(null)` is the only state flip.
+    if (armTimerRef.current) {
+      clearTimeout(armTimerRef.current);
+      armTimerRef.current = null;
     }
 
     setExtractingFrom(from);

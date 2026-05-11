@@ -149,13 +149,17 @@ describe('pipeline episodeVideo helper', () => {
 
   it('startEpisodeVideoForIssue reuses an existing cdProjectId by default', async () => {
     const { issue } = await seedSeriesAndIssue({
-      scenes: [{ description: 'one' }],
+      scenes: [{ description: 'one' }, { description: 'two' }, { description: '' }],
     });
     const first = await svc.startEpisodeVideoForIssue(issue.id);
     cdCreated.length = 0;
     const second = await svc.startEpisodeVideoForIssue(issue.id);
     expect(second.cdProjectId).toBe(first.cdProjectId);
     expect(second.reused).toBe(true);
+    // Reuse path emits the same `scenes` count shape as the fresh-start path
+    // so SSE consumers (autoRunner) don't have to guard against undefined.
+    // Empty descriptions are filtered (matches buildTreatmentFromStoryboards).
+    expect(second.scenes).toBe(2);
     expect(cdCreated).toHaveLength(0);
   });
 

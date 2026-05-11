@@ -32,10 +32,20 @@ const TIER_TO_MODEL_KEY = Object.freeze({
 
 const isTierName = (m) => typeof m === 'string' && m in TIER_TO_MODEL_KEY;
 
+// First-element fallback when defaultModel is unset on a provider that
+// exposes a `models` array (some toolkit-configured providers ship a model
+// list but no explicit default). Without this, API-side runners that require
+// an explicit model would receive `null` and 400. Mirrors the older pipeline
+// fallback that the shared runner replaced.
+const providerFallbackModel = (provider) =>
+  provider.defaultModel
+  || (Array.isArray(provider.models) && provider.models[0])
+  || null;
+
 export function resolveModel(provider, modelHint) {
-  if (!modelHint) return provider.defaultModel || null;
+  if (!modelHint) return providerFallbackModel(provider);
   if (isTierName(modelHint)) {
-    return provider[TIER_TO_MODEL_KEY[modelHint]] || provider.defaultModel || null;
+    return provider[TIER_TO_MODEL_KEY[modelHint]] || providerFallbackModel(provider);
   }
   return modelHint;
 }

@@ -346,9 +346,14 @@ export function mergeExtractedBible(existing, incoming, kind, { idPrefix = DEFAU
         }
       }
       if (reindex) indexEntry(map, found, cfg.keyFields);
-      found.firstAppearance = sane.firstAppearance;
-      found.evidence = sane.evidence;
-      found.missingFromProse = sane.missingFromProse;
+      // Prose-derived fields refresh verbatim — but only when the extractor
+      // actually emitted them. A partial LLM response that omits these keys
+      // entirely would otherwise clear prior data, since the sanitizer
+      // normalizes missing keys to null/[]. Explicit null/[] in rawIncoming
+      // still wins (the "refresh verbatim including explicit nulls" rule).
+      if ('firstAppearance' in rawIncoming) found.firstAppearance = sane.firstAppearance;
+      if ('evidence' in rawIncoming) found.evidence = sane.evidence;
+      if ('missingFromProse' in rawIncoming) found.missingFromProse = sane.missingFromProse;
       found.updatedAt = nowIso();
     } else {
       // Refuse new inserts past the per-bible cap so a runaway extraction

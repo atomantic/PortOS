@@ -50,6 +50,21 @@ describe('stageRunner — resolveModel', () => {
   it('returns explicit model id verbatim when not a tier name', () => {
     expect(resolveModel({ defaultModel: 'd' }, 'gpt-5-explicit')).toBe('gpt-5-explicit');
   });
+
+  it('falls back to provider.models[0] when defaultModel is unset (no hint)', () => {
+    expect(resolveModel({ models: ['m0', 'm1'] }, null)).toBe('m0');
+    expect(resolveModel({ models: ['m0'], defaultModel: '' }, null)).toBe('m0');
+  });
+
+  it('falls back to provider.models[0] when both tier slot and defaultModel are unset', () => {
+    expect(resolveModel({ models: ['m0', 'm1'] }, 'heavy')).toBe('m0');
+  });
+
+  it('returns null when neither defaultModel nor models[] is available', () => {
+    expect(resolveModel({}, null)).toBeNull();
+    expect(resolveModel({ models: [] }, null)).toBeNull();
+    expect(resolveModel({}, 'heavy')).toBeNull();
+  });
 });
 
 describe('stageRunner — extractJson', () => {
