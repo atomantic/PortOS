@@ -111,8 +111,9 @@ export const mediaJobEvents = new EventEmitter();
 // GPU lane: serialized — `running` holds at most one job (the MLX runtime can't
 // share VRAM). Codex lane: up to `codexParallelLimit` jobs in `codexRunning[]`
 // since each call shells out to its own external child process. `queue` is
-// shared submission order. `archive` is recently-finished jobs (~24h TTL);
-// canceled jobs are deliberately dropped instead of archived.
+// shared submission order. `archive` is recently-finished jobs (~24h TTL),
+// including canceled ones so /api/media-jobs?status=canceled and the recent-
+// reel UI can still find them within the 24h window.
 const queue = [];
 let running = null;
 const codexRunning = [];
@@ -342,9 +343,10 @@ function startLaneJob(job, { isCodex }) {
     } else {
       running = null;
     }
-    // Canceled jobs are dropped (not archived) so they don't clutter the
-    // recent reel. Failed / completed runs still archive.
-    if (job.status !== 'canceled') archive.push(job);
+    // Archive every terminal job (completed / failed / canceled). The 24h
+    // TTL prune in persistImpl keeps the file from growing unbounded, and
+    // the UI's recent-reel cap (recentLimit) handles in-memory display.
+    archive.push(job);
     recomputeQueuePositions();
     persist().catch((e) => console.log(`⚠️ mediaJobQueue persist on ${label} done failed: ${e.message}`));
   })();
@@ -723,6 +725,10 @@ export async function cancelJob(jobId) {
     job.status = 'canceled';
     job.error = 'Canceled before start';
     job.completedAt = new Date().toISOString();
+    // Archive so /api/media-jobs?status=canceled and the recent-reel UI
+    // can still find it within the 24h TTL. Mirrors the running-cancel path
+    // in startLaneJob's terminal handler.
+    archive.push(job);
     // Removing a queued job shifts everyone behind it up one slot. Recompute
     // + broadcast so clients still attached to those SSE streams see the new
     // position immediately, instead of waiting for the next dequeue.
@@ -823,7 +829,9 @@ function sleep(ms) {
 export function __resetForTests() {
   queue.length = 0;
   running = null;
-  codexRunning = null;
+  // `codexRunning` is a const array — clear it in place rather than reassigning,
+  // which would throw TypeError and break `findJob()` (.find on null).
+  codexRunning.length = 0;
   archive.length = 0;
   sseJobs.clear();
   workerStarted = false;

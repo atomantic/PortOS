@@ -7,8 +7,10 @@
  *
  * Strict-but-tolerant: requires `## Page N` / `### Panel N` headers, then
  * each panel's `**Description:** ...`, `**Caption:** ...`, `**Dialogue:** ...`,
- * `**SFX:** ...` blocks per the template. "(none)" / empty values become null.
- * Unexpected text between panels is ignored.
+ * `**SFX:** ...` blocks per the template. "(none)" / empty values normalize
+ * to `''` for caption/sfx and `[]` for dialogue (never null) so downstream
+ * template renderers don't need null-guards. Unexpected text between panels
+ * is ignored.
  */
 const PAGE_RE = /^##\s+Page\s+([\dIVX]+)\b/i;
 const PANEL_RE = /^###\s+Panel\s+([\dIVX]+)\b/i;

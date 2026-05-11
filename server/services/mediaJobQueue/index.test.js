@@ -118,7 +118,7 @@ describe('mediaJobQueue', () => {
     expect(mediaJobQueue.listJobs({ status: 'running' })).toHaveLength(1);
   });
 
-  it('cancelQueuedJobs drops every queued job, leaves running ones alone', async () => {
+  it('cancelQueuedJobs cancels every queued job, leaves running ones alone', async () => {
     // Block the worker so subsequent enqueues stay queued.
     let resolveBlocker;
     stubs.generateVideo.mockImplementation(() => new Promise((r) => { resolveBlocker = r; }));
@@ -130,12 +130,13 @@ describe('mediaJobQueue', () => {
     await flush();
 
     // No filter: every queued job (a, b, c) cancels; running blocker is untouched.
-    // Canceled jobs are deleted (not archived), so getJob returns null for them.
+    // Canceled jobs are archived (not dropped) so they stay findable for the
+    // recent-reel UI and /api/media-jobs?status=canceled within the 24h TTL.
     const r = await mediaJobQueue.cancelQueuedJobs();
     expect(r.canceled).toBe(3);
-    expect(mediaJobQueue.getJob(a.jobId)).toBeNull();
-    expect(mediaJobQueue.getJob(b.jobId)).toBeNull();
-    expect(mediaJobQueue.getJob(c.jobId)).toBeNull();
+    expect(mediaJobQueue.getJob(a.jobId).status).toBe('canceled');
+    expect(mediaJobQueue.getJob(b.jobId).status).toBe('canceled');
+    expect(mediaJobQueue.getJob(c.jobId).status).toBe('canceled');
     expect(mediaJobQueue.getJob(blocker.jobId).status).toBe('running');
 
     videoGenEvents.emit('failed', { generationId: blocker.jobId, error: 'cleanup' });
@@ -154,8 +155,8 @@ describe('mediaJobQueue', () => {
 
     const r = await mediaJobQueue.cancelQueuedJobs({ kind: 'video' });
     expect(r.canceled).toBe(1);
-    // Canceled jobs are deleted (not archived), so v is no longer findable.
-    expect(mediaJobQueue.getJob(v.jobId)).toBeNull();
+    // Canceled jobs are archived (not dropped) — `v` is findable with status 'canceled'.
+    expect(mediaJobQueue.getJob(v.jobId).status).toBe('canceled');
     // Image queued job is left in the queue (still 'queued', not canceled).
     expect(mediaJobQueue.getJob(i.jobId).status).toBe('queued');
     expect(mediaJobQueue.getJob(blocker.jobId).status).toBe('running');
@@ -180,8 +181,11 @@ describe('mediaJobQueue', () => {
     const result = await mediaJobQueue.cancelJob(target.jobId);
     expect(result.ok).toBe(true);
     expect(result.status).toBe('canceled');
-    // Canceled jobs are deleted (not archived), so getJob returns null.
-    expect(mediaJobQueue.getJob(target.jobId)).toBeNull();
+    // Canceled jobs are archived (not dropped) so /api/media-jobs?status=canceled
+    // and the recent-reel UI can find them within the 24h TTL.
+    const archived = mediaJobQueue.getJob(target.jobId);
+    expect(archived).not.toBeNull();
+    expect(archived.status).toBe('canceled');
 
     // Unblock the first one for cleanup.
     videoGenEvents.emit('failed', { generationId: blocker.jobId, error: 'cleanup' });
