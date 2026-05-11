@@ -71,6 +71,14 @@ const sanitizeStage = (raw) => {
   };
 };
 
+// Episode-video render settings the user chose at kickoff time. Persisted
+// on the stage so a page reload doesn't reset them to the defaults — the
+// restart flow can render the same pickers populated with the user's
+// previous choice. The CD project itself owns the authoritative values once
+// rendering starts; these are the *requested* settings for the next start.
+const ASPECT_RATIO_VALUES = new Set(['16:9', '9:16', '1:1']);
+const QUALITY_VALUES = new Set(['draft', 'standard', 'high']);
+
 const sanitizeVisualStage = (raw) => {
   // Visual stages keep arbitrary structured artifact lists. Sanitize the
   // wrapper but pass through known shapes.
@@ -81,6 +89,8 @@ const sanitizeVisualStage = (raw) => {
     scenes: Array.isArray(raw?.scenes) ? raw.scenes.slice(0, 200) : [],
     cdProjectId: isStr(raw?.cdProjectId) && raw.cdProjectId ? raw.cdProjectId : null,
     videoPath: isStr(raw?.videoPath) && raw.videoPath ? raw.videoPath : null,
+    aspectRatio: ASPECT_RATIO_VALUES.has(raw?.aspectRatio) ? raw.aspectRatio : null,
+    quality: QUALITY_VALUES.has(raw?.quality) ? raw.quality : null,
   };
 };
 

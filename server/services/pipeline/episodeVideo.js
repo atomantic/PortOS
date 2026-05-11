@@ -116,6 +116,11 @@ export async function startEpisodeVideoForIssue(issueId, options = {}) {
   await updateStage(issueId, 'episodeVideo', {
     status: 'generating',
     cdProjectId: project.id,
+    // Persist the chosen render settings so a page reload restores the
+    // pickers — otherwise restart from a fresh tab would silently fall back
+    // to defaults that the user can't see or adjust.
+    aspectRatio,
+    quality,
     output: '',
     errorMessage: '',
   });

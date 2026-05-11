@@ -30,8 +30,11 @@ export default function EpisodeVideoStage({ issue, onStageUpdate }) {
   const [cdProject, setCdProject] = useState(null);
   const [submitting, setSubmitting] = useState(false);
   const [confirmRestart, setConfirmRestart] = useState(false);
-  const [aspectRatio, setAspectRatio] = useState('16:9');
-  const [quality, setQuality] = useState('standard');
+  // Initialize from the persisted stage values so a page reload (or a fresh
+  // tab) doesn't lose the user's previous picks. Falls through to defaults
+  // for an unstarted episodeVideo stage.
+  const [aspectRatio, setAspectRatio] = useState(stage.aspectRatio || '16:9');
+  const [quality, setQuality] = useState(stage.quality || 'standard');
   const intervalRef = useRef(null);
 
   // Single polling effect keyed only on cdProjectId so a status flip doesn't
@@ -163,8 +166,30 @@ export default function EpisodeVideoStage({ issue, onStageUpdate }) {
             </button>
           </div>
         ) : confirmRestart ? (
-          <div className="inline-flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
             <span className="text-xs text-port-warning">Start a new CD project?</span>
+            <select
+              value={aspectRatio}
+              onChange={(e) => setAspectRatio(e.target.value)}
+              disabled={submitting}
+              aria-label="Aspect ratio"
+              className="bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-gray-300"
+            >
+              <option value="16:9">16:9</option>
+              <option value="9:16">9:16</option>
+              <option value="1:1">1:1</option>
+            </select>
+            <select
+              value={quality}
+              onChange={(e) => setQuality(e.target.value)}
+              disabled={submitting}
+              aria-label="Render quality"
+              className="bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-gray-300"
+            >
+              <option value="draft">draft</option>
+              <option value="standard">standard</option>
+              <option value="high">high</option>
+            </select>
             <button
               type="button"
               onClick={() => submit({ force: true })}

@@ -145,6 +145,20 @@ describe('pipeline episodeVideo helper', () => {
     const refreshed = await issuesSvc.getIssue(issue.id);
     expect(refreshed.stages.episodeVideo.cdProjectId).toBe(result.cdProjectId);
     expect(refreshed.stages.episodeVideo.status).toBe('generating');
+    // Persisted render settings so a page reload (or a fresh tab) can
+    // restore the picker state — defaults applied since no overrides given.
+    expect(refreshed.stages.episodeVideo.aspectRatio).toBe('16:9');
+    expect(refreshed.stages.episodeVideo.quality).toBe('standard');
+  });
+
+  it('startEpisodeVideoForIssue persists user-overridden aspectRatio + quality on the stage', async () => {
+    const { issue } = await seedSeriesAndIssue({
+      scenes: [{ description: 'foo' }],
+    });
+    await svc.startEpisodeVideoForIssue(issue.id, { aspectRatio: '9:16', quality: 'high' });
+    const refreshed = await issuesSvc.getIssue(issue.id);
+    expect(refreshed.stages.episodeVideo.aspectRatio).toBe('9:16');
+    expect(refreshed.stages.episodeVideo.quality).toBe('high');
   });
 
   it('startEpisodeVideoForIssue reuses an existing cdProjectId by default', async () => {

@@ -126,6 +126,8 @@ const visualStageInputSchema = stageInputSchema.extend({
   scenes: z.array(z.any()).max(200).optional(),
   cdProjectId: z.string().trim().max(64).nullable().optional(),
   videoPath: z.string().trim().max(1000).nullable().optional(),
+  aspectRatio: z.enum(ASPECT_RATIOS).nullable().optional(),
+  quality: z.enum(QUALITIES).nullable().optional(),
 });
 
 const issuePatchSchema = z.object({

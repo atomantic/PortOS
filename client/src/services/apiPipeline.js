@@ -34,11 +34,15 @@ export const deletePipelineSeries = (id) => request(`/pipeline/series/${encodeUR
 
 // Extract bibles (characters / settings / objects) from an issue's prose
 // stage and merge them into the series. `kinds` defaults server-side to all
-// three. Returns { series, results } where results is keyed by field name.
-export const extractPipelineBibles = (seriesId, { issueId, corpus, kinds, providerOverride } = {}) =>
+// three. Pass `parallel: true` to fan out the kinds concurrently — ~3×
+// wall-clock speedup on HTTP-API providers (OpenAI / Anthropic / LM Studio
+// HTTP). Safe to leave off for CLI-only providers (codex / claude-code /
+// gemini-cli) which serialize at the provider session anyway.
+// Returns { series, results } where results is keyed by field name.
+export const extractPipelineBibles = (seriesId, { issueId, corpus, kinds, providerOverride, parallel } = {}) =>
   request(`/pipeline/series/${encodeURIComponent(seriesId)}/extract-bible`, {
     method: 'POST',
-    body: JSON.stringify({ issueId, corpus, kinds, providerOverride }),
+    body: JSON.stringify({ issueId, corpus, kinds, providerOverride, parallel }),
   });
 
 // ---- Issues ----
