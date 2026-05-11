@@ -31,6 +31,10 @@ export default function StoryboardsStage({ issue, onStageUpdate }) {
 
   const tvScriptReady = !!(issue.stages?.tvScript?.output || '').trim();
   const proseReady = !!(issue.stages?.prose?.output || '').trim();
+  // Any non-null, non-arm value means an extract POST is in flight — both
+  // buttons must lock out concurrent submits so racing requests can't
+  // overwrite each other's results (last-write-wins).
+  const extractInFlight = !!extractingFrom && !extractingFrom.startsWith('arm:');
 
   const persist = async (nextScenes) => {
     setScenes(nextScenes);
@@ -122,7 +126,7 @@ export default function StoryboardsStage({ issue, onStageUpdate }) {
           <button
             type="button"
             onClick={() => onExtractClick('tvScript')}
-            disabled={!tvScriptReady || extractingFrom === 'tvScript'}
+            disabled={!tvScriptReady || extractInFlight}
             title={tvScriptReady ? 'Parse the teleplay sluglines into structured scenes' : 'Generate the TV script first'}
             className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-port-card border border-port-border text-white text-sm hover:border-port-accent/50 disabled:opacity-40 disabled:cursor-not-allowed"
           >
@@ -134,7 +138,7 @@ export default function StoryboardsStage({ issue, onStageUpdate }) {
           <button
             type="button"
             onClick={() => onExtractClick('prose')}
-            disabled={!proseReady || extractingFrom === 'prose'}
+            disabled={!proseReady || extractInFlight}
             title={proseReady ? 'Break the prose into paragraph-grain scenes' : 'Generate the prose first'}
             className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-port-card border border-port-border text-white text-sm hover:border-port-accent/50 disabled:opacity-40 disabled:cursor-not-allowed"
           >

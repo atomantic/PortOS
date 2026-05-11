@@ -20,7 +20,6 @@
 
 import { readFile } from 'fs/promises';
 import { join } from 'path';
-import { existsSync } from 'fs';
 
 const PARTIAL_RE = /\{\{>\s*([A-Za-z0-9_-]+)\s*\}\}/g;
 const MAX_DEPTH = 8;
@@ -82,13 +81,22 @@ export async function expandPartials(template, { partialsDir } = {}) {
   async function loadOne(name) {
     if (cache.has(name)) return cache.get(name);
     const path = join(partialsDir, `${name}.md`);
-    if (!existsSync(path)) {
-      cache.set(name, null);
-      return null;
+    // Try-read-catch-ENOENT keeps the whole expansion async — a sync
+    // existsSync here would block the event loop on every partial in a
+    // hot prompt-render path. Any non-ENOENT error (EACCES etc) escalates;
+    // a missing partial is a normal "no such name" signal handled by the
+    // sync expander's loud-throw path.
+    try {
+      const body = await readFile(path, 'utf-8');
+      cache.set(name, body);
+      return body;
+    } catch (err) {
+      if (err.code === 'ENOENT') {
+        cache.set(name, null);
+        return null;
+      }
+      throw err;
     }
-    const body = await readFile(path, 'utf-8');
-    cache.set(name, body);
-    return body;
   }
 
   // Walk the include graph breadth-first so every referenced partial is

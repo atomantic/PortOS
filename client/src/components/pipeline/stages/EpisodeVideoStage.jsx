@@ -102,6 +102,11 @@ export default function EpisodeVideoStage({ issue, onStageUpdate }) {
       ...stage,
       status: 'generating',
       cdProjectId: result.cdProjectId,
+      // Mirror the server's persisted render settings on the client-side
+      // issue model so a same-session navigate-away-and-back doesn't reset
+      // the restart pickers to defaults before a full refetch lands.
+      aspectRatio,
+      quality,
     });
   };
 
