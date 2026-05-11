@@ -1,6 +1,8 @@
 /**
  * Pure parser for the Marvel/DC-format comic script the pipeline-comic-script
- * stage produces (see data/prompts/stages/pipeline-comic-script.md). Splits
+ * stage produces (see data.sample/prompts/stages/pipeline-comic-script.md —
+ * data/ is gitignored; data.sample/ is the authoritative template, copied
+ * into data/ at setup time). Splits
  * the markdown into a structured `{ pages: [{ panels: [...] }] }` shape so
  * the comicPages stage UI can drop the LLM-authored panel descriptions
  * directly into image-gen prompts without a second round-trip.

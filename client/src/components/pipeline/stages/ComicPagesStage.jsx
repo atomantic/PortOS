@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Plus, Trash2, Sparkles, Loader2, Wand2, ImagePlus } from 'lucide-react';
 import toast from '../../ui/Toast';
 import { useArmedAction } from '../../../hooks/useArmedAction';
@@ -49,10 +49,17 @@ export default function ComicPagesStage({ issue, onStageUpdate }) {
       : p);
     persist(next);
   };
+  // Ref tracks the latest pages array so onBlur's persist call doesn't read a
+  // stale render-scope value — onChange schedules a setPages, then onBlur fires
+  // synchronously in the same browser tick (before React re-renders), so without
+  // this the persisted snapshot would miss the user's last keystroke.
+  const pagesRef = useRef(pages);
+  pagesRef.current = pages;
   const updatePanel = (pi, ni, patch) => {
     const next = pages.map((p, i) => i === pi
       ? { ...p, panels: (p.panels || []).map((q, j) => j === ni ? { ...q, ...patch } : q) }
       : p);
+    pagesRef.current = next;
     setPages(next);
   };
 
@@ -203,7 +210,7 @@ export default function ComicPagesStage({ issue, onStageUpdate }) {
                     <textarea
                       value={panel.description || ''}
                       onChange={(e) => updatePanel(pi, ni, { description: e.target.value })}
-                      onBlur={() => persist(pages)}
+                      onBlur={() => persist(pagesRef.current)}
                       placeholder="Panel subject: wide shot, foundry crucible, dusk light, Lina silhouetted against the glow."
                       rows={2}
                       className="flex-1 px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm"

@@ -305,12 +305,16 @@ function startWorker() {
 // flight be picked up immediately on the next 150 ms tick instead of having
 // to wait for the entire GPU job to finish first.
 function startLaneJob(job, { isCodex }) {
-  // Guard against indexOf=-1 → splice(-1, 1) silently dropping the LAST queued
-  // job. Today the call sites (drainLoop + runJobNow) can't double-promote a
-  // job thanks to JS's single-threaded event loop, but the guard removes a
-  // footgun if those call patterns ever change.
+  // If the job isn't in the queue, it was already promoted (e.g. by a parallel
+  // runJobNow). Skip — promoting again would double-start the job and corrupt
+  // the lane (push it onto codexRunning/running twice). Silently splice(-1)
+  // would also lop the wrong job off the queue.
   const idx = queue.indexOf(job);
-  if (idx >= 0) queue.splice(idx, 1);
+  if (idx < 0) {
+    console.log(`⚠️ media-job [${job.id.slice(0, 8)}] startLaneJob: already removed from queue, skipping`);
+    return;
+  }
+  queue.splice(idx, 1);
   job.status = 'running';
   job.startedAt = new Date().toISOString();
   job.position = 1;

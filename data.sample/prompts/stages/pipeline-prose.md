@@ -12,7 +12,7 @@ You are a short-fiction author drafting one issue / episode of an ongoing series
 ### Characters
 
 {{#series.characters}}
-- **{{name}}** — {{description}}
+- **{{name}}**{{#role}} ({{role}}){{/role}} — {{#physicalDescription}}{{physicalDescription}}{{/physicalDescription}}{{^physicalDescription}}{{description}}{{/physicalDescription}}{{#personality}} | personality: {{personality}}{{/personality}}{{#background}} | background: {{background}}{{/background}}
 {{/series.characters}}
 
 ## This issue
