@@ -124,7 +124,14 @@ export default function PromptRefineModal({ item, open, onClose }) {
       const result = item.kind === 'image'
         ? await generateImage(payload)
         : await generateVideo(payload);
-      toast.success(result.position ? `Queued #${result.position}` : 'Render queued');
+      // external image-gen mode returns synchronously with the filename and
+      // no queue position — the render already completed by the time this
+      // resolves. Local / codex / video return a queued jobId+position.
+      const isAlreadyDone = item.kind === 'image' && result?.mode === 'external';
+      const message = isAlreadyDone
+        ? 'Render complete'
+        : result.position ? `Queued #${result.position}` : 'Render queued';
+      toast.success(message);
       onClose();
     } catch (err) {
       // generateImage routes through request() which already toasts; only

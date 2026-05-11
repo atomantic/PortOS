@@ -124,13 +124,13 @@ async function runRefinePrompt(provider, model, prompt) {
   });
 
   let text = '';
-  await new Promise((resolve, reject) => {
+  return await new Promise((resolve, reject) => {
     const onData = (chunk) => { text += typeof chunk === 'string' ? chunk : (chunk?.text || ''); };
     const onComplete = (result) => {
       if (result?.error || result?.success === false) {
         reject(new ServerError(result?.error || 'Prompt refinement failed', { status: 502, code: 'PROMPT_REFINE_FAILED' }));
       } else {
-        resolve(result);
+        resolve({ text, runId });
       }
     };
     if (provider.type === 'cli') {
@@ -149,7 +149,6 @@ async function runRefinePrompt(provider, model, prompt) {
       executeApiRun(runId, provider, model, prompt, process.cwd(), [], onData, onComplete).catch(reject);
     }
   });
-  return text;
 }
 
 export async function refineMediaPrompt({
@@ -200,7 +199,7 @@ export async function refineMediaPrompt({
     renderConfig,
   });
 
-  const text = await runRefinePrompt(provider, selectedModel, llmPrompt);
+  const { text, runId } = await runRefinePrompt(provider, selectedModel, llmPrompt);
 
   let parsed;
   try {
@@ -210,7 +209,7 @@ export async function refineMediaPrompt({
     // can contain user prompts or other sensitive content; the persisted
     // run artifact at `data/runs/<runId>/output.txt` already captures the
     // full response for offline debugging.
-    console.warn(`⚠️ media-prompt-refine [${provider.id}/${selectedModel || 'default'}] parse failed: ${e.message} (response size: ${(text || '').length} chars)`);
+    console.warn(`⚠️ media-prompt-refine [${provider.id}/${selectedModel || 'default'} runId=${runId}] parse failed: ${e.message} (response size: ${(text || '').length} chars) — full output at data/runs/${runId}/output.txt`);
     throw new ServerError(e.message, { status: 502, code: 'PROMPT_REFINE_BAD_JSON' });
   }
 
