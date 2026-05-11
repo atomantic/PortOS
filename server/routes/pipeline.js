@@ -661,10 +661,10 @@ router.post('/issues/:id/stages/comicPages/pages/:pageIndex/render', asyncHandle
   }
   const body = validateRequest(comicPageRenderSchema, req.body ?? {});
 
-  // Validate the page exists up front so an out-of-range index returns a clean
-  // 404 instead of bubbling the service's generic Error (which mapServiceError
-  // doesn't translate). Also lets us skip the enqueue work entirely when the
-  // index is bad.
+  // Validate the page exists up front so we skip the enqueue work entirely
+  // when the index is bad. The service also throws ServerError(404) for the
+  // same case (defense in depth — any other caller still gets a clean 404),
+  // but checking here avoids loading the bible context just to error out.
   const issue = await issuesSvc.getIssue(req.params.id).catch((err) => { throw mapServiceError(err); });
   const pages = Array.isArray(issue.stages?.comicPages?.pages) ? [...issue.stages.comicPages.pages] : [];
   if (!pages[pageIndex]) {
