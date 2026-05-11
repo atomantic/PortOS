@@ -168,9 +168,14 @@ export async function updateSeries(id, patch = {}) {
  */
 export async function extractAndMergeIntoSeries(seriesId, opts = {}) {
   const series = await getSeries(seriesId);
-  const kinds = (opts.kinds && opts.kinds.length)
+  // Dedup `kinds` — duplicates would run extra LLM calls AND last-write-wins
+  // the merge for the same field, so the only observable effect of a repeat
+  // is a wasted provider round-trip. Preserve first-seen order so callers
+  // can rely on response key order in `results`.
+  const rawKinds = (opts.kinds && opts.kinds.length)
     ? opts.kinds
     : [BIBLE_KIND.CHARACTER, BIBLE_KIND.SETTING, BIBLE_KIND.OBJECT];
+  const kinds = [...new Set(rawKinds)];
   if (!isStr(opts.corpus) || !opts.corpus.trim()) {
     throw makeErr('extractAndMergeIntoSeries: corpus is required', ERR_VALIDATION);
   }

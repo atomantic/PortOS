@@ -133,6 +133,23 @@ describe('promoteWorkToPipeline', () => {
     expect(second.series.id).not.toBe(first.series.id);
   });
 
+  it('falls through to a fresh create when the linked issue belongs to a different series (mismatched link)', async () => {
+    const work = await seedWorkWithProse();
+    const first = await promoteWorkToPipeline(work.id);
+    // Simulate a corrupted link: rewrite the work manifest to point at the
+    // first series but a DIFFERENT (unrelated) series' issue. Mirrors a
+    // manual edit, partial delete, or migration bug.
+    const strayerSeries = await seriesSvc.createSeries({ name: 'Strayer' });
+    const issuesSvc = await import('../pipeline/issues.js');
+    const strayerIssue = await issuesSvc.createIssue({ seriesId: strayerSeries.id, title: 'Stray' });
+    await wrLocal.linkToPipeline(work.id, { seriesId: first.series.id, issueId: strayerIssue.id });
+
+    const second = await promoteWorkToPipeline(work.id);
+    expect(second.reused).toBe(false);
+    // The new pair must be self-consistent (issue belongs to the new series).
+    expect(second.issue.seriesId).toBe(second.series.id);
+  });
+
   it('populates storyboards scenes from a succeeded script analysis (visualPrompt → description)', async () => {
     const work = await seedWorkWithProse();
 

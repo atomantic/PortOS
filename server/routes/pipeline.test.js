@@ -309,6 +309,27 @@ describe('pipeline routes', () => {
     spy.mockRestore();
   });
 
+  it('POST /series/:id/extract-bible dedups duplicate kinds (no extra LLM calls)', async () => {
+    const extractor = await import('../lib/bibleExtractor.js');
+    const calls = [];
+    const spy = vi.spyOn(extractor, 'extractBible').mockImplementation(async ({ kind }) => {
+      calls.push(kind);
+      return { extracted: [], runId: `run-${kind}`, providerId: 'mock', model: 'mock-model' };
+    });
+
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const r = await request(app)
+      .post(`/api/pipeline/series/${ser.body.id}/extract-bible`)
+      .send({ corpus: 'x', kinds: ['character', 'character', 'setting'] });
+
+    expect(r.status).toBe(200);
+    // Duplicates collapsed before the LLM dispatch — 2 calls for 2 unique kinds.
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(calls.sort()).toEqual(['character', 'setting']);
+    spy.mockRestore();
+  });
+
   // ---- storyboards/extract-scenes ----
 
   it('POST /issues/:id/stages/storyboards/extract-scenes 400s when the source stage is empty', async () => {

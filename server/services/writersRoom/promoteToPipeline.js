@@ -72,7 +72,12 @@ export async function promoteWorkToPipeline(workId, { force = false } = {}) {
   if (!force && manifest.pipelineSeriesId && manifest.pipelineIssueId) {
     const existingSeries = await seriesSvc.getSeries(manifest.pipelineSeriesId).catch(() => null);
     const existingIssue = await issuesSvc.getIssue(manifest.pipelineIssueId).catch(() => null);
-    if (existingSeries && existingIssue) {
+    // Verify the issue actually belongs to the linked series — otherwise a
+    // manual edit / partial delete / future migration could leave the work
+    // pointing at a mismatched pair, and we'd return an unrelated issue.
+    // A mismatch is treated like a missing record: drop the stale link and
+    // fall through to a fresh create.
+    if (existingSeries && existingIssue && existingIssue.seriesId === existingSeries.id) {
       return { series: existingSeries, issue: existingIssue, reused: true };
     }
     await wrLocal.linkToPipeline(workId, { seriesId: null, issueId: null });

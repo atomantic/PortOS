@@ -81,7 +81,6 @@ export default function EpisodeVideoStage({ issue, onStageUpdate }) {
       return;
     }
     setConfirmRestart(false);
-    if (force) setCdProject(null);
     setSubmitting(true);
     const payload = { aspectRatio, quality };
     if (force) payload.force = true;
@@ -92,6 +91,11 @@ export default function EpisodeVideoStage({ issue, onStageUpdate }) {
     setSubmitting(false);
     if (!result) return;
     if (force) {
+      // Only clear the prior project view AFTER the restart kickoff succeeds.
+      // Clearing pre-flight (which we used to do) meant a failed restart
+      // tore the in-flight progress UI off the page even though the
+      // previous CD project was still rendering.
+      setCdProject(null);
       toast.success(`Restarted: ${result.cdProjectId.slice(0, 8)}`);
     } else if (result.reused) {
       toast.success(`Reusing in-flight CD project ${result.cdProjectId.slice(0, 8)}`);
