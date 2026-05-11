@@ -92,10 +92,18 @@ export function composeComicPagePrompt({ series, world, page, pageNumber, extraS
   const panels = Array.isArray(page?.panels) ? page.panels : [];
   if (panels.length === 0) return '';
 
+  // Append a sentence-terminator unless the source text already ends in one —
+  // prose extracted from a script often carries its own `.`, `!`, or `?`, and
+  // double-punctuating like "...sunstreaming in.." is noisy in prompts. The
+  // optional trailing `"` covers the dialogue/caption case where we wrap the
+  // text in quotes — `KESSA: "...away."` should NOT become `KESSA: "...away.".`.
+  const endPunct = (s) => /[.!?]"?$/.test(s) ? s : `${s}.`;
+
   const panelLines = panels.map((p, i) => {
     const idx = i + 1;
-    const parts = [`Panel ${idx}: ${(p.description || '').trim() || 'continuation of previous beat'}.`];
-    if (p.caption && p.caption.trim()) parts.push(`Caption: "${p.caption.trim()}".`);
+    const desc = (p.description || '').trim() || 'continuation of previous beat';
+    const parts = [`Panel ${idx}: ${endPunct(desc)}`];
+    if (p.caption && p.caption.trim()) parts.push(`Caption: "${endPunct(p.caption.trim())}"`);
     if (Array.isArray(p.dialogue) && p.dialogue.length > 0) {
       // Trim first so whitespace-only character / line fields don't pass the
       // truthy guard and emit malformed `: ""` entries. Drop dialogue rows
@@ -108,9 +116,9 @@ export function composeComicPagePrompt({ series, world, page, pageNumber, extraS
         })
         .filter(Boolean)
         .join(' / ');
-      if (dlg) parts.push(`Dialogue: ${dlg}.`);
+      if (dlg) parts.push(`Dialogue: ${endPunct(dlg)}`);
     }
-    if (p.sfx && p.sfx.trim()) parts.push(`SFX: ${p.sfx.trim()}.`);
+    if (p.sfx && p.sfx.trim()) parts.push(`SFX: ${endPunct(p.sfx.trim())}`);
     return parts.join(' ');
   });
 

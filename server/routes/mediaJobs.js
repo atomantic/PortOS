@@ -26,6 +26,11 @@ const listQuerySchema = z.object({
 // the Render Queue UI actually renders (prompt, owner-supplied settings).
 const PARAM_ALLOWLIST = new Set([
   'prompt', 'negativePrompt', 'modelId',
+  // `model` is the codex-side counterpart to `modelId` (different field name
+  // because Codex passes a model string straight to the CLI, while local /
+  // video providers carry a registry-id). Without it the UI can't tell which
+  // codex model a failed job tried to use — the row would just say "codex".
+  'model',
   'width', 'height', 'numFrames', 'fps', 'steps', 'guidanceScale',
   'seed', 'tiling', 'disableAudio', 'mode', 'imageStrength',
   'cfgScale', 'guidance', 'quantize',

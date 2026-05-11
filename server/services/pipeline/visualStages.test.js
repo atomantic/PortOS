@@ -84,4 +84,28 @@ describe('composeComicPagePrompt', () => {
     });
     expect(prompt).toMatch(/Art style: gritty ink-wash, muted earthtones, heavy contrast, aged paper texture/);
   });
+
+  it('does not double-punctuate when description / caption / sfx already end in . ! ?', () => {
+    const page = {
+      panels: [{
+        description: 'Wide shot with morning sun streaming in.',
+        caption: 'No one has told the rib.',
+        dialogue: [{ character: 'KESSA', line: 'Move it!' }],
+        sfx: 'CRASH!',
+      }],
+    };
+    const prompt = composeComicPagePrompt({ series: SERIES, page, pageNumber: 1 });
+    // Each pre-terminated segment should keep its terminator, never `..` or `!.`.
+    expect(prompt).not.toMatch(/streaming in\.\./);
+    expect(prompt).not.toMatch(/has told the rib\.\."/);
+    expect(prompt).not.toMatch(/Move it!\."/);
+    expect(prompt).not.toMatch(/CRASH!\./);
+  });
+
+  it('still appends a terminator when the field has no sentence-end punctuation', () => {
+    const page = { panels: [{ description: 'A solitary frame', sfx: 'fmp' }] };
+    const prompt = composeComicPagePrompt({ series: SERIES, page, pageNumber: 1 });
+    expect(prompt).toMatch(/Panel 1: A solitary frame\./);
+    expect(prompt).toMatch(/SFX: fmp\./);
+  });
 });
