@@ -26,7 +26,7 @@
  * stay honest about what the runner actually executed.
  */
 
-import { createRun, executeApiRun, executeCliRun, hasModelFlag } from '../services/runner.js';
+import { createRun, executeApiRun, executeCliRun, extractBakedModel, hasModelFlag } from '../services/runner.js';
 
 const DEFAULT_TIMEOUT_MS = 300000;
 const APPEND_CHUNK = (acc, chunk) => acc + (typeof chunk === 'string' ? chunk : (chunk?.text || ''));
@@ -46,6 +46,35 @@ export const providerHonorsModelOverride = (provider) => (
   provider?.type === 'api'
   || (provider?.type === 'cli' && !hasModelFlag(provider?.args))
 );
+
+/**
+ * Resolve the model id that will ACTUALLY execute against the provider,
+ * for accurate logging + run-record persistence.
+ *
+ * Decision table:
+ *   - Provider honors per-call override (API or CLI w/o baked args flag)
+ *     → callerModel || provider.defaultModel || provider.models[0]
+ *   - CLI with a baked --model/-m in provider.args (runner.js will
+ *     suppress its own injection and let the args-pinned model win)
+ *     → extractBakedModel(args) || provider.defaultModel || models[0]
+ *
+ * Returns null when no fallback resolves (so logs read "(default)" instead
+ * of an inaccurate value).
+ *
+ * @param {object} provider
+ * @param {string} [callerModel] — the per-call model the caller asked for
+ * @returns {string|null}
+ */
+export function resolveEffectiveModel(provider, callerModel) {
+  if (providerHonorsModelOverride(provider)) {
+    return callerModel || provider?.defaultModel || provider?.models?.[0] || null;
+  }
+  // Non-honoring CLI path: args-baked model id wins over defaultModel.
+  const baked = provider?.type === 'cli' && hasModelFlag(provider?.args)
+    ? extractBakedModel(provider.args)
+    : null;
+  return baked || provider?.defaultModel || provider?.models?.[0] || null;
+}
 
 /**
  * Run a prompt through a provider and resolve with the streamed text +
@@ -93,11 +122,10 @@ export async function runPromptThroughProvider({ provider, prompt, source, model
   }
 
   // Resolve the model that'll actually run BEFORE creating the run record
-  // so the record reflects reality. For providers that don't honor the
-  // override, fall back to provider.defaultModel / models[0].
-  const effectiveModel = providerHonorsModelOverride(provider)
-    ? (model || provider.defaultModel || provider.models?.[0] || null)
-    : (provider.defaultModel || provider.models?.[0] || null);
+  // so the record reflects reality. resolveEffectiveModel handles both
+  // the override-honored fallback chain AND the args-baked-CLI case
+  // (extract the args-pinned model id rather than logging defaultModel).
+  const effectiveModel = resolveEffectiveModel(provider, model);
 
   // Some call sites (stageRunner) create the run themselves so they can
   // log the runId before the LLM call starts. When provided, reuse it.

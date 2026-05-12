@@ -5,6 +5,7 @@ vi.mock('../services/runner.js', () => ({
   executeApiRun: vi.fn(),
   executeCliRun: vi.fn(),
   hasModelFlag: vi.fn(() => false),
+  extractBakedModel: vi.fn(() => null),
 }));
 
 const runner = await import('../services/runner.js');
@@ -154,6 +155,32 @@ describe('promptRunner — happy paths', () => {
     });
 
     expect(out.text).toBe('ran with defaultModel=fallback');
+  });
+
+  it('returns the args-baked model id (not defaultModel) when extractBakedModel succeeds', async () => {
+    // Regression: previously the non-honoring CLI branch fell through to
+    // provider.defaultModel, so a baked args model id would never reach
+    // the run record / return value. Now resolveEffectiveModel extracts
+    // the args-pinned id directly.
+    runner.hasModelFlag.mockReturnValue(true);
+    runner.extractBakedModel.mockReturnValue('baked-in');
+    runner.executeCliRun.mockImplementation(async (id, providerArg, _p, _cwd, onData, onComplete, _t) => {
+      onData(`ran with defaultModel=${providerArg.defaultModel}`);
+      onComplete({ success: true });
+    });
+
+    const out = await runPromptThroughProvider({
+      provider: { id: 'claude-code', type: 'cli', defaultModel: 'fallback', timeout: 5000, args: ['--model', 'baked-in'] },
+      prompt: 'p',
+      source: 't',
+      model: 'user-picked-this',
+    });
+
+    // effectiveModel = baked-in (not defaultModel='fallback'). Clone
+    // fires because baked-in !== defaultModel; the CLI receives the
+    // cloned provider whose defaultModel === baked-in.
+    expect(out.model).toBe('baked-in');
+    expect(out.text).toBe('ran with defaultModel=baked-in');
   });
 });
 
