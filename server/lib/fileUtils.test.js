@@ -3,6 +3,7 @@ import { writeFile, rm, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
+  assertSafeFilename,
   isValidJSON,
   safeJSONParse,
   safeJSONLParse,
@@ -329,6 +330,69 @@ describe('fileUtils', () => {
       expect(formatDuration(25 * 60 * 60000)).toBe('1d 1h');
       expect(formatDuration(48 * 60 * 60000)).toBe('2d 0h');
       expect(formatDuration(50 * 60 * 60000)).toBe('2d 2h');
+    });
+  });
+
+  describe('assertSafeFilename', () => {
+    it('accepts a safe basename with an allowlisted extension', () => {
+      expect(() => assertSafeFilename('foo.png', { extensions: ['.png'] })).not.toThrow();
+      expect(() => assertSafeFilename('lora-cool.safetensors', { extensions: ['.safetensors'] })).not.toThrow();
+    });
+
+    it('matches extensions case-insensitively', () => {
+      expect(() => assertSafeFilename('FOO.PNG', { extensions: ['.png'] })).not.toThrow();
+      expect(() => assertSafeFilename('cool.SafeTensors', { extensions: ['.safetensors'] })).not.toThrow();
+    });
+
+    it('allows substring `..` in the middle of a name', () => {
+      expect(() => assertSafeFilename('my..render.png', { extensions: ['.png'] })).not.toThrow();
+    });
+
+    it('rejects path separators', () => {
+      expect(() => assertSafeFilename('sub/foo.png', { extensions: ['.png'] })).toThrow(/Invalid filename/);
+      expect(() => assertSafeFilename('sub\\foo.png', { extensions: ['.png'] })).toThrow(/Invalid filename/);
+    });
+
+    it('rejects exact-traversal `.` and `..`', () => {
+      expect(() => assertSafeFilename('.', { extensions: ['.png'] })).toThrow(/Invalid filename/);
+      expect(() => assertSafeFilename('..', { extensions: ['.png'] })).toThrow(/Invalid filename/);
+    });
+
+    it('rejects null bytes', () => {
+      expect(() => assertSafeFilename('foo\0.png', { extensions: ['.png'] })).toThrow(/Invalid filename/);
+    });
+
+    it('rejects empty or non-string inputs', () => {
+      expect(() => assertSafeFilename('', { extensions: ['.png'] })).toThrow(/Filename required/);
+      expect(() => assertSafeFilename(undefined, { extensions: ['.png'] })).toThrow(/Filename required/);
+      expect(() => assertSafeFilename(null, { extensions: ['.png'] })).toThrow(/Filename required/);
+    });
+
+    it('rejects unrecognized extensions', () => {
+      expect(() => assertSafeFilename('foo.jpg', { extensions: ['.png'] })).toThrow(/Invalid filename/);
+      expect(() => assertSafeFilename('foo.exe', { extensions: ['.png', '.gif'] })).toThrow(/Invalid filename/);
+    });
+
+    it('uses subject in error messages', () => {
+      expect(() => assertSafeFilename('', { extensions: ['.safetensors'], subject: 'LoRA filename' }))
+        .toThrow(/LoRA filename required/);
+      expect(() => assertSafeFilename('foo.jpg', { extensions: ['.safetensors'], subject: 'LoRA filename' }))
+        .toThrow(/Invalid LoRA filename/);
+    });
+
+    it('throws on missing extensions option (programmer error, not user)', () => {
+      expect(() => assertSafeFilename('foo.png', {})).toThrow(/extensions allowlist is required/);
+      expect(() => assertSafeFilename('foo.png', { extensions: [] })).toThrow(/extensions allowlist is required/);
+    });
+
+    it('attaches 400 status + VALIDATION_ERROR code on the thrown ServerError', () => {
+      try {
+        assertSafeFilename('bad/path.png', { extensions: ['.png'] });
+        throw new Error('Expected assertion to throw');
+      } catch (err) {
+        expect(err.status).toBe(400);
+        expect(err.code).toBe('VALIDATION_ERROR');
+      }
     });
   });
 });

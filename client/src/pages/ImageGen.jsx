@@ -18,6 +18,7 @@ import FavoritesFilterChip from '../components/media/FavoritesFilterChip';
 import StylePresetPicker from '../components/media/StylePresetPicker';
 import BackendChipStrip from '../components/media/BackendChipStrip';
 import { normalizeImage } from '../components/media/normalize';
+import { RUNNER_FAMILIES } from '../lib/runnerFamilies';
 import Flux2InstallModal from '../components/imageGen/Flux2InstallModal';
 import Flux2TokenBanner from '../components/imageGen/Flux2TokenBanner';
 import ImageGenControls from '../components/imageGen/ImageGenControls';
@@ -382,13 +383,13 @@ export default function ImageGen() {
   }, [settingsOpen, reloadBackends]);
 
   const currentModel = models.find((m) => m.id === modelId);
-  const isFlux2Model = currentModel?.runner === 'flux2';
+  const isFlux2Model = currentModel?.runner === RUNNER_FAMILIES.FLUX2;
   // mflux is the default runner for entries with no explicit `runner` field.
   // Used to filter the LoRA picker so users only see compatible weights for
   // the selected model. LoRAs with `runnerFamily === null` (legacy / unknown
   // base) are shown too with a warning indicator — the runner may still
   // accept them, or surface a clear error.
-  const currentRunnerFamily = currentModel?.runner || 'mflux';
+  const currentRunnerFamily = currentModel?.runner || RUNNER_FAMILIES.MFLUX;
   const compatibleLoras = availableLoras.filter((l) => !l.runnerFamily || l.runnerFamily === currentRunnerFamily);
 
   const refreshFlux2Status = useCallback((signal) => {

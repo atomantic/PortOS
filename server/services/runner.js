@@ -25,17 +25,28 @@ export async function createRun(options) {
 
 /**
  * Build CLI args based on provider type.
- * Each CLI provider has different conventions for stdin input and model selection.
+ * Each CLI provider has different conventions for stdin input and model
+ * selection. `provider.defaultModel` is honored for all three (codex /
+ * claude-code / gemini-cli) so a per-call clone with an overridden
+ * defaultModel (e.g. modal-selected "thinking" tier in Refine Prompt)
+ * actually picks the modal-selected model instead of falling back to
+ * whatever's baked into `provider.args`.
+ *
+ * Model-flag injection is GATED on `provider.args` not already containing
+ * a model flag — users who hard-coded e.g. `--model gemini-2.5-pro` in
+ * their saved provider config keep that override and don't get a
+ * duplicate flag from us.
  */
-function buildCliArgs(provider) {
+export function buildCliArgs(provider) {
   const providerId = provider?.id || '';
+  const baseArgs = Array.isArray(provider?.args) ? provider.args : [];
   const effectiveDefaultModel = providerId === 'codex' && provider.defaultModel === 'codex-configured-default'
     ? null
     : provider.defaultModel;
 
   // Codex CLI: `codex exec -` reads prompt from stdin, --model for model
   if (providerId === 'codex') {
-    const args = [...(provider.args || []), 'exec'];
+    const args = [...baseArgs, 'exec'];
     if (effectiveDefaultModel) {
       args.push('--model', effectiveDefaultModel);
     }
@@ -43,13 +54,37 @@ function buildCliArgs(provider) {
     return args;
   }
 
-  // Gemini CLI: prompt is piped via stdin directly
+  // Gemini CLI: prompt is piped via stdin directly. `-m <model>` is gemini-
+  // cli's documented short flag for model selection (long form: `--model`).
+  // Skip injection when the user's saved args already pin a model (either
+  // form) so we don't duplicate the flag.
   if (providerId === 'gemini-cli') {
-    return [...(provider.args || [])];
+    const args = [...baseArgs];
+    if (effectiveDefaultModel && !hasModelFlag(baseArgs)) {
+      args.push('-m', effectiveDefaultModel);
+    }
+    return args;
   }
 
-  // Default (Claude Code CLI): -p - means "read prompt from stdin"
-  return [...(provider.args || []), '-p', '-'];
+  // Default (Claude Code CLI): `-p -` means "read prompt from stdin".
+  // `--model <id>` is claude-code's model flag; it parses flags
+  // positionally so appending after `-p -` is fine. Same gate as gemini-
+  // cli — respect user-baked model flags.
+  const args = [...baseArgs, '-p', '-'];
+  if (effectiveDefaultModel && !hasModelFlag(baseArgs)) {
+    args.push('--model', effectiveDefaultModel);
+  }
+  return args;
+}
+
+// Detects whether the provider's stored argv already pins a model. We
+// check both flag forms (`--model` / `-m`) and both styles (separated
+// `--model x` and joined `--model=x`). gemini-cli is the only one that
+// uses `-m` short form; checking it on claude-code too is harmless
+// (claude-code doesn't define a `-m` short flag).
+function hasModelFlag(args) {
+  return args.some((a) => a === '--model' || a === '-m'
+    || (typeof a === 'string' && (a.startsWith('--model=') || a.startsWith('-m='))));
 }
 
 /**

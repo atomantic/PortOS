@@ -501,4 +501,129 @@ describe('mediaModels registry', () => {
     expect(reg._shippedDefaults.video.macos).toContain('ltx23_dgrauet_q8');
     logSpy.mockRestore();
   });
+
+  // _shippedDefaults ↔ image[] drift — surfaced as a loud warning at boot.
+  // The deletion-survives-upgrade contract means any built-in in
+  // `_shippedDefaults` AND in DEFAULT_REGISTRY but missing from the user's
+  // image[] will never be re-added on its own. The drift was real (a
+  // 2026-05-09 install hit it after a partial editor save / write race).
+
+  it('drift warning fires when a shipped built-in is missing from image[]', async () => {
+    // _shippedDefaults claims z-image-turbo-bf16 was shipped, but the user's
+    // image[] array doesn't have it (and it IS a current DEFAULT_REGISTRY
+    // entry, so this is true drift — not a legitimate deletion).
+    writeFileSync(registryFile, JSON.stringify({
+      video: { macos: [], windows: [], defaultMacos: 'x', defaultWindows: 'x' },
+      image: [
+        { id: 'dev', name: 'Flux 1 Dev' },
+        // 'z-image-turbo-bf16' deliberately missing
+      ],
+      textEncoders: [{ id: 't', label: 't', repo: 'r' }],
+      selectedTextEncoder: 't',
+      _shippedDefaults: {
+        video: { macos: [], windows: [] },
+        image: { list: ['dev', 'z-image-turbo-bf16'] },
+      },
+    }));
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const { loadMediaModels } = await import('./mediaModels.js');
+    loadMediaModels();
+    const driftCalls = logSpy.mock.calls
+      .map((args) => args.join(' '))
+      .filter((line) => line.includes('media-models drift'));
+    expect(driftCalls.length).toBeGreaterThan(0);
+    expect(driftCalls.some((c) => c.includes('z-image-turbo-bf16'))).toBe(true);
+    logSpy.mockRestore();
+  });
+
+  it('drift warning does NOT fire for an id no longer in DEFAULT_REGISTRY', async () => {
+    // _shippedDefaults includes a legacy id (e.g. an old experimental model
+    // that we removed from DEFAULT_REGISTRY) — that's not drift, it's normal
+    // upgrade churn. The warning must skip it.
+    writeFileSync(registryFile, JSON.stringify({
+      video: { macos: [], windows: [], defaultMacos: 'x', defaultWindows: 'x' },
+      image: [{ id: 'dev', name: 'Flux 1 Dev' }],
+      textEncoders: [{ id: 't', label: 't', repo: 'r' }],
+      selectedTextEncoder: 't',
+      _shippedDefaults: {
+        video: { macos: [], windows: [] },
+        image: { list: ['dev', 'ancient-removed-model'] },
+      },
+    }));
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const { loadMediaModels } = await import('./mediaModels.js');
+    loadMediaModels();
+    const driftCalls = logSpy.mock.calls
+      .map((args) => args.join(' '))
+      .filter((line) => line.includes('media-models drift'));
+    expect(driftCalls.some((c) => c.includes('ancient-removed-model'))).toBe(false);
+    logSpy.mockRestore();
+  });
+
+  it('drift warning fires for video.macos as well as image', async () => {
+    const platformKey = process.platform === 'win32' ? 'windows' : 'macos';
+    const otherKey = process.platform === 'win32' ? 'macos' : 'windows';
+    // _shippedDefaults claims ltx23_dgrauet_q4 was shipped (and it IS still
+    // in DEFAULT_REGISTRY.video.macos), but the user's macos list doesn't
+    // have it.
+    const driftedId = 'ltx23_dgrauet_q4';
+    const userPlatformList = platformKey === 'macos' ? [
+      { id: 'ltx2_unified', name: 'LTX-2 Unified', runtime: 'mlx_video', steps: 30, guidance: 3.0 },
+      // ltx23_dgrauet_q4 deliberately absent (drift)
+    ] : [
+      { id: 'ltx_video', name: 'LTX', runtime: 'mlx_video', steps: 25, guidance: 3.0 },
+    ];
+    writeFileSync(registryFile, JSON.stringify({
+      video: {
+        [platformKey]: userPlatformList,
+        [otherKey]: [],
+        defaultMacos: 'ltx2_unified',
+        defaultWindows: 'ltx_video',
+      },
+      image: [],
+      textEncoders: [{ id: 't', label: 't', repo: 'r' }],
+      selectedTextEncoder: 't',
+      _shippedDefaults: {
+        video: {
+          macos: platformKey === 'macos' ? ['ltx2_unified', driftedId] : [],
+          windows: platformKey === 'windows' ? ['ltx_video'] : [],
+        },
+        image: { list: [] },
+      },
+    }));
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const { loadMediaModels } = await import('./mediaModels.js');
+    loadMediaModels();
+    const driftCalls = logSpy.mock.calls
+      .map((args) => args.join(' '))
+      .filter((line) => line.includes('media-models drift'));
+    // Only assert on macos to avoid platform divergence in CI — the macos
+    // built-in list is the populated one for both test runs.
+    if (platformKey === 'macos') {
+      expect(driftCalls.some((c) => c.includes(driftedId) && c.includes('video.macos'))).toBe(true);
+    }
+    logSpy.mockRestore();
+  });
+
+  it('does NOT auto-recover the drifted entry (warn loud, but trust the registry on disk)', async () => {
+    // Same setup as the first drift test — confirm that the warning does
+    // NOT cause normalizeRegistry to silently re-add the missing built-in.
+    // Auto-recovery would defeat real deletions.
+    writeFileSync(registryFile, JSON.stringify({
+      video: { macos: [], windows: [], defaultMacos: 'x', defaultWindows: 'x' },
+      image: [{ id: 'dev', name: 'Flux 1 Dev' }],
+      textEncoders: [{ id: 't', label: 't', repo: 'r' }],
+      selectedTextEncoder: 't',
+      _shippedDefaults: {
+        video: { macos: [], windows: [] },
+        image: { list: ['dev', 'z-image-turbo-bf16'] },
+      },
+    }));
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const { loadMediaModels, getImageModels } = await import('./mediaModels.js');
+    loadMediaModels();
+    const ids = getImageModels().map((m) => m.id);
+    expect(ids).not.toContain('z-image-turbo-bf16');
+    logSpy.mockRestore();
+  });
 });

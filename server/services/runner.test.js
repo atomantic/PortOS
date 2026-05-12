@@ -17,7 +17,7 @@ vi.mock('fs/promises', () => ({
 
 const { spawn } = await import('child_process');
 const runner = await import('./runner.js');
-const { setAIToolkit, executeCliRun } = runner;
+const { setAIToolkit, executeCliRun, buildCliArgs } = runner;
 
 // Minimal toolkit stub that satisfies executeCliRun's expectations
 function fakeToolkit() {
@@ -95,5 +95,94 @@ describe('executeCliRun — Codex sentinel suppression', () => {
     const modelIdx = capturedArgs.indexOf('--model');
     expect(modelIdx).toBeGreaterThanOrEqual(0);
     expect(capturedArgs[modelIdx + 1]).toBe('o4-mini');
+  });
+});
+
+describe('buildCliArgs — claude-code defaultModel honoring', () => {
+  it('appends --model <id> after `-p -` for claude-code', () => {
+    const provider = { id: 'claude-code', command: 'claude', args: [], defaultModel: 'claude-opus-4-7' };
+    const args = buildCliArgs(provider);
+    expect(args).toEqual(['-p', '-', '--model', 'claude-opus-4-7']);
+  });
+
+  it('omits --model when defaultModel is unset', () => {
+    const provider = { id: 'claude-code', command: 'claude', args: [], defaultModel: null };
+    const args = buildCliArgs(provider);
+    expect(args).toEqual(['-p', '-']);
+  });
+
+  it('respects a user-baked --model in provider.args and does NOT duplicate', () => {
+    const provider = {
+      id: 'claude-code',
+      command: 'claude',
+      args: ['--model', 'claude-sonnet-4-5'],
+      defaultModel: 'claude-opus-4-7',
+    };
+    const args = buildCliArgs(provider);
+    // baked model wins, no extra trailing flag
+    expect(args).toEqual(['--model', 'claude-sonnet-4-5', '-p', '-']);
+    expect(args.filter((a) => a === '--model').length).toBe(1);
+  });
+
+  it('respects a user-baked --model=value joined form', () => {
+    const provider = {
+      id: 'claude-code',
+      command: 'claude',
+      args: ['--model=claude-sonnet-4-5'],
+      defaultModel: 'claude-opus-4-7',
+    };
+    const args = buildCliArgs(provider);
+    expect(args).toEqual(['--model=claude-sonnet-4-5', '-p', '-']);
+  });
+});
+
+describe('buildCliArgs — gemini-cli defaultModel honoring', () => {
+  it('appends -m <id> for gemini-cli', () => {
+    const provider = { id: 'gemini-cli', command: 'gemini', args: [], defaultModel: 'gemini-2.5-pro' };
+    const args = buildCliArgs(provider);
+    expect(args).toEqual(['-m', 'gemini-2.5-pro']);
+  });
+
+  it('omits -m when defaultModel is unset', () => {
+    const provider = { id: 'gemini-cli', command: 'gemini', args: [], defaultModel: null };
+    const args = buildCliArgs(provider);
+    expect(args).toEqual([]);
+  });
+
+  it('respects a user-baked -m in provider.args', () => {
+    const provider = {
+      id: 'gemini-cli',
+      command: 'gemini',
+      args: ['-m', 'gemini-2.0-flash'],
+      defaultModel: 'gemini-2.5-pro',
+    };
+    const args = buildCliArgs(provider);
+    expect(args).toEqual(['-m', 'gemini-2.0-flash']);
+    expect(args.filter((a) => a === '-m').length).toBe(1);
+  });
+
+  it('respects a user-baked --model in provider.args (long-form)', () => {
+    const provider = {
+      id: 'gemini-cli',
+      command: 'gemini',
+      args: ['--model', 'gemini-2.0-flash'],
+      defaultModel: 'gemini-2.5-pro',
+    };
+    const args = buildCliArgs(provider);
+    expect(args).toEqual(['--model', 'gemini-2.0-flash']);
+  });
+});
+
+describe('buildCliArgs — codex (regression coverage for the existing logic)', () => {
+  it('omits --model when defaultModel is the sentinel', () => {
+    const provider = { id: 'codex', command: 'codex', args: [], defaultModel: 'codex-configured-default' };
+    const args = buildCliArgs(provider);
+    expect(args).toEqual(['exec', '-']);
+  });
+
+  it('appends --model when a real model is given', () => {
+    const provider = { id: 'codex', command: 'codex', args: [], defaultModel: 'o4-mini' };
+    const args = buildCliArgs(provider);
+    expect(args).toEqual(['exec', '--model', 'o4-mini', '-']);
   });
 });

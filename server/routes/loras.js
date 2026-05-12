@@ -10,6 +10,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler } from '../lib/errorHandler.js';
+import { deepMerge } from '../lib/objects.js';
 import { validateRequest } from '../lib/validation.js';
 import {
   deleteLora,
@@ -55,10 +56,10 @@ router.get('/auth/civitai', asyncHandler(async (_req, res) => {
 const authPostSchema = z.object({ apiKey: z.string().min(1).max(256) });
 router.post('/auth/civitai', asyncHandler(async (req, res) => {
   const { apiKey } = validateRequest(authPostSchema, req.body);
-  // Manual deep-merge so future civitai sub-fields don't get clobbered by
-  // updateSettings' shallow-merge contract.
+  // Shared deepMerge so future civitai sub-fields don't get clobbered by
+  // updateSettings' shallow-merge contract (see lib/objects.js).
   const current = await getSettings();
-  await saveSettings({ ...current, civitai: { ...(current.civitai || {}), apiKey: apiKey.trim() } });
+  await saveSettings(deepMerge(current, { civitai: { apiKey: apiKey.trim() } }));
   res.json({ hasKey: true, source: 'settings' });
 }));
 

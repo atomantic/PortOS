@@ -9,9 +9,10 @@ import { existsSync } from 'fs';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { randomUUID } from 'crypto';
-import { join, dirname } from 'path';
+import { join, dirname, basename } from 'path';
 import { fileURLToPath } from 'url';
 import { homedir } from 'os';
+import { ServerError } from './errorHandler.js';
 
 const execFileAsync = promisify(execFile);
 const IS_WIN = process.platform === 'win32';
@@ -516,6 +517,56 @@ export function formatBytes(bytes) {
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];
   const i = Math.floor(Math.log(bytes) / Math.log(1024));
   return (bytes / Math.pow(1024, i)).toFixed(i > 1 ? 1 : 0) + ' ' + units[i];
+}
+
+/**
+ * Validate a user-supplied filename is a safe basename with one of the
+ * allowed extensions — refuses path-traversal, null bytes, separators, and
+ * exact `.` / `..`. Throws a 400 ServerError with code VALIDATION_ERROR
+ * so calling routes don't have to repeat the check.
+ *
+ * Consolidates the two near-identical assertions that used to live in
+ * `services/loras.js#assertSafeLoraFilename` (`.safetensors` only) and
+ * `services/imageGen/local.js#assertGalleryFilename` (`.png` only).
+ *
+ * Substring `..` is intentionally allowed (e.g. `foo..bar.png` is fine);
+ * only the exact-string traversal cases are rejected. Path separators (`/`
+ * and `\`) are rejected on every platform — the same input gets posted
+ * from Windows clients too.
+ *
+ * @param {string} filename
+ * @param {{ extensions: string[], subject?: string }} opts
+ *   - `extensions`: list of allowed extensions including the leading dot
+ *     (`['.png']`, `['.safetensors']`, etc.). Case-insensitive match.
+ *   - `subject`: optional noun for the error message ("LoRA filename" →
+ *     "Invalid LoRA filename"). Defaults to "filename".
+ */
+export function assertSafeFilename(filename, { extensions, subject = 'filename' } = {}) {
+  if (!Array.isArray(extensions) || extensions.length === 0) {
+    throw new Error('assertSafeFilename: extensions allowlist is required');
+  }
+  const subjectText = subject || 'filename';
+  if (!filename || typeof filename !== 'string') {
+    const Subject = `${subjectText[0].toUpperCase()}${subjectText.slice(1)}`;
+    throw new ServerError(`${Subject} required`, { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  // Null bytes terminate C strings — some POSIX syscalls treat the prefix
+  // as a separate path. Reject up front so it can't reach the FS layer.
+  if (filename.includes('\0')) {
+    throw new ServerError(`Invalid ${subjectText}`, { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  const isExactTraversal = filename === '.' || filename === '..';
+  const hasSeparator = filename.includes('/') || filename.includes('\\');
+  const isPureBasename = basename(filename) === filename;
+  // Leading dot is fine for normal hidden files, but combined with the no-
+  // separator rule it's already covered above for `.`/`..`. We keep the
+  // basename equality check so e.g. `subdir\foo.png` (which has a `\` and
+  // also has basename `foo.png`) is still rejected by hasSeparator.
+  const lower = filename.toLowerCase();
+  const extOk = extensions.some((ext) => lower.endsWith(String(ext).toLowerCase()));
+  if (!extOk || hasSeparator || isExactTraversal || !isPureBasename) {
+    throw new ServerError(`Invalid ${subjectText}`, { status: 400, code: 'VALIDATION_ERROR' });
+  }
 }
 
 // Size in bytes of every file under `path`. Shells out to `du -sk` (or
