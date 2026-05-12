@@ -189,10 +189,11 @@ export const registerVoiceHandlers = (socket) => {
   // (ui_click, ui_fill, ui_select, ui_check).
   socket.on('voice:ui:index', (payload) => {
     if (!payload || typeof payload !== 'object') return;
-    const { path, title, elements } = payload;
+    const { path, title, elements, text } = payload;
     if (!Array.isArray(elements)) return;
     // Cap to avoid prompt bloat from a malicious or runaway client.
     const MAX = 200;
+    const MAX_TEXT = 8192;
     const filtered = elements
       .filter((e) => e && typeof e === 'object' && typeof e.ref === 'number' && typeof e.label === 'string')
       .slice(0, MAX);
@@ -200,6 +201,7 @@ export const registerVoiceHandlers = (socket) => {
       path: typeof path === 'string' ? path.slice(0, 256) : null,
       title: typeof title === 'string' ? title.slice(0, 120) : null,
       elements: filtered,
+      text: typeof text === 'string' ? text.slice(0, MAX_TEXT) : null,
       updatedAt: Date.now(),
     };
     if (state.uiWaiters.length) {

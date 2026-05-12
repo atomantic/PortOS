@@ -325,6 +325,32 @@ socket.on('voice:tts:audio', ({ sentence, wav }) => {
   enqueuePlay(ab).catch((err) => console.warn('[voice] playback failed:', err));
 });
 
+// Proactive CoS speech. Server-pushed lines (alerts/briefings/reminders) come
+// in on a separate channel so the client can render a distinct visual cue and
+// keep them out of the user/assistant dialogue history. Reuse the same audio
+// playback queue + TTS echo memory as user-initiated turns so mic barge-in
+// (voice:interrupt → stopPlayback) cancels proactive audio for free.
+const proactiveListeners = new Set();
+socket.on('voice:speak', ({ sentence, wav, priority, source, ts }) => {
+  if (rejectingTts) return;
+  rememberTtsSentence(sentence);
+  const ab = toExactArrayBuffer(wav);
+  if (!ab) return;
+  enqueuePlay(ab).catch((err) => console.warn('[voice] proactive playback failed:', err));
+  for (const fn of proactiveListeners) {
+    fn({ sentence, priority: priority || 'normal', source: source || 'cos', ts: ts || Date.now() });
+  }
+});
+
+// Subscribe to proactive-speech UI events. Returns an unsubscribe function.
+// The CoS speech audio plays unconditionally (it's the whole point), but
+// surfaces (toast, pill, conversation pane) decide independently whether to
+// render a visual hint.
+export const onProactiveSpeech = (handler) => {
+  proactiveListeners.add(handler);
+  return () => proactiveListeners.delete(handler);
+};
+
 // voice:transcript marks the start of a new turn's outputs — any pending
 // rejection from a previous cancellation should be lifted now so this turn's
 // TTS chunks actually play.

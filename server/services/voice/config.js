@@ -75,6 +75,19 @@ export const VOICE_DEFAULTS = Object.freeze({
       enabled: false,
       maxIterations: 3,
     },
+    // Proactive speech — the CoS speaks first (alerts, briefings, reminders).
+    // OFF by default so a fresh install doesn't blurt at the user; opt in via
+    // Settings → Voice. Quiet hours suppress proactive lines; barge-in (a
+    // user-initiated utterance) cancels in-flight proactive audio through the
+    // existing voice:interrupt path.
+    proactive: {
+      enabled: false,
+      quietHours: {
+        enabled: false,
+        start: '22:00',
+        end: '07:00',
+      },
+    },
   },
 
   vad: { endOfSpeechMs: 700, minUtteranceMs: 250 },

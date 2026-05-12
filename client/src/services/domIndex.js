@@ -122,6 +122,60 @@ const findTitle = () => {
   return truncate(document.title, 60);
 };
 
+// Cap on visible-text snapshot we ship to the server alongside the
+// interactable index. The `ui_read` voice tool returns this so the LLM can
+// answer "what does this say?" without an extra DOM trip. 8 KB lines up
+// with the server-side truncation in `ui_read.execute`.
+const MAX_TEXT_CHARS = 8000;
+
+// Drop chrome the user almost certainly didn't mean — nav rails, the floating
+// voice widget, toast banners. Keep <main> and dialogs so what's visually
+// front-and-center is what shows up in the snapshot. Falls back to whole-
+// body text for pages that don't put content in <main>.
+const TEXT_BLOCK_SELECTORS = ['main', '[role="dialog"]'];
+const TEXT_EXCLUDE_SELECTORS = [
+  'nav',
+  'aside',
+  'script',
+  'style',
+  'noscript',
+  '[aria-hidden="true"]',
+  '[data-voice-widget]',
+];
+
+// Extract visible textual content from a subtree. We clone the node first so
+// we can prune nav/aside/script subtrees without mutating the live DOM, then
+// pull textContent and collapse whitespace.
+const extractText = (node) => {
+  const clone = node.cloneNode(true);
+  for (const sel of TEXT_EXCLUDE_SELECTORS) {
+    clone.querySelectorAll(sel).forEach((n) => n.remove());
+  }
+  const raw = clone.textContent || '';
+  return raw.replace(/\s+/g, ' ').trim();
+};
+
+const extractVisibleText = () => {
+  const blocks = [];
+  for (const sel of TEXT_BLOCK_SELECTORS) {
+    document.querySelectorAll(sel).forEach((node) => {
+      if (!isVisible(node)) return;
+      const t = extractText(node);
+      if (t) blocks.push(t);
+    });
+  }
+  if (!blocks.length) {
+    const fallback = document.body ? extractText(document.body) : '';
+    if (fallback) blocks.push(fallback);
+  }
+  const joined = blocks.join('\n\n');
+  if (joined.length <= MAX_TEXT_CHARS) return joined;
+  // Truncate on a word boundary so the tail isn't a partial token.
+  const cut = joined.slice(0, MAX_TEXT_CHARS);
+  const lastSpace = cut.lastIndexOf(' ');
+  return `${cut.slice(0, lastSpace > 0 ? lastSpace : MAX_TEXT_CHARS)}…`;
+};
+
 export const buildIndex = () => {
   clearRefs();
   const root = pickRoot();
@@ -165,6 +219,7 @@ export const buildIndex = () => {
     path: window.location.pathname + window.location.search,
     title: findTitle(),
     elements,
+    text: extractVisibleText(),
   };
 };
 

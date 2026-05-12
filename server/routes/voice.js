@@ -13,6 +13,7 @@ import { checkAll, invalidateHealthCache } from '../services/voice/health.js';
 import { reconcile, verifyBinaries, verifyModels, downloadPiperVoice } from '../services/voice/bootstrap.js';
 import { synthesize, listVoices } from '../services/voice/tts.js';
 import { findPiperVoice } from '../services/voice/piper-voices.js';
+import { speakProactive, HHMM_RE } from '../services/voice/proactiveSpeech.js';
 
 const router = Router();
 
@@ -68,6 +69,14 @@ const voiceConfigPatchSchema = z.object({
     tools: z.object({
       enabled: z.boolean().optional(),
       maxIterations: z.number().int().min(1).max(10).optional(),
+    }).partial().optional(),
+    proactive: z.object({
+      enabled: z.boolean().optional(),
+      quietHours: z.object({
+        enabled: z.boolean().optional(),
+        start: z.string().regex(HHMM_RE).optional(),
+        end: z.string().regex(HHMM_RE).optional(),
+      }).partial().optional(),
     }).partial().optional(),
   }).partial().optional(),
   vad: z.object({
@@ -166,6 +175,29 @@ router.post('/test', asyncHandler(async (req, res) => {
   res.setHeader('Content-Type', 'audio/wav');
   res.setHeader('X-TTS-Latency-Ms', String(latencyMs));
   res.send(wav);
+}));
+
+// POST /api/voice/speak — server-pushed proactive speech. The CoS (or any
+// internal subsystem) uses this to make the assistant speak first; clients
+// pick up the audio over the `voice:speak` socket event. Suppressed by
+// quiet hours / disabled flag — those return 200 with `{ ok: false, reason }`
+// rather than an HTTP error because suppression is the documented contract.
+const speakBodySchema = z.object({
+  text: z.string().min(1).max(MAX_TEST_TEXT_LEN),
+  priority: z.enum(['low', 'normal', 'high']).optional(),
+  source: z.string().max(64).optional(),
+});
+router.post('/speak', asyncHandler(async (req, res) => {
+  const parsed = speakBodySchema.safeParse(req.body || {});
+  if (!parsed.success) {
+    throw new ServerError(
+      `Invalid speak payload: ${parsed.error.issues.map((i) => `${i.path.join('.')} ${i.message}`).join('; ')}`,
+      { status: 400, code: 'VALIDATION_ERROR' },
+    );
+  }
+  const io = req.app.get('io');
+  const result = await speakProactive({ io, ...parsed.data });
+  res.json(result);
 }));
 
 export default router;

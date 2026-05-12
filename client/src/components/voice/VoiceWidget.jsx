@@ -5,6 +5,7 @@ import {
   startCapture, stopCapture, interrupt, resetConversation, sendText, onVoiceEvent, isCapturing,
   startContinuous, stopContinuous, isContinuous, whenPlaybackDrained, getVadLevel,
   webSpeechSupported, startWebSpeechCapture, stopWebSpeechCapture, isWebSpeechCapturing,
+  onProactiveSpeech,
 } from '../../services/voiceClient';
 import { getVoiceConfig } from '../../services/apiVoice';
 import toast from '../ui/Toast';
@@ -227,6 +228,20 @@ export default function VoiceWidget() {
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [history]);
+
+  // Proactive CoS speech — the server pushes a `voice:speak` event when the
+  // assistant initiates a line (alerts, reminders, briefings). Audio plays
+  // automatically via voiceClient; surface a transient toast so the user has
+  // visual context for unexpected speech, and append to history so the line
+  // shows up in the conversation pane just like a normal assistant reply.
+  useEffect(() => {
+    if (!enabled) return undefined;
+    return onProactiveSpeech(({ sentence, priority }) => {
+      setHistory((h) => [...h, { role: 'assistant', text: sentence, proactive: true }].slice(-MAX_HISTORY));
+      const icon = priority === 'high' ? '🔔' : '🤖';
+      toast(`${icon} ${sentence.length > 80 ? `${sentence.slice(0, 80)}…` : sentence}`);
+    });
+  }, [enabled]);
 
   const handleStart = useCallback(async () => {
     if (!enabled) return;

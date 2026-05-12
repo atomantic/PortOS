@@ -13,6 +13,7 @@ import { getVoiceConfig } from './config.js';
 import { getToolSpecsForIntent, classifyIntent, dispatchTool, getAllToolNames, UI_KINDS } from './tools.js';
 import { isEchoOfRecentTts, rememberTtsSentence } from './echo.js';
 import { appendJournal, getToday } from '../brainJournal.js';
+import { resolvePending, isExpired } from './confirmGate.js';
 
 // Compact per-page UI summary the LLM uses to drive ui_* tools. Keep it
 // short — every turn pays the token cost. Groups elements by kind and shows
@@ -128,6 +129,8 @@ const buildSystemPrompt = (cfg) => {
       'When the user describes a daily-life event in first person ("I did X today", "X happened today", "set up Y for Z today", "I had a nice walk", "the dishwasher broke") AND no specific tool fits better, the right tool is daily_log_append (NOT goal_log_note unless they explicitly named a goal). goal_log_note is ONLY for "log progress on my <goal-name> goal" / "update my <goal-name> goal with X" — there must be a real goal title in the user\'s words. Random life events like "set up the cat litter box" are daily_log_append, not goals. ' +
       '"save"/"capture"/"add"/"remember"/"note"/"file"/"log it" → matching capture tool (e.g., brain_capture, meatspace_log_*, daily_log_append, goal_log_note). ' +
       '"start dictation"/"dictate"/"record my log" → daily_log_start_dictation. ' +
+      '"what does this say"/"read this aloud"/"read the page to me"/"what\'s on this page" → ui_read, then speak the returned `content` verbatim (do NOT paraphrase or summarize unless the user asked "what is this page about?"). ' +
+      'DESTRUCTIVE-ACTION FLOW: when ui_click returns `confirmation_required: true` the gate has fired — speak the returned `summary` (it tells the user how to confirm) and STOP. The user\'s next utterance ("yes"/"confirm"/"cancel") is handled BY THE SERVER, not by you — do not re-issue ui_click on the same target unless the user rephrases the request after cancelling. ' +
       '"what time"/"what day"/"what date" → time_now. ' +
       '"what are my goals"/"my goals" → goal_list. ' +
       '"is anything crashed"/"pm2 status"/"are services up" → pm2_status. ' +
@@ -330,6 +333,49 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
     console.log(`🎙️  dictation → journal[${date}] +${trimmed.length} chars`);
     emit('voice:idle', { reason: 'dictation-appended' });
     return { transcript: userText, reply: '' };
+  }
+
+  // Short, hand-crafted assistant reply that bypasses the LLM. Used by the
+  // confirmation gate (and any other future synchronous responses) so the
+  // user hears the canonical "Confirmed — Delete account." / "Cancelled."
+  // line via TTS plus the same llm:delta/done/idle event sequence a normal
+  // turn produces.
+  const speakSyntheticReply = async (reply) => {
+    const { wav, latencyMs } = await synthesize(reply, { signal });
+    if (!signal?.aborted) emit('voice:tts:audio', { sentence: reply, wav, latencyMs });
+    emit('voice:llm:delta', { delta: reply });
+    emit('voice:llm:done', { text: reply });
+    emit('voice:idle', { reason: 'turn-complete' });
+  };
+
+  // Destructive-action confirmation gate. A previous turn stashed a pending
+  // click on the session; this turn's utterance either confirms it (re-issue
+  // the side effect) or cancels (drop pending and continue normally). Stale
+  // pending records are GC'd so a forgotten "yes" minutes later can't fire
+  // a destructive action.
+  if (state?.pendingDestructive) {
+    const pending = state.pendingDestructive;
+    state.pendingDestructive = null; // consume up-front; every branch clears it
+    if (isExpired(pending)) {
+      console.log(`🛑 [${turnId}] dropping expired pending destructive (${pending.tool})`);
+    } else {
+      const decision = resolvePending(pending, userText);
+      if (decision.action === 'execute') {
+        const { target } = pending;
+        tlog(`confirm.execute ${pending.tool} target="${target.label}"`);
+        emit('voice:ui:click', { target: { ref: target.ref, label: target.label } });
+        const reply = `Confirmed — ${target.label}.`;
+        await speakSyntheticReply(reply);
+        return { transcript: userText, reply };
+      }
+      if (decision.action === 'cancel') {
+        tlog(`confirm.cancel ${pending.tool}`);
+        const reply = 'Cancelled.';
+        await speakSyntheticReply(reply);
+        return { transcript: userText, reply };
+      }
+      tlog(`confirm.passthrough — discarding pending ${pending.tool}`);
+    }
   }
 
   const toolsEnabled = !!cfg.llm.tools?.enabled;
