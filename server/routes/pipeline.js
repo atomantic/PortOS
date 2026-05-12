@@ -538,9 +538,13 @@ router.post('/series/:id/arc/verify', asyncHandler(async (req, res) => {
 // silently miss the most-recent items once the dataset grows past
 // `ISSUES_PER_RESPONSE_MAX` (1000).
 router.get('/issues/recent', asyncHandler(async (req, res) => {
-  const limit = Math.max(1, Math.min(50, Number(req.query.limit) || 10));
+  // Forward the raw query value to the service — it owns clamping +
+  // non-finite handling, and applying our own `Number(...) || 10` here
+  // would silently disagree with the service (e.g. limit=0 ends up as 10
+  // via the route but clamps to 1 in the service). Pass through and let
+  // listRecentIssues coerce.
   const [issues, series] = await Promise.all([
-    issuesSvc.listRecentIssues({ limit }),
+    issuesSvc.listRecentIssues({ limit: req.query.limit }),
     seriesSvc.listSeries(),
   ]);
   const seriesById = new Map(series.map((s) => [s.id, s.name]));

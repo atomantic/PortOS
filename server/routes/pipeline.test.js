@@ -224,6 +224,18 @@ describe('pipeline routes', () => {
     expect(r.status).toBe(400);
   });
 
+  it('GET /issues/recent?limit=0 clamps to 1 (route forwards to service which owns coercion)', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'A' });
+    await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'B' });
+    const r = await request(app).get('/api/pipeline/issues/recent?limit=0');
+    expect(r.status).toBe(200);
+    // Without alignment, the route's `Number(...) || 10` would return up
+    // to 10 issues even when the caller explicitly passed 0.
+    expect(r.body).toHaveLength(1);
+  });
+
   it('GET /issues/recent returns the most-recently-updated issues with denormalized seriesName', async () => {
     const app = makeApp();
     const ser1 = await request(app).post('/api/pipeline/series').send({ name: 'Alpha' });

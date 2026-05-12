@@ -659,6 +659,17 @@ describe('pipeline stage navigation tools', () => {
       expect(r3.stage).toBe('episodeVideo');
     });
 
+    it('resolves singular "comic page" / "page" so the regex and alias table agree', async () => {
+      // The regex matches `comic ?pages?` (singular OR plural). The alias
+      // table now mirrors that so a matched utterance never bottoms out
+      // at "Unknown stage" with the user staring at a working group.
+      const ctx = makeCtx('/pipeline/issues/iss-x/idea');
+      const r1 = await dispatchTool('pipeline_open_stage', { stage: 'comic page' }, ctx);
+      expect(r1.stage).toBe('comicPages');
+      const r2 = await dispatchTool('pipeline_open_stage', { stage: 'page' }, ctx);
+      expect(r2.stage).toBe('comicPages');
+    });
+
     it('rejects an unknown stage with a suggestion list', async () => {
       const ctx = makeCtx('/pipeline/issues/iss-x/idea');
       const r = await dispatchTool('pipeline_open_stage', { stage: 'whatever' }, ctx);

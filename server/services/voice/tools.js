@@ -37,7 +37,7 @@ const PIPELINE_STAGE_ALIASES = {
   prose: 'prose', story: 'prose',
   'comic script': 'comicScript', comicscript: 'comicScript', comics: 'comicScript',
   'tv script': 'tvScript', tvscript: 'tvScript', teleplay: 'tvScript',
-  'comic pages': 'comicPages', comicpages: 'comicPages', pages: 'comicPages',
+  'comic pages': 'comicPages', 'comic page': 'comicPages', comicpages: 'comicPages', pages: 'comicPages', page: 'comicPages',
   storyboards: 'storyboards', storyboard: 'storyboards', scenes: 'storyboards',
   'episode video': 'episodeVideo', episodevideo: 'episodeVideo', episode: 'episodeVideo', video: 'episodeVideo',
 };

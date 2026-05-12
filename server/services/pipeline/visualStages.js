@@ -1,16 +1,26 @@
 /**
  * Pipeline — Visual stage handoff helpers
  *
- * Thin wrappers that enqueue image-gen jobs on behalf of the Pipeline's
- * comicPages and storyboards stages. The route layer is responsible for
- * persisting the returned jobIds into the issue's stage record — this module
- * just owns the "build the right params, hand to mediaJobQueue" mechanic so
- * the pipeline doesn't have to duplicate Image-Gen's mode-resolution code.
+ * Responsibilities, in order of how they evolved:
  *
- * MVP scope: image jobs only. Scene video / episode-video stitching is
- * deferred — the storyboards and episodeVideo stages currently expose
- * read/write of their structured fields but don't yet drive the Creative
- * Director scene runner. See PLAN.md "Pipeline — Deferred" for the follow-up.
+ * 1. **Image enqueue** (`enqueueVisualImage`, `enqueueVisualComicPage`) —
+ *    build the right diffusion params for a comicPages panel / page or a
+ *    storyboards scene and hand off to `mediaJobQueue`. The route layer
+ *    persists the returned jobId into the issue's stage record.
+ *
+ * 2. **Single-scene video enqueue** (`enqueueStoryboardSceneVideo`) —
+ *    render one storyboard scene as a t2v clip without committing to the
+ *    full episode-video stitch. Persists `sceneVideoJobId` on the scene
+ *    so a reload still surfaces the in-flight render.
+ *
+ * 3. **LLM-driven prompt refinement** (`refineComicPanelPrompt`,
+ *    `refineStoryboardScenePrompt`) — elaborate a panel/scene description
+ *    into a richer image-gen prompt via `runStagedLLM`, then persist the
+ *    refined text back on the source record. Shared `runPromptRefine`
+ *    helper + slim `loadRefineContext` keep the two surfaces DRY.
+ *
+ * Full episode-video stitching still lives in `episodeVideo.js` — that
+ * path drives the Creative Director scene runner end-to-end.
  */
 
 import { enqueueJob } from '../mediaJobQueue/index.js';

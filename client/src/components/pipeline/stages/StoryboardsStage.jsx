@@ -1,10 +1,19 @@
 /**
- * Storyboards stage — one storyboard image per TV-script scene.
+ * Storyboards stage — one storyboard image per TV-script scene, plus
+ * single-scene video preview and AI-driven prompt refinement.
  *
- * MVP: flat list of scenes. Each scene has its own description and a
- * "Generate storyboard image" button that hands off to image-gen via the
- * pipeline visual endpoint. Per-scene video rendering via Creative Director
- * is deferred — see PLAN.md "Pipeline — Deferred".
+ * Each scene row exposes four actions:
+ *   - **AI: refine** — rewrites the description via the storyboard prompt
+ *     template (see server/services/pipeline/visualStages.js#refineStoryboardScenePrompt).
+ *   - **Storyboard** — enqueues an image-gen job for the scene; jobId
+ *     lands on `scene.imageJobId`, surfaced via `<MediaJobThumb>`.
+ *   - **Scene video** — enqueues a t2v video render; jobId lands on
+ *     `scene.sceneVideoJobId`. Independent of the full episode-video
+ *     stitch in `episodeVideo.js`.
+ *   - **Trash** — removes the scene from the list.
+ *
+ * Auto-fill: "From TV script" / "From prose" buttons run the scene
+ * extractor against the corresponding text stage and replace the list.
  */
 
 import { useEffect, useRef, useState } from 'react';
