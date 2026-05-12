@@ -296,19 +296,19 @@ function FocalSlot({ chunk, focalColor }) {
 }
 
 // Modal wrapper — full-screen overlay so any page can pop the reader without
-// leaving its context. Closes on Esc or backdrop click. The inner RapidReader
-// owns its own window-level Esc capture-phase handler (so Space/arrow keys can
-// be claimed before VoiceWidget sees them); Modal's bubble-phase Esc is a
-// no-op here because the capture-phase handler stops propagation first.
+// leaving its context. Closes on Esc or backdrop click. Both Modal and the
+// inner RapidReader register capture-phase window-level Esc listeners; Modal's
+// is registered first (when its own useEffect runs before the inner reader's),
+// so Modal fires first and stopImmediatePropagation()s. RapidReader's Esc
+// branch is therefore reached only when the reader is mounted outside a Modal
+// (e.g. directly embedded on a page); inside RapidReaderModal it's effectively
+// dormant on Esc — both ultimately call the same onClose, so the behaviour is
+// equivalent either way.
 export function RapidReaderModal({ open, text, title, onClose, ...readerProps }) {
   return (
     <Modal
       open={open}
       onClose={onClose}
-      // RapidReader itself listens for Esc in the capture phase; let Modal's
-      // listener fire as a backup only when the inner reader didn't claim it.
-      // closeOnEsc default true is fine — stopImmediatePropagation in the
-      // reader's capture handler short-circuits us when the reader handles it.
       size="xl"
       ariaLabel={title || 'Rapid Reader'}
       panelClassName="bg-port-card border border-port-border rounded-xl shadow-2xl"

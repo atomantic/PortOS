@@ -78,9 +78,16 @@ export default function LayoutEditor({ layouts, activeLayoutId, limits, onClose,
 
   const close = useCallback(() => { onClose(); }, [onClose]);
 
-  // Esc + backdrop dismiss live in <Modal>. Inline-mode inputs (duplicate name,
-  // delete confirm, switch confirm) call e.stopPropagation() on their own Esc
-  // handlers so they cancel the inline mode without closing the whole editor.
+  // Inline modes (duplicate-name input, delete confirm, switch confirm) need
+  // Esc to cancel just the inline state, not close the whole editor. Modal's
+  // window-level capture-phase Esc listener fires before any inner input's
+  // onKeyDown, so we can't rely on stopPropagation from those inputs — they
+  // never see the event. Instead we hand Modal a custom `onEsc` that maps Esc
+  // to `setMode('idle')` while a mode is active, falling back to close().
+  const handleEsc = useCallback(() => {
+    if (mode !== 'idle') { setMode('idle'); return; }
+    close();
+  }, [mode, close]);
 
   const move = (index, delta) => {
     setWidgets((prev) => {
@@ -172,6 +179,7 @@ export default function LayoutEditor({ layouts, activeLayoutId, limits, onClose,
     <Modal
       open
       onClose={close}
+      onEsc={handleEsc}
       size="xl"
       align="top"
       usePortal

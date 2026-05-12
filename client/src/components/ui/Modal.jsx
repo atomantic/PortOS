@@ -20,17 +20,26 @@
  *   closeOnBackdrop=false   EditAppModal / MemoryEditModal / ResumeAgentModal
  *                           — long forms where an accidental click on the
  *                           overlay would lose typed state.
- *   closeOnEsc=false        KeyboardHelp / Flux2InstallModal — owners that
- *                           either manage Esc themselves or never wired Esc
- *                           pre-refactor and don't want accidental dismissal.
+ *   closeOnEsc=false        Flux2InstallModal — never wired Esc pre-refactor.
+ *                           Modal still registers in the Esc stack as the
+ *                           top-most layer so Esc is blocked (no fallthrough
+ *                           to underlying modals); it just doesn't dispatch
+ *                           a close.
+ *   onEsc                   Caller-supplied Esc handler. When provided, Esc
+ *                           on the top-most modal invokes `onEsc` instead of
+ *                           `onClose`. Used by LayoutEditor (Esc cancels an
+ *                           inline rename/delete mode without closing the
+ *                           editor) and KeyboardHelp (defers to its own
+ *                           toggle hook).
  *   align='top'             LayoutEditor / KeyboardHelp / Flux2InstallModal.
  *   usePortal               LayoutEditor / KeyboardHelp — escape any
  *                           stacking-context ancestors.
  *
- * Stacking: Modal uses a single module-scope `keydown` listener that fires
- * only the top-most open Modal's `onClose` on Esc. Stacking siblings (e.g.
- * Flux2InstallModal opened on top of LayoutEditor, or PromptRefineModal
- * opened from inside a media flow) never see Esc fire all layers at once.
+ * Stacking: Modal uses a single module-scope `keydown` capture-phase
+ * listener that dispatches Esc only to the top-most open Modal — and only
+ * the top-most. Every open Modal registers on the stack (regardless of its
+ * Esc opt-in), so a closeOnEsc=false top-most layer still blocks the
+ * keystroke from reaching the modal beneath it.
  */
 
 import { useEffect, useRef } from 'react';
@@ -55,12 +64,16 @@ const ALIGN_CLASSES = {
   top: 'items-start justify-center pt-[10vh] px-4 pb-4',
 };
 
-// Module-scope stack of open Modal ids. A single keydown listener on `window`
-// dispatches Esc only to the top-most modal — without this, Esc would close
-// every modal on the stack at once (e.g. PromptRefineModal inside MediaLightbox,
-// or Flux2InstallModal above LayoutEditor).
+// Module-scope stack of open Modal ids. A single capture-phase keydown
+// listener on `window` dispatches Esc only to the top-most modal — every
+// other listener (including the layer beneath this one) is blocked via
+// stopImmediatePropagation. Modals register here regardless of whether they
+// want to close on Esc, so a non-dismissible top-most layer still prevents
+// fallthrough to underlying modals.
 const modalStack = [];
+const escHandlers = new Map();
 let globalEscListener = null;
+let modalIdSeq = 0;
 
 function pushModal(id) {
   modalStack.push(id);
@@ -68,13 +81,12 @@ function pushModal(id) {
     globalEscListener = (e) => {
       if (e.key !== 'Escape' || modalStack.length === 0) return;
       const top = modalStack[modalStack.length - 1];
-      const onClose = escHandlers.get(top);
-      if (onClose) {
-        // Block any other Esc listeners (including other Modals' window handlers
-        // we may have failed to clean up) from also firing on this keystroke.
-        e.stopImmediatePropagation();
-        onClose();
-      }
+      const handler = escHandlers.get(top);
+      // Always block fallthrough at the top-most modal, even if it didn't
+      // register a handler (closeOnEsc=false + no onEsc). Otherwise Esc could
+      // reach the layer beneath and dismiss the wrong modal.
+      e.stopImmediatePropagation();
+      if (handler) handler();
     };
     window.addEventListener('keydown', globalEscListener, true);
   }
@@ -89,12 +101,10 @@ function popModal(id) {
   }
 }
 
-const escHandlers = new Map();
-let modalIdSeq = 0;
-
 export default function Modal({
   open,
   onClose,
+  onEsc,
   children,
   size = 'md',
   closeOnBackdrop = true,
@@ -111,19 +121,26 @@ export default function Modal({
   const idRef = useRef(null);
   if (idRef.current === null) idRef.current = ++modalIdSeq;
 
-  // Register this modal on the stack while it is open + opted-in to Esc. The
-  // global listener fires only the top-most modal's onClose, preventing the
-  // "one Esc closes every layer" bug when modals are stacked.
+  // Every open modal registers on the stack so the top-most always handles
+  // (or absorbs) Esc. The handler dispatched is one of:
+  //   - onEsc, if provided (caller wants custom Esc semantics — e.g.
+  //     LayoutEditor cancels an inline mode instead of closing).
+  //   - onClose, if closeOnEsc is true (the common case).
+  //   - undefined → no dispatch, but Esc is still swallowed at this layer so
+  //     it can't fall through to an underlying modal.
   useEffect(() => {
-    if (!open || !closeOnEsc) return;
+    if (!open) return;
     const id = idRef.current;
-    escHandlers.set(id, () => onClose?.());
+    let handler;
+    if (onEsc) handler = () => onEsc();
+    else if (closeOnEsc) handler = () => onClose?.();
+    if (handler) escHandlers.set(id, handler);
     pushModal(id);
     return () => {
       escHandlers.delete(id);
       popModal(id);
     };
-  }, [open, closeOnEsc, onClose]);
+  }, [open, closeOnEsc, onClose, onEsc]);
 
   if (!open) return null;
 

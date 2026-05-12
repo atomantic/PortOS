@@ -85,10 +85,9 @@ export default function KeyboardHelp() {
     <Modal
       open={open}
       onClose={close}
-      // Esc is owned by useKeyboardHelp (global toggle on `?` + dismiss on Esc
-      // even when focus is in an input) — disable Modal's Esc to avoid a
-      // double-handler.
-      closeOnEsc={false}
+      // Modal's capture-phase Esc dispatcher closes us as the top-most layer.
+      // useKeyboardHelp's document bubble-phase Esc listener is a backup for
+      // when no Modal-stack listener is mounted, but it gets pre-empted here.
       size="md"
       align="top"
       usePortal
