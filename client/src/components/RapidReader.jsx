@@ -298,11 +298,12 @@ function FocalSlot({ chunk, focalColor }) {
 // Modal wrapper — full-screen overlay so any page can pop the reader without
 // leaving its context. Closes on Esc or backdrop click. The inner RapidReader
 // registers a capture-phase window keydown listener (so Space / arrow keys
-// can be claimed before VoiceWidget sees them); Modal's window listener is
-// bubble-phase. Capture fires before bubble at the same target, so on Esc
-// RapidReader sees the event first and calls onClose. Modal's listener then
-// runs and calls onClose again, but the wrapper has already unmounted by
-// then — net effect: identical to "Modal closes it" for the user.
+// can be claimed before VoiceWidget sees them) that, on Esc, calls onClose
+// and then preventDefault() + stopImmediatePropagation(). Modal's window
+// listener is bubble-phase, so it never even reaches the same event — the
+// capture-phase stopImmediatePropagation cancels propagation entirely; even
+// if it did reach Modal, `defaultPrevented` would suppress the close
+// dispatch. RapidReader owns Esc unilaterally inside this wrapper.
 export function RapidReaderModal({ open, text, title, onClose, ...readerProps }) {
   return (
     <Modal
