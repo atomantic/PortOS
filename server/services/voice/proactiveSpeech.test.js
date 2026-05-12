@@ -188,6 +188,38 @@ describe('speakProactive', () => {
     expect(emit).not.toHaveBeenCalled();
   });
 
+  // Avoidable-overhead guard: when quiet hours are off the decision can't
+  // depend on local time, so getUserTimezone()/getLocalParts() must NOT be
+  // called. Skipping them removes a settings-file read + Intl call per
+  // proactive line and one async failure surface.
+  it('does not resolve local time when quiet hours are disabled', async () => {
+    const { getUserTimezone, getLocalParts } = await import('../../lib/timezone.js');
+    getUserTimezone.mockClear();
+    getLocalParts.mockClear();
+    const { io } = makeIo();
+    const r = await speakProactive({ io, text: 'noon ping' });
+    expect(r.ok).toBe(true);
+    expect(getUserTimezone).not.toHaveBeenCalled();
+    expect(getLocalParts).not.toHaveBeenCalled();
+  });
+
+  it('resolves local time only when quiet hours are enabled', async () => {
+    const { getVoiceConfig } = await import('./config.js');
+    const { getUserTimezone, getLocalParts } = await import('../../lib/timezone.js');
+    getUserTimezone.mockClear();
+    getLocalParts.mockClear();
+    getVoiceConfig.mockResolvedValueOnce({
+      enabled: true,
+      llm: { proactive: { enabled: true, quietHours: { enabled: true, start: '22:00', end: '07:00' } } },
+    });
+    getLocalParts.mockReturnValueOnce({ hour: 14, minute: 0 });
+    const { io } = makeIo();
+    const r = await speakProactive({ io, text: 'midday ping' });
+    expect(r.ok).toBe(true);
+    expect(getUserTimezone).toHaveBeenCalledTimes(1);
+    expect(getLocalParts).toHaveBeenCalledTimes(1);
+  });
+
   it('suppresses during quiet hours', async () => {
     const { getVoiceConfig } = await import('./config.js');
     const { getLocalParts } = await import('../../lib/timezone.js');

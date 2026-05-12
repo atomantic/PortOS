@@ -101,7 +101,14 @@ export const speakProactive = async ({ io, text, priority = 'normal', source = '
   }
 
   const cfg = await getVoiceConfig();
-  const nowMinutes = await getLocalMinutes();
+  // Only resolve the user's local time when the decision actually depends on
+  // it. getLocalMinutes() reads settings via getUserTimezone() and is the
+  // only async work in the suppression path; skipping it when quiet hours
+  // are disabled keeps proactive sends cheap (one fewer fs read + Intl call
+  // per line) and removes an avoidable async failure surface.
+  const nowMinutes = cfg?.llm?.proactive?.quietHours?.enabled
+    ? await getLocalMinutes()
+    : 0;
   const decision = shouldSpeak(cfg, nowMinutes);
   if (!decision.ok) {
     console.log(`🔕 voice: proactive suppressed (${decision.reason}) "${trimmed.slice(0, 60)}"`);

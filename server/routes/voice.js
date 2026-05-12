@@ -13,7 +13,7 @@ import { checkAll, invalidateHealthCache } from '../services/voice/health.js';
 import { reconcile, verifyBinaries, verifyModels, downloadPiperVoice } from '../services/voice/bootstrap.js';
 import { synthesize, listVoices } from '../services/voice/tts.js';
 import { findPiperVoice } from '../services/voice/piper-voices.js';
-import { speakProactive, HHMM_RE } from '../services/voice/proactiveSpeech.js';
+import { speakProactive, HHMM_RE, MAX_PROACTIVE_TEXT_LEN } from '../services/voice/proactiveSpeech.js';
 
 const router = Router();
 
@@ -21,11 +21,13 @@ const VALID_TTS_ENGINES = new Set(['kokoro', 'piper']);
 const validEngine = (v) => VALID_TTS_ENGINES.has(v) ? v : undefined;
 
 // Shared cap for every REST endpoint that turns a text payload into TTS
-// audio (/test and /speak). Matches the Socket.IO-side cap so HTTP can't
-// be used to bypass it with a multi-megabyte string that would then take
-// minutes to synthesize. Centralized here so changing the limit for one
-// endpoint can't silently drift the other.
-const MAX_VOICE_TEXT_LEN = 4000;
+// audio (/test and /speak). Imported from proactiveSpeech.js so the
+// HTTP-layer cap and the function-boundary cap can't drift apart — if
+// someone bumps the proactive limit, the route cap moves with it. Both
+// caps exist on purpose: route-level for early rejection (no synthesis
+// work wasted), function-level as defense in depth for direct in-process
+// callers (CoS, scheduler) that bypass the route.
+const MAX_VOICE_TEXT_LEN = MAX_PROACTIVE_TEXT_LEN;
 
 // Partial schema — deepMerge fills in anything omitted, so every field is
 // optional. The point here is to reject unknown engine values and obvious

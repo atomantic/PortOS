@@ -136,12 +136,22 @@ const MAX_TEXT_CHARS = 8000;
 // front-and-center is what shows up in the snapshot. Falls back to whole-
 // body text for pages that don't put content in <main>.
 const TEXT_BLOCK_SELECTORS = ['main', '[role="dialog"]'];
+// Exclude:
+//  - chrome the user didn't mean (nav rails, asides, the floating voice widget)
+//  - non-rendered DOM (script/style/noscript)
+//  - explicitly hidden subtrees: [hidden] is the spec-blessed HTML attribute
+//    for hidden content (e.g., inactive tab panels in component libraries),
+//    and aria-hidden="true" covers content hidden from assistive tech.
+//    Without these, ui_read would include the textContent of tab panels that
+//    aren't visually on the page — the agent would then "read the page" and
+//    recite content from inactive tabs.
 const TEXT_EXCLUDE_SELECTORS = [
   'nav',
   'aside',
   'script',
   'style',
   'noscript',
+  '[hidden]',
   '[aria-hidden="true"]',
   '[data-voice-widget]',
 ];
