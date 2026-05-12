@@ -727,6 +727,7 @@ describe('pipeline stage navigation tools', () => {
       expect(classifyIntent('open teleplay').has('pipeline')).toBe(true);
       expect(classifyIntent('open comics').has('pipeline')).toBe(true);
       expect(classifyIntent('open the pages').has('pipeline')).toBe(true);
+      expect(classifyIntent('open page').has('pipeline')).toBe(true);
       expect(classifyIntent('go to scenes').has('pipeline')).toBe(true);
       expect(classifyIntent('open episode').has('pipeline')).toBe(true);
       expect(classifyIntent('open video').has('pipeline')).toBe(true);

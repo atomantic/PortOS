@@ -232,7 +232,7 @@ const GROUP_INTENT = {
   //
   // Alias list must mirror PIPELINE_STAGE_ALIASES below so any alias
   // accepted by pipeline_open_stage actually triggers the group.
-  pipeline: /\b(?:next stage|previous stage|prev stage|stage (?:advance|forward|back)|(?:open|go to|back to)(?: the)? (?:idea|prose|story|comic ?script|comicscript|comics|tv ?script|tvscript|teleplay|comic ?pages?|comicpages|pages|storyboards?|scenes|episode ?video|episodevideo|episode|video)(?: stage)?)\b/i,
+  pipeline: /\b(?:next stage|previous stage|prev stage|stage (?:advance|forward|back)|(?:open|go to|back to)(?: the)? (?:idea|prose|story|comic ?script|comicscript|comics|tv ?script|tvscript|teleplay|comic ?pages?|comicpages|pages?|storyboards?|scenes|episode ?video|episodevideo|episode|video)(?: stage)?)\b/i,
   ui: UI_INTENT_RE,
 };
 

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { AlertCircle, Loader2 } from 'lucide-react';
+import { AlertCircle, Ban, Loader2 } from 'lucide-react';
 import useMediaJobProgress from '../../hooks/useMediaJobProgress';
 
 /**
@@ -98,6 +98,21 @@ export default function MediaJobThumb({ jobId, label = 'Render', size = 'sm', ki
       >
         <AlertCircle size={14} />
         <span>failed</span>
+      </div>
+    );
+  }
+
+  if (status === 'canceled') {
+    // Canceled by the user via the queue cancel route. Without an explicit
+    // branch the row would fall through to the running/queued spinner and
+    // look stuck forever — re-enqueue lives on the parent stage button.
+    return (
+      <div
+        title="Render canceled"
+        className={`${dims} bg-port-bg rounded border border-port-border flex flex-col items-center justify-center gap-1 text-[10px] text-port-text-muted`}
+      >
+        <Ban size={14} />
+        <span>canceled</span>
       </div>
     );
   }
