@@ -14,6 +14,7 @@ vi.mock('../services/runner.js', () => ({
   createRun: vi.fn(async () => ({ runId: 'run-abc12345' })),
   executeApiRun: vi.fn(),
   executeCliRun: vi.fn(),
+  hasModelFlag: vi.fn(() => false),
 }));
 
 const providers = await import('../services/providers.js');

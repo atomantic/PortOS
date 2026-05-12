@@ -246,7 +246,7 @@ router.get('/models', (_req, res) => {
 });
 
 router.get('/loras', asyncHandler(async (_req, res) => {
-  res.json(await local.listLoras());
+  res.json(await local.listLoraFilenames());
 }));
 
 router.get('/gallery', asyncHandler(async (_req, res) => {

@@ -26,7 +26,7 @@
  * stay honest about what the runner actually executed.
  */
 
-import { createRun, executeApiRun, executeCliRun } from '../services/runner.js';
+import { createRun, executeApiRun, executeCliRun, hasModelFlag } from '../services/runner.js';
 
 const DEFAULT_TIMEOUT_MS = 300000;
 const APPEND_CHUNK = (acc, chunk) => acc + (typeof chunk === 'string' ? chunk : (chunk?.text || ''));
@@ -35,14 +35,17 @@ const APPEND_CHUNK = (acc, chunk) => acc + (typeof chunk === 'string' ? chunk : 
  * Returns true when the runner+provider pair will actually honor a
  * per-call `model` override. For API providers the model is a
  * first-class arg to `executeApiRun`. For CLI providers,
- * `runner.js#buildCliArgs` currently only translates the resolved
- * `defaultModel` into a `--model` flag for codex; claude-code and
- * gemini-cli ignore it and run with whatever model is baked into
- * `provider.args`. PLAN.md tracks extending buildCliArgs to all
- * CLI providers — once that lands this predicate widens.
+ * `runner.js#buildCliArgs` now translates the resolved `defaultModel`
+ * into a `--model`/`-m` flag for codex, claude-code, AND gemini-cli —
+ * BUT only when the user hasn't already baked a model flag into
+ * `provider.args`. If a flag is baked in, the runner-injected one is
+ * suppressed and the args-baked model wins; so claim "doesn't honor"
+ * for that case to keep the run-record honest.
  */
-export const providerHonorsModelOverride = (provider) =>
-  provider?.type === 'api' || provider?.id === 'codex';
+export const providerHonorsModelOverride = (provider) => (
+  provider?.type === 'api'
+  || (provider?.type === 'cli' && !hasModelFlag(provider?.args))
+);
 
 /**
  * Run a prompt through a provider and resolve with the streamed text +

@@ -123,7 +123,14 @@ router.post('/refine-prompt', asyncHandler(async (req, res) => {
 
 router.get('/:id', asyncHandler(async (req, res) => {
   const job = getJob(req.params.id);
-  if (!job) throw new ServerError('Not found', { status: 404, code: 'NOT_FOUND' });
+  if (!job) {
+    // Speculative lookups (Pipeline `MediaJobThumb` hydration for old
+    // panel/scene jobIds that are past the queue's 24h archive TTL) hit
+    // this path constantly. Mark as `warning` so it doesn't surface as a
+    // global toast/console.error via useErrorNotifications — the body is
+    // unchanged, callers still get a 404 + NOT_FOUND code.
+    throw new ServerError('Not found', { status: 404, code: 'NOT_FOUND', severity: 'warning' });
+  }
   res.json(sanitizeJob(job));
 }));
 

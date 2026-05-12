@@ -12,6 +12,7 @@ import { Link } from 'react-router-dom';
 import { Trash2, Download, ExternalLink, Sparkles, AlertTriangle, KeyRound, Check, X, RefreshCw, Wand2 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import { formatBytes } from '../utils/formatters';
+import { RUNNER_FAMILIES } from '../lib/runnerFamilies';
 import {
   listLorasFull,
   installLoraFromCivitai,
@@ -23,16 +24,16 @@ import {
 } from '../services/api';
 
 const RUNNER_LABEL = {
-  mflux: 'Flux 1',
-  flux2: 'Flux 2',
-  'z-image': 'Z-Image',
-  ernie: 'ERNIE',
+  [RUNNER_FAMILIES.MFLUX]: 'Flux 1',
+  [RUNNER_FAMILIES.FLUX2]: 'Flux 2',
+  [RUNNER_FAMILIES.Z_IMAGE]: 'Z-Image',
+  [RUNNER_FAMILIES.ERNIE]: 'ERNIE',
 };
 const RUNNER_BADGE_CLASS = {
-  mflux: 'bg-port-accent/20 text-port-accent border-port-accent/30',
-  flux2: 'bg-purple-600/20 text-purple-300 border-purple-500/30',
-  'z-image': 'bg-emerald-600/20 text-emerald-300 border-emerald-500/30',
-  ernie: 'bg-amber-600/20 text-amber-300 border-amber-500/30',
+  [RUNNER_FAMILIES.MFLUX]: 'bg-port-accent/20 text-port-accent border-port-accent/30',
+  [RUNNER_FAMILIES.FLUX2]: 'bg-purple-600/20 text-purple-300 border-purple-500/30',
+  [RUNNER_FAMILIES.Z_IMAGE]: 'bg-emerald-600/20 text-emerald-300 border-emerald-500/30',
+  [RUNNER_FAMILIES.ERNIE]: 'bg-amber-600/20 text-amber-300 border-amber-500/30',
 };
 
 export default function Loras() {
@@ -234,10 +235,10 @@ function SuggestionsPanel({ suggestions, loading, installedFilenames, installing
     // The four runner-family sections always render, even when Civitai
     // search returns zero — `alwaysShow` lets the user see all four
     // headers at a glance instead of silently collapsing the empty ones.
-    { key: 'mflux',   label: 'Top for Flux 1',  cards: runners.mflux || [],     hint: 'Most-downloaded LoRAs trained against Flux.1 D / Flux.1 S.', alwaysShow: true },
-    { key: 'flux2',   label: 'Top for Flux 2',  cards: runners.flux2 || [],     hint: 'Most-downloaded LoRAs trained against Flux.2 Klein 4B / 9B.', alwaysShow: true },
-    { key: 'z-image', label: 'Top for Z-Image', cards: runners['z-image'] || [], hint: 'Most-downloaded LoRAs trained against Z-Image / Z-Image-Turbo.', alwaysShow: true },
-    { key: 'ernie',   label: 'Top for ERNIE',   cards: runners.ernie || [],     hint: 'Most-downloaded LoRAs trained against ERNIE-Image.', alwaysShow: true },
+    { key: RUNNER_FAMILIES.MFLUX,   label: 'Top for Flux 1',  cards: runners[RUNNER_FAMILIES.MFLUX] || [],   hint: 'Most-downloaded LoRAs trained against Flux.1 D / Flux.1 S.', alwaysShow: true },
+    { key: RUNNER_FAMILIES.FLUX2,   label: 'Top for Flux 2',  cards: runners[RUNNER_FAMILIES.FLUX2] || [],   hint: 'Most-downloaded LoRAs trained against Flux.2 Klein 4B / 9B.', alwaysShow: true },
+    { key: RUNNER_FAMILIES.Z_IMAGE, label: 'Top for Z-Image', cards: runners[RUNNER_FAMILIES.Z_IMAGE] || [], hint: 'Most-downloaded LoRAs trained against Z-Image / Z-Image-Turbo.', alwaysShow: true },
+    { key: RUNNER_FAMILIES.ERNIE,   label: 'Top for ERNIE',   cards: runners[RUNNER_FAMILIES.ERNIE] || [],   hint: 'Most-downloaded LoRAs trained against ERNIE-Image.', alwaysShow: true },
   ];
   return (
     <div className="space-y-4">
@@ -305,7 +306,12 @@ function SuggestionsSection({ label, hint, cards, alwaysShow = false, installedF
   );
 }
 
-const RUNNER_LABELS_SHORT = { mflux: 'Flux 1', flux2: 'Flux 2', 'z-image': 'Z-Image', ernie: 'ERNIE' };
+const RUNNER_LABELS_SHORT = {
+  [RUNNER_FAMILIES.MFLUX]: 'Flux 1',
+  [RUNNER_FAMILIES.FLUX2]: 'Flux 2',
+  [RUNNER_FAMILIES.Z_IMAGE]: 'Z-Image',
+  [RUNNER_FAMILIES.ERNIE]: 'ERNIE',
+};
 
 function SuggestionCard({ card, installedFilenames, installingSuggestionKey, onInstall }) {
   const installs = card.curated && card.installs && Object.keys(card.installs).length > 0 ? card.installs : null;

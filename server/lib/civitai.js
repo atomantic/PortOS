@@ -16,6 +16,7 @@
  */
 
 import { ServerError } from './errorHandler.js';
+import { RUNNER_FAMILIES } from './runners.js';
 
 const CIVITAI_API = 'https://civitai.com/api/v1';
 const CIVITAI_HOSTS = new Set(['civitai.com', 'civitai.red', 'civitai.green', 'www.civitai.com']);
@@ -29,10 +30,10 @@ export const baseModelToRunner = (baseModel) => {
   const b = baseModel.trim().toLowerCase();
   if (!b) return null;
   // Match Flux.1 *, Flux 1 *, FLUX.1 D, FLUX.1 S
-  if (b.startsWith('flux.1') || b.startsWith('flux 1') || b === 'flux1') return 'mflux';
-  if (b.startsWith('flux.2') || b.startsWith('flux 2') || b === 'flux2') return 'flux2';
-  if (b.startsWith('z-image') || b.startsWith('zimage') || b.startsWith('z image')) return 'z-image';
-  if (b.startsWith('ernie-image') || b.startsWith('ernie image') || b.startsWith('ernieimage') || b === 'ernie') return 'ernie';
+  if (b.startsWith('flux.1') || b.startsWith('flux 1') || b === 'flux1') return RUNNER_FAMILIES.MFLUX;
+  if (b.startsWith('flux.2') || b.startsWith('flux 2') || b === 'flux2') return RUNNER_FAMILIES.FLUX2;
+  if (b.startsWith('z-image') || b.startsWith('zimage') || b.startsWith('z image')) return RUNNER_FAMILIES.Z_IMAGE;
+  if (b.startsWith('ernie-image') || b.startsWith('ernie image') || b.startsWith('ernieimage') || b === 'ernie') return RUNNER_FAMILIES.ERNIE;
   // SDXL / SD1.5 / Pony / Illustrious / etc. — none currently supported by
   // any PortOS runner. Surfacing them in the UI as "incompatible" is more
   // useful than hiding them entirely.
@@ -305,10 +306,10 @@ export const buildSidecar = ({ model, version, file, filename }) => {
 // LoRAs (e.g. model 1155749). Civitai is inconsistent about hyphens and
 // per-variant naming, so each runner family lists every accepted alias.
 const RUNNER_TO_BASE_MODELS = {
-  mflux: ['Flux.1 D', 'Flux.1 S'],
-  flux2: ['Flux.2 Klein 4B', 'Flux.2 Klein 9B'],
-  'z-image': ['ZImageBase', 'ZImageTurbo'],
-  ernie: ['Ernie'],
+  [RUNNER_FAMILIES.MFLUX]: ['Flux.1 D', 'Flux.1 S'],
+  [RUNNER_FAMILIES.FLUX2]: ['Flux.2 Klein 4B', 'Flux.2 Klein 9B'],
+  [RUNNER_FAMILIES.Z_IMAGE]: ['ZImageBase', 'ZImageTurbo'],
+  [RUNNER_FAMILIES.ERNIE]: ['Ernie'],
 };
 
 // Search Civitai for LoRA-family models targeting the given runner family.

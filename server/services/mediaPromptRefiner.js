@@ -1,7 +1,8 @@
 import { ServerError } from '../lib/errorHandler.js';
 import { findBalancedBlocks, tryParseWithRepair } from '../lib/jsonExtract.js';
-import { providerHonorsModelOverride, runPromptThroughProvider } from '../lib/promptRunner.js';
+import { runPromptThroughProvider } from '../lib/promptRunner.js';
 import { getProviderById } from './providers.js';
+import { hasModelFlag, extractBakedModel } from './runner.js';
 
 const MAX_PROMPT_LEN = 8000;
 const MAX_REASON_LEN = 1200;
@@ -143,14 +144,20 @@ export async function refineMediaPrompt({
     );
   }
 
-  // Resolve the model that'll actually run via the shared predicate so
-  // the early MODEL_REQUIRED guard + the response's `model` field match
-  // what promptRunner internally resolves. Non-codex CLI providers fall
-  // back to defaultModel → models[0] because their --model flag isn't
-  // wired (PLAN.md tracks extending buildCliArgs to all CLIs).
-  const selectedModel = providerHonorsModelOverride(provider)
+  // Resolve the model that'll actually run. API providers honor the per-call
+  // `model` override directly; for CLI providers, `runner.js#buildCliArgs`
+  // injects `--model`/`-m` from `provider.defaultModel` for every supported
+  // CLI (codex / claude-code / gemini-cli) UNLESS the user has already baked
+  // a model flag into provider.args. In the "baked flag" case the override
+  // is silently dropped and the model from args wins — so we surface that
+  // exact id (extracted from args) on the run record instead of guessing
+  // from defaultModel, which can diverge.
+  const cliHasBakedModelFlag = provider.type === 'cli' && hasModelFlag(provider.args);
+  const honorsModelOverride = provider.type === 'api' || (provider.type === 'cli' && !cliHasBakedModelFlag);
+  const bakedModel = cliHasBakedModelFlag ? extractBakedModel(provider.args) : null;
+  const selectedModel = honorsModelOverride
     ? (model || provider.defaultModel || provider.models?.[0] || '')
-    : (provider.defaultModel || provider.models?.[0] || '');
+    : (bakedModel || provider.defaultModel || provider.models?.[0] || '');
   if (!selectedModel && provider.type === 'api') {
     throw new ServerError('Model is required for prompt refinement', { status: 400, code: 'MODEL_REQUIRED' });
   }

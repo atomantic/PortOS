@@ -4,11 +4,21 @@ vi.mock('./providers.js', () => ({
   getProviderById: vi.fn(),
 }));
 
-vi.mock('./runner.js', () => ({
-  createRun: vi.fn().mockResolvedValue({ runId: 'test-run' }),
-  executeApiRun: vi.fn(),
-  executeCliRun: vi.fn(),
-}));
+// Partial mock: stub the side-effectful run-execution surface (createRun /
+// executeApiRun / executeCliRun) but defer to the REAL helper exports for
+// hasModelFlag / extractBakedModel so the tests always exercise the
+// canonical parsing logic. If those helpers ever change semantics
+// (e.g. start rejecting --model with no value), the refiner tests pick
+// up the new behavior automatically.
+vi.mock('./runner.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    createRun: vi.fn().mockResolvedValue({ runId: 'test-run' }),
+    executeApiRun: vi.fn(),
+    executeCliRun: vi.fn(),
+  };
+});
 
 const providers = await import('./providers.js');
 const runner = await import('./runner.js');
@@ -173,11 +183,11 @@ ${JSON.stringify({ prompt: 'painted owl portrait', negativePrompt: 'blurry', rat
     })).rejects.toMatchObject({ code: 'PROVIDER_DISABLED', status: 400 });
   });
 
-  it('ignores per-call model override for non-Codex CLIs since the runner cannot apply it', async () => {
-    // runner.js#buildCliArgs only translates defaultModel into a --model flag
-    // for codex. For claude-code / gemini-cli the per-call override would be
-    // silently dropped, so the response model must reflect what'll actually
-    // run (the provider's configured default), not the user's selection.
+  it('honors per-call model override for claude-code / gemini-cli when args do not pin a model', async () => {
+    // runner.js#buildCliArgs now injects --model/-m from provider.defaultModel
+    // for every CLI provider (codex / claude-code / gemini-cli), so cloning
+    // the provider with the user-selected model is safe and the response
+    // accurately reports what'll actually run.
     providers.getProviderById.mockResolvedValue({
       id: 'claude-code',
       type: 'cli',
@@ -193,10 +203,61 @@ ${JSON.stringify({ prompt: 'painted owl portrait', negativePrompt: 'blurry', rat
       prompt: 'p',
       feedback: 'f',
       providerId: 'claude-code',
-      model: 'user-selected-model-the-runner-will-ignore',
+      model: 'user-selected-sonnet',
     });
 
-    expect(result.model).toBe('claude-baked-in');
+    expect(result.model).toBe('user-selected-sonnet');
+  });
+
+  it('reports the args-baked model (not defaultModel) when a CLI provider pins a model in args', async () => {
+    // When the user has hard-coded `--model X` (or `-m X`) into provider.args,
+    // buildCliArgs skips injection and the saved arg wins — the per-call
+    // override is silently dropped. To match reality, the response should
+    // report the model extracted from args, NOT defaultModel (which might
+    // diverge from what the CLI will actually run with).
+    providers.getProviderById.mockResolvedValue({
+      id: 'claude-code',
+      type: 'cli',
+      enabled: true,
+      defaultModel: 'claude-stale-default',
+      args: ['--model', 'baked-in-from-args'],
+    });
+    mockRunnerSuccess(runner.executeCliRun, JSON.stringify({
+      prompt: 'x', negativePrompt: '', rationale: '', changes: [],
+    }));
+
+    const result = await refineMediaPrompt({
+      kind: 'image',
+      prompt: 'p',
+      feedback: 'f',
+      providerId: 'claude-code',
+      model: 'user-selection-runner-will-drop',
+    });
+
+    expect(result.model).toBe('baked-in-from-args');
+  });
+
+  it('extracts the args-baked model from joined-form (--model=X) flags too', async () => {
+    providers.getProviderById.mockResolvedValue({
+      id: 'gemini-cli',
+      type: 'cli',
+      enabled: true,
+      defaultModel: 'gemini-stale-default',
+      args: ['-m=gemini-from-joined-arg'],
+    });
+    mockRunnerSuccess(runner.executeCliRun, JSON.stringify({
+      prompt: 'x', negativePrompt: '', rationale: '', changes: [],
+    }));
+
+    const result = await refineMediaPrompt({
+      kind: 'image',
+      prompt: 'p',
+      feedback: 'f',
+      providerId: 'gemini-cli',
+      model: 'user-selection-dropped',
+    });
+
+    expect(result.model).toBe('gemini-from-joined-arg');
   });
 
   it('falls back to provider.models[0] when defaultModel is absent (API provider)', async () => {

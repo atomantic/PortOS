@@ -4,6 +4,7 @@ vi.mock('../services/runner.js', () => ({
   createRun: vi.fn(),
   executeApiRun: vi.fn(),
   executeCliRun: vi.fn(),
+  hasModelFlag: vi.fn(() => false),
 }));
 
 const runner = await import('../services/runner.js');
@@ -113,26 +114,46 @@ describe('promptRunner — happy paths', () => {
     expect(out.text).toBe('ran with model=new');
   });
 
-  it('does NOT clone non-codex CLI providers with the model override — runner.js#buildCliArgs ignores it', async () => {
-    // claude-code / gemini-cli's buildCliArgs path doesn't honor
-    // provider.defaultModel, so cloning it just lies to the
-    // onRunStarted hook about which model actually ran. The run
-    // record must reflect what the CLI actually executed.
+  it('clones non-codex CLI providers with the model override when args have no baked-in model flag', async () => {
+    // Post-#222: runner.js#buildCliArgs honors `provider.defaultModel`
+    // for codex / claude-code / gemini-cli when the user hasn't already
+    // baked a model flag into provider.args. So the clone is safe and
+    // the run record correctly reflects the user's selection.
+    runner.hasModelFlag.mockReturnValue(false);
     runner.executeCliRun.mockImplementation(async (id, providerArg, _p, _cwd, onData, onComplete, _t) => {
       onData(`ran with defaultModel=${providerArg.defaultModel}`);
       onComplete({ success: true });
     });
 
     const out = await runPromptThroughProvider({
-      provider: { id: 'claude-code', type: 'cli', defaultModel: 'baked-in', timeout: 5000 },
+      provider: { id: 'claude-code', type: 'cli', defaultModel: 'old', timeout: 5000, args: [] },
       prompt: 'p',
       source: 't',
       model: 'user-picked-this',
     });
 
-    // The run still goes through, but the executed-against model is
-    // the provider's actual defaultModel, not the user's selection.
-    expect(out.text).toBe('ran with defaultModel=baked-in');
+    expect(out.text).toBe('ran with defaultModel=user-picked-this');
+  });
+
+  it('does NOT clone CLI providers when args have a baked-in --model flag (args win)', async () => {
+    // When the user has pinned a model in provider.args, runner.js
+    // suppresses its own --model injection. Per-call override is
+    // silently dropped and the args-baked model wins — keep the run
+    // record honest by not pretending the override applied.
+    runner.hasModelFlag.mockReturnValue(true);
+    runner.executeCliRun.mockImplementation(async (id, providerArg, _p, _cwd, onData, onComplete, _t) => {
+      onData(`ran with defaultModel=${providerArg.defaultModel}`);
+      onComplete({ success: true });
+    });
+
+    const out = await runPromptThroughProvider({
+      provider: { id: 'claude-code', type: 'cli', defaultModel: 'fallback', timeout: 5000, args: ['--model', 'baked-in'] },
+      prompt: 'p',
+      source: 't',
+      model: 'user-picked-this',
+    });
+
+    expect(out.text).toBe('ran with defaultModel=fallback');
   });
 });
 

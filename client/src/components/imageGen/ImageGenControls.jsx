@@ -11,6 +11,7 @@
 import { Dice5 } from 'lucide-react';
 import { filterResolutions } from '../../lib/imageGenResolutions';
 import { randomSeed } from '../../lib/genUtils';
+import { RUNNER_FAMILIES } from '../../lib/runnerFamilies';
 
 const QUANTIZE_OPTIONS = [
   { value: '3', label: '3-bit' },
@@ -42,7 +43,7 @@ export default function ImageGenControls({
   const isCodex = mode === 'codex';
 
   const currentModel = models.find((m) => m.id === modelId);
-  const isFlux2 = currentModel?.runner === 'flux2';
+  const isFlux2 = currentModel?.runner === RUNNER_FAMILIES.FLUX2;
 
   // Filter by backend; a stale w/h (e.g. Flux 2 → Flux 1 with 1536 still set)
   // falls through to the (custom) <option> below so the value stays visible

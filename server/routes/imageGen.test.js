@@ -12,7 +12,7 @@ vi.mock('../services/imageGen/index.js', () => ({
   IMAGE_GEN_MODES: ['external', 'local', 'codex'],
   local: {
     listImageModels: vi.fn(() => []),
-    listLoras: vi.fn(async () => []),
+    listLoraFilenames: vi.fn(async () => []),
     listGallery: vi.fn(async () => []),
     deleteImage: vi.fn(async () => ({ ok: true })),
   },

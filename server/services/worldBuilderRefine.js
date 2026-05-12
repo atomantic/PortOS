@@ -13,7 +13,7 @@
 
 import { ServerError } from '../lib/errorHandler.js';
 import { getActiveProvider, getProviderById } from './providers.js';
-import { createRun, executeApiRun, executeCliRun } from './runner.js';
+import { createRun, executeApiRun, executeCliRun, hasModelFlag, extractBakedModel } from './runner.js';
 import {
   PROMPT_FRAGMENT_MAX,
   STARTER_PROMPT_MAX,
@@ -147,10 +147,11 @@ async function runRefine(provider, model, prompt) {
       }
     };
     if (provider.type === 'cli') {
-      // Mirror the media refiner: only Codex's `buildCliArgs` honors a per-call
-      // model override today, so don't lie about which model ran for the others.
-      const canOverrideModel = provider.id === 'codex';
-      const providerForCli = canOverrideModel && model && model !== provider.defaultModel
+      // Mirror the media refiner: `buildCliArgs` now honors a per-call model
+      // override (via `provider.defaultModel`) for codex / claude-code /
+      // gemini-cli. Clone the provider with the overridden defaultModel
+      // whenever the caller picked something other than the saved default.
+      const providerForCli = model && model !== provider.defaultModel
         ? { ...provider, defaultModel: model }
         : provider;
       executeCliRun(runId, providerForCli, prompt, process.cwd(), onData, onComplete, provider.timeout ?? 300000).catch(reject);
@@ -198,10 +199,17 @@ export async function refineWorldPrompts({
     );
   }
 
-  const honorsModelOverride = provider.type === 'api' || provider.id === 'codex';
+  // API providers honor per-call `model` directly; CLI providers do too via
+  // buildCliArgs (which injects --model/-m from provider.defaultModel),
+  // unless the user has hard-coded a model flag into provider.args — in
+  // that case the saved arg wins and we surface the model id parsed out of
+  // args so the response/run record matches what'll actually run.
+  const cliHasBakedModelFlag = provider.type === 'cli' && hasModelFlag(provider.args);
+  const honorsModelOverride = provider.type === 'api' || (provider.type === 'cli' && !cliHasBakedModelFlag);
+  const bakedModel = cliHasBakedModelFlag ? extractBakedModel(provider.args) : null;
   const selectedModel = honorsModelOverride
     ? (model || provider.defaultModel || provider.models?.[0] || '')
-    : (provider.defaultModel || provider.models?.[0] || '');
+    : (bakedModel || provider.defaultModel || provider.models?.[0] || '');
   if (!selectedModel && provider.type === 'api') {
     throw new ServerError('Model is required for world refinement', { status: 400, code: 'MODEL_REQUIRED' });
   }

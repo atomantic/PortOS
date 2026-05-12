@@ -18,7 +18,7 @@ import { existsSync, watch as fsWatch } from 'fs';
 import { join, dirname, resolve as resolvePath, sep as PATH_SEP, basename } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
-import { ensureDir, PATHS, safeJSONParse } from '../../lib/fileUtils.js';
+import { assertSafeFilename, ensureDir, PATHS, safeJSONParse } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { imageGenEvents } from '../imageGenEvents.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, PYTHON_NOISE_RE } from '../../lib/sseUtils.js';
@@ -512,14 +512,18 @@ export async function generateImage({ pythonPath, prompt, negativePrompt = '', m
 }
 
 // Validate a gallery filename: PNG-only, basename only, no path separators.
-// `.endsWith('.png')` already rejects `.` and `..` so substring-`..` matching
-// would over-reject legitimate names like `my..render.png`. Throws a 400 so
-// callers don't have to repeat the check.
+// Delegates to the shared `assertSafeFilename` helper in fileUtils.js.
+// Substring `..` is allowed (e.g. `my..render.png` is fine) because the
+// helper only rejects the exact-string traversal cases.
+// `requiredMessage` preserves the original "Invalid filename" wording for
+// the missing-input case so existing client error-message expectations
+// (and the previously-shipped error-middleware contract) don't shift.
 export function assertGalleryFilename(filename) {
-  if (!filename || !filename.endsWith('.png')
-      || filename.includes('/') || filename.includes('\\')) {
-    throw new ServerError('Invalid filename', { status: 400, code: 'VALIDATION_ERROR' });
-  }
+  assertSafeFilename(filename, {
+    extensions: ['.png'],
+    subject: 'filename',
+    requiredMessage: 'Invalid filename',
+  });
 }
 
 // Returns `{ path, metadata }`. `path` is the resolved sidecar location, or
@@ -574,7 +578,13 @@ export async function setImageHidden(filename, hidden) {
 // Returns just `{ filename, name }` — clients send `filename` back in the
 // generate payload's `loraFilenames` and the server resolves it against
 // PATHS.loras. Avoids leaking absolute server paths into the API surface.
-export async function listLoras() {
+//
+// Distinct from `services/loras.js#listLoras` which returns the rich
+// Civitai-aware shape (civitai, runnerFamily, triggerWords, etc.) for the
+// `/api/loras` manager UI. The two used to share the name `listLoras`;
+// rename here makes the shape distinction explicit so a future caller
+// can't import the wrong one and silently lose `civitai`/`runnerFamily`.
+export async function listLoraFilenames() {
   await ensureDir(PATHS.loras);
   const files = await readdir(PATHS.loras).catch(() => []);
   return files.filter((f) => f.endsWith('.safetensors')).map((f) => ({

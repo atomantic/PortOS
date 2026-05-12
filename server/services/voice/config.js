@@ -5,6 +5,7 @@
 import { homedir } from 'os';
 import { join } from 'path';
 import { getSettings, updateSettings } from '../settings.js';
+import { deepMerge } from '../../lib/objects.js';
 
 const VOICE_HOME = join(homedir(), '.portos', 'voice');
 
@@ -78,17 +79,6 @@ export const VOICE_DEFAULTS = Object.freeze({
 
   vad: { endOfSpeechMs: 700, minUtteranceMs: 250 },
 });
-
-const isObj = (v) => v && typeof v === 'object' && !Array.isArray(v);
-
-const deepMerge = (base, patch) => {
-  if (!isObj(patch)) return patch === undefined ? base : patch;
-  const out = { ...base };
-  for (const [k, v] of Object.entries(patch)) {
-    out[k] = isObj(base[k]) && isObj(v) ? deepMerge(base[k], v) : v;
-  }
-  return out;
-};
 
 export const expandPath = (p) => {
   if (typeof p !== 'string') return p;

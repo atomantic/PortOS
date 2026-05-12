@@ -19,6 +19,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
 import { join, dirname } from 'path';
 import { PATHS } from './fileUtils.js';
+import { RUNNER_FAMILIES } from './runners.js';
 // fileUtils.ensureDir is async/Promise-returning; this module needs a
 // synchronous version because `loadMediaModels()` is called at import-time
 // from videoGen/imageGen modules, which can't await before exporting.
@@ -187,7 +188,7 @@ const arrayOrDefault = (v, fallback) => (Array.isArray(v) ? v : fallback);
 // flux2 model but is missing the runner discriminator. User overrides for
 // other fields (custom name, steps, repo) are preserved.
 const FLUX2_DEFAULTS_BY_ID = Object.fromEntries(
-  DEFAULT_REGISTRY.image.filter((m) => m.runner === 'flux2').map((m) => [m.id, m])
+  DEFAULT_REGISTRY.image.filter((m) => m.runner === RUNNER_FAMILIES.FLUX2).map((m) => [m.id, m])
 );
 
 const upgradeImageEntries = (list) => {
@@ -203,7 +204,7 @@ const upgradeImageEntries = (list) => {
     // to clear). Any other broken value the user added is intentional and
     // preserved.
     const { broken, ...rest } = entry;
-    const merged = { ...seed, ...rest, runner: 'flux2' };
+    const merged = { ...seed, ...rest, runner: RUNNER_FAMILIES.FLUX2 };
     if (broken !== undefined && broken !== 'macos') merged.broken = broken;
     return merged;
   });
@@ -236,9 +237,9 @@ const backfillCfgDisabled = (list) => {
   });
 };
 
-export const isFlux2 = (model) => model?.runner === 'flux2';
-export const isZImage = (model) => model?.runner === 'z-image';
-export const isErnie = (model) => model?.runner === 'ernie';
+export const isFlux2 = (model) => model?.runner === RUNNER_FAMILIES.FLUX2;
+export const isZImage = (model) => model?.runner === RUNNER_FAMILIES.Z_IMAGE;
+export const isErnie = (model) => model?.runner === RUNNER_FAMILIES.ERNIE;
 export const isCfgDisabled = (model) => model?.cfgDisabled === true;
 
 // Append models that are genuinely new in this release (not in
@@ -393,6 +394,44 @@ const normalizeRegistry = (parsed) => {
   };
 };
 
+// Detect drift between `_shippedDefaults` and the user's live list. We
+// previously hit a real install (2026-05-09) where `_shippedDefaults.image.list`
+// claimed all default ids had been shipped but the user's `image[]` array was
+// missing several of them — most likely from a partial editor save or a
+// concurrent-write race. The deletion-survives-upgrade contract then
+// permanently skipped re-adding those built-ins on every restart. We DON'T
+// auto-recover (that would defeat real deletions), but we make the drift
+// loud at boot so a user / sysadmin can act on it.
+//
+// IMPORTANT: this state is structurally indistinguishable from an INTENTIONAL
+// deletion — `appendNewlyShippedEntries` skips re-adding ids that are in
+// shippedIds but not userList for exactly that reason. There is no "silence
+// without re-adding" path today: removing an id from `_shippedDefaults`
+// flips it back to "genuinely new built-in" and normalizeRegistry will
+// re-append it on next boot. So if the absence is intentional, this log
+// fires every restart — users can either live with it, or accept the
+// re-add and delete the entry again from the UI. We surface it anyway
+// because the silent-skipping behaviour was the original bug.
+//
+// `kind` is either 'image' (single list at `_shippedDefaults.image.list`)
+// or 'video' (per-platform arrays at `_shippedDefaults.video.macos` /
+// `_shippedDefaults.video.windows`).
+const warnDrift = (kind, platform, shippedIds, defaultIds, presentIds) => {
+  const shippedSet = new Set(shippedIds || []);
+  const defaultSet = new Set(defaultIds || []);
+  const presentSet = new Set(presentIds || []);
+  for (const id of shippedSet) {
+    if (!defaultSet.has(id)) continue;     // not a current built-in; ignore
+    if (presentSet.has(id)) continue;      // present — no drift
+    // shippedIds for image lives at `_shippedDefaults.image.list`; for video
+    // it's `_shippedDefaults.video.{macos,windows}` directly. Surface the
+    // accurate key so a copy-paste from the warning lands in the right place.
+    const where = platform ? `${kind}.${platform}` : kind;
+    const shippedKey = platform ? `_shippedDefaults.${kind}.${platform}` : `_shippedDefaults.${kind}.list`;
+    console.log(`⚠️ media-models drift: built-in "${id}" was shipped but is missing from ${where}[] — if the deletion is intentional this warning will repeat each boot (no silence-without-restore path exists); to restore, either re-add the entry manually or delete ${shippedKey} entirely to re-bootstrap`);
+  }
+};
+
 export const loadMediaModels = () => {
   if (cached) return cached;
   seedIfMissing();
@@ -408,6 +447,44 @@ export const loadMediaModels = () => {
     readOk = true;
   } catch (err) {
     console.log(`⚠️ Failed to load ${REGISTRY_FILE} (${err.message}) — using built-in defaults`);
+  }
+  // Drift check runs on the RAW parsed file (pre-normalize), because
+  // normalizeRegistry uses _shippedDefaults to decide which built-ins to
+  // re-add and which to skip. We want to surface the mismatch as it exists
+  // on disk, not the post-merge view. Skip when no parsed file at all (the
+  // catch above already logged) or when _shippedDefaults isn't populated yet
+  // (bootstrap path — no drift is possible).
+  if (readOk && isPlainObject(parsed?._shippedDefaults)) {
+    const sd = parsed._shippedDefaults;
+    if (isPlainObject(sd.image) && Array.isArray(parsed.image)) {
+      warnDrift(
+        'image',
+        null,
+        Array.isArray(sd.image.list) ? sd.image.list : [],
+        DEFAULT_REGISTRY.image.map((m) => m.id),
+        parsed.image.map((m) => m?.id).filter((id) => typeof id === 'string'),
+      );
+    }
+    if (isPlainObject(sd.video) && isPlainObject(parsed.video)) {
+      if (Array.isArray(sd.video.macos) && Array.isArray(parsed.video.macos)) {
+        warnDrift(
+          'video',
+          'macos',
+          sd.video.macos,
+          DEFAULT_REGISTRY.video.macos.map((m) => m.id),
+          parsed.video.macos.map((m) => m?.id).filter((id) => typeof id === 'string'),
+        );
+      }
+      if (Array.isArray(sd.video.windows) && Array.isArray(parsed.video.windows)) {
+        warnDrift(
+          'video',
+          'windows',
+          sd.video.windows,
+          DEFAULT_REGISTRY.video.windows.map((m) => m.id),
+          parsed.video.windows.map((m) => m?.id).filter((id) => typeof id === 'string'),
+        );
+      }
+    }
   }
   cached = normalizeRegistry(parsed);
   // Persist _shippedDefaults back to disk whenever it was absent or gained new

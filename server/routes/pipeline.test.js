@@ -69,6 +69,32 @@ vi.mock('../services/pipeline/visualStages.js', () => ({
     prompt: `comic-page prompt for page ${opts.pageIndex + 1}`,
     pageIndex: opts.pageIndex,
   })),
+  // Single-scene video render. Returns the shape the route forwards verbatim
+  // to clients: { jobId, prompt, sceneIndex, issue, stage }.
+  enqueueStoryboardSceneVideo: vi.fn(async (issueId, sceneIndex) => ({
+    jobId: `scene-vid-${++uuidCounter}`,
+    prompt: `scene video prompt ${sceneIndex}`,
+    sceneIndex,
+    issue: { id: issueId, stages: { storyboards: { scenes: [] } } },
+    stage: { scenes: [] },
+  })),
+  refineComicPanelPrompt: vi.fn(async (issueId, pi, ni) => ({
+    panel: { description: 'refined panel body' },
+    page: { panels: [] },
+    issue: { id: issueId, stages: { comicPages: { pages: [] } } },
+    stage: { pages: [] },
+    runId: 'run-mock-comic',
+    changes: ['mock change'],
+    providerId: 'mock-provider',
+  })),
+  refineStoryboardScenePrompt: vi.fn(async (issueId, idx) => ({
+    scene: { description: 'refined scene body' },
+    issue: { id: issueId, stages: { storyboards: { scenes: [] } } },
+    stage: { scenes: [] },
+    runId: 'run-mock-scene',
+    changes: ['mock change'],
+    providerId: 'mock-provider',
+  })),
 }));
 
 // The episode-video handoff creates a CD project; stub it so the route test
@@ -196,6 +222,81 @@ describe('pipeline routes', () => {
       .post(`/api/pipeline/issues/${iss.body.id}/stages/episodeVideo/visual`)
       .send({});
     expect(r.status).toBe(400);
+  });
+
+  it('GET /issues/recent?limit=0 clamps to 1 (route forwards to service which owns coercion)', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'A' });
+    await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'B' });
+    const r = await request(app).get('/api/pipeline/issues/recent?limit=0');
+    expect(r.status).toBe(200);
+    // Without alignment, the route's `Number(...) || 10` would return up
+    // to 10 issues even when the caller explicitly passed 0.
+    expect(r.body).toHaveLength(1);
+  });
+
+  it('GET /issues/recent returns the most-recently-updated issues with denormalized seriesName', async () => {
+    const app = makeApp();
+    const ser1 = await request(app).post('/api/pipeline/series').send({ name: 'Alpha' });
+    const ser2 = await request(app).post('/api/pipeline/series').send({ name: 'Beta' });
+    const iss1 = await request(app).post(`/api/pipeline/series/${ser1.body.id}/issues`).send({ title: 'Old' });
+    // Bump iss1's updatedAt back so iss2 is unambiguously the most recent.
+    await new Promise((r) => setTimeout(r, 10));
+    const iss2 = await request(app).post(`/api/pipeline/series/${ser2.body.id}/issues`).send({ title: 'Newer' });
+    const r = await request(app).get('/api/pipeline/issues/recent?limit=10');
+    expect(r.status).toBe(200);
+    expect(Array.isArray(r.body)).toBe(true);
+    expect(r.body[0].id).toBe(iss2.body.id);
+    expect(r.body[0].seriesName).toBe('Beta');
+    expect(r.body.find((i) => i.id === iss1.body.id)?.seriesName).toBe('Alpha');
+  });
+
+  it('POST /issues/:id/stages/storyboards/scenes/:index/video returns the enqueued jobId', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    const r = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/storyboards/scenes/0/video`)
+      .send({ aspectRatio: '16:9' });
+    expect(r.status).toBe(200);
+    expect(r.body.jobId).toMatch(/^scene-vid-/);
+    expect(r.body.sceneIndex).toBe(0);
+  });
+
+  it('POST /issues/:id/stages/storyboards/scenes/:index/video rejects a non-integer index', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    const r = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/storyboards/scenes/nope/video`)
+      .send({});
+    expect(r.status).toBe(400);
+  });
+
+  it('POST /issues/:id/stages/comicPages/pages/:p/panels/:n/refine-prompt returns the refined panel + changes', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    const r = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/comicPages/pages/0/panels/0/refine-prompt`)
+      .send({});
+    expect(r.status).toBe(200);
+    expect(r.body.runId).toBe('run-mock-comic');
+    expect(r.body.panel.description).toBe('refined panel body');
+    expect(r.body.changes).toEqual(['mock change']);
+  });
+
+  it('POST /issues/:id/stages/storyboards/scenes/:index/refine-prompt returns the refined scene', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    const r = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/storyboards/scenes/0/refine-prompt`)
+      .send({ providerId: 'codex', model: 'gpt-4o' });
+    expect(r.status).toBe(200);
+    expect(r.body.runId).toBe('run-mock-scene');
+    expect(r.body.scene.description).toBe('refined scene body');
   });
 
   it('POST /issues/:id/auto-run-text returns runId + sseUrl', async () => {

@@ -1,26 +1,39 @@
 /**
  * Pipeline — Visual stage handoff helpers
  *
- * Thin wrappers that enqueue image-gen jobs on behalf of the Pipeline's
- * comicPages and storyboards stages. The route layer is responsible for
- * persisting the returned jobIds into the issue's stage record — this module
- * just owns the "build the right params, hand to mediaJobQueue" mechanic so
- * the pipeline doesn't have to duplicate Image-Gen's mode-resolution code.
+ * Responsibilities, in order of how they evolved:
  *
- * MVP scope: image jobs only. Scene video / episode-video stitching is
- * deferred — the storyboards and episodeVideo stages currently expose
- * read/write of their structured fields but don't yet drive the Creative
- * Director scene runner. See PLAN.md "Pipeline — Deferred" for the follow-up.
+ * 1. **Image enqueue** (`enqueueVisualImage`, `enqueueVisualComicPage`) —
+ *    build the right diffusion params for a comicPages panel / page or a
+ *    storyboards scene and hand off to `mediaJobQueue`. The route layer
+ *    persists the returned jobId into the issue's stage record.
+ *
+ * 2. **Single-scene video enqueue** (`enqueueStoryboardSceneVideo`) —
+ *    render one storyboard scene as a t2v clip without committing to the
+ *    full episode-video stitch. Persists `sceneVideoJobId` on the scene
+ *    so a reload still surfaces the in-flight render.
+ *
+ * 3. **LLM-driven prompt refinement** (`refineComicPanelPrompt`,
+ *    `refineStoryboardScenePrompt`) — elaborate a panel/scene description
+ *    into a richer image-gen prompt via `runStagedLLM`, then persist the
+ *    refined text back on the source record. Shared `runPromptRefine`
+ *    helper + slim `loadRefineContext` keep the two surfaces DRY.
+ *
+ * Full episode-video stitching still lives in `episodeVideo.js` — that
+ * path drives the Creative Director scene runner end-to-end.
  */
 
 import { enqueueJob } from '../mediaJobQueue/index.js';
 import { getSettings } from '../settings.js';
 import { getSeries } from './series.js';
-import { getIssue, VISUAL_STAGE_IDS } from './issues.js';
+import { getIssue, updateStage, VISUAL_STAGE_IDS } from './issues.js';
 import { getWorld } from '../worldBuilder.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { buildScenePrompt, buildSettingByKey, matchSceneSetting } from '../../lib/scenePrompt.js';
 import { composeStyledPrompt } from '../../lib/composeStyledPrompt.js';
+import { getDefaultVideoModelId, getVideoModels } from '../../lib/mediaModels.js';
+import { runStagedLLM } from '../../lib/stageRunner.js';
+import { ASPECT_PRESETS } from '../../lib/creativeDirectorPresets.js';
 
 const SUPPORTED_MODES = new Set(['local', 'codex']);
 
@@ -210,4 +223,277 @@ export async function enqueueVisualImage(issueId, stageId, options = {}) {
     logLine: `🎬 Pipeline visual — issue=${issueId.slice(0, 8)} stage=${stageId}`,
   });
   return { jobId, mode, prompt };
+}
+
+/**
+ * Enqueue a single-scene video render for a storyboard scene. Builds the
+ * same prompt the episode-video CD treatment would build for this scene
+ * (composeVisualPrompt with style notes + world style), then enqueues a
+ * video job through the shared mediaJobQueue.
+ *
+ * Persists the resulting jobId on `stages.storyboards.scenes[index]
+ * .sceneVideoJobId` so the UI can reflect it on reload.
+ *
+ * Returns { jobId, prompt, sceneIndex }.
+ */
+export async function enqueueStoryboardSceneVideo(issueId, sceneIndex, options = {}) {
+  const idx = Number(sceneIndex);
+  if (!Number.isInteger(idx) || idx < 0) {
+    throw new ServerError('sceneIndex must be a non-negative integer', {
+      status: 400, code: 'PIPELINE_SCENE_BAD_INDEX',
+    });
+  }
+  const { issue, settings, series, world } = await loadBibleContext(issueId);
+  const pythonPath = settings.imageGen?.local?.pythonPath || null;
+  if (!pythonPath) {
+    throw new ServerError(
+      'Local video generation is not configured (settings.imageGen.local.pythonPath is missing).',
+      { status: 400, code: 'VIDEO_GEN_NOT_CONFIGURED' },
+    );
+  }
+  const scenes = Array.isArray(issue.stages?.storyboards?.scenes)
+    ? [...issue.stages.storyboards.scenes]
+    : [];
+  const scene = scenes[idx];
+  if (!scene) {
+    throw new ServerError(`sceneIndex ${idx} out of range (have ${scenes.length})`, {
+      status: 404, code: 'PIPELINE_SCENE_NOT_FOUND',
+    });
+  }
+  if (!(scene.description || '').trim()) {
+    throw new ServerError('scene has no description — add a description before rendering', {
+      status: 400, code: 'PIPELINE_SCENE_EMPTY_DESCRIPTION',
+    });
+  }
+
+  const prompt = composeVisualPrompt({
+    series,
+    description: scene.description,
+    slugline: scene.slugline || '',
+    extraStyle: options.extraStyle,
+    world,
+  });
+
+  const aspectRatio = ASPECT_PRESETS[options.aspectRatio] ? options.aspectRatio : '16:9';
+  const { width, height } = ASPECT_PRESETS[aspectRatio];
+  const modelId = options.modelId || settings.videoGen?.defaultModelId || getDefaultVideoModelId();
+  // Validate the model exists for this platform before enqueueing — otherwise
+  // the worker will fail with "Unknown video model" and leave a persisted
+  // doomed entry in the queue. Mirrors the same fail-fast pattern as
+  // /api/video-gen's route validation.
+  if (!getVideoModels().some((m) => m.id === modelId)) {
+    throw new ServerError(`Unknown video model "${modelId}"`, {
+      status: 400, code: 'PIPELINE_UNKNOWN_VIDEO_MODEL',
+    });
+  }
+  const negativePrompt = options.negativePrompt || 'text, watermark, blur, motion blur, low quality';
+
+  const { jobId } = enqueueJob({
+    kind: 'video',
+    params: {
+      pythonPath,
+      prompt,
+      negativePrompt,
+      modelId,
+      width,
+      height,
+      mode: 't2v',
+      disableAudio: true,
+      tiling: 'auto',
+      chunks: 1,
+    },
+    owner: `pipeline:${issueId}:storyboards:scene${idx}`,
+  });
+
+  scenes[idx] = { ...scene, sceneVideoJobId: jobId };
+  const { issue: updatedIssue, stage } = await updateStage(issueId, 'storyboards', {
+    status: 'edited',
+    scenes,
+  });
+  console.log(`🎥 Pipeline scene video — issue=${issueId.slice(0, 8)} scene=${idx + 1} jobId=${jobId.slice(0, 8)}`);
+  return { jobId, prompt, sceneIndex: idx, issue: updatedIssue, stage };
+}
+
+const seriesBibleCtx = (series) => ({
+  name: series.name || '',
+  styleNotes: series.styleNotes || '',
+  logline: series.logline || '',
+  premise: series.premise || '',
+});
+
+const issueCtx = (issue) => ({ number: issue.number || 0, title: issue.title || '' });
+
+const neighborText = (item) => (item?.description || '').trim().slice(0, 240) || '(empty)';
+
+// Refine path needs issue + series only — skip the settings + world reads
+// that loadBibleContext does for the image/video enqueue path.
+async function loadRefineContext(issueId) {
+  const issue = await getIssue(issueId);
+  const series = await getSeries(issue.seriesId);
+  return { issue, series };
+}
+
+// Shared scaffolding for both the comic-panel and storyboard-scene refine
+// paths. The caller supplies the per-stage variables/persist details; this
+// helper owns the runStagedLLM call + result parsing + empty-prompt guard +
+// changes shaping.
+async function runPromptRefine({ templateName, variables, options, source, logTag }) {
+  const result = await runStagedLLM(templateName, variables, {
+    providerOverride: options.providerId,
+    modelOverride: options.model,
+    returnsJson: true,
+    source,
+  });
+  const refined = (result.content?.prompt || '').trim();
+  if (!refined) {
+    throw new ServerError('LLM returned an empty refined prompt', {
+      status: 502, code: 'PIPELINE_PROMPT_REFINE_EMPTY',
+    });
+  }
+  const changes = Array.isArray(result.content?.changes)
+    ? result.content.changes.map((c) => String(c).slice(0, 240)).filter(Boolean).slice(0, 8)
+    : [];
+  console.log(`✨ ${logTag} runId=${(result.runId || '').slice(0, 8)}`);
+  return { refined, changes, runId: result.runId, providerId: result.providerId };
+}
+
+/**
+ * Run the `pipeline-comic-panel-image-prompt` template against the current
+ * panel + surrounding context, then persist the refined description on the
+ * panel. Returns { panel, page, issue, stage, runId, changes, providerId }.
+ */
+export async function refineComicPanelPrompt(issueId, pageIndex, panelIndex, options = {}) {
+  const pi = Number(pageIndex);
+  const ni = Number(panelIndex);
+  if (!Number.isInteger(pi) || pi < 0 || !Number.isInteger(ni) || ni < 0) {
+    throw new ServerError('pageIndex and panelIndex must be non-negative integers', {
+      status: 400, code: 'PIPELINE_PANEL_BAD_INDEX',
+    });
+  }
+  const { issue, series } = await loadRefineContext(issueId);
+  const pages = Array.isArray(issue.stages?.comicPages?.pages) ? [...issue.stages.comicPages.pages] : [];
+  const page = pages[pi];
+  if (!page) {
+    throw new ServerError(`pageIndex ${pi} out of range (have ${pages.length})`, {
+      status: 404, code: 'PIPELINE_COMIC_PAGE_NOT_FOUND',
+    });
+  }
+  const panels = Array.isArray(page.panels) ? [...page.panels] : [];
+  const panel = panels[ni];
+  if (!panel) {
+    throw new ServerError(`panelIndex ${ni} out of range (have ${panels.length})`, {
+      status: 404, code: 'PIPELINE_COMIC_PANEL_NOT_FOUND',
+    });
+  }
+  if (!(panel.description || '').trim()) {
+    throw new ServerError('panel has no description to refine', {
+      status: 400, code: 'PIPELINE_PANEL_EMPTY_DESCRIPTION',
+    });
+  }
+
+  const prev = panels[ni - 1];
+  const next = panels[ni + 1];
+  // Drop dialogue rows whose line is empty/whitespace — matches the same
+  // filter `composeComicPagePrompt` applies, so the refine template doesn't
+  // get fed noisy `CHAR: ""` fragments that would confuse the LLM.
+  const dialogue = Array.isArray(panel.dialogue) && panel.dialogue.length
+    ? panel.dialogue
+      .map((d) => {
+        const character = (d.character || 'CHAR').trim() || 'CHAR';
+        const line = (d.line || '').trim();
+        return line ? `${character}: "${line}"` : null;
+      })
+      .filter(Boolean)
+      .join(' / ')
+    : '';
+
+  const { refined, changes, runId, providerId } = await runPromptRefine({
+    templateName: 'pipeline-comic-panel-image-prompt',
+    variables: {
+      series: seriesBibleCtx(series),
+      issue: issueCtx(issue),
+      pageNumber: pi + 1,
+      panelNumber: ni + 1,
+      panelCount: panels.length,
+      description: (panel.description || '').slice(0, 4000),
+      caption: (panel.caption || '').slice(0, 1000),
+      hasCaption: !!(panel.caption || '').trim(),
+      dialogue,
+      hasDialogue: !!dialogue,
+      sfx: (panel.sfx || '').slice(0, 500),
+      hasSfx: !!(panel.sfx || '').trim(),
+      hasNeighbors: !!(prev || next),
+      previousPanel: neighborText(prev),
+      nextPanel: neighborText(next),
+    },
+    options,
+    source: 'pipeline-comic-panel-prompt-refine',
+    logTag: `Pipeline comic panel refine — issue=${issueId.slice(0, 8)} p=${pi + 1} panel=${ni + 1}`,
+  });
+
+  panels[ni] = { ...panel, description: refined };
+  pages[pi] = { ...page, panels };
+  const { issue: updatedIssue, stage } = await updateStage(issueId, 'comicPages', {
+    status: 'edited',
+    pages,
+  });
+  return { panel: panels[ni], page: pages[pi], issue: updatedIssue, stage, runId, changes, providerId };
+}
+
+/**
+ * Run the `pipeline-storyboard-image-prompt` template against the current
+ * storyboard scene + surrounding context, then persist the refined
+ * description on the scene. Returns { scene, issue, stage, runId, changes, providerId }.
+ */
+export async function refineStoryboardScenePrompt(issueId, sceneIndex, options = {}) {
+  const idx = Number(sceneIndex);
+  if (!Number.isInteger(idx) || idx < 0) {
+    throw new ServerError('sceneIndex must be a non-negative integer', {
+      status: 400, code: 'PIPELINE_SCENE_BAD_INDEX',
+    });
+  }
+  const { issue, series } = await loadRefineContext(issueId);
+  const scenes = Array.isArray(issue.stages?.storyboards?.scenes)
+    ? [...issue.stages.storyboards.scenes]
+    : [];
+  const scene = scenes[idx];
+  if (!scene) {
+    throw new ServerError(`sceneIndex ${idx} out of range (have ${scenes.length})`, {
+      status: 404, code: 'PIPELINE_SCENE_NOT_FOUND',
+    });
+  }
+  if (!(scene.description || '').trim()) {
+    throw new ServerError('scene has no description to refine', {
+      status: 400, code: 'PIPELINE_SCENE_EMPTY_DESCRIPTION',
+    });
+  }
+
+  const prev = scenes[idx - 1];
+  const next = scenes[idx + 1];
+
+  const { refined, changes, runId, providerId } = await runPromptRefine({
+    templateName: 'pipeline-storyboard-image-prompt',
+    variables: {
+      series: seriesBibleCtx(series),
+      issue: issueCtx(issue),
+      sceneNumber: idx + 1,
+      sceneCount: scenes.length,
+      slugline: (scene.slugline || '').slice(0, 200),
+      hasSlugline: !!(scene.slugline || '').trim(),
+      description: (scene.description || '').slice(0, 4000),
+      hasNeighbors: !!(prev || next),
+      previousScene: neighborText(prev),
+      nextScene: neighborText(next),
+    },
+    options,
+    source: 'pipeline-storyboard-prompt-refine',
+    logTag: `Pipeline scene refine — issue=${issueId.slice(0, 8)} scene=${idx + 1}`,
+  });
+
+  scenes[idx] = { ...scene, description: refined };
+  const { issue: updatedIssue, stage } = await updateStage(issueId, 'storyboards', {
+    status: 'edited',
+    scenes,
+  });
+  return { scene: scenes[idx], issue: updatedIssue, stage, runId, changes, providerId };
 }
