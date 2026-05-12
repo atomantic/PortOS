@@ -213,6 +213,33 @@ describe('promptRunner — strictest-discriminator rejection', () => {
       source: 't',
     })).rejects.toThrow(/Unsupported provider type: rpc/);
   });
+
+  it('rejects when provider is null or missing entirely', async () => {
+    await expect(runPromptThroughProvider({
+      provider: null, prompt: 'p', source: 't',
+    })).rejects.toThrow(/provider is required/);
+    await expect(runPromptThroughProvider({
+      prompt: 'p', source: 't',
+    })).rejects.toThrow(/provider is required/);
+  });
+
+  it('rejects when provider.id is missing or non-string', async () => {
+    await expect(runPromptThroughProvider({
+      provider: { type: 'api' }, prompt: 'p', source: 't',
+    })).rejects.toThrow(/provider.id must be a non-empty string/);
+    await expect(runPromptThroughProvider({
+      provider: { id: '', type: 'api' }, prompt: 'p', source: 't',
+    })).rejects.toThrow(/provider.id must be a non-empty string/);
+  });
+
+  it('rejects when prompt or source is missing/empty', async () => {
+    await expect(runPromptThroughProvider({
+      provider: apiProvider(), prompt: '', source: 't',
+    })).rejects.toThrow(/prompt must be a non-empty string/);
+    await expect(runPromptThroughProvider({
+      provider: apiProvider(), prompt: 'p', source: '',
+    })).rejects.toThrow(/source must be a non-empty string/);
+  });
 });
 
 describe('promptRunner — multi-chunk text accumulation', () => {

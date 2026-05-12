@@ -69,6 +69,26 @@ export const providerHonorsModelOverride = (provider) =>
  *   neither override nor provider.defaultModel applies).
  */
 export async function runPromptThroughProvider({ provider, prompt, source, model, runId: callerRunId }) {
+  // Validate inputs up front so an accidentally-null `provider` (or one
+  // missing `id`/`type`) surfaces a clear error here instead of throwing
+  // a downstream TypeError on `provider.id` inside createRun or on the
+  // provider.type dispatch below.
+  if (!provider || typeof provider !== 'object') {
+    throw new Error('runPromptThroughProvider: provider is required');
+  }
+  if (typeof provider.id !== 'string' || !provider.id) {
+    throw new Error('runPromptThroughProvider: provider.id must be a non-empty string');
+  }
+  if (provider.type !== 'cli' && provider.type !== 'api') {
+    throw new Error(`Unsupported provider type: ${provider.type}`);
+  }
+  if (typeof prompt !== 'string' || !prompt.length) {
+    throw new Error('runPromptThroughProvider: prompt must be a non-empty string');
+  }
+  if (typeof source !== 'string' || !source.length) {
+    throw new Error('runPromptThroughProvider: source must be a non-empty string');
+  }
+
   // Resolve the model that'll actually run BEFORE creating the run record
   // so the record reflects reality. For providers that don't honor the
   // override, fall back to provider.defaultModel / models[0].

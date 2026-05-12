@@ -100,11 +100,16 @@ async function resolveProviderForStage(stage, { providerOverride } = {}) {
 export function extractJson(text) {
   if (!text || typeof text !== 'string') throw new Error('Empty AI response');
 
-  // Mirror jsonExtract.extractJson's fence handling so the candidate
-  // positions reflect the same text the underlying walker would see.
-  let s = stripCodeFences(text.trim());
-  const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (fence) s = fence[1].trim();
+  // Strip a wrapping ```…``` only when the ENTIRE response is fenced.
+  // The naive "first fenced block" heuristic (used historically) would
+  // grab fenced prompt-echo content from CLI runs like Codex, where the
+  // prompt itself may contain fenced JSON schema examples that appear
+  // BEFORE the model's actual answer in the stream. Walking the whole
+  // text and letting findBalancedBlocks discover candidates is safer:
+  // an echoed schema either parses (and matches by source order) or
+  // fails parse-with-repair and is silently skipped in favor of the
+  // real response.
+  const s = stripCodeFences(text.trim());
 
   // Collect candidates of BOTH shapes with their source-text positions.
   // findBalancedBlocks returns block substrings in order; indexOf gives

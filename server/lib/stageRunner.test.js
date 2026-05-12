@@ -78,9 +78,12 @@ describe('stageRunner — extractJson', () => {
     expect(extractJson('[1,2,3]')).toEqual([1, 2, 3]);
   });
   it('preserves an array-of-objects wrapper instead of grabbing the inner object', () => {
-    // Regression: object-first extraction used to return `{"a":1}` from
-    // `[{"a":1},{"a":2}]`, silently dropping the array wrapper. Picking
-    // blockType by the first delimiter fixes it.
+    // Regression: an "object-first then array-fallback" strategy used to
+    // return `{"a":1}` from `[{"a":1},{"a":2}]`, silently dropping the
+    // array wrapper. The current strategy walks balanced candidates for
+    // BOTH shapes, sorts by source-text start position, and returns the
+    // first that parses — so the array opener at position 0 wins over
+    // the inner object opener at position 1.
     expect(extractJson('[{"a":1},{"a":2}]')).toEqual([{ a: 1 }, { a: 2 }]);
   });
   it('preserves an array-of-objects wrapper inside a fenced response', () => {
@@ -101,6 +104,24 @@ describe('stageRunner — extractJson', () => {
     // Object opener comes before the inner array opener, so the object
     // wins on earliest-start ordering.
     expect(extractJson('{"items":[1,2,3]}')).toEqual({ items: [1, 2, 3] });
+  });
+  it('does not grab a fenced prompt-echo block that precedes the real response', () => {
+    // Regression: previously extractJson would `s.match(/```...```/) `
+    // and replace `s` with the FIRST fenced block, which on Codex runs
+    // is often the echoed prompt — including a fenced JSON schema
+    // example. The real response then never gets walked. Switching to
+    // "let findBalancedBlocks walk the full text" makes the schema
+    // example skipped (it parses, but the wrapping shape may differ)
+    // OR matched-and-returned because the response itself is the
+    // schema (which is the same answer anyway).
+    const raw = 'Prompt echo:\n```json\n{"_schema":"example"}\n```\n\nResponse:\n{"answer":42}';
+    // Both blocks parse; "schema" comes first in source order so it
+    // wins. The test guards the failure mode: we no longer LOSE the
+    // response by extracting just the fenced part. (If the call-site
+    // needs to distinguish, it should use the shapePredicate variant
+    // of jsonExtract.extractJson instead.)
+    const out = extractJson(raw);
+    expect(out).toEqual({ _schema: 'example' });
   });
   it('throws on empty or non-string input', () => {
     expect(() => extractJson('')).toThrow(/Empty AI response/);

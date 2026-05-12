@@ -206,8 +206,13 @@ export function extractJson(text, { shapePredicate, blockType = 'object' } = {})
 
   let s = stripCodeFences(text.trim());
   // stripCodeFences only catches leading/trailing fences. CLI banners
-  // sometimes wrap the response in fences mid-stream — fall back to a
-  // greedy fence match so we still extract the inner JSON.
+  // sometimes wrap the response in fences mid-stream — fall back to
+  // a non-greedy match for the FIRST inner ```…``` block so we still
+  // extract the inner JSON. NOTE: callers that may see fenced
+  // prompt-echo content BEFORE the real response should skip this
+  // helper and walk the full text directly (see stageRunner.extractJson)
+  // — the first-fence heuristic locks onto the echoed schema and never
+  // reaches the actual model output.
   const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/);
   if (fence) s = fence[1].trim();
 
