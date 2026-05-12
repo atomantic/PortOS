@@ -112,7 +112,7 @@ export default function PromptRefineModal({ item, open, onClose }) {
 
   return (
     <Modal
-      open
+      open={open}
       onClose={onClose}
       size="xl"
       zIndexClassName="z-[70]"

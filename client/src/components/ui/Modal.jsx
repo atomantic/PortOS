@@ -45,7 +45,7 @@
  * the close in that case.
  */
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useId, useRef } from 'react';
 import { createPortal } from 'react-dom';
 
 const SIZE_CLASSES = {
@@ -103,7 +103,6 @@ const ALIGN_CLASSES = {
 // dev hot-reload.
 const modalStack = [];
 const escHandlers = new Map();
-let modalIdSeq = 0;
 
 function handleGlobalEsc(e) {
   if (e.key !== 'Escape' || modalStack.length === 0) return;
@@ -177,8 +176,10 @@ export default function Modal({
   ariaLabel,
 }) {
   const backdropRef = useRef(null);
-  const idRef = useRef(null);
-  if (idRef.current === null) idRef.current = ++modalIdSeq;
+  // `useId()` is React's render-safe stable id source — survives StrictMode's
+  // double-invoke without allocating extra ids the way a `modalIdSeq++`
+  // module-scope counter would.
+  const modalId = useId();
   // Latest handler refs — kept fresh on every render without re-running the
   // stack-registration effect. This decouples handler identity (which
   // changes every render when callers use inline arrow functions, e.g.
@@ -203,7 +204,7 @@ export default function Modal({
   //     so it can't fall through to an underlying modal.
   useEffect(() => {
     if (!open) return;
-    const id = idRef.current;
+    const id = modalId;
     escHandlers.set(id, () => {
       if (onEscRef.current) { onEscRef.current(); return; }
       if (closeOnEscRef.current) onCloseRef.current?.();
