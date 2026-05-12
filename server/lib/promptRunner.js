@@ -16,9 +16,14 @@
  * empty completion that doesn't set `error` but does set
  * `success: false`) used to flow through as a successful empty string.
  *
- * Returns `{ text, runId }`. `text` is the full streamed body; `runId`
- * is the persisted run id so callers can log it and surface
- * data/runs/<runId>/output.txt for offline debugging.
+ * Returns `{ text, runId, model }`. `text` is the full streamed body;
+ * `runId` is the persisted run id so callers can log it and surface
+ * data/runs/<runId>/output.txt for offline debugging; `model` is the
+ * effective model that actually executed after the per-provider
+ * override gate (null when neither the caller's model nor
+ * provider.defaultModel applies). Callers should log/return THIS
+ * `model`, not the value they passed in, so logs and run records
+ * stay honest about what the runner actually executed.
  */
 
 import { createRun, executeApiRun, executeCliRun } from '../services/runner.js';
