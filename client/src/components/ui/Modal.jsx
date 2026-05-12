@@ -121,19 +121,31 @@ function handleGlobalEsc(e) {
 }
 
 if (typeof window !== 'undefined') {
-  // Guard against double-install on Vite HMR. The module can re-evaluate when
-  // it (or one of its importers) is edited; without this guard the handler
-  // would stack up, with each copy referencing the stale modalStack from its
-  // own module instance.
+  // Install both window AND document keydown listeners. Bubble-phase event
+  // order on the same keystroke is: target → ... → document → window. A
+  // document-level handler installed by another component (e.g.
+  // useKeyboardHelp, AddToCollectionMenu's click-away effect) fires before
+  // our window listener, so without a document-level listener of our own
+  // those handlers could react to Esc while a modal is open and dismiss the
+  // wrong layer. Installing at both phases — and stopImmediatePropagation()
+  // at both — gives the top-most modal full ownership of the keystroke
+  // regardless of where competing listeners are bound.
+  //
+  // Guarded against double-install on Vite HMR. The module can re-evaluate
+  // when it (or one of its importers) is edited; without the globalThis
+  // flag the handlers would stack up, with each copy referencing the stale
+  // modalStack from its own module instance.
   if (!globalThis.__portos_modal_esc_installed) {
     window.addEventListener('keydown', handleGlobalEsc);
+    document.addEventListener('keydown', handleGlobalEsc);
     globalThis.__portos_modal_esc_installed = true;
   }
-  // On HMR dispose, tear down the listener so the next module instance can
-  // re-install it cleanly against its own modalStack/escHandlers.
+  // On HMR dispose, tear down both listeners so the next module instance
+  // can re-install them cleanly against its own modalStack/escHandlers.
   if (import.meta.hot) {
     import.meta.hot.dispose(() => {
       window.removeEventListener('keydown', handleGlobalEsc);
+      document.removeEventListener('keydown', handleGlobalEsc);
       delete globalThis.__portos_modal_esc_installed;
     });
   }
