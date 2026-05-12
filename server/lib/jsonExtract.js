@@ -79,38 +79,45 @@ export function findBalancedBlocks(s, { startChar = '{', endChar = '}' } = {}) {
  *     `}}]` → `}]}` (not dropping the brace) keeps the brace count
  *     correct so the outer container still closes.
  *
- * Returns the parsed value on success, or `null` if all repairs fail.
+ * Returns `{ value }` on success (where `value` may be a valid JSON
+ * `null`); returns `{ error }` if all repairs fail. The wrapper lets a
+ * top-level `null` response flow through as a real parsed value rather
+ * than colliding with a "did not parse" sentinel.
  *
  * @param {string} jsonText — candidate JSON text
- * @returns {unknown|null} — parsed value or null
+ * @returns {{ value: unknown } | { error: Error }}
  */
 export function tryParseWithRepair(jsonText) {
-  if (typeof jsonText !== 'string') return null;
+  if (typeof jsonText !== 'string') return { error: new Error('Non-string input') };
   // `[...]` placeholder cleanup runs before the first parse so a block
   // containing only that token (no other JSON errors) succeeds on the
   // first try instead of falling into the trailing-comma branch.
   const initial = jsonText.replace(/\[\s*\.\.\.\s*\]/g, '[]');
-  const initialParse = safeParse(initial);
-  if (initialParse !== undefined) return initialParse;
+  const initialResult = safeParse(initial);
+  if (!initialResult.error) return initialResult;
 
   const noTrailing = initial.replace(/,(\s*[}\]])/g, '$1');
   if (noTrailing !== initial) {
-    const trailingParse = safeParse(noTrailing);
-    if (trailingParse !== undefined) return trailingParse;
+    const trailingResult = safeParse(noTrailing);
+    if (!trailingResult.error) return trailingResult;
   }
 
   const fixedOrphan = noTrailing.replace(/}\s*}\s*]/g, '}]}');
-  const orphanParse = safeParse(fixedOrphan);
-  if (orphanParse !== undefined) return orphanParse;
+  const orphanResult = safeParse(fixedOrphan);
+  if (!orphanResult.error) return orphanResult;
 
-  return null;
+  // Surface the last attempt's parse error so the caller can include the
+  // concrete reason ("Unexpected token } in JSON at position 47") in its
+  // error message rather than a generic "no JSON block found".
+  return { error: orphanResult.error };
 }
 
-// `undefined` is the "did not parse" sentinel — using a sentinel rather
-// than try/catch in callers lets `null` flow through as a valid parsed
-// value (some LLMs legitimately return JSON `null`).
+// Returns `{ value }` on success or `{ error }` on failure. The discriminated
+// shape lets a JSON `null` literal flow through as a valid parsed value
+// (some LLMs legitimately return `null`); a single-value-with-sentinel
+// API can't distinguish "parsed `null`" from "did not parse."
 function safeParse(text) {
-  try { return JSON.parse(text); } catch { return undefined; }
+  try { return { value: JSON.parse(text) }; } catch (error) { return { error }; }
 }
 
 /**
@@ -155,24 +162,29 @@ export function extractJson(text, { shapePredicate, blockType = 'object' } = {})
   const candidates = findBalancedBlocks(s, { startChar, endChar });
   if (!candidates.length) candidates.push(s);
 
-  let firstParsed;
+  // `parsedHolder` carries the first parseable block as `{ value }` even
+  // when it doesn't match shapePredicate, so a top-level `null` literal
+  // can still flow through as a real parsed value on fallback.
+  let parsedHolder;
+  let lastError;
   let lastPreview = s.slice(0, 200);
   for (const block of candidates) {
-    const parsed = tryParseWithRepair(block);
-    if (parsed !== null && parsed !== undefined) {
-      if (!shapePredicate || shapePredicate(parsed)) {
-        return { value: parsed };
-      }
-      if (firstParsed === undefined) firstParsed = parsed;
-    } else {
+    const result = tryParseWithRepair(block);
+    if (result.error) {
+      lastError = result.error;
       lastPreview = block.slice(0, 200);
+      continue;
     }
+    if (!shapePredicate || shapePredicate(result.value)) {
+      return { value: result.value };
+    }
+    if (parsedHolder === undefined) parsedHolder = result;
   }
 
-  if (firstParsed !== undefined) return { value: firstParsed };
+  if (parsedHolder !== undefined) return parsedHolder;
   return {
     value: undefined,
-    lastError: new Error('No matching JSON block found'),
+    lastError: lastError || new Error('No matching JSON block found'),
     lastPreview,
   };
 }

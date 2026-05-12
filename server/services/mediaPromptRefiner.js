@@ -45,11 +45,12 @@ function extractRefinementJson(raw) {
   let placeholderSeen = false;
   let lastErr;
   for (const block of candidates) {
-    const value = tryParseWithRepair(block);
-    if (value === null) {
-      lastErr = new Error('JSON parse failed');
+    const result = tryParseWithRepair(block);
+    if (result.error) {
+      lastErr = result.error;
       continue;
     }
+    const { value } = result;
     if (value && typeof value === 'object' && typeof value.prompt === 'string') {
       if (isPlaceholderPrompt(value.prompt)) { placeholderSeen = true; }
       else return value;

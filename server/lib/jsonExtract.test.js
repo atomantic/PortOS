@@ -36,11 +36,11 @@ describe('jsonExtract.findBalancedBlocks', () => {
 
 describe('jsonExtract.tryParseWithRepair', () => {
   it('parses clean JSON in the happy path', () => {
-    expect(tryParseWithRepair('{"a":1}')).toEqual({ a: 1 });
+    expect(tryParseWithRepair('{"a":1}')).toEqual({ value: { a: 1 } });
   });
 
   it('repairs trailing commas before `}` and `]`', () => {
-    expect(tryParseWithRepair('{"a":[1,2,],"b":1,}')).toEqual({ a: [1, 2], b: 1 });
+    expect(tryParseWithRepair('{"a":[1,2,],"b":1,}')).toEqual({ value: { a: [1, 2], b: 1 } });
   });
 
   it('repairs Codex `}}]` orphan-brace corruption on a brace-balanced slice', () => {
@@ -53,31 +53,36 @@ describe('jsonExtract.tryParseWithRepair', () => {
     // shape, lifted from worldBuilderExpand's real production failure.
     const bad = '{"stylePrompt":"x","categories":{"vehicles":{"variations":[{"label":"a","prompt":"…blister"}}]}}';
     expect(tryParseWithRepair(bad)).toEqual({
-      stylePrompt: 'x',
-      categories: { vehicles: { variations: [{ label: 'a', prompt: '…blister' }] } },
+      value: {
+        stylePrompt: 'x',
+        categories: { vehicles: { variations: [{ label: 'a', prompt: '…blister' }] } },
+      },
     });
   });
 
   it('replaces literal `[...]` placeholder elisions with empty arrays', () => {
-    expect(tryParseWithRepair('{"vars":[...]}')).toEqual({ vars: [] });
+    expect(tryParseWithRepair('{"vars":[...]}')).toEqual({ value: { vars: [] } });
   });
 
-  it('returns null when no repair can recover the input', () => {
-    expect(tryParseWithRepair('{ this is not valid json')).toBeNull();
-    expect(tryParseWithRepair('garbage')).toBeNull();
+  it('returns the concrete parse error when no repair can recover the input', () => {
+    const r1 = tryParseWithRepair('{ this is not valid json');
+    expect(r1.value).toBeUndefined();
+    expect(r1.error).toBeInstanceOf(Error);
+    expect(r1.error.message).toMatch(/JSON/i);
+    const r2 = tryParseWithRepair('garbage');
+    expect(r2.error).toBeInstanceOf(Error);
   });
 
-  it('returns null for non-string input', () => {
-    expect(tryParseWithRepair(null)).toBeNull();
-    expect(tryParseWithRepair(42)).toBeNull();
+  it('returns an error for non-string input', () => {
+    expect(tryParseWithRepair(null).error).toBeInstanceOf(Error);
+    expect(tryParseWithRepair(42).error).toBeInstanceOf(Error);
   });
 
-  it('preserves JSON `null` as a valid parsed value (not the failure sentinel)', () => {
-    expect(tryParseWithRepair('null')).toBeNull();
-    // Internally `null` flows through as a real value — only `undefined`
-    // represents "didn't parse." Exposed shape: a `null` JSON literal
-    // returns `null`, which a caller can distinguish via the `value`
-    // wrapper in extractJson().
+  it('preserves JSON `null` as a valid parsed value distinguishable from parse failure', () => {
+    // A top-level JSON `null` literal is a valid parsed value — the
+    // `{ value }` wrapper lets callers distinguish it from a parse
+    // failure (which returns `{ error }`).
+    expect(tryParseWithRepair('null')).toEqual({ value: null });
   });
 });
 
@@ -151,6 +156,27 @@ describe('jsonExtract.extractJson', () => {
     expect(value).toBeUndefined();
     expect(lastError).toBeInstanceOf(Error);
     expect(lastPreview).toContain('broken');
+  });
+
+  it('surfaces the concrete JSON.parse error message (not a generic "no JSON block found")', () => {
+    // Regression: when every candidate block fails parsing, `lastError`
+    // must carry the actual JSON.parse exception so downstream error
+    // context (e.g. ServerError reason) is informative.
+    const { value, lastError } = extractJson('{ "invalid": }');
+    expect(value).toBeUndefined();
+    // V8 / SpiderMonkey error messages differ but both reference JSON
+    // and contain a position marker. The important thing is that it's
+    // NOT the generic fallback message.
+    expect(lastError.message).not.toMatch(/No matching JSON block found/);
+    expect(lastError.message).toMatch(/JSON|Unexpected|token/i);
+  });
+
+  it('successfully extracts a top-level JSON `null` literal', () => {
+    // A bare `null` response is a valid JSON value — extractJson must
+    // not collapse it into a "did not parse" sentinel. Bracket-aware
+    // findBalancedBlocks won't find a block for `null` (no `{`/`[`),
+    // so the fallback `candidates.push(s)` path handles it.
+    expect(extractJson('null')).toEqual({ value: null });
   });
 
   it('returns an Empty-LLM-response sentinel for empty input', () => {
