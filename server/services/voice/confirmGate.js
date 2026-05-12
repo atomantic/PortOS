@@ -8,8 +8,13 @@
 // voice pipeline (before the LLM runs) and routed through resolvePending():
 //
 //   "confirm" / "yes do it" / "go ahead" → re-issue the click side-effect
-//   "no" / "cancel" / "stop" / anything else → clear the pending state and
-//   fall through to the normal LLM turn so the user can do something else.
+//   "no" / "cancel" / "stop"             → drop the pending click and send a
+//                                          short spoken acknowledgement
+//                                          ("Cancelled.") without running the
+//                                          LLM
+//   anything else (ambiguous)            → clear the pending state and fall
+//                                          through to the normal LLM turn so
+//                                          the user can do something else.
 //
 // Keeping this as a pure module (no I/O, no socket emits; the clock is
 // injectable via `createdAt` / `now` parameters and only defaults to

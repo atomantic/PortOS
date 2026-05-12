@@ -447,6 +447,11 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
   let lastLlm = null;
   let finalText = '';
   const toolRuns = []; // [{ name, ok, ms, error }]
+  // Set when a tool returned confirmation_required:true. We short-circuit the
+  // turn server-side rather than trusting system-prompt instructions to keep
+  // the LLM from issuing further tool calls in the same turn. The pending
+  // record was already stashed on state by the tool itself.
+  let confirmationPrompt = null;
 
   for (let iter = 0; iter < maxIterations; iter++) {
     if (signal?.aborted) break;
@@ -575,7 +580,33 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
         tool_call_id: tc.resolvedId,
         content: JSON.stringify(result),
       });
+      // Destructive-action short-circuit: the tool stashed a pending record on
+      // state and returned a deterministic confirmation prompt. Stop executing
+      // further tool calls in this turn AND skip the next LLM iteration so the
+      // model can't (a) issue more tool calls that overwrite pendingDestructive
+      // or fire unrelated side effects, or (b) paraphrase the prompt in its
+      // own voice. The next user utterance ("yes"/"cancel") is handled by the
+      // pre-LLM gate in this same function.
+      if (result?.confirmation_required) {
+        confirmationPrompt = result.summary || 'That looks destructive — confirm by saying "yes" or "cancel" to skip.';
+        break;
+      }
     }
+    if (confirmationPrompt) break;
+  }
+
+  // Destructive-confirm short-circuit: drain any already-streamed sentences
+  // (the model may have spoken "Okay, deleting that" before the tool call),
+  // then speak the deterministic confirmation prompt and end the turn. This
+  // replaces relying on system-prompt instructions to keep the LLM from
+  // continuing tool iterations — the gate is enforced server-side regardless
+  // of what the model would have done next.
+  if (confirmationPrompt && !signal?.aborted) {
+    if (pending.trim()) synthQueue = synthQueue.then(() => speak(pending.trim()));
+    await synthQueue;
+    tlog(`confirm.prompt "${confirmationPrompt.slice(0, 80)}"`);
+    await speakSyntheticReply(confirmationPrompt);
+    return { transcript: userText, reply: confirmationPrompt };
   }
 
   if (pending.trim()) synthQueue = synthQueue.then(() => speak(pending.trim()));
