@@ -385,6 +385,38 @@ describe('fileUtils', () => {
       expect(() => assertSafeFilename('foo.png', { extensions: [] })).toThrow(/extensions allowlist is required/);
     });
 
+    it('throws on extensions that do not start with a dot (programmer error)', () => {
+      // Bare suffix like 'png' would also match 'not-an-imagepng' if we didn't
+      // enforce the leading-dot rule — that's a serious validation hole.
+      expect(() => assertSafeFilename('foo.png', { extensions: ['png'] }))
+        .toThrow(/each extension must be a non-empty string starting with/);
+      expect(() => assertSafeFilename('foo.png', { extensions: ['.png', 'jpg'] }))
+        .toThrow(/each extension must be a non-empty string starting with/);
+      expect(() => assertSafeFilename('foo.png', { extensions: [''] }))
+        .toThrow(/each extension must be a non-empty string starting with/);
+      expect(() => assertSafeFilename('foo.png', { extensions: ['.'] }))
+        .toThrow(/each extension must be a non-empty string starting with/);
+      expect(() => assertSafeFilename('foo.png', { extensions: [123] }))
+        .toThrow(/each extension must be a non-empty string starting with/);
+    });
+
+    it('honors requiredMessage override for the missing-input case only', () => {
+      // Backward-compat path: wrappers that used to throw a fixed phrase
+      // (e.g. "Filename required" / "Invalid filename") can preserve that
+      // message without affecting the invalid-input message.
+      expect(() => assertSafeFilename('', {
+        extensions: ['.safetensors'],
+        subject: 'LoRA filename',
+        requiredMessage: 'Filename required',
+      })).toThrow(/^Filename required$/);
+      // Invalid path still uses the subject-derived message.
+      expect(() => assertSafeFilename('foo.jpg', {
+        extensions: ['.safetensors'],
+        subject: 'LoRA filename',
+        requiredMessage: 'Filename required',
+      })).toThrow(/^Invalid LoRA filename$/);
+    });
+
     it('attaches 400 status + VALIDATION_ERROR code on the thrown ServerError', () => {
       try {
         assertSafeFilename('bad/path.png', { extensions: ['.png'] });

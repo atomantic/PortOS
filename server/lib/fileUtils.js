@@ -535,20 +535,35 @@ export function formatBytes(bytes) {
  * from Windows clients too.
  *
  * @param {string} filename
- * @param {{ extensions: string[], subject?: string }} opts
+ * @param {{ extensions: string[], subject?: string, requiredMessage?: string }} opts
  *   - `extensions`: list of allowed extensions including the leading dot
- *     (`['.png']`, `['.safetensors']`, etc.). Case-insensitive match.
+ *     (`['.png']`, `['.safetensors']`, etc.). Case-insensitive match. Each
+ *     entry MUST be a non-empty string starting with `.` — otherwise a bare
+ *     suffix like `'png'` would also match `'not-an-imagepng'` and weaken
+ *     the validation, so we treat that as a programmer error and throw.
  *   - `subject`: optional noun for the error message ("LoRA filename" →
  *     "Invalid LoRA filename"). Defaults to "filename".
+ *   - `requiredMessage`: optional exact message used when `filename` is
+ *     missing/empty — preserves backward-compat for wrappers that used to
+ *     throw a specific phrase (e.g. `Filename required` for the gallery
+ *     case). When omitted, the message is derived from `subject`.
  */
-export function assertSafeFilename(filename, { extensions, subject = 'filename' } = {}) {
+export function assertSafeFilename(filename, { extensions, subject = 'filename', requiredMessage } = {}) {
   if (!Array.isArray(extensions) || extensions.length === 0) {
     throw new Error('assertSafeFilename: extensions allowlist is required');
+  }
+  for (const ext of extensions) {
+    if (typeof ext !== 'string' || ext.length < 2 || !ext.startsWith('.')) {
+      throw new Error(`assertSafeFilename: each extension must be a non-empty string starting with "." (got ${JSON.stringify(ext)})`);
+    }
   }
   const subjectText = subject || 'filename';
   if (!filename || typeof filename !== 'string') {
     const Subject = `${subjectText[0].toUpperCase()}${subjectText.slice(1)}`;
-    throw new ServerError(`${Subject} required`, { status: 400, code: 'VALIDATION_ERROR' });
+    const message = typeof requiredMessage === 'string' && requiredMessage.length > 0
+      ? requiredMessage
+      : `${Subject} required`;
+    throw new ServerError(message, { status: 400, code: 'VALIDATION_ERROR' });
   }
   // Null bytes terminate C strings — some POSIX syscalls treat the prefix
   // as a separate path. Reject up front so it can't reach the FS layer.

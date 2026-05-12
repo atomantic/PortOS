@@ -69,8 +69,15 @@ export const readSidecar = async (filename) => {
 // shared `assertSafeFilename` helper in fileUtils.js (which also handles
 // gallery .png assertions). Substring `..` is allowed because
 // slugifyForFilename can produce names like `foo..bar` from non-ASCII input.
+// `requiredMessage` preserves the historical "Filename required" wording
+// (instead of the subject-derived "LoRA filename required") so any client
+// or test that pattern-matches on the missing-input message keeps working.
 export const assertSafeLoraFilename = (filename) => {
-  assertSafeFilename(filename, { extensions: ['.safetensors'], subject: 'LoRA filename' });
+  assertSafeFilename(filename, {
+    extensions: ['.safetensors'],
+    subject: 'LoRA filename',
+    requiredMessage: 'Filename required',
+  });
 };
 
 // LoRAs without sidecars get a minimal "legacy" entry with sensible defaults

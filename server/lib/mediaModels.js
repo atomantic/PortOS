@@ -403,6 +403,14 @@ const normalizeRegistry = (parsed) => {
 // auto-recover (that would defeat real deletions), but we make the drift
 // loud at boot so a user / sysadmin can act on it.
 //
+// IMPORTANT: this state is structurally indistinguishable from an INTENTIONAL
+// deletion — `appendNewlyShippedEntries` skips re-adding ids that are in
+// shippedIds but not userList for exactly that reason. So this log will also
+// fire every boot for built-ins the user deliberately removed. We surface it
+// anyway because silent skipping was the bug; the message tells the user how
+// to silence it (delete `_shippedDefaults.<where>.<id>`) if the absence is
+// intentional, rather than implying they should always restore.
+//
 // `kind` is either 'image' (single list, image[]) or 'video' (per-platform
 // macos / windows lists).
 const warnDrift = (kind, platform, shippedIds, defaultIds, presentIds) => {
@@ -413,7 +421,7 @@ const warnDrift = (kind, platform, shippedIds, defaultIds, presentIds) => {
     if (!defaultSet.has(id)) continue;     // not a current built-in; ignore
     if (presentSet.has(id)) continue;      // present — no drift
     const where = platform ? `${kind}.${platform}` : kind;
-    console.log(`⚠️ media-models drift: built-in "${id}" was shipped but is missing from ${where}[] — restore it manually or delete _shippedDefaults.${where} to re-bootstrap`);
+    console.log(`⚠️ media-models drift: built-in "${id}" was shipped but is missing from ${where}[] — if you intentionally deleted it, remove "${id}" from _shippedDefaults.${where} to silence; otherwise restore it manually or delete _shippedDefaults.${where} to re-bootstrap`);
   }
 };
 

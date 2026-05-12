@@ -515,8 +515,15 @@ export async function generateImage({ pythonPath, prompt, negativePrompt = '', m
 // Delegates to the shared `assertSafeFilename` helper in fileUtils.js.
 // Substring `..` is allowed (e.g. `my..render.png` is fine) because the
 // helper only rejects the exact-string traversal cases.
+// `requiredMessage` preserves the original "Invalid filename" wording for
+// the missing-input case so existing client error-message expectations
+// (and the previously-shipped error-middleware contract) don't shift.
 export function assertGalleryFilename(filename) {
-  assertSafeFilename(filename, { extensions: ['.png'], subject: 'filename' });
+  assertSafeFilename(filename, {
+    extensions: ['.png'],
+    subject: 'filename',
+    requiredMessage: 'Invalid filename',
+  });
 }
 
 // Returns `{ path, metadata }`. `path` is the resolved sidecar location, or
