@@ -15,7 +15,7 @@
  */
 
 import { ServerError } from './errorHandler.js';
-import { extractJson as extractJsonShared, findBalancedBlocks, tryParseWithRepair } from './jsonExtract.js';
+import { findBalancedBlocks, tryParseWithRepair } from './jsonExtract.js';
 import { providerHonorsModelOverride, runPromptThroughProvider } from './promptRunner.js';
 import { stripCodeFences } from './aiProvider.js';
 import { getActiveProvider, getProviderById } from '../services/providers.js';
@@ -144,11 +144,12 @@ export function extractJson(text) {
     lastError = parsed.error;
   }
 
-  // Last resort: defer to extractJsonShared for the typed `lastError`
-  // message wording that callers may have come to depend on.
-  const fallback = extractJsonShared(text);
-  if (fallback.value !== undefined) return fallback.value;
-  throw new Error(`Invalid JSON in AI response: ${fallback.lastError?.message || lastError?.message || 'no JSON block found'}`);
+  // No fallback to jsonExtract.extractJson here: that helper grabs the
+  // first inner ```…``` fenced block, which is exactly the prompt-echo
+  // failure mode this implementation was rewritten to avoid. Surface
+  // the last parse error from the candidate loop so callers see the
+  // concrete reason instead of a generic "no JSON block found".
+  throw new Error(`Invalid JSON in AI response: ${lastError?.message || 'no JSON block found'}`);
 }
 
 /**
