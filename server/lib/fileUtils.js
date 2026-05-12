@@ -545,8 +545,11 @@ export function formatBytes(bytes) {
  *     "Invalid LoRA filename"). Defaults to "filename".
  *   - `requiredMessage`: optional exact message used when `filename` is
  *     missing/empty — preserves backward-compat for wrappers that used to
- *     throw a specific phrase (e.g. `Filename required` for the gallery
- *     case). When omitted, the message is derived from `subject`.
+ *     throw a specific phrase. The gallery wrapper passes `'Invalid filename'`
+ *     (its pre-refactor implementation threw that for every failure, including
+ *     missing-input); the LoRA wrapper passes `'Filename required'` to match
+ *     its historical wording. When omitted, the message is derived from
+ *     `subject` (e.g. `'Filename required'` / `'LoRA filename required'`).
  */
 export function assertSafeFilename(filename, { extensions, subject = 'filename', requiredMessage } = {}) {
   if (!Array.isArray(extensions) || extensions.length === 0) {

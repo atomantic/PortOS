@@ -77,15 +77,31 @@ export function buildCliArgs(provider) {
   return args;
 }
 
-// Detects whether the provider's stored argv already pins a model. We
-// check both flag forms (`--model` / `-m`) and both styles (separated
-// `--model x` and joined `--model=x`). gemini-cli is the only one that
-// uses `-m` short form; checking it on claude-code too is harmless
+// Detects whether the provider's stored argv already pins a model with a
+// usable value. We check both flag forms (`--model` / `-m`) and both styles
+// (separated `--model x` and joined `--model=x`). gemini-cli is the only
+// one that uses `-m` short form; checking it on claude-code too is harmless
 // (claude-code doesn't define a `-m` short flag).
+//
+// A separated flag with no value following (`['--model']` at end of argv,
+// or `['--model', '--other']`) is treated as NOT a baked-in pin — the CLI
+// would reject the argv at runtime anyway, and pretending it's a pin would
+// also make refiners report `null` (from extractBakedModel) and skip
+// injecting our own model. Better to leave injection on and let
+// buildCliArgs fix the broken argv by appending a valid `--model X`.
 export function hasModelFlag(args) {
   if (!Array.isArray(args)) return false;
-  return args.some((a) => a === '--model' || a === '-m'
-    || (typeof a === 'string' && (a.startsWith('--model=') || a.startsWith('-m='))));
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (typeof a !== 'string') continue;
+    if (a.startsWith('--model=') && a.length > '--model='.length) return true;
+    if (a.startsWith('-m=') && a.length > '-m='.length) return true;
+    if (a === '--model' || a === '-m') {
+      const next = args[i + 1];
+      if (typeof next === 'string' && next.length > 0 && !next.startsWith('-')) return true;
+    }
+  }
+  return false;
 }
 
 /**

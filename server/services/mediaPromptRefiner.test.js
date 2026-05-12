@@ -12,9 +12,20 @@ vi.mock('./runner.js', () => ({
   // honored, and to surface the args-baked model id when it isn't. Real
   // implementations live in runner.js; the mock just defers to a pure-ish
   // copy so the refiner sees realistic behavior in tests.
-  hasModelFlag: (args) => Array.isArray(args) && args.some((a) =>
-    a === '--model' || a === '-m'
-    || (typeof a === 'string' && (a.startsWith('--model=') || a.startsWith('-m=')))),
+  hasModelFlag: (args) => {
+    if (!Array.isArray(args)) return false;
+    for (let i = 0; i < args.length; i++) {
+      const a = args[i];
+      if (typeof a !== 'string') continue;
+      if (a.startsWith('--model=') && a.length > '--model='.length) return true;
+      if (a.startsWith('-m=') && a.length > '-m='.length) return true;
+      if (a === '--model' || a === '-m') {
+        const next = args[i + 1];
+        if (typeof next === 'string' && next.length > 0 && !next.startsWith('-')) return true;
+      }
+    }
+    return false;
+  },
   extractBakedModel: (args) => {
     if (!Array.isArray(args)) return null;
     for (let i = 0; i < args.length; i++) {

@@ -209,6 +209,19 @@ describe('hasModelFlag', () => {
     expect(hasModelFlag(undefined)).toBe(false);
     expect(hasModelFlag('--model foo')).toBe(false);
   });
+  it('returns false for a separated flag at end of argv (no value follows)', () => {
+    expect(hasModelFlag(['--model'])).toBe(false);
+    expect(hasModelFlag(['-m'])).toBe(false);
+    expect(hasModelFlag(['--other', '--model'])).toBe(false);
+  });
+  it('returns false when the value following looks like another flag', () => {
+    expect(hasModelFlag(['--model', '--other'])).toBe(false);
+    expect(hasModelFlag(['-m', '-x'])).toBe(false);
+  });
+  it('returns false for an empty joined value (--model= / -m=)', () => {
+    expect(hasModelFlag(['--model='])).toBe(false);
+    expect(hasModelFlag(['-m='])).toBe(false);
+  });
 });
 
 describe('extractBakedModel', () => {
