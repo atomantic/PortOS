@@ -1,9 +1,9 @@
 import { useEffect, useRef, useCallback } from 'react';
-import { createPortal } from 'react-dom';
 import { Keyboard, X } from 'lucide-react';
 import { useKeyboardHelp } from '../hooks/useKeyboardHelp';
 import { useScrollLock } from '../hooks/useScrollLock';
 import { modKey } from '../utils/platform';
+import Modal from './ui/Modal';
 
 const SHORTCUT_SECTIONS = [
   {
@@ -81,26 +81,23 @@ export default function KeyboardHelp() {
     }
   }, []);
 
-  if (!open) return null;
-
-  const overlay = (
-    <div className="fixed inset-0 z-[9999] flex items-start justify-center pt-[10vh]">
-      {/* Backdrop */}
-      <div
-        className="absolute inset-0 bg-black/60"
-        onClick={close}
-        aria-hidden="true"
-      />
-
-      {/* Modal */}
-      <div
-        ref={dialogRef}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="keyboard-help-title"
-        className="relative w-full max-w-lg mx-4 bg-port-card rounded-xl border border-port-border shadow-2xl overflow-hidden"
-        onKeyDown={handleKeyDown}
-      >
+  return (
+    <Modal
+      open={open}
+      onClose={close}
+      // Esc is owned by useKeyboardHelp (global toggle on `?` + dismiss on Esc
+      // even when focus is in an input) — disable Modal's Esc to avoid a
+      // double-handler.
+      closeOnEsc={false}
+      size="md"
+      align="top"
+      usePortal
+      zIndexClassName="z-[9999]"
+      backdropClassName="bg-black/60"
+      ariaLabelledBy="keyboard-help-title"
+      panelClassName="bg-port-card rounded-xl border border-port-border shadow-2xl overflow-hidden"
+    >
+      <div ref={dialogRef} onKeyDown={handleKeyDown}>
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-port-border">
           <div className="flex items-center gap-2.5">
@@ -147,8 +144,6 @@ export default function KeyboardHelp() {
           </p>
         </div>
       </div>
-    </div>
+    </Modal>
   );
-
-  return createPortal(overlay, document.body);
 }

@@ -88,3 +88,52 @@ export function normalizeVideo(v) {
     raw: v,
   };
 }
+
+// Sidecar field knowledge co-located with the normalize functions. Sidecars
+// were written with both snake_case (Python writer) and camelCase (Node writer)
+// over the project's history; the fallback chains keep older renders queueable
+// from <PromptRefineModal> without forcing a one-shot migration.
+//
+// Returns the subset of fields the queue-render API accepts for the given
+// kind. The `mode` here is the *original* render mode (defaulted when missing);
+// callers may override it (e.g. PromptRefineModal forces `mode: 'text'` for
+// video requeues so a missing source-image doesn't drop the render).
+export function getRenderConfigForItem(item) {
+  if (!item) return {};
+  const raw = item.raw || {};
+  if (item.kind === 'image') {
+    return {
+      mode: item.mode || 'local',
+      modelId: item.modelId,
+      width: item.width,
+      height: item.height,
+      steps: item.steps,
+      guidance: item.guidance,
+      cfgScale: raw.cfgScale ?? raw.cfg_scale,
+      seed: item.seed,
+      quantize: item.quantize,
+      loraFilenames: raw.loraFilenames ?? raw.lora_filenames,
+      loraScales: raw.loraScales ?? raw.lora_scales,
+    };
+  }
+  if (item.kind === 'video') {
+    return {
+      mode: item.mode || 'text',
+      modelId: item.modelId,
+      width: item.width,
+      height: item.height,
+      numFrames: item.numFrames,
+      fps: item.fps,
+      steps: raw.steps,
+      // Nullish coalescing — a deliberate `0` guidanceScale is valid for some
+      // video models and must survive the round-trip back into the queued payload.
+      guidanceScale: raw.guidanceScale ?? raw.guidance_scale ?? raw.guidance,
+      seed: raw.seed,
+      tiling: raw.tiling,
+      disableAudio: raw.disableAudio ?? raw.disable_audio,
+      loraFilenames: raw.loraFilenames ?? raw.lora_filenames,
+      loraScales: raw.loraScales ?? raw.lora_scales,
+    };
+  }
+  return {};
+}

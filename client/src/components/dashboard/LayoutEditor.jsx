@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { createPortal } from 'react-dom';
 import { X, ArrowUp, ArrowDown, Trash2, Plus, Save } from 'lucide-react';
 import { useScrollLock } from '../../hooks/useScrollLock';
 import { WIDGETS, WIDGETS_BY_ID } from './widgetRegistry.jsx';
 import toast from '../ui/Toast';
+import Modal from '../ui/Modal';
 
 // Keyboard-first editor. No drag-and-drop dep — reorder uses up/down buttons
 // (keyboard + touch friendly). Delete and "save as new" use inline state
@@ -78,9 +78,9 @@ export default function LayoutEditor({ layouts, activeLayoutId, limits, onClose,
 
   const close = useCallback(() => { onClose(); }, [onClose]);
 
-  const onKeyDown = (e) => {
-    if (e.key === 'Escape') close();
-  };
+  // Esc + backdrop dismiss live in <Modal>. Inline-mode inputs (duplicate name,
+  // delete confirm, switch confirm) call e.stopPropagation() on their own Esc
+  // handlers so they cancel the inline mode without closing the whole editor.
 
   const move = (index, delta) => {
     setWidgets((prev) => {
@@ -168,11 +168,18 @@ export default function LayoutEditor({ layouts, activeLayoutId, limits, onClose,
 
   const available = WIDGETS.filter((w) => !widgets.includes(w.id));
 
-  const overlay = (
-    <div className="fixed inset-0 z-[9999] flex items-start justify-center pt-[10vh]" onKeyDown={onKeyDown}>
-      <div className="absolute inset-0 bg-black/60" onClick={close} aria-hidden="true" />
-
-      <div role="dialog" aria-modal="true" aria-labelledby="layout-editor-title" className="relative w-full max-w-3xl mx-4 bg-port-card rounded-xl border border-port-border shadow-2xl overflow-hidden">
+  return (
+    <Modal
+      open
+      onClose={close}
+      size="xl"
+      align="top"
+      usePortal
+      zIndexClassName="z-[9999]"
+      backdropClassName="bg-black/60"
+      ariaLabelledBy="layout-editor-title"
+      panelClassName="bg-port-card rounded-xl border border-port-border shadow-2xl overflow-hidden"
+    >
         <div className="flex items-center justify-between px-5 py-4 border-b border-port-border">
           <h2 id="layout-editor-title" className="text-sm font-semibold text-white">Edit Layouts</h2>
           <button ref={closeRef} onClick={close} className="p-1 text-gray-500 hover:text-white transition-colors rounded" aria-label="Close">
@@ -314,9 +321,6 @@ export default function LayoutEditor({ layouts, activeLayoutId, limits, onClose,
             </div>
           )}
         </div>
-      </div>
-    </div>
+    </Modal>
   );
-
-  return createPortal(overlay, document.body);
 }

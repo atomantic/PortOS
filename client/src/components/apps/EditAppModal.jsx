@@ -5,6 +5,7 @@ import IconPicker from '../IconPicker';
 import * as api from '../../services/api';
 import { PORTOS_APP_ID } from '../../services/apiCore';
 import toast from '../ui/Toast';
+import Modal from '../ui/Modal';
 
 export default function EditAppModal({ app, onClose, onSave }) {
   const [formData, setFormData] = useState({
@@ -159,14 +160,20 @@ export default function EditAppModal({ app, onClose, onSave }) {
   };
 
   return (
-    <div
-      className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="edit-app-title"
+    <Modal
+      open
+      onClose={onClose}
+      // App-edit historically had no backdrop dismiss / Esc — the form is
+      // long-lived and an accidental Esc while editing nested JIRA pickers
+      // would lose state. Preserve that.
+      closeOnBackdrop={false}
+      closeOnEsc={false}
+      size="md"
+      backdropClassName="bg-black/50"
+      ariaLabelledBy="edit-app-title"
+      panelClassName="bg-port-card border border-port-border rounded-xl p-4 sm:p-6 max-h-[90vh] overflow-auto"
     >
-      <div className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6 w-full max-w-lg max-h-[90vh] overflow-auto">
-        <h2 id="edit-app-title" className="text-xl font-bold text-white mb-4">Edit App</h2>
+      <h2 id="edit-app-title" className="text-xl font-bold text-white mb-4">Edit App</h2>
 
         {error && (
           <div className="mb-4 p-3 bg-port-error/20 border border-port-error rounded-lg text-port-error text-sm">
@@ -671,7 +678,6 @@ export default function EditAppModal({ app, onClose, onSave }) {
             </button>
           </div>
         </form>
-      </div>
-    </div>
+    </Modal>
   );
 }

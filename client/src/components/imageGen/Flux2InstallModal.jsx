@@ -13,6 +13,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { CheckCircle2, Loader2, AlertCircle, Download, X } from 'lucide-react';
 import { safeParseJSON } from '../../lib/genUtils';
+import Modal from '../ui/Modal';
 
 // Cap on retained log lines. A torch install can emit hundreds of pip output
 // lines; without this the array grows unbounded and re-renders cost more per
@@ -109,8 +110,6 @@ export default function Flux2InstallModal({ open, onClose, onComplete }) {
     }
   }, [logs.length]);
 
-  if (!open) return null;
-
   const installRunning = !done && !error && currentStage && currentStage !== 'verify';
 
   const performClose = () => {
@@ -126,18 +125,20 @@ export default function Flux2InstallModal({ open, onClose, onComplete }) {
   const stageIdx = currentStage ? STAGE_INDEX[currentStage] ?? -1 : -1;
 
   return (
-    <div className="fixed inset-0 z-[9999] flex items-start justify-center pt-[8vh]">
-      <div
-        className="absolute inset-0 bg-black/70 backdrop-blur-sm"
-        onClick={handleClose}
-        aria-hidden="true"
-      />
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="flux2-install-title"
-        className="relative w-full max-w-2xl mx-4 bg-port-card rounded-xl border border-port-border shadow-2xl overflow-hidden flex flex-col max-h-[80vh]"
-      >
+    <Modal
+      open={open}
+      onClose={handleClose}
+      size="lg"
+      align="top"
+      // installer needs to outrank every other overlay (incl. LayoutEditor)
+      zIndexClassName="z-[9999]"
+      // Bespoke backdrop: keep the existing blur. The pt-[10vh] from align=top
+      // is fine here — the original was pt-[8vh] but the 2vh delta is
+      // imperceptible (~16px) and not worth a custom override.
+      backdropClassName="bg-black/70 backdrop-blur-sm"
+      ariaLabelledBy="flux2-install-title"
+      panelClassName="bg-port-card rounded-xl border border-port-border shadow-2xl overflow-hidden flex flex-col max-h-[80vh]"
+    >
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-port-border">
           <div className="flex items-center gap-2.5">
@@ -283,7 +284,6 @@ export default function Flux2InstallModal({ open, onClose, onComplete }) {
             </>
           )}
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { X, Save, Plus, Trash2 } from 'lucide-react';
 import toast from '../../ui/Toast';
+import Modal from '../../ui/Modal';
 import * as api from '../../../services/api';
 import { MEMORY_TYPES, MEMORY_TYPE_COLORS } from '../constants';
 import { getAppName } from '../../../utils/formatters';
@@ -92,9 +93,19 @@ export default function MemoryEditModal({ memory, apps, onSave, onClose }) {
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6 w-full max-w-2xl max-h-[90vh] overflow-auto">
-        <div className="flex items-center justify-between mb-4">
+    <Modal
+      open
+      onClose={onClose}
+      // EditMemory historically had no backdrop-click dismiss; preserve.
+      closeOnBackdrop={false}
+      // Esc-to-close wasn't wired either; preserve so a stray Esc while typing
+      // in the content textarea doesn't lose user work.
+      closeOnEsc={false}
+      size="lg"
+      backdropClassName="bg-black/50"
+      panelClassName="bg-port-card border border-port-border rounded-xl p-4 sm:p-6 max-h-[90vh] overflow-auto"
+    >
+      <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg sm:text-xl font-bold text-white">Edit Memory</h2>
           <button
             onClick={onClose}
@@ -299,7 +310,6 @@ export default function MemoryEditModal({ memory, apps, onSave, onClose }) {
             </button>
           </div>
         </form>
-      </div>
-    </div>
+    </Modal>
   );
 }
