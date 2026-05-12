@@ -489,6 +489,53 @@ export function VoiceTab() {
           </div>
         </label>
 
+        <label className="flex items-start gap-3 cursor-pointer md:col-span-2">
+          <input
+            type="checkbox"
+            checked={cfg.llm.proactive?.enabled === true}
+            onChange={(e) => patch('llm.proactive.enabled', e.target.checked)}
+            className="w-4 h-4 mt-0.5 shrink-0"
+          />
+          <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-baseline gap-x-3 gap-y-0.5 min-w-0 flex-1">
+            <span className="text-sm text-white">Allow proactive speech</span>
+            <span className="text-xs text-gray-500">
+              CoS can speak first for alerts and reminders. Disabled by default.
+            </span>
+          </div>
+        </label>
+
+        {cfg.llm.proactive?.enabled === true && (
+          <div className="md:col-span-2 grid grid-cols-1 sm:grid-cols-3 gap-3 pl-7">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={cfg.llm.proactive?.quietHours?.enabled === true}
+                onChange={(e) => patch('llm.proactive.quietHours.enabled', e.target.checked)}
+                className="w-4 h-4 shrink-0"
+              />
+              <span className="text-sm text-white">Quiet hours</span>
+            </label>
+            <Field label="Start (HH:MM)" hint="Local time">
+              <input
+                type="time"
+                value={cfg.llm.proactive?.quietHours?.start || '22:00'}
+                onChange={(e) => patch('llm.proactive.quietHours.start', e.target.value)}
+                disabled={!cfg.llm.proactive?.quietHours?.enabled}
+                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm disabled:opacity-50"
+              />
+            </Field>
+            <Field label="End (HH:MM)" hint="Local time">
+              <input
+                type="time"
+                value={cfg.llm.proactive?.quietHours?.end || '07:00'}
+                onChange={(e) => patch('llm.proactive.quietHours.end', e.target.value)}
+                disabled={!cfg.llm.proactive?.quietHours?.enabled}
+                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm disabled:opacity-50"
+              />
+            </Field>
+          </div>
+        )}
+
         {sttEngine === 'whisper' && (
           <label className="flex items-start gap-3 cursor-pointer md:col-span-2">
             <input

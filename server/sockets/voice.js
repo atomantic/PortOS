@@ -17,6 +17,32 @@ const HISTORY_MESSAGES = 24;
 // short; 4 KB covers any realistic spoken turn and rejects prompt-stuffing.
 const MAX_AUDIO_BYTES = 8 * 1024 * 1024;
 const MAX_TEXT_LEN = 4000;
+// Cap on the visible-text snapshot the client ships alongside each UI index.
+// Matches `MAX_TEXT_CHARS` in `client/src/services/domIndex.js` so the ~8 KB
+// limit documented on the `ui_read` tool is enforced consistently whether the
+// truncation happens client-side (well-behaved widget) or server-side here
+// (runaway / malicious client). The client already does word-boundary
+// truncation; we re-do it server-side so the guarantee holds end-to-end.
+const MAX_UI_TEXT_CHARS = 8000;
+
+// Truncate on the last whitespace boundary (space / newline / tab) so the
+// tail isn't a partial token, then append an ellipsis. Mirrors the
+// client-side truncation in `domIndex.js` so the shape of `ui.text` is
+// identical regardless of which side trimmed it. We match ANY whitespace,
+// not just space, because the client's `joined` snapshot inserts `\n\n`
+// between blocks — a strict space-only search would hard-cut mid-token
+// whenever the nearest break is a block separator.
+// Exported for direct unit testing without standing up a real socket.
+export const truncateOnWordBoundary = (text, max) => {
+  if (text.length <= max) return text;
+  const cut = text.slice(0, max);
+  // /\s\S*$/ finds the LAST whitespace character (followed by zero or more
+  // non-whitespace chars to end-of-string). Returns -1 when no whitespace
+  // exists at all (a single mega-token longer than `max`), in which case
+  // we hard-cut at `max` rather than emit an empty string.
+  const lastWs = cut.search(/\s\S*$/);
+  return `${cut.slice(0, lastWs > 0 ? lastWs : max)}…`;
+};
 
 const audioByteLength = (audio) => {
   if (Buffer.isBuffer(audio)) return audio.byteLength;
@@ -145,6 +171,10 @@ export const registerVoiceHandlers = (socket) => {
 
   socket.on('voice:interrupt', () => {
     state.ctrl?.abort();
+    // Clear any pending destructive-confirmation gate — after an interrupt
+    // the user's next "yes" should NOT be consumed as confirmation of a
+    // stale, abandoned destructive action.
+    state.pendingDestructive = null;
     socket.emit('voice:idle', { reason: 'interrupted' });
   });
 
@@ -152,6 +182,10 @@ export const registerVoiceHandlers = (socket) => {
     state.ctrl?.abort();
     state.history = [];
     state.dictation = { enabled: false, date: null };
+    // Same safety guard as voice:interrupt — a reset wipes conversation
+    // context, so a pending destructive click from the prior turn must
+    // not survive into the next utterance.
+    state.pendingDestructive = null;
     socket.emit('voice:dictation', { enabled: false });
     socket.emit('voice:idle', { reason: 'reset' });
   });
@@ -189,17 +223,21 @@ export const registerVoiceHandlers = (socket) => {
   // (ui_click, ui_fill, ui_select, ui_check).
   socket.on('voice:ui:index', (payload) => {
     if (!payload || typeof payload !== 'object') return;
-    const { path, title, elements } = payload;
+    const { path, title, elements, text } = payload;
     if (!Array.isArray(elements)) return;
-    // Cap to avoid prompt bloat from a malicious or runaway client.
-    const MAX = 200;
+    // Cap elements at 200 to bound prompt size from a malicious or runaway
+    // client. (The visible-text `text` field has its own ~8 KB cap, enforced
+    // below via `truncateOnWordBoundary(MAX_UI_TEXT_CHARS)` — see the
+    // module-level constant for the rationale.)
+    const MAX_ELEMENTS = 200;
     const filtered = elements
       .filter((e) => e && typeof e === 'object' && typeof e.ref === 'number' && typeof e.label === 'string')
-      .slice(0, MAX);
+      .slice(0, MAX_ELEMENTS);
     state.ui = {
       path: typeof path === 'string' ? path.slice(0, 256) : null,
       title: typeof title === 'string' ? title.slice(0, 120) : null,
       elements: filtered,
+      text: typeof text === 'string' ? truncateOnWordBoundary(text, MAX_UI_TEXT_CHARS) : null,
       updatedAt: Date.now(),
     };
     if (state.uiWaiters.length) {

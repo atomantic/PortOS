@@ -1,0 +1,256 @@
+import { describe, it, expect } from 'vitest';
+import {
+  DESTRUCTIVE_LABEL_RE,
+  isDestructiveLabel,
+  isAffirmative,
+  isNegative,
+  buildPending,
+  resolvePending,
+  isExpired,
+  PENDING_TTL_MS,
+} from './confirmGate.js';
+
+describe('isDestructiveLabel', () => {
+  it.each([
+    ['Delete', true],
+    ['delete account', true],
+    ['Remove member', true],
+    ['Discard changes', true],
+    ['Reset to defaults', true],
+    ['Clear filters', true],
+    ['DELETE', true],
+  ])('matches %s → %s', (label, expected) => {
+    expect(isDestructiveLabel(label)).toBe(expected);
+  });
+
+  it.each([
+    ['Save', false],
+    ['Cancel', false],
+    ['Cancellation', false],
+    ['Resettable', false], // word boundary blocks substring
+    ['Removable', false],
+    ['Cleared session', false], // trailing "ed" breaks the word boundary
+    ['', false],
+  ])('correctly classifies %s → %s', (label, expected) => {
+    expect(isDestructiveLabel(label)).toBe(expected);
+  });
+
+  it('matches the exact words clear/delete/remove/discard/reset', () => {
+    // Word boundary on both sides — "Clear filters" matches; "Cleared" does not.
+    // Safe-by-default: a false-positive (extra confirm) is fine; a false-negative
+    // (no gate) means a destructive click fires silently. We pick narrow matching.
+    expect(DESTRUCTIVE_LABEL_RE.test('Clear filters')).toBe(true);
+    expect(DESTRUCTIVE_LABEL_RE.test('Cleared session')).toBe(false);
+  });
+});
+
+describe('isAffirmative / isNegative', () => {
+  it.each([
+    'confirm',
+    'yes',
+    'yes do it',
+    'yes, please',
+    'do it',
+    'go ahead',
+    'proceed',
+    'continue',
+    'affirmative',
+    'OK',
+    'okay',
+    'Confirm.',
+  ])('treats "%s" as affirmative', (s) => {
+    expect(isAffirmative(s)).toBe(true);
+    expect(isNegative(s)).toBe(false);
+  });
+
+  it.each([
+    'no',
+    'cancel',
+    'stop',
+    'nope',
+    'never mind',
+    'nevermind',
+    "don't",
+    'dont',
+    'abort',
+    'negative',
+  ])('treats "%s" as negative', (s) => {
+    expect(isNegative(s)).toBe(true);
+    expect(isAffirmative(s)).toBe(false);
+  });
+
+  it('rejects unrelated sentences as neither', () => {
+    for (const s of [
+      'what time is it?',
+      'open my brain inbox',
+      'tell me a joke',
+      'remember to buy milk',
+    ]) {
+      expect(isAffirmative(s)).toBe(false);
+      expect(isNegative(s)).toBe(false);
+    }
+  });
+
+  it('strips surrounding quotes and trailing punctuation', () => {
+    expect(isAffirmative('"confirm"')).toBe(true);
+    expect(isAffirmative('yes!')).toBe(true);
+    expect(isNegative('cancel.')).toBe(true);
+  });
+
+  // Regression guard: quote-then-punctuation AND punctuation-then-quote both
+  // need to normalize down to the bare token. A single-pass strip that
+  // removes quotes before trailing punctuation drops `"confirm".` to
+  // `confirm"`, which silently fails the AFFIRM_RE match and discards a
+  // pending destructive action.
+  it.each([
+    '"confirm".',   // punctuation outside the closing quote
+    '"confirm."',   // punctuation inside the closing quote
+    "'yes'.",       // single quotes + outside punctuation
+    '"yes!"',       // exclamation inside quotes
+    '"go ahead."',  // multi-word affirmative inside quotes + punctuation
+  ])('handles quote/punctuation ordering "%s" as affirmative', (s) => {
+    expect(isAffirmative(s)).toBe(true);
+  });
+
+  it.each([
+    '"cancel".',
+    '"cancel."',
+    "'stop'.",
+    '"no!"',
+  ])('handles quote/punctuation ordering "%s" as negative', (s) => {
+    expect(isNegative(s)).toBe(true);
+  });
+
+  // STT engines (Whisper) commonly emit a trailing comma after a yes/no
+  // when the user takes a brief pause ("yes, delete it" gets transcribed
+  // with the comma intact even when the rest of the sentence is missing).
+  // Comma/colon/semicolon must be stripped along with sentence-terminator
+  // punctuation, otherwise the gate silently discards the pending action.
+  it.each(['yes,', 'yes;', 'yes:', 'confirm,', 'okay,', 'ok,'])(
+    'treats yes-with-trailing-punctuation "%s" as affirmative',
+    (s) => {
+      expect(isAffirmative(s)).toBe(true);
+    },
+  );
+
+  it.each(['no,', 'cancel,', 'stop,', 'cancel;', 'no:', 'never mind,'])(
+    'treats no-with-trailing-punctuation "%s" as negative',
+    (s) => {
+      expect(isNegative(s)).toBe(true);
+    },
+  );
+
+  // "okay cancel" / "ok no" etc. — bare "ok/okay" matches AFFIRM_RE, so
+  // without filler-tolerance in NEGATIVE_RE the user's intended cancel would
+  // be mis-executed as a destructive confirmation.
+  it.each([
+    'okay cancel',
+    'okay never mind',
+    'ok no',
+    'okay stop',
+    'ok cancel',
+  ])('treats filler "%s" as negative, not affirmative', (s) => {
+    expect(isNegative(s)).toBe(true);
+  });
+});
+
+describe('resolvePending', () => {
+  const pending = buildPending({
+    tool: 'ui_click',
+    args: { label: 'Delete' },
+    target: { ref: 5, label: 'Delete', kind: 'button' },
+  });
+
+  it('returns passthrough when no pending', () => {
+    expect(resolvePending(null, 'yes').action).toBe('passthrough');
+  });
+
+  it('execute on affirmative', () => {
+    const d = resolvePending(pending, 'yes');
+    expect(d.action).toBe('execute');
+    expect(d.pending).toBe(pending);
+  });
+
+  it('cancel on negative', () => {
+    const d = resolvePending(pending, 'cancel');
+    expect(d.action).toBe('cancel');
+  });
+
+  it('passthrough on ambiguous (user moved on without yes/no)', () => {
+    const d = resolvePending(pending, 'what time is it?');
+    expect(d.action).toBe('passthrough');
+  });
+
+  it('execute on "confirm"', () => {
+    expect(resolvePending(pending, 'confirm').action).toBe('execute');
+  });
+
+  it('cancel on "stop"', () => {
+    expect(resolvePending(pending, 'stop').action).toBe('cancel');
+  });
+
+  // Regression guard for the "okay cancel" class: negative must win over
+  // affirmative when the user prefixes a cancel word with "ok/okay".
+  it.each([
+    ['okay cancel', 'cancel'],
+    ['ok no', 'cancel'],
+    ['okay never mind', 'cancel'],
+  ])('classifies "%s" as %s (negative beats affirmative filler)', (utterance, expected) => {
+    expect(resolvePending(pending, utterance).action).toBe(expected);
+  });
+
+  // Regression guard for the "cancel meeting" class: sentences that start
+  // with a yes/no token but keep going must passthrough so the LLM can
+  // handle the new request, rather than being short-circuited with a
+  // synthetic "Cancelled." reply that drops the rest of the utterance.
+  it.each([
+    'cancel the meeting',
+    'stop the music',
+    'no problem with that',
+    'yes I want to go to lunch',
+    'delete the email from yesterday',
+  ])('passes through "%s" (yes/no prefix but full sentence)', (utterance) => {
+    expect(resolvePending(pending, utterance).action).toBe('passthrough');
+  });
+});
+
+describe('buildPending shape', () => {
+  it('records tool/args/target with createdAt', () => {
+    const before = Date.now();
+    const p = buildPending({
+      tool: 'ui_click',
+      args: { label: 'Reset' },
+      target: { ref: 7, label: 'Reset', kind: 'button' },
+    });
+    expect(p.tool).toBe('ui_click');
+    expect(p.args).toEqual({ label: 'Reset' });
+    expect(p.target).toEqual({ ref: 7, label: 'Reset', kind: 'button' });
+    expect(p.createdAt).toBeGreaterThanOrEqual(before);
+  });
+
+  it('accepts an injected createdAt for deterministic tests', () => {
+    const p = buildPending({
+      tool: 'ui_click',
+      args: { label: 'Delete' },
+      target: { ref: 1, label: 'Delete', kind: 'button' },
+      createdAt: 12345,
+    });
+    expect(p.createdAt).toBe(12345);
+  });
+});
+
+describe('isExpired', () => {
+  it('returns false for fresh pending', () => {
+    const p = buildPending({ tool: 'ui_click', args: {}, target: {} });
+    expect(isExpired(p, Date.now())).toBe(false);
+  });
+
+  it('returns true when older than TTL', () => {
+    const p = { tool: 'ui_click', args: {}, target: {}, createdAt: Date.now() - PENDING_TTL_MS - 1 };
+    expect(isExpired(p)).toBe(true);
+  });
+
+  it('returns false for null pending', () => {
+    expect(isExpired(null)).toBe(false);
+  });
+});

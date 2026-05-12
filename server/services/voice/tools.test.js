@@ -460,6 +460,101 @@ describe('getToolSpecsForIntent — ui_ask gating', () => {
   });
 });
 
+describe('ui_read', () => {
+  it('returns ok:false when no UI index is loaded', async () => {
+    const r = await dispatchTool('ui_read', {}, { state: { ui: null } });
+    expect(r.ok).toBe(false);
+    expect(r.summary).toMatch(/can't see/i);
+  });
+
+  it('returns ok:false when UI index has empty/missing text', async () => {
+    const r = await dispatchTool('ui_read', {}, { state: { ui: { text: '' } } });
+    expect(r.ok).toBe(false);
+  });
+
+  it('returns the page text content verbatim', async () => {
+    const text = 'Welcome to Tasks. Three tasks pending. Click to add another.';
+    const ctx = { state: { ui: { text, path: '/tasks', title: 'Tasks' } } };
+    const r = await dispatchTool('ui_read', {}, ctx);
+    expect(r.ok).toBe(true);
+    expect(r.content).toBe(text);
+    expect(r.path).toBe('/tasks');
+    expect(r.title).toBe('Tasks');
+    expect(r.chars).toBe(text.length);
+    expect(r.summary).toMatch(/Read page "Tasks"/);
+  });
+
+  it('honors summarize=true flag without altering content', async () => {
+    const text = 'long content here';
+    const ctx = { state: { ui: { text } } };
+    const r = await dispatchTool('ui_read', { summarize: true }, ctx);
+    expect(r.ok).toBe(true);
+    expect(r.summarize).toBe(true);
+    expect(r.content).toBe(text);
+  });
+
+  it('is gated on UI intent (read this page → ui_read present)', async () => {
+    const { specs } = getToolSpecsForIntent('read me what does this page say');
+    const names = specs.map((s) => s.function.name);
+    expect(names).toContain('ui_read');
+  });
+});
+
+describe('ui_click — destructive confirmation gate', () => {
+  const makeState = () => ({
+    ui: {
+      elements: [
+        { ref: 1, kind: 'button', label: 'Save' },
+        { ref: 2, kind: 'button', label: 'Delete account' },
+        { ref: 3, kind: 'button', label: 'Reset filters' },
+      ],
+    },
+  });
+
+  it('clicks non-destructive labels immediately', async () => {
+    const state = makeState();
+    const sideEffects = [];
+    const r = await dispatchTool('ui_click', { label: 'Save' }, { state, sideEffects });
+    expect(r.ok).toBe(true);
+    expect(r.confirmation_required).toBeUndefined();
+    expect(sideEffects).toHaveLength(1);
+    expect(sideEffects[0].type).toBe('ui:click');
+    expect(state.pendingDestructive).toBeUndefined();
+  });
+
+  it('stashes pending and asks for confirmation on destructive label', async () => {
+    const state = makeState();
+    const sideEffects = [];
+    const r = await dispatchTool('ui_click', { label: 'Delete account' }, { state, sideEffects });
+    expect(r.ok).toBe(true);
+    expect(r.confirmation_required).toBe(true);
+    expect(sideEffects).toHaveLength(0);
+    expect(state.pendingDestructive).toBeTruthy();
+    expect(state.pendingDestructive.tool).toBe('ui_click');
+    expect(state.pendingDestructive.target.label).toBe('Delete account');
+  });
+
+  it('also gates "Reset filters"', async () => {
+    const state = makeState();
+    const r = await dispatchTool('ui_click', { label: 'Reset' }, { state, sideEffects: [] });
+    expect(r.confirmation_required).toBe(true);
+  });
+
+  it('skips the gate when ctx.confirmed flag is set (re-issue path)', async () => {
+    const state = makeState();
+    const sideEffects = [];
+    const r = await dispatchTool(
+      'ui_click',
+      { label: 'Delete account' },
+      { state, sideEffects, confirmed: true },
+    );
+    expect(r.ok).toBe(true);
+    expect(r.confirmation_required).toBeUndefined();
+    expect(sideEffects).toHaveLength(1);
+    expect(state.pendingDestructive).toBeUndefined();
+  });
+});
+
 // image_generate uses imageGen.generateImage under the hood; mocked
 // above. The codexEnabledRef toggle drives the disabled-gate test.
 describe("image_generate", () => {

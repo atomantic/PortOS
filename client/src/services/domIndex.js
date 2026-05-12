@@ -122,6 +122,80 @@ const findTitle = () => {
   return truncate(document.title, 60);
 };
 
+// Cap on visible-text snapshot we ship to the server alongside the
+// interactable index. The `ui_read` voice tool returns this so the LLM can
+// answer "what does this say?" without an extra DOM trip. The same 8000
+// cap (and the same word-boundary truncation) is enforced server-side in
+// `server/sockets/voice.js` so the ~8 KB limit documented on `ui_read`
+// holds end-to-end whether the truncation happens here (well-behaved
+// widget) or there (runaway / malicious client).
+const MAX_TEXT_CHARS = 8000;
+
+// Drop chrome the user almost certainly didn't mean — nav rails, the floating
+// voice widget, toast banners. Keep <main> and dialogs so what's visually
+// front-and-center is what shows up in the snapshot. Falls back to whole-
+// body text for pages that don't put content in <main>.
+const TEXT_BLOCK_SELECTORS = ['main', '[role="dialog"]'];
+// Exclude:
+//  - chrome the user didn't mean (nav rails, asides, the floating voice widget)
+//  - non-rendered DOM (script/style/noscript)
+//  - explicitly hidden subtrees: [hidden] is the spec-blessed HTML attribute
+//    for hidden content (e.g., inactive tab panels in component libraries),
+//    and aria-hidden="true" covers content hidden from assistive tech.
+//    Without these, ui_read would include the textContent of tab panels that
+//    aren't visually on the page — the agent would then "read the page" and
+//    recite content from inactive tabs.
+const TEXT_EXCLUDE_SELECTORS = [
+  'nav',
+  'aside',
+  'script',
+  'style',
+  'noscript',
+  '[hidden]',
+  '[aria-hidden="true"]',
+  '[data-voice-widget]',
+];
+
+// Combined selector built once at module load so extractText doesn't pay the
+// O(selectors × DOM) cost of N separate querySelectorAll passes on every
+// snapshot. With ~8 exclude selectors and a deep page, that was the dominant
+// cost in the ui_read path.
+const TEXT_EXCLUDE_QUERY = TEXT_EXCLUDE_SELECTORS.join(',');
+
+// Extract visible textual content from a subtree. We clone the node first so
+// we can prune nav/aside/script subtrees without mutating the live DOM, then
+// pull textContent and collapse whitespace.
+const extractText = (node) => {
+  const clone = node.cloneNode(true);
+  clone.querySelectorAll(TEXT_EXCLUDE_QUERY).forEach((n) => n.remove());
+  const raw = clone.textContent || '';
+  return raw.replace(/\s+/g, ' ').trim();
+};
+
+const extractVisibleText = () => {
+  const blocks = [];
+  for (const sel of TEXT_BLOCK_SELECTORS) {
+    document.querySelectorAll(sel).forEach((node) => {
+      if (!isVisible(node)) return;
+      const t = extractText(node);
+      if (t) blocks.push(t);
+    });
+  }
+  if (!blocks.length) {
+    const fallback = document.body ? extractText(document.body) : '';
+    if (fallback) blocks.push(fallback);
+  }
+  const joined = blocks.join('\n\n');
+  if (joined.length <= MAX_TEXT_CHARS) return joined;
+  // Truncate on a word boundary so the tail isn't a partial token. Match
+  // ANY whitespace (space/newline/tab) as a boundary — `joined` inserts
+  // `\n\n` between blocks, so a strict space-only search would hard-cut
+  // mid-token when the closest break is the block separator.
+  const cut = joined.slice(0, MAX_TEXT_CHARS);
+  const lastWs = cut.search(/\s[^\s]*$/);
+  return `${cut.slice(0, lastWs > 0 ? lastWs : MAX_TEXT_CHARS)}…`;
+};
+
 export const buildIndex = () => {
   clearRefs();
   const root = pickRoot();
@@ -165,6 +239,7 @@ export const buildIndex = () => {
     path: window.location.pathname + window.location.search,
     title: findTitle(),
     elements,
+    text: extractVisibleText(),
   };
 };
 

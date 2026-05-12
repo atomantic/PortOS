@@ -13,15 +13,21 @@ import { checkAll, invalidateHealthCache } from '../services/voice/health.js';
 import { reconcile, verifyBinaries, verifyModels, downloadPiperVoice } from '../services/voice/bootstrap.js';
 import { synthesize, listVoices } from '../services/voice/tts.js';
 import { findPiperVoice } from '../services/voice/piper-voices.js';
+import { speakProactive, HHMM_RE, MAX_PROACTIVE_TEXT_LEN } from '../services/voice/proactiveSpeech.js';
 
 const router = Router();
 
 const VALID_TTS_ENGINES = new Set(['kokoro', 'piper']);
 const validEngine = (v) => VALID_TTS_ENGINES.has(v) ? v : undefined;
 
-// Match the Socket.IO-side cap so /test can't be used to bypass it with a
-// multi-megabyte string that would then take minutes to synthesize.
-const MAX_TEST_TEXT_LEN = 4000;
+// Shared cap for every REST endpoint that turns a text payload into TTS
+// audio (/test and /speak). Imported from proactiveSpeech.js so the
+// HTTP-layer cap and the function-boundary cap can't drift apart — if
+// someone bumps the proactive limit, the route cap moves with it. Both
+// caps exist on purpose: route-level for early rejection (no synthesis
+// work wasted), function-level as defense in depth for direct in-process
+// callers (CoS, scheduler) that bypass the route.
+const MAX_VOICE_TEXT_LEN = MAX_PROACTIVE_TEXT_LEN;
 
 // Partial schema — deepMerge fills in anything omitted, so every field is
 // optional. The point here is to reject unknown engine values and obvious
@@ -68,6 +74,14 @@ const voiceConfigPatchSchema = z.object({
     tools: z.object({
       enabled: z.boolean().optional(),
       maxIterations: z.number().int().min(1).max(10).optional(),
+    }).partial().optional(),
+    proactive: z.object({
+      enabled: z.boolean().optional(),
+      quietHours: z.object({
+        enabled: z.boolean().optional(),
+        start: z.string().regex(HHMM_RE).optional(),
+        end: z.string().regex(HHMM_RE).optional(),
+      }).partial().optional(),
     }).partial().optional(),
   }).partial().optional(),
   vad: z.object({
@@ -145,8 +159,8 @@ router.post('/piper/fetch', asyncHandler(async (req, res) => {
 router.post('/test', asyncHandler(async (req, res) => {
   const text = (req.body?.text || '').toString().trim();
   if (!text) return res.status(400).json({ error: 'text is required' });
-  if (text.length > MAX_TEST_TEXT_LEN) {
-    return res.status(400).json({ error: `text too long (${text.length} > ${MAX_TEST_TEXT_LEN} chars)` });
+  if (text.length > MAX_VOICE_TEXT_LEN) {
+    return res.status(400).json({ error: `text too long (${text.length} > ${MAX_VOICE_TEXT_LEN} chars)` });
   }
   const voice = (req.body?.voice || '').toString().trim() || undefined;
   const engine = validEngine((req.body?.engine || '').toString().trim());
@@ -166,6 +180,51 @@ router.post('/test', asyncHandler(async (req, res) => {
   res.setHeader('Content-Type', 'audio/wav');
   res.setHeader('X-TTS-Latency-Ms', String(latencyMs));
   res.send(wav);
+}));
+
+// POST /api/voice/speak — server-pushed proactive speech. The CoS (or any
+// internal subsystem) uses this to make the assistant speak first; clients
+// pick up the audio over the `voice:speak` socket event. Suppressed by
+// quiet hours / disabled flag — those return 200 with `{ ok: false, reason }`
+// rather than an HTTP error because suppression is the documented contract.
+const speakBodySchema = z.object({
+  // Trim first so whitespace-only payloads ("   ") fail the .min(1) check
+  // at the HTTP boundary with a 400, matching /api/voice/test's behavior
+  // instead of falling through to a 200 { ok:false, reason:'empty' }.
+  text: z.string().trim().min(1).max(MAX_VOICE_TEXT_LEN),
+  priority: z.enum(['low', 'normal', 'high']).optional(),
+  // Empty / whitespace-only `source` would otherwise satisfy `.optional()`
+  // and override speakProactive's default of `'cos'`, emitting payloads
+  // with `source: ''`. Treat whitespace-only as omitted so the default
+  // applies. (`.trim().min(1)` would have rejected the same input with
+  // a 400 — we prefer silent fall-through for an internal route.)
+  source: z.string().max(64).optional()
+    .transform((s) => {
+      const t = (s ?? '').trim();
+      return t === '' ? undefined : t;
+    }),
+});
+router.post('/speak', asyncHandler(async (req, res) => {
+  const parsed = speakBodySchema.safeParse(req.body || {});
+  if (!parsed.success) {
+    throw new ServerError(
+      `Invalid speak payload: ${parsed.error.issues.map((i) => `${i.path.join('.')} ${i.message}`).join('; ')}`,
+      { status: 400, code: 'VALIDATION_ERROR' },
+    );
+  }
+  const io = req.app.get('io');
+  // Fail fast on missing io — that's a server misconfiguration (Socket.IO
+  // never attached) and a 200 { ok:false, reason:'no-io' } would silently
+  // mask the bad state from monitoring. Quiet-hours / proactive-disabled
+  // still return 200 because those ARE expected suppression outcomes.
+  if (!io) {
+    throw new ServerError(
+      'voice subsystem misconfigured: io not attached',
+      { status: 500, code: 'VOICE_IO_UNAVAILABLE' },
+    );
+  }
+  const result = await speakProactive({ io, ...parsed.data });
+  res.json(result);
 }));
 
 export default router;

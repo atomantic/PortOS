@@ -17,6 +17,7 @@ import { runAsk, VALID_MODES as ASK_VALID_MODES } from '../askService.js';
 import * as imageGen from '../imageGen/index.js';
 import { imageGenEvents } from '../imageGenEvents.js';
 import { getSettings } from '../settings.js';
+import { isDestructiveLabel, buildPending } from './confirmGate.js';
 
 const DAILY_LOG_PATH = '/brain/daily-log';
 
@@ -171,6 +172,7 @@ const TOOL_GROUPS = {
   daily_log_stop_dictation: 'dailylog',
   daily_log_read: 'dailylog',
   ui_list_interactables: 'ui',
+  ui_read: 'ui',
   ui_click: 'ui',
   ui_fill: 'ui',
   ui_select: 'ui',
@@ -190,7 +192,7 @@ const TOOL_GROUPS = {
 
 // Loose on purpose — false positives are cheap (one extra tool), false
 // negatives are expensive (LLM guesses wrong or can't act).
-export const UI_INTENT_RE = /\b(click|press|tap|hit|open|go to|take me|show me|navigate|select|pick|switch|choose|tab|button|dropdown|field|input|fill|enter|type|write|check|uncheck|toggle|link|option|on (?:this|the) page|what(?:'s)? (?:on|here))\b/i;
+export const UI_INTENT_RE = /\b(click|press|tap|hit|open|go to|take me|show me|navigate|select|pick|switch|choose|tab|button|dropdown|field|input|fill|enter|type|write|check|uncheck|toggle|link|option|on (?:this|the) page|what(?:'s)? (?:on|here|does (?:this|the page))|read (?:this|the page|me (?:this|the page|what))|read (?:it )?(?:aloud|out))\b/i;
 // Strong form-fill signal: when the user is clearly directing content INTO
 // a specific field, brain_capture/daily_log_append must be suppressed even
 // if capture verbs appear inside the value (e.g. "fill description with
@@ -1036,6 +1038,46 @@ const TOOLS = [
   },
 
   {
+    name: 'ui_read',
+    description:
+      'Read back the visible text on the current page. Use when the user asks "what does this say?", "read this aloud", "what\'s on the page?", "read me the page". ' +
+      'Returns the user-visible textual content of the main content area (excluding nav rails, asides, and the voice widget itself). ' +
+      'Output is capped at ~8 KB; longer pages are tail-trimmed on a word boundary with an ellipsis. ' +
+      'Default behavior (summarize=false): read the returned `content` verbatim — do NOT summarize. ' +
+      'When the user asks for a summary instead ("what is this page about?", "summarize this page"), pass summarize=true and produce a short summary of `content` rather than reading it verbatim.',
+    parameters: {
+      type: 'object',
+      properties: {
+        summarize: {
+          type: 'boolean',
+          description: 'If true, the LLM may summarize before reading aloud (use when the user asks "what is this page about?" rather than "read this to me"). Default false — speak `content` verbatim.',
+        },
+      },
+    },
+    execute: async ({ summarize = false } = {}, ctx = {}) => {
+      const ui = ctx?.state?.ui;
+      if (!ui || typeof ui.text !== 'string' || !ui.text.trim()) {
+        return {
+          ok: false,
+          error: 'No page text available',
+          summary: "I can't see the page content right now — make sure the voice widget is loaded and try again.",
+        };
+      }
+      return {
+        ok: true,
+        path: ui.path,
+        title: ui.title,
+        content: ui.text,
+        chars: ui.text.length,
+        summarize: !!summarize,
+        // Keep `summary` short so the LLM message history isn't doubled — the
+        // full body lives in `content`.
+        summary: `Read page "${ui.title || ui.path || 'current page'}" (${ui.text.length} chars).`,
+      };
+    },
+  },
+
+  {
     name: 'ui_click',
     description: 'Click a tab, button, or link on the current page by visible label. "Select Memory tab" → label="Memory", kind="tab".',
     parameters: {
@@ -1049,6 +1091,26 @@ const TOOLS = [
     execute: async ({ label, kind } = {}, ctx = {}) => {
       const hit = findUiElement(ctx, label, kind);
       if (!hit.entry) return hit.err;
+      // Destructive-action confirmation gate. If the resolved label looks
+      // destructive (delete/remove/discard/reset/clear), stash a pending
+      // record on the per-session state and ask the LLM to prompt the user
+      // for spoken confirmation. The next user turn is intercepted by
+      // pipeline.js → resolvePending() which either re-issues the click or
+      // cancels. Skip if the caller already confirmed (re-issue path).
+      if (ctx.state && !ctx.confirmed && isDestructiveLabel(hit.entry.label)) {
+        ctx.state.pendingDestructive = buildPending({
+          tool: 'ui_click',
+          args: { label: hit.entry.label, kind: hit.entry.kind },
+          target: { ref: hit.entry.ref, label: hit.entry.label, kind: hit.entry.kind },
+        });
+        return {
+          ok: true,
+          confirmation_required: true,
+          label: hit.entry.label,
+          kind: hit.entry.kind,
+          summary: `That looks destructive — confirm by saying "yes" or "confirm" to ${hit.entry.label}, or "cancel" to skip.`,
+        };
+      }
       ctx.sideEffects?.push({ type: 'ui:click', target: { ref: hit.entry.ref, label: hit.entry.label } });
       return { ok: true, label: hit.entry.label, kind: hit.entry.kind, summary: `Clicked ${hit.entry.label}.` };
     },
