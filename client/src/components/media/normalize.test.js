@@ -88,6 +88,31 @@ describe('getRenderConfigForItem - image', () => {
     const cfg = getRenderConfigForItem(image);
     expect(cfg.mode).toBe('local');
   });
+
+  it('falls back to legacy loraPaths when loraFilenames is absent', () => {
+    // Older sidecars (pre-refactor) only persisted absolute loraPaths. The
+    // server image-gen route still accepts that legacy field, but the
+    // requeue payload from <PromptRefineModal> uses loraFilenames. Derive
+    // basenames so legacy items don't lose their LoRA configuration on
+    // refine-and-resubmit.
+    const image = normalizeImage({
+      filename: 'e.png',
+      prompt: '',
+      loraPaths: ['/abs/path/to/oldLora.safetensors', '/other/dir/styleA.safetensors'],
+    });
+    const cfg = getRenderConfigForItem(image);
+    expect(cfg.loraFilenames).toEqual(['oldLora.safetensors', 'styleA.safetensors']);
+  });
+
+  it('falls back to legacy snake-case lora_paths', () => {
+    const image = normalizeImage({
+      filename: 'f.png',
+      prompt: '',
+      lora_paths: ['C:\\loras\\winLora.safetensors'],
+    });
+    const cfg = getRenderConfigForItem(image);
+    expect(cfg.loraFilenames).toEqual(['winLora.safetensors']);
+  });
 });
 
 describe('getRenderConfigForItem - video', () => {
