@@ -23,6 +23,30 @@ describe('truncateOnWordBoundary', () => {
     expect(out).toBe('abcde…');
   });
 
+  // The client's extractVisibleText joins blocks with '\n\n', so the
+  // truncation must find the LAST whitespace of any kind — not just a
+  // literal space. Without this, a newline-separated block boundary
+  // landing before the cap would still hard-cut mid-token.
+  it('truncates on a newline boundary when no later space exists', () => {
+    // 'block one\n\nblock two longword' — cap=15 → 'block one\n\nbloc'
+    // The last whitespace before the partial 'bloc' is the second \n
+    // at index 10. Slice(0,10) = 'block one\n', then '…'.
+    const text = 'block one\n\nblock two longword';
+    const out = truncateOnWordBoundary(text, 15);
+    expect(out.endsWith('…')).toBe(true);
+    // Tail (before the ellipsis) is not a partial token from "block two".
+    expect(out).not.toMatch(/bloc…$/);
+    expect(out.startsWith('block one')).toBe(true);
+  });
+
+  it('truncates on a tab boundary when present', () => {
+    const text = 'col1\tcol2\tcol3-very-long-cell';
+    const out = truncateOnWordBoundary(text, 12);
+    expect(out.endsWith('…')).toBe(true);
+    // Whatever the tail is, it should not be a partial 'col3-very-long-cell' token.
+    expect(out).not.toMatch(/col3-…$/);
+  });
+
   it('matches the documented ~8 KB end-to-end cap', () => {
     // Build a long string of 5-char words separated by spaces.
     const word = 'aaaaa';

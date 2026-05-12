@@ -156,14 +156,18 @@ const TEXT_EXCLUDE_SELECTORS = [
   '[data-voice-widget]',
 ];
 
+// Combined selector built once at module load so extractText doesn't pay the
+// O(selectors × DOM) cost of N separate querySelectorAll passes on every
+// snapshot. With ~8 exclude selectors and a deep page, that was the dominant
+// cost in the ui_read path.
+const TEXT_EXCLUDE_QUERY = TEXT_EXCLUDE_SELECTORS.join(',');
+
 // Extract visible textual content from a subtree. We clone the node first so
 // we can prune nav/aside/script subtrees without mutating the live DOM, then
 // pull textContent and collapse whitespace.
 const extractText = (node) => {
   const clone = node.cloneNode(true);
-  for (const sel of TEXT_EXCLUDE_SELECTORS) {
-    clone.querySelectorAll(sel).forEach((n) => n.remove());
-  }
+  clone.querySelectorAll(TEXT_EXCLUDE_QUERY).forEach((n) => n.remove());
   const raw = clone.textContent || '';
   return raw.replace(/\s+/g, ' ').trim();
 };
@@ -183,10 +187,13 @@ const extractVisibleText = () => {
   }
   const joined = blocks.join('\n\n');
   if (joined.length <= MAX_TEXT_CHARS) return joined;
-  // Truncate on a word boundary so the tail isn't a partial token.
+  // Truncate on a word boundary so the tail isn't a partial token. Match
+  // ANY whitespace (space/newline/tab) as a boundary — `joined` inserts
+  // `\n\n` between blocks, so a strict space-only search would hard-cut
+  // mid-token when the closest break is the block separator.
   const cut = joined.slice(0, MAX_TEXT_CHARS);
-  const lastSpace = cut.lastIndexOf(' ');
-  return `${cut.slice(0, lastSpace > 0 ? lastSpace : MAX_TEXT_CHARS)}…`;
+  const lastWs = cut.search(/\s[^\s]*$/);
+  return `${cut.slice(0, lastWs > 0 ? lastWs : MAX_TEXT_CHARS)}…`;
 };
 
 export const buildIndex = () => {

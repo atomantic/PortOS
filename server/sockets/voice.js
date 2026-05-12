@@ -25,15 +25,23 @@ const MAX_TEXT_LEN = 4000;
 // truncation; we re-do it server-side so the guarantee holds end-to-end.
 const MAX_UI_TEXT_CHARS = 8000;
 
-// Truncate on the last space so the tail isn't a partial token, then append
-// an ellipsis. Mirrors the client-side truncation in `domIndex.js` so the
-// shape of `ui.text` is identical regardless of which side trimmed it.
+// Truncate on the last whitespace boundary (space / newline / tab) so the
+// tail isn't a partial token, then append an ellipsis. Mirrors the
+// client-side truncation in `domIndex.js` so the shape of `ui.text` is
+// identical regardless of which side trimmed it. We match ANY whitespace,
+// not just space, because the client's `joined` snapshot inserts `\n\n`
+// between blocks — a strict space-only search would hard-cut mid-token
+// whenever the nearest break is a block separator.
 // Exported for direct unit testing without standing up a real socket.
 export const truncateOnWordBoundary = (text, max) => {
   if (text.length <= max) return text;
   const cut = text.slice(0, max);
-  const lastSpace = cut.lastIndexOf(' ');
-  return `${cut.slice(0, lastSpace > 0 ? lastSpace : max)}…`;
+  // /\s\S*$/ finds the LAST whitespace character (followed by zero or more
+  // non-whitespace chars to end-of-string). Returns -1 when no whitespace
+  // exists at all (a single mega-token longer than `max`), in which case
+  // we hard-cut at `max` rather than emit an empty string.
+  const lastWs = cut.search(/\s\S*$/);
+  return `${cut.slice(0, lastWs > 0 ? lastWs : max)}…`;
 };
 
 const audioByteLength = (audio) => {

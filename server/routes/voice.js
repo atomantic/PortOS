@@ -193,7 +193,16 @@ const speakBodySchema = z.object({
   // instead of falling through to a 200 { ok:false, reason:'empty' }.
   text: z.string().trim().min(1).max(MAX_VOICE_TEXT_LEN),
   priority: z.enum(['low', 'normal', 'high']).optional(),
-  source: z.string().max(64).optional(),
+  // Empty / whitespace-only `source` would otherwise satisfy `.optional()`
+  // and override speakProactive's default of `'cos'`, emitting payloads
+  // with `source: ''`. Treat whitespace-only as omitted so the default
+  // applies. (`.trim().min(1)` would have rejected the same input with
+  // a 400 — we prefer silent fall-through for an internal route.)
+  source: z.string().max(64).optional()
+    .transform((s) => {
+      const t = (s ?? '').trim();
+      return t === '' ? undefined : t;
+    }),
 });
 router.post('/speak', asyncHandler(async (req, res) => {
   const parsed = speakBodySchema.safeParse(req.body || {});
@@ -204,6 +213,16 @@ router.post('/speak', asyncHandler(async (req, res) => {
     );
   }
   const io = req.app.get('io');
+  // Fail fast on missing io — that's a server misconfiguration (Socket.IO
+  // never attached) and a 200 { ok:false, reason:'no-io' } would silently
+  // mask the bad state from monitoring. Quiet-hours / proactive-disabled
+  // still return 200 because those ARE expected suppression outcomes.
+  if (!io) {
+    throw new ServerError(
+      'voice subsystem misconfigured: io not attached',
+      { status: 500, code: 'VOICE_IO_UNAVAILABLE' },
+    );
+  }
   const result = await speakProactive({ io, ...parsed.data });
   res.json(result);
 }));

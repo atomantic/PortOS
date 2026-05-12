@@ -40,6 +40,12 @@ import * as tts from '../services/voice/tts.js';
 import * as piperVoices from '../services/voice/piper-voices.js';
 import * as proactiveSpeech from '../services/voice/proactiveSpeech.js';
 import voiceRoutes from './voice.js';
+import { errorEvents } from '../lib/errorHandler.js';
+
+// Node's EventEmitter throws if 'error' is emitted with zero listeners.
+// asyncHandler emits to errorEvents on every route failure, so swallow it
+// here — assertions go through the HTTP response, not the emitter.
+errorEvents.on('error', () => {});
 
 const DEFAULT_CFG = {
   enabled: false,
@@ -47,9 +53,14 @@ const DEFAULT_CFG = {
   tts: { engine: 'kokoro' },
 };
 
-const buildApp = () => {
+const buildApp = ({ io = { emit: () => {} } } = {}) => {
   const app = express();
   app.use(express.json());
+  // /speak fails fast when io is missing (a 500 misconfiguration error
+  // rather than a 200 { ok:false, reason:'no-io' } that monitoring would
+  // miss). Attach a stub io by default; pass io:null to exercise the
+  // misconfiguration branch.
+  if (io) app.set('io', io);
   app.use('/api/voice', voiceRoutes);
   return app;
 };
@@ -263,6 +274,33 @@ describe('Voice Routes', () => {
       const res = await request(buildApp()).post('/api/voice/speak').send({ text: 'late night ping' });
       expect(res.status).toBe(200);
       expect(res.body).toEqual({ ok: false, reason: 'quiet-hours' });
+    });
+
+    // Misconfiguration must surface as a real HTTP error so monitoring
+    // sees it — a 200 ok:false here would silently mask a Socket.IO that
+    // never attached.
+    it('returns 500 VOICE_IO_UNAVAILABLE when io is not configured', async () => {
+      proactiveSpeech.speakProactive.mockResolvedValue({ ok: true, latencyMs: 1 });
+      const res = await request(buildApp({ io: null }))
+        .post('/api/voice/speak')
+        .send({ text: 'hi' });
+      expect(res.status).toBe(500);
+      expect(res.body.code).toBe('VOICE_IO_UNAVAILABLE');
+      expect(proactiveSpeech.speakProactive).not.toHaveBeenCalled();
+    });
+
+    // Empty / whitespace-only source must NOT override speakProactive's
+    // default of 'cos'. The schema transforms it to undefined so the
+    // default kicks in.
+    it.each(['', '   ', '\t'])('drops empty/whitespace source "%s" so default applies', async (source) => {
+      proactiveSpeech.speakProactive.mockResolvedValue({ ok: true });
+      const res = await request(buildApp())
+        .post('/api/voice/speak')
+        .send({ text: 'hi', source });
+      expect(res.status).toBe(200);
+      expect(proactiveSpeech.speakProactive).toHaveBeenCalledTimes(1);
+      const [args] = proactiveSpeech.speakProactive.mock.calls[0];
+      expect(args.source).toBeUndefined();
     });
   });
 });
