@@ -58,13 +58,20 @@ const SIZE_CLASSES = {
   none: '',
 };
 
-// Per-align flex + padding. These defaults appear before `backdropClassName`
-// in the rendered class string (documenting intent that caller overrides come
-// last) but actual Tailwind precedence is decided by CSS source order — see
-// the note next to the overlay <div> below for the override mechanics.
+// Per-align flex + padding. Centre uses `p-4` so the panel doesn't touch the
+// viewport edge on mobile; callers that need an edge-to-edge layout (e.g. a
+// modal that supplies its own padding internally) should pass align='none'.
+// `backdropClassName` is appended last in the class string; actual Tailwind
+// utility precedence is decided by CSS source order, not class-attribute
+// order — see the note next to the overlay <div> below.
 const ALIGN_CLASSES = {
   center: 'items-center justify-center p-4',
   top: 'items-start justify-center pt-[10vh] px-4 pb-4',
+  // No padding — for callers that historically had a bare overlay (no `p-*`)
+  // and provide their own panel-internal padding instead. Used by
+  // ResumeAgentModal where the pre-refactor overlay was
+  // `fixed inset-0 ... flex items-center justify-center` with no padding.
+  none: 'items-center justify-center',
 };
 
 // Module-scope stack of open Modal ids. A single bubble-phase keydown
@@ -82,40 +89,42 @@ const ALIGN_CLASSES = {
 // Modals register on the stack regardless of whether they opt in to Esc, so
 // a non-dismissible top-most layer still absorbs the keystroke and prevents
 // fallthrough to the modal beneath it.
+//
+// IMPORTANT: the listener is registered at module load (not lazily on first
+// modal open) so it runs before any window keydown handler that mounts after
+// this module is imported (MediaLightbox, VoiceWidget, CityFilterBar, etc.).
+// `stopImmediatePropagation` only blocks listeners registered after this
+// one on the same target, so install-order matters. Modal is imported very
+// early by App.jsx via the layout shell, which gives us reliable precedence
+// over component-level listeners that mount only when their pages open.
 const modalStack = [];
 const escHandlers = new Map();
-let globalEscListener = null;
 let modalIdSeq = 0;
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || modalStack.length === 0) return;
+    // Always swallow the keystroke at this layer so it can't reach window-
+    // level handlers behind us (MediaLightbox, voice-widget capture, etc.).
+    // Whether we also dispatch the close handler depends on
+    // `defaultPrevented`: if a child widget already consumed Esc (focused
+    // <select> closing its dropdown, custom menu calling preventDefault()),
+    // skip the close — but the keystroke is still ours to absorb.
+    e.stopImmediatePropagation();
+    if (e.defaultPrevented) return;
+    const top = modalStack[modalStack.length - 1];
+    const handler = escHandlers.get(top);
+    if (handler) handler();
+  });
+}
 
 function pushModal(id) {
   modalStack.push(id);
-  if (!globalEscListener) {
-    globalEscListener = (e) => {
-      if (e.key !== 'Escape' || modalStack.length === 0) return;
-      // Always swallow the keystroke at this layer so it can't reach window-
-      // level handlers behind us (an underlying MediaLightbox, the layer
-      // below in the Modal stack, voice-widget capture, etc.). Whether we
-      // also dispatch the close handler depends on `defaultPrevented`: if a
-      // child widget already consumed Esc (focused <select> closing its
-      // dropdown, custom menu calling preventDefault()), skip the close —
-      // but the keystroke is still ours to absorb.
-      e.stopImmediatePropagation();
-      if (e.defaultPrevented) return;
-      const top = modalStack[modalStack.length - 1];
-      const handler = escHandlers.get(top);
-      if (handler) handler();
-    };
-    window.addEventListener('keydown', globalEscListener);
-  }
 }
 
 function popModal(id) {
   const idx = modalStack.lastIndexOf(id);
   if (idx >= 0) modalStack.splice(idx, 1);
-  if (modalStack.length === 0 && globalEscListener) {
-    window.removeEventListener('keydown', globalEscListener);
-    globalEscListener = null;
-  }
 }
 
 export default function Modal({
@@ -137,27 +146,41 @@ export default function Modal({
   const backdropRef = useRef(null);
   const idRef = useRef(null);
   if (idRef.current === null) idRef.current = ++modalIdSeq;
+  // Latest handler refs — kept fresh on every render without re-running the
+  // stack-registration effect. This decouples handler identity (which
+  // changes every render when callers use inline arrow functions, e.g.
+  // DeployPanel during streaming output) from stack push/pop, which must
+  // only happen when `open` toggles. Otherwise an unrelated render of one
+  // modal would pop+re-push it and accidentally move it above another
+  // modal that opened later.
+  const onCloseRef = useRef(onClose);
+  const onEscRef = useRef(onEsc);
+  const closeOnEscRef = useRef(closeOnEsc);
+  onCloseRef.current = onClose;
+  onEscRef.current = onEsc;
+  closeOnEscRef.current = closeOnEsc;
 
-  // Every open modal registers on the stack so the top-most always handles
-  // (or absorbs) Esc. The handler dispatched is one of:
+  // Push/pop only on open toggle + unmount. Handler indirection through
+  // refs lets us absorb prop changes (new onClose / onEsc / closeOnEsc)
+  // without touching the stack. The dispatched handler is one of:
   //   - onEsc, if provided (caller wants custom Esc semantics — e.g.
   //     LayoutEditor cancels an inline mode instead of closing).
   //   - onClose, if closeOnEsc is true (the common case).
-  //   - undefined → no dispatch, but Esc is still swallowed at this layer so
-  //     it can't fall through to an underlying modal.
+  //   - undefined → no dispatch, but Esc is still swallowed at this layer
+  //     so it can't fall through to an underlying modal.
   useEffect(() => {
     if (!open) return;
     const id = idRef.current;
-    let handler;
-    if (onEsc) handler = () => onEsc();
-    else if (closeOnEsc) handler = () => onClose?.();
-    if (handler) escHandlers.set(id, handler);
+    escHandlers.set(id, () => {
+      if (onEscRef.current) { onEscRef.current(); return; }
+      if (closeOnEscRef.current) onCloseRef.current?.();
+    });
     pushModal(id);
     return () => {
       escHandlers.delete(id);
       popModal(id);
     };
-  }, [open, closeOnEsc, onClose, onEsc]);
+  }, [open]);
 
   if (!open) return null;
 

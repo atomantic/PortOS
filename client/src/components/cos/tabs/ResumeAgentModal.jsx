@@ -84,6 +84,11 @@ export default function ResumeAgentModal({ agent, taskType = 'user', providers, 
       closeOnBackdrop={false}
       closeOnEsc={false}
       size="lg"
+      // Pre-refactor overlay had no padding — `fixed inset-0 ... flex
+      // items-center justify-center` with no `p-*`. Preserve that so the
+      // panel still reaches viewport edges on small screens. `align='none'`
+      // applies the same flex centring without the default `p-4`.
+      align="none"
       backdropClassName="bg-black/50"
       panelClassName="bg-port-card border border-port-border rounded-xl p-6 max-h-[90vh] overflow-auto"
       ariaLabelledBy="resume-agent-title"
