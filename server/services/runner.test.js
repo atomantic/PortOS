@@ -274,6 +274,13 @@ describe('extractBakedModel', () => {
   it('returns null when separated form has no value following the flag', () => {
     expect(extractBakedModel(['--model'])).toBe(null);
   });
+  it('returns null when the value following looks like another flag (matches hasModelFlag)', () => {
+    // Without this guard, extractBakedModel would extract '--other' as the
+    // model id while hasModelFlag returned false, leaving the two functions
+    // out of sync. Both must agree on what counts as a real pin.
+    expect(extractBakedModel(['--model', '--other'])).toBe(null);
+    expect(extractBakedModel(['-m', '-x'])).toBe(null);
+  });
   it('returns null when no model flag is present', () => {
     expect(extractBakedModel(['--other', 'foo'])).toBe(null);
     expect(extractBakedModel([])).toBe(null);

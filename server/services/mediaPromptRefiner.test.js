@@ -4,43 +4,21 @@ vi.mock('./providers.js', () => ({
   getProviderById: vi.fn(),
 }));
 
-vi.mock('./runner.js', () => ({
-  createRun: vi.fn().mockResolvedValue({ runId: 'test-run' }),
-  executeApiRun: vi.fn(),
-  executeCliRun: vi.fn(),
-  // Refiners use these to figure out whether per-call model override will be
-  // honored, and to surface the args-baked model id when it isn't. Real
-  // implementations live in runner.js; the mock just defers to a pure-ish
-  // copy so the refiner sees realistic behavior in tests.
-  hasModelFlag: (args) => {
-    if (!Array.isArray(args)) return false;
-    for (let i = 0; i < args.length; i++) {
-      const a = args[i];
-      if (typeof a !== 'string') continue;
-      if (a.startsWith('--model=') && a.length > '--model='.length) return true;
-      if (a.startsWith('-m=') && a.length > '-m='.length) return true;
-      if (a === '--model' || a === '-m') {
-        const next = args[i + 1];
-        if (typeof next === 'string' && next.length > 0 && !next.startsWith('-')) return true;
-      }
-    }
-    return false;
-  },
-  extractBakedModel: (args) => {
-    if (!Array.isArray(args)) return null;
-    for (let i = 0; i < args.length; i++) {
-      const a = args[i];
-      if (typeof a !== 'string') continue;
-      if (a === '--model' || a === '-m') {
-        const next = args[i + 1];
-        return typeof next === 'string' && next.length > 0 ? next : null;
-      }
-      if (a.startsWith('--model=')) return a.slice('--model='.length) || null;
-      if (a.startsWith('-m=')) return a.slice('-m='.length) || null;
-    }
-    return null;
-  },
-}));
+// Partial mock: stub the side-effectful run-execution surface (createRun /
+// executeApiRun / executeCliRun) but defer to the REAL helper exports for
+// hasModelFlag / extractBakedModel so the tests always exercise the
+// canonical parsing logic. If those helpers ever change semantics
+// (e.g. start rejecting --model with no value), the refiner tests pick
+// up the new behavior automatically.
+vi.mock('./runner.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    createRun: vi.fn().mockResolvedValue({ runId: 'test-run' }),
+    executeApiRun: vi.fn(),
+    executeCliRun: vi.fn(),
+  };
+});
 
 const providers = await import('./providers.js');
 const runner = await import('./runner.js');

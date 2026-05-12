@@ -148,7 +148,12 @@ export function extractBakedModel(args) {
     if (typeof a !== 'string') continue;
     if (a === '--model' || a === '-m') {
       const next = args[i + 1];
-      return typeof next === 'string' && next.length > 0 ? next : null;
+      // Match hasModelFlag exactly: a value that starts with '-' is the next
+      // flag, not the model id. Without this guard, `['--model', '--other']`
+      // would extract `'--other'` even though hasModelFlag said "no baked
+      // model" — the two would disagree and refiners could mis-report.
+      if (typeof next === 'string' && next.length > 0 && !next.startsWith('-')) return next;
+      return null;
     }
     if (a.startsWith('--model=')) return a.slice('--model='.length) || null;
     if (a.startsWith('-m=')) return a.slice('-m='.length) || null;
