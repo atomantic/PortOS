@@ -7,6 +7,13 @@ import toast from '../ui/Toast';
 import PromptRefineModal from './PromptRefineModal';
 import AddToCollectionMenu from './AddToCollectionMenu';
 
+// Intentionally NOT migrated to <ui/Modal>. The prev/next buttons sit as
+// viewport-edge siblings of the card (not children of a constrained panel
+// box), and the Esc cascade refineOpen → drawerOpen → fullScreen → close
+// is layered into the window keydown handler below. Modal would wrap
+// children in a panel container and add its own Esc listener — both fight
+// this lightbox's existing UX.
+
 const NOTE_MAX = 2000;
 const NOTE_DEBOUNCE_MS = 500;
 

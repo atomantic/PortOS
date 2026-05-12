@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { Rocket, X, ChevronDown } from 'lucide-react';
 import BrailleSpinner from '../BrailleSpinner';
+import Modal from '../ui/Modal';
 import { useAppDeploy } from '../../hooks/useAppDeploy';
 
 const FLAG_OPTIONS = [
@@ -35,13 +36,13 @@ export default function DeployPanel({ appId, appName }) {
 
   useEffect(() => () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); }, []);
 
-  // Esc to dismiss the modal (deploy keeps running in the background)
-  useEffect(() => {
-    if (!isOpen) return;
-    const onKey = (e) => { if (e.key === 'Escape') setDismissed(true); };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [isOpen]);
+  // Pre-refactor, Esc always set dismissed=true (hide the modal, keep deploy
+  // state intact so output reappears when re-opened). X / backdrop ran the
+  // full handleClose which calls clearDeploy() once the deploy has finished.
+  // The shared Modal dispatches Esc via onClose by default, which would call
+  // clearDeploy after a finished deploy — losing the output. onEsc preserves
+  // the original "Esc always hides, never clears" semantics.
+  const handleEsc = () => setDismissed(true);
 
   const toggleFlag = (flag) => {
     setSelectedFlags(prev => {
@@ -122,53 +123,56 @@ export default function DeployPanel({ appId, appName }) {
       )}
 
       {isOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
-          onClick={(e) => { if (e.target === e.currentTarget) handleClose(); }}
+        <Modal
+          open
+          onClose={handleClose}
+          onEsc={handleEsc}
+          size="xl"
+          backdropClassName="bg-black/60"
+          panelClassName="bg-port-bg border border-port-border rounded-xl shadow-2xl max-h-[80vh] flex flex-col"
+          ariaLabelledBy="deploy-panel-title"
         >
-          <div className="bg-port-bg border border-port-border rounded-xl shadow-2xl w-full max-w-3xl max-h-[80vh] flex flex-col">
-            <div className="flex items-center justify-between px-4 py-3 border-b border-port-border">
-              <div className="flex items-center gap-2">
-                <Rocket size={16} className="text-purple-400" />
-                <span className="text-sm font-medium text-white">Deploy: {appName}</span>
-                {isDeploying && <BrailleSpinner text="" className="text-xs text-purple-400" />}
-              </div>
-              <button
-                onClick={handleClose}
-                className="text-gray-400 hover:text-white transition-colors"
-                title={isDeploying ? 'Hide (deploy keeps running)' : 'Close'}
-                aria-label={isDeploying ? 'Hide deploy output' : 'Close deploy panel'}
-              >
-                <X size={16} />
-              </button>
+          <div className="flex items-center justify-between px-4 py-3 border-b border-port-border">
+            <div className="flex items-center gap-2">
+              <Rocket size={16} className="text-purple-400" />
+              <span id="deploy-panel-title" className="text-sm font-medium text-white">Deploy: {appName}</span>
+              {isDeploying && <BrailleSpinner text="" className="text-xs text-purple-400" />}
             </div>
-
-            <div
-              ref={outputRef}
-              className="flex-1 overflow-auto p-4 font-mono text-xs leading-relaxed bg-black/40"
+            <button
+              onClick={handleClose}
+              className="text-gray-400 hover:text-white transition-colors"
+              title={isDeploying ? 'Hide (deploy keeps running)' : 'Close'}
+              aria-label={isDeploying ? 'Hide deploy output' : 'Close deploy panel'}
             >
-              {output.map((line, i) => (
-                <div
-                  key={i}
-                  className={
-                    line.stream === 'stderr' ? 'text-port-error whitespace-pre-wrap break-words' :
-                    line.stream === 'status' ? 'text-purple-400 font-bold whitespace-pre-wrap break-words' :
-                    'text-gray-300 whitespace-pre-wrap break-words'
-                  }
-                >
-                  {line.text}
-                </div>
-              ))}
-              {error && <div className="text-port-error mt-2 whitespace-pre-wrap break-words">Error: {error}</div>}
-            </div>
-
-            {result && (
-              <div className={`px-4 py-2 border-t border-port-border text-xs ${result.success ? 'text-port-success' : 'text-port-error'}`}>
-                {result.success ? 'Deploy completed successfully' : `Deploy failed (exit code ${result.code})`}
-              </div>
-            )}
+              <X size={16} />
+            </button>
           </div>
-        </div>
+
+          <div
+            ref={outputRef}
+            className="flex-1 overflow-auto p-4 font-mono text-xs leading-relaxed bg-black/40"
+          >
+            {output.map((line, i) => (
+              <div
+                key={i}
+                className={
+                  line.stream === 'stderr' ? 'text-port-error whitespace-pre-wrap break-words' :
+                  line.stream === 'status' ? 'text-purple-400 font-bold whitespace-pre-wrap break-words' :
+                  'text-gray-300 whitespace-pre-wrap break-words'
+                }
+              >
+                {line.text}
+              </div>
+            ))}
+            {error && <div className="text-port-error mt-2 whitespace-pre-wrap break-words">Error: {error}</div>}
+          </div>
+
+          {result && (
+            <div className={`px-4 py-2 border-t border-port-border text-xs ${result.success ? 'text-port-success' : 'text-port-error'}`}>
+              {result.success ? 'Deploy completed successfully' : `Deploy failed (exit code ${result.code})`}
+            </div>
+          )}
+        </Modal>
       )}
     </div>
   );

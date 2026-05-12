@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { Play, Pause, RotateCcw, Rewind, FastForward, X, Zap } from 'lucide-react';
+import Modal from './ui/Modal';
 
 // Optimal Recognition Point — the focal letter the eye lands on. Spritz-style:
 // shorter words use a left-shifted ORP, longer words shift right. Returns the
@@ -295,35 +296,39 @@ function FocalSlot({ chunk, focalColor }) {
 }
 
 // Modal wrapper — full-screen overlay so any page can pop the reader without
-// leaving its context. Closes on Esc or backdrop click.
+// leaving its context. Closes on Esc or backdrop click. The inner RapidReader
+// registers a capture-phase window keydown listener (so Space / arrow keys
+// can be claimed before VoiceWidget sees them) that, on Esc, calls onClose
+// and then preventDefault() + stopImmediatePropagation(). Modal's window
+// listener is bubble-phase, so it never even reaches the same event — the
+// capture-phase stopImmediatePropagation cancels propagation entirely; even
+// if it did reach Modal, `defaultPrevented` would suppress the close
+// dispatch. RapidReader owns Esc unilaterally inside this wrapper.
 export function RapidReaderModal({ open, text, title, onClose, ...readerProps }) {
-  if (!open) return null;
   return (
-    <div
-      className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4"
-      role="dialog"
-      aria-modal="true"
-      aria-label={title || 'Rapid Reader'}
-      onClick={(e) => { if (e.target === e.currentTarget) onClose?.(); }}
+    <Modal
+      open={open}
+      onClose={onClose}
+      size="xl"
+      ariaLabel={title || 'Rapid Reader'}
+      panelClassName="bg-port-card border border-port-border rounded-xl shadow-2xl"
     >
-      <div className="w-full max-w-3xl bg-port-card border border-port-border rounded-xl shadow-2xl">
-        <div className="flex items-center justify-between gap-2 px-4 py-2 border-b border-port-border">
-          <div className="flex items-center gap-2 text-sm text-gray-300 truncate">
-            <Zap size={14} className="text-port-accent shrink-0" />
-            <span className="truncate">{title || 'Rapid Reader'}</span>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="min-h-10 min-w-10 flex items-center justify-center text-gray-400 hover:text-white"
-            aria-label="Close rapid reader"
-          >
-            <X size={18} />
-          </button>
+      <div className="flex items-center justify-between gap-2 px-4 py-2 border-b border-port-border">
+        <div className="flex items-center gap-2 text-sm text-gray-300 truncate">
+          <Zap size={14} className="text-port-accent shrink-0" />
+          <span className="truncate">{title || 'Rapid Reader'}</span>
         </div>
-        <RapidReader text={text} onClose={onClose} autoPlay {...readerProps} />
+        <button
+          type="button"
+          onClick={onClose}
+          className="min-h-10 min-w-10 flex items-center justify-center text-gray-400 hover:text-white"
+          aria-label="Close rapid reader"
+        >
+          <X size={18} />
+        </button>
       </div>
-    </div>
+      <RapidReader text={text} onClose={onClose} autoPlay {...readerProps} />
+    </Modal>
   );
 }
 

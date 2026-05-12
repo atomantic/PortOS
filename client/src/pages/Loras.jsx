@@ -11,6 +11,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { Trash2, Download, ExternalLink, Sparkles, AlertTriangle, KeyRound, Check, X, RefreshCw, Wand2 } from 'lucide-react';
 import toast from '../components/ui/Toast';
+import Modal from '../components/ui/Modal';
 import { formatBytes } from '../utils/formatters';
 import { RUNNER_FAMILIES } from '../lib/runnerFamilies';
 import {
@@ -447,15 +448,6 @@ function CivitaiAuthModal({ pendingUrl, message, auth, onClose, onSaved, onRetry
   const [saving, setSaving] = useState(false);
   const [clearing, setClearing] = useState(false);
 
-  // a11y: close on Escape so keyboard-only users can dismiss without
-  // tabbing to the X. Listen at document level (capture phase not
-  // required — modal is the only open dialog).
-  useEffect(() => {
-    const onKey = (e) => { if (e.key === 'Escape') onClose?.(); };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [onClose]);
-
   const handleSave = async (e) => {
     e?.preventDefault?.();
     if (!apiKey.trim() || saving) return;
@@ -488,72 +480,70 @@ function CivitaiAuthModal({ pendingUrl, message, auth, onClose, onSaved, onRetry
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4" onClick={onClose}>
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="civitai-auth-title"
-        className="bg-port-card border border-port-border rounded-lg p-5 w-full max-w-md space-y-4"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <KeyRound size={18} className="text-port-accent" />
-            <h2 id="civitai-auth-title" className="text-base font-semibold text-white">Civitai API key</h2>
-          </div>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-200" aria-label="Close">
-            <X size={16} />
-          </button>
+    <Modal
+      open
+      onClose={onClose}
+      size="sm"
+      ariaLabelledBy="civitai-auth-title"
+      panelClassName="bg-port-card border border-port-border rounded-lg p-5 space-y-4"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <KeyRound size={18} className="text-port-accent" />
+          <h2 id="civitai-auth-title" className="text-base font-semibold text-white">Civitai API key</h2>
         </div>
-
-        {message && (
-          <div className="text-xs bg-port-warning/10 border border-port-warning/30 rounded px-3 py-2 text-amber-100 flex items-start gap-2">
-            <AlertTriangle size={14} className="shrink-0 mt-0.5 text-port-warning" />
-            <span>{message}</span>
-          </div>
-        )}
-
-        <p className="text-xs text-gray-400 leading-relaxed">
-          Some Civitai LoRAs require a logged-in token to download (adult or restricted content). Generate one at{' '}
-          <a href="https://civitai.com/user/account" target="_blank" rel="noopener noreferrer" className="text-port-accent hover:underline">
-            civitai.com/user/account
-          </a>{' '}
-          → API Keys. PortOS stores it in <code className="bg-port-bg px-1 rounded">data/settings.json</code>.
-        </p>
-
-        <form onSubmit={handleSave} className="space-y-2">
-          <label className="block text-xs font-medium text-gray-400">API key</label>
-          <input
-            type="password"
-            value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
-            placeholder={auth?.hasKey ? '•••• key already set — paste a new one to replace' : 'paste your Civitai API key'}
-            className="w-full bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-gray-200 placeholder:text-gray-600 font-mono"
-            disabled={saving}
-            autoFocus
-          />
-          <div className="flex items-center gap-2 pt-1">
-            <button
-              type="submit"
-              disabled={saving || !apiKey.trim()}
-              className="flex-1 bg-port-accent text-white px-4 py-2 rounded text-sm font-medium hover:bg-port-accent/90 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {saving ? 'Saving…' : (pendingUrl ? 'Save key & retry install' : 'Save key')}
-            </button>
-            {auth?.hasKey && auth?.source === 'settings' && (
-              <button
-                type="button"
-                onClick={handleClear}
-                disabled={clearing}
-                className="px-3 py-2 rounded text-xs text-port-error hover:bg-port-error/10 border border-port-error/30 disabled:opacity-50"
-              >
-                {clearing ? 'Clearing…' : 'Clear'}
-              </button>
-            )}
-          </div>
-        </form>
+        <button onClick={onClose} className="text-gray-400 hover:text-gray-200" aria-label="Close">
+          <X size={16} />
+        </button>
       </div>
-    </div>
+
+      {message && (
+        <div className="text-xs bg-port-warning/10 border border-port-warning/30 rounded px-3 py-2 text-amber-100 flex items-start gap-2">
+          <AlertTriangle size={14} className="shrink-0 mt-0.5 text-port-warning" />
+          <span>{message}</span>
+        </div>
+      )}
+
+      <p className="text-xs text-gray-400 leading-relaxed">
+        Some Civitai LoRAs require a logged-in token to download (adult or restricted content). Generate one at{' '}
+        <a href="https://civitai.com/user/account" target="_blank" rel="noopener noreferrer" className="text-port-accent hover:underline">
+          civitai.com/user/account
+        </a>{' '}
+        → API Keys. PortOS stores it in <code className="bg-port-bg px-1 rounded">data/settings.json</code>.
+      </p>
+
+      <form onSubmit={handleSave} className="space-y-2">
+        <label className="block text-xs font-medium text-gray-400">API key</label>
+        <input
+          type="password"
+          value={apiKey}
+          onChange={(e) => setApiKey(e.target.value)}
+          placeholder={auth?.hasKey ? '•••• key already set — paste a new one to replace' : 'paste your Civitai API key'}
+          className="w-full bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-gray-200 placeholder:text-gray-600 font-mono"
+          disabled={saving}
+          autoFocus
+        />
+        <div className="flex items-center gap-2 pt-1">
+          <button
+            type="submit"
+            disabled={saving || !apiKey.trim()}
+            className="flex-1 bg-port-accent text-white px-4 py-2 rounded text-sm font-medium hover:bg-port-accent/90 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {saving ? 'Saving…' : (pendingUrl ? 'Save key & retry install' : 'Save key')}
+          </button>
+          {auth?.hasKey && auth?.source === 'settings' && (
+            <button
+              type="button"
+              onClick={handleClear}
+              disabled={clearing}
+              className="px-3 py-2 rounded text-xs text-port-error hover:bg-port-error/10 border border-port-error/30 disabled:opacity-50"
+            >
+              {clearing ? 'Clearing…' : 'Clear'}
+            </button>
+          )}
+        </div>
+      </form>
+    </Modal>
   );
 }
 

@@ -2,6 +2,7 @@ import { useState, useRef } from 'react';
 import { X, CheckCircle, AlertCircle, RotateCcw, Image, Loader2 } from 'lucide-react';
 import { processScreenshotUploads } from '../../../utils/fileUpload';
 import toast from '../../ui/Toast';
+import Modal from '../../ui/Modal';
 import { filterSelectableModels } from '../../../utils/providers';
 
 export default function ResumeAgentModal({ agent, taskType = 'user', providers, apps, onSubmit, onClose }) {
@@ -75,10 +76,25 @@ export default function ResumeAgentModal({ agent, taskType = 'user', providers, 
   };
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-      <div className="bg-port-card border border-port-border rounded-xl p-6 w-full max-w-2xl max-h-[90vh] overflow-auto">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-xl font-bold text-white">
+    <Modal
+      open
+      onClose={onClose}
+      // Resume modal historically had neither backdrop dismiss nor Esc; an
+      // accidental dismiss would lose user-typed refined instructions.
+      closeOnBackdrop={false}
+      closeOnEsc={false}
+      size="lg"
+      // Pre-refactor overlay had no padding — `fixed inset-0 ... flex
+      // items-center justify-center` with no `p-*`. Preserve that so the
+      // panel still reaches viewport edges on small screens. `align='none'`
+      // applies the same flex centring without the default `p-4`.
+      align="none"
+      backdropClassName="bg-black/50"
+      panelClassName="bg-port-card border border-port-border rounded-xl p-6 max-h-[90vh] overflow-auto"
+      ariaLabelledBy="resume-agent-title"
+    >
+      <div className="flex items-center justify-between mb-4">
+          <h2 id="resume-agent-title" className="text-xl font-bold text-white">
             Resume {taskType === 'internal' ? 'System ' : ''}Agent Task
           </h2>
           <button
@@ -243,7 +259,6 @@ export default function ResumeAgentModal({ agent, taskType = 'user', providers, 
             </button>
           </div>
         </form>
-      </div>
-    </div>
+    </Modal>
   );
 }

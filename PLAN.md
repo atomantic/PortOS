@@ -56,11 +56,10 @@ The dgrauet/ltx-2-mlx runtime ships with FFLF (true keyframe interpolation), aud
 These were flagged by the post-merge code review pass on the Z-Image + Civitai LoRA work but deliberately deferred to keep the original PR scoped.
 
 _All items in this section have shipped — see DONE.md → 2026-05-12 for the
-"Civitai / Z-Image follow-ups — six post-merge cleanups" entry and the
-`scripts/_runner_common.py` extraction entry._
-- [ ] **Project-wide `<Modal>` component** — every modal in the app (`Flux2InstallModal`, `EditAppModal`, `MemoryEditModal`, `ResumeAgentModal`, `MediaLightbox`, `LayoutEditor`, `KeyboardHelp`, `RapidReader`, `DeployPanel`'s confirm, the new `CivitaiAuthModal` in `Loras.jsx`) rolls its own `fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4` backdrop + click-outside + close-button + ESC handler. Extract `client/src/components/ui/Modal.jsx` with backdrop + dialog props and a slot for the body, then convert all call sites. ~300 LOC of duplicated chrome across the codebase.
-
-- [ ] **Extend `normalize.js` to expose render-config fields** — `client/src/components/media/PromptRefineModal.jsx#getRenderConfig` reaches into `item.raw?.{cfgScale,loraFilenames,loraScales,steps (video),guidanceScale,seed,tiling,disableAudio}` because `normalizeImage`/`normalizeVideo` don't surface those fields. Either lift the snake_case/camelCase fallback chain into normalize.js so the modal reads from `item.*` only, or add `getRenderConfigForItem(item)` co-located with normalize so the sidecar field-naming knowledge lives in one file. Surfaced from the Refine Prompt /simplify pass.
+"Civitai / Z-Image follow-ups — six post-merge cleanups", the
+`scripts/_runner_common.py` extraction, the `runPromptThroughProvider`
++ `jsonExtract` unification, and the `<Modal>` + `getRenderConfigForItem`
+entries._
 
 ### Better Audit follow-ups
 
