@@ -121,6 +121,25 @@ describe('isAffirmative / isNegative', () => {
     expect(isNegative(s)).toBe(true);
   });
 
+  // STT engines (Whisper) commonly emit a trailing comma after a yes/no
+  // when the user takes a brief pause ("yes, delete it" gets transcribed
+  // with the comma intact even when the rest of the sentence is missing).
+  // Comma/colon/semicolon must be stripped along with sentence-terminator
+  // punctuation, otherwise the gate silently discards the pending action.
+  it.each(['yes,', 'yes;', 'yes:', 'confirm,', 'okay,', 'ok,'])(
+    'treats yes-with-trailing-punctuation "%s" as affirmative',
+    (s) => {
+      expect(isAffirmative(s)).toBe(true);
+    },
+  );
+
+  it.each(['no,', 'cancel,', 'stop,', 'cancel;', 'no:', 'never mind,'])(
+    'treats no-with-trailing-punctuation "%s" as negative',
+    (s) => {
+      expect(isNegative(s)).toBe(true);
+    },
+  );
+
   // "okay cancel" / "ok no" etc. — bare "ok/okay" matches AFFIRM_RE, so
   // without filler-tolerance in NEGATIVE_RE the user's intended cancel would
   // be mis-executed as a destructive confirmation.

@@ -1043,7 +1043,8 @@ const TOOLS = [
       'Read back the visible text on the current page. Use when the user asks "what does this say?", "read this aloud", "what\'s on the page?", "read me the page". ' +
       'Returns the user-visible textual content of the main content area (excluding nav rails, asides, and the voice widget itself). ' +
       'Output is capped at ~8 KB; longer pages are tail-trimmed on a word boundary with an ellipsis. ' +
-      'When the user wants the content spoken back, read the returned `content` verbatim — do NOT summarize.',
+      'Default behavior (summarize=false): read the returned `content` verbatim — do NOT summarize. ' +
+      'When the user asks for a summary instead ("what is this page about?", "summarize this page"), pass summarize=true and produce a short summary of `content` rather than reading it verbatim.',
     parameters: {
       type: 'object',
       properties: {

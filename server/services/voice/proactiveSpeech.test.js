@@ -21,6 +21,7 @@ const {
   isWithinQuietHours,
   shouldSpeak,
   speakProactive,
+  MAX_PROACTIVE_TEXT_LEN,
 } = await import('./proactiveSpeech.js');
 
 describe('parseHHMM', () => {
@@ -137,6 +138,28 @@ describe('speakProactive', () => {
     const r = await speakProactive({ io, text: '   ' });
     expect(r.ok).toBe(false);
     expect(r.reason).toBe('empty');
+  });
+
+  // Defense in depth — the route validator caps payloads at 4000 chars, but
+  // internal subsystems (CoS, scheduler) call speakProactive directly and
+  // bypass that. The same bound must hold at the function boundary so a
+  // runaway caller can't trigger multi-minute synthesis.
+  it('rejects text longer than MAX_PROACTIVE_TEXT_LEN', async () => {
+    const { io, emit } = makeIo();
+    const oversized = 'x'.repeat(MAX_PROACTIVE_TEXT_LEN + 1);
+    const r = await speakProactive({ io, text: oversized });
+    expect(r.ok).toBe(false);
+    expect(r.reason).toBe('too-long');
+    expect(r.chars).toBe(oversized.length);
+    expect(r.maxChars).toBe(MAX_PROACTIVE_TEXT_LEN);
+    expect(emit).not.toHaveBeenCalled();
+  });
+
+  it('accepts text exactly at MAX_PROACTIVE_TEXT_LEN', async () => {
+    const { io, emit } = makeIo();
+    const r = await speakProactive({ io, text: 'x'.repeat(MAX_PROACTIVE_TEXT_LEN) });
+    expect(r.ok).toBe(true);
+    expect(emit).toHaveBeenCalledTimes(1);
   });
 
   it('emits voice:speak with audio when allowed', async () => {

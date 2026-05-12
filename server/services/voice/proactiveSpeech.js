@@ -33,6 +33,15 @@ export const parseHHMM = (s) => {
   return Number(m[1]) * 60 + Number(m[2]);
 };
 
+// Maximum spoken-text length for proactive lines. The /api/voice/speak Zod
+// schema already caps HTTP payloads at 4000 chars, but `speakProactive` is
+// also called directly by internal subsystems (CoS, scheduler, etc.) that
+// bypass the route validator. Enforce the same bound here so a runaway
+// caller can't trigger multi-minute synthesis and a multi-megabyte socket
+// payload. Exposed so the route can import the same constant if it ever
+// needs to.
+export const MAX_PROACTIVE_TEXT_LEN = 4000;
+
 // Quiet-hours window inclusion check. Handles the overnight case (start>end,
 // e.g. 22:00 → 07:00) by wrapping. Same-value start/end means "the window is
 // empty" — proactive speech is always allowed.
@@ -86,6 +95,10 @@ export const speakProactive = async ({ io, text, priority = 'normal', source = '
   if (!io) return { ok: false, reason: 'no-io' };
   const trimmed = (text || '').trim();
   if (!trimmed) return { ok: false, reason: 'empty' };
+  if (trimmed.length > MAX_PROACTIVE_TEXT_LEN) {
+    console.warn(`🔕 voice: proactive too-long (${trimmed.length} > ${MAX_PROACTIVE_TEXT_LEN}) "${trimmed.slice(0, 60)}…"`);
+    return { ok: false, reason: 'too-long', chars: trimmed.length, maxChars: MAX_PROACTIVE_TEXT_LEN };
+  }
 
   const cfg = await getVoiceConfig();
   const nowMinutes = await getLocalMinutes();
