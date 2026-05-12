@@ -582,7 +582,12 @@ describe('cos.js source — priority + capacity invariants', () => {
 
     // `if (availableSlots <= 0) return;` (line 2332) is the cheap guard
     // that prevents spawning when the global cap is at or beyond capacity.
-    expect(fnBody).toMatch(/if\s*\(\s*availableSlots\s*<=\s*0\s*\)\s*return\s*;/);
+    // Regex tolerates optional braces, optional semicolon, and optional
+    // single-line block (`{ return; }`) so a formatting refactor doesn't
+    // trip this behavioral check.
+    expect(fnBody).toMatch(
+      /if\s*\(\s*availableSlots\s*<=\s*0\s*\)\s*(?:\{\s*)?return\s*;?\s*(?:\})?/
+    );
   });
 
   it('evaluateTasks short-circuits when availableSlots <= 0', () => {
@@ -597,20 +602,27 @@ describe('cos.js source — priority + capacity invariants', () => {
     const fnStart = COS_SRC.indexOf('async function dequeueNextTask');
     const fnBody = extractFnBody(COS_SRC, fnStart);
 
-    // The five priority-section comments appear in this exact order. If a
-    // refactor inverts them (e.g. promotes mission above user) this guard
-    // catches it before the behavioral test does.
-    const onDemandIdx = fnBody.indexOf('Priority 0');
-    const userIdx     = fnBody.indexOf('Priority 1');
-    const autoSysIdx  = fnBody.indexOf('Priority 2');
-    const missionIdx  = fnBody.indexOf('Priority 3');
-    const idleIdx     = fnBody.indexOf('Priority 4');
+    // Anchor on the actual code markers (declarations / generator calls)
+    // for each priority bucket — NOT the `// Priority N` comments. A comment
+    // rename or rewording shouldn't fail this test; only an actual reorder
+    // of the dequeue logic should.
+    //
+    //   Priority 0 (onDemand)    — `onDemandRequests` declaration + loop
+    //   Priority 1 (user)        — `pendingUserTasks` declaration + loop
+    //   Priority 2 (autoSystem)  — `autoApproved` declaration + loop
+    //   Priority 3 (mission)     — `generateMissionTasks(` call
+    //   Priority 4 (idle)        — `generateIdleReviewTask(` call
+    const onDemandIdx = fnBody.indexOf('onDemandRequests');
+    const userIdx     = fnBody.indexOf('pendingUserTasks');
+    const autoSysIdx  = fnBody.indexOf('autoApproved');
+    const missionIdx  = fnBody.indexOf('generateMissionTasks(');
+    const idleIdx     = fnBody.indexOf('generateIdleReviewTask(');
 
-    expect(onDemandIdx).toBeGreaterThan(-1);
-    expect(userIdx).toBeGreaterThan(onDemandIdx);
-    expect(autoSysIdx).toBeGreaterThan(userIdx);
-    expect(missionIdx).toBeGreaterThan(autoSysIdx);
-    expect(idleIdx).toBeGreaterThan(missionIdx);
+    expect(onDemandIdx, 'onDemandRequests must appear').toBeGreaterThan(-1);
+    expect(userIdx, 'pendingUserTasks must appear after onDemand').toBeGreaterThan(onDemandIdx);
+    expect(autoSysIdx, 'autoApproved must appear after pendingUserTasks').toBeGreaterThan(userIdx);
+    expect(missionIdx, 'generateMissionTasks must appear after autoApproved').toBeGreaterThan(autoSysIdx);
+    expect(idleIdx, 'generateIdleReviewTask must appear after generateMissionTasks').toBeGreaterThan(missionIdx);
   });
 
   it('per-project cap defaults to global cap when unset', () => {

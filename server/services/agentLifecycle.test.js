@@ -32,8 +32,11 @@
  *    recovery` block). The completion function has NO try/catch wrapping
  *    its core steps, so a throw from `completeAgent`, `updateTask`, or
  *    `processAgentCompletion` aborts the function before
- *    `runnerAgents.delete(agentId)` runs at line 1146 — leaving the agent's
- *    in-memory record forever and blocking any later completion event.
+ *    `runnerAgents.delete(agentId)` runs at line 1146 — leaking the agent's
+ *    entry in the in-memory `runnerAgents` map. Observable impact: memory
+ *    grows unboundedly across runs, and a stale entry can re-trigger or
+ *    misroute completion handling if the runner re-emits the event or the
+ *    handler is retried for the same agentId.
  *
  * These tests use inline copies of the relevant slices (matching the
  * convention in subAgentSpawner.test.js — pure logic copies instead of
