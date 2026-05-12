@@ -74,13 +74,21 @@ function makeCapacityTracker(state, agentsByProject = {}) {
  *   1. user        — user-authored pending tasks
  *   2. autoSystem  — auto-approved system / improvement tasks
  *   3. mission     — proactive mission tasks (only when no pending user)
- *   4. idle        — generated idle-review task (only when nothing else)
+ *   4. idle        — generated idle-review task (only when nothing else
+ *                    has been queued/spawned in this cycle)
  *
  * Within a bucket the iteration order is whatever the source array provides
  * (file order for parsed TASKS.md; arrival order for the on-demand request
  * queue). The dequeue loop does NOT re-sort by priorityValue at this layer
  * — it relies on the upstream parser/writer to keep CRITICAL/HIGH tasks
  * positioned earlier in the file. This is the contract these tests pin.
+ *
+ * Idle gating: production is stricter than just `!hasPendingUserTasks`. In
+ * `dequeueNextTask` the idle generator is fenced by `if (spawned === 0 &&
+ * state.config.idleReviewEnabled && !hasPendingUserTasks)` (cos.js:2480) —
+ * i.e. NOTHING else (autoSystem, mission) may have spawned this cycle.
+ * `evaluateTasks` mirrors this at cos.js:862 with `tasksToSpawn.length === 0`.
+ * The replica enforces the same `spawned === 0` precondition.
  */
 function priorityDequeue(buckets, capacity) {
   const order = ['onDemand', 'user', 'autoSystem', 'mission', 'idle'];
@@ -91,6 +99,8 @@ function priorityDequeue(buckets, capacity) {
 
   for (const bucketName of order) {
     if ((bucketName === 'mission' || bucketName === 'idle') && hasPendingUserTasks) continue;
+    // Idle is stricter: only fires when no other bucket has spawned yet.
+    if (bucketName === 'idle' && capacity.spawned.length > 0) continue;
     const bucket = buckets[bucketName] || [];
     for (const task of bucket) {
       if (capacity.spawned.length >= capacity.availableSlots) return capacity.spawned;
@@ -150,6 +160,10 @@ describe('evaluateTasks — priority ordering', () => {
   });
 
   it('mission + idle fire only when there are NO pending user tasks', () => {
+    // Idle is fenced behind `spawned === 0` in production (cos.js:2480), so
+    // when autoSystem and mission are both non-empty, idle does NOT fire.
+    // This test pins the user-pending gate; the next test pins the idle
+    // `spawned === 0` gate.
     const state = makeState({ maxConcurrentAgents: 5 });
     const capacity = makeCapacityTracker(state);
 
@@ -162,7 +176,47 @@ describe('evaluateTasks — priority ordering', () => {
     };
 
     const spawned = priorityDequeue(buckets, capacity);
-    expect(spawned.map(t => t._bucket)).toEqual(['autoSystem', 'mission', 'idle']);
+    // autoSystem + mission spawn; idle is SUPPRESSED because earlier buckets
+    // already produced spawns (mirrors cos.js:2480 `spawned === 0` guard).
+    expect(spawned.map(t => t._bucket)).toEqual(['autoSystem', 'mission']);
+  });
+
+  it('idle fires only when nothing else has spawned (spawned === 0 gate, cos.js:2480)', () => {
+    // When autoSystem and mission are both empty AND no user-pending, idle
+    // gets to run. This is the only path through which the idle bucket
+    // actually drains in production.
+    const state = makeState({ maxConcurrentAgents: 5 });
+    const capacity = makeCapacityTracker(state);
+
+    const buckets = {
+      onDemand: [],
+      user: [],
+      autoSystem: [],
+      mission: [],
+      idle: [task('sys-idle-1')],
+    };
+
+    const spawned = priorityDequeue(buckets, capacity);
+    expect(spawned.map(t => t._bucket)).toEqual(['idle']);
+  });
+
+  it('idle suppressed when only autoSystem spawned (no user, no mission)', () => {
+    // Pin the asymmetry: even a SINGLE autoSystem spawn is enough to suppress
+    // idle on the same cycle. This is the production behavior at cos.js:862
+    // (`tasksToSpawn.length === 0`) and cos.js:2480 (`spawned === 0`).
+    const state = makeState({ maxConcurrentAgents: 5 });
+    const capacity = makeCapacityTracker(state);
+
+    const buckets = {
+      onDemand: [],
+      user: [],
+      autoSystem: [task('sys-auto-1')],
+      mission: [],
+      idle: [task('sys-idle-1')],
+    };
+
+    const spawned = priorityDequeue(buckets, capacity);
+    expect(spawned.map(t => t._bucket)).toEqual(['autoSystem']);
   });
 
   it('within a single bucket, file/arrival order wins (no in-bucket priority re-sort)', () => {
@@ -382,17 +436,33 @@ describe('dequeueNextTask — capacity guards', () => {
  * `dequeueNextTask` (~250 LOC) can grow past any chosen window and silently
  * drop priority markers, making ordering assertions pass on empty matches.
  *
- * Skips brace characters inside string literals and line/block comments so
- * a stray `{` in a string doesn't unbalance the scanner. (Template literals
- * and regex literals aren't handled — neither appears in the production
- * functions this helper extracts, but if that changes the assertions will
- * fail loudly before any data corruption can leak through.)
+ * Skips brace characters inside string literals (single/double quote AND
+ * template literals, including nested `${...}` interpolations), regex
+ * literals, and line/block comments so stray `{`/`}` characters don't
+ * unbalance the scanner. `evaluateTasks` and `dequeueNextTask` both contain
+ * template literals like `emitLog(`...${task.id}...`)` whose `${...}` braces
+ * would otherwise be counted as structural braces.
+ *
+ * Regex disambiguation uses a "previous significant token" heuristic — a `/`
+ * is a regex literal when the preceding non-whitespace token is not an
+ * identifier/number/closing-bracket. This handles the patterns used in cos.js
+ * (assignment, return, function-arg position) but isn't a full JS tokenizer;
+ * if a future refactor introduces edge cases the source-level assertions
+ * will fail loudly rather than silently miss matches.
  */
 function extractFnBody(src, fnStart) {
   const openIdx = src.indexOf('{', fnStart);
   if (openIdx === -1) return '';
   let depth = 0;
   let i = openIdx;
+  // Stack tracks nested template-literal `${...}` interpolation depth so the
+  // scanner returns to template-string mode after a `}` closes an expression.
+  const tplStack = [];
+  // Last significant (non-whitespace, non-comment) character — used to decide
+  // whether `/` starts a regex literal or is the division operator.
+  let lastSig = '';
+  const setLastSig = (c) => { if (!/\s/.test(c)) lastSig = c; };
+
   while (i < src.length) {
     const ch = src[i];
     const next = src[i + 1];
@@ -408,22 +478,97 @@ function extractFnBody(src, fnStart) {
       i = end === -1 ? src.length : end + 2;
       continue;
     }
-    // String literals — skip to matching unescaped quote
+    // Regex literal — `/` is a regex start when not preceded by an
+    // identifier/number/closing-paren/closing-bracket (i.e. when it can't be
+    // the division operator). Skip to matching unescaped `/` (and flags).
+    if (ch === '/' && !/[\w)\]]/.test(lastSig)) {
+      let j = i + 1;
+      let inClass = false;
+      while (j < src.length) {
+        const c = src[j];
+        if (c === '\\') { j += 2; continue; }
+        if (c === '[') inClass = true;
+        else if (c === ']') inClass = false;
+        else if (c === '/' && !inClass) break;
+        else if (c === '\n') break; // unterminated regex — bail
+        j++;
+      }
+      // Skip trailing flags (g/i/m/s/u/y)
+      j++;
+      while (j < src.length && /[gimsuy]/.test(src[j])) j++;
+      i = j;
+      lastSig = '/';
+      continue;
+    }
+    // Single/double-quoted string — skip to matching unescaped quote
     if (ch === '"' || ch === "'") {
       let j = i + 1;
       while (j < src.length) {
         if (src[j] === '\\') { j += 2; continue; }
         if (src[j] === ch) break;
+        if (src[j] === '\n') break; // unterminated — bail
         j++;
       }
       i = j + 1;
+      lastSig = ch;
       continue;
     }
-    if (ch === '{') depth++;
-    else if (ch === '}') {
-      depth--;
-      if (depth === 0) return src.slice(fnStart, i + 1);
+    // Template literal — scan until backtick or `${`. On `${` push depth and
+    // resume normal scanning until matching `}` (tracked via tplStack).
+    if (ch === '`') {
+      let j = i + 1;
+      while (j < src.length) {
+        if (src[j] === '\\') { j += 2; continue; }
+        if (src[j] === '`') { j++; break; }
+        if (src[j] === '$' && src[j + 1] === '{') {
+          // Enter interpolation; resume outer loop, push template marker.
+          tplStack.push(depth);
+          i = j + 2;
+          depth++; // the `{` of ${
+          lastSig = '{';
+          break;
+        }
+        j++;
+      }
+      if (j >= i) { // either closed the template or entered interpolation
+        if (src[i] === undefined) break;
+        if (tplStack.length === 0 || tplStack[tplStack.length - 1] !== depth - 1) {
+          // We closed the template entirely (didn't enter interpolation).
+          i = j;
+          lastSig = '`';
+        }
+      }
+      continue;
     }
+    if (ch === '{') { depth++; setLastSig(ch); i++; continue; }
+    if (ch === '}') {
+      depth--;
+      // If we just closed a template interpolation, resume template scan.
+      if (tplStack.length > 0 && tplStack[tplStack.length - 1] === depth) {
+        tplStack.pop();
+        // Resume template literal scan from i+1
+        let j = i + 1;
+        while (j < src.length) {
+          if (src[j] === '\\') { j += 2; continue; }
+          if (src[j] === '`') { j++; break; }
+          if (src[j] === '$' && src[j + 1] === '{') {
+            tplStack.push(depth);
+            j += 2;
+            depth++;
+            break;
+          }
+          j++;
+        }
+        i = j;
+        lastSig = '`';
+        continue;
+      }
+      if (depth === 0) return src.slice(fnStart, i + 1);
+      setLastSig(ch);
+      i++;
+      continue;
+    }
+    setLastSig(ch);
     i++;
   }
   return src.slice(fnStart); // unbalanced — return rest of file
@@ -478,5 +623,16 @@ describe('cos.js source — priority + capacity invariants', () => {
     const pattern = /maxConcurrentAgentsPerProject\s*\|\|\s*state\.config\.maxConcurrentAgents/;
     expect(dequeueFn).toMatch(pattern);
     expect(evalFn).toMatch(pattern);
+  });
+
+  it('idle generator is fenced by spawned===0 / tasksToSpawn.length===0', () => {
+    // Pin the strict-idle gate that the replica enforces. If a refactor
+    // drops either fence, idle could spawn alongside autoSystem/mission and
+    // double-load the agent pool.
+    const dequeueFn = extractFnBody(COS_SRC, COS_SRC.indexOf('async function dequeueNextTask'));
+    const evalFn    = extractFnBody(COS_SRC, COS_SRC.indexOf('export async function evaluateTasks'));
+
+    expect(dequeueFn).toMatch(/spawned\s*===\s*0\s*&&\s*state\.config\.idleReviewEnabled/);
+    expect(evalFn).toMatch(/tasksToSpawn\.length\s*===\s*0\s*&&\s*state\.config\.idleReviewEnabled/);
   });
 });
