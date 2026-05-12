@@ -160,6 +160,22 @@ export async function listIssues({ seriesId = null } = {}) {
     .slice(0, ISSUES_PER_RESPONSE_MAX);
 }
 
+/**
+ * Recently-updated issues across all series. Sorts the FULL issue set by
+ * `updatedAt` desc before applying `limit` — unlike `listIssues`, which
+ * sorts by `seriesId/number` then caps at `ISSUES_PER_RESPONSE_MAX`. That
+ * cap would silently miss the most-recent issues once the dataset grows
+ * beyond 1000, so the sidebar's recent-issues view needs this dedicated
+ * helper.
+ */
+export async function listRecentIssues({ limit = 10 } = {}) {
+  const { issues } = await readState();
+  const clamped = Math.max(1, Math.min(50, Math.floor(Number(limit)) || 10));
+  return [...issues]
+    .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))
+    .slice(0, clamped);
+}
+
 export async function getIssue(id) {
   const { issues } = await readState();
   const found = issues.find((i) => i.id === id);

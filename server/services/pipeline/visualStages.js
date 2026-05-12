@@ -21,7 +21,7 @@ import { getWorld } from '../worldBuilder.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { buildScenePrompt, buildSettingByKey, matchSceneSetting } from '../../lib/scenePrompt.js';
 import { composeStyledPrompt } from '../../lib/composeStyledPrompt.js';
-import { getDefaultVideoModelId } from '../../lib/mediaModels.js';
+import { getDefaultVideoModelId, getVideoModels } from '../../lib/mediaModels.js';
 import { runStagedLLM } from '../../lib/stageRunner.js';
 import { ASPECT_PRESETS } from '../../lib/creativeDirectorPresets.js';
 
@@ -267,6 +267,15 @@ export async function enqueueStoryboardSceneVideo(issueId, sceneIndex, options =
   const aspectRatio = ASPECT_PRESETS[options.aspectRatio] ? options.aspectRatio : '16:9';
   const { width, height } = ASPECT_PRESETS[aspectRatio];
   const modelId = options.modelId || settings.videoGen?.defaultModelId || getDefaultVideoModelId();
+  // Validate the model exists for this platform before enqueueing — otherwise
+  // the worker will fail with "Unknown video model" and leave a persisted
+  // doomed entry in the queue. Mirrors the same fail-fast pattern as
+  // /api/video-gen's route validation.
+  if (!getVideoModels().some((m) => m.id === modelId)) {
+    throw new ServerError(`Unknown video model "${modelId}"`, {
+      status: 400, code: 'PIPELINE_UNKNOWN_VIDEO_MODEL',
+    });
+  }
   const negativePrompt = options.negativePrompt || 'text, watermark, blur, motion blur, low quality';
 
   const { jobId } = enqueueJob({

@@ -533,27 +533,25 @@ router.post('/series/:id/arc/verify', asyncHandler(async (req, res) => {
 // =====================
 
 // Recent issues across all series — used by the sidebar's dynamic Pipeline
-// child list. Returns up to `limit` issues sorted by updatedAt desc, each
-// with a denormalized seriesName for display.
+// child list. Routes through `listRecentIssues` which sorts the FULL issue
+// set by `updatedAt` desc before applying limit; `listIssues` would
+// silently miss the most-recent items once the dataset grows past
+// `ISSUES_PER_RESPONSE_MAX` (1000).
 router.get('/issues/recent', asyncHandler(async (req, res) => {
   const limit = Math.max(1, Math.min(50, Number(req.query.limit) || 10));
   const [issues, series] = await Promise.all([
-    issuesSvc.listIssues(),
+    issuesSvc.listRecentIssues({ limit }),
     seriesSvc.listSeries(),
   ]);
   const seriesById = new Map(series.map((s) => [s.id, s.name]));
-  const sorted = [...issues]
-    .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))
-    .slice(0, limit)
-    .map((i) => ({
-      id: i.id,
-      title: i.title,
-      number: i.number,
-      seriesId: i.seriesId,
-      seriesName: seriesById.get(i.seriesId) || '(unknown series)',
-      updatedAt: i.updatedAt,
-    }));
-  res.json(sorted);
+  res.json(issues.map((i) => ({
+    id: i.id,
+    title: i.title,
+    number: i.number,
+    seriesId: i.seriesId,
+    seriesName: seriesById.get(i.seriesId) || '(unknown series)',
+    updatedAt: i.updatedAt,
+  })));
 }));
 
 router.get('/issues/:id', asyncHandler(async (req, res) => {
