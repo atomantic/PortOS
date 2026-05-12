@@ -108,7 +108,12 @@ const PIPELINE_STAGE_TOOLS = [
       const cur = parsePipelineIssuePath(ctx.state?.ui?.path);
       if (!cur) return NOT_ON_PIPELINE_ISSUE_PAGE;
       const key = String(stage || '').trim().toLowerCase();
-      const canonical = PIPELINE_STAGE_ALIASES[key] || (PIPELINE_STAGE_IDS.includes(stage) ? stage : null);
+      // Build a case-insensitive canonical lookup so "Prose", "PROSE",
+      // "prose" all resolve. PIPELINE_STAGE_IDS is mixed-case ('idea',
+      // 'comicScript', ...) so a direct .includes(key) wouldn't match;
+      // compare lowercased forms instead.
+      const canonicalById = PIPELINE_STAGE_IDS.find((id) => id.toLowerCase() === key);
+      const canonical = PIPELINE_STAGE_ALIASES[key] || canonicalById || null;
       if (!canonical) {
         return {
           ok: false,

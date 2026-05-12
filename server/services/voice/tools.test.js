@@ -659,6 +659,15 @@ describe('pipeline stage navigation tools', () => {
       expect(r3.stage).toBe('episodeVideo');
     });
 
+    it('resolves canonical ids case-insensitively (e.g. "Prose" → prose, "ComicScript" → comicScript)', async () => {
+      const ctx = makeCtx('/pipeline/issues/iss-x/idea');
+      const r1 = await dispatchTool('pipeline_open_stage', { stage: 'Prose' }, ctx);
+      expect(r1.stage).toBe('prose');
+      const r2 = await dispatchTool('pipeline_open_stage', { stage: 'COMICSCRIPT' }, ctx);
+      // 'COMICSCRIPT' lowercased ('comicscript') hits the alias table.
+      expect(r2.stage).toBe('comicScript');
+    });
+
     it('resolves singular "comic page" / "page" so the regex and alias table agree', async () => {
       // The regex matches `comic ?pages?` (singular OR plural). The alias
       // table now mirrors that so a matched utterance never bottoms out

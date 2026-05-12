@@ -262,7 +262,7 @@ export default function StoryboardsStage({ issue, onStageUpdate }) {
                   <button
                     type="button"
                     onClick={() => handleRefinePrompt(i)}
-                    disabled={refiningIdx === i}
+                    disabled={refiningIdx !== null}
                     title="Elaborate this description into a richer image-gen prompt (LLM call — replaces the current text)"
                     className="inline-flex items-center justify-center gap-1 px-2 py-1.5 rounded bg-port-card border border-port-border text-white text-xs hover:border-port-accent/50 disabled:opacity-50"
                   >
