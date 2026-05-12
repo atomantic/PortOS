@@ -117,7 +117,18 @@ export default function useMediaJobProgress(jobId, { kind = 'image' } = {}) {
     };
     const onFailed = (data) => {
       if (data.generationId !== jobId) return;
+      // The mediaJobQueue collapses user-canceled jobs into a *:failed
+      // socket event (SIGTERM looks like a failure to the underlying gen
+      // module) while the persisted job.status is actually 'canceled'.
+      // Re-fetch the authoritative state so MediaJobThumb's canceled UI
+      // is reachable in live sessions, not just on reload.
       setState((prev) => ({ ...prev, status: 'failed', error: data.error || 'failed' }));
+      getMediaJob(jobId).then((job) => {
+        if (canceled || !mountedRef.current) return;
+        if (job?.status === 'canceled') {
+          setState((prev) => ({ ...prev, status: 'canceled', error: job.error || prev.error }));
+        }
+      }).catch(() => {});
     };
 
     socket.on(`${evtPrefix}:started`, onStarted);

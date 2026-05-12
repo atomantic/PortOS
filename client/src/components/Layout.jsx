@@ -393,7 +393,13 @@ export default function Layout() {
     // Track successful fetches only — a failed fetch shouldn't lock out the
     // next focus retry for 30 seconds.
     let lastSuccessAt = 0;
-    const sigOf = (items) => items.map((i) => `${i.id}@${i.updatedAt}`).join('|');
+    // Include EVERY rendered field — id/updatedAt alone misses cases like
+    // a series rename (which doesn't bump the issue's updatedAt) where the
+    // sidebar label would stay stale because `sigOf(prev) === sigOf(next)`
+    // suppresses the state update.
+    const sigOf = (items) => items
+      .map((i) => `${i.id}@${i.updatedAt}|${i.number}|${i.title}|${i.seriesName}`)
+      .join('||');
     const loadRecent = () => {
       api.listRecentPipelineIssues(10)
         .then((items) => {

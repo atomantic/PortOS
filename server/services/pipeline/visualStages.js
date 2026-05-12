@@ -393,8 +393,18 @@ export async function refineComicPanelPrompt(issueId, pageIndex, panelIndex, opt
 
   const prev = panels[ni - 1];
   const next = panels[ni + 1];
+  // Drop dialogue rows whose line is empty/whitespace — matches the same
+  // filter `composeComicPagePrompt` applies, so the refine template doesn't
+  // get fed noisy `CHAR: ""` fragments that would confuse the LLM.
   const dialogue = Array.isArray(panel.dialogue) && panel.dialogue.length
-    ? panel.dialogue.map((d) => `${(d.character || 'CHAR')}: "${(d.line || '').trim()}"`).join(' / ')
+    ? panel.dialogue
+      .map((d) => {
+        const character = (d.character || 'CHAR').trim() || 'CHAR';
+        const line = (d.line || '').trim();
+        return line ? `${character}: "${line}"` : null;
+      })
+      .filter(Boolean)
+      .join(' / ')
     : '';
 
   const { refined, changes, runId, providerId } = await runPromptRefine({
