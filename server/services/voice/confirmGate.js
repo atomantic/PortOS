@@ -43,7 +43,17 @@ export const DESTRUCTIVE_LABEL_RE = /\b(delete|remove|discard|reset|clear)\b/i;
 const AFFIRM_RE = /^(?:confirm|yes(?:[, ]+(?:do it|please|delete|remove|clear|reset|discard))?|do it|go ahead|proceed|continue|affirmative|ok(?:ay)?)$/i;
 const NEGATIVE_RE = /^(?:(?:ok(?:ay)?[, ]+)?(?:no|cancel|stop|nope|never ?mind|don'?t|abort|negative))$/i;
 
-const normalize = (text) => (text || '').trim().replace(/^["']+|["']+$/g, '').replace(/[.!?]+$/, '');
+// Strip wrapping quotes AND trailing sentence punctuation in either order:
+// `"confirm".` and `"confirm."` and `confirm.` should all normalize to
+// `confirm`. Running each pass twice handles the cases where punctuation
+// is outside the closing quote and where it's inside.
+const normalize = (text) => {
+  let s = (text || '').trim();
+  for (let i = 0; i < 2; i++) {
+    s = s.replace(/^["']+|["']+$/g, '').replace(/[.!?]+$/, '');
+  }
+  return s;
+};
 
 export const isDestructiveLabel = (label) => DESTRUCTIVE_LABEL_RE.test(label || '');
 

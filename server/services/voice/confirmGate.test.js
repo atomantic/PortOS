@@ -97,6 +97,30 @@ describe('isAffirmative / isNegative', () => {
     expect(isNegative('cancel.')).toBe(true);
   });
 
+  // Regression guard: quote-then-punctuation AND punctuation-then-quote both
+  // need to normalize down to the bare token. A single-pass strip that
+  // removes quotes before trailing punctuation drops `"confirm".` to
+  // `confirm"`, which silently fails the AFFIRM_RE match and discards a
+  // pending destructive action.
+  it.each([
+    '"confirm".',   // punctuation outside the closing quote
+    '"confirm."',   // punctuation inside the closing quote
+    "'yes'.",       // single quotes + outside punctuation
+    '"yes!"',       // exclamation inside quotes
+    '"go ahead."',  // multi-word affirmative inside quotes + punctuation
+  ])('handles quote/punctuation ordering "%s" as affirmative', (s) => {
+    expect(isAffirmative(s)).toBe(true);
+  });
+
+  it.each([
+    '"cancel".',
+    '"cancel."',
+    "'stop'.",
+    '"no!"',
+  ])('handles quote/punctuation ordering "%s" as negative', (s) => {
+    expect(isNegative(s)).toBe(true);
+  });
+
   // "okay cancel" / "ok no" etc. — bare "ok/okay" matches AFFIRM_RE, so
   // without filler-tolerance in NEGATIVE_RE the user's intended cancel would
   // be mis-executed as a destructive confirmation.

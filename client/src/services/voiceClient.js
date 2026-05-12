@@ -326,13 +326,19 @@ socket.on('voice:tts:audio', ({ sentence, wav }) => {
 });
 
 // Proactive CoS speech. Server-pushed lines (alerts/briefings/reminders) come
-// in on a separate channel so the client can render a distinct visual cue and
-// keep them out of the user/assistant dialogue history. Reuse the same audio
-// playback queue + TTS echo memory as user-initiated turns so mic barge-in
-// (voice:interrupt → stopPlayback) cancels proactive audio for free.
+// in on a separate channel so the client can render a distinct visual cue;
+// VoiceWidget decides whether/how to display them (toast + history appending).
+// Reuse the same audio playback queue + TTS echo memory as user-initiated
+// turns so mic barge-in (voice:interrupt → stopPlayback) cancels proactive
+// audio for free.
+//
+// NOTE: deliberately NOT gated by `rejectingTts`. That flag suppresses stale
+// chunks from a CANCELLED turn (it stays sticky after stopPlayback() until the
+// next voice:transcript), but a proactive alert is its own event — gating it
+// would silently drop reminders/briefings whenever the user had recently
+// interrupted a turn, which is exactly when proactive nudges are most useful.
 const proactiveListeners = new Set();
 socket.on('voice:speak', ({ sentence, wav, priority, source, ts }) => {
-  if (rejectingTts) return;
   rememberTtsSentence(sentence);
   const ab = toExactArrayBuffer(wav);
   if (!ab) return;
