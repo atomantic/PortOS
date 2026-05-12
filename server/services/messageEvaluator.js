@@ -71,12 +71,11 @@ async function resolveProviderConfig(actionType) {
 
 async function runPrompt(provider, model, prompt, source) {
   // promptRunner internally gates per-call model overrides for providers
-  // that don't honor them (non-codex CLI), so we pass `model` through as-is
-  // and rely on the shared layer to drop it when appropriate. The triage
-  // path doesn't surface the effective model to the caller; if a future
-  // log/return needs it, read `model` off the resolved value here.
-  const { text } = await runPromptThroughProvider({ provider, model, prompt, source });
-  return text;
+  // that don't honor them (non-codex CLI). Surface the effective model
+  // it actually used so callers can log it accurately instead of echoing
+  // back the (possibly-dropped) input model.
+  const { text, model: effectiveModel } = await runPromptThroughProvider({ provider, model, prompt, source });
+  return { text, model: effectiveModel };
 }
 
 function parseEvalResponse(text, messageIds) {
@@ -116,8 +115,9 @@ export async function evaluateMessages(messages) {
   const rulesSection = await buildRulesPromptSection();
   const prompt = EVAL_PROMPT + rulesSection + JSON.stringify(payload, null, 2) + '\n' + EVAL_PROMPT_SUFFIX;
 
-  console.log(`📧 Evaluating ${messages.length} messages with ${provider.name}/${model || provider.defaultModel}`);
-  const response = await runPrompt(provider, model, prompt, 'messages-triage');
+  console.log(`📧 Evaluating ${messages.length} messages with ${provider.name}`);
+  const { text: response, model: effectiveModel } = await runPrompt(provider, model, prompt, 'messages-triage');
+  console.log(`📧 Triage ran on ${provider.name}/${effectiveModel || '(default)'}`);
 
   const messageIds = new Set(messages.map(m => m.id));
   const evaluations = parseEvalResponse(response, messageIds);
@@ -216,7 +216,8 @@ export async function generateReplyBody(message, instructions = '', options = {}
   if (threadContext) template += threadContext;
 
   const voiceLabel = shouldUseVoice ? ' with voice' : '';
-  console.log(`📧 Generating AI reply${voiceLabel} with ${provider.name}/${model || provider.defaultModel}`);
-  const response = await runPrompt(provider, model, template, 'messages-reply');
+  console.log(`📧 Generating AI reply${voiceLabel} with ${provider.name}`);
+  const { text: response, model: effectiveModel } = await runPrompt(provider, model, template, 'messages-reply');
+  console.log(`📧 Reply ran on ${provider.name}/${effectiveModel || '(default)'}`);
   return { body: response.trim() };
 }

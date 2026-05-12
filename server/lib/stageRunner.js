@@ -109,19 +109,15 @@ export async function runStagedLLM(stageName, variables, options = {}) {
   const stage = getStage(stageName);
   const provider = await resolveProviderForStage(stage, options);
   const prompt = await buildPrompt(stageName, variables);
-  let resolvedModel = resolveModel(provider, options.modelOverride || stage?.model);
-  // Special case: gemini-cli requires an explicit model — toolkit defaults
-  // to `auto` which can resolve to a slow reasoning model (LM Studio gotcha).
-  if (provider.id === 'gemini-cli' && !resolvedModel) {
-    resolvedModel = provider.lightModel || 'gemini-2.5-flash';
-  }
+  const resolvedModel = resolveModel(provider, options.modelOverride || stage?.model);
   // Non-codex CLI providers ignore per-call model overrides at the
   // runner.js#buildCliArgs layer, so recording the resolved model in
   // createRun would lie about what actually ran. Drop the override at
   // the record + log boundary for those providers — promptRunner does
   // the same internally. PLAN.md tracks extending buildCliArgs to honor
   // per-call model for all CLI providers; once that lands the gate goes
-  // away.
+  // away (and the gemini-cli fast-model fallback can be reintroduced
+  // here, since today it would be silently dropped anyway).
   const effectiveModel = providerHonorsModelOverride(provider)
     ? resolvedModel
     : (provider.defaultModel || provider.models?.[0] || null);
