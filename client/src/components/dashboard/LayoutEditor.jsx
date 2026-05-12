@@ -79,11 +79,14 @@ export default function LayoutEditor({ layouts, activeLayoutId, limits, onClose,
   const close = useCallback(() => { onClose(); }, [onClose]);
 
   // Inline modes (duplicate-name input, delete confirm, switch confirm) need
-  // Esc to cancel just the inline state, not close the whole editor. Modal's
-  // window-level capture-phase Esc listener fires before any inner input's
-  // onKeyDown, so we can't rely on stopPropagation from those inputs — they
-  // never see the event. Instead we hand Modal a custom `onEsc` that maps Esc
-  // to `setMode('idle')` while a mode is active, falling back to close().
+  // Esc to cancel just the inline state, not close the whole editor. The
+  // inputs' own onKeyDown handlers DO see Esc first (Modal's window listener
+  // is bubble-phase) and call preventDefault() — and our Modal honours
+  // `defaultPrevented` by skipping the close. But relying on every inline
+  // handler to remember preventDefault is fragile. Cleaner: hand Modal a
+  // single `onEsc` that maps Esc to `setMode('idle')` while a mode is
+  // active, falling back to close() at the top level. This works regardless
+  // of whether the focused element has its own onKeyDown.
   const handleEsc = useCallback(() => {
     if (mode !== 'idle') { setMode('idle'); return; }
     close();

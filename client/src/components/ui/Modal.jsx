@@ -92,16 +92,17 @@ function pushModal(id) {
   if (!globalEscListener) {
     globalEscListener = (e) => {
       if (e.key !== 'Escape' || modalStack.length === 0) return;
-      // An inner widget already consumed Esc (e.g. a focused <select>
-      // closing its dropdown, a custom menu calling preventDefault()). Leave
-      // them alone — don't close the modal too.
+      // Always swallow the keystroke at this layer so it can't reach window-
+      // level handlers behind us (an underlying MediaLightbox, the layer
+      // below in the Modal stack, voice-widget capture, etc.). Whether we
+      // also dispatch the close handler depends on `defaultPrevented`: if a
+      // child widget already consumed Esc (focused <select> closing its
+      // dropdown, custom menu calling preventDefault()), skip the close —
+      // but the keystroke is still ours to absorb.
+      e.stopImmediatePropagation();
       if (e.defaultPrevented) return;
       const top = modalStack[modalStack.length - 1];
       const handler = escHandlers.get(top);
-      // Block fallthrough at the top-most modal regardless of whether it
-      // registered a close handler. Otherwise Esc could reach the modal
-      // beneath this one.
-      e.stopImmediatePropagation();
       if (handler) handler();
     };
     window.addEventListener('keydown', globalEscListener);
