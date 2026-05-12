@@ -27,8 +27,13 @@ export const DESTRUCTIVE_LABEL_RE = /\b(delete|remove|discard|reset|clear)\b/i;
 // "yes I want to delete the goal" is treated as an affirmative confirmation,
 // while "the article is yes-ifying things" doesn't match. Trailing
 // punctuation is stripped before matching.
+// Optional leading "ok/okay " filler is allowed in NEGATIVE_RE so that
+// "okay cancel" / "okay never mind" are correctly classified as cancellations
+// rather than being eaten by AFFIRM_RE's bare "ok/okay" branch. resolvePending
+// also checks negative BEFORE affirmative as belt-and-suspenders for any
+// future affirmative tokens that happen to share a prefix with a negative.
 const AFFIRM_RE = /^(?:confirm|yes(?:[, ]+(?:do it|please|delete|remove|clear|reset|discard))?|do it|go ahead|proceed|continue|affirmative|ok(?:ay)?)\b/i;
-const NEGATIVE_RE = /^(?:no|cancel|stop|nope|never ?mind|don'?t|abort|negative)\b/i;
+const NEGATIVE_RE = /^(?:(?:ok(?:ay)?[, ]+)?(?:no|cancel|stop|nope|never ?mind|don'?t|abort|negative))\b/i;
 
 const normalize = (text) => (text || '').trim().replace(/^["']+|["']+$/g, '').replace(/[.!?]+$/, '');
 
@@ -62,8 +67,12 @@ export const buildPending = ({ tool, args, target, createdAt = Date.now() }) => 
 // utterance normally without speaking a "cancelled" confirmation.
 export const resolvePending = (pending, userText) => {
   if (!pending) return { action: 'passthrough' };
-  if (isAffirmative(userText)) return { action: 'execute', pending };
+  // Check negative BEFORE affirmative — `AFFIRM_RE` matches bare leading
+  // "ok"/"okay", so "okay cancel" / "okay never mind" would otherwise
+  // execute the destructive action. Safe-by-default: if the user uttered
+  // any cancel word in the sentence-leading position, take the cancel.
   if (isNegative(userText)) return { action: 'cancel', pending };
+  if (isAffirmative(userText)) return { action: 'execute', pending };
   return { action: 'passthrough' };
 };
 

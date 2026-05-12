@@ -369,7 +369,12 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
       if (decision.action === 'execute') {
         const { target } = pending;
         tlog(`confirm.execute ${pending.tool} target="${target.label}"`);
-        emit('voice:ui:click', { target: { ref: target.ref, label: target.label } });
+        // Confirmation happens on the user's NEXT spoken turn, by which time
+        // the client may have re-indexed the DOM and reassigned refs — the
+        // stale `target.ref` could now point at a different element. Emit
+        // only the `label` so the client falls through to label-based
+        // resolution (uiInteract.resolve() prefers ref when present).
+        emit('voice:ui:click', { target: { label: target.label } });
         const reply = `Confirmed — ${target.label}.`;
         await speakSyntheticReply(reply);
         return { transcript: userText, reply };

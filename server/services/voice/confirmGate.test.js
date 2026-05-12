@@ -96,6 +96,19 @@ describe('isAffirmative / isNegative', () => {
     expect(isAffirmative('yes!')).toBe(true);
     expect(isNegative('cancel.')).toBe(true);
   });
+
+  // "okay cancel" / "ok no" etc. — bare "ok/okay" matches AFFIRM_RE, so
+  // without filler-tolerance in NEGATIVE_RE the user's intended cancel would
+  // be mis-executed as a destructive confirmation.
+  it.each([
+    'okay cancel',
+    'okay never mind',
+    'ok no',
+    'okay stop',
+    'ok cancel',
+  ])('treats filler "%s" as negative, not affirmative', (s) => {
+    expect(isNegative(s)).toBe(true);
+  });
 });
 
 describe('resolvePending', () => {
@@ -131,6 +144,16 @@ describe('resolvePending', () => {
 
   it('cancel on "stop"', () => {
     expect(resolvePending(pending, 'stop').action).toBe('cancel');
+  });
+
+  // Regression guard for the "okay cancel" class: negative must win over
+  // affirmative when the user prefixes a cancel word with "ok/okay".
+  it.each([
+    ['okay cancel', 'cancel'],
+    ['ok no', 'cancel'],
+    ['okay never mind', 'cancel'],
+  ])('classifies "%s" as %s (negative beats affirmative filler)', (utterance, expected) => {
+    expect(resolvePending(pending, utterance).action).toBe(expected);
   });
 });
 

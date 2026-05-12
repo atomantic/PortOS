@@ -163,6 +163,10 @@ export const registerVoiceHandlers = (socket) => {
 
   socket.on('voice:interrupt', () => {
     state.ctrl?.abort();
+    // Clear any pending destructive-confirmation gate — after an interrupt
+    // the user's next "yes" should NOT be consumed as confirmation of a
+    // stale, abandoned destructive action.
+    state.pendingDestructive = null;
     socket.emit('voice:idle', { reason: 'interrupted' });
   });
 
@@ -170,6 +174,10 @@ export const registerVoiceHandlers = (socket) => {
     state.ctrl?.abort();
     state.history = [];
     state.dictation = { enabled: false, date: null };
+    // Same safety guard as voice:interrupt — a reset wipes conversation
+    // context, so a pending destructive click from the prior turn must
+    // not survive into the next utterance.
+    state.pendingDestructive = null;
     socket.emit('voice:dictation', { enabled: false });
     socket.emit('voice:idle', { reason: 'reset' });
   });
@@ -209,13 +217,14 @@ export const registerVoiceHandlers = (socket) => {
     if (!payload || typeof payload !== 'object') return;
     const { path, title, elements, text } = payload;
     if (!Array.isArray(elements)) return;
-    // Cap to avoid prompt bloat from a malicious or runaway client.
-    // MAX_TEXT matches the client-side `MAX_TEXT_CHARS` in domIndex.js so the
-    // ~8 KB cap documented on `ui_read` is enforced consistently end-to-end.
-    const MAX = 200;
+    // Cap elements at 200 to bound prompt size from a malicious or runaway
+    // client. (The visible-text `text` field has its own ~8 KB cap, enforced
+    // below via `truncateOnWordBoundary(MAX_UI_TEXT_CHARS)` — see the
+    // module-level constant for the rationale.)
+    const MAX_ELEMENTS = 200;
     const filtered = elements
       .filter((e) => e && typeof e === 'object' && typeof e.ref === 'number' && typeof e.label === 'string')
-      .slice(0, MAX);
+      .slice(0, MAX_ELEMENTS);
     state.ui = {
       path: typeof path === 'string' ? path.slice(0, 256) : null,
       title: typeof title === 'string' ? title.slice(0, 120) : null,
