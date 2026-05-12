@@ -170,7 +170,12 @@ export async function listIssues({ seriesId = null } = {}) {
  */
 export async function listRecentIssues({ limit = 10 } = {}) {
   const { issues } = await readState();
-  const clamped = Math.max(1, Math.min(50, Math.floor(Number(limit)) || 10));
+  // Coerce in two passes so non-finite inputs ('abc', undefined) fall to
+  // the default rather than letting JS's `0 || 10` short-circuit return
+  // 10 for an explicit limit=0.
+  const raw = Number(limit);
+  const fallback = Number.isFinite(raw) ? Math.floor(raw) : 10;
+  const clamped = Math.max(1, Math.min(50, fallback));
   return [...issues]
     .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))
     .slice(0, clamped);

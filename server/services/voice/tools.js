@@ -222,14 +222,17 @@ const GROUP_INTENT = {
   // page" by anchoring on creation verbs paired with visual nouns.
   media: /\b(?:generate|render|create|draw|sketch|paint|illustrate|make|design|produce)\b[^.!?\n]{0,30}\b(?:image|picture|photo|illustration|art(?:work)?|render|drawing|sketch|portrait|wallpaper|scene|asset|graphic|logo|icon)\b|\bimagegen\b/i,
   // Pipeline stage navigation — fires on "next stage", "previous stage",
-  // "back to prose", "open the storyboards", "open prose", and the stage
-  // names themselves (idea, prose, comic script, tv script, comic pages,
-  // storyboards, episode video). The stage-name alternation is shared by
-  // open/go-to/back-to so "open prose" and "back to storyboards" route
-  // correctly without requiring the trailing word "stage". The leading
-  // anchors ("open the", "go to", "back to") keep "take me to pipeline"
-  // out of this group — that still routes to ui_navigate.
-  pipeline: /\b(?:next stage|previous stage|prev stage|stage (?:advance|forward|back)|(?:open|go to|back to)(?: the)? (?:idea|prose|comic ?script|tv ?script|comic ?pages?|storyboards?|episode ?video)(?: stage)?)\b/i,
+  // "back to prose", "open the storyboards", "open prose", "open teleplay",
+  // and the stage names + their spoken aliases (idea, prose, story,
+  // comic script, teleplay, comic pages, pages, storyboards, scenes,
+  // episode video, episode, video). The stage-name alternation is shared
+  // across open/go-to/back-to so users don't need to say "stage" as a
+  // suffix. The leading anchors keep "take me to pipeline" out of this
+  // group — that still routes to ui_navigate.
+  //
+  // Alias list must mirror PIPELINE_STAGE_ALIASES below so any alias
+  // accepted by pipeline_open_stage actually triggers the group.
+  pipeline: /\b(?:next stage|previous stage|prev stage|stage (?:advance|forward|back)|(?:open|go to|back to)(?: the)? (?:idea|prose|story|comic ?script|comicscript|comics|tv ?script|tvscript|teleplay|comic ?pages?|comicpages|pages|storyboards?|scenes|episode ?video|episodevideo|episode|video)(?: stage)?)\b/i,
   ui: UI_INTENT_RE,
 };
 

@@ -709,5 +709,17 @@ describe('pipeline stage navigation tools', () => {
     it('does not steal generic "open pipeline" / "take me to pipeline" — those belong to ui_navigate', () => {
       expect(classifyIntent('take me to the pipeline').has('pipeline')).toBe(false);
     });
+
+    it('matches spoken aliases so PIPELINE_STAGE_ALIASES resolution actually runs', () => {
+      // Aliases that were dropped from the original narrow regex — without
+      // these the alias table below was unreachable for these utterances.
+      expect(classifyIntent('open teleplay').has('pipeline')).toBe(true);
+      expect(classifyIntent('open comics').has('pipeline')).toBe(true);
+      expect(classifyIntent('open the pages').has('pipeline')).toBe(true);
+      expect(classifyIntent('go to scenes').has('pipeline')).toBe(true);
+      expect(classifyIntent('open episode').has('pipeline')).toBe(true);
+      expect(classifyIntent('open video').has('pipeline')).toBe(true);
+      expect(classifyIntent('back to story').has('pipeline')).toBe(true);
+    });
   });
 });
