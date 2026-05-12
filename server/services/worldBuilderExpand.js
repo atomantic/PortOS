@@ -22,7 +22,7 @@ import {
 } from './worldBuilder.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { extractJson as extractJsonShared } from '../lib/jsonExtract.js';
-import { runPromptThroughProvider } from '../lib/promptRunner.js';
+import { providerHonorsModelOverride, runPromptThroughProvider } from '../lib/promptRunner.js';
 
 const LABEL_MAX = 80;
 
@@ -161,7 +161,12 @@ export async function expandWorldTemplate({ starterPrompt, providerId, model } =
   let provider = providerId ? await getProviderById(providerId).catch(() => null) : null;
   if (!provider) provider = await getActiveProvider();
   if (!provider) throw new Error('No AI provider available for world expansion');
-  const selectedModel = model || provider.defaultModel || provider.models?.[0];
+  // Mirror the gate that promptRunner applies internally so the log line
+  // and the returned `llm.model` field reflect what'll actually execute.
+  // Non-codex CLI providers ignore the per-call model.
+  const selectedModel = providerHonorsModelOverride(provider)
+    ? (model || provider.defaultModel || provider.models?.[0])
+    : (provider.defaultModel || provider.models?.[0]);
 
   const fullPrompt = EXPANSION_PROMPT.replace('{starterPrompt}', starterPrompt.trim());
   console.log(`🌍 World Builder expanding via ${provider.name}/${selectedModel || 'default'}`);

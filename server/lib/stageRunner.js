@@ -16,7 +16,7 @@
 
 import { ServerError } from './errorHandler.js';
 import { extractJson as extractJsonShared } from './jsonExtract.js';
-import { runPromptThroughProvider } from './promptRunner.js';
+import { providerHonorsModelOverride, runPromptThroughProvider } from './promptRunner.js';
 import { getActiveProvider, getProviderById } from '../services/providers.js';
 import { buildPrompt, getStage } from '../services/promptService.js';
 import { createRun } from '../services/runner.js';
@@ -109,26 +109,36 @@ export async function runStagedLLM(stageName, variables, options = {}) {
   const stage = getStage(stageName);
   const provider = await resolveProviderForStage(stage, options);
   const prompt = await buildPrompt(stageName, variables);
-  let model = resolveModel(provider, options.modelOverride || stage?.model);
+  let resolvedModel = resolveModel(provider, options.modelOverride || stage?.model);
   // Special case: gemini-cli requires an explicit model — toolkit defaults
   // to `auto` which can resolve to a slow reasoning model (LM Studio gotcha).
-  if (provider.id === 'gemini-cli' && !model) {
-    model = provider.lightModel || 'gemini-2.5-flash';
+  if (provider.id === 'gemini-cli' && !resolvedModel) {
+    resolvedModel = provider.lightModel || 'gemini-2.5-flash';
   }
+  // Non-codex CLI providers ignore per-call model overrides at the
+  // runner.js#buildCliArgs layer, so recording the resolved model in
+  // createRun would lie about what actually ran. Drop the override at
+  // the record + log boundary for those providers — promptRunner does
+  // the same internally. PLAN.md tracks extending buildCliArgs to honor
+  // per-call model for all CLI providers; once that lands the gate goes
+  // away.
+  const effectiveModel = providerHonorsModelOverride(provider)
+    ? resolvedModel
+    : (provider.defaultModel || provider.models?.[0] || null);
 
   const { runId } = await createRun({
     providerId: provider.id,
-    model,
+    model: effectiveModel,
     prompt,
     source: options.source || 'staged-llm',
   });
-  console.log(`📝 stage: ${provider.id} / ${model || '(default)'} / ${stageName} → ${runId.slice(0, 8)}`);
+  console.log(`📝 stage: ${provider.id} / ${effectiveModel || '(default)'} / ${stageName} → ${runId.slice(0, 8)}`);
 
   // Stage runs pre-create the run record (so the runId can be logged BEFORE
   // the LLM call starts), then thread that id through the shared runner.
   const { text } = await runPromptThroughProvider({
-    provider, model, prompt, source: options.source || 'staged-llm', runId,
+    provider, model: effectiveModel, prompt, source: options.source || 'staged-llm', runId,
   });
   const content = options.returnsJson ? extractJson(text) : text;
-  return { content, model: model || null, providerId: provider.id, runId };
+  return { content, model: effectiveModel || null, providerId: provider.id, runId };
 }

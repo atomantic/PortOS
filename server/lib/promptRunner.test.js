@@ -22,7 +22,7 @@ beforeEach(() => {
 });
 
 describe('promptRunner — happy paths', () => {
-  it('routes CLI providers through executeCliRun, accumulates text, resolves { text, runId }', async () => {
+  it('routes CLI providers through executeCliRun, accumulates text, resolves { text, runId, model }', async () => {
     runner.executeCliRun.mockImplementation(async (id, _p, _pr, _cwd, onData, onComplete, _t) => {
       onData('hello ');
       onData('world');
@@ -35,12 +35,12 @@ describe('promptRunner — happy paths', () => {
       source: 'test',
     });
 
-    expect(out).toEqual({ text: 'hello world', runId: 'run-xyz' });
+    expect(out).toEqual({ text: 'hello world', runId: 'run-xyz', model: 'm-default' });
     expect(runner.executeCliRun).toHaveBeenCalledTimes(1);
     expect(runner.executeApiRun).not.toHaveBeenCalled();
   });
 
-  it('routes API providers through executeApiRun, accumulates text, resolves { text, runId }', async () => {
+  it('routes API providers through executeApiRun, accumulates text, resolves { text, runId, model }', async () => {
     runner.executeApiRun.mockImplementation(async (id, _p, _m, _pr, _cwd, _ctx, onData, onComplete) => {
       onData('foo');
       onData({ text: 'bar' }); // API streams sometimes ship {text} chunks
@@ -54,7 +54,7 @@ describe('promptRunner — happy paths', () => {
       model: 'gpt-test',
     });
 
-    expect(out).toEqual({ text: 'foobar', runId: 'run-xyz' });
+    expect(out).toEqual({ text: 'foobar', runId: 'run-xyz', model: 'gpt-test' });
     expect(runner.executeApiRun).toHaveBeenCalledTimes(1);
     expect(runner.executeCliRun).not.toHaveBeenCalled();
   });

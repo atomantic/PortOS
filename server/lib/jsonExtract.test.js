@@ -43,6 +43,31 @@ describe('jsonExtract.tryParseWithRepair', () => {
     expect(tryParseWithRepair('{"a":[1,2,],"b":1,}')).toEqual({ value: { a: [1, 2], b: 1 } });
   });
 
+  it('preserves trailing-comma-like patterns INSIDE string values (string-aware repair)', () => {
+    // Without string-aware repair, `,}` inside a string value would be
+    // rewritten to `}`, corrupting the content. The repair only runs
+    // outside quoted string regions.
+    const input = '{"label":"hello ,}","b":1,}'; // trailing `,}` outside, `,}` inside string
+    expect(tryParseWithRepair(input)).toEqual({ value: { label: 'hello ,}', b: 1 } });
+  });
+
+  it('preserves `}}]` INSIDE string values (string-aware orphan-brace repair)', () => {
+    // The Codex orphan-brace repair `}}]` → `}]}` must not touch
+    // string contents — a model writing about JSON syntax in a label
+    // would otherwise be silently rewritten.
+    const input = '{"note":"the pattern }}] is a code smell","ok":true}';
+    expect(tryParseWithRepair(input)).toEqual({
+      value: { note: 'the pattern }}] is a code smell', ok: true },
+    });
+  });
+
+  it('preserves `[...]` placeholder-looking content INSIDE string values', () => {
+    // A string containing the literal text `[...]` (e.g. a translation
+    // note or instruction text) must not be replaced with `[]`.
+    const input = '{"hint":"insert [...] here"}';
+    expect(tryParseWithRepair(input)).toEqual({ value: { hint: 'insert [...] here' } });
+  });
+
   it('repairs Codex `}}]` orphan-brace corruption on a brace-balanced slice', () => {
     // In production this repair runs AFTER findBalancedBlocks has carved
     // out the outer-balanced slice. The slice contains `}}]` mid-content

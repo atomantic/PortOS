@@ -27,30 +27,56 @@ const DEFAULT_TIMEOUT_MS = 300000;
 const APPEND_CHUNK = (acc, chunk) => acc + (typeof chunk === 'string' ? chunk : (chunk?.text || ''));
 
 /**
+ * Returns true when the runner+provider pair will actually honor a
+ * per-call `model` override. For API providers the model is a
+ * first-class arg to `executeApiRun`. For CLI providers,
+ * `runner.js#buildCliArgs` currently only translates the resolved
+ * `defaultModel` into a `--model` flag for codex; claude-code and
+ * gemini-cli ignore it and run with whatever model is baked into
+ * `provider.args`. PLAN.md tracks extending buildCliArgs to all
+ * CLI providers — once that lands this predicate widens.
+ */
+export const providerHonorsModelOverride = (provider) =>
+  provider?.type === 'api' || provider?.id === 'codex';
+
+/**
  * Run a prompt through a provider and resolve with the streamed text +
  * run id. Rejects (via the strictest discriminator) on any runner-
  * reported failure.
+ *
+ * Per-call `model` overrides are silently dropped for providers that
+ * don't honor them (see `providerHonorsModelOverride`). This keeps the
+ * persisted run record honest about which model actually ran — passing
+ * the user's selection downstream when the runner can't apply it would
+ * make `/runs` and SSE status events lie about model usage.
  *
  * @param {object} args
  * @param {object} args.provider — { id, type: 'cli'|'api', timeout?, ... }
  * @param {string} args.prompt   — full text to send to the LLM
  * @param {string} args.source   — run-record tag (`'world-builder-expansion'`,
  *   `'media-prompt-refine'`, `'messages-triage'`, `'staged-llm'`, etc.)
- * @param {string} [args.model]  — explicit model id (CLI providers honor
- *   this only when buildCliArgs supports per-call model override —
- *   today that's just codex; the caller is responsible for the upstream
- *   "should I even pass model?" decision)
+ * @param {string} [args.model]  — model id hint; ignored when the
+ *   provider doesn't honor it (claude-code, gemini-cli today).
  * @param {string} [args.runId]  — caller-supplied run id (skip createRun
  *   round-trip when the caller has already created the run)
- * @returns {Promise<{ text: string, runId: string }>}
+ * @returns {Promise<{ text: string, runId: string, model: string|null }>}
+ *   — `model` is the resolved model that actually executed (null when
+ *   neither override nor provider.defaultModel applies).
  */
 export async function runPromptThroughProvider({ provider, prompt, source, model, runId: callerRunId }) {
+  // Resolve the model that'll actually run BEFORE creating the run record
+  // so the record reflects reality. For providers that don't honor the
+  // override, fall back to provider.defaultModel / models[0].
+  const effectiveModel = providerHonorsModelOverride(provider)
+    ? (model || provider.defaultModel || provider.models?.[0] || null)
+    : (provider.defaultModel || provider.models?.[0] || null);
+
   // Some call sites (stageRunner) create the run themselves so they can
   // log the runId before the LLM call starts. When provided, reuse it.
   // Otherwise create one here so callers always get a runId back.
   const runId = callerRunId || (await createRun({
     providerId: provider.id,
-    model,
+    model: effectiveModel,
     prompt,
     source,
   })).runId;
@@ -64,27 +90,19 @@ export async function runPromptThroughProvider({ provider, prompt, source, model
       if (result?.error || result?.success === false) {
         reject(new Error(result?.error || `${provider.type === 'cli' ? 'CLI' : 'API'} execution failed`));
       } else {
-        resolve({ text, runId });
+        resolve({ text, runId, model: effectiveModel });
       }
     };
 
     if (provider.type === 'cli') {
       // executeCliRun reads `provider.defaultModel` for both the CLI
-      // args (`buildCliArgs(provider)`) and the run-started metadata
-      // hook (which persists the model name on the run record). The
-      // toolkit's CLI entry doesn't accept a separate `model` param,
-      // so we'd have to clone the provider with the new defaultModel
-      // to honor a per-call override. But `runner.js#buildCliArgs`
-      // currently only translates `defaultModel` into a `--model`
-      // flag for the `codex` provider — claude-code and gemini-cli
-      // ignore it and run with whatever model is baked into
-      // provider.args. Cloning anyway would lie to the run-started
-      // hook about which model actually ran. Gate the clone to codex
-      // so the run record stays truthful. (PLAN.md tracks extending
-      // buildCliArgs to honor per-call model for all CLI providers.)
-      const honorsModelOverride = provider.id === 'codex';
-      const providerForCli = honorsModelOverride && model && model !== provider.defaultModel
-        ? { ...provider, defaultModel: model }
+      // args and the run-started metadata hook. Hand it a clone with
+      // effectiveModel in defaultModel so codex's --model flag picks
+      // up the override AND the hook reports the right model. For
+      // non-codex CLIs effectiveModel === provider.defaultModel
+      // (resolved above), so the clone is a no-op.
+      const providerForCli = effectiveModel && effectiveModel !== provider.defaultModel
+        ? { ...provider, defaultModel: effectiveModel }
         : provider;
       executeCliRun(
         runId,
@@ -99,7 +117,7 @@ export async function runPromptThroughProvider({ provider, prompt, source, model
       executeApiRun(
         runId,
         provider,
-        model,
+        effectiveModel,
         prompt,
         process.cwd(),
         [],

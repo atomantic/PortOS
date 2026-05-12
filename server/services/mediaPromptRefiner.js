@@ -1,6 +1,6 @@
 import { ServerError } from '../lib/errorHandler.js';
 import { findBalancedBlocks, tryParseWithRepair } from '../lib/jsonExtract.js';
-import { runPromptThroughProvider } from '../lib/promptRunner.js';
+import { providerHonorsModelOverride, runPromptThroughProvider } from '../lib/promptRunner.js';
 import { getProviderById } from './providers.js';
 
 const MAX_PROMPT_LEN = 8000;
@@ -104,19 +104,14 @@ ${feedback}`;
 // runner avoids the "stdin is not a terminal" failure mode that hits when
 // you spawn `codex` directly without the `exec -` invocation.
 //
-// Note: `runner.js#buildCliArgs` only translates `provider.defaultModel`
-// into a `--model` flag for `codex` today; `claude-code` and `gemini-cli`
-// ignore it and run with whatever model is baked into provider.args.
-// Pass the per-call model override only when it'll actually take effect —
-// otherwise the runner would lie about which model ran. PLAN.md tracks
-// extending buildCliArgs to all CLI providers.
+// promptRunner already drops the per-call model for providers that don't
+// honor it (see providerHonorsModelOverride), so we pass `model` through
+// unconditionally and let the shared layer decide. Wrap runner failures
+// in a typed ServerError so the route returns 502 PROMPT_REFINE_FAILED.
 function runRefinePrompt(provider, model, prompt) {
-  const canOverrideModel = provider.type !== 'cli' || provider.id === 'codex';
-  // Wrap runner failures in a typed ServerError so the route returns 502
-  // PROMPT_REFINE_FAILED instead of a raw 500 from asyncHandler.
   return runPromptThroughProvider({
     provider,
-    model: canOverrideModel ? model : undefined,
+    model,
     prompt,
     source: 'media-prompt-refine',
   }).catch((err) => {
@@ -148,16 +143,12 @@ export async function refineMediaPrompt({
     );
   }
 
-  // Resolve the model that'll actually run. For API + Codex CLI, the runner
-  // honors the per-call `model` override. For other CLI providers (claude-code,
-  // gemini-cli), `runner.js#buildCliArgs` ignores per-call model and runs
-  // whatever's baked into provider.args / provider.defaultModel — so reporting
-  // the user-requested model in the response/run-record would lie about which
-  // model produced the output. Fall back through defaultModel → models[0] for
-  // those providers so the returned `model` reflects reality. (PLAN.md tracks
-  // extending buildCliArgs to honor per-call model for all CLI providers.)
-  const honorsModelOverride = provider.type === 'api' || provider.id === 'codex';
-  const selectedModel = honorsModelOverride
+  // Resolve the model that'll actually run via the shared predicate so
+  // the early MODEL_REQUIRED guard + the response's `model` field match
+  // what promptRunner internally resolves. Non-codex CLI providers fall
+  // back to defaultModel → models[0] because their --model flag isn't
+  // wired (PLAN.md tracks extending buildCliArgs to all CLIs).
+  const selectedModel = providerHonorsModelOverride(provider)
     ? (model || provider.defaultModel || provider.models?.[0] || '')
     : (provider.defaultModel || provider.models?.[0] || '');
   if (!selectedModel && provider.type === 'api') {

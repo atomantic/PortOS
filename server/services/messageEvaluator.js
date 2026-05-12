@@ -4,7 +4,7 @@ import { getSettings } from './settings.js';
 import { getProviderById, getAllProviders } from './providers.js';
 import { buildRulesPromptSection } from './messageTriageRules.js';
 import { PATHS } from '../lib/fileUtils.js';
-import { runPromptThroughProvider } from '../lib/promptRunner.js';
+import { providerHonorsModelOverride, runPromptThroughProvider } from '../lib/promptRunner.js';
 
 const EVAL_PROMPT = `You are an email triage assistant. For each email below, recommend ONE action and a brief reason.
 
@@ -70,7 +70,13 @@ async function resolveProviderConfig(actionType) {
 }
 
 async function runPrompt(provider, model, prompt, source) {
-  const selectedModel = model || provider.defaultModel || provider.models?.[0];
+  // Non-codex CLI providers ignore per-call model overrides — passing
+  // the user-picked model through would mislead the run record + logs.
+  // promptRunner applies the same gate internally; we mirror it here so
+  // the log line below shows the actual effective model.
+  const selectedModel = providerHonorsModelOverride(provider)
+    ? (model || provider.defaultModel || provider.models?.[0])
+    : (provider.defaultModel || provider.models?.[0]);
   const { text } = await runPromptThroughProvider({ provider, model: selectedModel, prompt, source });
   return text;
 }

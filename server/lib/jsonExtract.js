@@ -59,14 +59,66 @@ export function findBalancedBlocks(s, { startChar = '{', endChar = '}' } = {}) {
         if (depth === 0) { end = j; break; }
       }
     }
-    // Unbalanced: bail rather than scanning past — a later block can't fix
-    // the depth imbalance and the next outer caller can handle the partial
-    // result.
+    // Intentional bail on the first unbalanced segment. A well-formed
+    // block COULD exist further along (e.g. an LLM that dumped partial
+    // JSON, then prose, then a complete second JSON object), but for
+    // PortOS's LLM-output use case the more common shape is "model
+    // emitted one JSON and then trailed off" — surfacing the candidates
+    // we have so far and letting the caller decide is safer than gluing
+    // together fragments that span an unbalanced gap. If a future use
+    // case needs scan-past-unbalanced behavior, add an opt-in option.
     if (end === -1) break;
     blocks.push(s.slice(start, end + 1));
     i = end + 1;
   }
   return blocks;
+}
+
+/**
+ * Apply a regex `replace()` to the input ONLY OUTSIDE quoted JSON
+ * string regions. Walks the input with the same string/escape awareness
+ * as `findBalancedBlocks`, splits into alternating "code" and "string"
+ * segments, runs the replace on each code segment, then reassembles.
+ * Strings are passed through verbatim, so a JSON string containing
+ * `,}` or `}}]` as content is preserved.
+ */
+function replaceOutsideStrings(input, pattern, replacement) {
+  if (typeof input !== 'string' || !input) return input;
+  const segments = [];
+  let cursor = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < input.length; i += 1) {
+    const ch = input[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === '\\') escaped = true;
+      else if (ch === '"') {
+        // String just closed at index `i`. The open-quote → close-quote
+        // range (inclusive) is a 'string' segment the replace can't touch.
+        segments.push({ kind: 'string', text: input.slice(cursor, i + 1) });
+        cursor = i + 1;
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      // About to enter a string at index `i`. Flush the preceding code
+      // region so the replace can fire on it.
+      if (i > cursor) segments.push({ kind: 'code', text: input.slice(cursor, i) });
+      cursor = i;
+      inString = true;
+    }
+  }
+  // Flush trailing region. If the input ended mid-string (malformed JSON),
+  // treat the unterminated tail as a string so the repair doesn't touch
+  // it — the parse will fail anyway and the caller falls through.
+  if (cursor < input.length) {
+    segments.push({ kind: inString ? 'string' : 'code', text: input.slice(cursor) });
+  }
+  return segments.map((seg) => (
+    seg.kind === 'code' ? seg.text.replace(pattern, replacement) : seg.text
+  )).join('');
 }
 
 /**
@@ -78,6 +130,10 @@ export function findBalancedBlocks(s, { startChar = '{', endChar = '}' } = {}) {
  *     between a variation's close-brace and the array's `]`. Swapping
  *     `}}]` → `}]}` (not dropping the brace) keeps the brace count
  *     correct so the outer container still closes.
+ *
+ * All repairs are STRING-AWARE: the regexes only touch characters
+ * outside quoted JSON string values, so a string containing `,}` or
+ * `}}]` as ordinary content is preserved.
  *
  * Returns `{ value }` on success (where `value` may be a valid JSON
  * `null`); returns `{ error }` if all repairs fail. The wrapper lets a
@@ -92,17 +148,17 @@ export function tryParseWithRepair(jsonText) {
   // `[...]` placeholder cleanup runs before the first parse so a block
   // containing only that token (no other JSON errors) succeeds on the
   // first try instead of falling into the trailing-comma branch.
-  const initial = jsonText.replace(/\[\s*\.\.\.\s*\]/g, '[]');
+  const initial = replaceOutsideStrings(jsonText, /\[\s*\.\.\.\s*\]/g, '[]');
   const initialResult = safeParse(initial);
   if (!initialResult.error) return initialResult;
 
-  const noTrailing = initial.replace(/,(\s*[}\]])/g, '$1');
+  const noTrailing = replaceOutsideStrings(initial, /,(\s*[}\]])/g, '$1');
   if (noTrailing !== initial) {
     const trailingResult = safeParse(noTrailing);
     if (!trailingResult.error) return trailingResult;
   }
 
-  const fixedOrphan = noTrailing.replace(/}\s*}\s*]/g, '}]}');
+  const fixedOrphan = replaceOutsideStrings(noTrailing, /}\s*}\s*]/g, '}]}');
   const orphanResult = safeParse(fixedOrphan);
   if (!orphanResult.error) return orphanResult;
 
