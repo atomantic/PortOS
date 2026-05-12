@@ -36,9 +36,13 @@ export default function DeployPanel({ appId, appName }) {
 
   useEffect(() => () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); }, []);
 
-  // Esc-to-dismiss is handled by <Modal closeOnEsc>. The default close path is
-  // handleClose (X button + backdrop click), which keeps state alive if a deploy
-  // is still running so output reappears when the user re-opens the modal.
+  // Pre-refactor, Esc always set dismissed=true (hide the modal, keep deploy
+  // state intact so output reappears when re-opened). X / backdrop ran the
+  // full handleClose which calls clearDeploy() once the deploy has finished.
+  // The shared Modal dispatches Esc via onClose by default, which would call
+  // clearDeploy after a finished deploy — losing the output. onEsc preserves
+  // the original "Esc always hides, never clears" semantics.
+  const handleEsc = () => setDismissed(true);
 
   const toggleFlag = (flag) => {
     setSelectedFlags(prev => {
@@ -122,6 +126,7 @@ export default function DeployPanel({ appId, appName }) {
         <Modal
           open
           onClose={handleClose}
+          onEsc={handleEsc}
           size="xl"
           backdropClassName="bg-black/60"
           panelClassName="bg-port-bg border border-port-border rounded-xl shadow-2xl max-h-[80vh] flex flex-col"

@@ -35,11 +35,14 @@
  *   usePortal               LayoutEditor / KeyboardHelp — escape any
  *                           stacking-context ancestors.
  *
- * Stacking: Modal uses a single module-scope `keydown` capture-phase
+ * Stacking: Modal uses a single module-scope bubble-phase `keydown`
  * listener that dispatches Esc only to the top-most open Modal — and only
  * the top-most. Every open Modal registers on the stack (regardless of its
  * Esc opt-in), so a closeOnEsc=false top-most layer still blocks the
- * keystroke from reaching the modal beneath it.
+ * keystroke from reaching the modal beneath it. Inner widgets that consume
+ * Esc themselves (native <select> closing a dropdown, custom popovers) can
+ * call event.preventDefault() — Modal honours `defaultPrevented` and skips
+ * the close in that case.
  */
 
 import { useEffect, useRef } from 'react';
@@ -64,12 +67,21 @@ const ALIGN_CLASSES = {
   top: 'items-start justify-center pt-[10vh] px-4 pb-4',
 };
 
-// Module-scope stack of open Modal ids. A single capture-phase keydown
+// Module-scope stack of open Modal ids. A single bubble-phase keydown
 // listener on `window` dispatches Esc only to the top-most modal — every
-// other listener (including the layer beneath this one) is blocked via
-// stopImmediatePropagation. Modals register here regardless of whether they
-// want to close on Esc, so a non-dismissible top-most layer still prevents
-// fallthrough to underlying modals.
+// other Modal listener (including the layer beneath this one) is blocked via
+// stopImmediatePropagation after dispatch.
+//
+// Bubble phase, not capture: an inner widget that wants to own Esc (native
+// <select> closing its dropdown, custom popover dismissing itself) gets the
+// event first and can call event.preventDefault(). We honour
+// `event.defaultPrevented` and skip the close in that case, so opening a
+// <select> inside a modal and pressing Esc closes the menu instead of the
+// whole modal.
+//
+// Modals register on the stack regardless of whether they opt in to Esc, so
+// a non-dismissible top-most layer still absorbs the keystroke and prevents
+// fallthrough to the modal beneath it.
 const modalStack = [];
 const escHandlers = new Map();
 let globalEscListener = null;
@@ -80,15 +92,19 @@ function pushModal(id) {
   if (!globalEscListener) {
     globalEscListener = (e) => {
       if (e.key !== 'Escape' || modalStack.length === 0) return;
+      // An inner widget already consumed Esc (e.g. a focused <select>
+      // closing its dropdown, a custom menu calling preventDefault()). Leave
+      // them alone — don't close the modal too.
+      if (e.defaultPrevented) return;
       const top = modalStack[modalStack.length - 1];
       const handler = escHandlers.get(top);
-      // Always block fallthrough at the top-most modal, even if it didn't
-      // register a handler (closeOnEsc=false + no onEsc). Otherwise Esc could
-      // reach the layer beneath and dismiss the wrong modal.
+      // Block fallthrough at the top-most modal regardless of whether it
+      // registered a close handler. Otherwise Esc could reach the modal
+      // beneath this one.
       e.stopImmediatePropagation();
       if (handler) handler();
     };
-    window.addEventListener('keydown', globalEscListener, true);
+    window.addEventListener('keydown', globalEscListener);
   }
 }
 
@@ -96,7 +112,7 @@ function popModal(id) {
   const idx = modalStack.lastIndexOf(id);
   if (idx >= 0) modalStack.splice(idx, 1);
   if (modalStack.length === 0 && globalEscListener) {
-    window.removeEventListener('keydown', globalEscListener, true);
+    window.removeEventListener('keydown', globalEscListener);
     globalEscListener = null;
   }
 }
