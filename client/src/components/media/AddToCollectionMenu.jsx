@@ -37,7 +37,7 @@ export default function AddToCollectionMenu({ item, size = 'sm' }) {
   const triggerRef = useRef(null);
   const menuRef = useRef(null);
 
-  const itemKey = `${item.kind}:${item.kind === 'video' ? item.id : item.filename}`;
+  const itemKey = item.key;
   const itemRef = item.kind === 'video' ? item.id : item.filename;
 
   const filtered = useMemo(() => {

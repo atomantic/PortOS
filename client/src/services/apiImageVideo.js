@@ -108,12 +108,14 @@ export const updateMediaCollection = (id, patch) => request(`/media/collections/
 export const deleteMediaCollection = (id) => request(`/media/collections/${encodeURIComponent(id)}`, {
   method: 'DELETE',
 });
-export const addMediaCollectionItem = (id, { kind, ref }) => request(`/media/collections/${encodeURIComponent(id)}/items`, {
+export const addMediaCollectionItem = (id, { kind, ref }, { silent = false } = {}) => request(`/media/collections/${encodeURIComponent(id)}/items`, {
   method: 'POST',
   body: JSON.stringify({ kind, ref }),
+  silent,
 });
-export const removeMediaCollectionItem = (id, key) => request(`/media/collections/${encodeURIComponent(id)}/items/${encodeURIComponent(key)}`, {
+export const removeMediaCollectionItem = (id, key, { silent = false } = {}) => request(`/media/collections/${encodeURIComponent(id)}/items/${encodeURIComponent(key)}`, {
   method: 'DELETE',
+  silent,
 });
 
 // Media annotations — per-item star + free-text note, keyed by "<kind>:<ref>"
