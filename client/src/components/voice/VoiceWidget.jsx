@@ -504,7 +504,11 @@ export default function VoiceWidget() {
   const fabSurface = 'border-violet-500/50 shadow-[0_0_24px_-4px_rgba(168,85,247,0.55)]';
 
   return (
-    <div className="fixed bottom-4 right-4 z-50 flex flex-col items-end gap-2">
+    // data-voice-widget marker is used by client/src/services/domIndex.js
+    // TEXT_EXCLUDE_SELECTORS to keep the widget's own conversation transcript
+    // out of the ui_read visible-text snapshot — otherwise the voice agent
+    // would "read the page" and recite its own dialog back to the user.
+    <div data-voice-widget className="fixed bottom-4 right-4 z-50 flex flex-col items-end gap-2">
       {!expanded && (
         <div className="md:hidden flex items-center gap-2">
           {capturing && <span className={`text-xs ${tone} bg-port-card/95 backdrop-blur border rounded-full px-2 py-1 ${fabSurface}`}>{label}</span>}

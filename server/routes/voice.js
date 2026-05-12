@@ -186,7 +186,10 @@ router.post('/test', asyncHandler(async (req, res) => {
 // quiet hours / disabled flag — those return 200 with `{ ok: false, reason }`
 // rather than an HTTP error because suppression is the documented contract.
 const speakBodySchema = z.object({
-  text: z.string().min(1).max(MAX_VOICE_TEXT_LEN),
+  // Trim first so whitespace-only payloads ("   ") fail the .min(1) check
+  // at the HTTP boundary with a 400, matching /api/voice/test's behavior
+  // instead of falling through to a 200 { ok:false, reason:'empty' }.
+  text: z.string().trim().min(1).max(MAX_VOICE_TEXT_LEN),
   priority: z.enum(['low', 'normal', 'high']).optional(),
   source: z.string().max(64).optional(),
 });

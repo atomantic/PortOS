@@ -226,6 +226,16 @@ describe('Voice Routes', () => {
       expect(proactiveSpeech.speakProactive).not.toHaveBeenCalled();
     });
 
+    // Regression: schema trims before .min(1) so whitespace-only payloads
+    // fail at the HTTP boundary with a 400, not at the downstream
+    // speakProactive empty-text branch with a 200 {ok:false}.
+    it.each(['   ', '\t', '\n', '   \t  \n  '])('rejects whitespace-only text "%s"', async (text) => {
+      const res = await request(buildApp()).post('/api/voice/speak').send({ text });
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('VALIDATION_ERROR');
+      expect(proactiveSpeech.speakProactive).not.toHaveBeenCalled();
+    });
+
     it('rejects invalid priority enum', async () => {
       const res = await request(buildApp())
         .post('/api/voice/speak')
