@@ -15,8 +15,9 @@
  */
 
 import { ServerError } from './errorHandler.js';
-import { extractJson as extractJsonShared } from './jsonExtract.js';
+import { extractJson as extractJsonShared, findBalancedBlocks, tryParseWithRepair } from './jsonExtract.js';
 import { providerHonorsModelOverride, runPromptThroughProvider } from './promptRunner.js';
+import { stripCodeFences } from './aiProvider.js';
 import { getActiveProvider, getProviderById } from '../services/providers.js';
 import { buildPrompt, getStage } from '../services/promptService.js';
 import { createRun } from '../services/runner.js';
@@ -79,34 +80,67 @@ async function resolveProviderForStage(stage, { providerOverride } = {}) {
 /**
  * Extract the first balanced object/array from an LLM response. Some
  * providers prepend explanation prose; the prompt asks for JSON only but
- * we have to be defensive. Delegates to `lib/jsonExtract.extractJson` so
- * stages benefit from string-aware brace walking + Codex `}}]` and
- * trailing-comma repairs.
+ * we have to be defensive. Walks the same fence-stripped text as
+ * `lib/jsonExtract` so stages benefit from string-aware brace walking +
+ * Codex `}}]` and trailing-comma repairs.
  *
- * Picks `blockType` by peeking at the first JSON delimiter (`{` vs `[`)
- * after stripping fences and any prose prefix. Without this, an array-of-
- * objects response like `[{"a":1}]` would object-walk first, return the
- * inner `{"a":1}`, and silently lose the array wrapper. Falls through to
- * the other shape if the preferred walk produced no parseable block.
+ * Picks the earliest *parseable* top-level block, regardless of whether
+ * it's an object or array. This is the only safe heuristic given:
+ *   - Banner lines like `[workdir, /tmp]` precede the real JSON, so
+ *     `indexOf('[')` is a lying delimiter peek.
+ *   - An object response may legitimately contain an inner array field
+ *     (e.g. `{"a":[1,2]}`), and a raw walker run with `blockType: 'array'`
+ *     would happily return that `[1,2]` if asked.
+ * By gathering balanced candidates for BOTH shapes, parsing each in
+ * source order, and returning the first that parses, banners get
+ * skipped (their contents don't parse as JSON) and the wrapper shape
+ * is preserved (`[{"a":1}]` parses as the array; `{"a":[1,2]}` parses
+ * as the object because the `{` opener comes before the inner `[`).
  */
 export function extractJson(text) {
   if (!text || typeof text !== 'string') throw new Error('Empty AI response');
-  // Mirror jsonExtract.extractJson's fence handling so the delimiter peek
-  // sees the same string the walker will see.
-  let probe = text.trim();
-  const fence = probe.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (fence) probe = fence[1].trim();
-  const firstObj = probe.indexOf('{');
-  const firstArr = probe.indexOf('[');
-  const preferArray = firstArr !== -1 && (firstObj === -1 || firstArr < firstObj);
-  const primary = preferArray ? 'array' : 'object';
-  const secondary = preferArray ? 'object' : 'array';
 
-  const first = extractJsonShared(text, { blockType: primary });
-  if (first.value !== undefined) return first.value;
-  const second = extractJsonShared(text, { blockType: secondary });
-  if (second.value !== undefined) return second.value;
-  throw new Error(`Invalid JSON in AI response: ${first.lastError?.message || 'no JSON block found'}`);
+  // Mirror jsonExtract.extractJson's fence handling so the candidate
+  // positions reflect the same text the underlying walker would see.
+  let s = stripCodeFences(text.trim());
+  const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fence) s = fence[1].trim();
+
+  // Collect candidates of BOTH shapes with their source-text positions.
+  // findBalancedBlocks returns block substrings in order; indexOf gives
+  // us the start so we can interleave the two shape lists.
+  const candidates = [];
+  let cursor = 0;
+  for (const block of findBalancedBlocks(s, { startChar: '{', endChar: '}' })) {
+    const idx = s.indexOf(block, cursor);
+    candidates.push({ block, start: idx });
+    cursor = idx + block.length;
+  }
+  cursor = 0;
+  for (const block of findBalancedBlocks(s, { startChar: '[', endChar: ']' })) {
+    const idx = s.indexOf(block, cursor);
+    candidates.push({ block, start: idx });
+    cursor = idx + block.length;
+  }
+  candidates.sort((a, b) => a.start - b.start);
+
+  // Fall back to the raw text if neither shape walker found anything —
+  // the response might still be parseable JSON (e.g. a bare number or
+  // string literal). tryParseWithRepair handles those too.
+  if (!candidates.length) candidates.push({ block: s, start: 0 });
+
+  let lastError;
+  for (const { block } of candidates) {
+    const parsed = tryParseWithRepair(block);
+    if (!parsed.error) return parsed.value;
+    lastError = parsed.error;
+  }
+
+  // Last resort: defer to extractJsonShared for the typed `lastError`
+  // message wording that callers may have come to depend on.
+  const fallback = extractJsonShared(text);
+  if (fallback.value !== undefined) return fallback.value;
+  throw new Error(`Invalid JSON in AI response: ${fallback.lastError?.message || lastError?.message || 'no JSON block found'}`);
 }
 
 /**

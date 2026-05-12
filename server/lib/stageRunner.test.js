@@ -89,6 +89,19 @@ describe('stageRunner — extractJson', () => {
   it('still extracts a leading object when an array appears later in prose', () => {
     expect(extractJson('Sure! {"a":1} (example array later: [1,2])')).toEqual({ a: 1 });
   });
+  it('skips a Codex CLI banner `[workdir, /tmp]` and returns the actual object', () => {
+    // Regression: a raw `indexOf('[') < indexOf('{')` peek would prefer
+    // array-mode and (in the worst case) return an inner array field
+    // instead of the wrapping object. Earliest-parseable-block ordering
+    // skips the banner because its contents don't parse as JSON.
+    const raw = 'OpenAI Codex CLI v2.1.0\n[workdir, /tmp]\n\n{"a":1,"b":[2,3]}\n[finished]';
+    expect(extractJson(raw)).toEqual({ a: 1, b: [2, 3] });
+  });
+  it('returns the wrapping object — not its inner array field — when both walks succeed', () => {
+    // Object opener comes before the inner array opener, so the object
+    // wins on earliest-start ordering.
+    expect(extractJson('{"items":[1,2,3]}')).toEqual({ items: [1, 2, 3] });
+  });
   it('throws on empty or non-string input', () => {
     expect(() => extractJson('')).toThrow(/Empty AI response/);
     expect(() => extractJson(null)).toThrow(/Empty AI response/);
