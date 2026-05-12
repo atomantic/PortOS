@@ -583,3 +583,164 @@ describe("image_generate", () => {
     codexEnabledRef.value = false;
   });
 });
+
+// Pipeline stage navigation tools — parsePipelineIssuePath, pipeline_next_stage,
+// pipeline_prev_stage, pipeline_open_stage, plus the GROUP_INTENT.pipeline regex.
+describe('pipeline stage navigation tools', () => {
+  // Each dispatch needs a ctx with `state.ui.path` (current page) and a
+  // `sideEffects` array (where navigate intents land). The helper builds
+  // a fresh ctx so per-test mutations don't bleed.
+  const makeCtx = (path) => ({
+    state: { ui: path === undefined ? undefined : { path } },
+    sideEffects: [],
+  });
+
+  describe('pipeline_next_stage', () => {
+    it('advances from idea → prose', async () => {
+      const ctx = makeCtx('/pipeline/issues/iss-abc/idea');
+      const r = await dispatchTool('pipeline_next_stage', {}, ctx);
+      expect(r.ok).toBe(true);
+      expect(r.stage).toBe('prose');
+      expect(ctx.sideEffects).toEqual([{ type: 'navigate', path: '/pipeline/issues/iss-abc/prose' }]);
+    });
+
+    it('refuses to advance past episodeVideo (last stage)', async () => {
+      const r = await dispatchTool('pipeline_next_stage', {}, makeCtx('/pipeline/issues/x/episodeVideo'));
+      expect(r.ok).toBe(false);
+      expect(r.summary).toMatch(/last stage/);
+    });
+
+    it('refuses when not on a pipeline issue page', async () => {
+      const r = await dispatchTool('pipeline_next_stage', {}, makeCtx('/brain/inbox'));
+      expect(r.ok).toBe(false);
+      expect(r.summary).toMatch(/\/pipeline\/issues\//);
+    });
+
+    it('defaults the parsed stage to idea when the path omits the stage segment', async () => {
+      const ctx = makeCtx('/pipeline/issues/iss-zzz');
+      const r = await dispatchTool('pipeline_next_stage', {}, ctx);
+      expect(r.ok).toBe(true);
+      expect(r.stage).toBe('prose');
+    });
+  });
+
+  describe('pipeline_prev_stage', () => {
+    it('rewinds from prose → idea', async () => {
+      const ctx = makeCtx('/pipeline/issues/iss-abc/prose');
+      const r = await dispatchTool('pipeline_prev_stage', {}, ctx);
+      expect(r.ok).toBe(true);
+      expect(r.stage).toBe('idea');
+      expect(ctx.sideEffects).toEqual([{ type: 'navigate', path: '/pipeline/issues/iss-abc/idea' }]);
+    });
+
+    it('refuses to rewind past idea (first stage)', async () => {
+      const r = await dispatchTool('pipeline_prev_stage', {}, makeCtx('/pipeline/issues/x/idea'));
+      expect(r.ok).toBe(false);
+      expect(r.summary).toMatch(/first stage/);
+    });
+  });
+
+  describe('pipeline_open_stage', () => {
+    it('opens a canonical stage id directly', async () => {
+      const ctx = makeCtx('/pipeline/issues/iss-x/idea');
+      const r = await dispatchTool('pipeline_open_stage', { stage: 'storyboards' }, ctx);
+      expect(r.ok).toBe(true);
+      expect(r.stage).toBe('storyboards');
+      expect(ctx.sideEffects).toEqual([{ type: 'navigate', path: '/pipeline/issues/iss-x/storyboards' }]);
+    });
+
+    it('resolves spoken aliases (teleplay → tvScript, pages → comicPages, video → episodeVideo)', async () => {
+      const ctx = makeCtx('/pipeline/issues/iss-x/idea');
+      const r1 = await dispatchTool('pipeline_open_stage', { stage: 'teleplay' }, ctx);
+      expect(r1.stage).toBe('tvScript');
+      const r2 = await dispatchTool('pipeline_open_stage', { stage: 'pages' }, ctx);
+      expect(r2.stage).toBe('comicPages');
+      const r3 = await dispatchTool('pipeline_open_stage', { stage: 'video' }, ctx);
+      expect(r3.stage).toBe('episodeVideo');
+    });
+
+    it('resolves canonical ids case-insensitively (e.g. "Prose" → prose, "ComicScript" → comicScript)', async () => {
+      const ctx = makeCtx('/pipeline/issues/iss-x/idea');
+      const r1 = await dispatchTool('pipeline_open_stage', { stage: 'Prose' }, ctx);
+      expect(r1.stage).toBe('prose');
+      const r2 = await dispatchTool('pipeline_open_stage', { stage: 'COMICSCRIPT' }, ctx);
+      // 'COMICSCRIPT' lowercased ('comicscript') hits the alias table.
+      expect(r2.stage).toBe('comicScript');
+    });
+
+    it('resolves singular "comic page" / "page" so the regex and alias table agree', async () => {
+      // The regex matches `comic ?pages?` (singular OR plural). The alias
+      // table now mirrors that so a matched utterance never bottoms out
+      // at "Unknown stage" with the user staring at a working group.
+      const ctx = makeCtx('/pipeline/issues/iss-x/idea');
+      const r1 = await dispatchTool('pipeline_open_stage', { stage: 'comic page' }, ctx);
+      expect(r1.stage).toBe('comicPages');
+      const r2 = await dispatchTool('pipeline_open_stage', { stage: 'page' }, ctx);
+      expect(r2.stage).toBe('comicPages');
+    });
+
+    it('rejects an unknown stage with a suggestion list', async () => {
+      const ctx = makeCtx('/pipeline/issues/iss-x/idea');
+      const r = await dispatchTool('pipeline_open_stage', { stage: 'whatever' }, ctx);
+      expect(r.ok).toBe(false);
+      expect(r.summary).toMatch(/storyboards/);
+    });
+  });
+
+  describe('parsePipelineIssuePath (via dispatch)', () => {
+    // The parser isn't exported directly — exercise it through the public
+    // tools so regressions show up where users would actually feel them.
+    it('strips a query string from the path before parsing the id', async () => {
+      const ctx = makeCtx('/pipeline/issues/iss-abc/prose?foo=bar');
+      const r = await dispatchTool('pipeline_next_stage', {}, ctx);
+      expect(r.ok).toBe(true);
+      // If the query bled into the issueId or stage, the navigate path
+      // would carry "?foo=bar" or fall back to 'idea' as the current stage.
+      expect(ctx.sideEffects[0].path).toBe('/pipeline/issues/iss-abc/comicScript');
+    });
+
+    it('strips a hash anchor from the path before parsing the id', async () => {
+      const ctx = makeCtx('/pipeline/issues/iss-abc/prose#anchor');
+      const r = await dispatchTool('pipeline_next_stage', {}, ctx);
+      expect(r.ok).toBe(true);
+      expect(ctx.sideEffects[0].path).toBe('/pipeline/issues/iss-abc/comicScript');
+    });
+
+    it('tolerates a missing UI state', async () => {
+      const r = await dispatchTool('pipeline_next_stage', {}, makeCtx(undefined));
+      expect(r.ok).toBe(false);
+    });
+  });
+
+  describe('classifyIntent — pipeline group', () => {
+    it('matches explicit stage-advance phrasings', () => {
+      expect(classifyIntent('next stage').has('pipeline')).toBe(true);
+      expect(classifyIntent('previous stage').has('pipeline')).toBe(true);
+      expect(classifyIntent('stage forward').has('pipeline')).toBe(true);
+    });
+
+    it('matches "open <stage>" without requiring the trailing word "stage"', () => {
+      expect(classifyIntent('open prose').has('pipeline')).toBe(true);
+      expect(classifyIntent('open the storyboards').has('pipeline')).toBe(true);
+      expect(classifyIntent('back to prose').has('pipeline')).toBe(true);
+      expect(classifyIntent('go to storyboards').has('pipeline')).toBe(true);
+    });
+
+    it('does not steal generic "open pipeline" / "take me to pipeline" — those belong to ui_navigate', () => {
+      expect(classifyIntent('take me to the pipeline').has('pipeline')).toBe(false);
+    });
+
+    it('matches spoken aliases so PIPELINE_STAGE_ALIASES resolution actually runs', () => {
+      // Aliases that were dropped from the original narrow regex — without
+      // these the alias table below was unreachable for these utterances.
+      expect(classifyIntent('open teleplay').has('pipeline')).toBe(true);
+      expect(classifyIntent('open comics').has('pipeline')).toBe(true);
+      expect(classifyIntent('open the pages').has('pipeline')).toBe(true);
+      expect(classifyIntent('open page').has('pipeline')).toBe(true);
+      expect(classifyIntent('go to scenes').has('pipeline')).toBe(true);
+      expect(classifyIntent('open episode').has('pipeline')).toBe(true);
+      expect(classifyIntent('open video').has('pipeline')).toBe(true);
+      expect(classifyIntent('back to story').has('pipeline')).toBe(true);
+    });
+  });
+});

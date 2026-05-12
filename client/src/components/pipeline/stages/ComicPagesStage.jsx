@@ -1,18 +1,21 @@
 import { useRef, useState } from 'react';
-import { Plus, Trash2, Sparkles, Loader2, Wand2, ImagePlus } from 'lucide-react';
+import { Plus, Trash2, Sparkles, Loader2, Wand2, WandSparkles, ImagePlus } from 'lucide-react';
 import toast from '../../ui/Toast';
 import { useArmedAction } from '../../../hooks/useArmedAction';
 import {
   generatePipelineVisualImage,
   generatePipelineComicPage,
+  refinePipelineComicPanelPrompt,
   updatePipelineIssue,
   extractPipelineComicPages,
 } from '../../../services/api';
+import MediaJobThumb from '../MediaJobThumb';
 
 export default function ComicPagesStage({ issue, onStageUpdate }) {
   const stage = issue.stages?.comicPages || { status: 'empty', pages: [] };
   const [pages, setPages] = useState(stage.pages || []);
   const [savingIdx, setSavingIdx] = useState(null);
+  const [refiningKey, setRefiningKey] = useState(null);
   // Per-page in-flight state. Codex can render multiple pages in parallel, so
   // tracking a single index would flip the spinner off the wrong button when
   // the first request finished while a second was still pending.
@@ -114,6 +117,32 @@ export default function ComicPagesStage({ issue, onStageUpdate }) {
     toast.success(`Queued ${result.mode} page render (${result.jobId.slice(0, 8)})`);
   };
 
+  // LLM-driven refinement of a single panel's description into a richer
+  // image-gen prompt. Server replaces the persisted description with the
+  // refined version and returns the updated issue.
+  const handleRefinePanel = async (pi, ni) => {
+    const panel = pages[pi]?.panels?.[ni];
+    if (!panel?.description?.trim()) {
+      toast.error('Add a description first');
+      return;
+    }
+    const key = `${pi}:${ni}`;
+    setRefiningKey(key);
+    const result = await refinePipelineComicPanelPrompt(issue.id, pi, ni, {})
+      .catch((err) => {
+        toast.error(err.message || 'Refine failed');
+        return null;
+      });
+    setRefiningKey(null);
+    if (!result) return;
+    if (result.issue) {
+      setPages(result.issue.stages?.comicPages?.pages || []);
+      onStageUpdate?.('comicPages', result.issue.stages.comicPages, result.issue);
+    }
+    const summary = result.changes?.[0] ? ` — ${result.changes[0]}` : '';
+    toast.success(`Refined panel ${pi + 1}.${ni + 1}${summary}`);
+  };
+
   const handleGeneratePanel = async (pi, ni) => {
     const panel = pages[pi].panels[ni];
     if (!panel.description?.trim()) {
@@ -189,9 +218,12 @@ export default function ComicPagesStage({ issue, onStageUpdate }) {
                     Generate page
                   </button>
                   {page.imageJobId ? (
-                    <span className="text-[10px] text-gray-500 font-mono break-all" title="Last page render job">
-                      page job {page.imageJobId.slice(0, 8)}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <MediaJobThumb jobId={page.imageJobId} label={`Page ${pi + 1}`} size="md" />
+                      <span className="text-[10px] text-gray-500 font-mono break-all" title="Last page render job">
+                        {page.imageJobId.slice(0, 8)}
+                      </span>
+                    </div>
                   ) : null}
                   <button
                     type="button"
@@ -219,6 +251,16 @@ export default function ComicPagesStage({ issue, onStageUpdate }) {
                     <div className="flex flex-col gap-1 items-stretch w-32">
                       <button
                         type="button"
+                        onClick={() => handleRefinePanel(pi, ni)}
+                        disabled={refiningKey !== null}
+                        title="Elaborate this panel description into a richer image-gen prompt (LLM call — replaces the current text)"
+                        className="inline-flex items-center justify-center gap-1 px-2 py-1.5 rounded bg-port-card border border-port-border text-white text-xs hover:border-port-accent/50 disabled:opacity-50"
+                      >
+                        {refiningKey === `${pi}:${ni}` ? <Loader2 size={12} className="animate-spin" /> : <WandSparkles size={12} />}
+                        AI: refine
+                      </button>
+                      <button
+                        type="button"
                         onClick={() => handleGeneratePanel(pi, ni)}
                         disabled={savingIdx === `${pi}:${ni}`}
                         className="inline-flex items-center justify-center gap-1 px-2 py-1.5 rounded bg-port-accent text-white text-xs disabled:opacity-50"
@@ -227,7 +269,10 @@ export default function ComicPagesStage({ issue, onStageUpdate }) {
                         Image
                       </button>
                       {panel.imageJobId ? (
-                        <span className="text-[10px] text-gray-500 font-mono break-all">job {panel.imageJobId.slice(0, 8)}</span>
+                        <>
+                          <MediaJobThumb jobId={panel.imageJobId} label={`Panel ${ni + 1}`} size="sm" />
+                          <span className="text-[10px] text-gray-500 font-mono break-all">job {panel.imageJobId.slice(0, 8)}</span>
+                        </>
                       ) : null}
                     </div>
                     <button

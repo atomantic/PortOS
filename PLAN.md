@@ -7,7 +7,6 @@ For project goals, see [GOALS.md](./GOALS.md). For completed work, see [DONE.md]
 ## Next Up
 
 1. **Voice agent next power-ups** — `ui_read` (extract visible page text so "what does this say?" works without hand-navigation), destructive-action confirmation gate (pause and require spoken "confirm" when `ui_click` matches `/delete|remove|discard|reset|clear/i`), proactive CoS speech (server-pushed voice with quiet-hours policy + barge-in contract).
-2. **God-file test coverage** — `cos.js` (3115 lines) and `agentLifecycle.js` (1446 lines) still have no test sibling. Add tests for `evaluateTasks` priority ordering + `dequeueNextTask` capacity guards (cos), and `spawnAgentForTask` + `handleAgentCompletion` error recovery (agentLifecycle). Both files are still growing — `agentLifecycle.js` is +11 LOC since last replan; add coverage before further surgery.
 
 ## Backlog
 
@@ -56,7 +55,9 @@ The dgrauet/ltx-2-mlx runtime ships with FFLF (true keyframe interpolation), aud
 
 These were flagged by the post-merge code review pass on the Z-Image + Civitai LoRA work but deliberately deferred to keep the original PR scoped.
 
-- [ ] **Extract `scripts/_runner_common.py`** — `scripts/flux2_macos.py` and `scripts/z_image_turbo.py` still duplicate `pick_device`, `make_generator`, `apply_memory_optimizations`, `write_sidecar`, `make_stepwise_callback` (~95% identical, only the latents-unpack branch differs), `_emit_user_error`, and the entire bottom-of-file HF cause-chain walker (`_repo_from_hf_error` + the gated/notfound/401 dispatch in `__main__`). Roughly 200 lines of byte-for-byte duplication. Extract into a shared module with `make_stepwise_callback(pipe, h, w, dir, *, unpack_latents=None)` and `install_hf_error_handler()` (decorator/context manager wrapping `main`). The `apply_loras` extraction already shipped via `scripts/lora_utils.py`; this is the same pattern, larger blast radius.
+_All items in this section have shipped — see DONE.md → 2026-05-12 for the
+"Civitai / Z-Image follow-ups — six post-merge cleanups" entry and the
+`scripts/_runner_common.py` extraction entry._
 - [ ] **Project-wide `<Modal>` component** — every modal in the app (`Flux2InstallModal`, `EditAppModal`, `MemoryEditModal`, `ResumeAgentModal`, `MediaLightbox`, `LayoutEditor`, `KeyboardHelp`, `RapidReader`, `DeployPanel`'s confirm, the new `CivitaiAuthModal` in `Loras.jsx`) rolls its own `fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4` backdrop + click-outside + close-button + ESC handler. Extract `client/src/components/ui/Modal.jsx` with backdrop + dialog props and a slot for the body, then convert all call sites. ~300 LOC of duplicated chrome across the codebase.
 
 - [ ] **Extract shared `runPromptThroughProvider` runner-wrapper** — four near-identical "create run → branch on provider.type → executeCliRun/executeApiRun → accumulate text → reject on error" implementations now exist: `server/services/mediaPromptRefiner.js#runRefinePrompt`, `server/services/messageEvaluator.js#runPrompt`, `server/lib/stageRunner.js#awaitRunnerCall`, `server/services/worldBuilderExpand.js#callLLM`. Promote into `server/lib/promptRunner.js` returning `{ text, runId }`, then collapse the four sites. Failure-handling drift is already visible (some reject on `success === false`, some only on `error`) — the unified version should pick the stricter discriminator. Surfaced from the Refine Prompt /simplify pass.
@@ -69,6 +70,7 @@ These were flagged by the post-merge code review pass on the Z-Image + Civitai L
 
 - [ ] **[HIGH][CODE]** `server/services/cos.js:3113` — remove `NODE_ENV !== 'test' && VITEST !== 'true'` init guard (test-specific hack in prod boot path).
 - [ ] **[HIGH][TESTS]** Create test files for `server/services/clinvar.js` and `server/services/telegramBridge.js`.
+- [ ] **[HIGH][CODE]** Wrap `handleAgentCompletion` body in try/finally so the terminal `runnerAgents.delete(agentId)` (`server/services/agentLifecycle.js:1146`) always runs. Today a throw from `completeAgent` (line 939), `completeAgentRun` (line 949), `updateTask` (lines 954 / 960), or `processAgentCompletion` (line 987) aborts the function and leaks the runner-agents Map entry forever, blocking any retry. Tests added 2026-05-12 in `agentLifecycle.test.js` ("regression-pin" block) document the gap — once the wrap lands, those tests' `runnerAgents.has(...)` assertions flip and need updating. Sister fix to the open Backlog item "Widen `spawningTasks` try/finally in `agentLifecycle.js#spawnAgentForTask`" above.
 - [ ] **[MEDIUM][CLIENT]** 4 components still redefine `formatBytes`/`formatTime`/`formatDuration`/`timeAgo`/`formatDate` locally instead of importing from `client/src/utils/formatters.js`: `pages/VideoTimelineEditor.jsx`, `pages/VideoTimeline.jsx`, `components/settings/MortalLoomTab.jsx`, `components/brain/tabs/ImportTab.jsx`. (Down from 8.)
 - [ ] **[MEDIUM][PERF]** `server/services/feeds.js#getItems` (lines 303–319) — full-sort-then-paginate on every request. Pre-sort once at write time or maintain a per-feed index.
 - [ ] **[MEDIUM][CODE]** Magic numbers in `cos.js:166,357`, `lmStudioManager.js:66`; brittle `err.message.startsWith('unknown piper voice:')` in `routes/voice.js:160` and `err.message.includes('not initialized')` in `services/visionTest.js:124`.

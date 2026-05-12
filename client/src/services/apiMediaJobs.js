@@ -7,7 +7,11 @@ export const listMediaJobs = (filters = {}) => {
   return request(`/media-jobs${qs ? `?${qs}` : ''}`);
 };
 
-export const getMediaJob = (id) => request(`/media-jobs/${encodeURIComponent(id)}`);
+// `silent` so speculative lookups (e.g. MediaJobThumb hydration for old
+// panel/scene jobIds past the queue's 24h archive TTL) don't surface a
+// global toast on the routine 404 — the caller's own .catch handles the
+// missing-job case as a cache miss.
+export const getMediaJob = (id) => request(`/media-jobs/${encodeURIComponent(id)}`, { silent: true });
 
 export const cancelMediaJob = (id) => request(`/media-jobs/${encodeURIComponent(id)}/cancel`, { method: 'POST' });
 
