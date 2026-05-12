@@ -20,7 +20,7 @@
  * test of mocks rather than logic, so we follow the established
  * inline-function-copy pattern from `subAgentSpawner.test.js` and
  * `agentLifecycle.test.js`: lift the priority/capacity slice into a pure
- * function that mirrors the production loop and exercise IT with test data.
+ * function that mirrors the production loop and exercise it with test data.
  *
  * A source-level regression check at the bottom asserts the priority order
  * and the capacity-guard early return are still in place in `cos.js`, so a
