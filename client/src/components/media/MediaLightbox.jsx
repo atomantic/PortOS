@@ -6,13 +6,14 @@ import {
 import toast from '../ui/Toast';
 import PromptRefineModal from './PromptRefineModal';
 import AddToCollectionMenu from './AddToCollectionMenu';
+import { useScrollLock } from '../../hooks/useScrollLock';
 
 // Intentionally NOT migrated to <ui/Modal>. The prev/next buttons sit as
 // viewport-edge siblings of the card (not children of a constrained panel
-// box), and the Esc cascade refineOpen → drawerOpen → fullScreen → close
-// is layered into the window keydown handler below. Modal would wrap
-// children in a panel container and add its own Esc listener — both fight
-// this lightbox's existing UX.
+// box), and the Esc cascade refineOpen → fullScreen → close is layered
+// into the window keydown handler below. Modal would wrap children in a
+// panel container and add its own Esc listener — both fight this
+// lightbox's existing UX.
 
 const NOTE_MAX = 2000;
 const NOTE_DEBOUNCE_MS = 500;
@@ -24,7 +25,6 @@ const CLEAN_LEVEL_LABELS = { light: 'Light', aggressive: 'Aggressive' };
 // Touch thresholds. dx > dy×1.2 keeps a diagonal scroll from being read as a
 // nav swipe but stays forgiving for a real thumb swipe.
 const SWIPE_MIN_PX = 50;
-const TAP_MAX_PX = 10;
 
 // onClean(item, level) — optional. Returning a rejected promise keeps the
 // lightbox open (e.g. on error) so the user can retry.
@@ -42,11 +42,10 @@ export default function MediaLightbox({
   annotation = null,
   onAnnotationChange,
 }) {
-  const [cleaning, setCleaning] = useState(null);
   const [fullScreen, setFullScreen] = useState(false);
-  const [drawerOpen, setDrawerOpen] = useState(false);
   const [refineOpen, setRefineOpen] = useState(false);
   const touchStart = useRef({ x: null, y: null });
+  useScrollLock(!!item);
   // Read callbacks + frequently-changing values from refs so the keydown
   // listener and the note-save debounce don't tear down on every parent
   // render. Callers pass inline arrows for onAnnotationChange, and the
@@ -60,7 +59,6 @@ export default function MediaLightbox({
       const cb = refs.current;
       if (e.key === 'Escape') {
         if (refineOpen) { setRefineOpen(false); return; }
-        if (fullScreen && drawerOpen) { setDrawerOpen(false); return; }
         if (fullScreen) { setFullScreen(false); return; }
         cb.onClose();
         return;
@@ -90,17 +88,11 @@ export default function MediaLightbox({
       }
     };
     window.addEventListener('keydown', onKey);
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => { window.removeEventListener('keydown', onKey); document.body.style.overflow = prev; };
-  }, [item, hasPrevious, hasNext, fullScreen, drawerOpen, refineOpen]);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [item, hasPrevious, hasNext, fullScreen, refineOpen]);
 
-  // Reset drawer when item changes (swipe forwards w/ settings open shouldn't
-  // carry the open state to the next image — feels jumpy).
-  useEffect(() => { setDrawerOpen(false); setRefineOpen(false); }, [item?.key]);
-  // The tap-toggle only fires in fullscreen, so drawerOpen under !fullScreen is
-  // always stale — clear it so a re-enter into fullscreen starts clean.
-  useEffect(() => { if (!fullScreen) setDrawerOpen(false); }, [fullScreen]);
+  // Reset refine modal when the previewed item changes.
+  useEffect(() => { setRefineOpen(false); }, [item?.key]);
 
   if (!item) return null;
   const isVideo = item.kind === 'video';
@@ -132,9 +124,8 @@ export default function MediaLightbox({
     ['Created', item.createdAt && new Date(item.createdAt).toLocaleString()],
   ].filter(([, v]) => v != null && v !== '');
 
-  // Ignore touches that originate on inline buttons (max/min toggle).
-  // Without this, their tap bubbles to onTouchEnd here and is read as a
-  // tap-on-image → drawer toggles alongside the button's own action.
+  // Ignore touches that originate on inline buttons (max/min toggle) so a
+  // button tap isn't also read as a swipe-start on the image.
   const isButtonTouch = (e) => !!e.target.closest('button');
   const onTouchStart = (e) => {
     if (isButtonTouch(e)) { touchStart.current = { x: null, y: null }; return; }
@@ -152,10 +143,6 @@ export default function MediaLightbox({
     if (Math.abs(dx) >= SWIPE_MIN_PX && Math.abs(dx) > Math.abs(dy) * 1.2) {
       if (dx > 0 && hasPrevious) onPrevious?.();
       else if (dx < 0 && hasNext) onNext?.();
-      return;
-    }
-    if (fullScreen && Math.abs(dx) < TAP_MAX_PX && Math.abs(dy) < TAP_MAX_PX) {
-      setDrawerOpen((o) => !o);
     }
   };
 
@@ -167,14 +154,7 @@ export default function MediaLightbox({
   // Anchor low in fullscreen so the chevrons land in the letterbox bar of a
   // landscape image instead of covering it. Non-fullscreen keeps them centered
   // — bottom-anchoring would bury them in the SettingsPane underneath.
-  let chevronPositionClass;
-  if (fullScreen && drawerOpen) {
-    chevronPositionClass = 'hidden sm:flex bottom-4';
-  } else if (fullScreen) {
-    chevronPositionClass = 'bottom-4';
-  } else {
-    chevronPositionClass = 'top-1/2 -translate-y-1/2';
-  }
+  const chevronPositionClass = fullScreen ? 'bottom-4' : 'top-1/2 -translate-y-1/2';
 
   return (
     <div
@@ -224,9 +204,7 @@ export default function MediaLightbox({
           ) : (
             <img src={item.previewUrl} alt={item.prompt} className={`${imgMax} object-contain`} />
           )}
-          {/* z-30 so this stays clickable when the settings drawer (z-20)
-              slides in over the image area. Solid white pill keeps it
-              readable against black letterbox bars. */}
+          {/* Solid white pill keeps it readable against black letterbox bars. */}
           <button
             type="button"
             onClick={(e) => { e.stopPropagation(); setFullScreen((v) => !v); }}
@@ -236,27 +214,23 @@ export default function MediaLightbox({
           >
             {fullScreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
           </button>
-          {fullScreen && !drawerOpen && (
+          {fullScreen && (hasPrevious || hasNext) && (
             <div className="absolute bottom-2 left-1/2 -translate-x-1/2 text-[10px] uppercase tracking-wide text-white/50 select-none pointer-events-none">
-              tap for settings{(hasPrevious || hasNext) ? ' · swipe to navigate' : ''}
+              swipe to navigate
             </div>
           )}
         </div>
 
-        {(!fullScreen || drawerOpen) && (
+        {!fullScreen && (
           <SettingsPane
             item={item}
             meta={meta}
             isVideo={isVideo}
-            fullScreen={fullScreen}
-            onClose={fullScreen ? () => setDrawerOpen(false) : onClose}
-            onPrimaryClose={onClose}
+            onClose={onClose}
             onRemix={onRemix}
             onSendToVideo={onSendToVideo}
             onContinue={onContinue}
             onClean={onClean}
-            cleaning={cleaning}
-            setCleaning={setCleaning}
             copy={copy}
             onRefine={() => setRefineOpen(true)}
             annotation={annotation}
@@ -270,16 +244,13 @@ export default function MediaLightbox({
 }
 
 function SettingsPane({
-  item, meta, isVideo, fullScreen,
-  onClose, onPrimaryClose, onRemix, onSendToVideo, onContinue, onClean,
-  cleaning, setCleaning, copy, onRefine,
+  item, meta, isVideo,
+  onClose, onRemix, onSendToVideo, onContinue, onClean,
+  copy, onRefine,
   annotation, onAnnotationChange,
 }) {
-  // Fullscreen: bottom sheet (max 55vh) on mobile so the image + chevrons
-  // stay reachable above it; side drawer (w-96) on desktop.
-  const asideClasses = fullScreen
-    ? 'absolute left-0 right-0 bottom-0 max-h-[55vh] sm:left-auto sm:top-0 sm:bottom-0 sm:max-h-none sm:w-96 z-20 bg-port-card border-t sm:border-t-0 sm:border-l border-port-border flex flex-col shadow-2xl'
-    : 'md:w-80 lg:w-96 shrink-0 flex flex-col border-t md:border-t-0 md:border-l border-port-border max-h-[40vh] md:max-h-[92vh]';
+  const asideClasses = 'md:w-80 lg:w-96 shrink-0 flex flex-col border-t md:border-t-0 md:border-l border-port-border max-h-[40vh] md:max-h-[92vh]';
+  const [cleaning, setCleaning] = useState(null);
   const starred = !!annotation?.starred;
   // Local draft state debounces saves so each keystroke doesn't PATCH.
   // onSaveRef keeps the debounce effect off the parent's render churn —
@@ -319,7 +290,7 @@ function SettingsPane({
             type="button"
             onClick={onClose}
             className="p-1.5 rounded text-gray-400 hover:text-white hover:bg-port-border/50"
-            aria-label={fullScreen ? 'Hide settings' : 'Close'}
+            aria-label="Close"
           >
             <X className="w-4 h-4" />
           </button>
@@ -418,7 +389,7 @@ function SettingsPane({
         {!isVideo && onRemix && (
           <button
             type="button"
-            onClick={() => { onRemix(item); onPrimaryClose(); }}
+            onClick={() => { onRemix(item); onClose(); }}
             className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs bg-port-accent text-white hover:opacity-90 rounded"
           >
             <Sparkles className="w-3.5 h-3.5" /> Remix
@@ -427,7 +398,7 @@ function SettingsPane({
         {!isVideo && onSendToVideo && (
           <button
             type="button"
-            onClick={() => { onSendToVideo(item); onPrimaryClose(); }}
+            onClick={() => { onSendToVideo(item); onClose(); }}
             className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs bg-port-success text-white hover:opacity-90 rounded"
           >
             <Film className="w-3.5 h-3.5" /> Send to Video
@@ -459,7 +430,7 @@ function SettingsPane({
                   } finally {
                     setCleaning(null);
                   }
-                  if (ok) onPrimaryClose();
+                  if (ok) onClose();
                 }}
                 className={`px-2 py-1.5 text-xs border-l border-port-border text-white hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed ${level === 'aggressive' ? 'bg-port-warning/80' : 'bg-port-border/70'}`}
               >
@@ -471,7 +442,7 @@ function SettingsPane({
         {isVideo && onContinue && (
           <button
             type="button"
-            onClick={() => { onContinue(item); onPrimaryClose(); }}
+            onClick={() => { onContinue(item); onClose(); }}
             className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs bg-port-accent text-white hover:opacity-90 rounded"
           >
             <ImageIcon className="w-3.5 h-3.5" /> Continue
