@@ -123,9 +123,18 @@ export async function runPromptThroughProvider({ provider, prompt, source, model
       // executeCliRun reads `provider.defaultModel` for both the CLI
       // args and the run-started metadata hook. Hand it a clone with
       // effectiveModel in defaultModel so codex's --model flag picks
-      // up the override AND the hook reports the right model. For
-      // non-codex CLIs effectiveModel === provider.defaultModel
-      // (resolved above), so the clone is a no-op.
+      // up the override AND the hook reports the right model. The
+      // guard below skips the clone only when effectiveModel already
+      // equals provider.defaultModel exactly — so:
+      //   - codex with a user-picked override that differs from the
+      //     baked default → clone, set new defaultModel.
+      //   - non-codex CLI whose defaultModel is already set: gate
+      //     above forces effectiveModel = provider.defaultModel,
+      //     guard skips the clone.
+      //   - non-codex CLI with defaultModel unset but models[0] set:
+      //     effectiveModel falls back to models[0], differs from the
+      //     missing defaultModel, so we DO clone and the hook can log
+      //     a real value instead of `undefined`.
       const providerForCli = effectiveModel && effectiveModel !== provider.defaultModel
         ? { ...provider, defaultModel: effectiveModel }
         : provider;
