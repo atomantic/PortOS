@@ -51,4 +51,15 @@ describe('deepMerge', () => {
     // base.a doesn't exist; patch.a is an object — should land verbatim
     expect(deepMerge({}, { a: { b: 1 } })).toEqual({ a: { b: 1 } });
   });
+
+  it('treats a missing/null/non-object base as an empty object', () => {
+    // `base?.[k]` recursion guard already tolerated missing bases — formalize
+    // it for the top-level so callers can pass `deepMerge(saved ?? null, patch)`
+    // without a TypeError when saved was never written.
+    expect(deepMerge(undefined, { a: 1 })).toEqual({ a: 1 });
+    expect(deepMerge(null, { a: 1, b: { c: 2 } })).toEqual({ a: 1, b: { c: 2 } });
+    expect(deepMerge(42, { a: 1 })).toEqual({ a: 1 });
+    expect(deepMerge('string', { a: 1 })).toEqual({ a: 1 });
+    expect(deepMerge([1, 2], { a: 1 })).toEqual({ a: 1 });
+  });
 });

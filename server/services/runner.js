@@ -39,7 +39,11 @@ export async function createRun(options) {
  */
 export function buildCliArgs(provider) {
   const providerId = provider?.id || '';
-  const baseArgs = Array.isArray(provider?.args) ? provider.args : [];
+  // Sanitize: drop any broken/dangling `--model` / `-m` tokens before
+  // appending. hasModelFlag treats those as "not a real pin" so the
+  // injection path fires — but if we kept the bogus token in baseArgs the
+  // CLI would still see two `--model` occurrences and reject the argv.
+  const baseArgs = stripBrokenModelFlags(Array.isArray(provider?.args) ? provider.args : []);
   const effectiveDefaultModel = providerId === 'codex' && provider.defaultModel === 'codex-configured-default'
     ? null
     : provider.defaultModel;
@@ -75,6 +79,29 @@ export function buildCliArgs(provider) {
     args.push('--model', effectiveDefaultModel);
   }
   return args;
+}
+
+// Strip dangling/empty `--model` / `-m` tokens (no value follows, or the
+// joined form has an empty value). Those would survive into the spawned
+// argv unchanged and cause the CLI to reject the invocation — see the
+// comment on hasModelFlag for the full reasoning. Pinned-with-value tokens
+// are preserved untouched so user-baked model selections still win.
+function stripBrokenModelFlags(args) {
+  if (!Array.isArray(args) || args.length === 0) return [];
+  const out = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (typeof a === 'string' && (a === '--model=' || a === '-m=')) {
+      continue; // empty joined form
+    }
+    if (a === '--model' || a === '-m') {
+      const next = args[i + 1];
+      const hasValue = typeof next === 'string' && next.length > 0 && !next.startsWith('-');
+      if (!hasValue) continue; // dangling separated form
+    }
+    out.push(a);
+  }
+  return out;
 }
 
 // Detects whether the provider's stored argv already pins a model with a

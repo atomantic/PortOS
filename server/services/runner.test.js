@@ -187,6 +187,40 @@ describe('buildCliArgs — codex (regression coverage for the existing logic)', 
   });
 });
 
+describe('buildCliArgs — strips dangling --model from baseArgs before injecting', () => {
+  it('drops a bare --model at end of args (claude-code) and appends the valid one', () => {
+    const provider = { id: 'claude-code', command: 'claude', args: ['--model'], defaultModel: 'sonnet-3.7' };
+    const args = buildCliArgs(provider);
+    // Bare --model would survive into argv and conflict with our injected
+    // --model sonnet-3.7. The sanitizer drops it so only the valid pair remains.
+    expect(args).toEqual(['-p', '-', '--model', 'sonnet-3.7']);
+  });
+
+  it('drops a --model followed by another flag (gemini-cli) and appends the valid one', () => {
+    const provider = { id: 'gemini-cli', command: 'gemini', args: ['-m', '--other'], defaultModel: 'gemini-flash' };
+    const args = buildCliArgs(provider);
+    expect(args).toEqual(['--other', '-m', 'gemini-flash']);
+  });
+
+  it('drops an empty joined model flag (--model=) and appends the valid one', () => {
+    const provider = { id: 'claude-code', command: 'claude', args: ['--model='], defaultModel: 'sonnet-3.7' };
+    const args = buildCliArgs(provider);
+    expect(args).toEqual(['-p', '-', '--model', 'sonnet-3.7']);
+  });
+
+  it('drops dangling --model on codex too (regression)', () => {
+    const provider = { id: 'codex', command: 'codex', args: ['--model'], defaultModel: 'o4-mini' };
+    const args = buildCliArgs(provider);
+    expect(args).toEqual(['exec', '--model', 'o4-mini', '-']);
+  });
+
+  it('preserves a properly-pinned --model and does NOT inject our own', () => {
+    const provider = { id: 'claude-code', command: 'claude', args: ['--model', 'baked-in'], defaultModel: 'would-be-ignored' };
+    const args = buildCliArgs(provider);
+    expect(args).toEqual(['--model', 'baked-in', '-p', '-']);
+  });
+});
+
 describe('hasModelFlag', () => {
   it('detects separated long form (--model X)', () => {
     expect(hasModelFlag(['--model', 'foo'])).toBe(true);
