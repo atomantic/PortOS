@@ -15,10 +15,11 @@
  */
 
 import { ServerError } from './errorHandler.js';
-import { stripCodeFences } from './aiProvider.js';
+import { extractJson as extractJsonShared } from './jsonExtract.js';
+import { runPromptThroughProvider } from './promptRunner.js';
 import { getActiveProvider, getProviderById } from '../services/providers.js';
 import { buildPrompt, getStage } from '../services/promptService.js';
-import { createRun, executeApiRun, executeCliRun } from '../services/runner.js';
+import { createRun } from '../services/runner.js';
 
 // Stage configs name a model by tier (PromptManager UI). Map each tier name
 // to the provider's per-tier model field; an unset tier falls through to
@@ -75,73 +76,22 @@ async function resolveProviderForStage(stage, { providerOverride } = {}) {
   throw new ServerError('No AI provider available', { status: 503, code: 'NO_PROVIDER' });
 }
 
-// Wraps executeApiRun / executeCliRun as a Promise so callers can await one
-// completion. Mirrors the pattern in worldBuilderExpand.js#callLLM — both
-// runner entry points are async and can reject before onComplete fires, so
-// we forward those rejections through the outer Promise instead of letting
-// them surface as unhandledRejection (Node ≥15 process-killer).
-function awaitRunnerCall({ provider, model, prompt, runId, source }) {
-  return new Promise((resolve, reject) => {
-    let text = '';
-    if (provider.type === 'cli') {
-      // executeCliRun reads `provider.defaultModel` for both the CLI args
-      // (`buildCliArgs(provider)`) and the run-started metadata hook. The
-      // toolkit's CLI entry doesn't accept a separate model param, so to
-      // honor a stage-level model override (or a tier-name resolution like
-      // `model: 'heavy'`) we hand it a shallow clone with the resolved
-      // model in `defaultModel`. Without this, `runStagedLLM(..., { modelOverride: 'codex-mini' })`
-      // would silently fall back to the provider's stock default AND the
-      // run record would log the wrong model.
-      const providerForCli = model && model !== provider.defaultModel
-        ? { ...provider, defaultModel: model }
-        : provider;
-      executeCliRun(
-        runId,
-        providerForCli,
-        prompt,
-        process.cwd(),
-        (chunk) => { text += chunk; },
-        (result) => {
-          if (result?.error || result?.success === false) {
-            reject(new Error(result?.error || 'CLI execution failed'));
-          } else {
-            resolve(text);
-          }
-        },
-        providerForCli.timeout ?? 300000,
-      ).catch(reject);
-    } else if (provider.type === 'api') {
-      executeApiRun(
-        runId,
-        provider,
-        model,
-        prompt,
-        process.cwd(),
-        [],
-        (data) => { text += typeof data === 'string' ? data : (data?.text || ''); },
-        (result) => {
-          if (result?.error) reject(new Error(result.error));
-          else resolve(text);
-        },
-      ).catch(reject);
-    } else {
-      reject(new Error(`Unsupported provider type: ${provider.type}`));
-    }
-  });
-}
-
 /**
  * Extract the first balanced object/array from an LLM response. Some
  * providers prepend explanation prose; the prompt asks for JSON only but
- * we have to be defensive. Lifted from the writers-room evaluator so the
- * pipeline gets the same lenient parser when it eventually requests JSON.
+ * we have to be defensive. Delegates to `lib/jsonExtract.extractJson` so
+ * stages benefit from string-aware brace walking + Codex `}}]` and
+ * trailing-comma repairs.
  */
 export function extractJson(text) {
   if (!text || typeof text !== 'string') throw new Error('Empty AI response');
-  let str = stripCodeFences(text);
-  const objMatch = str.match(/[{[][\s\S]*[\]}]/);
-  if (objMatch) str = objMatch[0];
-  return JSON.parse(str);
+  // Try object-first (most stages return `{}`), fall back to array — older
+  // callers that requested JSON were happy with either shape.
+  const obj = extractJsonShared(text);
+  if (obj.value !== undefined) return obj.value;
+  const arr = extractJsonShared(text, { blockType: 'array' });
+  if (arr.value !== undefined) return arr.value;
+  throw new Error(`Invalid JSON in AI response: ${obj.lastError?.message || 'no JSON block found'}`);
 }
 
 /**
@@ -174,7 +124,11 @@ export async function runStagedLLM(stageName, variables, options = {}) {
   });
   console.log(`📝 stage: ${provider.id} / ${model || '(default)'} / ${stageName} → ${runId.slice(0, 8)}`);
 
-  const text = await awaitRunnerCall({ provider, model, prompt, runId, source: options.source });
+  // Stage runs pre-create the run record (so the runId can be logged BEFORE
+  // the LLM call starts), then thread that id through the shared runner.
+  const { text } = await runPromptThroughProvider({
+    provider, model, prompt, source: options.source || 'staged-llm', runId,
+  });
   const content = options.returnsJson ? extractJson(text) : text;
   return { content, model: model || null, providerId: provider.id, runId };
 }

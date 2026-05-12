@@ -2,9 +2,9 @@ import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { getSettings } from './settings.js';
 import { getProviderById, getAllProviders } from './providers.js';
-import { createRun, executeApiRun, executeCliRun } from './runner.js';
 import { buildRulesPromptSection } from './messageTriageRules.js';
 import { PATHS } from '../lib/fileUtils.js';
+import { runPromptThroughProvider } from '../lib/promptRunner.js';
 
 const EVAL_PROMPT = `You are an email triage assistant. For each email below, recommend ONE action and a brief reason.
 
@@ -71,26 +71,8 @@ async function resolveProviderConfig(actionType) {
 
 async function runPrompt(provider, model, prompt, source) {
   const selectedModel = model || provider.defaultModel || provider.models?.[0];
-  const { runId } = await createRun({ providerId: provider.id, model: selectedModel, prompt, source });
-
-  let responseText = '';
-  await new Promise((resolve, reject) => {
-    if (provider.type === 'cli') {
-      executeCliRun(
-        runId, provider, prompt, process.cwd(),
-        (text) => { responseText += text; },
-        (result) => { result?.error || result?.success === false ? reject(new Error(result?.error || 'CLI execution failed')) : resolve(result); },
-        provider.timeout || 300000
-      );
-    } else {
-      executeApiRun(
-        runId, provider, selectedModel, prompt, process.cwd(), [],
-        (data) => { responseText += typeof data === 'string' ? data : (data?.text || ''); },
-        (result) => { result?.error ? reject(new Error(result.error)) : resolve(result); }
-      );
-    }
-  });
-  return responseText;
+  const { text } = await runPromptThroughProvider({ provider, model: selectedModel, prompt, source });
+  return text;
 }
 
 function parseEvalResponse(text, messageIds) {
