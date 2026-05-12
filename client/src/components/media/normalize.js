@@ -89,21 +89,13 @@ export function normalizeVideo(v) {
   };
 }
 
-// Sidecar field knowledge co-located with the normalize functions. Sidecars
-// were written with both snake_case (Python writer) and camelCase (Node writer)
-// over the project's history; the fallback chains keep older renders queueable
-// from <PromptRefineModal> without forcing a one-shot migration.
-//
-// Returns the subset of fields the queue-render API accepts for the given
-// kind. The `mode` here is the *original* render mode (defaulted when missing);
-// callers may override it (e.g. PromptRefineModal forces `mode: 'text'` for
-// Resolve `loraFilenames` from a raw sidecar with three fallbacks:
+// Resolve `loraFilenames` from a raw sidecar with four fallbacks:
 //   1. raw.loraFilenames    — new gen records, already basenames
 //   2. raw.lora_filenames   — same shape, snake_case writer
 //   3. raw.loraPaths        — legacy records pre-refactor, absolute paths
 //   4. raw.lora_paths       — same legacy shape, snake_case
-// Paths are reduced to basenames so the requeued payload matches the new
-// `loraFilenames` contract on the server.
+// Legacy paths are reduced to basenames so the requeued payload matches the
+// new `loraFilenames` contract on the server.
 function pickLoraFilenames(raw) {
   if (Array.isArray(raw.loraFilenames)) return raw.loraFilenames;
   if (Array.isArray(raw.lora_filenames)) return raw.lora_filenames;
@@ -116,7 +108,16 @@ function pickLoraFilenames(raw) {
     .filter(Boolean);
 }
 
-// video requeues so a missing source-image doesn't drop the render).
+// Sidecar field knowledge co-located with the normalize functions. Sidecars
+// were written with both snake_case (Python writer) and camelCase (Node
+// writer) over the project's history; the fallback chains keep older renders
+// queueable from <PromptRefineModal> without forcing a one-shot migration.
+//
+// Returns the subset of fields the queue-render API accepts for the given
+// kind. The `mode` here is the *original* render mode (defaulted when
+// missing); callers may override it (e.g. PromptRefineModal forces
+// `mode: 'text'` for video requeues so a missing source-image doesn't drop
+// the render).
 export function getRenderConfigForItem(item) {
   if (!item) return {};
   const raw = item.raw || {};

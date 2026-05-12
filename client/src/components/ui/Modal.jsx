@@ -90,32 +90,53 @@ const ALIGN_CLASSES = {
 // a non-dismissible top-most layer still absorbs the keystroke and prevents
 // fallthrough to the modal beneath it.
 //
-// IMPORTANT: the listener is registered at module load (not lazily on first
-// modal open) so it runs before any window keydown handler that mounts after
-// this module is imported (MediaLightbox, VoiceWidget, CityFilterBar, etc.).
-// `stopImmediatePropagation` only blocks listeners registered after this
-// one on the same target, so install-order matters. Modal is imported very
-// early by App.jsx via the layout shell, which gives us reliable precedence
-// over component-level listeners that mount only when their pages open.
+// The listener is registered at module load (the first time any Modal-using
+// component imports this file) so it runs before any window keydown handler
+// that mounts later. `stopImmediatePropagation` only blocks listeners
+// registered after this one on the same target, so install-order matters in
+// principle — but in practice Modal is imported transitively by enough
+// always-mounted shells that the order is consistent. If a future component
+// adds a window keydown handler at module load and runs first, this Modal
+// will still dispatch (because its handler exists), but won't block that
+// earlier listener. The HMR-safe install pattern below (`__portos_modal_esc`
+// globalThis flag + import.meta.hot.dispose) prevents duplicate installs on
+// dev hot-reload.
 const modalStack = [];
 const escHandlers = new Map();
 let modalIdSeq = 0;
 
+function handleGlobalEsc(e) {
+  if (e.key !== 'Escape' || modalStack.length === 0) return;
+  // Always swallow the keystroke at this layer so it can't reach window-
+  // level handlers behind us (MediaLightbox, voice-widget capture, etc.).
+  // Whether we also dispatch the close handler depends on
+  // `defaultPrevented`: if a child widget already consumed Esc (focused
+  // <select> closing its dropdown, custom menu calling preventDefault()),
+  // skip the close — but the keystroke is still ours to absorb.
+  e.stopImmediatePropagation();
+  if (e.defaultPrevented) return;
+  const top = modalStack[modalStack.length - 1];
+  const handler = escHandlers.get(top);
+  if (handler) handler();
+}
+
 if (typeof window !== 'undefined') {
-  window.addEventListener('keydown', (e) => {
-    if (e.key !== 'Escape' || modalStack.length === 0) return;
-    // Always swallow the keystroke at this layer so it can't reach window-
-    // level handlers behind us (MediaLightbox, voice-widget capture, etc.).
-    // Whether we also dispatch the close handler depends on
-    // `defaultPrevented`: if a child widget already consumed Esc (focused
-    // <select> closing its dropdown, custom menu calling preventDefault()),
-    // skip the close — but the keystroke is still ours to absorb.
-    e.stopImmediatePropagation();
-    if (e.defaultPrevented) return;
-    const top = modalStack[modalStack.length - 1];
-    const handler = escHandlers.get(top);
-    if (handler) handler();
-  });
+  // Guard against double-install on Vite HMR. The module can re-evaluate when
+  // it (or one of its importers) is edited; without this guard the handler
+  // would stack up, with each copy referencing the stale modalStack from its
+  // own module instance.
+  if (!globalThis.__portos_modal_esc_installed) {
+    window.addEventListener('keydown', handleGlobalEsc);
+    globalThis.__portos_modal_esc_installed = true;
+  }
+  // On HMR dispose, tear down the listener so the next module instance can
+  // re-install it cleanly against its own modalStack/escHandlers.
+  if (import.meta.hot) {
+    import.meta.hot.dispose(() => {
+      window.removeEventListener('keydown', handleGlobalEsc);
+      delete globalThis.__portos_modal_esc_installed;
+    });
+  }
 }
 
 function pushModal(id) {
