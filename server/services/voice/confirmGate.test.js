@@ -155,6 +155,20 @@ describe('resolvePending', () => {
   ])('classifies "%s" as %s (negative beats affirmative filler)', (utterance, expected) => {
     expect(resolvePending(pending, utterance).action).toBe(expected);
   });
+
+  // Regression guard for the "cancel meeting" class: sentences that start
+  // with a yes/no token but keep going must passthrough so the LLM can
+  // handle the new request, rather than being short-circuited with a
+  // synthetic "Cancelled." reply that drops the rest of the utterance.
+  it.each([
+    'cancel the meeting',
+    'stop the music',
+    'no problem with that',
+    'yes I want to go to lunch',
+    'delete the email from yesterday',
+  ])('passes through "%s" (yes/no prefix but full sentence)', (utterance) => {
+    expect(resolvePending(pending, utterance).action).toBe('passthrough');
+  });
 });
 
 describe('buildPending shape', () => {

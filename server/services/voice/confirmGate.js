@@ -23,17 +23,20 @@
 // don't trip it.
 export const DESTRUCTIVE_LABEL_RE = /\b(delete|remove|discard|reset|clear)\b/i;
 
-// Both regex sets are anchored at start (^) so a sentence like
-// "yes I want to delete the goal" is treated as an affirmative confirmation,
-// while "the article is yes-ifying things" doesn't match. Trailing
-// punctuation is stripped before matching.
+// Both regex sets are anchored at start (^) AND end ($) so only short,
+// stand-alone yes/no utterances are treated as a confirmation or cancellation.
+// Sentences that *start* with a yes/no token but then keep going ("cancel the
+// meeting", "stop the music", "yes I want to go to lunch") fall through to
+// `passthrough` so the LLM can answer the new request — matching the
+// module's documented contract that ambiguous input means the user has
+// moved on. Trailing punctuation is stripped before matching.
 // Optional leading "ok/okay " filler is allowed in NEGATIVE_RE so that
 // "okay cancel" / "okay never mind" are correctly classified as cancellations
 // rather than being eaten by AFFIRM_RE's bare "ok/okay" branch. resolvePending
 // also checks negative BEFORE affirmative as belt-and-suspenders for any
 // future affirmative tokens that happen to share a prefix with a negative.
-const AFFIRM_RE = /^(?:confirm|yes(?:[, ]+(?:do it|please|delete|remove|clear|reset|discard))?|do it|go ahead|proceed|continue|affirmative|ok(?:ay)?)\b/i;
-const NEGATIVE_RE = /^(?:(?:ok(?:ay)?[, ]+)?(?:no|cancel|stop|nope|never ?mind|don'?t|abort|negative))\b/i;
+const AFFIRM_RE = /^(?:confirm|yes(?:[, ]+(?:do it|please|delete|remove|clear|reset|discard))?|do it|go ahead|proceed|continue|affirmative|ok(?:ay)?)$/i;
+const NEGATIVE_RE = /^(?:(?:ok(?:ay)?[, ]+)?(?:no|cancel|stop|nope|never ?mind|don'?t|abort|negative))$/i;
 
 const normalize = (text) => (text || '').trim().replace(/^["']+|["']+$/g, '').replace(/[.!?]+$/, '');
 
