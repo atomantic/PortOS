@@ -375,11 +375,65 @@ describe('dequeueNextTask — capacity guards', () => {
 // the early-return out of `dequeueNextTask` or shuffles the priority order,
 // these assertions flip red.
 
+/**
+ * Extract a function body from `src` starting at signature offset `fnStart`
+ * by scanning braces (depth-tracked) until the matching closing `}`. This is
+ * more robust than a fixed-length slice — large functions like
+ * `dequeueNextTask` (~250 LOC) can grow past any chosen window and silently
+ * drop priority markers, making ordering assertions pass on empty matches.
+ *
+ * Skips brace characters inside string literals and line/block comments so
+ * a stray `{` in a string doesn't unbalance the scanner. (Template literals
+ * and regex literals aren't handled — neither appears in the production
+ * functions this helper extracts, but if that changes the assertions will
+ * fail loudly before any data corruption can leak through.)
+ */
+function extractFnBody(src, fnStart) {
+  const openIdx = src.indexOf('{', fnStart);
+  if (openIdx === -1) return '';
+  let depth = 0;
+  let i = openIdx;
+  while (i < src.length) {
+    const ch = src[i];
+    const next = src[i + 1];
+    // Line comment — skip to newline
+    if (ch === '/' && next === '/') {
+      const nl = src.indexOf('\n', i + 2);
+      i = nl === -1 ? src.length : nl + 1;
+      continue;
+    }
+    // Block comment — skip to closing */
+    if (ch === '/' && next === '*') {
+      const end = src.indexOf('*/', i + 2);
+      i = end === -1 ? src.length : end + 2;
+      continue;
+    }
+    // String literals — skip to matching unescaped quote
+    if (ch === '"' || ch === "'") {
+      let j = i + 1;
+      while (j < src.length) {
+        if (src[j] === '\\') { j += 2; continue; }
+        if (src[j] === ch) break;
+        j++;
+      }
+      i = j + 1;
+      continue;
+    }
+    if (ch === '{') depth++;
+    else if (ch === '}') {
+      depth--;
+      if (depth === 0) return src.slice(fnStart, i + 1);
+    }
+    i++;
+  }
+  return src.slice(fnStart); // unbalanced — return rest of file
+}
+
 describe('cos.js source — priority + capacity invariants', () => {
   it('dequeueNextTask early-returns when availableSlots <= 0', () => {
     const fnStart = COS_SRC.indexOf('async function dequeueNextTask');
     expect(fnStart, 'dequeueNextTask must exist').toBeGreaterThan(-1);
-    const fnBody = COS_SRC.slice(fnStart, fnStart + 8000);
+    const fnBody = extractFnBody(COS_SRC, fnStart);
 
     // `if (availableSlots <= 0) return;` (line 2332) is the cheap guard
     // that prevents spawning when the global cap is at or beyond capacity.
@@ -389,14 +443,14 @@ describe('cos.js source — priority + capacity invariants', () => {
   it('evaluateTasks short-circuits when availableSlots <= 0', () => {
     const fnStart = COS_SRC.indexOf('export async function evaluateTasks');
     expect(fnStart, 'evaluateTasks must exist').toBeGreaterThan(-1);
-    const fnBody = COS_SRC.slice(fnStart, fnStart + 8000);
+    const fnBody = extractFnBody(COS_SRC, fnStart);
 
     expect(fnBody).toMatch(/if\s*\(\s*availableSlots\s*<=\s*0\s*\)/);
   });
 
   it('priority order in dequeueNextTask: onDemand → user → autoSystem → mission → idle', () => {
     const fnStart = COS_SRC.indexOf('async function dequeueNextTask');
-    const fnBody = COS_SRC.slice(fnStart, fnStart + 8000);
+    const fnBody = extractFnBody(COS_SRC, fnStart);
 
     // The five priority-section comments appear in this exact order. If a
     // refactor inverts them (e.g. promotes mission above user) this guard
@@ -418,8 +472,8 @@ describe('cos.js source — priority + capacity invariants', () => {
     // The fallback `state.config.maxConcurrentAgentsPerProject || state.config.maxConcurrentAgents`
     // is the safety net for older state.json files that pre-date the
     // per-project cap. Both dequeueNextTask and evaluateTasks must keep it.
-    const dequeueFn = COS_SRC.slice(COS_SRC.indexOf('async function dequeueNextTask'), COS_SRC.indexOf('async function dequeueNextTask') + 4000);
-    const evalFn    = COS_SRC.slice(COS_SRC.indexOf('export async function evaluateTasks'), COS_SRC.indexOf('export async function evaluateTasks') + 4000);
+    const dequeueFn = extractFnBody(COS_SRC, COS_SRC.indexOf('async function dequeueNextTask'));
+    const evalFn    = extractFnBody(COS_SRC, COS_SRC.indexOf('export async function evaluateTasks'));
 
     const pattern = /maxConcurrentAgentsPerProject\s*\|\|\s*state\.config\.maxConcurrentAgents/;
     expect(dequeueFn).toMatch(pattern);
