@@ -82,16 +82,31 @@ async function resolveProviderForStage(stage, { providerOverride } = {}) {
  * we have to be defensive. Delegates to `lib/jsonExtract.extractJson` so
  * stages benefit from string-aware brace walking + Codex `}}]` and
  * trailing-comma repairs.
+ *
+ * Picks `blockType` by peeking at the first JSON delimiter (`{` vs `[`)
+ * after stripping fences and any prose prefix. Without this, an array-of-
+ * objects response like `[{"a":1}]` would object-walk first, return the
+ * inner `{"a":1}`, and silently lose the array wrapper. Falls through to
+ * the other shape if the preferred walk produced no parseable block.
  */
 export function extractJson(text) {
   if (!text || typeof text !== 'string') throw new Error('Empty AI response');
-  // Try object-first (most stages return `{}`), fall back to array — older
-  // callers that requested JSON were happy with either shape.
-  const obj = extractJsonShared(text);
-  if (obj.value !== undefined) return obj.value;
-  const arr = extractJsonShared(text, { blockType: 'array' });
-  if (arr.value !== undefined) return arr.value;
-  throw new Error(`Invalid JSON in AI response: ${obj.lastError?.message || 'no JSON block found'}`);
+  // Mirror jsonExtract.extractJson's fence handling so the delimiter peek
+  // sees the same string the walker will see.
+  let probe = text.trim();
+  const fence = probe.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fence) probe = fence[1].trim();
+  const firstObj = probe.indexOf('{');
+  const firstArr = probe.indexOf('[');
+  const preferArray = firstArr !== -1 && (firstObj === -1 || firstArr < firstObj);
+  const primary = preferArray ? 'array' : 'object';
+  const secondary = preferArray ? 'object' : 'array';
+
+  const first = extractJsonShared(text, { blockType: primary });
+  if (first.value !== undefined) return first.value;
+  const second = extractJsonShared(text, { blockType: secondary });
+  if (second.value !== undefined) return second.value;
+  throw new Error(`Invalid JSON in AI response: ${first.lastError?.message || 'no JSON block found'}`);
 }
 
 /**

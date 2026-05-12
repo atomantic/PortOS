@@ -77,6 +77,18 @@ describe('stageRunner — extractJson', () => {
   it('parses an array', () => {
     expect(extractJson('[1,2,3]')).toEqual([1, 2, 3]);
   });
+  it('preserves an array-of-objects wrapper instead of grabbing the inner object', () => {
+    // Regression: object-first extraction used to return `{"a":1}` from
+    // `[{"a":1},{"a":2}]`, silently dropping the array wrapper. Picking
+    // blockType by the first delimiter fixes it.
+    expect(extractJson('[{"a":1},{"a":2}]')).toEqual([{ a: 1 }, { a: 2 }]);
+  });
+  it('preserves an array-of-objects wrapper inside a fenced response', () => {
+    expect(extractJson('```json\n[{"id":"x"}]\n```')).toEqual([{ id: 'x' }]);
+  });
+  it('still extracts a leading object when an array appears later in prose', () => {
+    expect(extractJson('Sure! {"a":1} (example array later: [1,2])')).toEqual({ a: 1 });
+  });
   it('throws on empty or non-string input', () => {
     expect(() => extractJson('')).toThrow(/Empty AI response/);
     expect(() => extractJson(null)).toThrow(/Empty AI response/);
