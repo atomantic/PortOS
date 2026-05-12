@@ -132,6 +132,11 @@ export default function Flux2InstallModal({ open, onClose, onComplete }) {
       align="top"
       // installer needs to outrank every other overlay (incl. LayoutEditor)
       zIndexClassName="z-[9999]"
+      // Esc-to-cancel was never wired pre-refactor (see file header comment:
+      // install cancels via X button or backdrop click only). Keep that
+      // contract so a stray Esc during a multi-GB torch download doesn't
+      // SIGTERM pip mid-stream.
+      closeOnEsc={false}
       // Bespoke backdrop: keep the existing blur. The pt-[10vh] from align=top
       // is fine here — the original was pt-[8vh] but the 2vh delta is
       // imperceptible (~16px) and not worth a custom override.

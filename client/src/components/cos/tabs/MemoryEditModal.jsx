@@ -104,9 +104,10 @@ export default function MemoryEditModal({ memory, apps, onSave, onClose }) {
       size="lg"
       backdropClassName="bg-black/50"
       panelClassName="bg-port-card border border-port-border rounded-xl p-4 sm:p-6 max-h-[90vh] overflow-auto"
+      ariaLabelledBy="memory-edit-title"
     >
       <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg sm:text-xl font-bold text-white">Edit Memory</h2>
+          <h2 id="memory-edit-title" className="text-lg sm:text-xl font-bold text-white">Edit Memory</h2>
           <button
             onClick={onClose}
             className="p-2 min-h-[40px] min-w-[40px] flex items-center justify-center text-gray-500 hover:text-white transition-colors rounded-lg"

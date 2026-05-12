@@ -86,9 +86,10 @@ export default function ResumeAgentModal({ agent, taskType = 'user', providers, 
       size="lg"
       backdropClassName="bg-black/50"
       panelClassName="bg-port-card border border-port-border rounded-xl p-6 max-h-[90vh] overflow-auto"
+      ariaLabelledBy="resume-agent-title"
     >
       <div className="flex items-center justify-between mb-4">
-          <h2 className="text-xl font-bold text-white">
+          <h2 id="resume-agent-title" className="text-xl font-bold text-white">
             Resume {taskType === 'internal' ? 'System ' : ''}Agent Task
           </h2>
           <button

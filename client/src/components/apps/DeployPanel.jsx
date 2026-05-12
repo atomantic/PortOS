@@ -118,54 +118,57 @@ export default function DeployPanel({ appId, appName }) {
         </div>
       )}
 
-      <Modal
-        open={isOpen}
-        onClose={handleClose}
-        size="xl"
-        backdropClassName="bg-black/60"
-        panelClassName="bg-port-bg border border-port-border rounded-xl shadow-2xl max-h-[80vh] flex flex-col"
-      >
-        <div className="flex items-center justify-between px-4 py-3 border-b border-port-border">
-          <div className="flex items-center gap-2">
-            <Rocket size={16} className="text-purple-400" />
-            <span className="text-sm font-medium text-white">Deploy: {appName}</span>
-            {isDeploying && <BrailleSpinner text="" className="text-xs text-purple-400" />}
-          </div>
-          <button
-            onClick={handleClose}
-            className="text-gray-400 hover:text-white transition-colors"
-            title={isDeploying ? 'Hide (deploy keeps running)' : 'Close'}
-            aria-label={isDeploying ? 'Hide deploy output' : 'Close deploy panel'}
-          >
-            <X size={16} />
-          </button>
-        </div>
-
-        <div
-          ref={outputRef}
-          className="flex-1 overflow-auto p-4 font-mono text-xs leading-relaxed bg-black/40"
+      {isOpen && (
+        <Modal
+          open
+          onClose={handleClose}
+          size="xl"
+          backdropClassName="bg-black/60"
+          panelClassName="bg-port-bg border border-port-border rounded-xl shadow-2xl max-h-[80vh] flex flex-col"
+          ariaLabelledBy="deploy-panel-title"
         >
-          {output.map((line, i) => (
-            <div
-              key={i}
-              className={
-                line.stream === 'stderr' ? 'text-port-error whitespace-pre-wrap break-words' :
-                line.stream === 'status' ? 'text-purple-400 font-bold whitespace-pre-wrap break-words' :
-                'text-gray-300 whitespace-pre-wrap break-words'
-              }
-            >
-              {line.text}
+          <div className="flex items-center justify-between px-4 py-3 border-b border-port-border">
+            <div className="flex items-center gap-2">
+              <Rocket size={16} className="text-purple-400" />
+              <span id="deploy-panel-title" className="text-sm font-medium text-white">Deploy: {appName}</span>
+              {isDeploying && <BrailleSpinner text="" className="text-xs text-purple-400" />}
             </div>
-          ))}
-          {error && <div className="text-port-error mt-2 whitespace-pre-wrap break-words">Error: {error}</div>}
-        </div>
-
-        {result && (
-          <div className={`px-4 py-2 border-t border-port-border text-xs ${result.success ? 'text-port-success' : 'text-port-error'}`}>
-            {result.success ? 'Deploy completed successfully' : `Deploy failed (exit code ${result.code})`}
+            <button
+              onClick={handleClose}
+              className="text-gray-400 hover:text-white transition-colors"
+              title={isDeploying ? 'Hide (deploy keeps running)' : 'Close'}
+              aria-label={isDeploying ? 'Hide deploy output' : 'Close deploy panel'}
+            >
+              <X size={16} />
+            </button>
           </div>
-        )}
-      </Modal>
+
+          <div
+            ref={outputRef}
+            className="flex-1 overflow-auto p-4 font-mono text-xs leading-relaxed bg-black/40"
+          >
+            {output.map((line, i) => (
+              <div
+                key={i}
+                className={
+                  line.stream === 'stderr' ? 'text-port-error whitespace-pre-wrap break-words' :
+                  line.stream === 'status' ? 'text-purple-400 font-bold whitespace-pre-wrap break-words' :
+                  'text-gray-300 whitespace-pre-wrap break-words'
+                }
+              >
+                {line.text}
+              </div>
+            ))}
+            {error && <div className="text-port-error mt-2 whitespace-pre-wrap break-words">Error: {error}</div>}
+          </div>
+
+          {result && (
+            <div className={`px-4 py-2 border-t border-port-border text-xs ${result.success ? 'text-port-success' : 'text-port-error'}`}>
+              {result.success ? 'Deploy completed successfully' : `Deploy failed (exit code ${result.code})`}
+            </div>
+          )}
+        </Modal>
+      )}
     </div>
   );
 }
