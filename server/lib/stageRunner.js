@@ -100,15 +100,18 @@ async function resolveProviderForStage(stage, { providerOverride } = {}) {
 export function extractJson(text) {
   if (!text || typeof text !== 'string') throw new Error('Empty AI response');
 
-  // Strip a wrapping ```…``` only when the ENTIRE response is fenced.
-  // The naive "first fenced block" heuristic (used historically) would
-  // grab fenced prompt-echo content from CLI runs like Codex, where the
-  // prompt itself may contain fenced JSON schema examples that appear
-  // BEFORE the model's actual answer in the stream. Walking the whole
-  // text and letting findBalancedBlocks discover candidates is safer:
-  // an echoed schema either parses (and matches by source order) or
-  // fails parse-with-repair and is silently skipped in favor of the
-  // real response.
+  // Trim leading + trailing fences via stripCodeFences (note: it strips
+  // each side independently, so a response that only has a leading
+  // ```json with no closing fence will still get its opener removed —
+  // that's intentional and matches every other JSON-from-LLM helper in
+  // the codebase). What we DELIBERATELY do NOT do here is grab the
+  // first inner ```…``` fenced block: on Codex CLI runs the prompt
+  // itself can echo to stdout before the model response, and many
+  // stage prompts contain fenced JSON schema examples that would
+  // precede the real answer. Walking the whole text with
+  // findBalancedBlocks is safer — an echoed schema either parses
+  // (and gets ranked by source order) or fails parse-with-repair and
+  // is silently skipped in favor of the real response.
   const s = stripCodeFences(text.trim());
 
   // Collect candidates of BOTH shapes with their source-text positions.
