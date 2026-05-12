@@ -193,7 +193,7 @@ const navItems = [
     defaultTo: '/media',
     children: [
       { to: '/media', label: 'Media Gen', icon: Layers },
-      { to: '/pipeline', label: 'Pipeline', icon: WorkflowIcon },
+      { to: '/pipeline', label: 'Pipeline', icon: WorkflowIcon, dynamic: 'pipelineRecent' },
       { to: '/world-builder', label: 'World Builder', icon: Globe },
       { to: '/writers-room', label: 'Writers Room', icon: NotebookPen }
     ]
@@ -383,26 +383,88 @@ export default function Layout() {
     return () => socket.off('apps:changed', fetchApps);
   }, []);
 
+  // Fetch recent pipeline issues for the Create > Pipeline grandchildren.
+  // Refresh on focus so freshly-created/updated issues show up without a
+  // full reload — but debounced: alt-tabbing back after 2s shouldn't refetch.
+  // Signature guard on setState avoids re-rendering the whole sidebar tree
+  // when the items haven't actually changed.
+  const [recentPipelineIssues, setRecentPipelineIssues] = useState([]);
+  useEffect(() => {
+    // Track successful fetches only — a failed fetch shouldn't lock out the
+    // next focus retry for 30 seconds.
+    let lastSuccessAt = 0;
+    // Include EVERY rendered field — id/updatedAt alone misses cases like
+    // a series rename (which doesn't bump the issue's updatedAt) where the
+    // sidebar label would stay stale because `sigOf(prev) === sigOf(next)`
+    // suppresses the state update.
+    const sigOf = (items) => items
+      .map((i) => `${i.id}@${i.updatedAt}|${i.number}|${i.title}|${i.seriesName}`)
+      .join('||');
+    const loadRecent = () => {
+      api.listRecentPipelineIssues(10)
+        .then((items) => {
+          lastSuccessAt = Date.now();
+          const next = Array.isArray(items) ? items : [];
+          setRecentPipelineIssues((prev) => sigOf(prev) === sigOf(next) ? prev : next);
+        })
+        .catch((err) => {
+          console.warn(`⚠️ Sidebar pipeline-recent fetch failed: ${err?.message || err}`);
+        });
+    };
+    loadRecent();
+    const onFocus = () => {
+      if (Date.now() - lastSuccessAt < 30_000) return;
+      loadRecent();
+    };
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+  }, []);
+
   useEffect(() => {
     localStorage.setItem(SIDEBAR_KEY, String(collapsed));
   }, [collapsed]);
 
-  // Build dynamic nav items with app children
-  const resolvedNavItems = useMemo(() => navItems.map(item => {
-    if (item.dynamic !== 'apps') return item;
-    return {
-      ...item,
-      children: [
-        { to: '/apps', label: 'Dashboard', icon: LayoutDashboard, end: true },
-        { separator: true },
-        ...sidebarApps.map(app => ({
-          to: `/apps/${app.id}`,
-          label: app.name,
-          icon: Package
-        }))
-      ]
+  // Build dynamic nav items with app children + recent pipeline issues.
+  // `decoratePipelineChild` is defined inside the memo so its closure over
+  // `recentPipelineIssues` doesn't require an eslint-disable, and so it
+  // isn't reallocated on every render.
+  const resolvedNavItems = useMemo(() => {
+    const decoratePipelineChild = (child) => {
+      if (child.dynamic !== 'pipelineRecent') return child;
+      return {
+        ...child,
+        grandChildren: recentPipelineIssues.map((iss) => ({
+          to: `/pipeline/issues/${iss.id}/idea`,
+          label: `#${iss.number} ${iss.title}`.slice(0, 60),
+          title: `${iss.seriesName} — #${iss.number} ${iss.title}`,
+          // Active-detection prefix — the actual to-link points at /idea
+          // for a clean default, but the sidebar should highlight when the
+          // user is on ANY stage of this issue.
+          activePathPrefix: `/pipeline/issues/${iss.id}`,
+        })),
+      };
     };
-  }), [sidebarApps]);
+    return navItems.map((item) => {
+      if (item.dynamic === 'apps') {
+        return {
+          ...item,
+          children: [
+            { to: '/apps', label: 'Dashboard', icon: LayoutDashboard, end: true },
+            { separator: true },
+            ...sidebarApps.map((app) => ({
+              to: `/apps/${app.id}`,
+              label: app.name,
+              icon: Package,
+            })),
+          ],
+        };
+      }
+      if (Array.isArray(item.children)) {
+        return { ...item, children: item.children.map(decoratePipelineChild) };
+      }
+      return item;
+    });
+  }, [sidebarApps, recentPipelineIssues]);
 
   // Auto-expand sections when on a child page
   useEffect(() => {
@@ -632,21 +694,51 @@ export default function Layout() {
               const childActive = child.end
                 ? location.pathname === child.to
                 : isActive(child.to);
+              const grandChildren = Array.isArray(child.grandChildren) ? child.grandChildren : [];
               return (
-                <NavLink
-                  key={child.to}
-                  to={child.to}
-                  end={child.end}
-                  onClick={() => setMobileOpen(false)}
-                  className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors min-w-0 ${
-                    childActive
-                      ? 'bg-port-accent/10 text-port-accent'
-                      : 'text-gray-500 hover:text-white hover:bg-port-border/50'
-                  }`}
-                >
-                  <ChildIcon size={16} className="shrink-0" />
-                  <span className="min-w-0 truncate">{child.label}</span>
-                </NavLink>
+                <div key={child.to} className="min-w-0">
+                  <NavLink
+                    to={child.to}
+                    end={child.end}
+                    onClick={() => setMobileOpen(false)}
+                    className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors min-w-0 ${
+                      childActive
+                        ? 'bg-port-accent/10 text-port-accent'
+                        : 'text-gray-500 hover:text-white hover:bg-port-border/50'
+                    }`}
+                  >
+                    <ChildIcon size={16} className="shrink-0" />
+                    <span className="min-w-0 truncate">{child.label}</span>
+                  </NavLink>
+                  {grandChildren.length > 0 && (
+                    <div className="ml-6 mt-0.5 mb-1 border-l border-port-border/50 pl-2 min-w-0">
+                      {grandChildren.map((gc) => {
+                        // Prefer the explicit prefix (e.g. `/pipeline/issues/<id>`)
+                        // so the row stays highlighted across stage tabs — the
+                        // `to` link points at a specific default stage but the
+                        // user may navigate to siblings.
+                        const prefix = gc.activePathPrefix || gc.to;
+                        const gcActive = location.pathname === prefix
+                          || location.pathname.startsWith(prefix + '/');
+                        return (
+                          <NavLink
+                            key={gc.to}
+                            to={gc.to}
+                            onClick={() => setMobileOpen(false)}
+                            title={gc.title || gc.label}
+                            className={`block px-2 py-1 rounded text-xs transition-colors min-w-0 truncate ${
+                              gcActive
+                                ? 'text-port-accent'
+                                : 'text-gray-600 hover:text-gray-300 hover:bg-port-border/30'
+                            }`}
+                          >
+                            {gc.label}
+                          </NavLink>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
               );
             })}
           </div>
