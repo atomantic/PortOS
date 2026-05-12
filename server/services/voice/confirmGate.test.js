@@ -147,6 +147,16 @@ describe('buildPending shape', () => {
     expect(p.target).toEqual({ ref: 7, label: 'Reset', kind: 'button' });
     expect(p.createdAt).toBeGreaterThanOrEqual(before);
   });
+
+  it('accepts an injected createdAt for deterministic tests', () => {
+    const p = buildPending({
+      tool: 'ui_click',
+      args: { label: 'Delete' },
+      target: { ref: 1, label: 'Delete', kind: 'button' },
+      createdAt: 12345,
+    });
+    expect(p.createdAt).toBe(12345);
+  });
 });
 
 describe('isExpired', () => {

@@ -342,7 +342,13 @@ export const runTurn = async ({ audio, text, mimeType, source, history = [], emi
   // turn produces.
   const speakSyntheticReply = async (reply) => {
     const { wav, latencyMs } = await synthesize(reply, { signal });
-    if (!signal?.aborted) emit('voice:tts:audio', { sentence: reply, wav, latencyMs });
+    if (signal?.aborted) return;
+    // Track what we just said in the echo-suppression buffer so the next
+    // inbound transcript ("Confirmed — Delete." round-tripping through the
+    // mic) is dropped as TTS echo instead of being misclassified as user
+    // intent. Mirrors the normal `speak()` path.
+    if (state?.recentTts) rememberTtsSentence(state.recentTts, reply);
+    emit('voice:tts:audio', { sentence: reply, wav, latencyMs });
     emit('voice:llm:delta', { delta: reply });
     emit('voice:llm:done', { text: reply });
     emit('voice:idle', { reason: 'turn-complete' });

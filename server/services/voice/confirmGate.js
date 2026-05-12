@@ -11,8 +11,10 @@
 //   "no" / "cancel" / "stop" / anything else → clear the pending state and
 //   fall through to the normal LLM turn so the user can do something else.
 //
-// Keeping this as a pure module (no I/O, no socket emits, no clock) makes
-// the state machine trivially testable.
+// Keeping this as a pure module (no I/O, no socket emits; the clock is
+// injectable via `createdAt` / `now` parameters and only defaults to
+// `Date.now()` for ergonomics at call sites) makes the state machine
+// trivially testable.
 
 // Conservative on purpose — false-negatives only mean the user clicks a Delete
 // button without an extra confirm prompt, which mirrors a normal mouse click.
@@ -36,13 +38,15 @@ export const isAffirmative = (text) => AFFIRM_RE.test(normalize(text));
 export const isNegative = (text) => NEGATIVE_RE.test(normalize(text));
 
 // Build the pending record. Caller (tools.js / pipeline.js) is responsible
-// for placing it on `state.pendingDestructive`. Keeping the shape canonical
-// here means the pipeline never has to know the internal fields.
-export const buildPending = ({ tool, args, target }) => ({
+// for placing it on `state.pendingDestructive` AND for supplying `createdAt`
+// (defaults to Date.now() for ergonomics, but tests inject a fixed clock to
+// keep the module deterministic). Keeping the shape canonical here means
+// the pipeline never has to know the internal fields.
+export const buildPending = ({ tool, args, target, createdAt = Date.now() }) => ({
   tool,
   args,
   target, // resolved DOM target: { ref, label, kind }
-  createdAt: Date.now(),
+  createdAt,
 });
 
 // Decide what to do with the user's next utterance given a pending record.

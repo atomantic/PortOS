@@ -17,6 +17,24 @@ const HISTORY_MESSAGES = 24;
 // short; 4 KB covers any realistic spoken turn and rejects prompt-stuffing.
 const MAX_AUDIO_BYTES = 8 * 1024 * 1024;
 const MAX_TEXT_LEN = 4000;
+// Cap on the visible-text snapshot the client ships alongside each UI index.
+// Matches `MAX_TEXT_CHARS` in `client/src/services/domIndex.js` so the ~8 KB
+// limit documented on the `ui_read` tool is enforced consistently whether the
+// truncation happens client-side (well-behaved widget) or server-side here
+// (runaway / malicious client). The client already does word-boundary
+// truncation; we re-do it server-side so the guarantee holds end-to-end.
+const MAX_UI_TEXT_CHARS = 8000;
+
+// Truncate on the last space so the tail isn't a partial token, then append
+// an ellipsis. Mirrors the client-side truncation in `domIndex.js` so the
+// shape of `ui.text` is identical regardless of which side trimmed it.
+// Exported for direct unit testing without standing up a real socket.
+export const truncateOnWordBoundary = (text, max) => {
+  if (text.length <= max) return text;
+  const cut = text.slice(0, max);
+  const lastSpace = cut.lastIndexOf(' ');
+  return `${cut.slice(0, lastSpace > 0 ? lastSpace : max)}…`;
+};
 
 const audioByteLength = (audio) => {
   if (Buffer.isBuffer(audio)) return audio.byteLength;
@@ -192,8 +210,9 @@ export const registerVoiceHandlers = (socket) => {
     const { path, title, elements, text } = payload;
     if (!Array.isArray(elements)) return;
     // Cap to avoid prompt bloat from a malicious or runaway client.
+    // MAX_TEXT matches the client-side `MAX_TEXT_CHARS` in domIndex.js so the
+    // ~8 KB cap documented on `ui_read` is enforced consistently end-to-end.
     const MAX = 200;
-    const MAX_TEXT = 8192;
     const filtered = elements
       .filter((e) => e && typeof e === 'object' && typeof e.ref === 'number' && typeof e.label === 'string')
       .slice(0, MAX);
@@ -201,7 +220,7 @@ export const registerVoiceHandlers = (socket) => {
       path: typeof path === 'string' ? path.slice(0, 256) : null,
       title: typeof title === 'string' ? title.slice(0, 120) : null,
       elements: filtered,
-      text: typeof text === 'string' ? text.slice(0, MAX_TEXT) : null,
+      text: typeof text === 'string' ? truncateOnWordBoundary(text, MAX_UI_TEXT_CHARS) : null,
       updatedAt: Date.now(),
     };
     if (state.uiWaiters.length) {

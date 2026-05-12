@@ -124,8 +124,11 @@ const findTitle = () => {
 
 // Cap on visible-text snapshot we ship to the server alongside the
 // interactable index. The `ui_read` voice tool returns this so the LLM can
-// answer "what does this say?" without an extra DOM trip. 8 KB lines up
-// with the server-side truncation in `ui_read.execute`.
+// answer "what does this say?" without an extra DOM trip. The same 8000
+// cap (and the same word-boundary truncation) is enforced server-side in
+// `server/sockets/voice.js` so the ~8 KB limit documented on `ui_read`
+// holds end-to-end whether the truncation happens here (well-behaved
+// widget) or there (runaway / malicious client).
 const MAX_TEXT_CHARS = 8000;
 
 // Drop chrome the user almost certainly didn't mean — nav rails, the floating
