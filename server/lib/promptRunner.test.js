@@ -97,20 +97,42 @@ describe('promptRunner — happy paths', () => {
     expect(runner.createRun).not.toHaveBeenCalled();
   });
 
-  it('passes a CLI provider clone with overridden defaultModel when model differs', async () => {
+  it('passes a CLI provider clone with overridden defaultModel for codex (which honors --model)', async () => {
     runner.executeCliRun.mockImplementation(async (id, providerArg, _p, _cwd, onData, onComplete, _t) => {
       onData(`ran with model=${providerArg.defaultModel}`);
       onComplete({ success: true });
     });
 
     const out = await runPromptThroughProvider({
-      provider: cliProvider({ defaultModel: 'old' }),
+      provider: cliProvider({ defaultModel: 'old' }), // id: 'codex'
       prompt: 'p',
       source: 't',
       model: 'new',
     });
 
     expect(out.text).toBe('ran with model=new');
+  });
+
+  it('does NOT clone non-codex CLI providers with the model override — runner.js#buildCliArgs ignores it', async () => {
+    // claude-code / gemini-cli's buildCliArgs path doesn't honor
+    // provider.defaultModel, so cloning it just lies to the
+    // onRunStarted hook about which model actually ran. The run
+    // record must reflect what the CLI actually executed.
+    runner.executeCliRun.mockImplementation(async (id, providerArg, _p, _cwd, onData, onComplete, _t) => {
+      onData(`ran with defaultModel=${providerArg.defaultModel}`);
+      onComplete({ success: true });
+    });
+
+    const out = await runPromptThroughProvider({
+      provider: { id: 'claude-code', type: 'cli', defaultModel: 'baked-in', timeout: 5000 },
+      prompt: 'p',
+      source: 't',
+      model: 'user-picked-this',
+    });
+
+    // The run still goes through, but the executed-against model is
+    // the provider's actual defaultModel, not the user's selection.
+    expect(out.text).toBe('ran with defaultModel=baked-in');
   });
 });
 

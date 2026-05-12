@@ -144,7 +144,7 @@ describe('jsonExtract.extractJson', () => {
     expect(value.variations).toEqual([{ label: 'a', prompt: 'b' }]);
   });
 
-  it('repairs Codex CLI orphan-brace corruption (`}}]` → `}]`) inside the response', () => {
+  it('repairs Codex CLI orphan-brace corruption (`}}]` → `}]}`) inside the response', () => {
     const bad = '{"stylePrompt":"x","categories":{"vehicles":{"variations":[{"label":"a","prompt":"…blister"}}]}}}';
     const { value } = extractJson(bad);
     expect(value.stylePrompt).toBe('x');
