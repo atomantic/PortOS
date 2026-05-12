@@ -11,7 +11,6 @@
  * model so the UI still works for users who haven't configured a stage.
  */
 
-import { executeApiRun, executeCliRun, createRun } from './runner.js';
 import { getActiveProvider, getProviderById } from './providers.js';
 import {
   WORLD_CATEGORIES,
@@ -22,6 +21,8 @@ import {
   sanitizeCompositeSheets,
 } from './worldBuilder.js';
 import { ServerError } from '../lib/errorHandler.js';
+import { extractJson as extractJsonShared } from '../lib/jsonExtract.js';
+import { providerHonorsModelOverride, runPromptThroughProvider } from '../lib/promptRunner.js';
 
 const LABEL_MAX = 80;
 
@@ -67,169 +68,34 @@ Concrete compositeSheets examples:
 - If the world needs pitch posters, do not put "text" in the negativePrompt. Prefer "watermark, logo, unreadable tiny text, text artifacts" so title/section typography remains possible.
 - Output JUST the JSON object. No prose before or after.`;
 
-const isCliProvider = (provider) => provider?.type === 'cli';
-
-// Awaiting createRun separately keeps the Promise executor synchronous —
-// an `async` executor body silently swallows rejected awaits, leaving the
-// caller's Promise hanging forever if createRun throws.
-// Returns { text, runId } — runId is logged so a user debugging an empty
-// expansion can find the raw stdout at data/runs/<runId>/output.txt.
-async function callLLM(provider, model, prompt) {
-  const { runId } = await createRun({
-    providerId: provider.id,
-    model,
-    prompt,
-    source: 'world-builder-expansion',
-  });
-  return new Promise((resolve, reject) => {
-    let text = '';
-    // Both executeCliRun / executeApiRun are async — they can reject before
-    // onComplete ever fires (ensureDir/read/write failures, toolkit not
-    // initialized, provider errors). Without a rejection handler the awaiter
-    // would hang forever and Node would log an unhandledRejection. Forward
-    // the rejection through `reject` so callLLM() always settles.
-    if (isCliProvider(provider)) {
-      executeCliRun(
-        runId,
-        provider,
-        prompt,
-        process.cwd(),
-        (chunk) => { text += chunk; },
-        (result) => {
-          if (result?.error || result?.success === false) {
-            reject(new Error(result?.error || 'CLI execution failed'));
-          } else {
-            resolve({ text, runId });
-          }
-        },
-        provider.timeout ?? 300000,
-      ).catch(reject);
-    } else {
-      executeApiRun(
-        runId,
-        provider,
-        model,
-        prompt,
-        process.cwd(),
-        [],
-        (data) => { text += typeof data === 'string' ? data : (data?.text || ''); },
-        (result) => {
-          if (result?.error) reject(new Error(result.error));
-          else resolve({ text, runId });
-        },
-      ).catch(reject);
-    }
-  });
-}
-
-// Walk the string and return every top-level brace-balanced { … } block, in
-// order. String-aware so braces inside JSON string values don't throw off the
-// depth counter. Used by extractJson — Codex CLI echoes the user prompt back
-// to stdout before the model response, and the prompt itself contains a
-// JSON-shaped *schema example* (e.g. `{ "label": string (max 80 chars), … }`)
-// whose braces balance but whose contents are not valid JSON. Returning every
-// block lets the caller try each in turn instead of giving up on the first.
-const findBalancedBlocks = (s) => {
-  const blocks = [];
-  let i = 0;
-  while (i < s.length) {
-    const start = s.indexOf('{', i);
-    if (start === -1) break;
-    let depth = 0;
-    let inString = false;
-    let escaped = false;
-    let end = -1;
-    for (let j = start; j < s.length; j += 1) {
-      const ch = s[j];
-      if (inString) {
-        if (escaped) escaped = false;
-        else if (ch === '\\') escaped = true;
-        else if (ch === '"') inString = false;
-        continue;
-      }
-      if (ch === '"') { inString = true; continue; }
-      if (ch === '{') depth += 1;
-      else if (ch === '}') {
-        depth -= 1;
-        if (depth === 0) { end = j; break; }
-      }
-    }
-    if (end === -1) break; // unbalanced — no later block can balance either
-    blocks.push(s.slice(start, end + 1));
-    i = end + 1;
-  }
-  return blocks;
-};
-
-// Try JSON.parse on a candidate block; if it fails, attempt a few cheap
-// repairs that handle observed LLM corruption patterns:
-//   - Codex CLI sometimes emits an EXTRA `}` between a variation's close-brace
-//     and its enclosing array's `]` (`}}]}}}` instead of `}]}}}`). Brace
-//     balance still works because the extra `{` was hallucinated upstream.
-//   - Trailing comma before `]` or `}`.
-// We try removing/normalizing one suspicious char at a time, capped at a few
-// attempts so a genuinely broken block still bubbles a parse error.
-const tryParseWithRepair = (block) => {
-  try { return { value: JSON.parse(block) }; } catch (initialErr) {
-    // Remove trailing commas before `}` or `]` (common LLM mistake).
-    let candidate = block.replace(/,(\s*[}\]])/g, '$1');
-    if (candidate !== block) {
-      try { return { value: JSON.parse(candidate) }; } catch { /* keep trying */ }
-    }
-    // Fix Codex's `}}]` → `}]}` pattern: the variation object closes
-    // correctly, then an orphan `}` lands BEFORE the array's `]` instead of
-    // after it. Swapping (not dropping) keeps the brace count correct so the
-    // outer container still closes — dropping the brace would leave a
-    // dangling object open further out.
-    candidate = candidate.replace(/}\s*}\s*]/g, '}]}');
-    try { return { value: JSON.parse(candidate) }; } catch (err) {
-      return { error: err };
-    }
-  }
-};
+// Prefer a block that *looks like* a world-expansion response (has any of
+// stylePrompt / negativePrompt / categories / compositeSheets at the top
+// level). The expansion prompt includes literal JSON examples like
+//   { "label": "Crystalline canyon basin", "prompt": "…" }
+// which parse cleanly but aren't the response. Without the shape preference
+// we'd return that first valid-but-wrong object and end up with 0 variations.
+const isExpansionShape = (o) => o && typeof o === 'object'
+  && (typeof o.stylePrompt === 'string'
+    || typeof o.negativePrompt === 'string'
+    || (o.categories && typeof o.categories === 'object')
+    || Array.isArray(o.compositeSheets));
 
 const extractJson = (raw) => {
+  // Empty input is a "client-side" oversight (no LLM output at all) — keep
+  // the original raw Error so callers / tests that key on the message
+  // continue to match. Down-stream JSON parse failures are wrapped in a
+  // typed 502 ServerError so the route layer surfaces a useful HTTP code.
   if (!raw || typeof raw !== 'string') throw new Error('Empty LLM response');
-  let s = raw.trim();
-  // Strip ```json fences if present.
-  const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (fence) s = fence[1].trim();
-  // Try each brace-balanced block in order. This skips preamble ("Here is…"),
-  // prompt echoes (Codex CLI), and pseudo-JSON schema examples in the prompt.
-  // We prefer a block that *looks like* a world-expansion response (has any of
-  // stylePrompt / negativePrompt / categories at the top level) — the prompt
-  // template includes small JSON examples like
-  //   { "label": "Crystalline canyon basin", "prompt": "…" }
-  // which parse cleanly but aren't the response. Without the shape preference
-  // we'd return that first valid-but-wrong object and end up with 0 variations.
-  const candidates = findBalancedBlocks(s);
-  if (!candidates.length) candidates.push(s);
-  const isExpansionShape = (o) => o && typeof o === 'object'
-    && (typeof o.stylePrompt === 'string' || typeof o.negativePrompt === 'string' || (o.categories && typeof o.categories === 'object') || Array.isArray(o.compositeSheets));
-  let firstParsed;
-  let lastErr;
-  let lastPreview = s;
-  for (const block of candidates) {
-    // Recovery: some LLMs (notably Codex CLI) echo the prompt's `[...]`
-    // schema-notation back as a literal value. Replace such empty-placeholder
-    // arrays with `[]` so the rest of the parse can succeed.
-    const cleaned = block.replace(/\[\s*\.\.\.\s*\]/g, '[]');
-    const { value: parsed, error } = tryParseWithRepair(cleaned);
-    if (parsed !== undefined) {
-      if (isExpansionShape(parsed)) return parsed;
-      if (firstParsed === undefined) firstParsed = parsed;
-    } else {
-      lastErr = error;
-      lastPreview = cleaned;
-    }
-  }
-  if (firstParsed !== undefined) return firstParsed;
+  const { value, lastError, lastPreview } = extractJsonShared(raw, {
+    shapePredicate: isExpansionShape,
+  });
+  if (value !== undefined) return value;
   throw new ServerError(
     'LLM returned invalid JSON for world expansion. Try a different model or rerun.',
     {
       status: 502,
       code: 'LLM_INVALID_JSON',
-      context: { details: { reason: lastErr?.message || 'no JSON object found', preview: lastPreview.slice(0, 200) } },
+      context: { details: { reason: lastError?.message || 'no JSON object found', preview: lastPreview || '' } },
     },
   );
 };
@@ -295,12 +161,24 @@ export async function expandWorldTemplate({ starterPrompt, providerId, model } =
   let provider = providerId ? await getProviderById(providerId).catch(() => null) : null;
   if (!provider) provider = await getActiveProvider();
   if (!provider) throw new Error('No AI provider available for world expansion');
-  const selectedModel = model || provider.defaultModel || provider.models?.[0];
+  // Mirror the gate that promptRunner applies internally so the log line
+  // and the returned `llm.model` field reflect what'll actually execute.
+  // Non-codex CLI providers ignore the per-call model.
+  const selectedModel = providerHonorsModelOverride(provider)
+    ? (model || provider.defaultModel || provider.models?.[0])
+    : (provider.defaultModel || provider.models?.[0]);
 
   const fullPrompt = EXPANSION_PROMPT.replace('{starterPrompt}', starterPrompt.trim());
   console.log(`🌍 World Builder expanding via ${provider.name}/${selectedModel || 'default'}`);
 
-  const { text: raw, runId } = await callLLM(provider, selectedModel, fullPrompt);
+  // runId is logged so a user debugging an empty expansion can find the
+  // raw stdout at data/runs/<runId>/output.txt.
+  const { text: raw, runId } = await runPromptThroughProvider({
+    provider,
+    model: selectedModel,
+    prompt: fullPrompt,
+    source: 'world-builder-expansion',
+  });
   // Log raw response shape so a "0 variations" outcome is debuggable from
   // the server console alone — the runId points at data/runs/<id>/output.txt
   // for the full transcript.

@@ -15,10 +15,12 @@
  */
 
 import { ServerError } from './errorHandler.js';
+import { findBalancedBlocks, tryParseWithRepair } from './jsonExtract.js';
+import { providerHonorsModelOverride, runPromptThroughProvider } from './promptRunner.js';
 import { stripCodeFences } from './aiProvider.js';
 import { getActiveProvider, getProviderById } from '../services/providers.js';
 import { buildPrompt, getStage } from '../services/promptService.js';
-import { createRun, executeApiRun, executeCliRun } from '../services/runner.js';
+import { createRun } from '../services/runner.js';
 
 // Stage configs name a model by tier (PromptManager UI). Map each tier name
 // to the provider's per-tier model field; an unset tier falls through to
@@ -75,73 +77,94 @@ async function resolveProviderForStage(stage, { providerOverride } = {}) {
   throw new ServerError('No AI provider available', { status: 503, code: 'NO_PROVIDER' });
 }
 
-// Wraps executeApiRun / executeCliRun as a Promise so callers can await one
-// completion. Mirrors the pattern in worldBuilderExpand.js#callLLM — both
-// runner entry points are async and can reject before onComplete fires, so
-// we forward those rejections through the outer Promise instead of letting
-// them surface as unhandledRejection (Node ≥15 process-killer).
-function awaitRunnerCall({ provider, model, prompt, runId, source }) {
-  return new Promise((resolve, reject) => {
-    let text = '';
-    if (provider.type === 'cli') {
-      // executeCliRun reads `provider.defaultModel` for both the CLI args
-      // (`buildCliArgs(provider)`) and the run-started metadata hook. The
-      // toolkit's CLI entry doesn't accept a separate model param, so to
-      // honor a stage-level model override (or a tier-name resolution like
-      // `model: 'heavy'`) we hand it a shallow clone with the resolved
-      // model in `defaultModel`. Without this, `runStagedLLM(..., { modelOverride: 'codex-mini' })`
-      // would silently fall back to the provider's stock default AND the
-      // run record would log the wrong model.
-      const providerForCli = model && model !== provider.defaultModel
-        ? { ...provider, defaultModel: model }
-        : provider;
-      executeCliRun(
-        runId,
-        providerForCli,
-        prompt,
-        process.cwd(),
-        (chunk) => { text += chunk; },
-        (result) => {
-          if (result?.error || result?.success === false) {
-            reject(new Error(result?.error || 'CLI execution failed'));
-          } else {
-            resolve(text);
-          }
-        },
-        providerForCli.timeout ?? 300000,
-      ).catch(reject);
-    } else if (provider.type === 'api') {
-      executeApiRun(
-        runId,
-        provider,
-        model,
-        prompt,
-        process.cwd(),
-        [],
-        (data) => { text += typeof data === 'string' ? data : (data?.text || ''); },
-        (result) => {
-          if (result?.error) reject(new Error(result.error));
-          else resolve(text);
-        },
-      ).catch(reject);
-    } else {
-      reject(new Error(`Unsupported provider type: ${provider.type}`));
-    }
-  });
-}
-
 /**
  * Extract the first balanced object/array from an LLM response. Some
  * providers prepend explanation prose; the prompt asks for JSON only but
- * we have to be defensive. Lifted from the writers-room evaluator so the
- * pipeline gets the same lenient parser when it eventually requests JSON.
+ * we have to be defensive. Walks the same fence-stripped text as
+ * `lib/jsonExtract` so stages benefit from string-aware brace walking +
+ * Codex `}}]` and trailing-comma repairs.
+ *
+ * Picks the earliest *parseable* top-level block, regardless of whether
+ * it's an object or array. This is the only safe heuristic given:
+ *   - Banner lines like `[workdir, /tmp]` precede the real JSON, so
+ *     `indexOf('[')` is a lying delimiter peek.
+ *   - An object response may legitimately contain an inner array field
+ *     (e.g. `{"a":[1,2]}`), and a raw walker run with `blockType: 'array'`
+ *     would happily return that `[1,2]` if asked.
+ * By gathering balanced candidates for BOTH shapes, parsing each in
+ * source order, and returning the first that parses, banners get
+ * skipped (their contents don't parse as JSON) and the wrapper shape
+ * is preserved (`[{"a":1}]` parses as the array; `{"a":[1,2]}` parses
+ * as the object because the `{` opener comes before the inner `[`).
+ *
+ * When `promptToStrip` is supplied, any verbatim occurrence of that
+ * string is removed from `text` BEFORE walking. This handles CLI
+ * runners (notably Codex) that echo the input prompt to stdout — the
+ * prompt itself frequently contains fenced JSON schema examples that
+ * would otherwise parse and win on source-order ranking. Stripping
+ * the echo leaves only the model's actual response in the text the
+ * walker sees.
  */
-export function extractJson(text) {
+export function extractJson(text, { promptToStrip } = {}) {
   if (!text || typeof text !== 'string') throw new Error('Empty AI response');
-  let str = stripCodeFences(text);
-  const objMatch = str.match(/[{[][\s\S]*[\]}]/);
-  if (objMatch) str = objMatch[0];
-  return JSON.parse(str);
+  if (typeof promptToStrip === 'string' && promptToStrip) {
+    // Remove every verbatim occurrence so we don't have to guess where
+    // a CLI runner inserted line wrapping or trim. The prompt is fixed
+    // text we built ourselves a few lines up — split-join is safer
+    // than building a regex (which would need escaping).
+    text = text.split(promptToStrip).join('');
+  }
+
+  // Trim leading + trailing fences via stripCodeFences (note: it strips
+  // each side independently, so a response that only has a leading
+  // ```json with no closing fence will still get its opener removed —
+  // that's intentional and matches every other JSON-from-LLM helper in
+  // the codebase). What we DELIBERATELY do NOT do here is grab the
+  // first inner ```…``` fenced block: on Codex CLI runs the prompt
+  // itself can echo to stdout before the model response, and many
+  // stage prompts contain fenced JSON schema examples that would
+  // precede the real answer. Walking the whole text with
+  // findBalancedBlocks is safer — an echoed schema either parses
+  // (and gets ranked by source order) or fails parse-with-repair and
+  // is silently skipped in favor of the real response.
+  const s = stripCodeFences(text.trim());
+
+  // Collect candidates of BOTH shapes with their source-text positions.
+  // findBalancedBlocks returns block substrings in order; indexOf gives
+  // us the start so we can interleave the two shape lists.
+  const candidates = [];
+  let cursor = 0;
+  for (const block of findBalancedBlocks(s, { startChar: '{', endChar: '}' })) {
+    const idx = s.indexOf(block, cursor);
+    candidates.push({ block, start: idx });
+    cursor = idx + block.length;
+  }
+  cursor = 0;
+  for (const block of findBalancedBlocks(s, { startChar: '[', endChar: ']' })) {
+    const idx = s.indexOf(block, cursor);
+    candidates.push({ block, start: idx });
+    cursor = idx + block.length;
+  }
+  candidates.sort((a, b) => a.start - b.start);
+
+  // Fall back to the raw text if neither shape walker found anything —
+  // the response might still be parseable JSON (e.g. a bare number or
+  // string literal). tryParseWithRepair handles those too.
+  if (!candidates.length) candidates.push({ block: s, start: 0 });
+
+  let lastError;
+  for (const { block } of candidates) {
+    const parsed = tryParseWithRepair(block);
+    if (!parsed.error) return parsed.value;
+    lastError = parsed.error;
+  }
+
+  // No fallback to jsonExtract.extractJson here: that helper grabs the
+  // first inner ```…``` fenced block, which is exactly the prompt-echo
+  // failure mode this implementation was rewritten to avoid. Surface
+  // the last parse error from the candidate loop so callers see the
+  // concrete reason instead of a generic "no JSON block found".
+  throw new Error(`Invalid JSON in AI response: ${lastError?.message || 'no JSON block found'}`);
 }
 
 /**
@@ -159,22 +182,36 @@ export async function runStagedLLM(stageName, variables, options = {}) {
   const stage = getStage(stageName);
   const provider = await resolveProviderForStage(stage, options);
   const prompt = await buildPrompt(stageName, variables);
-  let model = resolveModel(provider, options.modelOverride || stage?.model);
-  // Special case: gemini-cli requires an explicit model — toolkit defaults
-  // to `auto` which can resolve to a slow reasoning model (LM Studio gotcha).
-  if (provider.id === 'gemini-cli' && !model) {
-    model = provider.lightModel || 'gemini-2.5-flash';
-  }
+  const resolvedModel = resolveModel(provider, options.modelOverride || stage?.model);
+  // Non-codex CLI providers ignore per-call model overrides at the
+  // runner.js#buildCliArgs layer, so recording the resolved model in
+  // createRun would lie about what actually ran. Drop the override at
+  // the record + log boundary for those providers — promptRunner does
+  // the same internally. PLAN.md tracks extending buildCliArgs to honor
+  // per-call model for all CLI providers; once that lands the gate goes
+  // away (and the gemini-cli fast-model fallback can be reintroduced
+  // here, since today it would be silently dropped anyway).
+  const effectiveModel = providerHonorsModelOverride(provider)
+    ? resolvedModel
+    : (provider.defaultModel || provider.models?.[0] || null);
 
   const { runId } = await createRun({
     providerId: provider.id,
-    model,
+    model: effectiveModel,
     prompt,
     source: options.source || 'staged-llm',
   });
-  console.log(`📝 stage: ${provider.id} / ${model || '(default)'} / ${stageName} → ${runId.slice(0, 8)}`);
+  console.log(`📝 stage: ${provider.id} / ${effectiveModel || '(default)'} / ${stageName} → ${runId.slice(0, 8)}`);
 
-  const text = await awaitRunnerCall({ provider, model, prompt, runId, source: options.source });
-  const content = options.returnsJson ? extractJson(text) : text;
-  return { content, model: model || null, providerId: provider.id, runId };
+  // Stage runs pre-create the run record (so the runId can be logged BEFORE
+  // the LLM call starts), then thread that id through the shared runner.
+  const { text } = await runPromptThroughProvider({
+    provider, model: effectiveModel, prompt, source: options.source || 'staged-llm', runId,
+  });
+  // Pass the prompt down so extractJson can strip any echoed copy of
+  // it before walking — Codex CLI echoes stdin to stdout, and stage
+  // prompts often contain fenced JSON schema examples that would
+  // otherwise parse-and-win over the model's actual response.
+  const content = options.returnsJson ? extractJson(text, { promptToStrip: prompt }) : text;
+  return { content, model: effectiveModel || null, providerId: provider.id, runId };
 }

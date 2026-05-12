@@ -1,6 +1,8 @@
 import { ServerError } from '../lib/errorHandler.js';
+import { findBalancedBlocks, tryParseWithRepair } from '../lib/jsonExtract.js';
+import { runPromptThroughProvider } from '../lib/promptRunner.js';
 import { getProviderById } from './providers.js';
-import { createRun, executeApiRun, executeCliRun, hasModelFlag, extractBakedModel } from './runner.js';
+import { hasModelFlag, extractBakedModel } from './runner.js';
 
 const MAX_PROMPT_LEN = 8000;
 const MAX_REASON_LEN = 1200;
@@ -24,49 +26,36 @@ const isPlaceholderPrompt = (s) => typeof s === 'string' && /^\s*<.+>\s*$/.test(
 // Codex CLI prepends a banner like `OpenAI Codex CLI...` and `[workdir, /…]`
 // metadata before the model's JSON output, AND echoes the input prompt to
 // stdout (which contains the schema example {…}). Walk braces with string-
-// awareness, skip any block whose `prompt` is a placeholder, and return the
-// first remaining block that parses as an object with a `prompt` field.
+// awareness via the shared lib, skip any block whose `prompt` is a
+// placeholder, and return the first remaining block that parses as an
+// object with a `prompt` field.
 function extractRefinementJson(raw) {
   if (typeof raw !== 'string' || !raw.trim()) throw new Error('Empty AI response');
   let s = raw.trim();
   const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/);
   if (fence) s = fence[1].trim();
 
-  let i = 0;
-  let lastErr;
+  const candidates = findBalancedBlocks(s);
+  if (!candidates.length) candidates.push(s);
+
+  // Walk every balanced block ourselves rather than calling the shared
+  // extractJson — we need a tri-state outcome (real refinement, placeholder
+  // echo, or parse error) to surface the "schema placeholder" error message
+  // that helps users pick a stronger model. extractJson's shape predicate
+  // collapses placeholder-vs-real into a single fallback path.
   let placeholderSeen = false;
-  while (i < s.length) {
-    const start = s.indexOf('{', i);
-    if (start === -1) break;
-    let depth = 0;
-    let inString = false;
-    let escaped = false;
-    let end = -1;
-    for (let j = start; j < s.length; j++) {
-      const ch = s[j];
-      if (inString) {
-        if (escaped) escaped = false;
-        else if (ch === '\\') escaped = true;
-        else if (ch === '"') inString = false;
-        continue;
-      }
-      if (ch === '"') { inString = true; continue; }
-      if (ch === '{') depth++;
-      else if (ch === '}') {
-        depth--;
-        if (depth === 0) { end = j; break; }
-      }
+  let lastErr;
+  for (const block of candidates) {
+    const result = tryParseWithRepair(block);
+    if (result.error) {
+      lastErr = result.error;
+      continue;
     }
-    if (end === -1) break;
-    const block = s.slice(start, end + 1);
-    try {
-      const value = JSON.parse(block);
-      if (value && typeof value === 'object' && typeof value.prompt === 'string') {
-        if (isPlaceholderPrompt(value.prompt)) { placeholderSeen = true; }
-        else return value;
-      }
-    } catch (e) { lastErr = e; }
-    i = end + 1;
+    const { value } = result;
+    if (value && typeof value === 'object' && typeof value.prompt === 'string') {
+      if (isPlaceholderPrompt(value.prompt)) { placeholderSeen = true; }
+      else return value;
+    }
   }
   if (placeholderSeen) {
     throw new Error('AI returned the schema placeholder instead of a real refinement — try a stronger model or rerun');
@@ -115,37 +104,19 @@ ${feedback}`;
 // shapes that the toolkit runner already knows about — going through the
 // runner avoids the "stdin is not a terminal" failure mode that hits when
 // you spawn `codex` directly without the `exec -` invocation.
-async function runRefinePrompt(provider, model, prompt) {
-  const { runId } = await createRun({
-    providerId: provider.id,
+//
+// promptRunner already drops the per-call model for providers that don't
+// honor it (see providerHonorsModelOverride), so we pass `model` through
+// unconditionally and let the shared layer decide. Wrap runner failures
+// in a typed ServerError so the route returns 502 PROMPT_REFINE_FAILED.
+function runRefinePrompt(provider, model, prompt) {
+  return runPromptThroughProvider({
+    provider,
     model,
     prompt,
     source: 'media-prompt-refine',
-  });
-
-  let text = '';
-  return await new Promise((resolve, reject) => {
-    const onData = (chunk) => { text += typeof chunk === 'string' ? chunk : (chunk?.text || ''); };
-    const onComplete = (result) => {
-      if (result?.error || result?.success === false) {
-        reject(new ServerError(result?.error || 'Prompt refinement failed', { status: 502, code: 'PROMPT_REFINE_FAILED' }));
-      } else {
-        resolve({ text, runId });
-      }
-    };
-    if (provider.type === 'cli') {
-      // `runner.js#buildCliArgs` honors `provider.defaultModel` for every
-      // supported CLI provider (codex / claude-code / gemini-cli) — it
-      // injects `--model` / `-m` whenever the user hasn't already baked a
-      // model flag into provider.args. So cloning with an overridden
-      // defaultModel is safe for all CLI types.
-      const providerForCli = model && model !== provider.defaultModel
-        ? { ...provider, defaultModel: model }
-        : provider;
-      executeCliRun(runId, providerForCli, prompt, process.cwd(), onData, onComplete, provider.timeout ?? 300000).catch(reject);
-    } else {
-      executeApiRun(runId, provider, model, prompt, process.cwd(), [], onData, onComplete).catch(reject);
-    }
+  }).catch((err) => {
+    throw new ServerError(err?.message || 'Prompt refinement failed', { status: 502, code: 'PROMPT_REFINE_FAILED' });
   });
 }
 

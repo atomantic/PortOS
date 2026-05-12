@@ -14,6 +14,7 @@ vi.mock('../services/runner.js', () => ({
   createRun: vi.fn(async () => ({ runId: 'run-abc12345' })),
   executeApiRun: vi.fn(),
   executeCliRun: vi.fn(),
+  hasModelFlag: vi.fn(() => false),
 }));
 
 const providers = await import('../services/providers.js');
@@ -76,6 +77,52 @@ describe('stageRunner — extractJson', () => {
   });
   it('parses an array', () => {
     expect(extractJson('[1,2,3]')).toEqual([1, 2, 3]);
+  });
+  it('preserves an array-of-objects wrapper instead of grabbing the inner object', () => {
+    // Regression: an "object-first then array-fallback" strategy used to
+    // return `{"a":1}` from `[{"a":1},{"a":2}]`, silently dropping the
+    // array wrapper. The current strategy walks balanced candidates for
+    // BOTH shapes, sorts by source-text start position, and returns the
+    // first that parses — so the array opener at position 0 wins over
+    // the inner object opener at position 1.
+    expect(extractJson('[{"a":1},{"a":2}]')).toEqual([{ a: 1 }, { a: 2 }]);
+  });
+  it('preserves an array-of-objects wrapper inside a fenced response', () => {
+    expect(extractJson('```json\n[{"id":"x"}]\n```')).toEqual([{ id: 'x' }]);
+  });
+  it('still extracts a leading object when an array appears later in prose', () => {
+    expect(extractJson('Sure! {"a":1} (example array later: [1,2])')).toEqual({ a: 1 });
+  });
+  it('skips a Codex CLI banner `[workdir, /tmp]` and returns the actual object', () => {
+    // Regression: a raw `indexOf('[') < indexOf('{')` peek would prefer
+    // array-mode and (in the worst case) return an inner array field
+    // instead of the wrapping object. Earliest-parseable-block ordering
+    // skips the banner because its contents don't parse as JSON.
+    const raw = 'OpenAI Codex CLI v2.1.0\n[workdir, /tmp]\n\n{"a":1,"b":[2,3]}\n[finished]';
+    expect(extractJson(raw)).toEqual({ a: 1, b: [2, 3] });
+  });
+  it('returns the wrapping object — not its inner array field — when both walks succeed', () => {
+    // Object opener comes before the inner array opener, so the object
+    // wins on earliest-start ordering.
+    expect(extractJson('{"items":[1,2,3]}')).toEqual({ items: [1, 2, 3] });
+  });
+  it('strips a known echoed prompt before walking so the real response wins', () => {
+    // Regression: Codex CLI echoes stdin to stdout, so when a stage
+    // prompt contains a fenced JSON schema example, both that schema
+    // AND the model's actual response are present in the captured
+    // text. Picking by source order returns the schema (placeholder
+    // data). Passing the prompt verbatim lets extractJson strip the
+    // echo first, so the response wins.
+    const prompt = 'Prompt echo:\n```json\n{"_schema":"example"}\n```';
+    const raw = `${prompt}\n\nResponse:\n{"answer":42}`;
+    expect(extractJson(raw, { promptToStrip: prompt })).toEqual({ answer: 42 });
+  });
+  it('without promptToStrip, an echoed schema block still wins on source order (documents the failure mode)', () => {
+    // This is the failure mode that runStagedLLM avoids by ALWAYS
+    // passing the prompt down. Kept here so future contributors who
+    // bypass the stripping path know they have to provide it.
+    const raw = 'Prompt echo:\n```json\n{"_schema":"example"}\n```\n\nResponse:\n{"answer":42}';
+    expect(extractJson(raw)).toEqual({ _schema: 'example' });
   });
   it('throws on empty or non-string input', () => {
     expect(() => extractJson('')).toThrow(/Empty AI response/);
