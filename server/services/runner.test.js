@@ -17,7 +17,7 @@ vi.mock('fs/promises', () => ({
 
 const { spawn } = await import('child_process');
 const runner = await import('./runner.js');
-const { setAIToolkit, executeCliRun, buildCliArgs } = runner;
+const { setAIToolkit, executeCliRun, buildCliArgs, hasModelFlag, extractBakedModel } = runner;
 
 // Minimal toolkit stub that satisfies executeCliRun's expectations
 function fakeToolkit() {
@@ -184,5 +184,58 @@ describe('buildCliArgs — codex (regression coverage for the existing logic)', 
     const provider = { id: 'codex', command: 'codex', args: [], defaultModel: 'o4-mini' };
     const args = buildCliArgs(provider);
     expect(args).toEqual(['exec', '--model', 'o4-mini', '-']);
+  });
+});
+
+describe('hasModelFlag', () => {
+  it('detects separated long form (--model X)', () => {
+    expect(hasModelFlag(['--model', 'foo'])).toBe(true);
+  });
+  it('detects separated short form (-m X)', () => {
+    expect(hasModelFlag(['-m', 'foo'])).toBe(true);
+  });
+  it('detects joined long form (--model=X)', () => {
+    expect(hasModelFlag(['--model=foo'])).toBe(true);
+  });
+  it('detects joined short form (-m=X)', () => {
+    expect(hasModelFlag(['-m=foo'])).toBe(true);
+  });
+  it('returns false when no model flag is present', () => {
+    expect(hasModelFlag(['--other', 'foo'])).toBe(false);
+    expect(hasModelFlag([])).toBe(false);
+  });
+  it('returns false for non-array input', () => {
+    expect(hasModelFlag(null)).toBe(false);
+    expect(hasModelFlag(undefined)).toBe(false);
+    expect(hasModelFlag('--model foo')).toBe(false);
+  });
+});
+
+describe('extractBakedModel', () => {
+  it('extracts from separated long form', () => {
+    expect(extractBakedModel(['--model', 'sonnet-3.7'])).toBe('sonnet-3.7');
+  });
+  it('extracts from separated short form', () => {
+    expect(extractBakedModel(['-m', 'gemini-2.5-pro'])).toBe('gemini-2.5-pro');
+  });
+  it('extracts from joined long form', () => {
+    expect(extractBakedModel(['--model=opus-4.7'])).toBe('opus-4.7');
+  });
+  it('extracts from joined short form', () => {
+    expect(extractBakedModel(['-m=gemini-flash'])).toBe('gemini-flash');
+  });
+  it('returns null when separated form has no value following the flag', () => {
+    expect(extractBakedModel(['--model'])).toBe(null);
+  });
+  it('returns null when no model flag is present', () => {
+    expect(extractBakedModel(['--other', 'foo'])).toBe(null);
+    expect(extractBakedModel([])).toBe(null);
+  });
+  it('returns null for non-array input', () => {
+    expect(extractBakedModel(null)).toBe(null);
+    expect(extractBakedModel(undefined)).toBe(null);
+  });
+  it('returns the FIRST baked flag when more than one is present', () => {
+    expect(extractBakedModel(['--model', 'first', '-m', 'second'])).toBe('first');
   });
 });

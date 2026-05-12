@@ -8,6 +8,27 @@ vi.mock('./runner.js', () => ({
   createRun: vi.fn().mockResolvedValue({ runId: 'test-run' }),
   executeApiRun: vi.fn(),
   executeCliRun: vi.fn(),
+  // Refiners use these to figure out whether per-call model override will be
+  // honored, and to surface the args-baked model id when it isn't. Real
+  // implementations live in runner.js; the mock just defers to a pure-ish
+  // copy so the refiner sees realistic behavior in tests.
+  hasModelFlag: (args) => Array.isArray(args) && args.some((a) =>
+    a === '--model' || a === '-m'
+    || (typeof a === 'string' && (a.startsWith('--model=') || a.startsWith('-m=')))),
+  extractBakedModel: (args) => {
+    if (!Array.isArray(args)) return null;
+    for (let i = 0; i < args.length; i++) {
+      const a = args[i];
+      if (typeof a !== 'string') continue;
+      if (a === '--model' || a === '-m') {
+        const next = args[i + 1];
+        return typeof next === 'string' && next.length > 0 ? next : null;
+      }
+      if (a.startsWith('--model=')) return a.slice('--model='.length) || null;
+      if (a.startsWith('-m=')) return a.slice('-m='.length) || null;
+    }
+    return null;
+  },
 }));
 
 const providers = await import('./providers.js');
@@ -199,16 +220,17 @@ ${JSON.stringify({ prompt: 'painted owl portrait', negativePrompt: 'blurry', rat
     expect(result.model).toBe('user-selected-sonnet');
   });
 
-  it('falls back to defaultModel when a CLI provider has --model baked into args (override silently dropped)', async () => {
+  it('reports the args-baked model (not defaultModel) when a CLI provider pins a model in args', async () => {
     // When the user has hard-coded `--model X` (or `-m X`) into provider.args,
-    // buildCliArgs skips injection and the saved arg wins — so the per-call
-    // override is silently dropped and we must report defaultModel, not the
-    // user's selection.
+    // buildCliArgs skips injection and the saved arg wins — the per-call
+    // override is silently dropped. To match reality, the response should
+    // report the model extracted from args, NOT defaultModel (which might
+    // diverge from what the CLI will actually run with).
     providers.getProviderById.mockResolvedValue({
       id: 'claude-code',
       type: 'cli',
       enabled: true,
-      defaultModel: 'claude-baked-in',
+      defaultModel: 'claude-stale-default',
       args: ['--model', 'baked-in-from-args'],
     });
     mockRunnerSuccess(runner.executeCliRun, JSON.stringify({
@@ -223,7 +245,30 @@ ${JSON.stringify({ prompt: 'painted owl portrait', negativePrompt: 'blurry', rat
       model: 'user-selection-runner-will-drop',
     });
 
-    expect(result.model).toBe('claude-baked-in');
+    expect(result.model).toBe('baked-in-from-args');
+  });
+
+  it('extracts the args-baked model from joined-form (--model=X) flags too', async () => {
+    providers.getProviderById.mockResolvedValue({
+      id: 'gemini-cli',
+      type: 'cli',
+      enabled: true,
+      defaultModel: 'gemini-stale-default',
+      args: ['-m=gemini-from-joined-arg'],
+    });
+    mockRunnerSuccess(runner.executeCliRun, JSON.stringify({
+      prompt: 'x', negativePrompt: '', rationale: '', changes: [],
+    }));
+
+    const result = await refineMediaPrompt({
+      kind: 'image',
+      prompt: 'p',
+      feedback: 'f',
+      providerId: 'gemini-cli',
+      model: 'user-selection-dropped',
+    });
+
+    expect(result.model).toBe('gemini-from-joined-arg');
   });
 
   it('falls back to provider.models[0] when defaultModel is absent (API provider)', async () => {

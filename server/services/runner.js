@@ -82,9 +82,35 @@ export function buildCliArgs(provider) {
 // `--model x` and joined `--model=x`). gemini-cli is the only one that
 // uses `-m` short form; checking it on claude-code too is harmless
 // (claude-code doesn't define a `-m` short flag).
-function hasModelFlag(args) {
+export function hasModelFlag(args) {
+  if (!Array.isArray(args)) return false;
   return args.some((a) => a === '--model' || a === '-m'
     || (typeof a === 'string' && (a.startsWith('--model=') || a.startsWith('-m='))));
+}
+
+/**
+ * Extract the pinned model id from provider.args when a model flag is baked
+ * in. Supports separated form (`--model X` / `-m X`) and joined form
+ * (`--model=X` / `-m=X`). Returns null when no model flag is present or the
+ * separated form has no value following the flag.
+ *
+ * Used by refiners (mediaPromptRefiner, worldBuilderRefine) so the model
+ * reported back to the caller / persisted on the run record matches what
+ * the CLI will actually run when the user has hard-coded a model in args.
+ */
+export function extractBakedModel(args) {
+  if (!Array.isArray(args)) return null;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (typeof a !== 'string') continue;
+    if (a === '--model' || a === '-m') {
+      const next = args[i + 1];
+      return typeof next === 'string' && next.length > 0 ? next : null;
+    }
+    if (a.startsWith('--model=')) return a.slice('--model='.length) || null;
+    if (a.startsWith('-m=')) return a.slice('-m='.length) || null;
+  }
+  return null;
 }
 
 /**

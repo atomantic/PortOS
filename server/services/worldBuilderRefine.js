@@ -13,7 +13,7 @@
 
 import { ServerError } from '../lib/errorHandler.js';
 import { getActiveProvider, getProviderById } from './providers.js';
-import { createRun, executeApiRun, executeCliRun } from './runner.js';
+import { createRun, executeApiRun, executeCliRun, hasModelFlag, extractBakedModel } from './runner.js';
 import {
   PROMPT_FRAGMENT_MAX,
   STARTER_PROMPT_MAX,
@@ -202,16 +202,14 @@ export async function refineWorldPrompts({
   // API providers honor per-call `model` directly; CLI providers do too via
   // buildCliArgs (which injects --model/-m from provider.defaultModel),
   // unless the user has hard-coded a model flag into provider.args — in
-  // that case the saved arg wins and we fall back so the reported model
-  // matches reality.
-  const cliHasBakedModelFlag = provider.type === 'cli'
-    && Array.isArray(provider.args)
-    && provider.args.some((a) => a === '--model' || a === '-m'
-      || (typeof a === 'string' && (a.startsWith('--model=') || a.startsWith('-m='))));
+  // that case the saved arg wins and we surface the model id parsed out of
+  // args so the response/run record matches what'll actually run.
+  const cliHasBakedModelFlag = provider.type === 'cli' && hasModelFlag(provider.args);
   const honorsModelOverride = provider.type === 'api' || (provider.type === 'cli' && !cliHasBakedModelFlag);
+  const bakedModel = cliHasBakedModelFlag ? extractBakedModel(provider.args) : null;
   const selectedModel = honorsModelOverride
     ? (model || provider.defaultModel || provider.models?.[0] || '')
-    : (provider.defaultModel || provider.models?.[0] || '');
+    : (bakedModel || provider.defaultModel || provider.models?.[0] || '');
   if (!selectedModel && provider.type === 'api') {
     throw new ServerError('Model is required for world refinement', { status: 400, code: 'MODEL_REQUIRED' });
   }

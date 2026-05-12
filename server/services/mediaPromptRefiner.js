@@ -1,6 +1,6 @@
 import { ServerError } from '../lib/errorHandler.js';
 import { getProviderById } from './providers.js';
-import { createRun, executeApiRun, executeCliRun } from './runner.js';
+import { createRun, executeApiRun, executeCliRun, hasModelFlag, extractBakedModel } from './runner.js';
 
 const MAX_PROMPT_LEN = 8000;
 const MAX_REASON_LEN = 1200;
@@ -178,16 +178,15 @@ export async function refineMediaPrompt({
   // injects `--model`/`-m` from `provider.defaultModel` for every supported
   // CLI (codex / claude-code / gemini-cli) UNLESS the user has already baked
   // a model flag into provider.args. In the "baked flag" case the override
-  // is silently dropped and the saved model wins — so we still fall back
-  // through defaultModel → models[0] for accurate reporting in that path.
-  const cliHasBakedModelFlag = provider.type === 'cli'
-    && Array.isArray(provider.args)
-    && provider.args.some((a) => a === '--model' || a === '-m'
-      || (typeof a === 'string' && (a.startsWith('--model=') || a.startsWith('-m='))));
+  // is silently dropped and the model from args wins — so we surface that
+  // exact id (extracted from args) on the run record instead of guessing
+  // from defaultModel, which can diverge.
+  const cliHasBakedModelFlag = provider.type === 'cli' && hasModelFlag(provider.args);
   const honorsModelOverride = provider.type === 'api' || (provider.type === 'cli' && !cliHasBakedModelFlag);
+  const bakedModel = cliHasBakedModelFlag ? extractBakedModel(provider.args) : null;
   const selectedModel = honorsModelOverride
     ? (model || provider.defaultModel || provider.models?.[0] || '')
-    : (provider.defaultModel || provider.models?.[0] || '');
+    : (bakedModel || provider.defaultModel || provider.models?.[0] || '');
   if (!selectedModel && provider.type === 'api') {
     throw new ServerError('Model is required for prompt refinement', { status: 400, code: 'MODEL_REQUIRED' });
   }
