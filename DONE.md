@@ -4,6 +4,10 @@ Archive of completed work. For active roadmap, see [PLAN.md](./PLAN.md). For pro
 
 ---
 
+## 2026-05-12
+
+- **Extract `scripts/_runner_common.py`** — Pulled the byte-for-byte-duplicated `pick_device` / `make_generator` / `apply_memory_optimizations` / `write_sidecar` / `make_stepwise_callback` / `_emit_user_error` / `_repo_from_hf_error` / HF cause-chain walker (~200 LOC) out of `scripts/flux2_macos.py` + `scripts/z_image_turbo.py` into a shared module. `make_stepwise_callback` now takes an optional `unpack_latents` callable so the flux2 packed-transformer-latent path stays runner-specific while the rest of the decode is shared. `install_hf_error_handler` is a `@decorator` over `main()` that owns the gated/notfound/401 dispatch — `if __name__ == "__main__": main()` collapses to one line in both runners. Mirrors the `lora_utils.py` extraction pattern. Server tests 4012/4012 green; both runners' `--help` resolves cleanly.
+
 ## 2026-05-10
 
 - **Pipeline — Story Arc Planning (Phases 1–4 shipped)** — Four-phase rebuild of the PipelineSeries page from a flat issue list into a structural Arc → Season → Episode tree.
