@@ -405,14 +405,17 @@ const normalizeRegistry = (parsed) => {
 //
 // IMPORTANT: this state is structurally indistinguishable from an INTENTIONAL
 // deletion — `appendNewlyShippedEntries` skips re-adding ids that are in
-// shippedIds but not userList for exactly that reason. So this log will also
-// fire every boot for built-ins the user deliberately removed. We surface it
-// anyway because silent skipping was the bug; the message tells the user how
-// to silence it (delete `_shippedDefaults.<where>.<id>`) if the absence is
-// intentional, rather than implying they should always restore.
+// shippedIds but not userList for exactly that reason. There is no "silence
+// without re-adding" path today: removing an id from `_shippedDefaults`
+// flips it back to "genuinely new built-in" and normalizeRegistry will
+// re-append it on next boot. So if the absence is intentional, this log
+// fires every restart — users can either live with it, or accept the
+// re-add and delete the entry again from the UI. We surface it anyway
+// because the silent-skipping behaviour was the original bug.
 //
-// `kind` is either 'image' (single list, image[]) or 'video' (per-platform
-// macos / windows lists).
+// `kind` is either 'image' (single list at `_shippedDefaults.image.list`)
+// or 'video' (per-platform arrays at `_shippedDefaults.video.macos` /
+// `_shippedDefaults.video.windows`).
 const warnDrift = (kind, platform, shippedIds, defaultIds, presentIds) => {
   const shippedSet = new Set(shippedIds || []);
   const defaultSet = new Set(defaultIds || []);
@@ -420,8 +423,12 @@ const warnDrift = (kind, platform, shippedIds, defaultIds, presentIds) => {
   for (const id of shippedSet) {
     if (!defaultSet.has(id)) continue;     // not a current built-in; ignore
     if (presentSet.has(id)) continue;      // present — no drift
+    // shippedIds for image lives at `_shippedDefaults.image.list`; for video
+    // it's `_shippedDefaults.video.{macos,windows}` directly. Surface the
+    // accurate key so a copy-paste from the warning lands in the right place.
     const where = platform ? `${kind}.${platform}` : kind;
-    console.log(`⚠️ media-models drift: built-in "${id}" was shipped but is missing from ${where}[] — if you intentionally deleted it, remove "${id}" from _shippedDefaults.${where} to silence; otherwise restore it manually or delete _shippedDefaults.${where} to re-bootstrap`);
+    const shippedKey = platform ? `_shippedDefaults.${kind}.${platform}` : `_shippedDefaults.${kind}.list`;
+    console.log(`⚠️ media-models drift: built-in "${id}" was shipped but is missing from ${where}[] — if the deletion is intentional this warning will repeat each boot (no silence-without-restore path exists); to restore, either re-add the entry manually or delete ${shippedKey} entirely to re-bootstrap`);
   }
 };
 

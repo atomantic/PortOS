@@ -147,10 +147,11 @@ async function runRefine(provider, model, prompt) {
       }
     };
     if (provider.type === 'cli') {
-      // Mirror the media refiner: only Codex's `buildCliArgs` honors a per-call
-      // model override today, so don't lie about which model ran for the others.
-      const canOverrideModel = provider.id === 'codex';
-      const providerForCli = canOverrideModel && model && model !== provider.defaultModel
+      // Mirror the media refiner: `buildCliArgs` now honors a per-call model
+      // override (via `provider.defaultModel`) for codex / claude-code /
+      // gemini-cli. Clone the provider with the overridden defaultModel
+      // whenever the caller picked something other than the saved default.
+      const providerForCli = model && model !== provider.defaultModel
         ? { ...provider, defaultModel: model }
         : provider;
       executeCliRun(runId, providerForCli, prompt, process.cwd(), onData, onComplete, provider.timeout ?? 300000).catch(reject);
@@ -198,7 +199,16 @@ export async function refineWorldPrompts({
     );
   }
 
-  const honorsModelOverride = provider.type === 'api' || provider.id === 'codex';
+  // API providers honor per-call `model` directly; CLI providers do too via
+  // buildCliArgs (which injects --model/-m from provider.defaultModel),
+  // unless the user has hard-coded a model flag into provider.args — in
+  // that case the saved arg wins and we fall back so the reported model
+  // matches reality.
+  const cliHasBakedModelFlag = provider.type === 'cli'
+    && Array.isArray(provider.args)
+    && provider.args.some((a) => a === '--model' || a === '-m'
+      || (typeof a === 'string' && (a.startsWith('--model=') || a.startsWith('-m='))));
+  const honorsModelOverride = provider.type === 'api' || (provider.type === 'cli' && !cliHasBakedModelFlag);
   const selectedModel = honorsModelOverride
     ? (model || provider.defaultModel || provider.models?.[0] || '')
     : (provider.defaultModel || provider.models?.[0] || '');

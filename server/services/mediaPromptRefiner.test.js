@@ -173,11 +173,11 @@ ${JSON.stringify({ prompt: 'painted owl portrait', negativePrompt: 'blurry', rat
     })).rejects.toMatchObject({ code: 'PROVIDER_DISABLED', status: 400 });
   });
 
-  it('ignores per-call model override for non-Codex CLIs since the runner cannot apply it', async () => {
-    // runner.js#buildCliArgs only translates defaultModel into a --model flag
-    // for codex. For claude-code / gemini-cli the per-call override would be
-    // silently dropped, so the response model must reflect what'll actually
-    // run (the provider's configured default), not the user's selection.
+  it('honors per-call model override for claude-code / gemini-cli when args do not pin a model', async () => {
+    // runner.js#buildCliArgs now injects --model/-m from provider.defaultModel
+    // for every CLI provider (codex / claude-code / gemini-cli), so cloning
+    // the provider with the user-selected model is safe and the response
+    // accurately reports what'll actually run.
     providers.getProviderById.mockResolvedValue({
       id: 'claude-code',
       type: 'cli',
@@ -193,7 +193,34 @@ ${JSON.stringify({ prompt: 'painted owl portrait', negativePrompt: 'blurry', rat
       prompt: 'p',
       feedback: 'f',
       providerId: 'claude-code',
-      model: 'user-selected-model-the-runner-will-ignore',
+      model: 'user-selected-sonnet',
+    });
+
+    expect(result.model).toBe('user-selected-sonnet');
+  });
+
+  it('falls back to defaultModel when a CLI provider has --model baked into args (override silently dropped)', async () => {
+    // When the user has hard-coded `--model X` (or `-m X`) into provider.args,
+    // buildCliArgs skips injection and the saved arg wins — so the per-call
+    // override is silently dropped and we must report defaultModel, not the
+    // user's selection.
+    providers.getProviderById.mockResolvedValue({
+      id: 'claude-code',
+      type: 'cli',
+      enabled: true,
+      defaultModel: 'claude-baked-in',
+      args: ['--model', 'baked-in-from-args'],
+    });
+    mockRunnerSuccess(runner.executeCliRun, JSON.stringify({
+      prompt: 'x', negativePrompt: '', rationale: '', changes: [],
+    }));
+
+    const result = await refineMediaPrompt({
+      kind: 'image',
+      prompt: 'p',
+      feedback: 'f',
+      providerId: 'claude-code',
+      model: 'user-selection-runner-will-drop',
     });
 
     expect(result.model).toBe('claude-baked-in');
