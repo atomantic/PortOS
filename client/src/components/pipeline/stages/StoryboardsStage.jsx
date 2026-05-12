@@ -281,7 +281,7 @@ export default function StoryboardsStage({ issue, onStageUpdate }) {
                   <button
                     type="button"
                     onClick={() => handleGenerateVideo(i)}
-                    disabled={renderingVideoIdx === i}
+                    disabled={renderingVideoIdx !== null}
                     title="Render this scene as a video clip (independent of the full episode-video stitch)"
                     className="inline-flex items-center justify-center gap-1 px-2 py-1.5 rounded bg-port-card border border-port-border text-white text-xs hover:border-port-accent/50 disabled:opacity-50"
                   >
