@@ -8,18 +8,23 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { Plus, Trash2, Sparkles, Loader2, Wand2 } from 'lucide-react';
+import { Plus, Trash2, Sparkles, Loader2, Wand2, Film, WandSparkles } from 'lucide-react';
 import toast from '../../ui/Toast';
 import {
   generatePipelineVisualImage,
+  generatePipelineSceneVideo,
+  refinePipelineSceneImagePrompt,
   updatePipelineIssue,
   extractPipelineStoryboardScenes,
 } from '../../../services/api';
+import MediaJobThumb from '../MediaJobThumb';
 
 export default function StoryboardsStage({ issue, onStageUpdate }) {
   const stage = issue.stages?.storyboards || { status: 'empty', scenes: [] };
   const [scenes, setScenes] = useState(stage.scenes || []);
   const [savingIdx, setSavingIdx] = useState(null);
+  const [renderingVideoIdx, setRenderingVideoIdx] = useState(null);
+  const [refiningIdx, setRefiningIdx] = useState(null);
   const [extractingFrom, setExtractingFrom] = useState(null);
   // Holds the active arm-timer id so an unmount or a fresh arm clears the
   // pending disarm — otherwise the 5s callback fires setExtractingFrom on
@@ -113,6 +118,59 @@ export default function StoryboardsStage({ issue, onStageUpdate }) {
     toast.success(`Queued ${result.mode} image (${result.jobId.slice(0, 8)})`);
   };
 
+  // LLM-driven refinement of the scene description into a richer image
+  // prompt. Server replaces the persisted description with the refined
+  // version and returns the updated issue.
+  const handleRefinePrompt = async (i) => {
+    const scene = scenes[i];
+    if (!scene.description?.trim()) {
+      toast.error('Add a description first');
+      return;
+    }
+    setRefiningIdx(i);
+    const result = await refinePipelineSceneImagePrompt(issue.id, i, {})
+      .catch((err) => {
+        toast.error(err.message || 'Refine failed');
+        return null;
+      });
+    setRefiningIdx(null);
+    if (!result) return;
+    if (result.issue) {
+      setScenes(result.issue.stages?.storyboards?.scenes || []);
+      onStageUpdate?.('storyboards', result.issue.stages.storyboards, result.issue);
+    }
+    const summary = result.changes?.[0] ? ` — ${result.changes[0]}` : '';
+    toast.success(`Refined scene ${i + 1}${summary}`);
+  };
+
+  // Render this one scene as a video clip — independent of the full
+  // episode-video stitch. Server persists sceneVideoJobId on the scene.
+  const handleGenerateVideo = async (i) => {
+    const scene = scenes[i];
+    if (!scene.description?.trim()) {
+      toast.error('Add a description first');
+      return;
+    }
+    setRenderingVideoIdx(i);
+    const result = await generatePipelineSceneVideo(issue.id, i, {})
+      .catch((err) => {
+        toast.error(err.message || 'Failed to enqueue scene video');
+        return null;
+      });
+    setRenderingVideoIdx(null);
+    if (!result) return;
+    // Server returned the updated issue — adopt its scenes list rather than
+    // patching locally so any sanitizer drift stays a server-side concern.
+    if (result.issue) {
+      setScenes(result.issue.stages?.storyboards?.scenes || []);
+      onStageUpdate?.('storyboards', result.issue.stages.storyboards, result.issue);
+    } else {
+      const next = scenes.map((s, j) => j === i ? { ...s, sceneVideoJobId: result.jobId } : s);
+      setScenes(next);
+    }
+    toast.success(`Queued scene video (${result.jobId.slice(0, 8)})`);
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -194,6 +252,16 @@ export default function StoryboardsStage({ issue, onStageUpdate }) {
                 <div className="flex flex-col gap-1 w-32">
                   <button
                     type="button"
+                    onClick={() => handleRefinePrompt(i)}
+                    disabled={refiningIdx === i}
+                    title="Elaborate this description into a richer image-gen prompt (LLM call — replaces the current text)"
+                    className="inline-flex items-center justify-center gap-1 px-2 py-1.5 rounded bg-port-card border border-port-border text-white text-xs hover:border-port-accent/50 disabled:opacity-50"
+                  >
+                    {refiningIdx === i ? <Loader2 size={12} className="animate-spin" /> : <WandSparkles size={12} />}
+                    AI: refine
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => handleGenerate(i)}
                     disabled={savingIdx === i}
                     className="inline-flex items-center justify-center gap-1 px-2 py-1.5 rounded bg-port-accent text-white text-xs disabled:opacity-50"
@@ -201,8 +269,27 @@ export default function StoryboardsStage({ issue, onStageUpdate }) {
                     {savingIdx === i ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
                     Storyboard
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => handleGenerateVideo(i)}
+                    disabled={renderingVideoIdx === i}
+                    title="Render this scene as a video clip (independent of the full episode-video stitch)"
+                    className="inline-flex items-center justify-center gap-1 px-2 py-1.5 rounded bg-port-card border border-port-border text-white text-xs hover:border-port-accent/50 disabled:opacity-50"
+                  >
+                    {renderingVideoIdx === i ? <Loader2 size={12} className="animate-spin" /> : <Film size={12} />}
+                    Scene video
+                  </button>
                   {scene.imageJobId ? (
-                    <span className="text-[10px] text-gray-500 font-mono break-all">job {scene.imageJobId.slice(0, 8)}</span>
+                    <>
+                      <MediaJobThumb jobId={scene.imageJobId} label={`Scene ${i + 1}`} size="md" />
+                      <span className="text-[10px] text-gray-500 font-mono break-all">img {scene.imageJobId.slice(0, 8)}</span>
+                    </>
+                  ) : null}
+                  {scene.sceneVideoJobId ? (
+                    <>
+                      <MediaJobThumb jobId={scene.sceneVideoJobId} label={`Scene ${i + 1} video`} size="md" kind="video" />
+                      <span className="text-[10px] text-gray-500 font-mono break-all">vid {scene.sceneVideoJobId.slice(0, 8)}</span>
+                    </>
                   ) : null}
                 </div>
               </div>

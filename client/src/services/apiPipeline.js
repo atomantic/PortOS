@@ -49,6 +49,11 @@ export const extractPipelineBibles = (seriesId, { issueId, corpus, kinds, provid
 export const listPipelineIssues = (seriesId) =>
   request(`/pipeline/series/${encodeURIComponent(seriesId)}/issues`);
 
+// Recently-updated issues across all series. Used by the sidebar to surface
+// in-flight pipeline work without forcing the user to drill in.
+export const listRecentPipelineIssues = (limit = 10) =>
+  request(`/pipeline/issues/recent?limit=${encodeURIComponent(limit)}`);
+
 export const createPipelineIssue = (seriesId, data) =>
   request(`/pipeline/series/${encodeURIComponent(seriesId)}/issues`, {
     method: 'POST',
@@ -103,6 +108,37 @@ export const extractPipelineComicPages = (issueId, { force } = {}) =>
 // Returns { jobId, mode, prompt, pageIndex, issue, stage }.
 export const generatePipelineComicPage = (issueId, pageIndex, opts = {}) =>
   request(`/pipeline/issues/${encodeURIComponent(issueId)}/stages/comicPages/pages/${encodeURIComponent(pageIndex)}/render`, {
+    method: 'POST',
+    body: JSON.stringify(opts),
+  });
+
+// Render a single storyboard scene as a video clip (one t2v call against
+// the scene's existing description + style). Independent of the
+// episode-video stitch — use this when you want to preview a scene before
+// committing the whole episode render.
+// Server persists the resulting jobId on stages.storyboards.scenes[index]
+// .sceneVideoJobId. Returns { jobId, prompt, sceneIndex, issue, stage }.
+export const generatePipelineSceneVideo = (issueId, sceneIndex, opts = {}) =>
+  request(`/pipeline/issues/${encodeURIComponent(issueId)}/stages/storyboards/scenes/${encodeURIComponent(sceneIndex)}/video`, {
+    method: 'POST',
+    body: JSON.stringify(opts),
+  });
+
+// LLM-driven refinement of a single comic panel's description into a
+// richer image-gen prompt. Uses the pipeline-comic-panel-image-prompt
+// stage with neighboring-panel continuity context. Server persists the
+// refined description on the panel and returns { panel, page, issue,
+// stage, runId, changes, providerId }.
+export const refinePipelineComicPanelPrompt = (issueId, pageIndex, panelIndex, opts = {}) =>
+  request(`/pipeline/issues/${encodeURIComponent(issueId)}/stages/comicPages/pages/${encodeURIComponent(pageIndex)}/panels/${encodeURIComponent(panelIndex)}/refine-prompt`, {
+    method: 'POST',
+    body: JSON.stringify(opts),
+  });
+
+// LLM-driven refinement of a single storyboard scene's description into a
+// richer image-gen prompt. Mirror of refinePipelineComicPanelPrompt.
+export const refinePipelineSceneImagePrompt = (issueId, sceneIndex, opts = {}) =>
+  request(`/pipeline/issues/${encodeURIComponent(issueId)}/stages/storyboards/scenes/${encodeURIComponent(sceneIndex)}/refine-prompt`, {
     method: 'POST',
     body: JSON.stringify(opts),
   });

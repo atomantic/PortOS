@@ -37,7 +37,13 @@ import * as seasonsSvc from '../services/pipeline/seasons.js';
 import * as arcPlanner from '../services/pipeline/arcPlanner.js';
 import { generateStage } from '../services/pipeline/textStages.js';
 import * as autoRunner from '../services/pipeline/autoRunner.js';
-import { enqueueVisualImage, enqueueVisualComicPage } from '../services/pipeline/visualStages.js';
+import {
+  enqueueVisualImage,
+  enqueueVisualComicPage,
+  enqueueStoryboardSceneVideo,
+  refineComicPanelPrompt,
+  refineStoryboardScenePrompt,
+} from '../services/pipeline/visualStages.js';
 import { startEpisodeVideoForIssue, ERR_NO_STORYBOARDS } from '../services/pipeline/episodeVideo.js';
 import { ASPECT_RATIOS, QUALITIES } from '../lib/creativeDirectorPresets.js';
 import { extractScenes, SOURCE_KIND } from '../lib/sceneExtractor.js';
@@ -250,6 +256,23 @@ const episodeVideoSchema = z.object({
   quality: z.enum(QUALITIES).optional(),
   modelId: z.string().trim().max(64).optional(),
   force: z.boolean().optional(),
+});
+
+// Single-scene video render. Lighter schema than episodeVideo because there
+// is no stitch step — just one t2v render against the scene's existing
+// description.
+const sceneVideoSchema = z.object({
+  aspectRatio: z.enum(ASPECT_RATIOS).optional(),
+  modelId: z.string().trim().max(64).optional(),
+  negativePrompt: z.string().trim().max(2000).optional(),
+  extraStyle: z.string().trim().max(2000).optional(),
+});
+
+// Provider/model picker for the LLM-driven panel/scene prompt refine. Both
+// are optional — server falls back to the active provider + stage default.
+const promptRefineSchema = z.object({
+  providerId: z.string().trim().max(80).optional(),
+  model: z.string().trim().max(200).optional(),
 });
 
 // Source for scene extraction: which text stage to read from (`prose` →
@@ -509,6 +532,30 @@ router.post('/series/:id/arc/verify', asyncHandler(async (req, res) => {
 // Issue routes
 // =====================
 
+// Recent issues across all series — used by the sidebar's dynamic Pipeline
+// child list. Returns up to `limit` issues sorted by updatedAt desc, each
+// with a denormalized seriesName for display.
+router.get('/issues/recent', asyncHandler(async (req, res) => {
+  const limit = Math.max(1, Math.min(50, Number(req.query.limit) || 10));
+  const [issues, series] = await Promise.all([
+    issuesSvc.listIssues(),
+    seriesSvc.listSeries(),
+  ]);
+  const seriesById = new Map(series.map((s) => [s.id, s.name]));
+  const sorted = [...issues]
+    .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))
+    .slice(0, limit)
+    .map((i) => ({
+      id: i.id,
+      title: i.title,
+      number: i.number,
+      seriesId: i.seriesId,
+      seriesName: seriesById.get(i.seriesId) || '(unknown series)',
+      updatedAt: i.updatedAt,
+    }));
+  res.json(sorted);
+}));
+
 router.get('/issues/:id', asyncHandler(async (req, res) => {
   const issue = await issuesSvc.getIssue(req.params.id).catch((err) => { throw mapServiceError(err); });
   res.json(issue);
@@ -684,6 +731,53 @@ router.post('/issues/:id/stages/comicPages/pages/:pageIndex/render', asyncHandle
     pages,
   });
   res.json({ ...result, issue: updatedIssue, stage });
+}));
+
+// AI-driven prompt refinement for a single comic panel. Uses
+// pipeline-comic-panel-image-prompt stage to elaborate the panel's existing
+// description into a richer image-gen prompt, then persists the result on
+// the panel.
+router.post('/issues/:id/stages/comicPages/pages/:pageIndex/panels/:panelIndex/refine-prompt',
+  asyncHandler(async (req, res) => {
+    const body = validateRequest(promptRefineSchema, req.body ?? {});
+    const result = await refineComicPanelPrompt(
+      req.params.id,
+      Number(req.params.pageIndex),
+      Number(req.params.panelIndex),
+      body,
+    ).catch((err) => { throw mapServiceError(err); });
+    res.json(result);
+  }),
+);
+
+// AI-driven prompt refinement for a single storyboard scene. Mirror of the
+// comic-panel refine but uses pipeline-storyboard-image-prompt.
+router.post('/issues/:id/stages/storyboards/scenes/:index/refine-prompt',
+  asyncHandler(async (req, res) => {
+    const body = validateRequest(promptRefineSchema, req.body ?? {});
+    const result = await refineStoryboardScenePrompt(
+      req.params.id,
+      Number(req.params.index),
+      body,
+    ).catch((err) => { throw mapServiceError(err); });
+    res.json(result);
+  }),
+);
+
+// Render a single storyboard scene as a video clip, independent of the
+// full episode-video stitch. Persists the resulting jobId on the scene's
+// `sceneVideoJobId` so a reload still shows the in-flight render.
+router.post('/issues/:id/stages/storyboards/scenes/:index/video', asyncHandler(async (req, res) => {
+  const idx = Number(req.params.index);
+  if (!Number.isInteger(idx) || idx < 0) {
+    throw new ServerError('scene index must be a non-negative integer', {
+      status: 400, code: 'PIPELINE_SCENE_BAD_INDEX',
+    });
+  }
+  const body = validateRequest(sceneVideoSchema, req.body ?? {});
+  const result = await enqueueStoryboardSceneVideo(req.params.id, idx, body)
+    .catch((err) => { throw mapServiceError(err); });
+  res.json(result);
 }));
 
 router.post('/issues/:id/stages/:stageId/visual', asyncHandler(async (req, res) => {

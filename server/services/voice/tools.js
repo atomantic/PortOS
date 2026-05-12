@@ -3,6 +3,7 @@
 // Add a new tool by pushing another entry onto TOOLS.
 
 import { captureThought, getInboxLog } from '../brain.js';
+import { STAGE_IDS as PIPELINE_STAGE_IDS } from '../pipeline/issues.js';
 import { logDrink, getAlcoholSummary } from '../meatspaceAlcohol.js';
 import { logNicotine, getNicotineSummary } from '../meatspaceNicotine.js';
 import { addBodyEntry } from '../meatspaceHealth.js';
@@ -18,6 +19,107 @@ import { imageGenEvents } from '../imageGenEvents.js';
 import { getSettings } from '../settings.js';
 
 const DAILY_LOG_PATH = '/brain/daily-log';
+
+// ----- Pipeline stage navigation helpers (used by pipeline_next_stage etc) -----
+const PIPELINE_STAGE_LABELS = {
+  idea: 'Idea',
+  prose: 'Prose',
+  comicScript: 'Comic Script',
+  tvScript: 'TV Script',
+  comicPages: 'Comic Pages',
+  storyboards: 'Storyboards',
+  episodeVideo: 'Episode Video',
+};
+// Spoken aliases → canonical stage ids. `resolveNavCommand` covers top-level
+// pages but not in-route stage names, so this is a dedicated table.
+const PIPELINE_STAGE_ALIASES = {
+  idea: 'idea',
+  prose: 'prose', story: 'prose',
+  'comic script': 'comicScript', comicscript: 'comicScript', comics: 'comicScript',
+  'tv script': 'tvScript', tvscript: 'tvScript', teleplay: 'tvScript',
+  'comic pages': 'comicPages', comicpages: 'comicPages', pages: 'comicPages',
+  storyboards: 'storyboards', storyboard: 'storyboards', scenes: 'storyboards',
+  'episode video': 'episodeVideo', episodevideo: 'episodeVideo', episode: 'episodeVideo', video: 'episodeVideo',
+};
+const parsePipelineIssuePath = (path) => {
+  if (typeof path !== 'string') return null;
+  // Strip query/hash before matching — `[^/]+` would otherwise greedily
+  // absorb `?foo=bar` or `#anchor` into the captured id/stage segments
+  // (the path "/pipeline/issues/abc?x" would parse as id="abc?x").
+  const clean = path.split(/[?#]/)[0];
+  const m = clean.match(/^\/pipeline\/issues\/([^/]+)(?:\/([^/]+))?/);
+  if (!m) return null;
+  const stage = PIPELINE_STAGE_IDS.includes(m[2]) ? m[2] : 'idea';
+  return { issueId: m[1], stage };
+};
+const NOT_ON_PIPELINE_ISSUE_PAGE = {
+  ok: false,
+  error: 'Not on a pipeline issue page',
+  summary: 'I can only switch stages from a /pipeline/issues/... page. Open an issue first.',
+};
+const navigateToPipelineStage = (issueId, stage, ctx) => {
+  const path = `/pipeline/issues/${issueId}/${stage}`;
+  ctx.sideEffects?.push({ type: 'navigate', path });
+  return { ok: true, path, stage, label: PIPELINE_STAGE_LABELS[stage], summary: `Opened ${PIPELINE_STAGE_LABELS[stage]}.` };
+};
+const PIPELINE_STAGE_TOOLS = [
+  {
+    name: 'pipeline_next_stage',
+    description: 'Advance to the next stage of the current pipeline issue (Idea → Prose → Comic Script → TV Script → Comic Pages → Storyboards → Episode Video). Only works on a /pipeline/issues/... page.',
+    parameters: { type: 'object', properties: {} },
+    execute: async (_args, ctx = {}) => {
+      const cur = parsePipelineIssuePath(ctx.state?.ui?.path);
+      if (!cur) return NOT_ON_PIPELINE_ISSUE_PAGE;
+      const idx = PIPELINE_STAGE_IDS.indexOf(cur.stage);
+      if (idx === PIPELINE_STAGE_IDS.length - 1) {
+        return { ok: false, error: 'Already on last stage', summary: `Already on ${PIPELINE_STAGE_LABELS[cur.stage]} — that's the last stage.` };
+      }
+      return navigateToPipelineStage(cur.issueId, PIPELINE_STAGE_IDS[idx + 1], ctx);
+    },
+  },
+  {
+    name: 'pipeline_prev_stage',
+    description: 'Go back to the previous stage of the current pipeline issue. Only works on a /pipeline/issues/... page.',
+    parameters: { type: 'object', properties: {} },
+    execute: async (_args, ctx = {}) => {
+      const cur = parsePipelineIssuePath(ctx.state?.ui?.path);
+      if (!cur) return NOT_ON_PIPELINE_ISSUE_PAGE;
+      const idx = PIPELINE_STAGE_IDS.indexOf(cur.stage);
+      if (idx === 0) {
+        return { ok: false, error: 'Already on first stage', summary: `Already on ${PIPELINE_STAGE_LABELS[cur.stage]} — that's the first stage.` };
+      }
+      return navigateToPipelineStage(cur.issueId, PIPELINE_STAGE_IDS[idx - 1], ctx);
+    },
+  },
+  {
+    name: 'pipeline_open_stage',
+    description: 'Open a specific stage of the current pipeline issue by name. Pass `stage` as the user spoke it: "prose", "comic script", "storyboards", "episode video", etc. Only works on a /pipeline/issues/... page.',
+    parameters: {
+      type: 'object',
+      properties: {
+        stage: {
+          type: 'string',
+          description: 'Stage name (idea, prose, comic script, tv script, comic pages, storyboards, episode video).',
+        },
+      },
+      required: ['stage'],
+    },
+    execute: async ({ stage } = {}, ctx = {}) => {
+      const cur = parsePipelineIssuePath(ctx.state?.ui?.path);
+      if (!cur) return NOT_ON_PIPELINE_ISSUE_PAGE;
+      const key = String(stage || '').trim().toLowerCase();
+      const canonical = PIPELINE_STAGE_ALIASES[key] || (PIPELINE_STAGE_IDS.includes(stage) ? stage : null);
+      if (!canonical) {
+        return {
+          ok: false,
+          error: `Unknown stage "${stage}"`,
+          summary: `I don't know a stage named "${stage}". Try: idea, prose, comic script, tv script, comic pages, storyboards, or episode video.`,
+        };
+      }
+      return navigateToPipelineStage(cur.issueId, canonical, ctx);
+    },
+  },
+];
 
 // Shorthand presets for voice logging. A user saying "I had a beer" should
 // not need to recite oz + ABV — these defaults match typical US servings.
@@ -70,6 +172,9 @@ const TOOL_GROUPS = {
   ui_check: 'ui',
   ui_ask: 'ask',
   image_generate: 'media',
+  pipeline_next_stage: 'pipeline',
+  pipeline_prev_stage: 'pipeline',
+  pipeline_open_stage: 'pipeline',
   // UNGROUPED = always-on: time_now, daily_log_append, ui_navigate.
   // brain_capture used to be always-on, but that caused form-fill turns
   // ("fill description with X") to be misrouted to brain_capture because
@@ -116,6 +221,12 @@ const GROUP_INTENT = {
   // common false positives like "imagine if" or "show me a picture of the
   // page" by anchoring on creation verbs paired with visual nouns.
   media: /\b(?:generate|render|create|draw|sketch|paint|illustrate|make|design|produce)\b[^.!?\n]{0,30}\b(?:image|picture|photo|illustration|art(?:work)?|render|drawing|sketch|portrait|wallpaper|scene|asset|graphic|logo|icon)\b|\bimagegen\b/i,
+  // Pipeline stage navigation — fires on "next stage", "back to prose",
+  // "open the storyboards", "rerun prose", and the stage names themselves
+  // (idea, prose, comic script, tv script, comic pages, storyboards,
+  // episode video). The regex stays narrow on purpose so it doesn't steal
+  // turns from ui_navigate ("take me to pipeline" still routes there).
+  pipeline: /\b(?:next stage|previous stage|prev stage|back (?:a |to (?:the )?)?stage|stage (?:advance|forward|back)|open (?:the )?(?:idea|prose|comic ?script|tv ?script|comic ?pages?|storyboards?|episode ?video) stage|go to (?:the )?(?:idea|prose|comic ?script|tv ?script|comic ?pages?|storyboards?|episode ?video) stage)\b/i,
   ui: UI_INTENT_RE,
 };
 
@@ -1198,6 +1309,8 @@ const TOOLS = [
       };
     },
   },
+
+  ...PIPELINE_STAGE_TOOLS,
 
   {
     name: 'time_now',
