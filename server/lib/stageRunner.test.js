@@ -106,23 +106,23 @@ describe('stageRunner — extractJson', () => {
     // wins on earliest-start ordering.
     expect(extractJson('{"items":[1,2,3]}')).toEqual({ items: [1, 2, 3] });
   });
-  it('does not grab a fenced prompt-echo block that precedes the real response', () => {
-    // Regression: previously extractJson would `s.match(/```...```/) `
-    // and replace `s` with the FIRST fenced block, which on Codex runs
-    // is often the echoed prompt — including a fenced JSON schema
-    // example. The real response then never gets walked. Switching to
-    // "let findBalancedBlocks walk the full text" makes the schema
-    // example skipped (it parses, but the wrapping shape may differ)
-    // OR matched-and-returned because the response itself is the
-    // schema (which is the same answer anyway).
+  it('strips a known echoed prompt before walking so the real response wins', () => {
+    // Regression: Codex CLI echoes stdin to stdout, so when a stage
+    // prompt contains a fenced JSON schema example, both that schema
+    // AND the model's actual response are present in the captured
+    // text. Picking by source order returns the schema (placeholder
+    // data). Passing the prompt verbatim lets extractJson strip the
+    // echo first, so the response wins.
+    const prompt = 'Prompt echo:\n```json\n{"_schema":"example"}\n```';
+    const raw = `${prompt}\n\nResponse:\n{"answer":42}`;
+    expect(extractJson(raw, { promptToStrip: prompt })).toEqual({ answer: 42 });
+  });
+  it('without promptToStrip, an echoed schema block still wins on source order (documents the failure mode)', () => {
+    // This is the failure mode that runStagedLLM avoids by ALWAYS
+    // passing the prompt down. Kept here so future contributors who
+    // bypass the stripping path know they have to provide it.
     const raw = 'Prompt echo:\n```json\n{"_schema":"example"}\n```\n\nResponse:\n{"answer":42}';
-    // Both blocks parse; "schema" comes first in source order so it
-    // wins. The test guards the failure mode: we no longer LOSE the
-    // response by extracting just the fenced part. (If the call-site
-    // needs to distinguish, it should use the shapePredicate variant
-    // of jsonExtract.extractJson instead.)
-    const out = extractJson(raw);
-    expect(out).toEqual({ _schema: 'example' });
+    expect(extractJson(raw)).toEqual({ _schema: 'example' });
   });
   it('throws on empty or non-string input', () => {
     expect(() => extractJson('')).toThrow(/Empty AI response/);

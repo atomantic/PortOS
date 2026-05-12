@@ -96,9 +96,24 @@ async function resolveProviderForStage(stage, { providerOverride } = {}) {
  * skipped (their contents don't parse as JSON) and the wrapper shape
  * is preserved (`[{"a":1}]` parses as the array; `{"a":[1,2]}` parses
  * as the object because the `{` opener comes before the inner `[`).
+ *
+ * When `promptToStrip` is supplied, any verbatim occurrence of that
+ * string is removed from `text` BEFORE walking. This handles CLI
+ * runners (notably Codex) that echo the input prompt to stdout — the
+ * prompt itself frequently contains fenced JSON schema examples that
+ * would otherwise parse and win on source-order ranking. Stripping
+ * the echo leaves only the model's actual response in the text the
+ * walker sees.
  */
-export function extractJson(text) {
+export function extractJson(text, { promptToStrip } = {}) {
   if (!text || typeof text !== 'string') throw new Error('Empty AI response');
+  if (typeof promptToStrip === 'string' && promptToStrip) {
+    // Remove every verbatim occurrence so we don't have to guess where
+    // a CLI runner inserted line wrapping or trim. The prompt is fixed
+    // text we built ourselves a few lines up — split-join is safer
+    // than building a regex (which would need escaping).
+    text = text.split(promptToStrip).join('');
+  }
 
   // Trim leading + trailing fences via stripCodeFences (note: it strips
   // each side independently, so a response that only has a leading
@@ -193,6 +208,10 @@ export async function runStagedLLM(stageName, variables, options = {}) {
   const { text } = await runPromptThroughProvider({
     provider, model: effectiveModel, prompt, source: options.source || 'staged-llm', runId,
   });
-  const content = options.returnsJson ? extractJson(text) : text;
+  // Pass the prompt down so extractJson can strip any echoed copy of
+  // it before walking — Codex CLI echoes stdin to stdout, and stage
+  // prompts often contain fenced JSON schema examples that would
+  // otherwise parse-and-win over the model's actual response.
+  const content = options.returnsJson ? extractJson(text, { promptToStrip: prompt }) : text;
   return { content, model: effectiveModel || null, providerId: provider.id, runId };
 }
