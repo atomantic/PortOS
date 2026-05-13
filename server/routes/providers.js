@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { testVision, runVisionTestSuite, checkVisionHealth } from '../services/visionTest.js';
 import { getAllProviderStatuses, getProviderStatus, markProviderAvailable, getTimeUntilRecovery } from '../services/providerStatus.js';
+import { providerSchema, validate } from '../lib/aiToolkit/validation.js';
 
 /**
  * Sanitize a provider object for client responses.
@@ -133,12 +134,22 @@ export function createPortOSProviderRoutes(aiToolkit) {
     res.json(sanitizeProvider(provider));
   }));
 
-  // PUT /:id — intercept to preserve redacted secrets before passing to toolkit
+  // PUT /:id — intercept to (a) validate the body via a partial provider
+  // schema (PUT can be a partial update; only the fields the client sent are
+  // re-validated), and (b) preserve redacted secrets before passing to the
+  // toolkit. Without partial validation, an `updateProvider` call could
+  // still persist invalid types (timeout: "abc", non-object envVars) the
+  // POST path now blocks.
   router.put('/:id', asyncHandler(async (req, res) => {
     const existing = await providerService.getProviderById(req.params.id);
     if (!existing) return res.status(404).json({ error: 'Provider not found' });
 
-    const updates = { ...req.body };
+    const validation = validate(providerSchema.partial(), req.body);
+    if (!validation.success) {
+      return res.status(400).json({ error: 'Invalid provider data', details: validation.errors });
+    }
+
+    const updates = { ...validation.data };
 
     // Preserve existing apiKey if client didn't send a new one
     if (!('apiKey' in updates)) {
@@ -158,7 +169,22 @@ export function createPortOSProviderRoutes(aiToolkit) {
     res.json(sanitizeProvider(provider));
   }));
 
-  // Mount base toolkit routes last (GET/PUT /:id are now shadowed by sanitized versions above)
+  // POST / — intercept to (a) validate the body against providerSchema so
+  // invalid fields like `timeout: "abc"` or non-object `envVars` don't
+  // persist and later break runner behavior, and (b) sanitize the created
+  // provider before responding so apiKey/secret envVar values don't echo
+  // back to the client (the toolkit's POST returns the raw provider).
+  router.post('/', asyncHandler(async (req, res) => {
+    const validation = validate(providerSchema, req.body);
+    if (!validation.success) {
+      return res.status(400).json({ error: 'Invalid provider data', details: validation.errors });
+    }
+    const provider = await providerService.createProvider(validation.data);
+    res.status(201).json(sanitizeProvider(provider));
+  }));
+
+  // Mount base toolkit routes last (GET/PUT /:id and POST / are now shadowed
+  // by sanitized versions above)
   router.use('/', aiToolkit.routes.providers);
 
   return router;

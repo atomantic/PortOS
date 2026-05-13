@@ -41,11 +41,16 @@ const mapServiceError = (err) => {
 const variationSchema = z.object({
   label: z.string().trim().min(1).max(svc.VARIATION_LABEL_MAX),
   prompt: z.string().trim().min(1).max(svc.PROMPT_FRAGMENT_MAX),
+  // Per-item lock — when true, expand preserves this variation across
+  // re-runs instead of letting the LLM regenerate it.
+  locked: z.boolean().optional(),
 });
 const compositeSheetSchema = z.object({
   kind: z.enum(svc.COMPOSITE_SHEET_KINDS).optional(),
   label: z.string().trim().min(1).max(svc.VARIATION_LABEL_MAX),
   prompt: z.string().trim().min(1).max(svc.COMPOSITE_PROMPT_MAX),
+  // Per-item lock for composite boards (same semantics as variations).
+  locked: z.boolean().optional(),
 });
 const categoryShape = z.object({
   variations: z.array(variationSchema).max(svc.VARIATIONS_PER_CATEGORY_MAX),
@@ -62,6 +67,23 @@ const llmSchema = z.object({
   model: z.string().trim().max(200).nullable().optional(),
 }).optional();
 
+// `locked` is a sparse map of `{ field: true }` for the LOCKABLE_FIELDS list.
+// `false` is treated the same as omitted — only `true` records a lock so the
+// stored shape stays minimal and additive. Accept legacy `influences` key as
+// an alias for both `influencesEmbrace` and `influencesAvoid` so older clients
+// PATCHing a previously saved lock map still pass validation (sanitizeLocked
+// rewrites it on read into the per-list keys).
+const lockedSchema = z.object({
+  ...Object.fromEntries(svc.LOCKABLE_FIELDS.map((k) => [k, z.boolean().optional()])),
+  influences: z.boolean().optional(),
+}).strict();
+
+const influenceEntrySchema = z.string().trim().min(1).max(svc.INFLUENCE_ENTRY_MAX);
+const influencesSchema = z.object({
+  embrace: z.array(influenceEntrySchema).max(svc.INFLUENCES_PER_LIST_MAX).optional().default([]),
+  avoid: z.array(influenceEntrySchema).max(svc.INFLUENCES_PER_LIST_MAX).optional().default([]),
+}).strict();
+
 const createSchema = z.object({
   name: z.string().trim().min(1).max(svc.NAME_MAX_LENGTH),
   starterPrompt: z.string().trim().max(svc.STARTER_PROMPT_MAX).optional().default(''),
@@ -72,6 +94,8 @@ const createSchema = z.object({
   styleNotes: z.string().trim().max(svc.STYLE_NOTES_MAX).optional().default(''),
   categories: categoriesSchema.optional(),
   compositeSheets: z.array(compositeSheetSchema).max(svc.COMPOSITE_SHEETS_MAX).optional(),
+  influences: influencesSchema.optional(),
+  locked: lockedSchema.optional(),
   llm: llmSchema,
 });
 
@@ -85,11 +109,33 @@ const patchSchema = z.object({
   styleNotes: z.string().trim().max(svc.STYLE_NOTES_MAX).optional(),
   categories: categoriesSchema.optional(),
   compositeSheets: z.array(compositeSheetSchema).max(svc.COMPOSITE_SHEETS_MAX).optional(),
+  influences: influencesSchema.optional(),
+  locked: lockedSchema.optional(),
   llm: llmSchema,
 }).refine((p) => Object.keys(p).length > 0, { message: 'patch must include at least one field' });
 
 const expandSchema = z.object({
   starterPrompt: z.string().trim().min(1).max(svc.STARTER_PROMPT_MAX),
+  // Optional structured influences from a prior refinement — passed in so
+  // the LLM keeps re-expansions on-direction instead of regenerating from
+  // the bare starter idea.
+  influences: influencesSchema.optional(),
+  // Per-item locks the user has set on individual variations / composite
+  // boards. Listed in the LLM prompt so it doesn't waste tokens regenerating
+  // them; the client merges them back in after the result returns.
+  preservedVariations: z.record(
+    z.string().trim().min(1).max(svc.WORLD_CATEGORY_KEY_MAX),
+    z.array(variationSchema).max(svc.VARIATIONS_PER_CATEGORY_MAX),
+  ).optional(),
+  preservedCompositeSheets: z.array(compositeSheetSchema).max(svc.COMPOSITE_SHEETS_MAX).optional(),
+  // Current bible/prompt state — locked entries are echoed verbatim, others
+  // are starting points the LLM can refine while staying consistent.
+  logline: z.string().trim().max(svc.LOGLINE_MAX).optional(),
+  premise: z.string().trim().max(svc.PREMISE_MAX).optional(),
+  styleNotes: z.string().trim().max(svc.STYLE_NOTES_MAX).optional(),
+  stylePrompt: z.string().trim().max(svc.PROMPT_FRAGMENT_MAX).optional(),
+  negativePrompt: z.string().trim().max(svc.PROMPT_FRAGMENT_MAX).optional(),
+  locked: lockedSchema.optional(),
   providerId: z.string().trim().max(80).optional(),
   model: z.string().trim().max(200).optional(),
 });
@@ -98,6 +144,23 @@ const refinePromptsSchema = z.object({
   starterPrompt: z.string().trim().min(1).max(svc.STARTER_PROMPT_MAX),
   stylePrompt: z.string().trim().max(svc.PROMPT_FRAGMENT_MAX).optional().default(''),
   negativePrompt: z.string().trim().max(svc.PROMPT_FRAGMENT_MAX).optional().default(''),
+  // Bible context: passed in so the refiner sees the full seed, refines them
+  // alongside the prompts, and stays consistent with the world's narrative.
+  logline: z.string().trim().max(svc.LOGLINE_MAX).optional().default(''),
+  premise: z.string().trim().max(svc.PREMISE_MAX).optional().default(''),
+  styleNotes: z.string().trim().max(svc.STYLE_NOTES_MAX).optional().default(''),
+  // Structured influences (embrace + avoid) — refined alongside the prompts
+  // and used as the canonical reference list for renderer-token composition.
+  influences: influencesSchema.optional(),
+  // Post-Expand structure — when present, the refiner sees the full world
+  // (categories + composites with per-item locks) and may edit/replace/add
+  // items per the user's feedback. When omitted (pre-Expand iteration), the
+  // refiner falls back to the bible-only behavior.
+  categories: categoriesSchema.optional(),
+  compositeSheets: z.array(compositeSheetSchema).max(svc.COMPOSITE_SHEETS_MAX).optional(),
+  // Per-field lock map — locked fields are echoed back unchanged regardless
+  // of what the LLM tries to write.
+  locked: lockedSchema.optional().default({}),
   feedback: z.string().trim().min(1).max(3000),
   providerId: z.string().trim().max(80).optional(),
   // Whitespace-only model → undefined so the refiner's defaultModel /

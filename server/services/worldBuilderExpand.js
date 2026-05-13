@@ -11,39 +11,129 @@
  * model so the UI still works for users who haven't configured a stage.
  */
 
-import { getActiveProvider, getProviderById } from './providers.js';
+import { getActiveProvider, getProviderById } from "./providers.js";
 import {
   WORLD_CATEGORIES,
+  LOCKABLE_FIELDS,
+  LOCKABLE_FIELD_LABELS,
   PROMPT_FRAGMENT_MAX,
   COMPOSITE_PROMPT_MAX,
   VARIATIONS_PER_CATEGORY_MAX,
   LOGLINE_MAX,
   PREMISE_MAX,
   STYLE_NOTES_MAX,
+  isInfluenceLockField,
   sanitizeCategories,
   sanitizeCompositeSheets,
-} from './worldBuilder.js';
-import { ServerError } from '../lib/errorHandler.js';
-import { extractJson as extractJsonShared } from '../lib/jsonExtract.js';
-import { resolveEffectiveModel, runPromptThroughProvider } from '../lib/promptRunner.js';
+  sanitizeInfluences,
+} from "./worldBuilder.js";
+import { ServerError } from "../lib/errorHandler.js";
+import { extractJson as extractJsonShared } from "../lib/jsonExtract.js";
+import {
+  resolveEffectiveModel,
+  runPromptThroughProvider,
+} from "../lib/promptRunner.js";
 
 const LABEL_MAX = 80;
 
-const EXPANSION_PROMPT = `You are a world-building prompt engineer for a Stable-Diffusion-style image generation pipeline AND a story-bible drafter for a comic/TV production pipeline. You will turn the user's starter idea into (a) a structured prompt set that produces a visually consistent universe across many renders, and (b) a short narrative bible that downstream writing stages can ingest.
+// Bible/prompt fields the LLM sees as "current world state" so re-expansion
+// stays consistent with prior refinements. Derived from LOCKABLE_FIELDS so a
+// new lockable field automatically reaches this prompt; excludes starterPrompt
+// (already shown above as the seed) and influences (rendered in its own
+// section).
+const CURRENT_STATE_FIELDS = LOCKABLE_FIELDS
+  .filter((k) => k !== 'starterPrompt' && !isInfluenceLockField(k))
+  .map((k) => [k, LOCKABLE_FIELD_LABELS[k].toUpperCase()]);
+
+function buildExpansionPrompt({
+  starterPrompt,
+  influences,
+  preservedVariations,
+  preservedCompositeSheets,
+  // Prior bible/prompt state — locked entries echo back unchanged; unlocked
+  // entries seed the LLM. Empty/missing fields are skipped.
+  priorLogline = '',
+  priorPremise = '',
+  priorStyleNotes = '',
+  priorStylePrompt = '',
+  priorNegativePrompt = '',
+  locked = {},
+}) {
+  const embrace = Array.isArray(influences?.embrace)
+    ? influences.embrace.filter(Boolean)
+    : [];
+  const avoid = Array.isArray(influences?.avoid)
+    ? influences.avoid.filter(Boolean)
+    : [];
+  const embraceTag = locked?.influencesEmbrace ? ' [LOCKED]' : '';
+  const avoidTag = locked?.influencesAvoid ? ' [LOCKED]' : '';
+  const influencesSection =
+    embrace.length || avoid.length
+      ? `\n# Influences (canonical reference list — these MUST inform stylePrompt + styleNotes for embraces and negativePrompt for avoids)\nEmbrace${embraceTag}: ${embrace.join(", ") || "(none)"}\nAvoid${avoidTag}: ${avoid.join(", ") || "(none)"}\n`
+      : "";
+
+  // Locked entries are flagged and MUST be echoed verbatim; unlocked entries
+  // are starting points the LLM can refine. Consistency goal: an LLM-generated
+  // premise should align with a locked logline, not be written in isolation.
+  const priorValues = {
+    logline: priorLogline,
+    premise: priorPremise,
+    styleNotes: priorStyleNotes,
+    stylePrompt: priorStylePrompt,
+    negativePrompt: priorNegativePrompt,
+  };
+  const stateLines = CURRENT_STATE_FIELDS
+    .filter(([key]) => typeof priorValues[key] === 'string' && priorValues[key].trim())
+    .map(([key, label]) => `${label}${locked?.[key] ? ' [LOCKED]' : ''}: ${priorValues[key].trim()}`);
+  const anyLocked = stateLines.length
+    && Object.keys(locked || {}).some((k) => locked[k] === true);
+  const currentStateSection = stateLines.length
+    ? `\n# Current world state — established context for this expansion${anyLocked ? '. Fields marked [LOCKED] MUST be echoed unchanged in your output' : ''}.
+${stateLines.join('\n\n')}\n`
+    : '';
+
+  // Preserved items: the client extracted user-pinned variations and
+  // composite boards. List them by category + label so the LLM can avoid
+  // generating duplicates, but tell it explicitly NOT to echo them in its
+  // output (the client merges them back in).
+  const preservedVariationLines = [];
+  if (preservedVariations && typeof preservedVariations === "object") {
+    for (const [cat, list] of Object.entries(preservedVariations)) {
+      if (!Array.isArray(list) || list.length === 0) continue;
+      for (const v of list) {
+        if (!v || !v.label) continue;
+        preservedVariationLines.push(`- ${cat}: "${v.label}"`);
+      }
+    }
+  }
+  const preservedSheetLines = Array.isArray(preservedCompositeSheets)
+    ? preservedCompositeSheets
+        .filter((s) => s && s.label)
+        .map((s) => `- ${s.kind || "reference_sheet"}: "${s.label}"`)
+    : [];
+
+  const preservedSection =
+    preservedVariationLines.length || preservedSheetLines.length
+      ? `\n# Preserved items — DO NOT regenerate these labels (the user has pinned them; the client preserves them on merge)
+${preservedVariationLines.length ? `Pinned variations:\n${preservedVariationLines.join("\n")}\n` : ""}${preservedSheetLines.length ? `Pinned composite boards:\n${preservedSheetLines.join("\n")}\n` : ""}`
+      : "";
+
+  return `You are a world-building prompt engineer for a Stable-Diffusion-style image generation pipeline AND a story-bible drafter for a comic/TV production pipeline. You will turn the user's starter idea into (a) a structured prompt set that produces a visually consistent universe across many renders, and (b) a short narrative bible that downstream writing stages can ingest.
 
 # Starter idea
-{starterPrompt}
-
+${starterPrompt}
+${influencesSection}${currentStateSection}${preservedSection}
 # Output contract
 Return a SINGLE JSON object. NO markdown, NO commentary. The object MUST have these top-level keys:
 
 - logline:        string. ONE sentence (≤500 chars) capturing the world's central tension/hook — protagonist-agnostic if no protagonist is implied. Example: "A foundry city goes silent — and the only survivor is a child."
 - premise:        string. 1-3 short paragraphs (≤4000 chars total) describing the setting, the central conflict or situation, the stakes, and the tone. Write it as the elevator pitch a showrunner would hand to a writers' room. No bullet points; prose only.
 - styleNotes:     string. A prose paragraph (≤4000 chars) describing the visual + tonal style for the story bible — references (artists, films, comics, games), mood, palette, pacing, narrative voice. This is read by writers + creative directors, not the image model, so use full sentences instead of comma-separated tokens.
-- stylePrompt:    string. A single comma-separated style fragment (lighting, color palette, render quality, artist references) that will be PREFIXED to every variation prompt. Keep under 400 characters. No subject nouns — those go in variations.
-- negativePrompt: string. Comma-separated tokens to avoid (e.g. "blurry, lowres, watermark, extra fingers"). Tailor to the world's aesthetic.
+- influences:     object { "embrace": [string], "avoid": [string] }. Short canonical reference labels (max 120 chars each, max 30 per list) — artists, comics, films, directors, palettes, materials, eras the world EMBRACES; styles, tropes, palettes the world AVOIDS. The renderer prepends these to stylePrompt/negativePrompt verbatim, so each entry should read as a clean prompt token (e.g. "Moebius", "cel-shading", "Ghibli painterly", "neon cyberpunk"). When influence input is provided above, preserve those entries unless the starter idea explicitly contradicts them.
+- stylePrompt:    string. A single comma-separated style fragment (lighting, color palette, render quality, artist references) that will be PREFIXED to every variation prompt. Keep under 400 characters. No subject nouns — those go in variations. Echo the embrace influences here so the renderer-side prompt is self-contained even before the structured prepend kicks in.
+- negativePrompt: string. Comma-separated tokens to avoid (e.g. "blurry, lowres, watermark, extra fingers"). Tailor to the world's aesthetic. Echo the avoid influences here.
 - categories: object. Atomic reusable buckets. Use snake_case keys. Start from these common buckets when useful:
-${WORLD_CATEGORIES.map((c) => `    - ${c}`).join('\n')}
+${WORLD_CATEGORIES.map((c) => `    - ${c}`).join("\n")}
   Add, remove, or rename buckets to fit the user's actual world-building task. Do not force every project into the starter buckets.
   Useful extra buckets include colonies, factions, tribes, species, cultures, clothing_styles, material_palettes, fasteners_and_closures, tools, rituals, raider_clans, vehicles, settlements, and artifacts.
 - compositeSheets: array. Complete, ready-to-render composite board prompts. Each item has { "kind": "reference_sheet" | "world_pitch_poster", "label": string, "prompt": string up to 4000 chars }. These are NOT atomic fragments; each prompt must describe one complete board/poster that combines multiple buckets into a single image.
@@ -72,7 +162,9 @@ Concrete compositeSheets examples:
 - Reference-sheet prompts must include a clear board structure: title/subject, 4-6 figure lineup roles when relevant, materials swatches, fasteners/accessories icons, color palette strip, background hint, and simplicity constraints such as minimal readable layout, fewer tiny objects, clean silhouettes, not baroque, not hyper-detailed.
 - World pitch poster prompts must include a clear editorial poster structure: world title/subtitle/logline area, dominant hero panorama, inset environment/culture/creature images, visual-language strip, color palette, materials/textures, light/atmosphere, themes/icons, and concise labeled blocks for world, feel, aesthetic, environments, cultures, and tone. Mention that body copy should be short, clean, and readable; avoid dense tiny text.
 - If the world needs pitch posters, do not put "text" in the negativePrompt. Prefer "watermark, logo, unreadable tiny text, text artifacts" so title/section typography remains possible.
+- When "Current world state" is provided above: treat it as the established world. Fields marked [LOCKED] MUST be echoed in your output exactly as given — do not reword, expand, or trim them. Unlocked current-state fields are starting points; you may refine them, but stay consistent with locked fields, the starter idea, and influences.
 - Output JUST the JSON object. No prose before or after.`;
+}
 
 // Prefer a block that *looks like* a world-expansion response (has any of
 // stylePrompt / negativePrompt / categories / compositeSheets at the top
@@ -80,31 +172,39 @@ Concrete compositeSheets examples:
 //   { "label": "Crystalline canyon basin", "prompt": "…" }
 // which parse cleanly but aren't the response. Without the shape preference
 // we'd return that first valid-but-wrong object and end up with 0 variations.
-const isExpansionShape = (o) => o && typeof o === 'object'
-  && (typeof o.stylePrompt === 'string'
-    || typeof o.negativePrompt === 'string'
-    || typeof o.logline === 'string'
-    || typeof o.premise === 'string'
-    || typeof o.styleNotes === 'string'
-    || (o.categories && typeof o.categories === 'object')
-    || Array.isArray(o.compositeSheets));
+const isExpansionShape = (o) =>
+  o &&
+  typeof o === "object" &&
+  (typeof o.stylePrompt === "string" ||
+    typeof o.negativePrompt === "string" ||
+    typeof o.logline === "string" ||
+    typeof o.premise === "string" ||
+    typeof o.styleNotes === "string" ||
+    (o.influences && typeof o.influences === "object") ||
+    (o.categories && typeof o.categories === "object") ||
+    Array.isArray(o.compositeSheets));
 
 const extractJson = (raw) => {
   // Empty input is a "client-side" oversight (no LLM output at all) — keep
   // the original raw Error so callers / tests that key on the message
   // continue to match. Down-stream JSON parse failures are wrapped in a
   // typed 502 ServerError so the route layer surfaces a useful HTTP code.
-  if (!raw || typeof raw !== 'string') throw new Error('Empty LLM response');
+  if (!raw || typeof raw !== "string") throw new Error("Empty LLM response");
   const { value, lastError, lastPreview } = extractJsonShared(raw, {
     shapePredicate: isExpansionShape,
   });
   if (value !== undefined) return value;
   throw new ServerError(
-    'LLM returned invalid JSON for world expansion. Try a different model or rerun.',
+    "LLM returned invalid JSON for world expansion. Try a different model or rerun.",
     {
       status: 502,
-      code: 'LLM_INVALID_JSON',
-      context: { details: { reason: lastError?.message || 'no JSON object found', preview: lastPreview || '' } },
+      code: "LLM_INVALID_JSON",
+      context: {
+        details: {
+          reason: lastError?.message || "no JSON object found",
+          preview: lastPreview || "",
+        },
+      },
     },
   );
 };
@@ -116,7 +216,7 @@ const normalizeCategories = (raw) => {
   // (e.g. colonies, factions, clothing_styles) instead of forcing everything
   // into the starter categories.
   const out = {};
-  const rawEntries = raw && typeof raw === 'object' ? Object.entries(raw) : [];
+  const rawEntries = raw && typeof raw === "object" ? Object.entries(raw) : [];
   for (const [key, node] of rawEntries) {
     let variations = [];
     if (Array.isArray(node)) variations = node;
@@ -124,34 +224,47 @@ const normalizeCategories = (raw) => {
     out[key] = {
       // Clamp to the same per-category cap the route schema enforces (50)
       // so a runaway LLM response can't bloat /expand output.
-      variations: variations.slice(0, VARIATIONS_PER_CATEGORY_MAX).map((v) => {
-        if (typeof v === 'string') {
-          const trimmed = v.trim();
-          return {
-            label: trimmed.slice(0, LABEL_MAX),
-            prompt: trimmed.slice(0, PROMPT_FRAGMENT_MAX),
-          };
-        }
-        const label = typeof v?.label === 'string' ? v.label.trim().slice(0, LABEL_MAX) : '';
-        const prompt = typeof v?.prompt === 'string' ? v.prompt.trim().slice(0, PROMPT_FRAGMENT_MAX) : '';
-        return { label, prompt };
-      }).filter((v) => v.label && v.prompt),
+      variations: variations
+        .slice(0, VARIATIONS_PER_CATEGORY_MAX)
+        .map((v) => {
+          if (typeof v === "string") {
+            const trimmed = v.trim();
+            return {
+              label: trimmed.slice(0, LABEL_MAX),
+              prompt: trimmed.slice(0, PROMPT_FRAGMENT_MAX),
+            };
+          }
+          const label =
+            typeof v?.label === "string"
+              ? v.label.trim().slice(0, LABEL_MAX)
+              : "";
+          const prompt =
+            typeof v?.prompt === "string"
+              ? v.prompt.trim().slice(0, PROMPT_FRAGMENT_MAX)
+              : "";
+          return { label, prompt };
+        })
+        .filter((v) => v.label && v.prompt),
     };
   }
   return sanitizeCategories(out);
 };
 
-const normalizeCompositeSheets = (raw) => sanitizeCompositeSheets(
-  Array.isArray(raw)
-    ? raw.map((sheet) => {
-      if (typeof sheet === 'string') {
-        const trimmed = sheet.trim();
-        return { label: trimmed.slice(0, LABEL_MAX), prompt: trimmed.slice(0, COMPOSITE_PROMPT_MAX) };
-      }
-      return sheet;
-    })
-    : [],
-);
+const normalizeCompositeSheets = (raw) =>
+  sanitizeCompositeSheets(
+    Array.isArray(raw)
+      ? raw.map((sheet) => {
+          if (typeof sheet === "string") {
+            const trimmed = sheet.trim();
+            return {
+              label: trimmed.slice(0, LABEL_MAX),
+              prompt: trimmed.slice(0, COMPOSITE_PROMPT_MAX),
+            };
+          }
+          return sheet;
+        })
+      : [],
+  );
 
 /**
  * Expand a starter prompt into a structured world template draft.
@@ -162,14 +275,36 @@ const normalizeCompositeSheets = (raw) => sanitizeCompositeSheets(
  * @param {string} [options.providerId]   — optional override; falls back to active.
  * @param {string} [options.model]        — optional override; falls back to provider default.
  */
-export async function expandWorldTemplate({ starterPrompt, providerId, model } = {}) {
+export async function expandWorldTemplate({
+  starterPrompt,
+  influences,
+  preservedVariations = {},
+  preservedCompositeSheets = [],
+  // Prior bible/prompt state — locked entries echo back unchanged, unlocked
+  // entries seed the LLM. Renamed to `prior*` so the parsed-LLM-output locals
+  // below can keep their canonical names.
+  logline: priorLogline = '',
+  premise: priorPremise = '',
+  styleNotes: priorStyleNotes = '',
+  stylePrompt: priorStylePrompt = '',
+  negativePrompt: priorNegativePrompt = '',
+  locked = {},
+  providerId,
+  model,
+} = {}) {
   if (!starterPrompt || !starterPrompt.trim()) {
-    throw new Error('starterPrompt is required');
+    throw new Error("starterPrompt is required");
   }
+  // Sanitize so a careless caller can't push out-of-cap influence labels into
+  // the LLM prompt or the returned result. Empty / missing → empty lists.
+  const safeInfluences = sanitizeInfluences(influences);
 
-  let provider = providerId ? await getProviderById(providerId).catch(() => null) : null;
+  let provider = providerId
+    ? await getProviderById(providerId).catch(() => null)
+    : null;
   if (!provider) provider = await getActiveProvider();
-  if (!provider) throw new Error('No AI provider available for world expansion');
+  if (!provider)
+    throw new Error("No AI provider available for world expansion");
   // resolveEffectiveModel mirrors what promptRunner resolves internally
   // so the log line below + the returned `llm.model` field reflect what
   // actually executed. For CLI providers with a baked --model/-m flag
@@ -177,8 +312,29 @@ export async function expandWorldTemplate({ starterPrompt, providerId, model } =
   // which can diverge).
   const selectedModel = resolveEffectiveModel(provider, model);
 
-  const fullPrompt = EXPANSION_PROMPT.replace('{starterPrompt}', starterPrompt.trim());
-  console.log(`🌍 World Builder expanding via ${provider.name}/${selectedModel || 'default'}`);
+  const fullPrompt = buildExpansionPrompt({
+    starterPrompt: starterPrompt.trim(),
+    influences: safeInfluences,
+    preservedVariations,
+    preservedCompositeSheets,
+    priorLogline,
+    priorPremise,
+    priorStyleNotes,
+    priorStylePrompt,
+    priorNegativePrompt,
+    locked,
+  });
+  const totalIn = safeInfluences.embrace.length + safeInfluences.avoid.length;
+  const preservedVarCount = Object.values(preservedVariations || {}).reduce(
+    (n, list) => n + (Array.isArray(list) ? list.length : 0),
+    0,
+  );
+  const preservedSheetCount = Array.isArray(preservedCompositeSheets)
+    ? preservedCompositeSheets.length
+    : 0;
+  console.log(
+    `🌍 World Builder expanding via ${provider.name}/${selectedModel || "default"} — influences in: ${totalIn ? `embrace=${safeInfluences.embrace.length} avoid=${safeInfluences.avoid.length}` : "none"} preserved: variations=${preservedVarCount} sheets=${preservedSheetCount}`,
+  );
 
   // runId is logged so a user debugging an empty expansion can find the
   // raw stdout at data/runs/<runId>/output.txt.
@@ -186,28 +342,62 @@ export async function expandWorldTemplate({ starterPrompt, providerId, model } =
     provider,
     model: selectedModel,
     prompt: fullPrompt,
-    source: 'world-builder-expansion',
+    source: "world-builder-expansion",
   });
   // Log raw response shape so a "0 variations" outcome is debuggable from
   // the server console alone — the runId points at data/runs/<id>/output.txt
   // for the full transcript.
-  console.log(`🌍 World Builder raw response — runId=${runId} length=${raw?.length || 0}`);
+  console.log(
+    `🌍 World Builder raw response — runId=${runId} length=${raw?.length || 0}`,
+  );
   const parsed = extractJson(raw);
-  console.log(`🌍 World Builder parsed JSON — keys=[${Object.keys(parsed || {}).join(',')}] categoryKeys=[${Object.keys(parsed?.categories || {}).join(',')}] compositeSheets=${Array.isArray(parsed?.compositeSheets) ? parsed.compositeSheets.length : 0}`);
+  console.log(
+    `🌍 World Builder parsed JSON — keys=[${Object.keys(parsed || {}).join(",")}] categoryKeys=[${Object.keys(parsed?.categories || {}).join(",")}] compositeSheets=${Array.isArray(parsed?.compositeSheets) ? parsed.compositeSheets.length : 0}`,
+  );
 
-  const trimField = (value, max) => (typeof value === 'string' ? value.trim().slice(0, max) : '');
+  // Distinguish "LLM omitted this key" (return null → client keeps draft)
+  // from "LLM returned ''" (return "" → client applies the clear). The
+  // client's pick helper in handleExpand treats null/undefined as absent
+  // and "" as an intentional value; emitting "" for both cases would
+  // clobber existing draft state on every response that misses a field.
+  const trimField = (value, max) =>
+    typeof value === "string" ? value.trim().slice(0, max) : null;
   const stylePrompt = trimField(parsed.stylePrompt, PROMPT_FRAGMENT_MAX);
   const negativePrompt = trimField(parsed.negativePrompt, PROMPT_FRAGMENT_MAX);
   const logline = trimField(parsed.logline, LOGLINE_MAX);
   const premise = trimField(parsed.premise, PREMISE_MAX);
   const styleNotes = trimField(parsed.styleNotes, STYLE_NOTES_MAX);
   const categories = normalizeCategories(parsed.categories || {});
-  const compositeSheets = normalizeCompositeSheets(parsed.compositeSheets || []);
-  const perCat = Object.keys(categories).map((k) => `${k}=${categories[k]?.variations?.length || 0}`).join(' ');
-  const totalVariations = Object.values(categories).reduce((n, c) => n + (c?.variations?.length || 0), 0);
-  console.log(`🌍 World Builder expansion complete — runId=${runId} ${totalVariations} variations, ${compositeSheets.length} composite sheets, bible=${logline ? 'yes' : 'no'} (${perCat})`);
+  const compositeSheets = normalizeCompositeSheets(
+    parsed.compositeSheets || [],
+  );
+  // sanitizeInfluences enforces the same per-entry cap, list cap, and
+  // case-insensitive dedupe used everywhere else. Distinguish "LLM omitted
+  // influences entirely" (preserve the user's pinned references) from "LLM
+  // returned an explicit {embrace:[],avoid:[]}" (apply — user asked to clear
+  // them) by checking the raw input shape before sanitization.
+  const llmInfluencesRaw = parsed.influences;
+  const llmInfluences = sanitizeInfluences(llmInfluencesRaw);
+  const influencesOut = (llmInfluencesRaw && typeof llmInfluencesRaw === "object")
+    ? {
+        embrace: Array.isArray(llmInfluencesRaw.embrace) ? llmInfluences.embrace : safeInfluences.embrace,
+        avoid: Array.isArray(llmInfluencesRaw.avoid) ? llmInfluences.avoid : safeInfluences.avoid,
+      }
+    : safeInfluences;
+  const perCat = Object.keys(categories)
+    .map((k) => `${k}=${categories[k]?.variations?.length || 0}`)
+    .join(" ");
+  const totalVariations = Object.values(categories).reduce(
+    (n, c) => n + (c?.variations?.length || 0),
+    0,
+  );
+  console.log(
+    `🌍 World Builder expansion complete — runId=${runId} ${totalVariations} variations, ${compositeSheets.length} composite sheets, bible=${logline ? "yes" : "no"} (${perCat})`,
+  );
   if (totalVariations === 0 && compositeSheets.length === 0) {
-    console.warn(`⚠️ World Builder expansion produced 0 variations — inspect data/runs/${runId}/output.txt for the raw LLM response`);
+    console.warn(
+      `⚠️ World Builder expansion produced 0 variations — inspect data/runs/${runId}/output.txt for the raw LLM response`,
+    );
   }
 
   return {
@@ -216,6 +406,7 @@ export async function expandWorldTemplate({ starterPrompt, providerId, model } =
     styleNotes,
     stylePrompt,
     negativePrompt,
+    influences: influencesOut,
     categories,
     compositeSheets,
     llm: { provider: provider.id, model: selectedModel || null },
@@ -223,4 +414,9 @@ export async function expandWorldTemplate({ starterPrompt, providerId, model } =
 }
 
 // Export for tests.
-export const __testing = { extractJson, normalizeCategories, normalizeCompositeSheets, EXPANSION_PROMPT };
+export const __testing = {
+  extractJson,
+  normalizeCategories,
+  normalizeCompositeSheets,
+  buildExpansionPrompt,
+};

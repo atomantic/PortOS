@@ -984,6 +984,7 @@ export default function Layout() {
             location.pathname === '/review' ||
             location.pathname.startsWith('/settings') ||
             location.pathname.startsWith('/wiki') ||
+            location.pathname.startsWith('/world-builder') ||
             location.pathname.startsWith('/writers-room') ||
             location.pathname.startsWith('/agents') ||
             location.pathname === '/shell' ||

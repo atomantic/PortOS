@@ -1,11 +1,11 @@
 /**
  * Provider Status Service
  *
- * Thin wrapper around portos-ai-toolkit's createProviderStatusService
+ * Thin wrapper around the in-tree aiToolkit's createProviderStatusService
  * that provides backwards-compatible exports for PortOS.
  */
 
-import { createProviderStatusService } from 'portos-ai-toolkit/server';
+import { createProviderStatusService } from '../lib/aiToolkit/index.js';
 import { PATHS } from '../lib/fileUtils.js';
 
 // Create the provider status service from ai-toolkit

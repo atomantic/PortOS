@@ -124,7 +124,7 @@ import { recoverStuckAnalyses } from './services/writersRoom/evaluator.js';
 import { recoverStuckAutoRuns } from './services/pipeline/autoRunner.js';
 import { initBridge as initBrainMemoryBridge } from './services/brainMemoryBridge.js';
 import { initDrillCache } from './services/meatspacePostDrillCache.js';
-import { createAIToolkit } from 'portos-ai-toolkit/server';
+import { createAIToolkit } from './lib/aiToolkit/index.js';
 import { createPortOSProviderRoutes } from './routes/providers.js';
 import { createPortOSRunsRoutes } from './routes/runs.js';
 import { createPortOSPromptsRoutes } from './routes/prompts.js';
@@ -217,11 +217,43 @@ setProvidersToolkit(aiToolkit);
 setRunnerToolkit(aiToolkit, { dataDir: DATA_DIR, hooks: aiToolkitHooks });
 setPromptsToolkit(aiToolkit);
 
-// Patch toolkit's runner to fix shell security issue (DEP0190)
-// Override executeCliRun to remove 'shell: true' which causes security warnings
+// Warm the providers file at startup so the codex-sentinel migration runs
+// before any inbound request can hit the providers cache. Awaited so the
+// migration write completes deterministically before request handlers
+// start consulting providers state.
+try {
+  await aiToolkit.services.providers.getAllProviders();
+} catch (err) {
+  console.error(`❌ Failed to load providers at startup: ${err.message}`);
+}
+
+// Swap the toolkit's generic executeCliRun for PortOS's variant that adds
+// CLI-provider-specific args building (Codex `exec -`, Gemini stdin piping,
+// Claude Code `-p -`). The toolkit's in-tree implementation is also safe
+// (no shell, prompt via stdin) — the PortOS variant exists for the per-CLI
+// invocation conventions, not for security.
 import { executeCliRun as executeCliRunFixed } from './services/runner.js';
 aiToolkit.services.runner.executeCliRun = executeCliRunFixed;
-console.log('🔧 Patched aiToolkit runner.executeCliRun to fix shell security issue');
+// Also patch stopRun + isRunActive so they consult `_portosActiveRuns`
+// (where the PortOS CLI variant tracks child processes), not just the
+// toolkit's internal `activeRuns` map. Without this, the runs router
+// would report live CLI runs as inactive and refuse to stop them.
+const originalStopRun = aiToolkit.services.runner.stopRun.bind(aiToolkit.services.runner);
+aiToolkit.services.runner.stopRun = async (runId) => {
+  const portosActive = aiToolkit.services.runner._portosActiveRuns?.get(runId);
+  if (portosActive) {
+    if (portosActive.kill) portosActive.kill('SIGTERM');
+    aiToolkit.services.runner._portosActiveRuns.delete(runId);
+    return true;
+  }
+  return originalStopRun(runId);
+};
+const originalIsRunActive = aiToolkit.services.runner.isRunActive.bind(aiToolkit.services.runner);
+aiToolkit.services.runner.isRunActive = (runId) => {
+  if (aiToolkit.services.runner._portosActiveRuns?.has(runId)) return true;
+  return originalIsRunActive(runId);
+};
+console.log('🔧 Patched aiToolkit runner.executeCliRun + stopRun + isRunActive with PortOS CLI variants');
 
 // Note: prompts service is initialized automatically by createAIToolkit()
 

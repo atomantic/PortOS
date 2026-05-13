@@ -207,6 +207,7 @@ export default function App() {
             <Route path="models" element={<MediaModels />} />
             <Route path="loras" element={<Loras />} />
             <Route path="world-builder" element={<WorldBuilder />} />
+            <Route path="world-builder/:worldId" element={<WorldBuilder />} />
           </Route>
           <Route path="image-gen" element={<RedirectWithSearch to="/media/image" />} />
           <Route path="video-gen" element={<RedirectWithSearch to="/media/video" />} />
@@ -216,6 +217,7 @@ export default function App() {
           <Route path="wiki/:tab" element={<Wiki />} />
           <Route path="rapid-reader" element={<RapidReaderPage />} />
           <Route path="world-builder" element={<WorldBuilder />} />
+          <Route path="world-builder/:worldId" element={<WorldBuilder />} />
           <Route path="writers-room" element={<WritersRoom />} />
           <Route path="pipeline" element={<Pipeline />} />
           <Route path="pipeline/series/:seriesId" element={<PipelineSeries />} />
