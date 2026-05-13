@@ -68,6 +68,8 @@ The AI provider/runner/prompt toolkit is vendored in-tree at `server/lib/aiToolk
 - When adding new provider fields (e.g., `fallbackProvider`, `lightModel`), update `createProvider()` in `server/lib/aiToolkit/providers.js`
 - `updateProvider()` uses spread so existing providers preserve custom fields, but `createProvider()` has an explicit field list
 
+**Override consistency.** PortOS replaces `aiToolkit.services.runner.executeCliRun` in `server/index.js` with a stdin-based variant that knows the per-CLI argv conventions (Codex `exec -`, Gemini stdin piping, Claude Code `-p -`). The PortOS variant tracks live child processes in `_portosActiveRuns`, not the toolkit's internal `activeRuns` map. **Every sibling method that reads or writes the runner's process map must be patched together** — `stopRun` and `isRunActive` are already overridden alongside `executeCliRun`; if you add a new method that touches active runs (e.g. `pauseRun`, `getActiveRunCount`), add a matching override or the runs router will report inconsistent state. The same principle applies to time-based state transitions: `providerStatus.init()` clears expired `estimatedRecovery` entries, so every reader (`getStatus`, `getAllStatuses`, `isAvailable`) must re-apply the same recovery check on read — otherwise providers stay "unavailable" past their recovery deadline until the next process restart.
+
 ### Command Palette & Voice Nav — shared backbone (`server/lib/navManifest.js`)
 
 PortOS has a single source of truth for navigation: `server/lib/navManifest.js` exports `NAV_COMMANDS` (every navigable page: `{ id, path, label, section, aliases, keywords }`) and `resolveNavCommand()` (the fuzzy resolver). It is consumed by:
@@ -150,6 +152,11 @@ When working **directly in the Claude Code TUI** with the user driving, edit the
   console.log(`📜 Processing ${items.length} items`);
   console.error(`❌ Failed to connect: ${err.message}`);
   ```
+- **LLM response merging — distinguish absent vs intentionally empty.** When merging an LLM response with existing state, "key absent" must preserve the original while "key present with empty value" must apply the intentional clear. Don't use `.length` truthiness as the signal — that conflates the two cases and silently restores values the user (or LLM) just cleared. Conventions:
+  - Strings: treat `null`/`undefined` as absent, `""` as a clear. Server helpers like `worldBuilderExpand.trimField` should return `null` for non-strings, not `""`.
+  - Arrays/objects: gate on `Array.isArray(parsed?.field)` / `typeof parsed?.field === 'object'` before deciding to fall back to the original.
+  - Keep server-side merges and the client's `pick` helpers mirrored — a one-sided change breaks the round-trip.
+- **Schema parity when adding fields.** When you add a field to a sanitizer, `createXxx`, or a payload shape, update the corresponding Zod schema (`server/lib/aiToolkit/validation.js` for toolkit shapes, `server/lib/validation.js` for PortOS routes) in the same change. Wire validation into POST and PUT (PUT can use `schema.partial()`); the PortOS convention is *all* inputs validated. Tolerate UI sentinels (`endpoint: ''` for CLI providers) with `z.preprocess(v => v === '' ? undefined : v, …)`. When a service migrates legacy keys on read, the schema must still accept the legacy shape so older clients don't 400 before the migration runs.
 
 ## Tailwind Design Tokens
 
