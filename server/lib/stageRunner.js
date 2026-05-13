@@ -16,7 +16,7 @@
 
 import { ServerError } from './errorHandler.js';
 import { findBalancedBlocks, tryParseWithRepair } from './jsonExtract.js';
-import { providerHonorsModelOverride, runPromptThroughProvider } from './promptRunner.js';
+import { resolveEffectiveModel, runPromptThroughProvider } from './promptRunner.js';
 import { stripCodeFences } from './aiProvider.js';
 import { getActiveProvider, getProviderById } from '../services/providers.js';
 import { buildPrompt, getStage } from '../services/promptService.js';
@@ -183,17 +183,12 @@ export async function runStagedLLM(stageName, variables, options = {}) {
   const provider = await resolveProviderForStage(stage, options);
   const prompt = await buildPrompt(stageName, variables);
   const resolvedModel = resolveModel(provider, options.modelOverride || stage?.model);
-  // Non-codex CLI providers ignore per-call model overrides at the
-  // runner.js#buildCliArgs layer, so recording the resolved model in
-  // createRun would lie about what actually ran. Drop the override at
-  // the record + log boundary for those providers — promptRunner does
-  // the same internally. PLAN.md tracks extending buildCliArgs to honor
-  // per-call model for all CLI providers; once that lands the gate goes
-  // away (and the gemini-cli fast-model fallback can be reintroduced
-  // here, since today it would be silently dropped anyway).
-  const effectiveModel = providerHonorsModelOverride(provider)
-    ? resolvedModel
-    : (provider.defaultModel || provider.models?.[0] || null);
+  // resolveEffectiveModel gates the override per provider type and, for
+  // CLI providers with a baked --model/-m flag in args, extracts the
+  // args-pinned model id so the run record + log line reflect what
+  // truly executes (rather than guessing from defaultModel, which can
+  // diverge from the args-baked value).
+  const effectiveModel = resolveEffectiveModel(provider, resolvedModel);
 
   const { runId } = await createRun({
     providerId: provider.id,
