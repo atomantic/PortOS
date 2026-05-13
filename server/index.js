@@ -124,7 +124,7 @@ import { recoverStuckAnalyses } from './services/writersRoom/evaluator.js';
 import { recoverStuckAutoRuns } from './services/pipeline/autoRunner.js';
 import { initBridge as initBrainMemoryBridge } from './services/brainMemoryBridge.js';
 import { initDrillCache } from './services/meatspacePostDrillCache.js';
-import { createAIToolkit } from 'portos-ai-toolkit/server';
+import { createAIToolkit } from './lib/aiToolkit/index.js';
 import { createPortOSProviderRoutes } from './routes/providers.js';
 import { createPortOSRunsRoutes } from './routes/runs.js';
 import { createPortOSPromptsRoutes } from './routes/prompts.js';
@@ -216,6 +216,12 @@ const aiToolkit = createAIToolkit({
 setProvidersToolkit(aiToolkit);
 setRunnerToolkit(aiToolkit, { dataDir: DATA_DIR, hooks: aiToolkitHooks });
 setPromptsToolkit(aiToolkit);
+
+// Warm the providers file at startup so the codex-sentinel migration lands
+// before any inbound request can race a concurrent write.
+aiToolkit.services.providers.getAllProviders().catch(err => {
+  console.error(`❌ Failed to load providers at startup: ${err.message}`);
+});
 
 // Patch toolkit's runner to fix shell security issue (DEP0190)
 // Override executeCliRun to remove 'shell: true' which causes security warnings

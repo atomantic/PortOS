@@ -56,16 +56,17 @@ Define all ports in the top-level `PORTS` object in `ecosystem.config.cjs` (see 
 ### Data Flow
 Client → HTTP/WebSocket → Routes (validate) → Services (logic) → JSON files/PM2
 
-### AI Toolkit (`portos-ai-toolkit`)
+### AI Toolkit (`server/lib/aiToolkit/`)
 
-PortOS depends on `portos-ai-toolkit` as an npm module for AI provider management, run tracking, and prompt templates. The toolkit is a separate project located at `../portos-ai-toolkit` and published to npm.
+The AI provider/runner/prompt toolkit is vendored in-tree at `server/lib/aiToolkit/`. (It was previously the `portos-ai-toolkit` npm package.) Keep the directory self-contained — no imports out to other PortOS modules — so future upstream syncs don't fight local edits.
 
 **Key points:**
-- Provider configuration (models, tiers, fallbacks) is managed by the toolkit's `providers.js`
-- PortOS extends toolkit routes in `server/routes/providers.js` for vision testing and provider status
-- When adding new provider fields (e.g., `fallbackProvider`, `lightModel`), update the toolkit's `createProvider()` function
-- The toolkit uses spread in `updateProvider()` so existing providers preserve custom fields, but `createProvider()` has an explicit field list
-- After updating the toolkit, run `npm update portos-ai-toolkit` in PortOS to pull changes
+- `server/lib/aiToolkit/index.js` exports `createAIToolkit`, `createProviderStatusService`, and the four Router factories (providers / runs / prompts / providerStatus)
+- Provider configuration (models, tiers, fallbacks) lives in `server/lib/aiToolkit/providers.js`
+- `loadProviders()` auto-migrates legacy codex configs to the `codex-configured-default` sentinel; `server/index.js` warms it at startup so the rewrite happens before any request
+- PortOS extends toolkit routes in `server/routes/providers.js` for vision testing and provider status (status routes live in PortOS, not the toolkit, because they call PortOS-side socket helpers)
+- When adding new provider fields (e.g., `fallbackProvider`, `lightModel`), update `createProvider()` in `server/lib/aiToolkit/providers.js`
+- `updateProvider()` uses spread so existing providers preserve custom fields, but `createProvider()` has an explicit field list
 
 ### Command Palette & Voice Nav — shared backbone (`server/lib/navManifest.js`)
 

@@ -6,6 +6,7 @@ import { spawn } from 'child_process';
 import { writeFile, readFile } from 'fs/promises';
 import { join } from 'path';
 import { ensureDir } from '../lib/fileUtils.js';
+import { resolveCliModel } from '../lib/providerModels.js';
 
 // This will be initialized by server/index.js and set via setAIToolkit()
 let aiToolkitInstance = null;
@@ -44,8 +45,8 @@ export function buildCliArgs(provider) {
   // injection path fires — but if we kept the bogus token in baseArgs the
   // CLI would still see two `--model` occurrences and reject the argv.
   const baseArgs = stripBrokenModelFlags(Array.isArray(provider?.args) ? provider.args : []);
-  const effectiveDefaultModel = providerId === 'codex' && provider.defaultModel === 'codex-configured-default'
-    ? null
+  const effectiveDefaultModel = providerId === 'codex'
+    ? resolveCliModel(provider.defaultModel)
     : provider.defaultModel;
 
   // Codex CLI: `codex exec -` reads prompt from stdin, --model for model
