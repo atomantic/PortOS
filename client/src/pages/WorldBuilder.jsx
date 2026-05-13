@@ -17,7 +17,7 @@ import {
 import toast from '../components/ui/Toast';
 import {
   listWorlds, getWorld, createWorld, updateWorld, deleteWorld, expandWorld,
-  renderWorld, listWorldRuns, getProviders, WORLD_CATEGORIES,
+  renderWorld, listWorldRuns, getProviders, refineWorldPrompts, WORLD_CATEGORIES,
   WORLD_CATEGORY_KEY_MAX, COMPOSITE_PROMPT_MAX, WORLD_LOGLINE_MAX,
   WORLD_PREMISE_MAX, WORLD_STYLE_NOTES_MAX, WORLD_LOCKABLE_FIELDS,
   WORLD_INFLUENCE_ENTRY_MAX, WORLD_INFLUENCES_PER_LIST_MAX,
@@ -28,7 +28,6 @@ import InfluenceChipsInput from '../components/worldBuilder/InfluenceChipsInput'
 import BackendChipStrip from '../components/media/BackendChipStrip';
 import ImageGenControls from '../components/imageGen/ImageGenControls';
 import { deriveAvailableBackends, IMAGE_GEN_MODE } from '../lib/imageGenBackends';
-import WorldPromptRefineModal from '../components/worldBuilder/WorldPromptRefineModal';
 
 const CATEGORY_LABELS = {
   landscapes: 'Landscapes',
@@ -236,6 +235,17 @@ export default function WorldBuilder() {
   const [pendingDeleteId, setPendingDeleteId] = useState(null);
 
   const [refineOpen, setRefineOpen] = useState(false);
+  const [refineFeedback, setRefineFeedback] = useState('');
+  const [refining, setRefining] = useState(false);
+  const [refineRationale, setRefineRationale] = useState('');
+  const [refineChanges, setRefineChanges] = useState([]);
+
+  const resetRefinePanel = () => {
+    setRefineOpen(false);
+    setRefineFeedback('');
+    setRefineRationale('');
+    setRefineChanges([]);
+  };
 
   // Worlds list collapsed state — desktop only (mobile stacks the sidebar
   // above the editor and there's no horizontal-space tradeoff to make).
@@ -279,6 +289,7 @@ export default function WorldBuilder() {
   // hydrate the draft.
   useEffect(() => {
     setPendingDeleteId(null);
+    resetRefinePanel();
     if (!selectedId) {
       setDraft(emptyTemplate());
       setRuns([]);
@@ -567,6 +578,72 @@ export default function WorldBuilder() {
     }
   };
 
+  const runRefine = async () => {
+    const feedback = refineFeedback.trim();
+    if (!feedback) {
+      toast.error('Add feedback to refine');
+      return;
+    }
+    if (!draft.starterPrompt?.trim()) {
+      toast.error('Add a starter idea first — there is nothing for the LLM to refine');
+      return;
+    }
+    const locks = draft.locked || {};
+    const allTopLocked = WORLD_LOCKABLE_FIELDS.every((k) => locks[k]);
+    const hasStructure = totalVariations > 0 || totalSheets > 0;
+    if (allTopLocked && !hasStructure) {
+      toast.error('All fields are locked — unlock at least one to enable refinement');
+      return;
+    }
+
+    setRefining(true);
+    setRefineRationale('');
+    setRefineChanges([]);
+    const result = await refineWorldPrompts({
+      starterPrompt: draft.starterPrompt || '',
+      stylePrompt: draft.stylePrompt || '',
+      negativePrompt: draft.negativePrompt || '',
+      logline: draft.logline || '',
+      premise: draft.premise || '',
+      styleNotes: draft.styleNotes || '',
+      influences: ensureInfluences(draft.influences),
+      categories: hasStructure ? draft.categories : undefined,
+      compositeSheets: hasStructure ? draft.compositeSheets : undefined,
+      locked: locks,
+      feedback,
+      providerId: draft.llm?.provider || activeProviderId || undefined,
+      model: draft.llm?.model || undefined,
+    }).catch(() => null);
+    setRefining(false);
+    if (!result) return;
+
+    const patch = {};
+    for (const key of WORLD_LOCKABLE_FIELDS) {
+      if (isInfluenceLockField(key)) continue;
+      if (locks[key]) continue;
+      patch[key] = (result[key] ?? '').trim();
+    }
+    if (result.influences) {
+      // Locked influence lists are server-side append-only — when the LLM
+      // returns an empty list for a locked side, that's an omission, not an
+      // intentional clear, so fall back to the originals.
+      const origInf = ensureInfluences(draft.influences);
+      const refinedInf = ensureInfluences(result.influences);
+      patch.influences = {
+        embrace: locks.influencesEmbrace && refinedInf.embrace.length === 0 ? origInf.embrace : refinedInf.embrace,
+        avoid: locks.influencesAvoid && refinedInf.avoid.length === 0 ? origInf.avoid : refinedInf.avoid,
+      };
+    }
+    if (result.categories && typeof result.categories === 'object') patch.categories = result.categories;
+    if (Array.isArray(result.compositeSheets)) patch.compositeSheets = result.compositeSheets;
+
+    await applyRefinement(patch);
+    setRefineRationale(result.rationale || '');
+    setRefineChanges(Array.isArray(result.changes) ? result.changes : []);
+    setRefineFeedback('');
+    toast.success('Refined world applied');
+  };
+
   // Render either the full batch (driven by the renderOpts.promptMode dropdown)
   // or a narrow scope passed in by an inline button. Scope shape:
   //   { promptMode, selection?, sheetSelection? } — see server renderSchema.
@@ -852,10 +929,13 @@ export default function WorldBuilder() {
               Generate From Idea
             </button>
             <button
-              onClick={() => setRefineOpen(true)}
+              onClick={() => setRefineOpen((v) => !v)}
               disabled={!draft.starterPrompt?.trim()}
-              className="px-3 py-2 bg-port-accent/15 hover:bg-port-accent/25 disabled:opacity-50 text-port-accent border border-port-accent/40 rounded flex items-center gap-2 min-h-[40px]"
-              title="Give feedback to refine the Starter Idea, Style Prompt, and Negative Prompt"
+              aria-expanded={refineOpen}
+              className={`px-3 py-2 disabled:opacity-50 text-port-accent border border-port-accent/40 rounded flex items-center gap-2 min-h-[40px] ${
+                refineOpen ? 'bg-port-accent/25' : 'bg-port-accent/15 hover:bg-port-accent/25'
+              }`}
+              title="Give feedback to refine the prompts in place — uses the LLM picked above"
             >
               <MessageSquarePlus size={16} />
               Refine prompts
@@ -864,25 +944,60 @@ export default function WorldBuilder() {
               {totalVariations} variation{totalVariations === 1 ? '' : 's'} across {categoryKeys.length} categories · {totalSheets} composite board{totalSheets === 1 ? '' : 's'}
             </span>
           </div>
-        </header>
 
-        <WorldPromptRefineModal
-          open={refineOpen}
-          onClose={() => setRefineOpen(false)}
-          onApply={applyRefinement}
-          starterPrompt={draft.starterPrompt || ''}
-          stylePrompt={draft.stylePrompt || ''}
-          negativePrompt={draft.negativePrompt || ''}
-          logline={draft.logline || ''}
-          premise={draft.premise || ''}
-          styleNotes={draft.styleNotes || ''}
-          influences={ensureInfluences(draft.influences)}
-          categories={draft.categories || {}}
-          compositeSheets={draft.compositeSheets || []}
-          locked={draft.locked || {}}
-          defaultProviderId={draft.llm?.provider || activeProviderId || null}
-          defaultModel={draft.llm?.model || null}
-        />
+          {refineOpen && (
+            <div className="border border-port-accent/40 bg-port-accent/5 rounded p-3 flex flex-col gap-2">
+              <label htmlFor="world-refine-feedback" className="text-[11px] uppercase tracking-wide text-gray-500">
+                Feedback — describe what you want changed
+              </label>
+              <textarea
+                id="world-refine-feedback"
+                value={refineFeedback}
+                onChange={(e) => setRefineFeedback(e.target.value)}
+                placeholder="e.g. lean grimmer and more spiritual; pull style toward Moebius + Tarkovsky; avoid neon and cyberpunk clichés."
+                rows={3}
+                disabled={refining}
+                className="w-full bg-port-bg border border-port-border rounded p-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-port-accent resize-y disabled:opacity-60"
+              />
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  type="button"
+                  onClick={runRefine}
+                  disabled={refining || !refineFeedback.trim() || !draft.starterPrompt?.trim()}
+                  className="px-3 py-2 bg-port-accent hover:bg-port-accent/90 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded flex items-center gap-2 min-h-[40px]"
+                >
+                  {refining ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} />}
+                  {refining ? 'Refining…' : 'Refine'}
+                </button>
+                <button
+                  type="button"
+                  onClick={resetRefinePanel}
+                  disabled={refining}
+                  className="px-3 py-2 text-sm text-gray-400 hover:text-white rounded min-h-[40px]"
+                >
+                  Close
+                </button>
+                <span className="text-[11px] text-gray-500">
+                  Applies in place — locked fields stay pinned.
+                </span>
+              </div>
+              {(refineRationale || refineChanges.length > 0) && (
+                <div className="border-t border-port-border/60 pt-2 mt-1 space-y-1.5">
+                  {refineRationale && (
+                    <p className="text-xs text-gray-300 whitespace-pre-wrap">{refineRationale}</p>
+                  )}
+                  {refineChanges.length > 0 && (
+                    <ul className="text-[11px] text-gray-400 list-disc pl-5 space-y-0.5">
+                      {refineChanges.map((c, idx) => (
+                        <li key={idx}>{c}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </header>
 
         <section className="bg-port-card border border-port-border rounded p-4 flex flex-col gap-3">
           <div>
