@@ -14,6 +14,7 @@ import { createProvidersRoutes } from './routes/providers.js';
 import { createRunsRoutes } from './routes/runs.js';
 import { createPromptsRoutes } from './routes/prompts.js';
 import { createProviderStatusRoutes } from './routes/providerStatus.js';
+import * as errorDetection from './errorDetection.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -103,7 +104,13 @@ export function createAIToolkit(config = {}) {
       providers: providerService,
       runner: runnerService,
       prompts: promptsService,
-      providerStatus: providerStatusService
+      providerStatus: providerStatusService,
+      // Expose error detection so the PortOS runner override (and any
+      // direct toolkit consumer) can call `services.errorDetection.analyzeError`
+      // without separately importing the module. Without this, CLI runs that
+      // exit non-zero silently skip error analysis and leave metadata.error
+      // null.
+      errorDetection
     },
 
     routes: {
