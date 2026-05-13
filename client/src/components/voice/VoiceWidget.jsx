@@ -5,6 +5,7 @@ import {
   startCapture, stopCapture, interrupt, resetConversation, sendText, onVoiceEvent, isCapturing,
   startContinuous, stopContinuous, isContinuous, whenPlaybackDrained, getVadLevel,
   webSpeechSupported, startWebSpeechCapture, stopWebSpeechCapture, isWebSpeechCapturing,
+  onProactiveSpeech,
 } from '../../services/voiceClient';
 import { getVoiceConfig } from '../../services/apiVoice';
 import toast from '../ui/Toast';
@@ -227,6 +228,20 @@ export default function VoiceWidget() {
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [history]);
+
+  // Proactive CoS speech — the server pushes a `voice:speak` event when the
+  // assistant initiates a line (alerts, reminders, briefings). Audio plays
+  // automatically via voiceClient; surface a transient toast so the user has
+  // visual context for unexpected speech, and append to history so the line
+  // shows up in the conversation pane just like a normal assistant reply.
+  useEffect(() => {
+    if (!enabled) return undefined;
+    return onProactiveSpeech(({ sentence, priority }) => {
+      setHistory((h) => [...h, { role: 'assistant', text: sentence, proactive: true }].slice(-MAX_HISTORY));
+      const icon = priority === 'high' ? '🔔' : '🤖';
+      toast(`${icon} ${sentence.length > 80 ? `${sentence.slice(0, 80)}…` : sentence}`);
+    });
+  }, [enabled]);
 
   const handleStart = useCallback(async () => {
     if (!enabled) return;
@@ -489,7 +504,11 @@ export default function VoiceWidget() {
   const fabSurface = 'border-violet-500/50 shadow-[0_0_24px_-4px_rgba(168,85,247,0.55)]';
 
   return (
-    <div className="fixed bottom-4 right-4 z-50 flex flex-col items-end gap-2">
+    // data-voice-widget marker is used by client/src/services/domIndex.js
+    // TEXT_EXCLUDE_SELECTORS to keep the widget's own conversation transcript
+    // out of the ui_read visible-text snapshot — otherwise the voice agent
+    // would "read the page" and recite its own dialog back to the user.
+    <div data-voice-widget className="fixed bottom-4 right-4 z-50 flex flex-col items-end gap-2">
       {!expanded && (
         <div className="md:hidden flex items-center gap-2">
           {capturing && <span className={`text-xs ${tone} bg-port-card/95 backdrop-blur border rounded-full px-2 py-1 ${fabSurface}`}>{label}</span>}

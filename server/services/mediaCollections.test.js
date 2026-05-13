@@ -74,6 +74,29 @@ describe('mediaCollections service', () => {
     expect(await svc.listCollections()).toEqual([]);
   });
 
+  it('findOrCreateCollectionByName returns the existing collection on case-insensitive match', async () => {
+    const a = await svc.createCollection({ name: 'World: Foo' });
+    const reused = await svc.findOrCreateCollectionByName({ name: '  world: foo  ' });
+    expect(reused.id).toBe(a.id);
+    expect(await svc.listCollections()).toHaveLength(1);
+  });
+
+  it('findOrCreateCollectionByName creates a new collection when no name matches', async () => {
+    await svc.createCollection({ name: 'World: Foo' });
+    const created = await svc.findOrCreateCollectionByName({
+      name: 'World: Bar',
+      description: 'desc',
+    });
+    expect(created.name).toBe('World: Bar');
+    expect(created.description).toBe('desc');
+    expect(await svc.listCollections()).toHaveLength(2);
+  });
+
+  it('findOrCreateCollectionByName validates name like createCollection', async () => {
+    await expect(svc.findOrCreateCollectionByName({ name: '   ' }))
+      .rejects.toMatchObject({ code: svc.ERR_VALIDATION });
+  });
+
   it('sanitizes hand-edited JSON with bogus items', async () => {
     fileStore.set('/mock/data/media-collections.json', {
       collections: [

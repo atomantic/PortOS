@@ -4,6 +4,9 @@ import {
   trigramsOf,
   rememberTtsSentence,
   isEchoOfRecentTts,
+  registerEchoBuffer,
+  unregisterEchoBuffer,
+  rememberTtsForAllSockets,
   MIN_SHARED_TRIGRAMS,
 } from './echo.js';
 
@@ -117,5 +120,38 @@ describe('isEchoOfRecentTts', () => {
     // Heard: 5 tokens → 3 trigrams. Bot: completely different except 1 trigram.
     const recent = seed(['quick brown fox jumps over fence', 'unrelated content here today now']);
     expect(isEchoOfRecentTts('the quick brown fox runs', recent, { now: NOW })).toBe(false);
+  });
+});
+
+describe('echo buffer registry (proactive-speech echo suppression)', () => {
+  it('fans out a sentence to every registered buffer', () => {
+    const a = [];
+    const b = [];
+    registerEchoBuffer(a);
+    registerEchoBuffer(b);
+    try {
+      rememberTtsForAllSockets('proactive briefing sentence', { now: 5000 });
+      expect(a).toHaveLength(1);
+      expect(b).toHaveLength(1);
+      expect(a[0].text).toBe('proactive briefing sentence');
+    } finally {
+      unregisterEchoBuffer(a);
+      unregisterEchoBuffer(b);
+    }
+  });
+
+  it('stops writing to a buffer after it is unregistered', () => {
+    const a = [];
+    registerEchoBuffer(a);
+    unregisterEchoBuffer(a);
+    rememberTtsForAllSockets('proactive briefing sentence', { now: 5000 });
+    expect(a).toEqual([]);
+  });
+
+  it('ignores non-array registrations', () => {
+    // No throw; nothing observable to assert beyond "doesn't crash".
+    expect(() => registerEchoBuffer(null)).not.toThrow();
+    expect(() => registerEchoBuffer(undefined)).not.toThrow();
+    expect(() => registerEchoBuffer({})).not.toThrow();
   });
 });

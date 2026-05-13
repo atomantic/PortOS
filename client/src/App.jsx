@@ -81,6 +81,9 @@ const CharacterSheet = lazyWithReload(() => import('./pages/CharacterSheet'));
 const Wiki = lazyWithReload(() => import('./pages/Wiki'));
 const RapidReaderPage = lazyWithReload(() => import('./pages/RapidReader'));
 const WritersRoom = lazyWithReload(() => import('./pages/WritersRoom'));
+const Pipeline = lazyWithReload(() => import('./pages/Pipeline'));
+const PipelineSeries = lazyWithReload(() => import('./pages/PipelineSeries'));
+const PipelineIssue = lazyWithReload(() => import('./pages/PipelineIssue'));
 
 // Loading fallback for lazy-loaded pages
 const PageLoader = () => (
@@ -212,7 +215,12 @@ export default function App() {
           <Route path="wiki" element={<Navigate to="/wiki/overview" replace />} />
           <Route path="wiki/:tab" element={<Wiki />} />
           <Route path="rapid-reader" element={<RapidReaderPage />} />
+          <Route path="world-builder" element={<WorldBuilder />} />
           <Route path="writers-room" element={<WritersRoom />} />
+          <Route path="pipeline" element={<Pipeline />} />
+          <Route path="pipeline/series/:seriesId" element={<PipelineSeries />} />
+          <Route path="pipeline/issues/:issueId" element={<Navigate to="idea" replace />} />
+          <Route path="pipeline/issues/:issueId/:stage" element={<PipelineIssue />} />
           <Route path="writers-room/works/:workId" element={<WritersRoom />} />
           <Route path="agents" element={<Agents />} />
           <Route path="agents/:agentId" element={<Agents />} />

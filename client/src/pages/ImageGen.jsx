@@ -13,22 +13,24 @@ import { useNavigate, useSearchParams, Link } from 'react-router-dom';
 import Drawer from '../components/Drawer';
 import { ImageGenTab } from '../components/settings/ImageGenTab';
 import MediaCard from '../components/media/MediaCard';
-import MediaLightbox from '../components/media/MediaLightbox';
+import MediaPreview from '../components/media/MediaPreview';
+import FavoritesFilterChip from '../components/media/FavoritesFilterChip';
 import StylePresetPicker from '../components/media/StylePresetPicker';
 import BackendChipStrip from '../components/media/BackendChipStrip';
 import { normalizeImage } from '../components/media/normalize';
+import { RUNNER_FAMILIES } from '../lib/runnerFamilies';
 import Flux2InstallModal from '../components/imageGen/Flux2InstallModal';
 import Flux2TokenBanner from '../components/imageGen/Flux2TokenBanner';
 import ImageGenControls from '../components/imageGen/ImageGenControls';
 import MediaJobsQueue from '../components/media/MediaJobsQueue';
 import { useMediaCompletionRefresh } from '../hooks/useMediaCompletionRefresh';
+import { useMediaAnnotations } from '../hooks/useMediaAnnotations';
 import {
   Image as ImageIcon, Sparkles, Download, RefreshCw, Settings as SettingsIcon,
   AlertTriangle, X, Film,
 } from 'lucide-react';
 import { composeStyledPrompt } from '../lib/composeStyledPrompt';
 import { deriveAvailableBackends, IMAGE_GEN_MODE } from '../lib/imageGenBackends';
-import { getMediaNavProps } from '../lib/mediaNavigation';
 import toast from '../components/ui/Toast';
 import BrailleSpinner from '../components/BrailleSpinner';
 import { useImageGenProgress } from '../hooks/useImageGenProgress';
@@ -100,6 +102,8 @@ export default function ImageGen() {
   const [gallery, setGallery] = useState([]);
   const [preview, setPreview] = useState(null);
   const [showHidden, setShowHidden] = useState(false);
+  const [favoritesOnly, setFavoritesOnly] = useState(false);
+  const { annotations, toggleStar, updateAnnotation } = useMediaAnnotations();
   // FLUX.2 readiness — drives the gating banner. Lazy-fetched on the first
   // selection of a flux2 model so we don't make an extra request when the
   // user is only using mflux/external/codex.
@@ -127,6 +131,10 @@ export default function ImageGen() {
   // the whole object so previewUrl can never out-live its file/name.
   const [initImage, setInitImage] = useState({ source: null, file: null, name: null, previewUrl: null });
   const [initImageStrength, setInitImageStrength] = useState(0.4);
+
+  // Batch size: how many renders this submit kicks off. Only meaningful for
+  // async modes (local + codex); external is synchronous and runs N=1.
+  const [batchCount, setBatchCount] = useState(1);
 
   const [generating, setGenerating] = useState(false);
   const [statusMsg, setStatusMsg] = useState('');
@@ -374,13 +382,13 @@ export default function ImageGen() {
   }, [settingsOpen, reloadBackends]);
 
   const currentModel = models.find((m) => m.id === modelId);
-  const isFlux2Model = currentModel?.runner === 'flux2';
+  const isFlux2Model = currentModel?.runner === RUNNER_FAMILIES.FLUX2;
   // mflux is the default runner for entries with no explicit `runner` field.
   // Used to filter the LoRA picker so users only see compatible weights for
   // the selected model. LoRAs with `runnerFamily === null` (legacy / unknown
   // base) are shown too with a warning indicator — the runner may still
   // accept them, or surface a clear error.
-  const currentRunnerFamily = currentModel?.runner || 'mflux';
+  const currentRunnerFamily = currentModel?.runner || RUNNER_FAMILIES.MFLUX;
   const compatibleLoras = availableLoras.filter((l) => !l.runnerFamily || l.runnerFamily === currentRunnerFamily);
 
   const refreshFlux2Status = useCallback((signal) => {
@@ -445,15 +453,19 @@ export default function ImageGen() {
   const flux2Issue = isFlux2Model && flux2Status
     ? (!flux2Status.venvInstalled ? 'venv' : !flux2Status.hfTokenPresent ? 'token' : null)
     : null;
-  const { visibleGallery, hiddenGallery } = useMemo(() => ({
-    visibleGallery: gallery.filter((img) => !img.hidden),
-    hiddenGallery: gallery.filter((img) => img.hidden),
-  }), [gallery]);
+  const { visibleGallery, hiddenGallery } = useMemo(() => {
+    const visible = gallery.filter((img) => !img.hidden);
+    const hidden = gallery.filter((img) => img.hidden);
+    if (!favoritesOnly) return { visibleGallery: visible, hiddenGallery: hidden };
+    // Normalize to derive the canonical item.key rather than hand-building
+    // `image:${img.filename}` — the kind/ref convention lives in normalize.js.
+    const isStarred = (img) => !!annotations[normalizeImage(img).key]?.starred;
+    return { visibleGallery: visible.filter(isStarred), hiddenGallery: hidden.filter(isStarred) };
+  }, [gallery, favoritesOnly, annotations]);
   const previewItems = useMemo(() => [
     ...visibleGallery.map(normalizeImage),
     ...(showHidden ? hiddenGallery.map(normalizeImage) : []),
   ], [visibleGallery, hiddenGallery, showHidden]);
-  const previewNavProps = getMediaNavProps(previewItems, preview, setPreview);
 
   // Snapshots current form state into a server payload + POSTs it to the
   // mediaJobQueue. Returns the queue's response ({ jobId, position, ... }).
@@ -559,27 +571,30 @@ export default function ImageGen() {
     });
   };
 
-  // Queue a render without taking over the active SSE/preview. Used when the
+  // Queue N renders without taking over the active SSE/preview. Used when the
   // user submits while one is already rendering — they get to keep watching
-  // the in-flight render, and the new payload lands in mediaJobQueue (server
+  // the in-flight render, and the new payloads land in mediaJobQueue (server
   // FIFO). When the active render finishes, refreshGallery() pulls all
   // completed images so the queued ones become visible as they land.
-  const handleQueueAdditional = async () => {
-    if (!prompt.trim()) return;
-    const { data } = await submitGenerationPayload().catch((err) => {
-      toast.error(err.message || 'Failed to queue render');
-      return {};
-    });
-    if (!data) return;
-    setPendingQueued((n) => n + 1);
-    const pos = typeof data.position === 'number' ? data.position : null;
-    toast.success(pos ? `Queued (${pos} ahead in queue)` : 'Queued');
+  // Async-mode only; external is synchronous so submitting N would block N×.
+  const queueAdditional = async (count = 1) => {
+    if (!prompt.trim() || count < 1) return;
+    const submissions = Array.from({ length: count }, () =>
+      submitGenerationPayload().then(({ data }) => data).catch((err) => err),
+    );
+    const results = await Promise.all(submissions);
+    const queued = results.filter((r) => r && !(r instanceof Error)).length;
+    const failed = results.length - queued;
+    if (queued > 0) setPendingQueued((n) => n + queued);
+    if (queued > 0) toast.success(count === 1 ? 'Queued' : `Queued ${queued}`);
+    if (failed > 0) toast.error(`${failed} job(s) failed to queue`);
   };
 
   const handleGenerate = async (e) => {
     e?.preventDefault?.();
     if (!prompt.trim()) return;
-    if (generating) return handleQueueAdditional();
+    const batchN = isAsyncMode ? Math.max(1, batchCount) : 1;
+    if (generating) return queueAdditional(batchN);
     setGenerating(true);
     setStatusMsg('Starting...');
     setError(null);
@@ -593,7 +608,12 @@ export default function ImageGen() {
 
     try {
       if (isAsyncMode) {
+        // Fire batch extras in parallel with the SSE-tracked first job so the
+        // queue positions surface immediately; await both before showing the
+        // success toast so the "+N queued" badge is in sync.
+        const extras = batchN > 1 ? queueAdditional(batchN - 1) : Promise.resolve();
         await startLocalGeneration();
+        await extras;
       } else {
         const composed = composeStyledPrompt(prompt, negativePrompt, stylePreset);
         const payload = {
@@ -966,7 +986,21 @@ export default function ImageGen() {
               className="flex items-center gap-2 px-4 py-2 bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg min-h-[40px]"
             >
               <Sparkles className="w-4 h-4" /> {generating ? 'Queue' : 'Generate'}
+              {isAsyncMode && batchCount > 1 && <span className="text-xs opacity-80">× {batchCount}</span>}
             </button>
+            {isAsyncMode && (
+              <label className="flex items-center gap-1.5 text-xs text-gray-400" title="Batch size: number of renders to queue per submit">
+                <span className="select-none">×</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={20}
+                  value={batchCount}
+                  onChange={(e) => setBatchCount(Math.max(1, Math.min(20, Number(e.target.value) || 1)))}
+                  className="w-14 bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
+                />
+              </label>
+            )}
             {generating && (
               <button
                 type="button"
@@ -1074,30 +1108,40 @@ export default function ImageGen() {
 
       <MediaJobsQueue kind="image" />
 
-      {visibleGallery.length > 0 && (
+      {(visibleGallery.length > 0 || favoritesOnly) && (
         <div className="bg-port-card border border-port-border rounded-xl p-4 space-y-2">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
             <h2 className="text-xs font-medium text-gray-400 uppercase tracking-wide">Recent renders ({Math.min(visibleGallery.length, 5)} of {visibleGallery.length})</h2>
-            {visibleGallery.length > 5 && (
-              <Link to="/media/history" className="text-xs text-port-accent hover:underline">View all →</Link>
-            )}
+            <div className="flex items-center gap-2">
+              <FavoritesFilterChip active={favoritesOnly} onToggle={() => setFavoritesOnly((v) => !v)} />
+              {visibleGallery.length > 5 && (
+                <Link to="/media/history" className="text-xs text-port-accent hover:underline">View all →</Link>
+              )}
+            </div>
           </div>
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
-            {visibleGallery.slice(0, 5).map((img) => {
-              const item = normalizeImage(img);
-              return (
-                <MediaCard
-                  key={item.key}
-                  item={item}
-                  onPreview={() => setPreview(item)}
-                  onRemix={() => handleRemix(img)}
-                  onSendToVideo={() => sendToVideo(img)}
-                  onDelete={() => handleDelete(img.filename)}
-                  onToggleHidden={() => handleToggleHidden(item)}
-                />
-              );
-            })}
-          </div>
+          {visibleGallery.length === 0 ? (
+            <div className="text-xs text-gray-500 py-3">No favorited images yet.</div>
+          ) : (
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
+              {visibleGallery.slice(0, 5).map((img) => {
+                const item = normalizeImage(img);
+                return (
+                  <MediaCard
+                    key={item.key}
+                    item={item}
+                    onPreview={() => setPreview(item)}
+                    onRemix={() => handleRemix(img)}
+                    onSendToVideo={() => sendToVideo(img)}
+                    onDelete={() => handleDelete(img.filename)}
+                    onToggleHidden={() => handleToggleHidden(item)}
+                    starred={!!annotations[item.key]?.starred}
+                    hasNote={!!annotations[item.key]?.note}
+                    onToggleStar={toggleStar}
+                  />
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 
@@ -1124,6 +1168,9 @@ export default function ImageGen() {
                     onSendToVideo={() => sendToVideo(img)}
                     onDelete={() => handleDelete(img.filename)}
                     onToggleHidden={() => handleToggleHidden(item)}
+                    starred={!!annotations[item.key]?.starred}
+                    hasNote={!!annotations[item.key]?.note}
+                    onToggleStar={toggleStar}
                   />
                 );
               })}
@@ -1132,13 +1179,15 @@ export default function ImageGen() {
         </div>
       )}
 
-      <MediaLightbox
-        item={preview}
-        onClose={() => setPreview(null)}
+      <MediaPreview
+        preview={preview}
+        setPreview={setPreview}
+        items={previewItems}
+        annotations={annotations}
+        updateAnnotation={updateAnnotation}
         onRemix={(item) => item?.raw && handleRemix(item.raw)}
         onSendToVideo={(item) => item?.raw?.filename && sendToVideo(item.raw)}
         onClean={(item, level) => handleClean(item?.raw, level)}
-        {...previewNavProps}
       />
 
 

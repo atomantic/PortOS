@@ -9,8 +9,9 @@
 // resolution; external swaps guidance for cfgScale; local shows guidance + quantize.
 
 import { Dice5 } from 'lucide-react';
-import { RESOLUTIONS, findResolution } from '../../lib/imageGenResolutions';
+import { filterResolutions } from '../../lib/imageGenResolutions';
 import { randomSeed } from '../../lib/genUtils';
+import { RUNNER_FAMILIES } from '../../lib/runnerFamilies';
 
 const QUANTIZE_OPTIONS = [
   { value: '3', label: '3-bit' },
@@ -42,12 +43,16 @@ export default function ImageGenControls({
   const isCodex = mode === 'codex';
 
   const currentModel = models.find((m) => m.id === modelId);
-  const isFlux2 = currentModel?.runner === 'flux2';
+  const isFlux2 = currentModel?.runner === RUNNER_FAMILIES.FLUX2;
 
-  const matched = findResolution(width, height);
+  // Filter by backend; a stale w/h (e.g. Flux 2 → Flux 1 with 1536 still set)
+  // falls through to the (custom) <option> below so the value stays visible
+  // until the user picks a supported one.
+  const availableResolutions = filterResolutions(mode, currentModel?.runner);
+  const matched = availableResolutions.find((r) => r.w === width && r.h === height);
   const resolutionLabel = matched?.label || (width && height ? `${width}×${height}` : '');
   const handleResolution = (e) => {
-    const r = RESOLUTIONS.find((opt) => opt.label === e.target.value);
+    const r = availableResolutions.find((opt) => opt.label === e.target.value);
     if (r) onResolutionChange?.(r.w, r.h);
   };
 
@@ -77,7 +82,7 @@ export default function ImageGenControls({
           disabled={disabled}
           className={inputCls}
         >
-          {RESOLUTIONS.map((r) => <option key={r.label} value={r.label}>{r.label}</option>)}
+          {availableResolutions.map((r) => <option key={r.label} value={r.label}>{r.label}</option>)}
           {!matched && resolutionLabel && <option value={resolutionLabel}>{resolutionLabel} (custom)</option>}
         </select>
       </div>

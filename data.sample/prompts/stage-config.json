@@ -185,6 +185,76 @@
       "model": "default",
       "returnsJson": true,
       "variables": []
+    },
+    "pipeline-idea-expansion": {
+      "name": "Pipeline — Idea / Beat Sheet",
+      "description": "Turn a rough seed idea for one issue or episode into a tight beat sheet with logline, theme, beats, setting, and any new characters. Spine for prose, comic script, TV script, and storyboard stages.",
+      "model": "default",
+      "returnsJson": false,
+      "variables": []
+    },
+    "pipeline-prose": {
+      "name": "Pipeline — Prose Draft",
+      "description": "Draft an 800–1500 word short-story version of one issue/episode from the beat sheet. Includes H2 scene breaks so downstream comic and TV adaptations have stable anchor points.",
+      "model": "default",
+      "returnsJson": false,
+      "variables": []
+    },
+    "pipeline-comic-script": {
+      "name": "Pipeline — Comic Book Script",
+      "description": "Adapt the prose draft into a Marvel/DC house-format comic-book issue script (page → panel → description / caption / dialogue / SFX). One of two parallel script stages, both downstream of prose.",
+      "model": "default",
+      "returnsJson": false,
+      "variables": []
+    },
+    "pipeline-tv-script": {
+      "name": "Pipeline — TV Teleplay",
+      "description": "Adapt the prose draft into a single-episode TV teleplay with sluglines, present-tense action, dialogue, and act breaks. One of two parallel script stages, both downstream of prose.",
+      "model": "default",
+      "returnsJson": false,
+      "variables": []
+    },
+    "pipeline-extract-scenes": {
+      "name": "Pipeline — Extract Scenes from TV Teleplay",
+      "description": "Parse an already-formatted TV teleplay into a structured scenes[] list (one entry per slugline) the storyboards stage can render. Defers to character / setting bibles for canonical names and slugline reuse.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-arc-overview": {
+      "name": "Pipeline — Series Arc Overview",
+      "description": "Plan the top-level multi-season story spine for a series from its bible: a series-level logline, summary, themes, protagonist arc, and a 2–5 season breakdown with per-season loglines, ending hooks, and episode-count targets. Runs at `heavy` tier — most expensive single call in the pipeline.",
+      "model": "heavy",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-season-episodes": {
+      "name": "Pipeline — Season Episode Breakdown",
+      "description": "Plan the episode-by-episode breakdown for one season of a multi-season series. Slots N episodes between the season's pickup state and ending hook, respecting prior seasons' continuity, the protagonist's whole-series arc, and a balanced mix of pilot / complication / midpoint / b-plot / all-is-lost / finale arc roles.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-arc-verify": {
+      "name": "Pipeline — Arc Verification",
+      "description": "Cross-season continuity pass over an authored arc: catches character contradictions, dropped subplots, episode-count vs arc-weight mismatch, unresolved finale hooks, arc-role imbalance, and theme drift. Returns actionable { severity, location, problem, suggestion } issues — empty list means clean.",
+      "model": "heavy",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-comic-panel-image-prompt": {
+      "name": "Pipeline — Comic Panel Image Prompt",
+      "description": "Refine a single comic panel's description into a richer image-gen-ready prompt. Uses caption / dialogue / sfx context + neighboring-panel continuity to elaborate without re-imagining the scene.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-storyboard-image-prompt": {
+      "name": "Pipeline — Storyboard Scene Image Prompt",
+      "description": "Refine a single storyboard scene's description into a richer image-gen-ready prompt. Uses slugline + neighboring-scene continuity to elaborate without contradicting location or time of day.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
     }
   }
 }

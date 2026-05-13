@@ -24,14 +24,8 @@ import StagePromptModelPicker from './StagePromptModelPicker';
 import CharactersBible from './CharactersBible';
 import SettingsBible from './SettingsBible';
 import ObjectsBible from './ObjectsBible';
-import {
-  WR_IMAGE_DEFAULTS,
-  buildCharByKey,
-  buildSettingByKey,
-  readWrImageSettings,
-  STYLE_ID,
-  EMPTY_IMAGE_STYLE,
-} from './sceneCardHelpers';
+import { WR_IMAGE_DEFAULTS, readWrImageSettings, STYLE_ID, EMPTY_IMAGE_STYLE } from '../../lib/wrImageDefaults';
+import { buildCharByKey, buildSettingByKey } from '../../lib/scenePrompt';
 
 const SCRIPT_STAGE = 'writers-room-script';
 

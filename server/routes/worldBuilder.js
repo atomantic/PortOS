@@ -18,9 +18,10 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import * as svc from '../services/worldBuilder.js';
 import { expandWorldTemplate } from '../services/worldBuilderExpand.js';
+import { refineWorldPrompts } from '../services/worldBuilderRefine.js';
 import { enqueueJob } from '../services/mediaJobQueue/index.js';
 import { getSettings } from '../services/settings.js';
-import { createCollection, NAME_MAX_LENGTH as COLLECTION_NAME_MAX } from '../services/mediaCollections.js';
+import { findOrCreateCollectionByName, NAME_MAX_LENGTH as COLLECTION_NAME_MAX } from '../services/mediaCollections.js';
 import { getImageModels, isFlux2, isZImage, isErnie } from '../lib/mediaModels.js';
 
 const router = Router();
@@ -66,6 +67,9 @@ const createSchema = z.object({
   starterPrompt: z.string().trim().max(svc.STARTER_PROMPT_MAX).optional().default(''),
   stylePrompt: z.string().trim().max(svc.PROMPT_FRAGMENT_MAX).optional().default(''),
   negativePrompt: z.string().trim().max(svc.PROMPT_FRAGMENT_MAX).optional().default(''),
+  logline: z.string().trim().max(svc.LOGLINE_MAX).optional().default(''),
+  premise: z.string().trim().max(svc.PREMISE_MAX).optional().default(''),
+  styleNotes: z.string().trim().max(svc.STYLE_NOTES_MAX).optional().default(''),
   categories: categoriesSchema.optional(),
   compositeSheets: z.array(compositeSheetSchema).max(svc.COMPOSITE_SHEETS_MAX).optional(),
   llm: llmSchema,
@@ -76,6 +80,9 @@ const patchSchema = z.object({
   starterPrompt: z.string().trim().max(svc.STARTER_PROMPT_MAX).optional(),
   stylePrompt: z.string().trim().max(svc.PROMPT_FRAGMENT_MAX).optional(),
   negativePrompt: z.string().trim().max(svc.PROMPT_FRAGMENT_MAX).optional(),
+  logline: z.string().trim().max(svc.LOGLINE_MAX).optional(),
+  premise: z.string().trim().max(svc.PREMISE_MAX).optional(),
+  styleNotes: z.string().trim().max(svc.STYLE_NOTES_MAX).optional(),
   categories: categoriesSchema.optional(),
   compositeSheets: z.array(compositeSheetSchema).max(svc.COMPOSITE_SHEETS_MAX).optional(),
   llm: llmSchema,
@@ -85,6 +92,21 @@ const expandSchema = z.object({
   starterPrompt: z.string().trim().min(1).max(svc.STARTER_PROMPT_MAX),
   providerId: z.string().trim().max(80).optional(),
   model: z.string().trim().max(200).optional(),
+});
+
+const refinePromptsSchema = z.object({
+  starterPrompt: z.string().trim().min(1).max(svc.STARTER_PROMPT_MAX),
+  stylePrompt: z.string().trim().max(svc.PROMPT_FRAGMENT_MAX).optional().default(''),
+  negativePrompt: z.string().trim().max(svc.PROMPT_FRAGMENT_MAX).optional().default(''),
+  feedback: z.string().trim().min(1).max(3000),
+  providerId: z.string().trim().max(80).optional(),
+  // Whitespace-only model → undefined so the refiner's defaultModel /
+  // models[0] fallback kicks in instead of a blank string reaching the
+  // provider. Mirrors how /api/media-jobs/refine-prompt handles it.
+  model: z.string().max(200).optional().transform((s) => {
+    const v = (s ?? '').trim();
+    return v.length > 0 ? v : undefined;
+  }),
 });
 
 // `selection` per category: 'all' or array of variation labels.
@@ -132,6 +154,14 @@ router.post('/expand', asyncHandler(async (req, res) => {
   const body = validateRequest(expandSchema, req.body ?? {});
   const result = await expandWorldTemplate(body);
   res.json(result);
+}));
+
+// Refines the 3 top-level prompts (starter / style / negative) based on
+// user feedback. Stateless — the caller decides whether to write the
+// result back to a saved world. Keep ahead of `/:id`.
+router.post('/refine-prompts', asyncHandler(async (req, res) => {
+  const body = validateRequest(refinePromptsSchema, req.body ?? {});
+  res.json(await refineWorldPrompts(body));
 }));
 
 router.get('/:id', asyncHandler(async (req, res) => {
@@ -210,12 +240,15 @@ router.post('/:id/render', asyncHandler(async (req, res) => {
 
   // Provision the collection up front so renders can be tagged as they
   // complete. The completion hook (worldBuilderCollectionHook) will add
-  // each finished image's filename to this collection.
+  // each finished image's filename to this collection. Repeat renders of
+  // the same world reuse the existing `World: <name>` bucket so per-world
+  // output accumulates in one place instead of fragmenting into a fresh
+  // date-suffixed collection per run.
   const collectionName = body.collectionName?.trim()
-    || `World: ${world.name} — ${new Date().toISOString().slice(0, 16).replace('T', ' ')}`;
-  const collection = await createCollection({
+    || `World: ${world.name}`;
+  const collection = await findOrCreateCollectionByName({
     name: collectionName.slice(0, COLLECTION_NAME_MAX),
-    description: `World Builder run for "${world.name}" (${compiled.length} prompts)`,
+    description: `World Builder renders for "${world.name}"`,
   });
 
   const runId = randomUUID();

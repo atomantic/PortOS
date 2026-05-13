@@ -45,14 +45,20 @@ export default function CreativeDirector() {
   const fetchProjects = useCallback(() => {
     listCreativeDirectorProjects()
       .then((data) => { setProjects(data || []); setLoading(false); })
-      .catch(() => setLoading(false));
+      .catch((err) => {
+        toast.error(err?.message || 'Failed to load Creative Director projects');
+        setLoading(false);
+      });
   }, []);
 
   useEffect(() => {
     fetchProjects();
     listVideoModels().then((m) => {
       setModels(m || []);
-      if (m?.length && !form.modelId) setForm((f) => ({ ...f, modelId: m[0].id }));
+      // Prefer the first non-deprecated model as the default so new projects
+      // don't start on a legacy backend.
+      const preferred = (m || []).find((entry) => !entry.deprecated) || (m || [])[0];
+      if (preferred && !form.modelId) setForm((f) => ({ ...f, modelId: preferred.id }));
     }).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fetchProjects]);
@@ -183,7 +189,12 @@ export default function CreativeDirector() {
                 onChange={(e) => setForm({ ...form, modelId: e.target.value })}
                 className="w-full mt-1 bg-port-bg border border-port-border rounded px-2 py-1 text-sm"
               >
-                {models.map((m) => <option key={m.id} value={m.id}>{m.name || m.id}</option>)}
+                {models.filter((m) => !m.deprecated).map((m) => <option key={m.id} value={m.id}>{m.name || m.id}</option>)}
+                {models.some((m) => m.deprecated) && (
+                  <optgroup label="Legacy">
+                    {models.filter((m) => m.deprecated).map((m) => <option key={m.id} value={m.id}>{m.name || m.id}</option>)}
+                  </optgroup>
+                )}
               </select>
             </label>
             <label className="block text-sm">

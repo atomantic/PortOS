@@ -15,11 +15,8 @@ venv at ~/.portos/venv-flux2 (already has diffusers from git HEAD + torch).
 
 import argparse
 import inspect
-import json
 import os
 import sys
-import threading
-from contextlib import contextmanager
 from pathlib import Path
 
 os.environ.setdefault("PYTORCH_MPS_FAST_MATH", "1")
@@ -28,54 +25,16 @@ import torch
 from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _runner_common import (  # noqa: E402
+    apply_memory_optimizations,
+    heartbeat,
+    install_hf_error_handler,
+    make_generator,
+    make_stepwise_callback,
+    pick_device,
+    write_sidecar,
+)
 from lora_utils import apply_loras  # noqa: E402
-
-
-@contextmanager
-def heartbeat(stage: str, interval: float = 20.0):
-    # Diffusers' from_pretrained on a fully-cached 10-25 GB model is silent
-    # for several minutes (mmap + weight assignment, no tqdm), which trips the
-    # JS-side idle watchdog (default 5min). Emit a non-noise stderr line every
-    # `interval` seconds so handleLine() in imageGen/local.js sees activity
-    # and resets lastActivityAt. True hangs (GIL-pinned C extension, no I/O)
-    # still trip the watchdog because the heartbeat thread can't print either.
-    stop = threading.Event()
-
-    def beat():
-        elapsed = 0
-        while not stop.wait(interval):
-            elapsed += int(interval)
-            print(f"STAGE:{stage}:heartbeat:{elapsed}s", file=sys.stderr, flush=True)
-
-    t = threading.Thread(target=beat, daemon=True)
-    t.start()
-    try:
-        yield
-    finally:
-        stop.set()
-        t.join(timeout=interval + 1)
-
-
-def pick_device(requested: str) -> str:
-    if requested == "auto":
-        if torch.backends.mps.is_available():
-            return "mps"
-        if torch.cuda.is_available():
-            return "cuda"
-        return "cpu"
-    if requested == "mps" and not torch.backends.mps.is_available():
-        print("⚠️ MPS requested but unavailable — falling back to CPU", file=sys.stderr)
-        return "cpu"
-    if requested == "cuda" and not torch.cuda.is_available():
-        print("⚠️ CUDA requested but unavailable — falling back to CPU", file=sys.stderr)
-        return "cpu"
-    return requested
-
-
-def make_generator(device: str, seed: int) -> torch.Generator:
-    if device in ("cuda", "mps"):
-        return torch.Generator(device).manual_seed(int(seed))
-    return torch.Generator().manual_seed(int(seed))
 
 
 def load_pipeline(repo: str, device: str, dtype, pipeline_class: str = ""):
@@ -115,86 +74,6 @@ def to_i2i_pipeline(pipe):
     return AutoPipelineForImage2Image.from_pipe(pipe)
 
 
-def apply_memory_optimizations(pipe) -> None:
-    if hasattr(pipe, "enable_attention_slicing"):
-        pipe.enable_attention_slicing()
-    if hasattr(pipe, "enable_vae_slicing"):
-        pipe.enable_vae_slicing()
-    vae = getattr(pipe, "vae", None)
-    if hasattr(pipe, "enable_vae_tiling"):
-        pipe.enable_vae_tiling()
-    elif vae is not None and hasattr(vae, "enable_tiling"):
-        vae.enable_tiling()
-
-
-def make_stepwise_callback(stepwise_dir: str, pipe, height: int, width: int):
-    """Return a `callback_on_step_end` that decodes the running latent into a
-    small preview PNG. local.js's `processLatestFrame` watches this dir and
-    streams the freshest frame to the SSE client.
-
-    Z-Image latents come back in the standard `(B, C, H_lat, W_lat)` layout
-    (unlike FLUX.2's packed transformer latents) so the decode path is a
-    plain VAE call — no unpack helper needed.
-    """
-    if not stepwise_dir:
-        return None
-    out = Path(stepwise_dir)
-    out.mkdir(parents=True, exist_ok=True)
-    vae = pipe.vae
-    scaling = getattr(vae.config, "scaling_factor", 1.0) or 1.0
-    shift = getattr(vae.config, "shift_factor", 0.0) or 0.0
-    # ERNIE keeps latents in float32 even when the pipeline was loaded with
-    # torch_dtype=bfloat16, so `vae.decode(latents / scaling + shift)` feeds
-    # float32 into a bfloat16 VAE and errors with "Input type (float) and
-    # bias type (c10::BFloat16) should be the same". Capture the VAE's actual
-    # weight dtype + device once so the callback can align the scaled latents
-    # before decode.
-    try:
-        vae_param = next(vae.parameters())
-        vae_dtype, vae_device = vae_param.dtype, vae_param.device
-    except StopIteration:
-        vae_dtype, vae_device = None, None
-
-    fired = {"count": 0, "saved": 0}
-
-    @torch.no_grad()
-    def cb(pipe, step_index, _timestep, callback_kwargs):
-        fired["count"] += 1
-        latents = callback_kwargs.get("latents")
-        if latents is None:
-            if step_index == 0:
-                print("⚠️ stepwise: latents missing from callback_kwargs", file=sys.stderr)
-            return callback_kwargs
-        if step_index == 0:
-            print(f"🖼️  stepwise: callback live, latents.shape={tuple(latents.shape)}", file=sys.stderr)
-        try:
-            if latents.dim() != 4:
-                # Some pipelines return packed latents. Skip preview rather
-                # than guess the unpack shape — the final image still saves.
-                return callback_kwargs
-            scaled = latents / scaling + shift
-            if vae_dtype is not None and (scaled.dtype != vae_dtype or scaled.device != vae_device):
-                scaled = scaled.to(device=vae_device, dtype=vae_dtype)
-            decoded = vae.decode(scaled, return_dict=False)[0]
-            decoded = (decoded.clamp(-1, 1) + 1) / 2
-            arr = (decoded[0].float().cpu().permute(1, 2, 0).numpy() * 255).astype("uint8")
-            img = Image.fromarray(arr)
-            img.thumbnail((512, 512), Image.LANCZOS)
-            img.save(out / f"step_{step_index + 1}.png", "PNG", optimize=False)
-            fired["saved"] += 1
-        except Exception as err:
-            print(f"⚠️ stepwise preview failed at step {step_index}: {type(err).__name__}: {err}", file=sys.stderr)
-        return callback_kwargs
-
-    cb._stats = fired
-    return cb
-
-
-def write_sidecar(output: str, payload: dict) -> None:
-    sidecar = Path(output).with_suffix(".metadata.json")
-    sidecar.write_text(json.dumps(payload, indent=2))
-
-
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="PortOS Z-Image-Turbo runner")
     p.add_argument("--model", required=True, help="model id (e.g. z-image-turbo-bf16)")
@@ -219,6 +98,7 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
+@install_hf_error_handler
 def main() -> None:
     args = parse_args()
 
@@ -328,71 +208,5 @@ def main() -> None:
     print(f"✅ z-image saved {args.output} (seed={seed})", file=sys.stderr)
 
 
-def _emit_user_error(kind: str, message: str, repo: str = "") -> None:
-    line = f"USER_ERROR:{kind}"
-    if repo:
-        line += f":{repo}"
-    print(line, file=sys.stderr, flush=True)
-    print(f"❌ {message}", file=sys.stderr, flush=True)
-
-
 if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        sys.exit(130)
-    except SystemExit:
-        raise
-    except Exception as err:
-        # Friendly USER_ERROR markers for common HF failure modes so the UI
-        # surfaces actionable text instead of raw "Exit code 1".
-        from huggingface_hub.errors import GatedRepoError, RepositoryNotFoundError, HfHubHTTPError
-        chain = []
-        cur = err
-        while cur is not None:
-            chain.append(cur)
-            cur = cur.__cause__ or cur.__context__
-
-        def _repo_from_hf_error(hf_err):
-            repo = getattr(hf_err, "repo_id", None) or ""
-            if repo:
-                return repo
-            url = getattr(getattr(hf_err, "response", None), "url", None) or \
-                  getattr(getattr(hf_err, "request", None), "url", None)
-            if url is None:
-                return ""
-            path = str(url).split("huggingface.co", 1)[-1].lstrip("/")
-            parts = path.split("/")
-            if parts[:1] == ["api"] and len(parts) >= 4 and parts[1] in {"models", "datasets", "spaces"}:
-                return f"{parts[2]}/{parts[3]}"
-            if len(parts) >= 2 and parts[0] not in {"api", "settings", "join"}:
-                return f"{parts[0]}/{parts[1]}"
-            return ""
-
-        gated = next((e for e in chain if isinstance(e, GatedRepoError)), None)
-        notfound = next((e for e in chain if isinstance(e, RepositoryNotFoundError)), None)
-        http = next((e for e in chain if isinstance(e, HfHubHTTPError)), None)
-        if gated is not None:
-            repo = _repo_from_hf_error(gated)
-            url = f"https://huggingface.co/{repo}" if repo else "https://huggingface.co/"
-            _emit_user_error(
-                "gated_repo",
-                f"Access to {repo or 'the model repo'} is restricted. Visit {url} "
-                f"to request access, then make sure your HF token is set in PortOS.",
-                repo,
-            )
-            sys.exit(2)
-        status = getattr(getattr(http, "response", None), "status_code", None) if http else None
-        if status == 401:
-            _emit_user_error(
-                "hf_unauthorized",
-                "HuggingFace rejected the token (401). Check that the token is valid "
-                "and has read access, then re-paste it in PortOS.",
-            )
-            sys.exit(2)
-        if notfound is not None:
-            repo = _repo_from_hf_error(notfound)
-            _emit_user_error("repo_not_found", f"HF repo not found: {repo or '(unknown)'}", repo)
-            sys.exit(2)
-        _emit_user_error("unknown", f"{type(err).__name__}: {err}")
-        raise
+    main()

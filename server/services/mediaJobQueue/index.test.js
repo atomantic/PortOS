@@ -118,7 +118,7 @@ describe('mediaJobQueue', () => {
     expect(mediaJobQueue.listJobs({ status: 'running' })).toHaveLength(1);
   });
 
-  it('cancelQueuedJobs drops every queued job, leaves running ones alone', async () => {
+  it('cancelQueuedJobs cancels every queued job, leaves running ones alone', async () => {
     // Block the worker so subsequent enqueues stay queued.
     let resolveBlocker;
     stubs.generateVideo.mockImplementation(() => new Promise((r) => { resolveBlocker = r; }));
@@ -130,6 +130,8 @@ describe('mediaJobQueue', () => {
     await flush();
 
     // No filter: every queued job (a, b, c) cancels; running blocker is untouched.
+    // Canceled jobs are archived (not dropped) so they stay findable for the
+    // recent-reel UI and /api/media-jobs?status=canceled within the 24h TTL.
     const r = await mediaJobQueue.cancelQueuedJobs();
     expect(r.canceled).toBe(3);
     expect(mediaJobQueue.getJob(a.jobId).status).toBe('canceled');
@@ -153,6 +155,7 @@ describe('mediaJobQueue', () => {
 
     const r = await mediaJobQueue.cancelQueuedJobs({ kind: 'video' });
     expect(r.canceled).toBe(1);
+    // Canceled jobs are archived (not dropped) — `v` is findable with status 'canceled'.
     expect(mediaJobQueue.getJob(v.jobId).status).toBe('canceled');
     // Image queued job is left in the queue (still 'queued', not canceled).
     expect(mediaJobQueue.getJob(i.jobId).status).toBe('queued');
@@ -178,8 +181,11 @@ describe('mediaJobQueue', () => {
     const result = await mediaJobQueue.cancelJob(target.jobId);
     expect(result.ok).toBe(true);
     expect(result.status).toBe('canceled');
-    const job = mediaJobQueue.getJob(target.jobId);
-    expect(job.status).toBe('canceled');
+    // Canceled jobs are archived (not dropped) so /api/media-jobs?status=canceled
+    // and the recent-reel UI can find them within the 24h TTL.
+    const archived = mediaJobQueue.getJob(target.jobId);
+    expect(archived).not.toBeNull();
+    expect(archived.status).toBe('canceled');
 
     // Unblock the first one for cleanup.
     videoGenEvents.emit('failed', { generationId: blocker.jobId, error: 'cleanup' });
@@ -562,6 +568,60 @@ describe('Codex lane', () => {
     imageGenEvents.emit('failed', { generationId: codex1.jobId, error: 'cleanup' });
     imageGenEvents.emit('failed', { generationId: codex2.jobId, error: 'cleanup' });
     await flush();
+  });
+
+  it('runJobNow promotes a queued Codex job past the parallel limit', async () => {
+    // Pin the codex lane at limit=1 and saturate it with a running Codex job
+    // so the second one lands in the queue.
+    mediaJobQueue.setCodexParallelLimit(1);
+    stubs.generateImageCodex.mockImplementation(() => new Promise(() => {}));
+
+    const codex1 = mediaJobQueue.enqueueJob({
+      kind: 'image', params: { prompt: 'codex first', mode: 'codex' },
+    });
+    await waitFor(() => stubs.generateImageCodex.mock.calls.length === 1);
+
+    const codex2 = mediaJobQueue.enqueueJob({
+      kind: 'image', params: { prompt: 'codex second', mode: 'codex' },
+    });
+    expect(mediaJobQueue.getJob(codex2.jobId).status).toBe('queued');
+
+    const result = mediaJobQueue.runJobNow(codex2.jobId);
+    expect(result.ok).toBe(true);
+    expect(result.status).toBe('running');
+    // Both Codex jobs are now in-flight (lane size 2, above the limit of 1).
+    await waitFor(() => stubs.generateImageCodex.mock.calls.length === 2);
+    expect(mediaJobQueue.getJob(codex2.jobId).status).toBe('running');
+
+    imageGenEvents.emit('failed', { generationId: codex1.jobId, error: 'cleanup' });
+    imageGenEvents.emit('failed', { generationId: codex2.jobId, error: 'cleanup' });
+    await flush();
+  });
+
+  it('runJobNow rejects GPU (non-Codex) queued jobs with NOT_CODEX', async () => {
+    // Block the GPU lane with one running job and queue a second so we have a
+    // queued GPU job to attempt run-now on.
+    stubs.generateVideo.mockImplementation(() => new Promise(() => {}));
+    const v1 = mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'first' } });
+    await waitFor(() => stubs.generateVideo.mock.calls.length === 1);
+    const v2 = mediaJobQueue.enqueueJob({ kind: 'video', params: { prompt: 'second' } });
+    expect(mediaJobQueue.getJob(v2.jobId).status).toBe('queued');
+
+    const result = mediaJobQueue.runJobNow(v2.jobId);
+    expect(result.ok).toBe(false);
+    expect(result.code).toBe('NOT_CODEX');
+    // The queued GPU job stays queued — single MLX runtime can't double up.
+    expect(mediaJobQueue.getJob(v2.jobId).status).toBe('queued');
+
+    videoGenEvents.emit('failed', { generationId: v1.jobId, error: 'cleanup' });
+    videoGenEvents.emit('failed', { generationId: v2.jobId, error: 'cleanup' });
+    await flush();
+  });
+
+  it('runJobNow returns NOT_FOUND for an unknown id', () => {
+    const result = mediaJobQueue.runJobNow('does-not-exist');
+    expect(result.ok).toBe(false);
+    expect(result.code).toBe('NOT_FOUND');
   });
 });
 

@@ -48,8 +48,20 @@ vi.mock('../services/mediaJobQueue/index.js', () => ({
   enqueueJob: vi.fn(({ params }) => ({ jobId: `job-${++uuidCounter}`, position: 1, status: 'queued', params })),
 }));
 
+// Tiny in-memory store so repeat-render tests can verify the new
+// find-or-create semantics (existing name → same collection id).
+const collectionsByName = new Map();
+const mockCreateRec = (name) => {
+  const id = `col-${collectionsByName.size + 1}`;
+  const rec = { id, name, items: [] };
+  collectionsByName.set(name.toLowerCase(), rec);
+  return rec;
+};
 vi.mock('../services/mediaCollections.js', () => ({
-  createCollection: vi.fn(async ({ name }) => ({ id: 'col-1', name, items: [] })),
+  createCollection: vi.fn(async ({ name }) => mockCreateRec(name)),
+  findOrCreateCollectionByName: vi.fn(async ({ name }) => {
+    return collectionsByName.get(name.toLowerCase()) ?? mockCreateRec(name);
+  }),
   addItem: vi.fn(),
   ERR_DUPLICATE: 'DUPLICATE',
   NAME_MAX_LENGTH: 80,
@@ -76,6 +88,7 @@ describe('world-builder routes', () => {
   beforeEach(() => {
     fileStore.clear();
     uuidCounter = 0;
+    collectionsByName.clear();
   });
 
   it('GET / returns []', async () => {
@@ -235,6 +248,45 @@ describe('world-builder routes', () => {
     expect(res.status).toBe(200);
     expect(res.body.promptCount).toBe(1);
     expect(res.body.jobIds).toHaveLength(1);
+  });
+
+  it('POST /:id/render reuses the same collection on repeat renders of the same world', async () => {
+    const app = buildApp();
+    const created = await request(app).post('/api/world-builder').send({
+      name: 'Repeat World',
+      categories: {
+        landscapes: { variations: [{ label: 'A', prompt: 'a' }] },
+      },
+    });
+    const first = await request(app)
+      .post(`/api/world-builder/${created.body.id}/render`)
+      .send({ mode: 'local' });
+    expect(first.status).toBe(200);
+    const second = await request(app)
+      .post(`/api/world-builder/${created.body.id}/render`)
+      .send({ mode: 'local' });
+    expect(second.status).toBe(200);
+    expect(second.body.collectionId).toBe(first.body.collectionId);
+    // The auto-generated name has no date suffix — bare `World: <name>`.
+    expect(second.body.collectionName).toBe('World: Repeat World');
+    expect(second.body.collectionName).not.toMatch(/\d{4}-\d{2}-\d{2}/);
+  });
+
+  it('POST /:id/render reuses an existing collection when collectionName matches', async () => {
+    const app = buildApp();
+    const created = await request(app).post('/api/world-builder').send({
+      name: 'Custom Bucket World',
+      categories: {
+        landscapes: { variations: [{ label: 'A', prompt: 'a' }] },
+      },
+    });
+    const first = await request(app)
+      .post(`/api/world-builder/${created.body.id}/render`)
+      .send({ mode: 'local', collectionName: 'Shared Bucket' });
+    const second = await request(app)
+      .post(`/api/world-builder/${created.body.id}/render`)
+      .send({ mode: 'local', collectionName: '  shared bucket  ' });
+    expect(second.body.collectionId).toBe(first.body.collectionId);
   });
 
   it('POST /:id/render rejects when no variations exist', async () => {

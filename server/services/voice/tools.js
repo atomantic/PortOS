@@ -3,6 +3,7 @@
 // Add a new tool by pushing another entry onto TOOLS.
 
 import { captureThought, getInboxLog } from '../brain.js';
+import { STAGE_IDS as PIPELINE_STAGE_IDS } from '../pipeline/issues.js';
 import { logDrink, getAlcoholSummary } from '../meatspaceAlcohol.js';
 import { logNicotine, getNicotineSummary } from '../meatspaceNicotine.js';
 import { addBodyEntry } from '../meatspaceHealth.js';
@@ -16,8 +17,115 @@ import { runAsk, VALID_MODES as ASK_VALID_MODES } from '../askService.js';
 import * as imageGen from '../imageGen/index.js';
 import { imageGenEvents } from '../imageGenEvents.js';
 import { getSettings } from '../settings.js';
+import { isDestructiveLabel, buildPending } from './confirmGate.js';
 
 const DAILY_LOG_PATH = '/brain/daily-log';
+
+// ----- Pipeline stage navigation helpers (used by pipeline_next_stage etc) -----
+const PIPELINE_STAGE_LABELS = {
+  idea: 'Idea',
+  prose: 'Prose',
+  comicScript: 'Comic Script',
+  tvScript: 'TV Script',
+  comicPages: 'Comic Pages',
+  storyboards: 'Storyboards',
+  episodeVideo: 'Episode Video',
+};
+// Spoken aliases → canonical stage ids. `resolveNavCommand` covers top-level
+// pages but not in-route stage names, so this is a dedicated table.
+const PIPELINE_STAGE_ALIASES = {
+  idea: 'idea',
+  prose: 'prose', story: 'prose',
+  'comic script': 'comicScript', comicscript: 'comicScript', comics: 'comicScript',
+  'tv script': 'tvScript', tvscript: 'tvScript', teleplay: 'tvScript',
+  'comic pages': 'comicPages', 'comic page': 'comicPages', comicpages: 'comicPages', pages: 'comicPages', page: 'comicPages',
+  storyboards: 'storyboards', storyboard: 'storyboards', scenes: 'storyboards',
+  'episode video': 'episodeVideo', episodevideo: 'episodeVideo', episode: 'episodeVideo', video: 'episodeVideo',
+};
+const parsePipelineIssuePath = (path) => {
+  if (typeof path !== 'string') return null;
+  // Strip query/hash before matching — `[^/]+` would otherwise greedily
+  // absorb `?foo=bar` or `#anchor` into the captured id/stage segments
+  // (the path "/pipeline/issues/abc?x" would parse as id="abc?x").
+  const clean = path.split(/[?#]/)[0];
+  const m = clean.match(/^\/pipeline\/issues\/([^/]+)(?:\/([^/]+))?/);
+  if (!m) return null;
+  const stage = PIPELINE_STAGE_IDS.includes(m[2]) ? m[2] : 'idea';
+  return { issueId: m[1], stage };
+};
+const NOT_ON_PIPELINE_ISSUE_PAGE = {
+  ok: false,
+  error: 'Not on a pipeline issue page',
+  summary: 'I can only switch stages from a /pipeline/issues/... page. Open an issue first.',
+};
+const navigateToPipelineStage = (issueId, stage, ctx) => {
+  const path = `/pipeline/issues/${issueId}/${stage}`;
+  ctx.sideEffects?.push({ type: 'navigate', path });
+  return { ok: true, path, stage, label: PIPELINE_STAGE_LABELS[stage], summary: `Opened ${PIPELINE_STAGE_LABELS[stage]}.` };
+};
+const PIPELINE_STAGE_TOOLS = [
+  {
+    name: 'pipeline_next_stage',
+    description: 'Advance to the next stage of the current pipeline issue (Idea → Prose → Comic Script → TV Script → Comic Pages → Storyboards → Episode Video). Only works on a /pipeline/issues/... page.',
+    parameters: { type: 'object', properties: {} },
+    execute: async (_args, ctx = {}) => {
+      const cur = parsePipelineIssuePath(ctx.state?.ui?.path);
+      if (!cur) return NOT_ON_PIPELINE_ISSUE_PAGE;
+      const idx = PIPELINE_STAGE_IDS.indexOf(cur.stage);
+      if (idx === PIPELINE_STAGE_IDS.length - 1) {
+        return { ok: false, error: 'Already on last stage', summary: `Already on ${PIPELINE_STAGE_LABELS[cur.stage]} — that's the last stage.` };
+      }
+      return navigateToPipelineStage(cur.issueId, PIPELINE_STAGE_IDS[idx + 1], ctx);
+    },
+  },
+  {
+    name: 'pipeline_prev_stage',
+    description: 'Go back to the previous stage of the current pipeline issue. Only works on a /pipeline/issues/... page.',
+    parameters: { type: 'object', properties: {} },
+    execute: async (_args, ctx = {}) => {
+      const cur = parsePipelineIssuePath(ctx.state?.ui?.path);
+      if (!cur) return NOT_ON_PIPELINE_ISSUE_PAGE;
+      const idx = PIPELINE_STAGE_IDS.indexOf(cur.stage);
+      if (idx === 0) {
+        return { ok: false, error: 'Already on first stage', summary: `Already on ${PIPELINE_STAGE_LABELS[cur.stage]} — that's the first stage.` };
+      }
+      return navigateToPipelineStage(cur.issueId, PIPELINE_STAGE_IDS[idx - 1], ctx);
+    },
+  },
+  {
+    name: 'pipeline_open_stage',
+    description: 'Open a specific stage of the current pipeline issue by name. Pass `stage` as the user spoke it: "prose", "comic script", "storyboards", "episode video", etc. Only works on a /pipeline/issues/... page.',
+    parameters: {
+      type: 'object',
+      properties: {
+        stage: {
+          type: 'string',
+          description: 'Stage name (idea, prose, comic script, tv script, comic pages, storyboards, episode video).',
+        },
+      },
+      required: ['stage'],
+    },
+    execute: async ({ stage } = {}, ctx = {}) => {
+      const cur = parsePipelineIssuePath(ctx.state?.ui?.path);
+      if (!cur) return NOT_ON_PIPELINE_ISSUE_PAGE;
+      const key = String(stage || '').trim().toLowerCase();
+      // Build a case-insensitive canonical lookup so "Prose", "PROSE",
+      // "prose" all resolve. PIPELINE_STAGE_IDS is mixed-case ('idea',
+      // 'comicScript', ...) so a direct .includes(key) wouldn't match;
+      // compare lowercased forms instead.
+      const canonicalById = PIPELINE_STAGE_IDS.find((id) => id.toLowerCase() === key);
+      const canonical = PIPELINE_STAGE_ALIASES[key] || canonicalById || null;
+      if (!canonical) {
+        return {
+          ok: false,
+          error: `Unknown stage "${stage}"`,
+          summary: `I don't know a stage named "${stage}". Try: idea, prose, comic script, tv script, comic pages, storyboards, or episode video.`,
+        };
+      }
+      return navigateToPipelineStage(cur.issueId, canonical, ctx);
+    },
+  },
+];
 
 // Shorthand presets for voice logging. A user saying "I had a beer" should
 // not need to recite oz + ABV — these defaults match typical US servings.
@@ -64,12 +172,16 @@ const TOOL_GROUPS = {
   daily_log_stop_dictation: 'dailylog',
   daily_log_read: 'dailylog',
   ui_list_interactables: 'ui',
+  ui_read: 'ui',
   ui_click: 'ui',
   ui_fill: 'ui',
   ui_select: 'ui',
   ui_check: 'ui',
   ui_ask: 'ask',
   image_generate: 'media',
+  pipeline_next_stage: 'pipeline',
+  pipeline_prev_stage: 'pipeline',
+  pipeline_open_stage: 'pipeline',
   // UNGROUPED = always-on: time_now, daily_log_append, ui_navigate.
   // brain_capture used to be always-on, but that caused form-fill turns
   // ("fill description with X") to be misrouted to brain_capture because
@@ -80,7 +192,7 @@ const TOOL_GROUPS = {
 
 // Loose on purpose — false positives are cheap (one extra tool), false
 // negatives are expensive (LLM guesses wrong or can't act).
-export const UI_INTENT_RE = /\b(click|press|tap|hit|open|go to|take me|show me|navigate|select|pick|switch|choose|tab|button|dropdown|field|input|fill|enter|type|write|check|uncheck|toggle|link|option|on (?:this|the) page|what(?:'s)? (?:on|here))\b/i;
+export const UI_INTENT_RE = /\b(click|press|tap|hit|open|go to|take me|show me|navigate|select|pick|switch|choose|tab|button|dropdown|field|input|fill|enter|type|write|check|uncheck|toggle|link|option|on (?:this|the) page|what(?:'s)? (?:on|here|does (?:this|the page))|read (?:this|the page|me (?:this|the page|what))|read (?:it )?(?:aloud|out))\b/i;
 // Strong form-fill signal: when the user is clearly directing content INTO
 // a specific field, brain_capture/daily_log_append must be suppressed even
 // if capture verbs appear inside the value (e.g. "fill description with
@@ -116,6 +228,18 @@ const GROUP_INTENT = {
   // common false positives like "imagine if" or "show me a picture of the
   // page" by anchoring on creation verbs paired with visual nouns.
   media: /\b(?:generate|render|create|draw|sketch|paint|illustrate|make|design|produce)\b[^.!?\n]{0,30}\b(?:image|picture|photo|illustration|art(?:work)?|render|drawing|sketch|portrait|wallpaper|scene|asset|graphic|logo|icon)\b|\bimagegen\b/i,
+  // Pipeline stage navigation — fires on "next stage", "previous stage",
+  // "back to prose", "open the storyboards", "open prose", "open teleplay",
+  // and the stage names + their spoken aliases (idea, prose, story,
+  // comic script, teleplay, comic pages, pages, storyboards, scenes,
+  // episode video, episode, video). The stage-name alternation is shared
+  // across open/go-to/back-to so users don't need to say "stage" as a
+  // suffix. The leading anchors keep "take me to pipeline" out of this
+  // group — that still routes to ui_navigate.
+  //
+  // Alias list must mirror PIPELINE_STAGE_ALIASES below so any alias
+  // accepted by pipeline_open_stage actually triggers the group.
+  pipeline: /\b(?:next stage|previous stage|prev stage|stage (?:advance|forward|back)|(?:open|go to|back to)(?: the)? (?:idea|prose|story|comic ?script|comicscript|comics|tv ?script|tvscript|teleplay|comic ?pages?|comicpages|pages?|storyboards?|scenes|episode ?video|episodevideo|episode|video)(?: stage)?)\b/i,
   ui: UI_INTENT_RE,
 };
 
@@ -914,6 +1038,46 @@ const TOOLS = [
   },
 
   {
+    name: 'ui_read',
+    description:
+      'Read back the visible text on the current page. Use when the user asks "what does this say?", "read this aloud", "what\'s on the page?", "read me the page". ' +
+      'Returns the user-visible textual content of the main content area (excluding nav rails, asides, and the voice widget itself). ' +
+      'Output is capped at ~8 KB; longer pages are tail-trimmed on a word boundary with an ellipsis. ' +
+      'Default behavior (summarize=false): read the returned `content` verbatim — do NOT summarize. ' +
+      'When the user asks for a summary instead ("what is this page about?", "summarize this page"), pass summarize=true and produce a short summary of `content` rather than reading it verbatim.',
+    parameters: {
+      type: 'object',
+      properties: {
+        summarize: {
+          type: 'boolean',
+          description: 'If true, the LLM may summarize before reading aloud (use when the user asks "what is this page about?" rather than "read this to me"). Default false — speak `content` verbatim.',
+        },
+      },
+    },
+    execute: async ({ summarize = false } = {}, ctx = {}) => {
+      const ui = ctx?.state?.ui;
+      if (!ui || typeof ui.text !== 'string' || !ui.text.trim()) {
+        return {
+          ok: false,
+          error: 'No page text available',
+          summary: "I can't see the page content right now — make sure the voice widget is loaded and try again.",
+        };
+      }
+      return {
+        ok: true,
+        path: ui.path,
+        title: ui.title,
+        content: ui.text,
+        chars: ui.text.length,
+        summarize: !!summarize,
+        // Keep `summary` short so the LLM message history isn't doubled — the
+        // full body lives in `content`.
+        summary: `Read page "${ui.title || ui.path || 'current page'}" (${ui.text.length} chars).`,
+      };
+    },
+  },
+
+  {
     name: 'ui_click',
     description: 'Click a tab, button, or link on the current page by visible label. "Select Memory tab" → label="Memory", kind="tab".',
     parameters: {
@@ -927,6 +1091,26 @@ const TOOLS = [
     execute: async ({ label, kind } = {}, ctx = {}) => {
       const hit = findUiElement(ctx, label, kind);
       if (!hit.entry) return hit.err;
+      // Destructive-action confirmation gate. If the resolved label looks
+      // destructive (delete/remove/discard/reset/clear), stash a pending
+      // record on the per-session state and ask the LLM to prompt the user
+      // for spoken confirmation. The next user turn is intercepted by
+      // pipeline.js → resolvePending() which either re-issues the click or
+      // cancels. Skip if the caller already confirmed (re-issue path).
+      if (ctx.state && !ctx.confirmed && isDestructiveLabel(hit.entry.label)) {
+        ctx.state.pendingDestructive = buildPending({
+          tool: 'ui_click',
+          args: { label: hit.entry.label, kind: hit.entry.kind },
+          target: { ref: hit.entry.ref, label: hit.entry.label, kind: hit.entry.kind },
+        });
+        return {
+          ok: true,
+          confirmation_required: true,
+          label: hit.entry.label,
+          kind: hit.entry.kind,
+          summary: `That looks destructive — confirm by saying "yes" or "confirm" to ${hit.entry.label}, or "cancel" to skip.`,
+        };
+      }
       ctx.sideEffects?.push({ type: 'ui:click', target: { ref: hit.entry.ref, label: hit.entry.label } });
       return { ok: true, label: hit.entry.label, kind: hit.entry.kind, summary: `Clicked ${hit.entry.label}.` };
     },
@@ -1198,6 +1382,8 @@ const TOOLS = [
       };
     },
   },
+
+  ...PIPELINE_STAGE_TOOLS,
 
   {
     name: 'time_now',

@@ -625,7 +625,9 @@ export const writersRoomCharacterUpdateSchema = z.object({
 }).strict();
 
 const wrSettingTextField = z.string().max(2000);
-export const writersRoomSettingCreateSchema = z.object({
+// Inner ZodObject (without refine) — exposed so the Pipeline can `.extend()`
+// it; `.refine()` returns a ZodEffects which has no `.extend()`.
+const writersRoomSettingCreateObject = z.object({
   name: z.string().trim().max(200).optional(),
   slugline: z.string().trim().max(200).optional(),
   description: wrSettingTextField.optional(),
@@ -634,9 +636,13 @@ export const writersRoomSettingCreateSchema = z.object({
   weather: wrSettingTextField.optional(),
   recurringDetails: wrSettingTextField.optional(),
   notes: wrSettingTextField.optional(),
-}).strict().refine((v) => (v.name && v.name.trim()) || (v.slugline && v.slugline.trim()), {
-  message: 'Setting requires either a slugline or a name',
-});
+}).strict();
+const settingHasIdentifier = (v) =>
+  (v.name && v.name.trim()) || (v.slugline && v.slugline.trim());
+export const writersRoomSettingCreateSchema = writersRoomSettingCreateObject.refine(
+  settingHasIdentifier,
+  { message: 'Setting requires either a slugline or a name' },
+);
 export const writersRoomSettingUpdateSchema = z.object({
   name: z.string().trim().max(200).optional(),
   slugline: z.string().trim().max(200).optional(),
@@ -663,6 +669,18 @@ export const writersRoomObjectUpdateSchema = z.object({
   significance: wrObjectTextField.optional(),
   notes: wrObjectTextField.optional(),
 }).strict();
+
+// Generic bible-entry schemas — re-exports of the writers-room schemas under
+// kind-neutral names so the Pipeline routes share the same validation
+// surface and funnel through the canonical sanitizer in storyBible.js.
+// `settingBibleCreateSchema` is the un-refined ZodObject (not the refined
+// `writersRoomSettingCreateSchema`) so Pipeline can `.extend()` it.
+export const characterBibleCreateSchema = writersRoomCharacterCreateSchema;
+export const characterBibleUpdateSchema = writersRoomCharacterUpdateSchema;
+export const settingBibleCreateSchema = writersRoomSettingCreateObject;
+export const settingBibleUpdateSchema = writersRoomSettingUpdateSchema;
+export const objectBibleCreateSchema = writersRoomObjectCreateSchema;
+export const objectBibleUpdateSchema = writersRoomObjectUpdateSchema;
 
 // =============================================================================
 // FEATURE AGENT SCHEMAS

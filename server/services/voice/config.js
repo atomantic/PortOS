@@ -5,6 +5,7 @@
 import { homedir } from 'os';
 import { join } from 'path';
 import { getSettings, updateSettings } from '../settings.js';
+import { deepMerge } from '../../lib/objects.js';
 
 const VOICE_HOME = join(homedir(), '.portos', 'voice');
 
@@ -74,21 +75,23 @@ export const VOICE_DEFAULTS = Object.freeze({
       enabled: false,
       maxIterations: 3,
     },
+    // Proactive speech — the CoS speaks first (alerts, briefings, reminders).
+    // OFF by default so a fresh install doesn't blurt at the user; opt in via
+    // Settings → Voice. Quiet hours suppress proactive lines; barge-in (a
+    // user-initiated utterance) cancels in-flight proactive audio through the
+    // existing voice:interrupt path.
+    proactive: {
+      enabled: false,
+      quietHours: {
+        enabled: false,
+        start: '22:00',
+        end: '07:00',
+      },
+    },
   },
 
   vad: { endOfSpeechMs: 700, minUtteranceMs: 250 },
 });
-
-const isObj = (v) => v && typeof v === 'object' && !Array.isArray(v);
-
-const deepMerge = (base, patch) => {
-  if (!isObj(patch)) return patch === undefined ? base : patch;
-  const out = { ...base };
-  for (const [k, v] of Object.entries(patch)) {
-    out[k] = isObj(base[k]) && isObj(v) ? deepMerge(base[k], v) : v;
-  }
-  return out;
-};
 
 export const expandPath = (p) => {
   if (typeof p !== 'string') return p;

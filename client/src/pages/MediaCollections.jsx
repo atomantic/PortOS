@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Plus, FolderOpen, Trash2, Image as ImageIcon, Film } from 'lucide-react';
+import { Plus, FolderOpen, Inbox, Trash2, Image as ImageIcon, Film } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import {
   listMediaCollections, createMediaCollection, deleteMediaCollection,
   listVideoHistory, listImageGallery,
 } from '../services/api';
+import { buildUnsortedCollection } from '../lib/unsorted';
 
 // Resolve a collection's cover-thumbnail URL. Default = newest item by
 // addedAt; user-pinned coverKey wins when set. We need full image/video
@@ -92,13 +93,24 @@ export default function MediaCollections() {
     });
   };
 
-  const enriched = useMemo(() => collections.map((c) => {
-    const counts = (c.items || []).reduce((acc, it) => {
-      acc[it.kind] = (acc[it.kind] || 0) + 1;
-      return acc;
-    }, { image: 0, video: 0 });
-    return { ...c, cover: resolveCover(c, imagesByName, videosById), counts };
-  }), [collections, imagesByName, videosById]);
+  const images = useMemo(() => Array.from(imagesByName.values()), [imagesByName]);
+  const videos = useMemo(() => Array.from(videosById.values()), [videosById]);
+  const unsorted = useMemo(
+    () => buildUnsortedCollection(collections, images, videos),
+    [collections, images, videos],
+  );
+
+  const enriched = useMemo(() => {
+    // Pinned synthetic "Unsorted" entry first, then real collections.
+    const all = [unsorted, ...collections];
+    return all.map((c) => {
+      const counts = (c.items || []).reduce((acc, it) => {
+        acc[it.kind] = (acc[it.kind] || 0) + 1;
+        return acc;
+      }, { image: 0, video: 0 });
+      return { ...c, cover: resolveCover(c, imagesByName, videosById), counts };
+    });
+  }, [collections, unsorted, imagesByName, videosById]);
 
   return (
     <div className="space-y-4">
@@ -129,7 +141,10 @@ export default function MediaCollections() {
       ) : (
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
           {enriched.map((c) => (
-            <div key={c.id} className="bg-port-card border border-port-border rounded-xl overflow-hidden flex flex-col">
+            <div
+              key={c.id}
+              className={`bg-port-card border rounded-xl overflow-hidden flex flex-col ${c.synthetic ? 'border-port-accent/40' : 'border-port-border'}`}
+            >
               <Link
                 to={`/media/collections/${encodeURIComponent(c.id)}`}
                 className="block aspect-square bg-port-bg relative"
@@ -138,7 +153,7 @@ export default function MediaCollections() {
                   <img src={c.cover} alt={c.name} className="w-full h-full object-cover" loading="lazy" />
                 ) : (
                   <div className="w-full h-full flex items-center justify-center text-gray-600">
-                    <FolderOpen className="w-12 h-12" />
+                    {c.synthetic ? <Inbox className="w-12 h-12" /> : <FolderOpen className="w-12 h-12" />}
                   </div>
                 )}
               </Link>
@@ -152,14 +167,16 @@ export default function MediaCollections() {
                   {c.counts.image === 0 && c.counts.video === 0 && <span>Empty</span>}
                 </div>
                 <div className="flex-1" />
-                <button
-                  type="button"
-                  onClick={() => handleDelete(c)}
-                  className="self-end px-1.5 py-1 bg-port-error/20 hover:bg-port-error/40 text-port-error text-[10px] rounded flex items-center gap-1"
-                  title="Delete collection"
-                >
-                  <Trash2 className="w-3 h-3" />
-                </button>
+                {!c.synthetic && (
+                  <button
+                    type="button"
+                    onClick={() => handleDelete(c)}
+                    className="self-end px-1.5 py-1 bg-port-error/20 hover:bg-port-error/40 text-port-error text-[10px] rounded flex items-center gap-1"
+                    title="Delete collection"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                  </button>
+                )}
               </div>
             </div>
           ))}

@@ -10,6 +10,7 @@ import { spawn } from 'child_process';
 import { createHash } from 'crypto';
 import { createReadStream } from 'fs';
 import { access, readFile, readdir, stat, writeFile } from 'fs/promises';
+import { hostname } from 'os';
 import { join, resolve, relative, isAbsolute } from 'path';
 import { PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';
 import { getEvent } from './eventScheduler.js';
@@ -19,6 +20,12 @@ import { checkHealth } from '../lib/db.js';
 let isRunning = false;
 
 const STATE_PATH = join(PATHS.data, 'backup', 'state.json');
+
+// Snapshots live under snapshots/<hostname>/<snapshotId> so a single shared
+// destination (e.g. iCloud) can host backups from multiple machines without
+// their snapshot IDs colliding.
+const MACHINE_HOST = hostname().toLowerCase().replace(/[^\w.\-]/g, '_') || 'unknown';
+
 const DEFAULT_STATE = {
   lastRun: null,
   status: 'never',
@@ -96,7 +103,7 @@ export async function runBackup(destPath, io = null, { excludePaths = [] } = {})
 
   isRunning = true;
   const snapshotId = new Date().toISOString().replace(/:/g, '-').replace(/\..+/, '');
-  const snapshotDir = join(destPath, 'snapshots', snapshotId);
+  const snapshotDir = join(destPath, 'snapshots', MACHINE_HOST, snapshotId);
   const dataDestDir = join(snapshotDir, 'data');
 
   console.log(`💾 Backup starting: snapshot ${snapshotId}${excludePaths.length ? ` (excluding ${excludePaths.length} paths)` : ''}`);
@@ -254,7 +261,7 @@ export async function generateManifest(snapshotDataDir, manifestPath) {
 export async function listSnapshots(destPath) {
   if (!destPath) return [];
 
-  const snapshotsDir = join(destPath, 'snapshots');
+  const snapshotsDir = join(destPath, 'snapshots', MACHINE_HOST);
   const entries = await readdir(snapshotsDir).catch(() => []);
 
   const snapshots = await Promise.all(
@@ -289,11 +296,10 @@ export async function restoreSnapshot(destPath, snapshotId, { dryRun = true, sub
   if (!snapshotId || !/^[\w\-.:T]+$/.test(snapshotId)) {
     throw new Error(`Invalid snapshotId: ${snapshotId}`);
   }
-  const srcDir = join(destPath, 'snapshots', snapshotId, 'data');
-  // Containment check: resolved path must stay within the snapshots directory.
+  const snapshotsRoot = resolve(join(destPath, 'snapshots', MACHINE_HOST));
+  const srcDir = join(snapshotsRoot, snapshotId, 'data');
   // Use path.relative to stay cross-platform and avoid prefix-match pitfalls
   // (e.g. /snaps vs /snaps2).
-  const snapshotsRoot = resolve(join(destPath, 'snapshots'));
   const rel = relative(snapshotsRoot, resolve(srcDir));
   if (!rel || rel.startsWith('..') || isAbsolute(rel)) {
     throw new Error(`Path traversal detected for snapshotId: ${snapshotId}`);

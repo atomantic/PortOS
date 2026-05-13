@@ -11,17 +11,19 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Globe2, Plus, Trash2, Sparkles, Wand2, Loader2, Save, FolderOpen,
-  Edit3, X,
+  Edit3, X, MessageSquarePlus, Play,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import {
   listWorlds, getWorld, createWorld, updateWorld, deleteWorld, expandWorld,
   renderWorld, listWorldRuns, getProviders, WORLD_CATEGORIES,
-  WORLD_CATEGORY_KEY_MAX, COMPOSITE_PROMPT_MAX, listImageModels, getSettings,
+  WORLD_CATEGORY_KEY_MAX, COMPOSITE_PROMPT_MAX, WORLD_LOGLINE_MAX,
+  WORLD_PREMISE_MAX, WORLD_STYLE_NOTES_MAX, listImageModels, getSettings,
 } from '../services/api';
 import BackendChipStrip from '../components/media/BackendChipStrip';
 import ImageGenControls from '../components/imageGen/ImageGenControls';
 import { deriveAvailableBackends, IMAGE_GEN_MODE } from '../lib/imageGenBackends';
+import WorldPromptRefineModal from '../components/worldBuilder/WorldPromptRefineModal';
 
 const CATEGORY_LABELS = {
   landscapes: 'Landscapes',
@@ -88,6 +90,9 @@ const emptyTemplate = () => ({
   starterPrompt: '',
   stylePrompt: '',
   negativePrompt: '',
+  logline: '',
+  premise: '',
+  styleNotes: '',
   categories: ensureDraftCategories(),
   compositeSheets: [],
   llm: { provider: null, model: null },
@@ -131,6 +136,8 @@ export default function WorldBuilder() {
   // click within the live render confirms. Avoids window.confirm per
   // CLAUDE.md UI Patterns.
   const [pendingDeleteId, setPendingDeleteId] = useState(null);
+
+  const [refineOpen, setRefineOpen] = useState(false);
 
   const refresh = async () => {
     setLoading(true);
@@ -178,6 +185,9 @@ export default function WorldBuilder() {
           // by the LLM or added by the user.
           categories: ensureDraftCategories(w.categories),
           compositeSheets: w.compositeSheets || [],
+          logline: w.logline || '',
+          premise: w.premise || '',
+          styleNotes: w.styleNotes || '',
           llm: w.llm || { provider: null, model: null },
         });
       }
@@ -203,6 +213,9 @@ export default function WorldBuilder() {
       starterPrompt: draft.starterPrompt || '',
       stylePrompt: draft.stylePrompt || '',
       negativePrompt: draft.negativePrompt || '',
+      logline: draft.logline || '',
+      premise: draft.premise || '',
+      styleNotes: draft.styleNotes || '',
       categories: draft.categories,
       compositeSheets: draft.compositeSheets || [],
       llm: draft.llm || {},
@@ -261,6 +274,12 @@ export default function WorldBuilder() {
       ...draft,
       stylePrompt: result.stylePrompt || draft.stylePrompt,
       negativePrompt: result.negativePrompt || draft.negativePrompt,
+      // Only overwrite the narrative bible fields when the LLM actually
+      // produced one — preserves any prose the user has already hand-edited
+      // when they re-run /expand to refresh just the image categories.
+      logline: result.logline || draft.logline,
+      premise: result.premise || draft.premise,
+      styleNotes: result.styleNotes || draft.styleNotes,
       categories: ensureDraftCategories(result.categories),
       compositeSheets: result.compositeSheets || draft.compositeSheets || [],
       llm: result.llm || draft.llm,
@@ -280,6 +299,9 @@ export default function WorldBuilder() {
         starterPrompt: expandedDraft.starterPrompt || '',
         stylePrompt: expandedDraft.stylePrompt || '',
         negativePrompt: expandedDraft.negativePrompt || '',
+        logline: expandedDraft.logline || '',
+        premise: expandedDraft.premise || '',
+        styleNotes: expandedDraft.styleNotes || '',
         categories: expandedDraft.categories,
         compositeSheets: expandedDraft.compositeSheets || [],
         llm: expandedDraft.llm || {},
@@ -296,14 +318,57 @@ export default function WorldBuilder() {
     toast.success(`Expanded into ${total} variations and ${expandedDraft.compositeSheets?.length || 0} boards — review then Save`);
   };
 
-  const handleRender = async () => {
+  // Writes the LLM-refined starter/style/negative back to the draft. Mirrors
+  // handleExpand's auto-save: if the world is already persisted, persist the
+  // refinement immediately so subsequent renders/expansions see it on disk.
+  const applyRefinement = async ({ starterPrompt, stylePrompt, negativePrompt }) => {
+    const next = {
+      ...draft,
+      starterPrompt: starterPrompt ?? draft.starterPrompt,
+      stylePrompt: stylePrompt ?? draft.stylePrompt,
+      negativePrompt: negativePrompt ?? draft.negativePrompt,
+    };
+    setDraft(next);
+    if (selectedId && next.name?.trim()) {
+      const updated = await updateWorld(selectedId, {
+        name: next.name.trim(),
+        starterPrompt: next.starterPrompt || '',
+        stylePrompt: next.stylePrompt || '',
+        negativePrompt: next.negativePrompt || '',
+        logline: next.logline || '',
+        premise: next.premise || '',
+        styleNotes: next.styleNotes || '',
+        categories: next.categories,
+        compositeSheets: next.compositeSheets || [],
+        llm: next.llm || {},
+      }).catch((e) => { toast.error(`Auto-save after refine failed: ${e.message}`); return null; });
+      if (updated) {
+        setWorlds((prev) => {
+          const without = prev.filter((w) => w.id !== updated.id);
+          return [updated, ...without];
+        });
+      }
+    }
+  };
+
+  // Render either the full batch (driven by the renderOpts.promptMode dropdown)
+  // or a narrow scope passed in by an inline button. Scope shape:
+  //   { promptMode, selection?, sheetSelection? } — see server renderSchema.
+  const runRender = async (scope = null) => {
     if (!selectedId) {
       toast.error('Save the world first');
       return;
     }
-    const total = renderPromptCount(draft, renderOpts.promptMode);
+    const promptMode = scope?.promptMode || renderOpts.promptMode || 'variations';
+    const total = scope
+      ? scopedPromptCount(draft, scope)
+      : renderPromptCount(draft, promptMode);
     if (!total) {
       toast.error('No prompts — expand the template first');
+      return;
+    }
+    if (availableBackends.length === 0) {
+      toast.error('Configure an image-gen backend first');
       return;
     }
     const effectiveMode = renderOpts.mode || defaultMode || undefined;
@@ -322,8 +387,10 @@ export default function WorldBuilder() {
       guidance: numericOrUndef(renderOpts.guidance),
       cfgScale: numericOrUndef(renderOpts.cfgScale),
       quantize: renderOpts.quantize || undefined,
-      promptMode: renderOpts.promptMode || 'variations',
+      promptMode,
       batchPerVariation: renderOpts.batchPerVariation,
+      selection: scope?.selection,
+      sheetSelection: scope?.sheetSelection,
     }).catch((e) => { toast.error(`Render failed: ${e.message}`); return null; });
     setRendering(false);
     if (!result) return;
@@ -331,6 +398,10 @@ export default function WorldBuilder() {
     const updated = await listWorldRuns(selectedId).catch(() => runs);
     setRuns(updated);
   };
+
+  const handleRender = () => runRender(null);
+
+  const canRender = !!selectedId && availableBackends.length > 0 && !rendering;
 
   const updateDraft = (patch) => setDraft((d) => ({ ...d, ...patch }));
   const updateCategory = (cat, variations) => setDraft((d) => ({
@@ -504,11 +575,78 @@ export default function WorldBuilder() {
               {expanding ? <Loader2 size={16} className="animate-spin" /> : <Wand2 size={16} />}
               Expand starter → variations
             </button>
+            <button
+              onClick={() => setRefineOpen(true)}
+              disabled={!draft.starterPrompt?.trim()}
+              className="px-3 py-2 bg-port-accent/15 hover:bg-port-accent/25 disabled:opacity-50 text-port-accent border border-port-accent/40 rounded flex items-center gap-2 min-h-[40px]"
+              title="Give feedback to refine the Starter Idea, Style Prompt, and Negative Prompt"
+            >
+              <MessageSquarePlus size={16} />
+              Refine prompts
+            </button>
             <span className="text-xs text-gray-500">
               {totalVariations} variation{totalVariations === 1 ? '' : 's'} across {categoryKeys.length} categories · {totalSheets} composite board{totalSheets === 1 ? '' : 's'}
             </span>
           </div>
         </header>
+
+        <WorldPromptRefineModal
+          open={refineOpen}
+          onClose={() => setRefineOpen(false)}
+          onApply={applyRefinement}
+          starterPrompt={draft.starterPrompt || ''}
+          stylePrompt={draft.stylePrompt || ''}
+          negativePrompt={draft.negativePrompt || ''}
+          defaultProviderId={draft.llm?.provider || activeProviderId || null}
+          defaultModel={draft.llm?.model || null}
+        />
+
+        <section className="bg-port-card border border-port-border rounded p-4 flex flex-col gap-3">
+          <div>
+            <h2 className="text-sm font-semibold text-white">Story bible</h2>
+            <p className="text-xs text-gray-500 mt-0.5">
+              Pulled into the Pipeline → New Series form when this world is selected.
+            </p>
+          </div>
+          <div>
+            <label htmlFor="world-logline" className="text-xs text-gray-400 mb-1 block">Logline</label>
+            <input
+              id="world-logline"
+              type="text"
+              value={draft.logline || ''}
+              onChange={(e) => updateDraft({ logline: e.target.value })}
+              placeholder="One-sentence hook — A foundry city goes silent, and the only survivor is a child."
+              className="w-full bg-port-bg border border-port-border rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-port-accent"
+              maxLength={WORLD_LOGLINE_MAX}
+            />
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div>
+              <label htmlFor="world-premise" className="text-xs text-gray-400 mb-1 block">Premise</label>
+              <textarea
+                id="world-premise"
+                value={draft.premise || ''}
+                onChange={(e) => updateDraft({ premise: e.target.value })}
+                placeholder="Elevator pitch — 1-3 short paragraphs about the setting, central conflict, stakes, and tone."
+                className="w-full bg-port-bg border border-port-border rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-port-accent"
+                rows={6}
+                maxLength={WORLD_PREMISE_MAX}
+              />
+            </div>
+            <div>
+              <label htmlFor="world-style-notes" className="text-xs text-gray-400 mb-1 block">Style notes</label>
+              <textarea
+                id="world-style-notes"
+                value={draft.styleNotes || ''}
+                onChange={(e) => updateDraft({ styleNotes: e.target.value })}
+                placeholder="Narrative style: references (artists / films / comics), mood, palette, pacing, voice. Prose, not tokens."
+                className="w-full bg-port-bg border border-port-border rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-port-accent"
+                rows={6}
+                maxLength={WORLD_STYLE_NOTES_MAX}
+              />
+            </div>
+          </div>
+        </section>
 
         {/* Style template */}
         <section className="bg-port-card border border-port-border rounded p-4 grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -541,6 +679,8 @@ export default function WorldBuilder() {
         <CompositeSheetsEditor
           sheets={draft.compositeSheets || []}
           onChange={updateCompositeSheets}
+          canRender={canRender}
+          onRender={(sheet) => runRender({ promptMode: 'sheets', sheetSelection: [sheet.label] })}
         />
 
         {/* Categories */}
@@ -578,6 +718,9 @@ export default function WorldBuilder() {
               canRemove={!WORLD_CATEGORIES.includes(cat)}
               onChange={(next) => updateCategory(cat, next)}
               onRemove={() => removeCategory(cat)}
+              canRender={canRender}
+              onRenderCategory={() => runRender({ promptMode: 'variations', selection: { [cat]: 'all' } })}
+              onRenderVariation={(v) => runRender({ promptMode: 'variations', selection: { [cat]: [v.label] } })}
             />
           ))}
         </section>
@@ -703,7 +846,29 @@ function renderPromptCount(world, promptMode = 'variations') {
   return variations;
 }
 
-function CompositeSheetsEditor({ sheets, onChange }) {
+// Mirrors the server's compilePrompts for selection/sheetSelection so an inline
+// "Render" button can disable itself + show an accurate count without a round trip.
+function scopedPromptCount(world, scope) {
+  if (!scope) return 0;
+  if (scope.promptMode === 'sheets') {
+    const sheets = world.compositeSheets || [];
+    if (scope.sheetSelection === 'all' || !scope.sheetSelection) return sheets.length;
+    const set = new Set(scope.sheetSelection);
+    return sheets.filter((s) => set.has(s.label)).length;
+  }
+  // variations
+  if (!scope.selection) return 0;
+  let n = 0;
+  for (const [cat, pick] of Object.entries(scope.selection)) {
+    const vars = world.categories?.[cat]?.variations || [];
+    if (pick === 'all') { n += vars.length; continue; }
+    const labels = new Set(pick);
+    n += vars.filter((v) => labels.has(v.label)).length;
+  }
+  return n;
+}
+
+function CompositeSheetsEditor({ sheets, onChange, canRender = false, onRender = null }) {
   const [adding, setAdding] = useState(false);
   const [newKind, setNewKind] = useState('reference_sheet');
   const [newLabel, setNewLabel] = useState('');
@@ -854,6 +1019,16 @@ function CompositeSheetsEditor({ sheets, onChange }) {
                     <div className="text-xs text-gray-400 line-clamp-3">{sheet.prompt}</div>
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
+                    {onRender && (
+                      <button
+                        onClick={() => onRender(sheet)}
+                        disabled={!canRender}
+                        className="p-1 text-gray-400 hover:text-port-accent disabled:opacity-30 disabled:cursor-not-allowed rounded"
+                        title={canRender ? 'Render this board' : 'Save the world and configure a render backend to enable'}
+                      >
+                        <Play size={14} />
+                      </button>
+                    )}
                     <button
                       onClick={() => startEdit(idx, sheet)}
                       className="p-1 text-gray-400 hover:text-port-accent rounded"
@@ -879,7 +1054,10 @@ function CompositeSheetsEditor({ sheets, onChange }) {
   );
 }
 
-function CategoryEditor({ category, variations, canRemove = false, onChange, onRemove }) {
+function CategoryEditor({
+  category, variations, canRemove = false, onChange, onRemove,
+  canRender = false, onRenderCategory = null, onRenderVariation = null,
+}) {
   const [adding, setAdding] = useState(false);
   const [newLabel, setNewLabel] = useState('');
   const [newPrompt, setNewPrompt] = useState('');
@@ -926,6 +1104,16 @@ function CategoryEditor({ category, variations, canRemove = false, onChange, onR
           <span className="ml-2 text-xs text-gray-500">{variations.length}</span>
         </h3>
         <div className="flex items-center gap-1">
+          {onRenderCategory && (
+            <button
+              onClick={onRenderCategory}
+              disabled={!canRender || variations.length === 0}
+              className="text-xs px-2 py-1 bg-port-accent/15 hover:bg-port-accent/25 disabled:opacity-30 disabled:cursor-not-allowed text-port-accent rounded flex items-center gap-1 min-h-[40px] sm:min-h-0"
+              title={variations.length === 0 ? 'Add variations first' : 'Render this category'}
+            >
+              <Play size={12} /> Render
+            </button>
+          )}
           {canRemove && (
             <button
               onClick={onRemove}
@@ -1010,6 +1198,16 @@ function CategoryEditor({ category, variations, canRemove = false, onChange, onR
                     <div className="text-xs text-gray-400 line-clamp-2">{v.prompt}</div>
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
+                    {onRenderVariation && (
+                      <button
+                        onClick={() => onRenderVariation(v)}
+                        disabled={!canRender}
+                        className="p-1 text-gray-400 hover:text-port-accent disabled:opacity-30 disabled:cursor-not-allowed rounded"
+                        title={canRender ? 'Render this variation' : 'Save the world and configure a render backend to enable'}
+                      >
+                        <Play size={14} />
+                      </button>
+                    )}
                     <button
                       onClick={() => startEdit(idx, v)}
                       className="p-1 text-gray-400 hover:text-port-accent rounded"

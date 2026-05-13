@@ -13,6 +13,7 @@
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { PATHS, atomicWrite, readJSONFile, ensureDir } from '../lib/fileUtils.js';
+import { ITEM_KIND, REF_MAX_LENGTH, itemKey } from '../lib/mediaItemKey.js';
 
 const STATE_PATH = join(PATHS.data, 'media-collections.json');
 
@@ -23,12 +24,9 @@ const makeErr = (message, code) => Object.assign(new Error(message), { code });
 
 export const NAME_MAX_LENGTH = 80;
 export const DESCRIPTION_MAX_LENGTH = 500;
-export const REF_MAX_LENGTH = 256;
 export const ITEMS_MAX = 5000;
 
-const ITEM_KIND = new Set(['image', 'video']);
-
-export const itemKey = (it) => `${it.kind}:${it.ref}`;
+export { REF_MAX_LENGTH, itemKey };
 
 const DEFAULT_STATE = { collections: [] };
 
@@ -126,6 +124,35 @@ export async function createCollection({ name, description = '' }) {
   const next = {
     id: randomUUID(),
     name: trimmedName,
+    description: trimmedDescription,
+    coverKey: null,
+    items: [],
+    createdAt: now,
+    updatedAt: now,
+  };
+  await writeAll([...all, next]);
+  return next;
+}
+
+// Find an existing collection by case-insensitive trimmed name, else create
+// a fresh one. Lets repeat-render callers (World Builder) append into a
+// single per-world bucket without growing a new collection on every run.
+export async function findOrCreateCollectionByName({ name, description = '' }) {
+  const trimmed = typeof name === 'string' ? name.trim() : '';
+  if (!trimmed || trimmed.length > NAME_MAX_LENGTH) {
+    throw makeErr('Collection name is required (1..' + NAME_MAX_LENGTH + ' chars)', ERR_VALIDATION);
+  }
+  const trimmedDescription = typeof description === 'string'
+    ? description.trim().slice(0, DESCRIPTION_MAX_LENGTH)
+    : '';
+  const all = await listCollections();
+  const needle = trimmed.toLowerCase();
+  const existing = all.find((c) => c.name.toLowerCase() === needle);
+  if (existing) return existing;
+  const now = new Date().toISOString();
+  const next = {
+    id: randomUUID(),
+    name: trimmed,
     description: trimmedDescription,
     coverKey: null,
     items: [],

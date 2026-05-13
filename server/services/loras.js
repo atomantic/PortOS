@@ -25,7 +25,7 @@ import { Readable } from 'stream';
 import { pipeline } from 'stream/promises';
 import { basename, join } from 'path';
 import { ServerError } from '../lib/errorHandler.js';
-import { PATHS } from '../lib/fileUtils.js';
+import { assertSafeFilename, PATHS } from '../lib/fileUtils.js';
 import {
   applyDownloadToken,
   baseModelToRunner,
@@ -65,20 +65,19 @@ export const readSidecar = async (filename) => {
   return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
 };
 
-// Validate a basename so it can't escape PATHS.loras. We require the input
-// equals its own basename (no path separators, no parent traversal) and ends
-// in `.safetensors`. Substring `..` is allowed because slugifyForFilename can
-// produce names like `foo..bar` from non-ASCII input.
+// Validate a basename so it can't escape PATHS.loras. Delegates to the
+// shared `assertSafeFilename` helper in fileUtils.js (which also handles
+// gallery .png assertions). Substring `..` is allowed because
+// slugifyForFilename can produce names like `foo..bar` from non-ASCII input.
+// `requiredMessage` preserves the historical "Filename required" wording
+// (instead of the subject-derived "LoRA filename required") so any client
+// or test that pattern-matches on the missing-input message keeps working.
 export const assertSafeLoraFilename = (filename) => {
-  if (!filename || typeof filename !== 'string') {
-    throw new ServerError('Filename required', { status: 400, code: 'VALIDATION_ERROR' });
-  }
-  const isExactTraversal = filename === '.' || filename === '..';
-  const hasSeparator = filename.includes('/') || filename.includes('\\');
-  const isPureBasename = basename(filename) === filename;
-  if (!filename.endsWith('.safetensors') || hasSeparator || isExactTraversal || !isPureBasename) {
-    throw new ServerError('Invalid LoRA filename', { status: 400, code: 'VALIDATION_ERROR' });
-  }
+  assertSafeFilename(filename, {
+    extensions: ['.safetensors'],
+    subject: 'LoRA filename',
+    requiredMessage: 'Filename required',
+  });
 };
 
 // LoRAs without sidecars get a minimal "legacy" entry with sensible defaults

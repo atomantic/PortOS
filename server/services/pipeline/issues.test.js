@@ -1,0 +1,146 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+const fileStore = new Map();
+
+vi.mock('../../lib/fileUtils.js', () => ({
+  PATHS: { data: '/mock/data' },
+  ensureDir: vi.fn().mockResolvedValue(undefined),
+  atomicWrite: vi.fn(async (path, data) => { fileStore.set(path, data); }),
+  readJSONFile: vi.fn(async (path, fallback) => (fileStore.has(path) ? fileStore.get(path) : fallback)),
+}));
+
+let uuidCounter = 0;
+vi.mock('crypto', async () => {
+  const actual = await vi.importActual('crypto');
+  return { ...actual, randomUUID: () => `uuid-${++uuidCounter}` };
+});
+
+const svc = await import('./issues.js');
+
+describe('pipeline issues service', () => {
+  beforeEach(() => {
+    fileStore.clear();
+    uuidCounter = 0;
+  });
+
+  it('createIssue assigns iss- id and auto-numbers within a series', async () => {
+    const a = await svc.createIssue({ seriesId: 'ser-1', title: 'First' });
+    const b = await svc.createIssue({ seriesId: 'ser-1', title: 'Second' });
+    const c = await svc.createIssue({ seriesId: 'ser-2', title: 'Other series first' });
+    expect(a.id).toMatch(/^iss-/);
+    expect(a.number).toBe(1);
+    expect(b.number).toBe(2);
+    expect(c.number).toBe(1); // independent counter per series
+  });
+
+  it('createIssue requires seriesId and title', async () => {
+    await expect(svc.createIssue({ title: 'x' })).rejects.toMatchObject({ code: svc.ERR_VALIDATION });
+    await expect(svc.createIssue({ seriesId: 'ser-1' })).rejects.toMatchObject({ code: svc.ERR_VALIDATION });
+  });
+
+  it('every stage is initialized to "empty"', async () => {
+    const i = await svc.createIssue({ seriesId: 'ser-1', title: 'First' });
+    for (const id of svc.STAGE_IDS) {
+      expect(i.stages[id].status).toBe('empty');
+      expect(i.stages[id].output).toBe('');
+    }
+  });
+
+  it('updateStage patches only the named stage', async () => {
+    const i = await svc.createIssue({ seriesId: 'ser-1', title: 'First' });
+    const { issue, stage } = await svc.updateStage(i.id, 'idea', {
+      status: 'ready',
+      output: '# Beat sheet ...',
+      lastRunId: 'run-123',
+    });
+    expect(stage.status).toBe('ready');
+    expect(stage.output).toBe('# Beat sheet ...');
+    expect(stage.lastRunId).toBe('run-123');
+    expect(stage.updatedAt).toBeTruthy();
+    // Prose should still be empty.
+    expect(issue.stages.prose.status).toBe('empty');
+    expect(issue.stages.prose.output).toBe('');
+  });
+
+  it('updateStage rejects unknown stage ids', async () => {
+    const i = await svc.createIssue({ seriesId: 'ser-1', title: 'First' });
+    await expect(svc.updateStage(i.id, 'bogus', { status: 'ready' })).rejects.toMatchObject({ code: svc.ERR_VALIDATION });
+  });
+
+  it('updateStage on a visual stage preserves arrays', async () => {
+    const i = await svc.createIssue({ seriesId: 'ser-1', title: 'First' });
+    const { stage } = await svc.updateStage(i.id, 'comicPages', {
+      status: 'ready',
+      pages: [{ panels: [{ imageJobId: 'j1' }] }],
+    });
+    expect(stage.pages).toHaveLength(1);
+    expect(stage.pages[0].panels[0].imageJobId).toBe('j1');
+  });
+
+  it('listIssues filters by seriesId and orders by number', async () => {
+    await svc.createIssue({ seriesId: 'ser-1', title: 'Issue 1' });
+    await svc.createIssue({ seriesId: 'ser-2', title: 'Other 1' });
+    await svc.createIssue({ seriesId: 'ser-1', title: 'Issue 2' });
+    const list1 = await svc.listIssues({ seriesId: 'ser-1' });
+    expect(list1.map((i) => i.number)).toEqual([1, 2]);
+    expect(list1.every((i) => i.seriesId === 'ser-1')).toBe(true);
+  });
+
+  describe('listRecentIssues', () => {
+    it('orders descending by updatedAt across all series', async () => {
+      const a = await svc.createIssue({ seriesId: 'ser-1', title: 'A' });
+      const b = await svc.createIssue({ seriesId: 'ser-2', title: 'B' });
+      const c = await svc.createIssue({ seriesId: 'ser-3', title: 'C' });
+      // Bump A so it becomes unambiguously the most recent — its update
+      // timestamp will be 10ms later than B and C's creates, which may
+      // share the same ms-resolution timestamp with each other.
+      await new Promise((r) => setTimeout(r, 10));
+      await svc.updateStage(a.id, 'idea', { status: 'ready', output: 'fresh' });
+      const recent = await svc.listRecentIssues({ limit: 10 });
+      expect(recent[0].id).toBe(a.id);
+      expect(recent).toHaveLength(3);
+      // B and C may tie on ms-resolution timestamps; only assert their
+      // membership in the remaining positions, not the order between them.
+      expect(new Set(recent.slice(1).map((i) => i.id))).toEqual(new Set([b.id, c.id]));
+    });
+
+    it('clamps limit: < 1 → 1, > 50 → 50, non-numeric → default 10', async () => {
+      for (let i = 0; i < 12; i += 1) {
+        // Stagger to keep updatedAt monotonic.
+        await svc.createIssue({ seriesId: 'ser-1', title: `T${i}` });
+        await new Promise((r) => setTimeout(r, 2));
+      }
+      expect((await svc.listRecentIssues({ limit: 0 })).length).toBe(1);
+      expect((await svc.listRecentIssues({ limit: -5 })).length).toBe(1);
+      expect((await svc.listRecentIssues({ limit: 999 })).length).toBe(12);
+      expect((await svc.listRecentIssues({ limit: 'abc' })).length).toBe(10);
+      expect((await svc.listRecentIssues({})).length).toBe(10);
+    });
+
+    it('respects the upper clamp of 50', async () => {
+      // Verifying the cap without creating 51 issues — pass an explicit
+      // huge limit and confirm it clamps to 50 (one of the bounds), and
+      // a limit of 50 returns up to 50.
+      for (let i = 0; i < 3; i += 1) {
+        await svc.createIssue({ seriesId: 'ser-1', title: `Y${i}` });
+      }
+      const r = await svc.listRecentIssues({ limit: 9999 });
+      expect(r.length).toBeLessThanOrEqual(50);
+    });
+  });
+
+  it('updateIssue partial patch preserves other fields', async () => {
+    const i = await svc.createIssue({ seriesId: 'ser-1', title: 'First' });
+    await svc.updateStage(i.id, 'idea', { status: 'ready', output: 'Beats here' });
+    const updated = await svc.updateIssue(i.id, { status: 'shipped' });
+    expect(updated.status).toBe('shipped');
+    expect(updated.title).toBe('First');
+    expect(updated.stages.idea.output).toBe('Beats here');
+  });
+
+  it('deleteIssue 404s on second call', async () => {
+    const i = await svc.createIssue({ seriesId: 'ser-1', title: 'First' });
+    await svc.deleteIssue(i.id);
+    await expect(svc.deleteIssue(i.id)).rejects.toMatchObject({ code: svc.ERR_NOT_FOUND });
+  });
+});

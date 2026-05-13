@@ -108,12 +108,26 @@ export const updateMediaCollection = (id, patch) => request(`/media/collections/
 export const deleteMediaCollection = (id) => request(`/media/collections/${encodeURIComponent(id)}`, {
   method: 'DELETE',
 });
-export const addMediaCollectionItem = (id, { kind, ref }) => request(`/media/collections/${encodeURIComponent(id)}/items`, {
+export const addMediaCollectionItem = (id, { kind, ref }, { silent = false } = {}) => request(`/media/collections/${encodeURIComponent(id)}/items`, {
   method: 'POST',
   body: JSON.stringify({ kind, ref }),
+  silent,
 });
-export const removeMediaCollectionItem = (id, key) => request(`/media/collections/${encodeURIComponent(id)}/items/${encodeURIComponent(key)}`, {
+export const removeMediaCollectionItem = (id, key, { silent = false } = {}) => request(`/media/collections/${encodeURIComponent(id)}/items/${encodeURIComponent(key)}`, {
   method: 'DELETE',
+  silent,
+});
+
+// Media annotations — per-item star + free-text note, keyed by "<kind>:<ref>"
+// (same shape as collections + the client-side `item.key` from normalize.js).
+// Decoupled from generation pipeline data so favorites survive job pruning.
+// GET returns `{ annotations: { [key]: { starred, note, updatedAt } } }`.
+// PATCH partial-merges; the entry is removed entirely when both fields end
+// up empty — `entry` in the response is `null` to signal that.
+export const listMediaAnnotations = () => request('/media/annotations');
+export const setMediaAnnotation = (key, patch) => request(`/media/annotations/${encodeURIComponent(key)}`, {
+  method: 'PATCH',
+  body: JSON.stringify(patch),
 });
 
 // Models management (HF cache + LoRAs)

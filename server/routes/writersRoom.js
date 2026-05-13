@@ -4,7 +4,8 @@
  */
 
 import { Router } from 'express';
-import { asyncHandler } from '../lib/errorHandler.js';
+import { z } from 'zod';
+import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import {
   validateRequest,
   writersRoomFolderCreateSchema,
@@ -41,6 +42,7 @@ import {
 import {
   listObjects, createObject, updateObject, deleteObject,
 } from '../services/writersRoom/objects.js';
+import { promoteWorkToPipeline, ERR_NO_DRAFT_BODY } from '../services/writersRoom/promoteToPipeline.js';
 import { addItem as addCollectionItem, ERR_DUPLICATE } from '../services/mediaCollections.js';
 
 const router = Router();
@@ -83,6 +85,21 @@ router.patch('/works/:id', asyncHandler(async (req, res) => {
 
 router.delete('/works/:id', asyncHandler(async (req, res) => {
   res.json(await deleteWork(req.params.id));
+}));
+
+// ---------- pipeline bridge (item 6 of the WR↔Pipeline DRY unification) ----------
+
+const promoteSchema = z.object({ force: z.boolean().optional() });
+
+router.post('/works/:id/promote-to-pipeline', asyncHandler(async (req, res) => {
+  const body = validateRequest(promoteSchema, req.body ?? {});
+  const result = await promoteWorkToPipeline(req.params.id, body).catch((err) => {
+    if (err?.code === ERR_NO_DRAFT_BODY) {
+      throw new ServerError(err.message, { status: 400, code: ERR_NO_DRAFT_BODY });
+    }
+    throw err;
+  });
+  res.status(result.reused ? 200 : 201).json(result);
 }));
 
 // ---------- draft body / versions ----------

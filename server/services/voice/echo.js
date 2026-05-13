@@ -58,6 +58,28 @@ export const rememberTtsSentence = (recent, sentence, { now = Date.now(), window
   return recent;
 };
 
+// Per-socket echo buffers registered by `sockets/voice.js`. Server-emitted
+// proactive speech (`speakProactive`) broadcasts to every connected client
+// but has no socket context of its own, so it can't reach into a single
+// socket's `state.recentTts`. This module-scope registry lets the proactive
+// path write a remembered sentence into every active socket's buffer in one
+// call, so the next user turn picks up echoed proactive audio and drops it
+// just like an in-turn TTS line. Single-instance app, so a process-wide
+// registry is fine.
+const echoBuffers = new Set();
+
+export const registerEchoBuffer = (buf) => {
+  if (Array.isArray(buf)) echoBuffers.add(buf);
+};
+
+export const unregisterEchoBuffer = (buf) => {
+  echoBuffers.delete(buf);
+};
+
+export const rememberTtsForAllSockets = (sentence, opts = {}) => {
+  for (const buf of echoBuffers) rememberTtsSentence(buf, sentence, opts);
+};
+
 // Returns true iff the transcript is almost certainly the bot's own TTS
 // echoed back. Default-false on any uncertainty so we never silently drop
 // legitimate user input.

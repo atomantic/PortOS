@@ -5,8 +5,14 @@ node_modules/
 dist/
 build/
 
-# Runtime data (contains app registry, history, runs)
-data/
+# Runtime data (app registry, history, runs). Override the directory-level
+# `data/` rule from the global ~/.gitignore so git descends into data/ and
+# evaluates the negations below; then re-exclude everything inside, and
+# re-include the source-controlled migration scripts.
+!data/
+data/*
+!data/migrations/
+data/migrations/.applied.json
 
 # Environment files
 .env
@@ -50,6 +56,9 @@ BTW.md
 
 # Browser service node_modules (code is committed)
 browser/node_modules/
+
+# Browser service runtime data (CDP profiles, cache, downloads)
+browser/data/
 
 # Sub-package lock files. Root package.json does NOT declare these as
 # workspaces; `npm run setup` runs `npm install --prefix <pkg>` for each,

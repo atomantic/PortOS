@@ -8,7 +8,8 @@
         "repo": "notapalindrome/ltx2-mlx-av",
         "runtime": "mlx_video",
         "steps": 30,
-        "guidance": 3
+        "guidance": 3,
+        "deprecated": true
       },
       {
         "id": "ltx23_unified",
@@ -16,7 +17,8 @@
         "repo": "notapalindrome/ltx23-mlx-av",
         "runtime": "mlx_video",
         "steps": 25,
-        "guidance": 3
+        "guidance": 3,
+        "deprecated": true
       },
       {
         "id": "ltx23_distilled_q4",
@@ -24,7 +26,8 @@
         "repo": "notapalindrome/ltx23-mlx-av-q4",
         "runtime": "mlx_video",
         "steps": 25,
-        "guidance": 3
+        "guidance": 3,
+        "deprecated": true
       },
       {
         "id": "ltx23_dgrauet_q4",

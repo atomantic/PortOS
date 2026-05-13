@@ -25,6 +25,7 @@
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { PATHS, atomicWrite, readJSONFile, ensureDir } from '../lib/fileUtils.js';
+import { composeStyledPrompt } from '../lib/composeStyledPrompt.js';
 
 const STATE_PATH = join(PATHS.data, 'world-builder.json');
 
@@ -40,6 +41,11 @@ export const STARTER_PROMPT_MAX = 4000;
 export const PROMPT_FRAGMENT_MAX = 2000;
 export const COMPOSITE_PROMPT_MAX = 4000;
 export const VARIATION_LABEL_MAX = 120;
+// Narrative bible fields — surfaced into the Pipeline "new series" form so a
+// world's logline/premise/style notes can seed a production series in one click.
+export const LOGLINE_MAX = 500;
+export const PREMISE_MAX = 4000;
+export const STYLE_NOTES_MAX = 4000;
 export const VARIATIONS_PER_CATEGORY_MAX = 50;
 export const COMPOSITE_SHEETS_MAX = 50;
 export const COMPOSITE_SHEET_KINDS = Object.freeze([
@@ -167,6 +173,9 @@ const sanitizeTemplate = (raw) => {
   const starterPrompt = trimTo(raw.starterPrompt, STARTER_PROMPT_MAX);
   const stylePrompt = trimTo(raw.stylePrompt, PROMPT_FRAGMENT_MAX);
   const negativePrompt = trimTo(raw.negativePrompt, PROMPT_FRAGMENT_MAX);
+  const logline = trimTo(raw.logline, LOGLINE_MAX);
+  const premise = trimTo(raw.premise, PREMISE_MAX);
+  const styleNotes = trimTo(raw.styleNotes, STYLE_NOTES_MAX);
   const categories = sanitizeCategories(raw.categories || {});
   const compositeSheets = sanitizeCompositeSheets(raw.compositeSheets || []);
   const llm = raw.llm && typeof raw.llm === 'object'
@@ -183,6 +192,9 @@ const sanitizeTemplate = (raw) => {
     starterPrompt,
     stylePrompt,
     negativePrompt,
+    logline,
+    premise,
+    styleNotes,
     categories,
     compositeSheets,
     llm,
@@ -241,6 +253,9 @@ export async function createWorld(input = {}) {
     starterPrompt: input.starterPrompt || '',
     stylePrompt: input.stylePrompt || '',
     negativePrompt: input.negativePrompt || '',
+    logline: input.logline || '',
+    premise: input.premise || '',
+    styleNotes: input.styleNotes || '',
     categories: input.categories || {},
     compositeSheets: input.compositeSheets || [],
     llm: input.llm || {},
@@ -271,13 +286,20 @@ export async function updateWorld(id, patch = {}) {
     ? { ...(cur.llm || {}), ...(patch.llm || {}) }
     : cur.llm;
 
+  // Scalar fields: only apply what the patch actually carries, so a partial
+  // PATCH never clobbers a field the caller didn't send. `categories` + `llm`
+  // are handled above (they need per-key merging, not replacement).
+  const PATCHABLE_SCALARS = [
+    'name', 'starterPrompt', 'stylePrompt', 'negativePrompt',
+    'logline', 'premise', 'styleNotes', 'compositeSheets',
+  ];
+  const scalarPatch = Object.fromEntries(
+    PATCHABLE_SCALARS.filter((k) => k in patch).map((k) => [k, patch[k]]),
+  );
+
   const merged = sanitizeTemplate({
     ...cur,
-    ...('name' in patch ? { name: patch.name } : {}),
-    ...('starterPrompt' in patch ? { starterPrompt: patch.starterPrompt } : {}),
-    ...('stylePrompt' in patch ? { stylePrompt: patch.stylePrompt } : {}),
-    ...('negativePrompt' in patch ? { negativePrompt: patch.negativePrompt } : {}),
-    ...('compositeSheets' in patch ? { compositeSheets: patch.compositeSheets } : {}),
+    ...scalarPatch,
     categories: mergedCategories,
     llm: mergedLlm,
     updatedAt: new Date().toISOString(),
@@ -343,8 +365,10 @@ export function compilePrompts(world, options = {}) {
   }
   const batchPerVariation = Math.max(1, Math.min(20, Number(options.batchPerVariation) || 1));
 
-  const stylePart = world.stylePrompt?.trim();
-  const negativePrompt = world.negativePrompt?.trim() || '';
+  const stylePreset = {
+    prompt: world.stylePrompt?.trim() || '',
+    negativePrompt: world.negativePrompt?.trim() || '',
+  };
   const compiled = [];
 
   if (promptMode === 'variations' || promptMode === 'all') {
@@ -356,7 +380,7 @@ export function compilePrompts(world, options = {}) {
         ? variations
         : variations.filter((v) => Array.isArray(sel) && sel.some((s) => s.toLowerCase() === v.label.toLowerCase()));
       for (const variation of filtered) {
-        const prompt = [stylePart, variation.prompt].filter(Boolean).join(', ');
+        const { prompt, negativePrompt } = composeStyledPrompt(variation.prompt, '', stylePreset);
         for (let i = 0; i < batchPerVariation; i += 1) {
           compiled.push({
             category,
@@ -377,7 +401,7 @@ export function compilePrompts(world, options = {}) {
       ? sheets
       : sheets.filter((s) => Array.isArray(sheetSelection) && sheetSelection.some((label) => label.toLowerCase() === s.label.toLowerCase()));
     for (const sheet of filteredSheets) {
-      const prompt = [stylePart, sheet.prompt].filter(Boolean).join(', ');
+      const { prompt, negativePrompt } = composeStyledPrompt(sheet.prompt, '', stylePreset);
       const category = sheet.kind === 'world_pitch_poster'
         ? 'world_pitch_posters'
         : 'composite_sheets';

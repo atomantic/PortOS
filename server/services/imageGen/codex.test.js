@@ -100,6 +100,26 @@ describe('codex provider — generateImage', () => {
     await flush();
   });
 
+  it('appends a "(high quality)" hint when width or height ≥ 1536', async () => {
+    await codex.generateImage({ prompt: 'a fox', width: 1536, height: 1024 });
+    const promptArg = spawnCalls[0].args[spawnCalls[0].args.length - 1];
+    expect(promptArg).toContain('(1536x1024)');
+    expect(promptArg).toContain('(high quality)');
+    spawnCalls[0].child.exitCode = 1;
+    spawnCalls[0].child.emit('close', 1, null);
+    await flush();
+  });
+
+  it('does not append "(high quality)" for sub-1536 dimensions', async () => {
+    await codex.generateImage({ prompt: 'a fox', width: 1024, height: 1024 });
+    const promptArg = spawnCalls[0].args[spawnCalls[0].args.length - 1];
+    expect(promptArg).toContain('(1024x1024)');
+    expect(promptArg).not.toContain('high quality');
+    spawnCalls[0].child.exitCode = 1;
+    spawnCalls[0].child.emit('close', 1, null);
+    await flush();
+  });
+
   it('honors codexPath override (custom binary)', async () => {
     await codex.generateImage({ prompt: 'a fox', codexPath: '/opt/custom/codex' });
     expect(spawnCalls[0].bin).toBe('/opt/custom/codex');
@@ -112,11 +132,15 @@ describe('codex provider — generateImage', () => {
     await expect(codex.generateImage({ prompt: '   ' })).rejects.toThrow(/Prompt is required/);
   });
 
-  it('refuses concurrent generations (returns 409 ALREADY_RUNNING)', async () => {
-    await codex.generateImage({ prompt: 'one' });
-    await expect(codex.generateImage({ prompt: 'two' })).rejects.toThrow(/already in progress/);
-    spawnCalls[0].child.exitCode = 1;
-    spawnCalls[0].child.emit('close', 1, null);
+  it('allows concurrent generations (parallel codex lane)', async () => {
+    const a = await codex.generateImage({ prompt: 'one' });
+    const b = await codex.generateImage({ prompt: 'two' });
+    expect(a.jobId).not.toBe(b.jobId);
+    expect(spawnCalls.length).toBe(2);
+    for (const c of spawnCalls) {
+      c.child.exitCode = 1;
+      c.child.emit('close', 1, null);
+    }
     await flush();
   });
 });

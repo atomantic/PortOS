@@ -18,7 +18,8 @@ export const NAV_COMMANDS = [
   { id: 'nav.media.creative-director', path: '/media/creative-director', label: 'Creative Director', section: 'Create', aliases: ['creative-director', 'creative', 'director', 'long-form', 'episode'], keywords: ['story', 'episode', 'narrative', 'agent', 'auto-video', 'long-form'] },
   { id: 'nav.media.timeline', path: '/media/timeline', label: 'Timeline', section: 'Create', aliases: ['timeline', 'video-timeline', 'editor'], keywords: ['edit', 'trim', 'composite', 'stitch', 'cut', 'compose'] },
   { id: 'nav.media.models', path: '/media/models', label: 'Media Models', section: 'Create', aliases: ['media-models', 'image-models', 'video-models', 'huggingface'], keywords: ['hf cache', 'model storage', 'disk'] },
-  { id: 'nav.media.world-builder', path: '/media/world-builder', label: 'World Builder', section: 'Create', aliases: ['world-builder', 'worldbuilder', 'worldbuild', 'world', 'universe', 'lore'], keywords: ['style template', 'sci-fi', 'fantasy', 'concept art', 'batch render', 'variations'] },
+  { id: 'nav.create.world-builder', path: '/world-builder', label: 'World Builder', section: 'Create', aliases: ['world-builder', 'worldbuilder', 'worldbuild', 'world', 'universe', 'lore'], keywords: ['style template', 'sci-fi', 'fantasy', 'concept art', 'batch render', 'variations'] },
+  { id: 'nav.create.pipeline', path: '/pipeline', label: 'Pipeline', section: 'Create', aliases: ['pipeline', 'production', 'series-pipeline', 'production-pipeline'], keywords: ['series', 'issue', 'episode', 'comic', 'script', 'prose', 'storyboard', 'narrative', 'workflow'] },
   { id: 'nav.media.loras', path: '/media/loras', label: 'LoRAs', section: 'Create', aliases: ['loras', 'lora', 'lora-manager', 'civitai'], keywords: ['lora', 'civitai', 'fine-tune', 'style adapter', 'realstagram', 'photoreal', 'flux lora'] },
   { id: 'nav.media.settings', path: '/media/image?settings=1', label: 'Media Gen Settings', section: 'Create', aliases: ['media-settings', 'image-gen-settings', 'sd-settings', 'video-gen-settings'] },
   { id: 'nav.writers-room', path: '/writers-room', label: 'Writers Room', section: 'Create', aliases: ['writers-room', 'writersroom', 'writer', 'write', 'studio', 'novel'], keywords: ['prose', 'screenplay', 'story', 'draft', 'manuscript', 'literary', 'novel', 'short story'] },
@@ -57,7 +58,10 @@ export const NAV_COMMANDS = [
   { id: 'nav.cos.learning', path: '/cos/learning', label: 'Learning', section: 'Chief of Staff', aliases: ['cos-learning'] },
   { id: 'nav.cos.memory', path: '/cos/memory', label: 'Memory', section: 'Chief of Staff', aliases: ['cos-memory'] },
   { id: 'nav.cos.schedule', path: '/cos/schedule', label: 'Schedule', section: 'Chief of Staff', aliases: ['schedule', 'cos-schedule'] },
-  { id: 'nav.cos.workflow', path: '/cos/workflow', label: 'Workflow', section: 'Chief of Staff', aliases: ['workflow', 'cos-workflow', 'pipeline'], keywords: ['pipeline', 'dependencies', 'order', 'stages'] },
+  // Note: `pipeline` is intentionally NOT an alias here — that token now
+  // resolves to the dedicated /pipeline page (nav.create.pipeline). CoS still
+  // surfaces "task pipeline" via the `pipeline` keyword in the palette.
+  { id: 'nav.cos.workflow', path: '/cos/workflow', label: 'Workflow', section: 'Chief of Staff', aliases: ['workflow', 'cos-workflow'], keywords: ['pipeline', 'dependencies', 'order', 'stages', 'task pipeline'] },
   { id: 'nav.cos.productivity', path: '/cos/productivity', label: 'Streaks', section: 'Chief of Staff', aliases: ['streaks', 'cos-productivity'] },
 
   { id: 'nav.messages.inbox', path: '/messages/inbox', label: 'Inbox', section: 'Comms', aliases: ['messages'] },

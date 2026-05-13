@@ -2,9 +2,10 @@ import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { getSettings } from './settings.js';
 import { getProviderById, getAllProviders } from './providers.js';
-import { createRun, executeApiRun, executeCliRun } from './runner.js';
 import { buildRulesPromptSection } from './messageTriageRules.js';
 import { PATHS } from '../lib/fileUtils.js';
+import { runPromptThroughProvider } from '../lib/promptRunner.js';
+import { extractJson } from '../lib/jsonExtract.js';
 
 const EVAL_PROMPT = `You are an email triage assistant. For each email below, recommend ONE action and a brief reason.
 
@@ -70,35 +71,21 @@ async function resolveProviderConfig(actionType) {
 }
 
 async function runPrompt(provider, model, prompt, source) {
-  const selectedModel = model || provider.defaultModel || provider.models?.[0];
-  const { runId } = await createRun({ providerId: provider.id, model: selectedModel, prompt, source });
-
-  let responseText = '';
-  await new Promise((resolve, reject) => {
-    if (provider.type === 'cli') {
-      executeCliRun(
-        runId, provider, prompt, process.cwd(),
-        (text) => { responseText += text; },
-        (result) => { result?.error || result?.success === false ? reject(new Error(result?.error || 'CLI execution failed')) : resolve(result); },
-        provider.timeout || 300000
-      );
-    } else {
-      executeApiRun(
-        runId, provider, selectedModel, prompt, process.cwd(), [],
-        (data) => { responseText += typeof data === 'string' ? data : (data?.text || ''); },
-        (result) => { result?.error ? reject(new Error(result.error)) : resolve(result); }
-      );
-    }
-  });
-  return responseText;
+  // promptRunner internally gates per-call model overrides for providers
+  // that don't honor them (non-codex CLI). Surface the effective model
+  // it actually used so callers can log it accurately instead of echoing
+  // back the (possibly-dropped) input model.
+  const { text, model: effectiveModel } = await runPromptThroughProvider({ provider, model, prompt, source });
+  return { text, model: effectiveModel };
 }
 
 function parseEvalResponse(text, messageIds) {
-  // Extract JSON array from response (may have markdown fences)
-  const jsonMatch = text.match(/\[[\s\S]*\]/);
-  if (!jsonMatch) return null;
-
-  const parsed = JSON.parse(jsonMatch[0]);
+  // Route through the shared extractor so banner-stripping, trailing-comma
+  // repair, and the `[...]` placeholder elision the rest of PortOS's LLM
+  // callers benefit from also apply here. Without it, a Codex banner before
+  // the JSON or a stray trailing comma throws SyntaxError instead of
+  // surfacing the cleaner "Failed to parse AI evaluation response" upstream.
+  const { value: parsed } = extractJson(text, { blockType: 'array' });
   if (!Array.isArray(parsed)) return null;
 
   // Index by message ID, only keep valid entries
@@ -130,8 +117,9 @@ export async function evaluateMessages(messages) {
   const rulesSection = await buildRulesPromptSection();
   const prompt = EVAL_PROMPT + rulesSection + JSON.stringify(payload, null, 2) + '\n' + EVAL_PROMPT_SUFFIX;
 
-  console.log(`📧 Evaluating ${messages.length} messages with ${provider.name}/${model || provider.defaultModel}`);
-  const response = await runPrompt(provider, model, prompt, 'messages-triage');
+  console.log(`📧 Evaluating ${messages.length} messages with ${provider.name}`);
+  const { text: response, model: effectiveModel } = await runPrompt(provider, model, prompt, 'messages-triage');
+  console.log(`📧 Triage ran on ${provider.name}/${effectiveModel || '(default)'}`);
 
   const messageIds = new Set(messages.map(m => m.id));
   const evaluations = parseEvalResponse(response, messageIds);
@@ -230,7 +218,8 @@ export async function generateReplyBody(message, instructions = '', options = {}
   if (threadContext) template += threadContext;
 
   const voiceLabel = shouldUseVoice ? ' with voice' : '';
-  console.log(`📧 Generating AI reply${voiceLabel} with ${provider.name}/${model || provider.defaultModel}`);
-  const response = await runPrompt(provider, model, template, 'messages-reply');
+  console.log(`📧 Generating AI reply${voiceLabel} with ${provider.name}`);
+  const { text: response, model: effectiveModel } = await runPrompt(provider, model, template, 'messages-reply');
+  console.log(`📧 Reply ran on ${provider.name}/${effectiveModel || '(default)'}`);
   return { body: response.trim() };
 }

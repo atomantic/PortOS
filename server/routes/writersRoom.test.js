@@ -49,6 +49,11 @@ vi.mock('../services/mediaCollections.js', () => ({
   ERR_DUPLICATE: 'ERR_DUPLICATE',
 }));
 
+vi.mock('../services/writersRoom/promoteToPipeline.js', () => ({
+  ERR_NO_DRAFT_BODY: 'WR_PROMOTE_NO_DRAFT_BODY',
+  promoteWorkToPipeline: vi.fn(),
+}));
+
 import * as svc from '../services/writersRoom/local.js';
 import * as charSvc from '../services/writersRoom/characters.js';
 import * as settingsSvc from '../services/writersRoom/settings.js';
@@ -276,6 +281,66 @@ describe('writersRoom routes', () => {
       const r = await request(app).delete('/api/writers-room/works/wr-work-1/settings/wr-setting-1');
       expect(r.status).toBe(200);
       expect(settingsSvc.deleteSetting).toHaveBeenCalledWith('wr-work-1', 'wr-setting-1');
+    });
+  });
+
+  describe('promote-to-pipeline', () => {
+    it('POST /works/:id/promote-to-pipeline returns 201 with series + issue on fresh promote', async () => {
+      const promoter = await import('../services/writersRoom/promoteToPipeline.js');
+      promoter.promoteWorkToPipeline.mockResolvedValue({
+        series: { id: 'ser-1', name: 'A', writersRoomWorkId: 'wr-work-1' },
+        issue: { id: 'iss-1', seriesId: 'ser-1', title: 'A' },
+        reused: false,
+      });
+
+      const r = await request(app)
+        .post('/api/writers-room/works/wr-work-1/promote-to-pipeline')
+        .send({});
+      expect(r.status).toBe(201);
+      expect(r.body.series.id).toBe('ser-1');
+      expect(r.body.issue.id).toBe('iss-1');
+      expect(r.body.reused).toBe(false);
+      expect(promoter.promoteWorkToPipeline).toHaveBeenCalledWith('wr-work-1', {});
+    });
+
+    it('POST /works/:id/promote-to-pipeline returns 200 + reused=true when the link already exists', async () => {
+      const promoter = await import('../services/writersRoom/promoteToPipeline.js');
+      promoter.promoteWorkToPipeline.mockResolvedValue({
+        series: { id: 'ser-1' }, issue: { id: 'iss-1' }, reused: true,
+      });
+
+      const r = await request(app)
+        .post('/api/writers-room/works/wr-work-1/promote-to-pipeline')
+        .send({});
+      expect(r.status).toBe(200);
+      expect(r.body.reused).toBe(true);
+    });
+
+    it('POST /works/:id/promote-to-pipeline forwards force flag through', async () => {
+      const promoter = await import('../services/writersRoom/promoteToPipeline.js');
+      promoter.promoteWorkToPipeline.mockResolvedValue({
+        series: { id: 'ser-2' }, issue: { id: 'iss-2' }, reused: false,
+      });
+
+      await request(app)
+        .post('/api/writers-room/works/wr-work-1/promote-to-pipeline')
+        .send({ force: true });
+      expect(promoter.promoteWorkToPipeline).toHaveBeenCalledWith('wr-work-1', { force: true });
+    });
+
+    it('POST /works/:id/promote-to-pipeline surfaces empty-draft as 400', async () => {
+      const promoter = await import('../services/writersRoom/promoteToPipeline.js');
+      promoter.promoteWorkToPipeline.mockRejectedValue(
+        Object.assign(new Error('Cannot promote — the active draft has no prose. Write some text first.'), {
+          code: 'WR_PROMOTE_NO_DRAFT_BODY',
+        }),
+      );
+
+      const r = await request(app)
+        .post('/api/writers-room/works/wr-work-1/promote-to-pipeline')
+        .send({});
+      expect(r.status).toBe(400);
+      expect(r.body.error || r.body.message).toMatch(/no prose/i);
     });
   });
 });

@@ -15,13 +15,13 @@ import {
 } from '../../services/apiWritersRoom';
 import socket from '../../services/socket';
 import useClickOutside from '../../hooks/useClickOutside';
+import { WR_IMAGE_DEFAULTS } from '../../lib/wrImageDefaults';
 import {
-  WR_IMAGE_DEFAULTS,
   buildScenePrompt,
   matchSceneCharacters,
   matchSceneSetting,
   normCharKey,
-} from './sceneCardHelpers';
+} from '../../lib/scenePrompt';
 
 const SceneCard = forwardRef(function SceneCard({
   scene,

@@ -29,7 +29,7 @@ import { useSearchParams, useNavigate, Link } from 'react-router-dom';
 import Drawer from '../components/Drawer';
 import { ImageGenTab } from '../components/settings/ImageGenTab';
 import MediaCard from '../components/media/MediaCard';
-import MediaLightbox from '../components/media/MediaLightbox';
+import MediaPreview from '../components/media/MediaPreview';
 import StylePresetPicker from '../components/media/StylePresetPicker';
 import { normalizeVideo } from '../components/media/normalize';
 import { composeStyledPrompt } from '../lib/composeStyledPrompt';
@@ -41,7 +41,9 @@ import toast from '../components/ui/Toast';
 import BrailleSpinner from '../components/BrailleSpinner';
 import BatchQueuePanel from '../components/media/BatchQueuePanel';
 import MediaJobsQueue from '../components/media/MediaJobsQueue';
+import FavoritesFilterChip from '../components/media/FavoritesFilterChip';
 import { useMediaCompletionRefresh } from '../hooks/useMediaCompletionRefresh';
+import { useMediaAnnotations } from '../hooks/useMediaAnnotations';
 import {
   getVideoGenStatus, generateVideo, cancelVideoGen,
   listVideoHistory, deleteVideoHistoryItem, setVideoHidden, extractLastFrame,
@@ -49,7 +51,6 @@ import {
   listImageGallery,
 } from '../services/api';
 import { randomSeed, safeParseJSON } from '../lib/genUtils';
-import { getMediaNavProps } from '../lib/mediaNavigation';
 
 const RESOLUTIONS = [
   { label: '512×320 (16:10)', w: 512, h: 320 },
@@ -214,11 +215,23 @@ export default function VideoGen() {
     visibleHistory: history.filter((v) => !v.hidden),
     hiddenHistory: history.filter((v) => v.hidden),
   }), [history]);
+  const [favoritesOnly, setFavoritesOnly] = useState(false);
+  const { annotations, toggleStar, updateAnnotation } = useMediaAnnotations();
+  // Gallery sections respect the favorites filter; the extend-mode dropdown
+  // (which reads visibleHistory directly) intentionally does not, since
+  // hiding non-favorites from the "pick a previous video" picker would
+  // surprise the user.
+  const { galleryVisible, galleryHidden } = useMemo(() => {
+    if (!favoritesOnly) return { galleryVisible: visibleHistory, galleryHidden: hiddenHistory };
+    // Normalize to derive the canonical item.key rather than hand-building
+    // `video:${v.id}` — the kind/ref convention lives in normalize.js.
+    const isStarred = (v) => !!annotations[normalizeVideo(v).key]?.starred;
+    return { galleryVisible: visibleHistory.filter(isStarred), galleryHidden: hiddenHistory.filter(isStarred) };
+  }, [visibleHistory, hiddenHistory, favoritesOnly, annotations]);
   const previewItems = useMemo(() => [
-    ...visibleHistory.map(normalizeVideo),
-    ...(showHidden ? hiddenHistory.map(normalizeVideo) : []),
-  ], [visibleHistory, hiddenHistory, showHidden]);
-  const previewNavProps = getMediaNavProps(previewItems, preview, setPreview);
+    ...galleryVisible.map(normalizeVideo),
+    ...(showHidden ? galleryHidden.map(normalizeVideo) : []),
+  ], [galleryVisible, galleryHidden, showHidden]);
 
   const handleDeleteHistory = async (item) => {
     await deleteVideoHistoryItem(item.id).catch((err) => toast.error(err.message || 'Delete failed'));
@@ -722,6 +735,7 @@ export default function VideoGen() {
     onClear,
     alt,
     advisoryNote,
+    hint,
   }) => {
     // Clear button shows as soon as the user picks anything (state-only).
     // Preview gates on `uploadUrl` instead of the raw `upload` File because
@@ -772,6 +786,11 @@ export default function VideoGen() {
         {advisoryNote && (
           <p className="text-[10px] text-gray-500 leading-snug" title={advisoryNote.title}>
             {advisoryNote.text}
+          </p>
+        )}
+        {hint && (
+          <p className="text-[10px] text-port-accent/80 leading-snug" title={hint.title}>
+            {hint.text}
           </p>
         )}
       </div>
@@ -927,6 +946,10 @@ export default function VideoGen() {
                   text: 'Experimental — last frame is advisory.',
                   title: 'FFLF backend support is experimental — LTX/mlx_video uses the start frame and treats the last frame as advisory.',
                 },
+                hint: {
+                  text: 'Tip: use keyframes that share scene geometry — same camera, same subject. The model interpolates between them; unrelated images produce a visual cut.',
+                  title: 'FFLF works best when the two frames depict the same scene with continuous geometry. Both runtimes (notapalindrome and dgrauet) benefit from this.',
+                },
               })}
             </div>
           )}
@@ -1011,7 +1034,12 @@ export default function VideoGen() {
                   onChange={(e) => { setModelId(e.target.value); setSteps(''); setGuidanceScale(''); }}
                   className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
                 >
-                  {models.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                  {models.filter((m) => !m.deprecated).map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                  {models.some((m) => m.deprecated) && (
+                    <optgroup label="Legacy">
+                      {models.filter((m) => m.deprecated).map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+                    </optgroup>
+                  )}
                 </select>
               </div>
             )}
@@ -1274,46 +1302,56 @@ export default function VideoGen() {
 
       <MediaJobsQueue kind="video" />
 
-      {visibleHistory.length > 0 && (
+      {(galleryVisible.length > 0 || favoritesOnly) && (
         <div className="bg-port-card border border-port-border rounded-xl p-4 space-y-2">
-          <div className="flex items-center justify-between">
-            <h2 className="text-xs font-medium text-gray-400 uppercase tracking-wide">Recent renders ({Math.min(visibleHistory.length, 5)} of {visibleHistory.length})</h2>
-            {visibleHistory.length > 5 && (
-              <Link to="/media/history" className="text-xs text-port-accent hover:underline">View all →</Link>
-            )}
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <h2 className="text-xs font-medium text-gray-400 uppercase tracking-wide">Recent renders ({Math.min(galleryVisible.length, 5)} of {galleryVisible.length})</h2>
+            <div className="flex items-center gap-2">
+              <FavoritesFilterChip active={favoritesOnly} onToggle={() => setFavoritesOnly((v) => !v)} />
+              {galleryVisible.length > 5 && (
+                <Link to="/media/history" className="text-xs text-port-accent hover:underline">View all →</Link>
+              )}
+            </div>
           </div>
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
-            {visibleHistory.slice(0, 5).map((v) => {
-              const item = normalizeVideo(v);
-              return (
-                <MediaCard
-                  key={item.key}
-                  item={item}
-                  onPreview={() => setPreview(item)}
-                  onContinue={() => handleContinueHistory(v)}
-                  onUpscale={() => handleUpscaleHistory(v)}
-                  onDelete={() => handleDeleteHistory(v)}
-                  onToggleHidden={() => handleToggleHistoryHidden(v)}
-                />
-              );
-            })}
-          </div>
+          {galleryVisible.length === 0 ? (
+            <div className="text-xs text-gray-500 py-3">No favorited videos yet.</div>
+          ) : (
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
+              {galleryVisible.slice(0, 5).map((v) => {
+                const item = normalizeVideo(v);
+                return (
+                  <MediaCard
+                    key={item.key}
+                    item={item}
+                    onPreview={() => setPreview(item)}
+                    onContinue={() => handleContinueHistory(v)}
+                    onUpscale={() => handleUpscaleHistory(v)}
+                    onDelete={() => handleDeleteHistory(v)}
+                    onToggleHidden={() => handleToggleHistoryHidden(v)}
+                    starred={!!annotations[item.key]?.starred}
+                    hasNote={!!annotations[item.key]?.note}
+                    onToggleStar={toggleStar}
+                  />
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 
-      {hiddenHistory.length > 0 && (
+      {galleryHidden.length > 0 && (
         <div className="bg-port-card border border-port-border rounded-xl p-4 space-y-2">
           <button
             type="button"
             onClick={() => setShowHidden((s) => !s)}
             className="flex items-center justify-between w-full text-xs font-medium text-gray-400 uppercase tracking-wide hover:text-white"
           >
-            <span>{showHidden ? 'Hide' : 'Show'} hidden ({hiddenHistory.length})</span>
+            <span>{showHidden ? 'Hide' : 'Show'} hidden ({galleryHidden.length})</span>
             <span className="text-xs text-gray-500">{showHidden ? '▾' : '▸'}</span>
           </button>
           {showHidden && (
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
-              {hiddenHistory.map((v) => {
+              {galleryHidden.map((v) => {
                 const item = normalizeVideo(v);
                 return (
                   <MediaCard
@@ -1323,6 +1361,9 @@ export default function VideoGen() {
                     onContinue={() => handleContinueHistory(v)}
                     onDelete={() => handleDeleteHistory(v)}
                     onToggleHidden={() => handleToggleHistoryHidden(v)}
+                    starred={!!annotations[item.key]?.starred}
+                    hasNote={!!annotations[item.key]?.note}
+                    onToggleStar={toggleStar}
                   />
                 );
               })}
@@ -1331,11 +1372,13 @@ export default function VideoGen() {
         </div>
       )}
 
-      <MediaLightbox
-        item={preview}
-        onClose={() => setPreview(null)}
+      <MediaPreview
+        preview={preview}
+        setPreview={setPreview}
+        items={previewItems}
+        annotations={annotations}
+        updateAnnotation={updateAnnotation}
         onContinue={(item) => handleContinueHistory(item.raw)}
-        {...previewNavProps}
       />
 
       <Drawer open={settingsOpen} onClose={closeSettings} title="Media Generation Settings">

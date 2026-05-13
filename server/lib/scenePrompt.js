@@ -1,0 +1,128 @@
+/**
+ * Shared scene-prompt composer + bible matchers. Pure ESM, no Node-only
+ * deps — mirrored to `client/src/lib/scenePrompt.js` for the client bundle.
+ */
+
+const PROMPT_MAX = 1900;
+
+// Normalize a screenplay slugline so case/punctuation/dash variants collapse:
+// `INT. KITCHEN — NIGHT` and `INT KITCHEN - NIGHT` both become `INT KITCHEN NIGHT`.
+export const normalizeSlugline = (s) => String(s || '')
+  .toUpperCase()
+  .replace(/[—–-]/g, ' ')
+  .replace(/[.,:;]/g, '')
+  .replace(/\s+/g, ' ')
+  .trim();
+
+// LLM scenes name characters bare ("ARIA"); profiles may use full names
+// ("Aria Reyes") or "the bartender". Strip leading "the " and lowercase.
+export const normCharKey = (s) => String(s || '').trim().toLowerCase().replace(/^the\s+/, '');
+
+export function buildCharByKey(allCharacters) {
+  const map = new Map();
+  for (const profile of allCharacters || []) {
+    map.set(normCharKey(profile.name), profile);
+    for (const alias of profile.aliases || []) map.set(normCharKey(alias), profile);
+  }
+  return map;
+}
+
+export function matchSceneCharacters(sceneCharacterNames = [], charByKey) {
+  if (!Array.isArray(sceneCharacterNames) || !sceneCharacterNames.length) return [];
+  const matched = [];
+  const seen = new Set();
+  for (const name of sceneCharacterNames) {
+    const profile = charByKey?.get(normCharKey(name));
+    if (profile && !seen.has(profile.id || profile.name)) {
+      matched.push(profile);
+      seen.add(profile.id || profile.name);
+    }
+  }
+  return matched;
+}
+
+export function buildSettingByKey(allSettings) {
+  const map = new Map();
+  for (const setting of allSettings || []) {
+    const key = normalizeSlugline(setting.slugline || setting.name);
+    if (!key) continue;
+    map.set(key, setting);
+  }
+  return map;
+}
+
+export function matchSceneSetting(sceneSlugline, settingByKey) {
+  if (!sceneSlugline) return null;
+  return settingByKey?.get(normalizeSlugline(sceneSlugline)) || null;
+}
+
+/**
+ * Compose the final image-gen prompt with priority order (diffusion models
+ * weight earlier tokens heaviest):
+ *   1. worldStyle preset (cinematic / film-noir / etc.) — broadest aesthetic
+ *   2. workTitle — gives the model story-context cues
+ *   3. setting baseline (description / palette / recurring details) — the place
+ *   4. Featuring — char1: desc, char2: desc — the subjects
+ *   5. scene.visualPrompt — what's NEW this beat
+ *
+ * Truncation priority is the inverse: visualPrompt survives unconditionally,
+ * then setting baseline, then characters. Style + title are short so they're
+ * always kept. Featuring drops characters one-by-one to fit; setting drops
+ * secondary fields (palette, recurring) before description.
+ *
+ * Positional API kept for parity with the long-running Writers Room caller
+ * (`SceneCard.jsx`) — adding new optional kwargs at the tail is fine.
+ */
+export function buildScenePrompt(workTitle, scene, matchedCharacters, worldStyle = '', matchedSetting = null) {
+  const stylePart = worldStyle && worldStyle.trim() ? `${worldStyle.trim()}. ` : '';
+  const titlePart = workTitle ? `${workTitle}. ` : '';
+  const visual = scene?.visualPrompt || scene?.description || '';
+
+  const settingFrags = matchedSetting ? [
+    matchedSetting.description?.trim() || '',
+    matchedSetting.palette ? `Palette: ${matchedSetting.palette.trim()}.` : '',
+    matchedSetting.recurringDetails?.trim() || '',
+  ].filter(Boolean) : [];
+
+  // Accept either `physicalDescription` (writers-room shape) or
+  // `description` (pipeline shape) — the composer doesn't care which
+  // field carries the visual descriptor.
+  const featuringFragments = (matchedCharacters || [])
+    .map((c) => ({ name: c.name, desc: (c.physicalDescription || c.description || '').trim() }))
+    .filter((c) => c.desc)
+    .map((c) => `${c.name}: ${c.desc}`);
+
+  const PREFIX = 'Featuring — ';
+  const reserveCore = stylePart.length + titlePart.length + visual.length + 4;
+  let budget = PROMPT_MAX - reserveCore;
+
+  // Setting first claim on remaining budget (place baseline > characters
+  // for visual continuity across scenes).
+  const settingFit = [];
+  for (const frag of settingFrags) {
+    const cost = (settingFit.length === 0 ? 0 : 1) + frag.length;
+    if (cost > budget) break;
+    settingFit.push(frag);
+    budget -= cost;
+  }
+
+  // Then characters fill what's left, prefix included.
+  budget -= PREFIX.length;
+  const charFit = [];
+  for (const frag of featuringFragments) {
+    const cost = (charFit.length === 0 ? 0 : 1) + frag.length;
+    if (cost > budget) break;
+    charFit.push(frag);
+    budget -= cost;
+  }
+
+  const segs = [];
+  if (stylePart) segs.push(stylePart.trim());
+  if (titlePart) segs.push(titlePart.trim());
+  if (settingFit.length > 0) segs.push(settingFit.join(' '));
+  if (charFit.length > 0) segs.push(`${PREFIX}${charFit.join(' ')}`);
+  if (visual) segs.push(visual);
+  return segs.filter(Boolean).join(' ').slice(0, PROMPT_MAX);
+}
+
+export const __testing = { PROMPT_MAX };

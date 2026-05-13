@@ -183,7 +183,7 @@ export default function ImageClean() {
             Image Cleaner
           </h2>
           <p className="text-gray-500 text-sm">
-            Strip C2PA provenance + median-filter pixel noise from gpt-image-1 / Codex output.
+            Strip C2PA provenance + median-filter pixel noise from gpt-image / Codex output.
           </p>
         </div>
       </div>

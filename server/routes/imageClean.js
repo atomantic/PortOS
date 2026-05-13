@@ -1,5 +1,5 @@
 // Mirrors void-private's CodexImagegenService.cleanImage — strips C2PA
-// provenance + median-filters pixel-level noise from gpt-image-1 output.
+// provenance + median-filters pixel-level noise from gpt-image (Codex) output.
 
 import { Router } from 'express';
 import { z } from 'zod';
@@ -63,7 +63,7 @@ function isPngChunkType(buf, offset) {
 // force millions of iterations at the 40MiB input limit.
 const MAX_PNG_CHUNKS = 10000;
 
-// Walks PNG chunks once for the `caBX` provenance chunk emitted by gpt-image-1.
+// Walks PNG chunks once for the `caBX` provenance chunk emitted by gpt-image.
 // Sharp's default re-encode drops it; we detect it explicitly so the response
 // can flag what was stripped. Bails on invalid chunk type, truncated chunk, or
 // chunk-count overrun — a buffer that only matches the PNG signature but is

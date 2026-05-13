@@ -1,85 +1,8 @@
-import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { Bot, ExternalLink } from 'lucide-react';
+import { Bot } from 'lucide-react';
 import { extractKind } from './ActiveAgentsBanner.jsx';
-
-const STATUS_BADGE = {
-  pending: 'bg-port-border text-port-text-muted',
-  rendering: 'bg-port-accent/30 text-port-accent',
-  evaluating: 'bg-port-warning/30 text-port-warning',
-  accepted: 'bg-port-success/30 text-port-success',
-  failed: 'bg-port-error/30 text-port-error',
-};
-
-// Renders the preview area for a scene that has a rendered video.
-// Uses <video controls poster> so the thumbnail is shown when idle and the
-// user can play the clip in-tab without leaving the page. The browser handles
-// a missing poster (ffmpeg/thumbnail not generated) by showing its own blank
-// poster — controls remain fully accessible either way.
-//
-// `renderedJobId` survives even after the underlying mp4 is deleted from
-// history, so the <video> can fail to load. We track that with onError and
-// fall back to a "missing media" placeholder (matches the prior <a><img>
-// onError-hides-tile behavior) instead of leaving a broken control.
-function ScenePreview({ jobId, label }) {
-  const [missing, setMissing] = useState(false);
-  // `attempt` is bumped manually by the user-clickable Retry button below
-  // (and indirectly by the jobId reset effect — a re-render with the same
-  // jobId would otherwise leave a transient load error stuck for the rest
-  // of the session). Each bump remounts <video> via the keyed `?retry=N`
-  // suffix so the browser re-fetches instead of using its cached error.
-  const [attempt, setAttempt] = useState(0);
-  // Reset the missing flag when jobId changes so a re-rendered scene gets
-  // a fresh load attempt instead of inheriting the prior scene's "media
-  // missing" state. attempt resets too so the cache-busting param starts
-  // fresh per scene.
-  useEffect(() => {
-    setMissing(false);
-    setAttempt(0);
-  }, [jobId]);
-  const cacheBust = attempt > 0 ? `?retry=${attempt}` : '';
-  const videoSrc = `/data/videos/${jobId}.mp4${cacheBust}`;
-  const posterSrc = `/data/video-thumbnails/${jobId}.jpg${cacheBust}`;
-  if (missing) {
-    return (
-      <div className="bg-port-bg aspect-video flex flex-col items-center justify-center text-port-text-muted text-xs gap-2">
-        <span>media missing</span>
-        <button
-          type="button"
-          onClick={() => { setMissing(false); setAttempt((a) => a + 1); }}
-          className="px-2 py-0.5 rounded border border-port-border hover:bg-port-card text-port-text"
-        >
-          Retry
-        </button>
-      </div>
-    );
-  }
-  return (
-    <div className="relative bg-port-bg aspect-video">
-      <video
-        key={attempt}
-        src={videoSrc}
-        poster={posterSrc}
-        controls
-        preload="none"
-        playsInline
-        aria-label={label}
-        onError={() => setMissing(true)}
-        className="w-full h-full object-cover"
-      />
-      <a
-        href={videoSrc}
-        target="_blank"
-        rel="noopener noreferrer"
-        aria-label={`Open ${label} in new tab`}
-        title="Open video in new tab"
-        className="absolute top-1 right-1 p-1 rounded bg-black/50 text-white hover:bg-black/80"
-      >
-        <ExternalLink className="w-3 h-3" />
-      </a>
-    </div>
-  );
-}
+import ScenePreview from './ScenePreview.jsx';
+import { SCENE_STATUS_BADGE } from './sceneStatus.js';
 
 export default function SegmentsTab({ project, activeAgents = [] }) {
   const scenes = project.treatment?.scenes;
@@ -139,7 +62,7 @@ export default function SegmentsTab({ project, activeAgents = [] }) {
             <div className="p-2 space-y-1">
               <div className="flex items-center justify-between gap-2">
                 <div className="text-sm font-medium">Scene {s.order + 1}</div>
-                <span className={`text-xs px-2 py-0.5 rounded ${STATUS_BADGE[decoratedStatus] || ''}`}>{decoratedStatus}</span>
+                <span className={`text-xs px-2 py-0.5 rounded ${SCENE_STATUS_BADGE[decoratedStatus] || ''}`}>{decoratedStatus}</span>
               </div>
               <div className="text-xs text-port-text-muted truncate" title={s.intent}>{s.intent}</div>
               <div className="text-xs text-port-text-muted">

@@ -47,6 +47,21 @@ describe('resolveNavCommand — fuzzy matching', () => {
     expect(resolveNavCommand('goals')?.path).toBe('/goals/list');
   });
 
+  it('resolves World Builder to its new standalone Create path', () => {
+    // Promoted out of /media/world-builder; nav alias must follow.
+    const hit = resolveNavCommand('world builder');
+    expect(hit?.path).toBe('/world-builder');
+    expect(hit?.command?.id).toBe('nav.create.world-builder');
+  });
+
+  it('resolves "pipeline" to the new Create Pipeline page (not CoS Workflow)', () => {
+    // The `pipeline` alias used to belong to /cos/workflow; the new dedicated
+    // Pipeline page owns it now. CoS Workflow keeps `pipeline` as a keyword.
+    const hit = resolveNavCommand('pipeline');
+    expect(hit?.path).toBe('/pipeline');
+    expect(hit?.command?.id).toBe('nav.create.pipeline');
+  });
+
   it('resolves multi-word voice phrasings that end on a known page', () => {
     // "take me to the tasks page" → normalized "take-me-to-the-tasks-page"
     // → the resolver's "key contained in norm" tier picks up "tasks" via the

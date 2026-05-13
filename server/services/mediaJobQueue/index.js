@@ -40,6 +40,9 @@ import {
 } from '../../lib/sseUtils.js';
 import { videoGenEvents } from '../videoGen/events.js';
 import { imageGenEvents } from '../imageGenEvents.js';
+import { getSettings } from '../settings.js';
+
+const isCodexJob = (j) => j.kind === 'image' && j.params?.mode === 'codex';
 
 const JOBS_FILE = join(PATHS.data, 'media-jobs.json');
 const COMPLETED_TTL_MS = 24 * 60 * 60 * 1000;
@@ -54,6 +57,12 @@ const watchdogMs = (envValue, defaultMs) => {
 };
 const WATCHDOG_VIDEO_MS = watchdogMs(process.env.MEDIA_JOB_WATCHDOG_VIDEO_MS, 30 * 60 * 1000);
 const WATCHDOG_IMAGE_MS = watchdogMs(process.env.MEDIA_JOB_WATCHDOG_IMAGE_MS, 5 * 60 * 1000);
+// Codex jobs are silent until completion — no per-step output to reset the
+// idle watchdog. With parallel codex renders sharing OpenAI throughput, a
+// single render can easily exceed 5 minutes wall-clock, so the image-kind
+// default trips false positives. 20 minutes covers a slow generation +
+// queueing delay, and is env-overridable when batch limits change.
+const WATCHDOG_CODEX_MS = watchdogMs(process.env.MEDIA_JOB_WATCHDOG_CODEX_MS, 20 * 60 * 1000);
 
 // Returns true if `p` resolves strictly under PATHS.uploads. Shared by
 // safeUnlinkUpload (cleanup) and the pre-gen sanitizer (Thread #1 guard).
@@ -105,15 +114,35 @@ function getGenModuleForJob(job) {
 
 export const mediaJobEvents = new EventEmitter();
 
-// Live state. GPU jobs: at most one in `running` at a time. Codex image jobs
-// (`kind === 'image' && params.mode === 'codex'`) run in a separate concurrent
-// lane (`codexRunning`) because they don't share the MLX runtime. `queue`
-// holds pending jobs in submission order. `archive` holds recently-finished
-// jobs (visible for ~24h via /api/media-jobs?status=completed).
+// GPU lane: serialized — `running` holds at most one job (the MLX runtime can't
+// share VRAM). Codex lane: up to `codexParallelLimit` jobs in `codexRunning[]`
+// since each call shells out to its own external child process. `queue` is
+// shared submission order. `archive` is recently-finished jobs (~24h TTL),
+// including canceled ones so /api/media-jobs?status=canceled and the recent-
+// reel UI can still find them within the 24h window.
 const queue = [];
 let running = null;
-let codexRunning = null;
+const codexRunning = [];
 const archive = [];
+
+export const CODEX_PARALLEL_MIN = 1;
+export const CODEX_PARALLEL_MAX = 10;
+export const CODEX_PARALLEL_DEFAULT = 1;
+let codexParallelLimit = CODEX_PARALLEL_DEFAULT;
+const clampParallel = (n) => {
+  const x = Number(n);
+  if (!Number.isFinite(x) || x < 1) return CODEX_PARALLEL_DEFAULT;
+  return Math.min(Math.floor(x), CODEX_PARALLEL_MAX);
+};
+export const getCodexParallelLimit = () => codexParallelLimit;
+export function setCodexParallelLimit(n) {
+  codexParallelLimit = clampParallel(n);
+  return codexParallelLimit;
+}
+export async function refreshCodexParallelLimit() {
+  const s = await getSettings();
+  return setCodexParallelLimit(s?.imageGen?.codex?.parallelLimit ?? CODEX_PARALLEL_DEFAULT);
+}
 
 // jobId → entry consumed by lib/sseUtils.js#{broadcastSse,attachSseClient,
 // closeJobAfterDelay}. Each entry carries `clients: []` and `lastPayload`,
@@ -128,7 +157,8 @@ let initPromise = null;
 
 function findJob(jobId) {
   if (running && running.id === jobId) return running;
-  if (codexRunning && codexRunning.id === jobId) return codexRunning;
+  const codexHit = codexRunning.find((j) => j.id === jobId);
+  if (codexHit) return codexHit;
   const inQueue = queue.find((j) => j.id === jobId);
   if (inQueue) return inQueue;
   return archive.find((j) => j.id === jobId) || null;
@@ -141,7 +171,7 @@ export function getJob(jobId) {
 export function listJobs({ status, kind, owner } = {}) {
   const all = [
     ...(running ? [running] : []),
-    ...(codexRunning ? [codexRunning] : []),
+    ...codexRunning,
     ...queue,
     ...archive,
   ];
@@ -176,7 +206,7 @@ async function persistImpl() {
   archive.push(...trimmedArchive);
   const live = [
     ...(running ? [running] : []),
-    ...(codexRunning ? [codexRunning] : []),
+    ...codexRunning,
     ...queue,
     ...archive,
   ];
@@ -192,6 +222,9 @@ export async function initMediaJobQueue() {
   initPromise = (async () => {
     // Once-at-boot: subsequent persist() calls assume the data dir exists.
     await ensureDir(PATHS.data);
+    // Read the codex parallel limit before the worker starts so the first
+    // drain tick honors the user's configured value, not the default.
+    await refreshCodexParallelLimit().catch(() => {});
     const data = await readJSONFile(JOBS_FILE, { jobs: [] });
     const persistedJobs = Array.isArray(data?.jobs) ? data.jobs : [];
     const restartedFailedIds = [];
@@ -209,8 +242,10 @@ export async function initMediaJobQueue() {
         // multipart upload it staged into data/uploads would leak forever.
         // safeUnlinkUpload constrains the delete to PATHS.uploads so we
         // never delete a file the job merely referenced (gallery image,
-        // prior render, etc).
+        // prior render, etc). audioFilePath is the same kind of staged
+        // upload (a2v/voice/video jobs) — needs the same cleanup.
         safeUnlinkUpload(j.params?.uploadedTempPath);
+        safeUnlinkUpload(j.params?.audioFilePath);
         for (const p of normalizeTempPaths(j.params?.uploadedTempPaths)) {
           safeUnlinkUpload(p);
         }
@@ -226,7 +261,6 @@ export async function initMediaJobQueue() {
     // event report accurate slots. Positions are lane-scoped: Codex image
     // jobs and GPU jobs each get their own counter so a queued Codex job
     // behind a running GPU job is restored as position 1 (not position 2).
-    const isCodexJob = (j) => j.kind === 'image' && j.params?.mode === 'codex';
     let codexCounter = 0;
     let gpuCounter = 0;
     for (const q of queue) {
@@ -280,12 +314,21 @@ function startWorker() {
 // flight be picked up immediately on the next 150 ms tick instead of having
 // to wait for the entire GPU job to finish first.
 function startLaneJob(job, { isCodex }) {
-  queue.splice(queue.indexOf(job), 1);
+  // If the job isn't in the queue, it was already promoted (e.g. by a parallel
+  // runJobNow). Skip — promoting again would double-start the job and corrupt
+  // the lane (push it onto codexRunning/running twice). Silently splice(-1)
+  // would also lop the wrong job off the queue.
+  const idx = queue.indexOf(job);
+  if (idx < 0) {
+    console.log(`⚠️ media-job [${job.id.slice(0, 8)}] startLaneJob: already removed from queue, skipping`);
+    return;
+  }
+  queue.splice(idx, 1);
   job.status = 'running';
   job.startedAt = new Date().toISOString();
   job.position = 1;
   if (isCodex) {
-    codexRunning = job;
+    codexRunning.push(job);
   } else {
     running = job;
   }
@@ -313,10 +356,14 @@ function startLaneJob(job, { isCodex }) {
       }
     }
     if (isCodex) {
-      codexRunning = null;
+      const idx = codexRunning.indexOf(job);
+      if (idx >= 0) codexRunning.splice(idx, 1);
     } else {
       running = null;
     }
+    // Archive every terminal job (completed / failed / canceled). The 24h
+    // TTL prune in persistImpl keeps the file from growing unbounded, and
+    // the UI's recent-reel cap (recentLimit) handles in-memory display.
     archive.push(job);
     recomputeQueuePositions();
     persist().catch((e) => console.log(`⚠️ mediaJobQueue persist on ${label} done failed: ${e.message}`));
@@ -325,20 +372,60 @@ function startLaneJob(job, { isCodex }) {
 
 async function drainLoop() {
   while (true) {
-    // Codex lane: concurrent with GPU lane.
-    if (!codexRunning) {
-      const nextCodex = queue.find((j) => j.kind === 'image' && j.params?.mode === 'codex');
-      if (nextCodex) startLaneJob(nextCodex, { isCodex: true });
+    // Single queue scan, promote eligible codex jobs while there's room and a
+    // GPU job if the lane is open. Stops cleanly on an empty queue.
+    let gpuOpen = !running;
+    let codexSlots = codexParallelLimit - codexRunning.length;
+    if ((gpuOpen || codexSlots > 0) && queue.length > 0) {
+      for (const job of queue.slice()) {
+        if (isCodexJob(job)) {
+          if (codexSlots > 0) {
+            startLaneJob(job, { isCodex: true });
+            codexSlots -= 1;
+          }
+        } else if (gpuOpen) {
+          startLaneJob(job, { isCodex: false });
+          gpuOpen = false;
+        }
+        if (!gpuOpen && codexSlots <= 0) break;
+      }
     }
-
-    // GPU lane: serialized — at most one video or local-image job at a time.
-    if (!running) {
-      const nextGpu = queue.find((j) => !(j.kind === 'image' && j.params?.mode === 'codex'));
-      if (nextGpu) startLaneJob(nextGpu, { isCodex: false });
-    }
-
     await sleep(150);
   }
+}
+
+// Drop a job from the archive (e.g. after a successful retry — the old failed
+// row shouldn't keep cluttering the recent-reel UI now that a fresh job has
+// inherited its work). Returns true if removed, false if the id wasn't found
+// or was still live. Live jobs are deliberately left alone — the caller
+// should cancel them first.
+export function removeArchivedJob(jobId) {
+  const idx = archive.findIndex((j) => j.id === jobId);
+  if (idx < 0) return false;
+  archive.splice(idx, 1);
+  // End any SSE clients still attached within the SSE_CLEANUP_DELAY_MS grace
+  // window before dropping the entry — a bare `sseJobs.delete()` here would
+  // leave their HTTP responses dangling because closeJobAfterDelay's pending
+  // timer would find no entry to drain when it fires.
+  const sseEntry = sseJobs.get(jobId);
+  if (sseEntry) {
+    for (const c of sseEntry.clients) c.end();
+    sseJobs.delete(jobId);
+  }
+  persist().catch((e) => console.log(`⚠️ mediaJobQueue persist on archive prune failed: ${e.message}`));
+  return true;
+}
+
+// "Run now" bypass — start a queued codex job immediately even if the lane is
+// at its limit. GPU jobs are rejected (single MLX runtime would OOM).
+export function runJobNow(jobId) {
+  const job = queue.find((j) => j.id === jobId);
+  if (!job) return { ok: false, code: 'NOT_FOUND', error: 'Job not found in queue' };
+  if (!isCodexJob(job)) {
+    return { ok: false, code: 'NOT_CODEX', error: 'Only Codex image jobs can be run-now; GPU jobs serialize on the MLX runtime' };
+  }
+  startLaneJob(job, { isCodex: true });
+  return { ok: true, status: 'running' };
 }
 
 // Recompute queue positions and notify each waiting SSE client of its new
@@ -347,12 +434,11 @@ async function drainLoop() {
 // /:jobId/events would keep showing the position from its original enqueue
 // frame even after the line ahead of it cleared.
 function recomputeQueuePositions() {
-  const isCodexJob = (j) => j.kind === 'image' && j.params?.mode === 'codex';
   const codexJobs = queue.filter(isCodexJob);
   const gpuJobs = queue.filter((j) => !isCodexJob(j));
 
   codexJobs.forEach((q, i) => {
-    const newPosition = i + 1 + (codexRunning ? 1 : 0);
+    const newPosition = i + 1 + codexRunning.length;
     if (q.position !== newPosition) {
       q.position = newPosition;
       const entry = sseJobs.get(q.id);
@@ -528,9 +614,11 @@ async function runJob(job) {
   // prose) regularly while it's actually working. Any non-noise line in
   // imageGen/videoGen/local.js#handleLine emits 'activity' which resets
   // lastActivityAt; only true hangs (process wedged, no output) trip it.
-  const idleTimeoutMs = job.kind === 'video'
-    ? WATCHDOG_VIDEO_MS * Math.max(1, Number(safeParams.chunks) || 1)
-    : WATCHDOG_IMAGE_MS;
+  const idleTimeoutMs = (() => {
+    if (job.kind === 'video') return WATCHDOG_VIDEO_MS * Math.max(1, Number(safeParams.chunks) || 1);
+    if (isCodexJob(job)) return WATCHDOG_CODEX_MS;
+    return WATCHDOG_IMAGE_MS;
+  })();
   let lastActivityAt = Date.now();
   const onActivity = (e) => {
     if (e?.generationId === job.id) lastActivityAt = Date.now();
@@ -565,7 +653,7 @@ async function runJob(job) {
       const mod = await getGenModuleForJob(job);
       if (job.status !== 'running') return;
       console.log(`⏱️ media-job [${job.id.slice(0, 8)}] watchdog fired after ${idleFor}ms idle (limit ${idleTimeoutMs}ms) — marking failed`);
-      if (mod?.cancel) mod.cancel();
+      if (mod?.cancel) mod.cancel(job.id);
       handlers.failed({ error: `watchdog timeout: no runner output for ${Math.round(idleFor / 1000)}s (limit ${Math.round(idleTimeoutMs / 1000)}s)` });
     } catch (err) {
       // Don't take down the server over a watchdog tick that couldn't
@@ -595,8 +683,10 @@ async function runJob(job) {
     // validation fail). Clean up multipart upload temp files the route
     // handed us so they don't leak under data/uploads.
     // safeUnlinkUpload constrains the delete to PATHS.uploads as
-    // defense-in-depth against corrupted persisted params.
+    // defense-in-depth against corrupted persisted params. audioFilePath
+    // is the same kind of staged upload (a2v jobs) — clean it up too.
     await safeUnlinkUpload(job.params?.uploadedTempPath);
+    await safeUnlinkUpload(job.params?.audioFilePath);
     for (const p of normalizeTempPaths(job.params?.uploadedTempPaths)) {
       await safeUnlinkUpload(p);
     }
@@ -627,9 +717,9 @@ export function enqueueJob({ kind, params, owner = null }) {
     // same lane occupies slot 1, then same-lane queued jobs follow. Codex
     // jobs only count Codex ahead-of-them; GPU jobs only count GPU jobs.
     position: (() => {
-      const isCodex = kind === 'image' && params?.mode === 'codex';
-      const laneQueue = queue.filter((j) => (j.kind === 'image' && j.params?.mode === 'codex') === isCodex);
-      return laneQueue.length + (isCodex ? (codexRunning ? 1 : 0) : (running ? 1 : 0)) + 1;
+      const isCodex = isCodexJob({ kind, params });
+      const laneQueue = queue.filter((j) => isCodexJob(j) === isCodex);
+      return laneQueue.length + (isCodex ? codexRunning.length : (running ? 1 : 0)) + 1;
     })(),
   };
   queue.push(job);
@@ -671,19 +761,20 @@ export async function cancelJob(jobId) {
     // staged under PATHS.uploads. If we drop the job before it starts,
     // runJob never gets a chance to delete it — clean up here so the
     // uploads dir doesn't accumulate. safeUnlinkUpload constrains the
-    // delete to PATHS.uploads.
+    // delete to PATHS.uploads. audioFilePath is the same kind of staged
+    // upload (a2v/voice/video jobs) and would otherwise leak when the user
+    // cancels before the job starts.
     await safeUnlinkUpload(job.params?.uploadedTempPath);
+    await safeUnlinkUpload(job.params?.audioFilePath);
     for (const p of normalizeTempPaths(job.params?.uploadedTempPaths)) {
       await safeUnlinkUpload(p);
     }
     job.status = 'canceled';
-    // Persist the cancel reason on the job so a late SSE reconnect (after
-    // the live SSE entry was cleaned up) can synthesize the same terminal
-    // payload from the archived state — without this, attachSseClient's
-    // post-cleanup terminal frame would just say "Canceled" and lose the
-    // more specific "Canceled before start" reason we just broadcast.
     job.error = 'Canceled before start';
     job.completedAt = new Date().toISOString();
+    // Archive so /api/media-jobs?status=canceled and the recent-reel UI
+    // can still find it within the 24h TTL. Mirrors the running-cancel path
+    // in startLaneJob's terminal handler.
     archive.push(job);
     // Removing a queued job shifts everyone behind it up one slot. Recompute
     // + broadcast so clients still attached to those SSE streams see the new
@@ -700,16 +791,16 @@ export async function cancelJob(jobId) {
     console.log(`🛑 media-job [${jobId.slice(0, 8)}] canceled (was queued)`);
     return { ok: true, status: 'canceled' };
   }
-  // Check both the GPU slot and the Codex slot for a running-cancel.
-  const runningJob = (running?.id === jobId ? running : null) ?? (codexRunning?.id === jobId ? codexRunning : null);
+  // Cancel-while-running — check the GPU slot and every parallel codex slot.
+  const runningJob = (running?.id === jobId ? running : null)
+    ?? codexRunning.find((j) => j.id === jobId)
+    ?? null;
   if (runningJob) {
-    // Flag the job so the dispatcher's `failed` handler treats the SIGTERM-
-    // induced failure as `canceled` rather than `failed`. Without this the
-    // job would land in archive with status='failed' and listing by
-    // status='canceled' would be empty for running cancels.
+    // cancelRequested flips the dispatcher's `failed` handler into the
+    // `canceled` branch instead of marking it failed.
     runningJob.cancelRequested = true;
     const mod = await getGenModuleForJob(runningJob);
-    if (mod?.cancel) mod.cancel();
+    if (mod?.cancel) mod.cancel(jobId);
     console.log(`🛑 media-job [${jobId.slice(0, 8)}] cancel signal sent (was running)`);
     return { ok: true, status: 'canceling' };
   }
@@ -785,11 +876,16 @@ function sleep(ms) {
 export function __resetForTests() {
   queue.length = 0;
   running = null;
-  codexRunning = null;
+  // `codexRunning` is a const array — clear it in place rather than reassigning,
+  // which would throw TypeError and break `findJob()` (.find on null).
+  codexRunning.length = 0;
   archive.length = 0;
   sseJobs.clear();
   workerStarted = false;
   initPromise = null;
+  // Reset the lane limit too — a test that called setCodexParallelLimit(N)
+  // otherwise leaks N into subsequent tests and makes ordering matter.
+  codexParallelLimit = CODEX_PARALLEL_DEFAULT;
   // Reset the persist chain so a leftover rejection from a previous test's
   // ENOENT writes doesn't poison subsequent persist() calls.
   persistChain = Promise.resolve();

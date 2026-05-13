@@ -245,6 +245,8 @@ export async function listWorks() {
         activeDraftVersionId: manifest.activeDraftVersionId,
         wordCount: activeDraft?.wordCount ?? 0,
         draftCount: (manifest.drafts || []).length,
+        pipelineSeriesId: manifest.pipelineSeriesId || null,
+        pipelineIssueId: manifest.pipelineIssueId || null,
         createdAt: manifest.createdAt,
         updatedAt: manifest.updatedAt,
       };
@@ -333,6 +335,24 @@ export async function updateWork(id, patch) {
     const folders = await loadFolders();
     if (!folders.find((f) => f.id === patch.folderId)) throw notFound('Folder');
   }
+  await saveManifest(id, next);
+  return next;
+}
+
+/**
+ * Bidirectional bridge link: record that this work was promoted to a pipeline
+ * series + first issue. Set once by `promoteToPipeline`; the WR side reads it
+ * to render the "Open in pipeline" CTA on the work detail page. Distinct from
+ * `updateWork` because the link isn't user-editable. Pass `null` to unlink.
+ */
+export async function linkToPipeline(id, { seriesId = null, issueId = null } = {}) {
+  const manifest = await getWork(id);
+  const next = {
+    ...manifest,
+    pipelineSeriesId: seriesId ? String(seriesId).slice(0, 64) : null,
+    pipelineIssueId: issueId ? String(issueId).slice(0, 64) : null,
+    updatedAt: nowIso(),
+  };
   await saveManifest(id, next);
   return next;
 }

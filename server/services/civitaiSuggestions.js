@@ -17,10 +17,11 @@ import {
   searchCivitaiLoras,
   extractSamplePrompt,
 } from '../lib/civitai.js';
+import { RUNNER_FAMILIES } from '../lib/runners.js';
 import { resolveCivitaiKey } from './loras.js';
 
 const TTL_MS = 60 * 60 * 1000; // 1 hour
-const RUNNER_FAMILIES = ['mflux', 'flux2', 'z-image', 'ernie'];
+const RUNNER_FAMILY_LIST = Object.values(RUNNER_FAMILIES);
 
 // Hand-curated picks that always lead the suggestion panel regardless of
 // whether they crack Civitai's "Most Downloaded" leaderboard. Compat per
@@ -187,7 +188,7 @@ const fetchSuggestionsFor = async (runnerFamily, { fetchImpl, force = false } = 
 export const getSuggestions = async ({ fetchImpl, limit = 4, force = false } = {}) => {
   const [curated, runnerEntries] = await Promise.all([
     getCurated({ fetchImpl, force }),
-    Promise.all(RUNNER_FAMILIES.map(async (family) => {
+    Promise.all(RUNNER_FAMILY_LIST.map(async (family) => {
       const cards = await fetchSuggestionsFor(family, { fetchImpl, force })
         .catch((err) => {
           console.log(`⚠️ Civitai suggestion fetch failed for ${family}: ${err?.message || err}`);

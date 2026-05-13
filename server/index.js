@@ -67,6 +67,7 @@ import searchRoutes from './routes/search.js';
 import paletteRoutes from './routes/palette.js';
 import dashboardLayoutsRoutes from './routes/dashboardLayouts.js';
 import mediaCollectionsRoutes from './routes/mediaCollections.js';
+import mediaAnnotationsRoutes from './routes/mediaAnnotations.js';
 import dataSyncRoutes from './routes/dataSync.js';
 import identityRoutes from './routes/identity.js';
 import instancesRoutes from './routes/instances.js';
@@ -88,6 +89,7 @@ import creativeDirectorRoutes from './routes/creativeDirector.js';
 import writersRoomRoutes from './routes/writersRoom.js';
 import worldBuilderRoutes from './routes/worldBuilder.js';
 import { initWorldBuilderCollectionHook } from './services/worldBuilderCollectionHook.js';
+import pipelineRoutes from './routes/pipeline.js';
 import { initMediaJobQueue } from './services/mediaJobQueue/index.js';
 import { recoverInFlightProjects } from './services/creativeDirector/recovery.js';
 import imageVideoModelsRoutes from './routes/imageVideoModels.js';
@@ -119,6 +121,7 @@ import { restoreLoops } from './services/loops.js';
 import { startBrainScheduler } from './services/brainScheduler.js';
 import { recoverStuckClassifications } from './services/brain.js';
 import { recoverStuckAnalyses } from './services/writersRoom/evaluator.js';
+import { recoverStuckAutoRuns } from './services/pipeline/autoRunner.js';
 import { initBridge as initBrainMemoryBridge } from './services/brainMemoryBridge.js';
 import { initDrillCache } from './services/meatspacePostDrillCache.js';
 import { createAIToolkit } from 'portos-ai-toolkit/server';
@@ -271,6 +274,7 @@ app.use('/api/search', searchRoutes);
 app.use('/api/palette', paletteRoutes);
 app.use('/api/dashboard/layouts', dashboardLayoutsRoutes);
 app.use('/api/media/collections', mediaCollectionsRoutes);
+app.use('/api/media/annotations', mediaAnnotationsRoutes);
 app.use('/api/attachments', attachmentsRoutes);
 app.use('/api/backup', backupRoutes);
 app.use('/api/database', databaseRoutes);
@@ -331,6 +335,7 @@ app.use('/api/media-jobs', mediaJobsRoutes);
 app.use('/api/creative-director', creativeDirectorRoutes);
 app.use('/api/writers-room', writersRoomRoutes);
 app.use('/api/world-builder', worldBuilderRoutes);
+app.use('/api/pipeline', pipelineRoutes);
 app.use('/api/image-video/models', imageVideoModelsRoutes);
 app.use('/api/loras', lorasRoutes);
 // AUTOMATIC1111-compatible surface for tailnet clients — gated by
@@ -356,6 +361,7 @@ try {
 // Recover any inbox entries stuck in 'classifying' from a previous crash/restart
 recoverStuckClassifications().catch(err => console.error(`❌ Brain recovery failed: ${err.message}`));
 recoverStuckAnalyses().catch(err => console.error(`❌ Writers Room recovery failed: ${err.message}`));
+recoverStuckAutoRuns().catch(err => console.error(`❌ Pipeline auto-run recovery failed: ${err.message}`));
 // Initialize brain scheduler for daily digests and weekly reviews
 startBrainScheduler();
 // Initialize brain→memory bridge (mirrors brain data into CoS memory for semantic search)
@@ -545,7 +551,17 @@ let shuttingDown = false;
 const shutdown = async (signal) => {
   if (shuttingDown) return;
   shuttingDown = true;
-  console.log(`🛑 Received ${signal} - shutting down gracefully`);
+  // Diagnostic context for the shutdown trigger. ppid tells us whether the
+  // signal came from PM2 (parent is the PM2 god process), a TTY (parent is
+  // the user's shell), or some external orchestrator. pm_* env vars are set
+  // by PM2 so their presence + a matching ppid is the smoking gun.
+  const pid = process.pid;
+  const ppid = process.ppid;
+  const tty = process.stdin.isTTY ? 'tty' : 'no-tty';
+  const pmId = process.env.pm_id ?? process.env.PM2_ID ?? '<not set>';
+  const pmExecPath = process.env.pm_exec_path ?? '<not set>';
+  console.log(`🛑 Received ${signal} - shutting down gracefully (pid=${pid} ppid=${ppid} ${tty} pm_id=${pmId})`);
+  if (pmExecPath !== '<not set>') console.log(`   ↳ launched by PM2: pm_exec_path=${pmExecPath}`);
 
   const forceExitTimer = setTimeout(() => {
     console.error('⚠️ Graceful shutdown timed out, forcing exit');

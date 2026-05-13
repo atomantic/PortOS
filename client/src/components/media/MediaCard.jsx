@@ -1,4 +1,4 @@
-import { Trash2, Download, Film, Image as ImageIcon, Sparkles, Eye, EyeOff, Maximize2, Wand2 } from 'lucide-react';
+import { Trash2, Download, Film, Image as ImageIcon, Sparkles, Eye, EyeOff, Maximize2, Wand2, Star, MessageSquare } from 'lucide-react';
 import AddToCollectionMenu from './AddToCollectionMenu';
 import { loraDisplayName } from './normalize';
 
@@ -22,6 +22,9 @@ export default function MediaCard({
   disabled = false,
   hideActions = false,
   showCollectionMenu = true,
+  starred = false,
+  hasNote = false,
+  onToggleStar,
 }) {
   const { kind, prompt, modelId, previewUrl, downloadUrl } = item;
   const isVideo = kind === 'video';
@@ -42,12 +45,33 @@ export default function MediaCard({
             {isVideo ? <Film className="w-10 h-10" /> : <ImageIcon className="w-10 h-10" />}
           </div>
         )}
-        <span className="absolute bottom-1 right-1 text-[9px] px-1.5 py-0.5 bg-black/70 text-white rounded uppercase tracking-wide">
-          {isVideo ? 'Video' : 'Image'}
-        </span>
         {selectionLabel != null && (
           <div className="absolute top-1.5 left-1.5 w-5 h-5 rounded-full bg-port-accent text-white text-[10px] font-bold flex items-center justify-center">
             {selectionLabel}
+          </div>
+        )}
+        {(onToggleStar || starred || hasNote) && (
+          <div className="absolute bottom-1.5 left-1.5 flex items-center gap-1">
+            {onToggleStar && (
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); onToggleStar(item); }}
+                className={`p-1 rounded-full ${starred ? 'bg-port-warning/90 text-black' : 'bg-black/50 text-white/70 hover:text-white'}`}
+                title={starred ? 'Unfavorite' : 'Favorite'}
+                aria-label={starred ? 'Unfavorite' : 'Favorite'}
+              >
+                <Star className={`w-3.5 h-3.5 ${starred ? 'fill-current' : ''}`} />
+              </button>
+            )}
+            {hasNote && (
+              <span
+                className="p-1 rounded-full bg-port-accent/80 text-white"
+                title="Has note"
+                aria-label="Has note"
+              >
+                <MessageSquare className="w-3 h-3" />
+              </span>
+            )}
           </div>
         )}
         <div className="absolute top-1.5 right-1.5 flex flex-col items-end gap-0.5">

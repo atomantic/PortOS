@@ -9,14 +9,15 @@ import { Link, useNavigate } from 'react-router-dom';
 import { Combine, Image as ImageIcon, Film, Search, X } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import MediaCard from '../components/media/MediaCard';
-import MediaLightbox from '../components/media/MediaLightbox';
+import MediaPreview from '../components/media/MediaPreview';
+import FavoritesFilterChip from '../components/media/FavoritesFilterChip';
 import { normalizeImage, normalizeVideo } from '../components/media/normalize';
 import { useMediaCompletionRefresh } from '../hooks/useMediaCompletionRefresh';
-import { getMediaNavProps } from '../lib/mediaNavigation';
+import { useMediaAnnotations } from '../hooks/useMediaAnnotations';
 import {
   listVideoHistory, deleteVideoHistoryItem, extractLastFrame, stitchVideos,
   upscaleVideo,
-  listImageGallery, deleteImage,
+  listImageGallery, deleteImage, cleanGalleryImage,
 } from '../services/api';
 
 const FILTERS = [
@@ -35,6 +36,8 @@ export default function MediaHistory() {
   const [selected, setSelected] = useState([]); // video ids
   const [stitching, setStitching] = useState(false);
   const [preview, setPreview] = useState(null);
+  const [favoritesOnly, setFavoritesOnly] = useState(false);
+  const { annotations, toggleStar, updateAnnotation } = useMediaAnnotations();
 
   const refresh = useCallback(async ({ silent = false } = {}) => {
     if (!silent) setLoading(true);
@@ -84,11 +87,14 @@ export default function MediaHistory() {
     () => tokens.length === 0 ? items : items.filter((_, idx) => tokens.every((t) => haystacks[idx].includes(t))),
     [items, haystacks, tokens]
   );
-  const filtered = useMemo(
+  const kindFiltered = useMemo(
     () => filter === 'all' ? searched : searched.filter(i => i.kind === filter),
     [searched, filter]
   );
-  const previewNavProps = getMediaNavProps(filtered, preview, setPreview);
+  const filtered = useMemo(
+    () => favoritesOnly ? kindFiltered.filter((i) => annotations[i.key]?.starred) : kindFiltered,
+    [kindFiltered, favoritesOnly, annotations]
+  );
   const counts = useMemo(() => {
     const c = { all: 0, image: 0, video: 0 };
     for (const i of searched) {
@@ -140,6 +146,17 @@ export default function MediaHistory() {
     } catch (err) {
       toast.error(err.message || 'Failed to extract last frame');
     }
+  };
+
+  const handleClean = async (img, level) => {
+    if (!img?.filename) throw new Error('Missing filename');
+    const cleaned = await cleanGalleryImage(img.filename, level).catch((err) => {
+      toast.error(err.message || 'Failed to clean image');
+      throw err;
+    });
+    const normalized = normalizeImage(cleaned);
+    setItems((prev) => [normalized, ...prev.filter((x) => x.key !== normalized.key)]);
+    toast.success(`Cleaned (${level}) → ${cleaned.filename}`);
   };
 
   const handleRemix = (item) => {
@@ -220,6 +237,7 @@ export default function MediaHistory() {
               {f.label} <span className="opacity-60">{counts[f.id]}</span>
             </button>
           ))}
+          <FavoritesFilterChip active={favoritesOnly} onToggle={() => setFavoritesOnly((v) => !v)} size="md" />
         </div>
         <div className="flex items-center gap-1">
           <Link to="/media/image" className="flex items-center gap-1.5 px-2 py-1 text-xs text-gray-300 hover:text-white border border-port-border rounded hover:bg-port-border/50">
@@ -284,19 +302,25 @@ export default function MediaHistory() {
                 selected={idx !== -1}
                 disabled={stitchMode && it.kind !== 'video'}
                 hideActions={stitchMode}
+                starred={!!annotations[it.key]?.starred}
+                hasNote={!!annotations[it.key]?.note}
+                onToggleStar={!stitchMode ? toggleStar : undefined}
               />
             );
           })}
         </div>
       )}
 
-      <MediaLightbox
-        item={preview}
-        onClose={() => setPreview(null)}
+      <MediaPreview
+        preview={preview}
+        setPreview={setPreview}
+        items={filtered}
+        annotations={annotations}
+        updateAnnotation={updateAnnotation}
         onRemix={handleRemix}
         onSendToVideo={handleSendToVideo}
         onContinue={handleContinue}
-        {...previewNavProps}
+        onClean={(item, level) => handleClean(item?.raw, level)}
       />
     </div>
   );

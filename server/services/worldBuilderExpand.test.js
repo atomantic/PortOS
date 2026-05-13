@@ -239,4 +239,13 @@ describe('worldBuilderExpand.EXPANSION_PROMPT', () => {
     expect(EXPANSION_PROMPT).toContain('world summary concept pitch poster');
     expect(EXPANSION_PROMPT).toContain('materials swatches');
   });
+
+  it('asks the LLM to emit a narrative bible (logline / premise / styleNotes)', () => {
+    // The pipeline pulls these straight into the New Series form, so the
+    // contract has to stay in the prompt. If this assertion fails, double-
+    // check that worldBuilderExpand.js still hydrates the three fields too.
+    expect(EXPANSION_PROMPT).toContain('logline:');
+    expect(EXPANSION_PROMPT).toContain('premise:');
+    expect(EXPANSION_PROMPT).toContain('styleNotes:');
+  });
 });
