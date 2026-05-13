@@ -537,6 +537,11 @@ export default function WorldBuilder() {
       next[key] = patch[key];
     }
     if (patch.influences != null) next.influences = ensureInfluences(patch.influences);
+    // Holistic refine returns categories + composites when the world has
+    // been expanded; the server already enforced per-item locks before
+    // sending these back, so apply directly.
+    if (patch.categories) next.categories = ensureDraftCategories(patch.categories);
+    if (Array.isArray(patch.compositeSheets)) next.compositeSheets = patch.compositeSheets;
     setDraft(next);
     if (selectedId && next.name?.trim()) {
       const updated = await updateWorld(selectedId, {
@@ -872,6 +877,8 @@ export default function WorldBuilder() {
           premise={draft.premise || ''}
           styleNotes={draft.styleNotes || ''}
           influences={ensureInfluences(draft.influences)}
+          categories={draft.categories || {}}
+          compositeSheets={draft.compositeSheets || []}
           locked={draft.locked || {}}
           defaultProviderId={draft.llm?.provider || activeProviderId || null}
           defaultModel={draft.llm?.model || null}

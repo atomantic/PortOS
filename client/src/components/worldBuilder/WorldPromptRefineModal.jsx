@@ -1,22 +1,23 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Check, Lock, Sparkles, Wand2, X } from 'lucide-react';
+import { Check, Lock, Minus, Plus, Sparkles, Wand2, X } from 'lucide-react';
 import ProviderModelSelector from '../ProviderModelSelector';
 import toast from '../ui/Toast';
 import useProviderModels from '../../hooks/useProviderModels';
 import {
-  refineWorldPrompts, WORLD_LOCKABLE_FIELDS, ensureInfluences, isInfluenceLockField,
+  refineWorldPrompts, WORLD_LOCKABLE_FIELDS, ensureInfluences, isInfluenceLockField, normalizeLabelKey,
 } from '../../services/api';
 import InfluenceChipsInput from './InfluenceChipsInput';
 
 /**
- * Refines all six top-level world fields (Starter Idea, Style Prompt, Negative
- * Prompt, Logline, Premise, Style Notes) based on user feedback. Mirrors
- * PromptRefineModal's shape — feedback box, provider/model selector,
- * refined-fields review, then apply.
+ * Refines world fields (bible + influences) and, when the world has been
+ * expanded, also the structure (categories + composite sheets) based on user
+ * feedback. Mirrors PromptRefineModal's shape — feedback box, provider/model
+ * selector, refined-fields review, then apply.
  *
- * Locked fields (passed via the `locked` prop) are read-only in both the
- * originals preview and the refined section, and are NEVER applied back to
- * the parent draft — defense-in-depth on top of the server-side lock honoring.
+ * Locked fields / locked variations / locked composites are preserved
+ * server-side; the modal renders them as read-only and never applies a change
+ * to a locked entity. Locked influence lists are append-only in this path
+ * (server may add new tokens; existing ones round-trip in order).
  */
 
 const FIELD_LABELS = {
@@ -52,6 +53,11 @@ export default function WorldPromptRefineModal({
   premise = '',
   styleNotes = '',
   influences = emptyInfluences(),
+  // Post-Expand world structure — when present, the refiner sees and may
+  // edit categories + composite sheets alongside the bible. Pre-Expand drafts
+  // pass null/empty and the modal degrades to bible-only mode.
+  categories = null,
+  compositeSheets = null,
   locked = {},
   // Optional pre-selected provider/model — when a world already pins an LLM
   // for expansion, default the refiner to the same combo so the user doesn't
@@ -75,7 +81,14 @@ export default function WorldPromptRefineModal({
   const originals = useMemo(() => ({
     starterPrompt, stylePrompt, negativePrompt, logline, premise, styleNotes,
     influences: ensureInfluences(influences),
-  }), [starterPrompt, stylePrompt, negativePrompt, logline, premise, styleNotes, influences]);
+    categories: categories && typeof categories === 'object' ? categories : {},
+    compositeSheets: Array.isArray(compositeSheets) ? compositeSheets : [],
+  }), [starterPrompt, stylePrompt, negativePrompt, logline, premise, styleNotes, influences, categories, compositeSheets]);
+
+  const hasStructure = useMemo(() => (
+    Object.keys(originals.categories).length > 0 ||
+    originals.compositeSheets.length > 0
+  ), [originals.categories, originals.compositeSheets]);
 
   const [feedback, setFeedback] = useState('');
   const [refined, setRefined] = useState({});
@@ -120,6 +133,9 @@ export default function WorldPromptRefineModal({
     setChanges([]);
     const result = await refineWorldPrompts({
       ...originals,
+      // Empty structure → server reverts to bible-only refine.
+      categories: hasStructure ? originals.categories : undefined,
+      compositeSheets: hasStructure ? originals.compositeSheets : undefined,
       locked,
       feedback: feedback.trim(),
       providerId: selectedProviderId,
@@ -133,6 +149,12 @@ export default function WorldPromptRefineModal({
       next[key] = result[key] ?? '';
     }
     next.influences = ensureInfluences(result.influences);
+    if (result.categories && typeof result.categories === 'object') {
+      next.categories = result.categories;
+    }
+    if (Array.isArray(result.compositeSheets)) {
+      next.compositeSheets = result.compositeSheets;
+    }
     setRefined(next);
     setRationale(result.rationale || '');
     setChanges(Array.isArray(result.changes) ? result.changes : []);
@@ -154,12 +176,18 @@ export default function WorldPromptRefineModal({
     }
     const refinedInf = ensureInfluences(refined.influences);
     const origInf = originals.influences;
+    // Influences in refine mode are append-only when locked, so the server's
+    // returned list is always safe to apply directly (locked tokens are
+    // preserved in order, new tokens appended).
     patch.influences = {
-      embrace: locked.influencesEmbrace ? origInf.embrace : refinedInf.embrace,
-      avoid: locked.influencesAvoid ? origInf.avoid : refinedInf.avoid,
+      embrace: refinedInf.embrace.length ? refinedInf.embrace : origInf.embrace,
+      avoid: refinedInf.avoid.length ? refinedInf.avoid : origInf.avoid,
     };
+    // Server already enforced per-item locks before returning these.
+    if (refined.categories) patch.categories = refined.categories;
+    if (refined.compositeSheets) patch.compositeSheets = refined.compositeSheets;
     onApply(patch);
-    toast.success('Refined fields applied');
+    toast.success('Refined world applied');
     onClose();
   };
 
@@ -180,7 +208,7 @@ export default function WorldPromptRefineModal({
           <div className="flex items-center gap-2 min-w-0">
             <Sparkles className="w-4 h-4 text-port-accent shrink-0" />
             <h2 id="world-refine-title" className="text-sm font-semibold text-white">
-              Refine world prompts
+              {hasStructure ? 'Refine world' : 'Refine world prompts'}
             </h2>
           </div>
           <button
@@ -197,7 +225,9 @@ export default function WorldPromptRefineModal({
           <p className="text-xs text-gray-400">
             Describe what you want the world to feel like — story tone, era, art-direction
             references, what to avoid. The LLM rewrites your starter, prompts, and bible
-            fields to match. Locked fields stay untouched. Review the result before applying.
+            fields{hasStructure ? ', plus categories + composite sheets,' : ''} to match.
+            Locked fields and locked items stay untouched (locked influence lists are
+            preserved in order but may gain new tokens). Review the result before applying.
           </p>
 
           {/* Originals — read-only preview so the user remembers what's about
@@ -303,6 +333,14 @@ export default function WorldPromptRefineModal({
                 lockedEmbrace={!!locked.influencesEmbrace}
                 lockedAvoid={!!locked.influencesAvoid}
               />
+              {(refined.categories || refined.compositeSheets) && (
+                <StructureDiff
+                  originalCategories={originals.categories}
+                  refinedCategories={refined.categories}
+                  originalComposites={originals.compositeSheets}
+                  refinedComposites={refined.compositeSheets}
+                />
+              )}
             </div>
           )}
         </div>
@@ -408,6 +446,107 @@ function RefinedInfluences({ label, value, onChange, lockedEmbrace, lockedAvoid 
           />
         </div>
       </div>
+    </div>
+  );
+}
+
+function diffItems(orig, fresh) {
+  const origByKey = new Map(orig.map((i) => [normalizeLabelKey(i.label), i]));
+  const freshByKey = new Map(fresh.map((i) => [normalizeLabelKey(i.label), i]));
+  const rows = [];
+  for (const item of fresh) {
+    const prev = origByKey.get(normalizeLabelKey(item.label));
+    if (!prev) {
+      rows.push({ status: 'added', current: item });
+    } else if (prev.locked) {
+      rows.push({ status: 'locked', current: prev });
+    } else if (prev.prompt === item.prompt) {
+      rows.push({ status: 'unchanged', current: item });
+    } else {
+      rows.push({ status: 'changed', current: item, previous: prev });
+    }
+  }
+  for (const item of orig) {
+    if (!freshByKey.has(normalizeLabelKey(item.label))) {
+      rows.push({ status: 'removed', current: item });
+    }
+  }
+  return rows;
+}
+
+function DiffRow({ status, current, previous }) {
+  const accents = {
+    added: 'border-port-success/40 bg-port-success/5',
+    removed: 'border-port-error/40 bg-port-error/5',
+    changed: 'border-port-accent/40 bg-port-accent/5',
+    locked: 'border-port-accent/20 bg-port-bg',
+    unchanged: 'border-port-border bg-port-bg',
+  };
+  const badges = {
+    added: <span className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wide text-port-success"><Plus className="w-3 h-3" /> Added</span>,
+    removed: <span className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wide text-port-error"><Minus className="w-3 h-3" /> Removed</span>,
+    changed: <span className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wide text-port-accent">Changed</span>,
+    locked: <span className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wide text-port-accent"><Lock className="w-3 h-3" /> Locked</span>,
+    unchanged: <span className="text-[10px] uppercase tracking-wide text-gray-500">Unchanged</span>,
+  };
+  return (
+    <div className={`border rounded p-2 ${accents[status]}`}>
+      <div className="flex items-center justify-between gap-2 mb-1">
+        <div className="text-xs font-medium text-white truncate">{current.label}</div>
+        {badges[status]}
+      </div>
+      {status === 'changed' && (
+        <div className="text-[11px] text-gray-500 whitespace-pre-wrap line-clamp-2 line-through">
+          {previous.prompt}
+        </div>
+      )}
+      <div className={`text-[11px] whitespace-pre-wrap ${status === 'removed' ? 'text-gray-500 line-through' : 'text-gray-300'}`}>
+        {current.prompt}
+      </div>
+    </div>
+  );
+}
+
+function StructureDiff({ originalCategories, refinedCategories, originalComposites, refinedComposites }) {
+  const catKeys = useMemo(() => {
+    const keys = new Set([
+      ...Object.keys(originalCategories || {}),
+      ...Object.keys(refinedCategories || {}),
+    ]);
+    return Array.from(keys).sort();
+  }, [originalCategories, refinedCategories]);
+
+  return (
+    <div className="space-y-3">
+      <div className="text-xs font-semibold uppercase tracking-wide text-gray-400">
+        Structure changes
+      </div>
+      {catKeys.map((key) => {
+        const orig = originalCategories?.[key]?.variations || [];
+        const fresh = refinedCategories?.[key]?.variations || [];
+        const rows = diffItems(orig, fresh);
+        if (!rows.length) return null;
+        return (
+          <div key={key} className="border border-port-border rounded-lg p-2 bg-port-bg/50">
+            <div className="text-[11px] uppercase tracking-wide text-gray-500 mb-2">{key}</div>
+            <div className="space-y-1.5">
+              {rows.map((r, i) => (
+                <DiffRow key={`${key}-${r.current.label}-${i}`} {...r} />
+              ))}
+            </div>
+          </div>
+        );
+      })}
+      {(originalComposites?.length || refinedComposites?.length) > 0 && (
+        <div className="border border-port-border rounded-lg p-2 bg-port-bg/50">
+          <div className="text-[11px] uppercase tracking-wide text-gray-500 mb-2">composite sheets</div>
+          <div className="space-y-1.5">
+            {diffItems(originalComposites || [], refinedComposites || []).map((r, i) => (
+              <DiffRow key={`comp-${r.current.label}-${i}`} {...r} />
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

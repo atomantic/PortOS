@@ -52,6 +52,10 @@ export const refineWorldPrompts = ({
   starterPrompt, stylePrompt, negativePrompt,
   logline, premise, styleNotes,
   influences,
+  // Post-Expand structure — when provided, the server sees the full world and
+  // may edit/replace/add categories + composites alongside the bible refine.
+  // Omit (or pass empty/falsy) to get the bible-only behavior.
+  categories, compositeSheets,
   locked,
   feedback, providerId, model,
 } = {}) => request('/world-builder/refine-prompts', {
@@ -60,6 +64,8 @@ export const refineWorldPrompts = ({
     starterPrompt, stylePrompt, negativePrompt,
     logline, premise, styleNotes,
     influences,
+    ...(categories && Object.keys(categories).length ? { categories } : {}),
+    ...(Array.isArray(compositeSheets) && compositeSheets.length ? { compositeSheets } : {}),
     locked,
     feedback, providerId, model,
   }),
@@ -77,6 +83,11 @@ export const WORLD_LOCKABLE_FIELDS = [
   'influencesEmbrace',
   'influencesAvoid',
 ];
+
+// Mirror of `normalizeLabelKey` in server/services/worldBuilder.js — used for
+// case-insensitive identity matching between original and refined items.
+export const normalizeLabelKey = (label) =>
+  typeof label === 'string' ? label.trim().toLowerCase() : '';
 
 // Coerce whatever shape the server / draft / patch hands us into a strict
 // `{ embrace: [], avoid: [] }` so consumers never have to guard undefined.

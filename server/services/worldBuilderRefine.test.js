@@ -1,10 +1,13 @@
 import { describe, it, expect } from "vitest";
 import { __testing } from "./worldBuilderRefine.js";
+import { mergeInfluencesWithLocksAdditive } from "./worldBuilder.js";
 
 const {
   extractRefinementJson,
   buildWorldRefinePrompt,
   collapseStyleDirectionDupes,
+  mergeCategoriesWithLocks,
+  mergeCompositesWithLocks,
 } = __testing;
 
 describe("worldBuilderRefine.extractRefinementJson", () => {
@@ -241,5 +244,205 @@ describe("worldBuilderRefine.collapseStyleDirectionDupes", () => {
     const out = collapseStyleDirectionDupes(input);
     expect((out.match(/style direction:/gi) || []).length).toBe(1);
     expect(out).toContain("Style Direction: upper");
+  });
+});
+
+describe("worldBuilderRefine.buildWorldRefinePrompt — structure-aware path", () => {
+  it("emits an ORIGINAL CATEGORIES block + structure schema when categories are passed", () => {
+    const out = buildWorldRefinePrompt({
+      starterPrompt: "seed",
+      stylePrompt: "",
+      negativePrompt: "",
+      categories: {
+        factions: {
+          variations: [
+            { label: "The Velvet Null", prompt: "ink-noir cabal", locked: true },
+            { label: "The Lollipop Bureau", prompt: "pastel agency" },
+          ],
+        },
+      },
+      feedback: "replace lollipop bureau",
+    });
+    expect(out).toContain("ORIGINAL CATEGORIES");
+    expect(out).toContain('"The Velvet Null" [LOCKED]');
+    expect(out).toContain('"The Lollipop Bureau"');
+    expect(out).not.toMatch(/"The Lollipop Bureau" \[LOCKED\]/);
+    expect(out).toContain('"categories"');
+    expect(out).toContain("STRUCTURE RULES");
+    expect(out).toMatch(/APPEND new tokens/);
+  });
+
+  it("emits an ORIGINAL COMPOSITE SHEETS block when sheets are passed", () => {
+    const out = buildWorldRefinePrompt({
+      starterPrompt: "seed",
+      stylePrompt: "",
+      negativePrompt: "",
+      compositeSheets: [
+        { kind: "world_pitch_poster", label: "Pitch poster", prompt: "city skyline", locked: true },
+        { kind: "reference_sheet", label: "Uniforms sheet", prompt: "rival branding" },
+      ],
+      feedback: "x",
+    });
+    expect(out).toContain("ORIGINAL COMPOSITE SHEETS");
+    expect(out).toContain('"Pitch poster" [LOCKED]');
+    expect(out).toContain('"Uniforms sheet"');
+    expect(out).toContain('"compositeSheets"');
+  });
+
+  it("omits structure sections entirely when no categories/composites are passed (pre-Expand)", () => {
+    const out = buildWorldRefinePrompt({
+      starterPrompt: "seed",
+      stylePrompt: "",
+      negativePrompt: "",
+      feedback: "x",
+    });
+    expect(out).not.toContain("ORIGINAL CATEGORIES");
+    expect(out).not.toContain("ORIGINAL COMPOSITE SHEETS");
+    expect(out).not.toContain("STRUCTURE RULES");
+    expect(out).not.toContain('"categories"');
+    expect(out).not.toContain('"compositeSheets"');
+  });
+});
+
+describe("worldBuilderRefine.mergeCategoriesWithLocks", () => {
+  it("preserves locked variations and replaces unlocked ones from LLM output", () => {
+    const original = {
+      factions: {
+        variations: [
+          { label: "Velvet Null", prompt: "ink-noir", locked: true },
+          { label: "Lollipop Bureau", prompt: "pastel agency" },
+        ],
+      },
+    };
+    const fromLlm = {
+      factions: {
+        variations: [
+          // LLM trying to overwrite a locked label should be ignored.
+          { label: "Velvet Null", prompt: "REWRITTEN BY MISTAKE" },
+          // Unlocked item gets rewritten.
+          { label: "Lollipop Bureau", prompt: "umbrella-academy-coded misfits in pastel" },
+        ],
+      },
+    };
+    const merged = mergeCategoriesWithLocks(original, fromLlm);
+    const labels = merged.factions.variations.map((v) => v.label);
+    expect(labels).toEqual(["Velvet Null", "Lollipop Bureau"]);
+    const velvet = merged.factions.variations.find((v) => v.label === "Velvet Null");
+    expect(velvet.prompt).toBe("ink-noir");
+    expect(velvet.locked).toBe(true);
+    const lollipop = merged.factions.variations.find((v) => v.label === "Lollipop Bureau");
+    expect(lollipop.prompt).toBe("umbrella-academy-coded misfits in pastel");
+  });
+
+  it("appends entirely new variations the LLM proposes", () => {
+    const original = {
+      factions: {
+        variations: [
+          { label: "Velvet Null", prompt: "ink-noir", locked: true },
+        ],
+      },
+    };
+    const fromLlm = {
+      factions: {
+        variations: [
+          { label: "Velvet Null", prompt: "x" },
+          { label: "The Hollow Choir", prompt: "monastic survivors with bone instruments" },
+        ],
+      },
+    };
+    const merged = mergeCategoriesWithLocks(original, fromLlm);
+    const labels = merged.factions.variations.map((v) => v.label);
+    expect(labels).toContain("The Hollow Choir");
+  });
+
+  it("accepts entirely new categories the LLM proposes", () => {
+    const original = { factions: { variations: [] } };
+    const fromLlm = {
+      factions: { variations: [] },
+      secret_rituals: {
+        variations: [{ label: "Solstice Mask", prompt: "midnight procession with bone masks" }],
+      },
+    };
+    const merged = mergeCategoriesWithLocks(original, fromLlm);
+    expect(merged.secret_rituals).toBeDefined();
+    expect(merged.secret_rituals.variations[0].label).toBe("Solstice Mask");
+  });
+
+  it("drops unlocked items the LLM omits (effectively removed)", () => {
+    const original = {
+      factions: {
+        variations: [
+          { label: "Locked Faction", prompt: "stays", locked: true },
+          { label: "Doomed Faction", prompt: "goes" },
+        ],
+      },
+    };
+    const fromLlm = {
+      factions: { variations: [{ label: "Locked Faction", prompt: "ignored" }] },
+    };
+    const merged = mergeCategoriesWithLocks(original, fromLlm);
+    const labels = merged.factions.variations.map((v) => v.label);
+    expect(labels).toContain("Locked Faction");
+    expect(labels).not.toContain("Doomed Faction");
+  });
+});
+
+describe("worldBuilderRefine.mergeCompositesWithLocks", () => {
+  it("preserves locked composites verbatim and rewrites unlocked ones", () => {
+    const original = [
+      { kind: "world_pitch_poster", label: "Pitch", prompt: "original pitch", locked: true },
+      { kind: "reference_sheet", label: "Uniforms", prompt: "old uniforms" },
+    ];
+    const fromLlm = [
+      { kind: "world_pitch_poster", label: "Pitch", prompt: "REWRITTEN" }, // ignored
+      { kind: "reference_sheet", label: "Uniforms", prompt: "umbrella-academy uniforms" },
+      { kind: "reference_sheet", label: "Vehicles", prompt: "new vehicle board" },
+    ];
+    const merged = mergeCompositesWithLocks(original, fromLlm);
+    const labels = merged.map((c) => c.label);
+    expect(labels).toEqual(["Pitch", "Uniforms", "Vehicles"]);
+    expect(merged.find((c) => c.label === "Pitch").prompt).toBe("original pitch");
+    expect(merged.find((c) => c.label === "Uniforms").prompt).toBe("umbrella-academy uniforms");
+  });
+});
+
+describe("worldBuilder.mergeInfluencesWithLocksAdditive (refine-time)", () => {
+  it("preserves locked tokens in order and APPENDS new tokens from LLM", () => {
+    const merged = mergeInfluencesWithLocksAdditive(
+      { influencesEmbrace: true, influencesAvoid: true },
+      { embrace: ["Moebius", "Umbrella Academy"], avoid: ["kid-comic"] },
+      { embrace: ["Moebius", "Brandon Graham"], avoid: ["grimdark"] },
+    );
+    // Original Moebius + Brandon Graham preserved in order, plus new Umbrella Academy appended.
+    expect(merged.embrace).toEqual(["Moebius", "Brandon Graham", "Umbrella Academy"]);
+    expect(merged.avoid).toEqual(["grimdark", "kid-comic"]);
+  });
+
+  it("does not duplicate when LLM repeats existing locked tokens", () => {
+    const merged = mergeInfluencesWithLocksAdditive(
+      { influencesEmbrace: true },
+      { embrace: ["moebius", "MOEBIUS", "Saga"] }, // case-insensitive dedup
+      { embrace: ["Moebius"] },
+    );
+    expect(merged.embrace).toEqual(["Moebius", "Saga"]);
+  });
+
+  it("ignores LLM removals when the list is locked", () => {
+    const merged = mergeInfluencesWithLocksAdditive(
+      { influencesEmbrace: true },
+      { embrace: [] }, // LLM tried to wipe the list
+      { embrace: ["Moebius", "Brandon Graham"] },
+    );
+    expect(merged.embrace).toEqual(["Moebius", "Brandon Graham"]);
+  });
+
+  it("falls through to LLM output entirely when list is NOT locked", () => {
+    const merged = mergeInfluencesWithLocksAdditive(
+      {}, // nothing locked
+      { embrace: ["Umbrella Academy"], avoid: ["candy colored"] },
+      { embrace: ["Moebius"], avoid: ["grimdark"] },
+    );
+    expect(merged.embrace).toEqual(["Umbrella Academy"]);
+    expect(merged.avoid).toEqual(["candy colored"]);
   });
 });

@@ -16,6 +16,9 @@ import { getActiveProvider, getProviderById } from "./providers.js";
 import { createRun, executeApiRun, executeCliRun } from "./runner.js";
 import { resolveEffectiveModel } from "../lib/promptRunner.js";
 import {
+  COMPOSITE_PROMPT_MAX,
+  COMPOSITE_SHEETS_MAX,
+  COMPOSITE_SHEET_KINDS,
   LOCKABLE_FIELDS,
   LOCKABLE_FIELD_LABELS,
   LOGLINE_MAX,
@@ -23,8 +26,15 @@ import {
   PROMPT_FRAGMENT_MAX,
   STARTER_PROMPT_MAX,
   STYLE_NOTES_MAX,
+  VARIATIONS_PER_CATEGORY_MAX,
+  VARIATION_LABEL_MAX,
+  WORLD_CATEGORY_COUNT_MAX,
   isInfluenceLockField,
-  mergeInfluencesWithLocks,
+  mergeInfluencesWithLocksAdditive,
+  normalizeCategoryKey,
+  normalizeLabelKey,
+  sanitizeCategories,
+  sanitizeCompositeSheets,
   sanitizeInfluences,
   sanitizeLocked,
 } from "./worldBuilder.js";
@@ -142,6 +152,32 @@ export function collapseStyleDirectionDupes(starter) {
   return `${stripped}\n\n${last}`.trim();
 }
 
+const renderCategoriesForPrompt = (categories) => {
+  const entries = Object.entries(categories || {});
+  if (!entries.length) return "";
+  return entries
+    .map(([key, cat]) => {
+      const variations = (cat?.variations || [])
+        .map((v) => {
+          const flag = v.locked ? " [LOCKED]" : "";
+          return `    - "${v.label}"${flag}: ${v.prompt}`;
+        })
+        .join("\n");
+      return `  ${key}:\n${variations || "    (no variations yet)"}`;
+    })
+    .join("\n");
+};
+
+const renderCompositesForPrompt = (composites) => {
+  if (!composites?.length) return "";
+  return composites
+    .map((c) => {
+      const flag = c.locked ? " [LOCKED]" : "";
+      return `  - (${c.kind || "reference_sheet"}) "${c.label}"${flag}: ${c.prompt}`;
+    })
+    .join("\n");
+};
+
 export function buildWorldRefinePrompt({
   starterPrompt,
   stylePrompt,
@@ -150,6 +186,8 @@ export function buildWorldRefinePrompt({
   premise = "",
   styleNotes = "",
   influences = { embrace: [], avoid: [] },
+  categories = null,
+  compositeSheets = null,
   locked = {},
   feedback,
 }) {
@@ -163,6 +201,41 @@ ${lockedRules.join("\n")}
 
   const embrace = Array.isArray(influences?.embrace) ? influences.embrace : [];
   const avoid = Array.isArray(influences?.avoid) ? influences.avoid : [];
+
+  const hasStructure =
+    (categories && Object.keys(categories).length) ||
+    (Array.isArray(compositeSheets) && compositeSheets.length);
+
+  const structureRules = hasStructure
+    ? `
+STRUCTURE RULES (the world has been expanded — categories and composite sheets are part of this refinement):
+- Each category groups related prompt variations (factions, characters, vehicles, etc.). Each variation is { "label", "prompt" } and may be flagged [LOCKED].
+- Each composite sheet is a multi-subject board (kind "reference_sheet" or "world_pitch_poster") with { "label", "prompt" }, also [LOCKED]-flaggable.
+- Variations / composites flagged [LOCKED] must be returned with their EXACT original label + prompt — do not rephrase, expand, trim, or "lightly clean up" them. The server discards changes to locked items.
+- Unlocked variations / composites may be rewritten, replaced (same label, new prompt), or REMOVED if the user's feedback warrants it. Removing an item means omitting it from the response.
+- You MAY ADD new variations to any existing category, propose ENTIRELY NEW categories, and ADD new composite sheets when the feedback motivates it. Use snake_case keys for new category names (e.g. "secret_rituals").
+- Keep category counts manageable: at most ${WORLD_CATEGORY_COUNT_MAX} total categories, ${VARIATIONS_PER_CATEGORY_MAX} variations per category, ${COMPOSITE_SHEETS_MAX} composite sheets.
+- Variation prompts ≤${PROMPT_FRAGMENT_MAX} chars; composite prompts ≤${COMPOSITE_PROMPT_MAX} chars; labels ≤${VARIATION_LABEL_MAX} chars.
+- When updating an unlocked composite that references a renamed/removed variation, update the composite's prompt to match — keep the world internally consistent.
+- For LOCKED influence lists in this refine: preserve every existing token IN ORDER, but you MAY APPEND new tokens at the end. You may NOT remove, reorder, or rewrite existing locked tokens. The server enforces order preservation regardless.
+`
+    : "";
+
+  const structureContext = hasStructure
+    ? `
+ORIGINAL CATEGORIES (current draft — items flagged [LOCKED] must round-trip unchanged):
+${renderCategoriesForPrompt(categories) || "  (none)"}
+
+ORIGINAL COMPOSITE SHEETS (current draft):
+${renderCompositesForPrompt(compositeSheets) || "  (none)"}
+`
+    : "";
+
+  const structureSchema = hasStructure
+    ? `,
+  "categories": { "<category_key>": { "variations": [ { "label": "<short label>", "prompt": "<full prompt fragment>", "locked": true } ] } },
+  "compositeSheets": [ { "kind": "reference_sheet" | "world_pitch_poster", "label": "<short label>", "prompt": "<full board prompt>", "locked": true } ]`
+    : "";
 
   return `You are a senior world-building editor for a Stable-Diffusion-style image-generation pipeline AND a story-bible drafter for a comic/TV production pipeline.
 
@@ -185,7 +258,7 @@ ${lockedSection}Return ONLY valid JSON in this schema (replace every <…> with 
   "logline": "<full rewritten one-sentence narrative hook>",
   "premise": "<full rewritten 1-3 paragraph elevator pitch>",
   "styleNotes": "<full rewritten narrative-style prose about references, mood, palette, pacing, voice>",
-  "influences": { "embrace": ["<short reference label>", "..."], "avoid": ["<short reference label>", "..."] },
+  "influences": { "embrace": ["<short reference label>", "..."], "avoid": ["<short reference label>", "..."] }${structureSchema},
   "rationale": "<one concise sentence explaining the overall edit>",
   "changes": ["<short bullet of what changed and why>"]
 }
@@ -199,7 +272,7 @@ Rules:
 - The "logline", "premise", and "styleNotes" must stay narratively coherent with the refined influences and style prompts.
 - Apply the user's feedback decisively. If they ask for a different style/mood/era, move toward it in influences + style prompt + styleNotes, and name the things to avoid in negativePrompt + influences.avoid.
 - No field may equal the schema placeholder text — output real rewritten content for every key.
-${lockedRules.length ? "- Any field listed under LOCKED FIELDS above must be returned EXACTLY as the original — do not reword, expand, or trim it. The server will discard any change to a locked field, but echoing the original keeps the JSON consistent.\n" : ""}
+${lockedRules.length ? "- Any field listed under LOCKED FIELDS above must be returned EXACTLY as the original — do not reword, expand, or trim it. The server will discard any change to a locked field, but echoing the original keeps the JSON consistent.\n" : ""}${structureRules}
 ORIGINAL STARTER IDEA:
 ${starterPrompt || "(empty)"}
 
@@ -221,10 +294,66 @@ ${styleNotes || "(empty)"}
 ORIGINAL INFLUENCES:
 Embrace: ${embrace.length ? embrace.join(", ") : "(none)"}
 Avoid: ${avoid.length ? avoid.join(", ") : "(none)"}
-
+${structureContext}
 USER FEEDBACK:
 ${feedback}`;
 }
+
+// Lock semantics for categories + composites are the same: locked items
+// round-trip verbatim from the originals; LLM output is taken for everything
+// else, but any LLM entry whose label collides with a locked one is dropped
+// (we never let the LLM "rewrite" a locked item by re-using its label).
+const mergeCategoriesWithLocks = (originalCategories, llmCategories) => {
+  const orig = originalCategories || {};
+  const fresh = (llmCategories && typeof llmCategories === "object") ? llmCategories : {};
+  const merged = {};
+
+  for (const [rawKey, origCat] of Object.entries(orig)) {
+    const key = normalizeCategoryKey(rawKey) || rawKey;
+    const origVars = Array.isArray(origCat?.variations) ? origCat.variations : [];
+    const llmVars = Array.isArray(fresh?.[key]?.variations) ? fresh[key].variations : [];
+    const lockedOrig = origVars.filter((v) => v?.locked === true);
+    const lockedLabels = new Set(lockedOrig.map((v) => normalizeLabelKey(v.label)));
+
+    const out = [...lockedOrig];
+    for (const v of llmVars) {
+      if (!v || typeof v !== "object") continue;
+      const label = typeof v.label === "string" ? v.label.trim() : "";
+      if (!label || lockedLabels.has(normalizeLabelKey(label))) continue;
+      out.push({ label, prompt: typeof v.prompt === "string" ? v.prompt : "" });
+    }
+    merged[key] = { variations: out };
+  }
+
+  for (const [rawKey, cat] of Object.entries(fresh)) {
+    const key = normalizeCategoryKey(rawKey) || rawKey;
+    if (merged[key]) continue;
+    if (!cat || typeof cat !== "object") continue;
+    merged[key] = { variations: Array.isArray(cat.variations) ? cat.variations : [] };
+  }
+
+  return sanitizeCategories(merged);
+};
+
+const mergeCompositesWithLocks = (originalSheets, llmSheets) => {
+  const orig = Array.isArray(originalSheets) ? originalSheets : [];
+  const fresh = Array.isArray(llmSheets) ? llmSheets : [];
+  const lockedOrig = orig.filter((s) => s?.locked === true);
+  const lockedLabels = new Set(lockedOrig.map((s) => normalizeLabelKey(s.label)));
+
+  const merged = [...lockedOrig];
+  for (const s of fresh) {
+    if (!s || typeof s !== "object") continue;
+    const label = typeof s.label === "string" ? s.label.trim() : "";
+    if (!label || lockedLabels.has(normalizeLabelKey(label))) continue;
+    merged.push({
+      kind: COMPOSITE_SHEET_KINDS.includes(s.kind) ? s.kind : "reference_sheet",
+      label,
+      prompt: typeof s.prompt === "string" ? s.prompt : "",
+    });
+  }
+  return sanitizeCompositeSheets(merged);
+};
 
 // CLI providers (codex/claude-code/gemini-cli) need provider-specific arg
 // shapes that the toolkit runner already knows about — going through the
@@ -289,7 +418,15 @@ async function runRefine(provider, model, prompt) {
 }
 
 /**
- * Refine the 6 top-level world fields (starter, style, negative + bible).
+ * Refine world fields. Operates in two modes:
+ *  - Bible-only (pre-Expand): categories + compositeSheets omitted; behavior
+ *    matches the original refine — rewrite the seven scalar/influence fields
+ *    per feedback.
+ *  - Holistic (post-Expand): caller passes `categories` and/or `compositeSheets`
+ *    and the LLM may edit/replace/remove unlocked variations + composites, add
+ *    new ones, and propose new categories. Locked items (per-field, per-list,
+ *    per-variation, per-composite) round-trip verbatim. Locked influence lists
+ *    become APPEND-ONLY in this path (preserve order, may add new tokens).
  *
  * @param {object} args
  * @param {string} args.starterPrompt   — original
@@ -298,6 +435,9 @@ async function runRefine(provider, model, prompt) {
  * @param {string} [args.logline]        — original bible logline (may be empty)
  * @param {string} [args.premise]        — original bible premise (may be empty)
  * @param {string} [args.styleNotes]     — original bible style notes (may be empty)
+ * @param {object} [args.influences]     — { embrace, avoid }
+ * @param {object} [args.categories]     — full categories map from the draft (with per-item locks)
+ * @param {Array}  [args.compositeSheets] — composite sheets from the draft (with per-item locks)
  * @param {object} [args.locked]         — { field: true } for fields the user has pinned; locked fields are echoed back unchanged
  * @param {string} args.feedback        — required user feedback
  * @param {string} [args.providerId]    — overrides the active provider
@@ -311,6 +451,8 @@ export async function refineWorldPrompts({
   premise = "",
   styleNotes = "",
   influences,
+  categories,
+  compositeSheets,
   locked = {},
   feedback,
   providerId,
@@ -370,6 +512,10 @@ export async function refineWorldPrompts({
 
   // Trim originals up front so we can pass them to both the LLM AND use them
   // verbatim as the lock fallback below.
+  const hasStructure =
+    (categories && typeof categories === "object" && Object.keys(categories).length > 0) ||
+    (Array.isArray(compositeSheets) && compositeSheets.length > 0);
+
   const originals = {
     starterPrompt: trimTo(starterPrompt, STARTER_PROMPT_MAX),
     stylePrompt: trimTo(stylePrompt, PROMPT_FRAGMENT_MAX),
@@ -378,6 +524,8 @@ export async function refineWorldPrompts({
     premise: trimTo(premise, PREMISE_MAX),
     styleNotes: trimTo(styleNotes, STYLE_NOTES_MAX),
     influences: sanitizeInfluences(influences),
+    categories: hasStructure ? sanitizeCategories(categories || {}) : null,
+    compositeSheets: hasStructure ? sanitizeCompositeSheets(compositeSheets || []) : null,
   };
 
   const llmPrompt = buildWorldRefinePrompt({
@@ -424,7 +572,14 @@ export async function refineWorldPrompts({
     const llmValue = trimTo(parsed[key], FIELD_CAPS[key]);
     refined[key] = llmValue || originals[key];
   }
-  refined.influences = mergeInfluencesWithLocks(safeLocked, parsed.influences, originals.influences);
+  // Refine path uses APPEND-ONLY semantics for locked influence lists — the
+  // user wants "lock = don't rebuild, but you may append". Expand still calls
+  // the strict variant.
+  refined.influences = mergeInfluencesWithLocksAdditive(
+    safeLocked,
+    parsed.influences,
+    originals.influences,
+  );
 
   // Legacy cleanup: prior refinements may have stuffed a "Style direction:"
   // paragraph into the starter. Now that influences carries the direction
@@ -442,7 +597,10 @@ export async function refineWorldPrompts({
     });
   }
 
-  return {
+  // Structure merge — only when the caller passed categories/composites.
+  // Empty / pre-Expand calls return without these keys so the response shape
+  // stays identical to the bible-only contract.
+  const result = {
     ...refined,
     locked: safeLocked,
     rationale: trimTo(parsed.rationale, MAX_RATIONALE),
@@ -450,10 +608,25 @@ export async function refineWorldPrompts({
     providerId: provider.id,
     model: selectedModel,
   };
+
+  if (hasStructure) {
+    result.categories = mergeCategoriesWithLocks(
+      originals.categories || {},
+      parsed.categories,
+    );
+    result.compositeSheets = mergeCompositesWithLocks(
+      originals.compositeSheets || [],
+      parsed.compositeSheets,
+    );
+  }
+
+  return result;
 }
 
 export const __testing = {
   extractRefinementJson,
   buildWorldRefinePrompt,
   collapseStyleDirectionDupes,
+  mergeCategoriesWithLocks,
+  mergeCompositesWithLocks,
 };

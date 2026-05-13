@@ -115,6 +115,12 @@ const DEFAULT_STATE = { worlds: [], runs: [] };
 const isStr = (v) => typeof v === 'string';
 const trimTo = (v, max) => (isStr(v) ? v.trim().slice(0, max) : '');
 
+// Case-insensitive key for matching variation/composite labels across the
+// original + LLM-refined sets. Returning the same lowercase string ensures
+// "Lollipop Bureau" and "lollipop bureau" collapse to one identity.
+export const normalizeLabelKey = (label) =>
+  typeof label === "string" ? label.trim().toLowerCase() : "";
+
 export const normalizeCategoryKey = (raw) => {
   if (!isStr(raw)) return '';
   return raw
@@ -246,6 +252,36 @@ export const mergeInfluencesWithLocks = (locked, fresh, fallback) => {
       : (freshSafe.embrace.length ? freshSafe.embrace : fallbackSafe.embrace),
     avoid: locked?.influencesAvoid
       ? fallbackSafe.avoid
+      : (freshSafe.avoid.length ? freshSafe.avoid : fallbackSafe.avoid),
+  };
+};
+
+// Refine-time variant: when a list is locked, preserve every existing token in
+// order but allow the LLM to APPEND new tokens (case-insensitive de-dup). The
+// user explicitly wants "lock = no rebuild, additions still welcome" in the
+// holistic refine flow; Expand should keep using the strict variant above.
+const appendUnique = (existing, additions) => {
+  const seen = new Set(existing.map((t) => normalizeLabelKey(t)));
+  const out = [...existing];
+  for (const t of additions) {
+    const key = normalizeLabelKey(t);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(t);
+    if (out.length >= INFLUENCES_PER_LIST_MAX) break;
+  }
+  return out;
+};
+
+export const mergeInfluencesWithLocksAdditive = (locked, fresh, fallback) => {
+  const freshSafe = sanitizeInfluences(fresh);
+  const fallbackSafe = sanitizeInfluences(fallback);
+  return {
+    embrace: locked?.influencesEmbrace
+      ? appendUnique(fallbackSafe.embrace, freshSafe.embrace)
+      : (freshSafe.embrace.length ? freshSafe.embrace : fallbackSafe.embrace),
+    avoid: locked?.influencesAvoid
+      ? appendUnique(fallbackSafe.avoid, freshSafe.avoid)
       : (freshSafe.avoid.length ? freshSafe.avoid : fallbackSafe.avoid),
   };
 };

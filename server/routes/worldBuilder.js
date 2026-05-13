@@ -148,6 +148,12 @@ const refinePromptsSchema = z.object({
   // Structured influences (embrace + avoid) — refined alongside the prompts
   // and used as the canonical reference list for renderer-token composition.
   influences: influencesSchema.optional(),
+  // Post-Expand structure — when present, the refiner sees the full world
+  // (categories + composites with per-item locks) and may edit/replace/add
+  // items per the user's feedback. When omitted (pre-Expand iteration), the
+  // refiner falls back to the bible-only behavior.
+  categories: categoriesSchema.optional(),
+  compositeSheets: z.array(compositeSheetSchema).max(svc.COMPOSITE_SHEETS_MAX).optional(),
   // Per-field lock map — locked fields are echoed back unchanged regardless
   // of what the LLM tries to write.
   locked: lockedSchema.optional().default({}),
