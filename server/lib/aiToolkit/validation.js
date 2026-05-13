@@ -1,6 +1,10 @@
 import { z } from 'zod';
 
 export const providerSchema = z.object({
+  // Sample providers post a stable id (e.g. 'codex') so the server can adopt
+  // them verbatim rather than slugifying the display name (which would turn
+  // 'Codex CLI' into 'codex-cli' and break id-keyed CLI argument handling).
+  id: z.string().regex(/^[a-z0-9][a-z0-9-]*$/, 'id must be lowercase alphanumeric with hyphens').max(80).optional(),
   name: z.string().min(1).max(100),
   type: z.enum(['cli', 'api']),
   command: z.string().optional(),

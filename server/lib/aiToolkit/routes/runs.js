@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { runSchema, validate } from '../validation.js';
 
 export function createRunsRoutes(runnerService, options = {}) {
   const router = Router();
@@ -14,13 +15,20 @@ export function createRunsRoutes(runnerService, options = {}) {
   }));
 
   router.post('/', asyncHandler(async (req, res) => {
-    const { providerId, model, prompt, workspacePath, workspaceName, timeout, screenshots } = req.body;
+    // Validate up front so invalid types (timeout: "abc", screenshots: "x")
+    // can't reach the runner — setTimeout would treat "abc" as 0 and kill
+    // the run immediately, and iterating a string `screenshots` would walk
+    // characters as individual paths.
+    const result = validate(runSchema, req.body);
+    if (!result.success) {
+      return res.status(400).json({ error: 'Invalid run data', details: result.errors });
+    }
+    const { providerId, model, prompt, workspacePath, workspaceName, timeout, screenshots } = result.data;
     console.log(`🚀 POST /runs - provider: ${providerId}, model: ${model}, workspace: ${workspaceName}`);
 
     if (!providerId) {
       return res.status(400).json({ error: 'providerId is required' });
     }
-
     if (!prompt) {
       return res.status(400).json({ error: 'prompt is required' });
     }
