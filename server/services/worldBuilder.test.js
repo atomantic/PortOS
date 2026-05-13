@@ -98,6 +98,43 @@ describe('worldBuilder service', () => {
     await expect(svc.createWorld({ name: '' })).rejects.toThrow(/name is required/);
   });
 
+  it('createWorld persists narrative bible fields (logline / premise / styleNotes)', async () => {
+    const w = await seedWorld({
+      logline: 'A foundry city goes silent, and the only survivor is a child.',
+      premise: 'Long-form premise paragraph about the setting, conflict, stakes, and tone.',
+      styleNotes: 'Moebius linework, oil-on-canvas grain, contemplative pacing, sparse dialogue.',
+    });
+    expect(w.logline).toBe('A foundry city goes silent, and the only survivor is a child.');
+    expect(w.premise).toBe('Long-form premise paragraph about the setting, conflict, stakes, and tone.');
+    expect(w.styleNotes).toBe('Moebius linework, oil-on-canvas grain, contemplative pacing, sparse dialogue.');
+  });
+
+  it('updateWorld patches narrative bible fields independently of categories', async () => {
+    const w = await seedWorld({ logline: 'original logline' });
+    const patched = await svc.updateWorld(w.id, {
+      logline: 'new logline',
+      premise: 'new premise',
+      styleNotes: 'new style notes',
+    });
+    expect(patched.logline).toBe('new logline');
+    expect(patched.premise).toBe('new premise');
+    expect(patched.styleNotes).toBe('new style notes');
+    // Untouched (existing) data preserved.
+    expect(patched.categories.landscapes.variations).toHaveLength(2);
+    expect(patched.stylePrompt).toBe(w.stylePrompt);
+  });
+
+  it('createWorld trims bible fields to their max length', async () => {
+    const w = await seedWorld({
+      logline: 'x'.repeat(svc.LOGLINE_MAX + 50),
+      premise: 'y'.repeat(svc.PREMISE_MAX + 50),
+      styleNotes: 'z'.repeat(svc.STYLE_NOTES_MAX + 50),
+    });
+    expect(w.logline).toHaveLength(svc.LOGLINE_MAX);
+    expect(w.premise).toHaveLength(svc.PREMISE_MAX);
+    expect(w.styleNotes).toHaveLength(svc.STYLE_NOTES_MAX);
+  });
+
   it('updateWorld merges partial patches', async () => {
     const w = await seedWorld();
     const patched = await svc.updateWorld(w.id, { name: 'Renamed', stylePrompt: 'new style' });

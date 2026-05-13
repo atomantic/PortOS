@@ -17,7 +17,8 @@ import toast from '../components/ui/Toast';
 import {
   listWorlds, getWorld, createWorld, updateWorld, deleteWorld, expandWorld,
   renderWorld, listWorldRuns, getProviders, WORLD_CATEGORIES,
-  WORLD_CATEGORY_KEY_MAX, COMPOSITE_PROMPT_MAX, listImageModels, getSettings,
+  WORLD_CATEGORY_KEY_MAX, COMPOSITE_PROMPT_MAX, WORLD_LOGLINE_MAX,
+  WORLD_PREMISE_MAX, WORLD_STYLE_NOTES_MAX, listImageModels, getSettings,
 } from '../services/api';
 import BackendChipStrip from '../components/media/BackendChipStrip';
 import ImageGenControls from '../components/imageGen/ImageGenControls';
@@ -89,6 +90,9 @@ const emptyTemplate = () => ({
   starterPrompt: '',
   stylePrompt: '',
   negativePrompt: '',
+  logline: '',
+  premise: '',
+  styleNotes: '',
   categories: ensureDraftCategories(),
   compositeSheets: [],
   llm: { provider: null, model: null },
@@ -181,6 +185,9 @@ export default function WorldBuilder() {
           // by the LLM or added by the user.
           categories: ensureDraftCategories(w.categories),
           compositeSheets: w.compositeSheets || [],
+          logline: w.logline || '',
+          premise: w.premise || '',
+          styleNotes: w.styleNotes || '',
           llm: w.llm || { provider: null, model: null },
         });
       }
@@ -206,6 +213,9 @@ export default function WorldBuilder() {
       starterPrompt: draft.starterPrompt || '',
       stylePrompt: draft.stylePrompt || '',
       negativePrompt: draft.negativePrompt || '',
+      logline: draft.logline || '',
+      premise: draft.premise || '',
+      styleNotes: draft.styleNotes || '',
       categories: draft.categories,
       compositeSheets: draft.compositeSheets || [],
       llm: draft.llm || {},
@@ -264,6 +274,12 @@ export default function WorldBuilder() {
       ...draft,
       stylePrompt: result.stylePrompt || draft.stylePrompt,
       negativePrompt: result.negativePrompt || draft.negativePrompt,
+      // Only overwrite the narrative bible fields when the LLM actually
+      // produced one — preserves any prose the user has already hand-edited
+      // when they re-run /expand to refresh just the image categories.
+      logline: result.logline || draft.logline,
+      premise: result.premise || draft.premise,
+      styleNotes: result.styleNotes || draft.styleNotes,
       categories: ensureDraftCategories(result.categories),
       compositeSheets: result.compositeSheets || draft.compositeSheets || [],
       llm: result.llm || draft.llm,
@@ -283,6 +299,9 @@ export default function WorldBuilder() {
         starterPrompt: expandedDraft.starterPrompt || '',
         stylePrompt: expandedDraft.stylePrompt || '',
         negativePrompt: expandedDraft.negativePrompt || '',
+        logline: expandedDraft.logline || '',
+        premise: expandedDraft.premise || '',
+        styleNotes: expandedDraft.styleNotes || '',
         categories: expandedDraft.categories,
         compositeSheets: expandedDraft.compositeSheets || [],
         llm: expandedDraft.llm || {},
@@ -316,6 +335,9 @@ export default function WorldBuilder() {
         starterPrompt: next.starterPrompt || '',
         stylePrompt: next.stylePrompt || '',
         negativePrompt: next.negativePrompt || '',
+        logline: next.logline || '',
+        premise: next.premise || '',
+        styleNotes: next.styleNotes || '',
         categories: next.categories,
         compositeSheets: next.compositeSheets || [],
         llm: next.llm || {},
@@ -578,6 +600,53 @@ export default function WorldBuilder() {
           defaultProviderId={draft.llm?.provider || activeProviderId || null}
           defaultModel={draft.llm?.model || null}
         />
+
+        <section className="bg-port-card border border-port-border rounded p-4 flex flex-col gap-3">
+          <div>
+            <h2 className="text-sm font-semibold text-white">Story bible</h2>
+            <p className="text-xs text-gray-500 mt-0.5">
+              Pulled into the Pipeline → New Series form when this world is selected.
+            </p>
+          </div>
+          <div>
+            <label htmlFor="world-logline" className="text-xs text-gray-400 mb-1 block">Logline</label>
+            <input
+              id="world-logline"
+              type="text"
+              value={draft.logline || ''}
+              onChange={(e) => updateDraft({ logline: e.target.value })}
+              placeholder="One-sentence hook — A foundry city goes silent, and the only survivor is a child."
+              className="w-full bg-port-bg border border-port-border rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-port-accent"
+              maxLength={WORLD_LOGLINE_MAX}
+            />
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div>
+              <label htmlFor="world-premise" className="text-xs text-gray-400 mb-1 block">Premise</label>
+              <textarea
+                id="world-premise"
+                value={draft.premise || ''}
+                onChange={(e) => updateDraft({ premise: e.target.value })}
+                placeholder="Elevator pitch — 1-3 short paragraphs about the setting, central conflict, stakes, and tone."
+                className="w-full bg-port-bg border border-port-border rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-port-accent"
+                rows={6}
+                maxLength={WORLD_PREMISE_MAX}
+              />
+            </div>
+            <div>
+              <label htmlFor="world-style-notes" className="text-xs text-gray-400 mb-1 block">Style notes</label>
+              <textarea
+                id="world-style-notes"
+                value={draft.styleNotes || ''}
+                onChange={(e) => updateDraft({ styleNotes: e.target.value })}
+                placeholder="Narrative style: references (artists / films / comics), mood, palette, pacing, voice. Prose, not tokens."
+                className="w-full bg-port-bg border border-port-border rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-port-accent"
+                rows={6}
+                maxLength={WORLD_STYLE_NOTES_MAX}
+              />
+            </div>
+          </div>
+        </section>
 
         {/* Style template */}
         <section className="bg-port-card border border-port-border rounded p-4 grid grid-cols-1 md:grid-cols-2 gap-3">

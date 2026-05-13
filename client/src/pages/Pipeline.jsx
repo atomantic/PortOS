@@ -9,28 +9,74 @@
 
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Plus, Workflow as WorkflowIcon, Trash2, Loader2 } from 'lucide-react';
+import { Plus, Workflow as WorkflowIcon, Trash2, Loader2, Globe2 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import {
   listPipelineSeries,
   createPipelineSeries,
   deletePipelineSeries,
   PIPELINE_TARGET_FORMATS,
+  listWorlds,
+  WORLD_LOGLINE_MAX,
+  WORLD_PREMISE_MAX,
+  WORLD_STYLE_NOTES_MAX,
 } from '../services/api';
+
+const emptyForm = () => ({
+  name: '',
+  worldId: '',
+  logline: '',
+  premise: '',
+  styleNotes: '',
+  targetFormat: 'comic+tv',
+});
 
 export default function Pipeline() {
   const [series, setSeries] = useState([]);
+  const [worlds, setWorlds] = useState([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ name: '', logline: '', targetFormat: 'comic+tv' });
+  const [form, setForm] = useState(emptyForm);
 
   useEffect(() => {
-    listPipelineSeries()
-      .then((items) => setSeries(Array.isArray(items) ? items : []))
-      .catch((err) => toast.error(err.message || 'Failed to load series'))
-      .finally(() => setLoading(false));
+    Promise.all([
+      listPipelineSeries().catch(() => []),
+      // Worlds are optional — failing the fetch should still let the user
+      // create a series without one. Surface the error as a quiet toast.
+      listWorlds().catch((err) => {
+        toast.error(err.message || 'Failed to load worlds');
+        return [];
+      }),
+    ]).then(([s, w]) => {
+      setSeries(Array.isArray(s) ? s : []);
+      setWorlds(Array.isArray(w) ? w : []);
+      setLoading(false);
+    });
   }, []);
+
+  // Pull logline/premise/styleNotes from the selected world. Only overwrites
+  // form fields that are currently empty so a user who's already typed a
+  // logline doesn't lose it when they pick a world afterwards.
+  const BIBLE_FIELDS = ['logline', 'premise', 'styleNotes'];
+  const handleWorldChange = (worldId) => {
+    if (!worldId) {
+      setForm((f) => ({ ...f, worldId: '' }));
+      return;
+    }
+    const w = worlds.find((x) => x.id === worldId);
+    if (!w) {
+      setForm((f) => ({ ...f, worldId }));
+      return;
+    }
+    setForm((f) => {
+      const next = { ...f, worldId };
+      for (const k of BIBLE_FIELDS) {
+        if (!f[k].trim()) next[k] = w[k] || '';
+      }
+      return next;
+    });
+  };
 
   const handleCreate = async (e) => {
     e?.preventDefault();
@@ -43,6 +89,9 @@ export default function Pipeline() {
     const created = await createPipelineSeries({
       name,
       logline: form.logline.trim(),
+      premise: form.premise.trim(),
+      styleNotes: form.styleNotes.trim(),
+      worldId: form.worldId || undefined,
       targetFormat: form.targetFormat,
     }).catch((err) => {
       toast.error(err.message || 'Failed to create series');
@@ -52,7 +101,7 @@ export default function Pipeline() {
     if (!created) return;
     // Reactive insert — no full refetch (CLAUDE.md convention).
     setSeries((prev) => [created, ...prev]);
-    setForm({ name: '', logline: '', targetFormat: 'comic+tv' });
+    setForm(emptyForm());
     setShowForm(false);
     toast.success(`Created "${created.name}"`);
   };
@@ -100,20 +149,45 @@ export default function Pipeline() {
 
       {showForm && (
         <form onSubmit={handleCreate} className="mb-6 p-4 bg-port-card border border-port-border rounded-lg space-y-3">
-          <div>
-            <label htmlFor="series-name" className="block text-xs uppercase tracking-wider text-gray-500 mb-1">
-              Name
-            </label>
-            <input
-              id="series-name"
-              type="text"
-              value={form.name}
-              onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-              placeholder="Salt Run"
-              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
-              maxLength={200}
-              autoFocus
-            />
+          <div className="grid grid-cols-1 sm:grid-cols-[1fr_240px] gap-3">
+            <div>
+              <label htmlFor="series-name" className="block text-xs uppercase tracking-wider text-gray-500 mb-1">
+                Name
+              </label>
+              <input
+                id="series-name"
+                type="text"
+                value={form.name}
+                onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                placeholder="Salt Run"
+                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
+                maxLength={200}
+                autoFocus
+              />
+            </div>
+            <div>
+              <label htmlFor="series-world" className="block text-xs uppercase tracking-wider text-gray-500 mb-1">
+                <span className="inline-flex items-center gap-1"><Globe2 size={12} /> World (optional)</span>
+              </label>
+              <select
+                id="series-world"
+                value={form.worldId}
+                onChange={(e) => handleWorldChange(e.target.value)}
+                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
+              >
+                <option value="">— None —</option>
+                {worlds.map((w) => (
+                  <option key={w.id} value={w.id}>{w.name}</option>
+                ))}
+              </select>
+              <p className="text-[11px] text-gray-500 mt-1">
+                {form.worldId
+                  ? 'Logline / premise / style notes pulled from the world — edit below.'
+                  : worlds.length === 0
+                    ? 'No worlds yet. Build one in Media Gen → World Builder.'
+                    : 'Pick a world to auto-fill the bible.'}
+              </p>
+            </div>
           </div>
           <div>
             <label htmlFor="series-logline" className="block text-xs uppercase tracking-wider text-gray-500 mb-1">
@@ -126,8 +200,38 @@ export default function Pipeline() {
               onChange={(e) => setForm((f) => ({ ...f, logline: e.target.value }))}
               placeholder="A foundry city goes silent — and the only survivor is a child."
               className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
-              maxLength={500}
+              maxLength={WORLD_LOGLINE_MAX}
             />
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div>
+              <label htmlFor="series-premise" className="block text-xs uppercase tracking-wider text-gray-500 mb-1">
+                Premise
+              </label>
+              <textarea
+                id="series-premise"
+                value={form.premise}
+                onChange={(e) => setForm((f) => ({ ...f, premise: e.target.value }))}
+                placeholder="Elevator pitch — setting, central conflict, stakes, tone."
+                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm"
+                rows={5}
+                maxLength={WORLD_PREMISE_MAX}
+              />
+            </div>
+            <div>
+              <label htmlFor="series-style-notes" className="block text-xs uppercase tracking-wider text-gray-500 mb-1">
+                Style notes
+              </label>
+              <textarea
+                id="series-style-notes"
+                value={form.styleNotes}
+                onChange={(e) => setForm((f) => ({ ...f, styleNotes: e.target.value }))}
+                placeholder="Visual / tonal references, mood, pacing, voice."
+                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm"
+                rows={5}
+                maxLength={WORLD_STYLE_NOTES_MAX}
+              />
+            </div>
           </div>
           <div>
             <label htmlFor="series-format" className="block text-xs uppercase tracking-wider text-gray-500 mb-1">

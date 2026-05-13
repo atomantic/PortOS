@@ -6,7 +6,7 @@ For project goals, see [GOALS.md](./GOALS.md). For completed work, see [DONE.md]
 
 ## Next Up
 
-_(empty — pick the next chunk from Backlog)_
+- [ ] **Fix `lib/creativeDirectorPrompts.test.js` imageStrength wording assertions.** 3 tests in `server/lib/creativeDirectorPrompts.test.js` (around line 210) fail on `expect(out).toContain('Image strength: default')` — the prompt template no longer emits that exact phrasing for unset/null imageStrength. Pre-existing on `main` (verified 2026-05-12 while landing world-bible → pipeline wiring; out of scope for that PR). Either re-add the wording in the prompt builder or update the test to match the new output.
 
 ## Backlog
 

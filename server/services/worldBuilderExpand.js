@@ -17,6 +17,9 @@ import {
   PROMPT_FRAGMENT_MAX,
   COMPOSITE_PROMPT_MAX,
   VARIATIONS_PER_CATEGORY_MAX,
+  LOGLINE_MAX,
+  PREMISE_MAX,
+  STYLE_NOTES_MAX,
   sanitizeCategories,
   sanitizeCompositeSheets,
 } from './worldBuilder.js';
@@ -26,7 +29,7 @@ import { providerHonorsModelOverride, runPromptThroughProvider } from '../lib/pr
 
 const LABEL_MAX = 80;
 
-const EXPANSION_PROMPT = `You are a world-building prompt engineer for a Stable-Diffusion-style image generation pipeline. You will turn the user's starter idea into a structured prompt set that produces a visually consistent universe across many renders.
+const EXPANSION_PROMPT = `You are a world-building prompt engineer for a Stable-Diffusion-style image generation pipeline AND a story-bible drafter for a comic/TV production pipeline. You will turn the user's starter idea into (a) a structured prompt set that produces a visually consistent universe across many renders, and (b) a short narrative bible that downstream writing stages can ingest.
 
 # Starter idea
 {starterPrompt}
@@ -34,6 +37,9 @@ const EXPANSION_PROMPT = `You are a world-building prompt engineer for a Stable-
 # Output contract
 Return a SINGLE JSON object. NO markdown, NO commentary. The object MUST have these top-level keys:
 
+- logline:        string. ONE sentence (≤500 chars) capturing the world's central tension/hook — protagonist-agnostic if no protagonist is implied. Example: "A foundry city goes silent — and the only survivor is a child."
+- premise:        string. 1-3 short paragraphs (≤4000 chars total) describing the setting, the central conflict or situation, the stakes, and the tone. Write it as the elevator pitch a showrunner would hand to a writers' room. No bullet points; prose only.
+- styleNotes:     string. A prose paragraph (≤4000 chars) describing the visual + tonal style for the story bible — references (artists, films, comics, games), mood, palette, pacing, narrative voice. This is read by writers + creative directors, not the image model, so use full sentences instead of comma-separated tokens.
 - stylePrompt:    string. A single comma-separated style fragment (lighting, color palette, render quality, artist references) that will be PREFIXED to every variation prompt. Keep under 400 characters. No subject nouns — those go in variations.
 - negativePrompt: string. Comma-separated tokens to avoid (e.g. "blurry, lowres, watermark, extra fingers"). Tailor to the world's aesthetic.
 - categories: object. Atomic reusable buckets. Use snake_case keys. Start from these common buckets when useful:
@@ -77,6 +83,9 @@ Concrete compositeSheets examples:
 const isExpansionShape = (o) => o && typeof o === 'object'
   && (typeof o.stylePrompt === 'string'
     || typeof o.negativePrompt === 'string'
+    || typeof o.logline === 'string'
+    || typeof o.premise === 'string'
+    || typeof o.styleNotes === 'string'
     || (o.categories && typeof o.categories === 'object')
     || Array.isArray(o.compositeSheets));
 
@@ -186,20 +195,25 @@ export async function expandWorldTemplate({ starterPrompt, providerId, model } =
   const parsed = extractJson(raw);
   console.log(`🌍 World Builder parsed JSON — keys=[${Object.keys(parsed || {}).join(',')}] categoryKeys=[${Object.keys(parsed?.categories || {}).join(',')}] compositeSheets=${Array.isArray(parsed?.compositeSheets) ? parsed.compositeSheets.length : 0}`);
 
-  const stylePrompt = typeof parsed.stylePrompt === 'string'
-    ? parsed.stylePrompt.trim().slice(0, PROMPT_FRAGMENT_MAX) : '';
-  const negativePrompt = typeof parsed.negativePrompt === 'string'
-    ? parsed.negativePrompt.trim().slice(0, PROMPT_FRAGMENT_MAX) : '';
+  const trimField = (value, max) => (typeof value === 'string' ? value.trim().slice(0, max) : '');
+  const stylePrompt = trimField(parsed.stylePrompt, PROMPT_FRAGMENT_MAX);
+  const negativePrompt = trimField(parsed.negativePrompt, PROMPT_FRAGMENT_MAX);
+  const logline = trimField(parsed.logline, LOGLINE_MAX);
+  const premise = trimField(parsed.premise, PREMISE_MAX);
+  const styleNotes = trimField(parsed.styleNotes, STYLE_NOTES_MAX);
   const categories = normalizeCategories(parsed.categories || {});
   const compositeSheets = normalizeCompositeSheets(parsed.compositeSheets || []);
   const perCat = Object.keys(categories).map((k) => `${k}=${categories[k]?.variations?.length || 0}`).join(' ');
   const totalVariations = Object.values(categories).reduce((n, c) => n + (c?.variations?.length || 0), 0);
-  console.log(`🌍 World Builder expansion complete — runId=${runId} ${totalVariations} variations, ${compositeSheets.length} composite sheets (${perCat})`);
+  console.log(`🌍 World Builder expansion complete — runId=${runId} ${totalVariations} variations, ${compositeSheets.length} composite sheets, bible=${logline ? 'yes' : 'no'} (${perCat})`);
   if (totalVariations === 0 && compositeSheets.length === 0) {
     console.warn(`⚠️ World Builder expansion produced 0 variations — inspect data/runs/${runId}/output.txt for the raw LLM response`);
   }
 
   return {
+    logline,
+    premise,
+    styleNotes,
     stylePrompt,
     negativePrompt,
     categories,
