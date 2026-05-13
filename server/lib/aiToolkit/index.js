@@ -114,12 +114,14 @@ export function createAIToolkit(config = {}) {
     },
 
     mountRoutes(app, basePath = '/api') {
-      app.use(`${basePath}/providers`, providersRouter);
-      app.use(`${basePath}/runs`, runsRouter);
-      app.use(`${basePath}/prompts`, promptsRouter);
+      // Mount the more specific /providers/status BEFORE /providers so that
+      // the providers router's GET /:id doesn't intercept "status" as an id.
       if (providerStatusRouter) {
         app.use(`${basePath}/providers/status`, providerStatusRouter);
       }
+      app.use(`${basePath}/providers`, providersRouter);
+      app.use(`${basePath}/runs`, runsRouter);
+      app.use(`${basePath}/prompts`, promptsRouter);
     }
   };
 }

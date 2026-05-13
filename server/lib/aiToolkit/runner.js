@@ -378,7 +378,12 @@ export function createRunnerService(config = {}) {
           }
         }
 
-        if (!output.trim() && reasoning.trim()) {
+        // Capture the fallback decision BEFORE mutating `output` — otherwise
+        // the metadata check below (`!output.trim() && reasoning.trim()`) is
+        // always false on the reasoning-only path because `output` was just
+        // overwritten with the reasoning text.
+        const usedReasoningAsFallback = !output.trim() && reasoning.trim().length > 0;
+        if (usedReasoningAsFallback) {
           console.log(`🧠 Reasoning model detected - using reasoning as output (${reasoning.length} chars)`);
           output = reasoning;
           onData?.({ text: reasoning, isReasoning: true });
@@ -394,7 +399,7 @@ export function createRunnerService(config = {}) {
         metadata.success = true;
         metadata.outputSize = Buffer.byteLength(output);
         metadata.hadReasoning = reasoning.length > 0;
-        metadata.usedReasoningAsFallback = !output.trim() && reasoning.trim();
+        metadata.usedReasoningAsFallback = usedReasoningAsFallback;
         await writeFile(metadataPath, JSON.stringify(metadata, null, 2));
 
         hooks.onRunCompleted?.(metadata, output);

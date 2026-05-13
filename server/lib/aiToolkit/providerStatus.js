@@ -141,7 +141,24 @@ export function createProviderStatusService(config = {}) {
     },
 
     getAllStatuses() {
-      return { ...statusCache };
+      // Apply the same recovery check getStatus() uses so the aggregate
+      // endpoint reports a recovered provider as available instead of
+      // returning the stale cached unavailable entry.
+      const now = Date.now();
+      const providers = {};
+      for (const [id, status] of Object.entries(statusCache.providers || {})) {
+        if (status.estimatedRecovery && now > new Date(status.estimatedRecovery).getTime()) {
+          providers[id] = {
+            available: true,
+            reason: 'ok',
+            message: 'Provider available',
+            lastChecked: new Date().toISOString()
+          };
+        } else {
+          providers[id] = status;
+        }
+      }
+      return { ...statusCache, providers };
     },
 
     isAvailable(providerId) {

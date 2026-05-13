@@ -241,18 +241,22 @@ export const sanitizeInfluences = (raw = {}) => {
 
 // Build a refined influences object that honors per-list locks. Locked lists
 // take their value from `fallback` (originals); unlocked lists take from
-// `fresh` (the LLM output), falling back to `fallback` when the LLM omitted
-// that list. Mirrors `mergeInfluencesWithLocks` in client/services/apiWorldBuilder.js.
+// `fresh` (the LLM output), falling back to `fallback` ONLY when the LLM
+// omitted that list (key absent). An explicit `[]` is applied so the user
+// can intentionally clear an unlocked list. Mirrors `mergeInfluencesWithLocks`
+// in client/services/apiWorldBuilder.js.
 export const mergeInfluencesWithLocks = (locked, fresh, fallback) => {
   const freshSafe = sanitizeInfluences(fresh);
   const fallbackSafe = sanitizeInfluences(fallback);
+  const freshHasEmbrace = Array.isArray(fresh?.embrace);
+  const freshHasAvoid = Array.isArray(fresh?.avoid);
   return {
     embrace: locked?.influencesEmbrace
       ? fallbackSafe.embrace
-      : (freshSafe.embrace.length ? freshSafe.embrace : fallbackSafe.embrace),
+      : (freshHasEmbrace ? freshSafe.embrace : fallbackSafe.embrace),
     avoid: locked?.influencesAvoid
       ? fallbackSafe.avoid
-      : (freshSafe.avoid.length ? freshSafe.avoid : fallbackSafe.avoid),
+      : (freshHasAvoid ? freshSafe.avoid : fallbackSafe.avoid),
   };
 };
 
@@ -276,13 +280,18 @@ const appendUnique = (existing, additions) => {
 export const mergeInfluencesWithLocksAdditive = (locked, fresh, fallback) => {
   const freshSafe = sanitizeInfluences(fresh);
   const fallbackSafe = sanitizeInfluences(fallback);
+  // Distinguish "LLM omitted the list" (preserve fallback) from "LLM
+  // returned []" (apply — user explicitly cleared the unlocked list).
+  // The additive locked path is unaffected: an empty append-list is a no-op.
+  const freshHasEmbrace = Array.isArray(fresh?.embrace);
+  const freshHasAvoid = Array.isArray(fresh?.avoid);
   return {
     embrace: locked?.influencesEmbrace
       ? appendUnique(fallbackSafe.embrace, freshSafe.embrace)
-      : (freshSafe.embrace.length ? freshSafe.embrace : fallbackSafe.embrace),
+      : (freshHasEmbrace ? freshSafe.embrace : fallbackSafe.embrace),
     avoid: locked?.influencesAvoid
       ? appendUnique(fallbackSafe.avoid, freshSafe.avoid)
-      : (freshSafe.avoid.length ? freshSafe.avoid : fallbackSafe.avoid),
+      : (freshHasAvoid ? freshSafe.avoid : fallbackSafe.avoid),
   };
 };
 

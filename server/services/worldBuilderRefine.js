@@ -463,10 +463,16 @@ export async function refineWorldPrompts({
     });
   }
   const safeLocked = sanitizeLocked(locked);
-  // Refusing the run if everything is locked spares the user a confusing
-  // "nothing changed" outcome (the LLM would echo every field, then the
-  // server would overwrite with originals, then the modal would show no diff).
-  if (LOCKABLE_FIELDS.every((k) => safeLocked[k])) {
+  // hasStructure also unblocks an all-top-level-locked refine — the user
+  // can still want to tune unlocked variations or composite boards.
+  const hasStructure =
+    (categories && typeof categories === "object" && Object.keys(categories).length > 0) ||
+    (Array.isArray(compositeSheets) && compositeSheets.length > 0);
+  // Refusing the run if everything is locked AND there is no structure spares
+  // the user a confusing "nothing changed" outcome (the LLM would echo every
+  // field, then the server would overwrite with originals, then the modal
+  // would show no diff). When there is structure to refine, fall through.
+  if (LOCKABLE_FIELDS.every((k) => safeLocked[k]) && !hasStructure) {
     throw new ServerError(
       "All fields are locked — unlock at least one before refining",
       { status: 400, code: "ALL_FIELDS_LOCKED" },
@@ -504,10 +510,6 @@ export async function refineWorldPrompts({
 
   // Trim originals up front so we can pass them to both the LLM AND use them
   // verbatim as the lock fallback below.
-  const hasStructure =
-    (categories && typeof categories === "object" && Object.keys(categories).length > 0) ||
-    (Array.isArray(compositeSheets) && compositeSheets.length > 0);
-
   const originals = {
     starterPrompt: trimTo(starterPrompt, STARTER_PROMPT_MAX),
     stylePrompt: trimTo(stylePrompt, PROMPT_FRAGMENT_MAX),
@@ -551,9 +553,11 @@ export async function refineWorldPrompts({
   };
 
   // Scalar fields: if locked, echo the original; otherwise take the LLM's
-  // value (or fall back to original when missing/empty so the modal never
-  // receives a blank where the user had content). Influences is an object
-  // with per-list locks — handled separately below.
+  // value, distinguishing "key absent / null" (fall back to original) from
+  // an intentional "" (apply — the user asked to clear it). Mirrors the
+  // expand merge's pick semantics so an unlocked field like negativePrompt
+  // can actually be cleared by refine. Influences uses per-list locks and is
+  // handled separately below.
   const refined = {};
   for (const key of LOCKABLE_FIELDS) {
     if (isInfluenceLockField(key)) continue;
@@ -561,8 +565,12 @@ export async function refineWorldPrompts({
       refined[key] = originals[key];
       continue;
     }
-    const llmValue = trimTo(parsed[key], FIELD_CAPS[key]);
-    refined[key] = llmValue || originals[key];
+    const raw = parsed[key];
+    if (raw === null || raw === undefined) {
+      refined[key] = originals[key];
+    } else {
+      refined[key] = trimTo(raw, FIELD_CAPS[key]);
+    }
   }
   // Refine path uses APPEND-ONLY semantics for locked influence lists — the
   // user wants "lock = don't rebuild, but you may append". Expand still calls
