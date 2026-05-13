@@ -220,7 +220,11 @@ export function analyzeHttpError(response) {
   }
 
   if (body) {
-    return analyzeError(body);
+    // analyzeError returns `hasError: false` when no known pattern matches;
+    // for a non-2xx response that's still a failure — preserve it as an
+    // UNKNOWN HTTP error instead of letting the caller treat it as success.
+    const bodyAnalysis = analyzeError(body);
+    if (bodyAnalysis.hasError) return bodyAnalysis;
   }
 
   return {

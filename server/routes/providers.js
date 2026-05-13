@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { testVision, runVisionTestSuite, checkVisionHealth } from '../services/visionTest.js';
 import { getAllProviderStatuses, getProviderStatus, markProviderAvailable, getTimeUntilRecovery } from '../services/providerStatus.js';
+import { providerSchema, validate } from '../lib/aiToolkit/validation.js';
 
 /**
  * Sanitize a provider object for client responses.
@@ -158,16 +159,17 @@ export function createPortOSProviderRoutes(aiToolkit) {
     res.json(sanitizeProvider(provider));
   }));
 
-  // POST / — intercept to sanitize the created provider before responding so
-  // apiKey and secret envVar values don't echo back to the client (the
-  // toolkit's POST returns the raw provider object).
+  // POST / — intercept to (a) validate the body against providerSchema so
+  // invalid fields like `timeout: "abc"` or non-object `envVars` don't
+  // persist and later break runner behavior, and (b) sanitize the created
+  // provider before responding so apiKey/secret envVar values don't echo
+  // back to the client (the toolkit's POST returns the raw provider).
   router.post('/', asyncHandler(async (req, res) => {
-    const { name, type } = req.body;
-    if (!name) return res.status(400).json({ error: 'Name is required' });
-    if (!type || !['cli', 'api'].includes(type)) {
-      return res.status(400).json({ error: 'Type must be "cli" or "api"' });
+    const validation = validate(providerSchema, req.body);
+    if (!validation.success) {
+      return res.status(400).json({ error: 'Invalid provider data', details: validation.errors });
     }
-    const provider = await providerService.createProvider(req.body);
+    const provider = await providerService.createProvider(validation.data);
     res.status(201).json(sanitizeProvider(provider));
   }));
 

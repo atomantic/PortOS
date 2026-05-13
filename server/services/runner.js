@@ -49,9 +49,13 @@ export function buildCliArgs(provider) {
     ? resolveCliModel(provider.defaultModel)
     : provider.defaultModel;
 
-  // Codex CLI: `codex exec -` reads prompt from stdin, --model for model
+  // Codex CLI: `codex exec -` reads prompt from stdin, --model for model.
+  // Detect an existing leading `exec` in user/legacy args so we don't end up
+  // running `codex exec --full-auto exec -` after migration of legacy
+  // configs that already pinned an `exec` subcommand.
   if (providerId === 'codex') {
-    const args = [...baseArgs, 'exec'];
+    const hasExec = baseArgs.includes('exec');
+    const args = hasExec ? [...baseArgs] : [...baseArgs, 'exec'];
     if (effectiveDefaultModel) {
       args.push('--model', effectiveDefaultModel);
     }
