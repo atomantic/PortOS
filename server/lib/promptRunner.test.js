@@ -181,6 +181,16 @@ describe('promptRunner — happy paths', () => {
     // cloned provider whose defaultModel === baked-in.
     expect(out.model).toBe('baked-in');
     expect(out.text).toBe('ran with defaultModel=baked-in');
+    // Run-record side of the bugfix: createRun must persist the
+    // args-baked model id so the recorded run reflects what actually
+    // executed (not the caller's silently-dropped override or the
+    // provider.defaultModel fallback).
+    expect(runner.createRun).toHaveBeenCalledWith({
+      providerId: 'claude-code',
+      model: 'baked-in',
+      prompt: 'p',
+      source: 't',
+    });
   });
 });
 
