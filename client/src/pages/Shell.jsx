@@ -55,6 +55,13 @@ export default function Shell() {
   // Mirror urlSessionId into a ref so callbacks (activateSession, handleSessions) can read the
   // latest URL without forcing the heavy socket-listener effect to re-bind on every URL change.
   const urlSessionIdRef = useRef(urlSessionId);
+  // Keep navigate in a ref so callbacks don't list it in deps — guarantees the socket-listener
+  // effect can't tear down on URL change even if router internals ever start returning a fresh
+  // navigate identity per render.
+  const navigateRef = useRef(navigate);
+  // Set to 'push' before any user-initiated switch (tab click, "New" button) so the next
+  // activateSession pushes a history entry; auto/URL-driven switches keep the 'replace' default.
+  const pendingNavIntentRef = useRef('replace');
   const socket = useSocket();
   const [connected, setConnected] = useState(false);
   const [sessions, setSessions] = useState([]);
@@ -67,6 +74,7 @@ export default function Shell() {
   const sessionsRef = useRef([]);
 
   useEffect(() => { urlSessionIdRef.current = urlSessionId; }, [urlSessionId]);
+  useEffect(() => { navigateRef.current = navigate; }, [navigate]);
 
   // Read query params once on mount for initial session options
   useEffect(() => {
@@ -243,9 +251,11 @@ export default function Shell() {
     setActiveSessionId(sessionId);
     setConnected(true);
     if (urlSessionIdRef.current !== sessionId) {
-      navigate(`/shell/${sessionId}`, { replace: true });
+      const intent = pendingNavIntentRef.current;
+      pendingNavIntentRef.current = 'replace';
+      navigateRef.current(`/shell/${sessionId}`, { replace: intent === 'replace' });
     }
-  }, [navigate]);
+  }, []);
 
   const startSession = useCallback(() => {
     if (!socket?.connected) return;
@@ -277,9 +287,9 @@ export default function Shell() {
       if (termInstanceRef.current) {
         termInstanceRef.current.writeln('\r\n\x1b[33m[Session killed]\x1b[0m');
       }
-      navigate('/shell', { replace: true });
+      navigateRef.current('/shell', { replace: true });
     }
-  }, [socket, navigate, clearActiveSession]);
+  }, [socket, clearActiveSession]);
 
   const killOtherSession = useCallback((sessionId) => {
     if (!socket) return;
@@ -289,15 +299,22 @@ export default function Shell() {
       if (termInstanceRef.current) {
         termInstanceRef.current.writeln('\r\n\x1b[33m[Session killed]\x1b[0m');
       }
-      navigate('/shell', { replace: true });
+      navigateRef.current('/shell', { replace: true });
     }
-  }, [socket, navigate, clearActiveSession]);
+  }, [socket, clearActiveSession]);
 
-  const switchToSession = useCallback((sessionId) => {
+  const switchToSession = useCallback((sessionId, { fromUrl = false } = {}) => {
     if (sessionId === sessionIdRef.current) return;
+    if (!fromUrl) pendingNavIntentRef.current = 'push';
     clearActiveSession();
     attachToSession(sessionId);
   }, [attachToSession, clearActiveSession]);
+
+  // User clicked "New" button — set push intent so back/forward can return to the prior session.
+  const startNewSession = useCallback(() => {
+    pendingNavIntentRef.current = 'push';
+    startSession();
+  }, [startSession]);
 
   // Handle socket connection and shell session events
   useEffect(() => {
@@ -385,7 +402,7 @@ export default function Shell() {
         if (remaining.length > 0) {
           setTimeout(() => attachToSession(remaining[remaining.length - 1].sessionId), 100);
         } else {
-          navigate('/shell', { replace: true });
+          navigateRef.current('/shell', { replace: true });
         }
       }
     };
@@ -421,15 +438,17 @@ export default function Shell() {
       // Don't kill session on unmount — it persists server-side
       sessionIdRef.current = null;
     };
-  }, [socket, startSession, attachToSession, activateSession, navigate, clearActiveSession]);
+  }, [socket, startSession, attachToSession, activateSession, clearActiveSession]);
 
   // React to URL changes after init (browser back/forward, manual URL paste).
   // If the URL points at a known session that isn't currently displayed, switch to it.
+  // fromUrl: true keeps the next activateSession in 'replace' mode — the browser already
+  // owns this history entry, so we don't want to double-push.
   useEffect(() => {
     if (!hasInitializedRef.current) return;
     if (!urlSessionId) return;
     if (!sessionsRef.current.some(s => s.sessionId === urlSessionId)) return;
-    switchToSession(urlSessionId);
+    switchToSession(urlSessionId, { fromUrl: true });
   }, [urlSessionId, switchToSession]);
 
   return (
@@ -468,7 +487,7 @@ export default function Shell() {
             </button>
           )}
           <button
-            onClick={startSession}
+            onClick={startNewSession}
             className="flex items-center gap-1.5 px-2.5 py-2 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg text-sm transition-colors min-h-[40px]"
             title="Start new session"
           >
@@ -511,7 +530,7 @@ export default function Shell() {
             );
           })}
           <button
-            onClick={startSession}
+            onClick={startNewSession}
             className="flex items-center gap-1 px-2 py-1.5 text-xs text-gray-500 hover:text-white hover:bg-port-border rounded transition-colors min-h-[40px]"
             title="New session"
           >
