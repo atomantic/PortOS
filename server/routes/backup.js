@@ -11,7 +11,12 @@ router.get('/status', asyncHandler(async (req, res) => {
   const state = await backup.getState();
   const settings = await getSettings();
   const nextRun = backup.getNextRunTime();
-  res.json({ ...state, destPath: settings.backup?.destPath ?? null, nextRun });
+  res.json({
+    ...state,
+    destPath: settings.backup?.destPath ?? null,
+    nextRun,
+    defaultExcludes: backup.DEFAULT_EXCLUDES
+  });
 }));
 
 // POST /api/backup/run

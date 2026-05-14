@@ -8,7 +8,8 @@ vi.mock('../services/backup.js', () => ({
   getNextRunTime: vi.fn(),
   runBackup: vi.fn(),
   listSnapshots: vi.fn(),
-  restoreSnapshot: vi.fn()
+  restoreSnapshot: vi.fn(),
+  DEFAULT_EXCLUDES: [{ path: 'browser-profile/', reason: 'test' }]
 }));
 
 vi.mock('../services/settings.js', () => ({
@@ -44,7 +45,8 @@ describe('backup routes', () => {
         lastRun: '2026-04-01T00:00:00Z',
         success: true,
         destPath: '/backup/target',
-        nextRun: '2026-04-08T00:00:00Z'
+        nextRun: '2026-04-08T00:00:00Z',
+        defaultExcludes: [{ path: 'browser-profile/', reason: 'test' }]
       });
     });
 

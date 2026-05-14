@@ -21,6 +21,16 @@ let isRunning = false;
 
 const STATE_PATH = join(PATHS.data, 'backup', 'state.json');
 
+// Paths under data/ that are always skipped on top of user-configured excludes.
+// Browser profile is a CDP cache that can grow to several GB; worktrees are
+// throwaway agent checkouts of the main repo.
+export const DEFAULT_EXCLUDES = [
+  { path: 'browser-profile/', reason: 'Browser CDP profile — cache/cookies, can be several GB' },
+  { path: 'cos/worktrees/', reason: 'Ephemeral agent git worktrees — recreated on demand' }
+];
+
+const DEFAULT_EXCLUDE_PATHS = DEFAULT_EXCLUDES.map(e => e.path);
+
 // Snapshots live under snapshots/<hostname>/<snapshotId> so a single shared
 // destination (e.g. iCloud) can host backups from multiple machines without
 // their snapshot IDs colliding.
@@ -106,7 +116,11 @@ export async function runBackup(destPath, io = null, { excludePaths = [] } = {})
   const snapshotDir = join(destPath, 'snapshots', MACHINE_HOST, snapshotId);
   const dataDestDir = join(snapshotDir, 'data');
 
-  console.log(`💾 Backup starting: snapshot ${snapshotId}${excludePaths.length ? ` (excluding ${excludePaths.length} paths)` : ''}`);
+  // Merge user excludes with built-in defaults; dedupe so user can't double-list a default.
+  const userExcludes = excludePaths.filter(Boolean);
+  const effectiveExcludes = [...new Set([...DEFAULT_EXCLUDE_PATHS, ...userExcludes])];
+
+  console.log(`💾 Backup starting: snapshot ${snapshotId} (excluding ${effectiveExcludes.length} paths)`);
   if (io) io.emit('backup:started', { snapshotId });
 
   await ensureDir(dataDestDir);
@@ -125,7 +139,7 @@ export async function runBackup(destPath, io = null, { excludePaths = [] } = {})
     throw err;
   };
 
-  const excludeFlags = excludePaths.filter(Boolean).flatMap(p => ['--exclude', p]);
+  const excludeFlags = effectiveExcludes.flatMap(p => ['--exclude', p]);
   changedFiles = await runRsync(PATHS.data, dataDestDir, excludeFlags).catch(fail);
   console.log(`💾 Backup rsync complete: ${changedFiles.length} files changed (exit 0)`);
 
