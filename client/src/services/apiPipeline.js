@@ -151,6 +151,17 @@ export const generatePipelineComicPage = (issueId, pageIndex, opts = {}) =>
     body: JSON.stringify(opts),
   });
 
+// Render the issue's front cover. Pass `coverScript` to render a not-yet-
+// saved concept (the route persists it back to stages.comicPages.cover so
+// the next reload reflects what was rendered). Server folds in series
+// name, issue number, issue title, and style notes — caller only owns the
+// cover-concept text. Returns { jobId, mode, prompt, cover, issue, stage }.
+export const generatePipelineComicCover = (issueId, opts = {}) =>
+  request(`/pipeline/issues/${encodeURIComponent(issueId)}/stages/comicPages/cover/render`, {
+    method: 'POST',
+    body: JSON.stringify(opts),
+  });
+
 // Patch one comic page's raw markdown — the server re-parses panels from the
 // edited rawText so subsequent renders still get a structured prompt.
 // Returns { issue, stage, page }.

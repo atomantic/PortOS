@@ -51,10 +51,22 @@ const applyWorldStyle = (prompt, world) => {
   return composeStyledPrompt(prompt, '', { prompt: world.stylePrompt, negativePrompt: '' }).prompt;
 };
 
+// Resolution order for the image-gen mode on a pipeline visual stage:
+//   1. Per-request override (`options.mode`) — set by the stage's persisted
+//      `genConfig` or an explicit UI selection.
+//   2. Saved dispatcher default (`settings.imageGen.mode`) — but only when
+//      it names a mode this surface supports (visual pipeline doesn't
+//      proxy the external SD-API path).
+//   3. Auto-default — prefer Codex when the user has enabled it
+//      (`imageGen.codex.enabled`), since cloud image gen produces
+//      print-quality comic pages out of the box. Otherwise fall back to
+//      local diffusion (flux-1) the way the original default behaved.
 const resolveMode = (options, settings) => {
   if (SUPPORTED_MODES.has(options.mode)) return options.mode;
   const settingsMode = settings?.imageGen?.mode;
-  return SUPPORTED_MODES.has(settingsMode) ? settingsMode : 'local';
+  if (SUPPORTED_MODES.has(settingsMode)) return settingsMode;
+  if (settings?.imageGen?.codex?.enabled) return 'codex';
+  return 'local';
 };
 
 const loadBibleContext = async (issueId) => {
@@ -155,6 +167,75 @@ function formatBalloon(character, line) {
   // Terminator handled here so endPunct() at the call site doesn't have to
   // navigate the closing paren — we always end with `).`.
   return `Speech balloon reads: "${cleanText}" ${attribution}.`;
+}
+
+/**
+ * Compose a comic-book front-cover prompt. The cover always renders the
+ * series masthead (logo-style title) and the issue number tag in the
+ * canonical top-of-cover position, plus the user's cover concept as the
+ * scene content. Falls back to the issue title when the user has not
+ * written a cover concept yet.
+ *
+ * Returns the full prompt string (with world style baked in when present).
+ */
+export function composeComicCoverPrompt({
+  series, world, issue, coverScript = '', extraStyle = '',
+}) {
+  const seriesName = (series?.name || '').trim();
+  const issueNumber = Number.isFinite(issue?.number) ? Math.max(1, Math.floor(issue.number)) : 1;
+  const issueTitle = (issue?.title || '').trim();
+  const concept = (coverScript || '').trim();
+
+  const styleStack = stackStyle(series, extraStyle);
+  const styleClause = styleStack ? ` Art style: ${styleStack}.` : '';
+
+  // Title-block requirements get spelled out explicitly because cover-art
+  // typography is the part image-gen models get most wrong on the first
+  // pass — without a hard cue the model often emits panels instead of
+  // a cover, or skips the issue-number tag.
+  const titleBlock = seriesName
+    ? `Render the series masthead "${seriesName}" as bold, large comic-book logo typography near the top of the cover.`
+    : 'Render a bold comic-book series masthead as large logo typography near the top of the cover.';
+  const numberBlock = `Include a clearly legible issue-number tag reading "#${issueNumber}" in the top-left corner — small but readable.`;
+  const titleLine = issueTitle
+    ? ` Include the episode title "${issueTitle}" as a secondary banner below the masthead.`
+    : '';
+
+  // Fall back to the issue title so a one-click render against a fresh cover
+  // still produces something thematically on-target instead of a blank canvas.
+  const sceneDescription = concept
+    || (issueTitle ? `A single dramatic hero image evoking "${issueTitle}".` : 'A single dramatic hero image of the protagonist mid-action.');
+
+  const layout = `A single full printable comic-book front cover for a serialized issue. ${titleBlock} ${numberBlock}${titleLine} The rest of the cover is one bold hero image (no panel borders, no multi-panel layout — this is the cover, not an interior page).${styleClause}`;
+  const body = `Cover concept: ${sceneDescription}`;
+  return applyWorldStyle(`${layout}\n\n${body}`, world);
+}
+
+/**
+ * Enqueue a comic-issue front-cover image render. Builds a cover-art
+ * prompt (series masthead + issue-number tag + user's cover concept) and
+ * hands it to the image-gen queue. Caller records the returned jobId on
+ * `stages.comicPages.cover.imageJobId`.
+ *
+ * Returns the resolved coverScript alongside { jobId, mode, prompt } so
+ * the route can persist it without a second read of the issue file.
+ */
+export async function enqueueComicCover(issueId, options = {}) {
+  const { issue, settings, series, world } = await loadBibleContext(issueId);
+  const cover = issue.stages?.comicPages?.cover || null;
+  const coverScript = typeof options.coverScript === 'string'
+    ? options.coverScript
+    : (cover?.script || '');
+  const mode = resolveMode(options, settings);
+  const prompt = composeComicCoverPrompt({
+    series, world, issue, coverScript, extraStyle: options.extraStyle,
+  });
+  const jobId = enqueueImageJob({
+    prompt, world, settings, options, mode,
+    owner: `pipeline:${issueId}:comicPages:cover`,
+    logLine: `🎨 Pipeline comic cover — issue=${issueId.slice(0, 8)} number=${issue.number || 1}`,
+  });
+  return { jobId, mode, prompt, coverScript };
 }
 
 export function composeComicPagePrompt({

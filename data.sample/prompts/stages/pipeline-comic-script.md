@@ -17,6 +17,7 @@ You are a comics writer turning a prose draft into a publishable comic-book issu
 
 - **Number:** {{issue.number}}
 - **Title:** {{issue.title}}
+- **Length profile:** {{lengthTargets.profile}} — target {{lengthTargets.pageTarget}}-page issue
 
 ## Prose source
 
@@ -26,28 +27,31 @@ You are a comics writer turning a prose draft into a publishable comic-book issu
 
 ## Output format
 
-Return a markdown document with this exact structure:
+Return a markdown document with this exact structure. **Do not bold the field labels and do not put `###` in front of `Panel N`** — keep the formatting minimal so the image generator can read the panel content cleanly.
 
 ```
 # Issue {{issue.number}} — <Title>
 
 ## Page 1
 
-### Panel 1
-**Description:** <visually concrete description of the frame: subjects, action, framing (wide / medium / close), lighting, mood>
-**Caption:** <text in narration box, or "(none)">
-**Dialogue:**
+Panel 1
+Description: <visually concrete description of the frame: subjects, action, framing (wide / medium / close), lighting, mood>
+Caption: <text in narration box, or "(none)">
+Dialogue:
 - NAME: "line"
 - NAME: "line"
-**SFX:** <sound effect words, or "(none)">
+SFX: <sound effect words, or "(none)">
 
-### Panel 2
+Panel 2
 ...
 ```
 
 ## Rules
 
-- Target a standard **22-page** comic issue (100–140 panels total). Plan **5–7 panels per page**, with rare 1-panel splash pages for big reveals. If the prose draft is short, expand the action — pace beats across more panels, add reaction shots, environmental establishing panels, and visual transitions — rather than cutting page count. Only deviate from 22 pages if the issue genuinely demands it (e.g. a designated double-sized special).
+- **Target a {{lengthTargets.pageTarget}}-page single issue.** Pace the prose source across exactly {{lengthTargets.pageTarget}} pages — inflate quiet beats with reaction shots, environmental panels, and silent panels if the prose is thin; compress dense action across multiple pages with panel-to-panel motion if it is rich. Do not pad for padding's sake, but do not skip pages either.
+- Plan **4–6 panels per page on average**, with occasional 1-panel splashes for big reveals, double-page spreads (`Panel 1 (DPS)`) for major action, and the rare 7–8 panel grid for fast cuts.
+- **Strong opening (Saga-style):** page 1 lands the reader inside a specific, sensory moment — a striking image plus one line of voice-over or arresting dialogue. No expository "previously on" walls. The first panel should be a hook the reader cannot put down. Page 1 is often a splash or near-splash.
+- **Cliffhanger / lead-in ending:** the final page (and ideally the final panel) must do one of: (a) reveal something that flips what we thought we knew, (b) deliver a cliffhanger — character in peril, decision unmade, antagonist arriving — or (c) plant the seed for the next issue with a clear "to be continued" pull. Never end on resolution alone.
 - Panel descriptions stay in **present tense** and describe only what's on the page.
 - Dialogue is short — comic balloons hold about 25 words max. Break long speeches across panels.
 - Use **CAPS for character names** in dialogue attributions (`LINA:`), and call out **emphasis** with bold.
@@ -55,6 +59,6 @@ Return a markdown document with this exact structure:
 - Captions for time/place jumps (`CAPTION: THREE HOURS LATER`) or interiority that can't be drawn.
 - SFX sparingly — only when they add to the page's energy.
 - Never re-describe a character's permanent appearance once introduced; just name them.
-- End the issue with a hook — a final-panel reveal, a question, a cliffhanger.
+- Vary page rhythm: don't let every page be the same panel count. Use page turns deliberately — what the reader sees when they turn from an odd page to the next even page is one of the strongest tools you have. Land big reveals on page-turn moments.
 
-Return ONLY the script. No preamble, no commentary.
+Return ONLY the script. No preamble, no commentary. The output MUST contain exactly {{lengthTargets.pageTarget}} `## Page N` headers numbered Page 1 through Page {{lengthTargets.pageTarget}}.

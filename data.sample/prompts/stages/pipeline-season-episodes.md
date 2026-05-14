@@ -63,6 +63,13 @@ For each episode write:
 - **`synopsis`** — 2–3 sentences. What *happens* in this episode at the arc level. Don't write scene blocking — keep it at the level a season planner needs.
 - **`primaryCharacters`** — array of CAPS character names from the bible who carry the episode. Usually 1–3; never empty for a main character series.
 - **`arcRole`** — single token describing the episode's structural job in this season. Pick one of: `pilot` / `complication` / `midpoint` / `b-plot` / `all-is-lost` / `finale`. Used downstream to verify the season has balanced shape.
+- **`lengthProfile`** — single token sizing this episode for downstream prose / script / video generation. Pick one of:
+  - `teaser` — promo / cold-open / mini-issue (~8 pages comic / ~10 min episode). Use sparingly, mostly for B-plot or anthology beats.
+  - `standard` — the working default (~22 pages / ~24 min). Use for most episodes.
+  - `extended` — premiere / set-piece episodes (~32 pages / ~36 min). Use for pilots that have to establish a lot of world, or mid-season turning points that earn extra runtime.
+  - `finale` — season climax (~44 pages / ~48 min). Reserve for the actual `arcRole: 'finale'` episode (and occasionally `all-is-lost` if the budget allows). Don't apply to every episode — finale-length used everywhere becomes meaningless.
+
+  Default to `standard` when nothing argues for a different size.
 
 ## Output contract
 
@@ -77,7 +84,8 @@ Return ONLY valid JSON matching this shape — no prose, no markdown fence, no c
       "logline": "string",
       "synopsis": "string",
       "primaryCharacters": ["NAME", "..."],
-      "arcRole": "pilot"
+      "arcRole": "pilot",
+      "lengthProfile": "standard"
     }
   ]
 }

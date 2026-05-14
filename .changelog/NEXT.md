@@ -2,6 +2,39 @@
 
 ## Added
 
+- **Pipeline — per-issue length profile, per-stage gen config, comic front cover.**
+  Three additive pipeline-UX features rescued from a pre-crash recovery branch
+  and cherry-picked into main:
+  - **Length profile picker** in the pipeline issue header. Sets
+    `issue.lengthProfile` (`teaser` / `standard` / `extended` / `finale` /
+    `custom`) plus optional `pageTarget` + `minutesTarget`. New
+    `server/lib/issueLength.js` materializes the profile into prompt-template
+    variables (`{{lengthTargets.profile}}`, `pageTarget`, `minutesTarget`,
+    `proseWordsMin/Max`, `beatsMin/Max`) that the idea, prose, comic-script,
+    TV-script prompts now consume — beat counts, prose word ranges, and page
+    counts scale with the picked profile instead of being hardcoded to 22
+    pages / 24 minutes. The season-episodes generator emits a `lengthProfile`
+    per episode so a finale auto-scales without manual tweaking.
+  - **Per-stage generation settings.** New gear-icon modal on visual stages
+    (`comicPages`, `storyboards`) exposes `imageMode` (`auto` / `local` /
+    `codex`), pinned local image model, and a refine-LLM override. Persisted
+    on `stages.<stageId>.genConfig` so reloads keep the user's choice.
+    Threads through `generatePipelineComicPage`, `generatePipelineVisualImage`,
+    and the two refine-prompt endpoints. Visual stages' server resolver now
+    defaults to codex when `imageGen.codex.enabled` (still falls back to
+    local diffusion otherwise).
+  - **Comic-issue front cover.** Optional cover concept per issue persisted
+    on `stages.comicPages.cover` (`script` + `imageJobId` + `prompt`). New
+    `POST /pipeline/issues/:id/stages/comicPages/cover/render` route builds
+    the cover prompt server-side (series masthead + issue-number tag + the
+    user's concept) and enqueues an image-gen job; the cover card sits
+    above the page list in the Comic Pages tab.
+  - **Comic-script parser** now recognizes an optional `## Cover concept`
+    section and the simpler `Panel N` / `Field:` plain-line format the
+    updated prompts emit, alongside the legacy `### Panel N` /
+    `**Field:**` form. `parseComicScript` returns
+    `{ coverConcept, pages: [{ rawText, panels }] }`.
+
 - **Universe Canon page — lock toggle, tag chips, and "from series" badge on every card.**
   Phase 2a of the Universe-as-Canon UI. Each `CanonCard` (used on both the
   Universe Canon page and the per-series Nouns page) now renders:

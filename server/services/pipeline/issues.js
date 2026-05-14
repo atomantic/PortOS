@@ -21,6 +21,7 @@
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { PATHS, atomicWrite, readJSONFile, ensureDir } from '../../lib/fileUtils.js';
+import { LENGTH_PROFILE_NAMES, DEFAULT_LENGTH_PROFILE } from '../../lib/issueLength.js';
 
 // Lazy resolution — see series.js for context.
 const statePath = () => join(PATHS.data, 'pipeline-issues.json');
@@ -83,6 +84,34 @@ const sanitizeStage = (raw) => {
 const ASPECT_RATIO_VALUES = new Set(['16:9', '9:16', '1:1']);
 const QUALITY_VALUES = new Set(['draft', 'standard', 'high']);
 
+// `imageMode: 'auto'` defers to the server resolver (codex when enabled,
+// local otherwise). Returns null when nothing was set so the persisted
+// JSON stays clean for issues that never opened the panel.
+const IMAGE_MODE_VALUES = new Set(['auto', 'local', 'codex']);
+const GEN_CONFIG_STR_MAX = 200;
+const sanitizeGenConfig = (raw) => {
+  if (!raw || typeof raw !== 'object') return null;
+  const imageMode = IMAGE_MODE_VALUES.has(raw.imageMode) ? raw.imageMode : 'auto';
+  const imageModelId = trimTo(raw.imageModelId, GEN_CONFIG_STR_MAX) || null;
+  const refineProvider = trimTo(raw.refineProvider, GEN_CONFIG_STR_MAX) || null;
+  const refineModel = trimTo(raw.refineModel, GEN_CONFIG_STR_MAX) || null;
+  if (imageMode === 'auto' && !imageModelId && !refineProvider && !refineModel) {
+    return null;
+  }
+  return { imageMode, imageModelId, refineProvider, refineModel };
+};
+
+const COVER_SCRIPT_MAX = 8000;
+const COVER_PROMPT_MAX = 16_000;
+const sanitizeCover = (raw) => {
+  if (!raw || typeof raw !== 'object') return null;
+  const script = trimTo(raw.script, COVER_SCRIPT_MAX);
+  const imageJobId = isStr(raw.imageJobId) && raw.imageJobId ? raw.imageJobId : null;
+  const prompt = trimTo(raw.prompt, COVER_PROMPT_MAX);
+  if (!script && !imageJobId && !prompt) return null;
+  return { script, imageJobId, prompt: prompt || null };
+};
+
 const sanitizeVisualStage = (raw) => {
   // Visual stages keep arbitrary structured artifact lists. Sanitize the
   // wrapper but pass through known shapes.
@@ -95,6 +124,10 @@ const sanitizeVisualStage = (raw) => {
     videoPath: isStr(raw?.videoPath) && raw.videoPath ? raw.videoPath : null,
     aspectRatio: ASPECT_RATIO_VALUES.has(raw?.aspectRatio) ? raw.aspectRatio : null,
     quality: QUALITY_VALUES.has(raw?.quality) ? raw.quality : null,
+    // genConfig + cover are only read by comicPages/storyboards; pass-through
+    // is a no-op on episodeVideo, which never looks at them.
+    genConfig: sanitizeGenConfig(raw?.genConfig),
+    cover: sanitizeCover(raw?.cover),
   };
 };
 
@@ -124,6 +157,19 @@ const sanitizeIssue = (raw) => {
   const arcPosition = Number.isFinite(raw.arcPosition)
     ? Math.max(0, Math.min(ARC_POSITION_MAX, Math.floor(raw.arcPosition)))
     : null;
+  // Defaults to 'standard' so pre-field issues keep the prior 22pg/24min sizing.
+  // pageTarget/minutesTarget are only consumed when lengthProfile==='custom',
+  // but we persist them on every profile so the picker can remember a previous
+  // custom value if the user toggles back.
+  const lengthProfile = LENGTH_PROFILE_NAMES.includes(raw.lengthProfile)
+    ? raw.lengthProfile
+    : DEFAULT_LENGTH_PROFILE;
+  const pageTarget = Number.isFinite(raw.pageTarget)
+    ? Math.max(1, Math.min(500, Math.floor(raw.pageTarget)))
+    : null;
+  const minutesTarget = Number.isFinite(raw.minutesTarget)
+    ? Math.max(1, Math.min(600, Math.floor(raw.minutesTarget)))
+    : null;
   return {
     id: raw.id,
     seriesId: trimTo(raw.seriesId, SERIES_ID_MAX),
@@ -132,6 +178,9 @@ const sanitizeIssue = (raw) => {
     status,
     seasonId,
     arcPosition,
+    lengthProfile,
+    pageTarget,
+    minutesTarget,
     stages: sanitizeStages(raw.stages || {}),
     createdAt,
     updatedAt,
@@ -204,6 +253,9 @@ export async function createIssue(input = {}) {
     // (and any future caller wiring an issue to a season at create time).
     seasonId: 'seasonId' in input ? input.seasonId : null,
     arcPosition: 'arcPosition' in input ? input.arcPosition : null,
+    lengthProfile: 'lengthProfile' in input ? input.lengthProfile : undefined,
+    pageTarget: 'pageTarget' in input ? input.pageTarget : null,
+    minutesTarget: 'minutesTarget' in input ? input.minutesTarget : null,
     stages: input.stages || {},
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
@@ -237,6 +289,9 @@ export async function updateIssue(id, patch = {}) {
     ...('status' in patch ? { status: patch.status } : {}),
     ...('seasonId' in patch ? { seasonId: patch.seasonId } : {}),
     ...('arcPosition' in patch ? { arcPosition: patch.arcPosition } : {}),
+    ...('lengthProfile' in patch ? { lengthProfile: patch.lengthProfile } : {}),
+    ...('pageTarget' in patch ? { pageTarget: patch.pageTarget } : {}),
+    ...('minutesTarget' in patch ? { minutesTarget: patch.minutesTarget } : {}),
     stages: mergedStages,
     updatedAt: new Date().toISOString(),
   });

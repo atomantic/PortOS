@@ -17,6 +17,7 @@ You are a TV writer adapting a prose draft into a single-episode teleplay in sta
 
 - **Number:** {{issue.number}}
 - **Title:** {{issue.title}}
+- **Length profile:** {{lengthTargets.profile}} — target {{lengthTargets.minutesTarget}}-minute episode
 
 ## Prose source
 
@@ -59,14 +60,16 @@ CUT TO:
 
 ## Rules
 
-- Single half-hour structure: TEASER → ACT ONE → ACT TWO → ACT THREE → TAG. (For a 30-min series. Drop ACT THREE for a 22-min hard-half-hour, expand to four acts for a full hour.)
+- **Target a {{lengthTargets.minutesTarget}}-minute episode.** Use the **TEASER → ACT ONE → ACT TWO → ACT THREE → TAG** structure (collapse to TEASER → ONE ACT for very short episodes, or expand to TEASER → ACT ONE → ACT TWO → ACT THREE → ACT FOUR → TAG for long specials). One script page ≈ one minute of screen time, so aim for **~{{lengthTargets.minutesTarget}} pages of formatted teleplay**.
+- **Strong opening (Saga-style cold open):** the TEASER lands the viewer inside a specific sensory moment in the first 30–60 seconds — a striking image, an arresting line, an unanswered question. No exposition voice-over walls, no "previously on" recaps. The opening beat is the hook that earns the rest of the episode.
+- **Cliffhanger / lead-in ending:** the TAG (or final scene if no TAG) must do one of: (a) reveal something that recontextualizes the episode, (b) deliver a cliffhanger — a character in peril, a decision unmade, an antagonist arriving — or (c) plant the seed for the next episode with a clear next-episode pull. Never close on tidy resolution alone — serialized TV needs forward propulsion.
 - Use **sluglines in bold** for every scene: `**INT. KITCHEN — NIGHT**`.
 - Action paragraphs stay **short** (1–4 lines) and in **present tense**.
 - CAPS character names above their dialogue lines.
 - Parentheticals only when the line reading would otherwise be ambiguous.
 - Scene transitions in caps: `CUT TO:`, `SMASH CUT TO:`, `FADE TO:`.
-- Cover the same story beats as the prose, but free to add visual texture (establishing shots, silent reaction beats) the prose only implied.
-- Pages map to roughly one minute of screen time at 25–30 words of dialogue per page; aim for **a script that reads at the episode's target length**, not for a literal mapping.
-- End every act with a button — an image, a line, or a reveal that pulls you across the commercial break.
+- Cover the same story beats as the prose, but free to add visual texture (establishing shots, silent reaction beats, B-story interludes) the prose only implied — you have {{lengthTargets.minutesTarget}} minutes of screen time, not 800 words of compressed text.
+- **End every act with a button** — an image, a line, or a reveal that pulls the viewer past the act break. Act-outs are non-negotiable; they're where the audience decides whether to stick around.
+- Vary scene length: rapid-fire montage sequences should sit next to one-location dialogue scenes that breathe. Don't let every scene be the same energy.
 
 Return ONLY the teleplay. No preamble, no commentary, no "FADE IN:" header unless the script genuinely opens cold.

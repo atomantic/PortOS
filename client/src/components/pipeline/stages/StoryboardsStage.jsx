@@ -27,10 +27,13 @@ import {
   extractPipelineStoryboardScenes,
 } from '../../../services/api';
 import MediaJobThumb from '../MediaJobThumb';
+import { genConfigToImageOptions, genConfigToRefineOptions } from './VisualGenSettings';
 
 export default function StoryboardsStage({ issue, onStageUpdate }) {
   const stage = issue.stages?.storyboards || { status: 'empty', scenes: [] };
   const [scenes, setScenes] = useState(stage.scenes || []);
+  // Per-stage gen config — edited from the page-level settings modal.
+  const genConfig = stage.genConfig || null;
   const [savingIdx, setSavingIdx] = useState(null);
   const [renderingVideoIdx, setRenderingVideoIdx] = useState(null);
   const [refiningIdx, setRefiningIdx] = useState(null);
@@ -116,6 +119,7 @@ export default function StoryboardsStage({ issue, onStageUpdate }) {
     const result = await generatePipelineVisualImage(issue.id, 'storyboards', {
       description: scene.description,
       slugline: scene.slugline || '',
+      ...genConfigToImageOptions(genConfig),
     }).catch((err) => {
       toast.error(err.message || 'Failed to enqueue image');
       return null;
@@ -137,7 +141,7 @@ export default function StoryboardsStage({ issue, onStageUpdate }) {
       return;
     }
     setRefiningIdx(i);
-    const result = await refinePipelineSceneImagePrompt(issue.id, i, {})
+    const result = await refinePipelineSceneImagePrompt(issue.id, i, genConfigToRefineOptions(genConfig))
       .catch((err) => {
         toast.error(err.message || 'Refine failed');
         return null;

@@ -18,6 +18,7 @@ import { runStagedLLM } from '../../lib/stageRunner.js';
 import { getSeries, extractAndMergeIntoSeries } from './series.js';
 import { getIssue, updateStage, TEXT_STAGE_IDS } from './issues.js';
 import { getSeriesCanon } from './seriesCanon.js';
+import { computeIssueTargets } from '../../lib/issueLength.js';
 
 const STAGE_TO_TEMPLATE = Object.freeze({
   idea: 'pipeline-idea-expansion',
@@ -56,6 +57,9 @@ function buildStageContext({ series, canon, issue, stageId, seedInput }) {
       number: issue.number,
       title: issue.title,
     },
+    // Fed into every text template via {{lengthTargets.*}}. Always populated
+    // (defaults to 'standard') so templates can use the fields unconditionally.
+    lengthTargets: computeIssueTargets(issue),
     stages,
     seed: (seedInput || issue.stages?.[stageId]?.input || '').trim(),
   };

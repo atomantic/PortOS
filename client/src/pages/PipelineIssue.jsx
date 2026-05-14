@@ -10,11 +10,12 @@ import { useEffect, useState, useMemo } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, Sparkles, Loader2, X, Lightbulb, BookOpen, FileText, Film as FilmIcon,
-  LayoutGrid, Image as ImageIcon, Clapperboard, Users,
+  LayoutGrid, Image as ImageIcon, Clapperboard, Users, Settings,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
+import Modal from '../components/ui/Modal';
 import {
-  getPipelineIssue, getPipelineSeries,
+  getPipelineIssue, getPipelineSeries, updatePipelineIssue,
   startPipelineAutoRunText, cancelPipelineAutoRunText,
   PIPELINE_STAGES, PIPELINE_TAB_STAGES, PIPELINE_STAGE_LABELS,
 } from '../services/api';
@@ -28,6 +29,15 @@ import ComicPagesStage from '../components/pipeline/stages/ComicPagesStage';
 import StoryboardsStage from '../components/pipeline/stages/StoryboardsStage';
 import EpisodeVideoStage from '../components/pipeline/stages/EpisodeVideoStage';
 import SeriesLlmPicker from '../components/pipeline/SeriesLlmPicker';
+import LengthProfilePicker from '../components/pipeline/LengthProfilePicker';
+import { VisualGenSettingsPanel } from '../components/pipeline/stages/VisualGenSettings';
+
+// Stages whose render buttons consume genConfig — only these show the
+// header-level settings gear. Text-only stages (idea/prose/script) don't.
+const VISUAL_STAGE_LABELS = {
+  comicPages: 'Comic pages',
+  storyboards: 'Storyboards',
+};
 
 const STAGE_ICONS = {
   idea: Lightbulb,
@@ -73,6 +83,7 @@ export default function PipelineIssue() {
   const [loading, setLoading] = useState(true);
   const [autoRunStarting, setAutoRunStarting] = useState(false);
   const [autoRunActive, setAutoRunActive] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const { latest, frames } = usePipelineAutoRunProgress(issueId, { enabled: autoRunActive });
 
   useEffect(() => {
@@ -130,6 +141,30 @@ export default function PipelineIssue() {
     });
   };
 
+  // Persist length-profile changes from the header picker. The patch is a
+  // flat issue-level patch (no `stages.*` envelope) so the issue sanitizer
+  // routes lengthProfile / pageTarget / minutesTarget straight onto the record.
+  const handleLengthChange = async (patch) => {
+    const updated = await updatePipelineIssue(issueId, patch).catch((err) => {
+      toast.error(err.message || 'Save failed');
+      return null;
+    });
+    if (updated) setIssue(updated);
+  };
+
+  // Persist genConfig changes from the header settings modal. The active
+  // visual stage owns the config record (we keep per-stage genConfig so a
+  // user can pin "codex" for comicPages but "local" for storyboards).
+  const handleGenConfigChange = async (next) => {
+    const updated = await updatePipelineIssue(issueId, {
+      stages: { [stageId]: { genConfig: next } },
+    }).catch((err) => {
+      toast.error(err.message || 'Save failed');
+      return null;
+    });
+    if (updated) setIssue(updated);
+  };
+
   const handleStageUpdate = (id, updatedStage, updatedIssue) => {
     if (updatedIssue) {
       setIssue(updatedIssue);
@@ -152,6 +187,7 @@ export default function PipelineIssue() {
   if (!issue) return null;
 
   const StageComponent = STAGE_COMPONENTS[stageId];
+  const isVisualStage = stageId in VISUAL_STAGE_LABELS;
 
   return (
     <div className="flex flex-col h-full">
@@ -176,6 +212,7 @@ export default function PipelineIssue() {
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <h1 className="text-xl font-bold text-white truncate">#{issue.number} — {issue.title}</h1>
           <div className="flex items-center gap-2 flex-wrap">
+            <LengthProfilePicker issue={issue} onChange={handleLengthChange} />
             {series ? (
               <SeriesLlmPicker
                 series={series}
@@ -212,6 +249,17 @@ export default function PipelineIssue() {
               {autoRunStarting || autoRunActive ? <Loader2 size={14} className="animate-spin" /> : <Clapperboard size={14} />}
               Run everything (incl. video)
             </button>
+            {isVisualStage && (
+              <button
+                type="button"
+                onClick={() => setSettingsOpen(true)}
+                className="inline-flex items-center justify-center p-2 rounded-lg bg-port-card border border-port-border text-gray-300 hover:text-white hover:border-port-accent/50"
+                title={`${VISUAL_STAGE_LABELS[stageId]} generation settings`}
+                aria-label={`${VISUAL_STAGE_LABELS[stageId]} generation settings`}
+              >
+                <Settings size={16} />
+              </button>
+            )}
           </div>
         </div>
 
@@ -266,6 +314,32 @@ export default function PipelineIssue() {
           </details>
         ) : null}
       </div>
+
+      {/* Per-stage generation settings — only available on visual stages. */}
+      {isVisualStage && (
+        <Modal open={settingsOpen} onClose={() => setSettingsOpen(false)} size="lg" ariaLabel="Generation settings">
+          <div className="bg-port-card border border-port-border rounded-lg p-5 space-y-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-base font-semibold text-white">
+                {VISUAL_STAGE_LABELS[stageId]} — Generation settings
+              </h2>
+              <button
+                type="button"
+                onClick={() => setSettingsOpen(false)}
+                className="p-1 text-gray-400 hover:text-white"
+                aria-label="Close"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <VisualGenSettingsPanel
+              value={issue.stages?.[stageId]?.genConfig || null}
+              onChange={handleGenConfigChange}
+              stageLabel={VISUAL_STAGE_LABELS[stageId]}
+            />
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }

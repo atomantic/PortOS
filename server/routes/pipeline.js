@@ -40,6 +40,7 @@ import * as autoRunner from '../services/pipeline/autoRunner.js';
 import {
   enqueueVisualImage,
   enqueueVisualComicPage,
+  enqueueComicCover,
   enqueueStoryboardSceneVideo,
   refineComicPanelPrompt,
   refineStoryboardScenePrompt,
@@ -49,6 +50,7 @@ import { startEpisodeVideoForIssue, ERR_NO_STORYBOARDS } from '../services/pipel
 import { ASPECT_RATIOS, QUALITIES } from '../lib/creativeDirectorPresets.js';
 import { extractScenes, SOURCE_KIND } from '../lib/sceneExtractor.js';
 import { parseComicScript } from '../lib/comicScriptParser.js';
+import { LENGTH_PROFILE_NAMES } from '../lib/issueLength.js';
 import { llmSchema } from './universeBuilder.js';
 import { BIBLE_KIND } from '../lib/storyBible.js';
 import { ARC_LIMITS, ARC_STATUSES, SEASON_STATUSES } from '../lib/storyArc.js';
@@ -201,6 +203,22 @@ const visualStageInputSchema = stageInputSchema.extend({
   videoPath: z.string().trim().max(1000).nullable().optional(),
   aspectRatio: z.enum(ASPECT_RATIOS).nullable().optional(),
   quality: z.enum(QUALITIES).nullable().optional(),
+  // Per-stage gen config — image mode + optional pinned model + optional
+  // refine-LLM override. Sanitizer drops the field entirely when nothing
+  // is set, so a `null` here clears it.
+  genConfig: z.object({
+    imageMode: z.enum(['auto', 'local', 'codex']).optional(),
+    imageModelId: z.string().trim().max(200).nullable().optional(),
+    refineProvider: z.string().trim().max(200).nullable().optional(),
+    refineModel: z.string().trim().max(200).nullable().optional(),
+  }).nullable().optional(),
+  // Comic-issue front cover. Only meaningful on the comicPages stage; the
+  // service-side sanitizer drops the field on other visual stages.
+  cover: z.object({
+    script: z.string().max(8000).optional(),
+    imageJobId: z.string().trim().max(200).nullable().optional(),
+    prompt: z.string().max(16_000).nullable().optional(),
+  }).nullable().optional(),
 });
 
 const issuePatchSchema = z.object({
@@ -211,6 +229,12 @@ const issuePatchSchema = z.object({
   // ordinal within that season. `null` clears the assignment.
   seasonId: z.string().trim().min(1).max(issuesSvc.SEASON_ID_MAX).nullable().optional(),
   arcPosition: z.number().int().min(0).max(issuesSvc.ARC_POSITION_MAX).nullable().optional(),
+  // Per-issue length profile. Drives the prompt-template size targets
+  // (beats / prose words / page count / minute count). pageTarget +
+  // minutesTarget are only meaningful when lengthProfile === 'custom'.
+  lengthProfile: z.enum(LENGTH_PROFILE_NAMES).optional(),
+  pageTarget: z.number().int().min(1).max(500).nullable().optional(),
+  minutesTarget: z.number().int().min(1).max(600).nullable().optional(),
   // Use visualStageInputSchema as the union arm so visual-stage payloads keep
   // their `scenes` / `pages` / `cdProjectId` / `videoPath` fields. The schema
   // is a superset of stageInputSchema (those four are optional additions), so
@@ -239,6 +263,22 @@ const visualGenerateSchema = z.object({
   cfgScale: z.number().min(0).max(30).optional(),
   guidance: z.number().min(0).max(30).optional(),
   seed: z.number().int().min(0).optional(),
+});
+
+// Comic-issue front cover render. Accepts an optional `coverScript`
+// override (otherwise the route reads it from stages.comicPages.cover.script);
+// the rest of the prompt is built server-side from series + issue metadata.
+const comicCoverRenderSchema = z.object({
+  coverScript: z.string().max(8000).optional(),
+  negativePrompt: z.string().trim().max(2000).optional(),
+  extraStyle: z.string().trim().max(2000).optional(),
+  mode: z.enum(['local', 'codex']).optional(),
+  modelId: z.string().trim().max(64).optional(),
+  width: z.number().int().min(64).max(2048).optional(),
+  height: z.number().int().min(64).max(2048).optional(),
+  steps: z.number().int().min(1).max(150).optional(),
+  cfgScale: z.number().min(0).max(30).optional(),
+  guidance: z.number().min(0).max(30).optional(),
 });
 
 // Full-comic-page render: same knobs as panel render minus `description` /
@@ -544,6 +584,9 @@ router.post('/series/:id/seasons/:seasonId/episodes/generate', asyncHandler(asyn
         // don't collide.
         seasonId: req.params.seasonId,
         arcPosition: ep.number,
+        // Episode-level length sizing from the season-episodes LLM pass.
+        // Defaults to 'standard' inside the issue sanitizer when missing.
+        lengthProfile: ep.lengthProfile,
         stages: {
           idea: {
             status: ep.synopsis ? 'edited' : 'empty',
@@ -811,6 +854,33 @@ router.patch('/issues/:id/stages/comicPages/pages/:pageIndex', asyncHandler(asyn
     pages,
   });
   res.json({ issue: updatedIssue, stage, page: pages[pageIndex] });
+}));
+
+// Render the comic-issue front cover. Builds a cover-art prompt (series
+// masthead + issue-number tag + the user's cover concept) and persists the
+// returned jobId on stages.comicPages.cover.imageJobId. Pass `coverScript`
+// in the body to override or update the persisted cover concept in the
+// same call. Returns { jobId, mode, prompt, cover, issue, stage }.
+router.post('/issues/:id/stages/comicPages/cover/render', asyncHandler(async (req, res) => {
+  const body = validateRequest(comicCoverRenderSchema, req.body ?? {});
+  // Make sure the issue exists up front — defense in depth + clean 404
+  // before we spend the bible-context load.
+  await issuesSvc.getIssue(req.params.id).catch((err) => { throw mapServiceError(err); });
+
+  const result = await enqueueComicCover(req.params.id, body)
+    .catch((err) => { throw mapServiceError(err); });
+
+  // Persist coverScript + jobId + prompt back onto the issue so the UI
+  // shows the in-flight render on reload, even if the user navigates away.
+  const nextCover = {
+    script: result.coverScript || '',
+    imageJobId: result.jobId,
+    prompt: result.prompt,
+  };
+  const { issue: updatedIssue, stage } = await issuesSvc.updateStage(req.params.id, 'comicPages', {
+    cover: nextCover,
+  });
+  res.json({ ...result, cover: stage.cover, issue: updatedIssue, stage });
 }));
 
 // Render a full comic page (multi-panel layout in one image) — the
