@@ -16,7 +16,10 @@ import useMediaJobProgress from '../../hooks/useMediaJobProgress';
  * does — flips to a "missing" badge with a Retry button (re-arms the
  * <video>/<img> via a cache-busting key) when the file 404s.
  */
-export default function MediaJobThumb({ jobId, label = 'Render', size = 'sm', kind = 'image', onPreview = null }) {
+export default function MediaJobThumb({
+  jobId, label = 'Render', size = 'sm', kind = 'image',
+  onPreview = null, onStatus = null, onFilename = null,
+}) {
   const { status, progress, step, totalSteps, currentImage, filename, error } =
     useMediaJobProgress(jobId, { kind });
   // Local missing-media state. Reset when jobId changes so a fresh render
@@ -24,6 +27,12 @@ export default function MediaJobThumb({ jobId, label = 'Render', size = 'sm', ki
   const [missing, setMissing] = useState(false);
   const [attempt, setAttempt] = useState(0);
   useEffect(() => { setMissing(false); setAttempt(0); }, [jobId]);
+
+  // Forward subscription state to the parent so callers (e.g. PageRow's
+  // disable-while-rendering logic, lightbox nav builders) don't need a
+  // duplicate useMediaJobProgress subscription on the same jobId.
+  useEffect(() => { if (onStatus) onStatus(status); }, [status, onStatus]);
+  useEffect(() => { if (onFilename && filename) onFilename(filename); }, [filename, onFilename]);
 
   if (!jobId) return null;
 

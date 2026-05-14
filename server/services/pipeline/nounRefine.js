@@ -1,54 +1,28 @@
-/**
- * Refine a single character's `physicalDescription` so it renders visually
- * distinct from the rest of the cast. The LLM sees the target + every peer's
- * existing description and is asked to commit to specific differentiating
- * choices (ethnicity, age, hair, silhouette, wardrobe palette, ...).
- *
- * Reads/writes go through `getSeries` / `updateSeries` so the regular
- * sanitize-on-write pass still runs.
- */
+// Rewrite a character's `physicalDescription` so the rendered image differs
+// from every peer in the cast. Characters only (settings/objects need
+// different prompt fields — punt until there's a real need).
 
 import { getSeries, updateSeries } from './series.js';
 import { getUniverse } from '../universeBuilder.js';
-import { runStagedLLM } from '../../lib/stageRunner.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { runPromptRefine } from './refineHelpers.js';
 
-const KIND_FIELD = Object.freeze({
-  characters: 'physicalDescription',
+const peerForPrompt = (entry) => ({
+  name: entry.name,
+  aliases: Array.isArray(entry.aliases) ? entry.aliases : [],
+  role: entry.role || '',
+  physicalDescription: entry.physicalDescription || entry.description || '',
 });
 
-// Slimmed-down peer shape sent to the prompt. Drops timestamps + ids the LLM
-// doesn't need so the prompt stays inside the context budget when the cast
-// grows past a few entries.
-function peerForPrompt(entry) {
-  return {
-    name: entry.name,
-    aliases: Array.isArray(entry.aliases) ? entry.aliases : [],
-    role: entry.role || '',
-    physicalDescription: entry.physicalDescription || entry.description || '',
-  };
-}
-
-function targetForPrompt(entry) {
-  return {
-    name: entry.name,
-    aliases: Array.isArray(entry.aliases) ? entry.aliases : [],
-    role: entry.role || '',
-    physicalDescription: entry.physicalDescription || '',
-    evidence: Array.isArray(entry.evidence) ? entry.evidence : [],
-    firstAppearance: entry.firstAppearance || null,
-  };
-}
+const targetForPrompt = (entry) => ({
+  ...peerForPrompt(entry),
+  evidence: Array.isArray(entry.evidence) ? entry.evidence : [],
+  firstAppearance: entry.firstAppearance || null,
+});
 
 export async function refineCharacterDescription(seriesId, entryId, options = {}) {
-  const kind = 'characters';
-  const field = KIND_FIELD[kind];
-  if (!field) {
-    throw new ServerError(`Unsupported noun kind: ${kind}`, { status: 400, code: 'PIPELINE_NOUN_KIND' });
-  }
-
   const series = await getSeries(seriesId);
-  const list = Array.isArray(series[kind]) ? series[kind] : [];
+  const list = Array.isArray(series.characters) ? series.characters : [];
   const idx = list.findIndex((e) => e.id === entryId);
   if (idx < 0) {
     throw new ServerError(`Character ${entryId} not found in series`, {
@@ -58,9 +32,6 @@ export async function refineCharacterDescription(seriesId, entryId, options = {}
   const target = list[idx];
   const peers = list.filter((_, i) => i !== idx);
 
-  // Style clause: universe stylePrompt (if linked) + series styleNotes, dropped
-  // into the prompt as plain text. The LLM doesn't need the full universe JSON —
-  // it only steers wardrobe/era cues toward the established aesthetic.
   const universe = series.universeId ? await getUniverse(series.universeId).catch(() => null) : null;
   const styleBits = [
     universe?.stylePrompt ? `Universe aesthetic: ${universe.stylePrompt}` : null,
@@ -70,41 +41,24 @@ export async function refineCharacterDescription(seriesId, entryId, options = {}
     ? styleBits.join('\n')
     : '(none provided — pick choices that fit the character\'s role and genre)';
 
-  const result = await runStagedLLM('pipeline-character-refine', {
-    targetJson: JSON.stringify(targetForPrompt(target), null, 2),
-    peersJson: JSON.stringify(peers.map(peerForPrompt), null, 2),
-    styleClause,
-  }, {
-    providerOverride: options.providerId,
-    modelOverride: options.model,
-    returnsJson: true,
+  const { refined, changes, rationale, runId, providerId, model } = await runPromptRefine({
+    templateName: 'pipeline-character-refine',
+    variables: {
+      targetJson: JSON.stringify(targetForPrompt(target), null, 2),
+      peersJson: JSON.stringify(peers.map(peerForPrompt), null, 2),
+      styleClause,
+    },
+    options,
     source: 'pipeline-character-refine',
+    logTag: `Pipeline character refine — series=${seriesId.slice(0, 8)} entry=${entryId.slice(0, 8)}`,
+    resultField: 'physicalDescription',
+    emptyError: { code: 'PIPELINE_NOUN_REFINE_EMPTY', message: 'LLM returned an empty physicalDescription' },
+    changesLimit: 12,
   });
 
-  const refined = (result.content?.physicalDescription || '').trim();
-  if (!refined) {
-    throw new ServerError('LLM returned an empty physicalDescription', {
-      status: 502, code: 'PIPELINE_NOUN_REFINE_EMPTY',
-    });
-  }
-  const rationale = (result.content?.rationale || '').trim();
-  const changes = Array.isArray(result.content?.changes)
-    ? result.content.changes.map((c) => String(c).slice(0, 240)).filter(Boolean).slice(0, 12)
-    : [];
+  const nextList = list.map((e, i) => i === idx ? { ...e, physicalDescription: refined } : e);
+  const updated = await updateSeries(seriesId, { characters: nextList });
+  const updatedEntry = (updated.characters || []).find((e) => e.id === entryId) || null;
 
-  const nextList = list.map((e, i) => i === idx ? { ...e, [field]: refined } : e);
-  const updated = await updateSeries(seriesId, { [kind]: nextList });
-  const updatedEntry = (updated[kind] || []).find((e) => e.id === entryId) || null;
-
-  console.log(`✨ Pipeline character refine — series=${seriesId.slice(0, 8)} entry=${entryId.slice(0, 8)} runId=${(result.runId || '').slice(0, 8)}`);
-
-  return {
-    series: updated,
-    entry: updatedEntry,
-    rationale,
-    changes,
-    runId: result.runId,
-    providerId: result.providerId,
-    model: result.model,
-  };
+  return { series: updated, entry: updatedEntry, rationale, changes, runId, providerId, model };
 }

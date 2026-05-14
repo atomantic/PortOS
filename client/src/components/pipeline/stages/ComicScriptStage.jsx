@@ -25,7 +25,6 @@ import { getSettings, updateSettings } from '../../../services/apiSystem';
 import { listImageModels } from '../../../services/apiImageVideo';
 import MediaJobThumb from '../MediaJobThumb';
 import MediaPreview from '../../media/MediaPreview';
-import useMediaJobProgress from '../../../hooks/useMediaJobProgress';
 import Drawer from '../../Drawer';
 import ImageGenSettingsForm from '../../imageGen/ImageGenSettingsForm';
 import { deriveAvailableBackends } from '../../../lib/imageGenBackends';
@@ -308,20 +307,18 @@ function PageRow({ issue, pageIndex, page, renderOpts = {}, onStageUpdate, onPre
   useEffect(() => { setDraft(rawText); }, [rawText]);
   const dirty = draft !== rawText;
 
-  // Subscribe to the page's render job so we can (a) disable the Render
-  // button while the job is queued/running and (b) bubble the resolved
-  // filename up to the parent for lightbox nav.
-  const { status: jobStatus, filename: jobFilename } = useMediaJobProgress(page.imageJobId);
-  useEffect(() => {
-    if (page.imageJobId && jobFilename) onFilenameKnown?.(page.imageJobId, jobFilename);
-  }, [page.imageJobId, jobFilename, onFilenameKnown]);
-  // Treat 'unknown' (pre-hydration) as in-flight when a jobId exists — avoids
-  // a brief re-enable flash after page reload while the GET /media-jobs/:id
-  // catches up.
+  // Job status comes from MediaJobThumb via callback so we don't double-
+  // subscribe to the same socket events. Treat 'unknown' (pre-hydration)
+  // as in-flight when a jobId exists — avoids a brief re-enable flash
+  // after page reload while the GET /media-jobs/:id catches up.
+  const [jobStatus, setJobStatus] = useState('unknown');
   const jobInFlight = !!page.imageJobId
     && jobStatus !== 'completed'
     && jobStatus !== 'failed'
     && jobStatus !== 'canceled';
+  const onJobFilename = useCallback((filename) => {
+    if (page.imageJobId) onFilenameKnown?.(page.imageJobId, filename);
+  }, [page.imageJobId, onFilenameKnown]);
 
   const handleSave = async () => {
     setSaving(true);
@@ -415,6 +412,8 @@ function PageRow({ issue, pageIndex, page, renderOpts = {}, onStageUpdate, onPre
               label={`Page ${pageIndex + 1}`}
               size="fill"
               onPreview={(filename) => onPreview?.(pageIndex, filename, page)}
+              onStatus={setJobStatus}
+              onFilename={onJobFilename}
             />
           ) : (
             <span className="text-xs text-gray-500 italic">No render yet — click <em>Render</em>.</span>

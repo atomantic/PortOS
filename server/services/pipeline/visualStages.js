@@ -37,6 +37,7 @@ import {
 import { composeStyledPrompt } from '../../lib/composeStyledPrompt.js';
 import { getDefaultVideoModelId, getVideoModels } from '../../lib/mediaModels.js';
 import { runStagedLLM } from '../../lib/stageRunner.js';
+import { runPromptRefine } from './refineHelpers.js';
 import { ASPECT_PRESETS } from '../../lib/creativeDirectorPresets.js';
 
 const SUPPORTED_MODES = new Set(['local', 'codex']);
@@ -465,29 +466,6 @@ async function loadRefineContext(issueId) {
   return { issue, series };
 }
 
-// Shared scaffolding for both the comic-panel and storyboard-scene refine
-// paths. The caller supplies the per-stage variables/persist details; this
-// helper owns the runStagedLLM call + result parsing + empty-prompt guard +
-// changes shaping.
-async function runPromptRefine({ templateName, variables, options, source, logTag }) {
-  const result = await runStagedLLM(templateName, variables, {
-    providerOverride: options.providerId,
-    modelOverride: options.model,
-    returnsJson: true,
-    source,
-  });
-  const refined = (result.content?.prompt || '').trim();
-  if (!refined) {
-    throw new ServerError('LLM returned an empty refined prompt', {
-      status: 502, code: 'PIPELINE_PROMPT_REFINE_EMPTY',
-    });
-  }
-  const changes = Array.isArray(result.content?.changes)
-    ? result.content.changes.map((c) => String(c).slice(0, 240)).filter(Boolean).slice(0, 8)
-    : [];
-  console.log(`✨ ${logTag} runId=${(result.runId || '').slice(0, 8)}`);
-  return { refined, changes, runId: result.runId, providerId: result.providerId };
-}
 
 /**
  * Run the `pipeline-comic-panel-image-prompt` template against the current
