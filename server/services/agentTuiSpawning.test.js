@@ -16,7 +16,7 @@ vi.mock('./cosEvents.js', () => ({
 }));
 
 vi.mock('./cosAgents.js', () => ({
-  appendAgentOutput: vi.fn().mockResolvedValue(undefined),
+  appendAgentOutputLines: vi.fn().mockResolvedValue(undefined),
   updateAgent: vi.fn().mockResolvedValue(undefined),
   completeAgent: vi.fn().mockResolvedValue(undefined)
 }));

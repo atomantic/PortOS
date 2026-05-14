@@ -10,7 +10,7 @@ import { join } from 'path';
 import { writeFile, appendFile, rm } from 'fs/promises';
 import * as shellService from './shell.js';
 import { emitLog } from './cosEvents.js';
-import { appendAgentOutput, updateAgent, completeAgent } from './cosAgents.js';
+import { appendAgentOutputLines, updateAgent, completeAgent } from './cosAgents.js';
 import { registerSpawnedAgent, unregisterSpawnedAgent } from './agents.js';
 import { markProviderUsageLimit, markProviderRateLimited } from './providerStatus.js';
 import { updateTask } from './cos.js';
@@ -31,6 +31,12 @@ const RAW_BUFFER_CAP = 512 * 1024;
 const RAW_BUFFER_HEADROOM = 640 * 1024;
 const OUTPUT_BUFFER_CAP = 1024 * 1024;
 const OUTPUT_BUFFER_HEADROOM = 1280 * 1024;
+// Debounce window for batching parsed output to disk + state. A chatty TUI can
+// emit hundreds of lines/sec; without batching, each line triggers a full
+// state load+save (see appendAgentOutput) and a small appendFile, which slows
+// the PTY event loop and thrashes the filesystem. 250ms is invisible to the
+// live tail but cuts I/O by 1-2 orders of magnitude.
+const OUTPUT_FLUSH_INTERVAL_MS = 250;
 
 const ANSI_PATTERN = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1B\\))/g;
 
@@ -82,7 +88,30 @@ export async function spawnTuiAgent(agentId, task, prompt, workspacePath, model,
   let lastLine = '';
   let sessionId = null;
 
-  const appendLine = async (line) => {
+  let pendingLines = [];
+  let flushTimer = null;
+  let flushing = null;
+
+  const flushPendingLines = async () => {
+    if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
+    if (pendingLines.length === 0) return;
+    const batch = pendingLines;
+    pendingLines = [];
+    await Promise.all([
+      appendAgentOutputLines(agentId, batch).catch(() => {}),
+      appendFile(outputFile, batch.map(l => `${l}\n`).join('')).catch(() => {})
+    ]);
+  };
+
+  const scheduleFlush = () => {
+    if (flushTimer || flushing) return;
+    flushTimer = setTimeout(() => {
+      flushTimer = null;
+      flushing = flushPendingLines().finally(() => { flushing = null; });
+    }, OUTPUT_FLUSH_INTERVAL_MS);
+  };
+
+  const appendLine = (line) => {
     const cleanLine = line.trim();
     if (!cleanLine || cleanLine === lastLine) return;
     if (promptPreview && cleanLine.replace(/\s+/g, ' ').includes(promptPreview)) return;
@@ -92,8 +121,8 @@ export async function spawnTuiAgent(agentId, task, prompt, workspacePath, model,
     if (outputBuffer.length > OUTPUT_BUFFER_HEADROOM) {
       outputBuffer = outputBuffer.slice(-OUTPUT_BUFFER_CAP);
     }
-    await appendAgentOutput(agentId, cleanLine);
-    await appendFile(outputFile, `${cleanLine}\n`).catch(() => {});
+    pendingLines.push(cleanLine);
+    scheduleFlush();
     if (promptSentAt) meaningfulLinesAfterPrompt++;
   };
 
@@ -104,6 +133,11 @@ export async function spawnTuiAgent(agentId, task, prompt, workspacePath, model,
     const agentData = activeAgents.get(agentId);
     if (agentData?.idleTimer) clearInterval(agentData.idleTimer);
     if (agentData?.promptTimer) clearTimeout(agentData.promptTimer);
+
+    // Drain pending parsed lines before the final state writes so completion
+    // events don't beat the last output batch to disk.
+    if (flushing) await flushing.catch(() => {});
+    await flushPendingLines();
 
     const duration = Date.now() - (agentData?.startedAt || Date.now());
     const terminatedByUser = userTerminatedAgents.has(agentId);
@@ -218,7 +252,7 @@ export async function spawnTuiAgent(agentId, task, prompt, workspacePath, model,
 
     const lines = clean.split('\n').map(line => line.trim()).filter(Boolean);
     for (const line of lines) {
-      await appendLine(line);
+      appendLine(line);
     }
   };
 
@@ -267,7 +301,7 @@ export async function spawnTuiAgent(agentId, task, prompt, workspacePath, model,
     if (finalized) return;
     promptSentAt = Date.now();
     shellService.writeToSession(sessionId, `\x1b[200~${prompt}\x1b[201~\r`);
-    appendLine(`📟 Prompt pasted into TUI session ${sessionId.slice(0, 8)}`).catch(() => {});
+    appendLine(`📟 Prompt pasted into TUI session ${sessionId.slice(0, 8)}`);
   }, tuiConfig.promptDelayMs);
 
   const idleTimer = setInterval(() => {
@@ -308,6 +342,6 @@ export async function spawnTuiAgent(agentId, task, prompt, workspacePath, model,
     }
   });
 
-  await appendLine(`📟 TUI session started: ${sessionId.slice(0, 8)} (${tuiConfig.commandLine})`);
+  appendLine(`📟 TUI session started: ${sessionId.slice(0, 8)} (${tuiConfig.commandLine})`);
   return agentId;
 }

@@ -364,6 +364,35 @@ export async function appendAgentOutput(agentId, line) {
   return result;
 }
 
+// Batched variant — single state load+save for many lines. Used by the TUI
+// spawner to avoid write-amplification on chatty TUIs that emit hundreds of
+// lines per second; per-line appendAgentOutput would re-load and re-save the
+// entire state JSON for every line.
+export async function appendAgentOutputLines(agentId, lines) {
+  if (!Array.isArray(lines) || lines.length === 0) return null;
+  const result = await withStateLock(async () => {
+    const state = await loadState();
+    if (!state.agents[agentId]) return null;
+    const timestamp = new Date().toISOString();
+    for (const line of lines) {
+      state.agents[agentId].output.push({ timestamp, line });
+    }
+    if (state.agents[agentId].output.length > 1000) {
+      state.agents[agentId].output = state.agents[agentId].output.slice(-1000);
+    }
+    await saveState(state);
+    return state.agents[agentId];
+  });
+
+  if (result) {
+    for (const line of lines) {
+      cosEvents.emit('agent:output', { agentId, line });
+    }
+  }
+
+  return result;
+}
+
 // Get all agents from in-memory state (includes running and recently completed; archived agents loaded via getAgentsByDate)
 export async function getAgents() {
   const state = await loadState();
