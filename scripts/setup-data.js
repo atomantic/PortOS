@@ -66,6 +66,7 @@ if (!existsSync(dataDir)) {
 const JSON_MERGE_TARGETS = [
   { relPath: 'prompts/stage-config.json', mergeKey: 'stages' },
   { relPath: 'prompts/variables.json',    mergeKey: 'variables' },
+  { relPath: 'providers.json',            mergeKey: 'providers' },
 ];
 
 const mergeJsonStarter = (relPath, mergeKey) => {

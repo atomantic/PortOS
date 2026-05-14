@@ -7,12 +7,20 @@ const shellSessions = new Map();
 
 const MAX_TOTAL_SESSIONS = 5;
 
-function runHook(label, sessionId, fn, arg) {
+// PTY event handlers run outside the Express middleware chain — uncaught throws here
+// crash the Node process instead of bubbling to res.next. try/catch is therefore
+// justified in this one spot despite the project-wide "no try/catch" convention.
+// Async hooks are serialized per-session via hookQueue so interleaved awaits (e.g.
+// agentTuiSpawning's handleData mutating module-level buffers) don't race.
+function runHook(label, session, fn, arg) {
   if (!fn) return;
-  const result = fn(arg);
-  if (result && typeof result.then === 'function') {
-    result.catch(err => console.error(`🐚 ${label} handler error in ${sessionId.slice(0, 8)}: ${err.message}`));
-  }
+  session.hookQueue = session.hookQueue.then(() => {
+    try {
+      return Promise.resolve(fn(arg));
+    } catch (err) {
+      console.error(`🐚 ${label} sync error in ${session._id}: ${err.message}`);
+    }
+  }).catch(err => console.error(`🐚 ${label} async error in ${session._id}: ${err.message}`));
 }
 
 // Allowlist of safe environment variable prefixes to pass to PTY sessions
@@ -72,7 +80,10 @@ export function createShellSession(socket, options = {}) {
       rows,
       cwd,
       env: {
-        ...buildSafeEnv(),
+        ...buildSafeEnv(), // filters process.env to prevent leaking inherited secrets (e.g. shell-inherited API keys)
+        // options.env is the caller's explicit opt-in env (e.g. TUI provider API keys for codex/claude).
+        // Callers are responsible for not passing vars they don't want visible inside attachable shells.
+        // Single-user/single-instance deployment (Tailscale-only) makes this acceptable.
         ...(options.env || {}),
         TERM: 'xterm-256color',
         COLORTERM: 'truecolor'
@@ -91,6 +102,8 @@ export function createShellSession(socket, options = {}) {
 
   // Store session info
   shellSessions.set(sessionId, {
+    _id: sessionId.slice(0, 8),
+    hookQueue: Promise.resolve(),
     pty: ptyProcess,
     socket,
     cwd,
@@ -115,7 +128,7 @@ export function createShellSession(socket, options = {}) {
     }
     const session = shellSessions.get(sessionId);
     session?.socket?.emit('shell:output', { sessionId, data });
-    runHook('onData', sessionId, session?.onData, data);
+    if (session) runHook('onData', session, session.onData, data);
   });
 
   // Handle pty exit
@@ -124,7 +137,7 @@ export function createShellSession(socket, options = {}) {
     const session = shellSessions.get(sessionId);
     shellSessions.delete(sessionId);
     session?.socket?.emit('shell:exit', { sessionId, code: exitCode });
-    runHook('onExit', sessionId, session?.onExit, { exitCode });
+    if (session) runHook('onExit', session, session.onExit, { exitCode });
     broadcastSessionList();
   });
 
@@ -228,7 +241,7 @@ export function killSession(sessionId) {
     console.log(`🐚 Killing shell session ${sessionId.slice(0, 8)}`);
     session.pty.kill();
     shellSessions.delete(sessionId);
-    runHook('onExit', sessionId, session.onExit, { exitCode: null, killed: true });
+    runHook('onExit', session, session.onExit, { exitCode: null, killed: true });
     broadcastSessionList();
     return true;
   }

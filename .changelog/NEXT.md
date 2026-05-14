@@ -2,6 +2,7 @@
 
 ## Added
 
+<<<<<<< HEAD
 - **Universe-as-Canon lock semantics — series-extracted canon arrives auto-locked.**
   Every canon entry on a universe (characters/settings/objects) can now carry a
   `locked: true` flag, plus `prompt`, `tags`, `source`, and `sourceSeriesId`
@@ -51,6 +52,16 @@
     covering `setCanonEntryLock` + refine refuses locked + differentiate
     skips locked + extract autoLock pass-through. Full server suite (4,525
     tests) passes.
+
+- **TUI providers — codex, claude code, gemini in attachable shells.** New
+  provider type `tui` runs CoS agents inside a PTY-backed shell session that
+  the user can attach to mid-run from the Shell page (`/shell?session=…`).
+  Ships disabled-by-default entries for `codex-tui`, `claude-code-tui`, and
+  `gemini-tui` in `data.sample/providers.json`; existing deployments pick
+  them up automatically because `scripts/setup-data.js` now JSON-merges new
+  `providers` entries on update (same starter-merge pattern as
+  `prompts/stage-config.json`). The Shell page's quick-command toolbar also
+  gains a `gemini` button alongside the existing `claude` / `codex` buttons.
 
 - **Universe canon — characters, places, and objects on the universe.** Phase A
   of the Universe-as-canon refactor. `universe.characters[]`/`settings[]`/

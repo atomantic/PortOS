@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
+import { Link } from 'react-router-dom';
 import {
   Cpu,
   Trash2,
@@ -493,14 +494,14 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
             </span>
           )}
           {!completed && agent.metadata?.tuiSessionId && (
-            <a
-              href={`/shell?session=${encodeURIComponent(agent.metadata.tuiSessionId)}`}
+            <Link
+              to={`/shell?session=${encodeURIComponent(agent.metadata.tuiSessionId)}`}
               className="flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25 whitespace-nowrap"
               title="Open TUI shell session"
             >
               <ExternalLink size={10} aria-hidden="true" className="shrink-0" />
               <span className="font-mono">shell {agent.metadata.tuiSessionId.slice(0, 6)}</span>
-            </a>
+            </Link>
           )}
           {/* Show zombie warning if PID exists but process is dead */}
           {!completed && agent.pid && processStats && !processStats.active && (

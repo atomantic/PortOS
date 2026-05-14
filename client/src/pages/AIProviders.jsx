@@ -611,10 +611,15 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
       headlessArgs: formData.headlessArgs ? formData.headlessArgs.split(' ').filter(Boolean) : [],
       timeout: parseInt(formData.timeout, 10)
     };
-    if (Number.isFinite(tuiPromptDelay)) data.tuiPromptDelayMs = tuiPromptDelay;
-    else delete data.tuiPromptDelayMs;
-    if (Number.isFinite(tuiIdleTimeout)) data.tuiIdleTimeoutMs = tuiIdleTimeout;
-    else delete data.tuiIdleTimeoutMs;
+    if (formData.type === 'tui') {
+      if (Number.isFinite(tuiPromptDelay)) data.tuiPromptDelayMs = tuiPromptDelay;
+      else delete data.tuiPromptDelayMs;
+      if (Number.isFinite(tuiIdleTimeout)) data.tuiIdleTimeoutMs = tuiIdleTimeout;
+      else delete data.tuiIdleTimeoutMs;
+    } else {
+      delete data.tuiPromptDelayMs;
+      delete data.tuiIdleTimeoutMs;
+    }
 
     // Only send apiKey if user entered a new value (avoid overwriting existing key with empty string)
     if (!data.apiKey && provider) {
