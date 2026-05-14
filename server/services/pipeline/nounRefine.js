@@ -22,6 +22,20 @@ const targetForPrompt = (entry) => ({
 
 export async function refineCharacterDescription(seriesId, entryId, options = {}) {
   const series = await getSeries(seriesId);
+
+  // Phase B.3 routing: if the series links to a universe, refine on the
+  // universe (where canon actually lives post-Phase-B). Return a series-
+  // shaped result so legacy callers — the per-series Nouns page when it
+  // takes the orphan branch — don't fork.
+  if (series.universeId) {
+    // Dynamic import to avoid the universeCanon → series.js cycle on
+    // module-init (universeCanon imports updateUniverse, which lives in
+    // universeBuilder.js, but the indirect graph still trips).
+    const { refineUniverseCharacter } = await import('../universeCanon.js');
+    const result = await refineUniverseCharacter(series.universeId, entryId, options);
+    return { series, entry: result.entry, rationale: result.rationale, changes: result.changes, runId: result.runId, providerId: result.providerId, model: result.model };
+  }
+
   const list = Array.isArray(series.characters) ? series.characters : [];
   const idx = list.findIndex((e) => e.id === entryId);
   if (idx < 0) {

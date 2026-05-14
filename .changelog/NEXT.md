@@ -206,6 +206,19 @@
   it) — the post-merge length comparison was always equal. Now clones the
   universe-side array before passing.
 
+- **Legacy series-side canon helpers redirect to universe (Phase B.3a).**
+  `extractAndMergeIntoSeries` and `refineCharacterDescription` now early-
+  return into their universe-side equivalents when `series.universeId` is
+  set. Every legacy caller (the season:episodes:generate auto-extract,
+  textStages auto-extract, the `/series/:id/extract-bible` route, the
+  `/series/:id/characters/:entryId/refine` route) automatically writes to
+  the universe without a fork. The redirect uses dynamic `import('../universeCanon.js')`
+  to avoid a module-init cycle.
+
+  Net effect: linked series's auto-flows now populate universe canon
+  exactly like the manual paths on the Nouns + Universe Canon pages.
+  Orphan series (no universeId) still take the legacy series-side merge.
+
 - **Per-issue Nouns page reads + writes universe canon (Phase B.2).** When
   the series is linked to a universe, the Nouns page now points all canon
   reads (preview thumbnails, "in this issue" filtering) and all mutations

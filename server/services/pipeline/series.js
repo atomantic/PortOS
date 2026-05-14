@@ -226,6 +226,20 @@ export async function purgeImageRefFromAllSeries(filename) {
  */
 export async function extractAndMergeIntoSeries(seriesId, opts = {}) {
   const series = await getSeries(seriesId);
+
+  // Phase B.3 routing: if the series links to a universe, extract into the
+  // universe (single source of truth) and return a compatible shape so
+  // every legacy caller (auto-extract in textStages, season:episodes
+  // autorun, the /extract-bible route) keeps working without a fork.
+  if (series.universeId) {
+    // Dynamic import to avoid a circular dep — universeCanon → series.js
+    // (for updateSeries, indirectly) and back here would deadlock on
+    // module-init otherwise.
+    const { extractCanonFromProse } = await import('../universeCanon.js');
+    const { universe, results } = await extractCanonFromProse(series.universeId, opts);
+    return { series, universe, results };
+  }
+
   // Dedup `kinds` — duplicates would run extra LLM calls AND last-write-wins
   // the merge for the same field, so the only observable effect of a repeat
   // is a wasted provider round-trip. Preserve first-seen order so callers
