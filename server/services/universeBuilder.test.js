@@ -577,6 +577,113 @@ describe("universeBuilder service", () => {
     });
   });
 
+  describe("categories→canon backfill", () => {
+    it("backfills canon arrays from categories on first read + stamps schemaVersion=2", async () => {
+      fileStore.set("/mock/data/universe-builder.json", {
+        universes: [
+          {
+            id: "w-v1", name: "Legacy",
+            starterPrompt: "old", stylePrompt: "", negativePrompt: "",
+            categories: {
+              characters: { variations: [{ label: "Alex", prompt: "field lead detective" }] },
+              landscapes: { variations: [{ label: "Crystal Canyon", prompt: "canyon, alien sun", locked: true }] },
+              environments: { variations: [{ label: "Bubble Room", prompt: "pastel lab" }] },
+              vehicles: { variations: [{ label: "Rover", prompt: "dust-streaked rover" }] },
+              structures: { variations: [{ label: "Monolith", prompt: "black monolith" }] },
+              factions: { variations: [{ label: "Rebels", prompt: "scarred faction icon" }] }, // custom key → object tagged 'factions'
+            },
+            createdAt: "2024-01-01T00:00:00Z",
+          },
+        ],
+        runs: [],
+      });
+      const list = await svc.listUniverses();
+      const w = list[0];
+      expect(w.schemaVersion).toBe(2);
+      // Characters
+      const alex = w.characters.find((c) => c.name === "Alex");
+      expect(alex).toBeTruthy();
+      expect(alex.prompt).toBe("field lead detective");
+      expect(alex.tags).toEqual([]);
+      expect(alex.source).toBe("universe-expand");
+      // Settings — landscape + environment
+      const canyon = w.settings.find((s) => s.name === "Crystal Canyon");
+      expect(canyon.tags).toEqual(["landscape"]);
+      expect(canyon.locked).toBe(true); // variation lock carries through
+      expect(canyon.slugline).toBe("Crystal Canyon"); // settings need slugline
+      const bubble = w.settings.find((s) => s.name === "Bubble Room");
+      expect(bubble.tags).toEqual(["environment"]);
+      // Objects — vehicle + structure + custom 'factions'
+      const rover = w.objects.find((o) => o.name === "Rover");
+      expect(rover.tags).toEqual(["vehicle"]);
+      const monolith = w.objects.find((o) => o.name === "Monolith");
+      expect(monolith.tags).toEqual(["structure"]);
+      const rebels = w.objects.find((o) => o.name === "Rebels");
+      expect(rebels.tags).toEqual(["factions"]); // unknown category key → object catch-all
+    });
+
+    it("backfill is idempotent — re-reading a v2 universe does not duplicate canon", async () => {
+      fileStore.set("/mock/data/universe-builder.json", {
+        universes: [
+          {
+            id: "w-v1", name: "Legacy",
+            starterPrompt: "old", stylePrompt: "", negativePrompt: "",
+            categories: {
+              characters: { variations: [{ label: "Alex", prompt: "detective" }] },
+            },
+            createdAt: "2024-01-01T00:00:00Z",
+          },
+        ],
+        runs: [],
+      });
+      // First read triggers backfill + persist.
+      const first = (await svc.listUniverses())[0];
+      expect(first.characters.length).toBe(1);
+      // Second read — schemaVersion=2 already on disk, backfill skipped.
+      const second = (await svc.listUniverses())[0];
+      expect(second.characters.length).toBe(1);
+      // Third read post-rename: a user-renamed entry must not be clobbered by
+      // re-running backfill (the schemaVersion guard prevents the re-insert).
+      const renamed = { ...second, characters: second.characters.map((c) => ({ ...c, name: "Alex Smith" })) };
+      fileStore.set("/mock/data/universe-builder.json", { universes: [renamed], runs: [] });
+      const third = (await svc.listUniverses())[0];
+      expect(third.characters.length).toBe(1);
+      expect(third.characters[0].name).toBe("Alex Smith");
+    });
+
+    it("backfill does not overwrite a pre-existing canon entry sharing a variation label", async () => {
+      fileStore.set("/mock/data/universe-builder.json", {
+        universes: [
+          {
+            id: "w-mixed", name: "Mixed",
+            starterPrompt: "", stylePrompt: "", negativePrompt: "",
+            categories: {
+              characters: { variations: [{ label: "Alex", prompt: "from variation" }] },
+            },
+            // Hand-authored canon entry whose name collides with the variation
+            // label. Backfill must NOT overwrite — the canon entry's richer
+            // metadata wins.
+            characters: [{
+              id: "chr-existing", name: "Alex",
+              role: "Hand-authored role",
+              physicalDescription: "hand-authored description",
+              source: "manual",
+            }],
+            createdAt: "2024-01-01T00:00:00Z",
+          },
+        ],
+        runs: [],
+      });
+      const w = (await svc.listUniverses())[0];
+      // Still exactly one Alex (no duplicate).
+      const alexes = w.characters.filter((c) => c.name === "Alex");
+      expect(alexes.length).toBe(1);
+      // Hand-authored fields preserved; the variation's prompt didn't bleed in.
+      expect(alexes[0].role).toBe("Hand-authored role");
+      expect(alexes[0].source).toBe("manual");
+    });
+  });
+
   describe("sanitizers", () => {
     it("drops malformed variations on read", async () => {
       // Manually plant invalid state — sanitizeTemplate strips it on read.

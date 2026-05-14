@@ -26,7 +26,14 @@ import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { PATHS, atomicWrite, readJSONFile, ensureDir } from '../lib/fileUtils.js';
 import { composeStyledPrompt } from '../lib/composeStyledPrompt.js';
-import { sanitizeBibleList, BIBLE_KIND } from '../lib/storyBible.js';
+import {
+  sanitizeBibleList, BIBLE_KIND, BIBLE_FIELD, BIBLE_LIMITS, BIBLE_SOURCE,
+  normalizeBibleName,
+} from '../lib/storyBible.js';
+
+// Bumped when a sanitizer-time backfill changes how on-disk universes are
+// shaped, so future migrations can gate on the prior version.
+export const CURRENT_SCHEMA_VERSION = 2;
 
 const STATE_PATH = join(PATHS.data, 'universe-builder.json');
 
@@ -100,9 +107,9 @@ export const LOCKABLE_FIELD_LABELS = Object.freeze({
 export const INFLUENCE_LOCK_FIELDS = Object.freeze(['influencesEmbrace', 'influencesAvoid']);
 export const isInfluenceLockField = (key) => INFLUENCE_LOCK_FIELDS.includes(key);
 
-// Starter buckets the UI surfaces for a fresh universe. They remain for
-// compatibility, but saved templates may carry any additional sanitized
-// category keys the LLM or user creates.
+// Legacy buckets the v1 universe schema used. Retires after Phase 2 UI reads
+// canon directly — until then it's still consumed by existing expand / refine
+// / route code.
 export const WORLD_CATEGORIES = Object.freeze([
   'landscapes',
   'environments',
@@ -110,6 +117,18 @@ export const WORLD_CATEGORIES = Object.freeze([
   'structures',
   'vehicles',
 ]);
+
+// Maps v1 category buckets to canon kinds + tags. Unknown keys fall to
+// object (catch-all kind) tagged with the bucket name.
+const CATEGORY_TO_CANON = Object.freeze({
+  characters:   { kind: BIBLE_KIND.CHARACTER, tags: [] },
+  landscapes:   { kind: BIBLE_KIND.SETTING,   tags: ['landscape'] },
+  environments: { kind: BIBLE_KIND.SETTING,   tags: ['environment'] },
+  structures:   { kind: BIBLE_KIND.OBJECT,    tags: ['structure'] },
+  vehicles:     { kind: BIBLE_KIND.OBJECT,    tags: ['vehicle'] },
+});
+const resolveCanonForCategory = (categoryKey) =>
+  CATEGORY_TO_CANON[categoryKey] || { kind: BIBLE_KIND.OBJECT, tags: [categoryKey] };
 
 const DEFAULT_STATE = { universes: [], runs: [] };
 
@@ -324,6 +343,68 @@ export const sanitizeCompositeSheets = (raw = []) => {
   return sheets;
 };
 
+// Backfill canon arrays from v1 `categories[].variations[]`. Idempotent:
+// entries matching an existing canon name (case-insensitive) are skipped, so
+// hand-authored / series-extracted records are never overwritten. Categories
+// stay intact during the transition; Phase 2 UI retires them.
+function backfillCanonFromCategories(raw, existingCanon) {
+  // v2 hot path — already backfilled. Sanitize through the kind sanitizers
+  // once and return; no category scan needed.
+  if (raw.schemaVersion >= CURRENT_SCHEMA_VERSION) {
+    return {
+      characters: sanitizeBibleList(existingCanon.characters, BIBLE_KIND.CHARACTER),
+      settings: sanitizeBibleList(existingCanon.settings, BIBLE_KIND.SETTING),
+      objects: sanitizeBibleList(existingCanon.objects, BIBLE_KIND.OBJECT),
+      schemaVersion: raw.schemaVersion,
+    };
+  }
+
+  const next = {
+    characters: Array.isArray(existingCanon.characters) ? [...existingCanon.characters] : [],
+    settings: Array.isArray(existingCanon.settings) ? [...existingCanon.settings] : [],
+    objects: Array.isArray(existingCanon.objects) ? [...existingCanon.objects] : [],
+  };
+  const nameSeen = {
+    characters: new Set(next.characters.map((e) => normalizeBibleName(e?.name))),
+    settings: new Set(next.settings.map((e) => normalizeBibleName(e?.name))),
+    objects: new Set(next.objects.map((e) => normalizeBibleName(e?.name))),
+  };
+
+  const categories = raw && typeof raw.categories === 'object' ? raw.categories : {};
+  for (const [rawKey, value] of Object.entries(categories)) {
+    const categoryKey = normalizeCategoryKey(rawKey) || rawKey;
+    const { kind, tags } = resolveCanonForCategory(categoryKey);
+    const targetField = BIBLE_FIELD[kind];
+    const variations = Array.isArray(value?.variations) ? value.variations : [];
+    for (const variation of variations) {
+      const label = trimTo(variation?.label, BIBLE_LIMITS.NAME_MAX);
+      if (!label) continue;
+      const nameKey = normalizeBibleName(label);
+      if (nameSeen[targetField].has(nameKey)) continue;
+      if (next[targetField].length >= BIBLE_LIMITS.ENTRIES_PER_BIBLE_MAX) break;
+      const entry = {
+        name: label,
+        prompt: trimTo(variation?.prompt, BIBLE_LIMITS.PROMPT_MAX),
+        tags,
+        source: BIBLE_SOURCE.UNIVERSE_EXPAND,
+      };
+      if (variation?.locked === true) entry.locked = true;
+      // Setting sanitizer requires a name OR slugline; planting the label as
+      // both preserves the variation identity for scene-matchers.
+      if (kind === BIBLE_KIND.SETTING) entry.slugline = label;
+      next[targetField].push(entry);
+      nameSeen[targetField].add(nameKey);
+    }
+  }
+
+  return {
+    characters: sanitizeBibleList(next.characters, BIBLE_KIND.CHARACTER),
+    settings: sanitizeBibleList(next.settings, BIBLE_KIND.SETTING),
+    objects: sanitizeBibleList(next.objects, BIBLE_KIND.OBJECT),
+    schemaVersion: CURRENT_SCHEMA_VERSION,
+  };
+}
+
 const sanitizeTemplate = (raw) => {
   if (!raw || typeof raw !== 'object') return null;
   if (!isStr(raw.id) || !raw.id) return null;
@@ -339,13 +420,15 @@ const sanitizeTemplate = (raw) => {
   const compositeSheets = sanitizeCompositeSheets(raw.compositeSheets || []);
   const influences = sanitizeInfluences(raw.influences);
   const locked = sanitizeLocked(raw.locked);
-  // Canon entity registries — structured records (vs categories[].variations[]
-  // which is the freeform prompt-template library). A series's cast/places/
-  // objects will eventually reference these by id (Phase B). Existing
-  // universes load with empty arrays until extraction populates them.
-  const characters = sanitizeBibleList(raw.characters, BIBLE_KIND.CHARACTER);
-  const settings = sanitizeBibleList(raw.settings, BIBLE_KIND.SETTING);
-  const objects = sanitizeBibleList(raw.objects, BIBLE_KIND.OBJECT);
+  // Canon registries. Backfill copies legacy `categories[].variations[]` into
+  // the matching kind on first read so series-side prompts can pull canon by
+  // entity name; categories stays alive until Phase 2 retires it.
+  const canonBackfill = backfillCanonFromCategories(raw, {
+    characters: raw.characters,
+    settings: raw.settings,
+    objects: raw.objects,
+  });
+  const { characters, settings, objects, schemaVersion } = canonBackfill;
   const llm = raw.llm && typeof raw.llm === 'object'
     ? {
       provider: trimTo(raw.llm.provider, 80) || null,
@@ -370,6 +453,7 @@ const sanitizeTemplate = (raw) => {
     characters,
     settings,
     objects,
+    schemaVersion,
     llm,
     createdAt,
     updatedAt,
@@ -393,8 +477,17 @@ const sanitizeRun = (raw) => {
 async function readState() {
   await ensureDir(PATHS.data);
   const raw = await readJSONFile(STATE_PATH, DEFAULT_STATE, { logError: false });
+  const rawById = new Map(Array.isArray(raw.universes) ? raw.universes.filter((u) => u?.id).map((u) => [u.id, u]) : []);
   const universes = Array.isArray(raw.universes) ? raw.universes.map(sanitizeTemplate).filter(Boolean) : [];
   const runs = Array.isArray(raw.runs) ? raw.runs.map(sanitizeRun).filter(Boolean) : [];
+  // Persist on first backfill so subsequent reads skip the work and the user
+  // is free to rename or delete canon entries without the backfill re-adding
+  // them from their source variation.
+  const migrated = universes.filter((u) => (rawById.get(u.id)?.schemaVersion || 0) < CURRENT_SCHEMA_VERSION);
+  if (migrated.length > 0) {
+    console.log(`🌍 Universe Builder canon backfill — migrated ${migrated.length} universe(s) to schemaVersion=${CURRENT_SCHEMA_VERSION}`);
+    await writeState({ universes, runs });
+  }
   return { universes, runs };
 }
 
