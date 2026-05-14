@@ -19,10 +19,10 @@ vi.mock("crypto", async () => {
   return { ...actual, randomUUID: () => `uuid-${++uuidCounter}` };
 });
 
-const svc = await import("./worldBuilder.js");
+const svc = await import("./universeBuilder.js");
 
 const seedWorld = async (overrides = {}) =>
-  svc.createWorld({
+  svc.createUniverse({
     name: "Moebius SciFi",
     starterPrompt: "moebius and scavengers reign meets prophet",
     stylePrompt: "moebius linework, scavengers reign palette",
@@ -46,17 +46,17 @@ const seedWorld = async (overrides = {}) =>
     ...overrides,
   });
 
-describe("worldBuilder service", () => {
+describe("universeBuilder service", () => {
   beforeEach(() => {
     fileStore.clear();
     uuidCounter = 0;
   });
 
-  it("listWorlds returns [] for fresh state", async () => {
-    expect(await svc.listWorlds()).toEqual([]);
+  it("listUniverses returns [] for fresh state", async () => {
+    expect(await svc.listUniverses()).toEqual([]);
   });
 
-  it("createWorld persists with sanitized categories", async () => {
+  it("createUniverse persists with sanitized categories", async () => {
     const w = await seedWorld();
     expect(w.id).toBe("uuid-1");
     expect(w.name).toBe("Moebius SciFi");
@@ -70,7 +70,7 @@ describe("worldBuilder service", () => {
     expect(w.categories.environments.variations).toHaveLength(0);
   });
 
-  it("createWorld preserves custom world-building categories", async () => {
+  it("createUniverse preserves custom universe-building categories", async () => {
     const w = await seedWorld({
       categories: {
         "Clothing Styles": {
@@ -101,7 +101,7 @@ describe("worldBuilder service", () => {
     expect(w.categories.landscapes.variations).toHaveLength(0);
   });
 
-  it("createWorld persists composite sheet prompts separately from categories", async () => {
+  it("createUniverse persists composite sheet prompts separately from categories", async () => {
     const w = await seedWorld({
       compositeSheets: [
         {
@@ -121,34 +121,34 @@ describe("worldBuilder service", () => {
     ]);
   });
 
-  it("createWorld persists world pitch poster prompts separately from categories", async () => {
+  it("createUniverse persists universe pitch poster prompts separately from categories", async () => {
     const w = await seedWorld({
       compositeSheets: [
         {
           kind: "world_pitch_poster",
-          label: "World summary concept pitch poster",
+          label: "Universe summary concept pitch poster",
           prompt:
-            "Create a cinematic world summary concept pitch poster with hero panorama, inset environments, cultures, creatures, visual language, color palette, materials, light atmosphere, and theme icons.",
+            "Create a cinematic universe summary concept pitch poster with hero panorama, inset environments, cultures, creatures, visual language, color palette, materials, light atmosphere, and theme icons.",
         },
       ],
     });
     expect(w.compositeSheets).toEqual([
       {
         kind: "world_pitch_poster",
-        label: "World summary concept pitch poster",
+        label: "Universe summary concept pitch poster",
         prompt:
-          "Create a cinematic world summary concept pitch poster with hero panorama, inset environments, cultures, creatures, visual language, color palette, materials, light atmosphere, and theme icons.",
+          "Create a cinematic universe summary concept pitch poster with hero panorama, inset environments, cultures, creatures, visual language, color palette, materials, light atmosphere, and theme icons.",
       },
     ]);
   });
 
-  it("createWorld rejects empty name", async () => {
-    await expect(svc.createWorld({ name: "" })).rejects.toThrow(
+  it("createUniverse rejects empty name", async () => {
+    await expect(svc.createUniverse({ name: "" })).rejects.toThrow(
       /name is required/,
     );
   });
 
-  it("createWorld persists narrative bible fields (logline / premise / styleNotes)", async () => {
+  it("createUniverse persists narrative bible fields (logline / premise / styleNotes)", async () => {
     const w = await seedWorld({
       logline: "A foundry city goes silent, and the only survivor is a child.",
       premise:
@@ -167,9 +167,9 @@ describe("worldBuilder service", () => {
     );
   });
 
-  it("updateWorld patches narrative bible fields independently of categories", async () => {
+  it("updateUniverse patches narrative bible fields independently of categories", async () => {
     const w = await seedWorld({ logline: "original logline" });
-    const patched = await svc.updateWorld(w.id, {
+    const patched = await svc.updateUniverse(w.id, {
       logline: "new logline",
       premise: "new premise",
       styleNotes: "new style notes",
@@ -182,7 +182,7 @@ describe("worldBuilder service", () => {
     expect(patched.stylePrompt).toBe(w.stylePrompt);
   });
 
-  it("createWorld trims bible fields to their max length", async () => {
+  it("createUniverse trims bible fields to their max length", async () => {
     const w = await seedWorld({
       logline: "x".repeat(svc.LOGLINE_MAX + 50),
       premise: "y".repeat(svc.PREMISE_MAX + 50),
@@ -193,9 +193,9 @@ describe("worldBuilder service", () => {
     expect(w.styleNotes).toHaveLength(svc.STYLE_NOTES_MAX);
   });
 
-  it("updateWorld merges partial patches", async () => {
+  it("updateUniverse merges partial patches", async () => {
     const w = await seedWorld();
-    const patched = await svc.updateWorld(w.id, {
+    const patched = await svc.updateUniverse(w.id, {
       name: "Renamed",
       stylePrompt: "new style",
     });
@@ -206,24 +206,24 @@ describe("worldBuilder service", () => {
     expect(patched.categories.landscapes.variations).toHaveLength(2);
   });
 
-  it("updateWorld throws NOT_FOUND for unknown id", async () => {
+  it("updateUniverse throws NOT_FOUND for unknown id", async () => {
     await expect(
-      svc.updateWorld("no-such", { name: "X" }),
+      svc.updateUniverse("no-such", { name: "X" }),
     ).rejects.toMatchObject({ code: svc.ERR_NOT_FOUND });
   });
 
-  it("deleteWorld removes the world and its runs", async () => {
+  it("deleteUniverse removes the universe and its runs", async () => {
     const w = await seedWorld();
     await svc.recordRun({
       id: "run-1",
-      worldId: w.id,
+      universeId: w.id,
       collectionId: "col-1",
       jobIds: ["j1"],
       promptCount: 3,
     });
     expect(await svc.listRuns(w.id)).toHaveLength(1);
-    await svc.deleteWorld(w.id);
-    expect(await svc.listWorlds()).toEqual([]);
+    await svc.deleteUniverse(w.id);
+    expect(await svc.listUniverses()).toEqual([]);
     expect(await svc.listRuns(w.id)).toEqual([]);
   });
 
@@ -355,15 +355,15 @@ describe("worldBuilder service", () => {
       });
     });
 
-    it("tags world pitch poster prompts separately from reference sheets", async () => {
+    it("tags universe pitch poster prompts separately from reference sheets", async () => {
       const w = await seedWorld({
         categories: {},
         compositeSheets: [
           {
             kind: "world_pitch_poster",
-            label: "World pitch poster",
+            label: "Universe pitch poster",
             prompt:
-              "cinematic world summary pitch poster, hero panorama, inset cultures, palette, themes",
+              "cinematic universe summary pitch poster, hero panorama, inset cultures, palette, themes",
           },
         ],
       });
@@ -371,7 +371,7 @@ describe("worldBuilder service", () => {
       expect(compiled).toHaveLength(1);
       expect(compiled[0]).toMatchObject({
         category: "world_pitch_posters",
-        label: "World pitch poster",
+        label: "Universe pitch poster",
       });
     });
 
@@ -392,7 +392,7 @@ describe("worldBuilder service", () => {
   });
 
   describe("influences", () => {
-    it("round-trips embrace + avoid lists through createWorld", async () => {
+    it("round-trips embrace + avoid lists through createUniverse", async () => {
       const w = await seedWorld({
         influences: {
           embrace: ["Moebius", "cel-shading"],
@@ -438,11 +438,11 @@ describe("worldBuilder service", () => {
       expect(w.influences.embrace).toHaveLength(svc.INFLUENCES_PER_LIST_MAX);
     });
 
-    it("updateWorld replaces influence lists wholesale (does not merge)", async () => {
+    it("updateUniverse replaces influence lists wholesale (does not merge)", async () => {
       const w = await seedWorld({
         influences: { embrace: ["A", "B"], avoid: ["X"] },
       });
-      const patched = await svc.updateWorld(w.id, {
+      const patched = await svc.updateUniverse(w.id, {
         influences: { embrace: ["C"] },
       });
       // Wholesale replace: avoid is gone because the patch didn't carry it.
@@ -551,7 +551,7 @@ describe("worldBuilder service", () => {
         locked: { logline: true, influencesEmbrace: true },
       });
       expect(w.locked).toEqual({ logline: true, influencesEmbrace: true });
-      const patched = await svc.updateWorld(w.id, {
+      const patched = await svc.updateUniverse(w.id, {
         locked: { styleNotes: true },
       });
       expect(patched.locked).toEqual({ styleNotes: true });
@@ -566,7 +566,7 @@ describe("worldBuilder service", () => {
 
     it("migrates legacy `locked.influences: true` into per-list locks", async () => {
       // Prior schema combined embrace + avoid into one `influences` lock. The
-      // sanitizer now splits it into two so existing on-disk worlds keep working
+      // sanitizer now splits it into two so existing on-disk universes keep working
       // without a data migration step.
       const w = await seedWorld({ locked: { influences: true, premise: true } });
       expect(w.locked).toEqual({
@@ -580,8 +580,8 @@ describe("worldBuilder service", () => {
   describe("sanitizers", () => {
     it("drops malformed variations on read", async () => {
       // Manually plant invalid state — sanitizeTemplate strips it on read.
-      fileStore.set("/mock/data/world-builder.json", {
-        worlds: [
+      fileStore.set("/mock/data/universe-builder.json", {
+        universes: [
           {
             id: "w1",
             name: "X",
@@ -603,7 +603,7 @@ describe("worldBuilder service", () => {
         ],
         runs: [],
       });
-      const list = await svc.listWorlds();
+      const list = await svc.listUniverses();
       expect(list[0].categories.landscapes.variations).toHaveLength(1);
       expect(list[0].categories.landscapes.variations[0].label).toBe("Good");
     });

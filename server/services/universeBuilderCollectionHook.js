@@ -1,8 +1,8 @@
 /**
- * World Builder — collection hook.
+ * Universe Builder — collection hook.
  *
  * Subscribes to mediaJobEvents and, for each completed image job that
- * carries `params.worldRun.collectionId`, files the rendered filename
+ * carries `params.universeRun.collectionId`, files the rendered filename
  * into that collection.
  *
  * Mounted once at server boot from server/index.js so it can listen for
@@ -16,7 +16,7 @@ import { addItem, ERR_DUPLICATE } from './mediaCollections.js';
 
 let registeredHandler = null;
 
-export function initWorldBuilderCollectionHook() {
+export function initUniverseBuilderCollectionHook() {
   // Idempotent: a stray double-init (test reload, future refactor) would
   // otherwise register two listeners and double-file every completed image.
   if (registeredHandler) return;
@@ -29,7 +29,7 @@ export function initWorldBuilderCollectionHook() {
   registeredHandler = (job) => {
     void (async () => {
       if (!job || job.kind !== 'image') return;
-      const tag = job.params?.worldRun;
+      const tag = job.params?.universeRun;
       if (!tag?.collectionId) return;
       const filename = job.result?.filename;
       if (!filename || typeof filename !== 'string') return;
@@ -39,21 +39,21 @@ export function initWorldBuilderCollectionHook() {
           // A duplicate (same filename rendered twice in the same run) is
           // expected when batchPerVariation > 1 and the gen output collides.
           if (err?.code === ERR_DUPLICATE) return 'duplicate';
-          console.log(`⚠️ world-builder collection hook failed for ${filename}: ${err?.message || String(err)}`);
+          console.log(`⚠️ universe-builder collection hook failed for ${filename}: ${err?.message || String(err)}`);
           return 'failed';
         });
       if (status === 'added') {
-        console.log(`🌍 world-builder run=${tag.runId?.slice(0, 8)} category=${tag.category} → ${filename}`);
+        console.log(`🌍 universe-builder run=${tag.runId?.slice(0, 8)} category=${tag.category} → ${filename}`);
       } else if (status === 'duplicate') {
-        console.log(`🌍 world-builder run=${tag.runId?.slice(0, 8)} category=${tag.category} duplicate skipped: ${filename}`);
+        console.log(`🌍 universe-builder run=${tag.runId?.slice(0, 8)} category=${tag.category} duplicate skipped: ${filename}`);
       }
     })().catch((err) => {
       // Last-resort net for synchronous throws (unexpected job shape, etc).
-      console.log(`⚠️ world-builder collection hook crashed: ${err?.message || err}`);
+      console.log(`⚠️ universe-builder collection hook crashed: ${err?.message || err}`);
     });
   };
   mediaJobEvents.on('completed', registeredHandler);
-  console.log('🌍 World Builder collection hook initialized');
+  console.log('🌍 Universe Builder collection hook initialized');
 }
 
 // Test-only reset hook so suites that re-init can do so cleanly. Removes the

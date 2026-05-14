@@ -39,7 +39,7 @@ export const CHARACTERS_PER_SERIES_MAX = BIBLE_LIMITS.ENTRIES_PER_BIBLE_MAX;
 export const BIBLE_ENTRIES_PER_SERIES_MAX = BIBLE_LIMITS.ENTRIES_PER_BIBLE_MAX;
 export const IMAGE_REFS_PER_CHARACTER_MAX = BIBLE_LIMITS.IMAGE_REFS_PER_ENTRY_MAX;
 export const IMAGE_REF_MAX = BIBLE_LIMITS.IMAGE_REF_MAX;
-export const WORLD_ID_MAX = 64;
+export const UNIVERSE_ID_MAX = 64;
 export const WRITERS_ROOM_WORK_ID_MAX = 64;
 export const TARGET_FORMATS = Object.freeze(['comic', 'tv', 'comic+tv']);
 export const ISSUE_COUNT_TARGET_MAX = 999;
@@ -68,7 +68,7 @@ const sanitizeSeries = (raw) => {
     name,
     logline: trimTo(raw.logline, LOGLINE_MAX),
     premise: trimTo(raw.premise, PREMISE_MAX),
-    worldId: trimTo(raw.worldId, WORLD_ID_MAX) || null,
+    universeId: trimTo(raw.universeId, UNIVERSE_ID_MAX) || null,
     // Bidirectional link to a Writers Room work (item 6 of the DRY
     // unification). Set by the "Promote to pipeline" flow; never auto-cleared.
     writersRoomWorkId: trimTo(raw.writersRoomWorkId, WRITERS_ROOM_WORK_ID_MAX) || null,
@@ -122,7 +122,7 @@ export async function createSeries(input = {}) {
     name,
     logline: input.logline || '',
     premise: input.premise || '',
-    worldId: input.worldId || null,
+    universeId: input.universeId || null,
     writersRoomWorkId: input.writersRoomWorkId || null,
     characters: input.characters || [],
     settings: input.settings || [],
@@ -155,7 +155,7 @@ export async function updateSeries(id, patch = {}) {
     ...('name' in patch ? { name: patch.name } : {}),
     ...('logline' in patch ? { logline: patch.logline } : {}),
     ...('premise' in patch ? { premise: patch.premise } : {}),
-    ...('worldId' in patch ? { worldId: patch.worldId } : {}),
+    ...('universeId' in patch ? { universeId: patch.universeId } : {}),
     ...('writersRoomWorkId' in patch ? { writersRoomWorkId: patch.writersRoomWorkId } : {}),
     ...('characters' in patch ? { characters: patch.characters } : {}),
     ...('settings' in patch ? { settings: patch.settings } : {}),
@@ -172,6 +172,42 @@ export async function updateSeries(id, patch = {}) {
   state.series[idx] = merged;
   await writeState(state);
   return merged;
+}
+
+/**
+ * Strip a filename from every `imageRefs[]` across every series's
+ * characters/settings/objects. Called by the image-delete route so a noun
+ * card stops pointing at a file the user just deleted from the gallery.
+ *
+ * Returns `{ removed }` — total references stripped across all series.
+ * Skips the write when nothing matched, so a delete of a non-noun image
+ * (the common case) is a cheap no-op read.
+ */
+const BIBLE_KEYS = ['characters', 'settings', 'objects'];
+export async function purgeImageRefFromAllSeries(filename) {
+  if (!filename || typeof filename !== 'string') return { removed: 0 };
+  const state = await readState();
+  let removed = 0;
+  const nextSeries = state.series.map((s) => {
+    let touched = false;
+    const patched = { ...s };
+    for (const key of BIBLE_KEYS) {
+      const list = Array.isArray(s[key]) ? s[key] : null;
+      if (!list) continue;
+      const nextList = list.map((entry) => {
+        const refs = Array.isArray(entry.imageRefs) ? entry.imageRefs : null;
+        if (!refs || !refs.includes(filename)) return entry;
+        const trimmed = refs.filter((f) => f !== filename);
+        removed += refs.length - trimmed.length;
+        touched = true;
+        return { ...entry, imageRefs: trimmed };
+      });
+      if (touched) patched[key] = nextList;
+    }
+    return touched ? { ...patched, updatedAt: new Date().toISOString() } : s;
+  });
+  if (removed > 0) await writeState({ series: nextSeries });
+  return { removed };
 }
 
 /**

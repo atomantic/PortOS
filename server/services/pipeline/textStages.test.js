@@ -33,7 +33,7 @@ vi.mock('../providers.js', () => ({
 vi.mock('../runner.js', () => ({
   createRun: vi.fn(async () => ({ runId: `run-${++uuidCounter}` })),
   // Stub executeApiRun: call onData with a canned response immediately, then
-  // onComplete with success. Mirrors what worldBuilderExpand.test.js doesn't
+  // onComplete with success. Mirrors what universeBuilderExpand.test.js doesn't
   // need to do (it mocks the upstream expander), but we test the lower-level
   // text-stage runner here.
   executeApiRun: vi.fn(async (runId, provider, model, prompt, _cwd, _shots, onData, onComplete) => {

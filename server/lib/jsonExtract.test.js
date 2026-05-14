@@ -75,7 +75,7 @@ describe('jsonExtract.tryParseWithRepair', () => {
     // closes the array). Swapping `}}]` → `}]}` is brace-count-neutral
     // so the outer container still closes. The slice itself MUST be
     // brace-balanced (4 `{`, 4 `}`) — that's the post-findBalancedBlocks
-    // shape, lifted from worldBuilderExpand's real production failure.
+    // shape, lifted from universeBuilderExpand's real production failure.
     const bad = '{"stylePrompt":"x","categories":{"vehicles":{"variations":[{"label":"a","prompt":"…blister"}}]}}';
     expect(tryParseWithRepair(bad)).toEqual({
       value: {

@@ -48,7 +48,7 @@ function buildStageContext({ series, issue, stageId, seedInput }) {
       logline: series.logline,
       premise: series.premise,
       styleNotes: series.styleNotes,
-      worldId: series.worldId || '',
+      universeId: series.universeId || '',
       characters: series.characters || [],
     },
     issue: {

@@ -81,6 +81,14 @@ export const extractPipelineBibles = (seriesId, { issueId, corpus, kinds, provid
     body: JSON.stringify({ issueId, corpus, kinds, providerOverride, parallel }),
   });
 
+// Rewrite one character's physicalDescription so they render distinct from
+// every peer. Returns { series, entry, rationale, changes }.
+export const refinePipelineCharacter = (seriesId, entryId, { providerId, model } = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/characters/${encodeURIComponent(entryId)}/refine`, {
+    method: 'POST',
+    body: JSON.stringify({ providerId, model }),
+  });
+
 // ---- Issues ----
 export const listPipelineIssues = (seriesId) =>
   request(`/pipeline/series/${encodeURIComponent(seriesId)}/issues`);

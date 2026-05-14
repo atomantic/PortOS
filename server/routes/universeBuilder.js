@@ -1,14 +1,14 @@
 /**
- * World Builder Routes
+ * Universe Builder Routes
  *
- *   GET    /api/world-builder                        → World[]
- *   POST   /api/world-builder                        → World
- *   GET    /api/world-builder/:id                    → World
- *   PATCH  /api/world-builder/:id                    → World
- *   DELETE /api/world-builder/:id                    → { id }
- *   POST   /api/world-builder/expand                 → { stylePrompt, negativePrompt, categories, compositeSheets, llm }
- *   POST   /api/world-builder/:id/render             → { runId, collectionId, jobIds, promptCount }
- *   GET    /api/world-builder/:id/runs               → Run[]
+ *   GET    /api/universe-builder                        → Universe[]
+ *   POST   /api/universe-builder                        → Universe
+ *   GET    /api/universe-builder/:id                    → Universe
+ *   PATCH  /api/universe-builder/:id                    → Universe
+ *   DELETE /api/universe-builder/:id                    → { id }
+ *   POST   /api/universe-builder/expand                 → { stylePrompt, negativePrompt, categories, compositeSheets, llm }
+ *   POST   /api/universe-builder/:id/render             → { runId, collectionId, jobIds, promptCount }
+ *   GET    /api/universe-builder/:id/runs               → Run[]
  */
 
 import { Router } from 'express';
@@ -16,9 +16,9 @@ import { z } from 'zod';
 import { randomUUID } from 'crypto';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
-import * as svc from '../services/worldBuilder.js';
-import { expandWorldTemplate } from '../services/worldBuilderExpand.js';
-import { refineWorldPrompts } from '../services/worldBuilderRefine.js';
+import * as svc from '../services/universeBuilder.js';
+import { expandWorldTemplate } from '../services/universeBuilderExpand.js';
+import { refineWorldPrompts } from '../services/universeBuilderRefine.js';
 import { enqueueJob } from '../services/mediaJobQueue/index.js';
 import { getSettings } from '../services/settings.js';
 import { findOrCreateCollectionByName, NAME_MAX_LENGTH as COLLECTION_NAME_MAX } from '../services/mediaCollections.js';
@@ -145,14 +145,14 @@ const refinePromptsSchema = z.object({
   stylePrompt: z.string().trim().max(svc.PROMPT_FRAGMENT_MAX).optional().default(''),
   negativePrompt: z.string().trim().max(svc.PROMPT_FRAGMENT_MAX).optional().default(''),
   // Bible context: passed in so the refiner sees the full seed, refines them
-  // alongside the prompts, and stays consistent with the world's narrative.
+  // alongside the prompts, and stays consistent with the universe's narrative.
   logline: z.string().trim().max(svc.LOGLINE_MAX).optional().default(''),
   premise: z.string().trim().max(svc.PREMISE_MAX).optional().default(''),
   styleNotes: z.string().trim().max(svc.STYLE_NOTES_MAX).optional().default(''),
   // Structured influences (embrace + avoid) — refined alongside the prompts
   // and used as the canonical reference list for renderer-token composition.
   influences: influencesSchema.optional(),
-  // Post-Expand structure — when present, the refiner sees the full world
+  // Post-Expand structure — when present, the refiner sees the full universe
   // (categories + composites with per-item locks) and may edit/replace/add
   // items per the user's feedback. When omitted (pre-Expand iteration), the
   // refiner falls back to the bible-only behavior.
@@ -183,7 +183,7 @@ const selectionSchema = z.record(
 
 const renderSchema = z.object({
   // Optional friendly name for the resulting collection. If omitted, server
-  // synthesizes "World: <name> (timestamp)".
+  // synthesizes "Universe: <name> (timestamp)".
   collectionName: z.string().trim().min(1).max(COLLECTION_NAME_MAX).optional(),
   // Image-gen knobs — these mirror /api/image-gen/generate so the user can
   // pick mode/size/steps without bouncing to the Image page first.
@@ -203,16 +203,16 @@ const renderSchema = z.object({
 });
 
 router.get('/', asyncHandler(async (_req, res) => {
-  res.json(await svc.listWorlds());
+  res.json(await svc.listUniverses());
 }));
 
 router.post('/', asyncHandler(async (req, res) => {
   const body = validateRequest(createSchema, req.body ?? {});
-  res.status(201).json(await svc.createWorld(body));
+  res.status(201).json(await svc.createUniverse(body));
 }));
 
 // `expand` is a sub-resource — keep it ahead of `/:id` so the wildcard
-// doesn't catch "expand" as a world id.
+// doesn't catch "expand" as a universe id.
 router.post('/expand', asyncHandler(async (req, res) => {
   const body = validateRequest(expandSchema, req.body ?? {});
   const result = await expandWorldTemplate(body);
@@ -221,25 +221,25 @@ router.post('/expand', asyncHandler(async (req, res) => {
 
 // Refines the 3 top-level prompts (starter / style / negative) based on
 // user feedback. Stateless — the caller decides whether to write the
-// result back to a saved world. Keep ahead of `/:id`.
+// result back to a saved universe. Keep ahead of `/:id`.
 router.post('/refine-prompts', asyncHandler(async (req, res) => {
   const body = validateRequest(refinePromptsSchema, req.body ?? {});
   res.json(await refineWorldPrompts(body));
 }));
 
 router.get('/:id', asyncHandler(async (req, res) => {
-  const w = await svc.getWorld(req.params.id).catch((err) => { throw mapServiceError(err); });
+  const w = await svc.getUniverse(req.params.id).catch((err) => { throw mapServiceError(err); });
   res.json(w);
 }));
 
 router.patch('/:id', asyncHandler(async (req, res) => {
   const body = validateRequest(patchSchema, req.body ?? {});
-  const w = await svc.updateWorld(req.params.id, body).catch((err) => { throw mapServiceError(err); });
+  const w = await svc.updateUniverse(req.params.id, body).catch((err) => { throw mapServiceError(err); });
   res.json(w);
 }));
 
 router.delete('/:id', asyncHandler(async (req, res) => {
-  const r = await svc.deleteWorld(req.params.id).catch((err) => { throw mapServiceError(err); });
+  const r = await svc.deleteUniverse(req.params.id).catch((err) => { throw mapServiceError(err); });
   res.json(r);
 }));
 
@@ -249,9 +249,9 @@ router.get('/:id/runs', asyncHandler(async (req, res) => {
 
 router.post('/:id/render', asyncHandler(async (req, res) => {
   const body = validateRequest(renderSchema, req.body ?? {});
-  const world = await svc.getWorld(req.params.id).catch((err) => { throw mapServiceError(err); });
+  const universe = await svc.getUniverse(req.params.id).catch((err) => { throw mapServiceError(err); });
 
-  const compiled = svc.compilePrompts(world, {
+  const compiled = svc.compilePrompts(universe, {
     promptMode: body.promptMode,
     selection: body.selection,
     sheetSelection: body.sheetSelection,
@@ -302,23 +302,23 @@ router.post('/:id/render', asyncHandler(async (req, res) => {
   }
 
   // Provision the collection up front so renders can be tagged as they
-  // complete. The completion hook (worldBuilderCollectionHook) will add
+  // complete. The completion hook (universeBuilderCollectionHook) will add
   // each finished image's filename to this collection. Repeat renders of
-  // the same world reuse the existing `World: <name>` bucket so per-world
+  // the same universe reuse the existing `Universe: <name>` bucket so per-universe
   // output accumulates in one place instead of fragmenting into a fresh
   // date-suffixed collection per run.
   const collectionName = body.collectionName?.trim()
-    || `World: ${world.name}`;
+    || `Universe: ${universe.name}`;
   const collection = await findOrCreateCollectionByName({
     name: collectionName.slice(0, COLLECTION_NAME_MAX),
-    description: `World Builder renders for "${world.name}"`,
+    description: `Universe Builder renders for "${universe.name}"`,
   });
 
   const runId = randomUUID();
   const jobIds = [];
   // Map cfgScale → guidance the same way /api/image-gen/generate does. The
   // mediaJobQueue calls imageGen/local.generateImage() directly (not the
-  // dispatcher), so without this mapping the World Builder UI's CFG control
+  // dispatcher), so without this mapping the Universe Builder UI's CFG control
   // would silently no-op for local renders.
   const guidance = body.guidance ?? body.cfgScale;
   const baseParams = {
@@ -338,9 +338,9 @@ router.post('/:id/render', asyncHandler(async (req, res) => {
       // Tag every job so the completion hook can route the result back
       // into the run's collection without us having to thread additional
       // arguments through the queue.
-      worldRun: {
+      universeRun: {
         runId,
-        worldId: world.id,
+        universeId: universe.id,
         collectionId: collection.id,
         category: item.category,
         label: item.label,
@@ -366,14 +366,14 @@ router.post('/:id/render', asyncHandler(async (req, res) => {
 
   const run = await svc.recordRun({
     id: runId,
-    worldId: world.id,
+    universeId: universe.id,
     collectionId: collection.id,
     jobIds,
     promptCount: compiled.length,
     createdAt: new Date().toISOString(),
   });
 
-  console.log(`🌍 World Builder render — world=${world.name} prompts=${compiled.length} mode=${mode} runId=${runId.slice(0, 8)}`);
+  console.log(`🌍 Universe Builder render — universe=${universe.name} prompts=${compiled.length} mode=${mode} runId=${runId.slice(0, 8)}`);
 
   res.json({
     runId: run.id,

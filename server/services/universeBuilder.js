@@ -1,24 +1,24 @@
 /**
- * World Builder Service
+ * Universe Builder Service
  *
- * Stores user-created "world templates" — sci-fi/fantasy/etc. universe
+ * Stores user-created "universe templates" — sci-fi/fantasy/etc. universe
  * descriptions expanded by an LLM into a structured prompt set:
  *
  *   - stylePrompt + negativePrompt (positive style fragment + negative prompt)
- *   - categories: named prompt buckets, seeded with common world-art buckets
+ *   - categories: named prompt buckets, seeded with common universe-art buckets
  *     like landscapes / characters / vehicles, but open to project-specific
  *     buckets like colonies, factions, species, clothing_styles, or raider_clans
  *     (each with a list of `variations` — short prompt fragments)
  *   - compositeSheets: complete board/poster prompts that combine several
- *     buckets into one image, e.g. a colony costume guide or a world summary
+ *     buckets into one image, e.g. a colony costume guide or a universe summary
  *     concept pitch poster
  *
  * From those pieces the route can compile a flat list of full prompts and
- * enqueue them as image-gen jobs, all tagged with the same `worldId` and
+ * enqueue them as image-gen jobs, all tagged with the same `universeId` and
  * `runId` so the resulting renders form a self-contained collection.
  *
- * Persisted to data/world-builder.json. Renders for a run land in a
- * media-collections.json collection named "World: <worldName>" (or any
+ * Persisted to data/universe-builder.json. Renders for a run land in a
+ * media-collections.json collection named "Universe: <worldName>" (or any
  * other name the user picks at kickoff).
  */
 
@@ -27,7 +27,7 @@ import { randomUUID } from 'crypto';
 import { PATHS, atomicWrite, readJSONFile, ensureDir } from '../lib/fileUtils.js';
 import { composeStyledPrompt } from '../lib/composeStyledPrompt.js';
 
-const STATE_PATH = join(PATHS.data, 'world-builder.json');
+const STATE_PATH = join(PATHS.data, 'universe-builder.json');
 
 export const ERR_NOT_FOUND = 'NOT_FOUND';
 export const ERR_VALIDATION = 'VALIDATION_ERROR';
@@ -42,7 +42,7 @@ export const PROMPT_FRAGMENT_MAX = 2000;
 export const COMPOSITE_PROMPT_MAX = 4000;
 export const VARIATION_LABEL_MAX = 120;
 // Narrative bible fields — surfaced into the Pipeline "new series" form so a
-// world's logline/premise/style notes can seed a production series in one click.
+// universe's logline/premise/style notes can seed a production series in one click.
 export const LOGLINE_MAX = 500;
 export const PREMISE_MAX = 4000;
 export const STYLE_NOTES_MAX = 4000;
@@ -57,7 +57,7 @@ export const WORLD_CATEGORY_COUNT_MAX = 30;
 
 // Influences — structured reference lists that deterministically inform
 // stylePrompt (embrace) and negativePrompt (avoid) at render-compile time.
-// They are the canonical record of the world's direction so re-expansions
+// They are the canonical record of the universe's direction so re-expansions
 // inherit it; the LLM still authors the prose stylePrompt around them.
 export const INFLUENCE_ENTRY_MAX = 120;
 export const INFLUENCES_PER_LIST_MAX = 30;
@@ -99,7 +99,7 @@ export const LOCKABLE_FIELD_LABELS = Object.freeze({
 export const INFLUENCE_LOCK_FIELDS = Object.freeze(['influencesEmbrace', 'influencesAvoid']);
 export const isInfluenceLockField = (key) => INFLUENCE_LOCK_FIELDS.includes(key);
 
-// Starter buckets the UI surfaces for a fresh world. They remain for
+// Starter buckets the UI surfaces for a fresh universe. They remain for
 // compatibility, but saved templates may carry any additional sanitized
 // category keys the LLM or user creates.
 export const WORLD_CATEGORIES = Object.freeze([
@@ -110,7 +110,7 @@ export const WORLD_CATEGORIES = Object.freeze([
   'vehicles',
 ]);
 
-const DEFAULT_STATE = { worlds: [], runs: [] };
+const DEFAULT_STATE = { universes: [], runs: [] };
 
 const isStr = (v) => typeof v === 'string';
 const trimTo = (v, max) => (isStr(v) ? v.trim().slice(0, max) : '');
@@ -159,7 +159,7 @@ const sanitizeCompositeSheet = (raw) => {
 
 const sanitizeCategory = (raw) => {
   // Per-category structure: { variations: [{ label, prompt }] }. Cap so a
-  // runaway LLM can't blow up the world template; matches the route schema.
+  // runaway LLM can't blow up the universe template; matches the route schema.
   if (!raw || typeof raw !== 'object') return { variations: [] };
   const variations = [];
   if (Array.isArray(raw.variations)) {
@@ -244,7 +244,7 @@ export const sanitizeInfluences = (raw = {}) => {
 // `fresh` (the LLM output), falling back to `fallback` ONLY when the LLM
 // omitted that list (key absent). An explicit `[]` is applied so the user
 // can intentionally clear an unlocked list. Mirrors `mergeInfluencesWithLocks`
-// in client/services/apiWorldBuilder.js.
+// in client/services/apiUniverseBuilder.js.
 export const mergeInfluencesWithLocks = (locked, fresh, fallback) => {
   const freshSafe = sanitizeInfluences(fresh);
   const fallbackSafe = sanitizeInfluences(fallback);
@@ -302,7 +302,7 @@ export const sanitizeLocked = (raw = {}) => {
     if (raw[key] === true) out[key] = true;
   }
   // Migration: prior schema had a single `influences` lock covering both
-  // embrace + avoid. Expand into the two per-list locks so existing worlds
+  // embrace + avoid. Expand into the two per-list locks so existing universes
   // keep working without a data migration step.
   if (raw.influences === true) {
     out.influencesEmbrace = true;
@@ -368,10 +368,10 @@ const sanitizeTemplate = (raw) => {
 const sanitizeRun = (raw) => {
   if (!raw || typeof raw !== 'object') return null;
   if (!isStr(raw.id) || !raw.id) return null;
-  if (!isStr(raw.worldId) || !raw.worldId) return null;
+  if (!isStr(raw.universeId) || !raw.universeId) return null;
   return {
     id: raw.id,
-    worldId: raw.worldId,
+    universeId: raw.universeId,
     collectionId: isStr(raw.collectionId) ? raw.collectionId : null,
     jobIds: Array.isArray(raw.jobIds) ? raw.jobIds.filter(isStr).slice(0, MAX_RUN_JOB_IDS) : [],
     promptCount: Number.isFinite(raw.promptCount) ? raw.promptCount : 0,
@@ -382,31 +382,31 @@ const sanitizeRun = (raw) => {
 async function readState() {
   await ensureDir(PATHS.data);
   const raw = await readJSONFile(STATE_PATH, DEFAULT_STATE, { logError: false });
-  const worlds = Array.isArray(raw.worlds) ? raw.worlds.map(sanitizeTemplate).filter(Boolean) : [];
+  const universes = Array.isArray(raw.universes) ? raw.universes.map(sanitizeTemplate).filter(Boolean) : [];
   const runs = Array.isArray(raw.runs) ? raw.runs.map(sanitizeRun).filter(Boolean) : [];
-  return { worlds, runs };
+  return { universes, runs };
 }
 
 async function writeState(state) {
   await atomicWrite(STATE_PATH, state);
 }
 
-export async function listWorlds() {
-  const { worlds } = await readState();
-  // Newest first — matches user expectation for a "your worlds" list.
-  return [...worlds].sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+export async function listUniverses() {
+  const { universes } = await readState();
+  // Newest first — matches user expectation for a "your universes" list.
+  return [...universes].sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
 }
 
-export async function getWorld(id) {
-  const { worlds } = await readState();
-  const w = worlds.find((x) => x.id === id);
-  if (!w) throw makeErr(`World not found: ${id}`, ERR_NOT_FOUND);
+export async function getUniverse(id) {
+  const { universes } = await readState();
+  const w = universes.find((x) => x.id === id);
+  if (!w) throw makeErr(`Universe not found: ${id}`, ERR_NOT_FOUND);
   return w;
 }
 
-export async function createWorld(input = {}) {
+export async function createUniverse(input = {}) {
   const name = trimTo(input.name, NAME_MAX_LENGTH);
-  if (!name) throw makeErr(`World name is required (1..${NAME_MAX_LENGTH} chars)`, ERR_VALIDATION);
+  if (!name) throw makeErr(`Universe name is required (1..${NAME_MAX_LENGTH} chars)`, ERR_VALIDATION);
   const state = await readState();
   const now = new Date().toISOString();
   const next = sanitizeTemplate({
@@ -426,20 +426,20 @@ export async function createWorld(input = {}) {
     createdAt: now,
     updatedAt: now,
   });
-  state.worlds.push(next);
+  state.universes.push(next);
   await writeState(state);
   return next;
 }
 
-export async function updateWorld(id, patch = {}) {
+export async function updateUniverse(id, patch = {}) {
   const state = await readState();
-  const idx = state.worlds.findIndex((w) => w.id === id);
-  if (idx < 0) throw makeErr(`World not found: ${id}`, ERR_NOT_FOUND);
-  const cur = state.worlds[idx];
+  const idx = state.universes.findIndex((w) => w.id === id);
+  if (idx < 0) throw makeErr(`Universe not found: ${id}`, ERR_NOT_FOUND);
+  const cur = state.universes[idx];
 
   // Merge `categories` per-key — a partial PATCH that only includes
   // `landscapes` must NOT wipe characters/structures/etc. Whole categories
-  // not present in the patch are kept as-is from the current world.
+  // not present in the patch are kept as-is from the current universe.
   const mergedCategories = 'categories' in patch
     ? { ...cur.categories, ...(patch.categories || {}) }
     : cur.categories;
@@ -480,19 +480,19 @@ export async function updateWorld(id, patch = {}) {
     llm: mergedLlm,
     updatedAt: new Date().toISOString(),
   });
-  if (!merged) throw makeErr('Invalid world payload', ERR_VALIDATION);
-  state.worlds[idx] = merged;
+  if (!merged) throw makeErr('Invalid universe payload', ERR_VALIDATION);
+  state.universes[idx] = merged;
   await writeState(state);
   return merged;
 }
 
-export async function deleteWorld(id) {
+export async function deleteUniverse(id) {
   const state = await readState();
-  const before = state.worlds.length;
-  state.worlds = state.worlds.filter((w) => w.id !== id);
-  if (state.worlds.length === before) throw makeErr(`World not found: ${id}`, ERR_NOT_FOUND);
-  // Drop runs referencing the deleted world — they're useless without it.
-  state.runs = state.runs.filter((r) => r.worldId !== id);
+  const before = state.universes.length;
+  state.universes = state.universes.filter((w) => w.id !== id);
+  if (state.universes.length === before) throw makeErr(`Universe not found: ${id}`, ERR_NOT_FOUND);
+  // Drop runs referencing the deleted universe — they're useless without it.
+  state.runs = state.runs.filter((r) => r.universeId !== id);
   await writeState(state);
   return { id };
 }
@@ -508,9 +508,9 @@ export async function recordRun(run) {
   return sanitized;
 }
 
-export async function listRuns(worldId = null) {
+export async function listRuns(universeId = null) {
   const { runs } = await readState();
-  const filtered = worldId ? runs.filter((r) => r.worldId === worldId) : runs;
+  const filtered = universeId ? runs.filter((r) => r.universeId === universeId) : runs;
   return [...filtered].sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
 }
 
@@ -540,8 +540,8 @@ export function composeInfluenceTokens(structured = [], prose = '') {
 }
 
 /**
- * Compile the world template into an ordered list of full image-gen
- * prompts. Each entry combines the world's style prompt with one
+ * Compile the universe template into an ordered list of full image-gen
+ * prompts. Each entry combines the universe's style prompt with one
  * variation from a chosen category.
  *
  *   selection: { landscapes: 'all' | string[], characters: ... }
@@ -551,14 +551,14 @@ export function composeInfluenceTokens(structured = [], prose = '') {
  *
  *   batchPerVariation: how many renders per variation (1..20)
  */
-export function compilePrompts(world, options = {}) {
-  if (!world) return [];
+export function compilePrompts(universe, options = {}) {
+  if (!universe) return [];
   const promptMode = ['variations', 'sheets', 'all'].includes(options.promptMode)
     ? options.promptMode
     : 'variations';
   const selection = options.selection && typeof options.selection === 'object'
     ? options.selection
-    : Object.fromEntries(getWorldCategoryKeys(world.categories).map((c) => [c, 'all']));
+    : Object.fromEntries(getWorldCategoryKeys(universe.categories).map((c) => [c, 'all']));
   const normalizedSelection = {};
   for (const [key, value] of Object.entries(selection)) {
     const normalized = normalizeCategoryKey(key);
@@ -567,8 +567,8 @@ export function compilePrompts(world, options = {}) {
   const batchPerVariation = Math.max(1, Math.min(20, Number(options.batchPerVariation) || 1));
 
   const stylePreset = {
-    prompt: composeInfluenceTokens(world.influences?.embrace, world.stylePrompt),
-    negativePrompt: composeInfluenceTokens(world.influences?.avoid, world.negativePrompt),
+    prompt: composeInfluenceTokens(universe.influences?.embrace, universe.stylePrompt),
+    negativePrompt: composeInfluenceTokens(universe.influences?.avoid, universe.negativePrompt),
   };
   const compiled = [];
 
@@ -576,7 +576,7 @@ export function compilePrompts(world, options = {}) {
     for (const category of getWorldCategoryKeys(normalizedSelection)) {
       const sel = normalizedSelection[category];
       if (!sel) continue;
-      const variations = world.categories?.[category]?.variations || [];
+      const variations = universe.categories?.[category]?.variations || [];
       const filtered = sel === 'all'
         ? variations
         : variations.filter((v) => Array.isArray(sel) && sel.some((s) => s.toLowerCase() === v.label.toLowerCase()));
@@ -597,7 +597,7 @@ export function compilePrompts(world, options = {}) {
 
   if (promptMode === 'sheets' || promptMode === 'all') {
     const sheetSelection = options.sheetSelection || 'all';
-    const sheets = world.compositeSheets || [];
+    const sheets = universe.compositeSheets || [];
     const filteredSheets = sheetSelection === 'all'
       ? sheets
       : sheets.filter((s) => Array.isArray(sheetSelection) && sheetSelection.some((label) => label.toLowerCase() === s.label.toLowerCase()));

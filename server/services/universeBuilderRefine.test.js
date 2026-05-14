@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { __testing } from "./worldBuilderRefine.js";
-import { mergeInfluencesWithLocksAdditive } from "./worldBuilder.js";
+import { __testing } from "./universeBuilderRefine.js";
+import { mergeInfluencesWithLocksAdditive } from "./universeBuilder.js";
 
 const {
   extractRefinementJson,
@@ -10,10 +10,10 @@ const {
   mergeCompositesWithLocks,
 } = __testing;
 
-describe("worldBuilderRefine.extractRefinementJson", () => {
+describe("universeBuilderRefine.extractRefinementJson", () => {
   it("parses a raw refinement object", () => {
     const obj = {
-      starterPrompt: "a darker scavenger world",
+      starterPrompt: "a darker scavenger universe",
       stylePrompt: "gritty palette, deep shadows",
       negativePrompt: "cute, neon",
       rationale: "pushed mood toward grim",
@@ -45,10 +45,10 @@ describe("worldBuilderRefine.extractRefinementJson", () => {
       // the real response below it.
       '{"starterPrompt":"<full rewritten…>","stylePrompt":"<…>","negativePrompt":"<…>"}',
       "codex response:",
-      '{"starterPrompt":"a darker world","stylePrompt":"gritty","negativePrompt":""}',
+      '{"starterPrompt":"a darker universe","stylePrompt":"gritty","negativePrompt":""}',
     ].join("\n");
     const out = extractRefinementJson(raw);
-    expect(out.starterPrompt).toBe("a darker world");
+    expect(out.starterPrompt).toBe("a darker universe");
     expect(out.stylePrompt).toBe("gritty");
   });
 
@@ -72,7 +72,7 @@ describe("worldBuilderRefine.extractRefinementJson", () => {
   });
 });
 
-describe("worldBuilderRefine.buildWorldRefinePrompt", () => {
+describe("universeBuilderRefine.buildWorldRefinePrompt", () => {
   it("includes all three originals + feedback verbatim", () => {
     const out = buildWorldRefinePrompt({
       starterPrompt: "moebius scavengers",
@@ -196,7 +196,7 @@ describe("worldBuilderRefine.buildWorldRefinePrompt", () => {
   });
 });
 
-describe("worldBuilderRefine.collapseStyleDirectionDupes", () => {
+describe("universeBuilderRefine.collapseStyleDirectionDupes", () => {
   it("returns input untouched when no Style direction block is present", () => {
     expect(collapseStyleDirectionDupes("a foundry city goes silent")).toBe(
       "a foundry city goes silent",
@@ -247,7 +247,7 @@ describe("worldBuilderRefine.collapseStyleDirectionDupes", () => {
   });
 });
 
-describe("worldBuilderRefine.buildWorldRefinePrompt — structure-aware path", () => {
+describe("universeBuilderRefine.buildWorldRefinePrompt — structure-aware path", () => {
   it("emits an ORIGINAL CATEGORIES block + structure schema when categories are passed", () => {
     const out = buildWorldRefinePrompt({
       starterPrompt: "seed",
@@ -304,7 +304,7 @@ describe("worldBuilderRefine.buildWorldRefinePrompt — structure-aware path", (
   });
 });
 
-describe("worldBuilderRefine.mergeCategoriesWithLocks", () => {
+describe("universeBuilderRefine.mergeCategoriesWithLocks", () => {
   it("preserves locked variations and replaces unlocked ones from LLM output", () => {
     const original = {
       factions: {
@@ -387,7 +387,7 @@ describe("worldBuilderRefine.mergeCategoriesWithLocks", () => {
   });
 });
 
-describe("worldBuilderRefine.mergeCompositesWithLocks", () => {
+describe("universeBuilderRefine.mergeCompositesWithLocks", () => {
   it("preserves locked composites verbatim and rewrites unlocked ones", () => {
     const original = [
       { kind: "world_pitch_poster", label: "Pitch", prompt: "original pitch", locked: true },
@@ -406,7 +406,7 @@ describe("worldBuilderRefine.mergeCompositesWithLocks", () => {
   });
 });
 
-describe("worldBuilder.mergeInfluencesWithLocksAdditive (refine-time)", () => {
+describe("universeBuilder.mergeInfluencesWithLocksAdditive (refine-time)", () => {
   it("preserves locked tokens in order and APPENDS new tokens from LLM", () => {
     const merged = mergeInfluencesWithLocksAdditive(
       { influencesEmbrace: true, influencesAvoid: true },

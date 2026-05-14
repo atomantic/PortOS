@@ -44,11 +44,12 @@ import {
   refineComicPanelPrompt,
   refineStoryboardScenePrompt,
 } from '../services/pipeline/visualStages.js';
+import { refineCharacterDescription } from '../services/pipeline/nounRefine.js';
 import { startEpisodeVideoForIssue, ERR_NO_STORYBOARDS } from '../services/pipeline/episodeVideo.js';
 import { ASPECT_RATIOS, QUALITIES } from '../lib/creativeDirectorPresets.js';
 import { extractScenes, SOURCE_KIND } from '../lib/sceneExtractor.js';
 import { parseComicScript } from '../lib/comicScriptParser.js';
-import { llmSchema } from './worldBuilder.js';
+import { llmSchema } from './universeBuilder.js';
 import { BIBLE_KIND } from '../lib/storyBible.js';
 import { ARC_LIMITS, ARC_STATUSES, SEASON_STATUSES } from '../lib/storyArc.js';
 
@@ -131,7 +132,7 @@ const seriesCreateSchema = z.object({
   name: z.string().trim().min(1).max(seriesSvc.NAME_MAX),
   logline: z.string().trim().max(seriesSvc.LOGLINE_MAX).optional().default(''),
   premise: z.string().trim().max(seriesSvc.PREMISE_MAX).optional().default(''),
-  worldId: z.string().trim().max(seriesSvc.WORLD_ID_MAX).nullable().optional(),
+  universeId: z.string().trim().max(seriesSvc.UNIVERSE_ID_MAX).nullable().optional(),
   writersRoomWorkId: z.string().trim().max(seriesSvc.WRITERS_ROOM_WORK_ID_MAX).nullable().optional(),
   characters: z.array(characterSchema).max(seriesSvc.BIBLE_ENTRIES_PER_SERIES_MAX).optional(),
   settings: z.array(settingSchema).max(seriesSvc.BIBLE_ENTRIES_PER_SERIES_MAX).optional(),
@@ -148,7 +149,7 @@ const seriesPatchSchema = z.object({
   name: z.string().trim().min(1).max(seriesSvc.NAME_MAX).optional(),
   logline: z.string().trim().max(seriesSvc.LOGLINE_MAX).optional(),
   premise: z.string().trim().max(seriesSvc.PREMISE_MAX).optional(),
-  worldId: z.string().trim().max(seriesSvc.WORLD_ID_MAX).nullable().optional(),
+  universeId: z.string().trim().max(seriesSvc.UNIVERSE_ID_MAX).nullable().optional(),
   writersRoomWorkId: z.string().trim().max(seriesSvc.WRITERS_ROOM_WORK_ID_MAX).nullable().optional(),
   characters: z.array(characterSchema).max(seriesSvc.BIBLE_ENTRIES_PER_SERIES_MAX).optional(),
   settings: z.array(settingSchema).max(seriesSvc.BIBLE_ENTRIES_PER_SERIES_MAX).optional(),
@@ -411,6 +412,21 @@ router.post('/series/:id/extract-bible', asyncHandler(async (req, res) => {
 router.delete('/series/:id', asyncHandler(async (req, res) => {
   const r = await seriesSvc.deleteSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
   res.json(r);
+}));
+
+const refineCharacterSchema = z.object({
+  providerId: z.string().trim().max(64).optional(),
+  model: z.string().trim().max(128).optional(),
+});
+
+// LLM-driven rewrite of one character's physicalDescription so the rendered
+// image differs from every peer. Preserves evidence + firstAppearance. Returns
+// the updated series so the client can reactively swap state without a refetch.
+router.post('/series/:id/characters/:entryId/refine', asyncHandler(async (req, res) => {
+  const body = validateRequest(refineCharacterSchema, req.body ?? {});
+  const result = await refineCharacterDescription(req.params.id, req.params.entryId, body)
+    .catch((err) => { throw mapServiceError(err); });
+  res.json(result);
 }));
 
 router.get('/series/:id/issues', asyncHandler(async (req, res) => {

@@ -30,7 +30,7 @@ For every named character (or distinct unnamed character — "the bartender", "t
    - `name` — canonical name as used most often in the prose. For unnamed characters use a stable role tag like `THE BARTENDER`.
    - `aliases` — other names / nicknames / titles used for them.
    - `role` — one phrase: `protagonist`, `antagonist`, `love interest`, `mentor`, `supporting`, `minor`, `narrator`, etc.
-   - `physicalDescription` — 30–80 words, image-gen-ready. Be specific and visual: age range, build, skin tone, hair color/length/style, eye color, distinguishing features, signature wardrobe / silhouette, posture. Bake in genre/era cues so a model with no story context can render them. Do NOT use the character's name inside this field.
+   - `physicalDescription` — 50–100 words, image-gen-ready. **Every renderable axis MUST be specified** — apparent ethnicity / heritage cues, age range (give a decade window), build (height + body type), skin tone, hair (color + length + style + texture), eye color, distinguishing facial features (face shape, nose, eyebrows, scars, freckles, jewelry, makeup), signature wardrobe (specific garments, palette, era cues), posture/silhouette. Bake in genre/era cues so a model with no story context can render them. Do NOT use the character's name inside this field.
    - `personality` — 1–2 sentences on temperament and voice.
    - `background` — 1–2 sentences on who they are and where they come from, only what the prose actually establishes.
    - `firstAppearance` — short quote (≤ 120 chars) from the prose where they first show up, or null if not clear.
@@ -38,9 +38,15 @@ For every named character (or distinct unnamed character — "the bartender", "t
 
 2. **Respect existing edits.** If a field in the existing profile is already filled in, keep that value verbatim. Only populate empty / missing fields.
 
-3. **Identify gaps.** For every character (existing AND new), list which fields the prose does not yet support — return them as `missingFromProse`. The writer uses this to decide whether to add detail to the prose or fill the field manually.
+3. **Visually differentiate every character in the cast.** Before finalizing, scan all `physicalDescription` values you're producing AND every non-empty `physicalDescription` in the existing profiles above. **No two characters may be visually interchangeable** — if you produce two adult women in dark jackets with brown hair, an image model will render them as the same person. Pick distinguishing choices across:
+   - ethnicity / heritage (e.g. East Asian, Afro-Caribbean, Mediterranean, Pacific Islander, Nordic — be specific, not generic "white" or "diverse")
+   - age decade (mid-20s vs late-30s vs 50s reads completely different)
+   - hair (color, length, texture, style — don't give two characters the same dark bob)
+   - silhouette (tall and lanky vs compact and broad-shouldered vs petite)
+   - signature garment + palette (one character's "rumpled jacket" should not collide with another's)
+   When two characters would otherwise collide on a dimension, deliberately push one in a different direction.
 
-4. Do not invent details the prose does not support. If the prose never mentions hair color, leave that out of `physicalDescription` rather than guessing — and call it out in `missingFromProse`.
+4. **Commit when prose is silent, then log it.** When the prose doesn't specify a renderable detail (hair color, ethnicity, exact wardrobe), DO NOT leave `physicalDescription` blank on that axis — pick a specific, opinionated choice that fits the character's role and differentiates them from the rest of the cast. Then list the field path in `missingFromProse` (e.g. `physicalDescription.hairColor`) so the writer knows you committed without prose evidence and can override if needed. The bible drives image gen — empty axes produce identical-looking characters. A committed-but-flagged choice is always better than a gap.
 
 5. Do not include characters who are merely referenced (e.g. "her dead father") unless they appear in a scene. Use your judgment.
 

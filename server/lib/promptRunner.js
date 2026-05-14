@@ -5,7 +5,7 @@
  * provider.type → executeCliRun/executeApiRun → accumulate streamed text
  * → reject on error" had drifted in failure-handling:
  *
- *   - worldBuilderExpand#callLLM        — CLI: `error || success === false`, API: `error` only
+ *   - universeBuilderExpand#callLLM        — CLI: `error || success === false`, API: `error` only
  *   - stageRunner#awaitRunnerCall       — CLI: `error || success === false`, API: `error` only
  *   - mediaPromptRefiner#runRefinePrompt — both: `error || success === false`
  *   - messageEvaluator#runPrompt        — CLI: `error || success === false`, API: `error` only
@@ -90,7 +90,7 @@ export function resolveEffectiveModel(provider, callerModel) {
  * @param {object} args
  * @param {object} args.provider — { id, type: 'cli'|'api', timeout?, ... }
  * @param {string} args.prompt   — full text to send to the LLM
- * @param {string} args.source   — run-record tag (`'world-builder-expansion'`,
+ * @param {string} args.source   — run-record tag (`'universe-builder-expansion'`,
  *   `'media-prompt-refine'`, `'messages-triage'`, `'staged-llm'`, etc.)
  * @param {string} [args.model]  — model id hint; ignored when the
  *   provider doesn't honor it (claude-code, gemini-cli today).

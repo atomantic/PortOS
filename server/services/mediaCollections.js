@@ -135,7 +135,7 @@ export async function createCollection({ name, description = '' }) {
 }
 
 // Find an existing collection by case-insensitive trimmed name, else create
-// a fresh one. Lets repeat-render callers (World Builder) append into a
+// a fresh one. Lets repeat-render callers (Universe Builder) append into a
 // single per-world bucket without growing a new collection on every run.
 export async function findOrCreateCollectionByName({ name, description = '' }) {
   const trimmed = typeof name === 'string' ? name.trim() : '';

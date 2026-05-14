@@ -46,7 +46,7 @@ vi.mock('../settings.js', () => ({
   getSettings: vi.fn(async () => ({ imageGen: { local: { pythonPath: '/usr/bin/python3' }, mode: 'local' }, videoGen: {} })),
 }));
 
-vi.mock('../worldBuilder.js', () => ({ getWorld: vi.fn(async () => null) }));
+vi.mock('../universeBuilder.js', () => ({ getUniverse: vi.fn(async () => null) }));
 
 const enqueueJobMock = vi.fn(() => ({ jobId: 'job-fake-1234' }));
 vi.mock('../mediaJobQueue/index.js', () => ({ enqueueJob: (...a) => enqueueJobMock(...a) }));

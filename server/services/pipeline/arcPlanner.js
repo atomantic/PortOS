@@ -25,8 +25,8 @@ import { getSeries, updateSeries } from './series.js';
 import { listIssues } from './issues.js';
 import { sanitizeArc, sanitizeSeasonList, sanitizeSeason, buildSeason } from '../../lib/storyArc.js';
 import { recommendStructure, describeStructure } from '../../lib/seasonStructure.js';
-import { getWorld } from '../worldBuilder.js';
-import { renderCategoriesForPrompt, renderCompositesForPrompt } from '../../lib/worldPromptRenderers.js';
+import { getUniverse } from '../universeBuilder.js';
+import { renderCategoriesForPrompt, renderCompositesForPrompt } from '../../lib/universePromptRenderers.js';
 
 export const ERR_VALIDATION = 'PIPELINE_ARC_VALIDATION';
 const makeErr = (message, code) => Object.assign(new Error(message), { code });
@@ -54,9 +54,9 @@ function renderPriorSeason(s, priorIssues) {
 // The world is the canonical source for factions, characters, environments,
 // etc. — without this, the arc planner would only see the series' own
 // characters/settings/objects which are usually empty pre-prose.
-async function loadWorldContext(worldId) {
-  if (!worldId) return null;
-  const world = await getWorld(worldId).catch(() => null);
+async function loadWorldContext(universeId) {
+  if (!universeId) return null;
+  const world = await getUniverse(universeId).catch(() => null);
   if (!world) return null;
 
   const embrace = Array.isArray(world.influences?.embrace) ? world.influences.embrace : [];
@@ -85,7 +85,7 @@ const EMPTY_WORLD_CONTEXT = {
   worldStyleNotes: '',
   worldInfluencesEmbrace: '(none)',
   worldInfluencesAvoid: '(none)',
-  worldCategoriesText: '(none — series has no linked World Builder world)',
+  worldCategoriesText: '(none — series has no linked Universe Builder world)',
   worldCompositesText: '(none)',
 };
 
@@ -93,7 +93,7 @@ const EMPTY_WORLD_CONTEXT = {
 // that chain (verify → resolve) don't reload the same world twice.
 async function resolveWorldContext(series, preloaded) {
   if (preloaded) return preloaded;
-  return (await loadWorldContext(series.worldId)) || EMPTY_WORLD_CONTEXT;
+  return (await loadWorldContext(series.universeId)) || EMPTY_WORLD_CONTEXT;
 }
 
 // The `recommendedStructure` field encodes comic-as-TV norms (6–10 per

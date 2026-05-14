@@ -26,7 +26,7 @@ vi.mock('../../lib/stageRunner.js', () => ({
 const seriesSvc = await import('./series.js');
 const issuesSvc = await import('./issues.js');
 const seasonsSvc = await import('./seasons.js');
-const worldSvc = await import('../worldBuilder.js');
+const worldSvc = await import('../universeBuilder.js');
 const planner = await import('./arcPlanner.js');
 
 async function setupSeries(overrides = {}) {
@@ -118,7 +118,7 @@ describe('arcPlanner — generateArcOverview', () => {
 
   it('feeds the linked world\'s categories + composite sheets into the prompt context', async () => {
     // Create a world with factions + a composite sheet, then a series linked to it.
-    const world = await worldSvc.createWorld({
+    const world = await worldSvc.createUniverse({
       name: 'Clandestiny',
       starterPrompt: 'paranormal investigators in a candy-bright city',
       logline: 'World logline',
@@ -138,7 +138,7 @@ describe('arcPlanner — generateArcOverview', () => {
         { kind: 'reference_sheet', label: 'Rival agencies branding', prompt: 'comparison sheet' },
       ],
     });
-    const s = await setupSeries({ worldId: world.id });
+    const s = await setupSeries({ universeId: world.id });
 
     stageRunnerSpy = vi.fn(async () => ({
       content: {
@@ -159,8 +159,8 @@ describe('arcPlanner — generateArcOverview', () => {
     expect(ctx.worldInfluencesAvoid).toContain('gritty');
   });
 
-  it('renders an "(no linked world)" placeholder when the series has no worldId', async () => {
-    const s = await setupSeries({ worldId: null });
+  it('renders an "(no linked world)" placeholder when the series has no universeId', async () => {
+    const s = await setupSeries({ universeId: null });
     stageRunnerSpy = vi.fn(async () => ({
       content: { logline: 'L', summary: 'S', themes: [], protagonistArc: 'A', seasonOutlines: [] },
       runId: 'r1', providerId: 'p', model: 'm',

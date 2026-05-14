@@ -1,7 +1,7 @@
 /**
- * Shared renderers that turn a World Builder world's `categories` map and
+ * Shared renderers that turn a Universe Builder universe's `categories` map and
  * `compositeSheets` array into prompt-friendly text blocks. Used by both
- * `worldBuilderRefine` (which needs `[LOCKED]` flags) and `arcPlanner` (which
+ * `universeBuilderRefine` (which needs `[LOCKED]` flags) and `arcPlanner` (which
  * does not). The two prior copies in those files had drifted in formatting;
  * consolidating here keeps the LLM input shape consistent across stages.
  */

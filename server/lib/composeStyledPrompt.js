@@ -10,7 +10,7 @@
  * Preset negative appends to user negative so user-specified avoids stay
  * first-class.
  *
- * Used by World Builder's batch-prompt compiler and any future server-side
+ * Used by Universe Builder's batch-prompt compiler and any future server-side
  * caller that needs the same style-prefix convention.
  */
 export function composeStyledPrompt(userPrompt, userNegative, preset) {

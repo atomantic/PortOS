@@ -21,7 +21,7 @@ import ArcCanvas from '../components/pipeline/ArcCanvas';
 import {
   getPipelineSeries, updatePipelineSeries,
   listPipelineIssues,
-  listWorlds,
+  listUniverses,
 } from '../services/api';
 import { recommendStructure, describeStructure } from '../lib/seasonStructure';
 
@@ -32,7 +32,7 @@ export default function PipelineSeries() {
   const navigate = useNavigate();
   const [series, setSeries] = useState(null);
   const [issues, setIssues] = useState([]);
-  const [worlds, setWorlds] = useState([]);
+  const [universes, setWorlds] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
@@ -44,7 +44,7 @@ export default function PipelineSeries() {
     Promise.all([
       getPipelineSeries(seriesId),
       listPipelineIssues(seriesId),
-      listWorlds().catch(() => []),
+      listUniverses().catch(() => []),
     ])
       .then(([s, is, ws]) => {
         if (canceled) return;
@@ -92,7 +92,7 @@ export default function PipelineSeries() {
   const flushPending = async () => {
     if (!series) return false;
     const saved = lastSavedRef.current || series;
-    const fields = ['name', 'logline', 'premise', 'styleNotes', 'issueCountTarget', 'worldId'];
+    const fields = ['name', 'logline', 'premise', 'styleNotes', 'issueCountTarget', 'universeId'];
     const dirty = fields.some((k) => (series[k] ?? '') !== (saved[k] ?? ''))
       || JSON.stringify(series.characters || []) !== JSON.stringify(saved.characters || [])
       || JSON.stringify(series.llm || {}) !== JSON.stringify(saved.llm || {});
@@ -101,7 +101,7 @@ export default function PipelineSeries() {
       name: series.name,
       logline: series.logline,
       premise: series.premise,
-      worldId: series.worldId || null,
+      universeId: series.universeId || null,
       styleNotes: series.styleNotes,
       issueCountTarget: series.issueCountTarget,
       characters: series.characters,
@@ -158,7 +158,7 @@ export default function PipelineSeries() {
 
   // Mobile = flex column (grid template ignored); lg+ = grid where the inline
   // `gridTemplateColumns` swap between collapsed/expanded widths takes effect.
-  // Mirrors the WorldBuilder full-bleed layout so the bible rail sits flush
+  // Mirrors the UniverseBuilder full-bleed layout so the bible rail sits flush
   // against the main app sidebar instead of floating inside Layout padding.
   const desktopGridCols = sidebarCollapsed ? '32px minmax(0, 1fr)' : '360px minmax(0, 1fr)';
 
@@ -184,7 +184,7 @@ export default function PipelineSeries() {
           <aside className="border-b lg:border-b-0 lg:border-r border-port-border bg-port-card/40 lg:overflow-y-auto">
             <BibleSidebar
               series={series}
-              worlds={worlds}
+              universes={universes}
               patchSeries={patchSeries}
               onAddCharacter={handleAddCharacter}
               onUpdateCharacter={handleUpdateCharacter}
@@ -234,7 +234,7 @@ export default function PipelineSeries() {
   );
 }
 
-function BibleSidebar({ series, worlds, patchSeries, onAddCharacter, onUpdateCharacter, onRemoveCharacter, onCollapse }) {
+function BibleSidebar({ series, universes, patchSeries, onAddCharacter, onUpdateCharacter, onRemoveCharacter, onCollapse }) {
   return (
     <section className="px-3 py-3 space-y-4">
       <div className="flex items-center justify-between">
@@ -303,22 +303,22 @@ function BibleSidebar({ series, worlds, patchSeries, onAddCharacter, onUpdateCha
         />
       </Field>
 
-      <Field label="Linked World (from World Builder)">
+      <Field label="Linked World (from Universe Builder)">
         <div className="flex items-center gap-2">
           <select
-            value={series.worldId || ''}
-            onChange={(e) => patchSeries({ worldId: e.target.value || null })}
+            value={series.universeId || ''}
+            onChange={(e) => patchSeries({ universeId: e.target.value || null })}
             className="flex-1 px-3 py-2 bg-port-bg border border-port-border rounded text-white"
           >
             <option value="">— None —</option>
-            {worlds.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
+            {universes.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
           </select>
           <Link
-            to={series.worldId ? `/world-builder` : '/world-builder'}
+            to={series.universeId ? `/universe-builder` : '/universe-builder'}
             className="inline-flex items-center gap-1 text-xs text-port-accent hover:underline whitespace-nowrap"
           >
             <Globe size={12} />
-            {series.worldId ? 'Open' : 'Create'}
+            {series.universeId ? 'Open' : 'Create'}
           </Link>
         </div>
       </Field>

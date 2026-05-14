@@ -1,14 +1,14 @@
 /**
- * World Builder — refine the 3 top-level prompts (starter idea, style prompt,
+ * Universe Builder — refine the 3 top-level prompts (starter idea, style prompt,
  * negative prompt) based on user feedback. Mirrors the media prompt-refine
- * flow (see `mediaPromptRefiner.js`) but operates on a world template rather
+ * flow (see `mediaPromptRefiner.js`) but operates on a universe template rather
  * than an individual render.
  *
  * The LLM gets the originals + a free-form feedback string and returns:
  *   { starterPrompt, stylePrompt, negativePrompt, rationale, changes? }
  *
  * The caller (route → UI) presents the refined fields for review before they
- * overwrite the draft, so the LLM never silently mutates a saved world.
+ * overwrite the draft, so the LLM never silently mutates a saved universe.
  */
 
 import { ServerError } from "../lib/errorHandler.js";
@@ -18,7 +18,7 @@ import { resolveEffectiveModel } from "../lib/promptRunner.js";
 import {
   renderCategoriesForPrompt as renderCategoriesShared,
   renderCompositesForPrompt as renderCompositesShared,
-} from "../lib/worldPromptRenderers.js";
+} from "../lib/universePromptRenderers.js";
 import {
   COMPOSITE_PROMPT_MAX,
   COMPOSITE_SHEETS_MAX,
@@ -40,7 +40,7 @@ import {
   sanitizeCompositeSheets,
   sanitizeInfluences,
   sanitizeLocked,
-} from "./worldBuilder.js";
+} from "./universeBuilder.js";
 
 const MAX_FEEDBACK = 3000;
 const MAX_RATIONALE = 1200;
@@ -191,20 +191,20 @@ ${lockedRules.join("\n")}
 
   const structureRules = hasStructure
     ? `
-STRUCTURE RULES (the world has been expanded — categories and composite sheets are part of this refinement):
+STRUCTURE RULES (the universe has been expanded — categories and composite sheets are part of this refinement):
 - Each category groups related prompt variations (factions, characters, vehicles, etc.). Each variation is { "label", "prompt" } and may be flagged [LOCKED].
 - Each composite sheet is a multi-subject board (kind "reference_sheet" or "world_pitch_poster") with { "label", "prompt" }, also [LOCKED]-flaggable.
 - Variations / composites flagged [LOCKED] must be returned with their EXACT original label + prompt — do not rephrase, expand, trim, or "lightly clean up" them. The server discards changes to locked items.
 - Unlocked variations / composites may be rewritten, replaced (same label, new prompt), or REMOVED if the user's feedback warrants it. Removing an item means omitting it from the response.
 - EXPLICIT REMOVAL IS A DIRECT ORDER. If the user names a specific variation, composite, faction, character, location, or other entity to remove ("drop X", "remove X", "delete X", "get rid of X", "no more X"), you MUST:
   (a) OMIT any variation whose label matches X from the response entirely (do not return it under a renamed label either).
-  (b) OMIT any composite sheet whose primary subject IS X — even if a sibling subject remains. For example, if the user removes "Faction A" and a sheet is titled "Faction A vs Faction B branding sheet", omit the whole sheet; replace it with a single-subject sheet for Faction B only if the world still warrants it.
+  (b) OMIT any composite sheet whose primary subject IS X — even if a sibling subject remains. For example, if the user removes "Faction A" and a sheet is titled "Faction A vs Faction B branding sheet", omit the whole sheet; replace it with a single-subject sheet for Faction B only if the universe still warrants it.
   (c) SCRUB every textual reference to X from the prompts of any remaining unlocked composites and variations (faction lists, inset panels, comparison columns, callouts, etc.). Rewrite those prompts so X is not mentioned. If a remaining unlocked composite's prompt becomes incoherent once X is scrubbed, remove that composite too.
   (d) References to X inside LOCKED items (locked variations, locked composites, locked narrative fields) cannot be edited — leave them, but do not let them tempt you into re-adding X under a new label. The server will not re-add X just because a locked field still mentions it.
 - You MAY ADD new variations to any existing category, propose ENTIRELY NEW categories, and ADD new composite sheets when the feedback motivates it. Use snake_case keys for new category names (e.g. "secret_rituals").
 - Keep category counts manageable: at most ${WORLD_CATEGORY_COUNT_MAX} total categories, ${VARIATIONS_PER_CATEGORY_MAX} variations per category, ${COMPOSITE_SHEETS_MAX} composite sheets.
 - Variation prompts ≤${PROMPT_FRAGMENT_MAX} chars; composite prompts ≤${COMPOSITE_PROMPT_MAX} chars; labels ≤${VARIATION_LABEL_MAX} chars.
-- When updating an unlocked composite that references a renamed/removed variation, update the composite's prompt to match — keep the world internally consistent.
+- When updating an unlocked composite that references a renamed/removed variation, update the composite's prompt to match — keep the universe internally consistent.
 - For LOCKED influence lists in this refine: preserve every existing token IN ORDER, but you MAY APPEND new tokens at the end. You may NOT remove, reorder, or rewrite existing locked tokens. The server enforces order preservation regardless.
 `
     : "";
@@ -225,16 +225,16 @@ ${renderCompositesForPrompt(compositeSheets) || "  (none)"}
   "compositeSheets": [ { "kind": "reference_sheet" | "world_pitch_poster", "label": "<short label>", "prompt": "<full board prompt>", "locked": true } ]`
     : "";
 
-  return `You are a senior world-building editor for a Stable-Diffusion-style image-generation pipeline AND a story-bible drafter for a comic/TV production pipeline.
+  return `You are a senior universe-building editor for a Stable-Diffusion-style image-generation pipeline AND a story-bible drafter for a comic/TV production pipeline.
 
-The user has seven top-level fields that define a "world":
-- STARTER IDEA — the high-concept seed the world expander fans out into categories.
+The user has seven top-level fields that define a "universe":
+- STARTER IDEA — the high-concept seed the universe expander fans out into categories.
 - STYLE PROMPT — comma-separated visual style tokens prepended to every render (palette, lighting, render quality, artist references).
 - NEGATIVE PROMPT — comma-separated tokens to avoid in renders.
 - LOGLINE — one-sentence narrative hook.
 - PREMISE — 1-3 paragraph elevator pitch (setting, conflict, stakes, tone).
 - STYLE NOTES — narrative-side prose about references, mood, palette, pacing, voice.
-- INFLUENCES — structured { embrace: [string], avoid: [string] } reference list. The renderer prepends embrace verbatim to the style prompt and avoid verbatim to the negative prompt, so this is the canonical record of "what direction is this world pointing." Each entry is a short prompt-token-style label (e.g. "Moebius", "cel-shading", "Ghibli painterly"). Max 30 entries per list, max 120 chars each.
+- INFLUENCES — structured { embrace: [string], avoid: [string] } reference list. The renderer prepends embrace verbatim to the style prompt and avoid verbatim to the negative prompt, so this is the canonical record of "what direction is this universe pointing." Each entry is a short prompt-token-style label (e.g. "Moebius", "cel-shading", "Ghibli painterly"). Max 30 entries per list, max 120 chars each.
 
 The user has given feedback about the story, mood, style, or design they want refined. Rewrite ALL seven fields so they more faithfully express the user's intention and stay internally consistent. Output the COMPLETE rewritten text/values for each — not a placeholder, not a summary, not a diff.
 
@@ -252,10 +252,10 @@ ${lockedSection}Return ONLY valid JSON in this schema (replace every <…> with 
 }
 
 Rules:
-- Preserve story/character/world DNA from the originals unless the user's feedback explicitly contradicts it.
+- Preserve story/character/universe DNA from the originals unless the user's feedback explicitly contradicts it.
 - The "starterPrompt" stays a clean high-concept seed — no category content (landscapes, factions, etc.) and no style-direction prose. The structured "influences" field carries that direction so re-expansions inherit it deterministically.
 - The "stylePrompt" must be comma-separated visual-style tokens only. No subject nouns. No camera/aspect tokens. Under 400 characters. It SHOULD echo every "embrace" influence so the prompt is self-contained even before the structured prepend kicks in.
-- The "negativePrompt" must be comma-separated tokens. It SHOULD echo every "avoid" influence. If the world relies on text/typography (e.g. pitch posters), avoid putting "text" in negatives — prefer "watermark, logo, unreadable tiny text, text artifacts".
+- The "negativePrompt" must be comma-separated tokens. It SHOULD echo every "avoid" influence. If the universe relies on text/typography (e.g. pitch posters), avoid putting "text" in negatives — prefer "watermark, logo, unreadable tiny text, text artifacts".
 - The "influences" lists are the canonical reference set. Add what the user's feedback embraces, drop what's no longer relevant, and add explicit avoids for things they're moving away from. Keep entries short (a name, a movement, a palette descriptor) — they're prepended verbatim to the renderer prompt.
 - The "logline", "premise", and "styleNotes" must stay narratively coherent with the refined influences and style prompts.
 - Apply the user's feedback decisively. If they ask for a different style/mood/era, move toward it in influences + style prompt + styleNotes, and name the things to avoid in negativePrompt + influences.avoid.
@@ -354,7 +354,7 @@ async function runRefine(provider, model, prompt) {
     providerId: provider.id,
     model,
     prompt,
-    source: "world-builder-refine",
+    source: "universe-builder-refine",
   });
 
   let text = "";
@@ -365,7 +365,7 @@ async function runRefine(provider, model, prompt) {
     const onComplete = (result) => {
       if (result?.error || result?.success === false) {
         reject(
-          new ServerError(result?.error || "World refinement failed", {
+          new ServerError(result?.error || "Universe refinement failed", {
             status: 502,
             code: "WORLD_REFINE_FAILED",
           }),
@@ -408,7 +408,7 @@ async function runRefine(provider, model, prompt) {
 }
 
 /**
- * Refine world fields. Operates in two modes:
+ * Refine universe fields. Operates in two modes:
  *  - Bible-only (pre-Expand): categories + compositeSheets omitted; behavior
  *    matches the original refine — rewrite the seven scalar/influence fields
  *    per feedback.
@@ -482,7 +482,7 @@ export async function refineWorldPrompts({
     : null;
   if (!provider) provider = await getActiveProvider();
   if (!provider) {
-    throw new ServerError("No AI provider available for world refinement", {
+    throw new ServerError("No AI provider available for universe refinement", {
       status: 400,
       code: "NO_PROVIDER",
     });
@@ -500,7 +500,7 @@ export async function refineWorldPrompts({
   // decision table.
   const selectedModel = resolveEffectiveModel(provider, model) || "";
   if (!selectedModel && provider.type === "api") {
-    throw new ServerError("Model is required for world refinement", {
+    throw new ServerError("Model is required for universe refinement", {
       status: 400,
       code: "MODEL_REQUIRED",
     });
@@ -533,7 +533,7 @@ export async function refineWorldPrompts({
     parsed = extractRefinementJson(text || "");
   } catch (e) {
     console.warn(
-      `⚠️ world-refine [${provider.id}/${selectedModel || "default"} runId=${runId}] parse failed: ${e.message} (response size: ${(text || "").length} chars)`,
+      `⚠️ universe-refine [${provider.id}/${selectedModel || "default"} runId=${runId}] parse failed: ${e.message} (response size: ${(text || "").length} chars)`,
     );
     throw new ServerError(e.message, {
       status: 502,

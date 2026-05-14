@@ -19,7 +19,7 @@ vi.mock('crypto', async () => {
 });
 
 // Stub the LLM expander so the route test doesn't shell out to a real provider.
-vi.mock('../services/worldBuilderExpand.js', () => ({
+vi.mock('../services/universeBuilderExpand.js', () => ({
   expandWorldTemplate: vi.fn(async ({ starterPrompt }) => ({
     stylePrompt: 'mocked style for ' + starterPrompt,
     negativePrompt: 'blurry',
@@ -32,7 +32,7 @@ vi.mock('../services/worldBuilderExpand.js', () => ({
     },
     compositeSheets: [
       { kind: 'reference_sheet', label: 'Mock costume sheet', prompt: 'mocked complete costume reference sheet with lineup, materials, fasteners, palette' },
-      { kind: 'world_pitch_poster', label: 'Mock world pitch poster', prompt: 'mocked world summary concept pitch poster with hero panorama, inset cultures, palette, materials, and theme icons' },
+      { kind: 'world_pitch_poster', label: 'Mock universe pitch poster', prompt: 'mocked universe summary concept pitch poster with hero panorama, inset cultures, palette, materials, and theme icons' },
     ],
     llm: { provider: 'anthropic', model: 'claude' },
   })),
@@ -74,17 +74,17 @@ vi.mock('../lib/mediaModels.js', () => ({
   isErnie: () => false,
 }));
 
-const worldBuilderRoutes = (await import('./worldBuilder.js')).default;
+const universeBuilderRoutes = (await import('./universeBuilder.js')).default;
 
 const buildApp = () => {
   const app = express();
   app.use(express.json());
-  app.use('/api/world-builder', worldBuilderRoutes);
+  app.use('/api/universe-builder', universeBuilderRoutes);
   app.use(errorMiddleware);
   return app;
 };
 
-describe('world-builder routes', () => {
+describe('universe-builder routes', () => {
   beforeEach(() => {
     fileStore.clear();
     uuidCounter = 0;
@@ -92,27 +92,27 @@ describe('world-builder routes', () => {
   });
 
   it('GET / returns []', async () => {
-    const res = await request(buildApp()).get('/api/world-builder');
+    const res = await request(buildApp()).get('/api/universe-builder');
     expect(res.status).toBe(200);
     expect(res.body).toEqual([]);
   });
 
-  it('POST / creates a world', async () => {
+  it('POST / creates a universe', async () => {
     const res = await request(buildApp())
-      .post('/api/world-builder')
-      .send({ name: 'My World', starterPrompt: 'cyber forest' });
+      .post('/api/universe-builder')
+      .send({ name: 'My Universe', starterPrompt: 'cyber forest' });
     expect(res.status).toBe(201);
     expect(res.body.id).toBe('uuid-1');
-    expect(res.body.name).toBe('My World');
+    expect(res.body.name).toBe('My Universe');
     // All five categories populated even when not supplied.
     expect(Object.keys(res.body.categories).sort()).toEqual(
       ['characters', 'environments', 'landscapes', 'structures', 'vehicles'],
     );
   });
 
-  it('POST / accepts dynamic world-building categories', async () => {
+  it('POST / accepts dynamic universe-building categories', async () => {
     const res = await request(buildApp())
-      .post('/api/world-builder')
+      .post('/api/universe-builder')
       .send({
         name: 'Colonies',
         categories: {
@@ -127,7 +127,7 @@ describe('world-builder routes', () => {
 
   it('POST / accepts composite sheet prompts', async () => {
     const res = await request(buildApp())
-      .post('/api/world-builder')
+      .post('/api/universe-builder')
       .send({
         name: 'Sheets',
         compositeSheets: [
@@ -140,13 +140,13 @@ describe('world-builder routes', () => {
     expect(res.body.compositeSheets[0].label).toBe('Gas-Giant Drifters sheet');
   });
 
-  it('POST / accepts world pitch poster composite prompts', async () => {
+  it('POST / accepts universe pitch poster composite prompts', async () => {
     const res = await request(buildApp())
-      .post('/api/world-builder')
+      .post('/api/universe-builder')
       .send({
         name: 'Pitch Posters',
         compositeSheets: [
-          { kind: 'world_pitch_poster', label: 'World summary concept pitch poster', prompt: 'Create a cinematic world summary concept pitch poster with hero panorama, inset environments, cultures, creatures, visual language strip, color palette, materials, light atmosphere, and theme icons.' },
+          { kind: 'world_pitch_poster', label: 'Universe summary concept pitch poster', prompt: 'Create a cinematic universe summary concept pitch poster with hero panorama, inset environments, cultures, creatures, visual language strip, color palette, materials, light atmosphere, and theme icons.' },
         ],
       });
     expect(res.status).toBe(201);
@@ -156,34 +156,34 @@ describe('world-builder routes', () => {
 
   it('POST / rejects missing name', async () => {
     const res = await request(buildApp())
-      .post('/api/world-builder')
+      .post('/api/universe-builder')
       .send({ starterPrompt: 'cyber forest' });
     expect(res.status).toBe(400);
   });
 
   it('PATCH /:id updates fields', async () => {
     const app = buildApp();
-    const c = await request(app).post('/api/world-builder').send({ name: 'A' });
+    const c = await request(app).post('/api/universe-builder').send({ name: 'A' });
     const res = await request(app)
-      .patch(`/api/world-builder/${c.body.id}`)
+      .patch(`/api/universe-builder/${c.body.id}`)
       .send({ name: 'B', stylePrompt: 'oil painting' });
     expect(res.status).toBe(200);
     expect(res.body.name).toBe('B');
     expect(res.body.stylePrompt).toBe('oil painting');
   });
 
-  it('DELETE /:id removes the world', async () => {
+  it('DELETE /:id removes the universe', async () => {
     const app = buildApp();
-    const c = await request(app).post('/api/world-builder').send({ name: 'A' });
-    const del = await request(app).delete(`/api/world-builder/${c.body.id}`);
+    const c = await request(app).post('/api/universe-builder').send({ name: 'A' });
+    const del = await request(app).delete(`/api/universe-builder/${c.body.id}`);
     expect(del.status).toBe(200);
-    const list = await request(app).get('/api/world-builder');
+    const list = await request(app).get('/api/universe-builder');
     expect(list.body).toEqual([]);
   });
 
   it('POST /expand returns LLM expansion', async () => {
     const res = await request(buildApp())
-      .post('/api/world-builder/expand')
+      .post('/api/universe-builder/expand')
       .send({ starterPrompt: 'moebius scifi' });
     expect(res.status).toBe(200);
     expect(res.body.stylePrompt).toContain('moebius scifi');
@@ -194,7 +194,7 @@ describe('world-builder routes', () => {
 
   it('POST /:id/render queues image jobs and records run', async () => {
     const app = buildApp();
-    const created = await request(app).post('/api/world-builder').send({
+    const created = await request(app).post('/api/universe-builder').send({
       name: 'Render Test',
       stylePrompt: 'style',
       negativePrompt: 'neg',
@@ -204,21 +204,21 @@ describe('world-builder routes', () => {
       },
     });
     const res = await request(app)
-      .post(`/api/world-builder/${created.body.id}/render`)
+      .post(`/api/universe-builder/${created.body.id}/render`)
       .send({ batchPerVariation: 2, mode: 'local' });
     expect(res.status).toBe(200);
     expect(res.body.promptCount).toBe(6); // 3 variations × 2 batch
     expect(res.body.jobIds).toHaveLength(6);
     expect(res.body.collectionId).toBe('col-1');
     // Run is recorded.
-    const runs = await request(app).get(`/api/world-builder/${created.body.id}/runs`);
+    const runs = await request(app).get(`/api/universe-builder/${created.body.id}/runs`);
     expect(runs.body).toHaveLength(1);
     expect(runs.body[0].promptCount).toBe(6);
   });
 
   it('POST /:id/render queues custom category prompts', async () => {
     const app = buildApp();
-    const created = await request(app).post('/api/world-builder').send({
+    const created = await request(app).post('/api/universe-builder').send({
       name: 'Clothing',
       stylePrompt: 'moebius, clean reference sheet',
       categories: {
@@ -226,7 +226,7 @@ describe('world-builder routes', () => {
       },
     });
     const res = await request(app)
-      .post(`/api/world-builder/${created.body.id}/render`)
+      .post(`/api/universe-builder/${created.body.id}/render`)
       .send({ mode: 'local', selection: { clothing_styles: 'all' } });
     expect(res.status).toBe(200);
     expect(res.body.promptCount).toBe(1);
@@ -235,7 +235,7 @@ describe('world-builder routes', () => {
 
   it('POST /:id/render queues composite sheet prompts', async () => {
     const app = buildApp();
-    const created = await request(app).post('/api/world-builder').send({
+    const created = await request(app).post('/api/universe-builder').send({
       name: 'Composite Clothing',
       stylePrompt: 'moebius, clean reference sheet',
       compositeSheets: [
@@ -243,57 +243,57 @@ describe('world-builder routes', () => {
       ],
     });
     const res = await request(app)
-      .post(`/api/world-builder/${created.body.id}/render`)
+      .post(`/api/universe-builder/${created.body.id}/render`)
       .send({ mode: 'local', promptMode: 'sheets' });
     expect(res.status).toBe(200);
     expect(res.body.promptCount).toBe(1);
     expect(res.body.jobIds).toHaveLength(1);
   });
 
-  it('POST /:id/render reuses the same collection on repeat renders of the same world', async () => {
+  it('POST /:id/render reuses the same collection on repeat renders of the same universe', async () => {
     const app = buildApp();
-    const created = await request(app).post('/api/world-builder').send({
-      name: 'Repeat World',
+    const created = await request(app).post('/api/universe-builder').send({
+      name: 'Repeat Universe',
       categories: {
         landscapes: { variations: [{ label: 'A', prompt: 'a' }] },
       },
     });
     const first = await request(app)
-      .post(`/api/world-builder/${created.body.id}/render`)
+      .post(`/api/universe-builder/${created.body.id}/render`)
       .send({ mode: 'local' });
     expect(first.status).toBe(200);
     const second = await request(app)
-      .post(`/api/world-builder/${created.body.id}/render`)
+      .post(`/api/universe-builder/${created.body.id}/render`)
       .send({ mode: 'local' });
     expect(second.status).toBe(200);
     expect(second.body.collectionId).toBe(first.body.collectionId);
-    // The auto-generated name has no date suffix — bare `World: <name>`.
-    expect(second.body.collectionName).toBe('World: Repeat World');
+    // The auto-generated name has no date suffix — bare `Universe: <name>`.
+    expect(second.body.collectionName).toBe('Universe: Repeat Universe');
     expect(second.body.collectionName).not.toMatch(/\d{4}-\d{2}-\d{2}/);
   });
 
   it('POST /:id/render reuses an existing collection when collectionName matches', async () => {
     const app = buildApp();
-    const created = await request(app).post('/api/world-builder').send({
-      name: 'Custom Bucket World',
+    const created = await request(app).post('/api/universe-builder').send({
+      name: 'Custom Bucket Universe',
       categories: {
         landscapes: { variations: [{ label: 'A', prompt: 'a' }] },
       },
     });
     const first = await request(app)
-      .post(`/api/world-builder/${created.body.id}/render`)
+      .post(`/api/universe-builder/${created.body.id}/render`)
       .send({ mode: 'local', collectionName: 'Shared Bucket' });
     const second = await request(app)
-      .post(`/api/world-builder/${created.body.id}/render`)
+      .post(`/api/universe-builder/${created.body.id}/render`)
       .send({ mode: 'local', collectionName: '  shared bucket  ' });
     expect(second.body.collectionId).toBe(first.body.collectionId);
   });
 
   it('POST /:id/render rejects when no variations exist', async () => {
     const app = buildApp();
-    const created = await request(app).post('/api/world-builder').send({ name: 'Empty' });
+    const created = await request(app).post('/api/universe-builder').send({ name: 'Empty' });
     const res = await request(app)
-      .post(`/api/world-builder/${created.body.id}/render`)
+      .post(`/api/universe-builder/${created.body.id}/render`)
       .send({ mode: 'local' });
     expect(res.status).toBe(400);
     expect(res.body.code).toBe('WORLD_BUILDER_EMPTY');

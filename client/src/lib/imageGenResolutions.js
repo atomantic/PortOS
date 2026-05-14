@@ -1,5 +1,5 @@
 // Shared resolution presets for image generation. Used by the standalone
-// Image Gen page and the World Builder batch render so the size dropdown
+// Image Gen page and the Universe Builder batch render so the size dropdown
 // stays consistent everywhere.
 //
 // Entries without a `compatible` field are universal. The non-universal

@@ -27,7 +27,7 @@ import { enqueueJob } from '../mediaJobQueue/index.js';
 import { getSettings } from '../settings.js';
 import { getSeries } from './series.js';
 import { getIssue, updateStage, VISUAL_STAGE_IDS } from './issues.js';
-import { getWorld } from '../worldBuilder.js';
+import { getUniverse } from '../universeBuilder.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import {
   buildScenePrompt, buildSettingByKey, matchSceneSetting,
@@ -59,7 +59,7 @@ const loadBibleContext = async (issueId) => {
   const issueChain = (async () => {
     const issue = await getIssue(issueId);
     const series = await getSeries(issue.seriesId);
-    const world = series.worldId ? await getWorld(series.worldId).catch(() => null) : null;
+    const world = series.universeId ? await getUniverse(series.universeId).catch(() => null) : null;
     return { issue, series, world };
   })();
   const [chain, settings] = await Promise.all([issueChain, getSettings()]);

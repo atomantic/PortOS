@@ -32,7 +32,7 @@ describe('pipeline series service', () => {
       name: 'Salt Run',
       logline: 'A foundry city goes silent.',
       premise: 'Long-form premise about a salt-mining city...',
-      worldId: 'world-123',
+      universeId: 'world-123',
       styleNotes: 'moebius linework, washed sepia',
       targetFormat: 'comic+tv',
       issueCountTarget: 6,
@@ -44,7 +44,7 @@ describe('pipeline series service', () => {
     expect(s.id).toMatch(/^ser-/);
     expect(s.name).toBe('Salt Run');
     expect(s.logline).toBe('A foundry city goes silent.');
-    expect(s.worldId).toBe('world-123');
+    expect(s.universeId).toBe('world-123');
     expect(s.targetFormat).toBe('comic+tv');
     expect(s.issueCountTarget).toBe(6);
     // Empty-name character dropped; Lina gets a chr- id.

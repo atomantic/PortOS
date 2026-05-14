@@ -153,7 +153,7 @@ When working **directly in the Claude Code TUI** with the user driving, edit the
   console.error(`❌ Failed to connect: ${err.message}`);
   ```
 - **LLM response merging — distinguish absent vs intentionally empty.** When merging an LLM response with existing state, "key absent" must preserve the original while "key present with empty value" must apply the intentional clear. Don't use `.length` truthiness as the signal — that conflates the two cases and silently restores values the user (or LLM) just cleared. Conventions:
-  - Strings: treat `null`/`undefined` as absent, `""` as a clear. Server helpers like `worldBuilderExpand.trimField` should return `null` for non-strings, not `""`.
+  - Strings: treat `null`/`undefined` as absent, `""` as a clear. Server helpers like `universeBuilderExpand.trimField` should return `null` for non-strings, not `""`.
   - Arrays/objects: gate on `Array.isArray(parsed?.field)` / `typeof parsed?.field === 'object'` before deciding to fall back to the original.
   - Keep server-side merges and the client's `pick` helpers mirrored — a one-sided change breaks the round-trip.
 - **Schema parity when adding fields.** When you add a field to a sanitizer, `createXxx`, or a payload shape, update the corresponding Zod schema (`server/lib/aiToolkit/validation.js` for toolkit shapes, `server/lib/validation.js` for PortOS routes) in the same change. Wire validation into POST and PUT (PUT can use `schema.partial()`); the PortOS convention is *all* inputs validated. Tolerate UI sentinels (`endpoint: ''` for CLI providers) with `z.preprocess(v => v === '' ? undefined : v, …)`. When a service migrates legacy keys on read, the schema must still accept the legacy shape so older clients don't 400 before the migration runs.

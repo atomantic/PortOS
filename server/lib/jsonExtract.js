@@ -10,11 +10,11 @@
  *
  * This module collapses three near-identical extractors that all solved
  * the same problem:
- *   - worldBuilderExpand.js — string-aware brace walker + repair passes
+ *   - universeBuilderExpand.js — string-aware brace walker + repair passes
  *   - mediaPromptRefiner.js#extractRefinementJson — brace walker without repairs
  *   - stageRunner.js#extractJson — greedy regex
  *
- * The richest implementation (worldBuilderExpand) is promoted here and
+ * The richest implementation (universeBuilderExpand) is promoted here and
  * the three callers import from this file with optional shape predicates.
  */
 

@@ -33,6 +33,7 @@ import { join, basename, resolve as resolvePath, sep as PATH_SEP } from 'node:pa
 import { readFile, writeFile } from 'fs/promises';
 import { STYLE_PRESETS } from '../lib/writersRoomStylePresets.js';
 import { cleanImageBuffer, CLEAN_LEVELS } from './imageClean.js';
+import { purgeImageRefFromAllSeries } from '../services/pipeline/series.js';
 
 const router = Router();
 
@@ -316,7 +317,19 @@ router.post('/cancel', asyncHandler(async (req, res) => {
 }));
 
 router.delete('/:filename', asyncHandler(async (req, res) => {
-  res.json(await local.deleteImage(req.params.filename));
+  const result = await local.deleteImage(req.params.filename);
+  // Sync pipeline-series noun imageRefs[] so a deleted gallery image stops
+  // showing as a stale thumbnail on the Nouns stage. Best-effort: a series
+  // read/write failure must not block the gallery delete from succeeding.
+  const purge = await purgeImageRefFromAllSeries(req.params.filename)
+    .catch((err) => {
+      console.warn(`⚠️ Pipeline ref purge failed for ${req.params.filename}: ${err?.message || err}`);
+      return { removed: 0 };
+    });
+  if (purge.removed > 0) {
+    console.log(`🧹 Purged ${purge.removed} pipeline noun ref(s) for ${req.params.filename}`);
+  }
+  res.json({ ...result, pipelineRefsRemoved: purge.removed });
 }));
 
 router.post('/:filename/visibility', asyncHandler(async (req, res) => {

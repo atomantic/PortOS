@@ -15,7 +15,7 @@ import {
   listPipelineSeries,
   createPipelineSeries,
   deletePipelineSeries,
-  listWorlds,
+  listUniverses,
   WORLD_LOGLINE_MAX,
   WORLD_PREMISE_MAX,
   WORLD_STYLE_NOTES_MAX,
@@ -23,7 +23,7 @@ import {
 
 const emptyForm = () => ({
   name: '',
-  worldId: '',
+  universeId: '',
   logline: '',
   premise: '',
   styleNotes: '',
@@ -31,7 +31,7 @@ const emptyForm = () => ({
 
 export default function Pipeline() {
   const [series, setSeries] = useState([]);
-  const [worlds, setWorlds] = useState([]);
+  const [universes, setWorlds] = useState([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [showForm, setShowForm] = useState(false);
@@ -40,10 +40,10 @@ export default function Pipeline() {
   useEffect(() => {
     Promise.all([
       listPipelineSeries().catch(() => []),
-      // Worlds are optional — failing the fetch should still let the user
+      // Universes are optional — failing the fetch should still let the user
       // create a series without one. Surface the error as a quiet toast.
-      listWorlds().catch((err) => {
-        toast.error(err.message || 'Failed to load worlds');
+      listUniverses().catch((err) => {
+        toast.error(err.message || 'Failed to load universes');
         return [];
       }),
     ]).then(([s, w]) => {
@@ -57,18 +57,18 @@ export default function Pipeline() {
   // form fields that are currently empty so a user who's already typed a
   // logline doesn't lose it when they pick a world afterwards.
   const BIBLE_FIELDS = ['logline', 'premise', 'styleNotes'];
-  const handleWorldChange = (worldId) => {
-    if (!worldId) {
-      setForm((f) => ({ ...f, worldId: '' }));
+  const handleWorldChange = (universeId) => {
+    if (!universeId) {
+      setForm((f) => ({ ...f, universeId: '' }));
       return;
     }
-    const w = worlds.find((x) => x.id === worldId);
+    const w = universes.find((x) => x.id === universeId);
     if (!w) {
-      setForm((f) => ({ ...f, worldId }));
+      setForm((f) => ({ ...f, universeId }));
       return;
     }
     setForm((f) => {
-      const next = { ...f, worldId };
+      const next = { ...f, universeId };
       for (const k of BIBLE_FIELDS) {
         if (!f[k].trim()) next[k] = w[k] || '';
       }
@@ -89,7 +89,7 @@ export default function Pipeline() {
       logline: form.logline.trim(),
       premise: form.premise.trim(),
       styleNotes: form.styleNotes.trim(),
-      worldId: form.worldId || undefined,
+      universeId: form.universeId || undefined,
     }).catch((err) => {
       toast.error(err.message || 'Failed to create series');
       return null;
@@ -168,20 +168,20 @@ export default function Pipeline() {
               </label>
               <select
                 id="series-world"
-                value={form.worldId}
+                value={form.universeId}
                 onChange={(e) => handleWorldChange(e.target.value)}
                 className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
               >
                 <option value="">— None —</option>
-                {worlds.map((w) => (
+                {universes.map((w) => (
                   <option key={w.id} value={w.id}>{w.name}</option>
                 ))}
               </select>
               <p className="text-[11px] text-gray-500 mt-1">
-                {form.worldId
+                {form.universeId
                   ? 'Logline / premise / style notes pulled from the world — edit below.'
-                  : worlds.length === 0
-                    ? 'No worlds yet. Build one in Media Gen → World Builder.'
+                  : universes.length === 0
+                    ? 'No universes yet. Build one in Media Gen → Universe Builder.'
                     : 'Pick a world to auto-fill the bible.'}
               </p>
             </div>

@@ -1,5 +1,5 @@
 /**
- * World Builder page (Media Gen → World Builder).
+ * Universe Builder page (Media Gen → Universe Builder).
  *
  * Lets the user describe a universe in one starter prompt, expand it into a
  * full set of style + per-category variation prompts via the LLM of their
@@ -16,7 +16,7 @@ import {
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import {
-  listWorlds, getWorld, createWorld, updateWorld, deleteWorld, expandWorld,
+  listUniverses, getUniverse, createUniverse, updateUniverse, deleteUniverse, expandUniverse,
   renderWorld, listWorldRuns, getProviders, refineWorldPrompts, WORLD_CATEGORIES,
   WORLD_CATEGORY_KEY_MAX, COMPOSITE_PROMPT_MAX, WORLD_LOGLINE_MAX,
   WORLD_PREMISE_MAX, WORLD_STYLE_NOTES_MAX, WORLD_LOCKABLE_FIELDS,
@@ -24,7 +24,7 @@ import {
   ensureInfluences, isInfluenceLockField, mergeInfluencesWithLocks,
   listImageModels, getSettings,
 } from '../services/api';
-import InfluenceChipsInput from '../components/worldBuilder/InfluenceChipsInput';
+import InfluenceChipsInput from '../components/universeBuilder/InfluenceChipsInput';
 import BackendChipStrip from '../components/media/BackendChipStrip';
 import ImageGenControls from '../components/imageGen/ImageGenControls';
 import { deriveAvailableBackends, IMAGE_GEN_MODE } from '../lib/imageGenBackends';
@@ -80,7 +80,7 @@ const DEFAULT_RENDER_OPTS = {
   batchPerVariation: 1,
 };
 
-// Mirror of COMPOSITE_SHEET_KINDS in server/services/worldBuilder.js — keep
+// Mirror of COMPOSITE_SHEET_KINDS in server/services/universeBuilder.js — keep
 // in sync when adding kinds.
 const COMPOSITE_BOARD_KINDS = [
   { value: 'reference_sheet', label: 'Reference sheet' },
@@ -185,19 +185,19 @@ function InfluencesEditor({ influences, onChange, locked, onToggleLock }) {
   );
 }
 
-export default function WorldBuilder() {
+export default function UniverseBuilder() {
   // The selected world id lives in the URL so deep-linking + back/forward
-  // work. The page is mounted at /world-builder, /world-builder/:worldId,
-  // and /media/world-builder(/:worldId) — strip any trailing /<id> off the
+  // work. The page is mounted at /universe-builder, /universe-builder/:universeId,
+  // and /media/universe-builder(/:universeId) — strip any trailing /<id> off the
   // current pathname to derive the base for navigation back to the list.
   const params = useParams();
   const navigate = useNavigate();
   const location = useLocation();
-  const selectedId = params.worldId || null;
-  const basePath = location.pathname.replace(/\/world-builder(?:\/.*)?$/, '/world-builder');
+  const selectedId = params.universeId || null;
+  const basePath = location.pathname.replace(/\/universe-builder(?:\/.*)?$/, '/universe-builder');
   const goToWorld = (id) => navigate(id ? `${basePath}/${encodeURIComponent(id)}` : basePath);
 
-  const [worlds, setWorlds] = useState([]);
+  const [universes, setWorlds] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [expanding, setExpanding] = useState(false);
@@ -210,21 +210,21 @@ export default function WorldBuilder() {
   const [defaultMode, setDefaultMode] = useState(null);
 
   // The draft is the editable copy of the currently-selected world. New
-  // worlds start as a draft with no id; saving creates the persisted record.
+  // universes start as a draft with no id; saving creates the persisted record.
   const [draft, setDraft] = useState(emptyTemplate());
   const [newCategoryName, setNewCategoryName] = useState('');
 
   // Per-page render knobs. Persisted to localStorage so the user's
   // preferred batch size sticks across visits.
   const [renderOpts, setRenderOpts] = useState(() => {
-    const saved = localStorage.getItem('worldBuilder.renderOpts');
+    const saved = localStorage.getItem('universeBuilder.renderOpts');
     if (saved) {
       try { return { ...DEFAULT_RENDER_OPTS, ...JSON.parse(saved) }; } catch { /* fall through */ }
     }
     return DEFAULT_RENDER_OPTS;
   });
   useEffect(() => {
-    localStorage.setItem('worldBuilder.renderOpts', JSON.stringify(renderOpts));
+    localStorage.setItem('universeBuilder.renderOpts', JSON.stringify(renderOpts));
   }, [renderOpts]);
 
   const [runs, setRuns] = useState([]);
@@ -247,16 +247,16 @@ export default function WorldBuilder() {
     setRefineChanges([]);
   };
 
-  // Worlds list collapsed state — desktop only (mobile stacks the sidebar
+  // Universes list collapsed state — desktop only (mobile stacks the sidebar
   // above the editor and there's no horizontal-space tradeoff to make).
   // Persists across visits so users who prefer a maximized editor stay there.
   const [worldsCollapsed, setWorldsCollapsed] = useState(() => {
-    try { return localStorage.getItem('worldBuilder.worldsCollapsed') === '1'; } catch { return false; }
+    try { return localStorage.getItem('universeBuilder.worldsCollapsed') === '1'; } catch { return false; }
   });
   const toggleWorldsCollapsed = () => {
     setWorldsCollapsed((prev) => {
       const next = !prev;
-      try { localStorage.setItem('worldBuilder.worldsCollapsed', next ? '1' : '0'); } catch { /* sandboxed */ }
+      try { localStorage.setItem('universeBuilder.worldsCollapsed', next ? '1' : '0'); } catch { /* sandboxed */ }
       return next;
     });
   };
@@ -264,7 +264,7 @@ export default function WorldBuilder() {
   const refresh = async () => {
     setLoading(true);
     const [list, provData, models, settings] = await Promise.all([
-      listWorlds().catch(() => []),
+      listUniverses().catch(() => []),
       getProviders().catch(() => ({ providers: [] })),
       listImageModels().catch(() => []),
       getSettings().catch(() => ({})),
@@ -297,7 +297,7 @@ export default function WorldBuilder() {
     }
     let cancelled = false;
     Promise.all([
-      getWorld(selectedId).catch(() => null),
+      getUniverse(selectedId).catch(() => null),
       listWorldRuns(selectedId).catch(() => []),
     ]).then(([w, r]) => {
       if (cancelled) return;
@@ -348,8 +348,8 @@ export default function WorldBuilder() {
       llm: draft.llm || {},
     };
     const result = selectedId
-      ? await updateWorld(selectedId, payload).catch((e) => { toast.error(`Save failed: ${e.message}`); return null; })
-      : await createWorld(payload).catch((e) => { toast.error(`Save failed: ${e.message}`); return null; });
+      ? await updateUniverse(selectedId, payload).catch((e) => { toast.error(`Save failed: ${e.message}`); return null; })
+      : await createUniverse(payload).catch((e) => { toast.error(`Save failed: ${e.message}`); return null; });
     setSaving(false);
     if (result) {
       toast.success(selectedId ? 'World updated' : 'World created');
@@ -376,7 +376,7 @@ export default function WorldBuilder() {
     // delete. Otherwise the user would see both a red "Delete failed" toast
     // AND a green "World deleted" toast, with the world apparently gone from
     // the sidebar even though it's still on disk.
-    const ok = await deleteWorld(id)
+    const ok = await deleteUniverse(id)
       .then(() => true)
       .catch((e) => { toast.error(`Delete failed: ${e.message}`); return false; });
     if (!ok) return;
@@ -404,7 +404,7 @@ export default function WorldBuilder() {
     const preservedCompositeSheets = (draft.compositeSheets || []).filter((s) => s?.locked === true);
 
     setExpanding(true);
-    const result = await expandWorld({
+    const result = await expandUniverse({
       starterPrompt: draft.starterPrompt,
       // Full prior state + locks ride along so the LLM can keep its output
       // consistent with refined/pinned bible fields (see expand prompt builder).
@@ -495,7 +495,7 @@ export default function WorldBuilder() {
     setDraft(expandedDraft);
     const lockedKeys = Object.keys(locks).filter((k) => locks[k]);
     if (lockedKeys.length) {
-      console.log(`🔒 World Builder expand preserved ${lockedKeys.length} locked field(s): ${lockedKeys.join(', ')}`);
+      console.log(`🔒 Universe Builder expand preserved ${lockedKeys.length} locked field(s): ${lockedKeys.join(', ')}`);
     }
     const total = totalVariationCount(expandedDraft);
     if (expandedDraft.compositeSheets?.length) {
@@ -506,7 +506,7 @@ export default function WorldBuilder() {
     // copy still has empty categories. New (unsaved) drafts still need a
     // manual Save since they have no name yet.
     if (selectedId && expandedDraft.name?.trim()) {
-      const updated = await updateWorld(selectedId, {
+      const updated = await updateUniverse(selectedId, {
         name: expandedDraft.name.trim(),
         starterPrompt: expandedDraft.starterPrompt || '',
         stylePrompt: expandedDraft.stylePrompt || '',
@@ -555,7 +555,7 @@ export default function WorldBuilder() {
     if (Array.isArray(patch.compositeSheets)) next.compositeSheets = patch.compositeSheets;
     setDraft(next);
     if (selectedId && next.name?.trim()) {
-      const updated = await updateWorld(selectedId, {
+      const updated = await updateUniverse(selectedId, {
         name: next.name.trim(),
         starterPrompt: next.starterPrompt || '',
         stylePrompt: next.stylePrompt || '',
@@ -711,7 +711,7 @@ export default function WorldBuilder() {
       if (selectedId && next.name?.trim()) {
         // Fire-and-forget — the in-memory state already reflects the toggle;
         // on failure we toast and the next manual Save still recovers.
-        updateWorld(selectedId, { locked: nextLocked })
+        updateUniverse(selectedId, { locked: nextLocked })
           .catch((e) => toast.error(`Lock save failed: ${e.message}`));
       }
       return next;
@@ -777,8 +777,8 @@ export default function WorldBuilder() {
           <button
             onClick={toggleWorldsCollapsed}
             className="p-1.5 text-gray-500 hover:text-white"
-            title="Show worlds"
-            aria-label="Show worlds"
+            title="Show universes"
+            aria-label="Show universes"
           >
             <PanelLeftOpen size={14} />
           </button>
@@ -787,7 +787,7 @@ export default function WorldBuilder() {
         <aside className="border-b lg:border-b-0 lg:border-r border-port-border bg-port-card/40 px-3 py-3 flex flex-col gap-2 lg:overflow-y-auto">
           <div className="flex items-center justify-between">
             <h2 className="text-sm font-semibold text-white flex items-center gap-2">
-              <Globe2 size={16} className="text-port-accent" /> Worlds
+              <Globe2 size={16} className="text-port-accent" /> Universes
             </h2>
             <div className="flex items-center gap-1">
               <button
@@ -800,8 +800,8 @@ export default function WorldBuilder() {
               <button
                 onClick={toggleWorldsCollapsed}
                 className="hidden lg:inline-flex p-1.5 text-gray-500 hover:text-white"
-                title="Collapse worlds"
-                aria-label="Collapse worlds"
+                title="Collapse universes"
+                aria-label="Collapse universes"
               >
                 <PanelLeftClose size={14} />
               </button>
@@ -809,11 +809,11 @@ export default function WorldBuilder() {
           </div>
           {loading ? (
             <p className="text-xs text-gray-500">Loading…</p>
-          ) : worlds.length === 0 ? (
-            <p className="text-xs text-gray-500">No worlds yet — click <span className="text-port-accent">New</span> to start.</p>
+          ) : universes.length === 0 ? (
+            <p className="text-xs text-gray-500">No universes yet — click <span className="text-port-accent">New</span> to start.</p>
           ) : (
             <ul className="flex flex-col gap-1 overflow-y-auto">
-              {worlds.map((w) => {
+              {universes.map((w) => {
                 const active = w.id === selectedId;
                 return (
                   <li key={w.id}>

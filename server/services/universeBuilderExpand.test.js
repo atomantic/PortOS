@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { __testing } from "./worldBuilderExpand.js";
-import { WORLD_CATEGORIES } from "./worldBuilder.js";
+import { __testing } from "./universeBuilderExpand.js";
+import { WORLD_CATEGORIES } from "./universeBuilder.js";
 
 const {
   extractJson,
@@ -14,7 +14,7 @@ const EXPANSION_PROMPT = buildExpansionPrompt({
   starterPrompt: "fixture starter",
 });
 
-describe("worldBuilderExpand.extractJson", () => {
+describe("universeBuilderExpand.extractJson", () => {
   it("parses a raw JSON object", () => {
     const obj = {
       stylePrompt: "a, b, c",
@@ -86,7 +86,7 @@ describe("worldBuilderExpand.extractJson", () => {
   });
 
   it("repairs Codex CLI orphan-brace corruption (`}}]` → `}]`) inside the response", () => {
-    // Real-world: Codex produced `{"label":"...","prompt":"…blister"}}]}}}`
+    // Real-universe: Codex produced `{"label":"...","prompt":"…blister"}}]}}}`
     // — an extra `}` snuck in between the variation's close-brace and the
     // array's `]`. extractJson must recover that to a parsed expansion shape.
     const badJson =
@@ -107,12 +107,12 @@ describe("worldBuilderExpand.extractJson", () => {
     ]);
   });
 
-  it("prefers a world-expansion-shaped object over an in-prompt JSON example", () => {
+  it("prefers a universe-expansion-shaped object over an in-prompt JSON example", () => {
     // The actual prompt template includes literal JSON example variations:
     //   { "label": "Crystalline canyon basin", "prompt": "…" }
     // These are valid JSON and brace-balance cleanly, but they aren't the
     // response. extractJson must skip them and return the larger object that
-    // has the world-expansion top-level keys.
+    // has the universe-expansion top-level keys.
     const raw = [
       "codex",
       '{ "label": "Crystalline canyon basin", "prompt": "vast crystalline canyon, salt flats" }',
@@ -141,7 +141,7 @@ describe("worldBuilderExpand.extractJson", () => {
   });
 });
 
-describe("worldBuilderExpand.normalizeCategories", () => {
+describe("universeBuilderExpand.normalizeCategories", () => {
   it("returns all canonical categories with empty variations on empty input", () => {
     const out = normalizeCategories({});
     for (const key of WORLD_CATEGORIES) {
@@ -217,7 +217,7 @@ describe("worldBuilderExpand.normalizeCategories", () => {
   });
 });
 
-describe("worldBuilderExpand.normalizeCompositeSheets", () => {
+describe("universeBuilderExpand.normalizeCompositeSheets", () => {
   it("keeps complete composite reference-sheet prompts", () => {
     const out = normalizeCompositeSheets([
       {
@@ -247,21 +247,21 @@ describe("worldBuilderExpand.normalizeCompositeSheets", () => {
     ]);
   });
 
-  it("preserves world pitch poster board kind", () => {
+  it("preserves universe pitch poster board kind", () => {
     const out = normalizeCompositeSheets([
       {
         kind: "world_pitch_poster",
-        label: "World summary concept pitch poster",
+        label: "Universe summary concept pitch poster",
         prompt:
-          "Create a cinematic world summary concept pitch poster with hero panorama, inset environments, culture callouts, palette, materials, light atmosphere, and theme icons.",
+          "Create a cinematic universe summary concept pitch poster with hero panorama, inset environments, culture callouts, palette, materials, light atmosphere, and theme icons.",
       },
     ]);
     expect(out).toEqual([
       {
         kind: "world_pitch_poster",
-        label: "World summary concept pitch poster",
+        label: "Universe summary concept pitch poster",
         prompt:
-          "Create a cinematic world summary concept pitch poster with hero panorama, inset environments, culture callouts, palette, materials, light atmosphere, and theme icons.",
+          "Create a cinematic universe summary concept pitch poster with hero panorama, inset environments, culture callouts, palette, materials, light atmosphere, and theme icons.",
       },
     ]);
   });
@@ -279,22 +279,22 @@ describe("worldBuilderExpand.normalizeCompositeSheets", () => {
   });
 });
 
-describe("worldBuilderExpand.EXPANSION_PROMPT", () => {
-  it("allows dynamic world-building buckets and reference-sheet domains", () => {
+describe("universeBuilderExpand.EXPANSION_PROMPT", () => {
+  it("allows dynamic universe-building buckets and reference-sheet domains", () => {
     expect(EXPANSION_PROMPT).toContain("Add, remove, or rename buckets");
     expect(EXPANSION_PROMPT).toContain("colonies, factions, tribes, species");
     expect(EXPANSION_PROMPT).toContain("clothing guides");
     expect(EXPANSION_PROMPT).toContain("raider_clans");
     expect(EXPANSION_PROMPT).toContain("compositeSheets");
     expect(EXPANSION_PROMPT).toContain("world_pitch_poster");
-    expect(EXPANSION_PROMPT).toContain("world summary concept pitch poster");
+    expect(EXPANSION_PROMPT).toContain("universe summary concept pitch poster");
     expect(EXPANSION_PROMPT).toContain("materials swatches");
   });
 
   it("asks the LLM to emit a narrative bible (logline / premise / styleNotes)", () => {
     // The pipeline pulls these straight into the New Series form, so the
     // contract has to stay in the prompt. If this assertion fails, double-
-    // check that worldBuilderExpand.js still hydrates the three fields too.
+    // check that universeBuilderExpand.js still hydrates the three fields too.
     expect(EXPANSION_PROMPT).toContain("logline:");
     expect(EXPANSION_PROMPT).toContain("premise:");
     expect(EXPANSION_PROMPT).toContain("styleNotes:");
@@ -326,12 +326,12 @@ describe("worldBuilderExpand.EXPANSION_PROMPT", () => {
     expect(out).toContain("Avoid: Ghibli painterly");
   });
 
-  it("omits the Current world state section when no bible/prompt fields are provided", () => {
+  it("omits the Current universe state section when no bible/prompt fields are provided", () => {
     const out = buildExpansionPrompt({ starterPrompt: "seed" });
-    expect(out).not.toContain("# Current world state");
+    expect(out).not.toContain("# Current universe state");
   });
 
-  it("includes provided bible + prompt fields as Current world state context", () => {
+  it("includes provided bible + prompt fields as Current universe state context", () => {
     const out = buildExpansionPrompt({
       starterPrompt: "seed",
       priorLogline: "A foundry city goes silent.",
@@ -340,7 +340,7 @@ describe("worldBuilderExpand.EXPANSION_PROMPT", () => {
       priorStylePrompt: "moebius linework, dust palette",
       priorNegativePrompt: "blurry, lowres",
     });
-    expect(out).toContain("# Current world state");
+    expect(out).toContain("# Current universe state");
     expect(out).toContain("LOGLINE: A foundry city goes silent.");
     expect(out).toContain("PREMISE: Three families inherit the silence.");
     expect(out).toContain("STYLE NOTES: Tarkovsky pacing, Moebius palette.");
@@ -384,7 +384,7 @@ describe("worldBuilderExpand.EXPANSION_PROMPT", () => {
     expect(out).toMatch(/Avoid \[LOCKED\]: Ghibli/);
   });
 
-  it("skips empty bible/prompt fields from Current world state", () => {
+  it("skips empty bible/prompt fields from Current universe state", () => {
     const out = buildExpansionPrompt({
       starterPrompt: "seed",
       priorLogline: "Just a logline.",

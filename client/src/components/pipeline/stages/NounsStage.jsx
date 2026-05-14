@@ -19,11 +19,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   Library, Loader2, Users, MapPin, Package,
-  ImagePlus, Settings as SettingsIcon, ChevronDown, ChevronRight,
+  ImagePlus, Settings as SettingsIcon, ChevronDown, ChevronRight, WandSparkles,
 } from 'lucide-react';
 import toast from '../../ui/Toast';
-import { extractPipelineBibles, updatePipelineSeries } from '../../../services/api';
-import { getWorld } from '../../../services/apiWorldBuilder';
+import { extractPipelineBibles, updatePipelineSeries, refinePipelineCharacter } from '../../../services/api';
+import { getUniverse } from '../../../services/apiUniverseBuilder';
 import { getSettings, updateSettings, generateImage } from '../../../services/apiSystem';
 import { listImageModels } from '../../../services/apiImageVideo';
 import {
@@ -34,6 +34,7 @@ import { useAsyncAction } from '../../../hooks/useAsyncAction';
 import useMounted from '../../../hooks/useMounted';
 import useMediaJobProgress from '../../../hooks/useMediaJobProgress';
 import MediaJobThumb from '../MediaJobThumb';
+import MediaPreview from '../../media/MediaPreview';
 import Drawer from '../../Drawer';
 import ImageGenSettingsForm from '../../imageGen/ImageGenSettingsForm';
 import { deriveAvailableBackends } from '../../../lib/imageGenBackends';
@@ -76,12 +77,41 @@ export default function NounsStage({ issue, series, onSeriesUpdate }) {
   const [imageCfg, setImageCfg] = useState(PIPELINE_IMAGE_DEFAULTS);
   const [imageModels, setImageModels] = useState([]);
   const [sysSettings, setSysSettings] = useState(null);
-  const [world, setWorld] = useState(null);
+  const [universe, setUniverse] = useState(null);
   // Per-entry in-flight render: { [entryId]: jobId }. NounCard subscribes to
   // job progress and surfaces MediaJobThumb until completion — the entry's
   // imageRefs[] is only PATCHed onto the series when the job actually
   // finishes, so we never render broken <img>s for files that don't exist yet.
   const [renderingJobs, setRenderingJobs] = useState({});
+  // Shared lightbox state — a flat items list across every kind's imageRefs
+  // powers prev/next nav so the user can page through every reference image
+  // in the series without closing/reopening.
+  const [preview, setPreview] = useState(null);
+  const previewItems = useMemo(() => {
+    const items = [];
+    for (const kind of KINDS) {
+      const list = Array.isArray(series?.[kind.key]) ? series[kind.key] : [];
+      for (const entry of list) {
+        const refs = Array.isArray(entry.imageRefs) ? entry.imageRefs : [];
+        for (const filename of refs) {
+          items.push({
+            key: `noun:${filename}`,
+            kind: 'image',
+            filename,
+            previewUrl: `/data/images/${filename}`,
+            downloadUrl: `/data/images/${filename}`,
+            prompt: `${entry.name}: ${kind.descFor(entry) || ''}`.trim().replace(/:\s*$/, ''),
+          });
+        }
+      }
+    }
+    return items;
+  }, [series]);
+  const openPreview = useCallback((filename) => {
+    if (!filename) return;
+    const match = previewItems.find((i) => i.filename === filename);
+    if (match) setPreview(match);
+  }, [previewItems]);
 
   const availableBackends = useMemo(
     () => deriveAvailableBackends(sysSettings, { excludeExternal: true }),
@@ -102,19 +132,19 @@ export default function NounsStage({ issue, series, onSeriesUpdate }) {
     return () => { cancelled = true; };
   }, [mountedRef]);
 
-  // Fetch the linked world so reference renders inherit the same
+  // Fetch the linked universe so reference renders inherit the same
   // stylePrompt + negativePrompt the comic-page renderer uses. Codex can't
   // accept reference images, so a consistent aesthetic is the only knob
   // keeping ref images and comic pages visually coherent.
   useEffect(() => {
-    if (!series?.worldId) { setWorld(null); return; }
+    if (!series?.universeId) { setUniverse(null); return; }
     let cancelled = false;
-    getWorld(series.worldId).then((w) => {
+    getUniverse(series.universeId).then((w) => {
       if (cancelled || !mountedRef.current) return;
-      setWorld(w || null);
-    }).catch(() => { if (mountedRef.current) setWorld(null); });
+      setUniverse(w || null);
+    }).catch(() => { if (mountedRef.current) setUniverse(null); });
     return () => { cancelled = true; };
-  }, [series?.worldId, mountedRef]);
+  }, [series?.universeId, mountedRef]);
 
   const persistImageCfg = useCallback(async (next) => {
     setImageCfg(next);
@@ -147,6 +177,23 @@ export default function NounsStage({ issue, series, onSeriesUpdate }) {
     { errorMessage: 'Extraction failed' },
   );
 
+  // Per-character in-flight refine. Tracking by id (not a single bool) so
+  // the user can fire refines in serial without the spinner jumping cards.
+  const [refiningCharacterId, setRefiningCharacterId] = useState(null);
+  const handleRefineCharacter = useCallback(async (entryId) => {
+    if (!series || refiningCharacterId) return;
+    setRefiningCharacterId(entryId);
+    const providerId = series.llm?.provider || undefined;
+    const model = series.llm?.model || undefined;
+    const result = await refinePipelineCharacter(series.id, entryId, { providerId, model })
+      .catch((err) => { toast.error(err.message || 'Refine failed'); return null; });
+    if (mountedRef.current) setRefiningCharacterId(null);
+    if (!result || !mountedRef.current) return;
+    onSeriesUpdate?.(result.series);
+    const summary = result.rationale || (result.changes?.[0] ? result.changes[0] : 'description rewritten');
+    toast.success(`Refined description — ${summary.slice(0, 140)}`);
+  }, [series, refiningCharacterId, onSeriesUpdate, mountedRef]);
+
   const handleExtract = async () => {
     if (!series || !proseReady) return;
     const result = await runExtract();
@@ -170,14 +217,14 @@ export default function NounsStage({ issue, series, onSeriesUpdate }) {
       return;
     }
     const baseOpts = pipelineImageCfgToRenderOpts(imageCfg);
-    // Inject the world's stylePrompt as a prefix and merge negativePrompts so
+    // Inject the universe's stylePrompt as a prefix and merge negativePrompts so
     // ref images and comic pages share the same aesthetic (Codex doesn't
     // accept reference images, so style consistency comes from text alone).
     const userPrompt = `${entry.name}: ${description}`;
     const styled = composeStyledPrompt(
       userPrompt,
       baseOpts.negativePrompt || '',
-      world ? { prompt: world.stylePrompt, negativePrompt: world.negativePrompt } : null,
+      universe ? { prompt: universe.stylePrompt, negativePrompt: universe.negativePrompt } : null,
     );
     const payload = {
       ...baseOpts,
@@ -275,6 +322,9 @@ export default function NounsStage({ issue, series, onSeriesUpdate }) {
           onRender={(entry) => handleRenderRef(kind, entry)}
           onJobCompleted={(entryId, filename) => handleRefCompleted(kind.key, entryId, filename)}
           onJobFailed={handleRefFailed}
+          onPreview={openPreview}
+          onRefine={handleRefineCharacter}
+          refiningCharacterId={refiningCharacterId}
         />
       ))}
 
@@ -286,11 +336,13 @@ export default function NounsStage({ issue, series, onSeriesUpdate }) {
           availableBackends={availableBackends}
         />
       </Drawer>
+
+      <MediaPreview preview={preview} setPreview={setPreview} items={previewItems} />
     </div>
   );
 }
 
-function KindSection({ kind, all, prose, renderingJobs, onRender, onJobCompleted, onJobFailed }) {
+function KindSection({ kind, all, prose, renderingJobs, onRender, onJobCompleted, onJobFailed, onPreview, onRefine, refiningCharacterId }) {
   const Icon = kind.icon;
   const inIssue = useMemo(() => kind.match(prose, all), [prose, all, kind]);
   const inIssueIds = useMemo(() => new Set(inIssue.map((e) => e.id || e.name)), [inIssue]);
@@ -330,6 +382,10 @@ function KindSection({ kind, all, prose, renderingJobs, onRender, onJobCompleted
                   onRender={() => onRender(entry)}
                   onJobCompleted={onJobCompleted}
                   onJobFailed={onJobFailed}
+                  onPreview={onPreview}
+                  onRefine={onRefine}
+                  refining={refiningCharacterId === entry.id}
+                  refineDisabled={!!refiningCharacterId && refiningCharacterId !== entry.id}
                 />
               ))}
             </ul>
@@ -352,6 +408,10 @@ function KindSection({ kind, all, prose, renderingJobs, onRender, onJobCompleted
                   onRender={() => onRender(entry)}
                   onJobCompleted={onJobCompleted}
                   onJobFailed={onJobFailed}
+                  onPreview={onPreview}
+                  onRefine={onRefine}
+                  refining={refiningCharacterId === entry.id}
+                  refineDisabled={!!refiningCharacterId && refiningCharacterId !== entry.id}
                 />
               ))}
             </ul>
@@ -362,7 +422,7 @@ function KindSection({ kind, all, prose, renderingJobs, onRender, onJobCompleted
   );
 }
 
-function NounCard({ kind, entry, inFlightJobId, onRender, onJobCompleted, onJobFailed }) {
+function NounCard({ kind, entry, inFlightJobId, onRender, onJobCompleted, onJobFailed, onPreview, onRefine, refining = false, refineDisabled = false }) {
   const description = kind.descFor(entry);
   const refs = Array.isArray(entry.imageRefs) ? entry.imageRefs : [];
 
@@ -401,16 +461,30 @@ function NounCard({ kind, entry, inFlightJobId, onRender, onJobCompleted, onJobF
             {description || <em className="text-gray-600">No description yet.</em>}
           </p>
         </div>
-        <button
-          type="button"
-          onClick={onRender}
-          disabled={!description.trim() || !!inFlightJobId}
-          className="shrink-0 inline-flex items-center gap-1 px-2 py-1 text-[10px] rounded border border-port-border text-gray-300 hover:bg-port-border/40 hover:text-white disabled:opacity-40"
-          title={description.trim() ? `Render a canonical reference image for ${entry.name}` : 'Add a description first'}
-        >
-          {inFlightJobId ? <Loader2 size={10} className="animate-spin" /> : <ImagePlus size={10} />}
-          Render reference
-        </button>
+        <div className="shrink-0 flex flex-col gap-1 items-stretch">
+          {kind.key === 'characters' && onRefine ? (
+            <button
+              type="button"
+              onClick={() => onRefine(entry.id)}
+              disabled={refining || refineDisabled}
+              className="inline-flex items-center justify-center gap-1 px-2 py-1 text-[10px] rounded border border-port-border text-gray-300 hover:bg-port-border/40 hover:text-white disabled:opacity-40"
+              title={`Rewrite ${entry.name}'s description so they render distinct from every other character`}
+            >
+              {refining ? <Loader2 size={10} className="animate-spin" /> : <WandSparkles size={10} />}
+              AI: differentiate
+            </button>
+          ) : null}
+          <button
+            type="button"
+            onClick={onRender}
+            disabled={!description.trim() || !!inFlightJobId}
+            className="inline-flex items-center justify-center gap-1 px-2 py-1 text-[10px] rounded border border-port-border text-gray-300 hover:bg-port-border/40 hover:text-white disabled:opacity-40"
+            title={description.trim() ? `Render a canonical reference image for ${entry.name}` : 'Add a description first'}
+          >
+            {inFlightJobId ? <Loader2 size={10} className="animate-spin" /> : <ImagePlus size={10} />}
+            Render reference
+          </button>
+        </div>
       </div>
       {(refs.length > 0 || inFlightJobId) ? (
         <div className="flex items-center gap-2 mt-2 flex-wrap">
@@ -418,13 +492,12 @@ function NounCard({ kind, entry, inFlightJobId, onRender, onJobCompleted, onJobF
             <MediaJobThumb jobId={inFlightJobId} label={`${entry.name} reference`} size="sm" />
           ) : null}
           {refs.map((ref) => (
-            <a
+            <button
               key={ref}
-              href={`/data/images/${ref}`}
-              target="_blank"
-              rel="noopener noreferrer"
+              type="button"
+              onClick={() => onPreview?.(ref)}
               title={ref}
-              className="w-16 h-16 bg-port-bg rounded overflow-hidden border border-port-border hover:border-port-accent/50"
+              className="w-16 h-16 bg-port-bg rounded overflow-hidden border border-port-border hover:border-port-accent/50 cursor-zoom-in p-0"
             >
               <img
                 src={`/data/images/${ref}`}
@@ -432,7 +505,7 @@ function NounCard({ kind, entry, inFlightJobId, onRender, onJobCompleted, onJobF
                 className="w-full h-full object-cover"
                 loading="lazy"
               />
-            </a>
+            </button>
           ))}
         </div>
       ) : null}

@@ -24,6 +24,8 @@ import {
 import { getSettings, updateSettings } from '../../../services/apiSystem';
 import { listImageModels } from '../../../services/apiImageVideo';
 import MediaJobThumb from '../MediaJobThumb';
+import MediaPreview from '../../media/MediaPreview';
+import useMediaJobProgress from '../../../hooks/useMediaJobProgress';
 import Drawer from '../../Drawer';
 import ImageGenSettingsForm from '../../imageGen/ImageGenSettingsForm';
 import { deriveAvailableBackends } from '../../../lib/imageGenBackends';
@@ -77,6 +79,38 @@ export default function ComicScriptStage({ issue, series, onStageUpdate }) {
   const [imageCfg, setImageCfg] = useState(PIPELINE_IMAGE_DEFAULTS);
   const [imageModels, setImageModels] = useState([]);
   const [sysSettings, setSysSettings] = useState(null);
+  // Shared lightbox state. PageRow reports its rendered filename up via
+  // `onFilenameKnown` so the parent can build a navigable items list keyed by
+  // page order — preview prev/next walks rendered pages in page order.
+  const [preview, setPreview] = useState(null);
+  const [filenameByJobId, setFilenameByJobId] = useState({});
+  const onFilenameKnown = useCallback((jobId, filename) => {
+    if (!jobId || !filename) return;
+    setFilenameByJobId((prev) => prev[jobId] === filename ? prev : { ...prev, [jobId]: filename });
+  }, []);
+  const buildPageItem = useCallback((pageIndex, page, filename) => ({
+    key: `comic-page:${filename}`,
+    kind: 'image',
+    filename,
+    previewUrl: `/data/images/${filename}`,
+    downloadUrl: `/data/images/${filename}`,
+    prompt: page?.prompt || `Page ${pageIndex + 1}`,
+  }), []);
+  const previewItems = useMemo(() => {
+    const pageList = Array.isArray(comicPages.pages) ? comicPages.pages : [];
+    return pageList
+      .map((p, idx) => {
+        if (!p.imageJobId) return null;
+        const filename = filenameByJobId[p.imageJobId];
+        if (!filename) return null;
+        return buildPageItem(idx, p, filename);
+      })
+      .filter(Boolean);
+  }, [comicPages.pages, filenameByJobId, buildPageItem]);
+  const openPreview = useCallback((pageIndex, filename, page) => {
+    if (!filename) return;
+    setPreview(buildPageItem(pageIndex, page, filename));
+  }, [buildPageItem]);
   const availableBackends = useMemo(
     () => deriveAvailableBackends(sysSettings, { excludeExternal: true }),
     [sysSettings],
@@ -226,9 +260,13 @@ export default function ComicScriptStage({ issue, series, onStageUpdate }) {
             page={page}
             renderOpts={renderOpts}
             onStageUpdate={onStageUpdate}
+            onPreview={openPreview}
+            onFilenameKnown={onFilenameKnown}
           />
         ))}
       </ul>
+
+      <MediaPreview preview={preview} setPreview={setPreview} items={previewItems} />
 
       {hasScript ? (
         <details
@@ -258,7 +296,7 @@ export default function ComicScriptStage({ issue, series, onStageUpdate }) {
   );
 }
 
-function PageRow({ issue, pageIndex, page, renderOpts = {}, onStageUpdate }) {
+function PageRow({ issue, pageIndex, page, renderOpts = {}, onStageUpdate, onPreview, onFilenameKnown }) {
   const rawText = useMemo(
     () => page.rawText || panelsToMarkdown(page.panels, pageIndex + 1),
     [page.rawText, page.panels, pageIndex],
@@ -269,6 +307,21 @@ function PageRow({ issue, pageIndex, page, renderOpts = {}, onStageUpdate }) {
   // Sync local edits with parent updates (re-extract / re-render persist).
   useEffect(() => { setDraft(rawText); }, [rawText]);
   const dirty = draft !== rawText;
+
+  // Subscribe to the page's render job so we can (a) disable the Render
+  // button while the job is queued/running and (b) bubble the resolved
+  // filename up to the parent for lightbox nav.
+  const { status: jobStatus, filename: jobFilename } = useMediaJobProgress(page.imageJobId);
+  useEffect(() => {
+    if (page.imageJobId && jobFilename) onFilenameKnown?.(page.imageJobId, jobFilename);
+  }, [page.imageJobId, jobFilename, onFilenameKnown]);
+  // Treat 'unknown' (pre-hydration) as in-flight when a jobId exists — avoids
+  // a brief re-enable flash after page reload while the GET /media-jobs/:id
+  // catches up.
+  const jobInFlight = !!page.imageJobId
+    && jobStatus !== 'completed'
+    && jobStatus !== 'failed'
+    && jobStatus !== 'canceled';
 
   const handleSave = async () => {
     setSaving(true);
@@ -324,11 +377,15 @@ function PageRow({ issue, pageIndex, page, renderOpts = {}, onStageUpdate }) {
           <button
             type="button"
             onClick={handleRender}
-            disabled={rendering || dirty}
+            disabled={rendering || dirty || jobInFlight}
             className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs bg-port-accent text-white font-medium disabled:opacity-40"
-            title={dirty ? 'Save changes before rendering' : 'Queue a full-page render for this page'}
+            title={dirty
+              ? 'Save changes before rendering'
+              : jobInFlight
+                ? 'Render in progress…'
+                : 'Queue a full-page render for this page'}
           >
-            {rendering ? <Loader2 size={12} className="animate-spin" /> : <ImageIcon size={12} />}
+            {(rendering || jobInFlight) ? <Loader2 size={12} className="animate-spin" /> : <ImageIcon size={12} />}
             Render
           </button>
           <button
@@ -351,9 +408,14 @@ function PageRow({ issue, pageIndex, page, renderOpts = {}, onStageUpdate }) {
           className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-xs font-mono leading-relaxed"
           placeholder={`## Page ${pageIndex + 1}\n\n### Panel 1\n**Description:** ...`}
         />
-        <div className="flex items-center justify-center bg-port-bg border border-port-border rounded min-h-[200px]">
+        <div className="flex items-center justify-center bg-port-bg border border-port-border rounded min-h-[200px] overflow-hidden">
           {page.imageJobId ? (
-            <MediaJobThumb jobId={page.imageJobId} label={`Page ${pageIndex + 1}`} size="md" />
+            <MediaJobThumb
+              jobId={page.imageJobId}
+              label={`Page ${pageIndex + 1}`}
+              size="fill"
+              onPreview={(filename) => onPreview?.(pageIndex, filename, page)}
+            />
           ) : (
             <span className="text-xs text-gray-500 italic">No render yet — click <em>Render</em>.</span>
           )}

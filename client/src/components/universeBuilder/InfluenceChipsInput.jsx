@@ -26,7 +26,7 @@ const TONE_CLASS = {
 
 /**
  * Chip input for an influence list (embrace or avoid). Used by both the
- * inline World Builder editor and the Refine modal — extracting one
+ * inline Universe Builder editor and the Refine modal — extracting one
  * implementation keeps Enter/comma/paste/Backspace behavior, dedupe rules,
  * per-entry caps, and drag-to-reorder in lockstep across both surfaces.
  *

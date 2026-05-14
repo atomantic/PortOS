@@ -161,6 +161,38 @@
 
 ## Changed
 
+- **BREAKING — World Builder is now Universe Builder.** A universe can contain
+  many worlds, and stories within the same universe can share canon (characters,
+  places, things) across multiple series — Marvel-style crossovers. This is a
+  pure rename pass; behavior is unchanged. Files (`worldBuilder*.js` →
+  `universeBuilder*.js`, `WorldBuilder.jsx` → `UniverseBuilder.jsx`), routes
+  (`/api/world-builder/*` → `/api/universe-builder/*`), client routes
+  (`/world-builder` → `/universe-builder`), fields (`series.worldId` →
+  `series.universeId`), top-level data key (`worlds: []` → `universes: []` in
+  `data/universe-builder.json`), function names (`getWorld` → `getUniverse`,
+  etc.), constants (`WORLD_ID_MAX` → `UNIVERSE_ID_MAX`), and the
+  `params.worldRun` mediaJobQueue tag (148 existing job records migrated).
+  Back-compat: the `⌘K` palette + voice agent keep `'world'`/`'world-builder'`
+  as aliases for the renamed nav entry, so muscle memory still resolves.
+  Sets up the next phase: lift canon entities (characters/places/objects)
+  from per-series bibles to the universe so multiple series can share them.
+
+- **Pipeline character — "AI: differentiate" button.** Per-character refine on
+  the Nouns page (Universe Builder side coming). Sends the target plus every
+  peer's `physicalDescription` to a new `pipeline-character-refine` prompt
+  and rewrites only the target's `physicalDescription` so no two characters
+  collide on ethnicity, age, hair, silhouette, or signature wardrobe.
+  Preserves evidence + firstAppearance.
+
+- **Character extraction prompt — opinionated commits, not gaps.**
+  `writers-room-characters.md` now requires every renderable axis (ethnicity,
+  age decade, build, hair color/length/texture/style, eye color, distinguishing
+  facial features, signature wardrobe with palette + era, posture). When prose
+  is silent, the LLM is told to COMMIT to a specific choice that differentiates
+  the character from the rest of the cast and log the committed axes in
+  `missingFromProse[]`. The old "do not invent" rule was producing
+  visually-interchangeable characters when prose was sparse on visual specifics.
+
 - **Sidebar Pipeline submenu — all series, not 10 recent issues.** The
   Create → Pipeline grandchildren now list every series alphabetically
   (links to `/pipeline/series/:id`) instead of the 10 most recently updated

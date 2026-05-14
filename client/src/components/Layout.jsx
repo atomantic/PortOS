@@ -194,7 +194,7 @@ const navItems = [
     children: [
       { to: '/media', label: 'Media Gen', icon: Layers },
       { to: '/pipeline', label: 'Pipeline', icon: WorkflowIcon, dynamic: 'pipelineSeries' },
-      { to: '/world-builder', label: 'World Builder', icon: Globe },
+      { to: '/universe-builder', label: 'Universe Builder', icon: Globe },
       { to: '/writers-room', label: 'Writers Room', icon: NotebookPen }
     ]
   },
@@ -979,7 +979,7 @@ export default function Layout() {
             location.pathname === '/review' ||
             location.pathname.startsWith('/settings') ||
             location.pathname.startsWith('/wiki') ||
-            location.pathname.startsWith('/world-builder') ||
+            location.pathname.startsWith('/universe-builder') ||
             location.pathname.startsWith('/writers-room') ||
             location.pathname.startsWith('/agents') ||
             location.pathname === '/shell' ||

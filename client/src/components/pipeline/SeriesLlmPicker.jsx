@@ -5,7 +5,7 @@ import toast from '../ui/Toast';
 /**
  * Two-select provider+model picker bound to `series.llm`. Saves on change so
  * the choice applies to every subsequent LLM call on this series (arc, idea,
- * prose, scripts, auto-run). Mirrors the World Builder `world.llm` picker.
+ * prose, scripts, auto-run). Mirrors the Universe Builder `universe.llm` picker.
  */
 export default function SeriesLlmPicker({ series, onSeriesUpdate, disabled = false }) {
   const [providers, setProviders] = useState([]);

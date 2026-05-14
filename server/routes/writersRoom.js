@@ -194,7 +194,7 @@ router.delete('/works/:id/characters/:characterId', asyncHandler(async (req, res
   res.json(await deleteCharacter(req.params.id, req.params.characterId));
 }));
 
-// ---------- settings (locations / world bible) ----------
+// ---------- settings (locations / universe bible) ----------
 
 router.get('/works/:id/settings', asyncHandler(async (req, res) => {
   res.json(await listSettings(req.params.id));
