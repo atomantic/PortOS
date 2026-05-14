@@ -52,6 +52,11 @@ export { generateReport, getReport, getTodayReport, listReports, listBriefings, 
 const AGENT_ARCHIVE_RETENTION_DAYS = 90;
 const RESUME_DEQUEUE_DELAY_MS = 500;
 
+// First non-empty line of a string. Used by addTask dedup: stored descriptions
+// are flattened to a single line by generateTasksMarkdown, so the comparison
+// must normalize on the first line to match multi-line inputs.
+export const firstLine = (s) => (s || '').split('\n').map(l => l.trim()).find(l => l) || '';
+
 const _execAsync = promisify(exec);
 const _execFileAsync = promisify(execFile);
 const execAsync = (cmd, opts) => _execAsync(cmd, { ...opts, windowsHide: true });
@@ -2191,14 +2196,14 @@ export async function addTask(taskData, taskType = 'user', { raw = false } = {})
     tasks = parseTasksMarkdown(content);
   }
 
-  // Reject duplicate: same description already pending or in_progress
-  const normalizedDesc = taskData.description.trim().toLowerCase();
+  // Reject duplicate: same first-line description already pending or in_progress.
+  const normalizedDesc = firstLine(taskData.description).toLowerCase();
   const duplicate = tasks.find(t =>
     (t.status === 'pending' || t.status === 'in_progress') &&
-    t.description?.trim().toLowerCase() === normalizedDesc
+    firstLine(t.description).toLowerCase() === normalizedDesc
   );
   if (duplicate) {
-    console.log(`⚠️ Duplicate task rejected: "${taskData.description.substring(0, 60)}" matches ${duplicate.id}`);
+    console.log(`⚠️ Duplicate task rejected: "${normalizedDesc.substring(0, 60)}" matches ${duplicate.id}`);
     return { ...duplicate, duplicate: true };
   }
 

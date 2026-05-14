@@ -32,6 +32,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import { firstLine } from './cos.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const COS_SRC = readFileSync(join(__dirname, 'cos.js'), 'utf-8');
@@ -646,5 +647,43 @@ describe('cos.js source — priority + capacity invariants', () => {
 
     expect(dequeueFn).toMatch(/spawned\s*===\s*0\s*&&\s*state\.config\.idleReviewEnabled/);
     expect(evalFn).toMatch(/tasksToSpawn\.length\s*===\s*0\s*&&\s*state\.config\.idleReviewEnabled/);
+  });
+});
+
+describe('addTask — first-line dedup', () => {
+  it('returns the first non-empty trimmed line', () => {
+    expect(firstLine('hello\nworld')).toBe('hello');
+    expect(firstLine('\n\n  first  \nsecond')).toBe('first');
+    expect(firstLine('single')).toBe('single');
+  });
+
+  it('returns empty string for null/undefined/empty input', () => {
+    expect(firstLine(null)).toBe('');
+    expect(firstLine(undefined)).toBe('');
+    expect(firstLine('')).toBe('');
+    expect(firstLine('\n\n\n')).toBe('');
+  });
+
+  it('multi-line and single-line descriptions with the same first line collide', () => {
+    // Repro: handleOrphanedTask builds a multi-line description, but
+    // generateTasksMarkdown flattens it to one line. Without first-line
+    // normalization, addTask's dedup compares the full multi-line input to
+    // the stored single line and never matches — producing N duplicate
+    // [Auto-Fix] tasks, each spawning its own agent.
+    const multi = '[Auto-Fix] Investigate repeated agent orphaning for task X\n\n**Last Orphaned Agent**: agent-aaa';
+    const stored = '[Auto-Fix] Investigate repeated agent orphaning for task X';
+    expect(firstLine(multi).toLowerCase()).toBe(firstLine(stored).toLowerCase());
+  });
+
+  it('addTask uses firstLine for dedup (regression guard)', () => {
+    // addTask's signature destructuring (`{ raw = false } = {}`) confuses the
+    // brace-balanced extractFnBody scanner — slice from the declaration to
+    // the next top-level function instead.
+    const start = COS_SRC.indexOf('export async function addTask');
+    expect(start, 'addTask must exist').toBeGreaterThan(-1);
+    const end = COS_SRC.indexOf('export async function', start + 1);
+    const fnBody = COS_SRC.slice(start, end === -1 ? undefined : end);
+    expect(fnBody).toMatch(/firstLine\(taskData\.description\)/);
+    expect(fnBody).toMatch(/firstLine\(t\.description\)/);
   });
 });
