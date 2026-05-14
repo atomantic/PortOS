@@ -15,7 +15,7 @@ import { randomUUID } from 'crypto';
 import { PATHS, atomicWrite, readJSONFile, ensureDir } from '../../lib/fileUtils.js';
 import {
   sanitizeBibleList, mergeExtractedBible,
-  BIBLE_LIMITS, BIBLE_KIND, BIBLE_FIELD, BIBLE_KEYS,
+  BIBLE_LIMITS, BIBLE_KIND, BIBLE_FIELD, BIBLE_KEYS, BIBLE_SOURCE,
   isStr, trimTo,
 } from '../../lib/storyBible.js';
 import { sanitizeArc, sanitizeSeasonList } from '../../lib/storyArc.js';
@@ -227,16 +227,19 @@ export async function purgeImageRefFromAllSeries(filename) {
 export async function extractAndMergeIntoSeries(seriesId, opts = {}) {
   const series = await getSeries(seriesId);
 
-  // Phase B.3 routing: if the series links to a universe, extract into the
-  // universe (single source of truth) and return a compatible shape so
-  // every legacy caller (auto-extract in textStages, season:episodes
-  // autorun, the /extract-bible route) keeps working without a fork.
+  // Phase B.3 routing: when the series links to a universe, extract into the
+  // universe and return a compatible shape so every legacy caller keeps
+  // working without a fork. New entries arrive auto-locked + tagged with this
+  // series so a later refine/differentiate cannot silently rewrite them.
   if (series.universeId) {
-    // Dynamic import to avoid a circular dep — universeCanon → series.js
-    // (for updateSeries, indirectly) and back here would deadlock on
-    // module-init otherwise.
+    // Dynamic import avoids a circular dep through universeCanon → series.js.
     const { extractCanonFromProse } = await import('../universeCanon.js');
-    const { universe, results } = await extractCanonFromProse(series.universeId, opts);
+    const { universe, results } = await extractCanonFromProse(series.universeId, {
+      ...opts,
+      source: BIBLE_SOURCE.SERIES_EXTRACT,
+      autoLock: true,
+      sourceSeriesId: series.id,
+    });
     return { series, universe, results };
   }
 

@@ -168,3 +168,13 @@ export const differentiateUniverseCast = (universeId, { providerId, model } = {}
 // issueCount }`. Read-only aggregation.
 export const getUniverseCanonUsage = (universeId) =>
   request(`/universe-builder/${encodeURIComponent(universeId)}/canon-usage`);
+
+// Toggle the `locked` flag on a single canon entry. Locked entries are
+// protected from AI rewrite paths (refine returns 409; differentiate skips
+// them at apply time; re-extract appends evidence only). `kind` must be
+// 'character' | 'setting' | 'object' (the singular BIBLE_KIND values).
+export const setUniverseCanonLock = (universeId, kind, entryId, locked) =>
+  request(`/universe-builder/${encodeURIComponent(universeId)}/canon/${encodeURIComponent(kind)}/${encodeURIComponent(entryId)}/lock`, {
+    method: 'PATCH',
+    body: JSON.stringify({ locked }),
+  });

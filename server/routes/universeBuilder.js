@@ -18,6 +18,7 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import * as svc from '../services/universeBuilder.js';
 import * as canonSvc from '../services/universeCanon.js';
+import { BIBLE_KINDS } from '../lib/storyBible.js';
 import { getUniverseCanonUsage } from '../services/canonUsage.js';
 import { expandWorldTemplate } from '../services/universeBuilderExpand.js';
 import { refineWorldPrompts } from '../services/universeBuilderRefine.js';
@@ -435,6 +436,26 @@ router.post('/:id/characters/differentiate-cast', asyncHandler(async (req, res) 
 router.get('/:id/canon-usage', asyncHandler(async (req, res) => {
   const result = await getUniverseCanonUsage(req.params.id)
     .catch((err) => { throw mapServiceError(err); });
+  res.json(result);
+}));
+
+// Lock toggle for canon entries. Locked entries are protected from AI rewrite
+// paths (refine, differentiate, re-extract field overwrites).
+const setLockSchema = z.object({
+  locked: z.boolean(),
+});
+const lockParamsSchema = z.object({
+  kind: z.enum(BIBLE_KINDS),
+});
+router.patch('/:id/canon/:kind/:entryId/lock', asyncHandler(async (req, res) => {
+  const { kind } = validateRequest(lockParamsSchema, req.params);
+  const body = validateRequest(setLockSchema, req.body ?? {});
+  const result = await canonSvc.setCanonEntryLock(
+    req.params.id,
+    kind,
+    req.params.entryId,
+    body.locked,
+  ).catch((err) => { throw mapServiceError(err); });
   res.json(result);
 }));
 

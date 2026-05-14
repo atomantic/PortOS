@@ -4,6 +4,12 @@ import * as api from '../services/api';
 import socket from '../services/socket';
 import { filterSelectableModels } from '../utils/providers';
 
+const providerTypeClass = (type) => {
+  if (type === 'cli') return 'bg-blue-500/20 text-blue-400';
+  if (type === 'tui') return 'bg-emerald-500/20 text-emerald-400';
+  return 'bg-purple-500/20 text-purple-400';
+};
+
 export default function AIProviders() {
   const [providers, setProviders] = useState([]);
   const [activeProviderId, setActiveProviderId] = useState(null);
@@ -91,6 +97,9 @@ export default function AIProviders() {
   };
 
   const supportsModelRefresh = (provider) => {
+    if (provider.type === 'tui') {
+      return false;
+    }
     // Gemini CLI doesn't require model specification
     if (provider.type === 'cli' && provider.command === 'gemini') {
       return false;
@@ -170,6 +179,9 @@ export default function AIProviders() {
     toast.success(`Added ${sampleProviders.length} providers`);
   };
 
+  const selectedRunProvider = providers.find(p => p.id === activeProviderId);
+  const runProviderIsTui = selectedRunProvider?.type === 'tui';
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -243,9 +255,7 @@ export default function AIProviders() {
                   <div className="flex-1 min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
                       <h3 className="text-sm font-semibold text-white">{provider.name}</h3>
-                      <span className={`text-xs px-2 py-0.5 rounded ${
-                        provider.type === 'cli' ? 'bg-blue-500/20 text-blue-400' : 'bg-purple-500/20 text-purple-400'
-                      }`}>
+                      <span className={`text-xs px-2 py-0.5 rounded ${providerTypeClass(provider.type)}`}>
                         {provider.type.toUpperCase()}
                       </span>
                       {!provider.enabled && (
@@ -255,7 +265,7 @@ export default function AIProviders() {
                       )}
                     </div>
                     <div className="mt-1 text-xs text-gray-400 space-y-0.5">
-                      {provider.type === 'cli' && (
+                      {(provider.type === 'cli' || provider.type === 'tui') && (
                         <p>Command: <code className="text-gray-300">{provider.command} {provider.args?.join(' ')}</code></p>
                       )}
                       {provider.type === 'api' && (
@@ -303,7 +313,7 @@ export default function AIProviders() {
             >
               <option value="">Select Provider</option>
               {providers.filter(p => p.enabled).map(p => (
-                <option key={p.id} value={p.id}>{p.name}</option>
+                <option key={p.id} value={p.id}>{p.name}{p.type === 'tui' ? ' (CoS TUI)' : ''}</option>
               ))}
             </select>
 
@@ -330,7 +340,7 @@ export default function AIProviders() {
           <div className="flex justify-between items-center">
             <button
               onClick={handleExecuteRun}
-              disabled={!runPrompt.trim() || !activeProviderId || activeRun}
+              disabled={!runPrompt.trim() || !activeProviderId || activeRun || runProviderIsTui}
               className="px-6 py-2 bg-port-success hover:bg-port-success/80 text-white rounded-lg transition-colors disabled:opacity-50"
             >
               {activeRun ? 'Running...' : 'Execute'}
@@ -345,6 +355,12 @@ export default function AIProviders() {
               </button>
             )}
           </div>
+
+          {runProviderIsTui && (
+            <div className="text-xs text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-3 py-2">
+              TUI providers run through CoS agent tasks so their terminal session can be tracked and completed.
+            </div>
+          )}
 
           {runOutput && (
             <div className="bg-port-bg border border-port-border rounded-lg p-3 max-h-64 overflow-auto">
@@ -367,9 +383,7 @@ export default function AIProviders() {
               <div className="flex-1 min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
                   <h3 className="text-lg font-semibold text-white">{provider.name}</h3>
-                  <span className={`text-xs px-2 py-0.5 rounded ${
-                    provider.type === 'cli' ? 'bg-blue-500/20 text-blue-400' : 'bg-purple-500/20 text-purple-400'
-                  }`}>
+                  <span className={`text-xs px-2 py-0.5 rounded ${providerTypeClass(provider.type)}`}>
                     {provider.type.toUpperCase()}
                   </span>
                   {provider.id === activeProviderId && (
@@ -385,7 +399,7 @@ export default function AIProviders() {
                 </div>
 
                 <div className="mt-2 text-sm text-gray-400 space-y-1">
-                  {provider.type === 'cli' && (
+                  {(provider.type === 'cli' || provider.type === 'tui') && (
                     <p className="break-words">Command: <code className="text-gray-300 break-all">{provider.command} {provider.args?.join(' ')}</code></p>
                   )}
                   {provider.type === 'api' && (
@@ -408,6 +422,11 @@ export default function AIProviders() {
                   {provider.headlessArgs?.length > 0 && (
                     <p className="text-xs break-words">
                       Headless: <code className="text-gray-300 break-all">{provider.headlessArgs.join(' ')}</code>
+                    </p>
+                  )}
+                  {provider.type === 'tui' && (
+                    <p className="text-xs break-words">
+                      TUI: paste delay <span className="text-gray-300">{provider.tuiPromptDelayMs || 2500}ms</span>, idle complete <span className="text-gray-300">{provider.tuiIdleTimeoutMs || 180000}ms</span>
                     </p>
                   )}
                   {provider.fallbackProvider && (
@@ -567,7 +586,9 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
     enabled: provider?.enabled !== false,
     envVars: provider?.envVars || {},
     secretEnvVars: provider?.secretEnvVars || [],
-    headlessArgs: provider?.headlessArgs?.join(' ') || ''
+    headlessArgs: provider?.headlessArgs?.join(' ') || '',
+    tuiPromptDelayMs: provider?.tuiPromptDelayMs || 2500,
+    tuiIdleTimeoutMs: provider?.tuiIdleTimeoutMs || 180000
   });
 
   const [newEnvKey, setNewEnvKey] = useState('');
@@ -582,12 +603,23 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
   const handleSubmit = async (e) => {
     e.preventDefault();
 
+    const tuiPromptDelay = parseInt(formData.tuiPromptDelayMs, 10);
+    const tuiIdleTimeout = parseInt(formData.tuiIdleTimeoutMs, 10);
     const data = {
       ...formData,
       args: formData.args ? formData.args.split(' ').filter(Boolean) : [],
       headlessArgs: formData.headlessArgs ? formData.headlessArgs.split(' ').filter(Boolean) : [],
       timeout: parseInt(formData.timeout, 10)
     };
+    if (formData.type === 'tui') {
+      if (Number.isFinite(tuiPromptDelay)) data.tuiPromptDelayMs = tuiPromptDelay;
+      else delete data.tuiPromptDelayMs;
+      if (Number.isFinite(tuiIdleTimeout)) data.tuiIdleTimeoutMs = tuiIdleTimeout;
+      else delete data.tuiIdleTimeoutMs;
+    } else {
+      delete data.tuiPromptDelayMs;
+      delete data.tuiIdleTimeoutMs;
+    }
 
     // Only send apiKey if user entered a new value (avoid overwriting existing key with empty string)
     if (!data.apiKey && provider) {
@@ -630,11 +662,12 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
               className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
             >
               <option value="cli">CLI</option>
+              <option value="tui">TUI</option>
               <option value="api">API</option>
             </select>
           </div>
 
-          {formData.type === 'cli' && (
+          {(formData.type === 'cli' || formData.type === 'tui') && (
             <>
               <div>
                 <label className="block text-sm text-gray-400 mb-1">Command *</label>
@@ -642,8 +675,8 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
                   type="text"
                   value={formData.command}
                   onChange={(e) => setFormData(prev => ({ ...prev, command: e.target.value }))}
-                  placeholder="claude"
-                  required={formData.type === 'cli'}
+                  placeholder={formData.type === 'tui' ? 'codex' : 'claude'}
+                  required={formData.type === 'cli' || formData.type === 'tui'}
                   className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
                 />
               </div>
@@ -654,24 +687,56 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
                   type="text"
                   value={formData.args}
                   onChange={(e) => setFormData(prev => ({ ...prev, args: e.target.value }))}
-                  placeholder="--print -p"
+                  placeholder={formData.type === 'tui' ? '--dangerously-skip-permissions' : '--print -p'}
                   className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
                 />
               </div>
 
-              <div>
-                <label className="block text-sm text-gray-400 mb-1">Headless Args (for simple prompt tasks)</label>
-                <input
-                  type="text"
-                  value={formData.headlessArgs}
-                  onChange={(e) => setFormData(prev => ({ ...prev, headlessArgs: e.target.value }))}
-                  placeholder='--no-session-persistence --disable-slash-commands --tools ""'
-                  className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
-                />
-                <p className="text-xs text-gray-500 mt-1">
-                  Extra CLI flags for lightweight prompt-in/text-out mode (brain classifier, etc.)
-                </p>
-              </div>
+              {formData.type === 'cli' && (
+                <div>
+                  <label className="block text-sm text-gray-400 mb-1">Headless Args (for simple prompt tasks)</label>
+                  <input
+                    type="text"
+                    value={formData.headlessArgs}
+                    onChange={(e) => setFormData(prev => ({ ...prev, headlessArgs: e.target.value }))}
+                    placeholder='--no-session-persistence --disable-slash-commands --tools ""'
+                    className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
+                  />
+                  <p className="text-xs text-gray-500 mt-1">
+                    Extra CLI flags for lightweight prompt-in/text-out mode (brain classifier, etc.)
+                  </p>
+                </div>
+              )}
+
+              {formData.type === 'tui' && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-1">Prompt Paste Delay (ms)</label>
+                    <input
+                      type="number"
+                      min="250"
+                      max="60000"
+                      value={formData.tuiPromptDelayMs}
+                      onChange={(e) => setFormData(prev => ({ ...prev, tuiPromptDelayMs: e.target.value }))}
+                      className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm text-gray-400 mb-1">Idle Complete (ms)</label>
+                    <input
+                      type="number"
+                      min="10000"
+                      max="1800000"
+                      value={formData.tuiIdleTimeoutMs}
+                      onChange={(e) => setFormData(prev => ({ ...prev, tuiIdleTimeoutMs: e.target.value }))}
+                      className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
+                    />
+                  </div>
+                  <p className="sm:col-span-2 text-xs text-gray-500">
+                    TUI providers open an attachable shell session, paste the agent prompt, parse terminal output, and complete after the terminal is idle.
+                  </p>
+                </div>
+              )}
             </>
           )}
 

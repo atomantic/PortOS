@@ -66,6 +66,59 @@
         "GEMINI_SANDBOX": "false"
       }
     },
+    "codex-tui": {
+      "id": "codex-tui",
+      "name": "Codex TUI",
+      "type": "tui",
+      "command": "codex",
+      "args": [],
+      "models": ["codex-configured-default"],
+      "defaultModel": "codex-configured-default",
+      "lightModel": "codex-configured-default",
+      "mediumModel": "codex-configured-default",
+      "heavyModel": "codex-configured-default",
+      "timeout": 600000,
+      "enabled": false,
+      "envVars": {},
+      "tuiPromptDelayMs": 2500,
+      "tuiIdleTimeoutMs": 180000
+    },
+    "claude-code-tui": {
+      "id": "claude-code-tui",
+      "name": "Claude Code TUI",
+      "type": "tui",
+      "command": "claude",
+      "args": ["--dangerously-skip-permissions"],
+      "models": ["claude-haiku-4-5-20251001", "claude-sonnet-4-5-20250929", "claude-opus-4-5-20251101", "claude-opus-4-6"],
+      "defaultModel": "claude-opus-4-6",
+      "lightModel": "claude-haiku-4-5-20251001",
+      "mediumModel": "claude-sonnet-4-5-20250929",
+      "heavyModel": "claude-opus-4-6",
+      "timeout": 600000,
+      "enabled": false,
+      "envVars": {},
+      "tuiPromptDelayMs": 2500,
+      "tuiIdleTimeoutMs": 180000
+    },
+    "gemini-tui": {
+      "id": "gemini-tui",
+      "name": "Gemini TUI",
+      "type": "tui",
+      "command": "gemini",
+      "args": [],
+      "models": ["gemini-3.1-pro", "gemini-3-flash", "gemini-2.5-pro", "gemini-2.5-flash"],
+      "defaultModel": "gemini-2.5-flash",
+      "lightModel": "gemini-2.5-flash",
+      "mediumModel": "gemini-3-flash",
+      "heavyModel": "gemini-3.1-pro",
+      "timeout": 600000,
+      "enabled": false,
+      "envVars": {
+        "GEMINI_SANDBOX": "false"
+      },
+      "tuiPromptDelayMs": 2500,
+      "tuiIdleTimeoutMs": 180000
+    },
     "lmstudio": {
       "id": "lmstudio",
       "name": "LM Studio",

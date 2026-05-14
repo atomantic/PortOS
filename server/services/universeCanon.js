@@ -7,7 +7,7 @@
 import { getUniverse, updateUniverse, listUniverses } from './universeBuilder.js';
 import { extractBible } from '../lib/bibleExtractor.js';
 import {
-  BIBLE_KIND, BIBLE_FIELD, BIBLE_KEYS, mergeExtractedBible,
+  BIBLE_KIND, BIBLE_KINDS, BIBLE_FIELD, BIBLE_KEYS, BIBLE_SOURCE, mergeExtractedBible,
 } from '../lib/storyBible.js';
 import { runStagedLLM } from '../lib/stageRunner.js';
 import { runPromptRefine } from './pipeline/refineHelpers.js';
@@ -39,6 +39,10 @@ const buildStyleClause = (universe) => {
  * Extract characters/places/objects from a prose corpus and merge into the
  * universe's canon arrays. Mirrors `extractAndMergeIntoSeries` so callers
  * can swap targets without changing prompt shapes.
+ *
+ * `opts.source` / `opts.autoLock` / `opts.sourceSeriesId` stamp NEW inserts
+ * only — existing entries are not touched by these options (locked existing
+ * entries are protected by mergeExtractedBible itself).
  */
 export async function extractCanonFromProse(universeId, opts = {}) {
   const universe = await getUniverse(universeId);
@@ -65,11 +69,16 @@ export async function extractCanonFromProse(universeId, opts = {}) {
     ? await Promise.all(kinds.map(runOne))
     : await kinds.reduce(async (acc, kind) => [...(await acc), await runOne(kind)], Promise.resolve([]));
 
+  const mergeOpts = {
+    source: opts.source || BIBLE_SOURCE.SERIES_EXTRACT,
+    autoLock: opts.autoLock === true,
+    sourceSeriesId: opts.sourceSeriesId || null,
+  };
   const results = {};
   const patch = {};
   for (const { kind, result } of completed) {
     const field = BIBLE_FIELD[kind];
-    patch[field] = mergeExtractedBible(universe[field] || [], result.extracted, kind);
+    patch[field] = mergeExtractedBible(universe[field] || [], result.extracted, kind, mergeOpts);
     results[field] = {
       extracted: result.extracted, runId: result.runId,
       providerId: result.providerId, model: result.model,
@@ -94,6 +103,14 @@ export async function refineUniverseCharacter(universeId, entryId, options = {})
     });
   }
   const target = list[idx];
+  // 409 (vs. silent overwrite) so the UI can render a clear "Unlock to edit"
+  // affordance for entries an active series depends on.
+  if (target.locked === true) {
+    throw new ServerError(
+      `Character "${target.name}" is locked — unlock it before refining`,
+      { status: 409, code: 'UNIVERSE_CANON_LOCKED' },
+    );
+  }
   const peers = list.filter((_, i) => i !== idx);
 
   const { refined, changes, rationale, runId, providerId, model } = await runPromptRefine({
@@ -132,6 +149,14 @@ export async function differentiateUniverseCast(universeId, options = {}) {
     });
   }
 
+  // The LLM sees the FULL cast so unlocked rewrites are differentiated from
+  // locked descriptions too. Lock enforcement happens at apply time.
+  if (list.every((c) => c.locked === true)) {
+    throw new ServerError(
+      'All characters are locked — unlock at least one before differentiating the cast',
+      { status: 400, code: 'UNIVERSE_CANON_ALL_LOCKED' },
+    );
+  }
   const castForPrompt = list.map(targetForPrompt);
   const result = await runStagedLLM('pipeline-character-differentiate-cast', {
     castJson: JSON.stringify(castForPrompt, null, 2),
@@ -164,9 +189,14 @@ export async function differentiateUniverseCast(universeId, options = {}) {
   }
 
   let touched = 0;
+  let skippedLocked = 0;
   const nextList = list.map((entry) => {
     const rewrite = byId.get(entry.id);
     if (!rewrite) return entry;
+    if (entry.locked === true) {
+      skippedLocked += 1;
+      return entry;
+    }
     touched += 1;
     return { ...entry, physicalDescription: rewrite.physicalDescription };
   });
@@ -178,16 +208,50 @@ export async function differentiateUniverseCast(universeId, options = {}) {
 
   const updated = await updateUniverse(universeId, { characters: nextList });
   const rationale = typeof result.content?.rationale === 'string' ? result.content.rationale.trim() : '';
-  console.log(`✨ Universe cast differentiate — universe=${universeId.slice(0, 8)} touched=${touched}/${list.length} runId=${(result.runId || '').slice(0, 8)}`);
+  console.log(`✨ Universe cast differentiate — universe=${universeId.slice(0, 8)} touched=${touched}/${list.length} skippedLocked=${skippedLocked} runId=${(result.runId || '').slice(0, 8)}`);
   return {
     universe: updated,
     touched,
     skipped: list.length - touched,
+    skippedLocked,
     rationale,
     runId: result.runId,
     providerId: result.providerId,
     model: result.model,
   };
+}
+
+// Toggle the `locked` flag on a single canon entry. Locked entries are
+// protected from AI rewrite paths — see `mergeExtractedBible` (evidence-only
+// append) and the refine/differentiate runtime guards.
+export async function setCanonEntryLock(universeId, kind, entryId, locked) {
+  if (!BIBLE_KINDS.includes(kind)) {
+    throw new ServerError(
+      `Invalid canon kind "${kind}" — expected one of: ${BIBLE_KINDS.join(', ')}`,
+      { status: 400, code: 'UNIVERSE_CANON_INVALID_KIND' },
+    );
+  }
+  const universe = await getUniverse(universeId);
+  const field = BIBLE_FIELD[kind];
+  const list = Array.isArray(universe[field]) ? universe[field] : [];
+  const idx = list.findIndex((e) => e.id === entryId);
+  if (idx < 0) {
+    throw new ServerError(
+      `Canon ${kind} ${entryId} not found in universe`,
+      { status: 404, code: 'UNIVERSE_CANON_NOT_FOUND' },
+    );
+  }
+  const target = list[idx];
+  // No-op short-circuit avoids a write + updatedAt churn on redundant toggles.
+  if ((target.locked === true) === (locked === true)) {
+    return { universe, entry: target };
+  }
+  // applyCanonExtras strips locked: false on save, so we can pass it through
+  // directly instead of destructure-stripping here.
+  const nextList = list.map((e, i) => (i === idx ? { ...e, locked } : e));
+  const updated = await updateUniverse(universeId, { [field]: nextList });
+  const entry = (updated[field] || []).find((e) => e.id === entryId) || null;
+  return { universe: updated, entry };
 }
 
 /**

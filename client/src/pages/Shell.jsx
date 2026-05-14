@@ -13,6 +13,8 @@ const MAX_SESSIONS = 5;
 
 const QUICK_COMMANDS = [
   { label: 'claude', command: 'claude --dangerously-skip-permissions' },
+  { label: 'codex', command: 'codex' },
+  { label: 'gemini', command: 'gemini' },
   { label: 'openclaw', command: 'openclaw tui' },
   { label: 'git status', command: 'git status' },
   { label: 'git pull', command: 'git pull --rebase --autostash' },
@@ -64,8 +66,9 @@ export default function Shell() {
     if (initialOptsRef.current) return;
     const cwd = searchParams.get('cwd');
     const cmd = searchParams.get('cmd');
-    if (cwd || cmd) {
-      initialOptsRef.current = { cwd, cmd };
+    const session = searchParams.get('session');
+    if (cwd || cmd || session) {
+      initialOptsRef.current = { cwd, cmd, session };
       setSearchParams({}, { replace: true });
     } else {
       initialOptsRef.current = {};
@@ -311,7 +314,10 @@ export default function Shell() {
         hasInitializedRef.current = true;
         const opts = initialOptsRef.current || {};
         // If we have initial opts (cwd/cmd), always create a new session
-        if (opts.cwd || opts.cmd) {
+        if (opts.session && sessionList.some(s => s.sessionId === opts.session)) {
+          attachToSession(opts.session);
+          initialOptsRef.current = {};
+        } else if (opts.cwd || opts.cmd) {
           startSession();
         } else if (sessionList.length > 0 && !sessionIdRef.current) {
           // Attach to most recent existing session
@@ -456,7 +462,7 @@ export default function Shell() {
         <div className="flex items-center gap-1.5 mb-3 overflow-x-auto pb-1">
           {sessions.map((s) => {
             const isActive = s.sessionId === activeSessionId;
-            const label = s.cwd?.split('/').pop() || shortId(s.sessionId);
+            const label = s.label || s.cwd?.split('/').pop() || shortId(s.sessionId);
             return (
               <div
                 key={s.sessionId}
@@ -466,10 +472,10 @@ export default function Shell() {
                     : 'bg-port-card hover:bg-port-border text-gray-400 hover:text-white border border-port-border'
                 }`}
                 onClick={() => !isActive && switchToSession(s.sessionId)}
-                title={`${s.cwd || shortId(s.sessionId)} — ${formatAge(s.createdAt)} old`}
+                title={`${s.label || s.cwd || shortId(s.sessionId)} — ${formatAge(s.createdAt)} old`}
               >
                 <TerminalIcon size={12} className="shrink-0" />
-                <span className="truncate max-w-[100px]">{label}</span>
+                <span className="truncate max-w-[140px]">{label}</span>
                 <span className="text-[10px] opacity-60 shrink-0">{formatAge(s.createdAt)}</span>
                 <button
                   onClick={(e) => { e.stopPropagation(); killOtherSession(s.sessionId); }}

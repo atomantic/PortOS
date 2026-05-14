@@ -284,7 +284,7 @@ export const appUpdateSchema = appSchema.partial();
 // Provider schema
 export const providerSchema = z.object({
   name: z.string().min(1).max(100),
-  type: z.enum(['cli', 'api']),
+  type: z.enum(['cli', 'api', 'tui']),
   command: z.string().optional(),
   args: z.array(z.string()).optional(),
   endpoint: z.string().url().optional(),
@@ -293,7 +293,10 @@ export const providerSchema = z.object({
   defaultModel: z.string().nullable().optional(),
   timeout: z.number().int().min(1000).max(600000).optional(),
   enabled: z.boolean().optional(),
-  envVars: z.record(z.string()).optional()
+  envVars: z.record(z.string()).optional(),
+  headlessArgs: z.array(z.string()).optional(),
+  tuiPromptDelayMs: z.number().int().min(250).max(60000).optional(),
+  tuiIdleTimeoutMs: z.number().int().min(10000).max(1800000).optional()
 });
 
 // Run command schema

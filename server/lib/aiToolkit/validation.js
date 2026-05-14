@@ -6,7 +6,7 @@ export const providerSchema = z.object({
   // 'Codex CLI' into 'codex-cli' and break id-keyed CLI argument handling).
   id: z.string().regex(/^[a-z0-9][a-z0-9-]*$/, 'id must be lowercase alphanumeric with hyphens').max(80).optional(),
   name: z.string().min(1).max(100),
-  type: z.enum(['cli', 'api']),
+  type: z.enum(['cli', 'api', 'tui']),
   command: z.string().optional(),
   args: z.array(z.string()).optional(),
   // CLI providers send `endpoint: ''` from the form; coerce empty/null to
@@ -26,7 +26,9 @@ export const providerSchema = z.object({
   enabled: z.boolean().optional(),
   envVars: z.record(z.string()).optional(),
   secretEnvVars: z.array(z.string()).optional(),
-  headlessArgs: z.array(z.string()).optional()
+  headlessArgs: z.array(z.string()).optional(),
+  tuiPromptDelayMs: z.number().int().min(250).max(60000).optional(),
+  tuiIdleTimeoutMs: z.number().int().min(10000).max(1800000).optional()
 });
 
 export const runSchema = z.object({

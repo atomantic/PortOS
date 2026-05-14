@@ -227,6 +227,18 @@ describe('validation.js', () => {
       expect(result.success).toBe(true);
     });
 
+    it('should validate a TUI provider', () => {
+      const provider = {
+        name: 'Codex TUI',
+        type: 'tui',
+        command: 'codex',
+        tuiPromptDelayMs: 2500,
+        tuiIdleTimeoutMs: 180000
+      };
+      const result = providerSchema.safeParse(provider);
+      expect(result.success).toBe(true);
+    });
+
     it('should reject invalid type', () => {
       const provider = { name: 'Test', type: 'invalid' };
       const result = providerSchema.safeParse(provider);

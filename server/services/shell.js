@@ -7,6 +7,22 @@ const shellSessions = new Map();
 
 const MAX_TOTAL_SESSIONS = 5;
 
+// PTY event handlers run outside the Express middleware chain — uncaught throws here
+// crash the Node process instead of bubbling to res.next. try/catch is therefore
+// justified in this one spot despite the project-wide "no try/catch" convention.
+// Async hooks are serialized per-session via hookQueue so interleaved awaits (e.g.
+// agentTuiSpawning's handleData mutating module-level buffers) don't race.
+function runHook(label, session, fn, arg) {
+  if (!fn) return;
+  session.hookQueue = session.hookQueue.then(() => {
+    try {
+      return Promise.resolve(fn(arg));
+    } catch (err) {
+      console.error(`🐚 ${label} sync error in ${session._id}: ${err.message}`);
+    }
+  }).catch(err => console.error(`🐚 ${label} async error in ${session._id}: ${err.message}`));
+}
+
 // Allowlist of safe environment variable prefixes to pass to PTY sessions
 // Prevents leaking secrets (API keys, tokens) to the shell
 const SAFE_ENV_PREFIXES = [
@@ -44,7 +60,7 @@ function getDefaultShell() {
 export function createShellSession(socket, options = {}) {
   if (shellSessions.size >= MAX_TOTAL_SESSIONS) {
     console.warn(`🐚 Max total sessions reached (${MAX_TOTAL_SESSIONS})`);
-    socket.emit('shell:error', { error: `Max ${MAX_TOTAL_SESSIONS} shell sessions. Kill an existing session first.` });
+    socket?.emit?.('shell:error', { error: `Max ${MAX_TOTAL_SESSIONS} shell sessions. Kill an existing session first.` });
     return null;
   }
 
@@ -64,14 +80,18 @@ export function createShellSession(socket, options = {}) {
       rows,
       cwd,
       env: {
-        ...buildSafeEnv(),
+        ...buildSafeEnv(), // filters process.env to prevent leaking inherited secrets (e.g. shell-inherited API keys)
+        // options.env is the caller's explicit opt-in env (e.g. TUI provider API keys for codex/claude).
+        // Callers are responsible for not passing vars they don't want visible inside attachable shells.
+        // Single-user/single-instance deployment (Tailscale-only) makes this acceptable.
+        ...(options.env || {}),
         TERM: 'xterm-256color',
         COLORTERM: 'truecolor'
       }
     });
   } catch (err) {
     console.error(`❌ Failed to spawn PTY: ${err.message}`);
-    socket.emit('shell:error', { error: `Failed to spawn shell: ${err.message}` });
+    socket?.emit?.('shell:error', { error: `Failed to spawn shell: ${err.message}` });
     return null;
   }
 
@@ -82,10 +102,18 @@ export function createShellSession(socket, options = {}) {
 
   // Store session info
   shellSessions.set(sessionId, {
+    _id: sessionId.slice(0, 8),
+    hookQueue: Promise.resolve(),
     pty: ptyProcess,
     socket,
     cwd,
     createdAt: Date.now(),
+    label: options.label || null,
+    kind: options.kind || 'shell',
+    agentId: options.agentId || null,
+    command: options.command || null,
+    onData: options.onData || null,
+    onExit: options.onExit || null,
     outputBuffer,
     bufferSize: () => bufferSize
   });
@@ -100,6 +128,7 @@ export function createShellSession(socket, options = {}) {
     }
     const session = shellSessions.get(sessionId);
     session?.socket?.emit('shell:output', { sessionId, data });
+    if (session) runHook('onData', session, session.onData, data);
   });
 
   // Handle pty exit
@@ -108,11 +137,14 @@ export function createShellSession(socket, options = {}) {
     const session = shellSessions.get(sessionId);
     shellSessions.delete(sessionId);
     session?.socket?.emit('shell:exit', { sessionId, code: exitCode });
-    // Notify all sockets about session list change
+    if (session) runHook('onExit', session, session.onExit, { exitCode });
     broadcastSessionList();
   });
 
   broadcastSessionList();
+  if (options.initialCommand) {
+    setTimeout(() => writeToSession(sessionId, `${options.initialCommand}\n`), options.initialCommandDelayMs ?? 200);
+  }
   return sessionId;
 }
 
@@ -158,10 +190,22 @@ export function listAllSessions() {
     sessions.push({
       sessionId,
       cwd: session.cwd,
-      createdAt: session.createdAt
+      createdAt: session.createdAt,
+      label: session.label,
+      kind: session.kind,
+      agentId: session.agentId,
+      command: session.command
     });
   }
   return sessions;
+}
+
+export function getSession(sessionId) {
+  return shellSessions.get(sessionId) || null;
+}
+
+export function getSessionProcess(sessionId) {
+  return shellSessions.get(sessionId)?.pty || null;
 }
 
 /**
@@ -197,6 +241,7 @@ export function killSession(sessionId) {
     console.log(`🐚 Killing shell session ${sessionId.slice(0, 8)}`);
     session.pty.kill();
     shellSessions.delete(sessionId);
+    runHook('onExit', session, session.onExit, { exitCode: null, killed: true });
     broadcastSessionList();
     return true;
   }

@@ -2,6 +2,86 @@
 
 ## Added
 
+- **Universe Canon page — lock toggle, tag chips, and "from series" badge on every card.**
+  Phase 2a of the Universe-as-Canon UI. Each `CanonCard` (used on both the
+  Universe Canon page and the per-series Nouns page) now renders:
+  - A **Lock / Unlock** button (only on pages that pass `onToggleLock`; the
+    Nouns page omits it since per-series canon doesn't have universe-level
+    locks). When the entry is locked, the card border picks up the accent
+    color, a `Locked` pill appears next to the name, the "AI: differentiate"
+    button disables with an "Unlock to refine" tooltip, and the toggle button
+    flips to "Unlock" with an unlock-icon glyph.
+  - A `from series` badge (titled with the introducing series id) when the
+    entry's `sourceSeriesId` is set — so a user scanning the universe
+    immediately sees which canon came from prose extraction vs. universe
+    expand or manual authorship.
+  - A row of tag chips when `entry.tags[]` has items — surfaces the
+    `landscape` / `vehicle` / etc. tags the categories→canon backfill
+    stamps, plus any tags the user adds later.
+  New client helper `setUniverseCanonLock(universeId, kind, entryId, locked)`
+  calls the Phase 1 `PATCH /api/universe-builder/:id/canon/:kind/:entryId/lock`
+  route. ESLint clean, Vite production build green.
+
+- **Universe-as-Canon lock semantics — series-extracted canon arrives auto-locked.**
+  Every canon entry on a universe (characters/settings/objects) can now carry a
+  `locked: true` flag, plus `prompt`, `tags`, `source`, and `sourceSeriesId`
+  fields. When a series with a linked universe runs prose extraction (`prose`
+  stage auto-extract or the `/extract-bible` route), every NEW canon entry it
+  inserts is stamped `source: 'series-extract'`, `sourceSeriesId: series.id`,
+  and `locked: true`. This protects an active series's canon from being
+  silently rewritten by a later refine / re-extract / differentiate-cast pass
+  against the universe — the human operator unlocks the entry first when they
+  want regeneration to touch it.
+  - **Refine + Differentiate honor locks.** `POST /:id/characters/:entryId/refine`
+    returns 409 (`UNIVERSE_CANON_LOCKED`) on a locked character. The
+    `differentiate-cast` flow sends the full cast to the LLM (so unlocked
+    rewrites stay distinct from locked descriptions) but discards rewrites
+    targeting locked ids at apply time — locked `physicalDescription` round-
+    trips verbatim. New `skippedLocked` count surfaces alongside the existing
+    `touched` / `skipped` counts in the response.
+  - **`mergeExtractedBible` lock-aware semantics.** Locked entries pass
+    through narrative-field overwrites intact; only `evidence[]` is appended
+    (deduped) so the crossover trail still grows across multiple extractions.
+    `firstAppearance` and `missingFromProse` are not touched on locked
+    entries.
+  - **Categories→canon backfill on first read.** v1 universes (no
+    `schemaVersion` on disk) load through `sanitizeTemplate` and have every
+    `categories[key].variations[i]` copied into the matching canon array as a
+    new entry — characters → `characters[]`, landscapes/environments →
+    `settings[]` (tagged `landscape` / `environment`), vehicles/structures →
+    `objects[]` (tagged `vehicle` / `structure`), and any custom category
+    bucket flows into `objects[]` tagged with the bucket name. The migration
+    is idempotent (`schemaVersion: 2` stamped after first read and persisted
+    so user-renamed entries survive subsequent loads). Categories continue to
+    coexist with canon arrays during the UI transition; a follow-up retires
+    `categories` once the UI reads canon directly.
+  - **New lock-toggle route.** `PATCH /api/universe-builder/:id/canon/:kind/:entryId/lock`
+    with `{ locked: boolean }` toggles a single entry's lock. Unlock strips
+    the field entirely so the on-disk shape stays minimal (only `true` is
+    persisted, mirroring the variation pattern).
+  - **Source vocabulary.** Legacy `source: 'user' | 'ai' | 'imported'`
+    accepted on read for back-compat; new universe-canon writes use the
+    semantic `source: 'universe-expand' | 'series-extract' | 'manual'`
+    vocabulary. Writers-room flows continue to write the legacy values, so
+    the existing badge UI in `CharactersBible.jsx` / `SettingsBible.jsx` /
+    `ObjectsBible.jsx` is unaffected.
+  - **Tests.** 8 new storyBible cases (sanitizer extras + lock-aware merge +
+    autoLock provenance), 3 new universeBuilder cases (backfill + idempotence
+    + no-overwrite), and a new `universeCanon.test.js` file with 10 cases
+    covering `setCanonEntryLock` + refine refuses locked + differentiate
+    skips locked + extract autoLock pass-through. Full server suite (4,525
+    tests) passes.
+
+- **TUI providers — codex, claude code, gemini in attachable shells.** New
+  provider type `tui` runs CoS agents inside a PTY-backed shell session that
+  the user can attach to mid-run from the Shell page (`/shell?session=…`).
+  Ships disabled-by-default entries for `codex-tui`, `claude-code-tui`, and
+  `gemini-tui` in `data.sample/providers.json`; existing deployments pick
+  them up automatically because `scripts/setup-data.js` now JSON-merges new
+  `providers` entries on update (same starter-merge pattern as
+  `prompts/stage-config.json`). The Shell page's quick-command toolbar also
+  gains a `gemini` button alongside the existing `claude` / `codex` buttons.
+
 - **Universe canon — characters, places, and objects on the universe.** Phase A
   of the Universe-as-canon refactor. `universe.characters[]`/`settings[]`/
   `objects[]` arrays now live on the universe record alongside the existing

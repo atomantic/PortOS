@@ -96,6 +96,56 @@ describe('storyBible — sanitizeCharacter', () => {
     const out = sanitizeCharacter({ name: 'A', aliases: ['', '  ', null, 42, 'real'] });
     expect(out.aliases).toEqual(['real']);
   });
+
+  // ---- Universe-as-Canon extras: prompt / tags / locked / source / sourceSeriesId ----
+
+  it('accepts Universe-as-Canon extras: prompt + tags + sourceSeriesId', () => {
+    const out = sanitizeCharacter({
+      name: 'Alex',
+      prompt: 'field lead detective, expressive face, short jacket',
+      tags: ['protagonist', 'detective'],
+      sourceSeriesId: 'ser-1234',
+    });
+    expect(out.prompt).toBe('field lead detective, expressive face, short jacket');
+    expect(out.tags).toEqual(['protagonist', 'detective']);
+    expect(out.sourceSeriesId).toBe('ser-1234');
+  });
+
+  it('persists locked: true and accepts the new source vocabulary', () => {
+    const out = sanitizeCharacter({ name: 'Alex', locked: true, source: 'series-extract' });
+    expect(out.locked).toBe(true);
+    expect(out.source).toBe('series-extract');
+  });
+
+  it('omits locked when not strictly true (mirrors variation pattern)', () => {
+    expect(sanitizeCharacter({ name: 'A', locked: false }).locked).toBeUndefined();
+    expect(sanitizeCharacter({ name: 'A', locked: 'yes' }).locked).toBeUndefined();
+    expect(sanitizeCharacter({ name: 'A', locked: 1 }).locked).toBeUndefined();
+    expect(sanitizeCharacter({ name: 'A' }).locked).toBeUndefined();
+  });
+
+  it('caps tags + prompt + sourceSeriesId at their limits', () => {
+    const longPrompt = 'p'.repeat(BIBLE_LIMITS.PROMPT_MAX + 50);
+    const tooManyTags = Array.from({ length: BIBLE_LIMITS.TAGS_PER_ENTRY_MAX + 5 }, (_, i) => `tag-${i}`);
+    const longSrc = 's'.repeat(BIBLE_LIMITS.SOURCE_SERIES_ID_MAX + 10);
+    const out = sanitizeCharacter({
+      name: 'A', prompt: longPrompt, tags: tooManyTags, sourceSeriesId: longSrc,
+    });
+    expect(out.prompt.length).toBe(BIBLE_LIMITS.PROMPT_MAX);
+    expect(out.tags.length).toBe(BIBLE_LIMITS.TAGS_PER_ENTRY_MAX);
+    expect(out.sourceSeriesId.length).toBe(BIBLE_LIMITS.SOURCE_SERIES_ID_MAX);
+  });
+
+  it('extras apply identically to settings + objects', () => {
+    const s = sanitizeSetting({ name: 'Bubble Room', tags: ['indoor'], prompt: 'pastel lab', locked: true });
+    expect(s.tags).toEqual(['indoor']);
+    expect(s.prompt).toBe('pastel lab');
+    expect(s.locked).toBe(true);
+    const o = sanitizeObject({ name: 'Ward Tape', tags: ['prop', 'recurring'], prompt: 'striped tape coil', source: 'manual' });
+    expect(o.tags).toEqual(['prop', 'recurring']);
+    expect(o.prompt).toBe('striped tape coil');
+    expect(o.source).toBe('manual');
+  });
 });
 
 describe('storyBible — sanitizeSetting', () => {
@@ -222,6 +272,51 @@ describe('storyBible — mergeExtractedBible (characters)', () => {
     const incoming = Array.from({ length: 5 }, (_, i) => ({ name: `new-${i}` }));
     const merged = mergeExtractedBible(existing, incoming, 'character');
     expect(merged.length).toBe(BIBLE_LIMITS.ENTRIES_PER_BIBLE_MAX);
+  });
+
+  // ---- Universe-as-Canon lock-aware merge ----
+
+  it('locked existing entry: skips field overwrites, appends new evidence (deduped)', () => {
+    const existing = [sanitizeCharacter({
+      id: 'c1', name: 'Alex', physicalDescription: 'jacket with bright piping',
+      role: 'Field Lead', personality: 'calm menace', evidence: ['Issue 1 prose'],
+      locked: true, source: 'series-extract',
+    })];
+    const merged = mergeExtractedBible(existing, [{
+      name: 'Alex',
+      physicalDescription: 'rewritten attempt',
+      role: 'rewritten role',
+      personality: 'rewritten',
+      evidence: ['Issue 1 prose', 'Issue 3 prose'], // first is dupe, second is new
+      firstAppearance: 'should-be-ignored',
+    }], 'character');
+    expect(merged.length).toBe(1);
+    const alex = merged[0];
+    // Narrative fields round-trip verbatim — locked entries are protected.
+    expect(alex.physicalDescription).toBe('jacket with bright piping');
+    expect(alex.role).toBe('Field Lead');
+    expect(alex.personality).toBe('calm menace');
+    expect(alex.firstAppearance).toBeNull();
+    // Evidence accumulates: dedupe by case-insensitive trimmed string.
+    expect(alex.evidence).toEqual(['Issue 1 prose', 'Issue 3 prose']);
+    // Lock survives.
+    expect(alex.locked).toBe(true);
+  });
+
+  it('autoLock option stamps locked: true + sourceSeriesId on new inserts', () => {
+    const merged = mergeExtractedBible([], [{ name: 'Beta' }], 'character', {
+      source: 'series-extract', autoLock: true, sourceSeriesId: 'ser-active',
+    });
+    expect(merged.length).toBe(1);
+    expect(merged[0].locked).toBe(true);
+    expect(merged[0].source).toBe('series-extract');
+    expect(merged[0].sourceSeriesId).toBe('ser-active');
+  });
+
+  it('autoLock false (default) inserts unlocked entries — legacy behavior preserved', () => {
+    const merged = mergeExtractedBible([], [{ name: 'Beta' }], 'character');
+    expect(merged[0].locked).toBeUndefined();
+    expect(merged[0].source).toBe('ai'); // legacy default
   });
 });
 
