@@ -23,7 +23,7 @@
  * responsive without a refetch.
  */
 
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Plus, Trash2, Loader2, Sparkles, ShieldCheck, ChevronRight, ChevronDown,
@@ -38,6 +38,7 @@ import {
   generatePipelineArcOverview, generatePipelineSeasonEpisodes, verifyPipelineArc,
   resolvePipelineArcIssues,
   listPipelineIssues, updatePipelineSeries,
+  getProviders,
 } from '../../services/api';
 
 const ISSUE_STATUS_COLORS = {
@@ -114,10 +115,26 @@ function ArcHeader({ series, onSeriesUpdate, onIssuesUpdate, onFlushPending }) {
   // Which finding indexes have an in-flight per-finding resolve. Lets the row
   // show its own spinner without blocking the rest of the page.
   const [resolvingIdx, setResolvingIdx] = useState(new Set());
+  const [providers, setProviders] = useState([]);
+  const [activeProviderId, setActiveProviderId] = useState(null);
 
-  // Persist any pending bible edits BEFORE the LLM call reads from the server.
-  // Without this, typing "32" into the issue count and clicking Regenerate
-  // would run against the previously-saved value.
+  useEffect(() => {
+    getProviders()
+      .then((data) => {
+        setProviders(data?.providers || []);
+        setActiveProviderId(data?.activeProvider || null);
+      })
+      .catch(() => { /* dropdowns just show "Active provider" fallback */ });
+  }, []);
+
+  const llmOverride = useMemo(() => ({
+    providerOverride: series.llm?.provider || undefined,
+    modelOverride: series.llm?.model || undefined,
+  }), [series.llm?.provider, series.llm?.model]);
+
+  // Persist pending bible edits BEFORE the LLM call reads from the server,
+  // so typing "32" into the issue count and clicking Regenerate runs against
+  // the on-screen value, not the previously-saved one.
   const withFlush = async (fn) => {
     if (onFlushPending) await onFlushPending();
     return fn();
@@ -126,7 +143,7 @@ function ArcHeader({ series, onSeriesUpdate, onIssuesUpdate, onFlushPending }) {
   const runGenerate = async () => {
     setRunning('generate');
     const result = await withFlush(() =>
-      generatePipelineArcOverview(series.id, { commit: true }).catch((err) => {
+      generatePipelineArcOverview(series.id, { commit: true, ...llmOverride }).catch((err) => {
         toast.error(err.message || 'Failed to generate arc');
         return null;
       }),
@@ -136,15 +153,10 @@ function ArcHeader({ series, onSeriesUpdate, onIssuesUpdate, onFlushPending }) {
     onSeriesUpdate(result.series);
     toast.success('Arc generated and saved');
   };
-  // Two-click-arm pattern only applies when there's already an arc to clobber
-  // — first-time generation skips the confirm.
-  const [armReplace, armedGenerate] = useArmedAction(runGenerate);
-  const tryGenerate = () => (arc ? armedGenerate() : runGenerate());
-
   const runVerify = async () => {
     setRunning('verify');
     const result = await withFlush(() =>
-      verifyPipelineArc(series.id).catch((err) => {
+      verifyPipelineArc(series.id, llmOverride).catch((err) => {
         toast.error(err.message || 'Failed to verify arc');
         return null;
       }),
@@ -166,6 +178,7 @@ function ArcHeader({ series, onSeriesUpdate, onIssuesUpdate, onFlushPending }) {
     const result = await withFlush(() =>
       resolvePipelineArcIssues(series.id, {
         findings: findingsSubset,
+        ...llmOverride,
       }).catch((err) => {
         toast.error(err.message || 'Auto-resolve failed');
         return null;
@@ -206,24 +219,65 @@ function ArcHeader({ series, onSeriesUpdate, onIssuesUpdate, onFlushPending }) {
     }
   };
 
-  const generateBtnLabel = !arc ? 'Generate arc'
-    : armReplace ? 'Click again to replace'
-      : 'Regenerate arc';
+  const generateBtnLabel = arc ? 'Regenerate arc' : 'Generate arc';
+
+  const providerLabel = (id) => providers.find((p) => p.id === id)?.name || id || '—';
+  const providerModels = useMemo(() => {
+    const p = providers.find((x) => x.id === series.llm?.provider)
+      || providers.find((x) => x.id === activeProviderId);
+    return p?.models || [];
+  }, [providers, activeProviderId, series.llm?.provider]);
+
+  // Save on change rather than waiting for a "Save" button — verify / resolve /
+  // episode-gen all read series.llm at request time, so a delayed save would
+  // run a generation against a stale choice.
+  const saveLlm = async (next) => {
+    const updated = await updatePipelineSeries(series.id, { llm: next }).catch((err) => {
+      toast.error(err.message || 'Failed to save provider choice');
+      return null;
+    });
+    if (updated) onSeriesUpdate(updated);
+  };
 
   return (
     <section className="bg-port-card border border-port-border rounded-lg p-4 space-y-3">
       <div className="flex items-center justify-between flex-wrap gap-2">
         <h2 className="text-xs uppercase tracking-wider text-gray-500">Series arc</h2>
         <div className="flex items-center gap-2 flex-wrap">
+          {/* Bind to `?? ''` (NOT `|| activeProviderId || ''`) — unset must
+              select the "Active provider" empty option, otherwise the dropdown
+              would silently pin the active provider as if the user had chosen it. */}
+          <select
+            value={series.llm?.provider ?? ''}
+            onChange={(e) => saveLlm({ provider: e.target.value || null, model: null })}
+            disabled={!!running}
+            title="AI provider for arc generate / verify / resolve / episode generation"
+            className="bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-xs disabled:opacity-40"
+          >
+            <option value="">Active provider ({providerLabel(activeProviderId)})</option>
+            {providers.map((p) => (
+              <option key={p.id} value={p.id}>{p.name}</option>
+            ))}
+          </select>
+          <select
+            value={series.llm?.model || ''}
+            onChange={(e) => saveLlm({ ...(series.llm || {}), model: e.target.value || null })}
+            disabled={!!running || providerModels.length === 0}
+            title="Model for arc operations"
+            className="bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-xs disabled:opacity-40 max-w-[180px]"
+          >
+            <option value="">Default model</option>
+            {providerModels.map((m) => {
+              const id = typeof m === 'string' ? m : m.id;
+              const label = typeof m === 'string' ? m : (m.name || m.id);
+              return <option key={id} value={id}>{label}</option>;
+            })}
+          </select>
           <button
             type="button"
-            onClick={tryGenerate}
+            onClick={runGenerate}
             disabled={!!running}
-            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-sm font-medium border transition-colors ${
-              armReplace
-                ? 'bg-port-warning/10 text-port-warning border-port-warning/40'
-                : 'bg-port-bg text-port-accent border-port-border hover:border-port-accent/40'
-            } disabled:opacity-40`}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-sm font-medium border transition-colors bg-port-bg text-port-accent border-port-border hover:border-port-accent/40 disabled:opacity-40"
           >
             {running === 'generate' ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
             {generateBtnLabel}
@@ -458,18 +512,26 @@ function SeasonRow({ series, season, seasons, issues, onSeriesUpdate, onIssuesUp
       return;
     }
     setGeneratingEpisodes(true);
-    const result = await generatePipelineSeasonEpisodes(series.id, season.id, { commit: true })
+    const result = await generatePipelineSeasonEpisodes(series.id, season.id, {
+      commit: true,
+      providerOverride: series.llm?.provider || undefined,
+      modelOverride: series.llm?.model || undefined,
+    })
       .catch((err) => {
         toast.error(err.message || 'Failed to generate issues / episodes');
         return null;
       });
     setGeneratingEpisodes(false);
     if (!result) return;
-    // Refresh the issues list so the new ones land under this volume.
     const refreshed = await listPipelineIssues(series.id).catch(() => null);
     if (refreshed) onIssuesUpdate(refreshed);
+    if (result.bibleExtracted?.series) onSeriesUpdate(result.bibleExtracted.series);
     const n = result.createdIssues?.length || 0;
-    toast.success(`Generated ${n} issue${n === 1 ? '' : 's'} / episode${n === 1 ? '' : 's'}`);
+    const extracted = result.bibleExtracted;
+    const extractedSummary = extracted
+      ? ` (+${extracted.characters} chars, +${extracted.settings} settings, +${extracted.objects} objects extracted)`
+      : '';
+    toast.success(`Generated ${n} issue${n === 1 ? '' : 's'} / episode${n === 1 ? '' : 's'}${extractedSummary}`);
   };
 
   const runDeleteSeason = async () => {

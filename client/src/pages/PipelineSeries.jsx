@@ -94,7 +94,8 @@ export default function PipelineSeries() {
     const saved = lastSavedRef.current || series;
     const fields = ['name', 'logline', 'premise', 'styleNotes', 'issueCountTarget', 'worldId'];
     const dirty = fields.some((k) => (series[k] ?? '') !== (saved[k] ?? ''))
-      || JSON.stringify(series.characters || []) !== JSON.stringify(saved.characters || []);
+      || JSON.stringify(series.characters || []) !== JSON.stringify(saved.characters || [])
+      || JSON.stringify(series.llm || {}) !== JSON.stringify(saved.llm || {});
     if (!dirty) return false;
     const updated = await updatePipelineSeries(series.id, {
       name: series.name,
@@ -104,6 +105,7 @@ export default function PipelineSeries() {
       styleNotes: series.styleNotes,
       issueCountTarget: series.issueCountTarget,
       characters: series.characters,
+      llm: series.llm || { provider: null, model: null },
     }).catch((err) => {
       toast.error(`Pre-flush save failed: ${err.message}`);
       return null;

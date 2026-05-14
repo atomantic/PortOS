@@ -15,7 +15,7 @@
  */
 
 import { runStagedLLM } from '../../lib/stageRunner.js';
-import { getSeries } from './series.js';
+import { getSeries, extractAndMergeIntoSeries } from './series.js';
 import { getIssue, updateStage, TEXT_STAGE_IDS } from './issues.js';
 
 const STAGE_TO_TEMPLATE = Object.freeze({
@@ -111,6 +111,20 @@ export async function generateStage(issueId, stageId, options = {}) {
   });
 
   console.log(`✅ Pipeline stage — issue=${issueId.slice(0, 8)} stage=${stageId} runId=${result.runId} length=${output.length}`);
+
+  // Only runs on `prose`: scripts derive from prose so new characters land here
+  // first; idea is too short to extract usefully. Non-fatal — prose succeeded,
+  // and a noisy extract shouldn't roll back the user's accepted draft.
+  if (stageId === 'prose' && output) {
+    await extractAndMergeIntoSeries(series.id, {
+      corpus: output,
+      providerOverride: options.providerId,
+      parallel: true,
+    }).catch((err) => {
+      console.warn(`⚠️ Prose extraction failed for issue ${issueId.slice(0, 8)}: ${err.message}`);
+    });
+  }
+
   return { issue: updatedIssue, stage, runId: result.runId };
 }
 

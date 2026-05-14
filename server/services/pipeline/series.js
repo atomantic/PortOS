@@ -55,6 +55,12 @@ const sanitizeSeries = (raw) => {
   const issueCountTarget = Number.isFinite(raw.issueCountTarget)
     ? Math.max(0, Math.min(ISSUE_COUNT_TARGET_MAX, Math.floor(raw.issueCountTarget)))
     : 0;
+  const llm = raw.llm && typeof raw.llm === 'object'
+    ? {
+      provider: trimTo(raw.llm.provider, 80) || null,
+      model: trimTo(raw.llm.model, 200) || null,
+    }
+    : { provider: null, model: null };
   const createdAt = isStr(raw.createdAt) ? raw.createdAt : new Date().toISOString();
   const updatedAt = isStr(raw.updatedAt) ? raw.updatedAt : createdAt;
   return {
@@ -77,6 +83,7 @@ const sanitizeSeries = (raw) => {
     styleNotes: trimTo(raw.styleNotes, STYLE_NOTES_MAX),
     targetFormat,
     issueCountTarget,
+    llm,
     createdAt,
     updatedAt,
   };
@@ -125,6 +132,7 @@ export async function createSeries(input = {}) {
     styleNotes: input.styleNotes || '',
     targetFormat: input.targetFormat || 'comic+tv',
     issueCountTarget: input.issueCountTarget || 0,
+    llm: input.llm || null,
     createdAt: now,
     updatedAt: now,
   });
@@ -138,6 +146,10 @@ export async function updateSeries(id, patch = {}) {
   const idx = state.series.findIndex((s) => s.id === id);
   if (idx < 0) throw makeErr(`Series not found: ${id}`, ERR_NOT_FOUND);
   const cur = state.series[idx];
+  // Per-field merge so `{ provider: 'codex' }` doesn't clobber an existing `model`.
+  const mergedLlm = 'llm' in patch
+    ? { ...(cur.llm || {}), ...(patch.llm || {}) }
+    : cur.llm;
   const merged = sanitizeSeries({
     ...cur,
     ...('name' in patch ? { name: patch.name } : {}),
@@ -153,6 +165,7 @@ export async function updateSeries(id, patch = {}) {
     ...('styleNotes' in patch ? { styleNotes: patch.styleNotes } : {}),
     ...('targetFormat' in patch ? { targetFormat: patch.targetFormat } : {}),
     ...('issueCountTarget' in patch ? { issueCountTarget: patch.issueCountTarget } : {}),
+    llm: mergedLlm,
     updatedAt: new Date().toISOString(),
   });
   if (!merged) throw makeErr('Invalid series payload', ERR_VALIDATION);

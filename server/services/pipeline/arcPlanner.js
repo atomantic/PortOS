@@ -34,6 +34,23 @@ const makeErr = (message, code) => Object.assign(new Error(message), { code });
 const VERIFY_SEVERITIES = new Set(['high', 'medium', 'low']);
 const ARC_ROLES = new Set(['pilot', 'complication', 'midpoint', 'b-plot', 'all-is-lost', 'finale']);
 
+// Each prior season renders as its header (logline + synopsis) plus the
+// committed per-episode beats from `stages.idea.input` — that field was
+// seeded with the LLM's `logline + synopsis` at episode-generate time.
+function renderPriorSeason(s, priorIssues) {
+  const header = `### Season ${s.number} — ${s.title}\n\n${s.logline}\n\n${s.synopsis || '(no synopsis)'}`;
+  const seasonEpisodes = priorIssues
+    .filter((iss) => iss.seasonId === s.id)
+    .sort((a, b) => (a.arcPosition ?? 9999) - (b.arcPosition ?? 9999));
+  if (seasonEpisodes.length === 0) return header;
+  const lines = seasonEpisodes.map((iss) => {
+    const idea = (iss.stages?.idea?.input || '').trim();
+    const ord = iss.arcPosition || '?';
+    return idea ? `- E${ord} — ${iss.title}: ${idea}` : `- E${ord} — ${iss.title}`;
+  }).join('\n');
+  return `${header}\n\nEpisode beats:\n${lines}`;
+}
+
 // The world is the canonical source for factions, characters, environments,
 // etc. — without this, the arc planner would only see the series' own
 // characters/settings/objects which are usually empty pre-prose.
@@ -163,17 +180,15 @@ export async function generateArcOverview(seriesId, options = {}) {
 
 /**
  * Build the context for one season's episode breakdown. `priorSeasonsContext`
- * is a textual summary of the seasons BEFORE this one (synopsis + logline),
- * so the LLM has continuity to work against without re-reading every season.
+ * gives the LLM granular per-episode continuity — without it the verifier and
+ * planner only see season-level synopses and can't catch beat-level contradictions.
  */
-async function buildSeasonEpisodesContext(series, season, priorSeasons, preloadedWorld) {
+async function buildSeasonEpisodesContext(series, season, priorSeasons, priorIssues = [], preloadedWorld) {
   const arc = series.arc || {};
   const themesCsv = Array.isArray(arc.themes) ? arc.themes.join(', ') : '';
   const priorSeasonsContext = priorSeasons.length === 0
     ? '(this is the first season — no prior context)'
-    : priorSeasons
-      .map((s) => `### Season ${s.number} — ${s.title}\n\n${s.logline}\n\n${s.synopsis || '(no synopsis)'}`)
-      .join('\n\n');
+    : priorSeasons.map((s) => renderPriorSeason(s, priorIssues)).join('\n\n');
   const world = await resolveWorldContext(series, preloadedWorld);
   return {
     series: {
@@ -261,7 +276,14 @@ export async function generateSeasonEpisodes(seriesId, seasonId, options = {}) {
   // sanitizer; this matches what the user is editing on screen.
   const priorSeasons = seasons.filter((s) => (s.number || 0) < (season.number || 0));
 
-  const ctx = await buildSeasonEpisodesContext(series, season, priorSeasons);
+  let priorIssues = [];
+  if (priorSeasons.length > 0) {
+    const priorIds = new Set(priorSeasons.map((s) => s.id));
+    const all = await listIssues({ seriesId });
+    priorIssues = all.filter((iss) => iss.seasonId && priorIds.has(iss.seasonId));
+  }
+
+  const ctx = await buildSeasonEpisodesContext(series, season, priorSeasons, priorIssues);
   const { content, runId, providerId, model } = await runStagedLLM(
     'pipeline-season-episodes',
     ctx,
@@ -299,11 +321,15 @@ async function buildVerifyContext(series, preloadedWorld) {
   for (const iss of issues) {
     const key = iss.seasonId || null;
     if (!issuesBySeason.has(key)) issuesBySeason.set(key, []);
+    // `synopsis` key (not `beats`) so it matches the prompt's existing
+    // language; sourced from idea.input which carries the LLM's logline+synopsis.
+    const synopsis = (iss.stages?.idea?.input || '').trim();
     issuesBySeason.get(key).push({
       number: iss.number,
       title: iss.title,
       status: iss.status,
       arcPosition: iss.arcPosition,
+      synopsis: synopsis || null,
     });
   }
   for (const list of issuesBySeason.values()) {

@@ -29,7 +29,10 @@ import { getSeries } from './series.js';
 import { getIssue, updateStage, VISUAL_STAGE_IDS } from './issues.js';
 import { getWorld } from '../worldBuilder.js';
 import { ServerError } from '../../lib/errorHandler.js';
-import { buildScenePrompt, buildSettingByKey, matchSceneSetting } from '../../lib/scenePrompt.js';
+import {
+  buildScenePrompt, buildSettingByKey, matchSceneSetting,
+  buildCharByKey, matchSceneCharacters, matchCharactersInText,
+} from '../../lib/scenePrompt.js';
 import { composeStyledPrompt } from '../../lib/composeStyledPrompt.js';
 import { getDefaultVideoModelId, getVideoModels } from '../../lib/mediaModels.js';
 import { runStagedLLM } from '../../lib/stageRunner.js';
@@ -101,9 +104,17 @@ export function composeVisualPrompt({ series, description, slugline = '', extraS
   return applyWorldStyle(scenePrompt, world);
 }
 
-export function composeComicPagePrompt({ series, world, page, pageNumber, extraStyle = '' }) {
+export function composeComicPagePrompt({ series, world, page, pageNumber, extraStyle = '', matchedCharacters = [] }) {
   const panels = Array.isArray(page?.panels) ? page.panels : [];
   if (panels.length === 0) return '';
+
+  // Placed AFTER the layout clause: diffusion models weight earlier tokens
+  // more heavily, and the page-shape instruction has to claim that position.
+  const featuring = (matchedCharacters || [])
+    .map((c) => ({ name: c.name, desc: (c.physicalDescription || c.description || '').trim() }))
+    .filter((c) => c.name && c.desc)
+    .map((c) => `${c.name}: ${c.desc}`)
+    .join('; ');
 
   // Append a sentence-terminator unless the source text already ends in one —
   // prose extracted from a script often carries its own `.`, `!`, or `?`, and
@@ -140,8 +151,9 @@ export function composeComicPagePrompt({ series, world, page, pageNumber, extraS
   const seriesClause = series?.name ? ` from the series "${series.name}"` : '';
 
   const layout = `A single full printable comic book page${seriesClause}, page ${pageNumber}. Render a balanced multi-panel comic page layout with ${panels.length} clearly bordered panel${panels.length === 1 ? '' : 's'} arranged for left-to-right, top-to-bottom reading. Include lettered speech balloons for dialogue, rectangular narration captions, and stylized SFX where indicated. Each panel must be visually distinct, with consistent character designs across panels.${styleClause}`;
+  const featuringClause = featuring ? `\n\nFeaturing — ${featuring}` : '';
 
-  return applyWorldStyle(`${layout}\n\n${panelLines.join('\n\n')}`, world);
+  return applyWorldStyle(`${layout}${featuringClause}\n\n${panelLines.join('\n\n')}`, world);
 }
 
 /**
@@ -174,11 +186,19 @@ export async function enqueueVisualComicPage(issueId, options = {}) {
   }
 
   const mode = resolveMode(options, settings);
+  // Dialogue carries structured CAPS names, so match via charByKey rather than
+  // scanning panel description prose (cheaper and more reliable).
+  const charByKey = buildCharByKey(series.characters || []);
+  const dialogueNames = page.panels.flatMap((p) =>
+    (p.dialogue || []).map((d) => d.character).filter(Boolean),
+  );
+  const matchedCharacters = matchSceneCharacters(dialogueNames, charByKey);
   // composeComicPagePrompt only returns '' when panels.length === 0, which is
   // already rejected above. The "(continuation of previous beat)" placeholder
   // covers panels with no description, so the prompt is non-empty by here.
   const prompt = composeComicPagePrompt({
     series, world, page, pageNumber: pageIndex + 1, extraStyle: options.extraStyle,
+    matchedCharacters,
   });
 
   const jobId = enqueueImageJob({
@@ -204,11 +224,13 @@ export async function enqueueVisualImage(issueId, stageId, options = {}) {
   }
   const { settings, series, world } = await loadBibleContext(issueId);
   const mode = resolveMode(options, settings);
+  const matchedCharacters = matchCharactersInText(options.description || '', series.characters || []);
   const prompt = composeVisualPrompt({
     series,
     description: options.description,
     slugline: options.slugline,
     extraStyle: options.extraStyle,
+    matchedCharacters,
     world,
   });
   if (!prompt) {
@@ -266,11 +288,16 @@ export async function enqueueStoryboardSceneVideo(issueId, sceneIndex, options =
     });
   }
 
+  const matchedCharacters = matchCharactersInText(
+    `${scene.description || ''} ${scene.slugline || ''}`,
+    series.characters || [],
+  );
   const prompt = composeVisualPrompt({
     series,
     description: scene.description,
     slugline: scene.slugline || '',
     extraStyle: options.extraStyle,
+    matchedCharacters,
     world,
   });
 

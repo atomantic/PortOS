@@ -62,7 +62,7 @@ const categoriesSchema = z.record(
   message: `categories cannot exceed ${svc.WORLD_CATEGORY_COUNT_MAX} buckets`,
 });
 
-const llmSchema = z.object({
+export const llmSchema = z.object({
   provider: z.string().trim().max(80).nullable().optional(),
   model: z.string().trim().max(200).nullable().optional(),
 }).optional();

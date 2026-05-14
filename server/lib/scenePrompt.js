@@ -41,6 +41,35 @@ export function matchSceneCharacters(sceneCharacterNames = [], charByKey) {
   return matched;
 }
 
+/**
+ * Scan a free-form text blob (panel/scene description) for any character
+ * names or aliases from the bible. Word-boundary matching, case-insensitive.
+ * Used when the visual record doesn't carry a structured character list (e.g.
+ * storyboard scenes only have a free-text description). Keeps the prompt
+ * grounded in bible-canonical descriptions for everyone the LLM named.
+ */
+export function matchCharactersInText(text, allCharacters) {
+  if (!text || !Array.isArray(allCharacters) || !allCharacters.length) return [];
+  const haystack = String(text);
+  const matched = [];
+  const seen = new Set();
+  const wordBoundary = (needle) => {
+    if (!needle) return false;
+    const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`\\b${escaped}\\b`, 'i').test(haystack);
+  };
+  for (const profile of allCharacters) {
+    const key = profile.id || profile.name;
+    if (!key || seen.has(key)) continue;
+    const candidates = [profile.name, ...(profile.aliases || [])].filter(Boolean);
+    if (candidates.some(wordBoundary)) {
+      matched.push(profile);
+      seen.add(key);
+    }
+  }
+  return matched;
+}
+
 export function buildSettingByKey(allSettings) {
   const map = new Map();
   for (const setting of allSettings || []) {

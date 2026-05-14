@@ -48,6 +48,7 @@ import { startEpisodeVideoForIssue, ERR_NO_STORYBOARDS } from '../services/pipel
 import { ASPECT_RATIOS, QUALITIES } from '../lib/creativeDirectorPresets.js';
 import { extractScenes, SOURCE_KIND } from '../lib/sceneExtractor.js';
 import { parseComicScript } from '../lib/comicScriptParser.js';
+import { llmSchema } from './worldBuilder.js';
 import { BIBLE_KIND } from '../lib/storyBible.js';
 import { ARC_LIMITS, ARC_STATUSES, SEASON_STATUSES } from '../lib/storyArc.js';
 
@@ -140,6 +141,7 @@ const seriesCreateSchema = z.object({
   styleNotes: z.string().trim().max(seriesSvc.STYLE_NOTES_MAX).optional().default(''),
   targetFormat: z.enum(seriesSvc.TARGET_FORMATS).optional(),
   issueCountTarget: z.number().int().min(0).max(seriesSvc.ISSUE_COUNT_TARGET_MAX).optional(),
+  llm: llmSchema,
 });
 
 const seriesPatchSchema = z.object({
@@ -156,6 +158,7 @@ const seriesPatchSchema = z.object({
   styleNotes: z.string().trim().max(seriesSvc.STYLE_NOTES_MAX).optional(),
   targetFormat: z.enum(seriesSvc.TARGET_FORMATS).optional(),
   issueCountTarget: z.number().int().min(0).max(seriesSvc.ISSUE_COUNT_TARGET_MAX).optional(),
+  llm: llmSchema,
 }).refine((p) => Object.keys(p).length > 0, { message: 'patch must include at least one field' });
 
 // Season-resource schemas: dedicated CRUD on a sibling resource so the
@@ -497,6 +500,7 @@ router.post('/series/:id/seasons/:seasonId/episodes/generate', asyncHandler(asyn
     .catch((err) => { throw mapServiceError(err); });
 
   const createdIssues = [];
+  let bibleExtracted = null;
   if (body.commit) {
     // Create one issue per episode under this season. The issue sanitizer
     // already accepts `seasonId` + `arcPosition`, so we forward them in the
@@ -521,6 +525,31 @@ router.post('/series/:id/seasons/:seasonId/episodes/generate', asyncHandler(asyn
       });
       createdIssues.push(created);
     }
+
+    // Non-fatal: episode creation already succeeded, so a noisy extraction
+    // failure must not invalidate the user's accepted breakdown.
+    const corpus = result.episodes
+      .map((ep) => `## E${ep.number} — ${ep.title}\n\n${ep.logline || ''}\n\n${ep.synopsis || ''}`.trim())
+      .filter(Boolean)
+      .join('\n\n');
+    if (corpus.trim()) {
+      const extractRes = await seriesSvc.extractAndMergeIntoSeries(req.params.id, {
+        corpus,
+        providerOverride: body.providerOverride,
+        parallel: true,
+      }).catch((err) => {
+        console.warn(`⚠️ Continuity extraction failed for season ${req.params.seasonId}: ${err.message}`);
+        return null;
+      });
+      if (extractRes) {
+        bibleExtracted = {
+          characters: extractRes.results.characters?.extracted?.length || 0,
+          settings: extractRes.results.settings?.extracted?.length || 0,
+          objects: extractRes.results.objects?.extracted?.length || 0,
+          series: extractRes.series,
+        };
+      }
+    }
   }
 
   res.json({
@@ -531,6 +560,7 @@ router.post('/series/:id/seasons/:seasonId/episodes/generate', asyncHandler(asyn
     model: result.model,
     committed: !!body.commit,
     createdIssues,
+    bibleExtracted,
   });
 }));
 

@@ -2,6 +2,45 @@
 
 ## Added
 
+- **Pipeline Series — configurable per-series AI provider + model.** The arc
+  header now has provider + model dropdowns (mirroring the World Builder
+  expansion picker) bound to a new `series.llm = { provider, model }` field.
+  The choice persists on the series and is threaded into every arc operation —
+  Generate / Regenerate arc, Verify arc, Resolve, and per-season Generate
+  episodes — so the whole arc workflow runs against one consistent provider.
+  Defaults to the active system provider when unset.
+
+- **Pipeline Series — granular continuity context for season generation and
+  verification.** When generating volume N's episode breakdown, the LLM now
+  receives the actual per-episode beats of all prior volumes (pulled from each
+  issue's `stages.idea.input`), not just the season-level synopses. The
+  Verify arc pass also sees those per-episode synopses, so it can finally
+  catch contradictions like "S1E7 introduces a character never referenced
+  again" or "S2E3 implies a state S1's final episode hasn't reached" — the
+  prompt has always asked for these checks, but with only episode titles
+  visible the LLM had to bluff.
+
+- **Pipeline Series — automatic bible extraction after generation.** After a
+  successful per-season *Generate episodes* run, the server now extracts new
+  characters / settings / objects mentioned in the new episode loglines and
+  synopses, deduplicates them against the existing bible, and merges them in.
+  The same extraction also fires after every successful prose-stage
+  generation (`stages.prose`). Result: characters introduced mid-writing flow
+  back into the series bible automatically, so downstream visual stages
+  render the same character consistently across issues. Toast on the
+  episodes-generate flow now reads `"Generated 11 episodes (+3 chars, +2
+  settings, +1 objects extracted)"`.
+
+- **Pipeline Series — character physical descriptions reach image
+  composers.** `composeComicPagePrompt` and `composeVisualPrompt` now receive
+  the matched character profiles for everyone speaking on the page or named
+  in a storyboard scene's description, and prepend a "Featuring — NAME:
+  <physicalDescription>; ..." clause to the diffusion prompt. A new
+  `matchCharactersInText` helper word-boundary-scans free-text scene
+  descriptions for bible character names + aliases (the comic-page path uses
+  the structured dialogue character field directly). Same character now
+  renders the same way across panels, pages, and scenes.
+
 - **Pipeline Series — auto-resolve verification findings.** The verify panel
   now has a *Resolve all* button at the top and a per-finding *Resolve* button
   on each row. Each kicks off an LLM pass that rewrites the arc + volume
@@ -33,6 +72,13 @@
   rather than the last manually-saved snapshot.
 
 ## Changed
+
+- **Pipeline Series — Regenerate arc button no longer requires two clicks.**
+  Dropped the `useArmedAction` two-click-arm pattern from the regenerate
+  button; one click runs. The pattern was confusing — users didn't realize
+  "Click again to replace" was an instruction rather than a status. The
+  delete-season and delete-issue buttons keep the arm pattern since they're
+  hover-revealed trash icons where misclick risk is real.
 
 - **Pipeline Series — combined comic/TV terminology.** Every series now ships
   in both formats by default — graphic novel (issues → volumes) AND TV
