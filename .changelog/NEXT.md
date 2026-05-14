@@ -206,6 +206,16 @@
   it) — the post-merge length comparison was always equal. Now clones the
   universe-side array before passing.
 
+- **Universe Canon page — "Appears in" cross-references.** Each canon card
+  (characters / places / objects) now shows which linked series + how many
+  issues that entry appears in: `Appears in: Clandestiny (15 issues)`. New
+  server service `canonUsage.js` aggregates prose-matched usage across
+  every linked series's issues (scans prose + idea + scripts via the same
+  matchers the comic-page renderer uses). New route
+  `GET /api/universe-builder/:id/canon-usage`. Loaded lazily after the
+  initial Canon page paint and refreshed after extract operations so new
+  entries get usage attribution automatically.
+
 - **Nouns page is universe-only — orphan fallback removed (Phase B.3b).**
   The per-issue Nouns page no longer falls back to series-side canon for
   unlinked series. A series with no `universeId` now renders a clear gate

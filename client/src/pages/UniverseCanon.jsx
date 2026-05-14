@@ -20,6 +20,7 @@ import {
   refineUniverseCharacter,
   differentiateUniverseCast,
   updateUniverse,
+  getUniverseCanonUsage,
 } from '../services/apiUniverseBuilder';
 import { generateImage, getSettings } from '../services/apiSystem';
 import { composeStyledPrompt } from '../lib/composeStyledPrompt';
@@ -64,6 +65,11 @@ export default function UniverseCanon() {
   const [extractText, setExtractText] = useState('');
   const [extractOpen, setExtractOpen] = useState(false);
   const [preview, setPreview] = useState(null);
+  // Per-canon-entry usage map: `{ characters: { [entryId]: [{seriesId, seriesName, issueCount, ...}] }, ... }`.
+  // Loaded lazily after the universe itself — usage is a derived view and
+  // shouldn't block the initial render. Refetched after mutations that change
+  // the canon shape (extract / differentiate-cast) so new entries get usage.
+  const [usage, setUsage] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -77,6 +83,16 @@ export default function UniverseCanon() {
     });
     return () => { cancelled = true; };
   }, [universeId, mountedRef]);
+
+  // Lazy usage fetch. Decoupled from the universe load so a slow cross-
+  // reference scan doesn't gate the page paint, and so it can be refetched
+  // independently after canon mutations.
+  const refreshUsage = useCallback(() => {
+    getUniverseCanonUsage(universeId)
+      .then((u) => { if (mountedRef.current) setUsage(u); })
+      .catch(() => { /* non-fatal; cards just render without usage footer */ });
+  }, [universeId, mountedRef]);
+  useEffect(() => { refreshUsage(); }, [refreshUsage]);
 
   const previewItems = useMemo(() => {
     if (!universe) return [];
@@ -119,6 +135,7 @@ export default function UniverseCanon() {
     const result = await runExtract();
     if (!result || !mountedRef.current) return;
     setUniverse(result.universe);
+    refreshUsage();
     const counts = KINDS
       .map((k) => `${result.universe[k.key]?.length ?? 0} ${k.label.toLowerCase()}`)
       .join(', ');
@@ -283,6 +300,7 @@ export default function UniverseCanon() {
           key={kind.key}
           kind={kind}
           all={universe[kind.key] || []}
+          usage={usage?.[kind.key] || null}
           renderingJobs={renderingJobs}
           onRender={(entry) => handleRenderRef(kind, entry)}
           onJobCompleted={(entryId, filename) => handleRefCompleted(kind.key, entryId, filename)}
@@ -298,7 +316,7 @@ export default function UniverseCanon() {
   );
 }
 
-function KindSection({ kind, all, renderingJobs, onRender, onJobCompleted, onJobFailed, onPreview, onRefine, refiningId }) {
+function KindSection({ kind, all, usage, renderingJobs, onRender, onJobCompleted, onJobFailed, onPreview, onRefine, refiningId }) {
   const Icon = kind.icon;
   return (
     <section className="rounded-lg border border-port-border bg-port-card/40">
@@ -325,6 +343,7 @@ function KindSection({ kind, all, renderingJobs, onRender, onJobCompleted, onJob
                 onRefine={onRefine}
                 refining={refiningId === entry.id}
                 refineDisabled={!!refiningId && refiningId !== entry.id}
+                usage={usage?.[entry.id] || null}
               />
             ))}
           </ul>

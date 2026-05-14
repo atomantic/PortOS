@@ -18,6 +18,7 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import * as svc from '../services/universeBuilder.js';
 import * as canonSvc from '../services/universeCanon.js';
+import { getUniverseCanonUsage } from '../services/canonUsage.js';
 import { expandWorldTemplate } from '../services/universeBuilderExpand.js';
 import { refineWorldPrompts } from '../services/universeBuilderRefine.js';
 import { enqueueJob } from '../services/mediaJobQueue/index.js';
@@ -423,6 +424,16 @@ router.post('/:id/characters/:entryId/refine', asyncHandler(async (req, res) => 
 router.post('/:id/characters/differentiate-cast', asyncHandler(async (req, res) => {
   const body = validateRequest(refineCharSchema, req.body ?? {});
   const result = await canonSvc.differentiateUniverseCast(req.params.id, body)
+    .catch((err) => { throw mapServiceError(err); });
+  res.json(result);
+}));
+
+// Cross-reference: per-canon-entry usage across the universe's linked series.
+// Read-only aggregation; no LLM calls, no writes. Surfaces which series + how
+// many issues each character / place / object appears in, so the user can
+// see crossover/cameo footprint at a glance on the Universe Canon page.
+router.get('/:id/canon-usage', asyncHandler(async (req, res) => {
+  const result = await getUniverseCanonUsage(req.params.id)
     .catch((err) => { throw mapServiceError(err); });
   res.json(result);
 }));

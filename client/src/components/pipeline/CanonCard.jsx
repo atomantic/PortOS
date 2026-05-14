@@ -17,6 +17,9 @@ export default function CanonCard({
   inFlightJobId,
   onRender, onJobCompleted, onJobFailed, onPreview, onRefine,
   refining = false, refineDisabled = false,
+  // Cross-reference usage: `[{ seriesId, seriesName, issueCount, issueIds }, ...]`
+  // populated lazily by the Universe Canon page. Null while still loading.
+  usage = null,
 }) {
   const description = kind.descFor(entry);
   const refs = Array.isArray(entry.imageRefs) ? entry.imageRefs : [];
@@ -100,6 +103,18 @@ export default function CanonCard({
                 loading="lazy"
               />
             </button>
+          ))}
+        </div>
+      ) : null}
+      {usage && usage.length > 0 ? (
+        <div className="mt-2 text-[10px] text-gray-500">
+          Appears in:{' '}
+          {usage.map((u, i) => (
+            <span key={u.seriesId}>
+              {i > 0 ? ', ' : ''}
+              <span className="text-gray-400">{u.seriesName}</span>
+              <span className="text-gray-600"> ({u.issueCount} {u.issueCount === 1 ? 'issue' : 'issues'})</span>
+            </span>
           ))}
         </div>
       ) : null}

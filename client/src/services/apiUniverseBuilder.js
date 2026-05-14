@@ -161,3 +161,10 @@ export const differentiateUniverseCast = (universeId, { providerId, model } = {}
     method: 'POST',
     body: JSON.stringify({ providerId, model }),
   });
+
+// Cross-reference: where each canon entry appears across the universe's
+// linked series. Returns `{ characters: { [entryId]: [{seriesId, seriesName,
+// issueIds, issueCount}] }, settings: ..., objects: ..., seriesCount,
+// issueCount }`. Read-only aggregation.
+export const getUniverseCanonUsage = (universeId) =>
+  request(`/universe-builder/${encodeURIComponent(universeId)}/canon-usage`);
