@@ -44,7 +44,7 @@ function getDefaultShell() {
 export function createShellSession(socket, options = {}) {
   if (shellSessions.size >= MAX_TOTAL_SESSIONS) {
     console.warn(`🐚 Max total sessions reached (${MAX_TOTAL_SESSIONS})`);
-    socket.emit('shell:error', { error: `Max ${MAX_TOTAL_SESSIONS} shell sessions. Kill an existing session first.` });
+    socket?.emit?.('shell:error', { error: `Max ${MAX_TOTAL_SESSIONS} shell sessions. Kill an existing session first.` });
     return null;
   }
 
@@ -65,13 +65,14 @@ export function createShellSession(socket, options = {}) {
       cwd,
       env: {
         ...buildSafeEnv(),
+        ...(options.env || {}),
         TERM: 'xterm-256color',
         COLORTERM: 'truecolor'
       }
     });
   } catch (err) {
     console.error(`❌ Failed to spawn PTY: ${err.message}`);
-    socket.emit('shell:error', { error: `Failed to spawn shell: ${err.message}` });
+    socket?.emit?.('shell:error', { error: `Failed to spawn shell: ${err.message}` });
     return null;
   }
 
@@ -86,6 +87,12 @@ export function createShellSession(socket, options = {}) {
     socket,
     cwd,
     createdAt: Date.now(),
+    label: options.label || null,
+    kind: options.kind || 'shell',
+    agentId: options.agentId || null,
+    command: options.command || null,
+    onData: options.onData || null,
+    onExit: options.onExit || null,
     outputBuffer,
     bufferSize: () => bufferSize
   });
@@ -100,6 +107,7 @@ export function createShellSession(socket, options = {}) {
     }
     const session = shellSessions.get(sessionId);
     session?.socket?.emit('shell:output', { sessionId, data });
+    session?.onData?.(data);
   });
 
   // Handle pty exit
@@ -108,11 +116,15 @@ export function createShellSession(socket, options = {}) {
     const session = shellSessions.get(sessionId);
     shellSessions.delete(sessionId);
     session?.socket?.emit('shell:exit', { sessionId, code: exitCode });
+    session?.onExit?.({ exitCode });
     // Notify all sockets about session list change
     broadcastSessionList();
   });
 
   broadcastSessionList();
+  if (options.initialCommand) {
+    setTimeout(() => writeToSession(sessionId, `${options.initialCommand}\n`), options.initialCommandDelayMs || 200);
+  }
   return sessionId;
 }
 
@@ -158,10 +170,22 @@ export function listAllSessions() {
     sessions.push({
       sessionId,
       cwd: session.cwd,
-      createdAt: session.createdAt
+      createdAt: session.createdAt,
+      label: session.label,
+      kind: session.kind,
+      agentId: session.agentId,
+      command: session.command
     });
   }
   return sessions;
+}
+
+export function getSession(sessionId) {
+  return shellSessions.get(sessionId) || null;
+}
+
+export function getSessionProcess(sessionId) {
+  return shellSessions.get(sessionId)?.pty || null;
 }
 
 /**
@@ -197,6 +221,7 @@ export function killSession(sessionId) {
     console.log(`🐚 Killing shell session ${sessionId.slice(0, 8)}`);
     session.pty.kill();
     shellSessions.delete(sessionId);
+    session.onExit?.({ exitCode: null, killed: true });
     broadcastSessionList();
     return true;
   }

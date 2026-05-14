@@ -51,8 +51,8 @@ export function createProvidersRoutes(providerService, options = {}) {
       return res.status(400).json({ error: 'Name is required' });
     }
 
-    if (!type || !['cli', 'api'].includes(type)) {
-      return res.status(400).json({ error: 'Type must be "cli" or "api"' });
+    if (!type || !['cli', 'api', 'tui'].includes(type)) {
+      return res.status(400).json({ error: 'Type must be "cli", "api", or "tui"' });
     }
 
     const provider = await providerService.createProvider(req.body);

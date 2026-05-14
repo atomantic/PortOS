@@ -54,6 +54,24 @@
       "envVars": {},
       "secretEnvVars": []
     },
+    "codex-tui": {
+      "id": "codex-tui",
+      "name": "Codex TUI",
+      "type": "tui",
+      "command": "codex",
+      "args": [],
+      "models": ["codex-configured-default"],
+      "defaultModel": "codex-configured-default",
+      "lightModel": "codex-configured-default",
+      "mediumModel": "codex-configured-default",
+      "heavyModel": "codex-configured-default",
+      "timeout": 600000,
+      "enabled": false,
+      "envVars": {},
+      "secretEnvVars": [],
+      "tuiPromptDelayMs": 2500,
+      "tuiIdleTimeoutMs": 180000
+    },
     "gemini-cli": {
       "id": "gemini-cli",
       "name": "Gemini CLI",

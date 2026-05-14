@@ -31,6 +31,7 @@ import { createAgentRun, completeAgentRun, checkForTaskCommit } from './agentRun
 import { buildAgentPrompt, getAppWorkspace, getAppDataForTask, createJiraTicketForTask } from './agentPromptBuilder.js';
 import { buildCliSpawnConfig, isClaudeCliProvider, getClaudeSettingsEnv, spawnDirectly } from './agentCliSpawning.js';
 import { extractCodexAssistantTail } from '../lib/codexAssistantExtract.js';
+import { buildTuiSpawnConfig, spawnTuiAgent } from './agentTuiSpawning.js';
 import { selectModelForTask } from './agentModelSelection.js';
 import { processAgentCompletion } from './agentCompletion.js';
 import { activeAgents, runnerAgents, spawningTasks, useRunner, isTruthyMeta, isFalsyMeta } from './agentState.js';
@@ -455,6 +456,9 @@ export async function spawnAgentForTask(task) {
   // Create run entry for usage tracking
   const { runId } = await createAgentRun(agentId, task, selectedModel, provider, workspacePath, resolvedAppName);
 
+  const isTui = provider.type === 'tui';
+  const executionMode = isTui ? 'tui' : useRunner ? 'runner' : 'direct';
+
   // Register the agent with model info
   await registerAgent(agentId, task.id, {
     workspacePath,
@@ -471,7 +475,8 @@ export async function spawnAgentForTask(task) {
     modelReason: modelSelection.reason,
     runId,
     phase: 'initializing',
-    useRunner,
+    useRunner: isTui ? false : useRunner,
+    executionMode,
     taskAnalysisType: task.metadata?.analysisType || null,
     taskReviewType: task.metadata?.reviewType || null,
     taskApp: task.metadata?.app || null,
@@ -519,10 +524,18 @@ export async function spawnAgentForTask(task) {
     cosEvents.emit('job:spawned', { jobId: task.metadata.jobId });
   }
 
-  // Build CLI-specific spawn configuration
-  const cliConfig = buildCliSpawnConfig(provider, selectedModel);
+  const cliConfig = isTui
+    ? buildTuiSpawnConfig(provider, selectedModel)
+    : buildCliSpawnConfig(provider, selectedModel);
 
-  emitLog('success', `Spawning agent for task ${task.id}`, { agentId, model: selectedModel, mode: useRunner ? 'runner' : 'direct', cli: cliConfig.command, lane: laneName, worktree: !!worktreeInfo });
+  emitLog('success', `Spawning agent for task ${task.id}`, {
+    agentId,
+    model: selectedModel,
+    mode: executionMode,
+    cli: cliConfig.command,
+    lane: laneName,
+    worktree: !!worktreeInfo
+  });
 
   // Dedup-window fix: keep the `spawningTasks` guard active across the actual
   // spawn call, not just up to the in_progress flip. Deleting between
@@ -535,6 +548,12 @@ export async function spawnAgentForTask(task) {
   // closes that race. release() must NOT run here on the success path; the
   // lane is released by the agent-completion handler when the work finishes.
   try {
+    if (isTui) {
+      return await spawnTuiAgent(agentId, task, prompt, workspacePath, selectedModel, provider, runId, cliConfig, agentDir, toolExecution.id, laneName, {
+        cleanupWorktreeFn: cleanupAgentWorktree,
+        isTruthyMetaFn: isTruthyMeta
+      });
+    }
     if (useRunner) {
       return await spawnViaRunner(agentId, task, { prompt, workspacePath, model: selectedModel, provider, runId, cliConfig, executionId: toolExecution.id, laneName });
     }

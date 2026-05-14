@@ -192,46 +192,43 @@ export async function killAgent(agentId) {
  * Get process stats for an agent (CPU, memory usage).
  */
 export async function getAgentProcessStats(agentId) {
-  // Check if agent is in runner mode - use runner endpoint
-  if (runnerAgents.has(agentId) || useRunner) {
-    const stats = await getAgentStatsFromRunner(agentId);
-    return stats;
-  }
-
-  // Direct mode - get stats locally
   const agent = activeAgents.get(agentId);
-  if (!agent) {
-    return null;
+  if (agent) {
+    const { exec } = await import('child_process');
+    const { promisify } = await import('util');
+    const execAsync = promisify(exec);
+
+    const psCmd = process.platform === 'win32'
+      ? `tasklist /FI "PID eq ${agent.pid}" /FO CSV /NH`
+      : `ps -p ${agent.pid} -o pid=,pcpu=,rss=,state=`;
+    const result = await execAsync(psCmd, { windowsHide: true }).catch(() => ({ stdout: '' }));
+    const line = result.stdout.trim();
+
+    if (!line) {
+      return { active: false, pid: agent.pid, cpu: 0, memoryKb: 0, memoryMb: 0, state: 'dead' };
+    }
+
+    const parts = line.split(/\s+/).filter(Boolean);
+    if (parts.length >= 3) {
+      return {
+        active: true,
+        agentId,
+        pid: parseInt(parts[0], 10),
+        cpu: parseFloat(parts[1]) || 0,
+        memoryKb: parseInt(parts[2], 10) || 0,
+        memoryMb: Math.round((parseInt(parts[2], 10) || 0) / 1024 * 10) / 10,
+        state: parts[3] || 'unknown'
+      };
+    }
+
+    return { active: true, agentId, pid: agent.pid, cpu: 0, memoryKb: 0, memoryMb: 0, state: 'unknown' };
   }
 
-  const { exec } = await import('child_process');
-  const { promisify } = await import('util');
-  const execAsync = promisify(exec);
-
-  const psCmd = process.platform === 'win32'
-    ? `tasklist /FI "PID eq ${agent.pid}" /FO CSV /NH`
-    : `ps -p ${agent.pid} -o pid=,pcpu=,rss=,state=`;
-  const result = await execAsync(psCmd, { windowsHide: true }).catch(() => ({ stdout: '' }));
-  const line = result.stdout.trim();
-
-  if (!line) {
-    return { active: false, pid: agent.pid, cpu: 0, memoryKb: 0, memoryMb: 0, state: 'dead' };
+  if (runnerAgents.has(agentId) || useRunner) {
+    return await getAgentStatsFromRunner(agentId);
   }
 
-  const parts = line.split(/\s+/).filter(Boolean);
-  if (parts.length >= 3) {
-    return {
-      active: true,
-      agentId,
-      pid: parseInt(parts[0], 10),
-      cpu: parseFloat(parts[1]) || 0,
-      memoryKb: parseInt(parts[2], 10) || 0,
-      memoryMb: Math.round((parseInt(parts[2], 10) || 0) / 1024 * 10) / 10,
-      state: parts[3] || 'unknown'
-    };
-  }
-
-  return { active: true, agentId, pid: agent.pid, cpu: 0, memoryKb: 0, memoryMb: 0, state: 'unknown' };
+  return null;
 }
 
 /**
