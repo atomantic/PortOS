@@ -320,7 +320,14 @@ export default function Shell() {
   }, [socket, clearActiveSession]);
 
   const switchToSession = useCallback((sessionId, { fromUrl = false } = {}) => {
-    if (sessionId === sessionIdRef.current) return;
+    // Compare against the in-flight attach target if there is one, falling back to the
+    // currently-displayed session. Without this, a back→forward race (B→A while attach
+    // to A is pending, then forward back to B) would short-circuit on `sessionId ===
+    // sessionIdRef.current` and leave the pending attach to overwrite the user's forward.
+    const currentTarget = (pendingAttachRef.current && pendingAttachRef.current !== 'new')
+      ? pendingAttachRef.current
+      : sessionIdRef.current;
+    if (sessionId === currentTarget) return;
     // Don't pre-clear — keep the previously displayed session in sessionIdRef until
     // shell:attached lands (handleShellAttached → activateSession swaps atomically).
     // If shell:error fires instead, handleShellError can restore URL/terminal to the
@@ -402,6 +409,16 @@ export default function Shell() {
         } else {
           navigateRef.current('/shell', { replace: true });
         }
+        return;
+      }
+      // Tab is sitting on bare /shell with no displayed session (e.g. arrived when
+      // every live session was already attached elsewhere). If another tab later
+      // disconnects and frees one of those sessions, adopt it so the user doesn't have
+      // to manually click to recover. Gated on no in-flight start/attach so we don't
+      // race a request the user just initiated.
+      if (!displayed && !pendingAttachRef.current) {
+        const survivor = pickUnattachedSurvivor(sessionList);
+        if (survivor) attachToSession(survivor.sessionId);
       }
     };
 
@@ -490,18 +507,31 @@ export default function Shell() {
       // Passive errors (shell:input / shell:stop on a missing session) carry a sessionId
       // in the payload — no terminal state to recover.
       if (errSid) return;
-      const active = sessionIdRef.current;
-      if (!active) return;
       const live = sessionsRef.current;
+      const active = sessionIdRef.current;
+      if (!active) {
+        // No previously-displayed session to restore (e.g. initial deep-link attach
+        // failed before any session was active). Fall back to a free survivor so the
+        // user isn't stranded on /shell/<dead-id> with only the error message visible.
+        const free = live.filter(s => !s.attached);
+        if (free.length > 0) {
+          // Just navigate; the URL-change useEffect will issue the attach via
+          // switchToSession(fromUrl: true). Scheduling an attach here too would race.
+          navigateRef.current(`/shell/${free[free.length - 1].sessionId}`, { replace: true });
+        } else if (urlSessionIdRef.current) {
+          navigateRef.current('/shell', { replace: true });
+        }
+        return;
+      }
       if (!live.some(s => s.sessionId === active)) {
         // The session we were displaying is also gone. Fall back to a survivor that
-        // isn't already attached elsewhere (avoid stealing via shell:detached).
+        // isn't already attached elsewhere (avoid stealing via shell:detached). The
+        // URL-change useEffect adopts the new path on its own — don't also schedule
+        // an attach here, that produces two shell:attach requests for the same target.
         clearActiveSession();
         const free = live.filter(s => !s.attached);
         if (free.length > 0) {
-          const latest = free[free.length - 1];
-          navigateRef.current(`/shell/${latest.sessionId}`, { replace: true });
-          setTimeout(() => attachToSession(latest.sessionId), 100);
+          navigateRef.current(`/shell/${free[free.length - 1].sessionId}`, { replace: true });
         } else {
           navigateRef.current('/shell', { replace: true });
         }

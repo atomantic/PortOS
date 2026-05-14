@@ -265,4 +265,16 @@ describe('socket.js — initSocket', () => {
 
     expect(socket.emitted.some(([ev]) => ev === 'shell:sessions')).toBe(true);
   });
+
+  // listAllSessions must receive the requesting socket so the recipient-relative
+  // `attached` flag works (sessions bound to this socket should report attached:false).
+  it('shell:list forwards the requesting socket to listAllSessions', () => {
+    const socket = makeSocket('shell-list-socket');
+    io.connect(socket);
+    shellService.listAllSessions.mockClear();
+
+    socket.handlers['shell:list']();
+
+    expect(shellService.listAllSessions).toHaveBeenCalledWith(socket);
+  });
 });
