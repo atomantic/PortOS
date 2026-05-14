@@ -32,10 +32,10 @@ import SeriesLlmPicker from '../components/pipeline/SeriesLlmPicker';
 import LengthProfilePicker from '../components/pipeline/LengthProfilePicker';
 import { VisualGenSettingsPanel } from '../components/pipeline/stages/VisualGenSettings';
 
-// Stages whose render buttons consume genConfig — only these show the
-// header-level settings gear. Text-only stages (idea/prose/script) don't.
+// Stages that surface a header-level settings gear. The Comic editor
+// (`comicScript`) owns its own image-gen drawer inside ComicScriptStage,
+// so it stays off this list — only Storyboards needs the shared modal.
 const VISUAL_STAGE_LABELS = {
-  comicPages: 'Comic pages',
   storyboards: 'Storyboards',
 };
 

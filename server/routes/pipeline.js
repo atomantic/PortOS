@@ -802,11 +802,20 @@ router.post('/issues/:id/stages/comicPages/extract-pages', asyncHandler(async (r
     );
   }
 
-  const { pages } = parseComicScript(source);
+  const { pages, coverConcept } = parseComicScript(source);
+
+  // Preserve a user-edited cover script if one is already set — only seed
+  // from the parsed concept when the cover is currently blank. Otherwise an
+  // extract re-run would clobber a hand-curated cover.
+  const existingCoverScript = issue.stages?.comicPages?.cover?.script || '';
+  const nextCover = coverConcept && !existingCoverScript
+    ? { ...(issue.stages?.comicPages?.cover || {}), script: coverConcept }
+    : (issue.stages?.comicPages?.cover || null);
 
   const { issue: updatedIssue, stage } = await issuesSvc.updateStage(issue.id, 'comicPages', {
     status: pages.length ? 'ready' : 'empty',
     pages,
+    cover: nextCover,
     errorMessage: '',
   });
 

@@ -1,11 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { Plus, Trash2, Sparkles, Loader2, Wand2, WandSparkles, ImagePlus } from 'lucide-react';
 import toast from '../../ui/Toast';
 import { useArmedAction } from '../../../hooks/useArmedAction';
 import {
   generatePipelineVisualImage,
   generatePipelineComicPage,
-  generatePipelineComicCover,
   refinePipelineComicPanelPrompt,
   updatePipelineIssue,
   extractPipelineComicPages,
@@ -13,18 +12,17 @@ import {
 import MediaJobThumb from '../MediaJobThumb';
 import { genConfigToImageOptions, genConfigToRefineOptions } from './VisualGenSettings';
 
+// NOTE: `ComicPagesStage` is currently unreachable in the running app —
+// `PipelineIssue.jsx` redirects /comicPages URLs to /comicScript, where
+// `ComicScriptStage` owns the merged page editor. The cover UI for this
+// stage lives in ComicScriptStage. This component stays in the tree as a
+// pure per-panel editor so a future view that lands directly here still
+// works.
+
 export default function ComicPagesStage({ issue, onStageUpdate }) {
   const stage = issue.stages?.comicPages || { status: 'empty', pages: [] };
   const [pages, setPages] = useState(stage.pages || []);
   const genConfig = stage.genConfig || null;
-  const cover = stage.cover || { script: '', imageJobId: null, prompt: null };
-  // Draft cover script — separate from `cover.script` so the textarea can
-  // hold an in-progress value without round-tripping every keystroke to the
-  // server. Synced back to prop on external updates (e.g. another tab
-  // rendered the cover) so the textarea doesn't stay stuck on a stale draft.
-  const [draftCoverScript, setDraftCoverScript] = useState(cover.script || '');
-  useEffect(() => { setDraftCoverScript(cover.script || ''); }, [cover.script]);
-  const [renderingCover, setRenderingCover] = useState(false);
   const [savingIdx, setSavingIdx] = useState(null);
   const [refiningKey, setRefiningKey] = useState(null);
   // Per-page in-flight state. Codex can render multiple pages in parallel, so
@@ -101,34 +99,6 @@ export default function ComicPagesStage({ issue, onStageUpdate }) {
       toast.warning(`This will replace ${pages.length} existing page${pages.length === 1 ? '' : 's'}. Click again to confirm.`);
     }
     fireExtract();
-  };
-
-  const persistCoverScript = async (nextScript) => {
-    const next = { ...cover, script: nextScript };
-    const updated = await updatePipelineIssue(issue.id, {
-      stages: { comicPages: { cover: next } },
-    }).catch((err) => {
-      toast.error(err.message || 'Save failed');
-      return null;
-    });
-    if (updated) onStageUpdate?.('comicPages', updated.stages.comicPages, updated);
-  };
-
-  const handleRenderCover = async () => {
-    setRenderingCover(true);
-    const result = await generatePipelineComicCover(issue.id, {
-      coverScript: draftCoverScript || '',
-      ...genConfigToImageOptions(genConfig),
-    }).catch((err) => {
-      toast.error(err.message || 'Failed to render cover');
-      return null;
-    });
-    setRenderingCover(false);
-    if (!result) return;
-    if (result.issue) {
-      onStageUpdate?.('comicPages', result.issue.stages.comicPages, result.issue);
-    }
-    toast.success(`Queued ${result.mode} cover render (${result.jobId.slice(0, 8)})`);
   };
 
   const handleGeneratePage = async (pi) => {
@@ -234,43 +204,6 @@ export default function ComicPagesStage({ issue, onStageUpdate }) {
             <Plus size={14} /> Add page
           </button>
         </div>
-      </div>
-
-      <div className="p-3 bg-port-card border border-port-border rounded-lg">
-        <div className="flex items-center justify-between mb-2 gap-2 flex-wrap">
-          <span className="text-xs uppercase tracking-wider text-gray-500">Cover</span>
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={handleRenderCover}
-              disabled={renderingCover}
-              title="Render the issue's front cover — series masthead + issue number tag + your cover concept."
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-port-accent text-white text-xs font-medium hover:bg-port-accent/90 disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              {renderingCover ? <Loader2 size={12} className="animate-spin" /> : <ImagePlus size={12} />}
-              Render cover
-            </button>
-            {cover.imageJobId ? (
-              <div className="flex items-center gap-2">
-                <MediaJobThumb jobId={cover.imageJobId} label="Cover" size="md" />
-                <span className="text-[10px] text-gray-500 font-mono break-all" title="Last cover render job">
-                  {cover.imageJobId.slice(0, 8)}
-                </span>
-              </div>
-            ) : null}
-          </div>
-        </div>
-        <textarea
-          value={draftCoverScript}
-          onChange={(e) => setDraftCoverScript(e.target.value)}
-          onBlur={() => {
-            if ((cover.script || '') !== draftCoverScript) persistCoverScript(draftCoverScript);
-          }}
-          placeholder="Cover concept — describe the hero image, mood, lighting, framing. Series masthead and issue-number tag get composited in automatically."
-          rows={3}
-          className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm"
-          maxLength={8000}
-        />
       </div>
 
       {pages.length === 0 ? (

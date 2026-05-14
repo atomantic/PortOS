@@ -135,16 +135,3 @@ export function computeIssueTargets(issue = {}) {
   const preset = LENGTH_PROFILES[profile];
   return { profile, ...preset };
 }
-
-/**
- * Map of human-friendly preset labels keyed by profile name — used by the
- * UI dropdown without having to import the full profile table.
- */
-export function getProfileLabels() {
-  const out = {};
-  for (const [name, preset] of Object.entries(LENGTH_PROFILES)) {
-    out[name] = preset.label;
-  }
-  out.custom = 'Custom';
-  return out;
-}
