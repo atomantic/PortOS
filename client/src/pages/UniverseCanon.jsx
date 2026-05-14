@@ -8,7 +8,7 @@
  * universe references.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
   Library, Loader2, Users, MapPin, Package, Globe2, Wand2, ArrowLeft,
@@ -21,6 +21,7 @@ import {
   differentiateUniverseCast,
   updateUniverse,
   getUniverseCanonUsage,
+  setUniverseCanonLock,
 } from '../services/apiUniverseBuilder';
 import { generateImage, getSettings } from '../services/apiSystem';
 import { composeStyledPrompt } from '../lib/composeStyledPrompt';
@@ -36,11 +37,11 @@ import {
 
 const KINDS = [
   {
-    key: 'characters', label: 'Characters', singular: 'character', icon: Users,
+    key: 'characters', apiKind: 'character', label: 'Characters', singular: 'character', icon: Users,
     descFor: (c) => c.physicalDescription || c.description || '',
   },
   {
-    key: 'settings', label: 'Places', singular: 'place', icon: MapPin,
+    key: 'settings', apiKind: 'setting', label: 'Places', singular: 'place', icon: MapPin,
     descFor: (s) => [
       s.description,
       s.palette ? `Palette: ${s.palette}` : '',
@@ -48,7 +49,7 @@ const KINDS = [
     ].filter(Boolean).join('. '),
   },
   {
-    key: 'objects', label: 'Objects', singular: 'object', icon: Package,
+    key: 'objects', apiKind: 'object', label: 'Objects', singular: 'object', icon: Package,
     descFor: (o) => o.description || o.significance || '',
   },
 ];
@@ -62,6 +63,11 @@ export default function UniverseCanon() {
   const [renderingJobs, setRenderingJobs] = useState({});
   const [refiningId, setRefiningId] = useState(null);
   const [differentiating, setDifferentiating] = useState(false);
+  const [togglingLockId, setTogglingLockId] = useState(null);
+  // Ref mirrors togglingLockId for the reentrancy guard so handleToggleLock
+  // keeps a stable identity across lock toggles — otherwise it would change
+  // every time togglingLockId flips, re-rendering every KindSection + card.
+  const togglingLockRef = useRef(null);
   const [extractText, setExtractText] = useState('');
   const [extractOpen, setExtractOpen] = useState(false);
   const [preview, setPreview] = useState(null);
@@ -156,6 +162,19 @@ export default function UniverseCanon() {
     setUniverse(result.universe);
     toast.success(`Differentiated ${result.touched}/${result.touched + result.skipped} characters — ${(result.rationale || '').slice(0, 140)}`);
   };
+
+  const handleToggleLock = useCallback(async (kind, entryId, nextLocked) => {
+    if (togglingLockRef.current) return;
+    togglingLockRef.current = entryId;
+    setTogglingLockId(entryId);
+    const result = await setUniverseCanonLock(universeId, kind.apiKind, entryId, nextLocked)
+      .catch((err) => { toast.error(err.message || 'Lock toggle failed'); return null; });
+    togglingLockRef.current = null;
+    if (mountedRef.current) setTogglingLockId(null);
+    if (!result || !mountedRef.current) return;
+    setUniverse(result.universe);
+    toast.success(`${result.entry?.name || 'Entry'} ${nextLocked ? 'locked' : 'unlocked'}`);
+  }, [universeId, mountedRef]);
 
   const handleRefineCharacter = async (entryId) => {
     if (!universe || refiningId) return;
@@ -308,6 +327,8 @@ export default function UniverseCanon() {
           onPreview={openPreview}
           onRefine={handleRefineCharacter}
           refiningId={refiningId}
+          onToggleLock={(entryId, nextLocked) => handleToggleLock(kind, entryId, nextLocked)}
+          togglingLockId={togglingLockId}
         />
       ))}
 
@@ -316,7 +337,7 @@ export default function UniverseCanon() {
   );
 }
 
-function KindSection({ kind, all, usage, renderingJobs, onRender, onJobCompleted, onJobFailed, onPreview, onRefine, refiningId }) {
+function KindSection({ kind, all, usage, renderingJobs, onRender, onJobCompleted, onJobFailed, onPreview, onRefine, refiningId, onToggleLock, togglingLockId }) {
   const Icon = kind.icon;
   return (
     <section className="rounded-lg border border-port-border bg-port-card/40">
@@ -344,6 +365,8 @@ function KindSection({ kind, all, usage, renderingJobs, onRender, onJobCompleted
                 refining={refiningId === entry.id}
                 refineDisabled={!!refiningId && refiningId !== entry.id}
                 usage={usage?.[entry.id] || null}
+                onToggleLock={onToggleLock}
+                togglingLock={togglingLockId === entry.id}
               />
             ))}
           </ul>

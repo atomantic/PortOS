@@ -2,6 +2,26 @@
 
 ## Added
 
+- **Universe Canon page — lock toggle, tag chips, and "from series" badge on every card.**
+  Phase 2a of the Universe-as-Canon UI. Each `CanonCard` (used on both the
+  Universe Canon page and the per-series Nouns page) now renders:
+  - A **Lock / Unlock** button (only on pages that pass `onToggleLock`; the
+    Nouns page omits it since per-series canon doesn't have universe-level
+    locks). When the entry is locked, the card border picks up the accent
+    color, a `Locked` pill appears next to the name, the "AI: differentiate"
+    button disables with an "Unlock to refine" tooltip, and the toggle button
+    flips to "Unlock" with an unlock-icon glyph.
+  - A `from series` badge (titled with the introducing series id) when the
+    entry's `sourceSeriesId` is set — so a user scanning the universe
+    immediately sees which canon came from prose extraction vs. universe
+    expand or manual authorship.
+  - A row of tag chips when `entry.tags[]` has items — surfaces the
+    `landscape` / `vehicle` / etc. tags the categories→canon backfill
+    stamps, plus any tags the user adds later.
+  New client helper `setUniverseCanonLock(universeId, kind, entryId, locked)`
+  calls the Phase 1 `PATCH /api/universe-builder/:id/canon/:kind/:entryId/lock`
+  route. ESLint clean, Vite production build green.
+
 - **Universe-as-Canon lock semantics — series-extracted canon arrives auto-locked.**
   Every canon entry on a universe (characters/settings/objects) can now carry a
   `locked: true` flag, plus `prompt`, `tags`, `source`, and `sourceSeriesId`
