@@ -250,6 +250,29 @@ describe('arcPlanner — generateSeasonEpisodes', () => {
     expect(out.episodes[1].arcRole).toBe(null);            // invalid role drops to null
     expect(out.episodes[1].primaryCharacters).toEqual(['LINA']); // non-string + blank entries filtered
   });
+
+  it('rejects the `custom` length sentinel and derives a finale-role fallback to `finale`', async () => {
+    const { series, seasons } = await setupSeriesWithSeasons();
+    stageRunnerSpy = vi.fn(async () => ({
+      content: {
+        episodes: [
+          // LLM emitted `custom` without page/minute companions → reject sentinel,
+          // fall back via arcRole. arcRole=finale → finale preset.
+          { number: 1, title: 'Finale', arcRole: 'finale', lengthProfile: 'custom' },
+          // arcRole=midpoint and missing lengthProfile → default profile (standard).
+          { number: 2, title: 'Midpoint', arcRole: 'midpoint' },
+          // Valid preset is kept as-is.
+          { number: 3, title: 'Extra', lengthProfile: 'extended' },
+        ],
+      },
+      runId: 'r1', providerId: 'p', model: 'm',
+    }));
+    const out = await planner.generateSeasonEpisodes(series.id, seasons[0].id);
+    const byTitle = Object.fromEntries(out.episodes.map((e) => [e.title, e]));
+    expect(byTitle.Finale.lengthProfile).toBe('finale');
+    expect(byTitle.Midpoint.lengthProfile).toBe('standard');
+    expect(byTitle.Extra.lengthProfile).toBe('extended');
+  });
 });
 
 describe('arcPlanner — verifyArc', () => {

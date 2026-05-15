@@ -66,6 +66,8 @@ vi.mock('../../lib/mediaModels.js', () => ({
 
 const {
   composeComicPagePrompt,
+  composeComicCoverPrompt,
+  enqueueComicCover,
   enqueueStoryboardSceneVideo,
   refineComicPanelPrompt,
   refineStoryboardScenePrompt,
@@ -315,6 +317,144 @@ describe('refineComicPanelPrompt', () => {
           ]),
         }),
       ]),
+    }));
+  });
+});
+
+describe('composeComicCoverPrompt', () => {
+  const SERIES_NAMED = { name: 'Bone Walker', styleNotes: 'gritty ink-wash' };
+
+  it('includes the masthead text, the issue-number tag, and the cover concept body', () => {
+    const prompt = composeComicCoverPrompt({
+      series: SERIES_NAMED,
+      issue: { number: 7, title: 'The Long Sweep' },
+      coverScript: 'Kessa crouches on the rib spine at dawn.',
+    });
+    expect(prompt).toMatch(/series masthead "Bone Walker"/);
+    expect(prompt).toMatch(/issue-number tag reading "#7"/);
+    expect(prompt).toMatch(/Cover concept: Kessa crouches on the rib spine at dawn\./);
+    expect(prompt).toMatch(/episode title "The Long Sweep"/);
+    expect(prompt).toMatch(/Art style: gritty ink-wash/);
+  });
+
+  it('falls back to the issue title when no cover concept is supplied', () => {
+    const prompt = composeComicCoverPrompt({
+      series: SERIES_NAMED,
+      issue: { number: 1, title: 'Sunrise' },
+      coverScript: '',
+    });
+    expect(prompt).toMatch(/Cover concept: A single dramatic hero image evoking "Sunrise"\./);
+  });
+
+  it('falls back to a generic hero image when neither cover concept nor issue title is set', () => {
+    const prompt = composeComicCoverPrompt({
+      series: SERIES_NAMED,
+      issue: { number: 1, title: '' },
+      coverScript: '',
+    });
+    expect(prompt).toMatch(/A single dramatic hero image of the protagonist mid-action\./);
+  });
+
+  it('emits a generic masthead instruction when the series has no name', () => {
+    const prompt = composeComicCoverPrompt({
+      series: { name: '', styleNotes: '' },
+      issue: { number: 3, title: 'X' },
+      coverScript: 'something',
+    });
+    expect(prompt).toMatch(/Render a bold comic-book series masthead/);
+    // No empty quoted masthead string leaks through.
+    expect(prompt).not.toMatch(/masthead ""/);
+  });
+
+  it('clamps a non-positive issue number to 1 for the visible tag', () => {
+    const prompt = composeComicCoverPrompt({
+      series: SERIES_NAMED,
+      issue: { number: 0, title: '' },
+      coverScript: '',
+    });
+    expect(prompt).toMatch(/issue-number tag reading "#1"/);
+  });
+
+  it('prepends world.stylePrompt when a world is provided', () => {
+    const world = { stylePrompt: 'cinematic ink illustration, dramatic lighting', negativePrompt: '' };
+    const prompt = composeComicCoverPrompt({
+      series: SERIES_NAMED,
+      world,
+      issue: { number: 1, title: 'X' },
+      coverScript: 'something',
+    });
+    expect(prompt).toMatch(/cinematic ink illustration/);
+  });
+});
+
+describe('enqueueComicCover', () => {
+  beforeEach(() => {
+    // Default mock chain: getIssue returns mockIssue with no cover, settings
+    // returns local mode. Each test can override `getIssueMock` for special cases.
+    getIssueMock.mockImplementation(async () => ({
+      ...structuredClone(mockIssue),
+      number: 5,
+      title: 'Hero Issue',
+    }));
+  });
+
+  it('builds the cover prompt and enqueues a local image job by default', async () => {
+    const result = await enqueueComicCover('iss-test', {});
+    expect(result.jobId).toBe('job-fake-1234');
+    expect(result.mode).toBe('local');
+    expect(result.prompt).toMatch(/issue-number tag reading "#5"/);
+    expect(enqueueJobMock).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'image',
+      owner: 'pipeline:iss-test:comicPages:cover',
+      params: expect.objectContaining({
+        pythonPath: '/usr/bin/python3',
+        prompt: expect.stringContaining('Cover concept:'),
+      }),
+    }));
+  });
+
+  it('uses the option-supplied coverScript over the persisted stages.comicPages.cover.script', async () => {
+    getIssueMock.mockResolvedValueOnce({
+      ...structuredClone(mockIssue),
+      number: 2,
+      title: 'X',
+      stages: {
+        ...mockIssue.stages,
+        comicPages: {
+          ...mockIssue.stages.comicPages,
+          cover: { script: 'persisted concept' },
+        },
+      },
+    });
+    const result = await enqueueComicCover('iss-test', { coverScript: 'fresh override concept' });
+    expect(result.coverScript).toBe('fresh override concept');
+    expect(result.prompt).toMatch(/Cover concept: fresh override concept/);
+    expect(result.prompt).not.toMatch(/persisted concept/);
+  });
+
+  it('falls back to the persisted cover.script when no coverScript option is supplied', async () => {
+    getIssueMock.mockResolvedValueOnce({
+      ...structuredClone(mockIssue),
+      number: 2,
+      title: 'X',
+      stages: {
+        ...mockIssue.stages,
+        comicPages: {
+          ...mockIssue.stages.comicPages,
+          cover: { script: 'persisted concept' },
+        },
+      },
+    });
+    const result = await enqueueComicCover('iss-test', {});
+    expect(result.coverScript).toBe('persisted concept');
+    expect(result.prompt).toMatch(/Cover concept: persisted concept/);
+  });
+
+  it('honors options.mode = "codex" and passes codex-specific params through to the queue', async () => {
+    const result = await enqueueComicCover('iss-test', { mode: 'codex' });
+    expect(result.mode).toBe('codex');
+    expect(enqueueJobMock).toHaveBeenCalledWith(expect.objectContaining({
+      params: expect.objectContaining({ mode: 'codex' }),
     }));
   });
 });

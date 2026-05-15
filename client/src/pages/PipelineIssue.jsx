@@ -212,7 +212,11 @@ export default function PipelineIssue() {
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <h1 className="text-xl font-bold text-white truncate">#{issue.number} — {issue.title}</h1>
           <div className="flex items-center gap-2 flex-wrap">
-            <LengthProfilePicker issue={issue} onChange={handleLengthChange} />
+            <LengthProfilePicker
+              issue={issue}
+              onChange={handleLengthChange}
+              disabled={autoRunStarting || autoRunActive}
+            />
             {series ? (
               <SeriesLlmPicker
                 series={series}

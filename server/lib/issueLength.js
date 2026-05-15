@@ -72,11 +72,14 @@ export const LENGTH_PROFILE_NAMES = Object.freeze([
 ]);
 
 // Working bounds for custom overrides. Keeps a typo from asking for a
-// 5000-page comic and a 600-minute movie.
-const CUSTOM_PAGE_MIN = 4;
-const CUSTOM_PAGE_MAX = 120;
-const CUSTOM_MINUTE_MIN = 4;
-const CUSTOM_MINUTE_MAX = 240;
+// 5000-page comic and a 600-minute movie. Exported so the issue sanitizer,
+// the Zod patch schema, and the client picker all clamp to the same range —
+// otherwise the persisted value can drift past the values
+// `computeIssueTargets` is willing to honor at render time.
+export const CUSTOM_PAGE_MIN = 4;
+export const CUSTOM_PAGE_MAX = 120;
+export const CUSTOM_MINUTE_MIN = 4;
+export const CUSTOM_MINUTE_MAX = 240;
 const STANDARD_PAGES = LENGTH_PROFILES.standard.pageTarget;
 const STANDARD_WORDS_MIN = LENGTH_PROFILES.standard.proseWordsMin;
 const STANDARD_WORDS_MAX = LENGTH_PROFILES.standard.proseWordsMax;

@@ -15,11 +15,17 @@ import { LENGTH_PROFILES, summarizeLengthProfile, clampInt } from '../../lib/iss
 
 const PRESET_ORDER = ['teaser', 'standard', 'extended', 'finale'];
 
-export default function LengthProfilePicker({ issue, onChange }) {
+export default function LengthProfilePicker({ issue, onChange, disabled = false }) {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef(null);
   const profile = issue?.lengthProfile || 'standard';
   const summary = summarizeLengthProfile(issue);
+
+  // Auto-close the menu if the parent disables us mid-interaction. Prevents
+  // a stranded open menu over a disabled trigger during auto-run kickoff.
+  useEffect(() => {
+    if (disabled && open) setOpen(false);
+  }, [disabled, open]);
 
   // Close on outside click. No Esc handling here — there's no overlay that
   // would steal focus, and the page's Modal stack already handles Esc when
@@ -70,8 +76,15 @@ export default function LengthProfilePicker({ issue, onChange }) {
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-port-card border border-port-border text-xs text-gray-300 hover:text-white hover:border-port-accent/50"
-        title="Episode length profile — drives beat / prose / script size targets"
+        disabled={disabled}
+        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-port-card border border-port-border text-xs text-gray-300 hover:text-white hover:border-port-accent/50 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:text-gray-300 disabled:hover:border-port-border"
+        title={disabled
+          ? 'Length profile is locked while auto-run is active'
+          : 'Episode length profile — drives beat / prose / script size targets'}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-disabled={disabled}
+        aria-label={`Length profile: ${summary.label} (${summary.detail})`}
       >
         <Gauge size={12} className="text-gray-500" />
         <span className="font-medium text-white">{summary.label}</span>

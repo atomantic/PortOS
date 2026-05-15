@@ -25,7 +25,7 @@ import { getSeries, updateSeries } from './series.js';
 import { listIssues } from './issues.js';
 import { sanitizeArc, sanitizeSeasonList, sanitizeSeason, buildSeason } from '../../lib/storyArc.js';
 import { recommendStructure, describeStructure } from '../../lib/seasonStructure.js';
-import { LENGTH_PROFILE_NAMES } from '../../lib/issueLength.js';
+import { LENGTH_PROFILE_NAMES, DEFAULT_LENGTH_PROFILE } from '../../lib/issueLength.js';
 import { getUniverse } from '../universeBuilder.js';
 import { getSeriesCanon } from './seriesCanon.js';
 import { renderCategoriesForPrompt, renderCompositesForPrompt } from '../../lib/universePromptRenderers.js';
@@ -35,7 +35,16 @@ const makeErr = (message, code) => Object.assign(new Error(message), { code });
 
 const VERIFY_SEVERITIES = new Set(['high', 'medium', 'low']);
 const ARC_ROLES = new Set(['pilot', 'complication', 'midpoint', 'b-plot', 'all-is-lost', 'finale']);
-const LENGTH_PROFILES_SET = new Set(LENGTH_PROFILE_NAMES);
+// Season-episode generation must produce concrete preset profiles only — the
+// 'custom' sentinel needs companion pageTarget/minutesTarget values the LLM is
+// not asked to invent, so a 'custom' here would silently render as 'standard'
+// at prompt time. Limit to the canonical preset names.
+const SEASON_LENGTH_PRESETS = new Set(LENGTH_PROFILE_NAMES.filter((n) => n !== 'custom'));
+// Finale-role episodes should size like a finale even when the LLM omits
+// (or misspells) lengthProfile. Other arcRoles fall back to the default
+// profile so a missing/misspelled length doesn't cascade into the wrong
+// size for the whole arc.
+const lengthProfileForArcRole = (arcRole) => (arcRole === 'finale' ? 'finale' : DEFAULT_LENGTH_PROFILE);
 
 // Each prior season renders as its header (logline + synopsis) plus the
 // committed per-episode beats from `stages.idea.input` — that field was
@@ -246,10 +255,15 @@ function shapeEpisodes(rawEpisodes) {
     nextNumber = number + 1;
     const arcRole = ARC_ROLES.has(raw?.arcRole) ? raw.arcRole : null;
     // Episode-level length sizing — fed straight into the issue's
-    // lengthProfile when the route creates issues from this preview.
-    const lengthProfile = LENGTH_PROFILES_SET.has(raw?.lengthProfile)
+    // lengthProfile when the route creates issues from this preview. Only the
+    // concrete presets are accepted here (no 'custom' sentinel — the LLM is
+    // never asked to invent custom page/minute targets, and a 'custom' value
+    // without companion numbers silently degrades to 'standard' downstream).
+    // The fallback is derived from arcRole so a finale episode still sizes
+    // like a finale when the LLM omits the field.
+    const lengthProfile = SEASON_LENGTH_PRESETS.has(raw?.lengthProfile)
       ? raw.lengthProfile
-      : 'standard';
+      : lengthProfileForArcRole(arcRole);
     const primaryCharacters = Array.isArray(raw?.primaryCharacters)
       ? raw.primaryCharacters.filter((c) => typeof c === 'string' && c.trim()).map((c) => c.trim().slice(0, 200)).slice(0, 12)
       : [];

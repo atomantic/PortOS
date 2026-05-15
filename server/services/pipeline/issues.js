@@ -21,7 +21,10 @@
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { PATHS, atomicWrite, readJSONFile, ensureDir } from '../../lib/fileUtils.js';
-import { LENGTH_PROFILE_NAMES, DEFAULT_LENGTH_PROFILE } from '../../lib/issueLength.js';
+import {
+  LENGTH_PROFILE_NAMES, DEFAULT_LENGTH_PROFILE,
+  CUSTOM_PAGE_MIN, CUSTOM_PAGE_MAX, CUSTOM_MINUTE_MIN, CUSTOM_MINUTE_MAX,
+} from '../../lib/issueLength.js';
 
 // Lazy resolution — see series.js for context.
 const statePath = () => join(PATHS.data, 'pipeline-issues.json');
@@ -112,7 +115,7 @@ const sanitizeCover = (raw) => {
   return { script, imageJobId, prompt: prompt || null };
 };
 
-const sanitizeVisualStage = (raw) => {
+const sanitizeVisualStage = (raw, stageId = null) => {
   // Visual stages keep arbitrary structured artifact lists. Sanitize the
   // wrapper but pass through known shapes.
   const base = sanitizeStage(raw);
@@ -124,17 +127,24 @@ const sanitizeVisualStage = (raw) => {
     videoPath: isStr(raw?.videoPath) && raw.videoPath ? raw.videoPath : null,
     aspectRatio: ASPECT_RATIO_VALUES.has(raw?.aspectRatio) ? raw.aspectRatio : null,
     quality: QUALITY_VALUES.has(raw?.quality) ? raw.quality : null,
-    // genConfig + cover are only read by comicPages/storyboards; pass-through
-    // is a no-op on episodeVideo, which never looks at them.
+    // genConfig is read by comicPages/storyboards; pass-through is a no-op on
+    // episodeVideo, which never looks at it.
     genConfig: sanitizeGenConfig(raw?.genConfig),
-    cover: sanitizeCover(raw?.cover),
+    // `cover` is meaningful only on comicPages — it carries the front-cover
+    // concept + render job. Dropping it on storyboards / episodeVideo makes
+    // the contract explicit (matches the comment in pipeline.js's visual
+    // stage schema). When stageId is omitted (legacy callers / stage-shape
+    // sanitize at issue load time without per-stage context), keep the
+    // field — `sanitizeStages` below threads the stageId through so the
+    // canonical persistence path enforces the rule.
+    cover: stageId === null || stageId === 'comicPages' ? sanitizeCover(raw?.cover) : null,
   };
 };
 
 const sanitizeStages = (raw = {}) => {
   const out = {};
   for (const id of TEXT_STAGE_IDS) out[id] = sanitizeStage(raw[id]);
-  for (const id of VISUAL_STAGE_IDS) out[id] = sanitizeVisualStage(raw[id]);
+  for (const id of VISUAL_STAGE_IDS) out[id] = sanitizeVisualStage(raw[id], id);
   return out;
 };
 
@@ -160,15 +170,17 @@ const sanitizeIssue = (raw) => {
   // Defaults to 'standard' so pre-field issues keep the prior 22pg/24min sizing.
   // pageTarget/minutesTarget are only consumed when lengthProfile==='custom',
   // but we persist them on every profile so the picker can remember a previous
-  // custom value if the user toggles back.
+  // custom value if the user toggles back. Bounds mirror the values
+  // `computeIssueTargets` clamps to at render time — otherwise the persisted
+  // record could disagree with the prompt-rendered length.
   const lengthProfile = LENGTH_PROFILE_NAMES.includes(raw.lengthProfile)
     ? raw.lengthProfile
     : DEFAULT_LENGTH_PROFILE;
   const pageTarget = Number.isFinite(raw.pageTarget)
-    ? Math.max(1, Math.min(500, Math.floor(raw.pageTarget)))
+    ? Math.max(CUSTOM_PAGE_MIN, Math.min(CUSTOM_PAGE_MAX, Math.floor(raw.pageTarget)))
     : null;
   const minutesTarget = Number.isFinite(raw.minutesTarget)
-    ? Math.max(1, Math.min(600, Math.floor(raw.minutesTarget)))
+    ? Math.max(CUSTOM_MINUTE_MIN, Math.min(CUSTOM_MINUTE_MAX, Math.floor(raw.minutesTarget)))
     : null;
   return {
     id: raw.id,
@@ -278,9 +290,25 @@ export async function updateIssue(id, patch = {}) {
   if (idx < 0) throw makeErr(`Issue not found: ${id}`, ERR_NOT_FOUND);
   const cur = state.issues[idx];
 
-  const mergedStages = 'stages' in patch
-    ? { ...cur.stages, ...(patch.stages || {}) }
-    : cur.stages;
+  // Per-stage merge: a stage patch carries only the fields the caller is
+  // changing (e.g. `{ genConfig }` or `{ cover }`). Without this, the top-level
+  // spread would replace the entire stage object and silently drop sibling
+  // fields like `scenes` / `pages` / `genConfig`. Sanitization then defaults
+  // those back to empty arrays/null, erasing work the user (or LLM) just did.
+  // Callers that need a wholesale stage replacement should use `updateStage`,
+  // which writes the full sanitized stage in one shot.
+  let mergedStages = cur.stages;
+  if ('stages' in patch && patch.stages && typeof patch.stages === 'object') {
+    mergedStages = { ...cur.stages };
+    for (const [stageId, stagePatch] of Object.entries(patch.stages)) {
+      const prev = cur.stages?.[stageId];
+      if (prev && stagePatch && typeof prev === 'object' && typeof stagePatch === 'object') {
+        mergedStages[stageId] = { ...prev, ...stagePatch };
+      } else {
+        mergedStages[stageId] = stagePatch;
+      }
+    }
+  }
 
   const merged = sanitizeIssue({
     ...cur,
@@ -316,12 +344,12 @@ export async function updateStage(issueId, stageId, patch = {}) {
   if (idx < 0) throw makeErr(`Issue not found: ${issueId}`, ERR_NOT_FOUND);
   const cur = state.issues[idx];
   const isVisual = VISUAL_STAGE_IDS.includes(stageId);
-  const sanitize = isVisual ? sanitizeVisualStage : sanitizeStage;
-  const next = sanitize({
+  const merged = {
     ...cur.stages[stageId],
     ...patch,
     updatedAt: new Date().toISOString(),
-  });
+  };
+  const next = isVisual ? sanitizeVisualStage(merged, stageId) : sanitizeStage(merged);
   const mergedIssue = sanitizeIssue({
     ...cur,
     stages: { ...cur.stages, [stageId]: next },

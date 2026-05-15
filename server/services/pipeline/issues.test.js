@@ -138,6 +138,57 @@ describe('pipeline issues service', () => {
     expect(updated.stages.idea.output).toBe('Beats here');
   });
 
+  it('updateIssue stage patch merges per-stage fields instead of replacing', async () => {
+    // A partial stage patch from the client (e.g. saving genConfig from a
+    // settings drawer) must not erase the rest of that stage. The header
+    // gen-config save in particular was deleting `scenes` and `cover` until
+    // updateIssue was taught to per-stage-merge.
+    const i = await svc.createIssue({ seriesId: 'ser-1', title: 'Merge me' });
+    await svc.updateStage(i.id, 'storyboards', {
+      status: 'edited',
+      scenes: [{ slugline: 'INT. LAB', description: 'a scene' }],
+    });
+    await svc.updateStage(i.id, 'comicPages', {
+      status: 'edited',
+      pages: [{ panels: [{ description: 'panel one' }] }],
+      cover: { script: 'cover concept', imageJobId: null, prompt: null },
+    });
+
+    // Patch only genConfig on storyboards — scenes must survive.
+    const afterStoryboards = await svc.updateIssue(i.id, {
+      stages: { storyboards: { genConfig: { imageMode: 'codex' } } },
+    });
+    expect(afterStoryboards.stages.storyboards.scenes).toHaveLength(1);
+    expect(afterStoryboards.stages.storyboards.scenes[0].slugline).toBe('INT. LAB');
+    expect(afterStoryboards.stages.storyboards.genConfig).toEqual({
+      imageMode: 'codex', imageModelId: null, refineProvider: null, refineModel: null,
+    });
+
+    // Patch only cover on comicPages — pages must survive.
+    const afterCover = await svc.updateIssue(i.id, {
+      stages: { comicPages: { cover: { script: 'new concept' } } },
+    });
+    expect(afterCover.stages.comicPages.pages).toHaveLength(1);
+    expect(afterCover.stages.comicPages.cover.script).toBe('new concept');
+  });
+
+  it('drops cover field from non-comicPages visual stages on persist', async () => {
+    // Contract: `cover` is only meaningful on comicPages — the route schema
+    // documents this and the sanitizer enforces it. A misrouted patch should
+    // not silently leave a phantom cover on storyboards / episodeVideo.
+    const i = await svc.createIssue({ seriesId: 'ser-1', title: 'Cover gate' });
+    const patched = await svc.updateIssue(i.id, {
+      stages: {
+        comicPages: { cover: { script: 'should stay', imageJobId: null, prompt: null } },
+        storyboards: { cover: { script: 'should be dropped', imageJobId: null, prompt: null } },
+        episodeVideo: { cover: { script: 'should be dropped too', imageJobId: null, prompt: null } },
+      },
+    });
+    expect(patched.stages.comicPages.cover).toMatchObject({ script: 'should stay' });
+    expect(patched.stages.storyboards.cover).toBeNull();
+    expect(patched.stages.episodeVideo.cover).toBeNull();
+  });
+
   it('deleteIssue 404s on second call', async () => {
     const i = await svc.createIssue({ seriesId: 'ser-1', title: 'First' });
     await svc.deleteIssue(i.id);

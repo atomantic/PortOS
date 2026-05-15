@@ -180,6 +180,38 @@ SFX: "fmp"
     expect(pages[0].panels[1].sfx).toMatch(/fmp/);
   });
 
+  it('does not start a new panel when "Panel N" appears mid-description', () => {
+    // Regression: the relaxed plain-panel regex must require the panel header
+    // to be a standalone line. Without the end-anchor, a description line
+    // like "Panel 2 is offline on the monitor." used to split the panel.
+    const script = `## Page 1
+
+Panel 1
+Description: A wide shot of the security room. Panel 2 is offline on the monitor in the corner. Etta studies the dead feed.
+Caption: A quiet sweep before the storm.
+`;
+    const { pages } = parseComicScript(script);
+    expect(pages).toHaveLength(1);
+    expect(pages[0].panels).toHaveLength(1);
+    expect(pages[0].panels[0].description).toMatch(/Panel 2 is offline on the monitor/);
+  });
+
+  it('accepts the `Panel N (DPS)` double-page-spread header form', () => {
+    const script = `## Page 1
+
+Panel 1 (DPS)
+Description: A bold double-page spread of the city skyline at dawn.
+
+Panel 2
+Description: Tight on Kessa's hands clutching the railing.
+`;
+    const { pages } = parseComicScript(script);
+    expect(pages).toHaveLength(1);
+    expect(pages[0].panels).toHaveLength(2);
+    expect(pages[0].panels[0].description).toMatch(/double-page spread/);
+    expect(pages[0].panels[1].description).toMatch(/clutching the railing/);
+  });
+
   it('caps rawText at PAGE_SCRIPT_MAX', () => {
     // Build a page with a single panel whose description is enormous, then
     // assert the page's rawText is bounded. We can't import PANEL_LIMITS

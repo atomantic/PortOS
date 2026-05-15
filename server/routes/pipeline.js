@@ -50,7 +50,10 @@ import { startEpisodeVideoForIssue, ERR_NO_STORYBOARDS } from '../services/pipel
 import { ASPECT_RATIOS, QUALITIES } from '../lib/creativeDirectorPresets.js';
 import { extractScenes, SOURCE_KIND } from '../lib/sceneExtractor.js';
 import { parseComicScript } from '../lib/comicScriptParser.js';
-import { LENGTH_PROFILE_NAMES } from '../lib/issueLength.js';
+import {
+  LENGTH_PROFILE_NAMES,
+  CUSTOM_PAGE_MIN, CUSTOM_PAGE_MAX, CUSTOM_MINUTE_MIN, CUSTOM_MINUTE_MAX,
+} from '../lib/issueLength.js';
 import { llmSchema } from './universeBuilder.js';
 import { BIBLE_KIND } from '../lib/storyBible.js';
 import { ARC_LIMITS, ARC_STATUSES, SEASON_STATUSES } from '../lib/storyArc.js';
@@ -233,8 +236,8 @@ const issuePatchSchema = z.object({
   // (beats / prose words / page count / minute count). pageTarget +
   // minutesTarget are only meaningful when lengthProfile === 'custom'.
   lengthProfile: z.enum(LENGTH_PROFILE_NAMES).optional(),
-  pageTarget: z.number().int().min(1).max(500).nullable().optional(),
-  minutesTarget: z.number().int().min(1).max(600).nullable().optional(),
+  pageTarget: z.number().int().min(CUSTOM_PAGE_MIN).max(CUSTOM_PAGE_MAX).nullable().optional(),
+  minutesTarget: z.number().int().min(CUSTOM_MINUTE_MIN).max(CUSTOM_MINUTE_MAX).nullable().optional(),
   // Use visualStageInputSchema as the union arm so visual-stage payloads keep
   // their `scenes` / `pages` / `cdProjectId` / `videoPath` fields. The schema
   // is a superset of stageInputSchema (those four are optional additions), so
@@ -268,6 +271,9 @@ const visualGenerateSchema = z.object({
 // Comic-issue front cover render. Accepts an optional `coverScript`
 // override (otherwise the route reads it from stages.comicPages.cover.script);
 // the rest of the prompt is built server-side from series + issue metadata.
+// `seed` mirrors the page/panel render schemas so the shared image-gen drawer
+// flows the same render settings into the cover — enqueueImageJob honors it
+// via options.seed.
 const comicCoverRenderSchema = z.object({
   coverScript: z.string().max(8000).optional(),
   negativePrompt: z.string().trim().max(2000).optional(),
@@ -279,6 +285,7 @@ const comicCoverRenderSchema = z.object({
   steps: z.number().int().min(1).max(150).optional(),
   cfgScale: z.number().min(0).max(30).optional(),
   guidance: z.number().min(0).max(30).optional(),
+  seed: z.number().int().min(0).optional(),
 });
 
 // Full-comic-page render: same knobs as panel render minus `description` /

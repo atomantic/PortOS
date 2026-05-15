@@ -26,7 +26,13 @@ const ANY_H2_RE = /^##\s+/;
 // Plain `Panel N` is preferred by the current prompt template — `## Page N`
 // is the deepest header level we use, so panels live below it without their
 // own heading. Legacy `### Panel N` still accepted for back-compat.
-const PANEL_RE = /^(?:###\s+)?Panel\s+([\dIVX]+)\b/i;
+//
+// The line must be a standalone header — `Panel N` followed by nothing,
+// an optional parenthetical (e.g. `Panel 1 (DPS)` for a double-page spread),
+// or an optional trailing colon. Without the end-anchor a description line
+// like "Panel 2 is offline on the monitor." starts a new panel and silently
+// drops the rest of the prior panel's body.
+const PANEL_RE = /^(?:###\s+)?Panel\s+([\dIVX]+)\s*(?:\([^)]+\))?\s*:?\s*$/i;
 // Caption may repeat with a trailing index (`Caption 2:`); parsePanelBody
 // folds those into one caption block.
 const FIELD_RE = /^(?:\*\*)?(Description|Caption(?:\s+\d+)?|Dialogue|SFX)\s*:(?:\*\*)?\s*(.*)$/i;
