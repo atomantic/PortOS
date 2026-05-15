@@ -583,6 +583,17 @@
 
 ## Fixed
 
+- **Pipeline stage prompts — length profile variables reach existing installs.**
+  Running `npm run migrations` now auto-updates the five pipeline stage prompt
+  templates (`pipeline-idea-expansion.md`, `pipeline-prose.md`,
+  `pipeline-comic-script.md`, `pipeline-tv-script.md`,
+  `pipeline-season-episodes.md`) on machines that were set up before the
+  length-profile feature landed. Migration `003` compares each file's MD5 to
+  the pre-feature shipped hash: unmodified files are overwritten with the new
+  template; customized files are skipped with a diff hint. `setup-data.js` also
+  emits a one-line warning at install time when any stage prompt has drifted,
+  pointing at the migration command.
+
 - **CoS-spawned PRs — concise title + no double "Summary" heading.** Two
   related bugs in the PR-creation path:
   - The PR title was the raw user task description (e.g. "on the

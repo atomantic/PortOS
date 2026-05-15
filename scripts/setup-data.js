@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { existsSync, mkdirSync, cpSync, readdirSync, statSync, readFileSync, writeFileSync } from 'fs';
+import { createHash } from 'crypto';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -108,4 +109,31 @@ const migrationsDir = join(dataDir, 'migrations');
 if (!existsSync(migrationsDir)) {
   console.log('📁 Creating missing directory: migrations');
   mkdirSync(migrationsDir, { recursive: true });
+}
+
+// Drift detection — warn when a data.sample/prompts/stages/*.md differs from
+// the installed data/prompts/stages/*.md copy. Only fires on existing installs
+// (fresh installs already got a full copy above). Prompt templates drift when
+// a PortOS update adds new template variables (e.g. {{lengthTargets.*}}) that
+// existing installs won't pick up because setup-data.js only copies *missing*
+// files. The fix is to run: npm run migrations
+const sampleStagesDir = join(sampleDir, 'prompts', 'stages');
+const dataStagesDir   = join(dataDir,   'prompts', 'stages');
+if (existsSync(sampleStagesDir) && existsSync(dataStagesDir)) {
+  const md5 = (s) => createHash('md5').update(s).digest('hex');
+  const drifted = readdirSync(sampleStagesDir)
+    .filter(f => f.endsWith('.md'))
+    .filter((f) => {
+      const dataPath = join(dataStagesDir, f);
+      if (!existsSync(dataPath)) return false; // missing files handled above
+      const sampleMd5 = md5(readFileSync(join(sampleStagesDir, f), 'utf8'));
+      const dataMd5   = md5(readFileSync(dataPath, 'utf8'));
+      return sampleMd5 !== dataMd5;
+    });
+  if (drifted.length > 0) {
+    console.warn(
+      `\n⚠️  ${drifted.length} pipeline stage prompt(s) differ from data.sample — run \`npm run migrations\` to update unmodified prompts:\n` +
+      drifted.map(f => `   • ${f}`).join('\n') + '\n',
+    );
+  }
 }

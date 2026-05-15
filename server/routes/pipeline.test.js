@@ -1062,7 +1062,7 @@ describe('pipeline routes', () => {
     seasonEpisodesSpy = vi.fn(async () => ({
       season: sea.body,
       episodes: [
-        { number: 1, title: 'Ep 1', logline: 'L1', synopsis: 'Pilot synopsis', primaryCharacters: ['LINA'], arcRole: 'pilot' },
+        { number: 1, title: 'Ep 1', logline: 'L1', synopsis: 'Pilot synopsis', primaryCharacters: ['LINA'], arcRole: 'pilot', lengthProfile: 'extended' },
         { number: 2, title: 'Ep 2', logline: 'L2', synopsis: 'Comp synopsis', primaryCharacters: ['LINA'], arcRole: 'complication' },
       ],
       runId: 'run-2', providerId: 'p', model: 'm',
@@ -1078,6 +1078,8 @@ describe('pipeline routes', () => {
     expect(r.body.createdIssues[0].title).toBe('Ep 1');
     // Synopsis lands in stages.idea.input so auto-run-text has a seed.
     expect(r.body.createdIssues[0].stages.idea.input).toContain('Pilot synopsis');
+    // Non-default lengthProfile must be forwarded from the episode into the created issue.
+    expect(r.body.createdIssues[0].lengthProfile).toBe('extended');
     expect(r.body.createdIssues[1].arcPosition).toBe(2);
 
     const issues = await request(app).get(`/api/pipeline/series/${ser.body.id}/issues`);

@@ -77,7 +77,7 @@ describe('computeIssueTargets — custom profile', () => {
   });
 
   it('scales prose word range proportionally to page count', () => {
-    // A request twice as many pages as the standard preset should
+    // A request for twice as many pages as the standard preset should
     // proportionally scale the prose word range upward.
     const doublePages = LENGTH_PROFILES.standard.pageTarget * 2;
     const targets = computeIssueTargets({
