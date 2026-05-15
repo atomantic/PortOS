@@ -170,13 +170,27 @@ export default function ComicScriptStage({ issue, series, onStageUpdate }) {
   // Mirror PageRow's job-status pattern: start 'unknown' so we treat any
   // existing jobId as in-flight until MediaJobThumb reports back.
   const [coverJobStatus, setCoverJobStatus] = useState('unknown');
+  // `unknown` means the GET /media-jobs/:id is still in-flight OR the job
+  // archive has expired (404). After a short grace period, stop treating an
+  // unresolved `unknown` as in-flight so a stale imageJobId (job archived,
+  // page reloaded) doesn't permanently disable "Render cover". The 5-second
+  // window comfortably outlasts any LAN round-trip while being short enough
+  // that an actual expired-archive case doesn't frustrate the user.
+  const [coverUnknownExpired, setCoverUnknownExpired] = useState(false);
+  // Reset both whenever the jobId changes so a freshly-queued job gets a
+  // clean slate and is immediately treated as in-flight.
+  useEffect(() => {
+    setCoverJobStatus('unknown');
+    setCoverUnknownExpired(false);
+    if (!cover.imageJobId) return undefined;
+    const t = setTimeout(() => setCoverUnknownExpired(true), 5000);
+    return () => clearTimeout(t);
+  }, [cover.imageJobId]);
   const coverJobInFlight = !!cover.imageJobId
     && coverJobStatus !== 'completed'
     && coverJobStatus !== 'failed'
-    && coverJobStatus !== 'canceled';
-  // Reset to 'unknown' whenever the jobId changes so the new job is treated
-  // as in-flight until the first status event arrives.
-  useEffect(() => { setCoverJobStatus('unknown'); }, [cover.imageJobId]);
+    && coverJobStatus !== 'canceled'
+    && !(coverJobStatus === 'unknown' && coverUnknownExpired);
 
   const persistCoverScript = async (nextScript) => {
     // Only send the script text. Never clear imageJobId/prompt from the blur

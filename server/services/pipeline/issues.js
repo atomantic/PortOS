@@ -29,6 +29,21 @@ import {
 // Lazy resolution — see series.js for context.
 const statePath = () => join(PATHS.data, 'pipeline-issues.json');
 
+// Per-issue write queue: serializes concurrent updateIssue / updateStage calls
+// for the same issue ID so a blur-save PATCH can never clobber an in-flight
+// cover-render PATCH (and vice-versa). Each entry is a promise that settles
+// when the previous write for that issue finishes; the next write awaits it
+// before reading state, so it always merges against the freshest persisted
+// record. CLAUDE.md: "simple re-entrancy guards… are fine and expected."
+const issueWriteQueue = new Map();
+
+function queueIssueWrite(issueId, fn) {
+  const prev = issueWriteQueue.get(issueId) ?? Promise.resolve();
+  const next = prev.then(fn, fn); // always run fn, even when prev rejects
+  issueWriteQueue.set(issueId, next.catch(() => {})); // don't let queue entry hold rejection
+  return next; // callers still see the real resolve/reject
+}
+
 export const ERR_NOT_FOUND = 'PIPELINE_ISSUE_NOT_FOUND';
 export const ERR_VALIDATION = 'PIPELINE_ISSUE_VALIDATION';
 const makeErr = (message, code) => Object.assign(new Error(message), { code });
@@ -289,7 +304,8 @@ function nextIssueNumber(issues, seriesId) {
   return Math.max(...peers.map((i) => i.number || 0)) + 1;
 }
 
-export async function updateIssue(id, patch = {}) {
+export function updateIssue(id, patch = {}) {
+  return queueIssueWrite(id, async () => {
   const state = await readState();
   const idx = state.issues.findIndex((i) => i.id === id);
   if (idx < 0) throw makeErr(`Issue not found: ${id}`, ERR_NOT_FOUND);
@@ -360,6 +376,7 @@ export async function updateIssue(id, patch = {}) {
   state.issues[idx] = merged;
   await writeState(state);
   return merged;
+  }); // end queueIssueWrite
 }
 
 /**
@@ -368,10 +385,13 @@ export async function updateIssue(id, patch = {}) {
  * Patch keys: status, input, output, lastRunId, errorMessage, and (for
  * visual stages) pages/scenes/cdProjectId/videoPath.
  */
-export async function updateStage(issueId, stageId, patch = {}) {
+export function updateStage(issueId, stageId, patch = {}) {
   if (!STAGE_IDS.includes(stageId)) {
-    throw makeErr(`Unknown stage: ${stageId}`, ERR_VALIDATION);
+    // Validate before queueing so the caller gets an immediate rejection
+    // rather than waiting in line for an error it already knows about.
+    return Promise.reject(makeErr(`Unknown stage: ${stageId}`, ERR_VALIDATION));
   }
+  return queueIssueWrite(issueId, async () => {
   const state = await readState();
   const idx = state.issues.findIndex((i) => i.id === issueId);
   if (idx < 0) throw makeErr(`Issue not found: ${issueId}`, ERR_NOT_FOUND);
@@ -391,6 +411,7 @@ export async function updateStage(issueId, stageId, patch = {}) {
   state.issues[idx] = mergedIssue;
   await writeState(state);
   return { issue: mergedIssue, stage: mergedIssue.stages[stageId] };
+  }); // end queueIssueWrite
 }
 
 export async function deleteIssue(id) {

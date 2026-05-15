@@ -116,18 +116,34 @@ if (!existsSync(migrationsDir)) {
 // (fresh installs already got a full copy above). Prompt templates drift when
 // a PortOS update adds new template variables (e.g. {{lengthTargets.*}}) that
 // existing installs won't pick up because setup-data.js only copies *missing*
-// files. The fix is to run: npm run migrations
+// files.
 //
 // NOTE: only the five files managed by data/migrations/003-update-pipeline-stage-prompts.js
 // are checked here — scanning all stage prompts would produce misleading warnings for
 // prompts that have no migration counterpart (e.g. cd-evaluate.md, writers-room prompts).
-const PIPELINE_LENGTH_PROMPTS = [
-  'pipeline-idea-expansion.md',
-  'pipeline-prose.md',
-  'pipeline-comic-script.md',
-  'pipeline-tv-script.md',
-  'pipeline-season-episodes.md',
-];
+//
+// Hash constants mirror data/migrations/003-update-pipeline-stage-prompts.js so we
+// can distinguish three cases without importing that module:
+//   • hash === OLD_SHIPPED_MD5 → auto-updatable, migration not yet applied
+//   • hash === NEW_SHIPPED_MD5 → already up to date (migration applied or manual merge done)
+//   • neither               → customized, needs manual merge
+// Update these whenever 003 (or a successor migration) changes the hashes.
+const PIPELINE_LENGTH_OLD_MD5 = {
+  'pipeline-idea-expansion.md': 'aee25112b2c596f643b17c559b772c22',
+  'pipeline-prose.md':          'bfea5aeeb471aae9749baee765b473a7',
+  'pipeline-comic-script.md':   '40e5fdc1a1e68a7419b7dad936366c1a',
+  'pipeline-tv-script.md':      '3f6fecc25573ed054b47db392250034a',
+  'pipeline-season-episodes.md':'6e349ad26bed8a0ccb042571f03f03eb',
+};
+const PIPELINE_LENGTH_NEW_MD5 = {
+  'pipeline-idea-expansion.md': '41facefbc0c0549d456bef9111f95ab9',
+  'pipeline-prose.md':          '30ac30ec2b9d3e2a9eb869c181732cc6',
+  'pipeline-comic-script.md':   'beab031951859ca13579cdb9c4dbe769',
+  'pipeline-tv-script.md':      '376f779f4687b598f1c92ca4e770fd5a',
+  'pipeline-season-episodes.md':'c4928e2a5f833358116b29d2d669888d',
+};
+const PIPELINE_LENGTH_PROMPTS = Object.keys(PIPELINE_LENGTH_OLD_MD5);
+
 const sampleStagesDir = join(sampleDir, 'prompts', 'stages');
 const dataStagesDir   = join(dataDir,   'prompts', 'stages');
 if (existsSync(sampleStagesDir) && existsSync(dataStagesDir)) {
@@ -135,18 +151,37 @@ if (existsSync(sampleStagesDir) && existsSync(dataStagesDir)) {
     const normalized = s.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
     return createHash('md5').update(normalized).digest('hex');
   };
-  const drifted = PIPELINE_LENGTH_PROMPTS
-    .filter((f) => {
-      const dataPath = join(dataStagesDir, f);
-      if (!existsSync(dataPath)) return false; // missing files handled above
-      const sampleMd5 = md5(readFileSync(join(sampleStagesDir, f), 'utf8'));
-      const dataMd5   = md5(readFileSync(dataPath, 'utf8'));
-      return sampleMd5 !== dataMd5;
-    });
-  if (drifted.length > 0) {
+
+  const autoUpdatable = [];
+  const customized    = [];
+
+  for (const f of PIPELINE_LENGTH_PROMPTS) {
+    const dataPath = join(dataStagesDir, f);
+    if (!existsSync(dataPath)) continue; // missing files handled above
+    const dataMd5 = md5(readFileSync(dataPath, 'utf8'));
+    if (dataMd5 === PIPELINE_LENGTH_NEW_MD5[f]) continue; // already up to date
+    if (dataMd5 === PIPELINE_LENGTH_OLD_MD5[f]) {
+      autoUpdatable.push(f);
+    } else {
+      customized.push(f);
+    }
+  }
+
+  if (autoUpdatable.length > 0) {
     console.warn(
-      `\n⚠️  ${drifted.length} pipeline stage prompt(s) differ from data.sample — run \`npm run migrations\` to update unmodified prompts:\n` +
-      drifted.map(f => `   • ${f}`).join('\n') + '\n',
+      `\n⚠️  ${autoUpdatable.length} pipeline stage prompt(s) have a pending migration — run \`npm run migrations\` to auto-update:\n` +
+      autoUpdatable.map(f => `   • ${f}`).join('\n') + '\n',
+    );
+  }
+
+  if (customized.length > 0) {
+    console.warn(
+      `\n⚠️  ${customized.length} pipeline stage prompt(s) are customized and cannot be auto-updated.\n` +
+      `   Manually merge the new template variables into each file:\n` +
+      customized.map(f =>
+        `   • data/prompts/stages/${f}\n` +
+        `     Compare with: data.sample/prompts/stages/${f}`,
+      ).join('\n') + '\n',
     );
   }
 }
