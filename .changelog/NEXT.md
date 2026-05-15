@@ -56,6 +56,43 @@
   - **Layout full-width includes deep links.** `Layout.jsx` matches both
     `/shell` and `/shell/<id>` for full-height/overflow-hidden styling so
     deep-linked terminals render edge-to-edge like the bare route.
+  - **Server-side claim semantics for auto-pick.** Client auto-pick paths
+    (initial load, external-kill recovery, shell:exit fallback, error
+    fallback, bare-/shell adoption) now send `shell:attach` with
+    `claim: true`. The server's `attachSession` honors it — if the session
+    is bound to a different socket, the attach is refused with a
+    `claimRejected` result and the client gets `shell:error` with
+    `sessionId` for correlation. Manual paths (tab click, deep-link URL)
+    still default to `claim:false` (takeover semantics). Prevents two
+    idle tabs receiving the same `shell:sessions` broadcast from racing
+    to attach the same survivor and booting each other.
+  - **Strict-equality pending tracking.** Replaced the simple
+    `pendingAttachRef` with a `{ target, generation }` shape and helpers
+    `setPendingAttach` / `cancelPendingAttach`. Response handlers
+    (`handleShellAttached`, `handleShellStarted`) consume only when
+    target matches exactly, so a cancelled-mid-flight attach can't
+    re-navigate after Stop. Deferred work (setTimeout fallbacks) captures
+    generation and aborts if the user changed their mind during the
+    delay window.
+  - **Server-correlated attach errors.** `shell:error` from `shell:attach`
+    failures now carries the requested `sessionId`. The client matches it
+    against `pendingAttachRef.current.target` to recover the correct
+    request and ignores stale errors from earlier rapid clicks. Passive
+    errors (input/stop on missing session) carry sessionId too but never
+    match a pending request, so they don't mutate pending state.
+  - **Intentional vs passive idle preserved across reconnect.** Initial-
+    load auto-attach (which also runs on every reconnect because
+    `handleConnect` resets `hasInitializedRef`) gates on `!userIdleRef`,
+    and the empty-list auto-start branch does too. A transient
+    disconnect no longer re-adopts a session — or spawns a new one —
+    that the user had explicitly stopped.
+  - **handleShellExit / Detached / external-kill respect pending.** When
+    the displayed session dies but the user has an attach in flight to a
+    different session, the recovery handlers now skip their auto-pick
+    fallback and let the pending request complete. Previously,
+    `clearActiveSession` was implicated in cancelling the user's
+    in-flight switch by tearing down pending state alongside the
+    displayed session.
 
 - **Universe Canon page — lock toggle, tag chips, and "from series" badge on every card.**
   Phase 2a of the Universe-as-Canon UI. Each `CanonCard` (used on both the
