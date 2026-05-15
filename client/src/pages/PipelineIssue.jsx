@@ -84,6 +84,7 @@ export default function PipelineIssue() {
   const [autoRunStarting, setAutoRunStarting] = useState(false);
   const [autoRunActive, setAutoRunActive] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [lengthProfileSaving, setLengthProfileSaving] = useState(false);
   // Close the settings modal whenever the active stage changes so it doesn't
   // reopen unexpectedly when the user returns to a previously-visited stage.
   useEffect(() => { setSettingsOpen(false); }, [stageId]);
@@ -148,11 +149,11 @@ export default function PipelineIssue() {
   // flat issue-level patch (no `stages.*` envelope) so the issue sanitizer
   // routes lengthProfile / pageTarget / minutesTarget straight onto the record.
   const handleLengthChange = async (patch) => {
-    const updated = await updatePipelineIssue(issueId, patch).catch((err) => {
-      toast.error(err.message || 'Save failed');
-      return null;
-    });
-    if (updated) setIssue(updated);
+    setLengthProfileSaving(true);
+    updatePipelineIssue(issueId, patch)
+      .then((updated) => { if (updated) setIssue(updated); })
+      .catch((err) => { toast.error(err.message || 'Save failed'); })
+      .finally(() => setLengthProfileSaving(false));
   };
 
   // Persist genConfig changes from the header settings modal. The active
@@ -218,7 +219,7 @@ export default function PipelineIssue() {
             <LengthProfilePicker
               issue={issue}
               onChange={handleLengthChange}
-              disabled={autoRunStarting || autoRunActive}
+              disabled={autoRunStarting || autoRunActive || lengthProfileSaving}
             />
             {series ? (
               <SeriesLlmPicker
@@ -239,9 +240,9 @@ export default function PipelineIssue() {
             <button
               type="button"
               onClick={() => handleAutoRun({})}
-              disabled={autoRunStarting || autoRunActive}
+              disabled={autoRunStarting || autoRunActive || lengthProfileSaving}
               className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-port-accent text-white text-sm font-medium disabled:opacity-50"
-              title="Run idea → prose → (comic script + TV script) end to end"
+              title={lengthProfileSaving ? 'Saving length profile…' : 'Run idea → prose → (comic script + TV script) end to end'}
             >
               {autoRunStarting || autoRunActive ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
               Auto-run text
@@ -249,9 +250,9 @@ export default function PipelineIssue() {
             <button
               type="button"
               onClick={() => handleAutoRun({ includeVideo: true })}
-              disabled={autoRunStarting || autoRunActive}
+              disabled={autoRunStarting || autoRunActive || lengthProfileSaving}
               className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-port-card border border-port-accent/40 text-white text-sm font-medium disabled:opacity-50 hover:bg-port-accent/10"
-              title="Run text stages and then kick off episode video via Creative Director (burns GPU)"
+              title={lengthProfileSaving ? 'Saving length profile…' : 'Run text stages and then kick off episode video via Creative Director (burns GPU)'}
             >
               {autoRunStarting || autoRunActive ? <Loader2 size={14} className="animate-spin" /> : <Clapperboard size={14} />}
               Run everything (incl. video)

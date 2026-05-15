@@ -347,7 +347,7 @@ export default function ComicScriptStage({ issue, series, onStageUpdate }) {
           onBlur={() => {
             if ((cover.script || '') !== draftCoverScript) persistCoverScript(draftCoverScript);
           }}
-          placeholder="Cover concept — describe the hero image, mood, lighting, framing. Series masthead and issue-number tag get composited in automatically."
+          placeholder="Cover concept — describe the hero image, mood, lighting, framing. Series masthead and issue-number tag included in the prompt automatically."
           rows={3}
           className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm"
           maxLength={8000}

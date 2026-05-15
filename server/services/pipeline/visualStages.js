@@ -201,7 +201,7 @@ export function composeComicCoverPrompt({
     : 'Render a bold comic-book series masthead as large logo typography near the top of the cover.';
   const numberBlock = `Include a clearly legible issue-number tag reading "#${issueNumber}" in the top-left corner — small but readable.`;
   const titleLine = issueTitle
-    ? ` Include the episode title "${issueTitle}" as a secondary banner below the masthead.`
+    ? ` Include the issue title "${issueTitle}" as a secondary banner below the masthead.`
     : '';
 
   // Fall back to the issue title so a one-click render against a fresh cover

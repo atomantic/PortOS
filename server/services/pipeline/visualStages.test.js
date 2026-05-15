@@ -333,7 +333,7 @@ describe('composeComicCoverPrompt', () => {
     expect(prompt).toMatch(/series masthead "Bone Walker"/);
     expect(prompt).toMatch(/issue-number tag reading "#7"/);
     expect(prompt).toMatch(/Cover concept: Kessa crouches on the rib spine at dawn\./);
-    expect(prompt).toMatch(/episode title "The Long Sweep"/);
+    expect(prompt).toMatch(/issue title "The Long Sweep"/);
     expect(prompt).toMatch(/Art style: gritty ink-wash/);
   });
 
