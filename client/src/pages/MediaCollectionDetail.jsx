@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { ArrowLeft, CheckSquare, Copy, FolderInput, Inbox, Pencil, Star, StarOff, Trash2, X } from 'lucide-react';
+import ShareToButton from '../components/sharing/ShareToButton';
 import toast from '../components/ui/Toast';
 import MediaCard from '../components/media/MediaCard';
 import MediaPreview from '../components/media/MediaPreview';
@@ -374,6 +375,11 @@ export default function MediaCollectionDetail() {
             >
               <StarOff className="w-3 h-3" /> Unstar
             </button>
+            <ShareToButton
+              kind="media"
+              items={selectedItems.map((it) => ({ kind: it.kind, ref: it.ref }))}
+              label="Share…"
+            />
             <button
               ref={moveBtnRef}
               type="button"

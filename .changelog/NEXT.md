@@ -2,6 +2,53 @@
 
 ## Added
 
+- **Cross-network sharing via cloud-synced folders (share buckets).**
+  Pipeline series (with all issues + linked universe), universes, and
+  individual media can now be shared with peers on **different Tailscale
+  networks** by exporting into a cloud-synced folder (Google Drive, Dropbox,
+  iCloud Drive, Syncthing, USB stick). PortOS reads/writes a stable layout
+  inside the folder; the cloud-sync app handles cross-network transport, so
+  no PortOS-side broker is required.
+  - New **Sharing** page at `/sharing` (under Create in the sidebar +
+    `⌘K`-reachable) registers each synced folder as a "bucket" with a
+    per-bucket import mode: `inbox` (incoming shares queue for explicit
+    review) or `auto-merge` (LWW into the local working set on arrival).
+  - **ShareToButton** on the Pipeline series list, UniverseBuilder toolbar,
+    and Media Collection detail bulk-action bar exports the selected record
+    into any registered bucket. **OriginBadge** chips render on every
+    imported record with the sharer's display name + bucket name + import
+    timestamp.
+  - **Full-fidelity gen metadata.** Exports walk each record's
+    `imageJobId` / `sceneVideoJobId` / `imageRefs` / `videoPath` references,
+    copy the underlying asset (+ sidecar metadata JSON) into the bucket's
+    `assets/{images,videos}/`, and write the full `media-jobs.json` entry
+    (prompt, negative prompt, model, seed, sampler, dimensions, ref images,
+    audio inputs, LoRA selections, etc.) into `records/media/<jobId>.json`
+    so recipients can Regenerate / Iterate with identical parameters.
+  - **Source attribution.** A user-configurable `sharingDisplayName` +
+    optional `sharingBio` (in PortOS settings, with per-bucket overrides)
+    is stamped onto every outgoing manifest and every record's
+    `origin.{ bucketId, bucketName, source, sourceBio, manifestId,
+    importedAt }`. Recipients see attribution via `<OriginBadge>` on
+    imported records.
+  - **chokidar** watcher attaches to each bucket's `manifests/` directory
+    on boot and on bucket registration; backlog processing catches any
+    manifests that arrived while the server was offline. Per-bucket cursor
+    dedup (`data/sharing/cursors/<bucketId>.json`) ensures the same manifest
+    is never imported twice.
+  - **Privacy note:** the cloud-sync provider sees bucket contents in
+    plaintext; this is no different from any Google Drive folder share and
+    is surfaced inline on the Sharing page.
+
+  **Files:** new `server/services/sharing/{index,buckets,manifest,exporter,
+  importer,watcher}.js`, `server/routes/sharing.js`,
+  `server/lib/sharingOrigin.js`, `client/src/pages/Sharing.jsx`,
+  `client/src/components/sharing/{ShareToButton,OriginBadge}.jsx`,
+  `client/src/services/apiSharing.js`. `series` / `issues` / `universes` /
+  `media-collections` sanitizers gained an optional `origin` field. Tests:
+  `server/lib/sharingOrigin.test.js`, `server/services/sharing/{buckets,
+  manifest}.test.js`.
+
 - **Pipeline — per-issue length profile, per-stage gen config, comic front cover.**
   Three additive pipeline-UX features rescued from a pre-crash recovery branch
   and cherry-picked into main:

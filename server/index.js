@@ -96,6 +96,8 @@ import imageVideoModelsRoutes from './routes/imageVideoModels.js';
 import lorasRoutes from './routes/loras.js';
 import sdapiRoutes from './routes/sdapi.js';
 import openclawRoutes from './routes/openclaw.js';
+import sharingRoutes from './routes/sharing.js';
+import { initSharing } from './services/sharing/index.js';
 import askRoutes from './routes/ask.js';
 import { ensureSelf, startPolling } from './services/instances.js';
 import { initSyncLog } from './services/brainSyncLog.js';
@@ -374,6 +376,7 @@ app.use('/api/loras', lorasRoutes);
 // settings.imageGen.expose.a1111 so it returns 403 unless the user opted in.
 app.use('/sdapi/v1', sdapiRoutes);
 app.use('/api/openclaw', openclawRoutes);
+app.use('/api/sharing', sharingRoutes);
 app.use('/api/ask', askRoutes);
 
 // initMediaJobQueue is awaited as part of the startup chain below so that
@@ -505,6 +508,15 @@ ensureSelf()
     // Universe Builder needs the media job queue running before it can listen
     // for `completed` events — so initialize the hook here.
     initUniverseBuilderCollectionHook();
+  })
+  .then(() => {
+    // Sharing: attach chokidar watchers to every registered share bucket so
+    // incoming manifests from peers are picked up live. Backlog processing
+    // (manifests that arrived while the server was offline) runs as part of
+    // initSharing. Fire-and-forget — a failed bucket shouldn't block boot.
+    initSharing({ io }).catch((err) => {
+      console.error(`❌ Sharing init failed: ${err.message}`);
+    });
   })
   .then(() => {
     // Fire-and-forget — resume any Creative Director projects that were mid-

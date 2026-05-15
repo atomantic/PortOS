@@ -6,6 +6,21 @@ For project goals, see [GOALS.md](./GOALS.md). For completed work, see [DONE.md]
 
 ## Next Up
 
+### Cross-network sharing via cloud-synced folders ("Share Buckets") — v1 shipped
+
+V1 landed: buckets, ShareToButton on Pipeline + UniverseBuilder + MediaCollection, OriginBadge, exporter with full gen-metadata fidelity, importer with `auto-merge` + `inbox` modes, chokidar watcher, configurable `sharingDisplayName` source attribution, nav-manifest registration, unit tests for buckets/manifest/origin. See `~/.claude/plans/new-high-priority-task-valiant-wall.md` for design. Remaining follow-ups:
+
+- [ ] **Inbox-route + exporter integration tests.** Unit tests cover bucket validation, manifest helpers, origin sanitizer. End-to-end exporter+importer flow (export series → simulate peer pickup → promote) is only verified by manual smoke at v1; add `server/routes/sharing.test.js` + `server/services/sharing/exporter.test.js` + `importer.test.js` with mocked PATHS to cover the round-trip + asset copy + LWW merge paths.
+- [ ] **Preserve series id on auto-merge insert.** Today `applyAutoMerge` falls back to `createSeries` for new arrivals, which assigns a fresh local id (re-shares of the same series would land as duplicates). Either expose an `insertSeriesWithId` helper from `services/pipeline/series.js` for the importer, or normalize via the manifest's bucketId+originalId pair so subsequent updates LWW-merge into the right local record. Same applies to `universeBuilder.createUniverse`.
+- [ ] **Per-instance display-name fallback inside the Sharing page.** Settings save flow currently lives on the Sharing page top strip; mirror it into the existing Settings tab structure (`client/src/components/settings/`) so the field is discoverable from both surfaces.
+- [ ] **Conflict UI for auto-merge.** Today incoming records LWW silently. When a remote record overwrites a local one with a newer `updatedAt`, surface a notification ("auto-merged 'My Series' — local changes overridden") so the user knows. Could piggyback on the existing toast + `sharing:manifest-processed` socket event.
+- [ ] **Manifest archive pruning.** A bucket lived long enough accumulates thousands of manifests under `<bucket>/manifests/`. Add a per-bucket retention policy (e.g. keep last 500 manifests, archive the rest into `manifests/.archive/` or drop entirely once cursor advances past them).
+- [ ] **Native Google Drive / Dropbox API integration.** Mount-the-folder transport ships v1; a future iteration could integrate Drive API directly so users don't have to mount the drive themselves.
+- [ ] **Content-addressed asset dedup.** Today asset copies skip-if-filename-exists. Hash-based dedup would let multiple manifests share the same blob even when filenames differ.
+- [ ] **Extend `syncOrchestrator` to cover pipeline/universe over Tailscale.** Separate ticket from buckets — same-network peers on Tailscale should be able to sync these categories without going through a bucket.
+- [ ] **End-to-end encryption inside the bucket.** Plaintext today (privacy note in the UI). Add age/PGP-based encryption per-bucket so the cloud provider can't read shared content.
+- [ ] **Multi-hop provenance chains.** Re-share authors a fresh `origin` block; chain[] would preserve full attribution. Defer until users ask.
+
 ### Universe-as-Canon refactor — Phase B.4 cleanup + follow-ups
 
 The world model is now a Marvel-style **universe** carrying canonical entities (characters, places, objects) that multiple series can share for crossovers + cameos. Shipped 2026-05-14 across Phase 0 (world→universe rename), Phase A (canon arrays + Universe Canon page + cast-wide differentiate + image-delete purge sync), Phase B (render paths read via `getSeriesCanon`), Phase B.2 (Nouns page reads/writes universe canon), Phase B.3a (legacy series-side canon helpers redirect to universe when linked), Phase B.3b (Nouns page drops the orphan series fallback), and the "Appears in" cross-reference footer on every Canon card. Migration scripts: `server/scripts/migrateAll.js` (chains `migrateWorldToUniverse.js` + `migrateSeriesCanon.js`).

@@ -27,6 +27,8 @@ import {
 import InfluenceChipsInput from '../components/universeBuilder/InfluenceChipsInput';
 import BackendChipStrip from '../components/media/BackendChipStrip';
 import ImageGenControls from '../components/imageGen/ImageGenControls';
+import ShareToButton from '../components/sharing/ShareToButton';
+import OriginBadge from '../components/sharing/OriginBadge';
 import { deriveAvailableBackends, IMAGE_GEN_MODE } from '../lib/imageGenBackends';
 
 const CATEGORY_LABELS = {
@@ -866,6 +868,8 @@ export default function UniverseBuilder() {
                 >
                   <Library size={16} /> Canon
                 </Link>
+                <ShareToButton kind="universe" ids={[selectedId]} label="Share" />
+                {draft.origin ? <OriginBadge origin={draft.origin} /> : null}
                 <button
                   onClick={handleDelete}
                   className={`px-3 py-2 rounded flex items-center gap-2 min-h-[40px] ${

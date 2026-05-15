@@ -14,6 +14,7 @@ import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { PATHS, atomicWrite, readJSONFile, ensureDir } from '../lib/fileUtils.js';
 import { ITEM_KIND, REF_MAX_LENGTH, itemKey } from '../lib/mediaItemKey.js';
+import { sanitizeOrigin } from '../lib/sharingOrigin.js';
 
 const STATE_PATH = join(PATHS.data, 'media-collections.json');
 
@@ -45,7 +46,10 @@ const sanitizeItem = (raw) => {
   // resolver's Date sort — replace anything unparseable with now().
   const parsed = typeof raw.addedAt === 'string' ? Date.parse(raw.addedAt) : NaN;
   const addedAt = Number.isFinite(parsed) ? raw.addedAt : new Date().toISOString();
-  return { kind: raw.kind, ref, addedAt };
+  const out = { kind: raw.kind, ref, addedAt };
+  const origin = sanitizeOrigin(raw.origin);
+  if (origin) out.origin = origin;
+  return out;
 };
 
 const sanitizeCollection = (raw) => {

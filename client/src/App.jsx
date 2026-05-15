@@ -83,6 +83,7 @@ const Wiki = lazyWithReload(() => import('./pages/Wiki'));
 const RapidReaderPage = lazyWithReload(() => import('./pages/RapidReader'));
 const WritersRoom = lazyWithReload(() => import('./pages/WritersRoom'));
 const Pipeline = lazyWithReload(() => import('./pages/Pipeline'));
+const Sharing = lazyWithReload(() => import('./pages/Sharing'));
 const PipelineSeries = lazyWithReload(() => import('./pages/PipelineSeries'));
 const PipelineIssue = lazyWithReload(() => import('./pages/PipelineIssue'));
 
@@ -223,6 +224,7 @@ export default function App() {
           <Route path="universe-builder/:universeId" element={<UniverseBuilder />} />
           <Route path="universe-builder/:universeId/canon" element={<UniverseCanon />} />
           <Route path="writers-room" element={<WritersRoom />} />
+          <Route path="sharing" element={<Sharing />} />
           <Route path="pipeline" element={<Pipeline />} />
           <Route path="pipeline/series/:seriesId" element={<PipelineSeries />} />
           <Route path="pipeline/issues/:issueId" element={<Navigate to="idea" replace />} />

@@ -25,6 +25,7 @@ import {
   LENGTH_PROFILE_NAMES, DEFAULT_LENGTH_PROFILE,
   CUSTOM_PAGE_MIN, CUSTOM_PAGE_MAX, CUSTOM_MINUTE_MIN, CUSTOM_MINUTE_MAX,
 } from '../../lib/issueLength.js';
+import { sanitizeOrigin } from '../../lib/sharingOrigin.js';
 
 // Lazy resolution — see series.js for context.
 const statePath = () => join(PATHS.data, 'pipeline-issues.json');
@@ -223,6 +224,8 @@ const sanitizeIssue = (raw) => {
     pageTarget,
     minutesTarget,
     stages: sanitizeStages(raw.stages || {}),
+    // Share-bucket provenance — present on imported records, absent on locally-authored ones.
+    origin: sanitizeOrigin(raw.origin),
     createdAt,
     updatedAt,
   };
@@ -380,6 +383,7 @@ export function updateIssue(id, patch = {}) {
     ...('lengthProfile' in patch ? { lengthProfile: patch.lengthProfile } : {}),
     ...('pageTarget' in patch ? { pageTarget: patch.pageTarget } : {}),
     ...('minutesTarget' in patch ? { minutesTarget: patch.minutesTarget } : {}),
+    ...('origin' in patch ? { origin: patch.origin } : {}),
     stages: mergedStages,
     updatedAt: new Date().toISOString(),
   });

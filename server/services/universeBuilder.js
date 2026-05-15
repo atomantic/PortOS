@@ -30,6 +30,7 @@ import {
   sanitizeBibleList, BIBLE_KIND, BIBLE_FIELD, BIBLE_LIMITS, BIBLE_SOURCE,
   normalizeBibleName,
 } from '../lib/storyBible.js';
+import { sanitizeOrigin } from '../lib/sharingOrigin.js';
 
 // Bumped when a sanitizer-time backfill changes how on-disk universes are
 // shaped, so future migrations can gate on the prior version.
@@ -455,6 +456,8 @@ const sanitizeTemplate = (raw) => {
     objects,
     schemaVersion,
     llm,
+    // Share-bucket provenance — present on imported records, absent on locally-authored ones.
+    origin: sanitizeOrigin(raw.origin),
     createdAt,
     updatedAt,
   };
@@ -573,6 +576,8 @@ export async function updateUniverse(id, patch = {}) {
     // Canon entity arrays — patched wholesale (the sanitizer reruns
     // sanitizeBibleList so per-entry shape is enforced on every save).
     'characters', 'settings', 'objects',
+    // Share-bucket origin metadata (importer sets it; user clears via wholesale null).
+    'origin',
   ];
   const scalarPatch = Object.fromEntries(
     PATCHABLE_SCALARS.filter((k) => k in patch).map((k) => [k, patch[k]]),

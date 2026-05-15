@@ -20,6 +20,7 @@ import {
 } from '../../lib/storyBible.js';
 import { sanitizeArc, sanitizeSeasonList } from '../../lib/storyArc.js';
 import { extractBible } from '../../lib/bibleExtractor.js';
+import { sanitizeOrigin } from '../../lib/sharingOrigin.js';
 
 // Lazy resolution — PATHS.data may not be available at module-load time
 // (e.g. tests that swap it through a Proxy mock).
@@ -84,6 +85,8 @@ const sanitizeSeries = (raw) => {
     targetFormat,
     issueCountTarget,
     llm,
+    // Share-bucket provenance — present on imported records, absent on locally-authored ones.
+    origin: sanitizeOrigin(raw.origin),
     createdAt,
     updatedAt,
   };
@@ -165,6 +168,7 @@ export async function updateSeries(id, patch = {}) {
     ...('styleNotes' in patch ? { styleNotes: patch.styleNotes } : {}),
     ...('targetFormat' in patch ? { targetFormat: patch.targetFormat } : {}),
     ...('issueCountTarget' in patch ? { issueCountTarget: patch.issueCountTarget } : {}),
+    ...('origin' in patch ? { origin: patch.origin } : {}),
     llm: mergedLlm,
     updatedAt: new Date().toISOString(),
   });

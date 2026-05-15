@@ -79,6 +79,7 @@ import {
   Eraser,
   Sun,
   Moon,
+  Share2,
   Workflow as WorkflowIcon
 } from 'lucide-react';
 /* global __APP_VERSION__ */
@@ -194,6 +195,7 @@ const navItems = [
     children: [
       { to: '/media', label: 'Media Gen', icon: Layers },
       { to: '/pipeline', label: 'Pipeline', icon: WorkflowIcon, dynamic: 'pipelineSeries' },
+      { to: '/sharing', label: 'Sharing', icon: Share2 },
       { to: '/universe-builder', label: 'Universe Builder', icon: Globe },
       { to: '/writers-room', label: 'Writers Room', icon: NotebookPen }
     ]

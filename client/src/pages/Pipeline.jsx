@@ -11,6 +11,8 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Plus, Workflow as WorkflowIcon, Trash2, Loader2, Globe2 } from 'lucide-react';
 import toast from '../components/ui/Toast';
+import ShareToButton from '../components/sharing/ShareToButton';
+import OriginBadge from '../components/sharing/OriginBadge';
 import {
   listPipelineSeries,
   createPipelineSeries,
@@ -259,7 +261,10 @@ export default function Pipeline() {
           {series.map((s) => (
             <li key={s.id} className="flex items-center justify-between gap-3 p-3 bg-port-card border border-port-border rounded-lg hover:border-port-accent/40 transition-colors">
               <Link to={`/pipeline/series/${s.id}`} className="flex-1 min-w-0">
-                <div className="text-white font-medium truncate">{s.name}</div>
+                <div className="text-white font-medium truncate flex items-center gap-2">
+                  <span className="truncate">{s.name}</span>
+                  {s.origin ? <OriginBadge origin={s.origin} compact /> : null}
+                </div>
                 {s.logline ? (
                   <div className="text-xs text-gray-500 truncate">{s.logline}</div>
                 ) : (
@@ -271,6 +276,7 @@ export default function Pipeline() {
                   </div>
                 ) : null}
               </Link>
+              <ShareToButton kind="series" ids={[s.id]} compact />
               <button
                 type="button"
                 onClick={() => handleDelete(s)}
