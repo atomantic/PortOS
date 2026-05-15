@@ -61,9 +61,17 @@ export function BackupTab() {
   };
 
   const toggleDefaultExclude = (path) => {
-    setDisabledDefaultExcludes(prev =>
-      prev.includes(path) ? prev.filter(p => p !== path) : [...prev, path]
-    );
+    const currentlyDisabled = disabledDefaultExcludes.includes(path);
+    if (currentlyDisabled) {
+      // Re-enabling the default exclude — path goes back to being excluded.
+      setDisabledDefaultExcludes(prev => prev.filter(p => p !== path));
+    } else {
+      // Disabling the default — the user is opting this path back IN to backups.
+      // Also strip from custom Additional Exclude Paths; otherwise rsync would
+      // still exclude it and the toggle would lie about the actual behavior.
+      setDisabledDefaultExcludes(prev => [...prev, path]);
+      setExcludePaths(prev => prev.filter(p => p !== path));
+    }
   };
 
   const [handleRunNow, running] = useAsyncAction(async () => {
@@ -79,6 +87,13 @@ export function BackupTab() {
   const addExclude = () => {
     const trimmed = newExclude.trim();
     if (!trimmed || excludePaths.includes(trimmed)) return;
+    // A custom exclude that shadows a default would lie about toggle state
+    // (toggle "included" but rsync still excludes via the custom entry).
+    // Steer the user to the toggle instead.
+    if (defaultExcludes.some(d => d.path === trimmed)) {
+      toast.error(`"${trimmed}" is a default exclusion — use the toggle above instead`);
+      return;
+    }
     setExcludePaths([...excludePaths, trimmed]);
     setNewExclude('');
   };
@@ -148,7 +163,14 @@ export function BackupTab() {
           <ul className="space-y-1.5 mt-1">
             {defaultExcludes.map((d, i) => {
               const isDisabled = disabledDefaultExcludes.includes(d.path);
-              const isExcluded = !(d.overridable && isDisabled);
+              const inCustomExcludes = excludePaths.includes(d.path);
+              const defaultActive = !(d.overridable && isDisabled);
+              // The path is excluded if EITHER the built-in default still applies
+              // OR the user also listed it in Additional Exclude Paths. Without the
+              // second check, the toggle would show "included" while rsync excludes
+              // via the custom entry.
+              const isExcluded = defaultActive || inCustomExcludes;
+              const shadowedByCustom = !defaultActive && inCustomExcludes;
               return (
                 <li key={i} className="flex items-start gap-2 text-xs">
                   {d.overridable ? (
@@ -168,6 +190,7 @@ export function BackupTab() {
                   <span className="text-gray-500">
                     {d.reason}
                     {!isExcluded && <span className="text-port-success/80 ml-1">(included)</span>}
+                    {shadowedByCustom && <span className="text-port-warning ml-1">(still excluded via Additional Exclude Paths — remove it below)</span>}
                   </span>
                 </li>
               );

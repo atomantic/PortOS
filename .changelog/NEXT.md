@@ -443,12 +443,12 @@
   schema changes.
 
 - **Backup defaults — skip large re-downloadable assets, with per-default override.**
-  `loras/`, `repos/`, `cos/reference-repos/`, and `browser-downloads/` are now
-  in the built-in `DEFAULT_EXCLUDES` for scheduled and manual backups, so the
-  default snapshot no longer balloons by tens of GB of LoRA weights, cloned
-  upstream repos, and browser download cache when the user just wants their
-  data backed up to iCloud or an external drive. Each new entry is tagged
-  `overridable: true`; the Backup settings page renders a toggle per
+  `loras/*.safetensors`, `repos/`, `cos/reference-repos/`, and `browser-downloads/`
+  are now in the built-in `DEFAULT_EXCLUDES` for scheduled and manual backups,
+  so the default snapshot no longer balloons by tens of GB of LoRA weights,
+  cloned upstream repos, and browser download cache when the user just wants
+  their data backed up to iCloud or an external drive. Each new entry is
+  tagged `overridable: true`; the Backup settings page renders a toggle per
   overridable default so users can opt to back them up by adding the path
   to a new `backup.disabledDefaultExcludes` array. The pre-existing
   `browser-profile/` + `cos/worktrees/` + `cos/feature-agents/*/worktree/`
@@ -456,6 +456,24 @@
   irreplaceable user content) and continue to be skipped unconditionally.
   Plumbed through `runBackup()`, the route, the scheduler, and
   `backupConfigSchema`; tests updated.
+
+  **Notes on review feedback:**
+  - The LoRA exclude is `loras/*.safetensors`, not `loras/`. The
+    `.metadata.json` sidecars next to each `.safetensors` file (Civitai
+    metadata + user-editable name / recommendedScale / notes) are the
+    source of truth for that user data and ARE backed up.
+  - The cron handler in `backupScheduler.js` re-reads settings on each
+    invocation, so toggling a default exclude in the UI takes effect on the
+    next scheduled run without a server restart. (Only the cron expression
+    itself is captured at registration.)
+  - `runBackup()` guards `excludePaths` and `disabledDefaultExcludes` with
+    `Array.isArray` before filtering, so a hand-edited settings.json with
+    the wrong shape doesn't abort the backup. Exclude-computation extracted
+    into `computeEffectiveExcludes()` (pure, unit-tested).
+  - The Backup tab `<isExcluded>` state now accounts for paths also listed
+    in Additional Exclude Paths — toggling a default to "included" auto-
+    cleans the duplicate from `excludePaths`, and `addExclude` refuses to
+    shadow a default (steers the user to the toggle instead).
 
 ## Changed
 

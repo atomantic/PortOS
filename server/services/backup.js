@@ -36,7 +36,7 @@ export const DEFAULT_EXCLUDES = [
   { path: 'browser-profile/', reason: 'Browser CDP profile — cache/cookies, can be several GB', overridable: false },
   { path: 'cos/worktrees/', reason: 'Ephemeral agent git worktrees — recreated on demand', overridable: false },
   { path: 'cos/feature-agents/*/worktree/', reason: 'Per-feature-agent git worktrees — recreated on demand', overridable: false },
-  { path: 'loras/', reason: 'LoRA adapter files — large model weights, re-downloadable', overridable: true },
+  { path: 'loras/*.safetensors', reason: 'LoRA adapter weight files — large, re-downloadable. .metadata.json sidecars (Civitai metadata, user-editable name/notes) ARE backed up.', overridable: true },
   { path: 'repos/', reason: 'Cloned git repositories — large, re-cloneable from origin', overridable: true },
   { path: 'cos/reference-repos/', reason: 'Reference upstream repos used by agents — re-cloneable', overridable: true },
   { path: 'browser-downloads/', reason: 'Browser downloads cache — large, re-downloadable', overridable: true }
@@ -104,6 +104,28 @@ function runRsync(srcDir, destDir, flags = []) {
 // =============================================================================
 
 /**
+ * Compute the effective rsync --exclude list for a backup run. Pure function
+ * extracted so the Array.isArray guards + override allow-list can be unit
+ * tested without spawning rsync.
+ *
+ * - Non-overridable defaults stay on regardless of `disabledDefaultExcludes` so
+ *   ephemeral/cache paths can never be backed up by mistake (e.g. via a
+ *   hand-edited settings.json).
+ * - Array.isArray guards: settings can be hand-edited or sent by a stale
+ *   client, so a non-array value here would otherwise throw inside .filter
+ *   and abort the backup before the defensive allow-list has a chance to apply.
+ */
+export function computeEffectiveExcludes({ excludePaths, disabledDefaultExcludes } = {}) {
+  const overridablePaths = new Set(DEFAULT_EXCLUDES.filter(e => e.overridable).map(e => e.path));
+  const disabledList = Array.isArray(disabledDefaultExcludes) ? disabledDefaultExcludes : [];
+  const userList = Array.isArray(excludePaths) ? excludePaths : [];
+  const disabledSet = new Set(disabledList.filter(p => overridablePaths.has(p)));
+  const activeDefaults = DEFAULT_EXCLUDES.filter(e => !disabledSet.has(e.path)).map(e => e.path);
+  const userExcludes = userList.filter(Boolean);
+  return [...new Set([...activeDefaults, ...userExcludes])];
+}
+
+/**
  * Run a full backup snapshot from PATHS.data to destPath.
  * @param {string} destPath - Path to external drive backup root
  * @param {object|null} io - Socket.IO instance for real-time events (optional)
@@ -127,14 +149,7 @@ export async function runBackup(destPath, io = null, { excludePaths = [], disabl
   const snapshotDir = join(destPath, 'snapshots', MACHINE_HOST, snapshotId);
   const dataDestDir = join(snapshotDir, 'data');
 
-  // Non-overridable defaults stay on regardless of `disabledDefaultExcludes` so
-  // ephemeral/cache paths can never be backed up by mistake (e.g. via a hand-edited
-  // settings.json). Filter the disabled list to overridable paths before applying.
-  const overridablePaths = new Set(DEFAULT_EXCLUDES.filter(e => e.overridable).map(e => e.path));
-  const disabledSet = new Set(disabledDefaultExcludes.filter(p => overridablePaths.has(p)));
-  const activeDefaults = DEFAULT_EXCLUDES.filter(e => !disabledSet.has(e.path)).map(e => e.path);
-  const userExcludes = excludePaths.filter(Boolean);
-  const effectiveExcludes = [...new Set([...activeDefaults, ...userExcludes])];
+  const effectiveExcludes = computeEffectiveExcludes({ excludePaths, disabledDefaultExcludes });
 
   console.log(`💾 Backup starting: snapshot ${snapshotId} (excluding ${effectiveExcludes.length} paths)`);
   if (io) io.emit('backup:started', { snapshotId });

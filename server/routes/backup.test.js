@@ -11,7 +11,7 @@ vi.mock('../services/backup.js', () => ({
   restoreSnapshot: vi.fn(),
   DEFAULT_EXCLUDES: [
     { path: 'browser-profile/', reason: 'test', overridable: false },
-    { path: 'loras/', reason: 'test', overridable: true }
+    { path: 'loras/*.safetensors', reason: 'test', overridable: true }
   ]
 }));
 
@@ -51,7 +51,7 @@ describe('backup routes', () => {
         nextRun: '2026-04-08T00:00:00Z',
         defaultExcludes: [
           { path: 'browser-profile/', reason: 'test', overridable: false },
-          { path: 'loras/', reason: 'test', overridable: true }
+          { path: 'loras/*.safetensors', reason: 'test', overridable: true }
         ]
       });
     });
@@ -103,14 +103,14 @@ describe('backup routes', () => {
 
     it('forwards disabledDefaultExcludes when configured', async () => {
       getSettings.mockResolvedValue({
-        backup: { destPath: '/dest', disabledDefaultExcludes: ['loras/'] }
+        backup: { destPath: '/dest', disabledDefaultExcludes: ['loras/*.safetensors'] }
       });
       backup.runBackup.mockResolvedValue({ success: true });
       await request(buildApp()).post('/api/backup/run');
       expect(backup.runBackup).toHaveBeenCalledWith(
         '/dest',
         undefined,
-        { excludePaths: [], disabledDefaultExcludes: ['loras/'] }
+        { excludePaths: [], disabledDefaultExcludes: ['loras/*.safetensors'] }
       );
     });
   });
