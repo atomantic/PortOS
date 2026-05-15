@@ -526,7 +526,9 @@ export const searchQuerySchema = z.object({
 export const backupConfigSchema = z.object({
   destPath: z.string().min(1),
   cronExpression: z.string().optional(),
-  enabled: z.boolean().optional().default(true)
+  enabled: z.boolean().optional().default(true),
+  excludePaths: z.array(z.string()).optional().default([]),
+  disabledDefaultExcludes: z.array(z.string()).optional().default([])
 });
 
 export const restoreRequestSchema = z.object({

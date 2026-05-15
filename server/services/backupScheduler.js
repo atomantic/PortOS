@@ -31,6 +31,7 @@ export async function startBackupScheduler() {
   const cronExpression = settings.backup?.cronExpression || '0 0 * * *';
   const destPath = settings.backup.destPath;
   const excludePaths = settings.backup?.excludePaths || [];
+  const disabledDefaultExcludes = settings.backup?.disabledDefaultExcludes || [];
   const timezone = await getUserTimezone();
 
   schedule({
@@ -40,7 +41,7 @@ export async function startBackupScheduler() {
     timezone,
     handler: async () => {
       console.log('💾 Backup scheduler: running scheduled backup');
-      await runBackup(destPath, null, { excludePaths });
+      await runBackup(destPath, null, { excludePaths, disabledDefaultExcludes });
     },
     metadata: { source: 'backupScheduler' }
   });

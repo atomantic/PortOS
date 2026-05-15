@@ -27,8 +27,9 @@ router.post('/run', asyncHandler(async (req, res) => {
     return res.status(400).json({ error: 'BACKUP_NOT_CONFIGURED', message: 'No backup destination configured in settings' });
   }
   const excludePaths = settings.backup?.excludePaths || [];
+  const disabledDefaultExcludes = settings.backup?.disabledDefaultExcludes || [];
   const io = req.app.get('io');
-  const result = await backup.runBackup(destPath, io, { excludePaths });
+  const result = await backup.runBackup(destPath, io, { excludePaths, disabledDefaultExcludes });
   res.json(result);
 }));
 

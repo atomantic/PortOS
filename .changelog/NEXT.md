@@ -442,6 +442,21 @@
   PATCH round-trips cleanly through the canonical sanitizer with no other
   schema changes.
 
+- **Backup defaults — skip large re-downloadable assets, with per-default override.**
+  `loras/`, `repos/`, `cos/reference-repos/`, and `browser-downloads/` are now
+  in the built-in `DEFAULT_EXCLUDES` for scheduled and manual backups, so the
+  default snapshot no longer balloons by tens of GB of LoRA weights, cloned
+  upstream repos, and browser download cache when the user just wants their
+  data backed up to iCloud or an external drive. Each new entry is tagged
+  `overridable: true`; the Backup settings page renders a toggle per
+  overridable default so users can opt to back them up by adding the path
+  to a new `backup.disabledDefaultExcludes` array. The pre-existing
+  `browser-profile/` + `cos/worktrees/` + `cos/feature-agents/*/worktree/`
+  entries stay `overridable: false` (cache/ephemeral data with no
+  irreplaceable user content) and continue to be skipped unconditionally.
+  Plumbed through `runBackup()`, the route, the scheduler, and
+  `backupConfigSchema`; tests updated.
+
 ## Changed
 
 - **Data migration scripts for bringing old machines forward.** Two new

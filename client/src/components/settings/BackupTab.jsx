@@ -2,8 +2,13 @@ import { useState, useEffect } from 'react';
 import { Save, Plus, X, Play, ShieldOff } from 'lucide-react';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
+import ToggleSwitch from '../ToggleSwitch';
 import useAsyncAction from '../../hooks/useAsyncAction';
 import { getSettings, updateSettings, getBackupStatus, triggerBackup } from '../../services/api';
+
+// Set equality — rsync --exclude flags are order-independent, so reordering
+// or membership-only changes both signal a real dirty state.
+const sameSet = (a, b) => a.length === b.length && a.every(x => b.includes(x));
 
 export function BackupTab() {
   const [loading, setLoading] = useState(true);
@@ -14,6 +19,8 @@ export function BackupTab() {
   const [cronExpression, setCronExpression] = useState('0 2 * * *');
   const [excludePaths, setExcludePaths] = useState([]);
   const [savedExcludePaths, setSavedExcludePaths] = useState([]);
+  const [disabledDefaultExcludes, setDisabledDefaultExcludes] = useState([]);
+  const [savedDisabledDefaultExcludes, setSavedDisabledDefaultExcludes] = useState([]);
   const [defaultExcludes, setDefaultExcludes] = useState([]);
   const [newExclude, setNewExclude] = useState('');
 
@@ -23,12 +30,15 @@ export function BackupTab() {
         const backup = settings?.backup || {};
         const saved = backup.destPath || '';
         const savedExcludes = backup.excludePaths || [];
+        const savedDisabled = backup.disabledDefaultExcludes || [];
         setDestPath(saved);
         setSavedDestPath(saved);
         setEnabled(backup.enabled ?? false);
         setCronExpression(backup.cronExpression || '0 2 * * *');
         setExcludePaths(savedExcludes);
         setSavedExcludePaths(savedExcludes);
+        setDisabledDefaultExcludes(savedDisabled);
+        setSavedDisabledDefaultExcludes(savedDisabled);
         setDefaultExcludes(status?.defaultExcludes || []);
       })
       .catch(() => toast.error('Failed to load settings'))
@@ -38,15 +48,22 @@ export function BackupTab() {
   const handleSave = async () => {
     setSaving(true);
     try {
-      await updateSettings({ backup: { destPath, enabled, cronExpression, excludePaths } });
+      await updateSettings({ backup: { destPath, enabled, cronExpression, excludePaths, disabledDefaultExcludes } });
       setSavedDestPath(destPath);
       setSavedExcludePaths(excludePaths);
+      setSavedDisabledDefaultExcludes(disabledDefaultExcludes);
       toast.success('Settings saved');
     } catch (err) {
       toast.error(err.message || 'Failed to save settings');
     } finally {
       setSaving(false);
     }
+  };
+
+  const toggleDefaultExclude = (path) => {
+    setDisabledDefaultExcludes(prev =>
+      prev.includes(path) ? prev.filter(p => p !== path) : [...prev, path]
+    );
   };
 
   const [handleRunNow, running] = useAsyncAction(async () => {
@@ -74,9 +91,9 @@ export function BackupTab() {
     return <BrailleSpinner text="Loading backup settings" />;
   }
 
-  const excludesDirty = excludePaths.length !== savedExcludePaths.length
-    || excludePaths.some((p, i) => p !== savedExcludePaths[i]);
-  const dirty = destPath !== savedDestPath || excludesDirty;
+  const dirty = destPath !== savedDestPath
+    || !sameSet(excludePaths, savedExcludePaths)
+    || !sameSet(disabledDefaultExcludes, savedDisabledDefaultExcludes);
   const canRun = !!savedDestPath && !running && !saving && !dirty;
   const runTitle = !savedDestPath
     ? 'Configure and save a destination path first'
@@ -125,16 +142,36 @@ export function BackupTab() {
         <div className="space-y-2">
           <div className="flex items-center gap-2">
             <ShieldOff size={14} className="text-gray-500" />
-            <label className="block text-sm text-gray-400">Default Exclusions (always skipped)</label>
+            <label className="block text-sm text-gray-400">Default Exclusions</label>
           </div>
-          <p className="text-xs text-gray-500">Built-in paths that are never backed up — they hold large or ephemeral data that would bloat snapshots.</p>
-          <ul className="space-y-1 mt-1">
-            {defaultExcludes.map((d, i) => (
-              <li key={i} className="flex items-start gap-2 text-xs">
-                <code className="px-1.5 py-0.5 bg-port-bg border border-port-border rounded text-gray-300 shrink-0">{d.path}</code>
-                <span className="text-gray-500">{d.reason}</span>
-              </li>
-            ))}
+          <p className="text-xs text-gray-500">Built-in paths skipped by default to keep snapshots small. Overridable entries (large re-downloadable assets) can be re-enabled below; fixed entries hold ephemeral data and stay off.</p>
+          <ul className="space-y-1.5 mt-1">
+            {defaultExcludes.map((d, i) => {
+              const isDisabled = disabledDefaultExcludes.includes(d.path);
+              const isExcluded = !(d.overridable && isDisabled);
+              return (
+                <li key={i} className="flex items-start gap-2 text-xs">
+                  {d.overridable ? (
+                    <ToggleSwitch
+                      enabled={!isExcluded}
+                      onChange={() => toggleDefaultExclude(d.path)}
+                      size="sm"
+                      ariaLabel={isExcluded ? `Include ${d.path} in backups` : `Exclude ${d.path} from backups`}
+                      className="mt-0.5"
+                    />
+                  ) : (
+                    <span className="inline-flex items-center justify-center w-12 h-7 shrink-0 text-gray-600" title="Always excluded — cannot be backed up">
+                      <ShieldOff size={14} />
+                    </span>
+                  )}
+                  <code className={`px-1.5 py-0.5 bg-port-bg border rounded shrink-0 ${isExcluded ? 'text-gray-300 border-port-border' : 'text-port-success border-port-success/30'}`}>{d.path}</code>
+                  <span className="text-gray-500">
+                    {d.reason}
+                    {!isExcluded && <span className="text-port-success/80 ml-1">(included)</span>}
+                  </span>
+                </li>
+              );
+            })}
           </ul>
         </div>
       )}

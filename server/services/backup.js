@@ -21,20 +21,26 @@ let isRunning = false;
 
 const STATE_PATH = join(PATHS.data, 'backup', 'state.json');
 
-// Paths under data/ that are always skipped on top of user-configured excludes.
-// Browser profile is a CDP cache that can grow to several GB; worktrees are
-// throwaway agent checkouts of the main repo. When adding a new entry, ensure
-// the path glob covers *every* on-disk location for that class of data —
-// e.g. agent worktrees live under both cos/worktrees/ and
-// cos/feature-agents/*/worktree/; cross-reference worktreeManager.js and
-// agentLifecycle.js if introducing new worktree paths.
+// Paths under data/ that are skipped by default on top of user-configured excludes.
+// Two classes live here: (1) ephemeral/cache data the user almost never wants in a
+// snapshot (browser profile, agent worktrees), and (2) large re-downloadable assets
+// (LoRA model files, cloned repos, browser downloads) that would bloat the backup
+// target — typically iCloud or an external drive with limited capacity. Entries
+// tagged `overridable: true` can be re-enabled from the Backup settings UI via
+// `disabledDefaultExcludes`; non-overridable entries hold no irreplaceable user data
+// and stay off unconditionally. When adding a new entry, ensure the path glob covers
+// *every* on-disk location for that class of data — e.g. agent worktrees live under
+// both cos/worktrees/ and cos/feature-agents/*/worktree/; cross-reference
+// worktreeManager.js and agentLifecycle.js if introducing new worktree paths.
 export const DEFAULT_EXCLUDES = [
-  { path: 'browser-profile/', reason: 'Browser CDP profile — cache/cookies, can be several GB' },
-  { path: 'cos/worktrees/', reason: 'Ephemeral agent git worktrees — recreated on demand' },
-  { path: 'cos/feature-agents/*/worktree/', reason: 'Per-feature-agent git worktrees — recreated on demand' }
+  { path: 'browser-profile/', reason: 'Browser CDP profile — cache/cookies, can be several GB', overridable: false },
+  { path: 'cos/worktrees/', reason: 'Ephemeral agent git worktrees — recreated on demand', overridable: false },
+  { path: 'cos/feature-agents/*/worktree/', reason: 'Per-feature-agent git worktrees — recreated on demand', overridable: false },
+  { path: 'loras/', reason: 'LoRA adapter files — large model weights, re-downloadable', overridable: true },
+  { path: 'repos/', reason: 'Cloned git repositories — large, re-cloneable from origin', overridable: true },
+  { path: 'cos/reference-repos/', reason: 'Reference upstream repos used by agents — re-cloneable', overridable: true },
+  { path: 'browser-downloads/', reason: 'Browser downloads cache — large, re-downloadable', overridable: true }
 ];
-
-const DEFAULT_EXCLUDE_PATHS = DEFAULT_EXCLUDES.map(e => e.path);
 
 // Snapshots live under snapshots/<hostname>/<snapshotId> so a single shared
 // destination (e.g. iCloud) can host backups from multiple machines without
@@ -102,7 +108,7 @@ function runRsync(srcDir, destDir, flags = []) {
  * @param {string} destPath - Path to external drive backup root
  * @param {object|null} io - Socket.IO instance for real-time events (optional)
  */
-export async function runBackup(destPath, io = null, { excludePaths = [] } = {}) {
+export async function runBackup(destPath, io = null, { excludePaths = [], disabledDefaultExcludes = [] } = {}) {
   if (isRunning) {
     console.log('💾 Backup already running — skipping');
     return { skipped: true };
@@ -121,9 +127,14 @@ export async function runBackup(destPath, io = null, { excludePaths = [] } = {})
   const snapshotDir = join(destPath, 'snapshots', MACHINE_HOST, snapshotId);
   const dataDestDir = join(snapshotDir, 'data');
 
-  // Merge user excludes with built-in defaults; dedupe so user can't double-list a default.
+  // Non-overridable defaults stay on regardless of `disabledDefaultExcludes` so
+  // ephemeral/cache paths can never be backed up by mistake (e.g. via a hand-edited
+  // settings.json). Filter the disabled list to overridable paths before applying.
+  const overridablePaths = new Set(DEFAULT_EXCLUDES.filter(e => e.overridable).map(e => e.path));
+  const disabledSet = new Set(disabledDefaultExcludes.filter(p => overridablePaths.has(p)));
+  const activeDefaults = DEFAULT_EXCLUDES.filter(e => !disabledSet.has(e.path)).map(e => e.path);
   const userExcludes = excludePaths.filter(Boolean);
-  const effectiveExcludes = [...new Set([...DEFAULT_EXCLUDE_PATHS, ...userExcludes])];
+  const effectiveExcludes = [...new Set([...activeDefaults, ...userExcludes])];
 
   console.log(`💾 Backup starting: snapshot ${snapshotId} (excluding ${effectiveExcludes.length} paths)`);
   if (io) io.emit('backup:started', { snapshotId });
