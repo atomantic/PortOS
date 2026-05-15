@@ -131,7 +131,10 @@ const PIPELINE_LENGTH_PROMPTS = [
 const sampleStagesDir = join(sampleDir, 'prompts', 'stages');
 const dataStagesDir   = join(dataDir,   'prompts', 'stages');
 if (existsSync(sampleStagesDir) && existsSync(dataStagesDir)) {
-  const md5 = (s) => createHash('md5').update(s).digest('hex');
+  const md5 = (s) => {
+    const normalized = s.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    return createHash('md5').update(normalized).digest('hex');
+  };
   const drifted = PIPELINE_LENGTH_PROMPTS
     .filter((f) => {
       const dataPath = join(dataStagesDir, f);

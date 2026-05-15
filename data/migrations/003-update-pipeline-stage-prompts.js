@@ -22,7 +22,10 @@ import { readFile, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { createHash } from 'crypto';
 
-const md5 = (str) => createHash('md5').update(str).digest('hex');
+const md5 = (str) => {
+  const normalized = str.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  return createHash('md5').update(normalized).digest('hex');
+};
 
 // MD5 hashes of the version shipped BEFORE the length-profile feature.
 // Computed from git show <merge-base>:data.sample/prompts/stages/<file>.
