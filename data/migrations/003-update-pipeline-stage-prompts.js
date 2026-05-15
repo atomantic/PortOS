@@ -18,7 +18,7 @@
  * is a no-op.
  */
 
-import { readFile, writeFile, copyFile } from 'fs/promises';
+import { readFile, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { createHash } from 'crypto';
 

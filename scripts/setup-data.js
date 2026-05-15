@@ -117,12 +117,22 @@ if (!existsSync(migrationsDir)) {
 // a PortOS update adds new template variables (e.g. {{lengthTargets.*}}) that
 // existing installs won't pick up because setup-data.js only copies *missing*
 // files. The fix is to run: npm run migrations
+//
+// NOTE: only the five files managed by data/migrations/003-update-pipeline-stage-prompts.js
+// are checked here — scanning all stage prompts would produce misleading warnings for
+// prompts that have no migration counterpart (e.g. cd-evaluate.md, writers-room prompts).
+const PIPELINE_LENGTH_PROMPTS = [
+  'pipeline-idea-expansion.md',
+  'pipeline-prose.md',
+  'pipeline-comic-script.md',
+  'pipeline-tv-script.md',
+  'pipeline-season-episodes.md',
+];
 const sampleStagesDir = join(sampleDir, 'prompts', 'stages');
 const dataStagesDir   = join(dataDir,   'prompts', 'stages');
 if (existsSync(sampleStagesDir) && existsSync(dataStagesDir)) {
   const md5 = (s) => createHash('md5').update(s).digest('hex');
-  const drifted = readdirSync(sampleStagesDir)
-    .filter(f => f.endsWith('.md'))
+  const drifted = PIPELINE_LENGTH_PROMPTS
     .filter((f) => {
       const dataPath = join(dataStagesDir, f);
       if (!existsSync(dataPath)) return false; // missing files handled above
