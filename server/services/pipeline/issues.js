@@ -29,18 +29,27 @@ import {
 // Lazy resolution — see series.js for context.
 const statePath = () => join(PATHS.data, 'pipeline-issues.json');
 
-// Per-issue write queue: serializes concurrent updateIssue / updateStage calls
-// for the same issue ID so a blur-save PATCH can never clobber an in-flight
-// cover-render PATCH (and vice-versa). Each entry is a promise that settles
-// when the previous write for that issue finishes; the next write awaits it
-// before reading state, so it always merges against the freshest persisted
-// record. CLAUDE.md: "simple re-entrancy guards… are fine and expected."
-const issueWriteQueue = new Map();
+// File-level write lock: serializes concurrent updateIssue / updateStage calls
+// against the shared pipeline-issues.json state file so a blur-save PATCH can
+// never clobber an in-flight cover-render PATCH (and vice-versa, across any
+// pair of issues — not just two writes to the same issue id). Each enqueue
+// awaits the previous write to settle before reading state, so it always
+// merges against the freshest persisted record. CLAUDE.md: "simple
+// re-entrancy guards… are fine and expected."
+let issueWriteTail = Promise.resolve();
 
-function queueIssueWrite(issueId, fn) {
-  const prev = issueWriteQueue.get(issueId) ?? Promise.resolve();
-  const next = prev.then(fn, fn); // always run fn, even when prev rejects
-  issueWriteQueue.set(issueId, next.catch(() => {})); // don't let queue entry hold rejection
+function queueIssueWrite(_issueId, fn) {
+  const next = issueWriteTail.then(fn, fn); // run fn even when prev rejects
+  // Track the silenced tail so a rejection doesn't poison subsequent waiters,
+  // but only as long as this write is the tail — if another write enqueues
+  // after us, it becomes the tail and we drop our reference so the chain
+  // doesn't retain settled promises (and their resolved payloads) for the
+  // life of the process.
+  const silenced = next.catch(() => {});
+  issueWriteTail = silenced;
+  silenced.finally(() => {
+    if (issueWriteTail === silenced) issueWriteTail = Promise.resolve();
+  });
   return next; // callers still see the real resolve/reject
 }
 
