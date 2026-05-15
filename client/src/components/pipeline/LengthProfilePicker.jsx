@@ -27,16 +27,19 @@ export default function LengthProfilePicker({ issue, onChange, disabled = false 
     if (disabled && open) setOpen(false);
   }, [disabled, open]);
 
-  // Close on outside click. No Esc handling here — there's no overlay that
-  // would steal focus, and the page's Modal stack already handles Esc when
-  // a real modal is open above this control.
+  // Close on outside click or Escape.
   useEffect(() => {
     if (!open) return undefined;
     const onDoc = (e) => {
       if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false);
     };
+    const onKey = (e) => { if (e.key === 'Escape') setOpen(false); };
     document.addEventListener('mousedown', onDoc);
-    return () => document.removeEventListener('mousedown', onDoc);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDoc);
+      document.removeEventListener('keydown', onKey);
+    };
   }, [open]);
 
   const choose = (next) => {
@@ -81,7 +84,6 @@ export default function LengthProfilePicker({ issue, onChange, disabled = false 
         title={disabled
           ? 'Length profile is locked while auto-run is active'
           : 'Episode length profile — drives beat / prose / script size targets'}
-        aria-haspopup="menu"
         aria-expanded={open}
         aria-disabled={disabled}
         aria-label={`Length profile: ${summary.label} (${summary.detail})`}
