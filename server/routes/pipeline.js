@@ -857,6 +857,12 @@ router.post('/issues/:id/stages/comicPages/extract-pages', asyncHandler(async (r
 // Per-page rawText patch — re-parses panels from the edited markdown so a
 // subsequent render still gets a structured prompt. Page's `imageJobId` is
 // preserved so the user doesn't lose an in-flight render after a save.
+//
+// The splice + per-panel imageJobId preservation runs inside
+// updateStageWithLatest's computeFn so it reads the freshest persisted pages
+// array. A concurrent page-level render that lands between a pre-queue read
+// and our write would otherwise be reverted — including the imageJobId it
+// just queued.
 router.patch('/issues/:id/stages/comicPages/pages/:pageIndex', asyncHandler(async (req, res) => {
   const pageIndex = Number(req.params.pageIndex);
   if (!Number.isInteger(pageIndex) || pageIndex < 0) {
@@ -865,30 +871,34 @@ router.patch('/issues/:id/stages/comicPages/pages/:pageIndex', asyncHandler(asyn
     });
   }
   const body = validateRequest(comicPagePatchSchema, req.body ?? {});
-  const issue = await issuesSvc.getIssue(req.params.id).catch((err) => { throw mapServiceError(err); });
-  const pages = Array.isArray(issue.stages?.comicPages?.pages) ? [...issue.stages.comicPages.pages] : [];
-  if (!pages[pageIndex]) {
-    throw new ServerError(
-      `pageIndex ${pageIndex} out of range — comicPages has ${pages.length} page${pages.length === 1 ? '' : 's'}`,
-      { status: 404, code: 'PIPELINE_COMIC_PAGE_NOT_FOUND' },
-    );
-  }
   const { pages: reparsed } = parseComicScript(body.rawText);
   const fresh = reparsed[0] || { panels: [], rawText: body.rawText };
-  pages[pageIndex] = {
-    ...pages[pageIndex],
-    rawText: fresh.rawText || body.rawText,
-    panels: fresh.panels.map((p, i) => ({
-      ...p,
-      // Preserve in-flight per-panel jobIds when the panel survived the re-parse.
-      imageJobId: pages[pageIndex].panels?.[i]?.imageJobId ?? p.imageJobId ?? null,
-    })),
-  };
-  const { issue: updatedIssue, stage } = await issuesSvc.updateStage(req.params.id, 'comicPages', {
-    status: 'edited',
-    pages,
-  });
-  res.json({ issue: updatedIssue, stage, page: pages[pageIndex] });
+
+  const { issue: updatedIssue, stage } = await issuesSvc.updateStageWithLatest(
+    req.params.id,
+    'comicPages',
+    (currentStage) => {
+      const currentPages = Array.isArray(currentStage?.pages) ? currentStage.pages : [];
+      if (!currentPages[pageIndex]) {
+        throw new ServerError(
+          `pageIndex ${pageIndex} out of range — comicPages has ${currentPages.length} page${currentPages.length === 1 ? '' : 's'}`,
+          { status: 404, code: 'PIPELINE_COMIC_PAGE_NOT_FOUND' },
+        );
+      }
+      const nextPages = [...currentPages];
+      nextPages[pageIndex] = {
+        ...currentPages[pageIndex],
+        rawText: fresh.rawText || body.rawText,
+        panels: fresh.panels.map((p, i) => ({
+          ...p,
+          // Preserve in-flight per-panel jobIds against the freshest panels.
+          imageJobId: currentPages[pageIndex].panels?.[i]?.imageJobId ?? p.imageJobId ?? null,
+        })),
+      };
+      return { status: 'edited', pages: nextPages };
+    },
+  ).catch((err) => { throw mapServiceError(err); });
+  res.json({ issue: updatedIssue, stage, page: stage.pages[pageIndex] });
 }));
 
 // Render the comic-issue front cover. Builds a cover-art prompt (series
@@ -939,7 +949,7 @@ router.post('/issues/:id/stages/comicPages/pages/:pageIndex/render', asyncHandle
   // same case (defense in depth — any other caller still gets a clean 404),
   // but checking here avoids loading the bible context just to error out.
   const issue = await issuesSvc.getIssue(req.params.id).catch((err) => { throw mapServiceError(err); });
-  const pages = Array.isArray(issue.stages?.comicPages?.pages) ? [...issue.stages.comicPages.pages] : [];
+  const pages = Array.isArray(issue.stages?.comicPages?.pages) ? issue.stages.comicPages.pages : [];
   if (!pages[pageIndex]) {
     throw new ServerError(
       `pageIndex ${pageIndex} out of range — comicPages has ${pages.length} page${pages.length === 1 ? '' : 's'}`,
@@ -951,11 +961,33 @@ router.post('/issues/:id/stages/comicPages/pages/:pageIndex/render', asyncHandle
     .catch((err) => { throw mapServiceError(err); });
 
   // Persist the jobId on the page so a reload still shows the in-flight render.
-  pages[pageIndex] = { ...pages[pageIndex], imageJobId: result.jobId, prompt: result.prompt };
-  const { issue: updatedIssue, stage } = await issuesSvc.updateStage(req.params.id, 'comicPages', {
-    status: 'edited',
-    pages,
-  });
+  // The splice happens inside updateStageWithLatest's computeFn so it lands on
+  // the freshest persisted pages array — a concurrent page edit or sibling
+  // page's render that wrote between our enqueue and persist would otherwise
+  // be reverted by the stale snapshot above.
+  const { issue: updatedIssue, stage } = await issuesSvc.updateStageWithLatest(
+    req.params.id,
+    'comicPages',
+    (currentStage) => {
+      const currentPages = Array.isArray(currentStage?.pages) ? currentStage.pages : [];
+      if (!currentPages[pageIndex]) {
+        // Page was deleted between enqueue and persist (unlikely but possible).
+        // Throw 404 — the queued render job will surface as orphaned in the
+        // media-jobs queue, which the UI can clean up.
+        throw new ServerError(
+          `pageIndex ${pageIndex} out of range — comicPages has ${currentPages.length} page${currentPages.length === 1 ? '' : 's'}`,
+          { status: 404, code: 'PIPELINE_COMIC_PAGE_NOT_FOUND' },
+        );
+      }
+      const nextPages = [...currentPages];
+      nextPages[pageIndex] = {
+        ...currentPages[pageIndex],
+        imageJobId: result.jobId,
+        prompt: result.prompt,
+      };
+      return { status: 'edited', pages: nextPages };
+    },
+  ).catch((err) => { throw mapServiceError(err); });
   res.json({ ...result, issue: updatedIssue, stage });
 }));
 
