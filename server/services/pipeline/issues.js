@@ -297,13 +297,37 @@ export async function updateIssue(id, patch = {}) {
   // those back to empty arrays/null, erasing work the user (or LLM) just did.
   // Callers that need a wholesale stage replacement should use `updateStage`,
   // which writes the full sanitized stage in one shot.
+  //
+  // `cover` and `genConfig` are treated as deep-merge sub-objects: a partial
+  // `{ cover: { script } }` patch from a textarea-blur save must not wipe the
+  // sibling `imageJobId` / `prompt` that a parallel "Render cover" mutation
+  // just persisted. Passing `null` explicitly still clears the sub-object
+  // (intentional-clear semantics).
+  const NESTED_DEEP_MERGE_KEYS = ['cover', 'genConfig'];
   let mergedStages = cur.stages;
   if ('stages' in patch && patch.stages && typeof patch.stages === 'object') {
     mergedStages = { ...cur.stages };
     for (const [stageId, stagePatch] of Object.entries(patch.stages)) {
       const prev = cur.stages?.[stageId];
       if (prev && stagePatch && typeof prev === 'object' && typeof stagePatch === 'object') {
-        mergedStages[stageId] = { ...prev, ...stagePatch };
+        const merged = { ...prev, ...stagePatch };
+        for (const key of NESTED_DEEP_MERGE_KEYS) {
+          if (key in stagePatch
+              && stagePatch[key] && typeof stagePatch[key] === 'object'
+              && prev[key] && typeof prev[key] === 'object') {
+            merged[key] = { ...prev[key], ...stagePatch[key] };
+          }
+        }
+        // Clear transient error fields when a content/status change implies
+        // the previous failure is no longer the active state. Mirrors the
+        // pre-per-stage-merge behavior, where a `{ status, input, output }`
+        // patch replaced the whole stage and implicitly wiped errorMessage.
+        if ('status' in stagePatch && stagePatch.status !== 'error'
+            && stagePatch.status !== 'generating'
+            && !('errorMessage' in stagePatch)) {
+          merged.errorMessage = '';
+        }
+        mergedStages[stageId] = merged;
       } else {
         mergedStages[stageId] = stagePatch;
       }

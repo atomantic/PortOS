@@ -32,6 +32,13 @@ Return a markdown document with this exact structure. **Do not bold the field la
 ```
 # Issue {{issue.number}} — <Title>
 
+## Cover concept
+
+<2–4 sentence cover-art concept: the single hero image that should land on
+the front cover. Focus on subject, framing, mood, and a striking visual
+detail. The cover renderer composes the masthead + issue-number tag
+itself, so do NOT describe text or typography here — just the scene.>
+
 ## Page 1
 
 Panel 1
@@ -61,4 +68,4 @@ Panel 2
 - Never re-describe a character's permanent appearance once introduced; just name them.
 - Vary page rhythm: don't let every page be the same panel count. Use page turns deliberately — what the reader sees when they turn from an odd page to the next even page is one of the strongest tools you have. Land big reveals on page-turn moments.
 
-Return ONLY the script. No preamble, no commentary. The output MUST contain exactly {{lengthTargets.pageTarget}} `## Page N` headers numbered Page 1 through Page {{lengthTargets.pageTarget}}.
+Return ONLY the script. No preamble, no commentary. The output MUST start with the `## Cover concept` section, followed by exactly {{lengthTargets.pageTarget}} `## Page N` headers numbered Page 1 through Page {{lengthTargets.pageTarget}}.

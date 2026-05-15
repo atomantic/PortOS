@@ -44,20 +44,38 @@ const MODE_BLURB = {
 // Cache the three session-stable lookups (settings, image models, providers)
 // at module scope so every Comic/Storyboard stage mount on the same Pipeline
 // page (or after a remount) reuses the result instead of re-fetching. Stored
-// as the in-flight Promise so concurrent mounts don't race.
+// as the in-flight Promise so concurrent mounts don't race. The cache is
+// cleared when ANY underlying request failed so a transient error during
+// settings/provider startup doesn't lock the panel into stale fallbacks for
+// the rest of the SPA session — the next mount retries.
 let lookupCache = null;
 const loadLookups = () => {
-  if (!lookupCache) {
-    lookupCache = Promise.all([
-      getSettings().catch(() => null),
-      listImageModels().catch(() => []),
-      getProviders().catch(() => ({ providers: [] })),
-    ]);
-  }
-  return lookupCache;
+  if (lookupCache) return lookupCache;
+  let anyFailed = false;
+  const promise = Promise.all([
+    getSettings().catch(() => { anyFailed = true; return null; }),
+    listImageModels().catch(() => { anyFailed = true; return []; }),
+    getProviders().catch(() => { anyFailed = true; return { providers: [] }; }),
+  ]).then((vals) => {
+    if (anyFailed) lookupCache = null;
+    return vals;
+  });
+  lookupCache = promise;
+  return promise;
 };
 
+// Mirror of server-side `visualStages.js#resolveMode`. The "Auto →" label in
+// this panel must match what the server will actually dispatch — otherwise
+// the modal tells the user "Auto is currently Codex" while the render flows
+// to local diffusion (or vice versa). Priority:
+//   1. settings.imageGen.mode pinned to 'local' or 'codex' → that mode
+//   2. settings.imageGen.codex.enabled                     → 'codex'
+//   3. local pythonPath configured                         → 'local'
+//   4. otherwise                                           → not configured
+const SUPPORTED_MODES = new Set(['local', 'codex']);
 const resolveAutoLabel = (s) => {
+  const pinned = s?.imageGen?.mode;
+  if (SUPPORTED_MODES.has(pinned)) return pinned === 'codex' ? 'Codex' : 'Local diffusion';
   if (s?.imageGen?.codex?.enabled) return 'Codex';
   if (s?.imageGen?.local?.pythonPath) return 'Local diffusion';
   return 'Local diffusion (not configured)';

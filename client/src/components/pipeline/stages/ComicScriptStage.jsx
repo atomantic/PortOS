@@ -169,9 +169,13 @@ export default function ComicScriptStage({ issue, series, onStageUpdate }) {
   const [renderingCover, setRenderingCover] = useState(false);
 
   const persistCoverScript = async (nextScript) => {
-    const next = { ...cover, script: nextScript };
+    // Send only the changed field — the server's per-stage merge now deep-
+    // merges `cover` sub-fields, so it preserves a `imageJobId` / `prompt`
+    // that a racing "Render cover" mutation may have just persisted. Building
+    // `next` from the closure-captured `cover` here would race with the
+    // render flow and overwrite the newly-queued job id back to null.
     const updated = await updatePipelineIssue(issue.id, {
-      stages: { comicPages: { cover: next } },
+      stages: { comicPages: { cover: { script: nextScript } } },
     }).catch((err) => {
       toast.error(err.message || 'Save failed');
       return null;

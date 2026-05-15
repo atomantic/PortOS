@@ -15,14 +15,19 @@
     counts scale with the picked profile instead of being hardcoded to 22
     pages / 24 minutes. The season-episodes generator emits a `lengthProfile`
     per episode so a finale auto-scales without manual tweaking.
-  - **Per-stage generation settings.** New gear-icon modal on visual stages
-    (`comicPages`, `storyboards`) exposes `imageMode` (`auto` / `local` /
+  - **Per-stage generation settings.** New gear-icon modal in the issue
+    header on the **Storyboards** tab exposes `imageMode` (`auto` / `local` /
     `codex`), pinned local image model, and a refine-LLM override. Persisted
-    on `stages.<stageId>.genConfig` so reloads keep the user's choice.
-    Threads through `generatePipelineComicPage`, `generatePipelineVisualImage`,
-    and the two refine-prompt endpoints. Visual stages' server resolver now
-    defaults to codex when `imageGen.codex.enabled` (still falls back to
-    local diffusion otherwise).
+    on `stages.<stageId>.genConfig` so reloads keep the user's choice; the
+    Comic editor (`comicScript` tab) keeps its existing image-gen drawer so
+    the gear stays off that tab to avoid duplicate controls. The same
+    `genConfig` shape persists on `stages.comicPages.genConfig` as well —
+    threaded through `generatePipelineComicPage`,
+    `generatePipelineVisualImage`, and the two refine-prompt endpoints —
+    so a future header-gear extension to the Comic tab can opt in without
+    a schema change. Visual stages' server resolver now defaults to codex
+    when `imageGen.codex.enabled` (still falls back to local diffusion
+    otherwise).
   - **Comic-issue front cover.** Optional cover concept per issue persisted
     on `stages.comicPages.cover` (`script` + `imageJobId` + `prompt`). New
     `POST /pipeline/issues/:id/stages/comicPages/cover/render` route builds

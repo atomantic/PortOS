@@ -813,11 +813,15 @@ router.post('/issues/:id/stages/comicPages/extract-pages', asyncHandler(async (r
 
   // Preserve a user-edited cover script if one is already set — only seed
   // from the parsed concept when the cover is currently blank. Otherwise an
-  // extract re-run would clobber a hand-curated cover.
-  const existingCoverScript = issue.stages?.comicPages?.cover?.script || '';
+  // extract re-run would clobber a hand-curated cover. When we DO seed, also
+  // clear any prior imageJobId / prompt — they were rendered against the old
+  // (likely placeholder / fallback) script, so leaving them would show a
+  // rendered cover image that doesn't match the new concept text.
+  const existingCover = issue.stages?.comicPages?.cover || null;
+  const existingCoverScript = existingCover?.script || '';
   const nextCover = coverConcept && !existingCoverScript
-    ? { ...(issue.stages?.comicPages?.cover || {}), script: coverConcept }
-    : (issue.stages?.comicPages?.cover || null);
+    ? { script: coverConcept, imageJobId: null, prompt: null }
+    : existingCover;
 
   const { issue: updatedIssue, stage } = await issuesSvc.updateStage(issue.id, 'comicPages', {
     status: pages.length ? 'ready' : 'empty',
