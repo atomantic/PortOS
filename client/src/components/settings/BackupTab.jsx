@@ -10,6 +10,12 @@ import { getSettings, updateSettings, getBackupStatus, triggerBackup } from '../
 // or membership-only changes both signal a real dirty state.
 const sameSet = (a, b) => a.length === b.length && a.every(x => b.includes(x));
 
+// settings.json is hand-editable and the GET /settings endpoint is unvalidated,
+// so an incoming `excludePaths`/`disabledDefaultExcludes` value can be a string,
+// null, or any other shape. Normalize before it reaches React state — otherwise
+// downstream `.some` / `.includes` / `.filter` calls crash the Backup tab.
+const asArray = (v) => Array.isArray(v) ? v : [];
+
 export function BackupTab() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -29,8 +35,8 @@ export function BackupTab() {
       .then(([settings, status]) => {
         const backup = settings?.backup || {};
         const saved = backup.destPath || '';
-        const savedExcludes = backup.excludePaths || [];
-        const savedDisabled = backup.disabledDefaultExcludes || [];
+        const savedExcludes = asArray(backup.excludePaths);
+        const savedDisabled = asArray(backup.disabledDefaultExcludes);
         setDestPath(saved);
         setSavedDestPath(saved);
         setEnabled(backup.enabled ?? false);
@@ -39,7 +45,7 @@ export function BackupTab() {
         setSavedExcludePaths(savedExcludes);
         setDisabledDefaultExcludes(savedDisabled);
         setSavedDisabledDefaultExcludes(savedDisabled);
-        setDefaultExcludes(status?.defaultExcludes || []);
+        setDefaultExcludes(asArray(status?.defaultExcludes));
       })
       .catch(() => toast.error('Failed to load settings'))
       .finally(() => setLoading(false));

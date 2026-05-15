@@ -464,8 +464,10 @@
     source of truth for that user data and ARE backed up.
   - The cron handler in `backupScheduler.js` re-reads settings on each
     invocation, so toggling a default exclude in the UI takes effect on the
-    next scheduled run without a server restart. (Only the cron expression
-    itself is captured at registration.)
+    next scheduled run without a server restart. The handler also re-checks
+    `backup.enabled` and `backup.destPath`, so disabling backups or clearing
+    the destination after startup short-circuits the run. (Only the cron
+    expression itself is captured at registration.)
   - `runBackup()` guards `excludePaths` and `disabledDefaultExcludes` with
     `Array.isArray` before filtering, so a hand-edited settings.json with
     the wrong shape doesn't abort the backup. Exclude-computation extracted
@@ -474,6 +476,12 @@
     in Additional Exclude Paths — toggling a default to "included" auto-
     cleans the duplicate from `excludePaths`, and `addExclude` refuses to
     shadow a default (steers the user to the toggle instead).
+  - Client-side `asArray()` normalizer wraps `settings.backup.excludePaths`
+    and `disabledDefaultExcludes` (and the `defaultExcludes` returned from
+    `/api/backup/status`) before they reach React state — settings.json is
+    hand-editable and the GET endpoint is unvalidated, so an incoming
+    non-array shape no longer crashes downstream `.some` / `.includes` /
+    `.filter` calls in the Backup tab.
 
 ## Changed
 

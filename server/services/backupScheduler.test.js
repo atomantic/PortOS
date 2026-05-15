@@ -91,6 +91,23 @@ describe('startBackupScheduler', () => {
     );
   });
 
+  it('handler skips the run if backup was disabled since registration', async () => {
+    getSettings.mockResolvedValueOnce({
+      backup: { enabled: true, destPath: '/dest', excludePaths: [], disabledDefaultExcludes: [] }
+    });
+    await startBackupScheduler();
+
+    // User toggled "Enabled" off in the UI before the cron fired.
+    getSettings.mockResolvedValueOnce({
+      backup: { enabled: false, destPath: '/dest' }
+    });
+
+    const handler = schedule.mock.calls[0][0].handler;
+    await handler();
+
+    expect(runBackup).not.toHaveBeenCalled();
+  });
+
   it('handler skips the run if destPath has been cleared since registration', async () => {
     getSettings.mockResolvedValueOnce({
       backup: { enabled: true, destPath: '/dest', excludePaths: [], disabledDefaultExcludes: [] }

@@ -42,6 +42,10 @@ export async function startBackupScheduler() {
     timezone,
     handler: async () => {
       const current = await getSettings();
+      if (current.backup?.enabled === false) {
+        console.log('💾 Backup scheduler: disabled since registration — skipping run');
+        return;
+      }
       const destPath = current.backup?.destPath;
       if (!destPath) {
         console.log('💾 Backup scheduler: destPath cleared since registration — skipping run');
