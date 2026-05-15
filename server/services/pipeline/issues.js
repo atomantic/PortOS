@@ -95,7 +95,12 @@ const GEN_CONFIG_STR_MAX = 200;
 const sanitizeGenConfig = (raw) => {
   if (!raw || typeof raw !== 'object') return null;
   const imageMode = IMAGE_MODE_VALUES.has(raw.imageMode) ? raw.imageMode : 'auto';
-  const imageModelId = trimTo(raw.imageModelId, GEN_CONFIG_STR_MAX) || null;
+  // imageModelId is only meaningful for local diffusion — clear it for other
+  // modes so a previously-pinned model doesn't silently persist in the config
+  // and mislead the UI or any future reader that doesn't filter by mode.
+  const imageModelId = imageMode === 'local'
+    ? (trimTo(raw.imageModelId, GEN_CONFIG_STR_MAX) || null)
+    : null;
   const refineProvider = trimTo(raw.refineProvider, GEN_CONFIG_STR_MAX) || null;
   const refineModel = trimTo(raw.refineModel, GEN_CONFIG_STR_MAX) || null;
   if (imageMode === 'auto' && !imageModelId && !refineProvider && !refineModel) {
@@ -177,10 +182,10 @@ const sanitizeIssue = (raw) => {
     ? raw.lengthProfile
     : DEFAULT_LENGTH_PROFILE;
   const pageTarget = Number.isFinite(raw.pageTarget)
-    ? Math.max(CUSTOM_PAGE_MIN, Math.min(CUSTOM_PAGE_MAX, Math.floor(raw.pageTarget)))
+    ? Math.max(CUSTOM_PAGE_MIN, Math.min(CUSTOM_PAGE_MAX, Math.round(raw.pageTarget)))
     : null;
   const minutesTarget = Number.isFinite(raw.minutesTarget)
-    ? Math.max(CUSTOM_MINUTE_MIN, Math.min(CUSTOM_MINUTE_MAX, Math.floor(raw.minutesTarget)))
+    ? Math.max(CUSTOM_MINUTE_MIN, Math.min(CUSTOM_MINUTE_MAX, Math.round(raw.minutesTarget)))
     : null;
   return {
     id: raw.id,

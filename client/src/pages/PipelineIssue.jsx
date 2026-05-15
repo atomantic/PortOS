@@ -84,6 +84,9 @@ export default function PipelineIssue() {
   const [autoRunStarting, setAutoRunStarting] = useState(false);
   const [autoRunActive, setAutoRunActive] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Close the settings modal whenever the active stage changes so it doesn't
+  // reopen unexpectedly when the user returns to a previously-visited stage.
+  useEffect(() => { setSettingsOpen(false); }, [stageId]);
   const { latest, frames } = usePipelineAutoRunProgress(issueId, { enabled: autoRunActive });
 
   useEffect(() => {

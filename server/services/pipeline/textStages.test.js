@@ -118,4 +118,49 @@ describe('pipeline text stage generator', () => {
     const { issue } = await seed();
     await expect(textStages.generateStage(issue.id, 'comicPages')).rejects.toThrow(/unsupported stageId/);
   });
+
+  it('prompt context carries lengthTargets from a named non-default profile (extended)', async () => {
+    const { series } = await seed();
+    // Create an issue with the 'extended' profile — distinct from 'standard' so
+    // any accidental fallback to standard is detectable via pageTarget (32 vs 22).
+    const issue = await issuesSvc.createIssue({
+      seriesId: series.id,
+      title: 'The Surge',
+      lengthProfile: 'extended',
+    });
+    await textStages.generateStage(issue.id, 'idea');
+    const ctx = JSON.parse(llmCalls[0].prompt.replace(/^RENDERED:[^:]+:/, ''));
+    const lt = ctx.lengthTargets;
+    expect(lt.profile).toBe('extended');
+    expect(lt.pageTarget).toBe(32);
+    expect(lt.minutesTarget).toBe(36);
+    expect(lt.proseWordsMin).toBe(4500);
+    expect(lt.proseWordsMax).toBe(6500);
+    expect(lt.beatsMin).toBe(12);
+    expect(lt.beatsMax).toBe(16);
+  });
+
+  it('prompt context carries derived lengthTargets for the custom profile', async () => {
+    const { series } = await seed();
+    // 44 pages is 2× the standard 22-page baseline, so all derived ranges
+    // should also double. minutesTarget is stored as-is (not derived).
+    const issue = await issuesSvc.createIssue({
+      seriesId: series.id,
+      title: 'The Override',
+      lengthProfile: 'custom',
+      pageTarget: 44,
+      minutesTarget: 50,
+    });
+    await textStages.generateStage(issue.id, 'idea');
+    const ctx = JSON.parse(llmCalls[0].prompt.replace(/^RENDERED:[^:]+:/, ''));
+    const lt = ctx.lengthTargets;
+    expect(lt.profile).toBe('custom');
+    expect(lt.pageTarget).toBe(44);
+    expect(lt.minutesTarget).toBe(50);
+    // scale = 44/22 = 2 → proseWords: 2500×2=5000, 4000×2=8000; beats: 8×2=16, 12×2=24
+    expect(lt.proseWordsMin).toBe(5000);
+    expect(lt.proseWordsMax).toBe(8000);
+    expect(lt.beatsMin).toBe(16);
+    expect(lt.beatsMax).toBe(24);
+  });
 });

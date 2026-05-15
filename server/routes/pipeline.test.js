@@ -688,6 +688,69 @@ describe('pipeline routes', () => {
     expect(r.body.stage.pages[0].panels[0].description).toBe('Fresh.');
   });
 
+  it('POST /issues/:id/stages/comicPages/extract-pages seeds blank cover.script from parsed coverConcept', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    const script = [
+      '## Cover concept',
+      'A lone figure stands on a crumbling bridge.',
+      '',
+      '## Page 1',
+      '',
+      'Panel 1',
+      '**Description:** The bridge at dusk.',
+      '**Caption:** (none)',
+      '**Dialogue:** (none)',
+      '**SFX:** (none)',
+    ].join('\n');
+    await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
+      stages: { comicScript: { status: 'ready', output: script } },
+    });
+    const r = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/comicPages/extract-pages`)
+      .send({});
+    expect(r.status).toBe(200);
+    // Response reflects the seeded cover
+    expect(r.body.stage.cover.script).toBe('A lone figure stands on a crumbling bridge.');
+    expect(r.body.stage.cover.imageJobId).toBeNull();
+    expect(r.body.stage.cover.prompt).toBeNull();
+    // Persisted issue also carries the seeded cover
+    expect(r.body.issue.stages.comicPages.cover.script).toBe('A lone figure stands on a crumbling bridge.');
+  });
+
+  it('POST /issues/:id/stages/comicPages/extract-pages does not clobber an existing cover.script', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    const script = [
+      '## Cover concept',
+      'A brand-new concept from the re-run.',
+      '',
+      '## Page 1',
+      '',
+      'Panel 1',
+      '**Description:** The bridge at dawn.',
+      '**Caption:** (none)',
+      '**Dialogue:** (none)',
+      '**SFX:** (none)',
+    ].join('\n');
+    // Pre-seed the issue with an existing user-edited cover script
+    await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
+      stages: {
+        comicScript: { status: 'ready', output: script },
+        comicPages: { cover: { script: 'user edit', imageJobId: 'old-job', prompt: 'old prompt' } },
+      },
+    });
+    const r = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/comicPages/extract-pages`)
+      .send({});
+    expect(r.status).toBe(200);
+    // The existing cover must be preserved exactly — no clobber
+    expect(r.body.stage.cover.script).toBe('user edit');
+    expect(r.body.issue.stages.comicPages.cover.script).toBe('user edit');
+  });
+
   // ---- comicPages/pages/:pageIndex/render ----
 
   it('POST /issues/:id/stages/comicPages/pages/:pageIndex/render 400s for a non-integer pageIndex', async () => {

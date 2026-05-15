@@ -99,7 +99,7 @@ const summarizeMode = (cfg, autoResolution) => {
 // The actual settings panel body. Extracted so the same controls can live
 // either inside a self-contained accordion (legacy inline placement) or
 // chromelessly inside a parent-owned container like a settings modal.
-function VisualGenSettingsBody({ cfg, update, stageLabel, systemSettings, imageModels, providers, refineModels, availableBackends, blurb }) {
+function VisualGenSettingsBody({ cfg, update, stageLabel, systemSettings, imageModels, providers, providersLoaded, refineModels, availableBackends, blurb }) {
   return (
     <div className="space-y-3">
       <div>
@@ -109,7 +109,7 @@ function VisualGenSettingsBody({ cfg, update, stageLabel, systemSettings, imageM
         <BackendChipStrip
           availableBackends={availableBackends}
           value={cfg.imageMode}
-          onChange={(id) => update({ imageMode: id })}
+          onChange={(id) => update({ imageMode: id, ...(id !== 'local' ? { imageModelId: null } : {}) })}
           size="sm"
           ariaLabel={`${stageLabel} image backend`}
           titlePrefix="Render images via"
@@ -117,7 +117,7 @@ function VisualGenSettingsBody({ cfg, update, stageLabel, systemSettings, imageM
         <p className="text-[10px] text-gray-500 mt-1">{blurb}</p>
         {cfg.imageMode === 'codex' && !systemSettings?.imageGen?.codex?.enabled && (
           <p className="text-[10px] text-port-warning mt-1">
-            Codex Imagegen is disabled in Settings — generation will fail until you enable it.
+            Codex Imagegen is disabled in Settings — renders will fall back to local diffusion.
           </p>
         )}
       </div>
@@ -144,7 +144,7 @@ function VisualGenSettingsBody({ cfg, update, stageLabel, systemSettings, imageM
         <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1">
           AI refine LLM
         </div>
-        {providers.length === 0 ? (
+        {providersLoaded && providers.length === 0 ? (
           <p className="text-[10px] text-gray-600 italic">
             No enabled providers — add one in Settings → AI Providers.
           </p>
@@ -200,19 +200,27 @@ function VisualGenSettingsBody({ cfg, update, stageLabel, systemSettings, imageM
 // Internal hook: all the shared loads (settings / image models / providers)
 // plus the derived state every flavor of the panel needs. Returns the
 // "props bundle" callers feed straight into <VisualGenSettingsBody>.
-function useVisualGenSettings(value, stageLabel) {
+// `refreshOnMount` — when true, busts the module-level cache on each mount so
+// the panel always fetches fresh settings/providers. Used by VisualGenSettingsPanel
+// (mounted inside a Modal that is freshly constructed each open) so users who
+// enable Codex or swap providers in Settings see the change immediately on the
+// next modal open without reloading the SPA.
+function useVisualGenSettings(value, stageLabel, refreshOnMount = false) {
   const cfg = { ...DEFAULT_CONFIG, ...(value || {}) };
   const [systemSettings, setSystemSettings] = useState(null);
   const [imageModels, setImageModels] = useState([]);
   const [providers, setProviders] = useState([]);
+  const [providersLoaded, setProvidersLoaded] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
+    if (refreshOnMount) lookupCache = null;
     loadLookups().then(([s, modelList, providerResp]) => {
       if (cancelled) return;
       setSystemSettings(s);
       setImageModels(Array.isArray(modelList) ? modelList : []);
       setProviders((providerResp?.providers || []).filter((p) => p.enabled));
+      setProvidersLoaded(true);
     });
     return () => { cancelled = true; };
   }, []);
@@ -235,7 +243,7 @@ function useVisualGenSettings(value, stageLabel) {
     : MODE_BLURB[cfg.imageMode];
 
   return {
-    cfg, stageLabel, systemSettings, imageModels, providers,
+    cfg, stageLabel, systemSettings, imageModels, providers, providersLoaded,
     availableBackends, refineModels, summary, blurb,
   };
 }
@@ -245,7 +253,7 @@ function useVisualGenSettings(value, stageLabel) {
  * Use when embedding inside a Modal or other parent-owned container.
  */
 export function VisualGenSettingsPanel({ value, onChange, stageLabel = 'Visual stage' }) {
-  const bag = useVisualGenSettings(value, stageLabel);
+  const bag = useVisualGenSettings(value, stageLabel, true);
   const update = (patch) => onChange?.({ ...bag.cfg, ...patch });
   return <VisualGenSettingsBody {...bag} update={update} />;
 }

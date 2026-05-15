@@ -194,10 +194,12 @@ describe('pipeline issues service', () => {
 
   it('deep-merges genConfig sub-fields so a partial `{ genConfig: { imageMode } }` patch preserves the rest', async () => {
     const i = await svc.createIssue({ seriesId: 'ser-1', title: 'Gen merge' });
+    // Start with local mode + a pinned model — imageModelId is valid for local mode.
     await svc.updateStage(i.id, 'storyboards', {
       status: 'edited',
-      genConfig: { imageMode: 'codex', imageModelId: 'flux-1', refineProvider: null, refineModel: null },
+      genConfig: { imageMode: 'local', imageModelId: 'flux-1', refineProvider: null, refineModel: null },
     });
+    // Partial patch only changes imageMode — imageModelId should survive the deep merge.
     const updated = await svc.updateIssue(i.id, {
       stages: { storyboards: { genConfig: { imageMode: 'local' } } },
     });
@@ -205,6 +207,19 @@ describe('pipeline issues service', () => {
       imageMode: 'local',
       imageModelId: 'flux-1',
     });
+  });
+
+  it('sanitizeGenConfig clears imageModelId when imageMode is not local', async () => {
+    const i = await svc.createIssue({ seriesId: 'ser-1', title: 'Gen mode clear' });
+    // A codex-mode config with an imageModelId (stale client state) must not
+    // persist the model id — it is meaningless for codex/auto and would mislead
+    // the UI into showing a "pinned" model that generation ignores.
+    await svc.updateStage(i.id, 'storyboards', {
+      status: 'edited',
+      genConfig: { imageMode: 'codex', imageModelId: 'flux-1', refineProvider: null, refineModel: null },
+    });
+    const issue = await svc.getIssue(i.id);
+    expect(issue.stages.storyboards.genConfig.imageModelId).toBeNull();
   });
 
   it('treats `cover: null` as an explicit clear, not a deep merge', async () => {
@@ -267,6 +282,22 @@ describe('pipeline issues service', () => {
     expect(patched.stages.comicPages.cover).toMatchObject({ script: 'should stay' });
     expect(patched.stages.storyboards.cover).toBeNull();
     expect(patched.stages.episodeVideo.cover).toBeNull();
+  });
+
+  it('sanitizer rounds fractional pageTarget/minutesTarget to match computeIssueTargets', async () => {
+    // Regression: sanitizer was using Math.floor while computeIssueTargets uses
+    // Math.round (via clampInt), so persisted values could disagree with the
+    // prompt-rendered targets. e.g. pageTarget: 22.7 → stored as 22 but
+    // rendered as 23. Both must agree on 23.
+    const i = await svc.createIssue({
+      seriesId: 'ser-1',
+      title: 'Rounding regression',
+      lengthProfile: 'custom',
+      pageTarget: 22.7,
+      minutesTarget: 23.5,
+    });
+    expect(i.pageTarget).toBe(23);
+    expect(i.minutesTarget).toBe(24);
   });
 
   it('deleteIssue 404s on second call', async () => {
