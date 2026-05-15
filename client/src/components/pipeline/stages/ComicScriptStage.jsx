@@ -179,13 +179,19 @@ export default function ComicScriptStage({ issue, series, onStageUpdate }) {
   useEffect(() => { setCoverJobStatus('unknown'); }, [cover.imageJobId]);
 
   const persistCoverScript = async (nextScript) => {
-    // Send only the changed field — the server's per-stage merge now deep-
-    // merges `cover` sub-fields, so it preserves a `imageJobId` / `prompt`
-    // that a racing "Render cover" mutation may have just persisted. Building
-    // `next` from the closure-captured `cover` here would race with the
-    // render flow and overwrite the newly-queued job id back to null.
+    // If the script text changed AND no render is currently in flight, the
+    // previously-rendered image (imageJobId + prompt) no longer matches the
+    // new concept — clear them so the UI doesn't show a stale render alongside
+    // the updated text.  When a render IS in flight we leave imageJobId alone
+    // because we want to track the completion of the job we just kicked off.
+    // When the text hasn't changed (no-op blur) we also leave the render fields
+    // alone so a valid, matching render is never cleared unnecessarily.
+    const scriptChanged = nextScript !== (cover.script || '');
+    const coverPatch = scriptChanged && !coverJobInFlight
+      ? { script: nextScript, imageJobId: null, prompt: null }
+      : { script: nextScript };
     const updated = await updatePipelineIssue(issue.id, {
-      stages: { comicPages: { cover: { script: nextScript } } },
+      stages: { comicPages: { cover: coverPatch } },
     }).catch((err) => {
       toast.error(err.message || 'Save failed');
       return null;

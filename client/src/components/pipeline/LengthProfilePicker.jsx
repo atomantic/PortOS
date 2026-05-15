@@ -11,7 +11,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { ChevronDown, Gauge } from 'lucide-react';
-import { LENGTH_PROFILES, summarizeLengthProfile, clampInt } from '../../lib/issueLength';
+import { LENGTH_PROFILES, summarizeLengthProfile, clampInt, CUSTOM_PAGE_MIN, CUSTOM_PAGE_MAX, CUSTOM_MINUTE_MIN, CUSTOM_MINUTE_MAX } from '../../lib/issueLength';
 
 const PRESET_ORDER = ['teaser', 'standard', 'extended', 'finale'];
 
@@ -68,8 +68,8 @@ export default function LengthProfilePicker({ issue, onChange, disabled = false 
   const saveCustom = () => {
     onChange?.({
       lengthProfile: 'custom',
-      pageTarget: clampInt(customPages, 4, 120),
-      minutesTarget: clampInt(customMinutes, 4, 240),
+      pageTarget: clampInt(customPages, CUSTOM_PAGE_MIN, CUSTOM_PAGE_MAX),
+      minutesTarget: clampInt(customMinutes, CUSTOM_MINUTE_MIN, CUSTOM_MINUTE_MAX),
     });
     setOpen(false);
   };
@@ -128,8 +128,8 @@ export default function LengthProfilePicker({ issue, onChange, disabled = false 
                   Pages
                   <input
                     type="number"
-                    min={4}
-                    max={120}
+                    min={CUSTOM_PAGE_MIN}
+                    max={CUSTOM_PAGE_MAX}
                     value={customPages}
                     onChange={(e) => setCustomPages(e.target.value)}
                     className="block w-full mt-0.5 px-2 py-1 bg-port-bg border border-port-border rounded text-white text-xs"
@@ -139,8 +139,8 @@ export default function LengthProfilePicker({ issue, onChange, disabled = false 
                   Minutes
                   <input
                     type="number"
-                    min={4}
-                    max={240}
+                    min={CUSTOM_MINUTE_MIN}
+                    max={CUSTOM_MINUTE_MAX}
                     value={customMinutes}
                     onChange={(e) => setCustomMinutes(e.target.value)}
                     className="block w-full mt-0.5 px-2 py-1 bg-port-bg border border-port-border rounded text-white text-xs"

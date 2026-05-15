@@ -34,6 +34,15 @@ export const LENGTH_PROFILES = Object.freeze({
 
 export const DEFAULT_LENGTH_PROFILE = 'standard';
 
+// Working bounds for custom overrides — mirrored from `server/lib/issueLength.js`
+// (CUSTOM_PAGE_MIN / CUSTOM_PAGE_MAX / CUSTOM_MINUTE_MIN / CUSTOM_MINUTE_MAX).
+// The client cannot import from the server, so these values are duplicated here
+// manually. If you change the range on the server side, update this file too.
+export const CUSTOM_PAGE_MIN = 4;
+export const CUSTOM_PAGE_MAX = 120;
+export const CUSTOM_MINUTE_MIN = 4;
+export const CUSTOM_MINUTE_MAX = 240;
+
 // Clamp + round + fallback. Returns `null` for non-finite input so callers
 // can distinguish "user cleared the field" from "user typed nonsense".
 // Empty string is treated as absent (not coerced to 0) so clearing a Custom
