@@ -40,6 +40,98 @@
     `**Field:**` form. `parseComicScript` returns
     `{ coverConcept, pages: [{ rawText, panels }] }`.
 
+- **Shell — UUID-based URLs for each sub-shell session.** The shell page now
+  mounts at `/shell/:sessionId` in addition to `/shell`, and mirrors the active
+  session id into the URL whenever a session is started, attached, or switched.
+  Reload preserves the active shell, the URL is shareable as a deep link, and
+  browser back/forward + manual URL paste switch between live sessions.
+  Stopping or killing the active session (or its PTY exiting with no remaining
+  sessions) clears the URL back to `/shell`. The pre-existing `?session=<uuid>`
+  query-param (one-shot "attach to this session") still works alongside the
+  new path param.
+  - **Attach-failure recovery.** Switching sessions no longer pre-clears the
+    displayed session — `sessionIdRef` only swaps on `shell:attached`. If the
+    target session dies between list read and attach (race), `shell:error`
+    restores the URL + terminal to the previously displayed session (or falls
+    back to a live survivor) instead of stranding the UI on a dead URL.
+  - **Multi-tab handoff notification.** Opening the same `/shell/:sessionId`
+    in a second tab takes over the PTY socket (single-subscriber by design).
+    The server now emits `shell:detached` to the previous socket so the
+    original tab clears its disconnected view + navigates back to `/shell`
+    instead of sitting "Connected" with no output.
+  - **Auto-pick won't steal an attached session.** Session list entries now
+    carry `attached: boolean` from the server. Every auto-pick path on the
+    client (initial load, external-kill fallback, shell:exit fallback,
+    shell:error recovery) filters survivors to ones that aren't already
+    driving another tab. Manual tab clicks and deep-link URL navigation
+    still take over (intent is explicit). Prevents tab B from booting
+    tab A off its shell when tab B's session is killed externally.
+  - **`attached` is recipient-relative.** `listAllSessions` and
+    `broadcastSessionList` now personalize each subscriber's payload so
+    `attached` only reports `true` when the session is bound to a
+    *different* socket. Sessions bound to the recipient's own singleton
+    socket (e.g. sessions opened earlier in this tab that stayed bound
+    when the user navigated away and back) report `attached: false`, so
+    the client's auto-pick path adopts them on return instead of leaving
+    bare `/shell` disconnected.
+  - **Pending-attach gate.** A new `pendingAttachRef` tracks the in-flight
+    start/attach target. While set, keystrokes and quick commands are
+    dropped (so input doesn't land in the previous session during the
+    "Attaching…" window), incoming `shell:output` is suppressed (so the
+    old session's stream doesn't paint into the cleared terminal), and
+    stale `shell:attached` responses for an older target are ignored when
+    the user rapid-fire-clicks tabs.
+  - **Start-failure error message preserved.** When `shell:error` fires
+    from a start attempt while an existing session is still alive (e.g.
+    session limit hit), `handleShellError` no longer re-attaches and
+    repaints the terminal — the error stays readable. Re-attach recovery
+    now triggers when the URL diverged from the active session (URL-nav
+    switch failure) OR when `pendingAttachRef` was for a different session
+    at the time of error (tab-click switch failure — URL never moved
+    because `activateSession` never fired). The start-failure path
+    (`pendingAttachRef === 'new'`) leaves the terminal untouched so the
+    error message survives.
+  - **Layout full-width includes deep links.** `Layout.jsx` matches both
+    `/shell` and `/shell/<id>` for full-height/overflow-hidden styling so
+    deep-linked terminals render edge-to-edge like the bare route.
+  - **Server-side claim semantics for auto-pick.** Client auto-pick paths
+    (initial load, external-kill recovery, shell:exit fallback, error
+    fallback, bare-/shell adoption) now send `shell:attach` with
+    `claim: true`. The server's `attachSession` honors it — if the session
+    is bound to a different socket, the attach is refused with a
+    `claimRejected` result and the client gets `shell:error` with
+    `sessionId` for correlation. Manual paths (tab click, deep-link URL)
+    still default to `claim:false` (takeover semantics). Prevents two
+    idle tabs receiving the same `shell:sessions` broadcast from racing
+    to attach the same survivor and booting each other.
+  - **Strict-equality pending tracking.** Replaced the simple
+    `pendingAttachRef` with a `{ target, generation }` shape and helpers
+    `setPendingAttach` / `cancelPendingAttach`. Response handlers
+    (`handleShellAttached`, `handleShellStarted`) consume only when
+    target matches exactly, so a cancelled-mid-flight attach can't
+    re-navigate after Stop. Deferred work (setTimeout fallbacks) captures
+    generation and aborts if the user changed their mind during the
+    delay window.
+  - **Server-correlated attach errors.** `shell:error` from `shell:attach`
+    failures now carries the requested `sessionId`. The client matches it
+    against `pendingAttachRef.current.target` to recover the correct
+    request and ignores stale errors from earlier rapid clicks. Passive
+    errors (`shell:input` to a missing session) carry sessionId too but
+    don't match a pending request, so they don't mutate pending state.
+  - **Intentional vs passive idle preserved across reconnect.** Initial-
+    load auto-attach (which also runs on every reconnect because
+    `handleConnect` resets `hasInitializedRef`) gates on `!userIdleRef`,
+    and the empty-list auto-start branch does too. A transient
+    disconnect no longer re-adopts a session — or spawns a new one —
+    that the user had explicitly stopped.
+  - **handleShellExit / Detached / external-kill respect pending.** When
+    the displayed session dies but the user has an attach in flight to a
+    different session, the recovery handlers now skip their auto-pick
+    fallback and let the pending request complete. Previously,
+    `clearActiveSession` was implicated in cancelling the user's
+    in-flight switch by tearing down pending state alongside the
+    displayed session.
+
 - **Universe Canon page — lock toggle, tag chips, and "from series" badge on every card.**
   Phase 2a of the Universe-as-Canon UI. Each `CanonCard` (used on both the
   Universe Canon page and the per-series Nouns page) now renders:

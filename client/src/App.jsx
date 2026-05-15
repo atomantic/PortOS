@@ -168,6 +168,7 @@ export default function App() {
           <Route path="settings/:tab" element={<Settings />} />
           <Route path="uploads" element={<Uploads />} />
           <Route path="shell" element={<Shell />} />
+          <Route path="shell/:sessionId" element={<Shell />} />
           <Route path="browser" element={<BrowserPage />} />
           <Route path="insights" element={<Navigate to="/insights/overview" replace />} />
           <Route path="insights/:tab" element={<Insights />} />
