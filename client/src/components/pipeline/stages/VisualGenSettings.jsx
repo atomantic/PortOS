@@ -68,15 +68,19 @@ const loadLookups = () => {
 // this panel must match what the server will actually dispatch — otherwise
 // the modal tells the user "Auto is currently Codex" while the render flows
 // to local diffusion (or vice versa). Priority:
-//   1. settings.imageGen.mode pinned to 'local' or 'codex' → that mode
-//   2. settings.imageGen.codex.enabled                     → 'codex'
-//   3. local pythonPath configured                         → 'local'
-//   4. otherwise                                           → not configured
-const SUPPORTED_MODES = new Set(['local', 'codex']);
+//   1. settings.imageGen.mode pinned to 'codex' AND codex.enabled   → 'codex'
+//   2. settings.imageGen.mode pinned to 'local'                      → 'local'
+//   3. settings.imageGen.codex.enabled (auto-default)               → 'codex'
+//   4. local pythonPath configured                                   → 'local'
+//   5. otherwise                                                     → not configured
+// Codex is gated on the enabled flag at every step — a stale 'codex' pin
+// from before the toggle was turned off must resolve as local, not Codex.
 const resolveAutoLabel = (s) => {
+  const codexEnabled = s?.imageGen?.codex?.enabled === true;
   const pinned = s?.imageGen?.mode;
-  if (SUPPORTED_MODES.has(pinned)) return pinned === 'codex' ? 'Codex' : 'Local diffusion';
-  if (s?.imageGen?.codex?.enabled) return 'Codex';
+  if (pinned === 'codex' && codexEnabled) return 'Codex';
+  if (pinned === 'local') return 'Local diffusion';
+  if (codexEnabled) return 'Codex';
   if (s?.imageGen?.local?.pythonPath) return 'Local diffusion';
   return 'Local diffusion (not configured)';
 };

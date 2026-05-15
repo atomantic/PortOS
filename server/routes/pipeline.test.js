@@ -69,6 +69,14 @@ vi.mock('../services/pipeline/visualStages.js', () => ({
     prompt: `comic-page prompt for page ${opts.pageIndex + 1}`,
     pageIndex: opts.pageIndex,
   })),
+  // Front cover render. Returns shape the route merges with the persisted cover:
+  // { jobId, mode, prompt, coverScript }.
+  enqueueComicCover: vi.fn(async (_issueId, body) => ({
+    jobId: `cover-job-${++uuidCounter}`,
+    mode: 'local',
+    prompt: 'cover art prompt',
+    coverScript: body?.coverScript ?? 'default cover concept',
+  })),
   // Single-scene video render. Returns the shape the route forwards verbatim
   // to clients: { jobId, prompt, sceneIndex, issue, stage }.
   enqueueStoryboardSceneVideo: vi.fn(async (issueId, sceneIndex) => ({
@@ -739,6 +747,46 @@ describe('pipeline routes', () => {
     expect(r.body.code || r.body.error).toMatch(/PIPELINE_COMIC_PAGE_NOT_FOUND|out of range/i);
     // Enqueue is never reached when the page doesn't exist.
     expect(visualStages.enqueueVisualComicPage).not.toHaveBeenCalled();
+  });
+
+  // ---- comicPages/cover/render ----
+
+  it('POST /issues/:id/stages/comicPages/cover/render returns jobId + prompt and persists cover on the issue', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    const r = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/comicPages/cover/render`)
+      .send({ coverScript: 'Hero stands atop the foundry, smoke rising' });
+    expect(r.status).toBe(200);
+    expect(r.body.jobId).toMatch(/^cover-job-/);
+    expect(r.body.prompt).toBe('cover art prompt');
+    // Persistence: stages.comicPages.cover must carry script, imageJobId, prompt.
+    expect(r.body.cover.script).toBe('Hero stands atop the foundry, smoke rising');
+    expect(r.body.cover.imageJobId).toBe(r.body.jobId);
+    expect(r.body.cover.prompt).toBe(r.body.prompt);
+    // Top-level issue + stage are also returned.
+    expect(r.body.issue.id).toBe(iss.body.id);
+    expect(r.body.stage.cover.imageJobId).toBe(r.body.jobId);
+  });
+
+  it('POST /issues/:id/stages/comicPages/cover/render 404s for an unknown issue', async () => {
+    const app = makeApp();
+    const r = await request(app)
+      .post('/api/pipeline/issues/iss-nope/stages/comicPages/cover/render')
+      .send({});
+    expect(r.status).toBe(404);
+  });
+
+  it('POST /issues/:id/stages/comicPages/cover/render 400s when the body fails schema validation', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    // `width` must be an integer; sending a string triggers Zod validation failure.
+    const r = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/comicPages/cover/render`)
+      .send({ width: 'not-a-number' });
+    expect(r.status).toBe(400);
   });
 
   // -----------------------

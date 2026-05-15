@@ -41,8 +41,6 @@ import { runPromptRefine } from './refineHelpers.js';
 import { resolveSeriesCanonSync } from './seriesCanon.js';
 import { ASPECT_PRESETS } from '../../lib/creativeDirectorPresets.js';
 
-const SUPPORTED_MODES = new Set(['local', 'codex']);
-
 const stackStyle = (series, extraStyle) =>
   [series?.styleNotes, extraStyle].map((s) => (s || '').trim()).filter(Boolean).join(', ');
 
@@ -53,19 +51,24 @@ const applyWorldStyle = (prompt, world) => {
 
 // Resolution order for the image-gen mode on a pipeline visual stage:
 //   1. Per-request override (`options.mode`) — set by the stage's persisted
-//      `genConfig` or an explicit UI selection.
+//      `genConfig` or an explicit UI selection. Codex is only honored when
+//      `imageGen.codex.enabled` is true; a stale 'codex' override from
+//      before the toggle was turned off falls through to the next step.
 //   2. Saved dispatcher default (`settings.imageGen.mode`) — but only when
 //      it names a mode this surface supports (visual pipeline doesn't
-//      proxy the external SD-API path).
+//      proxy the external SD-API path) AND, for 'codex', Codex is enabled.
 //   3. Auto-default — prefer Codex when the user has enabled it
 //      (`imageGen.codex.enabled`), since cloud image gen produces
 //      print-quality comic pages out of the box. Otherwise fall back to
 //      local diffusion (flux-1) the way the original default behaved.
 const resolveMode = (options, settings) => {
-  if (SUPPORTED_MODES.has(options.mode)) return options.mode;
+  const codexEnabled = settings?.imageGen?.codex?.enabled === true;
+  if (options.mode === 'codex' && codexEnabled) return 'codex';
+  if (options.mode === 'local') return 'local';
   const settingsMode = settings?.imageGen?.mode;
-  if (SUPPORTED_MODES.has(settingsMode)) return settingsMode;
-  if (settings?.imageGen?.codex?.enabled) return 'codex';
+  if (settingsMode === 'codex' && codexEnabled) return 'codex';
+  if (settingsMode === 'local') return 'local';
+  if (codexEnabled) return 'codex';
   return 'local';
 };
 

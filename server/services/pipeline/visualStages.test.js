@@ -450,12 +450,65 @@ describe('enqueueComicCover', () => {
     expect(result.prompt).toMatch(/Cover concept: persisted concept/);
   });
 
-  it('honors options.mode = "codex" and passes codex-specific params through to the queue', async () => {
+  it('honors options.mode = "codex" when codex is enabled', async () => {
+    const settingsMod = await import('../settings.js');
+    settingsMod.getSettings.mockResolvedValueOnce({
+      imageGen: {
+        local: { pythonPath: '/usr/bin/python3' },
+        mode: 'local',
+        codex: { enabled: true, codexPath: '/usr/local/bin/codex', model: 'dall-e-3' },
+      },
+      videoGen: {},
+    });
     const result = await enqueueComicCover('iss-test', { mode: 'codex' });
     expect(result.mode).toBe('codex');
     expect(enqueueJobMock).toHaveBeenCalledWith(expect.objectContaining({
       params: expect.objectContaining({ mode: 'codex' }),
     }));
+  });
+
+  it('falls back to local when options.mode = "codex" but codex toggle is off', async () => {
+    const settingsMod = await import('../settings.js');
+    settingsMod.getSettings.mockResolvedValueOnce({
+      imageGen: {
+        local: { pythonPath: '/usr/bin/python3' },
+        mode: 'local',
+        codex: { enabled: false },
+      },
+      videoGen: {},
+    });
+    const result = await enqueueComicCover('iss-test', { mode: 'codex' });
+    expect(result.mode).toBe('local');
+    expect(enqueueJobMock).toHaveBeenCalledWith(expect.objectContaining({
+      params: expect.objectContaining({ pythonPath: '/usr/bin/python3' }),
+    }));
+  });
+
+  it('falls back to local when settings.imageGen.mode = "codex" but codex toggle is off', async () => {
+    const settingsMod = await import('../settings.js');
+    settingsMod.getSettings.mockResolvedValueOnce({
+      imageGen: {
+        local: { pythonPath: '/usr/bin/python3' },
+        mode: 'codex',
+        codex: { enabled: false },
+      },
+      videoGen: {},
+    });
+    const result = await enqueueComicCover('iss-test', {});
+    expect(result.mode).toBe('local');
+  });
+
+  it('auto-selects codex when codex is enabled and no mode is pinned', async () => {
+    const settingsMod = await import('../settings.js');
+    settingsMod.getSettings.mockResolvedValueOnce({
+      imageGen: {
+        local: { pythonPath: '/usr/bin/python3' },
+        codex: { enabled: true, codexPath: '/usr/local/bin/codex', model: 'dall-e-3' },
+      },
+      videoGen: {},
+    });
+    const result = await enqueueComicCover('iss-test', {});
+    expect(result.mode).toBe('codex');
   });
 });
 
