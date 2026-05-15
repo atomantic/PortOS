@@ -295,8 +295,12 @@ export async function updateIssue(id, patch = {}) {
   // spread would replace the entire stage object and silently drop sibling
   // fields like `scenes` / `pages` / `genConfig`. Sanitization then defaults
   // those back to empty arrays/null, erasing work the user (or LLM) just did.
-  // Callers that need a wholesale stage replacement should use `updateStage`,
-  // which writes the full sanitized stage in one shot.
+  // Callers that need stage-level changes without touching issue-level fields
+  // should use `updateStage`, which does a shallow merge of the patch over the
+  // existing stage (`{ ...cur.stages[stageId], ...patch }`) before sanitizing.
+  // Note: `updateStage` still merges — omitted sibling stage fields are
+  // preserved. To clear a field explicitly, pass it as `null` or `""` in the
+  // patch.
   //
   // `cover` and `genConfig` are treated as deep-merge sub-objects: a partial
   // `{ cover: { script } }` patch from a textarea-blur save must not wipe the

@@ -68,4 +68,4 @@ Panel 2
 - Never re-describe a character's permanent appearance once introduced; just name them.
 - Vary page rhythm: don't let every page be the same panel count. Use page turns deliberately — what the reader sees when they turn from an odd page to the next even page is one of the strongest tools you have. Land big reveals on page-turn moments.
 
-Return ONLY the script. No preamble, no commentary. The output MUST start with the `## Cover concept` section, followed by exactly {{lengthTargets.pageTarget}} `## Page N` headers numbered Page 1 through Page {{lengthTargets.pageTarget}}.
+Return ONLY the script. No preamble, no commentary. The output MUST start with the `# Issue {{issue.number}} — <Title>` heading, followed immediately by the `## Cover concept` section, then exactly {{lengthTargets.pageTarget}} `## Page N` headers numbered Page 1 through Page {{lengthTargets.pageTarget}}.

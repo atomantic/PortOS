@@ -33,7 +33,7 @@
     `POST /pipeline/issues/:id/stages/comicPages/cover/render` route builds
     the cover prompt server-side (series masthead + issue-number tag + the
     user's concept) and enqueues an image-gen job; the cover card sits
-    above the page list in the Comic Pages tab.
+    above the page list in the Comic tab (the merged Comic editor).
   - **Comic-script parser** now recognizes an optional `## Cover concept`
     section and the simpler `Panel N` / `Field:` plain-line format the
     updated prompts emit, alongside the legacy `### Panel N` /

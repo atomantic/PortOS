@@ -186,6 +186,12 @@ const seasonDeleteSchema = z.object({
 const issueCreateSchema = z.object({
   title: z.string().trim().min(1).max(issuesSvc.TITLE_MAX),
   number: z.number().int().min(1).max(9999).optional(),
+  // Per-issue length profile — can be set at create time so a user creating
+  // a standalone oversized issue (e.g. an annual) doesn't have to open the
+  // picker after the fact. Defaults server-side to 'standard'.
+  lengthProfile: z.enum(LENGTH_PROFILE_NAMES).optional(),
+  pageTarget: z.number().int().min(CUSTOM_PAGE_MIN).max(CUSTOM_PAGE_MAX).nullable().optional(),
+  minutesTarget: z.number().int().min(CUSTOM_MINUTE_MIN).max(CUSTOM_MINUTE_MAX).nullable().optional(),
 });
 
 const stageInputSchema = z.object({

@@ -36,7 +36,10 @@ export const DEFAULT_LENGTH_PROFILE = 'standard';
 
 // Clamp + round + fallback. Returns `null` for non-finite input so callers
 // can distinguish "user cleared the field" from "user typed nonsense".
+// Empty string is treated as absent (not coerced to 0) so clearing a Custom
+// number input returns null rather than being clamped up to the minimum.
 export function clampInt(raw, min, max) {
+  if (raw === '' || raw === null || raw === undefined) return null;
   const n = Number(raw);
   if (!Number.isFinite(n)) return null;
   return Math.max(min, Math.min(max, Math.round(n)));
