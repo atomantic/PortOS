@@ -7,7 +7,7 @@ import useAsyncAction from '../../hooks/useAsyncAction';
 import { getSettings, updateSettings, getBackupStatus, triggerBackup } from '../../services/api';
 
 // Set equality — rsync --exclude flags are order-independent, so reordering
-// or membership-only changes both signal a real dirty state.
+// is NOT a dirty state; only membership changes (added/removed entries) are.
 const sameSet = (a, b) => a.length === b.length && a.every(x => b.includes(x));
 
 // settings.json is hand-editable and the GET /settings endpoint is unvalidated,
@@ -15,6 +15,23 @@ const sameSet = (a, b) => a.length === b.length && a.every(x => b.includes(x));
 // null, or any other shape. Normalize before it reaches React state — otherwise
 // downstream `.some` / `.includes` / `.filter` calls crash the Backup tab.
 const asArray = (v) => Array.isArray(v) ? v : [];
+
+// Whether a user-supplied custom rsync exclude pattern covers (shadows) a default
+// exclude path — broader than a bare `===` check so the UI doesn't mark a default
+// as "included" while a custom entry like `loras/`, `loras/**`, or `/cos/` is
+// still effectively excluding it via rsync. Strips leading `/`, trailing `/`, and
+// a trailing `**`/`*` glob from both sides, then compares directory prefixes:
+// the custom path shadows the default when the default's normalized form equals
+// the custom's OR lives inside the custom's subtree.
+const normalizePattern = (p) =>
+  String(p ?? '').replace(/^\/+/, '').replace(/\/+\*+$/, '').replace(/\*+$/, '').replace(/\/+$/, '');
+const shadowsDefault = (customPath, defaultPath) => {
+  if (customPath === defaultPath) return true;
+  const c = normalizePattern(customPath);
+  const d = normalizePattern(defaultPath);
+  if (!c || !d) return false;
+  return d === c || d.startsWith(c + '/');
+};
 
 export function BackupTab() {
   const [loading, setLoading] = useState(true);
@@ -73,10 +90,11 @@ export function BackupTab() {
       setDisabledDefaultExcludes(prev => prev.filter(p => p !== path));
     } else {
       // Disabling the default — the user is opting this path back IN to backups.
-      // Also strip from custom Additional Exclude Paths; otherwise rsync would
-      // still exclude it and the toggle would lie about the actual behavior.
+      // Strip every shadowing custom entry (exact match AND broader patterns
+      // like `loras/`, `loras/**`); otherwise rsync would still exclude it and
+      // the toggle would lie about the actual behavior.
       setDisabledDefaultExcludes(prev => [...prev, path]);
-      setExcludePaths(prev => prev.filter(p => p !== path));
+      setExcludePaths(prev => prev.filter(p => !shadowsDefault(p, path)));
     }
   };
 
@@ -95,9 +113,10 @@ export function BackupTab() {
     if (!trimmed || excludePaths.includes(trimmed)) return;
     // A custom exclude that shadows a default would lie about toggle state
     // (toggle "included" but rsync still excludes via the custom entry).
-    // Steer the user to the toggle instead.
-    if (defaultExcludes.some(d => d.path === trimmed)) {
-      toast.error(`"${trimmed}" is a default exclusion — use the toggle above instead`);
+    // Catches exact matches AND broader patterns like `loras/` or `loras/**`.
+    const shadowed = defaultExcludes.find(d => shadowsDefault(trimmed, d.path));
+    if (shadowed) {
+      toast.error(`"${trimmed}" shadows the default exclusion "${shadowed.path}" — use the toggle above instead`);
       return;
     }
     setExcludePaths([...excludePaths, trimmed]);
@@ -169,14 +188,14 @@ export function BackupTab() {
           <ul className="space-y-1.5 mt-1">
             {defaultExcludes.map((d, i) => {
               const isDisabled = disabledDefaultExcludes.includes(d.path);
-              const inCustomExcludes = excludePaths.includes(d.path);
+              // Custom excludes can shadow a default via exact match (`loras/...`)
+              // OR a broader pattern (`loras/`, `loras/**`, `/cos/`). The broader
+              // check is necessary because rsync still applies the custom pattern
+              // even when the default toggle says "included".
+              const shadowingCustom = excludePaths.find(p => shadowsDefault(p, d.path));
               const defaultActive = !(d.overridable && isDisabled);
-              // The path is excluded if EITHER the built-in default still applies
-              // OR the user also listed it in Additional Exclude Paths. Without the
-              // second check, the toggle would show "included" while rsync excludes
-              // via the custom entry.
-              const isExcluded = defaultActive || inCustomExcludes;
-              const shadowedByCustom = !defaultActive && inCustomExcludes;
+              const isExcluded = defaultActive || !!shadowingCustom;
+              const shadowedByCustom = !defaultActive && !!shadowingCustom;
               return (
                 <li key={i} className="flex items-start gap-2 text-xs">
                   {d.overridable ? (
@@ -196,7 +215,7 @@ export function BackupTab() {
                   <span className="text-gray-500">
                     {d.reason}
                     {!isExcluded && <span className="text-port-success/80 ml-1">(included)</span>}
-                    {shadowedByCustom && <span className="text-port-warning ml-1">(still excluded via Additional Exclude Paths — remove it below)</span>}
+                    {shadowedByCustom && <span className="text-port-warning ml-1">(still excluded via Additional Exclude Paths — remove <code>{shadowingCustom}</code> below)</span>}
                   </span>
                 </li>
               );

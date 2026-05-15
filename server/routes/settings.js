@@ -7,6 +7,7 @@ import {
   CODEX_PARALLEL_DEFAULT,
 } from '../services/mediaJobQueue/index.js';
 import { asyncHandler } from '../lib/errorHandler.js';
+import { backupConfigSchema, validateRequest } from '../lib/validation.js';
 
 const router = Router();
 
@@ -38,6 +39,13 @@ router.get('/', asyncHandler(async (req, res) => {
 
 // PUT /api/settings
 router.put('/', asyncHandler(async (req, res) => {
+  // Settings is a polymorphic store but the backup sub-object has a known
+  // schema. Validate that slice when it's present so a malformed Backup-tab
+  // save doesn't reach disk (the runtime guards downstream are belt-and-
+  // suspenders, but per project convention all inputs are validated).
+  if (req.body?.backup !== undefined) {
+    validateRequest(backupConfigSchema.partial(), req.body.backup);
+  }
   const merged = await updateSettings(req.body);
   // The queue caches codex.parallelLimit in-process; sync it from the
   // merged value so a save takes effect without a restart and without

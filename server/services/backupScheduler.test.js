@@ -76,7 +76,7 @@ describe('startBackupScheduler', () => {
         enabled: true,
         destPath: '/dest-fresh',
         excludePaths: ['fresh/'],
-        disabledDefaultExcludes: ['loras/*.safetensors']
+        disabledDefaultExcludes: ['/loras/*.safetensors']
       }
     });
 
@@ -87,7 +87,7 @@ describe('startBackupScheduler', () => {
     expect(runBackup).toHaveBeenCalledWith(
       '/dest-fresh',
       null,
-      { excludePaths: ['fresh/'], disabledDefaultExcludes: ['loras/*.safetensors'] }
+      { excludePaths: ['fresh/'], disabledDefaultExcludes: ['/loras/*.safetensors'] }
     );
   });
 

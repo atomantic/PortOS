@@ -32,14 +32,19 @@ const STATE_PATH = join(PATHS.data, 'backup', 'state.json');
 // *every* on-disk location for that class of data — e.g. agent worktrees live under
 // both cos/worktrees/ and cos/feature-agents/*/worktree/; cross-reference
 // worktreeManager.js and agentLifecycle.js if introducing new worktree paths.
+//
+// All paths are anchored with a leading `/` (rsync filter syntax for "relative to
+// the transfer root"). Without the anchor, a pattern like `loras/*.safetensors`
+// matches any `loras/` directory anywhere under data/ (e.g. a user's
+// brain/.../loras/ collection), which would silently exclude unrelated user data.
 export const DEFAULT_EXCLUDES = [
-  { path: 'browser-profile/', reason: 'Browser CDP profile — cache/cookies, can be several GB', overridable: false },
-  { path: 'cos/worktrees/', reason: 'Ephemeral agent git worktrees — recreated on demand', overridable: false },
-  { path: 'cos/feature-agents/*/worktree/', reason: 'Per-feature-agent git worktrees — recreated on demand', overridable: false },
-  { path: 'loras/*.safetensors', reason: 'LoRA adapter weight files — large, re-downloadable. .metadata.json sidecars (Civitai metadata, user-editable name/notes) ARE backed up.', overridable: true },
-  { path: 'repos/', reason: 'Cloned git repositories — large, re-cloneable from origin', overridable: true },
-  { path: 'cos/reference-repos/', reason: 'Reference upstream repos used by agents — re-cloneable', overridable: true },
-  { path: 'browser-downloads/', reason: 'Browser downloads cache — large, re-downloadable', overridable: true }
+  { path: '/browser-profile/', reason: 'Browser CDP profile — cache/cookies, can be several GB', overridable: false },
+  { path: '/cos/worktrees/', reason: 'Ephemeral agent git worktrees — recreated on demand', overridable: false },
+  { path: '/cos/feature-agents/*/worktree/', reason: 'Per-feature-agent git worktrees — recreated on demand', overridable: false },
+  { path: '/loras/*.safetensors', reason: 'LoRA adapter weight files — large, re-downloadable. .metadata.json sidecars (Civitai metadata, user-editable name/notes) ARE backed up.', overridable: true },
+  { path: '/repos/', reason: 'Cloned git repositories — large, re-cloneable from origin', overridable: true },
+  { path: '/cos/reference-repos/', reason: 'Reference upstream repos used by agents — re-cloneable', overridable: true },
+  { path: '/browser-downloads/', reason: 'Browser downloads cache — large, re-downloadable', overridable: true }
 ];
 
 // Snapshots live under snapshots/<hostname>/<snapshotId> so a single shared

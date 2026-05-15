@@ -458,7 +458,12 @@
   `backupConfigSchema`; tests updated.
 
   **Notes on review feedback:**
-  - The LoRA exclude is `loras/*.safetensors`, not `loras/`. The
+  - All `DEFAULT_EXCLUDES` paths are anchored with a leading `/` (rsync
+    filter syntax for "relative to the transfer root"). Without the anchor
+    a pattern like `loras/*.safetensors` would match any `loras/` directory
+    anywhere under data/ — including user-managed collections under e.g.
+    `brain/.../loras/` — and silently exclude unrelated user data.
+  - The LoRA exclude is `/loras/*.safetensors`, not `/loras/`. The
     `.metadata.json` sidecars next to each `.safetensors` file (Civitai
     metadata + user-editable name / recommendedScale / notes) are the
     source of truth for that user data and ARE backed up.
@@ -473,9 +478,19 @@
     the wrong shape doesn't abort the backup. Exclude-computation extracted
     into `computeEffectiveExcludes()` (pure, unit-tested).
   - The Backup tab `<isExcluded>` state now accounts for paths also listed
-    in Additional Exclude Paths — toggling a default to "included" auto-
-    cleans the duplicate from `excludePaths`, and `addExclude` refuses to
-    shadow a default (steers the user to the toggle instead).
+    in Additional Exclude Paths via a `shadowsDefault()` helper that
+    catches exact matches AND broader rsync patterns (`loras/`, `loras/**`,
+    `/cos/` covering `/cos/reference-repos/`). Toggling a default to
+    "included" strips every shadowing custom entry, and `addExclude`
+    refuses to add a pattern that would shadow any default. The warning
+    chip names the offending custom entry so the user knows which one to
+    delete.
+  - `backupConfigSchema` is now wired into the settings PUT route (used as
+    `.partial()` so an unrelated settings save doesn't require a full
+    backup config). The schema's `destPath` was loosened to
+    `z.string().nullable().optional()` to match the route's existing
+    "empty / missing destPath = not configured" semantics — saving an
+    empty input no longer 400s.
   - Client-side `asArray()` normalizer wraps `settings.backup.excludePaths`
     and `disabledDefaultExcludes` (and the `defaultExcludes` returned from
     `/api/backup/status`) before they reach React state — settings.json is

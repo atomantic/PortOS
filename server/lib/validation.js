@@ -523,8 +523,12 @@ export const searchQuerySchema = z.object({
 // BACKUP SCHEMAS
 // =============================================================================
 
+// Used by both the settings PUT route (.partial() for incremental updates) and
+// any direct backup-config endpoint. destPath is nullable: the UI persists an
+// empty string when the field is cleared, and the route handler treats empty/
+// missing destPath as "not configured" rather than rejecting the save.
 export const backupConfigSchema = z.object({
-  destPath: z.string().min(1),
+  destPath: z.string().nullable().optional(),
   cronExpression: z.string().optional(),
   enabled: z.boolean().optional().default(true),
   excludePaths: z.array(z.string()).optional().default([]),
