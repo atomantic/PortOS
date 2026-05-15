@@ -167,6 +167,16 @@ export default function ComicScriptStage({ issue, series, onStageUpdate }) {
   const [draftCoverScript, setDraftCoverScript] = useState(cover.script || '');
   useEffect(() => { setDraftCoverScript(cover.script || ''); }, [cover.script]);
   const [renderingCover, setRenderingCover] = useState(false);
+  // Mirror PageRow's job-status pattern: start 'unknown' so we treat any
+  // existing jobId as in-flight until MediaJobThumb reports back.
+  const [coverJobStatus, setCoverJobStatus] = useState('unknown');
+  const coverJobInFlight = !!cover.imageJobId
+    && coverJobStatus !== 'completed'
+    && coverJobStatus !== 'failed'
+    && coverJobStatus !== 'canceled';
+  // Reset to 'unknown' whenever the jobId changes so the new job is treated
+  // as in-flight until the first status event arrives.
+  useEffect(() => { setCoverJobStatus('unknown'); }, [cover.imageJobId]);
 
   const persistCoverScript = async (nextScript) => {
     // Send only the changed field — the server's per-stage merge now deep-
@@ -298,16 +308,18 @@ export default function ComicScriptStage({ issue, series, onStageUpdate }) {
             <button
               type="button"
               onClick={handleRenderCover}
-              disabled={renderingCover}
-              title="Render the issue's front cover — series masthead + issue number tag + your cover concept."
+              disabled={renderingCover || coverJobInFlight}
+              title={coverJobInFlight
+                ? 'Cover render in progress…'
+                : 'Render the issue\'s front cover — series masthead + issue number tag + your cover concept.'}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-port-accent text-white text-xs font-medium hover:bg-port-accent/90 disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              {renderingCover ? <Loader2 size={12} className="animate-spin" /> : <ImageIcon size={12} />}
+              {(renderingCover || coverJobInFlight) ? <Loader2 size={12} className="animate-spin" /> : <ImageIcon size={12} />}
               Render cover
             </button>
             {cover.imageJobId ? (
               <div className="flex items-center gap-2">
-                <MediaJobThumb jobId={cover.imageJobId} label="Cover" size="md" />
+                <MediaJobThumb jobId={cover.imageJobId} label="Cover" size="md" onStatus={setCoverJobStatus} />
                 <span className="text-[10px] text-gray-500 font-mono break-all" title="Last cover render job">
                   {cover.imageJobId.slice(0, 8)}
                 </span>
