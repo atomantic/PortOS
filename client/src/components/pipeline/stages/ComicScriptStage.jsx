@@ -7,7 +7,7 @@
  * render prompt stays high-quality, but they're never shown.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Loader2, Sparkles, ImageIcon, Save, Trash2, ChevronDown, ChevronRight, Settings as SettingsIcon } from 'lucide-react';
 import toast from '../../ui/Toast';
@@ -174,20 +174,34 @@ export default function ComicScriptStage({ issue, series, onStageUpdate }) {
     && coverJobStatus !== 'completed'
     && coverJobStatus !== 'failed'
     && coverJobStatus !== 'canceled';
+  // Tighter "actively running" check that excludes 'unknown'. Used to gate the
+  // stale-render clear in persistCoverScript — we only want to preserve the old
+  // imageJobId when a real queue/run is in progress, not when the status is
+  // merely unknown after a reload.
+  const coverJobActivelyRunning = !!cover.imageJobId
+    && (coverJobStatus === 'queued' || coverJobStatus === 'running');
   // Reset to 'unknown' whenever the jobId changes so the new job is treated
   // as in-flight until the first status event arrives.
   useEffect(() => { setCoverJobStatus('unknown'); }, [cover.imageJobId]);
 
+  // Ref used to suppress the textarea blur-save when the render button is the
+  // blur target. The render handler already sends draftCoverScript so the
+  // blur-save would race and could clear the new imageJobId.
+  const coverRenderMouseDownRef = useRef(false);
+
   const persistCoverScript = async (nextScript) => {
-    // If the script text changed AND no render is currently in flight, the
-    // previously-rendered image (imageJobId + prompt) no longer matches the
-    // new concept — clear them so the UI doesn't show a stale render alongside
-    // the updated text.  When a render IS in flight we leave imageJobId alone
-    // because we want to track the completion of the job we just kicked off.
-    // When the text hasn't changed (no-op blur) we also leave the render fields
-    // alone so a valid, matching render is never cleared unnecessarily.
+    // If the script text changed AND the cover job is not actively running
+    // (queued or running), clear the stale render fields so the UI doesn't show
+    // an old image alongside the updated concept.
+    //
+    // We intentionally use `coverJobActivelyRunning` rather than
+    // `coverJobInFlight` here: `coverJobInFlight` is also true when status is
+    // 'unknown' (after a reload before MediaJobThumb has reported back), and
+    // preserving a stale render in that window is wrong. The button stays
+    // disabled via `coverJobInFlight` so the user can't kick a second render
+    // while status is unknown — but a blur edit should still clear the stale image.
     const scriptChanged = nextScript !== (cover.script || '');
-    const coverPatch = scriptChanged && !coverJobInFlight
+    const coverPatch = scriptChanged && !coverJobActivelyRunning
       ? { script: nextScript, imageJobId: null, prompt: null }
       : { script: nextScript };
     const updated = await updatePipelineIssue(issue.id, {
@@ -313,6 +327,7 @@ export default function ComicScriptStage({ issue, series, onStageUpdate }) {
           <div className="flex items-center gap-2">
             <button
               type="button"
+              onMouseDown={() => { coverRenderMouseDownRef.current = true; }}
               onClick={handleRenderCover}
               disabled={renderingCover || coverJobInFlight}
               title={coverJobInFlight
@@ -337,6 +352,14 @@ export default function ComicScriptStage({ issue, series, onStageUpdate }) {
           value={draftCoverScript}
           onChange={(e) => setDraftCoverScript(e.target.value)}
           onBlur={() => {
+            // If the blur was triggered by clicking the Render cover button,
+            // skip this save — the render handler sends draftCoverScript itself,
+            // so the blur-save would race and could write { imageJobId: null }
+            // after the render route persists the new job.
+            if (coverRenderMouseDownRef.current) {
+              coverRenderMouseDownRef.current = false;
+              return;
+            }
             if ((cover.script || '') !== draftCoverScript) persistCoverScript(draftCoverScript);
           }}
           placeholder="Cover concept — describe the hero image, mood, lighting, framing. Series masthead and issue-number tag get composited in automatically."

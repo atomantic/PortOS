@@ -65,11 +65,15 @@ export default function LengthProfilePicker({ issue, onChange, disabled = false 
     setCustomMinutes(issue?.minutesTarget ?? std.minutesTarget);
   }, [issue?.pageTarget, issue?.minutesTarget, std.pageTarget, std.minutesTarget]);
 
+  const clampedPages = clampInt(customPages, CUSTOM_PAGE_MIN, CUSTOM_PAGE_MAX);
+  const clampedMinutes = clampInt(customMinutes, CUSTOM_MINUTE_MIN, CUSTOM_MINUTE_MAX);
+  const applyDisabled = clampedPages === null || clampedMinutes === null;
+
   const saveCustom = () => {
     onChange?.({
       lengthProfile: 'custom',
-      pageTarget: clampInt(customPages, CUSTOM_PAGE_MIN, CUSTOM_PAGE_MAX),
-      minutesTarget: clampInt(customMinutes, CUSTOM_MINUTE_MIN, CUSTOM_MINUTE_MAX),
+      pageTarget: clampedPages,
+      minutesTarget: clampedMinutes,
     });
     setOpen(false);
   };
@@ -150,7 +154,9 @@ export default function LengthProfilePicker({ issue, onChange, disabled = false 
               <button
                 type="button"
                 onClick={saveCustom}
-                className="mt-2 w-full px-2 py-1 rounded bg-port-accent text-white text-xs font-medium hover:bg-port-accent/90"
+                disabled={applyDisabled}
+                title={applyDisabled ? 'Enter a page count and minute count to apply' : 'Save custom length profile'}
+                className="mt-2 w-full px-2 py-1 rounded bg-port-accent text-white text-xs font-medium hover:bg-port-accent/90 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-port-accent"
               >
                 Apply custom length
               </button>
