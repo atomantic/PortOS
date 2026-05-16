@@ -16,7 +16,7 @@
 
 import { randomUUID } from 'crypto';
 import { join } from 'path';
-import { readdir } from 'fs/promises';
+import { readdir, rename } from 'fs/promises';
 import { PATHS, atomicWrite, readJSONFile, ensureDir } from '../../lib/fileUtils.js';
 import { SHARING_SCHEMA_VERSION, getProducedByVersion } from './version.js';
 import { isStr } from '../../lib/storyBible.js';
@@ -213,4 +213,124 @@ export async function listManifestFilenames(bucketPath) {
   const dir = join(bucketPath, 'manifests');
   const entries = await readdir(dir).catch(() => []);
   return entries.filter((f) => f.endsWith('.json')).sort().reverse();
+}
+
+/**
+ * Default retention cap per bucket per local instance. A long-lived bucket
+ * accumulates one manifest per share action, so capping owned manifests at
+ * 500 keeps disk + cloud-sync chatter bounded while preserving enough recent
+ * history for "did I share this?" forensics in `/sharing/:id/activity`.
+ */
+export const DEFAULT_MANIFEST_RETENTION = 500;
+
+/**
+ * Filenames currently being moved into `<bucket>/.archive/manifests/` by the
+ * pruner. The watcher consults this set so its `unlink` handler can skip
+ * `handleUnshare` for our own archive moves — those would otherwise reset
+ * cursor entries and emit a misleading "peer unshared" socket event.
+ *
+ * Held for ~5s after each rename to outlast chokidar's awaitWriteFinish
+ * debounce; the entry is unref'd from the event loop so it never blocks
+ * shutdown.
+ */
+const pruningInFlight = new Map();
+
+export function isManifestPruning(bucketId, filename) {
+  return pruningInFlight.get(bucketId)?.has(filename) || false;
+}
+
+function markPruning(bucketId, filename) {
+  let set = pruningInFlight.get(bucketId);
+  if (!set) {
+    set = new Set();
+    pruningInFlight.set(bucketId, set);
+  }
+  set.add(filename);
+}
+
+function scheduleUnmark(bucketId, filename, delayMs = 5000) {
+  const t = setTimeout(() => {
+    const set = pruningInFlight.get(bucketId);
+    if (!set) return;
+    set.delete(filename);
+    if (set.size === 0) pruningInFlight.delete(bucketId);
+  }, delayMs);
+  t.unref?.();
+}
+
+// Cap concurrent readManifest fd usage during classification — long-lived
+// buckets can hold thousands of manifests, and `EMFILE: too many open files`
+// is real on macOS defaults if we Promise.all the whole list.
+const CLASSIFY_CONCURRENCY = 32;
+
+/**
+ * Archive older one-shot manifests authored by `localInstanceId` so a bucket
+ * that lives long enough does not accumulate manifests indefinitely.
+ *
+ * Rules:
+ *   - Subscription manifests (`sub-*.json`) are never archived — they own a
+ *     deterministic filename per (recordKind, recordId) so older ones don't
+ *     accumulate, and removing one would replicate as an unshare to peers.
+ *   - Manifests authored by other peers are never archived — only the author
+ *     of a manifest knows whether it's been superseded, and a cross-peer
+ *     delete would replicate as an unshare on the originating peer.
+ *   - Owned one-shot manifests in excess of `maxManifests` are moved (oldest
+ *     first by ISO-prefixed filename) into `<bucket>/.archive/manifests/`.
+ *
+ * Returns `{ archived, kept, ownedTotal, skippedForeign, skippedReason }`.
+ * When `localInstanceId` is missing or 'unknown', returns a noop result with
+ * `skippedReason` set — we never blanket-archive without an author check.
+ */
+export async function pruneBucketManifests(bucket, opts = {}) {
+  const maxManifests = Number.isFinite(opts.maxManifests)
+    ? Math.max(0, opts.maxManifests)
+    : DEFAULT_MANIFEST_RETENTION;
+  const localInstanceId = opts.localInstanceId;
+  if (!localInstanceId || localInstanceId === 'unknown') {
+    return { archived: 0, kept: 0, ownedTotal: 0, skippedForeign: 0, skippedReason: 'no-local-instance-id' };
+  }
+  const manifestsDir = join(bucket.path, 'manifests');
+  const entries = await readdir(manifestsDir).catch(() => []);
+  const candidates = entries
+    .filter((f) => f.endsWith('.json') && !f.startsWith('sub-'))
+    .sort();
+  // Fast path: if the total candidate count is at or below the cap, no read
+  // of any manifest is necessary — owned count cannot exceed total.
+  if (candidates.length <= maxManifests) {
+    return { archived: 0, kept: candidates.length, ownedTotal: candidates.length, skippedForeign: 0, skippedReason: null };
+  }
+  // Classify in bounded-concurrency batches so a bucket with thousands of
+  // manifests doesn't exhaust file descriptors.
+  const owned = [];
+  let skippedForeign = 0;
+  for (let i = 0; i < candidates.length; i += CLASSIFY_CONCURRENCY) {
+    const batch = candidates.slice(i, i + CLASSIFY_CONCURRENCY);
+    const reads = await Promise.all(batch.map((filename) => readManifest(bucket.path, filename).catch(() => null)));
+    for (let j = 0; j < batch.length; j++) {
+      const m = reads[j];
+      if (!m) continue;
+      if (m.senderInstanceId === localInstanceId) owned.push(batch[j]);
+      else skippedForeign += 1;
+    }
+  }
+  if (owned.length <= maxManifests) {
+    return { archived: 0, kept: owned.length, ownedTotal: owned.length, skippedForeign, skippedReason: null };
+  }
+  const archiveDir = join(bucket.path, '.archive', 'manifests');
+  await ensureDir(archiveDir);
+  const toArchive = owned.slice(0, owned.length - maxManifests);
+  for (const filename of toArchive) markPruning(bucket.id, filename);
+  const renames = await Promise.all(toArchive.map(async (filename) => {
+    try {
+      await rename(join(manifestsDir, filename), join(archiveDir, filename));
+      return true;
+    } catch (err) {
+      console.log(`⚠️ sharing.manifest: archive failed for ${filename}: ${err.message}`);
+      return false;
+    } finally {
+      scheduleUnmark(bucket.id, filename);
+    }
+  }));
+  const archived = renames.filter(Boolean).length;
+  return { archived, kept: maxManifests, ownedTotal: owned.length, skippedForeign, skippedReason: null };
 }
