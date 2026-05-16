@@ -8,7 +8,7 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { Loader2, ImagePlus, WandSparkles, Lock, Unlock, Shirt, Plus, Trash2, ChevronDown, ChevronRight } from 'lucide-react';
+import { Loader2, ImagePlus, WandSparkles, Lock, Unlock, Shirt, Plus, Trash2, ChevronDown, ChevronRight, Star } from 'lucide-react';
 import useMediaJobProgress from '../../hooks/useMediaJobProgress';
 import MediaJobThumb from './MediaJobThumb';
 
@@ -360,22 +360,55 @@ export default function CanonCard({
           {inFlightJobId ? (
             <MediaJobThumb jobId={inFlightJobId} label={`${entry.name} reference`} size="sm" />
           ) : null}
-          {refs.map((ref) => (
-            <button
-              key={ref}
-              type="button"
-              onClick={() => onPreview?.(ref)}
-              title={ref}
-              className="w-16 h-16 bg-port-bg rounded overflow-hidden border border-port-border hover:border-port-accent/50 cursor-zoom-in p-0"
-            >
-              <img
-                src={`/data/images/${ref}`}
-                alt={`${entry.name} reference`}
-                className="w-full h-full object-cover"
-                loading="lazy"
-              />
-            </button>
-          ))}
+          {refs.map((ref) => {
+            const isPrimary = entry.primaryImageRef === ref;
+            const canPin = !!onPatchEntry && !locked;
+            return (
+              <div key={ref} className="relative w-16 h-16">
+                <button
+                  type="button"
+                  onClick={() => onPreview?.(ref)}
+                  title={ref}
+                  className={`w-full h-full bg-port-bg rounded overflow-hidden border ${
+                    isPrimary ? 'border-port-accent' : 'border-port-border hover:border-port-accent/50'
+                  } cursor-zoom-in p-0`}
+                >
+                  <img
+                    src={`/data/images/${ref}`}
+                    alt={`${entry.name} reference`}
+                    className="w-full h-full object-cover"
+                    loading="lazy"
+                  />
+                </button>
+                {canPin ? (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onPatchEntry(entry.id, { primaryImageRef: isPrimary ? null : ref });
+                    }}
+                    title={isPrimary
+                      ? `Unpin ${ref} as primary reference`
+                      : `Pin ${ref} as ${entry.name}'s primary reference`}
+                    className={`absolute top-0.5 right-0.5 p-0.5 rounded ${
+                      isPrimary
+                        ? 'bg-port-accent text-white'
+                        : 'bg-port-bg/80 text-gray-400 hover:text-port-accent'
+                    }`}
+                  >
+                    <Star size={10} fill={isPrimary ? 'currentColor' : 'none'} />
+                  </button>
+                ) : isPrimary ? (
+                  <span
+                    title="Primary reference image"
+                    className="absolute top-0.5 right-0.5 p-0.5 rounded bg-port-accent text-white"
+                  >
+                    <Star size={10} fill="currentColor" />
+                  </span>
+                ) : null}
+              </div>
+            );
+          })}
         </div>
       ) : null}
       {usage && usage.length > 0 ? (

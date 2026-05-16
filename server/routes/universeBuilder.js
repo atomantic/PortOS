@@ -102,6 +102,18 @@ const createSchema = z.object({
   llm: llmSchema,
 });
 
+// Canon arrays go through `sanitizeBibleList` in the service layer where
+// each entry is validated structurally — accept them loosely here so
+// patch-the-whole-list flows (e.g. inline canon edits, render-ref hooks)
+// don't fail Zod for legitimately rich shapes. Cap at the bible-wide entry
+// limit so a malicious payload can't blow up memory.
+// Hard cap mirrors BIBLE_LIMITS.ENTRIES_PER_BIBLE_MAX (200) with headroom
+// — sanitizer truncates anyway, so this just protects the JSON-parse layer.
+const canonArrayField = z.array(z.record(z.unknown())).max(500).optional();
+// `origin` is a share-bucket provenance block written by the importer + cleared
+// to null by the user; structurally an object or null.
+const originField = z.record(z.unknown()).nullable().optional();
+
 const patchSchema = z.object({
   name: z.string().trim().min(1).max(svc.NAME_MAX_LENGTH).optional(),
   starterPrompt: z.string().trim().max(svc.STARTER_PROMPT_MAX).optional(),
@@ -115,6 +127,15 @@ const patchSchema = z.object({
   influences: influencesSchema.optional(),
   locked: lockedSchema.optional(),
   llm: llmSchema,
+  // Canon writes — these flow through sanitizeBibleList server-side so
+  // schema parity here is just "accept arrays of records." Without these
+  // entries Zod's default strip behavior silently drops them from the
+  // patch (PATCHABLE_SCALARS in services/universeBuilder.js reads them
+  // from the post-Zod body, so they'd never reach the writer).
+  characters: canonArrayField,
+  settings: canonArrayField,
+  objects: canonArrayField,
+  origin: originField,
 }).refine((p) => Object.keys(p).length > 0, { message: 'patch must include at least one field' });
 
 const expandSchema = z.object({

@@ -2,6 +2,39 @@
 
 ## Added
 
+- **Canon entries: primary reference image (Cluster A — A3/A4/A5).** Every
+  character, place, and object canon entry gains an optional
+  `primaryImageRef: filename | null` slot that pins one of its rendered
+  `imageRefs[]` thumbnails as the canonical visual anchor. The CanonCard UI
+  surfaces a star button per thumbnail (top-right corner) — clicking the
+  star pins; clicking the pinned star unpins. The pinned image gets a
+  port-accent border + filled star indicator so the visual hierarchy is
+  legible across characters / settings / objects. Stale pointers (primary
+  names a filename that was later removed from `imageRefs[]`) auto-clear
+  to null on sanitization so the UI doesn't render a broken star. Defers
+  automatic injection into downstream panel/scene render prompts to the
+  multi-reference image-gen follow-up (PLAN.md). Touches:
+  `server/lib/storyBible.js` (new `derivePrimaryImageRef` helper +
+  `primaryImageRef` line in all three kind sanitizers),
+  `client/src/components/pipeline/CanonCard.jsx` (per-thumbnail star
+  overlay).
+
+## Fixed
+
+- **Universe canon writes silently dropped at the Zod layer.** The
+  `patchSchema` in `server/routes/universeBuilder.js` didn't list
+  `characters` / `settings` / `objects` / `origin`, so Zod's default-strip
+  behavior dropped them from PATCH bodies before the service layer's
+  `PATCHABLE_SCALARS` reader saw them. Means the inline canon-edit flows
+  shipped in earlier Cluster A commits (INT/EXT + time-of-day chips,
+  wardrobes editor) appeared to work in the optimistic UI but never
+  persisted to disk. The patch schema now accepts canon arrays as
+  loose record arrays (the service-layer `sanitizeBibleList` is the
+  structural validator), with a regression test in
+  `routes/universeBuilder.test.js` pinning the end-to-end persistence.
+
+## Added
+
 - **CoS scheduled-task filter (All / Enabled).** The CoS Schedule tab header
   gains an All/Enabled filter persisted in the URL (`?filter=enabled`) so the
   selection is bookmarkable. Counts render once per pass, and each filter

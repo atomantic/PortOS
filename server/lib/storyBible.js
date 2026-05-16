@@ -181,6 +181,17 @@ function ensureFirstAppearance(raw) {
   return isStr(raw) && raw.trim() ? raw.trim().slice(0, 200) : null;
 }
 
+// Primary reference image (A3/A4/A5). User pins one of the canon entry's
+// existing `imageRefs[]` as the canonical visual anchor. Stale pointers
+// (primary names a filename that was later removed from imageRefs) collapse
+// to null so the UI doesn't render a broken star indicator. Returns the
+// validated filename or null — never undefined, so the shape stays explicit.
+function derivePrimaryImageRef(raw, imageRefs) {
+  if (!isStr(raw) || !raw.trim()) return null;
+  const trimmed = raw.trim().slice(0, BIBLE_LIMITS.IMAGE_REF_MAX);
+  return imageRefs.includes(trimmed) ? trimmed : null;
+}
+
 // Wardrobe sanitizer (A2). One entry per outfit/styling variant; the
 // description is image-gen-ready prose ("worn linen suit, gold pocket watch,
 // scuffed wingtips"). Reference images per wardrobe land in a follow-up.
@@ -236,6 +247,7 @@ export function sanitizeCharacter(raw, { idPrefix = DEFAULT_ID_PREFIX.character,
     BIBLE_LIMITS.PHYSICAL_DESCRIPTION_MAX,
   );
   const created = preserveTimestamps && isStr(raw.createdAt) ? raw.createdAt : nowIso();
+  const imageRefs = cleanStringArray(raw.imageRefs, BIBLE_LIMITS.IMAGE_REF_MAX, BIBLE_LIMITS.IMAGE_REFS_PER_ENTRY_MAX);
   return {
     id: ensureId(raw.id, idPrefix),
     name,
@@ -248,7 +260,10 @@ export function sanitizeCharacter(raw, { idPrefix = DEFAULT_ID_PREFIX.character,
     // Voice binding for VO synthesis (kokoro/piper local OSS, ElevenLabs
     // when configured). null = use the project default at synth time.
     voiceId: trimTo(raw.voiceId, BIBLE_LIMITS.VOICE_ID_MAX) || null,
-    imageRefs: cleanStringArray(raw.imageRefs, BIBLE_LIMITS.IMAGE_REF_MAX, BIBLE_LIMITS.IMAGE_REFS_PER_ENTRY_MAX),
+    imageRefs,
+    // Pinned visual anchor (A3). One of imageRefs marked canonical so
+    // downstream renders + the UI know which to lean on.
+    primaryImageRef: derivePrimaryImageRef(raw.primaryImageRef, imageRefs),
     // Wardrobes (A2): outfit/styling variants applied on top of
     // physicalDescription. Empty array stays the legacy shape — every
     // existing character keeps rendering through physicalDescription alone.
@@ -270,6 +285,7 @@ export function sanitizeSetting(raw, { idPrefix = DEFAULT_ID_PREFIX.setting, pre
   // either there's nothing for a scene matcher to key on.
   if (!name && !slugline) return null;
   const created = preserveTimestamps && isStr(raw.createdAt) ? raw.createdAt : nowIso();
+  const imageRefs = cleanStringArray(raw.imageRefs, BIBLE_LIMITS.IMAGE_REF_MAX, BIBLE_LIMITS.IMAGE_REFS_PER_ENTRY_MAX);
   return {
     id: ensureId(raw.id, idPrefix),
     name,
@@ -285,7 +301,9 @@ export function sanitizeSetting(raw, { idPrefix = DEFAULT_ID_PREFIX.setting, pre
     timeOfDay: trimEnum(raw.timeOfDay, SETTING_TIME_OF_DAY_SET),
     recurringDetails: trimTo(raw.recurringDetails, BIBLE_LIMITS.RECURRING_DETAILS_MAX),
     notes: trimTo(raw.notes, BIBLE_LIMITS.NOTES_MAX),
-    imageRefs: cleanStringArray(raw.imageRefs, BIBLE_LIMITS.IMAGE_REF_MAX, BIBLE_LIMITS.IMAGE_REFS_PER_ENTRY_MAX),
+    imageRefs,
+    // A4: clean-plate / canonical location render pinned for downstream.
+    primaryImageRef: derivePrimaryImageRef(raw.primaryImageRef, imageRefs),
     firstAppearance: ensureFirstAppearance(raw.firstAppearance),
     evidence: cleanStringArray(raw.evidence, BIBLE_LIMITS.EVIDENCE_ITEM_MAX, BIBLE_LIMITS.EVIDENCE_PER_ENTRY_MAX),
     missingFromProse: cleanStringArray(raw.missingFromProse, BIBLE_LIMITS.EVIDENCE_ITEM_MAX, BIBLE_LIMITS.EVIDENCE_PER_ENTRY_MAX),
@@ -300,6 +318,7 @@ export function sanitizeObject(raw, { idPrefix = DEFAULT_ID_PREFIX.object, prese
   const name = trimTo(raw.name, BIBLE_LIMITS.NAME_MAX);
   if (!name) return null;
   const created = preserveTimestamps && isStr(raw.createdAt) ? raw.createdAt : nowIso();
+  const imageRefs = cleanStringArray(raw.imageRefs, BIBLE_LIMITS.IMAGE_REF_MAX, BIBLE_LIMITS.IMAGE_REFS_PER_ENTRY_MAX);
   return {
     id: ensureId(raw.id, idPrefix),
     name,
@@ -307,7 +326,9 @@ export function sanitizeObject(raw, { idPrefix = DEFAULT_ID_PREFIX.object, prese
     description: trimTo(raw.description, BIBLE_LIMITS.OBJECT_DESCRIPTION_MAX),
     significance: trimTo(raw.significance, BIBLE_LIMITS.SIGNIFICANCE_MAX),
     notes: trimTo(raw.notes, BIBLE_LIMITS.NOTES_MAX),
-    imageRefs: cleanStringArray(raw.imageRefs, BIBLE_LIMITS.IMAGE_REF_MAX, BIBLE_LIMITS.IMAGE_REFS_PER_ENTRY_MAX),
+    imageRefs,
+    // A5: canonical prop / hero-object reference render.
+    primaryImageRef: derivePrimaryImageRef(raw.primaryImageRef, imageRefs),
     firstAppearance: ensureFirstAppearance(raw.firstAppearance),
     evidence: cleanStringArray(raw.evidence, BIBLE_LIMITS.EVIDENCE_ITEM_MAX, BIBLE_LIMITS.EVIDENCE_PER_ENTRY_MAX),
     missingFromProse: cleanStringArray(raw.missingFromProse, BIBLE_LIMITS.EVIDENCE_ITEM_MAX, BIBLE_LIMITS.EVIDENCE_PER_ENTRY_MAX),

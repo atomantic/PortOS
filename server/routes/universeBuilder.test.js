@@ -172,6 +172,28 @@ describe('universe-builder routes', () => {
     expect(res.body.stylePrompt).toBe('oil painting');
   });
 
+  it('PATCH /:id persists canon array writes (characters/settings/objects)', async () => {
+    // Regression guard for the Zod-default-strips-unknown-keys bug that
+    // would silently drop canon-array writes from the inline-edit UI.
+    const app = buildApp();
+    const c = await request(app).post('/api/universe-builder').send({ name: 'A' });
+    const res = await request(app)
+      .patch(`/api/universe-builder/${c.body.id}`)
+      .send({
+        characters: [{ name: 'Jean', physicalDescription: 'tall, dark hair' }],
+        settings: [{ slugline: 'INT. BAR — NIGHT', intExt: 'INT', timeOfDay: 'night' }],
+        objects: [{ name: 'Gold pocket watch', description: 'tarnished brass casing' }],
+      });
+    expect(res.status).toBe(200);
+    expect(res.body.characters).toHaveLength(1);
+    expect(res.body.characters[0].name).toBe('Jean');
+    expect(res.body.settings).toHaveLength(1);
+    expect(res.body.settings[0].intExt).toBe('INT');
+    expect(res.body.settings[0].timeOfDay).toBe('night');
+    expect(res.body.objects).toHaveLength(1);
+    expect(res.body.objects[0].name).toBe('Gold pocket watch');
+  });
+
   it('DELETE /:id removes the universe', async () => {
     const app = buildApp();
     const c = await request(app).post('/api/universe-builder').send({ name: 'A' });

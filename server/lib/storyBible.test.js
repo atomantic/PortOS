@@ -147,6 +147,51 @@ describe('storyBible — sanitizeCharacter', () => {
     expect(o.source).toBe('manual');
   });
 
+  describe('primaryImageRef (Cluster A)', () => {
+    it('returns null when not set', () => {
+      const out = sanitizeCharacter({ name: 'A', imageRefs: ['a.png'] });
+      expect(out.primaryImageRef).toBeNull();
+    });
+
+    it('persists a valid pointer that matches one of imageRefs[]', () => {
+      const out = sanitizeCharacter({
+        name: 'A',
+        imageRefs: ['a.png', 'b.png'],
+        primaryImageRef: 'b.png',
+      });
+      expect(out.primaryImageRef).toBe('b.png');
+    });
+
+    it('auto-clears a stale pointer when the target was removed from imageRefs[]', () => {
+      const out = sanitizeCharacter({
+        name: 'A',
+        imageRefs: ['a.png'],
+        primaryImageRef: 'ghost.png',
+      });
+      expect(out.primaryImageRef).toBeNull();
+    });
+
+    it('rejects non-string pointers without throwing', () => {
+      const out = sanitizeCharacter({ name: 'A', imageRefs: ['a.png'], primaryImageRef: 123 });
+      expect(out.primaryImageRef).toBeNull();
+    });
+
+    it('applies identically to settings and objects', () => {
+      const s = sanitizeSetting({
+        name: 'Bar',
+        imageRefs: ['plate.png'],
+        primaryImageRef: 'plate.png',
+      });
+      expect(s.primaryImageRef).toBe('plate.png');
+      const o = sanitizeObject({
+        name: 'Watch',
+        imageRefs: ['watch1.png', 'watch2.png'],
+        primaryImageRef: 'watch2.png',
+      });
+      expect(o.primaryImageRef).toBe('watch2.png');
+    });
+  });
+
   describe('wardrobes (Cluster A)', () => {
     it('defaults to an empty array when omitted', () => {
       const out = sanitizeCharacter({ name: 'A' });
