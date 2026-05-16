@@ -882,9 +882,10 @@ function AppTaskTypeRow({ taskType, config, onUpdate, onTrigger, onReset, provid
 }
 
 const TASK_FILTERS = [
-  { id: 'all', label: 'All', match: () => true },
-  { id: 'enabled', label: 'Enabled', match: ([, config]) => config.enabled },
+  { id: 'all', label: 'All', emptyMessage: 'No tasks configured.', match: () => true },
+  { id: 'enabled', label: 'Enabled', emptyMessage: 'No enabled tasks.', match: ([, config]) => config.enabled },
 ];
+const DEFAULT_FILTER_ID = TASK_FILTERS[0].id;
 
 function AppTaskTypeSection({ tasks, onUpdate, onTrigger, onReset, providers, apps, onUpdateOverride, onBulkToggleOverride, improvementDisabled, filter, onFilterChange }) {
   const taskEntries = Object.entries(tasks || {});
@@ -893,6 +894,7 @@ function AppTaskTypeSection({ tasks, onUpdate, onTrigger, onReset, providers, ap
   const activeFilter = TASK_FILTERS.find(f => f.id === filter) || TASK_FILTERS[0];
   const allTaskTypes = taskEntries.map(([taskType]) => taskType);
   const visibleEntries = taskEntries.filter(activeFilter.match);
+  const counts = Object.fromEntries(TASK_FILTERS.map(f => [f.id, taskEntries.filter(f.match).length]));
 
   return (
     <div className="space-y-3">
@@ -901,7 +903,6 @@ function AppTaskTypeSection({ tasks, onUpdate, onTrigger, onReset, providers, ap
         <div className="flex items-center gap-1 ml-auto">
           {TASK_FILTERS.map(f => {
             const active = activeFilter.id === f.id;
-            const count = f.id === 'all' ? taskEntries.length : taskEntries.filter(f.match).length;
             return (
               <button
                 key={f.id}
@@ -913,7 +914,7 @@ function AppTaskTypeSection({ tasks, onUpdate, onTrigger, onReset, providers, ap
                     : 'text-gray-400 hover:text-white hover:bg-port-border/50'
                 }`}
               >
-                {f.label} ({count})
+                {f.label} ({counts[f.id]})
               </button>
             );
           })}
@@ -924,9 +925,9 @@ function AppTaskTypeSection({ tasks, onUpdate, onTrigger, onReset, providers, ap
       </p>
       {visibleEntries.length === 0 ? (
         <div className="text-center py-8 text-gray-500 border border-dashed border-port-border rounded-lg">
-          No {activeFilter.id === 'all' ? '' : `${activeFilter.label.toLowerCase()} `}tasks.{' '}
-          {activeFilter.id !== 'all' && (
-            <button onClick={() => onFilterChange('all')} className="text-port-accent hover:underline">Show all</button>
+          {activeFilter.emptyMessage}{' '}
+          {activeFilter.id !== DEFAULT_FILTER_ID && (
+            <button onClick={() => onFilterChange(DEFAULT_FILTER_ID)} className="text-port-accent hover:underline">Show all</button>
           )}
         </div>
       ) : (
@@ -960,10 +961,10 @@ export default function ScheduleTab({ apps }) {
   const [loading, setLoading] = useState(true);
 
   const filterParam = searchParams.get('filter');
-  const filter = TASK_FILTERS.some(f => f.id === filterParam) ? filterParam : 'all';
+  const filter = TASK_FILTERS.some(f => f.id === filterParam) ? filterParam : DEFAULT_FILTER_ID;
   const setFilter = useCallback((next) => {
     const params = new URLSearchParams(searchParams);
-    if (next === 'all') params.delete('filter');
+    if (next === DEFAULT_FILTER_ID) params.delete('filter');
     else params.set('filter', next);
     setSearchParams(params, { replace: true });
   }, [searchParams, setSearchParams]);
