@@ -25,6 +25,7 @@ import {
 import * as api from '../../../services/api';
 import OutputBlocks from '../OutputBlocks';
 import MarkdownOutput from '../MarkdownOutput';
+import Modal from '../../ui/Modal';
 import toast from '../../ui/Toast';
 
 // Extract task type from description (matches server-side extractTaskType)
@@ -907,60 +908,57 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
           })()}
         </div>
       )}
-      {promptOpen && (
-        <div
-          className="fixed inset-0 z-50 bg-black/70 flex items-center justify-center p-4"
-          onClick={() => setPromptOpen(false)}
-        >
-          <div
-            className="bg-port-card border border-port-border rounded-lg max-w-4xl w-full max-h-[80vh] flex flex-col"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between px-4 py-2 border-b border-port-border shrink-0">
-              <div className="flex items-center gap-2">
-                <MessageSquare size={14} className="text-gray-400" aria-hidden="true" />
-                <span className="text-sm text-gray-300">Agent prompt</span>
-                {promptContent && (
-                  <span className="text-xs text-gray-500 font-mono">
-                    {promptContent.length.toLocaleString()} chars · {promptContent.split('\n').length} lines
-                  </span>
-                )}
-              </div>
-              <div className="flex items-center gap-2">
-                {promptContent && (
-                  <button
-                    onClick={copyPromptToClipboard}
-                    className="text-xs px-2 py-1 rounded bg-port-border/40 text-gray-400 hover:text-white"
-                  >
-                    Copy
-                  </button>
-                )}
-                <button
-                  onClick={() => setPromptOpen(false)}
-                  className="text-xs px-2 py-1 rounded bg-port-border/40 text-gray-400 hover:text-white"
-                  aria-label="Close prompt viewer"
-                >
-                  Close
-                </button>
-              </div>
-            </div>
-            <div className="flex-1 overflow-auto p-4">
-              {loadingPrompt && (
-                <div className="flex items-center gap-2 text-gray-500 text-sm">
-                  <Loader2 size={14} aria-hidden="true" className="animate-spin" />
-                  Loading prompt…
-                </div>
-              )}
-              {promptError && (
-                <div className="text-port-error text-sm">{promptError}</div>
-              )}
-              {!loadingPrompt && !promptError && promptContent != null && (
-                <pre className="text-xs text-gray-300 font-mono whitespace-pre-wrap break-words">{promptContent}</pre>
-              )}
-            </div>
+      <Modal
+        open={promptOpen}
+        onClose={() => setPromptOpen(false)}
+        size="2xl"
+        usePortal
+        panelClassName="bg-port-card border border-port-border rounded-lg max-h-[80vh] flex flex-col"
+        ariaLabel="Agent prompt"
+      >
+        <div className="flex items-center justify-between px-4 py-2 border-b border-port-border shrink-0">
+          <div className="flex items-center gap-2">
+            <MessageSquare size={14} className="text-gray-400" aria-hidden="true" />
+            <span className="text-sm text-gray-300">Agent prompt</span>
+            {promptContent && (
+              <span className="text-xs text-gray-500 font-mono">
+                {promptContent.length.toLocaleString()} chars · {promptContent.split('\n').length} lines
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            {promptContent && (
+              <button
+                onClick={copyPromptToClipboard}
+                className="text-xs px-2 py-1 rounded bg-port-border/40 text-gray-400 hover:text-white"
+              >
+                Copy
+              </button>
+            )}
+            <button
+              onClick={() => setPromptOpen(false)}
+              className="text-xs px-2 py-1 rounded bg-port-border/40 text-gray-400 hover:text-white"
+              aria-label="Close prompt viewer"
+            >
+              Close
+            </button>
           </div>
         </div>
-      )}
+        <div className="flex-1 overflow-auto p-4">
+          {loadingPrompt && (
+            <div className="flex items-center gap-2 text-gray-500 text-sm">
+              <Loader2 size={14} aria-hidden="true" className="animate-spin" />
+              Loading prompt…
+            </div>
+          )}
+          {promptError && (
+            <div className="text-port-error text-sm">{promptError}</div>
+          )}
+          {!loadingPrompt && !promptError && promptContent != null && (
+            <pre className="text-xs text-gray-300 font-mono whitespace-pre-wrap break-words">{promptContent}</pre>
+          )}
+        </div>
+      </Modal>
     </div>
   );
 }
