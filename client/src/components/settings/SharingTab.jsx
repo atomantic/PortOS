@@ -13,7 +13,7 @@ export function SharingTab() {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    getSettings()
+    getSettings({ silent: true })
       .then((settings) => {
         const display = settings?.sharingDisplayName || '';
         const b = settings?.sharingBio || '';
@@ -37,6 +37,8 @@ export function SharingTab() {
     const merged = await updateSettings(patch).catch(() => null);
     setSaving(false);
     if (!merged) return;
+    setDisplayName(patch.sharingDisplayName);
+    setBio(patch.sharingBio);
     setSavedDisplayName(patch.sharingDisplayName);
     setSavedBio(patch.sharingBio);
     toast.success('Saved');
@@ -57,8 +59,9 @@ export function SharingTab() {
         </p>
         <div className="space-y-3">
           <div>
-            <label className="block text-xs uppercase tracking-wider text-gray-500 mb-1">Display name</label>
+            <label htmlFor="sharing-display-name" className="block text-xs uppercase tracking-wider text-gray-500 mb-1">Display name</label>
             <input
+              id="sharing-display-name"
               type="text"
               value={displayName}
               onChange={(e) => setDisplayName(e.target.value)}
@@ -68,8 +71,9 @@ export function SharingTab() {
             />
           </div>
           <div>
-            <label className="block text-xs uppercase tracking-wider text-gray-500 mb-1">Bio (optional)</label>
+            <label htmlFor="sharing-bio" className="block text-xs uppercase tracking-wider text-gray-500 mb-1">Bio (optional)</label>
             <textarea
+              id="sharing-bio"
               value={bio}
               onChange={(e) => setBio(e.target.value)}
               placeholder="Optional bio / contact note (visible to recipients)"

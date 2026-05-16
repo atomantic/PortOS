@@ -22,10 +22,11 @@ export const clearIgnoredVersions = () => request('/update/ignore', { method: 'D
 export const executePortosUpdate = () => request('/update/execute', { method: 'POST' });
 
 // Settings
-export const getSettings = () => request('/settings');
-export const updateSettings = (data) => request('/settings', {
+export const getSettings = (options) => request('/settings', options);
+export const updateSettings = (data, options) => request('/settings', {
   method: 'PUT',
-  body: JSON.stringify(data)
+  body: JSON.stringify(data),
+  ...options
 });
 
 // Usage
