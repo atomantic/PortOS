@@ -56,7 +56,7 @@ import {
 } from '../lib/issueLength.js';
 import { llmSchema } from './universeBuilder.js';
 import { BIBLE_KIND } from '../lib/storyBible.js';
-import { ARC_LIMITS, ARC_STATUSES, SEASON_STATUSES } from '../lib/storyArc.js';
+import { ARC_LIMITS, ARC_STATUSES, ARC_SHAPE_IDS, SEASON_STATUSES } from '../lib/storyArc.js';
 
 const router = Router();
 
@@ -117,6 +117,7 @@ const arcSchema = z.object({
   protagonistArc: z.string().trim().max(ARC_LIMITS.PROTAGONIST_ARC_MAX).optional().default(''),
   themes: z.array(z.string().trim().min(1).max(ARC_LIMITS.THEME_MAX))
     .max(ARC_LIMITS.THEMES_PER_ARC_MAX).optional(),
+  shape: z.enum(ARC_SHAPE_IDS).nullable().optional(),
   status: z.enum(ARC_STATUSES).optional(),
 });
 

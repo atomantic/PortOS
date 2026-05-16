@@ -29,6 +29,7 @@ describe('storyArc — sanitizeArc', () => {
       summary: '',
       protagonistArc: '',
       themes: [],
+      shape: null,
       status: 'draft',
     });
   });
@@ -36,6 +37,23 @@ describe('storyArc — sanitizeArc', () => {
   it('drops invalid status', () => {
     expect(sanitizeArc({ logline: 'x', status: 'bogus' }).status).toBe('draft');
     expect(sanitizeArc({ logline: 'x', status: 'verified' }).status).toBe('verified');
+  });
+
+  it('accepts allowed Vonnegut shape ids and nulls out anything else', () => {
+    expect(sanitizeArc({ logline: 'x', shape: 'cinderella' }).shape).toBe('cinderella');
+    expect(sanitizeArc({ logline: 'x', shape: 'man-in-hole' }).shape).toBe('man-in-hole');
+    expect(sanitizeArc({ logline: 'x', shape: 'not-a-real-shape' }).shape).toBe(null);
+    expect(sanitizeArc({ logline: 'x', shape: 42 }).shape).toBe(null);
+    expect(sanitizeArc({ logline: 'x' }).shape).toBe(null);
+  });
+
+  it('treats a picked shape as identifying content (explicit narrative decision)', () => {
+    const arc = sanitizeArc({ shape: 'cinderella' });
+    expect(arc).not.toBe(null);
+    expect(arc.shape).toBe('cinderella');
+    expect(arc.logline).toBe('');
+    // Invalid shape strings still fall through to "no arc"
+    expect(sanitizeArc({ shape: 'not-a-shape' })).toBe(null);
   });
 
   it('trims fields to their cap and cleans themes', () => {

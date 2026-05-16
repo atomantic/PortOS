@@ -40,6 +40,7 @@ import {
   listPipelineIssues, updatePipelineSeries,
 } from '../../services/api';
 import SeriesLlmPicker from './SeriesLlmPicker';
+import { ArcShapePicker, ArcShapeSparkline, getStoryShape } from './StoryShapes';
 
 const ISSUE_STATUS_COLORS = {
   draft: 'text-gray-400 bg-gray-700/30',
@@ -327,6 +328,11 @@ function ArcContent({ series, onSeriesUpdate }) {
           placeholder="Themes (comma-separated)"
           className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white text-sm"
         />
+        <ArcShapePicker
+          value={draft.shape || null}
+          onChange={(shape) => setDraft({ ...draft, shape })}
+          disabled={saving}
+        />
         <div className="flex items-center gap-2">
           <button
             type="button"
@@ -350,12 +356,23 @@ function ArcContent({ series, onSeriesUpdate }) {
     );
   }
 
+  const shapeDef = arc.shape ? getStoryShape(arc.shape) : null;
+
   return (
     <div className="space-y-2">
       {arc.logline ? <p className="text-sm text-white">{arc.logline}</p> : null}
-      {arc.themes?.length ? (
-        <div className="flex flex-wrap gap-1.5">
-          {arc.themes.map((t) => (
+      {(arc.themes?.length || shapeDef) ? (
+        <div className="flex flex-wrap items-center gap-1.5">
+          {shapeDef ? (
+            <span
+              className="inline-flex items-center gap-1.5 text-[10px] uppercase tracking-wider px-2 py-0.5 rounded bg-port-bg border border-port-accent/40 text-port-accent"
+              title={shapeDef.description}
+            >
+              <ArcShapeSparkline shape={shapeDef} width={48} height={16} />
+              {shapeDef.label}
+            </span>
+          ) : null}
+          {arc.themes?.map((t) => (
             <span key={t} className="text-[10px] uppercase tracking-wider px-2 py-0.5 rounded bg-port-bg border border-port-border text-gray-300">
               {t}
             </span>

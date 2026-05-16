@@ -38,6 +38,20 @@ export const ARC_LIMITS = Object.freeze({
 export const ARC_STATUSES = Object.freeze(['draft', 'verified']);
 export const SEASON_STATUSES = Object.freeze(['draft', 'verified', 'in-production', 'complete']);
 
+// Kurt Vonnegut's eight story shapes. The server only validates the id; the
+// client owns the display metadata (label, point series for the sparkline).
+// Keep this list in sync with `client/src/components/pipeline/StoryShapes.jsx`.
+export const ARC_SHAPE_IDS = Object.freeze([
+  'rags-to-riches',
+  'tragedy',
+  'man-in-hole',
+  'icarus',
+  'cinderella',
+  'oedipus',
+  'boy-meets-girl',
+  'creation-story',
+]);
+
 const SEASON_ID_PREFIX = 'sea-';
 // `id` of an existing season as written by us. Used by `sanitizeSeason` so
 // callers (route patch handlers, season service) accept either an id we
@@ -78,10 +92,13 @@ export function sanitizeArc(raw) {
   const themes = cleanThemes(raw.themes);
   // An arc with zero identifying content is indistinguishable from "no arc"
   // — store null so the UI can render the empty state instead of a blank
-  // expanded panel. This also keeps the JSON tighter on disk.
-  if (!logline && !summary && !protagonistArc && themes.length === 0) return null;
+  // expanded panel. This also keeps the JSON tighter on disk. A picked
+  // `shape` counts as identifying content: it's an explicit narrative
+  // decision the user made at create time and shouldn't silently vanish.
+  const shape = isStr(raw.shape) && ARC_SHAPE_IDS.includes(raw.shape) ? raw.shape : null;
+  if (!logline && !summary && !protagonistArc && themes.length === 0 && !shape) return null;
   const status = ARC_STATUSES.includes(raw.status) ? raw.status : 'draft';
-  return { logline, summary, protagonistArc, themes, status };
+  return { logline, summary, protagonistArc, themes, shape, status };
 }
 
 /**

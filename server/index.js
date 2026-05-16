@@ -8,6 +8,7 @@ import { existsSync } from 'fs';
 import { readFile, unlink } from 'fs/promises';
 import { createTailscaleServers } from '../lib/tailscale-https.js';
 import { getSelfHost } from './lib/peerSelfHost.js';
+import { getBuildId, getStampedIndexHtml } from './lib/buildId.js';
 
 import alertsRoutes from './routes/alerts.js';
 import appleHealthRoutes from './routes/appleHealth.js';
@@ -476,17 +477,27 @@ app.use('/data/video-thumbnails', express.static(PATHS.videoThumbnails));
 // Serve built client UI (production mode — no Vite dev server needed)
 const CLIENT_DIST = join(__dirname, '..', 'client', 'dist');
 if (existsSync(CLIENT_DIST)) {
-  app.use(express.static(CLIENT_DIST));
+  // `index: false` keeps express.static from short-circuiting `/` (and any
+  // bare directory) with the raw index.html — that path needs to flow through
+  // the splat handler below so the meta-tag injection runs.
+  app.use(express.static(CLIENT_DIST, { index: false }));
   // SPA fallback: serve index.html for page navigations only
   // Skip asset requests (.js, .css, etc.) so stale chunk requests get a proper 404
-  // instead of index.html with text/html MIME type
+  // instead of index.html with text/html MIME type. We serve the stamped HTML
+  // string (with <meta name="portos-build-id"> injected) instead of sendFile
+  // so the bundled JS can read its own build id at boot.
+  const stampedIndexHtml = getStampedIndexHtml();
   app.get('/{*splat}', (req, res, next) => {
     if (req.path.match(/\.\w+$/) && !req.path.endsWith('.html')) {
       return next();
     }
-    res.sendFile(join(CLIENT_DIST, 'index.html'));
+    if (stampedIndexHtml) {
+      res.type('html').send(stampedIndexHtml);
+    } else {
+      res.sendFile(join(CLIENT_DIST, 'index.html'));
+    }
   });
-  console.log(`📦 Serving built UI from client/dist`);
+  console.log(`📦 Serving built UI from client/dist (build ${getBuildId()})`);
 }
 
 // 404 handler (API routes that didn't match)

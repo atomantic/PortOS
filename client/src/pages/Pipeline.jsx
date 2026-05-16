@@ -22,6 +22,7 @@ import {
   WORLD_PREMISE_MAX,
   WORLD_STYLE_NOTES_MAX,
 } from '../services/api';
+import { ArcShapePicker, ArcShapeSparkline, getStoryShape } from '../components/pipeline/StoryShapes';
 
 const emptyForm = () => ({
   name: '',
@@ -29,6 +30,8 @@ const emptyForm = () => ({
   logline: '',
   premise: '',
   styleNotes: '',
+  shape: null,
+  issueCountTarget: '',
 });
 
 export default function Pipeline() {
@@ -86,12 +89,15 @@ export default function Pipeline() {
       return;
     }
     setCreating(true);
+    const target = parseInt(form.issueCountTarget, 10);
     const created = await createPipelineSeries({
       name,
       logline: form.logline.trim(),
       premise: form.premise.trim(),
       styleNotes: form.styleNotes.trim(),
       universeId: form.universeId || undefined,
+      issueCountTarget: Number.isFinite(target) && target > 0 ? target : undefined,
+      arc: form.shape ? { shape: form.shape } : undefined,
     }).catch((err) => {
       toast.error(err.message || 'Failed to create series');
       return null;
@@ -128,7 +134,7 @@ export default function Pipeline() {
       <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
         <div className="flex items-center gap-3">
           <WorkflowIcon className="w-6 h-6 text-port-accent" />
-          <h1 className="text-2xl font-bold text-white">Series</h1>
+          <h1 className="text-2xl font-bold text-white">Series Pipeline</h1>
         </div>
         <button
           type="button"
@@ -202,6 +208,30 @@ export default function Pipeline() {
               maxLength={WORLD_LOGLINE_MAX}
             />
           </div>
+          <div className="grid grid-cols-1 sm:grid-cols-[1fr_180px] gap-3 items-start">
+            <ArcShapePicker
+              value={form.shape}
+              onChange={(shape) => setForm((f) => ({ ...f, shape }))}
+            />
+            <div>
+              <label htmlFor="series-issue-count" className="block text-[10px] uppercase tracking-wider text-gray-500 mb-1.5">
+                Story size (issues / episodes)
+              </label>
+              <input
+                id="series-issue-count"
+                type="number"
+                value={form.issueCountTarget}
+                onChange={(e) => setForm((f) => ({ ...f, issueCountTarget: e.target.value }))}
+                placeholder="e.g. 12"
+                min={0}
+                max={999}
+                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
+              />
+              <p className="text-[11px] text-gray-500 mt-1">
+                Target count across the whole arc — guides issue/episode planning.
+              </p>
+            </div>
+          </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div>
               <label htmlFor="series-premise" className="block text-xs uppercase tracking-wider text-gray-500 mb-1">
@@ -258,17 +288,28 @@ export default function Pipeline() {
         <div className="text-gray-500 text-sm">No series yet. Click <span className="text-port-accent">New Series</span> to start.</div>
       ) : (
         <ul className="space-y-2">
-          {series.map((s) => (
-            <li key={s.id} className="flex items-center justify-between gap-3 p-3 bg-port-card border border-port-border rounded-lg hover:border-port-accent/40 transition-colors">
+          {series.map((s) => {
+            const shapeDef = s.arc?.shape ? getStoryShape(s.arc.shape) : null;
+            return (
+            <li key={s.id} className="flex items-start justify-between gap-3 p-3 bg-port-card border border-port-border rounded-lg hover:border-port-accent/40 transition-colors">
               <Link to={`/pipeline/series/${s.id}`} className="flex-1 min-w-0">
-                <div className="text-white font-medium truncate flex items-center gap-2">
-                  <span className="truncate">{s.name}</span>
+                <div className="text-white font-medium flex items-center gap-2 flex-wrap">
+                  <span>{s.name}</span>
                   {s.origin ? <OriginBadge origin={s.origin} compact /> : null}
+                  {shapeDef ? (
+                    <span
+                      className="inline-flex items-center gap-1.5 text-[10px] uppercase tracking-wider px-2 py-0.5 rounded bg-port-bg border border-port-accent/40 text-port-accent"
+                      title={shapeDef.description}
+                    >
+                      <ArcShapeSparkline shape={shapeDef} width={40} height={14} />
+                      {shapeDef.label}
+                    </span>
+                  ) : null}
                 </div>
                 {s.logline ? (
-                  <div className="text-xs text-gray-500 truncate">{s.logline}</div>
+                  <div className="text-xs text-gray-500 mt-1 whitespace-pre-wrap break-words">{s.logline}</div>
                 ) : (
-                  <div className="text-xs text-gray-600 italic">No logline yet</div>
+                  <div className="text-xs text-gray-600 italic mt-1">No logline yet</div>
                 )}
                 {s.issueCountTarget ? (
                   <div className="text-xs text-gray-600 mt-1">
@@ -287,7 +328,8 @@ export default function Pipeline() {
                 <Trash2 size={16} />
               </button>
             </li>
-          ))}
+            );
+          })}
         </ul>
       )}
     </div>

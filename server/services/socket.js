@@ -40,6 +40,7 @@ import * as appsService from './apps.js';
 import * as appUpdater from './appUpdater.js';
 import * as appDeployer from './appDeployer.js';
 import { registerVoiceHandlers } from '../sockets/voice.js';
+import { getBuildId } from '../lib/buildId.js';
 
 // Store active log streams per socket
 const activeStreams = new Map();
@@ -82,6 +83,12 @@ export function initSocket(io) {
   io.on('connection', (socket) => {
     console.log(`🔌 Client connected: ${socket.id}`);
     registerVoiceHandlers(socket);
+
+    // Tell the client what build the server is on. The client compares this
+    // to its own embedded <meta name="portos-build-id"> value; a mismatch
+    // means the tab is running stale code against a freshly-rebuilt server
+    // and the user is offered a reload.
+    socket.emit('build:id', { buildId: getBuildId() });
 
     // Handle streaming app detection
     socket.on('detect:start', async (rawData) => {

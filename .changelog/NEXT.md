@@ -2,6 +2,50 @@
 
 ## Added
 
+- **Series Pipeline — Vonnegut story-shape picker + sparkline visualization.**
+  Series records can now carry an explicit narrative-shape decision drawn from
+  Kurt Vonnegut's eight story shapes (Rags to Riches, Tragedy, Man in Hole,
+  Icarus, Cinderella, Oedipus, Boy Meets Girl, Creation Story). New
+  `series.arc.shape` field; each shape has a label, one-line description, and
+  a normalized 7-point [-1, 1] series that drives a small inline SVG sparkline.
+  Picker is a 2×4 grid of toggle chips; re-clicking the selected shape clears
+  it back to none. Rendered both inline in the create-series form (new row
+  alongside the new `Story size` issue/episode-count input — both fields
+  thread into the create payload, falling through to server defaults when
+  empty) and on the arc-canvas header + edit form for existing series. Each
+  series card on the Series Pipeline index shows the shape as a small chip
+  next to the name when set. **Files:** new `client/src/components/pipeline/StoryShapes.jsx`
+  (display metadata + `ArcShapeSparkline` + `ArcShapePicker`), new
+  `ARC_SHAPE_IDS` export in `server/lib/storyArc.js`, `shape` field on the
+  arc sanitizer (treated as identifying content — a "shape only" arc survives
+  so an explicit narrative-design choice at create time isn't silently
+  dropped), schema parity in `server/routes/pipeline.js` (`arcSchema.shape`),
+  and arc-resolve LLM merge preserves shape across LLM rewrites
+  (`server/services/pipeline/arcPlanner.js`).
+
+- **Stale-build detection — Socket.IO `build:id` event + Vite preload-error catch.**
+  The "Failed to fetch dynamically imported module" red error screen after a
+  server restart now self-resolves without user action. Two layers:
+  - **Build-ID broadcast.** `server/lib/buildId.js` hashes `client/dist/index.html`
+    once at boot (the file changes every Vite build because it embeds the
+    bundle-hash filenames), injects `<meta name="portos-build-id" content="…">`
+    into the served HTML, and exposes `getBuildId()` to the socket service.
+    `express.static(CLIENT_DIST, { index: false })` so `/` flows through the
+    SPA-fallback handler (which serves the stamped HTML) instead of being
+    short-circuited by static. `initSocket` emits `build:id` on every connect.
+    Client reads its embedded build id from the meta tag and on mismatch shows
+    a sticky toast ("New build available. [Reload]") with a manual reload
+    button — protects unsaved input. JSX-bearing toast extracted to
+    `staleBuildToast.jsx` so `socket.js` stays JS.
+  - **`vite:preloadError` listener in main.jsx.** Catches the chunk-preload
+    404 *before* it propagates to React's error boundary, falls through to
+    `reloadOnceForStaleChunk()`. Anti-loop guard now keys its sessionStorage
+    flag on the build id (was a single session-wide one-shot, which left the
+    user stranded on the error screen after a second rebuild — a fresh build
+    now gets a fresh reload attempt). Same handler also runs on
+    `unhandledrejection` so a stale-chunk rejection outside React's tree is
+    caught too.
+
 - **Comic Pages — rendered filename persisted on the record (survives queue TTL).**
   Comic-page records previously stored only `imageJobId`. After the
   mediaJobQueue's 24-hour archive TTL, the UI could no longer resolve
@@ -675,6 +719,17 @@
   stage id. Historical references in `DONE.md`, prior changelog
   versions, `data/migrations/003-*.js`, and `data/runs/*/metadata.json`
   left as-is (record of past work, not current state).
+
+- **Series Pipeline index — renamed + cards wrap + shape visible.** The
+  `/pipeline` page is now titled **Series Pipeline** (matching the URL's
+  intent — the page lists series in a pipeline, not just a generic
+  "Pipeline"); sidebar label + nav-manifest label updated in lockstep
+  (existing `pipeline` / `series` / `series-pipeline` aliases keep ⌘K and
+  voice navigation working). Series rows no longer truncate — name uses
+  `flex-wrap` so the shape chip can sit beside it, and the logline wraps
+  with `whitespace-pre-wrap break-words` for full-length descriptions. Each
+  card with `series.arc.shape` set renders an inline shape badge (40×14
+  sparkline + uppercase label) next to the series name.
 
 - **Sidebar nav: "Pipeline" → "Series".** Label change only — URLs,
   files, server routes, and API endpoints all retain the `pipeline`

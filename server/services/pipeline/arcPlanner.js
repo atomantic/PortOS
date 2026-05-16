@@ -525,6 +525,7 @@ export async function resolveVerifyIssues(seriesId, options = {}) {
     summary: content?.arc?.summary || series.arc.summary || '',
     themes: content?.arc?.themes ?? series.arc.themes,
     protagonistArc: content?.arc?.protagonistArc ?? series.arc.protagonistArc ?? '',
+    shape: content?.arc?.shape ?? series.arc.shape ?? null,
     status: 'draft',
   });
 
