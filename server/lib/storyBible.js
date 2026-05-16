@@ -73,6 +73,25 @@ export const BIBLE_KIND = Object.freeze({
   OBJECT: 'object',
 });
 
+// Enums for the location-classification fields on Setting canon entries.
+// Mirrors AnyFilm's INT/EXT + time-of-day taxonomy so generated panels and
+// scene starts inherit lighting/composition cues for free.
+export const SETTING_INT_EXT = Object.freeze(['INT', 'EXT']);
+export const SETTING_TIME_OF_DAY = Object.freeze(['dawn', 'day', 'dusk', 'night']);
+const SETTING_INT_EXT_SET = new Set(SETTING_INT_EXT);
+const SETTING_TIME_OF_DAY_SET = new Set(SETTING_TIME_OF_DAY);
+
+const trimEnum = (raw, allowed) => {
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const upper = trimmed.toUpperCase();
+  if (allowed.has(upper)) return upper;
+  const lower = trimmed.toLowerCase();
+  if (allowed.has(lower)) return lower;
+  return null;
+};
+
 // Canonical pluralization: pipeline series.<field>, evaluator analysis kind,
 // extractor LLM envelope key — all the same string, consolidated here.
 export const BIBLE_FIELD = Object.freeze({
@@ -95,7 +114,7 @@ export const BIBLE_KINDS = Object.freeze(Object.values(BIBLE_KIND));
 // stage's bibles context (evaluator). Excludes ids/timestamps/source/notes.
 export const PROMPT_FIELDS = Object.freeze({
   [BIBLE_KIND.CHARACTER]: ['name', 'aliases', 'role', 'physicalDescription', 'personality', 'background', 'voiceId', 'prompt', 'tags'],
-  [BIBLE_KIND.SETTING]: ['name', 'slugline', 'description', 'palette', 'era', 'weather', 'recurringDetails', 'prompt', 'tags'],
+  [BIBLE_KIND.SETTING]: ['name', 'slugline', 'description', 'palette', 'era', 'weather', 'intExt', 'timeOfDay', 'recurringDetails', 'prompt', 'tags'],
   [BIBLE_KIND.OBJECT]: ['name', 'aliases', 'description', 'significance', 'prompt', 'tags'],
 });
 
@@ -222,6 +241,11 @@ export function sanitizeSetting(raw, { idPrefix = DEFAULT_ID_PREFIX.setting, pre
     palette: trimTo(raw.palette, BIBLE_LIMITS.PALETTE_MAX),
     era: trimTo(raw.era, BIBLE_LIMITS.ERA_MAX),
     weather: trimTo(raw.weather, BIBLE_LIMITS.WEATHER_MAX),
+    // INT/EXT + time-of-day enums (Cluster A). null when unset — scene-prompt
+    // composer skips the metadata fragment in that case so legacy settings
+    // keep rendering with description-only prompts.
+    intExt: trimEnum(raw.intExt, SETTING_INT_EXT_SET),
+    timeOfDay: trimEnum(raw.timeOfDay, SETTING_TIME_OF_DAY_SET),
     recurringDetails: trimTo(raw.recurringDetails, BIBLE_LIMITS.RECURRING_DETAILS_MAX),
     notes: trimTo(raw.notes, BIBLE_LIMITS.NOTES_MAX),
     imageRefs: cleanStringArray(raw.imageRefs, BIBLE_LIMITS.IMAGE_REF_MAX, BIBLE_LIMITS.IMAGE_REFS_PER_ENTRY_MAX),
@@ -298,7 +322,7 @@ const MERGE_CONFIG = Object.freeze({
     ],
   },
   setting: {
-    userEditable: ['description', 'palette', 'era', 'weather', 'recurringDetails'],
+    userEditable: ['description', 'palette', 'era', 'weather', 'intExt', 'timeOfDay', 'recurringDetails'],
     keyFields: [
       { field: 'slugline', normalize: normalizeSlugline },
       { field: 'name', normalize: normalizeSlugline },

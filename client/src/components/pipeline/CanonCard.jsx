@@ -12,6 +12,46 @@ import { Loader2, ImagePlus, WandSparkles, Lock, Unlock } from 'lucide-react';
 import useMediaJobProgress from '../../hooks/useMediaJobProgress';
 import MediaJobThumb from './MediaJobThumb';
 
+// Setting metadata enums — kept in lock-step with `SETTING_INT_EXT` and
+// `SETTING_TIME_OF_DAY` in `server/lib/storyBible.js`. Mirror is fine: a
+// drift would surface immediately as a Zod 400 on the next save.
+const INT_EXT_OPTIONS = ['INT', 'EXT'];
+const TIME_OF_DAY_OPTIONS = ['dawn', 'day', 'dusk', 'night'];
+
+function ChipPicker({ label, value, options, onChange }) {
+  return (
+    <div className="flex items-center gap-1">
+      <span className="text-[10px] uppercase tracking-wider text-gray-500">{label}:</span>
+      {options.map((opt) => {
+        const active = value === opt;
+        return (
+          <button
+            key={opt}
+            type="button"
+            onClick={() => onChange(active ? null : opt)}
+            className={`px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wider border ${
+              active
+                ? 'bg-port-accent/20 border-port-accent text-port-accent'
+                : 'border-port-border text-gray-400 hover:text-white hover:border-gray-500'
+            }`}
+            title={active ? `Clear ${label}` : `Set ${label} to ${opt}`}
+          >
+            {opt}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function ReadonlyChip({ children }) {
+  return (
+    <span className="px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wider bg-port-card border border-port-border text-gray-400">
+      {children}
+    </span>
+  );
+}
+
 export default function CanonCard({
   kind, entry,
   inFlightJobId,
@@ -24,6 +64,9 @@ export default function CanonCard({
   // unlockable-only at the universe level. Called with `(entryId, nextLocked)`.
   onToggleLock = null,
   togglingLock = false,
+  // Optional — when provided + kind is settings, surfaces inline chip pickers
+  // for `intExt` / `timeOfDay`. Called with `(entryId, { intExt?, timeOfDay? })`.
+  onPatchEntry = null,
 }) {
   const description = kind.descFor(entry);
   const refs = Array.isArray(entry.imageRefs) ? entry.imageRefs : [];
@@ -89,6 +132,27 @@ export default function CanonCard({
           <p className="text-xs text-gray-400 mt-1 line-clamp-3 whitespace-pre-wrap">
             {description || <em className="text-gray-600">No description yet.</em>}
           </p>
+          {kind.key === 'settings' && onPatchEntry && !locked ? (
+            <div className="flex flex-wrap items-center gap-2 mt-2">
+              <ChipPicker
+                label="INT/EXT"
+                value={entry.intExt}
+                options={INT_EXT_OPTIONS}
+                onChange={(v) => onPatchEntry(entry.id, { intExt: v })}
+              />
+              <ChipPicker
+                label="Time"
+                value={entry.timeOfDay}
+                options={TIME_OF_DAY_OPTIONS}
+                onChange={(v) => onPatchEntry(entry.id, { timeOfDay: v })}
+              />
+            </div>
+          ) : kind.key === 'settings' && (entry.intExt || entry.timeOfDay) ? (
+            <div className="flex flex-wrap items-center gap-1 mt-2">
+              {entry.intExt ? <ReadonlyChip>{entry.intExt}</ReadonlyChip> : null}
+              {entry.timeOfDay ? <ReadonlyChip>{entry.timeOfDay}</ReadonlyChip> : null}
+            </div>
+          ) : null}
         </div>
         <div className="shrink-0 flex flex-col gap-1 items-stretch">
           {onToggleLock ? (

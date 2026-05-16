@@ -142,6 +142,8 @@ const SHIPPED_PROMPT_OLD_MD5 = {
   'pipeline-arc-resolve.md':     '87bc5c01f1a8a97b681727a38b05edc6',
   // Shot decomposition additions (migration 006).
   'pipeline-extract-scenes.md':  '59fa5ee305ce53d91eb15224d8b546d3',
+  // INT/EXT + time-of-day additions to the places extractor (migration 007).
+  'writers-room-places.md':      '7f1f80eb63d67a21161994cde115045e',
 };
 const SHIPPED_PROMPT_NEW_MD5 = {
   'pipeline-idea-expansion.md': '1ee44cf95851ff8debf18729ebcd40b4',
@@ -154,6 +156,7 @@ const SHIPPED_PROMPT_NEW_MD5 = {
   'pipeline-volume-verify.md':  '03f3c874cb80e1c98abcf03168fa7a92',
   'pipeline-arc-resolve.md':    'a8677bbe1eb38f871fb152a5b0fec7c6',
   'pipeline-extract-scenes.md': 'c51fb208568d0d903eb43b437478b0ba',
+  'writers-room-places.md':     '24a33628cc94d80fa5ca60831d973daf',
 };
 const SHIPPED_PROMPT_FILES = Object.keys(SHIPPED_PROMPT_OLD_MD5);
 

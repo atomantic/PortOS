@@ -114,6 +114,36 @@ describe('scenePrompt — buildScenePrompt', () => {
       .toBeLessThan(out.indexOf('wide shot of two figures'));
   });
 
+  it('prepends INT/EXT + time-of-day before the setting description (Cluster A)', () => {
+    const out = buildScenePrompt(
+      '',
+      baseScene,
+      [],
+      '',
+      { description: 'cramped chrome bar', intExt: 'INT', timeOfDay: 'night' },
+    );
+    expect(out).toContain('Interior, night.');
+    expect(out.indexOf('Interior, night.'))
+      .toBeLessThan(out.indexOf('cramped chrome bar'));
+  });
+
+  it('honors only one of intExt / timeOfDay if the other is null', () => {
+    const intOnly = buildScenePrompt('', baseScene, [], '', { description: 'bar', intExt: 'EXT', timeOfDay: null });
+    expect(intOnly).toContain('Exterior.');
+    expect(intOnly).not.toContain(',');
+
+    const todOnly = buildScenePrompt('', baseScene, [], '', { description: 'bar', intExt: null, timeOfDay: 'dawn' });
+    expect(todOnly).toContain('dawn.');
+    expect(todOnly).not.toContain('Interior');
+    expect(todOnly).not.toContain('Exterior');
+  });
+
+  it('emits no metadata fragment when both fields are missing (legacy settings)', () => {
+    const out = buildScenePrompt('', baseScene, [], '', { description: 'bar' });
+    expect(out).not.toContain('Interior');
+    expect(out).not.toContain('Exterior');
+  });
+
   it('accepts pipeline-flavored characters (description in lieu of physicalDescription)', () => {
     const out = buildScenePrompt(
       'Series',

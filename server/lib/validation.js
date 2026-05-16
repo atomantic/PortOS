@@ -664,6 +664,16 @@ const writersRoomSettingCreateObject = z.object({
   weather: wrSettingTextField.optional(),
   recurringDetails: wrSettingTextField.optional(),
   notes: wrSettingTextField.optional(),
+  // Cluster A — INT/EXT + time-of-day taxonomy. Case-insensitive accept
+  // mirrors the sanitizer (`INT`/`int` both normalize to `INT`).
+  intExt: z.preprocess(
+    (v) => (typeof v === 'string' ? v.trim().toUpperCase() : v),
+    z.enum(['INT', 'EXT']),
+  ).nullable().optional(),
+  timeOfDay: z.preprocess(
+    (v) => (typeof v === 'string' ? v.trim().toLowerCase() : v),
+    z.enum(['dawn', 'day', 'dusk', 'night']),
+  ).nullable().optional(),
 }).strict();
 const settingHasIdentifier = (v) =>
   (v.name && v.name.trim()) || (v.slugline && v.slugline.trim());
@@ -680,6 +690,16 @@ export const writersRoomSettingUpdateSchema = z.object({
   weather: wrSettingTextField.optional(),
   recurringDetails: wrSettingTextField.optional(),
   notes: wrSettingTextField.optional(),
+  // Cluster A — INT/EXT + time-of-day taxonomy. Case-insensitive accept
+  // mirrors the sanitizer (`INT`/`int` both normalize to `INT`).
+  intExt: z.preprocess(
+    (v) => (typeof v === 'string' ? v.trim().toUpperCase() : v),
+    z.enum(['INT', 'EXT']),
+  ).nullable().optional(),
+  timeOfDay: z.preprocess(
+    (v) => (typeof v === 'string' ? v.trim().toLowerCase() : v),
+    z.enum(['dawn', 'day', 'dusk', 'night']),
+  ).nullable().optional(),
 }).strict();
 
 const wrObjectTextField = z.string().max(2000);

@@ -34,6 +34,8 @@ For every distinct *location* the prose stages a scene in (interior or exterior)
    - `era` — short tag (`near-future`, `1950s noir`, `present day`, `Victorian`). One phrase. Skip if the prose is ambiguous.
    - `weather` — recurring atmospheric conditions inside this place (`muggy curry-steam`, `dust motes in shafts of sun`, `permanent drizzle out the window`). Skip if the prose doesn't establish one.
    - `recurringDetails` — 1–2 sentences listing distinctive props or fixtures the prose returns to (`three tiny tables and standing room only`, `a dead jukebox in the corner`). These are the visual anchors that keep scenes in the same place looking the same.
+   - `intExt` — `"INT"` for interiors, `"EXT"` for exteriors. Drives lighting + composition cues in downstream renders. Omit only if the prose genuinely doesn't settle one way (rare).
+   - `timeOfDay` — one of `"dawn"`, `"day"`, `"dusk"`, `"night"` when the prose stages the place at a consistent time. Skip if the location appears across multiple times of day without a dominant.
    - `firstAppearance` — short quote (≤ 120 chars) from the prose where the location first shows up, or null if not clear.
    - `evidence` — array of 1–3 short verbatim quotes (≤ 120 chars each) from the prose that support the description specifically.
 
@@ -62,6 +64,8 @@ Return ONLY valid JSON matching this shape — no prose, no markdown fence, no c
       "era": "string",
       "weather": "string",
       "recurringDetails": "string",
+      "intExt": "INT or EXT or null",
+      "timeOfDay": "dawn or day or dusk or night or null",
       "firstAppearance": "string or null",
       "evidence": ["string", ...],
       "missingFromProse": ["palette", "weather", ...]

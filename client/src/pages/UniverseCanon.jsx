@@ -237,6 +237,21 @@ export default function UniverseCanon() {
     if (errMsg) toast.error(`Render failed: ${errMsg}`);
   }, []);
 
+  // Inline-edit channel for canon fields the user types/picks directly
+  // (today: setting intExt + timeOfDay chips). Optimistic — UI updates
+  // before the server roundtrip so chip clicks feel instant.
+  const handlePatchEntry = useCallback(async (kind, entryId, patch) => {
+    if (!universe || !patch || typeof patch !== 'object') return;
+    const kindKey = kind.key;
+    const list = (universe[kindKey] || []).map((e) =>
+      e.id === entryId ? { ...e, ...patch } : e
+    );
+    setUniverse((prev) => prev ? { ...prev, [kindKey]: list } : prev);
+    const updated = await updateUniverse(universeId, { [kindKey]: list })
+      .catch((err) => { toast.error(`Save failed: ${err.message}`); return null; });
+    if (updated && mountedRef.current) setUniverse(updated);
+  }, [universe, universeId, mountedRef]);
+
   if (loadErr) return <div className="p-4 text-port-error">{loadErr}</div>;
   if (!universe) return <div className="p-4 text-gray-500 italic">Loading universe…</div>;
 
@@ -329,6 +344,7 @@ export default function UniverseCanon() {
           refiningId={refiningId}
           onToggleLock={(entryId, nextLocked) => handleToggleLock(kind, entryId, nextLocked)}
           togglingLockId={togglingLockId}
+          onPatchEntry={(entryId, patch) => handlePatchEntry(kind, entryId, patch)}
         />
       ))}
 
@@ -337,7 +353,7 @@ export default function UniverseCanon() {
   );
 }
 
-function KindSection({ kind, all, usage, renderingJobs, onRender, onJobCompleted, onJobFailed, onPreview, onRefine, refiningId, onToggleLock, togglingLockId }) {
+function KindSection({ kind, all, usage, renderingJobs, onRender, onJobCompleted, onJobFailed, onPreview, onRefine, refiningId, onToggleLock, togglingLockId, onPatchEntry }) {
   const Icon = kind.icon;
   return (
     <section className="rounded-lg border border-port-border bg-port-card/40">
@@ -367,6 +383,7 @@ function KindSection({ kind, all, usage, renderingJobs, onRender, onJobCompleted
                 usage={usage?.[entry.id] || null}
                 onToggleLock={onToggleLock}
                 togglingLock={togglingLockId === entry.id}
+                onPatchEntry={onPatchEntry}
               />
             ))}
           </ul>

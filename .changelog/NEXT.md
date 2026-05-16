@@ -2,6 +2,32 @@
 
 ## Added
 
+- **Setting canon: INT/EXT + time-of-day metadata (Cluster A).** Every entry
+  under `universe.settings[]` gains two new optional fields — `intExt`
+  (`'INT'`/`'EXT'`/null) and `timeOfDay` (`'dawn'`/`'day'`/`'dusk'`/`'night'`
+  /null) — that flow through the scene-prompt composer ahead of the description
+  fragment so downstream image-gen calls inherit lighting / composition cues
+  for free. Sanitizer normalizes case (`int` → `INT`); invalid values fall
+  through to null without throwing, so legacy settings keep rendering. The
+  scene-prompt builder prepends `Interior, night.` (or whichever subset is
+  set) ahead of the existing description / palette / recurring-details
+  fragments. Universe Canon + Nouns stage cards surface the new fields as
+  inline chip pickers (single-click to set, click again to clear) that PATCH
+  via the existing `updateUniverse` write path; reads stay through optimistic
+  state so chips feel instant. The places-extraction LLM prompt asks for
+  the two new fields in its JSON contract, with an idempotent migration
+  (`007-places-int-ext-time-of-day.js`) auto-updating un-customized
+  installs. Touches: `server/lib/storyBible.js` (sanitizer + enum
+  normalizer + `SETTING_INT_EXT` / `SETTING_TIME_OF_DAY` exports +
+  `PROMPT_FIELDS` + `MERGE_CONFIG.userEditable`),
+  `server/lib/validation.js` (Zod parity with case-insensitive preprocessing),
+  `server/lib/scenePrompt.js` + `client/src/lib/scenePrompt.js` (composer
+  metadata fragment), `client/src/components/pipeline/CanonCard.jsx`
+  (chip pickers + read-only chips), `client/src/pages/UniverseCanon.jsx`,
+  `client/src/components/pipeline/stages/NounsStage.jsx` (optimistic
+  PATCH wiring), `data.sample/prompts/stages/writers-room-places.md`,
+  `data/migrations/007-places-int-ext-time-of-day.js`, `scripts/setup-data.js`.
+
 - **Pipeline audio stage: music bed muxed into the episode video (Phase 4d).**
   When the Creative Director stitch step finishes the timeline render, a
   second ffmpeg pass overlays the issue's `stages.audio.music.trackFilename`

@@ -265,6 +265,21 @@ export default function NounsStage({ issue, series }) {
     if (updated && mountedRef.current) setUniverse(updated);
   }, [universe, mountedRef]);
 
+  // Inline-edit channel for canon fields the user picks directly (today:
+  // setting intExt + timeOfDay chips). Optimistic — UI updates before the
+  // server roundtrip so chip clicks feel instant.
+  const handlePatchEntry = useCallback(async (kind, entryId, patch) => {
+    if (!universe || !patch || typeof patch !== 'object') return;
+    const kindKey = kind.key;
+    const list = (universe[kindKey] || []).map((e) =>
+      e.id === entryId ? { ...e, ...patch } : e,
+    );
+    setUniverse((prev) => prev ? { ...prev, [kindKey]: list } : prev);
+    const updated = await updateUniverse(universe.id, { [kindKey]: list })
+      .catch((err) => { toast.error(`Save failed: ${err.message}`); return null; });
+    if (updated && mountedRef.current) setUniverse(updated);
+  }, [universe, mountedRef]);
+
   const handleRefFailed = useCallback((entryId, errMsg) => {
     setRenderingJobs((prev) => {
       if (!prev[entryId]) return prev;
@@ -350,6 +365,7 @@ export default function NounsStage({ issue, series }) {
           onPreview={openPreview}
           onRefine={handleRefineCharacter}
           refiningCharacterId={refiningCharacterId}
+          onPatchEntry={(entryId, patch) => handlePatchEntry(kind, entryId, patch)}
         />
       ))}
 
@@ -367,7 +383,7 @@ export default function NounsStage({ issue, series }) {
   );
 }
 
-function KindSection({ kind, all, prose, renderingJobs, onRender, onJobCompleted, onJobFailed, onPreview, onRefine, refiningCharacterId }) {
+function KindSection({ kind, all, prose, renderingJobs, onRender, onJobCompleted, onJobFailed, onPreview, onRefine, refiningCharacterId, onPatchEntry }) {
   const Icon = kind.icon;
   const inIssue = useMemo(() => kind.match(prose, all), [prose, all, kind]);
   const inIssueIds = useMemo(() => new Set(inIssue.map((e) => e.id || e.name)), [inIssue]);
@@ -411,6 +427,7 @@ function KindSection({ kind, all, prose, renderingJobs, onRender, onJobCompleted
                   onRefine={onRefine}
                   refining={refiningCharacterId === entry.id}
                   refineDisabled={!!refiningCharacterId && refiningCharacterId !== entry.id}
+                  onPatchEntry={onPatchEntry}
                 />
               ))}
             </ul>
@@ -437,6 +454,7 @@ function KindSection({ kind, all, prose, renderingJobs, onRender, onJobCompleted
                   onRefine={onRefine}
                   refining={refiningCharacterId === entry.id}
                   refineDisabled={!!refiningCharacterId && refiningCharacterId !== entry.id}
+                  onPatchEntry={onPatchEntry}
                 />
               ))}
             </ul>

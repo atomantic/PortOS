@@ -89,7 +89,17 @@ export function buildScenePrompt(workTitle, scene, matchedCharacters, worldStyle
   const titlePart = workTitle ? `${workTitle}. ` : '';
   const visual = scene?.visualPrompt || scene?.description || '';
 
+  const intExtPart = matchedSetting?.intExt === 'INT'
+    ? 'Interior'
+    : matchedSetting?.intExt === 'EXT'
+      ? 'Exterior'
+      : '';
+  const todPart = typeof matchedSetting?.timeOfDay === 'string' && matchedSetting.timeOfDay
+    ? matchedSetting.timeOfDay
+    : '';
+  const settingMetaFrag = [intExtPart, todPart].filter(Boolean).join(', ');
   const settingFrags = matchedSetting ? [
+    settingMetaFrag ? `${settingMetaFrag}.` : '',
     matchedSetting.description?.trim() || '',
     matchedSetting.palette ? `Palette: ${matchedSetting.palette.trim()}.` : '',
     matchedSetting.recurringDetails?.trim() || '',

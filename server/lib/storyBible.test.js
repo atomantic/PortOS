@@ -171,6 +171,32 @@ describe('storyBible — sanitizeSetting', () => {
     expect(out.palette).toBe('amber, neon-red');
     expect(out.evidence).toEqual(['ch1: opens here']);
   });
+
+  describe('intExt + timeOfDay (Cluster A)', () => {
+    it('persists valid enums', () => {
+      const out = sanitizeSetting({ name: 'Bar', intExt: 'INT', timeOfDay: 'night' });
+      expect(out.intExt).toBe('INT');
+      expect(out.timeOfDay).toBe('night');
+    });
+
+    it('normalizes case on both fields', () => {
+      const out = sanitizeSetting({ name: 'Bar', intExt: 'ext', timeOfDay: 'DUSK' });
+      expect(out.intExt).toBe('EXT');
+      expect(out.timeOfDay).toBe('dusk');
+    });
+
+    it('drops invalid enum values to null instead of throwing', () => {
+      const out = sanitizeSetting({ name: 'Bar', intExt: 'underwater', timeOfDay: 'midnight-snack' });
+      expect(out.intExt).toBeNull();
+      expect(out.timeOfDay).toBeNull();
+    });
+
+    it('treats missing/empty as null (legacy settings)', () => {
+      const out = sanitizeSetting({ name: 'Bar' });
+      expect(out.intExt).toBeNull();
+      expect(out.timeOfDay).toBeNull();
+    });
+  });
 });
 
 describe('storyBible — sanitizeObject', () => {
