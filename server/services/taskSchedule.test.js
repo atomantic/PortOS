@@ -447,11 +447,20 @@ describe('taskSchedule', () => {
         }
       })
       // do-replan is enabled globally but disabled for app-1; feature-ideas is enabled for app-1
+      const originalIsTaskTypeEnabledForApp = isTaskTypeEnabledForApp.getMockImplementation()
       isTaskTypeEnabledForApp.mockImplementation(async (_appId, taskType) => taskType !== 'do-replan')
 
-      const result = await shouldRunTask('feature-ideas', 'app-1')
-      expect(result.shouldRun).toBe(true)
-      expect(result.reason).toContain('daily-due')
+      try {
+        const result = await shouldRunTask('feature-ideas', 'app-1')
+        expect(result.shouldRun).toBe(true)
+        expect(result.reason).toContain('daily-due')
+      } finally {
+        if (originalIsTaskTypeEnabledForApp) {
+          isTaskTypeEnabledForApp.mockImplementation(originalIsTaskTypeEnabledForApp)
+        } else {
+          isTaskTypeEnabledForApp.mockReset()
+        }
+      }
     })
 
     it('feature-ideas runs when do-replan has run since its last run', async () => {
