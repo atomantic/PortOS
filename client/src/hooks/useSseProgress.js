@@ -29,7 +29,12 @@ export function useSseProgress(url, { enabled = true } = {}) {
 
     es.onopen = () => setIsOpen(true);
     es.onmessage = (evt) => {
-      const data = JSON.parse(evt.data);
+      let data;
+      try {
+        data = JSON.parse(evt.data);
+      } catch {
+        return;
+      }
       setFrames((prev) => [...prev, data]);
       setLatest(data);
       if (TERMINAL_TYPES.has(data?.type)) {

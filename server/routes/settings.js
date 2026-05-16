@@ -7,7 +7,7 @@ import {
   CODEX_PARALLEL_DEFAULT,
 } from '../services/mediaJobQueue/index.js';
 import { asyncHandler } from '../lib/errorHandler.js';
-import { backupConfigSchema, validateRequest } from '../lib/validation.js';
+import { backupConfigSchema, sharingSettingsPatchSchema, validateRequest } from '../lib/validation.js';
 
 const router = Router();
 
@@ -45,6 +45,12 @@ router.put('/', asyncHandler(async (req, res) => {
   // suspenders, but per project convention all inputs are validated).
   if (req.body?.backup !== undefined) {
     validateRequest(backupConfigSchema.partial(), req.body.backup);
+  }
+  if (req.body?.sharingDisplayName !== undefined || req.body?.sharingBio !== undefined) {
+    validateRequest(sharingSettingsPatchSchema.partial(), {
+      sharingDisplayName: req.body.sharingDisplayName,
+      sharingBio: req.body.sharingBio,
+    });
   }
   const merged = await updateSettings(req.body);
   // The queue caches codex.parallelLimit in-process; sync it from the

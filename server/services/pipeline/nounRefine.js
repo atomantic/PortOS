@@ -3,7 +3,6 @@
 // different prompt fields — punt until there's a real need).
 
 import { getSeries, updateSeries } from './series.js';
-import { getUniverse } from '../universeBuilder.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { runPromptRefine } from './refineHelpers.js';
 
@@ -46,7 +45,7 @@ export async function refineCharacterDescription(seriesId, entryId, options = {}
   const target = list[idx];
   const peers = list.filter((_, i) => i !== idx);
 
-  const universe = series.universeId ? await getUniverse(series.universeId).catch(() => null) : null;
+  const universe = null; // orphan-series path only — universeId branch returns early above
   const styleBits = [
     universe?.stylePrompt ? `Universe aesthetic: ${universe.stylePrompt}` : null,
     series.styleNotes ? `Series notes: ${series.styleNotes}` : null,

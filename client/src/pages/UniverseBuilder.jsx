@@ -7,7 +7,7 @@
  * that all land in a single auto-named collection.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
   Globe2, Plus, Trash2, Sparkles, Wand2, Loader2, Save, FolderOpen,
@@ -17,6 +17,7 @@ import {
 import toast from '../components/ui/Toast';
 import {
   listUniverses, getUniverse, createUniverse, updateUniverse, deleteUniverse, expandUniverse,
+  generateCategoryVariations,
   renderWorld, listWorldRuns, getProviders, refineWorldPrompts, WORLD_CATEGORIES,
   WORLD_CATEGORY_KEY_MAX, COMPOSITE_PROMPT_MAX, WORLD_LOGLINE_MAX,
   WORLD_PREMISE_MAX, WORLD_STYLE_NOTES_MAX, WORLD_LOCKABLE_FIELDS,
@@ -24,6 +25,7 @@ import {
   ensureInfluences, isInfluenceLockField, mergeInfluencesWithLocks,
   listImageModels, getSettings,
 } from '../services/api';
+import useClickOutside from '../hooks/useClickOutside';
 import InfluenceChipsInput from '../components/universeBuilder/InfluenceChipsInput';
 import BackendChipStrip from '../components/media/BackendChipStrip';
 import ImageGenControls from '../components/imageGen/ImageGenControls';
@@ -47,6 +49,21 @@ const normalizeCategoryKey = (raw) => (raw || '')
   .replace(/^_+|_+$/g, '')
   .replace(/_{2,}/g, '_')
   .slice(0, WORLD_CATEGORY_KEY_MAX);
+
+// Merge `fresh` items after `existing`, case-insensitively deduping by label.
+// Used by both Expand (locked + LLM result) and per-category Generate (current
+// + LLM additions); pinned/existing entries keep their slot at the top.
+const mergeVariations = (existing, fresh) => {
+  const seen = new Set((existing || []).map((v) => v.label.toLowerCase()));
+  const merged = [...(existing || [])];
+  for (const v of fresh || []) {
+    const key = v.label?.toLowerCase();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    merged.push(v);
+  }
+  return merged;
+};
 
 const humanizeCategory = (key) => CATEGORY_LABELS[key]
   || key.replace(/_/g, ' ').replace(/\b\w/g, (ch) => ch.toUpperCase());
@@ -440,22 +457,6 @@ export default function UniverseBuilder() {
       return llmValue == null ? draft[key] : llmValue;
     };
     const refinedInfluences = mergeInfluencesWithLocks(locks, result.influences, draft.influences);
-    // Per-item lock merge: for each category, locked items survive at the
-    // top of the list; LLM-generated items follow, deduped case-insensitively
-    // by label so the LLM can't accidentally regenerate a pinned label.
-    // Categories that exist in the draft but not in the LLM result are
-    // preserved when they still hold locked variations.
-    const mergeVariations = (locked, fresh) => {
-      const seen = new Set(locked.map((v) => v.label.toLowerCase()));
-      const merged = [...locked];
-      for (const v of fresh || []) {
-        const key = v.label?.toLowerCase();
-        if (!key || seen.has(key)) continue;
-        seen.add(key);
-        merged.push(v);
-      }
-      return merged;
-    };
     const llmCategories = result.categories || {};
     const mergedCategories = {};
     const allCatKeys = new Set([
@@ -723,6 +724,49 @@ export default function UniverseBuilder() {
     ...d,
     categories: { ...d.categories, [cat]: { variations } },
   }));
+  const handleGenerateInCategory = async (cat, count) => {
+    const current = draft.categories?.[cat]?.variations || [];
+    const existingLabels = current.map((v) => v.label).filter(Boolean);
+    const result = await generateCategoryVariations({
+      category: cat,
+      count,
+      existingLabels,
+      influences: ensureInfluences(draft.influences),
+      logline: draft.logline || '',
+      premise: draft.premise || '',
+      styleNotes: draft.styleNotes || '',
+      stylePrompt: draft.stylePrompt || '',
+      negativePrompt: draft.negativePrompt || '',
+      providerId: draft.llm?.provider || undefined,
+      model: draft.llm?.model || undefined,
+    }, { silent: true }).catch((e) => { toast.error(`Generate failed: ${e.message}`); return null; });
+    if (!result) return;
+    const fresh = Array.isArray(result.variations) ? result.variations : [];
+    const merged = mergeVariations(current, fresh);
+    const additionCount = merged.length - current.length;
+    if (additionCount === 0) {
+      toast.error('LLM returned no new variations — try again or adjust the universe context');
+      return;
+    }
+    const nextDraft = {
+      ...draft,
+      categories: { ...draft.categories, [cat]: { variations: merged } },
+    };
+    setDraft(nextDraft);
+    if (selectedId && nextDraft.name?.trim()) {
+      const updated = await updateUniverse(selectedId, { categories: nextDraft.categories })
+        .catch((e) => { toast.error(`Auto-save after generate failed: ${e.message}`); return null; });
+      if (updated) {
+        setWorlds((prev) => {
+          const without = prev.filter((w) => w.id !== updated.id);
+          return [updated, ...without];
+        });
+        toast.success(`Added ${additionCount} variation${additionCount === 1 ? '' : 's'} to ${humanizeCategory(cat)} — saved`);
+        return;
+      }
+    }
+    toast.success(`Added ${additionCount} variation${additionCount === 1 ? '' : 's'} to ${humanizeCategory(cat)} — review then Save`);
+  };
   const updateCompositeSheets = (sheets) => setDraft((d) => ({ ...d, compositeSheets: sheets }));
   const addCategory = () => {
     const key = normalizeCategoryKey(newCategoryName);
@@ -905,8 +949,9 @@ export default function UniverseBuilder() {
               />
             </div>
             <div>
-              <label className="text-xs text-gray-400 mb-1 block">LLM for expansion</label>
+              <label htmlFor="world-llm-provider" className="text-xs text-gray-400 mb-1 block">LLM for expansion</label>
               <select
+                id="world-llm-provider"
                 // Bind to `?? ''` (NOT `|| activeProviderId || ''`) — when
                 // provider is null/unset, the empty value should select the
                 // "Active provider" option, not silently switch the dropdown
@@ -1153,6 +1198,7 @@ export default function UniverseBuilder() {
               canRender={canRender}
               onRenderCategory={() => runRender({ promptMode: 'variations', selection: { [cat]: 'all' } })}
               onRenderVariation={(v) => runRender({ promptMode: 'variations', selection: { [cat]: [v.label] } })}
+              onGenerate={(count) => handleGenerateInCategory(cat, count)}
             />
           ))}
         </section>
@@ -1181,8 +1227,9 @@ export default function UniverseBuilder() {
           )}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
-              <label className="block text-xs font-medium text-gray-400 mb-1">Prompt set</label>
+              <label htmlFor="world-render-prompt-mode" className="block text-xs font-medium text-gray-400 mb-1">Prompt set</label>
               <select
+                id="world-render-prompt-mode"
                 value={renderOpts.promptMode || 'variations'}
                 onChange={(e) => setRenderOpts((r) => ({ ...r, promptMode: e.target.value }))}
                 className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent min-h-[40px]"
@@ -1212,8 +1259,9 @@ export default function UniverseBuilder() {
           />
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
             <div>
-              <label className="block text-xs font-medium text-gray-400 mb-1">Renders per prompt</label>
+              <label htmlFor="world-render-batch" className="block text-xs font-medium text-gray-400 mb-1">Renders per prompt</label>
               <input
+                id="world-render-batch"
                 type="number" min={1} max={20}
                 value={renderOpts.batchPerVariation ?? 1}
                 onChange={(e) => {
@@ -1503,9 +1551,14 @@ function CompositeSheetsEditor({ sheets, onChange, canRender = false, onRender =
   );
 }
 
+const GENERATE_PRESETS = [3, 5, 10];
+const GENERATE_CUSTOM_MIN = 1;
+const GENERATE_CUSTOM_MAX = 50;
+
 function CategoryEditor({
   category, variations, canRemove = false, onChange, onRemove,
   canRender = false, onRenderCategory = null, onRenderVariation = null,
+  onGenerate = null,
 }) {
   const [adding, setAdding] = useState(false);
   const [newLabel, setNewLabel] = useState('');
@@ -1513,6 +1566,31 @@ function CategoryEditor({
   const [editIdx, setEditIdx] = useState(null);
   const [editLabel, setEditLabel] = useState('');
   const [editPrompt, setEditPrompt] = useState('');
+  const [genOpen, setGenOpen] = useState(false);
+  const [genCustom, setGenCustom] = useState('');
+  const [generating, setGenerating] = useState(false);
+  const genWrapRef = useRef(null);
+
+  useClickOutside(genWrapRef, genOpen, () => setGenOpen(false));
+  useEffect(() => {
+    if (!genOpen) return undefined;
+    const onKey = (e) => { if (e.key === 'Escape') setGenOpen(false); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [genOpen]);
+
+  const runGenerate = async (count) => {
+    const n = Math.max(GENERATE_CUSTOM_MIN, Math.min(GENERATE_CUSTOM_MAX, parseInt(count, 10) || 0));
+    if (!n || !onGenerate) return;
+    setGenOpen(false);
+    setGenerating(true);
+    try {
+      await onGenerate(n);
+    } finally {
+      setGenerating(false);
+      setGenCustom('');
+    }
+  };
 
   const addVariation = () => {
     const label = newLabel.trim();
@@ -1570,6 +1648,58 @@ function CategoryEditor({
             >
               <Play size={12} /> Render
             </button>
+          )}
+          {onGenerate && (
+            <div className="relative" ref={genWrapRef}>
+              <button
+                onClick={() => setGenOpen((v) => !v)}
+                disabled={generating}
+                className="text-xs px-2 py-1 bg-port-accent/15 hover:bg-port-accent/25 disabled:opacity-30 disabled:cursor-not-allowed text-port-accent rounded flex items-center gap-1 min-h-[40px] sm:min-h-0"
+                title="Ask the LLM for more variations in this category"
+                aria-haspopup="menu"
+                aria-expanded={genOpen}
+              >
+                {generating ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
+                Generate
+              </button>
+              {genOpen && (
+                <div
+                  role="menu"
+                  className="absolute right-0 top-full mt-1 z-20 w-44 bg-port-card border border-port-border rounded shadow-lg p-1 flex flex-col gap-0.5"
+                >
+                  {GENERATE_PRESETS.map((n) => (
+                    <button
+                      key={n}
+                      role="menuitem"
+                      onClick={() => runGenerate(n)}
+                      className="text-left text-xs px-2 py-1.5 text-gray-200 hover:bg-port-accent/20 rounded"
+                    >
+                      Generate {n} more
+                    </button>
+                  ))}
+                  <div className="border-t border-port-border my-1" />
+                  <div className="flex items-center gap-1 px-1 pb-1">
+                    <input
+                      type="number"
+                      min={GENERATE_CUSTOM_MIN}
+                      max={GENERATE_CUSTOM_MAX}
+                      value={genCustom}
+                      onChange={(e) => setGenCustom(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') runGenerate(genCustom); }}
+                      placeholder="Custom"
+                      className="w-16 bg-port-bg border border-port-border rounded px-1.5 py-1 text-white text-xs focus:outline-none focus:border-port-accent"
+                    />
+                    <button
+                      onClick={() => runGenerate(genCustom)}
+                      disabled={!Number(genCustom) || Number(genCustom) < GENERATE_CUSTOM_MIN}
+                      className="flex-1 text-xs px-2 py-1 bg-port-accent/20 hover:bg-port-accent/30 disabled:opacity-30 disabled:cursor-not-allowed text-port-accent rounded"
+                    >
+                      Go
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
           )}
           {canRemove && (
             <button
