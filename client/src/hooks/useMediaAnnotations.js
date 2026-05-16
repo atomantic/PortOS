@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { listMediaAnnotations, setMediaAnnotation } from '../services/api';
+import socket from '../services/socket';
 import toast from '../components/ui/Toast';
 
 // Loads the full media-annotation map once and exposes optimistic-update
@@ -21,6 +22,23 @@ export function useMediaAnnotations() {
       () => { /* fallback to empty map — non-fatal */ },
     );
     return () => { cancelled = true; };
+  }, []);
+
+  // Mirror server broadcasts so a note/star toggle in one view (or browser tab)
+  // shows up in every other open consumer. Originator also receives this; the
+  // server entry is authoritative and overrides the optimistic merge.
+  useEffect(() => {
+    const onUpdate = ({ key, entry }) => {
+      if (!key) return;
+      setAnnotations((prev) => {
+        const next = { ...prev };
+        if (entry) next[key] = entry;
+        else delete next[key];
+        return next;
+      });
+    };
+    socket.on('media:annotation:updated', onUpdate);
+    return () => socket.off('media:annotation:updated', onUpdate);
   }, []);
 
   const updateAnnotation = useCallback(async (key, patch) => {

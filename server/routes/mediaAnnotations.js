@@ -40,6 +40,10 @@ router.patch('/:key', asyncHandler(async (req, res) => {
   // Express decodes the path param, but the key still has to round-trip through
   // svc validation so a hand-rolled curl can't sneak past.
   const updated = await svc.setAnnotation(req.params.key, body).catch((err) => { throw mapServiceError(err); });
+  // Broadcast so every other open view (History, Collections, Pipeline, other
+  // browser tabs) reflects the change without a manual refresh. `entry` is null
+  // when the annotation was pruned (both starred=false and note='').
+  req.app.get('io')?.emit('media:annotation:updated', { key: req.params.key, entry: updated });
   res.json({ key: req.params.key, entry: updated });
 }));
 
