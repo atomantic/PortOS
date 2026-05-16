@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { existsSync, mkdirSync, cpSync, readdirSync, statSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, cpSync, readdirSync, statSync, readFileSync, writeFileSync, renameSync, rmdirSync } from 'fs';
 import { createHash } from 'crypto';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
@@ -10,6 +10,24 @@ const dataDir = join(rootDir, 'data');
 const sampleDir = join(rootDir, 'data.sample');
 
 console.log('📁 Setting up data directory...');
+
+// One-shot cleanup for installs that predate the migrations-out-of-data move:
+// (1) relocate data/migrations/.applied.json → data/migrations.applied.json so
+//     run-migrations.js finds the prior applied-list and doesn't re-run anything;
+// (2) drop the now-orphan data/migrations/ directory if empty. Guarded so we
+//     never clobber a fresh-layout applied file and never blow away a non-empty
+//     dir (in case a user has uncommitted local migration files).
+const legacyMigrationsDir = join(dataDir, 'migrations');
+const legacyAppliedFile = join(legacyMigrationsDir, '.applied.json');
+const newAppliedFile = join(dataDir, 'migrations.applied.json');
+if (existsSync(legacyAppliedFile) && !existsSync(newAppliedFile)) {
+  renameSync(legacyAppliedFile, newAppliedFile);
+  console.log('🧹 Moved data/migrations/.applied.json → data/migrations.applied.json');
+}
+if (existsSync(legacyMigrationsDir) && readdirSync(legacyMigrationsDir).length === 0) {
+  rmdirSync(legacyMigrationsDir);
+  console.log('🧹 Removed orphan data/migrations/ directory');
+}
 
 if (!existsSync(dataDir)) {
   console.log('📁 Creating data directory from data.sample...');
