@@ -9,7 +9,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Loader2, Sparkles, ImageIcon, Save, Trash2, ChevronDown, ChevronRight, Settings as SettingsIcon } from 'lucide-react';
+import { Loader2, Sparkles, ImageIcon, Save, Trash2, ChevronDown, ChevronRight, Settings as SettingsIcon, FileDown } from 'lucide-react';
 import toast from '../../ui/Toast';
 import {
   generatePipelineStage,
@@ -260,6 +260,11 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
     }
   };
 
+  const pdfRenderedCount = pages.filter((p) => p?.filename).length
+    + (comicPages.cover?.filename ? 1 : 0);
+  const pdfTotal = pages.length + (comicPages.cover ? 1 : 0);
+  const pdfReady = pdfRenderedCount > 0;
+
   return (
     <div className="space-y-4">
       <header className="flex items-center justify-between gap-3 flex-wrap">
@@ -302,6 +307,22 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
               Split into pages
             </button>
           ) : null}
+          <a
+            href={pdfReady ? `/api/pipeline/issues/${encodeURIComponent(issue.id)}/comic.pdf` : undefined}
+            aria-disabled={!pdfReady}
+            onClick={(e) => { if (!pdfReady) e.preventDefault(); }}
+            title={pdfReady
+              ? `Download a print-ready PDF (${pdfRenderedCount}/${pdfTotal} rendered)`
+              : 'Render at least one page or the cover first'}
+            className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border text-sm ${
+              pdfReady
+                ? 'bg-port-card border-port-border text-white hover:border-port-accent/50'
+                : 'bg-port-card border-port-border text-gray-500 cursor-not-allowed'
+            }`}
+          >
+            <FileDown size={14} />
+            PDF
+          </a>
           <button
             type="button"
             onClick={handleGenerate}

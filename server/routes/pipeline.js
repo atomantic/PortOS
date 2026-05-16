@@ -50,6 +50,7 @@ import { startEpisodeVideoForIssue, ERR_NO_STORYBOARDS } from '../services/pipel
 import { ASPECT_RATIOS, QUALITIES } from '../lib/creativeDirectorPresets.js';
 import { extractScenes, SOURCE_KIND } from '../lib/sceneExtractor.js';
 import { listVisualStyles } from '../lib/visualStyles.js';
+import { buildComicPdf, PAGE_SIZES, DEFAULT_PAGE_SIZE, ERR_NO_RENDERED_PAGES } from '../services/pipeline/comicPdf.js';
 import { parseComicScript } from '../lib/comicScriptParser.js';
 import {
   LENGTH_PROFILE_NAMES,
@@ -71,6 +72,7 @@ const SERVICE_ERROR_STATUS = {
   [seasonsSvc.ERR_REASSIGN_TARGET]: 400,
   [arcPlanner.ERR_VALIDATION]: 400,
   [ERR_NO_STORYBOARDS]: 400,
+  [ERR_NO_RENDERED_PAGES]: 409,
 };
 
 const mapServiceError = (err) => {
@@ -1044,6 +1046,26 @@ router.post('/issues/:id/stages/comicPages/pages/:pageIndex/render', asyncHandle
     },
   ).catch((err) => { throw mapServiceError(err); });
   res.json({ ...result, issue: updatedIssue, stage });
+}));
+
+// Print-ready PDF export of a comic issue's rendered pages. Streams the
+// assembled PDF straight to the response — no on-disk artifact, so a new
+// render is always a fresh assembly. ?size= picks paper format
+// (us-letter|a4|tabloid). 409 when the issue has no rendered cover/pages.
+router.get('/issues/:id/comic.pdf', asyncHandler(async (req, res) => {
+  const sizeRaw = typeof req.query.size === 'string' ? req.query.size : '';
+  const size = PAGE_SIZES[sizeRaw] ? sizeRaw : DEFAULT_PAGE_SIZE;
+  const includeCover = req.query.cover !== 'skip';
+  const includeColophon = req.query.colophon !== 'skip';
+  const { bytes, filename } = await buildComicPdf(req.params.id, {
+    size, includeCover, includeColophon,
+  }).catch((err) => { throw mapServiceError(err); });
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.setHeader('Content-Length', String(bytes.length));
+  // Zero-copy aliasing: Buffer shares the Uint8Array's ArrayBuffer instead of
+  // duplicating tens of MB for a multi-page PDF.
+  res.end(Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength));
 }));
 
 // AI-driven prompt refinement for a single comic panel. Uses
