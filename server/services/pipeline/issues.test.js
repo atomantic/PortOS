@@ -16,6 +16,8 @@ vi.mock('crypto', async () => {
 });
 
 const svc = await import('./issues.js');
+const seriesSvc = await import('./series.js');
+const seasonsSvc = await import('./seasons.js');
 
 describe('pipeline issues service', () => {
   beforeEach(() => {
@@ -31,6 +33,87 @@ describe('pipeline issues service', () => {
     expect(a.number).toBe(1);
     expect(b.number).toBe(2);
     expect(c.number).toBe(1); // independent counter per series
+  });
+
+  describe('volume-ordered numbering', () => {
+    const setupTwoVolumeSeries = async () => {
+      const series = await seriesSvc.createSeries({ name: 'Saga' });
+      const v1 = await seasonsSvc.createSeason(series.id, { title: 'Volume 1', number: 1 });
+      const v2 = await seasonsSvc.createSeason(series.id, { title: 'Volume 2', number: 2 });
+      return { series, v1, v2 };
+    };
+
+    it('issues number contiguously across volumes in season order', async () => {
+      const { series, v1, v2 } = await setupTwoVolumeSeries();
+      // V1 first (10 issues), then V2 (3 issues) — V2 should start at #11.
+      for (let i = 1; i <= 10; i += 1) {
+        await svc.createIssue({ seriesId: series.id, seasonId: v1.id, arcPosition: i, title: `V1 E${i}` });
+      }
+      for (let i = 1; i <= 3; i += 1) {
+        await svc.createIssue({ seriesId: series.id, seasonId: v2.id, arcPosition: i, title: `V2 E${i}` });
+      }
+      const list = await svc.listIssues({ seriesId: series.id });
+      const v1Numbers = list.filter((i) => i.seasonId === v1.id).map((i) => i.number).sort((a, b) => a - b);
+      const v2Numbers = list.filter((i) => i.seasonId === v2.id).map((i) => i.number).sort((a, b) => a - b);
+      expect(v1Numbers).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+      expect(v2Numbers).toEqual([11, 12, 13]);
+    });
+
+    it('adding an issue to V1 shifts V2 numbers up', async () => {
+      const { series, v1, v2 } = await setupTwoVolumeSeries();
+      // Seed V1 with 2, V2 with 2.
+      await svc.createIssue({ seriesId: series.id, seasonId: v1.id, arcPosition: 1, title: 'V1 E1' });
+      await svc.createIssue({ seriesId: series.id, seasonId: v1.id, arcPosition: 2, title: 'V1 E2' });
+      const v2first = await svc.createIssue({ seriesId: series.id, seasonId: v2.id, arcPosition: 1, title: 'V2 E1' });
+      const v2second = await svc.createIssue({ seriesId: series.id, seasonId: v2.id, arcPosition: 2, title: 'V2 E2' });
+      expect(v2first.number).toBe(3);
+      expect(v2second.number).toBe(4);
+      // Add a third issue to V1 — V2 should shift from #3..4 to #4..5.
+      await svc.createIssue({ seriesId: series.id, seasonId: v1.id, arcPosition: 3, title: 'V1 E3' });
+      const after = await svc.listIssues({ seriesId: series.id });
+      const v2NumbersAfter = after.filter((i) => i.seasonId === v2.id).map((i) => i.number).sort((a, b) => a - b);
+      expect(v2NumbersAfter).toEqual([4, 5]);
+    });
+
+    it('deleting an issue compacts the sequence', async () => {
+      const { series, v1, v2 } = await setupTwoVolumeSeries();
+      const a = await svc.createIssue({ seriesId: series.id, seasonId: v1.id, arcPosition: 1, title: 'V1 E1' });
+      await svc.createIssue({ seriesId: series.id, seasonId: v1.id, arcPosition: 2, title: 'V1 E2' });
+      await svc.createIssue({ seriesId: series.id, seasonId: v2.id, arcPosition: 1, title: 'V2 E1' });
+      await svc.deleteIssue(a.id);
+      const after = await svc.listIssues({ seriesId: series.id });
+      expect(after.map((i) => i.number)).toEqual([1, 2]);
+    });
+
+    it('changes to a later volume do not move earlier volumes', async () => {
+      const { series, v1, v2 } = await setupTwoVolumeSeries();
+      const v1a = await svc.createIssue({ seriesId: series.id, seasonId: v1.id, arcPosition: 1, title: 'V1 E1' });
+      const v1b = await svc.createIssue({ seriesId: series.id, seasonId: v1.id, arcPosition: 2, title: 'V1 E2' });
+      await svc.createIssue({ seriesId: series.id, seasonId: v2.id, arcPosition: 1, title: 'V2 E1' });
+      // Append another V2 issue — V1's persisted numbers must not change.
+      await svc.createIssue({ seriesId: series.id, seasonId: v2.id, arcPosition: 2, title: 'V2 E2' });
+      const after = await svc.listIssues({ seriesId: series.id });
+      const refetchedV1a = after.find((i) => i.id === v1a.id);
+      const refetchedV1b = after.find((i) => i.id === v1b.id);
+      expect(refetchedV1a.number).toBe(1);
+      expect(refetchedV1b.number).toBe(2);
+    });
+
+    it('reordering season numbers triggers full series renumber', async () => {
+      const { series, v1, v2 } = await setupTwoVolumeSeries();
+      await svc.createIssue({ seriesId: series.id, seasonId: v1.id, arcPosition: 1, title: 'V1 E1' });
+      await svc.createIssue({ seriesId: series.id, seasonId: v1.id, arcPosition: 2, title: 'V1 E2' });
+      await svc.createIssue({ seriesId: series.id, seasonId: v2.id, arcPosition: 1, title: 'V2 E1' });
+      await svc.createIssue({ seriesId: series.id, seasonId: v2.id, arcPosition: 2, title: 'V2 E2' });
+      // Swap volume order: make v2 come first.
+      await seasonsSvc.updateSeason(series.id, v2.id, { number: 1 });
+      await seasonsSvc.updateSeason(series.id, v1.id, { number: 2 });
+      const after = await svc.listIssues({ seriesId: series.id });
+      const v2Nums = after.filter((i) => i.seasonId === v2.id).map((i) => i.number).sort((a, b) => a - b);
+      const v1Nums = after.filter((i) => i.seasonId === v1.id).map((i) => i.number).sort((a, b) => a - b);
+      expect(v2Nums).toEqual([1, 2]);
+      expect(v1Nums).toEqual([3, 4]);
+    });
   });
 
   it('createIssue requires seriesId and title', async () => {

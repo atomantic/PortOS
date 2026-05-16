@@ -946,10 +946,9 @@ router.post('/series/:id/seasons/:seasonId/episodes/generate', asyncHandler(asyn
       const created = await issuesSvc.createIssue({
         seriesId: req.params.id,
         title: ep.title,
-        // Issue `number` is series-scoped (the existing canonical counter);
-        // `arcPosition` is the season-scoped ordinal the LLM gave us. We let
-        // `createIssue` pick the series number so existing issues' numbers
-        // don't collide.
+        // Issue `number` is derived from (volume order, arcPosition) by
+        // `createIssue`'s renumber pass — a new V1 episode falls into V1's
+        // slot and later volumes' numbers shift to make room.
         seasonId: req.params.seasonId,
         arcPosition: ep.number,
         // `arcRole` carries the LLM's pilot / complication / midpoint / etc.

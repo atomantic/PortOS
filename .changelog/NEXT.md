@@ -96,6 +96,33 @@
   `client/src/components/imageGen/HfTokenBanner.jsx` (renamed from
   `Flux2TokenBanner.jsx`).
 
+- **Issue numbers now reflect volume order across the whole series.** The
+  series-wide issue counter was monotonic — adding new episodes to V1 in a
+  series that already had V2 produced issues like `#33` instead of slotting
+  into V1's range. `issue.number` is now a derived attribute computed from
+  (volume order, `arcPosition`) by a renumber pass that runs after every
+  mutation that can shift the canonical sequence (`createIssue`,
+  `deleteIssue`, `updateIssue` when `seasonId`/`arcPosition` changes,
+  `updateSeason` when a volume's number changes, `deleteSeason` after the
+  reassign loop). Earlier volumes stay frozen — the renumber anchors at the
+  affected volume so an unrelated V2 edit never reshuffles V1, and a stale
+  `seasonId` (one pointing at a deleted season) is normalized to the
+  unscoped tail so it never triggers a full series renumber. The pure
+  algorithm lives in `server/lib/pipelineIssueOrder.js` so the new
+  `recomputeIssueNumbersForSeries(seriesId, fromSeasonId?)` export (used by
+  the seasons service after a volume reorder) and the one-shot migration
+  share one implementation — neither can drift from the other. The
+  `nextIssueNumber` helper is gone. A new migration
+  (`scripts/migrations/010-renumber-pipeline-issues-by-volume.js`) walks
+  every existing series once on next startup so on-disk state matches the
+  new model without requiring a manual edit. Touches:
+  `server/lib/pipelineIssueOrder.js` (new),
+  `server/services/pipeline/issues.js`,
+  `server/services/pipeline/seasons.js`,
+  `server/routes/pipeline.js`,
+  `server/services/pipeline/issues.test.js` (+5 cases),
+  `scripts/migrations/010-renumber-pipeline-issues-by-volume.js` (new).
+
 - **Visual Style Preset dropdown clipped inside the bible sidebar.** The
   prior z-30 → z-50 bump was a no-op for the real problem: the dropdown
   lives inside the Pipeline Series bible `<aside class="lg:overflow-y-auto">`,

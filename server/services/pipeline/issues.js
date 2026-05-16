@@ -30,6 +30,8 @@ import { sanitizeVisualStyleRef } from '../../lib/visualStyles.js';
 import { ARC_ROLES } from '../../lib/storyArc.js';
 import { isStr, trimTo } from '../../lib/storyBible.js';
 import { emitRecordUpdated } from '../sharing/recordEvents.js';
+import { applyVolumeOrderedNumbers, UNSCOPED_ANCHOR } from '../../lib/pipelineIssueOrder.js';
+import * as seriesSvc from './series.js';
 
 // Lazy resolution — see series.js for context.
 const statePath = () => join(PATHS.data, 'pipeline-issues.json');
@@ -415,7 +417,8 @@ export function createIssue(input = {}) {
   const next = sanitizeIssue({
     id: `iss-${randomUUID()}`,
     seriesId,
-    number: input.number || nextIssueNumber(state.issues, seriesId),
+    // Placeholder — `renumberInline` below derives the canonical number.
+    number: 0,
     title,
     status: 'draft',
     // Phase 2: optional arc pointers passed by the season-episodes generator
@@ -432,6 +435,7 @@ export function createIssue(input = {}) {
   });
   if (!next) throw makeErr('Invalid issue payload', ERR_VALIDATION);
   state.issues.push(next);
+  await renumberInline(state, seriesId, next.seasonId || UNSCOPED_ANCHOR);
   await writeState(state);
   // New issue = series-level change for any active share subscription.
   emitRecordUpdated('series', next.seriesId);
@@ -439,10 +443,25 @@ export function createIssue(input = {}) {
   }); // end queueIssueWrite
 }
 
-function nextIssueNumber(issues, seriesId) {
-  const peers = issues.filter((i) => i.seriesId === seriesId);
-  if (peers.length === 0) return 1;
-  return Math.max(...peers.map((i) => i.number || 0)) + 1;
+async function renumberInline(state, seriesId, fromSeasonId = null) {
+  const series = await seriesSvc.getSeries(seriesId).catch(() => null);
+  return applyVolumeOrderedNumbers({
+    issues: state.issues,
+    seriesId,
+    seasons: series?.seasons || [],
+    fromSeasonId,
+  });
+}
+
+export function recomputeIssueNumbersForSeries(seriesId, fromSeasonId = null) {
+  return queueIssueWrite(null, async () => {
+    const state = await readState();
+    const changed = await renumberInline(state, seriesId, fromSeasonId);
+    if (!changed) return { changed: false };
+    await writeState(state);
+    emitRecordUpdated('series', seriesId);
+    return { changed: true };
+  });
 }
 
 /**
@@ -466,12 +485,15 @@ export function insertIssueWithId(input = {}) {
     const next = sanitizeIssue({ ...input, seriesId, title });
     if (!next) throw makeErr('Invalid issue payload', ERR_VALIDATION);
     state.issues.push(next);
+    // Imported `number` is a starting hint — local canonical numbering still
+    // comes from (volume order, arcPosition) of the local state.
+    await renumberInline(state, seriesId, next.seasonId || UNSCOPED_ANCHOR);
     await writeState(state);
     return next;
   });
 }
 
-export function updateIssue(id, patch = {}) {
+export function updateIssue(id, patch = {}, { skipRenumber = false } = {}) {
   return queueIssueWrite(id, async () => {
   const state = await readState();
   const idx = state.issues.findIndex((i) => i.id === id);
@@ -543,6 +565,17 @@ export function updateIssue(id, patch = {}) {
   });
   if (!merged) throw makeErr('Invalid issue payload', ERR_VALIDATION);
   state.issues[idx] = merged;
+  // A seasonId move affects both source and destination volumes, so full
+  // renumber. An arcPosition change only reorders within the current volume.
+  // `skipRenumber` lets bulk callers (e.g. deleteSeason) collapse N per-update
+  // renumbers into one final pass.
+  if (!skipRenumber) {
+    if ('seasonId' in patch && cur.seasonId !== merged.seasonId) {
+      await renumberInline(state, merged.seriesId, null);
+    } else if ('arcPosition' in patch && cur.arcPosition !== merged.arcPosition) {
+      await renumberInline(state, merged.seriesId, merged.seasonId || UNSCOPED_ANCHOR);
+    }
+  }
   await writeState(state);
   // Issues are exported as part of their parent series — re-export the
   // series so any active subscription picks up the issue change.
@@ -570,8 +603,10 @@ export function deleteIssue(id) {
   const state = await readState();
   const idx = state.issues.findIndex((i) => i.id === id);
   if (idx < 0) throw makeErr(`Issue not found: ${id}`, ERR_NOT_FOUND);
-  const seriesId = state.issues[idx].seriesId;
+  const removed = state.issues[idx];
+  const seriesId = removed.seriesId;
   state.issues.splice(idx, 1);
+  await renumberInline(state, seriesId, removed.seasonId || UNSCOPED_ANCHOR);
   await writeState(state);
   // Series export bundles every issue, so a deletion is an update on the
   // parent series for any active share-bucket subscription.

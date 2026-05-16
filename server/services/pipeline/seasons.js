@@ -78,6 +78,11 @@ export async function updateSeason(seriesId, seasonId, patch = {}) {
   // `number` ascending so a number change moves the season automatically.
   const merged = seasons.map((s) => (s.id === seasonId ? next : s));
   const updated = await seriesSvc.updateSeries(seriesId, { seasons: merged });
+  // Issue numbers derive from volume order — a volume `number` swap
+  // reshuffles every issue's slot in the series.
+  if (cur.number !== next.number) {
+    await issuesSvc.recomputeIssueNumbersForSeries(seriesId);
+  }
   return updated.seasons.find((s) => s.id === seasonId);
 }
 
@@ -122,9 +127,12 @@ export async function deleteSeason(seriesId, seasonId, { reassignTo = null } = {
   // once at the end against the final state.
   await withReexportSuppressed('series', seriesId, async () => {
     for (const iss of reassignList) {
-      await issuesSvc.updateIssue(iss.id, { seasonId: reassignTo });
+      await issuesSvc.updateIssue(iss.id, { seasonId: reassignTo }, { skipRenumber: true });
     }
     await seriesSvc.updateSeries(seriesId, { seasons: merged });
+    // One renumber pass after the bulk reassign + season removal so the loop
+    // doesn't pay for N per-update renumbers.
+    await issuesSvc.recomputeIssueNumbersForSeries(seriesId);
   });
   emitRecordUpdated('series', seriesId);
   return { id: seasonId, reassignedIssueCount: reassignList.length, reassignedTo: reassignTo };
