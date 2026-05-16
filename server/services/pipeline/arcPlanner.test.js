@@ -336,6 +336,141 @@ describe('arcPlanner — verifyArc', () => {
   });
 });
 
+describe('arcPlanner — verifyVolume', () => {
+  beforeEach(() => {
+    fileStore.clear();
+    uuidCounter = 0;
+    stageRunnerSpy = undefined;
+  });
+
+  it('throws 400 NO_ARC if the series has no arc to anchor the volume against', async () => {
+    const s = await setupSeries();
+    const sea = await seasonsSvc.createSeason(s.id, { title: 'V1', logline: 'l' });
+    await expect(planner.verifyVolume(s.id, sea.id))
+      .rejects.toMatchObject({ status: 400, code: 'PIPELINE_NO_ARC' });
+  });
+
+  it('throws NOT_FOUND when the season id does not exist on the series', async () => {
+    const s = await setupSeries();
+    await seriesSvc.updateSeries(s.id, { arc: { logline: 'L' } });
+    await expect(planner.verifyVolume(s.id, 'sea-does-not-exist'))
+      .rejects.toMatchObject({ code: 'PIPELINE_SEASON_NOT_FOUND' });
+  });
+
+  it('emits beats for expanded issues and synopsis for un-expanded ones, never both', async () => {
+    const s = await setupSeries();
+    await seriesSvc.updateSeries(s.id, {
+      arc: { logline: 'Whole arc', summary: 'sum', themes: ['legacy'] },
+    });
+    const sea = await seasonsSvc.createSeason(s.id, {
+      title: 'V1', logline: 'volume l', synopsis: 'volume s', endingHook: 'hook',
+      episodeCountTarget: 3,
+    });
+    // Issue 1: has beats (LLM output filled). Expect `beats` field, no `synopsis`.
+    const beatsIssue = await issuesSvc.createIssue({
+      seriesId: s.id, title: 'Ep 1', seasonId: sea.id, arcPosition: 1,
+      stages: { idea: { input: 'seed', output: 'beat 1\nbeat 2\nbeat 3', status: 'ready' } },
+    });
+    // Issue 2: synopsis-only (idea.input set, output empty). Expect `synopsis`,
+    // no `beats`.
+    const synopsisIssue = await issuesSvc.createIssue({
+      seriesId: s.id, title: 'Ep 2', seasonId: sea.id, arcPosition: 2,
+      stages: { idea: { input: 'just a seed', status: 'edited' } },
+    });
+    // Issue from another season — must not leak into this volume's payload.
+    const otherSeason = await seasonsSvc.createSeason(s.id, { title: 'V2', logline: 'other' });
+    await issuesSvc.createIssue({
+      seriesId: s.id, title: 'Other vol issue', seasonId: otherSeason.id, arcPosition: 1,
+      stages: { idea: { input: 'other', output: 'other beats', status: 'ready' } },
+    });
+
+    stageRunnerSpy = vi.fn(async () => ({
+      content: { issues: [{ severity: 'high', problem: 'X', location: 'episode:1', suggestion: 'Y' }] },
+      runId: 'rv', providerId: 'p', model: 'm',
+    }));
+
+    const out = await planner.verifyVolume(s.id, sea.id);
+    expect(stageRunnerSpy).toHaveBeenCalledWith(
+      'pipeline-volume-verify',
+      expect.any(Object),
+      expect.objectContaining({ returnsJson: true, source: 'pipeline-volume-verify' }),
+    );
+
+    const ctx = stageRunnerSpy.mock.calls[0][1];
+    expect(ctx.volume.title).toBe('V1');
+    expect(ctx.volume.endingHook).toBe('hook');
+
+    const volumeIssues = JSON.parse(ctx.volumeIssuesJson);
+    expect(volumeIssues).toHaveLength(2);
+    expect(volumeIssues[0].title).toBe(beatsIssue.title);
+    expect(volumeIssues[0].beats).toContain('beat 1');
+    expect(volumeIssues[0]).not.toHaveProperty('synopsis');
+    expect(volumeIssues[1].title).toBe(synopsisIssue.title);
+    expect(volumeIssues[1].synopsis).toBe('just a seed');
+    expect(volumeIssues[1]).not.toHaveProperty('beats');
+
+    expect(out.issues).toEqual([
+      { severity: 'high', location: 'episode:1', problem: 'X', suggestion: 'Y' },
+    ]);
+    expect(out.seasonId).toBe(sea.id);
+  });
+
+  it('includes only the immediate-neighbor volumes (prior + next), excluding self', async () => {
+    const s = await setupSeries();
+    await seriesSvc.updateSeries(s.id, { arc: { logline: 'L' } });
+    const v1 = await seasonsSvc.createSeason(s.id, { title: 'V1', logline: 'one' });
+    const v2 = await seasonsSvc.createSeason(s.id, { title: 'V2', logline: 'two', endingHook: 'hook2' });
+    const v3 = await seasonsSvc.createSeason(s.id, { title: 'V3', logline: 'three' });
+    const v4 = await seasonsSvc.createSeason(s.id, { title: 'V4', logline: 'four' });
+
+    stageRunnerSpy = vi.fn(async () => ({
+      content: { issues: [] }, runId: 'r', providerId: 'p', model: 'm',
+    }));
+    // Verifying the middle volume should expose V2 (prior) + V4 (next), never V1 or V3 itself.
+    await planner.verifyVolume(s.id, v3.id);
+    const ctx = stageRunnerSpy.mock.calls[0][1];
+    const neighbors = JSON.parse(ctx.neighborsJson);
+    expect(neighbors.map((n) => n.position)).toEqual(['prior', 'next']);
+    expect(neighbors[0].title).toBe('V2');
+    expect(neighbors[0].endingHook).toBe('hook2');
+    expect(neighbors[1].title).toBe('V4');
+    expect(neighbors.find((n) => n.title === 'V3')).toBeUndefined();
+    expect(neighbors.find((n) => n.title === 'V1')).toBeUndefined();
+
+    // First volume has no prior, only next.
+    stageRunnerSpy.mockClear();
+    stageRunnerSpy.mockImplementation(async () => ({ content: { issues: [] }, runId: 'r', providerId: 'p', model: 'm' }));
+    await planner.verifyVolume(s.id, v1.id);
+    const firstNeighbors = JSON.parse(stageRunnerSpy.mock.calls[0][1].neighborsJson);
+    expect(firstNeighbors.map((n) => n.position)).toEqual(['next']);
+
+    // Last volume has no next, only prior.
+    stageRunnerSpy.mockClear();
+    stageRunnerSpy.mockImplementation(async () => ({ content: { issues: [] }, runId: 'r', providerId: 'p', model: 'm' }));
+    await planner.verifyVolume(s.id, v4.id);
+    const lastNeighbors = JSON.parse(stageRunnerSpy.mock.calls[0][1].neighborsJson);
+    expect(lastNeighbors.map((n) => n.position)).toEqual(['prior']);
+  });
+
+  it('returns empty issues for a clean volume + drops malformed entries', async () => {
+    const s = await setupSeries();
+    await seriesSvc.updateSeries(s.id, { arc: { logline: 'L' } });
+    const sea = await seasonsSvc.createSeason(s.id, { title: 'V', logline: 'l' });
+    stageRunnerSpy = vi.fn(async () => ({
+      content: {
+        issues: [
+          { problem: '' },                                  // dropped
+          { severity: 'low', problem: 'real but tiny' },    // kept
+          'not an object',                                  // dropped
+        ],
+      },
+      runId: 'r', providerId: 'p', model: 'm',
+    }));
+    const out = await planner.verifyVolume(s.id, sea.id);
+    expect(out.issues.map((i) => i.problem)).toEqual(['real but tiny']);
+  });
+});
+
 describe('arcPlanner — resolveVerifyIssues', () => {
   beforeEach(() => {
     fileStore.clear();

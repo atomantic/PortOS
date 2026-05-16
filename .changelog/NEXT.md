@@ -2,6 +2,27 @@
 
 ## Added
 
+- **Series Pipeline — per-volume Validate volume continuity pass.**
+  Complement to the cross-volume Verify arc pass: a new "Validate volume"
+  button on each season/volume row runs a deeper, narrower continuity check
+  scoped to that single volume. Goes to beat depth (`stages.idea.output`) for
+  issues whose beats are expanded; falls back to synopsis depth (`stages.idea.input`)
+  for un-expanded issues, so a partially-expanded volume can still be
+  validated mid-workflow. Boundary checks against the immediately-prior and
+  immediately-next volumes only (the cross-volume arc verify handles distant
+  cross-references). Checks: volume-internal arc shape, within-volume
+  continuity, beat-level escalation, promise drift, boundary continuity,
+  cast economy, volume-scope world-entity drift, and obvious length-vs-weight
+  mismatches. Each verify button now also exposes an inline "What this
+  checks" disclosure listing its rules and depth so the human editor knows
+  what each pass covers (and what it explicitly doesn't) before trusting
+  the result. **Files:** new
+  `data.sample/prompts/stages/pipeline-volume-verify.md` + stage-config
+  entry, new `verifyVolume()` in `server/services/pipeline/arcPlanner.js`,
+  new `POST /pipeline/series/:id/seasons/:seasonId/verify` route,
+  `verifyPipelineVolume()` API helper, and `VerifyScopeHint` + Validate
+  volume button wiring in `client/src/components/pipeline/ArcCanvas.jsx`.
+
 - **Series Pipeline — Vonnegut story-shape picker + sparkline visualization.**
   Series records can now carry an explicit narrative-shape decision drawn from
   Kurt Vonnegut's eight story shapes (Rags to Riches, Tragedy, Man in Hole,

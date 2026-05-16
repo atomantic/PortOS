@@ -27,7 +27,7 @@ import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Plus, Trash2, Loader2, Sparkles, ShieldCheck, ChevronRight, ChevronDown,
-  ChevronsUpDown, AlertCircle, Wand2,
+  ChevronsUpDown, AlertCircle, Wand2, Info,
 } from 'lucide-react';
 import toast from '../ui/Toast';
 import { timeAgo } from '../../utils/formatters';
@@ -36,6 +36,7 @@ import {
   createPipelineIssue, deletePipelineIssue, updatePipelineIssue,
   createPipelineSeason, updatePipelineSeason, deletePipelineSeason,
   generatePipelineArcOverview, generatePipelineSeasonEpisodes, verifyPipelineArc,
+  verifyPipelineVolume,
   resolvePipelineArcIssues,
   listPipelineIssues, updatePipelineSeries,
 } from '../../services/api';
@@ -54,6 +55,54 @@ const SEVERITY_COLORS = {
   medium: 'text-port-warning border-port-warning/40 bg-port-warning/10',
   low: 'text-gray-400 border-gray-500/30 bg-gray-700/20',
 };
+
+// What each verify pass actually checks. Surfaced as a `<details>` next to
+// the button so the editor knows what they're getting (and what they're NOT
+// getting) before they trust the green check.
+const VERIFY_ARC_SCOPE = {
+  depth: 'Synopsis-level only across every volume. Beats and scripts are NOT read — use Validate volume for that.',
+  checks: [
+    'Character contradictions across volumes (dead character speaks; protagonist state breaks at a volume boundary)',
+    'Dropped subplots (an early endingHook never paid off later)',
+    'Episode-count vs. arc-weight mismatch per volume',
+    'Unresolved finale hooks (logline / protagonist arc / themes)',
+    'Arc-role imbalance (missing or duplicate pilot / finale)',
+    'Theme drift (a theme is named in the arc but appears in no synopsis)',
+    'World entity drift (refs to nonexistent factions / characters / locations, or unused major entities)',
+  ],
+};
+
+const VERIFY_VOLUME_SCOPE = {
+  depth: 'One volume in depth — reads beat sheets (stages.idea.output) for issues that have them, falls back to synopsis depth for un-expanded issues. Boundary checks against the immediate-neighbor volumes only.',
+  checks: [
+    'Volume-internal arc shape (does the volume read as a complete sub-arc; does the final issue pay off the endingHook)',
+    'Within-volume continuity (a character / object / beat that disappears mid-volume without resolution)',
+    'Beat-level escalation (issues with beats only) — adjacent issues that plateau or contradict each other',
+    'Promise drift (the volume logline / synopsis makes a promise no issue delivers — or vice versa)',
+    'Boundary continuity (volume opening picks up the prior endingHook; volume endingHook seeds the next volume)',
+    'Cast economy (a one-beat introduction never seen again, or a major bible character the volume never uses)',
+    'Volume-scope world-entity drift',
+    'Length-vs-weight mismatch obvious in isolation',
+  ],
+};
+
+function VerifyScopeHint({ scope }) {
+  return (
+    <details className="text-[10px] text-gray-500">
+      <summary className="cursor-pointer hover:text-gray-300 inline-flex items-center gap-1">
+        <Info size={10} /> What this checks
+      </summary>
+      <div className="mt-1 pl-4 space-y-1">
+        <p className="text-gray-400 italic">{scope.depth}</p>
+        <ul className="list-disc pl-4 space-y-0.5">
+          {scope.checks.map((c) => (
+            <li key={c}>{c}</li>
+          ))}
+        </ul>
+      </div>
+    </details>
+  );
+}
 
 export default function ArcCanvas({ series, issues, onSeriesUpdate, onIssuesUpdate, onFlushPending }) {
   const seasons = series.seasons || [];
@@ -244,6 +293,7 @@ function ArcHeader({ series, onSeriesUpdate, onIssuesUpdate, onFlushPending }) {
               onClick={runVerify}
               disabled={!!running}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-sm font-medium border bg-port-bg text-gray-300 border-port-border hover:border-port-accent/40 disabled:opacity-40"
+              title="Cross-volume continuity pass at synopsis depth"
             >
               {running === 'verify' ? <Loader2 size={14} className="animate-spin" /> : <ShieldCheck size={14} />}
               Verify arc
@@ -251,6 +301,8 @@ function ArcHeader({ series, onSeriesUpdate, onIssuesUpdate, onFlushPending }) {
           ) : null}
         </div>
       </div>
+
+      {hasGeneratedArc ? <VerifyScopeHint scope={VERIFY_ARC_SCOPE} /> : null}
 
       {arc ? (
         <ArcContent series={series} onSeriesUpdate={onSeriesUpdate} />
@@ -410,12 +462,12 @@ function ArcContent({ series, onSeriesUpdate }) {
   );
 }
 
-function VerifyResults({ issues, onDismiss, onResolveAll, onResolveOne, resolvingAll, resolvingIdx }) {
+function VerifyResults({ issues, onDismiss, onResolveAll, onResolveOne, resolvingAll, resolvingIdx, title = 'Verification' }) {
   const busy = resolvingAll || (resolvingIdx && resolvingIdx.size > 0);
   return (
     <div className="border border-port-border rounded p-3 bg-port-bg/50 space-y-2">
       <div className="flex items-center justify-between gap-2 flex-wrap">
-        <h3 className="text-xs uppercase tracking-wider text-gray-500">Verification — {issues.length} issue{issues.length === 1 ? '' : 's'}</h3>
+        <h3 className="text-xs uppercase tracking-wider text-gray-500">{title} — {issues.length} issue{issues.length === 1 ? '' : 's'}</h3>
         <div className="flex items-center gap-2">
           {onResolveAll ? (
             <button
@@ -477,6 +529,30 @@ function SeasonRow({ series, season, seasons, issues, onSeriesUpdate, onIssuesUp
   const [collapsed, setCollapsed] = useState(false);
   const [generatingEpisodes, setGeneratingEpisodes] = useState(false);
   const [editing, setEditing] = useState(false);
+  const [verifying, setVerifying] = useState(false);
+  const [verifyIssues, setVerifyIssues] = useState(null);
+
+  const hasArc = !!series.arc;
+  const hasEpisodes = issues.length > 0;
+  const runVerifyVolume = async () => {
+    setVerifying(true);
+    const result = await verifyPipelineVolume(series.id, season.id, {
+      providerOverride: series.llm?.provider || undefined,
+      modelOverride: series.llm?.model || undefined,
+    }).catch((err) => {
+      toast.error(err.message || 'Failed to verify volume');
+      return null;
+    });
+    setVerifying(false);
+    if (!result) return;
+    setVerifyIssues(result.issues || []);
+    const n = (result.issues || []).length;
+    if (n === 0) {
+      toast.success(`Volume ${season.number} verified — no issues found`);
+    } else {
+      toast.error(`Volume ${season.number} verification surfaced ${n} issue${n === 1 ? '' : 's'}`);
+    }
+  };
 
   const runGenerateEpisodes = async () => {
     if (issues.length > 0) {
@@ -585,12 +661,24 @@ function SeasonRow({ series, season, seasons, issues, onSeriesUpdate, onIssuesUp
               />
             ))}
           </ul>
+          {verifyIssues && verifyIssues.length > 0 ? (
+            <div className="px-3 pb-3">
+              <VerifyResults
+                issues={verifyIssues}
+                title={`Volume ${season.number} verification`}
+                onDismiss={() => setVerifyIssues(null)}
+              />
+            </div>
+          ) : null}
           <SeasonActions
             series={series}
             season={season}
-            hasEpisodes={issues.length > 0}
+            hasArc={hasArc}
+            hasEpisodes={hasEpisodes}
             generatingEpisodes={generatingEpisodes}
+            verifying={verifying}
             onGenerateEpisodes={runGenerateEpisodes}
+            onValidateVolume={runVerifyVolume}
             onIssuesUpdate={onIssuesUpdate}
           />
         </>
@@ -704,7 +792,10 @@ function SeasonEditor({ series, season, seasons, onSeriesUpdate }) {
   );
 }
 
-function SeasonActions({ series, season, hasEpisodes, generatingEpisodes, onGenerateEpisodes, onIssuesUpdate }) {
+function SeasonActions({
+  series, season, hasArc, hasEpisodes, generatingEpisodes,
+  verifying, onGenerateEpisodes, onValidateVolume, onIssuesUpdate,
+}) {
   const [adding, setAdding] = useState(false);
   const [newTitle, setNewTitle] = useState('');
   const seasonHasContext = !!(season.logline?.trim() || season.synopsis?.trim());
@@ -731,61 +822,87 @@ function SeasonActions({ series, season, hasEpisodes, generatingEpisodes, onGene
     toast.success(`Issue / Episode "${created.title}" added`);
   };
 
+  // Validate volume needs (1) an authored arc on the parent series and
+  // (2) at least one issue under this volume — otherwise there is nothing
+  // for the LLM to check against the volume's promises.
+  const validateDisabledReason = !hasArc
+    ? 'Generate the series arc first (the volume verifier checks against the arc)'
+    : !hasEpisodes
+      ? 'Add or generate at least one issue / episode first'
+      : null;
+
   return (
-    <div className="px-3 pb-3 pt-1 border-t border-port-border/50 flex items-center gap-2 flex-wrap">
-      {adding ? (
-        <form onSubmit={handleAdd} className="flex items-center gap-2 flex-1">
-          <input
-            value={newTitle}
-            onChange={(e) => setNewTitle(e.target.value)}
-            placeholder="Issue / Episode title…"
-            className="flex-1 px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm"
-            autoFocus
-            maxLength={300}
-          />
-          <button
-            type="submit"
-            disabled={!newTitle.trim()}
-            className="inline-flex items-center gap-1 px-3 py-1.5 rounded bg-port-accent text-white text-sm font-medium disabled:opacity-40"
-          >
-            <Plus size={12} /> Add
-          </button>
-          <button
-            type="button"
-            onClick={() => { setAdding(false); setNewTitle(''); }}
-            className="text-xs text-gray-400 hover:text-white px-2"
-          >
-            Cancel
-          </button>
-        </form>
-      ) : (
-        <>
-          <button
-            type="button"
-            onClick={() => setAdding(true)}
-            className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-gray-300 hover:text-white border border-port-border bg-port-bg"
-          >
-            <Plus size={12} /> Add issue / episode
-          </button>
-          <button
-            type="button"
-            onClick={onGenerateEpisodes}
-            disabled={generatingEpisodes || hasEpisodes || !seasonHasContext}
-            title={
-              hasEpisodes
-                ? 'Volume already has issues / episodes'
-                : !seasonHasContext
-                  ? 'Add a volume logline or synopsis first'
-                  : 'Have an LLM plan the per-issue / per-episode breakdown'
-            }
-            className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-port-accent hover:text-white border border-port-border bg-port-bg hover:border-port-accent/40 disabled:opacity-40 disabled:hover:text-port-accent"
-          >
-            {generatingEpisodes ? <Loader2 size={12} className="animate-spin" /> : <Wand2 size={12} />}
-            Generate issues / episodes (LLM)
-          </button>
-        </>
-      )}
-    </div>
+    <>
+      <div className="px-3 pb-2 pt-2 border-t border-port-border/50 flex items-center gap-2 flex-wrap">
+        {adding ? (
+          <form onSubmit={handleAdd} className="flex items-center gap-2 flex-1">
+            <input
+              value={newTitle}
+              onChange={(e) => setNewTitle(e.target.value)}
+              placeholder="Issue / Episode title…"
+              className="flex-1 px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm"
+              autoFocus
+              maxLength={300}
+            />
+            <button
+              type="submit"
+              disabled={!newTitle.trim()}
+              className="inline-flex items-center gap-1 px-3 py-1.5 rounded bg-port-accent text-white text-sm font-medium disabled:opacity-40"
+            >
+              <Plus size={12} /> Add
+            </button>
+            <button
+              type="button"
+              onClick={() => { setAdding(false); setNewTitle(''); }}
+              className="text-xs text-gray-400 hover:text-white px-2"
+            >
+              Cancel
+            </button>
+          </form>
+        ) : (
+          <>
+            <button
+              type="button"
+              onClick={() => setAdding(true)}
+              className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-gray-300 hover:text-white border border-port-border bg-port-bg"
+            >
+              <Plus size={12} /> Add issue / episode
+            </button>
+            <button
+              type="button"
+              onClick={onGenerateEpisodes}
+              disabled={generatingEpisodes || hasEpisodes || !seasonHasContext}
+              title={
+                hasEpisodes
+                  ? 'Volume already has issues / episodes'
+                  : !seasonHasContext
+                    ? 'Add a volume logline or synopsis first'
+                    : 'Have an LLM plan the per-issue / per-episode breakdown'
+              }
+              className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-port-accent hover:text-white border border-port-border bg-port-bg hover:border-port-accent/40 disabled:opacity-40 disabled:hover:text-port-accent"
+            >
+              {generatingEpisodes ? <Loader2 size={12} className="animate-spin" /> : <Wand2 size={12} />}
+              Generate issues / episodes (LLM)
+            </button>
+            <button
+              type="button"
+              onClick={onValidateVolume}
+              disabled={!!validateDisabledReason || verifying}
+              title={validateDisabledReason || `Deep continuity pass on volume ${season.number}`}
+              className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-gray-300 hover:text-white border border-port-border bg-port-bg hover:border-port-accent/40 disabled:opacity-40 disabled:hover:text-gray-300"
+            >
+              {verifying ? <Loader2 size={12} className="animate-spin" /> : <ShieldCheck size={12} />}
+              Validate volume
+            </button>
+          </>
+        )}
+      </div>
+      {!adding ? (
+        <div className="px-3 pb-3">
+          <VerifyScopeHint scope={VERIFY_VOLUME_SCOPE} />
+        </div>
+      ) : null}
+    </>
   );
 }
 

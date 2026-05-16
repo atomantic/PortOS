@@ -23,6 +23,7 @@ import { runStagedLLM } from '../../lib/stageRunner.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { getSeries, updateSeries } from './series.js';
 import { listIssues } from './issues.js';
+import { getSeason } from './seasons.js';
 import { sanitizeArc, sanitizeSeasonList, sanitizeSeason, buildSeason } from '../../lib/storyArc.js';
 import { recommendStructure, describeStructure } from '../../lib/seasonStructure.js';
 import { LENGTH_PROFILE_NAMES, DEFAULT_LENGTH_PROFILE } from '../../lib/issueLength.js';
@@ -53,7 +54,7 @@ function renderPriorSeason(s, priorIssues) {
   const header = `### Season ${s.number} — ${s.title}\n\n${s.logline}\n\n${s.synopsis || '(no synopsis)'}`;
   const seasonEpisodes = priorIssues
     .filter((iss) => iss.seasonId === s.id)
-    .sort((a, b) => (a.arcPosition ?? 9999) - (b.arcPosition ?? 9999));
+    .sort(compareIssuesByPosition);
   if (seasonEpisodes.length === 0) return header;
   const lines = seasonEpisodes.map((iss) => {
     const idea = (iss.stages?.idea?.input || '').trim();
@@ -106,6 +107,34 @@ const EMPTY_WORLD_CONTEXT = {
 async function resolveWorldContext(series, preloaded) {
   if (preloaded) return preloaded;
   return (await loadWorldContext(series.universeId)) || EMPTY_WORLD_CONTEXT;
+}
+
+// Canonical issue sort: arcPosition first (issues seeded by the season-
+// episode generator carry sequential positions), then series number as a
+// tiebreaker for issues that were created ad-hoc and never got a position.
+const compareIssuesByPosition = (a, b) =>
+  (a.arcPosition ?? 9999) - (b.arcPosition ?? 9999) || (a.number || 0) - (b.number || 0);
+
+// Series + world + arc fields shared by every arc-level prompt context.
+// Pulled out so verify-arc and verify-volume don't drift on what counts as
+// "the bible block" — both passes must see the same series identity.
+async function buildArcBaseContext(series, preloadedWorld) {
+  const arc = series.arc || {};
+  const world = await resolveWorldContext(series, preloadedWorld);
+  return {
+    series: {
+      name: series.name,
+      logline: series.logline,
+      premise: series.premise,
+    },
+    ...world,
+    arc: {
+      logline: arc.logline || '',
+      summary: arc.summary || '',
+      protagonistArc: arc.protagonistArc || '',
+      themesCsv: Array.isArray(arc.themes) ? arc.themes.join(', ') : '',
+    },
+  };
 }
 
 // The `recommendedStructure` field encodes comic-as-TV norms (6–10 per
@@ -338,7 +367,11 @@ export async function generateSeasonEpisodes(seriesId, seasonId, options = {}) {
  */
 async function buildVerifyContext(series, preloadedWorld) {
   const seasons = sanitizeSeasonList(series.seasons || []);
-  const issues = await listIssues({ seriesId: series.id });
+  const [issues, base, canon] = await Promise.all([
+    listIssues({ seriesId: series.id }),
+    buildArcBaseContext(series, preloadedWorld),
+    getSeriesCanon(series),
+  ]);
   // Group issues by seasonId so the tree's leaf order matches the seasons'
   // arcPosition order. Ungrouped issues land in a `null` bucket so the LLM
   // sees them too.
@@ -358,7 +391,7 @@ async function buildVerifyContext(series, preloadedWorld) {
     });
   }
   for (const list of issuesBySeason.values()) {
-    list.sort((a, b) => (a.arcPosition ?? 9999) - (b.arcPosition ?? 9999) || (a.number || 0) - (b.number || 0));
+    list.sort(compareIssuesByPosition);
   }
   const tree = seasons.map((s) => ({
     number: s.number,
@@ -379,22 +412,8 @@ async function buildVerifyContext(series, preloadedWorld) {
       episodes: ungrouped,
     });
   }
-  const arc = series.arc || {};
-  const world = await resolveWorldContext(series, preloadedWorld);
-  const canon = await getSeriesCanon(series);
   return {
-    series: {
-      name: series.name,
-      logline: series.logline,
-      premise: series.premise,
-    },
-    ...world,
-    arc: {
-      logline: arc.logline || '',
-      summary: arc.summary || '',
-      protagonistArc: arc.protagonistArc || '',
-      themesCsv: Array.isArray(arc.themes) ? arc.themes.join(', ') : '',
-    },
+    ...base,
     seasonsTreeJson: JSON.stringify(tree, null, 2),
     existingCharactersJson: JSON.stringify(canon.characters, null, 2),
     existingSettingsJson: JSON.stringify(canon.settings, null, 2),
@@ -444,6 +463,104 @@ export async function verifyArc(seriesId, options = {}) {
   );
   const issues = shapeVerifyIssues(content?.issues);
   return { issues, raw: content, runId, providerId, model };
+}
+
+// Set exactly one of `beats` / `synopsis` so the prompt's beat-level checks
+// don't run against synopsis-only issues (and vice-versa). Beats land in
+// idea.output once the LLM-expand pass runs; before that, idea.input still
+// carries the seed synopsis.
+function renderVolumeIssue(iss) {
+  const beats = (iss.stages?.idea?.output || '').trim();
+  const synopsis = (iss.stages?.idea?.input || '').trim();
+  const base = {
+    number: iss.number,
+    title: iss.title,
+    status: iss.status,
+    arcPosition: iss.arcPosition,
+  };
+  if (beats) return { ...base, beats };
+  return { ...base, synopsis: synopsis || null };
+}
+
+// Neighbor volumes — only the immediately-prior and immediately-next season
+// (by `number`) — so the LLM can check boundary continuity (#5 in the
+// prompt) without ballooning the context. Excludes the volume under review.
+function buildNeighborVolumes(allSeasons, currentSeasonId) {
+  const sorted = (allSeasons || [])
+    .filter((s) => s && s.id)
+    .slice()
+    .sort((a, b) => (a.number || 0) - (b.number || 0));
+  const idx = sorted.findIndex((s) => s.id === currentSeasonId);
+  if (idx < 0) return [];
+  const out = [];
+  if (idx > 0) out.push({ position: 'prior', ...sliceSeasonForNeighbor(sorted[idx - 1]) });
+  if (idx < sorted.length - 1) out.push({ position: 'next', ...sliceSeasonForNeighbor(sorted[idx + 1]) });
+  return out;
+}
+
+function sliceSeasonForNeighbor(s) {
+  return {
+    number: s.number,
+    title: s.title,
+    logline: s.logline || '',
+    synopsis: s.synopsis || '',
+    endingHook: s.endingHook || '',
+  };
+}
+
+async function buildVolumeVerifyContext(series, season, preloadedWorld) {
+  const [allIssues, base] = await Promise.all([
+    listIssues({ seriesId: series.id }),
+    buildArcBaseContext(series, preloadedWorld),
+  ]);
+  const volumeIssues = allIssues
+    .filter((iss) => iss.seasonId === season.id)
+    .sort(compareIssuesByPosition)
+    .map(renderVolumeIssue);
+  return {
+    ...base,
+    volume: {
+      number: season.number ?? '',
+      title: season.title || '',
+      logline: season.logline || '',
+      synopsis: season.synopsis || '',
+      endingHook: season.endingHook || '',
+      episodeCountTarget: season.episodeCountTarget ?? '',
+      themesCsv: Array.isArray(season.themes) ? season.themes.join(', ') : '',
+    },
+    neighborsJson: JSON.stringify(buildNeighborVolumes(series.seasons, season.id), null, 2),
+    volumeIssuesJson: JSON.stringify(volumeIssues, null, 2),
+  };
+}
+
+// Verify a single volume / season — the deeper, narrower counterpart to
+// verifyArc. The cross-volume pass operates at synopsis depth across the
+// whole arc; this pass operates at beat depth (when beats exist) across one
+// volume. Issues without beats are checked at synopsis depth — the prompt
+// is explicitly aware of which depth each issue is at, so a partially-
+// expanded volume can still be validated mid-workflow.
+export async function verifyVolume(seriesId, seasonId, options = {}) {
+  const series = await getSeries(seriesId);
+  if (!series.arc) {
+    throw new ServerError(
+      'Series has no arc — run /arc/generate first before verifying a volume',
+      { status: 400, code: 'PIPELINE_NO_ARC' },
+    );
+  }
+  const season = await getSeason(seriesId, seasonId);
+  const ctx = await buildVolumeVerifyContext(series, season, options.preloadedWorld);
+  const { content, runId, providerId, model } = await runStagedLLM(
+    'pipeline-volume-verify',
+    ctx,
+    {
+      providerOverride: options.providerOverride,
+      modelOverride: options.modelOverride,
+      returnsJson: true,
+      source: 'pipeline-volume-verify',
+    },
+  );
+  const issues = shapeVerifyIssues(content?.issues);
+  return { issues, raw: content, runId, providerId, model, seasonId };
 }
 
 async function buildResolveContext(series, findings, preloadedWorld) {
@@ -581,9 +698,12 @@ export const __testing = {
   buildArcOverviewContext,
   buildSeasonEpisodesContext,
   buildVerifyContext,
+  buildVolumeVerifyContext,
   buildResolveContext,
   shapeSeasonOutlines,
   shapeEpisodes,
   shapeVerifyIssues,
   shapeFindings,
+  renderVolumeIssue,
+  buildNeighborVolumes,
 };

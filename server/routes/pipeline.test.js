@@ -38,6 +38,7 @@ vi.mock('../services/pipeline/textStages.js', async () => {
 let arcGenerateSpy;
 let seasonEpisodesSpy;
 let arcVerifySpy;
+let volumeVerifySpy;
 vi.mock('../services/pipeline/arcPlanner.js', async () => {
   const actual = await vi.importActual('../services/pipeline/arcPlanner.js');
   return {
@@ -45,6 +46,7 @@ vi.mock('../services/pipeline/arcPlanner.js', async () => {
     generateArcOverview: vi.fn((...args) => arcGenerateSpy(...args)),
     generateSeasonEpisodes: vi.fn((...args) => seasonEpisodesSpy(...args)),
     verifyArc: vi.fn((...args) => arcVerifySpy(...args)),
+    verifyVolume: vi.fn((...args) => volumeVerifySpy(...args)),
   };
 });
 
@@ -1099,5 +1101,23 @@ describe('pipeline routes', () => {
     expect(r.status).toBe(200);
     expect(r.body.issues).toHaveLength(1);
     expect(r.body.issues[0].severity).toBe('high');
+  });
+
+  it('POST /series/:id/seasons/:seasonId/verify forwards to the volume verifier', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    volumeVerifySpy = vi.fn(async (_seriesId, seasonId) => ({
+      issues: [
+        { severity: 'medium', location: 'episode:3', problem: 'beats plateau', suggestion: 'escalate ep 3' },
+      ],
+      runId: 'rv', providerId: 'p', model: 'm', seasonId,
+    }));
+    const r = await request(app)
+      .post(`/api/pipeline/series/${ser.body.id}/seasons/sea-fake/verify`)
+      .send({ providerOverride: 'anthropic' });
+    expect(r.status).toBe(200);
+    expect(r.body.issues).toHaveLength(1);
+    expect(r.body.issues[0].location).toBe('episode:3');
+    expect(volumeVerifySpy).toHaveBeenCalledWith(ser.body.id, 'sea-fake', expect.objectContaining({ providerOverride: 'anthropic' }));
   });
 });

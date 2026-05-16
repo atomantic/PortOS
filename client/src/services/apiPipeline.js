@@ -251,6 +251,16 @@ export const verifyPipelineArc = (seriesId, { providerOverride, modelOverride } 
     body: JSON.stringify({ providerOverride, modelOverride }),
   });
 
+// Deep verify pass for a single volume / season. Complements verifyPipelineArc:
+// the arc pass is cross-volume + synopsis-depth; this pass is volume-scoped
+// and goes to beat depth for issues whose stages.idea.output is populated.
+// Returns { issues, runId, providerId, model, seasonId }. Empty issues[] = clean.
+export const verifyPipelineVolume = (seriesId, seasonId, { providerOverride, modelOverride } = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/seasons/${encodeURIComponent(seasonId)}/verify`, {
+    method: 'POST',
+    body: JSON.stringify({ providerOverride, modelOverride }),
+  });
+
 // Auto-resolve verification findings — server runs an LLM pass that rewrites
 // the arc + volume/season outlines to address every finding, then persists.
 // Pass `findings: [...]` to resolve only that subset; omit to re-verify and

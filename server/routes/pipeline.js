@@ -381,6 +381,8 @@ const providerOverrideShape = {
 const arcGenerateSchema = z.object({ ...providerOverrideShape, commit: z.boolean().optional() });
 const seasonEpisodesGenerateSchema = z.object({ ...providerOverrideShape, commit: z.boolean().optional() });
 const arcVerifySchema = z.object(providerOverrideShape);
+// Volume / season verify shares the same provider/model override shape.
+const volumeVerifySchema = z.object(providerOverrideShape);
 
 // Auto-resolve verification findings. `findings` empty/omitted = re-verify
 // first then resolve everything; otherwise the LLM only addresses the
@@ -654,6 +656,18 @@ router.post('/series/:id/arc/verify', asyncHandler(async (req, res) => {
   await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
   const body = validateRequest(arcVerifySchema, req.body ?? {});
   const result = await arcPlanner.verifyArc(req.params.id, body)
+    .catch((err) => { throw mapServiceError(err); });
+  res.json(result);
+}));
+
+// Per-volume verify — the deeper, narrower counterpart to /arc/verify.
+// Runs the pipeline-volume-verify prompt over a single season's issues,
+// going to beat depth when issues have beats and falling back to synopsis
+// depth otherwise so a partially-expanded volume can still be validated.
+router.post('/series/:id/seasons/:seasonId/verify', asyncHandler(async (req, res) => {
+  await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
+  const body = validateRequest(volumeVerifySchema, req.body ?? {});
+  const result = await arcPlanner.verifyVolume(req.params.id, req.params.seasonId, body)
     .catch((err) => { throw mapServiceError(err); });
   res.json(result);
 }));
