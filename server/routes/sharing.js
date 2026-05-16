@@ -25,7 +25,7 @@ import { SHARING_SCHEMA_VERSION } from '../services/sharing/version.js';
 import { attachWatcher, detachWatcher } from '../services/sharing/watcher.js';
 import { exportByKind } from '../services/sharing/exporter.js';
 import {
-  listInbox, promoteInboxItem, dismissInboxItem,
+  listInbox, promoteInboxItem, dismissInboxItem, processBacklog,
 } from '../services/sharing/importer.js';
 import {
   listSubscriptions, subscribe, unsubscribe,
@@ -65,6 +65,7 @@ router.post('/buckets', asyncHandler(async (req, res) => {
   const input = validateRequest(bucketCreateSchema, req.body || {});
   const bucket = await createBucket(input);
   await attachWatcher(bucket.id);
+  await processBacklog(bucket.id);
   res.status(201).json({ bucket: await hydrateBucket(bucket) });
 }));
 
