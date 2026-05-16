@@ -1,10 +1,13 @@
 /**
- * Share Bucket — chokidar watcher on each bucket's `manifests/` directory.
+ * Share Bucket — chokidar watcher on each bucket's `manifests/` and `assets/`
+ * directories.
  *
  * When a peer's cloud-sync app drops a new manifest into the shared folder,
- * chokidar fires `add` and we ingest it via importer.processManifest. Mirrors
- * the pattern in server/services/taskWatcher.js — persistent + ignoreInitial
- * + awaitWriteFinish so we don't pick up the file mid-write.
+ * chokidar fires `add` and we ingest it via importer.processManifest. When
+ * asset files arrive after the manifest, we rescan the backlog so pending
+ * manifests can finish. Mirrors the pattern in server/services/taskWatcher.js
+ * — persistent + ignoreInitial + awaitWriteFinish so we don't pick up the file
+ * mid-write.
  *
  * Per-bucket watchers are kept in a map keyed by bucket id so a bucket
  * registration / removal can attach / detach individually without restarting
@@ -17,6 +20,22 @@ import { processManifest, processBacklog, handleUnshare, sharingEvents } from '.
 import { getBucket, listBuckets, ensureBucketLayout } from './buckets.js';
 
 const watchers = new Map(); // bucketId → chokidar instance
+const backlogQueues = new Map(); // bucketId → promise chain
+
+function queueBacklog(bucketId) {
+  const previous = backlogQueues.get(bucketId) || Promise.resolve();
+  const next = previous
+    .catch(() => {})
+    .then(() => processBacklog(bucketId))
+    .catch((err) => {
+      console.error(`❌ sharing.watcher: backlog process failed bucket=${bucketId}: ${err?.message || err}`);
+    })
+    .finally(() => {
+      if (backlogQueues.get(bucketId) === next) backlogQueues.delete(bucketId);
+    });
+  backlogQueues.set(bucketId, next);
+  return next;
+}
 
 export async function attachWatcher(bucketId) {
   const existing = watchers.get(bucketId);
@@ -26,7 +45,8 @@ export async function attachWatcher(bucketId) {
   const bucket = await getBucket(bucketId);
   await ensureBucketLayout(bucket);
   const manifestsDir = join(bucket.path, 'manifests');
-  const w = watch(manifestsDir, {
+  const assetsDir = join(bucket.path, 'assets');
+  const w = watch([manifestsDir, assetsDir], {
     persistent: true,
     ignoreInitial: true,
     awaitWriteFinish: { stabilityThreshold: 300, pollInterval: 100 },
@@ -37,7 +57,10 @@ export async function attachWatcher(bucketId) {
   // request lifecycle, no Express middleware to bubble the throw to).
   w.on('add', async (path) => {
     const file = basename(path);
-    if (!file.endsWith('.json')) return;
+    if (!file.endsWith('.json')) {
+      if (path.includes(`${assetsDir}/`)) await queueBacklog(bucketId);
+      return;
+    }
     try {
       await processManifest(bucketId, file);
     } catch (err) {
@@ -49,7 +72,10 @@ export async function attachWatcher(bucketId) {
     // produces a stable file), but it can happen if a peer's sync app
     // does a delete-then-write. Re-process — cursor will dedup.
     const file = basename(path);
-    if (!file.endsWith('.json')) return;
+    if (!file.endsWith('.json')) {
+      if (path.includes(`${assetsDir}/`)) await queueBacklog(bucketId);
+      return;
+    }
     try {
       await processManifest(bucketId, file);
     } catch (err) {

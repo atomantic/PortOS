@@ -231,6 +231,49 @@ describe('sharing round-trip', () => {
     expect(fs.existsSync(join(tempData, 'images', 'second.png'))).toBe(true);
   });
 
+  it('keeps universe manifests retryable while Drive assets are still syncing', async () => {
+    const bucket = await buckets.createBucket({ name: 'SlowDriveBucket', path: tempBucket, mode: 'auto-merge' });
+    const universeBuilder = await import('../universeBuilder.js');
+    const mediaCollections = await import('../mediaCollections.js');
+    const { readCursor, hasBeenProcessed } = await import('./manifest.js');
+    const u = await universeBuilder.createUniverse({ name: 'Slow Sync Universe' });
+    const fs = await import('fs');
+    fs.writeFileSync(join(tempData, 'images', 'late.png'), 'LATEPNG');
+
+    const collection = await mediaCollections.findOrCreateCollectionByName({
+      name: `Universe: ${u.name}`, description: 'Linked', universeId: u.id,
+    });
+    await mediaCollections.addItem(collection.id, { kind: 'image', ref: 'fakeasset.png' });
+    await mediaCollections.addItem(collection.id, { kind: 'image', ref: 'late.png' });
+
+    const exp = await exporter.exportUniverse(u.id, bucket.id);
+    fs.rmSync(join(tempBucket, 'assets', 'images', 'late.png'), { force: true });
+    fs.rmSync(join(tempData, 'images', 'late.png'), { force: true });
+    await mediaCollections.deleteCollection(collection.id);
+    await universeBuilder.deleteUniverse(u.id);
+
+    const first = await importer.processManifest(bucket.id, exp.filename);
+    expect(first.pending).toBe(true);
+    expect(first.outcome.pendingAssets).toEqual([{ kind: 'image', ref: 'late.png' }]);
+    expect(first.outcome.collectionItemsAdded).toBe(1);
+    expect(first.outcome.collectionItemsDeferred).toBe(1);
+
+    let restoredCollection = (await mediaCollections.listCollections()).find((c) => c.universeId === u.id);
+    expect(restoredCollection.items.map((i) => i.ref)).toEqual(['fakeasset.png']);
+    let cursor = await readCursor(bucket.id);
+    expect(hasBeenProcessed(cursor, exp.filename, exp.manifestId)).toBe(false);
+
+    fs.writeFileSync(join(tempBucket, 'assets', 'images', 'late.png'), 'LATEPNG');
+    const retry = await importer.processBacklog(bucket.id);
+    expect(retry.processed).toBe(1);
+
+    restoredCollection = (await mediaCollections.listCollections()).find((c) => c.universeId === u.id);
+    expect(restoredCollection.items.map((i) => i.ref).sort()).toEqual(['fakeasset.png', 'late.png']);
+    expect(fs.existsSync(join(tempData, 'images', 'late.png'))).toBe(true);
+    cursor = await readCursor(bucket.id);
+    expect(hasBeenProcessed(cursor, exp.filename, exp.manifestId)).toBe(true);
+  });
+
   it('subscription round-trip: subscribe → mutate → re-export onto same filename → unsubscribe → unshared event', async () => {
     const { subscribe, unsubscribe, subscriptionFilename, __resetForTests } = await import('./subscriptions.js');
     const { sharingEvents } = await import('./importer.js');

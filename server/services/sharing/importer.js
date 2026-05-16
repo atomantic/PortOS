@@ -8,8 +8,10 @@
  *   - bucket.mode === 'inbox' → write a pending-import entry into
  *     `data/sharing/inbox/<bucketId>.json` for the user to review + promote.
  *
- * Either way the cursor records the manifest filename so the watcher doesn't
- * replay it on restart.
+ * Once required asset blobs are present, the cursor records the manifest
+ * filename so the watcher doesn't replay it on restart. If cloud sync delivers
+ * the manifest before its assets, the importer applies/copies what is available
+ * and leaves the manifest retryable until the remaining blobs arrive.
  *
  * Asset blobs referenced by the manifest are copied from the bucket's
  * `assets/{images,videos}/` into the local `data/{images,videos}/` directories
@@ -58,11 +60,11 @@ function remoteWins(localTs, remoteTs) {
  * swallowed (the item already exists locally; nothing to do).
  *
  * The asset blobs are NOT copied here — `copyAssetsLocally` (called in
- * `processManifest`) already pulled every `assetRefs[]` entry, which
- * includes the collection items. This function only persists the local
- * collection record so the items show up in the user's UI.
+ * `processManifest`) already pulled every available asset entry. This function
+ * only persists collection membership for items whose blobs are present so the
+ * UI does not point at files that Google Drive has not synced yet.
  */
-async function mergeCollectionPayload(payload) {
+async function mergeCollectionPayload(payload, availableAssetKeys = null) {
   if (!payload?.universeId || !Array.isArray(payload.items)) return { itemsAdded: 0 };
   const collection = await findOrCreateCollectionByName({
     name: payload.name || `Universe: ${payload.universeId}`,
@@ -74,8 +76,13 @@ async function mergeCollectionPayload(payload) {
   });
   if (!collection) return { itemsAdded: 0 };
   let added = 0;
+  let deferred = 0;
   for (const item of payload.items) {
     if (!item?.kind || !item?.ref) continue;
+    if (availableAssetKeys && !availableAssetKeys.has(`${item.kind}:${basename(item.ref)}`)) {
+      deferred += 1;
+      continue;
+    }
     const result = await addCollectionItem(collection.id, item).catch((err) => {
       if (err?.code === COLLECTION_ERR_DUPLICATE) return null;
       console.log(`⚠️ sharing.importer: addCollectionItem failed for ${item.ref}: ${err.message}`);
@@ -83,13 +90,37 @@ async function mergeCollectionPayload(payload) {
     });
     if (result) added += 1;
   }
-  return { itemsAdded: added };
+  return { itemsAdded: added, itemsDeferred: deferred };
+}
+
+function manifestAssetRefs(manifest) {
+  const refs = [];
+  const seen = new Set();
+  const push = (raw) => {
+    if (!raw || !isStr(raw.ref)) return;
+    const kind = raw.kind === 'video' ? 'video' : 'image';
+    const filename = basename(raw.ref);
+    if (!filename || filename !== raw.ref) return;
+    const key = `${kind}:${filename}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    refs.push({ kind, ref: filename });
+  };
+  for (const ref of manifest?.assetRefs || []) push(ref);
+  // Universe collection payloads are also asset membership. Import from the
+  // payload so late-arriving Drive files can be copied and added incrementally
+  // even if assetRefs was incomplete in an older manifest.
+  for (const item of manifest?.collection?.items || []) push(item);
+  return refs;
 }
 
 /** Copy bundled assets from the bucket into local data dirs. Runs in parallel. */
 async function copyAssetsLocally(bucketPath, assetRefs) {
   await ensureDir(PATHS.images);
   await ensureDir(PATHS.videos);
+  const copied = [];
+  const available = [];
+  const missing = [];
   await Promise.all((assetRefs || []).map(async (ref) => {
     if (!ref || !isStr(ref.ref)) return;
     const filename = basename(ref.ref);
@@ -99,11 +130,13 @@ async function copyAssetsLocally(bucketPath, assetRefs) {
     const sourcePath = join(sourceDir, filename);
     const targetPath = join(targetDir, filename);
     if (!existsSync(sourcePath)) {
-      console.log(`⚠️ sharing.importer: asset ${filename} listed in manifest but missing in bucket`);
+      missing.push({ kind: isVideo ? 'video' : 'image', ref: filename });
       return;
     }
+    available.push({ kind: isVideo ? 'video' : 'image', ref: filename });
     if (!existsSync(targetPath)) {
       await copyFile(sourcePath, targetPath);
+      copied.push({ kind: isVideo ? 'video' : 'image', ref: filename });
     }
     if (!isVideo) {
       const sidecarBase = filename.replace(/\.(png|jpe?g|webp)$/i, '') + '.metadata.json';
@@ -114,6 +147,7 @@ async function copyAssetsLocally(bucketPath, assetRefs) {
       }
     }
   }));
+  return { copied, available, missing };
 }
 
 /** Merge bucket-bundled media-job records into local data/media-jobs.json. */
@@ -178,7 +212,7 @@ async function readReferencedRecords(bucketPath, manifest) {
  * than remote and got replaced — surfaced via the socket event so the user
  * is notified when auto-merge clobbers local edits.
  */
-async function applyAutoMerge(bucket, manifest, records) {
+async function applyAutoMerge(bucket, manifest, records, { availableAssetKeys = null } = {}) {
   let applied = 0;
   const overridden = [];
 
@@ -224,13 +258,15 @@ async function applyAutoMerge(bucket, manifest, records) {
   // are unioned into a local "Universe: <name>" collection so peer-
   // generated images appear alongside the universe in the recipient's UI.
   let itemsAdded = 0;
+  let itemsDeferred = 0;
   if (manifest.collection) {
-    const r = await mergeCollectionPayload(manifest.collection);
+    const r = await mergeCollectionPayload(manifest.collection, availableAssetKeys);
     itemsAdded = r.itemsAdded;
+    itemsDeferred = r.itemsDeferred || 0;
     if (itemsAdded > 0) applied += itemsAdded;
   }
 
-  return { applied, overridden, collectionItemsAdded: itemsAdded };
+  return { applied, overridden, collectionItemsAdded: itemsAdded, collectionItemsDeferred: itemsDeferred };
 }
 
 const INBOX_MAX = 1000;
@@ -324,15 +360,24 @@ export async function processManifest(bucketId, manifestFilename) {
   const records = await readReferencedRecords(bucket.path, manifest);
 
   // Always copy assets + media-job records ahead of the merge so canon and
-  // pipeline records that reference them point at present files.
-  await copyAssetsLocally(bucket.path, manifest.assetRefs);
+  // pipeline records that reference them point at present files. Asset sync can
+  // lag behind manifest sync in Drive/Dropbox/etc.; copy what exists now and
+  // leave the manifest un-cursored until the rest arrives.
+  const assetCopy = await copyAssetsLocally(bucket.path, manifestAssetRefs(manifest));
+  const availableAssetKeys = new Set(assetCopy.available.map((ref) => `${ref.kind}:${ref.ref}`));
   await mergeMediaJobRecords(bucket.path, manifest.recordIds);
 
   let outcome;
   if (bucket.mode === 'auto-merge') {
-    outcome = { mode: 'auto-merge', ...(await applyAutoMerge(bucket, manifest, records)) };
+    outcome = { mode: 'auto-merge', ...(await applyAutoMerge(bucket, manifest, records, { availableAssetKeys })) };
   } else {
     outcome = { mode: 'inbox', ...(await applyInbox(bucket, manifest, manifestFilename, records)) };
+  }
+  if (assetCopy.missing.length > 0) {
+    outcome.pendingAssets = assetCopy.missing;
+    sharingEvents.emit('manifest-processed', { bucketId, manifestId: manifest.id, manifestFilename, outcome });
+    console.log(`⏳ sharing: bucket=${bucket.name} manifest=${manifest.id} kind=${manifest.kind} mode=${bucket.mode} waitingForAssets=${assetCopy.missing.length}`);
+    return { processed: true, pending: true, manifest, outcome };
   }
   await markProcessed(bucketId, manifestFilename, manifest.id);
 
@@ -346,13 +391,11 @@ export async function processBacklog(bucketId) {
   const bucket = await getBucket(bucketId);
   const manifestsDir = join(bucket.path, 'manifests');
   if (!existsSync(manifestsDir)) return { processed: 0 };
-  const cursor = await readCursor(bucketId);
   const filenames = (await readdir(manifestsDir).catch(() => []))
     .filter((f) => f.endsWith('.json'))
     .sort();
   let processed = 0;
   for (const f of filenames) {
-    if (hasBeenProcessed(cursor, f)) continue;
     const res = await processManifest(bucketId, f).catch((err) => {
       console.log(`⚠️ sharing.importer: processManifest failed for ${f}: ${err.message}`);
       return null;
@@ -372,9 +415,16 @@ export async function promoteInboxItem(bucketId, manifestId) {
   const manifest = await readManifest(bucket.path, item.manifestFilename);
   if (!manifest) throw new Error(`Manifest no longer exists in bucket: ${item.manifestFilename}`);
   const records = await readReferencedRecords(bucket.path, manifest);
-  await copyAssetsLocally(bucket.path, manifest.assetRefs);
+  const assetCopy = await copyAssetsLocally(bucket.path, manifestAssetRefs(manifest));
+  if (assetCopy.missing.length > 0) {
+    throw Object.assign(new Error(`Manifest assets are still syncing (${assetCopy.missing.length} missing)`), {
+      code: 'SHARING_ASSETS_PENDING',
+      missingAssets: assetCopy.missing,
+    });
+  }
   await mergeMediaJobRecords(bucket.path, manifest.recordIds);
-  const outcome = await applyAutoMerge(bucket, manifest, records);
+  const availableAssetKeys = new Set(assetCopy.available.map((ref) => `${ref.kind}:${ref.ref}`));
+  const outcome = await applyAutoMerge(bucket, manifest, records, { availableAssetKeys });
   // Drop from inbox.
   inbox.items.splice(idx, 1);
   await writeInbox(bucketId, inbox);
