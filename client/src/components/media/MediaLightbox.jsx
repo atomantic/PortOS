@@ -17,6 +17,16 @@ import { useScrollLock } from '../../hooks/useScrollLock';
 
 const NOTE_MAX = 2000;
 const NOTE_DEBOUNCE_MS = 500;
+const SAVED_INDICATOR_MS = 1500;
+
+// Window-level shortcuts (f, s, arrows) must skip editable targets — otherwise
+// typing in the note textarea triggers fullscreen / favorite / nav instead of
+// inserting text or moving the caret. Window listeners fire after the target,
+// so preventDefault here still cancels the browser's default text behavior.
+const isEditableTarget = (e) => {
+  const t = e.target;
+  return !!(t && (t.tagName === 'TEXTAREA' || t.tagName === 'INPUT' || t.isContentEditable));
+};
 
 // Mirror of CLEAN_LEVELS in server/routes/imageClean.js. If the server adds a
 // new level, drop a label here and the pill renders automatically.
@@ -63,26 +73,25 @@ export default function MediaLightbox({
         cb.onClose();
         return;
       }
+      const inEditable = isEditableTarget(e);
       if (e.key === 'f' || e.key === 'F') {
+        if (inEditable) return;
         setFullScreen((v) => !v);
         return;
       }
-      // `s` toggles favorite — but only when focus is on the body, not while
-      // typing in the note textarea (which would eat every literal "s").
       if ((e.key === 's' || e.key === 'S') && cb.onAnnotationChange) {
-        const t = e.target;
-        const inEditable = t && (t.tagName === 'TEXTAREA' || t.tagName === 'INPUT' || t.isContentEditable);
-        if (!inEditable) {
-          e.preventDefault();
-          cb.onAnnotationChange({ starred: !cb.starred });
-          return;
-        }
+        if (inEditable) return;
+        e.preventDefault();
+        cb.onAnnotationChange({ starred: !cb.starred });
+        return;
       }
       if (e.key === 'ArrowLeft' && hasPrevious && cb.onPrevious) {
+        if (inEditable) return;
         e.preventDefault();
         cb.onPrevious();
       }
       if (e.key === 'ArrowRight' && hasNext && cb.onNext) {
+        if (inEditable) return;
         e.preventDefault();
         cb.onNext();
       }
@@ -257,19 +266,50 @@ function SettingsPane({
   // page components pass inline-arrow onAnnotationChange callbacks, which
   // would otherwise restart the timer every time a media-gen event arrived.
   const [noteDraft, setNoteDraft] = useState(annotation?.note ?? '');
+  const [saveStatus, setSaveStatus] = useState('idle');
   const onSaveRef = useRef(onAnnotationChange);
+  const pendingNoteRef = useRef(null);
   useEffect(() => { onSaveRef.current = onAnnotationChange; });
+  // Sync noteDraft to whatever the server says (server push, save echo,
+  // initial load). Kept separate from the item-swap effect so a successful
+  // save's prop update doesn't also reset saveStatus and hide "Saved".
   useEffect(() => {
     setNoteDraft(annotation?.note ?? '');
   }, [item?.key, annotation?.note]);
+  // On item swap (or full unmount): flush any pending note to the *old* item's
+  // save callback before resetting local state. onSaveRef still holds the old
+  // closure at cleanup time because React runs effect cleanups before the new
+  // render's ref-update effect body fires. Without this, prev/next silently
+  // drops a mid-debounce edit.
+  useEffect(() => {
+    setSaveStatus('idle');
+    return () => {
+      if (pendingNoteRef.current !== null && onSaveRef.current) {
+        onSaveRef.current({ note: pendingNoteRef.current });
+        pendingNoteRef.current = null;
+      }
+    };
+  }, [item?.key]);
   useEffect(() => {
     if (!onSaveRef.current) return undefined;
-    if (noteDraft === (annotation?.note ?? '')) return undefined;
+    if (noteDraft === (annotation?.note ?? '')) {
+      pendingNoteRef.current = null;
+      return undefined;
+    }
+    pendingNoteRef.current = noteDraft;
+    setSaveStatus('pending');
     const handle = setTimeout(() => {
       onSaveRef.current?.({ note: noteDraft });
+      pendingNoteRef.current = null;
+      setSaveStatus('saved');
     }, NOTE_DEBOUNCE_MS);
     return () => clearTimeout(handle);
   }, [noteDraft, annotation?.note]);
+  useEffect(() => {
+    if (saveStatus !== 'saved') return undefined;
+    const handle = setTimeout(() => setSaveStatus('idle'), SAVED_INDICATOR_MS);
+    return () => clearTimeout(handle);
+  }, [saveStatus]);
   return (
     <aside className={asideClasses} onClick={(e) => e.stopPropagation()}>
       <header className="flex items-center justify-between p-3 border-b border-port-border">
@@ -319,7 +359,12 @@ function SettingsPane({
           <div>
             <div className="flex items-center justify-between mb-1">
               <span className="text-gray-500 uppercase tracking-wide">Notes</span>
-              <span className="text-[10px] text-gray-500">{noteDraft.length}/{NOTE_MAX}</span>
+              <div className="flex items-center gap-2 text-[10px] text-gray-500">
+                {saveStatus === 'pending' && <span>Saving…</span>}
+                {saveStatus === 'saved' && <span className="text-port-success">Saved</span>}
+                {saveStatus === 'idle' && <span>Saves automatically</span>}
+                <span>{noteDraft.length}/{NOTE_MAX}</span>
+              </div>
             </div>
             <textarea
               value={noteDraft}
