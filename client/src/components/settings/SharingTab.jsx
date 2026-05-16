@@ -98,3 +98,5 @@ export function SharingTab() {
     </div>
   );
 }
+
+export default SharingTab;
