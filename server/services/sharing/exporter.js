@@ -18,7 +18,7 @@ import { copyFile, readFile, writeFile, stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import { PATHS, ensureDir, atomicWrite, readJSONFile } from '../../lib/fileUtils.js';
 import { getBucket, ensureBucketLayout } from './buckets.js';
-import { buildManifest, writeManifest } from './manifest.js';
+import { buildManifest, writeManifest, pruneBucketManifests } from './manifest.js';
 import { listSeries, getSeries } from '../pipeline/series.js';
 import { listIssues } from '../pipeline/issues.js';
 import { getUniverse } from '../universeBuilder.js';
@@ -38,6 +38,18 @@ async function resolveSourceName(bucket) {
     return settings.sharingDisplayName.trim();
   }
   return os.userInfo().username || 'unknown';
+}
+
+/**
+ * Best-effort cap on the bucket's manifest directory after each export.
+ * Subscription manifests + peer-authored manifests are exempt — see
+ * `pruneBucketManifests` for the policy. Failures are logged + swallowed
+ * so the export response isn't blocked on an archive miss.
+ */
+async function pruneAfterExport(bucket, senderInstanceId) {
+  await pruneBucketManifests(bucket, { localInstanceId: senderInstanceId }).catch((err) => {
+    console.log(`⚠️ sharing.exporter: pruneBucketManifests failed for bucket=${bucket.name}: ${err.message}`);
+  });
 }
 
 async function resolveSourceBio(bucket) {
@@ -315,6 +327,7 @@ export async function exportSeries(seriesId, bucketId, opts = {}) {
 
   const manifest = { ...manifestStub, recordIds, assetRefs };
   const filename = await writeManifest(bucket.path, manifest);
+  await pruneAfterExport(bucket, senderInstanceId);
   return { manifestId, filename, recordCount: recordIds.length, assetCount: assetRefs.length };
 }
 
@@ -372,6 +385,7 @@ export async function exportUniverse(universeId, bucketId, opts = {}) {
 
   const manifest = { ...manifestStub, recordIds: [universe.id], assetRefs };
   const filename = await writeManifest(bucket.path, manifest);
+  await pruneAfterExport(bucket, senderInstanceId);
   return { manifestId, filename, recordCount: 1, assetCount: assetRefs.length };
 }
 
@@ -424,6 +438,7 @@ export async function exportMedia(items, bucketId) {
 
   const manifest = { ...manifestStub, recordIds, assetRefs };
   const filename = await writeManifest(bucket.path, manifest);
+  await pruneAfterExport(bucket, senderInstanceId);
   return { manifestId, filename, recordCount: recordIds.length, assetCount: assetRefs.length };
 }
 

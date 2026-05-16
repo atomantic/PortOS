@@ -18,6 +18,8 @@ import { watch } from 'chokidar';
 import { join, basename } from 'path';
 import { processManifest, processBacklog, handleUnshare, sharingEvents } from './importer.js';
 import { getBucket, listBuckets, ensureBucketLayout } from './buckets.js';
+import { isManifestPruning, pruneBucketManifests } from './manifest.js';
+import { getInstanceId } from '../instances.js';
 
 const watchers = new Map(); // bucketId → chokidar instance
 const backlogQueues = new Map(); // bucketId → { running: Promise, queued: Promise|null }
@@ -106,6 +108,10 @@ export async function attachWatcher(bucketId) {
     if (!path.includes(`${manifestsDir}/`)) return;
     const file = basename(path);
     if (!file.endsWith('.json')) return;
+    // Our own pruner moves stale manifests into `<bucket>/.archive/manifests/`;
+    // skip the resulting unlink so we don't reset our cursor or emit a
+    // misleading "peer unshared" socket event for an archive we initiated.
+    if (isManifestPruning(bucketId, file)) return;
     try {
       await handleUnshare(bucketId, file);
     } catch (err) {
@@ -131,6 +137,7 @@ export async function detachWatcher(bucketId) {
 
 export async function attachAllWatchers() {
   const buckets = await listBuckets();
+  const localInstanceId = await getInstanceId().catch(() => null);
   for (const b of buckets) {
     await attachWatcher(b.id).catch((err) => {
       console.error(`❌ sharing.watcher: failed to attach bucket=${b.name}: ${err.message}`);
@@ -139,6 +146,13 @@ export async function attachAllWatchers() {
     await processBacklog(b.id).catch((err) => {
       console.error(`❌ sharing.watcher: backlog process failed bucket=${b.name}: ${err.message}`);
     });
+    // One-shot prune on boot: handles long-lived buckets where this instance
+    // rarely exports (post-export prune wouldn't fire often enough).
+    if (localInstanceId) {
+      await pruneBucketManifests(b, { localInstanceId }).catch((err) => {
+        console.error(`❌ sharing.watcher: prune failed bucket=${b.name}: ${err.message}`);
+      });
+    }
   }
   return { attached: watchers.size };
 }

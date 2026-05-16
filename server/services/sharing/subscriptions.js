@@ -25,7 +25,16 @@ import { PATHS, atomicWrite, readJSONFile, ensureDir } from '../../lib/fileUtils
 import { isStr } from '../../lib/storyBible.js';
 import { getBucket } from './buckets.js';
 import { exportSeries, exportUniverse } from './exporter.js';
-import { recordEvents } from './recordEvents.js';
+import {
+  recordEvents,
+  isReexportSuppressed,
+  withReexportSuppressed,
+  __resetReexportSuppression,
+} from './recordEvents.js';
+
+// Re-export so existing callers (importer.js etc.) keep their import path
+// stable; the canonical implementation now lives in recordEvents.js.
+export { withReexportSuppressed };
 import { subscriptionFilename } from './manifest.js';
 
 // Re-export from the canonical source so other modules can import the
@@ -217,24 +226,6 @@ export async function unsubscribeAllForRecord(recordKind, recordId) {
  */
 const DEBOUNCE_MS = 3000;
 const pendingTimers = new Map(); // subId → Timeout
-const suppressedReexports = new Map(); // `${kind}:${id}` → count
-
-function suppressionKey(recordKind, recordId) {
-  return `${recordKind}:${recordId}`;
-}
-
-export async function withReexportSuppressed(recordKind, recordId, fn) {
-  if (!recordKind || !recordId || typeof fn !== 'function') return fn?.();
-  const key = suppressionKey(recordKind, recordId);
-  suppressedReexports.set(key, (suppressedReexports.get(key) || 0) + 1);
-  try {
-    return await fn();
-  } finally {
-    const next = (suppressedReexports.get(key) || 1) - 1;
-    if (next <= 0) suppressedReexports.delete(key);
-    else suppressedReexports.set(key, next);
-  }
-}
 
 async function reexportNow(sub) {
   const exp = await runExport(sub).catch((err) => {
@@ -252,7 +243,7 @@ async function reexportNow(sub) {
 }
 
 export async function reexportSubscribedRecord(recordKind, recordId) {
-  if (suppressedReexports.has(suppressionKey(recordKind, recordId))) return;
+  if (isReexportSuppressed(recordKind, recordId)) return;
   const subs = await listSubscriptions({ recordKind, recordId });
   for (const sub of subs) {
     const existing = pendingTimers.get(sub.id);
@@ -294,7 +285,7 @@ export function installSubscriptionListener() {
 export function __resetForTests() {
   for (const t of pendingTimers.values()) clearTimeout(t);
   pendingTimers.clear();
-  suppressedReexports.clear();
+  __resetReexportSuppression();
   if (onUpdated) recordEvents.off('updated', onUpdated);
   if (onDeleted) recordEvents.off('deleted', onDeleted);
   onUpdated = null;

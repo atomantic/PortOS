@@ -174,13 +174,19 @@ const LIGHT_CONTEXT_PROVIDER_TYPES = new Set(['tui', 'cli']);
  * @param {Function} isTruthyMetaFn - isTruthyMeta function (passed to avoid circular dep)
  * @param {Object} options
  * @param {string} [options.providerType='api'] - `'tui' | 'cli' | 'api'`
+ * @param {string} [options.providerId] - Provider id (e.g. `'claude-code'`). When the
+ *   CLI provider has access to the project's slashdo commands (Claude Code), the
+ *   light prompt instructs the agent to run `/simplify` and `/do:pr` itself
+ *   instead of relying on PortOS's post-exit push+PR. The spawner must then
+ *   pass `openPR: false` to `cleanupAgentWorktree` to avoid double-firing.
  */
 export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo = null, isTruthyMetaFn = (v) => v === true || v === 'true', options = {}) {
   const providerType = options.providerType || 'api';
+  const providerId = options.providerId || null;
   const isTui = providerType === 'tui';
 
   if (LIGHT_CONTEXT_PROVIDER_TYPES.has(providerType)) {
-    return buildLightContextPrompt(task, workspaceDir, worktreeInfo, isTruthyMetaFn, { isTui });
+    return buildLightContextPrompt(task, workspaceDir, worktreeInfo, isTruthyMetaFn, { isTui, providerId });
   }
 
   // Full path: API providers don't read CLAUDE.md natively, so always include it.
@@ -489,13 +495,18 @@ Begin working on the task now.`;
  * Falls back gracefully when worktree/jira/pipeline metadata is absent — only
  * the present sections render.
  */
-export function buildLightContextPrompt(task, workspaceDir, worktreeInfo, isTruthyMetaFn, { isTui = true } = {}) {
+export function buildLightContextPrompt(task, workspaceDir, worktreeInfo, isTruthyMetaFn, { isTui = true, providerId = null } = {}) {
   const willOpenPR = isTruthyMetaFn(task.metadata?.openPR);
   const willReviewLoop = isTruthyMetaFn(task.metadata?.reviewLoop);
   const simplifyEnabled = isTruthyMetaFn(task.metadata?.simplify);
   const isReadOnly = isTruthyMetaFn(task.metadata?.readOnly);
   const isReviewLoopFollowUp = isTruthyMetaFn(task.metadata?.reviewLoopFollowUp);
   const isWorktreeOnExistingBranch = worktreeInfo?.existingBranch === true;
+  // Claude Code CLI providers can drive `/simplify` + `/do:pr` themselves
+  // (the slashdo submodule mounts those as project-level slash commands).
+  // Other CLI providers (codex, gemini) can't — they get the legacy
+  // commit-only block where PortOS handles push+PR on exit.
+  const hasSlashdo = !isTui && (providerId === 'claude-code' || providerId === 'claude-code-bedrock');
 
   const sections = [];
 
@@ -532,7 +543,7 @@ export function buildLightContextPrompt(task, workspaceDir, worktreeInfo, isTrut
       `- **Path**: \`${worktreeInfo.worktreePath}\``,
       worktreeInfo.baseBranch ? `- **Based on**: \`${worktreeInfo.baseBranch}\`` : null,
       '',
-      worktreeCommitGuidance({ isTui, isWorktreeOnExistingBranch, willOpenPR }),
+      worktreeCommitGuidance({ isTui, hasSlashdo, isWorktreeOnExistingBranch, willOpenPR }),
       'Do NOT manually switch branches or modify the worktree configuration.'
     ].filter(Boolean).join('\n'));
   }
@@ -595,7 +606,7 @@ export function buildLightContextPrompt(task, workspaceDir, worktreeInfo, isTrut
       willOpenPR, willReviewLoop, simplifyEnabled, sentinelPath: `${worktreeInfo?.worktreePath || workspaceDir}/.agent-done`
     }));
   } else {
-    sections.push(buildCliCompletionSection({ worktreeInfo, willOpenPR }));
+    sections.push(buildCliCompletionSection({ worktreeInfo, willOpenPR, hasSlashdo, simplifyEnabled }));
   }
 
   sections.push('Begin working on the task now.');
@@ -605,13 +616,19 @@ export function buildLightContextPrompt(task, workspaceDir, worktreeInfo, isTrut
 /**
  * Worktree commit-guidance helper for the light prompt. Picks the right
  * single-sentence instruction based on whether the agent will run its own
- * push workflow (TUI), reuse an existing PR branch (review fixes), or hand
- * off to PortOS's post-exit push.
+ * push workflow (TUI or Claude Code CLI with slashdo), reuse an existing PR
+ * branch (review fixes), or hand off to PortOS's post-exit push.
  */
-function worktreeCommitGuidance({ isTui, isWorktreeOnExistingBranch, willOpenPR }) {
+function worktreeCommitGuidance({ isTui, hasSlashdo, isWorktreeOnExistingBranch, willOpenPR }) {
   if (isTui) return 'Commit your changes to this branch — see **Completion Workflow** below.';
   if (isWorktreeOnExistingBranch) {
     return 'Commit and **push** any review-fix commits to this branch (the PR points at it). Use `git pull --rebase` before pushing if needed.';
+  }
+  if (hasSlashdo && willOpenPR) {
+    return 'Commit your changes here — the **Completion** section below drives the push and PR. PortOS will NOT push or open a PR on your behalf.';
+  }
+  if (hasSlashdo) {
+    return 'Commit your changes here — the **Completion** section below drives the push. PortOS will NOT push on your behalf.';
   }
   if (willOpenPR) {
     return 'Commit your changes here. The system will push and open a PR after you exit — do NOT push or open a PR yourself.';
@@ -662,11 +679,36 @@ function buildTuiCompletionSection({ willOpenPR, willReviewLoop, simplifyEnabled
 }
 
 /**
- * CLI (non-TUI) completion block. CLI agents (codex exec / claude -p /
- * gemini one-shot) don't have slashdo commands available — they commit and
- * PortOS handles the push/PR after exit.
+ * CLI (non-TUI) completion block.
+ *
+ * Claude Code CLI agents have slashdo commands available (the submodule
+ * mounts them as project-level slash commands), so when `hasSlashdo` is
+ * true and a PR is expected, the agent owns the full `/simplify` → `/do:pr`
+ * sequence and PortOS skips its post-exit push+PR. Codex/Gemini and other
+ * CLI providers fall through to the legacy commit-only block where PortOS
+ * handles push+PR on exit.
  */
-function buildCliCompletionSection({ worktreeInfo, willOpenPR }) {
+function buildCliCompletionSection({ worktreeInfo, willOpenPR, hasSlashdo = false, simplifyEnabled = false }) {
+  if (hasSlashdo && worktreeInfo && willOpenPR) {
+    const lines = ['## Completion', 'When finished, run these in order without further user input:'];
+    let step = 1;
+    if (simplifyEnabled) {
+      lines.push(`${step++}. \`/simplify\` — review the changed code for reuse, quality, and efficiency, and fix any findings.`);
+    }
+    lines.push(`${step++}. \`/do:pr\` — commits your changes, pushes the branch, and opens a pull request against the default branch.`);
+    lines.push('', 'PortOS will NOT push or open a PR on your behalf.');
+    return lines.join('\n');
+  }
+  if (hasSlashdo && worktreeInfo) {
+    const lines = ['## Completion', 'When finished, run these in order without further user input:'];
+    let step = 1;
+    if (simplifyEnabled) {
+      lines.push(`${step++}. \`/simplify\` — review the changed code for reuse, quality, and efficiency, and fix any findings.`);
+    }
+    lines.push(`${step++}. \`/do:push\` — commits your changes and pushes the branch.`);
+    lines.push('', 'PortOS will NOT push on your behalf.');
+    return lines.join('\n');
+  }
   let body;
   if (worktreeInfo && willOpenPR) {
     body = 'Commit your changes (stage specific files, `feat:`/`fix:` prefix, no Co-Authored-By). Do NOT push — PortOS will push and open the PR after you exit.';

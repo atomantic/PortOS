@@ -367,9 +367,8 @@ Repository: {repoPath}
    - <question 1>
    - <question 2>
    \`\`\`
-9. Annotate the PLAN.md item by appending \` <!-- NEEDS_INPUT -->\` to its line
-10. Commit both changes with message "chore: flag PLAN.md item needing user input"
-11. Do NOT open a PR — stop here
+9. **Move the unchecked item to the bottom of PLAN.md and annotate it with \` <!-- NEEDS_INPUT -->\`** — remove the line from its current position and append it at the end of the file with the annotation. This keeps the queue moving so the next \`feature-ideas\` run picks up a different actionable item instead of repeatedly tripping on this one.
+10. Commit both changes (the new \`.plan-questions.md\` file and the PLAN.md move) with message \`chore: flag PLAN.md item needing user input\`. Then proceed to the **Completion** section below so the clarification PR is opened for the user to review — do NOT leave the worktree orphaned.
 
 ## Phase 4 — Brainstorm a New Feature
 
@@ -440,16 +439,15 @@ Capture the exact text of the item you selected (without the leading \`- [ ]\`) 
    - <question 1>
    - <question 2>
    \`\`\`
-8. Annotate the PLAN.md item by appending \` <!-- NEEDS_INPUT -->\` to its line (do NOT remove it from PLAN.md)
-9. Commit both changes with message \`chore: flag PLAN.md item needing user input\`
-10. Do NOT open a PR — stop here
+8. **Move the unchecked item to the bottom of PLAN.md and annotate it with \` <!-- NEEDS_INPUT -->\`** — remove the line from its current position and append it at the end of the file with the annotation. This keeps the queue moving so the next \`plan-task\` run picks up a different actionable item instead of repeatedly tripping on this one.
+9. Commit both changes (the new \`.plan-questions.md\` file and the PLAN.md move) with message \`chore: flag PLAN.md item needing user input\`. Then proceed to the **Completion** section below so the clarification PR is opened for the user to review — do NOT leave the worktree orphaned.
 
 ## Constraints
 
 - This task has **no \`runAfter\` dependencies** — it runs independently of \`do-replan\`, \`pr-reviewer\`, etc.
 - Do NOT brainstorm new features. Do NOT propose items not already in PLAN.md.
 - Do NOT touch unrelated PLAN.md items, even to tidy them.
-- One commit. One PR (or no PR if clarification was needed).`,
+- One commit. One PR — either the implementation PR (Phase 3a) or the clarification PR (Phase 3b).`,
 
   'code-reviewer-review': `[Review: {appName}] Deep Codebase Review (Stage 1)
 
@@ -1080,8 +1078,8 @@ For each reference above:
 // Prompt versions — bump when a default prompt changes so existing instances auto-upgrade.
 // Only non-customized prompts (promptCustomized !== true) are upgraded.
 const PROMPT_VERSIONS = {
-  'feature-ideas': 6,  // v6: remove hardcoded worktree language (worktree context injected by agentPromptBuilder)
-  'plan-task': 1,      // v1: strict PLAN.md executor — move item to DONE.md in same commit, no brainstorm fallback, no runAfter deps
+  'feature-ideas': 7,  // v7: Phase 3b reorders item to bottom + commits clarification PR instead of orphaning the worktree
+  'plan-task': 2,      // v2: Phase 3b reorders item to bottom + commits clarification PR instead of orphaning the worktree
   'pr-reviewer': 3,    // v3: multi-stage pipeline (security scan → code review + merge)
   'code-reviewer-a': 1, // v1: 2-stage pipeline (codebase review → triage & implement)
   'code-reviewer-b': 1, // v1: 2-stage pipeline (codebase review → triage & implement)

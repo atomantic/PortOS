@@ -1157,6 +1157,37 @@
 
 ## Changed
 
+- **CoS agent prompts: Claude Code CLI owns push + PR; Phase 3b opens a
+  clarification PR.** Two coupled changes to the planned-work CoS templates
+  (`feature-ideas`, `plan-task`) and the runtime CLI completion block:
+  (1) When the provider is Claude Code (`claude-code` / `claude-code-bedrock`)
+  and the task uses a worktree with `openPR`, the runtime "## Completion"
+  section now instructs the agent to run `/simplify` (when enabled) and then
+  `/do:pr` itself instead of "commit and let PortOS push" — and
+  `cleanupAgentWorktree` is gated to skip its post-exit `git push` + `gh pr
+  create` for those runs (mirrors the existing TUI cleanup contract) so the
+  agent and PortOS don't both try to create the PR. Codex / Gemini and other
+  CLI providers keep the previous "commit only, PortOS handles push+PR" block
+  because they don't have slashdo commands available. (2) Phase 3b
+  ("Request Clarification") no longer ends with "Do NOT open a PR — stop
+  here" — that was orphaning the worktree on every `<!-- NEEDS_INPUT -->`
+  flag. The agent now moves the flagged item to the bottom of PLAN.md
+  (so subsequent runs pick up a different actionable item), commits the
+  `.plan-questions.md` file + the PLAN.md move with `chore: flag PLAN.md
+  item needing user input`, and proceeds to the Completion section so a
+  clarification PR is opened for review. `PROMPT_VERSIONS` bumped
+  (`feature-ideas` 6→7, `plan-task` 1→2) to auto-upgrade non-customized
+  configs. `buildAgentPrompt` / `buildLightContextPrompt` now take a
+  `providerId` option; covered by four new tests in
+  `server/services/agentPromptBuilder.test.js` (slashdo Completion with
+  `/simplify` enabled/disabled, `/do:push` fallback when `openPR` is false,
+  unchanged behavior for non-Claude CLI providers). Touches:
+  `server/services/agentPromptBuilder.js`,
+  `server/services/agentPromptBuilder.test.js`,
+  `server/services/agentLifecycle.js`,
+  `server/services/agentCliSpawning.js`,
+  `server/services/taskSchedule.js`.
+
 - **CoS agent prompts: light vs full context split.** Codex / Claude Code /
   Gemini agents (`provider.type` ∈ {`tui`, `cli`}) now receive a minimal
   runtime-built prompt — just task description, attached context, screenshot
@@ -1562,6 +1593,41 @@
   to scrub stray references from sibling unlocked composites' prompts.
 
 ## Fixed
+
+- **Pipeline volume delete: clearer confirmation, loading state, and no
+  exporter warning storm.** Three coupled fixes to the trash button on a
+  series volume / season in the Arc Canvas:
+  1. Replaced the two-click `useArmedAction` arm (which users found
+     non-discoverable — first click looked like a no-op) with an inline
+     confirm row matching `LayoutEditor`'s pattern: clicking the trash
+     swaps the Edit + Trash controls for `Delete volume? [Cancel]
+     [Delete]`.
+  2. The cascade reassigns every child issue's `seasonId`, which can take
+     several seconds on a populated volume. Added a `Loader2`
+     `Deleting…` state so the row visibly works instead of looking
+     frozen.
+  3. Each per-issue `updateIssue` was emitting `emitRecordUpdated('series',
+     …)`, which scheduled N debounced re-exports of the same series. Every
+     re-export then walked the series and called `exportMediaJobAndAsset`
+     for each issue's `imageJobId`, logging
+     `⚠️ sharing.exporter: imageJobId <id> not found in live queue or
+     archive` for any job already aged out of the persisted archive — one
+     warning per missing job per re-export, multiplied by the cascade. The
+     season-delete service now wraps the reassign cascade in
+     `withReexportSuppressed('series', seriesId, …)` and emits a single
+     `emitRecordUpdated` against the final state, collapsing the storm to
+     one re-export.
+  Moved `withReexportSuppressed` + its suppression registry from
+  `sharing/subscriptions.js` down to `sharing/recordEvents.js` so pipeline
+  services can suppress without transitively pulling the exporter / file-IO
+  graph into their test mocks (matches the file's existing "Kept separate
+  …so importing this bus doesn't drag in the heavyweight pipeline graph"
+  intent). `subscriptions.js` re-exports `withReexportSuppressed` so
+  `importer.js`'s import path stays stable. Touches
+  `client/src/components/pipeline/ArcCanvas.jsx`,
+  `server/services/pipeline/seasons.js`,
+  `server/services/sharing/recordEvents.js`,
+  `server/services/sharing/subscriptions.js`.
 
 - **`update.sh` / `setup.sh` (+ PowerShell siblings) no longer hang on
   slash-do install when multiple AI environments are detected.** The

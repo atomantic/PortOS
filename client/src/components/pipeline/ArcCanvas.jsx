@@ -727,12 +727,20 @@ function SeasonRow({ series, season, seasons, issues, onSeriesUpdate, onIssuesUp
     toast.success(`Generated ${n} issue${n === 1 ? '' : 's'} / episode${n === 1 ? '' : 's'}${extractedSummary}`);
   };
 
+  // 'idle' | 'confirm' | 'deleting' — drives an inline confirm row that swaps
+  // in for the Edit/Trash buttons. Two-click "arm" was confusing (see
+  // feedback memory); inline confirm matches LayoutEditor's pattern.
+  const [deleteMode, setDeleteMode] = useState('idle');
   const runDeleteSeason = async () => {
+    setDeleteMode('deleting');
     const result = await deletePipelineSeason(series.id, season.id, { reassignTo: null }).catch((err) => {
       toast.error(err.message || 'Delete failed');
       return null;
     });
-    if (!result) return;
+    if (!result) {
+      setDeleteMode('idle');
+      return;
+    }
     onSeriesUpdate({ ...series, seasons: seasons.filter((s) => s.id !== season.id) });
     const refreshed = await listPipelineIssues(series.id).catch(() => null);
     if (refreshed) onIssuesUpdate(refreshed);
@@ -743,7 +751,6 @@ function SeasonRow({ series, season, seasons, issues, onSeriesUpdate, onIssuesUp
       toast.success('Volume / season deleted');
     }
   };
-  const [armDelete, deleteSeason] = useArmedAction(runDeleteSeason);
 
   return (
     <li className="bg-port-card border border-port-border rounded-lg">
@@ -761,22 +768,53 @@ function SeasonRow({ series, season, seasons, issues, onSeriesUpdate, onIssuesUp
         <span className="text-[10px] uppercase tracking-wider text-gray-500" title="Issues / Episodes">
           {issues.length} / {season.episodeCountTarget || '?'} issues
         </span>
-        <button
-          type="button"
-          onClick={() => setEditing(!editing)}
-          className="ml-auto text-xs text-gray-400 hover:text-white"
-        >
-          {editing ? 'Done' : 'Edit'}
-        </button>
-        <button
-          type="button"
-          onClick={deleteSeason}
-          className={`p-1.5 ${armDelete ? 'text-port-error' : 'text-gray-500 hover:text-port-error'}`}
-          aria-label={armDelete ? `Confirm delete volume / season ${season.title}` : `Delete volume / season ${season.title}`}
-          title={armDelete ? 'Click again to confirm' : 'Delete volume / season'}
-        >
-          <Trash2 size={12} />
-        </button>
+        <div className="ml-auto flex items-center gap-2">
+          {deleteMode === 'idle' && (
+            <>
+              <button
+                type="button"
+                onClick={() => setEditing(!editing)}
+                className="text-xs text-gray-400 hover:text-white"
+              >
+                {editing ? 'Done' : 'Edit'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setDeleteMode('confirm')}
+                className="p-1.5 text-gray-500 hover:text-port-error"
+                aria-label={`Delete volume / season ${season.title}`}
+                title="Delete volume / season"
+              >
+                <Trash2 size={12} />
+              </button>
+            </>
+          )}
+          {deleteMode === 'confirm' && (
+            <>
+              <span className="text-xs text-port-error">Delete volume?</span>
+              <button
+                type="button"
+                onClick={() => setDeleteMode('idle')}
+                className="px-2 py-0.5 text-xs text-gray-300 hover:text-white rounded border border-port-border"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={runDeleteSeason}
+                className="px-2 py-0.5 text-xs rounded bg-port-error text-white hover:bg-port-error/80"
+              >
+                Delete
+              </button>
+            </>
+          )}
+          {deleteMode === 'deleting' && (
+            <span className="flex items-center gap-1.5 text-xs text-gray-400">
+              <Loader2 size={12} className="animate-spin" />
+              Deleting…
+            </span>
+          )}
+        </div>
       </div>
 
       {editing ? (

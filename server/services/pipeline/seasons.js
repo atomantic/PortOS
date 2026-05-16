@@ -15,6 +15,7 @@ import { ARC_LIMITS, buildSeason, sanitizeSeason } from '../../lib/storyArc.js';
 import { isStr } from '../../lib/storyBible.js';
 import * as seriesSvc from './series.js';
 import * as issuesSvc from './issues.js';
+import { emitRecordUpdated, withReexportSuppressed } from '../sharing/recordEvents.js';
 
 export const ERR_NOT_FOUND = 'PIPELINE_SEASON_NOT_FOUND';
 export const ERR_VALIDATION = 'PIPELINE_SEASON_VALIDATION';
@@ -112,10 +113,19 @@ export async function deleteSeason(seriesId, seasonId, { reassignTo = null } = {
   // (issues per series ~< 100) so the cost is bounded.
   const childIssues = await issuesSvc.listIssues({ seriesId });
   const reassignList = childIssues.filter((iss) => iss.seasonId === seasonId);
-  for (const iss of reassignList) {
-    await issuesSvc.updateIssue(iss.id, { seasonId: reassignTo });
-  }
   const merged = seasons.filter((s) => s.id !== seasonId);
-  await seriesSvc.updateSeries(seriesId, { seasons: merged });
+  // Each updateIssue + updateSeries emits `emitRecordUpdated('series', …)`. Without
+  // suppression a cascade of N issues would schedule N debounced re-exports of the
+  // same series; the exporter then logs "imageJobId not found" warnings per re-run
+  // for any image jobs that have already aged out of the archive. Collapse the
+  // cascade into a single re-export by suppressing during the writes and emitting
+  // once at the end against the final state.
+  await withReexportSuppressed('series', seriesId, async () => {
+    for (const iss of reassignList) {
+      await issuesSvc.updateIssue(iss.id, { seasonId: reassignTo });
+    }
+    await seriesSvc.updateSeries(seriesId, { seasons: merged });
+  });
+  emitRecordUpdated('series', seriesId);
   return { id: seasonId, reassignedIssueCount: reassignList.length, reassignedTo: reassignTo };
 }

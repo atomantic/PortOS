@@ -436,7 +436,8 @@ export async function spawnAgentForTask(task) {
   // Build the agent prompt. `provider.type` drives the light-vs-full split
   // inside buildAgentPrompt — see its doc comment.
   const prompt = await buildAgentPrompt(task, config, workspacePath, worktreeInfo, isTruthyMeta, {
-    providerType: provider.type
+    providerType: provider.type,
+    providerId: provider.id
   });
 
   // Create agent directory
@@ -1133,10 +1134,16 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
     // body — re-merging the worktree branch into the source workspace would
     // duplicate the squashed commits, so suppress the auto-merge fallback.
     const taskReviewLoopFollowUp = isTruthyMeta(agent.task?.metadata?.reviewLoopFollowUp);
+    // Claude Code CLI agents run `/simplify` + `/do:pr` themselves (see
+    // buildCliCompletionSection in agentPromptBuilder.js) — they push the
+    // branch and open the PR on their own. Mirror the TUI cleanup contract
+    // so PortOS doesn't double-fire `gh pr create` ("a pull request already
+    // exists" would preserve the worktree as a false-positive failure).
+    const agentOwnsPR = taskOpenPR && (agent.providerId === 'claude-code' || agent.providerId === 'claude-code-bedrock');
     const cleanupWarnings = await cleanupAgentWorktree(agentId, success, {
-      openPR: taskOpenPR,
-      requestCopilotReview: taskOpenPR && taskReviewLoop,
-      skipMerge: taskReviewLoopFollowUp,
+      openPR: agentOwnsPR ? false : taskOpenPR,
+      requestCopilotReview: !agentOwnsPR && taskOpenPR && taskReviewLoop,
+      skipMerge: taskReviewLoopFollowUp || agentOwnsPR,
       description: task?.description,
       agentOutput: outputBuffer,
       originalTask: task

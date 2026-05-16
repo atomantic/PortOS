@@ -134,7 +134,7 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).not.toMatch(/`\/do:pr`/);
     });
 
-    it('emits a non-TUI "Completion" block (no slashdo) for CLI agents', () => {
+    it('emits a non-TUI "Completion" block (no slashdo) for non-Claude CLI agents', () => {
       const prompt = buildLightContextPrompt(
         makeTask({ metadata: { openPR: true } }),
         '/r',
@@ -145,6 +145,42 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).not.toMatch(/`\/do:pr`/);
       expect(prompt).not.toMatch(/`\/quit`/);
       expect(prompt).toMatch(/PortOS will push and open the PR/);
+    });
+
+    it('emits a slashdo Completion block (/simplify + /do:pr) for Claude Code CLI + openPR', () => {
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: { openPR: true, simplify: true } }),
+        '/r',
+        { branchName: 'b', worktreePath: '/tmp/wt' },
+        isTruthyMeta,
+        { isTui: false, providerId: 'claude-code' });
+      expect(prompt).toMatch(/^## Completion$/m);
+      expect(prompt).toMatch(/`\/simplify`/);
+      expect(prompt).toMatch(/`\/do:pr`/);
+      expect(prompt).toMatch(/PortOS will NOT push or open a PR on your behalf/);
+      expect(prompt).not.toMatch(/`\/quit`/);
+    });
+
+    it('skips /simplify in the slashdo Completion block when simplify is disabled', () => {
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: { openPR: true, simplify: false } }),
+        '/r',
+        { branchName: 'b', worktreePath: '/tmp/wt' },
+        isTruthyMeta,
+        { isTui: false, providerId: 'claude-code' });
+      expect(prompt).toMatch(/`\/do:pr`/);
+      expect(prompt).not.toMatch(/`\/simplify`/);
+    });
+
+    it('uses /do:push (not /do:pr) for Claude Code CLI when openPR is false', () => {
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: { openPR: false, simplify: true } }),
+        '/r',
+        { branchName: 'b', worktreePath: '/tmp/wt' },
+        isTruthyMeta,
+        { isTui: false, providerId: 'claude-code' });
+      expect(prompt).toMatch(/`\/do:push`/);
+      expect(prompt).not.toMatch(/`\/do:pr`/);
     });
 
     it('suppresses the completion block and warns when readOnly is set', () => {
