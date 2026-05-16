@@ -26,6 +26,7 @@ import {
   CUSTOM_PAGE_MIN, CUSTOM_PAGE_MAX, CUSTOM_MINUTE_MIN, CUSTOM_MINUTE_MAX,
 } from '../../lib/issueLength.js';
 import { sanitizeOrigin } from '../../lib/sharingOrigin.js';
+import { ARC_ROLES } from '../../lib/storyArc.js';
 import { emitRecordUpdated } from '../sharing/recordEvents.js';
 
 // Lazy resolution — see series.js for context.
@@ -205,6 +206,9 @@ const sanitizeIssue = (raw) => {
   const arcPosition = Number.isFinite(raw.arcPosition)
     ? Math.max(0, Math.min(ARC_POSITION_MAX, Math.floor(raw.arcPosition)))
     : null;
+  // LLM-assigned role within the volume — drives beat-sheet cadence
+  // (finale vs. complication need very different shapes).
+  const arcRole = ARC_ROLES.includes(raw.arcRole) ? raw.arcRole : null;
   // Defaults to 'standard' so pre-field issues keep the prior 22pg/24min sizing.
   // pageTarget/minutesTarget are only consumed when lengthProfile==='custom',
   // but we persist them on every profile so the picker can remember a previous
@@ -228,6 +232,7 @@ const sanitizeIssue = (raw) => {
     status,
     seasonId,
     arcPosition,
+    arcRole,
     lengthProfile,
     pageTarget,
     minutesTarget,
@@ -306,6 +311,7 @@ export function createIssue(input = {}) {
     // (and any future caller wiring an issue to a season at create time).
     seasonId: 'seasonId' in input ? input.seasonId : null,
     arcPosition: 'arcPosition' in input ? input.arcPosition : null,
+    arcRole: 'arcRole' in input ? input.arcRole : null,
     lengthProfile: 'lengthProfile' in input ? input.lengthProfile : undefined,
     pageTarget: 'pageTarget' in input ? input.pageTarget : null,
     minutesTarget: 'minutesTarget' in input ? input.minutesTarget : null,
@@ -414,6 +420,7 @@ export function updateIssue(id, patch = {}) {
     ...('status' in patch ? { status: patch.status } : {}),
     ...('seasonId' in patch ? { seasonId: patch.seasonId } : {}),
     ...('arcPosition' in patch ? { arcPosition: patch.arcPosition } : {}),
+    ...('arcRole' in patch ? { arcRole: patch.arcRole } : {}),
     ...('lengthProfile' in patch ? { lengthProfile: patch.lengthProfile } : {}),
     ...('pageTarget' in patch ? { pageTarget: patch.pageTarget } : {}),
     ...('minutesTarget' in patch ? { minutesTarget: patch.minutesTarget } : {}),

@@ -24,7 +24,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { getSeries, updateSeries } from './series.js';
 import { listIssues } from './issues.js';
 import { getSeason } from './seasons.js';
-import { sanitizeArc, sanitizeSeasonList, sanitizeSeason, buildSeason } from '../../lib/storyArc.js';
+import { sanitizeArc, sanitizeSeasonList, sanitizeSeason, buildSeason, ARC_ROLES as ARC_ROLE_LIST } from '../../lib/storyArc.js';
 import { recommendStructure, describeStructure } from '../../lib/seasonStructure.js';
 import { LENGTH_PROFILE_NAMES, DEFAULT_LENGTH_PROFILE } from '../../lib/issueLength.js';
 import { getUniverse } from '../universeBuilder.js';
@@ -35,7 +35,7 @@ export const ERR_VALIDATION = 'PIPELINE_ARC_VALIDATION';
 const makeErr = (message, code) => Object.assign(new Error(message), { code });
 
 const VERIFY_SEVERITIES = new Set(['high', 'medium', 'low']);
-const ARC_ROLES = new Set(['pilot', 'complication', 'midpoint', 'b-plot', 'all-is-lost', 'finale']);
+const ARC_ROLES = new Set(ARC_ROLE_LIST);
 // Season-episode generation must produce concrete preset profiles only — the
 // 'custom' sentinel needs companion pageTarget/minutesTarget values the LLM is
 // not asked to invent, so a 'custom' here would silently render as 'standard'
@@ -112,7 +112,7 @@ async function resolveWorldContext(series, preloaded) {
 // Canonical issue sort: arcPosition first (issues seeded by the season-
 // episode generator carry sequential positions), then series number as a
 // tiebreaker for issues that were created ad-hoc and never got a position.
-const compareIssuesByPosition = (a, b) =>
+export const compareIssuesByPosition = (a, b) =>
   (a.arcPosition ?? 9999) - (b.arcPosition ?? 9999) || (a.number || 0) - (b.number || 0);
 
 // Series + world + arc fields shared by every arc-level prompt context.

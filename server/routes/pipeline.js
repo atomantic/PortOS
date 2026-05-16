@@ -56,7 +56,7 @@ import {
 } from '../lib/issueLength.js';
 import { llmSchema } from './universeBuilder.js';
 import { BIBLE_KIND } from '../lib/storyBible.js';
-import { ARC_LIMITS, ARC_STATUSES, ARC_SHAPE_IDS, SEASON_STATUSES } from '../lib/storyArc.js';
+import { ARC_LIMITS, ARC_STATUSES, ARC_SHAPE_IDS, ARC_ROLES, SEASON_STATUSES } from '../lib/storyArc.js';
 
 const router = Router();
 
@@ -239,6 +239,7 @@ const issuePatchSchema = z.object({
   // ordinal within that season. `null` clears the assignment.
   seasonId: z.string().trim().min(1).max(issuesSvc.SEASON_ID_MAX).nullable().optional(),
   arcPosition: z.number().int().min(0).max(issuesSvc.ARC_POSITION_MAX).nullable().optional(),
+  arcRole: z.enum(ARC_ROLES).nullable().optional(),
   // Per-issue length profile. Drives the prompt-template size targets
   // (beats / prose words / page count / minute count). pageTarget +
   // minutesTarget are only meaningful when lengthProfile === 'custom'.
@@ -601,6 +602,10 @@ router.post('/series/:id/seasons/:seasonId/episodes/generate', asyncHandler(asyn
         // don't collide.
         seasonId: req.params.seasonId,
         arcPosition: ep.number,
+        // `arcRole` carries the LLM's pilot / complication / midpoint / etc.
+        // classification forward so the idea-expansion prompt can size beats
+        // to the role (a finale needs a different cadence than a complication).
+        arcRole: ep.arcRole,
         // Episode-level length sizing from the season-episodes LLM pass.
         // Defaults to 'standard' inside the issue sanitizer when missing.
         lengthProfile: ep.lengthProfile,

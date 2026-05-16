@@ -16,8 +16,9 @@
 
 import { runStagedLLM } from '../../lib/stageRunner.js';
 import { getSeries, extractAndMergeIntoSeries } from './series.js';
-import { getIssue, updateStage, TEXT_STAGE_IDS } from './issues.js';
+import { getIssue, listIssues, updateStage, TEXT_STAGE_IDS } from './issues.js';
 import { getSeriesCanon } from './seriesCanon.js';
+import { compareIssuesByPosition } from './arcPlanner.js';
 import { computeIssueTargets } from '../../lib/issueLength.js';
 
 const STAGE_TO_TEMPLATE = Object.freeze({
@@ -26,6 +27,106 @@ const STAGE_TO_TEMPLATE = Object.freeze({
   comicScript: 'pipeline-comic-script',
   teleplay: 'pipeline-teleplay',
 });
+
+// Set exactly one of `beats` / `synopsis` per neighbor so the prompt's
+// beat-level guidance doesn't leak into synopsis-only entries (the template
+// gates on each field independently).
+function shapeNeighborForIdeaPrompt(iss) {
+  if (!iss) return null;
+  const beats = (iss.stages?.idea?.output || '').trim();
+  const synopsis = (iss.stages?.idea?.input || '').trim();
+  const base = {
+    number: iss.number,
+    title: iss.title,
+    arcPosition: iss.arcPosition,
+    arcRole: iss.arcRole || null,
+  };
+  return beats ? { ...base, beats } : { ...base, synopsis };
+}
+
+// Mirrors the writer's working frame when drafting beats: whole-series arc
+// + parent volume + immediate-neighbor issues. Other text stages (prose,
+// comicScript, teleplay) don't need it — they derive from beats which
+// already encode it.
+async function buildIdeaContextAugment(series, issue) {
+  const seasons = Array.isArray(series.seasons) ? series.seasons : [];
+  const season = issue.seasonId ? seasons.find((s) => s.id === issue.seasonId) : null;
+
+  // Arc block — only when the series actually has generated arc content
+  // (shape-only arcs aren't enough context for the LLM to lean on).
+  const arc = series.arc;
+  const hasArcText = !!(arc && (arc.logline || arc.summary || arc.protagonistArc || arc.themes?.length));
+  const arcBlock = hasArcText
+    ? {
+        logline: arc.logline || '',
+        summary: arc.summary || '',
+        protagonistArc: arc.protagonistArc || '',
+        themesCsv: Array.isArray(arc.themes) ? arc.themes.join(', ') : '',
+      }
+    : null;
+
+  if (!season) {
+    return {
+      arc: arcBlock,
+      volume: null,
+      arcRole: issue.arcRole || null,
+      positionInVolume: null,
+      priorIssue: null,
+      nextIssue: null,
+      priorVolume: null,
+    };
+  }
+
+  const allIssues = await listIssues({ seriesId: series.id });
+  const volumeIssues = allIssues
+    .filter((i) => i.seasonId === season.id)
+    .sort(compareIssuesByPosition);
+  const idx = volumeIssues.findIndex((i) => i.id === issue.id);
+  const priorIssue = idx > 0 ? shapeNeighborForIdeaPrompt(volumeIssues[idx - 1]) : null;
+  const nextIssue = idx >= 0 && idx < volumeIssues.length - 1
+    ? shapeNeighborForIdeaPrompt(volumeIssues[idx + 1])
+    : null;
+  const positionInVolume = idx >= 0
+    ? { ordinal: idx + 1, total: volumeIssues.length }
+    : null;
+
+  // Prior volume — only relevant when this issue opens its volume (no prior
+  // siblings within the same volume). Use the season number sequence (not
+  // creation order) so out-of-order seasons still produce the right neighbor.
+  let priorVolume = null;
+  if (idx <= 0) {
+    const sortedSeasons = seasons
+      .slice()
+      .sort((a, b) => (a.number || 0) - (b.number || 0));
+    const seasonIdx = sortedSeasons.findIndex((s) => s.id === season.id);
+    if (seasonIdx > 0) {
+      const prev = sortedSeasons[seasonIdx - 1];
+      priorVolume = {
+        number: prev.number,
+        title: prev.title || '',
+        endingHook: prev.endingHook || '',
+      };
+    }
+  }
+
+  return {
+    arc: arcBlock,
+    volume: {
+      number: season.number,
+      title: season.title || '',
+      logline: season.logline || '',
+      synopsis: season.synopsis || '',
+      endingHook: season.endingHook || '',
+      episodeCountTarget: season.episodeCountTarget || 0,
+      themesCsv: Array.isArray(season.themes) ? season.themes.join(', ') : '',
+    },
+    arcRole: issue.arcRole || null,
+    positionInVolume,
+    priorIssue,
+    nextIssue,
+    priorVolume,
+  };
+}
 
 /**
  * Build the variable bag fed into the stage template. Includes the series
@@ -89,6 +190,9 @@ export async function generateStage(issueId, stageId, options = {}) {
   await updateStage(issueId, stageId, { status: 'generating', errorMessage: '' });
 
   const ctx = buildStageContext({ series, canon, issue, stageId, seedInput: options.seedInput });
+  if (stageId === 'idea') {
+    Object.assign(ctx, await buildIdeaContextAugment(series, issue));
+  }
 
   // Catch only at this boundary so the stage record persists the failure
   // before the error bubbles to the caller — without this, an LLM throw
@@ -135,4 +239,4 @@ export async function generateStage(issueId, stageId, options = {}) {
 }
 
 // Export internals for tests.
-export const __testing = { buildStageContext, STAGE_TO_TEMPLATE };
+export const __testing = { buildStageContext, buildIdeaContextAugment, shapeNeighborForIdeaPrompt, STAGE_TO_TEMPLATE };

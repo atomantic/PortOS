@@ -2,6 +2,38 @@
 
 ## Added
 
+- **Beat-sheet expansion — arc / volume / neighbor-issue context block.**
+  The `idea` text stage previously generated each issue's beats in isolation
+  against the series bible + the user's seed. It now sees the whole frame a
+  human editor has open while writing beats: the series arc (logline /
+  summary / protagonist arc / themes when populated), the parent volume's
+  logline / synopsis / `endingHook` / `episodeCountTarget` / themes, this
+  issue's `arcRole` + position-in-volume, the immediate prior + next issue
+  in the same volume (beats when expanded, synopsis when not — sourced
+  from the current state of each neighbor so regenerating mid-volume picks
+  up whatever's been written since), and the prior volume's `endingHook`
+  when this is the opening issue of its volume. Regeneration is by design
+  current-state-aware: re-running beat generation on issue 3 after issue 4
+  is expanded will read issue 4's beats as the "next issue" context. Other
+  text stages (prose, comicScript, teleplay) don't get the augment — they
+  derive from beats which already encode this. **Files:** new
+  `buildIdeaContextAugment` + `shapeNeighborForIdeaPrompt` in
+  `server/services/pipeline/textStages.js`, wired into `generateStage`
+  only for `stageId === 'idea'`; new `arcRole` field persisted on the
+  issue (`server/services/pipeline/issues.js` sanitizer + create + update,
+  schema in `server/routes/pipeline.js`, season-episodes commit forwards
+  `ep.arcRole`); `ARC_ROLES` promoted from arcPlanner-local to a shared
+  export in `server/lib/storyArc.js`; `compareIssuesByPosition` exported
+  from arcPlanner.js so the augmenter reuses the canonical issue sort.
+  Prompt template rewritten with `{{#arc}}` / `{{#volume}}` / `{{#priorIssue}}`
+  / `{{#nextIssue}}` / `{{#priorVolume}}` / `{{#arcRole}}` /
+  `{{#positionInVolume}}` Mustache sections that each gate independently on
+  presence. New migration `data/migrations/004-augment-idea-expansion-context.js`
+  updates installs from the post-003 hash to the new template; the drift
+  warning in `scripts/setup-data.js` now accepts array-valued OLD hashes
+  so multi-migration lineages still trigger "run migrations" instead of
+  false-positive "customized" warnings.
+
 - **Series Pipeline — per-volume Validate volume continuity pass.**
   Complement to the cross-volume Verify arc pass: a new "Validate volume"
   button on each season/volume row runs a deeper, narrower continuity check

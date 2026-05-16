@@ -122,21 +122,20 @@ if (!existsSync(migrationsDir)) {
 // are checked here — scanning all stage prompts would produce misleading warnings for
 // prompts that have no migration counterpart (e.g. cd-evaluate.md, writers-room prompts).
 //
-// Hash constants mirror data/migrations/003-update-pipeline-stage-prompts.js so we
-// can distinguish three cases without importing that module:
-//   • hash === OLD_SHIPPED_MD5 → auto-updatable, migration not yet applied
-//   • hash === NEW_SHIPPED_MD5 → already up to date (migration applied or manual merge done)
-//   • neither               → customized, needs manual merge
-// Update these whenever 003 (or a successor migration) changes the hashes.
+// Mirror data/migrations/003+ NEW/OLD hashes. Array values let the check
+// recognize multi-migration lineages (file evolved through 003 → 004); a
+// user at an intermediate hash still gets the "run migrations" prompt.
 const PIPELINE_LENGTH_OLD_MD5 = {
-  'pipeline-idea-expansion.md': 'aee25112b2c596f643b17c559b772c22',
+  // idea-expansion: aee… (pre-003) and 41fa… (post-003, pre-004) both
+  // auto-updatable to the post-004 hash.
+  'pipeline-idea-expansion.md': ['aee25112b2c596f643b17c559b772c22', '41facefbc0c0549d456bef9111f95ab9'],
   'pipeline-prose.md':          'bfea5aeeb471aae9749baee765b473a7',
   'pipeline-comic-script.md':   '40e5fdc1a1e68a7419b7dad936366c1a',
   'pipeline-teleplay.md':      '3f6fecc25573ed054b47db392250034a',
   'pipeline-season-episodes.md':'6e349ad26bed8a0ccb042571f03f03eb',
 };
 const PIPELINE_LENGTH_NEW_MD5 = {
-  'pipeline-idea-expansion.md': '41facefbc0c0549d456bef9111f95ab9',
+  'pipeline-idea-expansion.md': '1ee44cf95851ff8debf18729ebcd40b4',
   'pipeline-prose.md':          '30ac30ec2b9d3e2a9eb869c181732cc6',
   'pipeline-comic-script.md':   'beab031951859ca13579cdb9c4dbe769',
   'pipeline-teleplay.md':      '376f779f4687b598f1c92ca4e770fd5a',
@@ -160,7 +159,9 @@ if (existsSync(sampleStagesDir) && existsSync(dataStagesDir)) {
     if (!existsSync(dataPath)) continue; // missing files handled above
     const dataMd5 = md5(readFileSync(dataPath, 'utf8'));
     if (dataMd5 === PIPELINE_LENGTH_NEW_MD5[f]) continue; // already up to date
-    if (dataMd5 === PIPELINE_LENGTH_OLD_MD5[f]) {
+    const oldExpected = PIPELINE_LENGTH_OLD_MD5[f];
+    const oldHashes = Array.isArray(oldExpected) ? oldExpected : [oldExpected];
+    if (oldHashes.includes(dataMd5)) {
       autoUpdatable.push(f);
     } else {
       customized.push(f);

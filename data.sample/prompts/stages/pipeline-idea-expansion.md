@@ -20,11 +20,101 @@ You are a story consultant who turns a rough seed idea into a tight beat sheet f
 *(No characters defined yet — invent placeholders only if absolutely required.)*
 {{/series.characters}}
 
+{{#arc}}
+## Whole-series arc
+
+- **Series logline:** {{logline}}
+{{#themesCsv}}- **Themes:** {{themesCsv}}
+{{/themesCsv}}{{#protagonistArc}}- **Protagonist arc:** {{protagonistArc}}
+{{/protagonistArc}}{{#summary}}- **Arc summary:** {{summary}}
+{{/summary}}
+
+The beat sheet you write must move the protagonist arc forward and stay within the named themes — do NOT introduce a major new theme the arc never references.
+{{/arc}}
+
+{{#volume}}
+## This volume / season
+
+- **Volume {{number}} — "{{title}}"**
+{{#logline}}- **Volume logline:** {{logline}}
+{{/logline}}{{#synopsis}}- **Volume synopsis:** {{synopsis}}
+{{/synopsis}}{{#endingHook}}- **Volume ending hook (the volume's FINAL issue must pay this off):** {{endingHook}}
+{{/endingHook}}{{#themesCsv}}- **Volume themes:** {{themesCsv}}
+{{/themesCsv}}- **Issue / episode count target:** {{episodeCountTarget}}
+{{/volume}}
+
 ## This issue / episode
 
 - **Number:** {{issue.number}}
 - **Working title:** {{issue.title}}
-- **Length profile:** {{lengthTargets.profile}} — target {{lengthTargets.pageTarget}}-page comic / {{lengthTargets.minutesTarget}}-minute episode
+{{#arcRole}}- **Arc role within the volume:** **{{.}}**
+{{/arcRole}}{{#positionInVolume}}- **Position in volume:** issue {{ordinal}} of {{total}}.
+{{/positionInVolume}}- **Length profile:** {{lengthTargets.profile}} — target {{lengthTargets.pageTarget}}-page comic / {{lengthTargets.minutesTarget}}-minute episode
+
+{{#arcRole}}
+Write beats appropriate to the arc role above:
+
+- `pilot` — opens the world; introduces the volume's central question
+- `complication` — raises stakes and complicates the protagonist's plan
+- `midpoint` — flips a major premise or reveals new information
+- `b-plot` — advances a secondary thread while the A-plot rests
+- `all-is-lost` — strips the protagonist of their advantage at the lowest point
+- `finale` — pays off the volume's ending hook and lands the emotional arc
+{{/arcRole}}
+
+{{#priorVolume}}
+## Previous volume ended on
+
+Volume {{number}} — "{{title}}" — closed with this hook: **{{endingHook}}**
+
+This is the *opening* issue of the next volume. Your first beat should pick up directly from that hook (don't retell — react). The protagonist's state at the top must be consistent with where the prior volume left them.
+{{/priorVolume}}
+
+{{#priorIssue}}
+## Prior issue in this volume (immediate predecessor)
+
+Issue #{{number}} — "{{title}}"{{#arcRole}} (arc role: **{{.}}**){{/arcRole}}
+
+{{#beats}}
+Beat sheet:
+
+```
+{{.}}
+```
+
+{{/beats}}{{#synopsis}}
+Synopsis (no beats yet):
+
+```
+{{.}}
+```
+
+{{/synopsis}}
+Your opening beat must follow naturally from how this issue closed. Don't repeat its closing image; advance from it.
+{{/priorIssue}}
+
+{{#nextIssue}}
+## Next issue in this volume (immediate successor)
+
+Issue #{{number}} — "{{title}}"{{#arcRole}} (arc role: **{{.}}**){{/arcRole}}
+
+{{#beats}}
+Beat sheet:
+
+```
+{{.}}
+```
+
+{{/beats}}{{#synopsis}}
+Synopsis (no beats yet):
+
+```
+{{.}}
+```
+
+{{/synopsis}}
+Your closing beat / cliffhanger must hand cleanly into this next issue. The protagonist's state, location, and outstanding stakes at the end of your beat sheet should set up its opening without contradicting it.
+{{/nextIssue}}
 
 ## Rough seed from the user
 

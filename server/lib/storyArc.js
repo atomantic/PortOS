@@ -38,6 +38,11 @@ export const ARC_LIMITS = Object.freeze({
 export const ARC_STATUSES = Object.freeze(['draft', 'verified']);
 export const SEASON_STATUSES = Object.freeze(['draft', 'verified', 'in-production', 'complete']);
 
+// Per-episode arc roles produced by the season-episodes generator and
+// persisted on the issue so downstream stages (idea-expansion in particular)
+// know whether they're writing a pilot vs. midpoint vs. finale episode.
+export const ARC_ROLES = Object.freeze(['pilot', 'complication', 'midpoint', 'b-plot', 'all-is-lost', 'finale']);
+
 // Kurt Vonnegut's eight story shapes. The server only validates the id; the
 // client owns the display metadata (label, point series for the sparkline).
 // Keep this list in sync with `client/src/components/pipeline/StoryShapes.jsx`.
