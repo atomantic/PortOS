@@ -20,7 +20,7 @@ import BackendChipStrip from '../components/media/BackendChipStrip';
 import { normalizeImage } from '../components/media/normalize';
 import { RUNNER_FAMILIES } from '../lib/runnerFamilies';
 import Flux2InstallModal from '../components/imageGen/Flux2InstallModal';
-import Flux2TokenBanner from '../components/imageGen/Flux2TokenBanner';
+import HfTokenBanner from '../components/imageGen/HfTokenBanner';
 import ImageGenControls from '../components/imageGen/ImageGenControls';
 import MediaJobsQueue from '../components/media/MediaJobsQueue';
 import { useMediaCompletionRefresh } from '../hooks/useMediaCompletionRefresh';
@@ -109,6 +109,9 @@ export default function ImageGen() {
   // user is only using mflux/external/codex.
   const [flux2Status, setFlux2Status] = useState(null);
   const [flux2InstallOpen, setFlux2InstallOpen] = useState(false);
+  // Generic HF-token presence for legacy mflux gated models (FLUX.1-dev).
+  // Lazy-fetched when a model with `requiresHfToken: true` is selected.
+  const [hfTokenPresent, setHfTokenPresent] = useState(null);
 
   const [selectedMode, setSelectedMode] = useState(null);
   const [availableBackends, setAvailableBackends] = useState([]);
@@ -398,6 +401,13 @@ export default function ImageGen() {
       .catch(() => {});
   }, []);
 
+  const refreshHfTokenStatus = useCallback((signal) => {
+    return fetch('/api/image-gen/setup/hf-token-status', { signal })
+      .then((r) => r.ok ? r.json() : null)
+      .then((s) => { if (s) setHfTokenPresent(!!s.hfTokenPresent); })
+      .catch(() => {});
+  }, []);
+
   // Memoized so Flux2InstallModal's EventSource effect doesn't re-fire on
   // every parent re-render (gallery / generating / progress state churn
   // would otherwise tear down the SSE connection mid-install).
@@ -416,6 +426,17 @@ export default function ImageGen() {
     refreshFlux2Status(controller.signal);
     return () => controller.abort();
   }, [isFlux2Model, modelId, refreshFlux2Status]);
+
+  // Lazy-fetch HF token presence for legacy mflux gated models (FLUX.1-dev).
+  // FLUX.2 has its own combined status fetch above (which also covers the
+  // venv install), so skip the duplicate request when isFlux2Model.
+  const needsHfTokenGate = !!currentModel?.requiresHfToken && !isFlux2Model;
+  useEffect(() => {
+    if (!needsHfTokenGate) { setHfTokenPresent(null); return; }
+    const controller = new AbortController();
+    refreshHfTokenStatus(controller.signal);
+    return () => controller.abort();
+  }, [needsHfTokenGate, modelId, refreshHfTokenStatus]);
 
   // While the user has additional renders queued behind the active one, poll
   // `/api/media-jobs` to keep `pendingQueued` in sync with the server's
@@ -832,9 +853,17 @@ export default function ImageGen() {
             </div>
           )}
           {flux2Issue === 'token' && (
-            <Flux2TokenBanner
+            <HfTokenBanner
+              modelLabel={currentModel?.name || 'FLUX.2-klein'}
               licenseUrl={flux2Status.licenseUrl}
               onSaved={refreshFlux2Status}
+            />
+          )}
+          {needsHfTokenGate && hfTokenPresent === false && (
+            <HfTokenBanner
+              modelLabel={currentModel?.name || modelId}
+              licenseUrl={currentModel?.licenseUrl}
+              onSaved={refreshHfTokenStatus}
             />
           )}
 
@@ -1043,7 +1072,7 @@ export default function ImageGen() {
               )}
               {errorMeta?.kind === 'hf_unauthorized' && (
                 <div className="text-port-warning/80">
-                  Paste a fresh token in the FLUX.2 banner above (it appears when the model needs one).
+                  Paste a fresh token in the HF token banner above (it appears when the model needs one).
                 </div>
               )}
             </div>

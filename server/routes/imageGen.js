@@ -487,13 +487,23 @@ router.get('/setup/flux2-status', asyncHandler(async (_req, res) => {
   });
 }));
 
+// Generic HF-token presence check for legacy mflux runners that don't need
+// the FLUX.2 venv. Any model entry with `requiresHfToken: true` in
+// data/media-models.json drives the banner through this endpoint.
+router.get('/setup/hf-token-status', asyncHandler(async (_req, res) => {
+  const token = await getHfToken();
+  res.json({ hfTokenPresent: !!token });
+}));
+
 // Save the HF token from the inline form on the Image Gen page. settings.json
 // is the canonical location (single-user app behind Tailscale — see CLAUDE.md).
-const flux2TokenSchema = z.object({
+// Same endpoint serves FLUX.2 and legacy mflux gated models — the token is
+// global (HF_TOKEN env in spawn).
+const hfTokenSchema = z.object({
   token: z.string().regex(HF_TOKEN_REGEX, 'Token must look like `hf_…`').max(200),
 });
-router.post('/setup/flux2-token', asyncHandler(async (req, res) => {
-  const { token } = validateRequest(flux2TokenSchema, req.body || {});
+router.post('/setup/hf-token', asyncHandler(async (req, res) => {
+  const { token } = validateRequest(hfTokenSchema, req.body || {});
   const settings = await getSettings();
   await saveSettings({
     ...settings,

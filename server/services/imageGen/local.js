@@ -479,6 +479,25 @@ export async function generateImage({ pythonPath, prompt, negativePrompt = '', m
           userMessage = 'Your mflux install is corrupted (entry-point shim and package layout out of sync). Repair with: `pip uninstall -y mflux && pip install --user --force-reinstall --no-cache-dir --no-deps mflux`. If you use conda, run the same in your conda env\'s pip.';
         }
       }
+      // Legacy mflux-generate is a pre-built binary, so it doesn't emit the
+      // structured USER_ERROR markers the flux2/z-image Python runners use.
+      // Match the raw huggingface_hub stack instead — `GatedRepoError` or the
+      // "Cannot access gated repo for url …/<owner>/<name>/…" prose. Extract
+      // the repo so the UI banner can link the user straight to the license
+      // page (and we set kind=gated_repo so the client knows to surface the
+      // token-entry form).
+      if (!userMessage) {
+        const gatedUrlMatch = lines
+          .map((l) => l.match(/Cannot access gated repo for url https?:\/\/huggingface\.co\/([^/\s]+\/[^/\s]+)\//))
+          .find(Boolean);
+        const hasGatedError = lines.some((l) => /GatedRepoError|Access to model .* is restricted/.test(l));
+        if (gatedUrlMatch || hasGatedError) {
+          userKind = 'gated_repo';
+          userRepo = gatedUrlMatch ? gatedUrlMatch[1] : null;
+          const repoText = userRepo || 'the model';
+          userMessage = `Access to ${repoText} is gated. Accept the license at https://huggingface.co/${userRepo || '<repo>'} and paste your HuggingFace token into Image Gen settings, then retry.`;
+        }
+      }
       const tail = lines.slice(-10).join('\n');
       const errorText = userMessage
         ? `${userMessage}\n\n(diagnostic) ${reason}`

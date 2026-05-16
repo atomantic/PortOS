@@ -1,8 +1,9 @@
 /**
- * Inline HF_TOKEN entry for the Image Gen page. Replaces the static
- * "export HF_TOKEN=… before running PortOS" instruction with a paste-and-save
- * form that stores the token in settings.json (which the local-image worker
- * reads when spawning flux2_macos.py).
+ * Inline HF_TOKEN entry for any gated HuggingFace image model (FLUX.1-dev,
+ * FLUX.2-klein, etc.). Replaces the static "export HF_TOKEN=… before running
+ * PortOS" instruction with a paste-and-save form that stores the token in
+ * settings.json (which the local-image worker reads when spawning mflux /
+ * flux2_macos.py).
  *
  * Single-user app behind Tailscale — see CLAUDE.md security model — so a
  * plaintext settings entry is the appropriate trade-off vs. a separate
@@ -14,7 +15,7 @@ import { Key, Loader2 } from 'lucide-react';
 import toast from '../ui/Toast';
 import apiCore from '../../services/apiCore';
 
-export default function Flux2TokenBanner({ licenseUrl, onSaved }) {
+export default function HfTokenBanner({ modelLabel, licenseUrl, onSaved }) {
   const [token, setToken] = useState('');
   const [saving, setSaving] = useState(false);
 
@@ -24,7 +25,7 @@ export default function Flux2TokenBanner({ licenseUrl, onSaved }) {
     setSaving(true);
     // apiCore.post toasts the error itself on non-2xx; swallow the throw so
     // we leave saving=false either way and don't double-toast.
-    const result = await apiCore.post('/image-gen/setup/flux2-token', { token: trimmed }).catch(() => null);
+    const result = await apiCore.post('/image-gen/setup/hf-token', { token: trimmed }).catch(() => null);
     setSaving(false);
     if (!result?.ok) return;
     setToken('');
@@ -32,12 +33,14 @@ export default function Flux2TokenBanner({ licenseUrl, onSaved }) {
     onSaved?.();
   };
 
+  const licenseLinkText = licenseUrl?.replace(/^https?:\/\//, '');
+
   return (
     <div className="rounded-lg border border-port-warning/40 bg-port-warning/10 px-3 py-3 text-xs text-port-warning space-y-2">
       <div>
-        FLUX.2-klein is a gated model. Accept the license at{' '}
+        {modelLabel} is a gated model. Accept the license at{' '}
         <a href={licenseUrl} target="_blank" rel="noreferrer" className="underline text-white">
-          huggingface.co/black-forest-labs/FLUX.2-klein-4B
+          {licenseLinkText}
         </a>
         , then create a read token at{' '}
         <a href="https://huggingface.co/settings/tokens" target="_blank" rel="noreferrer" className="underline text-white">

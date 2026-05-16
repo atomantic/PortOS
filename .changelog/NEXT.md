@@ -72,6 +72,30 @@
 
 ## Fixed
 
+- **Missing HuggingFace token prompt for FLUX.1-dev (gated repo).** Generating
+  with FLUX.1-dev failed with a raw `huggingface_hub.errors.GatedRepoError:
+  401 Client Error` stack trace and no UI affordance — the existing inline
+  HF-token banner only triggered for FLUX.2-klein. Two fixes: (1) Model
+  registry now drives gating — `data/media-models.json` entries can carry
+  `requiresHfToken: true` + `licenseUrl`, and `dev` (FLUX.1-dev) is marked
+  accordingly. A new `GET /api/image-gen/setup/hf-token-status` endpoint
+  reports token presence for any gated legacy mflux model (FLUX.2's combined
+  status endpoint stays for its venv check). The component is renamed
+  `Flux2TokenBanner → HfTokenBanner` and takes a `modelLabel` + `licenseUrl`
+  prop so the gated-model copy/link adapts to the selected model. The POST
+  endpoint is renamed `/setup/flux2-token → /setup/hf-token` to match its
+  generic role.
+  (2) `server/services/imageGen/local.js` now detects gated-repo failures
+  from mflux's pre-built binary (which doesn't emit PortOS's structured
+  `USER_ERROR:` markers) by matching `GatedRepoError` / `Cannot access gated
+  repo for url …/<owner>/<name>/…` in stderr, extracting the repo, and
+  surfacing an actionable `kind=gated_repo` failure with the license URL —
+  same path used by the existing `mflux_install_corrupted` heuristic.
+  Touches: `data/media-models.json`, `server/routes/imageGen.js`,
+  `server/services/imageGen/local.js`, `client/src/pages/ImageGen.jsx`,
+  `client/src/components/imageGen/HfTokenBanner.jsx` (renamed from
+  `Flux2TokenBanner.jsx`).
+
 - **Visual Style Preset dropdown clipped inside the bible sidebar.** The
   prior z-30 → z-50 bump was a no-op for the real problem: the dropdown
   lives inside the Pipeline Series bible `<aside class="lg:overflow-y-auto">`,

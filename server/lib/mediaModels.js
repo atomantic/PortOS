@@ -52,7 +52,7 @@ const DEFAULT_REGISTRY = {
   },
   image: [
     // mflux runner — MLX-only, Flux 1 (dev/schnell). `runner` defaults to 'mflux'.
-    { id: 'dev',              name: 'Flux 1 Dev',      steps: 20, guidance: 3.5 },
+    { id: 'dev',              name: 'Flux 1 Dev',      steps: 20, guidance: 3.5, requiresHfToken: true, licenseUrl: 'https://huggingface.co/black-forest-labs/FLUX.1-dev' },
     { id: 'schnell',          name: 'Flux 1 Schnell',  steps: 4,  guidance: 0,   cfgDisabled: true },
     // flux2 runner — PyTorch + diffusers + MPS (Apple Silicon) or CUDA (Win/Linux).
     // Models are quantized to fit on consumer hardware; tokenizer comes from the
