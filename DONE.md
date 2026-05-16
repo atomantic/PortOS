@@ -4,6 +4,10 @@ Archive of completed work. For active roadmap, see [PLAN.md](./PLAN.md). For pro
 
 ---
 
+## 2026-05-16
+
+- **Sharing display-name settings — discoverable from the Settings tab structure** — New `client/src/components/settings/SharingTab.jsx` mirrors the display-name + bio strip from the Sharing page top so users can find the source-attribution fields under `/settings/sharing` as well. Standalone tab uses a vertical card layout with a textarea (not single-line input) for the 2000-char bio. Wired into `client/src/pages/Settings.jsx` TABS + switch, sidebar in `client/src/components/Layout.jsx`, and `server/lib/navManifest.js` (`nav.settings.sharing`) so it's reachable from sidebar, `⌘K`, and voice. The existing Sharing page top strip stays in place — both surfaces hit the same `sharingDisplayName` / `sharingBio` settings keys.
+
 ## 2026-05-12
 
 - **Civitai / Z-Image follow-ups — six post-merge cleanups** — Six items off the "Civitai LoRA / Z-Image-Turbo follow-ups" backlog in one pass.
