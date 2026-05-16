@@ -26,9 +26,10 @@ export const RESOLUTIONS = [
   { label: '1536×1024 (hi-res landscape)', w: 1536, h: 1024, compatible: ['codex', RUNNER_FAMILIES.FLUX2] },
   // US comic-book trim presets — 6.625"×10.25" = 1.547:1 aspect, the real
   // standard. Distinct from "portrait" because comic pages are squarer than
-  // 2:3. The draft size is small enough to also run on FLUX2/flux1 locally;
-  // hi-res variants are codex-only (impractical on local diffusers).
-  { label: '1280×1972 (comic page — draft)', w: 1280, h: 1972, compatible: ['codex', 'flux1', RUNNER_FAMILIES.FLUX2] },
+  // 2:3. Codex-only: every dimension here exceeds the implicit local-runner
+  // ceilings used by the entries above (flux1 ≤1216, FLUX2 ≤1536, Z-Image /
+  // ERNIE degrade past ~1280).
+  { label: '1280×1972 (comic page — draft)', w: 1280, h: 1972, compatible: ['codex'] },
   { label: '1920×2951 (comic page — hi-res, margin)', w: 1920, h: 2951, compatible: ['codex'] },
   { label: '1988×3056 (comic page — hi-res, full bleed)', w: 1988, h: 3056, compatible: ['codex'] },
   // gpt-image-2 final-render presets: hard ceiling is each edge ≤ 3840 and
