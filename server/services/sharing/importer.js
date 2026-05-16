@@ -437,21 +437,30 @@ export async function processManifest(bucketId, manifestFilename) {
 }
 
 /**
- * Drop any inbox items the local instance itself produced. Pre-fix releases
- * could surface self-shares as pending imports; this prunes those on the
- * next backlog pass. Items predating the senderInstanceId field are
- * backfilled by reading the underlying manifest, so the pruning works for
- * legacy inbox state too.
+ * Drop inbox items that are no longer importable:
+ *   - Self-authored: this instance produced the manifest (pre-fix releases
+ *     surfaced these as pending imports). Items predating the
+ *     `senderInstanceId` field are backfilled by reading the underlying
+ *     manifest.
+ *   - Orphan: the manifest file is gone from the bucket. `promoteInboxItem`
+ *     would fail anyway; clearing them lets the UI advance instead of
+ *     stranding zombie rows the user must hand-dismiss.
  */
 async function pruneSelfAuthoredInbox(bucket, localInstanceId) {
-  if (!localInstanceId) return { pruned: 0 };
   const inbox = await readInbox(bucket.id);
   const items = Array.isArray(inbox.items) ? inbox.items : [];
-  if (items.length === 0) return { pruned: 0 };
+  if (items.length === 0) return { pruned: 0, orphaned: 0 };
 
   let changed = false;
+  let orphaned = 0;
   const kept = [];
   for (const it of items) {
+    const manifestPath = join(bucket.path, 'manifests', it.manifestFilename);
+    if (!existsSync(manifestPath)) {
+      orphaned += 1;
+      changed = true;
+      continue;
+    }
     let sender = it.senderInstanceId || null;
     let backfilled = it;
     if (!sender) {
@@ -468,16 +477,16 @@ async function pruneSelfAuthoredInbox(bucket, localInstanceId) {
     }
     kept.push(backfilled);
   }
-  const pruned = items.length - kept.length;
+  const pruned = items.length - kept.length - orphaned;
   if (changed) {
     inbox.items = kept;
     await writeInbox(bucket.id, inbox);
-    if (pruned > 0) {
+    if (pruned > 0 || orphaned > 0) {
       sharingEvents.emit('inbox-updated', { bucketId: bucket.id });
-      console.log(`🧹 sharing: bucket=${bucket.name} pruned ${pruned} self-authored inbox item(s)`);
+      console.log(`🧹 sharing: bucket=${bucket.name} pruned ${pruned} self-authored + ${orphaned} orphan inbox item(s)`);
     }
   }
-  return { pruned };
+  return { pruned, orphaned };
 }
 
 /** On startup or registration, scan the manifests dir for unprocessed entries. */

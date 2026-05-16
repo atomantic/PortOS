@@ -52,8 +52,11 @@
   on the next `processBacklog` pass (which runs on server startup per
   bucket): missing `senderInstanceId` fields are filled from the manifest
   file on disk, then any item matching the local instance id is dropped
-  with an `inbox-updated` socket event so the UI clears immediately.
-  Touches: `server/services/sharing/importer.js`,
+  with an `inbox-updated` socket event so the UI clears immediately. The
+  same pass also drops *orphan* inbox items whose manifest file no longer
+  exists in the bucket — one-shot manifests that were superseded by a
+  subscription-mode share leave zombie inbox rows that `promoteInboxItem`
+  would 404 on anyway. Touches: `server/services/sharing/importer.js`,
   `server/services/sharing/integration.test.js`.
 
 - **`adoptImportedSubscription` no longer mislabels deliberately-subscribed

@@ -465,6 +465,37 @@ describe('sharing round-trip', () => {
     expect(updates[0]).toMatchObject({ bucketId: bucket.id });
   });
 
+  it('processBacklog prunes orphaned inbox items whose manifest file is no longer in the bucket', async () => {
+    const { sharingEvents } = await import('./importer.js');
+    const bucket = await buckets.createBucket({ name: 'OrphanBucket', path: tempBucket, mode: 'inbox' });
+
+    const fs = await import('fs');
+    const inboxFile = join(tempData, 'sharing', 'inbox', `${bucket.id}.json`);
+    mkdirSync(join(tempData, 'sharing', 'inbox'), { recursive: true });
+    fs.writeFileSync(inboxFile, JSON.stringify({ items: [{
+      manifestId: 'orphan-mid',
+      manifestFilename: 'this-file-was-deleted-from-the-bucket.json',
+      kind: 'universe',
+      subscription: null,
+      source: 'remote-peer',
+      sourceBio: null,
+      senderInstanceId: 'some-other-peer',
+      createdAt: new Date().toISOString(),
+      receivedAt: new Date().toISOString(),
+      recordIds: ['u-orphan'],
+      assetCount: 0,
+    }] }));
+
+    const updates = [];
+    const onUpdate = (p) => updates.push(p);
+    sharingEvents.on('inbox-updated', onUpdate);
+    await importer.processBacklog(bucket.id);
+    sharingEvents.off('inbox-updated', onUpdate);
+
+    expect(await importer.listInbox(bucket.id)).toEqual([]);
+    expect(updates).toHaveLength(1);
+  });
+
   it('refuses a manifest with a sharingSchemaVersion newer than local + emits incompatible event', async () => {
     const { SHARING_SCHEMA_VERSION } = await import('./version.js');
     const { sharingEvents } = await import('./importer.js');
