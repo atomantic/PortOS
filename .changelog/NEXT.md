@@ -2,6 +2,13 @@
 
 ## Added
 
+- **CoS scheduled-task filter (All / Enabled).** The CoS Schedule tab header
+  gains an All/Enabled filter persisted in the URL (`?filter=enabled`) so the
+  selection is bookmarkable. Counts render once per pass, and each filter
+  carries its own empty-state copy so a future filter can't fall back to an
+  awkward auto-generated message. Touches
+  `client/src/components/cos/tabs/ScheduleTab.jsx`.
+
 - **Character canon: wardrobes (Cluster A).** Every entry under
   `universe.characters[]` gains an optional `wardrobes[]` array — each entry
   is an `{ id, name, description, createdAt, updatedAt }` outfit/styling
@@ -932,6 +939,15 @@
 
 ## Changed
 
+- **CI test output is now quiet + fail-fast.** New `server/package.json`
+  `test:ci` script (`vitest run --bail=1 --silent=passed-only
+  --reporter=default --reporter=github-actions`) used by `.github/workflows/ci.yml`.
+  Suppresses `console.log/error` output from passing tests (so the 1000s of
+  emoji-prefixed logs that previously flooded CI only appear when the owning
+  test fails), bails after the first failing test, and emits GitHub Actions
+  annotations on failure lines so the PR view links straight to the
+  offending assertion. Local `npm test` is unchanged.
+
 - **TUI agents now write a markdown task summary into `.agent-done` and
   PortOS ingests it as the agent's `outputBuffer`.** With per-line PTY
   capture off, the agent card's "Show output" panel only showed
@@ -1263,6 +1279,15 @@
   to scrub stray references from sibling unlocked composites' prompts.
 
 ## Fixed
+
+- **Flaky death-clock test passes again.** `computeDeathClock` healthy-years
+  test in `server/services/meatspace.test.js` derived its expected value from
+  `result.yearsRemaining` (rounded to 2dp by the service) but compared
+  against `result.healthyYearsRemaining` (derived from the full-precision
+  value). On some calendar dates the two rounding paths differed by 0.1 and
+  the assertion failed in CI. Now uses `toBeCloseTo(..., 0)` so the test
+  asserts the 85% ratio with tolerance instead of re-deriving from a
+  pre-rounded number.
 
 - **Theme contrast: white text on light-green success backgrounds now uses
   dark text.** `--port-on-success` defaulted to white (255 255 255), which
