@@ -177,7 +177,11 @@ async function findCollectionForUniverse(universe) {
   const direct = all.find((c) => c.universeId === universe.id);
   if (direct) return direct;
   const conventional = `universe: ${(universe.name || '').toLowerCase()}`;
-  return all.find((c) => (c.name || '').toLowerCase() === conventional) || null;
+  const legacy = all.find((c) => (c.name || '').toLowerCase() === conventional);
+  // Legacy universe-builder collections were named conventionally but did not
+  // carry the explicit link. Preserve the link in the share payload so the
+  // importer can restore membership instead of leaving copied assets unsorted.
+  return legacy ? { ...legacy, universeId: universe.id } : null;
 }
 
 /**
