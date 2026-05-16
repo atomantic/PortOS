@@ -209,7 +209,15 @@ function ArcHeader({ series, onSeriesUpdate, onIssuesUpdate, onFlushPending }) {
     }
   };
 
-  const generateBtnLabel = arc ? 'Regenerate arc' : 'Generate arc';
+  // A picked `shape` alone counts as an "arc" record (it's an explicit
+  // narrative-design decision the sanitizer preserves), but it isn't a
+  // generated arc — the LLM hasn't written anything yet. Use the
+  // text-content check to drive the "Generate" vs "Regenerate" affordances
+  // so the user isn't told to regenerate something that doesn't exist yet.
+  const hasGeneratedArc = !!(
+    arc && (arc.logline || arc.summary || arc.protagonistArc || arc.themes?.length)
+  );
+  const generateBtnLabel = hasGeneratedArc ? 'Regenerate arc' : 'Generate arc';
 
   return (
     <section className="bg-port-card border border-port-border rounded-lg p-4 space-y-3">
@@ -230,7 +238,7 @@ function ArcHeader({ series, onSeriesUpdate, onIssuesUpdate, onFlushPending }) {
             {running === 'generate' ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
             {generateBtnLabel}
           </button>
-          {arc ? (
+          {hasGeneratedArc ? (
             <button
               type="button"
               onClick={runVerify}

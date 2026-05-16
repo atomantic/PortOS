@@ -924,6 +924,15 @@
 
 ## Fixed
 
+- **Arc header — "Generate arc" stays accurate when only a shape is picked.**
+  After the sanitizer started preserving shape-only arcs, any series created
+  with a Vonnegut shape but no other arc content immediately showed
+  *Regenerate arc* and the *Verify arc* button — even though the LLM hadn't
+  written any logline/summary/themes yet. New `hasGeneratedArc` check gates
+  on actual text content (`logline || summary || protagonistArc ||
+  themes.length`), so the button reads *Generate arc* and Verify stays
+  hidden until the LLM has actually produced an arc to regenerate or verify.
+
 - **Storyboards scene extraction now uses the per-series configured LLM.**
   Clicking "From Teleplay" / "From Prose" on the Storyboards stage was
   calling Claude Code (the system default) regardless of the
