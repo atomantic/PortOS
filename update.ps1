@@ -212,26 +212,19 @@ if (Test-Path $migrationsScript) {
 }
 Step "migrations" "done" "Migrations complete"
 
-# Check for slash-do (optional, used by the PR Reviewer schedule task)
-$slashDoFound = Get-Command slash-do -ErrorAction SilentlyContinue
-if (-not $slashDoFound) {
-    Write-SafeHost "slash-do is not installed. It is used by the PR Reviewer schedule task." -ForegroundColor Yellow
-    if ([Environment]::UserInteractive) {
-        $reply = Read-Host "Install slash-do now? [y/N]"
-        if ($reply -match "^[Yy]$") {
-            Write-SafeHost "Installing slash-do..." -ForegroundColor Yellow
-            Invoke-Logged npm install -g slash-do@latest
-            if ($LASTEXITCODE -ne 0) {
-                Write-SafeHost "⚠️  Failed to install slash-do. Continuing without it." -ForegroundColor Red
-            }
-        } else {
-            Write-SafeHost "Skipping slash-do install. You can install later with: npm install -g slash-do@latest"
-        }
-    } else {
-        Write-SafeHost "Skipping slash-do prompt (non-interactive). Install later with: npm install -g slash-do@latest"
-    }
-    Write-SafeHost ""
+# Install/update slash-do commands. Replaces the previous interactive prompt
+# with an always-on `npx slash-do@latest` call so the user-global command
+# pool stays current across updates. Failures are non-fatal.
+# Pipe "a" so slash-do's "multiple environments detected" prompt auto-selects
+# all detected envs instead of hanging on readline (update.ps1 has no TTY).
+Step "slash-do" "running" "Installing/updating slash-do commands..."
+"a" | & npx --yes slash-do@latest >> $UpdateLog 2>&1
+if ($LASTEXITCODE -ne 0) {
+    Write-SafeHost "⚠️  slash-do install/update failed. Continuing (re-run later: npx slash-do@latest)." -ForegroundColor Yellow
+    $global:LASTEXITCODE = 0
 }
+Step "slash-do" "done" "slash-do commands installed/updated"
+Write-SafeHost ""
 
 # Build UI assets for production serving
 Step "build" "running" "Building client..."

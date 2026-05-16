@@ -207,7 +207,7 @@
       "returnsJson": false,
       "variables": []
     },
-    "pipeline-tv-script": {
+    "pipeline-teleplay": {
       "name": "Pipeline — TV Teleplay",
       "description": "Adapt the prose draft into a single-episode TV teleplay with sluglines, present-tense action, dialogue, and act breaks. One of two parallel script stages, both downstream of prose.",
       "model": "default",
@@ -238,6 +238,13 @@
     "pipeline-arc-verify": {
       "name": "Pipeline — Arc Verification",
       "description": "Cross-season continuity pass over an authored arc: catches character contradictions, dropped subplots, episode-count vs arc-weight mismatch, unresolved finale hooks, arc-role imbalance, and theme drift. Returns actionable { severity, location, problem, suggestion } issues — empty list means clean.",
+      "model": "heavy",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-volume-verify": {
+      "name": "Pipeline — Volume / Season Verification",
+      "description": "Deep continuity pass on a single volume / season: volume-internal arc shape, within-volume continuity, beat-level escalation (issues with beats), promise drift, boundary continuity with neighbor volumes, cast economy, volume-scope world-entity drift, and obvious length-vs-weight mismatches. Complement to the cross-volume arc verify, deeper because the scope is smaller. Returns actionable { severity, location, problem, suggestion } issues — empty list means clean.",
       "model": "heavy",
       "returnsJson": true,
       "variables": []

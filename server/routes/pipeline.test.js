@@ -38,6 +38,7 @@ vi.mock('../services/pipeline/textStages.js', async () => {
 let arcGenerateSpy;
 let seasonEpisodesSpy;
 let arcVerifySpy;
+let volumeVerifySpy;
 vi.mock('../services/pipeline/arcPlanner.js', async () => {
   const actual = await vi.importActual('../services/pipeline/arcPlanner.js');
   return {
@@ -45,6 +46,7 @@ vi.mock('../services/pipeline/arcPlanner.js', async () => {
     generateArcOverview: vi.fn((...args) => arcGenerateSpy(...args)),
     generateSeasonEpisodes: vi.fn((...args) => seasonEpisodesSpy(...args)),
     verifyArc: vi.fn((...args) => arcVerifySpy(...args)),
+    verifyVolume: vi.fn((...args) => volumeVerifySpy(...args)),
   };
 });
 
@@ -69,6 +71,14 @@ vi.mock('../services/pipeline/visualStages.js', () => ({
     prompt: `comic-page prompt for page ${opts.pageIndex + 1}`,
     pageIndex: opts.pageIndex,
   })),
+  // Front cover render. Returns shape the route merges with the persisted cover:
+  // { jobId, mode, prompt, coverScript }.
+  enqueueComicCover: vi.fn(async (_issueId, body) => ({
+    jobId: `cover-job-${++uuidCounter}`,
+    mode: 'local',
+    prompt: 'cover art prompt',
+    coverScript: body?.coverScript ?? 'default cover concept',
+  })),
   // Single-scene video render. Returns the shape the route forwards verbatim
   // to clients: { jobId, prompt, sceneIndex, issue, stage }.
   enqueueStoryboardSceneVideo: vi.fn(async (issueId, sceneIndex) => ({
@@ -78,6 +88,27 @@ vi.mock('../services/pipeline/visualStages.js', () => ({
     issue: { id: issueId, stages: { storyboards: { scenes: [] } } },
     stage: { scenes: [] },
   })),
+  enqueueStoryboardShotStartFrame: vi.fn(async (issueId, sceneIndex, shotIndex) => ({
+    jobId: `shot-img-${++uuidCounter}`,
+    mode: 'local',
+    prompt: `shot ${shotIndex} prompt`,
+    sceneIndex,
+    shotIndex,
+    issue: { id: issueId, stages: { storyboards: { scenes: [] } } },
+    stage: { scenes: [] },
+  })),
+  // Pure helper used by the route to construct the in-flight slot record.
+  // Kept inline (not vi.fn) so the route's call-site logic is exercised
+  // without forcing every test to thread a mock implementation through.
+  buildRenderSlot: ({ slotKey, jobId, prompt, width, height, fromProof = false, filename = null }) => ({
+    jobId,
+    filename,
+    prompt: prompt || null,
+    width: width ?? null,
+    height: height ?? null,
+    createdAt: new Date().toISOString(),
+    ...(slotKey === 'finalImage' ? { fromProof } : {}),
+  }),
   refineComicPanelPrompt: vi.fn(async (issueId, pi, ni) => ({
     panel: { description: 'refined panel body' },
     page: { panels: [] },
@@ -106,6 +137,100 @@ vi.mock('../services/pipeline/episodeVideo.js', () => ({
     scenes: 2,
     reused: opts?.force ? false : false,
   })),
+}));
+
+// Audio service mocks — avoid touching the real TTS pipeline + filesystem
+// while still exercising the route's voice-resolution + persist flow.
+vi.mock('../services/pipeline/audio.js', () => ({
+  listAllVoices: vi.fn(async () => [{ id: 'kokoro:af_heart', engine: 'kokoro', voice: 'af_heart', label: 'Heart' }]),
+  synthesizeToFile: vi.fn(async ({ voiceId }) => ({
+    filename: `vo-mock-${++uuidCounter}.wav`,
+    latencyMs: 5,
+    engine: 'kokoro',
+    voiceId: voiceId || null,
+  })),
+  parseVoiceId: vi.fn((v) => {
+    if (!v) return { engine: null, voice: null };
+    const m = v.match(/^([a-z]+):(.+)$/);
+    return m ? { engine: m[1], voice: m[2] } : { engine: null, voice: v };
+  }),
+  extractDialogueLines: vi.fn((issue) => {
+    const scenes = issue?.stages?.storyboards?.scenes || [];
+    const out = [];
+    let n = 1;
+    for (const s of scenes) {
+      for (const d of (s.dialogue || [])) {
+        if (!d?.line?.trim()) continue;
+        out.push({
+          id: `line-${String(n).padStart(3, '0')}`,
+          characterId: null,
+          characterName: d.character || null,
+          text: d.line,
+          voiceIdOverride: null,
+          audioJobId: null,
+          audioFilename: null,
+        });
+        n += 1;
+      }
+    }
+    return { lines: out, preservedCount: 0 };
+  }),
+  resolveVoiceForLine: vi.fn((line, series, { explicit } = {}) => {
+    if (explicit) return explicit;
+    if (line?.voiceIdOverride) return line.voiceIdOverride;
+    if (line?.characterId && series?.characters) {
+      const c = series.characters.find((x) => x?.id === line.characterId);
+      if (c?.voiceId) return c.voiceId;
+    }
+    return null;
+  }),
+}));
+vi.mock('../services/voice/tts.js', () => ({
+  synthesize: vi.fn(async () => ({ wav: Buffer.from('w'), latencyMs: 1, engine: 'kokoro' })),
+  listVoices: vi.fn(async () => ({ engine: 'kokoro', voices: [] })),
+  VALID_ENGINES: new Set(['kokoro', 'piper']),
+}));
+
+const musicLibraryStore = new Map();
+let lastImportedName = null;
+const assertSafe = (name) => {
+  if (typeof name !== 'string' || name.includes('..') || name.includes('/')) {
+    const e = new Error('Invalid music filename');
+    e.status = 400; e.code = 'VALIDATION_ERROR';
+    throw e;
+  }
+};
+vi.mock('../services/pipeline/musicLibrary.js', () => ({
+  MUSIC_UPLOAD_MAX_BYTES: 50 * 1024 * 1024,
+  MUSIC_SOURCE: { UPLOAD: 'upload', LIBRARY: 'library', GEN: 'gen' },
+  isSupportedMusicUpload: vi.fn(() => true),
+  listMusicLibrary: vi.fn(async () => Array.from(musicLibraryStore.values())),
+  importUploadedTrack: vi.fn(async (_tmpPath, originalName) => {
+    lastImportedName = originalName;
+    const filename = `music-uuid-${++uuidCounter}.mp3`;
+    musicLibraryStore.set(filename, { filename, label: originalName.replace(/\.[^.]+$/, ''), sizeBytes: 11, updatedAt: new Date().toISOString() });
+    return { filename, sizeBytes: 11 };
+  }),
+  statMusicTrack: vi.fn(async (filename) => {
+    assertSafe(filename);
+    return musicLibraryStore.get(filename) || null;
+  }),
+  deleteMusicTrack: vi.fn(async (filename) => {
+    assertSafe(filename);
+    const existed = musicLibraryStore.has(filename);
+    musicLibraryStore.delete(filename);
+    return existed;
+  }),
+}));
+
+vi.mock('../lib/multipart.js', () => ({
+  uploadSingle: () => (req, _res, next) => {
+    req.file = req.body?._mockFile || null;
+    delete req.body?._mockFile;
+    next();
+  },
+  optionalUpload: () => (_req, _res, next) => next(),
+  uploadFields: () => (_req, _res, next) => next(),
 }));
 
 const pipelineRouter = (await import('./pipeline.js')).default;
@@ -270,6 +395,29 @@ describe('pipeline routes', () => {
     const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
     const r = await request(app)
       .post(`/api/pipeline/issues/${iss.body.id}/stages/storyboards/scenes/nope/video`)
+      .send({});
+    expect(r.status).toBe(400);
+  });
+
+  it('POST /issues/:id/stages/storyboards/scenes/:sceneIndex/shots/:shotIndex/render returns the enqueued jobId', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    const r = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/storyboards/scenes/0/shots/2/render`)
+      .send({});
+    expect(r.status).toBe(200);
+    expect(r.body.jobId).toMatch(/^shot-img-/);
+    expect(r.body.sceneIndex).toBe(0);
+    expect(r.body.shotIndex).toBe(2);
+  });
+
+  it('POST /issues/:id/stages/storyboards/scenes/:sceneIndex/shots/:shotIndex/render rejects bad indices', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    const r = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/storyboards/scenes/nope/shots/0/render`)
       .send({});
     expect(r.status).toBe(400);
   });
@@ -460,7 +608,7 @@ describe('pipeline routes', () => {
     const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
     const r = await request(app)
       .post(`/api/pipeline/issues/${iss.body.id}/stages/storyboards/extract-scenes`)
-      .send({ from: 'tvScript' });
+      .send({ from: 'teleplay' });
     expect(r.status).toBe(400);
     expect(r.body.error || r.body.message).toMatch(/empty/i);
   });
@@ -471,13 +619,13 @@ describe('pipeline routes', () => {
     const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
     await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
       stages: {
-        tvScript: { status: 'ready', output: '## TEASER\n\n**INT. ROOM — NIGHT**\n\nAction.' },
+        teleplay: { status: 'ready', output: '## TEASER\n\n**INT. ROOM — NIGHT**\n\nAction.' },
         storyboards: { scenes: [{ slugline: 'EXT. CITY', description: 'pre-existing' }] },
       },
     });
     const r = await request(app)
       .post(`/api/pipeline/issues/${iss.body.id}/stages/storyboards/extract-scenes`)
-      .send({ from: 'tvScript' });
+      .send({ from: 'teleplay' });
     expect(r.status).toBe(409);
     expect(r.body.error || r.body.message).toMatch(/force/i);
   });
@@ -501,17 +649,17 @@ describe('pipeline routes', () => {
     });
     const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
     await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
-      stages: { tvScript: { status: 'ready', output: '## TEASER\n\n**INT. VAULT — NIGHT**\n\nThey break in.' } },
+      stages: { teleplay: { status: 'ready', output: '## TEASER\n\n**INT. VAULT — NIGHT**\n\nThey break in.' } },
     });
 
     const r = await request(app)
       .post(`/api/pipeline/issues/${iss.body.id}/stages/storyboards/extract-scenes`)
-      .send({ from: 'tvScript' });
+      .send({ from: 'teleplay' });
 
     expect(r.status).toBe(200);
     expect(r.body.sceneCount).toBe(2);
     expect(r.body.runId).toBe('run-scenes-1');
-    expect(r.body.sourceKind).toBe('tvScript');
+    expect(r.body.sourceKind).toBe('teleplay');
     // visualPrompt → description aliasing for UI compat
     expect(r.body.stage.scenes[0].description).toBe('a high-tech vault, two figures in tactical gear, dim red emergency light');
     expect(r.body.stage.scenes[0].slugline).toBe('INT. VAULT — NIGHT');
@@ -525,7 +673,7 @@ describe('pipeline routes', () => {
     // Series characters were forwarded to the extractor for bible deference
     const firstCall = spy.mock.calls[0][0];
     expect(firstCall.characters[0].name).toBe('Alice');
-    expect(firstCall.sourceKind).toBe('tvScript');
+    expect(firstCall.sourceKind).toBe('teleplay');
     expect(firstCall.series).toEqual({ name: 'S', styleNotes: '' });
     spy.mockRestore();
   });
@@ -569,13 +717,13 @@ describe('pipeline routes', () => {
     const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
     await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
       stages: {
-        tvScript: { status: 'ready', output: '## TEASER\n\n**INT. ROOM — NIGHT**' },
+        teleplay: { status: 'ready', output: '## TEASER\n\n**INT. ROOM — NIGHT**' },
         storyboards: { scenes: [{ slugline: 'OLD', description: 'will be replaced' }] },
       },
     });
     const r = await request(app)
       .post(`/api/pipeline/issues/${iss.body.id}/stages/storyboards/extract-scenes`)
-      .send({ from: 'tvScript', force: true });
+      .send({ from: 'teleplay', force: true });
 
     expect(r.status).toBe(200);
     expect(r.body.sceneCount).toBe(1);
@@ -680,6 +828,69 @@ describe('pipeline routes', () => {
     expect(r.body.stage.pages[0].panels[0].description).toBe('Fresh.');
   });
 
+  it('POST /issues/:id/stages/comicPages/extract-pages seeds blank cover.script from parsed coverConcept', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    const script = [
+      '## Cover concept',
+      'A lone figure stands on a crumbling bridge.',
+      '',
+      '## Page 1',
+      '',
+      'Panel 1',
+      '**Description:** The bridge at dusk.',
+      '**Caption:** (none)',
+      '**Dialogue:** (none)',
+      '**SFX:** (none)',
+    ].join('\n');
+    await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
+      stages: { comicScript: { status: 'ready', output: script } },
+    });
+    const r = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/comicPages/extract-pages`)
+      .send({});
+    expect(r.status).toBe(200);
+    // Response reflects the seeded cover
+    expect(r.body.stage.cover.script).toBe('A lone figure stands on a crumbling bridge.');
+    expect(r.body.stage.cover.imageJobId).toBeNull();
+    expect(r.body.stage.cover.prompt).toBeNull();
+    // Persisted issue also carries the seeded cover
+    expect(r.body.issue.stages.comicPages.cover.script).toBe('A lone figure stands on a crumbling bridge.');
+  });
+
+  it('POST /issues/:id/stages/comicPages/extract-pages does not clobber an existing cover.script', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    const script = [
+      '## Cover concept',
+      'A brand-new concept from the re-run.',
+      '',
+      '## Page 1',
+      '',
+      'Panel 1',
+      '**Description:** The bridge at dawn.',
+      '**Caption:** (none)',
+      '**Dialogue:** (none)',
+      '**SFX:** (none)',
+    ].join('\n');
+    // Pre-seed the issue with an existing user-edited cover script
+    await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
+      stages: {
+        comicScript: { status: 'ready', output: script },
+        comicPages: { cover: { script: 'user edit', imageJobId: 'old-job', prompt: 'old prompt' } },
+      },
+    });
+    const r = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/comicPages/extract-pages`)
+      .send({});
+    expect(r.status).toBe(200);
+    // The existing cover must be preserved exactly — no clobber
+    expect(r.body.stage.cover.script).toBe('user edit');
+    expect(r.body.issue.stages.comicPages.cover.script).toBe('user edit');
+  });
+
   // ---- comicPages/pages/:pageIndex/render ----
 
   it('POST /issues/:id/stages/comicPages/pages/:pageIndex/render 400s for a non-integer pageIndex', async () => {
@@ -714,10 +925,13 @@ describe('pipeline routes', () => {
     expect(r.body.jobId).toMatch(/^page-job-/);
     // pageNumber is pageIndex + 1, so /pages/1/render renders the *2nd* page.
     expect(r.body.prompt).toMatch(/page 2/);
-    expect(r.body.stage.pages[1].imageJobId).toBe(r.body.jobId);
-    expect(r.body.stage.pages[1].prompt).toBe(r.body.prompt);
-    // Other page untouched
-    expect(r.body.stage.pages[0].imageJobId).toBeUndefined();
+    // No explicit target → defaults to proof (per the route schema).
+    // The render lands on pages[1].proofImage, not the legacy imageJobId slot.
+    expect(r.body.stage.pages[1].proofImage.jobId).toBe(r.body.jobId);
+    expect(r.body.stage.pages[1].proofImage.prompt).toBe(r.body.prompt);
+    expect(r.body.stage.pages[1].proofImage.filename).toBeNull();
+    // Other page untouched — has no slot record either.
+    expect(r.body.stage.pages[0].proofImage).toBeFalsy();
     expect(r.body.stage.status).toBe('edited');
   });
 
@@ -739,6 +953,48 @@ describe('pipeline routes', () => {
     expect(r.body.code || r.body.error).toMatch(/PIPELINE_COMIC_PAGE_NOT_FOUND|out of range/i);
     // Enqueue is never reached when the page doesn't exist.
     expect(visualStages.enqueueVisualComicPage).not.toHaveBeenCalled();
+  });
+
+  // ---- comicPages/cover/render ----
+
+  it('POST /issues/:id/stages/comicPages/cover/render returns jobId + prompt and persists cover on the issue', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    const r = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/comicPages/cover/render`)
+      .send({ coverScript: 'Hero stands atop the foundry, smoke rising' });
+    expect(r.status).toBe(200);
+    expect(r.body.jobId).toMatch(/^cover-job-/);
+    expect(r.body.prompt).toBe('cover art prompt');
+    // Persistence: cover carries the user's script + the proof slot
+    // record. No `target` in the request → defaults to 'proof' per schema.
+    expect(r.body.cover.script).toBe('Hero stands atop the foundry, smoke rising');
+    expect(r.body.cover.proofImage.jobId).toBe(r.body.jobId);
+    expect(r.body.cover.proofImage.prompt).toBe(r.body.prompt);
+    expect(r.body.cover.proofImage.filename).toBeNull();
+    // Top-level issue + stage are also returned.
+    expect(r.body.issue.id).toBe(iss.body.id);
+    expect(r.body.stage.cover.proofImage.jobId).toBe(r.body.jobId);
+  });
+
+  it('POST /issues/:id/stages/comicPages/cover/render 404s for an unknown issue', async () => {
+    const app = makeApp();
+    const r = await request(app)
+      .post('/api/pipeline/issues/iss-nope/stages/comicPages/cover/render')
+      .send({});
+    expect(r.status).toBe(404);
+  });
+
+  it('POST /issues/:id/stages/comicPages/cover/render 400s when the body fails schema validation', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    // `width` must be an integer; sending a string triggers Zod validation failure.
+    const r = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/comicPages/cover/render`)
+      .send({ width: 'not-a-number' });
+    expect(r.status).toBe(400);
   });
 
   // -----------------------
@@ -951,7 +1207,7 @@ describe('pipeline routes', () => {
     seasonEpisodesSpy = vi.fn(async () => ({
       season: sea.body,
       episodes: [
-        { number: 1, title: 'Ep 1', logline: 'L1', synopsis: 'Pilot synopsis', primaryCharacters: ['LINA'], arcRole: 'pilot' },
+        { number: 1, title: 'Ep 1', logline: 'L1', synopsis: 'Pilot synopsis', primaryCharacters: ['LINA'], arcRole: 'pilot', lengthProfile: 'extended' },
         { number: 2, title: 'Ep 2', logline: 'L2', synopsis: 'Comp synopsis', primaryCharacters: ['LINA'], arcRole: 'complication' },
       ],
       runId: 'run-2', providerId: 'p', model: 'm',
@@ -967,6 +1223,8 @@ describe('pipeline routes', () => {
     expect(r.body.createdIssues[0].title).toBe('Ep 1');
     // Synopsis lands in stages.idea.input so auto-run-text has a seed.
     expect(r.body.createdIssues[0].stages.idea.input).toContain('Pilot synopsis');
+    // Non-default lengthProfile must be forwarded from the episode into the created issue.
+    expect(r.body.createdIssues[0].lengthProfile).toBe('extended');
     expect(r.body.createdIssues[1].arcPosition).toBe(2);
 
     const issues = await request(app).get(`/api/pipeline/series/${ser.body.id}/issues`);
@@ -986,5 +1244,228 @@ describe('pipeline routes', () => {
     expect(r.status).toBe(200);
     expect(r.body.issues).toHaveLength(1);
     expect(r.body.issues[0].severity).toBe('high');
+  });
+
+  it('POST /series/:id/seasons/:seasonId/verify forwards to the volume verifier', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    volumeVerifySpy = vi.fn(async (_seriesId, seasonId) => ({
+      issues: [
+        { severity: 'medium', location: 'episode:3', problem: 'beats plateau', suggestion: 'escalate ep 3' },
+      ],
+      runId: 'rv', providerId: 'p', model: 'm', seasonId,
+    }));
+    const r = await request(app)
+      .post(`/api/pipeline/series/${ser.body.id}/seasons/sea-fake/verify`)
+      .send({ providerOverride: 'anthropic' });
+    expect(r.status).toBe(200);
+    expect(r.body.issues).toHaveLength(1);
+    expect(r.body.issues[0].location).toBe('episode:3');
+    expect(volumeVerifySpy).toHaveBeenCalledWith(ser.body.id, 'sea-fake', expect.objectContaining({ providerOverride: 'anthropic' }));
+  });
+
+  describe('audio stage routes', () => {
+    async function seedIssueWithStoryboards(app) {
+      const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+      const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+      await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
+        stages: {
+          storyboards: {
+            scenes: [{
+              slugline: 'INT. KITCHEN — NIGHT',
+              dialogue: [
+                { character: 'JEAN', line: 'I told you he was coming.' },
+                { character: 'DON CARLOS', line: 'Quiet now.' },
+              ],
+            }],
+          },
+        },
+      });
+      return iss.body;
+    }
+
+    it('POST /audio/extract-lines populates lines[] from storyboards dialogue', async () => {
+      const app = makeApp();
+      const iss = await seedIssueWithStoryboards(app);
+      const r = await request(app)
+        .post(`/api/pipeline/issues/${iss.id}/stages/audio/extract-lines`)
+        .send({});
+      expect(r.status).toBe(200);
+      expect(r.body.lineCount).toBe(2);
+      expect(r.body.stage.lines).toHaveLength(2);
+      expect(r.body.stage.lines[0].text).toMatch(/coming/);
+    });
+
+    it('POST /audio/extract-lines 409s on second call without force:true', async () => {
+      const app = makeApp();
+      const iss = await seedIssueWithStoryboards(app);
+      await request(app).post(`/api/pipeline/issues/${iss.id}/stages/audio/extract-lines`).send({});
+      const r = await request(app)
+        .post(`/api/pipeline/issues/${iss.id}/stages/audio/extract-lines`)
+        .send({});
+      expect(r.status).toBe(409);
+    });
+
+    it('POST /audio/extract-lines with force:true replaces existing lines', async () => {
+      const app = makeApp();
+      const iss = await seedIssueWithStoryboards(app);
+      await request(app).post(`/api/pipeline/issues/${iss.id}/stages/audio/extract-lines`).send({});
+      const r = await request(app)
+        .post(`/api/pipeline/issues/${iss.id}/stages/audio/extract-lines`)
+        .send({ force: true });
+      expect(r.status).toBe(200);
+      expect(r.body.lineCount).toBe(2);
+    });
+
+    it('POST /audio/lines/:idx/render persists audioFilename on the matching line', async () => {
+      const app = makeApp();
+      const iss = await seedIssueWithStoryboards(app);
+      await request(app).post(`/api/pipeline/issues/${iss.id}/stages/audio/extract-lines`).send({});
+      const r = await request(app)
+        .post(`/api/pipeline/issues/${iss.id}/stages/audio/lines/0/render`)
+        .send({});
+      expect(r.status).toBe(200);
+      expect(r.body.filename).toMatch(/^vo-mock-/);
+      expect(r.body.lineIdx).toBe(0);
+      expect(r.body.engine).toBe('kokoro');
+      // Refetch the issue and confirm the audio filename landed.
+      const issAfter = await request(app).get(`/api/pipeline/issues/${iss.id}`);
+      expect(issAfter.body.stages.audio.lines[0].audioFilename).toMatch(/^vo-mock-/);
+    });
+
+    it('POST /audio/lines/:idx/render 404s for out-of-range index', async () => {
+      const app = makeApp();
+      const iss = await seedIssueWithStoryboards(app);
+      await request(app).post(`/api/pipeline/issues/${iss.id}/stages/audio/extract-lines`).send({});
+      const r = await request(app)
+        .post(`/api/pipeline/issues/${iss.id}/stages/audio/lines/99/render`)
+        .send({});
+      expect(r.status).toBe(404);
+    });
+
+    it('POST /audio/lines/:idx/render 400s for non-integer index', async () => {
+      const app = makeApp();
+      const iss = await seedIssueWithStoryboards(app);
+      const r = await request(app)
+        .post(`/api/pipeline/issues/${iss.id}/stages/audio/lines/nope/render`)
+        .send({});
+      expect(r.status).toBe(400);
+    });
+  });
+
+  describe('music library routes', () => {
+    beforeEach(() => {
+      musicLibraryStore.clear();
+      lastImportedName = null;
+    });
+
+    async function seedIssue(app) {
+      const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+      const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+      return iss.body;
+    }
+
+    it('GET /audio/music-library returns the current track list', async () => {
+      const app = makeApp();
+      musicLibraryStore.set('music-1.mp3', { filename: 'music-1.mp3', label: 'theme', sizeBytes: 100, updatedAt: '2026-05-15T00:00:00.000Z' });
+      const r = await request(app).get('/api/pipeline/audio/music-library');
+      expect(r.status).toBe(200);
+      expect(r.body.tracks).toHaveLength(1);
+      expect(r.body.tracks[0].filename).toBe('music-1.mp3');
+    });
+
+    it('POST /audio/music/upload imports the file and attaches it to the issue', async () => {
+      const app = makeApp();
+      const iss = await seedIssue(app);
+      const r = await request(app)
+        .post(`/api/pipeline/issues/${iss.id}/stages/audio/music/upload`)
+        // The mock multipart parser pulls req.file out of req.body._mockFile so
+        // this test can sidestep the real streaming parser without losing the
+        // route's req.file contract.
+        .send({ _mockFile: { path: '/tmp/uploaded.mp3', originalname: 'My Theme.mp3', mimetype: 'audio/mpeg', size: 11 } });
+      expect(r.status).toBe(200);
+      expect(r.body.music.source).toBe('upload');
+      expect(r.body.music.trackFilename).toMatch(/^music-uuid-/);
+      // Persisted on the issue
+      const after = await request(app).get(`/api/pipeline/issues/${iss.id}`);
+      expect(after.body.stages.audio.music.trackFilename).toBe(r.body.music.trackFilename);
+      expect(lastImportedName).toBe('My Theme.mp3');
+    });
+
+    it('POST /audio/music/upload 400s when no file is uploaded', async () => {
+      const app = makeApp();
+      const iss = await seedIssue(app);
+      const r = await request(app)
+        .post(`/api/pipeline/issues/${iss.id}/stages/audio/music/upload`)
+        .send({});
+      expect(r.status).toBe(400);
+    });
+
+    it('POST /audio/music/attach attaches an existing library track', async () => {
+      const app = makeApp();
+      const iss = await seedIssue(app);
+      musicLibraryStore.set('shared.mp3', { filename: 'shared.mp3', label: 'shared', sizeBytes: 100, updatedAt: '2026-05-15T00:00:00.000Z' });
+      const r = await request(app)
+        .post(`/api/pipeline/issues/${iss.id}/stages/audio/music/attach`)
+        .send({ trackFilename: 'shared.mp3', label: 'Library pick' });
+      expect(r.status).toBe(200);
+      expect(r.body.music.source).toBe('library');
+      expect(r.body.music.trackFilename).toBe('shared.mp3');
+      expect(r.body.music.label).toBe('Library pick');
+    });
+
+    it('POST /audio/music/attach 404s when the track is not in the library', async () => {
+      const app = makeApp();
+      const iss = await seedIssue(app);
+      const r = await request(app)
+        .post(`/api/pipeline/issues/${iss.id}/stages/audio/music/attach`)
+        .send({ trackFilename: 'ghost.mp3' });
+      expect(r.status).toBe(404);
+    });
+
+    it('POST /audio/music/attach 400s on path-traversal filenames', async () => {
+      const app = makeApp();
+      const iss = await seedIssue(app);
+      const r = await request(app)
+        .post(`/api/pipeline/issues/${iss.id}/stages/audio/music/attach`)
+        .send({ trackFilename: '../etc/passwd' });
+      expect(r.status).toBe(400);
+    });
+
+    it('DELETE /audio/music clears music from the issue without deleting the library entry', async () => {
+      const app = makeApp();
+      const iss = await seedIssue(app);
+      musicLibraryStore.set('shared.mp3', { filename: 'shared.mp3', label: 'shared', sizeBytes: 100, updatedAt: '2026-05-15T00:00:00.000Z' });
+      await request(app)
+        .post(`/api/pipeline/issues/${iss.id}/stages/audio/music/attach`)
+        .send({ trackFilename: 'shared.mp3' });
+      const r = await request(app)
+        .delete(`/api/pipeline/issues/${iss.id}/stages/audio/music`)
+        .send();
+      expect(r.status).toBe(200);
+      expect(r.body.stage.music).toBeNull();
+      // Library entry survives the issue detach
+      expect(musicLibraryStore.has('shared.mp3')).toBe(true);
+    });
+
+    it('DELETE /audio/music-library/:filename removes the file from the library', async () => {
+      const app = makeApp();
+      musicLibraryStore.set('doomed.mp3', { filename: 'doomed.mp3', label: 'doomed', sizeBytes: 1, updatedAt: '2026-05-15T00:00:00.000Z' });
+      const r = await request(app)
+        .delete('/api/pipeline/audio/music-library/doomed.mp3')
+        .send();
+      expect(r.status).toBe(200);
+      expect(r.body.deleted).toBe(true);
+      expect(musicLibraryStore.has('doomed.mp3')).toBe(false);
+    });
+
+    it('DELETE /audio/music-library/:filename returns deleted:false when the file is already gone', async () => {
+      const app = makeApp();
+      const r = await request(app)
+        .delete('/api/pipeline/audio/music-library/ghost.mp3')
+        .send();
+      expect(r.status).toBe(200);
+      expect(r.body.deleted).toBe(false);
+    });
   });
 });

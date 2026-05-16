@@ -131,7 +131,28 @@ def main() -> None:
     seed = args.seed if args.seed is not None else int(torch.randint(0, 2**31 - 1, (1,)).item())
     generator = make_generator(device, seed)
 
-    callback = make_stepwise_callback(args.stepwise_image_output_dir, pipe, int(args.height), int(args.width))
+    # ERNIE keeps latents 2x2 patch-packed during the loop (e.g. 32→128 ch at
+    # half spatial) and decodes via vae.bn unnormalization + _unpatchify_latents
+    # before vae.decode — the generic scaling/shift path fails with a channel
+    # mismatch ([32,32,1,1] weight vs 128-ch input). When the loaded pipeline
+    # exposes both hooks, pass an ERNIE-aware preview decoder.
+    preview_decoder = None
+    pipe_vae = getattr(pipe, "vae", None)
+    if hasattr(pipe, "_unpatchify_latents") and pipe_vae is not None and hasattr(pipe_vae, "bn"):
+        def preview_decoder(p, latents):  # noqa: E306 — local closure on purpose
+            vae = p.vae
+            mean = vae.bn.running_mean.view(1, -1, 1, 1).to(device=latents.device, dtype=latents.dtype)
+            std = torch.sqrt(vae.bn.running_var.view(1, -1, 1, 1) + 1e-5).to(device=latents.device, dtype=latents.dtype)
+            unpacked = p._unpatchify_latents(latents * std + mean)
+            return vae.decode(unpacked, return_dict=False)[0]
+
+    callback = make_stepwise_callback(
+        args.stepwise_image_output_dir,
+        pipe,
+        int(args.height),
+        int(args.width),
+        preview_decoder=preview_decoder,
+    )
 
     accepted = set(inspect.signature(pipe.__call__).parameters.keys())
     pipe_kwargs = dict(

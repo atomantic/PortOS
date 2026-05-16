@@ -23,40 +23,124 @@
  * path drives the Creative Director scene runner end-to-end.
  */
 
+import { basename, join, resolve as resolvePath, sep as PATH_SEP } from 'node:path';
 import { enqueueJob } from '../mediaJobQueue/index.js';
 import { getSettings } from '../settings.js';
 import { getSeries } from './series.js';
 import { getIssue, updateStage, VISUAL_STAGE_IDS } from './issues.js';
-import { getWorld } from '../worldBuilder.js';
+import { PATHS } from '../../lib/fileUtils.js';
+import { buildComicPagesOwner, buildStoryboardsShotOwner } from './owners.js';
+import { getUniverse } from '../universeBuilder.js';
 import { ServerError } from '../../lib/errorHandler.js';
-import { buildScenePrompt, buildSettingByKey, matchSceneSetting } from '../../lib/scenePrompt.js';
+import {
+  buildScenePrompt, buildSettingByKey, matchSceneSetting,
+  buildCharByKey, matchSceneCharacters, matchCharactersInText,
+  matchSettingsInText, matchObjectsInText,
+} from '../../lib/scenePrompt.js';
 import { composeStyledPrompt } from '../../lib/composeStyledPrompt.js';
+import { resolveVisualStyle } from '../../lib/visualStyles.js';
 import { getDefaultVideoModelId, getVideoModels } from '../../lib/mediaModels.js';
 import { runStagedLLM } from '../../lib/stageRunner.js';
+import { runPromptRefine } from './refineHelpers.js';
+import { resolveSeriesCanonSync } from './seriesCanon.js';
 import { ASPECT_PRESETS } from '../../lib/creativeDirectorPresets.js';
 
-const SUPPORTED_MODES = new Set(['local', 'codex']);
+const joinStyleParts = (...parts) =>
+  parts.map((s) => (s || '').trim()).filter(Boolean).join(', ');
 
-const stackStyle = (series, extraStyle) =>
-  [series?.styleNotes, extraStyle].map((s) => (s || '').trim()).filter(Boolean).join(', ');
+const stackStyle = (series, extraStyle) => joinStyleParts(series?.styleNotes, extraStyle);
+
+// Resolved fragment leads so the curated aesthetic dominates over the caller's
+// free-text additions.
+const composeExtraStyle = (series, issue, stageId, callerExtraStyle = '') =>
+  joinStyleParts(resolveVisualStyle(series, issue, stageId)?.promptFragment, callerExtraStyle);
 
 const applyWorldStyle = (prompt, world) => {
   if (!world) return prompt;
   return composeStyledPrompt(prompt, '', { prompt: world.stylePrompt, negativePrompt: '' }).prompt;
 };
 
+// Resolution order for the image-gen mode on a pipeline visual stage:
+//   1. Per-request override (`options.mode`) — set by the stage's persisted
+//      `genConfig` or an explicit UI selection. Codex is only honored when
+//      `imageGen.codex.enabled` is true; a stale 'codex' override from
+//      before the toggle was turned off falls through to the next step.
+//   2. Saved dispatcher default (`settings.imageGen.mode`) — but only when
+//      it names a mode this surface supports (visual pipeline doesn't
+//      proxy the external SD-API path) AND, for 'codex', Codex is enabled.
+//   3. Auto-default — prefer Codex when the user has enabled it
+//      (`imageGen.codex.enabled`), since cloud image gen produces
+//      print-quality comic pages out of the box. Otherwise fall back to
+//      local diffusion (flux-1) the way the original default behaved.
 const resolveMode = (options, settings) => {
-  if (SUPPORTED_MODES.has(options.mode)) return options.mode;
+  const codexEnabled = settings?.imageGen?.codex?.enabled === true;
+  if (options.mode === 'codex' && codexEnabled) return 'codex';
+  if (options.mode === 'local') return 'local';
   const settingsMode = settings?.imageGen?.mode;
-  return SUPPORTED_MODES.has(settingsMode) ? settingsMode : 'local';
+  if (settingsMode === 'codex' && codexEnabled) return 'codex';
+  if (settingsMode === 'local') return 'local';
+  if (codexEnabled) return 'codex';
+  return 'local';
+};
+
+// Defensive fallback — an unrecognized value must never land in the final
+// slot, even if a future client bypasses the route schema.
+const resolveVariant = (target) => (target === 'final' ? 'final' : 'proof');
+
+// Shape for a fresh in-flight render slot — used by both route handlers
+// (cover + page) and the filename hook's legacy-migration path. `filename`
+// starts null; the comic-pages filename hook stamps it on job completion.
+// `fromProof` is omitted for the proof slot and required for the final slot.
+export const buildRenderSlot = ({ slotKey, jobId, prompt, width, height, fromProof = false, filename = null }) => ({
+  jobId,
+  filename,
+  prompt: prompt || null,
+  width: width ?? null,
+  height: height ?? null,
+  createdAt: new Date().toISOString(),
+  ...(slotKey === 'finalImage' ? { fromProof } : {}),
+});
+
+// Default denoise strength for the "use proof as base" upscale path. Low
+// enough to preserve composition (panel layout, character placement),
+// high enough to let the model add the extra detail the larger canvas
+// affords. Tweakable per-call via options.initImageStrength.
+const PROOF_AS_BASE_DEFAULT_STRENGTH = 0.25;
+
+// Resolve a stored proof filename (e.g. "abc123.png") to an absolute path
+// under PATHS.images, enforcing the gallery prefix. Skips existsSync — the
+// downstream image-gen runner reads the path and will surface a clear error
+// if the file vanished between enqueue and exec; an existsSync here would
+// add a TOCTOU race for no real benefit.
+const resolveProofInitImage = (proofImage, label) => {
+  const name = proofImage?.filename;
+  if (typeof name !== 'string' || !name) {
+    throw new ServerError(
+      `Cannot use proof as base for ${label}: no proof render available yet — render the proof first.`,
+      { status: 400, code: 'PIPELINE_COMIC_PROOF_MISSING' },
+    );
+  }
+  const candidate = join(PATHS.images, basename(name));
+  const imagesRoot = resolvePath(PATHS.images) + PATH_SEP;
+  const resolved = resolvePath(candidate);
+  if (!resolved.startsWith(imagesRoot)) {
+    throw new ServerError(
+      `Proof image path escaped the gallery for ${label}: ${name}`,
+      { status: 400, code: 'PIPELINE_COMIC_PROOF_NOT_FOUND' },
+    );
+  }
+  return resolved;
 };
 
 const loadBibleContext = async (issueId) => {
   const issueChain = (async () => {
     const issue = await getIssue(issueId);
     const series = await getSeries(issue.seriesId);
-    const world = series.worldId ? await getWorld(series.worldId).catch(() => null) : null;
-    return { issue, series, world };
+    const world = series.universeId ? await getUniverse(series.universeId).catch(() => null) : null;
+    // Canon prefers the linked universe (Phase B) and falls back to the
+    // series's own arrays so pre-migration data still renders correctly.
+    const canon = resolveSeriesCanonSync(series, world);
+    return { issue, series, world, canon };
   })();
   const [chain, settings] = await Promise.all([issueChain, getSettings()]);
   return { ...chain, settings };
@@ -80,6 +164,15 @@ const enqueueImageJob = ({ prompt, world, settings, options, mode, owner, logLin
     steps: options.steps,
     guidance: options.guidance ?? options.cfgScale,
     cfgScale: options.cfgScale,
+    // Honored by local mflux + diffusers runners; codex picks its own.
+    ...(Number.isFinite(options.seed) ? { seed: options.seed } : {}),
+    // i2i upscale path: when the caller passes an init image (e.g.
+    // "use proof as base" for a final render) we forward it to the local
+    // image-gen runner. Codex silently ignores both fields — its
+    // `$imagegen` skill has no init-image input — so a codex-backend
+    // final render with useProofAsBase=true degrades to a full redraw.
+    ...(options.initImagePath ? { initImagePath: options.initImagePath } : {}),
+    ...(Number.isFinite(options.initImageStrength) ? { initImageStrength: options.initImageStrength } : {}),
   };
   const params = mode === 'codex'
     ? { mode: 'codex', codexPath: settings.imageGen?.codex?.codexPath, model: settings.imageGen?.codex?.model, ...baseParams }
@@ -101,9 +194,174 @@ export function composeVisualPrompt({ series, description, slugline = '', extraS
   return applyWorldStyle(scenePrompt, world);
 }
 
-export function composeComicPagePrompt({ series, world, page, pageNumber, extraStyle = '' }) {
+// Marvel/DC scripts attach parentheticals to speakers — `ETTA (EARPIECE):`,
+// `KESSA (WHISPERED):`, `LINA (THOUGHT):`. These tell a human artist HOW to
+// draw the balloon (jagged for transmitted voices, dashed for whispers,
+// cloud-outline for thoughts), but a diffusion model treats them as more text
+// to letter. Map them to visual balloon-style hints so the artist still gets
+// the cue without the label leaking into the lettering.
+const BALLOON_STYLE_HINTS = [
+  { test: /\b(EARPIECE|RADIO|COMM|TRANSMISSION|PHONE|HOLO|HOLOGRAM|INTERCOM|SPEAKER|TV|MONITOR|VIDEO)\b/, hint: 'jagged electronic/transmission balloon with bolt-shaped tail' },
+  { test: /\b(WHISPER(?:ED|S|ING)?|SOTTO|HUSHED|QUIET)\b/, hint: 'dashed-outline whisper balloon' },
+  { test: /\b(SHOUT(?:ED|S|ING)?|YELL(?:ED|S|ING)?|SCREAM(?:ED|S|ING)?|ANGRY|BURST)\b/, hint: 'spiked/burst-shaped balloon' },
+  { test: /\b(THOUGHT|THINKING|INTERNAL)\b/, hint: 'cloud-outline thought balloon with chain-of-bubbles tail' },
+  { test: /\b(SING(?:S|ING)?|SONG|MUSICAL)\b/, hint: 'wavy musical balloon with musical-note flourish' },
+  { test: /\b(OFF[\- ]?PANEL|OFF[\- ]?SCREEN|O\.?S\.?|O\.?P\.?)\b/, hint: 'off-panel balloon with tail pointing past the panel border' },
+  { test: /\b(NARRATION|VOICE[\- ]?OVER|V\.?O\.?)\b/, hint: 'rectangular narration caption rather than a speech balloon' },
+];
+
+/**
+ * Build one balloon attribution string: `Speech balloon reads: "<text>" (spoken
+ * by NAME[, <style hint>]).` Leads with the lettered text so the diffusion
+ * model anchors on the balloon's contents; parses any parenthetical modifier
+ * on the speaker into a visual styling hint (radio, whisper, thought, etc.).
+ * Returns null if `line` is blank — the caller filters those out.
+ */
+function formatBalloon(character, line) {
+  const text = (line || '').trim();
+  if (!text) return null;
+  const raw = (character || '').trim() || 'CHAR';
+  // Split `NAME (MODIFIER)` → speaker base + modifier text. Tolerate stacked
+  // parens (`NAME (EARPIECE, WHISPERED)`) by treating the whole inner-paren
+  // blob as one modifier string for hint detection.
+  const m = raw.match(/^([^(]+?)\s*\(([^)]*)\)\s*$/);
+  const speaker = (m ? m[1] : raw).trim() || 'CHAR';
+  const modifier = m ? m[2].trim() : '';
+  const cleanText = text.replace(/^"+|"+$/g, '').trim();
+  const styleHint = modifier
+    ? BALLOON_STYLE_HINTS.find((h) => h.test.test(modifier.toUpperCase()))?.hint
+    : null;
+  const attribution = styleHint
+    ? `(spoken by ${speaker}; ${styleHint})`
+    : `(spoken by ${speaker})`;
+  // Terminator handled here so endPunct() at the call site doesn't have to
+  // navigate the closing paren — we always end with `).`.
+  return `Speech balloon reads: "${cleanText}" ${attribution}.`;
+}
+
+/**
+ * Compose a comic-book front-cover prompt. The cover always renders the
+ * series masthead (logo-style title) and the issue number tag in the
+ * canonical top-of-cover position, plus the user's cover concept as the
+ * scene content. Falls back to the issue title when the user has not
+ * written a cover concept yet.
+ *
+ * Returns the full prompt string (with world style baked in when present).
+ */
+export function composeComicCoverPrompt({
+  series, world, issue, coverScript = '', extraStyle = '',
+}) {
+  const seriesName = (series?.name || '').trim();
+  const issueNumber = Number.isFinite(issue?.number) ? Math.max(1, Math.floor(issue.number)) : 1;
+  const issueTitle = (issue?.title || '').trim();
+  const concept = (coverScript || '').trim();
+
+  const styleStack = stackStyle(series, extraStyle);
+  const styleClause = styleStack ? ` Art style: ${styleStack}.` : '';
+
+  // Title-block requirements get spelled out explicitly because cover-art
+  // typography is the part image-gen models get most wrong on the first
+  // pass — without a hard cue the model often emits panels instead of
+  // a cover, or skips the issue-number tag.
+  const titleBlock = seriesName
+    ? `Render the series masthead "${seriesName}" as bold, large comic-book logo typography near the top of the cover.`
+    : 'Render a bold comic-book series masthead as large logo typography near the top of the cover.';
+  const numberBlock = `Include a clearly legible issue-number tag reading "#${issueNumber}" in the top-left corner — small but readable.`;
+  const titleLine = issueTitle
+    ? ` Include the issue title "${issueTitle}" as a secondary banner below the masthead.`
+    : '';
+
+  // Fall back to the issue title so a one-click render against a fresh cover
+  // still produces something thematically on-target instead of a blank canvas.
+  const sceneDescription = concept
+    || (issueTitle ? `A single dramatic hero image evoking "${issueTitle}".` : 'A single dramatic hero image of the protagonist mid-action.');
+
+  const layout = `A single full printable comic-book front cover for a serialized issue. ${titleBlock} ${numberBlock}${titleLine} The rest of the cover is one bold hero image (no panel borders, no multi-panel layout — this is the cover, not an interior page).${styleClause}`;
+  const body = `Cover concept: ${sceneDescription}`;
+  return applyWorldStyle(`${layout}\n\n${body}`, world);
+}
+
+/**
+ * Enqueue a comic-issue front-cover image render. Builds a cover-art
+ * prompt (series masthead + issue-number tag + user's cover concept) and
+ * hands it to the image-gen queue. Caller records the returned jobId on
+ * the appropriate variant slot (cover.proofImage / cover.finalImage)
+ * based on `options.target` ('proof' | 'final', default 'proof').
+ *
+ * When `options.useProofAsBase` is set and target='final', resolves the
+ * existing proof image to an absolute path under PATHS.images and passes
+ * it through as `initImagePath` so the local i2i runner can preserve
+ * the proof's composition while rendering at the larger size.
+ *
+ * Returns { jobId, mode, prompt, coverScript, variant, fromProof } so the
+ * route can construct the slot record without re-reading the issue file.
+ */
+export async function enqueueComicCover(issueId, options = {}) {
+  const { issue, settings, series, world } = await loadBibleContext(issueId);
+  const cover = issue.stages?.comicPages?.cover || null;
+  const coverScript = typeof options.coverScript === 'string'
+    ? options.coverScript
+    : (cover?.script || '');
+  const mode = resolveMode(options, settings);
+  const variant = resolveVariant(options.target);
+  const fromProof = variant === 'final' && options.useProofAsBase === true;
+  const initImagePath = fromProof
+    ? resolveProofInitImage(cover?.proofImage, 'cover')
+    : null;
+  const initImageStrength = fromProof
+    ? (Number.isFinite(options.initImageStrength) ? options.initImageStrength : PROOF_AS_BASE_DEFAULT_STRENGTH)
+    : undefined;
+  const prompt = composeComicCoverPrompt({
+    series, world, issue, coverScript,
+    extraStyle: composeExtraStyle(series, issue, 'comicPages', options.extraStyle),
+  });
+  const jobId = enqueueImageJob({
+    prompt, world, settings, mode,
+    options: { ...options, initImagePath, initImageStrength },
+    owner: buildComicPagesOwner({ issueId, target: 'cover', variant }),
+    logLine: `🎨 Pipeline comic cover — issue=${issueId.slice(0, 8)} number=${issue.number || 1} variant=${variant}${fromProof ? ' (from proof)' : ''}`,
+  });
+  return { jobId, mode, prompt, coverScript, variant, fromProof };
+}
+
+export function composeComicPagePrompt({
+  series, world, page, pageNumber, extraStyle = '',
+  matchedCharacters = [], matchedSettings = [], matchedObjects = [],
+}) {
   const panels = Array.isArray(page?.panels) ? page.panels : [];
   if (panels.length === 0) return '';
+
+  // Placed AFTER the layout clause: diffusion models weight earlier tokens
+  // more heavily, and the page-shape instruction has to claim that position.
+  const featuring = (matchedCharacters || [])
+    .map((c) => ({ name: c.name, desc: (c.physicalDescription || c.description || '').trim() }))
+    .filter((c) => c.name && c.desc)
+    .map((c) => `${c.name}: ${c.desc}`)
+    .join('; ');
+
+  // Setting baseline: pull description + palette + recurringDetails per matched
+  // setting. Same pattern as buildScenePrompt's settingFrags, but multi-setting
+  // (a single comic page can span more than one location).
+  const settingsClause = (matchedSettings || [])
+    .map((s) => {
+      const parts = [s.name && `${s.name}:`, (s.description || '').trim()].filter(Boolean);
+      const head = parts.join(' ');
+      const tail = [
+        s.palette ? `palette: ${s.palette.trim()}` : '',
+        (s.recurringDetails || '').trim(),
+      ].filter(Boolean).join('; ');
+      return [head, tail].filter(Boolean).join('. ');
+    })
+    .filter(Boolean)
+    .join(' | ');
+
+  // Notable objects/props/vehicles cited in the prose. Keeps signature props
+  // (e.g. "the brass key", "Wren's sloop") visually canonical across pages.
+  const notable = (matchedObjects || [])
+    .map((o) => ({ name: o.name, desc: (o.description || '').trim() }))
+    .filter((o) => o.name && o.desc)
+    .map((o) => `${o.name}: ${o.desc}`)
+    .join('; ');
 
   // Append a sentence-terminator unless the source text already ends in one —
   // prose extracted from a script often carries its own `.`, `!`, or `?`, and
@@ -116,22 +374,26 @@ export function composeComicPagePrompt({ series, world, page, pageNumber, extraS
     const idx = i + 1;
     const desc = (p.description || '').trim() || 'continuation of previous beat';
     const parts = [`Panel ${idx}: ${endPunct(desc)}`];
-    if (p.caption && p.caption.trim()) parts.push(`Caption: "${endPunct(p.caption.trim())}"`);
+    if (p.caption && p.caption.trim()) parts.push(`Narration caption box reads: "${endPunct(p.caption.trim())}"`);
     if (Array.isArray(p.dialogue) && p.dialogue.length > 0) {
-      // Trim first so whitespace-only character / line fields don't pass the
-      // truthy guard and emit malformed `: ""` entries. Drop dialogue rows
-      // whose line is empty — they have nothing for the artist to render.
+      // Format each dialogue line as `Speech balloon reads: "<text>" (spoken
+      // by NAME[, balloon style: <hint>])`. Lettered content (the quoted
+      // text) leads so the diffusion model anchors on it; speaker + style
+      // hints trail as attribution. The previous `NAME (MODIFIER): "text"`
+      // shape (Marvel/DC script convention) was being lettered verbatim
+      // INTO balloons by the image model — including the speaker name and
+      // parentheticals like "(EARPIECE)". Dropping speaker into the
+      // attribution slot and translating common parentheticals to balloon
+      // styling hints (jagged for radio/earpiece, dashed for whisper, cloud
+      // for thought) preserves the artistic intent without leaking labels
+      // into the lettered text.
       const dlg = p.dialogue
-        .map((d) => {
-          const character = (d.character || '').trim() || 'CHAR';
-          const line = (d.line || '').trim();
-          return line ? `${character}: "${line}"` : null;
-        })
+        .map((d) => formatBalloon(d.character, d.line))
         .filter(Boolean)
-        .join(' / ');
-      if (dlg) parts.push(`Dialogue: ${endPunct(dlg)}`);
+        .join(' ');
+      if (dlg) parts.push(dlg);
     }
-    if (p.sfx && p.sfx.trim()) parts.push(`SFX: ${endPunct(p.sfx.trim())}`);
+    if (p.sfx && p.sfx.trim()) parts.push(`SFX lettering: ${endPunct(p.sfx.trim())}`);
     return parts.join(' ');
   });
 
@@ -139,18 +401,26 @@ export function composeComicPagePrompt({ series, world, page, pageNumber, extraS
   const styleClause = styleStack ? ` Art style: ${styleStack}.` : '';
   const seriesClause = series?.name ? ` from the series "${series.name}"` : '';
 
-  const layout = `A single full printable comic book page${seriesClause}, page ${pageNumber}. Render a balanced multi-panel comic page layout with ${panels.length} clearly bordered panel${panels.length === 1 ? '' : 's'} arranged for left-to-right, top-to-bottom reading. Include lettered speech balloons for dialogue, rectangular narration captions, and stylized SFX where indicated. Each panel must be visually distinct, with consistent character designs across panels.${styleClause}`;
+  const layout = `A single full printable comic book page${seriesClause}, page ${pageNumber}. Render a balanced multi-panel comic page layout with ${panels.length} clearly bordered panel${panels.length === 1 ? '' : 's'} arranged for left-to-right, top-to-bottom reading. Include lettered speech balloons for dialogue, rectangular narration boxes for captions, and stylized SFX where indicated. **Balloon lettering rule: each speech balloon contains ONLY the quoted text shown after "Speech balloon reads:". NEVER letter the speaker's name, role, or any parenthetical attribution (e.g. "(EARPIECE)", "(WHISPERED)", "(OFF-PANEL)") inside the balloon — those are tail-direction and balloon-styling cues for the artist, not lettered content.** Each panel must be visually distinct, with consistent character designs across panels.${styleClause}`;
+  const featuringClause = featuring ? `\n\nFeaturing — ${featuring}` : '';
+  const settingClause = settingsClause ? `\n\nSetting — ${settingsClause}` : '';
+  const notableClause = notable ? `\n\nNotable — ${notable}` : '';
 
-  return applyWorldStyle(`${layout}\n\n${panelLines.join('\n\n')}`, world);
+  return applyWorldStyle(`${layout}${featuringClause}${settingClause}${notableClause}\n\n${panelLines.join('\n\n')}`, world);
 }
 
 /**
  * Enqueue a full-comic-page image render. Builds a structured page-level
  * prompt from `issue.stages.comicPages.pages[pageIndex].panels[]` and hands
- * it to the image-gen queue. Caller records the returned jobId on
- * `pages[pageIndex].imageJobId`.
+ * it to the image-gen queue. Caller records the returned jobId on the
+ * appropriate variant slot (`pages[pageIndex].proofImage` /
+ * `pages[pageIndex].finalImage`) based on `options.target`.
  *
- * Returns { jobId, mode, prompt, pageIndex }.
+ * When `options.useProofAsBase` is set and target='final', resolves the
+ * page's existing proof image and passes it as initImagePath so the local
+ * i2i runner can preserve panel layout while upscaling.
+ *
+ * Returns { jobId, mode, prompt, pageIndex, variant, fromProof }.
  */
 export async function enqueueVisualComicPage(issueId, options = {}) {
   const pageIndex = Number(options.pageIndex);
@@ -159,7 +429,7 @@ export async function enqueueVisualComicPage(issueId, options = {}) {
       status: 400, code: 'PIPELINE_COMIC_PAGE_BAD_INDEX',
     });
   }
-  const { issue, settings, series, world } = await loadBibleContext(issueId);
+  const { issue, settings, series, world, canon } = await loadBibleContext(issueId);
   const pages = Array.isArray(issue.stages?.comicPages?.pages) ? issue.stages.comicPages.pages : [];
   const page = pages[pageIndex];
   if (!page) {
@@ -174,19 +444,63 @@ export async function enqueueVisualComicPage(issueId, options = {}) {
   }
 
   const mode = resolveMode(options, settings);
+  const variant = resolveVariant(options.target);
+  const fromProof = variant === 'final' && options.useProofAsBase === true;
+  const initImagePath = fromProof
+    ? resolveProofInitImage(page.proofImage, `page ${pageIndex + 1}`)
+    : null;
+  const initImageStrength = fromProof
+    ? (Number.isFinite(options.initImageStrength) ? options.initImageStrength : PROOF_AS_BASE_DEFAULT_STRENGTH)
+    : undefined;
+
+  // Build a free-text haystack from every panel's prose (description +
+  // caption + sfx). Dialogue lines feed character matching via CAPS names
+  // separately because the parser already structures them.
+  const proseHaystack = page.panels
+    .flatMap((p) => [p.description, p.caption, p.sfx])
+    .filter(Boolean)
+    .join('\n');
+  const dialogueNames = page.panels.flatMap((p) =>
+    (p.dialogue || []).map((d) => d.character).filter(Boolean),
+  );
+
+  // Characters: union of (a) dialogue CAPS speakers and (b) anyone named in
+  // panel prose. Deduplicates on id/name inside the matchers. Canon is read
+  // from `canon` (Phase B helper) which prefers the linked universe and
+  // falls back to series arrays for pre-migration data.
+  const charByKey = buildCharByKey(canon.characters);
+  const fromDialogue = matchSceneCharacters(dialogueNames, charByKey);
+  const fromProse = matchCharactersInText(proseHaystack, canon.characters);
+  const seenCharKeys = new Set();
+  const matchedCharacters = [...fromDialogue, ...fromProse].filter((c) => {
+    const k = c.id || c.name;
+    if (seenCharKeys.has(k)) return false;
+    seenCharKeys.add(k);
+    return true;
+  });
+
+  // Settings + objects: text-match against the panel prose. Codex can't take
+  // reference images, so rich text descriptions in the prompt are how we
+  // keep environments and signature props visually consistent page-to-page.
+  const matchedSettings = matchSettingsInText(proseHaystack, canon.settings);
+  const matchedObjects = matchObjectsInText(proseHaystack, canon.objects);
+
   // composeComicPagePrompt only returns '' when panels.length === 0, which is
   // already rejected above. The "(continuation of previous beat)" placeholder
   // covers panels with no description, so the prompt is non-empty by here.
   const prompt = composeComicPagePrompt({
-    series, world, page, pageNumber: pageIndex + 1, extraStyle: options.extraStyle,
+    series, world, page, pageNumber: pageIndex + 1,
+    extraStyle: composeExtraStyle(series, issue, 'comicPages', options.extraStyle),
+    matchedCharacters, matchedSettings, matchedObjects,
   });
 
   const jobId = enqueueImageJob({
-    prompt, world, settings, options, mode,
-    owner: `pipeline:${issueId}:comicPages:page${pageIndex}`,
-    logLine: `📄 Pipeline comic page — issue=${issueId.slice(0, 8)} page=${pageIndex + 1} panels=${page.panels.length}`,
+    prompt, world, settings, mode,
+    options: { ...options, initImagePath, initImageStrength },
+    owner: buildComicPagesOwner({ issueId, target: 'page', pageIndex, variant }),
+    logLine: `📄 Pipeline comic page — issue=${issueId.slice(0, 8)} page=${pageIndex + 1} panels=${page.panels.length} variant=${variant}${fromProof ? ' (from proof)' : ''}`,
   });
-  return { jobId, mode, prompt, pageIndex };
+  return { jobId, mode, prompt, pageIndex, variant, fromProof };
 }
 
 /**
@@ -202,13 +516,15 @@ export async function enqueueVisualImage(issueId, stageId, options = {}) {
       status: 400, code: 'PIPELINE_VISUAL_BAD_STAGE',
     });
   }
-  const { settings, series, world } = await loadBibleContext(issueId);
+  const { issue, settings, series, world, canon } = await loadBibleContext(issueId);
   const mode = resolveMode(options, settings);
+  const matchedCharacters = matchCharactersInText(options.description || '', canon.characters);
   const prompt = composeVisualPrompt({
     series,
     description: options.description,
     slugline: options.slugline,
-    extraStyle: options.extraStyle,
+    extraStyle: composeExtraStyle(series, issue, stageId, options.extraStyle),
+    matchedCharacters,
     world,
   });
   if (!prompt) {
@@ -243,7 +559,7 @@ export async function enqueueStoryboardSceneVideo(issueId, sceneIndex, options =
       status: 400, code: 'PIPELINE_SCENE_BAD_INDEX',
     });
   }
-  const { issue, settings, series, world } = await loadBibleContext(issueId);
+  const { issue, settings, series, world, canon } = await loadBibleContext(issueId);
   const pythonPath = settings.imageGen?.local?.pythonPath || null;
   if (!pythonPath) {
     throw new ServerError(
@@ -266,11 +582,16 @@ export async function enqueueStoryboardSceneVideo(issueId, sceneIndex, options =
     });
   }
 
+  const matchedCharacters = matchCharactersInText(
+    `${scene.description || ''} ${scene.slugline || ''}`,
+    canon.characters,
+  );
   const prompt = composeVisualPrompt({
     series,
     description: scene.description,
     slugline: scene.slugline || '',
-    extraStyle: options.extraStyle,
+    extraStyle: composeExtraStyle(series, issue, 'storyboards', options.extraStyle),
+    matchedCharacters,
     world,
   });
 
@@ -314,6 +635,76 @@ export async function enqueueStoryboardSceneVideo(issueId, sceneIndex, options =
   return { jobId, prompt, sceneIndex: idx, issue: updatedIssue, stage };
 }
 
+/**
+ * Enqueue an image render for a single shot inside a storyboard scene. Mirror
+ * of enqueueStoryboardSceneVideo but for IMAGE (start-frame), at shot
+ * granularity. Shot description is the primary anchor; falls back to the
+ * parent scene's description when the shot is sparse so a fresh shot still
+ * renders something coherent.
+ */
+export async function enqueueStoryboardShotStartFrame(issueId, sceneIndex, shotIndex, options = {}) {
+  const sIdx = Number(sceneIndex);
+  const tIdx = Number(shotIndex);
+  if (!Number.isInteger(sIdx) || sIdx < 0 || !Number.isInteger(tIdx) || tIdx < 0) {
+    throw new ServerError('sceneIndex and shotIndex must be non-negative integers', {
+      status: 400, code: 'PIPELINE_SHOT_BAD_INDEX',
+    });
+  }
+  const { issue, settings, series, world, canon } = await loadBibleContext(issueId);
+  const scenes = Array.isArray(issue.stages?.storyboards?.scenes)
+    ? [...issue.stages.storyboards.scenes]
+    : [];
+  const scene = scenes[sIdx];
+  if (!scene) {
+    throw new ServerError(`sceneIndex ${sIdx} out of range (have ${scenes.length})`, {
+      status: 404, code: 'PIPELINE_SCENE_NOT_FOUND',
+    });
+  }
+  const shots = Array.isArray(scene.shots) ? [...scene.shots] : [];
+  const shot = shots[tIdx];
+  if (!shot) {
+    throw new ServerError(`shotIndex ${tIdx} out of range (have ${shots.length})`, {
+      status: 404, code: 'PIPELINE_SHOT_NOT_FOUND',
+    });
+  }
+
+  const shotDescription = (shot.description || '').trim();
+  const description = shotDescription || (scene.description || '').trim();
+  if (!description) {
+    throw new ServerError('shot has no description (parent scene also empty) — add a description first', {
+      status: 400, code: 'PIPELINE_SHOT_EMPTY_DESCRIPTION',
+    });
+  }
+
+  const mode = resolveMode(options, settings);
+  const matchedCharacters = matchCharactersInText(
+    `${description} ${scene.slugline || ''}`,
+    canon.characters,
+  );
+  const prompt = composeVisualPrompt({
+    series,
+    description,
+    slugline: scene.slugline || '',
+    extraStyle: composeExtraStyle(series, issue, 'storyboards', options.extraStyle),
+    matchedCharacters,
+    world,
+  });
+
+  const jobId = enqueueImageJob({
+    prompt, world, settings, options, mode,
+    owner: buildStoryboardsShotOwner({ issueId, sceneIndex: sIdx, shotIndex: tIdx }),
+    logLine: `🎞️ Pipeline shot start-frame — issue=${issueId.slice(0, 8)} scene=${sIdx + 1} shot=${tIdx + 1}`,
+  });
+
+  shots[tIdx] = { ...shot, startFrameJobId: jobId };
+  scenes[sIdx] = { ...scene, shots };
+  const { issue: updatedIssue, stage } = await updateStage(issueId, 'storyboards', {
+    status: 'edited',
+    scenes,
+  });
+  return { jobId, mode, prompt, sceneIndex: sIdx, shotIndex: tIdx, issue: updatedIssue, stage };
+}
+
 const seriesBibleCtx = (series) => ({
   name: series.name || '',
   styleNotes: series.styleNotes || '',
@@ -333,29 +724,6 @@ async function loadRefineContext(issueId) {
   return { issue, series };
 }
 
-// Shared scaffolding for both the comic-panel and storyboard-scene refine
-// paths. The caller supplies the per-stage variables/persist details; this
-// helper owns the runStagedLLM call + result parsing + empty-prompt guard +
-// changes shaping.
-async function runPromptRefine({ templateName, variables, options, source, logTag }) {
-  const result = await runStagedLLM(templateName, variables, {
-    providerOverride: options.providerId,
-    modelOverride: options.model,
-    returnsJson: true,
-    source,
-  });
-  const refined = (result.content?.prompt || '').trim();
-  if (!refined) {
-    throw new ServerError('LLM returned an empty refined prompt', {
-      status: 502, code: 'PIPELINE_PROMPT_REFINE_EMPTY',
-    });
-  }
-  const changes = Array.isArray(result.content?.changes)
-    ? result.content.changes.map((c) => String(c).slice(0, 240)).filter(Boolean).slice(0, 8)
-    : [];
-  console.log(`✨ ${logTag} runId=${(result.runId || '').slice(0, 8)}`);
-  return { refined, changes, runId: result.runId, providerId: result.providerId };
-}
 
 /**
  * Run the `pipeline-comic-panel-image-prompt` template against the current

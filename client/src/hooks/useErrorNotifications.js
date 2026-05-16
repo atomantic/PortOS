@@ -20,6 +20,11 @@ export function useErrorNotifications() {
     socket.emit('errors:subscribe');
 
     const handleError = (error) => {
+      // `severity: 'warning'` routes (e.g. speculative GET /api/media-jobs/:id
+      // 404s for jobs past the 24h archive TTL) opt out of toast + console
+      // surfacing entirely — the network-tab 404 is sufficient signal.
+      if (error.severity === 'warning') return;
+
       if (error.code === 'PLATFORM_UNAVAILABLE') {
         toast(error.message, { duration: 5000, icon: '⚠️' });
         console.warn(`[${error.code}] ${error.message}`, error.context);

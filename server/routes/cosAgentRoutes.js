@@ -53,6 +53,15 @@ router.get('/agents/:id', asyncHandler(async (req, res) => {
   res.json(agent);
 }));
 
+// GET /api/cos/agents/:id/prompt - Read the prompt.txt saved at spawn time
+router.get('/agents/:id/prompt', asyncHandler(async (req, res) => {
+  const result = await cos.getAgentPrompt(req.params.id);
+  if (result.error) {
+    throw new ServerError(result.error, { status: 404, code: 'NOT_FOUND' });
+  }
+  res.json(result);
+}));
+
 // POST /api/cos/agents/:id/terminate - Terminate agent (graceful SIGTERM, then SIGKILL)
 router.post('/agents/:id/terminate', asyncHandler(async (req, res) => {
   const result = await cos.terminateAgent(req.params.id);

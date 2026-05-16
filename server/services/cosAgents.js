@@ -12,6 +12,7 @@ import { join } from 'path';
 import { cosEvents, emitLog } from './cosEvents.js';
 import { loadState, saveState, withStateLock, AGENTS_DIR } from './cosState.js';
 import { ensureDir, safeJSONParse } from '../lib/fileUtils.js';
+import { repairCodexTaskSummary } from './codexSummaryRepair.js';
 
 const INDEX_FILE = join(AGENTS_DIR, 'index.json');
 
@@ -363,6 +364,35 @@ export async function appendAgentOutput(agentId, line) {
   return result;
 }
 
+// Batched variant — single state load+save for many lines. Used by the TUI
+// spawner to avoid write-amplification on chatty TUIs that emit hundreds of
+// lines per second; per-line appendAgentOutput would re-load and re-save the
+// entire state JSON for every line.
+export async function appendAgentOutputLines(agentId, lines) {
+  if (!Array.isArray(lines) || lines.length === 0) return null;
+  const result = await withStateLock(async () => {
+    const state = await loadState();
+    if (!state.agents[agentId]) return null;
+    const timestamp = new Date().toISOString();
+    for (const line of lines) {
+      state.agents[agentId].output.push({ timestamp, line });
+    }
+    if (state.agents[agentId].output.length > 1000) {
+      state.agents[agentId].output = state.agents[agentId].output.slice(-1000);
+    }
+    await saveState(state);
+    return state.agents[agentId];
+  });
+
+  if (result) {
+    for (const line of lines) {
+      cosEvents.emit('agent:output', { agentId, line });
+    }
+  }
+
+  return result;
+}
+
 // Get all agents from in-memory state (includes running and recently completed; archived agents loaded via getAgentsByDate)
 export async function getAgents() {
   const state = await loadState();
@@ -402,7 +432,10 @@ export async function getAgentsByDate(date) {
       if (!raw) return;
       const id = raw.id || raw.agentId || entry.name;
       const { output, ...rest } = raw;
-      agents.push({ ...rest, id, status: raw.status || 'completed' });
+      const agent = { ...rest, id, status: raw.status || 'completed' };
+      const repaired = await repairCodexTaskSummary(join(dateDir, entry.name), agent);
+      if (repaired) agent.metadata = { ...agent.metadata, taskSummary: repaired };
+      agents.push(agent);
     });
     await Promise.allSettled(reads);
   }
@@ -437,6 +470,8 @@ export async function getAgent(agentId) {
   if (agent.status === 'completed') {
     const dateStr = agent.completedAt?.slice(0, 10);
     const agentDir = dateStr ? getAgentDir(agentId, dateStr) : getAgentDir(agentId);
+    const repaired = await repairCodexTaskSummary(agentDir, agent);
+    if (repaired) agent = { ...agent, metadata: { ...agent.metadata, taskSummary: repaired } };
     const outputFile = join(agentDir, 'output.txt');
     if (existsSync(outputFile)) {
       const fullOutput = await readFile(outputFile, 'utf-8');
@@ -449,6 +484,20 @@ export async function getAgent(agentId) {
   }
 
   return agent;
+}
+
+// Read the prompt that was sent to an agent at spawn time.
+// Used by the AgentCard UI to let the user inspect what was pasted into the
+// TUI / sent to the CLI so the prompt can be iterated on.
+export async function getAgentPrompt(agentId) {
+  const state = await loadState();
+  const agent = state.agents[agentId];
+  if (!agent) return { error: 'Agent not found' };
+  const agentDir = getAgentDir(agentId, agent.archiveDate);
+  const promptPath = join(agentDir, 'prompt.txt');
+  if (!existsSync(promptPath)) return { error: 'Prompt file not found' };
+  const prompt = await readFile(promptPath, 'utf8');
+  return { prompt, bytes: prompt.length };
 }
 
 // Terminate an agent (will be handled by spawner)
@@ -465,23 +514,47 @@ export async function killAgent(agentId) {
   return killAgentFromSpawner(agentId);
 }
 
-// Send a BTW (additional context) message to a running agent
+// Send a BTW (additional context) message to a running agent.
+//
+// BTW is only supported for Claude Code TUI agents — the message gets
+// bracket-pasted directly into the live PTY session as if the user typed it
+// themselves. The legacy BTW.md path is gone: it required headless agents to
+// poll a file mid-run, which most CLIs (codex / gemini / LM Studio) don't do
+// reliably anyway, and the indirection had to be reflected in the prompt with
+// a brittle "check this file" instruction. Other TUI kinds (codex, gemini)
+// don't honor bracketed-paste in the same way, so they're not eligible
+// either.
 export async function sendBtwToAgent(agentId, message) {
-  // Single locked read to validate agent and extract workspacePath
   const agentInfo = await withStateLock(async () => {
     const state = await loadState();
     const agent = state.agents[agentId];
     if (!agent) return { error: 'Agent not found' };
     if (agent.status !== 'running') return { error: 'Agent is not running' };
-    if (!agent.metadata?.workspacePath) return { error: 'Agent has no workspace path' };
-    return { workspacePath: agent.metadata.workspacePath };
+    if (agent.metadata?.executionMode !== 'tui') {
+      return { error: 'BTW is only supported for Claude Code TUI agents.' };
+    }
+    if (agent.metadata?.tuiKind !== 'claude') {
+      return { error: `BTW is only supported for Claude Code TUI agents (this agent runs ${agent.metadata.tuiKind || 'an unknown TUI'}).` };
+    }
+    if (!agent.metadata?.tuiSessionId) {
+      return { error: 'Agent has no attached TUI session' };
+    }
+    return { tuiSessionId: agent.metadata.tuiSessionId };
   });
 
   if (agentInfo.error) return agentInfo;
 
-  // Send to runner to write the BTW.md file
-  const { sendBtwToAgent: sendViaRunner } = await import('./cosRunnerClient.js');
-  const result = await sendViaRunner(agentId, message);
+  const shellService = await import('./shell.js');
+  if (!shellService.getSession(agentInfo.tuiSessionId)) {
+    return { error: 'TUI session is no longer alive' };
+  }
+  // Bracketed-paste + delayed Enter, mirroring the initial prompt paste in
+  // agentTuiSpawning.js: Claude Code commits the paste buffer before the
+  // submit arrives, so multi-line messages land as a single paste event.
+  shellService.writeToSession(agentInfo.tuiSessionId, `\x1b[200~${message}\x1b[201~`);
+  setTimeout(() => {
+    shellService.writeToSession(agentInfo.tuiSessionId, '\r');
+  }, 400);
 
   // Track in agent state (cap at 50 messages)
   const timestamp = new Date().toISOString();
@@ -499,7 +572,7 @@ export async function sendBtwToAgent(agentId, message) {
   });
 
   cosEvents.emit('agent:btw', { agentId, message, timestamp });
-  return { success: true, ...result };
+  return { success: true, delivered: 'tui-paste', tuiSessionId: agentInfo.tuiSessionId };
 }
 
 // Get process stats for an agent (CPU, memory)

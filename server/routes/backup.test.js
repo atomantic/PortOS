@@ -8,7 +8,11 @@ vi.mock('../services/backup.js', () => ({
   getNextRunTime: vi.fn(),
   runBackup: vi.fn(),
   listSnapshots: vi.fn(),
-  restoreSnapshot: vi.fn()
+  restoreSnapshot: vi.fn(),
+  DEFAULT_EXCLUDES: [
+    { path: '/browser-profile/', reason: 'test', overridable: false },
+    { path: '/loras/*.safetensors', reason: 'test', overridable: true }
+  ]
 }));
 
 vi.mock('../services/settings.js', () => ({
@@ -44,7 +48,11 @@ describe('backup routes', () => {
         lastRun: '2026-04-01T00:00:00Z',
         success: true,
         destPath: '/backup/target',
-        nextRun: '2026-04-08T00:00:00Z'
+        nextRun: '2026-04-08T00:00:00Z',
+        defaultExcludes: [
+          { path: '/browser-profile/', reason: 'test', overridable: false },
+          { path: '/loras/*.safetensors', reason: 'test', overridable: true }
+        ]
       });
     });
 
@@ -78,7 +86,7 @@ describe('backup routes', () => {
       expect(backup.runBackup).toHaveBeenCalledWith(
         '/dest',
         undefined,
-        { excludePaths: ['node_modules', '.git'] }
+        { excludePaths: ['node_modules', '.git'], disabledDefaultExcludes: [] }
       );
     });
 
@@ -89,7 +97,20 @@ describe('backup routes', () => {
       expect(backup.runBackup).toHaveBeenCalledWith(
         '/dest',
         undefined,
-        { excludePaths: [] }
+        { excludePaths: [], disabledDefaultExcludes: [] }
+      );
+    });
+
+    it('forwards disabledDefaultExcludes when configured', async () => {
+      getSettings.mockResolvedValue({
+        backup: { destPath: '/dest', disabledDefaultExcludes: ['/loras/*.safetensors'] }
+      });
+      backup.runBackup.mockResolvedValue({ success: true });
+      await request(buildApp()).post('/api/backup/run');
+      expect(backup.runBackup).toHaveBeenCalledWith(
+        '/dest',
+        undefined,
+        { excludePaths: [], disabledDefaultExcludes: ['/loras/*.safetensors'] }
       );
     });
   });

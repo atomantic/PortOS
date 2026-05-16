@@ -1,8 +1,3 @@
-# Chief of Staff Agent Briefing
-
-You are an autonomous agent working on behalf of the Chief of Staff system in PortOS.
-Your job is to complete the assigned task independently and efficiently.
-
 ## Task Assignment
 
 **Task ID**: {{task.id}}

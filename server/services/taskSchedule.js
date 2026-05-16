@@ -23,7 +23,7 @@ import { isTaskTypeEnabledForApp, getAppTaskTypeInterval, getActiveApps, getAppT
 import { loadState, isImprovementEnabled } from './cosState.js';
 import { PORTOS_UI_URL, PORTOS_API_URL } from '../lib/ports.js';
 import { getUserTimezone, getLocalParts } from '../lib/timezone.js';
-import { parseCronToNextRun } from './eventScheduler.js';
+import { parseCronToNextRun, parseCronToPrevRun } from './eventScheduler.js';
 
 const DATA_DIR = PATHS.cos;
 const SCHEDULE_FILE = join(DATA_DIR, 'task-schedule.json');
@@ -367,9 +367,8 @@ Repository: {repoPath}
    - <question 1>
    - <question 2>
    \`\`\`
-9. Annotate the PLAN.md item by appending \` <!-- NEEDS_INPUT -->\` to its line
-10. Commit both changes with message "chore: flag PLAN.md item needing user input"
-11. Do NOT open a PR — stop here
+9. **Move the unchecked item to the bottom of PLAN.md and annotate it with \` <!-- NEEDS_INPUT -->\`** — remove the line from its current position and append it at the end of the file with the annotation. This keeps the queue moving so the next \`feature-ideas\` run picks up a different actionable item instead of repeatedly tripping on this one.
+10. Commit both changes (the new \`.plan-questions.md\` file and the PLAN.md move) with message \`chore: flag PLAN.md item needing user input\`. Then proceed to the **Completion** section below so the clarification PR is opened for the user to review — do NOT leave the worktree orphaned.
 
 ## Phase 4 — Brainstorm a New Feature
 
@@ -394,6 +393,61 @@ When PLAN.md is missing, empty, or fully completed, brainstorm and implement a n
    - [x] <description of the feature you implemented>
    \`\`\`
 8. Commit with a clear description of the feature and rationale`,
+
+  'plan-task': `[Plan Task: {appName}] Execute Next PLAN.md Item
+
+Your goal is to implement the next unchecked item from PLAN.md and archive it to DONE.md in the same commit. No brainstorming, no scope expansion — just execute what is already planned.
+
+Repository: {repoPath}
+
+## Phase 1 — Find the Next Task
+
+1. Read PLAN.md from {repoPath}
+2. Read DONE.md from {repoPath} (if it exists) so you understand the archive format
+3. Find the first unchecked item (\`- [ ]\`) that does NOT have a \`<!-- NEEDS_INPUT -->\` annotation
+4. If PLAN.md is missing, has no unchecked items, or every unchecked item is annotated \`<!-- NEEDS_INPUT -->\`, **stop here** — exit cleanly without commits or PR. This task is a strict executor of planned work; brainstorming is handled by the \`feature-ideas\` task.
+
+Capture the exact text of the item you selected (without the leading \`- [ ]\`) — you will need it verbatim for the DONE.md entry.
+
+## Phase 2 — Evaluate Feasibility
+
+5. Read relevant source files to understand the scope of the item
+6. Decide: can this be implemented without user clarification? (requirements clear, no ambiguous design choices, no blocking external decisions)
+
+## Phase 3a — Implement (if feasible)
+
+7. Implement the change:
+   - Write clean, tested code following existing patterns
+   - Run tests to ensure nothing is broken
+8. Run \`/simplify\` to review changed code for reuse, quality, and efficiency. Fix any issues found in the same diff.
+9. **Move the item from PLAN.md to DONE.md (do NOT leave a checked \`- [x]\` behind in PLAN.md):**
+   - Remove the item's line(s) from PLAN.md entirely. If the item was a nested bullet under a heading and removing it leaves the surrounding section empty, leave the heading alone — separate plan curation is the \`do-replan\` task's job.
+   - Append a corresponding entry to DONE.md under today's date heading (\`## YYYY-MM-DD\`). Insert today's date heading directly below the top-of-file preamble if no section for today exists; otherwise append under the existing section.
+   - DONE.md entry format: \`- **<short title pulled from the PLAN.md item>** — <1–3 sentences describing what was actually implemented, key files touched, and any caveats>\`. Mirror the prose style of recent DONE.md entries.
+10. Commit the code change, the PLAN.md removal, and the DONE.md append **together in a single commit**. Commit message should reference the PLAN.md item title.
+
+## Phase 3b — Request Clarification (if not feasible)
+
+7. Create a file named \`.plan-questions.md\` in {repoPath} with this format:
+   \`\`\`
+   # Plan Question: <short title summarizing the PLAN.md item>
+
+   ## PLAN.md Item
+   <the exact text of the unchecked item>
+
+   ## Questions
+   - <question 1>
+   - <question 2>
+   \`\`\`
+8. **Move the unchecked item to the bottom of PLAN.md and annotate it with \` <!-- NEEDS_INPUT -->\`** — remove the line from its current position and append it at the end of the file with the annotation. This keeps the queue moving so the next \`plan-task\` run picks up a different actionable item instead of repeatedly tripping on this one.
+9. Commit both changes (the new \`.plan-questions.md\` file and the PLAN.md move) with message \`chore: flag PLAN.md item needing user input\`. Then proceed to the **Completion** section below so the clarification PR is opened for the user to review — do NOT leave the worktree orphaned.
+
+## Constraints
+
+- This task has **no \`runAfter\` dependencies** — it runs independently of \`do-replan\`, \`pr-reviewer\`, etc.
+- Do NOT brainstorm new features. Do NOT propose items not already in PLAN.md.
+- Do NOT touch unrelated PLAN.md items, even to tidy them.
+- One commit. One PR — either the implementation PR (Phase 3a) or the clarification PR (Phase 3b).`,
 
   'code-reviewer-review': `[Review: {appName}] Deep Codebase Review (Stage 1)
 
@@ -1024,7 +1078,8 @@ For each reference above:
 // Prompt versions — bump when a default prompt changes so existing instances auto-upgrade.
 // Only non-customized prompts (promptCustomized !== true) are upgraded.
 const PROMPT_VERSIONS = {
-  'feature-ideas': 6,  // v6: remove hardcoded worktree language (worktree context injected by agentPromptBuilder)
+  'feature-ideas': 7,  // v7: Phase 3b reorders item to bottom + commits clarification PR instead of orphaning the worktree
+  'plan-task': 2,      // v2: Phase 3b reorders item to bottom + commits clarification PR instead of orphaning the worktree
   'pr-reviewer': 3,    // v3: multi-stage pipeline (security scan → code review + merge)
   'code-reviewer-a': 1, // v1: 2-stage pipeline (codebase review → triage & implement)
   'code-reviewer-b': 1, // v1: 2-stage pipeline (codebase review → triage & implement)
@@ -1400,7 +1455,7 @@ Before reviewing code quality, scan each PR for malicious content:
 export const SELF_IMPROVEMENT_TASK_TYPES = [
   'security', 'code-quality', 'test-coverage', 'performance',
   'accessibility', 'branch-cleanup', 'console-errors', 'dependency-updates', 'documentation',
-  'ui-bugs', 'mobile-responsive', 'feature-ideas', 'error-handling',
+  'ui-bugs', 'mobile-responsive', 'feature-ideas', 'plan-task', 'error-handling',
   'typing', 'release-check', 'pr-reviewer', 'code-reviewer-a', 'code-reviewer-b',
   'jira-sprint-manager', 'jira-status-report', 'do-replan',
   // Watches `referenceRepos` configured on the app — fetches each upstream
@@ -1427,6 +1482,10 @@ const DEFAULT_TASK_INTERVALS = {
   // feature-ideas waits for do-replan so new work is grounded in a fresh PLAN.md
   // that already accounts for any in-flight or unmerged work.
   'feature-ideas':       { type: INTERVAL_TYPES.DAILY, enabled: false, providerId: null, model: null, prompt: null, runAfter: ['do-replan'], taskMetadata: { useWorktree: true, openPR: true, simplify: true } },
+  // plan-task is a strict executor of PLAN.md items — no brainstorm fallback, no
+  // runAfter deps. Picks the next unchecked item, implements it, and moves it
+  // from PLAN.md to DONE.md in the same commit.
+  'plan-task':           { type: INTERVAL_TYPES.DAILY, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: true, openPR: true, simplify: true } },
   'error-handling':      { type: INTERVAL_TYPES.ROTATION, enabled: false, providerId: null, model: null, prompt: null },
   'typing':              { type: INTERVAL_TYPES.ONCE, enabled: false, providerId: null, model: null, prompt: null },
   'release-check':       { type: INTERVAL_TYPES.ON_DEMAND, enabled: false, providerId: null, model: null, prompt: null },
@@ -1741,8 +1800,12 @@ export async function getExecutionHistory(taskType) {
 /**
  * Check if all runAfter dependencies have completed since this task's last run.
  * Returns { satisfied, pending } where pending lists unfinished dependency task types.
+ *
+ * Dependencies that are disabled — either globally (missing from the schedule or
+ * `enabled: false`) or disabled for the requesting app — are skipped, since they
+ * will never run and would otherwise block the dependent task indefinitely.
  */
-function checkRunAfterDeps(schedule, taskType, appId = null) {
+async function checkRunAfterDeps(schedule, taskType, appId = null) {
   const interval = schedule.tasks[taskType];
   const deps = interval?.runAfter;
   if (!deps || deps.length === 0) return { satisfied: true, pending: [] };
@@ -1753,6 +1816,10 @@ function checkRunAfterDeps(schedule, taskType, appId = null) {
 
   const pending = [];
   for (const dep of deps) {
+    const depConfig = schedule.tasks[dep];
+    if (!depConfig || !depConfig.enabled) continue;
+    if (appId && !(await isTaskTypeEnabledForApp(appId, dep))) continue;
+
     const depKey = `task:${dep}`;
     const depExec = schedule.executions[depKey] || { lastRun: null, perApp: {} };
     const depLastRun = safeDate(appId ? depExec.perApp[appId]?.lastRun : depExec.lastRun);
@@ -1894,6 +1961,39 @@ export async function shouldRunTask(taskType, appId = null) {
         result = { shouldRun: false, reason: 'invalid-cron' };
         break;
       }
+
+      // Catch-up: if a cron slot has already elapsed since the last successful run
+      // (or, for never-run tasks, within the last cron period), fire it now instead
+      // of waiting another full period. This recovers from daemon downtime, restarts,
+      // and the hourly-check window missing the 60-second cron match.
+      const prevRun = parseCronToPrevRun(cronExpr, new Date(now), timezone);
+      if (prevRun) {
+        const prevRunMs = prevRun.getTime();
+        let lookbackBound;
+        if (lastRun) {
+          lookbackBound = lastRun;
+        } else {
+          // Never-run: only catch up if the most-recent occurrence is within ONE cron
+          // period of now (e.g. daily cron catches up to ~24h, hourly to ~1h). The bound
+          // is "the occurrence before prevRun" — anything older has already been missed
+          // by more than one period and shouldn't be replayed.
+          const beforePrev = parseCronToPrevRun(cronExpr, new Date(prevRunMs - 60_000), timezone);
+          lookbackBound = beforePrev ? beforePrev.getTime() : 0;
+        }
+        if (prevRunMs > lookbackBound && prevRunMs <= now) {
+          // Compute nextRun for telemetry/reporting
+          const nextRunAfterCatch = parseCronToNextRun(cronExpr, new Date(now), timezone);
+          result = {
+            shouldRun: true,
+            reason: 'cron-catch-up',
+            cronExpression: cronExpr,
+            missedSlot: prevRun.toISOString(),
+            nextRunAt: nextRunAfterCatch ? nextRunAfterCatch.toISOString() : null
+          };
+          break;
+        }
+      }
+
       // For never-run tasks, use 1 minute ago so the first scheduled occurrence can match
       const fromDate = lastRun ? new Date(lastRun) : new Date(now - 60_000);
       const nextRun = parseCronToNextRun(cronExpr, fromDate, timezone);
@@ -1914,9 +2014,10 @@ export async function shouldRunTask(taskType, appId = null) {
       result = { shouldRun: true, reason: 'unknown-default-rotation' };
   }
 
-  // If the task would run, check runAfter dependencies — blocked until all deps have run since our last run
+  // If the task would run, check runAfter dependencies — blocked until all enabled deps have run since our last run.
+  // Disabled deps (globally or for this app) are skipped, since they'll never run.
   if (result.shouldRun && interval.runAfter?.length > 0) {
-    const depCheck = checkRunAfterDeps(schedule, taskType, appId);
+    const depCheck = await checkRunAfterDeps(schedule, taskType, appId);
     if (!depCheck.satisfied) {
       return { shouldRun: false, reason: 'waiting-on-dependencies', pendingDeps: depCheck.pending };
     }
@@ -1951,8 +2052,15 @@ export async function getNextTaskType(appId = null, lastType = '') {
   const schedule = await loadSchedule();
   const taskTypes = Object.keys(schedule.tasks);
 
-  // First, check for daily/weekly/once tasks that are due
   const dueTasks = await getDueTasks(appId);
+
+  // Explicit time-based schedules (cron, custom interval) outrank loose interval-based
+  // ones (daily/weekly/once). A user-pinned 9 AM cron should fire at 9 AM even if a
+  // weekly task is perpetually "ready" — the loose tasks will pick up the next slot.
+  const cronDue = dueTasks.filter(t => t.interval.type === INTERVAL_TYPES.CRON || t.interval.type === INTERVAL_TYPES.CUSTOM);
+  if (cronDue.length > 0) {
+    return { taskType: cronDue[0].taskType, reason: `${cronDue[0].interval.type}-due` };
+  }
 
   const dailyDue = dueTasks.filter(t => t.interval.type === INTERVAL_TYPES.DAILY);
   if (dailyDue.length > 0) {
@@ -1967,11 +2075,6 @@ export async function getNextTaskType(appId = null, lastType = '') {
   const onceDue = dueTasks.filter(t => t.interval.type === INTERVAL_TYPES.ONCE);
   if (onceDue.length > 0) {
     return { taskType: onceDue[0].taskType, reason: 'once-first-run' };
-  }
-
-  const cronDue = dueTasks.filter(t => t.interval.type === INTERVAL_TYPES.CRON || t.interval.type === INTERVAL_TYPES.CUSTOM);
-  if (cronDue.length > 0) {
-    return { taskType: cronDue[0].taskType, reason: `${cronDue[0].interval.type}-due` };
   }
 
   // Fall back to rotation among enabled rotation tasks
@@ -2354,6 +2457,7 @@ function getTaskTypeDescription(taskType) {
     'test-coverage': 'Improve test coverage',
     'documentation': 'Update documentation',
     'feature-ideas': 'Implement next planned feature or brainstorm new one',
+    'plan-task': 'Execute next PLAN.md item and archive it to DONE.md (worktree+PR)',
     'accessibility': 'Accessibility audit',
     'branch-cleanup': 'Clean up merged branches',
     'dependency-updates': 'Update dependencies',

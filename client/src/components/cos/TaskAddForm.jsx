@@ -72,13 +72,13 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
   // Get models for selected provider
   const selectedProvider = providers?.find(p => p.id === newTask.provider);
   const availableModels = filterSelectableModels(selectedProvider?.models);
-  const providerModelNote = selectedProvider
-    ? isCodexProvider(selectedProvider)
-      ? 'Codex uses the model configured in ~/.codex/config.toml.'
-      : selectedProvider.type === 'cli'
-        ? `${selectedProvider.name} uses its CLI configured default model.`
-        : 'No models are configured. PortOS will use the provider default.'
-    : '';
+  const providerModelNote = (() => {
+    if (!selectedProvider) return '';
+    if (selectedProvider.type === 'tui') return `${selectedProvider.name} runs in an attachable terminal UI session.`;
+    if (isCodexProvider(selectedProvider)) return 'Codex uses the model configured in ~/.codex/config.toml.';
+    if (selectedProvider.type === 'cli') return `${selectedProvider.name} uses its CLI configured default model.`;
+    return 'No models are configured. PortOS will use the provider default.';
+  })();
 
   // Apply template to form
   const applyTemplate = useCallback(async (template) => {

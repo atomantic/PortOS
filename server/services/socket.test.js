@@ -48,7 +48,7 @@ vi.mock('../lib/socketValidation.js', () => ({
   errorRecoverSchema: {},
   shellInputSchema: {},
   shellResizeSchema: {},
-  shellSessionIdSchema: {},
+  shellAttachSchema: {},
   shellStopSchema: {},
   appUpdateSchema: {},
   appStandardizeSchema: {},
@@ -264,5 +264,58 @@ describe('socket.js — initSocket', () => {
     socket.handlers['shell:list']();
 
     expect(socket.emitted.some(([ev]) => ev === 'shell:sessions')).toBe(true);
+  });
+
+  // listAllSessions must receive the requesting socket so the recipient-relative
+  // `attached` flag works (sessions bound to this socket should report attached:false).
+  it('shell:list forwards the requesting socket to listAllSessions', () => {
+    const socket = makeSocket('shell-list-socket');
+    io.connect(socket);
+    shellService.listAllSessions.mockClear();
+
+    socket.handlers['shell:list']();
+
+    expect(shellService.listAllSessions).toHaveBeenCalledWith(socket);
+  });
+
+  // ===========================================================================
+  // shell:attach claim semantics — auto-pick paths must not displace another tab
+  // ===========================================================================
+  it('shell:attach forwards claim flag to attachSession', () => {
+    const socket = makeSocket('shell-attach-claim');
+    io.connect(socket);
+    shellService.attachSession.mockClear();
+    shellService.attachSession.mockReturnValueOnce({ sessionId: 'abc', bufferedOutput: '' });
+
+    socket.handlers['shell:attach']({ sessionId: 'abc', claim: true });
+
+    expect(shellService.attachSession).toHaveBeenCalledWith('abc', socket, { claim: true });
+  });
+
+  it('shell:attach claim rejection emits shell:error with sessionId', () => {
+    const socket = makeSocket('shell-attach-rejected');
+    io.connect(socket);
+    shellService.attachSession.mockClear();
+    shellService.attachSession.mockReturnValueOnce({ claimRejected: true });
+
+    socket.handlers['shell:attach']({ sessionId: 'taken', claim: true });
+
+    const err = socket.emitted.find(([ev]) => ev === 'shell:error');
+    expect(err).toBeTruthy();
+    expect(err[1].sessionId).toBe('taken');
+    expect(socket.emitted.some(([ev]) => ev === 'shell:attached')).toBe(false);
+  });
+
+  it('shell:attach session-not-found error includes sessionId for client correlation', () => {
+    const socket = makeSocket('shell-attach-notfound');
+    io.connect(socket);
+    shellService.attachSession.mockClear();
+    shellService.attachSession.mockReturnValueOnce(null);
+
+    socket.handlers['shell:attach']({ sessionId: 'gone' });
+
+    const err = socket.emitted.find(([ev]) => ev === 'shell:error');
+    expect(err).toBeTruthy();
+    expect(err[1].sessionId).toBe('gone');
   });
 });

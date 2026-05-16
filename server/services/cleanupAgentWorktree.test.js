@@ -159,6 +159,7 @@ vi.mock('./git.js', () => ({
   getDefaultBranch: vi.fn().mockResolvedValue('main'),
   createPR: vi.fn(),
   generatePRDescription: vi.fn(),
+  suggestPRTitle: vi.fn(),
   deleteBranch: vi.fn().mockResolvedValue(undefined),
   requestCopilotReview: vi.fn().mockResolvedValue({ success: true }),
   resolveForgeForRepo: vi.fn().mockResolvedValue({ cli: 'gh', env: process.env, host: 'github.com', owner: null, account: null }),
@@ -206,6 +207,11 @@ describe('cleanupAgentWorktree - openPR path', () => {
     // generatePRDescription returns a rich body from agent output summary
     git.generatePRDescription.mockImplementation(() =>
       Promise.resolve('Automated PR created by PortOS Chief of Staff.\n\n## Summary\n\nImplemented the requested feature with new API endpoints and UI components.')
+    );
+    // suggestPRTitle echoes the fallback (task description) by default; specific
+    // tests can override to simulate a real commit-derived title.
+    git.suggestPRTitle.mockImplementation((_dir, _base, _head, fallback) =>
+      Promise.resolve((fallback || 'CoS automated task').split(/[\r\n]/)[0].trim().substring(0, 100) || 'CoS automated task')
     );
   });
 

@@ -32,7 +32,7 @@ describe('pipeline series service', () => {
       name: 'Salt Run',
       logline: 'A foundry city goes silent.',
       premise: 'Long-form premise about a salt-mining city...',
-      worldId: 'world-123',
+      universeId: 'world-123',
       styleNotes: 'moebius linework, washed sepia',
       targetFormat: 'comic+tv',
       issueCountTarget: 6,
@@ -44,7 +44,7 @@ describe('pipeline series service', () => {
     expect(s.id).toMatch(/^ser-/);
     expect(s.name).toBe('Salt Run');
     expect(s.logline).toBe('A foundry city goes silent.');
-    expect(s.worldId).toBe('world-123');
+    expect(s.universeId).toBe('world-123');
     expect(s.targetFormat).toBe('comic+tv');
     expect(s.issueCountTarget).toBe(6);
     // Empty-name character dropped; Lina gets a chr- id.
@@ -97,5 +97,78 @@ describe('pipeline series service', () => {
     const many = Array.from({ length: svc.CHARACTERS_PER_SERIES_MAX + 10 }, (_, i) => ({ name: `c${i}` }));
     const s = await svc.createSeries({ name: 'X', characters: many });
     expect(s.characters).toHaveLength(svc.CHARACTERS_PER_SERIES_MAX);
+  });
+
+  describe('insertSeriesWithId', () => {
+    it('preserves the caller-supplied id', async () => {
+      const s = await svc.insertSeriesWithId({ id: 'ser-fixed-abc', name: 'Imported' });
+      expect(s.id).toBe('ser-fixed-abc');
+      expect(s.name).toBe('Imported');
+    });
+
+    it('preserves createdAt/updatedAt when provided', async () => {
+      const ts = '2026-01-01T00:00:00.000Z';
+      const s = await svc.insertSeriesWithId({ id: 'ser-stamped', name: 'X', createdAt: ts, updatedAt: ts });
+      expect(s.createdAt).toBe(ts);
+      expect(s.updatedAt).toBe(ts);
+    });
+
+    it('rejects malformed id', async () => {
+      await expect(svc.insertSeriesWithId({ id: 'not-a-series-id', name: 'X' }))
+        .rejects.toMatchObject({ code: svc.ERR_VALIDATION });
+      await expect(svc.insertSeriesWithId({ name: 'X' }))
+        .rejects.toMatchObject({ code: svc.ERR_VALIDATION });
+    });
+
+    it('rejects duplicate id', async () => {
+      await svc.insertSeriesWithId({ id: 'ser-dup', name: 'First' });
+      await expect(svc.insertSeriesWithId({ id: 'ser-dup', name: 'Second' }))
+        .rejects.toMatchObject({ code: svc.ERR_DUPLICATE });
+    });
+
+    it('requires a name', async () => {
+      await expect(svc.insertSeriesWithId({ id: 'ser-noname' }))
+        .rejects.toMatchObject({ code: svc.ERR_VALIDATION });
+    });
+  });
+
+  describe('locked field (stage approval)', () => {
+    it('defaults to empty object on a fresh series', async () => {
+      const s = await svc.createSeries({ name: 'X' });
+      expect(s.locked).toEqual({});
+    });
+
+    it('persists locked.arc=true through round-trip', async () => {
+      const s = await svc.createSeries({ name: 'X' });
+      const updated = await svc.updateSeries(s.id, { locked: { arc: true } });
+      expect(updated.locked).toEqual({ arc: true });
+      // Survives a re-read (sanitizer + atomic write).
+      const fresh = await svc.getSeries(s.id);
+      expect(fresh.locked).toEqual({ arc: true });
+    });
+
+    it('toggling locked.arc back off clears the key', async () => {
+      const s = await svc.createSeries({ name: 'X' });
+      await svc.updateSeries(s.id, { locked: { arc: true } });
+      const cleared = await svc.updateSeries(s.id, { locked: { arc: false } });
+      // Only `true` is recorded — false collapses to absent so the on-disk
+      // shape stays minimal (matches universeBuilder.sanitizeLocked).
+      expect(cleared.locked).toEqual({});
+    });
+
+    it('ignores unknown lock keys', async () => {
+      const s = await svc.createSeries({
+        name: 'X',
+        locked: { arc: true, bogus: true, premise: true },
+      });
+      expect(s.locked).toEqual({ arc: true });
+    });
+
+    it('omitting locked from patch preserves existing locks', async () => {
+      const s = await svc.createSeries({ name: 'X', locked: { arc: true } });
+      const updated = await svc.updateSeries(s.id, { logline: 'new logline' });
+      expect(updated.locked).toEqual({ arc: true });
+      expect(updated.logline).toBe('new logline');
+    });
   });
 });

@@ -144,25 +144,19 @@ if [ -f "$ROOT_DIR/scripts/run-migrations.js" ]; then
 fi
 step "migrations" "done" "Migrations complete"
 
-# Check for slash-do (optional, used by the PR Reviewer schedule task)
-if ! command -v slash-do >/dev/null 2>&1; then
-  log "slash-do is not installed. It is used by the PR Reviewer schedule task."
-  if [ -t 0 ]; then
-    read -p "Install slash-do now? [y/N] " -n 1 -r
-    log ""
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-      log "Installing slash-do..."
-      if ! run npm install -g slash-do@latest; then
-        log "⚠️  Failed to install slash-do. Continuing without it."
-      fi
-    else
-      log "Skipping slash-do install. You can install later with: npm install -g slash-do@latest"
-    fi
-  else
-    log "Skipping slash-do prompt (non-interactive). Install later with: npm install -g slash-do@latest"
-  fi
-  log ""
+# Install/update slash-do commands. Replaces the previous interactive prompt
+# with an always-on `npx slash-do@latest` call so the user-global command
+# pool stays current across updates without user intervention. Failures are
+# non-fatal — the PR Reviewer schedule task is the only consumer and it
+# fails gracefully if the binary is missing.
+# Pipe "a" so slash-do's "multiple environments detected" prompt auto-selects
+# all detected envs instead of hanging on readline (update.sh has no TTY).
+step "slash-do" "running" "Installing/updating slash-do commands..."
+if ! echo a | run npx --yes slash-do@latest; then
+  log "⚠️  slash-do install/update failed. Continuing without it (re-run later: npx slash-do@latest)."
 fi
+step "slash-do" "done" "slash-do commands installed/updated"
+log ""
 
 # Build UI assets for production serving
 step "build" "running" "Building client..."

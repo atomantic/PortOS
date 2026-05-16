@@ -4,12 +4,14 @@ import { DatabaseTab } from '../components/settings/DatabaseTab';
 import { TelegramTab } from '../components/settings/TelegramTab';
 import { GeneralTab } from '../components/settings/GeneralTab';
 import { MortalLoomTab } from '../components/settings/MortalLoomTab';
+import { SharingTab } from '../components/settings/SharingTab';
 import { VoiceTab } from '../components/settings/VoiceTab';
 
 const TABS = [
   { id: 'general', label: 'General' },
   { id: 'backup', label: 'Backup' },
   { id: 'database', label: 'Database' },
+  { id: 'sharing', label: 'Sharing' },
   { id: 'voice', label: 'Voice' },
   { id: 'telegram', label: 'Telegram' },
   { id: 'mortalloom', label: 'MortalLoom' }
@@ -40,6 +42,7 @@ export default function Settings() {
       case 'general': return <GeneralTab />;
       case 'backup': return <BackupTab />;
       case 'database': return <DatabaseTab />;
+      case 'sharing': return <SharingTab />;
       case 'voice': return <VoiceTab />;
       case 'telegram': return <TelegramTab />;
       case 'mortalloom': return <MortalLoomTab />;

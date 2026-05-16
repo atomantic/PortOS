@@ -4,11 +4,25 @@ import { BrowserRouter } from 'react-router-dom';
 import { Toaster } from './components/ui/Toast';
 import ErrorBoundary from './components/ErrorBoundary';
 import { ThemeProvider } from './components/ThemeContext';
+import { isStaleChunkError, reloadOnceForStaleChunk } from './utils/staleChunkReload';
 import App from './App';
 import './index.css';
 
-// Handle unhandled promise rejections
+// Vite emits `vite:preloadError` when a code-split chunk's preload 404s —
+// usually because the server rebuilt and the chunk filename changed while
+// this tab was still open. Catching it here reloads before React's error
+// boundary ever sees the failure.
+window.addEventListener('vite:preloadError', (event) => {
+  if (reloadOnceForStaleChunk()) event.preventDefault?.();
+});
+
+// Handle unhandled promise rejections — also a chance to catch stale chunks
+// that surface as a rejected dynamic-import promise outside React's tree.
 window.addEventListener('unhandledrejection', (event) => {
+  if (isStaleChunkError(event.reason) && reloadOnceForStaleChunk()) {
+    event.preventDefault();
+    return;
+  }
   console.error(`❌ Unhandled Promise Rejection: ${event.reason}`);
   event.preventDefault();
 });

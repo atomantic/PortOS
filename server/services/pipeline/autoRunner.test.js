@@ -77,7 +77,7 @@ describe('pipeline auto-runner', () => {
     return { series, issue };
   }
 
-  it('runs idea → prose → (comicScript + tvScript in parallel) end to end', async () => {
+  it('runs idea → prose → (comicScript + teleplay in parallel) end to end', async () => {
     const { issue } = await seed();
     const { runId, alreadyRunning } = await autoRunner.startAutoRunTextStages(issue.id);
     expect(runId).toBeTruthy();
@@ -88,7 +88,7 @@ describe('pipeline auto-runner', () => {
     // resolve in either order but both must follow prose.
     expect(generated[0]).toBe('idea');
     expect(generated[1]).toBe('prose');
-    expect(new Set(generated.slice(2))).toEqual(new Set(['comicScript', 'tvScript']));
+    expect(new Set(generated.slice(2))).toEqual(new Set(['comicScript', 'teleplay']));
 
     // Issue status flips to needs-review when all stages complete (user must
     // review before marking shipped).
@@ -104,7 +104,7 @@ describe('pipeline auto-runner', () => {
     expect(generated).not.toContain('idea');
     expect(generated).toContain('prose');
     expect(generated).toContain('comicScript');
-    expect(generated).toContain('tvScript');
+    expect(generated).toContain('teleplay');
   });
 
   it('reruns a ready stage when force=true', async () => {

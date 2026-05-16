@@ -22,10 +22,11 @@ export const clearIgnoredVersions = () => request('/update/ignore', { method: 'D
 export const executePortosUpdate = () => request('/update/execute', { method: 'POST' });
 
 // Settings
-export const getSettings = () => request('/settings');
-export const updateSettings = (data) => request('/settings', {
+export const getSettings = (options) => request('/settings', options);
+export const updateSettings = (data, options) => request('/settings', {
   method: 'PUT',
-  body: JSON.stringify(data)
+  body: JSON.stringify(data),
+  ...options
 });
 
 // Usage
@@ -35,7 +36,7 @@ export const resetUsage = () => request('/usage', { method: 'DELETE' });
 
 // Backup
 export const getBackupStatus = (options) => request('/backup/status', options);
-export const triggerBackup = () => request('/backup/run', { method: 'POST' });
+export const triggerBackup = (options) => request('/backup/run', { method: 'POST', ...options });
 export const getBackupSnapshots = (options) => request('/backup/snapshots', options);
 export const restoreBackup = (data) => request('/backup/restore', { method: 'POST', body: JSON.stringify(data) });
 

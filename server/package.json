@@ -8,6 +8,7 @@
     "start": "node index.js",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:ci": "vitest run --bail=1 --silent=passed-only --reporter=default --reporter=github-actions",
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
@@ -15,6 +16,7 @@
     "googleapis": "171.4.0",
     "kokoro-js": "1.2.1",
     "node-pty": "1.2.0-beta.10",
+    "pdf-lib": "^1.17.1",
     "pg": "8.19.0",
     "pm2": "5.4.3",
     "sax": "1.4.4",

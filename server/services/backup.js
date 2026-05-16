@@ -21,6 +21,32 @@ let isRunning = false;
 
 const STATE_PATH = join(PATHS.data, 'backup', 'state.json');
 
+// Paths under data/ that are skipped by default on top of user-configured excludes.
+// Two classes live here: (1) ephemeral/cache data the user almost never wants in a
+// snapshot (browser profile, agent worktrees), and (2) large re-downloadable assets
+// (LoRA model files, cloned repos, browser downloads) that would bloat the backup
+// target — typically iCloud or an external drive with limited capacity. Entries
+// tagged `overridable: true` can be re-enabled from the Backup settings UI via
+// `disabledDefaultExcludes`; non-overridable entries hold no irreplaceable user data
+// and stay off unconditionally. When adding a new entry, ensure the path glob covers
+// *every* on-disk location for that class of data — e.g. agent worktrees live under
+// both cos/worktrees/ and cos/feature-agents/*/worktree/; cross-reference
+// worktreeManager.js and agentLifecycle.js if introducing new worktree paths.
+//
+// All paths are anchored with a leading `/` (rsync filter syntax for "relative to
+// the transfer root"). Without the anchor, a pattern like `loras/*.safetensors`
+// matches any `loras/` directory anywhere under data/ (e.g. a user's
+// brain/.../loras/ collection), which would silently exclude unrelated user data.
+export const DEFAULT_EXCLUDES = [
+  { path: '/browser-profile/', reason: 'Browser CDP profile — cache/cookies, can be several GB', overridable: false },
+  { path: '/cos/worktrees/', reason: 'Ephemeral agent git worktrees — recreated on demand', overridable: false },
+  { path: '/cos/feature-agents/*/worktree/', reason: 'Per-feature-agent git worktrees — recreated on demand', overridable: false },
+  { path: '/loras/*.safetensors', reason: 'LoRA adapter weight files — large, re-downloadable. .metadata.json sidecars (Civitai metadata, user-editable name/notes) ARE backed up.', overridable: true },
+  { path: '/repos/', reason: 'Cloned git repositories — large, re-cloneable from origin', overridable: true },
+  { path: '/cos/reference-repos/', reason: 'Reference upstream repos used by agents — re-cloneable', overridable: true },
+  { path: '/browser-downloads/', reason: 'Browser downloads cache — large, re-downloadable', overridable: true }
+];
+
 // Snapshots live under snapshots/<hostname>/<snapshotId> so a single shared
 // destination (e.g. iCloud) can host backups from multiple machines without
 // their snapshot IDs colliding.
@@ -83,11 +109,33 @@ function runRsync(srcDir, destDir, flags = []) {
 // =============================================================================
 
 /**
+ * Compute the effective rsync --exclude list for a backup run. Pure function
+ * extracted so the Array.isArray guards + override allow-list can be unit
+ * tested without spawning rsync.
+ *
+ * - Non-overridable defaults stay on regardless of `disabledDefaultExcludes` so
+ *   ephemeral/cache paths can never be backed up by mistake (e.g. via a
+ *   hand-edited settings.json).
+ * - Array.isArray guards: settings can be hand-edited or sent by a stale
+ *   client, so a non-array value here would otherwise throw inside .filter
+ *   and abort the backup before the defensive allow-list has a chance to apply.
+ */
+export function computeEffectiveExcludes({ excludePaths, disabledDefaultExcludes } = {}) {
+  const overridablePaths = new Set(DEFAULT_EXCLUDES.filter(e => e.overridable).map(e => e.path));
+  const disabledList = Array.isArray(disabledDefaultExcludes) ? disabledDefaultExcludes : [];
+  const userList = Array.isArray(excludePaths) ? excludePaths : [];
+  const disabledSet = new Set(disabledList.filter(p => overridablePaths.has(p)));
+  const activeDefaults = DEFAULT_EXCLUDES.filter(e => !disabledSet.has(e.path)).map(e => e.path);
+  const userExcludes = userList.filter(Boolean);
+  return [...new Set([...activeDefaults, ...userExcludes])];
+}
+
+/**
  * Run a full backup snapshot from PATHS.data to destPath.
  * @param {string} destPath - Path to external drive backup root
  * @param {object|null} io - Socket.IO instance for real-time events (optional)
  */
-export async function runBackup(destPath, io = null, { excludePaths = [] } = {}) {
+export async function runBackup(destPath, io = null, { excludePaths = [], disabledDefaultExcludes = [] } = {}) {
   if (isRunning) {
     console.log('💾 Backup already running — skipping');
     return { skipped: true };
@@ -106,7 +154,9 @@ export async function runBackup(destPath, io = null, { excludePaths = [] } = {})
   const snapshotDir = join(destPath, 'snapshots', MACHINE_HOST, snapshotId);
   const dataDestDir = join(snapshotDir, 'data');
 
-  console.log(`💾 Backup starting: snapshot ${snapshotId}${excludePaths.length ? ` (excluding ${excludePaths.length} paths)` : ''}`);
+  const effectiveExcludes = computeEffectiveExcludes({ excludePaths, disabledDefaultExcludes });
+
+  console.log(`💾 Backup starting: snapshot ${snapshotId} (excluding ${effectiveExcludes.length} paths)`);
   if (io) io.emit('backup:started', { snapshotId });
 
   await ensureDir(dataDestDir);
@@ -125,7 +175,7 @@ export async function runBackup(destPath, io = null, { excludePaths = [] } = {})
     throw err;
   };
 
-  const excludeFlags = excludePaths.filter(Boolean).flatMap(p => ['--exclude', p]);
+  const excludeFlags = effectiveExcludes.flatMap(p => ['--exclude', p]);
   changedFiles = await runRsync(PATHS.data, dataDestDir, excludeFlags).catch(fail);
   console.log(`💾 Backup rsync complete: ${changedFiles.length} files changed (exit 0)`);
 

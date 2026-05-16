@@ -8,6 +8,7 @@ import { existsSync } from 'fs';
 import { readFile, unlink } from 'fs/promises';
 import { createTailscaleServers } from '../lib/tailscale-https.js';
 import { getSelfHost } from './lib/peerSelfHost.js';
+import { getBuildId, getStampedIndexHtml } from './lib/buildId.js';
 
 import alertsRoutes from './routes/alerts.js';
 import appleHealthRoutes from './routes/appleHealth.js';
@@ -87,8 +88,10 @@ import videoTimelineRoutes from './routes/videoTimeline.js';
 import mediaJobsRoutes from './routes/mediaJobs.js';
 import creativeDirectorRoutes from './routes/creativeDirector.js';
 import writersRoomRoutes from './routes/writersRoom.js';
-import worldBuilderRoutes from './routes/worldBuilder.js';
-import { initWorldBuilderCollectionHook } from './services/worldBuilderCollectionHook.js';
+import universeBuilderRoutes from './routes/universeBuilder.js';
+import { initUniverseBuilderCollectionHook } from './services/universeBuilderCollectionHook.js';
+import { initComicPagesFilenameHook } from './services/pipeline/comicPagesFilenameHook.js';
+import { initStoryboardsFilenameHook } from './services/pipeline/storyboardsFilenameHook.js';
 import pipelineRoutes from './routes/pipeline.js';
 import { initMediaJobQueue } from './services/mediaJobQueue/index.js';
 import { recoverInFlightProjects } from './services/creativeDirector/recovery.js';
@@ -96,6 +99,8 @@ import imageVideoModelsRoutes from './routes/imageVideoModels.js';
 import lorasRoutes from './routes/loras.js';
 import sdapiRoutes from './routes/sdapi.js';
 import openclawRoutes from './routes/openclaw.js';
+import sharingRoutes from './routes/sharing.js';
+import { initSharing } from './services/sharing/index.js';
 import askRoutes from './routes/ask.js';
 import { ensureSelf, startPolling } from './services/instances.js';
 import { initSyncLog } from './services/brainSyncLog.js';
@@ -366,7 +371,7 @@ app.use('/api/video-timeline', videoTimelineRoutes);
 app.use('/api/media-jobs', mediaJobsRoutes);
 app.use('/api/creative-director', creativeDirectorRoutes);
 app.use('/api/writers-room', writersRoomRoutes);
-app.use('/api/world-builder', worldBuilderRoutes);
+app.use('/api/universe-builder', universeBuilderRoutes);
 app.use('/api/pipeline', pipelineRoutes);
 app.use('/api/image-video/models', imageVideoModelsRoutes);
 app.use('/api/loras', lorasRoutes);
@@ -374,6 +379,7 @@ app.use('/api/loras', lorasRoutes);
 // settings.imageGen.expose.a1111 so it returns 403 unless the user opted in.
 app.use('/sdapi/v1', sdapiRoutes);
 app.use('/api/openclaw', openclawRoutes);
+app.use('/api/sharing', sharingRoutes);
 app.use('/api/ask', askRoutes);
 
 // initMediaJobQueue is awaited as part of the startup chain below so that
@@ -468,21 +474,47 @@ app.use('/data/images', express.static(PATHS.images));
 // can pull them by URL without going through an explicit download route.
 app.use('/data/videos', express.static(PATHS.videos));
 app.use('/data/video-thumbnails', express.static(PATHS.videoThumbnails));
+// Voice-over WAVs rendered by the pipeline audio stage — the AudioStage UI
+// pulls them inline via <audio src="/data/audio/<filename>">.
+app.use('/data/audio', express.static(PATHS.audio));
+// Background-music tracks (uploaded today, generated locally tomorrow). The
+// AudioStage music picker plays them inline via <audio src="/data/music/...">.
+app.use('/data/music', express.static(PATHS.music));
 
 // Serve built client UI (production mode — no Vite dev server needed)
 const CLIENT_DIST = join(__dirname, '..', 'client', 'dist');
 if (existsSync(CLIENT_DIST)) {
-  app.use(express.static(CLIENT_DIST));
+  // `index: false` keeps express.static from short-circuiting `/` (and any
+  // bare directory) with the raw index.html — that path needs to flow through
+  // the splat handler below so the meta-tag injection runs.
+  app.use(express.static(CLIENT_DIST, { index: false }));
   // SPA fallback: serve index.html for page navigations only
   // Skip asset requests (.js, .css, etc.) so stale chunk requests get a proper 404
-  // instead of index.html with text/html MIME type
+  // instead of index.html with text/html MIME type. We serve the stamped HTML
+  // string (with <meta name="portos-build-id"> injected) instead of sendFile
+  // so the bundled JS can read its own build id at boot. Re-read per request —
+  // a `npm run build` between server start and the request rewrites index.html
+  // with new chunk filenames; a stale snapshot would tell the browser to load
+  // chunks that no longer exist on disk.
   app.get('/{*splat}', (req, res, next) => {
     if (req.path.match(/\.\w+$/) && !req.path.endsWith('.html')) {
       return next();
     }
-    res.sendFile(join(CLIENT_DIST, 'index.html'));
+    // index.html embeds the current build's hashed asset filenames. After a
+    // rebuild + restart, a browser still holding a cached copy would point at
+    // chunks that no longer exist on disk (the `index-CwBEDqDF.css` class of
+    // 404). `no-cache` lets the browser keep the file but forces an etag
+    // revalidation on every navigation, so a fresh build is picked up on the
+    // very next request without a hard refresh.
+    res.set('Cache-Control', 'no-cache');
+    const stampedIndexHtml = getStampedIndexHtml();
+    if (stampedIndexHtml) {
+      res.type('html').send(stampedIndexHtml);
+    } else {
+      res.sendFile(join(CLIENT_DIST, 'index.html'));
+    }
   });
-  console.log(`📦 Serving built UI from client/dist`);
+  console.log(`📦 Serving built UI from client/dist (build ${getBuildId()})`);
 }
 
 // 404 handler (API routes that didn't match)
@@ -502,9 +534,23 @@ ensureSelf()
   .then(() => initSyncLog())
   .then(() => initMediaJobQueue())
   .then(() => {
-    // World Builder needs the media job queue running before it can listen
+    // Universe Builder needs the media job queue running before it can listen
     // for `completed` events — so initialize the hook here.
-    initWorldBuilderCollectionHook();
+    initUniverseBuilderCollectionHook();
+    // Pipeline filename hooks — stamp `filename` onto stage records on
+    // media-job completion so the UI can still render them after the
+    // 24h media-job archive TTL elapses.
+    initComicPagesFilenameHook();
+    initStoryboardsFilenameHook();
+  })
+  .then(() => {
+    // Sharing: attach chokidar watchers to every registered share bucket so
+    // incoming manifests from peers are picked up live. Backlog processing
+    // (manifests that arrived while the server was offline) runs as part of
+    // initSharing. Fire-and-forget — a failed bucket shouldn't block boot.
+    initSharing({ io }).catch((err) => {
+      console.error(`❌ Sharing init failed: ${err.message}`);
+    });
   })
   .then(() => {
     // Fire-and-forget — resume any Creative Director projects that were mid-

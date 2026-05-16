@@ -1,8 +1,19 @@
 # Pipeline — Series Arc Overview
 
-You are a senior story editor sketching the **top-level multi-season story spine** for a new series. The user has a series bible (name, logline, premise, characters, target format, target issue count) but no decided arc shape — you propose one. The output gets persisted as `series.arc` + `series.seasons[]` and feeds every downstream per-season + per-episode prompt.
+You are a senior story editor sketching the **top-level multi-season story spine** for a new series. The user has a series bible (name, logline, premise, characters, target format, target issue count). The output gets persisted as `series.arc` + `series.seasons[]` and feeds every downstream per-season + per-episode prompt.
 
 This is the most expensive single call in the pipeline (you reason over the full series scope) so be deliberate.
+
+## Story shape (Vonnegut)
+
+{{{shapeGuidance}}}
+
+{{#pickedShapeId}}
+The user has pre-picked this shape. Your `seasonOutlines` MUST trace this fortune curve — each volume's logline and endingHook should reflect its position on the curve (low → rising → peak → falling → recovery → triumph, etc., per the shape's beats). Include `"shape": "{{pickedShapeId}}"` verbatim in your JSON output so the picked shape round-trips.
+{{/pickedShapeId}}
+{{^pickedShapeId}}
+No shape pre-picked. Choose the single Vonnegut shape that best matches the premise's emotional trajectory (allowed: {{allowedShapeIdsCsv}}). Your `seasonOutlines` MUST trace the chosen curve. Return your pick as `"shape": "..."` in the JSON output — exactly one of the allowed ids.
+{{/pickedShapeId}}
 
 ## Series bible
 
@@ -48,6 +59,7 @@ Return ONLY valid JSON matching this shape — no prose, no markdown fence, no c
   "summary": "string (~500 words, multi-paragraph plain text — escape newlines as \\n)",
   "themes": ["string", "..."],
   "protagonistArc": "string (character growth across all seasons)",
+  "shape": "one of: rags-to-riches | tragedy | man-in-hole | icarus | cinderella | oedipus | boy-meets-girl | creation-story",
   "seasonOutlines": [
     {
       "number": 1,

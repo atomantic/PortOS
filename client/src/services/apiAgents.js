@@ -83,6 +83,7 @@ export const getCosAgent = (id) => request(`/cos/agents/${id}`);
 export const terminateCosAgent = (id) => request(`/cos/agents/${id}/terminate`, { method: 'POST' });
 export const killCosAgent = (id) => request(`/cos/agents/${id}/kill`, { method: 'POST' });
 export const getCosAgentStats = (id) => request(`/cos/agents/${id}/stats`);
+export const getCosAgentPrompt = (id) => request(`/cos/agents/${id}/prompt`);
 export const deleteCosAgent = (id) => request(`/cos/agents/${id}`, { method: 'DELETE' });
 export const clearCompletedCosAgents = () => request('/cos/agents/completed', { method: 'DELETE' });
 export const submitCosAgentFeedback = (id, feedback) => request(`/cos/agents/${id}/feedback`, {

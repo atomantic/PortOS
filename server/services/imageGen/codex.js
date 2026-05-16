@@ -119,9 +119,22 @@ export async function checkConnection({ codexPath } = {}) {
 
 const SESSION_ID_RE = /^session id:\s*([0-9a-f-]{36})/im;
 
-export async function generateImage({ codexPath, model, prompt, width, height, negativePrompt, jobId: providedJobId = null }) {
+export async function generateImage({
+  codexPath, model, prompt, width, height, negativePrompt,
+  // Accepted (and ignored) so the pipeline's "use proof as base" upscale path
+  // doesn't reject when codex is the active backend. The `$imagegen` skill in
+  // the Codex CLI has no init-image input; this surface is local-only. Logged
+  // so the degraded behavior is visible — a final render kicked off with
+  // useProofAsBase=true against codex will be a full redraw at the larger
+  // size, not an i2i upscale that preserves the proof's composition.
+  initImagePath, initImageStrength: _initImageStrength,
+  jobId: providedJobId = null,
+}) {
   if (!prompt?.trim()) {
     throw new ServerError('Prompt is required', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+  if (initImagePath) {
+    console.log(`⚠️ codex generateImage: ignoring initImagePath (gpt-image-2 $imagegen has no init-image input — falling back to full redraw)`);
   }
   await ensureDir(PATHS.images);
 
@@ -197,18 +210,26 @@ async function runCodex(job, jobId, bin, args, outputPath, filename, meta) {
   // buffer so a session-id line that gets split across chunk boundaries
   // (Node streams can land each pipe write as its own 'data' event)
   // still matches. Trim aggressively after a match to keep this tiny.
+  //
+  // Why: match BEFORE slicing. With long pipeline prompts (multi-KB
+  // comic-script payloads), codex emits the banner + the echoed prompt
+  // in a single stderr chunk that can exceed BANNER_BUF_MAX. If we
+  // sliced first, the `session id:` line at the FRONT would get chopped
+  // off before we ever ran the regex, producing the
+  // "Codex returned no session id" false negative.
   let bannerBuf = '';
   const BANNER_BUF_MAX = 4 * 1024;
   const captureSession = (text) => {
     if (sessionId) return;
     bannerBuf += text;
-    if (bannerBuf.length > BANNER_BUF_MAX) bannerBuf = bannerBuf.slice(-BANNER_BUF_MAX);
     const m = bannerBuf.match(SESSION_ID_RE);
     if (m) {
       sessionId = m[1];
       bannerBuf = '';
       broadcastSse(job, { type: 'status', message: `Codex session ${sessionId.slice(0, 8)}…` });
+      return;
     }
+    if (bannerBuf.length > BANNER_BUF_MAX) bannerBuf = bannerBuf.slice(-BANNER_BUF_MAX);
   };
 
   proc.on('error', (err) => {
@@ -216,9 +237,11 @@ async function runCodex(job, jobId, bin, args, outputPath, filename, meta) {
     finalizeError(job, jobId, proc, `Failed to spawn ${bin}: ${err.message}`);
   });
 
-  proc.stdout.on('data', (chunk) => {
-    const text = chunk.toString();
-    captureSession(text);
+  proc.stdout.on('data', () => {
+    // Codex prints the `session id:` banner on stderr only — don't feed
+    // stdout into bannerBuf. A stdout chunk arriving between two stderr
+    // chunks of the banner can split the session-id line with unrelated
+    // text and break the regex match.
     broadcastSse(job, { type: 'status', message: 'Running…' });
   });
 

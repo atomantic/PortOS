@@ -4,7 +4,10 @@ const baseStatusColors = {
   '--port-success': '34 197 94',
   '--port-warning': '245 158 11',
   '--port-error': '239 68 68',
-  '--port-on-success': '255 255 255',
+  // White on #22c55e / #16a34a fails WCAG AA (~2.0 / ~3.0). Dark forest green
+  // hits ~9.5 / ~6.0 — safe for both Classic Midnight (bright green) and the
+  // light themes that inherit this default.
+  '--port-on-success': '5 46 22',
   '--port-on-warning': '17 24 39',
   '--port-on-error': '255 255 255',
 };
@@ -243,7 +246,7 @@ export const THEMES = {
       '--port-warning': '202 138 4',
       '--port-error': '225 29 72',
       '--port-on-accent': '255 255 255',
-      '--port-on-success': '255 255 255',
+      '--port-on-success': '5 46 22',
       '--port-on-warning': '255 255 255',
       '--port-on-error': '255 255 255',
       '--port-text': '12 30 36',

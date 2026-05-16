@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef, memo } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { Play, RotateCcw, ChevronDown, ChevronRight, AlertCircle, RefreshCw, Package, Info, GitMerge } from 'lucide-react';
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
@@ -880,53 +881,93 @@ function AppTaskTypeRow({ taskType, config, onUpdate, onTrigger, onReset, provid
   );
 }
 
-function AppTaskTypeSection({ tasks, onUpdate, onTrigger, onReset, providers, apps, onUpdateOverride, onBulkToggleOverride, improvementDisabled }) {
+const TASK_FILTERS = [
+  { id: 'all', label: 'All', emptyMessage: 'No tasks configured.', match: () => true },
+  { id: 'enabled', label: 'Enabled', emptyMessage: 'No enabled tasks.', match: ([, config]) => config.enabled },
+];
+const DEFAULT_FILTER_ID = TASK_FILTERS[0].id;
+
+function AppTaskTypeSection({ tasks, onUpdate, onTrigger, onReset, providers, apps, onUpdateOverride, onBulkToggleOverride, improvementDisabled, filter, onFilterChange }) {
   const taskEntries = Object.entries(tasks || {});
   if (taskEntries.length === 0) return null;
 
-  const enabledCount = taskEntries.filter(([, config]) => config.enabled).length;
+  const activeFilter = TASK_FILTERS.find(f => f.id === filter) || TASK_FILTERS[0];
   const allTaskTypes = taskEntries.map(([taskType]) => taskType);
+  const visibleEntries = taskEntries.filter(activeFilter.match);
+  const counts = Object.fromEntries(TASK_FILTERS.map(f => [f.id, taskEntries.filter(f.match).length]));
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-2 flex-wrap">
         <h3 className="text-lg font-semibold text-white">Improvement Tasks</h3>
-        <span className="text-xs text-gray-500">
-          {enabledCount} enabled
-        </span>
+        <div className="flex items-center gap-1 ml-auto">
+          {TASK_FILTERS.map(f => {
+            const active = activeFilter.id === f.id;
+            return (
+              <button
+                key={f.id}
+                onClick={() => onFilterChange(f.id)}
+                aria-pressed={active}
+                className={`px-3 py-1.5 text-sm rounded-lg transition-colors font-medium min-h-[40px] ${
+                  active
+                    ? 'bg-port-accent/10 text-port-accent'
+                    : 'text-gray-400 hover:text-white hover:bg-port-border/50'
+                }`}
+              >
+                {f.label} ({counts[f.id]})
+              </button>
+            );
+          })}
+        </div>
       </div>
       <p className="text-sm text-gray-400">
         Tasks that analyze and improve PortOS and managed apps. Expand a task to configure per-app overrides.
       </p>
-      <div className="space-y-2">
-        {taskEntries.map(([taskType, config]) => (
-          <AppTaskTypeRow
-            key={taskType}
-            taskType={taskType}
-            config={config}
-            onUpdate={onUpdate}
-            onTrigger={onTrigger}
-            onReset={onReset}
-            providers={providers}
-            apps={apps}
-            onUpdateOverride={onUpdateOverride}
-            onBulkToggleOverride={onBulkToggleOverride}
-            allTaskTypes={allTaskTypes}
-            improvementDisabled={improvementDisabled}
-          />
-        ))}
-      </div>
+      {visibleEntries.length === 0 ? (
+        <div className="text-center py-8 text-gray-500 border border-dashed border-port-border rounded-lg">
+          {activeFilter.emptyMessage}{' '}
+          {activeFilter.id !== DEFAULT_FILTER_ID && (
+            <button onClick={() => onFilterChange(DEFAULT_FILTER_ID)} className="text-port-accent hover:underline">Show all</button>
+          )}
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {visibleEntries.map(([taskType, config]) => (
+            <AppTaskTypeRow
+              key={taskType}
+              taskType={taskType}
+              config={config}
+              onUpdate={onUpdate}
+              onTrigger={onTrigger}
+              onReset={onReset}
+              providers={providers}
+              apps={apps}
+              onUpdateOverride={onUpdateOverride}
+              onBulkToggleOverride={onBulkToggleOverride}
+              allTaskTypes={allTaskTypes}
+              improvementDisabled={improvementDisabled}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
 
 export default function ScheduleTab({ apps }) {
-  // searchParams no longer used — unified task list
+  const [searchParams, setSearchParams] = useSearchParams();
   const [schedule, setSchedule] = useState(null);
   const [providers, setProviders] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  // View state removed — unified task list replaces segmented self/app views
+  const filterParam = searchParams.get('filter');
+  const filter = TASK_FILTERS.some(f => f.id === filterParam) ? filterParam : DEFAULT_FILTER_ID;
+  const setFilter = useCallback((next) => {
+    const params = new URLSearchParams(searchParams);
+    if (next === DEFAULT_FILTER_ID) params.delete('filter');
+    else params.set('filter', next);
+    setSearchParams(params, { replace: true });
+  }, [searchParams, setSearchParams]);
 
   const fetchSchedule = useCallback(async () => {
     const data = await api.getCosSchedule().catch(() => null);
@@ -1076,6 +1117,8 @@ export default function ScheduleTab({ apps }) {
         onUpdateOverride={handleUpdateAppOverride}
         onBulkToggleOverride={handleBulkToggleOverride}
         improvementDisabled={improvementDisabled}
+        filter={filter}
+        onFilterChange={setFilter}
       />
 
       {schedule.lastUpdated && (

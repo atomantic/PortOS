@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
+import { Link } from 'react-router-dom';
 import {
   Cpu,
   Trash2,
@@ -24,6 +25,7 @@ import {
 import * as api from '../../../services/api';
 import OutputBlocks from '../OutputBlocks';
 import MarkdownOutput from '../MarkdownOutput';
+import Modal from '../../ui/Modal';
 import toast from '../../ui/Toast';
 
 // Extract task type from description (matches server-side extractTaskType)
@@ -109,6 +111,10 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
   const [btwInput, setBtwInput] = useState('');
   const [sendingBtw, setSendingBtw] = useState(false);
   const [btwMessages, setBtwMessages] = useState(agent.btwMessages || []);
+  const [promptContent, setPromptContent] = useState(null);
+  const [promptOpen, setPromptOpen] = useState(false);
+  const [loadingPrompt, setLoadingPrompt] = useState(false);
+  const [promptError, setPromptError] = useState(null);
 
   // Sync feedback state when parent refreshes agent data
   useEffect(() => {
@@ -149,6 +155,29 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
       onFeedbackChange?.();
     }
   }, [agent.id, feedbackComment, submittingFeedback, onFeedbackChange]);
+
+  // Open the prompt modal — lazy-fetches prompt.txt the first time it opens.
+  // Useful for iterating on the prompt itself (the user can see exactly what
+  // was pasted into the TUI / sent to the CLI and decide what to trim).
+  const openPromptModal = useCallback(async () => {
+    setPromptOpen(true);
+    if (promptContent !== null || loadingPrompt) return;
+    setLoadingPrompt(true);
+    setPromptError(null);
+    const result = await api.getCosAgentPrompt(agent.id).catch(err => {
+      setPromptError(err.message);
+      return null;
+    });
+    setLoadingPrompt(false);
+    if (result?.prompt) setPromptContent(result.prompt);
+  }, [agent.id, promptContent, loadingPrompt]);
+
+  const copyPromptToClipboard = useCallback(() => {
+    if (!promptContent) return;
+    navigator.clipboard.writeText(promptContent)
+      .then(() => toast.success('Prompt copied to clipboard'))
+      .catch(err => toast.error(`Failed to copy: ${err.message}`));
+  }, [promptContent]);
 
   // Send BTW message to running agent
   const sendBtw = useCallback(async () => {
@@ -390,6 +419,11 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
                 {agent.metadata?.phase === 'initializing' ? 'Initializing' : 'Working'}
               </span>
             )}
+            {agent.metadata?.executionMode === 'tui' && (
+              <span className="px-2 py-0.5 text-xs rounded bg-emerald-500/20 text-emerald-400 shrink-0">
+                TUI
+              </span>
+            )}
           </div>
           {/* Actions - right side */}
           <div className="flex items-center gap-2 shrink-0">
@@ -486,6 +520,26 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
               <span className="text-port-success/70">|</span>
               <span className="font-mono">{processStats.memoryMb}MB</span>
             </span>
+          )}
+          {!completed && agent.metadata?.tuiSessionId && (
+            <Link
+              to={`/shell?session=${encodeURIComponent(agent.metadata.tuiSessionId)}`}
+              className="flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25 whitespace-nowrap"
+              title="Open TUI shell session"
+            >
+              <ExternalLink size={10} aria-hidden="true" className="shrink-0" />
+              <span className="font-mono">shell {agent.metadata.tuiSessionId.slice(0, 6)}</span>
+            </Link>
+          )}
+          {!remote && (
+            <button
+              onClick={openPromptModal}
+              className="flex items-center gap-1 px-2 py-0.5 rounded bg-port-border/40 text-gray-400 hover:bg-port-border/60 hover:text-white whitespace-nowrap"
+              title="View the prompt this agent was given at spawn"
+            >
+              <MessageSquare size={10} aria-hidden="true" className="shrink-0" />
+              <span>Prompt</span>
+            </button>
           )}
           {/* Show zombie warning if PID exists but process is dead */}
           {!completed && agent.pid && processStats && !processStats.active && (
@@ -602,7 +656,7 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
           </div>
         )}
 
-        {!completed && !remote && (
+        {!completed && !remote && agent.metadata?.executionMode === 'tui' && agent.metadata?.tuiKind === 'claude' && (
           <div className="mt-2 flex gap-2">
             <input
               type="text"
@@ -618,7 +672,7 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
               onClick={sendBtw}
               disabled={sendingBtw || !btwInput.trim()}
               className="flex items-center gap-1.5 px-3 py-1 text-xs bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30 rounded transition-colors disabled:opacity-50 min-h-[32px]"
-              title="Send BTW message to agent"
+              title="Send BTW message to agent (pastes into the live Claude Code TUI session)"
             >
               {sendingBtw ? <Loader2 size={12} className="animate-spin" aria-hidden="true" /> : <Send size={12} aria-hidden="true" />}
               BTW
@@ -854,6 +908,57 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
           })()}
         </div>
       )}
+      <Modal
+        open={promptOpen}
+        onClose={() => setPromptOpen(false)}
+        size="2xl"
+        usePortal
+        panelClassName="bg-port-card border border-port-border rounded-lg max-h-[80vh] flex flex-col"
+        ariaLabel="Agent prompt"
+      >
+        <div className="flex items-center justify-between px-4 py-2 border-b border-port-border shrink-0">
+          <div className="flex items-center gap-2">
+            <MessageSquare size={14} className="text-gray-400" aria-hidden="true" />
+            <span className="text-sm text-gray-300">Agent prompt</span>
+            {promptContent && (
+              <span className="text-xs text-gray-500 font-mono">
+                {promptContent.length.toLocaleString()} chars · {promptContent.split('\n').length} lines
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            {promptContent && (
+              <button
+                onClick={copyPromptToClipboard}
+                className="text-xs px-2 py-1 rounded bg-port-border/40 text-gray-400 hover:text-white"
+              >
+                Copy
+              </button>
+            )}
+            <button
+              onClick={() => setPromptOpen(false)}
+              className="text-xs px-2 py-1 rounded bg-port-border/40 text-gray-400 hover:text-white"
+              aria-label="Close prompt viewer"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+        <div className="flex-1 overflow-auto p-4">
+          {loadingPrompt && (
+            <div className="flex items-center gap-2 text-gray-500 text-sm">
+              <Loader2 size={14} aria-hidden="true" className="animate-spin" />
+              Loading prompt…
+            </div>
+          )}
+          {promptError && (
+            <div className="text-port-error text-sm">{promptError}</div>
+          )}
+          {!loadingPrompt && !promptError && promptContent != null && (
+            <pre className="text-xs text-gray-300 font-mono whitespace-pre-wrap break-words">{promptContent}</pre>
+          )}
+        </div>
+      </Modal>
     </div>
   );
 }

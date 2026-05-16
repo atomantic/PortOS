@@ -139,7 +139,9 @@ export function createProviderService(config = {}) {
         enabled: providerData.enabled !== false,
         envVars: providerData.envVars || {},
         secretEnvVars: providerData.secretEnvVars || [],
-        headlessArgs: providerData.headlessArgs || []
+        headlessArgs: providerData.headlessArgs || [],
+        tuiPromptDelayMs: providerData.tuiPromptDelayMs || 2500,
+        tuiIdleTimeoutMs: providerData.tuiIdleTimeoutMs || 180000
       };
 
       data.providers[id] = provider;
@@ -196,7 +198,7 @@ export function createProviderService(config = {}) {
         return { success: false, error: 'Provider not found' };
       }
 
-      if (provider.type === 'cli') {
+      if (provider.type === 'cli' || provider.type === 'tui') {
         // Use execFile (no shell) so user-configured `provider.command` cannot
         // inject extra shell commands via metacharacters.
         const { stdout } = await execFileAsync('which', [provider.command])

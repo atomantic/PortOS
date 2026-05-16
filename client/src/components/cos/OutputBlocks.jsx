@@ -4,6 +4,15 @@ import MarkdownOutput from './MarkdownOutput';
 export const isToolLine = (line) =>
   line.startsWith('🔧') || line.startsWith('  →') || line.startsWith('  ↳') || line.startsWith('[stderr]');
 
+// Lifecycle marker lines (emitted from agentTuiSpawning.js for TUI agents)
+// should render as their own one-line blocks instead of getting collapsed into
+// the surrounding markdown — markdown joins consecutive single-`\n` lines
+// onto one rendered line, which made the 📟 / 💡 / ✅ events run together
+// in the CoS agent output panel.
+const LIFECYCLE_PREFIXES = ['📟', '💡', '✅'];
+export const isLifecycleLine = (line) =>
+  LIFECYCLE_PREFIXES.some(p => line.startsWith(p));
+
 const INITIAL_BLOCKS = 80;
 const LOAD_MORE_BLOCKS = 120;
 
@@ -21,13 +30,18 @@ function renderBlock(block, i) {
     }
     return <div key={i} className="py-0.5 text-xs font-mono text-yellow-500 break-all">{line}</div>;
   }
+  if (block.type === 'lifecycle') {
+    return <div key={i} className="py-0.5 text-xs text-gray-400 break-words">{block.line}</div>;
+  }
   return <MarkdownOutput key={i} content={block.content} />;
 }
 
 export default function OutputBlocks({ output }) {
   const [visibleCount, setVisibleCount] = useState(INITIAL_BLOCKS);
 
-  // Group consecutive lines: tool lines render as monospace, content lines as markdown
+  // Group consecutive lines: tool lines render as monospace, lifecycle markers
+  // render as their own one-line blocks, content lines fold into a single
+  // markdown block.
   const blocks = useMemo(() => {
     const result = [];
     let mdLines = [];
@@ -44,6 +58,9 @@ export default function OutputBlocks({ output }) {
       if (isToolLine(line)) {
         flushMd();
         result.push({ type: 'tool', line });
+      } else if (isLifecycleLine(line)) {
+        flushMd();
+        result.push({ type: 'lifecycle', line });
       } else {
         mdLines.push(line);
       }

@@ -11,6 +11,7 @@
  * make. We removed the previous `stitch` agent task entirely.
  */
 
+import { join } from 'path';
 import {
   createProject as createTimelineProject,
   updateProject as updateTimelineProject,
@@ -22,6 +23,9 @@ import { loadHistory } from '../videoGen/local.js';
 import { addItem as addCollectionItem } from '../mediaCollections.js';
 import { buildTimelineClips } from './orchestrator.js';
 import { getProject, updateProject } from './local.js';
+import { getIssue } from '../pipeline/issues.js';
+import { muxMusicBed, resolveMusicTrackPath } from '../pipeline/audioMux.js';
+import { PATHS } from '../../lib/fileUtils.js';
 
 const FINAL_RENDER_POLL_MS = 3000;
 const FINAL_RENDER_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes — concat is fast but be generous on big projects.
@@ -103,6 +107,9 @@ export async function runStitch(projectId) {
       return;
     }
 
+    // Best-effort music-bed overlay (Phase 4d) — must not block the stitch.
+    await maybeMuxPipelineAudio(project, finalEntry);
+
     await updateProject(projectId, {
       finalVideoId: finalEntry.id,
       status: 'complete',
@@ -124,4 +131,25 @@ export async function runStitch(projectId) {
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+async function maybeMuxPipelineAudio(project, finalEntry) {
+  if (!project?.sourceIssueId) return;
+  const issue = await getIssue(project.sourceIssueId).catch(() => null);
+  if (!issue) {
+    console.log(`⚠️ CD stitch mux: source issue ${project.sourceIssueId.slice(0, 8)} not found — skipping`);
+    return;
+  }
+  const musicFilename = issue.stages?.audio?.music?.trackFilename;
+  const musicPath = await resolveMusicTrackPath(musicFilename);
+  if (!musicPath) return;
+
+  const videoPath = join(PATHS.videos, finalEntry.filename);
+  console.log(`🎵 CD stitch mux: overlaying ${musicFilename} onto ${finalEntry.filename}`);
+  const result = await muxMusicBed(videoPath, { musicPath });
+  if (result.ok) {
+    console.log(`✅ CD stitch mux: music bed applied to ${finalEntry.filename}`);
+  } else {
+    console.log(`⚠️ CD stitch mux: music bed skipped (${result.reason}) — keeping silent output`);
+  }
 }

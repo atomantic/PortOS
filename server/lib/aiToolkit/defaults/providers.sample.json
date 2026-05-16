@@ -1,5 +1,5 @@
 {
-  "activeProvider": "claude-code",
+  "activeProvider": "claude-code-tui",
   "providers": {
     "claude-code": {
       "id": "claude-code",
@@ -53,6 +53,57 @@
       "enabled": true,
       "envVars": {},
       "secretEnvVars": []
+    },
+    "codex-tui": {
+      "id": "codex-tui",
+      "name": "Codex TUI",
+      "type": "tui",
+      "command": "codex",
+      "args": ["--ask-for-approval", "never"],
+      "models": ["codex-configured-default"],
+      "defaultModel": "codex-configured-default",
+      "lightModel": "codex-configured-default",
+      "mediumModel": "codex-configured-default",
+      "heavyModel": "codex-configured-default",
+      "timeout": 600000,
+      "enabled": false,
+      "envVars": {},
+      "secretEnvVars": [],
+      "tuiPromptDelayMs": 2500,
+      "tuiIdleTimeoutMs": 180000
+    },
+    "claude-code-tui": {
+      "id": "claude-code-tui",
+      "name": "Claude Code TUI",
+      "type": "tui",
+      "command": "claude",
+      "args": ["--dangerously-skip-permissions"],
+      "models": ["claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-7"],
+      "defaultModel": "claude-sonnet-4-6",
+      "lightModel": "claude-haiku-4-5",
+      "mediumModel": "claude-sonnet-4-6",
+      "heavyModel": "claude-opus-4-7",
+      "timeout": 600000,
+      "enabled": true,
+      "envVars": {},
+      "secretEnvVars": [],
+      "tuiPromptDelayMs": 2500,
+      "tuiIdleTimeoutMs": 180000
+    },
+    "gemini-tui": {
+      "id": "gemini-tui",
+      "name": "Gemini TUI",
+      "type": "tui",
+      "command": "gemini",
+      "args": [],
+      "models": [],
+      "defaultModel": null,
+      "timeout": 600000,
+      "enabled": false,
+      "envVars": {},
+      "secretEnvVars": [],
+      "tuiPromptDelayMs": 2500,
+      "tuiIdleTimeoutMs": 180000
     },
     "gemini-cli": {
       "id": "gemini-cli",

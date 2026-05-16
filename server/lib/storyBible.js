@@ -28,6 +28,11 @@ export const BIBLE_LIMITS = Object.freeze({
   NOTES_MAX: 4000,
   IMAGE_REF_MAX: 500,
   IMAGE_REFS_PER_ENTRY_MAX: 12,
+  // Wardrobes per character — A2 in the AnyFilm gap analysis. Each entry
+  // is an outfit/styling variant; first one is the visual default.
+  WARDROBE_NAME_MAX: 120,
+  WARDROBE_DESCRIPTION_MAX: 800,
+  WARDROBES_PER_CHARACTER_MAX: 10,
   EVIDENCE_ITEM_MAX: 500,
   EVIDENCE_PER_ENTRY_MAX: 20,
   // Settings
@@ -42,15 +47,55 @@ export const BIBLE_LIMITS = Object.freeze({
   SIGNIFICANCE_MAX: 1000,
   // Per-bible cap (universal — protects against runaway extraction)
   ENTRIES_PER_BIBLE_MAX: 200,
+  PROMPT_MAX: 2000,
+  TAG_MAX: 60,
+  TAGS_PER_ENTRY_MAX: 12,
+  SOURCE_SERIES_ID_MAX: 64,
+  // Voice id namespace: `engine:voiceName` (e.g. `kokoro:af_heart`,
+  // `piper:en_GB-northern_english_male`). Caps generously since 3rd-party
+  // providers (ElevenLabs) use uuid-shaped voice ids.
+  VOICE_ID_MAX: 200,
 });
 
-const SOURCES = new Set(['user', 'ai', 'imported']);
+// Canonical provenance vocabulary. `BIBLE_SOURCE.SERIES_EXTRACT` is the
+// default for new bible-extracted entries; `UNIVERSE_EXPAND` is stamped on
+// canon backfilled from a v1 universe's categories; `MANUAL` is user-authored.
+// Legacy values ('user' / 'ai' / 'imported') are accepted on read so existing
+// data round-trips; nothing in the codebase coerces them.
+export const BIBLE_SOURCE = Object.freeze({
+  UNIVERSE_EXPAND: 'universe-expand',
+  SERIES_EXTRACT: 'series-extract',
+  MANUAL: 'manual',
+});
+const SOURCES = new Set([
+  ...Object.values(BIBLE_SOURCE),
+  'user', 'ai', 'imported',
+]);
 
 export const BIBLE_KIND = Object.freeze({
   CHARACTER: 'character',
   SETTING: 'setting',
   OBJECT: 'object',
 });
+
+// Enums for the location-classification fields on Setting canon entries.
+// Mirrors AnyFilm's INT/EXT + time-of-day taxonomy so generated panels and
+// scene starts inherit lighting/composition cues for free.
+export const SETTING_INT_EXT = Object.freeze(['INT', 'EXT']);
+export const SETTING_TIME_OF_DAY = Object.freeze(['dawn', 'day', 'dusk', 'night']);
+const SETTING_INT_EXT_SET = new Set(SETTING_INT_EXT);
+const SETTING_TIME_OF_DAY_SET = new Set(SETTING_TIME_OF_DAY);
+
+const trimEnum = (raw, allowed) => {
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const upper = trimmed.toUpperCase();
+  if (allowed.has(upper)) return upper;
+  const lower = trimmed.toLowerCase();
+  if (allowed.has(lower)) return lower;
+  return null;
+};
 
 // Canonical pluralization: pipeline series.<field>, evaluator analysis kind,
 // extractor LLM envelope key — all the same string, consolidated here.
@@ -60,13 +105,22 @@ export const BIBLE_FIELD = Object.freeze({
   [BIBLE_KIND.OBJECT]: 'objects',
 });
 
+// Ordered list of the persisted record's bible-array keys — used by
+// store-walkers (e.g. imageRef purge across all kinds) so a future kind
+// added here flows through without touching every walker.
+export const BIBLE_KEYS = Object.freeze(Object.values(BIBLE_FIELD));
+
+// Frozen list of kind values — for route/Zod kind validation, lock-toggle
+// dispatch, and any caller that needs to enumerate kinds.
+export const BIBLE_KINDS = Object.freeze(Object.values(BIBLE_KIND));
+
 // Fields the bible-extraction prompt cares about. Routed both into the
 // `existing<X>Json` prompt variable (bibleExtractor) and into the script
 // stage's bibles context (evaluator). Excludes ids/timestamps/source/notes.
 export const PROMPT_FIELDS = Object.freeze({
-  [BIBLE_KIND.CHARACTER]: ['name', 'aliases', 'role', 'physicalDescription', 'personality', 'background'],
-  [BIBLE_KIND.SETTING]: ['name', 'slugline', 'description', 'palette', 'era', 'weather', 'recurringDetails'],
-  [BIBLE_KIND.OBJECT]: ['name', 'aliases', 'description', 'significance'],
+  [BIBLE_KIND.CHARACTER]: ['name', 'aliases', 'role', 'physicalDescription', 'personality', 'background', 'voiceId', 'wardrobes', 'prompt', 'tags'],
+  [BIBLE_KIND.SETTING]: ['name', 'slugline', 'description', 'palette', 'era', 'weather', 'intExt', 'timeOfDay', 'recurringDetails', 'prompt', 'tags'],
+  [BIBLE_KIND.OBJECT]: ['name', 'aliases', 'description', 'significance', 'prompt', 'tags'],
 });
 
 export function pickPromptFields(kind, entry) {
@@ -118,11 +172,66 @@ function ensureId(raw, idPrefix) {
 }
 
 function ensureSource(raw) {
+  // Default 'user' preserves the writers-room badge UI; universe-canon callers
+  // pass `BIBLE_SOURCE.*` explicitly.
   return SOURCES.has(raw) ? raw : 'user';
 }
 
 function ensureFirstAppearance(raw) {
   return isStr(raw) && raw.trim() ? raw.trim().slice(0, 200) : null;
+}
+
+// Primary reference image (A3/A4/A5). User pins one of the canon entry's
+// existing `imageRefs[]` as the canonical visual anchor. Stale pointers
+// (primary names a filename that was later removed from imageRefs) collapse
+// to null so the UI doesn't render a broken star indicator. Returns the
+// validated filename or null — never undefined, so the shape stays explicit.
+function derivePrimaryImageRef(raw, imageRefs) {
+  if (!isStr(raw) || !raw.trim()) return null;
+  const trimmed = raw.trim().slice(0, BIBLE_LIMITS.IMAGE_REF_MAX);
+  return imageRefs.includes(trimmed) ? trimmed : null;
+}
+
+// Wardrobe sanitizer (A2). One entry per outfit/styling variant; the
+// description is image-gen-ready prose ("worn linen suit, gold pocket watch,
+// scuffed wingtips"). Reference images per wardrobe land in a follow-up.
+function sanitizeWardrobe(raw, { preserveTimestamps = true } = {}) {
+  if (!raw || typeof raw !== 'object') return null;
+  const name = trimTo(raw.name, BIBLE_LIMITS.WARDROBE_NAME_MAX);
+  if (!name) return null;
+  return {
+    id: ensureId(raw.id, 'wd-'),
+    name,
+    description: trimTo(raw.description, BIBLE_LIMITS.WARDROBE_DESCRIPTION_MAX),
+    createdAt: preserveTimestamps && isStr(raw.createdAt) ? raw.createdAt : nowIso(),
+    updatedAt: preserveTimestamps && isStr(raw.updatedAt) ? raw.updatedAt : nowIso(),
+  };
+}
+
+function sanitizeWardrobeList(raw, opts = {}) {
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  for (const w of raw) {
+    const sanitized = sanitizeWardrobe(w, opts);
+    if (!sanitized) continue;
+    out.push(sanitized);
+    if (out.length >= BIBLE_LIMITS.WARDROBES_PER_CHARACTER_MAX) break;
+  }
+  return out;
+}
+
+// Shared canon extras applied to every kind. `locked` follows the on-disk
+// minimization pattern from universe-builder variations: only `true` is
+// persisted, missing/false collapses to absent.
+function applyCanonExtras(raw) {
+  const out = {
+    prompt: trimTo(raw.prompt, BIBLE_LIMITS.PROMPT_MAX),
+    tags: cleanStringArray(raw.tags, BIBLE_LIMITS.TAG_MAX, BIBLE_LIMITS.TAGS_PER_ENTRY_MAX),
+    source: ensureSource(raw.source),
+    sourceSeriesId: trimTo(raw.sourceSeriesId, BIBLE_LIMITS.SOURCE_SERIES_ID_MAX) || null,
+  };
+  if (raw.locked === true) out.locked = true;
+  return out;
 }
 
 // Accepts the writers-room shape natively; legacy pipeline `description`
@@ -138,6 +247,7 @@ export function sanitizeCharacter(raw, { idPrefix = DEFAULT_ID_PREFIX.character,
     BIBLE_LIMITS.PHYSICAL_DESCRIPTION_MAX,
   );
   const created = preserveTimestamps && isStr(raw.createdAt) ? raw.createdAt : nowIso();
+  const imageRefs = cleanStringArray(raw.imageRefs, BIBLE_LIMITS.IMAGE_REF_MAX, BIBLE_LIMITS.IMAGE_REFS_PER_ENTRY_MAX);
   return {
     id: ensureId(raw.id, idPrefix),
     name,
@@ -147,11 +257,21 @@ export function sanitizeCharacter(raw, { idPrefix = DEFAULT_ID_PREFIX.character,
     personality: trimTo(raw.personality, BIBLE_LIMITS.PERSONALITY_MAX),
     background: trimTo(raw.background, BIBLE_LIMITS.BACKGROUND_MAX),
     notes: trimTo(raw.notes, BIBLE_LIMITS.NOTES_MAX),
-    imageRefs: cleanStringArray(raw.imageRefs, BIBLE_LIMITS.IMAGE_REF_MAX, BIBLE_LIMITS.IMAGE_REFS_PER_ENTRY_MAX),
+    // Voice binding for VO synthesis (kokoro/piper local OSS, ElevenLabs
+    // when configured). null = use the project default at synth time.
+    voiceId: trimTo(raw.voiceId, BIBLE_LIMITS.VOICE_ID_MAX) || null,
+    imageRefs,
+    // Pinned visual anchor (A3). One of imageRefs marked canonical so
+    // downstream renders + the UI know which to lean on.
+    primaryImageRef: derivePrimaryImageRef(raw.primaryImageRef, imageRefs),
+    // Wardrobes (A2): outfit/styling variants applied on top of
+    // physicalDescription. Empty array stays the legacy shape — every
+    // existing character keeps rendering through physicalDescription alone.
+    wardrobes: sanitizeWardrobeList(raw.wardrobes, { preserveTimestamps }),
     firstAppearance: ensureFirstAppearance(raw.firstAppearance),
     evidence: cleanStringArray(raw.evidence, BIBLE_LIMITS.EVIDENCE_ITEM_MAX, BIBLE_LIMITS.EVIDENCE_PER_ENTRY_MAX),
     missingFromProse: cleanStringArray(raw.missingFromProse, BIBLE_LIMITS.EVIDENCE_ITEM_MAX, BIBLE_LIMITS.EVIDENCE_PER_ENTRY_MAX),
-    source: ensureSource(raw.source),
+    ...applyCanonExtras(raw),
     createdAt: created,
     updatedAt: preserveTimestamps && isStr(raw.updatedAt) ? raw.updatedAt : nowIso(),
   };
@@ -165,6 +285,7 @@ export function sanitizeSetting(raw, { idPrefix = DEFAULT_ID_PREFIX.setting, pre
   // either there's nothing for a scene matcher to key on.
   if (!name && !slugline) return null;
   const created = preserveTimestamps && isStr(raw.createdAt) ? raw.createdAt : nowIso();
+  const imageRefs = cleanStringArray(raw.imageRefs, BIBLE_LIMITS.IMAGE_REF_MAX, BIBLE_LIMITS.IMAGE_REFS_PER_ENTRY_MAX);
   return {
     id: ensureId(raw.id, idPrefix),
     name,
@@ -173,12 +294,20 @@ export function sanitizeSetting(raw, { idPrefix = DEFAULT_ID_PREFIX.setting, pre
     palette: trimTo(raw.palette, BIBLE_LIMITS.PALETTE_MAX),
     era: trimTo(raw.era, BIBLE_LIMITS.ERA_MAX),
     weather: trimTo(raw.weather, BIBLE_LIMITS.WEATHER_MAX),
+    // INT/EXT + time-of-day enums (Cluster A). null when unset — scene-prompt
+    // composer skips the metadata fragment in that case so legacy settings
+    // keep rendering with description-only prompts.
+    intExt: trimEnum(raw.intExt, SETTING_INT_EXT_SET),
+    timeOfDay: trimEnum(raw.timeOfDay, SETTING_TIME_OF_DAY_SET),
     recurringDetails: trimTo(raw.recurringDetails, BIBLE_LIMITS.RECURRING_DETAILS_MAX),
     notes: trimTo(raw.notes, BIBLE_LIMITS.NOTES_MAX),
+    imageRefs,
+    // A4: clean-plate / canonical location render pinned for downstream.
+    primaryImageRef: derivePrimaryImageRef(raw.primaryImageRef, imageRefs),
     firstAppearance: ensureFirstAppearance(raw.firstAppearance),
     evidence: cleanStringArray(raw.evidence, BIBLE_LIMITS.EVIDENCE_ITEM_MAX, BIBLE_LIMITS.EVIDENCE_PER_ENTRY_MAX),
     missingFromProse: cleanStringArray(raw.missingFromProse, BIBLE_LIMITS.EVIDENCE_ITEM_MAX, BIBLE_LIMITS.EVIDENCE_PER_ENTRY_MAX),
-    source: ensureSource(raw.source),
+    ...applyCanonExtras(raw),
     createdAt: created,
     updatedAt: preserveTimestamps && isStr(raw.updatedAt) ? raw.updatedAt : nowIso(),
   };
@@ -189,6 +318,7 @@ export function sanitizeObject(raw, { idPrefix = DEFAULT_ID_PREFIX.object, prese
   const name = trimTo(raw.name, BIBLE_LIMITS.NAME_MAX);
   if (!name) return null;
   const created = preserveTimestamps && isStr(raw.createdAt) ? raw.createdAt : nowIso();
+  const imageRefs = cleanStringArray(raw.imageRefs, BIBLE_LIMITS.IMAGE_REF_MAX, BIBLE_LIMITS.IMAGE_REFS_PER_ENTRY_MAX);
   return {
     id: ensureId(raw.id, idPrefix),
     name,
@@ -196,10 +326,13 @@ export function sanitizeObject(raw, { idPrefix = DEFAULT_ID_PREFIX.object, prese
     description: trimTo(raw.description, BIBLE_LIMITS.OBJECT_DESCRIPTION_MAX),
     significance: trimTo(raw.significance, BIBLE_LIMITS.SIGNIFICANCE_MAX),
     notes: trimTo(raw.notes, BIBLE_LIMITS.NOTES_MAX),
+    imageRefs,
+    // A5: canonical prop / hero-object reference render.
+    primaryImageRef: derivePrimaryImageRef(raw.primaryImageRef, imageRefs),
     firstAppearance: ensureFirstAppearance(raw.firstAppearance),
     evidence: cleanStringArray(raw.evidence, BIBLE_LIMITS.EVIDENCE_ITEM_MAX, BIBLE_LIMITS.EVIDENCE_PER_ENTRY_MAX),
     missingFromProse: cleanStringArray(raw.missingFromProse, BIBLE_LIMITS.EVIDENCE_ITEM_MAX, BIBLE_LIMITS.EVIDENCE_PER_ENTRY_MAX),
-    source: ensureSource(raw.source),
+    ...applyCanonExtras(raw),
     createdAt: created,
     updatedAt: preserveTimestamps && isStr(raw.updatedAt) ? raw.updatedAt : nowIso(),
   };
@@ -240,14 +373,14 @@ const SANITIZERS = Object.freeze({
 // so a later entry in the same batch resolves to the canonical record.
 const MERGE_CONFIG = Object.freeze({
   character: {
-    userEditable: ['role', 'physicalDescription', 'personality', 'background'],
+    userEditable: ['role', 'physicalDescription', 'personality', 'background', 'wardrobes'],
     keyFields: [
       { field: 'name', normalize: normalizeBibleName },
       { field: 'aliases', normalize: normalizeBibleName },
     ],
   },
   setting: {
-    userEditable: ['description', 'palette', 'era', 'weather', 'recurringDetails'],
+    userEditable: ['description', 'palette', 'era', 'weather', 'intExt', 'timeOfDay', 'recurringDetails'],
     keyFields: [
       { field: 'slugline', normalize: normalizeSlugline },
       { field: 'name', normalize: normalizeSlugline },
@@ -315,8 +448,22 @@ const sortKey = (kind) => (entry) => {
  *   - prose-derived fields (firstAppearance/evidence/missingFromProse)
  *     refresh verbatim including explicit nulls
  *   - blank key fields backfill from incoming + re-index
+ *
+ * Lock semantics: when an existing matched entry has `locked === true`,
+ * field backfills + prose-field rewrites are skipped — only `evidence[]`
+ * appends (deduped) so the crossover trail still accumulates. `autoLock`
+ * stamps new inserts as locked + carries `sourceSeriesId` so a series-driven
+ * extraction cannot be silently rewritten by a later AI pass.
+ *
+ * Default source stays 'ai' (legacy) so writers-room badge UI is unaffected;
+ * universe-canon callers pass `BIBLE_SOURCE.*` explicitly.
  */
-export function mergeExtractedBible(existing, incoming, kind, { idPrefix = DEFAULT_ID_PREFIX[kind] } = {}) {
+export function mergeExtractedBible(existing, incoming, kind, {
+  idPrefix = DEFAULT_ID_PREFIX[kind],
+  source = 'ai',
+  autoLock = false,
+  sourceSeriesId = null,
+} = {}) {
   if (!Array.isArray(existing)) existing = [];
   const keyOf = sortKey(kind);
   if (!Array.isArray(incoming)) {
@@ -328,6 +475,20 @@ export function mergeExtractedBible(existing, incoming, kind, { idPrefix = DEFAU
   const map = new Map();
   for (const e of existing) indexEntry(map, e, cfg.keyFields);
 
+  const appendEvidence = (current, additions) => {
+    const out = Array.isArray(current) ? [...current] : [];
+    const seen = new Set(out.map(normalizeBibleName));
+    const trimmed = cleanStringArray(additions, BIBLE_LIMITS.EVIDENCE_ITEM_MAX, BIBLE_LIMITS.EVIDENCE_PER_ENTRY_MAX);
+    for (const item of trimmed) {
+      const key = normalizeBibleName(item);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(item);
+      if (out.length >= BIBLE_LIMITS.EVIDENCE_PER_ENTRY_MAX) break;
+    }
+    return out;
+  };
+
   for (const rawIncoming of incoming) {
     if (!rawIncoming || typeof rawIncoming !== 'object') continue;
     // Sanitize the incoming entry through the same shape the existing
@@ -337,6 +498,13 @@ export function mergeExtractedBible(existing, incoming, kind, { idPrefix = DEFAU
     if (!sane) continue;
     const found = lookupExisting(map, sane, cfg.keyFields);
     if (found) {
+      if (found.locked === true) {
+        if ('evidence' in rawIncoming) {
+          found.evidence = appendEvidence(found.evidence, sane.evidence);
+        }
+        found.updatedAt = nowIso();
+        continue;
+      }
       for (const field of cfg.userEditable) {
         if (isBlank(found[field]) && !isBlank(sane[field])) {
           found[field] = sane[field];
@@ -368,7 +536,9 @@ export function mergeExtractedBible(existing, incoming, kind, { idPrefix = DEFAU
       // Without this, the merged entries would silently truncate on next
       // read.
       if (existing.length >= BIBLE_LIMITS.ENTRIES_PER_BIBLE_MAX) continue;
-      const inserted = { ...sane, source: 'ai' };
+      const inserted = { ...sane, source };
+      if (sourceSeriesId) inserted.sourceSeriesId = sourceSeriesId;
+      if (autoLock) inserted.locked = true;
       existing.push(inserted);
       indexEntry(map, inserted, cfg.keyFields);
     }

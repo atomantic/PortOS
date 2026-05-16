@@ -1,5 +1,5 @@
 /**
- * Shared editor for the four text stages (idea, prose, comicScript, tvScript).
+ * Shared editor for the four text stages (idea, prose, comicScript, teleplay).
  * Each per-stage component wraps this with stage-specific labels + placeholders
  * — the underlying mechanic is identical: textarea for the user's edits +
  * generate button that calls the server's text-stage runner.
@@ -8,35 +8,24 @@
 import { useEffect, useState } from 'react';
 import { Loader2, Sparkles, Save } from 'lucide-react';
 import toast from '../../ui/Toast';
-import { generatePipelineStage, updatePipelineIssue, PIPELINE_STAGE_LABELS } from '../../../services/api';
+import {
+  generatePipelineStage, updatePipelineIssue,
+  PIPELINE_STAGE_LABELS,
+  PIPELINE_STAGE_STATUS_LABEL as STATUS_LABEL,
+  PIPELINE_STAGE_STATUS_COLOR as STATUS_COLOR,
+} from '../../../services/api';
 import { useAsyncAction } from '../../../hooks/useAsyncAction';
-
-const STATUS_LABEL = {
-  empty: 'Not started',
-  generating: 'Generating…',
-  ready: 'Ready',
-  edited: 'Edited',
-  'needs-review': 'Needs review',
-  error: 'Error',
-};
-
-const STATUS_COLOR = {
-  empty: 'text-gray-500',
-  generating: 'text-port-accent',
-  ready: 'text-port-success',
-  edited: 'text-port-warning',
-  'needs-review': 'text-port-warning',
-  error: 'text-port-error',
-};
 
 export default function TextStagePanel({
   issue,
+  series,
   stageId,
   onStageUpdate,
   seedPlaceholder,
   outputPlaceholder,
   generateLabel = 'Generate',
   extraActions = null,
+  actionsGated = false,
 }) {
   const stage = issue.stages?.[stageId] || { status: 'empty', input: '', output: '' };
   const [draftOutput, setDraftOutput] = useState(stage.output || '');
@@ -55,7 +44,11 @@ export default function TextStagePanel({
   }, [stage.output, stage.input, stage.status, stage.lastRunId]);
 
   const [runGenerate, localGenerating] = useAsyncAction(
-    () => generatePipelineStage(issue.id, stageId, { seedInput: draftInput }),
+    () => generatePipelineStage(issue.id, stageId, {
+      seedInput: draftInput,
+      providerId: series?.llm?.provider || undefined,
+      model: series?.llm?.model || undefined,
+    }),
     { errorMessage: `Failed to generate ${stageId}` },
   );
   const generating = localGenerating || serverGenerating;
@@ -115,7 +108,8 @@ export default function TextStagePanel({
           <button
             type="button"
             onClick={handleGenerate}
-            disabled={generating}
+            disabled={generating || actionsGated}
+            title={actionsGated ? 'Saving settings…' : undefined}
             className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-port-accent text-white text-sm font-medium disabled:opacity-50"
           >
             {generating ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}

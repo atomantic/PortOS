@@ -5,12 +5,13 @@ import { fileURLToPath, pathToFileURL } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const rootDir = join(__dirname, '..');
-const migrationsDir = join(rootDir, 'data', 'migrations');
-const appliedFile = join(migrationsDir, '.applied.json');
+const migrationsDir = join(__dirname, 'migrations');
+const appliedFile = join(rootDir, 'data', 'migrations.applied.json');
 
 async function run() {
-  // Ensure migrations directory exists
-  await mkdir(migrationsDir, { recursive: true });
+  // Ensure data/ exists so we can persist applied state (migrationsDir
+  // ships in the repo and always exists).
+  await mkdir(dirname(appliedFile), { recursive: true });
 
   // Load applied migrations list (default to [] on missing/unreadable file, throw on corrupted JSON)
   let applied = [];

@@ -47,11 +47,11 @@ describe('resolveNavCommand — fuzzy matching', () => {
     expect(resolveNavCommand('goals')?.path).toBe('/goals/list');
   });
 
-  it('resolves World Builder to its new standalone Create path', () => {
-    // Promoted out of /media/world-builder; nav alias must follow.
+  it('resolves Universe Builder to its new standalone Create path', () => {
+    // Promoted out of /media/universe-builder; nav alias must follow.
     const hit = resolveNavCommand('world builder');
-    expect(hit?.path).toBe('/world-builder');
-    expect(hit?.command?.id).toBe('nav.create.world-builder');
+    expect(hit?.path).toBe('/universe-builder');
+    expect(hit?.command?.id).toBe('nav.create.universe-builder');
   });
 
   it('resolves "pipeline" to the new Create Pipeline page (not CoS Workflow)', () => {

@@ -76,7 +76,7 @@ export const WORKFLOW_STAGES = [
     id: 'build',
     label: 'Build',
     description: 'Implement the next planned feature. Gated on do-replan so new work is grounded in a fresh plan.',
-    taskTypes: ['feature-ideas'],
+    taskTypes: ['feature-ideas', 'plan-task'],
     jobIds: []
   },
   {

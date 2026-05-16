@@ -34,7 +34,6 @@ import {
   killAgentViaRunner,
   getAgentStatsFromRunner,
   terminateAllAgentsViaRunner,
-  sendBtwToAgent,
   getAgentOutputFromRunner,
   executeCliRunViaRunner,
   getActiveRunsFromRunner,
@@ -329,33 +328,6 @@ describe('cosRunnerClient', () => {
     it('should throw on failure', async () => {
       fetchWithTimeout.mockResolvedValue(mockResponse(false, {}));
       await expect(terminateAllAgentsViaRunner()).rejects.toThrow('Failed to terminate agents');
-    });
-  });
-
-  // ===========================================================================
-  // sendBtwToAgent
-  // ===========================================================================
-  describe('sendBtwToAgent', () => {
-    it('should POST BTW message and return result', async () => {
-      fetchWithTimeout.mockResolvedValue(mockResponse(true, { sent: true }));
-      const result = await sendBtwToAgent('agent-1', 'Hey, check this out');
-      expect(result).toEqual({ sent: true });
-      expect(fetchWithTimeout).toHaveBeenCalledWith(
-        expect.stringContaining('/btw/agent-1'),
-        expect.objectContaining({
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' }
-        }),
-        30000
-      );
-
-      const callBody = JSON.parse(fetchWithTimeout.mock.calls[0][1].body);
-      expect(callBody.message).toBe('Hey, check this out');
-    });
-
-    it('should throw on failure', async () => {
-      fetchWithTimeout.mockResolvedValue(mockResponse(false, { error: 'Agent not running' }));
-      await expect(sendBtwToAgent('bad-id', 'msg')).rejects.toThrow('Agent not running');
     });
   });
 

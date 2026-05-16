@@ -11,29 +11,32 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Plus, Workflow as WorkflowIcon, Trash2, Loader2, Globe2 } from 'lucide-react';
 import toast from '../components/ui/Toast';
+import ShareToButton from '../components/sharing/ShareToButton';
+import OriginBadge from '../components/sharing/OriginBadge';
 import {
   listPipelineSeries,
   createPipelineSeries,
   deletePipelineSeries,
-  PIPELINE_TARGET_FORMATS,
-  listWorlds,
+  listUniverses,
   WORLD_LOGLINE_MAX,
   WORLD_PREMISE_MAX,
   WORLD_STYLE_NOTES_MAX,
 } from '../services/api';
+import { ArcShapePicker, ArcShapeSparkline, getStoryShape } from '../components/pipeline/StoryShapes';
 
 const emptyForm = () => ({
   name: '',
-  worldId: '',
+  universeId: '',
   logline: '',
   premise: '',
   styleNotes: '',
-  targetFormat: 'comic+tv',
+  shape: null,
+  issueCountTarget: '',
 });
 
 export default function Pipeline() {
   const [series, setSeries] = useState([]);
-  const [worlds, setWorlds] = useState([]);
+  const [universes, setWorlds] = useState([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
   const [showForm, setShowForm] = useState(false);
@@ -42,10 +45,10 @@ export default function Pipeline() {
   useEffect(() => {
     Promise.all([
       listPipelineSeries().catch(() => []),
-      // Worlds are optional — failing the fetch should still let the user
+      // Universes are optional — failing the fetch should still let the user
       // create a series without one. Surface the error as a quiet toast.
-      listWorlds().catch((err) => {
-        toast.error(err.message || 'Failed to load worlds');
+      listUniverses().catch((err) => {
+        toast.error(err.message || 'Failed to load universes');
         return [];
       }),
     ]).then(([s, w]) => {
@@ -59,18 +62,18 @@ export default function Pipeline() {
   // form fields that are currently empty so a user who's already typed a
   // logline doesn't lose it when they pick a world afterwards.
   const BIBLE_FIELDS = ['logline', 'premise', 'styleNotes'];
-  const handleWorldChange = (worldId) => {
-    if (!worldId) {
-      setForm((f) => ({ ...f, worldId: '' }));
+  const handleWorldChange = (universeId) => {
+    if (!universeId) {
+      setForm((f) => ({ ...f, universeId: '' }));
       return;
     }
-    const w = worlds.find((x) => x.id === worldId);
+    const w = universes.find((x) => x.id === universeId);
     if (!w) {
-      setForm((f) => ({ ...f, worldId }));
+      setForm((f) => ({ ...f, universeId }));
       return;
     }
     setForm((f) => {
-      const next = { ...f, worldId };
+      const next = { ...f, universeId };
       for (const k of BIBLE_FIELDS) {
         if (!f[k].trim()) next[k] = w[k] || '';
       }
@@ -86,13 +89,15 @@ export default function Pipeline() {
       return;
     }
     setCreating(true);
+    const target = parseInt(form.issueCountTarget, 10);
     const created = await createPipelineSeries({
       name,
       logline: form.logline.trim(),
       premise: form.premise.trim(),
       styleNotes: form.styleNotes.trim(),
-      worldId: form.worldId || undefined,
-      targetFormat: form.targetFormat,
+      universeId: form.universeId || undefined,
+      issueCountTarget: Number.isFinite(target) && target > 0 ? target : undefined,
+      arc: form.shape ? { shape: form.shape } : undefined,
     }).catch((err) => {
       toast.error(err.message || 'Failed to create series');
       return null;
@@ -129,7 +134,7 @@ export default function Pipeline() {
       <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
         <div className="flex items-center gap-3">
           <WorkflowIcon className="w-6 h-6 text-port-accent" />
-          <h1 className="text-2xl font-bold text-white">Pipeline</h1>
+          <h1 className="text-2xl font-bold text-white">Series Pipeline</h1>
         </div>
         <button
           type="button"
@@ -144,7 +149,7 @@ export default function Pipeline() {
       <p className="text-sm text-gray-400 mb-6">
         Each series carries a shared bible — logline, premise, characters, style, optional World — that
         every issue/episode below inherits into its stage prompts. Pipeline runs an idea seed through prose →
-        comic script + TV script (text), and hands off to image gen / Creative Director for the visual stages.
+        comic script + teleplay (text), and hands off to image gen / Creative Director for the visual stages.
       </p>
 
       {showForm && (
@@ -171,20 +176,20 @@ export default function Pipeline() {
               </label>
               <select
                 id="series-world"
-                value={form.worldId}
+                value={form.universeId}
                 onChange={(e) => handleWorldChange(e.target.value)}
                 className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
               >
                 <option value="">— None —</option>
-                {worlds.map((w) => (
+                {universes.map((w) => (
                   <option key={w.id} value={w.id}>{w.name}</option>
                 ))}
               </select>
               <p className="text-[11px] text-gray-500 mt-1">
-                {form.worldId
+                {form.universeId
                   ? 'Logline / premise / style notes pulled from the world — edit below.'
-                  : worlds.length === 0
-                    ? 'No worlds yet. Build one in Media Gen → World Builder.'
+                  : universes.length === 0
+                    ? 'No universes yet. Build one in Media Gen → Universe Builder.'
                     : 'Pick a world to auto-fill the bible.'}
               </p>
             </div>
@@ -202,6 +207,30 @@ export default function Pipeline() {
               className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
               maxLength={WORLD_LOGLINE_MAX}
             />
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-[1fr_180px] gap-3 items-start">
+            <ArcShapePicker
+              value={form.shape}
+              onChange={(shape) => setForm((f) => ({ ...f, shape }))}
+            />
+            <div>
+              <label htmlFor="series-issue-count" className="block text-[10px] uppercase tracking-wider text-gray-500 mb-1.5">
+                Story size (issues / episodes)
+              </label>
+              <input
+                id="series-issue-count"
+                type="number"
+                value={form.issueCountTarget}
+                onChange={(e) => setForm((f) => ({ ...f, issueCountTarget: e.target.value }))}
+                placeholder="e.g. 12"
+                min={0}
+                max={999}
+                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
+              />
+              <p className="text-[11px] text-gray-500 mt-1">
+                Target count across the whole arc — guides issue/episode planning.
+              </p>
+            </div>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div>
@@ -233,21 +262,6 @@ export default function Pipeline() {
               />
             </div>
           </div>
-          <div>
-            <label htmlFor="series-format" className="block text-xs uppercase tracking-wider text-gray-500 mb-1">
-              Target format
-            </label>
-            <select
-              id="series-format"
-              value={form.targetFormat}
-              onChange={(e) => setForm((f) => ({ ...f, targetFormat: e.target.value }))}
-              className="px-3 py-2 bg-port-bg border border-port-border rounded text-white"
-            >
-              {PIPELINE_TARGET_FORMATS.map((tf) => (
-                <option key={tf} value={tf}>{tf}</option>
-              ))}
-            </select>
-          </div>
           <div className="flex gap-2">
             <button
               type="submit"
@@ -274,19 +288,36 @@ export default function Pipeline() {
         <div className="text-gray-500 text-sm">No series yet. Click <span className="text-port-accent">New Series</span> to start.</div>
       ) : (
         <ul className="space-y-2">
-          {series.map((s) => (
-            <li key={s.id} className="flex items-center justify-between gap-3 p-3 bg-port-card border border-port-border rounded-lg hover:border-port-accent/40 transition-colors">
+          {series.map((s) => {
+            const shapeDef = s.arc?.shape ? getStoryShape(s.arc.shape) : null;
+            return (
+            <li key={s.id} className="flex items-start justify-between gap-3 p-3 bg-port-card border border-port-border rounded-lg hover:border-port-accent/40 transition-colors">
               <Link to={`/pipeline/series/${s.id}`} className="flex-1 min-w-0">
-                <div className="text-white font-medium truncate">{s.name}</div>
-                {s.logline ? (
-                  <div className="text-xs text-gray-500 truncate">{s.logline}</div>
-                ) : (
-                  <div className="text-xs text-gray-600 italic">No logline yet</div>
-                )}
-                <div className="text-xs text-gray-600 mt-1">
-                  {s.targetFormat} {s.issueCountTarget ? `• target ${s.issueCountTarget} issues` : ''}
+                <div className="text-white font-medium flex items-center gap-2 flex-wrap">
+                  <span>{s.name}</span>
+                  {s.origin ? <OriginBadge origin={s.origin} compact /> : null}
+                  {shapeDef ? (
+                    <span
+                      className="inline-flex items-center gap-1.5 text-[10px] uppercase tracking-wider px-2 py-0.5 rounded bg-port-bg border border-port-accent/40 text-port-accent"
+                      title={shapeDef.description}
+                    >
+                      <ArcShapeSparkline shape={shapeDef} width={40} height={14} />
+                      {shapeDef.label}
+                    </span>
+                  ) : null}
                 </div>
+                {s.logline ? (
+                  <div className="text-xs text-gray-500 mt-1 whitespace-pre-wrap break-words">{s.logline}</div>
+                ) : (
+                  <div className="text-xs text-gray-600 italic mt-1">No logline yet</div>
+                )}
+                {s.issueCountTarget ? (
+                  <div className="text-xs text-gray-600 mt-1">
+                    Target {s.issueCountTarget} issues / episodes
+                  </div>
+                ) : null}
               </Link>
+              <ShareToButton kind="series" ids={[s.id]} compact />
               <button
                 type="button"
                 onClick={() => handleDelete(s)}
@@ -297,7 +328,8 @@ export default function Pipeline() {
                 <Trash2 size={16} />
               </button>
             </li>
-          ))}
+            );
+          })}
         </ul>
       )}
     </div>

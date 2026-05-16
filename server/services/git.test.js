@@ -232,5 +232,36 @@ describe('extractAgentSummary', () => {
     expect(summary).toContain('All tests pass');
     expect(summary).not.toContain('🔧');
   });
+
+  it('strips leading "## Summary" heading so the PR body does not double it up', () => {
+    const output = [
+      '🔧 Using Edit tool',
+      '  → /path/to/file.js',
+      '',
+      '## Summary',
+      '',
+      'Added a Run Backup Now button and default-exclusions display.',
+      'All tests pass.'
+    ].join('\n');
+
+    const summary = extractAgentSummary(output);
+    expect(summary).not.toMatch(/^#{1,6}?\s*summary/i);
+    expect(summary?.split('\n')[0]).toContain('Added a Run Backup Now button');
+  });
+
+  it('strips leading "Summary:" (no markdown prefix) too', () => {
+    const output = [
+      '🔧 Using Edit tool',
+      '  → /path/to/file.js',
+      '',
+      'Summary:',
+      '',
+      'Added a Run Backup Now button and default-exclusions display.',
+      'All tests pass.'
+    ].join('\n');
+
+    const summary = extractAgentSummary(output);
+    expect(summary?.split('\n')[0]).toContain('Added a Run Backup Now button');
+  });
 });
 

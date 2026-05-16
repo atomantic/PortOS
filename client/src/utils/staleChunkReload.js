@@ -20,12 +20,22 @@ export const isStaleChunkError = (err) => {
   return STALE_CHUNK_PATTERNS.some(p => msg.includes(p));
 };
 
-// Reloads once per session — sessionStorage guard prevents infinite loops if
-// the new bundle is also broken. Returns true if a reload was triggered.
+// Anti-loop guard: stash the build id we already attempted a reload for. A
+// stale-chunk error in a *different* build (one we haven't yet tried to
+// recover from) still triggers a reload. The old session-wide one-shot
+// guard left the user stuck on the error screen after a second rebuild.
+const getCurrentBuildId = () => {
+  if (typeof document === 'undefined') return null;
+  const el = document.querySelector('meta[name="portos-build-id"]');
+  return el ? el.getAttribute('content') : null;
+};
+
 export const reloadOnceForStaleChunk = () => {
-  if (sessionStorage.getItem(RELOAD_FLAG)) return false;
-  sessionStorage.setItem(RELOAD_FLAG, '1');
-  console.warn('🔄 Stale chunk detected — reloading to pick up new bundle');
+  const buildId = getCurrentBuildId();
+  const flag = buildId ? `${buildId}` : '1';
+  if (sessionStorage.getItem(RELOAD_FLAG) === flag) return false;
+  sessionStorage.setItem(RELOAD_FLAG, flag);
+  console.warn(`🔄 Stale chunk detected (build ${buildId || 'unknown'}) — reloading to pick up new bundle`);
   window.location.reload();
   return true;
 };

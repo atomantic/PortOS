@@ -19,17 +19,19 @@ import { getMediaJob } from '../services/apiMediaJobs';
  * back to a page mid-render picks up the in-flight job's snapshot
  * instead of showing an empty preview until the next event lands.
  */
+const INITIAL_STATE = Object.freeze({
+  status: 'unknown',
+  progress: 0,
+  step: 0,
+  totalSteps: null,
+  currentImage: null,
+  filename: null,
+  path: null,
+  error: null,
+});
+
 export default function useMediaJobProgress(jobId, { kind = 'image' } = {}) {
-  const [state, setState] = useState(() => ({
-    status: 'unknown',
-    progress: 0,
-    step: 0,
-    totalSteps: null,
-    currentImage: null,
-    filename: null,
-    path: null,
-    error: null,
-  }));
+  const [state, setState] = useState(INITIAL_STATE);
   // Track mount so the initial fetch's setState doesn't fire after unmount
   // (the panel could be removed while the GET is in flight).
   //
@@ -49,10 +51,7 @@ export default function useMediaJobProgress(jobId, { kind = 'image' } = {}) {
     // Reset state on every jobId change so the previous job's filename /
     // currentImage doesn't briefly leak into the new job's render window
     // (between the listener attach and the new fetch resolving).
-    setState({
-      status: 'unknown', progress: 0, step: 0, totalSteps: null,
-      currentImage: null, filename: null, path: null, error: null,
-    });
+    setState(INITIAL_STATE);
     if (!jobId) return undefined;
 
     // Hydrate from the server. The job may already be completed (the user
@@ -69,7 +68,9 @@ export default function useMediaJobProgress(jobId, { kind = 'image' } = {}) {
         error: job.error || prev.error,
       }));
     }).catch(() => {
-      // 404 just means the job archive expired — keep `status: unknown`.
+      // 404 (job past 24h archive TTL) and any other failure stay silent;
+      // MediaJobThumb's `fallbackFilename` path bypasses this fetch entirely
+      // when the parent already has the completed render's filename.
     });
 
     const evtPrefix = kind === 'video' ? 'video-gen' : 'image-gen';

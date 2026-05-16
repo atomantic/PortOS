@@ -30,6 +30,8 @@ import { analyzeAgentFailure, resolveFailedTaskUpdate } from './agentErrorAnalys
 import { createAgentRun, completeAgentRun, checkForTaskCommit } from './agentRunTracking.js';
 import { buildAgentPrompt, getAppWorkspace, getAppDataForTask, createJiraTicketForTask } from './agentPromptBuilder.js';
 import { buildCliSpawnConfig, isClaudeCliProvider, getClaudeSettingsEnv, spawnDirectly } from './agentCliSpawning.js';
+import { extractCodexAssistantTail } from '../lib/codexAssistantExtract.js';
+import { buildTuiSpawnConfig, spawnTuiAgent } from './agentTuiSpawning.js';
 import { selectModelForTask } from './agentModelSelection.js';
 import { processAgentCompletion } from './agentCompletion.js';
 import { activeAgents, runnerAgents, spawningTasks, useRunner, isTruthyMeta, isFalsyMeta } from './agentState.js';
@@ -39,16 +41,6 @@ import { writeFile } from 'fs/promises';
 const ROOT_DIR = PATHS.root;
 const AGENTS_DIR = PATHS.cosAgents;
 
-
-/**
- * Remove BTW.md from agent workspace after completion.
- * Prevents ephemeral context files from being committed to git.
- */
-async function cleanupBtwFile(workspacePath) {
-  if (!workspacePath) return;
-  const btwPath = join(workspacePath, 'BTW.md');
-  await rm(btwPath).catch(() => {});
-}
 
 /**
  * Sync running agents from the runner (recovery after server restart).
@@ -439,8 +431,14 @@ export async function spawnAgentForTask(task) {
     }
   } // end !isReadOnly
 
-  // Build the agent prompt (includes worktree and JIRA context if applicable)
-  const prompt = await buildAgentPrompt(task, config, workspacePath, worktreeInfo, isTruthyMeta);
+  const isTui = provider.type === 'tui';
+
+  // Build the agent prompt. `provider.type` drives the light-vs-full split
+  // inside buildAgentPrompt — see its doc comment.
+  const prompt = await buildAgentPrompt(task, config, workspacePath, worktreeInfo, isTruthyMeta, {
+    providerType: provider.type,
+    providerId: provider.id
+  });
 
   // Create agent directory
   const agentDir = join(AGENTS_DIR, agentId);
@@ -453,6 +451,7 @@ export async function spawnAgentForTask(task) {
 
   // Create run entry for usage tracking
   const { runId } = await createAgentRun(agentId, task, selectedModel, provider, workspacePath, resolvedAppName);
+  const executionMode = isTui ? 'tui' : useRunner ? 'runner' : 'direct';
 
   // Register the agent with model info
   await registerAgent(agentId, task.id, {
@@ -470,7 +469,8 @@ export async function spawnAgentForTask(task) {
     modelReason: modelSelection.reason,
     runId,
     phase: 'initializing',
-    useRunner,
+    useRunner: isTui ? false : useRunner,
+    executionMode,
     taskAnalysisType: task.metadata?.analysisType || null,
     taskReviewType: task.metadata?.reviewType || null,
     taskApp: task.metadata?.app || null,
@@ -518,10 +518,18 @@ export async function spawnAgentForTask(task) {
     cosEvents.emit('job:spawned', { jobId: task.metadata.jobId });
   }
 
-  // Build CLI-specific spawn configuration
-  const cliConfig = buildCliSpawnConfig(provider, selectedModel);
+  const cliConfig = isTui
+    ? buildTuiSpawnConfig(provider, selectedModel)
+    : buildCliSpawnConfig(provider, selectedModel);
 
-  emitLog('success', `Spawning agent for task ${task.id}`, { agentId, model: selectedModel, mode: useRunner ? 'runner' : 'direct', cli: cliConfig.command, lane: laneName, worktree: !!worktreeInfo });
+  emitLog('success', `Spawning agent for task ${task.id}`, {
+    agentId,
+    model: selectedModel,
+    mode: executionMode,
+    cli: cliConfig.command,
+    lane: laneName,
+    worktree: !!worktreeInfo
+  });
 
   // Dedup-window fix: keep the `spawningTasks` guard active across the actual
   // spawn call, not just up to the in_progress flip. Deleting between
@@ -534,6 +542,12 @@ export async function spawnAgentForTask(task) {
   // closes that race. release() must NOT run here on the success path; the
   // lane is released by the agent-completion handler when the work finishes.
   try {
+    if (isTui) {
+      return await spawnTuiAgent(agentId, task, prompt, workspacePath, selectedModel, provider, runId, cliConfig, agentDir, toolExecution.id, laneName, {
+        cleanupWorktreeFn: cleanupAgentWorktree,
+        isTruthyMetaFn: isTruthyMeta
+      });
+    }
     if (useRunner) {
       return await spawnViaRunner(agentId, task, { prompt, workspacePath, model: selectedModel, provider, runId, cliConfig, executionId: toolExecution.id, laneName });
     }
@@ -641,6 +655,9 @@ export async function spawnViaRunner(agentId, task, opts) {
 export function extractFinalSummary(outputBuffer) {
   if (!outputBuffer) return null;
 
+  const codexTail = extractCodexAssistantTail(outputBuffer);
+  if (codexTail) return codexTail;
+
   const lines = outputBuffer.split('\n');
   const contentLines = [];
   let foundContent = false;
@@ -666,6 +683,12 @@ const RE_SIMPLIFY_ACTION = /\b(run|running|launch|now)\b/i;
 
 export function extractSimplifySummaries(outputBuffer) {
   if (!outputBuffer) return null;
+
+  // Codex CLI cannot execute slash commands like /simplify, so any match
+  // inside its output is from a diff/grep dump that quotes source code.
+  // Treat the assistant tail as the task summary and skip the simplify split.
+  const codexTail = extractCodexAssistantTail(outputBuffer);
+  if (codexTail) return { taskSummary: codexTail, simplifySummary: null };
 
   const lines = outputBuffer.split('\n');
   let simplifyIdx = -1;
@@ -1019,8 +1042,11 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
       const jiraPrBody = await git.generatePRDescription(workspace, targetBranch, jiraBranch, outputBuffer);
       const jiraPrBodyWithRef = `Resolves ${jiraTicketRef}\n\n${jiraPrBody}`;
 
+      const baseTitle = await git.suggestPRTitle(workspace, targetBranch, jiraBranch, task.description);
+      const jiraPrTitle = `${jiraTicketId}: ${baseTitle}`.substring(0, 100);
+
       const prResult = await git.createPR(workspace, {
-        title: `${jiraTicketId}: ${(task.description || 'CoS automated task').substring(0, 100)}`,
+        title: jiraPrTitle,
         body: jiraPrBodyWithRef,
         base: targetBranch,
         head: jiraBranch
@@ -1054,8 +1080,9 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
     });
   }
 
-  // Check for plan questions marker file (feature-ideas task needing user input)
-  if (task?.metadata?.analysisType === 'feature-ideas') {
+  // Check for plan questions marker file (feature-ideas / plan-task needing user input)
+  const planAnalysisType = task?.metadata?.analysisType;
+  if (planAnalysisType === 'feature-ideas' || planAnalysisType === 'plan-task') {
     const planWorkspace = agentState?.metadata?.workspacePath || task?.metadata?.repoPath || ROOT_DIR;
     const markerPath = join(planWorkspace, '.plan-questions.md');
 
@@ -1072,7 +1099,7 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
         message: markerContent,
         priority: PRIORITY_LEVELS.MEDIUM,
         link: appId ? `/apps/${appId}/documents` : undefined,
-        metadata: { appId, agentId, taskType: 'feature-ideas' }
+        metadata: { appId, agentId, taskType: planAnalysisType }
       }).catch(err => {
         emitLog('warn', `Failed to create plan_question notification: ${err.message}`, { agentId });
       });
@@ -1099,9 +1126,6 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
       .catch((err) => console.log(`⚠️ creativeDirector completion hook failed: ${err.message}`));
   }
 
-  // Clean up ephemeral BTW.md before worktree removal
-  await cleanupBtwFile(agentState?.metadata?.workspacePath);
-
   // Clean up worktree if agent was using one (skip merge when JIRA branch — PR handles merge)
   if (!jiraBranch) {
     const taskOpenPR = isTruthyMeta(agent.task?.metadata?.openPR);
@@ -1110,10 +1134,16 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
     // body — re-merging the worktree branch into the source workspace would
     // duplicate the squashed commits, so suppress the auto-merge fallback.
     const taskReviewLoopFollowUp = isTruthyMeta(agent.task?.metadata?.reviewLoopFollowUp);
+    // Claude Code CLI agents run `/simplify` + `/do:pr` themselves (see
+    // buildCliCompletionSection in agentPromptBuilder.js) — they push the
+    // branch and open the PR on their own. Mirror the TUI cleanup contract
+    // so PortOS doesn't double-fire `gh pr create` ("a pull request already
+    // exists" would preserve the worktree as a false-positive failure).
+    const agentOwnsPR = taskOpenPR && (agent.providerId === 'claude-code' || agent.providerId === 'claude-code-bedrock');
     const cleanupWarnings = await cleanupAgentWorktree(agentId, success, {
-      openPR: taskOpenPR,
-      requestCopilotReview: taskOpenPR && taskReviewLoop,
-      skipMerge: taskReviewLoopFollowUp,
+      openPR: agentOwnsPR ? false : taskOpenPR,
+      requestCopilotReview: !agentOwnsPR && taskOpenPR && taskReviewLoop,
+      skipMerge: taskReviewLoopFollowUp || agentOwnsPR,
       description: task?.description,
       agentOutput: outputBuffer,
       originalTask: task
@@ -1188,9 +1218,7 @@ export async function cleanupAgentWorktree(agentId, success, { openPR = false, r
       if (!targetBranch) {
         targetBranch = await git.getDefaultBranch(sourceWorkspace, { allowRemote: false }).catch(() => null) || 'main';
       }
-      const taskDesc = description || 'CoS automated task';
-      const firstLine = taskDesc.split(/[\r\n]/).find(l => l.trim()) || taskDesc;
-      const prTitle = firstLine.trim().substring(0, 100) || 'CoS automated task';
+      const prTitle = await git.suggestPRTitle(worktreePath, targetBranch, worktreeBranch, description);
 
       const prBody = await git.generatePRDescription(worktreePath, targetBranch, worktreeBranch, agentOutput);
 

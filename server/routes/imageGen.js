@@ -15,7 +15,9 @@ import { existsSync } from 'fs';
 import { copyFile, unlink } from 'fs/promises';
 import { randomUUID } from 'crypto';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import {
+  validateRequest, imageEdgeSchema, refineImagePixelCap, PIXEL_CAP_MESSAGE,
+} from '../lib/validation.js';
 import { optionalUpload } from '../lib/multipart.js';
 import * as imageGen from '../services/imageGen/index.js';
 import { local, IMAGE_GEN_MODES } from '../services/imageGen/index.js';
@@ -33,6 +35,8 @@ import { join, basename, resolve as resolvePath, sep as PATH_SEP } from 'node:pa
 import { readFile, writeFile } from 'fs/promises';
 import { STYLE_PRESETS } from '../lib/writersRoomStylePresets.js';
 import { cleanImageBuffer, CLEAN_LEVELS } from './imageClean.js';
+import { purgeImageRefFromAllSeries } from '../services/pipeline/series.js';
+import { purgeImageRefFromAllUniverses } from '../services/universeCanon.js';
 
 const router = Router();
 
@@ -45,8 +49,8 @@ const generateSchema = z.object({
   // `imageGen.mode` from settings.json.
   mode: z.enum(IMAGE_GEN_MODES).optional(),
   modelId: z.string().max(64).optional(),
-  width: z.number().int().min(64).max(2048).optional(),
-  height: z.number().int().min(64).max(2048).optional(),
+  width: imageEdgeSchema,
+  height: imageEdgeSchema,
   steps: z.number().int().min(1).max(150).optional(),
   cfgScale: z.number().min(0).max(30).optional(),
   guidance: z.number().min(0).max(30).optional(),
@@ -64,7 +68,7 @@ const generateSchema = z.object({
   // upload. Strength: 0.0 = ignore source, 1.0 = max influence.
   initImageFile: z.string().max(256).regex(/^[^/\\]+\.(png|jpg|jpeg|webp)$/i, 'init image must be a basename ending in png/jpg/jpeg/webp').optional(),
   initImageStrength: z.number().min(0).max(1).optional(),
-});
+}).refine(refineImagePixelCap, { message: PIXEL_CAP_MESSAGE, path: ['width'] });
 
 // JSON callers (SDAPI bridge, avatar route, the Imagine page's old payload
 // shape) skip the parser entirely; FormData callers get req.file + string
@@ -316,7 +320,27 @@ router.post('/cancel', asyncHandler(async (req, res) => {
 }));
 
 router.delete('/:filename', asyncHandler(async (req, res) => {
-  res.json(await local.deleteImage(req.params.filename));
+  const result = await local.deleteImage(req.params.filename);
+  // Sync both stores: pipeline series.characters/.settings/.objects[].imageRefs
+  // AND universe.characters/.settings/.objects[].imageRefs. Both are scanned
+  // because Phase A canon entities live on the universe; Phase B will collapse
+  // these into one source. Best-effort: a purge failure must not block the
+  // gallery delete itself.
+  const [seriesPurge, universePurge] = await Promise.all([
+    purgeImageRefFromAllSeries(req.params.filename).catch((err) => {
+      console.warn(`⚠️ Pipeline ref purge failed for ${req.params.filename}: ${err?.message || err}`);
+      return { removed: 0 };
+    }),
+    purgeImageRefFromAllUniverses(req.params.filename).catch((err) => {
+      console.warn(`⚠️ Universe canon purge failed for ${req.params.filename}: ${err?.message || err}`);
+      return { removed: 0 };
+    }),
+  ]);
+  const totalRemoved = seriesPurge.removed + universePurge.removed;
+  if (totalRemoved > 0) {
+    console.log(`🧹 Purged ${totalRemoved} canon ref(s) for ${req.params.filename} (series=${seriesPurge.removed}, universe=${universePurge.removed})`);
+  }
+  res.json({ ...result, canonRefsRemoved: totalRemoved });
 }));
 
 router.post('/:filename/visibility', asyncHandler(async (req, res) => {
@@ -463,13 +487,23 @@ router.get('/setup/flux2-status', asyncHandler(async (_req, res) => {
   });
 }));
 
+// Generic HF-token presence check for legacy mflux runners that don't need
+// the FLUX.2 venv. Any model entry with `requiresHfToken: true` in
+// data/media-models.json drives the banner through this endpoint.
+router.get('/setup/hf-token-status', asyncHandler(async (_req, res) => {
+  const token = await getHfToken();
+  res.json({ hfTokenPresent: !!token });
+}));
+
 // Save the HF token from the inline form on the Image Gen page. settings.json
 // is the canonical location (single-user app behind Tailscale — see CLAUDE.md).
-const flux2TokenSchema = z.object({
+// Same endpoint serves FLUX.2 and legacy mflux gated models — the token is
+// global (HF_TOKEN env in spawn).
+const hfTokenSchema = z.object({
   token: z.string().regex(HF_TOKEN_REGEX, 'Token must look like `hf_…`').max(200),
 });
-router.post('/setup/flux2-token', asyncHandler(async (req, res) => {
-  const { token } = validateRequest(flux2TokenSchema, req.body || {});
+router.post('/setup/hf-token', asyncHandler(async (req, res) => {
+  const { token } = validateRequest(hfTokenSchema, req.body || {});
   const settings = await getSettings();
   await saveSettings({
     ...settings,

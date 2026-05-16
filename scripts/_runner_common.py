@@ -116,6 +116,7 @@ def make_stepwise_callback(
     width: int,
     *,
     unpack_latents=None,
+    preview_decoder=None,
 ):
     """Return a `callback_on_step_end` that decodes the running latent into
     a small preview PNG. `local.js#processLatestFrame` watches this dir and
@@ -130,6 +131,11 @@ def make_stepwise_callback(
       - flux2: transformer-packed latents come back as
         `(B, num_patches, C*p*p)`. Pass a callable that takes
         `(latents, height, width)` and returns the unpacked tensor.
+      - ernie: latents stay 4-D but are 2x2 patch-packed (e.g. `(B, 128, H/2, W/2)`
+        for a 32-ch VAE) AND need pipeline-specific BN-stats unnormalization
+        before `vae.decode`, not the standard `latents/scaling + shift`.
+        Pass `preview_decoder=fn(pipe, latents) -> image_tensor` to fully
+        override the per-step decode path.
     """
     if not stepwise_dir:
         return None
@@ -173,10 +179,16 @@ def make_stepwise_callback(
                 latents = unpack_latents(latents, height, width)
             elif latents.dim() != 4:
                 return callback_kwargs
-            scaled = latents / scaling + shift
-            if vae_dtype is not None and (scaled.dtype != vae_dtype or scaled.device != vae_device):
-                scaled = scaled.to(device=vae_device, dtype=vae_dtype)
-            decoded = vae.decode(scaled, return_dict=False)[0]
+            if preview_decoder is not None:
+                aligned = latents
+                if vae_dtype is not None and (aligned.dtype != vae_dtype or aligned.device != vae_device):
+                    aligned = aligned.to(device=vae_device, dtype=vae_dtype)
+                decoded = preview_decoder(pipe, aligned)
+            else:
+                scaled = latents / scaling + shift
+                if vae_dtype is not None and (scaled.dtype != vae_dtype or scaled.device != vae_device):
+                    scaled = scaled.to(device=vae_device, dtype=vae_dtype)
+                decoded = vae.decode(scaled, return_dict=False)[0]
             decoded = (decoded.clamp(-1, 1) + 1) / 2
             arr = (decoded[0].float().cpu().permute(1, 2, 0).numpy() * 255).astype("uint8")
             img = Image.fromarray(arr)

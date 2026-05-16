@@ -31,6 +31,10 @@ You are a continuity editor doing a cross-season pass on a planned series. The u
 {{arc.summary}}
 ```
 
+## Story shape (Vonnegut)
+
+{{{shapeGuidance}}}
+
 ## Seasons + episodes
 
 ```json
@@ -47,6 +51,7 @@ Walk the seasons in order. Score each season + each episode against the arc. Spe
 4. **Unresolved hooks at the series finale.** The final season ends without paying off the whole-arc logline, protagonist arc, or any of the major themes.
 5. **Arc-role imbalance.** A season with 8 episodes and zero `pilot` / `finale` `arcRole` entries (or two `pilot`s / two `finale`s).
 6. **Theme drift.** A theme is named in `arc.themes` but doesn't appear in any season synopsis or episode logline.
+7. **Story-shape adherence.** If a Vonnegut shape was selected (see "Story shape" above — skip this check if none was selected), verify the season-level fortune trajectory traces that curve. Flag volumes whose `endingHook` lands at a fortune level that contradicts the curve (e.g. a "rags-to-riches" volume ending lower than it opened, a "tragedy" volume ending in unambiguous triumph, an "icarus" arc whose crash never comes). The whole-series finale must land at the shape's terminal level.
 
 ## Output contract
 

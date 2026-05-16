@@ -6,7 +6,7 @@
  */
 
 import { join } from 'path';
-import { readFile, writeFile, rm } from 'fs/promises';
+import { readFile, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { spawn } from 'child_process';
 import { homedir } from 'os';
@@ -568,18 +568,17 @@ export async function spawnDirectly(agentId, task, prompt, workspacePath, model,
     // Process memory extraction and app cooldown
     await processAgentCompletion(agentId, task, success, outputBuffer);
 
-    // Clean up ephemeral BTW.md before worktree removal
-    if (workspacePath) {
-      await rm(join(workspacePath, 'BTW.md')).catch(() => {});
-    }
-
-    // Clean up worktree if agent was using one
+    // Clean up worktree if agent was using one. Claude Code CLI agents run
+    // `/simplify` + `/do:pr` themselves (see buildCliCompletionSection in
+    // agentPromptBuilder.js) — mirror the TUI cleanup contract so PortOS
+    // doesn't double-fire push+PR creation.
     const directOpenPR = isTruthyMetaFn(task.metadata?.openPR);
     const directReviewLoopFollowUp = isTruthyMetaFn(task.metadata?.reviewLoopFollowUp);
+    const directAgentOwnsPR = directOpenPR && (provider?.id === 'claude-code' || provider?.id === 'claude-code-bedrock');
     await cleanupWorktreeFn(agentId, success, {
-      openPR: directOpenPR,
-      requestCopilotReview: directOpenPR && isTruthyMetaFn(task.metadata?.reviewLoop),
-      skipMerge: directReviewLoopFollowUp,
+      openPR: directAgentOwnsPR ? false : directOpenPR,
+      requestCopilotReview: !directAgentOwnsPR && directOpenPR && isTruthyMetaFn(task.metadata?.reviewLoop),
+      skipMerge: directReviewLoopFollowUp || directAgentOwnsPR,
       description: task.description,
       agentOutput: outputBuffer,
       originalTask: task

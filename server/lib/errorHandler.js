@@ -50,6 +50,9 @@ export function asyncHandler(fn) {
       const logMsg = `❌ Route error: ${error.message}`;
       if (error.code === 'PLATFORM_UNAVAILABLE') {
         console.warn(`⚠️ Platform unavailable: ${error.message}`);
+      } else if (error.severity === 'warning') {
+        // Expected high-volume 404s (e.g. speculative media-job archive
+        // lookups) — already classified as benign; don't pollute server logs.
       } else if (error.status >= 500) {
         console.error(logMsg, error.stack ? error.stack : '');
       } else {

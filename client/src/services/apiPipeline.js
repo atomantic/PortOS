@@ -1,21 +1,81 @@
-import { request } from './apiCore.js';
+import { request, API_BASE } from './apiCore.js';
+import { buildFormData } from './apiImageVideo.js';
 
 // Stage IDs mirror server/services/pipeline/issues.js — keep these in sync.
-export const PIPELINE_TEXT_STAGES = Object.freeze(['idea', 'prose', 'comicScript', 'tvScript']);
+// `nouns` is a UI-only pseudo-stage: it has no server stage record + no LLM
+// template, and its actions wrap existing endpoints (extract-bible + the
+// generic image gen API). It appears in PIPELINE_TAB_STAGES so it gets a tab
+// between Prose and Comic Pages, but it's NOT in server TEXT_STAGE_IDS — so
+// auto-run text chain skips it and POST /stages/nouns/generate would 400.
+export const PIPELINE_TEXT_STAGES = Object.freeze(['idea', 'prose', 'comicScript', 'teleplay']);
 export const PIPELINE_VISUAL_STAGES = Object.freeze(['comicPages', 'storyboards', 'episodeVideo']);
-export const PIPELINE_STAGES = Object.freeze([...PIPELINE_TEXT_STAGES, ...PIPELINE_VISUAL_STAGES]);
+export const PIPELINE_AUDIO_STAGES = Object.freeze(['audio']);
+export const PIPELINE_UI_STAGES = Object.freeze(['nouns']);
+export const PIPELINE_STAGES = Object.freeze([
+  ...PIPELINE_TEXT_STAGES, ...PIPELINE_VISUAL_STAGES, ...PIPELINE_AUDIO_STAGES, ...PIPELINE_UI_STAGES,
+]);
+
+// Stages that appear as their own tab, in display order. `comicPages` is
+// folded into the Comic Script tab (one merged page-by-page editor) — the
+// data still flows through the comicPages routes, the tab is just hidden.
+// `nouns` is inserted between Prose and Comic Pages so the workflow reads
+// Idea → Prose → Nouns → Comic → Teleplay → Storyboards → Episode Video.
+export const PIPELINE_TAB_STAGES = Object.freeze([
+  'idea', 'prose', 'nouns', 'comicScript', 'teleplay', 'storyboards', 'episodeVideo', 'audio',
+]);
 
 export const PIPELINE_STAGE_LABELS = Object.freeze({
   idea: 'Idea',
   prose: 'Prose',
-  comicScript: 'Comic Script',
-  tvScript: 'TV Script',
-  comicPages: 'Comic Pages',
+  nouns: 'Nouns',
+  // `comicScript` stage now owns the merged Comic Pages editor — the
+  // standalone Comic Pages tab is hidden via PIPELINE_TAB_STAGES below.
+  comicScript: 'Comic',
+  teleplay: 'Teleplay',
+  comicPages: 'Comic',
   storyboards: 'Storyboards',
-  episodeVideo: 'Episode Video',
+  episodeVideo: 'Video',
+  audio: 'Audio',
 });
 
 export const PIPELINE_TARGET_FORMATS = Object.freeze(['comic', 'tv', 'comic+tv']);
+
+export const PIPELINE_STAGE_STATUS_LABEL = Object.freeze({
+  empty: 'Not started',
+  generating: 'Generating…',
+  ready: 'Ready',
+  edited: 'Edited',
+  'needs-review': 'Needs review',
+  error: 'Error',
+});
+
+export const PIPELINE_STAGE_STATUS_COLOR = Object.freeze({
+  empty: 'text-gray-500',
+  generating: 'text-port-accent',
+  ready: 'text-port-success',
+  edited: 'text-port-warning',
+  'needs-review': 'text-port-warning',
+  error: 'text-port-error',
+});
+
+// ---- Visual styles catalog ----
+// Module-level promise dedup: the catalog is immutable for the life of the
+// server, so concurrent mounts share one in-flight fetch and subsequent calls
+// resolve from cache. Cleared on rejection so a transient failure can retry.
+let _visualStylesPromise = null;
+export const listPipelineVisualStyles = () => {
+  if (!_visualStylesPromise) {
+    _visualStylesPromise = request('/pipeline/visual-styles')
+      .catch((err) => { _visualStylesPromise = null; throw err; });
+  }
+  return _visualStylesPromise;
+};
+
+// Per-stage style override is identical-shaped across every visual stage —
+// factor the PATCH shape here so the three stage components don't each
+// hand-roll the body.
+export const updateIssueStageVisualStyle = (issueId, stageId, next) =>
+  updatePipelineIssue(issueId, { stages: { [stageId]: { visualStyleOverride: next } } });
 
 // ---- Series ----
 export const listPipelineSeries = () => request('/pipeline/series');
@@ -45,14 +105,17 @@ export const extractPipelineBibles = (seriesId, { issueId, corpus, kinds, provid
     body: JSON.stringify({ issueId, corpus, kinds, providerOverride, parallel }),
   });
 
+// Rewrite one character's physicalDescription so they render distinct from
+// every peer. Returns { series, entry, rationale, changes }.
+export const refinePipelineCharacter = (seriesId, entryId, { providerId, model } = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/characters/${encodeURIComponent(entryId)}/refine`, {
+    method: 'POST',
+    body: JSON.stringify({ providerId, model }),
+  });
+
 // ---- Issues ----
 export const listPipelineIssues = (seriesId) =>
   request(`/pipeline/series/${encodeURIComponent(seriesId)}/issues`);
-
-// Recently-updated issues across all series. Used by the sidebar to surface
-// in-flight pipeline work without forcing the user to drill in.
-export const listRecentPipelineIssues = (limit = 10) =>
-  request(`/pipeline/issues/recent?limit=${encodeURIComponent(limit)}`);
 
 export const createPipelineIssue = (seriesId, data) =>
   request(`/pipeline/series/${encodeURIComponent(seriesId)}/issues`, {
@@ -85,12 +148,12 @@ export const generatePipelineVisualImage = (issueId, stageId, opts) =>
   });
 
 // Auto-fill the storyboards stage's scenes[] from the issue's prose or
-// tvScript text stage. `from` defaults server-side to 'tvScript'. Pass
+// teleplay text stage. `from` defaults server-side to 'teleplay'. Pass
 // `force: true` to replace existing hand-curated scenes.
-export const extractPipelineStoryboardScenes = (issueId, { from, providerOverride, force } = {}) =>
+export const extractPipelineStoryboardScenes = (issueId, { from, providerOverride, modelOverride, force } = {}) =>
   request(`/pipeline/issues/${encodeURIComponent(issueId)}/stages/storyboards/extract-scenes`, {
     method: 'POST',
-    body: JSON.stringify({ from, providerOverride, force }),
+    body: JSON.stringify({ from, providerOverride, modelOverride, force }),
   });
 
 // Auto-fill the comicPages stage's pages[] by deterministically parsing the
@@ -112,6 +175,27 @@ export const generatePipelineComicPage = (issueId, pageIndex, opts = {}) =>
     body: JSON.stringify(opts),
   });
 
+// Render the issue's front cover. Pass `coverScript` to render a not-yet-
+// saved concept (the route persists it back to stages.comicPages.cover so
+// the next reload reflects what was rendered). Server folds in series
+// name, issue number, issue title, and style notes — caller only owns the
+// cover-concept text. Returns { jobId, mode, prompt, cover, issue, stage }.
+export const generatePipelineComicCover = (issueId, opts = {}, options = {}) =>
+  request(`/pipeline/issues/${encodeURIComponent(issueId)}/stages/comicPages/cover/render`, {
+    method: 'POST',
+    body: JSON.stringify(opts),
+    ...options,
+  });
+
+// Patch one comic page's raw markdown — the server re-parses panels from the
+// edited rawText so subsequent renders still get a structured prompt.
+// Returns { issue, stage, page }.
+export const updatePipelineComicPage = (issueId, pageIndex, { rawText } = {}) =>
+  request(`/pipeline/issues/${encodeURIComponent(issueId)}/stages/comicPages/pages/${encodeURIComponent(pageIndex)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ rawText }),
+  });
+
 // Render a single storyboard scene as a video clip (one t2v call against
 // the scene's existing description + style). Independent of the
 // episode-video stitch — use this when you want to preview a scene before
@@ -120,6 +204,15 @@ export const generatePipelineComicPage = (issueId, pageIndex, opts = {}) =>
 // .sceneVideoJobId. Returns { jobId, prompt, sceneIndex, issue, stage }.
 export const generatePipelineSceneVideo = (issueId, sceneIndex, opts = {}) =>
   request(`/pipeline/issues/${encodeURIComponent(issueId)}/stages/storyboards/scenes/${encodeURIComponent(sceneIndex)}/video`, {
+    method: 'POST',
+    body: JSON.stringify(opts),
+  });
+
+// Render the start-frame image for a single shot inside a storyboard scene.
+// Server persists the resulting jobId on
+// stages.storyboards.scenes[sceneIndex].shots[shotIndex].startFrameJobId.
+export const generatePipelineShotStartFrame = (issueId, sceneIndex, shotIndex, opts = {}) =>
+  request(`/pipeline/issues/${encodeURIComponent(issueId)}/stages/storyboards/scenes/${encodeURIComponent(sceneIndex)}/shots/${encodeURIComponent(shotIndex)}/render`, {
     method: 'POST',
     body: JSON.stringify(opts),
   });
@@ -191,6 +284,45 @@ export const verifyPipelineArc = (seriesId, { providerOverride, modelOverride } 
     body: JSON.stringify({ providerOverride, modelOverride }),
   });
 
+// Deep verify pass for a single volume / season. Complements verifyPipelineArc:
+// the arc pass is cross-volume + synopsis-depth; this pass is volume-scoped
+// and goes to beat depth for issues whose stages.idea.output is populated.
+// Returns { issues, runId, providerId, model, seasonId }. Empty issues[] = clean.
+export const verifyPipelineVolume = (seriesId, seasonId, { providerOverride, modelOverride } = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/seasons/${encodeURIComponent(seasonId)}/verify`, {
+    method: 'POST',
+    body: JSON.stringify({ providerOverride, modelOverride }),
+  });
+
+// Auto-resolve verification findings — server runs an LLM pass that rewrites
+// the arc + volume/season outlines to address every finding, then persists.
+// Pass `findings: [...]` to resolve only that subset; omit to re-verify and
+// resolve everything. Returns { series, applied, notes, findings, runId, ... }.
+export const resolvePipelineArcIssues = (seriesId, { findings, providerOverride, modelOverride } = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/arc/resolve-issues`, {
+    method: 'POST',
+    body: JSON.stringify({ findings, providerOverride, modelOverride }),
+  });
+
+// ---- Volume beat-sheet bulk generator ----
+// Sequential idea-stage run across every issue in a volume. `mode` is
+// 'skip-existing' (default) or 'regenerate-all'. Returns
+// { runId, alreadyRunning, sseUrl } — subscribe via pipelineVolumeBeatsSseUrl
+// to stream per-issue progress.
+export const startPipelineVolumeBeats = (seriesId, seasonId, { mode, providerOverride, modelOverride } = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/seasons/${encodeURIComponent(seasonId)}/generate-beats`, {
+    method: 'POST',
+    body: JSON.stringify({ mode, providerOverride, modelOverride }),
+  });
+
+export const cancelPipelineVolumeBeats = (seriesId, seasonId) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/seasons/${encodeURIComponent(seasonId)}/generate-beats/cancel`, {
+    method: 'POST',
+  });
+
+export const pipelineVolumeBeatsSseUrl = (seriesId, seasonId) =>
+  `/api/pipeline/series/${encodeURIComponent(seriesId)}/seasons/${encodeURIComponent(seasonId)}/generate-beats/progress`;
+
 // ---- Auto-run text chain ----
 export const startPipelineAutoRunText = (issueId, opts = {}) =>
   request(`/pipeline/issues/${encodeURIComponent(issueId)}/auto-run-text`, {
@@ -205,3 +337,73 @@ export const cancelPipelineAutoRunText = (issueId) =>
 
 export const pipelineAutoRunSseUrl = (issueId) =>
   `/api/pipeline/issues/${encodeURIComponent(issueId)}/auto-run-text/progress`;
+
+// ---- Audio stage ----
+// Walks storyboards.scenes[].dialogue and populates stages.audio.lines[].
+// Pass { force: true } to replace existing lines wholesale (server defaults
+// to a 409 when lines[] is already populated so a stray click can't wipe
+// manual edits).
+export const extractPipelineAudioLines = (issueId, { force } = {}) =>
+  request(`/pipeline/issues/${encodeURIComponent(issueId)}/stages/audio/extract-lines`, {
+    method: 'POST',
+    body: JSON.stringify({ force }),
+  });
+
+// Render one VO line. Voice resolution priority (server-side): explicit
+// voiceId body param > line.voiceIdOverride > character.voiceId > system
+// default. Returns { issue, stage, lineIdx, filename, engine, voiceId }.
+export const renderPipelineAudioLine = (issueId, lineIdx, { voiceId } = {}) =>
+  request(`/pipeline/issues/${encodeURIComponent(issueId)}/stages/audio/lines/${encodeURIComponent(lineIdx)}/render`, {
+    method: 'POST',
+    body: JSON.stringify({ voiceId }),
+  });
+
+// Per-line edit (text or voice override). Narrow patch shape — the server
+// merges against the freshest persisted record inside the per-issue write
+// queue so two simultaneous blurs against different lines can't clobber.
+export const patchPipelineAudioLine = (issueId, lineIdx, patch) =>
+  request(`/pipeline/issues/${encodeURIComponent(issueId)}/stages/audio/lines/${encodeURIComponent(lineIdx)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(patch),
+  });
+
+// ---- Music library (Phase 4c) ----
+export const listPipelineMusicLibrary = () =>
+  request('/pipeline/audio/music-library');
+
+// Bypasses `request()` because that helper hard-codes
+// `Content-Type: application/json`, which conflicts with FormData's
+// auto-generated multipart boundary.
+export const uploadPipelineMusicTrack = async (issueId, file, { label } = {}) => {
+  const res = await fetch(
+    `${API_BASE}/pipeline/issues/${encodeURIComponent(issueId)}/stages/audio/music/upload`,
+    { method: 'POST', body: buildFormData({ track: file, label }) },
+  );
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    const e = new Error(err.error || res.statusText);
+    e.code = err.code;
+    e.status = res.status;
+    throw e;
+  }
+  return res.json();
+};
+
+export const attachPipelineMusicTrack = (issueId, { trackFilename, label } = {}) =>
+  request(`/pipeline/issues/${encodeURIComponent(issueId)}/stages/audio/music/attach`, {
+    method: 'POST',
+    body: JSON.stringify({ trackFilename, label }),
+  });
+
+export const detachPipelineMusicTrack = (issueId) =>
+  request(`/pipeline/issues/${encodeURIComponent(issueId)}/stages/audio/music`, {
+    method: 'DELETE',
+  });
+
+// Library deletes do NOT auto-purge issue references — by design, so the
+// user sees the broken playback and re-picks rather than the library
+// silently rewriting issue state.
+export const deletePipelineMusicTrack = (filename) =>
+  request(`/pipeline/audio/music-library/${encodeURIComponent(filename)}`, {
+    method: 'DELETE',
+  });

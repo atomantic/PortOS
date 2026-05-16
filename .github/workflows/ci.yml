@@ -38,7 +38,7 @@ jobs:
         run: npm install --prefix client
 
       - name: Run server tests
-        run: npm test --prefix server
+        run: npm run test:ci --prefix server
 
       - name: Build client
         run: npm run build --prefix client

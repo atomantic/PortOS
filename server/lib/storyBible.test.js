@@ -96,6 +96,168 @@ describe('storyBible — sanitizeCharacter', () => {
     const out = sanitizeCharacter({ name: 'A', aliases: ['', '  ', null, 42, 'real'] });
     expect(out.aliases).toEqual(['real']);
   });
+
+  // ---- Universe-as-Canon extras: prompt / tags / locked / source / sourceSeriesId ----
+
+  it('accepts Universe-as-Canon extras: prompt + tags + sourceSeriesId', () => {
+    const out = sanitizeCharacter({
+      name: 'Alex',
+      prompt: 'field lead detective, expressive face, short jacket',
+      tags: ['protagonist', 'detective'],
+      sourceSeriesId: 'ser-1234',
+    });
+    expect(out.prompt).toBe('field lead detective, expressive face, short jacket');
+    expect(out.tags).toEqual(['protagonist', 'detective']);
+    expect(out.sourceSeriesId).toBe('ser-1234');
+  });
+
+  it('persists locked: true and accepts the new source vocabulary', () => {
+    const out = sanitizeCharacter({ name: 'Alex', locked: true, source: 'series-extract' });
+    expect(out.locked).toBe(true);
+    expect(out.source).toBe('series-extract');
+  });
+
+  it('omits locked when not strictly true (mirrors variation pattern)', () => {
+    expect(sanitizeCharacter({ name: 'A', locked: false }).locked).toBeUndefined();
+    expect(sanitizeCharacter({ name: 'A', locked: 'yes' }).locked).toBeUndefined();
+    expect(sanitizeCharacter({ name: 'A', locked: 1 }).locked).toBeUndefined();
+    expect(sanitizeCharacter({ name: 'A' }).locked).toBeUndefined();
+  });
+
+  it('caps tags + prompt + sourceSeriesId at their limits', () => {
+    const longPrompt = 'p'.repeat(BIBLE_LIMITS.PROMPT_MAX + 50);
+    const tooManyTags = Array.from({ length: BIBLE_LIMITS.TAGS_PER_ENTRY_MAX + 5 }, (_, i) => `tag-${i}`);
+    const longSrc = 's'.repeat(BIBLE_LIMITS.SOURCE_SERIES_ID_MAX + 10);
+    const out = sanitizeCharacter({
+      name: 'A', prompt: longPrompt, tags: tooManyTags, sourceSeriesId: longSrc,
+    });
+    expect(out.prompt.length).toBe(BIBLE_LIMITS.PROMPT_MAX);
+    expect(out.tags.length).toBe(BIBLE_LIMITS.TAGS_PER_ENTRY_MAX);
+    expect(out.sourceSeriesId.length).toBe(BIBLE_LIMITS.SOURCE_SERIES_ID_MAX);
+  });
+
+  it('extras apply identically to settings + objects', () => {
+    const s = sanitizeSetting({ name: 'Bubble Room', tags: ['indoor'], prompt: 'pastel lab', locked: true });
+    expect(s.tags).toEqual(['indoor']);
+    expect(s.prompt).toBe('pastel lab');
+    expect(s.locked).toBe(true);
+    const o = sanitizeObject({ name: 'Ward Tape', tags: ['prop', 'recurring'], prompt: 'striped tape coil', source: 'manual' });
+    expect(o.tags).toEqual(['prop', 'recurring']);
+    expect(o.prompt).toBe('striped tape coil');
+    expect(o.source).toBe('manual');
+  });
+
+  describe('primaryImageRef (Cluster A)', () => {
+    it('returns null when not set', () => {
+      const out = sanitizeCharacter({ name: 'A', imageRefs: ['a.png'] });
+      expect(out.primaryImageRef).toBeNull();
+    });
+
+    it('persists a valid pointer that matches one of imageRefs[]', () => {
+      const out = sanitizeCharacter({
+        name: 'A',
+        imageRefs: ['a.png', 'b.png'],
+        primaryImageRef: 'b.png',
+      });
+      expect(out.primaryImageRef).toBe('b.png');
+    });
+
+    it('auto-clears a stale pointer when the target was removed from imageRefs[]', () => {
+      const out = sanitizeCharacter({
+        name: 'A',
+        imageRefs: ['a.png'],
+        primaryImageRef: 'ghost.png',
+      });
+      expect(out.primaryImageRef).toBeNull();
+    });
+
+    it('rejects non-string pointers without throwing', () => {
+      const out = sanitizeCharacter({ name: 'A', imageRefs: ['a.png'], primaryImageRef: 123 });
+      expect(out.primaryImageRef).toBeNull();
+    });
+
+    it('applies identically to settings and objects', () => {
+      const s = sanitizeSetting({
+        name: 'Bar',
+        imageRefs: ['plate.png'],
+        primaryImageRef: 'plate.png',
+      });
+      expect(s.primaryImageRef).toBe('plate.png');
+      const o = sanitizeObject({
+        name: 'Watch',
+        imageRefs: ['watch1.png', 'watch2.png'],
+        primaryImageRef: 'watch2.png',
+      });
+      expect(o.primaryImageRef).toBe('watch2.png');
+    });
+  });
+
+  describe('wardrobes (Cluster A)', () => {
+    it('defaults to an empty array when omitted', () => {
+      const out = sanitizeCharacter({ name: 'A' });
+      expect(out.wardrobes).toEqual([]);
+    });
+
+    it('sanitizes well-formed wardrobe entries + assigns ids', () => {
+      const out = sanitizeCharacter({
+        name: 'Don Carlos',
+        wardrobes: [
+          { name: 'Wedding', description: 'cream silk suit, gold pocket watch' },
+          { name: 'Backalley', description: 'worn leather jacket, scuffed boots' },
+        ],
+      });
+      expect(out.wardrobes).toHaveLength(2);
+      expect(out.wardrobes[0].name).toBe('Wedding');
+      expect(out.wardrobes[0].description).toBe('cream silk suit, gold pocket watch');
+      expect(out.wardrobes[0].id).toMatch(/^wd-/);
+      expect(out.wardrobes[0].id).not.toBe(out.wardrobes[1].id);
+    });
+
+    it('preserves caller-supplied ids (round-trip after a PATCH)', () => {
+      const out = sanitizeCharacter({
+        name: 'Aria',
+        wardrobes: [{ id: 'wd-fixed-1', name: 'Tactical' }],
+      });
+      expect(out.wardrobes[0].id).toBe('wd-fixed-1');
+    });
+
+    it('drops entries with no name (the only required field)', () => {
+      const out = sanitizeCharacter({
+        name: 'Aria',
+        wardrobes: [
+          { description: 'no name on this one' },
+          { name: 'Real Wardrobe', description: 'has a name' },
+        ],
+      });
+      expect(out.wardrobes).toHaveLength(1);
+      expect(out.wardrobes[0].name).toBe('Real Wardrobe');
+    });
+
+    it('caps the list at BIBLE_LIMITS.WARDROBES_PER_CHARACTER_MAX', () => {
+      const tooMany = Array.from({ length: BIBLE_LIMITS.WARDROBES_PER_CHARACTER_MAX + 5 }, (_, i) => ({
+        name: `Outfit ${i}`,
+      }));
+      const out = sanitizeCharacter({ name: 'A', wardrobes: tooMany });
+      expect(out.wardrobes).toHaveLength(BIBLE_LIMITS.WARDROBES_PER_CHARACTER_MAX);
+    });
+
+    it('caps individual field lengths', () => {
+      const out = sanitizeCharacter({
+        name: 'A',
+        wardrobes: [{
+          name: 'n'.repeat(BIBLE_LIMITS.WARDROBE_NAME_MAX + 100),
+          description: 'd'.repeat(BIBLE_LIMITS.WARDROBE_DESCRIPTION_MAX + 100),
+        }],
+      });
+      expect(out.wardrobes[0].name.length).toBe(BIBLE_LIMITS.WARDROBE_NAME_MAX);
+      expect(out.wardrobes[0].description.length).toBe(BIBLE_LIMITS.WARDROBE_DESCRIPTION_MAX);
+    });
+
+    it('coerces a non-array wardrobes field to an empty array', () => {
+      const out = sanitizeCharacter({ name: 'A', wardrobes: 'not an array' });
+      expect(out.wardrobes).toEqual([]);
+    });
+  });
 });
 
 describe('storyBible — sanitizeSetting', () => {
@@ -120,6 +282,32 @@ describe('storyBible — sanitizeSetting', () => {
     expect(out.slugline).toBe('INT. BAR — NIGHT');
     expect(out.palette).toBe('amber, neon-red');
     expect(out.evidence).toEqual(['ch1: opens here']);
+  });
+
+  describe('intExt + timeOfDay (Cluster A)', () => {
+    it('persists valid enums', () => {
+      const out = sanitizeSetting({ name: 'Bar', intExt: 'INT', timeOfDay: 'night' });
+      expect(out.intExt).toBe('INT');
+      expect(out.timeOfDay).toBe('night');
+    });
+
+    it('normalizes case on both fields', () => {
+      const out = sanitizeSetting({ name: 'Bar', intExt: 'ext', timeOfDay: 'DUSK' });
+      expect(out.intExt).toBe('EXT');
+      expect(out.timeOfDay).toBe('dusk');
+    });
+
+    it('drops invalid enum values to null instead of throwing', () => {
+      const out = sanitizeSetting({ name: 'Bar', intExt: 'underwater', timeOfDay: 'midnight-snack' });
+      expect(out.intExt).toBeNull();
+      expect(out.timeOfDay).toBeNull();
+    });
+
+    it('treats missing/empty as null (legacy settings)', () => {
+      const out = sanitizeSetting({ name: 'Bar' });
+      expect(out.intExt).toBeNull();
+      expect(out.timeOfDay).toBeNull();
+    });
   });
 });
 
@@ -222,6 +410,51 @@ describe('storyBible — mergeExtractedBible (characters)', () => {
     const incoming = Array.from({ length: 5 }, (_, i) => ({ name: `new-${i}` }));
     const merged = mergeExtractedBible(existing, incoming, 'character');
     expect(merged.length).toBe(BIBLE_LIMITS.ENTRIES_PER_BIBLE_MAX);
+  });
+
+  // ---- Universe-as-Canon lock-aware merge ----
+
+  it('locked existing entry: skips field overwrites, appends new evidence (deduped)', () => {
+    const existing = [sanitizeCharacter({
+      id: 'c1', name: 'Alex', physicalDescription: 'jacket with bright piping',
+      role: 'Field Lead', personality: 'calm menace', evidence: ['Issue 1 prose'],
+      locked: true, source: 'series-extract',
+    })];
+    const merged = mergeExtractedBible(existing, [{
+      name: 'Alex',
+      physicalDescription: 'rewritten attempt',
+      role: 'rewritten role',
+      personality: 'rewritten',
+      evidence: ['Issue 1 prose', 'Issue 3 prose'], // first is dupe, second is new
+      firstAppearance: 'should-be-ignored',
+    }], 'character');
+    expect(merged.length).toBe(1);
+    const alex = merged[0];
+    // Narrative fields round-trip verbatim — locked entries are protected.
+    expect(alex.physicalDescription).toBe('jacket with bright piping');
+    expect(alex.role).toBe('Field Lead');
+    expect(alex.personality).toBe('calm menace');
+    expect(alex.firstAppearance).toBeNull();
+    // Evidence accumulates: dedupe by case-insensitive trimmed string.
+    expect(alex.evidence).toEqual(['Issue 1 prose', 'Issue 3 prose']);
+    // Lock survives.
+    expect(alex.locked).toBe(true);
+  });
+
+  it('autoLock option stamps locked: true + sourceSeriesId on new inserts', () => {
+    const merged = mergeExtractedBible([], [{ name: 'Beta' }], 'character', {
+      source: 'series-extract', autoLock: true, sourceSeriesId: 'ser-active',
+    });
+    expect(merged.length).toBe(1);
+    expect(merged[0].locked).toBe(true);
+    expect(merged[0].source).toBe('series-extract');
+    expect(merged[0].sourceSeriesId).toBe('ser-active');
+  });
+
+  it('autoLock false (default) inserts unlocked entries — legacy behavior preserved', () => {
+    const merged = mergeExtractedBible([], [{ name: 'Beta' }], 'character');
+    expect(merged[0].locked).toBeUndefined();
+    expect(merged[0].source).toBe('ai'); // legacy default
   });
 });
 

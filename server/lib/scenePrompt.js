@@ -41,6 +41,17 @@ export function matchSceneCharacters(sceneCharacterNames = [], charByKey) {
   return matched;
 }
 
+/**
+ * Scan a free-form text blob (panel/scene description) for any character
+ * names or aliases from the bible. Word-boundary matching, case-insensitive.
+ * Used when the visual record doesn't carry a structured character list (e.g.
+ * storyboard scenes only have a free-text description). Keeps the prompt
+ * grounded in bible-canonical descriptions for everyone the LLM named.
+ */
+export function matchCharactersInText(text, allCharacters) {
+  return matchEntriesByCandidates(text, allCharacters, (c) => [c.name, ...(c.aliases || [])]);
+}
+
 export function buildSettingByKey(allSettings) {
   const map = new Map();
   for (const setting of allSettings || []) {
@@ -54,6 +65,44 @@ export function buildSettingByKey(allSettings) {
 export function matchSceneSetting(sceneSlugline, settingByKey) {
   if (!sceneSlugline) return null;
   return settingByKey?.get(normalizeSlugline(sceneSlugline)) || null;
+}
+
+// Shared word-boundary scanner used by the *-InText helpers below. Returns
+// the entries whose `candidates(entry)` strings appear in the haystack.
+function matchEntriesByCandidates(text, entries, candidatesFn) {
+  if (!text || !Array.isArray(entries) || !entries.length) return [];
+  const haystack = String(text);
+  const matched = [];
+  const seen = new Set();
+  const wordBoundary = (needle) => {
+    if (!needle) return false;
+    const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`\\b${escaped}\\b`, 'i').test(haystack);
+  };
+  for (const entry of entries) {
+    const key = entry.id || entry.name;
+    if (!key || seen.has(key)) continue;
+    const candidates = candidatesFn(entry).filter(Boolean);
+    if (candidates.some(wordBoundary)) {
+      matched.push(entry);
+      seen.add(key);
+    }
+  }
+  return matched;
+}
+
+// Scan free-form prose for bible-canonical settings. Mirrors
+// `matchCharactersInText` but tests against `name` (settings have no aliases
+// in the canonical schema — slugline is for screenplay matching, not prose).
+export function matchSettingsInText(text, allSettings) {
+  return matchEntriesByCandidates(text, allSettings, (s) => [s.name]);
+}
+
+// Scan free-form prose for bible-canonical objects. Mirrors
+// `matchCharactersInText` — objects carry `name` + `aliases[]` per
+// `server/lib/storyBible.js:PROMPT_FIELDS`.
+export function matchObjectsInText(text, allObjects) {
+  return matchEntriesByCandidates(text, allObjects, (o) => [o.name, ...(o.aliases || [])]);
 }
 
 /**
@@ -78,7 +127,20 @@ export function buildScenePrompt(workTitle, scene, matchedCharacters, worldStyle
   const titlePart = workTitle ? `${workTitle}. ` : '';
   const visual = scene?.visualPrompt || scene?.description || '';
 
+  // INT/EXT + time-of-day claim the first setting slot — they're cheap
+  // (≤30 chars combined) and load-bearing for lighting/composition cues
+  // diffusion models actually weight.
+  const intExtPart = matchedSetting?.intExt === 'INT'
+    ? 'Interior'
+    : matchedSetting?.intExt === 'EXT'
+      ? 'Exterior'
+      : '';
+  const todPart = typeof matchedSetting?.timeOfDay === 'string' && matchedSetting.timeOfDay
+    ? matchedSetting.timeOfDay
+    : '';
+  const settingMetaFrag = [intExtPart, todPart].filter(Boolean).join(', ');
   const settingFrags = matchedSetting ? [
+    settingMetaFrag ? `${settingMetaFrag}.` : '',
     matchedSetting.description?.trim() || '',
     matchedSetting.palette ? `Palette: ${matchedSetting.palette.trim()}.` : '',
     matchedSetting.recurringDetails?.trim() || '',

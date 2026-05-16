@@ -214,7 +214,7 @@ function JobRow({ job, onCancel, onRetry, onRunNow, onDelete }) {
                 <span className="text-port-text-muted"> · #{job.position} in queue</span>
               )}
             </div>
-            <div className="text-xs text-port-text-muted truncate">
+            <div className="text-xs text-port-text-muted truncate" title={job.params?.prompt || undefined}>
               {job.params?.prompt ? `"${job.params.prompt.slice(0, 80)}${job.params.prompt.length > 80 ? '…' : ''}"` : 'no prompt'}
               {job.owner && <span> · {job.owner}</span>}
             </div>

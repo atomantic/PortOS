@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Layers, Code, Server, Globe, Smartphone, MonitorSmartphone, Plus } from 'lucide-react';
 import * as api from '../services/api';
-import DirectoryPicker from '../components/DirectoryPicker';
+import FolderPicker from '../components/FolderPicker';
 
 const ICONS = {
   layers: Layers,
@@ -115,11 +115,18 @@ export default function Templates() {
             </div>
 
             <div>
-              <DirectoryPicker
-                value={targetPath}
-                onChange={setTargetPath}
-                label="Target Directory"
-              />
+              <label className="block text-sm text-gray-400 mb-1">Target Directory *</label>
+              <div className="flex gap-2 items-stretch">
+                <input
+                  type="text"
+                  value={targetPath}
+                  onChange={(e) => setTargetPath(e.target.value)}
+                  placeholder="/path/to/parent/directory"
+                  required
+                  className="flex-1 min-w-0 px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white font-mono text-sm focus:border-port-accent focus:outline-hidden"
+                />
+                <FolderPicker value={targetPath} onChange={setTargetPath} />
+              </div>
               <p className="text-xs text-gray-500 mt-1">
                 App will be created at: {targetPath ? `${targetPath}/${appName || 'app-name'}` : '...'}
               </p>

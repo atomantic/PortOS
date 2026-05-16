@@ -10,6 +10,10 @@
   --color-port-error: rgb(var(--port-error));
   --color-port-text: rgb(var(--port-text));
   --color-port-text-muted: rgb(var(--port-text-muted));
+  --color-port-on-accent: rgb(var(--port-on-accent));
+  --color-port-on-success: rgb(var(--port-on-success));
+  --color-port-on-warning: rgb(var(--port-on-warning));
+  --color-port-on-error: rgb(var(--port-on-error));
 
   --animate-scanline: scanline 5s linear infinite;
 }
@@ -24,7 +28,7 @@
   --port-warning: 245 158 11;
   --port-error: 239 68 68;
   --port-on-accent: 255 255 255;
-  --port-on-success: 255 255 255;
+  --port-on-success: 5 46 22;
   --port-on-warning: 17 24 39;
   --port-on-error: 255 255 255;
   --port-text: 229 229 229;
@@ -334,6 +338,18 @@ html[data-port-theme] [class~="bg-port-accent"][class~="text-white"] {
 }
 
 html[data-port-theme] [class~="bg-port-success"][class~="text-white"] {
+  color: rgb(var(--port-on-success)) !important;
+}
+
+/* Hardcoded Tailwind green/emerald backgrounds with white text fail WCAG AA
+   contrast (white on #22c55e ≈ 2.0). Route through --port-on-success so themed
+   dark text wins automatically — mirrors the bg-port-success rule above for
+   components that bypass the theme token. */
+html[data-port-theme] :is(
+  .bg-green-400, .bg-green-500, .bg-green-600,
+  .bg-emerald-400, .bg-emerald-500, .bg-emerald-600,
+  .bg-lime-400, .bg-lime-500
+)[class~="text-white"] {
   color: rgb(var(--port-on-success)) !important;
 }
 

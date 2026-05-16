@@ -45,6 +45,15 @@ export const shellSessionIdSchema = z.object({
   sessionId: z.string().min(1, 'sessionId is required')
 });
 
+// shell:attach — session id + optional claim flag.
+// `claim: true` means "attach only if currently unattached or already mine" — used by
+// auto-pick paths so a multi-tab race doesn't displace another tab. Default (false)
+// preserves the manual-attach takeover semantics (deep-link / tab-click intent).
+export const shellAttachSchema = z.object({
+  sessionId: z.string().min(1, 'sessionId is required'),
+  claim: z.boolean().optional()
+});
+
 // shell:stop — session ID
 export const shellStopSchema = shellSessionIdSchema;
 

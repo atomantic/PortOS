@@ -29,23 +29,37 @@ export async function startBackupScheduler() {
   }
 
   const cronExpression = settings.backup?.cronExpression || '0 0 * * *';
-  const destPath = settings.backup.destPath;
-  const excludePaths = settings.backup?.excludePaths || [];
   const timezone = await getUserTimezone();
 
+  // The cron expression itself is locked in at registration time — changing it
+  // requires a restart. But everything else (destPath, excludePaths,
+  // disabledDefaultExcludes) is re-read inside the handler so toggles saved in
+  // the Settings UI take effect on the next scheduled run without a restart.
   schedule({
     id: 'backup-daily',
     type: 'cron',
     cron: cronExpression,
     timezone,
     handler: async () => {
+      const current = await getSettings();
+      if (current.backup?.enabled === false) {
+        console.log('💾 Backup scheduler: disabled since registration — skipping run');
+        return;
+      }
+      const destPath = current.backup?.destPath;
+      if (!destPath) {
+        console.log('💾 Backup scheduler: destPath cleared since registration — skipping run');
+        return;
+      }
+      const excludePaths = current.backup?.excludePaths || [];
+      const disabledDefaultExcludes = current.backup?.disabledDefaultExcludes || [];
       console.log('💾 Backup scheduler: running scheduled backup');
-      await runBackup(destPath, null, { excludePaths });
+      await runBackup(destPath, null, { excludePaths, disabledDefaultExcludes });
     },
     metadata: { source: 'backupScheduler' }
   });
 
-  console.log(`💾 Backup scheduler: registered daily backup at cron "${cronExpression}" -> ${destPath}`);
+  console.log(`💾 Backup scheduler: registered daily backup at cron "${cronExpression}" -> ${settings.backup.destPath}`);
 }
 
 /**

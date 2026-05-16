@@ -30,7 +30,7 @@ import {
   errorRecoverSchema,
   shellInputSchema,
   shellResizeSchema,
-  shellSessionIdSchema,
+  shellAttachSchema,
   shellStopSchema,
   appUpdateSchema,
   appStandardizeSchema,
@@ -40,6 +40,7 @@ import * as appsService from './apps.js';
 import * as appUpdater from './appUpdater.js';
 import * as appDeployer from './appDeployer.js';
 import { registerVoiceHandlers } from '../sockets/voice.js';
+import { getBuildId } from '../lib/buildId.js';
 
 // Store active log streams per socket
 const activeStreams = new Map();
@@ -82,6 +83,12 @@ export function initSocket(io) {
   io.on('connection', (socket) => {
     console.log(`🔌 Client connected: ${socket.id}`);
     registerVoiceHandlers(socket);
+
+    // Tell the client what build the server is on. The client compares this
+    // to its own embedded <meta name="portos-build-id"> value; a mismatch
+    // means the tab is running stale code against a freshly-rebuilt server
+    // and the user is offered a reload.
+    socket.emit('build:id', { buildId: getBuildId() });
 
     // Handle streaming app detection
     socket.on('detect:start', async (rawData) => {
@@ -449,19 +456,23 @@ export function initSocket(io) {
     });
 
     socket.on('shell:attach', (rawData) => {
-      const validated = validateSocketData(shellSessionIdSchema, rawData, socket, 'shell:attach');
+      const validated = validateSocketData(shellAttachSchema, rawData, socket, 'shell:attach');
       if (!validated) return;
-      const result = shellService.attachSession(validated.sessionId, socket);
-      if (result) {
+      const result = shellService.attachSession(validated.sessionId, socket, { claim: validated.claim });
+      if (result?.claimRejected) {
+        // sessionId in payload lets the client correlate this error to its pending
+        // request and ignore stale errors from earlier rapid clicks.
+        socket.emit('shell:error', { error: 'Session attached to another client', sessionId: validated.sessionId });
+      } else if (result) {
         socket.emit('shell:attached', result);
       } else {
-        socket.emit('shell:error', { error: 'Session not found' });
+        socket.emit('shell:error', { error: 'Session not found', sessionId: validated.sessionId });
       }
     });
 
     socket.on('shell:list', () => {
       shellService.subscribeSessionList(socket);
-      socket.emit('shell:sessions', shellService.listAllSessions());
+      socket.emit('shell:sessions', shellService.listAllSessions(socket));
     });
 
     socket.on('shell:input', (rawData) => {

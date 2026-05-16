@@ -27,45 +27,96 @@ const makeErr = (message, code) => Object.assign(new Error(message), { code });
 
 const DEFAULT_SCENE_DURATION = 3;
 const MAX_SCENES = 30;
+const CD_NEGATIVE_PROMPT = 'text, watermark, blur, motion blur, low quality';
+
+// Single source of truth for the CD-scene shape. `order` is stamped at flatten
+// time so callers don't carry a placeholder. Duration is clamped to [1,10] for
+// CD pacing — narrower than the sanitizer's [1,30] storage envelope on purpose.
+function buildCdScene({ sceneId, intent, prompt, durationSecondsRaw, useContinuationFromPrior }) {
+  return {
+    sceneId,
+    intent: intent.slice(0, 1000),
+    prompt: prompt.slice(0, 8000),
+    negativePrompt: CD_NEGATIVE_PROMPT,
+    durationSeconds: Number.isFinite(durationSecondsRaw)
+      ? Math.min(10, Math.max(1, durationSecondsRaw))
+      : DEFAULT_SCENE_DURATION,
+    useContinuationFromPrior,
+    sourceImageFile: null,
+  };
+}
+
+// Map one storyboard scene's shots[] to N CD scenes. Within-scene shots chain
+// by default (natural i2v continuation); the LLM can also flag an explicit
+// continuity ref to chain across a scene boundary (deliberate match cut).
+function expandShotsToCdScenes(scene, sceneIdx, shortIssueId, baselinePrompt) {
+  const shots = Array.isArray(scene.shots) ? scene.shots : [];
+  return shots.map((shot, sIdx) => {
+    const description = (shot.description || '').trim() || scene.description;
+    const chainsWithinScene = sIdx > 0;
+    const explicitContinuity = !!shot.continuityFromShotId;
+    return buildCdScene({
+      sceneId: `iss-${shortIssueId}-s${sceneIdx + 1}-sh${sIdx + 1}`,
+      intent: scene.slugline
+        ? `${scene.slugline} — shot ${sIdx + 1}`
+        : `Scene ${sceneIdx + 1} Shot ${sIdx + 1}`,
+      prompt: baselinePrompt(description, scene.slugline),
+      durationSecondsRaw: shot.durationSeconds,
+      useContinuationFromPrior: chainsWithinScene || explicitContinuity,
+    });
+  });
+}
 
 /**
- * Build the CD treatment from a pipeline issue's storyboards stage. Each
- * storyboard scene becomes one CD scene; the series styleNotes are
- * prepended into each prompt so the renders share visual identity. After
- * the first scene we set `useContinuationFromPrior: true` so i2v chaining
- * carries the seed forward — same trick as the smoke fixture, applied to
- * narrative content.
+ * Build the CD treatment from a pipeline issue's storyboards stage. The
+ * mapping rules:
+ *   - Scene with shots[] → N CD scenes (one per shot); shots chain within
+ *     the scene, the first shot of each scene starts a fresh angle.
+ *   - Scene without shots[] → one CD scene (legacy behavior); subsequent
+ *     legacy scenes chain via useContinuationFromPrior=true.
+ *
+ * MAX_SCENES caps the flattened CD scene count so an issue with deep shot
+ * decomposition can't push the CD render queue past its single-issue budget.
  */
 export function buildTreatmentFromStoryboards({ issue, series }) {
   const storyboards = issue.stages?.storyboards;
   const rawScenes = Array.isArray(storyboards?.scenes) ? storyboards.scenes : [];
-  const usable = rawScenes
-    .filter((s) => (s?.description || '').trim().length > 0)
-    .slice(0, MAX_SCENES);
+  const usable = rawScenes.filter((s) => (s?.description || '').trim().length > 0);
   if (!usable.length) {
     throw makeErr(
       'Storyboards stage has no scenes with descriptions. Add scenes on the Storyboards stage first.',
       ERR_NO_STORYBOARDS,
     );
   }
+  const shortIssueId = issue.id.slice(-8);
   const settingByKey = buildSettingByKey(series?.settings);
-  const scenes = usable.map((s, idx) => ({
-    sceneId: `iss-${issue.id.slice(-8)}-s${idx + 1}`,
-    order: idx,
-    intent: (s.slugline || `Scene ${idx + 1}`).slice(0, 1000),
-    prompt: composeVisualPrompt({ series, description: s.description, slugline: s.slugline || '', settingByKey }).slice(0, 8000),
-    negativePrompt: 'text, watermark, blur, motion blur, low quality',
-    durationSeconds: Number.isFinite(s.durationSeconds) ? Math.min(10, Math.max(1, s.durationSeconds)) : DEFAULT_SCENE_DURATION,
-    useContinuationFromPrior: idx > 0,
-    sourceImageFile: null,
-  }));
+  const baselinePrompt = (description, slugline) =>
+    composeVisualPrompt({ series, description, slugline: slugline || '', settingByKey });
+
+  const flattened = [];
+  for (let idx = 0; idx < usable.length; idx += 1) {
+    const scene = usable[idx];
+    const expanded = (Array.isArray(scene.shots) && scene.shots.length > 0)
+      ? expandShotsToCdScenes(scene, idx, shortIssueId, baselinePrompt)
+      : [buildCdScene({
+        sceneId: `iss-${shortIssueId}-s${idx + 1}`,
+        intent: scene.slugline || `Scene ${idx + 1}`,
+        prompt: baselinePrompt(scene.description, scene.slugline),
+        durationSecondsRaw: scene.durationSeconds,
+        // First entry overall is fresh; every legacy scene after it chains
+        // from its predecessor — matches the pre-shots behavior exactly.
+        useContinuationFromPrior: flattened.length > 0,
+      })];
+    const room = MAX_SCENES - flattened.length;
+    if (room <= 0) break;
+    flattened.push(...expanded.slice(0, room));
+  }
+  // Stamp final order indices after truncation so the CD project sees a
+  // contiguous [0..N) sequence regardless of where the cap kicked in.
+  const scenes = flattened.map((cd, i) => ({ ...cd, order: i }));
   const logline = (series?.logline || issue.title || 'Episode video').slice(0, 500);
   const synopsis = ((issue.stages?.idea?.output || issue.title || 'Pipeline episode') + '').slice(0, 5000);
-  return {
-    logline,
-    synopsis,
-    scenes,
-  };
+  return { logline, synopsis, scenes };
 }
 
 /**
@@ -82,19 +133,15 @@ export async function startEpisodeVideoForIssue(issueId, options = {}) {
   const [issue, settings] = await Promise.all([getIssue(issueId), getSettings()]);
 
   const existing = issue.stages?.episodeVideo?.cdProjectId;
-  if (existing && !options.force) {
-    // Mirror buildTreatmentFromStoryboards exactly so the reuse-path scenes
-    // count matches what the existing CD treatment actually holds: filter
-    // empty descriptions AND cap at MAX_SCENES. SSE / UI status messaging
-    // stays consistent between fresh-start and reuse paths.
-    const scenes = (issue.stages?.storyboards?.scenes || [])
-      .filter((s) => (s?.description || '').trim().length > 0)
-      .slice(0, MAX_SCENES).length;
-    return { cdProjectId: existing, reused: true, scenes };
-  }
-
   const series = await getSeries(issue.seriesId);
   const treatment = buildTreatmentFromStoryboards({ issue, series });
+  if (existing && !options.force) {
+    // SSE / UI status messaging stays consistent between fresh-start and
+    // reuse paths by reusing the treatment builder for the scene count —
+    // shot expansion + MAX_SCENES truncation produce the same number both
+    // times, so the user sees "N scenes" matching what was actually queued.
+    return { cdProjectId: existing, reused: true, scenes: treatment.scenes.length };
+  }
   const aspectRatio = options.aspectRatio || '16:9';
   const quality = options.quality || 'standard';
   const modelId = options.modelId || settings?.videoGen?.defaultModelId || getDefaultVideoModelId();
@@ -110,6 +157,7 @@ export async function startEpisodeVideoForIssue(issueId, options = {}) {
     userStory: issue.stages?.prose?.output || null,
     disableAudio: true,
     autoAcceptScenes: true,
+    sourceIssueId: issueId,
   });
   await setCDTreatment(project.id, treatment);
 

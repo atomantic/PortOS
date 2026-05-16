@@ -66,6 +66,14 @@ export const PATHS = {
   loras: join(__lib_dirname, '../../data/loras'),
   videos: join(__lib_dirname, '../../data/videos'),
   videoThumbnails: join(__lib_dirname, '../../data/video-thumbnails'),
+  // Persisted audio renders (voice-over lines). Kept distinct from
+  // the in-memory voice-agent synthesis path in services/voice/ — that path
+  // streams WAV over Socket.IO without ever touching disk.
+  audio: join(__lib_dirname, '../../data/audio'),
+  // Uploaded + (eventually) generated background music tracks. Separate from
+  // `audio/` so the user can browse + reuse a track across issues without
+  // walking through the VO-line filenames.
+  music: join(__lib_dirname, '../../data/music'),
   slashdo: join(__lib_dirname, '../../lib/slashdo')
 };
 

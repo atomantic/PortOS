@@ -3,6 +3,20 @@ import { ServerError } from './errorHandler.js';
 import { ASPECT_RATIOS, QUALITIES, PROJECT_STATUSES, SCENE_STATUSES } from './creativeDirectorPresets.js';
 import { WORK_KINDS, WORK_STATUSES, ANALYSIS_KINDS } from './writersRoomPresets.js';
 import { ALL_STYLE_IDS, STYLE_ID } from './writersRoomStylePresets.js';
+import { BIBLE_LIMITS } from './storyBible.js';
+
+// gpt-image-2 (codex backend) caps at 3840px per edge and 8,294,400 total
+// pixels. Mirror the ceiling for every image-gen route. Local mflux can
+// render up to 3840 in principle but is impractically slow past ~2048 — the
+// UI's `compatible: ['codex']` filter on the 4K presets keeps those out of
+// the local picker. Shared so the cap and refinement message stay identical
+// across schemas.
+export const MAX_IMAGE_EDGE = 3840;
+export const MAX_IMAGE_PIXELS = 8_294_400;
+export const imageEdgeSchema = z.number().int().min(64).max(MAX_IMAGE_EDGE).optional();
+export const refineImagePixelCap = (d) =>
+  !(d.width && d.height) || d.width * d.height <= MAX_IMAGE_PIXELS;
+export const PIXEL_CAP_MESSAGE = `Total pixels (width × height) must be ≤ ${MAX_IMAGE_PIXELS.toLocaleString()}`;
 
 // =============================================================================
 // AGENT PERSONALITY SCHEMAS
@@ -284,7 +298,7 @@ export const appUpdateSchema = appSchema.partial();
 // Provider schema
 export const providerSchema = z.object({
   name: z.string().min(1).max(100),
-  type: z.enum(['cli', 'api']),
+  type: z.enum(['cli', 'api', 'tui']),
   command: z.string().optional(),
   args: z.array(z.string()).optional(),
   endpoint: z.string().url().optional(),
@@ -293,7 +307,10 @@ export const providerSchema = z.object({
   defaultModel: z.string().nullable().optional(),
   timeout: z.number().int().min(1000).max(600000).optional(),
   enabled: z.boolean().optional(),
-  envVars: z.record(z.string()).optional()
+  envVars: z.record(z.string()).optional(),
+  headlessArgs: z.array(z.string()).optional(),
+  tuiPromptDelayMs: z.number().int().min(250).max(60000).optional(),
+  tuiIdleTimeoutMs: z.number().int().min(10000).max(1800000).optional()
 });
 
 // Run command schema
@@ -520,10 +537,16 @@ export const searchQuerySchema = z.object({
 // BACKUP SCHEMAS
 // =============================================================================
 
+// Used by both the settings PUT route (.partial() for incremental updates) and
+// any direct backup-config endpoint. destPath is nullable: the UI persists an
+// empty string when the field is cleared, and the route handler treats empty/
+// missing destPath as "not configured" rather than rejecting the save.
 export const backupConfigSchema = z.object({
-  destPath: z.string().min(1),
+  destPath: z.string().nullable().optional(),
   cronExpression: z.string().optional(),
-  enabled: z.boolean().optional().default(true)
+  enabled: z.boolean().optional().default(true),
+  excludePaths: z.array(z.string()).optional().default([]),
+  disabledDefaultExcludes: z.array(z.string()).optional().default([])
 });
 
 export const restoreRequestSchema = z.object({
@@ -605,6 +628,20 @@ export const writersRoomAnalysisCreateSchema = z.object({
 // other text fields tolerate '' so the writer can deliberately blank a field
 // out and have the next analysis re-fill it.
 const wrCharTextField = z.string().max(2000);
+// Voice id namespace shared by writers-room + pipeline character routes:
+// `engine:voiceName` (e.g. `kokoro:af_heart`). Nullable so a UI clear path
+// can null it explicitly.
+const wrVoiceIdField = z.string().trim().max(200).nullable();
+// Wardrobe array (A2). `id` is omitted on POSTs by the UI — the sanitizer
+// fills it from the server-side UUID factory. Limits sourced from
+// BIBLE_LIMITS so bumping the constant updates Zod automatically.
+const wrWardrobeField = z.array(z.object({
+  id: z.string().trim().max(64).optional(),
+  name: z.string().trim().min(1).max(BIBLE_LIMITS.WARDROBE_NAME_MAX),
+  description: z.string().max(BIBLE_LIMITS.WARDROBE_DESCRIPTION_MAX).optional(),
+  createdAt: z.string().optional(),
+  updatedAt: z.string().optional(),
+}).strict()).max(BIBLE_LIMITS.WARDROBES_PER_CHARACTER_MAX);
 export const writersRoomCharacterCreateSchema = z.object({
   name: z.string().trim().min(1).max(200),
   aliases: z.array(z.string().trim().min(1).max(200)).max(20).optional(),
@@ -613,6 +650,8 @@ export const writersRoomCharacterCreateSchema = z.object({
   personality: wrCharTextField.optional(),
   background: wrCharTextField.optional(),
   notes: wrCharTextField.optional(),
+  voiceId: wrVoiceIdField.optional(),
+  wardrobes: wrWardrobeField.optional(),
 }).strict();
 export const writersRoomCharacterUpdateSchema = z.object({
   name: z.string().trim().min(1).max(200).optional(),
@@ -622,6 +661,8 @@ export const writersRoomCharacterUpdateSchema = z.object({
   personality: wrCharTextField.optional(),
   background: wrCharTextField.optional(),
   notes: wrCharTextField.optional(),
+  voiceId: wrVoiceIdField.optional(),
+  wardrobes: wrWardrobeField.optional(),
 }).strict();
 
 const wrSettingTextField = z.string().max(2000);
@@ -636,6 +677,16 @@ const writersRoomSettingCreateObject = z.object({
   weather: wrSettingTextField.optional(),
   recurringDetails: wrSettingTextField.optional(),
   notes: wrSettingTextField.optional(),
+  // Cluster A — INT/EXT + time-of-day taxonomy. Case-insensitive accept
+  // mirrors the sanitizer (`INT`/`int` both normalize to `INT`).
+  intExt: z.preprocess(
+    (v) => (typeof v === 'string' ? v.trim().toUpperCase() : v),
+    z.enum(['INT', 'EXT']),
+  ).nullable().optional(),
+  timeOfDay: z.preprocess(
+    (v) => (typeof v === 'string' ? v.trim().toLowerCase() : v),
+    z.enum(['dawn', 'day', 'dusk', 'night']),
+  ).nullable().optional(),
 }).strict();
 const settingHasIdentifier = (v) =>
   (v.name && v.name.trim()) || (v.slugline && v.slugline.trim());
@@ -652,6 +703,16 @@ export const writersRoomSettingUpdateSchema = z.object({
   weather: wrSettingTextField.optional(),
   recurringDetails: wrSettingTextField.optional(),
   notes: wrSettingTextField.optional(),
+  // Cluster A — INT/EXT + time-of-day taxonomy. Case-insensitive accept
+  // mirrors the sanitizer (`INT`/`int` both normalize to `INT`).
+  intExt: z.preprocess(
+    (v) => (typeof v === 'string' ? v.trim().toUpperCase() : v),
+    z.enum(['INT', 'EXT']),
+  ).nullable().optional(),
+  timeOfDay: z.preprocess(
+    (v) => (typeof v === 'string' ? v.trim().toLowerCase() : v),
+    z.enum(['dawn', 'day', 'dusk', 'night']),
+  ).nullable().optional(),
 }).strict();
 
 const wrObjectTextField = z.string().max(2000);
@@ -819,6 +880,61 @@ export function sanitizeTaskMetadata(raw) {
 
 
 // =============================================================================
+// SHARING (cross-network share buckets via cloud-synced folders)
+// =============================================================================
+
+export const bucketModeSchema = z.enum(['auto-merge', 'inbox']);
+
+export const bucketCreateSchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  path: z.string().trim().min(1).max(2000),
+  mode: bucketModeSchema.optional().default('inbox'),
+  displayNameOverride: z.string().trim().max(120).optional().nullable(),
+  bioOverride: z.string().trim().max(2000).optional().nullable(),
+}).strict();
+
+export const bucketUpdateSchema = z.object({
+  name: z.string().trim().min(1).max(120).optional(),
+  mode: bucketModeSchema.optional(),
+  displayNameOverride: z.string().trim().max(120).nullable().optional(),
+  bioOverride: z.string().trim().max(2000).nullable().optional(),
+}).strict();
+
+// Items shape for kind:'media'. Mirrors mediaCollections item key
+// — { kind: 'image'|'video', ref: '<filename>' }.
+const sharingMediaItemSchema = z.object({
+  kind: z.enum(['image', 'video']),
+  ref: z.string().min(1).max(500),
+}).strict();
+
+export const sharingExportSchema = z.object({
+  kind: z.enum(['series', 'universe', 'media']),
+  ids: z.array(z.string().min(1).max(120)).max(50).optional(),
+  items: z.array(sharingMediaItemSchema).max(200).optional(),
+}).strict().refine(
+  (data) => {
+    if (data.kind === 'media') return Array.isArray(data.items) && data.items.length > 0;
+    return Array.isArray(data.ids) && data.ids.length > 0;
+  },
+  { message: "Provide 'ids' for kind=series|universe, or 'items' for kind=media" },
+);
+
+// User-level sharing config — extends settings.json.
+export const sharingSettingsPatchSchema = z.object({
+  sharingDisplayName: z.string().trim().max(120).optional(),
+  sharingBio: z.string().trim().max(2000).optional(),
+}).strict();
+
+// Subscription creation: persistent (bucket, record) tuple. Series + universe
+// are the subscribable kinds (records that change over time and benefit from
+// auto-re-export). Media is one-shot via /buckets/:id/export.
+export const subscriptionCreateSchema = z.object({
+  bucketId: z.string().trim().min(1).max(120),
+  recordKind: z.enum(['series', 'universe']),
+  recordId: z.string().trim().min(1).max(120),
+}).strict();
+
+// =============================================================================
 // CREATIVE DIRECTOR SCHEMAS
 // =============================================================================
 
@@ -858,6 +974,10 @@ export const creativeDirectorProjectCreateSchema = z.object({
   // (videoGen one-offs still default to enabled.)
   disableAudio: z.boolean().optional().default(true),
   autoAcceptScenes: z.boolean().optional().default(false),
+  // Optional back-pointer to the pipeline issue that spawned this project,
+  // used by the stitch step to mix in audio-stage music. Bare CD projects
+  // (no pipeline origin) leave this null.
+  sourceIssueId: z.string().min(1).max(64).nullable().optional(),
 });
 
 // Update is restricted to a few editable fields. modelId / aspectRatio /

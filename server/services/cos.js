@@ -20,7 +20,7 @@ import { promisify } from 'util';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { getActiveProvider } from './providers.js';
 import { parseTasksMarkdown, groupTasksByStatus, getNextTask, getAutoApprovedTasks, getAwaitingApprovalTasks, updateTaskStatus, generateTasksMarkdown, hasKnownPrefix, isInternalTaskId } from '../lib/taskParser.js';
-import { isAppOnCooldown, getNextAppForReview, markAppReviewStarted, markIdleReviewStarted } from './appActivity.js';
+import { isAppOnCooldown, getNextAppForReview, markAppReviewStarted, markIdleReviewStarted, clearStaleActiveAgents } from './appActivity.js';
 import { getActiveApps, getAppTaskTypeOverrides } from './apps.js';
 import { getAdaptiveCooldownMultiplier, getSkippedTaskTypes, getPerformanceSummary, checkAndRehabilitateSkippedTasks, getLearningInsights, getTaskTypeConfidence } from './taskLearning.js';
 import { schedule as scheduleEvent, cancel as cancelEvent, getStats as getSchedulerStats, parseCronToNextRun } from './eventScheduler.js';
@@ -44,13 +44,18 @@ import { cosEvents, emitLog } from './cosEvents.js';
 export { cosEvents, emitLog };
 
 // Agent lifecycle (re-export for backward compat with `import * as cos`)
-export { registerAgent, updateAgent, completeAgent, appendAgentOutput, getAgents, getAgentDates, getAgentsByDate, getAgent, terminateAgent, killAgent, sendBtwToAgent, getAgentProcessStats, cleanupZombieAgents, deleteAgent, submitAgentFeedback, getFeedbackStats, extractTaskType, archiveStaleAgents, clearCompletedAgents, pruneOldAgentArchives } from './cosAgents.js';
+export { registerAgent, updateAgent, completeAgent, appendAgentOutput, getAgents, getAgentDates, getAgentsByDate, getAgent, getAgentPrompt, terminateAgent, killAgent, sendBtwToAgent, getAgentProcessStats, cleanupZombieAgents, deleteAgent, submitAgentFeedback, getFeedbackStats, extractTaskType, archiveStaleAgents, clearCompletedAgents, pruneOldAgentArchives } from './cosAgents.js';
 
 // Reports and activity (re-export for backward compat with `import * as cos`)
 export { generateReport, getReport, getTodayReport, listReports, listBriefings, getBriefing, getLatestBriefing, getTodayActivity, getRecentTasks, formatRelativeTime } from './cosReports.js';
 
 const AGENT_ARCHIVE_RETENTION_DAYS = 90;
 const RESUME_DEQUEUE_DELAY_MS = 500;
+
+// First non-empty line of a string. Used by addTask dedup: stored descriptions
+// are flattened to a single line by generateTasksMarkdown, so the comparison
+// must normalize on the first line to match multi-line inputs.
+export const firstLine = (s) => (s || '').split('\n').map(l => l.trim()).find(l => l) || '';
 
 const _execAsync = promisify(exec);
 const _execFileAsync = promisify(execFile);
@@ -176,6 +181,19 @@ export async function start() {
 
   // Then reset any orphaned in_progress tasks (no running agent)
   await resetOrphanedTasks();
+
+  // Clear stale activeAgentId pointers in app-activity.json. Without this, an
+  // idle-review agent that died across a restart (or a long-stale Feb-era state
+  // file) leaves activeAgentId set forever — isAppOnCooldown treats that as
+  // "agent still working" and queueEligibleImprovementTasks silently skips the
+  // app every cycle. Re-load state since the orphan-cleanup steps above have
+  // already mutated the on-disk agents map.
+  const freshState = await loadState();
+  const liveAgentIds = new Set(Object.keys(freshState.agents || {}));
+  const { cleared: clearedActiveAgents } = await clearStaleActiveAgents(liveAgentIds).catch(() => ({ cleared: [] }));
+  if (clearedActiveAgents.length > 0) {
+    emitLog('info', `🧹 Cleared ${clearedActiveAgents.length} stale activeAgentId pointer(s) from app-activity`);
+  }
 
   // Archive stale completed agents from state.json on startup
   const { archived } = await _archiveStaleAgents().catch(() => ({ archived: 0 }));
@@ -1081,6 +1099,7 @@ function getTaskDescription(taskType, appName) {
       'ui-bugs': `Review UI for visual bugs in ${appName}`,
       'mobile-responsive': `Check mobile responsiveness of ${appName}`,
       'feature-ideas': `Implement a feature idea for ${appName} aligned with GOALS.md and PLAN.md (worktree+PR)`,
+      'plan-task': `Execute next PLAN.md item for ${appName} and archive it to DONE.md (worktree+PR)`,
       'release-check': `Verify release readiness for ${appName}`,
       'jira-sprint-manager': `Triage and implement JIRA sprint tickets for ${appName} (worktree+PR)`,
       'jira-status-report': `Generate JIRA weekly status report for ${appName}`,
@@ -1098,6 +1117,7 @@ function getTaskDescription(taskType, appName) {
     'test-coverage': 'Add missing tests for uncovered code paths',
     'documentation': 'Update documentation, comments, and README files',
     'feature-ideas': 'Implement a feature idea aligned with GOALS.md and PLAN.md (worktree+PR)',
+    'plan-task': 'Execute next PLAN.md item and archive it to DONE.md (worktree+PR)',
     'accessibility': 'Audit and fix accessibility issues (ARIA, keyboard nav, contrast)',
     'dependency-updates': 'Check for and safely update outdated dependencies',
     'error-handling': 'Improve error handling patterns and recovery logic',
@@ -1128,6 +1148,7 @@ const IMPROVEMENT_TYPES = [
   'documentation',
   // Goal 4: User Engagement
   'feature-ideas',
+  'plan-task',
   // Goal 5: System Health
   'accessibility',
   'dependency-updates',
@@ -2191,14 +2212,14 @@ export async function addTask(taskData, taskType = 'user', { raw = false } = {})
     tasks = parseTasksMarkdown(content);
   }
 
-  // Reject duplicate: same description already pending or in_progress
-  const normalizedDesc = taskData.description.trim().toLowerCase();
+  // Reject duplicate: same first-line description already pending or in_progress.
+  const normalizedDesc = firstLine(taskData.description).toLowerCase();
   const duplicate = tasks.find(t =>
     (t.status === 'pending' || t.status === 'in_progress') &&
-    t.description?.trim().toLowerCase() === normalizedDesc
+    firstLine(t.description).toLowerCase() === normalizedDesc
   );
   if (duplicate) {
-    console.log(`⚠️ Duplicate task rejected: "${taskData.description.substring(0, 60)}" matches ${duplicate.id}`);
+    console.log(`⚠️ Duplicate task rejected: "${normalizedDesc.substring(0, 60)}" matches ${duplicate.id}`);
     return { ...duplicate, duplicate: true };
   }
 
@@ -2957,7 +2978,10 @@ async function scheduleNextImprovementCheck() {
   if (!isDaemonRunning()) return;
 
   const taskSchedule = await import('./taskSchedule.js');
-  const upcoming = await taskSchedule.getUpcomingTasks(1);
+  // Pull a wider list so a perpetually-"ready" weekly task can't mask an upcoming
+  // cron boundary. We sort by status (ready first), so 1-element peeks always miss
+  // the cron slot when anything else is ready.
+  const upcoming = await taskSchedule.getUpcomingTasks(50);
 
   // Default: check again in 1 hour if nothing scheduled
   // Cap at 1 hour so per-app cron tasks (e.g. feature-ideas at 1am) are always checked
@@ -2966,13 +2990,19 @@ async function scheduleNextImprovementCheck() {
   let delayMs = MAX_CHECK_INTERVAL;
   let description = 'Periodic improvement check (1h)';
 
-  if (upcoming.length > 0 && upcoming[0].status === 'scheduled' && upcoming[0].eligibleIn > 0) {
-    delayMs = Math.min(upcoming[0].eligibleIn, MAX_CHECK_INTERVAL);
-    const effectiveFormatted = formatDuration(delayMs);
-    const capNote = upcoming[0].eligibleIn > MAX_CHECK_INTERVAL
-      ? ` (capped from ${upcoming[0].eligibleInFormatted})`
-      : '';
-    description = `Next improvement: ${upcoming[0].taskType} in ${effectiveFormatted}${capNote}`;
+  // Pick the soonest *scheduled* task (status='scheduled' with positive eligibleIn).
+  // Ready tasks don't gate the delay — they'll be queued on whatever the next check
+  // ends up being. Cron tasks DO gate the delay, because their firing window is a
+  // single minute; missing it pushes the next attempt out by a full period.
+  const nextScheduled = upcoming
+    .filter(t => t.status === 'scheduled' && t.eligibleIn > 0)
+    .sort((a, b) => a.eligibleIn - b.eligibleIn)[0];
+
+  if (nextScheduled && nextScheduled.eligibleIn < MAX_CHECK_INTERVAL) {
+    delayMs = nextScheduled.eligibleIn;
+    description = `Next improvement: ${nextScheduled.taskType} in ${formatDuration(delayMs)}`;
+  } else if (nextScheduled) {
+    description = `Next improvement: ${nextScheduled.taskType} in ${nextScheduled.eligibleInFormatted} (capped at 1h)`;
   }
 
   scheduleEvent({

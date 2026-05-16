@@ -5,7 +5,10 @@ import { synthesizeKokoro, listKokoroVoices } from './tts-kokoro.js';
 import { synthesizePiper, listPiperVoices } from './tts-piper.js';
 import { findPiperVoice } from './piper-voices.js';
 
-const VALID_ENGINES = new Set(['kokoro', 'piper']);
+// Single source of truth for the supported TTS engine names. Imported by
+// routes/voice.js, routes/pipeline.js, and services/pipeline/audio.js so a
+// new engine (e.g. ElevenLabs) shows up in every consumer with one edit.
+export const VALID_ENGINES = new Set(['kokoro', 'piper']);
 
 // Normalize `engine` against the allowlist so an invalid value can't silently
 // produce Kokoro audio while the response reports `engine: 'elevenlabs'`.

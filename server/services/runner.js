@@ -142,7 +142,7 @@ export function hasModelFlag(args) {
  * (`--model=X` / `-m=X`). Returns null when no model flag is present or the
  * separated form has no value following the flag.
  *
- * Used by refiners (mediaPromptRefiner, worldBuilderRefine) so the model
+ * Used by refiners (mediaPromptRefiner, universeBuilderRefine) so the model
  * reported back to the caller / persisted on the run record matches what
  * the CLI will actually run when the user has hard-coded a model in args.
  */

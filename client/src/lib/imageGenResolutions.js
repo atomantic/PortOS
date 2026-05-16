@@ -1,5 +1,5 @@
 // Shared resolution presets for image generation. Used by the standalone
-// Image Gen page and the World Builder batch render so the size dropdown
+// Image Gen page and the Universe Builder batch render so the size dropdown
 // stays consistent everywhere.
 //
 // Entries without a `compatible` field are universal. The non-universal
@@ -24,6 +24,13 @@ export const RESOLUTIONS = [
   { label: '1536×1536 (hi-res square)', w: 1536, h: 1536, compatible: ['codex', RUNNER_FAMILIES.FLUX2] },
   { label: '1024×1536 (hi-res portrait)', w: 1024, h: 1536, compatible: ['codex', RUNNER_FAMILIES.FLUX2] },
   { label: '1536×1024 (hi-res landscape)', w: 1536, h: 1024, compatible: ['codex', RUNNER_FAMILIES.FLUX2] },
+  // gpt-image-2 final-render presets: hard ceiling is each edge ≤ 3840 and
+  // total ≤ 8,294,400 pixels. All three below sit exactly at the pixel cap
+  // — pick aspect by shape. Codex-only because mflux/diffusers are too slow
+  // at this resolution to be practical (and the smaller models degrade).
+  { label: '3840×2160 (4K landscape)', w: 3840, h: 2160, compatible: ['codex'] },
+  { label: '2160×3840 (4K portrait — comic page)', w: 2160, h: 3840, compatible: ['codex'] },
+  { label: '2880×2880 (4K square)', w: 2880, h: 2880, compatible: ['codex'] },
 ];
 
 // Flux 1 (mflux/diffusers, `dev` / `schnell`) has no `runner` field — it's

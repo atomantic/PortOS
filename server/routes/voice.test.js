@@ -21,6 +21,7 @@ vi.mock('../services/voice/bootstrap.js', () => ({
 vi.mock('../services/voice/tts.js', () => ({
   synthesize: vi.fn(),
   listVoices: vi.fn(),
+  VALID_ENGINES: new Set(['kokoro', 'piper']),
 }));
 vi.mock('../services/voice/piper-voices.js', () => ({
   findPiperVoice: vi.fn(),

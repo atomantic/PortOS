@@ -42,7 +42,7 @@ export async function getProject(id) {
   return all.find((p) => p.id === id) || null;
 }
 
-export async function createProject({ name, aspectRatio, quality, modelId, targetDurationSeconds, styleSpec = '', startingImageFile = null, userStory = null, disableAudio = true, autoAcceptScenes = false }) {
+export async function createProject({ name, aspectRatio, quality, modelId, targetDurationSeconds, styleSpec = '', startingImageFile = null, userStory = null, disableAudio = true, autoAcceptScenes = false, sourceIssueId = null }) {
   const id = `cd-${randomUUID()}`;
   const now = new Date().toISOString();
 
@@ -65,6 +65,11 @@ export async function createProject({ name, aspectRatio, quality, modelId, targe
     userStory,
     disableAudio,
     autoAcceptScenes,
+    // Optional back-pointer to the pipeline issue that spawned this project.
+    // The stitch step uses it to look up `stages.audio.music` and mix it
+    // into the final cut. Bare CD projects (no pipeline origin) leave this
+    // null and skip the audio-mux pass.
+    sourceIssueId,
     collectionId: collection.id,
     timelineProjectId: null,
     finalVideoId: null,

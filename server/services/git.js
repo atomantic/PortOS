@@ -636,6 +636,37 @@ export async function generatePRDescription(dir, baseBranch, headBranch, agentOu
 }
 
 /**
+ * Suggest a concise PR title from the branch's commits, falling back to a
+ * provided text (typically the task description).
+ *
+ * The CoS task description is often verbose user prose (e.g. "on the
+ * settings/backup page, we should have a button to run the backup. Also, we
+ * should show default exclusions"). Commit subjects on the branch are far
+ * better titles because the agent wrote them as conventional-commit summaries
+ * of the actual change.
+ *
+ * Picks the OLDEST commit on the branch when present — for multi-commit
+ * branches that include follow-ups like "address review:" or "/simplify"
+ * cleanups, the first commit is usually the main feature/fix.
+ *
+ * @param {string} dir - Working directory (repo root or worktree)
+ * @param {string} baseBranch - Base branch the PR will target
+ * @param {string} headBranch - Branch the PR will be opened from
+ * @param {string} fallbackText - Used when no commits are found
+ * @returns {Promise<string>} PR title (<= 100 chars)
+ */
+export async function suggestPRTitle(dir, baseBranch, headBranch, fallbackText) {
+  const comparison = await getBranchComparison(dir, baseBranch, headBranch).catch(() => null);
+  if (comparison?.commits?.length) {
+    const oldest = comparison.commits[comparison.commits.length - 1];
+    const subject = oldest?.message?.trim();
+    if (subject) return subject.substring(0, 100);
+  }
+  const firstLine = (fallbackText || '').split(/[\r\n]/).find(l => l.trim()) || '';
+  return firstLine.trim().substring(0, 100) || 'CoS automated task';
+}
+
+/**
  * Extract a meaningful implementation summary from raw agent output.
  * Agents typically end their output with a summary of what was implemented.
  * This function finds the last tool-call artifact in the tail of the output
@@ -669,6 +700,15 @@ export function extractAgentSummary(output) {
   // Trim leading/trailing blank lines
   while (summaryLines.length && !summaryLines[0].trim()) summaryLines.shift();
   while (summaryLines.length && !summaryLines[summaryLines.length - 1].trim()) summaryLines.pop();
+
+  // Strip a leading "Summary" heading the agent may have written itself
+  // (e.g. "## Summary", "# Summary", "Summary:"). Without this, the PR body
+  // ends up with two stacked "Summary" headings — generatePRDescription wraps
+  // the extracted text in its own "## Summary" section.
+  while (summaryLines.length && /^\s*(#{1,6}\s*)?summary\s*:?\s*$/i.test(summaryLines[0])) {
+    summaryLines.shift();
+    while (summaryLines.length && !summaryLines[0].trim()) summaryLines.shift();
+  }
 
   const summary = summaryLines.join('\n').trim();
 

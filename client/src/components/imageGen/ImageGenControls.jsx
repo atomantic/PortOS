@@ -1,6 +1,6 @@
 // Shared image-gen knob grid. Renders model + resolution + steps + guidance/CFG +
 // quantize + (optional) seed in a 2- or 3-column grid that matches the standalone
-// Image Gen page. Used by ImageGen and World Builder batch render so the form
+// Image Gen page. Used by ImageGen and Universe Builder batch render so the form
 // looks and behaves the same in both places.
 //
 // Props are intentionally per-field (value + onChange pairs) rather than a single

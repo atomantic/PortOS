@@ -11,14 +11,13 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { getVoiceConfig, updateVoiceConfig } from '../services/voice/config.js';
 import { checkAll, invalidateHealthCache } from '../services/voice/health.js';
 import { reconcile, verifyBinaries, verifyModels, downloadPiperVoice } from '../services/voice/bootstrap.js';
-import { synthesize, listVoices } from '../services/voice/tts.js';
+import { synthesize, listVoices, VALID_ENGINES } from '../services/voice/tts.js';
 import { findPiperVoice } from '../services/voice/piper-voices.js';
 import { speakProactive, HHMM_RE, MAX_PROACTIVE_TEXT_LEN } from '../services/voice/proactiveSpeech.js';
 
 const router = Router();
 
-const VALID_TTS_ENGINES = new Set(['kokoro', 'piper']);
-const validEngine = (v) => VALID_TTS_ENGINES.has(v) ? v : undefined;
+const validEngine = (v) => VALID_ENGINES.has(v) ? v : undefined;
 
 // Shared cap for every REST endpoint that turns a text payload into TTS
 // audio (/test and /speak). Imported from proactiveSpeech.js so the

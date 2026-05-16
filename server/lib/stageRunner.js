@@ -18,6 +18,7 @@ import { ServerError } from './errorHandler.js';
 import { findBalancedBlocks, tryParseWithRepair } from './jsonExtract.js';
 import { resolveEffectiveModel, runPromptThroughProvider } from './promptRunner.js';
 import { stripCodeFences } from './aiProvider.js';
+import { extractCodexAssistant } from './codexAssistantExtract.js';
 import { getActiveProvider, getProviderById } from '../services/providers.js';
 import { buildPrompt, getStage } from '../services/promptService.js';
 import { createRun } from '../services/runner.js';
@@ -203,10 +204,11 @@ export async function runStagedLLM(stageName, variables, options = {}) {
   const { text } = await runPromptThroughProvider({
     provider, model: effectiveModel, prompt, source: options.source || 'staged-llm', runId,
   });
-  // Pass the prompt down so extractJson can strip any echoed copy of
-  // it before walking — Codex CLI echoes stdin to stdout, and stage
-  // prompts often contain fenced JSON schema examples that would
-  // otherwise parse-and-win over the model's actual response.
-  const content = options.returnsJson ? extractJson(text, { promptToStrip: prompt }) : text;
+  // Codex CLI dumps the full transcript (banner + metadata + echoed prompt +
+  // `codex\n<reply>` + token-stats footer). Carve out the assistant reply
+  // before either parsing JSON or returning text. Idempotent for non-Codex
+  // providers — returns input unchanged when the banner isn't present.
+  const cleaned = extractCodexAssistant(text);
+  const content = options.returnsJson ? extractJson(cleaned, { promptToStrip: prompt }) : cleaned;
   return { content, model: effectiveModel || null, providerId: provider.id, runId };
 }

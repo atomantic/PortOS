@@ -51,7 +51,8 @@ const MediaCollections = lazyWithReload(() => import('./pages/MediaCollections')
 const MediaCollectionDetail = lazyWithReload(() => import('./pages/MediaCollectionDetail'));
 const MediaModels = lazyWithReload(() => import('./pages/MediaModels'));
 const Loras = lazyWithReload(() => import('./pages/Loras'));
-const WorldBuilder = lazyWithReload(() => import('./pages/WorldBuilder'));
+const UniverseBuilder = lazyWithReload(() => import('./pages/UniverseBuilder'));
+const UniverseCanon = lazyWithReload(() => import('./pages/UniverseCanon'));
 const VideoTimeline = lazyWithReload(() => import('./pages/VideoTimeline'));
 const VideoTimelineEditor = lazyWithReload(() => import('./pages/VideoTimelineEditor'));
 const CreativeDirector = lazyWithReload(() => import('./pages/CreativeDirector'));
@@ -82,6 +83,7 @@ const Wiki = lazyWithReload(() => import('./pages/Wiki'));
 const RapidReaderPage = lazyWithReload(() => import('./pages/RapidReader'));
 const WritersRoom = lazyWithReload(() => import('./pages/WritersRoom'));
 const Pipeline = lazyWithReload(() => import('./pages/Pipeline'));
+const Sharing = lazyWithReload(() => import('./pages/Sharing'));
 const PipelineSeries = lazyWithReload(() => import('./pages/PipelineSeries'));
 const PipelineIssue = lazyWithReload(() => import('./pages/PipelineIssue'));
 
@@ -167,6 +169,7 @@ export default function App() {
           <Route path="settings/:tab" element={<Settings />} />
           <Route path="uploads" element={<Uploads />} />
           <Route path="shell" element={<Shell />} />
+          <Route path="shell/:sessionId" element={<Shell />} />
           <Route path="browser" element={<BrowserPage />} />
           <Route path="insights" element={<Navigate to="/insights/overview" replace />} />
           <Route path="insights/:tab" element={<Insights />} />
@@ -206,8 +209,9 @@ export default function App() {
             <Route path="timeline/:projectId" element={<VideoTimelineEditor />} />
             <Route path="models" element={<MediaModels />} />
             <Route path="loras" element={<Loras />} />
-            <Route path="world-builder" element={<WorldBuilder />} />
-            <Route path="world-builder/:worldId" element={<WorldBuilder />} />
+            <Route path="universe-builder" element={<UniverseBuilder />} />
+            <Route path="universe-builder/:universeId" element={<UniverseBuilder />} />
+            <Route path="universe-builder/:universeId/canon" element={<UniverseCanon />} />
           </Route>
           <Route path="image-gen" element={<RedirectWithSearch to="/media/image" />} />
           <Route path="video-gen" element={<RedirectWithSearch to="/media/video" />} />
@@ -216,9 +220,11 @@ export default function App() {
           <Route path="wiki" element={<Navigate to="/wiki/overview" replace />} />
           <Route path="wiki/:tab" element={<Wiki />} />
           <Route path="rapid-reader" element={<RapidReaderPage />} />
-          <Route path="world-builder" element={<WorldBuilder />} />
-          <Route path="world-builder/:worldId" element={<WorldBuilder />} />
+          <Route path="universe-builder" element={<UniverseBuilder />} />
+          <Route path="universe-builder/:universeId" element={<UniverseBuilder />} />
+          <Route path="universe-builder/:universeId/canon" element={<UniverseCanon />} />
           <Route path="writers-room" element={<WritersRoom />} />
+          <Route path="sharing" element={<Sharing />} />
           <Route path="pipeline" element={<Pipeline />} />
           <Route path="pipeline/series/:seriesId" element={<PipelineSeries />} />
           <Route path="pipeline/issues/:issueId" element={<Navigate to="idea" replace />} />

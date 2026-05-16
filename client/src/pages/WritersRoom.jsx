@@ -112,7 +112,9 @@ export default function WritersRoom() {
 
   // Inline gridTemplateColumns is a no-op while the container is `display: flex`
   // (mobile) and takes effect once `md:grid` flips display at the breakpoint.
-  const libraryTrack = libraryCollapsed ? '32px' : '260px';
+  // Collapsed track is 0px (not a thin rail) — matches CoS pattern where a
+  // floating expand button stands in for the rail.
+  const libraryTrack = libraryCollapsed ? '0px' : '260px';
   const exerciseSuffix = showExercise ? ' 320px' : '';
   const desktopGridCols = `${libraryTrack} minmax(0, 1fr)${exerciseSuffix}`;
 
@@ -125,20 +127,21 @@ export default function WritersRoom() {
       </div>
 
       <div
-        className="flex-1 flex flex-col md:grid min-h-0"
+        className="relative flex-1 flex flex-col md:grid min-h-0 transition-[grid-template-columns] duration-200"
         style={{ gridTemplateColumns: desktopGridCols }}
       >
+        {libraryCollapsed && (
+          <button
+            onClick={toggleLibrary}
+            className="hidden md:flex absolute left-0 top-2 z-20 p-1.5 text-gray-500 hover:text-white transition-colors rounded-r-md hover:bg-port-card bg-port-card/60 border border-l-0 border-port-border"
+            title="Show library"
+            aria-label="Show library"
+          >
+            <PanelLeftOpen size={16} />
+          </button>
+        )}
         {libraryCollapsed ? (
-          <aside className="hidden md:flex border-r border-port-border bg-port-card/40 items-start justify-center pt-3">
-            <button
-              onClick={toggleLibrary}
-              className="p-1.5 text-gray-500 hover:text-white"
-              title="Show library"
-              aria-label="Show library"
-            >
-              <PanelLeftOpen size={14} />
-            </button>
-          </aside>
+          <div className="hidden md:block overflow-hidden min-w-0" />
         ) : (
           <aside className="border-b md:border-b-0 md:border-r border-port-border bg-port-card/40 px-3 py-3 overflow-y-auto max-h-64 md:max-h-none">
             <LibraryPane

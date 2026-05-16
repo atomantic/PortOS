@@ -36,6 +36,21 @@ fi
 
 echo ""
 
+# Install/update slash-do (project-level slash commands for Claude Code et al.)
+# via npx. Auto-detects the installed AI environments and lays down the latest
+# command set under ~/.claude/commands (or per-environment equivalent). The
+# git submodule at lib/slashdo is the in-repo source for inline command loading
+# from CoS agents — `npx slash-do@latest` complements that by keeping the
+# user-global command pool current. Failures are non-fatal: PortOS still works
+# without the global slash commands.
+echo "Installing/updating slash-do commands (npx slash-do@latest)..."
+# Pipe "a" so slash-do's "multiple environments detected" prompt auto-selects
+# all detected envs instead of hanging on readline when stdin is not a TTY.
+if ! echo a | npx --yes slash-do@latest; then
+    echo "⚠️  slash-do install failed — skipping (you can re-run later: npx slash-do@latest)"
+fi
+echo ""
+
 # Optional Ghostty setup. Skip on non-TTY (CI, piped stdin) so `read` doesn't
 # abort the script under `set -e`, and `||` the read itself so a Ctrl-D in an
 # interactive shell defaults to "skip" instead of aborting.

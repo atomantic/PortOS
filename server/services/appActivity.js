@@ -124,6 +124,34 @@ export async function clearAppCooldown(appId) {
 }
 
 /**
+ * Clear `activeAgentId` entries that reference agents no longer in the live agent set.
+ *
+ * Called at daemon startup. Without this, an idle-review agent that died across a
+ * server restart (or a Feb-vintage state file that never finished cleanly) leaves a
+ * stale activeAgentId pointing at a dead PID. `isAppOnCooldown` treats any non-null
+ * activeAgentId as "still working" → the app is stuck on cooldown forever, and
+ * `queueEligibleImprovementTasks` silently skips it every cycle.
+ *
+ * @param {Set<string>|Array<string>} liveAgentIds - The currently-running agent IDs from cosState
+ * @returns {Promise<{cleared: string[]}>} - List of app IDs whose activeAgentId was cleared
+ */
+export async function clearStaleActiveAgents(liveAgentIds) {
+  const live = liveAgentIds instanceof Set ? liveAgentIds : new Set(liveAgentIds || []);
+  const activity = await loadAppActivity();
+  const cleared = [];
+  for (const [appId, app] of Object.entries(activity.apps || {})) {
+    if (app.activeAgentId && !live.has(app.activeAgentId)) {
+      cleared.push(appId);
+      app.activeAgentId = null;
+    }
+  }
+  if (cleared.length > 0) {
+    await saveAppActivity(activity);
+  }
+  return { cleared };
+}
+
+/**
  * Check if an app is on cooldown
  */
 export async function isAppOnCooldown(appId, cooldownMs) {

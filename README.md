@@ -8,6 +8,8 @@
 
 Think [Umbrel](https://umbrel.com), but for your active git repos, AI workflows, and personal knowledge. Access everything from your phone, tablet, or any device on your Tailscale network.
 
+> **Highly opinionated & personal.** PortOS is built for one specific use case: a single developer running it on their own machine, behind Tailscale, with their own AI providers and workflows. It makes strong assumptions about how you work and will keep making them. Pull requests are welcome — but the project will always prioritize the author's needs first, and merges may introduce breaking changes without warning. If something stops working after an update, ask your coding agent of choice to read the changelog and upgrade your local data: `"Read .changelog/vX.Y.Z.md and fix any migration issues in my PortOS data/ directory."`
+
 ![PortOS Chief of Staff](./docs/media/portos_1.png)
 
 ---
@@ -277,6 +279,15 @@ Configure AI providers for the runner and Chief of Staff:
 - [Prompt Manager](./docs/features/prompt-manager.md) — Customizable AI prompt templates
 - [JIRA Sprint Manager](./docs/features/jira-sprint-manager.md) — Autonomous JIRA triage and implementation
 - [Error Handling](./docs/features/error-handling.md) — Centralized error normalization and recovery
+
+## Contributing
+
+Pull requests are welcome. This is a personal project, so:
+
+- **Breakage happens.** Major version bumps (e.g. v2.0.0) may rename pages, reorganize data directories, or change schemas in ways that require a migration pass on your local data. Check the relevant `.changelog/vX.Y.Z.md` for what changed.
+- **Data migration.** If something stops working after an update, the fastest fix is to point your coding agent at the changelog: `"Read .changelog/vX.Y.Z.md and fix any migration issues in my PortOS data/ directory."` Most data issues are trivially auto-fixable this way.
+- **Opinionated by design.** Architecture decisions (single-user, no auth, JSON files over a full ORM, Tailscale-only networking) are intentional and will not change. PRs that add multi-user support, HTTPS-by-default, or general-purpose hardening will not be merged.
+- **Style.** Match the existing conventions in [CLAUDE.md](./CLAUDE.md) before opening a PR — especially the no-try/catch route convention, emoji-prefixed logging, and Zod validation on all inputs.
 
 ## License
 

@@ -96,6 +96,133 @@ describe('sanitizeSceneList', () => {
     expect(sanitizeSceneList({ scenes: 'oops' })).toEqual({ title: null, logline: null, scenes: [] });
   });
 
+  it('round-trips LLM-emitted shots[] on a scene', () => {
+    const out = sanitizeSceneList({
+      scenes: [{
+        heading: 'Scene 1', visualPrompt: 'wide',
+        shots: [
+          { id: 'shot-01', description: 'wide on the kitchen', durationSeconds: 5, continuityFromShotId: null },
+          { id: 'shot-02', description: 'close on the kettle', durationSeconds: 3, continuityFromShotId: 'shot-01' },
+        ],
+      }],
+    });
+    expect(out.scenes[0].shots).toEqual([
+      { id: 'shot-01', description: 'wide on the kitchen', durationSeconds: 5, continuityFromShotId: null },
+      { id: 'shot-02', description: 'close on the kettle', durationSeconds: 3, continuityFromShotId: 'shot-01' },
+    ]);
+  });
+
+  it('drops continuity references that point to unknown or forward shots', () => {
+    const out = sanitizeSceneList({
+      scenes: [{
+        heading: 'Scene 1',
+        shots: [
+          { id: 'shot-01', description: 'a', continuityFromShotId: 'shot-99' },   // unknown → null
+          { id: 'shot-02', description: 'b', continuityFromShotId: 'shot-03' },   // forward → null
+          { id: 'shot-03', description: 'c', continuityFromShotId: 'shot-03' },   // self → null
+          { id: 'shot-04', description: 'd', continuityFromShotId: 'shot-02' },   // valid backward
+        ],
+      }],
+    });
+    const shots = out.scenes[0].shots;
+    expect(shots[0].continuityFromShotId).toBe(null);
+    expect(shots[1].continuityFromShotId).toBe(null);
+    expect(shots[2].continuityFromShotId).toBe(null);
+    expect(shots[3].continuityFromShotId).toBe('shot-02');
+  });
+
+  it('defaults durationSeconds to 4 and clamps out-of-range values', () => {
+    const out = sanitizeSceneList({
+      scenes: [{
+        shots: [
+          { description: 'a' },                              // missing → 4
+          { description: 'b', durationSeconds: 'nope' },     // NaN → 4
+          { description: 'c', durationSeconds: 0 },          // below floor → 1
+          { description: 'd', durationSeconds: 999 },        // above ceiling → 30
+          { description: 'e', durationSeconds: 7.6 },        // rounded → 8
+        ],
+      }],
+    });
+    const shots = out.scenes[0].shots;
+    expect(shots[0].durationSeconds).toBe(4);
+    expect(shots[1].durationSeconds).toBe(4);
+    expect(shots[2].durationSeconds).toBe(1);
+    expect(shots[3].durationSeconds).toBe(30);
+    expect(shots[4].durationSeconds).toBe(8);
+  });
+
+  it('synthesizes shot ids when the LLM omits them', () => {
+    const out = sanitizeSceneList({
+      scenes: [{ shots: [{ description: 'first' }, { description: 'second' }] }],
+    });
+    expect(out.scenes[0].shots.map((s) => s.id)).toEqual(['shot-01', 'shot-02']);
+  });
+
+  it('drops shots without a description (empty content is not a shot)', () => {
+    const out = sanitizeSceneList({
+      scenes: [{
+        shots: [
+          { id: 'shot-01', description: 'real' },
+          { id: 'shot-02', description: '   ' },  // whitespace-only → dropped
+          { id: 'shot-03' },                       // missing → dropped
+        ],
+      }],
+    });
+    expect(out.scenes[0].shots).toHaveLength(1);
+    expect(out.scenes[0].shots[0].id).toBe('shot-01');
+  });
+
+  it('caps shots[] per scene at SHOTS_PER_SCENE_MAX (16)', () => {
+    const out = sanitizeSceneList({
+      scenes: [{
+        shots: Array.from({ length: 30 }, (_, i) => ({ description: `shot ${i}` })),
+      }],
+    });
+    expect(out.scenes[0].shots).toHaveLength(16);
+  });
+
+  it('missing shots[] on a scene yields an empty array (back-compat)', () => {
+    const out = sanitizeSceneList({ scenes: [{ heading: 'Scene 1', visualPrompt: 'w' }] });
+    expect(out.scenes[0].shots).toEqual([]);
+  });
+
+  it('whitespace-only shot id falls back to a synthesized id', () => {
+    const out = sanitizeSceneList({
+      scenes: [{ shots: [{ id: '   ', description: 'real' }] }],
+    });
+    expect(out.scenes[0].shots[0].id).toBe('shot-01');
+  });
+
+  it('continuity ref to a shot dropped for empty description collapses to null', () => {
+    const out = sanitizeSceneList({
+      scenes: [{
+        shots: [
+          { id: 'shot-01', description: '' },                            // dropped — no description
+          { id: 'shot-02', description: 'real', continuityFromShotId: 'shot-01' },
+        ],
+      }],
+    });
+    // Only shot-02 survives; its continuity ref points to a dropped shot
+    // and therefore collapses to null rather than fabricating a substitute.
+    expect(out.scenes[0].shots).toHaveLength(1);
+    expect(out.scenes[0].shots[0].continuityFromShotId).toBe(null);
+  });
+
+  it('duplicate shot ids resolve continuity refs to the first occurrence', () => {
+    const out = sanitizeSceneList({
+      scenes: [{
+        shots: [
+          { id: 'shot-01', description: 'a' },
+          { id: 'shot-01', description: 'b' },                            // duplicate id
+          { id: 'shot-03', description: 'c', continuityFromShotId: 'shot-01' },
+        ],
+      }],
+    });
+    // findIndex returns idx 0 (the first 'shot-01'). idx 0 < idx 2 → valid
+    // backward reference. Documents the dedup-resolution-to-first behavior.
+    expect(out.scenes[0].shots[2].continuityFromShotId).toBe('shot-01');
+  });
+
   it('drops non-string character names and trims survivors', () => {
     const out = sanitizeSceneList({ scenes: [{ characters: [' ALICE ', 42, null, 'BOB', ''] }] });
     expect(out.scenes[0].characters).toEqual(['ALICE', 'BOB']);
@@ -159,7 +286,7 @@ describe('extractScenes', () => {
     expect(result.model).toBe('gpt-oss-120b');
   });
 
-  it('routes tvScript source through the pipeline-extract-scenes stage with series + issue context', async () => {
+  it('routes teleplay source through the pipeline-extract-scenes stage with series + issue context', async () => {
     runStagedLLM.mockResolvedValue({
       content: { title: 'X', logline: 'L', scenes: [{ slugline: 'INT. ROOM' }] },
       runId: 'run-2', providerId: 'lmstudio', model: 'gpt-oss-120b',
@@ -167,7 +294,7 @@ describe('extractScenes', () => {
 
     await extractScenes({
       source: '## TEASER\n\n### Scene 1\n\n**INT. ROOM — NIGHT**\n\nAction.',
-      sourceKind: SOURCE_KIND.TV_SCRIPT,
+      sourceKind: SOURCE_KIND.TELEPLAY,
       series: { name: 'Show', styleNotes: 'noir' },
       issue: { number: 3, title: 'The Pilot' },
     });
@@ -176,7 +303,7 @@ describe('extractScenes', () => {
     expect(stage).toBe('pipeline-extract-scenes');
     expect(vars.series).toEqual({ name: 'Show', styleNotes: 'noir' });
     expect(vars.issue).toEqual({ number: 3, title: 'The Pilot' });
-    expect(opts.source).toBe('scene-extract-tvScript');
+    expect(opts.source).toBe('scene-extract-teleplay');
   });
 
   it('forwards providerOverride + custom run-tracking tag', async () => {

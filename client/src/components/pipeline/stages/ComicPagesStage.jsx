@@ -10,10 +10,19 @@ import {
   extractPipelineComicPages,
 } from '../../../services/api';
 import MediaJobThumb from '../MediaJobThumb';
+import { genConfigToImageOptions, genConfigToRefineOptions } from './VisualGenSettings';
 
-export default function ComicPagesStage({ issue, onStageUpdate }) {
+// NOTE: `ComicPagesStage` is currently unreachable in the running app —
+// `PipelineIssue.jsx` redirects /comicPages URLs to /comicScript, where
+// `ComicScriptStage` owns the merged page editor. The cover UI for this
+// stage lives in ComicScriptStage. This component stays in the tree as a
+// pure per-panel editor so a future view that lands directly here still
+// works.
+
+export default function ComicPagesStage({ issue, onStageUpdate, actionsGated = false }) {
   const stage = issue.stages?.comicPages || { status: 'empty', pages: [] };
   const [pages, setPages] = useState(stage.pages || []);
+  const genConfig = stage.genConfig || null;
   const [savingIdx, setSavingIdx] = useState(null);
   const [refiningKey, setRefiningKey] = useState(null);
   // Per-page in-flight state. Codex can render multiple pages in parallel, so
@@ -100,7 +109,7 @@ export default function ComicPagesStage({ issue, onStageUpdate }) {
       return;
     }
     markRendering(pi, true);
-    const result = await generatePipelineComicPage(issue.id, pi).catch((err) => {
+    const result = await generatePipelineComicPage(issue.id, pi, genConfigToImageOptions(genConfig)).catch((err) => {
       toast.error(err.message || 'Failed to enqueue page render');
       return null;
     });
@@ -128,7 +137,7 @@ export default function ComicPagesStage({ issue, onStageUpdate }) {
     }
     const key = `${pi}:${ni}`;
     setRefiningKey(key);
-    const result = await refinePipelineComicPanelPrompt(issue.id, pi, ni, {})
+    const result = await refinePipelineComicPanelPrompt(issue.id, pi, ni, genConfigToRefineOptions(genConfig))
       .catch((err) => {
         toast.error(err.message || 'Refine failed');
         return null;
@@ -152,6 +161,7 @@ export default function ComicPagesStage({ issue, onStageUpdate }) {
     setSavingIdx(`${pi}:${ni}`);
     const result = await generatePipelineVisualImage(issue.id, 'comicPages', {
       description: panel.description,
+      ...genConfigToImageOptions(genConfig),
     }).catch((err) => {
       toast.error(err.message || 'Failed to enqueue image');
       return null;
@@ -208,8 +218,8 @@ export default function ComicPagesStage({ issue, onStageUpdate }) {
                   <button
                     type="button"
                     onClick={() => handleGeneratePage(pi)}
-                    disabled={renderingPages.has(pi) || !(page.panels?.length > 0)}
-                    title="Render the entire page as one image — recommended for Codex / cloud image models. Local models will produce draft-quality results."
+                    disabled={renderingPages.has(pi) || !(page.panels?.length > 0) || actionsGated}
+                    title={actionsGated ? 'Saving settings…' : 'Render the entire page as one image — recommended for Codex / cloud image models. Local models will produce draft-quality results.'}
                     className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-port-accent text-white text-xs font-medium hover:bg-port-accent/90 disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     {renderingPages.has(pi)
@@ -219,7 +229,7 @@ export default function ComicPagesStage({ issue, onStageUpdate }) {
                   </button>
                   {page.imageJobId ? (
                     <div className="flex items-center gap-2">
-                      <MediaJobThumb jobId={page.imageJobId} label={`Page ${pi + 1}`} size="md" />
+                      <MediaJobThumb jobId={page.imageJobId} label={`Page ${pi + 1}`} size="md" fallbackFilename={page.filename || null} />
                       <span className="text-[10px] text-gray-500 font-mono break-all" title="Last page render job">
                         {page.imageJobId.slice(0, 8)}
                       </span>
@@ -252,8 +262,8 @@ export default function ComicPagesStage({ issue, onStageUpdate }) {
                       <button
                         type="button"
                         onClick={() => handleRefinePanel(pi, ni)}
-                        disabled={refiningKey !== null}
-                        title="Elaborate this panel description into a richer image-gen prompt (LLM call — replaces the current text)"
+                        disabled={refiningKey !== null || actionsGated}
+                        title={actionsGated ? 'Saving settings…' : 'Elaborate this panel description into a richer image-gen prompt (LLM call — replaces the current text)'}
                         className="inline-flex items-center justify-center gap-1 px-2 py-1.5 rounded bg-port-card border border-port-border text-white text-xs hover:border-port-accent/50 disabled:opacity-50"
                       >
                         {refiningKey === `${pi}:${ni}` ? <Loader2 size={12} className="animate-spin" /> : <WandSparkles size={12} />}
@@ -262,7 +272,8 @@ export default function ComicPagesStage({ issue, onStageUpdate }) {
                       <button
                         type="button"
                         onClick={() => handleGeneratePanel(pi, ni)}
-                        disabled={savingIdx === `${pi}:${ni}`}
+                        disabled={savingIdx === `${pi}:${ni}` || actionsGated}
+                        title={actionsGated ? 'Saving settings…' : undefined}
                         className="inline-flex items-center justify-center gap-1 px-2 py-1.5 rounded bg-port-accent text-white text-xs disabled:opacity-50"
                       >
                         {savingIdx === `${pi}:${ni}` ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}

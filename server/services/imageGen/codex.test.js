@@ -206,6 +206,81 @@ describe('codex provider — image harvest', () => {
     expect(failedListener.mock.calls[0][0].error).toMatch(/no image|account may not allow/i);
   }, 10000);
 
+  it('captures the session id even when banner + long prompt echo arrive in a single >4KB stderr chunk', async () => {
+    // Regression: with multi-KB comic-pipeline prompts, codex flushes the
+    // entire banner *and* the echoed prompt in one stderr write. The old
+    // captureSession() sliced the buffer to its tail before running the
+    // regex, chopping the `session id:` line off the front and producing
+    // a spurious "Codex returned no session id" failure even though the
+    // banner was emitted correctly.
+    const sessionId = '019e2513-c506-7de1-815e-c1f589229242';
+    const codexDir = join(TEST_HOME, '.codex', 'generated_images', sessionId);
+    await mkdir(codexDir, { recursive: true });
+    await writeFile(join(codexDir, 'ig_x.png'), Buffer.from('png'));
+
+    const completedListener = vi.fn();
+    imageGenEvents.on('completed', completedListener);
+
+    await codex.generateImage({ prompt: 'a fox' });
+    const child = spawnCalls[0].child;
+
+    const longPromptEcho = 'panel description '.repeat(400); // ~7KB
+    const banner =
+      'Reading additional input from stdin...\n' +
+      'OpenAI Codex v0.130.0\n' +
+      '--------\n' +
+      'workdir: /tmp\n' +
+      'model: gpt-5.5\n' +
+      'provider: openai\n' +
+      'approval: never\n' +
+      'sandbox: workspace-write\n' +
+      'reasoning effort: high\n' +
+      'reasoning summaries: none\n' +
+      `session id: ${sessionId}\n` +
+      '--------\n' +
+      'user\n' +
+      `$imagegen ${longPromptEcho}\n`;
+    expect(banner.length).toBeGreaterThan(4 * 1024);
+    child.stderr.emit('data', Buffer.from(banner));
+    child.exitCode = 0;
+    child.emit('close', 0, null);
+
+    const deadline = Date.now() + 3000;
+    while (Date.now() < deadline && completedListener.mock.calls.length === 0) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    expect(completedListener).toHaveBeenCalledTimes(1);
+  });
+
+  it('captures the session id when a stdout chunk interleaves the stderr banner', async () => {
+    // Regression: the old code fed both stdout and stderr into the same
+    // bannerBuf. A stdout chunk arriving between two stderr chunks of the
+    // banner would split the `session id:` line with unrelated text and
+    // break the regex match.
+    const sessionId = '019e2513-aaaa-7bcd-bb00-c1f589229242';
+    const codexDir = join(TEST_HOME, '.codex', 'generated_images', sessionId);
+    await mkdir(codexDir, { recursive: true });
+    await writeFile(join(codexDir, 'ig_y.png'), Buffer.from('png'));
+
+    const completedListener = vi.fn();
+    imageGenEvents.on('completed', completedListener);
+
+    await codex.generateImage({ prompt: 'a fox' });
+    const child = spawnCalls[0].child;
+
+    child.stderr.emit('data', Buffer.from('session id: 019e2513-aaaa-7bcd-'));
+    child.stdout.emit('data', Buffer.from('progress noise\n'));
+    child.stderr.emit('data', Buffer.from('bb00-c1f589229242\n'));
+    child.exitCode = 0;
+    child.emit('close', 0, null);
+
+    const deadline = Date.now() + 3000;
+    while (Date.now() < deadline && completedListener.mock.calls.length === 0) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    expect(completedListener).toHaveBeenCalledTimes(1);
+  });
+
   it('emits a failed event when no session id banner is parsed', async () => {
     const failedListener = vi.fn();
     imageGenEvents.on('failed', failedListener);

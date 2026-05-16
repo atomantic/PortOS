@@ -699,8 +699,8 @@ describe('pipeline stage navigation tools', () => {
       expect(ctx.sideEffects).toEqual([{ type: 'navigate', path: '/pipeline/issues/iss-abc/prose' }]);
     });
 
-    it('refuses to advance past episodeVideo (last stage)', async () => {
-      const r = await dispatchTool('pipeline_next_stage', {}, makeCtx('/pipeline/issues/x/episodeVideo'));
+    it('refuses to advance past audio (last navigable stage)', async () => {
+      const r = await dispatchTool('pipeline_next_stage', {}, makeCtx('/pipeline/issues/x/audio'));
       expect(r.ok).toBe(false);
       expect(r.summary).toMatch(/last stage/);
     });
@@ -744,10 +744,10 @@ describe('pipeline stage navigation tools', () => {
       expect(ctx.sideEffects).toEqual([{ type: 'navigate', path: '/pipeline/issues/iss-x/storyboards' }]);
     });
 
-    it('resolves spoken aliases (teleplay → tvScript, pages → comicPages, video → episodeVideo)', async () => {
+    it('resolves spoken aliases (teleplay → teleplay, pages → comicPages, video → episodeVideo)', async () => {
       const ctx = makeCtx('/pipeline/issues/iss-x/idea');
       const r1 = await dispatchTool('pipeline_open_stage', { stage: 'teleplay' }, ctx);
-      expect(r1.stage).toBe('tvScript');
+      expect(r1.stage).toBe('teleplay');
       const r2 = await dispatchTool('pipeline_open_stage', { stage: 'pages' }, ctx);
       expect(r2.stage).toBe('comicPages');
       const r3 = await dispatchTool('pipeline_open_stage', { stage: 'video' }, ctx);
