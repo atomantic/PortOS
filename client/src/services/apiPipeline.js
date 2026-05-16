@@ -299,6 +299,25 @@ export const resolvePipelineArcIssues = (seriesId, { findings, providerOverride,
     body: JSON.stringify({ findings, providerOverride, modelOverride }),
   });
 
+// ---- Volume beat-sheet bulk generator ----
+// Sequential idea-stage run across every issue in a volume. `mode` is
+// 'skip-existing' (default) or 'regenerate-all'. Returns
+// { runId, alreadyRunning, sseUrl } — subscribe via pipelineVolumeBeatsSseUrl
+// to stream per-issue progress.
+export const startPipelineVolumeBeats = (seriesId, seasonId, { mode, providerOverride, modelOverride } = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/seasons/${encodeURIComponent(seasonId)}/generate-beats`, {
+    method: 'POST',
+    body: JSON.stringify({ mode, providerOverride, modelOverride }),
+  });
+
+export const cancelPipelineVolumeBeats = (seriesId, seasonId) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/seasons/${encodeURIComponent(seasonId)}/generate-beats/cancel`, {
+    method: 'POST',
+  });
+
+export const pipelineVolumeBeatsSseUrl = (seriesId, seasonId) =>
+  `/api/pipeline/series/${encodeURIComponent(seriesId)}/seasons/${encodeURIComponent(seasonId)}/generate-beats/progress`;
+
 // ---- Auto-run text chain ----
 export const startPipelineAutoRunText = (issueId, opts = {}) =>
   request(`/pipeline/issues/${encodeURIComponent(issueId)}/auto-run-text`, {

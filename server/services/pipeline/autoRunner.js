@@ -18,7 +18,7 @@
 import { randomUUID } from 'crypto';
 import { broadcastSse, attachSseClient, closeJobAfterDelay } from '../../lib/sseUtils.js';
 import { generateStage } from './textStages.js';
-import { getIssue, updateIssue } from './issues.js';
+import { getIssue, updateIssue, isStageReady } from './issues.js';
 import { startEpisodeVideoForIssue, ERR_NO_STORYBOARDS } from './episodeVideo.js';
 
 // runs: Map<issueId, { runId, clients[], lastPayload, cancelRequested, startedAt }>
@@ -141,11 +141,7 @@ export async function startAutoRunTextStages(issueId, options = {}) {
 
 async function runStageIfNeeded(issueId, stageId, options) {
   const issue = await getIssue(issueId);
-  const cur = issue.stages?.[stageId];
-  // Skip if the user has already populated this stage and we aren't forced.
-  // 'edited' = user typed into the editor; 'ready' = LLM filled and user
-  // hasn't asked to rerun. Both are good — fall through to the next stage.
-  if (!options.force && cur && (cur.status === 'ready' || cur.status === 'edited') && cur.output) {
+  if (!options.force && isStageReady(issue.stages?.[stageId])) {
     broadcast(issueId, { type: 'skip', stage: stageId, reason: 'already populated' });
     return;
   }

@@ -306,6 +306,26 @@ describe('pipeline issues service', () => {
     await expect(svc.deleteIssue(i.id)).rejects.toMatchObject({ code: svc.ERR_NOT_FOUND });
   });
 
+  describe('isStageReady', () => {
+    it('returns true for ready/edited stages with non-empty output', () => {
+      expect(svc.isStageReady({ status: 'ready', output: 'beats' })).toBe(true);
+      expect(svc.isStageReady({ status: 'edited', output: 'user typed' })).toBe(true);
+    });
+    it('returns false for empty/whitespace output regardless of status', () => {
+      expect(svc.isStageReady({ status: 'ready', output: '' })).toBe(false);
+      expect(svc.isStageReady({ status: 'ready', output: '   ' })).toBe(false);
+    });
+    it('returns false for non-terminal statuses', () => {
+      expect(svc.isStageReady({ status: 'error', output: 'partial' })).toBe(false);
+      expect(svc.isStageReady({ status: 'generating', output: 'mid' })).toBe(false);
+      expect(svc.isStageReady({ status: 'empty', output: '' })).toBe(false);
+    });
+    it('returns false for null/undefined stage', () => {
+      expect(svc.isStageReady(null)).toBe(false);
+      expect(svc.isStageReady(undefined)).toBe(false);
+    });
+  });
+
   describe('insertIssueWithId', () => {
     it('preserves the caller-supplied id', async () => {
       const i = await svc.insertIssueWithId({ id: 'iss-fixed-xyz', seriesId: 'ser-1', title: 'Imported' });

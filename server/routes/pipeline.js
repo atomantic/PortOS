@@ -37,6 +37,7 @@ import * as seasonsSvc from '../services/pipeline/seasons.js';
 import * as arcPlanner from '../services/pipeline/arcPlanner.js';
 import { generateStage } from '../services/pipeline/textStages.js';
 import * as autoRunner from '../services/pipeline/autoRunner.js';
+import * as volumeBeatsRunner from '../services/pipeline/volumeBeatsRunner.js';
 import {
   enqueueVisualImage,
   enqueueVisualComicPage,
@@ -83,6 +84,19 @@ const mapServiceError = (err) => {
   if (status) return new ServerError(err.message, { status, code: err.code });
   return err;
 };
+
+// gpt-image-2 (codex backend) caps at 3840px per edge and 8,294,400 total
+// pixels. Mirror that ceiling for every pipeline image-gen route. Local
+// mflux can render up to 3840 in principle but is impractically slow past
+// ~2048 — the UI's `compatible: ['codex']` filter on the 4K presets keeps
+// those out of the local picker. The validator is shared because the cap
+// and refinement message must stay identical across schemas.
+const MAX_IMAGE_EDGE = 3840;
+const MAX_IMAGE_PIXELS = 8_294_400;
+const imageEdge = z.number().int().min(64).max(MAX_IMAGE_EDGE).optional();
+const refineImagePixelCap = (d) =>
+  !(d.width && d.height) || d.width * d.height <= MAX_IMAGE_PIXELS;
+const PIXEL_CAP_MESSAGE = `Total pixels (width × height) must be ≤ ${MAX_IMAGE_PIXELS.toLocaleString()}`;
 
 // ---- Series schemas ----
 
@@ -302,13 +316,13 @@ const visualGenerateSchema = z.object({
   extraStyle: z.string().trim().max(2000).optional(),
   mode: z.enum(['local', 'codex']).optional(),
   modelId: z.string().trim().max(64).optional(),
-  width: z.number().int().min(64).max(2048).optional(),
-  height: z.number().int().min(64).max(2048).optional(),
+  width: imageEdge,
+  height: imageEdge,
   steps: z.number().int().min(1).max(150).optional(),
   cfgScale: z.number().min(0).max(30).optional(),
   guidance: z.number().min(0).max(30).optional(),
   seed: z.number().int().min(0).optional(),
-});
+}).refine(refineImagePixelCap, { message: PIXEL_CAP_MESSAGE, path: ['width'] });
 
 // Comic-issue front cover render. Accepts an optional `coverScript`
 // override (otherwise the route reads it from stages.comicPages.cover.script);
@@ -322,13 +336,23 @@ const comicCoverRenderSchema = z.object({
   extraStyle: z.string().trim().max(2000).optional(),
   mode: z.enum(['local', 'codex']).optional(),
   modelId: z.string().trim().max(64).optional(),
-  width: z.number().int().min(64).max(2048).optional(),
-  height: z.number().int().min(64).max(2048).optional(),
+  width: imageEdge,
+  height: imageEdge,
   steps: z.number().int().min(1).max(150).optional(),
   cfgScale: z.number().min(0).max(30).optional(),
   guidance: z.number().min(0).max(30).optional(),
   seed: z.number().int().min(0).optional(),
-});
+  // Proof vs Final render variant. Each variant lands in its own slot
+  // (cover.proofImage / cover.finalImage) so the user can keep a fast
+  // proof for layout decisions and a hi-res final for the PDF.
+  target: z.enum(['proof', 'final']).optional().default('proof'),
+  // When the user likes the proof and wants the final to preserve its
+  // composition, set this to true — the server will pass the proof image
+  // as the init image for the final render at low denoise strength.
+  // Codex backend silently ignores it (gpt-image-2's $imagegen tool has
+  // no init-image input); local + external honor it.
+  useProofAsBase: z.boolean().optional().default(false),
+}).refine(refineImagePixelCap, { message: PIXEL_CAP_MESSAGE, path: ['width'] });
 
 // Full-comic-page render: same knobs as panel render minus `description` /
 // `slugline` (the prompt is built server-side from the page's panels[] so it
@@ -338,13 +362,16 @@ const comicPageRenderSchema = z.object({
   extraStyle: z.string().trim().max(2000).optional(),
   mode: z.enum(['local', 'codex']).optional(),
   modelId: z.string().trim().max(64).optional(),
-  width: z.number().int().min(64).max(2048).optional(),
-  height: z.number().int().min(64).max(2048).optional(),
+  width: imageEdge,
+  height: imageEdge,
   steps: z.number().int().min(1).max(150).optional(),
   cfgScale: z.number().min(0).max(30).optional(),
   guidance: z.number().min(0).max(30).optional(),
   seed: z.number().int().min(0).optional(),
-});
+  // See comicCoverRenderSchema for the proof/final semantics.
+  target: z.enum(['proof', 'final']).optional().default('proof'),
+  useProofAsBase: z.boolean().optional().default(false),
+}).refine(refineImagePixelCap, { message: PIXEL_CAP_MESSAGE, path: ['width'] });
 
 const episodeVideoSchema = z.object({
   aspectRatio: z.enum(ASPECT_RATIOS).optional(),
@@ -418,6 +445,14 @@ const seasonEpisodesGenerateSchema = z.object({ ...providerOverrideShape, commit
 const arcVerifySchema = z.object(providerOverrideShape);
 // Volume / season verify shares the same provider/model override shape.
 const volumeVerifySchema = z.object(providerOverrideShape);
+
+// Volume beat-sheets bulk generator. `mode` defaults to skip-existing so a
+// rerun on a partially-expanded volume only fills empty slots; the explicit
+// 'regenerate-all' is the "blow away every beat sheet" path.
+const volumeBeatsGenerateSchema = z.object({
+  ...providerOverrideShape,
+  mode: z.enum(volumeBeatsRunner.VOLUME_BEATS_MODES).optional().default('skip-existing'),
+});
 
 // Auto-resolve verification findings. `findings` empty/omitted = re-verify
 // first then resolve everything; otherwise the LLM only addresses the
@@ -769,6 +804,40 @@ router.post('/series/:id/seasons/:seasonId/verify', asyncHandler(async (req, res
   const result = await arcPlanner.verifyVolume(req.params.id, req.params.seasonId, body)
     .catch((err) => { throw mapServiceError(err); });
   res.json(result);
+}));
+
+// Sequential beat-sheet (idea stage) generator for every issue in a volume.
+// Runs serially so each issue's prompt sees the prior issue's freshly-written
+// beats via buildIdeaContextAugment; SSE streams per-issue progress. Pairs
+// naturally with the volume verify pass — generate-then-validate is the
+// expected workflow.
+router.post('/series/:id/seasons/:seasonId/generate-beats', asyncHandler(async (req, res) => {
+  const body = validateRequest(volumeBeatsGenerateSchema, req.body ?? {});
+  const result = await volumeBeatsRunner.startVolumeBeatsRun(
+    req.params.id,
+    req.params.seasonId,
+    {
+      mode: body.mode,
+      providerId: body.providerOverride,
+      model: body.modelOverride,
+    },
+  ).catch((err) => { throw mapServiceError(err); });
+  res.json({
+    ...result,
+    sseUrl: `/api/pipeline/series/${req.params.id}/seasons/${req.params.seasonId}/generate-beats/progress`,
+  });
+}));
+
+router.get('/series/:id/seasons/:seasonId/generate-beats/progress', (req, res) => {
+  const attached = volumeBeatsRunner.attachClient(req.params.seasonId, res);
+  if (!attached) {
+    res.status(404).json({ error: 'No active beat-sheet run for this volume' });
+  }
+});
+
+router.post('/series/:id/seasons/:seasonId/generate-beats/cancel', asyncHandler(async (req, res) => {
+  const canceled = volumeBeatsRunner.cancelVolumeBeatsRun(req.params.seasonId);
+  res.json({ canceled });
 }));
 
 // Auto-resolve verification findings. Persists the LLM's patched arc + season

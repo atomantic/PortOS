@@ -23,11 +23,11 @@
  * responsive without a refetch.
  */
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Plus, Trash2, Loader2, Sparkles, ShieldCheck, ChevronRight, ChevronDown,
-  ChevronsUpDown, AlertCircle, Wand2, Info,
+  ChevronsUpDown, AlertCircle, Wand2, Info, ListChecks, X,
 } from 'lucide-react';
 import toast from '../ui/Toast';
 import { timeAgo } from '../../utils/formatters';
@@ -39,7 +39,9 @@ import {
   verifyPipelineVolume,
   resolvePipelineArcIssues,
   listPipelineIssues, updatePipelineSeries,
+  startPipelineVolumeBeats, cancelPipelineVolumeBeats,
 } from '../../services/api';
+import { usePipelineVolumeBeatsProgress } from '../../hooks/usePipelineVolumeBeatsProgress';
 import SeriesLlmPicker from './SeriesLlmPicker';
 import { ArcShapePicker, ArcShapeSparkline, getStoryShape } from './StoryShapes';
 
@@ -531,6 +533,65 @@ function SeasonRow({ series, season, seasons, issues, onSeriesUpdate, onIssuesUp
   const [editing, setEditing] = useState(false);
   const [verifying, setVerifying] = useState(false);
   const [verifyIssues, setVerifyIssues] = useState(null);
+  // Volume beat-sheet bulk run — `active` gates SSE subscription; the latest
+  // frame drives the per-issue label on the button.
+  const [beatsActive, setBeatsActive] = useState(false);
+  const [beatsStarting, setBeatsStarting] = useState(false);
+  const { latest: beatsLatest } = usePipelineVolumeBeatsProgress(series.id, season.id, { enabled: beatsActive });
+
+  // Stable ref over the parent's setter — `handleIssuesUpdate` in
+  // PipelineSeries is re-allocated every render, so depending on it would
+  // re-run this effect on every parent update.
+  const onIssuesUpdateRef = useRef(onIssuesUpdate);
+  onIssuesUpdateRef.current = onIssuesUpdate;
+
+  // Refresh issues + toast when the run lands on a terminal frame and tear
+  // the SSE subscription down. Per-issue frames just drive the button
+  // label — refetching the whole list per issue would cost N+1 reads per
+  // run for no benefit (the button already shows live ordinal/total).
+  useEffect(() => {
+    if (!beatsActive || !beatsLatest) return;
+    const type = beatsLatest.type;
+    if (type !== 'complete' && type !== 'canceled' && type !== 'error') return;
+    setBeatsActive(false);
+    listPipelineIssues(series.id)
+      .then((refreshed) => onIssuesUpdateRef.current(refreshed))
+      .catch(() => null);
+    if (type === 'complete') {
+      const n = beatsLatest.generated || 0;
+      const s = beatsLatest.skipped || 0;
+      const e = beatsLatest.errored || 0;
+      const parts = [`${n} generated`];
+      if (s) parts.push(`${s} skipped`);
+      if (e) parts.push(`${e} errored`);
+      (e > 0 ? toast.error : toast.success)(`Volume ${season.number} beat sheets — ${parts.join(', ')}`);
+    } else if (type === 'canceled') {
+      toast.success(`Volume ${season.number} beat-sheet run canceled`);
+    } else {
+      toast.error(beatsLatest.error || 'Beat-sheet run failed');
+    }
+  }, [beatsActive, beatsLatest, series.id, season.number]);
+
+  const startBeats = async (mode) => {
+    setBeatsStarting(true);
+    const result = await startPipelineVolumeBeats(series.id, season.id, {
+      mode,
+      providerOverride: series.llm?.provider || undefined,
+      modelOverride: series.llm?.model || undefined,
+    }).catch((err) => {
+      toast.error(err.message || 'Failed to start beat-sheet run');
+      return null;
+    });
+    setBeatsStarting(false);
+    if (!result) return;
+    setBeatsActive(true);
+  };
+
+  const cancelBeats = async () => {
+    await cancelPipelineVolumeBeats(series.id, season.id).catch((err) => {
+      toast.error(err.message || 'Cancel failed');
+    });
+  };
 
   const hasArc = !!series.arc;
   const hasEpisodes = issues.length > 0;
@@ -680,6 +741,11 @@ function SeasonRow({ series, season, seasons, issues, onSeriesUpdate, onIssuesUp
             onGenerateEpisodes={runGenerateEpisodes}
             onValidateVolume={runVerifyVolume}
             onIssuesUpdate={onIssuesUpdate}
+            beatsActive={beatsActive}
+            beatsStarting={beatsStarting}
+            beatsLatest={beatsLatest}
+            onStartBeats={startBeats}
+            onCancelBeats={cancelBeats}
           />
         </>
       ) : null}
@@ -792,12 +858,27 @@ function SeasonEditor({ series, season, seasons, onSeriesUpdate }) {
   );
 }
 
+// Volume beat-sheet runner frame → button label. Keyed on the SSE frame's
+// `type` field; see server/services/pipeline/volumeBeatsRunner.js for the
+// frame shapes.
+const BEATS_FRAME_LABELS = {
+  start: (f) => `Starting (${f.total} issues)…`,
+  'issue:start': (f) => `Generating ${f.ordinal}/${f.total} — ${f.issueTitle || `#${f.issueNumber}`}`,
+  'issue:complete': (f) => `${f.ordinal}/${f.total} done`,
+  'issue:skip': (f) => `Skipped ${f.ordinal}/${f.total}`,
+  'issue:error': (f) => `Error on ${f.ordinal}/${f.total}`,
+};
+
 function SeasonActions({
   series, season, hasArc, hasEpisodes, generatingEpisodes,
   verifying, onGenerateEpisodes, onValidateVolume, onIssuesUpdate,
+  beatsActive, beatsStarting, beatsLatest, onStartBeats, onCancelBeats,
 }) {
   const [adding, setAdding] = useState(false);
   const [newTitle, setNewTitle] = useState('');
+  // Inline mode picker — surfaces only when the user clicks the button
+  // (per Ask each time choice for skip-existing vs regenerate-all).
+  const [beatsModePicker, setBeatsModePicker] = useState(false);
   const seasonHasContext = !!(season.logline?.trim() || season.synopsis?.trim());
 
   const handleAdd = async (e) => {
@@ -830,6 +911,19 @@ function SeasonActions({
     : !hasEpisodes
       ? 'Add or generate at least one issue / episode first'
       : null;
+
+  // Generate-all-beats needs episodes to iterate over; the per-issue
+  // generator handles the "no arc context" case gracefully so we don't gate
+  // on hasArc here.
+  const beatsDisabledReason = !hasEpisodes
+    ? 'Add or generate at least one issue / episode first'
+    : null;
+
+  // Human-readable status string for the in-flight button label. Terminal
+  // frames (complete/canceled/error) are absorbed by the parent useEffect.
+  const beatsLabel = beatsActive && beatsLatest
+    ? (BEATS_FRAME_LABELS[beatsLatest.type]?.(beatsLatest) ?? null)
+    : (beatsStarting ? 'Starting…' : null);
 
   return (
     <>
@@ -886,6 +980,26 @@ function SeasonActions({
             </button>
             <button
               type="button"
+              onClick={() => setBeatsModePicker((v) => !v)}
+              disabled={!!beatsDisabledReason || beatsActive || beatsStarting}
+              title={beatsDisabledReason || `Generate beat sheets for every issue in volume ${season.number} sequentially`}
+              className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-gray-300 hover:text-white border border-port-border bg-port-bg hover:border-port-accent/40 disabled:opacity-40 disabled:hover:text-gray-300"
+            >
+              {beatsStarting || beatsActive ? <Loader2 size={12} className="animate-spin" /> : <ListChecks size={12} />}
+              Generate beat sheets
+            </button>
+            {beatsActive ? (
+              <button
+                type="button"
+                onClick={onCancelBeats}
+                className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-port-warning hover:text-white border border-port-warning/40 bg-port-bg hover:bg-port-warning/10"
+                title="Stop the run after the current issue finishes"
+              >
+                <X size={12} /> Stop
+              </button>
+            ) : null}
+            <button
+              type="button"
               onClick={onValidateVolume}
               disabled={!!validateDisabledReason || verifying}
               title={validateDisabledReason || `Deep continuity pass on volume ${season.number}`}
@@ -897,6 +1011,45 @@ function SeasonActions({
           </>
         )}
       </div>
+      {beatsModePicker && !beatsActive && !beatsStarting ? (
+        <div className="mx-3 mb-2 p-2 border border-port-border rounded bg-port-bg/60 text-xs space-y-2">
+          <p className="text-gray-300">
+            Generate beat sheets for every issue in volume {season.number}, one at a time.
+            Each prompt picks up the prior issue's freshly-written beats.
+          </p>
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              type="button"
+              onClick={() => { setBeatsModePicker(false); onStartBeats('skip-existing'); }}
+              className="inline-flex items-center gap-1 px-2 py-1 rounded bg-port-accent text-white hover:bg-port-accent/80"
+              title="Only generate for issues that don't already have a beat sheet"
+            >
+              Skip issues with beats
+            </button>
+            <button
+              type="button"
+              onClick={() => { setBeatsModePicker(false); onStartBeats('regenerate-all'); }}
+              className="inline-flex items-center gap-1 px-2 py-1 rounded border border-port-warning/40 text-port-warning hover:bg-port-warning/10"
+              title="Overwrite every issue's existing beat sheet"
+            >
+              Regenerate all
+            </button>
+            <button
+              type="button"
+              onClick={() => setBeatsModePicker(false)}
+              className="text-gray-400 hover:text-white px-2"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : null}
+      {beatsLabel ? (
+        <div className="px-3 pb-2 text-xs text-gray-400 flex items-center gap-2">
+          <Loader2 size={12} className="animate-spin" />
+          {beatsLabel}
+        </div>
+      ) : null}
       {!adding ? (
         <div className="px-3 pb-3">
           <VerifyScopeHint scope={VERIFY_VOLUME_SCOPE} />
