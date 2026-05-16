@@ -146,6 +146,73 @@ describe('storyBible — sanitizeCharacter', () => {
     expect(o.prompt).toBe('striped tape coil');
     expect(o.source).toBe('manual');
   });
+
+  describe('wardrobes (Cluster A)', () => {
+    it('defaults to an empty array when omitted', () => {
+      const out = sanitizeCharacter({ name: 'A' });
+      expect(out.wardrobes).toEqual([]);
+    });
+
+    it('sanitizes well-formed wardrobe entries + assigns ids', () => {
+      const out = sanitizeCharacter({
+        name: 'Don Carlos',
+        wardrobes: [
+          { name: 'Wedding', description: 'cream silk suit, gold pocket watch' },
+          { name: 'Backalley', description: 'worn leather jacket, scuffed boots' },
+        ],
+      });
+      expect(out.wardrobes).toHaveLength(2);
+      expect(out.wardrobes[0].name).toBe('Wedding');
+      expect(out.wardrobes[0].description).toBe('cream silk suit, gold pocket watch');
+      expect(out.wardrobes[0].id).toMatch(/^wd-/);
+      expect(out.wardrobes[0].id).not.toBe(out.wardrobes[1].id);
+    });
+
+    it('preserves caller-supplied ids (round-trip after a PATCH)', () => {
+      const out = sanitizeCharacter({
+        name: 'Aria',
+        wardrobes: [{ id: 'wd-fixed-1', name: 'Tactical' }],
+      });
+      expect(out.wardrobes[0].id).toBe('wd-fixed-1');
+    });
+
+    it('drops entries with no name (the only required field)', () => {
+      const out = sanitizeCharacter({
+        name: 'Aria',
+        wardrobes: [
+          { description: 'no name on this one' },
+          { name: 'Real Wardrobe', description: 'has a name' },
+        ],
+      });
+      expect(out.wardrobes).toHaveLength(1);
+      expect(out.wardrobes[0].name).toBe('Real Wardrobe');
+    });
+
+    it('caps the list at BIBLE_LIMITS.WARDROBES_PER_CHARACTER_MAX', () => {
+      const tooMany = Array.from({ length: BIBLE_LIMITS.WARDROBES_PER_CHARACTER_MAX + 5 }, (_, i) => ({
+        name: `Outfit ${i}`,
+      }));
+      const out = sanitizeCharacter({ name: 'A', wardrobes: tooMany });
+      expect(out.wardrobes).toHaveLength(BIBLE_LIMITS.WARDROBES_PER_CHARACTER_MAX);
+    });
+
+    it('caps individual field lengths', () => {
+      const out = sanitizeCharacter({
+        name: 'A',
+        wardrobes: [{
+          name: 'n'.repeat(BIBLE_LIMITS.WARDROBE_NAME_MAX + 100),
+          description: 'd'.repeat(BIBLE_LIMITS.WARDROBE_DESCRIPTION_MAX + 100),
+        }],
+      });
+      expect(out.wardrobes[0].name.length).toBe(BIBLE_LIMITS.WARDROBE_NAME_MAX);
+      expect(out.wardrobes[0].description.length).toBe(BIBLE_LIMITS.WARDROBE_DESCRIPTION_MAX);
+    });
+
+    it('coerces a non-array wardrobes field to an empty array', () => {
+      const out = sanitizeCharacter({ name: 'A', wardrobes: 'not an array' });
+      expect(out.wardrobes).toEqual([]);
+    });
+  });
 });
 
 describe('storyBible — sanitizeSetting', () => {

@@ -3,6 +3,7 @@ import { ServerError } from './errorHandler.js';
 import { ASPECT_RATIOS, QUALITIES, PROJECT_STATUSES, SCENE_STATUSES } from './creativeDirectorPresets.js';
 import { WORK_KINDS, WORK_STATUSES, ANALYSIS_KINDS } from './writersRoomPresets.js';
 import { ALL_STYLE_IDS, STYLE_ID } from './writersRoomStylePresets.js';
+import { BIBLE_LIMITS } from './storyBible.js';
 
 // gpt-image-2 (codex backend) caps at 3840px per edge and 8,294,400 total
 // pixels. Mirror the ceiling for every image-gen route. Local mflux can
@@ -631,6 +632,16 @@ const wrCharTextField = z.string().max(2000);
 // `engine:voiceName` (e.g. `kokoro:af_heart`). Nullable so a UI clear path
 // can null it explicitly.
 const wrVoiceIdField = z.string().trim().max(200).nullable();
+// Wardrobe array (A2). `id` is omitted on POSTs by the UI — the sanitizer
+// fills it from the server-side UUID factory. Limits sourced from
+// BIBLE_LIMITS so bumping the constant updates Zod automatically.
+const wrWardrobeField = z.array(z.object({
+  id: z.string().trim().max(64).optional(),
+  name: z.string().trim().min(1).max(BIBLE_LIMITS.WARDROBE_NAME_MAX),
+  description: z.string().max(BIBLE_LIMITS.WARDROBE_DESCRIPTION_MAX).optional(),
+  createdAt: z.string().optional(),
+  updatedAt: z.string().optional(),
+}).strict()).max(BIBLE_LIMITS.WARDROBES_PER_CHARACTER_MAX);
 export const writersRoomCharacterCreateSchema = z.object({
   name: z.string().trim().min(1).max(200),
   aliases: z.array(z.string().trim().min(1).max(200)).max(20).optional(),
@@ -640,6 +651,7 @@ export const writersRoomCharacterCreateSchema = z.object({
   background: wrCharTextField.optional(),
   notes: wrCharTextField.optional(),
   voiceId: wrVoiceIdField.optional(),
+  wardrobes: wrWardrobeField.optional(),
 }).strict();
 export const writersRoomCharacterUpdateSchema = z.object({
   name: z.string().trim().min(1).max(200).optional(),
@@ -650,6 +662,7 @@ export const writersRoomCharacterUpdateSchema = z.object({
   background: wrCharTextField.optional(),
   notes: wrCharTextField.optional(),
   voiceId: wrVoiceIdField.optional(),
+  wardrobes: wrWardrobeField.optional(),
 }).strict();
 
 const wrSettingTextField = z.string().max(2000);

@@ -2,6 +2,26 @@
 
 ## Added
 
+- **Character canon: wardrobes (Cluster A).** Every entry under
+  `universe.characters[]` gains an optional `wardrobes[]` array — each entry
+  is an `{ id, name, description, createdAt, updatedAt }` outfit/styling
+  variant layered on top of `physicalDescription`. Each character supports
+  up to 10 wardrobes; `name` is the only required field (sanitizer drops
+  nameless entries). The Universe Canon + Nouns stage cards render a
+  collapsible "Outfits" section per character with an inline editor —
+  click-to-expand, inline name + description inputs that buffer drafts and
+  PATCH on blur (no per-keystroke round-trips), per-row trash, "Add outfit"
+  that stays client-side-only until the user types a name (so a
+  half-created row doesn't get sanitized away mid-type). Selective draft
+  pruning on row delete preserves in-flight keystrokes in unrelated rows.
+  Scene-level wardrobe picking (a panel says "Don Carlos in Wedding
+  outfit") is deferred — captured in PLAN.md once the UX is settled.
+  Touches: `server/lib/storyBible.js`
+  (`sanitizeWardrobe` + `sanitizeWardrobeList` + `BIBLE_LIMITS.WARDROBE_*` +
+  `PROMPT_FIELDS` + `MERGE_CONFIG.userEditable`),
+  `server/lib/validation.js` (Zod parity sourcing limits from BIBLE_LIMITS),
+  `client/src/components/pipeline/CanonCard.jsx` (new `WardrobeSection`).
+
 - **Setting canon: INT/EXT + time-of-day metadata (Cluster A).** Every entry
   under `universe.settings[]` gains two new optional fields — `intExt`
   (`'INT'`/`'EXT'`/null) and `timeOfDay` (`'dawn'`/`'day'`/`'dusk'`/`'night'`

@@ -7,8 +7,8 @@
  * universe, Phase A and beyond).
  */
 
-import { useEffect, useRef } from 'react';
-import { Loader2, ImagePlus, WandSparkles, Lock, Unlock } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Loader2, ImagePlus, WandSparkles, Lock, Unlock, Shirt, Plus, Trash2, ChevronDown, ChevronRight } from 'lucide-react';
 import useMediaJobProgress from '../../hooks/useMediaJobProgress';
 import MediaJobThumb from './MediaJobThumb';
 
@@ -49,6 +49,159 @@ function ReadonlyChip({ children }) {
     <span className="px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wider bg-port-card border border-port-border text-gray-400">
       {children}
     </span>
+  );
+}
+
+// Wardrobes (A2) — collapsed summary by default; click to expand into an
+// inline editor when `editable`. Per-field edits are buffered in a draft
+// state and only PATCHed on blur, so a textarea keystroke doesn't fire a
+// universe-wide round-trip per character.
+function WardrobeSection({ wardrobes, editable, onChange }) {
+  const [open, setOpen] = useState(false);
+  // Per-field drafts keyed by `${idx}:${field}`. `undefined` means the
+  // textarea reflects the persisted value verbatim.
+  const [drafts, setDrafts] = useState({});
+  // Pending new rows live entirely client-side until the user types a name
+  // — committing immediately would PATCH a nameless entry, the server-side
+  // sanitizer would drop it, and the row would vanish mid-type.
+  const [pendingNew, setPendingNew] = useState([]);
+
+  const merged = pendingNew.length
+    ? [...wardrobes, ...pendingNew]
+    : wardrobes;
+
+  if (!editable && merged.length === 0) return null;
+
+  const summary = merged.map((w) => w.name).filter(Boolean).join(', ');
+  const isPending = (idx) => idx >= wardrobes.length;
+  const draftValue = (idx, field, fallback) => {
+    const key = `${idx}:${field}`;
+    return key in drafts ? drafts[key] : (fallback ?? '');
+  };
+  const setDraft = (idx, field, value) => {
+    setDrafts((prev) => ({ ...prev, [`${idx}:${field}`]: value }));
+  };
+  const commitField = (idx, field) => {
+    const key = `${idx}:${field}`;
+    if (!(key in drafts)) return;
+    const value = drafts[key];
+    setDrafts((prev) => { const next = { ...prev }; delete next[key]; return next; });
+
+    if (isPending(idx)) {
+      const pendingIdx = idx - wardrobes.length;
+      const current = pendingNew[pendingIdx] || { name: '', description: '' };
+      if ((current[field] || '') === value) return;
+      const nextPending = pendingNew.map((p, i) => i === pendingIdx ? { ...p, [field]: value } : p);
+      // Once a pending row has a non-empty name it's safe to promote into
+      // the persisted list (server sanitizer no longer drops it).
+      if (field === 'name' && value.trim()) {
+        const promoted = nextPending[pendingIdx];
+        const remaining = nextPending.filter((_, i) => i !== pendingIdx);
+        setPendingNew(remaining);
+        onChange([...wardrobes, promoted]);
+      } else {
+        setPendingNew(nextPending);
+      }
+      return;
+    }
+
+    if ((wardrobes[idx]?.[field] || '') === value) return;
+    const nextList = wardrobes.map((w, i) => (i === idx ? { ...w, [field]: value } : w));
+    onChange(nextList);
+  };
+  const removeAt = (idx) => {
+    // Selective draft pruning — keep drafts in earlier indices untouched
+    // so editing outfit 3 while deleting outfit 1 doesn't lose the
+    // outfit-3 keystrokes. Indices past the removed row shift down by 1.
+    setDrafts((prev) => {
+      const next = {};
+      for (const [k, v] of Object.entries(prev)) {
+        const sep = k.indexOf(':');
+        if (sep < 0) continue;
+        const i = Number(k.slice(0, sep));
+        const field = k.slice(sep + 1);
+        if (i < idx) next[k] = v;
+        else if (i > idx) next[`${i - 1}:${field}`] = v;
+      }
+      return next;
+    });
+    if (isPending(idx)) {
+      const pendingIdx = idx - wardrobes.length;
+      setPendingNew(pendingNew.filter((_, i) => i !== pendingIdx));
+      return;
+    }
+    onChange(wardrobes.filter((_, i) => i !== idx));
+  };
+  const addOne = () => {
+    setOpen(true);
+    setPendingNew((prev) => [...prev, { name: '', description: '' }]);
+  };
+
+  return (
+    <div className="mt-2">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wider text-gray-500 hover:text-white"
+      >
+        {open ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
+        <Shirt size={10} />
+        Outfits ({merged.length}){summary && !open ? `: ${summary}` : ''}
+      </button>
+      {open ? (
+        <div className="mt-1.5 pl-3 border-l border-port-border space-y-1.5">
+          {merged.map((w, i) => (
+            <div key={w.id || i} className="space-y-1">
+              {editable ? (
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="text"
+                    value={draftValue(i, 'name', w.name)}
+                    onChange={(e) => setDraft(i, 'name', e.target.value)}
+                    onBlur={() => commitField(i, 'name')}
+                    placeholder="Outfit name (e.g. Wedding)"
+                    className="flex-1 min-w-0 px-1.5 py-0.5 text-xs bg-port-bg border border-port-border rounded text-white"
+                    maxLength={120}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => removeAt(i)}
+                    title={`Remove ${w.name || 'this outfit'}`}
+                    className="shrink-0 text-gray-500 hover:text-port-error"
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                </div>
+              ) : (
+                <div className="text-xs text-port-accent font-medium">{w.name}</div>
+              )}
+              {editable ? (
+                <textarea
+                  value={draftValue(i, 'description', w.description)}
+                  onChange={(e) => setDraft(i, 'description', e.target.value)}
+                  onBlur={() => commitField(i, 'description')}
+                  placeholder="What's the character wearing? (image-gen-ready prose)"
+                  rows={2}
+                  className="w-full px-1.5 py-0.5 text-xs bg-port-bg border border-port-border rounded text-white"
+                  maxLength={800}
+                />
+              ) : w.description ? (
+                <p className="text-[11px] text-gray-400 whitespace-pre-wrap">{w.description}</p>
+              ) : null}
+            </div>
+          ))}
+          {editable ? (
+            <button
+              type="button"
+              onClick={addOne}
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded border border-port-border text-gray-400 hover:text-white hover:border-gray-500"
+            >
+              <Plus size={10} /> Add outfit
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -152,6 +305,13 @@ export default function CanonCard({
               {entry.intExt ? <ReadonlyChip>{entry.intExt}</ReadonlyChip> : null}
               {entry.timeOfDay ? <ReadonlyChip>{entry.timeOfDay}</ReadonlyChip> : null}
             </div>
+          ) : null}
+          {kind.key === 'characters' ? (
+            <WardrobeSection
+              wardrobes={Array.isArray(entry.wardrobes) ? entry.wardrobes : []}
+              editable={!!onPatchEntry && !locked}
+              onChange={(next) => onPatchEntry?.(entry.id, { wardrobes: next })}
+            />
           ) : null}
         </div>
         <div className="shrink-0 flex flex-col gap-1 items-stretch">

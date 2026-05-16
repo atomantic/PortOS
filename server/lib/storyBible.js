@@ -28,6 +28,11 @@ export const BIBLE_LIMITS = Object.freeze({
   NOTES_MAX: 4000,
   IMAGE_REF_MAX: 500,
   IMAGE_REFS_PER_ENTRY_MAX: 12,
+  // Wardrobes per character — A2 in the AnyFilm gap analysis. Each entry
+  // is an outfit/styling variant; first one is the visual default.
+  WARDROBE_NAME_MAX: 120,
+  WARDROBE_DESCRIPTION_MAX: 800,
+  WARDROBES_PER_CHARACTER_MAX: 10,
   EVIDENCE_ITEM_MAX: 500,
   EVIDENCE_PER_ENTRY_MAX: 20,
   // Settings
@@ -113,7 +118,7 @@ export const BIBLE_KINDS = Object.freeze(Object.values(BIBLE_KIND));
 // `existing<X>Json` prompt variable (bibleExtractor) and into the script
 // stage's bibles context (evaluator). Excludes ids/timestamps/source/notes.
 export const PROMPT_FIELDS = Object.freeze({
-  [BIBLE_KIND.CHARACTER]: ['name', 'aliases', 'role', 'physicalDescription', 'personality', 'background', 'voiceId', 'prompt', 'tags'],
+  [BIBLE_KIND.CHARACTER]: ['name', 'aliases', 'role', 'physicalDescription', 'personality', 'background', 'voiceId', 'wardrobes', 'prompt', 'tags'],
   [BIBLE_KIND.SETTING]: ['name', 'slugline', 'description', 'palette', 'era', 'weather', 'intExt', 'timeOfDay', 'recurringDetails', 'prompt', 'tags'],
   [BIBLE_KIND.OBJECT]: ['name', 'aliases', 'description', 'significance', 'prompt', 'tags'],
 });
@@ -176,6 +181,34 @@ function ensureFirstAppearance(raw) {
   return isStr(raw) && raw.trim() ? raw.trim().slice(0, 200) : null;
 }
 
+// Wardrobe sanitizer (A2). One entry per outfit/styling variant; the
+// description is image-gen-ready prose ("worn linen suit, gold pocket watch,
+// scuffed wingtips"). Reference images per wardrobe land in a follow-up.
+function sanitizeWardrobe(raw, { preserveTimestamps = true } = {}) {
+  if (!raw || typeof raw !== 'object') return null;
+  const name = trimTo(raw.name, BIBLE_LIMITS.WARDROBE_NAME_MAX);
+  if (!name) return null;
+  return {
+    id: ensureId(raw.id, 'wd-'),
+    name,
+    description: trimTo(raw.description, BIBLE_LIMITS.WARDROBE_DESCRIPTION_MAX),
+    createdAt: preserveTimestamps && isStr(raw.createdAt) ? raw.createdAt : nowIso(),
+    updatedAt: preserveTimestamps && isStr(raw.updatedAt) ? raw.updatedAt : nowIso(),
+  };
+}
+
+function sanitizeWardrobeList(raw, opts = {}) {
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  for (const w of raw) {
+    const sanitized = sanitizeWardrobe(w, opts);
+    if (!sanitized) continue;
+    out.push(sanitized);
+    if (out.length >= BIBLE_LIMITS.WARDROBES_PER_CHARACTER_MAX) break;
+  }
+  return out;
+}
+
 // Shared canon extras applied to every kind. `locked` follows the on-disk
 // minimization pattern from universe-builder variations: only `true` is
 // persisted, missing/false collapses to absent.
@@ -216,6 +249,10 @@ export function sanitizeCharacter(raw, { idPrefix = DEFAULT_ID_PREFIX.character,
     // when configured). null = use the project default at synth time.
     voiceId: trimTo(raw.voiceId, BIBLE_LIMITS.VOICE_ID_MAX) || null,
     imageRefs: cleanStringArray(raw.imageRefs, BIBLE_LIMITS.IMAGE_REF_MAX, BIBLE_LIMITS.IMAGE_REFS_PER_ENTRY_MAX),
+    // Wardrobes (A2): outfit/styling variants applied on top of
+    // physicalDescription. Empty array stays the legacy shape — every
+    // existing character keeps rendering through physicalDescription alone.
+    wardrobes: sanitizeWardrobeList(raw.wardrobes, { preserveTimestamps }),
     firstAppearance: ensureFirstAppearance(raw.firstAppearance),
     evidence: cleanStringArray(raw.evidence, BIBLE_LIMITS.EVIDENCE_ITEM_MAX, BIBLE_LIMITS.EVIDENCE_PER_ENTRY_MAX),
     missingFromProse: cleanStringArray(raw.missingFromProse, BIBLE_LIMITS.EVIDENCE_ITEM_MAX, BIBLE_LIMITS.EVIDENCE_PER_ENTRY_MAX),
@@ -315,7 +352,7 @@ const SANITIZERS = Object.freeze({
 // so a later entry in the same batch resolves to the canonical record.
 const MERGE_CONFIG = Object.freeze({
   character: {
-    userEditable: ['role', 'physicalDescription', 'personality', 'background'],
+    userEditable: ['role', 'physicalDescription', 'personality', 'background', 'wardrobes'],
     keyFields: [
       { field: 'name', normalize: normalizeBibleName },
       { field: 'aliases', normalize: normalizeBibleName },
