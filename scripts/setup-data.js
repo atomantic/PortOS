@@ -104,13 +104,6 @@ for (const { relPath, mergeKey } of JSON_MERGE_TARGETS) {
   mergeJsonStarter(relPath, mergeKey);
 }
 
-// Ensure migrations directory exists (not in data.sample, needed for both fresh and existing installs)
-const migrationsDir = join(dataDir, 'migrations');
-if (!existsSync(migrationsDir)) {
-  console.log('📁 Creating missing directory: migrations');
-  mkdirSync(migrationsDir, { recursive: true });
-}
-
 // Drift detection — warn when a data.sample/prompts/stages/*.md differs from
 // the installed data/prompts/stages/*.md copy. Only fires on existing installs
 // (fresh installs already got a full copy above). Prompt templates drift when
@@ -118,11 +111,11 @@ if (!existsSync(migrationsDir)) {
 // existing installs won't pick up because setup-data.js only copies *missing*
 // files.
 //
-// NOTE: only the files managed by data/migrations/003+ are checked here —
+// NOTE: only the files managed by scripts/migrations/003+ are checked here —
 // scanning all stage prompts would produce misleading warnings for prompts
 // that have no migration counterpart (e.g. cd-evaluate.md, writers-room prompts).
 //
-// Mirror data/migrations/003+ NEW/OLD hashes. Array values let the check
+// Mirror scripts/migrations/003+ NEW/OLD hashes. Array values let the check
 // recognize multi-migration lineages (file evolved through 003 → 004 → 005);
 // a user at any intermediate hash still gets the "run migrations" prompt.
 const SHIPPED_PROMPT_OLD_MD5 = {

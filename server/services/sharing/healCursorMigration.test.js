@@ -1,5 +1,5 @@
 /**
- * Tests for `data/migrations/009-heal-sharing-cursor-drops.js` — the
+ * Tests for `scripts/migrations/009-heal-sharing-cursor-drops.js` — the
  * one-shot heal that clears sharing cursor entries whose manifests are
  * still on disk but whose records never got inserted locally.
  */
@@ -9,7 +9,7 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync
 import { tmpdir } from 'os';
 import { join } from 'path';
 
-import { healSharingCursorDrops } from '../../../data/migrations/009-heal-sharing-cursor-drops.js';
+import { healSharingCursorDrops } from '../../../scripts/migrations/009-heal-sharing-cursor-drops.js';
 
 const writeJson = (path, value) =>
   writeFileSync(path, JSON.stringify(value, null, 2) + '\n');

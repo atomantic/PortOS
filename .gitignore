@@ -5,14 +5,15 @@ node_modules/
 dist/
 build/
 
-# Runtime data (app registry, history, runs). Override the directory-level
-# `data/` rule from the global ~/.gitignore so git descends into data/ and
-# evaluates the negations below; then re-exclude everything inside, and
-# re-include the source-controlled migration scripts.
+# Runtime data (app registry, history, runs, migration state). Override the
+# directory-level `data/` rule from the global ~/.gitignore so git descends
+# into data/ and evaluates the negation below; then re-exclude everything
+# inside except the .gitkeep that pins the empty directory. Seed/template
+# content lives in data.sample/ and is copied in by scripts/setup-data.js;
+# migration scripts live in scripts/migrations/.
 !data/
 data/*
-!data/migrations/
-data/migrations/.applied.json
+!data/.gitkeep
 
 # Environment files
 .env
