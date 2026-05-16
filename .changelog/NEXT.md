@@ -1019,6 +1019,19 @@
 
 ## Fixed
 
+- **Scheduled tasks no longer block forever on disabled dependencies.** `checkRunAfterDeps`
+  in `server/services/taskSchedule.js` previously required every `runAfter`
+  dependency to have run since the dependent task's last execution — but if a
+  dep was disabled (e.g. `do-replan` globally paused while `feature-ideas` is
+  enabled), it would never run, and the dependent task would wait indefinitely
+  with `reason: 'waiting-on-dependencies'`. The dep gate now skips dependencies
+  that are disabled globally (`enabled: false` or missing from the schedule)
+  or disabled for the requesting app (`isTaskTypeEnabledForApp` returns false),
+  matching the rule that the actual scheduler uses to decide whether a task
+  will ever run. Tests cover the global-disabled and per-app-disabled paths;
+  the existing "blocks when dep is enabled but hasn't run" coverage is
+  preserved with an explicit `do-replan: enabled: true` in the fixture.
+
 - **Browser download-UI shell handoffs dead on macOS (Show in Finder / Open file silently no-op).**
   `browser/server.js` spawned Chrome as a direct child of `node`/PM2, which
   made PM2 the TCC "responsible app" for Chrome's AppleEvent +

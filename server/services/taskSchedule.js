@@ -1741,8 +1741,12 @@ export async function getExecutionHistory(taskType) {
 /**
  * Check if all runAfter dependencies have completed since this task's last run.
  * Returns { satisfied, pending } where pending lists unfinished dependency task types.
+ *
+ * Dependencies that are disabled — either globally (missing from the schedule or
+ * `enabled: false`) or disabled for the requesting app — are skipped, since they
+ * will never run and would otherwise block the dependent task indefinitely.
  */
-function checkRunAfterDeps(schedule, taskType, appId = null) {
+async function checkRunAfterDeps(schedule, taskType, appId = null) {
   const interval = schedule.tasks[taskType];
   const deps = interval?.runAfter;
   if (!deps || deps.length === 0) return { satisfied: true, pending: [] };
@@ -1753,6 +1757,10 @@ function checkRunAfterDeps(schedule, taskType, appId = null) {
 
   const pending = [];
   for (const dep of deps) {
+    const depConfig = schedule.tasks[dep];
+    if (!depConfig || !depConfig.enabled) continue;
+    if (appId && !(await isTaskTypeEnabledForApp(appId, dep))) continue;
+
     const depKey = `task:${dep}`;
     const depExec = schedule.executions[depKey] || { lastRun: null, perApp: {} };
     const depLastRun = safeDate(appId ? depExec.perApp[appId]?.lastRun : depExec.lastRun);
@@ -1914,9 +1922,10 @@ export async function shouldRunTask(taskType, appId = null) {
       result = { shouldRun: true, reason: 'unknown-default-rotation' };
   }
 
-  // If the task would run, check runAfter dependencies — blocked until all deps have run since our last run
+  // If the task would run, check runAfter dependencies — blocked until all enabled deps have run since our last run.
+  // Disabled deps (globally or for this app) are skipped, since they'll never run.
   if (result.shouldRun && interval.runAfter?.length > 0) {
-    const depCheck = checkRunAfterDeps(schedule, taskType, appId);
+    const depCheck = await checkRunAfterDeps(schedule, taskType, appId);
     if (!depCheck.satisfied) {
       return { shouldRun: false, reason: 'waiting-on-dependencies', pendingDeps: depCheck.pending };
     }

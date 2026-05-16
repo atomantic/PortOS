@@ -399,12 +399,15 @@ describe('taskSchedule', () => {
       expect(result.reason).toContain('daily-cooldown')
     })
 
-    it('feature-ideas waits on do-replan (runAfter default)', async () => {
+    it('feature-ideas waits on do-replan when do-replan is enabled', async () => {
       const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString()
 
       // Default runAfter:['do-replan'] kicks in since the test doesn't override it
       mockSchedule({
-        tasks: { 'feature-ideas': { type: 'daily', enabled: true, providerId: null, model: null, prompt: null } },
+        tasks: {
+          'feature-ideas': { type: 'daily', enabled: true, providerId: null, model: null, prompt: null },
+          'do-replan':     { type: 'weekly', enabled: true, providerId: null, model: null, prompt: null }
+        },
         executions: { 'task:feature-ideas': { lastRun: twoDaysAgo, count: 1, perApp: {} } }
       })
 
@@ -414,12 +417,52 @@ describe('taskSchedule', () => {
       expect(result.pendingDeps).toContain('do-replan')
     })
 
+    it('feature-ideas runs when do-replan dependency is globally disabled', async () => {
+      const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString()
+
+      // do-replan is disabled — feature-ideas would otherwise wait forever, so the dep is skipped
+      mockSchedule({
+        tasks: {
+          'feature-ideas': { type: 'daily', enabled: true, providerId: null, model: null, prompt: null },
+          'do-replan':     { type: 'weekly', enabled: false, providerId: null, model: null, prompt: null }
+        },
+        executions: { 'task:feature-ideas': { lastRun: twoDaysAgo, count: 1, perApp: {} } }
+      })
+
+      const result = await shouldRunTask('feature-ideas')
+      expect(result.shouldRun).toBe(true)
+      expect(result.reason).toContain('daily-due')
+    })
+
+    it('feature-ideas runs when do-replan dependency is disabled for the app', async () => {
+      const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString()
+
+      mockSchedule({
+        tasks: {
+          'feature-ideas': { type: 'daily', enabled: true, providerId: null, model: null, prompt: null },
+          'do-replan':     { type: 'weekly', enabled: true, providerId: null, model: null, prompt: null }
+        },
+        executions: {
+          'task:feature-ideas': { lastRun: twoDaysAgo, count: 1, perApp: { 'app-1': { lastRun: twoDaysAgo, count: 1 } } }
+        }
+      })
+      // do-replan is enabled globally but disabled for app-1; feature-ideas is enabled for app-1
+      isTaskTypeEnabledForApp.mockImplementation(async (_appId, taskType) => taskType !== 'do-replan')
+
+      const result = await shouldRunTask('feature-ideas', 'app-1')
+      expect(result.shouldRun).toBe(true)
+      expect(result.reason).toContain('daily-due')
+    })
+
     it('feature-ideas runs when do-replan has run since its last run', async () => {
       const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString()
       const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
 
       mockSchedule({
-        tasks: { 'feature-ideas': { type: 'daily', enabled: true, providerId: null, model: null, prompt: null } },
+        tasks: {
+          'feature-ideas': { type: 'daily', enabled: true, providerId: null, model: null, prompt: null },
+          'do-replan':     { type: 'weekly', enabled: true, providerId: null, model: null, prompt: null }
+        },
         executions: {
           'task:feature-ideas': { lastRun: twoDaysAgo, count: 1, perApp: {} },
           'task:do-replan':     { lastRun: oneDayAgo, count: 1, perApp: {} }
