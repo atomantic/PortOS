@@ -38,13 +38,85 @@ const OUTPUT_BUFFER_HEADROOM = 1280 * 1024;
 // live tail but cuts I/O by 1-2 orders of magnitude.
 const OUTPUT_FLUSH_INTERVAL_MS = 250;
 
+// Paste readiness gating. The TUI process needs time to render its welcome
+// banner and become input-ready before bracketed paste lands; sending the paste
+// during boot loses the entire prompt. We poll for output-idle (TUI has stopped
+// repainting) instead of guessing a fixed delay, with a hard upper bound so a
+// silent provider still gets the prompt eventually.
+const READY_POLL_INTERVAL_MS = 300;
+const READY_IDLE_THRESHOLD_MS = 1200;
+const PASTE_TO_ENTER_DELAY_MS = 400;
+const PASTE_DEADLINE_MS = 10000;
+
 const ANSI_PATTERN = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1B\\))/g;
 
-function stripAnsi(text) {
-  return text
-    .replace(ANSI_PATTERN, '')
-    .replace(/\x00/g, '')
-    .replace(/\u001b/g, '');
+// Heuristics for a trailing chunk that *might* be an unterminated escape
+// sequence. We hold the tail back from the strip pass and prepend it to the
+// next chunk, so a CSI/OSC split across two PTY reads still strips cleanly
+// instead of leaking the body (e.g. `0;Claude Code…`) into displayed output.
+const INCOMPLETE_CSI = /^\x1B\[[0-?]*[ -/]*$/;
+const INCOMPLETE_OSC = /^\x1B\][^\x07\x1B]*$/;
+const INCOMPLETE_ESC_2BYTE = /^\x1B$/;
+
+function createStreamingAnsiStripper() {
+  let tail = '';
+  const strip = (s) => s.replace(ANSI_PATTERN, '').replace(/\x00/g, '');
+  return (text) => {
+    const combined = tail + text;
+    tail = '';
+    const lastEsc = combined.lastIndexOf('\x1B');
+    // Only consider the trailing fragment if it lives near the end — older
+    // unterminated bytes belong to a previous repaint and would never resolve.
+    // Bodies longer than 4096 bytes are treated as terminated; an unbounded
+    // OSC (e.g. very long hyperlink) would leak its body to display rather
+    // than buffer forever.
+    if (lastEsc !== -1 && combined.length - lastEsc <= 4096) {
+      const candidate = combined.slice(lastEsc);
+      if (INCOMPLETE_ESC_2BYTE.test(candidate)
+        || INCOMPLETE_CSI.test(candidate)
+        || INCOMPLETE_OSC.test(candidate)) {
+        tail = candidate;
+        return strip(combined.slice(0, lastEsc));
+      }
+    }
+    return strip(combined);
+  };
+}
+
+// TUI repaint artifacts that aren't useful to display in the agent output
+// panel. The raw PTY stream still goes to the attached shell session (and to
+// rawBuffer for error analysis) — this only suppresses display noise.
+const BOX_DRAW_CHARS = /[─│┌┐└┘├┤┬┴┼━┃╮╯╰╭╱╲╳▶◀▼▲╴╵╶╷▌▐▖▗▘▝▙▚▛▜▟►◄·•]/g;
+const STATUS_FOOTER_PATTERNS = [
+  /bypass permissions (on|off)/i,
+  /shift\s*\+\s*tab to cycle/i
+];
+
+export function isTuiNoise(line) {
+  if (!line) return true;
+  const stripped = line.replace(BOX_DRAW_CHARS, '').trim();
+  if (!stripped) return true;
+  // Single bullet/prompt marker with nothing else
+  if (/^[>?]\s*$/.test(stripped)) return true;
+  // "Try 'how does X work?'" placeholder
+  if (/^try ["'].*["']\??$/i.test(stripped)) return true;
+  // Welcome banner lines (Claude Code v…, Opus 4.x, etc.)
+  if (/^claude code\b/i.test(stripped) && stripped.length < 64) return true;
+  if (/^opus \d/i.test(stripped) && stripped.length < 64) return true;
+  // Status footer / help bar
+  if (STATUS_FOOTER_PATTERNS.some(re => re.test(stripped))) return true;
+  // Letter-spaced gibberish from TUI animation: e.g. "c l a u d e - c o d e".
+  // Match strings where the majority of whitespace-separated tokens are a
+  // single character — the TUI sometimes renders typed input one glyph at a
+  // time with separating spaces during paste/erase animation.
+  if (stripped.length > 8) {
+    const tokens = stripped.split(/\s+/);
+    if (tokens.length >= 6) {
+      const singleCharTokens = tokens.filter(t => t.length === 1).length;
+      if (singleCharTokens >= tokens.length * 0.6) return true;
+    }
+  }
+  return false;
 }
 
 function shellQuote(value) {
@@ -90,6 +162,7 @@ export async function spawnTuiAgent(agentId, task, prompt, workspacePath, model,
   let finalized = false;
   let hasStartedWorking = false;
   let promptSentAt = null;
+  let firstOutputAt = null;
   let lastOutputAt = Date.now();
   let meaningfulLinesAfterPrompt = 0;
   let lastLine = '';
@@ -98,6 +171,9 @@ export async function spawnTuiAgent(agentId, task, prompt, workspacePath, model,
   let pendingLines = [];
   let flushTimer = null;
   let flushing = null;
+  let pasteEnterTimer = null;
+
+  const streamingStrip = createStreamingAnsiStripper();
 
   const flushPendingLines = async () => {
     if (flushTimer) { clearTimeout(flushTimer); flushTimer = null; }
@@ -118,10 +194,14 @@ export async function spawnTuiAgent(agentId, task, prompt, workspacePath, model,
     }, OUTPUT_FLUSH_INTERVAL_MS);
   };
 
-  const appendLine = (line) => {
+  const appendLine = (line, { force = false } = {}) => {
     const cleanLine = line.trim();
     if (!cleanLine || cleanLine === lastLine) return;
     if (promptPreview && cleanLine.replace(/\s+/g, ' ').includes(promptPreview)) return;
+    // Filter TUI repaint artifacts (banners, status footer, box drawing,
+    // letter-spaced animation frames). `force: true` lets internal messages
+    // ("TUI session started", etc.) bypass the filter.
+    if (!force && isTuiNoise(cleanLine)) return;
 
     lastLine = cleanLine;
     outputBuffer += `${cleanLine}\n`;
@@ -139,7 +219,8 @@ export async function spawnTuiAgent(agentId, task, prompt, workspacePath, model,
 
     const agentData = activeAgents.get(agentId);
     if (agentData?.idleTimer) clearInterval(agentData.idleTimer);
-    if (agentData?.promptTimer) clearTimeout(agentData.promptTimer);
+    if (agentData?.promptTimer) clearInterval(agentData.promptTimer);
+    if (pasteEnterTimer) { clearTimeout(pasteEnterTimer); pasteEnterTimer = null; }
 
     // Drain pending parsed lines before the final state writes so completion
     // events don't beat the last output batch to disk.
@@ -241,6 +322,7 @@ export async function spawnTuiAgent(agentId, task, prompt, workspacePath, model,
     rawBuffer += text;
     if (rawBuffer.length > RAW_BUFFER_HEADROOM) rawBuffer = rawBuffer.slice(-RAW_BUFFER_CAP);
     lastOutputAt = Date.now();
+    if (firstOutputAt === null) firstOutputAt = lastOutputAt;
 
     if (!hasStartedWorking) {
       hasStartedWorking = true;
@@ -248,7 +330,7 @@ export async function spawnTuiAgent(agentId, task, prompt, workspacePath, model,
       emitLog('info', `TUI agent ${agentId} working...`, { agentId, phase: 'working' });
     }
 
-    const clean = stripAnsi(text).replace(/\r/g, '\n');
+    const clean = streamingStrip(text).replace(/\r/g, '\n');
     const lowerClean = clean.toLowerCase();
     if (!promptSentAt && lowerClean.includes('command not found') && lowerClean.includes(commandName.toLowerCase())) {
       await finish({
@@ -307,12 +389,43 @@ export async function spawnTuiAgent(agentId, task, prompt, workspacePath, model,
     });
   }
 
-  const promptTimer = setTimeout(() => {
-    if (finalized) return;
+  // Send the bracketed-paste prompt only after the TUI has finished its initial
+  // repaint and gone quiet — pasting during the banner/loading screen is the
+  // failure mode that left the input empty. The `\r` is split from the paste
+  // write so Claude Code has time to commit the paste buffer before Enter
+  // fires; its handle is tracked so finish() can cancel a still-pending Enter
+  // if the agent ends in that window.
+  const startedAt = Date.now();
+  const sendPrompt = (reason) => {
+    if (finalized || promptSentAt) return;
     promptSentAt = Date.now();
-    shellService.writeToSession(sessionId, `\x1b[200~${prompt}\x1b[201~\r`);
-    appendLine(`📟 Prompt pasted into TUI session ${sessionId.slice(0, 8)}`);
-  }, tuiConfig.promptDelayMs);
+    shellService.writeToSession(sessionId, `\x1b[200~${prompt}\x1b[201~`);
+    pasteEnterTimer = setTimeout(() => {
+      pasteEnterTimer = null;
+      if (finalized) return;
+      shellService.writeToSession(sessionId, '\r');
+    }, PASTE_TO_ENTER_DELAY_MS);
+    appendLine(`📟 Prompt pasted into TUI session ${sessionId.slice(0, 8)} (${reason})`, { force: true });
+  };
+
+  const promptTimer = setInterval(() => {
+    if (finalized || promptSentAt) {
+      clearInterval(promptTimer);
+      return;
+    }
+    const now = Date.now();
+    const elapsed = now - startedAt;
+    if (elapsed >= PASTE_DEADLINE_MS) {
+      sendPrompt('fallback');
+      clearInterval(promptTimer);
+      return;
+    }
+    if (elapsed < tuiConfig.promptDelayMs) return;
+    if (firstOutputAt === null) return;
+    if (now - lastOutputAt < READY_IDLE_THRESHOLD_MS) return;
+    sendPrompt('ready');
+    clearInterval(promptTimer);
+  }, READY_POLL_INTERVAL_MS);
 
   const idleTimer = setInterval(() => {
     if (!promptSentAt || finalized) return;
@@ -352,6 +465,6 @@ export async function spawnTuiAgent(agentId, task, prompt, workspacePath, model,
     }
   });
 
-  appendLine(`📟 TUI session started: ${sessionId.slice(0, 8)} (${tuiConfig.commandLine})`);
+  appendLine(`📟 TUI session started: ${sessionId.slice(0, 8)} (${tuiConfig.commandLine})`, { force: true });
   return agentId;
 }

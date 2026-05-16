@@ -82,7 +82,7 @@ vi.mock('../lib/providerModels.js', () => ({
   resolveCliModel: vi.fn((m) => (m === 'codex-configured-default' || !m) ? null : m)
 }));
 
-import { buildTuiSpawnConfig, spawnTuiAgent } from './agentTuiSpawning.js';
+import { buildTuiSpawnConfig, isTuiNoise, spawnTuiAgent } from './agentTuiSpawning.js';
 import * as shellService from './shell.js';
 import * as cosAgents from './cosAgents.js';
 import * as cos from './cos.js';
@@ -145,6 +145,30 @@ describe('agent TUI spawning', () => {
     const config = buildTuiSpawnConfig({ id: 'codex-tui', command: 'codex', type: 'tui', args: [] }, null);
     expect(config.args).toEqual([]);
     expect(config.commandLine).toBe('codex');
+  });
+});
+
+describe('isTuiNoise', () => {
+  it('treats banner/status/box-drawing artifacts as noise', () => {
+    expect(isTuiNoise('')).toBe(true);
+    expect(isTuiNoise('   ')).toBe(true);
+    expect(isTuiNoise('─────────────')).toBe(true);
+    expect(isTuiNoise('>')).toBe(true);
+    expect(isTuiNoise('?')).toBe(true);
+    expect(isTuiNoise('Try "how does Layout.jsx work?"')).toBe(true);
+    expect(isTuiNoise('Claude Code v2.1.133')).toBe(true);
+    expect(isTuiNoise('Opus 4.7 with xhigh effort · Claude Max')).toBe(true);
+    expect(isTuiNoise('►► bypass permissions on (shift+tab to cycle)')).toBe(true);
+    // Letter-spaced animation frame from paste rendering
+    expect(isTuiNoise('c l a u d e - d a n g e r o u s l y - s k i p')).toBe(true);
+  });
+
+  it('keeps real agent output', () => {
+    expect(isTuiNoise('Reading file src/App.jsx...')).toBe(false);
+    expect(isTuiNoise('🔧 ReadFile')).toBe(false);
+    expect(isTuiNoise('Done! Refactored the auth middleware.')).toBe(false);
+    // Short prompt-style line — only filtered if it's a *bare* > or ?
+    expect(isTuiNoise('> hello')).toBe(false);
   });
 });
 
@@ -228,11 +252,19 @@ describe('spawnTuiAgent runtime', () => {
     // Flush initial async setup (updateAgent calls etc.)
     await flushMicrotasks();
 
-    // Fire the prompt timer so promptSentAt is set (promptDelayMs = 100ms)
-    await vi.advanceTimersByTimeAsync(110);
+    // Feed a banner-style line so firstOutputAt is set — the paste timer
+    // gates on "we've seen at least one chunk of output" plus an idle window
+    // before sending the prompt (ready-signal detection).
+    await capturedOnData(Buffer.from('Codex booting...\n'));
     await flushMicrotasks();
 
-    // Feed 2 meaningful lines AFTER the prompt so meaningfulLinesAfterPrompt >= 2.
+    // Advance past the prompt-delay floor (100ms) AND the readiness idle
+    // threshold (1200ms). The poll interval (300ms) ticks during this window
+    // and fires the paste once both gates open, setting promptSentAt.
+    await vi.advanceTimersByTimeAsync(2000);
+    await flushMicrotasks();
+
+    // Feed 2 meaningful lines AFTER the paste so meaningfulLinesAfterPrompt >= 2.
     // These must not match the promptPreview ("do the thing").
     await capturedOnData(Buffer.from('Agent output line one\n'));
     await capturedOnData(Buffer.from('Agent output line two\n'));

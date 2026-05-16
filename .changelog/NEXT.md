@@ -1104,6 +1104,24 @@
 
 ## Fixed
 
+- **TUI agent prompt now actually lands in Claude Code's input.** The fixed
+  2500 ms paste delay raced Claude Code's banner/loading render, so bracketed
+  paste arrived before the input field was ready and the entire prompt was
+  discarded — the agent then sat at an empty `>` prompt forever. The paste
+  is now gated on output-idle (TUI has stopped repainting for 1.2 s) with a
+  minimum boot delay floor and a 10 s deadline fallback, and the `\r`
+  submission is split out from the paste write by 400 ms so Claude Code can
+  commit the paste buffer before Enter fires. The deferred Enter is tracked
+  and cancelled in `finish()` if the agent ends inside the 400 ms window.
+  Also cleaned up the agent "Show output" panel: a streaming ANSI stripper
+  buffers unterminated CSI/OSC sequences across PTY chunks (was leaking
+  `0;Claude Code…` title-set fragments as visible text), and an `isTuiNoise`
+  filter drops the welcome banner, status footer, box-drawing lines, and
+  letter-spaced animation frames so what's left is closer to actual agent
+  output. The raw PTY stream is unaffected and still flows to the attached
+  shell session for live inspection. Touches `server/services/agentTuiSpawning.js`
+  + `agentTuiSpawning.test.js`.
+
 - **`index.html` now revalidates on every navigation, so rebuilds are picked
   up without a hard refresh.** The SPA fallback in `server/index.js` was
   serving `index.html` with no `Cache-Control` header, so browsers fell back
