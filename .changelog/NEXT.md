@@ -1349,6 +1349,17 @@
 
 ## Fixed
 
+- **Black ICE Terminal: active day/night toggle no longer renders a white moon
+  on bright green.** The settings theme picker uses `bg-port-accent
+  text-port-on-accent` to flag the active mode, but `--color-port-on-accent`
+  was never registered in Tailwind's `@theme` block — so `text-port-on-accent`
+  was a no-op and the icon inherited the body's near-white `--port-text`
+  (218 255 238 in Black ICE Terminal) against the bright `#00f5a0` background,
+  ~1.5 contrast. Added `--color-port-on-{accent,success,warning,error}` so
+  every theme's defined on-* tokens map to Tailwind utilities, restoring the
+  intended dark forest text. Same gap also covered the `bg-port-accent
+  text-port-on-accent` button in `ErrorBoundary.jsx`. Touches `client/src/index.css`.
+
 - **Flaky death-clock test passes again.** `computeDeathClock` healthy-years
   test in `server/services/meatspace.test.js` derived its expected value from
   `result.yearsRemaining` (rounded to 2dp by the service) but compared

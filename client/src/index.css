@@ -10,6 +10,10 @@
   --color-port-error: rgb(var(--port-error));
   --color-port-text: rgb(var(--port-text));
   --color-port-text-muted: rgb(var(--port-text-muted));
+  --color-port-on-accent: rgb(var(--port-on-accent));
+  --color-port-on-success: rgb(var(--port-on-success));
+  --color-port-on-warning: rgb(var(--port-on-warning));
+  --color-port-on-error: rgb(var(--port-on-error));
 
   --animate-scanline: scanline 5s linear infinite;
 }
