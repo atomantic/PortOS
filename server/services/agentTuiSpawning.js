@@ -7,7 +7,8 @@
  */
 
 import { join } from 'path';
-import { appendFile, rm } from 'fs/promises';
+import { existsSync } from 'fs';
+import { appendFile, readFile, rm } from 'fs/promises';
 import * as shellService from './shell.js';
 import { emitLog } from './cosEvents.js';
 import { appendAgentOutputLines, updateAgent, completeAgent } from './cosAgents.js';
@@ -47,6 +48,12 @@ const READY_POLL_INTERVAL_MS = 300;
 const READY_IDLE_THRESHOLD_MS = 1200;
 const PASTE_TO_ENTER_DELAY_MS = 400;
 const PASTE_DEADLINE_MS = 10000;
+// Sentinel-file polling. TUI agents write `.agent-done` in their workspace
+// when they've finished /simplify + /do:pr (or /do:push) — we poll for it
+// here so the agent gets cleanly finalized as soon as the work is done,
+// without waiting on the much longer idle timeout fallback.
+const DONE_SENTINEL_NAME = '.agent-done';
+const DONE_POLL_INTERVAL_MS = 2000;
 
 const ANSI_PATTERN = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1B\\))/g;
 
@@ -81,42 +88,6 @@ function createStreamingAnsiStripper() {
     }
     return strip(combined);
   };
-}
-
-// TUI repaint artifacts that aren't useful to display in the agent output
-// panel. The raw PTY stream still goes to the attached shell session (and to
-// rawBuffer for error analysis) — this only suppresses display noise.
-const BOX_DRAW_CHARS = /[─│┌┐└┘├┤┬┴┼━┃╮╯╰╭╱╲╳▶◀▼▲╴╵╶╷▌▐▖▗▘▝▙▚▛▜▟►◄·•]/g;
-const STATUS_FOOTER_PATTERNS = [
-  /bypass permissions (on|off)/i,
-  /shift\s*\+\s*tab to cycle/i
-];
-
-export function isTuiNoise(line) {
-  if (!line) return true;
-  const stripped = line.replace(BOX_DRAW_CHARS, '').trim();
-  if (!stripped) return true;
-  // Single bullet/prompt marker with nothing else
-  if (/^[>?]\s*$/.test(stripped)) return true;
-  // "Try 'how does X work?'" placeholder
-  if (/^try ["'].*["']\??$/i.test(stripped)) return true;
-  // Welcome banner lines (Claude Code v…, Opus 4.x, etc.)
-  if (/^claude code\b/i.test(stripped) && stripped.length < 64) return true;
-  if (/^opus \d/i.test(stripped) && stripped.length < 64) return true;
-  // Status footer / help bar
-  if (STATUS_FOOTER_PATTERNS.some(re => re.test(stripped))) return true;
-  // Letter-spaced gibberish from TUI animation: e.g. "c l a u d e - c o d e".
-  // Match strings where the majority of whitespace-separated tokens are a
-  // single character — the TUI sometimes renders typed input one glyph at a
-  // time with separating spaces during paste/erase animation.
-  if (stripped.length > 8) {
-    const tokens = stripped.split(/\s+/);
-    if (tokens.length >= 6) {
-      const singleCharTokens = tokens.filter(t => t.length === 1).length;
-      if (singleCharTokens >= tokens.length * 0.6) return true;
-    }
-  }
-  return false;
 }
 
 function shellQuote(value) {
@@ -164,7 +135,6 @@ export async function spawnTuiAgent(agentId, task, prompt, workspacePath, model,
   let promptSentAt = null;
   let firstOutputAt = null;
   let lastOutputAt = Date.now();
-  let meaningfulLinesAfterPrompt = 0;
   let lastLine = '';
   let sessionId = null;
 
@@ -194,14 +164,12 @@ export async function spawnTuiAgent(agentId, task, prompt, workspacePath, model,
     }, OUTPUT_FLUSH_INTERVAL_MS);
   };
 
-  const appendLine = (line, { force = false } = {}) => {
+  // TUI agents only emit a handful of internal status lines (session-started,
+  // prompt-pasted, completion) — see handleData for why per-line capture of
+  // the PTY stream itself is intentionally dropped.
+  const appendLine = (line) => {
     const cleanLine = line.trim();
     if (!cleanLine || cleanLine === lastLine) return;
-    if (promptPreview && cleanLine.replace(/\s+/g, ' ').includes(promptPreview)) return;
-    // Filter TUI repaint artifacts (banners, status footer, box drawing,
-    // letter-spaced animation frames). `force: true` lets internal messages
-    // ("TUI session started", etc.) bypass the filter.
-    if (!force && isTuiNoise(cleanLine)) return;
 
     lastLine = cleanLine;
     outputBuffer += `${cleanLine}\n`;
@@ -210,7 +178,6 @@ export async function spawnTuiAgent(agentId, task, prompt, workspacePath, model,
     }
     pendingLines.push(cleanLine);
     scheduleFlush();
-    if (promptSentAt) meaningfulLinesAfterPrompt++;
   };
 
   const finish = async ({ success, exitCode = 0, error = null, reason = 'completed' }) => {
@@ -220,6 +187,7 @@ export async function spawnTuiAgent(agentId, task, prompt, workspacePath, model,
     const agentData = activeAgents.get(agentId);
     if (agentData?.idleTimer) clearInterval(agentData.idleTimer);
     if (agentData?.promptTimer) clearInterval(agentData.promptTimer);
+    if (agentData?.doneSentinelTimer) clearInterval(agentData.doneSentinelTimer);
     if (pasteEnterTimer) { clearTimeout(pasteEnterTimer); pasteEnterTimer = null; }
 
     // Drain pending parsed lines before the final state writes so completion
@@ -300,13 +268,17 @@ export async function spawnTuiAgent(agentId, task, prompt, workspacePath, model,
 
     await processAgentCompletion(agentId, task, finalSuccess, outputBuffer);
     if (workspacePath) await rm(join(workspacePath, 'BTW.md')).catch(() => {});
+    if (workspacePath) await rm(join(workspacePath, DONE_SENTINEL_NAME)).catch(() => {});
 
-    const directOpenPR = isTruthyMetaFn(task.metadata?.openPR);
-    const directReviewLoopFollowUp = isTruthyMetaFn(task.metadata?.reviewLoopFollowUp);
+    // TUI agents run /do:pr (or /do:push) themselves before signaling via
+    // .agent-done, so the system-side cleanup must NOT also push or open a
+    // PR — that would double-fire. `skipMerge` is forced on so the
+    // post-exit auto-merge doesn't trip over a branch the agent already
+    // pushed. The worktree directory itself is still cleaned up.
     await cleanupWorktreeFn(agentId, finalSuccess, {
-      openPR: directOpenPR,
-      requestCopilotReview: directOpenPR && isTruthyMetaFn(task.metadata?.reviewLoop),
-      skipMerge: directReviewLoopFollowUp,
+      openPR: false,
+      requestCopilotReview: false,
+      skipMerge: true,
       description: task.description,
       agentOutput: outputBuffer,
       originalTask: task
@@ -330,21 +302,23 @@ export async function spawnTuiAgent(agentId, task, prompt, workspacePath, model,
       emitLog('info', `TUI agent ${agentId} working...`, { agentId, phase: 'working' });
     }
 
-    const clean = streamingStrip(text).replace(/\r/g, '\n');
-    const lowerClean = clean.toLowerCase();
-    if (!promptSentAt && lowerClean.includes('command not found') && lowerClean.includes(commandName.toLowerCase())) {
-      await finish({
-        success: false,
-        exitCode: 127,
-        error: `TUI command not found: ${tuiConfig.command}`,
-        reason: 'command-not-found'
-      });
-      return;
-    }
-
-    const lines = clean.split('\n').map(line => line.trim()).filter(Boolean);
-    for (const line of lines) {
-      appendLine(line);
+    // The TUI is a *screen*, not a log: every progress tick repaints the
+    // status line (`thinking with…`, token counters, footer) and gets
+    // re-captured if we parse it line-by-line. The attached shell session
+    // shows the live TUI faithfully — see-the-shell is the user-facing
+    // path. We still buffer the raw stream into rawBuffer for error
+    // analysis on failure, and we detect early "command not found" so a
+    // missing binary fails fast instead of idling.
+    if (!promptSentAt) {
+      const lowerStripped = streamingStrip(text).toLowerCase();
+      if (lowerStripped.includes('command not found') && lowerStripped.includes(commandName.toLowerCase())) {
+        await finish({
+          success: false,
+          exitCode: 127,
+          error: `TUI command not found: ${tuiConfig.command}`,
+          reason: 'command-not-found'
+        });
+      }
     }
   };
 
@@ -405,7 +379,7 @@ export async function spawnTuiAgent(agentId, task, prompt, workspacePath, model,
       if (finalized) return;
       shellService.writeToSession(sessionId, '\r');
     }, PASTE_TO_ENTER_DELAY_MS);
-    appendLine(`📟 Prompt pasted into TUI session ${sessionId.slice(0, 8)} (${reason})`, { force: true });
+    appendLine(`📟 Prompt pasted into TUI session ${sessionId.slice(0, 8)} (${reason})`);
   };
 
   const promptTimer = setInterval(() => {
@@ -432,13 +406,38 @@ export async function spawnTuiAgent(agentId, task, prompt, workspacePath, model,
     const runtime = Date.now() - promptSentAt;
     const idle = Date.now() - lastOutputAt;
     if (runtime < DEFAULT_TUI_MIN_RUNTIME_MS) return;
-    if (meaningfulLinesAfterPrompt < 2) return;
+    // We track post-paste activity via lastOutputAt instead of parsed-line
+    // counts because per-line PTY capture is intentionally disabled for TUI
+    // agents — see handleData.
+    if (lastOutputAt <= promptSentAt) return;
     if (idle >= tuiConfig.idleTimeoutMs) {
       finish({ success: true, exitCode: 0, reason: 'idle-complete' }).catch(err => {
         emitLog('error', `Failed to finalize TUI agent ${agentId}: ${err.message}`, { agentId });
       });
     }
   }, 5000);
+
+  // Sentinel-file watcher. The agent's prompt instructs it to write
+  // .agent-done in the workspace after running /simplify + /do:pr; that's
+  // the primary completion signal (idle-complete is just the fallback for
+  // an agent that didn't comply).
+  const doneSentinelPath = workspacePath ? join(workspacePath, DONE_SENTINEL_NAME) : null;
+  const doneSentinelTimer = doneSentinelPath ? setInterval(() => {
+    if (finalized) return;
+    if (!existsSync(doneSentinelPath)) return;
+    clearInterval(doneSentinelTimer);
+    readFile(doneSentinelPath, 'utf8')
+      .then(contents => {
+        const trimmed = contents.trim();
+        if (trimmed) appendLine(`✅ Agent signaled completion: ${trimmed.slice(0, 200)}`);
+      })
+      .catch(() => {})
+      .finally(() => {
+        finish({ success: true, exitCode: 0, reason: 'agent-signaled-done' }).catch(err => {
+          emitLog('error', `Failed to finalize TUI agent ${agentId} after sentinel: ${err.message}`, { agentId });
+        });
+      });
+  }, DONE_POLL_INTERVAL_MS) : null;
 
   activeAgents.set(agentId, {
     process: ptyProcess || { kill: () => shellService.killSession(sessionId) },
@@ -451,7 +450,8 @@ export async function spawnTuiAgent(agentId, task, prompt, workspacePath, model,
     laneName,
     tuiSessionId: sessionId,
     idleTimer,
-    promptTimer
+    promptTimer,
+    doneSentinelTimer
   });
 
   await updateAgent(agentId, {
@@ -465,6 +465,7 @@ export async function spawnTuiAgent(agentId, task, prompt, workspacePath, model,
     }
   });
 
-  appendLine(`📟 TUI session started: ${sessionId.slice(0, 8)} (${tuiConfig.commandLine})`, { force: true });
+  appendLine(`📟 TUI session started: ${sessionId.slice(0, 8)} (${tuiConfig.commandLine})`);
+  appendLine(`💡 Open the Shell tab for live TUI output — this panel only logs lifecycle events.`);
   return agentId;
 }

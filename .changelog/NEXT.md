@@ -886,6 +886,27 @@
 
 ## Changed
 
+- **TUI agents now own the simplify → push → PR sequence and self-signal
+  completion.** With Claude Code TUI available as a provider type, the
+  system no longer needs to drive `cleanupAgentWorktree`'s push/PR steps
+  from outside the agent: the agent's prompt now ends with a Completion
+  Workflow section instructing it to run `/simplify` (when enabled),
+  `/do:pr` (or `/do:push` when `openPR` is false), write `.agent-done`
+  in the workspace as a completion sentinel, and `/quit` to exit. PortOS
+  polls for the sentinel every 2 s and finalizes the agent with reason
+  `agent-signaled-done` as soon as it appears (the existing idle-timeout
+  is kept as a fallback for non-compliant agents). The TUI cleanup path
+  forces `openPR: false`, `requestCopilotReview: false`, `skipMerge: true`
+  so the worktree cleanup never double-fires push/PR after the agent has
+  already done it. CLAUDE.md is also no longer pasted into TUI prompts —
+  Claude Code reads it natively at session start, so duplicating it just
+  wastes tokens. The agent "Show output" panel for TUI agents drops
+  per-line PTY capture entirely (TUI is a screen, not a log — the
+  attached Shell tab is the live view) and only records lifecycle
+  events. Touches `server/services/agentPromptBuilder.js`,
+  `server/services/agentLifecycle.js`,
+  `server/services/agentTuiSpawning.js` + tests.
+
 - **Writers Room / Universe Builder / Series detail — collapse UX now matches
   CoS.** The three pages previously left a 32px vertical rail in place when
   their middle sidebar was collapsed. They now mirror the Chief of Staff

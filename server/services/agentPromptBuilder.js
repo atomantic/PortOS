@@ -152,13 +152,24 @@ ${hints.map(h => `- ${h}`).join('\n')}
  * @param {Object|null} worktreeInfo - Worktree details if using a worktree
  * @param {Function} isTruthyMetaFn - isTruthyMeta function (passed to avoid circular dep)
  */
-export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo = null, isTruthyMetaFn = (v) => v === true || v === 'true') {
+export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo = null, isTruthyMetaFn = (v) => v === true || v === 'true', options = {}) {
+  // TUI agents run inside an interactive Claude Code shell that already reads
+  // CLAUDE.md natively at session start — re-pasting it into the prompt just
+  // wastes tokens and duplicates context. TUI agents also own their
+  // commit/push/PR workflow directly via slashdo commands (Claude Code TUI
+  // has /simplify, /do:pr, etc. available), so the worktree/simplify
+  // sections that assume system-side post-exit cleanup are replaced with a
+  // single TUI workflow block.
+  const skipClaudeMd = options.skipClaudeMd === true;
+  const isTui = options.tui === true;
   // Fetch independent context sections in parallel
   const [memorySection, claudeMdSection, digitalTwinSection] = await Promise.all([
     getMemorySection(task, { maxTokens: config.memory?.maxContextTokens || 2000 })
       .catch(err => { console.log(`⚠️ Memory retrieval failed: ${err.message}`); return null; }),
-    getClaudeMdContext(workspaceDir)
-      .catch(err => { console.log(`⚠️ CLAUDE.md retrieval failed: ${err.message}`); return null; }),
+    skipClaudeMd
+      ? Promise.resolve(null)
+      : getClaudeMdContext(workspaceDir)
+          .catch(err => { console.log(`⚠️ CLAUDE.md retrieval failed: ${err.message}`); return null; }),
     getDigitalTwinForPrompt({ maxTokens: config.digitalTwin?.maxContextTokens || config.soul?.maxContextTokens || 2000 })
       .catch(err => { console.log(`⚠️ Digital twin context retrieval failed: ${err.message}`); return null; })
   ]);
@@ -177,9 +188,11 @@ You are working in an **isolated git worktree** to avoid conflicts with other ag
 - **Worktree Path**: \`${worktreeInfo.worktreePath}\`
 ${worktreeInfo.baseBranch ? `- **Based on**: \`${worktreeInfo.baseBranch}\` (latest from origin)` : ''}
 
-**Important**: ${isWorktreeOnExistingBranch
-    ? 'Commit and **push** any review-fix commits to this branch — the PR points at it, so pushed commits are how Copilot sees your fixes. Use `git pull --rebase` before pushing if needed.'
-    : `Commit your changes to this branch.${willOpenPR ? ' When your task completes, the system will push this branch and open a pull request against the default branch — do NOT push or open a PR yourself.' : ' Your commits will be automatically merged back to the main development branch when your task completes.'}`} Do NOT manually switch branches or modify the worktree configuration.
+**Important**: ${isTui
+    ? 'Commit your changes to this branch — see the **Completion Workflow** section below for the full push/PR/exit sequence.'
+    : isWorktreeOnExistingBranch
+      ? 'Commit and **push** any review-fix commits to this branch — the PR points at it, so pushed commits are how Copilot sees your fixes. Use `git pull --rebase` before pushing if needed.'
+      : `Commit your changes to this branch.${willOpenPR ? ' When your task completes, the system will push this branch and open a pull request against the default branch — do NOT push or open a PR yourself.' : ' Your commits will be automatically merged back to the main development branch when your task completes.'}`} Do NOT manually switch branches or modify the worktree configuration.
 ` : '';
 
   // Build pipeline context section if this is a pipeline stage
@@ -198,10 +211,32 @@ Use the findings from the previous stage to inform your work. If the previous st
   // Build simplify section if enabled. In the worktree-with-openPR flow the
   // system pushes and opens the PR after the agent exits, so the agent must
   // only commit (not push) — keep this wording aligned with the worktree
-  // section above.
-  const simplifySection = isTruthyMetaFn(task.metadata?.simplify) ? `
+  // section above. TUI agents own the full simplify+push+PR sequence in the
+  // Completion Workflow section below, so this section is suppressed for TUI.
+  const simplifyEnabled = isTruthyMetaFn(task.metadata?.simplify);
+  const simplifySection = simplifyEnabled && !isTui ? `
 ## Simplify Step
 After completing your work and before committing, run \`/simplify\` to review the changed code for reuse, quality, and efficiency. Fix any issues found, then ${worktreeInfo && willOpenPR ? 'commit your changes (do NOT push — on a successful run the system will push and open the PR after you exit; if the run fails, no push or PR happens)' : 'commit and push using `/do:push`'}.
+` : '';
+
+  // TUI Completion Workflow. Claude Code TUI has direct access to the
+  // slashdo commands (the submodule mounts them as project-level slash
+  // commands), so the agent runs the whole tail end itself instead of
+  // having PortOS drive push/PR creation from cleanup. The sentinel file
+  // (.agent-done) is what PortOS polls for to know the agent has finished
+  // — write it AFTER /do:pr/push succeeds, then /quit exits Claude Code
+  // and the spawn's handleExit fires.
+  const tuiCompletionCommand = willOpenPR ? '/do:pr' : '/do:push';
+  const tuiCompletionSection = isTui ? `
+## Completion Workflow
+You are running inside the Claude Code TUI, which has the project's slashdo commands available as slash commands. When your task is complete, run the following — in order — without further user input:
+
+1. ${simplifyEnabled ? '`/simplify` — review the changed code for reuse, quality, and efficiency, and fix any issues it surfaces.' : '(simplify is disabled for this task — skip step 1)'}
+2. \`${tuiCompletionCommand}\` — commits${willOpenPR ? ', pushes, and opens a pull request against the default branch' : ' and pushes the branch'}.
+3. Write the completion sentinel so PortOS knows you finished: \`echo "done" > "${worktreeInfo?.worktreePath || workspaceDir}/.agent-done"\` (PortOS polls for this file; without it the agent will sit idle until the 3-minute fallback timer fires).
+4. Run \`/quit\` to exit the Claude Code session cleanly.
+
+Do not wait for further user input between these steps — run them in sequence as soon as the implementation work is finished.
 ` : '';
 
   // Build review loop section if enabled. The agent itself does NOT open the PR
@@ -324,6 +359,7 @@ ${task.metadata.jiraBranch ? 'Commit your changes to this branch. Do NOT switch 
     pipelineSection,
     jiraSection,
     simplifySection,
+    tuiCompletionSection,
     reviewLoopSection,
     reviewLoopFollowUpSection,
     compactionSection,
@@ -359,6 +395,7 @@ ${worktreeSection}
 ${pipelineSection}
 ${jiraSection}
 ${simplifySection}
+${tuiCompletionSection}
 ${reviewLoopSection}
 ${reviewLoopFollowUpSection}
 ${compactionSection}

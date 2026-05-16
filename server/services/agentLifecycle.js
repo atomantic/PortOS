@@ -441,8 +441,12 @@ export async function spawnAgentForTask(task) {
     }
   } // end !isReadOnly
 
-  // Build the agent prompt (includes worktree and JIRA context if applicable)
-  const prompt = await buildAgentPrompt(task, config, workspacePath, worktreeInfo, isTruthyMeta);
+  const isTui = provider.type === 'tui';
+
+  // Build the agent prompt (includes worktree and JIRA context if applicable).
+  // TUI providers (Claude Code, etc.) read CLAUDE.md natively at session boot,
+  // so don't paste it into the prompt — saves tokens and avoids duplication.
+  const prompt = await buildAgentPrompt(task, config, workspacePath, worktreeInfo, isTruthyMeta, { skipClaudeMd: isTui, tui: isTui });
 
   // Create agent directory
   const agentDir = join(AGENTS_DIR, agentId);
@@ -455,8 +459,6 @@ export async function spawnAgentForTask(task) {
 
   // Create run entry for usage tracking
   const { runId } = await createAgentRun(agentId, task, selectedModel, provider, workspacePath, resolvedAppName);
-
-  const isTui = provider.type === 'tui';
   const executionMode = isTui ? 'tui' : useRunner ? 'runner' : 'direct';
 
   // Register the agent with model info

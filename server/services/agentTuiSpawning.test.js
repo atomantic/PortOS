@@ -82,7 +82,7 @@ vi.mock('../lib/providerModels.js', () => ({
   resolveCliModel: vi.fn((m) => (m === 'codex-configured-default' || !m) ? null : m)
 }));
 
-import { buildTuiSpawnConfig, isTuiNoise, spawnTuiAgent } from './agentTuiSpawning.js';
+import { buildTuiSpawnConfig, spawnTuiAgent } from './agentTuiSpawning.js';
 import * as shellService from './shell.js';
 import * as cosAgents from './cosAgents.js';
 import * as cos from './cos.js';
@@ -145,30 +145,6 @@ describe('agent TUI spawning', () => {
     const config = buildTuiSpawnConfig({ id: 'codex-tui', command: 'codex', type: 'tui', args: [] }, null);
     expect(config.args).toEqual([]);
     expect(config.commandLine).toBe('codex');
-  });
-});
-
-describe('isTuiNoise', () => {
-  it('treats banner/status/box-drawing artifacts as noise', () => {
-    expect(isTuiNoise('')).toBe(true);
-    expect(isTuiNoise('   ')).toBe(true);
-    expect(isTuiNoise('─────────────')).toBe(true);
-    expect(isTuiNoise('>')).toBe(true);
-    expect(isTuiNoise('?')).toBe(true);
-    expect(isTuiNoise('Try "how does Layout.jsx work?"')).toBe(true);
-    expect(isTuiNoise('Claude Code v2.1.133')).toBe(true);
-    expect(isTuiNoise('Opus 4.7 with xhigh effort · Claude Max')).toBe(true);
-    expect(isTuiNoise('►► bypass permissions on (shift+tab to cycle)')).toBe(true);
-    // Letter-spaced animation frame from paste rendering
-    expect(isTuiNoise('c l a u d e - d a n g e r o u s l y - s k i p')).toBe(true);
-  });
-
-  it('keeps real agent output', () => {
-    expect(isTuiNoise('Reading file src/App.jsx...')).toBe(false);
-    expect(isTuiNoise('🔧 ReadFile')).toBe(false);
-    expect(isTuiNoise('Done! Refactored the auth middleware.')).toBe(false);
-    // Short prompt-style line — only filtered if it's a *bare* > or ?
-    expect(isTuiNoise('> hello')).toBe(false);
   });
 });
 
@@ -264,14 +240,15 @@ describe('spawnTuiAgent runtime', () => {
     await vi.advanceTimersByTimeAsync(2000);
     await flushMicrotasks();
 
-    // Feed 2 meaningful lines AFTER the paste so meaningfulLinesAfterPrompt >= 2.
-    // These must not match the promptPreview ("do the thing").
-    await capturedOnData(Buffer.from('Agent output line one\n'));
-    await capturedOnData(Buffer.from('Agent output line two\n'));
+    // Feed one PTY chunk AFTER the paste so lastOutputAt > promptSentAt
+    // (the idle gate's "we saw activity post-paste" signal — replaces the
+    // old per-line count now that line capture is dropped).
+    await capturedOnData(Buffer.from('Agent post-paste activity\n'));
 
     // Advance past DEFAULT_TUI_MIN_RUNTIME_MS (15 000ms) + idleTimeoutMs (50ms).
-    // The idle setInterval ticks every 5 000ms; at the >=15s tick the conditions
-    // (runtime >= 15s, lines >= 2, idle >= 50ms) are all satisfied.
+    // The idle setInterval ticks every 5 000ms; at the >=15s tick the
+    // conditions (runtime >= 15s, lastOutputAt > promptSentAt, idle >= 50ms)
+    // are all satisfied.
     await vi.advanceTimersByTimeAsync(21000);
 
     // finish() is called as fire-and-forget inside the interval callback;
