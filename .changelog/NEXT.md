@@ -1019,6 +1019,25 @@
 
 ## Fixed
 
+- **Browser download-UI shell handoffs dead on macOS (Show in Finder / Open file silently no-op).**
+  `browser/server.js` spawned Chrome as a direct child of `node`/PM2, which
+  made PM2 the TCC "responsible app" for Chrome's AppleEvent +
+  LaunchServices calls on macOS Sequoia. PM2 hasn't been granted Automation
+  or Files-and-Folders access, so every shell handoff from Chrome's download
+  UI ("Show in Finder", "Open file", chrome://downloads row click) silently
+  no-op'd. Downloads themselves landed correctly because Chrome's own
+  sandboxed writes don't go through TCC. Fix: on macOS headed mode, launch
+  via `/usr/bin/open -na "Google Chrome.app" --args …` so launchd is the
+  responsible launcher and Chrome runs with its own TCC identity (Chrome's
+  parent PID is now `launchd` instead of `node`). Headless mode keeps the
+  direct `spawn` (no UI to click), and Linux/Windows are unaffected (no TCC).
+  Trade-off: `open` returns immediately, so we lose the direct PID handle;
+  shutdown now sends CDP `Browser.close` (with a 2s safety timeout + WS
+  fallback) instead of SIGTERM on macOS headed mode. **Files:**
+  `browser/server.js` — `MAC_CHROME_APP` constant, platform-split launch
+  branch in `launchBrowser`, new `closeBrowserViaCdp` helper, `shutdown`
+  promoted to async.
+
 - **Stale-build cache — buildId now invalidates when `client/dist/index.html` changes.**
   The boot-time cache in `server/lib/buildId.js` was load-once: once captured,
   the server kept serving the *original* stamped index.html — referencing the

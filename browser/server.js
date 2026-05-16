@@ -33,6 +33,8 @@ function getChromePath() {
   return 'google-chrome';
 }
 
+const MAC_CHROME_APP = '/Applications/Google Chrome.app';
+
 async function loadConfig() {
   const raw = await readFile(CONFIG_FILE, 'utf-8').catch(() => null);
   return raw ? JSON.parse(raw) : {};
@@ -176,16 +178,36 @@ async function launchBrowser() {
 
   console.log(`🌐 Launching Chrome (headless=${headlessMode}, profile=${profileDir}) CDP on ${CDP_HOST}:${CDP_PORT}`);
 
-  chromeProcess = spawn(chromePath, args, { stdio: 'ignore', windowsHide: true });
-
-  chromeProcess.on('exit', (code) => {
-    console.log(`⚠️ Chrome exited with code ${code}`);
-    chromeProcess = null;
-    if (downloadWs) {
-      try { downloadWs.close(); } catch {}
-      downloadWs = null;
-    }
-  });
+  // macOS headed mode: launch via LaunchServices (`open -na`) so Chrome owns
+  // its own TCC identity. As a direct subprocess of node/PM2, Chrome inherits
+  // PM2's responsibility for AppleEvents + LaunchServices calls — every shell
+  // handoff from the download UI ("Show in Finder", "Open file", chrome://
+  // downloads row click) silently no-ops because PM2 isn't granted Automation
+  // / Files-and-Folders access. `open -na` makes launchd the responsible
+  // launcher, so tccd resolves Chrome's requests against the user's existing
+  // Chrome.app grants. Trade-off: `open` returns immediately, so we lose the
+  // direct PID — shutdown uses CDP `Browser.close` instead of SIGTERM.
+  // Headless mode skips this (no UI to click) and non-darwin platforms don't
+  // have the TCC-responsibility problem at all.
+  if (platform() === 'darwin' && !headlessMode) {
+    chromeProcess = spawn('/usr/bin/open', ['-na', MAC_CHROME_APP, '--args', ...args], { stdio: 'ignore' });
+    chromeProcess.on('exit', () => {
+      // `open` returns ~immediately once Chrome is handed off to launchd; that
+      // exit is not Chrome's death. Chrome-exit detection happens via the
+      // download keep-alive WS close event + reconnect loop instead.
+      chromeProcess = null;
+    });
+  } else {
+    chromeProcess = spawn(chromePath, args, { stdio: 'ignore', windowsHide: true });
+    chromeProcess.on('exit', (code) => {
+      console.log(`⚠️ Chrome exited with code ${code}`);
+      chromeProcess = null;
+      if (downloadWs) {
+        try { downloadWs.close(); } catch {}
+        downloadWs = null;
+      }
+    });
+  }
 
   // Wait for CDP to become available
   for (let i = 0; i < 20; i++) {
@@ -231,19 +253,41 @@ const healthServer = createServer(async (req, res) => {
   }
 });
 
-function shutdown() {
+async function closeBrowserViaCdp() {
+  if (typeof WebSocket === 'undefined') return;
+  const version = await checkCdp();
+  const wsUrl = version?.webSocketDebuggerUrl;
+  if (!wsUrl) return;
+  await new Promise((resolve) => {
+    const ws = new WebSocket(wsUrl);
+    const done = () => { try { ws.close(); } catch {} resolve(); };
+    const safety = setTimeout(done, 2000);
+    ws.addEventListener('open', () => {
+      try { ws.send(JSON.stringify({ id: 999, method: 'Browser.close' })); } catch {}
+      // Give Chrome a moment to tear down before we exit the supervisor
+      setTimeout(() => { clearTimeout(safety); done(); }, 500);
+    });
+    ws.addEventListener('error', () => { clearTimeout(safety); done(); });
+  });
+}
+
+async function shutdown() {
   console.log('🛑 Shutting down browser...');
   shuttingDown = true;
   if (downloadWsReconnectTimer) {
     clearTimeout(downloadWsReconnectTimer);
     downloadWsReconnectTimer = null;
   }
+  // macOS headed mode: we launched via `open` which exited immediately, so
+  // SIGTERM on `chromeProcess` is a no-op. Send CDP Browser.close instead.
+  if (platform() === 'darwin' && !headlessMode) {
+    await closeBrowserViaCdp().catch(() => {});
+  } else if (chromeProcess && !chromeProcess.killed) {
+    chromeProcess.kill('SIGTERM');
+  }
   if (downloadWs) {
     try { downloadWs.close(); } catch {}
     downloadWs = null;
-  }
-  if (chromeProcess && !chromeProcess.killed) {
-    chromeProcess.kill('SIGTERM');
   }
   healthServer.close();
   process.exit(0);
