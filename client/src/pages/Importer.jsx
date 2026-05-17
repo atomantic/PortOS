@@ -222,7 +222,10 @@ export default function Importer() {
 
 function IntakeForm({ intake, setIntake, intakeValid, sourceLen, sourceOver, sourceCharLimit, analyzing, onAnalyze }) {
   return (
-    <div className="space-y-4 bg-port-card border border-port-border rounded-lg p-4 sm:p-6">
+    <form
+      className="space-y-4 bg-port-card border border-port-border rounded-lg p-4 sm:p-6"
+      onSubmit={(e) => { e.preventDefault(); if (intakeValid && !analyzing) onAnalyze(); }}
+    >
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
           <label htmlFor="importer-universe-name" className="block text-sm font-medium mb-1">
@@ -327,8 +330,7 @@ function IntakeForm({ intake, setIntake, intakeValid, sourceLen, sourceOver, sou
 
       <div className="flex items-center justify-end gap-2 pt-2">
         <button
-          type="button"
-          onClick={onAnalyze}
+          type="submit"
           disabled={!intakeValid || analyzing}
           className="bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded text-sm font-medium flex items-center gap-2"
         >
@@ -336,7 +338,7 @@ function IntakeForm({ intake, setIntake, intakeValid, sourceLen, sourceOver, sou
           {analyzing ? 'Analyzing…' : 'Analyze'}
         </button>
       </div>
-    </div>
+    </form>
   );
 }
 

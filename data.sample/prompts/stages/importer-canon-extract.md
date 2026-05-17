@@ -8,15 +8,7 @@ You are a senior story editor reverse-engineering an existing finished work into
 - **Series name:** {{seriesName}}
 - **Content type:** {{contentType}}
 
-{{#existingCanonJson}}
-## Existing universe canon (do NOT duplicate these by name or aliases)
-
-This universe already has some canonical entries. Match by `name` (case-insensitive) **and by any listed `aliases`**. If an existing entry covers the same character / place / object, **omit it entirely** from your output — return only NEW entries. (Evidence for existing entries from this source is not currently re-merged; downstream evidence backfill is a follow-up.)
-
-```json
-{{{existingCanonJson}}}
-```
-{{/existingCanonJson}}
+{{{existingCanonBlock}}}
 
 ## Per-content-type guidance
 

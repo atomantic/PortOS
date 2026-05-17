@@ -59,15 +59,27 @@ const DEFAULT_TARGET_ISSUE_COUNT_HINT = Object.freeze({
 const normName = (s) => String(s || '').trim().toLowerCase();
 const isStr = (v) => typeof v === 'string';
 
-// Mustache's section regex re-processes substituted values when the
-// substitution lands inside a `{{#section}}...{{/section}}` block (the
-// outer SECTION_RE loop runs until stable). User-supplied canon names /
-// descriptions containing `{{spoilers}}` or `{{#foo}}` would otherwise
-// get interpreted as template tokens. A zero-width space between the
-// braces is invisible to the LLM (still reads as `{{` / `}}` semantically)
-// but breaks the SECTION_RE / VAR_RE patterns.
-const escapeMustacheBraces = (s) =>
-  String(s).replace(/\{\{/g, '{​{').replace(/\}\}/g, '}​}');
+// Build the "existing canon" prompt block in JS rather than as a Mustache
+// `{{#section}}{{{var}}}{{/section}}` so the user-supplied canon JSON
+// passes through the template engine's TRIPLE_RE substitution exactly
+// once (after the section-resolution loop has settled). Substituting a
+// JSON-stringified value that contains `{{spoilers}}` *inside* a section
+// would otherwise let the outer SECTION/VAR loop re-interpret the
+// braces as template tokens.
+function buildExistingCanonBlock(existingCanon) {
+  if (!existingCanon) return '';
+  const json = JSON.stringify(existingCanon, null, 2);
+  return [
+    '## Existing universe canon (do NOT duplicate these by name or aliases)',
+    '',
+    'This universe already has some canonical entries. Match by `name` (case-insensitive) **and by any listed `aliases`**. If an existing entry covers the same character / place / object, **omit it entirely** from your output — return only NEW entries. (Evidence for existing entries from this source is not currently re-merged; downstream evidence backfill is a follow-up.)',
+    '',
+    '```json',
+    json,
+    '```',
+    '',
+  ].join('\n');
+}
 
 /**
  * Find a universe by case-insensitive name match. Returns `null` when no
@@ -251,7 +263,7 @@ export async function analyzeImport({
       seriesName: promptSeriesName,
       contentType,
       source,
-      existingCanonJson: existingCanon ? escapeMustacheBraces(JSON.stringify(existingCanon, null, 2)) : '',
+      existingCanonBlock: buildExistingCanonBlock(existingCanon),
       ...typeFlags,
     }, llmOpts),
     runStagedLLM('importer-arc-extract', {
@@ -406,17 +418,40 @@ export async function commitImport({
         ERR_VALIDATION,
       );
     }
+    // When proseExcerpt is present it must be non-empty after trim —
+    // mirrors the route Zod `.refine` so a whitespace-only excerpt from
+    // a direct caller doesn't seed `stages.prose` with garbage.
+    if (proposal.proseExcerpt !== undefined && proposal.proseExcerpt !== null) {
+      if (!isStr(proposal.proseExcerpt) || !proposal.proseExcerpt.trim()) {
+        throw makeErr(
+          `Issue at position ${i + 1} has invalid proseExcerpt (must be non-empty when present) — commit refused before any state changed.`,
+          ERR_VALIDATION,
+        );
+      }
+    }
   }
   // Same contract for seasons: route Zod enforces `number: int >= 1`,
   // commitImport mirrors it so the service is safe under direct calls.
+  // Also reject duplicate season numbers — the merge keys by `number`,
+  // so two incoming seasons with the same number would silently collapse
+  // into one entry post sanitizeSeasonList.
+  const seenSeasonNumbers = new Set();
   for (let i = 0; i < seasons.length; i++) {
     const s = seasons[i];
-    if (s?.number !== undefined && s?.number !== null
-        && (!Number.isInteger(s.number) || s.number < 1)) {
-      throw makeErr(
-        `Season at position ${i + 1} has invalid number (must be integer >= 1) — commit refused before any state changed.`,
-        ERR_VALIDATION,
-      );
+    if (s?.number !== undefined && s?.number !== null) {
+      if (!Number.isInteger(s.number) || s.number < 1) {
+        throw makeErr(
+          `Season at position ${i + 1} has invalid number (must be integer >= 1) — commit refused before any state changed.`,
+          ERR_VALIDATION,
+        );
+      }
+      if (seenSeasonNumbers.has(s.number)) {
+        throw makeErr(
+          `Duplicate season number ${s.number} at position ${i + 1} — commit refused before any state changed.`,
+          ERR_VALIDATION,
+        );
+      }
+      seenSeasonNumbers.add(s.number);
     }
   }
 
@@ -542,7 +577,13 @@ export async function commitImport({
         proposal.synopsis && `Synopsis: ${proposal.synopsis}`,
       ].filter(Boolean).join('\n\n');
       if (ideaSeed) {
-        stages.idea = { status: 'ready', input: ideaSeed };
+        // `idea` is seeded with input only — the user/LLM still needs to
+        // run the idea stage to produce `output`. `isStageReady` requires
+        // both `status in {'ready','edited'}` AND non-empty output, so
+        // marking 'ready' here would mislabel it to status-only consumers
+        // while failing readiness predicates downstream. 'empty' matches
+        // the actual state: input present, generation not yet performed.
+        stages.idea = { status: 'empty', input: ideaSeed };
       }
       const issue = await createIssue({
         seriesId: updatedSeries.id,

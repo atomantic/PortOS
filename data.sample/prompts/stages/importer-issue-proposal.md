@@ -66,7 +66,7 @@ Return ONLY valid JSON matching this shape — no prose, no markdown fence, no c
     {
       "title": "string",
       "arcPosition": 1,
-      "arcRole": "pilot|complication|midpoint|b-plot|all-is-lost|finale",
+      "arcRole": "pilot",
       "logline": "string",
       "synopsis": "string",
       "proseExcerpt": "string (verbatim from source)"
