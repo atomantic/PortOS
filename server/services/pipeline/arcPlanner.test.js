@@ -1002,4 +1002,25 @@ describe('arcPlanner — generateComicCoverConcepts', () => {
     // LLM should never have been called for a validation failure.
     expect(stageRunnerSpy).toBeUndefined();
   });
+
+  it('treats a whitespace-only existing script as blank and seeds it (client/server parity)', async () => {
+    // The client gate uses `.trim()` — the server must agree so a
+    // " \n " script doesn't enable the button but skip seeding.
+    const { issue } = await setupIssue();
+    await issuesSvc.updateStage(issue.id, 'comicPages', {
+      cover: { script: '   \n  ' },
+      backCover: { script: '\t' },
+    });
+    stageRunnerSpy = vi.fn(async () => ({
+      content: { coverConcept: 'LLM front', backCoverConcept: 'LLM back' },
+      runId: 'r', providerId: 'p', model: 'm',
+    }));
+
+    const out = await planner.generateComicCoverConcepts(issue.id, { commit: true });
+
+    expect(out.seeded).toEqual({ cover: true, backCover: true });
+    const stored = await issuesSvc.getIssue(issue.id);
+    expect(stored.stages.comicPages.cover.script).toBe('LLM front');
+    expect(stored.stages.comicPages.backCover.script).toBe('LLM back');
+  });
 });

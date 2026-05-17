@@ -251,14 +251,14 @@
     },
     "pipeline-volume-cover-concepts": {
       "name": "Pipeline — Volume Cover Concepts",
-      "description": "Generate FRONT and BACK cover-art concepts for one volume (season) of a comic series. Returns a {coverConcept, backCoverConcept} JSON pair — pure scene descriptions for the image-gen renderer (no masthead, logo, or typography). Lightweight per-season call; seeds blank cover scripts only and never clobbers a user edit.",
+      "description": "Generate FRONT and BACK cover-art concepts for one volume (season) of a comic series. Returns a {coverConcept, backCoverConcept} JSON pair — pure scene descriptions for the image-gen renderer (no masthead, logo, or typography). Lightweight per-season call; may seed the cover and/or backCover script slots when they're blank, and never clobbers a user edit.",
       "model": "default",
       "returnsJson": true,
       "variables": []
     },
     "pipeline-comic-cover-concepts": {
       "name": "Pipeline — Comic Issue Cover Concepts",
-      "description": "Generate FRONT and BACK cover-art concepts for a single comic issue. Returns a {coverConcept, backCoverConcept} JSON pair — pure scene descriptions for the image-gen renderer (no masthead, issue-number tag, or typography). Lightweight per-issue call; seeds blank cover scripts only and never clobbers a user edit.",
+      "description": "Generate FRONT and BACK cover-art concepts for a single comic issue. Returns a {coverConcept, backCoverConcept} JSON pair — pure scene descriptions for the image-gen renderer (no masthead, issue-number tag, or typography). Lightweight per-issue call; may seed the cover and/or backCover script slots (gated by the request `target`) when they're blank, and never clobbers a user edit.",
       "model": "default",
       "returnsJson": true,
       "variables": []

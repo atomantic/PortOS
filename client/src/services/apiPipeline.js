@@ -182,7 +182,9 @@ export const generatePipelineComicBackCover = (issueId, opts = {}, options = {})
 // slot(s) get seeded when `commit: true` — the UI button on each card sends
 // its own target so the user can regenerate one card's concept without
 // touching the other. Seeds only blank scripts; never clobbers a user edit.
-// Returns the proposed text plus the updated issue + comicPages stage.
+// Returns { coverConcept, backCoverConcept, target, seeded, … }; the
+// `issue` and `stage` fields are only populated when `commit: true` (the
+// preview-only path returns them as null).
 export const generatePipelineComicCoverConcepts = (issueId, opts = {}, options = {}) =>
   request(`/pipeline/issues/${encodeURIComponent(issueId)}/cover-concepts/generate`, {
     method: 'POST',

@@ -462,11 +462,13 @@ export async function generateVolumeCoverConcepts(seriesId, seasonId, options = 
     // race against a concurrent user blur-save).
     updatedSeries = await updateSeasonOnSeries(seriesId, seasonId, (cur) => {
       const patch = {};
-      if (coverConcept && !(cur.cover?.script || '')) {
+      // Trim before the blank-check so whitespace-only scripts count as
+      // blank — matches the client `.trim()` gate on the per-card buttons.
+      if (coverConcept && !(cur.cover?.script || '').trim()) {
         patch.cover = { ...(cur.cover || {}), script: coverConcept };
         seeded.cover = true;
       }
-      if (backCoverConcept && !(cur.backCover?.script || '')) {
+      if (backCoverConcept && !(cur.backCover?.script || '').trim()) {
         patch.backCover = { ...(cur.backCover || {}), script: backCoverConcept };
         seeded.backCover = true;
       }
@@ -546,11 +548,15 @@ export async function generateComicCoverConcepts(issueId, options = {}) {
     // same "only seed when blank" pattern as the volume variant.
     const result = await updateStageWithLatest(issueId, 'comicPages', (cur) => {
       const patch = {};
-      if (wantCover && coverConcept && !(cur?.cover?.script || '')) {
+      // Trim before the blank-check so the server's notion of "occupied"
+      // matches the client's `.trim()`-based button gate — otherwise a
+      // whitespace-only script enables the button but the server refuses
+      // to seed, producing a misleading "preserved" toast.
+      if (wantCover && coverConcept && !(cur?.cover?.script || '').trim()) {
         patch.cover = { ...(cur?.cover || {}), script: coverConcept };
         seeded.cover = true;
       }
-      if (wantBack && backCoverConcept && !(cur?.backCover?.script || '')) {
+      if (wantBack && backCoverConcept && !(cur?.backCover?.script || '').trim()) {
         patch.backCover = { ...(cur?.backCover || {}), script: backCoverConcept };
         seeded.backCover = true;
       }

@@ -314,19 +314,25 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
     const generating = generatingConcept[target];
     const filled = !!(script || '').trim();
     const noun = target === 'backCover' ? 'back-cover' : 'cover';
+    const tooltip = filled
+      ? `Clear the ${noun} concept first — the LLM only seeds blank concepts to avoid clobbering your edits.`
+      : `Have the LLM propose a ${noun} concept for this issue`;
+    // Tooltip on the wrapper, not the button: most browsers skip hover
+    // events on disabled controls so a `title` on `<button disabled>` is
+    // invisible. Mirrors the ScheduleTab.jsx pattern.
     return (
-      <button
-        type="button"
-        onClick={() => handleGenerateConcept(target)}
-        disabled={generating || filled}
-        title={filled
-          ? `Clear the ${noun} concept first — the LLM only seeds blank concepts to avoid clobbering your edits.`
-          : `Have the LLM propose a ${noun} concept for this issue`}
-        className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-port-accent hover:text-white border border-port-border bg-port-bg hover:border-port-accent/40 disabled:opacity-40 disabled:cursor-not-allowed"
-      >
-        {generating ? <Loader2 size={12} className="animate-spin" /> : <Wand2 size={12} />}
-        Generate concept (LLM)
-      </button>
+      <span title={tooltip} className="inline-block">
+        <button
+          type="button"
+          onClick={() => handleGenerateConcept(target)}
+          disabled={generating || filled}
+          aria-disabled={generating || filled || undefined}
+          className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-port-accent hover:text-white border border-port-border bg-port-bg hover:border-port-accent/40 disabled:opacity-40 disabled:cursor-not-allowed"
+        >
+          {generating ? <Loader2 size={12} className="animate-spin" /> : <Wand2 size={12} />}
+          Generate concept (LLM)
+        </button>
+      </span>
     );
   };
 
