@@ -13,7 +13,7 @@
 
 import { ServerError } from "../lib/errorHandler.js";
 import { getActiveProvider, getProviderById } from "./providers.js";
-import { createRun, executeApiRun, executeCliRun } from "./runner.js";
+import { runPromptThroughProvider } from "../lib/promptRunner.js";
 import { resolveEffectiveModel } from "../lib/promptRunner.js";
 import {
   renderCategoriesForPrompt as renderCategoriesShared,
@@ -329,65 +329,18 @@ const mergeCompositesWithLocks = (originalSheets, llmSheets) => {
   return sanitizeCompositeSheets(merged);
 };
 
-// CLI providers (codex/claude-code/gemini-cli) need provider-specific arg
-// shapes that the toolkit runner already knows about — going through the
-// runner avoids the "stdin is not a terminal" failure mode that hits when
-// you spawn `codex` directly without the `exec -` invocation.
+// Routes through the central handler so cli/api/tui providers all work; the
+// per-CLI argv quirks (codex `exec -`, gemini stdin pipe, claude `-p -`) live
+// inside runner.js#buildCliArgs and the TUI paste/idle handshake lives in
+// tuiPromptRunner.js — both reached via runPromptThroughProvider.
 async function runRefine(provider, model, prompt) {
-  const { runId } = await createRun({
-    providerId: provider.id,
-    model,
-    prompt,
-    source: "universe-builder-refine",
-  });
-
-  let text = "";
-  return new Promise((resolve, reject) => {
-    const onData = (chunk) => {
-      text += typeof chunk === "string" ? chunk : chunk?.text || "";
-    };
-    const onComplete = (result) => {
-      if (result?.error || result?.success === false) {
-        reject(
-          new ServerError(result?.error || "Universe refinement failed", {
-            status: 502,
-            code: "WORLD_REFINE_FAILED",
-          }),
-        );
-      } else {
-        resolve({ text, runId });
-      }
-    };
-    if (provider.type === "cli") {
-      // Mirror the media refiner: `buildCliArgs` now honors a per-call model
-      // override (via `provider.defaultModel`) for codex / claude-code /
-      // gemini-cli. Clone the provider with the overridden defaultModel
-      // whenever the caller picked something other than the saved default.
-      const providerForCli =
-        model && model !== provider.defaultModel
-          ? { ...provider, defaultModel: model }
-          : provider;
-      executeCliRun(
-        runId,
-        providerForCli,
-        prompt,
-        process.cwd(),
-        onData,
-        onComplete,
-        provider.timeout ?? 300000,
-      ).catch(reject);
-    } else {
-      executeApiRun(
-        runId,
-        provider,
-        model,
-        prompt,
-        process.cwd(),
-        [],
-        onData,
-        onComplete,
-      ).catch(reject);
-    }
+  return runPromptThroughProvider({
+    provider, prompt, source: "universe-builder-refine", model,
+  }).catch((err) => {
+    throw new ServerError(err?.message || "Universe refinement failed", {
+      status: 502,
+      code: "WORLD_REFINE_FAILED",
+    });
   });
 }
 

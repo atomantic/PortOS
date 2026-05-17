@@ -1,5 +1,4 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import EventEmitter from 'events';
 
 // Mock providers before importing the module
 vi.mock('./providers.js', () => ({
@@ -7,13 +6,15 @@ vi.mock('./providers.js', () => ({
   getProviderById: vi.fn()
 }));
 
-vi.mock('child_process', async (importOriginal) => {
-  const actual = await importOriginal();
-  return { ...actual, spawn: vi.fn() };
-});
+// Mock the central LLM handler — meatspacePostLlm used to spawn child_process
+// + fetch directly, but now delegates to runPromptThroughProvider. Runner
+// internals (spawn args, --model flag injection) are covered by runner.test.js.
+vi.mock('../lib/promptRunner.js', () => ({
+  runPromptThroughProvider: vi.fn()
+}));
 
 import { getActiveProvider, getProviderById } from './providers.js';
-import { spawn } from 'child_process';
+import { runPromptThroughProvider } from '../lib/promptRunner.js';
 import {
   LLM_DRILL_TYPES,
   generateLlmDrill,
@@ -25,7 +26,9 @@ import {
   scoreLlmDrill
 } from './meatspacePostLlm.js';
 
-// Helper: mock an API provider that returns a given JSON string
+// Helper: mock an API provider that returns a given JSON string. Sets the
+// central handler to resolve with the stringified response — drills then
+// parse it the same way they used to with a fetch-mocked API response.
 function mockApiProvider(responseJson) {
   const provider = {
     id: 'test-provider',
@@ -38,11 +41,10 @@ function mockApiProvider(responseJson) {
   getActiveProvider.mockResolvedValue(provider);
   getProviderById.mockResolvedValue(provider);
 
-  global.fetch = vi.fn().mockResolvedValue({
-    ok: true,
-    json: () => Promise.resolve({
-      choices: [{ message: { content: JSON.stringify(responseJson) } }]
-    })
+  runPromptThroughProvider.mockResolvedValue({
+    text: JSON.stringify(responseJson),
+    runId: 'test-run',
+    model: 'test-model'
   });
 
   return provider;
@@ -468,11 +470,9 @@ describe('AI response parsing', () => {
       endpoint: 'http://localhost:9999', defaultModel: 'test'
     };
     getActiveProvider.mockResolvedValue(provider);
-    global.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve({
-        choices: [{ message: { content: '```json\n{"questions":[{"prompt":"hello"}]}\n```' } }]
-      })
+    runPromptThroughProvider.mockResolvedValue({
+      text: '```json\n{"questions":[{"prompt":"hello"}]}\n```',
+      runId: 'test-run', model: 'test-model'
     });
 
     const result = await generateWordAssociation({ count: 1 });
@@ -485,11 +485,9 @@ describe('AI response parsing', () => {
       endpoint: 'http://localhost:9999', defaultModel: 'test'
     };
     getActiveProvider.mockResolvedValue(provider);
-    global.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve({
-        choices: [{ message: { content: 'Here is the result:\n{"questions":[{"prompt":"world"}]}\nHope this helps!' } }]
-      })
+    runPromptThroughProvider.mockResolvedValue({
+      text: 'Here is the result:\n{"questions":[{"prompt":"world"}]}\nHope this helps!',
+      runId: 'test-run', model: 'test-model'
     });
 
     const result = await generateWordAssociation({ count: 1 });
@@ -502,73 +500,11 @@ describe('AI response parsing', () => {
       endpoint: 'http://localhost:9999', defaultModel: 'test'
     };
     getActiveProvider.mockResolvedValue(provider);
-    global.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve({
-        choices: [{ message: { content: '' } }]
-      })
+    runPromptThroughProvider.mockResolvedValue({
+      text: '', runId: 'test-run', model: 'test-model'
     });
 
     await expect(generateWordAssociation({ count: 1 })).rejects.toThrow();
   });
 });
 
-// =============================================================================
-// CODEX SENTINEL — CLI spawn path
-// =============================================================================
-
-describe('CLI provider — codex sentinel model', () => {
-  function createMockChild(stdoutPayload) {
-    const child = new EventEmitter();
-    child.stdout = new EventEmitter();
-    child.stderr = new EventEmitter();
-    child.kill = vi.fn();
-    setImmediate(() => {
-      child.stdout.emit('data', Buffer.from(stdoutPayload));
-      child.emit('close', 0);
-    });
-    return child;
-  }
-
-  it('omits --model flag when defaultModel is the codex sentinel', async () => {
-    getActiveProvider.mockResolvedValue({
-      id: 'codex',
-      enabled: true,
-      type: 'cli',
-      command: 'codex',
-      args: [],
-      defaultModel: 'codex-configured-default',
-      timeout: 5000
-    });
-    spawn.mockReturnValue(createMockChild(JSON.stringify({
-      questions: [{ prompt: 'river', hints: '' }]
-    })));
-
-    await generateWordAssociation({ count: 1 });
-
-    const [, args] = spawn.mock.calls.at(-1);
-    expect(args).not.toContain('--model');
-  });
-
-  it('passes --model normally for non-sentinel CLI models', async () => {
-    getActiveProvider.mockResolvedValue({
-      id: 'codex',
-      enabled: true,
-      type: 'cli',
-      command: 'codex',
-      args: [],
-      defaultModel: 'o4-mini',
-      timeout: 5000
-    });
-    spawn.mockReturnValue(createMockChild(JSON.stringify({
-      questions: [{ prompt: 'river', hints: '' }]
-    })));
-
-    await generateWordAssociation({ count: 1 });
-
-    const [, args] = spawn.mock.calls.at(-1);
-    const modelIdx = args.indexOf('--model');
-    expect(modelIdx).toBeGreaterThanOrEqual(0);
-    expect(args[modelIdx + 1]).toBe('o4-mini');
-  });
-});

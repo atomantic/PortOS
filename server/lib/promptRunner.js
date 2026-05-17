@@ -27,6 +27,7 @@
  */
 
 import { createRun, executeApiRun, executeCliRun, extractBakedModel, hasModelFlag } from '../services/runner.js';
+import { executeTuiRun, cleanTuiResponse } from './tuiPromptRunner.js';
 
 const DEFAULT_TIMEOUT_MS = 300000;
 const APPEND_CHUNK = (acc, chunk) => acc + (typeof chunk === 'string' ? chunk : (chunk?.text || ''));
@@ -34,17 +35,17 @@ const APPEND_CHUNK = (acc, chunk) => acc + (typeof chunk === 'string' ? chunk : 
 /**
  * Returns true when the runner+provider pair will actually honor a
  * per-call `model` override. For API providers the model is a
- * first-class arg to `executeApiRun`. For CLI providers,
- * `runner.js#buildCliArgs` now translates the resolved `defaultModel`
- * into a `--model`/`-m` flag for codex, claude-code, AND gemini-cli —
- * BUT only when the user hasn't already baked a model flag into
- * `provider.args`. If a flag is baked in, the runner-injected one is
- * suppressed and the args-baked model wins; so claim "doesn't honor"
- * for that case to keep the run-record honest.
+ * first-class arg to `executeApiRun`. For CLI/TUI providers,
+ * `runner.js#buildCliArgs` / `tuiPromptRunner.js#buildOneShotInvocation`
+ * translate the resolved `defaultModel` into a `--model`/`-m` flag — BUT
+ * only when the user hasn't already baked a model flag into `provider.args`.
+ * If a flag is baked in, the runner-injected one is suppressed and the
+ * args-baked model wins; so claim "doesn't honor" for that case to keep
+ * the run-record honest.
  */
 export const providerHonorsModelOverride = (provider) => (
   provider?.type === 'api'
-  || (provider?.type === 'cli' && !hasModelFlag(provider?.args))
+  || ((provider?.type === 'cli' || provider?.type === 'tui') && !hasModelFlag(provider?.args))
 );
 
 /**
@@ -69,8 +70,8 @@ export function resolveEffectiveModel(provider, callerModel) {
   if (providerHonorsModelOverride(provider)) {
     return callerModel || provider?.defaultModel || provider?.models?.[0] || null;
   }
-  // Non-honoring CLI path: args-baked model id wins over defaultModel.
-  const baked = provider?.type === 'cli' && hasModelFlag(provider?.args)
+  // Non-honoring CLI/TUI path: args-baked model id wins over defaultModel.
+  const baked = (provider?.type === 'cli' || provider?.type === 'tui') && hasModelFlag(provider?.args)
     ? extractBakedModel(provider.args)
     : null;
   return baked || provider?.defaultModel || provider?.models?.[0] || null;
@@ -88,7 +89,7 @@ export function resolveEffectiveModel(provider, callerModel) {
  * make `/runs` and SSE status events lie about model usage.
  *
  * @param {object} args
- * @param {object} args.provider — { id, type: 'cli'|'api', timeout?, ... }
+ * @param {object} args.provider — { id, type: 'cli'|'api'|'tui', timeout?, ... }
  * @param {string} args.prompt   — full text to send to the LLM
  * @param {string} args.source   — run-record tag (`'universe-builder-expansion'`,
  *   `'media-prompt-refine'`, `'messages-triage'`, `'staged-llm'`, etc.)
@@ -96,11 +97,20 @@ export function resolveEffectiveModel(provider, callerModel) {
  *   provider doesn't honor it (claude-code, gemini-cli today).
  * @param {string} [args.runId]  — caller-supplied run id (skip createRun
  *   round-trip when the caller has already created the run)
+ * @param {(chunk: string) => void} [args.onData] — incremental stream
+ *   callback; receives each output chunk as it arrives. Useful for live
+ *   progress UI (loops, live transcripts). Does NOT change the resolved
+ *   `text` value — callers receive the full buffered text either way.
+ *   For TUI providers the stripped chunks are emitted; the final `text`
+ *   is the cleaned response with the prompt-echo elided.
+ * @param {number} [args.timeout] — per-call timeout in ms; falls back to
+ *   `provider.timeout`, then DEFAULT_TIMEOUT_MS. Callers like the loop
+ *   runner expose a user-configurable timeout that isn't a provider attr.
  * @returns {Promise<{ text: string, runId: string, model: string|null }>}
  *   — `model` is the resolved model that actually executed (null when
  *   neither override nor provider.defaultModel applies).
  */
-export async function runPromptThroughProvider({ provider, prompt, source, model, runId: callerRunId }) {
+export async function runPromptThroughProvider({ provider, prompt, source, model, runId: callerRunId, onData: onDataCallback, timeout: timeoutOverride }) {
   // Validate inputs up front so an accidentally-null `provider` (or one
   // missing `id`/`type`) surfaces a clear error here instead of throwing
   // a downstream TypeError on `provider.id` inside createRun or on the
@@ -111,7 +121,7 @@ export async function runPromptThroughProvider({ provider, prompt, source, model
   if (typeof provider.id !== 'string' || !provider.id) {
     throw new Error('runPromptThroughProvider: provider.id must be a non-empty string');
   }
-  if (provider.type !== 'cli' && provider.type !== 'api') {
+  if (provider.type !== 'cli' && provider.type !== 'api' && provider.type !== 'tui') {
     throw new Error(`Unsupported provider type: ${provider.type}`);
   }
   if (typeof prompt !== 'string' || !prompt.length) {
@@ -139,56 +149,47 @@ export async function runPromptThroughProvider({ provider, prompt, source, model
 
   return new Promise((resolve, reject) => {
     let text = '';
-    const onData = (chunk) => { text = APPEND_CHUNK(text, chunk); };
+    const onData = (chunk) => {
+      text = APPEND_CHUNK(text, chunk);
+      if (onDataCallback) {
+        const chunkText = typeof chunk === 'string' ? chunk : (chunk?.text || '');
+        if (chunkText) onDataCallback(chunkText);
+      }
+    };
     // Strictest discriminator: reject on either truthy `error` OR
     // explicit `success === false`. Per-site drift was the bug.
+    const labelByType = { cli: 'CLI', api: 'API', tui: 'TUI' };
     const onComplete = (result) => {
       if (result?.error || result?.success === false) {
-        reject(new Error(result?.error || `${provider.type === 'cli' ? 'CLI' : 'API'} execution failed`));
+        reject(new Error(result?.error || `${labelByType[provider.type] || provider.type} execution failed`));
       } else {
-        resolve({ text, runId, model: effectiveModel });
+        // TUI buffers contain the pasted prompt echo + UI chrome — clean
+        // before resolving so callers see roughly the same shape they
+        // get from a CLI run (model response text, possibly with noise).
+        const cleaned = provider.type === 'tui' ? cleanTuiResponse(text, prompt) : text;
+        resolve({ text: cleaned, runId, model: effectiveModel });
       }
     };
 
+    // executeCliRun / executeTuiRun both read `provider.defaultModel` for
+    // arg construction AND the run-started metadata hook. Hand them a
+    // clone with effectiveModel pinned so a per-call model override
+    // actually picks up (and the hook reports the right model). The
+    // guard skips the clone when effectiveModel already equals
+    // provider.defaultModel — typical for non-codex CLI providers where
+    // resolveEffectiveModel falls through to defaultModel anyway.
+    const providerForRun = effectiveModel && effectiveModel !== provider.defaultModel
+      ? { ...provider, defaultModel: effectiveModel }
+      : provider;
+    const effectiveTimeout = timeoutOverride ?? providerForRun.timeout ?? DEFAULT_TIMEOUT_MS;
+
     if (provider.type === 'cli') {
-      // executeCliRun reads `provider.defaultModel` for both the CLI
-      // args and the run-started metadata hook. Hand it a clone with
-      // effectiveModel in defaultModel so codex's --model flag picks
-      // up the override AND the hook reports the right model. The
-      // guard below skips the clone only when effectiveModel already
-      // equals provider.defaultModel exactly — so:
-      //   - codex with a user-picked override that differs from the
-      //     baked default → clone, set new defaultModel.
-      //   - non-codex CLI whose defaultModel is already set: gate
-      //     above forces effectiveModel = provider.defaultModel,
-      //     guard skips the clone.
-      //   - non-codex CLI with defaultModel unset but models[0] set:
-      //     effectiveModel falls back to models[0], differs from the
-      //     missing defaultModel, so we DO clone and the hook can log
-      //     a real value instead of `undefined`.
-      const providerForCli = effectiveModel && effectiveModel !== provider.defaultModel
-        ? { ...provider, defaultModel: effectiveModel }
-        : provider;
-      executeCliRun(
-        runId,
-        providerForCli,
-        prompt,
-        process.cwd(),
-        onData,
-        onComplete,
-        providerForCli.timeout ?? DEFAULT_TIMEOUT_MS,
-      ).catch(reject);
+      executeCliRun(runId, providerForRun, prompt, process.cwd(), onData, onComplete, effectiveTimeout).catch(reject);
     } else if (provider.type === 'api') {
-      executeApiRun(
-        runId,
-        provider,
-        effectiveModel,
-        prompt,
-        process.cwd(),
-        [],
-        onData,
-        onComplete,
-      ).catch(reject);
+      // API runs take model as a first-class arg — no clone needed.
+      executeApiRun(runId, provider, effectiveModel, prompt, process.cwd(), [], onData, onComplete).catch(reject);
+    } else if (provider.type === 'tui') {
+      executeTuiRun(runId, providerForRun, prompt, process.cwd(), onData, onComplete, effectiveTimeout).catch(reject);
     } else {
       reject(new Error(`Unsupported provider type: ${provider.type}`));
     }

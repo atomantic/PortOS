@@ -5,10 +5,10 @@
  * Includes recent activity context to avoid repetition.
  */
 
-import { executeApiRun, executeCliRun, createRun } from './runner.js';
 import { getActiveProvider, getProviderById } from './providers.js';
 import * as agentActivity from './agentActivity.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
+import { runPromptThroughProvider } from '../lib/promptRunner.js';
 
 /**
  * Parse JSON from AI response text (handles markdown blocks, extra text)
@@ -89,55 +89,9 @@ async function runAIGeneration(prompt, providerId, model, source) {
     throw new Error('No AI provider available for content generation');
   }
 
-  const selectedModel = model || provider.defaultModel || provider.models?.[0];
-
-  const { runId } = await createRun({
-    providerId: provider.id,
-    model: selectedModel,
-    prompt,
-    source
+  const { text: responseText, model: selectedModel } = await runPromptThroughProvider({
+    provider, prompt, source, model,
   });
-
-  let responseText = '';
-  const isCliProvider = provider.type === 'cli';
-
-  await new Promise((resolve, reject) => {
-    if (isCliProvider) {
-      executeCliRun(
-        runId,
-        provider,
-        prompt,
-        process.cwd(),
-        (text) => { responseText += text; },
-        (result) => {
-          if (result?.error || result?.success === false) {
-            reject(new Error(result?.error || 'CLI execution failed'));
-          } else {
-            resolve(result);
-          }
-        },
-        provider.timeout || 300000
-      );
-    } else {
-      executeApiRun(
-        runId,
-        provider,
-        selectedModel,
-        prompt,
-        process.cwd(),
-        [],
-        (data) => { responseText += typeof data === 'string' ? data : (data?.text || ''); },
-        (result) => {
-          if (result?.error) {
-            reject(new Error(result.error));
-          } else {
-            resolve(result);
-          }
-        }
-      );
-    }
-  });
-
   return { responseText, provider, selectedModel };
 }
 

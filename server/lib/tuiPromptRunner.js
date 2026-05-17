@@ -1,0 +1,313 @@
+/**
+ * One-shot TUI prompt runner.
+ *
+ * Spawns a TUI binary (Claude Code, Codex, Gemini, etc.) in a PTY, waits for
+ * the prompt cursor to become input-ready, bracketed-pastes the prompt + Enter,
+ * watches for the model response to complete via sustained output-idle, then
+ * strips ANSI and returns the captured text. Persists a run record under
+ * `data/runs/<runId>/` so /runs can replay TUI invocations alongside CLI/API.
+ *
+ * Distinct from `server/services/agentTuiSpawning.js` — that path wraps
+ * long-running CoS agents (worktree, /simplify, /do:pr, .agent-done sentinel).
+ * This is the synchronous "send prompt, get text back" variant the central
+ * promptRunner needs when `provider.type === 'tui'`.
+ *
+ * Spawning bypasses `services/shell.js` deliberately:
+ *   - shellService caps total sessions at 5, which the central handler can
+ *     exceed easily (arc planner fans out parallel calls).
+ *   - shellService wraps a login shell around the TUI; pasting `${cmd}\n`
+ *     into a zsh prompt is slower and noisier than spawning the TUI directly.
+ *
+ * Completion detection is intentionally minimal: idle-after-response, with a
+ * hard timeout fallback. Per-binary input-prompt regexes were considered but
+ * are fragile across versions and screen sizes; the idle threshold (~8s)
+ * works universally and matches how a human knows the TUI finished — output
+ * stopped scrolling.
+ */
+
+import { spawn as ptySpawn } from 'node-pty';
+import { writeFile } from 'fs/promises';
+import { join } from 'path';
+import { ensureDir, PATHS } from './fileUtils.js';
+import { createStreamingAnsiStripper } from './ansiStrip.js';
+import {
+  DEFAULT_TUI_PROMPT_DELAY_MS,
+  PASTE_MARKER_POLL_MS,
+  PASTE_MARKER_PATTERN,
+  PASTE_TO_ENTER_MIN_DELAY_MS,
+  PASTE_TO_ENTER_FALLBACK_MS,
+  PASTE_DEADLINE_MS,
+  READY_POLL_INTERVAL_MS,
+  READY_IDLE_THRESHOLD_MS,
+  OUTPUT_BUFFER_CAP,
+  OUTPUT_BUFFER_HEADROOM,
+  RAW_BUFFER_CAP,
+  RAW_BUFFER_HEADROOM,
+  buildTuiInvocation,
+  detectMissingTuiBinary,
+} from './tuiHandshake.js';
+
+// One-shot defaults that don't apply to the long-running agent path:
+//   - hard run cap (5 min vs unbounded for agents)
+//   - response-complete idle threshold (8s vs 180s for agents — agents wait
+//     out tool calls + /simplify + /do:pr, we're just waiting for the model
+//     to stop talking)
+const DEFAULT_TIMEOUT_MS = 300000;
+const DEFAULT_ONE_SHOT_IDLE_MS = 8000;
+
+// Wide PTY so TUI doesn't wrap responses at narrow widths, which makes
+// downstream parsing harder.
+const PTY_COLS = 200;
+const PTY_ROWS = 50;
+
+/**
+ * Run a single prompt through a TUI provider and return the response text.
+ *
+ * @param {object} opts
+ * @param {object} opts.provider — { id, type: 'tui', command, args, envVars,
+ *   tuiPromptDelayMs?, tuiOneShotIdleMs?, timeout? }
+ * @param {string} opts.prompt   — full text to paste into the TUI
+ * @param {string} opts.runId    — pre-created run id (caller owns persistence
+ *   of the prompt + metadata under data/runs/<runId>/; we append output).
+ * @param {string} [opts.model]  — model id; passed via --model unless null
+ *   (Codex sentinel case).
+ * @param {(chunk: string) => void} [opts.onData] — incremental stripped
+ *   output stream, matching the executeCliRun/executeApiRun signature so
+ *   the central handler can treat all three branches uniformly.
+ * @param {(meta: object) => void} [opts.onComplete] — final metadata with
+ *   `{ success, exitCode, error, outputSize }`. Resolves AFTER this fires.
+ * @param {string} [opts.cwd]    — working directory for the spawned TUI.
+ * @returns {Promise<void>} resolves after onComplete fires. Throws on
+ *   spawn error before any output. Errors during run land on onComplete.
+ */
+export async function executeTuiRun(runId, provider, prompt, cwd, onData, onComplete, timeout) {
+  if (!provider || typeof provider !== 'object') {
+    throw new Error('executeTuiRun: provider is required');
+  }
+  if (typeof prompt !== 'string' || !prompt) {
+    throw new Error('executeTuiRun: prompt must be a non-empty string');
+  }
+
+  const { command, args } = buildTuiInvocation(provider, provider.defaultModel);
+  const promptDelayMs = provider.tuiPromptDelayMs ?? DEFAULT_TUI_PROMPT_DELAY_MS;
+  const idleThresholdMs = provider.tuiOneShotIdleMs ?? DEFAULT_ONE_SHOT_IDLE_MS;
+  const totalTimeoutMs = timeout ?? provider.timeout ?? DEFAULT_TIMEOUT_MS;
+  const workingDir = (typeof cwd === 'string' && cwd) ? cwd : PATHS.root;
+
+  const runDir = join(PATHS.runs, runId);
+  await ensureDir(runDir);
+  const outputPath = join(runDir, 'output.txt');
+
+  console.log(`📟 Executing TUI: ${command} ${args.join(' ')} (${prompt.length} chars via paste)`);
+
+  let ptyProcess;
+  try {
+    ptyProcess = ptySpawn(command, args, {
+      name: 'xterm-256color',
+      cols: PTY_COLS,
+      rows: PTY_ROWS,
+      cwd: workingDir,
+      env: {
+        ...process.env,
+        ...(provider.envVars || {}),
+        TERM: 'xterm-256color',
+        COLORTERM: 'truecolor'
+      }
+    });
+  } catch (err) {
+    throw new Error(`Failed to spawn TUI '${command}': ${err.message}`);
+  }
+
+  const startTime = Date.now();
+  let outputBuffer = '';
+  let rawBuffer = '';
+  let promptSentAt = null;
+  let firstOutputAt = null;
+  let lastOutputAt = startTime;
+  let firstResponseAt = null;
+  let finalized = false;
+
+  const streamingStrip = createStreamingAnsiStripper();
+  let readyTimer = null;
+  let pasteEnterTimer = null;
+  let idleWatchTimer = null;
+  let hardTimeoutTimer = null;
+
+  const cleanupTimers = () => {
+    if (readyTimer) { clearInterval(readyTimer); readyTimer = null; }
+    if (pasteEnterTimer) { clearInterval(pasteEnterTimer); pasteEnterTimer = null; }
+    if (idleWatchTimer) { clearInterval(idleWatchTimer); idleWatchTimer = null; }
+    if (hardTimeoutTimer) { clearTimeout(hardTimeoutTimer); hardTimeoutTimer = null; }
+  };
+
+  return new Promise((resolve) => {
+    const finish = async ({ success, exitCode = 0, error = null, reason = 'completed' }) => {
+      if (finalized) return;
+      finalized = true;
+      cleanupTimers();
+
+      // Kill the PTY if still alive — one-shot runs don't leave a session
+      // behind for the user to interact with.
+      try { if (ptyProcess && !ptyProcess.killed) ptyProcess.kill(); } catch { /* already gone */ }
+
+      const duration = Date.now() - startTime;
+      const metadata = {
+        endTime: new Date().toISOString(),
+        duration,
+        exitCode,
+        success,
+        error,
+        completionReason: reason,
+        outputSize: Buffer.byteLength(outputBuffer)
+      };
+
+      await writeFile(outputPath, outputBuffer).catch(() => {});
+      onComplete?.(metadata);
+      resolve();
+    };
+
+    ptyProcess.onData((data) => {
+      const text = data.toString();
+      rawBuffer += text;
+      if (rawBuffer.length > RAW_BUFFER_HEADROOM) rawBuffer = rawBuffer.slice(-RAW_BUFFER_CAP);
+
+      const stripped = streamingStrip(text);
+      if (stripped) {
+        outputBuffer += stripped;
+        if (outputBuffer.length > OUTPUT_BUFFER_HEADROOM) {
+          outputBuffer = outputBuffer.slice(-OUTPUT_BUFFER_CAP);
+        }
+        onData?.(stripped);
+      }
+
+      const now = Date.now();
+      lastOutputAt = now;
+      if (firstOutputAt === null) firstOutputAt = now;
+      if (promptSentAt && firstResponseAt === null && now > promptSentAt) {
+        firstResponseAt = now;
+        // Defer the idle-watch timer until the first response chunk so we
+        // don't run a 1Hz no-op throughout the 5-30s spawn + paste window.
+        // Significant on parallel fan-out paths (arc planner).
+        idleWatchTimer = setInterval(() => {
+          if (finalized) return;
+          const idle = Date.now() - lastOutputAt;
+          if (idle >= idleThresholdMs) {
+            finish({ success: true, exitCode: 0, reason: 'idle-complete' });
+          }
+        }, 1000);
+      }
+
+      // Early-fail probe — without this guard a typo'd provider.command
+      // would idle until the hard timeout (5 min default).
+      if (!promptSentAt && detectMissingTuiBinary(stripped, command)) {
+        finish({
+          success: false,
+          exitCode: 127,
+          error: `TUI command not found: ${command}`,
+          reason: 'command-not-found'
+        });
+      }
+    });
+
+    ptyProcess.onExit(({ exitCode, signal }) => {
+      const killed = !!signal;
+      finish({
+        success: !killed && exitCode === 0,
+        exitCode: typeof exitCode === 'number' ? exitCode : (killed ? 130 : 0),
+        error: killed ? `TUI killed (signal ${signal})` : null,
+        reason: killed ? 'killed' : 'exit'
+      });
+    });
+
+    const sendPrompt = (reason) => {
+      if (finalized || promptSentAt) return;
+      promptSentAt = Date.now();
+      const rawLenBeforePaste = rawBuffer.length;
+      try {
+        ptyProcess.write(`\x1b[200~${prompt}\x1b[201~`);
+      } catch (err) {
+        finish({ success: false, exitCode: 1, error: `Failed to write prompt: ${err.message}`, reason: 'write-failed' });
+        return;
+      }
+      console.log(`📟 Pasted prompt into TUI ${command} (${reason})`);
+
+      const pasteSentAt = Date.now();
+      pasteEnterTimer = setInterval(() => {
+        if (finalized) { clearInterval(pasteEnterTimer); pasteEnterTimer = null; return; }
+        const elapsed = Date.now() - pasteSentAt;
+        const postPaste = rawBuffer.slice(rawLenBeforePaste);
+        const markerSeen = PASTE_MARKER_PATTERN.test(postPaste);
+        if ((markerSeen && elapsed >= PASTE_TO_ENTER_MIN_DELAY_MS)
+          || elapsed >= PASTE_TO_ENTER_FALLBACK_MS) {
+          clearInterval(pasteEnterTimer);
+          pasteEnterTimer = null;
+          try { ptyProcess.write('\r'); } catch { /* PTY may have already exited */ }
+        }
+      }, PASTE_MARKER_POLL_MS);
+    };
+
+    // Ready watch — paste only once the TUI banner finishes repainting AND
+    // we've had at least promptDelayMs of runtime. Falls back to forcing
+    // the paste after PASTE_DEADLINE_MS so a silent provider still gets
+    // the prompt.
+    readyTimer = setInterval(() => {
+      if (finalized || promptSentAt) {
+        clearInterval(readyTimer);
+        readyTimer = null;
+        return;
+      }
+      const now = Date.now();
+      const elapsed = now - startTime;
+      if (elapsed >= PASTE_DEADLINE_MS) {
+        sendPrompt('fallback');
+        return;
+      }
+      if (elapsed < promptDelayMs) return;
+      if (firstOutputAt === null) return;
+      if (now - lastOutputAt < READY_IDLE_THRESHOLD_MS) return;
+      sendPrompt('ready');
+    }, READY_POLL_INTERVAL_MS);
+
+    // (idleWatchTimer is created inside onData once firstResponseAt is set.)
+
+    // Hard timeout — covers stuck-banner, no-response, and runaway-response
+    // cases. Provider-configurable via `timeout`; defaults to 5 min.
+    hardTimeoutTimer = setTimeout(() => {
+      if (finalized) return;
+      finish({
+        success: false,
+        exitCode: 124,
+        error: `TUI run timed out after ${totalTimeoutMs}ms`,
+        reason: 'timeout'
+      });
+    }, totalTimeoutMs);
+  });
+}
+
+/**
+ * Best-effort response cleanup for an already-ANSI-stripped TUI buffer.
+ *
+ * The TUI buffer is a screen, not a log — it contains banner art, the
+ * pasted prompt echoed back, status lines ("thinking...", token counters),
+ * box-drawing characters around the input prompt, and the model's response
+ * interleaved with all of it. Reliable carve-out would need per-binary
+ * scrapers; this helper just drops the obvious bits (paste marker + echoed
+ * prompt) and leaves downstream consumers (`extractJson`,
+ * `extractCodexAssistant`) to find structured content in the rest.
+ *
+ * Input is assumed pre-stripped of ANSI codes (the central handler streams
+ * each chunk through `createStreamingAnsiStripper` during accumulation, so
+ * `outputBuffer` is already clean). Don't strip again — it's a wasted scan
+ * over up to 1MB of text.
+ */
+export function cleanTuiResponse(strippedText, prompt) {
+  if (typeof strippedText !== 'string' || !strippedText) return '';
+  let text = strippedText.replace(/\[Pasted text #\d+[^\]]*\]/g, '');
+  // split-join over the prompt is safe because the prompt is fixed text —
+  // no regex escaping needed. Guard on length>16 so a degenerate empty/
+  // tiny prompt doesn't accidentally erase model output.
+  if (typeof prompt === 'string' && prompt.length > 16) {
+    text = text.split(prompt).join('');
+  }
+  return text.trim();
+}

@@ -14,7 +14,7 @@ import { getDigitalTwinForPrompt } from './digital-twin.js';
 import { buildPrompt } from './promptService.js';
 import { getToolsSummaryForPrompt } from './tools.js';
 import { getActiveProvider } from './providers.js';
-import { executeApiRun, executeCliRun, createRun } from './runner.js';
+import { runPromptThroughProvider } from '../lib/promptRunner.js';
 import { readJSONFile, loadSlashdoFile, PATHS } from '../lib/fileUtils.js';
 import * as jiraService from './jira.js';
 import { emitLog } from './cosEvents.js';
@@ -780,23 +780,18 @@ export async function generateJiraTitle(description) {
 
   const prompt = `Generate a concise JIRA ticket title (max 80 chars) for this task. Output ONLY the title text, nothing else.\n\nTask: ${description}`;
 
-  const { runId } = await createRun({ providerId: provider.id, model, prompt, source: 'jira-title' }).catch(() => ({}));
-  if (!runId) return fallback;
+  // Best-effort title — failures are non-fatal (the task still gets the
+  // truncated-description fallback). 30s is the legacy cap; titles should
+  // be near-instant, and a slow model shouldn't block task creation.
+  const result = await runPromptThroughProvider({
+    provider, prompt, source: 'jira-title', model, timeout: 30000,
+  }).catch(err => {
+    console.warn(`⚠️ JIRA title generation failed: ${err.message}`);
+    return null;
+  });
+  if (!result) return fallback;
 
-  let title = '';
-
-  await new Promise((resolve) => {
-    const onData = (data) => { title += typeof data === 'string' ? data : (data?.text || ''); };
-    const onDone = () => resolve();
-
-    if (provider.type === 'cli') {
-      executeCliRun(runId, provider, prompt, process.cwd(), onData, onDone, 30000);
-    } else {
-      executeApiRun(runId, provider, model, prompt, process.cwd(), [], onData, onDone);
-    }
-  }).catch(err => console.warn(`⚠️ JIRA title generation failed: ${err.message}`));
-
-  title = title.trim().replace(/^["']|["']$/g, '');
+  const title = (result.text || '').trim().replace(/^["']|["']$/g, '');
   return title || fallback;
 }
 

@@ -24,79 +24,40 @@ import { persistSimplifySummaries } from './agentLifecycle.js';
 import { activeAgents, userTerminatedAgents } from './agentState.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { resolveCliModel } from '../lib/providerModels.js';
+import { createStreamingAnsiStripper } from '../lib/ansiStrip.js';
+import {
+  DEFAULT_TUI_PROMPT_DELAY_MS,
+  DEFAULT_TUI_IDLE_TIMEOUT_MS,
+  READY_POLL_INTERVAL_MS,
+  READY_IDLE_THRESHOLD_MS,
+  PASTE_MARKER_POLL_MS,
+  PASTE_MARKER_PATTERN,
+  PASTE_TO_ENTER_MIN_DELAY_MS,
+  PASTE_TO_ENTER_FALLBACK_MS,
+  PASTE_DEADLINE_MS,
+  RAW_BUFFER_CAP,
+  RAW_BUFFER_HEADROOM,
+  OUTPUT_BUFFER_CAP,
+  OUTPUT_BUFFER_HEADROOM,
+  inferTuiCommand,
+  applyCommandDefaults,
+} from '../lib/tuiHandshake.js';
 
-const DEFAULT_TUI_PROMPT_DELAY_MS = 2500;
-const DEFAULT_TUI_IDLE_TIMEOUT_MS = 180000;
+// Agent-specific timing/lifecycle constants (not shared with the one-shot
+// runner — agents stay alive much longer and write a sentinel file when done).
 const DEFAULT_TUI_MIN_RUNTIME_MS = 15000;
-const RAW_BUFFER_CAP = 512 * 1024;
-const RAW_BUFFER_HEADROOM = 640 * 1024;
-const OUTPUT_BUFFER_CAP = 1024 * 1024;
-const OUTPUT_BUFFER_HEADROOM = 1280 * 1024;
 // Debounce window for batching parsed output to disk + state. A chatty TUI can
 // emit hundreds of lines/sec; without batching, each line triggers a full
 // state load+save (see appendAgentOutput) and a small appendFile, which slows
 // the PTY event loop and thrashes the filesystem. 250ms is invisible to the
 // live tail but cuts I/O by 1-2 orders of magnitude.
 const OUTPUT_FLUSH_INTERVAL_MS = 250;
-
-// Paste readiness gating. The TUI process needs time to render its welcome
-// banner and become input-ready before bracketed paste lands; sending the paste
-// during boot loses the entire prompt. We poll for output-idle (TUI has stopped
-// repainting) instead of guessing a fixed delay, with a hard upper bound so a
-// silent provider still gets the prompt eventually.
-const READY_POLL_INTERVAL_MS = 300;
-const READY_IDLE_THRESHOLD_MS = 1200;
-// Wait for Claude Code's `[Pasted text #N +M lines]` marker to appear before
-// sending `\r`. A fixed 400 ms timer was too short for large prompts (87+
-// line pastes) — Claude Code was still committing the paste buffer when the
-// Enter arrived, so the Enter got swallowed. The marker is emitted as soon
-// as the paste is committed and the input cursor is ready for submit.
-const PASTE_MARKER_POLL_MS = 150;
-const PASTE_MARKER_PATTERN = /\[Pasted text #\d+/;
-const PASTE_TO_ENTER_MIN_DELAY_MS = 200;
-const PASTE_TO_ENTER_FALLBACK_MS = 3500;
-const PASTE_DEADLINE_MS = 10000;
 // Sentinel-file polling. TUI agents write `.agent-done` in their workspace
 // when they've finished /simplify + /do:pr (or /do:push) — we poll for it
 // here so the agent gets cleanly finalized as soon as the work is done,
 // without waiting on the much longer idle timeout fallback.
 const DONE_SENTINEL_NAME = '.agent-done';
 const DONE_POLL_INTERVAL_MS = 2000;
-
-const ANSI_PATTERN = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1B\\))/g;
-
-// Heuristics for a trailing chunk that *might* be an unterminated escape
-// sequence. We hold the tail back from the strip pass and prepend it to the
-// next chunk, so a CSI/OSC split across two PTY reads still strips cleanly
-// instead of leaking the body (e.g. `0;Claude Code…`) into displayed output.
-const INCOMPLETE_CSI = /^\x1B\[[0-?]*[ -/]*$/;
-const INCOMPLETE_OSC = /^\x1B\][^\x07\x1B]*$/;
-const INCOMPLETE_ESC_2BYTE = /^\x1B$/;
-
-function createStreamingAnsiStripper() {
-  let tail = '';
-  const strip = (s) => s.replace(ANSI_PATTERN, '').replace(/\x00/g, '');
-  return (text) => {
-    const combined = tail + text;
-    tail = '';
-    const lastEsc = combined.lastIndexOf('\x1B');
-    // Only consider the trailing fragment if it lives near the end — older
-    // unterminated bytes belong to a previous repaint and would never resolve.
-    // Bodies longer than 4096 bytes are treated as terminated; an unbounded
-    // OSC (e.g. very long hyperlink) would leak its body to display rather
-    // than buffer forever.
-    if (lastEsc !== -1 && combined.length - lastEsc <= 4096) {
-      const candidate = combined.slice(lastEsc);
-      if (INCOMPLETE_ESC_2BYTE.test(candidate)
-        || INCOMPLETE_CSI.test(candidate)
-        || INCOMPLETE_OSC.test(candidate)) {
-        tail = candidate;
-        return strip(combined.slice(0, lastEsc));
-      }
-    }
-    return strip(combined);
-  };
-}
 
 function shellQuote(value) {
   const text = String(value ?? '');
@@ -107,24 +68,6 @@ function shellQuote(value) {
 function appendModelArgs(args, model) {
   const effectiveModel = resolveCliModel(model);
   return effectiveModel ? [...args, '--model', effectiveModel] : args;
-}
-
-function inferTuiCommand(id) {
-  if (!id) return 'claude';
-  if (id.includes('codex')) return 'codex';
-  if (id.includes('gemini')) return 'gemini';
-  return 'claude';
-}
-
-// Without `--ask-for-approval never`, codex TUI blocks on the user to approve
-// every tool call — there's no human at the keyboard for sub-agent runs, so
-// the session hangs until idle-timeout. Injected here (vs. requiring it in
-// every saved provider config) so existing installs upgrade automatically.
-function applyCommandDefaults(command, args) {
-  if (command === 'codex' && !args.includes('--ask-for-approval')) {
-    return ['--ask-for-approval', 'never', ...args];
-  }
-  return args;
 }
 
 export function buildTuiSpawnConfig(provider, model) {

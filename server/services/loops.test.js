@@ -19,8 +19,11 @@ vi.mock('../lib/fileUtils.js', () => ({
 }));
 
 vi.mock('./runner.js', () => ({
-  createRun: vi.fn(),
-  executeCliRun: vi.fn()
+  createRun: vi.fn()
+}));
+
+vi.mock('../lib/promptRunner.js', () => ({
+  runPromptThroughProvider: vi.fn()
 }));
 
 vi.mock('./providers.js', () => ({
@@ -30,7 +33,8 @@ vi.mock('./providers.js', () => ({
 }));
 
 import { readFile, writeFile } from 'fs/promises';
-import { createRun, executeCliRun } from './runner.js';
+import { createRun } from './runner.js';
+import { runPromptThroughProvider } from '../lib/promptRunner.js';
 import { getProviderById, getActiveProvider } from './providers.js';
 import {
   createLoop,
@@ -42,7 +46,7 @@ import {
 
 // Convenience aliases after import
 const mockCreateRun = createRun;
-const mockExecuteCliRun = executeCliRun;
+const mockRunPrompt = runPromptThroughProvider;
 const mockGetProviderById = getProviderById;
 const mockGetActiveProvider = getActiveProvider;
 
@@ -62,8 +66,9 @@ function setupProviderMocks() {
   mockGetProviderById.mockResolvedValue(MOCK_PROVIDER);
   mockGetActiveProvider.mockResolvedValue(MOCK_PROVIDER);
   mockCreateRun.mockResolvedValue(MOCK_RUN_RESULT);
-  // executeCliRun is fire-and-forget in loops.js; mock to resolve immediately
-  mockExecuteCliRun.mockResolvedValue(undefined);
+  // runPromptThroughProvider is fire-and-forget in loops.js (started, then
+  // .then chains onComplete). Resolve quickly so the iteration completes.
+  mockRunPrompt.mockResolvedValue({ text: '', runId: 'run-123', model: 'test' });
 }
 
 describe('loops.js', () => {
@@ -242,7 +247,7 @@ describe('loops.js', () => {
   // executeIteration error logging via triggerLoop
   // ===========================================================================
   describe('error handling in executeIteration', () => {
-    it('logs console.error when executeCliRun rejects', async () => {
+    it('logs console.error when the central prompt runner rejects', async () => {
       const loop = await createLoop({
         prompt: 'error test',
         interval: '30s',
@@ -252,15 +257,15 @@ describe('loops.js', () => {
       const savedBefore = JSON.parse(writeFile.mock.calls[0][1]);
       readFile.mockResolvedValue(JSON.stringify(savedBefore));
 
-      // Make executeCliRun reject
-      mockExecuteCliRun.mockRejectedValue(new Error('CLI execution failed'));
+      // Make runPromptThroughProvider reject (replaces the old executeCliRun
+      // rejection path — same failure surface, new dispatcher).
+      mockRunPrompt.mockRejectedValue(new Error('CLI execution failed'));
 
       const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
       await triggerLoop(loop.id);
 
-      // Allow microtasks to settle (the .catch on executeCliRun is async)
-      // Flush promise microtask queue
+      // Allow microtasks to settle (the .catch on the runner is async)
       for (let i = 0; i < 5; i++) await Promise.resolve();
 
       expect(consoleSpy).toHaveBeenCalledWith(

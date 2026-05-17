@@ -12,7 +12,8 @@ import { readFile, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { PATHS, ensureDir } from '../lib/fileUtils.js';
 import { randomUUID } from 'crypto';
-import { createRun, executeCliRun } from './runner.js';
+import { createRun } from './runner.js';
+import { runPromptThroughProvider } from '../lib/promptRunner.js';
 import { getProviderById, getAllProviders, getActiveProvider } from './providers.js';
 
 export const loopEvents = new EventEmitter();
@@ -128,6 +129,9 @@ async function executeIteration(loop) {
     console.log(`🔄 Loop ${id} iteration ${iterationNum} complete (${provider.name}, exit ${metadata.exitCode}, ${outputLines.length} lines)`);
   };
 
+  // Pre-create the run so `active.runId` can be set before generation
+  // starts (cancellation needs the id). The central handler reuses our
+  // runId when provided rather than creating a second one.
   const runResult = await createRun({
     providerId: provider.id,
     prompt: loop.prompt,
@@ -146,19 +150,22 @@ async function executeIteration(loop) {
 
   active.runId = runResult.metadata.id;
 
-  executeCliRun(
-    runResult.metadata.id,
-    runResult.provider,
-    loop.prompt,
-    loop.cwd || PATHS.root,
-    onData,
-    onComplete,
-    loop.timeout || DEFAULT_TIMEOUT_MS
-  ).catch(err => {
+  // Adapt the central handler's resolve/reject to the legacy onComplete
+  // metadata shape. We can't get the runner's full metadata back from
+  // runPromptThroughProvider today — it only resolves `{ text, runId,
+  // model }`. Reconstruct the bits onComplete inspects (exitCode + success
+  // + duration) from the promise resolution.
+  const startedAt = Date.now();
+  runPromptThroughProvider({
+    provider, prompt: loop.prompt, source: 'loop', runId: runResult.metadata.id,
+    onData, timeout: loop.timeout || DEFAULT_TIMEOUT_MS,
+  }).then(() => {
+    onComplete({ exitCode: 0, success: true, duration: Date.now() - startedAt });
+  }).catch(err => {
     active.running = false;
     active.runId = null;
     loopEvents.emit('iteration:error', { id, iteration: iterationNum, error: err.message, timestamp: Date.now() });
-    console.error(`❌ Loop ${id} executeCliRun failed: ${err.message}`);
+    console.error(`❌ Loop ${id} run failed: ${err.message}`);
   });
 }
 
