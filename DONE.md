@@ -8,6 +8,7 @@ For active roadmap see [PLAN.md](./PLAN.md). For project goals see [GOALS.md](./
 
 ## 2026-05
 
+- **Sharing — route-level tests for `server/routes/sharing.js`.** New `server/routes/sharing.test.js` covers bucket CRUD, export (kinds + missing-payload refinement), inbox actions, subscriptions, activity, and error mapping (28 tests). Locks the HTTP/JSON contract (Zod rejection + 201 vs 200 + service-error code passthrough) that integration.test.js + subscriptions.test.js previously bypassed by exercising the service layer directly.
 - **Sharing — manifest archive pruning.** Long-lived sharing buckets no longer accumulate thousands of one-shot manifest JSONs; owned manifests over the cap are archived (peer/subscription manifests exempt).
 - **Sharing — display-name & bio settings tab.** Source-attribution fields now also editable under `/settings/sharing`.
 - **Pipeline — Story Arc Planning.** PipelineSeries rebuilt into an Arc → Season → Episode tree with three LLM passes (arc overview, per-season episodes, cross-season verify) and a two-pane bible-sidebar + card-canvas layout.
