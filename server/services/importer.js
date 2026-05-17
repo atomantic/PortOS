@@ -795,15 +795,19 @@ export async function commitImport({
         failed = delErr;
       });
       if (failed) {
+        // The "still on disk" set includes BOTH the failed-to-delete issue
+        // AND the untouched issues that come after it in the loop — all of
+        // them are unaffected on disk and will be wiped on retry. Reporting
+        // them as one set (instead of singling out `ex.id` separately) keeps
+        // the count honest: total still-on-disk == remainingIds.length.
+        const deletedSet = new Set(deletedIds);
         const remainingIds = existingIssues
           .map((e) => e.id)
-          .filter((id) => id !== ex.id && !deletedIds.includes(id));
+          .filter((id) => !deletedSet.has(id));
         const deletedMsg = deletedIds.length > 0
           ? ` ${deletedIds.length} issue${deletedIds.length === 1 ? '' : 's'} were already deleted before the failure (${deletedIds.join(', ')}) and cannot be recovered.`
           : '';
-        const remainingMsg = remainingIds.length > 0
-          ? ` ${remainingIds.length} issue${remainingIds.length === 1 ? '' : 's'} remain on disk (${remainingIds.join(', ')}); retry will wipe them.`
-          : '';
+        const remainingMsg = ` ${remainingIds.length} issue${remainingIds.length === 1 ? '' : 's'} remain on disk (${remainingIds.join(', ')}, including the failed one); retry will wipe them.`;
         throw makeErr(
           `Replace mode aborted on first delete failure — issue ${ex.id} could not be deleted (${failed.message}). No universe, series, or new-issue writes were performed.${deletedMsg}${remainingMsg} Resolve the underlying error and retry.`,
           ERR_VALIDATION,

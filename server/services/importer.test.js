@@ -320,6 +320,152 @@ describe('analyzeImport', () => {
 });
 
 // ---------------------------------------------------------------------------
+// classifyImportContent — hallucination-guard coverage
+//
+// Copilot review: route tests mock classifyImportContent entirely, so the
+// service-level sanitization logic (dropping out-of-enum contentType /
+// confidence, truncating reasoning, handling non-object run.content) had
+// no test coverage. A regression that accidentally accepted `raw.contentType`
+// without enum-membership would not have been caught. These tests pin every
+// guard branch directly against the service.
+// ---------------------------------------------------------------------------
+
+describe('classifyImportContent', () => {
+  it('passes valid contentType + confidence + reasoning through verbatim', async () => {
+    mockRunStagedLLM.mockResolvedValueOnce({
+      content: { contentType: 'screenplay', confidence: 'high', reasoning: 'has FADE IN markers' },
+      model: 'mock',
+      providerId: 'mock',
+      runId: 'run-classify-1',
+    });
+    const result = await importerSvc.classifyImportContent({ source: 'INT. ROOM - DAY' });
+    expect(result.contentType).toBe('screenplay');
+    expect(result.confidence).toBe('high');
+    expect(result.reasoning).toBe('has FADE IN markers');
+    expect(result.runId).toBe('run-classify-1');
+  });
+
+  it('drops a hallucinated contentType not in IMPORTER_CONTENT_TYPES to null', async () => {
+    mockRunStagedLLM.mockResolvedValueOnce({
+      content: { contentType: 'manga', confidence: 'high', reasoning: 'panels' },
+      model: 'mock',
+      providerId: 'mock',
+      runId: 'run-x',
+    });
+    const result = await importerSvc.classifyImportContent({ source: 'some prose' });
+    expect(result.contentType).toBeNull();
+    // Confidence + reasoning are independent guards — they stay valid.
+    expect(result.confidence).toBe('high');
+    expect(result.reasoning).toBe('panels');
+  });
+
+  it('drops a hallucinated confidence not in {high|medium|low} to null', async () => {
+    mockRunStagedLLM.mockResolvedValueOnce({
+      content: { contentType: 'novel', confidence: 'extremely-high', reasoning: 'chapters' },
+      model: 'mock',
+      providerId: 'mock',
+      runId: 'run-x',
+    });
+    const result = await importerSvc.classifyImportContent({ source: 'some prose' });
+    expect(result.contentType).toBe('novel');
+    expect(result.confidence).toBeNull();
+    expect(result.reasoning).toBe('chapters');
+  });
+
+  it('truncates reasoning to 500 chars', async () => {
+    const longReasoning = 'a'.repeat(2_000);
+    mockRunStagedLLM.mockResolvedValueOnce({
+      content: { contentType: 'short-story', confidence: 'medium', reasoning: longReasoning },
+      model: 'mock',
+      providerId: 'mock',
+      runId: 'run-x',
+    });
+    const result = await importerSvc.classifyImportContent({ source: 'some prose' });
+    expect(result.reasoning).toHaveLength(500);
+    expect(result.reasoning).toBe('a'.repeat(500));
+  });
+
+  it('coerces non-string reasoning to null', async () => {
+    mockRunStagedLLM.mockResolvedValueOnce({
+      content: { contentType: 'comic-script', confidence: 'low', reasoning: 42 },
+      model: 'mock',
+      providerId: 'mock',
+      runId: 'run-x',
+    });
+    const result = await importerSvc.classifyImportContent({ source: 'some prose' });
+    expect(result.reasoning).toBeNull();
+    expect(result.contentType).toBe('comic-script');
+    expect(result.confidence).toBe('low');
+  });
+
+  it('treats a non-object run.content as empty — all fields land at null', async () => {
+    mockRunStagedLLM.mockResolvedValueOnce({
+      content: 'I am a plain string, not JSON',
+      model: 'mock',
+      providerId: 'mock',
+      runId: 'run-x',
+    });
+    const result = await importerSvc.classifyImportContent({ source: 'some prose' });
+    expect(result.contentType).toBeNull();
+    expect(result.confidence).toBeNull();
+    expect(result.reasoning).toBeNull();
+    expect(result.runId).toBe('run-x');
+  });
+
+  it('treats a null run.content as empty', async () => {
+    mockRunStagedLLM.mockResolvedValueOnce({
+      content: null,
+      model: 'mock',
+      providerId: 'mock',
+      runId: 'run-x',
+    });
+    const result = await importerSvc.classifyImportContent({ source: 'some prose' });
+    expect(result.contentType).toBeNull();
+    expect(result.confidence).toBeNull();
+    expect(result.reasoning).toBeNull();
+  });
+
+  it('rejects missing source with ERR_VALIDATION before calling the LLM', async () => {
+    let caught;
+    try {
+      await importerSvc.classifyImportContent({ source: '' });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeDefined();
+    expect(caught.code).toBe(importerSvc.ERR_VALIDATION);
+    expect(mockRunStagedLLM).not.toHaveBeenCalled();
+  });
+
+  it('rejects oversized source with ERR_VALIDATION before calling the LLM', async () => {
+    const oversized = 'x'.repeat(importerSvc.IMPORTER_SOURCE_CHAR_LIMIT + 1);
+    let caught;
+    try {
+      await importerSvc.classifyImportContent({ source: oversized });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeDefined();
+    expect(caught.code).toBe(importerSvc.ERR_VALIDATION);
+    expect(mockRunStagedLLM).not.toHaveBeenCalled();
+  });
+
+  it('only passes the first CLASSIFY_SOURCE_HEAD_CHARS to the LLM', async () => {
+    mockRunStagedLLM.mockResolvedValueOnce({
+      content: { contentType: 'novel', confidence: 'low', reasoning: 'r' },
+      model: 'mock',
+      providerId: 'mock',
+      runId: 'run-x',
+    });
+    const big = 'a'.repeat(importerSvc.CLASSIFY_SOURCE_HEAD_CHARS + 5_000);
+    await importerSvc.classifyImportContent({ source: big });
+    expect(mockRunStagedLLM).toHaveBeenCalled();
+    const vars = mockRunStagedLLM.mock.calls[0][1];
+    expect(vars.sourceHead).toHaveLength(importerSvc.CLASSIFY_SOURCE_HEAD_CHARS);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // commitImport
 // ---------------------------------------------------------------------------
 
