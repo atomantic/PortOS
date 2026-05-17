@@ -1,5 +1,5 @@
 /**
- * Test for migration 017 — categorize universe buckets + retire characters bucket.
+ * Test for migration 018 — categorize universe buckets + retire characters bucket.
  *
  * Vitest's `include` pattern (`**\/*.test.js`) only scans server/ and
  * client/src/. To get this picked up, server/vitest.config.js was extended
@@ -10,15 +10,15 @@ import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, existsSync
 import { tmpdir } from 'os';
 import { join } from 'path';
 
-import migration from './017-categorize-universe-buckets.js';
+import migration from './018-categorize-universe-buckets.js';
 
-describe('migration 017 — categorize universe buckets', () => {
+describe('migration 018 — categorize universe buckets', () => {
   let rootDir;
   let dataDir;
   let filePath;
 
   beforeEach(() => {
-    rootDir = mkdtempSync(join(tmpdir(), 'migration-017-'));
+    rootDir = mkdtempSync(join(tmpdir(), 'migration-018-'));
     dataDir = join(rootDir, 'data');
     mkdirSync(dataDir, { recursive: true });
     filePath = join(dataDir, 'universe-builder.json');

@@ -66,7 +66,7 @@ export default {
     const filePath = join(rootDir, 'data', 'universe-builder.json');
     const doc = await readJson(filePath);
     if (!doc || !Array.isArray(doc.universes)) {
-      console.log('🌐 migration 017: no universe-builder.json found, skipping');
+      console.log('🌐 migration 018: no universe-builder.json found, skipping');
       return;
     }
 
@@ -128,16 +128,16 @@ export default {
         // Re-throw with the offending universe id so a partial-batch failure
         // is debuggable. Without this, the bare stack points at the field
         // access but doesn't say which universe.
-        throw new Error(`migration 017 failed on universe id=${universe.id || '<unknown>'}: ${err.message}`);
+        throw new Error(`migration 018 failed on universe id=${universe.id || '<unknown>'}: ${err.message}`);
       }
     }
 
     if (touched === 0) {
-      console.log('🌐 migration 017: all universes already at schema v4, skipping write');
+      console.log('🌐 migration 018: all universes already at schema v4, skipping write');
       return;
     }
 
     await writeJson(filePath, doc);
-    console.log(`🌐 migration 017: updated ${touched} universe(s) — folded ${charactersFolded} character variation(s) into canon, dropped ${bucketsDropped} 'characters' bucket(s), assigned kind to ${kindsAssigned} bucket(s)`);
+    console.log(`🌐 migration 018: updated ${touched} universe(s) — folded ${charactersFolded} character variation(s) into canon, dropped ${bucketsDropped} 'characters' bucket(s), assigned kind to ${kindsAssigned} bucket(s)`);
   },
 };
