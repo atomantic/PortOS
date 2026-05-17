@@ -1233,7 +1233,7 @@ export default function UniverseBuilder() {
     const needsCanonDefault = !scope && (promptMode === 'canon' || promptMode === 'all');
     const effectiveCanonSelection = scope?.canonSelection
       ?? (needsCanonDefault
-        ? { characters: 'all', settings: 'all', objects: 'all' }
+        ? Object.fromEntries(TRUNK_TABS.map((t) => [t.kind, 'all']))
         : undefined);
     // Per-batch overrides from the ImageGenSettingsForm. Empty strings →
     // undefined so the server falls back to the universe's stored influences.
@@ -1346,13 +1346,22 @@ export default function UniverseBuilder() {
   // into the matching trunk on next render via groupBucketsByKind.
   const assignBucketKind = async (bucket, targetKind) => {
     if (!TRUNK_BY_KIND[targetKind]) return;
-    const current = draft.categories?.[bucket];
-    if (!current) return;
-    const nextCategories = {
-      ...draft.categories,
-      [bucket]: { ...current, kind: targetKind },
-    };
-    setDraft((d) => ({ ...d, categories: nextCategories }));
+    // Compute the patch from inside the functional updater so we never read
+    // a stale `draft` reference — concurrent edits between click and state
+    // commit are merged correctly, and we capture the post-update value to
+    // pass to the server PATCH. Returning `d` short-circuits when the bucket
+    // is gone so we don't fire an empty PATCH.
+    let nextCategories = null;
+    setDraft((d) => {
+      const current = d.categories?.[bucket];
+      if (!current) return d;
+      nextCategories = {
+        ...d.categories,
+        [bucket]: { ...current, kind: targetKind },
+      };
+      return { ...d, categories: nextCategories };
+    });
+    if (!nextCategories) return;
     const trunk = TRUNK_BY_KIND[targetKind];
     if (!selectedId) {
       toast.success(`Tagged "${humanizeCategory(bucket)}" as ${trunk.label} — save to persist`);

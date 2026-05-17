@@ -115,13 +115,14 @@ function CanonRedirect() {
 
 // /media/universe-builder/* → /universe-builder/* redirect for legacy bookmarks
 // after the MediaGen tab for Universe Builder was removed in favor of the
-// Create sidebar link.
+// Create sidebar link. The canon variant forces `#canon` to scroll the
+// embedded canon section; non-canon preserves whatever hash the user had.
 function UniverseBuilderRedirect({ canon = false }) {
-  const { pathname, search } = useLocation();
+  const { pathname, search, hash } = useLocation();
   const rest = pathname.replace(/^\/media\/universe-builder/, '');
   const target = canon
     ? `/universe-builder${rest.replace(/\/canon\/?$/, '')}${search}#canon`
-    : `/universe-builder${rest}${search}`;
+    : `/universe-builder${rest}${search}${hash}`;
   return <Navigate to={target} replace />;
 }
 
