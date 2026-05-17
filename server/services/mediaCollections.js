@@ -8,6 +8,15 @@
  * An item is identified by `{ kind: 'image'|'video', ref: <filename|videoId> }`.
  * A collection's `coverKey` is `null` (auto: newest item) or `"<kind>:<ref>"`
  * to pin a specific item as the cover thumbnail.
+ *
+ * **Concurrency.** Every public mutator routes through `serializeFileWrite`
+ * (a single-tail queue keyed on the shared media-collections.json file).
+ * Without it, parallel write paths — e.g. the pipeline cover filer's
+ * `addItem` running alongside Universe Builder's completion-hook `addItem`,
+ * or a `deleteUniverse` unlink racing with an in-flight cover completion —
+ * each do a `listCollections → modify → atomicWrite(entire array)` round
+ * and the second write silently clobbers the first. Mirrors the
+ * `issueWriteTail` pattern in `server/services/pipeline/issues.js`.
  */
 
 import { join } from 'path';
@@ -119,6 +128,18 @@ export async function getCollection(id) {
   return c;
 }
 
+// File-level write tail. Every public mutator wraps its read-modify-write
+// in `serializeFileWrite` so the read always sees the freshest persisted
+// state and the write completes before the next task's read begins.
+// `writeAll` is the only persistence call and must only be invoked from
+// inside a serialized task.
+let fileWriteTail = Promise.resolve();
+const serializeFileWrite = (task) => {
+  const next = fileWriteTail.then(task, task);
+  // Don't let a rejection poison the chain.
+  fileWriteTail = next.catch(() => undefined);
+  return next;
+};
 const writeAll = async (collections) => {
   await atomicWrite(statePath(), { collections });
   return collections;
@@ -135,19 +156,21 @@ export async function createCollection({ name, description = '' }) {
   const trimmedDescription = typeof description === 'string'
     ? description.trim().slice(0, DESCRIPTION_MAX_LENGTH)
     : '';
-  const all = await listCollections();
-  const now = new Date().toISOString();
-  const next = {
-    id: randomUUID(),
-    name: trimmedName,
-    description: trimmedDescription,
-    coverKey: null,
-    items: [],
-    createdAt: now,
-    updatedAt: now,
-  };
-  await writeAll([...all, next]);
-  return next;
+  return serializeFileWrite(async () => {
+    const all = await listCollections();
+    const now = new Date().toISOString();
+    const next = {
+      id: randomUUID(),
+      name: trimmedName,
+      description: trimmedDescription,
+      coverKey: null,
+      items: [],
+      createdAt: now,
+      updatedAt: now,
+    };
+    await writeAll([...all, next]);
+    return next;
+  });
 }
 
 // Find an existing collection by case-insensitive trimmed name, else create
@@ -158,6 +181,12 @@ export async function createCollection({ name, description = '' }) {
 // subscriptions know which universe-record to notify when items change.
 // If the matched existing collection lacks `universeId`, it's backfilled
 // from the caller's value so the link is established on next access.
+//
+// **Prefer `findOrCreateUniverseCollection` for universe-owned paths.**
+// This helper is still name-first and will return any same-name collection
+// — including one already linked to a different universe — so it can
+// silently route renders into the wrong bucket when two universes share a
+// display name. The universeId-first helper rules that out.
 export async function findOrCreateCollectionByName({ name, description = '', universeId = null }) {
   const trimmed = typeof name === 'string' ? name.trim() : '';
   if (!trimmed || trimmed.length > NAME_MAX_LENGTH) {
@@ -166,33 +195,35 @@ export async function findOrCreateCollectionByName({ name, description = '', uni
   const trimmedDescription = typeof description === 'string'
     ? description.trim().slice(0, DESCRIPTION_MAX_LENGTH)
     : '';
-  const all = await listCollections();
-  const needle = trimmed.toLowerCase();
-  const existing = all.find((c) => c.name.toLowerCase() === needle);
-  if (existing) {
-    if (universeId && !existing.universeId) {
-      // Lazy backfill so legacy "Universe: <name>" collections gain the
-      // link the first time a universe-builder render references them.
-      const idx = all.findIndex((c) => c.id === existing.id);
-      all[idx] = { ...existing, universeId, updatedAt: new Date().toISOString() };
-      await writeAll(all);
-      return all[idx];
+  return serializeFileWrite(async () => {
+    const all = await listCollections();
+    const needle = trimmed.toLowerCase();
+    const existing = all.find((c) => c.name.toLowerCase() === needle);
+    if (existing) {
+      if (universeId && !existing.universeId) {
+        // Lazy backfill so legacy "Universe: <name>" collections gain the
+        // link the first time a universe-builder render references them.
+        const idx = all.findIndex((c) => c.id === existing.id);
+        all[idx] = { ...existing, universeId, updatedAt: new Date().toISOString() };
+        await writeAll(all);
+        return all[idx];
+      }
+      return existing;
     }
-    return existing;
-  }
-  const now = new Date().toISOString();
-  const next = {
-    id: randomUUID(),
-    name: trimmed,
-    description: trimmedDescription,
-    coverKey: null,
-    universeId: universeId || null,
-    items: [],
-    createdAt: now,
-    updatedAt: now,
-  };
-  await writeAll([...all, next]);
-  return next;
+    const now = new Date().toISOString();
+    const next = {
+      id: randomUUID(),
+      name: trimmed,
+      description: trimmedDescription,
+      coverKey: null,
+      universeId: universeId || null,
+      items: [],
+      createdAt: now,
+      updatedAt: now,
+    };
+    await writeAll([...all, next]);
+    return next;
+  });
 }
 
 // Naming convention for the auto-managed universe collection. Single source
@@ -222,63 +253,54 @@ export async function createCollectionForUniverse({ name, description = '', univ
   const trimmedDescription = typeof description === 'string'
     ? description.trim().slice(0, DESCRIPTION_MAX_LENGTH)
     : '';
-  const all = await listCollections();
-  const now = new Date().toISOString();
-  const next = {
-    id: randomUUID(),
-    name: trimmed,
-    description: trimmedDescription,
-    coverKey: null,
-    universeId: universeId.slice(0, UNIVERSE_ID_MAX),
-    items: [],
-    createdAt: now,
-    updatedAt: now,
-  };
-  await writeAll([...all, next]);
-  return next;
+  return serializeFileWrite(async () => {
+    const all = await listCollections();
+    const now = new Date().toISOString();
+    const next = {
+      id: randomUUID(),
+      name: trimmed,
+      description: trimmedDescription,
+      coverKey: null,
+      universeId: universeId.slice(0, UNIVERSE_ID_MAX),
+      items: [],
+      createdAt: now,
+      updatedAt: now,
+    };
+    await writeAll([...all, next]);
+    return next;
+  });
 }
 
 // Look up an existing collection by its universeId stamp. Returns null if no
 // collection has ever been linked to this universe — callers fall back to
-// findOrCreateCollectionByName to upsert on first use.
+// `findOrCreateUniverseCollection` (the universeId-first upsert) to provision
+// on first use. Do NOT fall back to `findOrCreateCollectionByName` here, that
+// path is name-first and would adopt a same-named foreign-universe bucket.
 export async function findCollectionByUniverseId(universeId) {
   if (!universeId) return null;
   const all = await listCollections();
   return all.find((c) => c.universeId === universeId) || null;
 }
 
-// Single-tail mutex protecting the read → match → backfill-or-create → write
-// sequence below. media-collections.json is a single shared document; without
-// serialization, two first-time filings (cover + back-cover for one universe,
-// or first renders for two universes that share the same display name) can
-// both observe "no link" in parallel, both choose the create-fresh branch,
-// and the second writeAll clobbers the first — leaving the loser's collection
-// id absent from disk and the subsequent addItem targeting a ghost record.
-// Bounded scope: only this helper holds the lock, so unrelated collection
-// writes (addItem, updateCollection, etc.) aren't blocked.
-let universeCollectionTail = Promise.resolve();
-const serializeUniverseCollectionWrite = (task) => {
-  const next = universeCollectionTail.then(task, task);
-  universeCollectionTail = next.catch(() => undefined);
-  return next;
-};
-
 /**
  * Atomic universeId-first upsert for a universe's auto-managed collection.
  *
- * Resolution order under the shared mutex:
- *   1. universeId stamp wins — survives a hand-renamed legacy collection
- *      that predates the rename-lock or any name drift.
- *   2. An *unlinked* same-name collection (legacy bucket from before the link
- *      existed) is adopted and the universeId is backfilled.
- *   3. Otherwise a fresh collection is created and stamped with `universeId`,
- *      even when the canonical name is already taken by a *different*
- *      universe's collection. Two same-named collections is the
- *      user-correctable case; corrupting the foreign universe's bucket is not.
+ * Resolution order (serialized via the shared file write tail):
+ *   1. universeId stamp wins. If the linked collection's name has drifted
+ *      from the current canonical `Universe: <universeName>` (e.g. a prior
+ *      best-effort rename cascade failed), it's reconciled here so the user
+ *      always sees the right name on next render — self-healing recovery
+ *      path that doesn't require fixing `updateUniverse`'s cascade error.
+ *   2. Otherwise a fresh collection is created and stamped with `universeId`,
+ *      even when the canonical name is already taken by another collection
+ *      (a different universe's bucket, OR a previously-unlinked orphan from
+ *      a deleted universe). Adopting either would mix renders across
+ *      universes; two same-named collections is the user-correctable case.
  *
  * Callers (pipeline cover filer, Universe Builder render route) all funnel
  * through this so the universe → collection identity stays consistent across
- * both auto-filing and explicit-render paths.
+ * both auto-filing and explicit-render paths, regardless of what's happened
+ * to the name in between.
  */
 export async function findOrCreateUniverseCollection({ universeId, universeName, description = '' }) {
   if (!universeId || typeof universeId !== 'string') {
@@ -291,19 +313,25 @@ export async function findOrCreateUniverseCollection({ universeId, universeName,
   const trimmedDescription = typeof description === 'string'
     ? description.trim().slice(0, DESCRIPTION_MAX_LENGTH)
     : '';
-  return serializeUniverseCollectionWrite(async () => {
+  return serializeFileWrite(async () => {
     const all = await listCollections();
-    const byId = all.find((c) => c.universeId === universeId);
-    if (byId) return byId;
-    const needle = desiredName.toLowerCase();
-    const legacyIdx = all.findIndex((c) => c.name.toLowerCase() === needle && !c.universeId);
-    if (legacyIdx >= 0) {
-      const merged = { ...all[legacyIdx], universeId: universeId.slice(0, UNIVERSE_ID_MAX), updatedAt: new Date().toISOString() };
+    const linkedIdx = all.findIndex((c) => c.universeId === universeId);
+    if (linkedIdx >= 0) {
+      const linked = all[linkedIdx];
+      if (linked.name === desiredName) return linked;
+      // Self-heal a drifted name (failed cascade, hand-edited JSON, etc.).
+      // The rename-lock in updateCollection blocks user-facing fixes, so
+      // without this branch a stale name would be locked in forever.
+      const merged = { ...linked, name: desiredName, updatedAt: new Date().toISOString() };
       const next = [...all];
-      next[legacyIdx] = merged;
+      next[linkedIdx] = merged;
       await writeAll(next);
       return merged;
     }
+    // No universeId match — always create fresh. Adopting a same-named
+    // unlinked collection (legacy bucket OR a post-`deleteUniverse` orphan)
+    // would mix renders across universes; the explicit `createCollection`
+    // path is available for users who want to manually relink an orphan.
     const now = new Date().toISOString();
     const next = {
       id: randomUUID(),
@@ -327,20 +355,22 @@ export async function findOrCreateUniverseCollection({ universeId, universeName,
 // Returns the list of unlinked collection ids (empty when none matched).
 export async function unlinkCollectionsForUniverse(universeId) {
   if (!universeId) return [];
-  const all = await listCollections();
-  const matches = all
-    .map((c, i) => (c.universeId === universeId ? i : -1))
-    .filter((i) => i >= 0);
-  if (!matches.length) return [];
-  const now = new Date().toISOString();
-  const next = [...all];
-  const unlinkedIds = [];
-  for (const i of matches) {
-    next[i] = { ...all[i], universeId: null, updatedAt: now };
-    unlinkedIds.push(all[i].id);
-  }
-  await writeAll(next);
-  return unlinkedIds;
+  return serializeFileWrite(async () => {
+    const all = await listCollections();
+    const matches = all
+      .map((c, i) => (c.universeId === universeId ? i : -1))
+      .filter((i) => i >= 0);
+    if (!matches.length) return [];
+    const now = new Date().toISOString();
+    const next = [...all];
+    const unlinkedIds = [];
+    for (const i of matches) {
+      next[i] = { ...all[i], universeId: null, updatedAt: now };
+      unlinkedIds.push(all[i].id);
+    }
+    await writeAll(next);
+    return unlinkedIds;
+  });
 }
 
 // Cascade a universe rename to its linked collection. Skips the rename-lock
@@ -349,59 +379,67 @@ export async function unlinkCollectionsForUniverse(universeId) {
 // universe rename itself.
 export async function renameCollectionForUniverse(universeId, newUniverseName) {
   if (!universeId) return null;
-  const all = await listCollections();
-  const idx = all.findIndex((c) => c.universeId === universeId);
-  if (idx < 0) return null;
-  const target = all[idx];
-  const desired = universeCollectionNameFor(newUniverseName);
-  if (!desired || desired === target.name) return target;
-  const merged = { ...target, name: desired, updatedAt: new Date().toISOString() };
-  const next = [...all];
-  next[idx] = merged;
-  await writeAll(next);
-  return merged;
+  return serializeFileWrite(async () => {
+    const all = await listCollections();
+    const idx = all.findIndex((c) => c.universeId === universeId);
+    if (idx < 0) return null;
+    const target = all[idx];
+    const desired = universeCollectionNameFor(newUniverseName);
+    if (!desired || desired === target.name) return target;
+    const merged = { ...target, name: desired, updatedAt: new Date().toISOString() };
+    const next = [...all];
+    next[idx] = merged;
+    await writeAll(next);
+    return merged;
+  });
 }
 
 export async function updateCollection(id, patch) {
-  const all = await listCollections();
-  const idx = all.findIndex((c) => c.id === id);
-  if (idx < 0) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
-  const cur = all[idx];
-  // Universe-linked collections own their name — Universe Builder uses
-  // `Universe: <name>` as the identity for routing auto-filed renders into
-  // the right bucket. A user-driven rename would silently fork that bucket
-  // on the next render. The supported workflow is renaming the universe;
-  // updateUniverse cascades the new name down to the linked collection.
-  if ('name' in patch && cur.universeId && patch.name !== cur.name) {
-    throw makeErr(
-      'This collection is linked to a Universe — rename the universe to rename it.',
-      ERR_VALIDATION,
-    );
-  }
-  // Cover key validation is deferred to sanitizeCollection on read, but we
-  // also reject up-front so the API gives a clear error rather than silently
-  // dropping the cover.
-  if (patch.coverKey != null && !cur.items.find((it) => itemKey(it) === patch.coverKey)) {
-    throw makeErr('coverKey must reference an item in this collection', ERR_VALIDATION);
-  }
-  const merged = {
-    ...cur,
-    ...('name' in patch ? { name: patch.name } : {}),
-    ...('description' in patch ? { description: patch.description } : {}),
-    ...('coverKey' in patch ? { coverKey: patch.coverKey } : {}),
-    updatedAt: new Date().toISOString(),
-  };
-  const next = [...all];
-  next[idx] = merged;
-  await writeAll(next);
-  return merged;
+  return serializeFileWrite(async () => {
+    const all = await listCollections();
+    const idx = all.findIndex((c) => c.id === id);
+    if (idx < 0) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
+    const cur = all[idx];
+    // Product/UI constraint: universe-linked collections own their visible
+    // name. The name is the user-facing identity of a universe's bucket, so
+    // renaming it independent of the universe is confusing — the supported
+    // workflow is renaming the universe (which cascades down via
+    // renameCollectionForUniverse). Routing is by `universeId` regardless;
+    // this lock exists to keep what the user sees consistent with the
+    // universe's name, not to prevent routing forks.
+    if ('name' in patch && cur.universeId && patch.name !== cur.name) {
+      throw makeErr(
+        'This collection is linked to a Universe — rename the universe to rename it.',
+        ERR_VALIDATION,
+      );
+    }
+    // Cover key validation is deferred to sanitizeCollection on read, but we
+    // also reject up-front so the API gives a clear error rather than silently
+    // dropping the cover.
+    if (patch.coverKey != null && !cur.items.find((it) => itemKey(it) === patch.coverKey)) {
+      throw makeErr('coverKey must reference an item in this collection', ERR_VALIDATION);
+    }
+    const merged = {
+      ...cur,
+      ...('name' in patch ? { name: patch.name } : {}),
+      ...('description' in patch ? { description: patch.description } : {}),
+      ...('coverKey' in patch ? { coverKey: patch.coverKey } : {}),
+      updatedAt: new Date().toISOString(),
+    };
+    const next = [...all];
+    next[idx] = merged;
+    await writeAll(next);
+    return merged;
+  });
 }
 
 export async function deleteCollection(id) {
-  const all = await listCollections();
-  if (!all.find((c) => c.id === id)) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
-  await writeAll(all.filter((c) => c.id !== id));
-  return { id };
+  return serializeFileWrite(async () => {
+    const all = await listCollections();
+    if (!all.find((c) => c.id === id)) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
+    await writeAll(all.filter((c) => c.id !== id));
+    return { id };
+  });
 }
 
 // Mirror sanitizeItem so direct callers (addItem + bulkUpdateCollectionItems)
@@ -420,25 +458,30 @@ const validateItemInput = (item) => {
 
 export async function addItem(id, item) {
   const { kind, ref } = validateItemInput(item);
-  const all = await listCollections();
-  const idx = all.findIndex((c) => c.id === id);
-  if (idx < 0) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
-  const cur = all[idx];
-  const key = `${kind}:${ref}`;
-  if (cur.items.find((it) => itemKey(it) === key)) {
-    throw makeErr(`Item already in collection: ${key}`, ERR_DUPLICATE);
-  }
-  if (cur.items.length >= ITEMS_MAX) {
-    throw makeErr(`Collection full (limit ${ITEMS_MAX})`, ERR_VALIDATION);
-  }
-  const merged = {
-    ...cur,
-    items: [...cur.items, { kind, ref, addedAt: new Date().toISOString() }],
-    updatedAt: new Date().toISOString(),
-  };
-  const next = [...all];
-  next[idx] = merged;
-  await writeAll(next);
+  const merged = await serializeFileWrite(async () => {
+    const all = await listCollections();
+    const idx = all.findIndex((c) => c.id === id);
+    if (idx < 0) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
+    const cur = all[idx];
+    const key = `${kind}:${ref}`;
+    if (cur.items.find((it) => itemKey(it) === key)) {
+      throw makeErr(`Item already in collection: ${key}`, ERR_DUPLICATE);
+    }
+    if (cur.items.length >= ITEMS_MAX) {
+      throw makeErr(`Collection full (limit ${ITEMS_MAX})`, ERR_VALIDATION);
+    }
+    const updated = {
+      ...cur,
+      items: [...cur.items, { kind, ref, addedAt: new Date().toISOString() }],
+      updatedAt: new Date().toISOString(),
+    };
+    const next = [...all];
+    next[idx] = updated;
+    await writeAll(next);
+    return updated;
+  });
+  // Emit outside the serialized critical section — subscribers may issue
+  // their own collection reads and we don't want to deadlock the tail.
   if (merged.universeId) emitRecordUpdated('universe', merged.universeId);
   return merged;
 }
@@ -474,73 +517,79 @@ export async function bulkUpdateCollectionItems(id, { add = [], remove = [] } = 
     }
   }
 
-  const all = await listCollections();
-  const idx = all.findIndex((c) => c.id === id);
-  if (idx < 0) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
-  const cur = all[idx];
+  const result = await serializeFileWrite(async () => {
+    const all = await listCollections();
+    const idx = all.findIndex((c) => c.id === id);
+    if (idx < 0) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
+    const cur = all[idx];
 
-  const removeSet = new Set(remove);
-  const remainingItems = cur.items.filter((it) => !removeSet.has(itemKey(it)));
-  const removed = cur.items.length - remainingItems.length;
+    const removeSet = new Set(remove);
+    const remainingItems = cur.items.filter((it) => !removeSet.has(itemKey(it)));
+    const removed = cur.items.length - remainingItems.length;
 
-  // Dedupe `add` against itself AND against items that survived the removal.
-  // This is intentionally tolerant — re-adding an existing item is a no-op
-  // rather than an error, so a multi-select Move that overlaps with prior
-  // membership stays idempotent.
-  const presentKeys = new Set(remainingItems.map(itemKey));
-  const now = new Date().toISOString();
-  const additions = [];
-  for (const { kind, ref } of cleanAdd) {
-    const key = `${kind}:${ref}`;
-    if (presentKeys.has(key)) continue;
-    presentKeys.add(key);
-    additions.push({ kind, ref, addedAt: now });
+    // Dedupe `add` against itself AND against items that survived the removal.
+    // This is intentionally tolerant — re-adding an existing item is a no-op
+    // rather than an error, so a multi-select Move that overlaps with prior
+    // membership stays idempotent.
+    const presentKeys = new Set(remainingItems.map(itemKey));
+    const now = new Date().toISOString();
+    const additions = [];
+    for (const { kind, ref } of cleanAdd) {
+      const key = `${kind}:${ref}`;
+      if (presentKeys.has(key)) continue;
+      presentKeys.add(key);
+      additions.push({ kind, ref, addedAt: now });
+    }
+
+    const nextItems = [...remainingItems, ...additions];
+    if (nextItems.length > ITEMS_MAX) {
+      throw makeErr(`Collection full (limit ${ITEMS_MAX})`, ERR_VALIDATION);
+    }
+
+    // Drop a cover that pointed at a now-removed item — matches the
+    // single-item removeItem path so the cover never dangles after a batch.
+    const coverKey = cur.coverKey && removeSet.has(cur.coverKey) ? null : cur.coverKey;
+
+    const merged = {
+      ...cur,
+      items: nextItems,
+      coverKey,
+      updatedAt: now,
+    };
+    const next = [...all];
+    next[idx] = merged;
+    await writeAll(next);
+    return { collection: merged, added: additions.length, removed };
+  });
+  if (result.collection.universeId && (result.added || result.removed)) {
+    emitRecordUpdated('universe', result.collection.universeId);
   }
-
-  const nextItems = [...remainingItems, ...additions];
-  if (nextItems.length > ITEMS_MAX) {
-    throw makeErr(`Collection full (limit ${ITEMS_MAX})`, ERR_VALIDATION);
-  }
-
-  // Drop a cover that pointed at a now-removed item — matches the
-  // single-item removeItem path so the cover never dangles after a batch.
-  const coverKey = cur.coverKey && removeSet.has(cur.coverKey) ? null : cur.coverKey;
-
-  const merged = {
-    ...cur,
-    items: nextItems,
-    coverKey,
-    updatedAt: now,
-  };
-  const next = [...all];
-  next[idx] = merged;
-  await writeAll(next);
-  if (merged.universeId && (additions.length || removed)) {
-    emitRecordUpdated('universe', merged.universeId);
-  }
-  return { collection: merged, added: additions.length, removed };
+  return result;
 }
 
 export async function removeItem(id, key) {
-  const all = await listCollections();
-  const idx = all.findIndex((c) => c.id === id);
-  if (idx < 0) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
-  const cur = all[idx];
-  const before = cur.items.length;
-  const items = cur.items.filter((it) => itemKey(it) !== key);
-  if (items.length === before) throw makeErr(`Item not in collection: ${key}`, ERR_NOT_FOUND);
-  const merged = {
-    ...cur,
-    items,
-    // Drop the cover if it pointed at the removed item — sanitizeCollection
-    // would do this on the next read, but doing it here keeps the in-memory
-    // return consistent with what's persisted.
-    coverKey: cur.coverKey === key ? null : cur.coverKey,
-    updatedAt: new Date().toISOString(),
-  };
-  const next = [...all];
-  next[idx] = merged;
-  await writeAll(next);
+  const merged = await serializeFileWrite(async () => {
+    const all = await listCollections();
+    const idx = all.findIndex((c) => c.id === id);
+    if (idx < 0) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
+    const cur = all[idx];
+    const before = cur.items.length;
+    const items = cur.items.filter((it) => itemKey(it) !== key);
+    if (items.length === before) throw makeErr(`Item not in collection: ${key}`, ERR_NOT_FOUND);
+    const updated = {
+      ...cur,
+      items,
+      // Drop the cover if it pointed at the removed item — sanitizeCollection
+      // would do this on the next read, but doing it here keeps the in-memory
+      // return consistent with what's persisted.
+      coverKey: cur.coverKey === key ? null : cur.coverKey,
+      updatedAt: new Date().toISOString(),
+    };
+    const next = [...all];
+    next[idx] = updated;
+    await writeAll(next);
+    return updated;
+  });
   if (merged.universeId) emitRecordUpdated('universe', merged.universeId);
   return merged;
 }

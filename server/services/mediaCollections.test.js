@@ -295,13 +295,42 @@ describe('mediaCollections service', () => {
         expect(await svc.listCollections()).toHaveLength(1);
       });
 
-      it('adopts an unlinked legacy same-name collection and backfills universeId', async () => {
+      it('does NOT adopt an unlinked same-name collection — creates a fresh stamped bucket', async () => {
+        // The unlinked legacy bucket might be (a) a true pre-link legacy
+        // collection OR (b) an orphan left behind by deleteUniverse. We
+        // can't tell them apart, and adopting (b) would silently mix the
+        // deleted universe's renders into the new same-named universe.
         const legacy = await svc.createCollection({ name: 'Universe: Foo' });
         const linked = await svc.findOrCreateUniverseCollection({
           universeId: 'u-1', universeName: 'Foo',
         });
-        expect(linked.id).toBe(legacy.id);
+        expect(linked.id).not.toBe(legacy.id);
         expect(linked.universeId).toBe('u-1');
+        // Both collections exist independently.
+        expect(await svc.listCollections()).toHaveLength(2);
+      });
+
+      it('does NOT re-adopt a post-deleteUniverse orphan when a new same-named universe arrives', async () => {
+        // Stand in for the deleteUniverse flow: link, fill, then unlink.
+        const first = await svc.findOrCreateUniverseCollection({
+          universeId: 'u-A', universeName: 'Cosmos',
+        });
+        await svc.addItem(first.id, { kind: 'image', ref: 'oldA.png' });
+        await svc.unlinkCollectionsForUniverse('u-A');
+        // A brand-new universe with the same display name renders for the
+        // first time. The orphan still carries the canonical name, but
+        // must NOT be adopted — otherwise oldA.png would silently appear
+        // in the new universe's bucket.
+        const fresh = await svc.findOrCreateUniverseCollection({
+          universeId: 'u-B', universeName: 'Cosmos',
+        });
+        expect(fresh.id).not.toBe(first.id);
+        expect(fresh.universeId).toBe('u-B');
+        expect(fresh.items).toEqual([]);
+        // The orphan kept its items — user can manually relink or rename.
+        const orphan = await svc.getCollection(first.id);
+        expect(orphan.universeId).toBeNull();
+        expect(orphan.items.map((it) => it.ref)).toEqual(['oldA.png']);
       });
 
       it('refuses to adopt a same-name collection already linked to a different universe', async () => {
@@ -316,16 +345,33 @@ describe('mediaCollections service', () => {
         expect(await svc.listCollections()).toHaveLength(2);
       });
 
-      it('survives a universe rename — same universeId still resolves to the linked bucket regardless of universeName', async () => {
+      it('survives a universe rename — same universeId still resolves to the linked bucket', async () => {
         const first = await svc.findOrCreateUniverseCollection({
           universeId: 'u-1', universeName: 'OldName',
         });
-        // Universe got renamed; even before the cascade fires, the next
-        // resolution should still find the linked collection by id.
         const reuse = await svc.findOrCreateUniverseCollection({
           universeId: 'u-1', universeName: 'NewName',
         });
         expect(reuse.id).toBe(first.id);
+      });
+
+      it('self-heals a drifted name (failed cascade) on next render', async () => {
+        const first = await svc.findOrCreateUniverseCollection({
+          universeId: 'u-1', universeName: 'NewName',
+        });
+        // Simulate a failed cascade by hand-overwriting the persisted name
+        // (the rename-lock blocks updateCollection from doing this).
+        const current = await svc.listCollections();
+        current[0] = { ...current[0], name: 'Universe: OldName' };
+        fileStore.set('/mock/data/media-collections.json', { collections: current });
+        const healed = await svc.findOrCreateUniverseCollection({
+          universeId: 'u-1', universeName: 'NewName',
+        });
+        expect(healed.id).toBe(first.id);
+        expect(healed.name).toBe('Universe: NewName');
+        // And it actually persists — next read confirms.
+        const reread = await svc.getCollection(first.id);
+        expect(reread.name).toBe('Universe: NewName');
       });
 
       it('serializes concurrent first-time filings (no race-induced duplicate or orphan)', async () => {
@@ -360,6 +406,38 @@ describe('mediaCollections service', () => {
           .rejects.toMatchObject({ code: svc.ERR_VALIDATION });
         await expect(svc.findOrCreateUniverseCollection({ universeId: 'u-1' }))
           .rejects.toMatchObject({ code: svc.ERR_VALIDATION });
+      });
+    });
+
+    describe('cross-path write serialization', () => {
+      it('addItem racing unlinkCollectionsForUniverse — neither drops items', async () => {
+        // Two completely different write paths racing on the same file.
+        // Without the file-level write tail, unlink's stale snapshot would
+        // clobber the in-flight addItem that completed first.
+        const linked = await svc.findOrCreateUniverseCollection({
+          universeId: 'u-1', universeName: 'Foo',
+        });
+        await Promise.all([
+          svc.addItem(linked.id, { kind: 'image', ref: 'race-1.png' }),
+          svc.unlinkCollectionsForUniverse('u-1'),
+          svc.addItem(linked.id, { kind: 'image', ref: 'race-2.png' }),
+        ]);
+        const fresh = await svc.getCollection(linked.id);
+        const refs = fresh.items.map((it) => it.ref).sort();
+        expect(refs).toEqual(['race-1.png', 'race-2.png']);
+      });
+
+      it('rename + addItem from two paths — both end states persist', async () => {
+        const linked = await svc.findOrCreateUniverseCollection({
+          universeId: 'u-1', universeName: 'Old',
+        });
+        await Promise.all([
+          svc.addItem(linked.id, { kind: 'image', ref: 'cover.png' }),
+          svc.renameCollectionForUniverse('u-1', 'New'),
+        ]);
+        const fresh = await svc.getCollection(linked.id);
+        expect(fresh.name).toBe('Universe: New');
+        expect(fresh.items.map((it) => it.ref)).toEqual(['cover.png']);
       });
     });
   });
