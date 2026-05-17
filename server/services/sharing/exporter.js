@@ -87,16 +87,43 @@ async function copyAssetIfPresent(filename, kind, bucketPath) {
 }
 
 /**
+ * Build a synthetic job record from a `.metadata.json` sidecar when the
+ * in-memory queue/archive no longer holds the job (>24h TTL). The sidecar
+ * lives alongside the image file so its lifetime is tied to the asset.
+ */
+async function jobFromSidecar(jobId) {
+  const sc = await readJSONFile(join(PATHS.images, `${jobId}.metadata.json`));
+  if (!sc) return null;
+  return {
+    id: sc.id || jobId,
+    kind: 'image',
+    owner: null,
+    status: 'completed',
+    completedAt: sc.createdAt || null,
+    params: {
+      prompt: sc.prompt,
+      negativePrompt: sc.negativePrompt,
+      width: sc.width,
+      height: sc.height,
+      mode: sc.mode,
+      model: sc.model,
+    },
+    result: { filename: sc.filename },
+  };
+}
+
+/**
  * For each `imageJobId`, fetch the live media-job (or look it up in the persisted
  * archive) and write a sanitized copy into the bucket records/media/ so the
- * recipient can re-render with identical prompt/seed/params. Returns the asset
- * refs (image filenames) discovered.
+ * recipient can re-render with identical prompt/seed/params. Falls back to the
+ * per-image `.metadata.json` sidecar for jobs older than the 24h archive TTL.
+ * Returns the asset refs (image filenames) discovered.
  */
 async function exportMediaJobAndAsset(jobId, bucketPath, mediaRecordsDir) {
   if (!jobId || !isStr(jobId)) return [];
-  const job = getJob(jobId);
+  const job = getJob(jobId) || await jobFromSidecar(jobId);
   if (!job) {
-    console.log(`⚠️ sharing.exporter: imageJobId ${jobId} not found in live queue or archive`);
+    console.log(`⚠️ sharing.exporter: imageJobId ${jobId} not found in live queue, archive, or sidecar`);
     return [];
   }
   // Trim transient/runtime fields — keep enough to re-render with full fidelity.
