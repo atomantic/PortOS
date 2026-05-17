@@ -7,12 +7,13 @@
  * that all land in a single auto-named collection.
  */
 
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
   Globe2, Plus, Trash2, Sparkles, Wand2, Loader2, Save, FolderOpen,
   Edit3, X, MessageSquarePlus, Play, Lock, Unlock,
   PanelLeftClose, PanelLeftOpen,
+  BookOpen, Users, MapPin, Package, Layers, ImagePlus, FolderTree,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import {
@@ -42,6 +43,40 @@ const CATEGORY_LABELS = {
   environments: 'Environments',
   structures: 'Structures',
   vehicles: 'Vehicles',
+};
+
+// Tab order in the Universe Builder. Bible / Composites / Render are always
+// visible; the three canon trunks (Cast / Places / Objects) render even when
+// empty so the user has a discoverable target for canon+variation work; Other
+// only renders when at least one un-kinded bucket exists.
+const TAB_BIBLE = 'bible';
+const TAB_CAST = 'cast';
+const TAB_PLACES = 'places';
+const TAB_OBJECTS = 'objects';
+const TAB_OTHER = 'other';
+const TAB_COMPOSITES = 'composites';
+const TAB_RENDER = 'render';
+// Pseudo-bucket key for the canon-only view inside a trunk. Overloads
+// `?bucket=` (alongside real bucket keys) AND a `promptMode` value on the
+// render route; same string in both contexts to keep the contract consistent.
+const BUCKET_CANON = 'canon';
+const TRUNK_TABS = [
+  { id: TAB_CAST, kind: 'characters', label: 'Cast', canonKey: 'characters', icon: Users, singular: 'character' },
+  { id: TAB_PLACES, kind: 'settings', label: 'Places', canonKey: 'settings', icon: MapPin, singular: 'place' },
+  { id: TAB_OBJECTS, kind: 'objects', label: 'Objects', canonKey: 'objects', icon: Package, singular: 'object' },
+];
+const TRUNK_BY_ID = Object.fromEntries(TRUNK_TABS.map((t) => [t.id, t]));
+
+// Group category buckets by their `kind` tag. Buckets with an unknown / missing
+// kind fall into the `other` bin — that bin drives whether the Other tab shows.
+const groupBucketsByKind = (categories = {}) => {
+  const out = { characters: [], settings: [], objects: [], other: [] };
+  for (const [key, bucket] of Object.entries(categories || {})) {
+    const kind = bucket?.kind || 'other';
+    if (out[kind]) out[kind].push(key);
+    else out.other.push(key);
+  }
+  return out;
 };
 
 const normalizeCategoryKey = (raw) => (raw || '')
@@ -953,7 +988,8 @@ export default function UniverseBuilder() {
 
   // Render either the full batch (driven by the renderOpts.promptMode dropdown)
   // or a narrow scope passed in by an inline button. Scope shape:
-  //   { promptMode, selection?, sheetSelection? } — see server renderSchema.
+  //   { promptMode, selection?, sheetSelection?, canonSelection? } — see
+  //   server renderSchema.
   const runRender = async (scope = null) => {
     if (!selectedId) {
       toast.error('Save the world first');
@@ -991,6 +1027,7 @@ export default function UniverseBuilder() {
       batchPerVariation: renderOpts.batchPerVariation,
       selection: scope?.selection,
       sheetSelection: scope?.sheetSelection,
+      canonSelection: scope?.canonSelection,
     }).catch((e) => { toast.error(`Render failed: ${e.message}`); return null; });
     setRendering(false);
     if (!result) return;
@@ -999,7 +1036,9 @@ export default function UniverseBuilder() {
     setRuns(updated);
   };
 
-  const handleRender = () => runRender(null);
+  // RenderTab and per-trunk Bulk-render buttons pass a scope object; the
+  // bare "Render N images" button passes nothing (= use the renderOpts).
+  const handleRender = (scope = null) => runRender(scope);
 
   const canRender = !!selectedId && availableBackends.length > 0 && !rendering;
 
@@ -1141,7 +1180,58 @@ export default function UniverseBuilder() {
   const categoryKeys = getCategoryKeys(draft.categories);
   const totalVariations = totalVariationCount(draft);
   const totalSheets = draft.compositeSheets?.length || 0;
-  const renderTotal = renderPromptCount(draft, renderOpts.promptMode);
+
+  // URL-driven tab + bucket state (per CLAUDE.md "Linkable routes for all
+  // views"). `?tab=cast&bucket=heroes` deep-links into a sub-bucket; both fall
+  // back to bible / "" (All) on first load. We also forward existing params
+  // (e.g. `?series=` on the embedded Canon section) untouched.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const bucketsByKind = useMemo(() => groupBucketsByKind(draft.categories), [draft.categories]);
+  const hasOtherBuckets = bucketsByKind.other.length > 0;
+  const requestedTab = searchParams.get('tab');
+  const isValidTab = (tab) => (
+    tab === TAB_BIBLE || tab === TAB_CAST || tab === TAB_PLACES || tab === TAB_OBJECTS
+    || tab === TAB_COMPOSITES || tab === TAB_RENDER
+    || (tab === TAB_OTHER && hasOtherBuckets)
+  );
+  const activeTab = isValidTab(requestedTab) ? requestedTab : TAB_BIBLE;
+  const activeBucket = searchParams.get('bucket') || '';
+  const setTab = useCallback((tab, opts = {}) => {
+    const next = new URLSearchParams(searchParams);
+    if (tab === TAB_BIBLE) next.delete('tab');
+    else next.set('tab', tab);
+    if (opts.bucket === undefined) next.delete('bucket');
+    else if (opts.bucket) next.set('bucket', opts.bucket);
+    else next.delete('bucket');
+    setSearchParams(next, { replace: !!opts.replace });
+  }, [searchParams, setSearchParams]);
+  const setBucket = useCallback((bucket) => {
+    const next = new URLSearchParams(searchParams);
+    if (bucket) next.set('bucket', bucket);
+    else next.delete('bucket');
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams]);
+
+  // Drop a stale `?bucket=` if the bucket no longer exists under the current
+  // tab (e.g. user deleted the bucket, or auto-sort moved it to another kind).
+  useEffect(() => {
+    if (!activeBucket) return;
+    const trunk = TRUNK_BY_ID[activeTab];
+    if (!trunk) {
+      if (searchParams.has('bucket')) {
+        const next = new URLSearchParams(searchParams);
+        next.delete('bucket');
+        setSearchParams(next, { replace: true });
+      }
+      return;
+    }
+    const validForTab = bucketsByKind[trunk.kind] || [];
+    if (!validForTab.includes(activeBucket)) {
+      const next = new URLSearchParams(searchParams);
+      next.delete('bucket');
+      setSearchParams(next, { replace: true });
+    }
+  }, [activeTab, activeBucket, bucketsByKind, searchParams, setSearchParams]);
 
   // Mobile = flex column (grid template ignored); lg+ = grid where the inline
   // `gridTemplateColumns` swap between collapsed/expanded widths takes effect.
@@ -1230,263 +1320,148 @@ export default function UniverseBuilder() {
 
       {/* Editor — owns its own scroll inside the full-width main so the
           sidebar can stay pinned while the long card stack scrolls. */}
-      <section className="flex flex-col gap-4 p-4 min-h-0 lg:overflow-y-auto">
-        <header className="bg-port-card border border-port-border rounded p-4 flex flex-col gap-3">
-          <div className="flex items-center gap-2 flex-wrap">
-            <input
-              type="text"
-              value={draft.name}
-              onChange={(e) => updateDraft({ name: e.target.value })}
-              placeholder="World name (e.g. Moebius / Scavenger sci-fi)"
-              className="flex-1 min-w-[180px] bg-port-bg border border-port-border rounded px-3 py-2 text-white focus:outline-none focus:border-port-accent"
-              maxLength={100}
-            />
-            <button
-              onClick={handleSave}
-              disabled={saving || !draft.name?.trim()}
-              className="px-3 py-2 bg-port-accent hover:bg-port-accent/90 disabled:opacity-50 text-white rounded flex items-center gap-2 min-h-[40px]"
-            >
-              {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
-              {selectedId ? 'Save' : 'Create'}
-            </button>
-            {selectedId && (
-              <>
-                <ShareToButton kind="universe" ids={[selectedId]} label="Share" />
-                {draft.origin ? <OriginBadge origin={draft.origin} /> : null}
-                <button
-                  onClick={handleDelete}
-                  className={`px-3 py-2 rounded flex items-center gap-2 min-h-[40px] ${
-                    pendingDeleteId === selectedId
-                      ? 'bg-red-700 hover:bg-red-600 text-white'
-                      : 'bg-red-900/30 hover:bg-red-900/50 text-red-300'
-                  }`}
-                  title="Delete world"
-                >
-                  <Trash2 size={16} /> {pendingDeleteId === selectedId ? 'Confirm delete' : 'Delete'}
-                </button>
-              </>
-            )}
-          </div>
-
-          {/* Starter prompt + LLM picker */}
-          <div className="grid grid-cols-1 md:grid-cols-[1fr_220px] gap-3">
-            <div>
-              <FieldLabel field="starterPrompt" locked={draft.locked} onToggleLock={toggleLock}>
-                Starter idea
-              </FieldLabel>
-              <textarea
-                value={draft.starterPrompt}
-                onChange={(e) => updateDraft({ starterPrompt: e.target.value })}
-                placeholder="moebius and scavengers reign meets Prophet inspired sci fi universe"
-                className="w-full bg-port-bg border border-port-border rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-port-accent"
-                rows={2}
-                maxLength={4000}
-              />
-            </div>
-            <div>
-              <label htmlFor="world-llm-provider" className="text-xs text-gray-400 mb-1 block">LLM for expansion</label>
-              <select
-                id="world-llm-provider"
-                // Bind to `?? ''` (NOT `|| activeProviderId || ''`) — when
-                // provider is null/unset, the empty value should select the
-                // "Active provider" option, not silently switch the dropdown
-                // to the active provider's explicit option (which would
-                // misrepresent saved state as a pinned provider).
-                value={draft.llm?.provider ?? ''}
-                onChange={(e) => updateDraft({ llm: { ...draft.llm, provider: e.target.value || null, model: null } })}
-                className="w-full bg-port-bg border border-port-border rounded px-2 py-2 text-white text-sm min-h-[40px]"
+      <section className="flex flex-col gap-3 p-4 min-h-0 lg:overflow-y-auto">
+        {/* Thin action header — name + Save + Share + Delete sit above the
+            tab nav so they're reachable from any tab. The Bible-tab actions
+            (Generate / Refine, starter idea, story-bible fields) live inside
+            the Bible tab itself, per Phase C "Bible is its own tab". */}
+        <header className="bg-port-card border border-port-border rounded p-3 flex items-center gap-2 flex-wrap">
+          <input
+            type="text"
+            value={draft.name}
+            onChange={(e) => updateDraft({ name: e.target.value })}
+            placeholder="World name (e.g. Moebius / Scavenger sci-fi)"
+            className="flex-1 min-w-[180px] bg-port-bg border border-port-border rounded px-3 py-2 text-white focus:outline-none focus:border-port-accent"
+            maxLength={100}
+          />
+          <button
+            onClick={handleSave}
+            disabled={saving || !draft.name?.trim()}
+            className="px-3 py-2 bg-port-accent hover:bg-port-accent/90 disabled:opacity-50 text-white rounded flex items-center gap-2 min-h-[40px]"
+          >
+            {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+            {selectedId ? 'Save' : 'Create'}
+          </button>
+          {selectedId && (
+            <>
+              <ShareToButton kind="universe" ids={[selectedId]} label="Share" />
+              {draft.origin ? <OriginBadge origin={draft.origin} /> : null}
+              <button
+                onClick={handleDelete}
+                className={`px-3 py-2 rounded flex items-center gap-2 min-h-[40px] ${
+                  pendingDeleteId === selectedId
+                    ? 'bg-red-700 hover:bg-red-600 text-white'
+                    : 'bg-red-900/30 hover:bg-red-900/50 text-red-300'
+                }`}
+                title="Delete world"
               >
-                <option value="">Active provider ({providerLabel(activeProviderId)})</option>
-                {providers.map((p) => (
-                  <option key={p.id} value={p.id}>{p.name}</option>
-                ))}
-              </select>
-              <select
-                value={draft.llm?.model || ''}
-                onChange={(e) => updateDraft({ llm: { ...draft.llm, model: e.target.value || null } })}
-                className="mt-1 w-full bg-port-bg border border-port-border rounded px-2 py-2 text-white text-sm min-h-[40px]"
-              >
-                <option value="">Default model</option>
-                {providerModels.map((m) => {
-                  const id = typeof m === 'string' ? m : m.id;
-                  const label = typeof m === 'string' ? m : (m.name || m.id);
-                  return <option key={id} value={id}>{label}</option>;
-                })}
-              </select>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2 flex-wrap">
-            <button
-              onClick={handleExpand}
-              disabled={expanding || saving || !draft.starterPrompt?.trim()}
-              className="px-3 py-2 bg-purple-600/30 hover:bg-purple-600/50 disabled:opacity-50 text-purple-200 border border-purple-600/40 rounded flex items-center gap-2 min-h-[40px]"
-            >
-              {expanding ? <Loader2 size={16} className="animate-spin" /> : <Wand2 size={16} />}
-              Generate From Idea
-            </button>
-            <button
-              onClick={() => setRefineOpen((v) => !v)}
-              disabled={!draft.starterPrompt?.trim()}
-              aria-expanded={refineOpen}
-              className={`px-3 py-2 disabled:opacity-50 text-port-accent border border-port-accent/40 rounded flex items-center gap-2 min-h-[40px] ${
-                refineOpen ? 'bg-port-accent/25' : 'bg-port-accent/15 hover:bg-port-accent/25'
-              }`}
-              title="Give feedback to refine the prompts in place — uses the LLM picked above"
-            >
-              <MessageSquarePlus size={16} />
-              Refine prompts
-            </button>
-            <span className="text-xs text-gray-500">
-              {totalVariations} variation{totalVariations === 1 ? '' : 's'} across {categoryKeys.length} categories · {totalSheets} composite board{totalSheets === 1 ? '' : 's'}
-            </span>
-          </div>
-
-          {refineOpen && (
-            <div className="border border-port-accent/40 bg-port-accent/5 rounded p-3 flex flex-col gap-2">
-              <label htmlFor="world-refine-feedback" className="text-[11px] uppercase tracking-wide text-gray-500">
-                Feedback — describe what you want changed
-              </label>
-              <textarea
-                id="world-refine-feedback"
-                value={refineFeedback}
-                onChange={(e) => setRefineFeedback(e.target.value)}
-                placeholder="e.g. lean grimmer and more spiritual; pull style toward Moebius + Tarkovsky; avoid neon and cyberpunk clichés."
-                rows={3}
-                disabled={refining}
-                className="w-full bg-port-bg border border-port-border rounded p-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-port-accent resize-y disabled:opacity-60"
-              />
-              <div className="flex items-center gap-2 flex-wrap">
-                <button
-                  type="button"
-                  onClick={runRefine}
-                  disabled={refining || !refineFeedback.trim() || !draft.starterPrompt?.trim()}
-                  className="px-3 py-2 bg-port-accent hover:bg-port-accent/90 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded flex items-center gap-2 min-h-[40px]"
-                >
-                  {refining ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} />}
-                  {refining ? 'Refining…' : 'Refine'}
-                </button>
-                <button
-                  type="button"
-                  onClick={resetRefinePanel}
-                  disabled={refining}
-                  className="px-3 py-2 text-sm text-gray-400 hover:text-white rounded min-h-[40px]"
-                >
-                  Close
-                </button>
-                <span className="text-[11px] text-gray-500">
-                  Applies in place — locked fields stay pinned.
-                </span>
-              </div>
-              {(refineRationale || refineChanges.length > 0) && (
-                <div className="border-t border-port-border/60 pt-2 mt-1 space-y-1.5">
-                  {refineRationale && (
-                    <p className="text-xs text-gray-300 whitespace-pre-wrap">{refineRationale}</p>
-                  )}
-                  {refineChanges.length > 0 && (
-                    <ul className="text-[11px] text-gray-400 list-disc pl-5 space-y-0.5">
-                      {refineChanges.map((c, idx) => (
-                        <li key={idx}>{c}</li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-              )}
-            </div>
+                <Trash2 size={16} /> {pendingDeleteId === selectedId ? 'Confirm delete' : 'Delete'}
+              </button>
+            </>
           )}
         </header>
 
-        <section className="bg-port-card border border-port-border rounded p-4 flex flex-col gap-3">
-          <div>
-            <h2 className="text-sm font-semibold text-white">Story bible</h2>
-            <p className="text-xs text-gray-500 mt-0.5">
-              Pulled into the Pipeline → New Series form when this world is selected.
-            </p>
-          </div>
-          <div>
-            <FieldLabel htmlFor="world-logline" field="logline" locked={draft.locked} onToggleLock={toggleLock}>
-              Logline
-            </FieldLabel>
-            <input
-              id="world-logline"
-              type="text"
-              value={draft.logline || ''}
-              onChange={(e) => updateDraft({ logline: e.target.value })}
-              placeholder="One-sentence hook — A foundry city goes silent, and the only survivor is a child."
-              className="w-full bg-port-bg border border-port-border rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-port-accent"
-              maxLength={WORLD_LOGLINE_MAX}
-            />
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <div>
-              <FieldLabel htmlFor="world-premise" field="premise" locked={draft.locked} onToggleLock={toggleLock}>
-                Premise
-              </FieldLabel>
-              <textarea
-                id="world-premise"
-                value={draft.premise || ''}
-                onChange={(e) => updateDraft({ premise: e.target.value })}
-                placeholder="Elevator pitch — 1-3 short paragraphs about the setting, central conflict, stakes, and tone."
-                className="w-full bg-port-bg border border-port-border rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-port-accent"
-                rows={6}
-                maxLength={WORLD_PREMISE_MAX}
-              />
-            </div>
-            <div>
-              <FieldLabel htmlFor="world-style-notes" field="styleNotes" locked={draft.locked} onToggleLock={toggleLock}>
-                Style notes
-              </FieldLabel>
-              <textarea
-                id="world-style-notes"
-                value={draft.styleNotes || ''}
-                onChange={(e) => updateDraft({ styleNotes: e.target.value })}
-                placeholder="Narrative style: references (artists / films / comics), mood, palette, pacing, voice. Prose, not tokens."
-                className="w-full bg-port-bg border border-port-border rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-port-accent"
-                rows={6}
-                maxLength={WORLD_STYLE_NOTES_MAX}
-              />
-            </div>
-          </div>
-          <StyleNegativePromptEditor
-            influences={draft.influences}
-            onChange={(next) => updateDraft({ influences: next })}
-            locked={draft.locked}
-            onToggleLock={toggleLock}
-          />
-        </section>
-
-        {/*
-          Gate on `draft.id === selectedId` — when the user switches universes,
-          `selectedId` updates synchronously but the new `draft` arrives after
-          an async `getUniverse(selectedId)` resolves. During that window, an
-          optimistic canon mutation routed through `onUniverseChange` would
-          send the *previous* universe's canon arrays to
-          `updateUniverse(selectedId, ...)`, wholesale-overwriting the newly
-          selected universe's canon on the server.
-        */}
-        {selectedId && draft.id === selectedId ? (
-          <UniverseCanonSection
-            universe={draft}
-            universeId={selectedId}
-            onUniverseChange={handleCanonChange}
-            imageCfg={imageCfg}
-          />
-        ) : null}
-
-        <CompositeSheetsEditor
-          sheets={draft.compositeSheets || []}
-          onChange={updateCompositeSheets}
-          canRender={canRender}
-          onRender={(sheet) => runRender({ promptMode: 'sheets', sheetSelection: [sheet.label] })}
+        <TabNav
+          activeTab={activeTab}
+          setTab={setTab}
+          hasOtherBuckets={hasOtherBuckets}
+          counts={{
+            cast: (draft.characters?.length || 0) + bucketsByKind.characters.reduce((n, k) => n + (draft.categories?.[k]?.variations?.length || 0), 0),
+            places: (draft.settings?.length || 0) + bucketsByKind.settings.reduce((n, k) => n + (draft.categories?.[k]?.variations?.length || 0), 0),
+            objects: (draft.objects?.length || 0) + bucketsByKind.objects.reduce((n, k) => n + (draft.categories?.[k]?.variations?.length || 0), 0),
+            other: bucketsByKind.other.reduce((n, k) => n + (draft.categories?.[k]?.variations?.length || 0), 0),
+            composites: totalSheets,
+          }}
         />
 
-        {/* Categories */}
-        <section className="bg-port-card border border-port-border rounded p-4 flex flex-col gap-3">
-          <div className="flex items-end justify-between gap-3 flex-wrap">
-            <div>
-              <h2 className="text-sm font-semibold text-white">Prompt categories</h2>
-            </div>
-            <div className="flex items-center gap-2">
+        {activeTab === TAB_BIBLE && (
+          <BibleTab
+            draft={draft}
+            updateDraft={updateDraft}
+            toggleLock={toggleLock}
+            llm={{ providers, providerModels, providerLabel, activeProviderId }}
+            handleExpand={handleExpand}
+            expanding={expanding}
+            saving={saving}
+            refine={{
+              open: refineOpen, setOpen: setRefineOpen,
+              feedback: refineFeedback, setFeedback: setRefineFeedback,
+              run: runRefine, running: refining, reset: resetRefinePanel,
+              rationale: refineRationale, changes: refineChanges,
+            }}
+            totalVariations={totalVariations}
+            categoryKeyCount={categoryKeys.length}
+            totalSheets={totalSheets}
+          />
+        )}
+
+        {TRUNK_TABS.map((trunk) => (
+          activeTab === trunk.id ? (
+            <TrunkView
+              key={trunk.id}
+              trunk={trunk}
+              draft={draft}
+              selectedId={selectedId}
+              buckets={bucketsByKind[trunk.kind] || []}
+              activeBucket={activeBucket}
+              setBucket={setBucket}
+              canRender={canRender}
+              imageCfg={imageCfg}
+              onUniverseChange={handleCanonChange}
+              onRemoveBucket={removeCategory}
+              onUpdateBucket={updateCategory}
+              onGenerateInBucket={handleGenerateInCategory}
+              onBulkRenderBucket={(bucket) => runRender({ promptMode: 'variations', selection: { [bucket]: 'all' } })}
+              onRenderVariation={(bucket, v) => runRender({ promptMode: 'variations', selection: { [bucket]: [v.label] } })}
+              onBulkRenderTrunk={() => {
+                const selection = Object.fromEntries(
+                  (bucketsByKind[trunk.kind] || []).map((b) => [b, 'all']),
+                );
+                const canonSelection = { [trunk.canonKey]: 'all' };
+                runRender({ promptMode: 'all', selection, canonSelection });
+              }}
+              onAddBucket={({ key }) => {
+                setDraft((d) => ({
+                  ...d,
+                  categories: { ...d.categories, [key]: { kind: trunk.kind, variations: [] } },
+                }));
+              }}
+            />
+          ) : null
+        ))}
+
+        {activeTab === TAB_OTHER && hasOtherBuckets && (
+          <OtherTab
+            draft={draft}
+            buckets={bucketsByKind.other}
+            activeBucket={activeBucket}
+            setBucket={setBucket}
+            canRender={canRender}
+            onUpdateBucket={updateCategory}
+            onRemoveBucket={removeCategory}
+            onGenerateInBucket={handleGenerateInCategory}
+            onBulkRenderBucket={(bucket) => runRender({ promptMode: 'variations', selection: { [bucket]: 'all' } })}
+            onRenderVariation={(bucket, v) => runRender({ promptMode: 'variations', selection: { [bucket]: [v.label] } })}
+            onAutoSort={() => {
+              toast('Auto-sort with AI is wired in a follow-up. Re-run "Generate From Idea" — Phase B\'s expand call now classifies buckets into the right trunk.', { icon: 'ℹ️' });
+            }}
+          />
+        )}
+
+        {activeTab === TAB_COMPOSITES && (
+          <>
+            <CompositeSheetsEditor
+              sheets={draft.compositeSheets || []}
+              onChange={updateCompositeSheets}
+              canRender={canRender}
+              onRender={(sheet) => runRender({ promptMode: 'sheets', sheetSelection: [sheet.label] })}
+            />
+            {/* Add-bucket row stays available here for power users who want to
+                introduce a brand-new custom bucket without going through
+                expand. New buckets default to kind='other' so they land under
+                the Other tab. */}
+            <section className="bg-port-card border border-port-border rounded p-3 flex items-center gap-2 flex-wrap">
+              <span className="text-xs text-gray-400 mr-1">Add a custom sub-bucket (lands under Other):</span>
               <input
                 type="text"
                 value={newCategoryName}
@@ -1503,131 +1478,24 @@ export default function UniverseBuilder() {
               >
                 <Plus size={14} /> Add
               </button>
-            </div>
-          </div>
-        </section>
-        <section className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          {categoryKeys.map((cat) => (
-            <CategoryEditor
-              key={cat}
-              category={cat}
-              variations={draft.categories?.[cat]?.variations || []}
-              canRemove={!WORLD_CATEGORIES.includes(cat)}
-              onChange={(next) => updateCategory(cat, next)}
-              onRemove={() => removeCategory(cat)}
-              canRender={canRender}
-              onRenderCategory={() => runRender({ promptMode: 'variations', selection: { [cat]: 'all' } })}
-              onRenderVariation={(v) => runRender({ promptMode: 'variations', selection: { [cat]: [v.label] } })}
-              onGenerate={(count) => handleGenerateInCategory(cat, count)}
-            />
-          ))}
-        </section>
+            </section>
+          </>
+        )}
 
-        {/* Render controls — reuses Image Gen's backend chip + knob grid so
-            the model picker, resolution presets, etc. stay in lockstep. */}
-        <section className="bg-port-card border border-port-border rounded p-4 flex flex-col gap-3">
-          <div className="flex items-center justify-between gap-2 flex-wrap">
-            <h2 className="text-sm font-semibold text-white flex items-center gap-2">
-              <FolderOpen size={16} className="text-port-accent" /> Batch render
-            </h2>
-            {availableBackends.length > 1 && (
-              <BackendChipStrip
-                availableBackends={availableBackends}
-                value={renderOpts.mode || defaultMode}
-                onChange={(id) => setRenderOpts((r) => ({ ...r, mode: id }))}
-                titlePrefix="Render via"
-              />
-            )}
-          </div>
-          {availableBackends.length === 0 && (
-            <p className="text-xs text-port-warning">
-              Configure a local mflux Python path or enable Codex Imagegen in Settings → Image Gen
-              to enable batch render.
-            </p>
-          )}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <div>
-              <label htmlFor="world-render-prompt-mode" className="block text-xs font-medium text-gray-400 mb-1">Prompt set</label>
-              <select
-                id="world-render-prompt-mode"
-                value={renderOpts.promptMode || 'variations'}
-                onChange={(e) => setRenderOpts((r) => ({ ...r, promptMode: e.target.value }))}
-                className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent min-h-[40px]"
-              >
-                <option value="sheets" disabled={totalSheets === 0}>Composite boards ({totalSheets})</option>
-                <option value="variations" disabled={totalVariations === 0}>Atomic variations ({totalVariations})</option>
-                <option value="all" disabled={totalSheets + totalVariations === 0}>Everything ({totalSheets + totalVariations})</option>
-              </select>
-            </div>
-          </div>
-          <ImageGenControls
-            mode={renderOpts.mode || defaultMode || 'local'}
-            models={imageModels}
-            modelId={renderOpts.modelId}
-            onModelChange={(id) => setRenderOpts((r) => ({ ...r, modelId: id, steps: '', guidance: '' }))}
-            width={renderOpts.width}
-            height={renderOpts.height}
-            onResolutionChange={(w, h) => setRenderOpts((r) => ({ ...r, width: w, height: h }))}
-            steps={renderOpts.steps}
-            onStepsChange={(v) => setRenderOpts((r) => ({ ...r, steps: v }))}
-            guidance={renderOpts.guidance}
-            onGuidanceChange={(v) => setRenderOpts((r) => ({ ...r, guidance: v }))}
-            cfgScale={renderOpts.cfgScale}
-            onCfgScaleChange={(v) => setRenderOpts((r) => ({ ...r, cfgScale: v }))}
-            quantize={renderOpts.quantize}
-            onQuantizeChange={(v) => setRenderOpts((r) => ({ ...r, quantize: v }))}
+        {activeTab === TAB_RENDER && (
+          <RenderTab
+            draft={draft}
+            selectedId={selectedId}
+            bucketsByKind={bucketsByKind}
+            renderOpts={renderOpts}
+            setRenderOpts={setRenderOpts}
+            availableBackends={availableBackends}
+            defaultMode={defaultMode}
+            imageModels={imageModels}
+            handleRender={handleRender}
+            rendering={rendering}
+            runs={runs}
           />
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-            <div>
-              <label htmlFor="world-render-batch" className="block text-xs font-medium text-gray-400 mb-1">Renders per prompt</label>
-              <input
-                id="world-render-batch"
-                type="number" min={1} max={20}
-                value={renderOpts.batchPerVariation ?? 1}
-                onChange={(e) => {
-                  const n = Number(e.target.value);
-                  setRenderOpts((r) => ({ ...r, batchPerVariation: Number.isFinite(n) && n > 0 ? n : 1 }));
-                }}
-                className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
-              />
-            </div>
-          </div>
-          <div className="flex items-center gap-2 flex-wrap">
-            <button
-              onClick={handleRender}
-              disabled={rendering || !selectedId || renderTotal === 0 || availableBackends.length === 0}
-              className="px-4 py-2 bg-port-accent hover:bg-port-accent/90 disabled:opacity-50 text-white rounded flex items-center gap-2 min-h-[40px]"
-            >
-              {rendering ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />}
-              Render {renderTotal * (renderOpts.batchPerVariation || 1)} image{renderTotal * (renderOpts.batchPerVariation || 1) === 1 ? '' : 's'}
-            </button>
-          </div>
-          {!selectedId && <p className="text-xs text-gray-500">Save the world first to enable rendering.</p>}
-        </section>
-
-        {/* Run history */}
-        {selectedId && runs.length > 0 && (
-          <section className="bg-port-card border border-port-border rounded p-4">
-            <h2 className="text-sm font-semibold text-white mb-2">Recent runs</h2>
-            <ul className="flex flex-col gap-1">
-              {runs.map((r) => (
-                <li key={r.id} className="flex items-center justify-between text-sm text-gray-300 border-b border-port-border/40 py-1.5">
-                  <span className="truncate">
-                    <span className="text-gray-500">{new Date(r.createdAt).toLocaleString()} —</span>{' '}
-                    {r.promptCount} prompt{r.promptCount === 1 ? '' : 's'}
-                  </span>
-                  {r.collectionId && (
-                    <Link
-                      to={`/media/collections/${r.collectionId}`}
-                      className="text-xs text-port-accent hover:underline whitespace-nowrap"
-                    >
-                      Open collection →
-                    </Link>
-                  )}
-                </li>
-              ))}
-            </ul>
-          </section>
         )}
       </section>
       </div>
@@ -1642,29 +1510,60 @@ function totalVariationCount(world) {
 function renderPromptCount(world, promptMode = 'variations') {
   const variations = totalVariationCount(world);
   const sheets = world.compositeSheets?.length || 0;
+  const canon = (world.characters?.length || 0) + (world.settings?.length || 0) + (world.objects?.length || 0);
   if (promptMode === 'sheets') return sheets;
-  if (promptMode === 'all') return variations + sheets;
+  if (promptMode === 'canon') return canon;
+  if (promptMode === 'all') return variations + sheets + canon;
   return variations;
 }
 
-// Mirrors the server's compilePrompts for selection/sheetSelection so an inline
-// "Render" button can disable itself + show an accurate count without a round trip.
+// Mirrors the server's compilePrompts for selection/sheetSelection/canonSelection
+// so an inline "Render" button can disable itself + show an accurate count
+// without a round trip.
 function scopedPromptCount(world, scope) {
   if (!scope) return 0;
-  if (scope.promptMode === 'sheets') {
-    const sheets = world.compositeSheets || [];
-    if (scope.sheetSelection === 'all' || !scope.sheetSelection) return sheets.length;
-    const set = new Set(scope.sheetSelection);
-    return sheets.filter((s) => set.has(s.label)).length;
-  }
-  // variations
-  if (!scope.selection) return 0;
+  const mode = scope.promptMode || 'variations';
   let n = 0;
-  for (const [cat, pick] of Object.entries(scope.selection)) {
-    const vars = world.categories?.[cat]?.variations || [];
-    if (pick === 'all') { n += vars.length; continue; }
-    const labels = new Set(pick);
-    n += vars.filter((v) => labels.has(v.label)).length;
+  if (mode === 'sheets' || mode === 'all') {
+    const sheets = world.compositeSheets || [];
+    if (scope.sheetSelection === 'all') n += sheets.length;
+    else if (Array.isArray(scope.sheetSelection)) {
+      const set = new Set(scope.sheetSelection.map((s) => s.toLowerCase()));
+      n += sheets.filter((s) => set.has((s.label || '').toLowerCase())).length;
+    } else if (mode === 'sheets') {
+      // promptMode=sheets with no selection = render every sheet
+      n += sheets.length;
+    }
+  }
+  if (mode === 'variations' || mode === 'all') {
+    if (scope.selection) {
+      for (const [cat, pick] of Object.entries(scope.selection)) {
+        const vars = world.categories?.[cat]?.variations || [];
+        if (pick === 'all') n += vars.length;
+        else if (Array.isArray(pick)) {
+          const labels = new Set(pick.map((p) => p.toLowerCase()));
+          n += vars.filter((v) => labels.has((v.label || '').toLowerCase())).length;
+        }
+      }
+    }
+  }
+  if (mode === 'canon' || mode === 'all') {
+    if (scope.canonSelection) {
+      for (const trunk of ['characters', 'settings', 'objects']) {
+        const pick = scope.canonSelection[trunk];
+        if (!pick) continue;
+        const entries = Array.isArray(world[trunk]) ? world[trunk] : [];
+        if (pick === 'all') n += entries.length;
+        else if (Array.isArray(pick)) {
+          const needles = new Set(pick.map((p) => p.toLowerCase()));
+          n += entries.filter((e) => {
+            const name = (e.name || '').toLowerCase();
+            const slug = (e.slugline || '').toLowerCase();
+            return needles.has(name) || needles.has(slug);
+          }).length;
+        }
+      }
+    }
   }
   return n;
 }
@@ -2145,5 +2044,753 @@ function CategoryEditor({
         </ul>
       )}
     </div>
+  );
+}
+
+// Tab nav — desktop shows a horizontal pill row; mobile collapses to a
+// <select> dropdown (CLAUDE.md "Mobile responsive"). The Other tab only
+// renders when at least one un-kinded bucket exists, per Phase C spec.
+function TabNav({ activeTab, setTab, hasOtherBuckets, counts }) {
+  const tabs = [
+    { id: TAB_BIBLE, label: 'Bible', icon: BookOpen, count: null },
+    { id: TAB_CAST, label: 'Cast', icon: Users, count: counts.cast },
+    { id: TAB_PLACES, label: 'Places', icon: MapPin, count: counts.places },
+    { id: TAB_OBJECTS, label: 'Objects', icon: Package, count: counts.objects },
+    ...(hasOtherBuckets ? [{ id: TAB_OTHER, label: 'Other', icon: FolderTree, count: counts.other }] : []),
+    { id: TAB_COMPOSITES, label: 'Composites', icon: Layers, count: counts.composites },
+    { id: TAB_RENDER, label: 'Render', icon: ImagePlus, count: null },
+  ];
+  return (
+    <>
+      {/* Mobile dropdown */}
+      <div className="sm:hidden">
+        <label htmlFor="ub-tab-select" className="sr-only">Section</label>
+        <select
+          id="ub-tab-select"
+          value={activeTab}
+          onChange={(e) => setTab(e.target.value)}
+          className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-port-accent min-h-[40px]"
+        >
+          {tabs.map((t) => (
+            <option key={t.id} value={t.id}>
+              {t.label}{t.count != null ? ` (${t.count})` : ''}
+            </option>
+          ))}
+        </select>
+      </div>
+      {/* Desktop pill row */}
+      <div className="hidden sm:flex items-center gap-1 bg-port-card border border-port-border rounded p-1 overflow-x-auto" role="tablist">
+        {tabs.map((t) => {
+          const Icon = t.icon;
+          const active = t.id === activeTab;
+          return (
+            <button
+              key={t.id}
+              type="button"
+              role="tab"
+              aria-selected={active}
+              onClick={() => setTab(t.id)}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-sm transition-colors whitespace-nowrap ${
+                active
+                  ? 'bg-port-accent/20 text-port-accent border border-port-accent/40'
+                  : 'text-gray-300 hover:bg-port-bg border border-transparent'
+              }`}
+            >
+              <Icon size={14} />
+              {t.label}
+              {t.count != null && (
+                <span className={`text-[10px] ${active ? 'text-port-accent/70' : 'text-gray-500'}`}>
+                  {t.count}
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+    </>
+  );
+}
+
+function BibleTab({
+  draft, updateDraft, toggleLock,
+  llm,
+  handleExpand, expanding, saving,
+  refine,
+  totalVariations, categoryKeyCount, totalSheets,
+}) {
+  const { providers, providerModels, providerLabel, activeProviderId } = llm;
+  const {
+    open: refineOpen, setOpen: setRefineOpen,
+    feedback: refineFeedback, setFeedback: setRefineFeedback,
+    run: runRefine, running: refining, reset: resetRefinePanel,
+    rationale: refineRationale, changes: refineChanges,
+  } = refine;
+  return (
+    <>
+      <section className="bg-port-card border border-port-border rounded p-4 flex flex-col gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-[1fr_220px] gap-3">
+          <div>
+            <FieldLabel field="starterPrompt" locked={draft.locked} onToggleLock={toggleLock}>
+              Starter idea
+            </FieldLabel>
+            <textarea
+              value={draft.starterPrompt}
+              onChange={(e) => updateDraft({ starterPrompt: e.target.value })}
+              placeholder="moebius and scavengers reign meets Prophet inspired sci fi universe"
+              className="w-full bg-port-bg border border-port-border rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-port-accent"
+              rows={2}
+              maxLength={4000}
+            />
+          </div>
+          <div>
+            <label htmlFor="world-llm-provider" className="text-xs text-gray-400 mb-1 block">LLM for expansion</label>
+            <select
+              id="world-llm-provider"
+              value={draft.llm?.provider ?? ''}
+              onChange={(e) => updateDraft({ llm: { ...draft.llm, provider: e.target.value || null, model: null } })}
+              className="w-full bg-port-bg border border-port-border rounded px-2 py-2 text-white text-sm min-h-[40px]"
+            >
+              <option value="">Active provider ({providerLabel(activeProviderId)})</option>
+              {providers.map((p) => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
+            <select
+              value={draft.llm?.model || ''}
+              onChange={(e) => updateDraft({ llm: { ...draft.llm, model: e.target.value || null } })}
+              className="mt-1 w-full bg-port-bg border border-port-border rounded px-2 py-2 text-white text-sm min-h-[40px]"
+            >
+              <option value="">Default model</option>
+              {providerModels.map((m) => {
+                const id = typeof m === 'string' ? m : m.id;
+                const label = typeof m === 'string' ? m : (m.name || m.id);
+                return <option key={id} value={id}>{label}</option>;
+              })}
+            </select>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            onClick={handleExpand}
+            disabled={expanding || saving || !draft.starterPrompt?.trim()}
+            className="px-3 py-2 bg-purple-600/30 hover:bg-purple-600/50 disabled:opacity-50 text-purple-200 border border-purple-600/40 rounded flex items-center gap-2 min-h-[40px]"
+          >
+            {expanding ? <Loader2 size={16} className="animate-spin" /> : <Wand2 size={16} />}
+            Generate From Idea
+          </button>
+          <button
+            onClick={() => setRefineOpen((v) => !v)}
+            disabled={!draft.starterPrompt?.trim()}
+            aria-expanded={refineOpen}
+            className={`px-3 py-2 disabled:opacity-50 text-port-accent border border-port-accent/40 rounded flex items-center gap-2 min-h-[40px] ${
+              refineOpen ? 'bg-port-accent/25' : 'bg-port-accent/15 hover:bg-port-accent/25'
+            }`}
+            title="Give feedback to refine the prompts in place — uses the LLM picked above"
+          >
+            <MessageSquarePlus size={16} />
+            Refine prompts
+          </button>
+          <span className="text-xs text-gray-500">
+            {totalVariations} variation{totalVariations === 1 ? '' : 's'} across {categoryKeyCount} categories · {totalSheets} composite board{totalSheets === 1 ? '' : 's'}
+          </span>
+        </div>
+
+        {refineOpen && (
+          <div className="border border-port-accent/40 bg-port-accent/5 rounded p-3 flex flex-col gap-2">
+            <label htmlFor="world-refine-feedback" className="text-[11px] uppercase tracking-wide text-gray-500">
+              Feedback — describe what you want changed
+            </label>
+            <textarea
+              id="world-refine-feedback"
+              value={refineFeedback}
+              onChange={(e) => setRefineFeedback(e.target.value)}
+              placeholder="e.g. lean grimmer and more spiritual; pull style toward Moebius + Tarkovsky; avoid neon and cyberpunk clichés."
+              rows={3}
+              disabled={refining}
+              className="w-full bg-port-bg border border-port-border rounded p-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-port-accent resize-y disabled:opacity-60"
+            />
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                type="button"
+                onClick={runRefine}
+                disabled={refining || !refineFeedback.trim() || !draft.starterPrompt?.trim()}
+                className="px-3 py-2 bg-port-accent hover:bg-port-accent/90 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded flex items-center gap-2 min-h-[40px]"
+              >
+                {refining ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} />}
+                {refining ? 'Refining…' : 'Refine'}
+              </button>
+              <button
+                type="button"
+                onClick={resetRefinePanel}
+                disabled={refining}
+                className="px-3 py-2 text-sm text-gray-400 hover:text-white rounded min-h-[40px]"
+              >
+                Close
+              </button>
+              <span className="text-[11px] text-gray-500">
+                Applies in place — locked fields stay pinned.
+              </span>
+            </div>
+            {(refineRationale || refineChanges.length > 0) && (
+              <div className="border-t border-port-border/60 pt-2 mt-1 space-y-1.5">
+                {refineRationale && (
+                  <p className="text-xs text-gray-300 whitespace-pre-wrap">{refineRationale}</p>
+                )}
+                {refineChanges.length > 0 && (
+                  <ul className="text-[11px] text-gray-400 list-disc pl-5 space-y-0.5">
+                    {refineChanges.map((c, idx) => (
+                      <li key={idx}>{c}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </section>
+
+      <section className="bg-port-card border border-port-border rounded p-4 flex flex-col gap-3">
+        <div>
+          <h2 className="text-sm font-semibold text-white">Story bible</h2>
+          <p className="text-xs text-gray-500 mt-0.5">
+            Pulled into the Pipeline → New Series form when this world is selected.
+          </p>
+        </div>
+        <div>
+          <FieldLabel htmlFor="world-logline" field="logline" locked={draft.locked} onToggleLock={toggleLock}>
+            Logline
+          </FieldLabel>
+          <input
+            id="world-logline"
+            type="text"
+            value={draft.logline || ''}
+            onChange={(e) => updateDraft({ logline: e.target.value })}
+            placeholder="One-sentence hook — A foundry city goes silent, and the only survivor is a child."
+            className="w-full bg-port-bg border border-port-border rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-port-accent"
+            maxLength={WORLD_LOGLINE_MAX}
+          />
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div>
+            <FieldLabel htmlFor="world-premise" field="premise" locked={draft.locked} onToggleLock={toggleLock}>
+              Premise
+            </FieldLabel>
+            <textarea
+              id="world-premise"
+              value={draft.premise || ''}
+              onChange={(e) => updateDraft({ premise: e.target.value })}
+              placeholder="Elevator pitch — 1-3 short paragraphs about the setting, central conflict, stakes, and tone."
+              className="w-full bg-port-bg border border-port-border rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-port-accent"
+              rows={6}
+              maxLength={WORLD_PREMISE_MAX}
+            />
+          </div>
+          <div>
+            <FieldLabel htmlFor="world-style-notes" field="styleNotes" locked={draft.locked} onToggleLock={toggleLock}>
+              Style notes
+            </FieldLabel>
+            <textarea
+              id="world-style-notes"
+              value={draft.styleNotes || ''}
+              onChange={(e) => updateDraft({ styleNotes: e.target.value })}
+              placeholder="Narrative style: references (artists / films / comics), mood, palette, pacing, voice. Prose, not tokens."
+              className="w-full bg-port-bg border border-port-border rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-port-accent"
+              rows={6}
+              maxLength={WORLD_STYLE_NOTES_MAX}
+            />
+          </div>
+        </div>
+        <StyleNegativePromptEditor
+          influences={draft.influences}
+          onChange={(next) => updateDraft({ influences: next })}
+          locked={draft.locked}
+          onToggleLock={toggleLock}
+        />
+      </section>
+    </>
+  );
+}
+
+// Sub-bucket chip strip used by TrunkView + OtherTab. The "All" chip is a
+// pseudo-bucket that clears `?bucket=`. Each real bucket key gets its own
+// chip; clicking toggles it on/off (toggle-off returns to All). Designed so
+// it works one-handed on mobile (38px tap targets, wraps to multiple lines).
+function BucketChipStrip({ buckets, activeBucket, setBucket, showAll = true, extraChips = [] }) {
+  if (buckets.length === 0 && extraChips.length === 0) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      {showAll && (
+        <button
+          type="button"
+          onClick={() => setBucket('')}
+          className={`px-2.5 py-1.5 rounded-full text-xs min-h-[32px] transition-colors ${
+            !activeBucket
+              ? 'bg-port-accent/25 text-port-accent border border-port-accent/40'
+              : 'bg-port-bg text-gray-300 border border-port-border hover:border-gray-500'
+          }`}
+        >
+          All
+        </button>
+      )}
+      {extraChips.map((chip) => (
+        <button
+          key={chip.key}
+          type="button"
+          onClick={() => setBucket(chip.key)}
+          className={`px-2.5 py-1.5 rounded-full text-xs min-h-[32px] transition-colors ${
+            activeBucket === chip.key
+              ? 'bg-port-accent/25 text-port-accent border border-port-accent/40'
+              : 'bg-port-bg text-gray-300 border border-port-border hover:border-gray-500'
+          }`}
+        >
+          {chip.label}
+        </button>
+      ))}
+      {buckets.map((bucket) => {
+        const active = activeBucket === bucket;
+        return (
+          <button
+            key={bucket}
+            type="button"
+            onClick={() => setBucket(active ? '' : bucket)}
+            className={`px-2.5 py-1.5 rounded-full text-xs min-h-[32px] transition-colors ${
+              active
+                ? 'bg-port-accent/25 text-port-accent border border-port-accent/40'
+                : 'bg-port-bg text-gray-300 border border-port-border hover:border-gray-500'
+            }`}
+          >
+            {humanizeCategory(bucket)}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// Per-trunk view. Three modes driven by `?bucket=`:
+//   - blank (default "All"): renders canon + every variation under this trunk
+//   - BUCKET_CANON: renders only canon entries (via the existing UniverseCanonSection)
+//   - <bucketKey>: renders that bucket's variations via CategoryEditor
+function TrunkView({
+  trunk, draft, selectedId, buckets, activeBucket, setBucket,
+  canRender, imageCfg, onUniverseChange,
+  onRemoveBucket, onUpdateBucket, onGenerateInBucket,
+  onBulkRenderBucket, onRenderVariation, onBulkRenderTrunk,
+  onAddBucket,
+}) {
+  const canonList = Array.isArray(draft[trunk.canonKey]) ? draft[trunk.canonKey] : [];
+  const totalUnderTrunk =
+    canonList.length
+    + buckets.reduce((n, k) => n + (draft.categories?.[k]?.variations?.length || 0), 0);
+  const [addingBucket, setAddingBucket] = useState(false);
+  const [newBucketName, setNewBucketName] = useState('');
+
+  const handleAddBucket = () => {
+    const key = normalizeCategoryKey(newBucketName);
+    if (!key) {
+      toast.error('Use letters or numbers for the bucket name');
+      return;
+    }
+    if (draft.categories?.[key]) {
+      toast.error('A bucket with that name already exists');
+      return;
+    }
+    onAddBucket({ key });
+    setNewBucketName('');
+    setAddingBucket(false);
+    setBucket(key);
+  };
+
+  return (
+    <>
+      <section className="bg-port-card border border-port-border rounded p-3 flex flex-col gap-2">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <BucketChipStrip
+            buckets={buckets}
+            activeBucket={activeBucket}
+            setBucket={setBucket}
+            extraChips={canonList.length > 0 ? [{ key: BUCKET_CANON, label: `Canon (${canonList.length})` }] : []}
+          />
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <button
+              type="button"
+              onClick={() => setAddingBucket((v) => !v)}
+              className="text-xs px-2 py-1.5 bg-port-bg hover:bg-port-border text-gray-300 border border-port-border rounded flex items-center gap-1 min-h-[32px]"
+              title={`Add a sub-bucket under ${trunk.label}`}
+            >
+              <Plus size={12} /> Bucket
+            </button>
+            <button
+              type="button"
+              onClick={onBulkRenderTrunk}
+              disabled={!canRender || totalUnderTrunk === 0}
+              className="text-xs px-2 py-1.5 bg-port-accent/15 hover:bg-port-accent/25 disabled:opacity-30 disabled:cursor-not-allowed text-port-accent rounded flex items-center gap-1 min-h-[32px]"
+              title={totalUnderTrunk === 0 ? `No ${trunk.label.toLowerCase()} to render yet` : `Bulk-render all ${trunk.label.toLowerCase()} — ${totalUnderTrunk} prompt${totalUnderTrunk === 1 ? '' : 's'}`}
+            >
+              <Sparkles size={12} /> Bulk-render all ({totalUnderTrunk})
+            </button>
+          </div>
+        </div>
+        {addingBucket && (
+          <div className="flex items-center gap-2 flex-wrap pt-1">
+            <input
+              type="text"
+              value={newBucketName}
+              onChange={(e) => setNewBucketName(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') handleAddBucket(); }}
+              placeholder={trunk.kind === 'characters' ? 'heroes, villains, factions' : trunk.kind === 'settings' ? 'colonies, ruins' : 'weapons, vehicles'}
+              className="flex-1 min-w-[160px] bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-sm focus:outline-none focus:border-port-accent"
+              maxLength={WORLD_CATEGORY_KEY_MAX}
+              autoFocus
+            />
+            <button
+              onClick={handleAddBucket}
+              disabled={!newBucketName.trim()}
+              className="text-xs px-2 py-1.5 bg-port-accent hover:bg-port-accent/90 disabled:opacity-50 text-white rounded min-h-[32px]"
+            >
+              Add
+            </button>
+            <button
+              onClick={() => { setAddingBucket(false); setNewBucketName(''); }}
+              className="text-xs px-2 py-1.5 bg-port-bg hover:bg-port-border text-gray-300 rounded min-h-[32px]"
+            >
+              Cancel
+            </button>
+          </div>
+        )}
+      </section>
+
+      {/* Canon visibility: "All" (no bucket selected) or the canon pseudo-bucket.
+          Gated on `draft.id === selectedId` to avoid the universe-switch race
+          documented on UniverseCanonSection itself. */}
+      {(!activeBucket || activeBucket === BUCKET_CANON) && selectedId && draft.id === selectedId ? (
+        <UniverseCanonSection
+          universe={draft}
+          universeId={selectedId}
+          onUniverseChange={onUniverseChange}
+          imageCfg={imageCfg}
+          kindFilter={trunk.kind}
+        />
+      ) : null}
+
+      {activeBucket !== BUCKET_CANON && (
+        <>
+          {(activeBucket ? [activeBucket] : buckets).length === 0 ? (
+            <section className="bg-port-card border border-port-border rounded p-6 text-center text-sm text-gray-500">
+              No {trunk.label.toLowerCase()} sub-buckets yet.{' '}
+              <button
+                type="button"
+                onClick={() => setAddingBucket(true)}
+                className="text-port-accent hover:underline"
+              >
+                Add one
+              </button>
+              {' '}or click <em>Generate From Idea</em> on the Bible tab to seed them.
+            </section>
+          ) : (
+            <section className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {(activeBucket ? [activeBucket] : buckets).map((cat) => (
+                <CategoryEditor
+                  key={cat}
+                  category={cat}
+                  variations={draft.categories?.[cat]?.variations || []}
+                  canRemove={!WORLD_CATEGORIES.includes(cat)}
+                  onChange={(next) => onUpdateBucket(cat, next)}
+                  onRemove={() => onRemoveBucket(cat)}
+                  canRender={canRender}
+                  onRenderCategory={() => onBulkRenderBucket(cat)}
+                  onRenderVariation={(v) => onRenderVariation(cat, v)}
+                  onGenerate={(count) => onGenerateInBucket(cat, count)}
+                />
+              ))}
+            </section>
+          )}
+        </>
+      )}
+    </>
+  );
+}
+
+// Other tab — un-kinded buckets that haven't been sorted into a trunk yet.
+// Same card grid as TrunkView but no canon plumbing, plus an "Auto-sort"
+// action that (eventually) LLM-classifies each bucket into the right trunk.
+function OtherTab({
+  draft, buckets, activeBucket, setBucket, canRender,
+  onUpdateBucket, onRemoveBucket, onGenerateInBucket,
+  onBulkRenderBucket, onRenderVariation, onAutoSort,
+}) {
+  return (
+    <>
+      <section className="bg-port-card border border-port-border rounded p-3 flex flex-col gap-2">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <BucketChipStrip
+            buckets={buckets}
+            activeBucket={activeBucket}
+            setBucket={setBucket}
+          />
+          <button
+            type="button"
+            onClick={onAutoSort}
+            disabled
+            className="text-xs px-2 py-1.5 bg-port-accent/15 disabled:opacity-50 text-port-accent rounded flex items-center gap-1 min-h-[32px]"
+            title="Auto-sort with AI — coming soon"
+          >
+            <Wand2 size={12} /> Auto-sort with AI
+          </button>
+        </div>
+        <p className="text-[11px] text-gray-500">
+          These buckets aren't tagged as Cast / Places / Objects yet — they were
+          either added manually or imported from a pre-Phase-A universe. Auto-sort
+          will classify each bucket into the right trunk with a meaningful name.
+        </p>
+      </section>
+
+      <section className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        {(activeBucket ? [activeBucket] : buckets).map((cat) => (
+          <CategoryEditor
+            key={cat}
+            category={cat}
+            variations={draft.categories?.[cat]?.variations || []}
+            canRemove={!WORLD_CATEGORIES.includes(cat)}
+            onChange={(next) => onUpdateBucket(cat, next)}
+            onRemove={() => onRemoveBucket(cat)}
+            canRender={canRender}
+            onRenderCategory={() => onBulkRenderBucket(cat)}
+            onRenderVariation={(v) => onRenderVariation(cat, v)}
+            onGenerate={(count) => onGenerateInBucket(cat, count)}
+          />
+        ))}
+      </section>
+    </>
+  );
+}
+
+function RenderTab({
+  draft, selectedId, bucketsByKind, renderOpts, setRenderOpts,
+  availableBackends, defaultMode, imageModels, handleRender, rendering, runs,
+}) {
+  const totalSheets = draft.compositeSheets?.length || 0;
+  const totalVariations = totalVariationCount(draft);
+  const totalCanon =
+    (draft.characters?.length || 0)
+    + (draft.settings?.length || 0)
+    + (draft.objects?.length || 0);
+  const renderTotal = renderPromptCount(draft, renderOpts.promptMode || 'variations');
+
+  return (
+    <>
+      <section className="bg-port-card border border-port-border rounded p-4 flex flex-col gap-3">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <h2 className="text-sm font-semibold text-white flex items-center gap-2">
+            <FolderOpen size={16} className="text-port-accent" /> Batch render
+          </h2>
+          {availableBackends.length > 1 && (
+            <BackendChipStrip
+              availableBackends={availableBackends}
+              value={renderOpts.mode || defaultMode}
+              onChange={(id) => setRenderOpts((r) => ({ ...r, mode: id }))}
+              titlePrefix="Render via"
+            />
+          )}
+        </div>
+        {availableBackends.length === 0 && (
+          <p className="text-xs text-port-warning">
+            Configure a local mflux Python path or enable Codex Imagegen in Settings → Image Gen
+            to enable batch render.
+          </p>
+        )}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div>
+            <label htmlFor="world-render-prompt-mode" className="block text-xs font-medium text-gray-400 mb-1">Prompt set</label>
+            <select
+              id="world-render-prompt-mode"
+              value={renderOpts.promptMode || 'variations'}
+              onChange={(e) => setRenderOpts((r) => ({ ...r, promptMode: e.target.value }))}
+              className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent min-h-[40px]"
+            >
+              <option value="variations" disabled={totalVariations === 0}>Atomic variations ({totalVariations})</option>
+              <option value="sheets" disabled={totalSheets === 0}>Composite boards ({totalSheets})</option>
+              <option value="canon" disabled={totalCanon === 0}>All canon ({totalCanon})</option>
+              <option value="all" disabled={totalSheets + totalVariations + totalCanon === 0}>
+                Everything ({totalSheets + totalVariations + totalCanon})
+              </option>
+            </select>
+          </div>
+        </div>
+        <ImageGenControls
+          mode={renderOpts.mode || defaultMode || 'local'}
+          models={imageModels}
+          modelId={renderOpts.modelId}
+          onModelChange={(id) => setRenderOpts((r) => ({ ...r, modelId: id, steps: '', guidance: '' }))}
+          width={renderOpts.width}
+          height={renderOpts.height}
+          onResolutionChange={(w, h) => setRenderOpts((r) => ({ ...r, width: w, height: h }))}
+          steps={renderOpts.steps}
+          onStepsChange={(v) => setRenderOpts((r) => ({ ...r, steps: v }))}
+          guidance={renderOpts.guidance}
+          onGuidanceChange={(v) => setRenderOpts((r) => ({ ...r, guidance: v }))}
+          cfgScale={renderOpts.cfgScale}
+          onCfgScaleChange={(v) => setRenderOpts((r) => ({ ...r, cfgScale: v }))}
+          quantize={renderOpts.quantize}
+          onQuantizeChange={(v) => setRenderOpts((r) => ({ ...r, quantize: v }))}
+        />
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+          <div>
+            <label htmlFor="world-render-batch" className="block text-xs font-medium text-gray-400 mb-1">Renders per prompt</label>
+            <input
+              id="world-render-batch"
+              type="number" min={1} max={20}
+              value={renderOpts.batchPerVariation ?? 1}
+              onChange={(e) => {
+                const n = Number(e.target.value);
+                setRenderOpts((r) => ({ ...r, batchPerVariation: Number.isFinite(n) && n > 0 ? n : 1 }));
+              }}
+              className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
+            />
+          </div>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <button
+            onClick={() => handleRender()}
+            disabled={rendering || !selectedId || renderTotal === 0 || availableBackends.length === 0}
+            className="px-4 py-2 bg-port-accent hover:bg-port-accent/90 disabled:opacity-50 text-white rounded flex items-center gap-2 min-h-[40px]"
+          >
+            {rendering ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />}
+            Render {renderTotal * (renderOpts.batchPerVariation || 1)} image{renderTotal * (renderOpts.batchPerVariation || 1) === 1 ? '' : 's'}
+          </button>
+        </div>
+        {!selectedId && <p className="text-xs text-gray-500">Save the world first to enable rendering.</p>}
+      </section>
+
+      <section className="bg-port-card border border-port-border rounded p-4 flex flex-col gap-3">
+        <h3 className="text-sm font-semibold text-white">Render targets</h3>
+        <p className="text-[11px] text-gray-500 -mt-1">
+          Click a target to queue that scope immediately with the knobs above.
+        </p>
+        <div className="flex flex-col gap-2">
+          {TRUNK_TABS.map((trunk) => {
+            const buckets = bucketsByKind[trunk.kind] || [];
+            const canonCount = (draft[trunk.canonKey] || []).length;
+            const variationCount = buckets.reduce((n, k) => n + (draft.categories?.[k]?.variations?.length || 0), 0);
+            const total = canonCount + variationCount;
+            if (total === 0) return null;
+            const Icon = trunk.icon;
+            return (
+              <div key={trunk.id} className="border border-port-border rounded p-2 bg-port-bg flex flex-col gap-1.5">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <div className="flex items-center gap-2 text-sm text-gray-200">
+                    <Icon size={14} className="text-port-accent" />
+                    <span className="font-medium">{trunk.label}</span>
+                    <span className="text-[11px] text-gray-500">
+                      {canonCount} canon · {variationCount} variation{variationCount === 1 ? '' : 's'}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleRender({
+                      promptMode: 'all',
+                      selection: Object.fromEntries(buckets.map((b) => [b, 'all'])),
+                      canonSelection: canonCount > 0 ? { [trunk.canonKey]: 'all' } : undefined,
+                    })}
+                    disabled={!selectedId || availableBackends.length === 0 || rendering}
+                    className="text-xs px-2 py-1 bg-port-accent/15 hover:bg-port-accent/25 disabled:opacity-30 disabled:cursor-not-allowed text-port-accent rounded min-h-[32px]"
+                    title={`Render every ${trunk.label.toLowerCase()} canon entry AND every variation under this trunk`}
+                  >
+                    Bulk-render all ({total})
+                  </button>
+                </div>
+                {buckets.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-1 pl-5">
+                    {buckets.map((bucket) => {
+                      const count = draft.categories?.[bucket]?.variations?.length || 0;
+                      return (
+                        <button
+                          key={bucket}
+                          type="button"
+                          onClick={() => handleRender({ promptMode: 'variations', selection: { [bucket]: 'all' } })}
+                          disabled={count === 0 || !selectedId || availableBackends.length === 0 || rendering}
+                          className="text-[11px] px-1.5 py-0.5 bg-port-card border border-port-border hover:border-port-accent disabled:opacity-30 disabled:cursor-not-allowed text-gray-300 rounded"
+                          title={count === 0 ? 'No variations yet' : `Bulk-render ${humanizeCategory(bucket)} (${count})`}
+                        >
+                          {humanizeCategory(bucket)} ({count})
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+          {(draft.characters?.length || draft.settings?.length || draft.objects?.length) ? (
+            <div className="border border-port-border rounded p-2 bg-port-bg flex items-center justify-between gap-2">
+              <span className="text-sm text-gray-200 flex items-center gap-2">
+                <Sparkles size={14} className="text-port-accent" />
+                All canon
+                <span className="text-[11px] text-gray-500">
+                  {(draft.characters?.length || 0) + (draft.settings?.length || 0) + (draft.objects?.length || 0)} entries
+                </span>
+              </span>
+              <button
+                type="button"
+                onClick={() => handleRender({
+                  promptMode: 'canon',
+                  canonSelection: {
+                    characters: 'all',
+                    settings: 'all',
+                    objects: 'all',
+                  },
+                })}
+                disabled={!selectedId || availableBackends.length === 0 || rendering}
+                className="text-xs px-2 py-1 bg-port-accent/15 hover:bg-port-accent/25 disabled:opacity-30 disabled:cursor-not-allowed text-port-accent rounded min-h-[32px]"
+              >
+                Bulk-render all canon
+              </button>
+            </div>
+          ) : null}
+          {totalSheets > 0 && (
+            <div className="border border-port-border rounded p-2 bg-port-bg flex items-center justify-between gap-2">
+              <span className="text-sm text-gray-200 flex items-center gap-2">
+                <Layers size={14} className="text-port-accent" />
+                Composite boards
+                <span className="text-[11px] text-gray-500">{totalSheets} board{totalSheets === 1 ? '' : 's'}</span>
+              </span>
+              <button
+                type="button"
+                onClick={() => handleRender({ promptMode: 'sheets', sheetSelection: 'all' })}
+                disabled={!selectedId || availableBackends.length === 0 || rendering}
+                className="text-xs px-2 py-1 bg-port-accent/15 hover:bg-port-accent/25 disabled:opacity-30 disabled:cursor-not-allowed text-port-accent rounded min-h-[32px]"
+              >
+                Bulk-render composites
+              </button>
+            </div>
+          )}
+        </div>
+      </section>
+
+      {selectedId && runs.length > 0 && (
+        <section className="bg-port-card border border-port-border rounded p-4">
+          <h2 className="text-sm font-semibold text-white mb-2">Recent runs</h2>
+          <ul className="flex flex-col gap-1">
+            {runs.map((r) => (
+              <li key={r.id} className="flex items-center justify-between text-sm text-gray-300 border-b border-port-border/40 py-1.5">
+                <span className="truncate">
+                  <span className="text-gray-500">{new Date(r.createdAt).toLocaleString()} —</span>{' '}
+                  {r.promptCount} prompt{r.promptCount === 1 ? '' : 's'}
+                </span>
+                {r.collectionId && (
+                  <Link
+                    to={`/media/collections/${r.collectionId}`}
+                    className="text-xs text-port-accent hover:underline whitespace-nowrap"
+                  >
+                    Open collection →
+                  </Link>
+                )}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+    </>
   );
 }

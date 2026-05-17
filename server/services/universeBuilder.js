@@ -874,21 +874,68 @@ export function joinInfluenceList(structured = []) {
   return structured.filter((t) => typeof t === 'string' && t.trim()).join(', ');
 }
 
+// Order matches the Universe Builder tab order (Cast → Places → Objects) so
+// the compiled-prompts list is stable across renders.
+const CANON_TRUNKS = Object.freeze([
+  { key: 'characters', category: 'canon:characters' },
+  { key: 'settings',   category: 'canon:settings' },
+  { key: 'objects',    category: 'canon:objects' },
+]);
+
+// Synthesize a render prompt from a canon entry. `entry.prompt` wins when the
+// user has hand-authored one; otherwise stitch together the descriptive fields
+// that exist for this kind (per-kind contract in `BIBLE_FIELD_WHITELIST`):
+//   - characters: physicalDescription, role
+//   - settings:   description, palette, era, weather, recurringDetails
+//   - objects:    description, significance
+// The output is fed back through `composeStyledPrompt(...)` so the universe's
+// embrace tokens still prefix every canon render.
+export function synthesizeCanonPrompt(kind, entry) {
+  if (!entry) return '';
+  if (typeof entry.prompt === 'string' && entry.prompt.trim()) return entry.prompt.trim();
+  const name = typeof entry.name === 'string' ? entry.name.trim() : '';
+  const parts = [];
+  if (kind === 'characters') {
+    if (entry.physicalDescription) parts.push(entry.physicalDescription);
+    if (entry.role) parts.push(entry.role);
+  } else if (kind === 'settings') {
+    if (entry.description) parts.push(entry.description);
+    if (entry.palette) parts.push(`palette: ${entry.palette}`);
+    if (entry.era) parts.push(`era: ${entry.era}`);
+    if (entry.weather) parts.push(`weather: ${entry.weather}`);
+    if (entry.recurringDetails) parts.push(entry.recurringDetails);
+  } else if (kind === 'objects') {
+    if (entry.description) parts.push(entry.description);
+    if (entry.significance) parts.push(`significance: ${entry.significance}`);
+  }
+  const body = parts.map((p) => String(p).trim()).filter(Boolean).join('. ');
+  if (name && body) return `${name} — ${body}`;
+  return name || body;
+}
+
 /**
  * Compile the universe template into an ordered list of full image-gen
  * prompts. Each entry combines the universe's style prompt with one
- * variation from a chosen category.
+ * variation from a chosen category, one composite sheet, or one canon entry.
+ *
+ *   promptMode: 'variations' | 'sheets' | 'canon' | 'all'
  *
  *   selection: { landscapes: 'all' | string[], characters: ... }
  *     - 'all' → use every variation
  *     - array of labels → only those labels (case-insensitive match)
  *     - missing key → skip the category entirely
  *
+ *   canonSelection: { characters?: 'all' | string[], settings?: ..., objects?: ... }
+ *     - 'all' → render every entry in that canon trunk
+ *     - array of names → only those names (case-insensitive match against
+ *       `name` and, for settings, `slugline`)
+ *     - missing key → skip the trunk entirely
+ *
  *   batchPerVariation: how many renders per variation (1..20)
  */
 export function compilePrompts(universe, options = {}) {
   if (!universe) return [];
-  const promptMode = ['variations', 'sheets', 'all'].includes(options.promptMode)
+  const promptMode = ['variations', 'sheets', 'canon', 'all'].includes(options.promptMode)
     ? options.promptMode
     : 'variations';
   const selection = options.selection && typeof options.selection === 'object'
@@ -949,6 +996,44 @@ export function compilePrompts(universe, options = {}) {
           negativePrompt,
           batchIndex: i,
         });
+      }
+    }
+  }
+
+  if (promptMode === 'canon' || promptMode === 'all') {
+    const canonSelection = options.canonSelection && typeof options.canonSelection === 'object'
+      ? options.canonSelection
+      : null;
+    if (canonSelection) {
+      for (const trunk of CANON_TRUNKS) {
+        const sel = canonSelection[trunk.key];
+        if (!sel) continue;
+        const entries = Array.isArray(universe[trunk.key]) ? universe[trunk.key] : [];
+        const filtered = sel === 'all'
+          ? entries
+          : entries.filter((e) => Array.isArray(sel) && sel.some((s) => {
+              const needle = s.toLowerCase();
+              if (typeof e.name === 'string' && e.name.toLowerCase() === needle) return true;
+              if (typeof e.slugline === 'string' && e.slugline.toLowerCase() === needle) return true;
+              return false;
+            }));
+        for (const entry of filtered) {
+          const seed = synthesizeCanonPrompt(trunk.key, entry);
+          // An entry with no name and no descriptive content yields nothing —
+          // skip rather than enqueue a style-prompt-only render that would
+          // produce a generic image with no identity anchor.
+          if (!seed) continue;
+          const { prompt, negativePrompt } = composeStyledPrompt(seed, '', stylePreset);
+          for (let i = 0; i < batchPerVariation; i += 1) {
+            compiled.push({
+              category: trunk.category,
+              label: entry.name || entry.slugline || trunk.key,
+              prompt,
+              negativePrompt,
+              batchIndex: i,
+            });
+          }
+        }
       }
     }
   }

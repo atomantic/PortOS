@@ -237,6 +237,22 @@ const selectionSchema = z.record(
   message: `selection cannot exceed ${svc.WORLD_CATEGORY_COUNT_MAX} buckets`,
 });
 
+// `canonSelection` per trunk: 'all' or array of canon-entry names (case-insensitive).
+// Settings entries also match on `slugline` so a render queued from the Places
+// tab can target an entry the user filed by slugline ("INT. FOUNDRY — DAY").
+// Per-trunk array length is bounded by BIBLE_LIMITS.ENTRIES_PER_BIBLE_MAX (200)
+// — same cap the bible sanitizer enforces on read, so this can't enqueue more
+// entries than the server actually persists.
+const CANON_TRUNK_KEYS = ['characters', 'settings', 'objects'];
+const CANON_ENTRIES_PER_TRUNK_MAX = 200;
+const canonSelectionValueSchema = z.union([
+  z.literal('all'),
+  z.array(z.string().trim().min(1).max(200)).max(CANON_ENTRIES_PER_TRUNK_MAX),
+]);
+const canonSelectionSchema = z.object(
+  Object.fromEntries(CANON_TRUNK_KEYS.map((k) => [k, canonSelectionValueSchema.optional()])),
+).strict();
+
 const renderSchema = z.object({
   // Removed: callers that still send `collectionName` get an explicit 400
   // (see the .refine() below) instead of a confusing silent no-op. The
@@ -255,10 +271,11 @@ const renderSchema = z.object({
   guidance: z.number().min(0).max(30).optional(),
   quantize: z.enum(['3', '4', '5', '6', '8']).optional(),
   // Per-variation render count and per-category subset.
-  promptMode: z.enum(['variations', 'sheets', 'all']).optional().default('variations'),
+  promptMode: z.enum(['variations', 'sheets', 'canon', 'all']).optional().default('variations'),
   batchPerVariation: z.number().int().min(1).max(20).optional().default(1),
   selection: selectionSchema.optional(),
   sheetSelection: z.union([z.literal('all'), z.array(z.string().trim().min(1).max(svc.VARIATION_LABEL_MAX)).max(svc.COMPOSITE_SHEETS_MAX)]).optional(),
+  canonSelection: canonSelectionSchema.optional(),
 }).refine((body) => body.collectionName === undefined, {
   message: 'collectionName is no longer supported — the linked collection follows the universe name automatically. Remove this field.',
   path: ['collectionName'],
@@ -323,6 +340,7 @@ router.post('/:id/render', asyncHandler(async (req, res) => {
     promptMode: body.promptMode,
     selection: body.selection,
     sheetSelection: body.sheetSelection,
+    canonSelection: body.canonSelection,
     batchPerVariation: body.batchPerVariation,
   });
   if (!compiled.length) {

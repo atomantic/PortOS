@@ -54,7 +54,7 @@ const KINDS = [
   },
 ];
 
-export default function UniverseCanonSection({ universe, universeId, onUniverseChange, imageCfg }) {
+export default function UniverseCanonSection({ universe, universeId, onUniverseChange, imageCfg, kindFilter = null }) {
   const mountedRef = useMounted();
   const [searchParams, setSearchParams] = useSearchParams();
   const seriesFilter = searchParams.get('series') || '';
@@ -447,7 +447,7 @@ export default function UniverseCanonSection({ universe, universeId, onUniverseC
         </p>
       ) : null}
 
-      {KINDS.map((kind) => (
+      {KINDS.filter((kind) => !kindFilter || kind.key === kindFilter).map((kind) => (
         <KindSection
           key={kind.key}
           kind={kind}
