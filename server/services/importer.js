@@ -776,22 +776,40 @@ export async function commitImport({
   // alongside undeleted old ones; the additive-mode collision check is
   // skipped in replace mode (existingArcPositions stays empty), so reused
   // arcPositions would silently produce duplicates on disk that additive
-  // mode explicitly rejects. Universe + series writes below are idempotent,
-  // so re-running the import after the user fixes the underlying delete
-  // failure is safe.
+  // mode explicitly rejects.
+  //
+  // Abort on the FIRST delete failure (not after looping through all of
+  // them) to minimize the destructive surface — deletes already landed are
+  // unrecoverable, so the fewer that completed before the throw, the more
+  // of the user's pre-import state survives. The error message names the
+  // succeeded vs remaining sets explicitly so the user can audit what's
+  // gone before retrying. Universe + series writes below are idempotent,
+  // so re-running the import after the user fixes the underlying error
+  // (and accepts the partially-deleted state) is safe.
   if (replaceMode && existingIssues.length > 0) {
-    const failedDeleteIds = [];
+    const deletedIds = [];
     for (const ex of existingIssues) {
+      let failed = null;
       await deleteIssue(ex.id).catch((delErr) => {
         console.error(`❌ commitImport replace: failed to delete existing issue ${ex.id}: ${delErr.message}`);
-        failedDeleteIds.push(ex.id);
+        failed = delErr;
       });
-    }
-    if (failedDeleteIds.length > 0) {
-      throw makeErr(
-        `Replace mode aborted — failed to delete ${failedDeleteIds.length} of ${existingIssues.length} existing issue${existingIssues.length === 1 ? '' : 's'} (${failedDeleteIds.join(', ')}). No universe, series, or issue writes were performed; resolve the underlying error and retry.`,
-        ERR_VALIDATION,
-      );
+      if (failed) {
+        const remainingIds = existingIssues
+          .map((e) => e.id)
+          .filter((id) => id !== ex.id && !deletedIds.includes(id));
+        const deletedMsg = deletedIds.length > 0
+          ? ` ${deletedIds.length} issue${deletedIds.length === 1 ? '' : 's'} were already deleted before the failure (${deletedIds.join(', ')}) and cannot be recovered.`
+          : '';
+        const remainingMsg = remainingIds.length > 0
+          ? ` ${remainingIds.length} issue${remainingIds.length === 1 ? '' : 's'} remain on disk (${remainingIds.join(', ')}); retry will wipe them.`
+          : '';
+        throw makeErr(
+          `Replace mode aborted on first delete failure — issue ${ex.id} could not be deleted (${failed.message}). No universe, series, or new-issue writes were performed.${deletedMsg}${remainingMsg} Resolve the underlying error and retry.`,
+          ERR_VALIDATION,
+        );
+      }
+      deletedIds.push(ex.id);
     }
   }
 

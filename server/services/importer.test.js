@@ -802,7 +802,8 @@ describe('commitImport', () => {
   // arcPosition (additive-mode's collision check is skipped in replace),
   // producing duplicates the additive path explicitly rejects. The fix is
   // to abort the commit before any new state is written if any delete
-  // fails. This test pins that contract.
+  // fails. This test pins that contract — single-issue case: nothing got
+  // deleted before the failure, so the abort is fully transactional.
   it('replaceMode=true aborts the commit when a delete fails — no new issues, arc unchanged', async () => {
     const { uni, ser } = await setupForCommit();
     // Seed pass — one issue, arc shape `rags-to-riches`.
@@ -832,7 +833,7 @@ describe('commitImport', () => {
       seasons: [],
       issues: [{ title: 'New Issue', arcPosition: 1, proseExcerpt: 'new prose' }],
       replaceMode: true,
-    })).rejects.toThrowError(/Replace mode aborted/);
+    })).rejects.toThrowError(/Replace mode aborted on first delete failure/);
 
     // Old issue still on disk, no new issue created.
     const afterIssues = await issuesSvc.listIssues({ seriesId: ser.id });
@@ -843,6 +844,66 @@ describe('commitImport', () => {
     const seriesAfter = await seriesSvc.getSeries(ser.id);
     expect(seriesAfter.arc.shape).toBe('rags-to-riches');
     expect(seriesAfter.arc.logline).toBe('Old');
+  });
+
+  // Second Copilot review iteration: aborting on the FIRST delete failure
+  // (not after looping through all of them) minimizes the destructive
+  // surface. With 3 seeded issues + a failure injected on the 2nd call,
+  // only 1 should be deleted before the abort fires — the 3rd issue's
+  // delete must NEVER be attempted.
+  it('replaceMode=true aborts on the FIRST delete failure, leaving subsequent issues untouched', async () => {
+    const { uni, ser } = await setupForCommit();
+    // Seed pass — three issues at arcPositions 1, 2, 3.
+    await importerSvc.commitImport({
+      universeId: uni.id,
+      seriesId: ser.id,
+      canonSelections: { characters: [], places: [], objects: [] },
+      arc: null,
+      seasons: [],
+      issues: [
+        { title: 'Old A', arcPosition: 1, proseExcerpt: 'a' },
+        { title: 'Old B', arcPosition: 2, proseExcerpt: 'b' },
+        { title: 'Old C', arcPosition: 3, proseExcerpt: 'c' },
+      ],
+    });
+    const seeded = await issuesSvc.listIssues({ seriesId: ser.id });
+    expect(seeded).toHaveLength(3);
+
+    // First call succeeds (real passthrough); second call throws; we must
+    // never reach a third call. Track call count + which id failed.
+    let deleteCallCount = 0;
+    let failedId = null;
+    mockDeleteIssue.mockImplementation(async (id) => {
+      deleteCallCount += 1;
+      if (deleteCallCount === 2) {
+        failedId = id;
+        throw new Error('disk full');
+      }
+      return realIssuesRef.current.deleteIssue(id);
+    });
+
+    await expect(importerSvc.commitImport({
+      universeId: uni.id,
+      seriesId: ser.id,
+      canonSelections: { characters: [], places: [], objects: [] },
+      arc: null,
+      seasons: [],
+      issues: [{ title: 'New', arcPosition: 1, proseExcerpt: 'new' }],
+      replaceMode: true,
+    })).rejects.toThrowError(/Replace mode aborted on first delete failure/);
+
+    // Exactly two delete calls happened (one success + one failure);
+    // the third issue was NEVER touched.
+    expect(deleteCallCount).toBe(2);
+
+    // Two issues remain on disk: the one that failed to delete, and the
+    // one that was never attempted. Exactly one issue was actually
+    // deleted before the abort.
+    const remaining = await issuesSvc.listIssues({ seriesId: ser.id });
+    expect(remaining).toHaveLength(2);
+    expect(remaining.map((i) => i.id)).toContain(failedId);
+    // No new issue was created — replace aborted before issue-loop.
+    expect(remaining.map((i) => i.title)).not.toContain('New');
   });
 
   // Same arcPosition between old + new issues — additive mode would reject
