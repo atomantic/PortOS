@@ -51,6 +51,25 @@ vi.mock('../lib/stageRunner.js', () => ({
   runStagedLLM: (...args) => mockRunStagedLLM(...args),
 }));
 
+// Mock `./pipeline/issues.js` so a single test can force `createIssue` to
+// throw mid-loop and exercise the ERR_PARTIAL_COMMIT_ISSUES rollback path.
+// `vi.hoisted` keeps the mock fn ref reachable from both the mock factory
+// (hoisted before imports) and the beforeEach reset (runs later). Default
+// behavior passes through to the real module so the dozen other tests that
+// expect real createIssue behavior keep working unchanged.
+const { mockCreateIssue, realIssuesRef } = vi.hoisted(() => ({
+  mockCreateIssue: vi.fn(),
+  realIssuesRef: { current: null },
+}));
+vi.mock('./pipeline/issues.js', async () => {
+  const actual = await vi.importActual('./pipeline/issues.js');
+  realIssuesRef.current = actual;
+  return {
+    ...actual,
+    createIssue: (...args) => mockCreateIssue(...args),
+  };
+});
+
 const importerSvc = await import('./importer.js');
 const universeSvc = await import('./universeBuilder.js');
 const seriesSvc = await import('./pipeline/series.js');
@@ -71,6 +90,10 @@ function wipeTempRoot() {
 beforeEach(() => {
   wipeTempRoot();
   mockRunStagedLLM.mockReset();
+  // Default createIssue to pass-through to the real module — only the
+  // rollback test overrides this to inject a mid-loop throw.
+  mockCreateIssue.mockReset();
+  mockCreateIssue.mockImplementation((...args) => realIssuesRef.current.createIssue(...args));
 });
 
 afterAll(() => {
@@ -505,6 +528,115 @@ describe('commitImport', () => {
     expect(s1).toBeDefined();
     expect(s2).toBeDefined();
   });
+
+  // Round-8 review: fallbackSeasonId must pick the LOWEST-NUMBERED season,
+  // not array-position [0]. After mergeSeasons the array order is
+  // `[...retained, ...incomingBuilt]` — retained existing seasons come
+  // first regardless of number, so a series with [season 2, season 3] that
+  // receives a new season 1 would otherwise pick season 2 as "fallback".
+  it('fallbackSeasonId picks the lowest-numbered season, not array[0]', async () => {
+    const { uni, ser } = await setupForCommit();
+
+    // First pass: seed seasons 2 and 3 (skip 1).
+    await importerSvc.commitImport({
+      universeId: uni.id, seriesId: ser.id,
+      canonSelections: { characters: [], places: [], objects: [] },
+      arc: null,
+      seasons: [
+        { number: 2, title: 'Two', logline: 'a', synopsis: '', endingHook: '' },
+        { number: 3, title: 'Three', logline: 'b', synopsis: '', endingHook: '' },
+      ],
+      issues: [{ title: 'I1', arcPosition: 1, proseExcerpt: 'p1' }],
+    });
+
+    // Second pass: add season 1 + an issue with no seasonNumber. The
+    // fallback must land it in season 1 (the new lowest), even though
+    // mergeSeasons returns [retained_2, retained_3, new_1] in that order.
+    const second = await importerSvc.commitImport({
+      universeId: uni.id, seriesId: ser.id,
+      canonSelections: { characters: [], places: [], objects: [] },
+      arc: null,
+      seasons: [{ number: 1, title: 'One', logline: 'c', synopsis: '', endingHook: '' }],
+      issues: [{ title: 'I-no-season', arcPosition: 4, proseExcerpt: 'p4' }],
+    });
+
+    const created = await issuesSvc.getIssue(second.createdIssueIds[0]);
+    const seasonOne = second.series.seasons.find((s) => s.number === 1);
+    expect(seasonOne).toBeDefined();
+    expect(created.seasonId).toBe(seasonOne.id);
+  });
+
+  // Round-8 review: remappedIssues entries now carry actualSeasonNumber
+  // and actualSeasonTitle so the client toast can name the season
+  // precisely instead of saying a generic "first season".
+  it('remappedIssues entries carry actualSeasonNumber + actualSeasonTitle', async () => {
+    const { uni, ser } = await setupForCommit();
+    // Seed season 1 only; the next commit references a non-existent season 99
+    // — the issue must land in season 1 and the remap entry must surface it.
+    const result = await importerSvc.commitImport({
+      universeId: uni.id, seriesId: ser.id,
+      canonSelections: { characters: [], places: [], objects: [] },
+      arc: null,
+      seasons: [{ number: 1, title: 'Foundry', logline: 'open', synopsis: '', endingHook: '' }],
+      issues: [
+        { title: 'A', arcPosition: 1, seasonNumber: 99, proseExcerpt: 'pa' },
+      ],
+    });
+    expect(result.remappedIssues).toHaveLength(1);
+    const remap = result.remappedIssues[0];
+    expect(remap.requestedSeasonNumber).toBe(99);
+    expect(remap.actualSeasonNumber).toBe(1);
+    expect(remap.actualSeasonTitle).toBe('Foundry');
+    expect(remap.actualSeasonId).toBeDefined();
+  });
+
+  // Round-8 review: missing test for the ERR_PARTIAL_COMMIT_ISSUES rollback
+  // path. Inject a createIssue failure on the 2nd of 3 issues; assert that
+  // the rollback deletes the 1st (already created), surfaces the partial
+  // code, and leaves the universe + series writes intact (those are
+  // idempotent + user-confirmed, so we don't roll them back).
+  it('rolls back created issues + throws ERR_PARTIAL_COMMIT_ISSUES when createIssue fails mid-loop', async () => {
+    const { uni, ser } = await setupForCommit();
+    let call = 0;
+    mockCreateIssue.mockImplementation(async (...args) => {
+      call++;
+      if (call === 2) throw new Error('simulated mid-loop FS error');
+      return realIssuesRef.current.createIssue(...args);
+    });
+
+    let caught;
+    try {
+      await importerSvc.commitImport({
+        universeId: uni.id, seriesId: ser.id,
+        canonSelections: { characters: [{ name: 'Aria' }], places: [], objects: [] },
+        arc: { logline: 'A', summary: 'S', shape: 'man-in-hole' },
+        seasons: [{ number: 1, title: 'S1', logline: '', synopsis: '', endingHook: '' }],
+        issues: [
+          { title: 'I1', arcPosition: 1, proseExcerpt: 'p1' },
+          { title: 'I2', arcPosition: 2, proseExcerpt: 'p2' },
+          { title: 'I3', arcPosition: 3, proseExcerpt: 'p3' },
+        ],
+      });
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).toBeDefined();
+    expect(caught.code).toBe('IMPORTER_PARTIAL_COMMIT_ISSUES');
+    expect(caught.message).toMatch(/universe and series were updated/i);
+    expect(caught.message).toMatch(/simulated mid-loop FS error/);
+
+    // Universe + series writes survive (user-confirmed, idempotent).
+    const universeAfter = await universeSvc.getUniverse(uni.id);
+    expect(universeAfter.characters.some((c) => c.name === 'Aria')).toBe(true);
+    const seriesAfter = await seriesSvc.getSeries(ser.id);
+    expect(seriesAfter.arc?.shape).toBe('man-in-hole');
+    expect(seriesAfter.seasons).toHaveLength(1);
+
+    // No leftover issues from the partial loop.
+    const issuesAfter = await issuesSvc.listIssues({ seriesId: ser.id });
+    expect(issuesAfter).toHaveLength(0);
+  });
 });
 
 describe('mergeSeasons (pure helper)', () => {
@@ -620,5 +752,24 @@ describe('mergeSeasons (pure helper)', () => {
     expect(caught).toBeDefined();
     expect(caught.code).toBe(importerSvc.ERR_VALIDATION);
     expect(caught.message).toContain('99');
+  });
+
+  // Round-8 review: the pure helper now rejects duplicate explicit incoming
+  // numbers directly — commitImport's route gate caught this for HTTP
+  // callers, but a future direct consumer would otherwise silently collapse
+  // two entries sharing a number into one merge target.
+  it('throws ERR_VALIDATION on duplicate explicit incoming season numbers', () => {
+    let caught;
+    try {
+      importerSvc.mergeSeasons([], [
+        { number: 1, title: 'A' },
+        { number: 1, title: 'B' },
+      ], stubBuildSeason);
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeDefined();
+    expect(caught.code).toBe(importerSvc.ERR_VALIDATION);
+    expect(caught.message).toMatch(/duplicate/i);
   });
 });

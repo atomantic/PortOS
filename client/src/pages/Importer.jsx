@@ -154,17 +154,25 @@ export default function Importer() {
     toast.success(`Imported ${result.createdIssueIds.length} issue${result.createdIssueIds.length === 1 ? '' : 's'} into "${result.series.name}"`);
     // Surface season-remap warnings so the user sees when an issue landed in
     // a different season than they (or the LLM) proposed — silent fallback
-    // would otherwise be invisible.
+    // would otherwise be invisible. Use the server-reported landed season
+    // metadata so the toast names the actual season (S2 — Diaspora), not a
+    // generic "first season" that can lie when seasons are sparsely numbered.
     if (Array.isArray(result.remappedIssues) && result.remappedIssues.length > 0) {
       const n = result.remappedIssues.length;
       const noun = `${n} issue${n === 1 ? '' : 's'}`;
-      // server sets actualSeasonId to fallbackSeasonId (first season) or
-      // null when the series has zero seasons. Disambiguate so the user
-      // doesn't see "landed in the first season" when no season exists.
       const landedSeasonless = result.remappedIssues.every((r) => r.actualSeasonId == null);
-      const msg = landedSeasonless
-        ? `${noun} created ungrouped — no seasons exist on this series to land them in.`
-        : `${noun} landed in the first season — the requested season number didn't exist.`;
+      let msg;
+      if (landedSeasonless) {
+        msg = `${noun} created ungrouped — no seasons exist on this series to land them in.`;
+      } else {
+        // All remapped issues land in the same fallback season today, so
+        // the first entry's metadata describes them all.
+        const sample = result.remappedIssues[0];
+        const seasonLabel = sample.actualSeasonNumber != null
+          ? `S${sample.actualSeasonNumber}${sample.actualSeasonTitle ? ` — ${sample.actualSeasonTitle}` : ''}`
+          : 'the available season';
+        msg = `${noun} landed in ${seasonLabel} — the requested season number didn't exist.`;
+      }
       toast.warning(msg);
     }
     navigate(`/pipeline/series/${result.series.id}`);

@@ -63,6 +63,9 @@ const isStr = (v) => typeof v === 'string';
 // that ceiling here so the auto-assign path can't silently land a value
 // the schema wouldn't accept on direct entry.
 const SEASON_NUMBER_MAX = 99;
+// Wire schema (importerIssueEntry) caps arcPosition at 9999 — mirror so
+// the service-side auto-assign can't drift above it.
+const ARC_POSITION_MAX = 9999;
 
 /**
  * Merge incoming seasons with the existing `series.seasons[]` array,
@@ -91,10 +94,23 @@ export function mergeSeasons(existingSeasons, incomingSeasons, buildSeasonImpl =
   const existingByNumber = new Map(
     existingSeasons.filter((s) => Number.isFinite(s.number)).map((s) => [s.number, s]),
   );
-  const usedNumbers = new Set([...existingByNumber.keys()]);
+  // Dedup-check explicit incoming numbers here too — commitImport's route
+  // path also gates against this, but a direct caller (a future internal
+  // consumer of the pure helper, or a test) would otherwise silently
+  // collapse two incoming seasons sharing a number into one merge target.
+  const seenIncomingNumbers = new Set();
   for (const s of incomingSeasons) {
-    if (Number.isInteger(s?.number) && s.number >= 1) usedNumbers.add(s.number);
+    if (Number.isInteger(s?.number) && s.number >= 1) {
+      if (seenIncomingNumbers.has(s.number)) {
+        throw makeErr(
+          `mergeSeasons: duplicate explicit season number ${s.number} in incoming list — caller must pre-dedupe.`,
+          ERR_VALIDATION,
+        );
+      }
+      seenIncomingNumbers.add(s.number);
+    }
   }
+  const usedNumbers = new Set([...existingByNumber.keys(), ...seenIncomingNumbers]);
   let nextFreeNumber = (usedNumbers.size === 0) ? 1 : Math.max(...usedNumbers) + 1;
   const nowIso = new Date().toISOString();
   // String-field merge: absent (`undefined`/`null`) preserves the existing
@@ -164,14 +180,20 @@ export function mergeSeasons(existingSeasons, incomingSeasons, buildSeasonImpl =
 function buildExistingCanonBlock(existingCanon) {
   if (!existingCanon) return '';
   const json = JSON.stringify(existingCanon, null, 2);
+  // Wrap in a tilde fence (`~~~`) rather than triple-backticks — user
+  // canon content (stylized character names, lyric titles, pasted
+  // markdown from a prior import) can legitimately contain ``` and
+  // would otherwise close our fence early, corrupting the prompt.
+  // Tildes are exceedingly rare in fiction prose; if they ever collide,
+  // a longer tilde run (`~~~~`) is the escape hatch.
   return [
     '## Existing universe canon (do NOT duplicate these by name or aliases)',
     '',
     'This universe already has some canonical entries. Match by `name` (case-insensitive) **and by any listed `aliases`**. If an existing entry covers the same character / place / object, **omit it entirely** from your output — return only NEW entries. (Evidence for existing entries from this source is not currently re-merged; downstream evidence backfill is a follow-up.)',
     '',
-    '```json',
+    '~~~json',
     json,
-    '```',
+    '~~~',
     '',
   ].join('\n');
 }
@@ -207,13 +229,22 @@ export async function findSeriesByName(name, universeId) {
  * inflate the prompt without informing the dedup decision (imageRefs,
  * timestamps, ids).
  */
+// Fields that must serialize as arrays in the prompt JSON — a non-array
+// truthy value (defensive against malformed on-disk data) would otherwise
+// reach the LLM as a scalar and break dedup matching.
+const COMPACT_ARRAY_FIELDS = new Set(['aliases']);
+
 function compactCanonForPrompt(universe) {
   const slim = (entry, fields) => {
     const out = {};
     for (const k of fields) {
       const v = entry[k];
       if (v == null || v === '') continue;
-      if (Array.isArray(v) && v.length === 0) continue;
+      if (COMPACT_ARRAY_FIELDS.has(k)) {
+        if (!Array.isArray(v) || v.length === 0) continue;
+      } else if (Array.isArray(v) && v.length === 0) {
+        continue;
+      }
       out[k] = v;
     }
     return out;
@@ -549,10 +580,19 @@ export async function commitImport({
   // Auto-assign sequential arcPositions to incoming issues that omit one.
   // Mirrors the seasons auto-assign in the merge path. Issues with an
   // explicit position keep it; gaps get filled by the next free integer.
+  // Cap at ARC_POSITION_MAX (matching the wire schema's `.max(9999)`)
+  // so a value the wire wouldn't accept can't reach createIssue via the
+  // service auto-assign path.
   let nextFreeArcPos = (seenArcPositions.size === 0) ? 1 : Math.max(...seenArcPositions) + 1;
   const issuesWithPositions = issues.map((proposal) => {
     if (Number.isInteger(proposal.arcPosition) && proposal.arcPosition >= 1) {
       return proposal;
+    }
+    if (nextFreeArcPos > ARC_POSITION_MAX) {
+      throw makeErr(
+        `Cannot auto-assign arcPosition — next free slot (${nextFreeArcPos}) exceeds the max of ${ARC_POSITION_MAX}. Free up a position or set issue.arcPosition explicitly.`,
+        ERR_VALIDATION,
+      );
     }
     const assigned = nextFreeArcPos++;
     return { ...proposal, arcPosition: assigned };
@@ -634,18 +674,27 @@ export async function commitImport({
     });
   }
 
-  // seasonNumber → seasonId map; missing seasonNumber falls through to
-  // the first season's id, or null when no seasons exist.
+  // seasonNumber → season-record map; missing seasonNumber falls through
+  // to the LOWEST-NUMBERED season (not array-position [0]), or null when no
+  // seasons exist. mergeSeasons returns `[...retained, ...incomingBuilt]`
+  // — retained existing seasons come first regardless of number, so an
+  // import that adds season 1 to a series already holding [2, 3] would
+  // otherwise pick season 2 as "first" and surprise the user.
   const seasonByNumber = new Map();
   for (const s of (updatedSeries.seasons || [])) {
-    if (Number.isFinite(s.number)) seasonByNumber.set(s.number, s.id);
+    if (Number.isFinite(s.number)) seasonByNumber.set(s.number, s);
   }
-  const fallbackSeasonId = updatedSeries.seasons?.[0]?.id || null;
+  const sortedSeasons = [...(updatedSeries.seasons || [])]
+    .filter((s) => Number.isFinite(s.number))
+    .sort((a, b) => a.number - b.number);
+  const fallbackSeason = sortedSeasons[0] || null;
+  const fallbackSeasonId = fallbackSeason?.id || null;
 
   const createdIssueIds = [];
   // Surface season-remap events so the UI can warn "issue 3 wanted season 5
-  // but it doesn't exist — landed in season 1." Silent reassignment hides
-  // user intent; an explicit list lets the caller toast it.
+  // but landed in S2 — Diaspora." Each entry carries the actual landed
+  // season's number + title so the client toast can be specific, not just
+  // "first season" (which can lie when seasons are sparsely numbered).
   const remappedIssues = [];
 
   // Thread C fix — issue-loop with rollback on failure. The universe +
@@ -661,13 +710,18 @@ export async function commitImport({
       if (proposal.seasonNumber != null) {
         const matched = seasonByNumber.get(proposal.seasonNumber);
         if (matched) {
-          seasonId = matched;
+          seasonId = matched.id;
         } else {
           remappedIssues.push({
             title: proposal.title,
             arcPosition: proposal.arcPosition,
             requestedSeasonNumber: proposal.seasonNumber,
             actualSeasonId: fallbackSeasonId,
+            // Surface the landed season's number + title so the UI can
+            // render a precise toast ("Issue 'Cold Iron' landed in S2 —
+            // Diaspora") instead of an inaccurate "first season".
+            actualSeasonNumber: fallbackSeason?.number ?? null,
+            actualSeasonTitle: fallbackSeason?.title ?? null,
           });
         }
       }
