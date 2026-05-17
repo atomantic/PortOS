@@ -64,15 +64,6 @@ For project goals, see [GOALS.md](./GOALS.md). For completed work, see [DONE.md]
 
 - [ ] **Native FFLF deeper test on real keyframe pairs.** Validate with last frame of clip A + first frame of clip B from the same scene; expose more pipeline knobs (cfg-scale, stg-scale, stage1-steps) if interpolation looks weak.
 
-### CoS / Agent lifecycle
-
-- [ ] **TUI providers in manual `/api/runs`.** Add a TUI-specific runner branch in `server/lib/aiToolkit/routes/runs.js` so devtools manual runs also open attachable shell sessions.
-- [ ] **Extract `finalizeAgent` helper shared across spawn paths.** Completion sequence is duplicated in `agentTuiSpawning.js`, `agentCliSpawning.js`, and `agentLifecycle.js#handleAgentCompletion`. A divergence in any leg silently breaks one path.
-- [ ] **Wrap `runnerAgents.delete` in `handleAgentCompletion` body with try/finally.** A throw from `completeAgent` / `completeAgentRun` / `updateTask` / `processAgentCompletion` leaks the runner-agents Map entry forever. Regression-pin tests in `agentLifecycle.test.js` document the gap.
-- [ ] **Shared `isTuiProvider` helper + client palette helper.** Mirror `isClaudeCliProvider`. Add `isTuiProvider` + lift `providerTypeClass` from `AIProviders.jsx` into `client/src/utils/providers.js`.
-- [ ] **`spawnTuiAgent` / `spawnDirectly` options-object refactor.** Convert 11 positional args + deps to a single options object before the surface area grows.
-- [ ] **Wrap `createShellSession` for agent TUIs.** Move callback/initial-command wiring into a thin `createAgentTuiSession()` in `agentTuiSpawning.js` that registers its own `pty.onData`.
-
 ### Voice agent
 
 - [ ] **Voice CoS tool expansion** — `calendar_today` / `calendar_next` (existing Google Calendar MCP), `meatspace_log_workout` (wraps `meatspaceHealth.js`), `weather_now` (pick API: OpenWeather / WeatherKit / NWS), `timer_set` (reuses `agentActionExecutor.js`).
@@ -105,6 +96,7 @@ For project goals, see [GOALS.md](./GOALS.md). For completed work, see [DONE.md]
 - [ ] **Client tests for deep routing + drag.** Smoke tests for `goToWorld(id)` URL transitions and chip-reorder ordering (mock `useSortable`).
 - [ ] **Shallow-equal guard in `useMediaAnnotations` socket handler.** Speculative micro-opt; theoretical until observed.
 - [ ] **Extract a `tryReadFile(path, encoding='utf8')` helper into `server/lib/fileUtils.js`.** The `readFile(path).catch(() => null)` pattern is inlined 15+ times across the codebase (`server/routes/apps.js:38` `safeReadJson`, `server/lib/fileUtils.js:505`, `server/lib/hfToken.js:16`, `server/services/agentDrafts.js:22`, `server/services/messageAccounts.js:10`, `server/services/missions.js:35`, `server/lib/tuiPromptRunner.js` new at line ~202, etc.). One helper + migrate; small win, prevents future drift. Defer until next infra pass.
+- [ ] **Sweep `provider.type === 'tui'` inline checks in client.** New `isTuiProvider` helper in `client/src/utils/providers.js` not yet adopted in `client/src/pages/AIProviders.jsx` (3 remaining inline checks at lines 262, 396, 421 of CONFIG-style chips) and `client/src/components/cos/TaskAddForm.jsx`. Low priority — these are visual chip predicates, not behavioral.
 - [ ] **Skip the `text` accumulator in `promptRunner.runPromptThroughProvider` for TUI providers.** `APPEND_CHUNK(acc, chunk)` runs per stream chunk regardless of provider type, but the TUI branch (post `fix-prose-stage-override`) discards the accumulated `text` and uses `result.text` from `executeTuiRun` instead. Streams can hit hundreds of KB of screen redraws per run — gate the accumulator on `effectiveProvider.type !== 'tui'` in `onData` to skip the per-chunk string concat. Pre-existing buffer cap on `outputBuffer` inside `executeTuiRun` already bounds memory; this is a CPU/alloc micro-opt, not a correctness fix.
 
 ### v2.1.0 pre-release review residue (deferred from main→release multi-agent review, 2026-05-16)

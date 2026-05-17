@@ -10,17 +10,12 @@ import { readFile, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { spawn } from 'child_process';
 import { homedir } from 'os';
-import { cosEvents, emitLog } from './cosEvents.js';
+import { cosEvents } from './cosEvents.js';
 import { updateAgent, completeAgent, appendAgentOutput } from './cosAgents.js';
 import { registerSpawnedAgent, unregisterSpawnedAgent } from './agents.js';
-import { markProviderUsageLimit, markProviderRateLimited } from './providerStatus.js';
-import { updateTask } from './cos.js';
-import { release } from './executionLanes.js';
-import { completeExecution, errorExecution } from './toolStateMachine.js';
-import { analyzeAgentFailure, resolveFailedTaskUpdate } from './agentErrorAnalysis.js';
+import { analyzeAgentFailure } from './agentErrorAnalysis.js';
 import { completeAgentRun } from './agentRunTracking.js';
-import { processAgentCompletion } from './agentCompletion.js';
-import { persistSimplifySummaries } from './agentLifecycle.js';
+import { finalizeAgent } from './agentLifecycle.js';
 import { activeAgents, userTerminatedAgents } from './agentState.js';
 import { safeJSONParse, PATHS } from '../lib/fileUtils.js';
 import { createCodexStderrFormatter } from '../lib/codexCliOutput.js';
@@ -288,6 +283,13 @@ export const isClaudeCliProvider = (provider) =>
   provider?.type === 'cli' && (provider.id === 'claude-code' || provider.id === 'claude-code-bedrock');
 
 /**
+ * Check if a provider is a TUI-backed agent provider (Claude Code, Codex,
+ * Gemini, etc. that run in a PTY). Used by callers that need to branch
+ * between headless CLI/API runs and TUI shell sessions.
+ */
+export const isTuiProvider = (provider) => provider?.type === 'tui';
+
+/**
  * Read env vars from ~/.claude/settings.json to inject into Claude CLI spawns.
  * Ensures user's Bedrock/provider config (CLAUDE_CODE_USE_BEDROCK, AWS_PROFILE, etc.)
  * is present in spawned agent environments even if PM2 was started without them.
@@ -320,7 +322,21 @@ export async function getClaudeSettingsEnv() {
  * `cleanupWorktreeFn` is passed in to avoid circular imports with agentLifecycle.js.
  * `isTruthyMetaFn` is passed in to avoid circular imports with subAgentSpawner.js.
  */
-export async function spawnDirectly(agentId, task, prompt, workspacePath, model, provider, runId, cliConfig, agentDir, executionId, laneName, { cleanupWorktreeFn, isTruthyMetaFn }) {
+export async function spawnDirectly({
+  agentId,
+  task,
+  prompt,
+  workspacePath,
+  model,
+  provider,
+  runId,
+  cliConfig,
+  agentDir,
+  executionId,
+  laneName,
+  cleanupWorktreeFn,
+  isTruthyMetaFn,
+}) {
   const fullCommand = `${cliConfig.command} ${cliConfig.args.join(' ')} <<< "${(task.description || '').substring(0, 100)}..."`;
 
   const ROOT_DIR = PATHS.root;
@@ -490,83 +506,30 @@ export async function spawnDirectly(agentId, task, prompt, workspacePath, model,
       }
     }
 
-    // Release execution lane
-    if (agentData?.laneName) {
-      release(agentId);
-    }
-
-    // Complete tool execution tracking
-    if (agentData?.executionId) {
-      if (success) {
-        completeExecution(agentData.executionId, { success: true, duration });
-      } else {
-        errorExecution(agentData.executionId, { message: `Agent exited with code ${code}`, code });
-        completeExecution(agentData.executionId, { success: false });
-      }
-    }
-
     await writeFile(outputFile, outputBuffer).catch(() => {});
 
     // Use raw stream buffer for error analysis (contains full JSON with error details)
     const analysisBuffer = rawStreamBuffer || outputBuffer;
     const errorAnalysis = success ? null : analyzeAgentFailure(analysisBuffer, task, model);
 
-    if (success) {
-      await persistSimplifySummaries(agentId, task, outputBuffer, isTruthyMetaFn);
-    }
+    const terminatedByUser = userTerminatedAgents.has(agentId);
+    if (terminatedByUser) userTerminatedAgents.delete(agentId);
 
-    await completeAgent(agentId, {
+    await finalizeAgent({
+      agentId,
+      task,
+      runId: agentData?.runId || runId,
+      providerId: agentData?.providerId || provider.id,
       success,
       exitCode: code,
       duration,
-      outputLength: outputBuffer.length,
-      errorAnalysis
+      outputBuffer,
+      errorAnalysis,
+      laneName: agentData?.laneName,
+      executionId: agentData?.executionId,
+      terminatedByUser,
+      isTruthyMetaFn,
     });
-
-    await completeAgentRun(agentData?.runId || runId, outputBuffer, code, duration, errorAnalysis);
-
-    // Update task status with retry tracking
-    // Skip if user-terminated — task already blocked by terminateAgent/killAgent
-    if (userTerminatedAgents.has(agentId)) {
-      userTerminatedAgents.delete(agentId);
-      await updateTask(task.id, {
-        status: 'blocked',
-        metadata: {
-          ...task.metadata,
-          blockedReason: 'Terminated by user',
-          blockedCategory: 'user-terminated',
-          blockedAt: new Date().toISOString()
-        }
-      }, task.taskType || 'user');
-    } else if (success) {
-      await updateTask(task.id, { status: 'completed' }, task.taskType || 'user');
-    } else {
-      const failedUpdate = await resolveFailedTaskUpdate(task, errorAnalysis, agentId);
-      await updateTask(task.id, failedUpdate, task.taskType || 'user');
-
-      // Handle provider status updates on failure
-      if (errorAnalysis) {
-        if (errorAnalysis.category === 'usage-limit' && errorAnalysis.requiresFallback) {
-          const providerId = agentData?.providerId || provider.id;
-          if (providerId) {
-            await markProviderUsageLimit(providerId, errorAnalysis).catch(err => {
-              emitLog('warn', `Failed to mark provider unavailable: ${err.message}`, { providerId });
-            });
-          }
-        }
-        if (errorAnalysis.category === 'rate-limit') {
-          const providerId = agentData?.providerId || provider.id;
-          if (providerId) {
-            await markProviderRateLimited(providerId).catch(err => {
-              emitLog('warn', `Failed to mark provider rate limited: ${err.message}`, { providerId });
-            });
-          }
-        }
-      }
-    }
-
-    // Process memory extraction and app cooldown
-    await processAgentCompletion(agentId, task, success, outputBuffer);
 
     // Clean up worktree if agent was using one. Claude Code CLI agents run
     // `/simplify` + `/do:pr` themselves (see buildCliCompletionSection in
