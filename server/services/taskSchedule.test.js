@@ -106,6 +106,19 @@ const mockSchedule = ({ tasks = {}, executions = {}, templates = [] } = {}) => {
   readJSONFile.mockResolvedValue({ version: 2, tasks, executions, templates })
 }
 
+// Resolve "the most recent 9 AM in the past, local time." Bare
+// `setHours(9, 0, 0, 0)` flakes in CI when the runner's wall-clock is
+// before 9 AM local (UTC CI fires at ~04:00 UTC daily) — today's 9 AM
+// would be in the future and shouldRunTask's `prevRunMs <= now` guard
+// correctly rejects a slot that hasn't happened yet, breaking these
+// tests' premise. Subtract a day when needed.
+const recentNineAm = () => {
+  const d = new Date()
+  d.setHours(9, 0, 0, 0)
+  if (d.getTime() > Date.now()) d.setDate(d.getDate() - 1)
+  return d
+}
+
 describe('taskSchedule', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -486,19 +499,6 @@ describe('taskSchedule', () => {
     })
 
     describe('cron catch-up', () => {
-      // Resolve "the most recent 9 AM in the past, local time." Bare
-      // `setHours(9, 0, 0, 0)` flakes in CI when the runner's wall-clock is
-      // before 9 AM local (UTC CI fires at ~04:00 UTC daily) — today's 9 AM
-      // would be in the future and shouldRunTask's `prevRunMs <= now` guard
-      // correctly rejects a slot that hasn't happened yet, breaking these
-      // tests' premise. Subtract a day when needed.
-      const recentNineAm = () => {
-        const d = new Date()
-        d.setHours(9, 0, 0, 0)
-        if (d.getTime() > Date.now()) d.setDate(d.getDate() - 1)
-        return d
-      }
-
       it('catches up a never-run cron when the most-recent slot is within one period', async () => {
         // Cron: 0 9 * * * (daily 9 AM). The most recent past 9 AM already elapsed.
         // First call (from=now): most-recent past 9 AM.
@@ -632,8 +632,7 @@ describe('taskSchedule', () => {
       // A weekly task with no execution record is perpetually 'ready' (weekly-due).
       // A cron task firing right now should still win — explicit time-based schedules
       // shouldn't get masked by loose interval-based ones.
-      const todayNineAm = new Date()
-      todayNineAm.setHours(9, 0, 0, 0)
+      const todayNineAm = recentNineAm()
       const tomorrowNineAm = new Date(todayNineAm.getTime() + 24 * 60 * 60 * 1000)
       const yesterdayNineAm = new Date(todayNineAm.getTime() - 24 * 60 * 60 * 1000)
 
