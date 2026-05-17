@@ -169,10 +169,11 @@ const enqueueImageJob = ({ prompt, world, settings, options, mode, owner, logLin
     // Honored by local mflux + diffusers runners; codex picks its own.
     ...(Number.isFinite(options.seed) ? { seed: options.seed } : {}),
     // i2i upscale path: when the caller passes an init image (e.g.
-    // "use proof as base" for a final render) we forward it to the local
-    // image-gen runner. Codex silently ignores both fields — its
-    // `$imagegen` skill has no init-image input — so a codex-backend
-    // final render with useProofAsBase=true degrades to a full redraw.
+    // "use proof as base" for a final render) we forward it to the active
+    // backend. Local mflux uses it as `--image-path`; codex attaches it via
+    // the CLI's `-i` flag and routes it to gpt-image-2's image-edit mode.
+    // The external SD-API backend has no i2i wiring and drops both fields
+    // at the dispatcher.
     ...(options.initImagePath ? { initImagePath: options.initImagePath } : {}),
     ...(Number.isFinite(options.initImageStrength) ? { initImageStrength: options.initImageStrength } : {}),
   };

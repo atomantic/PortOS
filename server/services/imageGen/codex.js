@@ -119,22 +119,30 @@ export async function checkConnection({ codexPath } = {}) {
 
 const SESSION_ID_RE = /^session id:\s*([0-9a-f-]{36})/im;
 
+// Codex CLI exposes no numeric i2i denoise knob, so map the local-runner-style
+// strength (0..1, lower = more faithful to the source) onto a phrase the model
+// reliably honors inside `$imagegen`. Mirrors PROOF_AS_BASE_DEFAULT_STRENGTH
+// (0.25) defaulting toward composition-preserving edits.
+const describeFidelity = (strength) => {
+  const n = Number.isFinite(strength) ? Math.max(0, Math.min(1, Number(strength))) : 0.25;
+  if (n <= 0.2) return 'preserve composition, characters, and layout exactly — only refine detail and resolution';
+  if (n <= 0.4) return 'preserve composition and characters while adding rendered detail at higher fidelity';
+  if (n <= 0.7) return 'use the attached image as a strong reference while refining art and detail';
+  return 'use the attached image as a loose reference; you may reinterpret freely';
+};
+
+// When `initImagePath` is set we attach the file via codex CLI's `-i <FILE>`
+// flag and reshape the prompt so the `$imagegen` skill feeds the attachment
+// to `image_gen` as an input image (gpt-image-2's image-edit mode).
+// `initImageStrength` is mapped to a fidelity phrase via describeFidelity —
+// codex CLI exposes no numeric denoise knob.
 export async function generateImage({
   codexPath, model, prompt, width, height, negativePrompt,
-  // Accepted (and ignored) so the pipeline's "use proof as base" upscale path
-  // doesn't reject when codex is the active backend. The `$imagegen` skill in
-  // the Codex CLI has no init-image input; this surface is local-only. Logged
-  // so the degraded behavior is visible — a final render kicked off with
-  // useProofAsBase=true against codex will be a full redraw at the larger
-  // size, not an i2i upscale that preserves the proof's composition.
-  initImagePath, initImageStrength: _initImageStrength,
+  initImagePath, initImageStrength,
   jobId: providedJobId = null,
 }) {
   if (!prompt?.trim()) {
     throw new ServerError('Prompt is required', { status: 400, code: 'VALIDATION_ERROR' });
-  }
-  if (initImagePath) {
-    console.log(`⚠️ codex generateImage: ignoring initImagePath (gpt-image-2 $imagegen has no init-image input — falling back to full redraw)`);
   }
   await ensureDir(PATHS.images);
 
@@ -150,13 +158,17 @@ export async function generateImage({
   const sizeHint = (width && height) ? ` (${width}x${height})` : '';
   const qualityHint = (width >= 1536 || height >= 1536) ? ' (high quality)' : '';
   const avoidHint = negativePrompt?.trim() ? `\nAvoid: ${negativePrompt.trim()}` : '';
-  const fullPrompt = `$imagegen ${prompt.trim()}${sizeHint}${qualityHint}${avoidHint}`;
+  const editPrefix = initImagePath
+    ? `Edit the attached reference image — ${describeFidelity(initImageStrength)}. Render target:\n`
+    : '';
+  const fullPrompt = `$imagegen ${editPrefix}${prompt.trim()}${sizeHint}${qualityHint}${avoidHint}`;
 
   const bin = codexPath || DEFAULT_BIN;
   const args = [
     'exec',
     '--skip-git-repo-check',
     '--sandbox', 'workspace-write',
+    ...(initImagePath ? ['-i', initImagePath] : []),
     ...(model ? ['-m', String(model)] : []),
     fullPrompt,
   ];

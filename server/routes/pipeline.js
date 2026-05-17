@@ -351,9 +351,10 @@ const visualGenerateSchema = z.object({
 //
 // `seed` mirrors the page/panel render schemas so the shared image-gen
 // drawer flows the same render settings into the cover —
-// enqueueImageJob honors it via options.seed. `useProofAsBase` is silently
-// ignored by Codex (gpt-image-2's $imagegen has no init-image input);
-// local + external honor it.
+// enqueueImageJob honors it via options.seed. `useProofAsBase` is honored by
+// local (mflux `--image-path`) and codex (gpt-image-2 image-edit via the
+// CLI's `-i <file>` flag); external SD-API has no i2i wiring and silently
+// drops the init image at the dispatcher.
 const makeCoverRenderSchema = (scriptField) => z.object({
   [scriptField]: z.string().max(8000).optional(),
   negativePrompt: z.string().trim().max(2000).optional(),
