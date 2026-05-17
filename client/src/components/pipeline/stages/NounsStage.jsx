@@ -250,8 +250,14 @@ export default function NounsStage({ issue, series }) {
   };
 
   const handleRenderCleanPlate = async (entry) => {
-    if (!entry?.description?.trim()) {
-      toast.error(`Add a description before generating a clean plate for ${entry.name}`);
+    // Match CanonCard's button-enable predicate (descFor includes palette +
+    // recurringDetails for settings) — composeCleanPlatePrompt builds a valid
+    // prompt from any of {description, palette, recurringDetails}, so gating
+    // on `description` alone produces a button that fails with this toast
+    // even though the composer would have succeeded.
+    const hasContent = !!(entry?.description?.trim() || entry?.palette?.trim() || entry?.recurringDetails?.trim());
+    if (!hasContent) {
+      toast.error(`Add a description, palette, or recurring details before generating a clean plate for ${entry.name}`);
       return;
     }
     const baseOpts = pipelineImageCfgToRenderOpts(imageCfg);

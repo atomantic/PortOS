@@ -344,6 +344,24 @@ export default function UniverseBuilder() {
     return () => { cancelled = true; };
   }, [selectedId]);
 
+  // Hash-scroll for deep-links — the legacy `/canon` redirect and
+  // PipelineSeries' "Manage characters, places, and objects" link both
+  // navigate to `/universe-builder/<id>#canon`. React Router doesn't
+  // auto-scroll to hashes, so wait until the section is rendered (gated by
+  // `draft.id === selectedId`) then scroll. The element id (`canon`) is set
+  // on UniverseCanonSection's root <section>.
+  useEffect(() => {
+    if (!location.hash) return;
+    if (!selectedId || draft.id !== selectedId) return;
+    const id = location.hash.slice(1);
+    // Defer one frame so the lazy section is in the DOM before we query for it.
+    const t = setTimeout(() => {
+      const el = document.getElementById(id);
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 50);
+    return () => clearTimeout(t);
+  }, [location.hash, selectedId, draft.id]);
+
   const handleNew = () => {
     goToWorld(null);
     setDraft(emptyTemplate());

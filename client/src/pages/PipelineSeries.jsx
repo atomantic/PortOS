@@ -337,8 +337,11 @@ function BibleSidebar({ series, universes, patchSeries, onCollapse }) {
       <div>
         <h3 className="text-xs uppercase tracking-wider text-gray-500 mb-2">Canon</h3>
         {series.universeId ? (
+          // `#canon` scrolls to the embedded canon section (id="canon" on
+          // UniverseCanonSection) so users land on the folded-in canon UI
+          // instead of the bible at the top of the builder.
           <Link
-            to={`/universe-builder/${encodeURIComponent(series.universeId)}`}
+            to={`/universe-builder/${encodeURIComponent(series.universeId)}#canon`}
             className="block text-xs text-port-accent hover:underline"
           >
             Manage characters, places, and objects on the linked Universe →

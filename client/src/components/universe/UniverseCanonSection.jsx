@@ -275,8 +275,14 @@ export default function UniverseCanonSection({ universe, universeId, onUniverseC
   };
 
   const handleRenderCleanPlate = async (entry) => {
-    if (!entry?.description?.trim()) {
-      toast.error(`Add a description before generating a clean plate for ${entry.name}`);
+    // Match CanonCard's button-enable predicate (descFor includes palette +
+    // recurringDetails for settings) — composeCleanPlatePrompt builds a valid
+    // prompt from any of {description, palette, recurringDetails}, so gating
+    // on `description` alone produces a button that fails with this toast
+    // even though the composer would have succeeded.
+    const hasContent = !!(entry?.description?.trim() || entry?.palette?.trim() || entry?.recurringDetails?.trim());
+    if (!hasContent) {
+      toast.error(`Add a description, palette, or recurring details before generating a clean plate for ${entry.name}`);
       return;
     }
     const baseOpts = pipelineImageCfgToRenderOpts(imageCfg);
@@ -347,7 +353,10 @@ export default function UniverseCanonSection({ universe, universeId, onUniverseC
   const charCount = (universe.characters || []).length;
 
   return (
-    <section className="bg-port-card border border-port-border rounded p-4 flex flex-col gap-3">
+    // `id="canon"` is the scroll target for `/universe-builder/:id#canon`
+    // deep-links (legacy `/canon` route redirect + PipelineSeries "Manage
+    // characters, places, and objects" link). Keep this id stable.
+    <section id="canon" className="bg-port-card border border-port-border rounded p-4 flex flex-col gap-3 scroll-mt-4">
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
           <h2 className="text-sm font-semibold text-white">Canon</h2>
