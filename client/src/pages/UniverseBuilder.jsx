@@ -59,10 +59,12 @@ const TAB_RENDER = 'render';
 // `?bucket=` (alongside real bucket keys) AND a `promptMode` value on the
 // render route; same string in both contexts to keep the contract consistent.
 const BUCKET_CANON = 'canon';
+// `kind` doubles as the canon-array key on the universe (`draft[kind]`) and
+// the canon-trunk identifier the server's `canonSelection` schema accepts.
 const TRUNK_TABS = [
-  { id: TAB_CAST, kind: 'characters', label: 'Cast', canonKey: 'characters', icon: Users, singular: 'character' },
-  { id: TAB_PLACES, kind: 'settings', label: 'Places', canonKey: 'settings', icon: MapPin, singular: 'place' },
-  { id: TAB_OBJECTS, kind: 'objects', label: 'Objects', canonKey: 'objects', icon: Package, singular: 'object' },
+  { id: TAB_CAST, kind: 'characters', label: 'Cast', icon: Users },
+  { id: TAB_PLACES, kind: 'settings', label: 'Places', icon: MapPin },
+  { id: TAB_OBJECTS, kind: 'objects', label: 'Objects', icon: Package },
 ];
 const TRUNK_BY_ID = Object.fromEntries(TRUNK_TABS.map((t) => [t.id, t]));
 
@@ -336,7 +338,15 @@ export default function UniverseBuilder() {
   const location = useLocation();
   const selectedId = params.universeId || null;
   const basePath = location.pathname.replace(/\/universe-builder(?:\/.*)?$/, '/universe-builder');
-  const goToWorld = (id) => navigate(id ? `${basePath}/${encodeURIComponent(id)}` : basePath);
+  // Preserve the `?tab=&bucket=` (and `?series=`) query string so the
+  // auto-save → create path doesn't snap the user back to the Bible tab
+  // after they triggered Generate From Idea from inside Cast/Places/Objects.
+  // The stale-bucket effect already strips any bucket that no longer exists
+  // under the new universe's categories.
+  const goToWorld = (id) => navigate({
+    pathname: id ? `${basePath}/${encodeURIComponent(id)}` : basePath,
+    search: location.search,
+  });
 
   const [universes, setWorlds] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -1213,23 +1223,22 @@ export default function UniverseBuilder() {
 
   // Drop a stale `?bucket=` if the bucket no longer exists under the current
   // tab (e.g. user deleted the bucket, or auto-sort moved it to another kind).
+  // `BUCKET_CANON` is a valid pseudo-bucket on every trunk tab — without an
+  // explicit allow, the chip's `setBucket(BUCKET_CANON)` flashed in the URL
+  // then immediately got stripped by this effect, hiding the canon-only view.
+  // Other tab buckets must validate against `bucketsByKind.other`; non-trunk
+  // non-Other tabs (Bible / Composites / Render) have no valid bucket scope.
   useEffect(() => {
     if (!activeBucket) return;
     const trunk = TRUNK_BY_ID[activeTab];
-    if (!trunk) {
-      if (searchParams.has('bucket')) {
-        const next = new URLSearchParams(searchParams);
-        next.delete('bucket');
-        setSearchParams(next, { replace: true });
-      }
-      return;
-    }
-    const validForTab = bucketsByKind[trunk.kind] || [];
-    if (!validForTab.includes(activeBucket)) {
-      const next = new URLSearchParams(searchParams);
-      next.delete('bucket');
-      setSearchParams(next, { replace: true });
-    }
+    if (trunk && activeBucket === BUCKET_CANON) return;
+    const validBuckets = trunk
+      ? (bucketsByKind[trunk.kind] || [])
+      : (activeTab === TAB_OTHER ? bucketsByKind.other : []);
+    if (validBuckets.includes(activeBucket)) return;
+    const next = new URLSearchParams(searchParams);
+    next.delete('bucket');
+    setSearchParams(next, { replace: true });
   }, [activeTab, activeBucket, bucketsByKind, searchParams, setSearchParams]);
 
   // Mobile = flex column (grid template ignored); lg+ = grid where the inline
@@ -1416,8 +1425,12 @@ export default function UniverseBuilder() {
                 const selection = Object.fromEntries(
                   (bucketsByKind[trunk.kind] || []).map((b) => [b, 'all']),
                 );
-                const canonSelection = { [trunk.canonKey]: 'all' };
-                runRender({ promptMode: 'all', selection, canonSelection });
+                const canonSelection = { [trunk.kind]: 'all' };
+                // Empty sheetSelection opts out of composite sheets — without
+                // it, the server's `sheetSelection || 'all'` default would
+                // queue every sheet alongside the trunk's canon + variations,
+                // overshooting the user-facing "N images" count.
+                runRender({ promptMode: 'all', selection, canonSelection, sheetSelection: [] });
               }}
               onAddBucket={({ key }) => {
                 setDraft((d) => ({
@@ -1506,10 +1519,22 @@ function totalVariationCount(world) {
   return getCategoryKeys(world.categories).reduce((n, c) => n + (world.categories?.[c]?.variations?.length || 0), 0);
 }
 
+// Match server-side `synthesizeCanonPrompt`: entries with no identity-anchor
+// (name / slugline / hand-authored prompt) AND no descriptive content compile
+// to an empty seed and get skipped. Mirror the predicate here so the "Render N
+// images" button count doesn't overshoot what the server will actually enqueue.
+const canonEntryHasContent = (e) => Boolean(
+  e?.name || e?.slugline || e?.prompt
+  || e?.physicalDescription || e?.description || e?.palette
+  || e?.recurringDetails || e?.role || e?.significance,
+);
+
 function renderPromptCount(world, promptMode = 'variations') {
   const variations = totalVariationCount(world);
   const sheets = world.compositeSheets?.length || 0;
-  const canon = (world.characters?.length || 0) + (world.settings?.length || 0) + (world.objects?.length || 0);
+  const canon = (world.characters || []).filter(canonEntryHasContent).length
+    + (world.settings || []).filter(canonEntryHasContent).length
+    + (world.objects || []).filter(canonEntryHasContent).length;
   if (promptMode === 'sheets') return sheets;
   if (promptMode === 'canon') return canon;
   if (promptMode === 'all') return variations + sheets + canon;
@@ -2378,7 +2403,7 @@ function TrunkView({
   onBulkRenderBucket, onRenderVariation, onBulkRenderTrunk,
   onAddBucket,
 }) {
-  const canonList = Array.isArray(draft[trunk.canonKey]) ? draft[trunk.canonKey] : [];
+  const canonList = Array.isArray(draft[trunk.kind]) ? draft[trunk.kind] : [];
   const totalUnderTrunk =
     canonList.length
     + buckets.reduce((n, k) => n + (draft.categories?.[k]?.variations?.length || 0), 0);
@@ -2670,7 +2695,7 @@ function RenderTab({
         <div className="flex flex-col gap-2">
           {TRUNK_TABS.map((trunk) => {
             const buckets = bucketsByKind[trunk.kind] || [];
-            const canonCount = (draft[trunk.canonKey] || []).length;
+            const canonCount = (draft[trunk.kind] || []).length;
             const variationCount = buckets.reduce((n, k) => n + (draft.categories?.[k]?.variations?.length || 0), 0);
             const total = canonCount + variationCount;
             if (total === 0) return null;
@@ -2690,7 +2715,10 @@ function RenderTab({
                     onClick={() => handleRender({
                       promptMode: 'all',
                       selection: Object.fromEntries(buckets.map((b) => [b, 'all'])),
-                      canonSelection: canonCount > 0 ? { [trunk.canonKey]: 'all' } : undefined,
+                      canonSelection: canonCount > 0 ? { [trunk.kind]: 'all' } : undefined,
+                      // Trunk scope excludes composite sheets — see comment on
+                      // TrunkView's onBulkRenderTrunk for why this opt-out matters.
+                      sheetSelection: [],
                     })}
                     disabled={!selectedId || availableBackends.length === 0 || rendering}
                     className="text-xs px-2 py-1 bg-port-accent/15 hover:bg-port-accent/25 disabled:opacity-30 disabled:cursor-not-allowed text-port-accent rounded min-h-[32px]"

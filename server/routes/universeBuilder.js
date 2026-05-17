@@ -18,7 +18,7 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import * as svc from '../services/universeBuilder.js';
 import * as canonSvc from '../services/universeCanon.js';
-import { BIBLE_KINDS } from '../lib/storyBible.js';
+import { BIBLE_KINDS, BIBLE_LIMITS } from '../lib/storyBible.js';
 import { getUniverseCanonUsage } from '../services/canonUsage.js';
 import { expandWorldTemplate, generateCategoryVariations } from '../services/universeBuilderExpand.js';
 import { refineWorldPrompts } from '../services/universeBuilderRefine.js';
@@ -240,14 +240,13 @@ const selectionSchema = z.record(
 // `canonSelection` per trunk: 'all' or array of canon-entry names (case-insensitive).
 // Settings entries also match on `slugline` so a render queued from the Places
 // tab can target an entry the user filed by slugline ("INT. FOUNDRY — DAY").
-// Per-trunk array length matches BIBLE_LIMITS.ENTRIES_PER_BIBLE_MAX (200) — same
-// cap the bible sanitizer enforces on read, so this can't enqueue more entries
-// than the server actually persists.
+// Per-trunk cap mirrors the bible sanitizer (`ENTRIES_PER_BIBLE_MAX`) so this
+// can't enqueue more entries than the server actually persists; per-string cap
+// mirrors `NAME_MAX` / `SLUGLINE_MAX` (both 200).
 const CANON_TRUNK_KEYS = ['characters', 'settings', 'objects'];
-const CANON_ENTRIES_PER_TRUNK_MAX = 200;
 const canonSelectionValueSchema = z.union([
   z.literal('all'),
-  z.array(z.string().trim().min(1).max(200)).max(CANON_ENTRIES_PER_TRUNK_MAX),
+  z.array(z.string().trim().min(1).max(BIBLE_LIMITS.NAME_MAX)).max(BIBLE_LIMITS.ENTRIES_PER_BIBLE_MAX),
 ]);
 const canonSelectionSchema = z.object(
   Object.fromEntries(CANON_TRUNK_KEYS.map((k) => [k, canonSelectionValueSchema.optional()])),
