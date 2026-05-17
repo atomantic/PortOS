@@ -539,6 +539,46 @@ describe("universeBuilder service", () => {
         expect(compiled[0].label).toBe("Foundry City");
       });
 
+      it("canonSelection: slugline matching is settings-only (characters/objects ignore stray slugline)", () => {
+        // A stray `slugline` on a character or object should NOT participate
+        // in canon-selection matching — slugline is part of the settings
+        // schema only. This guards against accidental cross-trunk selection
+        // when an upstream tool mis-tags an entry.
+        const w = {
+          ...canonWorld(),
+          characters: [
+            {
+              name: "Ghost",
+              slugline: "should-not-match-on-character",
+              physicalDescription: "spectral",
+            },
+          ],
+          objects: [
+            {
+              name: "Shard",
+              slugline: "should-not-match-on-object",
+              description: "humming crystal",
+            },
+          ],
+        };
+        const charsCompiled = svc.compilePrompts(w, {
+          promptMode: "canon",
+          canonSelection: { characters: ["should-not-match-on-character"] },
+        });
+        expect(charsCompiled).toHaveLength(0);
+        const objsCompiled = svc.compilePrompts(w, {
+          promptMode: "canon",
+          canonSelection: { objects: ["should-not-match-on-object"] },
+        });
+        expect(objsCompiled).toHaveLength(0);
+        // Sanity — name still matches.
+        const nameMatched = svc.compilePrompts(w, {
+          promptMode: "canon",
+          canonSelection: { characters: ["Ghost"], objects: ["Shard"] },
+        });
+        expect(nameMatched).toHaveLength(2);
+      });
+
       it("entry.prompt wins over synthesized fields", () => {
         const w = {
           ...canonWorld(),

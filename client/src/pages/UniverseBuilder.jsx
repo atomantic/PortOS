@@ -1022,6 +1022,18 @@ export default function UniverseBuilder() {
       const n = Number(v);
       return Number.isFinite(n) ? n : undefined;
     };
+    // Server contract: `compilePrompts` in canon/all modes only emits canon
+    // prompts when `canonSelection` is non-null (missing key skips the trunk
+    // entirely). When the user picks "canon" or "all" in the Render tab and
+    // clicks the bare "Render N images" button (no scope), the UI count
+    // already includes canon — so default the payload to "every trunk → all"
+    // so the server actually compiles them. Scoped calls always pass their
+    // own canonSelection and bypass this default.
+    const needsCanonDefault = !scope && (promptMode === 'canon' || promptMode === 'all');
+    const effectiveCanonSelection = scope?.canonSelection
+      ?? (needsCanonDefault
+        ? { characters: 'all', settings: 'all', objects: 'all' }
+        : undefined);
     setRendering(true);
     const result = await renderWorld(selectedId, {
       mode: effectiveMode,
@@ -1036,7 +1048,7 @@ export default function UniverseBuilder() {
       batchPerVariation: renderOpts.batchPerVariation,
       selection: scope?.selection,
       sheetSelection: scope?.sheetSelection,
-      canonSelection: scope?.canonSelection,
+      canonSelection: effectiveCanonSelection,
     }).catch((e) => { toast.error(`Render failed: ${e.message}`); return null; });
     setRendering(false);
     if (!result) return;
@@ -1214,11 +1226,15 @@ export default function UniverseBuilder() {
     else next.delete('bucket');
     setSearchParams(next, { replace: !!opts.replace });
   }, [searchParams, setSearchParams]);
-  const setBucket = useCallback((bucket) => {
+  // Explicit user bucket clicks push a history entry so back/forward actually
+  // walks tab+bucket navigation (the PR's headline deep-link promise). The
+  // stale-bucket-cleanup effect below uses `replace: true` directly so an
+  // implicit URL fix-up doesn't fork the history stack.
+  const setBucket = useCallback((bucket, opts = {}) => {
     const next = new URLSearchParams(searchParams);
     if (bucket) next.set('bucket', bucket);
     else next.delete('bucket');
-    setSearchParams(next, { replace: true });
+    setSearchParams(next, { replace: !!opts.replace });
   }, [searchParams, setSearchParams]);
 
   // Drop a stale `?bucket=` if the bucket no longer exists under the current
@@ -1616,10 +1632,16 @@ function scopedPromptCount(world, scope) {
         if (pick === 'all') n += withContent.length;
         else if (Array.isArray(pick)) {
           const needles = new Set(pick.map((p) => p.toLowerCase()));
+          // Mirror server: slugline matching is settings-only — name is the
+          // shared anchor for characters/objects.
           n += withContent.filter((e) => {
             const name = (e.name || '').toLowerCase();
-            const slug = (e.slugline || '').toLowerCase();
-            return needles.has(name) || needles.has(slug);
+            if (needles.has(name)) return true;
+            if (trunk === 'settings') {
+              const slug = (e.slugline || '').toLowerCase();
+              if (needles.has(slug)) return true;
+            }
+            return false;
           }).length;
         }
       }

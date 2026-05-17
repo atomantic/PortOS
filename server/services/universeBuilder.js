@@ -1014,7 +1014,13 @@ export function compilePrompts(universe, options = {}) {
           : entries.filter((e) => Array.isArray(sel) && sel.some((s) => {
               const needle = s.toLowerCase();
               if (typeof e.name === 'string' && e.name.toLowerCase() === needle) return true;
-              if (typeof e.slugline === 'string' && e.slugline.toLowerCase() === needle) return true;
+              // Slugline is settings-only (see canonSelection docstring above
+              // and BIBLE_FIELD_WHITELIST). Avoid matching a stray slugline
+              // field on a character/object payload — that field isn't part of
+              // the canon contract for those kinds.
+              if (trunk.key === 'settings'
+                  && typeof e.slugline === 'string'
+                  && e.slugline.toLowerCase() === needle) return true;
               return false;
             }));
         for (const entry of filtered) {
