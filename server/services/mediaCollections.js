@@ -237,11 +237,14 @@ export const universeCollectionNameFor = (universeName) =>
 // `findOrCreateUniverseCollection` (the universeId-first upsert) to provision
 // on first use. Do NOT fall back to `findOrCreateCollectionByName` here —
 // that path is name-first and would adopt a same-named foreign-universe
-// bucket.
+// bucket. The argument is sliced to the same limit storage uses so passing
+// an overlong id (e.g. from a malformed share manifest) matches whatever
+// the upsert helper would have persisted.
 export async function findCollectionByUniverseId(universeId) {
-  if (!universeId) return null;
+  if (typeof universeId !== 'string' || !universeId) return null;
+  const needle = universeId.slice(0, UNIVERSE_ID_MAX);
   const all = await listCollections();
-  return all.find((c) => c.universeId === universeId) || null;
+  return all.find((c) => c.universeId === needle) || null;
 }
 
 /**
@@ -321,11 +324,12 @@ export async function findOrCreateUniverseCollection({ universeId, universeName,
 // items themselves are preserved — the user may still want the renders.
 // Returns the list of unlinked collection ids (empty when none matched).
 export async function unlinkCollectionsForUniverse(universeId) {
-  if (!universeId) return [];
+  if (typeof universeId !== 'string' || !universeId) return [];
+  const needle = universeId.slice(0, UNIVERSE_ID_MAX);
   return serializeFileWrite(async () => {
     const all = await listCollections();
     const matches = all
-      .map((c, i) => (c.universeId === universeId ? i : -1))
+      .map((c, i) => (c.universeId === needle ? i : -1))
       .filter((i) => i >= 0);
     if (!matches.length) return [];
     const now = new Date().toISOString();
@@ -350,11 +354,12 @@ export async function unlinkCollectionsForUniverse(universeId) {
 // Returns the first updated collection (back-compat) — callers that need the
 // full list can re-read after.
 export async function renameCollectionForUniverse(universeId, newUniverseName) {
-  if (!universeId) return null;
+  if (typeof universeId !== 'string' || !universeId) return null;
+  const needle = universeId.slice(0, UNIVERSE_ID_MAX);
   return serializeFileWrite(async () => {
     const all = await listCollections();
     const matchIdxs = all
-      .map((c, i) => (c.universeId === universeId ? i : -1))
+      .map((c, i) => (c.universeId === needle ? i : -1))
       .filter((i) => i >= 0);
     if (!matchIdxs.length) return null;
     const desired = universeCollectionNameFor(newUniverseName);

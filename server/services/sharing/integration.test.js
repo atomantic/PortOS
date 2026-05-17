@@ -255,7 +255,13 @@ describe('sharing round-trip', () => {
     expect(fs.existsSync(join(tempData, 'images', 'second.png'))).toBe(true);
   });
 
-  it('universe export bundles a legacy convention-named collection with no universeId', async () => {
+  it('universe export ignores a same-named unlinked collection (universeId-only routing)', async () => {
+    // Round-9 review caught that the exporter's old "fall back to name
+    // match" path could pick up a post-deleteUniverse orphan and ship it
+    // out under a new same-named universe. The runtime fallback is gone;
+    // the upgrade path for genuinely-legacy installs is migration 021
+    // (which runs at boot, before any exporter call). This test pins the
+    // new contract.
     const bucket = await buckets.createBucket({ name: 'LegacyBucket', path: tempBucket, mode: 'auto-merge' });
     const universeBuilder = await import('../universeBuilder.js');
     const mediaCollections = await import('../mediaCollections.js');
@@ -263,29 +269,19 @@ describe('sharing round-trip', () => {
     const fs = await import('fs');
     fs.writeFileSync(join(tempData, 'images', 'legacy.png'), 'PNG');
 
-    const collection = await mediaCollections.createCollection({
+    // Unlinked collection with the conventional name — exporter must NOT
+    // adopt this for the universe.
+    const orphan = await mediaCollections.createCollection({
       name: `Universe: ${u.name}`,
       description: 'Legacy unlinked collection',
     });
-    await mediaCollections.addItem(collection.id, { kind: 'image', ref: 'legacy.png' });
+    await mediaCollections.addItem(orphan.id, { kind: 'image', ref: 'legacy.png' });
 
     const exp = await exporter.exportUniverse(u.id, bucket.id);
     const manifest = JSON.parse(fs.readFileSync(join(tempBucket, 'manifests', exp.filename), 'utf-8'));
-    expect(manifest.collection).toMatchObject({ name: 'Universe: Post-Epoc', universeId: u.id });
-    expect(manifest.collection.items).toHaveLength(1);
-
-    await mediaCollections.deleteCollection(collection.id);
-    await universeBuilder.deleteUniverse(u.id);
-
-    simulateRemoteSender(tempBucket, exp.filename);
-    const r = await importer.processManifest(bucket.id, exp.filename);
-    expect(r.processed).toBe(true);
-    expect(r.outcome.collectionItemsAdded).toBe(1);
-
-    const restored = (await mediaCollections.listCollections()).find((c) => c.name === 'Universe: Post-Epoc');
-    expect(restored).toBeTruthy();
-    expect(restored.universeId).toBe(u.id);
-    expect(restored.items.map((i) => i.ref)).toEqual(['legacy.png']);
+    // No collection payload in the manifest — the universe had no
+    // universeId-linked collection.
+    expect(manifest.collection).toBeFalsy();
   });
 
   it('keeps universe manifests retryable while Drive assets are still syncing', async () => {

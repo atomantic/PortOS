@@ -644,6 +644,17 @@ export async function promoteInboxItem(bucketId, manifestId) {
   await mergeMediaJobRecords(bucket.path, manifest.recordIds);
   const availableAssetKeys = new Set(assetCopy.available.map((ref) => `${ref.kind}:${ref.ref}`));
   const outcome = await applyAutoMerge(bucket, manifest, records, { availableAssetKeys });
+  // Mirror the missing-record/asset gates above: if the collection
+  // payload deferred because its universe isn't present locally yet,
+  // throw a pending error instead of silently dropping the inbox item.
+  // Otherwise the user's "promote" click would consume the inbox row
+  // while the collection items never landed.
+  if (outcome.collectionPendingUniverse) {
+    throw Object.assign(new Error(`Collection payload waiting on universe ${outcome.collectionPendingUniverse} to be imported first`), {
+      code: 'SHARING_UNIVERSE_PENDING',
+      pendingCollectionUniverse: outcome.collectionPendingUniverse,
+    });
+  }
   // Drop from inbox.
   inbox.items.splice(idx, 1);
   await writeInbox(bucketId, inbox);

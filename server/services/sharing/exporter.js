@@ -218,22 +218,27 @@ function collectAssetReferences(record) {
 }
 
 /**
- * Find the media collection linked to a universe. Prefers the explicit
- * `universeId` field on the collection (added by the universe-builder
- * route); falls back to matching the conventional `Universe: <name>`
- * name. Returns null when nothing's linked.
+ * Find the media collection linked to a universe. universeId-only routing
+ * — no name-based legacy fallback. Two reasons the legacy fallback was
+ * removed:
+ *   1. A post-`deleteUniverse` orphan (now name-matching some new
+ *      same-named universe) would otherwise be picked up and its old
+ *      items would be serialized as the new universe's collection,
+ *      reintroducing the cross-universe mixing this PR set out to
+ *      prevent.
+ *   2. An ambiguous case that migration 021 deliberately skipped (two
+ *      universes share a display name, no safe link) would otherwise be
+ *      exported under whichever universe ran the export — same
+ *      mis-attribution risk.
+ *
+ * Pre-link installs converge on universeId stamps via migration 021 at
+ * boot, so the runtime fallback is no longer needed for the upgrade
+ * path. Returns null when no collection is linked.
  */
 async function findCollectionForUniverse(universe) {
   if (!universe?.id) return null;
   const all = await listCollections().catch(() => []);
-  const direct = all.find((c) => c.universeId === universe.id);
-  if (direct) return direct;
-  const conventional = `universe: ${(universe.name || '').toLowerCase()}`;
-  const legacy = all.find((c) => (c.name || '').toLowerCase() === conventional);
-  // Legacy universe-builder collections were named conventionally but did not
-  // carry the explicit link. Preserve the link in the share payload so the
-  // importer can restore membership instead of leaving copied assets unsorted.
-  return legacy ? { ...legacy, universeId: universe.id } : null;
+  return all.find((c) => c.universeId === universe.id) || null;
 }
 
 /**
