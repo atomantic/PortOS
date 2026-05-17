@@ -269,6 +269,16 @@ export async function updateSeasonOnSeries(seriesId, seasonId, patchFn) {
     }
     const existing = seasons[seasonIdx];
     const patched = patchFn(existing);
+    // No-op short-circuit: `patchFn` returning `null`/`undefined` (or an empty
+    // object) means "nothing changed" — typically a filename-hook racing a
+    // newer job. Without this guard, every late completion event bumps
+    // `season.updatedAt`, rewrites the series file, and re-broadcasts
+    // `recordUpdated('series', …)`, which schedules a share re-export and
+    // makes LWW comparisons noisy. Mirrors the empty-patch fast-path the
+    // issues-side `updateStageWithLatest` already has.
+    if (!patched || (typeof patched === 'object' && Object.keys(patched).length === 0)) {
+      return cur;
+    }
     const nextSeasons = [...seasons];
     // Force a fresh updatedAt on the touched season so LWW comparisons fire.
     nextSeasons[seasonIdx] = { ...existing, ...patched, updatedAt: new Date().toISOString() };

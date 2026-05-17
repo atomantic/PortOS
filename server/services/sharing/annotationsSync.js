@@ -105,7 +105,7 @@ function buildManifestForAnnotations({ senderInstanceId, sourceName, bucket, rec
 }
 
 async function flushAll() {
-  pendingTimer = null;
+  // pendingTimer is already cleared by scheduleFlush's setTimeout callback.
   const [buckets, senderInstanceId, sourceName, localAnnotations] = await Promise.all([
     listBuckets().catch(() => []),
     getInstanceId().catch(() => null),
@@ -127,8 +127,15 @@ async function flushAll() {
 }
 
 function scheduleFlush() {
-  if (pendingTimer) return;
+  // True debounce: restart the timer on every call so a burst of rapid edits
+  // collapses into one flush 2s after the LAST change. The previous
+  // "if (pendingTimer) return" was a throttle — the first edit started the
+  // timer and subsequent edits within the window were absorbed but the
+  // flush still fired mid-burst (and the trailing edits then triggered
+  // another flush a moment later).
+  if (pendingTimer) clearTimeout(pendingTimer);
   pendingTimer = setTimeout(() => {
+    pendingTimer = null;
     flushAll().catch((err) => {
       console.error(`⚠️ sharing.annotations: flushAll failed: ${err.message}`);
     });
