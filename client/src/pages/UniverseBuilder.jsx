@@ -1218,12 +1218,22 @@ export default function UniverseBuilder() {
   const activeTab = isValidTab(requestedTab) ? requestedTab : TAB_BIBLE;
   const activeBucket = searchParams.get('bucket') || '';
   const setTab = useCallback((tab, opts = {}) => {
+    const currentTab = searchParams.get('tab') || TAB_BIBLE;
+    const isSameTab = tab === currentTab;
     const next = new URLSearchParams(searchParams);
     if (tab === TAB_BIBLE) next.delete('tab');
     else next.set('tab', tab);
-    if (opts.bucket === undefined) next.delete('bucket');
+    // Bucket behavior:
+    //   - explicit `opts.bucket` value (string) → set
+    //   - explicit `opts.bucket: null` → clear (callers that want to drop the
+    //     filter on the same tab pass null intentionally)
+    //   - omitted + same tab → preserve current bucket (re-clicking the
+    //     active tab shouldn't drop the user's chip/canon filter)
+    //   - omitted + tab transition → clear (the old bucket is meaningless on
+    //     the new tab's bucket namespace)
+    if (opts.bucket === null) next.delete('bucket');
     else if (opts.bucket) next.set('bucket', opts.bucket);
-    else next.delete('bucket');
+    else if (!isSameTab) next.delete('bucket');
     setSearchParams(next, { replace: !!opts.replace });
   }, [searchParams, setSearchParams]);
   // Explicit user bucket clicks push a history entry so back/forward actually
