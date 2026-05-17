@@ -284,17 +284,35 @@ const normalizeCompositeSheets = (raw) =>
 // pre-sanitize so the sanitizer's `ensureSource` allowlist validates it (a
 // post-sanitize stamp would bypass that check).
 //
-// Strip `id`/`createdAt`/`updatedAt` from raw entries before sanitizing.
-// `sanitizeBibleList` preserves any non-empty `id` it sees on input, so an
-// LLM that hallucinates an `id` (or — more likely — copies an example id from
-// the prompt) would otherwise inject duplicate or arbitrary identifiers into
-// the draft. The sanitizer mints a fresh id when one is missing; that's the
-// correct behavior for expand, which is always creating fresh canon entries.
+// Strip control + provenance fields from raw entries before sanitizing. The
+// sanitizer preserves whatever it finds for these — an LLM that hallucinates
+// any of them (or copies an example from the prompt) would otherwise inject
+// stale identifiers, false attribution, or phantom "locked" entries that
+// look user-pinned. Expand is creating fresh records; the only field whose
+// provenance we trust is `source` (set to UNIVERSE_EXPAND below).
+//
+// Stripped (the LLM should NEVER supply these):
+//   - id, createdAt, updatedAt — sanitizer mints fresh values
+//   - locked                   — sanitizer preserves `=== true`; a hallucinated
+//                                lock would block user edits without a Lock UI click
+//   - sourceSeriesId           — provenance (which series imported this entry);
+//                                expand isn't a series import, so always null
+//   - imageRefs, primaryImageRef — visual anchors are operational (set by
+//                                  Render UI / extraction), not creative
 const normalizeCanonArray = (raw, kind) => {
   if (!Array.isArray(raw)) return [];
   const stamped = raw.map((e) => {
     if (!e || typeof e !== 'object') return e;
-    const { id: _ignoredId, createdAt: _ca, updatedAt: _ua, ...rest } = e;
+    const {
+      id: _ignoredId,
+      createdAt: _ca,
+      updatedAt: _ua,
+      locked: _locked,
+      sourceSeriesId: _ssi,
+      imageRefs: _imgs,
+      primaryImageRef: _primary,
+      ...rest
+    } = e;
     return { ...rest, source: BIBLE_SOURCE.UNIVERSE_EXPAND };
   });
   // Expand is creating fresh entries; let the sanitizer stamp timestamps

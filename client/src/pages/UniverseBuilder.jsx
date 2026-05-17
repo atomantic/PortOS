@@ -74,14 +74,16 @@ const mergeVariations = (existing, fresh) => {
 
 // Merge LLM-expanded canon entries into the draft's existing canon array.
 // Existing entries always win on collision (lock or no — the user authored
-// them; the LLM's repeat is a hallucination at this point). Dedupes by name
-// AND slugline (for settings) so an expand that re-emits "Foundry City" or
-// "INT. FOUNDRY CITY — DAY" can't create a phantom duplicate. Mirrors the
+// them; the LLM's repeat is a hallucination at this point). Mirrors the
 // server-side dedupe in backfillCanonFromCategories + storyBible's
 // MERGE_CONFIG (`storyBible.js` keyFields).
 //
-// Identity rules are kind-aware to match the server:
-//   - characters/objects → `normalizeBibleName` (trim + lowercase).
+// Identity rules are kind-aware to match the server's MERGE_CONFIG:
+//   - characters/objects → `normalizeBibleName` (trim + lowercase) on `name`
+//                          AND `aliases[]`. Without aliases, an existing
+//                          character "Ashley" with alias "Ash" would not
+//                          collide with an LLM-returned "Ash", producing a
+//                          duplicate canon entry the user has to merge by hand.
 //   - settings           → `normalizeSlugline` for BOTH `slugline` AND `name`
 //                          (`storyBible.js` MERGE_CONFIG.setting.keyFields).
 //                          Without this, sluglines that differ only in dash
@@ -94,22 +96,36 @@ const mergeCanonByName = (existing, fresh, kind = 'character') => {
   // Empty/missing fresh — return `existing` unchanged (preserve reference so
   // a no-op expand doesn't trigger downstream identity-comparing effects).
   if (!fresh?.length) return existing || [];
-  const normName = kind === 'setting'
+  const isSetting = kind === 'setting';
+  const normName = isSetting
     ? (s) => (typeof s === 'string' ? normalizeSlugline(s) : '')
     : (s) => (typeof s === 'string' ? s.trim().toLowerCase() : '');
   const normSlug = (s) => (typeof s === 'string' ? normalizeSlugline(s) : '');
+  // Aliases participate in identity for character/object only — settings use
+  // slugline collision instead (the server's MERGE_CONFIG.setting has no
+  // aliases field).
+  const aliasKeys = (entry) => {
+    if (isSetting || !Array.isArray(entry?.aliases)) return [];
+    return entry.aliases.map(normName).filter(Boolean);
+  };
   const seen = new Set();
   for (const e of existing || []) {
     if (e?.name) seen.add(normName(e.name));
     if (e?.slugline) seen.add(normSlug(e.slugline));
+    for (const k of aliasKeys(e)) seen.add(k);
   }
   const merged = [...(existing || [])];
   for (const e of fresh) {
     const nameKey = normName(e?.name);
     const sluglineKey = normSlug(e?.slugline);
-    if ((nameKey && seen.has(nameKey)) || (sluglineKey && seen.has(sluglineKey))) continue;
+    const aliasMatches = aliasKeys(e);
+    const collides = (nameKey && seen.has(nameKey))
+      || (sluglineKey && seen.has(sluglineKey))
+      || aliasMatches.some((k) => seen.has(k));
+    if (collides) continue;
     if (nameKey) seen.add(nameKey);
     if (sluglineKey) seen.add(sluglineKey);
+    for (const k of aliasMatches) seen.add(k);
     merged.push(e);
   }
   return merged;
@@ -120,12 +136,14 @@ const humanizeCategory = (key) => CATEGORY_LABELS[key]
 
 // Toast summary for handleExpand — same body, different tail depending on
 // whether the auto-save succeeded.
-const expandToast = (draft, variationCount, saved) => {
-  const canonCount = (draft.characters?.length || 0)
-    + (draft.settings?.length || 0)
-    + (draft.objects?.length || 0);
-  const sheetCount = draft.compositeSheets?.length || 0;
-  const base = `Expanded into ${variationCount} variations, ${sheetCount} boards, ${canonCount} canon entries`;
+// `addedCanonCount` is the number of NEW canon entries the expand actually
+// contributed (post-merge minus pre-existing) — NOT the draft's total. On a
+// universe that already has canon, an expand that adds zero would otherwise
+// boast about preserved entries it didn't create. `variationCount` is the
+// total because every expand recomputes variations from scratch (locked +
+// freshly-generated); the diff isn't meaningful there.
+const expandToast = ({ variationCount, sheetCount, addedCanonCount, saved }) => {
+  const base = `Expanded into ${variationCount} variations, ${sheetCount} boards, ${addedCanonCount} new canon entries`;
   return `${base} — ${saved ? 'saved' : 'review then Save'}`;
 };
 
@@ -587,6 +605,14 @@ export default function UniverseBuilder() {
     const mergedCharacters = pickCanon('characters', 'character');
     const mergedSettings = pickCanon('settings', 'setting');
     const mergedObjects = pickCanon('objects', 'object');
+    // Count NEW canon entries this expand added (post-merge minus pre-existing).
+    // Used by the toast so a re-expand on a populated universe doesn't claim
+    // credit for entries the user already authored. Existing entries always win
+    // on collision in mergeCanonByName, so the delta is always non-negative.
+    const addedCanonCount =
+      (mergedCharacters.length - (draft.characters?.length || 0))
+      + (mergedSettings.length - (draft.settings?.length || 0))
+      + (mergedObjects.length - (draft.objects?.length || 0));
 
     const expandedDraft = {
       ...draft,
@@ -636,11 +662,21 @@ export default function UniverseBuilder() {
           const without = prev.filter((w) => w.id !== updated.id);
           return [updated, ...without];
         });
-        toast.success(expandToast(expandedDraft, total, true));
+        toast.success(expandToast({
+          variationCount: total,
+          sheetCount: expandedDraft.compositeSheets?.length || 0,
+          addedCanonCount,
+          saved: true,
+        }));
         return;
       }
     }
-    toast.success(expandToast(expandedDraft, total, false));
+    toast.success(expandToast({
+      variationCount: total,
+      sheetCount: expandedDraft.compositeSheets?.length || 0,
+      addedCanonCount,
+      saved: false,
+    }));
   };
 
   // Writes the LLM-refined fields back to the draft. The modal only emits
