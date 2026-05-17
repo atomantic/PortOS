@@ -126,7 +126,7 @@ function StageColumn({ stage, nodes, allNodes, hoveredId, setHoveredId }) {
   const hoveredNode = hoveredId ? allNodes.find(n => n.id === hoveredId) : null;
 
   return (
-    <div className="flex flex-col gap-2 w-full lg:w-60 lg:flex-shrink-0">
+    <div className="flex w-full min-w-0 flex-col gap-2 lg:flex-1">
       <div className={`rounded-md border ${palette.ring} ${palette.bg} px-3 py-2`}>
         <div className="flex items-center gap-2">
           <span className={`w-2 h-2 rounded-full ${palette.dot}`} />
