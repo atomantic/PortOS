@@ -637,12 +637,14 @@ export default function UniverseBuilder() {
     if (expandedDraft.compositeSheets?.length) {
       setRenderOpts((r) => ({ ...r, promptMode: 'sheets' }));
     }
-    // Auto-persist expansion if the world is already saved — otherwise the
-    // user clicks Render and hits "No prompts to render" because the disk
-    // copy still has empty categories. New (unsaved) drafts still need a
-    // manual Save since they have no name yet.
-    if (selectedId && expandedDraft.name?.trim()) {
-      const updated = await updateUniverse(selectedId, {
+    // Auto-persist expansion when the draft has a name. Updates the existing
+    // record when one is selected; creates a new one when the user has only
+    // typed a name + starter prompt and clicked Expand. The create path is
+    // important for the canon section's visibility — it's gated on
+    // `selectedId && draft.id === selectedId`, so without an id the user
+    // can't see/manage the canon arrays just merged into the draft.
+    if (expandedDraft.name?.trim()) {
+      const payload = {
         name: expandedDraft.name.trim(),
         starterPrompt: expandedDraft.starterPrompt || '',
         logline: expandedDraft.logline || '',
@@ -656,12 +658,18 @@ export default function UniverseBuilder() {
         influences: ensureInfluences(expandedDraft.influences),
         locked: expandedDraft.locked || {},
         llm: expandedDraft.llm || {},
-      }).catch((e) => { toast.error(`Auto-save after expand failed: ${e.message}`); return null; });
-      if (updated) {
+      };
+      const saved = selectedId
+        ? await updateUniverse(selectedId, payload).catch((e) => { toast.error(`Auto-save after expand failed: ${e.message}`); return null; })
+        : await createUniverse(payload).catch((e) => { toast.error(`Auto-save after expand failed: ${e.message}`); return null; });
+      if (saved) {
         setWorlds((prev) => {
-          const without = prev.filter((w) => w.id !== updated.id);
-          return [updated, ...without];
+          const without = prev.filter((w) => w.id !== saved.id);
+          return [saved, ...without];
         });
+        // New record: route to its id so the canon section gates flip and
+        // subsequent draft state reflects the persisted record.
+        if (!selectedId) goToWorld(saved.id);
         toast.success(expandToast({
           variationCount: total,
           sheetCount: expandedDraft.compositeSheets?.length || 0,

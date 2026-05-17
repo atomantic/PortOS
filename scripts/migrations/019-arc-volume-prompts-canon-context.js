@@ -107,7 +107,7 @@ export default {
           `     data.sample/prompts/stages/${filename}\n` +
           `   against your current:\n` +
           `     data/prompts/stages/${filename}\n` +
-          `   and add the new "World canon" block above the categories block.`,
+          `   and add the new "World canon" block in the same position as in the sample template.`,
         );
         skipped++;
         continue;

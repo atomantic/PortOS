@@ -224,12 +224,17 @@ const normalizeCategories = (raw) => {
     let variations = [];
     if (Array.isArray(node)) variations = node;
     else if (Array.isArray(node?.variations)) variations = node.variations;
-    // Forward the LLM-returned `kind` (if present) so sanitizeCategory can
-    // honor it. Without this passthrough, every custom bucket falls back to
-    // the WORLD_CATEGORY_DEFAULT_KINDS map (or `other`), and "kind"-tagged
+    // Forward the LLM-returned `kind` (if present + valid) so sanitizeCategory
+    // can honor it. Without this passthrough, every custom bucket falls back
+    // to the WORLD_CATEGORY_DEFAULT_KINDS map (or `other`), and "kind"-tagged
     // buckets like `factions: { kind: 'characters' }` silently land under the
     // wrong canon trunk in the UI despite the prompt contract advertising it.
-    const rawKind = node && typeof node === 'object' && !Array.isArray(node) ? node.kind : undefined;
+    // Clamp invalid LLM values (e.g. "people") at the boundary — drop them so
+    // sanitizeCategory falls back to default. sanitizeCategory would clamp
+    // again, but doing it here also defends the Zod route schema which
+    // rejects unknown enum values on a subsequent save round-trip.
+    const llmKind = node && typeof node === 'object' && !Array.isArray(node) ? node.kind : undefined;
+    const rawKind = CATEGORY_KINDS.includes(llmKind) ? llmKind : undefined;
     out[key] = {
       ...(rawKind !== undefined ? { kind: rawKind } : {}),
       // Clamp to the same per-category cap the route schema enforces (50)
