@@ -411,6 +411,40 @@ describe("universeBuilder service", () => {
       expect(compiled[0].label).toBe("Wake Jackals");
     });
 
+    it("layers per-batch overrides on top of universe influences", async () => {
+      const w = await seedWorld();
+      const compiled = svc.compilePrompts(w, {
+        selection: { landscapes: ["crystal canyon"] },
+        extraStyle: "high contrast",
+        extraNegative: "low quality",
+        stylePresetPrompt: "noir cinematography",
+        stylePresetNegative: "color photo",
+      });
+      expect(compiled).toHaveLength(1);
+      // Baseline + preset + extra are comma-joined into the stylePreset prefix
+      // and composeStyledPrompt sticks ". " between style and variation.
+      expect(compiled[0].prompt).toBe(
+        "moebius linework, scavengers reign palette, noir cinematography, high contrast. crystalline canyon, alien sun",
+      );
+      // Negative parts are comma-joined; composeStyledPrompt also adds a comma
+      // when the user negative is non-empty, but here userNegative is empty so
+      // we just see baseline + preset + extra.
+      expect(compiled[0].negativePrompt).toBe(
+        "blurry, lowres, color photo, low quality",
+      );
+    });
+
+    it("override fields default to baseline influences when omitted", async () => {
+      const w = await seedWorld();
+      const compiled = svc.compilePrompts(w, {
+        selection: { landscapes: ["crystal canyon"] },
+      });
+      expect(compiled[0].prompt).toBe(
+        "moebius linework, scavengers reign palette. crystalline canyon, alien sun",
+      );
+      expect(compiled[0].negativePrompt).toBe("blurry, lowres");
+    });
+
     it("clamps batchPerVariation to 1..20", async () => {
       const w = await seedWorld();
       // 0 → 1

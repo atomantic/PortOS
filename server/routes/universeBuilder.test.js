@@ -455,6 +455,27 @@ describe('universe-builder routes', () => {
     expect(JSON.stringify(res.body)).toMatch(/collectionName/i);
   });
 
+  it('POST /:id/render accepts seed/negativePrompt/extraStyle/loras overrides', async () => {
+    const app = buildApp();
+    const created = await request(app).post('/api/universe-builder').send({
+      name: 'Override Universe',
+      categories: {
+        landscapes: { variations: [{ label: 'A', prompt: 'a' }] },
+      },
+    });
+    const res = await request(app)
+      .post(`/api/universe-builder/${created.body.id}/render`)
+      .send({
+        mode: 'local',
+        seed: 'abc123',
+        negativePrompt: 'low quality',
+        extraStyle: 'high contrast',
+        loras: [{ filename: 'foo.safetensors', name: 'Foo', scale: 0.8 }],
+      });
+    expect(res.status).toBe(200);
+    expect(res.body.promptCount).toBe(1);
+  });
+
   it('POST /:id/render rejects when no variations exist', async () => {
     const app = buildApp();
     const created = await request(app).post('/api/universe-builder').send({ name: 'Empty' });
