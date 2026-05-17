@@ -16,6 +16,17 @@ const causeSuffix = (error) =>
   error.context?.causeChain ? ` ← ${error.context.causeChain}` : '';
 
 /**
+ * Build the path portion of a request URL for logging — strips the query
+ * string so tokens (e.g. `?access_token=…`) don't leak into server logs.
+ * Falls back through `originalUrl` → `url` → '/'.
+ */
+const routePath = (req) => {
+  const raw = req.originalUrl || req.url || '/';
+  const qIndex = raw.indexOf('?');
+  return qIndex === -1 ? raw : raw.slice(0, qIndex);
+};
+
+/**
  * Enhanced error object with metadata
  */
 export class ServerError extends Error {
@@ -54,7 +65,7 @@ export function asyncHandler(fn) {
       const error = normalizeError(err);
 
       // Log the error (skip stack traces for upstream platform issues)
-      const route = `${req.method} ${req.originalUrl || req.url}`;
+      const route = `${req.method} ${routePath(req)}`;
       const suffix = causeSuffix(error);
       const logMsg = `❌ Route error [${route}]: ${error.message}${suffix}`;
       if (error.code === 'PLATFORM_UNAVAILABLE') {
@@ -153,9 +164,11 @@ function getErrorCode(status) {
 
 /**
  * Strip sensitive fields from error context before broadcasting to clients.
- * Full context is still available in server-side console logs.
+ * Full context is still available in server-side console logs. Exported so
+ * socket-side listeners can defensively sanitize when they receive an error
+ * that was emitted directly (bypassing `emitErrorEvent`).
  */
-function sanitizeContext(context) {
+export function sanitizeContext(context) {
   if (!context || typeof context !== 'object') return context;
   const sensitive = ['apikey', 'token', 'secret', 'password', 'credential', 'authorization', 'bearer', 'envvars', 'secretenvvars'];
   const visited = new WeakSet();
@@ -225,7 +238,7 @@ export function errorMiddleware(err, req, res, next) {
   const error = normalizeError(err);
 
   // Log the error
-  const route = `${req.method} ${req.originalUrl || req.url}`;
+  const route = `${req.method} ${routePath(req)}`;
   const logMsg = `❌ Server error [${route}]: ${error.message}${causeSuffix(error)}`;
   if (error.status >= 500) {
     console.error(logMsg);
