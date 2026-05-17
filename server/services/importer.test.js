@@ -529,6 +529,48 @@ describe('commitImport', () => {
     expect(s2).toBeDefined();
   });
 
+  // Round-9 review: arcPosition auto-assign must seed `nextFreeArcPos`
+  // from the union of explicit incoming positions AND pre-existing
+  // series.issues[].arcPosition — re-import on a series that already
+  // has issues at [1..3] would otherwise auto-assign starting at 1 again
+  // and create duplicate positions silently.
+  it('arcPosition auto-assign on re-import skips arcPositions already used by existing issues', async () => {
+    const { uni, ser } = await setupForCommit();
+    // First pass: seed three issues at arcPositions 1, 2, 3.
+    await importerSvc.commitImport({
+      universeId: uni.id, seriesId: ser.id,
+      canonSelections: { characters: [], places: [], objects: [] },
+      arc: null,
+      seasons: [],
+      issues: [
+        { title: 'I1', arcPosition: 1, proseExcerpt: 'p1' },
+        { title: 'I2', arcPosition: 2, proseExcerpt: 'p2' },
+        { title: 'I3', arcPosition: 3, proseExcerpt: 'p3' },
+      ],
+    });
+    // Second pass: two new issues with NO arcPosition. Must auto-assign
+    // to 4 and 5, not collide with 1 and 2.
+    const second = await importerSvc.commitImport({
+      universeId: uni.id, seriesId: ser.id,
+      canonSelections: { characters: [], places: [], objects: [] },
+      arc: null,
+      seasons: [],
+      issues: [
+        { title: 'I4 — auto', proseExcerpt: 'p4' },
+        { title: 'I5 — auto', proseExcerpt: 'p5' },
+      ],
+    });
+    expect(second.createdIssueIds).toHaveLength(2);
+    const i4 = await issuesSvc.getIssue(second.createdIssueIds[0]);
+    const i5 = await issuesSvc.getIssue(second.createdIssueIds[1]);
+    expect(i4.arcPosition).toBe(4);
+    expect(i5.arcPosition).toBe(5);
+    // And the full series now has 5 issues, no collisions on arcPosition.
+    const allIssues = await issuesSvc.listIssues({ seriesId: ser.id });
+    const positions = allIssues.map((i) => i.arcPosition).sort((a, b) => a - b);
+    expect(positions).toEqual([1, 2, 3, 4, 5]);
+  });
+
   // Round-8 review: fallbackSeasonId must pick the LOWEST-NUMBERED season,
   // not array-position [0]. After mergeSeasons the array order is
   // `[...retained, ...incomingBuilt]` — retained existing seasons come

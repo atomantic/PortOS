@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { FileInput, Loader2, ArrowLeft, CheckCircle2, AlertTriangle } from 'lucide-react';
 import toast from '../components/ui/Toast';
@@ -59,16 +59,31 @@ export default function Importer() {
     sourceCharLimit: IMPORTER_SOURCE_CHAR_LIMIT_FALLBACK,
     arcRoles: IMPORTER_ARC_ROLES_FALLBACK,
   });
+  // Ref to the AbortController of the in-flight config GET so analyze can
+  // cancel it before firing — closes the GET-resolves-after-analyze race
+  // window where the GET's setConfig would clobber analyze-supplied values.
+  const abortConfigRef = useRef(null);
   useEffect(() => {
     // Silent — the fallback values are correct for the shipped client, so a
     // transient network blip doesn't need to toast.
-    getImporterConfig({ silent: true }).then((cfg) => {
-      if (!cfg) return;
+    //
+    // AbortController guards against a late-resolving config GET clobbering
+    // a server-side bump that the analyze response already applied. The
+    // user can navigate to /importer, fire Analyze faster than the config
+    // GET round-trip, and the GET-vs-analyze race would otherwise overwrite
+    // analyze's setConfig with the server-default fallback values whenever
+    // the GET resolves last. Aborting on unmount + on first analyze closes
+    // the window.
+    const ac = new AbortController();
+    abortConfigRef.current = ac;
+    getImporterConfig({ silent: true, signal: ac.signal }).then((cfg) => {
+      if (ac.signal.aborted || !cfg) return;
       setConfig({
         sourceCharLimit: Number.isFinite(cfg.sourceCharLimit) ? cfg.sourceCharLimit : IMPORTER_SOURCE_CHAR_LIMIT_FALLBACK,
         arcRoles: Array.isArray(cfg.arcRoles) && cfg.arcRoles.length > 0 ? cfg.arcRoles : IMPORTER_ARC_ROLES_FALLBACK,
       });
     }).catch(() => { /* keep fallbacks */ });
+    return () => ac.abort();
   }, []);
 
   // Review-phase editable state. Held separately from `preview` so the user
@@ -93,6 +108,11 @@ export default function Importer() {
   );
 
   const [runAnalyze, analyzing] = useAsyncAction(async () => {
+    // Cancel any still-in-flight config GET — its setConfig would
+    // otherwise resolve AFTER analyze's setConfig (which uses the
+    // server-fresh response.limits/arcRoles) and clobber it with the
+    // potentially-stale on-mount fetch values.
+    abortConfigRef.current?.abort();
     const payload = {
       universeName: intake.universeName.trim(),
       seriesName: intake.seriesName.trim(),

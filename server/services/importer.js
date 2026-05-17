@@ -25,7 +25,7 @@ import {
   createSeries,
   updateSeries,
 } from './pipeline/series.js';
-import { createIssue, deleteIssue } from './pipeline/issues.js';
+import { createIssue, deleteIssue, listIssues } from './pipeline/issues.js';
 import { sanitizeArc, sanitizeSeasonList, buildSeason, ARC_SHAPE_IDS, ARC_ROLES } from '../lib/storyArc.js';
 import { mergeExtractedBible, BIBLE_KIND } from '../lib/storyBible.js';
 
@@ -165,8 +165,16 @@ export function mergeSeasons(existingSeasons, incomingSeasons, buildSeasonImpl =
   });
   // Union: existing seasons NOT in the incoming set + the (updated or
   // freshly built) incoming entries. Caller runs sanitizeSeasonList.
+  // Filter retained to the same finite-numbered subset the map above
+  // operates on — a malformed existing entry (number undefined/NaN)
+  // would otherwise always slip through (since incomingNumbers only
+  // contains valid integers), surviving the merge unreachable by id.
+  // sanitizeSeasonList downstream coerces those to 0 and may drop
+  // them, but filtering here removes the ambiguity at the source.
   const incomingNumbers = new Set(incomingBuilt.map((s) => s.number));
-  const retained = existingSeasons.filter((s) => !incomingNumbers.has(s.number));
+  const retained = existingSeasons.filter((s) =>
+    Number.isFinite(s.number) && !incomingNumbers.has(s.number),
+  );
   return [...retained, ...incomingBuilt];
 }
 
@@ -580,10 +588,25 @@ export async function commitImport({
   // Auto-assign sequential arcPositions to incoming issues that omit one.
   // Mirrors the seasons auto-assign in the merge path. Issues with an
   // explicit position keep it; gaps get filled by the next free integer.
+  // Seed nextFree from the UNION of explicit incoming positions AND any
+  // pre-existing series.issues[].arcPosition — re-import on a series
+  // that already has issues at [1..3] would otherwise auto-assign
+  // starting at 1 again and create duplicate positions. createIssue
+  // doesn't enforce arcPosition uniqueness, so the collision would
+  // silently land on disk and the renumber pass would arbitrarily
+  // order the ties.
   // Cap at ARC_POSITION_MAX (matching the wire schema's `.max(9999)`)
   // so a value the wire wouldn't accept can't reach createIssue via the
   // service auto-assign path.
-  let nextFreeArcPos = (seenArcPositions.size === 0) ? 1 : Math.max(...seenArcPositions) + 1;
+  const existingIssues = await listIssues({ seriesId: series.id });
+  const existingArcPositions = new Set();
+  for (const ex of existingIssues) {
+    if (Number.isInteger(ex.arcPosition) && ex.arcPosition >= 1) {
+      existingArcPositions.add(ex.arcPosition);
+    }
+  }
+  const allUsedArcPositions = new Set([...seenArcPositions, ...existingArcPositions]);
+  let nextFreeArcPos = (allUsedArcPositions.size === 0) ? 1 : Math.max(...allUsedArcPositions) + 1;
   const issuesWithPositions = issues.map((proposal) => {
     if (Number.isInteger(proposal.arcPosition) && proposal.arcPosition >= 1) {
       return proposal;

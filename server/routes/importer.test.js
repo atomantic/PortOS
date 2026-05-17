@@ -158,5 +158,10 @@ describe('POST /api/importer/commit', () => {
       issues: [{ title: 'I1', arcPosition: 1 }],
     });
     expect(res.status).toBe(404);
+    // Pin the code too — a rename of universeSvc.ERR_NOT_FOUND would
+    // otherwise silently land here because SERVICE_ERROR_STATUS[undefined]
+    // falls through to the generic 500 handler and the status assertion
+    // alone wouldn't catch the regression.
+    expect(res.body.code).toBe(universeSvc.ERR_NOT_FOUND);
   });
 });
