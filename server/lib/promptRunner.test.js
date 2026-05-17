@@ -6,6 +6,10 @@ vi.mock('../services/runner.js', () => ({
   executeCliRun: vi.fn(),
   hasModelFlag: vi.fn(() => false),
   extractBakedModel: vi.fn(() => null),
+  // promptRunner.js imports stopRun for the API-timeout cancel path —
+  // without this mock, the timer firing would TypeError on `stopRun is
+  // not a function` and crash any test that triggers the API timeout.
+  stopRun: vi.fn().mockResolvedValue(undefined),
 }));
 
 // TUI runner is in lib (different module from services/runner.js) — mock it
@@ -468,5 +472,59 @@ describe('promptRunner — TUI provider routing', () => {
       provider: tuiProvider(),
       prompt: 'p', source: 't',
     })).rejects.toThrow(/Failed to spawn TUI/);
+  });
+});
+
+// =============================================================================
+// API timeout enforcement — the toolkit's executeApiRun has no internal
+// timer, so the central handler races a setTimeout against onComplete.
+// Verify that a stuck API run rejects with the timeout error AND that
+// stopRun is invoked for best-effort cancellation. Regression guard for
+// the round-2 review finding that API callers were hanging indefinitely.
+// =============================================================================
+
+describe('promptRunner — API timeout enforcement', () => {
+  it('rejects with timeout error when executeApiRun never completes and calls stopRun', async () => {
+    vi.useFakeTimers();
+    // executeApiRun hangs — never invokes onComplete or onData.
+    runner.executeApiRun.mockImplementation(() => new Promise(() => {}));
+
+    // Kick off the call and attach the rejection assertion BEFORE advancing
+    // timers — otherwise the timer-driven reject lands without a handler
+    // attached and vitest flags an unhandled rejection.
+    const promise = runPromptThroughProvider({
+      provider: apiProvider(),
+      prompt: 'p', source: 't',
+      timeout: 5000,
+    });
+    const assertion = expect(promise).rejects.toThrow(/API execution timed out after 5000ms/);
+
+    await vi.advanceTimersByTimeAsync(6000);
+    await assertion;
+
+    expect(runner.stopRun).toHaveBeenCalledWith('run-xyz');
+    vi.useRealTimers();
+  });
+
+  it('does not call stopRun when API completes within the timeout', async () => {
+    vi.useFakeTimers();
+    runner.executeApiRun.mockImplementation(async (id, _p, _m, _pr, _cwd, _ctx, onData, onComplete) => {
+      onData('quick');
+      onComplete({ success: true });
+    });
+
+    const promise = runPromptThroughProvider({
+      provider: apiProvider(),
+      prompt: 'p', source: 't',
+      timeout: 5000,
+    });
+
+    const out = await promise;
+    expect(out.text).toBe('quick');
+    // Advance time past what would have been the timeout — should not fire
+    // because settle-once guards cleared the handle.
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(runner.stopRun).not.toHaveBeenCalled();
+    vi.useRealTimers();
   });
 });

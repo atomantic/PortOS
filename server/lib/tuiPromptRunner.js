@@ -232,10 +232,28 @@ export async function executeTuiRun(runId, provider, prompt, cwd, onData, onComp
 
     ptyProcess.onExit(({ exitCode, signal }) => {
       const killed = !!signal;
+      const finalExitCode = typeof exitCode === 'number' ? exitCode : (killed ? 130 : 0);
+      const success = !killed && finalExitCode === 0;
+      // Always set an explicit error string when finishing as failure. The
+      // toolkit's errorDetection (if enabled) will fill in `error` inside
+      // finalizeRunRecord, but if it's absent we'd persist `success: false`
+      // with no error and the central handler would reject with a generic
+      // "TUI execution failed". Include the exit code + a tail of the
+      // captured output so failures are actionable from /runs without
+      // re-running.
+      let error = null;
+      if (killed) {
+        error = `TUI killed (signal ${signal})`;
+      } else if (!success) {
+        const tail = outputBuffer.slice(-200).trim();
+        error = tail
+          ? `TUI exited with code ${finalExitCode}: ${tail}`
+          : `TUI exited with code ${finalExitCode}`;
+      }
       finish({
-        success: !killed && exitCode === 0,
-        exitCode: typeof exitCode === 'number' ? exitCode : (killed ? 130 : 0),
-        error: killed ? `TUI killed (signal ${signal})` : null,
+        success,
+        exitCode: finalExitCode,
+        error,
         reason: killed ? 'killed' : 'exit'
       });
     });
