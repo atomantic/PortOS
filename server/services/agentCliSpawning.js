@@ -10,7 +10,7 @@ import { readFile, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { spawn } from 'child_process';
 import { homedir } from 'os';
-import { cosEvents } from './cosEvents.js';
+import { cosEvents, emitLog } from './cosEvents.js';
 import { updateAgent, completeAgent, appendAgentOutput } from './cosAgents.js';
 import { registerSpawnedAgent, unregisterSpawnedAgent } from './agents.js';
 import { release } from './executionLanes.js';
