@@ -551,6 +551,13 @@ export default function UniverseBuilder() {
   // double-mount stays clean.
   const mountedRef = useRef(true);
   useEffect(() => () => { mountedRef.current = false; }, []);
+  // Always-current draft snapshot. Click handlers that close over `draft`
+  // can race against in-flight setDraft calls (e.g. handleGenerateInCategory
+  // finishes its auto-save between render and click) — read draftRef.current
+  // for the freshest local state so PATCH payloads carry the latest merged
+  // categories instead of the stale closure value.
+  const draftRef = useRef(null);
+  useEffect(() => { draftRef.current = draft; }, [draft]);
   // Page-level in-flight gate for the promote action. Ref + state pair so
   // the disable check stays synchronous (ref) while still triggering renders
   // (state). Promote writes to `universe[bibleField]` and `categories[key]`
@@ -1346,19 +1353,18 @@ export default function UniverseBuilder() {
   // into the matching trunk on next render via groupBucketsByKind.
   const assignBucketKind = async (bucket, targetKind) => {
     if (!TRUNK_BY_KIND[targetKind]) return;
-    // Read the bucket once from the rendered draft — that's the instance the
-    // user clicked on, so the PATCH always reflects what they saw. The
-    // functional setDraft below uses the latest state so a concurrent edit
-    // to this bucket's variations (e.g. handleGenerateInCategory finishing
-    // mid-click) is merged correctly into the local store. The server-side
-    // PATCH is a shallow merge across top-level keys so unrelated concurrent
-    // edits to other fields are preserved either way.
-    const current = draft.categories?.[bucket];
+    // Read from draftRef so a generate's just-landed auto-save (which set
+    // draft via setDraft) is visible here even if React hasn't committed a
+    // re-render yet — without this, the PATCH below could overwrite the new
+    // variations with the closure's stale ones.
+    const latestDraft = draftRef.current || draft;
+    const current = latestDraft.categories?.[bucket];
     if (!current) return;
-    const nextCategories = {
-      ...draft.categories,
-      [bucket]: { ...current, kind: targetKind },
-    };
+    const nextBucket = { ...current, kind: targetKind };
+    // Only the affected bucket is sent in the PATCH — the server's categories
+    // patch is keyed (per-bucket replace), so omitting other keys leaves them
+    // untouched. That keeps concurrent edits to other buckets safe even when
+    // this handler raced an in-flight setDraft.
     setDraft((d) => ({
       ...d,
       categories: {
@@ -1371,7 +1377,7 @@ export default function UniverseBuilder() {
       toast.success(`Tagged "${humanizeCategory(bucket)}" as ${trunk.label} — save to persist`);
       return;
     }
-    const updated = await updateUniverse(selectedId, { categories: nextCategories }, { silent: true })
+    const updated = await updateUniverse(selectedId, { categories: { [bucket]: nextBucket } }, { silent: true })
       .catch((e) => { toast.error(`Move failed: ${e.message}`); return null; });
     if (updated) {
       setWorlds((prev) => {

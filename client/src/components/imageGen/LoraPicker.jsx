@@ -13,6 +13,11 @@
 
 import { Link } from 'react-router-dom';
 
+// Matches /api/image-gen/generate and /api/universe-builder/:id/render's
+// .max(8) on the LoRA list. Hard cap stops the user from queuing a render
+// that the server would reject with a confusing 400.
+const MAX_SELECTED_LORAS = 8;
+
 export default function LoraPicker({
   availableLoras = [],
   selected = [],
@@ -23,9 +28,11 @@ export default function LoraPicker({
 }) {
   if (!availableLoras.length) return null;
   const compatible = availableLoras.filter((l) => !l.runnerFamily || l.runnerFamily === currentRunnerFamily);
+  const atCap = selected.length >= MAX_SELECTED_LORAS;
 
   const toggle = (lora, on) => {
     if (on) {
+      if (atCap) return;
       const recommended = typeof lora.recommendedScale === 'number' ? lora.recommendedScale : 1.0;
       onChange?.([...selected, { filename: lora.filename, name: lora.name, scale: recommended }]);
     } else {
@@ -40,7 +47,10 @@ export default function LoraPicker({
     <div>
       <div className="flex items-center justify-between mb-1">
         <label className="block text-xs font-medium text-gray-400">
-          LoRAs <span className="text-gray-600 font-normal">({compatible.length}/{availableLoras.length} compatible)</span>
+          LoRAs <span className="text-gray-600 font-normal">
+            ({compatible.length}/{availableLoras.length} compatible
+            {selected.length > 0 ? ` · ${selected.length}/${MAX_SELECTED_LORAS} selected` : ''})
+          </span>
         </label>
         <Link to="/media/loras" className="text-[11px] text-port-accent hover:underline">Manage →</Link>
       </div>
@@ -56,13 +66,14 @@ export default function LoraPicker({
             const triggers = lora.triggerWords || [];
             return (
               <div key={lora.filename} className="flex items-center gap-2">
-                <label className="flex items-center gap-2 cursor-pointer flex-1 min-w-0">
+                <label className={`flex items-center gap-2 flex-1 min-w-0 ${atCap && !sel ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}`}>
                   <input
                     type="checkbox"
                     checked={!!sel}
-                    disabled={disabled}
+                    disabled={disabled || (atCap && !sel)}
                     onChange={(e) => toggle(lora, e.target.checked)}
                     className="rounded"
+                    title={atCap && !sel ? `Maximum ${MAX_SELECTED_LORAS} LoRAs per render — uncheck one to swap` : undefined}
                   />
                   <span className="text-xs text-gray-300 truncate flex-1" title={triggers.length ? `Trigger words: ${triggers.join(', ')}` : lora.name}>
                     {lora.name}
