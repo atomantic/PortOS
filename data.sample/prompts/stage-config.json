@@ -256,6 +256,13 @@
       "returnsJson": true,
       "variables": []
     },
+    "pipeline-series-title-logo": {
+      "name": "Pipeline — Series Title / Logo Design",
+      "description": "Design the series masthead / logo typography from the series name + logline + style notes + universe influences. Returns a {titleLogo} JSON object — a single prose paragraph describing typography treatment, finish, color hints, and motifs to inject into cover prompts and TV title screens. Runs once on series creation from a universe; user can regenerate from the bible sidebar.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
     "pipeline-comic-panel-image-prompt": {
       "name": "Pipeline — Comic Panel Image Prompt",
       "description": "Refine a single comic panel's description into a richer image-gen-ready prompt. Uses caption / dialogue / sfx context + neighboring-panel continuity to elaborate without re-imagining the scene.",

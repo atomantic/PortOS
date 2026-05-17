@@ -54,6 +54,7 @@ import {
 import { extractCanonFromProse } from '../services/universeCanon.js';
 import { getSeriesCanon } from '../services/pipeline/seriesCanon.js';
 import { startEpisodeVideoForIssue, ERR_NO_STORYBOARDS } from '../services/pipeline/episodeVideo.js';
+import { generateSeriesTitleLogo } from '../services/pipeline/seriesTitleLogo.js';
 import { COMIC_PAGE_VARIANTS, slotKeyForVariant } from '../services/pipeline/owners.js';
 import { ASPECT_RATIOS, QUALITIES } from '../lib/creativeDirectorPresets.js';
 import { extractScenes, SOURCE_KIND } from '../lib/sceneExtractor.js';
@@ -179,6 +180,8 @@ const seriesCreateSchema = z.object({
   seasons: z.array(seasonSchema).max(ARC_LIMITS.SEASONS_PER_SERIES_MAX).optional(),
   locked: seriesLockedSchema.optional(),
   styleNotes: z.string().trim().max(seriesSvc.STYLE_NOTES_MAX).optional().default(''),
+  titleLogo: z.string().trim().max(seriesSvc.TITLE_LOGO_MAX).optional().default(''),
+  author: z.string().trim().max(seriesSvc.AUTHOR_MAX).optional().default(''),
   stylePromptOverride: z.string().trim().max(seriesSvc.STYLE_PROMPT_OVERRIDE_MAX).optional().default(''),
   visualStyleDefault: visualStyleRefSchema.optional(),
   targetFormat: z.enum(seriesSvc.TARGET_FORMATS).optional(),
@@ -196,6 +199,8 @@ const seriesPatchSchema = z.object({
   seasons: z.array(seasonSchema).max(ARC_LIMITS.SEASONS_PER_SERIES_MAX).optional(),
   locked: seriesLockedSchema.optional(),
   styleNotes: z.string().trim().max(seriesSvc.STYLE_NOTES_MAX).optional(),
+  titleLogo: z.string().trim().max(seriesSvc.TITLE_LOGO_MAX).optional(),
+  author: z.string().trim().max(seriesSvc.AUTHOR_MAX).optional(),
   stylePromptOverride: z.string().trim().max(seriesSvc.STYLE_PROMPT_OVERRIDE_MAX).optional(),
   visualStyleDefault: visualStyleRefSchema.optional(),
   targetFormat: z.enum(seriesSvc.TARGET_FORMATS).optional(),
@@ -796,6 +801,20 @@ router.patch('/series/:id', asyncHandler(async (req, res) => {
 router.delete('/series/:id', asyncHandler(async (req, res) => {
   const r = await seriesSvc.deleteSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
   res.json(r);
+}));
+
+// Generate (or regenerate) the series.titleLogo description via the
+// `pipeline-series-title-logo` stage. Returns the updated series so the
+// client can swap state without a follow-up GET.
+const titleLogoGenerateSchema = z.object({
+  providerId: z.string().trim().max(80).optional(),
+  model: z.string().trim().max(200).optional(),
+});
+router.post('/series/:id/generate-title-logo', asyncHandler(async (req, res) => {
+  const body = validateRequest(titleLogoGenerateSchema, req.body ?? {});
+  const result = await generateSeriesTitleLogo(req.params.id, body)
+    .catch((err) => { throw mapServiceError(err); });
+  res.json(result);
 }));
 
 router.get('/series/:id/issues', asyncHandler(async (req, res) => {

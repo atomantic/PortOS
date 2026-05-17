@@ -92,6 +92,19 @@ export const deletePipelineSeries = (id) => request(`/pipeline/series/${encodeUR
   method: 'DELETE',
 });
 
+// `requestOptions` flows to apiCore.request — pass `{ silent: true }` when the
+// caller owns its own error UX (fire-and-forget on post-create).
+export const generateSeriesTitleLogo = (id, opts = {}, requestOptions = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(id)}/generate-title-logo`, {
+    method: 'POST',
+    body: JSON.stringify(opts),
+    ...requestOptions,
+  });
+
+// Mirror server caps in `server/services/pipeline/series.js` — bump both sides.
+export const SERIES_TITLE_LOGO_MAX = 2000;
+export const SERIES_AUTHOR_MAX = 120;
+
 // ---- Issues ----
 export const listPipelineIssues = (seriesId) =>
   request(`/pipeline/series/${encodeURIComponent(seriesId)}/issues`);

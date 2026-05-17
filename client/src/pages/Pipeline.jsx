@@ -17,7 +17,9 @@ import {
   listPipelineSeries,
   createPipelineSeries,
   deletePipelineSeries,
+  generateSeriesTitleLogo,
   listUniverses,
+  SERIES_AUTHOR_MAX,
   WORLD_LOGLINE_MAX,
   WORLD_PREMISE_MAX,
   WORLD_STYLE_NOTES_MAX,
@@ -30,6 +32,7 @@ const emptyForm = () => ({
   logline: '',
   premise: '',
   styleNotes: '',
+  author: '',
   shape: null,
   issueCountTarget: '',
 });
@@ -95,6 +98,7 @@ export default function Pipeline() {
       logline: form.logline.trim(),
       premise: form.premise.trim(),
       styleNotes: form.styleNotes.trim(),
+      author: form.author.trim(),
       universeId: form.universeId || undefined,
       issueCountTarget: Number.isFinite(target) && target > 0 ? target : undefined,
       arc: form.shape ? { shape: form.shape } : undefined,
@@ -109,6 +113,16 @@ export default function Pipeline() {
     setForm(emptyForm());
     setShowForm(false);
     toast.success(`Created "${created.name}"`);
+    // Fire-and-forget logo design when a universe is linked — the LLM brief
+    // needs universe influences + style notes, and gating creation on a multi-
+    // second call would feel slow. User can retry from the bible sidebar.
+    if (created.universeId && !created.titleLogo) {
+      generateSeriesTitleLogo(created.id, {}, { silent: true })
+        .then(({ series: updated }) => {
+          setSeries((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
+        })
+        .catch(() => {});
+    }
   };
 
   // Two-click delete: first click "arms" the row, second click fires. Avoids
@@ -194,19 +208,35 @@ export default function Pipeline() {
               </p>
             </div>
           </div>
-          <div>
-            <label htmlFor="series-logline" className="block text-xs uppercase tracking-wider text-gray-500 mb-1">
-              Logline
-            </label>
-            <input
-              id="series-logline"
-              type="text"
-              value={form.logline}
-              onChange={(e) => setForm((f) => ({ ...f, logline: e.target.value }))}
-              placeholder="A foundry city goes silent — and the only survivor is a child."
-              className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
-              maxLength={WORLD_LOGLINE_MAX}
-            />
+          <div className="grid grid-cols-1 sm:grid-cols-[1fr_240px] gap-3">
+            <div>
+              <label htmlFor="series-logline" className="block text-xs uppercase tracking-wider text-gray-500 mb-1">
+                Logline
+              </label>
+              <input
+                id="series-logline"
+                type="text"
+                value={form.logline}
+                onChange={(e) => setForm((f) => ({ ...f, logline: e.target.value }))}
+                placeholder="A foundry city goes silent — and the only survivor is a child."
+                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
+                maxLength={WORLD_LOGLINE_MAX}
+              />
+            </div>
+            <div>
+              <label htmlFor="series-author" className="block text-xs uppercase tracking-wider text-gray-500 mb-1">
+                Author (cover byline)
+              </label>
+              <input
+                id="series-author"
+                type="text"
+                value={form.author}
+                onChange={(e) => setForm((f) => ({ ...f, author: e.target.value }))}
+                placeholder="Jane Doe"
+                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
+                maxLength={SERIES_AUTHOR_MAX}
+              />
+            </div>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-[1fr_180px] gap-3 items-start">
             <ArcShapePicker
