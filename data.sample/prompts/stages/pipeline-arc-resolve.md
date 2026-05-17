@@ -18,7 +18,13 @@ Every series is published as both a graphic novel (issues → volumes) AND a TV 
 
 The arc is grounded in this World Builder world: **{{worldName}}**. When you rewrite synopses, ground them in these entities by name. If a finding flagged "world entity drift", swap the made-up entity for the closest match below.
 
-### World entity categories
+### World canon — named characters, places, objects
+
+```
+{{worldCanonText}}
+```
+
+### World entity categories — exploratory variation buckets
 
 ```
 {{worldCategoriesText}}

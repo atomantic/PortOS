@@ -6,7 +6,7 @@
  *   GET    /api/universe-builder/:id                    → Universe
  *   PATCH  /api/universe-builder/:id                    → Universe
  *   DELETE /api/universe-builder/:id                    → { id }
- *   POST   /api/universe-builder/expand                 → { influences, categories, compositeSheets, llm }
+ *   POST   /api/universe-builder/expand                 → { logline, premise, styleNotes, influences, categories, compositeSheets, characters, settings, objects, llm }
  *   POST   /api/universe-builder/:id/render             → { runId, collectionId, jobIds, promptCount }
  *   GET    /api/universe-builder/:id/runs               → Run[]
  */

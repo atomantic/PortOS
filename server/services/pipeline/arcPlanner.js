@@ -39,7 +39,7 @@ import { recommendStructure, describeStructure } from '../../lib/seasonStructure
 import { LENGTH_PROFILE_NAMES, DEFAULT_LENGTH_PROFILE } from '../../lib/issueLength.js';
 import { getUniverse } from '../universeBuilder.js';
 import { getSeriesCanon } from './seriesCanon.js';
-import { renderCategoriesForPrompt, renderCompositesForPrompt } from '../../lib/universePromptRenderers.js';
+import { renderCategoriesForPrompt, renderCompositesForPrompt, renderCanonForPrompt } from '../../lib/universePromptRenderers.js';
 
 export const ERR_VALIDATION = 'PIPELINE_ARC_VALIDATION';
 const makeErr = (message, code) => Object.assign(new Error(message), { code });
@@ -95,6 +95,10 @@ async function loadWorldContext(universeId) {
     worldInfluencesAvoid: avoid.length ? avoid.join(', ') : '(none)',
     worldCategoriesText: renderCategoriesForPrompt(world.categories) || '(none)',
     worldCompositesText: renderCompositesForPrompt(world.compositeSheets) || '(none)',
+    // Universe canon — named characters/places/objects the arc references by
+    // name. Separate from categories because the LLM should treat these as
+    // first-class entities, not exploratory variations.
+    worldCanonText: renderCanonForPrompt(world) || '(none)',
   };
 }
 
@@ -110,6 +114,7 @@ const EMPTY_WORLD_CONTEXT = {
   worldInfluencesAvoid: '(none)',
   worldCategoriesText: '(none — series has no linked Universe Builder world)',
   worldCompositesText: '(none)',
+  worldCanonText: '(none — series has no linked Universe Builder world)',
 };
 
 // Resolve world context, accepting an optional preloaded value so callers

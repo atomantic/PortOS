@@ -31,3 +31,52 @@ export function renderCompositesForPrompt(composites, { showLocked = false } = {
     })
     .join('\n');
 }
+
+// Per-canon-kind formatting table — header label + per-entry line builder.
+// One row per canon trunk; renderCanonForPrompt iterates this so a future
+// kind addition (or field tweak) is a one-line change.
+const CANON_SECTIONS = [
+  {
+    field: 'characters',
+    header: 'characters',
+    formatEntry: (c) => {
+      const desc = c.physicalDescription || c.description || '';
+      const role = c.role ? ` [${c.role}]` : '';
+      return `  - ${c.name}${role}${desc ? `: ${desc}` : ''}`;
+    },
+  },
+  {
+    field: 'settings',
+    header: 'places',
+    formatEntry: (s) => {
+      const label = s.name || s.slugline || '(unnamed)';
+      const desc = s.description || '';
+      const palette = s.palette ? ` palette: ${s.palette}` : '';
+      return `  - ${label}${desc ? `: ${desc}` : ''}${palette}`;
+    },
+  },
+  {
+    field: 'objects',
+    header: 'objects',
+    formatEntry: (o) => {
+      const desc = o.description || '';
+      const sig = o.significance ? ` (${o.significance})` : '';
+      return `  - ${o.name}${desc ? `: ${desc}` : ''}${sig}`;
+    },
+  },
+];
+
+// Render the universe's canon arrays (characters/settings/objects) into a
+// prompt-friendly text block. Distinct from renderCategoriesForPrompt because
+// canon entries are first-class named entities with rich metadata, not
+// exploratory variations — the arc planner references them by name.
+export function renderCanonForPrompt(world) {
+  if (!world || typeof world !== 'object') return '';
+  const sections = [];
+  for (const { field, header, formatEntry } of CANON_SECTIONS) {
+    const entries = Array.isArray(world[field]) ? world[field] : [];
+    if (!entries.length) continue;
+    sections.push(`${header}:\n${entries.map(formatEntry).join('\n')}`);
+  }
+  return sections.join('\n\n');
+}

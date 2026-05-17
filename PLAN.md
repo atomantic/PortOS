@@ -36,7 +36,7 @@ For project goals, see [GOALS.md](./GOALS.md). For completed work, see [DONE.md]
 - [x] ~~**Retire `universe.categories` on the schema.**~~ **Rejected 2026-05-17** — categories are an active user-facing exploration workflow (custom buckets like `factions`/`colonies`/`raider_clans`, bulk variation generation, batch render). Canon has no equivalent. See "Categories vs canon — decision" below.
 - [→] **Drop the default `characters` category.** Folded into Next Up #1 Phase A.
 - [→] **Universe expand LLM contract enrichment.** Folded into Next Up #1 Phase B.
-- [ ] **arcPlanner prompt context — include canon characters/places/objects.** `server/services/pipeline/arcPlanner.js:96` only renders `world.categories` into `worldCategoriesText`. With the `characters` default category retired (schema v4), characters now live in `world.characters[]` (canon) and don't surface in arc-planning prompts. Add a sibling `renderCanonForPrompt(world)` helper and a `worldCanonText` context field; update the arc prompt template + tests. Same gap likely exists in other prompt builders that read `world.categories` — sweep with `grep -rn "world\.categories" server/services/pipeline server/services/universeBuilder*.js`.
+- [→] **arcPlanner prompt context — include canon characters/places/objects.** Folded into Next Up #1 Phase B (Phase B PR shipped `renderCanonForPrompt(world)` + `worldCanonText` + migration 019 for the arc-resolve/volume-verify templates). Follow-up: sweep `grep -rn "world\.categories" server/services/pipeline server/services/universeBuilder*.js` for other prompt builders that read categories but not canon.
 - [ ] **Settings → Places kind rename.** `BIBLE_KIND.SETTING → BIBLE_KIND.PLACE`, `BIBLE_FIELD[SETTING]: 'settings' → 'places'`. Touches ~20 files. Stick the rename to bible context — app settings stays as "settings".
 - [ ] **Use rendered reference images as i2i anchors in downstream comic-page renders for models that support it.** SDXL/Flux pipelines anchor every panel render on the per-character rendered ref.
 
@@ -81,6 +81,10 @@ For project goals, see [GOALS.md](./GOALS.md). For completed work, see [DONE.md]
 
 ### Code quality / dedup (from `/simplify` passes)
 
+- [ ] **Extract `mergeExpandIntoDraft(draft, result)` from `UniverseBuilder.jsx#handleExpand`.** The function is ~150 lines mixing pure-merge logic (categories, sheets, canon, locks) with I/O shell (API call, setDraft, auto-save, toast). Pull the merge into a top-level pure helper so the I/O surface shrinks and the merge is unit-testable. Deferred from Phase B `/simplify` to keep that PR tightly scoped.
+- [x] ~~**Auto-save after expand can clobber concurrent canon edits.**~~ **Fixed in Phase B Copilot iteration 13** — both `handleExpand`'s auto-save and `handleSave`'s manual-save (when `canonDirty`) now refetch the server's canon via `getUniverse(selectedId)` and merge local additions with `mergeCanonByName` before the update payload is sent. Concurrent edits from NounsStage/other tabs are preserved on identity collision.
+- [ ] **Canon-merge can revert concurrent deletions/renames.** `UniverseBuilder.jsx` (handleSave + handleExpand auto-save) currently merges the FULL stale draft canon onto the refetched server canon — which protects against losing local additions but ALSO re-adds entries another tab deleted (because `mergeCanonByName` dedupes by name, the deleted entry is "preserved" from the stale draft). Real fix: track JUST the merged-from-expand additions in a sidecar set, merge only those onto the refetched server canon. Deferred from Phase B Copilot iteration 14 — needs a per-expand additions ledger.
+- [ ] **Extract `useSwipeNav` hook + `lib/clipboard.js`.** `MediaLightbox` swipe nav; clipboard inlined across 8+ call sites. Clipboard can move now.
 - [ ] **Route `MediaLightbox` settings drawer through `components/Drawer.jsx`.** Reconcile `Drawer`'s flat Esc handler with the lightbox's layered Escape cascade.
 - [ ] **`useAsyncAction` post-unmount setState guard.** Add `mountedRef` to gate `setRunning(false)`. YAGNI today; do at 4th consumer.
 - [ ] **Scene-level wardrobe picking.** Per-scene `characterAppearances: [{ characterId, wardrobeId? }]` on storyboard scenes with wardrobe-picker dropdown. Decide first: does the extractor guess or does the user pick? Append wardrobe after physicalDescription vs substitute body fields?
@@ -142,7 +146,7 @@ For project goals, see [GOALS.md](./GOALS.md). For completed work, see [DONE.md]
 - [ ] **Comic-book PDF export.** Once `stages.comicPages` carries enough panel data + rendered images, export print-ready PDF.
 - [ ] **Voice-controlled stage advancement.** Register pipeline stage navigation actions in `voice/tools.js`.
 - [ ] **AI-assisted panel/scene prompt generation.** Reserve `pipeline-comic-panel-image-prompt.md` and `pipeline-storyboard-image-prompt.md` for a future "turn script fragment into N image-gen prompts" button.
-- [ ] **Extract migration scaffolding into `scripts/migrations/_lib.js`.** Migrations 003 and 006 both implement the same hash-driven prompt-replace pattern (~75 lines of boilerplate each). Lift to a shared helper; next migration becomes ~15 lines.
+- [ ] **Extract migration scaffolding into `scripts/migrations/_lib.js`.** Migrations 003, 006, and 019 all implement the same hash-driven prompt-replace pattern (~75 lines of boilerplate each). Lift to a shared helper; next migration becomes ~15 lines.
 - [ ] **Shots-aware scene-output-contract partial.** Split into `_partials/scene-fields-core.md` + `_partials/scene-fields-shots.md` when a third shots-using stage appears.
 - [ ] **Per-panel/scene image progress in the Pipeline UI.** ComicPages and Storyboards record `jobId` but don't subscribe to the media-job SSE for live preview.
 

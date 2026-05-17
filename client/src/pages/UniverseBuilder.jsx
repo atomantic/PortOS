@@ -71,8 +71,47 @@ const mergeVariations = (existing, fresh) => {
   return merged;
 };
 
+// Merge LLM-expanded canon entries into the draft's existing canon array.
+// Existing entries always win on collision (lock or no — the user authored
+// them; the LLM's repeat is a hallucination at this point). Dedupes by name
+// AND slugline (for settings) so an expand that re-emits "Foundry City" or
+// "INT. FOUNDRY CITY — DAY" can't create a phantom duplicate. Mirrors the
+// server-side dedupe in backfillCanonFromCategories (storyBible#normalizeBibleName).
+const mergeCanonByName = (existing, fresh) => {
+  // Empty/missing fresh — return `existing` unchanged (preserve reference so
+  // a no-op expand doesn't trigger downstream identity-comparing effects).
+  if (!fresh?.length) return existing || [];
+  const norm = (s) => (typeof s === 'string' ? s.trim().toLowerCase() : '');
+  const seen = new Set();
+  for (const e of existing || []) {
+    if (e?.name) seen.add(norm(e.name));
+    if (e?.slugline) seen.add(norm(e.slugline));
+  }
+  const merged = [...(existing || [])];
+  for (const e of fresh) {
+    const nameKey = norm(e?.name);
+    const sluglineKey = norm(e?.slugline);
+    if ((nameKey && seen.has(nameKey)) || (sluglineKey && seen.has(sluglineKey))) continue;
+    if (nameKey) seen.add(nameKey);
+    if (sluglineKey) seen.add(sluglineKey);
+    merged.push(e);
+  }
+  return merged;
+};
+
 const humanizeCategory = (key) => CATEGORY_LABELS[key]
   || key.replace(/_/g, ' ').replace(/\b\w/g, (ch) => ch.toUpperCase());
+
+// Toast summary for handleExpand — same body, different tail depending on
+// whether the auto-save succeeded.
+const expandToast = (draft, variationCount, saved) => {
+  const canonCount = (draft.characters?.length || 0)
+    + (draft.settings?.length || 0)
+    + (draft.objects?.length || 0);
+  const sheetCount = draft.compositeSheets?.length || 0;
+  const base = `Expanded into ${variationCount} variations, ${sheetCount} boards, ${canonCount} canon entries`;
+  return `${base} — ${saved ? 'saved' : 'review then Save'}`;
+};
 
 const ensureDraftCategories = (categories = {}) => ({
   ...Object.fromEntries(WORLD_CATEGORIES.map((c) => [c, { variations: [] }])),
@@ -498,6 +537,15 @@ export default function UniverseBuilder() {
       return out;
     })();
 
+    // Merge LLM-emitted canon arrays into the draft's existing canon. Existing
+    // entries always win on name/slugline collision so a re-expand can't
+    // clobber hand-authored or series-extracted records. mergeCanonByName
+    // short-circuits when `fresh` is empty so identity is preserved.
+    const pickCanon = (key) => mergeCanonByName(draft[key] || [], Array.isArray(result[key]) ? result[key] : []);
+    const mergedCharacters = pickCanon('characters');
+    const mergedSettings = pickCanon('settings');
+    const mergedObjects = pickCanon('objects');
+
     const expandedDraft = {
       ...draft,
       starterPrompt: pick('starterPrompt', result.starterPrompt),
@@ -507,6 +555,9 @@ export default function UniverseBuilder() {
       influences: refinedInfluences,
       categories: ensureDraftCategories(mergedCategories),
       compositeSheets: mergedSheets,
+      characters: mergedCharacters,
+      settings: mergedSettings,
+      objects: mergedObjects,
       llm: result.llm || draft.llm,
     };
     setDraft(expandedDraft);
@@ -531,6 +582,9 @@ export default function UniverseBuilder() {
         styleNotes: expandedDraft.styleNotes || '',
         categories: expandedDraft.categories,
         compositeSheets: expandedDraft.compositeSheets || [],
+        characters: expandedDraft.characters || [],
+        settings: expandedDraft.settings || [],
+        objects: expandedDraft.objects || [],
         influences: ensureInfluences(expandedDraft.influences),
         locked: expandedDraft.locked || {},
         llm: expandedDraft.llm || {},
@@ -540,11 +594,11 @@ export default function UniverseBuilder() {
           const without = prev.filter((w) => w.id !== updated.id);
           return [updated, ...without];
         });
-        toast.success(`Expanded into ${total} variations and ${expandedDraft.compositeSheets?.length || 0} boards — saved`);
+        toast.success(expandToast(expandedDraft, total, true));
         return;
       }
     }
-    toast.success(`Expanded into ${total} variations and ${expandedDraft.compositeSheets?.length || 0} boards — review then Save`);
+    toast.success(expandToast(expandedDraft, total, false));
   };
 
   // Writes the LLM-refined fields back to the draft. The modal only emits

@@ -151,8 +151,12 @@ const SHIPPED_PROMPT_OLD_MD5 = {
   // Shape-aware additions (migration 005).
   'pipeline-arc-overview.md':    '6a3ecab43d1f46b7ef9aab6c69ea0326',
   'pipeline-arc-verify.md':      '52e31abc93e3105176236fcaa5d1575a',
-  'pipeline-volume-verify.md':   'c6ea28e972ad6e229bafb2d602b4dda3',
-  'pipeline-arc-resolve.md':     '87bc5c01f1a8a97b681727a38b05edc6',
+  // volume-verify: c6ea28… (pre-005) and 03f3c8… (post-005, pre-019) both
+  // auto-updatable to the post-019 (worldCanonText) hash.
+  'pipeline-volume-verify.md':  ['c6ea28e972ad6e229bafb2d602b4dda3', '03f3c874cb80e1c98abcf03168fa7a92'],
+  // arc-resolve: 87bc5c… (pre-005) and a8677b… (post-005, pre-019) both
+  // auto-updatable to the post-019 (worldCanonText) hash.
+  'pipeline-arc-resolve.md':    ['87bc5c01f1a8a97b681727a38b05edc6', 'a8677bbe1eb38f871fb152a5b0fec7c6'],
   // Shot decomposition additions (migration 006).
   'pipeline-extract-scenes.md':  '59fa5ee305ce53d91eb15224d8b546d3',
   // INT/EXT + time-of-day additions to the places extractor (migration 007).
@@ -177,8 +181,8 @@ const SHIPPED_PROMPT_NEW_MD5 = {
   'pipeline-season-episodes.md':'50c68a29c3ebc275db3095d06bd87100',
   'pipeline-arc-overview.md':   'd34d72b8e49ba303d38607845dd87f1c',
   'pipeline-arc-verify.md':     'ff56d8387162017e08d5d0491060ddd6',
-  'pipeline-volume-verify.md':  '03f3c874cb80e1c98abcf03168fa7a92',
-  'pipeline-arc-resolve.md':    'a8677bbe1eb38f871fb152a5b0fec7c6',
+  'pipeline-volume-verify.md':  '56ad31371452a6fdf68597512f8c0d35',
+  'pipeline-arc-resolve.md':    '2651dc3947adc75c02c4f394135f2703',
   'pipeline-extract-scenes.md': 'c51fb208568d0d903eb43b437478b0ba',
   'writers-room-places.md':     '24a33628cc94d80fa5ca60831d973daf',
   'cos-agent-briefing.md':      'dccb392a43cbd3dac900fee12c31619a',

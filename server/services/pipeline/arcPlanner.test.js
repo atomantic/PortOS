@@ -169,14 +169,15 @@ describe('arcPlanner — generateArcOverview', () => {
           { label: 'The Lollipop Bureau', prompt: 'pastel public-facing agency' },
           { label: 'The Velvet Null', prompt: 'minimalist rival' },
         ] },
-        // `characters` was retired as a default category in schema v4 — any
-        // variations under it now fold into universe.characters[] (canon).
-        // Use the cast leads as canon characters directly. Note: arcPlanner's
-        // current `worldCategoriesText` only reads from categories; canon
-        // characters aren't included yet (deferred to Phase B/C — see
-        // PLAN.md Backlog: "arcPlanner prompt context should include canon").
-        // For now this test only asserts category data flows through.
       },
+      // Canon characters (Phase B contract — first-class named entities; the
+      // `characters` default category was retired in Phase A schema v4).
+      characters: [
+        { name: 'Mira Holt', physicalDescription: 'field detective in a chartreuse coat' },
+      ],
+      objects: [
+        { name: 'The Tongue', description: 'an artifact that absorbs language' },
+      ],
       compositeSheets: [
         { kind: 'reference_sheet', label: 'Rival agencies branding', prompt: 'comparison sheet' },
       ],
@@ -197,6 +198,12 @@ describe('arcPlanner — generateArcOverview', () => {
     expect(ctx.worldCategoriesText).toContain('factions');
     expect(ctx.worldCategoriesText).toContain('The Lollipop Bureau');
     expect(ctx.worldCategoriesText).toContain('The Velvet Null');
+    // Phase B: canon entries surface in their own context field so the LLM
+    // can reference characters/places/objects by name (independent of
+    // categories, which stay as the exploratory-variation surface).
+    expect(ctx.worldCanonText).toContain('Mira Holt');
+    expect(ctx.worldCanonText).toContain('field detective');
+    expect(ctx.worldCanonText).toContain('The Tongue');
     expect(ctx.worldCompositesText).toContain('Rival agencies branding');
     expect(ctx.worldInfluencesEmbrace).toContain('Moebius');
     expect(ctx.worldInfluencesAvoid).toContain('gritty');
@@ -212,6 +219,7 @@ describe('arcPlanner — generateArcOverview', () => {
     const ctx = stageRunnerSpy.mock.calls[0][1];
     expect(ctx.worldName).toMatch(/no linked world/i);
     expect(ctx.worldCategoriesText).toMatch(/none/i);
+    expect(ctx.worldCanonText).toMatch(/none/i);
   });
 
   it('throws ERR_VALIDATION + skips the LLM call when arc is locked', async () => {
