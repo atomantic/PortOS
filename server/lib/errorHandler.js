@@ -100,7 +100,8 @@ export function asyncHandler(fn) {
  * Walk an Error's `cause` chain (Node's native fetch wraps the actual reason
  * in `err.cause` — without unwrapping, server logs show only "fetch failed").
  * Returns context fields ready to merge: { causeChain: "Foo: msg → Bar: msg",
- * cause: [{ name, message, ...SYSTEM_ERROR_KEYS }] }, or null if no cause.
+ * cause: [{ name, message, ...SYSTEM_ERROR_KEYS }] }, or an empty object when
+ * there is no cause — callers can spread the result unconditionally.
  */
 function describeCauseChain(err) {
   const cause = [];
@@ -119,7 +120,7 @@ function describeCauseChain(err) {
     cause.push(entry);
     current = current.cause;
   }
-  return cause.length ? { causeChain: labels.join(' → '), cause } : null;
+  return cause.length ? { causeChain: labels.join(' → '), cause } : {};
 }
 
 /**
