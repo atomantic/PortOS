@@ -22,7 +22,8 @@
 import { runStagedLLM } from '../../lib/stageRunner.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { getSeries, updateSeries, updateSeasonOnSeries } from './series.js';
-import { listIssues } from './issues.js';
+import { listIssues, updateIssue, recomputeIssueNumbersForSeries } from './issues.js';
+import { emitRecordUpdated, withReexportSuppressed } from '../sharing/recordEvents.js';
 import { getSeason } from './seasons.js';
 import {
   sanitizeArc,
@@ -793,34 +794,75 @@ export async function resolveVerifyIssues(seriesId, options = {}) {
   // canonical shape regardless.
   const existingById = new Map((series.seasons || []).map((s) => [s.id, s]));
   const proposedSeasons = Array.isArray(content?.seasons) ? content.seasons : [];
-  const merged = proposedSeasons.map((raw) => {
+  // Track each entry's provenance (existing id vs freshly minted) so we can
+  // remap orphaned child issues after sanitization.
+  const seasonEntries = proposedSeasons.map((raw) => {
     const existing = raw?.id ? existingById.get(raw.id) : null;
     if (existing) {
-      return sanitizeSeason({
-        ...existing,
-        title: typeof raw.title === 'string' ? raw.title : existing.title,
-        number: Number.isFinite(raw.number) ? raw.number : existing.number,
-        logline: typeof raw.logline === 'string' ? raw.logline : existing.logline,
-        synopsis: typeof raw.synopsis === 'string' ? raw.synopsis : existing.synopsis,
-        endingHook: typeof raw.endingHook === 'string' ? raw.endingHook : existing.endingHook,
-        episodeCountTarget: Number.isFinite(raw.episodeCountTarget)
-          ? raw.episodeCountTarget
-          : existing.episodeCountTarget,
-        themes: Array.isArray(raw.themes) ? raw.themes : existing.themes,
-      });
+      return {
+        season: sanitizeSeason({
+          ...existing,
+          title: typeof raw.title === 'string' ? raw.title : existing.title,
+          number: Number.isFinite(raw.number) ? raw.number : existing.number,
+          logline: typeof raw.logline === 'string' ? raw.logline : existing.logline,
+          synopsis: typeof raw.synopsis === 'string' ? raw.synopsis : existing.synopsis,
+          endingHook: typeof raw.endingHook === 'string' ? raw.endingHook : existing.endingHook,
+          episodeCountTarget: Number.isFinite(raw.episodeCountTarget)
+            ? raw.episodeCountTarget
+            : existing.episodeCountTarget,
+          themes: Array.isArray(raw.themes) ? raw.themes : existing.themes,
+        }),
+        sourceId: existing.id,
+      };
     }
-    return buildSeason({
-      number: raw?.number,
-      title: raw?.title,
-      logline: raw?.logline,
-      synopsis: raw?.synopsis,
-      endingHook: raw?.endingHook,
-      episodeCountTarget: raw?.episodeCountTarget,
-    });
-  }).filter(Boolean);
+    return {
+      season: buildSeason({
+        number: raw?.number,
+        title: raw?.title,
+        logline: raw?.logline,
+        synopsis: raw?.synopsis,
+        endingHook: raw?.endingHook,
+        episodeCountTarget: raw?.episodeCountTarget,
+      }),
+      sourceId: null,
+    };
+  }).filter((entry) => entry?.season);
 
-  const seasons = sanitizeSeasonList(merged);
-  const updated = await updateSeries(seriesId, { arc, seasons });
+  const seasons = sanitizeSeasonList(seasonEntries.map((e) => e.season));
+  // `sanitizeSeasonList` can drop entries (e.g. title-less + no number), so
+  // re-key remap inputs against what actually survived.
+  const finalIds = new Set(seasons.map((s) => s.id));
+  const preservedOldIds = new Set(
+    seasonEntries
+      .filter((e) => e.sourceId && finalIds.has(e.season.id))
+      .map((e) => e.sourceId),
+  );
+  const droppedOldSeasons = (series.seasons || []).filter((s) => !preservedOldIds.has(s.id));
+  const newlyMintedSeasons = seasonEntries
+    .filter((e) => !e.sourceId && finalIds.has(e.season.id))
+    .map((e) => e.season);
+  const remap = buildSeasonRemap(droppedOldSeasons, newlyMintedSeasons);
+
+  // Without the seasonId migration, the LLM replacing an id strands every
+  // child issue behind a key the UI never iterates. Mirrors `deleteSeason`'s
+  // bulk-reassign idiom — `skipRenumber` per call + one `recomputeIssueNumbers`
+  // after, wrapped in `withReexportSuppressed` so we don't fan out N socket
+  // events + N debounced re-exports of the same series.
+  const droppedIdSet = new Set(droppedOldSeasons.map((s) => s.id));
+  const reassignList = droppedIdSet.size
+    ? (await listIssues({ seriesId })).filter((iss) => droppedIdSet.has(iss.seasonId))
+    : [];
+
+  let updated;
+  await withReexportSuppressed('series', seriesId, async () => {
+    for (const iss of reassignList) {
+      const target = remap.get(iss.seasonId) ?? null;
+      await updateIssue(iss.id, { seasonId: target }, { skipRenumber: true });
+    }
+    updated = await updateSeries(seriesId, { arc, seasons });
+    if (reassignList.length) await recomputeIssueNumbersForSeries(seriesId);
+  });
+  if (reassignList.length) emitRecordUpdated('series', seriesId);
 
   const notes = typeof content?.notes === 'string' ? content.notes.trim().slice(0, 2000) : '';
   return {
@@ -832,6 +874,67 @@ export async function resolveVerifyIssues(seriesId, options = {}) {
     providerId,
     model,
   };
+}
+
+// Build a Map<oldSeasonId, newSeasonId|null> from the set of removed seasons
+// and the freshly-minted ones in the same resolve. Matching priority:
+//   1. normalized title equality (LLM was told to preserve titles when it can)
+//   2. `number` equality (only when the target number is unique among new ones)
+//   3. positional fallback (only when counts match and ordering aligns)
+// Anything that can't be matched maps to null so the issue lands in the
+// ungrouped bucket instead of staying stranded behind a defunct id.
+export function buildSeasonRemap(droppedOldSeasons, newlyMintedSeasons) {
+  const remap = new Map();
+  const claimed = new Set();
+  const norm = (s) => (typeof s === 'string' ? s.trim().toLowerCase() : '');
+
+  // Pass 1: normalized title
+  for (const old of droppedOldSeasons) {
+    const oldTitle = norm(old.title);
+    if (!oldTitle) continue;
+    const hit = newlyMintedSeasons.find(
+      (n) => norm(n.title) === oldTitle && !claimed.has(n.id),
+    );
+    if (hit) {
+      claimed.add(hit.id);
+      remap.set(old.id, hit.id);
+    }
+  }
+
+  // Pass 2: unique `number` match
+  for (const old of droppedOldSeasons) {
+    if (remap.has(old.id)) continue;
+    if (!Number.isFinite(old.number)) continue;
+    const matches = newlyMintedSeasons.filter(
+      (n) => n.number === old.number && !claimed.has(n.id),
+    );
+    if (matches.length === 1) {
+      claimed.add(matches[0].id);
+      remap.set(old.id, matches[0].id);
+    }
+  }
+
+  // Pass 3: positional fallback when the unclaimed sets line up 1:1
+  const oldRemaining = droppedOldSeasons.filter((s) => !remap.has(s.id));
+  const newRemaining = newlyMintedSeasons.filter((n) => !claimed.has(n.id));
+  if (oldRemaining.length && oldRemaining.length === newRemaining.length) {
+    const oldSorted = [...oldRemaining].sort(
+      (a, b) => (a.number ?? 0) - (b.number ?? 0),
+    );
+    const newSorted = [...newRemaining].sort(
+      (a, b) => (a.number ?? 0) - (b.number ?? 0),
+    );
+    for (let i = 0; i < oldSorted.length; i += 1) {
+      remap.set(oldSorted[i].id, newSorted[i].id);
+      claimed.add(newSorted[i].id);
+    }
+  }
+
+  // Anything still unmapped → null (ungrouped bucket).
+  for (const old of droppedOldSeasons) {
+    if (!remap.has(old.id)) remap.set(old.id, null);
+  }
+  return remap;
 }
 
 // Export internals for tests.

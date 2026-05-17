@@ -112,10 +112,12 @@ function VerifyScopeHint({ scope }) {
 
 export default function ArcCanvas({ series, issues, onSeriesUpdate, onIssuesUpdate, onFlushPending }) {
   const seasons = series.seasons || [];
-  // Group issues by seasonId for the tree; ungrouped issues land under null.
+  // Stale seasonIds (e.g. after a verify-resolve season rewrite) bucket under
+  // null so they show as ungrouped instead of vanishing into an un-iterated key.
+  const validSeasonIds = new Set(seasons.map((s) => s.id));
   const issuesBySeason = new Map();
   for (const iss of issues) {
-    const key = iss.seasonId || null;
+    const key = iss.seasonId && validSeasonIds.has(iss.seasonId) ? iss.seasonId : null;
     if (!issuesBySeason.has(key)) issuesBySeason.set(key, []);
     issuesBySeason.get(key).push(iss);
   }
@@ -255,8 +257,8 @@ function ArcHeader({ series, onSeriesUpdate, onIssuesUpdate, onFlushPending }) {
     if (!result) return null;
     if (result.series) onSeriesUpdate(result.series);
     if (onIssuesUpdate) {
-      // Server doesn't touch issues during resolve, but season reassignments
-      // can shift counts — refresh so the UI tree stays in sync.
+      // Server may reassign child issues' seasonId when resolve replaces
+      // season records — refresh so the tree reflects the moves.
       const refreshed = await listPipelineIssues(series.id).catch(() => null);
       if (refreshed) onIssuesUpdate(refreshed);
     }
