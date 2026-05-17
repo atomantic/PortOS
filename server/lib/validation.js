@@ -1125,7 +1125,12 @@ const importerSeasonEntry = z.object({
 
 const importerIssueEntry = z.object({
   title: z.string().trim().min(1).max(300),
-  arcPosition: z.number().int().min(1).max(9999),
+  // Optional — the service's commitImport auto-assigns the next free
+  // arcPosition when omitted (mirrors the season.number auto-assign).
+  // The wire previously required this, which orphaned the service-side
+  // auto-assign as dead code for HTTP callers; making it optional puts
+  // wire + service on one contract and keeps the auto-assign reachable.
+  arcPosition: z.number().int().min(1).max(9999).optional(),
   // The LLM may legitimately omit arcRole on a B-plot-light volume; gate
   // the enum but allow the field to be missing. Wrap with z.preprocess so
   // an empty string from the UI's "clear" affordance maps to undefined.

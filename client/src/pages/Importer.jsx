@@ -625,7 +625,13 @@ function IssuesReviewSection({ issues, setIssues, seasons, arcRoles }) {
                   type="number"
                   min="1"
                   max="9999"
-                  value={it.arcPosition ?? idx + 1}
+                  // Display empty when state is undefined so the field
+                  // reflects state honestly: a previously-rendered idx+1
+                  // would lie to the user about what the commit payload
+                  // sends. The "auto" placeholder signals the service
+                  // will pick the next free position on commit.
+                  value={it.arcPosition ?? ''}
+                  placeholder="auto"
                   onChange={(e) => updateAt(issues, setIssues, idx, {
                     // Empty input -> undefined so the service's auto-assign
                     // path picks the next free position. Avoids `Number('') = 0`

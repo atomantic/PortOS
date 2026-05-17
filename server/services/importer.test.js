@@ -7,19 +7,40 @@ import { join } from 'path';
 // service module runs its `const STATE_PATH = join(PATHS.data, ...)` at
 // import time. universeBuilder.js reads PATHS.data eagerly at module init,
 // so a per-test `let tempRoot = mkdtempSync()` would land too late.
+//
+// Vitest module-scoping caveat: this mock is sticky for the entire worker
+// — every service this file imports (universeBuilder, series, issues)
+// captures the redirected PATHS at THEIR module init. Any other test file
+// loaded by the same Vitest worker that imports those same services will
+// inherit our redirected PATHS through the shared module cache. Vitest's
+// default `pool: 'forks'` isolates by-file so this is safe today; if the
+// project ever switches to `pool: 'threads'` with shared module caches,
+// this file should be wrapped in `vi.isolate()` or moved into its own
+// project to avoid cross-test PATHS leakage.
 const tempRoot = mkdtempSync(join(tmpdir(), 'importer-test-'));
 
-// Mock fileUtils.js to point PATHS.data at our test root. Spread the actual
-// exports into a plain object and override PATHS — matches the pattern used
-// by bibleExtractor.test.js + sceneExtractor.test.js. A Proxy over the ESM
-// namespace exotic object that `vi.importActual` returns is brittle: it
-// intercepts only `get`, can bypass `[[Module]]` invariants Vitest's transform
-// expects, and behaves unpredictably for `Symbol.toStringTag` / re-exports.
+// Mock fileUtils.js so every PATHS member points under tempRoot — not
+// just `data`. The importer's transitive imports (universeBuilder,
+// series, issues, runner) only touch PATHS.data today, but if a future
+// change starts writing under PATHS.logs / PATHS.runs / PATHS.cache,
+// those writes would leak into the developer's working tree under the
+// previous "override data only" pattern. Redirecting every key keeps
+// tests hermetic regardless of which PATHS member the SUT picks up.
+//
+// Spread the actual exports into a plain object — matches the pattern
+// used by bibleExtractor.test.js + sceneExtractor.test.js. A Proxy over
+// the ESM namespace exotic object that `vi.importActual` returns is
+// brittle: it intercepts only `get`, can bypass `[[Module]]` invariants
+// Vitest's transform expects, and behaves unpredictably for
+// `Symbol.toStringTag` / re-exports.
 vi.mock('../lib/fileUtils.js', async () => {
   const actual = await vi.importActual('../lib/fileUtils.js');
+  const redirectedPaths = Object.fromEntries(
+    Object.keys(actual.PATHS).map((k) => [k, join(tempRoot, k)]),
+  );
   return {
     ...actual,
-    PATHS: { ...actual.PATHS, data: tempRoot },
+    PATHS: redirectedPaths,
   };
 });
 
@@ -554,5 +575,50 @@ describe('mergeSeasons (pure helper)', () => {
     const newNumbers = result.filter((s) => s.id.startsWith('built-')).map((s) => s.number).sort((a, b) => a - b);
     // nextFree = max(1,3) + 1 = 4 → [4, 5]
     expect(newNumbers).toEqual([4, 5]);
+  });
+
+  // Round-7 review: distinguish absent-vs-empty per CLAUDE.md's "LLM
+  // response merging" convention. An empty string is the user's intent
+  // to clear the field; null/undefined is the LLM omitting it and the
+  // existing value should win.
+  it('absent string fields (null/undefined) preserve the existing value', () => {
+    const existing = [
+      { id: 'e1', number: 1, title: 'Kept', logline: 'L', synopsis: 'S', endingHook: 'H', updatedAt: '2020-01-01T00:00:00.000Z' },
+    ];
+    const incoming = [{ number: 1, title: undefined, logline: null }];
+    const result = importerSvc.mergeSeasons(existing, incoming, stubBuildSeason);
+    expect(result[0].title).toBe('Kept');
+    expect(result[0].logline).toBe('L');
+    // No change in any tracked field → updatedAt preserved
+    expect(result[0].updatedAt).toBe('2020-01-01T00:00:00.000Z');
+  });
+
+  it('empty-string fields are treated as an intentional clear and bump updatedAt', () => {
+    const existing = [
+      { id: 'e1', number: 1, title: 'Original', logline: 'L', synopsis: 'S', endingHook: 'H', updatedAt: '2020-01-01T00:00:00.000Z' },
+    ];
+    const incoming = [{ number: 1, logline: '', synopsis: '' }];
+    const result = importerSvc.mergeSeasons(existing, incoming, stubBuildSeason);
+    expect(result[0].logline).toBe('');
+    expect(result[0].synopsis).toBe('');
+    // Title not present → preserved.
+    expect(result[0].title).toBe('Original');
+    // A clear is a change → updatedAt bumps.
+    expect(result[0].updatedAt > '2020-01-01T00:00:00.000Z').toBe(true);
+  });
+
+  it('throws ERR_VALIDATION when auto-assign would exceed the season number cap (99)', () => {
+    const existing = Array.from({ length: 99 }, (_, i) => ({
+      id: `e${i + 1}`, number: i + 1, title: `S${i + 1}`, logline: '', synopsis: '',
+    }));
+    let caught;
+    try {
+      importerSvc.mergeSeasons(existing, [{ title: 'overflow' }], stubBuildSeason);
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeDefined();
+    expect(caught.code).toBe(importerSvc.ERR_VALIDATION);
+    expect(caught.message).toContain('99');
   });
 });

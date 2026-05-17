@@ -69,23 +69,25 @@ export default {
     }
     console.log(`📝 importer prompts: ${copied} copied, ${present} already present, ${skipped} skipped`);
 
-    // Merge stage-config.json entries — only for keys missing from the
-    // installed config, so a user-edited config is never overwritten.
+    // Stage-config: merge importer entries into the installed config, or
+    // create the file from scratch (with just the importer entries) when
+    // the install has none. Without this fallback the migration would
+    // leave a sparse install in a half-seeded state — .md files copied
+    // above but no stage-config entries, so `getStage()` can't resolve
+    // them and the importer LLM calls fail or fall back to a wrong tier.
     const installedConfigPath = join(rootDir, 'data', 'prompts', 'stage-config.json');
     const sampleConfigPath = join(rootDir, 'data.sample', 'prompts', 'stage-config.json');
-    const installedExists = await access(installedConfigPath, constants.F_OK).then(() => true, () => false);
     const sampleConfigExists = await access(sampleConfigPath, constants.F_OK).then(() => true, () => false);
-    if (!installedExists || !sampleConfigExists) {
-      console.warn('⚠️  importer-stage-prompts: stage-config.json missing (installed or sample) — skipping config merge');
+    if (!sampleConfigExists) {
+      console.warn('⚠️  importer-stage-prompts: data.sample stage-config.json missing — cannot resolve importer entries; skipping config write');
       return;
     }
     try {
-      const [installedRaw, sampleRaw] = await Promise.all([
-        readFile(installedConfigPath, 'utf8'),
-        readFile(sampleConfigPath, 'utf8'),
-      ]);
-      const installed = JSON.parse(installedRaw);
-      const sample = JSON.parse(sampleRaw);
+      const sample = JSON.parse(await readFile(sampleConfigPath, 'utf8'));
+      const installedExists = await access(installedConfigPath, constants.F_OK).then(() => true, () => false);
+      const installed = installedExists
+        ? JSON.parse(await readFile(installedConfigPath, 'utf8'))
+        : { stages: {} };
       installed.stages = installed.stages || {};
       let added = 0;
       let preserved = 0;
@@ -102,7 +104,8 @@ export default {
         await mkdir(dirname(installedConfigPath), { recursive: true });
         await writeFile(installedConfigPath, JSON.stringify(installed, null, 2) + '\n', 'utf8');
       }
-      console.log(`📝 importer stage-config: ${added} added, ${preserved} already present`);
+      const action = installedExists ? 'merged' : 'created';
+      console.log(`📝 importer stage-config (${action}): ${added} added, ${preserved} already present`);
     } catch (err) {
       console.warn(`⚠️  importer-stage-prompts: stage-config merge failed: ${err.message}`);
     }

@@ -59,6 +59,11 @@ const DEFAULT_TARGET_ISSUE_COUNT_HINT = Object.freeze({
 const normName = (s) => String(s || '').trim().toLowerCase();
 const isStr = (v) => typeof v === 'string';
 
+// Wire schema (importerSeasonEntry) caps season.number at 99 — mirror
+// that ceiling here so the auto-assign path can't silently land a value
+// the schema wouldn't accept on direct entry.
+const SEASON_NUMBER_MAX = 99;
+
 /**
  * Merge incoming seasons with the existing `series.seasons[]` array,
  * matching by `number`. Pure function — no I/O. Extracted so the merge
@@ -69,11 +74,16 @@ const isStr = (v) => typeof v === 'string';
  * Contract:
  *   - Incoming seasons with an explicit integer `number >= 1` keep it.
  *   - Incoming seasons that omit `number` are assigned the next free
- *     integer above the union of existing + already-assigned numbers.
+ *     integer above the union of existing + already-assigned numbers;
+ *     throws ERR_VALIDATION if that would exceed SEASON_NUMBER_MAX (99).
  *   - Where the assigned number matches an existing season, the existing
  *     season's id (+ timestamps) are preserved — re-import is a metadata
- *     refresh, not a new season. `updatedAt` bumps only when title /
- *     logline / synopsis actually changed.
+ *     refresh, not a new season. **String-field merge follows CLAUDE.md's
+ *     "absent vs intentionally empty" rule**: `undefined`/`null` preserves
+ *     the existing value; an empty string `""` is treated as an intentional
+ *     clear and applied. `updatedAt` bumps when any tracked field
+ *     (title / logline / synopsis / endingHook / episodeCountTarget)
+ *     actually changed, including a clear.
  *   - Existing seasons not touched by this merge are retained as-is.
  *   - Caller is responsible for `sanitizeSeasonList` on the result.
  */
@@ -87,21 +97,44 @@ export function mergeSeasons(existingSeasons, incomingSeasons, buildSeasonImpl =
   }
   let nextFreeNumber = (usedNumbers.size === 0) ? 1 : Math.max(...usedNumbers) + 1;
   const nowIso = new Date().toISOString();
+  // String-field merge: absent (`undefined`/`null`) preserves the existing
+  // value; everything else — including `""` — is the user's intent and is
+  // applied verbatim. Mirrors the CLAUDE.md "distinguish absent vs
+  // intentionally empty" rule so a Review-phase blank-out actually clears.
+  const mergeStr = (incoming, existing) => (incoming == null ? (existing ?? '') : incoming);
   const incomingBuilt = incomingSeasons.map((s) => {
-    const num = (Number.isInteger(s?.number) && s.number >= 1) ? s.number : nextFreeNumber++;
+    let num;
+    if (Number.isInteger(s?.number) && s.number >= 1) {
+      num = s.number;
+    } else {
+      if (nextFreeNumber > SEASON_NUMBER_MAX) {
+        throw makeErr(
+          `Cannot auto-assign season number — next free slot (${nextFreeNumber}) exceeds the max of ${SEASON_NUMBER_MAX}. Free up a season slot or set season.number explicitly.`,
+          ERR_VALIDATION,
+        );
+      }
+      num = nextFreeNumber++;
+    }
     const existing = existingByNumber.get(num);
     if (existing) {
-      const titleChanged = !!(s.title && s.title !== existing.title);
-      const loglineChanged = !!(s.logline && s.logline !== existing.logline);
-      const synopsisChanged = !!(s.synopsis && s.synopsis !== existing.synopsis);
+      const nextTitle = mergeStr(s.title, existing.title) || `Season ${num}`;
+      const nextLogline = mergeStr(s.logline, existing.logline);
+      const nextSynopsis = mergeStr(s.synopsis, existing.synopsis);
+      const nextEndingHook = mergeStr(s.endingHook, existing.endingHook);
+      const nextEpisodeCount = s.episodeCountTarget ?? existing.episodeCountTarget ?? 0;
+      const anyChanged = nextTitle !== existing.title
+        || nextLogline !== (existing.logline ?? '')
+        || nextSynopsis !== (existing.synopsis ?? '')
+        || nextEndingHook !== (existing.endingHook ?? '')
+        || nextEpisodeCount !== (existing.episodeCountTarget ?? 0);
       return {
         ...existing,
-        title: s.title || existing.title || `Season ${num}`,
-        logline: s.logline || existing.logline || '',
-        synopsis: s.synopsis || existing.synopsis || '',
-        endingHook: s.endingHook || existing.endingHook || '',
-        episodeCountTarget: s.episodeCountTarget ?? existing.episodeCountTarget ?? 0,
-        ...((titleChanged || loglineChanged || synopsisChanged) ? { updatedAt: nowIso } : {}),
+        title: nextTitle,
+        logline: nextLogline,
+        synopsis: nextSynopsis,
+        endingHook: nextEndingHook,
+        episodeCountTarget: nextEpisodeCount,
+        ...(anyChanged ? { updatedAt: nowIso } : {}),
       };
     }
     return buildSeasonImpl({
@@ -585,13 +618,19 @@ export async function commitImport({
   const sanitizedArc = sanitizeArc(arc);
   let updatedSeries = series;
   if (sanitizedArc || seasons.length > 0) {
-    const existingSeasons = Array.isArray(series.seasons) ? series.seasons : [];
-    const merged = mergeSeasons(existingSeasons, seasons);
-    const builtSeasons = sanitizeSeasonList(merged);
-
+    // Only build + persist a seasons array when the caller actually sent
+    // some — otherwise an arc-only re-import on a series that already has
+    // seasons rewrites the array byte-for-byte identical (just to bump
+    // sanitizeSeasonList's normalization), a wasted disk write.
+    const seasonsPatch = seasons.length > 0
+      ? { seasons: sanitizeSeasonList(mergeSeasons(
+          Array.isArray(series.seasons) ? series.seasons : [],
+          seasons,
+        )) }
+      : {};
     updatedSeries = await updateSeries(series.id, {
       ...(sanitizedArc ? { arc: sanitizedArc } : {}),
-      ...(builtSeasons.length > 0 ? { seasons: builtSeasons } : {}),
+      ...seasonsPatch,
     });
   }
 
