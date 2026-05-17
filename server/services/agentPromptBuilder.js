@@ -319,12 +319,14 @@ A previous agent finished implementing the work for source task **${sourceTaskId
 2. If there are unresolved review threads, fix them in this worktree, run the project's tests, commit (\`feat:\`/\`fix:\` prefix, no Co-Authored-By), push, and resolve the addressed threads.
 3. Re-request a Copilot review.
 4. Repeat from step 1.
-5. When Copilot returns "0 comments" / no unresolved threads, merge the PR with:
+5. When Copilot returns "0 comments" / no unresolved threads, merge the PR **immediately** with this exact command (flags: \`--squash --delete-branch\`, nothing else):
    \`\`\`bash
-   gh pr merge "${prUrl}" --squash --auto --delete-branch
+   gh pr merge "${prUrl}" --squash --delete-branch
    \`\`\`
-   ${prOwner && prRepo && prNumber ? `(Equivalent: \`gh pr merge ${prNumber} --repo ${prOwner}/${prRepo} --squash --auto --delete-branch\`.)` : ''}
-6. Exit. Do **not** run \`/do:push\` or open a new PR — the merge handles everything. The system will clean up your worktree on exit (no auto-merge will be re-attempted because \`gh pr merge\` already merged on the remote).
+   ${prOwner && prRepo && prNumber ? `(Equivalent: \`gh pr merge ${prNumber} --repo ${prOwner}/${prRepo} --squash --delete-branch\`.)` : ''}
+   You have already verified the review is clean, so force the immediate merge. Adding any merge-deferral flag would leave the PR open after you exit.
+6. Confirm the PR is actually merged before exiting: \`gh pr view "${prUrl}" --json state -q .state\` must return \`MERGED\`. If it returns \`OPEN\` or \`CLOSED\`, investigate (a check is failing, a thread is still unresolved, or branch protection is blocking) — fix and retry the merge. Do NOT exit until state is \`MERGED\`.
+7. Exit. Do **not** run \`/do:push\` or open a new PR — the merge handles everything. The system will clean up your worktree on exit.
 
 **Hard stop:** if the loop hasn't converged after 10 iterations, post a PR comment summarising the unresolved blockers and exit. Do not loop indefinitely.
 
@@ -421,15 +423,10 @@ ${task.metadata.jiraBranch ? 'Commit your changes to this branch. Do NOT switch 
 
 ${memorySection || ''}
 
-## Task Assignment
-
-### Task Details
-- **ID**: ${task.id}
-- **Priority**: ${task.priority}
-- **Description**: ${task.description}
-${task.metadata?.context ? (task.metadata.context.includes('\n') ? `\n### Task Context\n\n${task.metadata.context.trimEnd()}\n` : `- **Context**: ${task.metadata.context}`) : ''}
-${task.metadata?.app ? `- **Target App**: ${task.metadata.app}\n- **Target App Directory**: ${workspaceDir}` : ''}
-${Array.isArray(task.metadata?.screenshots) && task.metadata.screenshots.length > 0 ? `- **Screenshots**: ${task.metadata.screenshots.join(', ')}` : ''}
+${task.description}
+${task.metadata?.context ? (task.metadata.context.includes('\n') ? `\n### Task Context\n\n${task.metadata.context.trimEnd()}\n` : `\n### Task Context\n\n${task.metadata.context}\n`) : ''}
+${task.metadata?.app ? `**Target App**: ${task.metadata.app}` : ''}
+${Array.isArray(task.metadata?.screenshots) && task.metadata.screenshots.length > 0 ? `**Screenshots**: ${task.metadata.screenshots.join(', ')}` : ''}
 ${worktreeSection}
 ${pipelineSection}
 ${jiraSection}
@@ -457,7 +454,7 @@ ${skillSection ? `## Task-Type Skill Guidelines\n\n${skillSection}\n` : ''}${too
 - Do not make unrelated changes
 - If blocked, explain clearly why
 - Never update the PortOS changelog (\`.changelog/\`) for work on managed apps — the PortOS changelog tracks PortOS core changes only
-${isTruthyMetaFn(task.metadata?.readOnly) ? `- **This is a read-only task.** Do NOT commit, push, or modify any files in the repository. Only read data and generate reports.` : isTui ? `- On successful completion, YOU run the Completion Workflow above (\`${tuiCompletionCommand}\`, write the sentinel, \`/quit\`). PortOS will NOT push or open a PR on your behalf.` : worktreeInfo && willOpenPR ? `- On successful completion, the system will push your branch and open a pull request — do NOT open a PR manually. (If the task fails, no PR is opened; the worktree is then cleaned up unless a safety check preserves it for manual recovery.)${willReviewLoop ? ' For GitHub PRs, a Copilot code review will also be requested automatically (skipped on GitLab and other non-GitHub forges) — do NOT run \`/do:rpr\` or attempt to address review comments yourself; you will have already exited.' : ''}` : worktreeInfo ? `- Your worktree branch will be automatically merged back to the source branch when your task completes — do NOT open a PR.` : ``}
+${isTruthyMetaFn(task.metadata?.readOnly) ? `- **This is a read-only task.** Do NOT commit, push, or modify any files in the repository. Only read data and generate reports.` : isTui ? `- On successful completion, YOU run the Completion Workflow above (\`${tuiCompletionCommand}\`, write the sentinel, \`/quit\`).` : worktreeInfo && willOpenPR ? `- On successful completion, the system will push your branch and open a pull request — do NOT open a PR manually. (If the task fails, no PR is opened; the worktree is then cleaned up unless a safety check preserves it for manual recovery.)${willReviewLoop ? ' For GitHub PRs, a Copilot code review will also be requested automatically (skipped on GitLab and other non-GitHub forges) — do NOT run \`/do:rpr\` or attempt to address review comments yourself; you will have already exited.' : ''}` : worktreeInfo ? `- Your worktree branch will be automatically merged back to the source branch when your task completes — do NOT open a PR.` : ``}
 
 ## Git Hygiene (CRITICAL)
 - **Before starting work**, run \`git status\` to verify a clean working tree. Do NOT stash or discard uncommitted changes — other agents may be working concurrently and expecting those changes to be present. If the tree is dirty, only commit files YOU changed for this task.
@@ -507,15 +504,11 @@ export function buildLightContextPrompt(task, workspaceDir, worktreeInfo, isTrut
   const sections = [];
 
   // --- Task block --------------------------------------------------------
-  const taskLines = [
-    '## Task',
-    `- **ID**: ${task.id}`,
-    `- **Priority**: ${task.priority}`,
-    `- **Description**: ${task.description}`
-  ];
-  if (task.metadata?.app) taskLines.push(`- **Target App**: ${task.metadata.app}`);
-  taskLines.push(`- **Working Directory**: \`${workspaceDir}\``);
-  sections.push(taskLines.join('\n'));
+  // cwd is set by the spawner and the agent knows its own id from the
+  // runner, so the prompt skips that metadata. Target app is kept because
+  // it scopes managed-app work.
+  sections.push(task.description);
+  if (task.metadata?.app) sections.push(`**Target App**: ${task.metadata.app}`);
 
   const context = task.metadata?.context;
   if (context) {
@@ -587,12 +580,14 @@ export function buildLightContextPrompt(task, workspaceDir, worktreeInfo, isTrut
       '2. If unresolved threads: fix in this worktree, run tests, commit (`feat:`/`fix:` prefix, no Co-Authored-By), push, resolve threads.',
       '3. Re-request a Copilot review.',
       '4. Repeat.',
-      '5. When clean, merge with:',
+      '5. When clean, merge **immediately** with this exact command (flags: `--squash --delete-branch`, nothing else):',
       '   ```bash',
-      `   gh pr merge "${prUrl}" --squash --auto --delete-branch`,
+      `   gh pr merge "${prUrl}" --squash --delete-branch`,
       '   ```',
-      prOwner && prRepo && prNumber ? `   (Equivalent: \`gh pr merge ${prNumber} --repo ${prOwner}/${prRepo} --squash --auto --delete-branch\`.)` : null,
-      '6. Exit — do NOT run `/do:push` or open a new PR.',
+      prOwner && prRepo && prNumber ? `   (Equivalent: \`gh pr merge ${prNumber} --repo ${prOwner}/${prRepo} --squash --delete-branch\`.)` : null,
+      '   You have already verified the review is clean, so force the immediate merge. Adding any merge-deferral flag would leave the PR open after you exit.',
+      `6. Confirm the merge happened before exiting: \`gh pr view "${prUrl}" --json state -q .state\` must return \`MERGED\`. If it returns \`OPEN\` or \`CLOSED\`, investigate (failing check, unresolved thread, branch protection) — fix and retry. Do NOT exit until state is \`MERGED\`.`,
+      '7. Exit — do NOT run `/do:push` or open a new PR.',
       '',
       '**Hard stop:** if not converged after 10 rounds, post a PR comment summarising blockers and exit.',
       '**Repeated comments:** if a round only re-raises feedback you intentionally rejected (with a reply explaining why), treat as clean and merge.'
@@ -621,10 +616,10 @@ function worktreeCommitGuidance({ isTui, hasSlashdo, isWorktreeOnExistingBranch,
     return 'Commit and **push** any review-fix commits to this branch (the PR points at it). Use `git pull --rebase` before pushing if needed.';
   }
   if (hasSlashdo && willOpenPR) {
-    return 'Commit your changes here — the **Completion** section below drives the push and PR. PortOS will NOT push or open a PR on your behalf.';
+    return 'Commit your changes here — the **Completion** section below drives the push and PR.';
   }
   if (hasSlashdo) {
-    return 'Commit your changes here — the **Completion** section below drives the push. PortOS will NOT push on your behalf.';
+    return 'Commit your changes here — the **Completion** section below drives the push.';
   }
   if (willOpenPR) {
     return 'Commit your changes here. The system will push and open a PR after you exit — do NOT push or open a PR yourself.';
@@ -678,23 +673,21 @@ function buildTuiCompletionSection({ willOpenPR, willReviewLoop, simplifyEnabled
  */
 function buildCliCompletionSection({ worktreeInfo, willOpenPR, hasSlashdo = false, simplifyEnabled = false }) {
   if (hasSlashdo && worktreeInfo && willOpenPR) {
-    const lines = ['## Completion', 'When finished, run these in order without further user input:'];
+    const lines = ['## Completion', 'When finished, run these in order:'];
     let step = 1;
     if (simplifyEnabled) {
       lines.push(`${step++}. \`/simplify\` — review the changed code for reuse, quality, and efficiency, and fix any findings.`);
     }
     lines.push(`${step++}. \`/do:pr\` — commits your changes, pushes the branch, and opens a pull request against the default branch.`);
-    lines.push('', 'PortOS will NOT push or open a PR on your behalf.');
     return lines.join('\n');
   }
   if (hasSlashdo && worktreeInfo) {
-    const lines = ['## Completion', 'When finished, run these in order without further user input:'];
+    const lines = ['## Completion', 'When finished, run these in order:'];
     let step = 1;
     if (simplifyEnabled) {
       lines.push(`${step++}. \`/simplify\` — review the changed code for reuse, quality, and efficiency, and fix any findings.`);
     }
     lines.push(`${step++}. \`/do:push\` — commits your changes and pushes the branch.`);
-    lines.push('', 'PortOS will NOT push on your behalf.');
     return lines.join('\n');
   }
   let body;

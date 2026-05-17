@@ -13,7 +13,41 @@
  * autonomous agent…" preamble are gone from BOTH paths.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+
+// Mock heavy dependencies used by the full (api) prompt path so the API-routing
+// regression test doesn't try to hit the memory DB, digital-twin services, or
+// disk-based slashdo loaders. Light-path tests don't invoke these at all, so
+// the mocks are no-ops for them.
+vi.mock('./memoryRetriever.js', () => ({
+  getMemorySection: vi.fn().mockResolvedValue(null),
+}));
+vi.mock('./digital-twin.js', () => ({
+  getDigitalTwinForPrompt: vi.fn().mockResolvedValue(null),
+}));
+vi.mock('./tools.js', () => ({
+  getToolsSummaryForPrompt: vi.fn().mockResolvedValue(''),
+}));
+vi.mock('./promptService.js', () => ({
+  buildPrompt: vi.fn().mockResolvedValue(null), // force fallback template
+}));
+vi.mock('./providers.js', () => ({
+  getActiveProvider: vi.fn().mockResolvedValue(null),
+}));
+vi.mock('../lib/promptRunner.js', () => ({
+  runPromptThroughProvider: vi.fn().mockResolvedValue(null),
+}));
+vi.mock('../lib/fileUtils.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    loadSlashdoFile: vi.fn().mockResolvedValue(null),
+  };
+});
+vi.mock('./jira.js', () => ({
+  createTicket: vi.fn().mockResolvedValue(null),
+}));
+
 import { buildLightContextPrompt, buildAgentPrompt } from './agentPromptBuilder.js';
 import { isTruthyMeta } from './agentState.js';
 
@@ -59,12 +93,21 @@ describe('buildLightContextPrompt', () => {
   });
 
   describe('what it includes', () => {
-    it('includes task id/priority/description and working directory', () => {
+    it('includes the task description directly without a metadata header', () => {
       const prompt = buildLightContextPrompt(makeTask(), '/workspaces/foo', null, isTruthyMeta);
-      expect(prompt).toMatch(/task-test-1/);
-      expect(prompt).toMatch(/HIGH/);
       expect(prompt).toMatch(/Add a button to the dashboard/);
-      expect(prompt).toMatch(/\/workspaces\/foo/);
+      // The agent's cwd is set by the spawner; the prompt doesn't repeat metadata.
+      expect(prompt).not.toMatch(/task-test-1/);
+      expect(prompt).not.toMatch(/\*\*ID\*\*:/);
+      expect(prompt).not.toMatch(/\*\*Priority\*\*:/);
+      expect(prompt).not.toMatch(/\*\*Working Directory\*\*:/);
+    });
+
+    it('shows Target App when set', () => {
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: { app: 'comics' } }),
+        '/r', null, isTruthyMeta);
+      expect(prompt).toMatch(/\*\*Target App\*\*: comics/);
     });
 
     it('renders attached context (multiline and single-line)', () => {
@@ -157,7 +200,7 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/^## Completion$/m);
       expect(prompt).toMatch(/`\/simplify`/);
       expect(prompt).toMatch(/`\/do:pr`/);
-      expect(prompt).toMatch(/PortOS will NOT push or open a PR on your behalf/);
+      expect(prompt).not.toMatch(/PortOS will NOT push/);
       expect(prompt).not.toMatch(/`\/quit`/);
     });
 
@@ -207,7 +250,13 @@ describe('buildLightContextPrompt', () => {
         isTruthyMeta);
       expect(prompt).toMatch(/## Review-Loop Follow-up/);
       expect(prompt).toMatch(/task-src-1/);
-      expect(prompt).toMatch(/gh pr merge "https:\/\/github\.com\/o\/r\/pull\/9"/);
+      expect(prompt).toMatch(/gh pr merge "https:\/\/github\.com\/o\/r\/pull\/9" --squash --delete-branch/);
+      // --auto must NOT appear inside any `gh pr merge` invocation — it defers
+      // the merge and the PR sits open after the agent exits.
+      expect(prompt).not.toMatch(/gh pr merge[^\n]*--auto/);
+      // Agent must verify the PR is actually merged before exiting.
+      expect(prompt).toMatch(/gh pr view "https:\/\/github\.com\/o\/r\/pull\/9" --json state/);
+      expect(prompt).toMatch(/MERGED/);
       expect(prompt).not.toMatch(/## Completion Workflow/);
     });
 
@@ -228,13 +277,15 @@ describe('buildLightContextPrompt', () => {
 });
 
 describe('buildAgentPrompt — provider type routing', () => {
-  it('routes TUI provider through the light path (no roleplay preamble)', async () => {
+  it('routes TUI provider through the light path (no roleplay preamble or task header)', async () => {
     const prompt = await buildAgentPrompt(
       makeTask(), {}, '/r', null, isTruthyMeta,
       { providerType: 'tui', tui: true, skipClaudeMd: true });
     expect(prompt).not.toMatch(/Chief of Staff Agent Briefing/);
     expect(prompt).not.toMatch(/You are an autonomous agent/);
-    expect(prompt).toMatch(/^## Task$/m);
+    // The Task header block is now gone — task description leads.
+    expect(prompt).not.toMatch(/^## Task$/m);
+    expect(prompt).toMatch(/Add a button to the dashboard/);
   });
 
   it('routes CLI provider through the light path too', async () => {
@@ -245,5 +296,38 @@ describe('buildAgentPrompt — provider type routing', () => {
     expect(prompt).not.toMatch(/You are an autonomous agent/);
     // Light + non-TUI uses the plain "## Completion" block.
     expect(prompt).toMatch(/^## Completion$/m);
+  });
+
+  it('full-context (api) review-loop follow-up emits merge command WITHOUT --auto and includes MERGED verification', async () => {
+    // Regression for Copilot feedback on PR #260: the merge-without-auto +
+    // MERGED-state verification instructions live in BOTH the light and full
+    // prompt paths, and we lock them in for the full path here so the two
+    // paths can't drift independently. The full path goes through the
+    // built-in fallback template (review-loop follow-up agents intentionally
+    // skip the user-side prompt template — see buildAgentPrompt).
+    const prompt = await buildAgentPrompt(
+      makeTask({ metadata: {
+        reviewLoopFollowUp: true,
+        reviewLoopPRUrl: 'https://github.com/o/r/pull/9',
+        reviewLoopPRBranch: 'b',
+        reviewLoopPRNumber: 9,
+        reviewLoopPROwner: 'o',
+        reviewLoopPRRepo: 'r',
+        sourceTaskId: 'task-src-1',
+      }}),
+      {},
+      '/r',
+      { branchName: 'b', worktreePath: '/tmp/wt' },
+      isTruthyMeta,
+      { providerType: 'api' });
+    expect(prompt).toMatch(/## Review-Loop Follow-up/);
+    // Merge command must be present, exactly with --squash --delete-branch.
+    expect(prompt).toMatch(/gh pr merge "https:\/\/github\.com\/o\/r\/pull\/9" --squash --delete-branch/);
+    // --auto must NOT appear inside any `gh pr merge` invocation — it defers
+    // the merge and the PR sits open after the agent exits.
+    expect(prompt).not.toMatch(/gh pr merge[^\n]*--auto/);
+    // Agent must verify the PR is actually merged before exiting.
+    expect(prompt).toMatch(/gh pr view "https:\/\/github\.com\/o\/r\/pull\/9" --json state -q \.state/);
+    expect(prompt).toMatch(/MERGED/);
   });
 });
