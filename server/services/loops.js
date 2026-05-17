@@ -153,6 +153,16 @@ async function executeIteration(loop) {
 
   active.runId = runResult.metadata.id;
 
+  // The toolkit's createRun may switch to a fallback provider when the
+  // requested one is marked unavailable (providerStatusService). Reassign
+  // `provider` to the effective one so dispatch, onComplete's
+  // history/persistence side, and the `iteration:complete` event all see
+  // the provider that actually ran. Without this, fallback would only
+  // update the run record while the spawn still hit the dead provider.
+  if (runResult.provider && runResult.provider.id !== provider.id) {
+    provider = runResult.provider;
+  }
+
   // Adapt the central handler's resolve/reject to the legacy onComplete
   // metadata shape. We can't get the runner's full metadata back from
   // runPromptThroughProvider today — it only resolves `{ text, runId,

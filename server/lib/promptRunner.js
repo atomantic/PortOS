@@ -141,24 +141,40 @@ export async function runPromptThroughProvider({ provider, prompt, source, model
   // so the record reflects reality. resolveEffectiveModel handles both
   // the override-honored fallback chain AND the args-baked-CLI case
   // (extract the args-pinned model id rather than logging defaultModel).
-  const effectiveModel = resolveEffectiveModel(provider, model);
+  let effectiveProvider = provider;
+  let effectiveModel = resolveEffectiveModel(effectiveProvider, model);
   const effectiveCwd = cwdOverride ?? process.cwd();
   const effectiveTimeout = timeoutOverride ?? provider?.timeout ?? DEFAULT_TIMEOUT_MS;
 
-  // Some call sites (stageRunner) create the run themselves so they can
-  // log the runId before the LLM call starts. When provided, reuse it.
-  // Otherwise create one here so callers always get a runId back. Pass
-  // `workspacePath` so /runs metadata reflects the directory the spawn
-  // ran in — without this, the record always showed process.cwd() even
-  // when callers (pm2Standardizer analyzing another repo, loops with
-  // loop.cwd) overrode cwd.
-  const runId = callerRunId || (await createRun({
-    providerId: provider.id,
-    model: effectiveModel,
-    prompt,
-    source,
-    workspacePath: effectiveCwd,
-  })).runId;
+  // Some call sites (stageRunner, loops) create the run themselves so
+  // they can log the runId before the LLM call starts. When provided,
+  // reuse it. Otherwise create one here so callers always get a runId
+  // back. Pass `workspacePath` so /runs metadata reflects the directory
+  // the spawn ran in.
+  //
+  // When we create the run ourselves, capture the FULL result — the
+  // toolkit's createRun may switch to a fallback provider when the
+  // requested one is unavailable (providerStatusService), and
+  // `runResult.provider` is the effective provider after that switch.
+  // Dispatch must use the fallback (otherwise we'd execute against the
+  // unavailable provider while the run record claims the fallback ran)
+  // and `effectiveModel` must be re-resolved against the fallback's
+  // defaults so the response value reflects what actually ran.
+  let runId = callerRunId;
+  if (!runId) {
+    const runResult = await createRun({
+      providerId: provider.id,
+      model: effectiveModel,
+      prompt,
+      source,
+      workspacePath: effectiveCwd,
+    });
+    runId = runResult.runId;
+    if (runResult.provider && runResult.provider.id !== provider.id) {
+      effectiveProvider = runResult.provider;
+      effectiveModel = resolveEffectiveModel(effectiveProvider, model);
+    }
+  }
 
   return new Promise((resolve, reject) => {
     let text = '';
@@ -180,12 +196,12 @@ export async function runPromptThroughProvider({ provider, prompt, source, model
     const labelByType = { cli: 'CLI', api: 'API', tui: 'TUI' };
     const onComplete = (result) => {
       if (result?.error || result?.success === false) {
-        safeReject(new Error(result?.error || `${labelByType[provider.type] || provider.type} execution failed`));
+        safeReject(new Error(result?.error || `${labelByType[effectiveProvider.type] || effectiveProvider.type} execution failed`));
       } else {
         // TUI buffers contain the pasted prompt echo + UI chrome — clean
         // before resolving so callers see roughly the same shape they
         // get from a CLI run (model response text, possibly with noise).
-        const cleaned = provider.type === 'tui' ? cleanTuiResponse(text, prompt) : text;
+        const cleaned = effectiveProvider.type === 'tui' ? cleanTuiResponse(text, prompt) : text;
         safeResolve({ text: cleaned, runId, model: effectiveModel });
       }
     };
@@ -197,13 +213,13 @@ export async function runPromptThroughProvider({ provider, prompt, source, model
     // guard skips the clone when effectiveModel already equals
     // provider.defaultModel — typical for non-codex CLI providers where
     // resolveEffectiveModel falls through to defaultModel anyway.
-    const providerForRun = effectiveModel && effectiveModel !== provider.defaultModel
-      ? { ...provider, defaultModel: effectiveModel }
-      : provider;
+    const providerForRun = effectiveModel && effectiveModel !== effectiveProvider.defaultModel
+      ? { ...effectiveProvider, defaultModel: effectiveModel }
+      : effectiveProvider;
 
-    if (provider.type === 'cli') {
+    if (effectiveProvider.type === 'cli') {
       executeCliRun(runId, providerForRun, prompt, effectiveCwd, onData, onComplete, effectiveTimeout).catch(safeReject);
-    } else if (provider.type === 'api') {
+    } else if (effectiveProvider.type === 'api') {
       // API runs take model as a first-class arg — no clone needed. The
       // toolkit's executeApiRun uses AbortController without a timer, so
       // we enforce the per-call timeout here: if it fires before
@@ -216,11 +232,11 @@ export async function runPromptThroughProvider({ provider, prompt, source, model
         stopRun(runId).catch(() => { /* best-effort cancel */ });
         safeReject(new Error(`API execution timed out after ${effectiveTimeout}ms`));
       }, effectiveTimeout);
-      executeApiRun(runId, provider, effectiveModel, prompt, effectiveCwd, [], onData, onComplete).catch(safeReject);
-    } else if (provider.type === 'tui') {
+      executeApiRun(runId, effectiveProvider, effectiveModel, prompt, effectiveCwd, [], onData, onComplete).catch(safeReject);
+    } else if (effectiveProvider.type === 'tui') {
       executeTuiRun(runId, providerForRun, prompt, effectiveCwd, onData, onComplete, effectiveTimeout).catch(safeReject);
     } else {
-      safeReject(new Error(`Unsupported provider type: ${provider.type}`));
+      safeReject(new Error(`Unsupported provider type: ${effectiveProvider.type}`));
     }
   });
 }
