@@ -30,7 +30,7 @@ import { SHARING_SCHEMA_VERSION, isManifestCompatible } from './version.js';
 import { insertSeriesWithId, updateSeries, getSeries } from '../pipeline/series.js';
 import { insertIssueWithId, updateIssue, getIssue } from '../pipeline/issues.js';
 import { insertUniverseWithId, updateUniverse, getUniverse } from '../universeBuilder.js';
-import { findOrCreateCollectionByName, addItem as addCollectionItem, ERR_DUPLICATE as COLLECTION_ERR_DUPLICATE } from '../mediaCollections.js';
+import { findOrCreateUniverseCollection, addItem as addCollectionItem, ERR_DUPLICATE as COLLECTION_ERR_DUPLICATE } from '../mediaCollections.js';
 import { adoptImportedSubscription, withReexportSuppressed } from './subscriptions.js';
 import { getInstanceId } from '../instances.js';
 import { mergePeerAnnotations } from '../mediaAnnotations.js';
@@ -66,9 +66,13 @@ function remoteWins(localTs, remoteTs) {
 
 /**
  * Merge a manifest's `collection` payload into local state. Find-or-create
- * the collection by `universeId` (with name as a fallback), then add each
- * remote item via `addItem` — `ERR_DUPLICATE` errors are expected and
- * swallowed (the item already exists locally; nothing to do).
+ * the universe-linked collection via the universeId-first helper, then
+ * add each remote item via `addItem` — `ERR_DUPLICATE` errors are expected
+ * and swallowed (the item already exists locally; nothing to do).
+ *
+ * Routing is by `universeId`, never by name — a manifest from a peer whose
+ * universe happens to share a display name with a local universe of a
+ * different id must NOT silently land in the local universe's bucket.
  *
  * The asset blobs are NOT copied here — `copyAssetsLocally` (called in
  * `processManifest`) already pulled every available asset entry. This function
@@ -77,12 +81,19 @@ function remoteWins(localTs, remoteTs) {
  */
 async function mergeCollectionPayload(payload, availableAssetKeys = null) {
   if (!payload?.universeId || !Array.isArray(payload.items)) return { itemsAdded: 0 };
-  const collection = await findOrCreateCollectionByName({
-    name: payload.name || `Universe: ${payload.universeId}`,
-    description: payload.description || '',
+  // Derive a display name for the canonical "Universe: <X>" pattern. The
+  // manifest carries the full pre-formatted name (`Universe: Foo`); strip
+  // the prefix so `universeCollectionNameFor` produces the same canonical
+  // string on the receiver. Fall back to `universeId` when name is absent.
+  const universeName = (payload.name || '')
+    .replace(/^Universe:\s*/i, '')
+    .trim() || payload.universeId;
+  const collection = await findOrCreateUniverseCollection({
     universeId: payload.universeId,
+    universeName,
+    description: payload.description || '',
   }).catch((err) => {
-    console.log(`⚠️ sharing.importer: findOrCreateCollectionByName failed: ${err.message}`);
+    console.log(`⚠️ sharing.importer: findOrCreateUniverseCollection failed: ${err.message}`);
     return null;
   });
   if (!collection) return { itemsAdded: 0 };

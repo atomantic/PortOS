@@ -18,6 +18,7 @@
 
 import {
   findOrCreateUniverseCollection,
+  unlinkCollectionsForUniverse,
   addItem,
   ERR_DUPLICATE,
 } from '../mediaCollections.js';
@@ -70,10 +71,18 @@ export async function fileCoverIntoUniverseCollection({ seriesId, filename }) {
       description: `Renders for "${liveUniverse.name}"`,
     });
 
-    // Deletion can still race after collection lookup/creation. Recheck before
-    // filing the item so we stop as soon as the universe is observed missing.
-    const universeStillExists = await universeSvc.getUniverse(series.universeId).catch(() => null);
-    if (!universeStillExists || universeStillExists.id !== liveUniverse.id) return;
+    // Delete-race guard: deleteUniverse may have fired between the
+    // getUniverse above and findOrCreateUniverseCollection's write,
+    // leaving a freshly-stamped collection bound to a now-deleted
+    // universeId (rename-locked, no universe to cascade from). Re-check
+    // and release the link so the user gets a normal orphan collection
+    // they can rename or delete. Single-user mode makes this rare, but
+    // when it does happen the lock is otherwise inescapable.
+    const stillExists = await universeSvc.getUniverse(series.universeId).catch(() => null);
+    if (!stillExists || stillExists.id !== liveUniverse.id) {
+      await unlinkCollectionsForUniverse(series.universeId).catch(() => null);
+      return;
+    }
 
     await addItem(collection.id, { kind: 'image', ref: filename }).catch((err) => {
       // A duplicate just means the user re-rendered the same cover into the

@@ -260,29 +260,6 @@ describe('mediaCollections service', () => {
       expect(await svc.unlinkCollectionsForUniverse(null)).toEqual([]);
     });
 
-    it('createCollectionForUniverse always creates a fresh, properly-stamped collection (never adopts a foreign-universe bucket of the same name)', async () => {
-      // Existing collection of the same name belongs to universe A.
-      const foreign = await svc.findOrCreateCollectionByName({
-        name: 'Universe: Twin', universeId: 'u-A',
-      });
-      // Now universe B (same display name, different id) provisions its bucket.
-      const own = await svc.createCollectionForUniverse({
-        name: 'Universe: Twin', universeId: 'u-B',
-      });
-      expect(own.id).not.toBe(foreign.id);
-      expect(own.universeId).toBe('u-B');
-      // Both collections exist independently — listing returns both.
-      const all = await svc.listCollections();
-      expect(all.find((c) => c.id === foreign.id)?.universeId).toBe('u-A');
-      expect(all.find((c) => c.id === own.id)?.universeId).toBe('u-B');
-    });
-
-    it('createCollectionForUniverse requires a universeId', async () => {
-      await expect(
-        svc.createCollectionForUniverse({ name: 'X' }),
-      ).rejects.toMatchObject({ code: svc.ERR_VALIDATION });
-    });
-
     describe('findOrCreateUniverseCollection', () => {
       it('returns the existing universeId-linked collection on second call', async () => {
         const first = await svc.findOrCreateUniverseCollection({
@@ -355,23 +332,25 @@ describe('mediaCollections service', () => {
         expect(reuse.id).toBe(first.id);
       });
 
-      it('self-heals a drifted name (failed cascade) on next render', async () => {
+      it('does NOT reconcile a drifted name on universeId-match path', async () => {
+        // The caller-supplied universeName can be stale (a snapshot taken
+        // before this call entered the write tail), so reconciling here
+        // could revert a concurrent rename cascade. The cascade itself
+        // (renameCollectionForUniverse) is the canonical path for name
+        // updates; a stale name from a failed cascade survives until the
+        // user re-triggers it.
         const first = await svc.findOrCreateUniverseCollection({
           universeId: 'u-1', universeName: 'NewName',
         });
-        // Simulate a failed cascade by hand-overwriting the persisted name
-        // (the rename-lock blocks updateCollection from doing this).
         const current = await svc.listCollections();
-        current[0] = { ...current[0], name: 'Universe: OldName' };
+        current[0] = { ...current[0], name: 'Universe: SomeOtherName' };
         fileStore.set('/mock/data/media-collections.json', { collections: current });
-        const healed = await svc.findOrCreateUniverseCollection({
+        const found = await svc.findOrCreateUniverseCollection({
           universeId: 'u-1', universeName: 'NewName',
         });
-        expect(healed.id).toBe(first.id);
-        expect(healed.name).toBe('Universe: NewName');
-        // And it actually persists — next read confirms.
-        const reread = await svc.getCollection(first.id);
-        expect(reread.name).toBe('Universe: NewName');
+        expect(found.id).toBe(first.id);
+        // The drifted name is preserved — caller doesn't get to reconcile.
+        expect(found.name).toBe('Universe: SomeOtherName');
       });
 
       it('serializes concurrent first-time filings (no race-induced duplicate or orphan)', async () => {

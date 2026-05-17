@@ -174,19 +174,17 @@ export async function createCollection({ name, description = '' }) {
 }
 
 // Find an existing collection by case-insensitive trimmed name, else create
-// a fresh one. Lets repeat-render callers (Universe Builder) append into a
-// single per-world bucket without growing a new collection on every run.
+// a fresh one. The non-universe-aware upsert — used by user-driven flows
+// where the bucket is identified by visible name (e.g. tests, ad-hoc CLI
+// scripts).
 //
-// `universeId`, when provided, stamps the collection so share-bucket
-// subscriptions know which universe-record to notify when items change.
-// If the matched existing collection lacks `universeId`, it's backfilled
-// from the caller's value so the link is established on next access.
-//
-// **Prefer `findOrCreateUniverseCollection` for universe-owned paths.**
-// This helper is still name-first and will return any same-name collection
-// — including one already linked to a different universe — so it can
-// silently route renders into the wrong bucket when two universes share a
-// display name. The universeId-first helper rules that out.
+// **Universe-owned paths must use `findOrCreateUniverseCollection`.**
+// This helper is name-first and will return any same-name collection,
+// including one already linked to a different universe, so it can route
+// renders into the wrong bucket when two universes share a display name.
+// The legacy `universeId` parameter remains for callers that need the
+// best-effort backfill of an unlinked legacy bucket, but new code should
+// prefer the universeId-first helper.
 export async function findOrCreateCollectionByName({ name, description = '', universeId = null }) {
   const trimmed = typeof name === 'string' ? name.trim() : '';
   if (!trimmed || trimmed.length > NAME_MAX_LENGTH) {
@@ -227,55 +225,19 @@ export async function findOrCreateCollectionByName({ name, description = '', uni
 }
 
 // Naming convention for the auto-managed universe collection. Single source
-// of truth so the upsert path (universe-builder render route), the rename
-// cascade (updateUniverse), and any caller that needs to display the name
-// stay aligned. Truncated to NAME_MAX_LENGTH because long universe names
-// would otherwise overflow sanitizeCollection's slice and silently mismatch.
+// of truth so the upsert path, the rename cascade (updateUniverse), and any
+// caller that needs to display the name stay aligned. Truncated to
+// NAME_MAX_LENGTH because long universe names would otherwise overflow
+// sanitizeCollection's slice and silently mismatch.
 export const universeCollectionNameFor = (universeName) =>
   `Universe: ${typeof universeName === 'string' ? universeName : ''}`.slice(0, NAME_MAX_LENGTH);
-
-// Create a fresh collection stamped with a universeId. Unlike
-// findOrCreateCollectionByName this never reuses a same-named existing
-// collection — callers who need the universe to own its own bucket (no
-// hijacking of a same-named foreign-universe collection) call this after
-// ruling out safe-to-reuse candidates. The created collection's name is
-// kept as-is, even if it collides with an existing collection; the user can
-// see both in the list and rename the conflicting one later. The
-// `universeId` stamp is the source of truth for routing future renders.
-export async function createCollectionForUniverse({ name, description = '', universeId }) {
-  const trimmed = typeof name === 'string' ? name.trim() : '';
-  if (!trimmed || trimmed.length > NAME_MAX_LENGTH) {
-    throw makeErr('Collection name is required (1..' + NAME_MAX_LENGTH + ' chars)', ERR_VALIDATION);
-  }
-  if (!universeId || typeof universeId !== 'string') {
-    throw makeErr('universeId is required', ERR_VALIDATION);
-  }
-  const trimmedDescription = typeof description === 'string'
-    ? description.trim().slice(0, DESCRIPTION_MAX_LENGTH)
-    : '';
-  return serializeFileWrite(async () => {
-    const all = await listCollections();
-    const now = new Date().toISOString();
-    const next = {
-      id: randomUUID(),
-      name: trimmed,
-      description: trimmedDescription,
-      coverKey: null,
-      universeId: universeId.slice(0, UNIVERSE_ID_MAX),
-      items: [],
-      createdAt: now,
-      updatedAt: now,
-    };
-    await writeAll([...all, next]);
-    return next;
-  });
-}
 
 // Look up an existing collection by its universeId stamp. Returns null if no
 // collection has ever been linked to this universe — callers fall back to
 // `findOrCreateUniverseCollection` (the universeId-first upsert) to provision
-// on first use. Do NOT fall back to `findOrCreateCollectionByName` here, that
-// path is name-first and would adopt a same-named foreign-universe bucket.
+// on first use. Do NOT fall back to `findOrCreateCollectionByName` here —
+// that path is name-first and would adopt a same-named foreign-universe
+// bucket.
 export async function findCollectionByUniverseId(universeId) {
   if (!universeId) return null;
   const all = await listCollections();
@@ -286,21 +248,24 @@ export async function findCollectionByUniverseId(universeId) {
  * Atomic universeId-first upsert for a universe's auto-managed collection.
  *
  * Resolution order (serialized via the shared file write tail):
- *   1. universeId stamp wins. If the linked collection's name has drifted
- *      from the current canonical `Universe: <universeName>` (e.g. a prior
- *      best-effort rename cascade failed), it's reconciled here so the user
- *      always sees the right name on next render — self-healing recovery
- *      path that doesn't require fixing `updateUniverse`'s cascade error.
+ *   1. universeId stamp wins. Returned as-is — the caller's `universeName`
+ *      can be stale (it was a snapshot taken before this call entered the
+ *      write tail), so reconciling the name here could ping-pong a fresh
+ *      cascade rename back to an old name. `renameCollectionForUniverse`
+ *      is the canonical path for name changes; if its best-effort cascade
+ *      fails, the surviving stale name is acceptable until the user
+ *      retriggers it (the lock blocks `updateCollection` but the cascade
+ *      itself is unrestricted).
  *   2. Otherwise a fresh collection is created and stamped with `universeId`,
  *      even when the canonical name is already taken by another collection
  *      (a different universe's bucket, OR a previously-unlinked orphan from
- *      a deleted universe). Adopting either would mix renders across
- *      universes; two same-named collections is the user-correctable case.
+ *      a deleted universe). Adopting either would silently mix renders
+ *      across universes; two same-named collections is the user-correctable
+ *      case.
  *
  * Callers (pipeline cover filer, Universe Builder render route) all funnel
  * through this so the universe → collection identity stays consistent across
- * both auto-filing and explicit-render paths, regardless of what's happened
- * to the name in between.
+ * both auto-filing and explicit-render paths.
  */
 export async function findOrCreateUniverseCollection({ universeId, universeName, description = '' }) {
   if (!universeId || typeof universeId !== 'string') {
@@ -315,23 +280,11 @@ export async function findOrCreateUniverseCollection({ universeId, universeName,
     : '';
   return serializeFileWrite(async () => {
     const all = await listCollections();
-    const linkedIdx = all.findIndex((c) => c.universeId === universeId);
-    if (linkedIdx >= 0) {
-      const linked = all[linkedIdx];
-      if (linked.name === desiredName) return linked;
-      // Self-heal a drifted name (failed cascade, hand-edited JSON, etc.).
-      // The rename-lock in updateCollection blocks user-facing fixes, so
-      // without this branch a stale name would be locked in forever.
-      const merged = { ...linked, name: desiredName, updatedAt: new Date().toISOString() };
-      const next = [...all];
-      next[linkedIdx] = merged;
-      await writeAll(next);
-      return merged;
-    }
+    const linked = all.find((c) => c.universeId === universeId);
+    if (linked) return linked;
     // No universeId match — always create fresh. Adopting a same-named
     // unlinked collection (legacy bucket OR a post-`deleteUniverse` orphan)
-    // would mix renders across universes; the explicit `createCollection`
-    // path is available for users who want to manually relink an orphan.
+    // would mix renders across universes.
     const now = new Date().toISOString();
     const next = {
       id: randomUUID(),
