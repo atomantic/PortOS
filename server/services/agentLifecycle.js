@@ -783,23 +783,27 @@ export async function finalizeAgent({
       ? { status: 'completed' }
       : await resolveFailedTaskUpdate(task, errorAnalysis, agentId);
 
-  // completeAgent (state file), completeAgentRun (runs file), updateTask
-  // (tasks file) all target independent stores — run them in parallel so a
-  // completion isn't bottlenecked on three sequential JSON writes.
-  const [, , taskResult] = await Promise.all([
-    completeAgent(agentId, {
-      success,
-      exitCode,
-      duration,
-      outputLength: outputBuffer?.length ?? 0,
-      errorAnalysis,
-      ...(error !== undefined ? { error } : {}),
-      ...(completionReason !== undefined ? { completionReason } : {}),
-    }),
-    runId ? completeAgentRun(runId, outputBuffer, exitCode, duration, errorAnalysis) : Promise.resolve(),
-    updateTask(task.id, taskUpdate, taskType),
-  ]);
+  // Sequential by design: completeAgent + updateTask share the cosState
+  // mutex (`withStateLock`) so parallelism gains nothing, AND ordering
+  // matters — if completeAgent throws, we must not mark the task completed.
+  // completeAgentRun writes its own runs/<id>/metadata.json (separate lock),
+  // so its place in the chain is purely about progress reporting on partial
+  // failure.
+  await completeAgent(agentId, {
+    success,
+    exitCode,
+    duration,
+    outputLength: outputBuffer?.length ?? 0,
+    errorAnalysis,
+    ...(error !== undefined ? { error } : {}),
+    ...(completionReason !== undefined ? { completionReason } : {}),
+  });
 
+  if (runId) {
+    await completeAgentRun(runId, outputBuffer, exitCode, duration, errorAnalysis);
+  }
+
+  const taskResult = await updateTask(task.id, taskUpdate, taskType);
   if (taskResult?.error) {
     const label = terminatedByUser ? 'blocked' : success ? 'completed' : 'failed';
     emitLog('warn', `⚠️ Failed to update ${label} task ${task.id}: ${taskResult.error} (taskType=${taskType})`, { taskId: task.id, agentId, error: taskResult.error });

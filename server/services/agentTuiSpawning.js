@@ -210,43 +210,51 @@ export async function spawnTuiAgent({
     const analysisBuffer = rawBuffer || outputBuffer;
     const errorAnalysis = finalSuccess ? null : analyzeAgentFailure(analysisBuffer, task, model);
 
-    await finalizeAgent({
-      agentId,
-      task,
-      runId,
-      providerId: provider?.id,
-      success: finalSuccess,
-      exitCode,
-      duration,
-      outputBuffer,
-      errorAnalysis,
-      laneName: agentData?.laneName || laneName,
-      executionId: agentData?.executionId || executionId,
-      errorExecutionMessage: finalError || `TUI agent ended: ${reason}`,
-      terminatedByUser,
-      isTruthyMetaFn,
-      error: finalError || undefined,
-      completionReason: reason,
-    });
-    if (workspacePath) await rm(join(workspacePath, DONE_SENTINEL_NAME)).catch(() => {});
+    // try/finally so a throw from finalizeAgent (e.g. processAgentCompletion
+    // hook crash) still runs the local cleanup — sentinel removal, worktree
+    // cleanup, pid unregister, activeAgents delete, session kill. Without
+    // this, a memory-extraction crash would strand the worktree and the
+    // shell session on disk.
+    try {
+      await finalizeAgent({
+        agentId,
+        task,
+        runId,
+        providerId: provider?.id,
+        success: finalSuccess,
+        exitCode,
+        duration,
+        outputBuffer,
+        errorAnalysis,
+        laneName: agentData?.laneName || laneName,
+        executionId: agentData?.executionId || executionId,
+        errorExecutionMessage: finalError || `TUI agent ended: ${reason}`,
+        terminatedByUser,
+        isTruthyMetaFn,
+        error: finalError || undefined,
+        completionReason: reason,
+      });
+    } finally {
+      if (workspacePath) await rm(join(workspacePath, DONE_SENTINEL_NAME)).catch(() => {});
 
-    // TUI agents run /do:pr (or /do:push) themselves before signaling via
-    // .agent-done, so the system-side cleanup must NOT also push or open a
-    // PR — that would double-fire. `skipMerge` is forced on so the
-    // post-exit auto-merge doesn't trip over a branch the agent already
-    // pushed. The worktree directory itself is still cleaned up.
-    await cleanupWorktreeFn(agentId, finalSuccess, {
-      openPR: false,
-      requestCopilotReview: false,
-      skipMerge: true,
-      description: task.description,
-      agentOutput: outputBuffer,
-      originalTask: task
-    });
+      // TUI agents run /do:pr (or /do:push) themselves before signaling via
+      // .agent-done, so the system-side cleanup must NOT also push or open a
+      // PR — that would double-fire. `skipMerge` is forced on so the
+      // post-exit auto-merge doesn't trip over a branch the agent already
+      // pushed. The worktree directory itself is still cleaned up.
+      await cleanupWorktreeFn(agentId, finalSuccess, {
+        openPR: false,
+        requestCopilotReview: false,
+        skipMerge: true,
+        description: task.description,
+        agentOutput: outputBuffer,
+        originalTask: task
+      }).catch(err => emitLog('warn', `TUI worktree cleanup failed for ${agentId}: ${err.message}`, { agentId }));
 
-    if (agentData?.pid) unregisterSpawnedAgent(agentData.pid);
-    activeAgents.delete(agentId);
-    if (sessionId && shellService.getSession(sessionId)) shellService.killSession(sessionId);
+      if (agentData?.pid) unregisterSpawnedAgent(agentData.pid);
+      activeAgents.delete(agentId);
+      if (sessionId && shellService.getSession(sessionId)) shellService.killSession(sessionId);
+    }
   };
 
   const handleData = async (data) => {

@@ -524,42 +524,50 @@ export async function spawnDirectly({
     const analysisBuffer = rawStreamBuffer || outputBuffer;
     const errorAnalysis = finalSuccess ? null : analyzeAgentFailure(analysisBuffer, task, model);
 
-    await finalizeAgent({
-      agentId,
-      task,
-      runId: agentData?.runId || runId,
-      providerId: agentData?.providerId || provider.id,
-      success: finalSuccess,
-      exitCode: code,
-      duration,
-      outputBuffer,
-      errorAnalysis,
-      laneName: agentData?.laneName,
-      executionId: agentData?.executionId,
-      terminatedByUser,
-      isTruthyMetaFn,
-      error: finalError || undefined,
-      completionReason: terminatedByUser ? 'user-terminated' : undefined,
-    });
+    // try/finally so a throw from finalizeAgent still runs the local
+    // cleanup (worktree, pid unregister, activeAgents delete). Mirrors the
+    // TUI path's pattern.
+    try {
+      await finalizeAgent({
+        agentId,
+        task,
+        runId: agentData?.runId || runId,
+        providerId: agentData?.providerId || provider.id,
+        success: finalSuccess,
+        exitCode: code,
+        duration,
+        outputBuffer,
+        errorAnalysis,
+        // Fall back to the outer scope: killAgent can clear activeAgents
+        // before the close event fires, which would otherwise skip lane
+        // release + execution tracking. Mirrors the TUI path's pattern.
+        laneName: agentData?.laneName || laneName,
+        executionId: agentData?.executionId || executionId,
+        terminatedByUser,
+        isTruthyMetaFn,
+        error: finalError || undefined,
+        completionReason: terminatedByUser ? 'user-terminated' : undefined,
+      });
+    } finally {
+      // Clean up worktree if agent was using one. Claude Code CLI agents run
+      // `/simplify` + `/do:pr` themselves (see buildCliCompletionSection in
+      // agentPromptBuilder.js) — mirror the TUI cleanup contract so PortOS
+      // doesn't double-fire push+PR creation.
+      const directOpenPR = isTruthyMetaFn(task.metadata?.openPR);
+      const directReviewLoopFollowUp = isTruthyMetaFn(task.metadata?.reviewLoopFollowUp);
+      const directAgentOwnsPR = directOpenPR && (provider?.id === 'claude-code' || provider?.id === 'claude-code-bedrock');
+      await cleanupWorktreeFn(agentId, finalSuccess, {
+        openPR: directAgentOwnsPR ? false : directOpenPR,
+        requestCopilotReview: !directAgentOwnsPR && directOpenPR && isTruthyMetaFn(task.metadata?.reviewLoop),
+        skipMerge: directReviewLoopFollowUp || directAgentOwnsPR,
+        description: task.description,
+        agentOutput: outputBuffer,
+        originalTask: task
+      }).catch(err => console.error(`❌ CLI worktree cleanup failed for ${agentId}: ${err.message}`));
 
-    // Clean up worktree if agent was using one. Claude Code CLI agents run
-    // `/simplify` + `/do:pr` themselves (see buildCliCompletionSection in
-    // agentPromptBuilder.js) — mirror the TUI cleanup contract so PortOS
-    // doesn't double-fire push+PR creation.
-    const directOpenPR = isTruthyMetaFn(task.metadata?.openPR);
-    const directReviewLoopFollowUp = isTruthyMetaFn(task.metadata?.reviewLoopFollowUp);
-    const directAgentOwnsPR = directOpenPR && (provider?.id === 'claude-code' || provider?.id === 'claude-code-bedrock');
-    await cleanupWorktreeFn(agentId, finalSuccess, {
-      openPR: directAgentOwnsPR ? false : directOpenPR,
-      requestCopilotReview: !directAgentOwnsPR && directOpenPR && isTruthyMetaFn(task.metadata?.reviewLoop),
-      skipMerge: directReviewLoopFollowUp || directAgentOwnsPR,
-      description: task.description,
-      agentOutput: outputBuffer,
-      originalTask: task
-    });
-
-    unregisterSpawnedAgent(agentData?.pid || claudeProcess.pid);
-    activeAgents.delete(agentId);
+      unregisterSpawnedAgent(agentData?.pid || claudeProcess.pid);
+      activeAgents.delete(agentId);
+    }
   });
 
   return agentId;
