@@ -177,7 +177,9 @@ const DATA_SAMPLE_DIR = join(__dirname, '..', 'data.sample');
 // `npm run migrations` or `npm run update`. Idempotent and cheap when the
 // applied-list is already current.
 await runMigrations({ rootDir: join(__dirname, '..') }).catch(err => {
-  console.error(`❌ Migration run failed at startup: ${err.message}`);
+  // Log the full stack (or stringified err for non-Error throws) so failures
+  // during boot are diagnosable without rerunning under a debugger.
+  console.error(`❌ Migration run failed at startup: ${err?.stack ?? err}`);
 });
 
 // Lifecycle hooks shared between AI Toolkit and PortOS runner shim
