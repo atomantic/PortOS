@@ -15,14 +15,14 @@ Return ONLY valid JSON matching this shape — no prose, no markdown fence, no c
 
 ```json
 {
-  "contentType": "short-story | novel | screenplay | comic-script",
-  "confidence": "high | medium | low",
+  "contentType": "novel",
+  "confidence": "high",
   "reasoning": "one short sentence citing the specific structural signal that drove the call"
 }
 ```
 
-- `contentType` MUST be exactly one of the four enum values above — spelling / case matters.
-- `confidence` reflects how unambiguous the structural signals are. A clear `INT. CAFE — DAY` heading + character cues = `high`. Prose that could be either a short story or a novel head = `medium` or `low`.
+- `contentType` MUST be exactly one of: `short-story`, `novel`, `screenplay`, `comic-script` — spelling / case matters. The example above is illustrative; pick the value that matches what you actually see.
+- `confidence` MUST be exactly one of: `high`, `medium`, `low`. `high` for clear structural signals (e.g. `INT. CAFE — DAY` heading + character cues); `medium` or `low` when prose could plausibly be more than one form.
 - `reasoning` is one sentence (≤ 200 chars) so the UI can show a tooltip. Cite the concrete signal — not "the writing feels novelistic."
 
 ## Source — first ~4 000 chars

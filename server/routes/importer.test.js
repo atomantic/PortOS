@@ -5,7 +5,7 @@ import importerRoutes from './importer.js';
 import { ERR_VALIDATION, ERR_LOCKED, IMPORTER_SOURCE_CHAR_LIMIT } from '../services/importer.js';
 import * as universeSvc from '../services/universeBuilder.js';
 import * as seriesSvc from '../services/pipeline/series.js';
-import { ARC_ROLES } from '../lib/storyArc.js';
+import { ARC_ROLES, ARC_SHAPE_IDS } from '../lib/storyArc.js';
 
 vi.mock('../services/importer.js', async () => {
   const actual = await vi.importActual('../services/importer.js');
@@ -42,10 +42,9 @@ describe('GET /api/importer/config', () => {
     expect(Array.isArray(res.body.arcRoles)).toBe(true);
     expect(res.body.arcRoles).toEqual([...ARC_ROLES]);
     expect(Array.isArray(res.body.arcShapeIds)).toBe(true);
-    // Server-canonical list — the dropdown filter relies on every shape
-    // id the client has metadata for being present here, so pin both
-    // length + membership rather than just `.length > 0`.
-    expect(res.body.arcShapeIds.length).toBeGreaterThan(0);
+    // Pin to ARC_SHAPE_IDS — the client's STORY_SHAPES dropdown filter
+    // expects this membership and a drift would silently hide shapes.
+    expect(res.body.arcShapeIds).toEqual([...ARC_SHAPE_IDS]);
   });
 });
 
