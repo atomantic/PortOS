@@ -43,7 +43,12 @@ import { emitRecordUpdated, emitRecordDeleted } from './sharing/recordEvents.js'
 //        so there is a single token-list editing surface.
 export const CURRENT_SCHEMA_VERSION = 3;
 
-const STATE_PATH = join(PATHS.data, 'universe-builder.json');
+// Lazy state-path resolution so test harnesses that swap PATHS.data
+// per-test (mkdtempSync + Proxy mock) see the right temp root. Computing
+// the path at module-load freezes whatever value PATHS.data held when
+// universeBuilder.js was first imported, which is `undefined` under the
+// proxy-mock pattern series.js's tests already use.
+const statePath = () => join(PATHS.data, 'universe-builder.json');
 
 export const ERR_NOT_FOUND = 'NOT_FOUND';
 export const ERR_VALIDATION = 'VALIDATION_ERROR';
@@ -515,7 +520,7 @@ const sanitizeRun = (raw) => {
 
 async function readState() {
   await ensureDir(PATHS.data);
-  const raw = await readJSONFile(STATE_PATH, DEFAULT_STATE, { logError: false });
+  const raw = await readJSONFile(statePath(), DEFAULT_STATE, { logError: false });
   const rawById = new Map(Array.isArray(raw.universes) ? raw.universes.filter((u) => u?.id).map((u) => [u.id, u]) : []);
   const universes = Array.isArray(raw.universes) ? raw.universes.map(sanitizeTemplate).filter(Boolean) : [];
   const runs = Array.isArray(raw.runs) ? raw.runs.map(sanitizeRun).filter(Boolean) : [];
@@ -531,7 +536,7 @@ async function readState() {
 }
 
 async function writeState(state) {
-  await atomicWrite(STATE_PATH, state);
+  await atomicWrite(statePath(), state);
 }
 
 export async function listUniverses() {
@@ -565,6 +570,12 @@ export async function createUniverse(input = {}) {
     compositeSheets: input.compositeSheets || [],
     influences: input.influences || {},
     locked: input.locked || {},
+    // Canon registries — let callers seed a universe at creation time
+    // (writers-room promote, share-bucket import). sanitizeTemplate runs
+    // each through sanitizeBibleList, so per-entry shape is enforced.
+    characters: input.characters || [],
+    settings: input.settings || [],
+    objects: input.objects || [],
     llm: input.llm || {},
     createdAt: now,
     updatedAt: now,
@@ -694,8 +705,8 @@ export async function listRuns(universeId = null) {
 // shape the renderer's `composeStyledPrompt` consumes. Tokens have already
 // been deduped + capped by `sanitizeInfluenceList` at write time, so this is
 // just a thin join — exported so downstream consumers (universeCanon,
-// pipeline/nounRefine, pipeline/visualStages) read a single helper instead
-// of each open-coding `(arr || []).join(', ')`.
+// pipeline/visualStages) read a single helper instead of each open-coding
+// `(arr || []).join(', ')`.
 export function joinInfluenceList(structured = []) {
   if (!Array.isArray(structured)) return '';
   return structured.filter((t) => typeof t === 'string' && t.trim()).join(', ');

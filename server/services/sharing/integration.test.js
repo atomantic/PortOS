@@ -52,6 +52,7 @@ const exporter = await import('./exporter.js');
 const importer = await import('./importer.js');
 const series = await import('../pipeline/series.js');
 const issues = await import('../pipeline/issues.js');
+const universeSvc = await import('../universeBuilder.js');
 
 // Rewrite a manifest's senderInstanceId on disk so the importer sees it as
 // coming from a remote peer. The mocked `getInstanceId` returns the same
@@ -83,18 +84,23 @@ describe('sharing round-trip', () => {
   it('exports a series, processes the manifest as inbox, then promotes — id + origin preserved', async () => {
     const bucket = await buckets.createBucket({ name: 'Test', path: tempBucket, mode: 'inbox' });
 
-    // Author a series + an issue locally.
+    // Author a series + an issue locally. Phase B.4: canon lives on the
+    // linked universe — seed a universe with the character + imageRef so
+    // the exporter (which walks linked-universe canon) finds the asset.
+    const uni = await universeSvc.createUniverse({
+      name: 'Salt Universe',
+      characters: [{ name: 'Vex', imageRefs: ['fakeasset.png'] }],
+    });
     const s = await series.createSeries({
       name: 'Salt Run', logline: 'A foundry city goes silent.', premise: 'The only survivor is a child.',
-      // Add an imageRef on a character so the exporter has an asset to copy.
-      characters: [{ name: 'Vex', imageRefs: ['fakeasset.png'] }],
+      universeId: uni.id,
     });
     const iss = await issues.createIssue({ seriesId: s.id, title: 'Issue 1' });
 
     // Export.
     const exp = await exporter.exportSeries(s.id, bucket.id);
     expect(exp.manifestId).toBeTruthy();
-    expect(exp.recordCount).toBe(2); // series + issue
+    expect(exp.recordCount).toBe(3); // series + issue + universe
     expect(exp.assetCount).toBeGreaterThanOrEqual(1);
 
     // Verify the bucket layout.

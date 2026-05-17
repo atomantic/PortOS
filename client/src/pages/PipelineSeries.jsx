@@ -2,7 +2,7 @@
  * Pipeline — Series detail page.
  *
  * Two-pane layout (Phase 1 of the Story Arc Planning redesign):
- *   - Left  : bible sidebar (name, logline, premise, characters, style, world). Sticky,
+ *   - Left  : bible sidebar (name, logline, premise, style, linked universe). Sticky,
  *             internally scrollable, collapsible into a hairline rail at lg+. State
  *             persists in localStorage under PIPELINE_SIDEBAR_KEY.
  *   - Right : structural canvas — today a card grid of issues/episodes; in subsequent
@@ -13,7 +13,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
 import {
-  ArrowLeft, Plus, Save, Trash2, Loader2, Workflow as WorkflowIcon, Globe, NotebookPen,
+  ArrowLeft, Save, Loader2, Workflow as WorkflowIcon, Globe, NotebookPen,
   PanelLeftClose, PanelLeftOpen,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
@@ -93,9 +93,8 @@ export default function PipelineSeries() {
   const flushPending = async () => {
     if (!series) return false;
     const saved = lastSavedRef.current || series;
-    const fields = ['name', 'logline', 'premise', 'styleNotes', 'issueCountTarget', 'universeId'];
+    const fields = ['name', 'logline', 'premise', 'styleNotes', 'stylePromptOverride', 'issueCountTarget', 'universeId'];
     const dirty = fields.some((k) => (series[k] ?? '') !== (saved[k] ?? ''))
-      || JSON.stringify(series.characters || []) !== JSON.stringify(saved.characters || [])
       || JSON.stringify(series.llm || {}) !== JSON.stringify(saved.llm || {});
     if (!dirty) return false;
     const updated = await updatePipelineSeries(series.id, {
@@ -104,8 +103,8 @@ export default function PipelineSeries() {
       premise: series.premise,
       universeId: series.universeId || null,
       styleNotes: series.styleNotes,
+      stylePromptOverride: series.stylePromptOverride || '',
       issueCountTarget: series.issueCountTarget,
-      characters: series.characters,
       llm: series.llm || { provider: null, model: null },
     }).catch((err) => {
       toast.error(`Pre-flush save failed: ${err.message}`);
@@ -123,23 +122,6 @@ export default function PipelineSeries() {
     const didSave = await flushPending();
     setSaving(false);
     if (didSave) toast.success('Series saved');
-  };
-
-  const handleAddCharacter = () => {
-    patchSeries({
-      characters: [
-        ...(series.characters || []),
-        { name: '', role: '', physicalDescription: '', personality: '', background: '' },
-      ],
-    });
-  };
-  const handleUpdateCharacter = (i, patch) => {
-    const next = [...series.characters];
-    next[i] = { ...next[i], ...patch };
-    patchSeries({ characters: next });
-  };
-  const handleRemoveCharacter = (i) => {
-    patchSeries({ characters: series.characters.filter((_, j) => j !== i) });
   };
 
   // ArcCanvas mutates issues via a setter-style update (`setState(fn)`-shaped)
@@ -190,9 +172,6 @@ export default function PipelineSeries() {
               series={series}
               universes={universes}
               patchSeries={patchSeries}
-              onAddCharacter={handleAddCharacter}
-              onUpdateCharacter={handleUpdateCharacter}
-              onRemoveCharacter={handleRemoveCharacter}
               onCollapse={toggleSidebar}
             />
           </aside>
@@ -238,7 +217,7 @@ export default function PipelineSeries() {
   );
 }
 
-function BibleSidebar({ series, universes, patchSeries, onAddCharacter, onUpdateCharacter, onRemoveCharacter, onCollapse }) {
+function BibleSidebar({ series, universes, patchSeries, onCollapse }) {
   return (
     <section className="px-3 py-3 space-y-4">
       <div className="flex items-center justify-between">
@@ -339,74 +318,36 @@ function BibleSidebar({ series, universes, patchSeries, onAddCharacter, onUpdate
         </div>
       </Field>
 
+      {series.universeId ? (
+        <Field label="Universe style override (this series only)">
+          <textarea
+            value={series.stylePromptOverride || ''}
+            onChange={(e) => patchSeries({ stylePromptOverride: e.target.value })}
+            rows={2}
+            className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
+            maxLength={1000}
+            placeholder="moody noir lighting, high contrast monochrome. Prepended ahead of the universe's style so this series can deviate without forking the universe."
+          />
+          <p className="text-[11px] text-gray-500 mt-1">
+            Prepended ahead of the linked universe's <em>stylePrompt</em> for every image-gen call from this series. Leave blank to use the universe style verbatim.
+          </p>
+        </Field>
+      ) : null}
+
       <div>
-        <div className="flex items-center justify-between mb-2">
-          <h3 className="text-xs uppercase tracking-wider text-gray-500">Characters</h3>
-          <button
-            type="button"
-            onClick={onAddCharacter}
-            className="inline-flex items-center gap-1 text-xs text-port-accent hover:underline"
+        <h3 className="text-xs uppercase tracking-wider text-gray-500 mb-2">Canon</h3>
+        {series.universeId ? (
+          <Link
+            to={`/universe-builder/${encodeURIComponent(series.universeId)}/canon`}
+            className="block text-xs text-port-accent hover:underline"
           >
-            <Plus size={12} /> Add
-          </button>
-        </div>
-        {(series.characters || []).length === 0 ? (
-          <p className="text-xs text-gray-600 italic">No characters yet — the bible has more bite once a few are defined.</p>
+            Manage characters, places, and objects on the linked Universe →
+          </Link>
         ) : (
-          <ul className="space-y-2">
-            {series.characters.map((c, i) => (
-              <li key={i} className="space-y-1 pb-2 border-b border-port-border/40 last:border-b-0 last:pb-0">
-                <div className="flex gap-2 items-center">
-                  <input
-                    value={c.name || ''}
-                    onChange={(e) => onUpdateCharacter(i, { name: e.target.value })}
-                    placeholder="Name"
-                    className="flex-1 px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm"
-                    maxLength={200}
-                  />
-                  <input
-                    value={c.role || ''}
-                    onChange={(e) => onUpdateCharacter(i, { role: e.target.value })}
-                    placeholder="Role"
-                    className="w-24 px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-xs"
-                    maxLength={200}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => onRemoveCharacter(i)}
-                    className="text-gray-500 hover:text-port-error p-1.5"
-                    aria-label="Remove character"
-                  >
-                    <Trash2 size={12} />
-                  </button>
-                </div>
-                <textarea
-                  value={c.physicalDescription || ''}
-                  onChange={(e) => onUpdateCharacter(i, { physicalDescription: e.target.value })}
-                  placeholder="Physical description — age, build, hair, eyes, wardrobe; drives image-gen"
-                  rows={3}
-                  className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-xs resize-y"
-                  maxLength={2000}
-                />
-                <textarea
-                  value={c.personality || ''}
-                  onChange={(e) => onUpdateCharacter(i, { personality: e.target.value })}
-                  placeholder="Personality — temperament, voice, quirks"
-                  rows={2}
-                  className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-xs resize-y"
-                  maxLength={2000}
-                />
-                <textarea
-                  value={c.background || ''}
-                  onChange={(e) => onUpdateCharacter(i, { background: e.target.value })}
-                  placeholder="Background — who they are, where they come from"
-                  rows={2}
-                  className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-xs resize-y"
-                  maxLength={2000}
-                />
-              </li>
-            ))}
-          </ul>
+          <p className="text-xs text-gray-600 italic">
+            Link a universe above to author characters, places, and objects shared
+            across this series' issues.
+          </p>
         )}
       </div>
     </section>

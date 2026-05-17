@@ -234,6 +234,7 @@ vi.mock('../lib/multipart.js', () => ({
 }));
 
 const pipelineRouter = (await import('./pipeline.js')).default;
+const universeSvc = await import('../services/universeBuilder.js');
 
 function makeApp() {
   const app = express();
@@ -463,143 +464,6 @@ describe('pipeline routes', () => {
     expect(r.status).toBe(404);
   });
 
-  it('POST /series/:id/extract-bible 400s when no issueId and no corpus is supplied', async () => {
-    const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
-    const r = await request(app).post(`/api/pipeline/series/${ser.body.id}/extract-bible`).send({});
-    expect(r.status).toBe(400);
-  });
-
-  it('POST /series/:id/extract-bible 400s when the issue has no prose stage output', async () => {
-    const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
-    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
-    const r = await request(app)
-      .post(`/api/pipeline/series/${ser.body.id}/extract-bible`)
-      .send({ issueId: iss.body.id });
-    expect(r.status).toBe(400);
-    expect(r.body.error || r.body.message).toMatch(/no prose/i);
-  });
-
-  it('POST /series/:id/extract-bible 400s when the issue belongs to a different series', async () => {
-    const app = makeApp();
-    const ser1 = await request(app).post('/api/pipeline/series').send({ name: 'S1' });
-    const ser2 = await request(app).post('/api/pipeline/series').send({ name: 'S2' });
-    const iss = await request(app).post(`/api/pipeline/series/${ser1.body.id}/issues`).send({ title: 'I' });
-    const r = await request(app)
-      .post(`/api/pipeline/series/${ser2.body.id}/extract-bible`)
-      .send({ issueId: iss.body.id });
-    expect(r.status).toBe(400);
-  });
-
-  it('POST /series/:id/extract-bible runs the requested kinds and merges into the series', async () => {
-    // Stub the bible extractor to skip the LLM call entirely.
-    const extractor = await import('../lib/bibleExtractor.js');
-    const spy = vi.spyOn(extractor, 'extractBible').mockImplementation(async ({ kind }) => ({
-      extracted: kind === 'character'
-        ? [{ name: 'Aria', physicalDescription: 'tall' }]
-        : kind === 'setting'
-        ? [{ slugline: 'INT. FOUNDRY — NIGHT', description: 'molten light' }]
-        : [{ name: 'The Locket', significance: "mother's" }],
-      runId: `run-${kind}`, providerId: 'mock', model: 'mock-model',
-    }));
-
-    const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
-    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
-    // Seed prose
-    await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
-      stages: { prose: { status: 'ready', output: 'Once upon a time...' } },
-    });
-
-    const r = await request(app)
-      .post(`/api/pipeline/series/${ser.body.id}/extract-bible`)
-      .send({ issueId: iss.body.id, kinds: ['character', 'setting'] });
-
-    expect(r.status).toBe(200);
-    expect(r.body.series.characters[0].name).toBe('Aria');
-    expect(r.body.series.settings[0].slugline).toBe('INT. FOUNDRY — NIGHT');
-    // Objects bible was not requested → still empty
-    expect(r.body.series.objects).toEqual([]);
-    expect(r.body.results.characters.runId).toBe('run-character');
-    expect(spy).toHaveBeenCalledTimes(2);
-    spy.mockRestore();
-  });
-
-  it('POST /series/:id/extract-bible with parallel:true fans all kinds out concurrently', async () => {
-    // Track interleaving by recording per-call start + finish times. In
-    // parallel mode all starts come before any finish; sequential mode has
-    // finish[N] before start[N+1].
-    const extractor = await import('../lib/bibleExtractor.js');
-    const events = [];
-    const spy = vi.spyOn(extractor, 'extractBible').mockImplementation(async ({ kind }) => {
-      events.push({ kind, event: 'start' });
-      await new Promise((r) => setTimeout(r, 30));
-      events.push({ kind, event: 'finish' });
-      return { extracted: [], runId: `run-${kind}`, providerId: 'mock', model: 'mock-model' };
-    });
-
-    const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
-    const r = await request(app)
-      .post(`/api/pipeline/series/${ser.body.id}/extract-bible`)
-      .send({ corpus: 'x', parallel: true });
-
-    expect(r.status).toBe(200);
-    expect(spy).toHaveBeenCalledTimes(3);
-    // Parallel guarantee: every start fired before the first finish.
-    const firstFinishIdx = events.findIndex((e) => e.event === 'finish');
-    const startsBeforeFirstFinish = events.slice(0, firstFinishIdx).filter((e) => e.event === 'start').length;
-    expect(startsBeforeFirstFinish).toBe(3);
-    spy.mockRestore();
-  });
-
-  it('POST /series/:id/extract-bible defaults to sequential (CLI-provider safe)', async () => {
-    const extractor = await import('../lib/bibleExtractor.js');
-    const events = [];
-    const spy = vi.spyOn(extractor, 'extractBible').mockImplementation(async ({ kind }) => {
-      events.push({ kind, event: 'start' });
-      await new Promise((r) => setTimeout(r, 10));
-      events.push({ kind, event: 'finish' });
-      return { extracted: [], runId: `run-${kind}`, providerId: 'mock', model: 'mock-model' };
-    });
-
-    const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
-    const r = await request(app)
-      .post(`/api/pipeline/series/${ser.body.id}/extract-bible`)
-      .send({ corpus: 'x' });
-
-    expect(r.status).toBe(200);
-    expect(spy).toHaveBeenCalledTimes(3);
-    // Sequential: each kind finishes before the next one starts. The events
-    // array must alternate start, finish, start, finish, start, finish.
-    const eventTypes = events.map((e) => e.event);
-    expect(eventTypes).toEqual(['start', 'finish', 'start', 'finish', 'start', 'finish']);
-    spy.mockRestore();
-  });
-
-  it('POST /series/:id/extract-bible dedups duplicate kinds (no extra LLM calls)', async () => {
-    const extractor = await import('../lib/bibleExtractor.js');
-    const calls = [];
-    const spy = vi.spyOn(extractor, 'extractBible').mockImplementation(async ({ kind }) => {
-      calls.push(kind);
-      return { extracted: [], runId: `run-${kind}`, providerId: 'mock', model: 'mock-model' };
-    });
-
-    const app = makeApp();
-    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
-    const r = await request(app)
-      .post(`/api/pipeline/series/${ser.body.id}/extract-bible`)
-      .send({ corpus: 'x', kinds: ['character', 'character', 'setting'] });
-
-    expect(r.status).toBe(200);
-    // Duplicates collapsed before the LLM dispatch — 2 calls for 2 unique kinds.
-    expect(spy).toHaveBeenCalledTimes(2);
-    expect(calls.sort()).toEqual(['character', 'setting']);
-    spy.mockRestore();
-  });
-
   // ---- storyboards/extract-scenes ----
 
   it('POST /issues/:id/stages/storyboards/extract-scenes 400s when the source stage is empty', async () => {
@@ -643,9 +507,17 @@ describe('pipeline routes', () => {
       runId: 'run-scenes-1', providerId: 'mock', model: 'mock-model',
     });
 
+    // Phase B.4: canon lives on the linked universe. Seed a universe via
+    // the service layer (this test mounts only /api/pipeline, not the
+    // universe-builder router), link the series to it, then run extraction
+    // — the universe's canon should reach the extractor via getSeriesCanon.
     const app = makeApp();
+    const uni = await universeSvc.createUniverse({
+      name: 'U',
+      characters: [{ name: 'Alice', physicalDescription: 'tall, freckles' }],
+    });
     const ser = await request(app).post('/api/pipeline/series').send({
-      name: 'S', characters: [{ name: 'Alice', physicalDescription: 'tall, freckles' }],
+      name: 'S', universeId: uni.id,
     });
     const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
     await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
@@ -670,7 +542,7 @@ describe('pipeline routes', () => {
     expect(r.body.stage.lastRunId).toBe('run-scenes-1');
     expect(r.body.stage.status).toBe('ready');
 
-    // Series characters were forwarded to the extractor for bible deference
+    // Universe canon was forwarded to the extractor for bible deference.
     const firstCall = spy.mock.calls[0][0];
     expect(firstCall.characters[0].name).toBe('Alice');
     expect(firstCall.sourceKind).toBe('teleplay');

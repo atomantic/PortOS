@@ -8,12 +8,8 @@
  * refine / render-reference) target the universe directly.
  *
  * A series with no `universeId` gets a gate banner directing the user to
- * link a universe — the orphan-series legacy flow was removed in Phase B.3b
- * since every active series in this install was migrated, and keeping the
- * dual-path branching just added complexity. Server-side legacy paths
- * remain for now (`extractAndMergeIntoSeries` etc.), but no UI exercises
- * them — they're scheduled for a future cleanup once the schema fields
- * (`series.{characters,settings,objects}`) get dropped too.
+ * link a universe — orphan-series canon was removed in Phase B.4 (the
+ * series schema no longer carries `characters` / `settings` / `objects`).
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -34,6 +30,7 @@ import {
 } from '../../../lib/scenePrompt';
 import { composeStyledPrompt } from '../../../lib/composeStyledPrompt';
 import { composeCleanPlatePrompt } from '../../../lib/cleanPlatePrompt';
+import { joinInfluenceList } from '../../../lib/joinInfluenceList';
 import useMounted from '../../../hooks/useMounted';
 import CanonCard from '../CanonCard';
 import MediaPreview from '../../media/MediaPreview';
@@ -70,6 +67,22 @@ const KINDS = [
     match: matchObjectsInText,
   },
 ];
+
+// Mirrors server-side `applyWorldStyle` (visualStages.js): the series'
+// optional `stylePromptOverride` prepends ahead of the universe's embrace
+// chip list, joined with the same `'. '` separator the server uses. Without
+// this parity, client preview renders drift from comic-page renders.
+// `universe` is allowed to be null — server-side buildStyleClause still
+// applies the override when only the series has style content (orphan or
+// failed-load), so the client preset must do the same.
+const universeStylePreset = (universe, series) => {
+  const override = (series?.stylePromptOverride || '').trim();
+  const embrace = universe ? joinInfluenceList(universe.influences?.embrace) : '';
+  const avoid = universe ? joinInfluenceList(universe.influences?.avoid) : '';
+  const prompt = [override, embrace].filter(Boolean).join('. ');
+  if (!prompt && !avoid) return null;
+  return { prompt, negativePrompt: avoid };
+};
 
 export default function NounsStage({ issue, series }) {
   const mountedRef = useMounted();
@@ -227,11 +240,14 @@ export default function NounsStage({ issue, series }) {
     // Inject the universe's stylePrompt as a prefix and merge negativePrompts so
     // ref images and comic pages share the same aesthetic (Codex doesn't
     // accept reference images, so style consistency comes from text alone).
+    // `series.stylePromptOverride` prepends ahead of the universe style so
+    // a single series can deviate without forking the universe — mirrors
+    // server-side `applyWorldStyle` in visualStages.js.
     const userPrompt = `${entry.name}: ${description}`;
     const styled = composeStyledPrompt(
       userPrompt,
       baseOpts.negativePrompt || '',
-      universe ? { prompt: universe.stylePrompt, negativePrompt: universe.negativePrompt } : null,
+      universeStylePreset(universe, series),
     );
     const payload = {
       ...baseOpts,
@@ -255,7 +271,7 @@ export default function NounsStage({ issue, series }) {
     const styled = composeStyledPrompt(
       plate.prompt,
       plate.negativePrompt,
-      universe ? { prompt: universe.stylePrompt, negativePrompt: universe.negativePrompt } : null,
+      universeStylePreset(universe, series),
     );
     const queued = await generateImage({
       ...baseOpts,

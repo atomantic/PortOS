@@ -11,6 +11,13 @@
  * creating duplicates. Pass `force: true` to make a fresh series anyway
  * (useful for re-syncing after a destructive pipeline-side edit).
  *
+ * `force: true` mints a brand-new universe alongside the fresh series — it
+ * does NOT delete the previously-linked universe. That's intentional: when
+ * canon has accumulated across crossover series sharing a universe, a
+ * destructive force-rebuild of one series shouldn't take its siblings' shared
+ * universe with it. The orphaned link is dropped from the work's manifest;
+ * the user can delete the stale universe explicitly if desired.
+ *
  * One-way: this is only the WR → Pipeline transfer. The link is stable
  * forever, but content does NOT auto-sync — calling this again on a linked
  * work returns the existing pair without re-copying. A future "re-sync"
@@ -24,6 +31,7 @@ import { listObjects } from './objects.js';
 import { getAnalysis } from './evaluator.js';
 import * as seriesSvc from '../pipeline/series.js';
 import * as issuesSvc from '../pipeline/issues.js';
+import { createUniverse } from '../universeBuilder.js';
 
 export const ERR_NO_DRAFT_BODY = 'WR_PROMOTE_NO_DRAFT_BODY';
 
@@ -90,13 +98,25 @@ export async function promoteWorkToPipeline(workId, { force = false } = {}) {
     loadScriptScenes(workId),
   ]);
 
+  // Phase B.4: canon now lives on the universe, never on the series. Mint a
+  // dedicated universe for this promoted work and seed it with the writers-
+  // room bibles. Naming follows the work title — the user can rename or
+  // re-link later via the Series page if they want to share an existing
+  // universe across crossover series. A fresh universe per work keeps the
+  // initial state predictable and avoids touching unrelated canon if the
+  // user re-promotes after destructive edits.
+  const universe = await createUniverse({
+    name: manifest.title,
+    characters,
+    settings,
+    objects,
+  });
+
   const series = await seriesSvc.createSeries({
     name: manifest.title,
     logline: '',
     premise: '',
-    characters,
-    settings,
-    objects,
+    universeId: universe.id,
     styleNotes: '',
     targetFormat: 'comic+tv',
     issueCountTarget: 1,

@@ -27,9 +27,6 @@ import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import {
   validateRequest,
-  characterBibleCreateSchema,
-  settingBibleCreateSchema,
-  objectBibleCreateSchema,
   imageEdgeSchema,
   refineImagePixelCap,
   PIXEL_CAP_MESSAGE,
@@ -54,7 +51,8 @@ import {
   refineStoryboardScenePrompt,
   buildRenderSlot,
 } from '../services/pipeline/visualStages.js';
-import { refineCharacterDescription } from '../services/pipeline/nounRefine.js';
+import { extractCanonFromProse } from '../services/universeCanon.js';
+import { getSeriesCanon } from '../services/pipeline/seriesCanon.js';
 import { startEpisodeVideoForIssue, ERR_NO_STORYBOARDS } from '../services/pipeline/episodeVideo.js';
 import { COMIC_PAGE_VARIANTS, slotKeyForVariant } from '../services/pipeline/owners.js';
 import { ASPECT_RATIOS, QUALITIES } from '../lib/creativeDirectorPresets.js';
@@ -83,7 +81,6 @@ import {
   CUSTOM_PAGE_MIN, CUSTOM_PAGE_MAX, CUSTOM_MINUTE_MIN, CUSTOM_MINUTE_MAX,
 } from '../lib/issueLength.js';
 import { llmSchema } from './universeBuilder.js';
-import { BIBLE_KIND } from '../lib/storyBible.js';
 import { ARC_LIMITS, ARC_STATUSES, ARC_SHAPE_IDS, ARC_ROLES, SEASON_STATUSES } from '../lib/storyArc.js';
 
 const router = Router();
@@ -110,34 +107,11 @@ const mapServiceError = (err) => {
 };
 
 // ---- Series schemas ----
-
-// Bible entry shape is owned by the canonical schemas in `server/lib/validation.js`
-// (re-exports of the Writers Room character/setting/object create-schemas). The
-// Pipeline extends them here with its own back-compat fields and uses
-// `.passthrough()` so canonical sanitizer-emitted fields (`evidence`,
-// `firstAppearance`, `source`, `createdAt`, `updatedAt`, `missingFromProse`)
-// round-trip cleanly when the client re-saves an existing series. Final
-// enforcement lives in the sanitizer in `server/lib/storyBible.js`.
-const characterSchema = characterBibleCreateSchema.extend({
-  id: z.string().trim().max(80).optional(),
-  // Back-compat: pre-DRY shape used `description`. Both fields are accepted
-  // and the canonical sanitizer normalizes them to `physicalDescription`.
-  description: z.string().trim().max(seriesSvc.CHARACTER_DESCRIPTION_MAX).optional(),
-  // Pipeline-only image refs (not present on the writers-room shape).
-  imageRefs: z.array(z.string().trim().min(1).max(seriesSvc.IMAGE_REF_MAX))
-    .max(seriesSvc.IMAGE_REFS_PER_CHARACTER_MAX).optional(),
-  // Pipeline preserves a looser `notes` cap (4000) than the writers-room
-  // base (2000) — overriding here so user-facing limits don't tighten.
-  notes: z.string().trim().max(4000).optional(),
-}).passthrough();
-
-const settingSchema = settingBibleCreateSchema.extend({
-  id: z.string().trim().max(80).optional(),
-}).passthrough();
-
-const objectSchema = objectBibleCreateSchema.extend({
-  id: z.string().trim().max(80).optional(),
-}).passthrough();
+//
+// Canon (characters / settings / objects) is no longer carried on a series
+// payload — it lives on the linked universe (Phase B.4). The bible-entry
+// Zod shapes (`characterSchema` et al.) and the `BIBLE_KIND` plumbing moved
+// out of this file when the series-side canon routes were retired.
 
 // Visual style ref — `{ id, customPrompt? }`. The id is validated lazily
 // (against the catalog in server/lib/visualStyles.js) by the sanitizer at
@@ -201,13 +175,11 @@ const seriesCreateSchema = z.object({
   premise: z.string().trim().max(seriesSvc.PREMISE_MAX).optional().default(''),
   universeId: z.string().trim().max(seriesSvc.UNIVERSE_ID_MAX).nullable().optional(),
   writersRoomWorkId: z.string().trim().max(seriesSvc.WRITERS_ROOM_WORK_ID_MAX).nullable().optional(),
-  characters: z.array(characterSchema).max(seriesSvc.BIBLE_ENTRIES_PER_SERIES_MAX).optional(),
-  settings: z.array(settingSchema).max(seriesSvc.BIBLE_ENTRIES_PER_SERIES_MAX).optional(),
-  objects: z.array(objectSchema).max(seriesSvc.BIBLE_ENTRIES_PER_SERIES_MAX).optional(),
   arc: arcSchema.nullable().optional(),
   seasons: z.array(seasonSchema).max(ARC_LIMITS.SEASONS_PER_SERIES_MAX).optional(),
   locked: seriesLockedSchema.optional(),
   styleNotes: z.string().trim().max(seriesSvc.STYLE_NOTES_MAX).optional().default(''),
+  stylePromptOverride: z.string().trim().max(seriesSvc.STYLE_PROMPT_OVERRIDE_MAX).optional().default(''),
   visualStyleDefault: visualStyleRefSchema.optional(),
   targetFormat: z.enum(seriesSvc.TARGET_FORMATS).optional(),
   issueCountTarget: z.number().int().min(0).max(seriesSvc.ISSUE_COUNT_TARGET_MAX).optional(),
@@ -220,13 +192,11 @@ const seriesPatchSchema = z.object({
   premise: z.string().trim().max(seriesSvc.PREMISE_MAX).optional(),
   universeId: z.string().trim().max(seriesSvc.UNIVERSE_ID_MAX).nullable().optional(),
   writersRoomWorkId: z.string().trim().max(seriesSvc.WRITERS_ROOM_WORK_ID_MAX).nullable().optional(),
-  characters: z.array(characterSchema).max(seriesSvc.BIBLE_ENTRIES_PER_SERIES_MAX).optional(),
-  settings: z.array(settingSchema).max(seriesSvc.BIBLE_ENTRIES_PER_SERIES_MAX).optional(),
-  objects: z.array(objectSchema).max(seriesSvc.BIBLE_ENTRIES_PER_SERIES_MAX).optional(),
   arc: arcSchema.nullable().optional(),
   seasons: z.array(seasonSchema).max(ARC_LIMITS.SEASONS_PER_SERIES_MAX).optional(),
   locked: seriesLockedSchema.optional(),
   styleNotes: z.string().trim().max(seriesSvc.STYLE_NOTES_MAX).optional(),
+  stylePromptOverride: z.string().trim().max(seriesSvc.STYLE_PROMPT_OVERRIDE_MAX).optional(),
   visualStyleDefault: visualStyleRefSchema.optional(),
   targetFormat: z.enum(seriesSvc.TARGET_FORMATS).optional(),
   issueCountTarget: z.number().int().min(0).max(seriesSvc.ISSUE_COUNT_TARGET_MAX).optional(),
@@ -470,21 +440,6 @@ const comicPagePatchSchema = z.object({
   rawText: z.string().max(40000),
 });
 
-// Source: `issueId` (pulls `stages.prose.output`) OR explicit `corpus` text.
-// `parallel: true` runs the three bible kinds concurrently (~3× wall-clock
-// speedup on HTTP-API providers like OpenAI/Anthropic/LM Studio HTTP).
-// Default stays sequential — safe for CLI providers that serialize at the
-// session anyway (codex / claude-code / gemini-cli).
-const extractBibleSchema = z.object({
-  kinds: z.array(z.enum([BIBLE_KIND.CHARACTER, BIBLE_KIND.SETTING, BIBLE_KIND.OBJECT]))
-    .min(1).max(3).optional()
-    .default([BIBLE_KIND.CHARACTER, BIBLE_KIND.SETTING, BIBLE_KIND.OBJECT]),
-  issueId: z.string().trim().max(64).optional(),
-  corpus: z.string().min(1).max(issuesSvc.STAGE_OUTPUT_MAX).optional(),
-  providerOverride: z.string().trim().max(80).optional(),
-  parallel: z.boolean().optional(),
-}).refine((p) => p.issueId || p.corpus, { message: 'extract requires either `issueId` or `corpus`' });
-
 // Arc / season-episodes / verify — Phase 3 of Story Arc Planning. The three
 // LLM calls share a provider/model override shape; the first two also accept
 // `commit: true` to persist the LLM output (skipping the preview/confirm step).
@@ -612,7 +567,11 @@ router.post('/issues/:id/stages/audio/extract-lines', asyncHandler(async (req, r
   // Carry forward already-rendered audio on re-extract when the same speaker
   // + same line text appears in the fresh extraction — otherwise a small edit
   // anywhere upstream would silently invalidate every previously-rendered WAV.
-  const { lines, preservedCount } = extractDialogueLines(issue, series, {
+  // Phase B.4: canon lives on the linked universe — bind dialogue speakers
+  // by name against `universe.characters` instead of the now-defunct
+  // `series.characters`.
+  const canon = await getSeriesCanon(series);
+  const { lines, preservedCount } = extractDialogueLines(issue, { characters: canon.characters }, {
     preserveFrom: existingLines,
   });
   const { issue: updatedIssue, stage } = await issuesSvc.updateStage(req.params.id, 'audio', {
@@ -664,9 +623,10 @@ router.patch('/issues/:id/stages/audio/lines/:lineIdx', asyncHandler(async (req,
 }));
 
 // Render one VO line. Voice resolution priority:
-//   1. line.voiceIdOverride  (explicit per-line override)
-//   2. character.voiceId      (series character binding)
-//   3. (none → uses the configured default voice via synthesize())
+//   1. body.voiceId           (per-request override)
+//   2. line.voiceIdOverride   (per-line override saved on the issue)
+//   3. character.voiceId      (linked-universe canon binding via getSeriesCanon)
+//   4. (none → uses the configured default voice via synthesize())
 const lineRenderSchema = z.object({ voiceId: z.string().trim().max(200).optional() });
 router.post('/issues/:id/stages/audio/lines/:lineIdx/render', asyncHandler(async (req, res) => {
   const lineIdx = Number(req.params.lineIdx);
@@ -686,11 +646,16 @@ router.post('/issues/:id/stages/audio/lines/:lineIdx/render', asyncHandler(async
   }
   // Resolve voice via the shared priority chain (explicit > line override
   // > character binding > project default). One source of truth, reused by
-  // the eventual "render all" flow + unit-tested for priority order.
-  const series = line.characterId
-    ? await seriesSvc.getSeries(issue.seriesId).catch(() => null)
-    : null;
-  const voiceId = resolveVoiceForLine(line, series, { explicit: body.voiceId });
+  // the eventual "render all" flow + unit-tested for priority order. Skip
+  // the canon load when a higher-priority resolver will win — otherwise
+  // every per-line render pays two file reads it doesn't use.
+  const needsCanon = !body.voiceId?.trim() && !line.voiceIdOverride && line.characterId;
+  let canon = null;
+  if (needsCanon) {
+    const series = await seriesSvc.getSeries(issue.seriesId).catch(() => null);
+    if (series) canon = await getSeriesCanon(series);
+  }
+  const voiceId = resolveVoiceForLine(line, canon, { explicit: body.voiceId });
   const synthResult = await synthesizeToFile({ text: line.text, voiceId })
     .catch((err) => { throw mapServiceError(err); });
   const nextLines = [...lines];
@@ -828,61 +793,9 @@ router.patch('/series/:id', asyncHandler(async (req, res) => {
   res.json(s);
 }));
 
-router.post('/series/:id/extract-bible', asyncHandler(async (req, res) => {
-  const body = validateRequest(extractBibleSchema, req.body ?? {});
-  // Validate series exists up front so a typo returns 404 instead of bubbling
-  // out of the service-layer call below.
-  const series = await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
-
-  let corpus = (body.corpus || '').trim();
-  if (!corpus) {
-    const issue = await issuesSvc.getIssue(body.issueId).catch((err) => { throw mapServiceError(err); });
-    if (issue.seriesId !== series.id) {
-      throw new ServerError('Issue does not belong to this series', { status: 400, code: 'PIPELINE_ISSUE_SERIES_MISMATCH' });
-    }
-    corpus = (issue.stages?.prose?.output || '').trim();
-    if (!corpus) {
-      throw new ServerError('Issue has no prose to extract from — generate the prose stage first', {
-        status: 400, code: 'PIPELINE_NO_PROSE_FOR_EXTRACTION',
-      });
-    }
-  }
-
-  // Delegate the extract → merge → patch chain to the service layer so
-  // mergeExtractedBible stays a service-internal concern. (Phase B note:
-  // this still writes into series.characters; the per-issue Nouns page
-  // reads from there. Render paths prefer universe canon via
-  // getSeriesCanon — so once the user runs migrateSeriesCanon and starts
-  // managing canon on the Universe Canon page, this legacy series-write
-  // becomes dead-end data. Removed in Phase B.2 when the Nouns page
-  // points at universe directly.)
-  const result = await seriesSvc.extractAndMergeIntoSeries(series.id, {
-    kinds: body.kinds,
-    corpus,
-    parallel: body.parallel,
-    providerOverride: body.providerOverride,
-  }).catch((err) => { throw mapServiceError(err); });
-  res.json(result);
-}));
-
 router.delete('/series/:id', asyncHandler(async (req, res) => {
   const r = await seriesSvc.deleteSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
   res.json(r);
-}));
-
-const refineCharacterSchema = z.object({
-  providerId: z.string().trim().max(64).optional(),
-  model: z.string().trim().max(128).optional(),
-});
-
-// LLM-driven rewrite of one character's physicalDescription so the rendered
-// image differs from every peer. Preserves evidence + firstAppearance. Returns
-// the updated series so the client can reactively swap state without a refetch.
-router.post('/series/:id/characters/:entryId/refine', asyncHandler(async (req, res) => {
-  const body = validateRequest(refineCharacterSchema, req.body ?? {});
-  const result = await refineCharacterDescription(req.params.id, req.params.entryId, body)
-    .catch((err) => { throw mapServiceError(err); });
-  res.json(result);
 }));
 
 router.get('/series/:id/issues', asyncHandler(async (req, res) => {
@@ -1014,16 +927,25 @@ router.post('/series/:id/seasons/:seasonId/episodes/generate', asyncHandler(asyn
     }
 
     // Non-fatal: episode creation already succeeded, so a noisy extraction
-    // failure must not invalidate the user's accepted breakdown.
+    // failure must not invalidate the user's accepted breakdown. Phase B.4:
+    // canon lives on the linked universe — orphan series (no universeId)
+    // skip extraction.
+    const series = await seriesSvc.getSeries(req.params.id).catch(() => null);
     const corpus = result.episodes
       .map((ep) => `## E${ep.number} — ${ep.title}\n\n${ep.logline || ''}\n\n${ep.synopsis || ''}`.trim())
       .filter(Boolean)
       .join('\n\n');
-    if (corpus.trim()) {
-      const extractRes = await seriesSvc.extractAndMergeIntoSeries(req.params.id, {
+    if (corpus.trim() && series?.universeId) {
+      // Stamp new inserts as series-extracted (autoLock + sourceSeriesId) so
+      // continuity-derived canon survives later AI refines and stays
+      // attributable to this series. Matches the pre-B.4 series-side
+      // extract semantics.
+      const extractRes = await extractCanonFromProse(series.universeId, {
         corpus,
         providerOverride: body.providerOverride,
         parallel: true,
+        autoLock: true,
+        sourceSeriesId: series.id,
       }).catch((err) => {
         console.warn(`⚠️ Continuity extraction failed for season ${req.params.seasonId}: ${err.message}`);
         return null;
@@ -1033,7 +955,7 @@ router.post('/series/:id/seasons/:seasonId/episodes/generate', asyncHandler(asyn
           characters: extractRes.results.characters?.extracted?.length || 0,
           settings: extractRes.results.settings?.extracted?.length || 0,
           objects: extractRes.results.objects?.extracted?.length || 0,
-          series: extractRes.series,
+          universe: extractRes.universe,
         };
       }
     }
@@ -1300,12 +1222,16 @@ router.post('/issues/:id/stages/storyboards/extract-scenes', asyncHandler(async 
   // Fall back to the series' configured LLM when the client doesn't pass an
   // explicit override — every Pipeline LLM action should honor the
   // provider/model picked in the issue header (which mirrors series.llm).
+  // Canon lives on the linked universe (Phase B.4). Orphan series render
+  // with empty canon — extractScenes can still produce scenes from the
+  // source text alone, just without character/setting/object grounding.
+  const canon = await getSeriesCanon(series);
   const result = await extractScenes({
     source,
     sourceKind,
-    characters: series.characters || [],
-    settings: series.settings || [],
-    objects: series.objects || [],
+    characters: canon.characters,
+    settings: canon.settings,
+    objects: canon.objects,
     work: { title: issue.title, kind: 'tv-episode' },
     series: { name: series.name, styleNotes: series.styleNotes },
     issue: { number: issue.number, title: issue.title },

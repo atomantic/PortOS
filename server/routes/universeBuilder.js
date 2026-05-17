@@ -97,6 +97,15 @@ const influencesSchema = z.object({
 const legacyStylePromptField = z.string().trim().max(svc.PROMPT_FRAGMENT_MAX).optional();
 const legacyNegativePromptField = z.string().trim().max(svc.PROMPT_FRAGMENT_MAX).optional();
 
+// Canon arrays go through `sanitizeBibleList` in the service layer where
+// each entry is validated structurally — accept them loosely here so
+// patch-the-whole-list flows (e.g. inline canon edits, render-ref hooks)
+// don't fail Zod for legitimately rich shapes. Cap at the bible-wide entry
+// limit so a malicious payload can't blow up memory.
+// Hard cap mirrors BIBLE_LIMITS.ENTRIES_PER_BIBLE_MAX (200) with headroom
+// — sanitizer truncates anyway, so this just protects the JSON-parse layer.
+const canonArrayField = z.array(z.record(z.unknown())).max(500).optional();
+
 const createSchema = z.object({
   name: z.string().trim().min(1).max(svc.NAME_MAX_LENGTH),
   starterPrompt: z.string().trim().max(svc.STARTER_PROMPT_MAX).optional().default(''),
@@ -110,16 +119,13 @@ const createSchema = z.object({
   influences: influencesSchema.optional(),
   locked: lockedSchema.optional(),
   llm: llmSchema,
+  // Canon registries on POST (Phase B.4): writers-room promote, share-bucket
+  // import, and tests can seed a universe with canon at create time instead
+  // of needing a second PATCH round-trip.
+  characters: canonArrayField,
+  settings: canonArrayField,
+  objects: canonArrayField,
 });
-
-// Canon arrays go through `sanitizeBibleList` in the service layer where
-// each entry is validated structurally — accept them loosely here so
-// patch-the-whole-list flows (e.g. inline canon edits, render-ref hooks)
-// don't fail Zod for legitimately rich shapes. Cap at the bible-wide entry
-// limit so a malicious payload can't blow up memory.
-// Hard cap mirrors BIBLE_LIMITS.ENTRIES_PER_BIBLE_MAX (200) with headroom
-// — sanitizer truncates anyway, so this just protects the JSON-parse layer.
-const canonArrayField = z.array(z.record(z.unknown())).max(500).optional();
 // `origin` is a share-bucket provenance block written by the importer + cleared
 // to null by the user; structurally an object or null.
 const originField = z.record(z.unknown()).nullable().optional();

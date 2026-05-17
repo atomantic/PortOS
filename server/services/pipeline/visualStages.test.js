@@ -203,6 +203,45 @@ describe('composeComicPagePrompt', () => {
     expect(prompt).toMatch(/cinematic ink illustration/);
   });
 
+  it('prepends series.stylePromptOverride ahead of the universe embrace tokens', () => {
+    // A per-series override lets one series in a shared universe deviate
+    // visually (e.g. a noir spin-off) without forking the universe. The
+    // override prepends so its tokens land in the heaviest position, with
+    // the universe style trailing — both must appear, override first.
+    const world = {
+      influences: {
+        embrace: ['cinematic ink illustration', 'dramatic lighting'],
+        avoid: [],
+      },
+    };
+    const seriesWithOverride = { ...SERIES, stylePromptOverride: 'moody noir lighting, high contrast monochrome' };
+    const prompt = composeComicPagePrompt({ series: seriesWithOverride, world, page: PAGE, pageNumber: 1 });
+    const overrideAt = prompt.indexOf('moody noir lighting');
+    const universeAt = prompt.indexOf('cinematic ink illustration');
+    expect(overrideAt).toBeGreaterThanOrEqual(0);
+    expect(universeAt).toBeGreaterThanOrEqual(0);
+    expect(overrideAt).toBeLessThan(universeAt);
+  });
+
+  it('falls through to universe-only style when stylePromptOverride is empty', () => {
+    const world = {
+      influences: { embrace: ['cinematic ink illustration'], avoid: [] },
+    };
+    const seriesNoOverride = { ...SERIES, stylePromptOverride: '' };
+    const prompt = composeComicPagePrompt({ series: seriesNoOverride, world, page: PAGE, pageNumber: 1 });
+    expect(prompt).toMatch(/cinematic ink illustration/);
+    expect(prompt).not.toMatch(/moody noir/);
+  });
+
+  it('applies stylePromptOverride even without a universe (no embrace tokens)', () => {
+    // The override is independent of the universe — if the series has an
+    // override but isn't linked to a universe (or the universe has no
+    // embrace tokens), the override still prepends to the prompt.
+    const seriesWithOverride = { ...SERIES, stylePromptOverride: 'experimental rotoscope' };
+    const prompt = composeComicPagePrompt({ series: seriesWithOverride, page: PAGE, pageNumber: 1 });
+    expect(prompt).toMatch(/experimental rotoscope/);
+  });
+
   it('appends extraStyle into the Art style clause', () => {
     const prompt = composeComicPagePrompt({
       series: SERIES,

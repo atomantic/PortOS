@@ -16,6 +16,7 @@
 import { composeVisualPrompt } from './visualStages.js';
 import { getIssue, updateStage } from './issues.js';
 import { getSeries } from './series.js';
+import { getSeriesCanon } from './seriesCanon.js';
 import { createProject as createCDProject, setTreatment as setCDTreatment } from '../creativeDirector/local.js';
 import { startCreativeDirectorProject } from '../creativeDirector/completionHook.js';
 import { getDefaultVideoModelId } from '../../lib/mediaModels.js';
@@ -78,7 +79,7 @@ function expandShotsToCdScenes(scene, sceneIdx, shortIssueId, baselinePrompt) {
  * MAX_SCENES caps the flattened CD scene count so an issue with deep shot
  * decomposition can't push the CD render queue past its single-issue budget.
  */
-export function buildTreatmentFromStoryboards({ issue, series }) {
+export function buildTreatmentFromStoryboards({ issue, series, canon = null }) {
   const storyboards = issue.stages?.storyboards;
   const rawScenes = Array.isArray(storyboards?.scenes) ? storyboards.scenes : [];
   const usable = rawScenes.filter((s) => (s?.description || '').trim().length > 0);
@@ -89,7 +90,10 @@ export function buildTreatmentFromStoryboards({ issue, series }) {
     );
   }
   const shortIssueId = issue.id.slice(-8);
-  const settingByKey = buildSettingByKey(series?.settings);
+  // Canon settings live on the linked universe (Phase B.4). Build the
+  // settingByKey once and reuse across every scene's composeVisualPrompt
+  // call rather than rebuilding per-call.
+  const settingByKey = buildSettingByKey(canon?.settings);
   const baselinePrompt = (description, slugline) =>
     composeVisualPrompt({ series, description, slugline: slugline || '', settingByKey });
 
@@ -134,7 +138,12 @@ export async function startEpisodeVideoForIssue(issueId, options = {}) {
 
   const existing = issue.stages?.episodeVideo?.cdProjectId;
   const series = await getSeries(issue.seriesId);
-  const treatment = buildTreatmentFromStoryboards({ issue, series });
+  // Canon (characters / settings / objects) lives on the linked universe
+  // — load it so the per-scene baseline prompt can inject setting baseline
+  // context (INT/EXT, timeOfDay, palette, recurring details) for matched
+  // sluglines. Orphan series render with empty canon.
+  const canon = await getSeriesCanon(series);
+  const treatment = buildTreatmentFromStoryboards({ issue, series, canon });
   if (existing && !options.force) {
     // SSE / UI status messaging stays consistent between fresh-start and
     // reuse paths by reusing the treatment builder for the scene count —

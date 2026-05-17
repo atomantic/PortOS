@@ -35,7 +35,6 @@ import { join, basename, resolve as resolvePath, sep as PATH_SEP } from 'node:pa
 import { readFile, writeFile } from 'fs/promises';
 import { STYLE_PRESETS } from '../lib/writersRoomStylePresets.js';
 import { cleanImageBuffer, CLEAN_LEVELS } from './imageClean.js';
-import { purgeImageRefFromAllSeries } from '../services/pipeline/series.js';
 import { purgeImageRefFromAllUniverses } from '../services/universeCanon.js';
 
 const router = Router();
@@ -321,26 +320,17 @@ router.post('/cancel', asyncHandler(async (req, res) => {
 
 router.delete('/:filename', asyncHandler(async (req, res) => {
   const result = await local.deleteImage(req.params.filename);
-  // Sync both stores: pipeline series.characters/.settings/.objects[].imageRefs
-  // AND universe.characters/.settings/.objects[].imageRefs. Both are scanned
-  // because Phase A canon entities live on the universe; Phase B will collapse
-  // these into one source. Best-effort: a purge failure must not block the
-  // gallery delete itself.
-  const [seriesPurge, universePurge] = await Promise.all([
-    purgeImageRefFromAllSeries(req.params.filename).catch((err) => {
-      console.warn(`⚠️ Pipeline ref purge failed for ${req.params.filename}: ${err?.message || err}`);
-      return { removed: 0 };
-    }),
-    purgeImageRefFromAllUniverses(req.params.filename).catch((err) => {
-      console.warn(`⚠️ Universe canon purge failed for ${req.params.filename}: ${err?.message || err}`);
-      return { removed: 0 };
-    }),
-  ]);
-  const totalRemoved = seriesPurge.removed + universePurge.removed;
-  if (totalRemoved > 0) {
-    console.log(`🧹 Purged ${totalRemoved} canon ref(s) for ${req.params.filename} (series=${seriesPurge.removed}, universe=${universePurge.removed})`);
+  // Sync universe canon — characters/settings/objects[].imageRefs on every
+  // universe is scanned and any reference to this filename is dropped.
+  // Best-effort: a purge failure must not block the gallery delete itself.
+  const universePurge = await purgeImageRefFromAllUniverses(req.params.filename).catch((err) => {
+    console.warn(`⚠️ Universe canon purge failed for ${req.params.filename}: ${err?.message || err}`);
+    return { removed: 0 };
+  });
+  if (universePurge.removed > 0) {
+    console.log(`🧹 Purged ${universePurge.removed} canon ref(s) for ${req.params.filename}`);
   }
-  res.json({ ...result, canonRefsRemoved: totalRemoved });
+  res.json({ ...result, canonRefsRemoved: universePurge.removed });
 }));
 
 router.post('/:filename/visibility', asyncHandler(async (req, res) => {
