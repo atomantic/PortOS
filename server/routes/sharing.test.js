@@ -166,16 +166,28 @@ describe('sharing routes', () => {
       expect(importer.processBacklog).toHaveBeenCalledWith('new1');
     });
 
-    it('surfaces SHARING_BUCKET_PATH_UNUSABLE when the service rejects the path', async () => {
+    it('maps SHARING_BUCKET_PATH_UNUSABLE to HTTP 400', async () => {
       buckets.createBucket.mockRejectedValue(
         makeServiceError('Bucket path is not a directory: /tmp/missing', 'SHARING_BUCKET_PATH_UNUSABLE'),
       );
       const res = await request(buildApp())
         .post('/api/sharing/buckets')
         .send({ name: 'X', path: '/tmp/missing' });
-      expect(res.status).toBe(500);
+      // Client-correctable: the path is invalid/unwritable.
+      expect(res.status).toBe(400);
       expect(res.body.code).toBe('SHARING_BUCKET_PATH_UNUSABLE');
       expect(watcher.attachWatcher).not.toHaveBeenCalled();
+    });
+
+    it('maps SHARING_BUCKET_VALIDATION to HTTP 400', async () => {
+      buckets.createBucket.mockRejectedValue(
+        makeServiceError('A bucket is already registered at: /tmp/dup', 'SHARING_BUCKET_VALIDATION'),
+      );
+      const res = await request(buildApp())
+        .post('/api/sharing/buckets')
+        .send({ name: 'X', path: '/tmp/dup' });
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('SHARING_BUCKET_VALIDATION');
     });
   });
 
@@ -300,6 +312,24 @@ describe('sharing routes', () => {
       expect(res.status).toBe(404);
       expect(res.body.code).toBe('SHARING_INBOX_NOT_FOUND');
     });
+
+    it('maps SHARING_RECORDS_PENDING to HTTP 409 (transient sync conflict)', async () => {
+      importer.promoteInboxItem.mockRejectedValue(
+        makeServiceError('Manifest records are still syncing (3 missing)', 'SHARING_RECORDS_PENDING'),
+      );
+      const res = await request(buildApp()).post('/api/sharing/buckets/b1/inbox/m-1/promote');
+      expect(res.status).toBe(409);
+      expect(res.body.code).toBe('SHARING_RECORDS_PENDING');
+    });
+
+    it('maps SHARING_ASSETS_PENDING to HTTP 409', async () => {
+      importer.promoteInboxItem.mockRejectedValue(
+        makeServiceError('Manifest assets are still syncing (2 missing)', 'SHARING_ASSETS_PENDING'),
+      );
+      const res = await request(buildApp()).post('/api/sharing/buckets/b1/inbox/m-1/promote');
+      expect(res.status).toBe(409);
+      expect(res.body.code).toBe('SHARING_ASSETS_PENDING');
+    });
   });
 
   describe('POST /api/sharing/buckets/:id/inbox/:manifestId/dismiss', () => {
@@ -369,6 +399,29 @@ describe('sharing routes', () => {
         .send({ bucketId: 'b1', recordKind: 'series', recordId: 's1' });
       expect(res.status).toBe(201);
       expect(res.body.subscription).toEqual(created);
+    });
+
+    it('maps SHARING_BUCKET_NOT_FOUND from subscribe → HTTP 404', async () => {
+      // subscribe() calls getBucket() which can throw SHARING_BUCKET_NOT_FOUND.
+      subs.subscribe.mockRejectedValue(
+        makeServiceError('Bucket not found: b-x', 'SHARING_BUCKET_NOT_FOUND'),
+      );
+      const res = await request(buildApp())
+        .post('/api/sharing/subscriptions')
+        .send({ bucketId: 'b-x', recordKind: 'series', recordId: 's1' });
+      expect(res.status).toBe(404);
+      expect(res.body.code).toBe('SHARING_BUCKET_NOT_FOUND');
+    });
+
+    it('maps SHARING_SUBSCRIPTION_VALIDATION from subscribe → HTTP 400', async () => {
+      subs.subscribe.mockRejectedValue(
+        makeServiceError('bucketId and recordId are required', 'SHARING_SUBSCRIPTION_VALIDATION'),
+      );
+      const res = await request(buildApp())
+        .post('/api/sharing/subscriptions')
+        .send({ bucketId: 'b1', recordKind: 'series', recordId: 's1' });
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('SHARING_SUBSCRIPTION_VALIDATION');
     });
   });
 
