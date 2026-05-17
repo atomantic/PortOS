@@ -23,6 +23,10 @@ function setClipboard(clipboard) {
   vi.stubGlobal('navigator', clipboard === undefined ? {} : { clipboard });
 }
 
+function unsetNavigator() {
+  vi.stubGlobal('navigator', undefined);
+}
+
 describe('writeClipboardSilently', () => {
   it('returns true and writes text on success', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
@@ -35,6 +39,12 @@ describe('writeClipboardSilently', () => {
 
   it('returns false when navigator.clipboard is unavailable (no toasts)', async () => {
     setClipboard(undefined);
+    expect(await writeClipboardSilently('hello')).toBe(false);
+    expect(toastMock.error).not.toHaveBeenCalled();
+  });
+
+  it('returns false when navigator itself is undefined (no ReferenceError)', async () => {
+    unsetNavigator();
     expect(await writeClipboardSilently('hello')).toBe(false);
     expect(toastMock.error).not.toHaveBeenCalled();
   });
@@ -87,6 +97,12 @@ describe('copyToClipboard', () => {
     expect(toastMock.error).toHaveBeenCalledWith('Clipboard unavailable on insecure context');
   });
 
+  it('toasts the insecure-context error when navigator itself is undefined', async () => {
+    unsetNavigator();
+    expect(await copyToClipboard('hello')).toBe(false);
+    expect(toastMock.error).toHaveBeenCalledWith('Clipboard unavailable on insecure context');
+  });
+
   it('toasts the failure and returns false when writeText throws', async () => {
     setClipboard({ writeText: vi.fn().mockRejectedValue(new Error('denied')) });
     expect(await copyToClipboard('hello')).toBe(false);
@@ -110,6 +126,11 @@ describe('readClipboard', () => {
 
   it('returns null when navigator.clipboard.readText is unavailable', async () => {
     setClipboard({});
+    expect(await readClipboard()).toBeNull();
+  });
+
+  it('returns null when navigator itself is undefined (no ReferenceError)', async () => {
+    unsetNavigator();
     expect(await readClipboard()).toBeNull();
   });
 

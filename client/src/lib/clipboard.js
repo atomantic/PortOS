@@ -1,13 +1,19 @@
 import toast from '../components/ui/Toast';
 
 // `navigator.clipboard` is undefined on insecure-origin contexts (raw HTTP over
-// LAN, some embedded webviews). Each helper short-circuits cleanly so callers
-// don't have to re-check `?.writeText` / `?.readText` at every site.
+// LAN, some embedded webviews). Reading via `globalThis.navigator` also keeps
+// the helpers safe in non-browser contexts (unit tests, SSR), where a bare
+// `navigator` reference would throw a ReferenceError before optional-chaining
+// could help. Each helper short-circuits cleanly so callers don't have to
+// re-check `?.writeText` / `?.readText` at every site.
+
+const clipboard = () => globalThis.navigator?.clipboard;
 
 export async function writeClipboardSilently(text) {
-  if (!text || !navigator.clipboard?.writeText) return false;
+  const c = clipboard();
+  if (!text || !c?.writeText) return false;
   try {
-    await navigator.clipboard.writeText(text);
+    await c.writeText(text);
     return true;
   } catch {
     return false;
@@ -19,12 +25,13 @@ export async function writeClipboardSilently(text) {
 // indicator in their own UI.
 export async function copyToClipboard(text, successMessage = 'Copied') {
   if (!text) return false;
-  if (!navigator.clipboard?.writeText) {
+  const c = clipboard();
+  if (!c?.writeText) {
     toast.error('Clipboard unavailable on insecure context');
     return false;
   }
   try {
-    await navigator.clipboard.writeText(text);
+    await c.writeText(text);
     if (successMessage) toast.success(successMessage);
     return true;
   } catch {
@@ -34,9 +41,10 @@ export async function copyToClipboard(text, successMessage = 'Copied') {
 }
 
 export async function readClipboard() {
-  if (!navigator.clipboard?.readText) return null;
+  const c = clipboard();
+  if (!c?.readText) return null;
   try {
-    return await navigator.clipboard.readText();
+    return await c.readText();
   } catch {
     return null;
   }
