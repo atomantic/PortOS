@@ -12,7 +12,7 @@
  * No cycle risk: this module imports nothing from either consumer.
  */
 
-import { resolveCliModel } from './providerModels.js';
+import { resolveCliModel, hasModelFlag } from './providerModels.js';
 
 // ─── Paste handshake constants ────────────────────────────────────────────
 
@@ -62,15 +62,18 @@ export function applyCommandDefaults(command, args) {
 }
 
 /**
- * Build the spawn args for a TUI invocation. Honors a baked --model flag in
- * provider.args (returned unchanged) over the resolved per-call model — the
- * one-shot caller's `--model` should never duplicate a user-baked one.
+ * Build the spawn args for a TUI invocation. When `provider.args` already
+ * has a `--model X` (or `-m X`) pin, the args-baked flag wins and we skip
+ * the per-call --model append — otherwise the CLI would see two flags and
+ * either error or take the last one (provider-specific). Matches the same
+ * gate `runner.js#buildCliArgs` uses for CLI providers.
  */
 export function buildTuiInvocation(provider, model) {
   const command = provider?.command || inferTuiCommand(provider?.id);
   const baseArgs = applyCommandDefaults(command, [...(provider?.args || [])]);
   const effectiveModel = resolveCliModel(model);
-  const args = effectiveModel ? [...baseArgs, '--model', effectiveModel] : baseArgs;
+  const shouldInject = effectiveModel && !hasModelFlag(baseArgs);
+  const args = shouldInject ? [...baseArgs, '--model', effectiveModel] : baseArgs;
   return { command, args };
 }
 

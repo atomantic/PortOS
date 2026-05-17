@@ -26,10 +26,10 @@
  */
 
 import { spawn as ptySpawn } from 'node-pty';
-import { writeFile } from 'fs/promises';
 import { join } from 'path';
 import { ensureDir, PATHS } from './fileUtils.js';
 import { createStreamingAnsiStripper } from './ansiStrip.js';
+import { getRunsPath, finalizeRunRecord } from '../services/runner.js';
 import {
   DEFAULT_TUI_PROMPT_DELAY_MS,
   PASTE_MARKER_POLL_MS,
@@ -61,24 +61,32 @@ const PTY_COLS = 200;
 const PTY_ROWS = 50;
 
 /**
- * Run a single prompt through a TUI provider and return the response text.
+ * Run a single prompt through a TUI provider. Mirrors the signature of
+ * `executeCliRun` / `executeApiRun` so the central handler treats all three
+ * branches uniformly (positional, NOT an options object).
  *
- * @param {object} opts
- * @param {object} opts.provider — { id, type: 'tui', command, args, envVars,
- *   tuiPromptDelayMs?, tuiOneShotIdleMs?, timeout? }
- * @param {string} opts.prompt   — full text to paste into the TUI
- * @param {string} opts.runId    — pre-created run id (caller owns persistence
- *   of the prompt + metadata under data/runs/<runId>/; we append output).
- * @param {string} [opts.model]  — model id; passed via --model unless null
- *   (Codex sentinel case).
- * @param {(chunk: string) => void} [opts.onData] — incremental stripped
- *   output stream, matching the executeCliRun/executeApiRun signature so
- *   the central handler can treat all three branches uniformly.
- * @param {(meta: object) => void} [opts.onComplete] — final metadata with
- *   `{ success, exitCode, error, outputSize }`. Resolves AFTER this fires.
- * @param {string} [opts.cwd]    — working directory for the spawned TUI.
- * @returns {Promise<void>} resolves after onComplete fires. Throws on
- *   spawn error before any output. Errors during run land on onComplete.
+ * Caller (typically `runPromptThroughProvider`) owns the run record:
+ *   - `createRun` (toolkit) writes the initial metadata.json + prompt.txt
+ *   - this function writes output.txt and finalizes metadata.json on exit
+ *     via `runner.js#finalizeRunRecord`, so /runs shows TUI runs with the
+ *     same success/exitCode/duration shape as CLI runs.
+ *
+ * @param {string} runId — pre-created run id (from createRun).
+ * @param {object} provider — { id, type: 'tui', command, args, envVars,
+ *   tuiPromptDelayMs?, tuiOneShotIdleMs?, timeout?, defaultModel? }. The
+ *   model passed to `--model` is taken from `provider.defaultModel`; per-
+ *   call overrides are applied by the central handler via a provider clone
+ *   before this function is reached.
+ * @param {string} prompt — full text to paste into the TUI.
+ * @param {string} cwd — working directory for the spawned TUI.
+ * @param {(chunk: string) => void} [onData] — incremental ANSI-stripped
+ *   output stream.
+ * @param {(meta: object) => void} [onComplete] — fired after exit with
+ *   `{ exitCode, duration, success, error?, model? }`. Promise resolves
+ *   AFTER this fires.
+ * @param {number} [timeout] — hard cap on a single run (ms). Falls back to
+ *   `provider.timeout`, then `DEFAULT_TIMEOUT_MS`.
+ * @returns {Promise<void>}
  */
 export async function executeTuiRun(runId, provider, prompt, cwd, onData, onComplete, timeout) {
   if (!provider || typeof provider !== 'object') {
@@ -94,11 +102,20 @@ export async function executeTuiRun(runId, provider, prompt, cwd, onData, onComp
   const totalTimeoutMs = timeout ?? provider.timeout ?? DEFAULT_TIMEOUT_MS;
   const workingDir = (typeof cwd === 'string' && cwd) ? cwd : PATHS.root;
 
-  const runDir = join(PATHS.runs, runId);
+  // Mirror runner.js#executeCliRun's runs-path resolution so TUI runs land
+  // under the runner-config dataDir (not always PATHS.runs) — otherwise a
+  // non-default dataDir would split metadata + output across two trees.
+  const runDir = join(getRunsPath(), runId);
   await ensureDir(runDir);
-  const outputPath = join(runDir, 'output.txt');
 
   console.log(`📟 Executing TUI: ${command} ${args.join(' ')} (${prompt.length} chars via paste)`);
+
+  // CLAUDECODE is set when PortOS itself runs inside Claude Code; passing it
+  // through to a spawned Claude Code TUI would make the child think it's
+  // nested. Other AI spawn paths (runner.js, agentCliSpawning.js) strip it
+  // for the same reason.
+  const childEnv = { ...process.env, ...(provider.envVars || {}), TERM: 'xterm-256color', COLORTERM: 'truecolor' };
+  delete childEnv.CLAUDECODE;
 
   let ptyProcess;
   try {
@@ -107,12 +124,7 @@ export async function executeTuiRun(runId, provider, prompt, cwd, onData, onComp
       cols: PTY_COLS,
       rows: PTY_ROWS,
       cwd: workingDir,
-      env: {
-        ...process.env,
-        ...(provider.envVars || {}),
-        TERM: 'xterm-256color',
-        COLORTERM: 'truecolor'
-      }
+      env: childEnv,
     });
   } catch (err) {
     throw new Error(`Failed to spawn TUI '${command}': ${err.message}`);
@@ -150,18 +162,19 @@ export async function executeTuiRun(runId, provider, prompt, cwd, onData, onComp
       // behind for the user to interact with.
       try { if (ptyProcess && !ptyProcess.killed) ptyProcess.kill(); } catch { /* already gone */ }
 
-      const duration = Date.now() - startTime;
-      const metadata = {
-        endTime: new Date().toISOString(),
-        duration,
-        exitCode,
-        success,
-        error,
-        completionReason: reason,
-        outputSize: Buffer.byteLength(outputBuffer)
-      };
-
-      await writeFile(outputPath, outputBuffer).catch(() => {});
+      // Delegate run-record finalization (output.txt + metadata.json merge
+      // + onRunCompleted/onRunFailed hooks + toolkit error analysis) to the
+      // shared runner helper. Tag with completionReason so /runs can show
+      // the TUI-specific signal (idle-complete, timeout, command-not-found)
+      // — finalizeRunRecord preserves any fields the toolkit already wrote
+      // when it merges.
+      const metadata = await finalizeRunRecord({
+        runId, output: outputBuffer, exitCode, success, error, startTime,
+      }).catch((err) => {
+        console.error(`❌ TUI run ${runId} finalize failed: ${err.message}`);
+        return { exitCode, success, error: error || err.message, duration: Date.now() - startTime };
+      });
+      metadata.completionReason = reason;
       onComplete?.(metadata);
       resolve();
     };

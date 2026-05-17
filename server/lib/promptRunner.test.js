@@ -8,7 +8,17 @@ vi.mock('../services/runner.js', () => ({
   extractBakedModel: vi.fn(() => null),
 }));
 
+// TUI runner is in lib (different module from services/runner.js) — mock it
+// here so the central handler's tui branch is testable without spawning a
+// real PTY. cleanTuiResponse is mocked to a passthrough so tests can assert
+// on the raw streamed text without worrying about the prompt-echo strip.
+vi.mock('./tuiPromptRunner.js', () => ({
+  executeTuiRun: vi.fn(),
+  cleanTuiResponse: vi.fn((text) => text),
+}));
+
 const runner = await import('../services/runner.js');
+const tuiRunner = await import('./tuiPromptRunner.js');
 const { runPromptThroughProvider } = await import('./promptRunner.js');
 
 const apiProvider = (extra = {}) => ({
@@ -17,10 +27,21 @@ const apiProvider = (extra = {}) => ({
 const cliProvider = (extra = {}) => ({
   id: 'codex', type: 'cli', defaultModel: 'm-default', timeout: 5000, ...extra,
 });
+const tuiProvider = (extra = {}) => ({
+  id: 'claude-code-tui', type: 'tui', defaultModel: 'm-default', timeout: 5000, ...extra,
+});
 
 beforeEach(() => {
   vi.clearAllMocks();
   runner.createRun.mockResolvedValue({ runId: 'run-xyz' });
+  // vi.clearAllMocks() clears calls but NOT mockReturnValue overrides,
+  // so the default implementations set in vi.mock() above don't auto-reset
+  // between tests. Re-apply the defaults that individual tests override
+  // (hasModelFlag, extractBakedModel, cleanTuiResponse) so a leak-over
+  // value can't poison the next test's resolveEffectiveModel run.
+  runner.hasModelFlag.mockReturnValue(false);
+  runner.extractBakedModel.mockReturnValue(null);
+  tuiRunner.cleanTuiResponse.mockImplementation((text) => text);
 });
 
 describe('promptRunner — happy paths', () => {
@@ -344,5 +365,86 @@ describe('promptRunner — multi-chunk text accumulation', () => {
       source: 't',
     });
     expect(out.text).toBe('hello world');
+  });
+});
+
+// =============================================================================
+// TUI routing — the third dispatch branch added alongside cli/api. Mirrors
+// the cli/api coverage above so the central handler's tui path can't quietly
+// regress (was the entry point for the Pipeline-prose crash bug).
+// =============================================================================
+
+describe('promptRunner — TUI provider routing', () => {
+  it('routes TUI providers through executeTuiRun, accumulates stripped text, resolves { text, runId, model }', async () => {
+    tuiRunner.executeTuiRun.mockImplementation(async (id, _p, _pr, _cwd, onData, onComplete, _t) => {
+      onData('once ');
+      onData('upon ');
+      onData('a time');
+      onComplete({ success: true, exitCode: 0 });
+    });
+
+    const out = await runPromptThroughProvider({
+      provider: tuiProvider(),
+      prompt: 'tell me a story',
+      source: 'pipeline-text-stage',
+    });
+
+    expect(out).toEqual({ text: 'once upon a time', runId: 'run-xyz', model: 'm-default' });
+    expect(tuiRunner.executeTuiRun).toHaveBeenCalledTimes(1);
+    expect(runner.executeCliRun).not.toHaveBeenCalled();
+    expect(runner.executeApiRun).not.toHaveBeenCalled();
+  });
+
+  it('passes cwd + timeout overrides through to executeTuiRun', async () => {
+    tuiRunner.executeTuiRun.mockImplementation(async (id, _p, _pr, _cwd, onData, onComplete, _t) => {
+      onData('ok');
+      onComplete({ success: true });
+    });
+
+    await runPromptThroughProvider({
+      provider: tuiProvider(),
+      prompt: 'p', source: 't',
+      cwd: '/tmp/some-other-repo',
+      timeout: 60000,
+    });
+
+    const args = tuiRunner.executeTuiRun.mock.calls[0];
+    expect(args[3]).toBe('/tmp/some-other-repo'); // cwd positional arg
+    expect(args[6]).toBe(60000);                   // timeout positional arg
+  });
+
+  it('runs cleanTuiResponse on the accumulated text before resolving', async () => {
+    tuiRunner.executeTuiRun.mockImplementation(async (id, _p, _pr, _cwd, onData, onComplete, _t) => {
+      onData('raw with chrome');
+      onComplete({ success: true });
+    });
+    tuiRunner.cleanTuiResponse.mockReturnValueOnce('cleaned');
+
+    const out = await runPromptThroughProvider({
+      provider: tuiProvider(),
+      prompt: 'p', source: 't',
+    });
+
+    expect(tuiRunner.cleanTuiResponse).toHaveBeenCalledWith('raw with chrome', 'p');
+    expect(out.text).toBe('cleaned');
+  });
+
+  it('rejects with TUI-labeled error when executeTuiRun fires onComplete with success: false', async () => {
+    tuiRunner.executeTuiRun.mockImplementation(async (id, _p, _pr, _cwd, _od, onComplete, _t) => {
+      onComplete({ success: false, exitCode: 124 });
+    });
+
+    await expect(runPromptThroughProvider({
+      provider: tuiProvider(),
+      prompt: 'p', source: 't',
+    })).rejects.toThrow(/TUI execution failed/);
+  });
+
+  it('rejects when executeTuiRun rejects (spawn failure path)', async () => {
+    tuiRunner.executeTuiRun.mockRejectedValue(new Error("Failed to spawn TUI 'claude'"));
+    await expect(runPromptThroughProvider({
+      provider: tuiProvider(),
+      prompt: 'p', source: 't',
+    })).rejects.toThrow(/Failed to spawn TUI/);
   });
 });

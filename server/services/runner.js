@@ -6,7 +6,13 @@ import { spawn } from 'child_process';
 import { writeFile, readFile } from 'fs/promises';
 import { join } from 'path';
 import { ensureDir } from '../lib/fileUtils.js';
-import { resolveCliModel } from '../lib/providerModels.js';
+import { resolveCliModel, hasModelFlag, extractBakedModel } from '../lib/providerModels.js';
+
+// Re-exported so existing importers (`promptRunner.js`, `mediaPromptRefiner.js`,
+// `universeBuilderRefine.js`) don't break — these helpers moved to providerModels.js
+// so `server/lib/tuiHandshake.js` could import them without a lib→service layer
+// violation.
+export { hasModelFlag, extractBakedModel };
 
 // This will be initialized by server/index.js and set via setAIToolkit()
 let aiToolkitInstance = null;
@@ -109,61 +115,61 @@ function stripBrokenModelFlags(args) {
   return out;
 }
 
-// Detects whether the provider's stored argv already pins a model with a
-// usable value. We check both flag forms (`--model` / `-m`) and both styles
-// (separated `--model x` and joined `--model=x`). gemini-cli is the only
-// one that uses `-m` short form; checking it on claude-code too is harmless
-// (claude-code doesn't define a `-m` short flag).
-//
-// A separated flag with no value following (`['--model']` at end of argv,
-// or `['--model', '--other']`) is treated as NOT a baked-in pin — the CLI
-// would reject the argv at runtime anyway, and pretending it's a pin would
-// also make refiners report `null` (from extractBakedModel) and skip
-// injecting our own model. Better to leave injection on and let
-// buildCliArgs fix the broken argv by appending a valid `--model X`.
-export function hasModelFlag(args) {
-  if (!Array.isArray(args)) return false;
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i];
-    if (typeof a !== 'string') continue;
-    if (a.startsWith('--model=') && a.length > '--model='.length) return true;
-    if (a.startsWith('-m=') && a.length > '-m='.length) return true;
-    if (a === '--model' || a === '-m') {
-      const next = args[i + 1];
-      if (typeof next === 'string' && next.length > 0 && !next.startsWith('-')) return true;
-    }
-  }
-  return false;
+/**
+ * Returns the configured runs directory. Other execution paths
+ * (`server/lib/tuiPromptRunner.js`) need this to write output + metadata
+ * under the same tree as `createRun` — without it, runs configured with a
+ * non-default `dataDir` end up split across two trees and `/runs` replay
+ * breaks.
+ */
+export function getRunsPath() {
+  return join(runnerConfig.dataDir, 'runs');
 }
 
 /**
- * Extract the pinned model id from provider.args when a model flag is baked
- * in. Supports separated form (`--model X` / `-m X`) and joined form
- * (`--model=X` / `-m=X`). Returns null when no model flag is present or the
- * separated form has no value following the flag.
+ * Read existing metadata.json (written by toolkit createRun), merge in
+ * completion fields, optionally run error analysis, write back, fire
+ * onRunCompleted / onRunFailed hooks, and write the output buffer. Mirror
+ * of the close-handler block in executeCliRun below — extracted so
+ * `tuiPromptRunner.js` can produce the same run-record shape (otherwise
+ * /runs shows TUI runs stuck with `success: null` forever).
  *
- * Used by refiners (mediaPromptRefiner, universeBuilderRefine) so the model
- * reported back to the caller / persisted on the run record matches what
- * the CLI will actually run when the user has hard-coded a model in args.
+ * @returns the merged metadata object (also written to disk).
  */
-export function extractBakedModel(args) {
-  if (!Array.isArray(args)) return null;
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i];
-    if (typeof a !== 'string') continue;
-    if (a === '--model' || a === '-m') {
-      const next = args[i + 1];
-      // Match hasModelFlag exactly: a value that starts with '-' is the next
-      // flag, not the model id. Without this guard, `['--model', '--other']`
-      // would extract `'--other'` even though hasModelFlag said "no baked
-      // model" — the two would disagree and refiners could mis-report.
-      if (typeof next === 'string' && next.length > 0 && !next.startsWith('-')) return next;
-      return null;
-    }
-    if (a.startsWith('--model=')) return a.slice('--model='.length) || null;
-    if (a.startsWith('-m=')) return a.slice('-m='.length) || null;
+export async function finalizeRunRecord({ runId, output, exitCode, success, error, startTime }) {
+  if (!aiToolkitInstance) throw new Error('AI Toolkit not initialized');
+  const runDir = join(getRunsPath(), runId);
+  const outputPath = join(runDir, 'output.txt');
+  const metadataPath = join(runDir, 'metadata.json');
+
+  await writeFile(outputPath, output).catch(() => {});
+
+  const metadataStr = await readFile(metadataPath, 'utf-8').catch(() => '{}');
+  let metadata = {};
+  try { metadata = JSON.parse(metadataStr); } catch { console.log('⚠️ Corrupted metadata for run, using fresh'); }
+  metadata.endTime = new Date().toISOString();
+  metadata.duration = Date.now() - startTime;
+  metadata.exitCode = exitCode;
+  metadata.success = success;
+  metadata.outputSize = Buffer.byteLength(output);
+  if (error) metadata.error = error;
+
+  if (!success && aiToolkitInstance.services.errorDetection) {
+    const errorAnalysis = aiToolkitInstance.services.errorDetection.analyzeError(output, exitCode);
+    metadata.error = metadata.error || errorAnalysis.message || `Process exited with code ${exitCode}`;
+    metadata.errorCategory = errorAnalysis.category;
+    metadata.errorAnalysis = errorAnalysis;
   }
-  return null;
+
+  await writeFile(metadataPath, JSON.stringify(metadata, null, 2)).catch(() => {});
+
+  if (success) {
+    runnerConfig.hooks?.onRunCompleted?.(metadata, output);
+  } else {
+    runnerConfig.hooks?.onRunFailed?.(metadata, metadata.error, output);
+  }
+
+  return metadata;
 }
 
 /**

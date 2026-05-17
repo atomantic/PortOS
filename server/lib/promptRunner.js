@@ -36,7 +36,7 @@ const APPEND_CHUNK = (acc, chunk) => acc + (typeof chunk === 'string' ? chunk : 
  * Returns true when the runner+provider pair will actually honor a
  * per-call `model` override. For API providers the model is a
  * first-class arg to `executeApiRun`. For CLI/TUI providers,
- * `runner.js#buildCliArgs` / `tuiPromptRunner.js#buildOneShotInvocation`
+ * `runner.js#buildCliArgs` / `tuiHandshake.js#buildTuiInvocation`
  * translate the resolved `defaultModel` into a `--model`/`-m` flag — BUT
  * only when the user hasn't already baked a model flag into `provider.args`.
  * If a flag is baked in, the runner-injected one is suppressed and the
