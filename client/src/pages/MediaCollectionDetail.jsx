@@ -462,7 +462,7 @@ export default function MediaCollectionDetail() {
                   hideActions={selectMode}
                   selected={isSelected}
                   starred={!!annotations[key]?.starred}
-                  hasNote={!!annotations[key]?.note}
+                  hasNote={!!annotations[key]?.anyNote}
                   onToggleStar={!selectMode ? toggleStar : undefined}
                 />
                 {!selectMode && !isUnsorted && (

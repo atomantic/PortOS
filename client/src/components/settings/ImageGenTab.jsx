@@ -9,7 +9,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Save, Image as ImageIcon, Zap, Wrench, Cloud, Cpu, Globe, AlertTriangle,
-  Sparkles, Terminal
+  Sparkles, Terminal, Key, Check, Trash2
 } from 'lucide-react';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
@@ -17,6 +17,7 @@ import LocalSetupPanel from './LocalSetupPanel';
 import {
   getSettings, updateSettings, getImageGenStatus, generateImage,
   registerTool, updateTool, getToolsList,
+  getHfTokenStatus, saveHfToken, clearHfToken,
 } from '../../services/api';
 
 const SDAPI_TOOL_ID = 'sdapi';
@@ -66,6 +67,45 @@ export function ImageGenTab() {
   const [rendering, setRendering] = useState(false);
   const [renderResult, setRenderResult] = useState(null);
   const renderEsRef = useRef(null);
+
+  // HuggingFace token state — separate from the main settings save flow because
+  // it has its own validated endpoints (POST /setup/hf-token + DELETE) and
+  // applies to local Flux models regardless of which backend is active.
+  // `source` is 'stored' | 'env' | 'cli' | 'none'; only 'stored' tokens can be
+  // cleared from the UI (env/CLI come from outside settings.json).
+  const [hfTokenInfo, setHfTokenInfo] = useState({ hfTokenPresent: null, source: null });
+  const [hfTokenInput, setHfTokenInput] = useState('');
+  // One busy flag covers both save and clear since they're mutually exclusive
+  // (both disable the form + buttons). `busy` is the in-flight verb so the
+  // Clear button can still show a Trash icon while the spinner is on Save.
+  const [hfTokenBusy, setHfTokenBusy] = useState(null); // null | 'saving' | 'clearing'
+
+  useEffect(() => {
+    getHfTokenStatus()
+      .then((s) => { if (s) setHfTokenInfo({ hfTokenPresent: !!s.hfTokenPresent, source: s.source || null }); })
+      .catch(() => {});
+  }, []);
+
+  const handleSaveHfToken = async () => {
+    const trimmed = hfTokenInput.trim();
+    if (!trimmed) return;
+    setHfTokenBusy('saving');
+    const result = await saveHfToken(trimmed).catch(() => null);
+    setHfTokenBusy(null);
+    if (!result?.ok) return;
+    setHfTokenInput('');
+    setHfTokenInfo({ hfTokenPresent: true, source: result.source || 'stored' });
+    toast.success('HuggingFace token saved');
+  };
+
+  const handleClearHfToken = async () => {
+    setHfTokenBusy('clearing');
+    const result = await clearHfToken().catch(() => null);
+    setHfTokenBusy(null);
+    if (!result?.ok) return;
+    setHfTokenInfo({ hfTokenPresent: !!result.hfTokenPresent, source: result.source || 'none' });
+    toast.success(result.hfTokenPresent ? 'Stored token cleared (env / CLI token still active)' : 'HuggingFace token cleared');
+  };
 
   // Close any in-flight test-render SSE on unmount so we don't fire setState
   // on a torn-down component if the user navigates away mid-render.
@@ -451,6 +491,84 @@ export function ImageGenTab() {
               </p>
             </div>
           </div>
+        )}
+      </div>
+
+      {/* HuggingFace token — used by local Flux models (FLUX.1-dev, FLUX.2-klein).
+          Independent of the mode picker because the token persists in settings
+          and applies whenever local image gen runs. */}
+      <div className="bg-port-card border border-port-border rounded-xl p-6 space-y-4">
+        <div className="flex items-center gap-2 text-white">
+          <Key size={18} />
+          <h2 className="text-lg font-semibold">HuggingFace Token</h2>
+        </div>
+        <p className="text-xs text-gray-500">
+          Required for gated local models — currently <code className="text-gray-400">FLUX.1-dev</code> and the{' '}
+          <code className="text-gray-400">FLUX.2-klein</code> family. Accept each model's license on HuggingFace, then create a read token at{' '}
+          <a href="https://huggingface.co/settings/tokens" target="_blank" rel="noreferrer" className="text-port-accent hover:underline">
+            huggingface.co/settings/tokens
+          </a>{' '}and paste it below. PortOS reads stored tokens first, then falls back to the{' '}
+          <code className="text-gray-400">HF_TOKEN</code> env var or <code className="text-gray-400">~/.cache/huggingface/token</code>.
+        </p>
+
+        {hfTokenInfo.hfTokenPresent === null ? (
+          <div className="text-xs text-gray-500"><BrailleSpinner text="Checking token status" /></div>
+        ) : hfTokenInfo.hfTokenPresent ? (
+          <div className="flex items-center gap-2 text-xs text-port-success">
+            <Check size={14} />
+            <span>
+              Token configured
+              {hfTokenInfo.source === 'env' && ' (from HF_TOKEN environment variable)'}
+              {hfTokenInfo.source === 'cli' && ' (from ~/.cache/huggingface/token — set via `hf auth login`)'}
+              {hfTokenInfo.source === 'stored' && ' (stored in settings.json)'}
+            </span>
+          </div>
+        ) : (
+          <div className="flex items-center gap-2 text-xs text-port-warning">
+            <AlertTriangle size={14} />
+            <span>No HuggingFace token configured — gated models will fail to download.</span>
+          </div>
+        )}
+
+        <div>
+          <label htmlFor="hf-token-input" className="block text-xs font-medium text-gray-400 mb-1">
+            {hfTokenInfo.source === 'stored' ? 'Replace stored token' : 'Paste a token'}
+          </label>
+          <div className="flex flex-col sm:flex-row gap-2">
+            <input
+              id="hf-token-input"
+              type="password"
+              value={hfTokenInput}
+              onChange={(e) => setHfTokenInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') handleSaveHfToken(); }}
+              disabled={hfTokenBusy !== null}
+              placeholder="hf_…"
+              autoComplete="off"
+              spellCheck={false}
+              className="flex-1 bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
+            />
+            <button
+              type="button"
+              onClick={handleSaveHfToken}
+              disabled={hfTokenBusy !== null || !hfTokenInput.trim()}
+              className="whitespace-nowrap inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-port-accent text-white text-sm font-medium hover:bg-port-accent/80 disabled:opacity-50 min-h-[40px]"
+            >
+              {hfTokenBusy === 'saving' ? <BrailleSpinner /> : <Save size={14} />}
+              Save token
+            </button>
+          </div>
+        </div>
+
+        {hfTokenInfo.source === 'stored' && (
+          <button
+            type="button"
+            onClick={handleClearHfToken}
+            disabled={hfTokenBusy !== null}
+            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-port-border text-gray-300 text-xs font-medium hover:bg-port-error/20 hover:text-port-error disabled:opacity-50"
+          >
+            {hfTokenBusy === 'clearing' ? <BrailleSpinner /> : <Trash2 size={12} />}
+            Clear stored token
+          </button>
         )}
       </div>
 

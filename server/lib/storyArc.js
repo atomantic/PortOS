@@ -18,6 +18,7 @@
 
 import { randomUUID } from 'crypto';
 import { isStr, trimTo } from './storyBible.js';
+import { sanitizeCoverLike } from './renderSlot.js';
 
 export const ARC_LIMITS = Object.freeze({
   LOGLINE_MAX: 500,
@@ -282,6 +283,12 @@ export function sanitizeSeason(raw, { preserveTimestamps = true } = {}) {
     episodeCountTarget,
     themes: cleanThemes(raw.themes),
     endingHook: trimTo(raw.endingHook, ARC_LIMITS.SEASON_ENDING_HOOK_MAX),
+    // Volume (season) cover + back cover. Same script + proof + final
+    // slot shape as an issue cover; rendered by enqueueVolumeCover and
+    // assembled into the volume PDF as the trade-paperback bookends.
+    // Both default to null; the season-cover render route writes them.
+    cover: sanitizeCoverLike(raw.cover),
+    backCover: sanitizeCoverLike(raw.backCover),
     status,
     createdAt: created,
     updatedAt: updated,

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   buildComicPagesOwner, parseComicPagesOwner,
   buildStoryboardsShotOwner, parseStoryboardsShotOwner,
+  buildSeasonCoverOwner, parseSeasonCoverOwner,
 } from './owners.js';
 
 describe('pipeline owner strings', () => {
@@ -15,6 +16,16 @@ describe('pipeline owner strings', () => {
     const owner = buildComicPagesOwner({ issueId: 'iss-abc', target: 'cover', variant: 'final' });
     expect(owner).toBe('pipeline:iss-abc:comicPages:cover:final');
     expect(parseComicPagesOwner(owner)).toEqual({ issueId: 'iss-abc', target: 'cover', variant: 'final' });
+  });
+
+  it('round-trips backCover owners (proof + final)', () => {
+    const proof = buildComicPagesOwner({ issueId: 'iss-abc', target: 'backCover', variant: 'proof' });
+    expect(proof).toBe('pipeline:iss-abc:comicPages:backCover:proof');
+    expect(parseComicPagesOwner(proof)).toEqual({ issueId: 'iss-abc', target: 'backCover', variant: 'proof' });
+
+    const final = buildComicPagesOwner({ issueId: 'iss-abc', target: 'backCover', variant: 'final' });
+    expect(final).toBe('pipeline:iss-abc:comicPages:backCover:final');
+    expect(parseComicPagesOwner(final)).toEqual({ issueId: 'iss-abc', target: 'backCover', variant: 'final' });
   });
 
   it('round-trips a page owner — default variant is proof', () => {
@@ -66,5 +77,43 @@ describe('pipeline owner strings', () => {
   it('comic parser does not match shot owners and vice versa', () => {
     expect(parseComicPagesOwner('pipeline:iss:storyboards:scene1:shot2')).toBeNull();
     expect(parseStoryboardsShotOwner('pipeline:iss:comicPages:page3')).toBeNull();
+  });
+
+  it('round-trips season-cover owners across both variants and both targets', () => {
+    for (const target of ['cover', 'backCover']) {
+      for (const variant of ['proof', 'final']) {
+        const owner = buildSeasonCoverOwner({
+          seriesId: 'ser-foo', seasonId: 'sea-bar', target, variant,
+        });
+        expect(owner).toBe(`pipeline:season:ser-foo:sea-bar:${target}:${variant}`);
+        expect(parseSeasonCoverOwner(owner)).toEqual({
+          seriesId: 'ser-foo', seasonId: 'sea-bar', target, variant,
+        });
+      }
+    }
+  });
+
+  it('season-cover builder rejects unknown target / variant', () => {
+    expect(() => buildSeasonCoverOwner({
+      seriesId: 's', seasonId: 'sea', target: 'panel', variant: 'proof',
+    })).toThrow();
+    expect(() => buildSeasonCoverOwner({
+      seriesId: 's', seasonId: 'sea', target: 'cover', variant: 'sketch',
+    })).toThrow();
+  });
+
+  it('season-cover and issue-cover owners do not match each other', () => {
+    const issueCover = 'pipeline:iss-abc:comicPages:cover:proof';
+    const seasonCover = 'pipeline:season:ser-foo:sea-bar:cover:proof';
+    expect(parseSeasonCoverOwner(issueCover)).toBeNull();
+    expect(parseComicPagesOwner(seasonCover)).toBeNull();
+  });
+
+  it('season-cover parser rejects malformed strings', () => {
+    expect(parseSeasonCoverOwner(null)).toBeNull();
+    expect(parseSeasonCoverOwner('')).toBeNull();
+    expect(parseSeasonCoverOwner('pipeline:season:s:sea:cover')).toBeNull();      // missing variant
+    expect(parseSeasonCoverOwner('pipeline:season:s:sea:panel:proof')).toBeNull(); // bad target
+    expect(parseSeasonCoverOwner('pipeline:s:sea:cover:proof')).toBeNull();        // missing 'season:'
   });
 });

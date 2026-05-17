@@ -16,6 +16,7 @@ import {
   extractPipelineComicPages,
   generatePipelineComicPage,
   generatePipelineComicCover,
+  generatePipelineComicBackCover,
   updatePipelineComicPage,
   updatePipelineIssue,
   updateIssueStageVisualStyle,
@@ -251,36 +252,52 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
 
   const renderOpts = useMemo(() => pipelineImageCfgToRenderOpts(imageCfg), [imageCfg]);
 
-  // Front cover lives on stages.comicPages.cover so it persists alongside the
-  // page renders. The textarea owns a draft string separate from the persisted
-  // value so keystrokes don't round-trip until blur.
+  // Front + back cover live on stages.comicPages.cover / .backCover; both
+  // persist alongside the page renders. Each owns a draft string separate
+  // from the persisted value so keystrokes don't round-trip until blur.
   const cover = comicPages.cover || { script: '', proofImage: null, finalImage: null };
   const coverProof = getProofSlot(cover);
   const coverFinal = getFinalSlot(cover);
   const [draftCoverScript, setDraftCoverScript] = useState(cover.script || '');
   useEffect(() => { setDraftCoverScript(cover.script || ''); }, [cover.script]);
-  const [renderingCoverProof, setRenderingCoverProof] = useState(false);
-  const [renderingCoverFinal, setRenderingCoverFinal] = useState(false);
-  const [useProofForCoverFinal, setUseProofForCoverFinal] = useState(true);
   const { inFlight: coverProofInFlight, setStatus: setCoverProofStatus } = useSlotInFlight(coverProof);
   const { inFlight: coverFinalInFlight, setStatus: setCoverFinalStatus } = useSlotInFlight(coverFinal);
 
-  // Codex CLI's `$imagegen` has no init-image input, so the "use proof as
-  // base" upscale path can't preserve composition there. Disable the
-  // checkbox + show a tooltip when codex is the active backend.
+  const backCover = comicPages.backCover || { script: '', proofImage: null, finalImage: null };
+  const backProof = getProofSlot(backCover);
+  const backFinal = getFinalSlot(backCover);
+  const [draftBackCoverScript, setDraftBackCoverScript] = useState(backCover.script || '');
+  useEffect(() => { setDraftBackCoverScript(backCover.script || ''); }, [backCover.script]);
+  const { inFlight: backProofInFlight, setStatus: setBackProofStatus } = useSlotInFlight(backProof);
+  const { inFlight: backFinalInFlight, setStatus: setBackFinalStatus } = useSlotInFlight(backFinal);
+
+  // One indexed busy map for all four cover×variant render buttons —
+  // collapses what would otherwise be four useState booleans and the
+  // nested ternaries needed to pick the right setter inside the shared
+  // render handler.
+  const [busy, setBusy] = useState({ coverProof: false, coverFinal: false, backProof: false, backFinal: false });
+  const setBusyFor = (target, variant, value) => {
+    const key = `${target === 'backCover' ? 'back' : 'cover'}${variant === 'final' ? 'Final' : 'Proof'}`;
+    setBusy((b) => ({ ...b, [key]: value }));
+  };
+
+  // i2i "from proof" toggles are independent per cover field — Codex
+  // backend can't honor i2i regardless, so the toggle is disabled there.
+  const [useProofForCoverFinal, setUseProofForCoverFinal] = useState(true);
+  const [useProofForBackFinal, setUseProofForBackFinal] = useState(true);
+
   const i2iSupported = imageCfg.mode !== 'codex';
   const i2iDisabledReason = i2iSupported
     ? null
     : 'Codex (gpt-image-2) does not support image-to-image. Switch backend in the image-gen settings to use the proof as a base.';
 
-  const persistCoverScript = async (nextScript) => {
-    // Only send the script text. Never clear imageJobId/prompt from the blur
-    // handler — doing so races with the render route's PATCH (which persists the
-    // new jobId) and whoever lands last wins. The render button is already
-    // disabled while a job is in-flight, so stale renders can only linger after
-    // a completed/failed job; the user re-renders explicitly to replace them.
+  // Shared script-persist (cover / backCover) — server-side updatePipelineIssue
+  // does a deep merge under stages.comicPages.<field>. Only the script text
+  // is sent; render slots are written exclusively by the render route to
+  // avoid blur-vs-render race conditions.
+  const persistCoverFieldScript = async (field, nextScript) => {
     const updated = await updatePipelineIssue(issue.id, {
-      stages: { comicPages: { cover: { script: nextScript } } },
+      stages: { comicPages: { [field]: { script: nextScript } } },
     }).catch((err) => {
       toast.error(err.message || 'Save failed');
       return null;
@@ -288,26 +305,31 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
     if (updated) onStageUpdate?.('comicPages', updated.stages.comicPages, updated);
   };
 
-  const handleRenderCover = async (target) => {
-    const setFlight = target === 'final' ? setRenderingCoverFinal : setRenderingCoverProof;
-    setFlight(true);
-    const useProofAsBase = target === 'final' && useProofForCoverFinal && i2iSupported;
-    const result = await generatePipelineComicCover(issue.id, {
-      coverScript: draftCoverScript || '',
+  const handleRenderCoverField = async (field, variant) => {
+    const isBack = field === 'backCover';
+    const useProofToggle = isBack ? useProofForBackFinal : useProofForCoverFinal;
+    setBusyFor(field, variant, true);
+    const useProofAsBase = variant === 'final' && useProofToggle && i2iSupported;
+    const draftText = isBack ? draftBackCoverScript : draftCoverScript;
+    const apiCall = isBack ? generatePipelineComicBackCover : generatePipelineComicCover;
+    const bodyScriptKey = isBack ? 'backCoverScript' : 'coverScript';
+    const label = isBack ? 'back cover' : 'cover';
+    const result = await apiCall(issue.id, {
+      [bodyScriptKey]: draftText || '',
       ...renderOpts,
-      target,
+      target: variant,
       useProofAsBase,
     }, { silent: true }).catch((err) => {
-      toast.error(err.message || `Failed to render ${target} cover`);
+      toast.error(err.message || `Failed to render ${variant} ${label}`);
       return null;
     });
-    setFlight(false);
+    setBusyFor(field, variant, false);
     if (!result) return;
     if (result.issue) {
       onStageUpdate?.('comicPages', result.issue.stages.comicPages, result.issue);
     }
     const suffix = useProofAsBase ? ' (from proof)' : '';
-    toast.success(`Queued ${result.mode} ${target} cover render${suffix} (${result.jobId.slice(0, 8)})`);
+    toast.success(`Queued ${result.mode} ${variant} ${label} render${suffix} (${result.jobId.slice(0, 8)})`);
   };
 
   const overrides = {
@@ -348,8 +370,11 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
   // PDF assembly's fallback chain prefers final, then proof, then legacy.
   const isRendered = (rec) => !!getPreferredSlot(rec)?.filename;
   const pdfRenderedCount = pages.filter(isRendered).length
-    + (isRendered(comicPages.cover) ? 1 : 0);
-  const pdfTotal = pages.length + (comicPages.cover ? 1 : 0);
+    + (isRendered(comicPages.cover) ? 1 : 0)
+    + (isRendered(comicPages.backCover) ? 1 : 0);
+  const pdfTotal = pages.length
+    + (comicPages.cover ? 1 : 0)
+    + (comicPages.backCover ? 1 : 0);
   const pdfReady = pdfRenderedCount > 0;
 
   return (
@@ -441,8 +466,8 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
           <div className="flex items-center gap-2 flex-wrap">
             <button
               type="button"
-              onClick={() => handleRenderCover('proof')}
-              disabled={renderingCoverProof || coverProofInFlight || actionsGated}
+              onClick={() => handleRenderCoverField('cover', 'proof')}
+              disabled={busy.coverProof || coverProofInFlight || actionsGated}
               title={actionsGated
                 ? 'Saving settings…'
                 : coverProofInFlight
@@ -450,7 +475,7 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
                   : 'Render a fast proof cover at the configured size — series masthead + issue number tag + your cover concept.'}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-port-accent text-white text-xs font-medium hover:bg-port-accent/90 disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              {(renderingCoverProof || coverProofInFlight) ? <Loader2 size={12} className="animate-spin" /> : <ImageIcon size={12} />}
+              {(busy.coverProof || coverProofInFlight) ? <Loader2 size={12} className="animate-spin" /> : <ImageIcon size={12} />}
               Render proof
             </button>
             <label
@@ -468,9 +493,9 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
             </label>
             <button
               type="button"
-              onClick={() => handleRenderCover('final')}
+              onClick={() => handleRenderCoverField('cover', 'final')}
               disabled={
-                renderingCoverFinal || coverFinalInFlight || actionsGated
+                busy.coverFinal || coverFinalInFlight || actionsGated
                 || (i2iSupported && useProofForCoverFinal && !coverProof?.filename)
               }
               title={finalButtonTooltip({
@@ -481,7 +506,7 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
               })}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-port-accent text-white text-xs font-medium hover:bg-port-accent/90 disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              {(renderingCoverFinal || coverFinalInFlight) ? <Loader2 size={12} className="animate-spin" /> : <Layers size={12} />}
+              {(busy.coverFinal || coverFinalInFlight) ? <Loader2 size={12} className="animate-spin" /> : <Layers size={12} />}
               Render final
             </button>
           </div>
@@ -490,7 +515,7 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
           value={draftCoverScript}
           onChange={(e) => setDraftCoverScript(e.target.value)}
           onBlur={() => {
-            if ((cover.script || '') !== draftCoverScript) persistCoverScript(draftCoverScript);
+            if ((cover.script || '') !== draftCoverScript) persistCoverFieldScript('cover', draftCoverScript);
           }}
           placeholder="Cover concept — describe the hero image, mood, lighting, framing. Series masthead and issue-number tag included in the prompt automatically."
           rows={3}
@@ -512,6 +537,89 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
               thumbLabel="Final"
               emptyHint="No final yet."
               onStatus={setCoverFinalStatus}
+              fillFromProofLabel
+            />
+          </div>
+        ) : null}
+      </div>
+
+      <div className="p-3 bg-port-card border border-port-border rounded-lg space-y-2">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <span className="text-xs uppercase tracking-wider text-gray-500">Back cover</span>
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              type="button"
+              onClick={() => handleRenderCoverField('backCover', 'proof')}
+              disabled={busy.backProof || backProofInFlight || actionsGated}
+              title={actionsGated
+                ? 'Saving settings…'
+                : backProofInFlight
+                  ? 'Proof render in progress…'
+                  : 'Render a fast proof back-cover at the configured size — illustration only, no text, no masthead.'}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-port-accent text-white text-xs font-medium hover:bg-port-accent/90 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {(busy.backProof || backProofInFlight) ? <Loader2 size={12} className="animate-spin" /> : <ImageIcon size={12} />}
+              Render proof
+            </button>
+            <label
+              className={`flex items-center gap-1 text-[11px] text-gray-400 ${i2iSupported ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`}
+              title={i2iDisabledReason || 'Use the proof image as the base for the final render — preserves composition.'}
+            >
+              <input
+                type="checkbox"
+                checked={i2iSupported && useProofForBackFinal}
+                onChange={(e) => setUseProofForBackFinal(e.target.checked)}
+                disabled={!i2iSupported}
+                className="rounded"
+              />
+              from proof
+            </label>
+            <button
+              type="button"
+              onClick={() => handleRenderCoverField('backCover', 'final')}
+              disabled={
+                busy.backFinal || backFinalInFlight || actionsGated
+                || (i2iSupported && useProofForBackFinal && !backProof?.filename)
+              }
+              title={finalButtonTooltip({
+                gated: actionsGated,
+                inFlight: backFinalInFlight,
+                needsProof: i2iSupported && useProofForBackFinal && !backProof?.filename,
+                defaultMsg: 'Render the hi-res final back-cover at the configured size. Tick "from proof" to upscale the proof rather than redraw it.',
+              })}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-port-accent text-white text-xs font-medium hover:bg-port-accent/90 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {(busy.backFinal || backFinalInFlight) ? <Loader2 size={12} className="animate-spin" /> : <Layers size={12} />}
+              Render final
+            </button>
+          </div>
+        </div>
+        <textarea
+          value={draftBackCoverScript}
+          onChange={(e) => setDraftBackCoverScript(e.target.value)}
+          onBlur={() => {
+            if ((backCover.script || '') !== draftBackCoverScript) persistCoverFieldScript('backCover', draftBackCoverScript);
+          }}
+          placeholder="Back cover concept — illustration only. No text, no masthead. A quiet companion image: a single object, an aftermath beat, a distant silhouette."
+          rows={3}
+          className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm"
+          maxLength={8000}
+        />
+        {(backProof || backFinal) ? (
+          <div className="grid grid-cols-2 gap-2">
+            <RenderSlotThumb
+              slot={backProof}
+              label="Proof"
+              thumbLabel="Proof"
+              emptyHint="No proof yet."
+              onStatus={setBackProofStatus}
+            />
+            <RenderSlotThumb
+              slot={backFinal}
+              label="Final"
+              thumbLabel="Final"
+              emptyHint="No final yet."
+              onStatus={setBackFinalStatus}
               fillFromProofLabel
             />
           </div>

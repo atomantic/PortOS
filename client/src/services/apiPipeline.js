@@ -3,7 +3,7 @@ import { buildFormData } from './apiImageVideo.js';
 
 // Stage IDs mirror server/services/pipeline/issues.js — keep these in sync.
 // `nouns` is a UI-only pseudo-stage: it has no server stage record + no LLM
-// template, and its actions wrap existing endpoints (extract-bible + the
+// template, and its actions wrap existing endpoints (extract scenes + the
 // generic image gen API). It appears in PIPELINE_TAB_STAGES so it gets a tab
 // between Prose and Comic Pages, but it's NOT in server TEXT_STAGE_IDS — so
 // auto-run text chain skips it and POST /stages/nouns/generate would 400.
@@ -92,27 +92,6 @@ export const deletePipelineSeries = (id) => request(`/pipeline/series/${encodeUR
   method: 'DELETE',
 });
 
-// Extract bibles (characters / settings / objects) from an issue's prose
-// stage and merge them into the series. `kinds` defaults server-side to all
-// three. Pass `parallel: true` to fan out the kinds concurrently — ~3×
-// wall-clock speedup on HTTP-API providers (OpenAI / Anthropic / LM Studio
-// HTTP). Safe to leave off for CLI-only providers (codex / claude-code /
-// gemini-cli) which serialize at the provider session anyway.
-// Returns { series, results } where results is keyed by field name.
-export const extractPipelineBibles = (seriesId, { issueId, corpus, kinds, providerOverride, parallel } = {}) =>
-  request(`/pipeline/series/${encodeURIComponent(seriesId)}/extract-bible`, {
-    method: 'POST',
-    body: JSON.stringify({ issueId, corpus, kinds, providerOverride, parallel }),
-  });
-
-// Rewrite one character's physicalDescription so they render distinct from
-// every peer. Returns { series, entry, rationale, changes }.
-export const refinePipelineCharacter = (seriesId, entryId, { providerId, model } = {}) =>
-  request(`/pipeline/series/${encodeURIComponent(seriesId)}/characters/${encodeURIComponent(entryId)}/refine`, {
-    method: 'POST',
-    body: JSON.stringify({ providerId, model }),
-  });
-
 // ---- Issues ----
 export const listPipelineIssues = (seriesId) =>
   request(`/pipeline/series/${encodeURIComponent(seriesId)}/issues`);
@@ -186,6 +165,53 @@ export const generatePipelineComicCover = (issueId, opts = {}, options = {}) =>
     body: JSON.stringify(opts),
     ...options,
   });
+
+// Render the issue's back cover. Same flow as the front cover wrapper above
+// but body field is `backCoverScript` and the persisted slot is
+// stages.comicPages.backCover. Server enforces an illustration-only prompt
+// (no masthead, no text). Returns { jobId, mode, prompt, backCover, issue, stage }.
+export const generatePipelineComicBackCover = (issueId, opts = {}, options = {}) =>
+  request(`/pipeline/issues/${encodeURIComponent(issueId)}/stages/comicPages/back-cover/render`, {
+    method: 'POST',
+    body: JSON.stringify(opts),
+    ...options,
+  });
+
+// Volume (season) cover render. Persists in-flight slot on
+// series.seasons[].cover via the season write tail.
+// Returns { jobId, mode, prompt, coverScript, season, series, variant, fromProof }.
+export const generatePipelineVolumeCover = (seriesId, seasonId, opts = {}, options = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/seasons/${encodeURIComponent(seasonId)}/cover/render`, {
+    method: 'POST',
+    body: JSON.stringify(opts),
+    ...options,
+  });
+
+// Volume back-cover render — same shape, lands on season.backCover.
+export const generatePipelineVolumeBackCover = (seriesId, seasonId, opts = {}, options = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/seasons/${encodeURIComponent(seasonId)}/back-cover/render`, {
+    method: 'POST',
+    body: JSON.stringify(opts),
+    ...options,
+  });
+
+// Ask the LLM to propose front + back cover concepts for the volume.
+// Pass { commit: true } to also seed `season.cover.script` /
+// `season.backCover.script` when those slots are currently blank (the
+// server never clobbers a user edit). Returns the proposed text plus the
+// updated season + series records.
+export const generatePipelineVolumeCoverConcepts = (seriesId, seasonId, opts = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/seasons/${encodeURIComponent(seasonId)}/cover-concepts/generate`, {
+    method: 'POST',
+    body: JSON.stringify(opts),
+  });
+
+// Build the trade-paperback PDF download URL for one volume. Used as an
+// <a href> so the browser streams the response straight to disk.
+export const pipelineVolumePdfUrl = (seriesId, seasonId, { size } = {}) => {
+  const qs = size ? `?size=${encodeURIComponent(size)}` : '';
+  return `/api/pipeline/series/${encodeURIComponent(seriesId)}/seasons/${encodeURIComponent(seasonId)}/volume.pdf${qs}`;
+};
 
 // Patch one comic page's raw markdown — the server re-parses panels from the
 // edited rawText so subsequent renders still get a structured prompt.

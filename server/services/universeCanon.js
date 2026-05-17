@@ -4,7 +4,7 @@
 // refactor). The series-side helpers stay live until Phase B migrates
 // series.cast → references into universe entities.
 
-import { getUniverse, updateUniverse, listUniverses } from './universeBuilder.js';
+import { getUniverse, updateUniverse, listUniverses, joinInfluenceList } from './universeBuilder.js';
 import { extractBible } from '../lib/bibleExtractor.js';
 import {
   BIBLE_KIND, BIBLE_KINDS, BIBLE_FIELD, BIBLE_KEYS, BIBLE_SOURCE, mergeExtractedBible,
@@ -28,8 +28,9 @@ const targetForPrompt = (entry) => ({
 });
 
 const buildStyleClause = (universe) => {
+  const embraceTokens = joinInfluenceList(universe.influences?.embrace);
   const bits = [
-    universe.stylePrompt ? `Universe aesthetic: ${universe.stylePrompt}` : null,
+    embraceTokens ? `Universe aesthetic: ${embraceTokens}` : null,
     universe.styleNotes ? `Universe notes: ${universe.styleNotes}` : null,
   ].filter(Boolean);
   return bits.length ? bits.join('\n') : '(none provided — pick choices that fit the character\'s role and genre)';

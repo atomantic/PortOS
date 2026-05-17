@@ -14,7 +14,7 @@ import { getDigitalTwinForPrompt } from './digital-twin.js';
 import { buildPrompt } from './promptService.js';
 import { getToolsSummaryForPrompt } from './tools.js';
 import { getActiveProvider } from './providers.js';
-import { executeApiRun, executeCliRun, createRun } from './runner.js';
+import { runPromptThroughProvider } from '../lib/promptRunner.js';
 import { readJSONFile, loadSlashdoFile, PATHS } from '../lib/fileUtils.js';
 import * as jiraService from './jira.js';
 import { emitLog } from './cosEvents.js';
@@ -258,11 +258,11 @@ After completing your work and before committing, run \`/simplify\` to review th
   const tuiCompletionCommand = willOpenPR ? '/do:pr' : '/do:push';
   const tuiCompletionSection = isTui ? `
 ## Completion Workflow
-You are running inside the Claude Code TUI, which has the project's slashdo commands available as slash commands. **You own the entire commit → push → ${willOpenPR ? 'PR' : 'push'} sequence — PortOS will NOT push or open a PR on your behalf.** When your task is complete, run the following — in order — without further user input:
+When the task is complete, run these in order:
 
-1. ${simplifyEnabled ? '`/simplify` — review the changed code for reuse, quality, and efficiency, and fix any issues it surfaces.' : '(simplify is disabled for this task — skip step 1)'}
-2. \`${tuiCompletionCommand}\` — commits${willOpenPR ? `, pushes, and opens a pull request against the default branch. Write the PR title and body yourself based on the actual changes you made; do NOT let any tool auto-generate the body from terminal output.${willReviewLoop ? ' After the PR is open, request a Copilot review (e.g. via `gh` if available).' : ''}` : ' and pushes the branch'}.
-3. Write your task summary to the completion sentinel as a SHORT markdown report — this becomes the task summary PortOS displays in the agent card and feeds into downstream features (memory extraction, completion hooks, etc.). Aim for ~5–15 lines. Use this exact shell-quoted heredoc form:
+1. ${simplifyEnabled ? '`/simplify`' : '(simplify is disabled — skip)'}
+2. \`${tuiCompletionCommand}\`${willReviewLoop && willOpenPR ? ' — after the PR opens, request a Copilot review (e.g. via `gh`).' : ''}
+3. Write a short markdown summary (~5–15 lines) to the completion sentinel — PortOS polls this every 2s; without it the agent sits idle until a 3-minute fallback fires.
 
    \`\`\`bash
    cat > "${worktreeInfo?.worktreePath || workspaceDir}/.agent-done" <<'EOF'
@@ -276,11 +276,7 @@ You are running inside the Claude Code TUI, which has the project's slashdo comm
    ${willOpenPR ? '## PR\n   <PR URL>' : '## Branch\n   <branch name>'}
    EOF
    \`\`\`
-
-   PortOS polls for this file every 2 seconds; without it the agent will sit idle until the 3-minute fallback timer fires.
-4. Run \`/quit\` to exit the Claude Code session cleanly.
-
-Do not wait for further user input between these steps — run them in sequence as soon as the implementation work is finished.
+4. \`/quit\`.
 ` : '';
 
   // Build review loop section if enabled. The agent itself does NOT open the PR
@@ -642,24 +638,18 @@ function worktreeCommitGuidance({ isTui, hasSlashdo, isWorktreeOnExistingBranch,
  */
 function buildTuiCompletionSection({ willOpenPR, willReviewLoop, simplifyEnabled, sentinelPath }) {
   const cmd = willOpenPR ? '/do:pr' : '/do:push';
-  const verb = willOpenPR ? 'PR' : 'push';
-  const cmdEffect = willOpenPR
-    ? ', pushes, and opens a PR against the default branch. Write the PR title and body yourself; do NOT let any tool auto-generate from terminal output'
-    : ' and pushes the branch';
   const reviewSuffix = willOpenPR && willReviewLoop
-    ? ' After the PR is open, request a Copilot review (e.g. via `gh`).' : '';
-  const simplifyStep = simplifyEnabled
-    ? '1. `/simplify` — review the changed code for reuse/quality/efficiency and fix any findings.'
-    : '1. (simplify disabled — skip)';
+    ? ' — after the PR opens, request a Copilot review (e.g. via `gh`).' : '';
+  const simplifyStep = simplifyEnabled ? '1. `/simplify`' : '1. (simplify disabled — skip)';
   const sentinelTail = willOpenPR ? '   ## PR\n   <PR URL>' : '   ## Branch\n   <branch name>';
 
   return [
     '## Completion Workflow',
-    `You own the entire commit → push → ${verb} sequence. PortOS will NOT push or open a PR for you. When the task is complete, run these in order without further user input:`,
+    'When the task is complete, run these in order:',
     '',
     simplifyStep,
-    `2. \`${cmd}\` — commits${cmdEffect}.${reviewSuffix}`,
-    '3. Write the completion sentinel as a SHORT markdown report (~5–15 lines):',
+    `2. \`${cmd}\`${reviewSuffix}`,
+    '3. Write a short markdown summary (~5–15 lines) to the completion sentinel — PortOS polls this every 2s; without it the agent sits idle until a 3-minute fallback fires.',
     '',
     '   ```bash',
     `   cat > "${sentinelPath}" <<'EOF'`,
@@ -672,9 +662,7 @@ function buildTuiCompletionSection({ willOpenPR, willReviewLoop, simplifyEnabled
     sentinelTail,
     '   EOF',
     '   ```',
-    '',
-    '   PortOS polls for this file every 2 seconds; without it the agent sits idle until the 3-minute fallback fires.',
-    '4. Run `/quit` to exit cleanly.'
+    '4. `/quit`.'
   ].join('\n');
 }
 
@@ -780,23 +768,18 @@ export async function generateJiraTitle(description) {
 
   const prompt = `Generate a concise JIRA ticket title (max 80 chars) for this task. Output ONLY the title text, nothing else.\n\nTask: ${description}`;
 
-  const { runId } = await createRun({ providerId: provider.id, model, prompt, source: 'jira-title' }).catch(() => ({}));
-  if (!runId) return fallback;
+  // Best-effort title — failures are non-fatal (the task still gets the
+  // truncated-description fallback). 30s is the legacy cap; titles should
+  // be near-instant, and a slow model shouldn't block task creation.
+  const result = await runPromptThroughProvider({
+    provider, prompt, source: 'jira-title', model, timeout: 30000,
+  }).catch(err => {
+    console.warn(`⚠️ JIRA title generation failed: ${err.message}`);
+    return null;
+  });
+  if (!result) return fallback;
 
-  let title = '';
-
-  await new Promise((resolve) => {
-    const onData = (data) => { title += typeof data === 'string' ? data : (data?.text || ''); };
-    const onDone = () => resolve();
-
-    if (provider.type === 'cli') {
-      executeCliRun(runId, provider, prompt, process.cwd(), onData, onDone, 30000);
-    } else {
-      executeApiRun(runId, provider, model, prompt, process.cwd(), [], onData, onDone);
-    }
-  }).catch(err => console.warn(`⚠️ JIRA title generation failed: ${err.message}`));
-
-  title = title.trim().replace(/^["']|["']$/g, '');
+  const title = (result.text || '').trim().replace(/^["']|["']$/g, '');
   return title || fallback;
 }
 

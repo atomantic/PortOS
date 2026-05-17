@@ -12,7 +12,7 @@
  * Uses AI for interpretation — supports both API and CLI providers.
  */
 
-import { executeApiRun, executeCliRun, createRun } from '../../services/runner.js';
+import { runPromptThroughProvider } from '../../lib/promptRunner.js';
 import { getActiveProvider, getProviderById } from '../../services/providers.js';
 
 /**
@@ -39,57 +39,17 @@ ${challengeText}
 
 Answer:`;
 
-  const { runId } = await createRun({
-    providerId: provider.id,
-    model,
-    prompt,
-    source: 'moltbook-challenge'
-  });
-
-  let responseText = '';
-  const isCliProvider = provider.type === 'cli';
-
-  await new Promise((resolve, reject) => {
-    if (isCliProvider) {
-      executeCliRun(
-        runId,
-        provider,
-        prompt,
-        process.cwd(),
-        (text) => { responseText += text; },
-        (result) => {
-          if (result?.error || result?.success === false) {
-            reject(new Error(result?.error || 'CLI execution failed'));
-          } else {
-            resolve(result);
-          }
-        },
-        provider.timeout || 300000
-      );
-    } else {
-      executeApiRun(
-        runId,
-        provider,
-        model,
-        prompt,
-        process.cwd(),
-        [],
-        (data) => { responseText += typeof data === 'string' ? data : (data?.text || ''); },
-        (result) => {
-          if (result?.error) reject(new Error(result.error));
-          else resolve(result);
-        }
-      );
-    }
+  const { text } = await runPromptThroughProvider({
+    provider, prompt, source: 'moltbook-challenge', model,
   });
 
   // Extract number from response
-  const numMatch = responseText.trim().match(/[\d]+\.?\d*/);
+  const numMatch = (text || '').trim().match(/[\d]+\.?\d*/);
   if (numMatch) {
     return parseFloat(numMatch[0]);
   }
 
-  console.log(`🔐 AI response didn't contain a number: "${responseText.substring(0, 100)}"`);
+  console.log(`🔐 AI response didn't contain a number: "${(text || '').substring(0, 100)}"`);
   return null;
 }
 

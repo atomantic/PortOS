@@ -303,7 +303,7 @@ export default function MediaHistory() {
                 disabled={stitchMode && it.kind !== 'video'}
                 hideActions={stitchMode}
                 starred={!!annotations[it.key]?.starred}
-                hasNote={!!annotations[it.key]?.note}
+                hasNote={!!annotations[it.key]?.anyNote}
                 onToggleStar={!stitchMode ? toggleStar : undefined}
               />
             );

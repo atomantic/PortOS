@@ -21,8 +21,10 @@ vi.mock('crypto', async () => {
 // Stub the LLM expander so the route test doesn't shell out to a real provider.
 vi.mock('../services/universeBuilderExpand.js', () => ({
   expandWorldTemplate: vi.fn(async ({ starterPrompt }) => ({
-    stylePrompt: 'mocked style for ' + starterPrompt,
-    negativePrompt: 'blurry',
+    influences: {
+      embrace: [`mocked style for ${starterPrompt}`],
+      avoid: ['blurry'],
+    },
     categories: {
       landscapes: { variations: [{ label: 'Mock Land', prompt: 'mocked landscape' }] },
       environments: { variations: [] },
@@ -166,10 +168,29 @@ describe('universe-builder routes', () => {
     const c = await request(app).post('/api/universe-builder').send({ name: 'A' });
     const res = await request(app)
       .patch(`/api/universe-builder/${c.body.id}`)
-      .send({ name: 'B', stylePrompt: 'oil painting' });
+      .send({ name: 'B', influences: { embrace: ['oil painting'], avoid: [] } });
     expect(res.status).toBe(200);
     expect(res.body.name).toBe('B');
-    expect(res.body.stylePrompt).toBe('oil painting');
+    expect(res.body.influences.embrace).toEqual(['oil painting']);
+    // The v2 prose stylePrompt / negativePrompt fields no longer round-trip.
+    expect(res.body.stylePrompt).toBeUndefined();
+    expect(res.body.negativePrompt).toBeUndefined();
+  });
+
+  it('PATCH /:id absorbs stale prose stylePrompt/negativePrompt into influences', async () => {
+    // Backward compat: a stale v2-shaped client may still PATCH the prose
+    // fields. The sanitizer's v2 → v3 migration splits them into chip tokens
+    // and merges into influences.embrace / influences.avoid.
+    const app = buildApp();
+    const c = await request(app)
+      .post('/api/universe-builder')
+      .send({ name: 'Legacy', influences: { embrace: ['existing'], avoid: ['existing-neg'] } });
+    const res = await request(app)
+      .patch(`/api/universe-builder/${c.body.id}`)
+      .send({ stylePrompt: 'oil painting, gritty', negativePrompt: 'blurry' });
+    expect(res.status).toBe(200);
+    expect(res.body.influences.embrace).toEqual(['existing', 'oil painting', 'gritty']);
+    expect(res.body.influences.avoid).toEqual(['existing-neg', 'blurry']);
   });
 
   it('PATCH /:id persists canon array writes (characters/settings/objects)', async () => {
@@ -208,7 +229,7 @@ describe('universe-builder routes', () => {
       .post('/api/universe-builder/expand')
       .send({ starterPrompt: 'moebius scifi' });
     expect(res.status).toBe(200);
-    expect(res.body.stylePrompt).toContain('moebius scifi');
+    expect(res.body.influences.embrace[0]).toContain('moebius scifi');
     expect(res.body.categories.landscapes.variations).toHaveLength(1);
     expect(res.body.compositeSheets).toHaveLength(2);
     expect(res.body.llm.provider).toBe('anthropic');
@@ -218,8 +239,7 @@ describe('universe-builder routes', () => {
     const app = buildApp();
     const created = await request(app).post('/api/universe-builder').send({
       name: 'Render Test',
-      stylePrompt: 'style',
-      negativePrompt: 'neg',
+      influences: { embrace: ['style'], avoid: ['neg'] },
       categories: {
         landscapes: { variations: [{ label: 'A', prompt: 'a prompt' }, { label: 'B', prompt: 'b prompt' }] },
         characters: { variations: [{ label: 'C', prompt: 'c prompt' }] },
@@ -242,7 +262,7 @@ describe('universe-builder routes', () => {
     const app = buildApp();
     const created = await request(app).post('/api/universe-builder').send({
       name: 'Clothing',
-      stylePrompt: 'moebius, clean reference sheet',
+      influences: { embrace: ['moebius', 'clean reference sheet'], avoid: [] },
       categories: {
         clothing_styles: { variations: [{ label: 'Gas-Giant Drifters', prompt: 'buckles, clips, pressure rings' }] },
       },
@@ -259,7 +279,7 @@ describe('universe-builder routes', () => {
     const app = buildApp();
     const created = await request(app).post('/api/universe-builder').send({
       name: 'Composite Clothing',
-      stylePrompt: 'moebius, clean reference sheet',
+      influences: { embrace: ['moebius', 'clean reference sheet'], avoid: [] },
       compositeSheets: [
         { label: 'Gas-Giant Drifters sheet', prompt: 'complete costume reference sheet, five figures, material swatches, pressure rings, palette strip' },
       ],

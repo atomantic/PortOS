@@ -64,6 +64,7 @@ import {
   Inbox,
   RefreshCw,
   Dog,
+  FileInput,
   FilePen,
   MessageCircle,
   Swords,
@@ -194,6 +195,7 @@ const navItems = [
     icon: Sparkles,
     defaultTo: '/media',
     children: [
+      { to: '/importer', label: 'Importer', icon: FileInput },
       { to: '/media', label: 'Media Gen', icon: Layers },
       { to: '/pipeline', label: 'Series Pipeline', icon: WorkflowIcon, dynamic: 'pipelineSeries' },
       { to: '/sharing', label: 'Sharing', icon: Share2 },

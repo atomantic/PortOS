@@ -81,29 +81,30 @@ export async function listAllVoices() {
  * Walk an issue's already-extracted storyboard scenes and emit a flat
  * `lines[]` ready to write onto `stages.audio.lines`. The scene extractor
  * already parsed dialogue into `{ character, line }` per scene, so we don't
- * re-parse markdown here — we just flatten + bind each speaker to a series
+ * re-parse markdown here — we just flatten + bind each speaker to a canon
  * character (by name, case-insensitive) so the per-line render can resolve
  * a voice id.
  *
- * Lines without a matching series character still get persisted (the user
+ * Lines without a matching canon character still get persisted (the user
  * may want narrator / un-named-character lines synthesized via the project
  * default voice); `characterId` stays null in that case.
  */
 /**
  * Voice resolution for a single VO line. Priority:
- *   1. `explicit`           (per-request body override)
+ *   1. `explicit`             (per-request body override)
  *   2. `line.voiceIdOverride` (per-line override saved on the issue)
- *   3. `character.voiceId`    (series character binding by line.characterId)
+ *   3. `character.voiceId`    (canon character binding by line.characterId)
  *   4. `null`                 (caller falls through to the configured default voice)
  *
- * Pure function — no I/O — so the route, a future "render all" flow, and
- * unit tests all use the same priority logic.
+ * `canon` is `{ characters }` — typically loaded from the linked universe
+ * via `getSeriesCanon(series)`. Pure function — no I/O — so the route,
+ * a future "render all" flow, and unit tests all use the same priority.
  */
-export function resolveVoiceForLine(line, series, { explicit } = {}) {
+export function resolveVoiceForLine(line, canon, { explicit } = {}) {
   if (typeof explicit === 'string' && explicit.trim()) return explicit.trim();
   if (line?.voiceIdOverride) return line.voiceIdOverride;
   if (line?.characterId) {
-    const char = (series?.characters || []).find((c) => c?.id === line.characterId);
+    const char = (canon?.characters || []).find((c) => c?.id === line.characterId);
     if (char?.voiceId) return char.voiceId;
   }
   return null;
@@ -123,7 +124,7 @@ function stripSpeakerParens(raw) {
     .trim();
 }
 
-export function extractDialogueLines(issue, series, { preserveFrom = [] } = {}) {
+export function extractDialogueLines(issue, canon, { preserveFrom = [] } = {}) {
   const scenes = Array.isArray(issue?.stages?.storyboards?.scenes)
     ? issue.stages.storyboards.scenes
     : [];
@@ -134,7 +135,7 @@ export function extractDialogueLines(issue, series, { preserveFrom = [] } = {}) 
   const rememberKey = (key, c) => {
     if (key && !charactersByKey.has(key)) charactersByKey.set(key, c);
   };
-  for (const c of (series?.characters || [])) {
+  for (const c of (canon?.characters || [])) {
     if (!c || typeof c !== 'object') continue;
     const name = typeof c.name === 'string' ? c.name.trim() : '';
     if (!name) continue;

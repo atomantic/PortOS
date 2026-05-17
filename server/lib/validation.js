@@ -4,6 +4,7 @@ import { ASPECT_RATIOS, QUALITIES, PROJECT_STATUSES, SCENE_STATUSES } from './cr
 import { WORK_KINDS, WORK_STATUSES, ANALYSIS_KINDS } from './writersRoomPresets.js';
 import { ALL_STYLE_IDS, STYLE_ID } from './writersRoomStylePresets.js';
 import { BIBLE_LIMITS } from './storyBible.js';
+import { ARC_SHAPE_IDS, ARC_ROLES } from './storyArc.js';
 
 // gpt-image-2 (codex backend) caps at 3840px per edge and 8,294,400 total
 // pixels. Mirror the ceiling for every image-gen route. Local mflux can
@@ -1054,4 +1055,114 @@ export const creativeDirectorSceneUpdateSchema = z.object({
     accepted: z.boolean(),
     sampledAt: z.string().optional(),
   }).nullable().optional(),
+}).strict();
+
+// ---------------------------------------------------------------------------
+// Create Suite — Importer.
+//
+// The importer takes a finished prose/script source and reverse-engineers
+// universe canon + series arc + issue split. Zod here enforces the wire
+// shape; the heavy validation (entry-level field caps, kind-specific
+// trimming) lives in storyBible.sanitizeBibleList + storyArc.sanitizeArc so
+// commit-side mutations always run through the same sanitizers the rest of
+// the pipeline uses. The canon/arc/issue entries below therefore use
+// `.passthrough()` — we want every field the LLM picked to reach the
+// sanitizer, not get stripped at the schema gate.
+// ---------------------------------------------------------------------------
+
+export const IMPORTER_CONTENT_TYPES = Object.freeze([
+  'short-story', 'novel', 'screenplay', 'comic-script',
+]);
+
+// Hard ceiling at the schema layer; the orchestrator enforces a tighter
+// 200K business-rule limit and returns a friendlier error. The 5MB ceiling
+// here mirrors writersRoomDraftSaveSchema.
+const importerSourceField = z.string().min(1).max(5_000_000);
+
+export const importerAnalyzeSchema = z.object({
+  universeName: z.string().trim().min(1).max(200),
+  seriesName: z.string().trim().min(1).max(200),
+  contentType: z.enum(IMPORTER_CONTENT_TYPES),
+  source: importerSourceField,
+  // UI sends `''` for "no override picked"; coerce to undefined so the
+  // server's `await getProviderById(undefined)` short-circuit kicks in.
+  providerOverride: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z.string().trim().max(120).optional(),
+  ),
+  targetIssueCount: z.number().int().min(1).max(50).optional(),
+}).strict();
+
+// Single canon-entry schema — every per-kind sanitizer (character / place /
+// object) only requires a `name`; `.passthrough()` keeps every LLM-emitted
+// field (firstAppearance, slugline, palette, …) for the sanitizer.
+const importerCanonEntry = z.object({
+  name: z.string().trim().min(1).max(BIBLE_LIMITS.NAME_MAX),
+}).passthrough();
+
+// Arc shape — every field optional so a partial preview (user cleared some
+// fields in the Review step) still validates; sanitizeArc fills in the
+// shape-level defaults.
+const importerArcShape = z.object({
+  logline: z.string().max(500).optional(),
+  summary: z.string().max(8000).optional(),
+  protagonistArc: z.string().max(4000).optional(),
+  themes: z.array(z.string().max(100)).max(20).optional(),
+  shape: z.enum(ARC_SHAPE_IDS).optional(),
+}).passthrough();
+
+// Season + issue entries used inside the commit payload. Seasons stay
+// permissive (sanitizer normalizes numbers + ids + status); issues need
+// `title` for createIssue but otherwise let the orchestrator decide.
+const importerSeasonEntry = z.object({
+  number: z.number().int().min(1).max(99).optional(),
+  title: z.string().trim().max(200).optional(),
+  logline: z.string().max(500).optional(),
+  synopsis: z.string().max(4000).optional(),
+  endingHook: z.string().max(1000).optional(),
+  episodeCountTarget: z.number().int().min(0).max(999).optional(),
+}).passthrough();
+
+const importerIssueEntry = z.object({
+  title: z.string().trim().min(1).max(300),
+  // Optional — the service's commitImport auto-assigns the next free
+  // arcPosition when omitted (mirrors the season.number auto-assign).
+  // The wire previously required this, which orphaned the service-side
+  // auto-assign as dead code for HTTP callers; making it optional puts
+  // wire + service on one contract and keeps the auto-assign reachable.
+  arcPosition: z.number().int().min(1).max(9999).optional(),
+  // The LLM may legitimately omit arcRole on a B-plot-light volume; gate
+  // the enum but allow the field to be missing. Wrap with z.preprocess so
+  // an empty string from the UI's "clear" affordance maps to undefined.
+  arcRole: z.preprocess(
+    (v) => (v === '' || v == null ? undefined : v),
+    z.enum(ARC_ROLES).optional(),
+  ),
+  // Season the issue belongs to. Optional — orchestrator picks the first
+  // season when omitted on a multi-season import.
+  seasonNumber: z.number().int().min(1).max(99).optional(),
+  logline: z.string().max(500).optional(),
+  synopsis: z.string().max(4000).optional(),
+  // 500K cap matches the issue's stages.prose.output limit so a long
+  // novel chapter can land verbatim. Optional — the LLM may omit the
+  // excerpt on some issues. When present, must be non-empty + non-whitespace
+  // so it doesn't seed prose.output with whitespace and mark the stage
+  // `ready` misleadingly.
+  proseExcerpt: z.string().min(1).max(500_000).refine(
+    (s) => s.trim().length > 0,
+    { message: 'proseExcerpt must contain non-whitespace content' },
+  ).optional(),
+}).passthrough();
+
+export const importerCommitSchema = z.object({
+  universeId: z.string().trim().min(1).max(120),
+  seriesId: z.string().trim().min(1).max(120),
+  canonSelections: z.object({
+    characters: z.array(importerCanonEntry).max(BIBLE_LIMITS.ENTRIES_PER_BIBLE_MAX).default([]),
+    places: z.array(importerCanonEntry).max(BIBLE_LIMITS.ENTRIES_PER_BIBLE_MAX).default([]),
+    objects: z.array(importerCanonEntry).max(BIBLE_LIMITS.ENTRIES_PER_BIBLE_MAX).default([]),
+  }).default({ characters: [], places: [], objects: [] }),
+  arc: importerArcShape.nullable().optional(),
+  seasons: z.array(importerSeasonEntry).max(50).default([]),
+  issues: z.array(importerIssueEntry).min(1).max(50),
 }).strict();

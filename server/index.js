@@ -92,7 +92,9 @@ import universeBuilderRoutes from './routes/universeBuilder.js';
 import { initUniverseBuilderCollectionHook } from './services/universeBuilderCollectionHook.js';
 import { initComicPagesFilenameHook } from './services/pipeline/comicPagesFilenameHook.js';
 import { initStoryboardsFilenameHook } from './services/pipeline/storyboardsFilenameHook.js';
+import { initSeasonCoverFilenameHook } from './services/pipeline/seasonCoverFilenameHook.js';
 import pipelineRoutes from './routes/pipeline.js';
+import importerRoutes from './routes/importer.js';
 import { initMediaJobQueue } from './services/mediaJobQueue/index.js';
 import { recoverInFlightProjects } from './services/creativeDirector/recovery.js';
 import imageVideoModelsRoutes from './routes/imageVideoModels.js';
@@ -238,7 +240,14 @@ try {
 // (no shell, prompt via stdin) — the PortOS variant exists for the per-CLI
 // invocation conventions, not for security.
 import { executeCliRun as executeCliRunFixed } from './services/runner.js';
+import { executeTuiRun as executeTuiRunFixed } from './lib/tuiPromptRunner.js';
 aiToolkit.services.runner.executeCliRun = executeCliRunFixed;
+// Attach the TUI executor so POST /api/runs with a TUI provider dispatches
+// here instead of erroring. The toolkit's runs router checks for
+// `runnerService.executeTuiRun` and 400s otherwise — without this patch,
+// runs UI would be unable to start TUI runs even though the staged-LLM path
+// (promptRunner.js) already routes TUI internally.
+aiToolkit.services.runner.executeTuiRun = executeTuiRunFixed;
 // Also patch stopRun + isRunActive so they consult `_portosActiveRuns`
 // (where the PortOS CLI variant tracks child processes), not just the
 // toolkit's internal `activeRuns` map. Without this, the runs router
@@ -373,6 +382,7 @@ app.use('/api/creative-director', creativeDirectorRoutes);
 app.use('/api/writers-room', writersRoomRoutes);
 app.use('/api/universe-builder', universeBuilderRoutes);
 app.use('/api/pipeline', pipelineRoutes);
+app.use('/api/importer', importerRoutes);
 app.use('/api/image-video/models', imageVideoModelsRoutes);
 app.use('/api/loras', lorasRoutes);
 // AUTOMATIC1111-compatible surface for tailnet clients — gated by
@@ -542,6 +552,7 @@ ensureSelf()
     // 24h media-job archive TTL elapses.
     initComicPagesFilenameHook();
     initStoryboardsFilenameHook();
+    initSeasonCoverFilenameHook();
   })
   .then(() => {
     // Sharing: attach chokidar watchers to every registered share bucket so

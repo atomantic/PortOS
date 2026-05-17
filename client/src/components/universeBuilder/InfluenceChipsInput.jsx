@@ -25,14 +25,15 @@ const TONE_CLASS = {
 };
 
 /**
- * Chip input for an influence list (embrace or avoid). Used by both the
- * inline Universe Builder editor and the Refine modal — extracting one
- * implementation keeps Enter/comma/paste/Backspace behavior, dedupe rules,
- * per-entry caps, and drag-to-reorder in lockstep across both surfaces.
+ * Chip input for the style-prompt (embrace) or negative-prompt (avoid) token
+ * list. Used by both the inline Universe Builder editor and the Refine modal
+ * — extracting one implementation keeps Enter/comma/paste/Backspace behavior,
+ * dedupe rules, per-entry caps, and drag-to-reorder in lockstep across both
+ * surfaces.
  *
- * Order is meaningful: the renderer prepends embrace + avoid to
- * stylePrompt/negativePrompt verbatim, so dragging a chip toward the front
- * gives it priority in the rendered prompt.
+ * Order is meaningful: the renderer joins each list verbatim into the
+ * positive / negative prompt, so dragging a chip toward the front gives it
+ * priority in the rendered prompt.
  *
  * `readOnly` collapses the editor to a plain chip preview (no input, no X
  * buttons, no drag handles) so locked influences render with the same chrome.

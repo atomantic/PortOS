@@ -78,12 +78,16 @@ vi.mock('../lib/fileUtils.js', () => ({
   })
 }));
 
-// Mock child_process
-vi.mock('child_process', () => ({
-  spawn: vi.fn()
+// Mock the central LLM handler — brain.js used to spawn child_process
+// directly, but now delegates to runPromptThroughProvider. Tests stub it to
+// return canned responses; the runner-internal mechanics (spawn args, --model
+// flag injection, stdio shape, gemini-cli --output-format) are covered by
+// runner.test.js, not here.
+vi.mock('../lib/promptRunner.js', () => ({
+  runPromptThroughProvider: vi.fn()
 }));
 
-import { spawn } from 'child_process';
+import { runPromptThroughProvider } from '../lib/promptRunner.js';
 import * as storage from './brainStorage.js';
 import { getProviderById } from './providers.js';
 import {
@@ -625,12 +629,7 @@ describe('brain service', () => {
       };
 
       // Mock fetch for API provider
-      globalThis.fetch = vi.fn().mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve({
-          choices: [{ message: { content: JSON.stringify(digestResponse) } }]
-        })
-      });
+      runPromptThroughProvider.mockResolvedValue({ text: JSON.stringify(digestResponse), runId: "test-run", model: "test-model" });
 
       storage.createDigest.mockResolvedValue({ id: 'digest-001', ...digestResponse });
 
@@ -663,12 +662,7 @@ describe('brain service', () => {
         smallWin: 'Yes'
       };
 
-      globalThis.fetch = vi.fn().mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve({
-          choices: [{ message: { content: JSON.stringify(digestResponse) } }]
-        })
-      });
+      runPromptThroughProvider.mockResolvedValue({ text: JSON.stringify(digestResponse), runId: "test-run", model: "test-model" });
 
       storage.createDigest.mockImplementation(async (data) => ({ id: 'digest-001', ...data }));
 
@@ -700,24 +694,16 @@ describe('brain service', () => {
         smallWin: 'Win'
       };
 
-      globalThis.fetch = vi.fn().mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve({
-          choices: [{ message: { content: JSON.stringify(digestResponse) } }]
-        })
-      });
+      runPromptThroughProvider.mockResolvedValue({ text: JSON.stringify(digestResponse), runId: "test-run", model: "test-model" });
 
       storage.createDigest.mockImplementation(async (data) => ({ id: 'd1', ...data }));
 
       await runDailyDigest();
 
-      // Verify fetch was called with body containing only Alice (has followUps)
-      const fetchCall = globalThis.fetch.mock.calls[0];
-      const body = JSON.parse(fetchCall[1].body);
-      const promptContent = body.messages[0].content;
-      // The prompt should contain the stringified peopleWithFollowUps
-      // We can't easily check the prompt content without knowing the template,
-      // but we can verify the storage calls
+      // After the central-handler migration we no longer inspect the raw
+      // request body — the storage-call assertion is what proves the filter
+      // ran. The prompt content is built inside the central handler from
+      // the variables we passed in.
       expect(storage.getPeople).toHaveBeenCalled();
     });
 
@@ -731,12 +717,7 @@ describe('brain service', () => {
       getProviderById.mockResolvedValue(mockProvider);
 
       // Return invalid format (missing required fields)
-      globalThis.fetch = vi.fn().mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve({
-          choices: [{ message: { content: JSON.stringify({ wrong: 'format' }) } }]
-        })
-      });
+      runPromptThroughProvider.mockResolvedValue({ text: JSON.stringify({ wrong: 'format' }), runId: 'test-run', model: 'test-model' });
 
       await expect(runDailyDigest()).rejects.toThrow('Invalid digest output');
     });
@@ -773,12 +754,7 @@ describe('brain service', () => {
         recurringTheme: 'Productivity'
       };
 
-      globalThis.fetch = vi.fn().mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve({
-          choices: [{ message: { content: JSON.stringify(reviewResponse) } }]
-        })
-      });
+      runPromptThroughProvider.mockResolvedValue({ text: JSON.stringify(reviewResponse), runId: "test-run", model: "test-model" });
 
       storage.createReview.mockResolvedValue({ id: 'review-001', ...reviewResponse });
 
@@ -809,12 +785,7 @@ describe('brain service', () => {
         recurringTheme: 'Theme'
       };
 
-      globalThis.fetch = vi.fn().mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve({
-          choices: [{ message: { content: JSON.stringify(reviewResponse) } }]
-        })
-      });
+      runPromptThroughProvider.mockResolvedValue({ text: JSON.stringify(reviewResponse), runId: "test-run", model: "test-model" });
 
       storage.createReview.mockImplementation(async (data) => ({ id: 'r1', ...data }));
 
@@ -832,12 +803,7 @@ describe('brain service', () => {
       const mockProvider = { id: 'lmstudio', enabled: true, type: 'api', endpoint: 'http://localhost:1234/v1', defaultModel: 'test' };
       getProviderById.mockResolvedValue(mockProvider);
 
-      globalThis.fetch = vi.fn().mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve({
-          choices: [{ message: { content: JSON.stringify({ bad: 'data' }) } }]
-        })
-      });
+      runPromptThroughProvider.mockResolvedValue({ text: JSON.stringify({ bad: 'data' }), runId: 'test-run', model: 'test-model' });
 
       await expect(runWeeklyReview()).rejects.toThrow('Invalid review output');
     });
@@ -867,12 +833,7 @@ describe('brain service', () => {
       // Wrap in markdown code block
       const wrappedResponse = '```json\n' + JSON.stringify(digestResponse) + '\n```';
 
-      globalThis.fetch = vi.fn().mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve({
-          choices: [{ message: { content: wrappedResponse } }]
-        })
-      });
+      runPromptThroughProvider.mockResolvedValue({ text: wrappedResponse, runId: "test-run", model: "test-model" });
 
       storage.createDigest.mockImplementation(async (data) => ({ id: 'd1', ...data }));
 
@@ -889,12 +850,7 @@ describe('brain service', () => {
       const mockProvider = { id: 'lmstudio', enabled: true, type: 'api', endpoint: 'http://localhost:1234/v1', defaultModel: 'test' };
       getProviderById.mockResolvedValue(mockProvider);
 
-      globalThis.fetch = vi.fn().mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve({
-          choices: [{ message: { content: '' } }]
-        })
-      });
+      runPromptThroughProvider.mockResolvedValue({ text: '', runId: "test-run", model: "test-model" });
 
       await expect(runDailyDigest()).rejects.toThrow('Empty or invalid AI response');
     });
@@ -936,24 +892,87 @@ describe('brain service', () => {
       const mockProvider = { id: 'lmstudio', enabled: true, type: 'api', endpoint: 'http://localhost:1234/v1', defaultModel: 'test' };
       getProviderById.mockResolvedValue(mockProvider);
 
-      globalThis.fetch = vi.fn().mockResolvedValue({
-        ok: false,
-        status: 500,
-        text: () => Promise.resolve('Internal Server Error')
-      });
+      // Central handler rejects on upstream API failure; the message format
+      // changed from "AI API error: 500" (old direct-fetch) to whatever the
+      // toolkit's executeApiRun surfaces. Test just asserts a rejection now.
+      runPromptThroughProvider.mockRejectedValue(new Error('AI API error: 500'));
 
       await expect(runDailyDigest()).rejects.toThrow('AI API error: 500');
     });
 
-    it('should throw for unsupported provider type', async () => {
+    // Removed: "should throw for unsupported provider type" — that
+    // validation moved to runPromptThroughProvider (lib/promptRunner.js),
+    // which is covered by promptRunner.test.js. brain.js no longer
+    // dispatches on provider.type directly.
+  });
+
+  // ===========================================================================
+  // headlessArgs — brain runs are classifier-style and must not pollute the
+  // user's Claude Code session list. brain.js appends provider.headlessArgs
+  // to a per-call provider clone before calling the central handler.
+  // Regression coverage for the migration from spawn() to runPromptThroughProvider.
+  // ===========================================================================
+
+  describe('headlessArgs preservation', () => {
+    it('appends provider.headlessArgs to the provider passed to the central handler', async () => {
       storage.getProjects.mockResolvedValue([{ id: 'p1', name: 'Proj', status: 'active' }]);
       storage.getAdminItems.mockResolvedValue([]);
       storage.getPeople.mockResolvedValue([]);
       storage.getInboxLog.mockResolvedValue([]);
+      storage.createDigest.mockImplementation(async (data) => ({ id: 'd1', ...data }));
 
-      getProviderById.mockResolvedValue({ id: 'weird', enabled: true, type: 'smoke_signal', defaultModel: 'test' });
+      getProviderById.mockResolvedValue({
+        id: 'claude-code',
+        enabled: true,
+        type: 'cli',
+        command: 'claude',
+        args: ['--print'],
+        headlessArgs: ['--no-session-persistence', '--disable-slash-commands'],
+        defaultModel: 'claude-opus-4-7'
+      });
 
-      await expect(runDailyDigest()).rejects.toThrow('Unsupported provider type: smoke_signal');
+      runPromptThroughProvider.mockResolvedValue({
+        text: JSON.stringify({
+          digestText: 'd', topActions: ['a'], stuckThing: 's', smallWin: 'w'
+        }),
+        runId: 'r', model: 'claude-opus-4-7'
+      });
+
+      await runDailyDigest('claude-code');
+
+      const passedProvider = runPromptThroughProvider.mock.calls[0][0].provider;
+      expect(passedProvider.args).toEqual([
+        '--print', '--no-session-persistence', '--disable-slash-commands'
+      ]);
+    });
+
+    it('does not clone the provider when headlessArgs is empty/absent', async () => {
+      storage.getProjects.mockResolvedValue([{ id: 'p1', name: 'Proj', status: 'active' }]);
+      storage.getAdminItems.mockResolvedValue([]);
+      storage.getPeople.mockResolvedValue([]);
+      storage.getInboxLog.mockResolvedValue([]);
+      storage.createDigest.mockImplementation(async (data) => ({ id: 'd1', ...data }));
+
+      const provider = {
+        id: 'lmstudio',
+        enabled: true,
+        type: 'api',
+        endpoint: 'http://localhost:1234/v1',
+        defaultModel: 'test'
+      };
+      getProviderById.mockResolvedValue(provider);
+
+      runPromptThroughProvider.mockResolvedValue({
+        text: JSON.stringify({
+          digestText: 'd', topActions: ['a'], stuckThing: 's', smallWin: 'w'
+        }),
+        runId: 'r', model: 'test'
+      });
+
+      await runDailyDigest('lmstudio');
+
+      const passedProvider = runPromptThroughProvider.mock.calls[0][0].provider;
+      expect(passedProvider).toBe(provider);
     });
   });
 
@@ -1004,208 +1023,6 @@ describe('brain service', () => {
     it('should re-export getSummary from storage', async () => {
       const { getSummary } = await import('./brain.js');
       expect(getSummary).toBe(storage.getSummary);
-    });
-  });
-
-  // ===========================================================================
-  // callAI CLI path — gemini-cli argv construction
-  // Guards against regressions like reintroducing interactive-mode detection,
-  // dropping --prompt, or losing the thinking-model fallback.
-  // ===========================================================================
-
-  describe('callAI CLI path (gemini-cli argv)', () => {
-    function createMockChild(stdoutPayload) {
-      const child = new EventEmitter();
-      child.stdout = new EventEmitter();
-      child.stderr = new EventEmitter();
-      child.kill = vi.fn();
-      // Emit payload and close on next tick so listeners attach first
-      setImmediate(() => {
-        child.stdout.emit('data', Buffer.from(stdoutPayload));
-        child.emit('close', 0);
-      });
-      return child;
-    }
-
-    const validDigestJson = JSON.stringify({
-      digestText: 'tiny digest',
-      topActions: ['a'],
-      stuckThing: 's',
-      smallWin: 'w'
-    });
-
-    beforeEach(() => {
-      // Override outer beforeEach's defaultModel so the callAI fallback path is reachable
-      storage.loadMeta.mockResolvedValue({
-        confidenceThreshold: 0.6,
-        defaultProvider: 'gemini-cli',
-        defaultModel: null
-      });
-      storage.getProjects.mockResolvedValue([{ id: 'p1', name: 'Proj', status: 'active' }]);
-      storage.getAdminItems.mockResolvedValue([]);
-      storage.getPeople.mockResolvedValue([]);
-      storage.getInboxLog.mockResolvedValue([]);
-      storage.createDigest.mockResolvedValue({ id: 'd1' });
-      storage.updateMeta.mockResolvedValue();
-    });
-
-    it('passes prompt via --prompt, forces --output-format text, and falls back to flash-lite when model unset', async () => {
-      getProviderById.mockResolvedValue({
-        id: 'gemini-cli',
-        enabled: true,
-        type: 'cli',
-        command: 'gemini',
-        args: [],
-        timeout: 50
-        // defaultModel deliberately unset — exercises the flash fallback
-      });
-      spawn.mockReturnValue(createMockChild(validDigestJson));
-
-      await runDailyDigest('gemini-cli');
-
-      expect(spawn).toHaveBeenCalledTimes(1);
-      const [command, args, opts] = spawn.mock.calls[0];
-      expect(command).toBe('gemini');
-      expect(opts.stdio).toEqual(['ignore', 'pipe', 'pipe']);
-
-      // Non-interactive output format pinned
-      const outputFmtIdx = args.indexOf('--output-format');
-      expect(outputFmtIdx).toBeGreaterThanOrEqual(0);
-      expect(args[outputFmtIdx + 1]).toBe('text');
-
-      // Thinking-model fallback
-      const modelIdx = args.indexOf('--model');
-      expect(modelIdx).toBeGreaterThanOrEqual(0);
-      expect(args[modelIdx + 1]).toBe('gemini-2.5-flash');
-
-      // Prompt delivered via flag (not positional) so gemini-cli stays non-interactive
-      const promptIdx = args.indexOf('--prompt');
-      expect(promptIdx).toBeGreaterThanOrEqual(0);
-      expect(args[promptIdx + 1]).toBe('test prompt');
-    });
-
-    it('honors an explicit model override instead of the flash fallback', async () => {
-      getProviderById.mockResolvedValue({
-        id: 'gemini-cli',
-        enabled: true,
-        type: 'cli',
-        command: 'gemini',
-        args: [],
-        defaultModel: 'gemini-2.5-pro',
-        timeout: 50
-      });
-      spawn.mockReturnValue(createMockChild(validDigestJson));
-
-      await runDailyDigest('gemini-cli');
-
-      const args = spawn.mock.calls[0][1];
-      const modelIdx = args.indexOf('--model');
-      expect(args[modelIdx + 1]).toBe('gemini-2.5-pro');
-    });
-
-    it('prefers provider.lightModel over the hard-coded flash fallback when defaultModel is unset', async () => {
-      getProviderById.mockResolvedValue({
-        id: 'gemini-cli',
-        enabled: true,
-        type: 'cli',
-        command: 'gemini',
-        args: [],
-        // Use a different model from the hard-coded fallback so the test
-        // proves lightModel wins, not that both happened to be the same string.
-        lightModel: 'gemini-3-flash',
-        timeout: 50
-        // defaultModel deliberately unset — lightModel should win over the hard-coded default
-      });
-      spawn.mockReturnValue(createMockChild(validDigestJson));
-
-      await runDailyDigest('gemini-cli');
-
-      const args = spawn.mock.calls[0][1];
-      const modelIdx = args.indexOf('--model');
-      expect(args[modelIdx + 1]).toBe('gemini-3-flash');
-    });
-
-    it('does not duplicate --output-format when provider args already specify it', async () => {
-      getProviderById.mockResolvedValue({
-        id: 'gemini-cli',
-        enabled: true,
-        type: 'cli',
-        command: 'gemini',
-        args: ['--output-format', 'json'],
-        defaultModel: 'gemini-2.5-flash',
-        timeout: 50
-      });
-      spawn.mockReturnValue(createMockChild(validDigestJson));
-
-      await runDailyDigest('gemini-cli');
-
-      const args = spawn.mock.calls[0][1];
-      const occurrences = args.filter(a => a === '--output-format').length;
-      expect(occurrences).toBe(1);
-      expect(args[args.indexOf('--output-format') + 1]).toBe('json');
-    });
-
-    it('persists the resolved model in digest ai.modelId so attribution survives the fallback', async () => {
-      getProviderById.mockResolvedValue({
-        id: 'gemini-cli',
-        enabled: true,
-        type: 'cli',
-        command: 'gemini',
-        args: [],
-        timeout: 50
-        // defaultModel and lightModel unset — forces the hard-coded fallback
-      });
-      spawn.mockReturnValue(createMockChild(validDigestJson));
-      // Capture the digest record so we can assert its ai metadata
-      let storedDigest = null;
-      storage.createDigest.mockImplementation(async (data) => {
-        storedDigest = data;
-        return { id: 'd-attr', ...data };
-      });
-
-      await runDailyDigest('gemini-cli');
-
-      expect(storedDigest).toBeTruthy();
-      expect(storedDigest.ai.providerId).toBe('gemini-cli');
-      expect(storedDigest.ai.modelId).toBe('gemini-2.5-flash');
-    });
-
-    it('uses positional prompt (not --prompt) for non-gemini CLI providers', async () => {
-      getProviderById.mockResolvedValue({
-        id: 'claude-code',
-        enabled: true,
-        type: 'cli',
-        command: 'claude',
-        args: ['-p'],
-        defaultModel: 'sonnet',
-        timeout: 50
-      });
-      spawn.mockReturnValue(createMockChild(validDigestJson));
-
-      await runDailyDigest('claude-code');
-
-      const args = spawn.mock.calls[0][1];
-      expect(args).not.toContain('--prompt');
-      expect(args).not.toContain('--output-format');
-      expect(args[args.length - 1]).toBe('test prompt');
-    });
-
-    it('omits --model entirely when defaultModel is the codex sentinel', async () => {
-      getProviderById.mockResolvedValue({
-        id: 'codex',
-        enabled: true,
-        type: 'cli',
-        command: 'codex',
-        args: [],
-        defaultModel: 'codex-configured-default',
-        timeout: 50
-      });
-      spawn.mockReturnValue(createMockChild(validDigestJson));
-
-      await runDailyDigest('codex');
-
-      const args = spawn.mock.calls[0][1];
-      expect(args).not.toContain('--model');
     });
   });
 });

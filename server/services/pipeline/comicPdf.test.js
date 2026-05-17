@@ -140,6 +140,38 @@ describe('buildComicPdf — happy path', () => {
     const { filename } = await buildComicPdf('iss-test');
     expect(filename).toBe('bone-walker-03.pdf');
   });
+
+  it('appends backCover after pages (cover → pages → back → colophon)', async () => {
+    await writeFile(join(FAKE_IMAGES_DIR, 'back.png'), TINY_PNG);
+    getIssueMock.mockResolvedValueOnce({
+      ...structuredClone(mockIssue),
+      stages: {
+        comicPages: {
+          cover: { filename: 'cover.png' },
+          pages: [{ filename: 'page1.png' }, { filename: 'page2.png' }],
+          backCover: { filename: 'back.png' },
+        },
+      },
+    });
+    const { pageCount } = await buildComicPdf('iss-test');
+    expect(pageCount).toBe(5); // cover + 2 pages + back + colophon
+  });
+
+  it('omits the back cover when includeBackCover=false', async () => {
+    await writeFile(join(FAKE_IMAGES_DIR, 'back.png'), TINY_PNG);
+    getIssueMock.mockResolvedValueOnce({
+      ...structuredClone(mockIssue),
+      stages: {
+        comicPages: {
+          cover: { filename: 'cover.png' },
+          pages: [{ filename: 'page1.png' }],
+          backCover: { filename: 'back.png' },
+        },
+      },
+    });
+    const { pageCount } = await buildComicPdf('iss-test', { includeBackCover: false });
+    expect(pageCount).toBe(3); // cover + page1 + colophon — back skipped
+  });
 });
 
 describe('buildComicPdf — rejection paths', () => {

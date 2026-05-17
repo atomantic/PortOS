@@ -73,42 +73,43 @@ describe("universeBuilderRefine.extractRefinementJson", () => {
 });
 
 describe("universeBuilderRefine.buildWorldRefinePrompt", () => {
-  it("includes all three originals + feedback verbatim", () => {
+  it("includes originals + influences + feedback verbatim", () => {
     const out = buildWorldRefinePrompt({
       starterPrompt: "moebius scavengers",
-      stylePrompt: "comic ink, dust palette",
-      negativePrompt: "lowres",
+      influences: {
+        embrace: ["comic ink", "dust palette"],
+        avoid: ["lowres"],
+      },
       feedback: "lean grimmer and more spiritual",
     });
     expect(out).toContain("moebius scavengers");
     expect(out).toContain("comic ink, dust palette");
     expect(out).toContain("lowres");
     expect(out).toContain("lean grimmer and more spiritual");
-    // Schema must mention the three output keys so the LLM can comply.
+    // Schema must mention the canonical output keys so the LLM can comply.
     expect(out).toContain('"starterPrompt"');
-    expect(out).toContain('"stylePrompt"');
-    expect(out).toContain('"negativePrompt"');
+    expect(out).toContain('"influences"');
   });
 
   it("substitutes (empty) for missing originals so the LLM sees the slot", () => {
     const out = buildWorldRefinePrompt({
       starterPrompt: "seed",
-      stylePrompt: "",
-      negativePrompt: "",
       feedback: "go dark",
     });
-    expect(out).toMatch(/ORIGINAL STYLE PROMPT:\n\(empty\)/);
-    expect(out).toMatch(/ORIGINAL NEGATIVE PROMPT:\n\(empty\)/);
     expect(out).toMatch(/ORIGINAL LOGLINE:\n\(empty\)/);
     expect(out).toMatch(/ORIGINAL PREMISE:\n\(empty\)/);
     expect(out).toMatch(/ORIGINAL STYLE NOTES:\n\(empty\)/);
+    // Influences carry the style + negative prompt now — verify the section
+    // header is present even with empty lists.
+    expect(out).toMatch(/ORIGINAL INFLUENCES:/);
+    // No standalone STYLE PROMPT / NEGATIVE PROMPT sections anymore.
+    expect(out).not.toContain("ORIGINAL STYLE PROMPT:");
+    expect(out).not.toContain("ORIGINAL NEGATIVE PROMPT:");
   });
 
   it("includes bible context (logline / premise / styleNotes) when provided", () => {
     const out = buildWorldRefinePrompt({
       starterPrompt: "seed",
-      stylePrompt: "s",
-      negativePrompt: "",
       logline: "A foundry city goes silent.",
       premise: "Three families inherit the silence.",
       styleNotes: "Tarkovsky pacing, Moebius palette.",
@@ -126,8 +127,6 @@ describe("universeBuilderRefine.buildWorldRefinePrompt", () => {
   it("emits a LOCKED FIELDS section when fields are pinned", () => {
     const out = buildWorldRefinePrompt({
       starterPrompt: "seed",
-      stylePrompt: "",
-      negativePrompt: "",
       logline: "L",
       premise: "",
       styleNotes: "",
@@ -144,8 +143,6 @@ describe("universeBuilderRefine.buildWorldRefinePrompt", () => {
   it("omits the LOCKED FIELDS section entirely when nothing is locked", () => {
     const out = buildWorldRefinePrompt({
       starterPrompt: "seed",
-      stylePrompt: "",
-      negativePrompt: "",
       feedback: "x",
     });
     expect(out).not.toContain("LOCKED FIELDS");
@@ -154,13 +151,11 @@ describe("universeBuilderRefine.buildWorldRefinePrompt", () => {
   it("declares the structured influences schema in the output contract", () => {
     const out = buildWorldRefinePrompt({
       starterPrompt: "seed",
-      stylePrompt: "",
-      negativePrompt: "",
       feedback: "x",
     });
-    // Structured influences replaced the legacy "Style direction:" clause —
-    // the renderer prepends them deterministically so the LLM has to populate
-    // them for re-expansions to inherit direction.
+    // Structured influences ARE the style + negative prompt — the renderer
+    // joins them verbatim so the LLM has to populate them for re-expansions
+    // to inherit direction.
     expect(out).toContain('"influences"');
     expect(out).toContain('"embrace"');
     expect(out).toContain('"avoid"');
@@ -171,8 +166,6 @@ describe("universeBuilderRefine.buildWorldRefinePrompt", () => {
   it("embeds prior influences as ORIGINAL INFLUENCES context", () => {
     const out = buildWorldRefinePrompt({
       starterPrompt: "seed",
-      stylePrompt: "",
-      negativePrompt: "",
       influences: {
         embrace: ["Moebius", "cel-shading"],
         avoid: ["Ghibli painterly"],
@@ -187,8 +180,6 @@ describe("universeBuilderRefine.buildWorldRefinePrompt", () => {
   it("renders ORIGINAL INFLUENCES with (none) when lists are empty", () => {
     const out = buildWorldRefinePrompt({
       starterPrompt: "seed",
-      stylePrompt: "",
-      negativePrompt: "",
       feedback: "x",
     });
     expect(out).toMatch(/Embrace: \(none\)/);

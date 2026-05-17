@@ -39,6 +39,15 @@ the front cover. Focus on subject, framing, mood, and a striking visual
 detail. The cover renderer composes the masthead + issue-number tag
 itself, so do NOT describe text or typography here — just the scene.>
 
+## Back cover concept
+
+<2–4 sentence back-cover concept: a SINGLE atmospheric illustration that
+complements (not duplicates) the front cover. Quieter, often a counterpoint
+— a single object, a silhouette at distance, an environmental detail, an
+aftermath beat. NO text, NO masthead, NO logos, NO panel borders — the
+renderer will explicitly forbid typography. Focus on subject, framing,
+mood, and a striking visual detail.>
+
 ## Page 1
 
 Panel 1
@@ -68,4 +77,4 @@ Panel 2
 - Never re-describe a character's permanent appearance once introduced; just name them.
 - Vary page rhythm: don't let every page be the same panel count. Use page turns deliberately — what the reader sees when they turn from an odd page to the next even page is one of the strongest tools you have. Land big reveals on page-turn moments.
 
-Return ONLY the script. No preamble, no commentary. The output MUST start with the `# Issue {{issue.number}} — <Title>` heading, followed immediately by the `## Cover concept` section, then exactly {{lengthTargets.pageTarget}} `## Page N` headers numbered Page 1 through Page {{lengthTargets.pageTarget}}.
+Return ONLY the script. No preamble, no commentary. The output MUST start with the `# Issue {{issue.number}} — <Title>` heading, followed immediately by the `## Cover concept` section, then the `## Back cover concept` section, then exactly {{lengthTargets.pageTarget}} `## Page N` headers numbered Page 1 through Page {{lengthTargets.pageTarget}}.

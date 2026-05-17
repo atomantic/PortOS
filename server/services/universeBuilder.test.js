@@ -21,12 +21,16 @@ vi.mock("crypto", async () => {
 
 const svc = await import("./universeBuilder.js");
 
+// Default universe with non-empty influences. Override `influences` for tests
+// that need isolation from the seed tokens.
 const seedWorld = async (overrides = {}) =>
   svc.createUniverse({
     name: "Moebius SciFi",
     starterPrompt: "moebius and scavengers reign meets prophet",
-    stylePrompt: "moebius linework, scavengers reign palette",
-    negativePrompt: "blurry, lowres",
+    influences: {
+      embrace: ["moebius linework", "scavengers reign palette"],
+      avoid: ["blurry", "lowres"],
+    },
     categories: {
       landscapes: {
         variations: [
@@ -179,7 +183,8 @@ describe("universeBuilder service", () => {
     expect(patched.styleNotes).toBe("new style notes");
     // Untouched (existing) data preserved.
     expect(patched.categories.landscapes.variations).toHaveLength(2);
-    expect(patched.stylePrompt).toBe(w.stylePrompt);
+    expect(patched.influences.embrace).toEqual(w.influences.embrace);
+    expect(patched.influences.avoid).toEqual(w.influences.avoid);
   });
 
   it("createUniverse trims bible fields to their max length", async () => {
@@ -197,10 +202,18 @@ describe("universeBuilder service", () => {
     const w = await seedWorld();
     const patched = await svc.updateUniverse(w.id, {
       name: "Renamed",
+      // Legacy stale-client shape: prose stylePrompt gets split into chips and
+      // appended to influences.embrace by the sanitizer's v2 → v3 migration.
       stylePrompt: "new style",
     });
     expect(patched.name).toBe("Renamed");
-    expect(patched.stylePrompt).toBe("new style");
+    // The legacy prose was absorbed as a single token at the tail of embrace.
+    expect(patched.influences.embrace).toEqual([
+      ...w.influences.embrace,
+      "new style",
+    ]);
+    // The legacy field is no longer stored on the record.
+    expect(patched.stylePrompt).toBeUndefined();
     // Untouched fields preserved.
     expect(patched.starterPrompt).toBe(w.starterPrompt);
     expect(patched.categories.landscapes.variations).toHaveLength(2);
@@ -392,6 +405,10 @@ describe("universeBuilder service", () => {
   });
 
   describe("influences", () => {
+    // These tests probe the per-list sanitizer in isolation, so they override
+    // seedWorld's default influences with their own to keep the assertions
+    // focused on the input under test (the default influences would otherwise
+    // round-trip alongside and confuse the expected output).
     it("round-trips embrace + avoid lists through createUniverse", async () => {
       const w = await seedWorld({
         influences: {
@@ -418,7 +435,9 @@ describe("universeBuilder service", () => {
     });
 
     it("defaults to empty lists when influences is missing or invalid", async () => {
-      const w = await seedWorld({ influences: undefined });
+      // seedWorld seeds non-empty influences by default — override with empty
+      // lists so this test isolates the missing/invalid branch.
+      const w = await seedWorld({ influences: { embrace: [], avoid: [] } });
       expect(w.influences).toEqual({ embrace: [], avoid: [] });
       const w2 = await seedWorld({
         name: "second",
@@ -450,10 +469,30 @@ describe("universeBuilder service", () => {
       expect(patched.influences.avoid).toEqual([]);
     });
 
-    it("compilePrompts deterministically prepends embrace to prompt + avoid to negative, deduped", async () => {
+    it("compilePrompts joins embrace verbatim into prompt + avoid into negative", async () => {
       const w = await seedWorld({
-        // stylePrompt already mentions one of the embraces — dedupe should
-        // ensure it doesn't appear twice in the rendered prompt.
+        influences: {
+          embrace: ["Moebius", "cel-shading", "ink", "dust palette"],
+          avoid: ["ghibli painterly", "lowres"],
+        },
+      });
+      const compiled = svc.compilePrompts(w, {
+        selection: { landscapes: ["Crystal Canyon"] },
+      });
+      expect(compiled).toHaveLength(1);
+      // Embrace tokens land verbatim as the style prefix, joined with the
+      // variation prompt via composeStyledPrompt's `. ` separator.
+      expect(compiled[0].prompt).toBe(
+        "Moebius, cel-shading, ink, dust palette. crystalline canyon, alien sun",
+      );
+      // Avoid tokens become the negative prompt verbatim.
+      expect(compiled[0].negativePrompt).toBe("ghibli painterly, lowres");
+    });
+
+    it("compilePrompts absorbs legacy prose stylePrompt/negativePrompt into the chip lists", async () => {
+      const w = await seedWorld({
+        // Stale v2-shaped payload — prose tokens migrate into the chip lists
+        // alongside any pre-existing influences and dedupe case-insensitively.
         stylePrompt: "cel-shading, ink, dust palette",
         negativePrompt: "lowres",
         influences: {
@@ -465,21 +504,14 @@ describe("universeBuilder service", () => {
         selection: { landscapes: ["Crystal Canyon"] },
       });
       expect(compiled).toHaveLength(1);
-      // Embrace tokens prefix the existing style tokens; the duplicate
-      // "cel-shading" only appears once.
-      expect(
-        compiled[0].prompt.startsWith(
-          "Moebius, cel-shading, ink, dust palette",
-        ),
-      ).toBe(true);
-      expect((compiled[0].prompt.match(/cel-shading/g) || []).length).toBe(1);
-      // Negative: avoid tokens prefix existing negatives, deduped against "lowres".
-      expect(
-        compiled[0].negativePrompt.startsWith("ghibli painterly, lowres"),
-      ).toBe(true);
-      expect((compiled[0].negativePrompt.match(/lowres/g) || []).length).toBe(
-        1,
+      // Chip tokens stay at the front (preserve user ordering); prose tokens
+      // land at the tail. "cel-shading" / "lowres" dedupe at the sanitizer.
+      expect(compiled[0].prompt).toBe(
+        "Moebius, cel-shading, ink, dust palette. crystalline canyon, alien sun",
       );
+      expect((compiled[0].prompt.match(/cel-shading/g) || []).length).toBe(1);
+      expect(compiled[0].negativePrompt).toBe("ghibli painterly, lowres");
+      expect((compiled[0].negativePrompt.match(/lowres/g) || []).length).toBe(1);
     });
   });
 
@@ -578,7 +610,7 @@ describe("universeBuilder service", () => {
   });
 
   describe("categories→canon backfill", () => {
-    it("backfills canon arrays from categories on first read + stamps schemaVersion=2", async () => {
+    it("backfills canon arrays from categories on first read + stamps the current schema version", async () => {
       fileStore.set("/mock/data/universe-builder.json", {
         universes: [
           {
@@ -599,7 +631,7 @@ describe("universeBuilder service", () => {
       });
       const list = await svc.listUniverses();
       const w = list[0];
-      expect(w.schemaVersion).toBe(2);
+      expect(w.schemaVersion).toBe(svc.CURRENT_SCHEMA_VERSION);
       // Characters
       const alex = w.characters.find((c) => c.name === "Alex");
       expect(alex).toBeTruthy();
@@ -622,7 +654,7 @@ describe("universeBuilder service", () => {
       expect(rebels.tags).toEqual(["factions"]); // unknown category key → object catch-all
     });
 
-    it("backfill is idempotent — re-reading a v2 universe does not duplicate canon", async () => {
+    it("backfill is idempotent — re-reading an already-migrated universe does not duplicate canon", async () => {
       fileStore.set("/mock/data/universe-builder.json", {
         universes: [
           {
@@ -639,7 +671,7 @@ describe("universeBuilder service", () => {
       // First read triggers backfill + persist.
       const first = (await svc.listUniverses())[0];
       expect(first.characters.length).toBe(1);
-      // Second read — schemaVersion=2 already on disk, backfill skipped.
+      // Second read — current schemaVersion already on disk, backfill skipped.
       const second = (await svc.listUniverses())[0];
       expect(second.characters.length).toBe(1);
       // Third read post-rename: a user-renamed entry must not be clobbered by

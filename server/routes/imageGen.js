@@ -23,7 +23,7 @@ import * as imageGen from '../services/imageGen/index.js';
 import { local, IMAGE_GEN_MODES } from '../services/imageGen/index.js';
 import { enqueueJob, attachSseClient as attachQueueSseClient, cancelJob, listJobs } from '../services/mediaJobQueue/index.js';
 import { getSettings, saveSettings } from '../services/settings.js';
-import { getHfToken, HF_TOKEN_REGEX } from '../lib/hfToken.js';
+import { getHfToken, getHfTokenInfo, HF_TOKEN_REGEX } from '../lib/hfToken.js';
 import { getImageModels, isFlux2, isZImage, isErnie } from '../lib/mediaModels.js';
 import {
   REQUIRED_PACKAGES, detectPython, checkPackages, installPackages,
@@ -35,7 +35,6 @@ import { join, basename, resolve as resolvePath, sep as PATH_SEP } from 'node:pa
 import { readFile, writeFile } from 'fs/promises';
 import { STYLE_PRESETS } from '../lib/writersRoomStylePresets.js';
 import { cleanImageBuffer, CLEAN_LEVELS } from './imageClean.js';
-import { purgeImageRefFromAllSeries } from '../services/pipeline/series.js';
 import { purgeImageRefFromAllUniverses } from '../services/universeCanon.js';
 
 const router = Router();
@@ -321,26 +320,17 @@ router.post('/cancel', asyncHandler(async (req, res) => {
 
 router.delete('/:filename', asyncHandler(async (req, res) => {
   const result = await local.deleteImage(req.params.filename);
-  // Sync both stores: pipeline series.characters/.settings/.objects[].imageRefs
-  // AND universe.characters/.settings/.objects[].imageRefs. Both are scanned
-  // because Phase A canon entities live on the universe; Phase B will collapse
-  // these into one source. Best-effort: a purge failure must not block the
-  // gallery delete itself.
-  const [seriesPurge, universePurge] = await Promise.all([
-    purgeImageRefFromAllSeries(req.params.filename).catch((err) => {
-      console.warn(`⚠️ Pipeline ref purge failed for ${req.params.filename}: ${err?.message || err}`);
-      return { removed: 0 };
-    }),
-    purgeImageRefFromAllUniverses(req.params.filename).catch((err) => {
-      console.warn(`⚠️ Universe canon purge failed for ${req.params.filename}: ${err?.message || err}`);
-      return { removed: 0 };
-    }),
-  ]);
-  const totalRemoved = seriesPurge.removed + universePurge.removed;
-  if (totalRemoved > 0) {
-    console.log(`🧹 Purged ${totalRemoved} canon ref(s) for ${req.params.filename} (series=${seriesPurge.removed}, universe=${universePurge.removed})`);
+  // Sync universe canon — characters/settings/objects[].imageRefs on every
+  // universe is scanned and any reference to this filename is dropped.
+  // Best-effort: a purge failure must not block the gallery delete itself.
+  const universePurge = await purgeImageRefFromAllUniverses(req.params.filename).catch((err) => {
+    console.warn(`⚠️ Universe canon purge failed for ${req.params.filename}: ${err?.message || err}`);
+    return { removed: 0 };
+  });
+  if (universePurge.removed > 0) {
+    console.log(`🧹 Purged ${universePurge.removed} canon ref(s) for ${req.params.filename}`);
   }
-  res.json({ ...result, canonRefsRemoved: totalRemoved });
+  res.json({ ...result, canonRefsRemoved: universePurge.removed });
 }));
 
 router.post('/:filename/visibility', asyncHandler(async (req, res) => {
@@ -491,8 +481,8 @@ router.get('/setup/flux2-status', asyncHandler(async (_req, res) => {
 // the FLUX.2 venv. Any model entry with `requiresHfToken: true` in
 // data/media-models.json drives the banner through this endpoint.
 router.get('/setup/hf-token-status', asyncHandler(async (_req, res) => {
-  const token = await getHfToken();
-  res.json({ hfTokenPresent: !!token });
+  const { token, source } = await getHfTokenInfo();
+  res.json({ hfTokenPresent: !!token, source });
 }));
 
 // Save the HF token from the inline form on the Image Gen page. settings.json
@@ -509,7 +499,17 @@ router.post('/setup/hf-token', asyncHandler(async (req, res) => {
     ...settings,
     imageGen: { ...(settings.imageGen || {}), hfToken: token.trim() },
   });
-  res.json({ ok: true, hfTokenPresent: true });
+  res.json({ ok: true, hfTokenPresent: true, source: 'stored' });
+}));
+
+// Clear the stored HF token. Falls back to env / CLI tokens if present —
+// callers should re-fetch /setup/hf-token-status to see the post-clear state.
+router.delete('/setup/hf-token', asyncHandler(async (_req, res) => {
+  const settings = await getSettings();
+  const { hfToken: _drop, ...restImageGen } = settings.imageGen || {};
+  await saveSettings({ ...settings, imageGen: restImageGen });
+  const { token, source } = await getHfTokenInfo();
+  res.json({ ok: true, hfTokenPresent: !!token, source });
 }));
 
 const checkSchema = z.object({ pythonPath: z.string().min(1) });

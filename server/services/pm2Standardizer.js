@@ -6,7 +6,7 @@ import { promisify } from 'util';
 import { getActiveProvider, getProviderById } from './providers.js';
 import { spawn } from 'child_process';
 import { safeJSONParse } from '../lib/fileUtils.js';
-import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
+import { runPromptThroughProvider } from '../lib/promptRunner.js';
 
 const execAsync = promisify(exec);
 const DEFAULT_PM2_AI_TIMEOUT_MS = 180000;
@@ -165,83 +165,18 @@ Rules:
 }
 
 /**
- * Execute LLM analysis using CLI provider
+ * Execute LLM analysis through the central handler — works for cli, api,
+ * and tui providers without per-type branching. `cwd` is the analyzed
+ * repo path, NOT PortOS's cwd; without it the CLI/TUI spawn lands in
+ * PortOS's directory and the analysis reads the wrong files.
  */
-async function executeCliAnalysis(provider, prompt, cwd) {
-  return new Promise((resolve, reject) => {
-    const args = [...(provider.args || []), prompt];
-    let output = '';
-    let settled = false;
-    let timer = null;
-
-    const settle = (fn, value) => {
-      if (settled) return;
-      settled = true;
-      if (timer) clearTimeout(timer);
-      fn(value);
-    };
-
-    const child = spawn(provider.command, args, {
-      cwd,
-      env: process.env,
-      shell: false,
-      windowsHide: true
-    });
-
-    child.stdout.on('data', (data) => {
-      output += data.toString();
-    });
-
-    child.stderr.on('data', (data) => {
-      output += data.toString();
-    });
-
-    child.on('close', (code) => {
-      if (code === 0) {
-        settle(resolve, output);
-      } else {
-        settle(reject, new Error(`CLI exited with code ${code}`));
-      }
-    });
-
-    child.on('error', (err) => settle(reject, err));
-
-    const timeoutMs = provider.timeout || 180000;
-    timer = setTimeout(() => {
-      console.log(`⏰ CLI analysis timed out after ${timeoutMs / 1000}s for: ${provider.command}`);
-      child.kill();
-      settle(reject, new Error(`Standardization analysis timed out after ${timeoutMs / 1000}s`));
-    }, timeoutMs);
+async function executeAnalysis(provider, prompt, cwd) {
+  const { text } = await runPromptThroughProvider({
+    provider, prompt, source: 'pm2-standardize',
+    timeout: provider.timeout || DEFAULT_PM2_AI_TIMEOUT_MS,
+    cwd,
   });
-}
-
-/**
- * Execute LLM analysis using API provider
- */
-async function executeApiAnalysis(provider, prompt) {
-  const headers = { 'Content-Type': 'application/json' };
-  if (provider.apiKey) {
-    headers['Authorization'] = `Bearer ${provider.apiKey}`;
-  }
-
-  const timeoutMs = provider.timeout || DEFAULT_PM2_AI_TIMEOUT_MS;
-
-  const response = await fetchWithTimeout(`${provider.endpoint}/chat/completions`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({
-      model: provider.defaultModel,
-      messages: [{ role: 'user', content: prompt }],
-      temperature: 0.1
-    })
-  }, timeoutMs);
-
-  if (!response.ok) {
-    throw new Error(`API error: ${response.status}`);
-  }
-
-  const data = await response.json();
-  return data.choices?.[0]?.message?.content || '';
+  return text;
 }
 
 /**
@@ -368,14 +303,7 @@ export async function analyzeApp(repoPath, providerId = null) {
   const startTime = Date.now();
   console.log(`🤖 Running ${provider.type} analysis via ${provider.name} (timeout: ${(provider.timeout || 180000) / 1000}s)`);
 
-  let response;
-  if (provider.type === 'cli') {
-    response = await executeCliAnalysis(provider, prompt, repoPath);
-  } else if (provider.type === 'api') {
-    response = await executeApiAnalysis(provider, prompt);
-  } else {
-    return { success: false, error: 'Unknown provider type' };
-  }
+  const response = await executeAnalysis(provider, prompt, repoPath);
 
   console.log(`✅ Analysis response received in ${((Date.now() - startTime) / 1000).toFixed(1)}s`);
 

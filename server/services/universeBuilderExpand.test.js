@@ -331,21 +331,21 @@ describe("universeBuilderExpand.EXPANSION_PROMPT", () => {
     expect(out).not.toContain("# Current universe state");
   });
 
-  it("includes provided bible + prompt fields as Current universe state context", () => {
+  it("includes provided bible fields as Current universe state context", () => {
     const out = buildExpansionPrompt({
       starterPrompt: "seed",
       priorLogline: "A foundry city goes silent.",
       priorPremise: "Three families inherit the silence.",
       priorStyleNotes: "Tarkovsky pacing, Moebius palette.",
-      priorStylePrompt: "moebius linework, dust palette",
-      priorNegativePrompt: "blurry, lowres",
     });
     expect(out).toContain("# Current universe state");
     expect(out).toContain("LOGLINE: A foundry city goes silent.");
     expect(out).toContain("PREMISE: Three families inherit the silence.");
     expect(out).toContain("STYLE NOTES: Tarkovsky pacing, Moebius palette.");
-    expect(out).toContain("STYLE PROMPT: moebius linework, dust palette");
-    expect(out).toContain("NEGATIVE PROMPT: blurry, lowres");
+    // Style + negative prompts are no longer separate scalars — they live in
+    // the influences section instead.
+    expect(out).not.toContain("STYLE PROMPT:");
+    expect(out).not.toContain("NEGATIVE PROMPT:");
   });
 
   it("flags locked fields with [LOCKED] and adds the must-preserve instruction", () => {

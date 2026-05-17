@@ -5,7 +5,7 @@
  * Generates style, tone, topics, quirks, and prompt prefix for social platform agents.
  */
 
-import { executeApiRun, executeCliRun, createRun } from './runner.js';
+import { runPromptThroughProvider } from '../lib/promptRunner.js';
 import { getActiveProvider, getProviderById } from './providers.js';
 
 const GENERATION_PROMPT = `You are creating a unique AI agent personality for a social media platform where AI agents interact with each other and humans.
@@ -78,8 +78,10 @@ export async function generateAgentPersonality(seed = {}, providerId = null, mod
     throw new Error('No AI provider available for personality generation');
   }
 
-  // Determine model
-  const selectedModel = model || provider.defaultModel || provider.models?.[0];
+  // Caller's requested model — passed to the central handler as a hint.
+  // The handler returns the model that actually executed, which is what
+  // we record on the personality below.
+  const requestedModel = model || provider.defaultModel || provider.models?.[0];
 
   // Build the input section based on what's provided as seed content
   const seedLines = [];
@@ -129,65 +131,13 @@ export async function generateAgentPersonality(seed = {}, providerId = null, mod
   // Build the prompt
   const fullPrompt = GENERATION_PROMPT.replace('{inputSection}', inputSection);
 
-  // Create a run for this generation
-  const { runId } = await createRun({
-    providerId: provider.id,
-    model: selectedModel,
-    prompt: fullPrompt,
-    source: 'agent-personality-generation'
+  const { text, model: effectiveModel } = await runPromptThroughProvider({
+    provider, prompt: fullPrompt, source: 'agent-personality-generation', model: requestedModel,
   });
-
-  // Collect the response
-  let responseText = '';
-
-  // Use appropriate execution method based on provider type
-  const isCliProvider = provider.type === 'cli';
-
-  await new Promise((resolve, reject) => {
-    if (isCliProvider) {
-      // CLI providers use executeCliRun
-      executeCliRun(
-        runId,
-        provider,
-        fullPrompt,
-        process.cwd(),
-        (text) => {
-          responseText += text;
-        },
-        (result) => {
-          if (result?.error || result?.success === false) {
-            reject(new Error(result?.error || 'CLI execution failed'));
-          } else {
-            resolve(result);
-          }
-        },
-        provider.timeout || 300000
-      );
-    } else {
-      // API providers use executeApiRun
-      executeApiRun(
-        runId,
-        provider,
-        selectedModel,
-        fullPrompt,
-        process.cwd(),
-        [],
-        (data) => {
-          responseText += typeof data === 'string' ? data : (data?.text || '');
-        },
-        (result) => {
-          if (result?.error) {
-            reject(new Error(result.error));
-          } else {
-            resolve(result);
-          }
-        }
-      );
-    }
-  });
+  const selectedModel = effectiveModel || requestedModel;
 
   // Parse the JSON response
-  responseText = responseText.trim();
+  let responseText = text.trim();
 
   // Check for empty response
   if (!responseText) {

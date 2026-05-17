@@ -1164,7 +1164,7 @@ export default function ImageGen() {
                     onDelete={() => handleDelete(img.filename)}
                     onToggleHidden={() => handleToggleHidden(item)}
                     starred={!!annotations[item.key]?.starred}
-                    hasNote={!!annotations[item.key]?.note}
+                    hasNote={!!annotations[item.key]?.anyNote}
                     onToggleStar={toggleStar}
                   />
                 );
@@ -1198,7 +1198,7 @@ export default function ImageGen() {
                     onDelete={() => handleDelete(img.filename)}
                     onToggleHidden={() => handleToggleHidden(item)}
                     starred={!!annotations[item.key]?.starred}
-                    hasNote={!!annotations[item.key]?.note}
+                    hasNote={!!annotations[item.key]?.anyNote}
                     onToggleStar={toggleStar}
                   />
                 );

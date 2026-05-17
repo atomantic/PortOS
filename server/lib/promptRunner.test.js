@@ -6,9 +6,23 @@ vi.mock('../services/runner.js', () => ({
   executeCliRun: vi.fn(),
   hasModelFlag: vi.fn(() => false),
   extractBakedModel: vi.fn(() => null),
+  // promptRunner.js imports stopRun for the API-timeout cancel path —
+  // without this mock, the timer firing would TypeError on `stopRun is
+  // not a function` and crash any test that triggers the API timeout.
+  stopRun: vi.fn().mockResolvedValue(undefined),
+}));
+
+// TUI runner is in lib (different module from services/runner.js) — mock it
+// here so the central handler's tui branch is testable without spawning a
+// real PTY. cleanTuiResponse is mocked to a passthrough so tests can assert
+// on the raw streamed text without worrying about the prompt-echo strip.
+vi.mock('./tuiPromptRunner.js', () => ({
+  executeTuiRun: vi.fn(),
+  cleanTuiResponse: vi.fn((text) => text),
 }));
 
 const runner = await import('../services/runner.js');
+const tuiRunner = await import('./tuiPromptRunner.js');
 const { runPromptThroughProvider } = await import('./promptRunner.js');
 
 const apiProvider = (extra = {}) => ({
@@ -17,10 +31,21 @@ const apiProvider = (extra = {}) => ({
 const cliProvider = (extra = {}) => ({
   id: 'codex', type: 'cli', defaultModel: 'm-default', timeout: 5000, ...extra,
 });
+const tuiProvider = (extra = {}) => ({
+  id: 'claude-code-tui', type: 'tui', defaultModel: 'm-default', timeout: 5000, ...extra,
+});
 
 beforeEach(() => {
   vi.clearAllMocks();
   runner.createRun.mockResolvedValue({ runId: 'run-xyz' });
+  // vi.clearAllMocks() clears calls but NOT mockReturnValue overrides,
+  // so the default implementations set in vi.mock() above don't auto-reset
+  // between tests. Re-apply the defaults that individual tests override
+  // (hasModelFlag, extractBakedModel, cleanTuiResponse) so a leak-over
+  // value can't poison the next test's resolveEffectiveModel run.
+  runner.hasModelFlag.mockReturnValue(false);
+  runner.extractBakedModel.mockReturnValue(null);
+  tuiRunner.cleanTuiResponse.mockImplementation((text) => text);
 });
 
 describe('promptRunner — happy paths', () => {
@@ -74,12 +99,34 @@ describe('promptRunner — happy paths', () => {
       model: 'gpt-5',
     });
 
-    expect(runner.createRun).toHaveBeenCalledWith({
+    expect(runner.createRun).toHaveBeenCalledWith(expect.objectContaining({
       providerId: 'openai',
       model: 'gpt-5',
       prompt: 'p',
       source: 'media-prompt-refine',
+    }));
+    // workspacePath now also goes through (defaults to process.cwd() when
+    // the caller doesn't pass `cwd`) so /runs reflects the actual spawn dir.
+    expect(runner.createRun.mock.calls[0][0]).toHaveProperty('workspacePath');
+  });
+
+  it('forwards a per-call cwd through to createRun as workspacePath', async () => {
+    runner.executeCliRun.mockImplementation(async (id, _p, _pr, cwd, onData, onComplete, _t) => {
+      onData(cwd); // echo back the cwd so the assertion below can check it
+      onComplete({ success: true });
     });
+
+    const out = await runPromptThroughProvider({
+      provider: cliProvider(),
+      prompt: 'p',
+      source: 't',
+      cwd: '/some/other/dir',
+    });
+
+    expect(out.text).toBe('/some/other/dir');
+    expect(runner.createRun).toHaveBeenCalledWith(
+      expect.objectContaining({ workspacePath: '/some/other/dir' })
+    );
   });
 
   it('reuses a caller-supplied runId (no createRun round-trip)', async () => {
@@ -185,12 +232,12 @@ describe('promptRunner — happy paths', () => {
     // args-baked model id so the recorded run reflects what actually
     // executed (not the caller's silently-dropped override or the
     // provider.defaultModel fallback).
-    expect(runner.createRun).toHaveBeenCalledWith({
+    expect(runner.createRun).toHaveBeenCalledWith(expect.objectContaining({
       providerId: 'claude-code',
       model: 'baked-in',
       prompt: 'p',
       source: 't',
-    });
+    }));
   });
 });
 
@@ -344,5 +391,140 @@ describe('promptRunner — multi-chunk text accumulation', () => {
       source: 't',
     });
     expect(out.text).toBe('hello world');
+  });
+});
+
+// =============================================================================
+// TUI routing — the third dispatch branch added alongside cli/api. Mirrors
+// the cli/api coverage above so the central handler's tui path can't quietly
+// regress (was the entry point for the Pipeline-prose crash bug).
+// =============================================================================
+
+describe('promptRunner — TUI provider routing', () => {
+  it('routes TUI providers through executeTuiRun, accumulates stripped text, resolves { text, runId, model }', async () => {
+    tuiRunner.executeTuiRun.mockImplementation(async (id, _p, _pr, _cwd, onData, onComplete, _t) => {
+      onData('once ');
+      onData('upon ');
+      onData('a time');
+      onComplete({ success: true, exitCode: 0 });
+    });
+
+    const out = await runPromptThroughProvider({
+      provider: tuiProvider(),
+      prompt: 'tell me a story',
+      source: 'pipeline-text-stage',
+    });
+
+    expect(out).toEqual({ text: 'once upon a time', runId: 'run-xyz', model: 'm-default' });
+    expect(tuiRunner.executeTuiRun).toHaveBeenCalledTimes(1);
+    expect(runner.executeCliRun).not.toHaveBeenCalled();
+    expect(runner.executeApiRun).not.toHaveBeenCalled();
+  });
+
+  it('passes cwd + timeout overrides through to executeTuiRun', async () => {
+    tuiRunner.executeTuiRun.mockImplementation(async (id, _p, _pr, _cwd, onData, onComplete, _t) => {
+      onData('ok');
+      onComplete({ success: true });
+    });
+
+    await runPromptThroughProvider({
+      provider: tuiProvider(),
+      prompt: 'p', source: 't',
+      cwd: '/tmp/some-other-repo',
+      timeout: 60000,
+    });
+
+    const args = tuiRunner.executeTuiRun.mock.calls[0];
+    expect(args[3]).toBe('/tmp/some-other-repo'); // cwd positional arg
+    expect(args[6]).toBe(60000);                   // timeout positional arg
+  });
+
+  it('runs cleanTuiResponse on the accumulated text before resolving', async () => {
+    tuiRunner.executeTuiRun.mockImplementation(async (id, _p, _pr, _cwd, onData, onComplete, _t) => {
+      onData('raw with chrome');
+      onComplete({ success: true });
+    });
+    tuiRunner.cleanTuiResponse.mockReturnValueOnce('cleaned');
+
+    const out = await runPromptThroughProvider({
+      provider: tuiProvider(),
+      prompt: 'p', source: 't',
+    });
+
+    expect(tuiRunner.cleanTuiResponse).toHaveBeenCalledWith('raw with chrome', 'p');
+    expect(out.text).toBe('cleaned');
+  });
+
+  it('rejects with TUI-labeled error when executeTuiRun fires onComplete with success: false', async () => {
+    tuiRunner.executeTuiRun.mockImplementation(async (id, _p, _pr, _cwd, _od, onComplete, _t) => {
+      onComplete({ success: false, exitCode: 124 });
+    });
+
+    await expect(runPromptThroughProvider({
+      provider: tuiProvider(),
+      prompt: 'p', source: 't',
+    })).rejects.toThrow(/TUI execution failed/);
+  });
+
+  it('rejects when executeTuiRun rejects (spawn failure path)', async () => {
+    tuiRunner.executeTuiRun.mockRejectedValue(new Error("Failed to spawn TUI 'claude'"));
+    await expect(runPromptThroughProvider({
+      provider: tuiProvider(),
+      prompt: 'p', source: 't',
+    })).rejects.toThrow(/Failed to spawn TUI/);
+  });
+});
+
+// =============================================================================
+// API timeout enforcement — the toolkit's executeApiRun has no internal
+// timer, so the central handler races a setTimeout against onComplete.
+// Verify that a stuck API run rejects with the timeout error AND that
+// stopRun is invoked for best-effort cancellation. Regression guard for
+// the round-2 review finding that API callers were hanging indefinitely.
+// =============================================================================
+
+describe('promptRunner — API timeout enforcement', () => {
+  it('rejects with timeout error when executeApiRun never completes and calls stopRun', async () => {
+    vi.useFakeTimers();
+    // executeApiRun hangs — never invokes onComplete or onData.
+    runner.executeApiRun.mockImplementation(() => new Promise(() => {}));
+
+    // Kick off the call and attach the rejection assertion BEFORE advancing
+    // timers — otherwise the timer-driven reject lands without a handler
+    // attached and vitest flags an unhandled rejection.
+    const promise = runPromptThroughProvider({
+      provider: apiProvider(),
+      prompt: 'p', source: 't',
+      timeout: 5000,
+    });
+    const assertion = expect(promise).rejects.toThrow(/API execution timed out after 5000ms/);
+
+    await vi.advanceTimersByTimeAsync(6000);
+    await assertion;
+
+    expect(runner.stopRun).toHaveBeenCalledWith('run-xyz');
+    vi.useRealTimers();
+  });
+
+  it('does not call stopRun when API completes within the timeout', async () => {
+    vi.useFakeTimers();
+    runner.executeApiRun.mockImplementation(async (id, _p, _m, _pr, _cwd, _ctx, onData, onComplete) => {
+      onData('quick');
+      onComplete({ success: true });
+    });
+
+    const promise = runPromptThroughProvider({
+      provider: apiProvider(),
+      prompt: 'p', source: 't',
+      timeout: 5000,
+    });
+
+    const out = await promise;
+    expect(out.text).toBe('quick');
+    // Advance time past what would have been the timeout — should not fire
+    // because settle-once guards cleared the handle.
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(runner.stopRun).not.toHaveBeenCalled();
+    vi.useRealTimers();
   });
 });

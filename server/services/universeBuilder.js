@@ -4,7 +4,10 @@
  * Stores user-created "universe templates" — sci-fi/fantasy/etc. universe
  * descriptions expanded by an LLM into a structured prompt set:
  *
- *   - stylePrompt + negativePrompt (positive style fragment + negative prompt)
+ *   - influences.embrace / influences.avoid (token lists managed as draggable
+ *     chips) act as both the style prompt and the negative prompt — they are
+ *     joined verbatim at render-compile time and form the single source of
+ *     truth for the universe's positive + negative tokens.
  *   - categories: named prompt buckets, seeded with common universe-art buckets
  *     like landscapes / characters / vehicles, but open to project-specific
  *     buckets like colonies, factions, species, clothing_styles, or raider_clans
@@ -35,9 +38,17 @@ import { emitRecordUpdated, emitRecordDeleted } from './sharing/recordEvents.js'
 
 // Bumped when a sanitizer-time backfill changes how on-disk universes are
 // shaped, so future migrations can gate on the prior version.
-export const CURRENT_SCHEMA_VERSION = 2;
+//   v3 — drop prose stylePrompt/negativePrompt fields; legacy values are
+//        split on commas and merged into influences.embrace / influences.avoid
+//        so there is a single token-list editing surface.
+export const CURRENT_SCHEMA_VERSION = 3;
 
-const STATE_PATH = join(PATHS.data, 'universe-builder.json');
+// Lazy state-path resolution so test harnesses that swap PATHS.data
+// per-test (mkdtempSync + Proxy mock) see the right temp root. Computing
+// the path at module-load freezes whatever value PATHS.data held when
+// universeBuilder.js was first imported, which is `undefined` under the
+// proxy-mock pattern series.js's tests already use.
+const statePath = () => join(PATHS.data, 'universe-builder.json');
 
 export const ERR_NOT_FOUND = 'NOT_FOUND';
 export const ERR_VALIDATION = 'VALIDATION_ERROR';
@@ -71,10 +82,10 @@ export const COMPOSITE_SHEET_KINDS = Object.freeze([
 export const WORLD_CATEGORY_KEY_MAX = 64;
 export const WORLD_CATEGORY_COUNT_MAX = 30;
 
-// Influences — structured reference lists that deterministically inform
-// stylePrompt (embrace) and negativePrompt (avoid) at render-compile time.
-// They are the canonical record of the universe's direction so re-expansions
-// inherit it; the LLM still authors the prose stylePrompt around them.
+// Influences — structured token lists that ARE the universe's style + negative
+// prompts. Surfaced in the UI as "Style prompt" (embrace) and "Negative prompt"
+// (avoid) and managed via the draggable-chip editor. Joined verbatim with the
+// per-variation prompt at render-compile time.
 export const INFLUENCE_ENTRY_MAX = 120;
 export const INFLUENCES_PER_LIST_MAX = 30;
 
@@ -84,8 +95,6 @@ export const INFLUENCES_PER_LIST_MAX = 30;
 // not lockable yet — start with the bible/prompt scalars the user owns.
 export const LOCKABLE_FIELDS = Object.freeze([
   'starterPrompt',
-  'stylePrompt',
-  'negativePrompt',
   'logline',
   'premise',
   'styleNotes',
@@ -99,13 +108,11 @@ export const LOCKABLE_FIELDS = Object.freeze([
 // extending LOCKABLE_FIELDS + this map; the prompts pick it up automatically.
 export const LOCKABLE_FIELD_LABELS = Object.freeze({
   starterPrompt: 'starter idea',
-  stylePrompt: 'style prompt',
-  negativePrompt: 'negative prompt',
   logline: 'logline',
   premise: 'premise',
   styleNotes: 'style notes',
-  influencesEmbrace: 'embrace influences',
-  influencesAvoid: 'avoid influences',
+  influencesEmbrace: 'style prompt tokens',
+  influencesAvoid: 'negative prompt tokens',
 });
 
 // Lockable lock-map keys that target one of the two influence sub-lists.
@@ -264,6 +271,32 @@ export const sanitizeInfluences = (raw = {}) => {
   };
 };
 
+// v2 → v3 migration helper. Splits a legacy comma/newline-separated prose
+// prompt into individual chip tokens. Returns an array suitable for appending
+// to an influence list before sanitization (sanitizeInfluenceList handles the
+// per-entry cap, list cap, and dedupe).
+const splitProsePrompt = (prose) => {
+  if (typeof prose !== 'string') return [];
+  return prose.split(/[,\n]/).map((s) => s.trim()).filter(Boolean);
+};
+
+// Append legacy prose stylePrompt / negativePrompt tokens onto the structured
+// influences. Existing chip tokens stay at the front so the user's deliberate
+// chip ordering is preserved; prose tokens land at the back and are deduped
+// case-insensitively by the downstream sanitizeInfluenceList. Tolerates raw
+// being missing / non-object.
+export const mergeLegacyPromptsIntoInfluences = (rawInfluences, legacyStylePrompt, legacyNegativePrompt) => {
+  const baseEmbrace = Array.isArray(rawInfluences?.embrace) ? rawInfluences.embrace : [];
+  const baseAvoid = Array.isArray(rawInfluences?.avoid) ? rawInfluences.avoid : [];
+  const extraEmbrace = splitProsePrompt(legacyStylePrompt);
+  const extraAvoid = splitProsePrompt(legacyNegativePrompt);
+  if (!extraEmbrace.length && !extraAvoid.length) return rawInfluences || {};
+  return {
+    embrace: [...baseEmbrace, ...extraEmbrace],
+    avoid: [...baseAvoid, ...extraAvoid],
+  };
+};
+
 // Build a refined influences object that honors per-list locks. Locked lists
 // take their value from `fallback` (originals); unlocked lists take from
 // `fresh` (the LLM output), falling back to `fallback` ONLY when the LLM
@@ -416,14 +449,20 @@ const sanitizeTemplate = (raw) => {
   const name = trimTo(raw.name, NAME_MAX_LENGTH);
   if (!name) return null;
   const starterPrompt = trimTo(raw.starterPrompt, STARTER_PROMPT_MAX);
-  const stylePrompt = trimTo(raw.stylePrompt, PROMPT_FRAGMENT_MAX);
-  const negativePrompt = trimTo(raw.negativePrompt, PROMPT_FRAGMENT_MAX);
   const logline = trimTo(raw.logline, LOGLINE_MAX);
   const premise = trimTo(raw.premise, PREMISE_MAX);
   const styleNotes = trimTo(raw.styleNotes, STYLE_NOTES_MAX);
   const categories = sanitizeCategories(raw.categories || {});
   const compositeSheets = sanitizeCompositeSheets(raw.compositeSheets || []);
-  const influences = sanitizeInfluences(raw.influences);
+  // Legacy v2 universes carried prose stylePrompt / negativePrompt fields
+  // alongside influences. v3 collapses both into the chip-based influences
+  // editor: split each prose field on commas/newlines and append to the
+  // matching list. sanitizeInfluenceList handles trim, cap, and
+  // case-insensitive dedupe so a token that already exists as a chip is not
+  // re-added by the migration.
+  const influences = sanitizeInfluences(
+    mergeLegacyPromptsIntoInfluences(raw.influences, raw.stylePrompt, raw.negativePrompt),
+  );
   const locked = sanitizeLocked(raw.locked);
   // Canon registries. Backfill copies legacy `categories[].variations[]` into
   // the matching kind on first read so series-side prompts can pull canon by
@@ -446,8 +485,6 @@ const sanitizeTemplate = (raw) => {
     id: raw.id,
     name,
     starterPrompt,
-    stylePrompt,
-    negativePrompt,
     logline,
     premise,
     styleNotes,
@@ -483,7 +520,7 @@ const sanitizeRun = (raw) => {
 
 async function readState() {
   await ensureDir(PATHS.data);
-  const raw = await readJSONFile(STATE_PATH, DEFAULT_STATE, { logError: false });
+  const raw = await readJSONFile(statePath(), DEFAULT_STATE, { logError: false });
   const rawById = new Map(Array.isArray(raw.universes) ? raw.universes.filter((u) => u?.id).map((u) => [u.id, u]) : []);
   const universes = Array.isArray(raw.universes) ? raw.universes.map(sanitizeTemplate).filter(Boolean) : [];
   const runs = Array.isArray(raw.runs) ? raw.runs.map(sanitizeRun).filter(Boolean) : [];
@@ -499,7 +536,7 @@ async function readState() {
 }
 
 async function writeState(state) {
-  await atomicWrite(STATE_PATH, state);
+  await atomicWrite(statePath(), state);
 }
 
 export async function listUniverses() {
@@ -533,6 +570,12 @@ export async function createUniverse(input = {}) {
     compositeSheets: input.compositeSheets || [],
     influences: input.influences || {},
     locked: input.locked || {},
+    // Canon registries — let callers seed a universe at creation time
+    // (writers-room promote, share-bucket import). sanitizeTemplate runs
+    // each through sanitizeBibleList, so per-entry shape is enforced.
+    characters: input.characters || [],
+    settings: input.settings || [],
+    objects: input.objects || [],
     llm: input.llm || {},
     createdAt: now,
     updatedAt: now,
@@ -597,7 +640,7 @@ export async function updateUniverse(id, patch = {}) {
   // + `locked` are handled above (they need per-key merging or wholesale
   // replacement, not the simple scalar copy).
   const PATCHABLE_SCALARS = [
-    'name', 'starterPrompt', 'stylePrompt', 'negativePrompt',
+    'name', 'starterPrompt',
     'logline', 'premise', 'styleNotes', 'compositeSheets',
     // Canon entity arrays — patched wholesale (the sanitizer reruns
     // sanitizeBibleList so per-entry shape is enforced on every save).
@@ -612,6 +655,10 @@ export async function updateUniverse(id, patch = {}) {
   const merged = sanitizeTemplate({
     ...cur,
     ...scalarPatch,
+    // sanitizeTemplate runs the v2 → v3 prose-prompt merge — see its
+    // `mergeLegacyPromptsIntoInfluences` call.
+    ...(patch.stylePrompt !== undefined ? { stylePrompt: patch.stylePrompt } : {}),
+    ...(patch.negativePrompt !== undefined ? { negativePrompt: patch.negativePrompt } : {}),
     categories: mergedCategories,
     influences: mergedInfluences,
     locked: mergedLocked,
@@ -654,29 +701,15 @@ export async function listRuns(universeId = null) {
   return [...filtered].sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
 }
 
-/**
- * Compose a token string by prepending an influence list (embrace or avoid)
- * to a free-form comma-separated prose tokens string, with case-insensitive
- * dedupe so the LLM-authored prompt never repeats an entry the user already
- * pinned. Used by compilePrompts so structured influences ALWAYS land in the
- * rendered prompt regardless of whether the LLM remembered them.
- */
-export function composeInfluenceTokens(structured = [], prose = '') {
-  const all = [];
-  if (Array.isArray(structured)) all.push(...structured);
-  if (typeof prose === 'string' && prose.trim()) {
-    all.push(...prose.split(',').map((s) => s.trim()).filter(Boolean));
-  }
-  const seen = new Set();
-  const out = [];
-  for (const token of all) {
-    if (!token) continue;
-    const key = token.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(token);
-  }
-  return out.join(', ');
+// Join an influence list (embrace or avoid) into the comma-separated string
+// shape the renderer's `composeStyledPrompt` consumes. Tokens have already
+// been deduped + capped by `sanitizeInfluenceList` at write time, so this is
+// just a thin join — exported so downstream consumers (universeCanon,
+// pipeline/visualStages) read a single helper instead of each open-coding
+// `(arr || []).join(', ')`.
+export function joinInfluenceList(structured = []) {
+  if (!Array.isArray(structured)) return '';
+  return structured.filter((t) => typeof t === 'string' && t.trim()).join(', ');
 }
 
 /**
@@ -707,8 +740,8 @@ export function compilePrompts(universe, options = {}) {
   const batchPerVariation = Math.max(1, Math.min(20, Number(options.batchPerVariation) || 1));
 
   const stylePreset = {
-    prompt: composeInfluenceTokens(universe.influences?.embrace, universe.stylePrompt),
-    negativePrompt: composeInfluenceTokens(universe.influences?.avoid, universe.negativePrompt),
+    prompt: joinInfluenceList(universe.influences?.embrace),
+    negativePrompt: joinInfluenceList(universe.influences?.avoid),
   };
   const compiled = [];
 

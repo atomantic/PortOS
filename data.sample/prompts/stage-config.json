@@ -262,6 +262,27 @@
       "model": "default",
       "returnsJson": true,
       "variables": []
+    },
+    "importer-canon-extract": {
+      "name": "Importer — Universe Canon Extraction",
+      "description": "Reverse-engineer characters / places / objects from a finished short story / novel / screenplay / comic script. Runs at `heavy` tier — source can be book-length.",
+      "model": "heavy",
+      "returnsJson": true,
+      "variables": []
+    },
+    "importer-arc-extract": {
+      "name": "Importer — Series Arc Extraction",
+      "description": "Extract series-level arc (logline / summary / themes / protagonistArc / shape) plus 1–5 seasons from a finished work. Persists into `series.arc` + `series.seasons[]`.",
+      "model": "heavy",
+      "returnsJson": true,
+      "variables": []
+    },
+    "importer-issue-proposal": {
+      "name": "Importer — Issue Proposal",
+      "description": "Split a finished work into PortOS pipeline issues with titles + arcPosition + arcRole + verbatim prose excerpts. Honors source-marked issue / chapter / volume headers.",
+      "model": "heavy",
+      "returnsJson": true,
+      "variables": []
     }
   }
 }

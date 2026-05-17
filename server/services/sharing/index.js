@@ -12,6 +12,7 @@ import { join } from 'path';
 import { attachAllWatchers, attachWatcher, detachWatcher, shutdownAllWatchers, listAttachedWatchers } from './watcher.js';
 import { sharingEvents } from './importer.js';
 import { installSubscriptionListener } from './subscriptions.js';
+import { initAnnotationsSync } from './annotationsSync.js';
 
 export { sharingEvents } from './importer.js';
 export { attachWatcher, detachWatcher, listAttachedWatchers };
@@ -50,9 +51,16 @@ export async function initSharing({ io: socketIo } = {}) {
     sharingEvents.on('unshared', (payload) => {
       io.emit('sharing:unshared', payload);
     });
+    // Peer-driven annotation merges re-use the same `media:annotation:updated`
+    // socket event the local PATCH route emits, so open UI consumers handle
+    // both transports through the same listener.
+    sharingEvents.on('annotation-updated', (payload) => {
+      io.emit('media:annotation:updated', payload);
+    });
   }
 
   installSubscriptionListener();
+  initAnnotationsSync();
   const result = await attachAllWatchers();
   console.log(`📡 sharing: initialized, watchers attached for ${result.attached} bucket(s)`);
   return result;

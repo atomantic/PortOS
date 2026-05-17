@@ -7,9 +7,9 @@
  * Uses the 'cos-task-enhance' prompt stage for provider/model configuration.
  */
 
-import { executeApiRun, executeCliRun, createRun } from './runner.js';
 import { getActiveProvider, getProviderById } from './providers.js';
 import { getStage, buildPrompt } from './promptService.js';
+import { runPromptThroughProvider } from '../lib/promptRunner.js';
 
 const STAGE_NAME = 'cos-task-enhance';
 
@@ -104,65 +104,17 @@ export async function enhanceTaskPrompt(description, context = '') {
       .replace('{contextSection}', contextSection);
   }
 
-  // Create a run for this enhancement
-  const { runId } = await createRun({
-    providerId: provider.id,
-    model,
-    prompt: fullPrompt,
-    source: 'task-enhancement'
+  const { text, model: effectiveModel } = await runPromptThroughProvider({
+    provider, prompt: fullPrompt, source: 'task-enhancement', model,
   });
-
-  // Collect the response
-  let enhancedDescription = '';
-
-  // Use appropriate execution method based on provider type
-  const isCliProvider = provider.type === 'cli';
-
-  await new Promise((resolve, reject) => {
-    if (isCliProvider) {
-      // CLI providers use executeCliRun
-      executeCliRun(
-        runId,
-        provider,
-        fullPrompt,
-        process.cwd(),
-        (text) => {
-          enhancedDescription += text;
-        },
-        (result) => {
-          if (result?.error || result?.success === false) {
-            reject(new Error(result?.error || 'CLI execution failed'));
-          } else {
-            resolve(result);
-          }
-        },
-        provider.timeout || 300000
-      );
-    } else {
-      // API providers use executeApiRun
-      executeApiRun(
-        runId,
-        provider,
-        model,
-        fullPrompt,
-        process.cwd(),
-        [], // No screenshots needed
-        (data) => {
-          enhancedDescription += typeof data === 'string' ? data : (data?.text || '');
-        },
-        (result) => {
-          if (result?.error) {
-            reject(new Error(result.error));
-          } else {
-            resolve(result);
-          }
-        }
-      );
-    }
-  });
+  // Keep the caller's chosen model (or provider default) when the runner
+  // resolves to a null effectiveModel — overwriting unconditionally would
+  // report `model: null` in logs + return values even though we explicitly
+  // chose one upstream.
+  model = effectiveModel || model || provider.defaultModel || null;
 
   // Clean up the response - remove any leading/trailing whitespace and common prefixes
-  enhancedDescription = enhancedDescription.trim();
+  let enhancedDescription = text.trim();
 
   // Remove common AI response prefixes
   const prefixesToRemove = [

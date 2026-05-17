@@ -26,13 +26,14 @@ export function buildComicPagesOwner({ issueId, target, pageIndex, variant = 'pr
     throw new Error(`buildComicPagesOwner: unknown variant "${variant}"`);
   }
   if (target === 'cover') return `${PREFIX}:${issueId}:comicPages:cover:${variant}`;
+  if (target === 'backCover') return `${PREFIX}:${issueId}:comicPages:backCover:${variant}`;
   if (target === 'page') return `${PREFIX}:${issueId}:comicPages:page${pageIndex}:${variant}`;
   throw new Error(`buildComicPagesOwner: unknown target "${target}"`);
 }
 
 // Suffix `(:proof|:final)?` is optional so legacy owners still parse. New
 // jobs always include the variant; old jobs default to 'proof' below.
-const COMIC_PAGES_RE = /^pipeline:([^:]+):comicPages:(cover|page(\d+))(?::(proof|final))?$/;
+const COMIC_PAGES_RE = /^pipeline:([^:]+):comicPages:(cover|backCover|page(\d+))(?::(proof|final))?$/;
 
 export function parseComicPagesOwner(owner) {
   if (typeof owner !== 'string') return null;
@@ -41,9 +42,35 @@ export function parseComicPagesOwner(owner) {
   const [, issueId, kind, pageIdxStr, variantMatch] = m;
   const variant = variantMatch || 'proof';
   if (kind === 'cover') return { issueId, target: 'cover', variant };
+  if (kind === 'backCover') return { issueId, target: 'backCover', variant };
   const pageIndex = Number(pageIdxStr);
   if (!Number.isInteger(pageIndex) || pageIndex < 0) return null;
   return { issueId, target: 'page', pageIndex, variant };
+}
+
+// Season-cover owners — `pipeline:season:<seriesId>:<seasonId>:<target>:<variant>`
+// where target ∈ {cover, backCover}. Distinct namespace from issue owners so
+// the comic-pages filename hook never accidentally matches a season-cover
+// completion event (the issue regex is anchored on `comicPages:` after the
+// issue id; season owners use `season:` after the prefix instead).
+export function buildSeasonCoverOwner({ seriesId, seasonId, target, variant = 'proof' }) {
+  if (!COMIC_PAGE_VARIANTS.includes(variant)) {
+    throw new Error(`buildSeasonCoverOwner: unknown variant "${variant}"`);
+  }
+  if (target !== 'cover' && target !== 'backCover') {
+    throw new Error(`buildSeasonCoverOwner: unknown target "${target}"`);
+  }
+  return `${PREFIX}:season:${seriesId}:${seasonId}:${target}:${variant}`;
+}
+
+const SEASON_COVER_RE = /^pipeline:season:([^:]+):([^:]+):(cover|backCover):(proof|final)$/;
+
+export function parseSeasonCoverOwner(owner) {
+  if (typeof owner !== 'string') return null;
+  const m = owner.match(SEASON_COVER_RE);
+  if (!m) return null;
+  const [, seriesId, seasonId, target, variant] = m;
+  return { seriesId, seasonId, target, variant };
 }
 
 // Per-shot start-frame renders inside the storyboards stage. Scene-level

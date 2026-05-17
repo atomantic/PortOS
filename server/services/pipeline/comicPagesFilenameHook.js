@@ -37,34 +37,40 @@ const hook = createFilenameHook({
   parseOwner: parseComicPagesOwner,
   applyFilename: (currentStage, parsed, job, filename) => {
     const slotKey = slotKeyForVariant(parsed.variant);
-    if (parsed.target === 'cover') {
-      const cover = currentStage?.cover;
-      if (!cover) return null;
+    // Cover and backCover share the exact same slot shape, so the
+    // stamp/migrate logic is identical — only the field name on
+    // `currentStage` differs. Branch on `parsed.target` instead of
+    // duplicating two near-identical blocks.
+    if (parsed.target === 'cover' || parsed.target === 'backCover') {
+      const field = parsed.target;             // 'cover' | 'backCover'
+      const record = currentStage?.[field];
+      if (!record) return null;
       // New shape: the route stamped { jobId, …, filename: null } into
-      // cover[slotKey] at enqueue. Only stamp the filename if THIS job is
-      // still the slot's active render — a re-render that landed between
-      // enqueue and this event would otherwise be overwritten with the
-      // older filename.
-      if (cover[slotKey]?.jobId === job.id) {
+      // record[slotKey] at enqueue. Only stamp the filename if THIS job
+      // is still the slot's active render — a re-render that landed
+      // between enqueue and this event would otherwise be overwritten
+      // with the older filename.
+      if (record[slotKey]?.jobId === job.id) {
         return {
-          patch: { cover: { ...cover, [slotKey]: { ...cover[slotKey], filename } } },
-          label: `cover.${slotKey}`,
+          patch: { [field]: { ...record, [slotKey]: { ...record[slotKey], filename } } },
+          label: `${field}.${slotKey}`,
         };
       }
-      // Legacy shape — pre-split job that wrote cover.imageJobId. Stamp
-      // the result into the matching new slot AND clear the legacy
-      // imageJobId/filename so the UI reads exclusively from the slot.
-      if (cover.imageJobId === job.id) {
+      // Legacy shape — pre-split job that wrote record.imageJobId.
+      // Stamp the result into the matching new slot AND clear the
+      // legacy imageJobId/filename so the UI reads exclusively from
+      // the slot.
+      if (record.imageJobId === job.id) {
         return {
           patch: {
-            cover: {
-              ...cover,
-              [slotKey]: legacySlotRecord(slotKey, job, filename, cover.prompt),
+            [field]: {
+              ...record,
+              [slotKey]: legacySlotRecord(slotKey, job, filename, record.prompt),
               imageJobId: null,
               filename: null,
             },
           },
-          label: `cover.${slotKey} (migrated)`,
+          label: `${field}.${slotKey} (migrated)`,
         };
       }
       return null;

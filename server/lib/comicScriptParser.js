@@ -22,8 +22,13 @@ const PAGE_RE = /^##\s+Page\s+([\dIVX]+)\b/i;
 // template emits before the first `## Page 1` header. Also accepts the
 // short `## Cover` form so a hand-edited script doesn't have to be exact.
 const COVER_RE = /^##\s+Cover(?:\s+concept)?\b/i;
-// Any `##` heading other than Page / Cover ends an in-progress cover block
-// (e.g. a stray `## Notes` section).
+// `## Back cover concept` — the optional back-cover art section the
+// comic-script template emits (typically right after `## Cover concept`,
+// before the first `## Page 1`). Matched BEFORE `COVER_RE` in the parse
+// loop because "Back cover" would otherwise pass the loose Cover regex.
+const BACK_COVER_RE = /^##\s+Back\s+cover(?:\s+concept)?\b/i;
+// Any `##` heading other than Page / Cover / Back cover ends an in-progress
+// cover or back-cover block (e.g. a stray `## Notes` section).
 const ANY_H2_RE = /^##\s+/;
 // Plain `Panel N` is preferred by the current prompt template — `## Page N`
 // is the deepest header level we use, so panels live below it without their
@@ -114,11 +119,15 @@ function parsePanelBody(lines) {
 
 /**
  * @param {string} script  markdown body from stages.comicScript.output
- * @returns {{ coverConcept: string, pages: Array<{ rawText, panels: Array<{ description, caption, dialogue, sfx }> }> }}
+ * @returns {{ coverConcept: string, backCoverConcept: string, pages: Array<{ rawText, panels: Array<{ description, caption, dialogue, sfx }> }> }}
  *
  *   - `coverConcept`: the body of an optional `## Cover concept` section that
  *     appears before the first `## Page 1` header. Empty string when the
  *     script doesn't include one (legacy scripts, hand-curated content).
+ *   - `backCoverConcept`: the body of an optional `## Back cover concept`
+ *     section. Same shape rules as `coverConcept`. Order with respect to
+ *     `## Cover concept` doesn't matter — both are captured wherever they
+ *     appear before the first `## Page 1`.
  *
  *   Each page carries:
  *   - `rawText`: the markdown slice from the page's `## Page N` header to
@@ -128,7 +137,9 @@ function parsePanelBody(lines) {
  *   - `panels`: structured panel breakdown for image-gen prompts.
  */
 export function parseComicScript(script) {
-  if (typeof script !== 'string' || !script.trim()) return { coverConcept: '', pages: [] };
+  if (typeof script !== 'string' || !script.trim()) {
+    return { coverConcept: '', backCoverConcept: '', pages: [] };
+  }
 
   const lines = script.split(/\r?\n/);
   const pages = [];
@@ -136,10 +147,13 @@ export function parseComicScript(script) {
   let currentRawLines = null;
   let currentPanelLines = null;
   let inAnyPanel = false;
-  // Cover-concept accumulator. Active between a `## Cover concept` heading
-  // and the next `##` heading (Page 1 or any other H2).
+  // Cover / back-cover concept accumulators. Each is active between its
+  // own `## …` heading and the next `##` heading (Page 1, the *other*
+  // cover section, or any other H2).
   let inCover = false;
+  let inBackCover = false;
   const coverLines = [];
+  const backCoverLines = [];
 
   const flushPanel = () => {
     if (!inAnyPanel || !currentPage || !currentPanelLines) return;
@@ -158,12 +172,21 @@ export function parseComicScript(script) {
   };
 
   for (const line of lines) {
+    // `BACK_COVER_RE` must run before `COVER_RE` — "## Back cover concept"
+    // would otherwise match the looser `## Cover` regex first.
+    if (BACK_COVER_RE.test(line)) {
+      inCover = false;
+      inBackCover = true;
+      continue;
+    }
     if (COVER_RE.test(line)) {
       inCover = true;
+      inBackCover = false;
       continue;
     }
     if (PAGE_RE.test(line)) {
       inCover = false;
+      inBackCover = false;
       flushPanel();
       flushPageRawText();
       if (pages.length >= PANEL_LIMITS.PAGES_MAX) break;
@@ -172,12 +195,18 @@ export function parseComicScript(script) {
       pages.push(currentPage);
       continue;
     }
-    // Any *other* H2 also ends the cover block (e.g. a stray `## Notes`).
-    if (inCover && ANY_H2_RE.test(line)) {
+    // Any *other* H2 also ends an in-progress cover / back-cover block
+    // (e.g. a stray `## Notes`).
+    if ((inCover || inBackCover) && ANY_H2_RE.test(line)) {
       inCover = false;
+      inBackCover = false;
     }
     if (inCover) {
       coverLines.push(line);
+      continue;
+    }
+    if (inBackCover) {
+      backCoverLines.push(line);
       continue;
     }
     if (currentRawLines) currentRawLines.push(line);
@@ -209,7 +238,11 @@ export function parseComicScript(script) {
     coverLines.join('\n').replace(/^\s*\n+|\n+\s*$/g, ''),
     PANEL_LIMITS.PAGE_SCRIPT_MAX,
   );
-  return { coverConcept, pages: filtered };
+  const backCoverConcept = trimTo(
+    backCoverLines.join('\n').replace(/^\s*\n+|\n+\s*$/g, ''),
+    PANEL_LIMITS.PAGE_SCRIPT_MAX,
+  );
+  return { coverConcept, backCoverConcept, pages: filtered };
 }
 
 export { PANEL_LIMITS };

@@ -24,12 +24,20 @@ export const RESOLUTIONS = [
   { label: '1536×1536 (hi-res square)', w: 1536, h: 1536, compatible: ['codex', RUNNER_FAMILIES.FLUX2] },
   { label: '1024×1536 (hi-res portrait)', w: 1024, h: 1536, compatible: ['codex', RUNNER_FAMILIES.FLUX2] },
   { label: '1536×1024 (hi-res landscape)', w: 1536, h: 1024, compatible: ['codex', RUNNER_FAMILIES.FLUX2] },
+  // US comic-book trim presets — 6.625"×10.25" = 1.547:1 aspect, the real
+  // standard. Distinct from "portrait" because comic pages are squarer than
+  // 2:3. Codex-only: every dimension here exceeds the implicit local-runner
+  // ceilings used by the entries above (flux1 ≤1216, FLUX2 ≤1536, Z-Image /
+  // ERNIE degrade past ~1280).
+  { label: '1280×1972 (comic page — draft)', w: 1280, h: 1972, compatible: ['codex'] },
+  { label: '1920×2951 (comic page — hi-res, margin)', w: 1920, h: 2951, compatible: ['codex'] },
+  { label: '1988×3056 (comic page — hi-res, full bleed)', w: 1988, h: 3056, compatible: ['codex'] },
   // gpt-image-2 final-render presets: hard ceiling is each edge ≤ 3840 and
   // total ≤ 8,294,400 pixels. All three below sit exactly at the pixel cap
   // — pick aspect by shape. Codex-only because mflux/diffusers are too slow
   // at this resolution to be practical (and the smaller models degrade).
   { label: '3840×2160 (4K landscape)', w: 3840, h: 2160, compatible: ['codex'] },
-  { label: '2160×3840 (4K portrait — comic page)', w: 2160, h: 3840, compatible: ['codex'] },
+  { label: '2160×3840 (4K portrait)', w: 2160, h: 3840, compatible: ['codex'] },
   { label: '2880×2880 (4K square)', w: 2880, h: 2880, compatible: ['codex'] },
 ];
 

@@ -19,17 +19,28 @@ async function readHfCliToken() {
 }
 
 export async function getHfToken() {
+  const { token } = await getHfTokenInfo();
+  return token;
+}
+
+// Same lookup as `getHfToken()` but also surfaces *where* the token came from
+// so the Settings UI can show "Stored token configured" vs "Using env var
+// HF_TOKEN" — and so the Clear button only appears when the stored entry is
+// the one being used. `source` is one of: 'stored' | 'env' | 'cli' | 'none'.
+export async function getHfTokenInfo() {
   const settings = await getSettings();
   const stored = settings?.imageGen?.hfToken?.trim?.();
-  if (stored) return stored;
+  if (stored) return { token: stored, source: 'stored' };
   const envToken = (
     process.env.HF_TOKEN ||
     process.env.HUGGINGFACE_HUB_TOKEN ||
     process.env.HUGGINGFACEHUB_API_TOKEN ||
     null
   );
-  if (envToken) return envToken;
-  return await readHfCliToken();
+  if (envToken) return { token: envToken, source: 'env' };
+  const cliToken = await readHfCliToken();
+  if (cliToken) return { token: cliToken, source: 'cli' };
+  return { token: null, source: 'none' };
 }
 
 // Spread into a child_process spawn `env` to give the Python child whichever

@@ -59,9 +59,9 @@ describe('parseComicScript', () => {
   });
 
   it('handles empty / non-string input', () => {
-    expect(parseComicScript('')).toEqual({ coverConcept: '', pages: [] });
-    expect(parseComicScript(null)).toEqual({ coverConcept: '', pages: [] });
-    expect(parseComicScript('# Just a title')).toEqual({ coverConcept: '', pages: [] });
+    expect(parseComicScript('')).toEqual({ coverConcept: '', backCoverConcept: '', pages: [] });
+    expect(parseComicScript(null)).toEqual({ coverConcept: '', backCoverConcept: '', pages: [] });
+    expect(parseComicScript('# Just a title')).toEqual({ coverConcept: '', backCoverConcept: '', pages: [] });
   });
 
   it('drops panels with no description and pages with no panels', () => {
@@ -139,6 +139,107 @@ Panel 1
 Description: A frame.
 `;
     expect(parseComicScript(script).coverConcept).toBe('');
+  });
+
+  it('extracts the `## Back cover concept` section into backCoverConcept', () => {
+    const script = `# Issue 1 — Bone Walker
+
+## Cover concept
+
+KESSA on the rib spine.
+
+## Back cover concept
+
+The beetle alone on a moonlit dune, single point-of-interest silhouette, no text, no logos.
+
+## Page 1
+
+Panel 1
+Description: A frame.
+`;
+    const { coverConcept, backCoverConcept } = parseComicScript(script);
+    expect(coverConcept).toMatch(/KESSA on the rib spine/);
+    expect(backCoverConcept).toMatch(/beetle alone on a moonlit dune/);
+    expect(backCoverConcept).not.toMatch(/KESSA/);
+  });
+
+  it('captures back-cover when only the back-cover section is present', () => {
+    const script = `## Back cover concept
+
+Just the back.
+
+## Page 1
+
+Panel 1
+Description: A frame.
+`;
+    const { coverConcept, backCoverConcept } = parseComicScript(script);
+    expect(coverConcept).toBe('');
+    expect(backCoverConcept).toMatch(/Just the back/);
+  });
+
+  it('accepts the short `## Back cover` heading', () => {
+    const script = `## Back cover
+
+Short form.
+
+## Page 1
+
+Panel 1
+Description: A frame.
+`;
+    expect(parseComicScript(script).backCoverConcept).toMatch(/Short form/);
+  });
+
+  it('handles back-cover before cover (any order)', () => {
+    const script = `## Back cover concept
+
+Back text.
+
+## Cover concept
+
+Front text.
+
+## Page 1
+
+Panel 1
+Description: A frame.
+`;
+    const { coverConcept, backCoverConcept } = parseComicScript(script);
+    expect(coverConcept).toMatch(/Front text/);
+    expect(backCoverConcept).toMatch(/Back text/);
+  });
+
+  it('terminates an in-progress back-cover block at any other H2', () => {
+    const script = `## Back cover concept
+
+Real back-cover content.
+
+## Notes
+
+Editorial scratchpad — should not appear in backCoverConcept.
+
+## Page 1
+
+Panel 1
+Description: A frame.
+`;
+    const { backCoverConcept } = parseComicScript(script);
+    expect(backCoverConcept).toMatch(/Real back-cover content/);
+    expect(backCoverConcept).not.toMatch(/Editorial scratchpad/);
+  });
+
+  it('returns empty backCoverConcept when the script has no Back cover section', () => {
+    const script = `## Cover concept
+
+Only a front.
+
+## Page 1
+
+Panel 1
+Description: A frame.
+`;
+    expect(parseComicScript(script).backCoverConcept).toBe('');
   });
 
   it('captures the raw page body for each page', () => {

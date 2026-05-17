@@ -8,14 +8,13 @@
  * - Handle corrections and fixes
  */
 
-import { spawn } from 'child_process';
 import * as storage from './brainStorage.js';
 import { brainEvents } from './brainStorage.js';
 import { getActiveProvider, getProviderById } from './providers.js';
 import { buildPrompt } from './promptService.js';
 import { validate } from '../lib/validation.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
-import { resolveCliModel } from '../lib/providerModels.js';
+import { runPromptThroughProvider } from '../lib/promptRunner.js';
 import {
   classifierOutputSchema,
   digestOutputSchema,
@@ -60,101 +59,18 @@ async function callAI(promptStageName, variables, providerOverride, modelOverrid
 
   console.log(`🧠 Calling AI: ${provider.id} / ${model} / ${promptStageName}`);
 
-  if (provider.type === 'cli') {
+  // brain runs are headless classification — append the provider's
+  // headlessArgs (e.g. claude-code's --no-session-persistence) so the
+  // user's session list doesn't fill up with classifier transcripts.
+  // The clone leaves the saved provider config untouched.
+  const providerForCall = provider.headlessArgs?.length
+    ? { ...provider, args: [...(provider.args || []), ...provider.headlessArgs] }
+    : provider;
 
-    return new Promise((resolve, reject) => {
-      const args = [...(provider.args || [])];
-      if (provider.headlessArgs?.length) {
-        args.push(...provider.headlessArgs);
-      }
-      // gemini-cli prompt delivery differs here from runner.js and agentCliSpawning.js:
-      // those pipe the prompt via stdin for streaming runs, while this path uses
-      // stdio: ['ignore', ...] for one-shot headless classification. With stdin ignored,
-      // gemini-cli flips to interactive mode and hangs — so the prompt must go via
-      // --prompt, and --output-format text skips interactive-mode detection overhead.
-      const isGeminiCli = provider.id === 'gemini-cli';
-      if (isGeminiCli && !args.includes('--output-format') && !args.includes('-o')) {
-        args.push('--output-format', 'text');
-      }
-      const cliModel = resolveCliModel(model);
-      if (cliModel) {
-        args.push('--model', cliModel);
-      }
-      if (isGeminiCli) {
-        args.push('--prompt', prompt);
-      } else {
-        args.push(prompt);
-      }
-      let output = '';
-
-      const child = spawn(provider.command, args, {
-        env: (() => { const e = { ...process.env, ...provider.envVars }; delete e.CLAUDECODE; return e; })(),
-        stdio: ['ignore', 'pipe', 'pipe'],
-        shell: false,
-        windowsHide: true
-      });
-
-      child.stdout.on('data', (data) => {
-        output += data.toString();
-      });
-
-      child.stderr.on('data', (data) => {
-        output += data.toString();
-      });
-
-      const timeoutMs = provider.timeout || 300000;
-      const killTimer = setTimeout(() => {
-        child.kill('SIGKILL');
-        reject(new Error(`CLI AI call timed out after ${timeoutMs}ms`));
-      }, timeoutMs);
-
-      child.on('close', (code) => {
-        clearTimeout(killTimer);
-        if (code === 0) {
-          resolve({ content: output, model, providerId: provider.id });
-        } else {
-          reject(new Error(`CLI exited with code ${code}${output ? ': ' + output.substring(0, 500) : ''}`));
-        }
-      });
-
-      child.on('error', (err) => {
-        clearTimeout(killTimer);
-        reject(err);
-      });
-    });
-  }
-
-  if (provider.type === 'api') {
-    const headers = { 'Content-Type': 'application/json' };
-    if (provider.apiKey) {
-      headers['Authorization'] = `Bearer ${provider.apiKey}`;
-    }
-
-    const response = await fetch(`${provider.endpoint}/chat/completions`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        model,
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0.1
-      }),
-      signal: AbortSignal.timeout(provider.timeout || 300000)
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`AI API error: ${response.status} - ${errorText}`);
-    }
-
-    const data = await response.json();
-    return {
-      content: data.choices?.[0]?.message?.content || '',
-      model,
-      providerId: provider.id
-    };
-  }
-
-  throw new Error(`Unsupported provider type: ${provider.type}`);
+  const { text, model: effectiveModel } = await runPromptThroughProvider({
+    provider: providerForCall, prompt, source: `brain-${promptStageName}`, model,
+  });
+  return { content: text, model: effectiveModel || model, providerId: provider.id };
 }
 
 /**

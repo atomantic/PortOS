@@ -21,8 +21,9 @@
 
 import { runStagedLLM } from '../../lib/stageRunner.js';
 import { ServerError } from '../../lib/errorHandler.js';
-import { getSeries, updateSeries } from './series.js';
-import { listIssues } from './issues.js';
+import { getSeries, updateSeries, updateSeasonOnSeries } from './series.js';
+import { listIssues, updateIssue, recomputeIssueNumbersForSeries } from './issues.js';
+import { emitRecordUpdated, withReexportSuppressed } from '../sharing/recordEvents.js';
 import { getSeason } from './seasons.js';
 import {
   sanitizeArc,
@@ -405,6 +406,87 @@ export async function generateSeasonEpisodes(seriesId, seasonId, options = {}) {
 }
 
 /**
+ * Generate FRONT + BACK cover-art concepts for one volume (season). Returns
+ * the proposed text without persisting; pass `commit: true` to write the
+ * scripts to `season.cover.script` / `season.backCover.script` — only when
+ * those slots are currently blank, never clobbering a user edit.
+ *
+ * Sized as a lightweight per-season LLM call rather than bolted onto the
+ * arc-overview pass so (a) cover concepts can be regenerated independently
+ * of the arc structure, and (b) the heavier arc-overview prompt's output
+ * tokens stay focused on structural beats.
+ */
+export async function generateVolumeCoverConcepts(seriesId, seasonId, options = {}) {
+  const series = await getSeries(seriesId);
+  const seasons = series.seasons || [];
+  const season = seasons.find((s) => s.id === seasonId);
+  if (!season) {
+    throw makeErr(`Season not found on series: ${seasonId}`, ERR_VALIDATION);
+  }
+  const themesCsv = Array.isArray(season.themes) ? season.themes.join(', ') : '';
+  const ctx = {
+    series: {
+      name: series.name,
+      logline: series.logline,
+      styleNotes: series.styleNotes,
+    },
+    season: {
+      number: season.number,
+      title: season.title,
+      logline: season.logline,
+      synopsis: season.synopsis,
+      endingHook: season.endingHook,
+      episodeCountTarget: season.episodeCountTarget,
+      themesCsv,
+    },
+  };
+  const { content, runId, providerId, model } = await runStagedLLM(
+    'pipeline-volume-cover-concepts',
+    ctx,
+    {
+      providerOverride: options.providerOverride,
+      modelOverride: options.modelOverride,
+      returnsJson: true,
+      source: 'pipeline-volume-cover-concepts',
+    },
+  );
+  const coverConcept = (typeof content?.coverConcept === 'string' ? content.coverConcept : '').trim();
+  const backCoverConcept = (typeof content?.backCoverConcept === 'string' ? content.backCoverConcept : '').trim();
+  let updatedSeries = null;
+  const seeded = { cover: false, backCover: false };
+  if (options.commit) {
+    // Scoped per-season patch via updateSeasonOnSeries — runs inside the
+    // series write tail, skips the full sanitizeSeries pass over every
+    // bible list. The "only seed when blank" check happens INSIDE the
+    // callback so it reads the freshest persisted scripts (avoiding a
+    // race against a concurrent user blur-save).
+    updatedSeries = await updateSeasonOnSeries(seriesId, seasonId, (cur) => {
+      const patch = {};
+      if (coverConcept && !(cur.cover?.script || '')) {
+        patch.cover = { ...(cur.cover || {}), script: coverConcept };
+        seeded.cover = true;
+      }
+      if (backCoverConcept && !(cur.backCover?.script || '')) {
+        patch.backCover = { ...(cur.backCover || {}), script: backCoverConcept };
+        seeded.backCover = true;
+      }
+      return patch;
+    });
+  }
+  return {
+    season: updatedSeries ? (updatedSeries.seasons || []).find((s) => s.id === seasonId) : season,
+    series: updatedSeries,
+    coverConcept,
+    backCoverConcept,
+    seeded,
+    raw: content,
+    runId,
+    providerId,
+    model,
+  };
+}
+
+/**
  * Build the verify-pass context — a JSON-encoded tree of seasons + their
  * child issues so the LLM has a single structural blob to scan. Issues are
  * looked up via `listIssues` so the verify pass sees the *current* set, not
@@ -712,34 +794,43 @@ export async function resolveVerifyIssues(seriesId, options = {}) {
   // canonical shape regardless.
   const existingById = new Map((series.seasons || []).map((s) => [s.id, s]));
   const proposedSeasons = Array.isArray(content?.seasons) ? content.seasons : [];
-  const merged = proposedSeasons.map((raw) => {
+  // Track each entry's provenance (existing id vs freshly minted) so we can
+  // remap orphaned child issues after sanitization.
+  const seasonEntries = proposedSeasons.map((raw) => {
     const existing = raw?.id ? existingById.get(raw.id) : null;
     if (existing) {
-      return sanitizeSeason({
-        ...existing,
-        title: typeof raw.title === 'string' ? raw.title : existing.title,
-        number: Number.isFinite(raw.number) ? raw.number : existing.number,
-        logline: typeof raw.logline === 'string' ? raw.logline : existing.logline,
-        synopsis: typeof raw.synopsis === 'string' ? raw.synopsis : existing.synopsis,
-        endingHook: typeof raw.endingHook === 'string' ? raw.endingHook : existing.endingHook,
-        episodeCountTarget: Number.isFinite(raw.episodeCountTarget)
-          ? raw.episodeCountTarget
-          : existing.episodeCountTarget,
-        themes: Array.isArray(raw.themes) ? raw.themes : existing.themes,
-      });
+      return {
+        season: sanitizeSeason({
+          ...existing,
+          title: typeof raw.title === 'string' ? raw.title : existing.title,
+          number: Number.isFinite(raw.number) ? raw.number : existing.number,
+          logline: typeof raw.logline === 'string' ? raw.logline : existing.logline,
+          synopsis: typeof raw.synopsis === 'string' ? raw.synopsis : existing.synopsis,
+          endingHook: typeof raw.endingHook === 'string' ? raw.endingHook : existing.endingHook,
+          episodeCountTarget: Number.isFinite(raw.episodeCountTarget)
+            ? raw.episodeCountTarget
+            : existing.episodeCountTarget,
+          themes: Array.isArray(raw.themes) ? raw.themes : existing.themes,
+        }),
+        sourceId: existing.id,
+      };
     }
-    return buildSeason({
-      number: raw?.number,
-      title: raw?.title,
-      logline: raw?.logline,
-      synopsis: raw?.synopsis,
-      endingHook: raw?.endingHook,
-      episodeCountTarget: raw?.episodeCountTarget,
-    });
-  }).filter(Boolean);
+    return {
+      season: buildSeason({
+        number: raw?.number,
+        title: raw?.title,
+        logline: raw?.logline,
+        synopsis: raw?.synopsis,
+        endingHook: raw?.endingHook,
+        episodeCountTarget: raw?.episodeCountTarget,
+      }),
+      sourceId: null,
+    };
+  }).filter((entry) => entry?.season);
 
-  const seasons = sanitizeSeasonList(merged);
-  const updated = await updateSeries(seriesId, { arc, seasons });
+  const seasons = sanitizeSeasonList(seasonEntries.map((e) => e.season));
+
+  const { series: updated } = await commitSeasonsWithRemap(series, { arc, seasons });
 
   const notes = typeof content?.notes === 'string' ? content.notes.trim().slice(0, 2000) : '';
   return {
@@ -751,6 +842,116 @@ export async function resolveVerifyIssues(seriesId, options = {}) {
     providerId,
     model,
   };
+}
+
+/**
+ * Persist a new `arc` + `seasons[]` onto a series, migrating any child issues
+ * whose `seasonId` referenced a season that the new shape dropped or renamed.
+ * Shared by `resolveVerifyIssues` (auto-resolve) and `/arc/generate` — both
+ * paths can rewrite season ids, and without this migration the orphans land
+ * behind keys the Arc Canvas never iterates back.
+ *
+ * Match priority (via `buildSeasonRemap`): normalized title → unique number →
+ * positional 1:1 fallback. Unmatched orphans get `seasonId: null` so they fall
+ * into the visible "Un-grouped" bucket instead of vanishing.
+ *
+ * `currentSeries` is the pre-write snapshot; pass the result of `getSeries(id)`
+ * so we know which ids existed before the write.
+ */
+export async function commitSeasonsWithRemap(currentSeries, { arc, seasons }) {
+  const seriesId = currentSeries.id;
+  const newIds = new Set((seasons || []).map((s) => s.id));
+  const droppedOldSeasons = (currentSeries.seasons || []).filter((s) => !newIds.has(s.id));
+  const oldIds = new Set((currentSeries.seasons || []).map((s) => s.id));
+  const newlyMintedSeasons = (seasons || []).filter((s) => !oldIds.has(s.id));
+  const remap = buildSeasonRemap(droppedOldSeasons, newlyMintedSeasons);
+  const droppedIdSet = new Set(droppedOldSeasons.map((s) => s.id));
+  const reassignList = droppedIdSet.size
+    ? (await listIssues({ seriesId })).filter((iss) => droppedIdSet.has(iss.seasonId))
+    : [];
+
+  // Mirrors `deleteSeason`'s bulk-reassign idiom — `skipRenumber` per call +
+  // one `recomputeIssueNumbers` after, wrapped in `withReexportSuppressed` so
+  // we don't fan out N socket events + N debounced re-exports of the same
+  // series.
+  //
+  // Persist the new seasons FIRST so that a crash between writes leaves
+  // issues attached to ids that still exist in `series.seasons[]`. If we
+  // wrote issues first and crashed before `updateSeries`, every reassigned
+  // issue would point at a `seasonId` that's not in the persisted series —
+  // the exact orphan state this helper was written to prevent.
+  let updated;
+  await withReexportSuppressed('series', seriesId, async () => {
+    updated = await updateSeries(seriesId, { arc, seasons });
+    for (const iss of reassignList) {
+      const target = remap.get(iss.seasonId) ?? null;
+      await updateIssue(iss.id, { seasonId: target }, { skipRenumber: true });
+    }
+    if (reassignList.length) await recomputeIssueNumbersForSeries(seriesId);
+  });
+  if (reassignList.length) emitRecordUpdated('series', seriesId);
+  return { series: updated, reassignedIssueCount: reassignList.length };
+}
+
+// Build a Map<oldSeasonId, newSeasonId|null> from the set of removed seasons
+// and the freshly-minted ones in the same resolve. Matching priority:
+//   1. normalized title equality (LLM was told to preserve titles when it can)
+//   2. `number` equality (only when the target number is unique among new ones)
+//   3. positional fallback (only when counts match and ordering aligns)
+// Anything that can't be matched maps to null so the issue lands in the
+// ungrouped bucket instead of staying stranded behind a defunct id.
+export function buildSeasonRemap(droppedOldSeasons, newlyMintedSeasons) {
+  const remap = new Map();
+  const claimed = new Set();
+  const norm = (s) => (typeof s === 'string' ? s.trim().toLowerCase() : '');
+
+  // Pass 1: normalized title
+  for (const old of droppedOldSeasons) {
+    const oldTitle = norm(old.title);
+    if (!oldTitle) continue;
+    const hit = newlyMintedSeasons.find(
+      (n) => norm(n.title) === oldTitle && !claimed.has(n.id),
+    );
+    if (hit) {
+      claimed.add(hit.id);
+      remap.set(old.id, hit.id);
+    }
+  }
+
+  // Pass 2: unique `number` match
+  for (const old of droppedOldSeasons) {
+    if (remap.has(old.id)) continue;
+    if (!Number.isFinite(old.number)) continue;
+    const matches = newlyMintedSeasons.filter(
+      (n) => n.number === old.number && !claimed.has(n.id),
+    );
+    if (matches.length === 1) {
+      claimed.add(matches[0].id);
+      remap.set(old.id, matches[0].id);
+    }
+  }
+
+  // Pass 3: positional fallback when the unclaimed sets line up 1:1
+  const oldRemaining = droppedOldSeasons.filter((s) => !remap.has(s.id));
+  const newRemaining = newlyMintedSeasons.filter((n) => !claimed.has(n.id));
+  if (oldRemaining.length && oldRemaining.length === newRemaining.length) {
+    const oldSorted = [...oldRemaining].sort(
+      (a, b) => (a.number ?? 0) - (b.number ?? 0),
+    );
+    const newSorted = [...newRemaining].sort(
+      (a, b) => (a.number ?? 0) - (b.number ?? 0),
+    );
+    for (let i = 0; i < oldSorted.length; i += 1) {
+      remap.set(oldSorted[i].id, newSorted[i].id);
+      claimed.add(newSorted[i].id);
+    }
+  }
+
+  // Anything still unmapped → null (ungrouped bucket).
+  for (const old of droppedOldSeasons) {
+    if (!remap.has(old.id)) remap.set(old.id, null);
+  }
+  return remap;
 }
 
 // Export internals for tests.

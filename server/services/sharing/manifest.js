@@ -21,7 +21,15 @@ import { PATHS, atomicWrite, readJSONFile, ensureDir } from '../../lib/fileUtils
 import { SHARING_SCHEMA_VERSION, getProducedByVersion } from './version.js';
 import { isStr } from '../../lib/storyBible.js';
 
-export const MANIFEST_KIND = Object.freeze(['series', 'universe', 'media']);
+export const MANIFEST_KIND = Object.freeze(['series', 'universe', 'media', 'media-annotations']);
+
+/** Deterministic filename for an instance's annotation manifest in a bucket.
+ *  One file per (bucket, instanceId) — re-exports overwrite in place so peers
+ *  see updates via chokidar `change` events, same pattern as subscriptions. */
+export function annotationManifestFilename(senderInstanceId) {
+  const safeId = String(senderInstanceId || 'unknown').replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 80);
+  return `annotations-${safeId}.json`;
+}
 
 /** @deprecated Use SHARING_SCHEMA_VERSION from ./version.js. Kept exported for back-compat. */
 export const MANIFEST_SCHEMA_VERSION = SHARING_SCHEMA_VERSION;
@@ -187,6 +195,9 @@ export function subscriptionFilename({ recordKind, recordId }) {
 }
 
 export function manifestFilename(manifest) {
+  if (manifest.kind === 'media-annotations') {
+    return annotationManifestFilename(manifest.senderInstanceId);
+  }
   if (manifest.subscription?.recordKind && manifest.subscription?.recordId) {
     return subscriptionFilename(manifest.subscription);
   }
@@ -292,7 +303,7 @@ export async function pruneBucketManifests(bucket, opts = {}) {
   const manifestsDir = join(bucket.path, 'manifests');
   const entries = await readdir(manifestsDir).catch(() => []);
   const candidates = entries
-    .filter((f) => f.endsWith('.json') && !f.startsWith('sub-'))
+    .filter((f) => f.endsWith('.json') && !f.startsWith('sub-') && !f.startsWith('annotations-'))
     .sort();
   // Fast path: if the total candidate count is at or below the cap, no read
   // of any manifest is necessary — owned count cannot exceed total.

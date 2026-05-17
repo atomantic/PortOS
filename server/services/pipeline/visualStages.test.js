@@ -46,7 +46,11 @@ vi.mock('../settings.js', () => ({
   getSettings: vi.fn(async () => ({ imageGen: { local: { pythonPath: '/usr/bin/python3' }, mode: 'local' }, videoGen: {} })),
 }));
 
-vi.mock('../universeBuilder.js', () => ({ getUniverse: vi.fn(async () => null) }));
+vi.mock('../universeBuilder.js', () => ({
+  getUniverse: vi.fn(async () => null),
+  joinInfluenceList: (arr) =>
+    Array.isArray(arr) ? arr.filter((t) => typeof t === 'string' && t.trim()).join(', ') : '',
+}));
 
 const enqueueJobMock = vi.fn(() => ({ jobId: 'job-fake-1234' }));
 vi.mock('../mediaJobQueue/index.js', () => ({ enqueueJob: (...a) => enqueueJobMock(...a) }));
@@ -185,10 +189,57 @@ describe('composeComicPagePrompt', () => {
     expect(prompt).toMatch(/Panel 1: continuation of previous beat\./);
   });
 
-  it('prepends world.stylePrompt when a world is provided', () => {
-    const world = { stylePrompt: 'cinematic ink illustration, dramatic lighting', negativePrompt: '' };
+  it('prepends the world style tokens (influences.embrace) when a world is provided', () => {
+    // The universe's style prompt now lives as a chip-token list on
+    // `influences.embrace`. visualStages joins them verbatim into the
+    // rendered prompt the same way the legacy prose `stylePrompt` did.
+    const world = {
+      influences: {
+        embrace: ['cinematic ink illustration', 'dramatic lighting'],
+        avoid: [],
+      },
+    };
     const prompt = composeComicPagePrompt({ series: SERIES, world, page: PAGE, pageNumber: 1 });
     expect(prompt).toMatch(/cinematic ink illustration/);
+  });
+
+  it('prepends series.stylePromptOverride ahead of the universe embrace tokens', () => {
+    // A per-series override lets one series in a shared universe deviate
+    // visually (e.g. a noir spin-off) without forking the universe. The
+    // override prepends so its tokens land in the heaviest position, with
+    // the universe style trailing — both must appear, override first.
+    const world = {
+      influences: {
+        embrace: ['cinematic ink illustration', 'dramatic lighting'],
+        avoid: [],
+      },
+    };
+    const seriesWithOverride = { ...SERIES, stylePromptOverride: 'moody noir lighting, high contrast monochrome' };
+    const prompt = composeComicPagePrompt({ series: seriesWithOverride, world, page: PAGE, pageNumber: 1 });
+    const overrideAt = prompt.indexOf('moody noir lighting');
+    const universeAt = prompt.indexOf('cinematic ink illustration');
+    expect(overrideAt).toBeGreaterThanOrEqual(0);
+    expect(universeAt).toBeGreaterThanOrEqual(0);
+    expect(overrideAt).toBeLessThan(universeAt);
+  });
+
+  it('falls through to universe-only style when stylePromptOverride is empty', () => {
+    const world = {
+      influences: { embrace: ['cinematic ink illustration'], avoid: [] },
+    };
+    const seriesNoOverride = { ...SERIES, stylePromptOverride: '' };
+    const prompt = composeComicPagePrompt({ series: seriesNoOverride, world, page: PAGE, pageNumber: 1 });
+    expect(prompt).toMatch(/cinematic ink illustration/);
+    expect(prompt).not.toMatch(/moody noir/);
+  });
+
+  it('applies stylePromptOverride even without a universe (no embrace tokens)', () => {
+    // The override is independent of the universe — if the series has an
+    // override but isn't linked to a universe (or the universe has no
+    // embrace tokens), the override still prepends to the prompt.
+    const seriesWithOverride = { ...SERIES, stylePromptOverride: 'experimental rotoscope' };
+    const prompt = composeComicPagePrompt({ series: seriesWithOverride, page: PAGE, pageNumber: 1 });
+    expect(prompt).toMatch(/experimental rotoscope/);
   });
 
   it('appends extraStyle into the Art style clause', () => {
@@ -479,8 +530,15 @@ describe('composeComicCoverPrompt', () => {
     expect(prompt).toMatch(/issue-number tag reading "#1"/);
   });
 
-  it('prepends world.stylePrompt when a world is provided', () => {
-    const world = { stylePrompt: 'cinematic ink illustration, dramatic lighting', negativePrompt: '' };
+  it('prepends the world style tokens (influences.embrace) when a world is provided', () => {
+    // Same migration as the page-prompt test above — covers stop reading
+    // a legacy prose stylePrompt; they now live as embrace chips.
+    const world = {
+      influences: {
+        embrace: ['cinematic ink illustration', 'dramatic lighting'],
+        avoid: [],
+      },
+    };
     const prompt = composeComicCoverPrompt({
       series: SERIES_NAMED,
       world,

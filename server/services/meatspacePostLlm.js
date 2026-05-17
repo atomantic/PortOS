@@ -9,9 +9,8 @@
  * - pun-wordplay: creative wordplay and pun generation
  */
 
-import { spawn } from 'child_process';
 import { getActiveProvider, getProviderById } from './providers.js';
-import { resolveCliModel } from '../lib/providerModels.js';
+import { runPromptThroughProvider } from '../lib/promptRunner.js';
 
 export const LLM_DRILL_TYPES = [
   'word-association',
@@ -46,71 +45,19 @@ async function callAI(prompt, providerId, model) {
   const selectedModel = model || provider.defaultModel;
   console.log(`🧪 POST LLM drill: ${provider.id} / ${selectedModel}`);
 
-  if (provider.type === 'cli') {
-    return new Promise((resolve, reject) => {
-      const args = [...(provider.args || [])];
-      if (provider.headlessArgs?.length) args.push(...provider.headlessArgs);
-      const cliModel = resolveCliModel(selectedModel);
-      if (cliModel) args.push('--model', cliModel);
-      args.push(prompt);
-      let output = '';
-      let settled = false;
+  // Append headlessArgs so claude-code's POST drills don't pollute the
+  // user's session list. The clone leaves the saved provider config
+  // untouched. Default timeout for POST drills is shorter than the
+  // central handler's default (2 min vs 5) since drills should be snappy.
+  const providerForCall = provider.headlessArgs?.length
+    ? { ...provider, args: [...(provider.args || []), ...provider.headlessArgs] }
+    : provider;
 
-      const child = spawn(provider.command, args, {
-        env: (() => { const e = { ...process.env, ...(provider.envVars || {}) }; delete e.CLAUDECODE; return e; })(),
-        shell: false,
-        windowsHide: true
-      });
-
-      const timeoutHandle = setTimeout(() => {
-        if (settled) return;
-        settled = true;
-        child.kill();
-        reject(new Error('POST AI request timed out'));
-      }, provider.timeout || 120000);
-
-      child.stdout.on('data', d => { output += d.toString(); });
-      child.stderr.on('data', d => { output += d.toString(); });
-      child.on('close', code => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timeoutHandle);
-        code === 0 ? resolve(output) : reject(new Error(`CLI exited with code ${code}`));
-      });
-      child.on('error', err => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timeoutHandle);
-        reject(err);
-      });
-    });
-  }
-
-  if (provider.type === 'api') {
-    const headers = { 'Content-Type': 'application/json' };
-    if (provider.apiKey) headers['Authorization'] = `Bearer ${provider.apiKey}`;
-
-    const response = await fetch(`${provider.endpoint}/chat/completions`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        model: selectedModel,
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0.7
-      }),
-      signal: AbortSignal.timeout(provider.timeout || 120000)
-    });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`AI API error: ${response.status} - ${errorText}`);
-    }
-
-    const data = await response.json();
-    return data.choices?.[0]?.message?.content || '';
-  }
-
-  throw new Error(`Unsupported provider type: ${provider.type}`);
+  const { text } = await runPromptThroughProvider({
+    provider: providerForCall, prompt, source: 'meatspace-post-llm', model: selectedModel,
+    timeout: provider.timeout || 120000,
+  });
+  return text;
 }
 
 function parseJsonFromAI(content) {

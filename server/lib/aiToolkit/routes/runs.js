@@ -76,6 +76,36 @@ export function createRunsRoutes(runnerService, options = {}) {
           io?.emit(`run:${runId}:complete`, finalMetadata);
         }
       );
+    } else if (provider.type === 'tui' && typeof runnerService.executeTuiRun === 'function') {
+      // Honor the user-picked model from the Runs UI — `executeTuiRun` reads
+      // `provider.defaultModel` for its `--model` injection, so without the
+      // clone every TUI run would silently fall back to the provider's saved
+      // default even when the user picked something else. Matches the API
+      // branch's `model` parameter being passed through.
+      const effectiveProvider = model
+        ? { ...provider, defaultModel: model }
+        : provider;
+      runnerService.executeTuiRun(
+        runId,
+        effectiveProvider,
+        prompt,
+        workspacePath,
+        (data) => {
+          io?.emit(`run:${runId}:data`, data);
+        },
+        (finalMetadata) => {
+          console.log(`✅ Run complete: ${runId}, success: ${finalMetadata.success}`);
+          io?.emit(`run:${runId}:complete`, finalMetadata);
+        },
+        effectiveTimeout
+      );
+    } else {
+      return res.status(400).json({
+        error: `Unsupported provider type: ${provider.type}`,
+        details: provider.type === 'tui'
+          ? 'TUI executor not attached to runner — check that executeTuiRun is patched in index.js'
+          : `Known types: cli, api, tui (received: ${provider.type})`,
+      });
     }
 
     res.status(202).json({

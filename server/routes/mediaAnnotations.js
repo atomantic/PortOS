@@ -1,7 +1,10 @@
 /**
- *   GET    /api/media/annotations          → { [key]: { starred, note, updatedAt } }
- *   PATCH  /api/media/annotations/:key     → updated entry or null (if pruned)
- *                                            body: { starred?: boolean, note?: string }
+ *   GET    /api/media/annotations
+ *     → { annotations: { [key]: { own: { authorName, starred, note, updatedAt } | null,
+ *                                  others: [{ instanceId, authorName, starred, note, updatedAt }] } } }
+ *   PATCH  /api/media/annotations/:key
+ *     body: { starred?: boolean, note?: string } — writes the local-author entry
+ *     → { key, entry: { own, others } }
  *
  * Key shape: `<kind>:<ref>` where kind ∈ {image, video} and ref has no `:`.
  * Matches the convention enforced by mediaCollections.js and produced by the
@@ -39,8 +42,13 @@ router.patch('/:key', asyncHandler(async (req, res) => {
   const body = validateRequest(patchSchema, req.body ?? {});
   // Express decodes the path param, but the key still has to round-trip through
   // svc validation so a hand-rolled curl can't sneak past.
-  const updated = await svc.setAnnotation(req.params.key, body).catch((err) => { throw mapServiceError(err); });
-  res.json({ key: req.params.key, entry: updated });
+  const entry = await svc.setAnnotation(req.params.key, body).catch((err) => { throw mapServiceError(err); });
+  // Broadcast so every other open view (History, Collections, Pipeline, other
+  // browser tabs) reflects the change without a manual refresh. Payload mirrors
+  // the GET shape: `entry` is `{ own, others }` (with own=null when the local
+  // author cleared their entry but peer notes remain).
+  req.app.get('io')?.emit('media:annotation:updated', { key: req.params.key, entry });
+  res.json({ key: req.params.key, entry });
 }));
 
 export default router;

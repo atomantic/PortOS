@@ -59,28 +59,28 @@ export async function createSeason(seriesId, input = {}) {
 }
 
 export async function updateSeason(seriesId, seasonId, patch = {}) {
-  const series = await seriesSvc.getSeries(seriesId);
-  const seasons = series.seasons || [];
-  const cur = seasons.find((s) => s.id === seasonId);
-  if (!cur) throw makeErr(`Season not found: ${seasonId}`, ERR_NOT_FOUND);
-  // Preserve `createdAt` and force a fresh `updatedAt` by overwriting them
-  // directly in the sanitizer input — the default `preserveTimestamps: true`
-  // path then just reads them through cleanly.
-  const next = sanitizeSeason({
-    ...cur,
-    ...patch,
-    id: cur.id,
-    createdAt: cur.createdAt,
-    updatedAt: new Date().toISOString(),
+  // Routed through the series write queue so the read-modify-write of one
+  // season can't be raced by a concurrent series PATCH or a cover-render
+  // landing. Caller still receives the final season as before.
+  let priorNumber = null;
+  let nextNumber = null;
+  const updated = await seriesSvc.updateSeasonOnSeries(seriesId, seasonId, (cur) => {
+    priorNumber = cur.number;
+    const next = sanitizeSeason({
+      ...cur,
+      ...patch,
+      id: cur.id,
+      createdAt: cur.createdAt,
+      updatedAt: new Date().toISOString(),
+    });
+    if (!next) throw makeErr('Season requires a title or a number > 0', ERR_VALIDATION);
+    nextNumber = next.number;
+    return next;
   });
-  if (!next) throw makeErr('Season requires a title or a number > 0', ERR_VALIDATION);
-  // Re-write the whole seasons array — the series sanitizer re-sorts by
-  // `number` ascending so a number change moves the season automatically.
-  const merged = seasons.map((s) => (s.id === seasonId ? next : s));
-  const updated = await seriesSvc.updateSeries(seriesId, { seasons: merged });
   // Issue numbers derive from volume order — a volume `number` swap
-  // reshuffles every issue's slot in the series.
-  if (cur.number !== next.number) {
+  // reshuffles every issue's slot in the series. Runs OUTSIDE the queue
+  // because it mutates issues.json, not series.json.
+  if (priorNumber !== nextNumber) {
     await issuesSvc.recomputeIssueNumbersForSeries(seriesId);
   }
   return updated.seasons.find((s) => s.id === seasonId);

@@ -34,7 +34,7 @@ export const deleteUniverse = (id) => request(`/universe-builder/${encodeURIComp
 export const expandUniverse = ({
   starterPrompt, influences,
   preservedVariations, preservedCompositeSheets,
-  logline, premise, styleNotes, stylePrompt, negativePrompt,
+  logline, premise, styleNotes,
   locked,
   providerId, model,
 } = {}) => request('/universe-builder/expand', {
@@ -42,7 +42,7 @@ export const expandUniverse = ({
   body: JSON.stringify({
     starterPrompt, influences,
     preservedVariations, preservedCompositeSheets,
-    logline, premise, styleNotes, stylePrompt, negativePrompt,
+    logline, premise, styleNotes,
     locked,
     providerId, model,
   }),
@@ -53,21 +53,21 @@ export const expandUniverse = ({
 export const generateCategoryVariations = ({
   category, count, existingLabels,
   influences,
-  logline, premise, styleNotes, stylePrompt, negativePrompt,
+  logline, premise, styleNotes,
   providerId, model,
 } = {}, options = {}) => request('/universe-builder/generate-variations', {
   method: 'POST',
   body: JSON.stringify({
     category, count, existingLabels,
     influences,
-    logline, premise, styleNotes, stylePrompt, negativePrompt,
+    logline, premise, styleNotes,
     providerId, model,
   }),
   ...options,
 });
 
 export const refineWorldPrompts = ({
-  starterPrompt, stylePrompt, negativePrompt,
+  starterPrompt,
   logline, premise, styleNotes,
   influences,
   // Post-Expand structure — when provided, the server sees the full world and
@@ -79,7 +79,7 @@ export const refineWorldPrompts = ({
 } = {}) => request('/universe-builder/refine-prompts', {
   method: 'POST',
   body: JSON.stringify({
-    starterPrompt, stylePrompt, negativePrompt,
+    starterPrompt,
     logline, premise, styleNotes,
     influences,
     ...(categories && Object.keys(categories).length ? { categories } : {}),
@@ -93,8 +93,6 @@ export const refineWorldPrompts = ({
 // iterates this so a new lockable field only needs adding in two places.
 export const WORLD_LOCKABLE_FIELDS = [
   'starterPrompt',
-  'stylePrompt',
-  'negativePrompt',
   'logline',
   'premise',
   'styleNotes',

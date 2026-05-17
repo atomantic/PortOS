@@ -4,7 +4,7 @@
  * Takes a starter prompt like:
  *   "moebius and scavengers reign meets Prophet inspired sci fi universe"
  * and asks the chosen LLM to return a structured JSON blob:
- *   { stylePrompt, negativePrompt, categories: { ... }, compositeSheets: [{ kind, label, prompt }] }
+ *   { influences: { embrace, avoid }, categories: { ... }, compositeSheets: [{ kind, label, prompt }] }
  *
  * The LLM choice is per-call: caller passes { providerId, model }. If
  * either is missing we fall back to the active provider / its default
@@ -50,13 +50,11 @@ function buildExpansionPrompt({
   influences,
   preservedVariations,
   preservedCompositeSheets,
-  // Prior bible/prompt state — locked entries echo back unchanged; unlocked
-  // entries seed the LLM. Empty/missing fields are skipped.
+  // Prior bible state — locked entries echo back unchanged; unlocked entries
+  // seed the LLM. Empty/missing fields are skipped.
   priorLogline = '',
   priorPremise = '',
   priorStyleNotes = '',
-  priorStylePrompt = '',
-  priorNegativePrompt = '',
   locked = {},
 }) {
   const embrace = Array.isArray(influences?.embrace)
@@ -69,7 +67,7 @@ function buildExpansionPrompt({
   const avoidTag = locked?.influencesAvoid ? ' [LOCKED]' : '';
   const influencesSection =
     embrace.length || avoid.length
-      ? `\n# Influences (canonical reference list — these MUST inform stylePrompt + styleNotes for embraces and negativePrompt for avoids)\nEmbrace${embraceTag}: ${embrace.join(", ") || "(none)"}\nAvoid${avoidTag}: ${avoid.join(", ") || "(none)"}\n`
+      ? `\n# Influences (style prompt embrace + negative prompt avoid — joined verbatim at render time as the universe's positive + negative prompts)\nEmbrace${embraceTag}: ${embrace.join(", ") || "(none)"}\nAvoid${avoidTag}: ${avoid.join(", ") || "(none)"}\n`
       : "";
 
   // Locked entries are flagged and MUST be echoed verbatim; unlocked entries
@@ -79,8 +77,6 @@ function buildExpansionPrompt({
     logline: priorLogline,
     premise: priorPremise,
     styleNotes: priorStyleNotes,
-    stylePrompt: priorStylePrompt,
-    negativePrompt: priorNegativePrompt,
   };
   const stateLines = CURRENT_STATE_FIELDS
     .filter(([key]) => typeof priorValues[key] === 'string' && priorValues[key].trim())
@@ -129,9 +125,7 @@ Return a SINGLE JSON object. NO markdown, NO commentary. The object MUST have th
 - logline:        string. ONE sentence (≤500 chars) capturing the universe's central tension/hook — protagonist-agnostic if no protagonist is implied. Example: "A foundry city goes silent — and the only survivor is a child."
 - premise:        string. 1-3 short paragraphs (≤4000 chars total) describing the setting, the central conflict or situation, the stakes, and the tone. Write it as the elevator pitch a showrunner would hand to a writers' room. No bullet points; prose only.
 - styleNotes:     string. A prose paragraph (≤4000 chars) describing the visual + tonal style for the story bible — references (artists, films, comics, games), mood, palette, pacing, narrative voice. This is read by writers + creative directors, not the image model, so use full sentences instead of comma-separated tokens.
-- influences:     object { "embrace": [string], "avoid": [string] }. Short canonical reference labels (max 120 chars each, max 30 per list) — artists, comics, films, directors, palettes, materials, eras the universe EMBRACES; styles, tropes, palettes the universe AVOIDS. The renderer prepends these to stylePrompt/negativePrompt verbatim, so each entry should read as a clean prompt token (e.g. "Moebius", "cel-shading", "Ghibli painterly", "neon cyberpunk"). When influence input is provided above, preserve those entries unless the starter idea explicitly contradicts them.
-- stylePrompt:    string. A single comma-separated style fragment (lighting, color palette, render quality, artist references) that will be PREFIXED to every variation prompt. Keep under 400 characters. No subject nouns — those go in variations. Echo the embrace influences here so the renderer-side prompt is self-contained even before the structured prepend kicks in.
-- negativePrompt: string. Comma-separated tokens to avoid (e.g. "blurry, lowres, watermark, extra fingers"). Tailor to the universe's aesthetic. Echo the avoid influences here.
+- influences:     object { "embrace": [string], "avoid": [string] }. THIS IS THE UNIVERSE'S STYLE + NEGATIVE PROMPT. Each list is a set of short prompt tokens (max 120 chars each, max 30 per list). The "embrace" list is joined verbatim as the positive style prompt prepended to every render (palette, lighting, render quality, artist references — e.g. "moebius linework", "cel-shading", "dust palette"). The "avoid" list is joined verbatim as the negative prompt (e.g. "blurry", "lowres", "watermark", "extra fingers"). Use short token-style labels, NOT full sentences. When influence input is provided above, preserve those entries unless the starter idea explicitly contradicts them.
 - categories: object. Atomic reusable buckets. Use snake_case keys. Start from these common buckets when useful:
 ${WORLD_CATEGORIES.map((c) => `    - ${c}`).join("\n")}
   Add, remove, or rename buckets to fit the user's actual universe-building task. Do not force every project into the starter buckets.
@@ -154,30 +148,28 @@ Concrete compositeSheets examples:
 - Generate 3-8 compositeSheets when the starter idea involves clothing systems, colonies, factions, cultures, species, vehicles, settlements, props, posters, decks, or other grouped visual-design systems.
 - For broad universe/universe/story settings, always include 1-3 "world_pitch_poster" compositeSheets in addition to any "reference_sheet" boards. These are summary concept pitch posters, not atomic character or environment sheets.
 - "label" is a short name a human can recognize (e.g. "Crystalline canyon basin", "Scavenger walker mech").
-- "prompt" describes the SUBJECT only — the stylePrompt is automatically prepended at render time, so do NOT repeat style tokens in each variation.
+- "prompt" describes the SUBJECT only — the embrace influences are automatically prepended at render time as the style prompt, so do NOT repeat style tokens in each variation.
 - Do not include camera/aspect tokens; the renderer adds those.
-- Ground the universe in the references provided. If the starter mentions specific artists, comics, films, games, or moods, weave them into stylePrompt.
+- Ground the universe in the references provided. If the starter mentions specific artists, comics, films, games, or moods, weave them into the embrace influences.
 - If the user asks for style sheets, reference sheets, clothing guides, materials, colonies, factions, tribes, species, pirate/raider groups, universe summary boards, concept pitch posters, or pitch-deck posters, create specific categories for the atomic facts AND create compositeSheets for the complete boards.
 - For colony clothing systems, include functional details like fasteners, closures, textile/material logic, silhouettes, class/role markers, weather or pressure adaptations, and culturally specific ornamentation.
 - Reference-sheet prompts must include a clear board structure: title/subject, 4-6 figure lineup roles when relevant, materials swatches, fasteners/accessories icons, color palette strip, background hint, and simplicity constraints such as minimal readable layout, fewer tiny objects, clean silhouettes, not baroque, not hyper-detailed.
 - Universe pitch poster prompts must include a clear editorial poster structure: universe title/subtitle/logline area, dominant hero panorama, inset environment/culture/creature images, visual-language strip, color palette, materials/textures, light/atmosphere, themes/icons, and concise labeled blocks for universe, feel, aesthetic, environments, cultures, and tone. Mention that body copy should be short, clean, and readable; avoid dense tiny text.
-- If the universe needs pitch posters, do not put "text" in the negativePrompt. Prefer "watermark, logo, unreadable tiny text, text artifacts" so title/section typography remains possible.
+- If the universe needs pitch posters, do not put "text" in the avoid influences. Prefer "watermark", "logo", "unreadable tiny text", "text artifacts" so title/section typography remains possible.
 - When "Current universe state" is provided above: treat it as the established universe. Fields marked [LOCKED] MUST be echoed in your output exactly as given — do not reword, expand, or trim them. Unlocked current-state fields are starting points; you may refine them, but stay consistent with locked fields, the starter idea, and influences.
 - Output JUST the JSON object. No prose before or after.`;
 }
 
 // Prefer a block that *looks like* a universe-expansion response (has any of
-// stylePrompt / negativePrompt / categories / compositeSheets at the top
-// level). The expansion prompt includes literal JSON examples like
+// the top-level keys we expect). The expansion prompt includes literal JSON
+// examples like
 //   { "label": "Crystalline canyon basin", "prompt": "…" }
 // which parse cleanly but aren't the response. Without the shape preference
 // we'd return that first valid-but-wrong object and end up with 0 variations.
 const isExpansionShape = (o) =>
   o &&
   typeof o === "object" &&
-  (typeof o.stylePrompt === "string" ||
-    typeof o.negativePrompt === "string" ||
-    typeof o.logline === "string" ||
+  (typeof o.logline === "string" ||
     typeof o.premise === "string" ||
     typeof o.styleNotes === "string" ||
     (o.influences && typeof o.influences === "object") ||
@@ -268,7 +260,7 @@ const normalizeCompositeSheets = (raw) =>
 
 /**
  * Expand a starter prompt into a structured universe template draft.
- * Returns { stylePrompt, negativePrompt, categories, compositeSheets, llm: { provider, model } }.
+ * Returns { logline, premise, styleNotes, influences, categories, compositeSheets, llm: { provider, model } }.
  *
  * @param {object} options
  * @param {string} options.starterPrompt
@@ -280,14 +272,12 @@ export async function expandWorldTemplate({
   influences,
   preservedVariations = {},
   preservedCompositeSheets = [],
-  // Prior bible/prompt state — locked entries echo back unchanged, unlocked
-  // entries seed the LLM. Renamed to `prior*` so the parsed-LLM-output locals
-  // below can keep their canonical names.
+  // Prior bible state — locked entries echo back unchanged, unlocked entries
+  // seed the LLM. Renamed to `prior*` so the parsed-LLM-output locals below
+  // can keep their canonical names.
   logline: priorLogline = '',
   premise: priorPremise = '',
   styleNotes: priorStyleNotes = '',
-  stylePrompt: priorStylePrompt = '',
-  negativePrompt: priorNegativePrompt = '',
   locked = {},
   providerId,
   model,
@@ -320,8 +310,6 @@ export async function expandWorldTemplate({
     priorLogline,
     priorPremise,
     priorStyleNotes,
-    priorStylePrompt,
-    priorNegativePrompt,
     locked,
   });
   const totalIn = safeInfluences.embrace.length + safeInfluences.avoid.length;
@@ -362,8 +350,6 @@ export async function expandWorldTemplate({
   // clobber existing draft state on every response that misses a field.
   const trimField = (value, max) =>
     typeof value === "string" ? value.trim().slice(0, max) : null;
-  const stylePrompt = trimField(parsed.stylePrompt, PROMPT_FRAGMENT_MAX);
-  const negativePrompt = trimField(parsed.negativePrompt, PROMPT_FRAGMENT_MAX);
   const logline = trimField(parsed.logline, LOGLINE_MAX);
   const premise = trimField(parsed.premise, PREMISE_MAX);
   const styleNotes = trimField(parsed.styleNotes, STYLE_NOTES_MAX);
@@ -404,8 +390,6 @@ export async function expandWorldTemplate({
     logline,
     premise,
     styleNotes,
-    stylePrompt,
-    negativePrompt,
     influences: influencesOut,
     categories,
     compositeSheets,
@@ -421,21 +405,17 @@ function buildCategoryGeneratePrompt({
   logline,
   premise,
   styleNotes,
-  stylePrompt,
-  negativePrompt,
 }) {
   const embrace = Array.isArray(influences?.embrace) ? influences.embrace.filter(Boolean) : [];
   const avoid = Array.isArray(influences?.avoid) ? influences.avoid.filter(Boolean) : [];
   const influencesSection = embrace.length || avoid.length
-    ? `\n# Influences\nEmbrace: ${embrace.join(", ") || "(none)"}\nAvoid: ${avoid.join(", ") || "(none)"}\n`
+    ? `\n# Influences (embrace = style prompt, avoid = negative prompt)\nEmbrace: ${embrace.join(", ") || "(none)"}\nAvoid: ${avoid.join(", ") || "(none)"}\n`
     : "";
 
   const stateLines = [
     logline && `LOGLINE: ${logline}`,
     premise && `PREMISE: ${premise}`,
     styleNotes && `STYLE NOTES: ${styleNotes}`,
-    stylePrompt && `STYLE PROMPT: ${stylePrompt}`,
-    negativePrompt && `NEGATIVE PROMPT: ${negativePrompt}`,
   ].filter(Boolean);
   const stateSection = stateLines.length
     ? `\n# Universe context — keep new variations consistent with this established setting\n${stateLines.join('\n\n')}\n`
@@ -455,7 +435,7 @@ Return a SINGLE JSON object with one key: "variations" — an array of EXACTLY $
 - Generate ${count} variations — no more, no less.
 - Each variation must be visually distinct from the others AND from the existing labels listed above.
 - "label" is a short human-recognizable name (e.g. "Crystalline canyon basin", "Scavenger walker mech").
-- "prompt" describes the SUBJECT only — the universe's stylePrompt is automatically prepended at render time, so do NOT repeat style tokens.
+- "prompt" describes the SUBJECT only — the universe's embrace influences are automatically prepended at render time as the style prompt, so do NOT repeat style tokens.
 - Do not include camera/aspect tokens; the renderer adds those.
 - Stay consistent with the universe context and influences. Lean into the embrace list; avoid the avoid list.
 - Output JUST the JSON object. NO markdown, NO commentary.`;
@@ -498,8 +478,6 @@ export async function generateCategoryVariations({
   logline = '',
   premise = '',
   styleNotes = '',
-  stylePrompt = '',
-  negativePrompt = '',
   providerId,
   model,
 } = {}) {
@@ -523,8 +501,6 @@ export async function generateCategoryVariations({
     logline,
     premise,
     styleNotes,
-    stylePrompt,
-    negativePrompt,
   });
 
   console.log(

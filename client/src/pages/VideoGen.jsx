@@ -1329,7 +1329,7 @@ export default function VideoGen() {
                     onDelete={() => handleDeleteHistory(v)}
                     onToggleHidden={() => handleToggleHistoryHidden(v)}
                     starred={!!annotations[item.key]?.starred}
-                    hasNote={!!annotations[item.key]?.note}
+                    hasNote={!!annotations[item.key]?.anyNote}
                     onToggleStar={toggleStar}
                   />
                 );
@@ -1362,7 +1362,7 @@ export default function VideoGen() {
                     onDelete={() => handleDeleteHistory(v)}
                     onToggleHidden={() => handleToggleHistoryHidden(v)}
                     starred={!!annotations[item.key]?.starred}
-                    hasNote={!!annotations[item.key]?.note}
+                    hasNote={!!annotations[item.key]?.anyNote}
                     onToggleStar={toggleStar}
                   />
                 );

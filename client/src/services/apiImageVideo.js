@@ -24,6 +24,15 @@ export const cleanGalleryImage = (filename, level = 'light') => request(`/image-
   body: JSON.stringify({ level }),
 });
 
+// HuggingFace token (gated local Flux models). Stored in settings.imageGen.hfToken;
+// reads fall back to HF_TOKEN env var and then ~/.cache/huggingface/token.
+export const getHfTokenStatus = () => request('/image-gen/setup/hf-token-status', { silent: true });
+export const saveHfToken = (token) => request('/image-gen/setup/hf-token', {
+  method: 'POST',
+  body: JSON.stringify({ token }),
+});
+export const clearHfToken = () => request('/image-gen/setup/hf-token', { method: 'DELETE' });
+
 // Video gen
 export const getVideoGenStatus = () => request('/video-gen/status');
 export const listVideoModels = () => request('/video-gen/models');

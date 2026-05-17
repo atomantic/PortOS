@@ -12,7 +12,8 @@ import { readFile, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { PATHS, ensureDir } from '../lib/fileUtils.js';
 import { randomUUID } from 'crypto';
-import { createRun, executeCliRun } from './runner.js';
+import { createRun } from './runner.js';
+import { runPromptThroughProvider } from '../lib/promptRunner.js';
 import { getProviderById, getAllProviders, getActiveProvider } from './providers.js';
 
 export const loopEvents = new EventEmitter();
@@ -95,7 +96,10 @@ async function executeIteration(loop) {
       lineCount: outputLines.length,
       duration: metadata.duration,
       provider: provider.name,
-      model: provider.defaultModel,
+      // The model the central handler actually ran (set by the .then below
+      // when the run resolved), with provider.defaultModel as the fallback
+      // for the failure path where executedModel is still null.
+      model: metadata.model || provider.defaultModel,
       timestamp: Date.now()
     };
 
@@ -128,6 +132,9 @@ async function executeIteration(loop) {
     console.log(`🔄 Loop ${id} iteration ${iterationNum} complete (${provider.name}, exit ${metadata.exitCode}, ${outputLines.length} lines)`);
   };
 
+  // Pre-create the run so `active.runId` can be set before generation
+  // starts (cancellation needs the id). The central handler reuses our
+  // runId when provided rather than creating a second one.
   const runResult = await createRun({
     providerId: provider.id,
     prompt: loop.prompt,
@@ -146,19 +153,50 @@ async function executeIteration(loop) {
 
   active.runId = runResult.metadata.id;
 
-  executeCliRun(
-    runResult.metadata.id,
-    runResult.provider,
-    loop.prompt,
-    loop.cwd || PATHS.root,
-    onData,
-    onComplete,
-    loop.timeout || DEFAULT_TIMEOUT_MS
-  ).catch(err => {
-    active.running = false;
-    active.runId = null;
+  // The toolkit's createRun may switch to a fallback provider when the
+  // requested one is marked unavailable (providerStatusService). Reassign
+  // `provider` to the effective one so dispatch, onComplete's
+  // history/persistence side, and the `iteration:complete` event all see
+  // the provider that actually ran. Without this, fallback would only
+  // update the run record while the spawn still hit the dead provider.
+  if (runResult.provider && runResult.provider.id !== provider.id) {
+    provider = runResult.provider;
+  }
+
+  // Adapt the central handler's resolve/reject to the legacy onComplete
+  // metadata shape. We can't get the runner's full metadata back from
+  // runPromptThroughProvider today — it only resolves `{ text, runId,
+  // model }`. Reconstruct the bits onComplete inspects (exitCode + success
+  // + duration) from the promise resolution; pass through `model` so
+  // iterResult records what actually ran (not just the saved default).
+  const startedAt = Date.now();
+  runPromptThroughProvider({
+    provider, prompt: loop.prompt, source: 'loop', runId: runResult.metadata.id,
+    onData, timeout: loop.timeout || DEFAULT_TIMEOUT_MS,
+    // loop.cwd is a user-facing setting on each loop record — without this
+    // pass-through, every loop runs against PortOS's own cwd instead of
+    // the directory the user picked.
+    cwd: loop.cwd || PATHS.root,
+  }).then(({ model: executedModel }) => {
+    onComplete({ exitCode: 0, success: true, duration: Date.now() - startedAt, model: executedModel });
+  }).catch(err => {
+    // Pre-migration `executeCliRun` always invoked `onComplete` — even on
+    // non-zero exit — so loop history / persistence / `iteration:complete`
+    // observers saw failed runs too. The .then/.catch split here would
+    // skip onComplete on failure and only emit `iteration:error`, breaking
+    // anything that subscribed to completes (history.push, lastExitCode
+    // persistence). Fire onComplete with a failure shape before the error
+    // event so the history + persistence side stays consistent.
+    const failureMetadata = {
+      exitCode: 1,
+      success: false,
+      duration: Date.now() - startedAt,
+      error: err.message,
+      model: provider.defaultModel,
+    };
+    onComplete(failureMetadata).catch(() => { /* history write is best-effort */ });
     loopEvents.emit('iteration:error', { id, iteration: iterationNum, error: err.message, timestamp: Date.now() });
-    console.error(`❌ Loop ${id} executeCliRun failed: ${err.message}`);
+    console.error(`❌ Loop ${id} run failed: ${err.message}`);
   });
 }
 

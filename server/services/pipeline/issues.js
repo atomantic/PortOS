@@ -29,6 +29,7 @@ import { sanitizeOrigin } from '../../lib/sharingOrigin.js';
 import { sanitizeVisualStyleRef } from '../../lib/visualStyles.js';
 import { ARC_ROLES } from '../../lib/storyArc.js';
 import { isStr, trimTo } from '../../lib/storyBible.js';
+import { sanitizeCoverLike } from '../../lib/renderSlot.js';
 import { emitRecordUpdated } from '../sharing/recordEvents.js';
 import { applyVolumeOrderedNumbers, UNSCOPED_ANCHOR } from '../../lib/pipelineIssueOrder.js';
 import * as seriesSvc from './series.js';
@@ -158,61 +159,11 @@ const sanitizeGenConfig = (raw) => {
   return { imageMode, imageModelId, refineProvider, refineModel };
 };
 
-const COVER_SCRIPT_MAX = 8000;
-const COVER_PROMPT_MAX = 16_000;
-const RENDER_FILENAME_MAX = 500;
-
-// Proof vs final render slot — each cover/page can have one of each. Stored
-// as a structured record so the UI/PDF can pick the right resolution without
-// re-rendering, and so the i2i "use proof as base" path has a stable
-// filename to read for the final render's init image.
-//
-// `final` slots additionally carry `fromProof: boolean` so the UI can show
-// "(upscaled from proof)" provenance.
-const sanitizeRenderSlot = (raw, { isFinal = false } = {}) => {
-  if (!raw || typeof raw !== 'object') return null;
-  const jobId = isStr(raw.jobId) && raw.jobId ? raw.jobId : null;
-  const filename = isStr(raw.filename) && raw.filename
-    ? raw.filename.slice(0, RENDER_FILENAME_MAX)
-    : null;
-  const prompt = trimTo(raw.prompt, COVER_PROMPT_MAX) || null;
-  const width = Number.isFinite(raw.width) ? Math.max(0, Math.floor(raw.width)) : null;
-  const height = Number.isFinite(raw.height) ? Math.max(0, Math.floor(raw.height)) : null;
-  const createdAt = isStr(raw.createdAt) ? raw.createdAt : null;
-  // Empty slot — drop it so the persisted JSON stays clean.
-  if (!jobId && !filename) return null;
-  const out = { jobId, filename, prompt, width, height, createdAt };
-  if (isFinal) out.fromProof = raw.fromProof === true;
-  return out;
-};
-
-const sanitizeCover = (raw) => {
-  if (!raw || typeof raw !== 'object') return null;
-  const script = trimTo(raw.script, COVER_SCRIPT_MAX);
-  // Legacy fields — pre-proof/final split. Preserved so existing data still
-  // displays via the UI/PDF read-fallback chain (final → proof → legacy).
-  // New renders write to proofImage/finalImage; the filename hook migrates
-  // any in-flight legacy job's completion into the new slots on landing.
-  const imageJobId = isStr(raw.imageJobId) && raw.imageJobId ? raw.imageJobId : null;
-  const prompt = trimTo(raw.prompt, COVER_PROMPT_MAX);
-  const filename = isStr(raw.filename) && raw.filename ? raw.filename : null;
-  const proofImage = sanitizeRenderSlot(raw.proofImage);
-  const finalImage = sanitizeRenderSlot(raw.finalImage, { isFinal: true });
-  if (!script && !imageJobId && !prompt && !filename && !proofImage && !finalImage) return null;
-  return {
-    script,
-    imageJobId,
-    prompt: prompt || null,
-    filename,
-    proofImage,
-    finalImage,
-  };
-};
-
 // Page records (pages[]) are pass-through in sanitizeVisualStage's array
 // slice, so the new proofImage/finalImage fields survive there without an
 // explicit sanitizer. If pages ever gets a deep sanitizer, route slot
-// records through sanitizeRenderSlot the same way the cover does.
+// records through sanitizeRenderSlot (lib/renderSlot.js) the same way
+// the cover does.
 
 const sanitizeVisualStage = (raw, stageId = null) => {
   // Visual stages keep arbitrary structured artifact lists. Sanitize the
@@ -229,14 +180,16 @@ const sanitizeVisualStage = (raw, stageId = null) => {
     // genConfig is read by comicPages/storyboards; pass-through is a no-op on
     // episodeVideo, which never looks at it.
     genConfig: sanitizeGenConfig(raw?.genConfig),
-    // `cover` is meaningful only on comicPages — it carries the front-cover
-    // concept + render job. Dropping it on storyboards / episodeVideo makes
-    // the contract explicit (matches the comment in pipeline.js's visual
-    // stage schema). When stageId is omitted (legacy callers / stage-shape
-    // sanitize at issue load time without per-stage context), keep the
-    // field — `sanitizeStages` below threads the stageId through so the
-    // canonical persistence path enforces the rule.
-    cover: stageId === null || stageId === 'comicPages' ? sanitizeCover(raw?.cover) : null,
+    // `cover` and `backCover` are meaningful only on comicPages — they carry
+    // the front/back-cover concept + render jobs. Dropping them on
+    // storyboards / episodeVideo makes the contract explicit (matches the
+    // comment in pipeline.js's visual stage schema). When stageId is
+    // omitted (legacy callers / stage-shape sanitize at issue load time
+    // without per-stage context), keep the field — `sanitizeStages` below
+    // threads the stageId through so the canonical persistence path
+    // enforces the rule.
+    cover: stageId === null || stageId === 'comicPages' ? sanitizeCoverLike(raw?.cover) : null,
+    backCover: stageId === null || stageId === 'comicPages' ? sanitizeCoverLike(raw?.backCover) : null,
     // Per-stage override so a series can mix aesthetics
     // (e.g. graphic-novel panels + cinematic storyboards).
     visualStyleOverride: sanitizeVisualStyleRef(raw?.visualStyleOverride),

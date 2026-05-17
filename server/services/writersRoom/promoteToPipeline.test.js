@@ -22,6 +22,7 @@ const { createSetting } = await import('./settings.js');
 const { createObject } = await import('./objects.js');
 const seriesSvc = await import('../pipeline/series.js');
 const issuesSvc = await import('../pipeline/issues.js');
+const universeSvc = await import('../universeBuilder.js');
 
 beforeEach(() => {
   tempRoot = mkdtempSync(join(tmpdir(), 'wr-promote-test-'));
@@ -80,7 +81,7 @@ describe('promoteWorkToPipeline', () => {
     expect(reloadedSeries.writersRoomWorkId).toBe(work.id);
   });
 
-  it('carries over characters / settings / objects bibles into the series', async () => {
+  it('carries over characters / settings / objects bibles into the linked universe (Phase B.4)', async () => {
     const work = await seedWorkWithProse();
     await createCharacter(work.id, { name: 'Aria', physicalDescription: 'tall, freckles' });
     await createSetting(work.id, { name: 'The Foundry', slugline: 'INT. FOUNDRY — NIGHT', description: 'molten light' });
@@ -88,13 +89,19 @@ describe('promoteWorkToPipeline', () => {
 
     const { series } = await promoteWorkToPipeline(work.id);
 
-    expect(series.characters).toHaveLength(1);
-    expect(series.characters[0].name).toBe('Aria');
-    expect(series.characters[0].physicalDescription).toBe('tall, freckles');
-    expect(series.settings).toHaveLength(1);
-    expect(series.settings[0].slugline).toBe('INT. FOUNDRY — NIGHT');
-    expect(series.objects).toHaveLength(1);
-    expect(series.objects[0].name).toBe('The Locket');
+    // Phase B.4: canon lives on the universe, not the series. promote
+    // mints a fresh universe for the work and links the series via
+    // universeId; the series itself no longer carries the canon arrays.
+    expect(series.universeId).toBeTruthy();
+    const universe = await universeSvc.getUniverse(series.universeId);
+    expect(universe.name).toBe('Test Work');
+    expect(universe.characters).toHaveLength(1);
+    expect(universe.characters[0].name).toBe('Aria');
+    expect(universe.characters[0].physicalDescription).toBe('tall, freckles');
+    expect(universe.settings).toHaveLength(1);
+    expect(universe.settings[0].slugline).toBe('INT. FOUNDRY — NIGHT');
+    expect(universe.objects).toHaveLength(1);
+    expect(universe.objects[0].name).toBe('The Locket');
   });
 
   it('is idempotent: a second promote returns the same series/issue with reused=true', async () => {

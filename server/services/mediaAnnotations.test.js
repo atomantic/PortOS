@@ -9,9 +9,20 @@ vi.mock('../lib/fileUtils.js', () => ({
   readJSONFile: vi.fn(async (path, fallback) => fileStore.has(path) ? fileStore.get(path) : fallback),
 }));
 
+// Stable identity for tests — bypass the disk-backed instances service.
+const LOCAL_INSTANCE = 'local-instance-id';
+vi.mock('./instances.js', () => ({
+  getInstanceId: vi.fn(async () => LOCAL_INSTANCE),
+}));
+vi.mock('./sharing/annotationIdentity.js', () => ({
+  resolveLocalAuthorName: vi.fn(async () => 'Local User'),
+}));
+
 const svc = await import('./mediaAnnotations.js');
 
-describe('mediaAnnotations service', () => {
+const STATE_PATH = '/mock/data/media-annotations.json';
+
+describe('mediaAnnotations service (multi-author)', () => {
   beforeEach(() => {
     fileStore.clear();
   });
@@ -20,34 +31,124 @@ describe('mediaAnnotations service', () => {
     expect(await svc.listAnnotations()).toEqual({});
   });
 
-  it('setAnnotation persists a starred entry', async () => {
+  it('setAnnotation writes local author entry and returns { own, others }', async () => {
     const r = await svc.setAnnotation('image:foo.png', { starred: true });
-    expect(r.starred).toBe(true);
-    expect(r.note).toBe('');
-    expect(typeof r.updatedAt).toBe('string');
+    expect(r.own).toMatchObject({ starred: true, note: '', authorName: 'Local User' });
+    expect(r.others).toEqual([]);
     const all = await svc.listAnnotations();
-    expect(all['image:foo.png'].starred).toBe(true);
+    expect(all['image:foo.png'].own.starred).toBe(true);
   });
 
-  it('setAnnotation persists a note-only entry', async () => {
-    const r = await svc.setAnnotation('video:abc-1', { note: 'reshoot at 24fps' });
-    expect(r.starred).toBe(false);
-    expect(r.note).toBe('reshoot at 24fps');
-  });
-
-  it('setAnnotation partial-merges (note keeps prior starred)', async () => {
+  it('setAnnotation partial-merges within the local author entry', async () => {
     await svc.setAnnotation('image:a.png', { starred: true });
     const r = await svc.setAnnotation('image:a.png', { note: 'looks great' });
-    expect(r.starred).toBe(true);
-    expect(r.note).toBe('looks great');
+    expect(r.own.starred).toBe(true);
+    expect(r.own.note).toBe('looks great');
   });
 
-  it('setAnnotation prunes when both fields become empty', async () => {
+  it('setAnnotation prunes the local author entry when both fields empty', async () => {
     await svc.setAnnotation('image:a.png', { starred: true, note: 'hi' });
     const r = await svc.setAnnotation('image:a.png', { starred: false, note: '' });
-    expect(r).toBeNull();
+    expect(r.own).toBeNull();
+    expect(r.others).toEqual([]);
     const all = await svc.listAnnotations();
     expect(all['image:a.png']).toBeUndefined();
+  });
+
+  it('setAnnotation preserves peer authors when local entry is pruned', async () => {
+    fileStore.set(STATE_PATH, {
+      annotations: {
+        'image:a.png': {
+          authors: {
+            'peer-1': { authorName: 'Peer', starred: true, note: 'keep me', updatedAt: '2026-01-01T00:00:00.000Z' },
+            [LOCAL_INSTANCE]: { authorName: 'Local User', starred: true, note: '', updatedAt: '2026-01-02T00:00:00.000Z' },
+          },
+        },
+      },
+    });
+    const r = await svc.setAnnotation('image:a.png', { starred: false });
+    expect(r.own).toBeNull();
+    expect(r.others).toHaveLength(1);
+    expect(r.others[0]).toMatchObject({ instanceId: 'peer-1', note: 'keep me' });
+  });
+
+  it('mergePeerAnnotations applies a peer record without touching local', async () => {
+    await svc.setAnnotation('image:a.png', { note: 'my note' });
+    const result = await svc.mergePeerAnnotations({
+      instanceId: 'peer-1',
+      authorName: 'Sam',
+      annotations: {
+        'image:a.png': { starred: true, note: 'peer note', updatedAt: '2099-01-01T00:00:00.000Z' },
+      },
+    });
+    expect(result.changed).toEqual(['image:a.png']);
+    const all = await svc.listAnnotations();
+    expect(all['image:a.png'].own.note).toBe('my note');
+    expect(all['image:a.png'].others[0]).toMatchObject({ authorName: 'Sam', starred: true, note: 'peer note' });
+  });
+
+  it('mergePeerAnnotations is per-author LWW (older payload ignored)', async () => {
+    fileStore.set(STATE_PATH, {
+      annotations: {
+        'image:a.png': {
+          authors: {
+            'peer-1': { authorName: 'Sam', starred: true, note: 'newer', updatedAt: '2026-02-01T00:00:00.000Z' },
+          },
+        },
+      },
+    });
+    await svc.mergePeerAnnotations({
+      instanceId: 'peer-1',
+      authorName: 'Sam',
+      annotations: {
+        'image:a.png': { starred: false, note: 'older', updatedAt: '2026-01-01T00:00:00.000Z' },
+      },
+    });
+    const all = await svc.listAnnotations();
+    expect(all['image:a.png'].others[0].note).toBe('newer');
+  });
+
+  it('mergePeerAnnotations refuses to write under local instanceId', async () => {
+    const result = await svc.mergePeerAnnotations({
+      instanceId: LOCAL_INSTANCE,
+      authorName: 'Spoofed',
+      annotations: {
+        'image:a.png': { starred: true, note: 'spoofed', updatedAt: '2099-01-01T00:00:00.000Z' },
+      },
+    });
+    expect(result.changed).toEqual([]);
+  });
+
+  it('legacy single-author entries are lifted into the local author bucket on read', async () => {
+    fileStore.set(STATE_PATH, {
+      annotations: {
+        'image:legacy.png': { starred: true, note: 'old note', updatedAt: '2025-01-01T00:00:00.000Z' },
+      },
+    });
+    const all = await svc.listAnnotations();
+    expect(all['image:legacy.png'].own).toMatchObject({ starred: true, note: 'old note' });
+    expect(all['image:legacy.png'].others).toEqual([]);
+  });
+
+  it('listLocalAuthorAnnotations returns only the local-instance entries', async () => {
+    fileStore.set(STATE_PATH, {
+      annotations: {
+        'image:mine.png': {
+          authors: {
+            [LOCAL_INSTANCE]: { authorName: 'Local User', starred: true, note: '', updatedAt: '2026-01-01T00:00:00.000Z' },
+            'peer-1': { authorName: 'Sam', starred: false, note: 'peer', updatedAt: '2026-01-02T00:00:00.000Z' },
+          },
+        },
+        'image:peers-only.png': {
+          authors: {
+            'peer-1': { authorName: 'Sam', starred: true, note: '', updatedAt: '2026-01-03T00:00:00.000Z' },
+          },
+        },
+      },
+    });
+    const mine = await svc.listLocalAuthorAnnotations();
+    expect(Object.keys(mine)).toEqual(['image:mine.png']);
+    expect(mine['image:mine.png'].starred).toBe(true);
   });
 
   it('setAnnotation rejects invalid key (no colon)', async () => {
@@ -82,12 +183,22 @@ describe('mediaAnnotations service', () => {
   });
 
   it('listAnnotations filters out invalid keys and entries from disk', async () => {
-    fileStore.set('/mock/data/media-annotations.json', {
+    fileStore.set(STATE_PATH, {
       annotations: {
-        'image:good.png': { starred: true, note: '', updatedAt: '2026-01-01T00:00:00.000Z' },
-        'badkey': { starred: true },
-        'audio:foo.mp3': { starred: true },
-        'image:empty.png': { starred: false, note: '' },
+        'image:good.png': {
+          authors: {
+            [LOCAL_INSTANCE]: { authorName: 'Local User', starred: true, note: '', updatedAt: '2026-01-01T00:00:00.000Z' },
+          },
+        },
+        'badkey': {
+          authors: { [LOCAL_INSTANCE]: { starred: true } },
+        },
+        'audio:foo.mp3': {
+          authors: { [LOCAL_INSTANCE]: { starred: true } },
+        },
+        'image:empty.png': {
+          authors: { [LOCAL_INSTANCE]: { starred: false, note: '' } },
+        },
       },
     });
     const all = await svc.listAnnotations();

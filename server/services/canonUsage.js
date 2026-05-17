@@ -91,12 +91,14 @@ export async function getUniverseCanonUsage(universeId) {
   const shape = (perKind) => {
     const out = {};
     for (const [entryId, perSeries] of perKind.entries()) {
-      out[entryId] = [...perSeries.entries()].map(([seriesId, { seriesName, issueIds }]) => ({
-        seriesId,
-        seriesName,
-        issueIds: [...issueIds],
-        issueCount: issueIds.size,
-      }));
+      out[entryId] = [...perSeries.entries()]
+        .map(([seriesId, { seriesName, issueIds }]) => ({
+          seriesId,
+          seriesName,
+          issueIds: [...issueIds],
+          issueCount: issueIds.size,
+        }))
+        .sort((a, b) => b.issueCount - a.issueCount || (a.seriesName || '').localeCompare(b.seriesName || ''));
     }
     return out;
   };

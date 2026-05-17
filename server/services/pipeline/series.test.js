@@ -27,7 +27,11 @@ describe('pipeline series service', () => {
     expect(await svc.listSeries()).toEqual([]);
   });
 
-  it('createSeries assigns ser- prefixed id and persists the bible fields', async () => {
+  it('createSeries assigns ser- prefixed id and persists the basic fields', async () => {
+    // Phase B.4: canon (characters/settings/objects) no longer lives on the
+    // series — it lives on the linked universe. This test exercises only
+    // the series-owned fields; canon round-tripping is covered by
+    // universeBuilder.test.js + promoteToPipeline.test.js.
     const s = await svc.createSeries({
       name: 'Salt Run',
       logline: 'A foundry city goes silent.',
@@ -36,10 +40,6 @@ describe('pipeline series service', () => {
       styleNotes: 'moebius linework, washed sepia',
       targetFormat: 'comic+tv',
       issueCountTarget: 6,
-      characters: [
-        { name: 'Lina', description: 'A young foundry surveyor.' },
-        { name: '', description: 'Skipped — no name' },
-      ],
     });
     expect(s.id).toMatch(/^ser-/);
     expect(s.name).toBe('Salt Run');
@@ -47,10 +47,9 @@ describe('pipeline series service', () => {
     expect(s.universeId).toBe('world-123');
     expect(s.targetFormat).toBe('comic+tv');
     expect(s.issueCountTarget).toBe(6);
-    // Empty-name character dropped; Lina gets a chr- id.
-    expect(s.characters).toHaveLength(1);
-    expect(s.characters[0].name).toBe('Lina');
-    expect(s.characters[0].id).toMatch(/^chr-/);
+    expect(s.characters).toBeUndefined();
+    expect(s.settings).toBeUndefined();
+    expect(s.objects).toBeUndefined();
   });
 
   it('createSeries requires a non-empty name', async () => {
@@ -93,10 +92,20 @@ describe('pipeline series service', () => {
     expect(s.targetFormat).toBe('comic+tv');
   });
 
-  it('caps characters at CHARACTERS_PER_SERIES_MAX', async () => {
-    const many = Array.from({ length: svc.CHARACTERS_PER_SERIES_MAX + 10 }, (_, i) => ({ name: `c${i}` }));
-    const s = await svc.createSeries({ name: 'X', characters: many });
-    expect(s.characters).toHaveLength(svc.CHARACTERS_PER_SERIES_MAX);
+  it('silently drops legacy canon fields on create (Phase B.4: canon moved to universe)', async () => {
+    // A stale client that still sends `characters: [...]` on series create
+    // gets a 200 — the field is dropped server-side instead of 400'ing —
+    // so old browser tabs don't fail on a save. The actual canon round-
+    // trips through the linked universe now.
+    const s = await svc.createSeries({
+      name: 'X',
+      characters: [{ name: 'ignored' }],
+      settings: [{ name: 'ignored' }],
+      objects: [{ name: 'ignored' }],
+    });
+    expect(s.characters).toBeUndefined();
+    expect(s.settings).toBeUndefined();
+    expect(s.objects).toBeUndefined();
   });
 
   describe('insertSeriesWithId', () => {

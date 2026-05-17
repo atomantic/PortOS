@@ -28,16 +28,12 @@ import { getInstanceId } from '../instances.js';
 import { getSettings } from '../settings.js';
 import { getProducedByVersion } from './version.js';
 import { isStr } from '../../lib/storyBible.js';
-import * as os from 'os';
+import { resolveGlobalDisplayName } from './annotationIdentity.js';
 
-/** Resolve the bucket-effective display name (per-bucket override → instance setting → OS user). */
+/** Resolve the bucket-effective display name (per-bucket override → global identity). */
 async function resolveSourceName(bucket) {
   if (bucket.displayNameOverride) return bucket.displayNameOverride;
-  const settings = await getSettings().catch(() => ({}));
-  if (isStr(settings?.sharingDisplayName) && settings.sharingDisplayName.trim()) {
-    return settings.sharingDisplayName.trim();
-  }
-  return os.userInfo().username || 'unknown';
+  return resolveGlobalDisplayName();
 }
 
 /**
@@ -91,16 +87,61 @@ async function copyAssetIfPresent(filename, kind, bucketPath) {
 }
 
 /**
+ * Build a synthetic job record from a `.metadata.json` sidecar when the
+ * in-memory queue/archive no longer holds the job (>24h TTL). The sidecar
+ * lives alongside the image file so its lifetime is tied to the asset.
+ *
+ * Guards against path traversal: rejects any jobId that contains a path
+ * separator, parent-directory token, or otherwise normalizes to something
+ * other than its bare basename. A corrupted or hostile imageJobId
+ * (`../../etc/passwd`, `..\foo`, absolute paths) could otherwise read
+ * arbitrary JSON outside `PATHS.images`. Same posture as `copyAssetIfPresent`.
+ */
+async function jobFromSidecar(jobId) {
+  if (typeof jobId !== 'string' || !jobId) return null;
+  if (basename(jobId) !== jobId) return null;
+  if (jobId.includes('/') || jobId.includes('\\') || jobId.includes('..')) return null;
+  const sc = await readJSONFile(join(PATHS.images, `${jobId}.metadata.json`));
+  if (!sc) return null;
+  // Sidecar schema differs between paths:
+  //   codex.js writes { mode: 'codex', model }
+  //   local.js writes { modelId } and omits `mode` (it's locally-rendered)
+  // Map both to a unified { mode, model } so re-render fidelity is preserved
+  // for local renders too (without this, local-render shares lost both fields
+  // once the in-memory job queue aged out and re-render fell back to defaults).
+  return {
+    id: sc.id || jobId,
+    kind: 'image',
+    owner: null,
+    status: 'completed',
+    completedAt: sc.createdAt || null,
+    params: {
+      prompt: sc.prompt,
+      negativePrompt: sc.negativePrompt,
+      width: sc.width,
+      height: sc.height,
+      mode: sc.mode || (sc.modelId ? 'local' : null),
+      model: sc.model || sc.modelId || null,
+      seed: sc.seed,
+      steps: sc.steps,
+      guidance: sc.guidance,
+    },
+    result: { filename: sc.filename },
+  };
+}
+
+/**
  * For each `imageJobId`, fetch the live media-job (or look it up in the persisted
  * archive) and write a sanitized copy into the bucket records/media/ so the
- * recipient can re-render with identical prompt/seed/params. Returns the asset
- * refs (image filenames) discovered.
+ * recipient can re-render with identical prompt/seed/params. Falls back to the
+ * per-image `.metadata.json` sidecar for jobs older than the 24h archive TTL.
+ * Returns the asset refs (image filenames) discovered.
  */
 async function exportMediaJobAndAsset(jobId, bucketPath, mediaRecordsDir) {
   if (!jobId || !isStr(jobId)) return [];
-  const job = getJob(jobId);
+  const job = getJob(jobId) || await jobFromSidecar(jobId);
   if (!job) {
-    console.log(`⚠️ sharing.exporter: imageJobId ${jobId} not found in live queue or archive`);
+    console.log(`⚠️ sharing.exporter: imageJobId ${jobId} not found in live queue, archive, or sidecar`);
     return [];
   }
   // Trim transient/runtime fields — keep enough to re-render with full fidelity.

@@ -1,18 +1,15 @@
 /**
- * Media Annotations
- *
- * Per-item star + free-text note, keyed by the same `<kind>:<ref>` convention
- * used by mediaCollections.js and the client-side normalize.js (`item.key`).
- * Persisted to data/media-annotations.json as a single
- * `{ annotations: { [key]: { starred, note, updatedAt } } }` document.
- *
- * Decoupled from the generation pipeline records (media-jobs.json,
- * video-history.json) so annotations survive pruning/archival of jobs.
+ * Per-author star + free-text note, keyed by `<kind>:<ref>`. Each PortOS
+ * instance only ever writes its own `instanceId` sub-entry; peer notes arrive
+ * via sharing/annotationsSync.js and merge in per-author LWW. Decoupled from
+ * media-jobs.json so annotations survive job pruning.
  */
 
 import { join } from 'path';
 import { PATHS, atomicWrite, readJSONFile, ensureDir } from '../lib/fileUtils.js';
 import { isValidKey } from '../lib/mediaItemKey.js';
+import { getInstanceId } from './instances.js';
+import { resolveLocalAuthorName } from './sharing/annotationIdentity.js';
 
 const STATE_PATH = join(PATHS.data, 'media-annotations.json');
 
@@ -25,7 +22,19 @@ const DEFAULT_STATE = { annotations: {} };
 
 export { isValidKey };
 
-const sanitizeEntry = (raw) => {
+// Indirection avoids a circular import on sharing/annotationsSync.js.
+const localChangeListeners = new Set();
+export function onLocalAnnotationChange(fn) {
+  localChangeListeners.add(fn);
+  return () => localChangeListeners.delete(fn);
+}
+function emitLocalChange(key) {
+  for (const fn of localChangeListeners) {
+    try { fn(key); } catch (err) { console.error(`⚠️ mediaAnnotations: listener failed: ${err.message}`); }
+  }
+}
+
+function sanitizeAuthorEntry(raw) {
   if (!raw || typeof raw !== 'object') return null;
   const starred = raw.starred === true;
   const note = typeof raw.note === 'string' ? raw.note.slice(0, NOTE_MAX_LENGTH) : '';
@@ -33,10 +42,28 @@ const sanitizeEntry = (raw) => {
   const updatedAt = typeof raw.updatedAt === 'string' && !Number.isNaN(Date.parse(raw.updatedAt))
     ? raw.updatedAt
     : new Date().toISOString();
-  return { starred, note, updatedAt };
-};
+  const authorName = typeof raw.authorName === 'string' && raw.authorName.trim()
+    ? raw.authorName.trim().slice(0, 120)
+    : '';
+  return { authorName, starred, note, updatedAt };
+}
 
-const readAll = async () => {
+// Safety net for a stale install: migration 014 rewrites the file once, but a
+// hand-edited or pre-014 file still parses correctly here.
+async function liftLegacyEntry(rawEntry) {
+  const isLegacy = rawEntry
+    && typeof rawEntry === 'object'
+    && !rawEntry.authors
+    && ('starred' in rawEntry || 'note' in rawEntry);
+  if (!isLegacy) return rawEntry;
+  const author = sanitizeAuthorEntry(rawEntry);
+  if (!author) return null;
+  const instanceId = await getInstanceId().catch(() => 'unknown');
+  const authorName = author.authorName || await resolveLocalAuthorName().catch(() => '');
+  return { authors: { [instanceId]: { ...author, authorName } } };
+}
+
+async function readAll() {
   await ensureDir(PATHS.data);
   const raw = await readJSONFile(STATE_PATH, DEFAULT_STATE, { logError: false });
   const annotations = raw && typeof raw.annotations === 'object' && raw.annotations !== null
@@ -45,25 +72,112 @@ const readAll = async () => {
   const out = {};
   for (const [key, value] of Object.entries(annotations)) {
     if (!isValidKey(key)) continue;
-    const s = sanitizeEntry(value);
-    if (s) out[key] = s;
+    const lifted = await liftLegacyEntry(value);
+    if (!lifted || !lifted.authors || typeof lifted.authors !== 'object') continue;
+    const authors = {};
+    for (const [instanceId, sub] of Object.entries(lifted.authors)) {
+      if (typeof instanceId !== 'string' || !instanceId) continue;
+      const sane = sanitizeAuthorEntry(sub);
+      if (sane) authors[instanceId] = sane;
+    }
+    if (Object.keys(authors).length > 0) out[key] = { authors };
   }
   return out;
-};
+}
+
+function projectForLocal(authorsMap, localInstanceId) {
+  if (!authorsMap || typeof authorsMap !== 'object') return { own: null, others: [] };
+  const own = authorsMap[localInstanceId] ?? null;
+  const others = Object.entries(authorsMap)
+    .filter(([id]) => id !== localInstanceId)
+    .map(([instanceId, entry]) => ({ instanceId, ...entry }))
+    .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
+  return { own, others };
+}
 
 export async function listAnnotations() {
-  return await readAll();
+  const [all, localInstanceId] = await Promise.all([
+    readAll(),
+    getInstanceId().catch(() => 'unknown'),
+  ]);
+  const out = {};
+  for (const [key, { authors }] of Object.entries(all)) {
+    out[key] = projectForLocal(authors, localInstanceId);
+  }
+  return out;
+}
+
+/** Used by sharing/annotationsSync.js to project just the local-author entries for export. */
+export async function listLocalAuthorAnnotations() {
+  const [all, localInstanceId] = await Promise.all([
+    readAll(),
+    getInstanceId().catch(() => 'unknown'),
+  ]);
+  const out = {};
+  for (const [key, { authors }] of Object.entries(all)) {
+    const entry = authors[localInstanceId];
+    if (entry) out[key] = entry;
+  }
+  return out;
 }
 
 /**
- * Partial merge with prune-on-empty.
+ * Per-author LWW: a peer payload only ever rewrites its own `instanceId`
+ * sub-entry, never another author's. Returns the changed keys AND the
+ * post-merge `{ own, others }` projection for each — so callers can broadcast
+ * without paying for a second readAll() per key.
+ *
+ * `payload` shape: `{ instanceId, authorName, annotations: { [key]: { starred, note, updatedAt } } }`.
+ */
+export async function mergePeerAnnotations(payload) {
+  if (!payload || typeof payload !== 'object') return { changed: [], projections: new Map() };
+  const peerInstanceId = typeof payload.instanceId === 'string' ? payload.instanceId : null;
+  if (!peerInstanceId) return { changed: [], projections: new Map() };
+  const localInstanceId = await getInstanceId().catch(() => null);
+  if (peerInstanceId === localInstanceId) return { changed: [], projections: new Map() };
+  const incoming = payload.annotations && typeof payload.annotations === 'object'
+    ? payload.annotations : {};
+  const all = await readAll();
+  const changed = [];
+  for (const [key, rawEntry] of Object.entries(incoming)) {
+    if (!isValidKey(key)) continue;
+    const sane = sanitizeAuthorEntry({ ...rawEntry, authorName: rawEntry?.authorName || payload.authorName });
+    const prior = all[key]?.authors?.[peerInstanceId] ?? null;
+    if (!sane) {
+      if (prior) {
+        delete all[key].authors[peerInstanceId];
+        if (Object.keys(all[key].authors).length === 0) delete all[key];
+        changed.push(key);
+      }
+      continue;
+    }
+    if (prior && (prior.updatedAt || '') >= sane.updatedAt) continue;
+    if (!all[key]) all[key] = { authors: {} };
+    all[key].authors[peerInstanceId] = sane;
+    changed.push(key);
+  }
+  if (changed.length > 0) {
+    await atomicWrite(STATE_PATH, { annotations: all });
+  }
+  const projections = new Map();
+  for (const key of changed) {
+    projections.set(key, projectForLocal(all[key]?.authors, localInstanceId));
+  }
+  return { changed, projections };
+}
+
+
+
+/**
+ * Partial merge with prune-on-empty — writes the local-instance author entry.
  *
  * Patch may include `starred` (boolean) and/or `note` (string). Fields not in
- * the patch keep their prior value. If the merged entry ends up with
- * `starred:false` AND an empty `note`, the entry is removed entirely to keep
- * the file lean.
+ * the patch keep their prior value (the local author's prior value, not any
+ * peer's). If the merged entry ends up with `starred:false` AND an empty
+ * `note`, the local-author entry is removed; if no authors remain on the key,
+ * the whole key is removed.
  *
- * Returns the merged entry, or `null` if it was pruned.
+ * Returns the post-write projection `{ own, others }` for this key.
  */
 export async function setAnnotation(key, patch) {
   if (!isValidKey(key)) throw makeErr(`Invalid key: ${key}`, ERR_VALIDATION);
@@ -85,21 +199,36 @@ export async function setAnnotation(key, patch) {
     throw makeErr(`note exceeds max length (${NOTE_MAX_LENGTH})`, ERR_VALIDATION);
   }
 
-  const all = await readAll();
-  const prior = all[key] ?? { starred: false, note: '', updatedAt: null };
+  const [all, localInstanceId, authorName] = await Promise.all([
+    readAll(),
+    getInstanceId(),
+    resolveLocalAuthorName().catch(() => ''),
+  ]);
+  if (!localInstanceId || localInstanceId === 'unknown') {
+    throw makeErr('Local instance identity not initialized', ERR_VALIDATION);
+  }
+
+  const priorAuthors = all[key]?.authors ?? {};
+  const priorOwn = priorAuthors[localInstanceId] ?? { starred: false, note: '', updatedAt: null };
   const merged = {
-    starred: hasStarred ? patch.starred : prior.starred,
-    note: hasNote ? patch.note : prior.note,
+    authorName: authorName || priorOwn.authorName || '',
+    starred: hasStarred ? patch.starred : priorOwn.starred,
+    note: hasNote ? patch.note : priorOwn.note,
     updatedAt: new Date().toISOString(),
   };
 
-  const next = { ...all };
+  const nextAuthors = { ...priorAuthors };
   if (!merged.starred && !merged.note) {
-    delete next[key];
-    await atomicWrite(STATE_PATH, { annotations: next });
-    return null;
+    delete nextAuthors[localInstanceId];
+  } else {
+    nextAuthors[localInstanceId] = merged;
   }
-  next[key] = merged;
+
+  const next = { ...all };
+  if (Object.keys(nextAuthors).length === 0) delete next[key];
+  else next[key] = { authors: nextAuthors };
   await atomicWrite(STATE_PATH, { annotations: next });
-  return merged;
+  emitLocalChange(key);
+
+  return projectForLocal(next[key]?.authors, localInstanceId);
 }

@@ -111,8 +111,6 @@ const compositeKindLabel = (kind) => COMPOSITE_BOARD_KINDS.find((k) => k.value =
 const emptyTemplate = () => ({
   name: '',
   starterPrompt: '',
-  stylePrompt: '',
-  negativePrompt: '',
   logline: '',
   premise: '',
   styleNotes: '',
@@ -134,10 +132,10 @@ function LockButton({ field, locked, onToggle, label }) {
     <button
       type="button"
       onClick={() => onToggle(field)}
-      className={`p-1 rounded -mr-1 ${
+      className={`p-1 rounded -mr-1 transition-colors ${
         isLocked
-          ? 'text-port-accent hover:bg-port-accent/20'
-          : 'text-gray-500 hover:text-gray-300 hover:bg-port-border/40'
+          ? 'bg-port-accent/20 text-port-accent ring-1 ring-port-accent/50 hover:bg-port-accent/30'
+          : 'text-gray-600 hover:text-gray-300 hover:bg-white/5'
       }`}
       title={isLocked ? `${label} locked — AI refine/expand will skip it` : `Lock ${label} against AI refine/expand`}
       aria-label={isLocked ? `Unlock ${label}` : `Lock ${label}`}
@@ -159,42 +157,41 @@ function FieldLabel({ htmlFor, children, field, locked, onToggleLock }) {
   );
 }
 
-// Two-column embrace + avoid editor with a single shared lock toggle.
-// Sits in the Story bible section so the writers + creative directors can
-// pin canonical references that the renderer then prepends deterministically
-// to stylePrompt / negativePrompt.
-function InfluencesEditor({ influences, onChange, locked, onToggleLock }) {
+// Style prompt + Negative prompt editor — two parallel chip lists. Embrace
+// tokens become the positive style prompt prepended to every render; avoid
+// tokens become the negative prompt. Each list locks independently.
+function StyleNegativePromptEditor({ influences, onChange, locked, onToggleLock }) {
   const safe = ensureInfluences(influences);
   return (
     <div>
       <div className="mb-1">
         <label className="text-xs text-gray-400">
-          Influences <span className="text-gray-600">— prepended to render prompts deterministically; embrace + avoid lock independently</span>
+          Style + Negative prompts <span className="text-gray-600">— prepended to every render; drag to reorder, click × to remove</span>
         </label>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <div>
           <div className="flex items-center justify-between gap-2 mb-1">
-            <div className="text-[11px] uppercase tracking-wide text-port-success/80">Embrace</div>
-            <LockButton field="influencesEmbrace" locked={locked} onToggle={onToggleLock} label="Embrace influences" />
+            <div className="text-[11px] uppercase tracking-wide text-port-success/80">Style prompt (embrace)</div>
+            <LockButton field="influencesEmbrace" locked={locked} onToggle={onToggleLock} label="Style prompt" />
           </div>
           <InfluenceChipsInput
             tokens={safe.embrace}
             onChange={(next) => onChange({ ...safe, embrace: next })}
-            placeholder="Moebius, cel-shading…"
+            placeholder="moebius linework, cel-shading, dust palette…"
             tone="success"
             readOnly={!!locked?.influencesEmbrace}
           />
         </div>
         <div>
           <div className="flex items-center justify-between gap-2 mb-1">
-            <div className="text-[11px] uppercase tracking-wide text-port-error/80">Avoid</div>
-            <LockButton field="influencesAvoid" locked={locked} onToggle={onToggleLock} label="Avoid influences" />
+            <div className="text-[11px] uppercase tracking-wide text-port-error/80">Negative prompt (avoid)</div>
+            <LockButton field="influencesAvoid" locked={locked} onToggle={onToggleLock} label="Negative prompt" />
           </div>
           <InfluenceChipsInput
             tokens={safe.avoid}
             onChange={(next) => onChange({ ...safe, avoid: next })}
-            placeholder="Ghibli painterly, neon cyberpunk…"
+            placeholder="blurry, lowres, watermark, neon cyberpunk…"
             tone="error"
             readOnly={!!locked?.influencesAvoid}
           />
@@ -355,8 +352,6 @@ export default function UniverseBuilder() {
     const payload = {
       name: draft.name.trim(),
       starterPrompt: draft.starterPrompt || '',
-      stylePrompt: draft.stylePrompt || '',
-      negativePrompt: draft.negativePrompt || '',
       logline: draft.logline || '',
       premise: draft.premise || '',
       styleNotes: draft.styleNotes || '',
@@ -431,8 +426,6 @@ export default function UniverseBuilder() {
       logline: draft.logline || '',
       premise: draft.premise || '',
       styleNotes: draft.styleNotes || '',
-      stylePrompt: draft.stylePrompt || '',
-      negativePrompt: draft.negativePrompt || '',
       locked: draft.locked || {},
       preservedVariations,
       preservedCompositeSheets,
@@ -450,8 +443,8 @@ export default function UniverseBuilder() {
     // protects the user's edits.
     const locks = draft.locked || {};
     // Distinguish "LLM omitted the field" (null/undefined → keep draft) from
-    // "LLM returned empty string" (negativePrompt is a legitimate "" — the
-    // user's `||` would silently restore a stale value they wanted gone).
+    // "LLM returned empty string" (a legitimate "" — the user's `||` would
+    // silently restore a stale value they wanted gone).
     const pick = (key, llmValue) => {
       if (locks[key]) return draft[key];
       return llmValue == null ? draft[key] : llmValue;
@@ -485,8 +478,6 @@ export default function UniverseBuilder() {
     const expandedDraft = {
       ...draft,
       starterPrompt: pick('starterPrompt', result.starterPrompt),
-      stylePrompt: pick('stylePrompt', result.stylePrompt),
-      negativePrompt: pick('negativePrompt', result.negativePrompt),
       logline: pick('logline', result.logline),
       premise: pick('premise', result.premise),
       styleNotes: pick('styleNotes', result.styleNotes),
@@ -512,8 +503,6 @@ export default function UniverseBuilder() {
       const updated = await updateUniverse(selectedId, {
         name: expandedDraft.name.trim(),
         starterPrompt: expandedDraft.starterPrompt || '',
-        stylePrompt: expandedDraft.stylePrompt || '',
-        negativePrompt: expandedDraft.negativePrompt || '',
         logline: expandedDraft.logline || '',
         premise: expandedDraft.premise || '',
         styleNotes: expandedDraft.styleNotes || '',
@@ -561,8 +550,6 @@ export default function UniverseBuilder() {
       const updated = await updateUniverse(selectedId, {
         name: next.name.trim(),
         starterPrompt: next.starterPrompt || '',
-        stylePrompt: next.stylePrompt || '',
-        negativePrompt: next.negativePrompt || '',
         logline: next.logline || '',
         premise: next.premise || '',
         styleNotes: next.styleNotes || '',
@@ -604,8 +591,6 @@ export default function UniverseBuilder() {
     setRefineChanges([]);
     const result = await refineWorldPrompts({
       starterPrompt: draft.starterPrompt || '',
-      stylePrompt: draft.stylePrompt || '',
-      negativePrompt: draft.negativePrompt || '',
       logline: draft.logline || '',
       premise: draft.premise || '',
       styleNotes: draft.styleNotes || '',
@@ -735,8 +720,6 @@ export default function UniverseBuilder() {
       logline: draft.logline || '',
       premise: draft.premise || '',
       styleNotes: draft.styleNotes || '',
-      stylePrompt: draft.stylePrompt || '',
-      negativePrompt: draft.negativePrompt || '',
       providerId: draft.llm?.provider || undefined,
       model: draft.llm?.model || undefined,
     }, { silent: true }).catch((e) => { toast.error(`Generate failed: ${e.message}`); return null; });
@@ -1112,45 +1095,12 @@ export default function UniverseBuilder() {
               />
             </div>
           </div>
-          <InfluencesEditor
+          <StyleNegativePromptEditor
             influences={draft.influences}
             onChange={(next) => updateDraft({ influences: next })}
             locked={draft.locked}
             onToggleLock={toggleLock}
           />
-        </section>
-
-        {/* Style template */}
-        <section className="bg-port-card border border-port-border rounded p-4 grid grid-cols-1 md:grid-cols-2 gap-3">
-          <div>
-            <div className="flex items-center justify-between gap-2 mb-1">
-              <label className="text-xs text-gray-400 flex items-center gap-1">
-                <Sparkles size={12} /> Style prompt (prepended to every variation)
-              </label>
-              <LockButton field="stylePrompt" locked={draft.locked} onToggle={toggleLock} label="Style prompt" />
-            </div>
-            <textarea
-              value={draft.stylePrompt}
-              onChange={(e) => updateDraft({ stylePrompt: e.target.value })}
-              placeholder="moebius linework, scavengers reign palette, oil-on-canvas grain, cinematic lighting…"
-              className="w-full bg-port-bg border border-port-border rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-port-accent"
-              rows={4}
-              maxLength={2000}
-            />
-          </div>
-          <div>
-            <FieldLabel field="negativePrompt" locked={draft.locked} onToggleLock={toggleLock}>
-              Negative prompt
-            </FieldLabel>
-            <textarea
-              value={draft.negativePrompt}
-              onChange={(e) => updateDraft({ negativePrompt: e.target.value })}
-              placeholder="blurry, lowres, watermark, extra fingers…"
-              className="w-full bg-port-bg border border-port-border rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-port-accent"
-              rows={4}
-              maxLength={2000}
-            />
-          </div>
         </section>
 
         <CompositeSheetsEditor

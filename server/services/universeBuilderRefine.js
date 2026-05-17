@@ -1,11 +1,11 @@
 /**
- * Universe Builder — refine the 3 top-level prompts (starter idea, style prompt,
- * negative prompt) based on user feedback. Mirrors the media prompt-refine
- * flow (see `mediaPromptRefiner.js`) but operates on a universe template rather
- * than an individual render.
+ * Universe Builder — refine the bible + influences (which collectively act as
+ * the universe's style and negative prompts) based on user feedback. Mirrors
+ * the media prompt-refine flow (see `mediaPromptRefiner.js`) but operates on
+ * a universe template rather than an individual render.
  *
  * The LLM gets the originals + a free-form feedback string and returns:
- *   { starterPrompt, stylePrompt, negativePrompt, rationale, changes? }
+ *   { starterPrompt, logline, premise, styleNotes, influences, rationale, changes? }
  *
  * The caller (route → UI) presents the refined fields for review before they
  * overwrite the draft, so the LLM never silently mutates a saved universe.
@@ -13,7 +13,7 @@
 
 import { ServerError } from "../lib/errorHandler.js";
 import { getActiveProvider, getProviderById } from "./providers.js";
-import { createRun, executeApiRun, executeCliRun } from "./runner.js";
+import { runPromptThroughProvider } from "../lib/promptRunner.js";
 import { resolveEffectiveModel } from "../lib/promptRunner.js";
 import {
   renderCategoriesForPrompt as renderCategoriesShared,
@@ -161,8 +161,6 @@ const renderCompositesForPrompt = (composites) =>
 
 export function buildWorldRefinePrompt({
   starterPrompt,
-  stylePrompt,
-  negativePrompt,
   logline = "",
   premise = "",
   styleNotes = "",
@@ -225,26 +223,22 @@ ${renderCompositesForPrompt(compositeSheets) || "  (none)"}
 
   return `You are a senior universe-building editor for a Stable-Diffusion-style image-generation pipeline AND a story-bible drafter for a comic/TV production pipeline.
 
-The user has seven top-level fields that define a "universe":
+The user has five top-level fields that define a "universe":
 - STARTER IDEA — the high-concept seed the universe expander fans out into categories.
-- STYLE PROMPT — comma-separated visual style tokens prepended to every render (palette, lighting, render quality, artist references).
-- NEGATIVE PROMPT — comma-separated tokens to avoid in renders.
 - LOGLINE — one-sentence narrative hook.
 - PREMISE — 1-3 paragraph elevator pitch (setting, conflict, stakes, tone).
 - STYLE NOTES — narrative-side prose about references, mood, palette, pacing, voice.
-- INFLUENCES — structured { embrace: [string], avoid: [string] } reference list. The renderer prepends embrace verbatim to the style prompt and avoid verbatim to the negative prompt, so this is the canonical record of "what direction is this universe pointing." Each entry is a short prompt-token-style label (e.g. "Moebius", "cel-shading", "Ghibli painterly"). Max 30 entries per list, max 120 chars each.
+- INFLUENCES — structured { embrace: [string], avoid: [string] } token lists. THESE ARE THE UNIVERSE'S STYLE + NEGATIVE PROMPT. The "embrace" list is joined verbatim as the positive style prompt prepended to every render (palette tokens, lighting, render quality, artist references — e.g. "moebius linework", "cel-shading", "dust palette"). The "avoid" list is joined verbatim as the negative prompt (e.g. "blurry", "lowres", "watermark"). Each entry is a short prompt-token-style label, NOT a full sentence. Max 30 entries per list, max 120 chars each.
 
-The user has given feedback about the story, mood, style, or design they want refined. Rewrite ALL seven fields so they more faithfully express the user's intention and stay internally consistent. Output the COMPLETE rewritten text/values for each — not a placeholder, not a summary, not a diff.
+The user has given feedback about the story, mood, style, or design they want refined. Rewrite ALL fields so they more faithfully express the user's intention and stay internally consistent. Output the COMPLETE rewritten text/values for each — not a placeholder, not a summary, not a diff.
 
 ${lockedSection}Return ONLY valid JSON in this schema (replace every <…> with real content; do NOT output the literal angle-bracket text):
 {
   "starterPrompt": "<full rewritten high-concept starter idea, 1-3 sentences. Stays a clean seed — do NOT append style direction prose here, that belongs in influences + styleNotes>",
-  "stylePrompt": "<full rewritten style fragment, comma-separated tokens, no subject nouns — palette, lighting, render quality, artist references; should echo the embrace influences>",
-  "negativePrompt": "<full rewritten negative prompt, comma-separated tokens to avoid; empty string if none; should echo the avoid influences>",
   "logline": "<full rewritten one-sentence narrative hook>",
   "premise": "<full rewritten 1-3 paragraph elevator pitch>",
   "styleNotes": "<full rewritten narrative-style prose about references, mood, palette, pacing, voice>",
-  "influences": { "embrace": ["<short reference label>", "..."], "avoid": ["<short reference label>", "..."] }${structureSchema},
+  "influences": { "embrace": ["<short style prompt token>", "..."], "avoid": ["<short negative prompt token>", "..."] }${structureSchema},
   "rationale": "<one concise sentence explaining the overall edit>",
   "changes": ["<short bullet of what changed and why>"]
 }
@@ -252,21 +246,13 @@ ${lockedSection}Return ONLY valid JSON in this schema (replace every <…> with 
 Rules:
 - Preserve story/character/universe DNA from the originals unless the user's feedback explicitly contradicts it.
 - The "starterPrompt" stays a clean high-concept seed — no category content (landscapes, factions, etc.) and no style-direction prose. The structured "influences" field carries that direction so re-expansions inherit it deterministically.
-- The "stylePrompt" must be comma-separated visual-style tokens only. No subject nouns. No camera/aspect tokens. Under 400 characters. It SHOULD echo every "embrace" influence so the prompt is self-contained even before the structured prepend kicks in.
-- The "negativePrompt" must be comma-separated tokens. It SHOULD echo every "avoid" influence. If the universe relies on text/typography (e.g. pitch posters), avoid putting "text" in negatives — prefer "watermark, logo, unreadable tiny text, text artifacts".
-- The "influences" lists are the canonical reference set. Add what the user's feedback embraces, drop what's no longer relevant, and add explicit avoids for things they're moving away from. Keep entries short (a name, a movement, a palette descriptor) — they're prepended verbatim to the renderer prompt.
-- The "logline", "premise", and "styleNotes" must stay narratively coherent with the refined influences and style prompts.
-- Apply the user's feedback decisively. If they ask for a different style/mood/era, move toward it in influences + style prompt + styleNotes, and name the things to avoid in negativePrompt + influences.avoid.
+- The "influences" lists are the canonical positive + negative prompt set. Each token is short (a name, a movement, a palette descriptor, a render-quality token) — they are joined verbatim into the renderer prompt. Add what the user's feedback embraces, drop what's no longer relevant, and add explicit avoids for things they're moving away from. If the universe relies on text/typography (e.g. pitch posters), avoid putting "text" in the avoid list — prefer "watermark", "logo", "unreadable tiny text", "text artifacts" so title typography remains possible.
+- The "logline", "premise", and "styleNotes" must stay narratively coherent with the refined influences.
+- Apply the user's feedback decisively. If they ask for a different style/mood/era, move toward it in influences + styleNotes, and name the things to avoid in influences.avoid.
 - No field may equal the schema placeholder text — output real rewritten content for every key.
 ${lockedRules.length ? "- Any field listed under LOCKED FIELDS above must be returned EXACTLY as the original — do not reword, expand, or trim it. The server will discard any change to a locked field, but echoing the original keeps the JSON consistent.\n" : ""}${structureRules}
 ORIGINAL STARTER IDEA:
 ${starterPrompt || "(empty)"}
-
-ORIGINAL STYLE PROMPT:
-${stylePrompt || "(empty)"}
-
-ORIGINAL NEGATIVE PROMPT:
-${negativePrompt || "(empty)"}
 
 ORIGINAL LOGLINE:
 ${logline || "(empty)"}
@@ -343,65 +329,18 @@ const mergeCompositesWithLocks = (originalSheets, llmSheets) => {
   return sanitizeCompositeSheets(merged);
 };
 
-// CLI providers (codex/claude-code/gemini-cli) need provider-specific arg
-// shapes that the toolkit runner already knows about — going through the
-// runner avoids the "stdin is not a terminal" failure mode that hits when
-// you spawn `codex` directly without the `exec -` invocation.
+// Routes through the central handler so cli/api/tui providers all work; the
+// per-CLI argv quirks (codex `exec -`, gemini stdin pipe, claude `-p -`) live
+// inside runner.js#buildCliArgs and the TUI paste/idle handshake lives in
+// tuiPromptRunner.js — both reached via runPromptThroughProvider.
 async function runRefine(provider, model, prompt) {
-  const { runId } = await createRun({
-    providerId: provider.id,
-    model,
-    prompt,
-    source: "universe-builder-refine",
-  });
-
-  let text = "";
-  return new Promise((resolve, reject) => {
-    const onData = (chunk) => {
-      text += typeof chunk === "string" ? chunk : chunk?.text || "";
-    };
-    const onComplete = (result) => {
-      if (result?.error || result?.success === false) {
-        reject(
-          new ServerError(result?.error || "Universe refinement failed", {
-            status: 502,
-            code: "WORLD_REFINE_FAILED",
-          }),
-        );
-      } else {
-        resolve({ text, runId });
-      }
-    };
-    if (provider.type === "cli") {
-      // Mirror the media refiner: `buildCliArgs` now honors a per-call model
-      // override (via `provider.defaultModel`) for codex / claude-code /
-      // gemini-cli. Clone the provider with the overridden defaultModel
-      // whenever the caller picked something other than the saved default.
-      const providerForCli =
-        model && model !== provider.defaultModel
-          ? { ...provider, defaultModel: model }
-          : provider;
-      executeCliRun(
-        runId,
-        providerForCli,
-        prompt,
-        process.cwd(),
-        onData,
-        onComplete,
-        provider.timeout ?? 300000,
-      ).catch(reject);
-    } else {
-      executeApiRun(
-        runId,
-        provider,
-        model,
-        prompt,
-        process.cwd(),
-        [],
-        onData,
-        onComplete,
-      ).catch(reject);
-    }
+  return runPromptThroughProvider({
+    provider, prompt, source: "universe-builder-refine", model,
+  }).catch((err) => {
+    throw new ServerError(err?.message || "Universe refinement failed", {
+      status: 502,
+      code: "WORLD_REFINE_FAILED",
+    });
   });
 }
 
@@ -418,12 +357,10 @@ async function runRefine(provider, model, prompt) {
  *
  * @param {object} args
  * @param {string} args.starterPrompt   — original
- * @param {string} [args.stylePrompt]   — original (may be empty)
- * @param {string} [args.negativePrompt] — original (may be empty)
  * @param {string} [args.logline]        — original bible logline (may be empty)
  * @param {string} [args.premise]        — original bible premise (may be empty)
  * @param {string} [args.styleNotes]     — original bible style notes (may be empty)
- * @param {object} [args.influences]     — { embrace, avoid }
+ * @param {object} [args.influences]     — { embrace, avoid } — the universe's style + negative prompt tokens
  * @param {object} [args.categories]     — full categories map from the draft (with per-item locks)
  * @param {Array}  [args.compositeSheets] — composite sheets from the draft (with per-item locks)
  * @param {object} [args.locked]         — { field: true } for fields the user has pinned; locked fields are echoed back unchanged
@@ -433,8 +370,6 @@ async function runRefine(provider, model, prompt) {
  */
 export async function refineWorldPrompts({
   starterPrompt,
-  stylePrompt = "",
-  negativePrompt = "",
   logline = "",
   premise = "",
   styleNotes = "",
@@ -508,8 +443,6 @@ export async function refineWorldPrompts({
   // verbatim as the lock fallback below.
   const originals = {
     starterPrompt: trimTo(starterPrompt, STARTER_PROMPT_MAX),
-    stylePrompt: trimTo(stylePrompt, PROMPT_FRAGMENT_MAX),
-    negativePrompt: trimTo(negativePrompt, PROMPT_FRAGMENT_MAX),
     logline: trimTo(logline, LOGLINE_MAX),
     premise: trimTo(premise, PREMISE_MAX),
     styleNotes: trimTo(styleNotes, STYLE_NOTES_MAX),
@@ -541,8 +474,6 @@ export async function refineWorldPrompts({
 
   const FIELD_CAPS = {
     starterPrompt: STARTER_PROMPT_MAX,
-    stylePrompt: PROMPT_FRAGMENT_MAX,
-    negativePrompt: PROMPT_FRAGMENT_MAX,
     logline: LOGLINE_MAX,
     premise: PREMISE_MAX,
     styleNotes: STYLE_NOTES_MAX,

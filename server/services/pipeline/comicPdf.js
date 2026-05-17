@@ -7,15 +7,13 @@
  * route surfaces "X of Y rendered" to the user before download.
  */
 
-import { join } from 'path';
-import { readFile } from 'fs/promises';
 import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
-import { PATHS, assertSafeFilename } from '../../lib/fileUtils.js';
-import { ServerError } from '../../lib/errorHandler.js';
 import { slugifyForFilename } from '../../lib/civitai.js';
 import { getIssue } from './issues.js';
 import { getSeries } from './series.js';
 import { resolveVisualStyle } from '../../lib/visualStyles.js';
+import { pickRenderedFilename } from '../../lib/renderSlot.js';
+import { readImageFromMedia, embedImageBytes, fitImage } from '../../lib/pdfImageEmbed.js';
 
 export const PAGE_SIZES = Object.freeze({
   'us-letter': { width: 612, height: 792 },
@@ -27,50 +25,8 @@ export const DEFAULT_PAGE_SIZE = 'us-letter';
 export const ERR_NO_RENDERED_PAGES = 'PIPELINE_COMIC_PDF_NO_PAGES';
 const makeErr = (message, code) => Object.assign(new Error(message), { code });
 
-const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
-const JPEG_MAGIC = Buffer.from([0xff, 0xd8, 0xff]);
-const IMAGE_EXTS = Object.freeze(['.png', '.jpg', '.jpeg']);
-
-// Magic-byte sniff so a .png-named file that's actually JPEG (or vice versa)
-// still embeds correctly. Falls back to extension only when sniff is inconclusive.
-function detectImageKind(bytes, filename) {
-  if (bytes.length >= 4 && bytes.subarray(0, 4).equals(PNG_MAGIC)) return 'png';
-  if (bytes.length >= 3 && bytes.subarray(0, 3).equals(JPEG_MAGIC)) return 'jpg';
-  const ext = (filename || '').toLowerCase();
-  if (ext.endsWith('.png')) return 'png';
-  if (ext.endsWith('.jpg') || ext.endsWith('.jpeg')) return 'jpg';
-  return null;
-}
-
-async function readImageFromMedia(filename) {
-  assertSafeFilename(filename, { extensions: IMAGE_EXTS, subject: 'comic page image' });
-  return readFile(join(PATHS.images, filename));
-}
-
-async function embedImageBytes(pdf, bytes, filename) {
-  const kind = detectImageKind(bytes, filename);
-  if (kind === 'png') return pdf.embedPng(bytes);
-  if (kind === 'jpg') return pdf.embedJpg(bytes);
-  throw new ServerError(`Unsupported image format for "${filename}" — expected PNG or JPEG`, {
-    status: 415, code: 'PIPELINE_COMIC_PDF_UNSUPPORTED_IMAGE',
-  });
-}
-
-// White margin reads as "edition" rather than "raw print plate" and avoids
-// cropping signed art on the page edges.
-function fitImage(imgW, imgH, pageW, pageH, marginPt = 18) {
-  const availW = pageW - marginPt * 2;
-  const availH = pageH - marginPt * 2;
-  const scale = Math.min(availW / imgW, availH / imgH);
-  const drawW = imgW * scale;
-  const drawH = imgH * scale;
-  return {
-    x: (pageW - drawW) / 2,
-    y: (pageH - drawH) / 2,
-    width: drawW,
-    height: drawH,
-  };
-}
+const READ_OPTS = { subject: 'comic page image' };
+const EMBED_OPTS = { unsupportedCode: 'PIPELINE_COMIC_PDF_UNSUPPORTED_IMAGE' };
 
 /**
  * @returns {{ bytes: Uint8Array, pageCount: number, filename: string }}
@@ -82,24 +38,16 @@ export async function buildComicPdf(issueId, opts = {}) {
   const sizeKey = PAGE_SIZES[opts.size] ? opts.size : DEFAULT_PAGE_SIZE;
   const { width: pageW, height: pageH } = PAGE_SIZES[sizeKey];
   const includeCover = opts.includeCover !== false;
+  const includeBackCover = opts.includeBackCover !== false;
   const includeColophon = opts.includeColophon !== false;
 
-  // Read-fallback chain for each cover/page filename:
-  //   1. finalImage.filename  — the hi-res print-ready render (preferred)
-  //   2. proofImage.filename  — the fast layout render
-  //   3. legacy `filename`    — pre-proof/final split records
-  // The user can keep iterating on the proof while the final is in flight,
-  // and the PDF will still assemble — just at whichever resolution is
-  // currently available.
-  const pickRenderedFilename = (record) => {
-    if (!record) return null;
-    return record.finalImage?.filename
-      || record.proofImage?.filename
-      || (typeof record.filename === 'string' && record.filename ? record.filename : null);
-  };
+  // Read-fallback chain (finalImage → proofImage → legacy filename) lives
+  // in server/lib/renderSlot.js so volume PDFs share it. See pickRenderedFilename
+  // import + re-export at the top of this file.
 
   const comicPages = issue.stages?.comicPages || {};
   const cover = includeCover ? comicPages.cover : null;
+  const backCover = includeBackCover ? comicPages.backCover : null;
   const pages = Array.isArray(comicPages.pages) ? comicPages.pages : [];
 
   const targets = [];
@@ -109,6 +57,8 @@ export async function buildComicPdf(issueId, opts = {}) {
     const name = pickRenderedFilename(p);
     if (name) targets.push(name);
   }
+  const backCoverFilename = pickRenderedFilename(backCover);
+  if (backCoverFilename) targets.push(backCoverFilename);
   if (targets.length === 0) {
     throw makeErr('Issue has no rendered pages or cover yet', ERR_NO_RENDERED_PAGES);
   }
@@ -118,7 +68,7 @@ export async function buildComicPdf(issueId, opts = {}) {
   // One bad page must not fail the whole download, so errors are captured
   // alongside the bytes and logged when the loop reaches them.
   const loaded = await Promise.all(targets.map((filename) =>
-    readImageFromMedia(filename)
+    readImageFromMedia(filename, READ_OPTS)
       .then((bytes) => ({ filename, bytes }))
       .catch((err) => ({ filename, err })),
   ));
@@ -137,7 +87,7 @@ export async function buildComicPdf(issueId, opts = {}) {
       console.error(`❌ comicPdf — skipped "${entry.filename}": ${entry.err.message || entry.err}`);
       continue;
     }
-    const img = await embedImageBytes(pdf, entry.bytes, entry.filename).catch((err) => {
+    const img = await embedImageBytes(pdf, entry.bytes, entry.filename, EMBED_OPTS).catch((err) => {
       console.error(`❌ comicPdf — embed failed "${entry.filename}": ${err.message || err}`);
       return null;
     });

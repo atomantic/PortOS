@@ -141,7 +141,9 @@ const SHIPPED_PROMPT_OLD_MD5 = {
   // auto-updatable to the post-004 hash.
   'pipeline-idea-expansion.md': ['aee25112b2c596f643b17c559b772c22', '41facefbc0c0549d456bef9111f95ab9'],
   'pipeline-prose.md':          'bfea5aeeb471aae9749baee765b473a7',
-  'pipeline-comic-script.md':   '40e5fdc1a1e68a7419b7dad936366c1a',
+  // comic-script: 40e5fd… (pre-003) and beab03… (post-003, pre-011) both
+  // auto-updatable to the post-011 (back-cover) hash.
+  'pipeline-comic-script.md':   ['40e5fdc1a1e68a7419b7dad936366c1a', 'beab031951859ca13579cdb9c4dbe769'],
   'pipeline-teleplay.md':       '3f6fecc25573ed054b47db392250034a',
   // season-episodes: 6e349a… (pre-003) and c4928e… (post-003, pre-005) both
   // auto-updatable to the post-005 (shape-aware) hash.
@@ -170,7 +172,7 @@ const SHIPPED_PROMPT_OLD_MD5 = {
 const SHIPPED_PROMPT_NEW_MD5 = {
   'pipeline-idea-expansion.md': '1ee44cf95851ff8debf18729ebcd40b4',
   'pipeline-prose.md':          '30ac30ec2b9d3e2a9eb869c181732cc6',
-  'pipeline-comic-script.md':   'beab031951859ca13579cdb9c4dbe769',
+  'pipeline-comic-script.md':   '1e0af305c27d0c80c4b482d2ebcb4a0d',
   'pipeline-teleplay.md':       '376f779f4687b598f1c92ca4e770fd5a',
   'pipeline-season-episodes.md':'50c68a29c3ebc275db3095d06bd87100',
   'pipeline-arc-overview.md':   'd34d72b8e49ba303d38607845dd87f1c',
