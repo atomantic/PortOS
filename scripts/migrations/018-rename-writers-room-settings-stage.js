@@ -34,11 +34,24 @@
  *
  * Resolution for both: when the corresponding `…-places` artifact (entry
  * or file) byte-for-byte matches the sample default, treat it as an
- * auto-seed and replace it with the legacy artifact's content (preserving
- * user customizations). If `…-places` differs from the sample, treat it
- * as a deliberate user edit and keep it. The legacy `…-settings.md` file
- * is removed once the migration has either preserved its content or
- * detected that it was untouched.
+ * auto-seed. Then decide whether the legacy artifact is genuinely
+ * customized:
+ *
+ *   - stage-config entry: compared structurally against the sample default.
+ *     Equal → unmodified, drop in favor of the seed; different → customized,
+ *     promote into `…-places`.
+ *   - `.md` prompt file: compared against an *embedded pre-rename baseline
+ *     hash* (`LEGACY_PROMPT_SHIPPED_MD5`), not the current sample. The
+ *     current sample includes migration 007's intExt/timeOfDay fields, so
+ *     an install that never ran 007 will *correctly* show the legacy file
+ *     as unmodified-baseline (matching the hash) — keeping the freshly
+ *     seeded modern sample is the right move. Only files whose hash
+ *     diverges from the baseline are treated as user customizations.
+ *
+ * If `…-places` differs from the sample, treat it as a deliberate user
+ * edit and keep it. The legacy `…-settings.md` file is removed once the
+ * migration has either preserved its content or detected that it was
+ * untouched.
  *
  * Idempotent: skips when only `writers-room-places` is present (and no
  * legacy key/file), or when neither key/file exists (fresh installs get
@@ -47,6 +60,7 @@
 
 import { readFile, writeFile, unlink, stat } from 'fs/promises';
 import { join } from 'path';
+import { createHash } from 'crypto';
 
 const STAGE_CONFIG_REL_PATH = 'data/prompts/stage-config.json';
 const SAMPLE_CONFIG_REL_PATH = 'data.sample/prompts/stage-config.json';
@@ -57,6 +71,23 @@ const PROMPTS_STAGES_DIR_REL = 'data/prompts/stages';
 const SAMPLE_STAGES_DIR_REL = 'data.sample/prompts/stages';
 const LEGACY_PROMPT_FILE = 'writers-room-settings.md';
 const NEW_PROMPT_FILE = 'writers-room-places.md';
+
+// MD5 of the pre-rename `writers-room-settings.md` shipped baseline (the
+// content that existed in data.sample right before commit be903564 renamed
+// the file to `writers-room-places.md`). An installed legacy file at this
+// hash is an *unmodified* default — the user did not customize it. This
+// also happens to equal migration 007's `OLD_SHIPPED_MD5` for the renamed
+// file, since be903564 only renamed (no content change).
+//
+// Used so we can distinguish "user customized legacy prompt → preserve"
+// from "user never ran migration 007 + never customized → keep the freshly
+// seeded modern sample with intExt/timeOfDay fields".
+const LEGACY_PROMPT_SHIPPED_MD5 = '7f1f80eb63d67a21161994cde115045e';
+
+const md5 = (str) => {
+  const normalized = str.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  return createHash('md5').update(normalized).digest('hex');
+};
 
 const readJsonOrNull = async (path) => {
   const raw = await readFile(path, 'utf-8').catch((err) => {
@@ -109,11 +140,21 @@ const migratePromptFile = async (rootDir) => {
   }
 
   if (newContent != null && sampleContent != null && newContent === sampleContent) {
-    // `…-places.md` was just auto-seeded from data.sample. If the legacy
-    // file differs from the sample, the user had customized it; preserve
-    // those customizations into `…-places.md`. (Migration 007's intExt /
-    // timeOfDay fields will be missing — warn so the user can re-merge.)
-    if (legacyContent !== sampleContent) {
+    // `…-places.md` was just auto-seeded from data.sample. Decide whether
+    // the legacy file is an unmodified default (keep the modern auto-seed)
+    // or carries real user customizations (preserve those over the seed).
+    //
+    // Compare against the pre-rename shipped baseline hash, NOT the current
+    // sample — for installs that never ran migration 007, the unmodified
+    // legacy file is *expected* to differ from the current sample (which
+    // has migration 007's intExt / timeOfDay fields). Treating any
+    // difference as "customized" would overwrite the freshly seeded modern
+    // template with an older default and silently undo migration 007.
+    const legacyHash = md5(legacyContent);
+    const legacyIsUnmodifiedDefault =
+      legacyHash === LEGACY_PROMPT_SHIPPED_MD5 || legacyContent === sampleContent;
+
+    if (!legacyIsUnmodifiedDefault) {
       await writeFile(newPath, legacyContent);
       console.warn(
         `⚠️  ${PROMPTS_STAGES_DIR_REL}/${NEW_PROMPT_FILE}: replaced auto-seeded sample with your customized ${LEGACY_PROMPT_FILE}.\n` +
@@ -122,7 +163,7 @@ const migratePromptFile = async (rootDir) => {
         `   and merge the new field bullets + JSON keys manually.`,
       );
     } else {
-      console.log(`📝 ${PROMPTS_STAGES_DIR_REL}/${NEW_PROMPT_FILE}: legacy file matched sample default, kept auto-seeded copy`);
+      console.log(`📝 ${PROMPTS_STAGES_DIR_REL}/${NEW_PROMPT_FILE}: legacy file matched shipped baseline, kept auto-seeded copy`);
     }
   } else if (newContent != null) {
     // `…-places.md` exists but differs from sample → user customized it
