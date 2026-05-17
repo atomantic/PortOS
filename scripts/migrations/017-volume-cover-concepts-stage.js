@@ -15,7 +15,7 @@
  *      files on next run so a fresh install gets it, but an upgrade that
  *      skips re-running setup-data leaves it absent.
  *
- * This migration fixes both for existing installs. Models on the same
+ * This migration fixes both for existing installs. Modeled on the same
  * idempotent pattern as `015-importer-stage-prompts.js`.
  */
 
