@@ -302,9 +302,12 @@ export default function MediaCollectionDetail() {
     // Universe-linked collections own their name (Universe Builder routes
     // renders into them by `Universe: <name>`). Locked here; the server
     // enforces this independently via the rename-lock in updateCollection.
-    // The lock state is exposed both visually (icon + title for sighted
-    // users) and programmatically (aria-label + sr-only text) so screen
-    // readers and keyboard users hear the same explanation.
+    // The lock state is exposed visually (icon + title tooltip for sighted
+    // users) and programmatically via the `sr-only` span — that's real text
+    // content screen readers announce after the collection name, so the
+    // assistive-tech experience matches what sighted users see in the
+    // tooltip. An `aria-label` on the heading would override the visible
+    // name; the `sr-only` text adds context without clobbering it.
     if (collection.universeId) {
       const lockMsg = 'Linked to a Universe — rename the universe to rename this collection.';
       return (

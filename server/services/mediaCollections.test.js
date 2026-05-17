@@ -282,6 +282,86 @@ describe('mediaCollections service', () => {
         svc.createCollectionForUniverse({ name: 'X' }),
       ).rejects.toMatchObject({ code: svc.ERR_VALIDATION });
     });
+
+    describe('findOrCreateUniverseCollection', () => {
+      it('returns the existing universeId-linked collection on second call', async () => {
+        const first = await svc.findOrCreateUniverseCollection({
+          universeId: 'u-1', universeName: 'Foo',
+        });
+        const second = await svc.findOrCreateUniverseCollection({
+          universeId: 'u-1', universeName: 'Foo',
+        });
+        expect(second.id).toBe(first.id);
+        expect(await svc.listCollections()).toHaveLength(1);
+      });
+
+      it('adopts an unlinked legacy same-name collection and backfills universeId', async () => {
+        const legacy = await svc.createCollection({ name: 'Universe: Foo' });
+        const linked = await svc.findOrCreateUniverseCollection({
+          universeId: 'u-1', universeName: 'Foo',
+        });
+        expect(linked.id).toBe(legacy.id);
+        expect(linked.universeId).toBe('u-1');
+      });
+
+      it('refuses to adopt a same-name collection already linked to a different universe', async () => {
+        const owned = await svc.findOrCreateUniverseCollection({
+          universeId: 'u-A', universeName: 'Twin',
+        });
+        const own = await svc.findOrCreateUniverseCollection({
+          universeId: 'u-B', universeName: 'Twin',
+        });
+        expect(own.id).not.toBe(owned.id);
+        expect(own.universeId).toBe('u-B');
+        expect(await svc.listCollections()).toHaveLength(2);
+      });
+
+      it('survives a universe rename — same universeId still resolves to the linked bucket regardless of universeName', async () => {
+        const first = await svc.findOrCreateUniverseCollection({
+          universeId: 'u-1', universeName: 'OldName',
+        });
+        // Universe got renamed; even before the cascade fires, the next
+        // resolution should still find the linked collection by id.
+        const reuse = await svc.findOrCreateUniverseCollection({
+          universeId: 'u-1', universeName: 'NewName',
+        });
+        expect(reuse.id).toBe(first.id);
+      });
+
+      it('serializes concurrent first-time filings (no race-induced duplicate or orphan)', async () => {
+        // Same-universe race: cover + back-cover for the first time.
+        await Promise.all([
+          svc.findOrCreateUniverseCollection({ universeId: 'u-1', universeName: 'Race' }),
+          svc.findOrCreateUniverseCollection({ universeId: 'u-1', universeName: 'Race' }),
+        ]);
+        const linked = await svc.findCollectionByUniverseId('u-1');
+        expect(linked).not.toBeNull();
+        expect(await svc.listCollections()).toHaveLength(1);
+      });
+
+      it('serializes concurrent first-time filings for two universes that share a display name', async () => {
+        // Both universes named "Twin" but with different ids. Without the
+        // mutex, both first-time creates would observe pre-create state and
+        // the second writeAll would clobber the first.
+        await Promise.all([
+          svc.findOrCreateUniverseCollection({ universeId: 'u-A', universeName: 'Twin' }),
+          svc.findOrCreateUniverseCollection({ universeId: 'u-B', universeName: 'Twin' }),
+        ]);
+        const a = await svc.findCollectionByUniverseId('u-A');
+        const b = await svc.findCollectionByUniverseId('u-B');
+        expect(a).not.toBeNull();
+        expect(b).not.toBeNull();
+        expect(a.id).not.toBe(b.id);
+        expect(await svc.listCollections()).toHaveLength(2);
+      });
+
+      it('requires universeId and universeName', async () => {
+        await expect(svc.findOrCreateUniverseCollection({ universeName: 'X' }))
+          .rejects.toMatchObject({ code: svc.ERR_VALIDATION });
+        await expect(svc.findOrCreateUniverseCollection({ universeId: 'u-1' }))
+          .rejects.toMatchObject({ code: svc.ERR_VALIDATION });
+      });
+    });
   });
 
   it('sanitizes hand-edited JSON with bogus items', async () => {

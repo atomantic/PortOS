@@ -59,11 +59,25 @@ const mockCreateRec = (name) => {
   collectionsByName.set(name.toLowerCase(), rec);
   return rec;
 };
+// Mirrors the production helper's universeId-first resolution so repeat-
+// render tests verify the new contract (same `universeId` → same collection
+// id) rather than the old name-only contract.
+const collectionsByUniverseId = new Map();
+const upsertUniverseRec = ({ universeId, universeName }) => {
+  if (collectionsByUniverseId.has(universeId)) return collectionsByUniverseId.get(universeId);
+  const name = `Universe: ${universeName || ''}`.slice(0, 80);
+  const rec = mockCreateRec(name);
+  rec.universeId = universeId;
+  collectionsByUniverseId.set(universeId, rec);
+  return rec;
+};
 vi.mock('../services/mediaCollections.js', () => ({
   createCollection: vi.fn(async ({ name }) => mockCreateRec(name)),
   findOrCreateCollectionByName: vi.fn(async ({ name }) => {
     return collectionsByName.get(name.toLowerCase()) ?? mockCreateRec(name);
   }),
+  findOrCreateUniverseCollection: vi.fn(async ({ universeId, universeName }) =>
+    upsertUniverseRec({ universeId, universeName })),
   addItem: vi.fn(),
   // Universe rename → collection rename cascade calls this from updateUniverse.
   // No-op here is fine: the routes test cares about the universe PATCH itself,
@@ -100,6 +114,7 @@ describe('universe-builder routes', () => {
     fileStore.clear();
     uuidCounter = 0;
     collectionsByName.clear();
+    collectionsByUniverseId.clear();
   });
 
   it('GET / returns []', async () => {
@@ -374,7 +389,7 @@ describe('universe-builder routes', () => {
     expect(second.body.collectionName).not.toMatch(/\d{4}-\d{2}-\d{2}/);
   });
 
-  it('POST /:id/render reuses an existing collection when collectionName matches', async () => {
+  it('POST /:id/render ignores body.collectionName — repeat renders reuse the universeId-linked bucket regardless of name hint', async () => {
     const app = buildApp();
     const created = await request(app).post('/api/universe-builder').send({
       name: 'Custom Bucket Universe',
@@ -387,8 +402,12 @@ describe('universe-builder routes', () => {
       .send({ mode: 'local', collectionName: 'Shared Bucket' });
     const second = await request(app)
       .post(`/api/universe-builder/${created.body.id}/render`)
-      .send({ mode: 'local', collectionName: '  shared bucket  ' });
+      .send({ mode: 'local', collectionName: 'totally different name' });
     expect(second.body.collectionId).toBe(first.body.collectionId);
+    // Canonical "Universe: <name>" wins — the user's hint is dropped because
+    // the rename-lock would just revert it.
+    expect(first.body.collectionName).toBe('Universe: Custom Bucket Universe');
+    expect(second.body.collectionName).toBe('Universe: Custom Bucket Universe');
   });
 
   it('POST /:id/render rejects when no variations exist', async () => {

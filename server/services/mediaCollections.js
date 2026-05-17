@@ -247,6 +247,79 @@ export async function findCollectionByUniverseId(universeId) {
   return all.find((c) => c.universeId === universeId) || null;
 }
 
+// Single-tail mutex protecting the read → match → backfill-or-create → write
+// sequence below. media-collections.json is a single shared document; without
+// serialization, two first-time filings (cover + back-cover for one universe,
+// or first renders for two universes that share the same display name) can
+// both observe "no link" in parallel, both choose the create-fresh branch,
+// and the second writeAll clobbers the first — leaving the loser's collection
+// id absent from disk and the subsequent addItem targeting a ghost record.
+// Bounded scope: only this helper holds the lock, so unrelated collection
+// writes (addItem, updateCollection, etc.) aren't blocked.
+let universeCollectionTail = Promise.resolve();
+const serializeUniverseCollectionWrite = (task) => {
+  const next = universeCollectionTail.then(task, task);
+  universeCollectionTail = next.catch(() => undefined);
+  return next;
+};
+
+/**
+ * Atomic universeId-first upsert for a universe's auto-managed collection.
+ *
+ * Resolution order under the shared mutex:
+ *   1. universeId stamp wins — survives a hand-renamed legacy collection
+ *      that predates the rename-lock or any name drift.
+ *   2. An *unlinked* same-name collection (legacy bucket from before the link
+ *      existed) is adopted and the universeId is backfilled.
+ *   3. Otherwise a fresh collection is created and stamped with `universeId`,
+ *      even when the canonical name is already taken by a *different*
+ *      universe's collection. Two same-named collections is the
+ *      user-correctable case; corrupting the foreign universe's bucket is not.
+ *
+ * Callers (pipeline cover filer, Universe Builder render route) all funnel
+ * through this so the universe → collection identity stays consistent across
+ * both auto-filing and explicit-render paths.
+ */
+export async function findOrCreateUniverseCollection({ universeId, universeName, description = '' }) {
+  if (!universeId || typeof universeId !== 'string') {
+    throw makeErr('universeId is required', ERR_VALIDATION);
+  }
+  if (typeof universeName !== 'string' || !universeName.trim()) {
+    throw makeErr('universeName is required', ERR_VALIDATION);
+  }
+  const desiredName = universeCollectionNameFor(universeName);
+  const trimmedDescription = typeof description === 'string'
+    ? description.trim().slice(0, DESCRIPTION_MAX_LENGTH)
+    : '';
+  return serializeUniverseCollectionWrite(async () => {
+    const all = await listCollections();
+    const byId = all.find((c) => c.universeId === universeId);
+    if (byId) return byId;
+    const needle = desiredName.toLowerCase();
+    const legacyIdx = all.findIndex((c) => c.name.toLowerCase() === needle && !c.universeId);
+    if (legacyIdx >= 0) {
+      const merged = { ...all[legacyIdx], universeId: universeId.slice(0, UNIVERSE_ID_MAX), updatedAt: new Date().toISOString() };
+      const next = [...all];
+      next[legacyIdx] = merged;
+      await writeAll(next);
+      return merged;
+    }
+    const now = new Date().toISOString();
+    const next = {
+      id: randomUUID(),
+      name: desiredName,
+      description: trimmedDescription,
+      coverKey: null,
+      universeId: universeId.slice(0, UNIVERSE_ID_MAX),
+      items: [],
+      createdAt: now,
+      updatedAt: now,
+    };
+    await writeAll([...all, next]);
+    return next;
+  });
+}
+
 // Clear the `universeId` link on any collection bound to this universe.
 // Used by deleteUniverse to release the rename-lock so the orphaned bucket
 // becomes a normal user-owned collection (renamable, deletable, etc.). The

@@ -24,7 +24,7 @@ import { expandWorldTemplate, generateCategoryVariations } from '../services/uni
 import { refineWorldPrompts } from '../services/universeBuilderRefine.js';
 import { enqueueJob } from '../services/mediaJobQueue/index.js';
 import { getSettings } from '../services/settings.js';
-import { findOrCreateCollectionByName, universeCollectionNameFor, NAME_MAX_LENGTH as COLLECTION_NAME_MAX } from '../services/mediaCollections.js';
+import { findOrCreateUniverseCollection, NAME_MAX_LENGTH as COLLECTION_NAME_MAX } from '../services/mediaCollections.js';
 import { registerUniverseBuilderRun } from '../services/universeBuilderCollectionHook.js';
 import { getImageModels, isFlux2, isZImage, isErnie } from '../lib/mediaModels.js';
 
@@ -238,8 +238,10 @@ const selectionSchema = z.record(
 });
 
 const renderSchema = z.object({
-  // Optional friendly name for the resulting collection. If omitted, server
-  // synthesizes "Universe: <name> (timestamp)".
+  // Accepted for backward compat but ignored — the linked collection's name
+  // is enforced as "Universe: <name>" by the rename-lock so a per-render
+  // override would just be reverted on the next access. The route resolves
+  // the collection by `universeId`, not name.
   collectionName: z.string().trim().min(1).max(COLLECTION_NAME_MAX).optional(),
   // Image-gen knobs — these mirror /api/image-gen/generate so the user can
   // pick mode/size/steps without bouncing to the Image page first.
@@ -365,16 +367,16 @@ router.post('/:id/render', asyncHandler(async (req, res) => {
 
   // Provision the collection up front so renders can be tagged as they
   // complete. The completion hook (universeBuilderCollectionHook) will add
-  // each finished image's filename to this collection. Repeat renders of
-  // the same universe reuse the existing `Universe: <name>` bucket so per-universe
-  // output accumulates in one place instead of fragmenting into a fresh
-  // date-suffixed collection per run.
-  const collectionName = body.collectionName?.trim()
-    || universeCollectionNameFor(universe.name);
-  const collection = await findOrCreateCollectionByName({
-    name: collectionName.slice(0, COLLECTION_NAME_MAX),
-    description: `Universe Builder renders for "${universe.name}"`,
+  // each finished image's filename to this collection. Resolution is
+  // universeId-first (not name-first) so a re-render finds the existing
+  // linked bucket even if the universe was hand-renamed or another
+  // universe happens to share the same display name. Name-only matching
+  // would either fork the bucket on rename or hijack a foreign universe's
+  // collection — the atomic helper rules out both.
+  const collection = await findOrCreateUniverseCollection({
     universeId: universe.id,
+    universeName: universe.name,
+    description: `Universe Builder renders for "${universe.name}"`,
   });
 
   const runId = randomUUID();
