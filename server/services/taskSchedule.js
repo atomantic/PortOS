@@ -396,39 +396,31 @@ When PLAN.md is missing, empty, or fully completed, brainstorm and implement a n
 
   'plan-task': `[Plan Task: {appName}] Execute Next PLAN.md Item
 
-Your goal is to implement the next unchecked item from PLAN.md and archive it to DONE.md in the same commit. No brainstorming, no scope expansion — just execute what is already planned.
-
-Repository: {repoPath}
+Implement the next unchecked item from PLAN.md and archive it to DONE.md. No brainstorming, no scope expansion — just execute what is already planned.
 
 ## Phase 1 — Find the Next Task
 
-1. Read PLAN.md from {repoPath}
-2. Read DONE.md from {repoPath} (if it exists) so you understand the archive format
-3. Find the first unchecked item (\`- [ ]\`) that does NOT have a \`<!-- NEEDS_INPUT -->\` annotation
-4. If PLAN.md is missing, has no unchecked items, or every unchecked item is annotated \`<!-- NEEDS_INPUT -->\`, **stop here** — exit cleanly without commits or PR. This task is a strict executor of planned work; brainstorming is handled by the \`feature-ideas\` task.
+1. Read PLAN.md and DONE.md (if present, for archive-format reference).
+2. Pick the first unchecked item (\`- [ ]\`) that does NOT have a \`<!-- NEEDS_INPUT -->\` annotation.
+3. If PLAN.md is missing, has no unchecked items, or every unchecked item is annotated \`<!-- NEEDS_INPUT -->\`, **stop here** — exit cleanly without commits or PR. Brainstorming is handled by the \`feature-ideas\` task.
 
-Capture the exact text of the item you selected (without the leading \`- [ ]\`) — you will need it verbatim for the DONE.md entry.
+Capture the exact text of the selected item (without the leading \`- [ ]\`) verbatim — DONE.md will reuse it.
 
-## Phase 2 — Evaluate Feasibility
+## Phase 2 — Decide
 
-5. Read relevant source files to understand the scope of the item
-6. Decide: can this be implemented without user clarification? (requirements clear, no ambiguous design choices, no blocking external decisions)
+Read relevant source files. Can this be implemented without user clarification (requirements clear, no ambiguous design choices, no blocking external decisions)?
 
 ## Phase 3a — Implement (if feasible)
 
-7. Implement the change:
-   - Write clean, tested code following existing patterns
-   - Run tests to ensure nothing is broken
-8. Run \`/simplify\` to review changed code for reuse, quality, and efficiency. Fix any issues found in the same diff.
-9. **Move the item from PLAN.md to DONE.md (do NOT leave a checked \`- [x]\` behind in PLAN.md):**
-   - Remove the item's line(s) from PLAN.md entirely. If the item was a nested bullet under a heading and removing it leaves the surrounding section empty, leave the heading alone — separate plan curation is the \`do-replan\` task's job.
-   - Append a corresponding entry to DONE.md under today's date heading (\`## YYYY-MM-DD\`). Insert today's date heading directly below the top-of-file preamble if no section for today exists; otherwise append under the existing section.
-   - DONE.md entry format: \`- **<short title pulled from the PLAN.md item>** — <1–3 sentences describing what was actually implemented, key files touched, and any caveats>\`. Mirror the prose style of recent DONE.md entries.
-10. Commit the code change, the PLAN.md removal, and the DONE.md append **together in a single commit**. Commit message should reference the PLAN.md item title.
+1. Implement the change. Write clean, tested code following existing patterns and run tests.
+2. **Move the item from PLAN.md to DONE.md (do NOT leave a checked \`- [x]\` behind in PLAN.md):**
+   - Remove the item's line(s) from PLAN.md entirely. If removing it leaves a heading empty, leave the heading alone — plan curation is the \`do-replan\` task's job.
+   - Append the entry to DONE.md under today's date heading (\`## YYYY-MM-DD\`). Insert today's heading directly below the top-of-file preamble if it doesn't exist yet.
+   - Entry format: \`- **<short title from the PLAN.md item>** — <1–3 sentences on what was implemented, key files touched, and any caveats>\`. Mirror the prose style of recent DONE.md entries.
 
 ## Phase 3b — Request Clarification (if not feasible)
 
-7. Create a file named \`.plan-questions.md\` in {repoPath} with this format:
+1. Create \`.plan-questions.md\`:
    \`\`\`
    # Plan Question: <short title summarizing the PLAN.md item>
 
@@ -439,15 +431,7 @@ Capture the exact text of the item you selected (without the leading \`- [ ]\`) 
    - <question 1>
    - <question 2>
    \`\`\`
-8. **Move the unchecked item to the bottom of PLAN.md and annotate it with \` <!-- NEEDS_INPUT -->\`** — remove the line from its current position and append it at the end of the file with the annotation. This keeps the queue moving so the next \`plan-task\` run picks up a different actionable item instead of repeatedly tripping on this one.
-9. Commit both changes (the new \`.plan-questions.md\` file and the PLAN.md move) with message \`chore: flag PLAN.md item needing user input\`. Then proceed to the **Completion** section below so the clarification PR is opened for the user to review — do NOT leave the worktree orphaned.
-
-## Constraints
-
-- This task has **no \`runAfter\` dependencies** — it runs independently of \`do-replan\`, \`pr-reviewer\`, etc.
-- Do NOT brainstorm new features. Do NOT propose items not already in PLAN.md.
-- Do NOT touch unrelated PLAN.md items, even to tidy them.
-- One commit. One PR — either the implementation PR (Phase 3a) or the clarification PR (Phase 3b).`,
+2. **Move the unchecked item to the bottom of PLAN.md and annotate it with \` <!-- NEEDS_INPUT -->\`** — remove from its current position and append at the end with the annotation. This keeps the queue moving so the next \`plan-task\` run picks up a different actionable item.`,
 
   'code-reviewer-review': `[Review: {appName}] Deep Codebase Review (Stage 1)
 
@@ -1079,7 +1063,7 @@ For each reference above:
 // Only non-customized prompts (promptCustomized !== true) are upgraded.
 const PROMPT_VERSIONS = {
   'feature-ideas': 7,  // v7: Phase 3b reorders item to bottom + commits clarification PR instead of orphaning the worktree
-  'plan-task': 2,      // v2: Phase 3b reorders item to bottom + commits clarification PR instead of orphaning the worktree
+  'plan-task': 3,      // v3: drop Constraints section + {repoPath} refs + commit/simplify steps already covered by the Completion Workflow
   'pr-reviewer': 3,    // v3: multi-stage pipeline (security scan → code review + merge)
   'code-reviewer-a': 1, // v1: 2-stage pipeline (codebase review → triage & implement)
   'code-reviewer-b': 1, // v1: 2-stage pipeline (codebase review → triage & implement)
