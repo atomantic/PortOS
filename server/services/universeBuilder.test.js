@@ -529,6 +529,29 @@ describe("universeBuilder service", () => {
         expect(compiled[0].label).toBe("Mira");
       });
 
+      it("synthesizes a settings prompt from slugline-only entries (no name)", () => {
+        // The bible sanitizer accepts a setting whose only identifier is a
+        // slugline (name field empty). synthesizeCanonPrompt must fall back
+        // to slugline as the identifier seed so such entries don't silently
+        // synthesize to '' and get skipped at render time.
+        const w = canonWorld();
+        w.settings.push({
+          // No name — only a slugline identifier + description.
+          slugline: "INT. OLD ARCHIVE — NIGHT",
+          description: "lantern-lit shelves of ledgers",
+        });
+        const compiled = svc.compilePrompts(w, {
+          promptMode: "canon",
+          canonSelection: { settings: "all" },
+        });
+        // Two settings now: the named Foundry City + the slugline-only Archive.
+        expect(compiled).toHaveLength(2);
+        const archive = compiled.find((c) => c.label === "INT. OLD ARCHIVE — NIGHT");
+        expect(archive).toBeTruthy();
+        expect(archive.prompt).toContain("INT. OLD ARCHIVE — NIGHT");
+        expect(archive.prompt).toContain("lantern-lit shelves of ledgers");
+      });
+
       it("canonSelection: settings also matches by slugline", () => {
         const w = canonWorld();
         const compiled = svc.compilePrompts(w, {

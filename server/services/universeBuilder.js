@@ -893,7 +893,16 @@ const CANON_TRUNKS = Object.freeze([
 export function synthesizeCanonPrompt(kind, entry) {
   if (!entry) return '';
   if (typeof entry.prompt === 'string' && entry.prompt.trim()) return entry.prompt.trim();
+  // Identifier seed: `name` is the shared anchor for all kinds. For
+  // `settings`, the bible sanitizer allows entries whose ONLY identifier is
+  // a slugline (e.g. "EXT. FOUNDRY CITY — DAY") with no separate name — fall
+  // back to slugline so those entries don't synthesize to an empty seed and
+  // get silently skipped at render time.
   const name = typeof entry.name === 'string' ? entry.name.trim() : '';
+  const sluglineId = (kind === 'settings' && typeof entry.slugline === 'string')
+    ? entry.slugline.trim()
+    : '';
+  const identifier = name || sluglineId;
   const parts = [];
   if (kind === 'characters') {
     if (entry.physicalDescription) parts.push(entry.physicalDescription);
@@ -909,8 +918,8 @@ export function synthesizeCanonPrompt(kind, entry) {
     if (entry.significance) parts.push(`significance: ${entry.significance}`);
   }
   const body = parts.map((p) => String(p).trim()).filter(Boolean).join('. ');
-  if (name && body) return `${name} — ${body}`;
-  return name || body;
+  if (identifier && body) return `${identifier} — ${body}`;
+  return identifier || body;
 }
 
 /**

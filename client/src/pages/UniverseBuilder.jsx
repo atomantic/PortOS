@@ -1237,6 +1237,20 @@ export default function UniverseBuilder() {
     setSearchParams(next, { replace: !!opts.replace });
   }, [searchParams, setSearchParams]);
 
+  // Drop a stale `?tab=` if it points to an unknown value or `tab=other`
+  // when the user has emptied the Other bucket bin. Without this, the URL
+  // and UI disagree: `activeTab` silently falls back to Bible but the param
+  // stays in the address bar — breaking the deep-link promise and confusing
+  // back/forward.
+  useEffect(() => {
+    if (!requestedTab) return;
+    if (isValidTab(requestedTab)) return;
+    const next = new URLSearchParams(searchParams);
+    next.delete('tab');
+    setSearchParams(next, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [requestedTab, hasOtherBuckets]);
+
   // Drop a stale `?bucket=` if the bucket no longer exists under the current
   // tab (e.g. user deleted the bucket, or auto-sort moved it to another kind).
   // `BUCKET_CANON` is a valid pseudo-bucket on every trunk tab — without an
@@ -1546,8 +1560,12 @@ function totalVariationCount(world) {
 // counts and disabled states lie about what will actually be enqueued.
 const canonEntryHasContent = (e, kind) => {
   if (!e) return false;
-  if (e.name || e.slugline) return true;
   if (typeof e.prompt === 'string' && e.prompt.trim()) return true;
+  // Identifier anchors per kind — settings allow slugline-only entries (bible
+  // sanitizer); characters/objects ignore stray slugline. Mirrors server
+  // synthesizeCanonPrompt's identifier-seed rule.
+  if (e.name) return true;
+  if (kind === 'settings' && e.slugline) return true;
   if (kind === 'characters') {
     return Boolean(e.physicalDescription || e.role);
   }

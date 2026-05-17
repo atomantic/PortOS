@@ -242,11 +242,13 @@ const selectionSchema = z.record(
 // tab can target an entry the user filed by slugline ("INT. FOUNDRY — DAY").
 // Per-trunk cap mirrors the bible sanitizer (`ENTRIES_PER_BIBLE_MAX`) so this
 // can't enqueue more entries than the server actually persists; per-string cap
-// mirrors `NAME_MAX` / `SLUGLINE_MAX` (both 200).
+// uses the looser of `NAME_MAX` / `SLUGLINE_MAX` so a settings entry filed by
+// slugline isn't rejected if those limits ever diverge (both 200 today).
 const CANON_TRUNK_KEYS = ['characters', 'settings', 'objects'];
+const CANON_NEEDLE_MAX = Math.max(BIBLE_LIMITS.NAME_MAX, BIBLE_LIMITS.SLUGLINE_MAX);
 const canonSelectionValueSchema = z.union([
   z.literal('all'),
-  z.array(z.string().trim().min(1).max(BIBLE_LIMITS.NAME_MAX)).max(BIBLE_LIMITS.ENTRIES_PER_BIBLE_MAX),
+  z.array(z.string().trim().min(1).max(CANON_NEEDLE_MAX)).max(BIBLE_LIMITS.ENTRIES_PER_BIBLE_MAX),
 ]);
 const canonSelectionSchema = z.object(
   Object.fromEntries(CANON_TRUNK_KEYS.map((k) => [k, canonSelectionValueSchema.optional()])),

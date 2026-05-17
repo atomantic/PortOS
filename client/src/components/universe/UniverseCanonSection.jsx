@@ -359,11 +359,14 @@ export default function UniverseCanonSection({ universe, universeId, onUniverseC
     <section id="canon" className="bg-port-card border border-port-border rounded p-4 flex flex-col gap-3 scroll-mt-4">
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
-          <h2 className="text-sm font-semibold text-white">Canon</h2>
+          <h2 className="text-sm font-semibold text-white">
+            {kindFilter ? (KINDS.find((k) => k.key === kindFilter)?.label || 'Canon') : 'Canon'}
+          </h2>
           <p className="text-xs text-gray-500 mt-0.5">
-            People, places, and things that exist in this universe. Series in this
-            universe share the same canon — episodes/issues reference these entries
-            so a character renders consistently across crossovers.
+            {kindFilter === 'characters' && 'Recurring people in this universe. Series share the same canon — issues reference these entries so a character renders consistently across crossovers.'}
+            {kindFilter === 'settings' && 'Recurring places in this universe. Series share the same canon — slugline-anchored entries can be referenced across issues.'}
+            {kindFilter === 'objects' && 'Recurring objects/items in this universe. Series share the same canon — issues reference these entries for visual continuity.'}
+            {!kindFilter && 'People, places, and things that exist in this universe. Series in this universe share the same canon — episodes/issues reference these entries so a character renders consistently across crossovers.'}
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
@@ -391,16 +394,23 @@ export default function UniverseCanonSection({ universe, universeId, onUniverseC
           >
             <Library size={12} /> Extract from prose
           </button>
-          <button
-            type="button"
-            onClick={handleDifferentiate}
-            disabled={differentiating || charCount < 2}
-            title={charCount < 2 ? 'Need at least 2 characters to differentiate' : 'Rewrite every character so the cast renders visually distinct'}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded bg-port-accent/15 hover:bg-port-accent/25 text-port-accent border border-port-accent/40 text-xs disabled:opacity-40"
-          >
-            {differentiating ? <Loader2 size={12} className="animate-spin" /> : <Wand2 size={12} />}
-            AI: differentiate cast
-          </button>
+          {/* "AI: differentiate cast" is a character-only operation. When the
+              parent passes `kindFilter` to scope this section to settings or
+              objects, hide the action so it doesn't look applicable to the
+              current trunk. Keep it visible on the all-kinds view + on the
+              characters-filtered view. */}
+          {(!kindFilter || kindFilter === 'characters') ? (
+            <button
+              type="button"
+              onClick={handleDifferentiate}
+              disabled={differentiating || charCount < 2}
+              title={charCount < 2 ? 'Need at least 2 characters to differentiate' : 'Rewrite every character so the cast renders visually distinct'}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded bg-port-accent/15 hover:bg-port-accent/25 text-port-accent border border-port-accent/40 text-xs disabled:opacity-40"
+            >
+              {differentiating ? <Loader2 size={12} className="animate-spin" /> : <Wand2 size={12} />}
+              AI: differentiate cast
+            </button>
+          ) : null}
         </div>
       </div>
 
