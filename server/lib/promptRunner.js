@@ -26,7 +26,7 @@
  * stay honest about what the runner actually executed.
  */
 
-import { createRun, executeApiRun, executeCliRun, extractBakedModel, hasModelFlag, stopRun } from '../services/runner.js';
+import { createRun, executeApiRun, executeCliRun, extractBakedModel, hasModelFlag, stopRun, patchRunMetadata } from '../services/runner.js';
 import { executeTuiRun, cleanTuiResponse } from './tuiPromptRunner.js';
 
 const DEFAULT_TIMEOUT_MS = 300000;
@@ -172,6 +172,16 @@ export async function runPromptThroughProvider({ provider, prompt, source, model
     if (runResult.provider && runResult.provider.id !== provider.id) {
       effectiveProvider = runResult.provider;
       effectiveModel = resolveEffectiveModel(effectiveProvider, model);
+      // createRun persisted `metadata.model = effectiveModel || provider.defaultModel`
+      // using the ORIGINAL provider's resolved value — so /runs would
+      // attribute a model that doesn't belong to the fallback (e.g. an
+      // API model id recorded on a CLI fallback). Patch the record so
+      // attribution matches what actually executes.
+      patchRunMetadata(runId, {
+        model: effectiveModel,
+        providerId: effectiveProvider.id,
+        providerName: effectiveProvider.name,
+      }).catch(() => { /* best-effort; metadata patch is not load-bearing */ });
     }
   }
 

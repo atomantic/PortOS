@@ -8,10 +8,10 @@ import { join } from 'path';
 import { ensureDir } from '../lib/fileUtils.js';
 import { resolveCliModel, hasModelFlag, extractBakedModel } from '../lib/providerModels.js';
 
-// Re-exported so existing importers (`promptRunner.js`, `mediaPromptRefiner.js`,
-// `universeBuilderRefine.js`) don't break — these helpers moved to providerModels.js
-// so `server/lib/tuiHandshake.js` could import them without a lib→service layer
-// violation.
+// Re-exported so `server/lib/promptRunner.js` can import via the runner
+// (its existing dependency boundary). The canonical home is now
+// `server/lib/providerModels.js` — that's where `server/lib/tuiHandshake.js`
+// imports from directly (lib→lib, no service layer violation).
 export { hasModelFlag, extractBakedModel };
 
 // This will be initialized by server/index.js and set via setAIToolkit()
@@ -189,6 +189,25 @@ export function emitRunStarted({ runId, provider, model }) {
     provider: provider?.name || provider?.id,
     model: model ?? provider?.defaultModel,
   });
+}
+
+/**
+ * Best-effort merge of `patch` into an existing run's metadata.json.
+ * Used by `promptRunner.js` when the toolkit's createRun falls back to a
+ * different provider — the original `metadata.model` then claims a model
+ * that doesn't belong to the fallback. Patch it post-hoc so /runs
+ * attribution matches what actually ran. Silent on read/write failures
+ * because the run record is best-effort tracking, not load-bearing.
+ */
+export async function patchRunMetadata(runId, patch) {
+  if (!patch || typeof patch !== 'object') return;
+  const metadataPath = join(getRunsPath(), runId, 'metadata.json');
+  const metadataStr = await readFile(metadataPath, 'utf-8').catch(() => null);
+  if (!metadataStr) return;
+  let metadata;
+  try { metadata = JSON.parse(metadataStr); } catch { return; }
+  Object.assign(metadata, patch);
+  await writeFile(metadataPath, JSON.stringify(metadata, null, 2)).catch(() => {});
 }
 
 /**
