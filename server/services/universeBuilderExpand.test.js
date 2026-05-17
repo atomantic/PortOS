@@ -6,6 +6,7 @@ const {
   extractJson,
   normalizeCategories,
   normalizeCompositeSheets,
+  normalizeCanonArray,
   buildExpansionPrompt,
 } = __testing;
 // Anchor the legacy assertions on the static body of the prompt — the only
@@ -224,6 +225,26 @@ describe("universeBuilderExpand.normalizeCategories", () => {
     const out = normalizeCategories({ factions: "not an object" });
     expect(out.factions).toMatchObject({ variations: [] });
   });
+
+  it("forwards LLM-returned `kind` so custom buckets land under the right trunk", () => {
+    // The expansion prompt asks the LLM to tag each category with a `kind`.
+    // Without explicit passthrough in the normalizer, that tag is discarded
+    // and every custom bucket falls back to the default-map / `other` —
+    // breaking the contract that `factions: { kind: 'characters' }` lands
+    // under the characters canon trunk in the UI.
+    const out = normalizeCategories({
+      factions: {
+        kind: "characters",
+        variations: [{ label: "Wake Jackals", prompt: "scavenger raiders" }],
+      },
+      gear: {
+        kind: "objects",
+        variations: [{ label: "Bone hook", prompt: "carved bone hook" }],
+      },
+    });
+    expect(out.factions.kind).toBe("characters");
+    expect(out.gear.kind).toBe("objects");
+  });
 });
 
 describe("universeBuilderExpand.normalizeCompositeSheets", () => {
@@ -288,6 +309,55 @@ describe("universeBuilderExpand.normalizeCompositeSheets", () => {
   });
 });
 
+describe("universeBuilderExpand.normalizeCanonArray", () => {
+  it("returns [] for non-array input", () => {
+    expect(normalizeCanonArray(null, "character")).toEqual([]);
+    expect(normalizeCanonArray(undefined, "character")).toEqual([]);
+    expect(normalizeCanonArray("not an array", "character")).toEqual([]);
+    expect(normalizeCanonArray({}, "character")).toEqual([]);
+  });
+
+  it("sanitizes a character entry to the bible shape (id, timestamps, physicalDescription)", () => {
+    const out = normalizeCanonArray(
+      [{ name: "Ash", physicalDescription: "young survivor with iron rebar" }],
+      "character",
+    );
+    expect(out).toHaveLength(1);
+    expect(out[0].name).toBe("Ash");
+    expect(out[0].physicalDescription).toBe("young survivor with iron rebar");
+    expect(out[0].id).toBeTruthy();
+    expect(out[0].createdAt).toBeTruthy();
+  });
+
+  it("sanitizes a setting entry, requiring at least one identifier (name OR slugline)", () => {
+    const out = normalizeCanonArray(
+      [
+        { name: "Foundry City", description: "vast iron metropolis", palette: "rust + brass" },
+        { slugline: "INT. FOUNDRY CITY — DAY" },
+        { description: "no name no slugline — dropped" },
+      ],
+      "setting",
+    );
+    expect(out).toHaveLength(2);
+    expect(out[0].name).toBe("Foundry City");
+    expect(out[0].palette).toBe("rust + brass");
+    expect(out[1].slugline).toBe("INT. FOUNDRY CITY — DAY");
+  });
+
+  it("sanitizes an object entry, requiring a name", () => {
+    const out = normalizeCanonArray(
+      [
+        { name: "The Tongue", description: "an artifact that absorbs language", significance: "central MacGuffin" },
+        { description: "nameless — dropped" },
+      ],
+      "object",
+    );
+    expect(out).toHaveLength(1);
+    expect(out[0].name).toBe("The Tongue");
+    expect(out[0].significance).toBe("central MacGuffin");
+  });
+});
+
 describe("universeBuilderExpand.EXPANSION_PROMPT", () => {
   it("allows dynamic universe-building buckets and reference-sheet domains", () => {
     expect(EXPANSION_PROMPT).toContain("Add, remove, or rename buckets");
@@ -315,6 +385,31 @@ describe("universeBuilderExpand.EXPANSION_PROMPT", () => {
     expect(EXPANSION_PROMPT).toContain("influences:");
     expect(EXPANSION_PROMPT).toContain('"embrace"');
     expect(EXPANSION_PROMPT).toContain('"avoid"');
+  });
+
+  it("asks the LLM to emit canon arrays (characters / settings / objects) with rich metadata", () => {
+    // Phase B contract: canon arrays are first-class outputs of the expand
+    // call. The client merges them into universe.characters[]/.settings[]/.objects[]
+    // and the redesigned UI surfaces them under their canon trunks. If this
+    // assertion fails, also verify normalizeCanonArray + expandWorldTemplate
+    // still surface the returned values in the response payload.
+    expect(EXPANSION_PROMPT).toContain("characters:");
+    expect(EXPANSION_PROMPT).toContain("physicalDescription");
+    expect(EXPANSION_PROMPT).toContain("settings:");
+    expect(EXPANSION_PROMPT).toContain("slugline");
+    expect(EXPANSION_PROMPT).toContain("recurringDetails");
+    expect(EXPANSION_PROMPT).toContain("objects:");
+    expect(EXPANSION_PROMPT).toContain("significance");
+  });
+
+  it("teaches the LLM to tag each category with a `kind` so it lands under the right canon trunk", () => {
+    // Without this, post-Phase-A UIs that group categories by kind put every
+    // new bucket under 'other' until the user hand-sorts.
+    expect(EXPANSION_PROMPT).toContain('"kind"');
+    expect(EXPANSION_PROMPT).toContain('"characters"');
+    expect(EXPANSION_PROMPT).toContain('"settings"');
+    expect(EXPANSION_PROMPT).toContain('"objects"');
+    expect(EXPANSION_PROMPT).toContain('"other"');
   });
 
   it("omits the Influences input section when no influences are provided", () => {

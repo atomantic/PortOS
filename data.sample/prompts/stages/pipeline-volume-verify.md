@@ -14,11 +14,18 @@ Every series is published in two parallel formats: graphic novel (issues → vol
 {{series.premise}}
 ```
 
+{{#hasLinkedWorld}}
 ## Linked World — canonical entities
 
 The arc was authored against this World Builder world: **{{worldName}}**. Continuity findings should call out when the volume references factions / characters / locations that don't exist in this entity set.
 
-### World entity categories
+### World canon — named characters, places, objects
+
+```
+{{worldCanonText}}
+```
+
+### World entity categories — exploratory variation buckets
 
 ```
 {{worldCategoriesText}}
@@ -29,6 +36,7 @@ The arc was authored against this World Builder world: **{{worldName}}**. Contin
 ```
 {{worldCompositesText}}
 ```
+{{/hasLinkedWorld}}
 
 {{> bible-deference }}
 

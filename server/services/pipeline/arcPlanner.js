@@ -39,7 +39,7 @@ import { recommendStructure, describeStructure } from '../../lib/seasonStructure
 import { LENGTH_PROFILE_NAMES, DEFAULT_LENGTH_PROFILE } from '../../lib/issueLength.js';
 import { getUniverse } from '../universeBuilder.js';
 import { getSeriesCanon } from './seriesCanon.js';
-import { renderCategoriesForPrompt, renderCompositesForPrompt } from '../../lib/universePromptRenderers.js';
+import { renderCategoriesForPrompt, renderCompositesForPrompt, renderCanonForPrompt } from '../../lib/universePromptRenderers.js';
 
 export const ERR_VALIDATION = 'PIPELINE_ARC_VALIDATION';
 const makeErr = (message, code) => Object.assign(new Error(message), { code });
@@ -86,6 +86,11 @@ async function loadWorldContext(universeId) {
   const avoid = Array.isArray(world.influences?.avoid) ? world.influences.avoid : [];
 
   return {
+    // Truthy mustache flag the prompt templates use to gate the entire
+    // "Linked World" block — unlinked arc/verify runs render a neutral
+    // placeholder instead of telling the LLM the series is grounded in a
+    // non-existent world.
+    hasLinkedWorld: true,
     worldName: world.name || '',
     worldStarter: world.starterPrompt || '',
     worldLogline: world.logline || '',
@@ -95,12 +100,19 @@ async function loadWorldContext(universeId) {
     worldInfluencesAvoid: avoid.length ? avoid.join(', ') : '(none)',
     worldCategoriesText: renderCategoriesForPrompt(world.categories) || '(none)',
     worldCompositesText: renderCompositesForPrompt(world.compositeSheets) || '(none)',
+    // Universe canon — named characters/places/objects the arc references by
+    // name. Separate from categories because the LLM should treat these as
+    // first-class entities, not exploratory variations.
+    worldCanonText: renderCanonForPrompt(world) || '(none)',
   };
 }
 
 // Fallback when series has no linked world — prompt partials still expect
-// these variables to be defined.
+// these variables to be defined. `hasLinkedWorld: false` lets the template's
+// `{{#hasLinkedWorld}}…{{/hasLinkedWorld}}` block fall through so the LLM
+// isn't told to ground arcs in a non-existent universe.
 const EMPTY_WORLD_CONTEXT = {
+  hasLinkedWorld: false,
   worldName: '(no linked world)',
   worldStarter: '',
   worldLogline: '',
@@ -110,6 +122,7 @@ const EMPTY_WORLD_CONTEXT = {
   worldInfluencesAvoid: '(none)',
   worldCategoriesText: '(none — series has no linked Universe Builder world)',
   worldCompositesText: '(none)',
+  worldCanonText: '(none — series has no linked Universe Builder world)',
 };
 
 // Resolve world context, accepting an optional preloaded value so callers

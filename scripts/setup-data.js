@@ -148,11 +148,18 @@ const SHIPPED_PROMPT_OLD_MD5 = {
   // season-episodes: 6e349a… (pre-003) and c4928e… (post-003, pre-005) both
   // auto-updatable to the post-005 (shape-aware) hash.
   'pipeline-season-episodes.md': ['6e349ad26bed8a0ccb042571f03f03eb', 'c4928e2a5f833358116b29d2d669888d'],
-  // Shape-aware additions (migration 005).
-  'pipeline-arc-overview.md':    '6a3ecab43d1f46b7ef9aab6c69ea0326',
-  'pipeline-arc-verify.md':      '52e31abc93e3105176236fcaa5d1575a',
-  'pipeline-volume-verify.md':   'c6ea28e972ad6e229bafb2d602b4dda3',
-  'pipeline-arc-resolve.md':     '87bc5c01f1a8a97b681727a38b05edc6',
+  // arc-overview: 6a3eca… (pre-005) and d34d72… (post-005, pre-019) both
+  // auto-updatable to the post-019 (worldCanonText) hash.
+  'pipeline-arc-overview.md':   ['6a3ecab43d1f46b7ef9aab6c69ea0326', 'd34d72b8e49ba303d38607845dd87f1c'],
+  // arc-verify: 52e31a… (pre-005) and ff56d8… (post-005, pre-019) both
+  // auto-updatable to the post-019 (worldCanonText) hash.
+  'pipeline-arc-verify.md':     ['52e31abc93e3105176236fcaa5d1575a', 'ff56d8387162017e08d5d0491060ddd6'],
+  // volume-verify: c6ea28… (pre-005) and 03f3c8… (post-005, pre-019) both
+  // auto-updatable to the post-019 (worldCanonText) hash.
+  'pipeline-volume-verify.md':  ['c6ea28e972ad6e229bafb2d602b4dda3', '03f3c874cb80e1c98abcf03168fa7a92'],
+  // arc-resolve: 87bc5c… (pre-005) and a8677b… (post-005, pre-019) both
+  // auto-updatable to the post-019 (worldCanonText) hash.
+  'pipeline-arc-resolve.md':    ['87bc5c01f1a8a97b681727a38b05edc6', 'a8677bbe1eb38f871fb152a5b0fec7c6'],
   // Shot decomposition additions (migration 006).
   'pipeline-extract-scenes.md':  '59fa5ee305ce53d91eb15224d8b546d3',
   // INT/EXT + time-of-day additions to the places extractor (migration 007).
@@ -175,10 +182,10 @@ const SHIPPED_PROMPT_NEW_MD5 = {
   'pipeline-comic-script.md':   '1e0af305c27d0c80c4b482d2ebcb4a0d',
   'pipeline-teleplay.md':       '376f779f4687b598f1c92ca4e770fd5a',
   'pipeline-season-episodes.md':'50c68a29c3ebc275db3095d06bd87100',
-  'pipeline-arc-overview.md':   'd34d72b8e49ba303d38607845dd87f1c',
-  'pipeline-arc-verify.md':     'ff56d8387162017e08d5d0491060ddd6',
-  'pipeline-volume-verify.md':  '03f3c874cb80e1c98abcf03168fa7a92',
-  'pipeline-arc-resolve.md':    'a8677bbe1eb38f871fb152a5b0fec7c6',
+  'pipeline-arc-overview.md':   '0a1f6ffa6908522e3690c5e9e53a6ee0',
+  'pipeline-arc-verify.md':     '36aa70cdfc25d7549573a4d556e7702c',
+  'pipeline-volume-verify.md':  '49458d36700cb94e34806d536ffe2940',
+  'pipeline-arc-resolve.md':    '8e348f3d1894382889f9f0ee7d5c6792',
   'pipeline-extract-scenes.md': 'c51fb208568d0d903eb43b437478b0ba',
   'writers-room-places.md':     '24a33628cc94d80fa5ca60831d973daf',
   'cos-agent-briefing.md':      'dccb392a43cbd3dac900fee12c31619a',

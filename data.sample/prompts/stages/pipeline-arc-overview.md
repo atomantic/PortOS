@@ -34,6 +34,18 @@ No shape pre-picked. Choose the single Vonnegut shape that best matches the prem
 
 - **Target total episode count (rough budget across all seasons):** {{series.issueCountTarget}}
 
+{{#hasLinkedWorld}}
+## Linked World — canonical entities
+
+The series is grounded in this World Builder world: **{{worldName}}**. When you write season loglines / synopses and the protagonist arc, ground them in these entities by name (not generic placeholders). If a world canon entry below names a character, place, or object that fits the season's beats, prefer it over inventing a new one.
+
+### World canon — named characters, places, objects
+
+```
+{{worldCanonText}}
+```
+{{/hasLinkedWorld}}
+
 {{> bible-deference }}
 
 ## How to shape the arc

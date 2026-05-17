@@ -35,6 +35,7 @@ import OriginBadge from '../components/sharing/OriginBadge';
 import UniverseCanonSection from '../components/universe/UniverseCanonSection';
 import { deriveAvailableBackends, IMAGE_GEN_MODE } from '../lib/imageGenBackends';
 import { PIPELINE_IMAGE_DEFAULTS, readPipelineImageSettings } from '../lib/pipelineImageDefaults';
+import { normalizeSlugline } from '../lib/scenePrompt';
 
 const CATEGORY_LABELS = {
   landscapes: 'Landscapes',
@@ -71,8 +72,92 @@ const mergeVariations = (existing, fresh) => {
   return merged;
 };
 
+// Merge LLM-expanded canon entries into the draft's existing canon array.
+// Existing entries always win on collision (lock or no — the user authored
+// them; the LLM's repeat is a hallucination at this point). Mirrors the
+// server-side dedupe in backfillCanonFromCategories + storyBible's
+// MERGE_CONFIG (`storyBible.js` keyFields).
+//
+// Identity rules are kind-aware to match the server's MERGE_CONFIG:
+//   - characters/objects → `normalizeBibleName` (trim + lowercase) on `name`
+//                          AND `aliases[]`. Without aliases, an existing
+//                          character "Ashley" with alias "Ash" would not
+//                          collide with an LLM-returned "Ash", producing a
+//                          duplicate canon entry the user has to merge by hand.
+//   - settings           → `normalizeSlugline` for BOTH `slugline` AND `name`
+//                          (`storyBible.js` MERGE_CONFIG.setting.keyFields).
+//                          Without this, sluglines that differ only in dash
+//                          style or punctuation ("INT. FOUNDRY CITY — DAY"
+//                          vs "INT FOUNDRY CITY - DAY") would land as two
+//                          separate place-canon entries, and `Foundry-City`
+//                          vs `Foundry City` would duplicate by name even
+//                          though every downstream lookup treats them as one.
+// Match server's BIBLE_LIMITS.ENTRIES_PER_BIBLE_MAX so the client doesn't
+// optimistically display + count entries the server will silently truncate
+// at sanitize time. Without this cap, the post-expand toast can claim
+// "+12 canon entries" while the server-saved record only kept some of them.
+const CLIENT_CANON_MAX = 200;
+
+const mergeCanonByName = (existing, fresh, kind = 'character') => {
+  // Empty/missing fresh — return `existing` unchanged (preserve reference so
+  // a no-op expand doesn't trigger downstream identity-comparing effects).
+  if (!fresh?.length) return existing || [];
+  const isSetting = kind === 'setting';
+  const normName = isSetting
+    ? (s) => (typeof s === 'string' ? normalizeSlugline(s) : '')
+    : (s) => (typeof s === 'string' ? s.trim().toLowerCase() : '');
+  const normSlug = (s) => (typeof s === 'string' ? normalizeSlugline(s) : '');
+  // Aliases participate in identity for character/object only — settings use
+  // slugline collision instead (the server's MERGE_CONFIG.setting has no
+  // aliases field).
+  const aliasKeys = (entry) => {
+    if (isSetting || !Array.isArray(entry?.aliases)) return [];
+    return entry.aliases.map(normName).filter(Boolean);
+  };
+  const seen = new Set();
+  for (const e of existing || []) {
+    if (e?.name) seen.add(normName(e.name));
+    if (e?.slugline) seen.add(normSlug(e.slugline));
+    for (const k of aliasKeys(e)) seen.add(k);
+  }
+  const merged = [...(existing || [])];
+  for (const e of fresh) {
+    const nameKey = normName(e?.name);
+    const sluglineKey = normSlug(e?.slugline);
+    const aliasMatches = aliasKeys(e);
+    const collides = (nameKey && seen.has(nameKey))
+      || (sluglineKey && seen.has(sluglineKey))
+      || aliasMatches.some((k) => seen.has(k));
+    // On collision, still register every identity key the fresh entry
+    // carried — so a *later* fresh entry with overlapping aliases/sluglines
+    // is recognized as a within-batch duplicate too. Without this, fresh
+    // entry A (collides on alias) gets skipped silently and fresh entry B
+    // (uses A's primary name) slips in as a duplicate of the existing record.
+    if (nameKey) seen.add(nameKey);
+    if (sluglineKey) seen.add(sluglineKey);
+    for (const k of aliasMatches) seen.add(k);
+    if (collides) continue;
+    if (merged.length >= CLIENT_CANON_MAX) break;
+    merged.push(e);
+  }
+  return merged;
+};
+
 const humanizeCategory = (key) => CATEGORY_LABELS[key]
   || key.replace(/_/g, ' ').replace(/\b\w/g, (ch) => ch.toUpperCase());
+
+// Toast summary for handleExpand — same body, different tail depending on
+// whether the auto-save succeeded.
+// `addedCanonCount` is the number of NEW canon entries the expand actually
+// contributed (post-merge minus pre-existing) — NOT the draft's total. On a
+// universe that already has canon, an expand that adds zero would otherwise
+// boast about preserved entries it didn't create. `variationCount` is the
+// total because every expand recomputes variations from scratch (locked +
+// freshly-generated); the diff isn't meaningful there.
+const expandToast = ({ variationCount, sheetCount, addedCanonCount, saved }) => {
+  const base = `Expanded into ${variationCount} variations, ${sheetCount} boards, ${addedCanonCount} new canon entries`;
+  return `${base} — ${saved ? 'saved' : 'review then Save'}`;
+};
 
 const ensureDraftCategories = (categories = {}) => ({
   ...Object.fromEntries(WORLD_CATEGORIES.map((c) => [c, { variations: [] }])),
@@ -239,6 +324,23 @@ export default function UniverseBuilder() {
   // universes start as a draft with no id; saving creates the persisted record.
   const [draft, setDraft] = useState(emptyTemplate());
   const [newCategoryName, setNewCategoryName] = useState('');
+  // True when handleExpand merged new canon entries into the draft that the
+  // server doesn't yet know about (auto-save failed or hasn't run). On the
+  // next manual Save, include canon arrays in the update payload so the
+  // merged entries actually persist. Cleared on successful save and on
+  // universe-switch (the new draft's canon is loaded from server, in sync).
+  const [canonDirty, setCanonDirty] = useState(false);
+  // Sidecar ledger of the EXACT canon entries the last expand merged into
+  // the draft but haven't been persisted yet. On save, only these entries
+  // are merged onto the refetched server canon — NOT the full stale draft.
+  // That avoids resurrecting entries another tab/surface deleted: a deletion
+  // wins because our ledger doesn't contain it, so the refetched canon
+  // (which already lacks the deleted entry) is the final state. Cleared on
+  // successful save and on universe-switch.
+  const pendingCanonAdditionsRef = useRef({ characters: [], settings: [], objects: [] });
+  const clearPendingCanonAdditions = () => {
+    pendingCanonAdditionsRef.current = { characters: [], settings: [], objects: [] };
+  };
 
   // Per-page render knobs. Persisted to localStorage so the user's
   // preferred batch size sticks across visits.
@@ -311,6 +413,8 @@ export default function UniverseBuilder() {
   useEffect(() => {
     setPendingDeleteId(null);
     resetRefinePanel();
+    setCanonDirty(false);
+    clearPendingCanonAdditions();
     if (!selectedId) {
       setDraft(emptyTemplate());
       setRuns([]);
@@ -372,7 +476,7 @@ export default function UniverseBuilder() {
       return;
     }
     setSaving(true);
-    const payload = {
+    const basePayload = {
       name: draft.name.trim(),
       starterPrompt: draft.starterPrompt || '',
       logline: draft.logline || '',
@@ -384,11 +488,61 @@ export default function UniverseBuilder() {
       locked: draft.locked || {},
       llm: draft.llm || {},
     };
+    // Canon arrays are wholesale-replaced server-side, so including them on
+    // a manual update can clobber concurrent edits from the canon UI / other
+    // tabs. Send canon when EITHER:
+    //   - creating (new universe needs the expanded canon as initial state)
+    //   - the draft has merged-but-unpersisted canon from a failed/skipped
+    //     auto-save after expand (`canonDirty`). Without this, the user's
+    //     "review then Save" toast doesn't actually persist the new canon.
+    // Otherwise the canon UI's own targeted PATCHes own the writes.
+    //
+    // When sending canon on UPDATE, refetch the server's current canon and
+    // merge our local additions onto it — that way concurrent edits from
+    // another tab (Nouns stage etc.) aren't clobbered by the stale draft.
+    // mergeCanonByName preserves the server entries on identity collision.
+    const needsCanonInPayload = !selectedId || canonDirty;
+    let payload = basePayload;
+    if (needsCanonInPayload) {
+      // For create: send the draft's canon as-is (the new universe starts empty).
+      // For update with canonDirty: refetch + merge ONLY the pending-additions
+      // ledger (not the full stale draft) so concurrent deletions in other
+      // tabs aren't resurrected.
+      // If the refetch fails for an existing universe, abort the save entirely:
+      // falling back to the stale draft would replace the server's canon wholesale
+      // and could undo concurrent canon edits/deletions in other tabs.
+      if (selectedId) {
+        const fresh = await getUniverse(selectedId).catch(() => null);
+        if (!fresh) {
+          setSaving(false);
+          toast.error('Save failed: could not fetch latest canon — please try again');
+          return;
+        }
+        const additions = pendingCanonAdditionsRef.current;
+        const baseCanon = {
+          characters: mergeCanonByName(fresh.characters || [], additions.characters, 'character'),
+          settings: mergeCanonByName(fresh.settings || [], additions.settings, 'setting'),
+          objects: mergeCanonByName(fresh.objects || [], additions.objects, 'object'),
+        };
+        payload = { ...basePayload, ...baseCanon };
+      } else {
+        const baseCanon = { characters: draft.characters || [], settings: draft.settings || [], objects: draft.objects || [] };
+        payload = { ...basePayload, ...baseCanon };
+      }
+    }
     const result = selectedId
       ? await updateUniverse(selectedId, payload).catch((e) => { toast.error(`Save failed: ${e.message}`); return null; })
       : await createUniverse(payload).catch((e) => { toast.error(`Save failed: ${e.message}`); return null; });
     setSaving(false);
     if (result) {
+      // Save persisted whatever canon was in the payload; clear the dirty
+      // flag so the next save can resume the "skip canon to avoid clobber"
+      // path. No-op if it was already false. Also drain the pending-additions
+      // ledger since those entries are now on the server.
+      if (needsCanonInPayload) {
+        setCanonDirty(false);
+        clearPendingCanonAdditions();
+      }
       toast.success(selectedId ? 'World updated' : 'World created');
       setWorlds((prev) => {
         const without = prev.filter((w) => w.id !== result.id);
@@ -482,7 +636,23 @@ export default function UniverseBuilder() {
     for (const cat of allCatKeys) {
       const locked = preservedVariations[cat] || [];
       const fresh = (llmCategories[cat]?.variations || []);
-      mergedCategories[cat] = { variations: mergeVariations(locked, fresh) };
+      // Preserve the bucket's `kind` so the category-to-canon-trunk contract
+      // survives the round-trip. Precedence:
+      //   - existing non-'other' draft kind (user curated it to a specific trunk)
+      //   - LLM-returned kind for this expand round (fresh classification)
+      //   - existing 'other' draft kind (Phase-B default for custom buckets)
+      //   - undefined (server's sanitizeCategory falls back to default-map / 'other')
+      // Allowing a fresh LLM kind to supersede an existing 'other' is intentional:
+      // pre-Phase-B "factions" buckets saved as `other` can be promoted to
+      // `characters` by a re-expand without requiring the user to manually change
+      // the trunk. User-curated non-`other` kinds (e.g. `settings`) are preserved.
+      const existingKind = draft.categories?.[cat]?.kind;
+      const freshKind = llmCategories[cat]?.kind;
+      const kind = (existingKind && existingKind !== 'other') ? existingKind : (freshKind || existingKind);
+      mergedCategories[cat] = {
+        ...(kind ? { kind } : {}),
+        variations: mergeVariations(locked, fresh),
+      };
     }
     // Composite sheets merge follows the same locked-first + dedupe pattern.
     const mergedSheets = (() => {
@@ -498,6 +668,31 @@ export default function UniverseBuilder() {
       return out;
     })();
 
+    // Merge LLM-emitted canon arrays into the draft's existing canon. Existing
+    // entries always win on name/slugline collision so a re-expand can't
+    // clobber hand-authored or series-extracted records. mergeCanonByName
+    // short-circuits when `fresh` is empty so identity is preserved.
+    //
+    // `kind` is passed so settings use `normalizeSlugline` for both `name` and
+    // `slugline` (matching the server's MERGE_CONFIG.setting.keyFields) —
+    // dash/punct-variant identifiers collide instead of duplicating.
+    const pickCanon = (key, kind) => mergeCanonByName(
+      draft[key] || [],
+      Array.isArray(result[key]) ? result[key] : [],
+      kind,
+    );
+    const mergedCharacters = pickCanon('characters', 'character');
+    const mergedSettings = pickCanon('settings', 'setting');
+    const mergedObjects = pickCanon('objects', 'object');
+    // Count NEW canon entries this expand added (post-merge minus pre-existing).
+    // Used by the toast so a re-expand on a populated universe doesn't claim
+    // credit for entries the user already authored. Existing entries always win
+    // on collision in mergeCanonByName, so the delta is always non-negative.
+    const addedCanonCount =
+      (mergedCharacters.length - (draft.characters?.length || 0))
+      + (mergedSettings.length - (draft.settings?.length || 0))
+      + (mergedObjects.length - (draft.objects?.length || 0));
+
     const expandedDraft = {
       ...draft,
       starterPrompt: pick('starterPrompt', result.starterPrompt),
@@ -507,9 +702,35 @@ export default function UniverseBuilder() {
       influences: refinedInfluences,
       categories: ensureDraftCategories(mergedCategories),
       compositeSheets: mergedSheets,
+      characters: mergedCharacters,
+      settings: mergedSettings,
+      objects: mergedObjects,
       llm: result.llm || draft.llm,
     };
     setDraft(expandedDraft);
+    // Flag the merged-but-not-yet-persisted canon so a subsequent manual
+    // Save (if auto-save fails or is bypassed) includes the new entries.
+    // Record exactly which entries we added (vs. what was already in the
+    // draft) so the save-time merge only re-applies the new ones, not the
+    // full stale draft.
+    if (addedCanonCount > 0) {
+      setCanonDirty(true);
+      const computeAdditions = (existing, merged) => {
+        const norm = (s) => (typeof s === 'string' ? s.trim().toLowerCase() : '');
+        const existingNames = new Set((existing || []).map((e) => norm(e?.name)).filter(Boolean));
+        const existingSluglines = new Set((existing || []).map((e) => norm(e?.slugline)).filter(Boolean));
+        return (merged || []).filter((e) => {
+          const n = norm(e?.name);
+          const s = norm(e?.slugline);
+          return !(n && existingNames.has(n)) && !(s && existingSluglines.has(s));
+        });
+      };
+      pendingCanonAdditionsRef.current = {
+        characters: [...pendingCanonAdditionsRef.current.characters, ...computeAdditions(draft.characters, mergedCharacters)],
+        settings: [...pendingCanonAdditionsRef.current.settings, ...computeAdditions(draft.settings, mergedSettings)],
+        objects: [...pendingCanonAdditionsRef.current.objects, ...computeAdditions(draft.objects, mergedObjects)],
+      };
+    }
     const lockedKeys = Object.keys(locks).filter((k) => locks[k]);
     if (lockedKeys.length) {
       console.log(`🔒 Universe Builder expand preserved ${lockedKeys.length} locked field(s): ${lockedKeys.join(', ')}`);
@@ -518,12 +739,60 @@ export default function UniverseBuilder() {
     if (expandedDraft.compositeSheets?.length) {
       setRenderOpts((r) => ({ ...r, promptMode: 'sheets' }));
     }
-    // Auto-persist expansion if the world is already saved — otherwise the
-    // user clicks Render and hits "No prompts to render" because the disk
-    // copy still has empty categories. New (unsaved) drafts still need a
-    // manual Save since they have no name yet.
-    if (selectedId && expandedDraft.name?.trim()) {
-      const updated = await updateUniverse(selectedId, {
+    // Auto-persist expansion when the draft has a name. Updates the existing
+    // record when one is selected; creates a new one when the user has only
+    // typed a name + starter prompt and clicked Expand. The create path is
+    // important for the canon section's visibility — it's gated on
+    // `selectedId && draft.id === selectedId`, so without an id the user
+    // can't see/manage the canon arrays just merged into the draft.
+    //
+    // Wrap the auto-save in `setSaving(true/false)` so the Create button
+    // (disabled={saving || ...}) can't double-submit during the await window
+    // between expanding=false and goToWorld(saved.id).
+    if (expandedDraft.name?.trim()) {
+      // Set saving BEFORE the refetch so the Expand + Save buttons
+      // (both disabled on `saving`) can't double-fire during the
+      // getUniverse await window below.
+      setSaving(true);
+      // For updates: refetch the server's canon and merge in ONLY the local
+      // additions ledger so a concurrent canon edit (Nouns stage, another tab)
+      // landing during the LLM call isn't wholesale-clobbered. If the refetch
+      // fails for an existing record, skip the auto-save (mark canonDirty so
+      // the user can retry via manual Save) rather than falling back to the
+      // stale draft, which would replace the server's canon wholesale and undo
+      // any concurrent deletions/edits.
+      let canonForPayload = {
+        characters: expandedDraft.characters || [],
+        settings: expandedDraft.settings || [],
+        objects: expandedDraft.objects || [],
+      };
+      if (selectedId) {
+        const fresh = await getUniverse(selectedId).catch(() => null);
+        if (!fresh) {
+          // Refetch failed — skip auto-save for this update to avoid a stale
+          // canon write. The new entries are already in the draft and the
+          // canonDirty flag is already set, so the user's manual Save will
+          // retry the refetch+merge path.
+          setSaving(false);
+          toast.success(expandToast({
+            variationCount: total,
+            sheetCount: expandedDraft.compositeSheets?.length || 0,
+            addedCanonCount,
+            saved: false,
+          }));
+          return;
+        }
+        canonForPayload = {
+          // Merge ONLY pending additions onto refetched server canon
+          // (not the full stale draft). Without this, concurrent canon
+          // deletions in other tabs/surfaces get resurrected because the
+          // deleted entry is still present in the stale draft.
+          characters: mergeCanonByName(fresh.characters || [], pendingCanonAdditionsRef.current.characters, 'character'),
+          settings: mergeCanonByName(fresh.settings || [], pendingCanonAdditionsRef.current.settings, 'setting'),
+          objects: mergeCanonByName(fresh.objects || [], pendingCanonAdditionsRef.current.objects, 'object'),
+        };
+      }
+      const payload = {
         name: expandedDraft.name.trim(),
         starterPrompt: expandedDraft.starterPrompt || '',
         logline: expandedDraft.logline || '',
@@ -531,20 +800,47 @@ export default function UniverseBuilder() {
         styleNotes: expandedDraft.styleNotes || '',
         categories: expandedDraft.categories,
         compositeSheets: expandedDraft.compositeSheets || [],
+        ...canonForPayload,
         influences: ensureInfluences(expandedDraft.influences),
         locked: expandedDraft.locked || {},
         llm: expandedDraft.llm || {},
-      }).catch((e) => { toast.error(`Auto-save after expand failed: ${e.message}`); return null; });
-      if (updated) {
+      };
+      // setSaving(true) already happened before the getUniverse refetch
+      // above so the disable-gate covers the whole save sequence.
+      const saved = await (selectedId
+        ? updateUniverse(selectedId, payload)
+        : createUniverse(payload))
+        .catch((e) => { toast.error(`Auto-save after expand failed: ${e.message}`); return null; })
+        .finally(() => setSaving(false));
+      if (saved) {
         setWorlds((prev) => {
-          const without = prev.filter((w) => w.id !== updated.id);
-          return [updated, ...without];
+          const without = prev.filter((w) => w.id !== saved.id);
+          return [saved, ...without];
         });
-        toast.success(`Expanded into ${total} variations and ${expandedDraft.compositeSheets?.length || 0} boards — saved`);
+        // Auto-save succeeded — server now has the merged canon, so a
+        // subsequent manual Save shouldn't re-send it (avoids the
+        // concurrent-edit clobber). Drain the additions ledger too since
+        // those entries are now on the server.
+        setCanonDirty(false);
+        clearPendingCanonAdditions();
+        // New record: route to its id so the canon section gates flip and
+        // subsequent draft state reflects the persisted record.
+        if (!selectedId) goToWorld(saved.id);
+        toast.success(expandToast({
+          variationCount: total,
+          sheetCount: expandedDraft.compositeSheets?.length || 0,
+          addedCanonCount,
+          saved: true,
+        }));
         return;
       }
     }
-    toast.success(`Expanded into ${total} variations and ${expandedDraft.compositeSheets?.length || 0} boards — review then Save`);
+    toast.success(expandToast({
+      variationCount: total,
+      sheetCount: expandedDraft.compositeSheets?.length || 0,
+      addedCanonCount,
+      saved: false,
+    }));
   };
 
   // Writes the LLM-refined fields back to the draft. The modal only emits
@@ -716,13 +1012,30 @@ export default function UniverseBuilder() {
   // server's stale copy of those fields.
   const handleCanonChange = (updated) => {
     if (!updated) return;
-    setDraft((d) => ({
-      ...d,
-      characters: updated.characters,
-      settings: updated.settings,
-      objects: updated.objects,
-      updatedAt: updated.updatedAt,
-    }));
+    setDraft((d) => {
+      // If a prior expand merged canon that hasn't been persisted yet,
+      // mergeCanonByName ONLY the pending additions (not the full stale
+      // draft) against the server's response. Using the additions ledger
+      // means concurrent canon deletions (which the server's response
+      // already reflects) win — pending additions are still preserved.
+      if (canonDirty) {
+        const additions = pendingCanonAdditionsRef.current;
+        return {
+          ...d,
+          characters: mergeCanonByName(updated.characters || [], additions.characters, 'character'),
+          settings: mergeCanonByName(updated.settings || [], additions.settings, 'setting'),
+          objects: mergeCanonByName(updated.objects || [], additions.objects, 'object'),
+          updatedAt: updated.updatedAt,
+        };
+      }
+      return {
+        ...d,
+        characters: updated.characters,
+        settings: updated.settings,
+        objects: updated.objects,
+        updatedAt: updated.updatedAt,
+      };
+    });
   };
   // Toggle a single field's lock state and (when the world is already saved)
   // persist immediately — locks are part of the world template, so a stale
@@ -746,7 +1059,11 @@ export default function UniverseBuilder() {
   };
   const updateCategory = (cat, variations) => setDraft((d) => ({
     ...d,
-    categories: { ...d.categories, [cat]: { variations } },
+    // Preserve the bucket's `kind` (which the server sanitizer would
+    // otherwise re-derive from defaults/`other` on the next save). Without
+    // this, every user edit to a custom bucket silently resets its canon
+    // trunk to `other`.
+    categories: { ...d.categories, [cat]: { ...(d.categories?.[cat] || {}), variations } },
   }));
   const handleGenerateInCategory = async (cat, count) => {
     const current = draft.categories?.[cat]?.variations || [];
@@ -772,7 +1089,10 @@ export default function UniverseBuilder() {
     }
     const nextDraft = {
       ...draft,
-      categories: { ...draft.categories, [cat]: { variations: merged } },
+      // Preserve the bucket's `kind` (mirror of updateCategory's behavior;
+      // see comment there). Generate-more is the second write path that
+      // could silently reset the trunk to default/other.
+      categories: { ...draft.categories, [cat]: { ...(draft.categories?.[cat] || {}), variations: merged } },
     };
     setDraft(nextDraft);
     if (selectedId && nextDraft.name?.trim()) {
@@ -999,7 +1319,7 @@ export default function UniverseBuilder() {
           <div className="flex items-center gap-2 flex-wrap">
             <button
               onClick={handleExpand}
-              disabled={expanding || !draft.starterPrompt?.trim()}
+              disabled={expanding || saving || !draft.starterPrompt?.trim()}
               className="px-3 py-2 bg-purple-600/30 hover:bg-purple-600/50 disabled:opacity-50 text-purple-200 border border-purple-600/40 rounded flex items-center gap-2 min-h-[40px]"
             >
               {expanding ? <Loader2 size={16} className="animate-spin" /> : <Wand2 size={16} />}

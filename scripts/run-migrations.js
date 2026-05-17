@@ -46,9 +46,11 @@ export async function runMigrations({
     }
   }
 
-  // Scan for migration files (*.js, sorted by filename). Test files live
-  // alongside their migration; exclude them so the runner doesn't try to
-  // import a vitest module as a migration.
+  // Scan for migration files (*.js, sorted by filename). Co-located vitest
+  // files (*.test.js) are excluded — they don't export `up()` and would
+  // throw the runner if imported as migrations. The vitest config picks
+  // them up via its own glob (`../scripts/**/*.test.js` in
+  // server/vitest.config.js).
   const files = (await readdir(migrationsDir))
     .filter(f => f.endsWith('.js') && !f.endsWith('.test.js'))
     .sort();
