@@ -16,13 +16,21 @@
  *   landing in the fresh bucket and the legacy renders stranded.
  *
  * What this does:
- *   Index universes by the *canonical collection name* they'd produce
- *   (`"Universe: " + name`, truncated to 80 chars — the same transform the
- *   runtime helper uses). For each unlinked collection whose name matches
- *   exactly one universe's canonical name (case-insensitive), stamp the
- *   `universeId` AND canonicalize the visible name to the freshly-computed
- *   canonical form. Skip zero/multi matches — the ambiguous case is the
- *   same risk this PR shipped to avoid.
+ *   1. Forward-link: index universes by the *canonical collection name*
+ *      they'd produce (`"Universe: " + name`, truncated to 80 chars — the
+ *      same transform the runtime helper uses). For each unlinked
+ *      collection whose name matches exactly one universe's canonical name
+ *      (case-insensitive), stamp the `universeId` AND canonicalize the
+ *      visible name to the freshly-computed canonical form. Skip zero or
+ *      multi matches — the ambiguous case is the same risk this PR
+ *      shipped to avoid.
+ *   2. Stale-link cleanup: clear `universeId` on any collection whose
+ *      stamp doesn't correspond to a current universe. The old
+ *      `deleteUniverse` didn't unlink linked collections, so upgraded
+ *      installs can have stamped buckets whose universes are long gone —
+ *      with this PR's new rename-lock, those would be permanently stuck
+ *      under their old name. Unlinking releases the lock so the user can
+ *      rename or delete the orphan via normal flows.
  *
  *   Indexing by canonical (truncated) name closes two upgrade-path gaps:
  *     1. Long universe names: the runtime truncates the collection name to
@@ -91,11 +99,30 @@ export default {
       universesByCanonicalName.set(key, bucket);
     }
 
+    // Set of all current universe ids so we can detect stale stamps
+    // (collection.universeId pointing at a universe that no longer exists).
+    const currentUniverseIds = new Set(
+      universesDoc.universes
+        .map((u) => (typeof u?.id === 'string' ? u.id : null))
+        .filter(Boolean),
+    );
+
     let linked = 0;
+    let unlinkedStale = 0;
     let ambiguous = 0;
     const now = new Date().toISOString();
     for (const c of collectionsDoc.collections) {
-      if (c?.universeId) continue;
+      if (c?.universeId) {
+        // Stale-link cleanup: pre-PR `deleteUniverse` didn't unlink, and
+        // the new rename-lock now strands those orphans permanently. Clear
+        // the stamp so the user can rename or delete them via normal flows.
+        if (!currentUniverseIds.has(c.universeId)) {
+          c.universeId = null;
+          c.updatedAt = now;
+          unlinkedStale += 1;
+        }
+        continue;
+      }
       if (typeof c?.name !== 'string') continue;
       const key = norm(c.name);
       const matches = universesByCanonicalName.get(key);
@@ -115,13 +142,18 @@ export default {
       linked += 1;
     }
 
-    if (linked > 0) {
+    if (linked > 0 || unlinkedStale > 0) {
       await writeJson(collectionsPath, collectionsDoc);
+    }
+    if (linked > 0) {
       console.log(`🔗 migration 021: linked ${linked} legacy "Universe: <name>" collection(s) by canonical-name match.`);
+    }
+    if (unlinkedStale > 0) {
+      console.log(`🔓 migration 021: unlinked ${unlinkedStale} collection(s) whose universe no longer exists (releases rename-lock).`);
     }
     if (ambiguous > 0) {
       console.log(`ℹ️ migration 021: ${ambiguous} collection(s) skipped due to multiple same-named universes.`);
     }
-    return { linked, ambiguous };
+    return { linked, unlinkedStale, ambiguous };
   },
 };

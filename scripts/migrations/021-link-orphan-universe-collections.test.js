@@ -52,6 +52,27 @@ describe('migration 021 — link orphan universe collections', () => {
     });
     const result = await migration.up({ rootDir });
     expect(result.linked).toBe(0);
+    expect(result.unlinkedStale).toBe(0);
+  });
+
+  it('unlinks a stale stamp — collection.universeId points at a universe that no longer exists', async () => {
+    // Pre-PR `deleteUniverse` didn't unlink, so an upgraded install can
+    // carry a stamped bucket whose universe is gone. With the new
+    // rename-lock, that bucket is permanently stuck under its old name
+    // unless this migration releases it.
+    writeJson(universesPath, { universes: [{ id: 'u-1', name: 'Foo' }] });
+    writeJson(collectionsPath, {
+      collections: [
+        { id: 'c-orphan', name: 'Universe: Ghost', universeId: 'u-ghost-deleted', items: [] },
+      ],
+    });
+    const result = await migration.up({ rootDir });
+    expect(result.unlinkedStale).toBe(1);
+    expect(result.linked).toBe(0);
+    const after = readJson(collectionsPath);
+    expect(after.collections[0].universeId).toBeNull();
+    // Name preserved — the user can now rename or delete it via normal flows.
+    expect(after.collections[0].name).toBe('Universe: Ghost');
   });
 
   it('skips ambiguous matches (two universes share the same display name)', async () => {

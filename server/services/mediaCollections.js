@@ -136,8 +136,17 @@ export async function getCollection(id) {
 let fileWriteTail = Promise.resolve();
 const serializeFileWrite = (task) => {
   const next = fileWriteTail.then(task, task);
-  // Don't let a rejection poison the chain.
-  fileWriteTail = next.catch(() => undefined);
+  // Silence the tail so a rejection doesn't poison subsequent waiters.
+  // Mirror the issueWriteTail / seriesWriteTail pattern: when this write
+  // is still the tail after it settles, reset to a fresh Promise.resolve()
+  // so the chain doesn't retain settled promises (and their resolved
+  // payloads) for the life of the process. If another write enqueues
+  // first, it becomes the tail and we drop our reference.
+  const silenced = next.catch(() => {});
+  fileWriteTail = silenced;
+  silenced.finally(() => {
+    if (fileWriteTail === silenced) fileWriteTail = Promise.resolve();
+  });
   return next;
 };
 const writeAll = async (collections) => {

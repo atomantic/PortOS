@@ -91,6 +91,12 @@ export async function fileCoverIntoUniverseCollection({ seriesId, filename }) {
   // instead of being thrown away with the universe.
   const stillExists = await universeSvc.getUniverse(universeId).catch(() => null);
   if (!stillExists || stillExists.id !== liveUniverse.id) {
-    await unlinkCollectionsForUniverse(universeId).catch(() => null);
+    await unlinkCollectionsForUniverse(universeId).catch((err) => {
+      // Log per the file header: bookkeeping failures are swallowed but
+      // never silenced. If this unlink fails, the just-stamped collection
+      // stays bound to a deleted universeId (rename-locked) and the
+      // operator needs the log entry to find + fix it.
+      console.error(`❌ cover → universe collection orphan-unlink failed for universe=${universeId}: ${err?.message || err}`);
+    });
   }
 }
