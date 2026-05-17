@@ -236,6 +236,25 @@ describe("universeBuilder service", () => {
     ).rejects.toMatchObject({ code: svc.ERR_NOT_FOUND });
   });
 
+  it("updateUniverse cascades a name change onto the linked media collection", async () => {
+    const collections = await import("./mediaCollections.js");
+    const w = await seedWorld();
+    // Provision the universe's collection the same way the render route does.
+    await collections.findOrCreateCollectionByName({
+      name: collections.universeCollectionNameFor(w.name),
+      universeId: w.id,
+    });
+    await svc.updateUniverse(w.id, { name: "Renamed Universe" });
+    const linked = await collections.findCollectionByUniverseId(w.id);
+    expect(linked?.name).toBe("Universe: Renamed Universe");
+  });
+
+  it("updateUniverse rename succeeds even when no linked collection exists", async () => {
+    const w = await seedWorld();
+    const patched = await svc.updateUniverse(w.id, { name: "Solo Rename" });
+    expect(patched.name).toBe("Solo Rename");
+  });
+
   it("deleteUniverse removes the universe and its runs", async () => {
     const w = await seedWorld();
     await svc.recordRun({

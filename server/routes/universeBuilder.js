@@ -24,7 +24,7 @@ import { expandWorldTemplate, generateCategoryVariations } from '../services/uni
 import { refineWorldPrompts } from '../services/universeBuilderRefine.js';
 import { enqueueJob } from '../services/mediaJobQueue/index.js';
 import { getSettings } from '../services/settings.js';
-import { findOrCreateCollectionByName, NAME_MAX_LENGTH as COLLECTION_NAME_MAX } from '../services/mediaCollections.js';
+import { findOrCreateCollectionByName, universeCollectionNameFor, NAME_MAX_LENGTH as COLLECTION_NAME_MAX } from '../services/mediaCollections.js';
 import { registerUniverseBuilderRun } from '../services/universeBuilderCollectionHook.js';
 import { getImageModels, isFlux2, isZImage, isErnie } from '../lib/mediaModels.js';
 
@@ -370,7 +370,7 @@ router.post('/:id/render', asyncHandler(async (req, res) => {
   // output accumulates in one place instead of fragmenting into a fresh
   // date-suffixed collection per run.
   const collectionName = body.collectionName?.trim()
-    || `Universe: ${universe.name}`;
+    || universeCollectionNameFor(universe.name);
   const collection = await findOrCreateCollectionByName({
     name: collectionName.slice(0, COLLECTION_NAME_MAX),
     description: `Universe Builder renders for "${universe.name}"`,

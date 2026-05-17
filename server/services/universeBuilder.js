@@ -35,6 +35,7 @@ import {
 } from '../lib/storyBible.js';
 import { sanitizeOrigin } from '../lib/sharingOrigin.js';
 import { emitRecordUpdated, emitRecordDeleted } from './sharing/recordEvents.js';
+import { renameCollectionForUniverse } from './mediaCollections.js';
 
 // Bumped when a sanitizer-time backfill changes how on-disk universes are
 // shaped, so future migrations can gate on the prior version.
@@ -723,6 +724,13 @@ export async function updateUniverse(id, patch = {}) {
   if (!merged) throw makeErr('Invalid universe payload', ERR_VALIDATION);
   state.universes[idx] = merged;
   await writeState(state);
+  // Cascade rename onto the linked media collection — log but don't fail
+  // the save: a stale collection name is recoverable, a failed save isn't.
+  if (merged.name !== cur.name) {
+    await renameCollectionForUniverse(merged.id, merged.name).catch((err) => {
+      console.error(`❌ universe-collection rename cascade failed for ${merged.id}: ${err?.message || err}`);
+    });
+  }
   emitRecordUpdated('universe', merged.id);
   return merged;
 }

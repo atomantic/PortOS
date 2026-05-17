@@ -180,6 +180,67 @@ describe('mediaCollections service', () => {
     });
   });
 
+  describe('universe-linked collections', () => {
+    it('updateCollection rejects a name change when the collection is universe-linked', async () => {
+      const linked = await svc.findOrCreateCollectionByName({
+        name: 'Universe: Foo', universeId: 'u-1',
+      });
+      await expect(svc.updateCollection(linked.id, { name: 'Renamed' }))
+        .rejects.toMatchObject({ code: svc.ERR_VALIDATION });
+      // Other patches (coverKey, description) still go through.
+      const updated = await svc.updateCollection(linked.id, { description: 'new desc' });
+      expect(updated.description).toBe('new desc');
+    });
+
+    it('updateCollection allows a same-name PATCH (no-op) on universe-linked collections', async () => {
+      const linked = await svc.findOrCreateCollectionByName({
+        name: 'Universe: Foo', universeId: 'u-1',
+      });
+      const result = await svc.updateCollection(linked.id, { name: linked.name });
+      expect(result.name).toBe('Universe: Foo');
+    });
+
+    it('universeCollectionNameFor produces the canonical "Universe: <name>" string and truncates', () => {
+      expect(svc.universeCollectionNameFor('Foo')).toBe('Universe: Foo');
+      const long = 'x'.repeat(200);
+      expect(svc.universeCollectionNameFor(long).length).toBe(svc.NAME_MAX_LENGTH);
+    });
+
+    it('findCollectionByUniverseId locates the linked collection (or returns null)', async () => {
+      expect(await svc.findCollectionByUniverseId('u-ghost')).toBeNull();
+      const linked = await svc.findOrCreateCollectionByName({
+        name: 'Universe: Foo', universeId: 'u-1',
+      });
+      const found = await svc.findCollectionByUniverseId('u-1');
+      expect(found?.id).toBe(linked.id);
+    });
+
+    it('renameCollectionForUniverse cascades a new name onto the linked collection', async () => {
+      const linked = await svc.findOrCreateCollectionByName({
+        name: 'Universe: Foo', universeId: 'u-1',
+      });
+      const updated = await svc.renameCollectionForUniverse('u-1', 'Bar');
+      expect(updated.id).toBe(linked.id);
+      expect(updated.name).toBe('Universe: Bar');
+      const fresh = await svc.getCollection(linked.id);
+      expect(fresh.name).toBe('Universe: Bar');
+    });
+
+    it('renameCollectionForUniverse is a no-op when no linked collection exists', async () => {
+      const result = await svc.renameCollectionForUniverse('u-nope', 'Bar');
+      expect(result).toBeNull();
+    });
+
+    it('renameCollectionForUniverse no-ops when the name already matches', async () => {
+      const linked = await svc.findOrCreateCollectionByName({
+        name: 'Universe: Foo', universeId: 'u-1',
+      });
+      const result = await svc.renameCollectionForUniverse('u-1', 'Foo');
+      expect(result.name).toBe(linked.name);
+      expect(result.updatedAt).toBe(linked.updatedAt);
+    });
+  });
+
   it('sanitizes hand-edited JSON with bogus items', async () => {
     fileStore.set('/mock/data/media-collections.json', {
       collections: [

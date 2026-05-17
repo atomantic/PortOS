@@ -65,6 +65,11 @@ vi.mock('../services/mediaCollections.js', () => ({
     return collectionsByName.get(name.toLowerCase()) ?? mockCreateRec(name);
   }),
   addItem: vi.fn(),
+  // Universe rename → collection rename cascade calls this from updateUniverse.
+  // No-op here is fine: the routes test cares about the universe PATCH itself,
+  // not the bookkeeping side-effect (covered in mediaCollections.test.js).
+  renameCollectionForUniverse: vi.fn(async () => null),
+  universeCollectionNameFor: (name) => `Universe: ${name || ''}`.slice(0, 80),
   ERR_DUPLICATE: 'DUPLICATE',
   NAME_MAX_LENGTH: 80,
 }));

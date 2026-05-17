@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { ArrowLeft, CheckSquare, Copy, FolderInput, Inbox, Pencil, Star, StarOff, Trash2, X } from 'lucide-react';
+import { ArrowLeft, CheckSquare, Copy, FolderInput, Inbox, Lock, Pencil, Star, StarOff, Trash2, X } from 'lucide-react';
 import ShareToButton from '../components/sharing/ShareToButton';
 import toast from '../components/ui/Toast';
 import MediaCard from '../components/media/MediaCard';
@@ -297,6 +297,18 @@ export default function MediaCollectionDetail() {
       <h1 className="text-xl font-semibold text-white flex items-center gap-2">
         <Inbox className="w-5 h-5 text-port-accent" />
         {collection.name}
+      </h1>
+    );
+    // Universe-linked collections own their name (Universe Builder routes
+    // renders into them by `Universe: <name>`). Locked here; the server
+    // enforces this independently via the rename-lock in updateCollection.
+    if (collection.universeId) return (
+      <h1
+        className="text-xl font-semibold text-white flex items-center gap-2"
+        title="Linked to a Universe — rename the universe to rename this collection."
+      >
+        {collection.name}
+        <Lock className="w-4 h-4 text-gray-500" />
       </h1>
     );
     if (editingName) return (

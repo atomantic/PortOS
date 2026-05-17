@@ -17,7 +17,10 @@ import { ITEM_KIND, REF_MAX_LENGTH, itemKey } from '../lib/mediaItemKey.js';
 import { sanitizeOrigin } from '../lib/sharingOrigin.js';
 import { emitRecordUpdated } from './sharing/recordEvents.js';
 
-const STATE_PATH = join(PATHS.data, 'media-collections.json');
+// Lazy resolution — PATHS.data may not be available at module-load time
+// (e.g. tests that swap it through a Proxy mock so different cases get
+// different temp roots). See universeBuilder.js for the same pattern.
+const statePath = () => join(PATHS.data, 'media-collections.json');
 
 export const ERR_NOT_FOUND = 'NOT_FOUND';
 export const ERR_DUPLICATE = 'DUPLICATE';
@@ -96,7 +99,7 @@ const sanitizeCollection = (raw) => {
 
 export async function listCollections() {
   await ensureDir(PATHS.data);
-  const raw = await readJSONFile(STATE_PATH, DEFAULT_STATE, { logError: false });
+  const raw = await readJSONFile(statePath(), DEFAULT_STATE, { logError: false });
   if (!Array.isArray(raw.collections)) return [];
   const seen = new Set();
   const out = [];
@@ -117,7 +120,7 @@ export async function getCollection(id) {
 }
 
 const writeAll = async (collections) => {
-  await atomicWrite(STATE_PATH, { collections });
+  await atomicWrite(statePath(), { collections });
   return collections;
 };
 
@@ -192,11 +195,58 @@ export async function findOrCreateCollectionByName({ name, description = '', uni
   return next;
 }
 
+// Naming convention for the auto-managed universe collection. Single source
+// of truth so the upsert path (universe-builder render route), the rename
+// cascade (updateUniverse), and any caller that needs to display the name
+// stay aligned. Truncated to NAME_MAX_LENGTH because long universe names
+// would otherwise overflow sanitizeCollection's slice and silently mismatch.
+export const universeCollectionNameFor = (universeName) =>
+  `Universe: ${typeof universeName === 'string' ? universeName : ''}`.slice(0, NAME_MAX_LENGTH);
+
+// Look up an existing collection by its universeId stamp. Returns null if no
+// collection has ever been linked to this universe — callers fall back to
+// findOrCreateCollectionByName to upsert on first use.
+export async function findCollectionByUniverseId(universeId) {
+  if (!universeId) return null;
+  const all = await listCollections();
+  return all.find((c) => c.universeId === universeId) || null;
+}
+
+// Cascade a universe rename to its linked collection. Skips the rename-lock
+// guard in updateCollection by writing the name directly — the lock exists
+// to block user-driven renames, not system-driven cascades from the
+// universe rename itself.
+export async function renameCollectionForUniverse(universeId, newUniverseName) {
+  if (!universeId) return null;
+  const all = await listCollections();
+  const idx = all.findIndex((c) => c.universeId === universeId);
+  if (idx < 0) return null;
+  const target = all[idx];
+  const desired = universeCollectionNameFor(newUniverseName);
+  if (!desired || desired === target.name) return target;
+  const merged = { ...target, name: desired, updatedAt: new Date().toISOString() };
+  const next = [...all];
+  next[idx] = merged;
+  await writeAll(next);
+  return merged;
+}
+
 export async function updateCollection(id, patch) {
   const all = await listCollections();
   const idx = all.findIndex((c) => c.id === id);
   if (idx < 0) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
   const cur = all[idx];
+  // Universe-linked collections own their name — Universe Builder uses
+  // `Universe: <name>` as the identity for routing auto-filed renders into
+  // the right bucket. A user-driven rename would silently fork that bucket
+  // on the next render. The supported workflow is renaming the universe;
+  // updateUniverse cascades the new name down to the linked collection.
+  if ('name' in patch && cur.universeId && patch.name !== cur.name) {
+    throw makeErr(
+      'This collection is linked to a Universe — rename the universe to rename it.',
+      ERR_VALIDATION,
+    );
+  }
   // Cover key validation is deferred to sanitizeCollection on read, but we
   // also reject up-front so the API gives a clear error rather than silently
   // dropping the cover.

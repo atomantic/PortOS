@@ -16,6 +16,9 @@
 import { parseComicPagesOwner, slotKeyForVariant } from './owners.js';
 import { createFilenameHook } from './filenameHookFactory.js';
 import { buildRenderSlot } from './visualStages.js';
+import { mediaJobEvents } from '../mediaJobQueue/index.js';
+import { getIssue } from './issues.js';
+import { fileCoverIntoUniverseCollection } from './coverUniverseFiler.js';
 
 // Slot record for a legacy in-flight completion (job enqueued before the
 // proof/final split). `job.params` carries the originally-requested width
@@ -102,5 +105,46 @@ const hook = createFilenameHook({
   },
 });
 
-export const initComicPagesFilenameHook = hook.init;
-export const __testing = hook.__testing;
+// Parallel listener: when an issue COVER or BACK-COVER render completes,
+// also file the image into the owning universe's media collection. Panels
+// are excluded — the universe bucket is for poster-style artwork, not
+// every interior frame. Runs alongside the factory hook (which stamps the
+// filename onto the stage); both subscribe to the same `completed` event
+// and act independently, so a failure in one doesn't break the other.
+let coverFilingHandler = null;
+
+const coverFilingListener = (job) => {
+  // Sync gate runs first — most completion events are panels or unrelated
+  // jobs, so allocating a microtask + try/catch frame for the >95% miss
+  // case is pure waste.
+  if (!job || job.kind !== 'image') return;
+  const filename = job.result?.filename;
+  if (typeof filename !== 'string' || !filename) return;
+  const parsed = parseComicPagesOwner(job.owner);
+  if (!parsed || (parsed.target !== 'cover' && parsed.target !== 'backCover')) return;
+  void (async () => {
+    const issue = await getIssue(parsed.issueId).catch(() => null);
+    if (!issue?.seriesId) return;
+    await fileCoverIntoUniverseCollection({ seriesId: issue.seriesId, filename });
+  })().catch((err) => {
+    console.error(`❌ comicPages cover→universe filer crashed: ${err?.message || err}`);
+  });
+};
+
+export function initComicPagesFilenameHook() {
+  hook.init();
+  if (!coverFilingHandler) {
+    coverFilingHandler = coverFilingListener;
+    mediaJobEvents.on('completed', coverFilingHandler);
+  }
+}
+
+export const __testing = {
+  reset() {
+    hook.__testing.reset();
+    if (coverFilingHandler) {
+      mediaJobEvents.off('completed', coverFilingHandler);
+      coverFilingHandler = null;
+    }
+  },
+};
