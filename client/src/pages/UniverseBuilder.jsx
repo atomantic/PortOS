@@ -10,9 +10,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
-  Globe2, Plus, Trash2, Sparkles, Wand2, Loader2, Save, FolderOpen,
+  Plus, Trash2, Sparkles, Wand2, Loader2, Save, FolderOpen,
   Edit3, X, MessageSquarePlus, Play, Lock, Unlock,
-  PanelLeftClose, PanelLeftOpen, ArrowUpCircle,
+  ArrowUpCircle, Search, ChevronDown, Check,
   BookOpen, Users, MapPin, Package, Layers, ImagePlus, FolderTree,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
@@ -26,7 +26,7 @@ import {
   listImageModels, getSettings,
 } from '../services/api';
 import useClickOutside from '../hooks/useClickOutside';
-import { useLocalStorageBool, useLocalStoragePersisted } from '../hooks/useLocalStorageBool';
+import { useLocalStoragePersisted } from '../hooks/useLocalStorageBool';
 import InfluenceChipsInput from '../components/universeBuilder/InfluenceChipsInput';
 import BackendChipStrip from '../components/media/BackendChipStrip';
 import ImageGenControls from '../components/imageGen/ImageGenControls';
@@ -329,6 +329,175 @@ function StyleNegativePromptEditor({ influences, onChange, locked, onToggleLock 
   );
 }
 
+// Universe autocomplete combobox: search existing universes or create one when
+// the trimmed query doesn't exactly match any. `onCreate` is wired to a
+// dedicated create path (not handleSave) so typing a new name while an existing
+// universe is selected never accidentally renames it.
+const LIST_ID = 'universe-selector-list';
+const OPTION_ID_PREFIX = 'universe-option-';
+const CREATE_OPTION_ID = 'universe-option-create';
+
+function UniverseSelector({ universes, selectedId, value, onChange, onPick, onCreate, busy }) {
+  const wrapRef = useRef(null);
+  const [open, setOpen] = useState(false);
+  const [activeIdx, setActiveIdx] = useState(0);
+  // Memoize the close callback so useClickOutside doesn't rebind its window
+  // listener on every render of the parent (which re-renders per keystroke).
+  const close = useCallback(() => setOpen(false), []);
+  useClickOutside(wrapRef, open, close);
+
+  const trimmed = (value || '').trim();
+  const lower = trimmed.toLowerCase();
+
+  // Exclude current — clicking it would be a navigation no-op.
+  const filtered = useMemo(() => {
+    if (!Array.isArray(universes) || universes.length === 0) return [];
+    return universes
+      .filter((u) => u.id !== selectedId)
+      .filter((u) => !lower || (u.name || '').toLowerCase().includes(lower))
+      .slice(0, 20);
+  }, [universes, selectedId, lower]);
+
+  // exactMatch still considers the current one so renaming-to-same doesn't
+  // surface a misleading Create option.
+  const exactMatch = useMemo(() => {
+    if (!trimmed) return false;
+    return (universes || []).some((u) => (u.name || '').trim().toLowerCase() === lower);
+  }, [universes, trimmed, lower]);
+
+  const showCreateOption = !!trimmed && !exactMatch;
+  const totalItems = filtered.length + (showCreateOption ? 1 : 0);
+
+  // Reset on result change to avoid stale Enter target.
+  useEffect(() => { setActiveIdx(0); }, [filtered.length, showCreateOption]);
+
+  const activeOptionId = open
+    ? (activeIdx < filtered.length
+      ? `${OPTION_ID_PREFIX}${filtered[activeIdx]?.id}`
+      : (showCreateOption ? CREATE_OPTION_ID : undefined))
+    : undefined;
+
+  const handleKeyDown = (e) => {
+    if (!open && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+      setOpen(true);
+      e.preventDefault();
+      return;
+    }
+    if (!open) return;
+    if (e.key === 'Escape') { setOpen(false); e.preventDefault(); return; }
+    if (e.key === 'ArrowDown') {
+      setActiveIdx((i) => (totalItems ? Math.min(totalItems - 1, i + 1) : 0));
+      e.preventDefault();
+      return;
+    }
+    if (e.key === 'ArrowUp') {
+      setActiveIdx((i) => Math.max(0, i - 1));
+      e.preventDefault();
+      return;
+    }
+    if (e.key === 'Enter') {
+      if (activeIdx < filtered.length) {
+        const u = filtered[activeIdx];
+        if (u) { onPick(u.id); setOpen(false); }
+        e.preventDefault();
+      } else if (showCreateOption) {
+        onCreate();
+        setOpen(false);
+        e.preventDefault();
+      }
+    }
+  };
+
+  return (
+    <div ref={wrapRef} className="relative flex-1 min-w-[200px]">
+      <div className="relative">
+        <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-500 pointer-events-none" />
+        <input
+          id="universe-name"
+          type="text"
+          value={value}
+          onChange={(e) => { onChange(e.target.value); setOpen(true); }}
+          onFocus={() => setOpen(true)}
+          onKeyDown={handleKeyDown}
+          placeholder="Search universes or type a new name…"
+          className="w-full bg-port-bg border border-port-border rounded pl-8 pr-9 py-2 text-white focus:outline-none focus:border-port-accent"
+          maxLength={100}
+          autoComplete="off"
+          role="combobox"
+          aria-autocomplete="list"
+          aria-expanded={open}
+          aria-controls={LIST_ID}
+          aria-activedescendant={activeOptionId}
+        />
+        <button
+          type="button"
+          onClick={() => setOpen((p) => !p)}
+          className="absolute right-1 top-1/2 -translate-y-1/2 p-1 text-gray-500 hover:text-white"
+          aria-label={open ? 'Close universe list' : 'Open universe list'}
+          tabIndex={-1}
+        >
+          <ChevronDown size={14} className={`transition-transform ${open ? 'rotate-180' : ''}`} />
+        </button>
+      </div>
+      {open && (
+        <ul
+          id={LIST_ID}
+          role="listbox"
+          className="absolute left-0 right-0 top-full mt-1 z-30 max-h-80 overflow-y-auto bg-port-card border border-port-border rounded shadow-lg"
+        >
+          {filtered.length === 0 && !showCreateOption && (
+            <li className="px-3 py-2 text-xs text-gray-500">
+              {(universes?.length || 0) === 0 ? 'No universes yet — type a name and Create.' : 'No matches'}
+            </li>
+          )}
+          {filtered.map((u, i) => (
+            <li key={u.id}>
+              <button
+                type="button"
+                id={`${OPTION_ID_PREFIX}${u.id}`}
+                role="option"
+                aria-selected={u.id === selectedId}
+                onClick={() => { onPick(u.id); setOpen(false); }}
+                onMouseEnter={() => setActiveIdx(i)}
+                className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 ${
+                  i === activeIdx ? 'bg-port-bg text-white' : 'text-gray-300 hover:bg-port-bg'
+                }`}
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="font-medium truncate">{u.name}</div>
+                  <div className="text-[11px] text-gray-500 truncate">{u.starterPrompt || 'No starter prompt'}</div>
+                </div>
+                {u.id === selectedId && <Check size={14} className="text-port-accent" />}
+              </button>
+            </li>
+          ))}
+          {showCreateOption && (
+            <li>
+              <button
+                type="button"
+                id={CREATE_OPTION_ID}
+                role="option"
+                aria-selected={false}
+                disabled={busy}
+                onClick={() => { onCreate(); setOpen(false); }}
+                onMouseEnter={() => setActiveIdx(filtered.length)}
+                className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 border-t border-port-border disabled:opacity-50 ${
+                  activeIdx === filtered.length
+                    ? 'bg-port-accent/20 text-port-accent'
+                    : 'text-port-accent hover:bg-port-accent/15'
+                }`}
+              >
+                {busy ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
+                Create &ldquo;{trimmed}&rdquo;
+              </button>
+            </li>
+          )}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 export default function UniverseBuilder() {
   // The selected world id lives in the URL so deep-linking + back/forward
   // work. The page is mounted at /universe-builder, /universe-builder/:universeId,
@@ -433,15 +602,6 @@ export default function UniverseBuilder() {
     setRefineChanges([]);
   };
 
-  // Universes list collapsed state — desktop only (mobile stacks the sidebar
-  // above the editor and there's no horizontal-space tradeoff to make).
-  // Persists across visits so users who prefer a maximized editor stay there.
-  const [worldsCollapsed, setWorldsCollapsed] = useLocalStorageBool(
-    'universeBuilder.worldsCollapsed',
-    false,
-  );
-  const toggleWorldsCollapsed = () => setWorldsCollapsed((prev) => !prev);
-
   const refresh = async () => {
     setLoading(true);
     const [list, provData, models, settings] = await Promise.all([
@@ -523,10 +683,26 @@ export default function UniverseBuilder() {
     return () => clearTimeout(t);
   }, [location.hash, selectedId, draft.id]);
 
-  const handleNew = () => {
-    goToWorld(null);
-    setDraft(emptyTemplate());
-    setRuns([]);
+  // Create-from-selector path: builds a universe from just the typed name
+  // (everything else empty) and navigates to it. Distinct from handleSave so
+  // typing a new name while an existing universe is selected doesn't rename
+  // that universe — Create always makes a new record.
+  const handleCreateNamed = async (rawName) => {
+    const name = (rawName || '').trim();
+    if (!name) { toast.error('Name is required'); return; }
+    setSaving(true);
+    const result = await createUniverse({
+      ...emptyTemplate(),
+      name,
+    }).catch((e) => { toast.error(`Create failed: ${e.message}`); return null; });
+    setSaving(false);
+    if (!result) return;
+    toast.success('World created');
+    setWorlds((prev) => {
+      const without = prev.filter((w) => w.id !== result.id);
+      return [result, ...without];
+    });
+    goToWorld(result.id);
   };
 
   const handleSave = async () => {
@@ -1353,106 +1529,23 @@ export default function UniverseBuilder() {
     setSearchParams(next, { replace: true });
   }, [activeTab, activeBucket, bucketsByKind, searchParams, setSearchParams]);
 
-  // Mobile = flex column (grid template ignored); lg+ = grid where the inline
-  // `gridTemplateColumns` swap between collapsed/expanded widths takes effect.
-  // Flipping `display` at the breakpoint (rather than overriding grid-cols-1
-  // with an inline style) keeps the mobile stack working. Collapsed track is
-  // 0px (not a thin rail) — matches CoS pattern where a floating expand
-  // button stands in for the rail.
-  const desktopGridCols = worldsCollapsed ? '0px minmax(0, 1fr)' : '260px minmax(0, 1fr)';
-
   return (
     <div className="flex flex-col h-full">
-      <div
-        className="relative flex-1 flex flex-col lg:grid min-h-0 transition-[grid-template-columns] duration-200"
-        style={{ gridTemplateColumns: desktopGridCols }}
-      >
-      {/* Sidebar — world list. Collapses entirely on desktop (no rail) —
-          a floating expand button at the nav edge stands in. Mobile keeps the
-          full sidebar inline (the page stacks vertically below `lg`, so
-          collapsing doesn't help there). Border-r + tinted bg matches
-          WritersRoom's tight integrated look — the editor area flows directly
-          off the sidebar without a card gap. */}
-      {worldsCollapsed && (
-        <button
-          onClick={toggleWorldsCollapsed}
-          className="hidden lg:flex absolute left-0 top-2 z-20 p-1.5 text-gray-500 hover:text-white transition-colors rounded-r-md hover:bg-port-card bg-port-card/60 border border-l-0 border-port-border"
-          title="Show universes"
-          aria-label="Show universes"
-        >
-          <PanelLeftOpen size={16} />
-        </button>
-      )}
-      {worldsCollapsed ? (
-        <div className="hidden lg:block overflow-hidden min-w-0" />
-      ) : (
-        <aside className="border-b lg:border-b-0 lg:border-r border-port-border bg-port-card/40 px-3 py-3 flex flex-col gap-2 lg:overflow-y-auto">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-white flex items-center gap-2">
-              <Globe2 size={16} className="text-port-accent" /> Universes
-            </h2>
-            <div className="flex items-center gap-1">
-              <button
-                onClick={handleNew}
-                className="text-xs px-2 py-1 bg-port-accent/15 hover:bg-port-accent/25 text-port-accent rounded flex items-center gap-1 min-h-[40px] sm:min-h-0"
-                title="New world"
-              >
-                <Plus size={14} /> New
-              </button>
-              <button
-                onClick={toggleWorldsCollapsed}
-                className="hidden lg:inline-flex p-1.5 text-gray-500 hover:text-white"
-                title="Collapse universes"
-                aria-label="Collapse universes"
-              >
-                <PanelLeftClose size={14} />
-              </button>
-            </div>
-          </div>
-          {loading ? (
-            <p className="text-xs text-gray-500">Loading…</p>
-          ) : universes.length === 0 ? (
-            <p className="text-xs text-gray-500">No universes yet — click <span className="text-port-accent">New</span> to start.</p>
-          ) : (
-            <ul className="flex flex-col gap-1 overflow-y-auto">
-              {universes.map((w) => {
-                const active = w.id === selectedId;
-                return (
-                  <li key={w.id}>
-                    <button
-                      onClick={() => goToWorld(w.id)}
-                      className={`w-full text-left px-2 py-2 rounded text-sm transition-colors min-h-[40px] ${
-                        active
-                          ? 'bg-port-accent/15 text-port-accent border border-port-accent/40'
-                          : 'text-gray-300 hover:bg-port-bg border border-transparent'
-                      }`}
-                    >
-                      <div className="font-medium truncate">{w.name}</div>
-                      <div className="text-[11px] text-gray-500 truncate">{w.starterPrompt || 'No starter prompt'}</div>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </aside>
-      )}
-
-      {/* Editor — owns its own scroll inside the full-width main so the
-          sidebar can stay pinned while the long card stack scrolls. */}
-      <section className="flex flex-col gap-3 p-4 min-h-0 lg:overflow-y-auto">
-        {/* Thin action header — name + Save + Share + Delete sit above the
-            tab nav so they're reachable from any tab. The Bible-tab actions
-            (Generate / Refine, starter idea, story-bible fields) live inside
-            the Bible tab itself, per Phase C "Bible is its own tab". */}
+      <section className="flex-1 flex flex-col gap-3 p-4 min-h-0 overflow-y-auto">
+        {/* Thin action header — autocomplete universe selector doubles as the
+            name field; Save + Share + Delete sit beside it so they're reachable
+            from any tab. The Bible-tab actions (Generate / Refine, starter
+            idea, story-bible fields) live inside the Bible tab itself, per
+            Phase C "Bible is its own tab". */}
         <header className="bg-port-card border border-port-border rounded p-3 flex items-center gap-2 flex-wrap">
-          <input
-            type="text"
-            value={draft.name}
-            onChange={(e) => updateDraft({ name: e.target.value })}
-            placeholder="World name (e.g. Moebius / Scavenger sci-fi)"
-            className="flex-1 min-w-[180px] bg-port-bg border border-port-border rounded px-3 py-2 text-white focus:outline-none focus:border-port-accent"
-            maxLength={100}
+          <UniverseSelector
+            universes={universes}
+            selectedId={selectedId}
+            value={draft.name || ''}
+            onChange={(name) => updateDraft({ name })}
+            onPick={(id) => goToWorld(id)}
+            onCreate={() => handleCreateNamed(draft.name)}
+            busy={saving || loading}
           />
           <button
             onClick={handleSave}
@@ -1626,7 +1719,6 @@ export default function UniverseBuilder() {
           />
         )}
       </section>
-      </div>
     </div>
   );
 }
