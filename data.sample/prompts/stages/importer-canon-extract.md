@@ -9,9 +9,9 @@ You are a senior story editor reverse-engineering an existing finished work into
 - **Content type:** {{contentType}}
 
 {{#existingCanonJson}}
-## Existing universe canon (do NOT duplicate these by name)
+## Existing universe canon (do NOT duplicate these by name or aliases)
 
-This universe already has some canonical entries. Match by `name` (case-insensitive). If an existing entry covers the same character / place / object, **omit it** from your output — the merge layer will append your `evidence` to the existing entry separately. Only return NEW entries.
+This universe already has some canonical entries. Match by `name` (case-insensitive) **and by any listed `aliases`**. If an existing entry covers the same character / place / object, **omit it entirely** from your output — return only NEW entries. (Evidence for existing entries from this source is not currently re-merged; downstream evidence backfill is a follow-up.)
 
 ```json
 {{{existingCanonJson}}}
@@ -52,8 +52,8 @@ For each distinct location with sensory detail or repeated scenes:
 - **`description`** — 1–3 sentences naming what's visible (architecture, props, atmosphere).
 - **`palette`** — color shorthand if implied by the prose ("warm tungsten, brass, deep brown").
 - **`era`** — temporal cue if relevant ("1970s suburban", "near-future cyberpunk").
-- **`intExt`** — `"INT"` or `"EXT"` or `null` if mixed/unclear.
-- **`timeOfDay`** — one of `dawn`, `day`, `dusk`, `night`, or `null`.
+- **`intExt`** — `"INT"` or `"EXT"`. Omit the key entirely if mixed/unclear (do NOT emit the literal string `"null"` — the sanitizer drops unknown enum values).
+- **`timeOfDay`** — one of `"dawn"`, `"day"`, `"dusk"`, `"night"`. Omit the key entirely if unknown.
 
 ### Objects
 For each object with narrative weight (MacGuffins, recurring symbols, plot-critical items):
@@ -85,8 +85,8 @@ Return ONLY valid JSON matching this shape — no prose, no markdown fence, no c
       "description": "string",
       "palette": "string",
       "era": "string",
-      "intExt": "INT|EXT|null",
-      "timeOfDay": "dawn|day|dusk|night|null"
+      "intExt": "INT" /* or "EXT", or omit the key entirely if mixed/unclear */,
+      "timeOfDay": "dawn" /* or "day" | "dusk" | "night", or omit the key entirely */
     }
   ],
   "objects": [

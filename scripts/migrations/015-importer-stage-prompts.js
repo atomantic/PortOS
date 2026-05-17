@@ -22,6 +22,7 @@ export default {
   async up({ rootDir }) {
     let copied = 0;
     let present = 0;
+    let skipped = 0;
     for (const filename of FILENAMES) {
       const dataPath = join(rootDir, 'data', 'prompts', 'stages', filename);
       const samplePath = join(rootDir, 'data.sample', 'prompts', 'stages', filename);
@@ -29,10 +30,27 @@ export default {
       const exists = await access(dataPath, constants.F_OK).then(() => true, () => false);
       if (exists) { present++; continue; }
 
-      await copyFile(samplePath, dataPath);
-      copied++;
-      console.log(`✅ seeded ${filename}`);
+      // Validate the source exists before copy — if `data.sample/` was
+      // trimmed in a later release or this migration runs against a sparse
+      // checkout, we'd otherwise abort the whole migration batch mid-loop.
+      const sampleExists = await access(samplePath, constants.F_OK).then(() => true, () => false);
+      if (!sampleExists) {
+        console.warn(`⚠️  importer-stage-prompts: sample missing for ${filename} — skipping`);
+        skipped++;
+        continue;
+      }
+
+      try {
+        await copyFile(samplePath, dataPath);
+        copied++;
+        console.log(`✅ seeded ${filename}`);
+      } catch (err) {
+        // Don't abort the batch — log and keep going so the other prompts
+        // still land. The operator sees exactly which one failed.
+        console.warn(`⚠️  importer-stage-prompts: copy failed for ${filename}: ${err.message}`);
+        skipped++;
+      }
     }
-    console.log(`📝 importer prompts: ${copied} copied, ${present} already present`);
+    console.log(`📝 importer prompts: ${copied} copied, ${present} already present, ${skipped} skipped`);
   },
 };

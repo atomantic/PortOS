@@ -10,7 +10,9 @@ import {
   commitImport,
   ERR_VALIDATION,
   ERR_LOCKED,
+  IMPORTER_SOURCE_CHAR_LIMIT,
 } from '../services/importer.js';
+import { ARC_ROLES } from '../lib/storyArc.js';
 import * as universeSvc from '../services/universeBuilder.js';
 import * as seriesSvc from '../services/pipeline/series.js';
 
@@ -32,6 +34,17 @@ const mapServiceError = (err) => {
   if (status) return new ServerError(err.message, { status, code: err.code });
   return err;
 };
+
+// Surfaces server-canonical constants so the client doesn't hardcode (and
+// drift from) the source-char limit or the arc-role enum. Read by the
+// Importer intake form on mount; the analyze response also includes these
+// for clients that skip the config call.
+router.get('/config', asyncHandler(async (req, res) => {
+  res.json({
+    sourceCharLimit: IMPORTER_SOURCE_CHAR_LIMIT,
+    arcRoles: [...ARC_ROLES],
+  });
+}));
 
 router.post('/analyze', asyncHandler(async (req, res) => {
   const input = validateRequest(importerAnalyzeSchema, req.body || {});

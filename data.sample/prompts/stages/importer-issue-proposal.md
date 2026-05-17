@@ -12,12 +12,17 @@ You are a senior story editor segmenting an existing finished work into PortOS p
 {{arcSummary}}
 ```
 
-{{#targetIssueCount}}
+{{#isUserRequestedCount}}
 - **User-requested issue count:** {{targetIssueCount}} — produce exactly this many issues, splitting the source proportionally.
+{{/isUserRequestedCount}}
+{{^isUserRequestedCount}}
+{{#targetIssueCount}}
+- **Target issue count (default for this content type):** {{targetIssueCount}} — use this as a starting point; the per-content-type guidance below may override it (e.g. a novel with explicit chapters).
 {{/targetIssueCount}}
 {{^targetIssueCount}}
 - **Issue count:** LLM's choice — see per-content-type guidance below.
 {{/targetIssueCount}}
+{{/isUserRequestedCount}}
 
 ## Per-content-type guidance for splitting
 

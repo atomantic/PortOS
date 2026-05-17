@@ -9,17 +9,18 @@ import { join } from 'path';
 // so a per-test `let tempRoot = mkdtempSync()` would land too late.
 const tempRoot = mkdtempSync(join(tmpdir(), 'importer-test-'));
 
-// Mock fileUtils.js to point PATHS.data at our test root. Proxy passes
-// every other export through unchanged so atomicWrite / readJSONFile keep
-// the real shapes.
+// Mock fileUtils.js to point PATHS.data at our test root. Spread the actual
+// exports into a plain object and override PATHS — matches the pattern used
+// by bibleExtractor.test.js + sceneExtractor.test.js. A Proxy over the ESM
+// namespace exotic object that `vi.importActual` returns is brittle: it
+// intercepts only `get`, can bypass `[[Module]]` invariants Vitest's transform
+// expects, and behaves unpredictably for `Symbol.toStringTag` / re-exports.
 vi.mock('../lib/fileUtils.js', async () => {
   const actual = await vi.importActual('../lib/fileUtils.js');
-  return new Proxy(actual, {
-    get(target, prop) {
-      if (prop === 'PATHS') return { ...actual.PATHS, data: tempRoot };
-      return target[prop];
-    },
-  });
+  return {
+    ...actual,
+    PATHS: { ...actual.PATHS, data: tempRoot },
+  };
 });
 
 // Mock runStagedLLM so tests never hit a real provider — every importer

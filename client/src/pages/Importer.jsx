@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { FileInput, Loader2, ArrowLeft, CheckCircle2, AlertTriangle } from 'lucide-react';
 import toast from '../components/ui/Toast';
@@ -7,8 +7,10 @@ import { STORY_SHAPES } from '../components/pipeline/StoryShapes';
 import {
   analyzeImport,
   commitImport,
+  getImporterConfig,
   IMPORTER_CONTENT_TYPES,
-  IMPORTER_SOURCE_CHAR_LIMIT,
+  IMPORTER_SOURCE_CHAR_LIMIT_FALLBACK,
+  IMPORTER_ARC_ROLES_FALLBACK,
 } from '../services/apiImporter';
 
 const CONTENT_TYPE_LABELS = {
@@ -18,10 +20,21 @@ const CONTENT_TYPE_LABELS = {
   'comic-script': 'Comic Script',
 };
 
-// Mirror of server `ARC_ROLES` in server/lib/storyArc.js. Server validates
-// against the same list; a drift here means the dropdown can't propose a
-// role the server would accept.
-const ARC_ROLES = ['pilot', 'complication', 'midpoint', 'b-plot', 'all-is-lost', 'finale'];
+// Whitelist of arc fields forwarded to the commit endpoint. The wire schema
+// (`importerArcShape`) is `.passthrough()` today and `sanitizeArc` ignores
+// unknowns, but `arcDraft` starts as a shallow clone of the LLM's arc
+// output — which still has the LLM-returned `seasons` field at the top
+// level. Without this strip the seasons would smuggle through to
+// `series.arc` if the schema ever tightens to `.strict()`.
+const ARC_FIELDS_TO_COMMIT = ['logline', 'summary', 'protagonistArc', 'themes', 'shape'];
+const pickArcFields = (arc) => {
+  if (!arc) return null;
+  const out = {};
+  for (const k of ARC_FIELDS_TO_COMMIT) {
+    if (arc[k] !== undefined) out[k] = arc[k];
+  }
+  return out;
+};
 
 const emptyIntake = () => ({
   universeName: '',
@@ -37,6 +50,27 @@ export default function Importer() {
   const [intake, setIntake] = useState(emptyIntake);
   const [preview, setPreview] = useState(null);
 
+  // Server-canonical config (source-char limit + arc-roles enum). Falls back
+  // to the shipped client defaults until the GET resolves. Hydrated on mount
+  // so the intake form's char-count warning + the review form's arc-role
+  // dropdown stay aligned with the server even when the server bumps the cap
+  // or extends the enum without a client redeploy.
+  const [config, setConfig] = useState({
+    sourceCharLimit: IMPORTER_SOURCE_CHAR_LIMIT_FALLBACK,
+    arcRoles: IMPORTER_ARC_ROLES_FALLBACK,
+  });
+  useEffect(() => {
+    // Silent — the fallback values are correct for the shipped client, so a
+    // transient network blip doesn't need to toast.
+    getImporterConfig({ silent: true }).then((cfg) => {
+      if (!cfg) return;
+      setConfig({
+        sourceCharLimit: Number.isFinite(cfg.sourceCharLimit) ? cfg.sourceCharLimit : IMPORTER_SOURCE_CHAR_LIMIT_FALLBACK,
+        arcRoles: Array.isArray(cfg.arcRoles) && cfg.arcRoles.length > 0 ? cfg.arcRoles : IMPORTER_ARC_ROLES_FALLBACK,
+      });
+    }).catch(() => { /* keep fallbacks */ });
+  }, []);
+
   // Review-phase editable state. Held separately from `preview` so the user
   // can experiment without losing the LLM's original suggestions.
   const [canonSelections, setCanonSelections] = useState({ characters: [], places: [], objects: [] });
@@ -45,7 +79,7 @@ export default function Importer() {
   const [issuesDraft, setIssuesDraft] = useState([]);
 
   const sourceLen = intake.source.length;
-  const sourceOver = sourceLen > IMPORTER_SOURCE_CHAR_LIMIT;
+  const sourceOver = sourceLen > config.sourceCharLimit;
 
   const intakeValid = useMemo(() =>
     intake.universeName.trim() && intake.seriesName.trim() && intake.source.trim() && !sourceOver,
@@ -70,9 +104,22 @@ export default function Importer() {
       places: (result.canonPreview?.places || []).map((e) => ({ ...e, _selected: true })),
       objects: (result.canonPreview?.objects || []).map((e) => ({ ...e, _selected: true })),
     });
-    setArcDraft(result.arcPreview ? { ...result.arcPreview } : null);
+    // arcDraft is sent verbatim as the commit's `arc` field — strip non-arc
+    // keys (e.g. the LLM's top-level `seasons`) at seed time so they can't
+    // smuggle into series.arc if the wire schema tightens.
+    setArcDraft(pickArcFields(result.arcPreview));
     setSeasonsDraft((result.seasonsPreview || []).map((s) => ({ ...s })));
     setIssuesDraft((result.issueProposals || []).map((i) => ({ ...i })));
+    // Server may have surfaced an updated source-char limit or arc-roles
+    // list — accept it for the rest of this session if the analyze response
+    // carries them, so the review form stays aligned with whatever the
+    // server is currently enforcing.
+    if (result.limits?.sourceCharLimit) {
+      setConfig((c) => ({ ...c, sourceCharLimit: result.limits.sourceCharLimit }));
+    }
+    if (Array.isArray(result.arcRoles) && result.arcRoles.length > 0) {
+      setConfig((c) => ({ ...c, arcRoles: result.arcRoles }));
+    }
     setPhase('review');
     return result;
   }, { errorMessage: 'Failed to analyze import' });
@@ -87,13 +134,20 @@ export default function Importer() {
         places: canonSelections.places.filter((e) => e._selected).map(stripPrivate),
         objects: canonSelections.objects.filter((e) => e._selected).map(stripPrivate),
       },
-      arc: arcDraft,
+      arc: pickArcFields(arcDraft),
       seasons: seasonsDraft,
       issues: issuesDraft.map(stripPrivate),
     };
     const result = await commitImport(payload, { silent: true });
     if (!result) return null;
     toast.success(`Imported ${result.createdIssueIds.length} issue${result.createdIssueIds.length === 1 ? '' : 's'} into "${result.series.name}"`);
+    // Surface season-remap warnings so the user sees when an issue landed in
+    // a different season than they (or the LLM) proposed — silent fallback
+    // would otherwise be invisible.
+    if (Array.isArray(result.remappedIssues) && result.remappedIssues.length > 0) {
+      const n = result.remappedIssues.length;
+      toast.warning(`${n} issue${n === 1 ? '' : 's'} landed in the first season — requested season number didn't exist.`);
+    }
     navigate(`/pipeline/series/${result.series.id}`);
     return result;
   }, { errorMessage: 'Failed to commit import' });
@@ -119,6 +173,7 @@ export default function Importer() {
           intakeValid={intakeValid}
           sourceLen={sourceLen}
           sourceOver={sourceOver}
+          sourceCharLimit={config.sourceCharLimit}
           analyzing={analyzing}
           onAnalyze={runAnalyze}
         />
@@ -135,6 +190,7 @@ export default function Importer() {
           setSeasonsDraft={setSeasonsDraft}
           issuesDraft={issuesDraft}
           setIssuesDraft={setIssuesDraft}
+          arcRoles={config.arcRoles}
           committing={committing}
           onCommit={runCommit}
           onBack={() => setPhase('intake')}
@@ -149,7 +205,7 @@ function stripPrivate(entry) {
   return rest;
 }
 
-function IntakeForm({ intake, setIntake, intakeValid, sourceLen, sourceOver, analyzing, onAnalyze }) {
+function IntakeForm({ intake, setIntake, intakeValid, sourceLen, sourceOver, sourceCharLimit, analyzing, onAnalyze }) {
   return (
     <div className="space-y-4 bg-port-card border border-port-border rounded-lg p-4 sm:p-6">
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -217,7 +273,7 @@ function IntakeForm({ intake, setIntake, intakeValid, sourceLen, sourceOver, ana
             Source Text
           </label>
           <span className={`text-xs ${sourceOver ? 'text-port-error' : 'text-port-text-muted'}`}>
-            {sourceLen.toLocaleString()} / {IMPORTER_SOURCE_CHAR_LIMIT.toLocaleString()} chars
+            {sourceLen.toLocaleString()} / {sourceCharLimit.toLocaleString()} chars
           </span>
         </div>
         <textarea
@@ -273,6 +329,7 @@ function ReviewPanel({
   preview, canonSelections, setCanonSelections,
   arcDraft, setArcDraft, seasonsDraft, setSeasonsDraft,
   issuesDraft, setIssuesDraft,
+  arcRoles,
   committing, onCommit, onBack,
 }) {
   const toggleSelected = (kind, idx) => {
@@ -331,7 +388,7 @@ function ReviewPanel({
 
       <ArcReviewSection arc={arcDraft} setArc={setArcDraft} seasons={seasonsDraft} setSeasons={setSeasonsDraft} />
 
-      <IssuesReviewSection issues={issuesDraft} setIssues={setIssuesDraft} seasons={seasonsDraft} />
+      <IssuesReviewSection issues={issuesDraft} setIssues={setIssuesDraft} seasons={seasonsDraft} arcRoles={arcRoles} />
 
       <div className="sticky bottom-4 flex items-center justify-end gap-2 bg-port-card border border-port-border rounded-lg p-3 shadow-lg">
         <button
@@ -504,7 +561,7 @@ function ArcReviewSection({ arc, setArc, seasons, setSeasons }) {
   );
 }
 
-function IssuesReviewSection({ issues, setIssues, seasons }) {
+function IssuesReviewSection({ issues, setIssues, seasons, arcRoles }) {
   if (issues.length === 0) {
     return (
       <section className="bg-port-card border border-port-border rounded-lg p-4">
@@ -554,7 +611,7 @@ function IssuesReviewSection({ issues, setIssues, seasons }) {
                   className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-sm"
                 >
                   <option value="">—</option>
-                  {ARC_ROLES.map((r) => <option key={r} value={r}>{r}</option>)}
+                  {arcRoles.map((r) => <option key={r} value={r}>{r}</option>)}
                 </select>
               </div>
               {seasonOptions ? (

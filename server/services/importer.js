@@ -25,7 +25,7 @@ import {
   updateSeries,
 } from './pipeline/series.js';
 import { createIssue } from './pipeline/issues.js';
-import { sanitizeArc, sanitizeSeasonList, buildSeason, ARC_SHAPE_IDS } from '../lib/storyArc.js';
+import { sanitizeArc, sanitizeSeasonList, buildSeason, ARC_SHAPE_IDS, ARC_ROLES } from '../lib/storyArc.js';
 import { mergeExtractedBible, BIBLE_KIND } from '../lib/storyBible.js';
 
 // Surfaced to the route layer so the importer's policy errors become 400s
@@ -110,10 +110,15 @@ function compactCanonForPrompt(universe) {
     }
     return out;
   };
+  // Aliases are exposed for every kind so the LLM's dedup matching aligns
+  // with the server-side merge keys (`mergeExtractedBible` dedups by name +
+  // aliases). Omitting aliases for any kind would let the LLM return an
+  // entry the merge layer treats as a duplicate, just with the new source's
+  // name variant.
   const characters = (universe.characters || []).map((c) =>
     slim(c, ['name', 'aliases', 'role', 'physicalDescription']));
   const places = (universe.settings || []).map((s) =>
-    slim(s, ['name', 'slugline', 'description']));
+    slim(s, ['name', 'aliases', 'slugline', 'description']));
   const objects = (universe.objects || []).map((o) =>
     slim(o, ['name', 'aliases', 'description']));
   if (!characters.length && !places.length && !objects.length) return null;
@@ -174,7 +179,8 @@ export async function analyzeImport({
   // option).
   const llmOpts = { providerOverride, source: 'importer-analyze', returnsJson: true };
 
-  const issueCountHint = Number.isFinite(targetIssueCount)
+  const userRequestedCount = Number.isFinite(targetIssueCount) && targetIssueCount > 0;
+  const issueCountHint = userRequestedCount
     ? targetIssueCount
     : DEFAULT_TARGET_ISSUE_COUNT_HINT[contentType];
 
@@ -223,7 +229,12 @@ export async function analyzeImport({
     source,
     ...typeFlags,
     arcSummary,
+    // `targetIssueCount` (number) is the value the prompt interpolates;
+    // `isUserRequestedCount` (boolean) gates the "user-requested — produce
+    // exactly this many" copy vs the softer "default for this type" copy so
+    // a per-type hint isn't presented as a hard user constraint.
     targetIssueCount: issueCountHint,
+    isUserRequestedCount: userRequestedCount,
   }, llmOpts);
 
   return {
@@ -246,6 +257,13 @@ export async function analyzeImport({
     },
     providerId: canonRun.providerId,
     model: canonRun.model,
+    // Server-canonical constants surfaced to the client so it doesn't have to
+    // hardcode (and silently drift from) them. The intake form's char-count
+    // warning + the review form's arc-role dropdown both read these.
+    limits: {
+      sourceCharLimit: IMPORTER_SOURCE_CHAR_LIMIT,
+    },
+    arcRoles: [...ARC_ROLES],
   };
 }
 
@@ -287,6 +305,21 @@ export async function commitImport({
       `Series "${series.name}" has a locked arc — commit refused. Unlock the arc to import.`,
       ERR_LOCKED,
     );
+  }
+
+  // Fail-fast validation BEFORE any state mutation: a missing-title issue
+  // would otherwise let the canon merge + arc/seasons write land on disk
+  // and only fail mid-issues-loop, leaving the system half-imported. We
+  // require `title` here because `createIssue` requires it and there is no
+  // rollback path for partial writes.
+  for (let i = 0; i < issues.length; i++) {
+    const proposal = issues[i];
+    if (!isStr(proposal?.title) || !proposal.title.trim()) {
+      throw makeErr(
+        `Issue at position ${i + 1} is missing a title — commit refused before any state changed.`,
+        ERR_VALIDATION,
+      );
+    }
   }
 
   // Wire field `places` maps to storage field `settings` until the
@@ -339,10 +372,25 @@ export async function commitImport({
   const fallbackSeasonId = updatedSeries.seasons?.[0]?.id || null;
 
   const createdIssueIds = [];
+  // Surface season-remap events so the UI can warn "issue 3 wanted season 5
+  // but it doesn't exist — landed in season 1." Silent reassignment hides
+  // user intent; an explicit list lets the caller toast it.
+  const remappedIssues = [];
   for (const proposal of issues) {
-    const seasonId = proposal.seasonNumber != null
-      ? (seasonByNumber.get(proposal.seasonNumber) || fallbackSeasonId)
-      : fallbackSeasonId;
+    let seasonId = fallbackSeasonId;
+    if (proposal.seasonNumber != null) {
+      const matched = seasonByNumber.get(proposal.seasonNumber);
+      if (matched) {
+        seasonId = matched;
+      } else {
+        remappedIssues.push({
+          title: proposal.title,
+          arcPosition: proposal.arcPosition,
+          requestedSeasonNumber: proposal.seasonNumber,
+          actualSeasonId: fallbackSeasonId,
+        });
+      }
+    }
     // Bundle stage seeds into the initial createIssue payload so the
     // serialized write tail handles one write per issue instead of
     // create + updateStage(prose) + updateStage(idea).
@@ -372,6 +420,7 @@ export async function commitImport({
     universe: updatedUniverse,
     series: updatedSeries,
     createdIssueIds,
+    remappedIssues,
   };
 }
 
