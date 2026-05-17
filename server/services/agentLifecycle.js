@@ -1066,7 +1066,12 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
         return null;
       });
       if (summary) {
-        await updateAgent(agentId, { metadata: { outputSummary: summary } });
+        // .catch so a metadata-write failure doesn't skip finalizeAgent —
+        // pipeline summary is best-effort; lane release + completeAgent +
+        // updateTask + processAgentCompletion must still run.
+        await updateAgent(agentId, { metadata: { outputSummary: summary } }).catch(err => {
+          emitLog('warn', `Failed to save pipeline summary for ${agentId}: ${err.message}`, { agentId });
+        });
       }
     }
 

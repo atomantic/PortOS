@@ -321,8 +321,11 @@ export async function getClaudeSettingsEnv() {
 
 /**
  * Spawn agent directly (fallback when runner not available).
- * `cleanupWorktreeFn` is passed in to avoid circular imports with agentLifecycle.js.
- * `isTruthyMetaFn` is passed in to avoid circular imports with subAgentSpawner.js.
+ * `cleanupWorktreeFn` is passed in to avoid pulling `cleanupAgentWorktree`
+ * out of agentLifecycle.js — that helper transitively imports the spawn
+ * paths, creating a cycle. `isTruthyMetaFn` is passed in for the same
+ * reason vs subAgentSpawner.js. (We DO import `finalizeAgent` from
+ * agentLifecycle.js — that's a one-way dep that hoists fine.)
  */
 export async function spawnDirectly({
   agentId,
