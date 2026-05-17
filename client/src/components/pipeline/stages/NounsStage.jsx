@@ -72,11 +72,13 @@ const KINDS = [
 // optional `stylePromptOverride` prepends ahead of the universe's embrace
 // chip list, joined with the same `'. '` separator the server uses. Without
 // this parity, client preview renders drift from comic-page renders.
+// `universe` is allowed to be null — server-side buildStyleClause still
+// applies the override when only the series has style content (orphan or
+// failed-load), so the client preset must do the same.
 const universeStylePreset = (universe, series) => {
-  if (!universe) return null;
   const override = (series?.stylePromptOverride || '').trim();
-  const embrace = joinInfluenceList(universe.influences?.embrace);
-  const avoid = joinInfluenceList(universe.influences?.avoid);
+  const embrace = universe ? joinInfluenceList(universe.influences?.embrace) : '';
+  const avoid = universe ? joinInfluenceList(universe.influences?.avoid) : '';
   const prompt = [override, embrace].filter(Boolean).join('. ');
   if (!prompt && !avoid) return null;
   return { prompt, negativePrompt: avoid };

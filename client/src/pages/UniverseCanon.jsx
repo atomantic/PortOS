@@ -444,7 +444,7 @@ export default function UniverseCanon() {
         </section>
       ) : null}
 
-      {seriesFilter && seriesOptions.length > 1 ? (
+      {seriesFilter ? (
         <p className="text-xs text-gray-500 italic">
           Showing canon used in <span className="text-gray-300">{seriesOptions.find((s) => s.id === seriesFilter)?.name || 'selected series'}</span>.{' '}
           <button
