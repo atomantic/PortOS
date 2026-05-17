@@ -59,12 +59,21 @@ describe('buildLightContextPrompt', () => {
   });
 
   describe('what it includes', () => {
-    it('includes task id/priority/description and working directory', () => {
+    it('includes the task description directly without a metadata header', () => {
       const prompt = buildLightContextPrompt(makeTask(), '/workspaces/foo', null, isTruthyMeta);
-      expect(prompt).toMatch(/task-test-1/);
-      expect(prompt).toMatch(/HIGH/);
       expect(prompt).toMatch(/Add a button to the dashboard/);
-      expect(prompt).toMatch(/\/workspaces\/foo/);
+      // The agent's cwd is set by the spawner; the prompt doesn't repeat metadata.
+      expect(prompt).not.toMatch(/task-test-1/);
+      expect(prompt).not.toMatch(/\*\*ID\*\*:/);
+      expect(prompt).not.toMatch(/\*\*Priority\*\*:/);
+      expect(prompt).not.toMatch(/\*\*Working Directory\*\*:/);
+    });
+
+    it('shows Target App when set', () => {
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: { app: 'comics' } }),
+        '/r', null, isTruthyMeta);
+      expect(prompt).toMatch(/\*\*Target App\*\*: comics/);
     });
 
     it('renders attached context (multiline and single-line)', () => {
@@ -157,7 +166,7 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/^## Completion$/m);
       expect(prompt).toMatch(/`\/simplify`/);
       expect(prompt).toMatch(/`\/do:pr`/);
-      expect(prompt).toMatch(/PortOS will NOT push or open a PR on your behalf/);
+      expect(prompt).not.toMatch(/PortOS will NOT push/);
       expect(prompt).not.toMatch(/`\/quit`/);
     });
 
@@ -207,7 +216,13 @@ describe('buildLightContextPrompt', () => {
         isTruthyMeta);
       expect(prompt).toMatch(/## Review-Loop Follow-up/);
       expect(prompt).toMatch(/task-src-1/);
-      expect(prompt).toMatch(/gh pr merge "https:\/\/github\.com\/o\/r\/pull\/9"/);
+      expect(prompt).toMatch(/gh pr merge "https:\/\/github\.com\/o\/r\/pull\/9" --squash --delete-branch/);
+      // --auto must NOT appear inside any `gh pr merge` invocation — it defers
+      // the merge and the PR sits open after the agent exits.
+      expect(prompt).not.toMatch(/gh pr merge[^\n]*--auto/);
+      // Agent must verify the PR is actually merged before exiting.
+      expect(prompt).toMatch(/gh pr view "https:\/\/github\.com\/o\/r\/pull\/9" --json state/);
+      expect(prompt).toMatch(/MERGED/);
       expect(prompt).not.toMatch(/## Completion Workflow/);
     });
 
@@ -228,13 +243,15 @@ describe('buildLightContextPrompt', () => {
 });
 
 describe('buildAgentPrompt — provider type routing', () => {
-  it('routes TUI provider through the light path (no roleplay preamble)', async () => {
+  it('routes TUI provider through the light path (no roleplay preamble or task header)', async () => {
     const prompt = await buildAgentPrompt(
       makeTask(), {}, '/r', null, isTruthyMeta,
       { providerType: 'tui', tui: true, skipClaudeMd: true });
     expect(prompt).not.toMatch(/Chief of Staff Agent Briefing/);
     expect(prompt).not.toMatch(/You are an autonomous agent/);
-    expect(prompt).toMatch(/^## Task$/m);
+    // The Task header block is now gone — task description leads.
+    expect(prompt).not.toMatch(/^## Task$/m);
+    expect(prompt).toMatch(/Add a button to the dashboard/);
   });
 
   it('routes CLI provider through the light path too', async () => {
