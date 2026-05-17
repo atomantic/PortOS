@@ -299,11 +299,15 @@ const renderSchema = z.object({
   negativePrompt: z.string().trim().max(svc.PROMPT_FRAGMENT_MAX).optional(),
   extraStyle: z.string().trim().max(svc.PROMPT_FRAGMENT_MAX).optional(),
   stylePresetId: z.string().trim().max(80).optional(),
+  // Matches /api/image-gen/generate's LoRA contract: basenames only (server
+  // resolves against PATHS.loras), max 8 stacked LoRAs per render. Keeping
+  // the two routes in sync so a payload that's accepted here can also flow
+  // through /api/image-gen/generate if we ever proxy it.
   loras: z.array(z.object({
-    filename: z.string().trim().min(1).max(256),
+    filename: z.string().trim().min(1).max(256).regex(/^[^/\\]+$/, 'lora filename must not contain path separators'),
     scale: z.number().min(0).max(2),
     name: z.string().trim().max(256).optional(),
-  })).max(20).optional(),
+  })).max(8).optional(),
 }).refine((body) => body.collectionName === undefined, {
   message: 'collectionName is no longer supported — the linked collection follows the universe name automatically. Remove this field.',
   path: ['collectionName'],

@@ -504,6 +504,23 @@ describe('universe-builder routes', () => {
     expect(res.status).toBe(400);
   });
 
+  it('POST /:id/render rejects lora filename with path separators (basenames only)', async () => {
+    const app = buildApp();
+    const created = await request(app).post('/api/universe-builder').send({
+      name: 'Bad LoRA Universe',
+      categories: {
+        landscapes: { variations: [{ label: 'A', prompt: 'a' }] },
+      },
+    });
+    const res = await request(app)
+      .post(`/api/universe-builder/${created.body.id}/render`)
+      .send({
+        mode: 'local',
+        loras: [{ filename: '../escape.safetensors', scale: 1.0 }],
+      });
+    expect(res.status).toBe(400);
+  });
+
   it('POST /:id/render rejects when no variations exist', async () => {
     const app = buildApp();
     const created = await request(app).post('/api/universe-builder').send({ name: 'Empty' });
