@@ -85,8 +85,8 @@ Return ONLY valid JSON matching this shape — no prose, no markdown fence, no c
       "description": "string",
       "palette": "string",
       "era": "string",
-      "intExt": "INT" /* or "EXT", or omit the key entirely if mixed/unclear */,
-      "timeOfDay": "dawn" /* or "day" | "dusk" | "night", or omit the key entirely */
+      "intExt": "INT",
+      "timeOfDay": "dawn"
     }
   ],
   "objects": [

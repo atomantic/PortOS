@@ -24,10 +24,11 @@ vi.mock('../services/pipeline/series.js', () => ({
   ERR_NOT_FOUND: 'PIPELINE_SERIES_NOT_FOUND',
 }));
 
-vi.mock('../lib/storyArc.js', () => ({
-  ARC_ROLES: ['protagonist', 'antagonist', 'mentor'],
-  ARC_SHAPE_IDS: ['heros-journey', 'three-act', 'kishotenketsu'],
-}));
+// No mock for ../lib/storyArc.js — the real module is cheap and the
+// constants (`ARC_ROLES`, `ARC_SHAPE_IDS`) are the source of truth that
+// `importerCommitSchema`'s `z.enum(...)` reads from. Mocking with
+// placeholder values would silently mask drift between the schema and
+// the prompts (`importer-issue-proposal.md`).
 
 import * as importerSvc from '../services/importer.js';
 

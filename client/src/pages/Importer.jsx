@@ -157,7 +157,15 @@ export default function Importer() {
     // would otherwise be invisible.
     if (Array.isArray(result.remappedIssues) && result.remappedIssues.length > 0) {
       const n = result.remappedIssues.length;
-      toast.warning(`${n} issue${n === 1 ? '' : 's'} landed in the first season — requested season number didn't exist.`);
+      const noun = `${n} issue${n === 1 ? '' : 's'}`;
+      // server sets actualSeasonId to fallbackSeasonId (first season) or
+      // null when the series has zero seasons. Disambiguate so the user
+      // doesn't see "landed in the first season" when no season exists.
+      const landedSeasonless = result.remappedIssues.every((r) => r.actualSeasonId == null);
+      const msg = landedSeasonless
+        ? `${noun} created ungrouped — no seasons exist on this series to land them in.`
+        : `${noun} landed in the first season — the requested season number didn't exist.`;
+      toast.warning(msg);
     }
     navigate(`/pipeline/series/${result.series.id}`);
     return result;

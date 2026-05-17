@@ -59,6 +59,16 @@ const DEFAULT_TARGET_ISSUE_COUNT_HINT = Object.freeze({
 const normName = (s) => String(s || '').trim().toLowerCase();
 const isStr = (v) => typeof v === 'string';
 
+// Mustache's section regex re-processes substituted values when the
+// substitution lands inside a `{{#section}}...{{/section}}` block (the
+// outer SECTION_RE loop runs until stable). User-supplied canon names /
+// descriptions containing `{{spoilers}}` or `{{#foo}}` would otherwise
+// get interpreted as template tokens. A zero-width space between the
+// braces is invisible to the LLM (still reads as `{{` / `}}` semantically)
+// but breaks the SECTION_RE / VAR_RE patterns.
+const escapeMustacheBraces = (s) =>
+  String(s).replace(/\{\{/g, '{​{').replace(/\}\}/g, '}​}');
+
 /**
  * Find a universe by case-insensitive name match. Returns `null` when no
  * match — the caller decides to create. Exported for the test surface.
@@ -241,7 +251,7 @@ export async function analyzeImport({
       seriesName: promptSeriesName,
       contentType,
       source,
-      existingCanonJson: existingCanon ? JSON.stringify(existingCanon, null, 2) : '',
+      existingCanonJson: existingCanon ? escapeMustacheBraces(JSON.stringify(existingCanon, null, 2)) : '',
       ...typeFlags,
     }, llmOpts),
     runStagedLLM('importer-arc-extract', {
@@ -383,6 +393,28 @@ export async function commitImport({
     if (!isStr(proposal?.title) || !proposal.title.trim()) {
       throw makeErr(
         `Issue at position ${i + 1} is missing a title — commit refused before any state changed.`,
+        ERR_VALIDATION,
+      );
+    }
+    // arcPosition is the issue's slot in the series — Zod enforces int >= 1
+    // at the route layer, but commitImport is also called directly from
+    // tests + future internal callers; mirror the schema gate here so the
+    // service contract holds regardless of caller.
+    if (!Number.isInteger(proposal.arcPosition) || proposal.arcPosition < 1) {
+      throw makeErr(
+        `Issue at position ${i + 1} has invalid arcPosition (must be integer >= 1) — commit refused before any state changed.`,
+        ERR_VALIDATION,
+      );
+    }
+  }
+  // Same contract for seasons: route Zod enforces `number: int >= 1`,
+  // commitImport mirrors it so the service is safe under direct calls.
+  for (let i = 0; i < seasons.length; i++) {
+    const s = seasons[i];
+    if (s?.number !== undefined && s?.number !== null
+        && (!Number.isInteger(s.number) || s.number < 1)) {
+      throw makeErr(
+        `Season at position ${i + 1} has invalid number (must be integer >= 1) — commit refused before any state changed.`,
         ERR_VALIDATION,
       );
     }
