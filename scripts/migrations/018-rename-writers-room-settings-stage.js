@@ -1,6 +1,7 @@
 /**
  * Rename the `writers-room-settings` stage key to `writers-room-places` in
- * the installed `data/prompts/stage-config.json`.
+ * the installed `data/prompts/stage-config.json`, and migrate the matching
+ * `.md` prompt template.
  *
  * Background: commit be903564 renamed the prompt file
  * `writers-room-settings.md` → `writers-room-places.md` (Universe rename PR)
@@ -12,32 +13,50 @@
  * not found`.
  *
  * Update flow ordering caveat (Copilot review on PR #265): `setup-data.js`
- * runs *before* migrations, and its `JSON_MERGE_TARGETS` merges any new
- * sample stage entries that the install is missing — so by the time this
- * migration runs, an existing install will typically have BOTH keys:
- *   • `writers-room-settings` → the user's (possibly customized) entry
- *   • `writers-room-places`   → freshly auto-seeded from data.sample defaults
- * Naively keeping the auto-seeded `…-places` entry would silently discard
- * any model/provider/variable customizations the user had on `…-settings`.
+ * runs *before* migrations, with two side effects this migration must
+ * counteract:
  *
- * Resolution: when both keys are present, compare the installed
- * `writers-room-places` against the sample default. If it matches exactly,
- * it's the auto-seeded one and we replace it with the user's legacy entry
- * (preserving customizations). If it differs, the user hand-edited it on
- * purpose and we keep it as-is.
+ *   1. `JSON_MERGE_TARGETS` merges any new sample stage entries — so by the
+ *      time this migration runs, an existing install will typically have
+ *      BOTH stage-config keys: `writers-room-settings` (user's, possibly
+ *      customized) and `writers-room-places` (fresh sample defaults).
+ *      Naively keeping the auto-seeded `…-places` entry would silently
+ *      discard any model/provider/variable customizations the user had on
+ *      `…-settings`.
+ *
+ *   2. `ensureSampleContent` copies missing prompt files — so
+ *      `data/prompts/stages/writers-room-places.md` will be auto-seeded
+ *      from data.sample (full post-rename + post-migration-007 content)
+ *      while the user's old `writers-room-settings.md` is left orphaned.
+ *      Switching the stage key to `…-places` makes the runtime use the
+ *      freshly seeded sample template, ignoring any customizations the
+ *      user had in `…-settings.md`.
+ *
+ * Resolution for both: when the corresponding `…-places` artifact (entry
+ * or file) byte-for-byte matches the sample default, treat it as an
+ * auto-seed and replace it with the legacy artifact's content (preserving
+ * user customizations). If `…-places` differs from the sample, treat it
+ * as a deliberate user edit and keep it. The legacy `…-settings.md` file
+ * is removed once the migration has either preserved its content or
+ * detected that it was untouched.
  *
  * Idempotent: skips when only `writers-room-places` is present (and no
- * legacy key), or when neither key exists (fresh installs get the
- * post-rename sample copy).
+ * legacy key/file), or when neither key/file exists (fresh installs get
+ * the post-rename sample copy).
  */
 
-import { readFile, writeFile } from 'fs/promises';
+import { readFile, writeFile, unlink, stat } from 'fs/promises';
 import { join } from 'path';
 
 const STAGE_CONFIG_REL_PATH = 'data/prompts/stage-config.json';
 const SAMPLE_CONFIG_REL_PATH = 'data.sample/prompts/stage-config.json';
 const LEGACY_KEY = 'writers-room-settings';
 const NEW_KEY = 'writers-room-places';
+
+const PROMPTS_STAGES_DIR_REL = 'data/prompts/stages';
+const SAMPLE_STAGES_DIR_REL = 'data.sample/prompts/stages';
+const LEGACY_PROMPT_FILE = 'writers-room-settings.md';
+const NEW_PROMPT_FILE = 'writers-room-places.md';
 
 const readJsonOrNull = async (path) => {
   const raw = await readFile(path, 'utf-8').catch((err) => {
@@ -52,8 +71,83 @@ const readJsonOrNull = async (path) => {
   }
 };
 
+const readTextOrNull = async (path) => readFile(path, 'utf-8').catch((err) => {
+  if (err.code === 'ENOENT') return null;
+  throw err;
+});
+
+const fileExists = async (path) => stat(path).then(() => true, (err) => {
+  if (err.code === 'ENOENT') return false;
+  throw err;
+});
+
+// Migrate the `.md` prompt template. Mirrors the stage-config conflict
+// policy: when both legacy and new files exist and `…-places.md` matches
+// the sample default, replace it with the legacy content (preserving the
+// user's customizations). Otherwise keep the user-customized `…-places.md`.
+// Always remove the now-orphan `…-settings.md` when its content has been
+// preserved or it matches the pre-rename baseline (== sample default).
+const migratePromptFile = async (rootDir) => {
+  const dataDir = join(rootDir, PROMPTS_STAGES_DIR_REL);
+  const sampleDir = join(rootDir, SAMPLE_STAGES_DIR_REL);
+  const legacyPath = join(dataDir, LEGACY_PROMPT_FILE);
+  const newPath = join(dataDir, NEW_PROMPT_FILE);
+  const samplePath = join(sampleDir, NEW_PROMPT_FILE);
+
+  const legacyExists = await fileExists(legacyPath);
+  if (!legacyExists) {
+    return; // already migrated or fresh install
+  }
+
+  const legacyContent = await readTextOrNull(legacyPath);
+  const newContent = await readTextOrNull(newPath);
+  const sampleContent = await readTextOrNull(samplePath);
+
+  if (legacyContent == null) {
+    // race / disappeared between stat and read — let next run resolve
+    return;
+  }
+
+  if (newContent != null && sampleContent != null && newContent === sampleContent) {
+    // `…-places.md` was just auto-seeded from data.sample. If the legacy
+    // file differs from the sample, the user had customized it; preserve
+    // those customizations into `…-places.md`. (Migration 007's intExt /
+    // timeOfDay fields will be missing — warn so the user can re-merge.)
+    if (legacyContent !== sampleContent) {
+      await writeFile(newPath, legacyContent);
+      console.warn(
+        `⚠️  ${PROMPTS_STAGES_DIR_REL}/${NEW_PROMPT_FILE}: replaced auto-seeded sample with your customized ${LEGACY_PROMPT_FILE}.\n` +
+        `   Note: if you had not picked up migration 007 (intExt / timeOfDay fields), diff against\n` +
+        `     ${SAMPLE_STAGES_DIR_REL}/${NEW_PROMPT_FILE}\n` +
+        `   and merge the new field bullets + JSON keys manually.`,
+      );
+    } else {
+      console.log(`📝 ${PROMPTS_STAGES_DIR_REL}/${NEW_PROMPT_FILE}: legacy file matched sample default, kept auto-seeded copy`);
+    }
+  } else if (newContent != null) {
+    // `…-places.md` exists but differs from sample → user customized it
+    // (or sample missing). Respect that and just drop the legacy orphan.
+    console.log(`📝 ${PROMPTS_STAGES_DIR_REL}/${NEW_PROMPT_FILE}: user-customized, kept as-is (legacy ${LEGACY_PROMPT_FILE} discarded)`);
+  } else {
+    // `…-places.md` missing entirely (setup-data didn't run) — promote
+    // the legacy file in place rather than dropping the user's content.
+    await writeFile(newPath, legacyContent);
+    console.log(`📝 ${PROMPTS_STAGES_DIR_REL}/${NEW_PROMPT_FILE}: promoted from legacy ${LEGACY_PROMPT_FILE}`);
+  }
+
+  await unlink(legacyPath).catch((err) => {
+    if (err.code !== 'ENOENT') throw err;
+  });
+  console.log(`🧹 removed orphan ${PROMPTS_STAGES_DIR_REL}/${LEGACY_PROMPT_FILE}`);
+};
+
 export default {
   async up({ rootDir }) {
+    // Migrate the `.md` prompt template first — even if the stage-config
+    // is already on `writers-room-places`, an orphan legacy prompt file
+    // may still need cleanup.
+    await migratePromptFile(rootDir);
+
     const path = join(rootDir, STAGE_CONFIG_REL_PATH);
     const raw = await readFile(path, 'utf-8').catch((err) => {
       if (err.code === 'ENOENT') return null;
