@@ -296,7 +296,7 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
       commit: true,
       providerOverride: series?.llm?.provider || undefined,
       modelOverride: series?.llm?.model || undefined,
-    }).catch((err) => {
+    }, { silent: true }).catch((err) => {
       toast.error(err.message || 'Failed to generate cover concept');
       return null;
     });

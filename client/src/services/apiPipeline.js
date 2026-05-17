@@ -183,10 +183,11 @@ export const generatePipelineComicBackCover = (issueId, opts = {}, options = {})
 // its own target so the user can regenerate one card's concept without
 // touching the other. Seeds only blank scripts; never clobbers a user edit.
 // Returns the proposed text plus the updated issue + comicPages stage.
-export const generatePipelineComicCoverConcepts = (issueId, opts = {}) =>
+export const generatePipelineComicCoverConcepts = (issueId, opts = {}, options = {}) =>
   request(`/pipeline/issues/${encodeURIComponent(issueId)}/cover-concepts/generate`, {
     method: 'POST',
     body: JSON.stringify(opts),
+    ...options,
   });
 
 // Volume (season) cover render. Persists in-flight slot on
@@ -212,10 +213,11 @@ export const generatePipelineVolumeBackCover = (seriesId, seasonId, opts = {}, o
 // `season.backCover.script` when those slots are currently blank (the
 // server never clobbers a user edit). Returns the proposed text plus the
 // updated season + series records.
-export const generatePipelineVolumeCoverConcepts = (seriesId, seasonId, opts = {}) =>
+export const generatePipelineVolumeCoverConcepts = (seriesId, seasonId, opts = {}, options = {}) =>
   request(`/pipeline/series/${encodeURIComponent(seriesId)}/seasons/${encodeURIComponent(seasonId)}/cover-concepts/generate`, {
     method: 'POST',
     body: JSON.stringify(opts),
+    ...options,
   });
 
 // Build the trade-paperback PDF download URL for one volume. Used as an
