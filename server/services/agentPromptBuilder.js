@@ -405,36 +405,18 @@ Use the findings from the previous stage to inform your work. If the previous st
 After completing your work and before committing, run \`/simplify\` to review the changed code for reuse, quality, and efficiency. Fix any issues found, then ${worktreeInfo && willOpenPR ? 'commit your changes (do NOT push — on a successful run the system will push and open the PR after you exit; if the run fails, no push or PR happens)' : 'commit and push using `/do:push`'}.
 ` : '';
 
-  // TUI Completion Workflow. Claude Code TUI has direct access to the
-  // slashdo commands (the submodule mounts them as project-level slash
-  // commands), so the agent runs the whole tail end itself instead of
-  // having PortOS drive push/PR creation from cleanup. The sentinel file
-  // (.agent-done) is what PortOS polls for to know the agent has finished
-  // — write it AFTER /do:pr/push succeeds, then /quit exits Claude Code
-  // and the spawn's handleExit fires.
+  // TUI completion section — delegate to the shared light-path builder so
+  // both prompt paths emit byte-identical workflows. (Background: TUI owns
+  // its own `/simplify` → `/do:pr|/do:push` → sentinel → `/quit` sequence
+  // because the slashdo submodule mounts those commands at project level —
+  // see `buildTuiCompletionSection` below for the full contract.)
   const tuiCompletionCommand = willOpenPR ? '/do:pr' : '/do:push';
-  const tuiCompletionSection = isTui ? `
-## Completion Workflow
-When the task is complete, run these in order:
-
-1. ${simplifyEnabled ? '`/simplify`' : '(simplify is disabled — skip)'}
-2. \`${tuiCompletionCommand}\`${willReviewLoop && willOpenPR ? ' — after the PR opens, request a Copilot review (e.g. via `gh`).' : ''}
-3. Write a short markdown summary (~5–15 lines) to the completion sentinel — PortOS polls this every 2s; without it the agent sits idle until a 3-minute fallback fires.
-
-   \`\`\`bash
-   cat > "${worktreeInfo?.worktreePath || workspaceDir}/.agent-done" <<'EOF'
-   ## Summary
-   <one-sentence statement of what was accomplished>
-
-   ## Changes
-   - <key file or area>: <what changed and why>
-   - <…>
-
-   ${willOpenPR ? '## PR\n   <PR URL>' : '## Branch\n   <branch name>'}
-   EOF
-   \`\`\`
-4. \`/quit\`.
-` : '';
+  const tuiCompletionSection = isTui
+    ? buildTuiCompletionSection({
+        willOpenPR, willReviewLoop, simplifyEnabled,
+        sentinelPath: `${worktreeInfo?.worktreePath || workspaceDir}/.agent-done`
+      })
+    : '';
 
   // Build review loop section if enabled. The agent itself does NOT open the PR
   // or run /do:rpr — by the time the PR exists, the agent has already exited.
@@ -727,6 +709,28 @@ function worktreeCommitGuidance({ isTui, hasSlashdo, isWorktreeOnExistingBranch,
 }
 
 /**
+ * Build the merge-and-verify steps that follow `/do:pr` in completion blocks.
+ * Returns `{ lines, nextStep }` — append `lines` to the workflow array and
+ * assign `nextStep` back to the caller's step counter so any subsequent
+ * numbered steps stay continuous.
+ *
+ * The agent must drive the merge itself — `/do:pr` runs the Copilot review
+ * loop but exits without merging, so without this step the PR sits open and
+ * the branch leaks. Mirrors the merge contract in the review-loop follow-up
+ * section so both agent flows converge on the same final state.
+ */
+function buildPostPRMergeSteps(startStep) {
+  const lines = [
+    `${startStep}. **Merge the PR immediately when the Copilot review loop reports \`clean\` (or \`too-large\`)** — \`/do:pr\` opens the PR and runs the review loop but does NOT merge. Capture the PR URL printed by \`/do:pr\` and run the exact command below (flags: \`--squash --delete-branch\`, nothing else — any merge-deferral flag leaves the PR open after you exit). Skip the merge if the loop ended \`timeout\`, \`error\`, or \`guardrail\`; leave the PR open for human follow-up.`,
+    '   ```bash',
+    '   gh pr merge "<PR_URL>" --squash --delete-branch',
+    '   ```',
+    `${startStep + 1}. Confirm the merge before exiting: \`gh pr view "<PR_URL>" --json state -q .state\` must return \`MERGED\`. If it returns \`OPEN\` or \`CLOSED\`, investigate (failing check, unresolved thread, branch protection), fix, and retry. Do NOT exit until state is \`MERGED\` (or you have explicitly decided not to merge per the rule above).`
+  ];
+  return { lines, nextStep: startStep + 2 };
+}
+
+/**
  * TUI completion-workflow block. The TUI owns its own commit → push → PR
  * pipeline via slashdo commands and signals "done" with a sentinel file.
  */
@@ -736,6 +740,9 @@ function buildTuiCompletionSection({ willOpenPR, willReviewLoop, simplifyEnabled
     ? ' — after the PR opens, request a Copilot review (e.g. via `gh`).' : '';
   const simplifyStep = simplifyEnabled ? '1. `/simplify`' : '1. (simplify disabled — skip)';
   const sentinelTail = willOpenPR ? '   ## PR\n   <PR URL>' : '   ## Branch\n   <branch name>';
+  const merge = willOpenPR ? buildPostPRMergeSteps(3) : { lines: [], nextStep: 3 };
+  const sentinelStep = merge.nextStep;
+  const quitStep = sentinelStep + 1;
 
   return [
     '## Completion Workflow',
@@ -743,7 +750,8 @@ function buildTuiCompletionSection({ willOpenPR, willReviewLoop, simplifyEnabled
     '',
     simplifyStep,
     `2. \`${cmd}\`${reviewSuffix}`,
-    '3. Write a short markdown summary (~5–15 lines) to the completion sentinel — PortOS polls this every 2s; without it the agent sits idle until a 3-minute fallback fires.',
+    ...merge.lines,
+    `${sentinelStep}. Write a short markdown summary (~5–15 lines) to the completion sentinel — PortOS polls this every 2s; without it the agent sits idle until a 3-minute fallback fires.`,
     '',
     '   ```bash',
     `   cat > "${sentinelPath}" <<'EOF'`,
@@ -756,7 +764,7 @@ function buildTuiCompletionSection({ willOpenPR, willReviewLoop, simplifyEnabled
     sentinelTail,
     '   EOF',
     '   ```',
-    '4. `/quit`.'
+    `${quitStep}. \`/quit\`.`
   ].join('\n');
 }
 
@@ -777,7 +785,10 @@ function buildCliCompletionSection({ worktreeInfo, willOpenPR, hasSlashdo = fals
     if (simplifyEnabled) {
       lines.push(`${step++}. \`/simplify\` — review the changed code for reuse, quality, and efficiency, and fix any findings.`);
     }
-    lines.push(`${step++}. \`/do:pr\` — commits your changes, pushes the branch, and opens a pull request against the default branch.`);
+    lines.push(`${step++}. \`/do:pr\` — commits your changes, pushes the branch, opens a pull request against the default branch, and drives the Copilot review loop until clean.`);
+    const merge = buildPostPRMergeSteps(step);
+    lines.push(...merge.lines);
+    step = merge.nextStep;
     return lines.join('\n');
   }
   if (hasSlashdo && worktreeInfo) {
