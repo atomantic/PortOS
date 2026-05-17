@@ -11,16 +11,10 @@ import { existsSync } from 'fs';
 import { appendFile, readFile, rm } from 'fs/promises';
 import * as shellService from './shell.js';
 import { emitLog } from './cosEvents.js';
-import { appendAgentOutputLines, updateAgent, completeAgent } from './cosAgents.js';
+import { appendAgentOutputLines, updateAgent } from './cosAgents.js';
 import { registerSpawnedAgent, unregisterSpawnedAgent } from './agents.js';
-import { markProviderUsageLimit, markProviderRateLimited } from './providerStatus.js';
-import { updateTask } from './cos.js';
-import { release } from './executionLanes.js';
-import { completeExecution, errorExecution } from './toolStateMachine.js';
-import { analyzeAgentFailure, resolveFailedTaskUpdate } from './agentErrorAnalysis.js';
-import { completeAgentRun } from './agentRunTracking.js';
-import { processAgentCompletion } from './agentCompletion.js';
-import { persistSimplifySummaries } from './agentLifecycle.js';
+import { analyzeAgentFailure } from './agentErrorAnalysis.js';
+import { finalizeAgent, releaseAgentLane } from './agentLifecycle.js';
 import { activeAgents, userTerminatedAgents } from './agentState.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { resolveCliModel } from '../lib/providerModels.js';
@@ -65,6 +59,37 @@ function shellQuote(value) {
   return `'${text.replace(/'/g, `'\\''`)}'`;
 }
 
+/**
+ * Thin wrapper around `shellService.createShellSession` for the agent TUI
+ * path. Centralizes the agent-side defaults (kind, label, initialCommand)
+ * and pairs the returned session id with its underlying pty process so
+ * callers don't have to make a second `getSessionProcess` call inline.
+ *
+ * Returns `{ sessionId, ptyProcess, pid }`. When the shell service fails
+ * to create the session, `sessionId` is null and the caller is expected
+ * to bail out via its `finish` path.
+ */
+export function createAgentTuiSession({ agentId, provider, tuiConfig, cwd, onData, onExit }) {
+  const sessionId = shellService.createShellSession(null, {
+    cwd,
+    kind: 'agent-tui',
+    agentId,
+    label: `${provider.name} ${agentId}`,
+    command: tuiConfig.commandLine,
+    initialCommand: tuiConfig.commandLine,
+    env: provider.envVars || {},
+    onData,
+    onExit,
+  });
+
+  if (!sessionId) {
+    return { sessionId: null, ptyProcess: null, pid: null };
+  }
+
+  const ptyProcess = shellService.getSessionProcess(sessionId);
+  return { sessionId, ptyProcess, pid: ptyProcess?.pid || null };
+}
+
 function appendModelArgs(args, model) {
   const effectiveModel = resolveCliModel(model);
   return effectiveModel ? [...args, '--model', effectiveModel] : args;
@@ -84,7 +109,21 @@ export function buildTuiSpawnConfig(provider, model) {
   };
 }
 
-export async function spawnTuiAgent(agentId, task, prompt, workspacePath, model, provider, runId, tuiConfig, agentDir, executionId, laneName, { cleanupWorktreeFn, isTruthyMetaFn }) {
+export async function spawnTuiAgent({
+  agentId,
+  task,
+  prompt,
+  workspacePath,
+  model,
+  provider,
+  runId,
+  tuiConfig,
+  agentDir,
+  executionId,
+  laneName,
+  cleanupWorktreeFn,
+  isTruthyMetaFn,
+}) {
   const outputFile = join(agentDir, 'output.txt');
   const cwd = workspacePath && typeof workspacePath === 'string' ? workspacePath : PATHS.root;
   const promptPreview = prompt.replace(/\s+/g, ' ').slice(0, 100);
@@ -164,90 +203,69 @@ export async function spawnTuiAgent(agentId, task, prompt, workspacePath, model,
     const finalSuccess = terminatedByUser ? false : success;
     const finalError = terminatedByUser ? 'Agent terminated by user' : error;
 
-    if (agentData?.laneName || laneName) release(agentId);
-
-    const effectiveExecutionId = agentData?.executionId || executionId;
-    if (effectiveExecutionId) {
-      if (finalSuccess) {
-        completeExecution(effectiveExecutionId, { success: true, duration });
-      } else {
-        errorExecution(effectiveExecutionId, { message: finalError || `TUI agent ended: ${reason}`, code: exitCode });
-        completeExecution(effectiveExecutionId, { success: false });
-      }
-    }
+    // Release the lane + complete execution tracking BEFORE the
+    // potentially-slow error-analysis / completeAgent / processAgentCompletion
+    // chain — neither call blocks on I/O, but lanes serialize related work
+    // and we don't want them held longer than necessary.
+    releaseAgentLane({
+      agentId,
+      success: finalSuccess,
+      duration,
+      exitCode,
+      executionId: agentData?.executionId || executionId,
+      laneName: agentData?.laneName || laneName,
+      errorExecutionMessage: finalError || `TUI agent ended: ${reason}`,
+    });
 
     // output.txt has already been incrementally appended via flushPendingLines;
     // do NOT writeFile() it from outputBuffer at finalize — outputBuffer is
     // capped at OUTPUT_BUFFER_CAP and would silently truncate the on-disk
     // record for long runs. The append-only stream is the authoritative copy.
-
     const analysisBuffer = rawBuffer || outputBuffer;
     const errorAnalysis = finalSuccess ? null : analyzeAgentFailure(analysisBuffer, task, model);
 
-    if (finalSuccess) {
-      await persistSimplifySummaries(agentId, task, outputBuffer, isTruthyMetaFn);
+    // try/finally so a throw from finalizeAgent (e.g. processAgentCompletion
+    // hook crash) still runs the local cleanup — sentinel removal, worktree
+    // cleanup, pid unregister, activeAgents delete, session kill. Without
+    // this, a memory-extraction crash would strand the worktree and the
+    // shell session on disk.
+    try {
+      await finalizeAgent({
+        agentId,
+        task,
+        runId,
+        providerId: provider?.id,
+        success: finalSuccess,
+        exitCode,
+        duration,
+        outputBuffer,
+        errorAnalysis,
+        terminatedByUser,
+        isTruthyMetaFn,
+        error: finalError || undefined,
+        completionReason: reason,
+      });
+    } finally {
+      if (workspacePath) await rm(join(workspacePath, DONE_SENTINEL_NAME)).catch(() => {});
+
+      // TUI agents run /do:pr (or /do:push) themselves before signaling via
+      // .agent-done, so the system-side cleanup must NOT also push or open a
+      // PR — that would double-fire. `skipMerge` is forced on so the
+      // post-exit auto-merge doesn't trip over a branch the agent already
+      // pushed. The worktree directory itself is still cleaned up.
+      await cleanupWorktreeFn(agentId, finalSuccess, {
+        openPR: false,
+        requestCopilotReview: false,
+        skipMerge: true,
+        description: task.description,
+        agentOutput: outputBuffer,
+        originalTask: task
+      }).catch(err => emitLog('warn', `TUI worktree cleanup failed for ${agentId}: ${err.message}`, { agentId }));
+
+      if (agentData?.pid) unregisterSpawnedAgent(agentData.pid);
+      activeAgents.delete(agentId);
+      if (sessionId && shellService.getSession(sessionId)) shellService.killSession(sessionId);
     }
-
-    await completeAgent(agentId, {
-      success: finalSuccess,
-      exitCode,
-      duration,
-      outputLength: outputBuffer.length,
-      error: finalError || undefined,
-      errorAnalysis,
-      completionReason: reason
-    });
-
-    await completeAgentRun(runId, outputBuffer, exitCode, duration, errorAnalysis);
-
-    if (terminatedByUser) {
-      await updateTask(task.id, {
-        status: 'blocked',
-        metadata: {
-          ...task.metadata,
-          blockedReason: 'Terminated by user',
-          blockedCategory: 'user-terminated',
-          blockedAt: new Date().toISOString()
-        }
-      }, task.taskType || 'user');
-    } else if (finalSuccess) {
-      await updateTask(task.id, { status: 'completed' }, task.taskType || 'user');
-    } else {
-      const failedUpdate = await resolveFailedTaskUpdate(task, errorAnalysis, agentId);
-      await updateTask(task.id, failedUpdate, task.taskType || 'user');
-
-      if (errorAnalysis?.category === 'usage-limit' && errorAnalysis.requiresFallback) {
-        await markProviderUsageLimit(provider.id, errorAnalysis).catch(err => {
-          emitLog('warn', `Failed to mark provider unavailable: ${err.message}`, { providerId: provider.id });
-        });
-      }
-      if (errorAnalysis?.category === 'rate-limit') {
-        await markProviderRateLimited(provider.id).catch(err => {
-          emitLog('warn', `Failed to mark provider rate limited: ${err.message}`, { providerId: provider.id });
-        });
-      }
-    }
-
-    await processAgentCompletion(agentId, task, finalSuccess, outputBuffer);
-    if (workspacePath) await rm(join(workspacePath, DONE_SENTINEL_NAME)).catch(() => {});
-
-    // TUI agents run /do:pr (or /do:push) themselves before signaling via
-    // .agent-done, so the system-side cleanup must NOT also push or open a
-    // PR — that would double-fire. `skipMerge` is forced on so the
-    // post-exit auto-merge doesn't trip over a branch the agent already
-    // pushed. The worktree directory itself is still cleaned up.
-    await cleanupWorktreeFn(agentId, finalSuccess, {
-      openPR: false,
-      requestCopilotReview: false,
-      skipMerge: true,
-      description: task.description,
-      agentOutput: outputBuffer,
-      originalTask: task
-    });
-
-    if (agentData?.pid) unregisterSpawnedAgent(agentData.pid);
-    activeAgents.delete(agentId);
-    if (sessionId && shellService.getSession(sessionId)) shellService.killSession(sessionId);
   };
 
   const handleData = async (data) => {
@@ -294,25 +312,22 @@ export async function spawnTuiAgent(agentId, task, prompt, workspacePath, model,
     });
   };
 
-  sessionId = shellService.createShellSession(null, {
-    cwd,
-    kind: 'agent-tui',
+  const session = createAgentTuiSession({
     agentId,
-    label: `${provider.name} ${agentId}`,
-    command: tuiConfig.commandLine,
-    initialCommand: tuiConfig.commandLine,
-    env: provider.envVars || {},
+    provider,
+    tuiConfig,
+    cwd,
     onData: handleData,
-    onExit: handleExit
+    onExit: handleExit,
   });
+  sessionId = session.sessionId;
 
   if (!sessionId) {
     await finish({ success: false, exitCode: 1, error: 'Failed to create TUI shell session', reason: 'spawn-error' });
     return null;
   }
 
-  const ptyProcess = shellService.getSessionProcess(sessionId);
-  const pid = ptyProcess?.pid || null;
+  const { ptyProcess, pid } = session;
   if (pid) {
     registerSpawnedAgent(pid, {
       fullCommand: tuiConfig.commandLine,

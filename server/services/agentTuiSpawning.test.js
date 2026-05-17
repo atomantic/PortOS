@@ -58,7 +58,9 @@ vi.mock('./agentCompletion.js', () => ({
 }));
 
 vi.mock('./agentLifecycle.js', () => ({
-  persistSimplifySummaries: vi.fn().mockResolvedValue(undefined)
+  persistSimplifySummaries: vi.fn().mockResolvedValue(undefined),
+  finalizeAgent: vi.fn().mockResolvedValue(undefined),
+  releaseAgentLane: vi.fn()
 }));
 
 vi.mock('./agentState.js', () => ({
@@ -84,8 +86,7 @@ vi.mock('../lib/providerModels.js', () => ({
 
 import { buildTuiSpawnConfig, spawnTuiAgent } from './agentTuiSpawning.js';
 import * as shellService from './shell.js';
-import * as cosAgents from './cosAgents.js';
-import * as cos from './cos.js';
+import * as agentLifecycle from './agentLifecycle.js';
 import * as agentErrorAnalysis from './agentErrorAnalysis.js';
 import { activeAgents, userTerminatedAgents } from './agentState.js';
 
@@ -216,7 +217,20 @@ describe('spawnTuiAgent runtime', () => {
       cleanupWorktreeFn: vi.fn().mockResolvedValue(undefined),
       isTruthyMetaFn: (v) => !!v
     };
-    return spawnTuiAgent(agentId, task, prompt, workspacePath, model, provider, runId, tuiConfig, agentDir, executionId, laneName, helpers);
+    return spawnTuiAgent({
+      agentId,
+      task,
+      prompt,
+      workspacePath,
+      model,
+      provider,
+      runId,
+      tuiConfig,
+      agentDir,
+      executionId,
+      laneName,
+      ...helpers,
+    });
   }
 
   beforeEach(() => {
@@ -245,13 +259,20 @@ describe('spawnTuiAgent runtime', () => {
     vi.useRealTimers();
   });
 
+  // The TUI spawn path delegates the central completion sequence
+  // (completeAgent + completeAgentRun + updateTask + processAgentCompletion +
+  // provider markers) to `finalizeAgent` so those concerns stay shared with
+  // the runner-mode and direct-CLI paths. The tests below assert the
+  // arguments handed to `finalizeAgent`, not the downstream individual
+  // calls — those are covered by agentLifecycle.test.js.
+
   // ── 1. Successful idle-complete path ────────────────────────────────────────
-  it('idle-complete: calls completeAgent(success:true) and updateTask(completed) when idle fires after enough output and runtime', async () => {
-    // Wire completeAgent to resolve a promise we can await, so we can detect
+  it('idle-complete: calls finalizeAgent(success:true) with completionReason=idle-complete when idle fires after enough output and runtime', async () => {
+    // Wire finalizeAgent to resolve a promise we can await, so we can detect
     // when the async finish() chain completes without polling.
     let resolveComplete;
     const completeDone = new Promise((r) => { resolveComplete = r; });
-    vi.mocked(cosAgents.completeAgent).mockImplementation(async () => { resolveComplete(); });
+    vi.mocked(agentLifecycle.finalizeAgent).mockImplementation(async () => { resolveComplete(); });
 
     runSpawn();
 
@@ -283,23 +304,21 @@ describe('spawnTuiAgent runtime', () => {
 
     // finish() is called as fire-and-forget inside the interval callback;
     // switch to real timers and await our sentinel promise so the full async
-    // chain (completeAgent → updateTask → ...) drains completely.
+    // chain (finalizeAgent → ...) drains completely.
     vi.useRealTimers();
     await completeDone;
 
-    expect(cosAgents.completeAgent).toHaveBeenCalledWith(
-      'agent-1',
-      expect.objectContaining({ success: true, completionReason: 'idle-complete' })
-    );
-    expect(cos.updateTask).toHaveBeenCalledWith(
-      'task-1',
-      expect.objectContaining({ status: 'completed' }),
-      expect.any(String)
+    expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: 'agent-1',
+        success: true,
+        completionReason: 'idle-complete',
+      })
     );
   });
 
   // ── 2. Command-not-found path ────────────────────────────────────────────────
-  it('command-not-found: completeAgent called with exitCode 127 and task updated to failed', async () => {
+  it('command-not-found: finalizeAgent called with success:false, exitCode 127, completionReason=command-not-found', async () => {
     const spawnPromise = runSpawn();
     await flushMicrotasks();
 
@@ -310,24 +329,18 @@ describe('spawnTuiAgent runtime', () => {
 
     await spawnPromise;
 
-    expect(cosAgents.completeAgent).toHaveBeenCalledWith(
-      'agent-1',
+    expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(
       expect.objectContaining({
+        agentId: 'agent-1',
         success: false,
         exitCode: 127,
-        completionReason: 'command-not-found'
+        completionReason: 'command-not-found',
       })
-    );
-    // resolveFailedTaskUpdate mock returns { status: 'failed' }
-    expect(cos.updateTask).toHaveBeenCalledWith(
-      'task-1',
-      expect.objectContaining({ status: 'failed' }),
-      expect.any(String)
     );
   });
 
   // ── 3. Shell-exit path with non-zero exit code ───────────────────────────────
-  it('shell-exit: completeAgent called with success:false and exitCode 1 when shell exits non-zero', async () => {
+  it('shell-exit: finalizeAgent called with success:false and exitCode 1 when shell exits non-zero', async () => {
     const spawnPromise = runSpawn();
     await flushMicrotasks();
 
@@ -336,18 +349,18 @@ describe('spawnTuiAgent runtime', () => {
 
     await spawnPromise;
 
-    expect(cosAgents.completeAgent).toHaveBeenCalledWith(
-      'agent-1',
+    expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(
       expect.objectContaining({
+        agentId: 'agent-1',
         success: false,
         exitCode: 1,
-        completionReason: 'shell-exit'
+        completionReason: 'shell-exit',
       })
     );
   });
 
   // ── 4. Killed / user-terminated path ────────────────────────────────────────
-  it('user-terminated: completeAgent receives terminated-by-user error and updateTask called with blocked+user-terminated', async () => {
+  it('user-terminated: finalizeAgent receives terminatedByUser:true + error=Agent terminated by user', async () => {
     // Mark agent as user-terminated before the exit fires
     userTerminatedAgents.add('agent-1');
 
@@ -359,36 +372,29 @@ describe('spawnTuiAgent runtime', () => {
 
     await spawnPromise;
 
-    expect(cosAgents.completeAgent).toHaveBeenCalledWith(
-      'agent-1',
+    expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(
       expect.objectContaining({
+        agentId: 'agent-1',
         success: false,
-        error: 'Agent terminated by user'
+        terminatedByUser: true,
+        error: 'Agent terminated by user',
       })
-    );
-    expect(cos.updateTask).toHaveBeenCalledWith(
-      'task-1',
-      expect.objectContaining({
-        status: 'blocked',
-        metadata: expect.objectContaining({ blockedCategory: 'user-terminated' })
-      }),
-      expect.any(String)
     );
   });
 
   // ── 5. Spawn-error path (createShellSession returns null) ────────────────────
-  it('spawn-error: function returns null and completeAgent reports spawn-error when session creation fails', async () => {
+  it('spawn-error: function returns null and finalizeAgent reports spawn-error when session creation fails', async () => {
     vi.mocked(shellService.createShellSession).mockReturnValue(null);
 
     const result = await runSpawn();
 
     expect(result).toBeNull();
-    expect(cosAgents.completeAgent).toHaveBeenCalledWith(
-      'agent-1',
+    expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(
       expect.objectContaining({
+        agentId: 'agent-1',
         success: false,
         error: 'Failed to create TUI shell session',
-        completionReason: 'spawn-error'
+        completionReason: 'spawn-error',
       })
     );
   });

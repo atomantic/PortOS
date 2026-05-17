@@ -13,14 +13,11 @@ import { homedir } from 'os';
 import { cosEvents, emitLog } from './cosEvents.js';
 import { updateAgent, completeAgent, appendAgentOutput } from './cosAgents.js';
 import { registerSpawnedAgent, unregisterSpawnedAgent } from './agents.js';
-import { markProviderUsageLimit, markProviderRateLimited } from './providerStatus.js';
-import { updateTask } from './cos.js';
 import { release } from './executionLanes.js';
 import { completeExecution, errorExecution } from './toolStateMachine.js';
-import { analyzeAgentFailure, resolveFailedTaskUpdate } from './agentErrorAnalysis.js';
+import { analyzeAgentFailure } from './agentErrorAnalysis.js';
 import { completeAgentRun } from './agentRunTracking.js';
-import { processAgentCompletion } from './agentCompletion.js';
-import { persistSimplifySummaries } from './agentLifecycle.js';
+import { finalizeAgent, releaseAgentLane } from './agentLifecycle.js';
 import { activeAgents, userTerminatedAgents } from './agentState.js';
 import { safeJSONParse, PATHS } from '../lib/fileUtils.js';
 import { createCodexStderrFormatter } from '../lib/codexCliOutput.js';
@@ -288,6 +285,13 @@ export const isClaudeCliProvider = (provider) =>
   provider?.type === 'cli' && (provider.id === 'claude-code' || provider.id === 'claude-code-bedrock');
 
 /**
+ * Check if a provider is a TUI-backed agent provider (Claude Code, Codex,
+ * Gemini, etc. that run in a PTY). Used by callers that need to branch
+ * between headless CLI/API runs and TUI shell sessions.
+ */
+export const isTuiProvider = (provider) => provider?.type === 'tui';
+
+/**
  * Read env vars from ~/.claude/settings.json to inject into Claude CLI spawns.
  * Ensures user's Bedrock/provider config (CLAUDE_CODE_USE_BEDROCK, AWS_PROFILE, etc.)
  * is present in spawned agent environments even if PM2 was started without them.
@@ -317,10 +321,31 @@ export async function getClaudeSettingsEnv() {
 
 /**
  * Spawn agent directly (fallback when runner not available).
- * `cleanupWorktreeFn` is passed in to avoid circular imports with agentLifecycle.js.
- * `isTruthyMetaFn` is passed in to avoid circular imports with subAgentSpawner.js.
+ * `cleanupWorktreeFn` and `isTruthyMetaFn` are passed in rather than
+ * imported directly. The agentLifecycle.js ↔ agentCliSpawning.js import
+ * graph is bidirectional (agentLifecycle calls `spawnDirectly`, this file
+ * calls `finalizeAgent`) and ES module hoisting handles it for top-level
+ * function references — but importing `cleanupAgentWorktree` /
+ * `isTruthyMeta` at module top level would force their `agentLifecycle`
+ * and `subAgentSpawner` modules to initialize before this one, racing
+ * the cycle in ways that surfaced as `undefined` reads on cold start.
+ * Passing them via the options object defers the lookup to call time.
  */
-export async function spawnDirectly(agentId, task, prompt, workspacePath, model, provider, runId, cliConfig, agentDir, executionId, laneName, { cleanupWorktreeFn, isTruthyMetaFn }) {
+export async function spawnDirectly({
+  agentId,
+  task,
+  prompt,
+  workspacePath,
+  model,
+  provider,
+  runId,
+  cliConfig,
+  agentDir,
+  executionId,
+  laneName,
+  cleanupWorktreeFn,
+  isTruthyMetaFn,
+}) {
   const fullCommand = `${cliConfig.command} ${cliConfig.args.join(' ')} <<< "${(task.description || '').substring(0, 100)}..."`;
 
   const ROOT_DIR = PATHS.root;
@@ -470,6 +495,30 @@ export async function spawnDirectly(agentId, task, prompt, workspacePath, model,
       agentData.killTimer = null;
     }
 
+    const terminatedByUser = userTerminatedAgents.has(agentId);
+    if (terminatedByUser) userTerminatedAgents.delete(agentId);
+
+    // If the user terminated the agent, force success=false even if the
+    // process happened to exit 0 in the race window — otherwise the run is
+    // recorded as successful while the task remains blocked. Mirrors the TUI
+    // `finish` path's `finalSuccess = terminatedByUser ? false : success`.
+    const finalSuccess = terminatedByUser ? false : success;
+    const finalError = terminatedByUser ? 'Agent terminated by user' : null;
+
+    // Release lane + complete execution tracking BEFORE the writeFile +
+    // error-analysis + state-write chain — neither call blocks on I/O, but
+    // lanes serialize related work. Fall back to outer scope when
+    // activeAgents was cleared by killAgent before close fired.
+    releaseAgentLane({
+      agentId,
+      success: finalSuccess,
+      duration,
+      exitCode: code,
+      executionId: agentData?.executionId || executionId,
+      laneName: agentData?.laneName || laneName,
+      errorExecutionMessage: finalError || undefined,
+    });
+
     // Flush remaining stream parser data
     if (streamParser) {
       const remaining = streamParser.flush();
@@ -490,102 +539,51 @@ export async function spawnDirectly(agentId, task, prompt, workspacePath, model,
       }
     }
 
-    // Release execution lane
-    if (agentData?.laneName) {
-      release(agentId);
-    }
-
-    // Complete tool execution tracking
-    if (agentData?.executionId) {
-      if (success) {
-        completeExecution(agentData.executionId, { success: true, duration });
-      } else {
-        errorExecution(agentData.executionId, { message: `Agent exited with code ${code}`, code });
-        completeExecution(agentData.executionId, { success: false });
-      }
-    }
-
     await writeFile(outputFile, outputBuffer).catch(() => {});
 
     // Use raw stream buffer for error analysis (contains full JSON with error details)
     const analysisBuffer = rawStreamBuffer || outputBuffer;
-    const errorAnalysis = success ? null : analyzeAgentFailure(analysisBuffer, task, model);
+    const errorAnalysis = finalSuccess ? null : analyzeAgentFailure(analysisBuffer, task, model);
 
-    if (success) {
-      await persistSimplifySummaries(agentId, task, outputBuffer, isTruthyMetaFn);
+    // try/finally so a throw from finalizeAgent still runs the local
+    // cleanup (worktree, pid unregister, activeAgents delete). Mirrors the
+    // TUI path's pattern.
+    try {
+      await finalizeAgent({
+        agentId,
+        task,
+        runId: agentData?.runId || runId,
+        providerId: agentData?.providerId || provider.id,
+        success: finalSuccess,
+        exitCode: code,
+        duration,
+        outputBuffer,
+        errorAnalysis,
+        terminatedByUser,
+        isTruthyMetaFn,
+        error: finalError || undefined,
+        completionReason: terminatedByUser ? 'user-terminated' : undefined,
+      });
+    } finally {
+      // Clean up worktree if agent was using one. Claude Code CLI agents run
+      // `/simplify` + `/do:pr` themselves (see buildCliCompletionSection in
+      // agentPromptBuilder.js) — mirror the TUI cleanup contract so PortOS
+      // doesn't double-fire push+PR creation.
+      const directOpenPR = isTruthyMetaFn(task.metadata?.openPR);
+      const directReviewLoopFollowUp = isTruthyMetaFn(task.metadata?.reviewLoopFollowUp);
+      const directAgentOwnsPR = directOpenPR && (provider?.id === 'claude-code' || provider?.id === 'claude-code-bedrock');
+      await cleanupWorktreeFn(agentId, finalSuccess, {
+        openPR: directAgentOwnsPR ? false : directOpenPR,
+        requestCopilotReview: !directAgentOwnsPR && directOpenPR && isTruthyMetaFn(task.metadata?.reviewLoop),
+        skipMerge: directReviewLoopFollowUp || directAgentOwnsPR,
+        description: task.description,
+        agentOutput: outputBuffer,
+        originalTask: task
+      }).catch(err => console.error(`❌ CLI worktree cleanup failed for ${agentId}: ${err.message}`));
+
+      unregisterSpawnedAgent(agentData?.pid || claudeProcess.pid);
+      activeAgents.delete(agentId);
     }
-
-    await completeAgent(agentId, {
-      success,
-      exitCode: code,
-      duration,
-      outputLength: outputBuffer.length,
-      errorAnalysis
-    });
-
-    await completeAgentRun(agentData?.runId || runId, outputBuffer, code, duration, errorAnalysis);
-
-    // Update task status with retry tracking
-    // Skip if user-terminated — task already blocked by terminateAgent/killAgent
-    if (userTerminatedAgents.has(agentId)) {
-      userTerminatedAgents.delete(agentId);
-      await updateTask(task.id, {
-        status: 'blocked',
-        metadata: {
-          ...task.metadata,
-          blockedReason: 'Terminated by user',
-          blockedCategory: 'user-terminated',
-          blockedAt: new Date().toISOString()
-        }
-      }, task.taskType || 'user');
-    } else if (success) {
-      await updateTask(task.id, { status: 'completed' }, task.taskType || 'user');
-    } else {
-      const failedUpdate = await resolveFailedTaskUpdate(task, errorAnalysis, agentId);
-      await updateTask(task.id, failedUpdate, task.taskType || 'user');
-
-      // Handle provider status updates on failure
-      if (errorAnalysis) {
-        if (errorAnalysis.category === 'usage-limit' && errorAnalysis.requiresFallback) {
-          const providerId = agentData?.providerId || provider.id;
-          if (providerId) {
-            await markProviderUsageLimit(providerId, errorAnalysis).catch(err => {
-              emitLog('warn', `Failed to mark provider unavailable: ${err.message}`, { providerId });
-            });
-          }
-        }
-        if (errorAnalysis.category === 'rate-limit') {
-          const providerId = agentData?.providerId || provider.id;
-          if (providerId) {
-            await markProviderRateLimited(providerId).catch(err => {
-              emitLog('warn', `Failed to mark provider rate limited: ${err.message}`, { providerId });
-            });
-          }
-        }
-      }
-    }
-
-    // Process memory extraction and app cooldown
-    await processAgentCompletion(agentId, task, success, outputBuffer);
-
-    // Clean up worktree if agent was using one. Claude Code CLI agents run
-    // `/simplify` + `/do:pr` themselves (see buildCliCompletionSection in
-    // agentPromptBuilder.js) — mirror the TUI cleanup contract so PortOS
-    // doesn't double-fire push+PR creation.
-    const directOpenPR = isTruthyMetaFn(task.metadata?.openPR);
-    const directReviewLoopFollowUp = isTruthyMetaFn(task.metadata?.reviewLoopFollowUp);
-    const directAgentOwnsPR = directOpenPR && (provider?.id === 'claude-code' || provider?.id === 'claude-code-bedrock');
-    await cleanupWorktreeFn(agentId, success, {
-      openPR: directAgentOwnsPR ? false : directOpenPR,
-      requestCopilotReview: !directAgentOwnsPR && directOpenPR && isTruthyMetaFn(task.metadata?.reviewLoop),
-      skipMerge: directReviewLoopFollowUp || directAgentOwnsPR,
-      description: task.description,
-      agentOutput: outputBuffer,
-      originalTask: task
-    });
-
-    unregisterSpawnedAgent(agentData?.pid || claudeProcess.pid);
-    activeAgents.delete(agentId);
   });
 
   return agentId;
