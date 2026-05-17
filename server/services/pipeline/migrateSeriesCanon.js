@@ -1,16 +1,27 @@
-// One-shot migration: copy series.{characters,settings,objects} into the
-// linked universe so Phase B readers (which prefer universe canon) have data
-// to read. Idempotent — re-running merges by name without creating dupes.
+// One-shot migration: copy legacy series.{characters,settings,objects} into
+// the linked universe so Phase B readers (which only consult universe canon)
+// have data to read. Idempotent — re-running merges by name without dupes.
 //
 // Runs on demand via CLI: `node server/services/pipeline/migrateSeriesCanon.js`
 // or programmatically from server boot if we ever auto-migrate.
 //
-// Does NOT clear the series's arrays. They stay as a fallback (and as the
-// edit surface for the existing per-series UI) until Phase B.2 drops them.
+// Phase B.4 note: `sanitizeSeries` no longer round-trips the legacy canon
+// fields, so calling `listSeries()` here would silently produce empty arrays
+// and the migration would no-op for any install that hadn't already migrated.
+// This script intentionally reads the raw `pipeline-series.json` instead, so
+// the recovery path stays viable until the user runs it. Once migrated, the
+// next series-side write will rewrite the JSON without the legacy fields.
 
-import { listSeries, updateSeries } from './series.js';
+import { join } from 'path';
+import { updateSeries } from './series.js';
+import { PATHS, readJSONFile } from '../../lib/fileUtils.js';
 import { getUniverse, createUniverse, updateUniverse } from '../universeBuilder.js';
 import { mergeExtractedBible, BIBLE_FIELD } from '../../lib/storyBible.js';
+
+// Raw read of pipeline-series.json (bypasses sanitizeSeries, which post-B.4
+// strips the legacy canon fields the migration needs to see).
+const readRawSeriesState = () =>
+  readJSONFile(join(PATHS.data, 'pipeline-series.json'), { series: [] }, { logError: false });
 
 // Reverse of BIBLE_FIELD — maps the persisted field name (`characters`) back
 // to its BIBLE_KIND value (`character`) so the migration can call
@@ -22,7 +33,8 @@ const KIND_BY_FIELD = Object.freeze(
 );
 
 export async function migrateSeriesCanon({ dryRun = false, log = console.log } = {}) {
-  const series = await listSeries();
+  const { series: rawSeries } = await readRawSeriesState();
+  const series = Array.isArray(rawSeries) ? rawSeries : [];
   const summary = { seriesScanned: 0, seriesMigrated: 0, universesCreated: 0, perKind: { characters: 0, settings: 0, objects: 0 } };
 
   for (const s of series) {

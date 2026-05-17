@@ -623,9 +623,10 @@ router.patch('/issues/:id/stages/audio/lines/:lineIdx', asyncHandler(async (req,
 }));
 
 // Render one VO line. Voice resolution priority:
-//   1. line.voiceIdOverride  (explicit per-line override)
-//   2. character.voiceId      (series character binding)
-//   3. (none → uses the configured default voice via synthesize())
+//   1. body.voiceId           (per-request override)
+//   2. line.voiceIdOverride   (per-line override saved on the issue)
+//   3. character.voiceId      (linked-universe canon binding via getSeriesCanon)
+//   4. (none → uses the configured default voice via synthesize())
 const lineRenderSchema = z.object({ voiceId: z.string().trim().max(200).optional() });
 router.post('/issues/:id/stages/audio/lines/:lineIdx/render', asyncHandler(async (req, res) => {
   const lineIdx = Number(req.params.lineIdx);
