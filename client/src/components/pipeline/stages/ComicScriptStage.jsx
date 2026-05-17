@@ -318,26 +318,34 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
     const tooltip = filled
       ? `Clear the ${noun} concept first — the LLM only seeds blank concepts to avoid clobbering your edits.`
       : `Have the LLM propose a ${noun} concept for this issue`;
+    const hintId = `concept-hint-${issue.id}-${target}`;
     // Use `aria-disabled` (not the DOM `disabled` attribute) so the
     // button stays in the keyboard tab order and the `title` tooltip is
     // discoverable on focus as well as hover. `disabled` removes the
     // element from tab order entirely and most browsers suppress hover
     // events on it, hiding the "clear first" guidance from keyboard +
     // screen-reader users. Click handler is gated on the same flag.
+    //
+    // `aria-describedby` (not `aria-label`) preserves the visible label
+    // ("Generate concept (LLM)") as the accessible name — WCAG 2.5.3
+    // "Label in Name" — and adds the tooltip as supplementary context.
     return (
-      <button
-        type="button"
-        onClick={disabled ? undefined : () => handleGenerateConcept(target)}
-        aria-disabled={disabled || undefined}
-        title={tooltip}
-        aria-label={tooltip}
-        className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-port-accent hover:text-white border border-port-border bg-port-bg hover:border-port-accent/40 ${
-          disabled ? 'opacity-40 cursor-not-allowed' : ''
-        }`}
-      >
-        {generating ? <Loader2 size={12} className="animate-spin" /> : <Wand2 size={12} />}
-        Generate concept (LLM)
-      </button>
+      <>
+        <button
+          type="button"
+          onClick={disabled ? undefined : () => handleGenerateConcept(target)}
+          aria-disabled={disabled || undefined}
+          aria-describedby={hintId}
+          title={tooltip}
+          className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-port-accent hover:text-white border border-port-border bg-port-bg hover:border-port-accent/40 ${
+            disabled ? 'opacity-40 cursor-not-allowed' : ''
+          }`}
+        >
+          {generating ? <Loader2 size={12} className="animate-spin" /> : <Wand2 size={12} />}
+          Generate concept (LLM)
+        </button>
+        <span id={hintId} className="sr-only">{tooltip}</span>
+      </>
     );
   };
 
