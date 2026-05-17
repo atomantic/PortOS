@@ -14,6 +14,9 @@ export async function writeClipboardSilently(text) {
   }
 }
 
+// Pass `successMessage: null` to keep the failure/insecure-context toasts but
+// suppress the success toast — for callers that own a transient "Copied"
+// indicator in their own UI.
 export async function copyToClipboard(text, successMessage = 'Copied') {
   if (!text) return false;
   if (!navigator.clipboard?.writeText) {
@@ -22,7 +25,7 @@ export async function copyToClipboard(text, successMessage = 'Copied') {
   }
   try {
     await navigator.clipboard.writeText(text);
-    toast.success(successMessage);
+    if (successMessage) toast.success(successMessage);
     return true;
   } catch {
     toast.error('Copy failed');
