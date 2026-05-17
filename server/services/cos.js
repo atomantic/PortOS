@@ -3031,9 +3031,10 @@ async function scheduleNextImprovementCheck() {
 }
 
 /**
- * Initialize on module load
+ * Wire event listeners, load state, and auto-start the daemon when configured.
+ * Called once from `server/index.js` during boot.
  */
-async function init() {
+export async function init() {
   await ensureDirectories();
 
   // When an agent completes, immediately try to dequeue the next pending task
@@ -3137,9 +3138,3 @@ async function init() {
   }
 }
 
-// Initialize asynchronously — vitest sets NODE_ENV=test by default, so this
-// skips eager init (and its listeners/timers) in unit tests and avoids
-// circular-import side effects.
-if (process.env.NODE_ENV !== 'test' && process.env.VITEST !== 'true') {
-  init();
-}

@@ -19,6 +19,7 @@
 
 ## Refactors
 
+- **CoS — explicit `init()` instead of module-level auto-init.** `server/services/cos.js` previously called `init()` at the bottom of the module, gated by `NODE_ENV !== 'test' && VITEST !== 'true'` so unit tests didn't spin up listeners/timers. The guard was a "test hack in the prod boot path" — `init` is now exported and called explicitly from `server/index.js` alongside `automationScheduler.init()` / `agentActionExecutor.init()` / etc. Test imports of `cos.js` no longer have side effects, and the prod boot path no longer branches on test-env vars.
 - **`LoraPicker` extracted** (`client/src/components/imageGen/LoraPicker.jsx`). The LoRA multi-select previously inlined in `ImageGen.jsx` is now a shared component used by both the standalone Image Gen page and the Universe Builder batch-render form.
 - **`ImageGenSettingsForm` extended** with `showLoras` + `showStylePreset` props (mounts `LoraPicker` / `StylePresetPicker`) and the previously-hidden CFG / quantize / model-defaults reset.
 - **`getStylePresetById` helper** added to `server/lib/writersRoomStylePresets.js` — Map-backed O(1) lookup that replaces the hand-rolled `STYLE_PRESETS.find(...)` pattern.

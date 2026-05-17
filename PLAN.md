@@ -139,7 +139,7 @@ For project goals, see [GOALS.md](./GOALS.md). For completed work, see [DONE.md]
 
 ### Better-audit residue
 
-- [ ] **[HIGH][CODE]** `server/services/cos.js:3113` — remove `NODE_ENV !== 'test' && VITEST !== 'true'` init guard (test hack in prod boot path).
+- [x] ~~**[HIGH][CODE]** `server/services/cos.js:3113` — remove `NODE_ENV !== 'test' && VITEST !== 'true'` init guard (test hack in prod boot path).~~ **Shipped 2026-05-17** — `init()` is now exported and called explicitly from `server/index.js` (alongside the other `*.init()` calls); module-level auto-init removed entirely so the test guard is no longer needed.
 - [ ] **[HIGH][TESTS]** Create test files for `server/services/clinvar.js` and `server/services/telegramBridge.js`.
 - [ ] **[HIGH][TESTS]** Add coverage for `server/services/shell.js` and `server/services/feeds.js` — both have exported functions but no sibling test. Shell drives all terminal sessions; feeds manages subscriptions. (New — surfaced 2026-05-16 replan.)
 - [ ] **[MEDIUM][CLIENT]** 4 components still redefine `formatBytes`/`formatTime`/`formatDuration`/`timeAgo`/`formatDate` locally: `VideoTimelineEditor.jsx`, `VideoTimeline.jsx`, `MortalLoomTab.jsx`, `ImportTab.jsx`.

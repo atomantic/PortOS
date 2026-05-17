@@ -29,12 +29,12 @@ import { listProjects, updateScene, updateRun, updateProject } from './local.js'
 import { listJobs, cancelJob } from '../mediaJobQueue/index.js';
 import { updateTask } from '../cos.js';
 
-// Boot-time coordination: cos.js eagerly calls resetOrphanedTasks() during
-// module import, which would respawn stale CD treatment/evaluate tasks
-// BEFORE recoverInFlightProjects() has had a chance to retire them via
-// updateTask. Two concurrent agents would then race on the same project.
-// Expose a promise that cos.init() awaits before its first
-// resetOrphanedTasks call, so the order is always:
+// Boot-time coordination: cos.init() calls resetOrphanedTasks() during start,
+// which would respawn stale CD treatment/evaluate tasks BEFORE
+// recoverInFlightProjects() has had a chance to retire them via updateTask.
+// Two concurrent agents would then race on the same project. Expose a
+// promise that cos.init() awaits before its first resetOrphanedTasks call,
+// so the order is always:
 //   1. recoverInFlightProjects retires stale CD tasks (status='completed').
 //   2. cos.resetOrphanedTasks runs and finds nothing CD-related to respawn.
 let resolveRecoveryDone;
@@ -67,7 +67,7 @@ export async function recoverInFlightProjects() {
   );
   if (!needsCleanup.length) {
     // Must resolve the gate even on the no-op path or cos.init's
-    // resetOrphanedTasks await would sit on its 5s timeout for nothing
+    // resetOrphanedTasks await would sit on its 60s timeout for nothing
     // every daemon start/auto-start.
     resolveRecoveryDone();
     return { resumed: 0 };

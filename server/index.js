@@ -119,6 +119,7 @@ import { errorEvents } from './lib/errorHandler.js';
 import './services/subAgentSpawner.js'; // Initialize CoS agent spawner
 import * as automationScheduler from './services/automationScheduler.js';
 import * as agentActionExecutor from './services/agentActionExecutor.js';
+import * as cos from './services/cos.js';
 import { startBackupScheduler } from './services/backupScheduler.js';
 import * as telegram from './services/telegram.js';
 import * as telegramBridge from './services/telegramBridge.js';
@@ -409,6 +410,10 @@ app.use('/api/ask', askRoutes);
 // data/ exists and the worker loop is running before /api/video-gen or
 // /api/image-gen can enqueue (otherwise persist() can race with ensureDir).
 
+// Explicit call (not a module-level side effect) so test imports of cos.js
+// don't spin up its event listeners and timers.
+cos.init().catch(err => console.error(`❌ CoS init failed: ${err.message}`));
+
 // Initialize agent automation scheduler and action executor
 automationScheduler.init().catch(err => console.error(`❌ Agent scheduler init failed: ${err.message}`));
 // agentActionExecutor.init() is synchronous — guard with try/catch so a thrown
@@ -584,7 +589,7 @@ ensureSelf()
     // no longer exist. Doesn't block startup.
     // recoverInFlightProjects resolves cdRecoveryDone on success. On any
     // failure path here, explicitly resolve it so cos.init's gate doesn't
-    // hit the 5s timeout fallback for nothing.
+    // hit the 60s timeout fallback for nothing.
     recoverInFlightProjects().catch(async (e) => {
       console.log(`⚠️ CD boot recovery failed: ${e.message}`);
       const { markRecoveryDone } = await import('./services/creativeDirector/recovery.js');
