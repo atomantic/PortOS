@@ -888,7 +888,7 @@ const CANON_TRUNKS = Object.freeze([
 //   - characters: physicalDescription, role
 //   - settings:   description, palette, era, weather, recurringDetails
 //   - objects:    description, significance
-// The output is fed back through `composeStyledPrompt(...)` so the universe's
+// The output is fed through `composeStyledPrompt(...)` so the universe's
 // embrace tokens still prefix every canon render.
 export function synthesizeCanonPrompt(kind, entry) {
   if (!entry) return '';

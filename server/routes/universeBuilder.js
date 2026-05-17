@@ -240,9 +240,9 @@ const selectionSchema = z.record(
 // `canonSelection` per trunk: 'all' or array of canon-entry names (case-insensitive).
 // Settings entries also match on `slugline` so a render queued from the Places
 // tab can target an entry the user filed by slugline ("INT. FOUNDRY — DAY").
-// Per-trunk array length is bounded by BIBLE_LIMITS.ENTRIES_PER_BIBLE_MAX (200)
-// — same cap the bible sanitizer enforces on read, so this can't enqueue more
-// entries than the server actually persists.
+// Per-trunk array length matches BIBLE_LIMITS.ENTRIES_PER_BIBLE_MAX (200) — same
+// cap the bible sanitizer enforces on read, so this can't enqueue more entries
+// than the server actually persists.
 const CANON_TRUNK_KEYS = ['characters', 'settings', 'objects'];
 const CANON_ENTRIES_PER_TRUNK_MAX = 200;
 const canonSelectionValueSchema = z.union([

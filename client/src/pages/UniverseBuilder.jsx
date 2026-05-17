@@ -22,7 +22,6 @@ import {
   renderWorld, listWorldRuns, getProviders, refineWorldPrompts, WORLD_CATEGORIES,
   WORLD_CATEGORY_KEY_MAX, COMPOSITE_PROMPT_MAX, WORLD_LOGLINE_MAX,
   WORLD_PREMISE_MAX, WORLD_STYLE_NOTES_MAX, WORLD_LOCKABLE_FIELDS,
-  WORLD_INFLUENCE_ENTRY_MAX, WORLD_INFLUENCES_PER_LIST_MAX,
   ensureInfluences, isInfluenceLockField, mergeInfluencesWithLocks,
   listImageModels, getSettings,
 } from '../services/api';
