@@ -103,10 +103,12 @@ function RedirectWithSearch({ to }) {
 
 // Canon page was folded into Universe Builder; redirect the old sub-route to
 // the builder so deep-links and bookmarks keep working. Strips the trailing
-// `/canon` and preserves the query string (e.g. `?series=<id>` filter).
+// `/canon` (with optional trailing slash — React Router matches both forms,
+// otherwise `/universe-builder/abc/canon/` would self-loop) and preserves the
+// query string (e.g. `?series=<id>` filter).
 function CanonRedirect() {
   const { pathname, search } = useLocation();
-  return <Navigate to={`${pathname.replace(/\/canon$/, '')}${search}`} replace />;
+  return <Navigate to={`${pathname.replace(/\/canon\/?$/, '')}${search}`} replace />;
 }
 
 // Force full reload on HMR — partial hot-replacement of the route tree

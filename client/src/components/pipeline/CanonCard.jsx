@@ -231,7 +231,13 @@ export default function CanonCard({
   // Refine + Render guarded against locked entries — locks signal "frozen
   // identity"; both AI rewrite (refine/differentiate) and new visual refs are
   // gated so the user explicitly unlocks before reshaping the entry.
-  const blockedByLock = locked && !!onToggleLock;
+  // Gate on `locked` alone, NOT on `!!onToggleLock` — consumers like
+  // NounsStage embed CanonCard without passing a toggle, but the underlying
+  // entry's `locked` flag still represents frozen-identity semantics on the
+  // server (Refine → 409 `UNIVERSE_CANON_LOCKED`, Render persists a new
+  // visual ref through bypass). The unlock UX lives in Universe Builder; the
+  // pipeline view just needs to respect it.
+  const blockedByLock = locked;
 
   // settledRef prevents duplicate completion callbacks under React 18
   // StrictMode's mount→cleanup→mount double-fire in dev. MediaJobThumb

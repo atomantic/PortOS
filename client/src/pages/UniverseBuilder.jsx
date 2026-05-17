@@ -1119,7 +1119,16 @@ export default function UniverseBuilder() {
           />
         </section>
 
-        {selectedId ? (
+        {/*
+          Gate on `draft.id === selectedId` — when the user switches universes,
+          `selectedId` updates synchronously but the new `draft` arrives after
+          an async `getUniverse(selectedId)` resolves. During that window, an
+          optimistic canon mutation routed through `onUniverseChange` would
+          send the *previous* universe's canon arrays to
+          `updateUniverse(selectedId, ...)`, wholesale-overwriting the newly
+          selected universe's canon on the server.
+        */}
+        {selectedId && draft.id === selectedId ? (
           <UniverseCanonSection
             universe={draft}
             universeId={selectedId}
