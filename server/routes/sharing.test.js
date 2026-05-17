@@ -119,11 +119,10 @@ describe('sharing routes', () => {
       expect(buckets.getBucket).toHaveBeenCalledWith('b1');
     });
 
-    it('maps the service NOT_FOUND code through normalizeError', async () => {
+    it('maps SHARING_BUCKET_NOT_FOUND to HTTP 404', async () => {
       buckets.getBucket.mockRejectedValue(makeServiceError('Bucket not found: nope', 'SHARING_BUCKET_NOT_FOUND'));
       const res = await request(buildApp()).get('/api/sharing/buckets/nope');
-      // Bare Error → 500; the original `code` is preserved in the JSON envelope.
-      expect(res.status).toBe(500);
+      expect(res.status).toBe(404);
       expect(res.body.code).toBe('SHARING_BUCKET_NOT_FOUND');
       expect(res.body.error).toContain('not found');
     });
@@ -204,15 +203,26 @@ describe('sharing routes', () => {
   describe('DELETE /api/sharing/buckets/:id', () => {
     it('detaches the watcher then deletes the bucket', async () => {
       watcher.detachWatcher.mockResolvedValue();
-      buckets.deleteBucket.mockResolvedValue({ deleted: true, id: 'b1' });
+      // Real service contract: `buckets.deleteBucket` resolves with `{ id }`.
+      buckets.deleteBucket.mockResolvedValue({ id: 'b1' });
       const res = await request(buildApp()).delete('/api/sharing/buckets/b1');
       expect(res.status).toBe(200);
-      expect(res.body).toEqual({ deleted: true, id: 'b1' });
+      expect(res.body).toEqual({ id: 'b1' });
       // Order matters: watcher must be detached before the bucket entry is removed
       // (otherwise the watcher leaks a chokidar handle to an unregistered id).
       const detachOrder = watcher.detachWatcher.mock.invocationCallOrder[0];
       const deleteOrder = buckets.deleteBucket.mock.invocationCallOrder[0];
       expect(detachOrder).toBeLessThan(deleteOrder);
+    });
+
+    it('maps SHARING_BUCKET_NOT_FOUND to HTTP 404', async () => {
+      watcher.detachWatcher.mockResolvedValue();
+      buckets.deleteBucket.mockRejectedValue(
+        makeServiceError('Bucket not found: gone', 'SHARING_BUCKET_NOT_FOUND'),
+      );
+      const res = await request(buildApp()).delete('/api/sharing/buckets/gone');
+      expect(res.status).toBe(404);
+      expect(res.body.code).toBe('SHARING_BUCKET_NOT_FOUND');
     });
   });
 
@@ -282,12 +292,12 @@ describe('sharing routes', () => {
       expect(importer.promoteInboxItem).toHaveBeenCalledWith('b1', 'm-1');
     });
 
-    it('surfaces SHARING_INBOX_NOT_FOUND', async () => {
+    it('maps SHARING_INBOX_NOT_FOUND to HTTP 404', async () => {
       importer.promoteInboxItem.mockRejectedValue(
         makeServiceError('Inbox item not found: m-x', 'SHARING_INBOX_NOT_FOUND'),
       );
       const res = await request(buildApp()).post('/api/sharing/buckets/b1/inbox/m-x/promote');
-      expect(res.status).toBe(500);
+      expect(res.status).toBe(404);
       expect(res.body.code).toBe('SHARING_INBOX_NOT_FOUND');
     });
   });
@@ -364,19 +374,20 @@ describe('sharing routes', () => {
 
   describe('DELETE /api/sharing/subscriptions/:id', () => {
     it('forwards the unsubscribe call', async () => {
-      subs.unsubscribe.mockResolvedValue({ unsubscribed: true });
+      // Real service contract: `subs.unsubscribe` resolves with `{ id, removed: true }`.
+      subs.unsubscribe.mockResolvedValue({ id: 'sub-1', removed: true });
       const res = await request(buildApp()).delete('/api/sharing/subscriptions/sub-1');
       expect(res.status).toBe(200);
-      expect(res.body).toEqual({ unsubscribed: true });
+      expect(res.body).toEqual({ id: 'sub-1', removed: true });
       expect(subs.unsubscribe).toHaveBeenCalledWith('sub-1');
     });
 
-    it('surfaces SHARING_SUBSCRIPTION_NOT_FOUND', async () => {
+    it('maps SHARING_SUBSCRIPTION_NOT_FOUND to HTTP 404', async () => {
       subs.unsubscribe.mockRejectedValue(
         makeServiceError('Subscription not found: sub-x', 'SHARING_SUBSCRIPTION_NOT_FOUND'),
       );
       const res = await request(buildApp()).delete('/api/sharing/subscriptions/sub-x');
-      expect(res.status).toBe(500);
+      expect(res.status).toBe(404);
       expect(res.body.code).toBe('SHARING_SUBSCRIPTION_NOT_FOUND');
     });
   });

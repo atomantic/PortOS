@@ -13,7 +13,7 @@
  */
 
 import { Router } from 'express';
-import { asyncHandler } from '../lib/errorHandler.js';
+import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import {
   bucketCreateSchema, bucketUpdateSchema, sharingExportSchema, subscriptionCreateSchema,
@@ -33,6 +33,25 @@ import {
 import { listManifestFilenames, readManifest } from '../services/sharing/manifest.js';
 
 const router = Router();
+
+/**
+ * Map sharing-service error codes onto HTTP statuses so the rest of PortOS's
+ * REST conventions hold (404 for not-found, 400 for client validation). Bare
+ * `Error`s thrown by the services carry a string `code` but no `status`, so
+ * `normalizeError` defaults them to 500 unless we re-throw them through
+ * `ServerError` with the right status here.
+ */
+const SHARING_ERROR_STATUS = {
+  SHARING_BUCKET_NOT_FOUND: 404,
+  SHARING_INBOX_NOT_FOUND: 404,
+  SHARING_SUBSCRIPTION_NOT_FOUND: 404,
+};
+
+const mapSharingError = (err) => {
+  const status = SHARING_ERROR_STATUS[err?.code];
+  if (status) throw new ServerError(err.message, { status, code: err.code });
+  throw err;
+};
 
 /** Hydrate a bucket with its on-disk bucket.json so the UI sees the bucket's
  *  protocol version (which may differ from the local SHARING_SCHEMA_VERSION
@@ -57,7 +76,7 @@ router.get('/buckets', asyncHandler(async (req, res) => {
 }));
 
 router.get('/buckets/:id', asyncHandler(async (req, res) => {
-  const bucket = await getBucket(req.params.id);
+  const bucket = await getBucket(req.params.id).catch(mapSharingError);
   res.json({ bucket: await hydrateBucket(bucket), localSchemaVersion: SHARING_SCHEMA_VERSION });
 }));
 
@@ -71,13 +90,13 @@ router.post('/buckets', asyncHandler(async (req, res) => {
 
 router.put('/buckets/:id', asyncHandler(async (req, res) => {
   const patch = validateRequest(bucketUpdateSchema, req.body || {});
-  const bucket = await updateBucket(req.params.id, patch);
+  const bucket = await updateBucket(req.params.id, patch).catch(mapSharingError);
   res.json({ bucket: await hydrateBucket(bucket) });
 }));
 
 router.delete('/buckets/:id', asyncHandler(async (req, res) => {
   await detachWatcher(req.params.id);
-  const result = await deleteBucket(req.params.id);
+  const result = await deleteBucket(req.params.id).catch(mapSharingError);
   res.json(result);
 }));
 
@@ -93,12 +112,12 @@ router.get('/buckets/:id/inbox', asyncHandler(async (req, res) => {
 }));
 
 router.post('/buckets/:id/inbox/:manifestId/promote', asyncHandler(async (req, res) => {
-  const result = await promoteInboxItem(req.params.id, req.params.manifestId);
+  const result = await promoteInboxItem(req.params.id, req.params.manifestId).catch(mapSharingError);
   res.json(result);
 }));
 
 router.post('/buckets/:id/inbox/:manifestId/dismiss', asyncHandler(async (req, res) => {
-  const result = await dismissInboxItem(req.params.id, req.params.manifestId);
+  const result = await dismissInboxItem(req.params.id, req.params.manifestId).catch(mapSharingError);
   res.json(result);
 }));
 
@@ -123,13 +142,13 @@ router.post('/subscriptions', asyncHandler(async (req, res) => {
 }));
 
 router.delete('/subscriptions/:id', asyncHandler(async (req, res) => {
-  const result = await unsubscribe(req.params.id);
+  const result = await unsubscribe(req.params.id).catch(mapSharingError);
   res.json(result);
 }));
 
 /** Recent manifests (max 50, newest first) — both incoming and outgoing land here. */
 router.get('/buckets/:id/activity', asyncHandler(async (req, res) => {
-  const bucket = await getBucket(req.params.id);
+  const bucket = await getBucket(req.params.id).catch(mapSharingError);
   const filenames = (await listManifestFilenames(bucket.path)).slice(0, 50);
   const reads = await Promise.all(filenames.map(async (f) => {
     const m = await readManifest(bucket.path, f);
