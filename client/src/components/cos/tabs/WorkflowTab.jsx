@@ -126,7 +126,7 @@ function StageColumn({ stage, nodes, allNodes, hoveredId, setHoveredId }) {
   const hoveredNode = hoveredId ? allNodes.find(n => n.id === hoveredId) : null;
 
   return (
-    <div className="flex w-full min-w-0 flex-col gap-2 lg:flex-1 lg:basis-0 lg:min-w-[11rem] lg:max-w-[15rem]">
+    <div className="flex w-full min-w-0 flex-col gap-2 2xl:flex-1 2xl:basis-0 2xl:min-w-[11rem] 2xl:max-w-[15rem]">
       <div className={`rounded-md border ${palette.ring} ${palette.bg} px-3 py-2`}>
         <div className="flex items-center gap-2">
           <span className={`w-2 h-2 rounded-full ${palette.dot}`} />
@@ -137,7 +137,7 @@ function StageColumn({ stage, nodes, allNodes, hoveredId, setHoveredId }) {
         </div>
         <p className="text-[11px] text-gray-400 mt-1 leading-snug">{stage.description}</p>
       </div>
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-1.5">
+      <div className="grid grid-cols-1 sm:grid-cols-2 2xl:grid-cols-1 gap-1.5">
         {nodes.map(node => (
           <NodeCard
             key={node.id}
@@ -167,7 +167,7 @@ function nodeReferences(node, hoveredId, hoveredNode) {
 
 function StageArrow() {
   return (
-    <div className="hidden lg:flex items-center px-2 text-gray-600 shrink-0" aria-hidden="true">
+    <div className="hidden 2xl:flex items-center px-2 text-gray-600 shrink-0" aria-hidden="true">
       <ArrowRight className="w-5 h-5" />
     </div>
   );
