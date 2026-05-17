@@ -120,6 +120,12 @@ export function mergeSeasons(existingSeasons, incomingSeasons, buildSeasonImpl =
     }
   }
   const usedNumbers = new Set([...existingByNumber.keys(), ...seenIncomingNumbers]);
+  // Jump-past-max rather than gap-fill: if existing seasons are [1, 5],
+  // auto-assign lands at 6 (not 2). Two reasons: (1) gap-fill could
+  // silently re-occupy a slot the user intentionally deleted (e.g.
+  // removed season 3 to retire it; new content shouldn't land at slot 3
+  // with a totally different premise); (2) "new = appended" matches the
+  // user's mental model of how multi-pass imports extend the world.
   let nextFreeNumber = (usedNumbers.size === 0) ? 1 : Math.max(...usedNumbers) + 1;
   const nowIso = new Date().toISOString();
   // String-field merge: absent (`undefined`/`null`) preserves the existing
@@ -538,9 +544,21 @@ export async function commitImport({
   const universe = await getUniverse(universeId);
   const series = await getSeries(seriesId);
 
-  if (series.universeId && series.universeId !== universe.id) {
+  // Defensive: refuse commit when series.universeId is set AND differs,
+  // OR when series.universeId is missing entirely. A legacy series
+  // persisted before universeId became standard would otherwise silently
+  // be re-homed to whichever universe the caller routed through. createSeries
+  // sets universeId today, so a missing value implies hand-edited / pre-link
+  // legacy data — flag it so the caller decides rather than silently linking.
+  if (series.universeId !== universe.id) {
+    if (series.universeId) {
+      throw makeErr(
+        `Series "${series.name}" is linked to a different universe — commit refused to avoid cross-linking.`,
+        ERR_VALIDATION,
+      );
+    }
     throw makeErr(
-      `Series "${series.name}" is linked to a different universe — commit refused to avoid cross-linking.`,
+      `Series "${series.name}" has no universeId — commit refused. Link the series to a universe explicitly before importing.`,
       ERR_VALIDATION,
     );
   }

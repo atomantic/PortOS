@@ -643,8 +643,19 @@ function IssuesReviewSection({ issues, setIssues, seasons, arcRoles }) {
       </section>
     );
   }
-  const seasonOptions = seasons.length > 1
-    ? [{ value: '', label: '(first season)' }, ...seasons.map((s) => ({ value: String(s.number), label: `S${s.number} — ${s.title || ''}` }))]
+  // Drop seasons with no finite `number` — the season-number input lets
+  // the user clear the field (storing `undefined`) and `String(undefined)`
+  // would otherwise produce `value: "undefined"`, which onChange would
+  // coerce to NaN and Zod would later reject as an opaque commit failure.
+  // The dropdown should only offer addressable seasons; user can pick the
+  // "(first season)" fallback for an issue while they fix the numberless
+  // season's number in the Arc section.
+  const numberedSeasons = seasons.filter((s) => Number.isFinite(s.number));
+  const seasonOptions = numberedSeasons.length > 1
+    ? [
+        { value: '', label: '(first season)' },
+        ...numberedSeasons.map((s) => ({ value: String(s.number), label: `S${s.number} — ${s.title || ''}` })),
+      ]
     : null;
   return (
     <section className="bg-port-card border border-port-border rounded-lg p-4">

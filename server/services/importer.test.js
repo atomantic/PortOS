@@ -529,6 +529,33 @@ describe('commitImport', () => {
     expect(s2).toBeDefined();
   });
 
+  // Round-12 review: cross-universe guard must refuse commit when the
+  // series has NO universeId (legacy / hand-edited data), not just when
+  // it differs. Previously a falsy universeId silently bypassed the
+  // guard and let the importer re-home the series.
+  it('refuses commit when the series has no universeId', async () => {
+    const uni = await universeSvc.createUniverse({ name: 'Linkless U' });
+    const ser = await seriesSvc.createSeries({ name: 'Linkless S' });
+    // sanitizeSeries normalizes a missing universeId to null. Confirm
+    // the precondition before exercising the guard.
+    expect(ser.universeId).toBeFalsy();
+    let caught;
+    try {
+      await importerSvc.commitImport({
+        universeId: uni.id, seriesId: ser.id,
+        canonSelections: { characters: [], places: [], objects: [] },
+        arc: null,
+        seasons: [],
+        issues: [{ title: 'I1', arcPosition: 1, proseExcerpt: 'p' }],
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeDefined();
+    expect(caught.code).toBe(importerSvc.ERR_VALIDATION);
+    expect(caught.message).toMatch(/no universeId/i);
+  });
+
   // Round-10 review: round-9's auto-assign fix only covered the omitted
   // case. An incoming issue that EXPLICITLY sets `arcPosition: 1` while
   // the series already holds an issue at position 1 must be rejected
