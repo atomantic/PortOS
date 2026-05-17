@@ -170,10 +170,21 @@ const migratePromptFile = async (rootDir) => {
     // (or sample missing). Respect that and just drop the legacy orphan.
     console.log(`📝 ${PROMPTS_STAGES_DIR_REL}/${NEW_PROMPT_FILE}: user-customized, kept as-is (legacy ${LEGACY_PROMPT_FILE} discarded)`);
   } else {
-    // `…-places.md` missing entirely (setup-data didn't run) — promote
-    // the legacy file in place rather than dropping the user's content.
-    await writeFile(newPath, legacyContent);
-    console.log(`📝 ${PROMPTS_STAGES_DIR_REL}/${NEW_PROMPT_FILE}: promoted from legacy ${LEGACY_PROMPT_FILE}`);
+    // `…-places.md` missing entirely (setup-data didn't run). Apply the
+    // same baseline check as the auto-seeded branch: if the legacy file
+    // is the unmodified pre-rename baseline AND we have a current sample,
+    // install the modern sample (so users picking up this migration cold
+    // also pick up migration 007's intExt / timeOfDay fields). Otherwise
+    // the legacy file carries user customizations (or there's no sample
+    // available) — promote it in place.
+    const legacyHash = md5(legacyContent);
+    if (legacyHash === LEGACY_PROMPT_SHIPPED_MD5 && sampleContent != null) {
+      await writeFile(newPath, sampleContent);
+      console.log(`📝 ${PROMPTS_STAGES_DIR_REL}/${NEW_PROMPT_FILE}: legacy matched shipped baseline, installed current sample`);
+    } else {
+      await writeFile(newPath, legacyContent);
+      console.log(`📝 ${PROMPTS_STAGES_DIR_REL}/${NEW_PROMPT_FILE}: promoted from legacy ${LEGACY_PROMPT_FILE}`);
+    }
   }
 
   await unlink(legacyPath).catch((err) => {
