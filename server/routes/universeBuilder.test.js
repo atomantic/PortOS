@@ -69,6 +69,10 @@ vi.mock('../services/mediaCollections.js', () => ({
   // No-op here is fine: the routes test cares about the universe PATCH itself,
   // not the bookkeeping side-effect (covered in mediaCollections.test.js).
   renameCollectionForUniverse: vi.fn(async () => null),
+  // Universe delete → unlink linked collections so the orphaned bucket
+  // becomes a normal user-owned collection. No-op stub mirrors the rename
+  // cascade pattern above (behavior is covered in mediaCollections.test.js).
+  unlinkCollectionsForUniverse: vi.fn(async () => []),
   universeCollectionNameFor: (name) => `Universe: ${name || ''}`.slice(0, 80),
   ERR_DUPLICATE: 'DUPLICATE',
   NAME_MAX_LENGTH: 80,

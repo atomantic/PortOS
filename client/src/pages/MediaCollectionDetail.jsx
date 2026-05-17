@@ -302,15 +302,22 @@ export default function MediaCollectionDetail() {
     // Universe-linked collections own their name (Universe Builder routes
     // renders into them by `Universe: <name>`). Locked here; the server
     // enforces this independently via the rename-lock in updateCollection.
-    if (collection.universeId) return (
-      <h1
-        className="text-xl font-semibold text-white flex items-center gap-2"
-        title="Linked to a Universe — rename the universe to rename this collection."
-      >
-        {collection.name}
-        <Lock className="w-4 h-4 text-gray-500" />
-      </h1>
-    );
+    // The lock state is exposed both visually (icon + title for sighted
+    // users) and programmatically (aria-label + sr-only text) so screen
+    // readers and keyboard users hear the same explanation.
+    if (collection.universeId) {
+      const lockMsg = 'Linked to a Universe — rename the universe to rename this collection.';
+      return (
+        <h1
+          className="text-xl font-semibold text-white flex items-center gap-2"
+          title={lockMsg}
+        >
+          {collection.name}
+          <Lock className="w-4 h-4 text-gray-500" aria-hidden="true" />
+          <span className="sr-only">{lockMsg}</span>
+        </h1>
+      );
+    }
     if (editingName) return (
       <input
         autoFocus

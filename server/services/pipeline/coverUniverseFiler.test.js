@@ -75,4 +75,43 @@ describe('fileCoverIntoUniverseCollection', () => {
     await fileCoverIntoUniverseCollection({ seriesId: series.id, filename: 'x.png' });
     expect(await collections.listCollections()).toEqual([]);
   });
+
+  it('never hijacks a same-named collection belonging to a different universe', async () => {
+    // Universe A already owns a "Universe: Twin" bucket.
+    const universeA = await universeSvc.createUniverse({ name: 'Twin' });
+    const ownedByA = await collections.findOrCreateCollectionByName({
+      name: 'Universe: Twin', universeId: universeA.id,
+    });
+    // Universe B (different id, same display name) renders its first cover.
+    const universeB = await universeSvc.createUniverse({ name: 'Twin' });
+    const seriesB = await seriesSvc.createSeries({ name: 'B-Series', universeId: universeB.id });
+    await fileCoverIntoUniverseCollection({ seriesId: seriesB.id, filename: 'b-cover.png' });
+    // Universe A's bucket must be untouched.
+    const a = await collections.getCollection(ownedByA.id);
+    expect(a.items).toHaveLength(0);
+    // Universe B got its own properly-stamped bucket.
+    const b = await collections.findCollectionByUniverseId(universeB.id);
+    expect(b).not.toBeNull();
+    expect(b.id).not.toBe(ownedByA.id);
+    expect(b.items.map((it) => it.ref)).toEqual(['b-cover.png']);
+  });
+
+  it('serializes concurrent filings for the same universe (no orphan collections from a race)', async () => {
+    const universe = await universeSvc.createUniverse({ name: 'Race' });
+    const series = await seriesSvc.createSeries({ name: 'S', universeId: universe.id });
+    // Two completions back-to-back before the collection exists — the per-
+    // universe queue must funnel both through the same create-or-find write
+    // so only one collection is persisted and both filenames land in it.
+    await Promise.all([
+      fileCoverIntoUniverseCollection({ seriesId: series.id, filename: 'cover.png' }),
+      fileCoverIntoUniverseCollection({ seriesId: series.id, filename: 'back.png' }),
+    ]);
+    const linked = await collections.findCollectionByUniverseId(universe.id);
+    expect(linked).not.toBeNull();
+    expect(linked.items.map((it) => it.ref).sort()).toEqual(['back.png', 'cover.png']);
+    // Only one "Universe: Race" collection — no race-induced duplicate.
+    const all = await collections.listCollections();
+    const named = all.filter((c) => c.name === 'Universe: Race');
+    expect(named).toHaveLength(1);
+  });
 });

@@ -35,7 +35,7 @@ import {
 } from '../lib/storyBible.js';
 import { sanitizeOrigin } from '../lib/sharingOrigin.js';
 import { emitRecordUpdated, emitRecordDeleted } from './sharing/recordEvents.js';
-import { renameCollectionForUniverse } from './mediaCollections.js';
+import { renameCollectionForUniverse, unlinkCollectionsForUniverse } from './mediaCollections.js';
 
 // Bumped when a sanitizer-time backfill changes how on-disk universes are
 // shaped, so future migrations can gate on the prior version.
@@ -743,6 +743,14 @@ export async function deleteUniverse(id) {
   // Drop runs referencing the deleted universe — they're useless without it.
   state.runs = state.runs.filter((r) => r.universeId !== id);
   await writeState(state);
+  // Release the rename-lock on any linked media collections — without this,
+  // the orphan collection's `universeId` stays stamped and the lock in
+  // updateCollection blocks renames forever even though the universe is gone.
+  // Best-effort: a failure here mustn't fail the delete (the universe is
+  // already gone from state).
+  await unlinkCollectionsForUniverse(id).catch((err) => {
+    console.error(`❌ unlink media collections for deleted universe ${id} failed: ${err?.message || err}`);
+  });
   emitRecordDeleted('universe', id);
   return { id };
 }

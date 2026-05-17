@@ -203,6 +203,41 @@ export async function findOrCreateCollectionByName({ name, description = '', uni
 export const universeCollectionNameFor = (universeName) =>
   `Universe: ${typeof universeName === 'string' ? universeName : ''}`.slice(0, NAME_MAX_LENGTH);
 
+// Create a fresh collection stamped with a universeId. Unlike
+// findOrCreateCollectionByName this never reuses a same-named existing
+// collection — callers who need the universe to own its own bucket (no
+// hijacking of a same-named foreign-universe collection) call this after
+// ruling out safe-to-reuse candidates. The created collection's name is
+// kept as-is, even if it collides with an existing collection; the user can
+// see both in the list and rename the conflicting one later. The
+// `universeId` stamp is the source of truth for routing future renders.
+export async function createCollectionForUniverse({ name, description = '', universeId }) {
+  const trimmed = typeof name === 'string' ? name.trim() : '';
+  if (!trimmed || trimmed.length > NAME_MAX_LENGTH) {
+    throw makeErr('Collection name is required (1..' + NAME_MAX_LENGTH + ' chars)', ERR_VALIDATION);
+  }
+  if (!universeId || typeof universeId !== 'string') {
+    throw makeErr('universeId is required', ERR_VALIDATION);
+  }
+  const trimmedDescription = typeof description === 'string'
+    ? description.trim().slice(0, DESCRIPTION_MAX_LENGTH)
+    : '';
+  const all = await listCollections();
+  const now = new Date().toISOString();
+  const next = {
+    id: randomUUID(),
+    name: trimmed,
+    description: trimmedDescription,
+    coverKey: null,
+    universeId: universeId.slice(0, UNIVERSE_ID_MAX),
+    items: [],
+    createdAt: now,
+    updatedAt: now,
+  };
+  await writeAll([...all, next]);
+  return next;
+}
+
 // Look up an existing collection by its universeId stamp. Returns null if no
 // collection has ever been linked to this universe — callers fall back to
 // findOrCreateCollectionByName to upsert on first use.
@@ -210,6 +245,29 @@ export async function findCollectionByUniverseId(universeId) {
   if (!universeId) return null;
   const all = await listCollections();
   return all.find((c) => c.universeId === universeId) || null;
+}
+
+// Clear the `universeId` link on any collection bound to this universe.
+// Used by deleteUniverse to release the rename-lock so the orphaned bucket
+// becomes a normal user-owned collection (renamable, deletable, etc.). The
+// items themselves are preserved — the user may still want the renders.
+// Returns the list of unlinked collection ids (empty when none matched).
+export async function unlinkCollectionsForUniverse(universeId) {
+  if (!universeId) return [];
+  const all = await listCollections();
+  const matches = all
+    .map((c, i) => (c.universeId === universeId ? i : -1))
+    .filter((i) => i >= 0);
+  if (!matches.length) return [];
+  const now = new Date().toISOString();
+  const next = [...all];
+  const unlinkedIds = [];
+  for (const i of matches) {
+    next[i] = { ...all[i], universeId: null, updatedAt: now };
+    unlinkedIds.push(all[i].id);
+  }
+  await writeAll(next);
+  return unlinkedIds;
 }
 
 // Cascade a universe rename to its linked collection. Skips the rename-lock

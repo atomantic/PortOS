@@ -239,6 +239,49 @@ describe('mediaCollections service', () => {
       expect(result.name).toBe(linked.name);
       expect(result.updatedAt).toBe(linked.updatedAt);
     });
+
+    it('unlinkCollectionsForUniverse clears the universeId on linked collections (preserves items)', async () => {
+      const linked = await svc.findOrCreateCollectionByName({
+        name: 'Universe: Foo', universeId: 'u-1',
+      });
+      await svc.addItem(linked.id, { kind: 'image', ref: 'art.png' });
+      const cleared = await svc.unlinkCollectionsForUniverse('u-1');
+      expect(cleared).toEqual([linked.id]);
+      const fresh = await svc.getCollection(linked.id);
+      expect(fresh.universeId).toBeNull();
+      expect(fresh.items).toHaveLength(1);
+      // Lock released — renames now succeed.
+      const renamed = await svc.updateCollection(linked.id, { name: 'Orphan Bucket' });
+      expect(renamed.name).toBe('Orphan Bucket');
+    });
+
+    it('unlinkCollectionsForUniverse is a no-op when no collection is linked', async () => {
+      expect(await svc.unlinkCollectionsForUniverse('ghost')).toEqual([]);
+      expect(await svc.unlinkCollectionsForUniverse(null)).toEqual([]);
+    });
+
+    it('createCollectionForUniverse always creates a fresh, properly-stamped collection (never adopts a foreign-universe bucket of the same name)', async () => {
+      // Existing collection of the same name belongs to universe A.
+      const foreign = await svc.findOrCreateCollectionByName({
+        name: 'Universe: Twin', universeId: 'u-A',
+      });
+      // Now universe B (same display name, different id) provisions its bucket.
+      const own = await svc.createCollectionForUniverse({
+        name: 'Universe: Twin', universeId: 'u-B',
+      });
+      expect(own.id).not.toBe(foreign.id);
+      expect(own.universeId).toBe('u-B');
+      // Both collections exist independently — listing returns both.
+      const all = await svc.listCollections();
+      expect(all.find((c) => c.id === foreign.id)?.universeId).toBe('u-A');
+      expect(all.find((c) => c.id === own.id)?.universeId).toBe('u-B');
+    });
+
+    it('createCollectionForUniverse requires a universeId', async () => {
+      await expect(
+        svc.createCollectionForUniverse({ name: 'X' }),
+      ).rejects.toMatchObject({ code: svc.ERR_VALIDATION });
+    });
   });
 
   it('sanitizes hand-edited JSON with bogus items', async () => {

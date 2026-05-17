@@ -270,6 +270,25 @@ describe("universeBuilder service", () => {
     expect(await svc.listRuns(w.id)).toEqual([]);
   });
 
+  it("deleteUniverse unlinks linked media collections (releases the rename-lock)", async () => {
+    const collections = await import("./mediaCollections.js");
+    const w = await seedWorld();
+    // Provision the universe's collection the same way the render route does.
+    const linked = await collections.findOrCreateCollectionByName({
+      name: collections.universeCollectionNameFor(w.name),
+      universeId: w.id,
+    });
+    expect(linked.universeId).toBe(w.id);
+    await svc.deleteUniverse(w.id);
+    // Collection survives — the user may still want the renders.
+    const fresh = await collections.getCollection(linked.id);
+    // …but the `universeId` is cleared so the rename-lock no longer applies.
+    expect(fresh.universeId).toBeNull();
+    await expect(
+      collections.updateCollection(fresh.id, { name: "User-Renamed" }),
+    ).resolves.toMatchObject({ name: "User-Renamed" });
+  });
+
   describe("compilePrompts", () => {
     it("returns one prompt per variation across selected categories with style prefix", async () => {
       const w = await seedWorld();

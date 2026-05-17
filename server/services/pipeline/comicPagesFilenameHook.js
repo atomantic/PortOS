@@ -16,7 +16,6 @@
 import { parseComicPagesOwner, slotKeyForVariant } from './owners.js';
 import { createFilenameHook } from './filenameHookFactory.js';
 import { buildRenderSlot } from './visualStages.js';
-import { mediaJobEvents } from '../mediaJobQueue/index.js';
 import { getIssue } from './issues.js';
 import { fileCoverIntoUniverseCollection } from './coverUniverseFiler.js';
 
@@ -103,48 +102,27 @@ const hook = createFilenameHook({
     }
     return null;
   },
-});
-
-// Parallel listener: when an issue COVER or BACK-COVER render completes,
-// also file the image into the owning universe's media collection. Panels
-// are excluded — the universe bucket is for poster-style artwork, not
-// every interior frame. Runs alongside the factory hook (which stamps the
-// filename onto the stage); both subscribe to the same `completed` event
-// and act independently, so a failure in one doesn't break the other.
-let coverFilingHandler = null;
-
-const coverFilingListener = (job) => {
-  // Sync gate runs first — most completion events are panels or unrelated
-  // jobs, so allocating a microtask + try/catch frame for the >95% miss
-  // case is pure waste.
-  if (!job || job.kind !== 'image') return;
-  const filename = job.result?.filename;
-  if (typeof filename !== 'string' || !filename) return;
-  const parsed = parseComicPagesOwner(job.owner);
-  if (!parsed || (parsed.target !== 'cover' && parsed.target !== 'backCover')) return;
-  void (async () => {
+  // Post-stamp side effect: when an issue COVER or BACK-COVER render
+  // commits, file the image into the owning universe's media collection.
+  // Panels are excluded — the universe bucket is for poster-style artwork,
+  // not every interior frame. Gating on `onStamped` (rather than a parallel
+  // mediaJobEvents listener) means stale renders that the `applyFilename`
+  // skipped because the slot's active jobId changed AND failed writes both
+  // skip filing automatically — there's a single success path.
+  onStamped: async ({ parsed, filename }) => {
+    if (parsed.target !== 'cover' && parsed.target !== 'backCover') return;
     const issue = await getIssue(parsed.issueId).catch(() => null);
     if (!issue?.seriesId) return;
     await fileCoverIntoUniverseCollection({ seriesId: issue.seriesId, filename });
-  })().catch((err) => {
-    console.error(`❌ comicPages cover→universe filer crashed: ${err?.message || err}`);
-  });
-};
+  },
+});
 
 export function initComicPagesFilenameHook() {
   hook.init();
-  if (!coverFilingHandler) {
-    coverFilingHandler = coverFilingListener;
-    mediaJobEvents.on('completed', coverFilingHandler);
-  }
 }
 
 export const __testing = {
   reset() {
     hook.__testing.reset();
-    if (coverFilingHandler) {
-      mediaJobEvents.off('completed', coverFilingHandler);
-      coverFilingHandler = null;
-    }
   },
 };

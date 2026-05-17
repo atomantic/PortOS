@@ -36,7 +36,12 @@ const handler = (job) => {
     const shortId = String(job.id || '').slice(0, 8);
     const slotKey = slotKeyForVariant(parsed.variant);
     const { seriesId, seasonId, target } = parsed;
-    let stamped = false;
+    // Track BOTH that the reducer chose to stamp AND that the write actually
+    // landed. Setting a flag inside the reducer alone isn't enough: a
+    // validation/IO failure in updateSeasonOnSeries would still trigger the
+    // universe filing with a filename that never persisted on the season.
+    let reducerStamped = false;
+    let writeOk = false;
 
     await seriesSvc.updateSeasonOnSeries(seriesId, seasonId, (cur) => {
       const record = cur?.[target];
@@ -46,18 +51,18 @@ const handler = (job) => {
       // already — in that case dropping our completion is the correct
       // behavior (the newer job's filename will overwrite ours anyway).
       if (record[slotKey]?.jobId !== job.id) return {};
-      stamped = true;
+      reducerStamped = true;
       return {
         [target]: {
           ...record,
           [slotKey]: { ...record[slotKey], filename },
         },
       };
-    }).catch((err) => {
+    }).then(() => { writeOk = true; }).catch((err) => {
       console.error(`❌ seasonCover filename hook failed for job ${shortId}: ${err?.message || err}`);
     });
 
-    if (stamped) {
+    if (reducerStamped && writeOk) {
       console.log(`📎 seasonCover filename stamped — series=${seriesId.slice(0, 8)} season=${seasonId.slice(0, 8)} ${target}.${slotKey} ← ${filename}`);
       await fileCoverIntoUniverseCollection({ seriesId, filename });
     }
