@@ -484,10 +484,27 @@ export default function UniverseBuilder() {
     //     auto-save after expand (`canonDirty`). Without this, the user's
     //     "review then Save" toast doesn't actually persist the new canon.
     // Otherwise the canon UI's own targeted PATCHes own the writes.
+    //
+    // When sending canon on UPDATE, refetch the server's current canon and
+    // merge our local additions onto it — that way concurrent edits from
+    // another tab (Nouns stage etc.) aren't clobbered by the stale draft.
+    // mergeCanonByName preserves the server entries on identity collision.
     const needsCanonInPayload = !selectedId || canonDirty;
-    const payload = needsCanonInPayload
-      ? { ...basePayload, characters: draft.characters || [], settings: draft.settings || [], objects: draft.objects || [] }
-      : basePayload;
+    let payload = basePayload;
+    if (needsCanonInPayload) {
+      let baseCanon = { characters: draft.characters || [], settings: draft.settings || [], objects: draft.objects || [] };
+      if (selectedId) {
+        const fresh = await getUniverse(selectedId).catch(() => null);
+        if (fresh) {
+          baseCanon = {
+            characters: mergeCanonByName(fresh.characters || [], draft.characters || [], 'character'),
+            settings: mergeCanonByName(fresh.settings || [], draft.settings || [], 'setting'),
+            objects: mergeCanonByName(fresh.objects || [], draft.objects || [], 'object'),
+          };
+        }
+      }
+      payload = { ...basePayload, ...baseCanon };
+    }
     const result = selectedId
       ? await updateUniverse(selectedId, payload).catch((e) => { toast.error(`Save failed: ${e.message}`); return null; })
       : await createUniverse(payload).catch((e) => { toast.error(`Save failed: ${e.message}`); return null; });
@@ -678,6 +695,24 @@ export default function UniverseBuilder() {
     // (disabled={saving || ...}) can't double-submit during the await window
     // between expanding=false and goToWorld(saved.id).
     if (expandedDraft.name?.trim()) {
+      // For updates: refetch the server's canon and merge in the local
+      // additions so a concurrent canon edit (Nouns stage, another tab)
+      // landing during the LLM call isn't wholesale-clobbered.
+      let canonForPayload = {
+        characters: expandedDraft.characters || [],
+        settings: expandedDraft.settings || [],
+        objects: expandedDraft.objects || [],
+      };
+      if (selectedId) {
+        const fresh = await getUniverse(selectedId).catch(() => null);
+        if (fresh) {
+          canonForPayload = {
+            characters: mergeCanonByName(fresh.characters || [], expandedDraft.characters || [], 'character'),
+            settings: mergeCanonByName(fresh.settings || [], expandedDraft.settings || [], 'setting'),
+            objects: mergeCanonByName(fresh.objects || [], expandedDraft.objects || [], 'object'),
+          };
+        }
+      }
       const payload = {
         name: expandedDraft.name.trim(),
         starterPrompt: expandedDraft.starterPrompt || '',
@@ -686,9 +721,7 @@ export default function UniverseBuilder() {
         styleNotes: expandedDraft.styleNotes || '',
         categories: expandedDraft.categories,
         compositeSheets: expandedDraft.compositeSheets || [],
-        characters: expandedDraft.characters || [],
-        settings: expandedDraft.settings || [],
-        objects: expandedDraft.objects || [],
+        ...canonForPayload,
         influences: ensureInfluences(expandedDraft.influences),
         locked: expandedDraft.locked || {},
         llm: expandedDraft.llm || {},
