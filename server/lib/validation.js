@@ -1109,6 +1109,16 @@ export const IMPORTER_CONTENT_TYPES = Object.freeze([
 // here mirrors writersRoomDraftSaveSchema.
 const importerSourceField = z.string().min(1).max(5_000_000);
 
+// Classify endpoint only sees the source — no universe/series context. The
+// LLM only consumes the head, so the schema is intentionally minimal.
+export const importerClassifySchema = z.object({
+  source: importerSourceField,
+  providerOverride: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z.string().trim().max(120).optional(),
+  ),
+}).strict();
+
 export const importerAnalyzeSchema = z.object({
   universeName: z.string().trim().min(1).max(200),
   seriesName: z.string().trim().min(1).max(200),
@@ -1195,4 +1205,11 @@ export const importerCommitSchema = z.object({
   arc: importerArcShape.nullable().optional(),
   seasons: z.array(importerSeasonEntry).max(50).default([]),
   issues: z.array(importerIssueEntry).min(1).max(50),
+  // Replace-mode flag — when true, every existing issue on the series is
+  // deleted before the incoming `issues` are created, and `series.arc` +
+  // `series.seasons[]` are written verbatim (not merged). Canon is still
+  // merged additively even in replace mode — universe canon is shared
+  // across series, so a per-series destructive replace would be wrong.
+  // Defaults to false to preserve the additive merge behavior.
+  replaceMode: z.boolean().optional().default(false),
 }).strict();

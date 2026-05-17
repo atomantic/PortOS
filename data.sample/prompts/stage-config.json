@@ -270,6 +270,13 @@
       "returnsJson": true,
       "variables": []
     },
+    "importer-classify": {
+      "name": "Importer — Content-Type Classification",
+      "description": "Classify the first chunk of a source as short-story / novel / screenplay / comic-script. Runs at `light` tier — only sees ~4K chars from the head of the source, costs are negligible compared to the canon/arc/issue extractors.",
+      "model": "light",
+      "returnsJson": true,
+      "variables": []
+    },
     "importer-canon-extract": {
       "name": "Importer — Universe Canon Extraction",
       "description": "Reverse-engineer characters / places / objects from a finished short story / novel / screenplay / comic script. Runs at `heavy` tier — source can be book-length.",

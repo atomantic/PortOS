@@ -10,9 +10,10 @@ import { ARC_ROLES } from '../lib/storyArc.js';
 vi.mock('../services/importer.js', async () => {
   const actual = await vi.importActual('../services/importer.js');
   return {
-    ...actual,               // real ERR_VALIDATION, ERR_LOCKED, IMPORTER_SOURCE_CHAR_LIMIT, etc.
-    analyzeImport: vi.fn(),  // mocked behavior
-    commitImport: vi.fn(),   // mocked behavior
+    ...actual,                       // real ERR_VALIDATION, ERR_LOCKED, IMPORTER_SOURCE_CHAR_LIMIT, etc.
+    analyzeImport: vi.fn(),          // mocked behavior
+    classifyImportContent: vi.fn(),  // mocked behavior
+    commitImport: vi.fn(),           // mocked behavior
   };
 });
 
@@ -33,12 +34,50 @@ function buildApp() {
 }
 
 describe('GET /api/importer/config', () => {
-  it('returns sourceCharLimit and arcRoles', async () => {
+  it('returns sourceCharLimit, arcRoles, and arcShapeIds', async () => {
     const app = buildApp();
     const res = await request(app).get('/api/importer/config');
     expect(res.status).toBe(200);
     expect(res.body.sourceCharLimit).toBe(IMPORTER_SOURCE_CHAR_LIMIT);
     expect(Array.isArray(res.body.arcRoles)).toBe(true);
+    expect(res.body.arcRoles).toEqual([...ARC_ROLES]);
+    expect(Array.isArray(res.body.arcShapeIds)).toBe(true);
+    // Server-canonical list — the dropdown filter relies on every shape
+    // id the client has metadata for being present here, so pin both
+    // length + membership rather than just `.length > 0`.
+    expect(res.body.arcShapeIds.length).toBeGreaterThan(0);
+  });
+});
+
+describe('POST /api/importer/classify', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns 200 with the classifier result on success', async () => {
+    importerSvc.classifyImportContent.mockResolvedValue({
+      contentType: 'screenplay',
+      confidence: 'high',
+      reasoning: 'INT. CAFE — DAY scene heading present',
+    });
+    const app = buildApp();
+    const res = await request(app).post('/api/importer/classify').send({ source: 'FADE IN:\nINT. CAFE — DAY' });
+    expect(res.status).toBe(200);
+    expect(res.body.contentType).toBe('screenplay');
+    expect(res.body.confidence).toBe('high');
+  });
+
+  it('returns 400 when source is missing', async () => {
+    const app = buildApp();
+    const res = await request(app).post('/api/importer/classify').send({});
+    expect(res.status).toBe(400);
+  });
+
+  it('returns 400 when the service throws ERR_VALIDATION', async () => {
+    const err = Object.assign(new Error('source is required'), { code: ERR_VALIDATION });
+    importerSvc.classifyImportContent.mockRejectedValue(err);
+    const app = buildApp();
+    const res = await request(app).post('/api/importer/classify').send({ source: 'x' });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe(ERR_VALIDATION);
   });
 });
 

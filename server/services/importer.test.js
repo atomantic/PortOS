@@ -728,6 +728,15 @@ describe('commitImport', () => {
     expect(caught.code).toBe('IMPORTER_PARTIAL_COMMIT_ISSUES');
     expect(caught.message).toMatch(/universe and series were updated/i);
     expect(caught.message).toMatch(/simulated mid-loop FS error/);
+    // The error carries the structured context the client needs to shape
+    // its retry — universe + series ids (so a re-fetch isn't required) and
+    // `arcAlreadyPersisted` (so the retry drops arc + seasons + canon from
+    // the payload and lets the server-side state stand).
+    expect(caught.context).toBeDefined();
+    expect(caught.context.universeId).toBe(uni.id);
+    expect(caught.context.seriesId).toBe(ser.id);
+    expect(caught.context.arcAlreadyPersisted).toBe(true);
+    expect(caught.context.skipArcOnRetry).toBe(true);
 
     // Universe + series writes survive (user-confirmed, idempotent).
     const universeAfter = await universeSvc.getUniverse(uni.id);
@@ -739,6 +748,76 @@ describe('commitImport', () => {
     // No leftover issues from the partial loop.
     const issuesAfter = await issuesSvc.listIssues({ seriesId: ser.id });
     expect(issuesAfter).toHaveLength(0);
+  });
+
+  // Round-N: replaceMode behavior. Seed a series with one issue + one arc
+  // shape; re-commit with replaceMode=true and assert the existing issue
+  // is wiped, the new issue is created, and the arc was overwritten.
+  it('replaceMode=true wipes existing issues + overwrites arc + seasons', async () => {
+    const { uni, ser } = await setupForCommit();
+    // Seed pass — one issue, one season, "rags-to-riches" arc.
+    await importerSvc.commitImport({
+      universeId: uni.id,
+      seriesId: ser.id,
+      canonSelections: { characters: [], places: [], objects: [] },
+      arc: { logline: 'Old', summary: 'Old', shape: 'rags-to-riches' },
+      seasons: [{ number: 1, title: 'Old S1', logline: '', synopsis: '', endingHook: '' }],
+      issues: [{ title: 'Old Issue', arcPosition: 1, proseExcerpt: 'old prose' }],
+    });
+    const beforeIssues = await issuesSvc.listIssues({ seriesId: ser.id });
+    expect(beforeIssues).toHaveLength(1);
+
+    // Replace pass — different arc shape, different issue.
+    const result = await importerSvc.commitImport({
+      universeId: uni.id,
+      seriesId: ser.id,
+      canonSelections: { characters: [], places: [], objects: [] },
+      arc: { logline: 'New', summary: 'New', shape: 'tragedy' },
+      seasons: [{ number: 1, title: 'New S1', logline: '', synopsis: '', endingHook: '' }],
+      issues: [{ title: 'New Issue', arcPosition: 1, proseExcerpt: 'new prose' }],
+      replaceMode: true,
+    });
+
+    // Old issue gone, only new issue remains.
+    const afterIssues = await issuesSvc.listIssues({ seriesId: ser.id });
+    expect(afterIssues).toHaveLength(1);
+    expect(afterIssues[0].title).toBe('New Issue');
+    expect(result.createdIssueIds).toEqual([afterIssues[0].id]);
+    // Arc was overwritten — shape is now `tragedy`.
+    expect(result.series.arc.shape).toBe('tragedy');
+    expect(result.series.arc.logline).toBe('New');
+    // Season title was overwritten.
+    expect(result.series.seasons[0].title).toBe('New S1');
+  });
+
+  // Same arcPosition between old + new issues — additive mode would reject
+  // with "explicit arcPosition collides", but replaceMode wipes the old
+  // first so the collision is gone by the time we write the new set.
+  it('replaceMode=true tolerates arcPosition reuse from the wiped set', async () => {
+    const { uni, ser } = await setupForCommit();
+    await importerSvc.commitImport({
+      universeId: uni.id,
+      seriesId: ser.id,
+      canonSelections: { characters: [], places: [], objects: [] },
+      arc: null,
+      seasons: [],
+      issues: [{ title: 'Old', arcPosition: 1, proseExcerpt: 'old' }],
+    });
+    // Same arcPosition=1 — additive would throw, replace accepts.
+    const result = await importerSvc.commitImport({
+      universeId: uni.id,
+      seriesId: ser.id,
+      canonSelections: { characters: [], places: [], objects: [] },
+      arc: null,
+      seasons: [],
+      issues: [{ title: 'New', arcPosition: 1, proseExcerpt: 'new' }],
+      replaceMode: true,
+    });
+    expect(result.createdIssueIds).toHaveLength(1);
+    const after = await issuesSvc.listIssues({ seriesId: ser.id });
+    expect(after).toHaveLength(1);
+    expect(after[0].title).toBe('New');
+    expect(after[0].arcPosition).toBe(1);
   });
 });
 

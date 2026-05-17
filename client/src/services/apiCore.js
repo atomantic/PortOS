@@ -42,6 +42,11 @@ export async function request(endpoint, options = {}) {
     const err = new Error(errorMessage);
     err.code = error?.code;
     err.status = response.status;
+    // Forward structured context the server attached to the error (e.g.
+    // ERR_PARTIAL_COMMIT_ISSUES carries `{ universeId, seriesId,
+    // arcAlreadyPersisted, skipArcOnRetry }` so the Importer client can
+    // shape its retry without re-overwriting persisted state).
+    if (error?.context) err.context = error.context;
     throw err;
   }
 

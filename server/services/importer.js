@@ -27,6 +27,7 @@ import {
 } from './pipeline/series.js';
 import { createIssue, deleteIssue, listIssues } from './pipeline/issues.js';
 import { sanitizeArc, sanitizeSeasonList, buildSeason, ARC_SHAPE_IDS, ARC_ROLES } from '../lib/storyArc.js';
+import { IMPORTER_CONTENT_TYPES } from '../lib/validation.js';
 import { mergeExtractedBible, BIBLE_KIND } from '../lib/storyBible.js';
 
 // Surfaced to the route layer so the importer's policy errors become 400s
@@ -320,6 +321,54 @@ function buildArcPreview(raw) {
   };
 }
 
+const CLASSIFIER_CONFIDENCES = new Set(['high', 'medium', 'low']);
+// 4K chars is roughly 1 200 tokens — enough to see chapter markers, scene
+// headings, and panel breaks. Exported so the client can trim its payload
+// to match (no point shipping 196KB of body the server will discard).
+export const CLASSIFY_SOURCE_HEAD_CHARS = 4_000;
+
+/**
+ * Lightweight pre-pass that classifies a source's content type so the
+ * Importer intake form can pre-select the radio (still user-editable).
+ * Runs at light tier, sees only the head of the source — costs are
+ * negligible compared to the three heavy-tier extractors in analyzeImport.
+ *
+ * Returns `{ contentType, confidence, reasoning }`. A hallucinated /
+ * out-of-enum `contentType` is dropped to `null` so the client can fall
+ * back to its default radio without rendering nonsense; `confidence` is
+ * gated similarly. The reasoning string is passed through verbatim so the
+ * UI can show it in a tooltip beside the auto-pick.
+ */
+export async function classifyImportContent({ source, providerOverride } = {}) {
+  if (!isStr(source) || !source.trim()) {
+    throw makeErr('source is required', ERR_VALIDATION);
+  }
+  if (source.length > IMPORTER_SOURCE_CHAR_LIMIT) {
+    throw makeErr(
+      `Source is ${source.length.toLocaleString()} chars — v1 limit is ${IMPORTER_SOURCE_CHAR_LIMIT.toLocaleString()}. Trim the source or wait for chunked-extraction support.`,
+      ERR_VALIDATION,
+    );
+  }
+  const sourceHead = source.slice(0, CLASSIFY_SOURCE_HEAD_CHARS);
+  const run = await runStagedLLM('importer-classify', { sourceHead }, {
+    providerOverride,
+    source: 'importer-classify',
+    returnsJson: true,
+  });
+  const raw = (typeof run.content === 'object' && run.content !== null) ? run.content : {};
+  const contentType = isStr(raw.contentType) && IMPORTER_CONTENT_TYPES.includes(raw.contentType) ? raw.contentType : null;
+  const confidence = isStr(raw.confidence) && CLASSIFIER_CONFIDENCES.has(raw.confidence) ? raw.confidence : null;
+  const reasoning = isStr(raw.reasoning) ? raw.reasoning.slice(0, 500) : null;
+  return {
+    contentType,
+    confidence,
+    reasoning,
+    runId: run.runId,
+    providerId: run.providerId,
+    model: run.model,
+  };
+}
+
 /**
  * Phase 1: analyze. Runs canon-extract + arc-extract in parallel (both read
  * source independently); after arc resolves, runs issue-proposal with the
@@ -515,6 +564,11 @@ export async function analyzeImport({
       sourceCharLimit: IMPORTER_SOURCE_CHAR_LIMIT,
     },
     arcRoles: [...ARC_ROLES],
+    // Surface the server's recognized arc-shape ids so the client can filter
+    // its local `STORY_SHAPES` metadata (display labels + sparkline points)
+    // against what the server will accept on commit. Avoids drift when
+    // shapes are added/removed server-side without a client redeploy.
+    arcShapeIds: [...ARC_SHAPE_IDS],
   };
 }
 
@@ -531,6 +585,10 @@ export async function commitImport({
   arc = null,
   seasons = [],
   issues = [],
+  // Destructive replace: wipes existing issues, overwrites arc + seasons.
+  // Universe canon still merges additively (it's shared across series, so
+  // a per-series destructive replace would be too coarse). Default false.
+  replaceMode = false,
 } = {}) {
   if (!isStr(universeId)) throw makeErr('universeId is required', ERR_VALIDATION);
   if (!isStr(seriesId)) throw makeErr('seriesId is required', ERR_VALIDATION);
@@ -643,24 +701,31 @@ export async function commitImport({
   // so a value the wire wouldn't accept can't reach createIssue via the
   // service auto-assign path.
   const existingIssues = await listIssues({ seriesId: series.id });
+  // In replace mode we'll wipe these before creating the new set, so any
+  // arcPosition that's currently occupied by an existing issue is fair
+  // game. In additive merge mode (default), occupied positions are
+  // off-limits — collisions silently land on disk today since
+  // createIssue doesn't enforce uniqueness.
   const existingArcPositions = new Set();
-  for (const ex of existingIssues) {
-    if (Number.isInteger(ex.arcPosition) && ex.arcPosition >= 1) {
-      existingArcPositions.add(ex.arcPosition);
+  if (!replaceMode) {
+    for (const ex of existingIssues) {
+      if (Number.isInteger(ex.arcPosition) && ex.arcPosition >= 1) {
+        existingArcPositions.add(ex.arcPosition);
+      }
     }
-  }
-  // Symmetry with the auto-assign branch: reject incoming issues whose
-  // EXPLICIT arcPosition collides with an arcPosition already used by an
-  // existing issue on the series. The auto-assign branch dodges this via
-  // the union-set seed; the explicit-position branch would otherwise let
-  // createIssue happily land a duplicate.
-  for (let i = 0; i < issues.length; i++) {
-    const pos = issues[i]?.arcPosition;
-    if (Number.isInteger(pos) && pos >= 1 && existingArcPositions.has(pos)) {
-      throw makeErr(
-        `Issue at position ${i + 1} explicit arcPosition ${pos} collides with an existing issue on the series — commit refused before any state changed. Either renumber the incoming issue or omit arcPosition to auto-assign.`,
-        ERR_VALIDATION,
-      );
+    // Symmetry with the auto-assign branch: reject incoming issues whose
+    // EXPLICIT arcPosition collides with an arcPosition already used by an
+    // existing issue on the series. The auto-assign branch dodges this via
+    // the union-set seed; the explicit-position branch would otherwise let
+    // createIssue happily land a duplicate.
+    for (let i = 0; i < issues.length; i++) {
+      const pos = issues[i]?.arcPosition;
+      if (Number.isInteger(pos) && pos >= 1 && existingArcPositions.has(pos)) {
+        throw makeErr(
+          `Issue at position ${i + 1} explicit arcPosition ${pos} collides with an existing issue on the series — commit refused before any state changed. Either renumber the incoming issue or omit arcPosition to auto-assign.`,
+          ERR_VALIDATION,
+        );
+      }
     }
   }
   const allUsedArcPositions = new Set([...seenArcPositions, ...existingArcPositions]);
@@ -734,11 +799,27 @@ export async function commitImport({
     ? await updateUniverse(universe.id, universePatch)
     : universe;
 
-  // sanitizeArc returns null on an entirely-empty payload — leave
-  // series.arc untouched in that case.
+  // Wipe before series-write so a stale issue can't point into a
+  // freshly-replaced arc. Per-issue delete failures are logged + skipped
+  // — one undeletable issue shouldn't abort the whole replace.
+  if (replaceMode && existingIssues.length > 0) {
+    for (const ex of existingIssues) {
+      await deleteIssue(ex.id).catch((delErr) =>
+        console.error(`❌ commitImport replace: failed to delete existing issue ${ex.id}: ${delErr.message}`),
+      );
+    }
+  }
+
   const sanitizedArc = sanitizeArc(arc);
   let updatedSeries = series;
-  if (sanitizedArc || seasons.length > 0) {
+  if (replaceMode) {
+    // null arc + empty seasons are user-confirmed clears in replace mode
+    // (in additive mode the same values mean "preserve").
+    updatedSeries = await updateSeries(series.id, {
+      arc: sanitizedArc,
+      seasons: sanitizeSeasonList(seasons),
+    });
+  } else if (sanitizedArc || seasons.length > 0) {
     // Only build + persist a seasons array when the caller actually sent
     // some — otherwise an arc-only re-import on a series that already has
     // seasons rewrites the array byte-for-byte identical (just to bump
@@ -845,16 +926,24 @@ export async function commitImport({
         console.error(`❌ commitImport rollback: failed to delete issue ${id}: ${delErr.message}`),
       );
     }
-    // Surface a distinct code + message so the UI can tell the user that the
-    // universe and series were saved but the issues were rolled back. Retrying
-    // commit is safe: universe/series merges are idempotent and season ids are
-    // stable, so only the issue creation re-runs.
+    // `context.arcAlreadyPersisted` tells the client to drop arc + seasons +
+    // canon from the retry payload — otherwise the retry overwrites any edits
+    // (parallel tab, collaborator) made to the persisted state after the
+    // failure. `skipArcOnRetry` is the imperative form of the same signal.
     const n = issues.length;
     const partial = Object.assign(
       new Error(
         `The universe and series were updated successfully, but ${createdIssueIds.length} of ${n} issue${n === 1 ? '' : 's'} failed and were rolled back — retry to create the remaining issues. (Original error: ${issueErr.message})`,
       ),
-      { code: ERR_PARTIAL_COMMIT_ISSUES },
+      {
+        code: ERR_PARTIAL_COMMIT_ISSUES,
+        context: {
+          universeId: updatedUniverse.id,
+          seriesId: updatedSeries.id,
+          arcAlreadyPersisted: true,
+          skipArcOnRetry: true,
+        },
+      },
     );
     throw partial;
   }

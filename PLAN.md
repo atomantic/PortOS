@@ -25,17 +25,10 @@ For project goals, see [GOALS.md](./GOALS.md). For completed work, see [DONE.md]
 - [ ] **Multi-hop provenance chains.** Re-share authors a fresh `origin` block; `chain[]` would preserve full attribution. Defer until users ask.
 - [ ] **Same collection-export pattern for pipeline series with auto-collections.** Series renders that get auto-filed into a per-series collection should also flow through `manifest.collection`.
 
-### Importer
+### Importer (deferred research)
 
-- [ ] **Chunked extraction for source > 200K chars.** Today's `IMPORTER_SOURCE_CHAR_LIMIT` hard-rejects. Once a real import hits the cap, route through per-chunk canon extraction + rolling synopsis. Investigate chunk-overlap / merge strategy first.
-- [ ] **Auto-detect content type.** A small `importer-classify.md` stage runs first and pre-selects the radio (still user-editable).
-- [ ] **Re-running an import to replace (not append) an existing series.** Destructive-confirm UX with a "Replace all" toggle.
-- [ ] **Importer review UI: extract `<CanonCard>` once Universe-as-Canon Phase 2 lands.** Today renders an inline minimal card in `Importer.jsx#CanonReviewSection`.
-- [ ] **[PERF] `updateAt` re-render cost in `Importer.jsx`.** Wrap issue/arc cards in `React.memo` or move inline edits into per-card local state that lifts on blur. ~50 issues + 500K-char `proseExcerpt` displays go sluggish.
-- [ ] **Centralise `ARC_ROLES` source-of-truth + expose `ARC_SHAPE_IDS` via `/importer/config`.** Drop the client-side `IMPORTER_ARC_ROLES_FALLBACK` to avoid drift from `server/lib/storyArc.js#ARC_ROLES`.
-- [ ] **Importer screenplay prompt — clarify `targetIssueCount` default vs user-requested.** Pass a separate `isUserRequestedCount` flag and gate the split logic on that.
-- [ ] **Importer partial-commit retry — guard against arc re-apply.** When `commitImport` rolls back issues mid-loop, a naive retry overwrites server-side arc edits. Version the arc or return a tagged response telling the client to skip arc on retry.
-- [ ] **Importer review UI: in-place `proseExcerpt` edit affordance.** Collapsed-by-default textarea per issue card so the user can trim/correct without re-running Analyze (which burns 3 heavy-tier LLM calls).
+- [ ] **Chunked extraction for source > 200K chars.** Today's `IMPORTER_SOURCE_CHAR_LIMIT` hard-rejects. Once a real import hits the cap, route through per-chunk canon extraction + rolling synopsis. **Investigate chunk-overlap / merge strategy first — research-required, not a drop-in feature.** Plan sketch: pick a chunk size that fits all three importer prompts (canon/arc/issue-proposal) under the smallest provider's context window after overhead; per-chunk canon-extract feeds back into `existingCanon` for the next chunk so dedup is rolling; rolling synopsis is generated after each chunk and prepended as `priorSynopsis` to the next; arc-extract runs against the final concatenated synopsis, not the raw source; issue-proposal honors chunk boundaries only when a chapter/issue marker straddles them. Open questions: (a) is overlap needed at all, or are chapter markers reliable enough to clean-cut at? (b) how to merge per-chunk arcs when chunks disagree on theme/protagonist? (c) progress UI — single bar or per-chunk? Defer until a real import actually hits the 200K cap; the hard-reject + "trim source" guidance is acceptable for now.
+- [ ] **Importer review UI: extract `<CanonCard>` once Universe-as-Canon Phase 2 lands.** Today renders an inline minimal card in `Importer.jsx#CanonReviewSection`. Blocked on Phase 2 — revisit when that section's first item ships.
 
 ### Universe-as-Canon — Phase 2 + extensions
 
@@ -134,7 +127,6 @@ For project goals, see [GOALS.md](./GOALS.md). For completed work, see [DONE.md]
 - [ ] **[LOW][CANON]** `server/services/pipeline/textStages.js:156` — dead-code fallback `|| series.characters` (always `undefined` post-B.4). Drop the middle clause.
 - [ ] **[LOW][CANON]** `server/services/pipeline/migrateSeriesCanon.js:61` — `updateSeries({ universeId })` writes mid-loop with the universe still empty. Crash between line 61 and the universe patch leaves series stripped + universe empty. Build the universe patch first, then write both.
 - [ ] **[LOW][IMPORTER]** `server/services/importer.js:444-446` — `arcSummary = arcContent.summary || arcContent.logline || \`${name} — ${type}\`` silently swallows a successful arc-extract that returned empty fields. Log a warning or surface `arcExtractFallback: true`.
-- [ ] **[LOW][IMPORTER]** `client/src/pages/Importer.jsx:653-659` — "(first season)" label lies when the fallback season is sparsely numbered ([S2, S5, S99] → server picks S2). Change to "(lowest-numbered season)" or compute the actual label.
 - [ ] **[LOW][SHARING]** `server/services/mediaAnnotations.js:154` — peer `updatedAt` not clamped to `Math.min(now, sane.updatedAt)`; a peer with future-skewed clock dominates all merges.
 - [ ] **[LOW][SHARING]** `server/services/mediaAnnotations.js:132-167` — `mergePeerAnnotations` accepts `peerInstanceId === 'unknown'`; the outgoing path guards but the import side doesn't. Add `if (!peerInstanceId || peerInstanceId === 'unknown') return ...`.
 - [ ] **[LOW][SHARING]** `server/services/sharing/annotationsSync.js:38-68` — empty-payload writes fan to every auto-merge bucket per local edit. Skip when both prior and current filtered payloads are empty.
