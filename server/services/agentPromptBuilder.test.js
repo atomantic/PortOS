@@ -167,6 +167,12 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/`\/do:pr`/);
       expect(prompt).toMatch(/\.agent-done/);
       expect(prompt).toMatch(/\/quit/);
+      // After /do:pr drives the Copilot review loop clean, the agent must
+      // merge and verify — otherwise the PR sits open after the agent exits.
+      expect(prompt).toMatch(/gh pr merge "<PR_URL>" --squash --delete-branch/);
+      expect(prompt).not.toMatch(/gh pr merge[^\n]*--auto/);
+      expect(prompt).toMatch(/gh pr view "<PR_URL>" --json state -q \.state/);
+      expect(prompt).toMatch(/MERGED/);
     });
 
     it('renders the Completion Workflow with /do:push when openPR is false', () => {
@@ -175,6 +181,8 @@ describe('buildLightContextPrompt', () => {
         '/r', null, isTruthyMeta, { isTui: true });
       expect(prompt).toMatch(/`\/do:push`/);
       expect(prompt).not.toMatch(/`\/do:pr`/);
+      // /do:push doesn't open a PR — no merge step should be emitted.
+      expect(prompt).not.toMatch(/gh pr merge/);
     });
 
     it('emits a non-TUI "Completion" block (no slashdo) for non-Claude CLI agents', () => {
@@ -202,6 +210,13 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/`\/do:pr`/);
       expect(prompt).not.toMatch(/PortOS will NOT push/);
       expect(prompt).not.toMatch(/`\/quit`/);
+      // After /do:pr drives the Copilot review loop clean, the agent must
+      // merge and verify — without these steps the PR sits open after the
+      // agent exits (the original "agent abandoned the PR" bug).
+      expect(prompt).toMatch(/gh pr merge "<PR_URL>" --squash --delete-branch/);
+      expect(prompt).not.toMatch(/gh pr merge[^\n]*--auto/);
+      expect(prompt).toMatch(/gh pr view "<PR_URL>" --json state -q \.state/);
+      expect(prompt).toMatch(/MERGED/);
     });
 
     it('skips /simplify in the slashdo Completion block when simplify is disabled', () => {
@@ -213,6 +228,8 @@ describe('buildLightContextPrompt', () => {
         { isTui: false, providerId: 'claude-code' });
       expect(prompt).toMatch(/`\/do:pr`/);
       expect(prompt).not.toMatch(/`\/simplify`/);
+      // Merge guidance still applies when /simplify is skipped.
+      expect(prompt).toMatch(/gh pr merge "<PR_URL>" --squash --delete-branch/);
     });
 
     it('uses /do:push (not /do:pr) for Claude Code CLI when openPR is false', () => {
@@ -224,6 +241,8 @@ describe('buildLightContextPrompt', () => {
         { isTui: false, providerId: 'claude-code' });
       expect(prompt).toMatch(/`\/do:push`/);
       expect(prompt).not.toMatch(/`\/do:pr`/);
+      // /do:push doesn't open a PR — no merge step should be emitted.
+      expect(prompt).not.toMatch(/gh pr merge/);
     });
 
     it('suppresses the completion block and warns when readOnly is set', () => {
