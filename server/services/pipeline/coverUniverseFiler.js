@@ -58,14 +58,22 @@ export async function fileCoverIntoUniverseCollection({ seriesId, filename }) {
   if (!series?.universeId) return;
 
   return enqueueForUniverse(series.universeId, async () => {
-    const universe = await universeSvc.getUniverse(series.universeId).catch(() => null);
-    if (!universe) return;
+    // Revalidate as close as possible to collection creation so we do not
+    // stamp a newly-created collection with a universe id/name fetched from a
+    // universe that has already been deleted.
+    const liveUniverse = await universeSvc.getUniverse(series.universeId).catch(() => null);
+    if (!liveUniverse) return;
 
     const collection = await findOrCreateUniverseCollection({
-      universeId: universe.id,
-      universeName: universe.name,
-      description: `Renders for "${universe.name}"`,
+      universeId: liveUniverse.id,
+      universeName: liveUniverse.name,
+      description: `Renders for "${liveUniverse.name}"`,
     });
+
+    // Deletion can still race after collection lookup/creation. Recheck before
+    // filing the item so we stop as soon as the universe is observed missing.
+    const universeStillExists = await universeSvc.getUniverse(series.universeId).catch(() => null);
+    if (!universeStillExists || universeStillExists.id !== liveUniverse.id) return;
 
     await addItem(collection.id, { kind: 'image', ref: filename }).catch((err) => {
       // A duplicate just means the user re-rendered the same cover into the
