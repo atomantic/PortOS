@@ -24,6 +24,7 @@ import {
   PREMISE_MAX,
   STYLE_NOTES_MAX,
   isInfluenceLockField,
+  normalizeCategoryKey,
   sanitizeCategories,
   sanitizeCompositeSheets,
   sanitizeInfluences,
@@ -433,29 +434,39 @@ export async function expandWorldTemplate({
   // characters[] return before normalizing, so the entries land in canon
   // instead of being silently dropped on auto-save round-trip.
   const rawCategories = parsed.categories && typeof parsed.categories === 'object' ? parsed.categories : {};
-  const retiredCharBucket = rawCategories.characters;
   let rawCharacters = Array.isArray(parsed.characters) ? [...parsed.characters] : [];
-  // Accept both shapes normalizeCategories accepts: object with `variations`
-  // OR raw array. Without the raw-array branch, an LLM emitting
-  // `categories: { characters: ["Ash", ...] }` would have its entries dropped
-  // by sanitizeCategories on save instead of folding into canon.
-  const retiredVariations = Array.isArray(retiredCharBucket)
-    ? retiredCharBucket
-    : Array.isArray(retiredCharBucket?.variations)
-      ? retiredCharBucket.variations
-      : null;
-  if (retiredVariations) {
-    for (const v of retiredVariations) {
-      if (typeof v === 'string') {
-        const trimmed = v.trim();
-        if (trimmed) rawCharacters.push({ name: trimmed });
-        continue;
+  // Match ANY raw key that normalizes to `characters` (e.g. "Characters",
+  // "character variations", "Character_Variations"). Without this, an LLM
+  // emitting a slightly different key would slip past the literal lookup
+  // and have its entries dropped by sanitizeCategories on save instead of
+  // folding into canon.
+  const survivingCategories = {};
+  let foldedAnything = false;
+  for (const [rawKey, value] of Object.entries(rawCategories)) {
+    if (normalizeCategoryKey(rawKey) === 'characters') {
+      const variations = Array.isArray(value)
+        ? value
+        : Array.isArray(value?.variations)
+          ? value.variations
+          : null;
+      if (variations) {
+        for (const v of variations) {
+          if (typeof v === 'string') {
+            const trimmed = v.trim();
+            if (trimmed) rawCharacters.push({ name: trimmed });
+            continue;
+          }
+          if (!v || typeof v !== 'object' || !v.label) continue;
+          rawCharacters.push({ name: v.label, prompt: v.prompt });
+        }
+        foldedAnything = true;
+        continue; // drop the bucket from the surviving categories
       }
-      if (!v || typeof v !== 'object' || !v.label) continue;
-      rawCharacters.push({ name: v.label, prompt: v.prompt });
     }
-    const { characters: _drop, ...rest } = rawCategories;
-    parsed.categories = rest;
+    survivingCategories[rawKey] = value;
+  }
+  if (foldedAnything) {
+    parsed.categories = survivingCategories;
   }
   const categories = normalizeCategories(parsed.categories || {});
   const compositeSheets = normalizeCompositeSheets(

@@ -8,7 +8,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, existsSync } from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
 import { createHash } from 'crypto';
 
 import migration, { applyMigration } from './019-arc-volume-prompts-canon-context.js';
@@ -46,7 +47,9 @@ const NEW_SHIPPED_MD5 = {
 
 // Lookup the real data.sample file for a given prompt; used to seed
 // fixtures and to compute "current" file bodies for round-trip checks.
-const repoRoot = join(import.meta.dirname || new URL('.', import.meta.url).pathname, '..', '..');
+// Use fileURLToPath rather than `new URL(...).pathname` so a checkout under
+// a path with spaces (or other URL-escapable chars) decodes correctly.
+const repoRoot = join(import.meta.dirname || dirname(fileURLToPath(import.meta.url)), '..', '..');
 const sampleBody = (filename) =>
   readFileSync(join(repoRoot, 'data.sample', 'prompts', 'stages', filename), 'utf-8');
 

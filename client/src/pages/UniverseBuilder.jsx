@@ -330,6 +330,17 @@ export default function UniverseBuilder() {
   // merged entries actually persist. Cleared on successful save and on
   // universe-switch (the new draft's canon is loaded from server, in sync).
   const [canonDirty, setCanonDirty] = useState(false);
+  // Sidecar ledger of the EXACT canon entries the last expand merged into
+  // the draft but haven't been persisted yet. On save, only these entries
+  // are merged onto the refetched server canon — NOT the full stale draft.
+  // That avoids resurrecting entries another tab/surface deleted: a deletion
+  // wins because our ledger doesn't contain it, so the refetched canon
+  // (which already lacks the deleted entry) is the final state. Cleared on
+  // successful save and on universe-switch.
+  const pendingCanonAdditionsRef = useRef({ characters: [], settings: [], objects: [] });
+  const clearPendingCanonAdditions = () => {
+    pendingCanonAdditionsRef.current = { characters: [], settings: [], objects: [] };
+  };
 
   // Per-page render knobs. Persisted to localStorage so the user's
   // preferred batch size sticks across visits.
@@ -403,6 +414,7 @@ export default function UniverseBuilder() {
     setPendingDeleteId(null);
     resetRefinePanel();
     setCanonDirty(false);
+    clearPendingCanonAdditions();
     if (!selectedId) {
       setDraft(emptyTemplate());
       setRuns([]);
@@ -492,14 +504,19 @@ export default function UniverseBuilder() {
     const needsCanonInPayload = !selectedId || canonDirty;
     let payload = basePayload;
     if (needsCanonInPayload) {
+      // For create: send the draft's canon as-is (the new universe starts empty).
+      // For update with canonDirty: refetch + merge ONLY the pending-additions
+      // ledger (not the full stale draft) so concurrent deletions in other
+      // tabs aren't resurrected.
       let baseCanon = { characters: draft.characters || [], settings: draft.settings || [], objects: draft.objects || [] };
       if (selectedId) {
         const fresh = await getUniverse(selectedId).catch(() => null);
         if (fresh) {
+          const additions = pendingCanonAdditionsRef.current;
           baseCanon = {
-            characters: mergeCanonByName(fresh.characters || [], draft.characters || [], 'character'),
-            settings: mergeCanonByName(fresh.settings || [], draft.settings || [], 'setting'),
-            objects: mergeCanonByName(fresh.objects || [], draft.objects || [], 'object'),
+            characters: mergeCanonByName(fresh.characters || [], additions.characters, 'character'),
+            settings: mergeCanonByName(fresh.settings || [], additions.settings, 'setting'),
+            objects: mergeCanonByName(fresh.objects || [], additions.objects, 'object'),
           };
         }
       }
@@ -512,8 +529,12 @@ export default function UniverseBuilder() {
     if (result) {
       // Save persisted whatever canon was in the payload; clear the dirty
       // flag so the next save can resume the "skip canon to avoid clobber"
-      // path. No-op if it was already false.
-      if (needsCanonInPayload) setCanonDirty(false);
+      // path. No-op if it was already false. Also drain the pending-additions
+      // ledger since those entries are now on the server.
+      if (needsCanonInPayload) {
+        setCanonDirty(false);
+        clearPendingCanonAdditions();
+      }
       toast.success(selectedId ? 'World updated' : 'World created');
       setWorlds((prev) => {
         const without = prev.filter((w) => w.id !== result.id);
@@ -675,7 +696,27 @@ export default function UniverseBuilder() {
     setDraft(expandedDraft);
     // Flag the merged-but-not-yet-persisted canon so a subsequent manual
     // Save (if auto-save fails or is bypassed) includes the new entries.
-    if (addedCanonCount > 0) setCanonDirty(true);
+    // Record exactly which entries we added (vs. what was already in the
+    // draft) so the save-time merge only re-applies the new ones, not the
+    // full stale draft.
+    if (addedCanonCount > 0) {
+      setCanonDirty(true);
+      const computeAdditions = (existing, merged) => {
+        const norm = (s) => (typeof s === 'string' ? s.trim().toLowerCase() : '');
+        const existingNames = new Set((existing || []).map((e) => norm(e?.name)).filter(Boolean));
+        const existingSluglines = new Set((existing || []).map((e) => norm(e?.slugline)).filter(Boolean));
+        return (merged || []).filter((e) => {
+          const n = norm(e?.name);
+          const s = norm(e?.slugline);
+          return !(n && existingNames.has(n)) && !(s && existingSluglines.has(s));
+        });
+      };
+      pendingCanonAdditionsRef.current = {
+        characters: [...pendingCanonAdditionsRef.current.characters, ...computeAdditions(draft.characters, mergedCharacters)],
+        settings: [...pendingCanonAdditionsRef.current.settings, ...computeAdditions(draft.settings, mergedSettings)],
+        objects: [...pendingCanonAdditionsRef.current.objects, ...computeAdditions(draft.objects, mergedObjects)],
+      };
+    }
     const lockedKeys = Object.keys(locks).filter((k) => locks[k]);
     if (lockedKeys.length) {
       console.log(`🔒 Universe Builder expand preserved ${lockedKeys.length} locked field(s): ${lockedKeys.join(', ')}`);
@@ -711,9 +752,13 @@ export default function UniverseBuilder() {
         const fresh = await getUniverse(selectedId).catch(() => null);
         if (fresh) {
           canonForPayload = {
-            characters: mergeCanonByName(fresh.characters || [], expandedDraft.characters || [], 'character'),
-            settings: mergeCanonByName(fresh.settings || [], expandedDraft.settings || [], 'setting'),
-            objects: mergeCanonByName(fresh.objects || [], expandedDraft.objects || [], 'object'),
+            // Merge ONLY pending additions onto refetched server canon
+            // (not the full stale draft). Without this, concurrent canon
+            // deletions in other tabs/surfaces get resurrected because the
+            // deleted entry is still present in the stale draft.
+            characters: mergeCanonByName(fresh.characters || [], pendingCanonAdditionsRef.current.characters, 'character'),
+            settings: mergeCanonByName(fresh.settings || [], pendingCanonAdditionsRef.current.settings, 'setting'),
+            objects: mergeCanonByName(fresh.objects || [], pendingCanonAdditionsRef.current.objects, 'object'),
           };
         }
       }
@@ -744,8 +789,10 @@ export default function UniverseBuilder() {
         });
         // Auto-save succeeded — server now has the merged canon, so a
         // subsequent manual Save shouldn't re-send it (avoids the
-        // concurrent-edit clobber).
+        // concurrent-edit clobber). Drain the additions ledger too since
+        // those entries are now on the server.
         setCanonDirty(false);
+        clearPendingCanonAdditions();
         // New record: route to its id so the canon section gates flip and
         // subsequent draft state reflects the persisted record.
         if (!selectedId) goToWorld(saved.id);
@@ -937,17 +984,17 @@ export default function UniverseBuilder() {
     if (!updated) return;
     setDraft((d) => {
       // If a prior expand merged canon that hasn't been persisted yet,
-      // mergeCanonByName the local entries against the server's response so
-      // those pending additions aren't wholesale-replaced when a canon UI
-      // action lands. mergeCanonByName preserves identity dedupe (name +
-      // slugline + aliases) so a duplicate isn't created if the server
-      // happens to already have one.
+      // mergeCanonByName ONLY the pending additions (not the full stale
+      // draft) against the server's response. Using the additions ledger
+      // means concurrent canon deletions (which the server's response
+      // already reflects) win — pending additions are still preserved.
       if (canonDirty) {
+        const additions = pendingCanonAdditionsRef.current;
         return {
           ...d,
-          characters: mergeCanonByName(updated.characters || [], d.characters || [], 'character'),
-          settings: mergeCanonByName(updated.settings || [], d.settings || [], 'setting'),
-          objects: mergeCanonByName(updated.objects || [], d.objects || [], 'object'),
+          characters: mergeCanonByName(updated.characters || [], additions.characters, 'character'),
+          settings: mergeCanonByName(updated.settings || [], additions.settings, 'setting'),
+          objects: mergeCanonByName(updated.objects || [], additions.objects, 'object'),
           updatedAt: updated.updatedAt,
         };
       }
