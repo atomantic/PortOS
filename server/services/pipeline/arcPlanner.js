@@ -829,40 +829,8 @@ export async function resolveVerifyIssues(seriesId, options = {}) {
   }).filter((entry) => entry?.season);
 
   const seasons = sanitizeSeasonList(seasonEntries.map((e) => e.season));
-  // `sanitizeSeasonList` can drop entries (e.g. title-less + no number), so
-  // re-key remap inputs against what actually survived.
-  const finalIds = new Set(seasons.map((s) => s.id));
-  const preservedOldIds = new Set(
-    seasonEntries
-      .filter((e) => e.sourceId && finalIds.has(e.season.id))
-      .map((e) => e.sourceId),
-  );
-  const droppedOldSeasons = (series.seasons || []).filter((s) => !preservedOldIds.has(s.id));
-  const newlyMintedSeasons = seasonEntries
-    .filter((e) => !e.sourceId && finalIds.has(e.season.id))
-    .map((e) => e.season);
-  const remap = buildSeasonRemap(droppedOldSeasons, newlyMintedSeasons);
 
-  // Without the seasonId migration, the LLM replacing an id strands every
-  // child issue behind a key the UI never iterates. Mirrors `deleteSeason`'s
-  // bulk-reassign idiom — `skipRenumber` per call + one `recomputeIssueNumbers`
-  // after, wrapped in `withReexportSuppressed` so we don't fan out N socket
-  // events + N debounced re-exports of the same series.
-  const droppedIdSet = new Set(droppedOldSeasons.map((s) => s.id));
-  const reassignList = droppedIdSet.size
-    ? (await listIssues({ seriesId })).filter((iss) => droppedIdSet.has(iss.seasonId))
-    : [];
-
-  let updated;
-  await withReexportSuppressed('series', seriesId, async () => {
-    for (const iss of reassignList) {
-      const target = remap.get(iss.seasonId) ?? null;
-      await updateIssue(iss.id, { seasonId: target }, { skipRenumber: true });
-    }
-    updated = await updateSeries(seriesId, { arc, seasons });
-    if (reassignList.length) await recomputeIssueNumbersForSeries(seriesId);
-  });
-  if (reassignList.length) emitRecordUpdated('series', seriesId);
+  const { series: updated } = await commitSeasonsWithRemap(series, { arc, seasons });
 
   const notes = typeof content?.notes === 'string' ? content.notes.trim().slice(0, 2000) : '';
   return {
@@ -874,6 +842,49 @@ export async function resolveVerifyIssues(seriesId, options = {}) {
     providerId,
     model,
   };
+}
+
+/**
+ * Persist a new `arc` + `seasons[]` onto a series, migrating any child issues
+ * whose `seasonId` referenced a season that the new shape dropped or renamed.
+ * Shared by `resolveVerifyIssues` (auto-resolve) and `/arc/generate` — both
+ * paths can rewrite season ids, and without this migration the orphans land
+ * behind keys the Arc Canvas never iterates back.
+ *
+ * Match priority (via `buildSeasonRemap`): normalized title → unique number →
+ * positional 1:1 fallback. Unmatched orphans get `seasonId: null` so they fall
+ * into the visible "Un-grouped" bucket instead of vanishing.
+ *
+ * `currentSeries` is the pre-write snapshot; pass the result of `getSeries(id)`
+ * so we know which ids existed before the write.
+ */
+export async function commitSeasonsWithRemap(currentSeries, { arc, seasons }) {
+  const seriesId = currentSeries.id;
+  const newIds = new Set((seasons || []).map((s) => s.id));
+  const droppedOldSeasons = (currentSeries.seasons || []).filter((s) => !newIds.has(s.id));
+  const oldIds = new Set((currentSeries.seasons || []).map((s) => s.id));
+  const newlyMintedSeasons = (seasons || []).filter((s) => !oldIds.has(s.id));
+  const remap = buildSeasonRemap(droppedOldSeasons, newlyMintedSeasons);
+  const droppedIdSet = new Set(droppedOldSeasons.map((s) => s.id));
+  const reassignList = droppedIdSet.size
+    ? (await listIssues({ seriesId })).filter((iss) => droppedIdSet.has(iss.seasonId))
+    : [];
+
+  // Mirrors `deleteSeason`'s bulk-reassign idiom — `skipRenumber` per call +
+  // one `recomputeIssueNumbers` after, wrapped in `withReexportSuppressed` so
+  // we don't fan out N socket events + N debounced re-exports of the same
+  // series.
+  let updated;
+  await withReexportSuppressed('series', seriesId, async () => {
+    for (const iss of reassignList) {
+      const target = remap.get(iss.seasonId) ?? null;
+      await updateIssue(iss.id, { seasonId: target }, { skipRenumber: true });
+    }
+    updated = await updateSeries(seriesId, { arc, seasons });
+    if (reassignList.length) await recomputeIssueNumbersForSeries(seriesId);
+  });
+  if (reassignList.length) emitRecordUpdated('series', seriesId);
+  return { series: updated, reassignedIssueCount: reassignList.length };
 }
 
 // Build a Map<oldSeasonId, newSeasonId|null> from the set of removed seasons

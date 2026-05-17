@@ -953,10 +953,13 @@ router.post('/series/:id/arc/generate', asyncHandler(async (req, res) => {
     .catch((err) => { throw mapServiceError(err); });
   let series = null;
   if (body.commit) {
-    series = await seriesSvc.updateSeries(req.params.id, {
+    const cur = await seriesSvc.getSeries(req.params.id)
+      .catch((err) => { throw mapServiceError(err); });
+    const committed = await arcPlanner.commitSeasonsWithRemap(cur, {
       arc: result.arc,
       seasons: result.seasons,
     }).catch((err) => { throw mapServiceError(err); });
+    series = committed.series;
   }
   res.json({
     arc: result.arc,

@@ -708,6 +708,72 @@ describe('arcPlanner — resolveVerifyIssues', () => {
   });
 });
 
+describe('arcPlanner — commitSeasonsWithRemap', () => {
+  beforeEach(() => {
+    fileStore.clear();
+    uuidCounter = 0;
+    stageRunnerSpy = undefined;
+  });
+
+  it('remaps child issues onto title-matched replacement seasons (the regenerate-arc path)', async () => {
+    const s = await setupSeries();
+    const oldS1 = await seasonsSvc.createSeason(s.id, { title: 'The Velvet Pouch', episodeCountTarget: 3 });
+    const oldS2 = await seasonsSvc.createSeason(s.id, { title: 'Six Blocks Down', episodeCountTarget: 3 });
+
+    const i1 = await issuesSvc.createIssue({ seriesId: s.id, seasonId: oldS1.id, title: 'Pilot' });
+    const i2 = await issuesSvc.createIssue({ seriesId: s.id, seasonId: oldS2.id, title: 'Middle' });
+
+    const cur = await seriesSvc.getSeries(s.id);
+    const freshSeasons = [
+      // Same titles, brand-new ids — exactly what shapeSeasonOutlines emits.
+      { id: 'sea-fresh-1', number: 1, title: 'The Velvet Pouch', logline: '', synopsis: '', endingHook: '', episodeCountTarget: 3, themes: [] },
+      { id: 'sea-fresh-2', number: 2, title: 'Six Blocks Down', logline: '', synopsis: '', endingHook: '', episodeCountTarget: 3, themes: [] },
+    ];
+    const out = await planner.commitSeasonsWithRemap(cur, {
+      arc: { logline: 'L', summary: '', themes: [], protagonistArc: '', shape: null, status: 'draft' },
+      seasons: freshSeasons,
+    });
+
+    expect(out.reassignedIssueCount).toBe(2);
+    expect(out.series.seasons.map((s) => s.id)).toEqual(['sea-fresh-1', 'sea-fresh-2']);
+
+    const finalI1 = await issuesSvc.getIssue(i1.id);
+    const finalI2 = await issuesSvc.getIssue(i2.id);
+    expect(finalI1.seasonId).toBe('sea-fresh-1');
+    expect(finalI2.seasonId).toBe('sea-fresh-2');
+  });
+
+  it('does nothing to issues when seasons[] preserves existing ids', async () => {
+    const s = await setupSeries();
+    const oldS1 = await seasonsSvc.createSeason(s.id, { title: 'Keep me', episodeCountTarget: 3 });
+    const i1 = await issuesSvc.createIssue({ seriesId: s.id, seasonId: oldS1.id, title: 'Pilot' });
+
+    const cur = await seriesSvc.getSeries(s.id);
+    const out = await planner.commitSeasonsWithRemap(cur, {
+      arc: { logline: 'L', summary: '', themes: [], protagonistArc: '', shape: null, status: 'draft' },
+      seasons: [{ ...oldS1, logline: 'updated' }],
+    });
+    expect(out.reassignedIssueCount).toBe(0);
+    const finalI1 = await issuesSvc.getIssue(i1.id);
+    expect(finalI1.seasonId).toBe(oldS1.id);
+  });
+
+  it('drops orphans to null when no remap target exists (collapsed seasons)', async () => {
+    const s = await setupSeries();
+    const oldS1 = await seasonsSvc.createSeason(s.id, { title: 'Only', episodeCountTarget: 3 });
+    const i1 = await issuesSvc.createIssue({ seriesId: s.id, seasonId: oldS1.id, title: 'Orphan' });
+
+    const cur = await seriesSvc.getSeries(s.id);
+    const out = await planner.commitSeasonsWithRemap(cur, {
+      arc: { logline: 'L', summary: '', themes: [], protagonistArc: '', shape: null, status: 'draft' },
+      seasons: [],
+    });
+    expect(out.reassignedIssueCount).toBe(1);
+    const finalI1 = await issuesSvc.getIssue(i1.id);
+    expect(finalI1.seasonId).toBeNull();
+  });
+});
+
 describe('arcPlanner — buildSeasonRemap', () => {
   it('matches by normalized title first', () => {
     const dropped = [{ id: 'old1', number: 1, title: 'The Velvet Pouch' }];
