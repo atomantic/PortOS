@@ -20,17 +20,24 @@ V1 landed: buckets, ShareToButton on Pipeline + UniverseBuilder + MediaCollectio
 - [ ] **Extend `syncOrchestrator` to cover pipeline/universe over Tailscale.** Separate ticket from buckets — same-network peers on Tailscale should be able to sync these categories without going through a bucket.
 - [ ] **Multi-hop provenance chains.** Re-share authors a fresh `origin` block; chain[] would preserve full attribution. Defer until users ask.
 
-### Create Suite — Importer page
+### Create Suite — Importer page (v1 shipped 2026-05-16)
 
-New on-ramp to the Create pipeline. User pastes a short story / novel / screenplay / comic script + Universe Name + Series Name; the Importer LLM-extracts universe canon (characters/places/objects), the story arc, and a proposed issue split; user reviews and commits to create or extend the universe + series with prose-seeded issues ready for the visual render stages. Find-or-create on both Universe and Series names so the same import can extend an existing world. See `~/.claude/plans/i-want-to-add-vivid-bear.md` for the full design.
+V1 shipped — `/importer` reverse-engineers a finished story / novel / screenplay / comic script into universe canon + series arc + prose-seeded issues. See `~/.claude/plans/i-want-to-add-vivid-bear.md` for the full design and `.changelog/NEXT.md` for the shipped notes.
 
-- [ ] Page scaffold: `client/src/pages/Importer.jsx` (intake + review phases), API client `client/src/services/apiImporter.js`, lazy `<Route path="importer">` in `App.jsx`, sidebar entry in `Layout.jsx`, `nav.create.importer` in `navManifest.js`.
-- [ ] Server orchestrator `server/services/importer.js` — `analyzeImport` (no persistence) + `commitImport` (universe canon merge + series arc/seasons + issue creation with `stages.prose.output` seeded).
-- [ ] Server routes `server/routes/importer.js` + Zod schemas `importerAnalyzeSchema` / `importerCommitSchema` in `server/lib/validation.js`.
-- [ ] Three new stage prompts: `importer-canon-extract.md`, `importer-arc-extract.md`, `importer-issue-proposal.md` (in `data.sample/prompts/stages/`); content-type branching inside via Liquid `{% if %}`. Add a migration script in `scripts/migrations/` so existing installs pick them up.
-- [ ] Find-or-create logic: case-insensitive name match; series match scoped to universe; respect `series.locked.arc` (throw `ERR_VALIDATION`, mirror arcPlanner pattern).
-- [ ] Tests in `server/services/importer.test.js` — find-or-create, analyze shape, commit happy/locked/duplicate paths, route validation.
-- [ ] **Follow-up**: chunked extraction for source > 200K chars (v1 hard-rejects; capture as a separate item once we hit the limit on a real import).
+- [x] Page scaffold: `client/src/pages/Importer.jsx` (intake + review phases), API client `client/src/services/apiImporter.js`, lazy `<Route path="importer">` in `App.jsx`, sidebar entry in `Layout.jsx`, `nav.create.importer` in `navManifest.js`.
+- [x] Server orchestrator `server/services/importer.js` — `analyzeImport` (no persistence) + `commitImport` (universe canon merge + series arc/seasons + issue creation with `stages.prose.output` seeded).
+- [x] Server routes `server/routes/importer.js` + Zod schemas `importerAnalyzeSchema` / `importerCommitSchema` in `server/lib/validation.js`.
+- [x] Three new stage prompts: `importer-canon-extract.md`, `importer-arc-extract.md`, `importer-issue-proposal.md` (in `data.sample/prompts/stages/`); content-type branching inside via Liquid `{% if %}`. Migration `015-importer-stage-prompts.js` seeds them into existing installs.
+- [x] Find-or-create logic: case-insensitive name match; series match scoped to universe; respect `series.locked.arc` (throw `ERR_LOCKED`).
+- [x] Tests in `server/services/importer.test.js` — find-or-create scoping, oversize rejection, locked-arc gating, commit happy/duplicate paths, route validation (via Zod).
+
+**Follow-ups (deferred from v1):**
+
+- [ ] **Chunked extraction for source > 200K chars.** v1 hard-rejects with `ERR_VALIDATION`. Once a real import hits the cap, lift the limit and route through a per-chunk canon extraction + rolling synopsis for arc-extract (issue-proposal still takes the full source). Investigation needed first to pick a chunk-overlap / merge strategy that doesn't double-extract recurring characters. Touch site: `server/services/importer.js#analyzeImport` (the `source.length > IMPORTER_SOURCE_CHAR_LIMIT` guard).
+- [ ] **Auto-detect content type.** Today the user picks via radio. A small `importer-classify.md` stage could run first and pre-select the radio (still user-editable). Skipped in v1 because the radio is one click.
+- [ ] **Re-running an import to *replace* (not append) an existing series.** Today the second pass extends. A destructive-confirm UX with a "Replace all" toggle would let the user blow away the previous import without manually deleting the series first. Hold until a user actually asks.
+- [ ] **Route-level tests for `server/routes/importer.js`.** Service-layer is covered in `importer.test.js`, but the HTTP surface (Zod rejection messages, `mapServiceError` status mapping) is only exercised via the service. Add a `server/routes/importer.test.js` mirroring the `routes/pipeline.test.js` pattern (supertest against the router) for explicit JSON-contract coverage.
+- [ ] **Importer review UI: extract `<CanonCard>` once it lands.** Today `client/src/pages/Importer.jsx#CanonReviewSection` renders an inline minimal card. When the Phase 2 "Extract shared CanonCard" item below (under Universe-as-Canon refactor) ships, swap the inline card for the shared component so locked / source-badge / tag-chip affordances appear here automatically.
 
 ### Universe-as-Canon refactor — Phase B.4 cleanup + follow-ups
 

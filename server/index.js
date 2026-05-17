@@ -94,6 +94,7 @@ import { initComicPagesFilenameHook } from './services/pipeline/comicPagesFilena
 import { initStoryboardsFilenameHook } from './services/pipeline/storyboardsFilenameHook.js';
 import { initSeasonCoverFilenameHook } from './services/pipeline/seasonCoverFilenameHook.js';
 import pipelineRoutes from './routes/pipeline.js';
+import importerRoutes from './routes/importer.js';
 import { initMediaJobQueue } from './services/mediaJobQueue/index.js';
 import { recoverInFlightProjects } from './services/creativeDirector/recovery.js';
 import imageVideoModelsRoutes from './routes/imageVideoModels.js';
@@ -374,6 +375,7 @@ app.use('/api/creative-director', creativeDirectorRoutes);
 app.use('/api/writers-room', writersRoomRoutes);
 app.use('/api/universe-builder', universeBuilderRoutes);
 app.use('/api/pipeline', pipelineRoutes);
+app.use('/api/importer', importerRoutes);
 app.use('/api/image-video/models', imageVideoModelsRoutes);
 app.use('/api/loras', lorasRoutes);
 // AUTOMATIC1111-compatible surface for tailnet clients — gated by
