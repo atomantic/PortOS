@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { Fragment, useState, useEffect, useCallback, useMemo } from 'react';
 import { RefreshCw, Clock, AlertTriangle, CheckCircle2, Circle, GitBranch, Bot, ArrowRight, Info } from 'lucide-react';
 import * as api from '../../../services/api';
 import { timeAgo } from '../../../utils/formatters';
@@ -126,7 +126,7 @@ function StageColumn({ stage, nodes, allNodes, hoveredId, setHoveredId }) {
   const hoveredNode = hoveredId ? allNodes.find(n => n.id === hoveredId) : null;
 
   return (
-    <div className="flex flex-col gap-2 min-w-[12rem] flex-shrink-0">
+    <div className="flex flex-col gap-2 w-full lg:w-60 lg:flex-shrink-0">
       <div className={`rounded-md border ${palette.ring} ${palette.bg} px-3 py-2`}>
         <div className="flex items-center gap-2">
           <span className={`w-2 h-2 rounded-full ${palette.dot}`} />
@@ -137,7 +137,7 @@ function StageColumn({ stage, nodes, allNodes, hoveredId, setHoveredId }) {
         </div>
         <p className="text-[11px] text-gray-400 mt-1 leading-snug">{stage.description}</p>
       </div>
-      <div className="flex flex-col gap-1.5">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-1.5">
         {nodes.map(node => (
           <NodeCard
             key={node.id}
@@ -167,7 +167,7 @@ function nodeReferences(node, hoveredId, hoveredNode) {
 
 function StageArrow() {
   return (
-    <div className="flex items-center px-1 text-gray-600 shrink-0" aria-hidden="true">
+    <div className="hidden lg:flex items-center px-1 text-gray-600 shrink-0" aria-hidden="true">
       <ArrowRight className="w-5 h-5" />
     </div>
   );
@@ -270,10 +270,10 @@ export default function WorkflowTab() {
       )}
 
       {graph && (
-        <div className="overflow-x-auto pb-2">
-          <div className="flex items-stretch gap-2 min-w-min">
+        <div className="lg:overflow-x-auto pb-2">
+          <div className="flex flex-col lg:flex-row lg:items-stretch gap-4 lg:gap-2 lg:min-w-min">
             {populatedStages.map((stage, i) => (
-              <div key={stage.id} className="flex items-stretch">
+              <Fragment key={stage.id}>
                 <StageColumn
                   stage={stage}
                   nodes={stage.nodes}
@@ -282,7 +282,7 @@ export default function WorkflowTab() {
                   setHoveredId={setHoveredId}
                 />
                 {i < populatedStages.length - 1 && <StageArrow />}
-              </div>
+              </Fragment>
             ))}
           </div>
         </div>
