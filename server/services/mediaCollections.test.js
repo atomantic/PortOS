@@ -409,6 +409,25 @@ describe('mediaCollections service', () => {
         await expect(svc.findOrCreateUniverseCollection({ universeId: 'u-1' }))
           .rejects.toMatchObject({ code: svc.ERR_VALIDATION });
       });
+
+      it('normalizes an overlong universeId once — lookup and storage agree (no duplicate-on-retry)', async () => {
+        // Caller passes a universeId longer than UNIVERSE_ID_MAX (80).
+        // Without the normalize-once fix, the create path slices for
+        // storage but the lookup compares the raw value — so the second
+        // call wouldn't find the row it just created and would mint a
+        // duplicate.
+        const overlong = 'u-' + 'x'.repeat(200);
+        const first = await svc.findOrCreateUniverseCollection({
+          universeId: overlong, universeName: 'Foo',
+        });
+        const second = await svc.findOrCreateUniverseCollection({
+          universeId: overlong, universeName: 'Foo',
+        });
+        expect(second.id).toBe(first.id);
+        expect(await svc.listCollections()).toHaveLength(1);
+        // The stamped id is the sliced value, not the raw overlong input.
+        expect(first.universeId.length).toBeLessThanOrEqual(80);
+      });
     });
 
     describe('cross-path write serialization', () => {

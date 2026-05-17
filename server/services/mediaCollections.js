@@ -274,13 +274,19 @@ export async function findOrCreateUniverseCollection({ universeId, universeName,
   if (typeof universeName !== 'string' || !universeName.trim()) {
     throw makeErr('universeName is required', ERR_VALIDATION);
   }
+  // Normalize the universeId once so lookup and storage both key on the
+  // same string. Without this, an overlong id (e.g. from a malformed
+  // share manifest) would not match the row it just created — the lookup
+  // compares the raw value but persistence sliced — and retries would
+  // pile up duplicate stamped collections.
+  const normalizedUniverseId = universeId.slice(0, UNIVERSE_ID_MAX);
   const desiredName = universeCollectionNameFor(universeName);
   const trimmedDescription = typeof description === 'string'
     ? description.trim().slice(0, DESCRIPTION_MAX_LENGTH)
     : '';
   return serializeFileWrite(async () => {
     const all = await listCollections();
-    const linked = all.find((c) => c.universeId === universeId);
+    const linked = all.find((c) => c.universeId === normalizedUniverseId);
     if (linked) return linked;
     // No universeId match — always create fresh. The runtime intentionally
     // does NOT adopt a same-named unlinked collection here: it can't tell
@@ -299,7 +305,7 @@ export async function findOrCreateUniverseCollection({ universeId, universeName,
       name: desiredName,
       description: trimmedDescription,
       coverKey: null,
-      universeId: universeId.slice(0, UNIVERSE_ID_MAX),
+      universeId: normalizedUniverseId,
       items: [],
       createdAt: now,
       updatedAt: now,

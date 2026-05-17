@@ -24,7 +24,7 @@ import { expandWorldTemplate, generateCategoryVariations } from '../services/uni
 import { refineWorldPrompts } from '../services/universeBuilderRefine.js';
 import { enqueueJob } from '../services/mediaJobQueue/index.js';
 import { getSettings } from '../services/settings.js';
-import { findOrCreateUniverseCollection, NAME_MAX_LENGTH as COLLECTION_NAME_MAX } from '../services/mediaCollections.js';
+import { findOrCreateUniverseCollection } from '../services/mediaCollections.js';
 import { registerUniverseBuilderRun } from '../services/universeBuilderCollectionHook.js';
 import { getImageModels, isFlux2, isZImage, isErnie } from '../lib/mediaModels.js';
 

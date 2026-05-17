@@ -239,7 +239,11 @@ describe("universeBuilder service", () => {
   it("updateUniverse cascades a name change onto the linked media collection", async () => {
     const collections = await import("./mediaCollections.js");
     const w = await seedWorld();
-    // Provision the universe's collection the same way the render route does.
+    // Seed a linked collection. The render route uses
+    // findOrCreateUniverseCollection (universeId-first); we use the
+    // name-first helper here only because the resulting record is
+    // shape-identical and avoids dragging in the production route's
+    // dependencies for this rename-cascade-focused test.
     await collections.findOrCreateCollectionByName({
       name: collections.universeCollectionNameFor(w.name),
       universeId: w.id,
@@ -273,7 +277,9 @@ describe("universeBuilder service", () => {
   it("deleteUniverse unlinks linked media collections (releases the rename-lock)", async () => {
     const collections = await import("./mediaCollections.js");
     const w = await seedWorld();
-    // Provision the universe's collection the same way the render route does.
+    // Seed a linked collection (see rename-cascade test above for why we
+    // use the name-first helper here even though production routes through
+    // findOrCreateUniverseCollection).
     const linked = await collections.findOrCreateCollectionByName({
       name: collections.universeCollectionNameFor(w.name),
       universeId: w.id,

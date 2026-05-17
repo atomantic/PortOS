@@ -81,17 +81,30 @@ function remoteWins(localTs, remoteTs) {
  */
 async function mergeCollectionPayload(payload, availableAssetKeys = null) {
   if (!payload?.universeId || !Array.isArray(payload.items)) return { itemsAdded: 0 };
-  // Derive a display name for the canonical "Universe: <X>" pattern. The
-  // manifest carries the full pre-formatted name (`Universe: Foo`); strip
-  // the prefix so `universeCollectionNameFor` produces the same canonical
-  // string on the receiver. Coerce any non-string into '' first — a
-  // malformed or older manifest with a non-string name shouldn't crash
-  // the whole import with `replace is not a function`; service-layer
-  // validation will reject the upstream call anyway if it matters.
-  const rawName = typeof payload.name === 'string' ? payload.name : '';
-  const universeName = rawName
-    .replace(/^Universe:\s*/i, '')
-    .trim() || payload.universeId;
+
+  // Defer the merge until the referenced universe exists locally. Creating
+  // a stamped (rename-locked) collection for a universe we haven't
+  // imported yet leaves the user with an unfixable orphan if the universe
+  // record fails to import or arrives in a later manifest. processManifest
+  // re-runs the merge attempt on each pass, so a deferred merge will be
+  // applied as soon as the universe lands.
+  const localUniverse = await getUniverse(payload.universeId).catch(() => null);
+  if (!localUniverse) {
+    return { itemsAdded: 0, itemsDeferred: payload.items.length, missingUniverse: true };
+  }
+
+  // Use the LOCAL universe's name (authoritative for the linked
+  // collection's locked name) over the manifest's `payload.name`. A peer
+  // exporting a stale or tampered collection payload must not be able to
+  // mint a locked collection on the receiver with the wrong visible name
+  // — once the universeId is stamped, no cascade fixes it. Fall back to
+  // a sanitized payload.name only when localUniverse.name is unusable.
+  const fallbackRaw = typeof payload.name === 'string' ? payload.name : '';
+  const fallbackName = fallbackRaw.replace(/^Universe:\s*/i, '').trim() || payload.universeId;
+  const universeName = typeof localUniverse.name === 'string' && localUniverse.name.trim()
+    ? localUniverse.name
+    : fallbackName;
+
   const collection = await findOrCreateUniverseCollection({
     universeId: payload.universeId,
     universeName,
