@@ -134,9 +134,13 @@ export function getRunsPath() {
  * `tuiPromptRunner.js` can produce the same run-record shape (otherwise
  * /runs shows TUI runs stuck with `success: null` forever).
  *
+ * `extras` (optional object) is merged into the persisted metadata BEFORE
+ * the file is written, so caller-specific fields like `completionReason`
+ * (TUI) survive to disk and show up on /runs replay.
+ *
  * @returns the merged metadata object (also written to disk).
  */
-export async function finalizeRunRecord({ runId, output, exitCode, success, error, startTime }) {
+export async function finalizeRunRecord({ runId, output, exitCode, success, error, startTime, extras }) {
   if (!aiToolkitInstance) throw new Error('AI Toolkit not initialized');
   const runDir = join(getRunsPath(), runId);
   const outputPath = join(runDir, 'output.txt');
@@ -153,6 +157,7 @@ export async function finalizeRunRecord({ runId, output, exitCode, success, erro
   metadata.success = success;
   metadata.outputSize = Buffer.byteLength(output);
   if (error) metadata.error = error;
+  if (extras && typeof extras === 'object') Object.assign(metadata, extras);
 
   if (!success && aiToolkitInstance.services.errorDetection) {
     const errorAnalysis = aiToolkitInstance.services.errorDetection.analyzeError(output, exitCode);
@@ -170,6 +175,20 @@ export async function finalizeRunRecord({ runId, output, exitCode, success, erro
   }
 
   return metadata;
+}
+
+/**
+ * Fire the `onRunStarted` lifecycle hook — used by execution paths that
+ * don't go through the toolkit's executeCliRun/executeApiRun (which fire
+ * it internally). `tuiPromptRunner.js` calls this on PTY spawn so UI/SSE
+ * run tracking sees TUI runs as active.
+ */
+export function emitRunStarted({ runId, provider, model }) {
+  runnerConfig.hooks?.onRunStarted?.({
+    runId,
+    provider: provider?.name || provider?.id,
+    model: model ?? provider?.defaultModel,
+  });
 }
 
 /**

@@ -26,7 +26,7 @@
  * stay honest about what the runner actually executed.
  */
 
-import { createRun, executeApiRun, executeCliRun, extractBakedModel, hasModelFlag } from '../services/runner.js';
+import { createRun, executeApiRun, executeCliRun, extractBakedModel, hasModelFlag, stopRun } from '../services/runner.js';
 import { executeTuiRun, cleanTuiResponse } from './tuiPromptRunner.js';
 
 const DEFAULT_TIMEOUT_MS = 300000;
@@ -142,19 +142,32 @@ export async function runPromptThroughProvider({ provider, prompt, source, model
   // the override-honored fallback chain AND the args-baked-CLI case
   // (extract the args-pinned model id rather than logging defaultModel).
   const effectiveModel = resolveEffectiveModel(provider, model);
+  const effectiveCwd = cwdOverride ?? process.cwd();
+  const effectiveTimeout = timeoutOverride ?? provider?.timeout ?? DEFAULT_TIMEOUT_MS;
 
   // Some call sites (stageRunner) create the run themselves so they can
   // log the runId before the LLM call starts. When provided, reuse it.
-  // Otherwise create one here so callers always get a runId back.
+  // Otherwise create one here so callers always get a runId back. Pass
+  // `workspacePath` so /runs metadata reflects the directory the spawn
+  // ran in — without this, the record always showed process.cwd() even
+  // when callers (pm2Standardizer analyzing another repo, loops with
+  // loop.cwd) overrode cwd.
   const runId = callerRunId || (await createRun({
     providerId: provider.id,
     model: effectiveModel,
     prompt,
     source,
+    workspacePath: effectiveCwd,
   })).runId;
 
   return new Promise((resolve, reject) => {
     let text = '';
+    let settled = false;
+    let apiTimeoutHandle = null;
+
+    const safeResolve = (value) => { if (!settled) { settled = true; if (apiTimeoutHandle) clearTimeout(apiTimeoutHandle); resolve(value); } };
+    const safeReject = (err) => { if (!settled) { settled = true; if (apiTimeoutHandle) clearTimeout(apiTimeoutHandle); reject(err); } };
+
     const onData = (chunk) => {
       text = APPEND_CHUNK(text, chunk);
       if (onDataCallback) {
@@ -167,13 +180,13 @@ export async function runPromptThroughProvider({ provider, prompt, source, model
     const labelByType = { cli: 'CLI', api: 'API', tui: 'TUI' };
     const onComplete = (result) => {
       if (result?.error || result?.success === false) {
-        reject(new Error(result?.error || `${labelByType[provider.type] || provider.type} execution failed`));
+        safeReject(new Error(result?.error || `${labelByType[provider.type] || provider.type} execution failed`));
       } else {
         // TUI buffers contain the pasted prompt echo + UI chrome — clean
         // before resolving so callers see roughly the same shape they
         // get from a CLI run (model response text, possibly with noise).
         const cleaned = provider.type === 'tui' ? cleanTuiResponse(text, prompt) : text;
-        resolve({ text: cleaned, runId, model: effectiveModel });
+        safeResolve({ text: cleaned, runId, model: effectiveModel });
       }
     };
 
@@ -187,20 +200,27 @@ export async function runPromptThroughProvider({ provider, prompt, source, model
     const providerForRun = effectiveModel && effectiveModel !== provider.defaultModel
       ? { ...provider, defaultModel: effectiveModel }
       : provider;
-    const effectiveTimeout = timeoutOverride ?? providerForRun.timeout ?? DEFAULT_TIMEOUT_MS;
-    const effectiveCwd = cwdOverride ?? process.cwd();
 
     if (provider.type === 'cli') {
-      executeCliRun(runId, providerForRun, prompt, effectiveCwd, onData, onComplete, effectiveTimeout).catch(reject);
+      executeCliRun(runId, providerForRun, prompt, effectiveCwd, onData, onComplete, effectiveTimeout).catch(safeReject);
     } else if (provider.type === 'api') {
-      // API runs take model as a first-class arg — no clone needed. cwd
-      // is irrelevant for API providers but the toolkit signature still
-      // takes it for parity with the CLI/TUI paths.
-      executeApiRun(runId, provider, effectiveModel, prompt, effectiveCwd, [], onData, onComplete).catch(reject);
+      // API runs take model as a first-class arg — no clone needed. The
+      // toolkit's executeApiRun uses AbortController without a timer, so
+      // we enforce the per-call timeout here: if it fires before
+      // onComplete, reject with the same timeout shape CLI/TUI use and
+      // attempt to stop the run. Without this guard, API callers that
+      // used to enforce timeouts via fetchWithTimeout / AbortSignal.timeout
+      // (meatspacePostLlm, pm2Standardizer, brain) regress to hanging
+      // indefinitely on a stuck endpoint.
+      apiTimeoutHandle = setTimeout(() => {
+        stopRun(runId).catch(() => { /* best-effort cancel */ });
+        safeReject(new Error(`API execution timed out after ${effectiveTimeout}ms`));
+      }, effectiveTimeout);
+      executeApiRun(runId, provider, effectiveModel, prompt, effectiveCwd, [], onData, onComplete).catch(safeReject);
     } else if (provider.type === 'tui') {
-      executeTuiRun(runId, providerForRun, prompt, effectiveCwd, onData, onComplete, effectiveTimeout).catch(reject);
+      executeTuiRun(runId, providerForRun, prompt, effectiveCwd, onData, onComplete, effectiveTimeout).catch(safeReject);
     } else {
-      reject(new Error(`Unsupported provider type: ${provider.type}`));
+      safeReject(new Error(`Unsupported provider type: ${provider.type}`));
     }
   });
 }

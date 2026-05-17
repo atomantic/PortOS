@@ -95,12 +95,34 @@ describe('promptRunner — happy paths', () => {
       model: 'gpt-5',
     });
 
-    expect(runner.createRun).toHaveBeenCalledWith({
+    expect(runner.createRun).toHaveBeenCalledWith(expect.objectContaining({
       providerId: 'openai',
       model: 'gpt-5',
       prompt: 'p',
       source: 'media-prompt-refine',
+    }));
+    // workspacePath now also goes through (defaults to process.cwd() when
+    // the caller doesn't pass `cwd`) so /runs reflects the actual spawn dir.
+    expect(runner.createRun.mock.calls[0][0]).toHaveProperty('workspacePath');
+  });
+
+  it('forwards a per-call cwd through to createRun as workspacePath', async () => {
+    runner.executeCliRun.mockImplementation(async (id, _p, _pr, cwd, onData, onComplete, _t) => {
+      onData(cwd); // echo back the cwd so the assertion below can check it
+      onComplete({ success: true });
     });
+
+    const out = await runPromptThroughProvider({
+      provider: cliProvider(),
+      prompt: 'p',
+      source: 't',
+      cwd: '/some/other/dir',
+    });
+
+    expect(out.text).toBe('/some/other/dir');
+    expect(runner.createRun).toHaveBeenCalledWith(
+      expect.objectContaining({ workspacePath: '/some/other/dir' })
+    );
   });
 
   it('reuses a caller-supplied runId (no createRun round-trip)', async () => {
@@ -206,12 +228,12 @@ describe('promptRunner — happy paths', () => {
     // args-baked model id so the recorded run reflects what actually
     // executed (not the caller's silently-dropped override or the
     // provider.defaultModel fallback).
-    expect(runner.createRun).toHaveBeenCalledWith({
+    expect(runner.createRun).toHaveBeenCalledWith(expect.objectContaining({
       providerId: 'claude-code',
       model: 'baked-in',
       prompt: 'p',
       source: 't',
-    });
+    }));
   });
 });
 

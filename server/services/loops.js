@@ -170,8 +170,21 @@ async function executeIteration(loop) {
   }).then(({ model: executedModel }) => {
     onComplete({ exitCode: 0, success: true, duration: Date.now() - startedAt, model: executedModel });
   }).catch(err => {
-    active.running = false;
-    active.runId = null;
+    // Pre-migration `executeCliRun` always invoked `onComplete` — even on
+    // non-zero exit — so loop history / persistence / `iteration:complete`
+    // observers saw failed runs too. The .then/.catch split here would
+    // skip onComplete on failure and only emit `iteration:error`, breaking
+    // anything that subscribed to completes (history.push, lastExitCode
+    // persistence). Fire onComplete with a failure shape before the error
+    // event so the history + persistence side stays consistent.
+    const failureMetadata = {
+      exitCode: 1,
+      success: false,
+      duration: Date.now() - startedAt,
+      error: err.message,
+      model: provider.defaultModel,
+    };
+    onComplete(failureMetadata).catch(() => { /* history write is best-effort */ });
     loopEvents.emit('iteration:error', { id, iteration: iterationNum, error: err.message, timestamp: Date.now() });
     console.error(`❌ Loop ${id} run failed: ${err.message}`);
   });

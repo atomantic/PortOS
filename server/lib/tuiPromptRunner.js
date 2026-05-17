@@ -29,7 +29,7 @@ import { spawn as ptySpawn } from 'node-pty';
 import { join } from 'path';
 import { ensureDir, PATHS } from './fileUtils.js';
 import { createStreamingAnsiStripper } from './ansiStrip.js';
-import { getRunsPath, finalizeRunRecord } from '../services/runner.js';
+import { getRunsPath, finalizeRunRecord, emitRunStarted } from '../services/runner.js';
 import {
   DEFAULT_TUI_PROMPT_DELAY_MS,
   PASTE_MARKER_POLL_MS,
@@ -130,6 +130,12 @@ export async function executeTuiRun(runId, provider, prompt, cwd, onData, onComp
     throw new Error(`Failed to spawn TUI '${command}': ${err.message}`);
   }
 
+  // Fire the toolkit's `onRunStarted` hook now that the PTY is alive — the
+  // CLI/API paths fire it inside the toolkit's executeCliRun/executeApiRun,
+  // but the TUI path doesn't go through those. Without this hook, /runs and
+  // any SSE-based "active run" UI never see TUI runs as in-flight.
+  emitRunStarted({ runId, provider, model: provider.defaultModel });
+
   const startTime = Date.now();
   let outputBuffer = '';
   let rawBuffer = '';
@@ -164,17 +170,19 @@ export async function executeTuiRun(runId, provider, prompt, cwd, onData, onComp
 
       // Delegate run-record finalization (output.txt + metadata.json merge
       // + onRunCompleted/onRunFailed hooks + toolkit error analysis) to the
-      // shared runner helper. Tag with completionReason so /runs can show
-      // the TUI-specific signal (idle-complete, timeout, command-not-found)
-      // — finalizeRunRecord preserves any fields the toolkit already wrote
-      // when it merges.
+      // shared runner helper. `completionReason` lands in `extras` so it
+      // gets persisted to metadata.json BEFORE the write (was previously
+      // set post-write and never made it to disk → /runs replay missed it).
       const metadata = await finalizeRunRecord({
         runId, output: outputBuffer, exitCode, success, error, startTime,
+        extras: { completionReason: reason },
       }).catch((err) => {
         console.error(`❌ TUI run ${runId} finalize failed: ${err.message}`);
-        return { exitCode, success, error: error || err.message, duration: Date.now() - startTime };
+        return {
+          exitCode, success, error: error || err.message,
+          duration: Date.now() - startTime, completionReason: reason,
+        };
       });
-      metadata.completionReason = reason;
       onComplete?.(metadata);
       resolve();
     };
