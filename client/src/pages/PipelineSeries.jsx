@@ -338,7 +338,7 @@ function BibleSidebar({ series, universes, patchSeries, onCollapse }) {
         <h3 className="text-xs uppercase tracking-wider text-gray-500 mb-2">Canon</h3>
         {series.universeId ? (
           <Link
-            to={`/universe-builder/${encodeURIComponent(series.universeId)}/canon`}
+            to={`/universe-builder/${encodeURIComponent(series.universeId)}`}
             className="block text-xs text-port-accent hover:underline"
           >
             Manage characters, places, and objects on the linked Universe →

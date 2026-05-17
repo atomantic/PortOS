@@ -6,7 +6,7 @@ For project goals, see [GOALS.md](./GOALS.md). For completed work, see [DONE.md]
 
 ## Next Up
 
-1. **Universe-as-Canon Phase 2 UI** — fold canon into UniverseBuilder, retire the standalone Canon page + route, retire `universe.categories` on the schema. (Backbone shipped; UI still on the two-page split.)
+1. **Universe-as-Canon Phase 2 UI — remaining schema retirement.** Canon is now folded into UniverseBuilder and the standalone Canon page is retired. Still to do: drop `universe.categories` from the schema (sanitizer, Zod, expand prompt template, `mergeCategoriesWithLocks`, `compilePrompts`'s `variations`/`all` branches) and enrich the expand LLM contract to ask for `characters[]`/`settings[]`/`objects[]` with rich metadata directly.
 2. **Step-by-step approval/lock UX across Universe → Series → Arc → Seasons → Episodes.** Iteration 1 shipped a single arc-level lock; extend to per-season + per-field locks, lock the bulk runners, surface stage-progress strip, enforce locks server-side before LLM invocations.
 3. **Sharing v2 contracts** — per-peer subscription filenames (`sub-<kind>-<recordId>-<senderInstanceId>.json`), tombstone-based item removals, "🔄 live" badge on inbox subscription rows.
 4. **Pipeline continuity gaps** — plumb character physicalDescription/personality/background into idea-stage prompt; plumb setting `palette`/`era`/`weather`/`recurringDetails` into visual stages; add `worldEntitiesSummary` to text stages; add a dedicated `voice` / speech-pattern field to the bible schema.
@@ -35,9 +35,7 @@ For project goals, see [GOALS.md](./GOALS.md). For completed work, see [DONE.md]
 
 ### Universe-as-Canon — Phase 2 + extensions
 
-- [ ] **Extract shared `CanonCard`.** Pull `CanonCard` + `KindSection` out of `UniverseCanon.jsx` into `client/src/components/universe/CanonCard.jsx`. Add lock-toggle icon, "from series: <name>" provenance badge, tag chips. Disable Refine + Render when locked.
-- [ ] **Fold canon into `UniverseBuilder.jsx`.** Replace the categories grid with three kind-sections (Characters / Settings / Objects) using shared `CanonCard`. Move "Extract from prose" into header. Keep composite sheets unchanged.
-- [ ] **Retire the standalone Canon page + route.** Replace `UniverseCanon.jsx` with a Navigate redirect (or delete + drop the route). Update `navManifest.js` + sidebar + tests.
+- [ ] **CanonCard "from series: <name>" full provenance label.** Card currently shows a "from series" chip with the series id in the tooltip. Plumb a `seriesNameMap` (or `sourceSeriesName` per entry) so the chip can render the actual series name. Needs the parent (`UniverseCanonSection` / `NounsStage`) to pass a `{ [seriesId]: name }` lookup.
 - [ ] **Retire `universe.categories` on the schema.** After UI no longer reads it, drop from `sanitizeTemplate`, route Zod schemas, expand prompt template, `mergeCategoriesWithLocks`, `compilePrompts`'s `'variations'`/`'all'` branches.
 - [ ] **Universe expand LLM contract enrichment.** Ask the LLM directly for `characters[]` / `settings[]` / `objects[]` with rich narrative metadata alongside visual `prompt`.
 - [ ] **Settings → Places kind rename.** `BIBLE_KIND.SETTING → BIBLE_KIND.PLACE`, `BIBLE_FIELD[SETTING]: 'settings' → 'places'`. Touches ~20 files. Stick the rename to bible context — app settings stays as "settings".

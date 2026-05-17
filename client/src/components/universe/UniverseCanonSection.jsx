@@ -1,48 +1,39 @@
 /**
- * Universe Canon — manage characters, places, and objects on a universe.
+ * Embeddable canon UI for a universe — Characters / Places / Objects with
+ * extract-from-prose, AI differentiate, per-entry lock + refine + render.
  *
- * Phase A of the Universe-as-canon refactor: entity registries live on the
- * universe so multiple series can share them. Mirrors the Nouns page's
- * structure but reads/writes universe.characters[] / .settings[] / .objects[].
- * The Nouns page (per-series) keeps working until Phase B migrates series →
- * universe references.
+ * Lives inside UniverseBuilder (Phase 2 of Universe-as-Canon) so canon and
+ * the template live on one page. Reads the universe from the parent (which
+ * owns the editable draft) and writes back via `onUniverseChange(updated)` so
+ * canon mutations don't clobber pending edits to logline/premise/etc.
+ *
+ * The series filter is URL-driven (`?series=<id>`) so deep-links restore the
+ * filtered view. The dropdown only appears when ≥2 series reference this
+ * universe's canon.
  */
-
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useParams, useSearchParams } from 'react-router-dom';
+import { useSearchParams } from 'react-router-dom';
 import {
-  Library, Loader2, Users, MapPin, Package, Globe2, Wand2, ArrowLeft, Filter,
+  Library, Loader2, Users, MapPin, Package, Wand2, Filter,
 } from 'lucide-react';
-import toast from '../components/ui/Toast';
+import toast from '../ui/Toast';
 import {
-  getUniverse,
   extractUniverseCanon,
   refineUniverseCharacter,
   differentiateUniverseCast,
   updateUniverse,
   getUniverseCanonUsage,
   setUniverseCanonLock,
-} from '../services/apiUniverseBuilder';
-import { generateImage, getSettings } from '../services/apiSystem';
-import { composeStyledPrompt } from '../lib/composeStyledPrompt';
-import { composeCleanPlatePrompt } from '../lib/cleanPlatePrompt';
-import { useAsyncAction } from '../hooks/useAsyncAction';
-import useMounted from '../hooks/useMounted';
-import CanonCard from '../components/pipeline/CanonCard';
-import MediaPreview from '../components/media/MediaPreview';
-import {
-  PIPELINE_IMAGE_DEFAULTS,
-  readPipelineImageSettings,
-  pipelineImageCfgToRenderOpts,
-} from '../lib/pipelineImageDefaults';
-import { joinInfluenceList } from '../lib/joinInfluenceList';
-
-const universeStylePreset = (universe) => {
-  const embrace = joinInfluenceList(universe?.influences?.embrace);
-  const avoid = joinInfluenceList(universe?.influences?.avoid);
-  if (!embrace && !avoid) return null;
-  return { prompt: embrace, negativePrompt: avoid };
-};
+} from '../../services/apiUniverseBuilder';
+import { generateImage } from '../../services/apiSystem';
+import { composeStyledPrompt } from '../../lib/composeStyledPrompt';
+import { composeCleanPlatePrompt } from '../../lib/cleanPlatePrompt';
+import { useAsyncAction } from '../../hooks/useAsyncAction';
+import useMounted from '../../hooks/useMounted';
+import CanonCard from '../pipeline/CanonCard';
+import MediaPreview from '../media/MediaPreview';
+import { pipelineImageCfgToRenderOpts } from '../../lib/pipelineImageDefaults';
+import { universeStylePreset } from '../../lib/universeStylePreset';
 
 const KINDS = [
   {
@@ -63,14 +54,10 @@ const KINDS = [
   },
 ];
 
-export default function UniverseCanon() {
-  const { universeId } = useParams();
+export default function UniverseCanonSection({ universe, universeId, onUniverseChange, imageCfg }) {
+  const mountedRef = useMounted();
   const [searchParams, setSearchParams] = useSearchParams();
   const seriesFilter = searchParams.get('series') || '';
-  const mountedRef = useMounted();
-  const [universe, setUniverse] = useState(null);
-  const [loadErr, setLoadErr] = useState(null);
-  const [imageCfg, setImageCfg] = useState(PIPELINE_IMAGE_DEFAULTS);
   const [renderingJobs, setRenderingJobs] = useState({});
   const [refiningId, setRefiningId] = useState(null);
   const [differentiating, setDifferentiating] = useState(false);
@@ -83,34 +70,18 @@ export default function UniverseCanon() {
   const [extractOpen, setExtractOpen] = useState(false);
   const [preview, setPreview] = useState(null);
   // Per-canon-entry usage map: `{ characters: { [entryId]: [{seriesId, seriesName, issueCount, ...}] }, ... }`.
-  // Loaded lazily after the universe itself — usage is a derived view and
-  // shouldn't block the initial render. Refetched after mutations that change
-  // the canon shape (extract / differentiate-cast) so new entries get usage.
+  // Loaded lazily — usage is a derived view and shouldn't block the initial
+  // paint. Refetched after mutations that change the canon shape (extract /
+  // differentiate-cast) so new entries get usage.
   const [usage, setUsage] = useState(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    Promise.all([
-      getUniverse(universeId).catch((e) => { setLoadErr(e.message || 'Load failed'); return null; }),
-      getSettings().catch(() => ({})),
-    ]).then(([u, s]) => {
-      if (cancelled || !mountedRef.current) return;
-      setUniverse(u);
-      setImageCfg(readPipelineImageSettings(s));
-    });
-    return () => { cancelled = true; };
-  }, [universeId, mountedRef]);
-
-  // Lazy usage fetch. Decoupled from the universe load so a slow cross-
-  // reference scan doesn't gate the page paint, and so it can be refetched
-  // independently after canon mutations. The captured `requestedFor` is
-  // checked against the live `currentUniverseIdRef` so a slow response from
-  // a previous universe (rapid navigation) can't repopulate `usage` with
-  // stale data — `setUsage(null)` on universeId change would otherwise be
-  // immediately undone.
+  // Lazy usage fetch. Captured `requestedFor` is checked against the live
+  // `currentUniverseIdRef` so a slow response from a previous universe can't
+  // repopulate `usage` with stale data after fast navigation.
   const currentUniverseIdRef = useRef(universeId);
   useEffect(() => { currentUniverseIdRef.current = universeId; }, [universeId]);
   const refreshUsage = useCallback(() => {
+    if (!universeId) return;
     const requestedFor = universeId;
     getUniverseCanonUsage(requestedFor)
       .then((u) => {
@@ -124,8 +95,7 @@ export default function UniverseCanon() {
 
   // Series-with-usage options for the filter dropdown. Derived from the
   // usage map rather than a fresh API call so the dropdown only lists
-  // series that actually reference this universe's canon — a series linked
-  // to the universe with zero issues has nothing to filter to.
+  // series that actually reference this universe's canon.
   const seriesOptions = useMemo(() => {
     if (!usage) return [];
     const seen = new Map();
@@ -144,15 +114,8 @@ export default function UniverseCanon() {
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [usage]);
 
-  // If the URL names a series that isn't in this universe's usage map
-  // (stale bookmark, deleted series), drop the param silently so the page
-  // doesn't show an empty "filtered" view forever. One-shot per universe —
-  // runs when usage first resolves; later URL changes are driven by the
-  // dropdown (handleSeriesFilterChange) which only sets known-good ids.
-  // Reset on universeId change so navigating between universes within the
-  // same mount validates each universe's filter param independently. Also
-  // clear `usage` so the validation effect doesn't run against the prior
-  // universe's data during the transition.
+  // Drop a stale `?series=` param when usage resolves and the series isn't
+  // in this universe. Reset per-universe so cross-universe nav re-validates.
   const validatedRef = useRef(false);
   useEffect(() => {
     validatedRef.current = false;
@@ -175,8 +138,6 @@ export default function UniverseCanon() {
     setSearchParams(next, { replace: true });
   }, [searchParams, setSearchParams]);
 
-  // Build a per-kind filtered entry list. When no filter is active the
-  // raw universe arrays pass through unchanged.
   const filteredByKind = useMemo(() => {
     if (!universe) return {};
     const out = {};
@@ -225,14 +186,21 @@ export default function UniverseCanon() {
     { errorMessage: 'Extraction failed' },
   );
 
+  // Drop late responses that arrive after the user has switched universes —
+  // otherwise universe A's refine/extract result would land in universe B's
+  // draft. The component stays mounted across selectedId changes (only the
+  // `universe` prop swaps), so mountedRef alone isn't sufficient.
+  const isStillCurrent = (capturedId) => mountedRef.current && currentUniverseIdRef.current === capturedId;
+
   const handleExtract = async () => {
     if (!extractText.trim()) {
       toast.error('Paste prose into the textarea first');
       return;
     }
+    const capturedId = universeId;
     const result = await runExtract();
-    if (!result || !mountedRef.current) return;
-    setUniverse(result.universe);
+    if (!result || !isStillCurrent(capturedId)) return;
+    onUniverseChange(result.universe);
     refreshUsage();
     const counts = KINDS
       .map((k) => `${result.universe[k.key]?.length ?? 0} ${k.label.toLowerCase()}`)
@@ -245,13 +213,14 @@ export default function UniverseCanon() {
   const handleDifferentiate = async () => {
     if (!universe || differentiating) return;
     setDifferentiating(true);
+    const capturedId = universeId;
     const providerId = universe.llm?.provider || undefined;
     const model = universe.llm?.model || undefined;
     const result = await differentiateUniverseCast(universeId, { providerId, model })
       .catch((err) => { toast.error(err.message || 'Differentiate failed'); return null; });
     if (mountedRef.current) setDifferentiating(false);
-    if (!result || !mountedRef.current) return;
-    setUniverse(result.universe);
+    if (!result || !isStillCurrent(capturedId)) return;
+    onUniverseChange(result.universe);
     toast.success(`Differentiated ${result.touched}/${result.touched + result.skipped} characters — ${(result.rationale || '').slice(0, 140)}`);
   };
 
@@ -259,25 +228,27 @@ export default function UniverseCanon() {
     if (togglingLockRef.current) return;
     togglingLockRef.current = entryId;
     setTogglingLockId(entryId);
+    const capturedId = universeId;
     const result = await setUniverseCanonLock(universeId, kind.apiKind, entryId, nextLocked)
       .catch((err) => { toast.error(err.message || 'Lock toggle failed'); return null; });
     togglingLockRef.current = null;
     if (mountedRef.current) setTogglingLockId(null);
-    if (!result || !mountedRef.current) return;
-    setUniverse(result.universe);
+    if (!result || !mountedRef.current || currentUniverseIdRef.current !== capturedId) return;
+    onUniverseChange(result.universe);
     toast.success(`${result.entry?.name || 'Entry'} ${nextLocked ? 'locked' : 'unlocked'}`);
-  }, [universeId, mountedRef]);
+  }, [universeId, onUniverseChange, mountedRef]);
 
   const handleRefineCharacter = async (entryId) => {
     if (!universe || refiningId) return;
     setRefiningId(entryId);
+    const capturedId = universeId;
     const providerId = universe.llm?.provider || undefined;
     const model = universe.llm?.model || undefined;
     const result = await refineUniverseCharacter(universeId, entryId, { providerId, model })
       .catch((err) => { toast.error(err.message || 'Refine failed'); return null; });
     if (mountedRef.current) setRefiningId(null);
-    if (!result || !mountedRef.current) return;
-    setUniverse(result.universe);
+    if (!result || !isStillCurrent(capturedId)) return;
+    onUniverseChange(result.universe);
     toast.success(`Refined — ${(result.rationale || result.changes?.[0] || 'description rewritten').slice(0, 140)}`);
   };
 
@@ -310,9 +281,8 @@ export default function UniverseCanon() {
     }
     const baseOpts = pipelineImageCfgToRenderOpts(imageCfg);
     const plate = composeCleanPlatePrompt(entry, baseOpts.negativePrompt || '');
-    // Layer the universe style on top of the clean-plate composition so
-    // the empty-location render shares the visual language of the
-    // populated reference renders.
+    // Layer the universe style on top of the clean-plate composition so the
+    // empty-location render shares the visual language of the populated refs.
     const styled = composeStyledPrompt(
       plate.prompt,
       plate.negativePrompt,
@@ -336,13 +306,14 @@ export default function UniverseCanon() {
       delete next[entryId];
       return next;
     });
+    const capturedId = universeId;
     const list = (universe[kindKey] || []).map((e) =>
       e.id === entryId ? { ...e, imageRefs: [...(e.imageRefs || []), filename] } : e
     );
     const updated = await updateUniverse(universeId, { [kindKey]: list })
       .catch((err) => { toast.error(`Save failed: ${err.message}`); return null; });
-    if (updated && mountedRef.current) setUniverse(updated);
-  }, [universe, universeId, mountedRef]);
+    if (updated && mountedRef.current && currentUniverseIdRef.current === capturedId) onUniverseChange(updated);
+  }, [universe, universeId, onUniverseChange, mountedRef]);
 
   const handleRefFailed = useCallback((entryId, errMsg) => {
     setRenderingJobs((prev) => {
@@ -355,48 +326,40 @@ export default function UniverseCanon() {
   }, []);
 
   // Inline-edit channel for canon fields the user types/picks directly
-  // (today: setting intExt + timeOfDay chips). Optimistic — UI updates
-  // before the server roundtrip so chip clicks feel instant.
+  // (setting intExt + timeOfDay chips, primaryImageRef pinning, wardrobe
+  // edits). Optimistic — UI updates before the server roundtrip so chip
+  // clicks feel instant.
   const handlePatchEntry = useCallback(async (kind, entryId, patch) => {
     if (!universe || !patch || typeof patch !== 'object') return;
+    const capturedId = universeId;
     const kindKey = kind.key;
     const list = (universe[kindKey] || []).map((e) =>
       e.id === entryId ? { ...e, ...patch } : e
     );
-    setUniverse((prev) => prev ? { ...prev, [kindKey]: list } : prev);
+    onUniverseChange({ ...universe, [kindKey]: list });
     const updated = await updateUniverse(universeId, { [kindKey]: list })
       .catch((err) => { toast.error(`Save failed: ${err.message}`); return null; });
-    if (updated && mountedRef.current) setUniverse(updated);
-  }, [universe, universeId, mountedRef]);
+    if (updated && mountedRef.current && currentUniverseIdRef.current === capturedId) onUniverseChange(updated);
+  }, [universe, universeId, onUniverseChange, mountedRef]);
 
-  if (loadErr) return <div className="p-4 text-port-error">{loadErr}</div>;
-  if (!universe) return <div className="p-4 text-gray-500 italic">Loading universe…</div>;
+  if (!universe) return null;
 
   const charCount = (universe.characters || []).length;
 
   return (
-    <div className="p-4 sm:p-6 max-w-5xl mx-auto space-y-5">
-      <header className="flex items-start justify-between gap-3 flex-wrap">
+    <section className="bg-port-card border border-port-border rounded p-4 flex flex-col gap-3">
+      <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
-          <Link
-            to={`/universe-builder/${encodeURIComponent(universeId)}`}
-            className="inline-flex items-center gap-1 text-xs text-port-accent hover:underline"
-          >
-            <ArrowLeft size={12} /> Back to Universe Builder
-          </Link>
-          <h1 className="text-xl font-semibold text-white mt-1 flex items-center gap-2">
-            <Globe2 size={18} className="text-port-accent" />
-            Canon: {universe.name}
-          </h1>
-          <p className="text-xs text-gray-500 mt-1 max-w-2xl">
-            People, places, and things that exist in this universe. Series within this universe
-            share the same canon — once Phase B lands, episodes/issues will reference these
-            entries directly so a character renders consistently across crossovers and cameos.
+          <h2 className="text-sm font-semibold text-white">Canon</h2>
+          <p className="text-xs text-gray-500 mt-0.5">
+            People, places, and things that exist in this universe. Series in this
+            universe share the same canon — episodes/issues reference these entries
+            so a character renders consistently across crossovers.
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           {seriesOptions.length > 1 ? (
-            <label className="inline-flex items-center gap-1.5 px-2 py-1.5 rounded-lg bg-port-card border border-port-border text-gray-300 text-sm">
+            <label className="inline-flex items-center gap-1.5 px-2 py-1.5 rounded bg-port-bg border border-port-border text-gray-300 text-xs">
               <Filter size={12} className="text-gray-500" />
               <span className="sr-only">Filter by series</span>
               <select
@@ -415,32 +378,33 @@ export default function UniverseCanon() {
           <button
             type="button"
             onClick={() => setExtractOpen((v) => !v)}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-port-card border border-port-border text-gray-300 text-sm hover:border-port-accent/50 hover:text-white"
+            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded bg-port-bg border border-port-border text-gray-300 text-xs hover:border-port-accent/50 hover:text-white"
           >
-            <Library size={14} /> Extract from prose
+            <Library size={12} /> Extract from prose
           </button>
           <button
             type="button"
             onClick={handleDifferentiate}
             disabled={differentiating || charCount < 2}
             title={charCount < 2 ? 'Need at least 2 characters to differentiate' : 'Rewrite every character so the cast renders visually distinct'}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-port-accent text-white text-sm font-medium disabled:opacity-40"
+            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded bg-port-accent/15 hover:bg-port-accent/25 text-port-accent border border-port-accent/40 text-xs disabled:opacity-40"
           >
-            {differentiating ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} />}
+            {differentiating ? <Loader2 size={12} className="animate-spin" /> : <Wand2 size={12} />}
             AI: differentiate cast
           </button>
         </div>
-      </header>
+      </div>
 
       {extractOpen ? (
-        <section className="rounded border border-port-border bg-port-card/40 p-3">
-          <label className="text-xs uppercase tracking-wider text-gray-500">Paste prose</label>
+        <div className="rounded border border-port-border bg-port-bg p-3">
+          <label htmlFor="canon-extract-textarea" className="text-xs uppercase tracking-wider text-gray-500">Paste prose</label>
           <textarea
+            id="canon-extract-textarea"
             value={extractText}
             onChange={(e) => setExtractText(e.target.value)}
-            rows={8}
+            rows={6}
             placeholder="Paste an issue's prose stage output, a story draft, or any prose body. The LLM extracts characters, places, and objects and merges them into this universe's canon."
-            className="w-full mt-1 px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-xs font-mono"
+            className="w-full mt-1 px-2 py-1.5 bg-port-card border border-port-border rounded text-white text-xs font-mono"
           />
           <div className="flex items-center justify-end gap-2 mt-2">
             <button
@@ -460,7 +424,7 @@ export default function UniverseCanon() {
               Extract
             </button>
           </div>
-        </section>
+        </div>
       ) : null}
 
       {seriesFilter ? (
@@ -497,14 +461,14 @@ export default function UniverseCanon() {
       ))}
 
       <MediaPreview preview={preview} setPreview={setPreview} items={previewItems} />
-    </div>
+    </section>
   );
 }
 
 function KindSection({ kind, all, totalCount, filtered, usage, renderingJobs, onRender, onJobCompleted, onJobFailed, onPreview, onRefine, refiningId, onToggleLock, togglingLockId, onPatchEntry, onRenderCleanPlate }) {
   const Icon = kind.icon;
   return (
-    <section className="rounded-lg border border-port-border bg-port-card/40">
+    <section className="rounded border border-port-border bg-port-bg/60">
       <div className="flex items-center gap-2 px-3 py-2 border-b border-port-border">
         <Icon size={14} className="text-gray-400" />
         <h3 className="text-sm font-semibold text-white">{kind.label}</h3>
@@ -545,4 +509,3 @@ function KindSection({ kind, all, totalCount, filtered, usage, renderingJobs, on
     </section>
   );
 }
-

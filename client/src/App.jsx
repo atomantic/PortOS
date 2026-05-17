@@ -52,7 +52,6 @@ const MediaCollectionDetail = lazyWithReload(() => import('./pages/MediaCollecti
 const MediaModels = lazyWithReload(() => import('./pages/MediaModels'));
 const Loras = lazyWithReload(() => import('./pages/Loras'));
 const UniverseBuilder = lazyWithReload(() => import('./pages/UniverseBuilder'));
-const UniverseCanon = lazyWithReload(() => import('./pages/UniverseCanon'));
 const VideoTimeline = lazyWithReload(() => import('./pages/VideoTimeline'));
 const VideoTimelineEditor = lazyWithReload(() => import('./pages/VideoTimelineEditor'));
 const CreativeDirector = lazyWithReload(() => import('./pages/CreativeDirector'));
@@ -100,6 +99,14 @@ const PageLoader = () => (
 function RedirectWithSearch({ to }) {
   const { search } = useLocation();
   return <Navigate to={`${to}${search}`} replace />;
+}
+
+// Canon page was folded into Universe Builder; redirect the old sub-route to
+// the builder so deep-links and bookmarks keep working. Strips the trailing
+// `/canon` and preserves the query string (e.g. `?series=<id>` filter).
+function CanonRedirect() {
+  const { pathname, search } = useLocation();
+  return <Navigate to={`${pathname.replace(/\/canon$/, '')}${search}`} replace />;
 }
 
 // Force full reload on HMR — partial hot-replacement of the route tree
@@ -212,7 +219,7 @@ export default function App() {
             <Route path="loras" element={<Loras />} />
             <Route path="universe-builder" element={<UniverseBuilder />} />
             <Route path="universe-builder/:universeId" element={<UniverseBuilder />} />
-            <Route path="universe-builder/:universeId/canon" element={<UniverseCanon />} />
+            <Route path="universe-builder/:universeId/canon" element={<CanonRedirect />} />
           </Route>
           <Route path="image-gen" element={<RedirectWithSearch to="/media/image" />} />
           <Route path="video-gen" element={<RedirectWithSearch to="/media/video" />} />
@@ -223,7 +230,7 @@ export default function App() {
           <Route path="rapid-reader" element={<RapidReaderPage />} />
           <Route path="universe-builder" element={<UniverseBuilder />} />
           <Route path="universe-builder/:universeId" element={<UniverseBuilder />} />
-          <Route path="universe-builder/:universeId/canon" element={<UniverseCanon />} />
+          <Route path="universe-builder/:universeId/canon" element={<CanonRedirect />} />
           <Route path="writers-room" element={<WritersRoom />} />
           <Route path="sharing" element={<Sharing />} />
           <Route path="importer" element={<Importer />} />

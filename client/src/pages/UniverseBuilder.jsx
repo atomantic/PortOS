@@ -11,7 +11,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
   Globe2, Plus, Trash2, Sparkles, Wand2, Loader2, Save, FolderOpen,
-  Edit3, X, MessageSquarePlus, Play, Lock, Unlock, Library,
+  Edit3, X, MessageSquarePlus, Play, Lock, Unlock,
   PanelLeftClose, PanelLeftOpen,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
@@ -31,7 +31,9 @@ import BackendChipStrip from '../components/media/BackendChipStrip';
 import ImageGenControls from '../components/imageGen/ImageGenControls';
 import ShareToButton from '../components/sharing/ShareToButton';
 import OriginBadge from '../components/sharing/OriginBadge';
+import UniverseCanonSection from '../components/universe/UniverseCanonSection';
 import { deriveAvailableBackends, IMAGE_GEN_MODE } from '../lib/imageGenBackends';
+import { PIPELINE_IMAGE_DEFAULTS, readPipelineImageSettings } from '../lib/pipelineImageDefaults';
 
 const CATEGORY_LABELS = {
   landscapes: 'Landscapes',
@@ -224,6 +226,10 @@ export default function UniverseBuilder() {
   const [imageModels, setImageModels] = useState([]);
   const [availableBackends, setAvailableBackends] = useState([]);
   const [defaultMode, setDefaultMode] = useState(null);
+  // Per-render config used by the embedded Canon section for reference
+  // renders (size, steps, etc.). Derived from the same settings fetch as the
+  // batch-render plumbing above so we don't round-trip getSettings() twice.
+  const [imageCfg, setImageCfg] = useState(PIPELINE_IMAGE_DEFAULTS);
 
   // The draft is the editable copy of the currently-selected world. New
   // universes start as a draft with no id; saving creates the persisted record.
@@ -296,6 +302,7 @@ export default function UniverseBuilder() {
     const saved = settings?.imageGen?.mode;
     const fallback = backends.find((b) => b.id === saved)?.id || backends[0]?.id || IMAGE_GEN_MODE.LOCAL;
     setDefaultMode(fallback);
+    setImageCfg(readPipelineImageSettings(settings));
     setLoading(false);
   };
 
@@ -685,6 +692,22 @@ export default function UniverseBuilder() {
   const canRender = !!selectedId && availableBackends.length > 0 && !rendering;
 
   const updateDraft = (patch) => setDraft((d) => ({ ...d, ...patch }));
+
+  // Canon mutations (extract / refine / differentiate / lock / render-ref)
+  // round-trip through the server and return the full universe. Only the
+  // canon arrays + their updatedAt timestamp flow back into the draft so
+  // unsaved edits to logline/premise/styleNotes aren't clobbered by the
+  // server's stale copy of those fields.
+  const handleCanonChange = (updated) => {
+    if (!updated) return;
+    setDraft((d) => ({
+      ...d,
+      characters: updated.characters,
+      settings: updated.settings,
+      objects: updated.objects,
+      updatedAt: updated.updatedAt,
+    }));
+  };
   // Toggle a single field's lock state and (when the world is already saved)
   // persist immediately — locks are part of the world template, so a stale
   // disk copy would let a later refine/expand silently overwrite a "locked"
@@ -892,13 +915,6 @@ export default function UniverseBuilder() {
             </button>
             {selectedId && (
               <>
-                <Link
-                  to={`/universe-builder/${encodeURIComponent(selectedId)}/canon`}
-                  className="px-3 py-2 rounded flex items-center gap-2 min-h-[40px] bg-port-card border border-port-border text-gray-300 hover:border-port-accent/50 hover:text-white text-sm"
-                  title="Manage canon: characters, places, and objects that exist in this universe"
-                >
-                  <Library size={16} /> Canon
-                </Link>
                 <ShareToButton kind="universe" ids={[selectedId]} label="Share" />
                 {draft.origin ? <OriginBadge origin={draft.origin} /> : null}
                 <button
@@ -1102,6 +1118,15 @@ export default function UniverseBuilder() {
             onToggleLock={toggleLock}
           />
         </section>
+
+        {selectedId ? (
+          <UniverseCanonSection
+            universe={draft}
+            universeId={selectedId}
+            onUniverseChange={handleCanonChange}
+            imageCfg={imageCfg}
+          />
+        ) : null}
 
         <CompositeSheetsEditor
           sheets={draft.compositeSheets || []}

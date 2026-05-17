@@ -30,7 +30,7 @@ import {
 } from '../../../lib/scenePrompt';
 import { composeStyledPrompt } from '../../../lib/composeStyledPrompt';
 import { composeCleanPlatePrompt } from '../../../lib/cleanPlatePrompt';
-import { joinInfluenceList } from '../../../lib/joinInfluenceList';
+import { universeStylePreset } from '../../../lib/universeStylePreset';
 import useMounted from '../../../hooks/useMounted';
 import CanonCard from '../CanonCard';
 import MediaPreview from '../../media/MediaPreview';
@@ -72,18 +72,6 @@ const KINDS = [
 // optional `stylePromptOverride` prepends ahead of the universe's embrace
 // chip list, joined with the same `'. '` separator the server uses. Without
 // this parity, client preview renders drift from comic-page renders.
-// `universe` is allowed to be null — server-side buildStyleClause still
-// applies the override when only the series has style content (orphan or
-// failed-load), so the client preset must do the same.
-const universeStylePreset = (universe, series) => {
-  const override = (series?.stylePromptOverride || '').trim();
-  const embrace = universe ? joinInfluenceList(universe.influences?.embrace) : '';
-  const avoid = universe ? joinInfluenceList(universe.influences?.avoid) : '';
-  const prompt = [override, embrace].filter(Boolean).join('. ');
-  if (!prompt && !avoid) return null;
-  return { prompt, negativePrompt: avoid };
-};
-
 export default function NounsStage({ issue, series }) {
   const mountedRef = useMounted();
   const prose = (issue.stages?.prose?.output || '').trim();
