@@ -167,7 +167,7 @@ function nodeReferences(node, hoveredId, hoveredNode) {
 
 function StageArrow() {
   return (
-    <div className="hidden lg:flex items-center px-1 text-gray-600 shrink-0" aria-hidden="true">
+    <div className="hidden lg:flex items-center px-2 text-gray-600 shrink-0" aria-hidden="true">
       <ArrowRight className="w-5 h-5" />
     </div>
   );
@@ -271,7 +271,7 @@ export default function WorkflowTab() {
 
       {graph && (
         <div className="lg:overflow-x-auto pb-2">
-          <div className="flex flex-col lg:flex-row lg:items-stretch gap-4 lg:gap-2 lg:min-w-min">
+          <div className="flex flex-col lg:flex-row lg:items-stretch gap-4 lg:gap-0 lg:min-w-min">
             {populatedStages.map((stage, i) => (
               <Fragment key={stage.id}>
                 <StageColumn
