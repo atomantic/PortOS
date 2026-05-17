@@ -346,12 +346,20 @@ async function applyAutoMerge(bucket, manifest, records, { availableAssetKeys = 
   // generated images appear alongside the universe in the recipient's UI.
   let itemsAdded = 0;
   let itemsDeferred = 0;
+  let collectionPendingUniverse = null;
   if (manifest.collection) {
     const r = await withReexportSuppressed('universe', manifest.collection.universeId, () =>
       mergeCollectionPayload(manifest.collection, availableAssetKeys));
     itemsAdded = r.itemsAdded;
     itemsDeferred = r.itemsDeferred || 0;
     if (itemsAdded > 0) applied += itemsAdded;
+    // `mergeCollectionPayload` defers when the referenced universe hasn't
+    // been imported locally yet. Propagate that as a pending condition so
+    // processManifest leaves the cursor un-advanced and the watcher
+    // retries — otherwise the manifest is marked processed and the
+    // deferred items never land if the universe record arrives in a
+    // later (independent) sync.
+    if (r.missingUniverse) collectionPendingUniverse = manifest.collection.universeId;
   }
 
   let adoptedSubscription = null;
@@ -370,6 +378,7 @@ async function applyAutoMerge(bucket, manifest, records, { availableAssetKeys = 
     overridden,
     collectionItemsAdded: itemsAdded,
     collectionItemsDeferred: itemsDeferred,
+    collectionPendingUniverse,
     adoptedSubscription: adoptedSubscription
       ? { id: adoptedSubscription.id, bucketId: adoptedSubscription.bucketId, recordKind: adoptedSubscription.recordKind, recordId: adoptedSubscription.recordId }
       : null,
@@ -511,11 +520,19 @@ export async function processManifest(bucketId, manifestFilename) {
   } else {
     outcome = { mode: 'inbox', ...(await applyInbox(bucket, manifest, manifestFilename, records)) };
   }
-  if (assetCopy.missing.length > 0 || missingRecords.length > 0) {
+  // A manifest is pending when any of these still need to land before the
+  // cursor advances: asset blobs, referenced record JSONs, OR a universe
+  // referenced by the manifest's collection payload that hasn't been
+  // imported yet. The third case can happen when the universe record
+  // failed to import (corrupt JSON, schema-version mismatch) or the
+  // manifest references a universeId not listed in `recordIds`.
+  const collectionPendingUniverse = outcome?.collectionPendingUniverse || null;
+  if (assetCopy.missing.length > 0 || missingRecords.length > 0 || collectionPendingUniverse) {
     if (assetCopy.missing.length > 0) outcome.pendingAssets = assetCopy.missing;
     if (missingRecords.length > 0) outcome.pendingRecords = missingRecords;
+    if (collectionPendingUniverse) outcome.pendingCollectionUniverse = collectionPendingUniverse;
     sharingEvents.emit('manifest-processed', { bucketId, manifestId: manifest.id, manifestFilename, outcome });
-    console.log(`⏳ sharing: bucket=${bucket.name} manifest=${manifest.id} kind=${manifest.kind} mode=${bucket.mode} waitingForAssets=${assetCopy.missing.length} waitingForRecords=${missingRecords.length}`);
+    console.log(`⏳ sharing: bucket=${bucket.name} manifest=${manifest.id} kind=${manifest.kind} mode=${bucket.mode} waitingForAssets=${assetCopy.missing.length} waitingForRecords=${missingRecords.length}${collectionPendingUniverse ? ` waitingForUniverse=${collectionPendingUniverse}` : ''}`);
     return { processed: true, pending: true, manifest, outcome };
   }
   await markProcessed(bucketId, manifestFilename, manifest.id);

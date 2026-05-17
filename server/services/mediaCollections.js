@@ -413,12 +413,20 @@ export async function updateCollection(id, patch) {
 }
 
 export async function deleteCollection(id) {
-  return serializeFileWrite(async () => {
+  const deletedUniverseId = await serializeFileWrite(async () => {
     const all = await listCollections();
-    if (!all.find((c) => c.id === id)) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
+    const target = all.find((c) => c.id === id);
+    if (!target) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
     await writeAll(all.filter((c) => c.id !== id));
-    return { id };
+    return target.universeId || null;
   });
+  // Mirror addItem/removeItem/bulkUpdateCollectionItems — universe-linked
+  // shares need to know membership changed so the subscriber doesn't keep
+  // publishing the deleted collection's contents until an unrelated edit
+  // fires. Emit outside the serialized critical section so subscribers'
+  // own reads don't deadlock the tail.
+  if (deletedUniverseId) emitRecordUpdated('universe', deletedUniverseId);
+  return { id };
 }
 
 // Mirror sanitizeItem so direct callers (addItem + bulkUpdateCollectionItems)

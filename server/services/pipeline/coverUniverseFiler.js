@@ -72,23 +72,25 @@ export async function fileCoverIntoUniverseCollection({ seriesId, filename }) {
   });
   if (!collection) return;
 
-  // Delete-race guard: deleteUniverse may have fired between the
-  // getUniverse above and findOrCreateUniverseCollection's write, leaving
-  // a freshly-stamped collection bound to a now-deleted universeId
-  // (rename-locked, no universe to cascade from). Re-check and release
-  // the link so the user gets a normal orphan collection they can rename
-  // or delete. Single-user mode makes this rare, but when it does happen
-  // the lock is otherwise inescapable.
-  const stillExists = await universeSvc.getUniverse(universeId).catch(() => null);
-  if (!stillExists || stillExists.id !== liveUniverse.id) {
-    await unlinkCollectionsForUniverse(universeId).catch(() => null);
-    return;
-  }
-
+  // File the render first, regardless of what happened to the universe
+  // mid-flight. The user's cover is real work — we never throw it away
+  // just because the universe got deleted between findOrCreate and now.
   await addItem(collection.id, { kind: 'image', ref: filename }).catch((err) => {
     // A duplicate just means the user re-rendered the same cover into the
     // same slot — not an error worth surfacing.
     if (err?.code === ERR_DUPLICATE) return;
     console.error(`❌ cover → universe collection filing failed for ${filename}: ${err?.message || err}`);
   });
+
+  // Delete-race recovery: deleteUniverse may have fired between the
+  // initial getUniverse and findOrCreateUniverseCollection's write,
+  // leaving the freshly-stamped collection bound to a now-deleted
+  // universeId — rename-locked with no universe to cascade from. Unlink
+  // the collection so the user can rename or delete it via normal flows;
+  // the cover added above is preserved in the (now-orphaned) bucket
+  // instead of being thrown away with the universe.
+  const stillExists = await universeSvc.getUniverse(universeId).catch(() => null);
+  if (!stillExists || stillExists.id !== liveUniverse.id) {
+    await unlinkCollectionsForUniverse(universeId).catch(() => null);
+  }
 }

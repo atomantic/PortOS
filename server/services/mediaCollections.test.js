@@ -74,6 +74,38 @@ describe('mediaCollections service', () => {
     expect(await svc.listCollections()).toEqual([]);
   });
 
+  it('deleteCollection emits recordUpdated on the universe when the deleted collection was linked', async () => {
+    const events = [];
+    const { recordEvents } = await import('./sharing/recordEvents.js');
+    const listener = (evt) => events.push(evt);
+    recordEvents.on('updated', listener);
+    try {
+      const linked = await svc.findOrCreateUniverseCollection({
+        universeId: 'u-1', universeName: 'Foo',
+      });
+      events.length = 0; // ignore the create-time emit
+      await svc.deleteCollection(linked.id);
+      expect(events).toContainEqual(expect.objectContaining({ recordKind: 'universe', recordId: 'u-1' }));
+    } finally {
+      recordEvents.off('updated', listener);
+    }
+  });
+
+  it('deleteCollection does NOT emit when the deleted collection was unlinked', async () => {
+    const events = [];
+    const { recordEvents } = await import('./sharing/recordEvents.js');
+    const listener = (evt) => events.push(evt);
+    recordEvents.on('updated', listener);
+    try {
+      const c = await svc.createCollection({ name: 'Orphan' });
+      events.length = 0;
+      await svc.deleteCollection(c.id);
+      expect(events).toEqual([]);
+    } finally {
+      recordEvents.off('updated', listener);
+    }
+  });
+
   it('findOrCreateCollectionByName returns the existing collection on case-insensitive match', async () => {
     const a = await svc.createCollection({ name: 'World: Foo' });
     const reused = await svc.findOrCreateCollectionByName({ name: '  world: foo  ' });
