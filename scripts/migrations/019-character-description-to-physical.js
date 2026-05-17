@@ -112,7 +112,7 @@ export default {
       return { changed: false, reason: 'no-legacy-description-fields' };
     }
     console.log(
-      `📝 migration 017: normalized character.description → physicalDescription on ${totalRecords} record(s), ${totalChars} character(s) (series=${seriesResult.recordsTouched}, universe=${universeResult.recordsTouched})`,
+      `📝 migration 019: normalized character.description → physicalDescription on ${totalRecords} record(s), ${totalChars} character(s) (series=${seriesResult.recordsTouched}, universe=${universeResult.recordsTouched})`,
     );
     return { changed: true, seriesRecords: seriesResult.recordsTouched, universeRecords: universeResult.recordsTouched, charactersTouched: totalChars };
   },
