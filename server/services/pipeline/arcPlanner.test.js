@@ -1003,6 +1003,14 @@ describe('arcPlanner — generateComicCoverConcepts', () => {
     expect(stageRunnerSpy).toBeUndefined();
   });
 
+  it('rejects an empty-string target (does not silently fall back to "both")', async () => {
+    const { issue } = await setupIssue();
+    await expect(
+      planner.generateComicCoverConcepts(issue.id, { target: '' }),
+    ).rejects.toMatchObject({ message: expect.stringContaining('Invalid target') });
+    expect(stageRunnerSpy).toBeUndefined();
+  });
+
   it('treats a whitespace-only existing script as blank and seeds it (client/server parity)', async () => {
     // The client gate uses `.trim()` — the server must agree so a
     // " \n " script doesn't enable the button but skip seeding.

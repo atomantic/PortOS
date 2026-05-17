@@ -290,6 +290,7 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
   const [generatingConcept, setGeneratingConcept] = useState({ cover: false, backCover: false });
 
   const handleGenerateConcept = async (target) => {
+    const label = target === 'backCover' ? 'Back cover' : 'Cover';
     setGeneratingConcept((g) => ({ ...g, [target]: true }));
     const result = await generatePipelineComicCoverConcepts(issue.id, {
       target,
@@ -297,13 +298,12 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
       providerOverride: series?.llm?.provider || undefined,
       modelOverride: series?.llm?.model || undefined,
     }, { silent: true }).catch((err) => {
-      toast.error(err.message || 'Failed to generate cover concept');
+      toast.error(err.message || `Failed to generate ${label.toLowerCase()} concept`);
       return null;
     });
     setGeneratingConcept((g) => ({ ...g, [target]: false }));
     if (!result) return;
     if (result.stage) onStageUpdate?.('comicPages', result.stage, result.issue);
-    const label = target === 'backCover' ? 'Back cover' : 'Cover';
     const seededThis = target === 'backCover' ? result.seeded?.backCover : result.seeded?.cover;
     toast.success(seededThis
       ? `${label} concept seeded`
@@ -313,26 +313,31 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
   const renderConceptButton = (target, script) => {
     const generating = generatingConcept[target];
     const filled = !!(script || '').trim();
+    const disabled = generating || filled;
     const noun = target === 'backCover' ? 'back-cover' : 'cover';
     const tooltip = filled
       ? `Clear the ${noun} concept first — the LLM only seeds blank concepts to avoid clobbering your edits.`
       : `Have the LLM propose a ${noun} concept for this issue`;
-    // Tooltip on the wrapper, not the button: most browsers skip hover
-    // events on disabled controls so a `title` on `<button disabled>` is
-    // invisible. Mirrors the ScheduleTab.jsx pattern.
+    // Use `aria-disabled` (not the DOM `disabled` attribute) so the
+    // button stays in the keyboard tab order and the `title` tooltip is
+    // discoverable on focus as well as hover. `disabled` removes the
+    // element from tab order entirely and most browsers suppress hover
+    // events on it, hiding the "clear first" guidance from keyboard +
+    // screen-reader users. Click handler is gated on the same flag.
     return (
-      <span title={tooltip} className="inline-block">
-        <button
-          type="button"
-          onClick={() => handleGenerateConcept(target)}
-          disabled={generating || filled}
-          aria-disabled={generating || filled || undefined}
-          className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-port-accent hover:text-white border border-port-border bg-port-bg hover:border-port-accent/40 disabled:opacity-40 disabled:cursor-not-allowed"
-        >
-          {generating ? <Loader2 size={12} className="animate-spin" /> : <Wand2 size={12} />}
-          Generate concept (LLM)
-        </button>
-      </span>
+      <button
+        type="button"
+        onClick={disabled ? undefined : () => handleGenerateConcept(target)}
+        aria-disabled={disabled || undefined}
+        title={tooltip}
+        aria-label={tooltip}
+        className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-port-accent hover:text-white border border-port-border bg-port-bg hover:border-port-accent/40 ${
+          disabled ? 'opacity-40 cursor-not-allowed' : ''
+        }`}
+      >
+        {generating ? <Loader2 size={12} className="animate-spin" /> : <Wand2 size={12} />}
+        Generate concept (LLM)
+      </button>
     );
   };
 

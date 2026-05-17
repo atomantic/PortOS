@@ -500,7 +500,9 @@ export async function generateVolumeCoverConcepts(seriesId, seasonId, options = 
  * the pair so the back can complement the front.
  */
 export async function generateComicCoverConcepts(issueId, options = {}) {
-  const target = options.target || 'both';
+  // `??` (not `||`) so an empty-string target falls through to the
+  // invalid-target guard below instead of silently defaulting to 'both'.
+  const target = options.target ?? 'both';
   if (target !== 'cover' && target !== 'backCover' && target !== 'both') {
     throw makeErr(`Invalid target: ${target}`, ERR_VALIDATION);
   }
