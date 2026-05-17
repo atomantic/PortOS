@@ -135,10 +135,18 @@ export default function UniverseCanon() {
 
   // If the URL names a series that isn't in this universe's usage map
   // (stale bookmark, deleted series), drop the param silently so the page
-  // doesn't show an empty "filtered" view forever. One-shot — runs when
-  // usage first resolves; later URL changes are driven by the dropdown
-  // (handleSeriesFilterChange) which only sets known-good ids.
+  // doesn't show an empty "filtered" view forever. One-shot per universe —
+  // runs when usage first resolves; later URL changes are driven by the
+  // dropdown (handleSeriesFilterChange) which only sets known-good ids.
+  // Reset on universeId change so navigating between universes within the
+  // same mount validates each universe's filter param independently. Also
+  // clear `usage` so the validation effect doesn't run against the prior
+  // universe's data during the transition.
   const validatedRef = useRef(false);
+  useEffect(() => {
+    validatedRef.current = false;
+    setUsage(null);
+  }, [universeId]);
   useEffect(() => {
     if (!usage || validatedRef.current) return;
     validatedRef.current = true;
