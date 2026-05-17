@@ -9,8 +9,13 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, readFileSync, mkdirSync, existsSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { createHash } from 'crypto';
 
-import migration from './019-arc-volume-prompts-canon-context.js';
+import migration, { applyMigration } from './019-arc-volume-prompts-canon-context.js';
+
+const md5 = (str) => createHash('md5')
+  .update(str.replace(/\r\n/g, '\n').replace(/\r/g, '\n'))
+  .digest('hex');
 
 // Mirror of the migration's hash table — when these change the test fixtures
 // below need to mirror the change too.
@@ -94,26 +99,36 @@ describe('migration 019 — arc/volume prompt canon context', () => {
     }
   });
 
-  it('upgrades a pre-Phase B file (matching ACCEPTED_OLD_MD5[0]) to the new sample content', async () => {
-    // Fetches the pre-Phase B body via git so we can plant a fixture whose
-    // hash genuinely matches `ACCEPTED_OLD_MD5['pipeline-arc-resolve.md'][0]`.
-    // Pinned to commit d4002a39 (the merge-base before Phase B landed). If
-    // git isn't on PATH or the commit is gone (e.g. shallow clone), skip —
-    // the no-op + customized-skip + idempotent paths cover the other branches.
-    let preBody;
-    try {
-      const { execSync } = await import('node:child_process');
-      preBody = execSync('git show d4002a39:data.sample/prompts/stages/pipeline-arc-resolve.md', {
-        cwd: repoRoot,
-        encoding: 'utf-8',
-      });
-    } catch {
-      return; // git unavailable — exercise via the other branches.
+  it('NEW_SHIPPED_MD5 matches the live data.sample bodies (drift catch)', () => {
+    // Without this assertion, a future template edit that forgets to bump
+    // NEW_SHIPPED_MD5 would make the migration classify the sample-shaped
+    // file as "customized" and silently skip the upgrade — the idempotency
+    // test below would still pass (it checks "stays unchanged"), masking
+    // the regression. This assertion fails loudly at release time.
+    for (const filename of Object.keys(NEW_SHIPPED_MD5)) {
+      const liveHash = md5(sampleBody(filename));
+      expect(liveHash).toBe(NEW_SHIPPED_MD5[filename]);
     }
-    writeFileSync(join(stagesDir, 'pipeline-arc-resolve.md'), preBody);
-    await migration.up({ rootDir });
-    expect(readFileSync(join(stagesDir, 'pipeline-arc-resolve.md'), 'utf-8'))
-      .toBe(sampleBody('pipeline-arc-resolve.md'));
+  });
+
+  it('upgrades when on-disk hash matches an accepted-old entry (synthetic fixture)', async () => {
+    // Plants a fixture body, registers its MD5 as the migration's "accepted
+    // old" hash via the pure applyMigration helper, then asserts the file
+    // gets rewritten to the data.sample version. Exercises the OLD→NEW
+    // upgrade branch without depending on git history (shallow clones +
+    // archive downloads work).
+    const filename = 'pipeline-arc-resolve.md';
+    const fakeOldBody = `# synthetic pre-migration body for ${filename}\n`;
+    const fakeOldHash = md5(fakeOldBody);
+
+    writeFileSync(join(stagesDir, filename), fakeOldBody);
+    const result = await applyMigration({
+      rootDir,
+      accepted: { [filename]: [fakeOldHash] },
+      current: { [filename]: md5(sampleBody(filename)) },
+    });
+    expect(result).toMatchObject({ updated: 1, skipped: 0 });
+    expect(readFileSync(join(stagesDir, filename), 'utf-8')).toBe(sampleBody(filename));
   });
 
   it('skips (does not clobber) a customized file whose hash matches neither old nor new', async () => {

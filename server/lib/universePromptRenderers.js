@@ -32,15 +32,32 @@ export function renderCompositesForPrompt(composites, { showLocked = false } = {
     .join('\n');
 }
 
+// Caps for canon → prompt rendering. Sanitized universes can hold up to
+// BIBLE_LIMITS.ENTRIES_PER_BIBLE_MAX (200) entries per kind with multi-KB
+// descriptions; rendering all of them into every arc/verify prompt would
+// inflate token cost + latency by orders of magnitude. Truncate at the
+// rendering layer (not in canon storage) so the on-disk universe stays rich
+// while LLM context stays bounded.
+export const CANON_PROMPT_ENTRIES_PER_KIND_MAX = 40;
+export const CANON_PROMPT_DESCRIPTION_MAX = 300;
+
+const truncDesc = (s) => {
+  if (typeof s !== 'string') return '';
+  const trimmed = s.trim();
+  if (trimmed.length <= CANON_PROMPT_DESCRIPTION_MAX) return trimmed;
+  return `${trimmed.slice(0, CANON_PROMPT_DESCRIPTION_MAX - 1).trimEnd()}…`;
+};
+
 // Per-canon-kind formatting table — header label + per-entry line builder.
 // One row per canon trunk; renderCanonForPrompt iterates this so a future
-// kind addition (or field tweak) is a one-line change.
+// kind addition (or field tweak) is a one-line change. formatEntry truncates
+// the long description field so a single entry can't dominate the prompt.
 const CANON_SECTIONS = [
   {
     field: 'characters',
     header: 'characters',
     formatEntry: (c) => {
-      const desc = c.physicalDescription || c.description || '';
+      const desc = truncDesc(c.physicalDescription || c.description || '');
       const role = c.role ? ` [${c.role}]` : '';
       return `  - ${c.name}${role}${desc ? `: ${desc}` : ''}`;
     },
@@ -50,7 +67,7 @@ const CANON_SECTIONS = [
     header: 'places',
     formatEntry: (s) => {
       const label = s.name || s.slugline || '(unnamed)';
-      const desc = s.description || '';
+      const desc = truncDesc(s.description || '');
       const palette = s.palette ? ` palette: ${s.palette}` : '';
       return `  - ${label}${desc ? `: ${desc}` : ''}${palette}`;
     },
@@ -59,8 +76,8 @@ const CANON_SECTIONS = [
     field: 'objects',
     header: 'objects',
     formatEntry: (o) => {
-      const desc = o.description || '';
-      const sig = o.significance ? ` (${o.significance})` : '';
+      const desc = truncDesc(o.description || '');
+      const sig = o.significance ? ` (${truncDesc(o.significance)})` : '';
       return `  - ${o.name}${desc ? `: ${desc}` : ''}${sig}`;
     },
   },
@@ -70,13 +87,22 @@ const CANON_SECTIONS = [
 // prompt-friendly text block. Distinct from renderCategoriesForPrompt because
 // canon entries are first-class named entities with rich metadata, not
 // exploratory variations — the arc planner references them by name.
+// Caps each section at CANON_PROMPT_ENTRIES_PER_KIND_MAX entries; an
+// "(… + N more)" footer signals truncation so the LLM doesn't assume the
+// canon is complete.
 export function renderCanonForPrompt(world) {
   if (!world || typeof world !== 'object') return '';
   const sections = [];
   for (const { field, header, formatEntry } of CANON_SECTIONS) {
     const entries = Array.isArray(world[field]) ? world[field] : [];
     if (!entries.length) continue;
-    sections.push(`${header}:\n${entries.map(formatEntry).join('\n')}`);
+    const shown = entries.slice(0, CANON_PROMPT_ENTRIES_PER_KIND_MAX);
+    const hiddenCount = entries.length - shown.length;
+    const lines = shown.map(formatEntry);
+    if (hiddenCount > 0) {
+      lines.push(`  - (… + ${hiddenCount} more ${header} not shown — prompt budget reached)`);
+    }
+    sections.push(`${header}:\n${lines.join('\n')}`);
   }
   return sections.join('\n\n');
 }

@@ -435,8 +435,22 @@ export async function expandWorldTemplate({
   const rawCategories = parsed.categories && typeof parsed.categories === 'object' ? parsed.categories : {};
   const retiredCharBucket = rawCategories.characters;
   let rawCharacters = Array.isArray(parsed.characters) ? [...parsed.characters] : [];
-  if (retiredCharBucket && Array.isArray(retiredCharBucket.variations)) {
-    for (const v of retiredCharBucket.variations) {
+  // Accept both shapes normalizeCategories accepts: object with `variations`
+  // OR raw array. Without the raw-array branch, an LLM emitting
+  // `categories: { characters: ["Ash", ...] }` would have its entries dropped
+  // by sanitizeCategories on save instead of folding into canon.
+  const retiredVariations = Array.isArray(retiredCharBucket)
+    ? retiredCharBucket
+    : Array.isArray(retiredCharBucket?.variations)
+      ? retiredCharBucket.variations
+      : null;
+  if (retiredVariations) {
+    for (const v of retiredVariations) {
+      if (typeof v === 'string') {
+        const trimmed = v.trim();
+        if (trimmed) rawCharacters.push({ name: trimmed });
+        continue;
+      }
       if (!v || typeof v !== 'object' || !v.label) continue;
       rawCharacters.push({ name: v.label, prompt: v.prompt });
     }

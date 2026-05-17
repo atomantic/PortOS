@@ -68,56 +68,64 @@ const NEW_SHIPPED_MD5 = {
   'pipeline-volume-verify.md':  '49458d36700cb94e34806d536ffe2940',
 };
 
+// Pure core — exposed for unit tests so the OLD→NEW upgrade branch can be
+// exercised with synthetic hash tables instead of pinning to a git commit.
+export async function applyMigration({ rootDir, accepted = ACCEPTED_OLD_MD5, current = NEW_SHIPPED_MD5 }) {
+  const stagesDir = join(rootDir, 'data', 'prompts', 'stages');
+  const sampleDir = join(rootDir, 'data.sample', 'prompts', 'stages');
+
+  let updated = 0;
+  let alreadyCurrent = 0;
+  let skipped = 0;
+
+  for (const filename of Object.keys(accepted)) {
+    const dataPath = join(stagesDir, filename);
+    const samplePath = join(sampleDir, filename);
+
+    const existing = await readFile(dataPath, 'utf-8').catch((err) => {
+      if (err.code !== 'ENOENT') throw err;
+      return null;
+    });
+
+    if (existing === null) {
+      // setup-data.js will copy it on next run; nothing for us to do.
+      console.log(`📄 arc-prompt ${filename}: not present in data/, will be created by setup-data.js`);
+      continue;
+    }
+
+    const existingMd5 = md5(existing);
+
+    if (existingMd5 === current[filename]) {
+      alreadyCurrent++;
+      continue;
+    }
+
+    const acceptedOld = accepted[filename];
+    if (!acceptedOld.includes(existingMd5)) {
+      console.warn(
+        `⚠️  arc-prompt ${filename} has been customized — skipping auto-update.\n` +
+        `   To pick up {{worldCanonText}} manually, diff:\n` +
+        `     data.sample/prompts/stages/${filename}\n` +
+        `   against your current:\n` +
+        `     data/prompts/stages/${filename}\n` +
+        `   and add the new "World canon" block in the same position as in the sample template.`,
+      );
+      skipped++;
+      continue;
+    }
+
+    const sampleContent = await readFile(samplePath, 'utf-8');
+    await writeFile(dataPath, sampleContent);
+    console.log(`✅ updated arc-prompt: ${filename}`);
+    updated++;
+  }
+
+  return { updated, alreadyCurrent, skipped };
+}
+
 export default {
   async up({ rootDir }) {
-    const stagesDir = join(rootDir, 'data', 'prompts', 'stages');
-    const sampleDir = join(rootDir, 'data.sample', 'prompts', 'stages');
-
-    let updated = 0;
-    let alreadyCurrent = 0;
-    let skipped = 0;
-
-    for (const filename of Object.keys(ACCEPTED_OLD_MD5)) {
-      const dataPath = join(stagesDir, filename);
-      const samplePath = join(sampleDir, filename);
-
-      const existing = await readFile(dataPath, 'utf-8').catch((err) => {
-        if (err.code !== 'ENOENT') throw err;
-        return null;
-      });
-
-      if (existing === null) {
-        // setup-data.js will copy it on next run; nothing for us to do.
-        console.log(`📄 arc-prompt ${filename}: not present in data/, will be created by setup-data.js`);
-        continue;
-      }
-
-      const existingMd5 = md5(existing);
-
-      if (existingMd5 === NEW_SHIPPED_MD5[filename]) {
-        alreadyCurrent++;
-        continue;
-      }
-
-      const acceptedOld = ACCEPTED_OLD_MD5[filename];
-      if (!acceptedOld.includes(existingMd5)) {
-        console.warn(
-          `⚠️  arc-prompt ${filename} has been customized — skipping auto-update.\n` +
-          `   To pick up {{worldCanonText}} manually, diff:\n` +
-          `     data.sample/prompts/stages/${filename}\n` +
-          `   against your current:\n` +
-          `     data/prompts/stages/${filename}\n` +
-          `   and add the new "World canon" block in the same position as in the sample template.`,
-        );
-        skipped++;
-        continue;
-      }
-
-      const sampleContent = await readFile(samplePath, 'utf-8');
-      await writeFile(dataPath, sampleContent);
-      console.log(`✅ updated arc-prompt: ${filename}`);
-      updated++;
-    }
+    const { updated, alreadyCurrent, skipped } = await applyMigration({ rootDir });
 
     if (updated > 0) {
       console.log(`📝 arc-prompt canon-context migration: ${updated} updated, ${alreadyCurrent} already current, ${skipped} skipped (customized)`);
