@@ -68,10 +68,6 @@ const KINDS = [
   },
 ];
 
-// Mirrors server-side `applyWorldStyle` (visualStages.js): the series'
-// optional `stylePromptOverride` prepends ahead of the universe's embrace
-// chip list, joined with the same `'. '` separator the server uses. Without
-// this parity, client preview renders drift from comic-page renders.
 export default function NounsStage({ issue, series }) {
   const mountedRef = useMounted();
   const prose = (issue.stages?.prose?.output || '').trim();
