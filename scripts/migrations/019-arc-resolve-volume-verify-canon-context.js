@@ -1,7 +1,12 @@
 /**
- * Add `{{worldCanonText}}` context block to arc-verify + arc-resolve prompt
- * templates so the LLM sees named universe canon (characters/places/objects)
- * alongside the existing exploratory `worldCategoriesText`.
+ * Add `{{worldCanonText}}` context block to the arc-resolve and
+ * volume-verify prompt templates so the LLM sees named universe canon
+ * (characters/places/objects) alongside the existing exploratory
+ * `worldCategoriesText`.
+ *
+ * Updates (per ACCEPTED_OLD_MD5 below):
+ *   - data/prompts/stages/pipeline-arc-resolve.md
+ *   - data/prompts/stages/pipeline-volume-verify.md
  *
  * Why:
  *   Phase A retired the default `characters` category; characters now live in

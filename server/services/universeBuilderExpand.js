@@ -224,7 +224,14 @@ const normalizeCategories = (raw) => {
     let variations = [];
     if (Array.isArray(node)) variations = node;
     else if (Array.isArray(node?.variations)) variations = node.variations;
+    // Forward the LLM-returned `kind` (if present) so sanitizeCategory can
+    // honor it. Without this passthrough, every custom bucket falls back to
+    // the WORLD_CATEGORY_DEFAULT_KINDS map (or `other`), and "kind"-tagged
+    // buckets like `factions: { kind: 'characters' }` silently land under the
+    // wrong canon trunk in the UI despite the prompt contract advertising it.
+    const rawKind = node && typeof node === 'object' && !Array.isArray(node) ? node.kind : undefined;
     out[key] = {
+      ...(rawKind !== undefined ? { kind: rawKind } : {}),
       // Clamp to the same per-category cap the route schema enforces (50)
       // so a runaway LLM response can't bloat /expand output.
       variations: variations

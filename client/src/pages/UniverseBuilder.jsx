@@ -35,6 +35,7 @@ import OriginBadge from '../components/sharing/OriginBadge';
 import UniverseCanonSection from '../components/universe/UniverseCanonSection';
 import { deriveAvailableBackends, IMAGE_GEN_MODE } from '../lib/imageGenBackends';
 import { PIPELINE_IMAGE_DEFAULTS, readPipelineImageSettings } from '../lib/pipelineImageDefaults';
+import { normalizeSlugline } from '../lib/scenePrompt';
 
 const CATEGORY_LABELS = {
   landscapes: 'Landscapes',
@@ -77,20 +78,28 @@ const mergeVariations = (existing, fresh) => {
 // AND slugline (for settings) so an expand that re-emits "Foundry City" or
 // "INT. FOUNDRY CITY — DAY" can't create a phantom duplicate. Mirrors the
 // server-side dedupe in backfillCanonFromCategories (storyBible#normalizeBibleName).
+//
+// Sluglines use `normalizeSlugline` (same identity rule the rest of the app
+// uses — `server/lib/scenePrompt.js` + `client/src/lib/scenePrompt.js` +
+// `storyBible.js` MERGE_CONFIG.setting.keyFields). Without this, sluglines
+// that differ only in dash style or punctuation ("INT. FOUNDRY CITY — DAY"
+// vs "INT FOUNDRY CITY - DAY") would land as two separate place-canon
+// entries even though every downstream lookup treats them as one.
 const mergeCanonByName = (existing, fresh) => {
   // Empty/missing fresh — return `existing` unchanged (preserve reference so
   // a no-op expand doesn't trigger downstream identity-comparing effects).
   if (!fresh?.length) return existing || [];
   const norm = (s) => (typeof s === 'string' ? s.trim().toLowerCase() : '');
+  const normSlug = (s) => (typeof s === 'string' ? normalizeSlugline(s) : '');
   const seen = new Set();
   for (const e of existing || []) {
     if (e?.name) seen.add(norm(e.name));
-    if (e?.slugline) seen.add(norm(e.slugline));
+    if (e?.slugline) seen.add(normSlug(e.slugline));
   }
   const merged = [...(existing || [])];
   for (const e of fresh) {
     const nameKey = norm(e?.name);
-    const sluglineKey = norm(e?.slugline);
+    const sluglineKey = normSlug(e?.slugline);
     if ((nameKey && seen.has(nameKey)) || (sluglineKey && seen.has(sluglineKey))) continue;
     if (nameKey) seen.add(nameKey);
     if (sluglineKey) seen.add(sluglineKey);
@@ -419,6 +428,14 @@ export default function UniverseBuilder() {
       styleNotes: draft.styleNotes || '',
       categories: draft.categories,
       compositeSheets: draft.compositeSheets || [],
+      // Canon arrays must be included on the manual Save/Create path too —
+      // a brand-new world that took the "review then Save" toast path would
+      // otherwise drop every expanded canon entry on first create, since
+      // only the auto-save branch (which only runs for already-saved worlds)
+      // forwards them. See review-resolved Copilot finding on PRRT_kwDOQx8jQ86CpLRw.
+      characters: draft.characters || [],
+      settings: draft.settings || [],
+      objects: draft.objects || [],
       influences: ensureInfluences(draft.influences),
       locked: draft.locked || {},
       llm: draft.llm || {},

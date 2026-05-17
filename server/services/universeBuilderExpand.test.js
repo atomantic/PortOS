@@ -225,6 +225,26 @@ describe("universeBuilderExpand.normalizeCategories", () => {
     const out = normalizeCategories({ factions: "not an object" });
     expect(out.factions).toMatchObject({ variations: [] });
   });
+
+  it("forwards LLM-returned `kind` so custom buckets land under the right trunk", () => {
+    // The expansion prompt asks the LLM to tag each category with a `kind`.
+    // Without explicit passthrough in the normalizer, that tag is discarded
+    // and every custom bucket falls back to the default-map / `other` —
+    // breaking the contract that `factions: { kind: 'characters' }` lands
+    // under the characters canon trunk in the UI.
+    const out = normalizeCategories({
+      factions: {
+        kind: "characters",
+        variations: [{ label: "Wake Jackals", prompt: "scavenger raiders" }],
+      },
+      gear: {
+        kind: "objects",
+        variations: [{ label: "Bone hook", prompt: "carved bone hook" }],
+      },
+    });
+    expect(out.factions.kind).toBe("characters");
+    expect(out.gear.kind).toBe("objects");
+  });
 });
 
 describe("universeBuilderExpand.normalizeCompositeSheets", () => {
