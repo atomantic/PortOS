@@ -3119,7 +3119,15 @@ function RenderTab({
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <button
-            onClick={() => handleRender({ promptMode: 'all' })}
+            onClick={() => handleRender({
+              promptMode: 'all',
+              // Both `scopedPromptCount` (client) and `compilePrompts` (server)
+              // skip canon entirely when `canonSelection` is omitted. The button
+              // label promises "everything", so we must explicitly select every
+              // canon trunk — derived from TRUNK_TABS so the set stays in sync
+              // when a new trunk is added.
+              canonSelection: Object.fromEntries(TRUNK_TABS.map((t) => [t.kind, 'all'])),
+            })}
             disabled={rendering || !selectedId || totalEverything === 0 || availableBackends.length === 0}
             className="px-4 py-2 bg-port-accent hover:bg-port-accent/90 disabled:opacity-50 text-white rounded flex items-center gap-2 min-h-[40px]"
             title="Render every canon entry + every variation + every composite board with these knobs"
