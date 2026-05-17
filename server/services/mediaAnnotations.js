@@ -49,8 +49,12 @@ function sanitizeAuthorEntry(raw) {
 }
 
 // Safety net for a stale install: migration 014 rewrites the file once, but a
-// hand-edited or pre-014 file still parses correctly here.
-async function liftLegacyEntry(rawEntry) {
+// hand-edited or pre-014 file still parses correctly here. Identity inputs
+// (`localInstanceId`, `defaultAuthorName`) are resolved ONCE per readAll() and
+// passed in — when the file holds N legacy entries the previous shape paid
+// N awaits on getInstanceId() + N on resolveLocalAuthorName() while every
+// call returned the same value.
+function liftLegacyEntry(rawEntry, { localInstanceId, defaultAuthorName }) {
   const isLegacy = rawEntry
     && typeof rawEntry === 'object'
     && !rawEntry.authors
@@ -58,9 +62,8 @@ async function liftLegacyEntry(rawEntry) {
   if (!isLegacy) return rawEntry;
   const author = sanitizeAuthorEntry(rawEntry);
   if (!author) return null;
-  const instanceId = await getInstanceId().catch(() => 'unknown');
-  const authorName = author.authorName || await resolveLocalAuthorName().catch(() => '');
-  return { authors: { [instanceId]: { ...author, authorName } } };
+  const authorName = author.authorName || defaultAuthorName;
+  return { authors: { [localInstanceId]: { ...author, authorName } } };
 }
 
 async function readAll() {
@@ -69,10 +72,17 @@ async function readAll() {
   const annotations = raw && typeof raw.annotations === 'object' && raw.annotations !== null
     ? raw.annotations
     : {};
+  // Resolve identity inputs ONCE for the whole file scan — every legacy entry
+  // would otherwise repeat both awaits below.
+  const [localInstanceId, defaultAuthorName] = await Promise.all([
+    getInstanceId().catch(() => 'unknown'),
+    resolveLocalAuthorName().catch(() => ''),
+  ]);
+  const liftCtx = { localInstanceId, defaultAuthorName };
   const out = {};
   for (const [key, value] of Object.entries(annotations)) {
     if (!isValidKey(key)) continue;
-    const lifted = await liftLegacyEntry(value);
+    const lifted = liftLegacyEntry(value, liftCtx);
     if (!lifted || !lifted.authors || typeof lifted.authors !== 'object') continue;
     const authors = {};
     for (const [instanceId, sub] of Object.entries(lifted.authors)) {

@@ -113,27 +113,23 @@ export async function deleteSeason(seriesId, seasonId, { reassignTo = null } = {
     }
   }
   // Re-point child issues first so a mid-write crash doesn't leave them
-  // dangling against a deleted season id. `updateIssue` is per-issue (and
-  // each call writes the file), so we batch-iterate; the data set is small
-  // (issues per series ~< 100) so the cost is bounded.
-  const childIssues = await issuesSvc.listIssues({ seriesId });
-  const reassignList = childIssues.filter((iss) => iss.seasonId === seasonId);
+  // dangling against a deleted season id. `bulkReassignSeason` collapses what
+  // used to be N per-issue queueIssueWrite cycles into a single readState →
+  // in-memory mutate → writeState → one renumber pass.
+  //
+  // Each updateSeries + bulkReassignSeason still emits `emitRecordUpdated('series', …)`. Without
+  // suppression those two events would schedule two debounced re-exports of the same
+  // series; the exporter then logs "imageJobId not found" warnings per re-run for
+  // any image jobs that have already aged out of the archive. Collapse the pair
+  // into a single re-export by suppressing during the writes and emitting once
+  // at the end against the final state.
   const merged = seasons.filter((s) => s.id !== seasonId);
-  // Each updateIssue + updateSeries emits `emitRecordUpdated('series', …)`. Without
-  // suppression a cascade of N issues would schedule N debounced re-exports of the
-  // same series; the exporter then logs "imageJobId not found" warnings per re-run
-  // for any image jobs that have already aged out of the archive. Collapse the
-  // cascade into a single re-export by suppressing during the writes and emitting
-  // once at the end against the final state.
+  let reassignedIssueCount = 0;
   await withReexportSuppressed('series', seriesId, async () => {
-    for (const iss of reassignList) {
-      await issuesSvc.updateIssue(iss.id, { seasonId: reassignTo }, { skipRenumber: true });
-    }
+    const result = await issuesSvc.bulkReassignSeason(seriesId, seasonId, reassignTo);
+    reassignedIssueCount = result.reassigned;
     await seriesSvc.updateSeries(seriesId, { seasons: merged });
-    // One renumber pass after the bulk reassign + season removal so the loop
-    // doesn't pay for N per-update renumbers.
-    await issuesSvc.recomputeIssueNumbersForSeries(seriesId);
   });
   emitRecordUpdated('series', seriesId);
-  return { id: seasonId, reassignedIssueCount: reassignList.length, reassignedTo: reassignTo };
+  return { id: seasonId, reassignedIssueCount, reassignedTo: reassignTo };
 }

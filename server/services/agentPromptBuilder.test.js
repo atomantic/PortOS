@@ -260,6 +260,47 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).not.toMatch(/## Completion Workflow/);
     });
 
+    it('worktreeCommitGuidance: existing-branch wins over slashdo/PR — emits the review-fix push wording', () => {
+      // When the worktree reuses a pre-existing PR branch (e.g. a review-loop
+      // follow-up agent picking up where the prior agent left off), the agent
+      // must push directly — the PR points at this branch and Copilot only
+      // sees commits that are actually pushed. This branch is selected even
+      // for a Claude Code CLI provider with `openPR: true`, because the PR
+      // already exists; opening another one would be wrong.
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: { openPR: true, simplify: true } }),
+        '/r',
+        { branchName: 'feat-x', worktreePath: '/tmp/wt', existingBranch: true },
+        isTruthyMeta,
+        { isTui: false, providerId: 'claude-code' });
+      expect(prompt).toMatch(/## Git Worktree/);
+      expect(prompt).toMatch(/\*\(pre-existing PR branch\)\*/);
+      // The review-fix push wording — distinct from the slashdo/post-exit ones.
+      expect(prompt).toMatch(/Commit and \*\*push\*\* any review-fix commits to this branch/);
+      expect(prompt).toMatch(/git pull --rebase/);
+      // And it must NOT emit the slashdo-driven Completion guidance for this branch.
+      expect(prompt).not.toMatch(/the \*\*Completion\*\* section below drives the push and PR/);
+    });
+
+    it('worktreeCommitGuidance: hasSlashdo + !willOpenPR emits the push-only Completion wording', () => {
+      // Claude Code CLI with a worktree but no PR (e.g. a managed-app task
+      // whose flow is "push the branch, no PR"). The agent owns its own
+      // /simplify + /do:push, so the worktree guidance points at the
+      // Completion section's push (not the PR variant).
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: { openPR: false, simplify: true } }),
+        '/r',
+        { branchName: 'feat-x', worktreePath: '/tmp/wt' },
+        isTruthyMeta,
+        { isTui: false, providerId: 'claude-code' });
+      expect(prompt).toMatch(/## Git Worktree/);
+      // Push-only Completion wording — NOT the "push and PR" variant.
+      expect(prompt).toMatch(/the \*\*Completion\*\* section below drives the push\./);
+      expect(prompt).not.toMatch(/drives the push and PR/);
+      // And NOT the post-exit handoff message (that's the codex/gemini path).
+      expect(prompt).not.toMatch(/The system will push and open a PR after you exit/);
+    });
+
     it('renders the pipeline block when previousStageAgentId is present', () => {
       const prompt = buildLightContextPrompt(makeTask({
         metadata: { pipeline: {

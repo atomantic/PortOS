@@ -8,12 +8,17 @@ export const PORTOS_APP_ID = 'portos-default';
 export async function request(endpoint, options = {}) {
   const { silent, ...fetchOptions } = options;
   const url = `${API_BASE}${endpoint}`;
+  // Skip the JSON content-type header for FormData bodies — the browser must
+  // set `multipart/form-data; boundary=…` itself, and any pre-supplied value
+  // (including ours) suppresses the auto-boundary and breaks the upload.
+  const isFormData = typeof FormData !== 'undefined' && fetchOptions.body instanceof FormData;
+  const baseHeaders = isFormData ? {} : { 'Content-Type': 'application/json' };
   const config = {
+    ...fetchOptions,
     headers: {
-      'Content-Type': 'application/json',
+      ...baseHeaders,
       ...fetchOptions.headers
-    },
-    ...fetchOptions
+    }
   };
 
   const response = await fetch(url, config).catch(() => null);

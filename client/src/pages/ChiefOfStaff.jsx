@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useSocket } from '../hooks/useSocket';
+import { useLocalStorageBool } from '../hooks/useLocalStorageBool';
 import * as api from '../services/api';
 import { Play, Square, Clock, CheckCircle, AlertCircle, Cpu, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Brain, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import toast from '../components/ui/Toast';
@@ -62,8 +63,10 @@ export default function ChiefOfStaff() {
   const [liveOutputs, setLiveOutputs] = useState({});
   const [eventLogs, setEventLogs] = useState([]);
   const [agentPanelCollapsed, setAgentPanelCollapsed] = useState(false);
-  const [desktopPanelCollapsed, setDesktopPanelCollapsed] = useState(() =>
-    localStorage.getItem('cos-panel-collapsed') === 'true'
+  const [desktopPanelCollapsed, setDesktopPanelCollapsed] = useLocalStorageBool(
+    'cos-panel-collapsed',
+    false,
+    { format: 'true' },
   );
   const [activeAgentMeta, setActiveAgentMeta] = useState(null);
   const [learningSummary, setLearningSummary] = useState(null);
@@ -85,12 +88,8 @@ export default function ChiefOfStaff() {
   };
 
   const toggleDesktopPanel = useCallback(() => {
-    setDesktopPanelCollapsed(prev => {
-      const next = !prev;
-      localStorage.setItem('cos-panel-collapsed', String(next));
-      return next;
-    });
-  }, []);
+    setDesktopPanelCollapsed((prev) => !prev);
+  }, [setDesktopPanelCollapsed]);
 
   // Countdown to next evaluation
   const evalCountdown = useNextEvalCountdown(

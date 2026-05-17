@@ -154,6 +154,163 @@ ${hints.map(h => `- ${h}`).join('\n')}
 const LIGHT_CONTEXT_PROVIDER_TYPES = new Set(['tui', 'cli']);
 
 /**
+ * Build the shared task block — the description plus optional `**Target App**`
+ * and `**Screenshots**` fields. Used by BOTH the light and full prompt paths
+ * so a new task-metadata field gets surfaced in both without drift.
+ *
+ * Returns three pre-rendered slots (`description`, `targetApp`, `screenshots`).
+ * Absent fields come back as empty strings so the full path's template literal
+ * can interpolate them in fixed positions and preserve byte-identical line
+ * spacing. The light path filters out the empty strings and joins what remains.
+ *
+ * @param {Object} task
+ * @param {Object} [opts]
+ * @param {boolean} [opts.screenshotsAsList=false] - When true, render screenshots
+ *   as a `### Screenshots` header followed by a bulleted list of paths (light
+ *   path style). When false, render as a single inline `**Screenshots**: a, b`
+ *   line (full path style).
+ * @returns {{ description: string, targetApp: string, screenshots: string }}
+ */
+export function buildTaskBlock(task, { screenshotsAsList = false } = {}) {
+  const description = task.description;
+  const targetApp = task.metadata?.app ? `**Target App**: ${task.metadata.app}` : '';
+  const shots = task.metadata?.screenshots;
+  let screenshots = '';
+  if (Array.isArray(shots) && shots.length > 0) {
+    screenshots = screenshotsAsList
+      ? '### Screenshots\nUse your filesystem tools to inspect each path:\n' +
+        shots.map(s => `- \`${s}\``).join('\n')
+      : `**Screenshots**: ${shots.join(', ')}`;
+  }
+  return { description, targetApp, screenshots };
+}
+
+/**
+ * Build the **review-loop follow-up** section — the instructions for the
+ * agent spawned by `spawnReviewLoopFollowUp` to drive Copilot's review-and-fix
+ * loop until the PR merges. Same 7-step procedure, same merge command, same
+ * MERGED-state verification, same 10-iteration cap in BOTH the light and full
+ * paths — extracted so the two can't drift independently.
+ *
+ * I/O (the slashdo `/do:rpr` body) is intentionally pulled outside this helper
+ * and threaded in via `rprBody` so the function stays pure and synchronous.
+ *
+ * @param {Object} metadata - task.metadata (reviewLoopPR* fields, sourceTaskId)
+ * @param {Object} [opts]
+ * @param {boolean} [opts.verbose=false] - When true, emit the verbose prose
+ *   variant the full (api) path uses, with PR Details list and an inlined
+ *   `/do:rpr` reference. When false, emit the compact list the light path uses.
+ * @param {string|null} [opts.rprBody=null] - The loaded `/do:rpr` slashdo body.
+ *   Only appended in verbose mode; ignored in compact mode.
+ * @returns {string}
+ */
+export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false, rprBody = null } = {}) {
+  const prUrl = metadata.reviewLoopPRUrl || '';
+  const prBranch = metadata.reviewLoopPRBranch || '';
+  const prNumber = metadata.reviewLoopPRNumber ?? '';
+  const prOwner = metadata.reviewLoopPROwner ?? '';
+  const prRepo = metadata.reviewLoopPRRepo ?? '';
+  const sourceTaskId = metadata.sourceTaskId || 'unknown';
+
+  if (verbose) {
+    return `
+## Review-Loop Follow-up (PRIMARY OBJECTIVE)
+A previous agent finished implementing the work for source task **${sourceTaskId}** and opened **PR ${prUrl}** on branch \`${prBranch}\`. The system has already requested an initial Copilot code review. **Your job is to drive the review-and-fix loop to completion and merge the PR.**
+
+**Run this loop UNTIL the PR has zero unresolved Copilot comments OR you hit the iteration cap of 10:**
+
+1. Wait for the latest Copilot review to complete (poll every 5–15s, max 5 minutes per round).
+2. If there are unresolved review threads, fix them in this worktree, run the project's tests, commit (\`feat:\`/\`fix:\` prefix, no Co-Authored-By), push, and resolve the addressed threads.
+3. Re-request a Copilot review.
+4. Repeat from step 1.
+5. When Copilot returns "0 comments" / no unresolved threads, merge the PR **immediately** with this exact command (flags: \`--squash --delete-branch\`, nothing else):
+   \`\`\`bash
+   gh pr merge "${prUrl}" --squash --delete-branch
+   \`\`\`
+   ${prOwner && prRepo && prNumber ? `(Equivalent: \`gh pr merge ${prNumber} --repo ${prOwner}/${prRepo} --squash --delete-branch\`.)` : ''}
+   You have already verified the review is clean, so force the immediate merge. Adding any merge-deferral flag would leave the PR open after you exit.
+6. Confirm the PR is actually merged before exiting: \`gh pr view "${prUrl}" --json state -q .state\` must return \`MERGED\`. If it returns \`OPEN\` or \`CLOSED\`, investigate (a check is failing, a thread is still unresolved, or branch protection is blocking) — fix and retry the merge. Do NOT exit until state is \`MERGED\`.
+7. Exit. Do **not** run \`/do:push\` or open a new PR — the merge handles everything. The system will clean up your worktree on exit.
+
+**Hard stop:** if the loop hasn't converged after 10 iterations, post a PR comment summarising the unresolved blockers and exit. Do not loop indefinitely.
+
+**Repeated comments:** If a new Copilot round only re-raises feedback you intentionally rejected (with a reply explaining why), treat that round as clean and move on to merge.
+
+PR Details:
+- **URL**: ${prUrl}
+- **Branch**: \`${prBranch}\`
+${prNumber !== '' ? `- **Number**: ${prNumber}` : ''}
+${prOwner && prRepo ? `- **Repo**: ${prOwner}/${prRepo}` : ''}
+- **Source task**: ${sourceTaskId}
+${rprBody ? `\n### /do:rpr Reference (full procedure)\n\n${rprBody}\n` : ''}`;
+  }
+
+  // Compact light-path variant.
+  return [
+    '## Review-Loop Follow-up (PRIMARY OBJECTIVE)',
+    `A previous agent finished task **${sourceTaskId}** and opened **PR ${prUrl}** on \`${prBranch}\`. The system has requested an initial Copilot review. Drive the review-and-fix loop to completion and merge.`,
+    '',
+    '**Loop UNTIL zero unresolved Copilot comments OR 10 iterations:**',
+    '1. Wait for the latest Copilot review (poll 5–15s, max 5 min per round).',
+    '2. If unresolved threads: fix in this worktree, run tests, commit (`feat:`/`fix:` prefix, no Co-Authored-By), push, resolve threads.',
+    '3. Re-request a Copilot review.',
+    '4. Repeat.',
+    '5. When clean, merge **immediately** with this exact command (flags: `--squash --delete-branch`, nothing else):',
+    '   ```bash',
+    `   gh pr merge "${prUrl}" --squash --delete-branch`,
+    '   ```',
+    prOwner && prRepo && prNumber ? `   (Equivalent: \`gh pr merge ${prNumber} --repo ${prOwner}/${prRepo} --squash --delete-branch\`.)` : null,
+    '   You have already verified the review is clean, so force the immediate merge. Adding any merge-deferral flag would leave the PR open after you exit.',
+    `6. Confirm the merge happened before exiting: \`gh pr view "${prUrl}" --json state -q .state\` must return \`MERGED\`. If it returns \`OPEN\` or \`CLOSED\`, investigate (failing check, unresolved thread, branch protection) — fix and retry. Do NOT exit until state is \`MERGED\`.`,
+    '7. Exit — do NOT run `/do:push` or open a new PR.',
+    '',
+    '**Hard stop:** if not converged after 10 rounds, post a PR comment summarising blockers and exit.',
+    '**Repeated comments:** if a round only re-raises feedback you intentionally rejected (with a reply explaining why), treat as clean and merge.'
+  ].filter(Boolean).join('\n');
+}
+
+/**
+ * Build the single "## Guidelines" completion-handoff bullet for the full
+ * (api) prompt path. Mirrors the helper pattern the light path already uses
+ * (`worktreeCommitGuidance`, `buildTuiCompletionSection`) — same 4-branch
+ * decision tree (read-only / TUI / worktree+PR / worktree-only / default) but
+ * flattened into a function so reading is linear instead of a nested ternary.
+ *
+ * Returns the bullet body WITHOUT the leading `- ` marker (caller prepends),
+ * or `null` when the branch produces no text (the legacy empty-string tail).
+ *
+ * @param {Object} opts
+ * @param {boolean} opts.isReadOnly
+ * @param {boolean} opts.isTui
+ * @param {string} opts.tuiCompletionCommand - `/do:pr` or `/do:push`
+ * @param {Object|null} opts.worktreeInfo
+ * @param {boolean} opts.willOpenPR
+ * @param {boolean} opts.willReviewLoop
+ * @returns {string|null}
+ */
+export function buildCompletionGuidelineBullet({
+  isReadOnly, isTui, tuiCompletionCommand,
+  worktreeInfo, willOpenPR, willReviewLoop,
+}) {
+  if (isReadOnly) {
+    return '**This is a read-only task.** Do NOT commit, push, or modify any files in the repository. Only read data and generate reports.';
+  }
+  if (isTui) {
+    return `On successful completion, YOU run the Completion Workflow above (\`${tuiCompletionCommand}\`, write the sentinel, \`/quit\`).`;
+  }
+  if (worktreeInfo && willOpenPR) {
+    const reviewSuffix = willReviewLoop
+      ? ' For GitHub PRs, a Copilot code review will also be requested automatically (skipped on GitLab and other non-GitHub forges) — do NOT run `/do:rpr` or attempt to address review comments yourself; you will have already exited.'
+      : '';
+    return `On successful completion, the system will push your branch and open a pull request — do NOT open a PR manually. (If the task fails, no PR is opened; the worktree is then cleaned up unless a safety check preserves it for manual recovery.)${reviewSuffix}`;
+  }
+  if (worktreeInfo) {
+    return 'Your worktree branch will be automatically merged back to the source branch when your task completes — do NOT open a PR.';
+  }
+  return null;
+}
+
+/**
  * Build the agent prompt.
  *
  * Two context modes, selected by `options.providerType`:
@@ -301,44 +458,8 @@ After your task completes, the system will request a Copilot code review automat
   const isReviewLoopFollowUp = isTruthyMetaFn(task.metadata?.reviewLoopFollowUp);
   let reviewLoopFollowUpSection = '';
   if (isReviewLoopFollowUp) {
-    const prUrl = task.metadata?.reviewLoopPRUrl || '';
-    const prBranch = task.metadata?.reviewLoopPRBranch || '';
-    const prNumber = task.metadata?.reviewLoopPRNumber ?? '';
-    const prOwner = task.metadata?.reviewLoopPROwner ?? '';
-    const prRepo = task.metadata?.reviewLoopPRRepo ?? '';
-    const sourceTaskId = task.metadata?.sourceTaskId || 'unknown';
     const rprBody = await loadSlashdoFile('rpr').catch(() => null);
-
-    reviewLoopFollowUpSection = `
-## Review-Loop Follow-up (PRIMARY OBJECTIVE)
-A previous agent finished implementing the work for source task **${sourceTaskId}** and opened **PR ${prUrl}** on branch \`${prBranch}\`. The system has already requested an initial Copilot code review. **Your job is to drive the review-and-fix loop to completion and merge the PR.**
-
-**Run this loop UNTIL the PR has zero unresolved Copilot comments OR you hit the iteration cap of 10:**
-
-1. Wait for the latest Copilot review to complete (poll every 5–15s, max 5 minutes per round).
-2. If there are unresolved review threads, fix them in this worktree, run the project's tests, commit (\`feat:\`/\`fix:\` prefix, no Co-Authored-By), push, and resolve the addressed threads.
-3. Re-request a Copilot review.
-4. Repeat from step 1.
-5. When Copilot returns "0 comments" / no unresolved threads, merge the PR **immediately** with this exact command (flags: \`--squash --delete-branch\`, nothing else):
-   \`\`\`bash
-   gh pr merge "${prUrl}" --squash --delete-branch
-   \`\`\`
-   ${prOwner && prRepo && prNumber ? `(Equivalent: \`gh pr merge ${prNumber} --repo ${prOwner}/${prRepo} --squash --delete-branch\`.)` : ''}
-   You have already verified the review is clean, so force the immediate merge. Adding any merge-deferral flag would leave the PR open after you exit.
-6. Confirm the PR is actually merged before exiting: \`gh pr view "${prUrl}" --json state -q .state\` must return \`MERGED\`. If it returns \`OPEN\` or \`CLOSED\`, investigate (a check is failing, a thread is still unresolved, or branch protection is blocking) — fix and retry the merge. Do NOT exit until state is \`MERGED\`.
-7. Exit. Do **not** run \`/do:push\` or open a new PR — the merge handles everything. The system will clean up your worktree on exit.
-
-**Hard stop:** if the loop hasn't converged after 10 iterations, post a PR comment summarising the unresolved blockers and exit. Do not loop indefinitely.
-
-**Repeated comments:** If a new Copilot round only re-raises feedback you intentionally rejected (with a reply explaining why), treat that round as clean and move on to merge.
-
-PR Details:
-- **URL**: ${prUrl}
-- **Branch**: \`${prBranch}\`
-${prNumber !== '' ? `- **Number**: ${prNumber}` : ''}
-${prOwner && prRepo ? `- **Repo**: ${prOwner}/${prRepo}` : ''}
-- **Source task**: ${sourceTaskId}
-${rprBody ? `\n### /do:rpr Reference (full procedure)\n\n${rprBody}\n` : ''}`;
+    reviewLoopFollowUpSection = buildReviewLoopFollowUpSection(task.metadata || {}, { verbose: true, rprBody });
   }
 
   // Build JIRA context section if applicable
@@ -418,15 +539,17 @@ ${task.metadata.jiraBranch ? 'Commit your changes to this branch. Do NOT switch 
     return promptData.prompt;
   }
 
+  const taskBlock = buildTaskBlock(task, { screenshotsAsList: false });
+
   // Fallback to built-in template
   return `${claudeMdSection || ''}
 
 ${memorySection || ''}
 
-${task.description}
+${taskBlock.description}
 ${task.metadata?.context ? (task.metadata.context.includes('\n') ? `\n### Task Context\n\n${task.metadata.context.trimEnd()}\n` : `\n### Task Context\n\n${task.metadata.context}\n`) : ''}
-${task.metadata?.app ? `**Target App**: ${task.metadata.app}` : ''}
-${Array.isArray(task.metadata?.screenshots) && task.metadata.screenshots.length > 0 ? `**Screenshots**: ${task.metadata.screenshots.join(', ')}` : ''}
+${taskBlock.targetApp}
+${taskBlock.screenshots}
 ${worktreeSection}
 ${pipelineSection}
 ${jiraSection}
@@ -454,7 +577,13 @@ ${skillSection ? `## Task-Type Skill Guidelines\n\n${skillSection}\n` : ''}${too
 - Do not make unrelated changes
 - If blocked, explain clearly why
 - Never update the PortOS changelog (\`.changelog/\`) for work on managed apps — the PortOS changelog tracks PortOS core changes only
-${isTruthyMetaFn(task.metadata?.readOnly) ? `- **This is a read-only task.** Do NOT commit, push, or modify any files in the repository. Only read data and generate reports.` : isTui ? `- On successful completion, YOU run the Completion Workflow above (\`${tuiCompletionCommand}\`, write the sentinel, \`/quit\`).` : worktreeInfo && willOpenPR ? `- On successful completion, the system will push your branch and open a pull request — do NOT open a PR manually. (If the task fails, no PR is opened; the worktree is then cleaned up unless a safety check preserves it for manual recovery.)${willReviewLoop ? ' For GitHub PRs, a Copilot code review will also be requested automatically (skipped on GitLab and other non-GitHub forges) — do NOT run \`/do:rpr\` or attempt to address review comments yourself; you will have already exited.' : ''}` : worktreeInfo ? `- Your worktree branch will be automatically merged back to the source branch when your task completes — do NOT open a PR.` : ``}
+${(() => {
+  const bullet = buildCompletionGuidelineBullet({
+    isReadOnly: isTruthyMetaFn(task.metadata?.readOnly),
+    isTui, tuiCompletionCommand, worktreeInfo, willOpenPR, willReviewLoop,
+  });
+  return bullet ? `- ${bullet}` : '';
+})()}
 
 ## Git Hygiene (CRITICAL)
 - **Before starting work**, run \`git status\` to verify a clean working tree. Do NOT stash or discard uncommitted changes — other agents may be working concurrently and expecting those changes to be present. If the tree is dirty, only commit files YOU changed for this task.
@@ -506,9 +635,10 @@ export function buildLightContextPrompt(task, workspaceDir, worktreeInfo, isTrut
   // --- Task block --------------------------------------------------------
   // cwd is set by the spawner and the agent knows its own id from the
   // runner, so the prompt skips that metadata. Target app is kept because
-  // it scopes managed-app work.
-  sections.push(task.description);
-  if (task.metadata?.app) sections.push(`**Target App**: ${task.metadata.app}`);
+  // it scopes managed-app work. Shared with the full path via buildTaskBlock.
+  const taskBlock = buildTaskBlock(task, { screenshotsAsList: true });
+  sections.push(taskBlock.description);
+  if (taskBlock.targetApp) sections.push(taskBlock.targetApp);
 
   const context = task.metadata?.context;
   if (context) {
@@ -517,12 +647,7 @@ export function buildLightContextPrompt(task, workspaceDir, worktreeInfo, isTrut
       : `### Context\n${context}`);
   }
 
-  if (Array.isArray(task.metadata?.screenshots) && task.metadata.screenshots.length > 0) {
-    sections.push(
-      '### Screenshots\nUse your filesystem tools to inspect each path:\n' +
-      task.metadata.screenshots.map(s => `- \`${s}\``).join('\n')
-    );
-  }
+  if (taskBlock.screenshots) sections.push(taskBlock.screenshots);
 
   // --- Worktree ----------------------------------------------------------
   if (worktreeInfo) {
@@ -565,33 +690,7 @@ export function buildLightContextPrompt(task, workspaceDir, worktreeInfo, isTrut
   if (isReadOnly) {
     sections.push('## Read-Only Task\nDo NOT commit, push, or modify any files. Read data and report findings only.');
   } else if (isReviewLoopFollowUp) {
-    const prUrl = task.metadata?.reviewLoopPRUrl || '';
-    const prBranch = task.metadata?.reviewLoopPRBranch || '';
-    const prNumber = task.metadata?.reviewLoopPRNumber ?? '';
-    const prOwner = task.metadata?.reviewLoopPROwner ?? '';
-    const prRepo = task.metadata?.reviewLoopPRRepo ?? '';
-    const sourceTaskId = task.metadata?.sourceTaskId || 'unknown';
-    sections.push([
-      '## Review-Loop Follow-up (PRIMARY OBJECTIVE)',
-      `A previous agent finished task **${sourceTaskId}** and opened **PR ${prUrl}** on \`${prBranch}\`. The system has requested an initial Copilot review. Drive the review-and-fix loop to completion and merge.`,
-      '',
-      '**Loop UNTIL zero unresolved Copilot comments OR 10 iterations:**',
-      '1. Wait for the latest Copilot review (poll 5–15s, max 5 min per round).',
-      '2. If unresolved threads: fix in this worktree, run tests, commit (`feat:`/`fix:` prefix, no Co-Authored-By), push, resolve threads.',
-      '3. Re-request a Copilot review.',
-      '4. Repeat.',
-      '5. When clean, merge **immediately** with this exact command (flags: `--squash --delete-branch`, nothing else):',
-      '   ```bash',
-      `   gh pr merge "${prUrl}" --squash --delete-branch`,
-      '   ```',
-      prOwner && prRepo && prNumber ? `   (Equivalent: \`gh pr merge ${prNumber} --repo ${prOwner}/${prRepo} --squash --delete-branch\`.)` : null,
-      '   You have already verified the review is clean, so force the immediate merge. Adding any merge-deferral flag would leave the PR open after you exit.',
-      `6. Confirm the merge happened before exiting: \`gh pr view "${prUrl}" --json state -q .state\` must return \`MERGED\`. If it returns \`OPEN\` or \`CLOSED\`, investigate (failing check, unresolved thread, branch protection) — fix and retry. Do NOT exit until state is \`MERGED\`.`,
-      '7. Exit — do NOT run `/do:push` or open a new PR.',
-      '',
-      '**Hard stop:** if not converged after 10 rounds, post a PR comment summarising blockers and exit.',
-      '**Repeated comments:** if a round only re-raises feedback you intentionally rejected (with a reply explaining why), treat as clean and merge.'
-    ].filter(Boolean).join('\n'));
+    sections.push(buildReviewLoopFollowUpSection(task.metadata || {}, { verbose: false }));
   } else if (isTui) {
     sections.push(buildTuiCompletionSection({
       willOpenPR, willReviewLoop, simplifyEnabled, sentinelPath: `${worktreeInfo?.worktreePath || workspaceDir}/.agent-done`

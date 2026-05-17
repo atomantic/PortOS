@@ -11,6 +11,7 @@ import {
   pauseCreativeDirectorProject,
 } from '../services/apiCreativeDirector.js';
 import { listVideoModels } from '../services/apiImageVideo.js';
+import ModelSelect from '../components/ModelSelect';
 
 const ASPECT_RATIOS = ['16:9', '9:16', '1:1'];
 const QUALITIES = ['draft', 'standard', 'high'];
@@ -184,18 +185,13 @@ export default function CreativeDirector() {
             </label>
             <label className="block text-sm">
               <span className="text-port-text-muted">Model</span>
-              <select
+              <ModelSelect
+                models={models}
                 value={form.modelId}
                 onChange={(e) => setForm({ ...form, modelId: e.target.value })}
+                getLabel={(m) => m.name || m.id}
                 className="w-full mt-1 bg-port-bg border border-port-border rounded px-2 py-1 text-sm"
-              >
-                {models.filter((m) => !m.deprecated).map((m) => <option key={m.id} value={m.id}>{m.name || m.id}</option>)}
-                {models.some((m) => m.deprecated) && (
-                  <optgroup label="Legacy">
-                    {models.filter((m) => m.deprecated).map((m) => <option key={m.id} value={m.id}>{m.name || m.id}</option>)}
-                  </optgroup>
-                )}
-              </select>
+              />
             </label>
             <label className="block text-sm">
               <span className="text-port-text-muted">Aspect ratio</span>

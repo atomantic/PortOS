@@ -97,6 +97,89 @@ describe('mediaCollections service', () => {
       .rejects.toMatchObject({ code: svc.ERR_VALIDATION });
   });
 
+  describe('bulkUpdateCollectionItems', () => {
+    it('applies adds and removes in one write', async () => {
+      const c = await svc.createCollection({ name: 'A' });
+      await svc.addItem(c.id, { kind: 'image', ref: 'keep.png' });
+      await svc.addItem(c.id, { kind: 'image', ref: 'drop.png' });
+      const result = await svc.bulkUpdateCollectionItems(c.id, {
+        add: [{ kind: 'image', ref: 'new1.png' }, { kind: 'video', ref: 'v1' }],
+        remove: ['image:drop.png'],
+      });
+      expect(result.added).toBe(2);
+      expect(result.removed).toBe(1);
+      const refs = result.collection.items.map((it) => it.ref).sort();
+      expect(refs).toEqual(['keep.png', 'new1.png', 'v1']);
+    });
+
+    it('is idempotent — re-adding an existing item is a no-op (not an error)', async () => {
+      const c = await svc.createCollection({ name: 'A' });
+      await svc.addItem(c.id, { kind: 'image', ref: 'foo.png' });
+      const result = await svc.bulkUpdateCollectionItems(c.id, {
+        add: [{ kind: 'image', ref: 'foo.png' }, { kind: 'image', ref: 'bar.png' }],
+      });
+      expect(result.added).toBe(1);
+      expect(result.collection.items).toHaveLength(2);
+    });
+
+    it('silently ignores remove keys that aren\'t present', async () => {
+      const c = await svc.createCollection({ name: 'A' });
+      await svc.addItem(c.id, { kind: 'image', ref: 'foo.png' });
+      const result = await svc.bulkUpdateCollectionItems(c.id, {
+        remove: ['image:foo.png', 'image:ghost.png'],
+      });
+      expect(result.removed).toBe(1);
+    });
+
+    it('drops the cover when the cover item is removed', async () => {
+      const c = await svc.createCollection({ name: 'A' });
+      await svc.addItem(c.id, { kind: 'image', ref: 'cover.png' });
+      await svc.updateCollection(c.id, { coverKey: 'image:cover.png' });
+      const result = await svc.bulkUpdateCollectionItems(c.id, {
+        remove: ['image:cover.png'],
+      });
+      expect(result.collection.coverKey).toBeNull();
+    });
+
+    it('rejects invalid item.kind without applying any partial mutation', async () => {
+      const c = await svc.createCollection({ name: 'A' });
+      await svc.addItem(c.id, { kind: 'image', ref: 'existing.png' });
+      await expect(svc.bulkUpdateCollectionItems(c.id, {
+        add: [{ kind: 'image', ref: 'ok.png' }, { kind: 'bogus', ref: 'bad.png' }],
+        remove: ['image:existing.png'],
+      })).rejects.toMatchObject({ code: svc.ERR_VALIDATION });
+      const after = await svc.getCollection(c.id);
+      expect(after.items.map((it) => it.ref)).toEqual(['existing.png']);
+    });
+
+    it('rejects when the collection would exceed ITEMS_MAX after the merge', async () => {
+      const c = await svc.createCollection({ name: 'A' });
+      // Seed a collection that's already at capacity via a hand-set file
+      // (faster than calling addItem 5000 times).
+      const all = await svc.listCollections();
+      const fat = { ...all[0], items: Array.from({ length: svc.ITEMS_MAX }, (_, i) => ({
+        kind: 'image', ref: `r${i}.png`, addedAt: new Date().toISOString(),
+      })) };
+      fileStore.set('/mock/data/media-collections.json', { collections: [fat] });
+      await expect(svc.bulkUpdateCollectionItems(c.id, {
+        add: [{ kind: 'image', ref: 'overflow.png' }],
+      })).rejects.toMatchObject({ code: svc.ERR_VALIDATION });
+    });
+
+    it('throws ERR_NOT_FOUND for unknown collection id', async () => {
+      await expect(svc.bulkUpdateCollectionItems('ghost', { add: [{ kind: 'image', ref: 'a.png' }] }))
+        .rejects.toMatchObject({ code: svc.ERR_NOT_FOUND });
+    });
+
+    it('rejects non-array add or remove', async () => {
+      const c = await svc.createCollection({ name: 'A' });
+      await expect(svc.bulkUpdateCollectionItems(c.id, { add: 'not-array' }))
+        .rejects.toMatchObject({ code: svc.ERR_VALIDATION });
+      await expect(svc.bulkUpdateCollectionItems(c.id, { remove: 'not-array' }))
+        .rejects.toMatchObject({ code: svc.ERR_VALIDATION });
+    });
+  });
+
   it('sanitizes hand-edited JSON with bogus items', async () => {
     fileStore.set('/mock/data/media-collections.json', {
       collections: [

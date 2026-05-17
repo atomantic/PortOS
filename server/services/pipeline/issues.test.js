@@ -508,4 +508,59 @@ describe('pipeline issues service', () => {
       expect(stage.lines[0].characterId).toBe('chr-9');
     });
   });
+
+  describe('bulkReassignSeason', () => {
+    const setup = async () => {
+      const series = await seriesSvc.createSeries({ name: 'Saga' });
+      const a = await seasonsSvc.createSeason(series.id, { title: 'Vol A', number: 1 });
+      const b = await seasonsSvc.createSeason(series.id, { title: 'Vol B', number: 2 });
+      for (let i = 1; i <= 3; i += 1) {
+        await svc.createIssue({ seriesId: series.id, seasonId: a.id, arcPosition: i, title: `A${i}` });
+      }
+      for (let i = 1; i <= 2; i += 1) {
+        await svc.createIssue({ seriesId: series.id, seasonId: b.id, arcPosition: i, title: `B${i}` });
+      }
+      return { series, a, b };
+    };
+
+    it('moves every issue from one season to another and renumbers contiguously', async () => {
+      const { series, a, b } = await setup();
+      const result = await svc.bulkReassignSeason(series.id, a.id, b.id);
+      expect(result.reassigned).toBe(3);
+      const list = await svc.listIssues({ seriesId: series.id });
+      const bIssues = list.filter((i) => i.seasonId === b.id);
+      expect(bIssues).toHaveLength(5);
+      // Numbers should be contiguous 1..5 across the (now sole) season.
+      const numbers = list.map((i) => i.number).sort((x, y) => x - y);
+      expect(numbers).toEqual([1, 2, 3, 4, 5]);
+    });
+
+    it('reassigning to null leaves issues un-grouped', async () => {
+      const { series, a } = await setup();
+      const result = await svc.bulkReassignSeason(series.id, a.id, null);
+      expect(result.reassigned).toBe(3);
+      const list = await svc.listIssues({ seriesId: series.id });
+      const orphans = list.filter((i) => !i.seasonId);
+      expect(orphans).toHaveLength(3);
+    });
+
+    it('returns { reassigned: 0 } and does not write when no issues match', async () => {
+      const { series } = await setup();
+      const result = await svc.bulkReassignSeason(series.id, 'sea-ghost', null);
+      expect(result.reassigned).toBe(0);
+    });
+
+    it('only touches issues in the matching series — other series untouched', async () => {
+      const { series, a, b } = await setup();
+      const other = await seriesSvc.createSeries({ name: 'Other' });
+      const otherSeason = await seasonsSvc.createSeason(other.id, { title: 'X', number: 1 });
+      await svc.createIssue({ seriesId: other.id, seasonId: otherSeason.id, title: 'Other-1' });
+
+      await svc.bulkReassignSeason(series.id, a.id, b.id);
+
+      const otherList = await svc.listIssues({ seriesId: other.id });
+      expect(otherList).toHaveLength(1);
+      expect(otherList[0].seasonId).toBe(otherSeason.id);
+    });
+  });
 });

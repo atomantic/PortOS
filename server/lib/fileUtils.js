@@ -4,12 +4,12 @@
  * Shared utilities for file operations used across services.
  */
 
-import { mkdir, readFile, writeFile, rename, unlink } from 'fs/promises';
+import { mkdir, readFile, readdir, stat, writeFile, rename, unlink } from 'fs/promises';
 import { existsSync, statSync } from 'fs';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { randomUUID } from 'crypto';
-import { join, dirname, basename, resolve as resolvePath, sep as PATH_SEP } from 'path';
+import { join, dirname, basename, extname, resolve as resolvePath, sep as PATH_SEP } from 'path';
 import { fileURLToPath } from 'url';
 import { homedir } from 'os';
 import { ServerError } from './errorHandler.js';
@@ -639,6 +639,51 @@ export function resolveGalleryImage(name, { mustExist = true } = {}) {
   } catch {
     return null;
   }
+}
+
+/**
+ * List a directory, keep entries whose extension matches `extensions`, stat
+ * each, and project the survivors through `mapEntry(name, fullPath, stat)`.
+ * Three sibling helpers (listLoras / listGallery / listMusicLibrary) used to
+ * spell this loop out by hand — collapsed onto one primitive so the dir-
+ * missing fallback, extension filter, and stat-failure handling all stay in
+ * sync.
+ *
+ * - `extensions`: array of lowercased extensions including the leading dot
+ *   (`['.png']`, `['.mp3', '.wav', ...]`). Matched against `extname(name)`
+ *   case-insensitively so `FOO.PNG` and `foo.png` both pass.
+ * - `mapEntry`: async/sync `(name, fullPath, stat) => entry|null`. Return
+ *   `null` to drop the entry. Final array preserves readdir order minus drops.
+ * - `requireRegularFile` (default `true`): when true, entries whose stat
+ *   reports `!isFile()` are dropped before `mapEntry` runs (skips directories
+ *   with matching extensions). Pass `false` to match the gallery's legacy
+ *   behavior (only drops on stat failure).
+ *
+ * Missing directory → `[]` (no surprise 500 on a fresh install). Stat errors
+ * on individual entries → drop that entry (matches the prior per-site
+ * `.catch(() => null)` pattern).
+ */
+export async function listDirectoryByExtension(dir, { extensions, mapEntry, requireRegularFile = true } = {}) {
+  if (!Array.isArray(extensions) || extensions.length === 0) {
+    throw new Error('listDirectoryByExtension: extensions allowlist is required');
+  }
+  if (typeof mapEntry !== 'function') {
+    throw new Error('listDirectoryByExtension: mapEntry must be a function');
+  }
+  const allowed = new Set(extensions.map((e) => String(e).toLowerCase()));
+  const names = await readdir(dir).catch((err) => {
+    if (err?.code === 'ENOENT') return [];
+    throw err;
+  });
+  const filtered = names.filter((name) => allowed.has((extname(name) || '').toLowerCase()));
+  const entries = await Promise.all(filtered.map(async (name) => {
+    const fullPath = join(dir, name);
+    const s = await stat(fullPath).catch(() => null);
+    if (!s) return null;
+    if (requireRegularFile && !s.isFile()) return null;
+    return mapEntry(name, fullPath, s);
+  }));
+  return entries.filter(Boolean);
 }
 
 // Size in bytes of every file under `path`. Shells out to `du -sk` (or

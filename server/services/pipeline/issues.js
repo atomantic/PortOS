@@ -418,6 +418,50 @@ export function recomputeIssueNumbersForSeries(seriesId, fromSeasonId = null) {
 }
 
 /**
+ * Reassign every issue under `(seriesId, fromSeasonId)` to `toSeasonId` in a
+ * single readState → in-memory mutate → writeState → one renumber pass.
+ * Used by `deleteSeason` (and any future bulk season-move flow) to collapse
+ * N per-issue queueIssueWrite cycles into one — the legacy N+1 pattern was
+ * `for (iss of children) await updateIssue(iss.id, { seasonId: toSeasonId }, { skipRenumber: true })`
+ * which paid N readState + N writeState round-trips and N debounced re-exports
+ * even with `withReexportSuppressed`.
+ *
+ * Returns `{ reassigned, fromSeasonId, toSeasonId }`. `toSeasonId` may be
+ * `null` (un-grouped). A re-export of the parent series is emitted once, after
+ * the renumber pass — callers under `withReexportSuppressed` get exactly one
+ * `series:updated` event regardless of the issue count.
+ */
+export function bulkReassignSeason(seriesId, fromSeasonId, toSeasonId = null) {
+  return queueIssueWrite(null, async () => {
+    const state = await readState();
+    let reassigned = 0;
+    const now = new Date().toISOString();
+    for (let i = 0; i < state.issues.length; i += 1) {
+      const iss = state.issues[i];
+      if (iss.seriesId !== seriesId) continue;
+      if ((iss.seasonId || null) !== (fromSeasonId || null)) continue;
+      // Re-sanitize through the same pipeline updateIssue uses so the
+      // in-memory rewrite gets the same shape guarantees as a route PATCH.
+      const merged = sanitizeIssue({
+        ...iss,
+        seasonId: toSeasonId,
+        updatedAt: now,
+      });
+      if (!merged) continue;
+      state.issues[i] = merged;
+      reassigned += 1;
+    }
+    if (reassigned === 0) return { reassigned: 0, fromSeasonId, toSeasonId };
+    // One renumber pass after the bulk move — the source AND destination
+    // volume both reshuffled, so use the series-wide form (fromSeasonId=null).
+    await renumberInline(state, seriesId, null);
+    await writeState(state);
+    emitRecordUpdated('series', seriesId);
+    return { reassigned, fromSeasonId, toSeasonId };
+  });
+}
+
+/**
  * Insert an issue with a caller-supplied id (used by the share-bucket importer
  * so re-imports of the same issue LWW-merge onto the same local row).
  * Throws ERR_DUPLICATE / ERR_VALIDATION on contract violations.

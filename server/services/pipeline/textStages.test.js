@@ -75,7 +75,7 @@ describe('pipeline text stage generator', () => {
       logline: 'A foundry city goes silent.',
       premise: 'Salt-mining city on a dying tideflat.',
       styleNotes: 'moebius linework',
-      characters: [{ name: 'Lina', description: 'foundry surveyor' }],
+      characters: [{ name: 'Lina', physicalDescription: 'foundry surveyor' }],
     });
     const issue = await issuesSvc.createIssue({ seriesId: series.id, title: 'The Hush' });
     return { series, issue };

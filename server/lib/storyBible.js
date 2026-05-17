@@ -144,16 +144,26 @@ const DEFAULT_ID_PREFIX = Object.freeze({
 // series.js, issues.js, etc.) stop redefining the same one-liners.
 export const isStr = (v) => typeof v === 'string';
 export const trimTo = (v, max) => (isStr(v) ? v.trim().slice(0, max) : '');
-const cleanStringArray = (raw, itemMax, listMax) => {
+
+// Walk a raw array through a per-item sanitizer, dropping rejected entries
+// (falsy return from `sanitizer`) and capping the output at `cap`. Three
+// near-identical loops elsewhere in this file (cleanStringArray, the wardrobe
+// list, the per-kind bible list) collapsed onto this single primitive so a
+// future cap/skip rule change lands in one place.
+const sanitizeListWith = (raw, sanitizer, cap) => {
   if (!Array.isArray(raw)) return [];
   const out = [];
   for (const v of raw) {
-    const s = trimTo(v, itemMax);
-    if (s) out.push(s);
-    if (out.length >= listMax) break;
+    const s = sanitizer(v);
+    if (!s) continue;
+    out.push(s);
+    if (out.length >= cap) break;
   }
   return out;
 };
+
+const cleanStringArray = (raw, itemMax, listMax) =>
+  sanitizeListWith(raw, (v) => trimTo(v, itemMax), listMax);
 
 export const isBlank = (v) => {
   if (v == null) return true;
@@ -209,15 +219,11 @@ function sanitizeWardrobe(raw, { preserveTimestamps = true } = {}) {
 }
 
 function sanitizeWardrobeList(raw, opts = {}) {
-  if (!Array.isArray(raw)) return [];
-  const out = [];
-  for (const w of raw) {
-    const sanitized = sanitizeWardrobe(w, opts);
-    if (!sanitized) continue;
-    out.push(sanitized);
-    if (out.length >= BIBLE_LIMITS.WARDROBES_PER_CHARACTER_MAX) break;
-  }
-  return out;
+  return sanitizeListWith(
+    raw,
+    (w) => sanitizeWardrobe(w, opts),
+    BIBLE_LIMITS.WARDROBES_PER_CHARACTER_MAX,
+  );
 }
 
 // Shared canon extras applied to every kind. `locked` follows the on-disk
@@ -234,16 +240,16 @@ function applyCanonExtras(raw) {
   return out;
 }
 
-// Accepts the writers-room shape natively; legacy pipeline `description`
-// is treated as `physicalDescription` when the latter is empty so old
-// series.json migrates forward on first save. TODO(item-4): drop the
-// `description` fallback once pipeline characters extract natively.
+// Pipeline + writers-room shapes both use `physicalDescription`. The legacy
+// pipeline `description` alias was migrated forward by migration 017; this
+// sanitizer reads `physicalDescription` only. Records that still carry the
+// legacy field after migration are normalized on next save through this path.
 export function sanitizeCharacter(raw, { idPrefix = DEFAULT_ID_PREFIX.character, preserveTimestamps = true } = {}) {
   if (!raw || typeof raw !== 'object') return null;
   const name = trimTo(raw.name, BIBLE_LIMITS.NAME_MAX);
   if (!name) return null;
   const physicalDescription = trimTo(
-    raw.physicalDescription || raw.description || '',
+    raw.physicalDescription || '',
     BIBLE_LIMITS.PHYSICAL_DESCRIPTION_MAX,
   );
   const created = preserveTimestamps && isStr(raw.createdAt) ? raw.createdAt : nowIso();
@@ -345,17 +351,13 @@ export function sanitizeObject(raw, { idPrefix = DEFAULT_ID_PREFIX.object, prese
  * agree on what an on-disk bible looks like.
  */
 export function sanitizeBibleList(rawList, kind, opts = {}) {
-  if (!Array.isArray(rawList)) return [];
   const sanitizer = SANITIZERS[kind];
   if (!sanitizer) return [];
-  const out = [];
-  for (const raw of rawList) {
-    const s = sanitizer(raw, opts);
-    if (!s) continue;
-    out.push(s);
-    if (out.length >= BIBLE_LIMITS.ENTRIES_PER_BIBLE_MAX) break;
-  }
-  return out;
+  return sanitizeListWith(
+    rawList,
+    (raw) => sanitizer(raw, opts),
+    BIBLE_LIMITS.ENTRIES_PER_BIBLE_MAX,
+  );
 }
 
 const SANITIZERS = Object.freeze({

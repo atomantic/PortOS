@@ -26,6 +26,7 @@ import {
   listImageModels, getSettings,
 } from '../services/api';
 import useClickOutside from '../hooks/useClickOutside';
+import { useLocalStorageBool, useLocalStoragePersisted } from '../hooks/useLocalStorageBool';
 import InfluenceChipsInput from '../components/universeBuilder/InfluenceChipsInput';
 import BackendChipStrip from '../components/media/BackendChipStrip';
 import ImageGenControls from '../components/imageGen/ImageGenControls';
@@ -54,11 +55,15 @@ const normalizeCategoryKey = (raw) => (raw || '')
 // Merge `fresh` items after `existing`, case-insensitively deduping by label.
 // Used by both Expand (locked + LLM result) and per-category Generate (current
 // + LLM additions); pinned/existing entries keep their slot at the top.
+// Rows with a missing/non-string label (older universes pre-rename, partial
+// LLM payloads) are dropped from both sides — keeping them in `merged` while
+// excluding from the dedup Set would let a fresh row with the same missing
+// label silently duplicate.
 const mergeVariations = (existing, fresh) => {
-  const seen = new Set((existing || []).map((v) => v.label.toLowerCase()));
-  const merged = [...(existing || [])];
-  for (const v of fresh || []) {
-    const key = v.label?.toLowerCase();
+  const merged = [];
+  const seen = new Set();
+  for (const v of [...(existing || []), ...(fresh || [])]) {
+    const key = v?.label?.toLowerCase();
     if (!key || seen.has(key)) continue;
     seen.add(key);
     merged.push(v);
@@ -237,16 +242,15 @@ export default function UniverseBuilder() {
 
   // Per-page render knobs. Persisted to localStorage so the user's
   // preferred batch size sticks across visits.
-  const [renderOpts, setRenderOpts] = useState(() => {
-    const saved = localStorage.getItem('universeBuilder.renderOpts');
-    if (saved) {
-      try { return { ...DEFAULT_RENDER_OPTS, ...JSON.parse(saved) }; } catch { /* fall through */ }
-    }
-    return DEFAULT_RENDER_OPTS;
-  });
-  useEffect(() => {
-    localStorage.setItem('universeBuilder.renderOpts', JSON.stringify(renderOpts));
-  }, [renderOpts]);
+  // useLocalStoragePersisted handles JSON round-trip + parse-failure fallback.
+  // The `parse` hook spreads DEFAULT_RENDER_OPTS under the saved object so a
+  // shape change (new field added to DEFAULT_RENDER_OPTS) populates that
+  // field without nuking the user's saved batch-size / cadence preferences.
+  const [renderOpts, setRenderOpts] = useLocalStoragePersisted(
+    'universeBuilder.renderOpts',
+    DEFAULT_RENDER_OPTS,
+    { parse: (raw) => ({ ...DEFAULT_RENDER_OPTS, ...(raw || {}) }) },
+  );
 
   const [runs, setRuns] = useState([]);
 
@@ -271,16 +275,11 @@ export default function UniverseBuilder() {
   // Universes list collapsed state — desktop only (mobile stacks the sidebar
   // above the editor and there's no horizontal-space tradeoff to make).
   // Persists across visits so users who prefer a maximized editor stay there.
-  const [worldsCollapsed, setWorldsCollapsed] = useState(() => {
-    try { return localStorage.getItem('universeBuilder.worldsCollapsed') === '1'; } catch { return false; }
-  });
-  const toggleWorldsCollapsed = () => {
-    setWorldsCollapsed((prev) => {
-      const next = !prev;
-      try { localStorage.setItem('universeBuilder.worldsCollapsed', next ? '1' : '0'); } catch { /* sandboxed */ }
-      return next;
-    });
-  };
+  const [worldsCollapsed, setWorldsCollapsed] = useLocalStorageBool(
+    'universeBuilder.worldsCollapsed',
+    false,
+  );
+  const toggleWorldsCollapsed = () => setWorldsCollapsed((prev) => !prev);
 
   const refresh = async () => {
     setLoading(true);

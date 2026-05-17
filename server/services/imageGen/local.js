@@ -18,7 +18,7 @@ import { existsSync, watch as fsWatch } from 'fs';
 import { join, dirname, resolve as resolvePath, sep as PATH_SEP, basename } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
-import { assertSafeFilename, ensureDir, PATHS, safeJSONParse, resolveGalleryImage } from '../../lib/fileUtils.js';
+import { assertSafeFilename, ensureDir, listDirectoryByExtension, PATHS, safeJSONParse, resolveGalleryImage } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { imageGenEvents } from '../imageGenEvents.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, PYTHON_NOISE_RE } from '../../lib/sseUtils.js';
@@ -555,21 +555,24 @@ export async function readImageSidecar(filename) {
 
 export async function listGallery() {
   if (!existsSync(PATHS.images)) return [];
-  const files = await readdir(PATHS.images);
-  const pngs = files.filter((f) => f.endsWith('.png'));
-  const items = await Promise.all(pngs.map(async (f) => {
-    const fullPath = join(PATHS.images, f);
-    const s = await stat(fullPath).catch(() => null);
-    if (!s) return null;
-    const { metadata } = await readImageSidecar(f);
-    return {
-      filename: f,
-      path: `/data/images/${f}`,
-      createdAt: metadata.createdAt || s.birthtime.toISOString(),
-      ...metadata,
-    };
-  }));
-  return items.filter(Boolean).sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  // requireRegularFile:false preserves the original gallery behavior — it
+  // never checked isFile(), only dropped on stat failure. listLoras /
+  // listMusicLibrary do filter directories; mirroring that here would be a
+  // behavior change.
+  const items = await listDirectoryByExtension(PATHS.images, {
+    extensions: ['.png'],
+    requireRegularFile: false,
+    mapEntry: async (f, _fullPath, s) => {
+      const { metadata } = await readImageSidecar(f);
+      return {
+        filename: f,
+        path: `/data/images/${f}`,
+        createdAt: metadata.createdAt || s.birthtime.toISOString(),
+        ...metadata,
+      };
+    },
+  });
+  return items.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 }
 
 export async function deleteImage(filename) {

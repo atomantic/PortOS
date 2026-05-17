@@ -18,14 +18,14 @@
  */
 
 import { existsSync } from 'fs';
-import { link, mkdir, readdir, readFile, rename, rm, stat, unlink, writeFile } from 'fs/promises';
+import { link, mkdir, readFile, rename, rm, stat, unlink, writeFile } from 'fs/promises';
 import { createWriteStream } from 'fs';
 import { randomBytes } from 'crypto';
 import { Readable } from 'stream';
 import { pipeline } from 'stream/promises';
 import { basename, join } from 'path';
 import { ServerError } from '../lib/errorHandler.js';
-import { assertSafeFilename, PATHS } from '../lib/fileUtils.js';
+import { assertSafeFilename, listDirectoryByExtension, PATHS } from '../lib/fileUtils.js';
 import {
   applyDownloadToken,
   baseModelToRunner,
@@ -89,45 +89,43 @@ export const listLoras = async () => {
     console.log(`⚠️ PATHS.loras exists but is not a directory: ${PATHS.loras}`);
     return [];
   }
-  const files = await readdir(PATHS.loras);
-  const safetensors = files.filter((f) => f.endsWith('.safetensors'));
-  const out = await Promise.all(safetensors.map(async (filename) => {
-    const fullPath = join(PATHS.loras, filename);
-    const s = await stat(fullPath).catch(() => null);
-    // Skip directories or other non-regular entries that happen to end in
-    // `.safetensors` — otherwise listLoras would surface them and deleteLora
-    // would later fail with EISDIR.
-    if (!s || !s.isFile()) return null;
-    const sidecar = await readSidecar(filename);
-    const fallbackName = filename.replace(/^lora-/, '').replace(/\.safetensors$/, '');
-    // Re-derive runnerFamily from civitai.baseModel at read time so
-    // sidecars written before a baseModelToRunner() mapping update (e.g.
-    // an install before 'Ernie' was a recognized base) don't permanently
-    // show as runnerFamily=null and leak across compat filters. Falls
-    // back to the stored value for legacy LoRAs without civitai metadata.
-    const baseModel = sidecar?.civitai?.baseModel;
-    const runnerFamily = baseModel
-      ? baseModelToRunner(baseModel)
-      : (sidecar?.runnerFamily || null);
-    return {
-      filename,
-      name: sidecar?.name || fallbackName,
-      sizeBytes: s.size,
-      installedAt: sidecar?.installedAt || s.birthtime?.toISOString?.() || null,
-      // sidecar fields surfaced for the picker / manager UI:
-      civitai: sidecar?.civitai || null,
-      runnerFamily,
-      triggerWords: sidecar?.triggerWords || [],
-      // Coerce non-finite values (NaN, Infinity, missing/malformed sidecar
-      // fields) to the default — `?? 1.0` alone wouldn't catch NaN.
-      recommendedScale: Number.isFinite(sidecar?.recommendedScale) ? sidecar.recommendedScale : 1.0,
-      // Normalize on read so already-installed LoRAs (sidecars written
-      // before the URL-normalize fix) also benefit without a reinstall.
-      previewImageUrl: normalizeCivitaiImageUrl(sidecar?.previewImageUrl) || null,
-      description: sidecar?.description || '',
-    };
-  }));
-  return out.filter(Boolean).sort((a, b) => (b.installedAt || '').localeCompare(a.installedAt || ''));
+  // listDirectoryByExtension handles the readdir + extension filter + per-
+  // entry stat + isFile check (so directories named `foo.safetensors` are
+  // dropped before deleteLora would later trip on EISDIR).
+  const out = await listDirectoryByExtension(PATHS.loras, {
+    extensions: ['.safetensors'],
+    mapEntry: async (filename, _fullPath, s) => {
+      const sidecar = await readSidecar(filename);
+      const fallbackName = filename.replace(/^lora-/, '').replace(/\.safetensors$/, '');
+      // Re-derive runnerFamily from civitai.baseModel at read time so
+      // sidecars written before a baseModelToRunner() mapping update (e.g.
+      // an install before 'Ernie' was a recognized base) don't permanently
+      // show as runnerFamily=null and leak across compat filters. Falls
+      // back to the stored value for legacy LoRAs without civitai metadata.
+      const baseModel = sidecar?.civitai?.baseModel;
+      const runnerFamily = baseModel
+        ? baseModelToRunner(baseModel)
+        : (sidecar?.runnerFamily || null);
+      return {
+        filename,
+        name: sidecar?.name || fallbackName,
+        sizeBytes: s.size,
+        installedAt: sidecar?.installedAt || s.birthtime?.toISOString?.() || null,
+        // sidecar fields surfaced for the picker / manager UI:
+        civitai: sidecar?.civitai || null,
+        runnerFamily,
+        triggerWords: sidecar?.triggerWords || [],
+        // Coerce non-finite values (NaN, Infinity, missing/malformed sidecar
+        // fields) to the default — `?? 1.0` alone wouldn't catch NaN.
+        recommendedScale: Number.isFinite(sidecar?.recommendedScale) ? sidecar.recommendedScale : 1.0,
+        // Normalize on read so already-installed LoRAs (sidecars written
+        // before the URL-normalize fix) also benefit without a reinstall.
+        previewImageUrl: normalizeCivitaiImageUrl(sidecar?.previewImageUrl) || null,
+        description: sidecar?.description || '',
+      };
+    },
+  });
+  return out.sort((a, b) => (b.installedAt || '').localeCompare(a.installedAt || ''));
 };
 
 export const getLora = async (filename) => {

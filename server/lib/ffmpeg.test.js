@@ -3,7 +3,7 @@ import { writeFileSync, mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
-import { verifyVideoPlayable, safeUnder } from './ffmpeg.js';
+import { verifyVideoPlayable, safeUnder, runFfmpegProcess } from './ffmpeg.js';
 
 describe('verifyVideoPlayable', () => {
   let tmpDir;
@@ -48,6 +48,72 @@ describe('verifyVideoPlayable', () => {
     } else {
       expect(res.ok).toBe(true);
     }
+  });
+});
+
+describe('runFfmpegProcess', () => {
+  it('returns ok:false when bin is not a string', async () => {
+    const res = await runFfmpegProcess({ args: ['-version'] });
+    expect(res.ok).toBe(false);
+    expect(res.reason).toMatch(/invalid ffmpeg binary/);
+  });
+
+  it('returns ok:false when args is not an array', async () => {
+    const res = await runFfmpegProcess({ bin: '/bin/true', args: 'oops' });
+    expect(res.ok).toBe(false);
+    expect(res.reason).toMatch(/invalid ffmpeg args/);
+  });
+
+  it('returns ok:true when the child exits 0 (using /bin/true as a fake ffmpeg)', async () => {
+    // POSIX-only — Windows skips. The helper only cares about the spawn-
+    // exit-0 contract, not anything ffmpeg-specific, so any zero-exit binary
+    // exercises the happy path.
+    if (process.platform === 'win32') return;
+    const res = await runFfmpegProcess({ bin: '/usr/bin/true', args: [] });
+    if (res.ok) {
+      expect(res).toEqual({ ok: true });
+    } else {
+      // Some hosts ship /bin/true instead — try once more.
+      const res2 = await runFfmpegProcess({ bin: '/bin/true', args: [] });
+      expect(res2).toEqual({ ok: true });
+    }
+  });
+
+  it('returns ok:false with non-zero exit code in reason', async () => {
+    if (process.platform === 'win32') return;
+    const res = await runFfmpegProcess({ bin: '/usr/bin/false', args: [] });
+    if (res.reason?.includes('spawn failed')) {
+      // /usr/bin/false may not exist (e.g. macOS sometimes uses /bin/false);
+      // try the alternative and re-assert.
+      const res2 = await runFfmpegProcess({ bin: '/bin/false', args: [] });
+      expect(res2.ok).toBe(false);
+      expect(res2.reason).toMatch(/ffmpeg exit 1/);
+    } else {
+      expect(res.ok).toBe(false);
+      expect(res.reason).toMatch(/ffmpeg exit 1/);
+    }
+  });
+
+  it('returns ok:false with spawn-failed reason for a missing binary', async () => {
+    const res = await runFfmpegProcess({ bin: '/this/does/not/exist/ffmpeg-fake', args: ['-x'] });
+    expect(res.ok).toBe(false);
+    expect(res.reason).toMatch(/spawn failed/);
+  });
+
+  it('removes the abort listener on normal completion (no listener leak)', async () => {
+    if (process.platform === 'win32') return;
+    const controller = new AbortController();
+    // Spy on add/remove to confirm the helper cleans up.
+    let added = 0;
+    let removed = 0;
+    const origAdd = controller.signal.addEventListener.bind(controller.signal);
+    const origRemove = controller.signal.removeEventListener.bind(controller.signal);
+    controller.signal.addEventListener = (...args) => { added += 1; return origAdd(...args); };
+    controller.signal.removeEventListener = (...args) => { removed += 1; return origRemove(...args); };
+    const trueBin = process.platform === 'darwin' ? '/usr/bin/true' : '/bin/true';
+    await runFfmpegProcess({ bin: trueBin, args: [], signal: controller.signal });
+    expect(added).toBe(1);
+    expect(removed).toBe(1);
   });
 });
 

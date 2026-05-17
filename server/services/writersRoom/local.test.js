@@ -2,19 +2,13 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, existsSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 
 let tempRoot;
 
 vi.mock('../../lib/fileUtils.js', async () => {
   const actual = await vi.importActual('../../lib/fileUtils.js');
-  return new Proxy(actual, {
-    get(target, prop) {
-      if (prop === 'PATHS') {
-        return { ...actual.PATHS, data: tempRoot };
-      }
-      return target[prop];
-    },
-  });
+  return makePathsProxy(actual, { dataRoot: () => tempRoot });
 });
 
 const local = await import('./local.js');

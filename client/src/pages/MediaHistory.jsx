@@ -37,7 +37,7 @@ export default function MediaHistory() {
   const [stitching, setStitching] = useState(false);
   const [preview, setPreview] = useState(null);
   const [favoritesOnly, setFavoritesOnly] = useState(false);
-  const { annotations, toggleStar, updateAnnotation } = useMediaAnnotations();
+  const { annotations, toggleStar, updateAnnotation, getCardProps } = useMediaAnnotations();
 
   const refresh = useCallback(async ({ silent = false } = {}) => {
     if (!silent) setLoading(true);
@@ -302,8 +302,7 @@ export default function MediaHistory() {
                 selected={idx !== -1}
                 disabled={stitchMode && it.kind !== 'video'}
                 hideActions={stitchMode}
-                starred={!!annotations[it.key]?.starred}
-                hasNote={!!annotations[it.key]?.anyNote}
+                {...getCardProps(it.key)}
                 onToggleStar={!stitchMode ? toggleStar : undefined}
               />
             );

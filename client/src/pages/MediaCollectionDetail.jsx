@@ -44,6 +44,10 @@ export default function MediaCollectionDetail() {
   const isUnsorted = id === UNSORTED_ID;
   const navigate = useNavigate();
   const [collection, setCollection] = useState(null);
+  // Full collections list — fetched once for the bulk move/copy picker so it
+  // doesn't pay a per-mount listMediaCollections() round-trip when opened.
+  // Already loaded for the unsorted view as part of buildUnsortedCollection().
+  const [allCollections, setAllCollections] = useState(null);
   const [imagesByName, setImagesByName] = useState(new Map());
   const [videosById, setVideosById] = useState(new Map());
   const [loading, setLoading] = useState(true);
@@ -57,7 +61,7 @@ export default function MediaCollectionDetail() {
   const [pickerMode, setPickerMode] = useState(null);
   const moveBtnRef = useRef(null);
   const copyBtnRef = useRef(null);
-  const { annotations, toggleStar, updateAnnotation } = useMediaAnnotations();
+  const { annotations, toggleStar, updateAnnotation, getCardProps } = useMediaAnnotations();
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -67,21 +71,24 @@ export default function MediaCollectionDetail() {
         listImageGallery().catch(() => []),
         listVideoHistory().catch(() => []),
       ]);
+      setAllCollections(Array.isArray(cols) ? cols : []);
       setCollection(buildUnsortedCollection(cols, images, videos));
       setImagesByName(new Map((images || []).map((i) => [i.filename, i])));
       setVideosById(new Map((videos || []).map((v) => [v.id, v])));
       setLoading(false);
       return;
     }
-    const [c, images, videos] = await Promise.all([
+    const [c, cols, images, videos] = await Promise.all([
       getMediaCollection(id).catch((err) => {
         toast.error(err.message || 'Collection not found');
         return null;
       }),
+      listMediaCollections().catch(() => []),
       listImageGallery().catch(() => []),
       listVideoHistory().catch(() => []),
     ]);
     setCollection(c);
+    setAllCollections(Array.isArray(cols) ? cols : []);
     setNameDraft(c?.name || '');
     setImagesByName(new Map((images || []).map((i) => [i.filename, i])));
     setVideosById(new Map((videos || []).map((v) => [v.id, v])));
@@ -430,6 +437,7 @@ export default function MediaCollectionDetail() {
               excludeId={collection.id}
               busy={bulkBusy}
               title={`${pickerMode === 'move' ? 'Move' : 'Copy'} ${selected.size} to…`}
+              collections={allCollections}
               onPick={bulkMoveOrCopy}
               onClose={() => setPickerMode(null)}
             />
@@ -461,8 +469,7 @@ export default function MediaCollectionDetail() {
                   onDelete={!selectMode ? handleDelete : undefined}
                   hideActions={selectMode}
                   selected={isSelected}
-                  starred={!!annotations[key]?.starred}
-                  hasNote={!!annotations[key]?.anyNote}
+                  {...getCardProps(key)}
                   onToggleStar={!selectMode ? toggleStar : undefined}
                 />
                 {!selectMode && !isUnsorted && (

@@ -1,4 +1,4 @@
-import { request, API_BASE } from './apiCore.js';
+import { request } from './apiCore.js';
 
 // Apple Health
 export const ingestAppleHealth = (data) => request('/health/ingest', {
@@ -27,21 +27,13 @@ export const getAppleHealthCorrelation = (from, to) => {
   if (to) params.set('to', to);
   return request(`/health/correlation?${params}`);
 };
-export const uploadAppleHealthXml = (file) => {
+export const uploadAppleHealthXml = (file, options = {}) => {
   const formData = new FormData();
   formData.append('file', file);
-  // Use fetch directly — the request helper sets Content-Type: application/json
-  // which conflicts with multipart/form-data. Browser sets correct boundary automatically.
-  return fetch(`${API_BASE}/health/import/xml`, {
-    method: 'POST',
-    body: formData,
-  }).then(async res => {
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ error: res.statusText }));
-      throw new Error(err.error || res.statusText);
-    }
-    return res.json();
-  });
+  // request() detects FormData bodies and lets the browser set the multipart
+  // boundary automatically. Accept `options` so callers with their own error
+  // UI can pass `{ silent: true }` to suppress the helper's toast.
+  return request('/health/import/xml', { method: 'POST', body: formData, ...options });
 };
 
 // Genome / Health Correlations

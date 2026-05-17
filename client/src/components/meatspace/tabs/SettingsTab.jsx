@@ -93,7 +93,9 @@ export default function SettingsTab({ onRefresh }) {
     setXmlProgress(0);
     setXmlImporting(true);
 
-    api.uploadAppleHealthXml(file).catch(err => {
+    // Owns its own error UI (xmlError) so suppress the helper's toast — per
+    // CLAUDE.md "custom catch ⇒ silent: true" convention.
+    api.uploadAppleHealthXml(file, { silent: true }).catch(err => {
       setXmlError(err.message);
       setXmlImporting(false);
     });

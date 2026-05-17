@@ -1,4 +1,4 @@
-import { request, API_BASE } from './apiCore.js';
+import { request } from './apiCore.js';
 import { buildFormData } from './apiImageVideo.js';
 
 // Stage IDs mirror server/services/pipeline/issues.js — keep these in sync.
@@ -397,23 +397,14 @@ export const patchPipelineAudioLine = (issueId, lineIdx, patch) =>
 export const listPipelineMusicLibrary = () =>
   request('/pipeline/audio/music-library');
 
-// Bypasses `request()` because that helper hard-codes
-// `Content-Type: application/json`, which conflicts with FormData's
-// auto-generated multipart boundary.
-export const uploadPipelineMusicTrack = async (issueId, file, { label } = {}) => {
-  const res = await fetch(
-    `${API_BASE}/pipeline/issues/${encodeURIComponent(issueId)}/stages/audio/music/upload`,
-    { method: 'POST', body: buildFormData({ track: file, label }) },
+// request() now detects FormData bodies and lets the browser set the multipart
+// boundary automatically — no need to bypass it. Accept `options` so callers
+// with their own error UI can pass `{ silent: true }`.
+export const uploadPipelineMusicTrack = (issueId, file, { label } = {}, options = {}) =>
+  request(
+    `/pipeline/issues/${encodeURIComponent(issueId)}/stages/audio/music/upload`,
+    { method: 'POST', body: buildFormData({ track: file, label }), ...options },
   );
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: res.statusText }));
-    const e = new Error(err.error || res.statusText);
-    e.code = err.code;
-    e.status = res.status;
-    throw e;
-  }
-  return res.json();
-};
 
 export const attachPipelineMusicTrack = (issueId, { trackFilename, label } = {}) =>
   request(`/pipeline/issues/${encodeURIComponent(issueId)}/stages/audio/music/attach`, {

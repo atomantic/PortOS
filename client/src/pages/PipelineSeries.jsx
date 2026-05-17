@@ -25,6 +25,7 @@ import {
   listUniverses,
 } from '../services/api';
 import { recommendStructure, describeStructure } from '../lib/seasonStructure';
+import { useLocalStorageBool } from '../hooks/useLocalStorageBool';
 
 const PIPELINE_SIDEBAR_KEY = 'portos-pipeline-series-sidebar-collapsed';
 
@@ -36,9 +37,11 @@ export default function PipelineSeries() {
   const [universes, setWorlds] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
-    return localStorage.getItem(PIPELINE_SIDEBAR_KEY) === 'true';
-  });
+  const [sidebarCollapsed, setSidebarCollapsed] = useLocalStorageBool(
+    PIPELINE_SIDEBAR_KEY,
+    false,
+    { format: 'true' },
+  );
 
   useEffect(() => {
     let canceled = false;
@@ -62,13 +65,7 @@ export default function PipelineSeries() {
     return () => { canceled = true; };
   }, [seriesId, navigate]);
 
-  const toggleSidebar = () => {
-    setSidebarCollapsed((prev) => {
-      const next = !prev;
-      localStorage.setItem(PIPELINE_SIDEBAR_KEY, String(next));
-      return next;
-    });
-  };
+  const toggleSidebar = () => setSidebarCollapsed((prev) => !prev);
 
   // Track the last server-persisted snapshot so `flushPending` knows whether
   // the local draft has diverged. Ref instead of state — we don't want

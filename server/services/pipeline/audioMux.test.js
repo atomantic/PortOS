@@ -15,9 +15,16 @@ vi.mock('../../lib/fileUtils.js', async () => {
 });
 
 const findFfmpegMock = vi.fn();
-vi.mock('../../lib/ffmpeg.js', () => ({
-  findFfmpeg: (...a) => findFfmpegMock(...a),
-}));
+// Pull the real runFfmpegProcess through — it's the helper audioMux now
+// delegates to. The child_process mock below still intercepts spawn, so the
+// real helper drives our fake ffmpeg.
+vi.mock('../../lib/ffmpeg.js', async () => {
+  const actual = await vi.importActual('../../lib/ffmpeg.js');
+  return {
+    ...actual,
+    findFfmpeg: (...a) => findFfmpegMock(...a),
+  };
+});
 
 // Capture spawn so the test asserts the ffmpeg args without actually
 // running ffmpeg. The mock returns a fake child-process object that fires

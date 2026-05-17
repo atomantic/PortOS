@@ -223,9 +223,10 @@ export async function deleteCollection(id) {
   return { id };
 }
 
-export async function addItem(id, item) {
-  // Mirror sanitizeItem so direct callers can't write a record that the
-  // next listCollections() would drop (silent add).
+// Mirror sanitizeItem so direct callers (addItem + bulkUpdateCollectionItems)
+// can't write a record that the next listCollections() would drop (silent add).
+// Returns a normalized `{ kind, ref }` so callers don't re-trim.
+const validateItemInput = (item) => {
   if (!item || !ITEM_KIND.has(item.kind)) {
     throw makeErr('item.kind must be "image" or "video"', ERR_VALIDATION);
   }
@@ -233,11 +234,16 @@ export async function addItem(id, item) {
   if (!ref || ref.length > REF_MAX_LENGTH || ref.includes(':')) {
     throw makeErr('item.ref invalid (empty, too long, or contains ":")', ERR_VALIDATION);
   }
+  return { kind: item.kind, ref };
+};
+
+export async function addItem(id, item) {
+  const { kind, ref } = validateItemInput(item);
   const all = await listCollections();
   const idx = all.findIndex((c) => c.id === id);
   if (idx < 0) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
   const cur = all[idx];
-  const key = `${item.kind}:${ref}`;
+  const key = `${kind}:${ref}`;
   if (cur.items.find((it) => itemKey(it) === key)) {
     throw makeErr(`Item already in collection: ${key}`, ERR_DUPLICATE);
   }
@@ -246,7 +252,7 @@ export async function addItem(id, item) {
   }
   const merged = {
     ...cur,
-    items: [...cur.items, { kind: item.kind, ref, addedAt: new Date().toISOString() }],
+    items: [...cur.items, { kind, ref, addedAt: new Date().toISOString() }],
     updatedAt: new Date().toISOString(),
   };
   const next = [...all];
@@ -254,6 +260,84 @@ export async function addItem(id, item) {
   await writeAll(next);
   if (merged.universeId) emitRecordUpdated('universe', merged.universeId);
   return merged;
+}
+
+/**
+ * Bulk add/remove items in a single read-modify-write. Halves wall-clock for
+ * UI "Move N items" / "select all" flows that would otherwise issue 2N
+ * round-trips (one DELETE per source-collection item + one POST per
+ * destination-collection item) and dodges the race window where an in-flight
+ * AddItem can collide with a parallel RemoveItem on the same collection.
+ *
+ * `add` items use sanitizeItem rules (kind + ref); duplicates of items
+ * already present are skipped silently (idempotent), matching the
+ * UI's expectation that "add what isn't already there." `remove` keys
+ * are `<kind>:<ref>` strings; unknown keys are silently ignored so a
+ * stale UI selection can't 404 the whole batch.
+ *
+ * Validation rules mirror `addItem`: any invalid `add` entry throws before
+ * any mutation lands. `remove` keys that aren't strings throw too.
+ *
+ * Returns the post-write collection plus counts: `{ collection, added, removed }`.
+ */
+export async function bulkUpdateCollectionItems(id, { add = [], remove = [] } = {}) {
+  if (!Array.isArray(add)) throw makeErr('add must be an array', ERR_VALIDATION);
+  if (!Array.isArray(remove)) throw makeErr('remove must be an array', ERR_VALIDATION);
+
+  // Validate every `add` entry up front so a single bad item doesn't leave
+  // a partially-applied batch behind.
+  const cleanAdd = add.map(validateItemInput);
+  for (const key of remove) {
+    if (typeof key !== 'string' || !key) {
+      throw makeErr('remove keys must be non-empty strings of the form "<kind>:<ref>"', ERR_VALIDATION);
+    }
+  }
+
+  const all = await listCollections();
+  const idx = all.findIndex((c) => c.id === id);
+  if (idx < 0) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
+  const cur = all[idx];
+
+  const removeSet = new Set(remove);
+  const remainingItems = cur.items.filter((it) => !removeSet.has(itemKey(it)));
+  const removed = cur.items.length - remainingItems.length;
+
+  // Dedupe `add` against itself AND against items that survived the removal.
+  // This is intentionally tolerant — re-adding an existing item is a no-op
+  // rather than an error, so a multi-select Move that overlaps with prior
+  // membership stays idempotent.
+  const presentKeys = new Set(remainingItems.map(itemKey));
+  const now = new Date().toISOString();
+  const additions = [];
+  for (const { kind, ref } of cleanAdd) {
+    const key = `${kind}:${ref}`;
+    if (presentKeys.has(key)) continue;
+    presentKeys.add(key);
+    additions.push({ kind, ref, addedAt: now });
+  }
+
+  const nextItems = [...remainingItems, ...additions];
+  if (nextItems.length > ITEMS_MAX) {
+    throw makeErr(`Collection full (limit ${ITEMS_MAX})`, ERR_VALIDATION);
+  }
+
+  // Drop a cover that pointed at a now-removed item — matches the
+  // single-item removeItem path so the cover never dangles after a batch.
+  const coverKey = cur.coverKey && removeSet.has(cur.coverKey) ? null : cur.coverKey;
+
+  const merged = {
+    ...cur,
+    items: nextItems,
+    coverKey,
+    updatedAt: now,
+  };
+  const next = [...all];
+  next[idx] = merged;
+  await writeAll(next);
+  if (merged.universeId && (additions.length || removed)) {
+    emitRecordUpdated('universe', merged.universeId);
+  }
+  return { collection: merged, added: additions.length, removed };
 }
 
 export async function removeItem(id, key) {

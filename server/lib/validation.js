@@ -881,6 +881,36 @@ export function sanitizeTaskMetadata(raw) {
 
 
 // =============================================================================
+// MEDIA COLLECTIONS — bulk add/remove items
+// =============================================================================
+
+// `ref` rules mirror server/services/mediaCollections.js#sanitizeItem: ":"
+// is the API key separator (`<kind>:<ref>` split on first ":"), so a ref
+// containing one would be unaddressable for DELETE/coverKey lookups.
+const mediaCollectionItemSchema = z.object({
+  kind: z.enum(['image', 'video']),
+  ref: z.string().trim().min(1).max(500).refine((s) => !s.includes(':'), {
+    message: 'ref may not contain ":"',
+  }),
+}).strict();
+
+// Remove keys are `<kind>:<ref>` strings the client already addresses items
+// by — kept loose here (length cap only) because invalid keys are silently
+// ignored by the service. Strict validation would force the client to filter
+// stale selections itself.
+const mediaCollectionRemoveKeySchema = z.string().min(3).max(520);
+
+// Bulk endpoint: { add?, remove? } — at least one of the two arrays must be
+// non-empty so a no-op call surfaces as a 400 instead of an opaque success.
+export const mediaCollectionBulkItemsSchema = z.object({
+  add: z.array(mediaCollectionItemSchema).max(1000).optional(),
+  remove: z.array(mediaCollectionRemoveKeySchema).max(1000).optional(),
+}).strict().refine(
+  (d) => (Array.isArray(d.add) && d.add.length > 0) || (Array.isArray(d.remove) && d.remove.length > 0),
+  { message: 'bulk update requires at least one item in add or remove' },
+);
+
+// =============================================================================
 // SHARING (cross-network share buckets via cloud-synced folders)
 // =============================================================================
 
