@@ -2838,7 +2838,7 @@ function OtherTab({
             onRenderCategory={() => onBulkRenderBucket(cat)}
             onRenderVariation={(v) => onRenderVariation(cat, v)}
             onGenerate={(count) => onGenerateInBucket(cat, count)}
-            canPromote={!!selectedId}
+            canPromote={canPromote}
             bucketKind={draft.categories?.[cat]?.kind}
             onPromote={onPromoteVariation ? (v, opts) => onPromoteVariation(cat, v, opts) : null}
           />
