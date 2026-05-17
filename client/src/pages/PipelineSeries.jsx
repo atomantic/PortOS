@@ -315,9 +315,12 @@ function BibleSidebar({ series, universes, patchSeries, onSeriesUpdate, onFlushP
 
       <div className="block">
         <div className="flex items-center justify-between mb-1">
-          <span className="block text-xs uppercase tracking-wider text-gray-500">
+          <label
+            htmlFor="series-title-logo"
+            className="block text-xs uppercase tracking-wider text-gray-500"
+          >
             Title / logo design
-          </span>
+          </label>
           <button
             type="button"
             onClick={handleGenerateLogo}
@@ -330,6 +333,7 @@ function BibleSidebar({ series, universes, patchSeries, onSeriesUpdate, onFlushP
           </button>
         </div>
         <textarea
+          id="series-title-logo"
           value={series.titleLogo || ''}
           onChange={(e) => patchSeries({ titleLogo: e.target.value })}
           rows={4}
