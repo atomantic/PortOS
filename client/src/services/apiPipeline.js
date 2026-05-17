@@ -190,6 +190,21 @@ export const generatePipelineComicBackCover = (issueId, opts = {}, options = {})
     ...options,
   });
 
+// Ask the LLM to propose front + back cover concepts for one comic issue.
+// `opts.target` ('cover' | 'backCover' | 'both', default 'both') gates which
+// slot(s) get seeded when `commit: true` — the UI button on each card sends
+// its own target so the user can regenerate one card's concept without
+// touching the other. Seeds only blank scripts; never clobbers a user edit.
+// Returns { coverConcept, backCoverConcept, target, seeded, … }; the
+// `issue` and `stage` fields are only populated when `commit: true` (the
+// preview-only path returns them as null).
+export const generatePipelineComicCoverConcepts = (issueId, opts = {}, options = {}) =>
+  request(`/pipeline/issues/${encodeURIComponent(issueId)}/cover-concepts/generate`, {
+    method: 'POST',
+    body: JSON.stringify(opts),
+    ...options,
+  });
+
 // Volume (season) cover render. Persists in-flight slot on
 // series.seasons[].cover via the season write tail.
 // Returns { jobId, mode, prompt, coverScript, season, series, variant, fromProof }.
@@ -213,10 +228,11 @@ export const generatePipelineVolumeBackCover = (seriesId, seasonId, opts = {}, o
 // `season.backCover.script` when those slots are currently blank (the
 // server never clobbers a user edit). Returns the proposed text plus the
 // updated season + series records.
-export const generatePipelineVolumeCoverConcepts = (seriesId, seasonId, opts = {}) =>
+export const generatePipelineVolumeCoverConcepts = (seriesId, seasonId, opts = {}, options = {}) =>
   request(`/pipeline/series/${encodeURIComponent(seriesId)}/seasons/${encodeURIComponent(seasonId)}/cover-concepts/generate`, {
     method: 'POST',
     body: JSON.stringify(opts),
+    ...options,
   });
 
 // Build the trade-paperback PDF download URL for one volume. Used as an

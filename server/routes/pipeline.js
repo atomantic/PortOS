@@ -381,6 +381,13 @@ const volumeCoverConceptsSchema = z.object({
   modelOverride: z.string().trim().max(200).optional(),
 });
 
+const comicCoverConceptsSchema = z.object({
+  target: z.enum(['cover', 'backCover', 'both']).optional().default('both'),
+  commit: z.boolean().optional().default(false),
+  providerOverride: z.string().trim().max(80).optional(),
+  modelOverride: z.string().trim().max(200).optional(),
+});
+
 // Full-comic-page render: same knobs as panel render minus `description` /
 // `slugline` (the prompt is built server-side from the page's panels[] so it
 // stays in sync with whatever the script-extractor produced).
@@ -1397,6 +1404,19 @@ router.patch('/issues/:id/stages/comicPages/pages/:pageIndex', asyncHandler(asyn
     },
   ).catch((err) => { throw mapServiceError(err); });
   res.json({ issue: updatedIssue, stage, page: stage.pages[pageIndex] });
+}));
+
+// Generate front + back cover-art concepts for one comic issue via the LLM.
+// Per-issue sibling of /series/:id/seasons/:seasonId/cover-concepts/generate.
+// `target` ('cover' | 'backCover' | 'both') gates which slots can be seeded
+// when `commit: true` — the UI button on each card sends its own target so
+// the user can regenerate one without touching the other. Seeds only blank
+// scripts; never clobbers a user edit.
+router.post('/issues/:id/cover-concepts/generate', asyncHandler(async (req, res) => {
+  const body = validateRequest(comicCoverConceptsSchema, req.body ?? {});
+  const result = await arcPlanner.generateComicCoverConcepts(req.params.id, body)
+    .catch((err) => { throw mapServiceError(err); });
+  res.json(result);
 }));
 
 // Render the comic-issue front cover. Builds a cover-art prompt (series
