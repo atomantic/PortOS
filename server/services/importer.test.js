@@ -57,8 +57,11 @@ vi.mock('../lib/stageRunner.js', () => ({
 // (hoisted before imports) and the beforeEach reset (runs later). Default
 // behavior passes through to the real module so the dozen other tests that
 // expect real createIssue behavior keep working unchanged.
-const { mockCreateIssue, realIssuesRef } = vi.hoisted(() => ({
+// `mockDeleteIssue` follows the same pattern so the replaceMode-abort test
+// can force a delete failure mid-wipe.
+const { mockCreateIssue, mockDeleteIssue, realIssuesRef } = vi.hoisted(() => ({
   mockCreateIssue: vi.fn(),
+  mockDeleteIssue: vi.fn(),
   realIssuesRef: { current: null },
 }));
 vi.mock('./pipeline/issues.js', async () => {
@@ -67,6 +70,7 @@ vi.mock('./pipeline/issues.js', async () => {
   return {
     ...actual,
     createIssue: (...args) => mockCreateIssue(...args),
+    deleteIssue: (...args) => mockDeleteIssue(...args),
   };
 });
 
@@ -90,10 +94,13 @@ function wipeTempRoot() {
 beforeEach(() => {
   wipeTempRoot();
   mockRunStagedLLM.mockReset();
-  // Default createIssue to pass-through to the real module — only the
-  // rollback test overrides this to inject a mid-loop throw.
+  // Default createIssue + deleteIssue to pass-through to the real module —
+  // only the rollback and replace-abort tests override these to inject
+  // failures.
   mockCreateIssue.mockReset();
   mockCreateIssue.mockImplementation((...args) => realIssuesRef.current.createIssue(...args));
+  mockDeleteIssue.mockReset();
+  mockDeleteIssue.mockImplementation((...args) => realIssuesRef.current.deleteIssue(...args));
 });
 
 afterAll(() => {
@@ -788,6 +795,54 @@ describe('commitImport', () => {
     expect(result.series.arc.logline).toBe('New');
     // Season title was overwritten.
     expect(result.series.seasons[0].title).toBe('New S1');
+  });
+
+  // Copilot review: in replaceMode, a swallowed per-issue delete failure
+  // would leave the old issue on disk AND create a new one with a reused
+  // arcPosition (additive-mode's collision check is skipped in replace),
+  // producing duplicates the additive path explicitly rejects. The fix is
+  // to abort the commit before any new state is written if any delete
+  // fails. This test pins that contract.
+  it('replaceMode=true aborts the commit when a delete fails — no new issues, arc unchanged', async () => {
+    const { uni, ser } = await setupForCommit();
+    // Seed pass — one issue, arc shape `rags-to-riches`.
+    await importerSvc.commitImport({
+      universeId: uni.id,
+      seriesId: ser.id,
+      canonSelections: { characters: [], places: [], objects: [] },
+      arc: { logline: 'Old', summary: 'Old', shape: 'rags-to-riches' },
+      seasons: [],
+      issues: [{ title: 'Old Issue', arcPosition: 1, proseExcerpt: 'old prose' }],
+    });
+    const beforeIssues = await issuesSvc.listIssues({ seriesId: ser.id });
+    expect(beforeIssues).toHaveLength(1);
+    const seededIssueId = beforeIssues[0].id;
+
+    // Inject a delete failure for the seeded issue id.
+    mockDeleteIssue.mockImplementationOnce(async () => {
+      throw new Error('disk full');
+    });
+
+    // Replace pass — should abort before universe/series/issue writes.
+    await expect(importerSvc.commitImport({
+      universeId: uni.id,
+      seriesId: ser.id,
+      canonSelections: { characters: [], places: [], objects: [] },
+      arc: { logline: 'New', summary: 'New', shape: 'tragedy' },
+      seasons: [],
+      issues: [{ title: 'New Issue', arcPosition: 1, proseExcerpt: 'new prose' }],
+      replaceMode: true,
+    })).rejects.toThrowError(/Replace mode aborted/);
+
+    // Old issue still on disk, no new issue created.
+    const afterIssues = await issuesSvc.listIssues({ seriesId: ser.id });
+    expect(afterIssues).toHaveLength(1);
+    expect(afterIssues[0].id).toBe(seededIssueId);
+    expect(afterIssues[0].title).toBe('Old Issue');
+    // Arc shape was NOT overwritten — series write never happened.
+    const seriesAfter = await seriesSvc.getSeries(ser.id);
+    expect(seriesAfter.arc.shape).toBe('rags-to-riches');
+    expect(seriesAfter.arc.logline).toBe('Old');
   });
 
   // Same arcPosition between old + new issues — additive mode would reject

@@ -769,6 +769,32 @@ export async function commitImport({
     }
   }
 
+  // Wipe BEFORE universe + series writes so any delete failure aborts the
+  // commit cleanly — universe canon + series arc are still in their
+  // pre-import state, and no new issues have been created yet. Without this
+  // ordering, a swallowed delete failure would leave us writing new issues
+  // alongside undeleted old ones; the additive-mode collision check is
+  // skipped in replace mode (existingArcPositions stays empty), so reused
+  // arcPositions would silently produce duplicates on disk that additive
+  // mode explicitly rejects. Universe + series writes below are idempotent,
+  // so re-running the import after the user fixes the underlying delete
+  // failure is safe.
+  if (replaceMode && existingIssues.length > 0) {
+    const failedDeleteIds = [];
+    for (const ex of existingIssues) {
+      await deleteIssue(ex.id).catch((delErr) => {
+        console.error(`❌ commitImport replace: failed to delete existing issue ${ex.id}: ${delErr.message}`);
+        failedDeleteIds.push(ex.id);
+      });
+    }
+    if (failedDeleteIds.length > 0) {
+      throw makeErr(
+        `Replace mode aborted — failed to delete ${failedDeleteIds.length} of ${existingIssues.length} existing issue${existingIssues.length === 1 ? '' : 's'} (${failedDeleteIds.join(', ')}). No universe, series, or issue writes were performed; resolve the underlying error and retry.`,
+        ERR_VALIDATION,
+      );
+    }
+  }
+
   // Wire field `places` maps to storage field `settings` until the
   // Phase 0b rename lands; the table keeps the three near-identical
   // merge calls + universe.update payload in one place.
@@ -798,17 +824,6 @@ export async function commitImport({
   const updatedUniverse = Object.keys(universePatch).length > 0
     ? await updateUniverse(universe.id, universePatch)
     : universe;
-
-  // Wipe before series-write so a stale issue can't point into a
-  // freshly-replaced arc. Per-issue delete failures are logged + skipped
-  // — one undeletable issue shouldn't abort the whole replace.
-  if (replaceMode && existingIssues.length > 0) {
-    for (const ex of existingIssues) {
-      await deleteIssue(ex.id).catch((delErr) =>
-        console.error(`❌ commitImport replace: failed to delete existing issue ${ex.id}: ${delErr.message}`),
-      );
-    }
-  }
 
   const sanitizedArc = sanitizeArc(arc);
   let updatedSeries = series;
