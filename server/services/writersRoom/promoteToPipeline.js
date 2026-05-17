@@ -31,7 +31,7 @@ import { listObjects } from './objects.js';
 import { getAnalysis } from './evaluator.js';
 import * as seriesSvc from '../pipeline/series.js';
 import * as issuesSvc from '../pipeline/issues.js';
-import { createUniverse } from '../universeBuilder.js';
+import { createUniverse, deleteUniverse } from '../universeBuilder.js';
 
 export const ERR_NO_DRAFT_BODY = 'WR_PROMOTE_NO_DRAFT_BODY';
 
@@ -112,29 +112,46 @@ export async function promoteWorkToPipeline(workId, { force = false } = {}) {
     objects,
   });
 
-  const series = await seriesSvc.createSeries({
-    name: manifest.title,
-    logline: '',
-    premise: '',
-    universeId: universe.id,
-    styleNotes: '',
-    targetFormat: 'comic+tv',
-    issueCountTarget: 1,
-    writersRoomWorkId: workId,
-  });
+  // Roll back the universe + (partial) series if any downstream write fails —
+  // otherwise a series/issue validation error would leave an orphan universe
+  // record with no series linked and the manifest still unlinked, with no
+  // path back to it from the writers-room UI. Try/catch is appropriate here
+  // (multi-step write that needs atomic-ish rollback, not error swallowing —
+  // we re-throw after cleanup so the caller still sees the original error).
+  let series = null;
+  let issue = null;
+  try {
+    series = await seriesSvc.createSeries({
+      name: manifest.title,
+      logline: '',
+      premise: '',
+      universeId: universe.id,
+      styleNotes: '',
+      targetFormat: 'comic+tv',
+      issueCountTarget: 1,
+      writersRoomWorkId: workId,
+    });
 
-  const storyboards = buildStoryboardScenes(scriptScenes);
-  const issue = await issuesSvc.createIssue({
-    seriesId: series.id,
-    title: manifest.title,
-    number: 1,
-    stages: {
-      prose: { status: 'edited', output: proseBody, input: '' },
-      storyboards: storyboards.length
-        ? { status: 'ready', scenes: storyboards }
-        : { status: 'empty' },
-    },
-  });
+    const storyboards = buildStoryboardScenes(scriptScenes);
+    issue = await issuesSvc.createIssue({
+      seriesId: series.id,
+      title: manifest.title,
+      number: 1,
+      stages: {
+        prose: { status: 'edited', output: proseBody, input: '' },
+        storyboards: storyboards.length
+          ? { status: 'ready', scenes: storyboards }
+          : { status: 'empty' },
+      },
+    });
+  } catch (err) {
+    // Best-effort cleanup; swallow cleanup errors so the original cause
+    // (validation failure, etc.) reaches the caller instead of a misleading
+    // delete-failed message.
+    if (series) await seriesSvc.deleteSeries(series.id).catch(() => {});
+    await deleteUniverse(universe.id).catch(() => {});
+    throw err;
+  }
 
   await wrLocal.linkToPipeline(workId, { seriesId: series.id, issueId: issue.id });
 
