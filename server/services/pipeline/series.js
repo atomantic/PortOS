@@ -14,6 +14,7 @@
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { PATHS, atomicWrite, readJSONFile, ensureDir } from '../../lib/fileUtils.js';
+import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
 import { isStr, trimTo } from '../../lib/storyBible.js';
 import { sanitizeArc, sanitizeSeasonList } from '../../lib/storyArc.js';
 import { sanitizeVisualStyleRef } from '../../lib/visualStyles.js';
@@ -24,25 +25,14 @@ import { emitRecordUpdated, emitRecordDeleted } from '../sharing/recordEvents.js
 // (e.g. tests that swap it through a Proxy mock).
 const statePath = () => join(PATHS.data, 'pipeline-series.json');
 
-// File-level write lock — same pattern as issueWriteTail in issues.js.
-// Required because multiple write paths can race on the single shared
+// File-level write lock. Required because multiple write paths can race on the single shared
 // pipeline-series.json file: PATCH /series/:id (bible edits), PATCH
 // /seasons/:seasonId (season metadata), the new volume cover-render route,
 // the season-cover filename hook landing, and the bible-extract merge.
 // All of those read-then-write the same JSON; without serialization a
 // later writer's `readState` can land on a pre-image snapshot and clobber
 // the earlier write. CLAUDE.md: "single tail per shared file."
-let seriesWriteTail = Promise.resolve();
-
-function queueSeriesWrite(fn) {
-  const next = seriesWriteTail.then(fn, fn); // run fn even when prev rejects
-  const silenced = next.catch(() => {});
-  seriesWriteTail = silenced;
-  silenced.finally(() => {
-    if (seriesWriteTail === silenced) seriesWriteTail = Promise.resolve();
-  });
-  return next;
-}
+const queueSeriesWrite = createFileWriteQueue();
 
 export const ERR_NOT_FOUND = 'PIPELINE_SERIES_NOT_FOUND';
 export const ERR_VALIDATION = 'PIPELINE_SERIES_VALIDATION';

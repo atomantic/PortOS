@@ -1128,4 +1128,80 @@ describe("universeBuilder service", () => {
         .rejects.toMatchObject({ code: svc.ERR_VALIDATION });
     });
   });
+
+  // Regression for "Async PATCH races on shared records — serialize writes
+  // server-side" (CLAUDE.md). Each updateUniverse() now goes through a
+  // file-level write tail so a stale snapshot can't clobber a sibling write.
+  describe("write serialization", () => {
+    it("concurrent updates to the same universe preserve every field", async () => {
+      const u = await svc.createUniverse({ name: "Race" });
+      // Five concurrent PATCHes, each touching a different scalar field.
+      // Without the queue, every call reads the same pre-PATCH snapshot and
+      // the last writeState wins — only one field would survive.
+      await Promise.all([
+        svc.updateUniverse(u.id, { logline: "L1" }),
+        svc.updateUniverse(u.id, { premise: "P1" }),
+        svc.updateUniverse(u.id, { styleNotes: "S1" }),
+        svc.updateUniverse(u.id, { starterPrompt: "SP1" }),
+        svc.updateUniverse(u.id, { name: "N1" }),
+      ]);
+      const final = await svc.getUniverse(u.id);
+      expect(final.logline).toBe("L1");
+      expect(final.premise).toBe("P1");
+      expect(final.styleNotes).toBe("S1");
+      expect(final.starterPrompt).toBe("SP1");
+      expect(final.name).toBe("N1");
+    });
+
+    it("concurrent updates to DIFFERENT universes preserve every field", async () => {
+      // Per CLAUDE.md: a Map<id, Promise> is NOT enough — both universes
+      // share the same JSON file, so writes to different ids can still race.
+      // The single file-level tail covers this.
+      const a = await svc.createUniverse({ name: "A" });
+      const b = await svc.createUniverse({ name: "B" });
+      await Promise.all([
+        svc.updateUniverse(a.id, { logline: "A-line", premise: "A-premise" }),
+        svc.updateUniverse(b.id, { logline: "B-line", premise: "B-premise" }),
+      ]);
+      const fa = await svc.getUniverse(a.id);
+      const fb = await svc.getUniverse(b.id);
+      expect(fa.logline).toBe("A-line");
+      expect(fa.premise).toBe("A-premise");
+      expect(fb.logline).toBe("B-line");
+      expect(fb.premise).toBe("B-premise");
+    });
+
+    it("a rejecting write does not poison the queue", async () => {
+      // Force the rejection from INSIDE the queue (after the writeState would
+      // run) so this actually pins poison-recovery rather than passing through
+      // a fail-before-queue path. The first call's ERR_NOT_FOUND fires inside
+      // the queued closure (the universe-id lookup happens after `readState`).
+      const u = await svc.createUniverse({ name: "PoisonTest" });
+      const results = await Promise.allSettled([
+        svc.updateUniverse("nonexistent-universe", { logline: "X" }),
+        svc.updateUniverse(u.id, { logline: "ok" }),
+      ]);
+      expect(results[0].status).toBe("rejected");
+      expect(results[0].reason?.code).toBe(svc.ERR_NOT_FOUND);
+      expect(results[1].status).toBe("fulfilled");
+      const final = await svc.getUniverse(u.id);
+      expect(final.logline).toBe("ok");
+    });
+
+    it("concurrent recordRun + updateUniverse don't clobber each other", async () => {
+      const u = await svc.createUniverse({ name: "RunRace" });
+      await Promise.all([
+        svc.updateUniverse(u.id, { logline: "L" }),
+        svc.recordRun({ id: "run-1", universeId: u.id, promptCount: 5 }),
+        svc.updateUniverse(u.id, { premise: "P" }),
+        svc.recordRun({ id: "run-2", universeId: u.id, promptCount: 7 }),
+      ]);
+      const final = await svc.getUniverse(u.id);
+      const runs = await svc.listRuns(u.id);
+      expect(final.logline).toBe("L");
+      expect(final.premise).toBe("P");
+      expect(runs).toHaveLength(2);
+      expect(runs.map((r) => r.id).sort()).toEqual(["run-1", "run-2"]);
+    });
+  });
 });

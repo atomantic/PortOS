@@ -28,6 +28,7 @@
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { PATHS, atomicWrite, readJSONFile, ensureDir } from '../lib/fileUtils.js';
+import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { composeStyledPrompt } from '../lib/composeStyledPrompt.js';
 import {
   sanitizeBibleList, BIBLE_KIND, BIBLE_FIELD, BIBLE_LIMITS, BIBLE_SOURCE,
@@ -54,6 +55,11 @@ export const CURRENT_SCHEMA_VERSION = 4;
 // universeBuilder.js was first imported, which is `undefined` under the
 // proxy-mock pattern series.js's tests already use.
 const statePath = () => join(PATHS.data, 'universe-builder.json');
+
+// Serializes every mutating call (create / update / delete / recordRun)
+// against the shared universe-builder.json so concurrent writes — even to
+// different universe ids — can't read a stale snapshot and clobber a sibling.
+const queueUniverseWrite = createFileWriteQueue();
 
 export const ERR_NOT_FOUND = 'NOT_FOUND';
 export const ERR_VALIDATION = 'VALIDATION_ERROR';
@@ -657,19 +663,28 @@ const sanitizeRun = (raw) => {
   };
 };
 
+// Once-per-process flag for the canon-backfill log — readState() runs in both
+// the queue and from un-queued readers, and the in-memory migration is cheap
+// to recompute every read, but the log line should fire once.
+let canonBackfillLogged = false;
+
 async function readState() {
   await ensureDir(PATHS.data);
   const raw = await readJSONFile(statePath(), DEFAULT_STATE, { logError: false });
   const rawById = new Map(Array.isArray(raw.universes) ? raw.universes.filter((u) => u?.id).map((u) => [u.id, u]) : []);
   const universes = Array.isArray(raw.universes) ? raw.universes.map(sanitizeTemplate).filter(Boolean) : [];
   const runs = Array.isArray(raw.runs) ? raw.runs.map(sanitizeRun).filter(Boolean) : [];
-  // Persist on first backfill so subsequent reads skip the work and the user
-  // is free to rename or delete canon entries without the backfill re-adding
-  // them from their source variation.
-  const migrated = universes.filter((u) => (rawById.get(u.id)?.schemaVersion || 0) < CURRENT_SCHEMA_VERSION);
-  if (migrated.length > 0) {
-    console.log(`🌍 Universe Builder canon backfill — migrated ${migrated.length} universe(s) to schemaVersion=${CURRENT_SCHEMA_VERSION}`);
-    await writeState({ universes, runs });
+  // The in-memory result is always at CURRENT_SCHEMA_VERSION (sanitizeTemplate
+  // re-stamps it on every read). Don't persist the migration here — that write
+  // would race against any concurrent queued mutator's writeState and could
+  // overwrite a freshly-patched record with the pre-patch migration baseline.
+  // The next queued mutator persists the migrated shape naturally.
+  if (!canonBackfillLogged) {
+    const migrated = universes.filter((u) => (rawById.get(u.id)?.schemaVersion || 0) < CURRENT_SCHEMA_VERSION);
+    if (migrated.length > 0) {
+      console.log(`🌍 Universe Builder canon backfill — migrated ${migrated.length} universe(s) in-memory to schemaVersion=${CURRENT_SCHEMA_VERSION}; persists on next write`);
+      canonBackfillLogged = true;
+    }
   }
   return { universes, runs };
 }
@@ -694,42 +709,44 @@ export async function getUniverse(id) {
 export async function createUniverse(input = {}) {
   const name = trimTo(input.name, NAME_MAX_LENGTH);
   if (!name) throw makeErr(`Universe name is required (1..${NAME_MAX_LENGTH} chars)`, ERR_VALIDATION);
-  const state = await readState();
-  const now = new Date().toISOString();
-  const next = sanitizeTemplate({
-    id: randomUUID(),
-    name,
-    starterPrompt: input.starterPrompt || '',
-    stylePrompt: input.stylePrompt || '',
-    negativePrompt: input.negativePrompt || '',
-    logline: input.logline || '',
-    premise: input.premise || '',
-    styleNotes: input.styleNotes || '',
-    categories: input.categories || {},
-    compositeSheets: input.compositeSheets || [],
-    influences: input.influences || {},
-    locked: input.locked || {},
-    // Canon registries — let callers seed a universe at creation time
-    // (writers-room promote, share-bucket import). sanitizeTemplate runs
-    // each through sanitizeBibleList, so per-entry shape is enforced.
-    characters: input.characters || [],
-    settings: input.settings || [],
-    objects: input.objects || [],
-    // Stamp the current schema so backfillCanonFromCategories takes its
-    // hot-path skip on first read. Without this, the legacy categories→
-    // canon backfill fires on every brand-new universe and re-pollutes
-    // `characters/settings/objects` with every category variation —
-    // counter to Phase B's separation of canon (named entities) from
-    // categories (exploratory variations). New universes are always at
-    // CURRENT_SCHEMA_VERSION; the backfill exists only for legacy reads.
-    schemaVersion: CURRENT_SCHEMA_VERSION,
-    llm: input.llm || {},
-    createdAt: now,
-    updatedAt: now,
+  return queueUniverseWrite(async () => {
+    const state = await readState();
+    const now = new Date().toISOString();
+    const next = sanitizeTemplate({
+      id: randomUUID(),
+      name,
+      starterPrompt: input.starterPrompt || '',
+      stylePrompt: input.stylePrompt || '',
+      negativePrompt: input.negativePrompt || '',
+      logline: input.logline || '',
+      premise: input.premise || '',
+      styleNotes: input.styleNotes || '',
+      categories: input.categories || {},
+      compositeSheets: input.compositeSheets || [],
+      influences: input.influences || {},
+      locked: input.locked || {},
+      // Canon registries — let callers seed a universe at creation time
+      // (writers-room promote, share-bucket import). sanitizeTemplate runs
+      // each through sanitizeBibleList, so per-entry shape is enforced.
+      characters: input.characters || [],
+      settings: input.settings || [],
+      objects: input.objects || [],
+      // Stamp the current schema so backfillCanonFromCategories takes its
+      // hot-path skip on first read. Without this, the legacy categories→
+      // canon backfill fires on every brand-new universe and re-pollutes
+      // `characters/settings/objects` with every category variation —
+      // counter to Phase B's separation of canon (named entities) from
+      // categories (exploratory variations). New universes are always at
+      // CURRENT_SCHEMA_VERSION; the backfill exists only for legacy reads.
+      schemaVersion: CURRENT_SCHEMA_VERSION,
+      llm: input.llm || {},
+      createdAt: now,
+      updatedAt: now,
+    });
+    state.universes.push(next);
+    await writeState(state);
+    return next;
   });
-  state.universes.push(next);
-  await writeState(state);
-  return next;
 }
 
 /**
@@ -743,118 +760,126 @@ export async function insertUniverseWithId(input = {}) {
   }
   const name = trimTo(input.name, NAME_MAX_LENGTH);
   if (!name) throw makeErr(`Universe name is required (1..${NAME_MAX_LENGTH} chars)`, ERR_VALIDATION);
-  const state = await readState();
-  if (state.universes.some((u) => u.id === input.id)) {
-    throw makeErr(`Universe id already exists: ${input.id}`, ERR_DUPLICATE);
-  }
-  const next = sanitizeTemplate({ ...input, name });
-  if (!next) throw makeErr('Invalid universe payload', ERR_VALIDATION);
-  state.universes.push(next);
-  await writeState(state);
-  return next;
+  return queueUniverseWrite(async () => {
+    const state = await readState();
+    if (state.universes.some((u) => u.id === input.id)) {
+      throw makeErr(`Universe id already exists: ${input.id}`, ERR_DUPLICATE);
+    }
+    const next = sanitizeTemplate({ ...input, name });
+    if (!next) throw makeErr('Invalid universe payload', ERR_VALIDATION);
+    state.universes.push(next);
+    await writeState(state);
+    return next;
+  });
 }
 
 export async function updateUniverse(id, patch = {}) {
-  const state = await readState();
-  const idx = state.universes.findIndex((w) => w.id === id);
-  if (idx < 0) throw makeErr(`Universe not found: ${id}`, ERR_NOT_FOUND);
-  const cur = state.universes[idx];
+  return queueUniverseWrite(async () => {
+    const state = await readState();
+    const idx = state.universes.findIndex((w) => w.id === id);
+    if (idx < 0) throw makeErr(`Universe not found: ${id}`, ERR_NOT_FOUND);
+    const cur = state.universes[idx];
 
-  // Merge `categories` per-key — a partial PATCH that only includes
-  // `landscapes` must NOT wipe characters/structures/etc. Whole categories
-  // not present in the patch are kept as-is from the current universe.
-  const mergedCategories = 'categories' in patch
-    ? { ...cur.categories, ...(patch.categories || {}) }
-    : cur.categories;
+    // Merge `categories` per-key — a partial PATCH that only includes
+    // `landscapes` must NOT wipe characters/structures/etc. Whole categories
+    // not present in the patch are kept as-is from the current universe.
+    const mergedCategories = 'categories' in patch
+      ? { ...cur.categories, ...(patch.categories || {}) }
+      : cur.categories;
 
-  // Merge `llm` field-by-field — sending only `{ provider }` shouldn't
-  // clear `model` and vice versa.
-  const mergedLlm = 'llm' in patch
-    ? { ...(cur.llm || {}), ...(patch.llm || {}) }
-    : cur.llm;
+    // Merge `llm` field-by-field — sending only `{ provider }` shouldn't
+    // clear `model` and vice versa.
+    const mergedLlm = 'llm' in patch
+      ? { ...(cur.llm || {}), ...(patch.llm || {}) }
+      : cur.llm;
 
-  // `locked` replaces wholesale when the patch sends it (so unticking a lock
-  // actually unlocks). Skipped when the patch omits it.
-  const mergedLocked = 'locked' in patch ? (patch.locked || {}) : (cur.locked || {});
+    // `locked` replaces wholesale when the patch sends it (so unticking a lock
+    // actually unlocks). Skipped when the patch omits it.
+    const mergedLocked = 'locked' in patch ? (patch.locked || {}) : (cur.locked || {});
 
-  // `influences` also replaces wholesale (each list is the user's full
-  // intended state — partial merging would leave stale entries the user
-  // thought they removed).
-  const mergedInfluences = 'influences' in patch ? (patch.influences || {}) : (cur.influences || {});
+    // `influences` also replaces wholesale (each list is the user's full
+    // intended state — partial merging would leave stale entries the user
+    // thought they removed).
+    const mergedInfluences = 'influences' in patch ? (patch.influences || {}) : (cur.influences || {});
 
-  // Scalar fields: only apply what the patch actually carries, so a partial
-  // PATCH never clobbers a field the caller didn't send. `categories` + `llm`
-  // + `locked` are handled above (they need per-key merging or wholesale
-  // replacement, not the simple scalar copy).
-  const PATCHABLE_SCALARS = [
-    'name', 'starterPrompt',
-    'logline', 'premise', 'styleNotes', 'compositeSheets',
-    // Canon entity arrays — patched wholesale (the sanitizer reruns
-    // sanitizeBibleList so per-entry shape is enforced on every save).
-    'characters', 'settings', 'objects',
-    // Share-bucket origin metadata (importer sets it; user clears via wholesale null).
-    'origin',
-  ];
-  const scalarPatch = Object.fromEntries(
-    PATCHABLE_SCALARS.filter((k) => k in patch).map((k) => [k, patch[k]]),
-  );
+    // Scalar fields: only apply what the patch actually carries, so a partial
+    // PATCH never clobbers a field the caller didn't send. `categories` + `llm`
+    // + `locked` are handled above (they need per-key merging or wholesale
+    // replacement, not the simple scalar copy).
+    const PATCHABLE_SCALARS = [
+      'name', 'starterPrompt',
+      'logline', 'premise', 'styleNotes', 'compositeSheets',
+      // Canon entity arrays — patched wholesale (the sanitizer reruns
+      // sanitizeBibleList so per-entry shape is enforced on every save).
+      'characters', 'settings', 'objects',
+      // Share-bucket origin metadata (importer sets it; user clears via wholesale null).
+      'origin',
+    ];
+    const scalarPatch = Object.fromEntries(
+      PATCHABLE_SCALARS.filter((k) => k in patch).map((k) => [k, patch[k]]),
+    );
 
-  const merged = sanitizeTemplate({
-    ...cur,
-    ...scalarPatch,
-    // sanitizeTemplate runs the v2 → v3 prose-prompt merge — see its
-    // `mergeLegacyPromptsIntoInfluences` call.
-    ...(patch.stylePrompt !== undefined ? { stylePrompt: patch.stylePrompt } : {}),
-    ...(patch.negativePrompt !== undefined ? { negativePrompt: patch.negativePrompt } : {}),
-    categories: mergedCategories,
-    influences: mergedInfluences,
-    locked: mergedLocked,
-    llm: mergedLlm,
-    updatedAt: new Date().toISOString(),
-  });
-  if (!merged) throw makeErr('Invalid universe payload', ERR_VALIDATION);
-  state.universes[idx] = merged;
-  await writeState(state);
-  // Cascade rename onto the linked media collection — log but don't fail
-  // the save: a stale collection name is recoverable, a failed save isn't.
-  if (merged.name !== cur.name) {
-    await renameCollectionForUniverse(merged.id, merged.name).catch((err) => {
-      console.error(`❌ universe-collection rename cascade failed for ${merged.id}: ${err?.message || err}`);
+    const merged = sanitizeTemplate({
+      ...cur,
+      ...scalarPatch,
+      // sanitizeTemplate runs the v2 → v3 prose-prompt merge — see its
+      // `mergeLegacyPromptsIntoInfluences` call.
+      ...(patch.stylePrompt !== undefined ? { stylePrompt: patch.stylePrompt } : {}),
+      ...(patch.negativePrompt !== undefined ? { negativePrompt: patch.negativePrompt } : {}),
+      categories: mergedCategories,
+      influences: mergedInfluences,
+      locked: mergedLocked,
+      llm: mergedLlm,
+      updatedAt: new Date().toISOString(),
     });
-  }
-  emitRecordUpdated('universe', merged.id);
-  return merged;
+    if (!merged) throw makeErr('Invalid universe payload', ERR_VALIDATION);
+    state.universes[idx] = merged;
+    await writeState(state);
+    // Cascade rename onto the linked media collection — log but don't fail
+    // the save: a stale collection name is recoverable, a failed save isn't.
+    if (merged.name !== cur.name) {
+      await renameCollectionForUniverse(merged.id, merged.name).catch((err) => {
+        console.error(`❌ universe-collection rename cascade failed for ${merged.id}: ${err?.message || err}`);
+      });
+    }
+    emitRecordUpdated('universe', merged.id);
+    return merged;
+  });
 }
 
 export async function deleteUniverse(id) {
-  const state = await readState();
-  const before = state.universes.length;
-  state.universes = state.universes.filter((w) => w.id !== id);
-  if (state.universes.length === before) throw makeErr(`Universe not found: ${id}`, ERR_NOT_FOUND);
-  // Drop runs referencing the deleted universe — they're useless without it.
-  state.runs = state.runs.filter((r) => r.universeId !== id);
-  await writeState(state);
-  // Release the rename-lock on any linked media collections — without this,
-  // the orphan collection's `universeId` stays stamped and the lock in
-  // updateCollection blocks renames forever even though the universe is gone.
-  // Best-effort: a failure here mustn't fail the delete (the universe is
-  // already gone from state).
-  await unlinkCollectionsForUniverse(id).catch((err) => {
-    console.error(`❌ unlink media collections for deleted universe ${id} failed: ${err?.message || err}`);
+  return queueUniverseWrite(async () => {
+    const state = await readState();
+    const before = state.universes.length;
+    state.universes = state.universes.filter((w) => w.id !== id);
+    if (state.universes.length === before) throw makeErr(`Universe not found: ${id}`, ERR_NOT_FOUND);
+    // Drop runs referencing the deleted universe — they're useless without it.
+    state.runs = state.runs.filter((r) => r.universeId !== id);
+    await writeState(state);
+    // Release the rename-lock on any linked media collections — without this,
+    // the orphan collection's `universeId` stays stamped and the lock in
+    // updateCollection blocks renames forever even though the universe is gone.
+    // Best-effort: a failure here mustn't fail the delete (the universe is
+    // already gone from state).
+    await unlinkCollectionsForUniverse(id).catch((err) => {
+      console.error(`❌ unlink media collections for deleted universe ${id} failed: ${err?.message || err}`);
+    });
+    emitRecordDeleted('universe', id);
+    return { id };
   });
-  emitRecordDeleted('universe', id);
-  return { id };
 }
 
 export async function recordRun(run) {
   const sanitized = sanitizeRun(run);
   if (!sanitized) throw makeErr('Invalid run payload', ERR_VALIDATION);
-  const state = await readState();
-  state.runs.push(sanitized);
-  // Keep last 200 runs to bound state growth.
-  if (state.runs.length > 200) state.runs = state.runs.slice(-200);
-  await writeState(state);
-  return sanitized;
+  return queueUniverseWrite(async () => {
+    const state = await readState();
+    state.runs.push(sanitized);
+    // Keep last 200 runs to bound state growth.
+    if (state.runs.length > 200) state.runs = state.runs.slice(-200);
+    await writeState(state);
+    return sanitized;
+  });
 }
 
 export async function listRuns(universeId = null) {

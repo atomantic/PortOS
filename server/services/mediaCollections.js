@@ -15,13 +15,14 @@
  * `addItem` running alongside Universe Builder's completion-hook `addItem`,
  * or a `deleteUniverse` unlink racing with an in-flight cover completion —
  * each do a `listCollections → modify → atomicWrite(entire array)` round
- * and the second write silently clobbers the first. Mirrors the
- * `issueWriteTail` pattern in `server/services/pipeline/issues.js`.
+ * and the second write silently clobbers the first. Built on
+ * `createFileWriteQueue()` in `server/lib/fileWriteQueue.js`.
  */
 
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { PATHS, atomicWrite, readJSONFile, ensureDir } from '../lib/fileUtils.js';
+import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { ITEM_KIND, REF_MAX_LENGTH, itemKey } from '../lib/mediaItemKey.js';
 import { sanitizeOrigin } from '../lib/sharingOrigin.js';
 import { emitRecordUpdated } from './sharing/recordEvents.js';
@@ -128,27 +129,11 @@ export async function getCollection(id) {
   return c;
 }
 
-// File-level write tail. Every public mutator wraps its read-modify-write
-// in `serializeFileWrite` so the read always sees the freshest persisted
-// state and the write completes before the next task's read begins.
-// `writeAll` is the only persistence call and must only be invoked from
-// inside a serialized task.
-let fileWriteTail = Promise.resolve();
-const serializeFileWrite = (task) => {
-  const next = fileWriteTail.then(task, task);
-  // Silence the tail so a rejection doesn't poison subsequent waiters.
-  // Mirror the issueWriteTail / seriesWriteTail pattern: when this write
-  // is still the tail after it settles, reset to a fresh Promise.resolve()
-  // so the chain doesn't retain settled promises (and their resolved
-  // payloads) for the life of the process. If another write enqueues
-  // first, it becomes the tail and we drop our reference.
-  const silenced = next.catch(() => {});
-  fileWriteTail = silenced;
-  silenced.finally(() => {
-    if (fileWriteTail === silenced) fileWriteTail = Promise.resolve();
-  });
-  return next;
-};
+// Every public mutator wraps its read-modify-write in `serializeFileWrite`
+// so the read always sees the freshest persisted state and the write
+// completes before the next task's read begins. `writeAll` is the only
+// persistence call and must only be invoked from inside a serialized task.
+const serializeFileWrite = createFileWriteQueue();
 const writeAll = async (collections) => {
   await atomicWrite(statePath(), { collections });
   return collections;

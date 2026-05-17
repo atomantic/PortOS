@@ -10,7 +10,7 @@
  * Season covers live on the series record, not on an issue stage — so we
  * write a small bespoke handler that routes through
  * `seriesSvc.updateSeasonOnSeries`, which serializes against the shared
- * `pipeline-series.json` via `seriesWriteTail`.
+ * `pipeline-series.json` via `queueSeriesWrite` (see `lib/fileWriteQueue.js`).
  *
  * Idempotency: skips when the slot's recorded `jobId` no longer matches
  * (a re-render landed between enqueue and this completion event). The
