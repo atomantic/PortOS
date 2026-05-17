@@ -174,6 +174,22 @@ export const isBlank = (v) => {
 
 export const normalizeBibleName = (name) => String(name || '').trim().toLowerCase();
 
+// Fields the LLM should NEVER set on a canon entry it just generated.
+// `id/createdAt/updatedAt` get freshly minted by the per-kind sanitizer; a
+// hallucinated `locked: true` would block user edits without a Lock UI click;
+// `sourceSeriesId` is provenance owned by series imports; `imageRefs` +
+// `primaryImageRef` are operational (set by the Render UI / extraction).
+export function stripCanonControlFields(entry) {
+  if (!entry || typeof entry !== 'object') return entry;
+  const {
+    id: _id, createdAt: _ca, updatedAt: _ua,
+    locked: _locked, sourceSeriesId: _ssi,
+    imageRefs: _imgs, primaryImageRef: _primary,
+    ...rest
+  } = entry;
+  return rest;
+}
+
 const nowIso = () => new Date().toISOString();
 
 function ensureId(raw, idPrefix) {

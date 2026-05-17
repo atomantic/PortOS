@@ -29,7 +29,7 @@ import {
   sanitizeCompositeSheets,
   sanitizeInfluences,
 } from "./universeBuilder.js";
-import { sanitizeBibleList, BIBLE_KIND, BIBLE_SOURCE } from "../lib/storyBible.js";
+import { sanitizeBibleList, stripCanonControlFields, BIBLE_KIND, BIBLE_SOURCE } from "../lib/storyBible.js";
 import { ServerError } from "../lib/errorHandler.js";
 import { extractJson as extractJsonShared } from "../lib/jsonExtract.js";
 import {
@@ -290,39 +290,17 @@ const normalizeCompositeSheets = (raw) =>
 // pre-sanitize so the sanitizer's `ensureSource` allowlist validates it (a
 // post-sanitize stamp would bypass that check).
 //
-// Strip control + provenance fields from raw entries before sanitizing. The
-// sanitizer preserves whatever it finds for these — an LLM that hallucinates
-// any of them (or copies an example from the prompt) would otherwise inject
-// stale identifiers, false attribution, or phantom "locked" entries that
-// look user-pinned. Expand is creating fresh records; the only field whose
-// provenance we trust is `source` (set to UNIVERSE_EXPAND below).
-//
-// Stripped (the LLM should NEVER supply these):
-//   - id, createdAt, updatedAt — sanitizer mints fresh values
-//   - locked                   — sanitizer preserves `=== true`; a hallucinated
-//                                lock would block user edits without a Lock UI click
-//   - sourceSeriesId           — provenance (which series imported this entry);
-//                                expand isn't a series import, so always null
-//   - imageRefs, primaryImageRef — visual anchors are operational (set by
-//                                  Render UI / extraction), not creative
+// Sanitize an LLM-emitted canon array through the universe service's
+// per-kind sanitizer. `source` is stamped pre-sanitize so the sanitizer's
+// `ensureSource` allowlist validates it; control fields the LLM should
+// never set (id/locked/imageRefs/etc.) are dropped via stripCanonControlFields
+// — shared with the Promote path so the two LLM entrypoints can't drift.
 const normalizeCanonArray = (raw, kind) => {
   if (!Array.isArray(raw)) return [];
   const stamped = raw.map((e) => {
     if (!e || typeof e !== 'object') return e;
-    const {
-      id: _ignoredId,
-      createdAt: _ca,
-      updatedAt: _ua,
-      locked: _locked,
-      sourceSeriesId: _ssi,
-      imageRefs: _imgs,
-      primaryImageRef: _primary,
-      ...rest
-    } = e;
-    return { ...rest, source: BIBLE_SOURCE.UNIVERSE_EXPAND };
+    return { ...stripCanonControlFields(e), source: BIBLE_SOURCE.UNIVERSE_EXPAND };
   });
-  // Expand is creating fresh entries; let the sanitizer stamp timestamps
-  // instead of preserving (likely-absent) ones from the LLM output.
   return sanitizeBibleList(stamped, kind, { preserveTimestamps: false });
 };
 

@@ -12,13 +12,13 @@ import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'reac
 import {
   Globe2, Plus, Trash2, Sparkles, Wand2, Loader2, Save, FolderOpen,
   Edit3, X, MessageSquarePlus, Play, Lock, Unlock,
-  PanelLeftClose, PanelLeftOpen,
+  PanelLeftClose, PanelLeftOpen, ArrowUpCircle,
   BookOpen, Users, MapPin, Package, Layers, ImagePlus, FolderTree,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import {
   listUniverses, getUniverse, createUniverse, updateUniverse, deleteUniverse, expandUniverse,
-  generateCategoryVariations,
+  generateCategoryVariations, promoteVariationToCanon,
   renderWorld, listWorldRuns, getProviders, refineWorldPrompts, WORLD_CATEGORIES,
   WORLD_CATEGORY_KEY_MAX, COMPOSITE_PROMPT_MAX, WORLD_LOGLINE_MAX,
   WORLD_PREMISE_MAX, WORLD_STYLE_NOTES_MAX, WORLD_LOCKABLE_FIELDS,
@@ -67,6 +67,7 @@ const TRUNK_TABS = [
   { id: TAB_OBJECTS, kind: 'objects', label: 'Objects', icon: Package },
 ];
 const TRUNK_BY_ID = Object.fromEntries(TRUNK_TABS.map((t) => [t.id, t]));
+const TRUNK_BY_KIND = Object.fromEntries(TRUNK_TABS.map((t) => [t.kind, t]));
 
 // Group category buckets by their `kind` tag. Buckets with an unknown / missing
 // kind fall into the `other` bin — that bin drives whether the Other tab shows.
@@ -367,6 +368,20 @@ export default function UniverseBuilder() {
   // The draft is the editable copy of the currently-selected world. New
   // universes start as a draft with no id; saving creates the persisted record.
   const [draft, setDraft] = useState(emptyTemplate());
+  // Mount tracker for deferred setState after async work (handlePromoteVariation
+  // can run for 5–30s while the LLM thinks). CLAUDE.md "Deferred work must
+  // respect both staleness and unmount" — never reset to true so dev-mode
+  // double-mount stays clean.
+  const mountedRef = useRef(true);
+  useEffect(() => () => { mountedRef.current = false; }, []);
+  // Page-level in-flight gate for the promote action. Ref + state pair so
+  // the disable check stays synchronous (ref) while still triggering renders
+  // (state). Promote writes to `universe[bibleField]` and `categories[key]`
+  // as wholesale replacements from a stale snapshot — letting two run in
+  // parallel against the same universe would let the second clobber the
+  // first's canon append.
+  const [promoting, setPromoting] = useState(false);
+  const promotingRef = useRef(false);
   const [newCategoryName, setNewCategoryName] = useState('');
   // True when handleExpand merged new canon entries into the draft that the
   // server doesn't yet know about (auto-save failed or hasn't run). On the
@@ -1169,6 +1184,63 @@ export default function UniverseBuilder() {
     }
     toast.success(`Added ${additionCount} variation${additionCount === 1 ? '' : 's'} to ${humanizeCategory(cat)} — review then Save`);
   };
+  // Requires `selectedId` — the server action reads the persisted record,
+  // so an unsaved draft can't be promoted from. The page-level `promoting`
+  // gate prevents two promotes (across buckets or trunks) from racing each
+  // other to stale-snapshot writes against the same universe.
+  const handlePromoteVariation = async (category, variation, { targetKind } = {}) => {
+    if (!selectedId) {
+      toast.error('Save the universe first — promote needs the persisted record');
+      return;
+    }
+    if (!variation?.label) return;
+    if (promotingRef.current) return;
+    promotingRef.current = true;
+    setPromoting(true);
+    const capturedId = selectedId;
+    const toastId = toast.loading(`Promoting "${variation.label}" to canon…`);
+    const result = await promoteVariationToCanon(selectedId, {
+      category,
+      label: variation.label,
+      targetKind,
+      providerId: draft.llm?.provider || undefined,
+      model: draft.llm?.model || undefined,
+    }, { silent: true }).catch((e) => {
+      toast.dismiss(toastId);
+      toast.error(`Promote failed: ${e.message}`);
+      return null;
+    });
+    if (mountedRef.current) {
+      promotingRef.current = false;
+      setPromoting(false);
+    }
+    if (!result?.universe) return;
+    const updated = result.universe;
+    // Always update the cached list — even when the user navigated away mid-
+    // flight, the persisted shape changed and other surfaces should see it.
+    setWorlds((prev) => {
+      const without = prev.filter((w) => w.id !== updated.id);
+      return [updated, ...without];
+    });
+    // Guard: if the user navigated to a different universe during the LLM
+    // call, the response belongs to the previous one — don't clobber the
+    // new draft. The list update above still surfaces the change.
+    if (!mountedRef.current || capturedId !== selectedId) return;
+    // Selective merge: only the canon array + the affected category bucket
+    // changed server-side. Preserve every other draft field (the user may
+    // have typed into logline/premise/influences during the LLM call).
+    setDraft((d) => ({
+      ...d,
+      characters: updated.characters,
+      settings: updated.settings,
+      objects: updated.objects,
+      categories: { ...d.categories, [result.removed.category]: updated.categories?.[result.removed.category] },
+      schemaVersion: updated.schemaVersion,
+      updatedAt: updated.updatedAt,
+    }));
+    toast.dismiss(toastId);
+    toast.success(`Promoted "${variation.label}" → ${result.targetKind} canon`);
+  };
   const updateCompositeSheets = (sheets) => setDraft((d) => ({ ...d, compositeSheets: sheets }));
   const addCategory = () => {
     const key = normalizeCategoryKey(newCategoryName);
@@ -1454,11 +1526,13 @@ export default function UniverseBuilder() {
               activeBucket={activeBucket}
               setBucket={setBucket}
               canRender={canRender}
+              canPromote={!!selectedId && !promoting}
               imageCfg={imageCfg}
               onUniverseChange={handleCanonChange}
               onRemoveBucket={removeCategory}
               onUpdateBucket={updateCategory}
               onGenerateInBucket={handleGenerateInCategory}
+              onPromoteVariation={(bucket, v) => handlePromoteVariation(bucket, v)}
               onBulkRenderBucket={(bucket) => runRender({ promptMode: 'variations', selection: { [bucket]: 'all' } })}
               onRenderVariation={(bucket, v) => runRender({ promptMode: 'variations', selection: { [bucket]: [v.label] } })}
               onBulkRenderTrunk={() => {
@@ -1489,9 +1563,11 @@ export default function UniverseBuilder() {
             activeBucket={activeBucket}
             setBucket={setBucket}
             canRender={canRender}
+            canPromote={!!selectedId && !promoting}
             onUpdateBucket={updateCategory}
             onRemoveBucket={removeCategory}
             onGenerateInBucket={handleGenerateInCategory}
+            onPromoteVariation={(bucket, v, opts) => handlePromoteVariation(bucket, v, opts)}
             onBulkRenderBucket={(bucket) => runRender({ promptMode: 'variations', selection: { [bucket]: 'all' } })}
             onRenderVariation={(bucket, v) => runRender({ promptMode: 'variations', selection: { [bucket]: [v.label] } })}
             onAutoSort={() => {
@@ -1896,7 +1972,12 @@ function CategoryEditor({
   category, variations, canRemove = false, onChange, onRemove,
   canRender = false, onRenderCategory = null, onRenderVariation = null,
   onGenerate = null,
+  // `bucketKind` drives the promote-button UX: when `'other'` (or absent)
+  // the picker opens to choose a trunk; otherwise we promote directly.
+  // `canPromote` gates on universe-persisted (the action reads the saved record).
+  canPromote = false, bucketKind = null, onPromote = null,
 }) {
+  const requiresTargetKind = !TRUNK_BY_KIND[bucketKind];
   const [adding, setAdding] = useState(false);
   const [newLabel, setNewLabel] = useState('');
   const [newPrompt, setNewPrompt] = useState('');
@@ -1906,15 +1987,38 @@ function CategoryEditor({
   const [genOpen, setGenOpen] = useState(false);
   const [genCustom, setGenCustom] = useState('');
   const [generating, setGenerating] = useState(false);
+  const [promotingIdx, setPromotingIdx] = useState(null);
+  const [pickerIdx, setPickerIdx] = useState(null);
   const genWrapRef = useRef(null);
+  const pickerWrapRef = useRef(null);
 
   useClickOutside(genWrapRef, genOpen, () => setGenOpen(false));
+  useClickOutside(pickerWrapRef, pickerIdx !== null, () => setPickerIdx(null));
   useEffect(() => {
     if (!genOpen) return undefined;
     const onKey = (e) => { if (e.key === 'Escape') setGenOpen(false); };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, [genOpen]);
+  useEffect(() => {
+    if (pickerIdx === null) return undefined;
+    const onKey = (e) => { if (e.key === 'Escape') setPickerIdx(null); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [pickerIdx]);
+
+  const editorMountedRef = useRef(true);
+  useEffect(() => () => { editorMountedRef.current = false; }, []);
+  const runPromote = async (idx, variation, opts) => {
+    if (!onPromote) return;
+    setPickerIdx(null);
+    setPromotingIdx(idx);
+    try {
+      await onPromote(variation, opts);
+    } finally {
+      if (editorMountedRef.current) setPromotingIdx(null);
+    }
+  };
 
   const runGenerate = async (count) => {
     const n = Math.max(GENERATE_CUSTOM_MIN, Math.min(GENERATE_CUSTOM_MAX, parseInt(count, 10) || 0));
@@ -2122,6 +2226,55 @@ function CategoryEditor({
                     <div className="text-xs text-gray-400 line-clamp-2">{v.prompt}</div>
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
+                    {onPromote && (() => {
+                      const promoteTitle = !canPromote
+                        ? 'Save the universe first to enable promote'
+                        : requiresTargetKind
+                          ? 'Promote to canon — pick a trunk'
+                          : 'Promote to canon — LLM expands this variation into a full canon entry';
+                      return (
+                      <div className="relative" ref={pickerIdx === idx ? pickerWrapRef : null}>
+                        <button
+                          onClick={() => {
+                            if (requiresTargetKind) {
+                              setPickerIdx(pickerIdx === idx ? null : idx);
+                              return;
+                            }
+                            runPromote(idx, v);
+                          }}
+                          disabled={!canPromote || promotingIdx !== null}
+                          className="p-1 text-gray-400 hover:text-port-success disabled:opacity-30 disabled:cursor-not-allowed rounded"
+                          title={promoteTitle}
+                          aria-haspopup={requiresTargetKind ? 'menu' : undefined}
+                          aria-expanded={requiresTargetKind ? pickerIdx === idx : undefined}
+                        >
+                          {promotingIdx === idx
+                            ? <Loader2 size={14} className="animate-spin" />
+                            : <ArrowUpCircle size={14} />}
+                        </button>
+                        {pickerIdx === idx && requiresTargetKind && (
+                          <div
+                            role="menu"
+                            className="absolute right-0 top-full mt-1 z-20 w-44 bg-port-card border border-port-border rounded shadow-lg p-1 flex flex-col gap-0.5"
+                          >
+                            <div className="px-2 pt-1 pb-1 text-[10px] uppercase tracking-wide text-gray-500">
+                              Promote to canon as…
+                            </div>
+                            {TRUNK_TABS.map((trunk) => (
+                              <button
+                                key={trunk.kind}
+                                role="menuitem"
+                                onClick={() => runPromote(idx, v, { targetKind: trunk.kind })}
+                                className="text-left text-xs px-2 py-1.5 text-gray-200 hover:bg-port-success/20 rounded"
+                              >
+                                {trunk.label}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                      );
+                    })()}
                     {onRenderVariation && (
                       <button
                         onClick={() => onRenderVariation(v)}
@@ -2492,8 +2645,8 @@ function BucketChipStrip({ buckets, activeBucket, setBucket, showAll = true, ext
 //   - <bucketKey>: renders that bucket's variations via CategoryEditor
 function TrunkView({
   trunk, draft, selectedId, buckets, activeBucket, setBucket,
-  canRender, imageCfg, onUniverseChange,
-  onRemoveBucket, onUpdateBucket, onGenerateInBucket,
+  canRender, canPromote, imageCfg, onUniverseChange,
+  onRemoveBucket, onUpdateBucket, onGenerateInBucket, onPromoteVariation,
   onBulkRenderBucket, onRenderVariation, onBulkRenderTrunk,
   onAddBucket,
 }) {
@@ -2626,6 +2779,9 @@ function TrunkView({
                   onRenderCategory={() => onBulkRenderBucket(cat)}
                   onRenderVariation={(v) => onRenderVariation(cat, v)}
                   onGenerate={(count) => onGenerateInBucket(cat, count)}
+                  canPromote={canPromote}
+                  bucketKind={draft.categories?.[cat]?.kind ?? trunk.kind}
+                  onPromote={onPromoteVariation ? (v) => onPromoteVariation(cat, v) : null}
                 />
               ))}
             </section>
@@ -2640,8 +2796,8 @@ function TrunkView({
 // Same card grid as TrunkView but no canon plumbing, plus an "Auto-sort"
 // action that (eventually) LLM-classifies each bucket into the right trunk.
 function OtherTab({
-  draft, buckets, activeBucket, setBucket, canRender,
-  onUpdateBucket, onRemoveBucket, onGenerateInBucket,
+  draft, buckets, activeBucket, setBucket, canRender, canPromote,
+  onUpdateBucket, onRemoveBucket, onGenerateInBucket, onPromoteVariation,
   onBulkRenderBucket, onRenderVariation, onAutoSort,
 }) {
   return (
@@ -2682,6 +2838,9 @@ function OtherTab({
             onRenderCategory={() => onBulkRenderBucket(cat)}
             onRenderVariation={(v) => onRenderVariation(cat, v)}
             onGenerate={(count) => onGenerateInBucket(cat, count)}
+            canPromote={!!selectedId}
+            bucketKind={draft.categories?.[cat]?.kind}
+            onPromote={onPromoteVariation ? (v, opts) => onPromoteVariation(cat, v, opts) : null}
           />
         ))}
       </section>

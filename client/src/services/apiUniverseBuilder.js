@@ -194,3 +194,16 @@ export const setUniverseCanonLock = (universeId, kind, entryId, locked) =>
     method: 'PATCH',
     body: JSON.stringify({ locked }),
   });
+
+// Promote a category variation into a full canon entry. `targetKind` is
+// required only when the source bucket's `kind` is 'other' (otherwise the
+// server derives it from the bucket). Pass `{ silent: true }` in `options`
+// when the caller owns its own error toast (per CLAUDE.md).
+export const promoteVariationToCanon = (universeId, {
+  category, label, targetKind, providerId, model,
+} = {}, options = {}) =>
+  request(`/universe-builder/${encodeURIComponent(universeId)}/promote-variation`, {
+    method: 'POST',
+    body: JSON.stringify({ category, label, targetKind, providerId, model }),
+    ...options,
+  });

@@ -18,6 +18,27 @@ vi.mock('crypto', async () => {
   return { ...actual, randomUUID: () => `uuid-${++uuidCounter}` };
 });
 
+// Stub the LLM promote service so route tests don't shell out to a provider.
+// Default mock just echoes back a minimal canon entry shape so the route
+// returns 200 and the schema/validation paths get exercised end-to-end.
+const promoteVariationToCanonMock = vi.fn(async (_universeId, body = {}) => ({
+  universe: { id: _universeId, characters: [], settings: [], objects: [] },
+  entry: { id: 'mock-entry', name: body.label },
+  targetKind: body.targetKind || 'characters',
+  removed: { category: body.category, label: body.label },
+  runId: 'mock-run',
+  llm: { provider: 'mock', model: null },
+}));
+vi.mock('../services/universeBuilderPromote.js', async () => {
+  // Pass the real VALID_TARGET_KINDS through so the route's Zod enum
+  // can't drift from the source-of-truth list (derived from BIBLE_FIELD).
+  const actual = await vi.importActual('../services/universeBuilderPromote.js');
+  return {
+    ...actual,
+    promoteVariationToCanon: (...args) => promoteVariationToCanonMock(...args),
+  };
+});
+
 // Stub the LLM expander so the route test doesn't shell out to a real provider.
 vi.mock('../services/universeBuilderExpand.js', () => ({
   expandWorldTemplate: vi.fn(async ({ starterPrompt }) => ({
@@ -412,5 +433,68 @@ describe('universe-builder routes', () => {
       .send({ mode: 'local' });
     expect(res.status).toBe(400);
     expect(res.body.code).toBe('WORLD_BUILDER_EMPTY');
+  });
+
+  describe('POST /:id/promote-variation', () => {
+    beforeEach(() => {
+      promoteVariationToCanonMock.mockClear();
+    });
+
+    it('forwards the body to the service and returns the result', async () => {
+      const app = buildApp();
+      const res = await request(app)
+        .post('/api/universe-builder/some-id/promote-variation')
+        .send({ category: 'landscapes', label: 'Salt Flats' });
+      expect(res.status).toBe(200);
+      expect(promoteVariationToCanonMock).toHaveBeenCalledWith('some-id', expect.objectContaining({
+        category: 'landscapes',
+        label: 'Salt Flats',
+      }));
+      expect(res.body.entry.name).toBe('Salt Flats');
+    });
+
+    it('passes through targetKind for other-kinded buckets', async () => {
+      const app = buildApp();
+      const res = await request(app)
+        .post('/api/universe-builder/some-id/promote-variation')
+        .send({ category: 'myth_archetypes', label: 'Solstice Mask', targetKind: 'objects' });
+      expect(res.status).toBe(200);
+      expect(promoteVariationToCanonMock).toHaveBeenCalledWith('some-id', expect.objectContaining({
+        targetKind: 'objects',
+      }));
+    });
+
+    it('400s on missing label (Zod schema)', async () => {
+      const app = buildApp();
+      const res = await request(app)
+        .post('/api/universe-builder/some-id/promote-variation')
+        .send({ category: 'landscapes' });
+      expect(res.status).toBe(400);
+      expect(promoteVariationToCanonMock).not.toHaveBeenCalled();
+    });
+
+    it('400s on invalid targetKind enum (Zod schema)', async () => {
+      const app = buildApp();
+      const res = await request(app)
+        .post('/api/universe-builder/some-id/promote-variation')
+        .send({ category: 'landscapes', label: 'A', targetKind: 'monster' });
+      expect(res.status).toBe(400);
+      expect(promoteVariationToCanonMock).not.toHaveBeenCalled();
+    });
+
+    it('maps service ServerError status onto the HTTP response', async () => {
+      promoteVariationToCanonMock.mockRejectedValueOnce(
+        Object.assign(new Error('Bucket not found'), {
+          status: 404,
+          code: 'UNIVERSE_PROMOTE_NO_CATEGORY',
+        }),
+      );
+      const app = buildApp();
+      const res = await request(app)
+        .post('/api/universe-builder/some-id/promote-variation')
+        .send({ category: 'nonexistent', label: 'A' });
+      expect(res.status).toBe(404);
+      expect(res.body.code).toBe('UNIVERSE_PROMOTE_NO_CATEGORY');
+    });
   });
 });

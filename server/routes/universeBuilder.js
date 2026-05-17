@@ -22,6 +22,7 @@ import { BIBLE_KINDS, BIBLE_LIMITS } from '../lib/storyBible.js';
 import { getUniverseCanonUsage } from '../services/canonUsage.js';
 import { expandWorldTemplate, generateCategoryVariations } from '../services/universeBuilderExpand.js';
 import { refineWorldPrompts } from '../services/universeBuilderRefine.js';
+import { promoteVariationToCanon, VALID_TARGET_KINDS } from '../services/universeBuilderPromote.js';
 import { enqueueJob } from '../services/mediaJobQueue/index.js';
 import { getSettings } from '../services/settings.js';
 import { findOrCreateUniverseCollection } from '../services/mediaCollections.js';
@@ -181,6 +182,17 @@ const expandSchema = z.object({
   premise: z.string().trim().max(svc.PREMISE_MAX).optional(),
   styleNotes: z.string().trim().max(svc.STYLE_NOTES_MAX).optional(),
   locked: lockedSchema.optional(),
+  providerId: z.string().trim().max(80).optional(),
+  model: z.string().trim().max(200).optional(),
+});
+
+// `targetKind` is only required when the source bucket's `kind` is 'other'
+// (otherwise the service resolves it from the bucket). Enum derived from
+// VALID_TARGET_KINDS so the schema and the resolver share one source.
+const promoteVariationSchema = z.object({
+  category: z.string().trim().min(1).max(svc.WORLD_CATEGORY_KEY_MAX),
+  label: z.string().trim().min(1).max(svc.VARIATION_LABEL_MAX),
+  targetKind: z.enum(VALID_TARGET_KINDS).optional(),
   providerId: z.string().trim().max(80).optional(),
   model: z.string().trim().max(200).optional(),
 });
@@ -492,6 +504,18 @@ const extractCanonSchema = z.object({
 router.post('/:id/extract-canon', asyncHandler(async (req, res) => {
   const body = validateRequest(extractCanonSchema, req.body ?? {});
   const result = await canonSvc.extractCanonFromProse(req.params.id, body)
+    .catch((err) => { throw mapServiceError(err); });
+  res.json(result);
+}));
+
+// Promote a {label, prompt} variation into a full canon entry of the
+// corresponding trunk (resolved from the bucket's `kind` field, or the
+// caller-supplied `targetKind` for 'other'-kinded buckets). The variation
+// is removed from its source bucket and the canon entry is appended in a
+// single atomic patch.
+router.post('/:id/promote-variation', asyncHandler(async (req, res) => {
+  const body = validateRequest(promoteVariationSchema, req.body ?? {});
+  const result = await promoteVariationToCanon(req.params.id, body)
     .catch((err) => { throw mapServiceError(err); });
   res.json(result);
 }));
