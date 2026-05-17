@@ -106,11 +106,17 @@ export function resolveEffectiveModel(provider, callerModel) {
  * @param {number} [args.timeout] — per-call timeout in ms; falls back to
  *   `provider.timeout`, then DEFAULT_TIMEOUT_MS. Callers like the loop
  *   runner expose a user-configurable timeout that isn't a provider attr.
+ * @param {string} [args.cwd] — working directory for the spawned process.
+ *   Defaults to `process.cwd()`. Callers that run AI against external
+ *   directories (loops with `loop.cwd`, pm2Standardizer with a repo path)
+ *   must pass this — without it, the CLI/TUI spawn lands in PortOS's own
+ *   cwd and the analysis runs against the wrong files. No-op for API
+ *   providers (no spawn).
  * @returns {Promise<{ text: string, runId: string, model: string|null }>}
  *   — `model` is the resolved model that actually executed (null when
  *   neither override nor provider.defaultModel applies).
  */
-export async function runPromptThroughProvider({ provider, prompt, source, model, runId: callerRunId, onData: onDataCallback, timeout: timeoutOverride }) {
+export async function runPromptThroughProvider({ provider, prompt, source, model, runId: callerRunId, onData: onDataCallback, timeout: timeoutOverride, cwd: cwdOverride }) {
   // Validate inputs up front so an accidentally-null `provider` (or one
   // missing `id`/`type`) surfaces a clear error here instead of throwing
   // a downstream TypeError on `provider.id` inside createRun or on the
@@ -182,14 +188,17 @@ export async function runPromptThroughProvider({ provider, prompt, source, model
       ? { ...provider, defaultModel: effectiveModel }
       : provider;
     const effectiveTimeout = timeoutOverride ?? providerForRun.timeout ?? DEFAULT_TIMEOUT_MS;
+    const effectiveCwd = cwdOverride ?? process.cwd();
 
     if (provider.type === 'cli') {
-      executeCliRun(runId, providerForRun, prompt, process.cwd(), onData, onComplete, effectiveTimeout).catch(reject);
+      executeCliRun(runId, providerForRun, prompt, effectiveCwd, onData, onComplete, effectiveTimeout).catch(reject);
     } else if (provider.type === 'api') {
-      // API runs take model as a first-class arg — no clone needed.
-      executeApiRun(runId, provider, effectiveModel, prompt, process.cwd(), [], onData, onComplete).catch(reject);
+      // API runs take model as a first-class arg — no clone needed. cwd
+      // is irrelevant for API providers but the toolkit signature still
+      // takes it for parity with the CLI/TUI paths.
+      executeApiRun(runId, provider, effectiveModel, prompt, effectiveCwd, [], onData, onComplete).catch(reject);
     } else if (provider.type === 'tui') {
-      executeTuiRun(runId, providerForRun, prompt, process.cwd(), onData, onComplete, effectiveTimeout).catch(reject);
+      executeTuiRun(runId, providerForRun, prompt, effectiveCwd, onData, onComplete, effectiveTimeout).catch(reject);
     } else {
       reject(new Error(`Unsupported provider type: ${provider.type}`));
     }

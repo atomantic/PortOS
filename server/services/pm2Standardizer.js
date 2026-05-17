@@ -166,12 +166,15 @@ Rules:
 
 /**
  * Execute LLM analysis through the central handler — works for cli, api,
- * and tui providers without per-type branching.
+ * and tui providers without per-type branching. `cwd` is the analyzed
+ * repo path, NOT PortOS's cwd; without it the CLI/TUI spawn lands in
+ * PortOS's directory and the analysis reads the wrong files.
  */
 async function executeAnalysis(provider, prompt, cwd) {
   const { text } = await runPromptThroughProvider({
     provider, prompt, source: 'pm2-standardize',
     timeout: provider.timeout || DEFAULT_PM2_AI_TIMEOUT_MS,
+    cwd,
   });
   return text;
 }

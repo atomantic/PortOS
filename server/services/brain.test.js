@@ -907,6 +907,76 @@ describe('brain service', () => {
   });
 
   // ===========================================================================
+  // headlessArgs — brain runs are classifier-style and must not pollute the
+  // user's Claude Code session list. brain.js appends provider.headlessArgs
+  // to a per-call provider clone before calling the central handler.
+  // Regression coverage for the migration from spawn() to runPromptThroughProvider.
+  // ===========================================================================
+
+  describe('headlessArgs preservation', () => {
+    it('appends provider.headlessArgs to the provider passed to the central handler', async () => {
+      storage.getProjects.mockResolvedValue([{ id: 'p1', name: 'Proj', status: 'active' }]);
+      storage.getAdminItems.mockResolvedValue([]);
+      storage.getPeople.mockResolvedValue([]);
+      storage.getInboxLog.mockResolvedValue([]);
+      storage.createDigest.mockImplementation(async (data) => ({ id: 'd1', ...data }));
+
+      getProviderById.mockResolvedValue({
+        id: 'claude-code',
+        enabled: true,
+        type: 'cli',
+        command: 'claude',
+        args: ['--print'],
+        headlessArgs: ['--no-session-persistence', '--disable-slash-commands'],
+        defaultModel: 'claude-opus-4-7'
+      });
+
+      runPromptThroughProvider.mockResolvedValue({
+        text: JSON.stringify({
+          digestText: 'd', topActions: ['a'], stuckThing: 's', smallWin: 'w'
+        }),
+        runId: 'r', model: 'claude-opus-4-7'
+      });
+
+      await runDailyDigest('claude-code');
+
+      const passedProvider = runPromptThroughProvider.mock.calls[0][0].provider;
+      expect(passedProvider.args).toEqual([
+        '--print', '--no-session-persistence', '--disable-slash-commands'
+      ]);
+    });
+
+    it('does not clone the provider when headlessArgs is empty/absent', async () => {
+      storage.getProjects.mockResolvedValue([{ id: 'p1', name: 'Proj', status: 'active' }]);
+      storage.getAdminItems.mockResolvedValue([]);
+      storage.getPeople.mockResolvedValue([]);
+      storage.getInboxLog.mockResolvedValue([]);
+      storage.createDigest.mockImplementation(async (data) => ({ id: 'd1', ...data }));
+
+      const provider = {
+        id: 'lmstudio',
+        enabled: true,
+        type: 'api',
+        endpoint: 'http://localhost:1234/v1',
+        defaultModel: 'test'
+      };
+      getProviderById.mockResolvedValue(provider);
+
+      runPromptThroughProvider.mockResolvedValue({
+        text: JSON.stringify({
+          digestText: 'd', topActions: ['a'], stuckThing: 's', smallWin: 'w'
+        }),
+        runId: 'r', model: 'test'
+      });
+
+      await runDailyDigest('lmstudio');
+
+      const passedProvider = runPromptThroughProvider.mock.calls[0][0].provider;
+      expect(passedProvider).toBe(provider);
+    });
+  });
+
+  // ===========================================================================
   // archiveRecord (tested indirectly via fixClassification)
   // ===========================================================================
 

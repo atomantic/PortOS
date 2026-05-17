@@ -96,7 +96,10 @@ async function executeIteration(loop) {
       lineCount: outputLines.length,
       duration: metadata.duration,
       provider: provider.name,
-      model: provider.defaultModel,
+      // The model the central handler actually ran (set by the .then below
+      // when the run resolved), with provider.defaultModel as the fallback
+      // for the failure path where executedModel is still null.
+      model: metadata.model || provider.defaultModel,
       timestamp: Date.now()
     };
 
@@ -154,13 +157,18 @@ async function executeIteration(loop) {
   // metadata shape. We can't get the runner's full metadata back from
   // runPromptThroughProvider today — it only resolves `{ text, runId,
   // model }`. Reconstruct the bits onComplete inspects (exitCode + success
-  // + duration) from the promise resolution.
+  // + duration) from the promise resolution; pass through `model` so
+  // iterResult records what actually ran (not just the saved default).
   const startedAt = Date.now();
   runPromptThroughProvider({
     provider, prompt: loop.prompt, source: 'loop', runId: runResult.metadata.id,
     onData, timeout: loop.timeout || DEFAULT_TIMEOUT_MS,
-  }).then(() => {
-    onComplete({ exitCode: 0, success: true, duration: Date.now() - startedAt });
+    // loop.cwd is a user-facing setting on each loop record — without this
+    // pass-through, every loop runs against PortOS's own cwd instead of
+    // the directory the user picked.
+    cwd: loop.cwd || PATHS.root,
+  }).then(({ model: executedModel }) => {
+    onComplete({ exitCode: 0, success: true, duration: Date.now() - startedAt, model: executedModel });
   }).catch(err => {
     active.running = false;
     active.runId = null;
