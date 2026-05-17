@@ -510,19 +510,26 @@ export async function spawnDirectly({
 
     await writeFile(outputFile, outputBuffer).catch(() => {});
 
-    // Use raw stream buffer for error analysis (contains full JSON with error details)
-    const analysisBuffer = rawStreamBuffer || outputBuffer;
-    const errorAnalysis = success ? null : analyzeAgentFailure(analysisBuffer, task, model);
-
     const terminatedByUser = userTerminatedAgents.has(agentId);
     if (terminatedByUser) userTerminatedAgents.delete(agentId);
+
+    // If the user terminated the agent, force success=false even if the
+    // process happened to exit 0 in the race window — otherwise the run is
+    // recorded as successful while the task remains blocked. Mirrors the TUI
+    // `finish` path's `finalSuccess = terminatedByUser ? false : success`.
+    const finalSuccess = terminatedByUser ? false : success;
+    const finalError = terminatedByUser ? 'Agent terminated by user' : null;
+
+    // Use raw stream buffer for error analysis (contains full JSON with error details)
+    const analysisBuffer = rawStreamBuffer || outputBuffer;
+    const errorAnalysis = finalSuccess ? null : analyzeAgentFailure(analysisBuffer, task, model);
 
     await finalizeAgent({
       agentId,
       task,
       runId: agentData?.runId || runId,
       providerId: agentData?.providerId || provider.id,
-      success,
+      success: finalSuccess,
       exitCode: code,
       duration,
       outputBuffer,
@@ -531,6 +538,8 @@ export async function spawnDirectly({
       executionId: agentData?.executionId,
       terminatedByUser,
       isTruthyMetaFn,
+      error: finalError || undefined,
+      completionReason: terminatedByUser ? 'user-terminated' : undefined,
     });
 
     // Clean up worktree if agent was using one. Claude Code CLI agents run
@@ -540,7 +549,7 @@ export async function spawnDirectly({
     const directOpenPR = isTruthyMetaFn(task.metadata?.openPR);
     const directReviewLoopFollowUp = isTruthyMetaFn(task.metadata?.reviewLoopFollowUp);
     const directAgentOwnsPR = directOpenPR && (provider?.id === 'claude-code' || provider?.id === 'claude-code-bedrock');
-    await cleanupWorktreeFn(agentId, success, {
+    await cleanupWorktreeFn(agentId, finalSuccess, {
       openPR: directAgentOwnsPR ? false : directOpenPR,
       requestCopilotReview: !directAgentOwnsPR && directOpenPR && isTruthyMetaFn(task.metadata?.reviewLoop),
       skipMerge: directReviewLoopFollowUp || directAgentOwnsPR,

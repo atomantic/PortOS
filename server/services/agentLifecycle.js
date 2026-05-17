@@ -1091,7 +1091,7 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
     const jiraInstanceId = agent.task?.metadata?.jiraInstanceId;
     const jiraCreatePR = agent.task?.metadata?.jiraCreatePR;
 
-    if (jiraTicketId && jiraBranch && success) {
+    if (jiraTicketId && jiraBranch && effectiveSuccess) {
       const workspace = agentState?.metadata?.workspacePath || ROOT_DIR;
 
       let jiraTicketUrl = agent.task?.metadata?.jiraTicketUrl || null;
@@ -1212,7 +1212,7 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
       // so PortOS doesn't double-fire `gh pr create` ("a pull request already
       // exists" would preserve the worktree as a false-positive failure).
       const agentOwnsPR = taskOpenPR && (agent.providerId === 'claude-code' || agent.providerId === 'claude-code-bedrock');
-      const cleanupWarnings = await cleanupAgentWorktree(agentId, success, {
+      const cleanupWarnings = await cleanupAgentWorktree(agentId, effectiveSuccess, {
         openPR: agentOwnsPR ? false : taskOpenPR,
         requestCopilotReview: !agentOwnsPR && taskOpenPR && taskReviewLoop,
         skipMerge: taskReviewLoopFollowUp || agentOwnsPR,
