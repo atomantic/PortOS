@@ -77,28 +77,35 @@ const mergeVariations = (existing, fresh) => {
 // them; the LLM's repeat is a hallucination at this point). Dedupes by name
 // AND slugline (for settings) so an expand that re-emits "Foundry City" or
 // "INT. FOUNDRY CITY — DAY" can't create a phantom duplicate. Mirrors the
-// server-side dedupe in backfillCanonFromCategories (storyBible#normalizeBibleName).
+// server-side dedupe in backfillCanonFromCategories + storyBible's
+// MERGE_CONFIG (`storyBible.js` keyFields).
 //
-// Sluglines use `normalizeSlugline` (same identity rule the rest of the app
-// uses — `server/lib/scenePrompt.js` + `client/src/lib/scenePrompt.js` +
-// `storyBible.js` MERGE_CONFIG.setting.keyFields). Without this, sluglines
-// that differ only in dash style or punctuation ("INT. FOUNDRY CITY — DAY"
-// vs "INT FOUNDRY CITY - DAY") would land as two separate place-canon
-// entries even though every downstream lookup treats them as one.
-const mergeCanonByName = (existing, fresh) => {
+// Identity rules are kind-aware to match the server:
+//   - characters/objects → `normalizeBibleName` (trim + lowercase).
+//   - settings           → `normalizeSlugline` for BOTH `slugline` AND `name`
+//                          (`storyBible.js` MERGE_CONFIG.setting.keyFields).
+//                          Without this, sluglines that differ only in dash
+//                          style or punctuation ("INT. FOUNDRY CITY — DAY"
+//                          vs "INT FOUNDRY CITY - DAY") would land as two
+//                          separate place-canon entries, and `Foundry-City`
+//                          vs `Foundry City` would duplicate by name even
+//                          though every downstream lookup treats them as one.
+const mergeCanonByName = (existing, fresh, kind = 'character') => {
   // Empty/missing fresh — return `existing` unchanged (preserve reference so
   // a no-op expand doesn't trigger downstream identity-comparing effects).
   if (!fresh?.length) return existing || [];
-  const norm = (s) => (typeof s === 'string' ? s.trim().toLowerCase() : '');
+  const normName = kind === 'setting'
+    ? (s) => (typeof s === 'string' ? normalizeSlugline(s) : '')
+    : (s) => (typeof s === 'string' ? s.trim().toLowerCase() : '');
   const normSlug = (s) => (typeof s === 'string' ? normalizeSlugline(s) : '');
   const seen = new Set();
   for (const e of existing || []) {
-    if (e?.name) seen.add(norm(e.name));
+    if (e?.name) seen.add(normName(e.name));
     if (e?.slugline) seen.add(normSlug(e.slugline));
   }
   const merged = [...(existing || [])];
   for (const e of fresh) {
-    const nameKey = norm(e?.name);
+    const nameKey = normName(e?.name);
     const sluglineKey = normSlug(e?.slugline);
     if ((nameKey && seen.has(nameKey)) || (sluglineKey && seen.has(sluglineKey))) continue;
     if (nameKey) seen.add(nameKey);
@@ -538,7 +545,17 @@ export default function UniverseBuilder() {
     for (const cat of allCatKeys) {
       const locked = preservedVariations[cat] || [];
       const fresh = (llmCategories[cat]?.variations || []);
-      mergedCategories[cat] = { variations: mergeVariations(locked, fresh) };
+      // Preserve the bucket's `kind` so the category-to-canon-trunk contract
+      // survives the round-trip. Precedence: existing draft kind (the user
+      // may have curated it) → LLM-returned kind for this bucket → undefined
+      // (server's sanitizeCategory then falls back to the default-map / 'other').
+      const existingKind = draft.categories?.[cat]?.kind;
+      const freshKind = llmCategories[cat]?.kind;
+      const kind = existingKind || freshKind;
+      mergedCategories[cat] = {
+        ...(kind ? { kind } : {}),
+        variations: mergeVariations(locked, fresh),
+      };
     }
     // Composite sheets merge follows the same locked-first + dedupe pattern.
     const mergedSheets = (() => {
@@ -558,10 +575,18 @@ export default function UniverseBuilder() {
     // entries always win on name/slugline collision so a re-expand can't
     // clobber hand-authored or series-extracted records. mergeCanonByName
     // short-circuits when `fresh` is empty so identity is preserved.
-    const pickCanon = (key) => mergeCanonByName(draft[key] || [], Array.isArray(result[key]) ? result[key] : []);
-    const mergedCharacters = pickCanon('characters');
-    const mergedSettings = pickCanon('settings');
-    const mergedObjects = pickCanon('objects');
+    //
+    // `kind` is passed so settings use `normalizeSlugline` for both `name` and
+    // `slugline` (matching the server's MERGE_CONFIG.setting.keyFields) —
+    // dash/punct-variant identifiers collide instead of duplicating.
+    const pickCanon = (key, kind) => mergeCanonByName(
+      draft[key] || [],
+      Array.isArray(result[key]) ? result[key] : [],
+      kind,
+    );
+    const mergedCharacters = pickCanon('characters', 'character');
+    const mergedSettings = pickCanon('settings', 'setting');
+    const mergedObjects = pickCanon('objects', 'object');
 
     const expandedDraft = {
       ...draft,

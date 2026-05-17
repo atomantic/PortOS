@@ -148,9 +148,12 @@ const SHIPPED_PROMPT_OLD_MD5 = {
   // season-episodes: 6e349a… (pre-003) and c4928e… (post-003, pre-005) both
   // auto-updatable to the post-005 (shape-aware) hash.
   'pipeline-season-episodes.md': ['6e349ad26bed8a0ccb042571f03f03eb', 'c4928e2a5f833358116b29d2d669888d'],
-  // Shape-aware additions (migration 005).
-  'pipeline-arc-overview.md':    '6a3ecab43d1f46b7ef9aab6c69ea0326',
-  'pipeline-arc-verify.md':      '52e31abc93e3105176236fcaa5d1575a',
+  // arc-overview: 6a3eca… (pre-005) and d34d72… (post-005, pre-019) both
+  // auto-updatable to the post-019 (worldCanonText) hash.
+  'pipeline-arc-overview.md':   ['6a3ecab43d1f46b7ef9aab6c69ea0326', 'd34d72b8e49ba303d38607845dd87f1c'],
+  // arc-verify: 52e31a… (pre-005) and ff56d8… (post-005, pre-019) both
+  // auto-updatable to the post-019 (worldCanonText) hash.
+  'pipeline-arc-verify.md':     ['52e31abc93e3105176236fcaa5d1575a', 'ff56d8387162017e08d5d0491060ddd6'],
   // volume-verify: c6ea28… (pre-005) and 03f3c8… (post-005, pre-019) both
   // auto-updatable to the post-019 (worldCanonText) hash.
   'pipeline-volume-verify.md':  ['c6ea28e972ad6e229bafb2d602b4dda3', '03f3c874cb80e1c98abcf03168fa7a92'],
@@ -179,8 +182,8 @@ const SHIPPED_PROMPT_NEW_MD5 = {
   'pipeline-comic-script.md':   '1e0af305c27d0c80c4b482d2ebcb4a0d',
   'pipeline-teleplay.md':       '376f779f4687b598f1c92ca4e770fd5a',
   'pipeline-season-episodes.md':'50c68a29c3ebc275db3095d06bd87100',
-  'pipeline-arc-overview.md':   'd34d72b8e49ba303d38607845dd87f1c',
-  'pipeline-arc-verify.md':     'ff56d8387162017e08d5d0491060ddd6',
+  'pipeline-arc-overview.md':   '59e19fb81417e640194a5e3ac5773125',
+  'pipeline-arc-verify.md':     'd077c3d6197fbb9a684a1fbb41a9493c',
   'pipeline-volume-verify.md':  '56ad31371452a6fdf68597512f8c0d35',
   'pipeline-arc-resolve.md':    '2651dc3947adc75c02c4f394135f2703',
   'pipeline-extract-scenes.md': 'c51fb208568d0d903eb43b437478b0ba',

@@ -1,10 +1,12 @@
 /**
- * Add `{{worldCanonText}}` context block to the arc-resolve and
- * volume-verify prompt templates so the LLM sees named universe canon
- * (characters/places/objects) alongside the existing exploratory
- * `worldCategoriesText`.
+ * Add `{{worldCanonText}}` context block to the four arc/volume prompt
+ * templates that receive linked-world context so the LLM sees named
+ * universe canon (characters/places/objects) alongside the existing
+ * exploratory `worldCategoriesText`.
  *
  * Updates (per ACCEPTED_OLD_MD5 below):
+ *   - data/prompts/stages/pipeline-arc-overview.md
+ *   - data/prompts/stages/pipeline-arc-verify.md
  *   - data/prompts/stages/pipeline-arc-resolve.md
  *   - data/prompts/stages/pipeline-volume-verify.md
  *
@@ -12,8 +14,11 @@
  *   Phase A retired the default `characters` category; characters now live in
  *   `universe.characters[]` (canon). Without this template change, arc-level
  *   prompts that grounded continuity findings in entity names lost the
- *   character roster entirely. See PLAN.md → Phase B + the
- *   "arcPlanner prompt context — include canon" backlog item it folded in.
+ *   character roster entirely. arcPlanner exposes `worldCanonText` to every
+ *   arc context now, but a context field without a template reference is
+ *   silently ignored — so every prompt that gets the field must render it.
+ *   See PLAN.md → Phase B + the "arcPlanner prompt context — include canon"
+ *   backlog item it folded in.
  *
  * Strategy — unmodified-only update, mirrors migration 003:
  *   - If the on-disk file matches the prior shipped MD5 (either the pre-005
@@ -37,6 +42,14 @@ const md5 = (str) => {
 // recent shipped hash first, then older). Any match is treated as
 // "unmodified by user → safe to replace."
 const ACCEPTED_OLD_MD5 = {
+  'pipeline-arc-overview.md': [
+    'd34d72b8e49ba303d38607845dd87f1c', // current (pre-Phase B) shipped
+    '6a3ecab43d1f46b7ef9aab6c69ea0326', // pre-005 (shape-aware), still in setup-data.js OLD list
+  ],
+  'pipeline-arc-verify.md': [
+    'ff56d8387162017e08d5d0491060ddd6', // current (pre-Phase B) shipped
+    '52e31abc93e3105176236fcaa5d1575a', // pre-005 (shape-aware), still in setup-data.js OLD list
+  ],
   'pipeline-arc-resolve.md': [
     'a8677bbe1eb38f871fb152a5b0fec7c6', // current (pre-Phase B) shipped
     '87bc5c01f1a8a97b681727a38b05edc6', // pre-005 (shape-aware), still in setup-data.js OLD list
@@ -49,6 +62,8 @@ const ACCEPTED_OLD_MD5 = {
 
 // New shipped hashes — what data.sample carries post-migration.
 const NEW_SHIPPED_MD5 = {
+  'pipeline-arc-overview.md':   '59e19fb81417e640194a5e3ac5773125',
+  'pipeline-arc-verify.md':     'd077c3d6197fbb9a684a1fbb41a9493c',
   'pipeline-arc-resolve.md':    '2651dc3947adc75c02c4f394135f2703',
   'pipeline-volume-verify.md':  '56ad31371452a6fdf68597512f8c0d35',
 };
@@ -114,9 +129,10 @@ export default {
 
     if (skipped > 0) {
       console.warn(
-        `\n⚠️  ${skipped} arc prompt(s) could not be auto-updated because they were customized.\n` +
-        `   The {{worldCanonText}} block will not render character names in arc-verify/resolve\n` +
-        `   until the files are merged manually. See data.sample/prompts/stages/.`,
+        `\n⚠️  ${skipped} arc/volume prompt(s) could not be auto-updated because they were customized.\n` +
+        `   The {{worldCanonText}} block will not render character names in arc-overview/\n` +
+        `   arc-verify/arc-resolve/volume-verify until the files are merged manually. See\n` +
+        `   data.sample/prompts/stages/.`,
       );
     }
   },

@@ -15,6 +15,16 @@ You are a continuity editor doing a cross-season pass on a planned series. The u
 
 {{> bible-deference }}
 
+## Linked World — canonical entities
+
+The series is grounded in this World Builder world: **{{worldName}}**. When you flag continuity findings, address characters/places/objects by their canonical names below. A "character contradiction" finding should reference the canon character; a "dropped subplot" finding should reference a canon place or object when relevant.
+
+### World canon — named characters, places, objects
+
+```
+{{worldCanonText}}
+```
+
 ## Full arc
 
 - **Whole-series logline:** {{arc.logline}}

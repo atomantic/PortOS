@@ -283,9 +283,20 @@ const normalizeCompositeSheets = (raw) =>
 // so the merge step downstream can rely on `Array.isArray`. Stamps `source`
 // pre-sanitize so the sanitizer's `ensureSource` allowlist validates it (a
 // post-sanitize stamp would bypass that check).
+//
+// Strip `id`/`createdAt`/`updatedAt` from raw entries before sanitizing.
+// `sanitizeBibleList` preserves any non-empty `id` it sees on input, so an
+// LLM that hallucinates an `id` (or — more likely — copies an example id from
+// the prompt) would otherwise inject duplicate or arbitrary identifiers into
+// the draft. The sanitizer mints a fresh id when one is missing; that's the
+// correct behavior for expand, which is always creating fresh canon entries.
 const normalizeCanonArray = (raw, kind) => {
   if (!Array.isArray(raw)) return [];
-  const stamped = raw.map((e) => (e && typeof e === 'object' ? { ...e, source: BIBLE_SOURCE.UNIVERSE_EXPAND } : e));
+  const stamped = raw.map((e) => {
+    if (!e || typeof e !== 'object') return e;
+    const { id: _ignoredId, createdAt: _ca, updatedAt: _ua, ...rest } = e;
+    return { ...rest, source: BIBLE_SOURCE.UNIVERSE_EXPAND };
+  });
   // Expand is creating fresh entries; let the sanitizer stamp timestamps
   // instead of preserving (likely-absent) ones from the LLM output.
   return sanitizeBibleList(stamped, kind, { preserveTimestamps: false });
