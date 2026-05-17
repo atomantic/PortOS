@@ -30,10 +30,13 @@ export function createFileWriteQueue() {
   return function queue(fn) {
     const next = tail.then(fn, fn); // run fn even when prev rejects
     // Silenced tail prevents a rejection from poisoning subsequent waiters.
-    // Release the reference once this write is no longer the tail so settled
-    // promises (and their resolved payloads) don't linger for the process life.
     const silenced = next.catch(() => {});
     tail = silenced;
+    // When this write settles AND nothing else has chained onto it (i.e. it's
+    // still the current tail), reset the tail to a fresh resolved promise so
+    // the settled promise (and its resolved payload) can be GC'd. If another
+    // write has already enqueued, `tail` points at that newer silenced
+    // promise — the equality check is false and we leave it alone.
     silenced.finally(() => {
       if (tail === silenced) tail = Promise.resolve();
     });

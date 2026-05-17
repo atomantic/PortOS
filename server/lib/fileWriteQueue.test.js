@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { createFileWriteQueue } from "./fileWriteQueue.js";
 
-// Defer one microtask so we can interleave with another awaiter.
+// Defer one event-loop tick (setImmediate is a check-phase macrotask, not a
+// microtask) so we can interleave with another awaiter.
 const tick = () => new Promise((r) => setImmediate(r));
 
 describe("createFileWriteQueue", () => {

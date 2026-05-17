@@ -774,7 +774,11 @@ export async function insertUniverseWithId(input = {}) {
 }
 
 export async function updateUniverse(id, patch = {}) {
-  return queueUniverseWrite(async () => {
+  // The queued section covers only the universe-builder read/modify/write
+  // cycle. The cross-file media-collection rename runs *after* the queue
+  // releases so a slow/stuck collection write can't block unrelated universe
+  // mutators (the universe row is already persisted by then).
+  const { merged, nameChanged } = await queueUniverseWrite(async () => {
     const state = await readState();
     const idx = state.universes.findIndex((w) => w.id === id);
     if (idx < 0) throw makeErr(`Universe not found: ${id}`, ERR_NOT_FOUND);
@@ -819,7 +823,7 @@ export async function updateUniverse(id, patch = {}) {
       PATCHABLE_SCALARS.filter((k) => k in patch).map((k) => [k, patch[k]]),
     );
 
-    const merged = sanitizeTemplate({
+    const mergedRecord = sanitizeTemplate({
       ...cur,
       ...scalarPatch,
       // sanitizeTemplate runs the v2 → v3 prose-prompt merge — see its
@@ -832,23 +836,29 @@ export async function updateUniverse(id, patch = {}) {
       llm: mergedLlm,
       updatedAt: new Date().toISOString(),
     });
-    if (!merged) throw makeErr('Invalid universe payload', ERR_VALIDATION);
-    state.universes[idx] = merged;
+    if (!mergedRecord) throw makeErr('Invalid universe payload', ERR_VALIDATION);
+    state.universes[idx] = mergedRecord;
     await writeState(state);
-    // Cascade rename onto the linked media collection — log but don't fail
-    // the save: a stale collection name is recoverable, a failed save isn't.
-    if (merged.name !== cur.name) {
-      await renameCollectionForUniverse(merged.id, merged.name).catch((err) => {
-        console.error(`❌ universe-collection rename cascade failed for ${merged.id}: ${err?.message || err}`);
-      });
-    }
-    emitRecordUpdated('universe', merged.id);
-    return merged;
+    return { merged: mergedRecord, nameChanged: mergedRecord.name !== cur.name };
   });
+  // Cascade rename onto the linked media collection — log but don't fail
+  // the save: a stale collection name is recoverable, a failed save isn't.
+  // Runs OUTSIDE the queue so the media-collections write tail can't stall
+  // subsequent universe mutators.
+  if (nameChanged) {
+    await renameCollectionForUniverse(merged.id, merged.name).catch((err) => {
+      console.error(`❌ universe-collection rename cascade failed for ${merged.id}: ${err?.message || err}`);
+    });
+  }
+  emitRecordUpdated('universe', merged.id);
+  return merged;
 }
 
 export async function deleteUniverse(id) {
-  return queueUniverseWrite(async () => {
+  // Queue covers only the universe-builder write; cross-file unlink runs
+  // after the queue releases so a slow media-collections write can't block
+  // subsequent universe mutators.
+  await queueUniverseWrite(async () => {
     const state = await readState();
     const before = state.universes.length;
     state.universes = state.universes.filter((w) => w.id !== id);
@@ -856,17 +866,17 @@ export async function deleteUniverse(id) {
     // Drop runs referencing the deleted universe — they're useless without it.
     state.runs = state.runs.filter((r) => r.universeId !== id);
     await writeState(state);
-    // Release the rename-lock on any linked media collections — without this,
-    // the orphan collection's `universeId` stays stamped and the lock in
-    // updateCollection blocks renames forever even though the universe is gone.
-    // Best-effort: a failure here mustn't fail the delete (the universe is
-    // already gone from state).
-    await unlinkCollectionsForUniverse(id).catch((err) => {
-      console.error(`❌ unlink media collections for deleted universe ${id} failed: ${err?.message || err}`);
-    });
-    emitRecordDeleted('universe', id);
-    return { id };
   });
+  // Release the rename-lock on any linked media collections — without this,
+  // the orphan collection's `universeId` stays stamped and the lock in
+  // updateCollection blocks renames forever even though the universe is gone.
+  // Best-effort: a failure here mustn't fail the delete (the universe is
+  // already gone from state). Runs OUTSIDE the universe-builder queue.
+  await unlinkCollectionsForUniverse(id).catch((err) => {
+    console.error(`❌ unlink media collections for deleted universe ${id} failed: ${err?.message || err}`);
+  });
+  emitRecordDeleted('universe', id);
+  return { id };
 }
 
 export async function recordRun(run) {
