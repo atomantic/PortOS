@@ -161,7 +161,26 @@ describe('errorHandler.js', () => {
 
       emitErrorEvent(mockIo, error);
 
-      expect(listener).toHaveBeenCalledWith(error);
+      // Listener receives (error, safeContext) — sensitive fields stripped so
+      // socket.js subscribers can safely re-broadcast.
+      expect(listener).toHaveBeenCalledWith(error, expect.any(Object));
+      errorEvents.off('error', listener);
+    });
+
+    it('should pass sanitized context to errorEvents listeners', () => {
+      const listener = vi.fn();
+      errorEvents.on('error', listener);
+
+      const mockIo = { emit: vi.fn() };
+      const error = new ServerError('Test error', {
+        context: { apiKey: 'secret-123', safe: 'visible' },
+      });
+
+      emitErrorEvent(mockIo, error);
+
+      const safeContext = listener.mock.calls[0][1];
+      expect(safeContext).toEqual({ safe: 'visible' });
+      expect(safeContext.apiKey).toBeUndefined();
       errorEvents.off('error', listener);
     });
   });

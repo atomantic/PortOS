@@ -181,13 +181,18 @@ function sanitizeContext(context) {
  * Emit error event via Socket.IO to alert UI.
  * `precomputedSafeContext` lets callers sanitize once and share with the HTTP
  * response so the two channels can't drift on what's stripped.
+ *
+ * `errorEvents` listeners receive `(error, safeContext)` — server-side
+ * subscribers (e.g. autoFixer) can read full `error.context` for diagnostics,
+ * but any subscriber that re-broadcasts to clients (e.g. `socket.js`) MUST
+ * use `safeContext` to avoid leaking sensitive fields.
  */
 export function emitErrorEvent(io, error, precomputedSafeContext) {
-  errorEvents.emit('error', error);
-
   const safeContext = precomputedSafeContext !== undefined
     ? precomputedSafeContext
     : sanitizeContext(error.context);
+
+  errorEvents.emit('error', error, safeContext);
 
   // Broadcast to all connected clients
   io.emit('error:occurred', {

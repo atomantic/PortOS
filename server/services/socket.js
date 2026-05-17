@@ -637,15 +637,17 @@ function setupCosEventForwarding() {
 
 // Set up error event forwarding
 function setupErrorEventForwarding() {
-  // Forward error events to error subscribers
-  errorEvents.on('error', (error) => {
+  // Forward error events to error subscribers. Use `safeContext` (second arg
+  // from emitErrorEvent) — `error.context` may contain sanitized fields like
+  // apiKey/token that must not be broadcast to clients.
+  errorEvents.on('error', (error, safeContext) => {
     broadcastToErrors('error:notified', {
       message: error.message,
       code: error.code,
       severity: error.severity,
       timestamp: error.timestamp,
       canAutoFix: error.canAutoFix,
-      context: error.context
+      context: safeContext !== undefined ? safeContext : error.context
     });
   });
 }
