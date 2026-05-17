@@ -249,6 +249,13 @@
       "returnsJson": true,
       "variables": []
     },
+    "pipeline-volume-cover-concepts": {
+      "name": "Pipeline — Volume Cover Concepts",
+      "description": "Generate FRONT and BACK cover-art concepts for one volume (season) of a comic series. Returns a {coverConcept, backCoverConcept} JSON pair — pure scene descriptions for the image-gen renderer (no masthead, logo, or typography). Lightweight per-season call; seeds blank cover scripts only and never clobbers a user edit.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
     "pipeline-comic-panel-image-prompt": {
       "name": "Pipeline — Comic Panel Image Prompt",
       "description": "Refine a single comic panel's description into a richer image-gen-ready prompt. Uses caption / dialogue / sfx context + neighboring-panel continuity to elaborate without re-imagining the scene.",
