@@ -59,7 +59,8 @@ vi.mock('./agentCompletion.js', () => ({
 
 vi.mock('./agentLifecycle.js', () => ({
   persistSimplifySummaries: vi.fn().mockResolvedValue(undefined),
-  finalizeAgent: vi.fn().mockResolvedValue(undefined)
+  finalizeAgent: vi.fn().mockResolvedValue(undefined),
+  releaseAgentLane: vi.fn()
 }));
 
 vi.mock('./agentState.js', () => ({

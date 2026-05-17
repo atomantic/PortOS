@@ -17,7 +17,7 @@ import { release } from './executionLanes.js';
 import { completeExecution, errorExecution } from './toolStateMachine.js';
 import { analyzeAgentFailure } from './agentErrorAnalysis.js';
 import { completeAgentRun } from './agentRunTracking.js';
-import { finalizeAgent } from './agentLifecycle.js';
+import { finalizeAgent, releaseAgentLane } from './agentLifecycle.js';
 import { activeAgents, userTerminatedAgents } from './agentState.js';
 import { safeJSONParse, PATHS } from '../lib/fileUtils.js';
 import { createCodexStderrFormatter } from '../lib/codexCliOutput.js';
@@ -321,11 +321,15 @@ export async function getClaudeSettingsEnv() {
 
 /**
  * Spawn agent directly (fallback when runner not available).
- * `cleanupWorktreeFn` is passed in to avoid pulling `cleanupAgentWorktree`
- * out of agentLifecycle.js — that helper transitively imports the spawn
- * paths, creating a cycle. `isTruthyMetaFn` is passed in for the same
- * reason vs subAgentSpawner.js. (We DO import `finalizeAgent` from
- * agentLifecycle.js — that's a one-way dep that hoists fine.)
+ * `cleanupWorktreeFn` and `isTruthyMetaFn` are passed in rather than
+ * imported directly. The agentLifecycle.js ↔ agentCliSpawning.js import
+ * graph is bidirectional (agentLifecycle calls `spawnDirectly`, this file
+ * calls `finalizeAgent`) and ES module hoisting handles it for top-level
+ * function references — but importing `cleanupAgentWorktree` /
+ * `isTruthyMeta` at module top level would force their `agentLifecycle`
+ * and `subAgentSpawner` modules to initialize before this one, racing
+ * the cycle in ways that surfaced as `undefined` reads on cold start.
+ * Passing them via the options object defers the lookup to call time.
  */
 export async function spawnDirectly({
   agentId,
@@ -491,6 +495,30 @@ export async function spawnDirectly({
       agentData.killTimer = null;
     }
 
+    const terminatedByUser = userTerminatedAgents.has(agentId);
+    if (terminatedByUser) userTerminatedAgents.delete(agentId);
+
+    // If the user terminated the agent, force success=false even if the
+    // process happened to exit 0 in the race window — otherwise the run is
+    // recorded as successful while the task remains blocked. Mirrors the TUI
+    // `finish` path's `finalSuccess = terminatedByUser ? false : success`.
+    const finalSuccess = terminatedByUser ? false : success;
+    const finalError = terminatedByUser ? 'Agent terminated by user' : null;
+
+    // Release lane + complete execution tracking BEFORE the writeFile +
+    // error-analysis + state-write chain — neither call blocks on I/O, but
+    // lanes serialize related work. Fall back to outer scope when
+    // activeAgents was cleared by killAgent before close fired.
+    releaseAgentLane({
+      agentId,
+      success: finalSuccess,
+      duration,
+      exitCode: code,
+      executionId: agentData?.executionId || executionId,
+      laneName: agentData?.laneName || laneName,
+      errorExecutionMessage: finalError || undefined,
+    });
+
     // Flush remaining stream parser data
     if (streamParser) {
       const remaining = streamParser.flush();
@@ -513,16 +541,6 @@ export async function spawnDirectly({
 
     await writeFile(outputFile, outputBuffer).catch(() => {});
 
-    const terminatedByUser = userTerminatedAgents.has(agentId);
-    if (terminatedByUser) userTerminatedAgents.delete(agentId);
-
-    // If the user terminated the agent, force success=false even if the
-    // process happened to exit 0 in the race window — otherwise the run is
-    // recorded as successful while the task remains blocked. Mirrors the TUI
-    // `finish` path's `finalSuccess = terminatedByUser ? false : success`.
-    const finalSuccess = terminatedByUser ? false : success;
-    const finalError = terminatedByUser ? 'Agent terminated by user' : null;
-
     // Use raw stream buffer for error analysis (contains full JSON with error details)
     const analysisBuffer = rawStreamBuffer || outputBuffer;
     const errorAnalysis = finalSuccess ? null : analyzeAgentFailure(analysisBuffer, task, model);
@@ -541,11 +559,6 @@ export async function spawnDirectly({
         duration,
         outputBuffer,
         errorAnalysis,
-        // Fall back to the outer scope: killAgent can clear activeAgents
-        // before the close event fires, which would otherwise skip lane
-        // release + execution tracking. Mirrors the TUI path's pattern.
-        laneName: agentData?.laneName || laneName,
-        executionId: agentData?.executionId || executionId,
         terminatedByUser,
         isTruthyMetaFn,
         error: finalError || undefined,

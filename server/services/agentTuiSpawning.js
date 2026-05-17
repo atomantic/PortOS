@@ -14,7 +14,7 @@ import { emitLog } from './cosEvents.js';
 import { appendAgentOutputLines, updateAgent } from './cosAgents.js';
 import { registerSpawnedAgent, unregisterSpawnedAgent } from './agents.js';
 import { analyzeAgentFailure } from './agentErrorAnalysis.js';
-import { finalizeAgent } from './agentLifecycle.js';
+import { finalizeAgent, releaseAgentLane } from './agentLifecycle.js';
 import { activeAgents, userTerminatedAgents } from './agentState.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { resolveCliModel } from '../lib/providerModels.js';
@@ -203,6 +203,20 @@ export async function spawnTuiAgent({
     const finalSuccess = terminatedByUser ? false : success;
     const finalError = terminatedByUser ? 'Agent terminated by user' : error;
 
+    // Release the lane + complete execution tracking BEFORE the
+    // potentially-slow error-analysis / completeAgent / processAgentCompletion
+    // chain — neither call blocks on I/O, but lanes serialize related work
+    // and we don't want them held longer than necessary.
+    releaseAgentLane({
+      agentId,
+      success: finalSuccess,
+      duration,
+      exitCode,
+      executionId: agentData?.executionId || executionId,
+      laneName: agentData?.laneName || laneName,
+      errorExecutionMessage: finalError || `TUI agent ended: ${reason}`,
+    });
+
     // output.txt has already been incrementally appended via flushPendingLines;
     // do NOT writeFile() it from outputBuffer at finalize — outputBuffer is
     // capped at OUTPUT_BUFFER_CAP and would silently truncate the on-disk
@@ -226,9 +240,6 @@ export async function spawnTuiAgent({
         duration,
         outputBuffer,
         errorAnalysis,
-        laneName: agentData?.laneName || laneName,
-        executionId: agentData?.executionId || executionId,
-        errorExecutionMessage: finalError || `TUI agent ended: ${reason}`,
         terminatedByUser,
         isTruthyMetaFn,
         error: finalError || undefined,

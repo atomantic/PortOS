@@ -728,11 +728,33 @@ export function extractSimplifySummaries(outputBuffer) {
 }
 
 /**
- * Shared end-of-run sequence for all three spawn paths (`handleAgentCompletion`
- * runner-mode, TUI `finish`, direct-CLI `close`). Path-specific cleanup
- * (worktree, sentinel removal, pty kill, in-memory map deletes) stays at the
- * calling site — this helper owns the central state writes only, so any
- * future change to the completion contract is a one-place fix.
+ * Release the execution lane and complete tool-execution tracking for a
+ * finishing agent. Pulled OUT of finalizeAgent so callers can fire it
+ * EARLY (before reading output.txt, running error analysis, or writing
+ * state) — neither call blocks on I/O, but lanes serialize related work
+ * and we don't want them held longer than necessary.
+ *
+ * Idempotent enough to be a no-op when laneName / executionId are absent
+ * (recovered agents post-restart, error paths that already released).
+ */
+export function releaseAgentLane({ agentId, success, duration, exitCode, executionId, laneName, errorExecutionMessage }) {
+  if (laneName) release(agentId);
+  if (!executionId) return;
+  if (success) {
+    completeExecution(executionId, { success: true, duration });
+  } else {
+    errorExecution(executionId, { message: errorExecutionMessage || `Agent exited with code ${exitCode}`, code: exitCode });
+    completeExecution(executionId, { success: false });
+  }
+}
+
+/**
+ * Shared end-of-run state writes for all three spawn paths
+ * (`handleAgentCompletion` runner-mode, TUI `finish`, direct-CLI `close`).
+ * Path-specific cleanup (worktree, sentinel removal, pty kill, in-memory
+ * map deletes) stays at the calling site; lane release + execution
+ * tracking should fire EARLIER via `releaseAgentLane()` — this helper
+ * owns the centralized state writes only.
  */
 export async function finalizeAgent({
   agentId,
@@ -744,26 +766,11 @@ export async function finalizeAgent({
   duration,
   outputBuffer,
   errorAnalysis,
-  laneName,
-  executionId,
-  errorExecutionMessage,
   terminatedByUser = false,
   isTruthyMetaFn,
   error,
   completionReason,
 }) {
-  if (laneName) release(agentId);
-
-  if (executionId) {
-    if (success) {
-      completeExecution(executionId, { success: true, duration });
-    } else {
-      const fallbackMessage = errorExecutionMessage || `Agent exited with code ${exitCode}`;
-      errorExecution(executionId, { message: fallbackMessage, code: exitCode });
-      completeExecution(executionId, { success: false });
-    }
-  }
-
   if (success && isTruthyMetaFn) {
     await persistSimplifySummaries(agentId, task, outputBuffer, isTruthyMetaFn);
   }
@@ -1036,6 +1043,12 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
       task.taskType = isInternalTaskId(id) ? 'internal' : 'user';
     }
 
+    // Release the lane + complete execution tracking BEFORE the
+    // potentially-slow output read / commit-detection / pipeline-summary
+    // I/O — those writes don't gate further work, but other tasks in the
+    // same lane shouldn't wait on them.
+    releaseAgentLane({ agentId, success, duration, exitCode, executionId, laneName });
+
     // Read output from agent directory
     const agentDir = join(AGENTS_DIR, agentId);
     const outputFile = join(agentDir, 'output.txt');
@@ -1085,8 +1098,6 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
       duration,
       outputBuffer,
       errorAnalysis,
-      laneName,
-      executionId,
       isTruthyMetaFn: isTruthyMeta,
     });
 
