@@ -2502,7 +2502,6 @@ function BibleTab({
               placeholder="moebius and scavengers reign meets Prophet inspired sci fi universe"
               className="w-full bg-port-bg border border-port-border rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-port-accent"
               rows={2}
-              maxLength={4000}
             />
           </div>
           <div>
