@@ -70,14 +70,20 @@ vi.mock('../services/pipeline/visualStages.js', () => ({
     // Match the real service contract: pageNumber is 1-based (pageIndex + 1).
     prompt: `comic-page prompt for page ${opts.pageIndex + 1}`,
     pageIndex: opts.pageIndex,
+    // Forward proof/final variant + i2i flag so the route's slotKey + slot
+    // record reflect the schema-validated body (target defaults to 'proof').
+    variant: opts?.target === 'final' ? 'final' : 'proof',
+    fromProof: opts?.target === 'final' && opts?.useProofAsBase === true,
   })),
   // Front cover render. Returns shape the route merges with the persisted cover:
-  // { jobId, mode, prompt, coverScript }.
+  // { jobId, mode, prompt, coverScript, variant, fromProof }.
   enqueueComicCover: vi.fn(async (_issueId, body) => ({
     jobId: `cover-job-${++uuidCounter}`,
     mode: 'local',
     prompt: 'cover art prompt',
     coverScript: body?.coverScript ?? 'default cover concept',
+    variant: body?.target === 'final' ? 'final' : 'proof',
+    fromProof: body?.target === 'final' && body?.useProofAsBase === true,
   })),
   // Single-scene video render. Returns the shape the route forwards verbatim
   // to clients: { jobId, prompt, sceneIndex, issue, stage }.
@@ -867,6 +873,85 @@ describe('pipeline routes', () => {
       .post(`/api/pipeline/issues/${iss.body.id}/stages/comicPages/cover/render`)
       .send({ width: 'not-a-number' });
     expect(r.status).toBe(400);
+  });
+
+  // ---- proof/final target + useProofAsBase semantics ----
+  // The render schemas (comicCoverRenderSchema + comicPageRenderSchema) carry a
+  // `target` enum ('proof'|'final', default 'proof') and `useProofAsBase`
+  // boolean. The route uses `slotKeyForVariant(result.variant)` to land the
+  // in-flight job on the matching slot (proofImage vs finalImage) and stamps
+  // `fromProof` on final-slot records so the UI can show "(upscaled from
+  // proof)" provenance.
+
+  it('POST /issues/:id/stages/comicPages/cover/render target=final + useProofAsBase=true persists onto finalImage with fromProof:true, leaving the prior proof slot untouched', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    // Seed a prior proof via the render route (the PATCH /issues schema strips
+    // unknown cover fields, so proofImage can only land here via render).
+    const proof = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/comicPages/cover/render`)
+      .send({ coverScript: 'Hero stands atop the foundry' });
+    expect(proof.status).toBe(200);
+    const priorProofJobId = proof.body.cover.proofImage.jobId;
+
+    const r = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/comicPages/cover/render`)
+      .send({ target: 'final', useProofAsBase: true });
+    expect(r.status).toBe(200);
+    expect(r.body.cover.finalImage.jobId).toBe(r.body.jobId);
+    expect(r.body.cover.finalImage.filename).toBeNull();
+    expect(r.body.cover.finalImage.fromProof).toBe(true);
+    // sanitizeRenderSlot only stamps fromProof on the final slot — proof
+    // records omit the field. Assert absence so a future schema regression
+    // that leaks fromProof onto proof slots fails loud.
+    expect(r.body.cover.proofImage.jobId).toBe(priorProofJobId);
+    expect(r.body.cover.proofImage).not.toHaveProperty('fromProof');
+  });
+
+  it('POST /issues/:id/stages/comicPages/pages/:pageIndex/render target=final + useProofAsBase=true persists onto pages[i].finalImage with fromProof:true, leaving the prior proof slot untouched', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
+      stages: {
+        comicPages: {
+          pages: [{ panels: [{ description: 'p1', caption: '', dialogue: [], sfx: '' }] }],
+        },
+      },
+    });
+    // Seed a prior proof via the render route (default target = 'proof').
+    const proof = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/comicPages/pages/0/render`)
+      .send({});
+    expect(proof.status).toBe(200);
+    const priorProofJobId = proof.body.stage.pages[0].proofImage.jobId;
+
+    const r = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/comicPages/pages/0/render`)
+      .send({ target: 'final', useProofAsBase: true });
+    expect(r.status).toBe(200);
+    expect(r.body.stage.pages[0].finalImage.jobId).toBe(r.body.jobId);
+    expect(r.body.stage.pages[0].finalImage.filename).toBeNull();
+    expect(r.body.stage.pages[0].finalImage.fromProof).toBe(true);
+    expect(r.body.stage.pages[0].proofImage.jobId).toBe(priorProofJobId);
+    expect(r.body.stage.pages[0].proofImage).not.toHaveProperty('fromProof');
+  });
+
+  it('POST page+cover render schemas reject invalid `target` enum values with 400', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    // Zod enum on comicPageRenderSchema rejects before the service dispatches,
+    // so no pages-seeding is needed — validation happens on body parse.
+    const pageRes = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/comicPages/pages/0/render`)
+      .send({ target: 'bogus' });
+    expect(pageRes.status).toBe(400);
+    const coverRes = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/comicPages/cover/render`)
+      .send({ target: 'bogus' });
+    expect(coverRes.status).toBe(400);
   });
 
   // -----------------------

@@ -14,11 +14,12 @@ vi.mock('../services/runner.js', () => ({
 
 // TUI runner is in lib (different module from services/runner.js) — mock it
 // here so the central handler's tui branch is testable without spawning a
-// real PTY. cleanTuiResponse is mocked to a passthrough so tests can assert
-// on the raw streamed text without worrying about the prompt-echo strip.
+// real PTY. executeTuiRun is responsible for its own response cleanup
+// (file-write directive + screen-scrape fallback), so the central handler
+// just forwards result.text. Tests drive the cleaned text directly via the
+// mock's onComplete payload.
 vi.mock('./tuiPromptRunner.js', () => ({
   executeTuiRun: vi.fn(),
-  cleanTuiResponse: vi.fn((text) => text),
 }));
 
 const runner = await import('../services/runner.js');
@@ -41,11 +42,10 @@ beforeEach(() => {
   // vi.clearAllMocks() clears calls but NOT mockReturnValue overrides,
   // so the default implementations set in vi.mock() above don't auto-reset
   // between tests. Re-apply the defaults that individual tests override
-  // (hasModelFlag, extractBakedModel, cleanTuiResponse) so a leak-over
-  // value can't poison the next test's resolveEffectiveModel run.
+  // (hasModelFlag, extractBakedModel) so a leak-over value can't poison
+  // the next test's resolveEffectiveModel run.
   runner.hasModelFlag.mockReturnValue(false);
   runner.extractBakedModel.mockReturnValue(null);
-  tuiRunner.cleanTuiResponse.mockImplementation((text) => text);
 });
 
 describe('promptRunner — happy paths', () => {
@@ -401,12 +401,11 @@ describe('promptRunner — multi-chunk text accumulation', () => {
 // =============================================================================
 
 describe('promptRunner — TUI provider routing', () => {
-  it('routes TUI providers through executeTuiRun, accumulates stripped text, resolves { text, runId, model }', async () => {
+  it('routes TUI providers through executeTuiRun and resolves with result.text', async () => {
     tuiRunner.executeTuiRun.mockImplementation(async (id, _p, _pr, _cwd, onData, onComplete, _t) => {
-      onData('once ');
-      onData('upon ');
-      onData('a time');
-      onComplete({ success: true, exitCode: 0 });
+      onData('chrome chunk ');
+      onData('more chrome');
+      onComplete({ success: true, exitCode: 0, text: 'once upon a time' });
     });
 
     const out = await runPromptThroughProvider({
@@ -439,20 +438,32 @@ describe('promptRunner — TUI provider routing', () => {
     expect(args[6]).toBe(60000);                   // timeout positional arg
   });
 
-  it('runs cleanTuiResponse on the accumulated text before resolving', async () => {
+  it('returns result.text from executeTuiRun (which owns its own response cleanup)', async () => {
     tuiRunner.executeTuiRun.mockImplementation(async (id, _p, _pr, _cwd, onData, onComplete, _t) => {
       onData('raw with chrome');
-      onComplete({ success: true });
+      onComplete({ success: true, text: 'cleaned response from file' });
     });
-    tuiRunner.cleanTuiResponse.mockReturnValueOnce('cleaned');
 
     const out = await runPromptThroughProvider({
       provider: tuiProvider(),
       prompt: 'p', source: 't',
     });
 
-    expect(tuiRunner.cleanTuiResponse).toHaveBeenCalledWith('raw with chrome', 'p');
-    expect(out.text).toBe('cleaned');
+    expect(out.text).toBe('cleaned response from file');
+  });
+
+  it('falls back to empty string when executeTuiRun omits result.text', async () => {
+    tuiRunner.executeTuiRun.mockImplementation(async (id, _p, _pr, _cwd, onData, onComplete, _t) => {
+      onData('streamed chrome');
+      onComplete({ success: true });
+    });
+
+    const out = await runPromptThroughProvider({
+      provider: tuiProvider(),
+      prompt: 'p', source: 't',
+    });
+
+    expect(out.text).toBe('');
   });
 
   it('rejects with TUI-labeled error when executeTuiRun fires onComplete with success: false', async () => {

@@ -28,7 +28,7 @@
       "returnsJson": true,
       "variables": []
     },
-    "writers-room-settings": {
+    "writers-room-places": {
       "name": "Writers Room — Setting / World Bible",
       "description": "Extract a setting/world bible from a Writers Room draft: per-location descriptions keyed by screenplay slugline (palette, era, weather, recurring details). Storyboard scenes match their slugline back to a setting and inject its description into the image prompt for visual continuity.",
       "model": "default",
@@ -249,6 +249,27 @@
       "returnsJson": true,
       "variables": []
     },
+    "pipeline-volume-cover-concepts": {
+      "name": "Pipeline — Volume Cover Concepts",
+      "description": "Generate FRONT and BACK cover-art concepts for one volume (season) of a comic series. Returns a {coverConcept, backCoverConcept} JSON pair — pure scene descriptions for the image-gen renderer (no masthead, logo, or typography). Lightweight per-season call; may seed the cover and/or backCover script slots when they're blank, and never clobbers a user edit.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-comic-cover-concepts": {
+      "name": "Pipeline — Comic Issue Cover Concepts",
+      "description": "Generate FRONT and BACK cover-art concepts for a single comic issue. Returns a {coverConcept, backCoverConcept} JSON pair — pure scene descriptions for the image-gen renderer (no masthead, issue-number tag, or typography). Lightweight per-issue call; may seed the cover and/or backCover script slots (gated by the request `target`) when they're blank, and never clobbers a user edit.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "pipeline-series-title-logo": {
+      "name": "Pipeline — Series Title / Logo Design",
+      "description": "Design the series masthead / logo typography from the series name + logline + style notes + universe influences. Returns a {titleLogo} JSON object — a single prose paragraph describing typography treatment, finish, color hints, and motifs to inject into cover prompts and TV title screens. Runs once on series creation from a universe; user can regenerate from the bible sidebar.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
     "pipeline-comic-panel-image-prompt": {
       "name": "Pipeline — Comic Panel Image Prompt",
       "description": "Refine a single comic panel's description into a richer image-gen-ready prompt. Uses caption / dialogue / sfx context + neighboring-panel continuity to elaborate without re-imagining the scene.",
@@ -260,6 +281,13 @@
       "name": "Pipeline — Storyboard Scene Image Prompt",
       "description": "Refine a single storyboard scene's description into a richer image-gen-ready prompt. Uses slugline + neighboring-scene continuity to elaborate without contradicting location or time of day.",
       "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "importer-classify": {
+      "name": "Importer — Content-Type Classification",
+      "description": "Classify the first chunk of a source as short-story / novel / screenplay / comic-script. Runs at `light` tier — only sees ~4K chars from the head of the source, costs are negligible compared to the canon/arc/issue extractors.",
+      "model": "light",
       "returnsJson": true,
       "variables": []
     },

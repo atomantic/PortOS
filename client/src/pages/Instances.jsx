@@ -18,6 +18,7 @@ import {
 import PeerAppsList from '../components/instances/PeerAppsList';
 import PeerAgentsSection from '../components/instances/PeerAgentsSection';
 import { timeAgo } from '../utils/formatters';
+import { useLocalStorageBool } from '../hooks/useLocalStorageBool';
 
 const STATUS_COLORS = {
   online: 'text-port-success',
@@ -81,17 +82,11 @@ function HealthSummary({ health, version }) {
 }
 
 function TailnetHelpBanner({ tailnetInfo }) {
-  const [collapsed, setCollapsed] = useState(() => {
-    return localStorage.getItem('portos-tailnet-help-collapsed') === '1';
-  });
+  const [collapsed, setCollapsed] = useLocalStorageBool('portos-tailnet-help-collapsed', false);
   const [provisioning, setProvisioning] = useState(false);
   const [provisionResult, setProvisionResult] = useState(null);
 
-  const toggle = () => {
-    const next = !collapsed;
-    setCollapsed(next);
-    localStorage.setItem('portos-tailnet-help-collapsed', next ? '1' : '0');
-  };
+  const toggle = () => setCollapsed((prev) => !prev);
 
   const provision = async (e) => {
     e.stopPropagation();

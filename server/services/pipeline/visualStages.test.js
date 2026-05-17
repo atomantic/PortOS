@@ -71,6 +71,8 @@ vi.mock('../../lib/mediaModels.js', () => ({
 const {
   composeComicPagePrompt,
   composeComicCoverPrompt,
+  composeVolumeCoverPrompt,
+  composeTitleScreenPrompt,
   enqueueComicCover,
   enqueueStoryboardSceneVideo,
   enqueueStoryboardShotStartFrame,
@@ -546,6 +548,88 @@ describe('composeComicCoverPrompt', () => {
       coverScript: 'something',
     });
     expect(prompt).toMatch(/cinematic ink illustration/);
+  });
+
+  it('injects series.titleLogo as the masthead design cue when present', () => {
+    const prompt = composeComicCoverPrompt({
+      series: {
+        ...SERIES_NAMED,
+        titleLogo: 'Hand-lettered slab serif in salt-crusted iron, hairline crack through the O.',
+      },
+      issue: { number: 1, title: 'X' },
+      coverScript: 'something',
+    });
+    expect(prompt).toMatch(/Logo design: Hand-lettered slab serif in salt-crusted iron/);
+    expect(prompt).toMatch(/series masthead "Bone Walker"/);
+  });
+
+  it('renders the author byline near the bottom when series.author is set', () => {
+    const prompt = composeComicCoverPrompt({
+      series: { ...SERIES_NAMED, author: 'A. Foundryworker' },
+      issue: { number: 1, title: 'X' },
+      coverScript: 'something',
+    });
+    expect(prompt).toMatch(/author byline reading "By A. Foundryworker"/);
+  });
+
+  it('omits the author byline when series.author is empty', () => {
+    const prompt = composeComicCoverPrompt({
+      series: { ...SERIES_NAMED, author: '' },
+      issue: { number: 1, title: 'X' },
+      coverScript: 'something',
+    });
+    expect(prompt).not.toMatch(/author byline/i);
+  });
+});
+
+describe('composeVolumeCoverPrompt', () => {
+  it('integrates titleLogo + author into the volume cover prompt', () => {
+    const prompt = composeVolumeCoverPrompt({
+      series: { name: 'Salt Run', styleNotes: 's', titleLogo: 'Engraved iron caps', author: 'J. Doe' },
+      season: { number: 2, title: 'The Long Sweep' },
+      coverScript: 'A wide hero shot of the foundry skyline.',
+    });
+    expect(prompt).toMatch(/trade-paperback FRONT cover/);
+    expect(prompt).toMatch(/series masthead "Salt Run"/);
+    expect(prompt).toMatch(/Logo design: Engraved iron caps/);
+    expect(prompt).toMatch(/volume tag reading "VOL\. 2"/);
+    expect(prompt).toMatch(/volume title "The Long Sweep"/);
+    expect(prompt).toMatch(/author byline reading "By J\. Doe"/);
+  });
+});
+
+describe('composeTitleScreenPrompt', () => {
+  it('builds a TV title card prompt that injects titleLogo + author + episode metadata', () => {
+    const prompt = composeTitleScreenPrompt({
+      series: {
+        name: 'Bone Walker',
+        styleNotes: 'gritty ink-wash',
+        titleLogo: 'Hand-lettered slab serif in salt-crusted iron.',
+        author: 'A. Foundryworker',
+      },
+      issue: { number: 3, title: 'The Long Sweep' },
+    });
+    expect(prompt).toMatch(/TV episode title screen/);
+    expect(prompt).toMatch(/series masthead "Bone Walker"/);
+    expect(prompt).toMatch(/Logo design: Hand-lettered slab serif in salt-crusted iron/);
+    expect(prompt).toMatch(/EPISODE 3/);
+    expect(prompt).toMatch(/episode title "The Long Sweep"/);
+    expect(prompt).toMatch(/author byline reading "By A\. Foundryworker"/);
+    expect(prompt).toMatch(/Art style: gritty ink-wash/);
+  });
+
+  it('falls back gracefully when only a series name is set', () => {
+    const prompt = composeTitleScreenPrompt({
+      series: { name: 'Bone Walker', styleNotes: '' },
+      issue: { number: 1, title: '' },
+    });
+    expect(prompt).toMatch(/series masthead "Bone Walker"/);
+    expect(prompt).toMatch(/EPISODE 1/);
+    // No `episode title "<value>"` secondary banner clause is emitted when the
+    // issue title is empty — the broader phrase "TV episode title screen" in
+    // the layout intro is expected, so scope the assertion to the banner.
+    expect(prompt).not.toMatch(/episode title "/);
+    expect(prompt).not.toMatch(/author byline/);
   });
 });
 

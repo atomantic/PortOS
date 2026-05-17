@@ -118,5 +118,15 @@ export function useMediaAnnotations() {
     updateAnnotation(item.key, { starred: !priorStarred });
   }, [updateAnnotation]);
 
-  return { annotations, toggleStar, updateAnnotation };
+  // Shortcut for the `{ starred, hasNote, onToggleStar }` triple that every
+  // <MediaCard> consumer reads from this hook. Callers spread it onto the card
+  // and can still override individual fields (e.g. clear onToggleStar in
+  // select/stitch modes by passing `onToggleStar={undefined}` after the spread).
+  const getCardProps = useCallback((key) => ({
+    starred: !!annotations[key]?.starred,
+    hasNote: !!annotations[key]?.anyNote,
+    onToggleStar: toggleStar,
+  }), [annotations, toggleStar]);
+
+  return { annotations, toggleStar, updateAnnotation, getCardProps };
 }

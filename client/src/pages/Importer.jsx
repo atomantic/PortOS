@@ -1,16 +1,17 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { FileInput, Loader2, ArrowLeft, CheckCircle2, AlertTriangle } from 'lucide-react';
+import { FileInput, Loader2, ArrowLeft, CheckCircle2, AlertTriangle, ChevronDown, ChevronRight, Wand2 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import { useAsyncAction } from '../hooks/useAsyncAction';
 import { STORY_SHAPES } from '../components/pipeline/StoryShapes';
 import {
   analyzeImport,
+  classifyImport,
   commitImport,
   getImporterConfig,
   IMPORTER_CONTENT_TYPES,
   IMPORTER_SOURCE_CHAR_LIMIT_FALLBACK,
-  IMPORTER_ARC_ROLES_FALLBACK,
+  CLASSIFY_SOURCE_HEAD_CHARS,
 } from '../services/apiImporter';
 
 const CONTENT_TYPE_LABELS = {
@@ -50,75 +51,69 @@ export default function Importer() {
   const [intake, setIntake] = useState(emptyIntake);
   const [preview, setPreview] = useState(null);
 
-  // Server-canonical config (source-char limit + arc-roles enum). Falls back
-  // to the shipped client defaults until the GET resolves. Hydrated on mount
-  // so the intake form's char-count warning + the review form's arc-role
-  // dropdown stay aligned with the server even when the server bumps the cap
-  // or extends the enum without a client redeploy.
+  // Server is the source of truth for the enums — a prior client-side copy
+  // (`IMPORTER_ARC_ROLES_FALLBACK`) silently drifted, so we wait on the GET
+  // rather than shadow it. `arcShapeIds: null` means "config not loaded
+  // yet; render all STORY_SHAPES" — distinguishes from "server shipped []".
   const [config, setConfig] = useState({
     sourceCharLimit: IMPORTER_SOURCE_CHAR_LIMIT_FALLBACK,
-    arcRoles: IMPORTER_ARC_ROLES_FALLBACK,
+    arcRoles: [],
+    arcShapeIds: null,
   });
-  // Ref to the AbortController of the in-flight config GET so analyze can
-  // cancel it before firing — closes the GET-resolves-after-analyze race
-  // window where the GET's setConfig would clobber analyze-supplied values.
+  // Analyze aborts the in-flight config GET so its late-resolving setConfig
+  // can't clobber analyze's server-fresh values.
   const abortConfigRef = useRef(null);
   useEffect(() => {
-    // Silent — the fallback values are correct for the shipped client, so a
-    // transient network blip doesn't need to toast.
-    //
-    // AbortController guards against a late-resolving config GET clobbering
-    // a server-side bump that the analyze response already applied. The
-    // user can navigate to /importer, fire Analyze faster than the config
-    // GET round-trip, and the GET-vs-analyze race would otherwise overwrite
-    // analyze's setConfig with the server-default fallback values whenever
-    // the GET resolves last. Aborting on unmount + on first analyze closes
-    // the window.
     const ac = new AbortController();
     abortConfigRef.current = ac;
     getImporterConfig({ silent: true, signal: ac.signal }).then((cfg) => {
       if (ac.signal.aborted || !cfg) return;
       setConfig({
         sourceCharLimit: Number.isFinite(cfg.sourceCharLimit) ? cfg.sourceCharLimit : IMPORTER_SOURCE_CHAR_LIMIT_FALLBACK,
-        arcRoles: Array.isArray(cfg.arcRoles) && cfg.arcRoles.length > 0 ? cfg.arcRoles : IMPORTER_ARC_ROLES_FALLBACK,
+        arcRoles: Array.isArray(cfg.arcRoles) ? cfg.arcRoles : [],
+        arcShapeIds: Array.isArray(cfg.arcShapeIds) && cfg.arcShapeIds.length > 0 ? cfg.arcShapeIds : null,
       });
     }).catch((err) => {
-      // Aborts (analyze fires first, unmount) are expected — silent.
-      // Real network/server errors are NOT expected — surface them so a
-      // misconfigured /importer/config doesn't silently fall back to
-      // client defaults forever without operator feedback.
       if (ac.signal.aborted) return;
       console.warn(`⚠️ Importer config fetch failed — using client fallbacks: ${err?.message || err}`);
     });
     return () => ac.abort();
   }, []);
 
-  // Review-phase editable state. Held separately from `preview` so the user
-  // can experiment without losing the LLM's original suggestions.
-  //
-  // `canonSelections` holds the clean (no UI flags) LLM-extracted entries.
-  // `selectedCanon` tracks which indexes are checked via parallel Sets — one
-  // per kind — so no UI flag ever touches the canon entry objects that flow
-  // to the commit payload.
   const [canonSelections, setCanonSelections] = useState({ characters: [], places: [], objects: [] });
   const [selectedCanon, setSelectedCanon] = useState({ characters: new Set(), places: new Set(), objects: new Set() });
   const [arcDraft, setArcDraft] = useState(null);
   const [seasonsDraft, setSeasonsDraft] = useState([]);
   const [issuesDraft, setIssuesDraft] = useState([]);
+  // Server already persisted universe+series+arc but the issue-loop rolled
+  // back. The next commit drops arc/seasons/canon so a retry can't overwrite
+  // server-side edits made between attempts.
+  const [arcAlreadyPersisted, setArcAlreadyPersisted] = useState(false);
+  // Destructive opt-in for existing series — wipes issues + overwrites arc.
+  const [replaceMode, setReplaceMode] = useState(false);
+  const [classifyHint, setClassifyHint] = useState(null);
 
-  const sourceLen = intake.source.length;
-  const sourceOver = sourceLen > config.sourceCharLimit;
+  // Stale hint after the source changes would mislead the user.
+  useEffect(() => { setClassifyHint(null); }, [intake.source]);
 
-  const intakeValid = useMemo(() =>
-    intake.universeName.trim() && intake.seriesName.trim() && intake.source.trim() && !sourceOver,
-    [intake, sourceOver],
-  );
+  const [runClassify, classifying] = useAsyncAction(async () => {
+    if (!intake.source.trim()) return null;
+    const result = await classifyImport({ source: intake.source.slice(0, CLASSIFY_SOURCE_HEAD_CHARS) }, { silent: true });
+    if (!result) return null;
+    if (result.contentType && IMPORTER_CONTENT_TYPES.includes(result.contentType)) {
+      setIntake((prev) => ({ ...prev, contentType: result.contentType }));
+    }
+    setClassifyHint({
+      contentType: result.contentType,
+      confidence: result.confidence,
+      reasoning: result.reasoning,
+    });
+    return result;
+  }, { errorMessage: 'Auto-detect failed' });
 
   const [runAnalyze, analyzing] = useAsyncAction(async () => {
-    // Cancel any still-in-flight config GET — its setConfig would
-    // otherwise resolve AFTER analyze's setConfig (which uses the
-    // server-fresh response.limits/arcRoles) and clobber it with the
-    // potentially-stale on-mount fetch values.
+    // A late-resolving config GET would clobber the server-fresh values in
+    // `result.limits` / `arcRoles` / `arcShapeIds` below.
     abortConfigRef.current?.abort();
     const payload = {
       universeName: intake.universeName.trim(),
@@ -130,60 +125,64 @@ export default function Importer() {
     if (Number.isFinite(tic) && tic > 0) payload.targetIssueCount = tic;
     const result = await analyzeImport(payload, { silent: true });
     if (!result) return null;
-    // Seed the editable Review-phase state from the preview.
     setPreview(result);
     const chars = result.canonPreview?.characters || [];
     const places = result.canonPreview?.places || [];
     const objects = result.canonPreview?.objects || [];
     setCanonSelections({ characters: chars, places, objects });
-    // All entries selected by default — track via index Sets, not object flags.
     setSelectedCanon({
       characters: new Set(chars.map((_, i) => i)),
       places: new Set(places.map((_, i) => i)),
       objects: new Set(objects.map((_, i) => i)),
     });
-    // arcDraft is sent verbatim as the commit's `arc` field — strip non-arc
-    // keys (e.g. the LLM's top-level `seasons`) at seed time so they can't
-    // smuggle into series.arc if the wire schema tightens.
+    // Strip non-arc keys (e.g. the LLM's top-level `seasons`) at seed time
+    // — guards against the wire schema tightening to `.strict()`.
     setArcDraft(pickArcFields(result.arcPreview));
     setSeasonsDraft((result.seasonsPreview || []).map((s) => ({ ...s })));
     setIssuesDraft((result.issueProposals || []).map((i) => ({ ...i })));
-    // Server may have surfaced an updated source-char limit or arc-roles
-    // list — accept it for the rest of this session if the analyze response
-    // carries them, so the review form stays aligned with whatever the
-    // server is currently enforcing.
-    if (result.limits?.sourceCharLimit) {
-      setConfig((c) => ({ ...c, sourceCharLimit: result.limits.sourceCharLimit }));
-    }
-    if (Array.isArray(result.arcRoles) && result.arcRoles.length > 0) {
-      setConfig((c) => ({ ...c, arcRoles: result.arcRoles }));
-    }
+    setArcAlreadyPersisted(false);
+    setReplaceMode(false);
+    setConfig((c) => ({
+      ...c,
+      ...(Number.isFinite(result.limits?.sourceCharLimit) ? { sourceCharLimit: result.limits.sourceCharLimit } : {}),
+      ...(Array.isArray(result.arcRoles) && result.arcRoles.length > 0 ? { arcRoles: result.arcRoles } : {}),
+      ...(Array.isArray(result.arcShapeIds) && result.arcShapeIds.length > 0 ? { arcShapeIds: result.arcShapeIds } : {}),
+    }));
     setPhase('review');
     return result;
   }, { errorMessage: 'Failed to analyze import' });
 
   const [runCommit, committing] = useAsyncAction(async () => {
     if (!preview) return null;
-    const payload = {
+    // arcAlreadyPersisted retry: server kept arc/seasons/canon from the
+    // failed commit, so resending them would clobber any subsequent edits.
+    const base = {
       universeId: preview.universe.id,
       seriesId: preview.series.id,
-      canonSelections: {
-        characters: canonSelections.characters.filter((_, i) => selectedCanon.characters.has(i)),
-        places: canonSelections.places.filter((_, i) => selectedCanon.places.has(i)),
-        objects: canonSelections.objects.filter((_, i) => selectedCanon.objects.has(i)),
-      },
-      arc: pickArcFields(arcDraft),
-      seasons: seasonsDraft,
       issues: issuesDraft,
     };
-    const result = await commitImport(payload, { silent: true });
+    const payload = arcAlreadyPersisted
+      ? { ...base, canonSelections: { characters: [], places: [], objects: [] }, arc: null, seasons: [] }
+      : {
+          ...base,
+          canonSelections: {
+            characters: canonSelections.characters.filter((_, i) => selectedCanon.characters.has(i)),
+            places: canonSelections.places.filter((_, i) => selectedCanon.places.has(i)),
+            objects: canonSelections.objects.filter((_, i) => selectedCanon.objects.has(i)),
+          },
+          arc: pickArcFields(arcDraft),
+          seasons: seasonsDraft,
+          ...(replaceMode && preview.isExistingSeries ? { replaceMode: true } : {}),
+        };
+    const result = await commitImport(payload, { silent: true }).catch((err) => {
+      if (err?.code === 'IMPORTER_PARTIAL_COMMIT_ISSUES' && err?.context?.arcAlreadyPersisted) {
+        setArcAlreadyPersisted(true);
+        toast.warning('Arc + seasons saved; issues failed and were rolled back. Retry to re-create the issues only — the arc won\'t be re-sent.');
+      }
+      throw err;
+    });
     if (!result) return null;
     toast.success(`Imported ${result.createdIssueIds.length} issue${result.createdIssueIds.length === 1 ? '' : 's'} into "${result.series.name}"`);
-    // Surface season-remap warnings so the user sees when an issue landed in
-    // a different season than they (or the LLM) proposed — silent fallback
-    // would otherwise be invisible. Use the server-reported landed season
-    // metadata so the toast names the actual season (S2 — Diaspora), not a
-    // generic "first season" that can lie when seasons are sparsely numbered.
     if (Array.isArray(result.remappedIssues) && result.remappedIssues.length > 0) {
       const n = result.remappedIssues.length;
       const noun = `${n} issue${n === 1 ? '' : 's'}`;
@@ -192,8 +191,6 @@ export default function Importer() {
       if (landedSeasonless) {
         msg = `${noun} created ungrouped — no seasons exist on this series to land them in.`;
       } else {
-        // All remapped issues land in the same fallback season today, so
-        // the first entry's metadata describes them all.
         const sample = result.remappedIssues[0];
         const seasonLabel = sample.actualSeasonNumber != null
           ? `S${sample.actualSeasonNumber}${sample.actualSeasonTitle ? ` — ${sample.actualSeasonTitle}` : ''}`
@@ -224,12 +221,12 @@ export default function Importer() {
         <IntakeForm
           intake={intake}
           setIntake={setIntake}
-          intakeValid={intakeValid}
-          sourceLen={sourceLen}
-          sourceOver={sourceOver}
           sourceCharLimit={config.sourceCharLimit}
           analyzing={analyzing}
           onAnalyze={runAnalyze}
+          classifying={classifying}
+          onClassify={runClassify}
+          classifyHint={classifyHint}
         />
       )}
 
@@ -246,6 +243,9 @@ export default function Importer() {
           issuesDraft={issuesDraft}
           setIssuesDraft={setIssuesDraft}
           arcRoles={config.arcRoles}
+          arcShapeIds={config.arcShapeIds}
+          replaceMode={replaceMode}
+          setReplaceMode={setReplaceMode}
           committing={committing}
           onCommit={runCommit}
           onBack={() => setPhase('intake')}
@@ -255,7 +255,11 @@ export default function Importer() {
   );
 }
 
-function IntakeForm({ intake, setIntake, intakeValid, sourceLen, sourceOver, sourceCharLimit, analyzing, onAnalyze }) {
+function IntakeForm({ intake, setIntake, sourceCharLimit, analyzing, onAnalyze, classifying, onClassify, classifyHint }) {
+  const sourceLen = intake.source.length;
+  const sourceOver = sourceLen > sourceCharLimit;
+  const intakeValid = intake.universeName.trim() && intake.seriesName.trim() && intake.source.trim() && !sourceOver;
+  const canClassify = intake.source.trim().length > 0 && !sourceOver && !classifying && !analyzing;
   return (
     <form
       className="space-y-4 bg-port-card border border-port-border rounded-lg p-4 sm:p-6"
@@ -300,7 +304,21 @@ function IntakeForm({ intake, setIntake, intakeValid, sourceLen, sourceOver, sou
       </div>
 
       <fieldset>
-        <legend className="block text-sm font-medium mb-2">Content Type</legend>
+        <div className="flex items-center justify-between mb-2">
+          <legend className="block text-sm font-medium">Content Type</legend>
+          <button
+            type="button"
+            onClick={onClassify}
+            disabled={!canClassify}
+            title={canClassify
+              ? 'Run a light-tier LLM pass on the source head to auto-detect the content type. The radio stays editable.'
+              : 'Paste source text first to enable auto-detect.'}
+            className="text-xs text-port-text-muted hover:text-port-text disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+          >
+            {classifying ? <Loader2 className="w-3 h-3 animate-spin" /> : <Wand2 className="w-3 h-3" />}
+            {classifying ? 'Detecting…' : 'Auto-detect'}
+          </button>
+        </div>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
           {IMPORTER_CONTENT_TYPES.map((ct) => (
             <label
@@ -323,6 +341,16 @@ function IntakeForm({ intake, setIntake, intakeValid, sourceLen, sourceOver, sou
             </label>
           ))}
         </div>
+        {classifyHint && classifyHint.contentType && (
+          <p className="text-xs text-port-text-muted mt-2 flex items-start gap-1">
+            <Wand2 className="w-3 h-3 mt-0.5 flex-shrink-0" />
+            <span>
+              Auto-detected <strong>{CONTENT_TYPE_LABELS[classifyHint.contentType] || classifyHint.contentType}</strong>
+              {classifyHint.confidence && <> ({classifyHint.confidence} confidence)</>}
+              {classifyHint.reasoning && <> — {classifyHint.reasoning}</>}
+            </span>
+          </p>
+        )}
       </fieldset>
 
       <div>
@@ -388,7 +416,8 @@ function ReviewPanel({
   selectedCanon, setSelectedCanon,
   arcDraft, setArcDraft, seasonsDraft, setSeasonsDraft,
   issuesDraft, setIssuesDraft,
-  arcRoles,
+  arcRoles, arcShapeIds,
+  replaceMode, setReplaceMode,
   committing, onCommit, onBack,
 }) {
   const toggleSelected = (kind, idx) => {
@@ -407,12 +436,28 @@ function ReviewPanel({
           <div className="font-medium">
             {preview.isExistingUniverse ? 'Adding to' : 'Creating new universe'} <span className="text-port-accent">"{preview.universe.name}"</span>
             {' / '}
-            {preview.isExistingSeries ? 'extending series' : 'new series'} <span className="text-port-accent">"{preview.series.name}"</span>
+            {preview.isExistingSeries
+              ? (replaceMode ? 'REPLACING series' : 'extending series')
+              : 'new series'} <span className="text-port-accent">"{preview.series.name}"</span>
           </div>
           <p className="text-xs text-port-text-muted mt-1">
             Review the canon below, edit any issue titles or synopses, then click Commit to seed
             the pipeline. The verbatim prose excerpt for each issue lands in <code>stages.prose.output</code>.
           </p>
+          {preview.isExistingSeries && (
+            <label className={`text-xs mt-2 flex items-center gap-2 cursor-pointer ${replaceMode ? 'text-port-error' : 'text-port-text-muted'}`}>
+              <input
+                type="checkbox"
+                checked={replaceMode}
+                onChange={(e) => setReplaceMode(e.target.checked)}
+                className="accent-port-error"
+              />
+              <AlertTriangle className="w-3 h-3" />
+              <span>
+                <strong>Replace all</strong> — wipe every existing issue on this series and overwrite arc + seasons with this import. <em>Cannot be undone.</em>
+              </span>
+            </label>
+          )}
         </div>
         <button onClick={onBack} className="text-xs text-port-text-muted hover:text-port-text flex items-center gap-1">
           <ArrowLeft className="w-3 h-3" /> Back
@@ -449,7 +494,7 @@ function ReviewPanel({
         renderBody={(e) => [e.description, e.significance].filter(Boolean).join(' • ')}
       />
 
-      <ArcReviewSection arc={arcDraft} setArc={setArcDraft} seasons={seasonsDraft} setSeasons={setSeasonsDraft} />
+      <ArcReviewSection arc={arcDraft} setArc={setArcDraft} seasons={seasonsDraft} setSeasons={setSeasonsDraft} arcShapeIds={arcShapeIds} />
 
       <IssuesReviewSection issues={issuesDraft} setIssues={setIssuesDraft} seasons={seasonsDraft} arcRoles={arcRoles} />
 
@@ -464,10 +509,18 @@ function ReviewPanel({
         <button
           onClick={onCommit}
           disabled={committing || issuesDraft.length === 0}
-          className="bg-port-success hover:bg-port-success/80 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded text-sm font-medium flex items-center gap-2"
+          className={`disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded text-sm font-medium flex items-center gap-2 ${
+            replaceMode
+              ? 'bg-port-error hover:bg-port-error/80'
+              : 'bg-port-success hover:bg-port-success/80'
+          }`}
         >
-          {committing ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
-          {committing ? 'Committing…' : `Commit ${issuesDraft.length} issue${issuesDraft.length === 1 ? '' : 's'}`}
+          {committing ? <Loader2 className="w-4 h-4 animate-spin" /> : (replaceMode ? <AlertTriangle className="w-4 h-4" /> : <CheckCircle2 className="w-4 h-4" />)}
+          {committing
+            ? 'Committing…'
+            : (replaceMode
+                ? `Replace with ${issuesDraft.length} issue${issuesDraft.length === 1 ? '' : 's'}`
+                : `Commit ${issuesDraft.length} issue${issuesDraft.length === 1 ? '' : 's'}`)}
         </button>
       </div>
     </div>
@@ -521,12 +574,16 @@ function CanonReviewSection({ title, kind, entries, selectedIdxs, onToggle, rend
   );
 }
 
-// Immutably update the element at `idx` in a state-managed list.
-function updateAt(list, setList, idx, patch) {
-  setList(list.map((e, i) => i === idx ? { ...e, ...patch } : e));
-}
+// Functional updater keeps unchanged map entries referentially identical,
+// so React.memo on the per-item card lets siblings bail out of render when
+// one card is edited. ~50 issues with 500K-char prose previews were laggy
+// without this.
+const makePatcher = (setList) => (idx, patch) => {
+  setList((prev) => prev.map((e, i) => (i === idx ? { ...e, ...patch } : e)));
+};
 
-function ArcReviewSection({ arc, setArc, seasons, setSeasons }) {
+function ArcReviewSection({ arc, setArc, seasons, setSeasons, arcShapeIds }) {
+  const patchSeasonAt = useMemo(() => makePatcher(setSeasons), [setSeasons]);
   if (!arc && seasons.length === 0) {
     return (
       <section className="bg-port-card border border-port-border rounded-lg p-4">
@@ -536,6 +593,12 @@ function ArcReviewSection({ arc, setArc, seasons, setSeasons }) {
     );
   }
   const a = arc || {};
+  // Filter so the dropdown can never offer a shape the commit-side
+  // `z.enum(ARC_SHAPE_IDS)` would reject. `null` sentinel = config not yet
+  // loaded; show all client shapes meanwhile.
+  const allowedShapes = Array.isArray(arcShapeIds) && arcShapeIds.length > 0
+    ? STORY_SHAPES.filter((s) => arcShapeIds.includes(s.id))
+    : STORY_SHAPES;
   return (
     <section className="bg-port-card border border-port-border rounded-lg p-4 space-y-4">
       <h2 className="text-lg font-semibold">Arc</h2>
@@ -559,7 +622,7 @@ function ArcReviewSection({ arc, setArc, seasons, setSeasons }) {
             className="w-full bg-port-bg border border-port-border rounded px-3 py-2 text-sm focus:outline-none focus:border-port-accent"
           >
             <option value="">— pick one —</option>
-            {STORY_SHAPES.map((s) => (
+            {allowedShapes.map((s) => (
               <option key={s.id} value={s.id}>{s.label}</option>
             ))}
           </select>
@@ -588,44 +651,7 @@ function ArcReviewSection({ arc, setArc, seasons, setSeasons }) {
           <h3 className="text-sm font-medium mb-2">Seasons ({seasons.length})</h3>
           <div className="space-y-2">
             {seasons.map((s, idx) => (
-              <div key={`season-${idx}`} className="border border-port-border rounded p-3">
-                <div className="grid grid-cols-1 sm:grid-cols-[80px_1fr] gap-3">
-                  <div>
-                    <label htmlFor={`season-${idx}-number`} className="block text-xs font-medium mb-1">#</label>
-                    <input
-                      id={`season-${idx}-number`}
-                      type="number"
-                      min="1"
-                      max="99"
-                      value={s.number ?? ''}
-                      onChange={(e) => updateAt(seasons, setSeasons, idx, {
-                        // Empty input -> undefined so the service's auto-assign
-                        // path picks the next free number. Avoids `Number('') = 0`
-                        // landing in state and failing the `>= 1` gate at commit.
-                        number: e.target.value === '' ? undefined : Number(e.target.value),
-                      })}
-                      className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-sm"
-                    />
-                  </div>
-                  <div>
-                    <label htmlFor={`season-${idx}-title`} className="block text-xs font-medium mb-1">Title</label>
-                    <input
-                      id={`season-${idx}-title`}
-                      type="text"
-                      value={s.title || ''}
-                      onChange={(e) => updateAt(seasons, setSeasons, idx, { title: e.target.value })}
-                      className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-sm"
-                    />
-                  </div>
-                </div>
-                <label htmlFor={`season-${idx}-synopsis`} className="block text-xs font-medium mb-1 mt-2">Synopsis</label>
-                <textarea
-                  id={`season-${idx}-synopsis`}
-                  value={s.synopsis || ''}
-                  onChange={(e) => updateAt(seasons, setSeasons, idx, { synopsis: e.target.value })}
-                  className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-sm min-h-[60px]"
-                />
-              </div>
+              <SeasonCard key={`season-${idx}`} idx={idx} season={s} onPatch={patchSeasonAt} />
             ))}
           </div>
         </div>
@@ -634,7 +660,170 @@ function ArcReviewSection({ arc, setArc, seasons, setSeasons }) {
   );
 }
 
+const SeasonCard = memo(function SeasonCard({ idx, season, onPatch }) {
+  return (
+    <div className="border border-port-border rounded p-3">
+      <div className="grid grid-cols-1 sm:grid-cols-[80px_1fr] gap-3">
+        <div>
+          <label htmlFor={`season-${idx}-number`} className="block text-xs font-medium mb-1">#</label>
+          <input
+            id={`season-${idx}-number`}
+            type="number"
+            min="1"
+            max="99"
+            value={season.number ?? ''}
+            onChange={(e) => onPatch(idx, {
+              number: e.target.value === '' ? undefined : Number(e.target.value),
+            })}
+            className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-sm"
+          />
+        </div>
+        <div>
+          <label htmlFor={`season-${idx}-title`} className="block text-xs font-medium mb-1">Title</label>
+          <input
+            id={`season-${idx}-title`}
+            type="text"
+            value={season.title || ''}
+            onChange={(e) => onPatch(idx, { title: e.target.value })}
+            className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-sm"
+          />
+        </div>
+      </div>
+      <label htmlFor={`season-${idx}-synopsis`} className="block text-xs font-medium mb-1 mt-2">Synopsis</label>
+      <textarea
+        id={`season-${idx}-synopsis`}
+        value={season.synopsis || ''}
+        onChange={(e) => onPatch(idx, { synopsis: e.target.value })}
+        className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-sm min-h-[60px]"
+      />
+    </div>
+  );
+});
+
+const IssueCard = memo(function IssueCard({ idx, issue, onPatch, arcRoles, seasonOptions }) {
+  // Local state, not lifted — keeps the collapse toggle off the issues array
+  // so a card-internal click doesn't broadcast to every memoized sibling.
+  const [proseExpanded, setProseExpanded] = useState(false);
+  const proseLen = (issue.proseExcerpt || '').length;
+  return (
+    <div className="border border-port-border rounded p-3">
+      <div className="grid grid-cols-1 sm:grid-cols-[80px_1fr_140px_140px] gap-3">
+        <div>
+          <label htmlFor={`iss-${idx}-pos`} className="block text-xs font-medium mb-1">Pos</label>
+          <input
+            id={`iss-${idx}-pos`}
+            type="number"
+            min="1"
+            max="9999"
+            // Display empty when state is undefined so the "auto" placeholder
+            // honestly signals the service will pick the next free position
+            // on commit (a rendered idx+1 would lie about the payload).
+            value={issue.arcPosition ?? ''}
+            placeholder="auto"
+            onChange={(e) => onPatch(idx, {
+              // `Number('') === 0` would land 0 in state and fail the `>= 1`
+              // gate at commit — undefined triggers server auto-assign instead.
+              arcPosition: e.target.value === '' ? undefined : Number(e.target.value),
+            })}
+            className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-sm"
+          />
+        </div>
+        <div>
+          <label htmlFor={`iss-${idx}-title`} className="block text-xs font-medium mb-1">Title</label>
+          <input
+            id={`iss-${idx}-title`}
+            type="text"
+            value={issue.title || ''}
+            onChange={(e) => onPatch(idx, { title: e.target.value })}
+            className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-sm"
+          />
+        </div>
+        <div>
+          <label htmlFor={`iss-${idx}-role`} className="block text-xs font-medium mb-1">Arc Role</label>
+          <select
+            id={`iss-${idx}-role`}
+            value={issue.arcRole || ''}
+            onChange={(e) => onPatch(idx, { arcRole: e.target.value || undefined })}
+            className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-sm"
+          >
+            <option value="">—</option>
+            {arcRoles.map((r) => <option key={r} value={r}>{r}</option>)}
+          </select>
+        </div>
+        {seasonOptions ? (
+          <div>
+            <label htmlFor={`iss-${idx}-season`} className="block text-xs font-medium mb-1">Season</label>
+            <select
+              id={`iss-${idx}-season`}
+              value={issue.seasonNumber == null ? '' : String(issue.seasonNumber)}
+              onChange={(e) => onPatch(idx, {
+                seasonNumber: e.target.value === '' ? undefined : Number(e.target.value),
+              })}
+              className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-sm"
+            >
+              {seasonOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+          </div>
+        ) : <div />}
+      </div>
+      <label htmlFor={`iss-${idx}-syn`} className="block text-xs font-medium mb-1 mt-2">Synopsis</label>
+      <textarea
+        id={`iss-${idx}-syn`}
+        value={issue.synopsis || ''}
+        onChange={(e) => onPatch(idx, { synopsis: e.target.value })}
+        className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-sm min-h-[50px]"
+      />
+      <div className="mt-2">
+        <button
+          type="button"
+          onClick={() => setProseExpanded((v) => !v)}
+          className="text-xs text-port-text-muted hover:text-port-text flex items-center gap-1"
+          aria-expanded={proseExpanded}
+          aria-controls={`iss-${idx}-prose`}
+        >
+          {proseExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+          Prose excerpt: {proseLen.toLocaleString()} chars
+          <span className="text-port-text-muted/70">— {proseExpanded ? 'click to collapse' : 'click to edit (verbatim from source)'}</span>
+        </button>
+        {proseExpanded && (
+          <textarea
+            id={`iss-${idx}-prose`}
+            value={issue.proseExcerpt || ''}
+            onChange={(e) => onPatch(idx, { proseExcerpt: e.target.value })}
+            // Monospace + tall default so the user sees enough lines to
+            // trim/correct a boundary without re-running Analyze (which
+            // burns 3 heavy-tier LLM calls). The textarea grows to fit
+            // browser-native scrolling when proseExcerpt is large.
+            className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-xs font-mono mt-2 min-h-[200px]"
+            // Allow tab character entry rather than focus-traversal — the
+            // user is editing prose, not navigating a form.
+            spellCheck={false}
+          />
+        )}
+      </div>
+    </div>
+  );
+});
+
 function IssuesReviewSection({ issues, setIssues, seasons, arcRoles }) {
+  const patchIssueAt = useMemo(() => makePatcher(setIssues), [setIssues]);
+  // Memo'd so `seasonOptions`'s identity is stable across issue-only edits
+  // — otherwise every keystroke would break React.memo on every IssueCard.
+  // Drops numberless seasons because the dropdown can only offer
+  // addressable ones; user can pick the lowest-numbered fallback while
+  // they fix the numberless season's number in the Arc section.
+  const seasonOptions = useMemo(() => {
+    const numberedSeasons = seasons.filter((s) => Number.isFinite(s.number));
+    if (numberedSeasons.length <= 1) return null;
+    // Server's fallback is the lowest-numbered season — not array[0]
+    // (sparsely-numbered seasons like [S2, S5, S99] make "first" lie).
+    const fallbackSeason = [...numberedSeasons].sort((a, b) => a.number - b.number)[0];
+    const fallbackLabel = `(lowest-numbered: S${fallbackSeason.number}${fallbackSeason.title ? ` — ${fallbackSeason.title}` : ''})`;
+    return [
+      { value: '', label: fallbackLabel },
+      ...numberedSeasons.map((s) => ({ value: String(s.number), label: `S${s.number} — ${s.title || ''}` })),
+    ];
+  }, [seasons]);
   if (issues.length === 0) {
     return (
       <section className="bg-port-card border border-port-border rounded-lg p-4">
@@ -643,99 +832,19 @@ function IssuesReviewSection({ issues, setIssues, seasons, arcRoles }) {
       </section>
     );
   }
-  // Drop seasons with no finite `number` — the season-number input lets
-  // the user clear the field (storing `undefined`) and `String(undefined)`
-  // would otherwise produce `value: "undefined"`, which onChange would
-  // coerce to NaN and Zod would later reject as an opaque commit failure.
-  // The dropdown should only offer addressable seasons; user can pick the
-  // "(first season)" fallback for an issue while they fix the numberless
-  // season's number in the Arc section.
-  const numberedSeasons = seasons.filter((s) => Number.isFinite(s.number));
-  const seasonOptions = numberedSeasons.length > 1
-    ? [
-        { value: '', label: '(first season)' },
-        ...numberedSeasons.map((s) => ({ value: String(s.number), label: `S${s.number} — ${s.title || ''}` })),
-      ]
-    : null;
   return (
     <section className="bg-port-card border border-port-border rounded-lg p-4">
       <h2 className="text-lg font-semibold mb-3">Proposed Issues ({issues.length})</h2>
       <div className="space-y-3">
         {issues.map((it, idx) => (
-          <div key={`issue-${idx}`} className="border border-port-border rounded p-3">
-            <div className="grid grid-cols-1 sm:grid-cols-[80px_1fr_140px_140px] gap-3">
-              <div>
-                <label htmlFor={`iss-${idx}-pos`} className="block text-xs font-medium mb-1">Pos</label>
-                <input
-                  id={`iss-${idx}-pos`}
-                  type="number"
-                  min="1"
-                  max="9999"
-                  // Display empty when state is undefined so the field
-                  // reflects state honestly: a previously-rendered idx+1
-                  // would lie to the user about what the commit payload
-                  // sends. The "auto" placeholder signals the service
-                  // will pick the next free position on commit.
-                  value={it.arcPosition ?? ''}
-                  placeholder="auto"
-                  onChange={(e) => updateAt(issues, setIssues, idx, {
-                    // Empty input -> undefined so the service's auto-assign
-                    // path picks the next free position. Avoids `Number('') = 0`
-                    // landing in state and failing the `>= 1` gate at commit.
-                    arcPosition: e.target.value === '' ? undefined : Number(e.target.value),
-                  })}
-                  className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-sm"
-                />
-              </div>
-              <div>
-                <label htmlFor={`iss-${idx}-title`} className="block text-xs font-medium mb-1">Title</label>
-                <input
-                  id={`iss-${idx}-title`}
-                  type="text"
-                  value={it.title || ''}
-                  onChange={(e) => updateAt(issues, setIssues, idx, { title: e.target.value })}
-                  className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-sm"
-                />
-              </div>
-              <div>
-                <label htmlFor={`iss-${idx}-role`} className="block text-xs font-medium mb-1">Arc Role</label>
-                <select
-                  id={`iss-${idx}-role`}
-                  value={it.arcRole || ''}
-                  onChange={(e) => updateAt(issues, setIssues, idx, { arcRole: e.target.value || undefined })}
-                  className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-sm"
-                >
-                  <option value="">—</option>
-                  {arcRoles.map((r) => <option key={r} value={r}>{r}</option>)}
-                </select>
-              </div>
-              {seasonOptions ? (
-                <div>
-                  <label htmlFor={`iss-${idx}-season`} className="block text-xs font-medium mb-1">Season</label>
-                  <select
-                    id={`iss-${idx}-season`}
-                    value={it.seasonNumber == null ? '' : String(it.seasonNumber)}
-                    onChange={(e) => updateAt(issues, setIssues, idx, {
-                      seasonNumber: e.target.value === '' ? undefined : Number(e.target.value),
-                    })}
-                    className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-sm"
-                  >
-                    {seasonOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-                  </select>
-                </div>
-              ) : <div />}
-            </div>
-            <label htmlFor={`iss-${idx}-syn`} className="block text-xs font-medium mb-1 mt-2">Synopsis</label>
-            <textarea
-              id={`iss-${idx}-syn`}
-              value={it.synopsis || ''}
-              onChange={(e) => updateAt(issues, setIssues, idx, { synopsis: e.target.value })}
-              className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-sm min-h-[50px]"
-            />
-            <div className="text-xs text-port-text-muted mt-1">
-              Prose excerpt: {(it.proseExcerpt || '').length.toLocaleString()} chars (verbatim from source — kept as-is)
-            </div>
-          </div>
+          <IssueCard
+            key={`issue-${idx}`}
+            idx={idx}
+            issue={it}
+            onPatch={patchIssueAt}
+            arcRoles={arcRoles}
+            seasonOptions={seasonOptions}
+          />
         ))}
       </div>
     </section>

@@ -5,13 +5,15 @@
  *   PATCH  /api/media/collections/:id              → Collection         (body: { name?, description?, coverKey? })
  *   DELETE /api/media/collections/:id              → { id }
  *   POST   /api/media/collections/:id/items        → Collection         (body: { kind, ref })
+ *   POST   /api/media/collections/:id/items/bulk   → { collection, added, removed }
+ *                                                                       (body: { add?: [{kind,ref}], remove?: ["<kind>:<ref>"] })
  *   DELETE /api/media/collections/:id/items/:key   → Collection         (key = "<kind>:<ref>")
  */
 
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import { validateRequest, mediaCollectionBulkItemsSchema } from '../lib/validation.js';
 import * as svc from '../services/mediaCollections.js';
 
 const router = Router();
@@ -81,6 +83,16 @@ router.post('/:id/items', asyncHandler(async (req, res) => {
   const body = validateRequest(itemSchema, req.body ?? {});
   const c = await svc.addItem(req.params.id, body).catch((err) => { throw mapServiceError(err); });
   res.json(c);
+}));
+
+// Bulk add+remove in a single read-modify-write. Returns
+// `{ collection, added, removed }` so callers can show "Added 3, removed 12"
+// confirmations without re-deriving the diff client-side.
+router.post('/:id/items/bulk', asyncHandler(async (req, res) => {
+  const body = validateRequest(mediaCollectionBulkItemsSchema, req.body ?? {});
+  const result = await svc.bulkUpdateCollectionItems(req.params.id, body)
+    .catch((err) => { throw mapServiceError(err); });
+  res.json(result);
 }));
 
 router.delete('/:id/items/:key', asyncHandler(async (req, res) => {

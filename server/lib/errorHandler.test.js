@@ -118,6 +118,35 @@ describe('errorHandler.js', () => {
       const normalized = normalizeError(error);
       expect(normalized.code).toBe('INTERNAL_ERROR');
     });
+
+    it('should unwrap err.cause chain and capture system fields', () => {
+      const root = Object.assign(new Error('getaddrinfo ENOTFOUND foo.example'), {
+        code: 'ENOTFOUND',
+        errno: -3008,
+        syscall: 'getaddrinfo',
+        hostname: 'foo.example'
+      });
+      const wrapped = Object.assign(new TypeError('fetch failed'), { cause: root });
+      const normalized = normalizeError(wrapped);
+      expect(normalized.message).toBe('fetch failed');
+      expect(normalized.context.causeChain).toContain('getaddrinfo ENOTFOUND foo.example');
+      expect(normalized.context.cause[0]).toMatchObject({
+        message: 'getaddrinfo ENOTFOUND foo.example',
+        code: 'ENOTFOUND',
+        errno: -3008,
+        syscall: 'getaddrinfo',
+        hostname: 'foo.example'
+      });
+    });
+
+    it('should not loop on self-referential cause chains', () => {
+      const a = new Error('a');
+      const b = new Error('b');
+      a.cause = b;
+      b.cause = a;
+      const normalized = normalizeError(a);
+      expect(normalized.context.cause.length).toBeLessThanOrEqual(5);
+    });
   });
 
   describe('emitErrorEvent', () => {
@@ -132,7 +161,26 @@ describe('errorHandler.js', () => {
 
       emitErrorEvent(mockIo, error);
 
-      expect(listener).toHaveBeenCalledWith(error);
+      // Listener receives (error, safeContext) — sensitive fields stripped so
+      // socket.js subscribers can safely re-broadcast.
+      expect(listener).toHaveBeenCalledWith(error, expect.any(Object));
+      errorEvents.off('error', listener);
+    });
+
+    it('should pass sanitized context to errorEvents listeners', () => {
+      const listener = vi.fn();
+      errorEvents.on('error', listener);
+
+      const mockIo = { emit: vi.fn() };
+      const error = new ServerError('Test error', {
+        context: { apiKey: 'secret-123', safe: 'visible' },
+      });
+
+      emitErrorEvent(mockIo, error);
+
+      const safeContext = listener.mock.calls[0][1];
+      expect(safeContext).toEqual({ safe: 'visible' });
+      expect(safeContext.apiKey).toBeUndefined();
       errorEvents.off('error', listener);
     });
   });

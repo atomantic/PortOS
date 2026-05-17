@@ -541,21 +541,26 @@ function makeCompletionHarness({ taskId, agentId, throws = {}, taskType = 'user'
 
 /**
  * Inline replica of the completion flow up to and including the cleanup
- * delete. Mirrors agentLifecycle.js lines 935–987 + 1146, with branching
- * on `effectiveSuccess` as in production.
+ * delete. Mirrors agentLifecycle.js handleAgentCompletion with the
+ * try/finally added so `deleteRunner()` ALWAYS runs even when an inner
+ * step throws. This is the behavioral contract enforced by the
+ * regression tests below.
  */
 async function runCompletion(harness, effectiveSuccess) {
-  await harness.completeAgent(harness.agentId, { success: effectiveSuccess });
-  if (harness.runId) {
-    await harness.completeAgentRun(harness.runId);
+  try {
+    await harness.completeAgent(harness.agentId, { success: effectiveSuccess });
+    if (harness.runId) {
+      await harness.completeAgentRun(harness.runId);
+    }
+    if (effectiveSuccess) {
+      await harness.updateTask(harness.taskId, { status: 'completed' }, harness.taskType);
+    } else {
+      await harness.updateTask(harness.taskId, { status: 'pending' }, harness.taskType);
+    }
+    await harness.processAgentCompletion(harness.agentId, { id: harness.taskId }, effectiveSuccess, '');
+  } finally {
+    harness.deleteRunner();
   }
-  if (effectiveSuccess) {
-    await harness.updateTask(harness.taskId, { status: 'completed' }, harness.taskType);
-  } else {
-    await harness.updateTask(harness.taskId, { status: 'pending' }, harness.taskType);
-  }
-  await harness.processAgentCompletion(harness.agentId, { id: harness.taskId }, effectiveSuccess, '');
-  harness.deleteRunner();
 }
 
 describe('handleAgentCompletion — happy path', () => {
@@ -590,16 +595,16 @@ describe('handleAgentCompletion — happy path', () => {
   });
 });
 
-describe('handleAgentCompletion — error recovery (uncovered today)', () => {
+describe('handleAgentCompletion — error recovery (try/finally guard)', () => {
   beforeEach(() => {
     runnerAgents.clear();
   });
 
-  it('regression-pin: a throw from completeAgent (state save) prevents runner cleanup', async () => {
-    // Production reference: agentLifecycle.js:939 — `await completeAgent(...)`
-    // is NOT wrapped in try/catch. A throw bubbles to the caller, but more
-    // importantly skips lines 940–1146, including the final
-    // `runnerAgents.delete(agentId)`. The runner record is leaked.
+  it('a throw from completeAgent still removes the runner record (finally guard)', async () => {
+    // handleAgentCompletion wraps the entire completion sequence in
+    // try/finally so a throw from any inner step cannot leak the
+    // runnerAgents Map entry. The error still propagates to the caller —
+    // the finally only guards in-memory state.
     runnerAgents.set('agent-C', { taskId: 'task-C' });
     const h = makeCompletionHarness({
       taskId: 'task-C',
@@ -609,22 +614,12 @@ describe('handleAgentCompletion — error recovery (uncovered today)', () => {
 
     await expect(runCompletion(h, true)).rejects.toThrow('completeAgent failed');
 
-    // BUG (documented): the runner-agents Map still has agent-C. A
-    // follow-up completion event for the same agentId would re-enter
-    // handleAgentCompletion and re-trigger the failing step. PLAN.md
-    // backlog should track wrapping these steps in try/catch with a final
-    // `runnerAgents.delete` in a finally block.
-    expect(runnerAgents.has('agent-C')).toBe(true);
-
-    // Downstream steps (updateTask, processAgentCompletion) never ran.
-    expect(h.calls.map(c => c.step)).toEqual(['completeAgent']);
+    expect(runnerAgents.has('agent-C')).toBe(false);
+    // Downstream steps did not run, but the finally fired deleteRunner.
+    expect(h.calls.map(c => c.step)).toEqual(['completeAgent', 'deleteRunner']);
   });
 
-  it('regression-pin: a throw from updateTask leaves runner record + skips post-completion hooks', async () => {
-    // Production reference: agentLifecycle.js:954 (success branch) / 960
-    // (failure branch). The function only inspects `result?.error` for
-    // soft-fail values — an actual thrown error bubbles up and skips
-    // processAgentCompletion + the final cleanup.
+  it('a throw from updateTask still removes the runner record', async () => {
     runnerAgents.set('agent-D', { taskId: 'task-D' });
     const h = makeCompletionHarness({
       taskId: 'task-D',
@@ -634,16 +629,11 @@ describe('handleAgentCompletion — error recovery (uncovered today)', () => {
 
     await expect(runCompletion(h, true)).rejects.toThrow('updateTask failed');
 
-    expect(runnerAgents.has('agent-D')).toBe(true);
-    // processAgentCompletion never invoked — memory extraction skipped.
-    expect(h.calls.map(c => c.step)).toEqual(['completeAgent', 'updateTask']);
+    expect(runnerAgents.has('agent-D')).toBe(false);
+    expect(h.calls.map(c => c.step)).toEqual(['completeAgent', 'updateTask', 'deleteRunner']);
   });
 
-  it('regression-pin: a throw from processAgentCompletion (hook dispatch) leaks the runner record', async () => {
-    // Production reference: agentLifecycle.js:987 — the memory-extraction /
-    // app-cooldown hook is called as `await processAgentCompletion(...)`
-    // with no try/catch. A crash inside the hook (memory store down,
-    // extraction throw) abandons the rest of the cleanup.
+  it('a throw from processAgentCompletion (hook dispatch) still removes the runner record', async () => {
     runnerAgents.set('agent-E', { taskId: 'task-E' });
     const h = makeCompletionHarness({
       taskId: 'task-E',
@@ -653,21 +643,13 @@ describe('handleAgentCompletion — error recovery (uncovered today)', () => {
 
     await expect(runCompletion(h, true)).rejects.toThrow('processAgentCompletion failed');
 
-    expect(runnerAgents.has('agent-E')).toBe(true);
-    // completeAgent + updateTask DID run — the task is marked completed in
-    // state, but the runner record is still cached in memory. A subsequent
-    // event for the same agentId hits the `if (!agent)` branch incorrectly
-    // because the agent IS still cached, leading to re-attempted hook
-    // dispatch that throws again.
+    expect(runnerAgents.has('agent-E')).toBe(false);
     expect(h.calls.find(c => c.step === 'completeAgent')).toBeDefined();
     expect(h.calls.find(c => c.step === 'updateTask')).toBeDefined();
-    expect(h.calls.find(c => c.step === 'deleteRunner')).toBeUndefined();
+    expect(h.calls.find(c => c.step === 'deleteRunner')).toBeDefined();
   });
 
-  it('regression-pin: a throw from completeAgentRun (run-tracking) leaves the runner record', async () => {
-    // Production reference: agentLifecycle.js:949 — only invoked when
-    // runId exists. completeAgentRun writes usage stats; a write failure
-    // shouldn't strand the runner-agent map.
+  it('a throw from completeAgentRun still removes the runner record', async () => {
     runnerAgents.set('agent-F', { taskId: 'task-F' });
     const h = makeCompletionHarness({
       taskId: 'task-F',
@@ -678,7 +660,19 @@ describe('handleAgentCompletion — error recovery (uncovered today)', () => {
 
     await expect(runCompletion(h, true)).rejects.toThrow('completeAgentRun failed');
 
-    expect(runnerAgents.has('agent-F')).toBe(true);
+    expect(runnerAgents.has('agent-F')).toBe(false);
+  });
+});
+
+// Source-level regression: the runner-cleanup `runnerAgents.delete(agentId)`
+// MUST live inside a `finally` clause so it survives a throw from any step
+// of the completion sequence.
+describe('agentLifecycle source — try/finally guard', () => {
+  it('handleAgentCompletion wraps the body in try/finally with runnerAgents.delete inside finally', () => {
+    const fnStart = AGENT_LIFECYCLE_SRC.indexOf('export async function handleAgentCompletion');
+    expect(fnStart, 'handleAgentCompletion must exist').toBeGreaterThan(-1);
+    const fnBody = AGENT_LIFECYCLE_SRC.slice(fnStart, fnStart + 60_000);
+    expect(fnBody).toMatch(/finally\s*\{[\s\S]{0,200}?runnerAgents\.delete\(agentId\)/);
   });
 });
 

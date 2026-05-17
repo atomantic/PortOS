@@ -2,7 +2,7 @@ import { spawnPm2 } from './pm2.js';
 import { streamDetection } from './streamingDetect.js';
 import { cosEvents } from './cosEvents.js';
 import { appsEvents } from './apps.js';
-import { errorEvents } from '../lib/errorHandler.js';
+import { errorEvents, sanitizeContext } from '../lib/errorHandler.js';
 import { handleErrorRecovery } from './autoFixer.js';
 import * as pm2Standardizer from './pm2Standardizer.js';
 import { notificationEvents } from './notifications.js';
@@ -637,15 +637,22 @@ function setupCosEventForwarding() {
 
 // Set up error event forwarding
 function setupErrorEventForwarding() {
-  // Forward error events to error subscribers
-  errorEvents.on('error', (error) => {
+  // Forward error events to error subscribers. Use `safeContext` (second arg
+  // from emitErrorEvent) — `error.context` may contain sensitive fields like
+  // apiKey/token that must not be broadcast to clients. When the caller emits
+  // directly (bypassing `emitErrorEvent`), `safeContext` is undefined; in that
+  // case sanitize the raw context defensively rather than passing it through.
+  errorEvents.on('error', (error, safeContext) => {
+    const context = safeContext !== undefined
+      ? safeContext
+      : sanitizeContext(error.context);
     broadcastToErrors('error:notified', {
       message: error.message,
       code: error.code,
       severity: error.severity,
       timestamp: error.timestamp,
       canAutoFix: error.canAutoFix,
-      context: error.context
+      context
     });
   });
 }

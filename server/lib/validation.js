@@ -881,6 +881,36 @@ export function sanitizeTaskMetadata(raw) {
 
 
 // =============================================================================
+// MEDIA COLLECTIONS — bulk add/remove items
+// =============================================================================
+
+// `ref` rules mirror server/services/mediaCollections.js#sanitizeItem: ":"
+// is the API key separator (`<kind>:<ref>` split on first ":"), so a ref
+// containing one would be unaddressable for DELETE/coverKey lookups.
+const mediaCollectionItemSchema = z.object({
+  kind: z.enum(['image', 'video']),
+  ref: z.string().trim().min(1).max(500).refine((s) => !s.includes(':'), {
+    message: 'ref may not contain ":"',
+  }),
+}).strict();
+
+// Remove keys are `<kind>:<ref>` strings the client already addresses items
+// by — kept loose here (length cap only) because invalid keys are silently
+// ignored by the service. Strict validation would force the client to filter
+// stale selections itself.
+const mediaCollectionRemoveKeySchema = z.string().min(3).max(520);
+
+// Bulk endpoint: { add?, remove? } — at least one of the two arrays must be
+// non-empty so a no-op call surfaces as a 400 instead of an opaque success.
+export const mediaCollectionBulkItemsSchema = z.object({
+  add: z.array(mediaCollectionItemSchema).max(1000).optional(),
+  remove: z.array(mediaCollectionRemoveKeySchema).max(1000).optional(),
+}).strict().refine(
+  (d) => (Array.isArray(d.add) && d.add.length > 0) || (Array.isArray(d.remove) && d.remove.length > 0),
+  { message: 'bulk update requires at least one item in add or remove' },
+);
+
+// =============================================================================
 // SHARING (cross-network share buckets via cloud-synced folders)
 // =============================================================================
 
@@ -1079,6 +1109,16 @@ export const IMPORTER_CONTENT_TYPES = Object.freeze([
 // here mirrors writersRoomDraftSaveSchema.
 const importerSourceField = z.string().min(1).max(5_000_000);
 
+// Classify endpoint only sees the source — no universe/series context. The
+// LLM only consumes the head, so the schema is intentionally minimal.
+export const importerClassifySchema = z.object({
+  source: importerSourceField,
+  providerOverride: z.preprocess(
+    (v) => (v === '' ? undefined : v),
+    z.string().trim().max(120).optional(),
+  ),
+}).strict();
+
 export const importerAnalyzeSchema = z.object({
   universeName: z.string().trim().min(1).max(200),
   seriesName: z.string().trim().min(1).max(200),
@@ -1165,4 +1205,11 @@ export const importerCommitSchema = z.object({
   arc: importerArcShape.nullable().optional(),
   seasons: z.array(importerSeasonEntry).max(50).default([]),
   issues: z.array(importerIssueEntry).min(1).max(50),
+  // Replace-mode flag — when true, every existing issue on the series is
+  // deleted before the incoming `issues` are created, and `series.arc` +
+  // `series.seasons[]` are written verbatim (not merged). Canon is still
+  // merged additively even in replace mode — universe canon is shared
+  // across series, so a per-series destructive replace would be wrong.
+  // Defaults to false to preserve the additive merge behavior.
+  replaceMode: z.boolean().optional().default(false),
 }).strict();

@@ -27,7 +27,7 @@
  */
 
 import { createRun, executeApiRun, executeCliRun, extractBakedModel, hasModelFlag, stopRun, patchRunMetadata } from '../services/runner.js';
-import { executeTuiRun, cleanTuiResponse } from './tuiPromptRunner.js';
+import { executeTuiRun } from './tuiPromptRunner.js';
 
 const DEFAULT_TIMEOUT_MS = 300000;
 const APPEND_CHUNK = (acc, chunk) => acc + (typeof chunk === 'string' ? chunk : (chunk?.text || ''));
@@ -215,11 +215,14 @@ export async function runPromptThroughProvider({ provider, prompt, source, model
       if (result?.error || result?.success === false) {
         safeReject(new Error(result?.error || `${labelByType[effectiveProvider.type] || effectiveProvider.type} execution failed`));
       } else {
-        // TUI buffers contain the pasted prompt echo + UI chrome — clean
-        // before resolving so callers see roughly the same shape they
-        // get from a CLI run (model response text, possibly with noise).
-        const cleaned = effectiveProvider.type === 'tui' ? cleanTuiResponse(text, prompt) : text;
-        safeResolve({ text: cleaned, runId, model: effectiveModel });
+        // TUI runs do their own cleanup inside executeTuiRun (preferring
+        // the response file the model was directed to write, falling back
+        // to cleanTuiResponse on the screen scrape). Trust `result.text`
+        // — the accumulated `text` here is the raw chrome-laden stream.
+        const finalText = effectiveProvider.type === 'tui'
+          ? (typeof result?.text === 'string' ? result.text : '')
+          : text;
+        safeResolve({ text: finalText, runId, model: effectiveModel });
       }
     };
 

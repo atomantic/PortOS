@@ -22,7 +22,7 @@
 import { runStagedLLM } from '../../lib/stageRunner.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { getSeries, updateSeries, updateSeasonOnSeries } from './series.js';
-import { listIssues, updateIssue, recomputeIssueNumbersForSeries } from './issues.js';
+import { listIssues, updateIssue, recomputeIssueNumbersForSeries, getIssue, updateStageWithLatest } from './issues.js';
 import { emitRecordUpdated, withReexportSuppressed } from '../sharing/recordEvents.js';
 import { getSeason } from './seasons.js';
 import {
@@ -39,7 +39,7 @@ import { recommendStructure, describeStructure } from '../../lib/seasonStructure
 import { LENGTH_PROFILE_NAMES, DEFAULT_LENGTH_PROFILE } from '../../lib/issueLength.js';
 import { getUniverse } from '../universeBuilder.js';
 import { getSeriesCanon } from './seriesCanon.js';
-import { renderCategoriesForPrompt, renderCompositesForPrompt } from '../../lib/universePromptRenderers.js';
+import { renderCategoriesForPrompt, renderCompositesForPrompt, renderCanonForPrompt } from '../../lib/universePromptRenderers.js';
 
 export const ERR_VALIDATION = 'PIPELINE_ARC_VALIDATION';
 const makeErr = (message, code) => Object.assign(new Error(message), { code });
@@ -86,6 +86,11 @@ async function loadWorldContext(universeId) {
   const avoid = Array.isArray(world.influences?.avoid) ? world.influences.avoid : [];
 
   return {
+    // Truthy mustache flag the prompt templates use to gate the entire
+    // "Linked World" block — unlinked arc/verify runs render a neutral
+    // placeholder instead of telling the LLM the series is grounded in a
+    // non-existent world.
+    hasLinkedWorld: true,
     worldName: world.name || '',
     worldStarter: world.starterPrompt || '',
     worldLogline: world.logline || '',
@@ -95,12 +100,19 @@ async function loadWorldContext(universeId) {
     worldInfluencesAvoid: avoid.length ? avoid.join(', ') : '(none)',
     worldCategoriesText: renderCategoriesForPrompt(world.categories) || '(none)',
     worldCompositesText: renderCompositesForPrompt(world.compositeSheets) || '(none)',
+    // Universe canon — named characters/places/objects the arc references by
+    // name. Separate from categories because the LLM should treat these as
+    // first-class entities, not exploratory variations.
+    worldCanonText: renderCanonForPrompt(world) || '(none)',
   };
 }
 
 // Fallback when series has no linked world — prompt partials still expect
-// these variables to be defined.
+// these variables to be defined. `hasLinkedWorld: false` lets the template's
+// `{{#hasLinkedWorld}}…{{/hasLinkedWorld}}` block fall through so the LLM
+// isn't told to ground arcs in a non-existent universe.
 const EMPTY_WORLD_CONTEXT = {
+  hasLinkedWorld: false,
   worldName: '(no linked world)',
   worldStarter: '',
   worldLogline: '',
@@ -110,6 +122,7 @@ const EMPTY_WORLD_CONTEXT = {
   worldInfluencesAvoid: '(none)',
   worldCategoriesText: '(none — series has no linked Universe Builder world)',
   worldCompositesText: '(none)',
+  worldCanonText: '(none — series has no linked Universe Builder world)',
 };
 
 // Resolve world context, accepting an optional preloaded value so callers
@@ -462,11 +475,13 @@ export async function generateVolumeCoverConcepts(seriesId, seasonId, options = 
     // race against a concurrent user blur-save).
     updatedSeries = await updateSeasonOnSeries(seriesId, seasonId, (cur) => {
       const patch = {};
-      if (coverConcept && !(cur.cover?.script || '')) {
+      // Trim before the blank-check so whitespace-only scripts count as
+      // blank — matches the client `.trim()` gate on the per-card buttons.
+      if (coverConcept && !(cur.cover?.script || '').trim()) {
         patch.cover = { ...(cur.cover || {}), script: coverConcept };
         seeded.cover = true;
       }
-      if (backCoverConcept && !(cur.backCover?.script || '')) {
+      if (backCoverConcept && !(cur.backCover?.script || '').trim()) {
         patch.backCover = { ...(cur.backCover || {}), script: backCoverConcept };
         seeded.backCover = true;
       }
@@ -476,6 +491,99 @@ export async function generateVolumeCoverConcepts(seriesId, seasonId, options = 
   return {
     season: updatedSeries ? (updatedSeries.seasons || []).find((s) => s.id === seasonId) : season,
     series: updatedSeries,
+    coverConcept,
+    backCoverConcept,
+    seeded,
+    raw: content,
+    runId,
+    providerId,
+    model,
+  };
+}
+
+/**
+ * Generate FRONT + BACK cover-art concepts for one comic issue. Per-issue
+ * sibling of `generateVolumeCoverConcepts`: returns the proposed text and,
+ * when `commit: true`, seeds blank `stages.comicPages.cover.script` /
+ * `stages.comicPages.backCover.script` slots without clobbering user edits.
+ *
+ * `options.target` ('cover' | 'backCover' | 'both', default 'both') gates
+ * which slots can be seeded — the UI buttons live per-card so the user can
+ * regenerate one without touching the other, even though the LLM returns
+ * the pair so the back can complement the front.
+ */
+export async function generateComicCoverConcepts(issueId, options = {}) {
+  // `??` (not `||`) so an empty-string target falls through to the
+  // invalid-target guard below instead of silently defaulting to 'both'.
+  const target = options.target ?? 'both';
+  if (target !== 'cover' && target !== 'backCover' && target !== 'both') {
+    throw makeErr(`Invalid target: ${target}`, ERR_VALIDATION);
+  }
+  const issue = await getIssue(issueId);
+  const series = await getSeries(issue.seriesId);
+  const proseFull = (issue.stages?.prose?.output || '').trim();
+  // Cap prose at a generous excerpt so very long drafts don't blow the
+  // prompt budget — the LLM only needs enough scene material to anchor a
+  // cover image, not the full text.
+  const proseExcerpt = proseFull.length > 4000 ? `${proseFull.slice(0, 4000)}…` : proseFull;
+  const ctx = {
+    series: {
+      name: series.name,
+      logline: series.logline,
+      styleNotes: series.styleNotes,
+    },
+    issue: {
+      number: issue.number,
+      title: issue.title,
+      synopsis: (issue.stages?.idea?.input || '').trim(),
+      beats: (issue.stages?.idea?.output || '').trim(),
+      proseExcerpt,
+    },
+  };
+  const { content, runId, providerId, model } = await runStagedLLM(
+    'pipeline-comic-cover-concepts',
+    ctx,
+    {
+      providerOverride: options.providerOverride,
+      modelOverride: options.modelOverride,
+      returnsJson: true,
+      source: 'pipeline-comic-cover-concepts',
+    },
+  );
+  const coverConcept = (typeof content?.coverConcept === 'string' ? content.coverConcept : '').trim();
+  const backCoverConcept = (typeof content?.backCoverConcept === 'string' ? content.backCoverConcept : '').trim();
+  const wantCover = target === 'cover' || target === 'both';
+  const wantBack = target === 'backCover' || target === 'both';
+  let updatedIssue = null;
+  let updatedStage = null;
+  const seeded = { cover: false, backCover: false };
+  if (options.commit) {
+    // Read the freshest persisted stage inside the queue so a concurrent
+    // blur-save on either cover script can't be silently overwritten —
+    // same "only seed when blank" pattern as the volume variant.
+    const result = await updateStageWithLatest(issueId, 'comicPages', (cur) => {
+      const patch = {};
+      // Trim before the blank-check so the server's notion of "occupied"
+      // matches the client's `.trim()`-based button gate — otherwise a
+      // whitespace-only script enables the button but the server refuses
+      // to seed, producing a misleading "preserved" toast.
+      if (wantCover && coverConcept && !(cur?.cover?.script || '').trim()) {
+        patch.cover = { ...(cur?.cover || {}), script: coverConcept };
+        seeded.cover = true;
+      }
+      if (wantBack && backCoverConcept && !(cur?.backCover?.script || '').trim()) {
+        patch.backCover = { ...(cur?.backCover || {}), script: backCoverConcept };
+        seeded.backCover = true;
+      }
+      return patch;
+    });
+    updatedIssue = result.issue;
+    updatedStage = result.stage;
+  }
+  return {
+    issue: updatedIssue,
+    stage: updatedStage,
+    target,
     coverConcept,
     backCoverConcept,
     seeded,

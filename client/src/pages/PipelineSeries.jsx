@@ -14,7 +14,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, Save, Loader2, Workflow as WorkflowIcon, Globe, NotebookPen,
-  PanelLeftClose, PanelLeftOpen,
+  PanelLeftClose, PanelLeftOpen, Sparkles,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import ArcCanvas from '../components/pipeline/ArcCanvas';
@@ -23,8 +23,11 @@ import {
   getPipelineSeries, updatePipelineSeries,
   listPipelineIssues,
   listUniverses,
+  generateSeriesTitleLogo,
+  SERIES_TITLE_LOGO_MAX, SERIES_AUTHOR_MAX,
 } from '../services/api';
 import { recommendStructure, describeStructure } from '../lib/seasonStructure';
+import { useLocalStorageBool } from '../hooks/useLocalStorageBool';
 
 const PIPELINE_SIDEBAR_KEY = 'portos-pipeline-series-sidebar-collapsed';
 
@@ -36,9 +39,11 @@ export default function PipelineSeries() {
   const [universes, setWorlds] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
-    return localStorage.getItem(PIPELINE_SIDEBAR_KEY) === 'true';
-  });
+  const [sidebarCollapsed, setSidebarCollapsed] = useLocalStorageBool(
+    PIPELINE_SIDEBAR_KEY,
+    false,
+    { format: 'true' },
+  );
 
   useEffect(() => {
     let canceled = false;
@@ -62,13 +67,7 @@ export default function PipelineSeries() {
     return () => { canceled = true; };
   }, [seriesId, navigate]);
 
-  const toggleSidebar = () => {
-    setSidebarCollapsed((prev) => {
-      const next = !prev;
-      localStorage.setItem(PIPELINE_SIDEBAR_KEY, String(next));
-      return next;
-    });
-  };
+  const toggleSidebar = () => setSidebarCollapsed((prev) => !prev);
 
   // Track the last server-persisted snapshot so `flushPending` knows whether
   // the local draft has diverged. Ref instead of state — we don't want
@@ -93,7 +92,7 @@ export default function PipelineSeries() {
   const flushPending = async () => {
     if (!series) return false;
     const saved = lastSavedRef.current || series;
-    const fields = ['name', 'logline', 'premise', 'styleNotes', 'stylePromptOverride', 'issueCountTarget', 'universeId'];
+    const fields = ['name', 'logline', 'premise', 'styleNotes', 'titleLogo', 'author', 'stylePromptOverride', 'issueCountTarget', 'universeId'];
     const dirty = fields.some((k) => (series[k] ?? '') !== (saved[k] ?? ''))
       || JSON.stringify(series.llm || {}) !== JSON.stringify(saved.llm || {});
     if (!dirty) return false;
@@ -103,6 +102,8 @@ export default function PipelineSeries() {
       premise: series.premise,
       universeId: series.universeId || null,
       styleNotes: series.styleNotes,
+      titleLogo: series.titleLogo || '',
+      author: series.author || '',
       stylePromptOverride: series.stylePromptOverride || '',
       issueCountTarget: series.issueCountTarget,
       llm: series.llm || { provider: null, model: null },
@@ -172,6 +173,8 @@ export default function PipelineSeries() {
               series={series}
               universes={universes}
               patchSeries={patchSeries}
+              onSeriesUpdate={updateSeriesFromServer}
+              onFlushPending={flushPending}
               onCollapse={toggleSidebar}
             />
           </aside>
@@ -217,7 +220,22 @@ export default function PipelineSeries() {
   );
 }
 
-function BibleSidebar({ series, universes, patchSeries, onCollapse }) {
+function BibleSidebar({ series, universes, patchSeries, onSeriesUpdate, onFlushPending, onCollapse }) {
+  const [generatingLogo, setGeneratingLogo] = useState(false);
+  const handleGenerateLogo = async () => {
+    // Server reads from disk — flush dirty edits so the LLM sees fresh fields.
+    if (onFlushPending) await onFlushPending();
+    setGeneratingLogo(true);
+    const result = await generateSeriesTitleLogo(series.id).catch((err) => {
+      toast.error(err.message || 'Failed to design logo');
+      return null;
+    });
+    setGeneratingLogo(false);
+    if (!result) return;
+    onSeriesUpdate?.(result.series);
+    toast.success('Logo concept designed');
+  };
+
   return (
     <section className="px-3 py-3 space-y-4">
       <div className="flex items-center justify-between">
@@ -239,6 +257,15 @@ function BibleSidebar({ series, universes, patchSeries, onCollapse }) {
           onChange={(e) => patchSeries({ name: e.target.value })}
           className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
           maxLength={200}
+        />
+      </Field>
+      <Field label="Author (cover byline + title screen)">
+        <input
+          value={series.author || ''}
+          onChange={(e) => patchSeries({ author: e.target.value })}
+          placeholder="Jane Doe"
+          className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
+          maxLength={SERIES_AUTHOR_MAX}
         />
       </Field>
       <Field label="Logline">
@@ -285,6 +312,39 @@ function BibleSidebar({ series, universes, patchSeries, onCollapse }) {
           placeholder="moebius linework, washed sepia, slow zooms, ambient drones. Reused as the visual prefix for every image-gen call from this series."
         />
       </Field>
+
+      <div className="block">
+        <div className="flex items-center justify-between mb-1">
+          <label
+            htmlFor="series-title-logo"
+            className="block text-xs uppercase tracking-wider text-gray-500"
+          >
+            Title / logo design
+          </label>
+          <button
+            type="button"
+            onClick={handleGenerateLogo}
+            disabled={generatingLogo}
+            className="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] text-port-accent hover:bg-port-bg disabled:opacity-50"
+            title="Design the masthead/logo with an LLM, using the series name + logline + style notes + universe influences"
+          >
+            {generatingLogo ? <Loader2 size={11} className="animate-spin" /> : <Sparkles size={11} />}
+            {series.titleLogo ? 'Regenerate' : 'Design'}
+          </button>
+        </div>
+        <textarea
+          id="series-title-logo"
+          value={series.titleLogo || ''}
+          onChange={(e) => patchSeries({ titleLogo: e.target.value })}
+          rows={4}
+          className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
+          maxLength={SERIES_TITLE_LOGO_MAX}
+          placeholder="A description of the series masthead — letterform, finish, color, motifs. Injected into every cover prompt and TV title screen. Click Design to generate from the bible + universe."
+        />
+        <p className="text-[11px] text-gray-500 mt-1">
+          Generated once on series creation from a universe; edit freely. Used by issue covers, volume covers, and TV title screens.
+        </p>
+      </div>
 
       <Field label="Visual style preset">
         <div className="flex items-center gap-2">
@@ -337,8 +397,11 @@ function BibleSidebar({ series, universes, patchSeries, onCollapse }) {
       <div>
         <h3 className="text-xs uppercase tracking-wider text-gray-500 mb-2">Canon</h3>
         {series.universeId ? (
+          // `#canon` scrolls to the embedded canon section (id="canon" on
+          // UniverseCanonSection) so users land on the folded-in canon UI
+          // instead of the bible at the top of the builder.
           <Link
-            to={`/universe-builder/${encodeURIComponent(series.universeId)}/canon`}
+            to={`/universe-builder/${encodeURIComponent(series.universeId)}#canon`}
             className="block text-xs text-port-accent hover:underline"
           >
             Manage characters, places, and objects on the linked Universe →

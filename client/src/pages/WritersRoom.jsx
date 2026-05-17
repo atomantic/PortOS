@@ -9,6 +9,7 @@ import {
   listWritersRoomWorks,
   getWritersRoomWork,
 } from '../services/apiWritersRoom';
+import { useLocalStorageBool } from '../hooks/useLocalStorageBool';
 
 const LIBRARY_COLLAPSED_KEY = 'wr.libraryCollapsed';
 
@@ -22,16 +23,10 @@ export default function WritersRoom() {
   const [showExercise, setShowExercise] = useState(false);
   // Library collapsed state — desktop only; mobile keeps the library inline
   // because there's no editor-vs-library tradeoff to make on a small screen.
-  const [libraryCollapsed, setLibraryCollapsed] = useState(() => {
-    try { return localStorage.getItem(LIBRARY_COLLAPSED_KEY) === '1'; } catch { return false; }
-  });
+  const [libraryCollapsed, setLibraryCollapsed] = useLocalStorageBool(LIBRARY_COLLAPSED_KEY, false);
   const toggleLibrary = useCallback(() => {
-    setLibraryCollapsed((prev) => {
-      const next = !prev;
-      try { localStorage.setItem(LIBRARY_COLLAPSED_KEY, next ? '1' : '0'); } catch { /* sandboxed storage */ }
-      return next;
-    });
-  }, []);
+    setLibraryCollapsed((prev) => !prev);
+  }, [setLibraryCollapsed]);
 
   // Skip setState when an in-flight library or work fetch resolves after the
   // page unmounts (rapid nav across pages). Reset on mount so React 18

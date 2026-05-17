@@ -59,15 +59,22 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
   );
   const appHasJira = selectedApp?.jira?.enabled;
 
-  // Auto-toggle JIRA, worktree, and PR checkboxes when app selection changes
+  // Gate on a content signature of the selected app's defaults (not the
+  // `apps` array reference) so periodic re-fetches in the parent don't
+  // stomp manual checkbox toggles between renders.
+  const appDefaultsSig = useMemo(() => selectedApp
+    ? `${selectedApp.id}|${!!selectedApp.defaultOpenPR}|${!!selectedApp.defaultUseWorktree}|${!!selectedApp.jira?.enabled}`
+    : `none:${newTask.app || ''}`,
+    [selectedApp, newTask.app]
+  );
   useEffect(() => {
-    const app = apps?.find(a => a.id === newTask.app);
-    const defaultOpenPR = !!app?.defaultOpenPR;
-    const defaultUseWorktree = !!app?.defaultUseWorktree || defaultOpenPR;
-    setCreateJiraTicket(!!app?.jira?.enabled);
+    const defaultOpenPR = !!selectedApp?.defaultOpenPR;
+    const defaultUseWorktree = !!selectedApp?.defaultUseWorktree || defaultOpenPR;
+    setCreateJiraTicket(!!selectedApp?.jira?.enabled);
     setUseWorktree(defaultUseWorktree);
     setOpenPR(defaultOpenPR);
-  }, [newTask.app, apps]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- selectedApp intentionally omitted; appDefaultsSig encodes every field the effect reads, so depending on the object reference would re-fire on identical-content polling refreshes and stomp manual toggles
+  }, [appDefaultsSig]);
 
   // Get models for selected provider
   const selectedProvider = providers?.find(p => p.id === newTask.provider);

@@ -2,13 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import toast from '../components/ui/Toast';
 import * as api from '../services/api';
 import socket from '../services/socket';
-import { filterSelectableModels } from '../utils/providers';
-
-const providerTypeClass = (type) => {
-  if (type === 'cli') return 'bg-blue-500/20 text-blue-400';
-  if (type === 'tui') return 'bg-emerald-500/20 text-emerald-400';
-  return 'bg-purple-500/20 text-purple-400';
-};
+import { filterSelectableModels, providerTypeClass, isTuiProvider } from '../utils/providers';
 
 export default function AIProviders() {
   const [providers, setProviders] = useState([]);
@@ -97,7 +91,7 @@ export default function AIProviders() {
   };
 
   const supportsModelRefresh = (provider) => {
-    if (provider.type === 'tui') {
+    if (isTuiProvider(provider)) {
       return false;
     }
     // Gemini CLI doesn't require model specification
@@ -180,7 +174,7 @@ export default function AIProviders() {
   };
 
   const selectedRunProvider = providers.find(p => p.id === activeProviderId);
-  const runProviderIsTui = selectedRunProvider?.type === 'tui';
+  const runProviderIsTui = isTuiProvider(selectedRunProvider);
 
   if (loading) {
     return (
@@ -340,7 +334,7 @@ export default function AIProviders() {
           <div className="flex justify-between items-center">
             <button
               onClick={handleExecuteRun}
-              disabled={!runPrompt.trim() || !activeProviderId || activeRun || runProviderIsTui}
+              disabled={!runPrompt.trim() || !activeProviderId || activeRun}
               className="px-6 py-2 bg-port-success hover:bg-port-success/80 text-white rounded-lg transition-colors disabled:opacity-50"
             >
               {activeRun ? 'Running...' : 'Execute'}
@@ -358,7 +352,7 @@ export default function AIProviders() {
 
           {runProviderIsTui && (
             <div className="text-xs text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-3 py-2">
-              TUI providers run through CoS agent tasks so their terminal session can be tracked and completed.
+              TUI providers spawn a PTY-backed run that streams output here and is stoppable from the run list.
             </div>
           )}
 
@@ -424,7 +418,7 @@ export default function AIProviders() {
                       Headless: <code className="text-gray-300 break-all">{provider.headlessArgs.join(' ')}</code>
                     </p>
                   )}
-                  {provider.type === 'tui' && (
+                  {isTuiProvider(provider) && (
                     <p className="text-xs break-words">
                       TUI: paste delay <span className="text-gray-300">{provider.tuiPromptDelayMs || 2500}ms</span>, idle complete <span className="text-gray-300">{provider.tuiIdleTimeoutMs || 180000}ms</span>
                     </p>

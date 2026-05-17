@@ -13,12 +13,20 @@
  *   { patch, label }  → stage gets the patch; label is logged
  * or `null` to skip (e.g. stale jobId after a re-render — see CLAUDE.md
  * "Pending socket-request tracking" for the same generation-aware idea).
+ *
+ * Optional `onStamped({ parsed, job, filename, label })` fires once *after*
+ * the stage write actually commits AND the reducer chose to stamp. Used by
+ * the comic-pages hook to file cover renders into a universe's collection
+ * — gating on commit avoids a stale-render or write-failure landing in the
+ * universe bucket. The callback is awaited inside the same outer
+ * try/catch frame as the hook, so a thrown error is logged and swallowed
+ * the same way as other hook failures (bookkeeping must not fail renders).
  */
 
 import { mediaJobEvents } from '../mediaJobQueue/index.js';
 import { updateStageWithLatest } from './issues.js';
 
-export function createFilenameHook({ name, stageId, kind = 'image', parseOwner, applyFilename }) {
+export function createFilenameHook({ name, stageId, kind = 'image', parseOwner, applyFilename, onStamped = null }) {
   let registeredHandler = null;
 
   const handler = (job) => {
@@ -30,7 +38,13 @@ export function createFilenameHook({ name, stageId, kind = 'image', parseOwner, 
       if (!parsed) return;
 
       const shortId = String(job.id || '').slice(0, 8);
+      // Track BOTH "reducer chose to stamp" AND "write actually committed."
+      // The reducer flag alone isn't enough: if updateStageWithLatest throws
+      // *after* the reducer ran (validation, IO), the `.catch` below fires
+      // but `stampedLabel` keeps its truthy value — without `writeOk` we'd
+      // log "stamped" and fire `onStamped` for a write that never landed.
       let stampedLabel = null;
+      let writeOk = false;
       await updateStageWithLatest(
         parsed.issueId,
         stageId,
@@ -40,12 +54,17 @@ export function createFilenameHook({ name, stageId, kind = 'image', parseOwner, 
           stampedLabel = result.label || null;
           return result.patch || {};
         },
-      ).catch((err) => {
+      ).then(() => { writeOk = true; }).catch((err) => {
         console.error(`❌ ${name} filename hook failed for job ${shortId}: ${err?.message || err}`);
       });
 
-      if (stampedLabel) {
+      if (stampedLabel && writeOk) {
         console.log(`📎 ${name} filename stamped — issue=${parsed.issueId.slice(0, 8)} ${stampedLabel} ← ${filename}`);
+        if (onStamped) {
+          await onStamped({ parsed, job, filename, label: stampedLabel }).catch((err) => {
+            console.error(`❌ ${name} onStamped hook failed for job ${shortId}: ${err?.message || err}`);
+          });
+        }
       }
     })().catch((err) => {
       console.error(`❌ ${name} filename hook crashed: ${err?.message || err}`);

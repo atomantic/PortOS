@@ -9,7 +9,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Loader2, Sparkles, ImageIcon, Save, Trash2, ChevronDown, ChevronRight, Settings as SettingsIcon, FileDown, Layers } from 'lucide-react';
+import { Loader2, Sparkles, ImageIcon, Save, Trash2, ChevronDown, ChevronRight, Settings as SettingsIcon, FileDown, Layers, Wand2 } from 'lucide-react';
 import toast from '../../ui/Toast';
 import {
   generatePipelineStage,
@@ -17,6 +17,7 @@ import {
   generatePipelineComicPage,
   generatePipelineComicCover,
   generatePipelineComicBackCover,
+  generatePipelineComicCoverConcepts,
   updatePipelineComicPage,
   updatePipelineIssue,
   updateIssueStageVisualStyle,
@@ -286,10 +287,67 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
   const [useProofForCoverFinal, setUseProofForCoverFinal] = useState(true);
   const [useProofForBackFinal, setUseProofForBackFinal] = useState(true);
 
-  const i2iSupported = imageCfg.mode !== 'codex';
-  const i2iDisabledReason = i2iSupported
-    ? null
-    : 'Codex (gpt-image-2) does not support image-to-image. Switch backend in the image-gen settings to use the proof as a base.';
+  const [generatingConcept, setGeneratingConcept] = useState({ cover: false, backCover: false });
+
+  const handleGenerateConcept = async (target) => {
+    const label = target === 'backCover' ? 'Back cover' : 'Cover';
+    setGeneratingConcept((g) => ({ ...g, [target]: true }));
+    const result = await generatePipelineComicCoverConcepts(issue.id, {
+      target,
+      commit: true,
+      providerOverride: series?.llm?.provider || undefined,
+      modelOverride: series?.llm?.model || undefined,
+    }, { silent: true }).catch((err) => {
+      toast.error(err.message || `Failed to generate ${label.toLowerCase()} concept`);
+      return null;
+    });
+    setGeneratingConcept((g) => ({ ...g, [target]: false }));
+    if (!result) return;
+    if (result.stage) onStageUpdate?.('comicPages', result.stage, result.issue);
+    const seededThis = target === 'backCover' ? result.seeded?.backCover : result.seeded?.cover;
+    toast.success(seededThis
+      ? `${label} concept seeded`
+      : `${label} concept generated (existing edit preserved)`);
+  };
+
+  const renderConceptButton = (target, script) => {
+    const generating = generatingConcept[target];
+    const filled = !!(script || '').trim();
+    const disabled = generating || filled;
+    const noun = target === 'backCover' ? 'back-cover' : 'cover';
+    const tooltip = filled
+      ? `Clear the ${noun} concept first — the LLM only seeds blank concepts to avoid clobbering your edits.`
+      : `Have the LLM propose a ${noun} concept for this issue`;
+    const hintId = `concept-hint-${issue.id}-${target}`;
+    // Use `aria-disabled` (not the DOM `disabled` attribute) so the
+    // button stays in the keyboard tab order and the `title` tooltip is
+    // discoverable on focus as well as hover. `disabled` removes the
+    // element from tab order entirely and most browsers suppress hover
+    // events on it, hiding the "clear first" guidance from keyboard +
+    // screen-reader users. Click handler is gated on the same flag.
+    //
+    // `aria-describedby` (not `aria-label`) preserves the visible label
+    // ("Generate concept (LLM)") as the accessible name — WCAG 2.5.3
+    // "Label in Name" — and adds the tooltip as supplementary context.
+    return (
+      <>
+        <button
+          type="button"
+          onClick={disabled ? undefined : () => handleGenerateConcept(target)}
+          aria-disabled={disabled || undefined}
+          aria-describedby={hintId}
+          title={tooltip}
+          className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-port-accent hover:text-white border border-port-border bg-port-bg hover:border-port-accent/40 ${
+            disabled ? 'opacity-40 cursor-not-allowed' : ''
+          }`}
+        >
+          {generating ? <Loader2 size={12} className="animate-spin" /> : <Wand2 size={12} />}
+          Generate concept (LLM)
+        </button>
+        <span id={hintId} className="sr-only">{tooltip}</span>
+      </>
+    );
+  };
 
   // Shared script-persist (cover / backCover) — server-side updatePipelineIssue
   // does a deep merge under stages.comicPages.<field>. Only the script text
@@ -309,7 +367,7 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
     const isBack = field === 'backCover';
     const useProofToggle = isBack ? useProofForBackFinal : useProofForCoverFinal;
     setBusyFor(field, variant, true);
-    const useProofAsBase = variant === 'final' && useProofToggle && i2iSupported;
+    const useProofAsBase = variant === 'final' && useProofToggle;
     const draftText = isBack ? draftBackCoverScript : draftCoverScript;
     const apiCall = isBack ? generatePipelineComicBackCover : generatePipelineComicCover;
     const bodyScriptKey = isBack ? 'backCoverScript' : 'coverScript';
@@ -464,6 +522,7 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
         <div className="flex items-center justify-between gap-2 flex-wrap">
           <span className="text-xs uppercase tracking-wider text-gray-500">Cover</span>
           <div className="flex items-center gap-2 flex-wrap">
+            {renderConceptButton('cover', cover.script)}
             <button
               type="button"
               onClick={() => handleRenderCoverField('cover', 'proof')}
@@ -479,14 +538,13 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
               Render proof
             </button>
             <label
-              className={`flex items-center gap-1 text-[11px] text-gray-400 ${i2iSupported ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`}
-              title={i2iDisabledReason || 'Use the proof image as the base for the final render — preserves composition.'}
+              className="flex items-center gap-1 text-[11px] text-gray-400 cursor-pointer"
+              title="Use the proof image as the base for the final render — preserves composition."
             >
               <input
                 type="checkbox"
-                checked={i2iSupported && useProofForCoverFinal}
+                checked={useProofForCoverFinal}
                 onChange={(e) => setUseProofForCoverFinal(e.target.checked)}
-                disabled={!i2iSupported}
                 className="rounded"
               />
               from proof
@@ -496,12 +554,12 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
               onClick={() => handleRenderCoverField('cover', 'final')}
               disabled={
                 busy.coverFinal || coverFinalInFlight || actionsGated
-                || (i2iSupported && useProofForCoverFinal && !coverProof?.filename)
+                || (useProofForCoverFinal && !coverProof?.filename)
               }
               title={finalButtonTooltip({
                 gated: actionsGated,
                 inFlight: coverFinalInFlight,
-                needsProof: i2iSupported && useProofForCoverFinal && !coverProof?.filename,
+                needsProof: useProofForCoverFinal && !coverProof?.filename,
                 defaultMsg: 'Render the hi-res final cover at the configured size. Tick "from proof" to upscale the proof rather than redraw it.',
               })}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-port-accent text-white text-xs font-medium hover:bg-port-accent/90 disabled:opacity-40 disabled:cursor-not-allowed"
@@ -547,6 +605,7 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
         <div className="flex items-center justify-between gap-2 flex-wrap">
           <span className="text-xs uppercase tracking-wider text-gray-500">Back cover</span>
           <div className="flex items-center gap-2 flex-wrap">
+            {renderConceptButton('backCover', backCover.script)}
             <button
               type="button"
               onClick={() => handleRenderCoverField('backCover', 'proof')}
@@ -562,14 +621,13 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
               Render proof
             </button>
             <label
-              className={`flex items-center gap-1 text-[11px] text-gray-400 ${i2iSupported ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`}
-              title={i2iDisabledReason || 'Use the proof image as the base for the final render — preserves composition.'}
+              className="flex items-center gap-1 text-[11px] text-gray-400 cursor-pointer"
+              title="Use the proof image as the base for the final render — preserves composition."
             >
               <input
                 type="checkbox"
-                checked={i2iSupported && useProofForBackFinal}
+                checked={useProofForBackFinal}
                 onChange={(e) => setUseProofForBackFinal(e.target.checked)}
-                disabled={!i2iSupported}
                 className="rounded"
               />
               from proof
@@ -579,12 +637,12 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
               onClick={() => handleRenderCoverField('backCover', 'final')}
               disabled={
                 busy.backFinal || backFinalInFlight || actionsGated
-                || (i2iSupported && useProofForBackFinal && !backProof?.filename)
+                || (useProofForBackFinal && !backProof?.filename)
               }
               title={finalButtonTooltip({
                 gated: actionsGated,
                 inFlight: backFinalInFlight,
-                needsProof: i2iSupported && useProofForBackFinal && !backProof?.filename,
+                needsProof: useProofForBackFinal && !backProof?.filename,
                 defaultMsg: 'Render the hi-res final back-cover at the configured size. Tick "from proof" to upscale the proof rather than redraw it.',
               })}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-port-accent text-white text-xs font-medium hover:bg-port-accent/90 disabled:opacity-40 disabled:cursor-not-allowed"
@@ -634,8 +692,6 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
             pageIndex={pi}
             page={page}
             renderOpts={renderOpts}
-            i2iSupported={i2iSupported}
-            i2iDisabledReason={i2iDisabledReason}
             onStageUpdate={onStageUpdate}
             onPreview={openPreview}
             onFilenameKnown={onFilenameKnown}
@@ -675,7 +731,6 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
 
 function PageRow({
   issue, pageIndex, page, renderOpts = {},
-  i2iSupported = true, i2iDisabledReason = null,
   onStageUpdate, onPreview, onFilenameKnown,
 }) {
   const rawText = useMemo(
@@ -717,7 +772,7 @@ function PageRow({
   const handleRender = async (target) => {
     const setFlight = target === 'final' ? setRenderingFinal : setRenderingProof;
     setFlight(true);
-    const useProofAsBase = target === 'final' && useProofForFinal && i2iSupported;
+    const useProofAsBase = target === 'final' && useProofForFinal;
     const res = await generatePipelineComicPage(issue.id, pageIndex, {
       ...renderOpts,
       target,
@@ -742,7 +797,7 @@ function PageRow({
     }
   };
 
-  const finalNeedsProof = i2iSupported && useProofForFinal && !proofSlot?.filename;
+  const finalNeedsProof = useProofForFinal && !proofSlot?.filename;
 
   return (
     <li className="rounded-lg border border-port-border bg-port-card/40">
@@ -777,14 +832,13 @@ function PageRow({
             Proof
           </button>
           <label
-            className={`flex items-center gap-1 text-[11px] text-gray-400 px-1 ${i2iSupported ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`}
-            title={i2iDisabledReason || 'Use the proof image as the base for the final render — preserves panel layout.'}
+            className="flex items-center gap-1 text-[11px] text-gray-400 px-1 cursor-pointer"
+            title="Use the proof image as the base for the final render — preserves panel layout."
           >
             <input
               type="checkbox"
-              checked={i2iSupported && useProofForFinal}
+              checked={useProofForFinal}
               onChange={(e) => setUseProofForFinal(e.target.checked)}
-              disabled={!i2iSupported}
               className="rounded"
             />
             from proof

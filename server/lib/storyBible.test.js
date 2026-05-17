@@ -2,19 +2,16 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, existsSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { makePathsProxy } from './mockPathsDataRoot.js';
 
 let tempRoot;
 
-// Mock PATHS.data so the factory writes into a temp dir per test. Mirrors
-// the pattern used by writers-room CRUD tests.
+// Mock PATHS.data so the factory writes into a temp dir per test. `tempRoot`
+// is a `let` that beforeEach reassigns — the function form of dataRoot makes
+// the Proxy re-read it on every PATHS access so each test sees its own dir.
 vi.mock('./fileUtils.js', async () => {
   const actual = await vi.importActual('./fileUtils.js');
-  return new Proxy(actual, {
-    get(target, prop) {
-      if (prop === 'PATHS') return { ...actual.PATHS, data: tempRoot };
-      return target[prop];
-    },
-  });
+  return makePathsProxy(actual, { dataRoot: () => tempRoot });
 });
 
 const storyBible = await import('./storyBible.js');
@@ -42,12 +39,13 @@ describe('storyBible — sanitizeCharacter', () => {
     expect(sanitizeCharacter({ name: '   ' })).toBeNull();
   });
 
-  it('back-compat: accepts pipeline-shape `description` and migrates to `physicalDescription`', () => {
+  it('lifts the legacy `description` alias into `physicalDescription` on read', () => {
     const out = sanitizeCharacter({ name: 'Aria', description: 'tall, dark hair' });
     expect(out.physicalDescription).toBe('tall, dark hair');
+    expect(out).not.toHaveProperty('description');
   });
 
-  it('prefers explicit `physicalDescription` over legacy `description` when both present', () => {
+  it('prefers `physicalDescription` when both fields are present', () => {
     const out = sanitizeCharacter({ name: 'Aria', description: 'old', physicalDescription: 'new' });
     expect(out.physicalDescription).toBe('new');
   });

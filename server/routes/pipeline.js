@@ -54,6 +54,7 @@ import {
 import { extractCanonFromProse } from '../services/universeCanon.js';
 import { getSeriesCanon } from '../services/pipeline/seriesCanon.js';
 import { startEpisodeVideoForIssue, ERR_NO_STORYBOARDS } from '../services/pipeline/episodeVideo.js';
+import { generateSeriesTitleLogo } from '../services/pipeline/seriesTitleLogo.js';
 import { COMIC_PAGE_VARIANTS, slotKeyForVariant } from '../services/pipeline/owners.js';
 import { ASPECT_RATIOS, QUALITIES } from '../lib/creativeDirectorPresets.js';
 import { extractScenes, SOURCE_KIND } from '../lib/sceneExtractor.js';
@@ -179,6 +180,8 @@ const seriesCreateSchema = z.object({
   seasons: z.array(seasonSchema).max(ARC_LIMITS.SEASONS_PER_SERIES_MAX).optional(),
   locked: seriesLockedSchema.optional(),
   styleNotes: z.string().trim().max(seriesSvc.STYLE_NOTES_MAX).optional().default(''),
+  titleLogo: z.string().trim().max(seriesSvc.TITLE_LOGO_MAX).optional().default(''),
+  author: z.string().trim().max(seriesSvc.AUTHOR_MAX).optional().default(''),
   stylePromptOverride: z.string().trim().max(seriesSvc.STYLE_PROMPT_OVERRIDE_MAX).optional().default(''),
   visualStyleDefault: visualStyleRefSchema.optional(),
   targetFormat: z.enum(seriesSvc.TARGET_FORMATS).optional(),
@@ -196,6 +199,8 @@ const seriesPatchSchema = z.object({
   seasons: z.array(seasonSchema).max(ARC_LIMITS.SEASONS_PER_SERIES_MAX).optional(),
   locked: seriesLockedSchema.optional(),
   styleNotes: z.string().trim().max(seriesSvc.STYLE_NOTES_MAX).optional(),
+  titleLogo: z.string().trim().max(seriesSvc.TITLE_LOGO_MAX).optional(),
+  author: z.string().trim().max(seriesSvc.AUTHOR_MAX).optional(),
   stylePromptOverride: z.string().trim().max(seriesSvc.STYLE_PROMPT_OVERRIDE_MAX).optional(),
   visualStyleDefault: visualStyleRefSchema.optional(),
   targetFormat: z.enum(seriesSvc.TARGET_FORMATS).optional(),
@@ -346,9 +351,10 @@ const visualGenerateSchema = z.object({
 //
 // `seed` mirrors the page/panel render schemas so the shared image-gen
 // drawer flows the same render settings into the cover —
-// enqueueImageJob honors it via options.seed. `useProofAsBase` is silently
-// ignored by Codex (gpt-image-2's $imagegen has no init-image input);
-// local + external honor it.
+// enqueueImageJob honors it via options.seed. `useProofAsBase` is honored by
+// local (mflux `--image-path`) and codex (gpt-image-2 image-edit via the
+// CLI's `-i <file>` flag); external SD-API has no i2i wiring and silently
+// drops the init image at the dispatcher.
 const makeCoverRenderSchema = (scriptField) => z.object({
   [scriptField]: z.string().max(8000).optional(),
   negativePrompt: z.string().trim().max(2000).optional(),
@@ -371,6 +377,13 @@ const volumeCoverRenderSchema    = makeCoverRenderSchema('coverScript');
 const volumeBackCoverRenderSchema = makeCoverRenderSchema('backCoverScript');
 
 const volumeCoverConceptsSchema = z.object({
+  commit: z.boolean().optional().default(false),
+  providerOverride: z.string().trim().max(80).optional(),
+  modelOverride: z.string().trim().max(200).optional(),
+});
+
+const comicCoverConceptsSchema = z.object({
+  target: z.enum(['cover', 'backCover', 'both']).optional().default('both'),
   commit: z.boolean().optional().default(false),
   providerOverride: z.string().trim().max(80).optional(),
   modelOverride: z.string().trim().max(200).optional(),
@@ -796,6 +809,20 @@ router.patch('/series/:id', asyncHandler(async (req, res) => {
 router.delete('/series/:id', asyncHandler(async (req, res) => {
   const r = await seriesSvc.deleteSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
   res.json(r);
+}));
+
+// Generate (or regenerate) the series.titleLogo description via the
+// `pipeline-series-title-logo` stage. Returns the updated series so the
+// client can swap state without a follow-up GET.
+const titleLogoGenerateSchema = z.object({
+  providerId: z.string().trim().max(80).optional(),
+  model: z.string().trim().max(200).optional(),
+});
+router.post('/series/:id/generate-title-logo', asyncHandler(async (req, res) => {
+  const body = validateRequest(titleLogoGenerateSchema, req.body ?? {});
+  const result = await generateSeriesTitleLogo(req.params.id, body)
+    .catch((err) => { throw mapServiceError(err); });
+  res.json(result);
 }));
 
 router.get('/series/:id/issues', asyncHandler(async (req, res) => {
@@ -1378,6 +1405,19 @@ router.patch('/issues/:id/stages/comicPages/pages/:pageIndex', asyncHandler(asyn
     },
   ).catch((err) => { throw mapServiceError(err); });
   res.json({ issue: updatedIssue, stage, page: stage.pages[pageIndex] });
+}));
+
+// Generate front + back cover-art concepts for one comic issue via the LLM.
+// Per-issue sibling of /series/:id/seasons/:seasonId/cover-concepts/generate.
+// `target` ('cover' | 'backCover' | 'both') gates which slots can be seeded
+// when `commit: true` — the UI button on each card sends its own target so
+// the user can regenerate one without touching the other. Seeds only blank
+// scripts; never clobbers a user edit.
+router.post('/issues/:id/cover-concepts/generate', asyncHandler(async (req, res) => {
+  const body = validateRequest(comicCoverConceptsSchema, req.body ?? {});
+  const result = await arcPlanner.generateComicCoverConcepts(req.params.id, body)
+    .catch((err) => { throw mapServiceError(err); });
+  res.json(result);
 }));
 
 // Render the comic-issue front cover. Builds a cover-art prompt (series

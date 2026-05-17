@@ -21,6 +21,7 @@
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { PATHS, atomicWrite, readJSONFile, ensureDir } from '../../lib/fileUtils.js';
+import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
 import {
   LENGTH_PROFILE_NAMES, DEFAULT_LENGTH_PROFILE,
   CUSTOM_PAGE_MIN, CUSTOM_PAGE_MAX, CUSTOM_MINUTE_MIN, CUSTOM_MINUTE_MAX,
@@ -40,26 +41,9 @@ const statePath = () => join(PATHS.data, 'pipeline-issues.json');
 // File-level write lock: serializes concurrent updateIssue / updateStage calls
 // against the shared pipeline-issues.json state file so a blur-save PATCH can
 // never clobber an in-flight cover-render PATCH (and vice-versa, across any
-// pair of issues — not just two writes to the same issue id). Each enqueue
-// awaits the previous write to settle before reading state, so it always
-// merges against the freshest persisted record. CLAUDE.md: "simple
-// re-entrancy guards… are fine and expected."
-let issueWriteTail = Promise.resolve();
-
-function queueIssueWrite(_issueId, fn) {
-  const next = issueWriteTail.then(fn, fn); // run fn even when prev rejects
-  // Track the silenced tail so a rejection doesn't poison subsequent waiters,
-  // but only as long as this write is the tail — if another write enqueues
-  // after us, it becomes the tail and we drop our reference so the chain
-  // doesn't retain settled promises (and their resolved payloads) for the
-  // life of the process.
-  const silenced = next.catch(() => {});
-  issueWriteTail = silenced;
-  silenced.finally(() => {
-    if (issueWriteTail === silenced) issueWriteTail = Promise.resolve();
-  });
-  return next; // callers still see the real resolve/reject
-}
+// pair of issues — not just two writes to the same issue id). CLAUDE.md:
+// "simple re-entrancy guards… are fine and expected."
+const queueIssueWrite = createFileWriteQueue();
 
 export const ERR_NOT_FOUND = 'PIPELINE_ISSUE_NOT_FOUND';
 export const ERR_VALIDATION = 'PIPELINE_ISSUE_VALIDATION';
@@ -365,7 +349,7 @@ export function createIssue(input = {}) {
   if (!seriesId) return Promise.reject(makeErr('seriesId is required', ERR_VALIDATION));
   const title = trimTo(input.title, TITLE_MAX);
   if (!title) return Promise.reject(makeErr(`title is required (1..${TITLE_MAX} chars)`, ERR_VALIDATION));
-  return queueIssueWrite(null, async () => {
+  return queueIssueWrite(async () => {
   const state = await readState();
   const next = sanitizeIssue({
     id: `iss-${randomUUID()}`,
@@ -407,13 +391,57 @@ async function renumberInline(state, seriesId, fromSeasonId = null) {
 }
 
 export function recomputeIssueNumbersForSeries(seriesId, fromSeasonId = null) {
-  return queueIssueWrite(null, async () => {
+  return queueIssueWrite(async () => {
     const state = await readState();
     const changed = await renumberInline(state, seriesId, fromSeasonId);
     if (!changed) return { changed: false };
     await writeState(state);
     emitRecordUpdated('series', seriesId);
     return { changed: true };
+  });
+}
+
+/**
+ * Reassign every issue under `(seriesId, fromSeasonId)` to `toSeasonId` in a
+ * single readState → in-memory mutate → writeState → one renumber pass.
+ * Used by `deleteSeason` (and any future bulk season-move flow) to collapse
+ * N per-issue queueIssueWrite cycles into one — the legacy N+1 pattern was
+ * `for (iss of children) await updateIssue(iss.id, { seasonId: toSeasonId }, { skipRenumber: true })`
+ * which paid N readState + N writeState round-trips and N debounced re-exports
+ * even with `withReexportSuppressed`.
+ *
+ * Returns `{ reassigned, fromSeasonId, toSeasonId }`. `toSeasonId` may be
+ * `null` (un-grouped). A re-export of the parent series is emitted once, after
+ * the renumber pass — callers under `withReexportSuppressed` get exactly one
+ * `series:updated` event regardless of the issue count.
+ */
+export function bulkReassignSeason(seriesId, fromSeasonId, toSeasonId = null) {
+  return queueIssueWrite(async () => {
+    const state = await readState();
+    let reassigned = 0;
+    const now = new Date().toISOString();
+    for (let i = 0; i < state.issues.length; i += 1) {
+      const iss = state.issues[i];
+      if (iss.seriesId !== seriesId) continue;
+      if ((iss.seasonId || null) !== (fromSeasonId || null)) continue;
+      // Re-sanitize through the same pipeline updateIssue uses so the
+      // in-memory rewrite gets the same shape guarantees as a route PATCH.
+      const merged = sanitizeIssue({
+        ...iss,
+        seasonId: toSeasonId,
+        updatedAt: now,
+      });
+      if (!merged) continue;
+      state.issues[i] = merged;
+      reassigned += 1;
+    }
+    if (reassigned === 0) return { reassigned: 0, fromSeasonId, toSeasonId };
+    // One renumber pass after the bulk move — the source AND destination
+    // volume both reshuffled, so use the series-wide form (fromSeasonId=null).
+    await renumberInline(state, seriesId, null);
+    await writeState(state);
+    emitRecordUpdated('series', seriesId);
+    return { reassigned, fromSeasonId, toSeasonId };
   });
 }
 
@@ -430,7 +458,7 @@ export function insertIssueWithId(input = {}) {
   if (!seriesId) return Promise.reject(makeErr('seriesId is required', ERR_VALIDATION));
   const title = trimTo(input.title, TITLE_MAX);
   if (!title) return Promise.reject(makeErr(`title is required (1..${TITLE_MAX} chars)`, ERR_VALIDATION));
-  return queueIssueWrite(input.id, async () => {
+  return queueIssueWrite(async () => {
     const state = await readState();
     if (state.issues.some((i) => i.id === input.id)) {
       throw makeErr(`Issue id already exists: ${input.id}`, ERR_DUPLICATE);
@@ -447,7 +475,7 @@ export function insertIssueWithId(input = {}) {
 }
 
 export function updateIssue(id, patch = {}, { skipRenumber = false } = {}) {
-  return queueIssueWrite(id, async () => {
+  return queueIssueWrite(async () => {
   const state = await readState();
   const idx = state.issues.findIndex((i) => i.id === id);
   if (idx < 0) throw makeErr(`Issue not found: ${id}`, ERR_NOT_FOUND);
@@ -552,7 +580,7 @@ export function updateStage(issueId, stageId, patch = {}) {
 }
 
 export function deleteIssue(id) {
-  return queueIssueWrite(id, async () => {
+  return queueIssueWrite(async () => {
   const state = await readState();
   const idx = state.issues.findIndex((i) => i.id === id);
   if (idx < 0) throw makeErr(`Issue not found: ${id}`, ERR_NOT_FOUND);
@@ -585,7 +613,7 @@ export function updateStageWithLatest(issueId, stageId, computeFn) {
     // rather than waiting in line for an error it already knows about.
     return Promise.reject(makeErr(`Unknown stage: ${stageId}`, ERR_VALIDATION));
   }
-  return queueIssueWrite(issueId, async () => {
+  return queueIssueWrite(async () => {
   const state = await readState();
   const idx = state.issues.findIndex((i) => i.id === issueId);
   if (idx < 0) throw makeErr(`Issue not found: ${issueId}`, ERR_NOT_FOUND);

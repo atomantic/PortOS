@@ -11,7 +11,6 @@
 
 import { Router } from 'express';
 import { z } from 'zod';
-import { existsSync } from 'fs';
 import { copyFile, unlink } from 'fs/promises';
 import { randomUUID } from 'crypto';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
@@ -30,8 +29,8 @@ import {
   isExternallyManaged, createVenv, isAllowedPython, pipNameFor,
   resolveFlux2Python, FLUX2_VENV_DEFAULT, installFlux2Venv, isFlux2VenvHealthy,
 } from '../lib/pythonSetup.js';
-import { PATHS, ensureDir } from '../lib/fileUtils.js';
-import { join, basename, resolve as resolvePath, sep as PATH_SEP } from 'node:path';
+import { PATHS, ensureDir, resolveGalleryImage } from '../lib/fileUtils.js';
+import { join } from 'node:path';
 import { readFile, writeFile } from 'fs/promises';
 import { STYLE_PRESETS } from '../lib/writersRoomStylePresets.js';
 import { cleanImageBuffer, CLEAN_LEVELS } from './imageClean.js';
@@ -146,10 +145,8 @@ router.post('/generate', initImageUpload, asyncHandler(async (req, res) => {
     await copyFile(req.file.path, initImagePath);
     uploadedInitTempPath = req.file.path;
   } else if (data.initImageFile) {
-    const candidate = join(PATHS.images, basename(data.initImageFile));
-    const imagesRoot = resolvePath(PATHS.images) + PATH_SEP;
-    const resolved = resolvePath(candidate);
-    if (!resolved.startsWith(imagesRoot) || !existsSync(resolved)) {
+    const resolved = resolveGalleryImage(data.initImageFile);
+    if (!resolved) {
       throw new ServerError('Init image not found in gallery', { status: 400, code: 'INIT_IMAGE_NOT_FOUND' });
     }
     initImagePath = resolved;

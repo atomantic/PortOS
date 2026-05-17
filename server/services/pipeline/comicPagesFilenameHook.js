@@ -16,6 +16,8 @@
 import { parseComicPagesOwner, slotKeyForVariant } from './owners.js';
 import { createFilenameHook } from './filenameHookFactory.js';
 import { buildRenderSlot } from './visualStages.js';
+import { getIssue } from './issues.js';
+import { fileCoverIntoUniverseCollection } from './coverUniverseFiler.js';
 
 // Slot record for a legacy in-flight completion (job enqueued before the
 // proof/final split). `job.params` carries the originally-requested width
@@ -100,7 +102,27 @@ const hook = createFilenameHook({
     }
     return null;
   },
+  // Post-stamp side effect: when an issue COVER or BACK-COVER render
+  // commits, file the image into the owning universe's media collection.
+  // Panels are excluded — the universe bucket is for poster-style artwork,
+  // not every interior frame. Gating on `onStamped` (rather than a parallel
+  // mediaJobEvents listener) means stale renders that the `applyFilename`
+  // skipped because the slot's active jobId changed AND failed writes both
+  // skip filing automatically — there's a single success path.
+  onStamped: async ({ parsed, filename }) => {
+    if (parsed.target !== 'cover' && parsed.target !== 'backCover') return;
+    const issue = await getIssue(parsed.issueId).catch(() => null);
+    if (!issue?.seriesId) return;
+    await fileCoverIntoUniverseCollection({ seriesId: issue.seriesId, filename });
+  },
 });
 
-export const initComicPagesFilenameHook = hook.init;
-export const __testing = hook.__testing;
+export function initComicPagesFilenameHook() {
+  hook.init();
+}
+
+export const __testing = {
+  reset() {
+    hook.__testing.reset();
+  },
+};

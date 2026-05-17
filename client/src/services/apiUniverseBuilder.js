@@ -1,6 +1,6 @@
 import { request } from './apiCore.js';
 
-export const WORLD_CATEGORIES = ['landscapes', 'environments', 'characters', 'structures', 'vehicles'];
+export const WORLD_CATEGORIES = ['landscapes', 'environments', 'structures', 'vehicles'];
 export const WORLD_CATEGORY_KEY_MAX = 64;
 export const COMPOSITE_PROMPT_MAX = 4000;
 // Mirror of the bible-field caps in server/services/universeBuilder.js — used by
@@ -193,4 +193,17 @@ export const setUniverseCanonLock = (universeId, kind, entryId, locked) =>
   request(`/universe-builder/${encodeURIComponent(universeId)}/canon/${encodeURIComponent(kind)}/${encodeURIComponent(entryId)}/lock`, {
     method: 'PATCH',
     body: JSON.stringify({ locked }),
+  });
+
+// Promote a category variation into a full canon entry. `targetKind` is
+// required only when the source bucket's `kind` is 'other' (otherwise the
+// server derives it from the bucket). Pass `{ silent: true }` in `options`
+// when the caller owns its own error toast (per CLAUDE.md).
+export const promoteVariationToCanon = (universeId, {
+  category, label, targetKind, providerId, model,
+} = {}, options = {}) =>
+  request(`/universe-builder/${encodeURIComponent(universeId)}/promote-variation`, {
+    method: 'POST',
+    body: JSON.stringify({ category, label, targetKind, providerId, model }),
+    ...options,
   });

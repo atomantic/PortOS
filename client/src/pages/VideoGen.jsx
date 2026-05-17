@@ -42,6 +42,7 @@ import BrailleSpinner from '../components/BrailleSpinner';
 import BatchQueuePanel from '../components/media/BatchQueuePanel';
 import MediaJobsQueue from '../components/media/MediaJobsQueue';
 import FavoritesFilterChip from '../components/media/FavoritesFilterChip';
+import ModelSelect from '../components/ModelSelect';
 import { useMediaCompletionRefresh } from '../hooks/useMediaCompletionRefresh';
 import { useMediaAnnotations } from '../hooks/useMediaAnnotations';
 import {
@@ -216,7 +217,7 @@ export default function VideoGen() {
     hiddenHistory: history.filter((v) => v.hidden),
   }), [history]);
   const [favoritesOnly, setFavoritesOnly] = useState(false);
-  const { annotations, toggleStar, updateAnnotation } = useMediaAnnotations();
+  const { annotations, updateAnnotation, getCardProps } = useMediaAnnotations();
   // Gallery sections respect the favorites filter; the extend-mode dropdown
   // (which reads visibleHistory directly) intentionally does not, since
   // hiding non-favorites from the "pick a previous video" picker would
@@ -1029,18 +1030,11 @@ export default function VideoGen() {
             {models.length > 0 && (
               <div className="col-span-2 sm:col-span-3">
                 <label className="block text-xs font-medium text-gray-400 mb-1">Model</label>
-                <select
+                <ModelSelect
+                  models={models}
                   value={modelId}
                   onChange={(e) => { setModelId(e.target.value); setSteps(''); setGuidanceScale(''); }}
-                  className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
-                >
-                  {models.filter((m) => !m.deprecated).map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-                  {models.some((m) => m.deprecated) && (
-                    <optgroup label="Legacy">
-                      {models.filter((m) => m.deprecated).map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-                    </optgroup>
-                  )}
-                </select>
+                />
               </div>
             )}
 
@@ -1328,9 +1322,7 @@ export default function VideoGen() {
                     onUpscale={() => handleUpscaleHistory(v)}
                     onDelete={() => handleDeleteHistory(v)}
                     onToggleHidden={() => handleToggleHistoryHidden(v)}
-                    starred={!!annotations[item.key]?.starred}
-                    hasNote={!!annotations[item.key]?.anyNote}
-                    onToggleStar={toggleStar}
+                    {...getCardProps(item.key)}
                   />
                 );
               })}
@@ -1361,9 +1353,7 @@ export default function VideoGen() {
                     onContinue={() => handleContinueHistory(v)}
                     onDelete={() => handleDeleteHistory(v)}
                     onToggleHidden={() => handleToggleHistoryHidden(v)}
-                    starred={!!annotations[item.key]?.starred}
-                    hasNote={!!annotations[item.key]?.anyNote}
-                    onToggleStar={toggleStar}
+                    {...getCardProps(item.key)}
                   />
                 );
               })}

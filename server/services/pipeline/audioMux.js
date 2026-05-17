@@ -14,13 +14,12 @@
  * beats blocking the whole stitch on an optional cosmetic step.
  */
 
-import { spawn } from 'child_process';
 import { join } from 'path';
 import { rename, unlink } from 'fs/promises';
 import { existsSync } from 'fs';
 import { randomUUID } from 'crypto';
 import { PATHS } from '../../lib/fileUtils.js';
-import { findFfmpeg } from '../../lib/ffmpeg.js';
+import { findFfmpeg, runFfmpegProcess } from '../../lib/ffmpeg.js';
 import { statMusicTrack } from './musicLibrary.js';
 
 // 0.5 ≈ -6 dB — quiet enough to sit under dialogue once VO mixing lands
@@ -72,7 +71,7 @@ export async function muxMusicBed(inputVideoPath, { musicPath, musicGain = DEFAU
     tmpOut,
   ];
 
-  const result = await runFfmpeg(ffmpeg, args, { signal });
+  const result = await runFfmpegProcess({ bin: ffmpeg, args, signal });
   if (!result.ok) {
     await unlink(tmpOut).catch(() => {});
     return result;
@@ -81,36 +80,6 @@ export async function muxMusicBed(inputVideoPath, { musicPath, musicGain = DEFAU
   // the silent original intact rather than a half-written video.
   await rename(tmpOut, inputVideoPath);
   return { ok: true };
-}
-
-function runFfmpeg(bin, args, { signal } = {}) {
-  return new Promise((resolve) => {
-    const proc = spawn(bin, args, { stdio: ['ignore', 'ignore', 'pipe'] });
-    let stderrTail = '';
-    const STDERR_TAIL_MAX = 2000;
-    proc.stderr.on('data', (chunk) => {
-      stderrTail += chunk.toString();
-      if (stderrTail.length > STDERR_TAIL_MAX) {
-        stderrTail = stderrTail.slice(-STDERR_TAIL_MAX);
-      }
-    });
-    proc.on('error', (err) => resolve({ ok: false, reason: `spawn failed: ${err.message}` }));
-    proc.on('close', (code, sig) => {
-      if (sig === 'SIGTERM' || sig === 'SIGKILL') {
-        resolve({ ok: false, reason: `cancelled (${sig})` });
-        return;
-      }
-      if (code !== 0) {
-        const tail = stderrTail.split(/\r?\n/).slice(-4).join(' | ');
-        resolve({ ok: false, reason: `ffmpeg exit ${code}: ${tail}` });
-        return;
-      }
-      resolve({ ok: true });
-    });
-    if (signal) {
-      signal.addEventListener('abort', () => proc.kill('SIGTERM'), { once: true });
-    }
-  });
 }
 
 export { DEFAULT_MUSIC_GAIN };

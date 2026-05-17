@@ -18,6 +18,27 @@ vi.mock('crypto', async () => {
   return { ...actual, randomUUID: () => `uuid-${++uuidCounter}` };
 });
 
+// Stub the LLM promote service so route tests don't shell out to a provider.
+// Default mock just echoes back a minimal canon entry shape so the route
+// returns 200 and the schema/validation paths get exercised end-to-end.
+const promoteVariationToCanonMock = vi.fn(async (_universeId, body = {}) => ({
+  universe: { id: _universeId, characters: [], settings: [], objects: [] },
+  entry: { id: 'mock-entry', name: body.label },
+  targetKind: body.targetKind || 'characters',
+  removed: { category: body.category, label: body.label },
+  runId: 'mock-run',
+  llm: { provider: 'mock', model: null },
+}));
+vi.mock('../services/universeBuilderPromote.js', async () => {
+  // Pass the real VALID_TARGET_KINDS through so the route's Zod enum
+  // can't drift from the source-of-truth list (derived from BIBLE_FIELD).
+  const actual = await vi.importActual('../services/universeBuilderPromote.js');
+  return {
+    ...actual,
+    promoteVariationToCanon: (...args) => promoteVariationToCanonMock(...args),
+  };
+});
+
 // Stub the LLM expander so the route test doesn't shell out to a real provider.
 vi.mock('../services/universeBuilderExpand.js', () => ({
   expandWorldTemplate: vi.fn(async ({ starterPrompt }) => ({
@@ -59,12 +80,35 @@ const mockCreateRec = (name) => {
   collectionsByName.set(name.toLowerCase(), rec);
   return rec;
 };
+// Mirrors the production helper's universeId-first resolution so repeat-
+// render tests verify the new contract (same `universeId` → same collection
+// id) rather than the old name-only contract.
+const collectionsByUniverseId = new Map();
+const upsertUniverseRec = ({ universeId, universeName }) => {
+  if (collectionsByUniverseId.has(universeId)) return collectionsByUniverseId.get(universeId);
+  const name = `Universe: ${universeName || ''}`.slice(0, 80);
+  const rec = mockCreateRec(name);
+  rec.universeId = universeId;
+  collectionsByUniverseId.set(universeId, rec);
+  return rec;
+};
 vi.mock('../services/mediaCollections.js', () => ({
   createCollection: vi.fn(async ({ name }) => mockCreateRec(name)),
   findOrCreateCollectionByName: vi.fn(async ({ name }) => {
     return collectionsByName.get(name.toLowerCase()) ?? mockCreateRec(name);
   }),
+  findOrCreateUniverseCollection: vi.fn(async ({ universeId, universeName }) =>
+    upsertUniverseRec({ universeId, universeName })),
   addItem: vi.fn(),
+  // Universe rename → collection rename cascade calls this from updateUniverse.
+  // No-op here is fine: the routes test cares about the universe PATCH itself,
+  // not the bookkeeping side-effect (covered in mediaCollections.test.js).
+  renameCollectionForUniverse: vi.fn(async () => null),
+  // Universe delete → unlink linked collections so the orphaned bucket
+  // becomes a normal user-owned collection. No-op stub mirrors the rename
+  // cascade pattern above (behavior is covered in mediaCollections.test.js).
+  unlinkCollectionsForUniverse: vi.fn(async () => []),
+  universeCollectionNameFor: (name) => `Universe: ${name || ''}`.slice(0, 80),
   ERR_DUPLICATE: 'DUPLICATE',
   NAME_MAX_LENGTH: 80,
 }));
@@ -91,6 +135,7 @@ describe('universe-builder routes', () => {
     fileStore.clear();
     uuidCounter = 0;
     collectionsByName.clear();
+    collectionsByUniverseId.clear();
   });
 
   it('GET / returns []', async () => {
@@ -106,10 +151,58 @@ describe('universe-builder routes', () => {
     expect(res.status).toBe(201);
     expect(res.body.id).toBe('uuid-1');
     expect(res.body.name).toBe('My Universe');
-    // All five categories populated even when not supplied.
+    // Default categories populated, each tagged with its canon trunk via
+    // WORLD_CATEGORY_DEFAULT_KINDS. `characters` was retired in schema v4
+    // (canon owns characters now).
     expect(Object.keys(res.body.categories).sort()).toEqual(
-      ['characters', 'environments', 'landscapes', 'structures', 'vehicles'],
+      ['environments', 'landscapes', 'structures', 'vehicles'],
     );
+    expect(res.body.categories.landscapes.kind).toBe('settings');
+    expect(res.body.categories.vehicles.kind).toBe('objects');
+  });
+
+  it('POST / accepts and persists a `kind` on each category', async () => {
+    const res = await request(buildApp())
+      .post('/api/universe-builder')
+      .send({
+        name: 'Kinded',
+        categories: {
+          factions: { kind: 'characters', variations: [{ label: 'Iron Reach', prompt: 'x' }] },
+          colonies: { kind: 'settings', variations: [{ label: 'Tycho', prompt: 'y' }] },
+        },
+      });
+    expect(res.status).toBe(201);
+    expect(res.body.categories.factions.kind).toBe('characters');
+    expect(res.body.categories.colonies.kind).toBe('settings');
+  });
+
+  it('POST / rejects an invalid `kind` enum value via Zod', async () => {
+    const res = await request(buildApp())
+      .post('/api/universe-builder')
+      .send({
+        name: 'Bad Kind',
+        categories: {
+          colonies: { kind: 'not-a-kind', variations: [] },
+        },
+      });
+    expect(res.status).toBe(400);
+  });
+
+  it('POST / folds a stale `characters` bucket into canon characters[] and drops the bucket', async () => {
+    const res = await request(buildApp())
+      .post('/api/universe-builder')
+      .send({
+        name: 'Stale Client',
+        categories: {
+          // Mimic an outdated client still sending the retired bucket.
+          characters: { variations: [{ label: 'Ash', prompt: 'young survivor' }] },
+        },
+      });
+    expect(res.status).toBe(201);
+    expect(res.body.categories.characters).toBeUndefined();
+    const ash = res.body.characters.find((c) => c.name === 'Ash');
+    expect(ash).toBeDefined();
+    expect(ash.prompt).toBe('young survivor');
   });
 
   it('POST / accepts dynamic universe-building categories', async () => {
@@ -242,7 +335,10 @@ describe('universe-builder routes', () => {
       influences: { embrace: ['style'], avoid: ['neg'] },
       categories: {
         landscapes: { variations: [{ label: 'A', prompt: 'a prompt' }, { label: 'B', prompt: 'b prompt' }] },
-        characters: { variations: [{ label: 'C', prompt: 'c prompt' }] },
+        // `characters` was retired as a default bucket in schema v4 (canon
+        // owns characters); use a custom bucket to keep the 3-variation
+        // render scenario intact.
+        outfits: { variations: [{ label: 'C', prompt: 'c prompt' }] },
       },
     });
     const res = await request(app)
@@ -314,21 +410,19 @@ describe('universe-builder routes', () => {
     expect(second.body.collectionName).not.toMatch(/\d{4}-\d{2}-\d{2}/);
   });
 
-  it('POST /:id/render reuses an existing collection when collectionName matches', async () => {
+  it('POST /:id/render rejects body.collectionName with a clear error (deprecated field)', async () => {
     const app = buildApp();
     const created = await request(app).post('/api/universe-builder').send({
-      name: 'Custom Bucket Universe',
+      name: 'Reject CollectionName Universe',
       categories: {
         landscapes: { variations: [{ label: 'A', prompt: 'a' }] },
       },
     });
-    const first = await request(app)
+    const res = await request(app)
       .post(`/api/universe-builder/${created.body.id}/render`)
       .send({ mode: 'local', collectionName: 'Shared Bucket' });
-    const second = await request(app)
-      .post(`/api/universe-builder/${created.body.id}/render`)
-      .send({ mode: 'local', collectionName: '  shared bucket  ' });
-    expect(second.body.collectionId).toBe(first.body.collectionId);
+    expect(res.status).toBe(400);
+    expect(JSON.stringify(res.body)).toMatch(/collectionName/i);
   });
 
   it('POST /:id/render rejects when no variations exist', async () => {
@@ -339,5 +433,68 @@ describe('universe-builder routes', () => {
       .send({ mode: 'local' });
     expect(res.status).toBe(400);
     expect(res.body.code).toBe('WORLD_BUILDER_EMPTY');
+  });
+
+  describe('POST /:id/promote-variation', () => {
+    beforeEach(() => {
+      promoteVariationToCanonMock.mockClear();
+    });
+
+    it('forwards the body to the service and returns the result', async () => {
+      const app = buildApp();
+      const res = await request(app)
+        .post('/api/universe-builder/some-id/promote-variation')
+        .send({ category: 'landscapes', label: 'Salt Flats' });
+      expect(res.status).toBe(200);
+      expect(promoteVariationToCanonMock).toHaveBeenCalledWith('some-id', expect.objectContaining({
+        category: 'landscapes',
+        label: 'Salt Flats',
+      }));
+      expect(res.body.entry.name).toBe('Salt Flats');
+    });
+
+    it('passes through targetKind for other-kinded buckets', async () => {
+      const app = buildApp();
+      const res = await request(app)
+        .post('/api/universe-builder/some-id/promote-variation')
+        .send({ category: 'myth_archetypes', label: 'Solstice Mask', targetKind: 'objects' });
+      expect(res.status).toBe(200);
+      expect(promoteVariationToCanonMock).toHaveBeenCalledWith('some-id', expect.objectContaining({
+        targetKind: 'objects',
+      }));
+    });
+
+    it('400s on missing label (Zod schema)', async () => {
+      const app = buildApp();
+      const res = await request(app)
+        .post('/api/universe-builder/some-id/promote-variation')
+        .send({ category: 'landscapes' });
+      expect(res.status).toBe(400);
+      expect(promoteVariationToCanonMock).not.toHaveBeenCalled();
+    });
+
+    it('400s on invalid targetKind enum (Zod schema)', async () => {
+      const app = buildApp();
+      const res = await request(app)
+        .post('/api/universe-builder/some-id/promote-variation')
+        .send({ category: 'landscapes', label: 'A', targetKind: 'monster' });
+      expect(res.status).toBe(400);
+      expect(promoteVariationToCanonMock).not.toHaveBeenCalled();
+    });
+
+    it('maps service ServerError status onto the HTTP response', async () => {
+      promoteVariationToCanonMock.mockRejectedValueOnce(
+        Object.assign(new Error('Bucket not found'), {
+          status: 404,
+          code: 'UNIVERSE_PROMOTE_NO_CATEGORY',
+        }),
+      );
+      const app = buildApp();
+      const res = await request(app)
+        .post('/api/universe-builder/some-id/promote-variation')
+        .send({ category: 'nonexistent', label: 'A' });
+      expect(res.status).toBe(404);
+      expect(res.body.code).toBe('UNIVERSE_PROMOTE_NO_CATEGORY');
+    });
   });
 });

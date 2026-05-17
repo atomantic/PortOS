@@ -45,6 +45,81 @@ export const findFfmpeg = async () => {
   return cachedFfmpegPath;
 };
 
+/**
+ * Spawn an ffmpeg child process and resolve with a structured result.
+ * Collapses three sibling implementations (audioMux mux, optimizeForStreaming
+ * faststart remux, upscaleVideo2x) onto one primitive so the spawn → stderr-
+ * tail → close → SIGTERM-on-abort behavior stays in sync.
+ *
+ * - `bin`: absolute ffmpeg path (call `findFfmpeg()` upstream — keeps the
+ *   discovery cache hot and lets the caller decide what to do when ffmpeg
+ *   is missing). Required.
+ * - `args`: argv passed to spawn. Required.
+ * - `signal`: optional `AbortSignal`. When the signal fires we SIGTERM the
+ *   child; the close handler reports `{ ok:false, reason: 'cancelled (SIGTERM)' }`.
+ *   The abort listener is removed in a `finally`-shaped path so a long-lived
+ *   signal (one per render queue, used across many calls) doesn't accumulate
+ *   listeners on every successful ffmpeg run.
+ * - `stderrTailBytes`: cap on the stderr buffer. `0` → `stdio: 'ignore'` (no
+ *   stderr captured, matches the historical optimize/upscale behavior).
+ *   Default `2000` mirrors audioMux's prior cap.
+ *
+ * Returns `{ ok: true }` on exit code 0, otherwise `{ ok: false, reason }`
+ * where `reason` is a short human-readable string suitable for logging or
+ * surfacing in a UI error. Spawn errors are translated into `reason: 'spawn
+ * failed: …'` so callers don't need a separate `.on('error', …)` handler.
+ */
+export function runFfmpegProcess({ bin, args, signal, stderrTailBytes = 2000 } = {}) {
+  if (!bin || typeof bin !== 'string') {
+    return Promise.resolve({ ok: false, reason: 'invalid ffmpeg binary' });
+  }
+  if (!Array.isArray(args)) {
+    return Promise.resolve({ ok: false, reason: 'invalid ffmpeg args' });
+  }
+  return new Promise((resolve) => {
+    const stdio = stderrTailBytes > 0 ? ['ignore', 'ignore', 'pipe'] : 'ignore';
+    const proc = spawn(bin, args, { stdio });
+    let stderrTail = '';
+    if (stderrTailBytes > 0 && proc.stderr) {
+      proc.stderr.on('data', (chunk) => {
+        stderrTail += chunk.toString();
+        if (stderrTail.length > stderrTailBytes) {
+          stderrTail = stderrTail.slice(-stderrTailBytes);
+        }
+      });
+    }
+    // `{ once: true }` auto-removes the listener when it fires. We still call
+    // removeEventListener on normal completion so a signal reused across many
+    // ffmpeg calls (one per render queue) doesn't accumulate dozens of unfired
+    // listeners — the leak the audioMux audit flagged.
+    let onAbort = null;
+    if (signal) {
+      onAbort = () => proc.kill('SIGTERM');
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
+    const cleanupSignal = () => {
+      if (signal && onAbort) signal.removeEventListener('abort', onAbort);
+    };
+    proc.on('error', (err) => {
+      cleanupSignal();
+      resolve({ ok: false, reason: `spawn failed: ${err.message}` });
+    });
+    proc.on('close', (code, sig) => {
+      cleanupSignal();
+      if (sig === 'SIGTERM' || sig === 'SIGKILL') {
+        resolve({ ok: false, reason: `cancelled (${sig})` });
+        return;
+      }
+      if (code !== 0) {
+        const tail = stderrTail.split(/\r?\n/).slice(-4).join(' | ');
+        resolve({ ok: false, reason: tail ? `ffmpeg exit ${code}: ${tail}` : `ffmpeg exit ${code}` });
+        return;
+      }
+      resolve({ ok: true });
+    });
+  });
+}
+
 // ffprobe sits next to ffmpeg in standard distributions — derive the path
 // from the cached ffmpeg discovery so we don't shell out twice.
 let cachedFfprobePath;
@@ -106,21 +181,15 @@ export const generateThumbnail = async (videoPath, jobId) => {
   // and not at an unreliable boundary. For short clips (<2s) seek to the
   // actual midpoint. Fall back to 1s when ffprobe is unavailable.
   const seekSec = duration ? Math.min(2.5, Math.max(0.5, duration / 2)) : 1.0;
-  return new Promise((resolve) => {
-    const proc = spawn(ffmpeg, [
-      '-ss', seekSec.toFixed(2),
-      '-i', videoPath,
-      '-vframes', '1',
-      '-q:v', '5',
-      '-y',
-      thumbPath,
-    ], { stdio: 'ignore' });
-    proc.on('close', (code) => resolve(code === 0 ? thumbFilename : null));
-    proc.on('error', (err) => {
-      console.log(`⚠️ ffmpeg thumbnail failed to spawn: ${err.message}`);
-      resolve(null);
-    });
+  const result = await runFfmpegProcess({
+    bin: ffmpeg,
+    args: ['-ss', seekSec.toFixed(2), '-i', videoPath, '-vframes', '1', '-q:v', '5', '-y', thumbPath],
+    stderrTailBytes: 0,
   });
+  if (!result.ok && result.reason?.startsWith('spawn failed: ')) {
+    console.log(`⚠️ ffmpeg thumbnail failed to spawn: ${result.reason.slice('spawn failed: '.length)}`);
+  }
+  return result.ok ? thumbFilename : null;
 };
 
 // Probe the video's total frame count. Tries the fast metadata path first
@@ -229,23 +298,15 @@ export const extractEvaluationFrames = async (videoPath, jobId, count = 5) => {
   const selectExpr = frameIndices.map((i) => `eq(n,${i})`).join('+');
   const outPattern = join(PATHS.videoThumbnails, `${jobId}-f%d.jpg`);
 
-  const ok = await new Promise((resolve) => {
-    const proc = spawn(ffmpeg, [
-      '-i', videoPath,
-      '-vf', `select='${selectExpr}'`,
-      '-vsync', 'vfr',
-      '-q:v', '5',
-      '-y',
-      outPattern,
-    ], { stdio: 'ignore' });
-    proc.on('close', (code) => resolve(code === 0));
-    proc.on('error', (err) => {
-      console.log(`⚠️ ffmpeg multi-frame extract failed to spawn: ${err.message}`);
-      resolve(false);
-    });
+  const result = await runFfmpegProcess({
+    bin: ffmpeg,
+    args: ['-i', videoPath, '-vf', `select='${selectExpr}'`, '-vsync', 'vfr', '-q:v', '5', '-y', outPattern],
+    stderrTailBytes: 0,
   });
-
-  if (!ok) return [];
+  if (!result.ok && result.reason?.startsWith('spawn failed: ')) {
+    console.log(`⚠️ ffmpeg multi-frame extract failed to spawn: ${result.reason.slice('spawn failed: '.length)}`);
+  }
+  if (!result.ok) return [];
   // ffmpeg's image2 muxer numbers output starting at 1 in match order, so
   // the basenames map 1:1 to our frameIndices in timeline order.
   return frameIndices.map((_, i) => `${jobId}-f${i + 1}.jpg`);
@@ -284,8 +345,9 @@ export const upscaleVideo2x = async (videoPath) => {
   // exact 2× width and the matching height. Avoiding `iw*2:ih*2` because
   // any user-supplied source with an odd dimension would otherwise fail.
   const tmpPath = `${videoPath}.up2x.mp4`;
-  const ok = await new Promise((resolve) => {
-    const proc = spawn(ffmpeg, [
+  const result = await runFfmpegProcess({
+    bin: ffmpeg,
+    args: [
       '-i', videoPath,
       '-vf', 'scale=iw*2:-2:flags=lanczos',
       '-c:v', 'libx264',
@@ -295,11 +357,9 @@ export const upscaleVideo2x = async (videoPath) => {
       '-c:a', 'copy',
       '-movflags', '+faststart',
       '-y', tmpPath,
-    ], { stdio: 'ignore' });
-    proc.on('close', (code) => resolve(code === 0));
-    proc.on('error', () => resolve(false));
+    ],
   });
-  if (!ok) {
+  if (!result.ok) {
     await unlink(tmpPath).catch(() => {});
     return { ok: false, reason: 'ffmpeg upscale failed' };
   }
@@ -330,12 +390,11 @@ export const optimizeForStreaming = async (videoPath) => {
   const ffmpeg = await findFfmpeg();
   if (!ffmpeg) return;
   const tmpPath = `${videoPath}.fs.mp4`;
-  const ok = await new Promise((resolve) => {
-    const proc = spawn(ffmpeg, ['-i', videoPath, '-c', 'copy', '-movflags', '+faststart', '-y', tmpPath], { stdio: 'ignore' });
-    proc.on('close', (code) => resolve(code === 0));
-    proc.on('error', () => resolve(false));
+  const result = await runFfmpegProcess({
+    bin: ffmpeg,
+    args: ['-i', videoPath, '-c', 'copy', '-movflags', '+faststart', '-y', tmpPath],
   });
-  if (!ok) { await unlink(tmpPath).catch(() => {}); return; }
+  if (!result.ok) { await unlink(tmpPath).catch(() => {}); return; }
   // POSIX rename atomically replaces an existing dest in one syscall. On
   // Windows, fs.rename fails when the destination already exists — but a
   // simple unlink-first would destroy the rendered video if the subsequent

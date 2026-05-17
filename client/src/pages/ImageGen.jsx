@@ -103,7 +103,7 @@ export default function ImageGen() {
   const [preview, setPreview] = useState(null);
   const [showHidden, setShowHidden] = useState(false);
   const [favoritesOnly, setFavoritesOnly] = useState(false);
-  const { annotations, toggleStar, updateAnnotation } = useMediaAnnotations();
+  const { annotations, updateAnnotation, getCardProps } = useMediaAnnotations();
   // FLUX.2 readiness — drives the gating banner. Lazy-fetched on the first
   // selection of a flux2 model so we don't make an extra request when the
   // user is only using mflux/external/codex.
@@ -1163,9 +1163,7 @@ export default function ImageGen() {
                     onSendToVideo={() => sendToVideo(img)}
                     onDelete={() => handleDelete(img.filename)}
                     onToggleHidden={() => handleToggleHidden(item)}
-                    starred={!!annotations[item.key]?.starred}
-                    hasNote={!!annotations[item.key]?.anyNote}
-                    onToggleStar={toggleStar}
+                    {...getCardProps(item.key)}
                   />
                 );
               })}
@@ -1197,9 +1195,7 @@ export default function ImageGen() {
                     onSendToVideo={() => sendToVideo(img)}
                     onDelete={() => handleDelete(img.filename)}
                     onToggleHidden={() => handleToggleHidden(item)}
-                    starred={!!annotations[item.key]?.starred}
-                    hasNote={!!annotations[item.key]?.anyNote}
-                    onToggleStar={toggleStar}
+                    {...getCardProps(item.key)}
                   />
                 );
               })}

@@ -14,11 +14,11 @@
  * care which one wrote the bytes.
  */
 
-import { readdir, stat, copyFile, unlink } from 'fs/promises';
+import { stat, copyFile, unlink } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, extname, basename } from 'path';
 import { randomUUID } from 'crypto';
-import { PATHS, ensureDir, assertSafeFilename } from '../../lib/fileUtils.js';
+import { PATHS, ensureDir, assertSafeFilename, listDirectoryByExtension } from '../../lib/fileUtils.js';
 
 // Mirror of the sanitizer's MUSIC_SOURCES set in `services/pipeline/issues.js`.
 // Exported so routes don't sprinkle bare strings; `'gen'` is reserved for the
@@ -97,29 +97,19 @@ export function deriveDefaultLabel(originalName) {
  */
 export async function listMusicLibrary() {
   await ensureDir(PATHS.music);
-  let names = [];
-  try {
-    names = await readdir(PATHS.music);
-  } catch (err) {
-    if (err.code === 'ENOENT') return [];
-    throw err;
-  }
-  const entries = await Promise.all(
-    names
-      .filter((name) => SUPPORTED_AUDIO_EXTENSIONS.includes((extname(name) || '').toLowerCase()))
-      .map(async (name) => {
-        const full = join(PATHS.music, name);
-        const s = await stat(full).catch(() => null);
-        if (!s || !s.isFile()) return null;
-        return {
-          filename: name,
-          label: deriveDefaultLabel(name),
-          sizeBytes: s.size,
-          updatedAt: s.mtime.toISOString(),
-        };
-      }),
-  );
-  return entries.filter(Boolean).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+  // listDirectoryByExtension covers readdir + ENOENT → [] + extension filter
+  // + stat + isFile drop. ensureDir runs first, so ENOENT shouldn't trip
+  // anyway — but the helper preserves the original safety net.
+  const entries = await listDirectoryByExtension(PATHS.music, {
+    extensions: [...SUPPORTED_AUDIO_EXTENSIONS],
+    mapEntry: (name, _full, s) => ({
+      filename: name,
+      label: deriveDefaultLabel(name),
+      sizeBytes: s.size,
+      updatedAt: s.mtime.toISOString(),
+    }),
+  });
+  return entries.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
 
 /**

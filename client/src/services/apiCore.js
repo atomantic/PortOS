@@ -8,12 +8,17 @@ export const PORTOS_APP_ID = 'portos-default';
 export async function request(endpoint, options = {}) {
   const { silent, ...fetchOptions } = options;
   const url = `${API_BASE}${endpoint}`;
+  // Skip the JSON content-type header for FormData bodies — the browser must
+  // set `multipart/form-data; boundary=…` itself, and any pre-supplied value
+  // (including ours) suppresses the auto-boundary and breaks the upload.
+  const isFormData = typeof FormData !== 'undefined' && fetchOptions.body instanceof FormData;
+  const baseHeaders = isFormData ? {} : { 'Content-Type': 'application/json' };
   const config = {
+    ...fetchOptions,
     headers: {
-      'Content-Type': 'application/json',
+      ...baseHeaders,
       ...fetchOptions.headers
-    },
-    ...fetchOptions
+    }
   };
 
   const response = await fetch(url, config).catch(() => null);
@@ -37,6 +42,11 @@ export async function request(endpoint, options = {}) {
     const err = new Error(errorMessage);
     err.code = error?.code;
     err.status = response.status;
+    // Forward structured context the server attached to the error (e.g.
+    // ERR_PARTIAL_COMMIT_ISSUES carries `{ universeId, seriesId,
+    // arcAlreadyPersisted, skipArcOnRetry }` so the Importer client can
+    // shape its retry without re-overwriting persisted state).
+    if (error?.context) err.context = error.context;
     throw err;
   }
 

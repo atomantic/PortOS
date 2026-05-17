@@ -5,6 +5,7 @@ import { tmpdir } from 'os';
 import {
   assertSafeFilename,
   isValidJSON,
+  listDirectoryByExtension,
   safeJSONParse,
   safeJSONLParse,
   readJSONFile,
@@ -425,6 +426,86 @@ describe('fileUtils', () => {
         expect(err.status).toBe(400);
         expect(err.code).toBe('VALIDATION_ERROR');
       }
+    });
+  });
+
+  describe('listDirectoryByExtension', () => {
+    const tmpRoot = join(tmpdir(), `portos-listdir-test-${process.pid}-${Date.now()}`);
+
+    beforeEach(async () => {
+      await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+      await mkdir(tmpRoot, { recursive: true });
+    });
+
+    afterEach(async () => {
+      await rm(tmpRoot, { recursive: true, force: true }).catch(() => {});
+    });
+
+    it('returns [] when the directory does not exist', async () => {
+      const res = await listDirectoryByExtension(join(tmpRoot, 'missing'), {
+        extensions: ['.png'],
+        mapEntry: (n) => ({ filename: n }),
+      });
+      expect(res).toEqual([]);
+    });
+
+    it('filters by extension (case-insensitive) and maps survivors', async () => {
+      await writeFile(join(tmpRoot, 'a.png'), 'a');
+      await writeFile(join(tmpRoot, 'b.PNG'), 'b');
+      await writeFile(join(tmpRoot, 'c.jpg'), 'c');
+      const res = await listDirectoryByExtension(tmpRoot, {
+        extensions: ['.png'],
+        mapEntry: (name, _full, s) => ({ name, sizeBytes: s.size }),
+      });
+      const names = res.map((r) => r.name).sort();
+      expect(names).toEqual(['a.png', 'b.PNG']);
+    });
+
+    it('drops directories when requireRegularFile is true (default)', async () => {
+      await writeFile(join(tmpRoot, 'real.safetensors'), 'data');
+      await mkdir(join(tmpRoot, 'fake.safetensors'));
+      const res = await listDirectoryByExtension(tmpRoot, {
+        extensions: ['.safetensors'],
+        mapEntry: (name) => ({ name }),
+      });
+      expect(res).toEqual([{ name: 'real.safetensors' }]);
+    });
+
+    it('keeps directories when requireRegularFile is false (gallery legacy)', async () => {
+      await writeFile(join(tmpRoot, 'real.png'), 'data');
+      await mkdir(join(tmpRoot, 'fake.png'));
+      const res = await listDirectoryByExtension(tmpRoot, {
+        extensions: ['.png'],
+        requireRegularFile: false,
+        mapEntry: (name) => ({ name }),
+      });
+      const names = res.map((r) => r.name).sort();
+      expect(names).toEqual(['fake.png', 'real.png']);
+    });
+
+    it('drops entries whose mapEntry returns null', async () => {
+      await writeFile(join(tmpRoot, 'a.json'), 'a');
+      await writeFile(join(tmpRoot, 'b.json'), 'b');
+      const res = await listDirectoryByExtension(tmpRoot, {
+        extensions: ['.json'],
+        mapEntry: (name) => (name === 'a.json' ? null : { name }),
+      });
+      expect(res).toEqual([{ name: 'b.json' }]);
+    });
+
+    it('throws if extensions is missing or empty', async () => {
+      await expect(
+        listDirectoryByExtension(tmpRoot, { mapEntry: (n) => n }),
+      ).rejects.toThrow(/extensions allowlist/);
+      await expect(
+        listDirectoryByExtension(tmpRoot, { extensions: [], mapEntry: (n) => n }),
+      ).rejects.toThrow(/extensions allowlist/);
+    });
+
+    it('throws if mapEntry is not a function', async () => {
+      await expect(
+        listDirectoryByExtension(tmpRoot, { extensions: ['.png'] }),
+      ).rejects.toThrow(/mapEntry must be a function/);
     });
   });
 });

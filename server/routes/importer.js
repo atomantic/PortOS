@@ -4,16 +4,18 @@ import {
   validateRequest,
   importerAnalyzeSchema,
   importerCommitSchema,
+  importerClassifySchema,
 } from '../lib/validation.js';
 import {
   analyzeImport,
+  classifyImportContent,
   commitImport,
   ERR_VALIDATION,
   ERR_LOCKED,
   ERR_PARTIAL_COMMIT_ISSUES,
   IMPORTER_SOURCE_CHAR_LIMIT,
 } from '../services/importer.js';
-import { ARC_ROLES } from '../lib/storyArc.js';
+import { ARC_ROLES, ARC_SHAPE_IDS } from '../lib/storyArc.js';
 import * as universeSvc from '../services/universeBuilder.js';
 import * as seriesSvc from '../services/pipeline/series.js';
 
@@ -43,19 +45,32 @@ const SERVICE_ERROR_STATUS = {
 
 const mapServiceError = (err) => {
   const status = SERVICE_ERROR_STATUS[err?.code];
-  if (status) return new ServerError(err.message, { status, code: err.code });
+  // Preserve `err.context` — ERR_PARTIAL_COMMIT_ISSUES carries the
+  // arcAlreadyPersisted retry signal the client gates on.
+  if (status) return new ServerError(err.message, {
+    status,
+    code: err.code,
+    ...(err.context ? { context: err.context } : {}),
+  });
   return err;
 };
 
 // Surfaces server-canonical constants so the client doesn't hardcode (and
-// drift from) the source-char limit or the arc-role enum. Read by the
-// Importer intake form on mount; the analyze response also includes these
-// for clients that skip the config call.
+// drift from) the source-char limit, the arc-role enum, or the arc-shape
+// id list. Read by the Importer intake form on mount; the analyze response
+// also includes these for clients that skip the config call.
 router.get('/config', asyncHandler(async (req, res) => {
   res.json({
     sourceCharLimit: IMPORTER_SOURCE_CHAR_LIMIT,
     arcRoles: [...ARC_ROLES],
+    arcShapeIds: [...ARC_SHAPE_IDS],
   });
+}));
+
+router.post('/classify', asyncHandler(async (req, res) => {
+  const input = validateRequest(importerClassifySchema, req.body || {});
+  const result = await classifyImportContent(input).catch((err) => { throw mapServiceError(err); });
+  res.json(result);
 }));
 
 router.post('/analyze', asyncHandler(async (req, res) => {

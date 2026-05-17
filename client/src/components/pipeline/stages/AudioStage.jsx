@@ -83,7 +83,9 @@ export default function AudioStage({ issue, onStageUpdate }) {
   const handleMusicUpload = async (file) => {
     if (!file) return;
     setMusicUploading(true);
-    const result = await uploadPipelineMusicTrack(issue.id, file).catch((err) => {
+    // Owns its own error UI (toast.error below) so suppress the helper's toast
+    // — per CLAUDE.md "custom catch ⇒ silent: true" convention.
+    const result = await uploadPipelineMusicTrack(issue.id, file, {}, { silent: true }).catch((err) => {
       toast.error(err.message || 'Upload failed');
       return null;
     });

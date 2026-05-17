@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import { ArrowLeft, CheckSquare, Copy, FolderInput, Inbox, Pencil, Star, StarOff, Trash2, X } from 'lucide-react';
+import { ArrowLeft, CheckSquare, Copy, FolderInput, Inbox, Lock, Pencil, Star, StarOff, Trash2, X } from 'lucide-react';
 import ShareToButton from '../components/sharing/ShareToButton';
 import toast from '../components/ui/Toast';
 import MediaCard from '../components/media/MediaCard';
@@ -44,6 +44,10 @@ export default function MediaCollectionDetail() {
   const isUnsorted = id === UNSORTED_ID;
   const navigate = useNavigate();
   const [collection, setCollection] = useState(null);
+  // Full collections list — fetched once for the bulk move/copy picker so it
+  // doesn't pay a per-mount listMediaCollections() round-trip when opened.
+  // Already loaded for the unsorted view as part of buildUnsortedCollection().
+  const [allCollections, setAllCollections] = useState(null);
   const [imagesByName, setImagesByName] = useState(new Map());
   const [videosById, setVideosById] = useState(new Map());
   const [loading, setLoading] = useState(true);
@@ -57,7 +61,7 @@ export default function MediaCollectionDetail() {
   const [pickerMode, setPickerMode] = useState(null);
   const moveBtnRef = useRef(null);
   const copyBtnRef = useRef(null);
-  const { annotations, toggleStar, updateAnnotation } = useMediaAnnotations();
+  const { annotations, toggleStar, updateAnnotation, getCardProps } = useMediaAnnotations();
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -67,21 +71,24 @@ export default function MediaCollectionDetail() {
         listImageGallery().catch(() => []),
         listVideoHistory().catch(() => []),
       ]);
+      setAllCollections(Array.isArray(cols) ? cols : []);
       setCollection(buildUnsortedCollection(cols, images, videos));
       setImagesByName(new Map((images || []).map((i) => [i.filename, i])));
       setVideosById(new Map((videos || []).map((v) => [v.id, v])));
       setLoading(false);
       return;
     }
-    const [c, images, videos] = await Promise.all([
+    const [c, cols, images, videos] = await Promise.all([
       getMediaCollection(id).catch((err) => {
         toast.error(err.message || 'Collection not found');
         return null;
       }),
+      listMediaCollections().catch(() => []),
       listImageGallery().catch(() => []),
       listVideoHistory().catch(() => []),
     ]);
     setCollection(c);
+    setAllCollections(Array.isArray(cols) ? cols : []);
     setNameDraft(c?.name || '');
     setImagesByName(new Map((images || []).map((i) => [i.filename, i])));
     setVideosById(new Map((videos || []).map((v) => [v.id, v])));
@@ -292,6 +299,29 @@ export default function MediaCollectionDetail() {
         {collection.name}
       </h1>
     );
+    // Universe-linked collections own their visible name — the user-facing
+    // identity follows the universe (renaming the universe cascades here).
+    // Routing is by `universeId` server-side regardless of name; this lock
+    // exists to keep the displayed name consistent with the universe. The
+    // server enforces it independently via the rename-lock in
+    // updateCollection. The lock state is exposed visually (icon + title
+    // tooltip for sighted users) and programmatically via the `sr-only`
+    // span — real text content screen readers announce after the
+    // collection name. An `aria-label` on the heading would override the
+    // visible name; the `sr-only` text adds context without clobbering it.
+    if (collection.universeId) {
+      const lockMsg = 'Linked to a Universe — rename the universe to rename this collection.';
+      return (
+        <h1
+          className="text-xl font-semibold text-white flex items-center gap-2"
+          title={lockMsg}
+        >
+          {collection.name}
+          <Lock className="w-4 h-4 text-gray-500" aria-hidden="true" />
+          <span className="sr-only">{lockMsg}</span>
+        </h1>
+      );
+    }
     if (editingName) return (
       <input
         autoFocus
@@ -430,6 +460,7 @@ export default function MediaCollectionDetail() {
               excludeId={collection.id}
               busy={bulkBusy}
               title={`${pickerMode === 'move' ? 'Move' : 'Copy'} ${selected.size} to…`}
+              collections={allCollections}
               onPick={bulkMoveOrCopy}
               onClose={() => setPickerMode(null)}
             />
@@ -461,8 +492,7 @@ export default function MediaCollectionDetail() {
                   onDelete={!selectMode ? handleDelete : undefined}
                   hideActions={selectMode}
                   selected={isSelected}
-                  starred={!!annotations[key]?.starred}
-                  hasNote={!!annotations[key]?.anyNote}
+                  {...getCardProps(key)}
                   onToggleStar={!selectMode ? toggleStar : undefined}
                 />
                 {!selectMode && !isUnsorted && (

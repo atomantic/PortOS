@@ -3,8 +3,8 @@
  * with description, render-reference button, optional AI-differentiate button
  * (characters only), and click-to-preview image thumbnails.
  *
- * Used by NounsStage (per-series, pre-Phase B) and UniverseCanon (per-
- * universe, Phase A and beyond).
+ * Used by NounsStage (per-series, pre-Phase B) and UniverseCanonSection
+ * (per-universe, embedded in UniverseBuilder).
  */
 
 import { useEffect, useRef, useState } from 'react';
@@ -228,10 +228,16 @@ export default function CanonCard({
   const refs = Array.isArray(entry.imageRefs) ? entry.imageRefs : [];
   const locked = entry.locked === true;
   const tags = Array.isArray(entry.tags) ? entry.tags.filter(Boolean) : [];
-  // Refine + Render guarded against locked entries — the server returns 409
-  // on refine; UI surfaces that as a disabled button with an explanatory tip
-  // so the user doesn't fire a doomed request.
-  const refineBlockedByLock = locked && !!onToggleLock;
+  // Refine + Render guarded against locked entries — locks signal "frozen
+  // identity"; both AI rewrite (refine/differentiate) and new visual refs are
+  // gated so the user explicitly unlocks before reshaping the entry.
+  // Gate on `locked` alone, NOT on `!!onToggleLock` — consumers like
+  // NounsStage embed CanonCard without passing a toggle, but the underlying
+  // entry's `locked` flag still represents frozen-identity semantics on the
+  // server (Refine → 409 `UNIVERSE_CANON_LOCKED`, Render persists a new
+  // visual ref through bypass). The unlock UX lives in Universe Builder; the
+  // pipeline view just needs to respect it.
+  const blockedByLock = locked;
 
   // settledRef prevents duplicate completion callbacks under React 18
   // StrictMode's mount→cleanup→mount double-fire in dev. MediaJobThumb
@@ -336,9 +342,9 @@ export default function CanonCard({
             <button
               type="button"
               onClick={() => onRefine(entry.id)}
-              disabled={refining || refineDisabled || refineBlockedByLock}
+              disabled={refining || refineDisabled || blockedByLock}
               className="inline-flex items-center justify-center gap-1 px-2 py-1 text-[10px] rounded border border-port-border text-gray-300 hover:bg-port-border/40 hover:text-white disabled:opacity-40"
-              title={refineBlockedByLock
+              title={blockedByLock
                 ? `Unlock ${entry.name} to refine`
                 : `Rewrite ${entry.name}'s description so they render distinct from every other character`}
             >
@@ -349,9 +355,11 @@ export default function CanonCard({
           <button
             type="button"
             onClick={onRender}
-            disabled={!description.trim() || !!inFlightJobId}
+            disabled={!description.trim() || !!inFlightJobId || blockedByLock}
             className="inline-flex items-center justify-center gap-1 px-2 py-1 text-[10px] rounded border border-port-border text-gray-300 hover:bg-port-border/40 hover:text-white disabled:opacity-40"
-            title={description.trim() ? `Render a canonical reference image for ${entry.name}` : 'Add a description first'}
+            title={blockedByLock
+              ? `Unlock ${entry.name} to render a new reference`
+              : (description.trim() ? `Render a canonical reference image for ${entry.name}` : 'Add a description first')}
           >
             {inFlightJobId ? <Loader2 size={10} className="animate-spin" /> : <ImagePlus size={10} />}
             Render reference
@@ -360,11 +368,13 @@ export default function CanonCard({
             <button
               type="button"
               onClick={() => onRenderCleanPlate(entry)}
-              disabled={!description.trim() || !!inFlightJobId}
+              disabled={!description.trim() || !!inFlightJobId || blockedByLock}
               className="inline-flex items-center justify-center gap-1 px-2 py-1 text-[10px] rounded border border-port-border text-gray-300 hover:bg-port-border/40 hover:text-white disabled:opacity-40"
-              title={description.trim()
-                ? `Render an empty-location plate for ${entry.name} — no people, edge-to-edge`
-                : 'Add a description first'}
+              title={blockedByLock
+                ? `Unlock ${entry.name} to render a clean plate`
+                : (description.trim()
+                  ? `Render an empty-location plate for ${entry.name} — no people, edge-to-edge`
+                  : 'Add a description first')}
             >
               {inFlightJobId ? <Loader2 size={10} className="animate-spin" /> : <Square size={10} />}
               Clean plate

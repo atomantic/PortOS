@@ -14,6 +14,7 @@
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { PATHS, atomicWrite, readJSONFile, ensureDir } from '../../lib/fileUtils.js';
+import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
 import { isStr, trimTo } from '../../lib/storyBible.js';
 import { sanitizeArc, sanitizeSeasonList } from '../../lib/storyArc.js';
 import { sanitizeVisualStyleRef } from '../../lib/visualStyles.js';
@@ -24,25 +25,14 @@ import { emitRecordUpdated, emitRecordDeleted } from '../sharing/recordEvents.js
 // (e.g. tests that swap it through a Proxy mock).
 const statePath = () => join(PATHS.data, 'pipeline-series.json');
 
-// File-level write lock — same pattern as issueWriteTail in issues.js.
-// Required because multiple write paths can race on the single shared
+// File-level write lock. Required because multiple write paths can race on the single shared
 // pipeline-series.json file: PATCH /series/:id (bible edits), PATCH
 // /seasons/:seasonId (season metadata), the new volume cover-render route,
 // the season-cover filename hook landing, and the bible-extract merge.
 // All of those read-then-write the same JSON; without serialization a
 // later writer's `readState` can land on a pre-image snapshot and clobber
 // the earlier write. CLAUDE.md: "single tail per shared file."
-let seriesWriteTail = Promise.resolve();
-
-function queueSeriesWrite(fn) {
-  const next = seriesWriteTail.then(fn, fn); // run fn even when prev rejects
-  const silenced = next.catch(() => {});
-  seriesWriteTail = silenced;
-  silenced.finally(() => {
-    if (seriesWriteTail === silenced) seriesWriteTail = Promise.resolve();
-  });
-  return next;
-}
+const queueSeriesWrite = createFileWriteQueue();
 
 export const ERR_NOT_FOUND = 'PIPELINE_SERIES_NOT_FOUND';
 export const ERR_VALIDATION = 'PIPELINE_SERIES_VALIDATION';
@@ -56,6 +46,11 @@ export const LOGLINE_MAX = 500;
 export const PREMISE_MAX = 8000;
 export const STYLE_NOTES_MAX = 4000;
 export const STYLE_PROMPT_OVERRIDE_MAX = 1000;
+// Title/logo design concept — prose description injected into cover + TV
+// title-screen prompts as the "logo design" cue. Generated from the universe's
+// style notes on series creation; editable in the bible.
+export const TITLE_LOGO_MAX = 2000;
+export const AUTHOR_MAX = 120;
 export const UNIVERSE_ID_MAX = 64;
 export const WRITERS_ROOM_WORK_ID_MAX = 64;
 export const TARGET_FORMATS = Object.freeze(['comic', 'tv', 'comic+tv']);
@@ -107,6 +102,8 @@ const sanitizeSeries = (raw) => {
     seasons: sanitizeSeasonList(raw.seasons),
     locked: sanitizeSeriesLocked(raw.locked),
     styleNotes: trimTo(raw.styleNotes, STYLE_NOTES_MAX),
+    titleLogo: trimTo(raw.titleLogo, TITLE_LOGO_MAX),
+    author: trimTo(raw.author, AUTHOR_MAX),
     // Per-series override that prepends ahead of the linked universe's
     // stylePrompt during image-gen composition. Lets a single series in a
     // shared universe deviate slightly (e.g. a noir spin-off) without
@@ -168,6 +165,8 @@ export async function createSeries(input = {}) {
       seasons: input.seasons || [],
       locked: input.locked || {},
       styleNotes: input.styleNotes || '',
+      titleLogo: input.titleLogo || '',
+      author: input.author || '',
       stylePromptOverride: input.stylePromptOverride || '',
       targetFormat: input.targetFormat || 'comic+tv',
       issueCountTarget: input.issueCountTarget || 0,
@@ -229,6 +228,8 @@ export async function updateSeries(id, patch = {}) {
       // Wholesale replace — `locked: {}` clears every lock; omission preserves.
       ...('locked' in patch ? { locked: patch.locked } : {}),
       ...('styleNotes' in patch ? { styleNotes: patch.styleNotes } : {}),
+      ...('titleLogo' in patch ? { titleLogo: patch.titleLogo } : {}),
+      ...('author' in patch ? { author: patch.author } : {}),
       ...('stylePromptOverride' in patch ? { stylePromptOverride: patch.stylePromptOverride } : {}),
       ...('visualStyleDefault' in patch ? { visualStyleDefault: patch.visualStyleDefault } : {}),
       ...('targetFormat' in patch ? { targetFormat: patch.targetFormat } : {}),

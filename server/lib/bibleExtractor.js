@@ -6,7 +6,7 @@ import { sanitizeBibleList, BIBLE_KIND, BIBLE_FIELD, pickPromptFields } from './
 
 const KIND_STAGE = Object.freeze({
   [BIBLE_KIND.CHARACTER]: 'writers-room-characters',
-  [BIBLE_KIND.SETTING]:   'writers-room-settings',
+  [BIBLE_KIND.SETTING]:   'writers-room-places',
   [BIBLE_KIND.OBJECT]:    'writers-room-objects',
 });
 

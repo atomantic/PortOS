@@ -3,17 +3,13 @@ import { mkdtempSync, rmSync, existsSync, writeFileSync, readdirSync, mkdirSync 
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { vi } from 'vitest';
+import { makePathsProxy } from '../../lib/mockPathsDataRoot.js';
 
 let tempRoot;
 
 vi.mock('../../lib/fileUtils.js', async () => {
   const actual = await vi.importActual('../../lib/fileUtils.js');
-  return new Proxy(actual, {
-    get(target, prop) {
-      if (prop === 'PATHS') return { ...actual.PATHS, data: tempRoot };
-      return target[prop];
-    },
-  });
+  return makePathsProxy(actual, { dataRoot: () => tempRoot });
 });
 
 const manifest = await import('./manifest.js');

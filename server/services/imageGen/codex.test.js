@@ -46,9 +46,13 @@ vi.mock('child_process', async (importOriginal) => {
 const FAKE_IMAGES_DIR = join(TEST_HOME, 'data-images');
 vi.mock('../../lib/fileUtils.js', async () => {
   const actual = await vi.importActual('../../lib/fileUtils.js');
+  // Mutate the actual PATHS object so functions inside fileUtils.js
+  // (e.g. resolveGalleryImage) see the test images dir at call time —
+  // a spread-only override would leave the original PATHS.images intact
+  // for any function closing over the actual module's binding.
+  actual.PATHS.images = FAKE_IMAGES_DIR;
   return {
     ...actual,
-    PATHS: { ...actual.PATHS, images: FAKE_IMAGES_DIR },
     ensureDir: vi.fn(async (dir) => mkdir(dir, { recursive: true })),
   };
 });
@@ -130,6 +134,61 @@ describe('codex provider — generateImage', () => {
 
   it('rejects when prompt is empty', async () => {
     await expect(codex.generateImage({ prompt: '   ' })).rejects.toThrow(/Prompt is required/);
+  });
+
+  it('forwards initImagePath via `-i <FILE>` and reshapes the prompt for image-edit', async () => {
+    // resolveGalleryImage requires the file to exist under PATHS.images.
+    await mkdir(FAKE_IMAGES_DIR, { recursive: true });
+    await writeFile(join(FAKE_IMAGES_DIR, 'proof.png'), 'fake');
+    await codex.generateImage({
+      prompt: 'cover art',
+      width: 1024, height: 1536,
+      initImagePath: 'proof.png',
+      initImageStrength: 0.2,
+    });
+    const { args } = spawnCalls[0];
+    const iIdx = args.indexOf('-i');
+    expect(iIdx).toBeGreaterThan(-1);
+    expect(args[iIdx + 1]).toBe(join(FAKE_IMAGES_DIR, 'proof.png'));
+    const promptArg = args[args.length - 1];
+    // The `$imagegen` prefix is preserved so the bundled skill still triggers.
+    expect(promptArg.startsWith('$imagegen ')).toBe(true);
+    // Edit-prefix tells codex to use the attachment rather than redraw.
+    expect(promptArg).toMatch(/edit the attached reference image/i);
+    // Low strength → composition-preserving fidelity phrase.
+    expect(promptArg).toMatch(/preserve composition/i);
+    expect(promptArg).toContain('cover art');
+    spawnCalls[0].child.exitCode = 1;
+    spawnCalls[0].child.emit('close', 1, null);
+    await flush();
+  });
+
+  it('drops initImagePath that escapes the gallery (defense-in-depth)', async () => {
+    await codex.generateImage({
+      prompt: 'cover art',
+      // Absolute outside-gallery path — resolveGalleryImage rejects via basename.
+      initImagePath: '/etc/passwd',
+      initImageStrength: 0.2,
+    });
+    const { args } = spawnCalls[0];
+    expect(args).not.toContain('-i');
+    const promptArg = args[args.length - 1];
+    // No edit prefix when the init image is dropped.
+    expect(promptArg).not.toMatch(/edit the attached reference image/i);
+    spawnCalls[0].child.exitCode = 1;
+    spawnCalls[0].child.emit('close', 1, null);
+    await flush();
+  });
+
+  it('omits `-i` and the edit-prefix when no initImagePath is passed', async () => {
+    await codex.generateImage({ prompt: 'cover art', width: 1024, height: 1024 });
+    const { args } = spawnCalls[0];
+    expect(args).not.toContain('-i');
+    const promptArg = args[args.length - 1];
+    expect(promptArg).not.toMatch(/edit the attached reference image/i);
+    spawnCalls[0].child.exitCode = 1;
+    spawnCalls[0].child.emit('close', 1, null);
+    await flush();
   });
 
   it('allows concurrent generations (parallel codex lane)', async () => {

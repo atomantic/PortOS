@@ -33,7 +33,13 @@ A short story is typically **one issue**. Unless `targetIssueCount` is set to so
 Novels usually map to **one issue per chapter** if chapters are short (≤3000 words), or chapter-pair groupings if chapters are longer. Honor the author's chapter breaks — they're the strongest structural signal. Aim for 6–15 issues for a typical novel.
 {{/isNovel}}
 {{#isScreenplay}}
-A standard screenplay is **one episode** (one issue). If the screenplay explicitly contains `ACT ONE` / `ACT TWO` / `ACT THREE` breaks AND the user has set `targetIssueCount > 1`, split on act breaks; otherwise return one issue.
+A standard screenplay is **one episode** (one issue).
+{{#isUserRequestedCount}}
+The user has explicitly requested `targetIssueCount = {{targetIssueCount}}`. If `{{targetIssueCount}} > 1` AND the screenplay contains `ACT ONE` / `ACT TWO` / `ACT THREE` breaks, split on act breaks to produce exactly `{{targetIssueCount}}` issues. If the user-requested count exceeds the available act breaks, group adjacent scenes to hit the count. **Honor the user's count — it is an explicit constraint, not a hint.**
+{{/isUserRequestedCount}}
+{{^isUserRequestedCount}}
+The user did NOT request an explicit issue count. Return ONE issue covering the whole screenplay regardless of act breaks — the per-type default for screenplays is a single episode and we should not silently split on act structure when the user didn't ask for it.
+{{/isUserRequestedCount}}
 {{/isScreenplay}}
 {{#isComicScript}}
 Comic scripts mark issues with `ISSUE N` or `#N` or similar headers — honor those exactly. If the script is unmarked, group every ~22 pages into one issue. Page markers (`PAGE 1`, `PAGE 2`, ...) define the boundaries.

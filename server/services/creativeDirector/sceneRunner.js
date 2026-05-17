@@ -28,9 +28,8 @@
  * isolated anyway.
  */
 
-import { join, basename, resolve as resolvePath, sep as PATH_SEP } from 'path';
-import { existsSync } from 'fs';
-import { PATHS } from '../../lib/fileUtils.js';
+import { join } from 'path';
+import { PATHS, resolveGalleryImage } from '../../lib/fileUtils.js';
 import { verifyVideoPlayable } from '../../lib/ffmpeg.js';
 import { presetToRenderParams } from '../../lib/creativeDirectorPresets.js';
 import { extractLastFrame, sampleEvaluationFrames } from '../videoGen/local.js';
@@ -135,29 +134,9 @@ export async function runSceneRender(project, scene) {
     }
   }
 
-  // Resolve sourceImageFile to an absolute path if it's a basename in the
-  // gallery. Two-layer guard:
-  //  1. basename() strips any path segments (so `../../etc/passwd` →
-  //     `passwd`); reject `.`/`..` outright.
-  //  2. resolve + prefix-check against the images root so a unicode trick
-  //     can't escape PATHS.images.
-  // Without these, `sourceImageFile: '..'` from a malicious / mistaken
-  // payload could resolve to PATHS.images's parent and feed an arbitrary
-  // local path into the renderer.
-  let sourceImagePath = null;
-  if (sourceImageFile) {
-    const safe = basename(sourceImageFile);
-    if (!safe || safe === '.' || safe === '..') {
-      console.log(`⚠️ CD scene ${scene.sceneId} sourceImageFile rejected (dot segment): ${sourceImageFile}`);
-    } else {
-      const imagesRoot = resolvePath(PATHS.images) + PATH_SEP;
-      const localPath = resolvePath(join(PATHS.images, safe));
-      if (localPath.startsWith(imagesRoot) && existsSync(localPath)) {
-        sourceImagePath = localPath;
-      } else {
-        console.log(`⚠️ CD scene ${scene.sceneId} sourceImageFile not found on disk: ${sourceImageFile}`);
-      }
-    }
+  const sourceImagePath = sourceImageFile ? resolveGalleryImage(sourceImageFile) : null;
+  if (sourceImageFile && !sourceImagePath) {
+    console.log(`⚠️ CD scene ${scene.sceneId} sourceImageFile rejected or missing on disk: ${sourceImageFile}`);
   }
   // If the continuation branch above produced a sourceImageFile but the
   // path-resolution step just dropped it (file missing, dot-segment, or

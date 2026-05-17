@@ -23,6 +23,11 @@ const svc = await import("./universeBuilder.js");
 
 // Default universe with non-empty influences. Override `influences` for tests
 // that need isolation from the seed tokens.
+//
+// The seed uses `outfits` (a custom category) rather than the legacy default
+// `characters` bucket — the latter was retired in schema v4 and any variations
+// under it get folded into universe.characters[] (canon) on sanitize. Using a
+// custom name keeps the 2-bucket / 3-variation scenario these tests rely on.
 const seedWorld = async (overrides = {}) =>
   svc.createUniverse({
     name: "Moebius SciFi",
@@ -38,7 +43,7 @@ const seedWorld = async (overrides = {}) =>
           { label: "Sand Sea", prompt: "endless sand sea, dunes" },
         ],
       },
-      characters: {
+      outfits: {
         variations: [
           {
             label: "Scavenger",
@@ -60,18 +65,24 @@ describe("universeBuilder service", () => {
     expect(await svc.listUniverses()).toEqual([]);
   });
 
-  it("createUniverse persists with sanitized categories", async () => {
+  it("createUniverse persists with sanitized categories + kind tags", async () => {
     const w = await seedWorld();
     expect(w.id).toBe("uuid-1");
     expect(w.name).toBe("Moebius SciFi");
-    // All five categories materialized even when only two were provided.
+    // All default categories materialized even when only one was provided,
+    // each tagged with its canon trunk via the WORLD_CATEGORY_DEFAULT_KINDS map.
     for (const c of svc.WORLD_CATEGORIES) {
       expect(w.categories[c]).toBeDefined();
       expect(Array.isArray(w.categories[c].variations)).toBe(true);
+      expect(svc.CATEGORY_KINDS).toContain(w.categories[c].kind);
     }
     expect(w.categories.landscapes.variations).toHaveLength(2);
-    expect(w.categories.characters.variations).toHaveLength(1);
+    expect(w.categories.landscapes.kind).toBe("settings");
+    expect(w.categories.vehicles.kind).toBe("objects");
     expect(w.categories.environments.variations).toHaveLength(0);
+    // Custom (un-defaulted) bucket falls to 'other'.
+    expect(w.categories.outfits.kind).toBe("other");
+    expect(w.categories.outfits.variations).toHaveLength(1);
   });
 
   it("createUniverse preserves custom universe-building categories", async () => {
@@ -225,6 +236,29 @@ describe("universeBuilder service", () => {
     ).rejects.toMatchObject({ code: svc.ERR_NOT_FOUND });
   });
 
+  it("updateUniverse cascades a name change onto the linked media collection", async () => {
+    const collections = await import("./mediaCollections.js");
+    const w = await seedWorld();
+    // Seed a linked collection. The render route uses
+    // findOrCreateUniverseCollection (universeId-first); we use the
+    // name-first helper here only because the resulting record is
+    // shape-identical and avoids dragging in the production route's
+    // dependencies for this rename-cascade-focused test.
+    await collections.findOrCreateCollectionByName({
+      name: collections.universeCollectionNameFor(w.name),
+      universeId: w.id,
+    });
+    await svc.updateUniverse(w.id, { name: "Renamed Universe" });
+    const linked = await collections.findCollectionByUniverseId(w.id);
+    expect(linked?.name).toBe("Universe: Renamed Universe");
+  });
+
+  it("updateUniverse rename succeeds even when no linked collection exists", async () => {
+    const w = await seedWorld();
+    const patched = await svc.updateUniverse(w.id, { name: "Solo Rename" });
+    expect(patched.name).toBe("Solo Rename");
+  });
+
   it("deleteUniverse removes the universe and its runs", async () => {
     const w = await seedWorld();
     await svc.recordRun({
@@ -240,11 +274,32 @@ describe("universeBuilder service", () => {
     expect(await svc.listRuns(w.id)).toEqual([]);
   });
 
+  it("deleteUniverse unlinks linked media collections (releases the rename-lock)", async () => {
+    const collections = await import("./mediaCollections.js");
+    const w = await seedWorld();
+    // Seed a linked collection (see rename-cascade test above for why we
+    // use the name-first helper here even though production routes through
+    // findOrCreateUniverseCollection).
+    const linked = await collections.findOrCreateCollectionByName({
+      name: collections.universeCollectionNameFor(w.name),
+      universeId: w.id,
+    });
+    expect(linked.universeId).toBe(w.id);
+    await svc.deleteUniverse(w.id);
+    // Collection survives — the user may still want the renders.
+    const fresh = await collections.getCollection(linked.id);
+    // …but the `universeId` is cleared so the rename-lock no longer applies.
+    expect(fresh.universeId).toBeNull();
+    await expect(
+      collections.updateCollection(fresh.id, { name: "User-Renamed" }),
+    ).resolves.toMatchObject({ name: "User-Renamed" });
+  });
+
   describe("compilePrompts", () => {
     it("returns one prompt per variation across selected categories with style prefix", async () => {
       const w = await seedWorld();
       const compiled = svc.compilePrompts(w);
-      // 2 landscapes + 1 character = 3 (other categories empty)
+      // 2 landscapes + 1 outfit = 3 (other categories empty)
       expect(compiled).toHaveLength(3);
       // Style prefix uses `. ` separator (composeStyledPrompt convention,
       // shared with the scenePrompt composer in the client).
@@ -290,9 +345,9 @@ describe("universeBuilder service", () => {
     it("selection: array filters by label (case-insensitive)", async () => {
       const w = await seedWorld();
       const compiled = svc.compilePrompts(w, {
-        selection: { landscapes: ["crystal canyon"], characters: "all" },
+        selection: { landscapes: ["crystal canyon"], outfits: "all" },
       });
-      // 1 landscape (filtered) + 1 character (all) = 2
+      // 1 landscape (filtered) + 1 outfit (all) = 2
       expect(compiled).toHaveLength(2);
       expect(compiled.map((c) => c.label).sort()).toEqual([
         "Crystal Canyon",
@@ -401,6 +456,218 @@ describe("universeBuilder service", () => {
       const compiled = svc.compilePrompts(w, { promptMode: "all" });
       expect(compiled).toHaveLength(4); // 3 atomic variations + 1 composite
       expect(compiled.map((p) => p.category)).toContain("composite_sheets");
+    });
+
+    describe("canon", () => {
+      // Compile canon directly off a draft (createUniverse doesn't accept canon —
+      // it lands via the canon-extract / refine path or the expand auto-save).
+      // The synthesis path doesn't touch persistence, so a literal world shape
+      // is enough.
+      const canonWorld = () => ({
+        influences: {
+          embrace: ["moebius linework"],
+          avoid: ["blurry"],
+        },
+        characters: [
+          {
+            name: "Mira",
+            physicalDescription: "weathered scavenger, dust mask, copper goggles",
+            role: "protagonist",
+          },
+          { name: "Vex", physicalDescription: "tall, scarred, plate-armor smith" },
+        ],
+        settings: [
+          {
+            name: "Foundry City",
+            slugline: "EXT. FOUNDRY CITY — DAY",
+            description: "vast smelting works at the canyon rim",
+            palette: "rust + bone",
+          },
+        ],
+        objects: [
+          { name: "Brass Compass", description: "always points away from home" },
+        ],
+      });
+
+      it("synthesizes canon prompts from name + descriptive fields with style prefix", () => {
+        const w = canonWorld();
+        const compiled = svc.compilePrompts(w, {
+          promptMode: "canon",
+          canonSelection: { characters: "all", settings: "all", objects: "all" },
+        });
+        // 2 characters + 1 setting + 1 object = 4
+        expect(compiled).toHaveLength(4);
+        const mira = compiled.find((c) => c.label === "Mira");
+        expect(mira.category).toBe("canon:characters");
+        expect(mira.prompt).toBe(
+          "moebius linework. Mira — weathered scavenger, dust mask, copper goggles. protagonist",
+        );
+        expect(mira.negativePrompt).toBe("blurry");
+        const place = compiled.find((c) => c.label === "Foundry City");
+        expect(place.category).toBe("canon:settings");
+        expect(place.prompt).toContain("Foundry City");
+        expect(place.prompt).toContain("palette: rust + bone");
+      });
+
+      it("canonSelection: missing trunk skips it", () => {
+        const w = canonWorld();
+        const compiled = svc.compilePrompts(w, {
+          promptMode: "canon",
+          canonSelection: { settings: "all" },
+        });
+        expect(compiled).toHaveLength(1);
+        expect(compiled[0].category).toBe("canon:settings");
+      });
+
+      it("canonSelection: array filters by name (case-insensitive)", () => {
+        const w = canonWorld();
+        const compiled = svc.compilePrompts(w, {
+          promptMode: "canon",
+          canonSelection: { characters: ["mira"] },
+        });
+        expect(compiled).toHaveLength(1);
+        expect(compiled[0].label).toBe("Mira");
+      });
+
+      it("synthesizes a settings prompt from slugline-only entries (no name)", () => {
+        // The bible sanitizer accepts a setting whose only identifier is a
+        // slugline (name field empty). synthesizeCanonPrompt must fall back
+        // to slugline as the identifier seed so such entries don't silently
+        // synthesize to '' and get skipped at render time.
+        const w = canonWorld();
+        w.settings.push({
+          // No name — only a slugline identifier + description.
+          slugline: "INT. OLD ARCHIVE — NIGHT",
+          description: "lantern-lit shelves of ledgers",
+        });
+        const compiled = svc.compilePrompts(w, {
+          promptMode: "canon",
+          canonSelection: { settings: "all" },
+        });
+        // Two settings now: the named Foundry City + the slugline-only Archive.
+        expect(compiled).toHaveLength(2);
+        const archive = compiled.find((c) => c.label === "INT. OLD ARCHIVE — NIGHT");
+        expect(archive).toBeTruthy();
+        expect(archive.prompt).toContain("INT. OLD ARCHIVE — NIGHT");
+        expect(archive.prompt).toContain("lantern-lit shelves of ledgers");
+      });
+
+      it("canonSelection: settings also matches by slugline", () => {
+        const w = canonWorld();
+        const compiled = svc.compilePrompts(w, {
+          promptMode: "canon",
+          canonSelection: { settings: ["EXT. FOUNDRY CITY — DAY"] },
+        });
+        expect(compiled).toHaveLength(1);
+        expect(compiled[0].label).toBe("Foundry City");
+      });
+
+      it("canonSelection: slugline matching is settings-only (characters/objects ignore stray slugline)", () => {
+        // A stray `slugline` on a character or object should NOT participate
+        // in canon-selection matching — slugline is part of the settings
+        // schema only. This guards against accidental cross-trunk selection
+        // when an upstream tool mis-tags an entry.
+        const w = {
+          ...canonWorld(),
+          characters: [
+            {
+              name: "Ghost",
+              slugline: "should-not-match-on-character",
+              physicalDescription: "spectral",
+            },
+          ],
+          objects: [
+            {
+              name: "Shard",
+              slugline: "should-not-match-on-object",
+              description: "humming crystal",
+            },
+          ],
+        };
+        const charsCompiled = svc.compilePrompts(w, {
+          promptMode: "canon",
+          canonSelection: { characters: ["should-not-match-on-character"] },
+        });
+        expect(charsCompiled).toHaveLength(0);
+        const objsCompiled = svc.compilePrompts(w, {
+          promptMode: "canon",
+          canonSelection: { objects: ["should-not-match-on-object"] },
+        });
+        expect(objsCompiled).toHaveLength(0);
+        // Sanity — name still matches.
+        const nameMatched = svc.compilePrompts(w, {
+          promptMode: "canon",
+          canonSelection: { characters: ["Ghost"], objects: ["Shard"] },
+        });
+        expect(nameMatched).toHaveLength(2);
+      });
+
+      it("entry.prompt wins over synthesized fields", () => {
+        const w = {
+          ...canonWorld(),
+          characters: [
+            {
+              name: "Mira",
+              physicalDescription: "ignored",
+              prompt: "explicit hand-authored prompt",
+            },
+          ],
+        };
+        const compiled = svc.compilePrompts(w, {
+          promptMode: "canon",
+          canonSelection: { characters: "all" },
+        });
+        expect(compiled).toHaveLength(1);
+        expect(compiled[0].prompt).toBe(
+          "moebius linework. explicit hand-authored prompt",
+        );
+      });
+
+      it("skips entries with no name and no descriptive content", () => {
+        const w = { ...canonWorld(), characters: [{}, { name: "Mira" }] };
+        const compiled = svc.compilePrompts(w, {
+          promptMode: "canon",
+          canonSelection: { characters: "all" },
+        });
+        expect(compiled).toHaveLength(1);
+        expect(compiled[0].label).toBe("Mira");
+      });
+
+      it("promptMode=all compiles variations + sheets + canon together", async () => {
+        const w = await seedWorld({
+          compositeSheets: [
+            { label: "Sheet", prompt: "clean reference sheet" },
+          ],
+        });
+        // Layer canon directly onto the persisted world for this scenario.
+        w.characters = [
+          { name: "Mira", physicalDescription: "weathered scavenger" },
+        ];
+        const compiled = svc.compilePrompts(w, {
+          promptMode: "all",
+          canonSelection: { characters: "all" },
+        });
+        // 3 variations + 1 sheet + 1 canon = 5
+        expect(compiled).toHaveLength(5);
+        expect(compiled.map((c) => c.category)).toContain("canon:characters");
+      });
+
+      it("respects batchPerVariation for canon", () => {
+        const w = canonWorld();
+        const compiled = svc.compilePrompts(w, {
+          promptMode: "canon",
+          canonSelection: { characters: ["mira"] },
+          batchPerVariation: 3,
+        });
+        expect(compiled).toHaveLength(3);
+        expect(compiled.every((c) => c.label === "Mira")).toBe(true);
+      });
+
+      it("canon promptMode without canonSelection produces no prompts", () => {
+        const w = canonWorld();
+        const compiled = svc.compilePrompts(w, { promptMode: "canon" });
+        expect(compiled).toEqual([]);
+      });
     });
   });
 
@@ -716,6 +983,90 @@ describe("universeBuilder service", () => {
     });
   });
 
+  describe("category kind (schema v4)", () => {
+    it("assigns built-in default kinds (landscapes/environments/structures→settings, vehicles→objects)", async () => {
+      const w = await seedWorld();
+      expect(w.categories.landscapes.kind).toBe("settings");
+      expect(w.categories.environments.kind).toBe("settings");
+      expect(w.categories.structures.kind).toBe("settings");
+      expect(w.categories.vehicles.kind).toBe("objects");
+    });
+
+    it("defaults custom (non-built-in) buckets to 'other'", async () => {
+      const w = await seedWorld({
+        categories: {
+          factions: { variations: [{ label: "Rebels", prompt: "x" }] },
+          colonies: { variations: [{ label: "Tycho", prompt: "y" }] },
+        },
+      });
+      expect(w.categories.factions.kind).toBe("other");
+      expect(w.categories.colonies.kind).toBe("other");
+    });
+
+    it("honors an explicit valid `kind` from the input over the built-in default", async () => {
+      const w = await seedWorld({
+        categories: {
+          landscapes: { kind: "objects", variations: [] },
+          factions: { kind: "characters", variations: [{ label: "Iron Reach", prompt: "z" }] },
+        },
+      });
+      expect(w.categories.landscapes.kind).toBe("objects"); // override beats default
+      expect(w.categories.factions.kind).toBe("characters");
+    });
+
+    it("falls back to default when explicit `kind` is invalid", async () => {
+      const w = await seedWorld({
+        categories: {
+          landscapes: { kind: "not-a-kind", variations: [] },
+          vehicles: { kind: 42, variations: [] },
+          colonies: { kind: null, variations: [{ label: "Tycho", prompt: "x" }] },
+        },
+      });
+      expect(w.categories.landscapes.kind).toBe("settings"); // built-in default
+      expect(w.categories.vehicles.kind).toBe("objects"); // built-in default
+      expect(w.categories.colonies.kind).toBe("other"); // custom fallback
+    });
+
+    it("drops the legacy default `characters` bucket and folds variations into canon", async () => {
+      const w = await seedWorld({
+        categories: {
+          // Mimic a v3 client (or post-migration tab) accidentally sending the
+          // retired bucket — sanitize folds it into canon.characters[] and
+          // drops the bucket entirely.
+          characters: {
+            variations: [
+              { label: "Ash", prompt: "young survivor with iron rebar" },
+              { label: "Roan", prompt: "weathered scavenger" },
+            ],
+          },
+        },
+      });
+      expect(w.categories.characters).toBeUndefined();
+      const ash = w.characters.find((c) => c.name === "Ash");
+      const roan = w.characters.find((c) => c.name === "Roan");
+      expect(ash).toBeDefined();
+      expect(ash.prompt).toBe("young survivor with iron rebar");
+      expect(roan).toBeDefined();
+    });
+
+    it("WORLD_CATEGORIES no longer includes `characters`", () => {
+      expect(svc.WORLD_CATEGORIES).not.toContain("characters");
+      expect(svc.WORLD_CATEGORIES).toEqual(
+        expect.arrayContaining(["landscapes", "environments", "structures", "vehicles"]),
+      );
+    });
+
+    it("kind round-trips through update", async () => {
+      const w = await seedWorld({
+        categories: { factions: { variations: [{ label: "Iron Reach", prompt: "x" }] } },
+      });
+      const patched = await svc.updateUniverse(w.id, {
+        categories: { factions: { kind: "characters", variations: [{ label: "Iron Reach", prompt: "x" }] } },
+      });
+      expect(patched.categories.factions.kind).toBe("characters");
+    });
+  });
+
   describe("sanitizers", () => {
     it("drops malformed variations on read", async () => {
       // Manually plant invalid state — sanitizeTemplate strips it on read.
@@ -775,6 +1126,82 @@ describe("universeBuilder service", () => {
     it("requires a name", async () => {
       await expect(svc.insertUniverseWithId({ id: "550e8400-e29b-41d4-a716-446655440002" }))
         .rejects.toMatchObject({ code: svc.ERR_VALIDATION });
+    });
+  });
+
+  // Regression for "Async PATCH races on shared records — serialize writes
+  // server-side" (CLAUDE.md). Each updateUniverse() now goes through a
+  // file-level write tail so a stale snapshot can't clobber a sibling write.
+  describe("write serialization", () => {
+    it("concurrent updates to the same universe preserve every field", async () => {
+      const u = await svc.createUniverse({ name: "Race" });
+      // Five concurrent PATCHes, each touching a different scalar field.
+      // Without the queue, every call reads the same pre-PATCH snapshot and
+      // the last writeState wins — only one field would survive.
+      await Promise.all([
+        svc.updateUniverse(u.id, { logline: "L1" }),
+        svc.updateUniverse(u.id, { premise: "P1" }),
+        svc.updateUniverse(u.id, { styleNotes: "S1" }),
+        svc.updateUniverse(u.id, { starterPrompt: "SP1" }),
+        svc.updateUniverse(u.id, { name: "N1" }),
+      ]);
+      const final = await svc.getUniverse(u.id);
+      expect(final.logline).toBe("L1");
+      expect(final.premise).toBe("P1");
+      expect(final.styleNotes).toBe("S1");
+      expect(final.starterPrompt).toBe("SP1");
+      expect(final.name).toBe("N1");
+    });
+
+    it("concurrent updates to DIFFERENT universes preserve every field", async () => {
+      // Per CLAUDE.md: a Map<id, Promise> is NOT enough — both universes
+      // share the same JSON file, so writes to different ids can still race.
+      // The single file-level tail covers this.
+      const a = await svc.createUniverse({ name: "A" });
+      const b = await svc.createUniverse({ name: "B" });
+      await Promise.all([
+        svc.updateUniverse(a.id, { logline: "A-line", premise: "A-premise" }),
+        svc.updateUniverse(b.id, { logline: "B-line", premise: "B-premise" }),
+      ]);
+      const fa = await svc.getUniverse(a.id);
+      const fb = await svc.getUniverse(b.id);
+      expect(fa.logline).toBe("A-line");
+      expect(fa.premise).toBe("A-premise");
+      expect(fb.logline).toBe("B-line");
+      expect(fb.premise).toBe("B-premise");
+    });
+
+    it("a rejecting write does not poison the queue", async () => {
+      // Force the rejection from INSIDE the queue (after the writeState would
+      // run) so this actually pins poison-recovery rather than passing through
+      // a fail-before-queue path. The first call's ERR_NOT_FOUND fires inside
+      // the queued closure (the universe-id lookup happens after `readState`).
+      const u = await svc.createUniverse({ name: "PoisonTest" });
+      const results = await Promise.allSettled([
+        svc.updateUniverse("nonexistent-universe", { logline: "X" }),
+        svc.updateUniverse(u.id, { logline: "ok" }),
+      ]);
+      expect(results[0].status).toBe("rejected");
+      expect(results[0].reason?.code).toBe(svc.ERR_NOT_FOUND);
+      expect(results[1].status).toBe("fulfilled");
+      const final = await svc.getUniverse(u.id);
+      expect(final.logline).toBe("ok");
+    });
+
+    it("concurrent recordRun + updateUniverse don't clobber each other", async () => {
+      const u = await svc.createUniverse({ name: "RunRace" });
+      await Promise.all([
+        svc.updateUniverse(u.id, { logline: "L" }),
+        svc.recordRun({ id: "run-1", universeId: u.id, promptCount: 5 }),
+        svc.updateUniverse(u.id, { premise: "P" }),
+        svc.recordRun({ id: "run-2", universeId: u.id, promptCount: 7 }),
+      ]);
+      const final = await svc.getUniverse(u.id);
+      const runs = await svc.listRuns(u.id);
+      expect(final.logline).toBe("L");
+      expect(final.premise).toBe("P");
+      expect(runs).toHaveLength(2);
+      expect(runs.map((r) => r.id).sort()).toEqual(["run-1", "run-2"]);
     });
   });
 });

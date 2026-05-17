@@ -4,6 +4,7 @@ import { Trash2, RotateCcw, MessageSquarePlus } from 'lucide-react';
 import * as api from '../services/api';
 import { formatTime, formatRuntime } from '../utils/formatters';
 import BrailleSpinner from '../components/BrailleSpinner';
+import { writeClipboardSilently } from '../lib/clipboard';
 
 export function RunsHistoryPage() {
   const navigate = useNavigate();
@@ -304,7 +305,7 @@ export function RunsHistoryPage() {
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
-                              navigator.clipboard?.writeText(run.id).catch(() => {});
+                              writeClipboardSilently(run.id);
                             }}
                             className="p-1 text-gray-500 hover:text-white transition-colors"
                             title="Copy execution ID"

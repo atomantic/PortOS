@@ -319,6 +319,7 @@ export function sanitizeSeasonList(rawList, opts = {}) {
  * timestamps, and the canonical defaults.
  */
 export function buildSeason(input = {}) {
+  const now = nowIso();
   return sanitizeSeason({
     id: `${SEASON_ID_PREFIX}${randomUUID()}`,
     number: input.number,
@@ -329,7 +330,7 @@ export function buildSeason(input = {}) {
     themes: input.themes,
     endingHook: input.endingHook,
     status: input.status,
-    createdAt: nowIso(),
-    updatedAt: nowIso(),
+    createdAt: now,
+    updatedAt: now,
   });
 }

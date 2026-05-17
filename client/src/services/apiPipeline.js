@@ -1,4 +1,4 @@
-import { request, API_BASE } from './apiCore.js';
+import { request } from './apiCore.js';
 import { buildFormData } from './apiImageVideo.js';
 
 // Stage IDs mirror server/services/pipeline/issues.js — keep these in sync.
@@ -92,6 +92,19 @@ export const deletePipelineSeries = (id) => request(`/pipeline/series/${encodeUR
   method: 'DELETE',
 });
 
+// `requestOptions` flows to apiCore.request — pass `{ silent: true }` when the
+// caller owns its own error UX (fire-and-forget on post-create).
+export const generateSeriesTitleLogo = (id, opts = {}, requestOptions = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(id)}/generate-title-logo`, {
+    method: 'POST',
+    body: JSON.stringify(opts),
+    ...requestOptions,
+  });
+
+// Mirror server caps in `server/services/pipeline/series.js` — bump both sides.
+export const SERIES_TITLE_LOGO_MAX = 2000;
+export const SERIES_AUTHOR_MAX = 120;
+
 // ---- Issues ----
 export const listPipelineIssues = (seriesId) =>
   request(`/pipeline/series/${encodeURIComponent(seriesId)}/issues`);
@@ -177,6 +190,21 @@ export const generatePipelineComicBackCover = (issueId, opts = {}, options = {})
     ...options,
   });
 
+// Ask the LLM to propose front + back cover concepts for one comic issue.
+// `opts.target` ('cover' | 'backCover' | 'both', default 'both') gates which
+// slot(s) get seeded when `commit: true` — the UI button on each card sends
+// its own target so the user can regenerate one card's concept without
+// touching the other. Seeds only blank scripts; never clobbers a user edit.
+// Returns { coverConcept, backCoverConcept, target, seeded, … }; the
+// `issue` and `stage` fields are only populated when `commit: true` (the
+// preview-only path returns them as null).
+export const generatePipelineComicCoverConcepts = (issueId, opts = {}, options = {}) =>
+  request(`/pipeline/issues/${encodeURIComponent(issueId)}/cover-concepts/generate`, {
+    method: 'POST',
+    body: JSON.stringify(opts),
+    ...options,
+  });
+
 // Volume (season) cover render. Persists in-flight slot on
 // series.seasons[].cover via the season write tail.
 // Returns { jobId, mode, prompt, coverScript, season, series, variant, fromProof }.
@@ -200,10 +228,11 @@ export const generatePipelineVolumeBackCover = (seriesId, seasonId, opts = {}, o
 // `season.backCover.script` when those slots are currently blank (the
 // server never clobbers a user edit). Returns the proposed text plus the
 // updated season + series records.
-export const generatePipelineVolumeCoverConcepts = (seriesId, seasonId, opts = {}) =>
+export const generatePipelineVolumeCoverConcepts = (seriesId, seasonId, opts = {}, options = {}) =>
   request(`/pipeline/series/${encodeURIComponent(seriesId)}/seasons/${encodeURIComponent(seasonId)}/cover-concepts/generate`, {
     method: 'POST',
     body: JSON.stringify(opts),
+    ...options,
   });
 
 // Build the trade-paperback PDF download URL for one volume. Used as an
@@ -397,23 +426,14 @@ export const patchPipelineAudioLine = (issueId, lineIdx, patch) =>
 export const listPipelineMusicLibrary = () =>
   request('/pipeline/audio/music-library');
 
-// Bypasses `request()` because that helper hard-codes
-// `Content-Type: application/json`, which conflicts with FormData's
-// auto-generated multipart boundary.
-export const uploadPipelineMusicTrack = async (issueId, file, { label } = {}) => {
-  const res = await fetch(
-    `${API_BASE}/pipeline/issues/${encodeURIComponent(issueId)}/stages/audio/music/upload`,
-    { method: 'POST', body: buildFormData({ track: file, label }) },
+// request() now detects FormData bodies and lets the browser set the multipart
+// boundary automatically — no need to bypass it. Accept `options` so callers
+// with their own error UI can pass `{ silent: true }`.
+export const uploadPipelineMusicTrack = (issueId, file, { label } = {}, options = {}) =>
+  request(
+    `/pipeline/issues/${encodeURIComponent(issueId)}/stages/audio/music/upload`,
+    { method: 'POST', body: buildFormData({ track: file, label }), ...options },
   );
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: res.statusText }));
-    const e = new Error(err.error || res.statusText);
-    e.code = err.code;
-    e.status = res.status;
-    throw e;
-  }
-  return res.json();
-};
 
 export const attachPipelineMusicTrack = (issueId, { trackFilename, label } = {}) =>
   request(`/pipeline/issues/${encodeURIComponent(issueId)}/stages/audio/music/attach`, {

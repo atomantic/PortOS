@@ -6,7 +6,7 @@
  *   GET    /api/universe-builder/:id                    → Universe
  *   PATCH  /api/universe-builder/:id                    → Universe
  *   DELETE /api/universe-builder/:id                    → { id }
- *   POST   /api/universe-builder/expand                 → { influences, categories, compositeSheets, llm }
+ *   POST   /api/universe-builder/expand                 → { logline, premise, styleNotes, influences, categories, compositeSheets, characters, settings, objects, llm }
  *   POST   /api/universe-builder/:id/render             → { runId, collectionId, jobIds, promptCount }
  *   GET    /api/universe-builder/:id/runs               → Run[]
  */
@@ -18,13 +18,14 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import * as svc from '../services/universeBuilder.js';
 import * as canonSvc from '../services/universeCanon.js';
-import { BIBLE_KINDS } from '../lib/storyBible.js';
+import { BIBLE_KINDS, BIBLE_LIMITS } from '../lib/storyBible.js';
 import { getUniverseCanonUsage } from '../services/canonUsage.js';
 import { expandWorldTemplate, generateCategoryVariations } from '../services/universeBuilderExpand.js';
 import { refineWorldPrompts } from '../services/universeBuilderRefine.js';
+import { promoteVariationToCanon, VALID_TARGET_KINDS } from '../services/universeBuilderPromote.js';
 import { enqueueJob } from '../services/mediaJobQueue/index.js';
 import { getSettings } from '../services/settings.js';
-import { findOrCreateCollectionByName, NAME_MAX_LENGTH as COLLECTION_NAME_MAX } from '../services/mediaCollections.js';
+import { findOrCreateUniverseCollection } from '../services/mediaCollections.js';
 import { registerUniverseBuilderRun } from '../services/universeBuilderCollectionHook.js';
 import { getImageModels, isFlux2, isZImage, isErnie } from '../lib/mediaModels.js';
 
@@ -57,6 +58,11 @@ const compositeSheetSchema = z.object({
   locked: z.boolean().optional(),
 });
 const categoryShape = z.object({
+  // Tags this bucket to one of the 3 canon trunks (or 'other' as the
+  // un-classified sink). Optional on input — sanitizeCategories resolves a
+  // sensible default from the built-in map (landscapes→settings etc.) or
+  // falls to 'other'. Added in schema v4.
+  kind: z.enum(svc.CATEGORY_KINDS).optional(),
   variations: z.array(variationSchema).max(svc.VARIATIONS_PER_CATEGORY_MAX),
 });
 const categoriesSchema = z.record(
@@ -180,6 +186,17 @@ const expandSchema = z.object({
   model: z.string().trim().max(200).optional(),
 });
 
+// `targetKind` is only required when the source bucket's `kind` is 'other'
+// (otherwise the service resolves it from the bucket). Enum derived from
+// VALID_TARGET_KINDS so the schema and the resolver share one source.
+const promoteVariationSchema = z.object({
+  category: z.string().trim().min(1).max(svc.WORLD_CATEGORY_KEY_MAX),
+  label: z.string().trim().min(1).max(svc.VARIATION_LABEL_MAX),
+  targetKind: z.enum(VALID_TARGET_KINDS).optional(),
+  providerId: z.string().trim().max(80).optional(),
+  model: z.string().trim().max(200).optional(),
+});
+
 const generateVariationsSchema = z.object({
   category: z.string().trim().min(1).max(svc.WORLD_CATEGORY_KEY_MAX),
   count: z.number().int().min(1).max(svc.VARIATIONS_PER_CATEGORY_MAX),
@@ -232,10 +249,30 @@ const selectionSchema = z.record(
   message: `selection cannot exceed ${svc.WORLD_CATEGORY_COUNT_MAX} buckets`,
 });
 
+// `canonSelection` per trunk: 'all' or array of canon-entry names (case-insensitive).
+// Settings entries also match on `slugline` so a render queued from the Places
+// tab can target an entry the user filed by slugline ("INT. FOUNDRY — DAY").
+// Per-trunk cap mirrors the bible sanitizer (`ENTRIES_PER_BIBLE_MAX`) so this
+// can't enqueue more entries than the server actually persists; per-string cap
+// uses the looser of `NAME_MAX` / `SLUGLINE_MAX` so a settings entry filed by
+// slugline isn't rejected if those limits ever diverge (both 200 today).
+const CANON_TRUNK_KEYS = ['characters', 'settings', 'objects'];
+const CANON_NEEDLE_MAX = Math.max(BIBLE_LIMITS.NAME_MAX, BIBLE_LIMITS.SLUGLINE_MAX);
+const canonSelectionValueSchema = z.union([
+  z.literal('all'),
+  z.array(z.string().trim().min(1).max(CANON_NEEDLE_MAX)).max(BIBLE_LIMITS.ENTRIES_PER_BIBLE_MAX),
+]);
+const canonSelectionSchema = z.object(
+  Object.fromEntries(CANON_TRUNK_KEYS.map((k) => [k, canonSelectionValueSchema.optional()])),
+).strict();
+
 const renderSchema = z.object({
-  // Optional friendly name for the resulting collection. If omitted, server
-  // synthesizes "Universe: <name> (timestamp)".
-  collectionName: z.string().trim().min(1).max(COLLECTION_NAME_MAX).optional(),
+  // Removed: callers that still send `collectionName` get an explicit 400
+  // (see the .refine() below) instead of a confusing silent no-op. The
+  // canonical "Universe: <name>" identity is owned by the universe and
+  // enforced by the rename-lock — per-render overrides have no semantic
+  // home in that model.
+  collectionName: z.unknown().optional(),
   // Image-gen knobs — these mirror /api/image-gen/generate so the user can
   // pick mode/size/steps without bouncing to the Image page first.
   mode: z.enum(['external', 'local', 'codex']).optional(),
@@ -247,10 +284,14 @@ const renderSchema = z.object({
   guidance: z.number().min(0).max(30).optional(),
   quantize: z.enum(['3', '4', '5', '6', '8']).optional(),
   // Per-variation render count and per-category subset.
-  promptMode: z.enum(['variations', 'sheets', 'all']).optional().default('variations'),
+  promptMode: z.enum(['variations', 'sheets', 'canon', 'all']).optional().default('variations'),
   batchPerVariation: z.number().int().min(1).max(20).optional().default(1),
   selection: selectionSchema.optional(),
   sheetSelection: z.union([z.literal('all'), z.array(z.string().trim().min(1).max(svc.VARIATION_LABEL_MAX)).max(svc.COMPOSITE_SHEETS_MAX)]).optional(),
+  canonSelection: canonSelectionSchema.optional(),
+}).refine((body) => body.collectionName === undefined, {
+  message: 'collectionName is no longer supported — the linked collection follows the universe name automatically. Remove this field.',
+  path: ['collectionName'],
 });
 
 router.get('/', asyncHandler(async (_req, res) => {
@@ -312,10 +353,11 @@ router.post('/:id/render', asyncHandler(async (req, res) => {
     promptMode: body.promptMode,
     selection: body.selection,
     sheetSelection: body.sheetSelection,
+    canonSelection: body.canonSelection,
     batchPerVariation: body.batchPerVariation,
   });
   if (!compiled.length) {
-    throw new ServerError('No prompts to render — add variations or composite sheets first', {
+    throw new ServerError('No prompts to render — add canon entries, variations, or composite sheets first', {
       status: 400, code: 'WORLD_BUILDER_EMPTY',
     });
   }
@@ -360,16 +402,16 @@ router.post('/:id/render', asyncHandler(async (req, res) => {
 
   // Provision the collection up front so renders can be tagged as they
   // complete. The completion hook (universeBuilderCollectionHook) will add
-  // each finished image's filename to this collection. Repeat renders of
-  // the same universe reuse the existing `Universe: <name>` bucket so per-universe
-  // output accumulates in one place instead of fragmenting into a fresh
-  // date-suffixed collection per run.
-  const collectionName = body.collectionName?.trim()
-    || `Universe: ${universe.name}`;
-  const collection = await findOrCreateCollectionByName({
-    name: collectionName.slice(0, COLLECTION_NAME_MAX),
-    description: `Universe Builder renders for "${universe.name}"`,
+  // each finished image's filename to this collection. Resolution is
+  // universeId-first (not name-first) so a re-render finds the existing
+  // linked bucket even if the universe was hand-renamed or another
+  // universe happens to share the same display name. Name-only matching
+  // would either fork the bucket on rename or hijack a foreign universe's
+  // collection — the atomic helper rules out both.
+  const collection = await findOrCreateUniverseCollection({
     universeId: universe.id,
+    universeName: universe.name,
+    description: `Universe Builder renders for "${universe.name}"`,
   });
 
   const runId = randomUUID();
@@ -462,6 +504,18 @@ const extractCanonSchema = z.object({
 router.post('/:id/extract-canon', asyncHandler(async (req, res) => {
   const body = validateRequest(extractCanonSchema, req.body ?? {});
   const result = await canonSvc.extractCanonFromProse(req.params.id, body)
+    .catch((err) => { throw mapServiceError(err); });
+  res.json(result);
+}));
+
+// Promote a {label, prompt} variation into a full canon entry of the
+// corresponding trunk (resolved from the bucket's `kind` field, or the
+// caller-supplied `targetKind` for 'other'-kinded buckets). The variation
+// is removed from its source bucket and the canon entry is appended in a
+// single atomic patch.
+router.post('/:id/promote-variation', asyncHandler(async (req, res) => {
+  const body = validateRequest(promoteVariationSchema, req.body ?? {});
+  const result = await promoteVariationToCanon(req.params.id, body)
     .catch((err) => { throw mapServiceError(err); });
   res.json(result);
 }));
