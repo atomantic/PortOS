@@ -1519,22 +1519,45 @@ function totalVariationCount(world) {
   return getCategoryKeys(world.categories).reduce((n, c) => n + (world.categories?.[c]?.variations?.length || 0), 0);
 }
 
-// Match server-side `synthesizeCanonPrompt`: entries with no identity-anchor
-// (name / slugline / hand-authored prompt) AND no descriptive content compile
-// to an empty seed and get skipped. Mirror the predicate here so the "Render N
-// images" button count doesn't overshoot what the server will actually enqueue.
-const canonEntryHasContent = (e) => Boolean(
-  e?.name || e?.slugline || e?.prompt
-  || e?.physicalDescription || e?.description || e?.palette
-  || e?.recurringDetails || e?.role || e?.significance,
-);
+// Match server-side `synthesizeCanonPrompt` (server/services/universeBuilder.js)
+// per-kind: entries with no identity-anchor (name / slugline / hand-authored
+// prompt) AND no descriptive content for that kind compile to an empty seed and
+// get skipped. Mirror the predicate here so the "Render N images" button count
+// doesn't overshoot what the server will actually enqueue.
+//
+// IMPORTANT: keep the per-kind field lists in sync with server's
+// `synthesizeCanonPrompt`. Drift between client/server here makes scoped render
+// counts and disabled states lie about what will actually be enqueued.
+const canonEntryHasContent = (e, kind) => {
+  if (!e) return false;
+  if (e.name || e.slugline) return true;
+  if (typeof e.prompt === 'string' && e.prompt.trim()) return true;
+  if (kind === 'characters') {
+    return Boolean(e.physicalDescription || e.role);
+  }
+  if (kind === 'settings') {
+    return Boolean(e.description || e.palette || e.era || e.weather || e.recurringDetails);
+  }
+  if (kind === 'objects') {
+    return Boolean(e.description || e.significance);
+  }
+  // Unknown kind — fall back to the inclusive union so an unrecognized trunk
+  // doesn't silently collapse to 0.
+  return Boolean(
+    e.physicalDescription || e.description || e.palette || e.era || e.weather
+    || e.recurringDetails || e.role || e.significance,
+  );
+};
+
+const countCanonWithContent = (world, kind) =>
+  (Array.isArray(world?.[kind]) ? world[kind] : []).filter((e) => canonEntryHasContent(e, kind)).length;
 
 function renderPromptCount(world, promptMode = 'variations') {
   const variations = totalVariationCount(world);
   const sheets = world.compositeSheets?.length || 0;
-  const canon = (world.characters || []).filter(canonEntryHasContent).length
-    + (world.settings || []).filter(canonEntryHasContent).length
-    + (world.objects || []).filter(canonEntryHasContent).length;
+  const canon = countCanonWithContent(world, 'characters')
+    + countCanonWithContent(world, 'settings')
+    + countCanonWithContent(world, 'objects');
   if (promptMode === 'sheets') return sheets;
   if (promptMode === 'canon') return canon;
   if (promptMode === 'all') return variations + sheets + canon;
@@ -1544,19 +1567,28 @@ function renderPromptCount(world, promptMode = 'variations') {
 // Mirrors the server's compilePrompts for selection/sheetSelection/canonSelection
 // so an inline "Render" button can disable itself + show an accurate count
 // without a round trip.
+//
+// Defaulting rules — mirror server/services/universeBuilder.js compilePrompts:
+//   - sheets/all + no sheetSelection → render every sheet (server defaults to 'all')
+//   - variations/all + no selection → render every category (server falls back
+//     to a full category map via getWorldCategoryKeys)
+//   - canon/all + no canonSelection → render NOTHING (server gates on a non-null
+//     canonSelection; missing key skips the trunk entirely)
+// Canon entries are filtered through `canonEntryHasContent(kind)` since the
+// server skips entries whose synthesized seed is empty.
 function scopedPromptCount(world, scope) {
   if (!scope) return 0;
   const mode = scope.promptMode || 'variations';
   let n = 0;
   if (mode === 'sheets' || mode === 'all') {
     const sheets = world.compositeSheets || [];
-    if (scope.sheetSelection === 'all') n += sheets.length;
-    else if (Array.isArray(scope.sheetSelection)) {
+    if (scope.sheetSelection === 'all' || scope.sheetSelection === undefined || scope.sheetSelection === null) {
+      // Both `sheets` and `all` default to every sheet when sheetSelection is
+      // omitted — server: `options.sheetSelection || 'all'`.
+      n += sheets.length;
+    } else if (Array.isArray(scope.sheetSelection)) {
       const set = new Set(scope.sheetSelection.map((s) => s.toLowerCase()));
       n += sheets.filter((s) => set.has((s.label || '').toLowerCase())).length;
-    } else if (mode === 'sheets') {
-      // promptMode=sheets with no selection = render every sheet
-      n += sheets.length;
     }
   }
   if (mode === 'variations' || mode === 'all') {
@@ -1569,6 +1601,9 @@ function scopedPromptCount(world, scope) {
           n += vars.filter((v) => labels.has((v.label || '').toLowerCase())).length;
         }
       }
+    } else {
+      // No selection ⇒ server treats this as "every category, all variations".
+      n += totalVariationCount(world);
     }
   }
   if (mode === 'canon' || mode === 'all') {
@@ -1577,10 +1612,11 @@ function scopedPromptCount(world, scope) {
         const pick = scope.canonSelection[trunk];
         if (!pick) continue;
         const entries = Array.isArray(world[trunk]) ? world[trunk] : [];
-        if (pick === 'all') n += entries.length;
+        const withContent = entries.filter((e) => canonEntryHasContent(e, trunk));
+        if (pick === 'all') n += withContent.length;
         else if (Array.isArray(pick)) {
           const needles = new Set(pick.map((p) => p.toLowerCase()));
-          n += entries.filter((e) => {
+          n += withContent.filter((e) => {
             const name = (e.name || '').toLowerCase();
             const slug = (e.slugline || '').toLowerCase();
             return needles.has(name) || needles.has(slug);
@@ -2404,8 +2440,14 @@ function TrunkView({
   onAddBucket,
 }) {
   const canonList = Array.isArray(draft[trunk.kind]) ? draft[trunk.kind] : [];
+  // Only count canon entries the server will actually compile — mirror the
+  // `synthesizeCanonPrompt`-empty-seed skip via `canonEntryHasContent`. Without
+  // this, "Bulk-render all (N)" would advertise more images than land, and the
+  // server can 400 with WORLD_BUILDER_EMPTY when every entry under the trunk
+  // synthesizes to nothing.
+  const canonRenderable = canonList.filter((e) => canonEntryHasContent(e, trunk.kind)).length;
   const totalUnderTrunk =
-    canonList.length
+    canonRenderable
     + buckets.reduce((n, k) => n + (draft.categories?.[k]?.variations?.length || 0), 0);
   const [addingBucket, setAddingBucket] = useState(false);
   const [newBucketName, setNewBucketName] = useState('');
@@ -2556,9 +2598,8 @@ function OtherTab({
           <button
             type="button"
             onClick={onAutoSort}
-            disabled
-            className="text-xs px-2 py-1.5 bg-port-accent/15 disabled:opacity-50 text-port-accent rounded flex items-center gap-1 min-h-[32px]"
-            title="Auto-sort with AI — coming soon"
+            className="text-xs px-2 py-1.5 bg-port-accent/15 hover:bg-port-accent/25 text-port-accent rounded flex items-center gap-1 min-h-[32px]"
+            title="Auto-sort with AI — shows guidance until the dedicated endpoint lands (tracked in PLAN.md)"
           >
             <Wand2 size={12} /> Auto-sort with AI
           </button>
@@ -2596,10 +2637,12 @@ function RenderTab({
 }) {
   const totalSheets = draft.compositeSheets?.length || 0;
   const totalVariations = totalVariationCount(draft);
-  const totalCanon =
-    (draft.characters?.length || 0)
-    + (draft.settings?.length || 0)
-    + (draft.objects?.length || 0);
+  // Mirror server-side compile skip rules — `renderPromptCount` already filters
+  // canon via `canonEntryHasContent`, so the "All canon (N)" option label and
+  // the actual enqueued count agree.
+  const totalCanon = countCanonWithContent(draft, 'characters')
+    + countCanonWithContent(draft, 'settings')
+    + countCanonWithContent(draft, 'objects');
   const renderTotal = renderPromptCount(draft, renderOpts.promptMode || 'variations');
 
   return (
@@ -2695,7 +2738,10 @@ function RenderTab({
         <div className="flex flex-col gap-2">
           {TRUNK_TABS.map((trunk) => {
             const buckets = bucketsByKind[trunk.kind] || [];
-            const canonCount = (draft[trunk.kind] || []).length;
+            // Use the synthesizable count for both the display label and the
+            // "Bulk-render all" total so the button advertises the number that
+            // will actually land on the server.
+            const canonCount = countCanonWithContent(draft, trunk.kind);
             const variationCount = buckets.reduce((n, k) => n + (draft.categories?.[k]?.variations?.length || 0), 0);
             const total = canonCount + variationCount;
             if (total === 0) return null;
@@ -2749,13 +2795,13 @@ function RenderTab({
               </div>
             );
           })}
-          {(draft.characters?.length || draft.settings?.length || draft.objects?.length) ? (
+          {totalCanon > 0 ? (
             <div className="border border-port-border rounded p-2 bg-port-bg flex items-center justify-between gap-2">
               <span className="text-sm text-gray-200 flex items-center gap-2">
                 <Sparkles size={14} className="text-port-accent" />
                 All canon
                 <span className="text-[11px] text-gray-500">
-                  {(draft.characters?.length || 0) + (draft.settings?.length || 0) + (draft.objects?.length || 0)} entries
+                  {totalCanon} entr{totalCanon === 1 ? 'y' : 'ies'}
                 </span>
               </span>
               <button

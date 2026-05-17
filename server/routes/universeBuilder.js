@@ -343,7 +343,7 @@ router.post('/:id/render', asyncHandler(async (req, res) => {
     batchPerVariation: body.batchPerVariation,
   });
   if (!compiled.length) {
-    throw new ServerError('No prompts to render — add variations or composite sheets first', {
+    throw new ServerError('No prompts to render — add canon entries, variations, or composite sheets first', {
       status: 400, code: 'WORLD_BUILDER_EMPTY',
     });
   }
