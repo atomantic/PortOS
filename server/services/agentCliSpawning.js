@@ -13,6 +13,8 @@ import { homedir } from 'os';
 import { cosEvents } from './cosEvents.js';
 import { updateAgent, completeAgent, appendAgentOutput } from './cosAgents.js';
 import { registerSpawnedAgent, unregisterSpawnedAgent } from './agents.js';
+import { release } from './executionLanes.js';
+import { completeExecution, errorExecution } from './toolStateMachine.js';
 import { analyzeAgentFailure } from './agentErrorAnalysis.js';
 import { completeAgentRun } from './agentRunTracking.js';
 import { finalizeAgent } from './agentLifecycle.js';

@@ -1031,7 +1031,7 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
       const id = task.id || '';
       task.taskType = isInternalTaskId(id) ? 'internal' : 'user';
     }
-  
+
     // Read output from agent directory
     const agentDir = join(AGENTS_DIR, agentId);
     const outputFile = join(agentDir, 'output.txt');
@@ -1039,7 +1039,7 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
     if (existsSync(outputFile)) {
       outputBuffer = await readFile(outputFile, 'utf-8').catch(() => '');
     }
-  
+
     // Post-execution validation: check for task commit even if exit code is non-zero
     let effectiveSuccess = success;
     if (!effectiveSuccess && task?.id) {
@@ -1050,10 +1050,10 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
         effectiveSuccess = true;
       }
     }
-  
+
     // Analyze failure if applicable
     const errorAnalysis = effectiveSuccess ? null : analyzeAgentFailure(outputBuffer, task, model);
-  
+
     // Extract pipeline output summary before completion writes metadata to disk
     if (task?.metadata?.pipeline && effectiveSuccess) {
       const workspacePath = agent.workspacePath || ROOT_DIR;
@@ -1065,7 +1065,7 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
         await updateAgent(agentId, { metadata: { outputSummary: summary } });
       }
     }
-  
+
     await finalizeAgent({
       agentId,
       task,
@@ -1080,20 +1080,20 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
       executionId,
       isTruthyMetaFn: isTruthyMeta,
     });
-  
+
     // Fetch agent state once for JIRA and plan-question blocks
     const { getAgent: getAgentState } = await import('./cos.js');
     const agentState = await getAgentState(agentId).catch(() => null);
-  
+
     // JIRA integration: push branch, create PR, comment on ticket
     const jiraTicketId = agent.task?.metadata?.jiraTicketId;
     const jiraBranch = agent.task?.metadata?.jiraBranch;
     const jiraInstanceId = agent.task?.metadata?.jiraInstanceId;
     const jiraCreatePR = agent.task?.metadata?.jiraCreatePR;
-  
+
     if (jiraTicketId && jiraBranch && success) {
       const workspace = agentState?.metadata?.workspacePath || ROOT_DIR;
-  
+
       let jiraTicketUrl = agent.task?.metadata?.jiraTicketUrl || null;
       if (!jiraTicketUrl && jiraInstanceId) {
         const jiraConfig = await jiraService.getInstances().catch(() => null);
@@ -1101,22 +1101,22 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
         if (baseUrl) jiraTicketUrl = `${baseUrl}/browse/${jiraTicketId}`;
       }
       const jiraTicketRef = jiraTicketUrl ? `[${jiraTicketId}](${jiraTicketUrl})` : jiraTicketId;
-  
+
       await git.push(workspace, jiraBranch).catch(err => {
         emitLog('warn', `Failed to push JIRA branch ${jiraBranch}: ${err.message}`, { agentId, ticketId: jiraTicketId });
       });
-  
+
       let prUrl = null;
       if (jiraCreatePR !== false) {
         const { baseBranch, devBranch } = await git.getRepoBranches(workspace).catch(() => ({ baseBranch: null, devBranch: null }));
         const targetBranch = devBranch || baseBranch || 'main';
-  
+
         const jiraPrBody = await git.generatePRDescription(workspace, targetBranch, jiraBranch, outputBuffer);
         const jiraPrBodyWithRef = `Resolves ${jiraTicketRef}\n\n${jiraPrBody}`;
-  
+
         const baseTitle = await git.suggestPRTitle(workspace, targetBranch, jiraBranch, task.description);
         const jiraPrTitle = `${jiraTicketId}: ${baseTitle}`.substring(0, 100);
-  
+
         const prResult = await git.createPR(workspace, {
           title: jiraPrTitle,
           body: jiraPrBodyWithRef,
@@ -1126,13 +1126,13 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
           emitLog('warn', `Failed to create PR for ${jiraTicketId}: ${err.message}`, { agentId });
           return null;
         });
-  
+
         if (prResult?.success) {
           prUrl = prResult.url;
           emitLog('success', `Created PR: ${prUrl}`, { agentId, ticketId: jiraTicketId });
         }
       }
-  
+
       if (jiraInstanceId) {
         const commentLines = [`Agent completed task successfully.`];
         if (prUrl) {
@@ -1144,26 +1144,26 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
           emitLog('warn', `Failed to comment on JIRA ticket ${jiraTicketId}: ${err.message}`, { agentId });
         });
       }
-  
+
       const { devBranch: dev, baseBranch: base } = await git.getRepoBranches(workspace).catch(() => ({ devBranch: null, baseBranch: null }));
       const returnBranch = dev || base || 'main';
       await git.checkout(workspace, returnBranch).catch(err => {
         emitLog('warn', `Failed to checkout back to ${returnBranch}: ${err.message}`, { agentId });
       });
     }
-  
+
     // Check for plan questions marker file (feature-ideas / plan-task needing user input)
     const planAnalysisType = task?.metadata?.analysisType;
     if (planAnalysisType === 'feature-ideas' || planAnalysisType === 'plan-task') {
       const planWorkspace = agentState?.metadata?.workspacePath || task?.metadata?.repoPath || ROOT_DIR;
       const markerPath = join(planWorkspace, '.plan-questions.md');
-  
+
       const markerContent = await readFile(markerPath, 'utf8').catch(() => null);
       if (markerContent) {
         const titleMatch = markerContent.match(/^#\s+Plan Question:\s*(.+)/m);
         const title = titleMatch?.[1]?.trim() || 'PLAN.md item needs your input';
         const appId = task.metadata?.app;
-  
+
         const { addNotification, NOTIFICATION_TYPES, PRIORITY_LEVELS } = await import('./notifications.js');
         await addNotification({
           type: NOTIFICATION_TYPES.PLAN_QUESTION,
@@ -1175,17 +1175,17 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
         }).catch(err => {
           emitLog('warn', `Failed to create plan_question notification: ${err.message}`, { agentId });
         });
-  
+
         await rm(markerPath).catch(() => {});
         emitLog('info', `📋 Plan question notification created: ${title}`, { agentId, appId });
       }
     }
-  
+
     // Advance pipeline to next stage if applicable
     if (task?.metadata?.pipeline) {
       await handlePipelineProgression(task, agentId, effectiveSuccess);
     }
-  
+
     // Advance Creative Director task chain if applicable. After a Creative
     // Director agent task (treatment or evaluate) finishes, the orchestrator
     // decides what comes next and enqueues it. Scene rendering and final
@@ -1197,7 +1197,7 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
       handleCreativeDirectorCompletion(task, agentId, effectiveSuccess)
         .catch((err) => console.log(`⚠️ creativeDirector completion hook failed: ${err.message}`));
     }
-  
+
     // Clean up worktree if agent was using one (skip merge when JIRA branch — PR handles merge)
     if (!jiraBranch) {
       const taskOpenPR = isTruthyMeta(agent.task?.metadata?.openPR);
@@ -1220,12 +1220,12 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
         agentOutput: outputBuffer,
         originalTask: task
       });
-  
+
       if (cleanupWarnings?.length > 0) {
         const { getAgent: getAgentForResult } = await import('./cos.js');
         const currentAgent = await getAgentForResult(agentId).catch(() => null);
         await updateAgent(agentId, { result: { ...currentAgent?.result, warnings: cleanupWarnings } });
-  
+
         const { addNotification, NOTIFICATION_TYPES, PRIORITY_LEVELS } = await import('./notifications.js');
         const appName = task?.metadata?.appName || task?.metadata?.app || 'PortOS';
         await addNotification({
@@ -1238,13 +1238,13 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
         }).catch(err => {
           emitLog('warn', `Failed to create cleanup warning notification: ${err.message}`, { agentId });
         });
-  
+
         void spawnMergeRecoveryTask(cleanupWarnings, agentId, task, appName, currentAgent?.metadata?.sourceWorkspace).catch(err => {
           emitLog('warn', `Failed to spawn merge recovery task: ${err.message}`, { agentId, taskId: task?.id });
         });
       }
     }
-  
+
   } finally {
     runnerAgents.delete(agentId);
   }
