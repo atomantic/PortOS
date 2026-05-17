@@ -1,5 +1,8 @@
-import { describe, it, expect } from 'vitest';
-import { cleanTuiResponse } from './tuiPromptRunner.js';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdtemp, rm, writeFile } from 'fs/promises';
+import { tmpdir } from 'os';
+import { join } from 'path';
+import { cleanTuiResponse, resolveTuiResponseText } from './tuiPromptRunner.js';
 
 // Targeted coverage for the cleanTuiResponse helper — it shapes what every
 // TUI-provider caller sees as the model response (paste-marker removal,
@@ -86,5 +89,92 @@ describe('cleanTuiResponse', () => {
       const raw = `\n\n[Pasted text #7 +1 lines]\n${prompt}\n\nA child rebuilds wonder in a green ruin.\n\n`;
       expect(cleanTuiResponse(raw, prompt)).toBe('A child rebuilds wonder in a green ruin.');
     });
+  });
+});
+
+// resolveTuiResponseText is the file-or-fallback chooser called from
+// executeTuiRun.finish. The PTY path is irreplicable in a unit test, so the
+// helper was extracted to make this decision (which is the actual new
+// behavior of the PR) testable in isolation.
+
+describe('resolveTuiResponseText', () => {
+  let tmpDir;
+  let responseFilePath;
+
+  beforeEach(async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), 'tui-response-test-'));
+    responseFilePath = join(tmpDir, 'tui-response.txt');
+  });
+  afterEach(async () => {
+    await rm(tmpDir, { recursive: true, force: true }).catch(() => null);
+  });
+
+  it('returns the response file contents trimmed and flags usedResponseFile=true on success', async () => {
+    await writeFile(responseFilePath, '\n  the prose body  \n');
+    const out = await resolveTuiResponseText({
+      success: true,
+      responseFilePath,
+      outputBuffer: 'screen chrome',
+      wrappedPrompt: 'wrapped',
+    });
+    expect(out).toEqual({ text: 'the prose body', usedResponseFile: true });
+  });
+
+  it('falls back to cleanTuiResponse(outputBuffer) when the file does not exist', async () => {
+    const out = await resolveTuiResponseText({
+      success: true,
+      responseFilePath: join(tmpDir, 'does-not-exist.txt'),
+      outputBuffer: '[Pasted text #1 +0 lines]\nfallback body',
+      wrappedPrompt: 'wrapped',
+    });
+    expect(out).toEqual({ text: 'fallback body', usedResponseFile: false });
+  });
+
+  it('falls back to cleanTuiResponse when the file exists but is empty', async () => {
+    await writeFile(responseFilePath, '');
+    const out = await resolveTuiResponseText({
+      success: true,
+      responseFilePath,
+      outputBuffer: 'fallback body',
+      wrappedPrompt: 'wrapped',
+    });
+    expect(out).toEqual({ text: 'fallback body', usedResponseFile: false });
+  });
+
+  it('falls back to cleanTuiResponse when the file is whitespace-only', async () => {
+    await writeFile(responseFilePath, '   \n\t  \n');
+    const out = await resolveTuiResponseText({
+      success: true,
+      responseFilePath,
+      outputBuffer: 'fallback body',
+      wrappedPrompt: 'wrapped',
+    });
+    expect(out).toEqual({ text: 'fallback body', usedResponseFile: false });
+  });
+
+  it('does NOT read the file when success=false — falls back unconditionally', async () => {
+    // A failed run shouldn't trust a partial file the model may have started
+    // writing. Even if the file exists with usable content, the caller
+    // rejects with an error and the response text path doesn't matter much
+    // — but the contract is: success=false ⇒ usedResponseFile=false.
+    await writeFile(responseFilePath, 'partial response that should not be used');
+    const out = await resolveTuiResponseText({
+      success: false,
+      responseFilePath,
+      outputBuffer: 'partial screen scrape',
+      wrappedPrompt: 'wrapped',
+    });
+    expect(out).toEqual({ text: 'partial screen scrape', usedResponseFile: false });
+  });
+
+  it('passes wrappedPrompt into cleanTuiResponse on the fallback path so prompt-echo elision strips the directive-wrapped prompt', async () => {
+    const wrappedPrompt = 'WRITE TO FILE INSTRUCTIONS AND TASK BODY — a long enough string to clear the 16-char guard';
+    const out = await resolveTuiResponseText({
+      success: true,
+      responseFilePath: join(tmpDir, 'absent.txt'),
+      outputBuffer: `${wrappedPrompt}\nthe model reply`,
+      wrappedPrompt,
+    });
+    expect(out).toEqual({ text: 'the model reply', usedResponseFile: false });
   });
 });

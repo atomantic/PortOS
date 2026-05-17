@@ -27,7 +27,7 @@
 
 import { spawn as ptySpawn } from 'node-pty';
 import { readFile } from 'fs/promises';
-import { join } from 'path';
+import { join, resolve } from 'path';
 import { ensureDir, PATHS } from './fileUtils.js';
 import { createStreamingAnsiStripper } from './ansiStrip.js';
 import { getRunsPath, finalizeRunRecord, emitRunStarted, registerActiveRun, unregisterActiveRun } from '../services/runner.js';
@@ -114,7 +114,14 @@ export async function executeTuiRun(runId, provider, prompt, cwd, onData, onComp
   // fundamentally lossy (box-drawing chars, "5%" cost meters, "bypass
   // permissions on" hints, etc. all bleed into the captured text). Ask the
   // model to write its final response to a file we'll read back instead.
-  const responseFilePath = join(runDir, 'tui-response.txt');
+  //
+  // `resolve()` is load-bearing: `runnerConfig.dataDir` defaults to the
+  // relative `'./data'`, and the TUI's cwd (`workingDir`) is frequently a
+  // different directory (universe/loop workspaces, target-app paths). A
+  // relative path embedded in the prompt would tell the LLM to write into
+  // its own cwd while the server reads from process.cwd() — different
+  // files, fallback every time.
+  const responseFilePath = resolve(runDir, 'tui-response.txt');
   const wrappedPrompt = `IMPORTANT — Output to file:
 When you have completed the task below, write your COMPLETE final response (and nothing else — no commentary, preamble, or wrapper text) to this exact absolute path using your file-writing tool:
 
@@ -195,22 +202,13 @@ ${prompt}`;
       // behind for the user to interact with.
       try { if (ptyProcess && !ptyProcess.killed) ptyProcess.kill(); } catch { /* already gone */ }
 
-      // Prefer the response file the TUI was directed to write — it contains
-      // the model's clean reply with no screen chrome. Fall back to the
-      // ANSI-stripped screen scrape (with paste markers + echoed prompt
-      // elided) only when the file is missing or empty.
-      let responseText = '';
-      let usedResponseFile = false;
-      if (success) {
-        const fileText = await readFile(responseFilePath, 'utf8').catch(() => null);
-        if (typeof fileText === 'string' && fileText.trim()) {
-          responseText = fileText.trim();
-          usedResponseFile = true;
-        }
-      }
-      if (!usedResponseFile) {
-        responseText = cleanTuiResponse(outputBuffer, wrappedPrompt);
-      }
+      // Prefer the response file the TUI was directed to write; fall back
+      // to the ANSI-stripped screen scrape when the file is missing/empty
+      // or the run didn't succeed. Logic lives in `resolveTuiResponseText`
+      // so it can be unit-tested without a live PTY.
+      const { text: responseText, usedResponseFile } = await resolveTuiResponseText({
+        success, responseFilePath, outputBuffer, wrappedPrompt,
+      });
 
       // Delegate run-record finalization (output.txt + metadata.json merge
       // + onRunCompleted/onRunFailed hooks + toolkit error analysis) to the
@@ -383,6 +381,27 @@ ${prompt}`;
  * `outputBuffer` is already clean). Don't strip again — it's a wasted scan
  * over up to 1MB of text.
  */
+/**
+ * Pick the TUI response text — preferring the file the model was directed
+ * to write, falling back to the cleaned screen scrape.
+ *
+ * Returns `{ text, usedResponseFile }`. `usedResponseFile` is true when the
+ * file existed and had non-empty trimmed content; false in every other
+ * case (file missing, empty, whitespace-only, or run did not succeed).
+ *
+ * Extracted out of `executeTuiRun.finish` so the file-read + fallback
+ * decision is testable without spawning a PTY.
+ */
+export async function resolveTuiResponseText({ success, responseFilePath, outputBuffer, wrappedPrompt }) {
+  if (success) {
+    const fileText = await readFile(responseFilePath, 'utf8').catch(() => null);
+    if (typeof fileText === 'string' && fileText.trim()) {
+      return { text: fileText.trim(), usedResponseFile: true };
+    }
+  }
+  return { text: cleanTuiResponse(outputBuffer, wrappedPrompt), usedResponseFile: false };
+}
+
 export function cleanTuiResponse(strippedText, prompt) {
   if (typeof strippedText !== 'string' || !strippedText) return '';
   let text = strippedText.replace(/\[Pasted text #\d+[^\]]*\]/g, '');
