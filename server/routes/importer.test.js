@@ -16,13 +16,21 @@ vi.mock('../services/importer.js', async () => {
   };
 });
 
-vi.mock('../services/universeBuilder.js', () => ({
-  ERR_NOT_FOUND: 'UNIVERSE_NOT_FOUND',
-}));
+// Spread the real modules so any export the route imports today or
+// adds tomorrow stays wired — only override what the route mutates
+// (currently nothing; both modules are read-only error-code surfaces
+// at the route layer, but a future change to e.g. `await
+// universeSvc.deleteUniverse(...)` from the route would otherwise
+// silently become `undefined()` under a hand-rolled mock).
+vi.mock('../services/universeBuilder.js', async () => {
+  const actual = await vi.importActual('../services/universeBuilder.js');
+  return { ...actual };
+});
 
-vi.mock('../services/pipeline/series.js', () => ({
-  ERR_NOT_FOUND: 'PIPELINE_SERIES_NOT_FOUND',
-}));
+vi.mock('../services/pipeline/series.js', async () => {
+  const actual = await vi.importActual('../services/pipeline/series.js');
+  return { ...actual };
+});
 
 // No mock for ../lib/storyArc.js — the real module is cheap and the
 // constants (`ARC_ROLES`, `ARC_SHAPE_IDS`) are the source of truth that

@@ -463,16 +463,27 @@ export async function commitImport({
     ['places',     BIBLE_KIND.SETTING,   'settings'],
     ['objects',    BIBLE_KIND.OBJECT,    'objects'],
   ];
-  const universePatch = Object.fromEntries(KIND_MAP.map(([selectionKey, kind, storageKey]) => [
-    storageKey,
-    mergeExtractedBible(
-      universe[storageKey] || [],
-      canonSelections[selectionKey] || [],
-      kind,
-      { source: 'imported' },
-    ),
-  ]));
-  const updatedUniverse = await updateUniverse(universe.id, universePatch);
+  // Only merge kinds the user actually supplied entries for — calling
+  // mergeExtractedBible with an empty list still rebuilds the array and
+  // re-stamps timestamps, churning the file write for no behavior change.
+  const universePatch = Object.fromEntries(
+    KIND_MAP
+      .filter(([selectionKey]) => (canonSelections[selectionKey] || []).length > 0)
+      .map(([selectionKey, kind, storageKey]) => [
+        storageKey,
+        mergeExtractedBible(
+          universe[storageKey] || [],
+          canonSelections[selectionKey],
+          kind,
+          { source: 'imported' },
+        ),
+      ]),
+  );
+  // If the user supplied no canon at all (arc-only import), skip the
+  // updateUniverse round-trip entirely.
+  const updatedUniverse = Object.keys(universePatch).length > 0
+    ? await updateUniverse(universe.id, universePatch)
+    : universe;
 
   // sanitizeArc returns null on an entirely-empty payload — leave
   // series.arc untouched in that case.
@@ -491,12 +502,33 @@ export async function commitImport({
     const existingByNumber = new Map(
       existingSeasons.filter((s) => Number.isFinite(s.number)).map((s) => [s.number, s]),
     );
+    // Auto-assign sequential numbers to incoming seasons that omit one
+    // (the route schema allows omission). Without this, multiple
+    // unnumbered seasons would all default to `1` and silently collapse.
+    // Resolution: scan max-of-(existing ∪ already-assigned-in-this-call)
+    // and pick `max + 1` for each unnumbered season.
+    const usedNumbers = new Set([...existingByNumber.keys()]);
+    for (const s of seasons) {
+      if (Number.isInteger(s?.number) && s.number >= 1) usedNumbers.add(s.number);
+    }
+    let nextFreeNumber = (usedNumbers.size === 0) ? 1 : Math.max(...usedNumbers) + 1;
+    const nowIso = new Date().toISOString();
     const incomingBuilt = seasons.map((s) => {
-      const num = s.number ?? 1;
+      let num;
+      if (Number.isInteger(s?.number) && s.number >= 1) {
+        num = s.number;
+      } else {
+        num = nextFreeNumber++;
+      }
       const existing = existingByNumber.get(num);
+      const titleChanged = !!(s.title && existing && s.title !== existing.title);
+      const loglineChanged = !!(s.logline && existing && s.logline !== existing.logline);
+      const synopsisChanged = !!(s.synopsis && existing && s.synopsis !== existing.synopsis);
       if (existing) {
-        // Preserve the existing season's id and timestamps — re-import with
-        // the same season number is a metadata refresh, not a new season.
+        // Preserve the existing season's id — re-import with the same
+        // season number is a metadata refresh, not a new season. Bump
+        // `updatedAt` only when an importable field actually changed so
+        // LWW reasoning and "last edited" UIs stay accurate.
         return {
           ...existing,
           title: s.title || existing.title || `Season ${num}`,
@@ -504,6 +536,7 @@ export async function commitImport({
           synopsis: s.synopsis || existing.synopsis || '',
           endingHook: s.endingHook || existing.endingHook || '',
           episodeCountTarget: s.episodeCountTarget ?? existing.episodeCountTarget ?? 0,
+          ...((titleChanged || loglineChanged || synopsisChanged) ? { updatedAt: nowIso } : {}),
         };
       }
       return buildSeason({
