@@ -32,7 +32,7 @@ import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { composeStyledPrompt } from '../lib/composeStyledPrompt.js';
 import {
   sanitizeBibleList, BIBLE_KIND, BIBLE_FIELD, BIBLE_LIMITS, BIBLE_SOURCE,
-  normalizeBibleName, findBibleEntryByName, isStr, trimTo,
+  normalizeBibleName, isStr, trimTo,
 } from '../lib/storyBible.js';
 import { sanitizeOrigin } from '../lib/sharingOrigin.js';
 import { emitRecordUpdated, emitRecordDeleted } from './sharing/recordEvents.js';
@@ -476,14 +476,31 @@ function foldRetiredCharactersBucket(raw, canon) {
     settings: canon.settings,
     objects: canon.objects,
   };
-  // Look up against the live `next.characters` array so a variation pushed
-  // on iteration N is visible to iteration N+1 — dedup-within-batch is
-  // implicit (no separate seen-set needed).
+  // Index existing canon character names AND aliases — server-side
+  // MERGE_CONFIG.character treats both as identity keys, so a retired-bucket
+  // variation matching an existing alias should collide and NOT create a
+  // duplicate. Without alias indexing, an "Ashley" character with alias
+  // "Ash" plus a `categories.characters: [{label: "Ash"}]` payload would
+  // produce two records. We keep a Set (rather than re-scanning the live
+  // array via findBibleEntryByName each iteration) so the per-variation
+  // membership test stays O(1) — folding a large retired bucket against a
+  // large canon would otherwise be O(n*m).
+  const seen = new Set();
+  for (const e of next.characters) {
+    if (e?.name) seen.add(normalizeBibleName(e.name));
+    if (Array.isArray(e?.aliases)) {
+      for (const alias of e.aliases) {
+        const key = normalizeBibleName(alias);
+        if (key) seen.add(key);
+      }
+    }
+  }
   for (const variation of variations) {
     const labelSource = typeof variation === 'string' ? variation : variation?.label;
     const label = trimTo(labelSource, BIBLE_LIMITS.NAME_MAX);
     if (!label) continue;
-    if (findBibleEntryByName(next.characters, label)) continue;
+    const nameKey = normalizeBibleName(label);
+    if (seen.has(nameKey)) continue;
     // Do NOT cap by length here against raw canon entries — they haven't
     // been sanitized yet, and a malformed bunch of pre-existing entries
     // could cause this fold to skip legitimate variations. sanitizeBibleList
@@ -497,6 +514,7 @@ function foldRetiredCharactersBucket(raw, canon) {
     };
     if (typeof variation === 'object' && variation?.locked === true) entry.locked = true;
     next.characters.push(entry);
+    seen.add(nameKey);
   }
   return next;
 }
