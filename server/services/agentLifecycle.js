@@ -820,17 +820,17 @@ export async function finalizeAgent({
     // Lazy provider lookup — only resolve the active provider when a marker
     // fires AND the caller didn't already know the id. This keeps the
     // successful-completion hot path free of a settings-file read.
-    const markerPid = errorAnalysis.category === 'usage-limit' || errorAnalysis.category === 'rate-limit'
+    const markerProviderId = errorAnalysis.category === 'usage-limit' || errorAnalysis.category === 'rate-limit'
       ? providerId || (await getActiveProvider())?.id
       : null;
-    if (markerPid && errorAnalysis.category === 'usage-limit' && errorAnalysis.requiresFallback) {
-      await markProviderUsageLimit(markerPid, errorAnalysis).catch(err => {
-        emitLog('warn', `Failed to mark provider unavailable: ${err.message}`, { providerId: markerPid });
+    if (markerProviderId && errorAnalysis.category === 'usage-limit' && errorAnalysis.requiresFallback) {
+      await markProviderUsageLimit(markerProviderId, errorAnalysis).catch(err => {
+        emitLog('warn', `Failed to mark provider unavailable: ${err.message}`, { providerId: markerProviderId });
       });
     }
-    if (markerPid && errorAnalysis.category === 'rate-limit') {
-      await markProviderRateLimited(markerPid).catch(err => {
-        emitLog('warn', `Failed to mark provider rate limited: ${err.message}`, { providerId: markerPid });
+    if (markerProviderId && errorAnalysis.category === 'rate-limit') {
+      await markProviderRateLimited(markerProviderId).catch(err => {
+        emitLog('warn', `Failed to mark provider rate limited: ${err.message}`, { providerId: markerProviderId });
       });
     }
   }
@@ -1088,18 +1088,30 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
       }
     }
 
-    await finalizeAgent({
-      agentId,
-      task,
-      runId,
-      providerId: agent.providerId,
-      success: effectiveSuccess,
-      exitCode,
-      duration,
-      outputBuffer,
-      errorAnalysis,
-      isTruthyMetaFn: isTruthyMeta,
-    });
+    // Catch + log instead of letting finalizeAgent's throw skip the rest of
+    // the cleanup (JIRA push, plan-question notification, pipeline
+    // progression, worktree cleanup). The error is still visible via
+    // emitLog + the agent's persisted state (completeAgent runs first
+    // inside finalizeAgent and is the most likely throw point — the
+    // partial-state cases are best-effort by design).
+    let finalizeError = null;
+    try {
+      await finalizeAgent({
+        agentId,
+        task,
+        runId,
+        providerId: agent.providerId,
+        success: effectiveSuccess,
+        exitCode,
+        duration,
+        outputBuffer,
+        errorAnalysis,
+        isTruthyMetaFn: isTruthyMeta,
+      });
+    } catch (err) {
+      finalizeError = err;
+      emitLog('error', `finalizeAgent threw for ${agentId} (continuing cleanup): ${err.message}`, { agentId, error: err.message });
+    }
 
     // Fetch agent state once for JIRA and plan-question blocks
     const { getAgent: getAgentState } = await import('./cos.js');
@@ -1265,6 +1277,10 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
       }
     }
 
+    // Surface a finalizeAgent throw to the caller after best-effort
+    // cleanup completed — without this the runner harness would never see
+    // the failure and couldn't requeue or alert.
+    if (finalizeError) throw finalizeError;
   } finally {
     runnerAgents.delete(agentId);
   }
