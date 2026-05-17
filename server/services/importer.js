@@ -31,7 +31,6 @@ import { mergeExtractedBible, BIBLE_KIND } from '../lib/storyBible.js';
 // Surfaced to the route layer so the importer's policy errors become 400s
 // with stable codes.
 export const ERR_VALIDATION = 'IMPORTER_VALIDATION';
-export const ERR_NOT_FOUND = 'IMPORTER_NOT_FOUND';
 export const ERR_LOCKED = 'IMPORTER_LOCKED';
 
 const makeErr = (message, code) => Object.assign(new Error(message), { code });
@@ -169,11 +168,25 @@ export async function analyzeImport({
   }
 
   const existingCanon = compactCanonForPrompt(universe);
-  const llmOpts = { providerOverride, source: 'importer-analyze' };
+  // returnsJson gates extractJson() in stageRunner — required even though
+  // the stage-config also declares `returnsJson: true` (that field is
+  // metadata for the Prompts UI; the runtime only consults the per-call
+  // option).
+  const llmOpts = { providerOverride, source: 'importer-analyze', returnsJson: true };
 
   const issueCountHint = Number.isFinite(targetIssueCount)
     ? targetIssueCount
     : DEFAULT_TARGET_ISSUE_COUNT_HINT[contentType];
+
+  // Per-type booleans for the Mustache section guards in the prompt
+  // templates (PortOS's template engine is Mustache, not Liquid — no
+  // `{% if x == 'y' %}` support, so we expose presence flags instead).
+  const typeFlags = {
+    isShortStory: contentType === 'short-story',
+    isNovel: contentType === 'novel',
+    isScreenplay: contentType === 'screenplay',
+    isComicScript: contentType === 'comic-script',
+  };
 
   // Canon + arc are independent reads of the same source — fire in
   // parallel. Issue-proposal depends on the arc summary, so chain after
@@ -185,11 +198,13 @@ export async function analyzeImport({
       contentType,
       source,
       existingCanonJson: existingCanon ? JSON.stringify(existingCanon, null, 2) : '',
+      ...typeFlags,
     }, llmOpts),
     runStagedLLM('importer-arc-extract', {
       seriesName: series.name,
       contentType,
       source,
+      ...typeFlags,
     }, llmOpts),
   ]);
 
@@ -206,6 +221,7 @@ export async function analyzeImport({
     seriesName: series.name,
     contentType,
     source,
+    ...typeFlags,
     arcSummary,
     targetIssueCount: issueCountHint,
   }, llmOpts);

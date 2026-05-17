@@ -20,18 +20,18 @@ This universe already has some canonical entries. Match by `name` (case-insensit
 
 ## Per-content-type guidance
 
-{% if contentType == 'short-story' %}
+{{#isShortStory}}
 Short stories are dense — every named entity is intentional. Extract every named character with a speaking role or repeated mention, every distinct setting with sensory detail in the prose, and any object that drives a plot beat or recurs across scenes. A cast of 3–8, 2–5 places, 0–4 objects is typical.
-{% endif %}
-{% if contentType == 'novel' %}
+{{/isShortStory}}
+{{#isNovel}}
 Novels carry more named entities than fit; favor recurring or POV-shifted characters over walk-ons, distinct settings over fly-by locations, and only objects with explicit narrative weight (MacGuffins, heirlooms, repeated motifs). 8–25 characters, 5–15 places, 0–10 objects is typical.
-{% endif %}
-{% if contentType == 'screenplay' %}
+{{/isNovel}}
+{{#isScreenplay}}
 Characters are introduced in ALL CAPS on first appearance — use that as the canonical list. Sluglines (`INT./EXT. LOCATION — TIME`) define places — group variants of the same location into one entry (e.g. `KITCHEN` + `KITCHEN — DAY` + `KITCHEN — NIGHT` → one place "Kitchen"). Objects are anything the action lines describe with specificity.
-{% endif %}
-{% if contentType == 'comic-script' %}
+{{/isScreenplay}}
+{{#isComicScript}}
 Comic scripts mark characters in ALL CAPS dialogue cues and panel descriptions. Settings appear in panel-description preambles (`PAGE 4 / PANEL 1: ROOFTOP — NIGHT`). Objects worth canonical entries are those a panel description lingers on (props, gadgets, symbolic items).
-{% endif %}
+{{/isComicScript}}
 
 ## What to extract
 

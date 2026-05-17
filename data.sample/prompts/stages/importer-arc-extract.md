@@ -24,18 +24,18 @@ Be specific: do not default to `man-in-hole` because it's the most common. If th
 
 ## Per-content-type guidance
 
-{% if contentType == 'short-story' %}
+{{#isShortStory}}
 Short stories almost always trace a single shape with one major turn. The whole story fits in one issue — your `seasons` array should typically be a single entry (`number: 1`) covering the entire piece, unless the story has explicit part breaks.
-{% endif %}
-{% if contentType == 'novel' %}
+{{/isShortStory}}
+{{#isNovel}}
 Novels typically divide into 2–4 acts or volumes. Use part / book breaks if the source has them ("Book One", "Part II"). Otherwise look for the major turning points where the protagonist's fortune pivots — those are season boundaries. 2–4 seasons is the usual range.
-{% endif %}
-{% if contentType == 'screenplay' %}
+{{/isNovel}}
+{{#isScreenplay}}
 Screenplays are single-episode by default — typically one season with one episode. If the screenplay carries explicit act-break headers (`ACT ONE`, `ACT TWO`, `ACT THREE`) and feels like multiple-episode material, you may split into multiple seasons; otherwise keep it as one.
-{% endif %}
-{% if contentType == 'comic-script' %}
+{{/isScreenplay}}
+{{#isComicScript}}
 Comic scripts mark issues / volumes explicitly with `ISSUE N` or `VOLUME N` headers. If the source uses those, mirror them as seasons (one season per volume). If unmarked, assume ~22 script pages per issue and group into ~6-issue volumes — but only use that as a fallback when explicit headers are missing.
-{% endif %}
+{{/isComicScript}}
 
 ## How to shape the arc
 

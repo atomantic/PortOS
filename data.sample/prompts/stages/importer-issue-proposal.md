@@ -21,18 +21,18 @@ You are a senior story editor segmenting an existing finished work into PortOS p
 
 ## Per-content-type guidance for splitting
 
-{% if contentType == 'short-story' %}
+{{#isShortStory}}
 A short story is typically **one issue**. Unless `targetIssueCount` is set to something larger, return exactly one issue covering the entire piece. The `proseExcerpt` is the whole source verbatim.
-{% endif %}
-{% if contentType == 'novel' %}
+{{/isShortStory}}
+{{#isNovel}}
 Novels usually map to **one issue per chapter** if chapters are short (≤3000 words), or chapter-pair groupings if chapters are longer. Honor the author's chapter breaks — they're the strongest structural signal. Aim for 6–15 issues for a typical novel.
-{% endif %}
-{% if contentType == 'screenplay' %}
+{{/isNovel}}
+{{#isScreenplay}}
 A standard screenplay is **one episode** (one issue). If the screenplay explicitly contains `ACT ONE` / `ACT TWO` / `ACT THREE` breaks AND the user has set `targetIssueCount > 1`, split on act breaks; otherwise return one issue.
-{% endif %}
-{% if contentType == 'comic-script' %}
+{{/isScreenplay}}
+{{#isComicScript}}
 Comic scripts mark issues with `ISSUE N` or `#N` or similar headers — honor those exactly. If the script is unmarked, group every ~22 pages into one issue. Page markers (`PAGE 1`, `PAGE 2`, ...) define the boundaries.
-{% endif %}
+{{/isComicScript}}
 
 ## What to write per issue
 

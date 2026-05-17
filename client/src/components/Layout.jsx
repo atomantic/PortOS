@@ -195,8 +195,8 @@ const navItems = [
     icon: Sparkles,
     defaultTo: '/media',
     children: [
-      { to: '/media', label: 'Media Gen', icon: Layers },
       { to: '/importer', label: 'Importer', icon: FileInput },
+      { to: '/media', label: 'Media Gen', icon: Layers },
       { to: '/pipeline', label: 'Series Pipeline', icon: WorkflowIcon, dynamic: 'pipelineSeries' },
       { to: '/sharing', label: 'Sharing', icon: Share2 },
       { to: '/universe-builder', label: 'Universe Builder', icon: Globe },

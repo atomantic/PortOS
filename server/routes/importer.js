@@ -9,16 +9,22 @@ import {
   analyzeImport,
   commitImport,
   ERR_VALIDATION,
-  ERR_NOT_FOUND,
   ERR_LOCKED,
 } from '../services/importer.js';
+import * as universeSvc from '../services/universeBuilder.js';
+import * as seriesSvc from '../services/pipeline/series.js';
 
 const router = Router();
 
+// The orchestrator throws its own validation/locked codes directly. Missing
+// universe / series codes bubble through `getUniverse` / `getSeries` with
+// their service-native codes (`NOT_FOUND` / `PIPELINE_SERIES_NOT_FOUND`),
+// not an importer-prefixed alias — map those to 404.
 const SERVICE_ERROR_STATUS = {
   [ERR_VALIDATION]: 400,
   [ERR_LOCKED]: 400,
-  [ERR_NOT_FOUND]: 404,
+  [universeSvc.ERR_NOT_FOUND]: 404,
+  [seriesSvc.ERR_NOT_FOUND]: 404,
 };
 
 const mapServiceError = (err) => {

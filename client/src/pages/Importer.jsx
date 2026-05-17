@@ -61,7 +61,7 @@ export default function Importer() {
     };
     const tic = intake.targetIssueCount === '' ? null : Number(intake.targetIssueCount);
     if (Number.isFinite(tic) && tic > 0) payload.targetIssueCount = tic;
-    const result = await analyzeImport(payload);
+    const result = await analyzeImport(payload, { silent: true });
     if (!result) return null;
     // Seed the editable Review-phase state from the preview.
     setPreview(result);
@@ -91,7 +91,7 @@ export default function Importer() {
       seasons: seasonsDraft,
       issues: issuesDraft.map(stripPrivate),
     };
-    const result = await commitImport(payload);
+    const result = await commitImport(payload, { silent: true });
     if (!result) return null;
     toast.success(`Imported ${result.createdIssueIds.length} issue${result.createdIssueIds.length === 1 ? '' : 's'} into "${result.series.name}"`);
     navigate(`/pipeline/series/${result.series.id}`);

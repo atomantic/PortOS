@@ -210,6 +210,39 @@ describe('analyzeImport', () => {
     expect(mockRunStagedLLM).not.toHaveBeenCalled();
   });
 
+  it('passes returnsJson:true so the stage runner parses the LLM reply', async () => {
+    // Regression-pin: without `returnsJson: true`, runStagedLLM returns the
+    // raw text and the orchestrator's `Array.isArray(content?.field)` checks
+    // all silently fail (preview becomes empty). Lock the opt in by asserting
+    // every analyze stage call passes it.
+    wireDefaultLLMResponses();
+    await importerSvc.analyzeImport({
+      universeName: 'U', seriesName: 'S', contentType: 'short-story', source: 'x',
+    });
+    expect(mockRunStagedLLM).toHaveBeenCalled();
+    for (const call of mockRunStagedLLM.mock.calls) {
+      const opts = call[2];
+      expect(opts).toMatchObject({ returnsJson: true });
+    }
+  });
+
+  it('forwards Mustache section-guard flags so per-content-type prompt blocks render', async () => {
+    // Regression-pin: PortOS's template engine is Mustache-only — the prompts
+    // use `{{#isShortStory}}…{{/isShortStory}}` blocks, so the orchestrator
+    // must pass per-type booleans alongside the contentType string.
+    wireDefaultLLMResponses();
+    await importerSvc.analyzeImport({
+      universeName: 'U', seriesName: 'S', contentType: 'novel', source: 'x',
+    });
+    const firstVars = mockRunStagedLLM.mock.calls[0][1];
+    expect(firstVars).toMatchObject({
+      isNovel: true,
+      isShortStory: false,
+      isScreenplay: false,
+      isComicScript: false,
+    });
+  });
+
   it('rejects a locked-arc series with ERR_LOCKED before calling the LLM', async () => {
     // Pre-seed a series with locked.arc, then re-analyze with its name.
     const uni = await universeSvc.createUniverse({ name: 'Locked U' });
