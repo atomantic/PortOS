@@ -1,10 +1,9 @@
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
-import { Layers, Image as ImageIcon, Film, History, HardDrive, Scissors, FolderOpen, Clapperboard, Globe2, Sparkles } from 'lucide-react';
+import { Layers, Image as ImageIcon, Film, History, HardDrive, Scissors, FolderOpen, Clapperboard, Sparkles } from 'lucide-react';
 
 const TABS = [
   { id: 'image', label: 'Image', icon: ImageIcon },
   { id: 'video', label: 'Video', icon: Film },
-  { id: 'universe-builder', label: 'Universe Builder', icon: Globe2 },
   { id: 'timeline', label: 'Timeline', icon: Scissors },
   { id: 'creative-director', label: 'Creative Director', icon: Clapperboard },
   { id: 'history', label: 'History', icon: History },

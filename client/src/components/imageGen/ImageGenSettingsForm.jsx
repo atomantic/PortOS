@@ -10,6 +10,8 @@
 
 import BackendChipStrip from '../media/BackendChipStrip';
 import ImageGenControls from './ImageGenControls';
+import LoraPicker from './LoraPicker';
+import StylePresetPicker from '../media/StylePresetPicker';
 import { IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
 
 export default function ImageGenSettingsForm({
@@ -18,11 +20,22 @@ export default function ImageGenSettingsForm({
   models = [],
   availableBackends = [],
   showStyleFields = true,
+  // LoRA picker — local mode only. Pass `availableLoras` + `currentRunnerFamily`
+  // to enable. `cfg.loras` holds the selected `[{ filename, name, scale }]`.
+  showLoras = false,
+  availableLoras = [],
+  currentRunnerFamily = null,
+  onAppendTrigger = null,
+  // Style preset picker — sits above the extra-style textarea. `cfg.stylePreset`
+  // holds the full preset object (not just the id) so consumers can compose
+  // styled prompts without a second lookup.
+  showStylePreset = false,
   disabled = false,
 }) {
   const cfg = value || {};
   const merge = (patch) => onChange?.({ ...cfg, ...patch });
   const isCodex = cfg.mode === IMAGE_GEN_MODE.CODEX;
+  const isLocal = cfg.mode === IMAGE_GEN_MODE.LOCAL;
   const labelCls = 'block text-xs font-medium text-gray-400 mb-1';
   const textareaCls = 'w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50 resize-y';
 
@@ -58,7 +71,7 @@ export default function ImageGenSettingsForm({
         mode={cfg.mode}
         models={models}
         modelId={cfg.modelId}
-        onModelChange={(modelId) => merge({ modelId })}
+        onModelChange={(modelId) => merge({ modelId, steps: '', guidance: '' })}
         width={cfg.width}
         height={cfg.height}
         onResolutionChange={(width, height) => merge({ width, height })}
@@ -66,12 +79,34 @@ export default function ImageGenSettingsForm({
         onStepsChange={(steps) => merge({ steps })}
         guidance={cfg.guidance}
         onGuidanceChange={(guidance) => merge({ guidance })}
+        cfgScale={cfg.cfgScale}
+        onCfgScaleChange={(cfgScale) => merge({ cfgScale })}
+        quantize={cfg.quantize}
+        onQuantizeChange={(quantize) => merge({ quantize })}
         seed={cfg.seed}
         onSeedChange={(seed) => merge({ seed })}
         showSeed
-        showQuantize={false}
         disabled={disabled}
       />
+
+      {showLoras && isLocal ? (
+        <LoraPicker
+          availableLoras={availableLoras}
+          selected={Array.isArray(cfg.loras) ? cfg.loras : []}
+          onChange={(loras) => merge({ loras })}
+          currentRunnerFamily={currentRunnerFamily}
+          onAppendTrigger={onAppendTrigger}
+          disabled={disabled}
+        />
+      ) : null}
+
+      {showStylePreset ? (
+        <StylePresetPicker
+          value={cfg.stylePreset?.id || ''}
+          onChange={(preset) => merge({ stylePreset: preset })}
+          disabled={disabled}
+        />
+      ) : null}
 
       {showStyleFields ? (
         <div className="space-y-3">

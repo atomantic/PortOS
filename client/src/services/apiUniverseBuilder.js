@@ -22,9 +22,10 @@ export const createUniverse = (data) => request('/universe-builder', {
   body: JSON.stringify(data),
 });
 
-export const updateUniverse = (id, patch) => request(`/universe-builder/${encodeURIComponent(id)}`, {
+export const updateUniverse = (id, patch, options = {}) => request(`/universe-builder/${encodeURIComponent(id)}`, {
   method: 'PATCH',
   body: JSON.stringify(patch),
+  ...options,
 });
 
 export const deleteUniverse = (id) => request(`/universe-builder/${encodeURIComponent(id)}`, {

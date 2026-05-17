@@ -995,9 +995,21 @@ export function compilePrompts(universe, options = {}) {
   }
   const batchPerVariation = Math.max(1, Math.min(20, Number(options.batchPerVariation) || 1));
 
+  // The universe's stored influences are the baseline; per-batch overrides
+  // append on top so the user can layer an extra-style chip, a style preset,
+  // or an extra negative without editing the persistent influences. Token
+  // lists are comma-joined to match composeStyledPrompt's input expectation.
+  const baselineEmbrace = joinInfluenceList(universe.influences?.embrace);
+  const baselineAvoid = joinInfluenceList(universe.influences?.avoid);
+  const embraceParts = [baselineEmbrace, options.stylePresetPrompt, options.extraStyle]
+    .map((s) => (typeof s === 'string' ? s.trim() : ''))
+    .filter(Boolean);
+  const avoidParts = [baselineAvoid, options.stylePresetNegative, options.extraNegative]
+    .map((s) => (typeof s === 'string' ? s.trim() : ''))
+    .filter(Boolean);
   const stylePreset = {
-    prompt: joinInfluenceList(universe.influences?.embrace),
-    negativePrompt: joinInfluenceList(universe.influences?.avoid),
+    prompt: embraceParts.join(', '),
+    negativePrompt: avoidParts.join(', '),
   };
   const compiled = [];
 
