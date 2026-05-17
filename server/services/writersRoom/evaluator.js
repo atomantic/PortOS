@@ -27,7 +27,7 @@ const KIND_META = {
   format:     { stage: 'writers-room-format',     returnsJson: false },
   script:     { stage: 'writers-room-script',     returnsJson: true },
   characters: { stage: 'writers-room-characters', returnsJson: true },
-  settings:   { stage: 'writers-room-settings',   returnsJson: true },
+  settings:   { stage: 'writers-room-places',     returnsJson: true },
   objects:    { stage: 'writers-room-objects',    returnsJson: true },
 };
 

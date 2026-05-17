@@ -28,7 +28,7 @@
       "returnsJson": true,
       "variables": []
     },
-    "writers-room-settings": {
+    "writers-room-places": {
       "name": "Writers Room — Setting / World Bible",
       "description": "Extract a setting/world bible from a Writers Room draft: per-location descriptions keyed by screenplay slugline (palette, era, weather, recurring details). Storyboard scenes match their slugline back to a setting and inject its description into the image prompt for visual continuity.",
       "model": "default",
