@@ -7,7 +7,9 @@ const HORIZONTAL_BIAS = 1.2;
 
 // Ignore touches that originate on inline buttons so a button tap on the
 // surface (e.g. fullscreen toggle) isn't also read as a swipe-start.
-const isButtonTouch = (e) => !!e.target.closest('button');
+// Optional-chain on `closest` because touch targets aren't guaranteed to be
+// Elements (e.g. Text nodes, jsdom-style envs without `closest`).
+const isButtonTouch = (e) => !!e.target?.closest?.('button');
 
 export function useSwipeNav({ onPrevious, onNext, hasPrevious = false, hasNext = false } = {}) {
   const touchStart = useRef({ x: null, y: null });
@@ -20,8 +22,10 @@ export function useSwipeNav({ onPrevious, onNext, hasPrevious = false, hasNext =
 
   const onTouchEnd = useCallback((e) => {
     const start = touchStart.current;
+    // Origin-based gate: if onTouchStart cleared the ref because the touch
+    // started on a button, we never bail on the end target — a swipe that
+    // begins on the surface and ends over an inline control is still valid.
     if (start.x == null) return;
-    if (isButtonTouch(e)) { touchStart.current = { x: null, y: null }; return; }
     const end = e.changedTouches[0];
     const dx = end.clientX - start.x;
     const dy = end.clientY - start.y;

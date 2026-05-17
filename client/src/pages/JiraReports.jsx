@@ -62,7 +62,11 @@ function ReportDetail({ report }) {
 
   const handleCopy = async () => {
     const plain = statusText.replace(/\*\*/g, '');
-    await writeClipboardSilently(plain);
+    const ok = await writeClipboardSilently(plain);
+    if (!ok) {
+      toast.error('Copy failed');
+      return;
+    }
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
