@@ -26,6 +26,7 @@
  */
 
 import { spawn as ptySpawn } from 'node-pty';
+import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { ensureDir, PATHS } from './fileUtils.js';
 import { createStreamingAnsiStripper } from './ansiStrip.js';
@@ -108,7 +109,24 @@ export async function executeTuiRun(runId, provider, prompt, cwd, onData, onComp
   const runDir = join(getRunsPath(), runId);
   await ensureDir(runDir);
 
-  console.log(`📟 Executing TUI: ${command} ${args.join(' ')} (${prompt.length} chars via paste)`);
+  // TUI screens redraw their banner, input chrome, and status bar on every
+  // keystroke — scraping the PTY stream for the model's reply is
+  // fundamentally lossy (box-drawing chars, "5%" cost meters, "bypass
+  // permissions on" hints, etc. all bleed into the captured text). Ask the
+  // model to write its final response to a file we'll read back instead.
+  const responseFilePath = join(runDir, 'tui-response.txt');
+  const wrappedPrompt = `IMPORTANT — Output to file:
+When you have completed the task below, write your COMPLETE final response (and nothing else — no commentary, preamble, or wrapper text) to this exact absolute path using your file-writing tool:
+
+    ${responseFilePath}
+
+Only the contents of that file will be used as your response, so do not print the response inline. Once the file is written, you can finish.
+
+----- TASK -----
+
+${prompt}`;
+
+  console.log(`📟 Executing TUI: ${command} ${args.join(' ')} (${wrappedPrompt.length} chars via paste, response→${responseFilePath})`);
 
   // CLAUDECODE is set when PortOS itself runs inside Claude Code; passing it
   // through to a spawned Claude Code TUI would make the child think it's
@@ -177,14 +195,31 @@ export async function executeTuiRun(runId, provider, prompt, cwd, onData, onComp
       // behind for the user to interact with.
       try { if (ptyProcess && !ptyProcess.killed) ptyProcess.kill(); } catch { /* already gone */ }
 
+      // Prefer the response file the TUI was directed to write — it contains
+      // the model's clean reply with no screen chrome. Fall back to the
+      // ANSI-stripped screen scrape (with paste markers + echoed prompt
+      // elided) only when the file is missing or empty.
+      let responseText = '';
+      let usedResponseFile = false;
+      if (success) {
+        const fileText = await readFile(responseFilePath, 'utf8').catch(() => null);
+        if (typeof fileText === 'string' && fileText.trim()) {
+          responseText = fileText.trim();
+          usedResponseFile = true;
+        }
+      }
+      if (!usedResponseFile) {
+        responseText = cleanTuiResponse(outputBuffer, wrappedPrompt);
+      }
+
       // Delegate run-record finalization (output.txt + metadata.json merge
       // + onRunCompleted/onRunFailed hooks + toolkit error analysis) to the
       // shared runner helper. `completionReason` lands in `extras` so it
       // gets persisted to metadata.json BEFORE the write (was previously
       // set post-write and never made it to disk → /runs replay missed it).
       const metadata = await finalizeRunRecord({
-        runId, output: outputBuffer, exitCode, success, error, startTime,
-        extras: { completionReason: reason },
+        runId, output: responseText, exitCode, success, error, startTime,
+        extras: { completionReason: reason, usedResponseFile },
       }).catch((err) => {
         console.error(`❌ TUI run ${runId} finalize failed: ${err.message}`);
         return {
@@ -192,7 +227,7 @@ export async function executeTuiRun(runId, provider, prompt, cwd, onData, onComp
           duration: Date.now() - startTime, completionReason: reason,
         };
       });
-      onComplete?.(metadata);
+      onComplete?.({ ...metadata, text: responseText, usedResponseFile });
       resolve();
     };
 
@@ -272,7 +307,7 @@ export async function executeTuiRun(runId, provider, prompt, cwd, onData, onComp
       promptSentAt = Date.now();
       const rawLenBeforePaste = rawBuffer.length;
       try {
-        ptyProcess.write(`\x1b[200~${prompt}\x1b[201~`);
+        ptyProcess.write(`\x1b[200~${wrappedPrompt}\x1b[201~`);
       } catch (err) {
         finish({ success: false, exitCode: 1, error: `Failed to write prompt: ${err.message}`, reason: 'write-failed' });
         return;
