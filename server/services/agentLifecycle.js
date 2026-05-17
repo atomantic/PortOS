@@ -1037,17 +1037,22 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
   // entry — otherwise a memory-extraction crash etc. would strand it forever
   // and no future spawn could reclaim the slot.
   try {
-    // Ensure taskType is set — recovered agents may lack it
-    if (task && !task.taskType) {
-      const id = task.id || '';
-      task.taskType = isInternalTaskId(id) ? 'internal' : 'user';
+    // Normalize the agent's task shape — recovered agents (post-restart,
+    // via syncRunnerAgents) may lack taskType AND metadata, both of which
+    // downstream paths spread / read without a guard.
+    if (task) {
+      if (!task.taskType) {
+        const id = task.id || '';
+        task.taskType = isInternalTaskId(id) ? 'internal' : 'user';
+      }
+      if (!task.metadata) task.metadata = {};
     }
 
-    // Release the lane + complete execution tracking BEFORE the
-    // potentially-slow output read / commit-detection / pipeline-summary
-    // I/O — those writes don't gate further work, but other tasks in the
-    // same lane shouldn't wait on them.
-    releaseAgentLane({ agentId, success, duration, exitCode, executionId, laneName });
+    // Release the execution lane immediately — `release` is a sync Map
+    // mutation, so this just frees the slot for other tasks in the same
+    // lane. Tool-execution tracking is deferred until effectiveSuccess is
+    // known (the post-exit commit check can flip it false→true).
+    if (laneName) release(agentId);
 
     // Read output from agent directory
     const agentDir = join(AGENTS_DIR, agentId);
@@ -1065,6 +1070,18 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
       if (commitFound) {
         emitLog('warn', `Agent ${agentId} reported failure (exit ${exitCode}) but work completed - commit found for task ${task.id}`, { agentId, taskId: task.id, exitCode });
         effectiveSuccess = true;
+      }
+    }
+
+    // Complete tool-execution tracking with effectiveSuccess so a
+    // commit-found promotion records consistently with completeAgent +
+    // updateTask below.
+    if (executionId) {
+      if (effectiveSuccess) {
+        completeExecution(executionId, { success: true, duration });
+      } else {
+        errorExecution(executionId, { message: `Agent exited with code ${exitCode}`, code: exitCode });
+        completeExecution(executionId, { success: false });
       }
     }
 
