@@ -830,6 +830,21 @@ describe('mergeSeasons (pure helper)', () => {
     expect(caught.message).toContain('99');
   });
 
+  // Round-11 review: legacy seasons with `title: undefined` would
+  // previously churn updatedAt on every no-op re-import — the change
+  // check compared `'Season N'` (the default applied to the new value)
+  // against `undefined` (the existing value), always producing a
+  // truthy diff. Fix applies the same default to both sides of the
+  // comparison so a re-import with no edits is correctly a no-op.
+  it('does NOT bump updatedAt for a legacy season with undefined title and no incoming edit', () => {
+    const existing = [
+      { id: 'e1', number: 1, /* title: undefined */ logline: '', synopsis: '', updatedAt: '2020-01-01T00:00:00.000Z' },
+    ];
+    // Incoming season omits every editable field — pure no-op.
+    const result = importerSvc.mergeSeasons(existing, [{ number: 1 }], stubBuildSeason);
+    expect(result[0].updatedAt).toBe('2020-01-01T00:00:00.000Z');
+  });
+
   // Round-8 review: the pure helper now rejects duplicate explicit incoming
   // numbers directly — commitImport's route gate caught this for HTTP
   // callers, but a future direct consumer would otherwise silently collapse

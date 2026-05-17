@@ -23,10 +23,16 @@ const router = Router();
 // universe / series codes bubble through `getUniverse` / `getSeries` with
 // their service-native codes (`NOT_FOUND` / `PIPELINE_SERIES_NOT_FOUND`),
 // not an importer-prefixed alias — map those to 404.
+// `ERR_PARTIAL_COMMIT_ISSUES` maps to 207 Multi-Status (not 500) because
+// the universe + series writes succeeded and only the issue loop was
+// rolled back — alerting / generic-retry middleware that pages on 5xx
+// would otherwise treat this user-action-recoverable state as an infra
+// failure. 207 is the canonical "completed with mixed outcomes" code
+// and the client UI can render a tailored retry affordance.
 const SERVICE_ERROR_STATUS = {
   [ERR_VALIDATION]: 400,
   [ERR_LOCKED]: 409,
-  [ERR_PARTIAL_COMMIT_ISSUES]: 500,
+  [ERR_PARTIAL_COMMIT_ISSUES]: 207,
   [universeSvc.ERR_NOT_FOUND]: 404,
   [seriesSvc.ERR_NOT_FOUND]: 404,
 };

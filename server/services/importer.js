@@ -142,12 +142,18 @@ export function mergeSeasons(existingSeasons, incomingSeasons, buildSeasonImpl =
     }
     const existing = existingByNumber.get(num);
     if (existing) {
-      const nextTitle = mergeStr(s.title, existing.title) || `Season ${num}`;
+      // Apply the same `|| Season N` default to BOTH sides of the title
+      // comparison so a legacy season with `title: undefined` doesn't
+      // churn updatedAt on every no-op re-import: without normalizing
+      // the existing-side default, `'Season N' !== undefined` always
+      // resolves truthy and bumps updatedAt even when nothing changed.
+      const titleDefault = `Season ${num}`;
+      const nextTitle = mergeStr(s.title, existing.title) || titleDefault;
       const nextLogline = mergeStr(s.logline, existing.logline);
       const nextSynopsis = mergeStr(s.synopsis, existing.synopsis);
       const nextEndingHook = mergeStr(s.endingHook, existing.endingHook);
       const nextEpisodeCount = s.episodeCountTarget ?? existing.episodeCountTarget ?? 0;
-      const anyChanged = nextTitle !== existing.title
+      const anyChanged = nextTitle !== (existing.title || titleDefault)
         || nextLogline !== (existing.logline ?? '')
         || nextSynopsis !== (existing.synopsis ?? '')
         || nextEndingHook !== (existing.endingHook ?? '')
@@ -234,6 +240,12 @@ export async function findUniverseByName(name) {
 export async function findSeriesByName(name, universeId) {
   const target = normName(name);
   if (!target) return null;
+  // Guard universeId too — without this, a falsy/missing universeId
+  // would match every series with a falsy `universeId` on disk, which
+  // breaks the "scoped to a specific universe" contract. Today's only
+  // caller in analyzeImport skips this lookup entirely when the universe
+  // doesn't exist yet, but this is exported for tests + future callers.
+  if (typeof universeId !== 'string' || !universeId) return null;
   const all = await listSeries();
   return all.find((s) =>
     normName(s.name) === target && s.universeId === universeId,
