@@ -209,6 +209,29 @@ describe("universeBuilder service", () => {
     expect(w.styleNotes).toHaveLength(svc.STYLE_NOTES_MAX);
   });
 
+  // Starter idea is intentionally uncapped at the legacy 4000-char limit —
+  // the cap was raised to 200,000 (a sanity ceiling, not an artificial
+  // brevity constraint). These tests pin the new boundary so a future
+  // refactor can't silently regress to the old 4k limit.
+  it("createUniverse preserves a starterPrompt well beyond the legacy 4000-char limit", async () => {
+    const longPrompt = "a".repeat(50_000);
+    const w = await seedWorld({ starterPrompt: longPrompt });
+    expect(w.starterPrompt).toHaveLength(50_000);
+    expect(w.starterPrompt).toBe(longPrompt);
+  });
+
+  it("createUniverse trims a starterPrompt exceeding STARTER_PROMPT_MAX (200k)", async () => {
+    const w = await seedWorld({
+      starterPrompt: "b".repeat(svc.STARTER_PROMPT_MAX + 5_000),
+    });
+    expect(w.starterPrompt).toHaveLength(svc.STARTER_PROMPT_MAX);
+  });
+
+  it("STARTER_PROMPT_MAX is at least the documented 200k ceiling", async () => {
+    // Guard against accidental regression to the legacy 4k cap.
+    expect(svc.STARTER_PROMPT_MAX).toBeGreaterThanOrEqual(200_000);
+  });
+
   it("updateUniverse merges partial patches", async () => {
     const w = await seedWorld();
     const patched = await svc.updateUniverse(w.id, {

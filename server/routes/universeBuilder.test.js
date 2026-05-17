@@ -124,7 +124,10 @@ const universeBuilderRoutes = (await import('./universeBuilder.js')).default;
 
 const buildApp = () => {
   const app = express();
-  app.use(express.json());
+  // Mirror production's 55mb body limit (see server/index.js) so payload-size
+  // tests exercise the Zod `.max()` boundary instead of bumping into the
+  // 100kb default body-parser limit.
+  app.use(express.json({ limit: '55mb' }));
   app.use('/api/universe-builder', universeBuilderRoutes);
   app.use(errorMiddleware);
   return app;
@@ -254,6 +257,33 @@ describe('universe-builder routes', () => {
       .post('/api/universe-builder')
       .send({ starterPrompt: 'cyber forest' });
     expect(res.status).toBe(400);
+  });
+
+  // Starter-idea length: the legacy 4000-char cap was lifted in favor of a
+  // 200,000-char sanity ceiling. These tests pin the new Zod boundary so a
+  // future schema edit can't silently restore the old limit (or relax it
+  // past the documented ceiling).
+  it('POST / accepts a starterPrompt well beyond the legacy 4000-char limit', async () => {
+    const longPrompt = 'a'.repeat(50_000);
+    const res = await request(buildApp())
+      .post('/api/universe-builder')
+      .send({ name: 'Long Idea', starterPrompt: longPrompt });
+    expect(res.status).toBe(201);
+    expect(res.body.starterPrompt).toHaveLength(50_000);
+  });
+
+  it('POST /expand rejects a starterPrompt exceeding 200,000 chars', async () => {
+    const res = await request(buildApp())
+      .post('/api/universe-builder/expand')
+      .send({ starterPrompt: 'x'.repeat(200_001) });
+    expect(res.status).toBe(400);
+  });
+
+  it('POST /expand accepts a starterPrompt at exactly 200,000 chars', async () => {
+    const res = await request(buildApp())
+      .post('/api/universe-builder/expand')
+      .send({ starterPrompt: 'x'.repeat(200_000) });
+    expect(res.status).toBe(200);
   });
 
   it('PATCH /:id updates fields', async () => {
