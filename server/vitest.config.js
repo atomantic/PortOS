@@ -7,8 +7,14 @@ export default defineConfig({
     // helpers (normalize.js sidecar field resolution) have unit tests that
     // belong alongside the source, but the client itself has no test runner.
     // The server's vitest is the project's single test entrypoint, so we
-    // include the client *.test.js files here.
-    include: ['**/*.test.js', '../client/src/**/*.test.js'],
+    // include the client *.test.js files here. Also pick up migration tests
+    // from scripts/migrations/ so each one-shot migration can be verified
+    // against synthetic fixtures.
+    include: [
+      '**/*.test.js',
+      '../client/src/**/*.test.js',
+      '../scripts/migrations/**/*.test.js',
+    ],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'text-summary', 'html'],

@@ -106,10 +106,58 @@ describe('universe-builder routes', () => {
     expect(res.status).toBe(201);
     expect(res.body.id).toBe('uuid-1');
     expect(res.body.name).toBe('My Universe');
-    // All five categories populated even when not supplied.
+    // Default categories populated, each tagged with its canon trunk via
+    // WORLD_CATEGORY_DEFAULT_KINDS. `characters` was retired in schema v4
+    // (canon owns characters now).
     expect(Object.keys(res.body.categories).sort()).toEqual(
-      ['characters', 'environments', 'landscapes', 'structures', 'vehicles'],
+      ['environments', 'landscapes', 'structures', 'vehicles'],
     );
+    expect(res.body.categories.landscapes.kind).toBe('settings');
+    expect(res.body.categories.vehicles.kind).toBe('objects');
+  });
+
+  it('POST / accepts and persists a `kind` on each category', async () => {
+    const res = await request(buildApp())
+      .post('/api/universe-builder')
+      .send({
+        name: 'Kinded',
+        categories: {
+          factions: { kind: 'characters', variations: [{ label: 'Iron Reach', prompt: 'x' }] },
+          colonies: { kind: 'settings', variations: [{ label: 'Tycho', prompt: 'y' }] },
+        },
+      });
+    expect(res.status).toBe(201);
+    expect(res.body.categories.factions.kind).toBe('characters');
+    expect(res.body.categories.colonies.kind).toBe('settings');
+  });
+
+  it('POST / rejects an invalid `kind` enum value via Zod', async () => {
+    const res = await request(buildApp())
+      .post('/api/universe-builder')
+      .send({
+        name: 'Bad Kind',
+        categories: {
+          colonies: { kind: 'not-a-kind', variations: [] },
+        },
+      });
+    expect(res.status).toBe(400);
+  });
+
+  it('POST / folds a stale `characters` bucket into canon characters[] and drops the bucket', async () => {
+    const res = await request(buildApp())
+      .post('/api/universe-builder')
+      .send({
+        name: 'Stale Client',
+        categories: {
+          // Mimic an outdated client still sending the retired bucket.
+          characters: { variations: [{ label: 'Ash', prompt: 'young survivor' }] },
+        },
+      });
+    expect(res.status).toBe(201);
+    expect(res.body.categories.characters).toBeUndefined();
+    const ash = res.body.characters.find((c) => c.name === 'Ash');
+    expect(ash).toBeDefined();
+    expect(ash.prompt).toBe('young survivor');
   });
 
   it('POST / accepts dynamic universe-building categories', async () => {
@@ -242,7 +290,10 @@ describe('universe-builder routes', () => {
       influences: { embrace: ['style'], avoid: ['neg'] },
       categories: {
         landscapes: { variations: [{ label: 'A', prompt: 'a prompt' }, { label: 'B', prompt: 'b prompt' }] },
-        characters: { variations: [{ label: 'C', prompt: 'c prompt' }] },
+        // `characters` was retired as a default bucket in schema v4 (canon
+        // owns characters); use a custom bucket to keep the 3-variation
+        // render scenario intact.
+        outfits: { variations: [{ label: 'C', prompt: 'c prompt' }] },
       },
     });
     const res = await request(app)

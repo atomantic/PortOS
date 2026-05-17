@@ -41,7 +41,11 @@ import { emitRecordUpdated, emitRecordDeleted } from './sharing/recordEvents.js'
 //   v3 — drop prose stylePrompt/negativePrompt fields; legacy values are
 //        split on commas and merged into influences.embrace / influences.avoid
 //        so there is a single token-list editing surface.
-export const CURRENT_SCHEMA_VERSION = 3;
+//   v4 — categories carry a `kind` field tagging them to one of the 3 canon
+//        trunks (characters/settings/objects/other); the default `characters`
+//        category is retired and any variations get folded into canon
+//        characters[]. See "Categories vs canon — decision" in PLAN.md.
+export const CURRENT_SCHEMA_VERSION = 4;
 
 // Lazy state-path resolution so test harnesses that swap PATHS.data
 // per-test (mkdtempSync + Proxy mock) see the right temp root. Computing
@@ -122,19 +126,52 @@ export const LOCKABLE_FIELD_LABELS = Object.freeze({
 export const INFLUENCE_LOCK_FIELDS = Object.freeze(['influencesEmbrace', 'influencesAvoid']);
 export const isInfluenceLockField = (key) => INFLUENCE_LOCK_FIELDS.includes(key);
 
-// Legacy buckets the v1 universe schema used. Retires after Phase 2 UI reads
-// canon directly — until then it's still consumed by existing expand / refine
-// / route code.
+// Built-in default category buckets the Universe Builder seeds on every new
+// universe. Each is tagged with a canon trunk (see WORLD_CATEGORY_DEFAULT_KINDS)
+// so the Phase C UI renders it under the right tab without needing a per-bucket
+// picker. The default `characters` bucket was retired in schema v4 — canon
+// owns characters now; any pre-v4 variations are folded into universe.characters[].
 export const WORLD_CATEGORIES = Object.freeze([
   'landscapes',
   'environments',
-  'characters',
   'structures',
   'vehicles',
 ]);
 
+// Valid values for a category's `kind`. Tagged onto each category so the UI
+// knows which canon trunk to render it under. `other` is the sink for
+// un-classified custom buckets; an "Auto-sort" UI action LLM-classifies them
+// into one of the 3 real kinds.
+export const CATEGORY_KINDS = Object.freeze(['characters', 'settings', 'objects', 'other']);
+export const DEFAULT_CATEGORY_KIND = 'other';
+
+// Bucket keys retired from the schema — sanitizeCategories drops them from
+// `categories` on read (variations get folded into canon by
+// backfillCanonFromCategories). Single hook for future retirements.
+const RETIRED_CATEGORY_KEYS = Object.freeze(new Set(['characters']));
+
+// Built-in default categories carry a known kind so they land under the right
+// trunk in the UI without user intervention. Custom keys not in this map fall
+// to DEFAULT_CATEGORY_KIND ('other') unless the input carries an explicit
+// valid `kind`.
+export const WORLD_CATEGORY_DEFAULT_KINDS = Object.freeze({
+  landscapes: 'settings',
+  environments: 'settings',
+  structures: 'settings',
+  vehicles: 'objects',
+});
+
+// Resolve a category's kind. Precedence: explicit valid kind on the input wins;
+// otherwise the built-in default map; otherwise DEFAULT_CATEGORY_KIND.
+const resolveCategoryKind = (key, rawKind) => {
+  if (CATEGORY_KINDS.includes(rawKind)) return rawKind;
+  return WORLD_CATEGORY_DEFAULT_KINDS[key] || DEFAULT_CATEGORY_KIND;
+};
+
 // Maps v1 category buckets to canon kinds + tags. Unknown keys fall to
-// object (catch-all kind) tagged with the bucket name.
+// object (catch-all kind) tagged with the bucket name. Still used by the
+// v3→v4 backfill that folds the retired `characters` bucket into canon, and
+// by the optional pre-v4 backfill for legacy `landscapes/vehicles/etc` buckets.
 const CATEGORY_TO_CANON = Object.freeze({
   characters:   { kind: BIBLE_KIND.CHARACTER, tags: [] },
   landscapes:   { kind: BIBLE_KIND.SETTING,   tags: ['landscape'] },
@@ -189,10 +226,15 @@ const sanitizeCompositeSheet = (raw) => {
   return out;
 };
 
-const sanitizeCategory = (raw) => {
-  // Per-category structure: { variations: [{ label, prompt }] }. Cap so a
+const sanitizeCategory = (raw, key) => {
+  // Per-category structure: { kind, variations: [{ label, prompt }] }. Cap so a
   // runaway LLM can't blow up the universe template; matches the route schema.
-  if (!raw || typeof raw !== 'object') return { variations: [] };
+  // `kind` tags the bucket to one of the 3 canon trunks (characters/settings/
+  // objects) or 'other'; resolveCategoryKind picks the best value from
+  // (explicit input || built-in default || 'other').
+  if (!raw || typeof raw !== 'object') {
+    return { kind: resolveCategoryKind(key), variations: [] };
+  }
   const variations = [];
   if (Array.isArray(raw.variations)) {
     for (const v of raw.variations) {
@@ -202,30 +244,43 @@ const sanitizeCategory = (raw) => {
       if (variations.length >= VARIATIONS_PER_CATEGORY_MAX) break;
     }
   }
-  return { variations };
+  return { kind: resolveCategoryKind(key, raw.kind), variations };
 };
 
+// Merges an `incoming` category into `base`, concatenating variations under
+// the cap and trusting `incoming.kind`. The sole caller (`sanitizeCategories`)
+// always passes a `sanitizeCategory`-produced `incoming`, so kind is
+// guaranteed valid — no fallback needed.
 const mergeCategories = (base, next) => {
   const merged = { ...base };
   for (const [key, category] of Object.entries(next)) {
     const current = merged[key]?.variations || [];
-    const incoming = category?.variations || [];
-    merged[key] = { variations: [...current, ...incoming].slice(0, VARIATIONS_PER_CATEGORY_MAX) };
+    const incoming = category.variations;
+    merged[key] = {
+      kind: category.kind,
+      variations: [...current, ...incoming].slice(0, VARIATIONS_PER_CATEGORY_MAX),
+    };
   }
   return merged;
 };
 
 export const sanitizeCategories = (raw = {}) => {
-  const categories = Object.fromEntries(WORLD_CATEGORIES.map((key) => [key, { variations: [] }]));
+  const categories = Object.fromEntries(
+    WORLD_CATEGORIES.map((key) => [key, { kind: resolveCategoryKind(key), variations: [] }])
+  );
   if (!raw || typeof raw !== 'object') return categories;
 
   let customCount = WORLD_CATEGORIES.length;
   for (const [rawKey, rawCategory] of Object.entries(raw)) {
     const key = normalizeCategoryKey(rawKey);
     if (!key) continue;
+    // Retired buckets get dropped here; variations are folded into the
+    // matching canon array by backfillCanonFromCategories, which runs
+    // alongside this sanitizer in sanitizeTemplate.
+    if (RETIRED_CATEGORY_KEYS.has(key)) continue;
     if (!categories[key] && customCount >= WORLD_CATEGORY_COUNT_MAX) continue;
     if (!categories[key]) customCount += 1;
-    Object.assign(categories, mergeCategories(categories, { [key]: sanitizeCategory(rawCategory) }));
+    Object.assign(categories, mergeCategories(categories, { [key]: sanitizeCategory(rawCategory, key) }));
   }
   return categories;
 };

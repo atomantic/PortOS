@@ -169,9 +169,13 @@ describe('arcPlanner — generateArcOverview', () => {
           { label: 'The Lollipop Bureau', prompt: 'pastel public-facing agency' },
           { label: 'The Velvet Null', prompt: 'minimalist rival' },
         ] },
-        characters: { variations: [
-          { label: 'Mira Holt', prompt: 'field detective' },
-        ] },
+        // `characters` was retired as a default category in schema v4 — any
+        // variations under it now fold into universe.characters[] (canon).
+        // Use the cast leads as canon characters directly. Note: arcPlanner's
+        // current `worldCategoriesText` only reads from categories; canon
+        // characters aren't included yet (deferred to Phase B/C — see
+        // PLAN.md Backlog: "arcPlanner prompt context should include canon").
+        // For now this test only asserts category data flows through.
       },
       compositeSheets: [
         { kind: 'reference_sheet', label: 'Rival agencies branding', prompt: 'comparison sheet' },
@@ -192,7 +196,7 @@ describe('arcPlanner — generateArcOverview', () => {
     expect(ctx.worldName).toBe('Clandestiny');
     expect(ctx.worldCategoriesText).toContain('factions');
     expect(ctx.worldCategoriesText).toContain('The Lollipop Bureau');
-    expect(ctx.worldCategoriesText).toContain('Mira Holt');
+    expect(ctx.worldCategoriesText).toContain('The Velvet Null');
     expect(ctx.worldCompositesText).toContain('Rival agencies branding');
     expect(ctx.worldInfluencesEmbrace).toContain('Moebius');
     expect(ctx.worldInfluencesAvoid).toContain('gritty');

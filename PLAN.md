@@ -6,7 +6,11 @@ For project goals, see [GOALS.md](./GOALS.md). For completed work, see [DONE.md]
 
 ## Next Up
 
-1. **Universe-as-Canon Phase 2 UI — remaining schema retirement.** Canon is now folded into UniverseBuilder and the standalone Canon page is retired. Still to do: drop `universe.categories` from the schema (sanitizer, Zod, expand prompt template, `mergeCategoriesWithLocks`, `compilePrompts`'s `variations`/`all` branches) and enrich the expand LLM contract to ask for `characters[]`/`settings[]`/`objects[]` with rich metadata directly.
+1. **Universe Builder redesign — trunks + sub-buckets layout.** Replace the vertical-stack layout with a tabbed-trunk layout (`Bible / Cast / Places / Objects / Composites / Render`). Unify custom categories as sub-buckets under one of the 3 canon trunks via a new `kind: 'characters'|'settings'|'objects'` field on each category. Card grids with thumbnails replace the per-category accordion. Multi-phase (each phase is its own PR):
+   - **Phase A — Data model + migration.** Add `kind: 'characters'|'settings'|'objects'|'other'` field to category sanitizer (`server/services/universeBuilder.js#sanitizeCategories`) and Zod (`server/routes/universeBuilder.js#categoryShape`); default to `'other'` when missing/invalid. Sub-bucket keys remain **globally unique** (no per-trunk namespacing). Migration `scripts/migrations/NNN-categorize-universe-buckets.js` assigns built-in defaults: `landscapes/environments/structures → settings`, `vehicles → objects`. The default `characters` category is retired; its variations backfill into `universe.characters[]` (reuse `backfillCanonFromCategories` logic). All other existing custom categories get `kind: 'other'`; Phase C surfaces them under an **Other** tab with an **Auto-sort** button that LLM-classifies each bucket into the right trunk + a meaningful name.
+   - **Phase B — Expand contract enrichment.** Teach `buildExpansionPrompt()` (`server/services/universeBuilderExpand.js`) to return rich canon arrays (`characters[]`/`settings[]`/`objects[]` with `physicalDescription`/`palette`/`recurringDetails`/`wardrobe`) alongside the existing `categories` (now kind-tagged) + `compositeSheets`. Update `isExpansionShape()` predicate. Client `handleExpand` in `UniverseBuilder.jsx` merges canon entries into the canon arrays parallel to the category merge (dedupe by name, respect per-entry locks). Categories the LLM emits include a `kind` so they land under the right trunk.
+   - **Phase C — Layout rewrite.** Tabbed top-level (Bible / Cast / Places / Objects / Other / Composites / Render) with URL state (`?tab=cast&bucket=heroes` per CLAUDE.md linkable-routes convention) — Bible is its own tab (not a sticky header). Per-trunk view = sub-bucket chip filter row + responsive card grid. Unify `CanonCard` + a new card for category variations into a single `EntryCard` component (renders thumbnail from `primaryImageRef` or most recent render). **Canon entries are first-class batch-render targets** alongside category variations and composite sheets: per-bucket actions are "Generate N more" + "Bulk-render this bucket"; per-trunk action is "Bulk-render all Cast/Places/Objects" (includes BOTH canon entries AND every variation in every sub-bucket under that trunk); the Batch Render tab itself offers per-trunk, per-bucket, and "All canon" selectors plus the existing composite-sheets mode. Composite reference images stay intact as their own render mode (no regression). Server-side: extend `compilePrompts` to accept canon entries as render sources (synthesize a prompt from `name + physicalDescription/palette/description`, layered with the universe style preset the same way variations are today). The **Other** tab only appears when un-kinded buckets exist, and shows the **Auto-sort with AI** action. Mobile: tabs collapse to a select dropdown.
+   - **Phase D — Polish & promotion.** "Promote variation to canon" action: take a `{label, prompt}` variation, expand it via LLM into a full canon entry (`name`, `physicalDescription`, etc.) and move it from the category bucket into the canon array. Tests for the new components. Extract design to `docs/features/universe-builder.md` if the doc warrants it.
 2. **Step-by-step approval/lock UX across Universe → Series → Arc → Seasons → Episodes.** Iteration 1 shipped a single arc-level lock; extend to per-season + per-field locks, lock the bulk runners, surface stage-progress strip, enforce locks server-side before LLM invocations.
 3. **Sharing v2 contracts** — per-peer subscription filenames (`sub-<kind>-<recordId>-<senderInstanceId>.json`), tombstone-based item removals, "🔄 live" badge on inbox subscription rows.
 4. **Pipeline continuity gaps** — plumb character physicalDescription/personality/background into idea-stage prompt; plumb setting `palette`/`era`/`weather`/`recurringDetails` into visual stages; add `worldEntitiesSummary` to text stages; add a dedicated `voice` / speech-pattern field to the bible schema.
@@ -36,8 +40,10 @@ For project goals, see [GOALS.md](./GOALS.md). For completed work, see [DONE.md]
 ### Universe-as-Canon — Phase 2 + extensions
 
 - [ ] **CanonCard "from series: <name>" full provenance label.** Card currently shows a "from series" chip with the series id in the tooltip. Plumb a `seriesNameMap` (or `sourceSeriesName` per entry) so the chip can render the actual series name. Needs the parent (`UniverseCanonSection` / `NounsStage`) to pass a `{ [seriesId]: name }` lookup.
-- [ ] **Retire `universe.categories` on the schema.** After UI no longer reads it, drop from `sanitizeTemplate`, route Zod schemas, expand prompt template, `mergeCategoriesWithLocks`, `compilePrompts`'s `'variations'`/`'all'` branches.
-- [ ] **Universe expand LLM contract enrichment.** Ask the LLM directly for `characters[]` / `settings[]` / `objects[]` with rich narrative metadata alongside visual `prompt`.
+- [x] ~~**Retire `universe.categories` on the schema.**~~ **Rejected 2026-05-17** — categories are an active user-facing exploration workflow (custom buckets like `factions`/`colonies`/`raider_clans`, bulk variation generation, batch render). Canon has no equivalent. See "Categories vs canon — decision" below.
+- [→] **Drop the default `characters` category.** Folded into Next Up #1 Phase A.
+- [→] **Universe expand LLM contract enrichment.** Folded into Next Up #1 Phase B.
+- [ ] **arcPlanner prompt context — include canon characters/places/objects.** `server/services/pipeline/arcPlanner.js:96` only renders `world.categories` into `worldCategoriesText`. With the `characters` default category retired (schema v4), characters now live in `world.characters[]` (canon) and don't surface in arc-planning prompts. Add a sibling `renderCanonForPrompt(world)` helper and a `worldCanonText` context field; update the arc prompt template + tests. Same gap likely exists in other prompt builders that read `world.categories` — sweep with `grep -rn "world\.categories" server/services/pipeline server/services/universeBuilder*.js`.
 - [ ] **Settings → Places kind rename.** `BIBLE_KIND.SETTING → BIBLE_KIND.PLACE`, `BIBLE_FIELD[SETTING]: 'settings' → 'places'`. Touches ~20 files. Stick the rename to bible context — app settings stays as "settings".
 - [ ] **Use rendered reference images as i2i anchors in downstream comic-page renders for models that support it.** SDXL/Flux pipelines anchor every panel render on the per-character rendered ref.
 
@@ -174,6 +180,24 @@ For project goals, see [GOALS.md](./GOALS.md). For completed work, see [DONE.md]
 - [ ] **Extract migration scaffolding into `scripts/migrations/_lib.js`.** Migrations 003 and 006 both implement the same hash-driven prompt-replace pattern (~75 lines of boilerplate each). Lift to a shared helper; next migration becomes ~15 lines.
 - [ ] **Shots-aware scene-output-contract partial.** Split into `_partials/scene-fields-core.md` + `_partials/scene-fields-shots.md` when a third shots-using stage appears.
 - [ ] **Per-panel/scene image progress in the Pipeline UI.** ComicPages and Storyboards record `jobId` but don't subscribe to the media-job SSE for live preview.
+
+---
+
+## Design decisions
+
+### Categories vs canon — decision (2026-05-17)
+
+**First framing (rejected same day):** retire `universe.categories` entirely, assuming canon subsumed it. This was wrong — canon and categories serve different workflows (consistency vs. exploration) and custom buckets like `factions`/`colonies` have no clean home in canon.
+
+**Second framing (rejected same day):** keep canon and categories as *complementary siblings* (two top-level sections of the Universe Builder page). Rejected because it preserves the bifurcated mental model — the user sees `Cast` and `Factions` as separate top-level concepts even though factions are characters.
+
+**Final framing (accepted 2026-05-17):** **unify under 3 canon trunks.** The Universe Builder has 3 first-class trunks — `Characters`, `Places`, `Objects` — and every entity in the universe (canon entries AND category variations) lives under exactly one trunk. Each category gets a new `kind` field tagging it to its trunk:
+
+- **Canon entries** = first-class entities with rich production metadata (`physicalDescription`, `palette`, `recurringDetails`, `wardrobe`, `imageRefs`). Named, consistent across episodes.
+- **Sub-buckets** (formerly "categories") = organizational + bulk-generation surfaces *within* a trunk. `Cast > Heroes/Villains/Factions`, `Places > Colonies/Ruins`, `Objects > Vehicles/Weapons`. Each holds flat `{label, prompt}` variations for visual exploration.
+- **Promotion**: a variation can be promoted to canon — the LLM expands it into a full canon entry and moves it from the bucket into the canon array.
+
+This collapses the page to 3 navigable trunks (plus Bible/Composites/Render), supports inline thumbnails per entry, and gives every entity one obvious home. See Next Up #1 for the multi-phase implementation.
 
 ---
 

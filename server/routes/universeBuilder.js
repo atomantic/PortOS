@@ -57,6 +57,11 @@ const compositeSheetSchema = z.object({
   locked: z.boolean().optional(),
 });
 const categoryShape = z.object({
+  // Tags this bucket to one of the 3 canon trunks (or 'other' as the
+  // un-classified sink). Optional on input — sanitizeCategories resolves a
+  // sensible default from the built-in map (landscapes→settings etc.) or
+  // falls to 'other'. Added in schema v4.
+  kind: z.enum(svc.CATEGORY_KINDS).optional(),
   variations: z.array(variationSchema).max(svc.VARIATIONS_PER_CATEGORY_MAX),
 });
 const categoriesSchema = z.record(

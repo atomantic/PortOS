@@ -38,7 +38,6 @@ import { PIPELINE_IMAGE_DEFAULTS, readPipelineImageSettings } from '../lib/pipel
 const CATEGORY_LABELS = {
   landscapes: 'Landscapes',
   environments: 'Environments',
-  characters: 'Characters',
   structures: 'Structures',
   vehicles: 'Vehicles',
 };

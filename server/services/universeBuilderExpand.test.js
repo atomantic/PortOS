@@ -142,10 +142,14 @@ describe("universeBuilderExpand.extractJson", () => {
 });
 
 describe("universeBuilderExpand.normalizeCategories", () => {
-  it("returns all canonical categories with empty variations on empty input", () => {
+  it("returns all canonical categories with empty variations + kind on empty input", () => {
     const out = normalizeCategories({});
     for (const key of WORLD_CATEGORIES) {
-      expect(out[key]).toEqual({ variations: [] });
+      // schema v4 tags each bucket with a `kind` resolving its canon trunk;
+      // built-in defaults carry the expected mapping from
+      // WORLD_CATEGORY_DEFAULT_KINDS.
+      expect(out[key]).toMatchObject({ variations: [] });
+      expect(typeof out[key].kind).toBe('string');
     }
   });
 
@@ -160,10 +164,13 @@ describe("universeBuilderExpand.normalizeCategories", () => {
   });
 
   it("truncates long string-shape labels at 80 chars", () => {
+    // `characters` was retired as a default bucket in schema v4 (canon owns
+    // characters now). Use a different built-in bucket to probe the length
+    // truncation behavior.
     const longText = "x".repeat(200);
-    const out = normalizeCategories({ characters: [longText] });
-    expect(out.characters.variations[0].label).toHaveLength(80);
-    expect(out.characters.variations[0].prompt).toBe(longText);
+    const out = normalizeCategories({ vehicles: [longText] });
+    expect(out.vehicles.variations[0].label).toHaveLength(80);
+    expect(out.vehicles.variations[0].prompt).toBe(longText);
   });
 
   it("accepts the canonical { variations: [{label,prompt}] } shape", () => {
@@ -212,8 +219,10 @@ describe("universeBuilderExpand.normalizeCategories", () => {
   });
 
   it("treats a non-object category as empty variations (not a crash)", () => {
-    const out = normalizeCategories({ characters: "not an object" });
-    expect(out.characters).toEqual({ variations: [] });
+    // `characters` is retired — the sanitizer drops that key entirely.
+    // Probe with a custom key so the don't-crash behavior is the assertion.
+    const out = normalizeCategories({ factions: "not an object" });
+    expect(out.factions).toMatchObject({ variations: [] });
   });
 });
 

@@ -23,6 +23,11 @@ const svc = await import("./universeBuilder.js");
 
 // Default universe with non-empty influences. Override `influences` for tests
 // that need isolation from the seed tokens.
+//
+// The seed uses `outfits` (a custom category) rather than the legacy default
+// `characters` bucket — the latter was retired in schema v4 and any variations
+// under it get folded into universe.characters[] (canon) on sanitize. Using a
+// custom name keeps the 2-bucket / 3-variation scenario these tests rely on.
 const seedWorld = async (overrides = {}) =>
   svc.createUniverse({
     name: "Moebius SciFi",
@@ -38,7 +43,7 @@ const seedWorld = async (overrides = {}) =>
           { label: "Sand Sea", prompt: "endless sand sea, dunes" },
         ],
       },
-      characters: {
+      outfits: {
         variations: [
           {
             label: "Scavenger",
@@ -60,18 +65,24 @@ describe("universeBuilder service", () => {
     expect(await svc.listUniverses()).toEqual([]);
   });
 
-  it("createUniverse persists with sanitized categories", async () => {
+  it("createUniverse persists with sanitized categories + kind tags", async () => {
     const w = await seedWorld();
     expect(w.id).toBe("uuid-1");
     expect(w.name).toBe("Moebius SciFi");
-    // All five categories materialized even when only two were provided.
+    // All default categories materialized even when only one was provided,
+    // each tagged with its canon trunk via the WORLD_CATEGORY_DEFAULT_KINDS map.
     for (const c of svc.WORLD_CATEGORIES) {
       expect(w.categories[c]).toBeDefined();
       expect(Array.isArray(w.categories[c].variations)).toBe(true);
+      expect(svc.CATEGORY_KINDS).toContain(w.categories[c].kind);
     }
     expect(w.categories.landscapes.variations).toHaveLength(2);
-    expect(w.categories.characters.variations).toHaveLength(1);
+    expect(w.categories.landscapes.kind).toBe("settings");
+    expect(w.categories.vehicles.kind).toBe("objects");
     expect(w.categories.environments.variations).toHaveLength(0);
+    // Custom (un-defaulted) bucket falls to 'other'.
+    expect(w.categories.outfits.kind).toBe("other");
+    expect(w.categories.outfits.variations).toHaveLength(1);
   });
 
   it("createUniverse preserves custom universe-building categories", async () => {
@@ -244,7 +255,7 @@ describe("universeBuilder service", () => {
     it("returns one prompt per variation across selected categories with style prefix", async () => {
       const w = await seedWorld();
       const compiled = svc.compilePrompts(w);
-      // 2 landscapes + 1 character = 3 (other categories empty)
+      // 2 landscapes + 1 outfit = 3 (other categories empty)
       expect(compiled).toHaveLength(3);
       // Style prefix uses `. ` separator (composeStyledPrompt convention,
       // shared with the scenePrompt composer in the client).
@@ -290,9 +301,9 @@ describe("universeBuilder service", () => {
     it("selection: array filters by label (case-insensitive)", async () => {
       const w = await seedWorld();
       const compiled = svc.compilePrompts(w, {
-        selection: { landscapes: ["crystal canyon"], characters: "all" },
+        selection: { landscapes: ["crystal canyon"], outfits: "all" },
       });
-      // 1 landscape (filtered) + 1 character (all) = 2
+      // 1 landscape (filtered) + 1 outfit (all) = 2
       expect(compiled).toHaveLength(2);
       expect(compiled.map((c) => c.label).sort()).toEqual([
         "Crystal Canyon",
@@ -713,6 +724,90 @@ describe("universeBuilder service", () => {
       // Hand-authored fields preserved; the variation's prompt didn't bleed in.
       expect(alexes[0].role).toBe("Hand-authored role");
       expect(alexes[0].source).toBe("manual");
+    });
+  });
+
+  describe("category kind (schema v4)", () => {
+    it("assigns built-in default kinds (landscapes/environments/structures→settings, vehicles→objects)", async () => {
+      const w = await seedWorld();
+      expect(w.categories.landscapes.kind).toBe("settings");
+      expect(w.categories.environments.kind).toBe("settings");
+      expect(w.categories.structures.kind).toBe("settings");
+      expect(w.categories.vehicles.kind).toBe("objects");
+    });
+
+    it("defaults custom (non-built-in) buckets to 'other'", async () => {
+      const w = await seedWorld({
+        categories: {
+          factions: { variations: [{ label: "Rebels", prompt: "x" }] },
+          colonies: { variations: [{ label: "Tycho", prompt: "y" }] },
+        },
+      });
+      expect(w.categories.factions.kind).toBe("other");
+      expect(w.categories.colonies.kind).toBe("other");
+    });
+
+    it("honors an explicit valid `kind` from the input over the built-in default", async () => {
+      const w = await seedWorld({
+        categories: {
+          landscapes: { kind: "objects", variations: [] },
+          factions: { kind: "characters", variations: [{ label: "Iron Reach", prompt: "z" }] },
+        },
+      });
+      expect(w.categories.landscapes.kind).toBe("objects"); // override beats default
+      expect(w.categories.factions.kind).toBe("characters");
+    });
+
+    it("falls back to default when explicit `kind` is invalid", async () => {
+      const w = await seedWorld({
+        categories: {
+          landscapes: { kind: "not-a-kind", variations: [] },
+          vehicles: { kind: 42, variations: [] },
+          colonies: { kind: null, variations: [{ label: "Tycho", prompt: "x" }] },
+        },
+      });
+      expect(w.categories.landscapes.kind).toBe("settings"); // built-in default
+      expect(w.categories.vehicles.kind).toBe("objects"); // built-in default
+      expect(w.categories.colonies.kind).toBe("other"); // custom fallback
+    });
+
+    it("drops the legacy default `characters` bucket and folds variations into canon", async () => {
+      const w = await seedWorld({
+        categories: {
+          // Mimic a v3 client (or post-migration tab) accidentally sending the
+          // retired bucket — sanitize folds it into canon.characters[] and
+          // drops the bucket entirely.
+          characters: {
+            variations: [
+              { label: "Ash", prompt: "young survivor with iron rebar" },
+              { label: "Roan", prompt: "weathered scavenger" },
+            ],
+          },
+        },
+      });
+      expect(w.categories.characters).toBeUndefined();
+      const ash = w.characters.find((c) => c.name === "Ash");
+      const roan = w.characters.find((c) => c.name === "Roan");
+      expect(ash).toBeDefined();
+      expect(ash.prompt).toBe("young survivor with iron rebar");
+      expect(roan).toBeDefined();
+    });
+
+    it("WORLD_CATEGORIES no longer includes `characters`", () => {
+      expect(svc.WORLD_CATEGORIES).not.toContain("characters");
+      expect(svc.WORLD_CATEGORIES).toEqual(
+        expect.arrayContaining(["landscapes", "environments", "structures", "vehicles"]),
+      );
+    });
+
+    it("kind round-trips through update", async () => {
+      const w = await seedWorld({
+        categories: { factions: { variations: [{ label: "Iron Reach", prompt: "x" }] } },
+      });
+      const patched = await svc.updateUniverse(w.id, {
+        categories: { factions: { kind: "characters", variations: [{ label: "Iron Reach", prompt: "x" }] } },
+      });
+      expect(patched.categories.factions.kind).toBe("characters");
     });
   });
 
