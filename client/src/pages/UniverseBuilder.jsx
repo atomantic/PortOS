@@ -1568,29 +1568,37 @@ function totalVariationCount(world) {
 // IMPORTANT: keep the per-kind field lists in sync with server's
 // `synthesizeCanonPrompt`. Drift between client/server here makes scoped render
 // counts and disabled states lie about what will actually be enqueued.
+// Server's `synthesizeCanonPrompt` trims each string field before pushing into
+// `parts` and then filters out empty results via `String(p).trim().filter(Boolean)`.
+// A whitespace-only field doesn't anchor renderability there — mirror that here
+// so client-side counts/disable states agree under optimistic edits.
+const hasNonBlankString = (v) => typeof v === 'string' && v.trim().length > 0;
+
 const canonEntryHasContent = (e, kind) => {
   if (!e) return false;
-  if (typeof e.prompt === 'string' && e.prompt.trim()) return true;
+  if (hasNonBlankString(e.prompt)) return true;
   // Identifier anchors per kind — settings allow slugline-only entries (bible
   // sanitizer); characters/objects ignore stray slugline. Mirrors server
   // synthesizeCanonPrompt's identifier-seed rule.
-  if (e.name) return true;
-  if (kind === 'settings' && e.slugline) return true;
+  if (hasNonBlankString(e.name)) return true;
+  if (kind === 'settings' && hasNonBlankString(e.slugline)) return true;
   if (kind === 'characters') {
-    return Boolean(e.physicalDescription || e.role);
+    return hasNonBlankString(e.physicalDescription) || hasNonBlankString(e.role);
   }
   if (kind === 'settings') {
-    return Boolean(e.description || e.palette || e.era || e.weather || e.recurringDetails);
+    return hasNonBlankString(e.description) || hasNonBlankString(e.palette)
+      || hasNonBlankString(e.era) || hasNonBlankString(e.weather)
+      || hasNonBlankString(e.recurringDetails);
   }
   if (kind === 'objects') {
-    return Boolean(e.description || e.significance);
+    return hasNonBlankString(e.description) || hasNonBlankString(e.significance);
   }
   // Unknown kind — fall back to the inclusive union so an unrecognized trunk
   // doesn't silently collapse to 0.
-  return Boolean(
-    e.physicalDescription || e.description || e.palette || e.era || e.weather
-    || e.recurringDetails || e.role || e.significance,
-  );
+  return hasNonBlankString(e.physicalDescription) || hasNonBlankString(e.description)
+    || hasNonBlankString(e.palette) || hasNonBlankString(e.era) || hasNonBlankString(e.weather)
+    || hasNonBlankString(e.recurringDetails) || hasNonBlankString(e.role)
+    || hasNonBlankString(e.significance);
 };
 
 const countCanonWithContent = (world, kind) =>
