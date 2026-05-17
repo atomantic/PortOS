@@ -18,7 +18,7 @@ import { existsSync, watch as fsWatch } from 'fs';
 import { join, dirname, resolve as resolvePath, sep as PATH_SEP, basename } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
-import { assertSafeFilename, ensureDir, PATHS, safeJSONParse } from '../../lib/fileUtils.js';
+import { assertSafeFilename, ensureDir, PATHS, safeJSONParse, resolveGalleryImage } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { imageGenEvents } from '../imageGenEvents.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, PYTHON_NOISE_RE } from '../../lib/sseUtils.js';
@@ -267,17 +267,12 @@ export async function generateImage({ pythonPath, prompt, negativePrompt = '', m
   // what the new client API uses for remix. Keep `loraPaths` populated too
   // so older code paths reading the sidecar don't break.
   const validLoraFilenames = validLoras.map((p) => basename(p));
-  // i2i: validate the init image path stays under PATHS.images so a malicious
-  // payload (or a stale absolute path from an old sidecar) can't make mflux
-  // read arbitrary files. If the caller passes a basename, the route layer
-  // already resolved it to PATHS.images/<basename>; this is a defense-in-depth
-  // check here too.
-  let validInitImagePath = null;
-  if (initImagePath && typeof initImagePath === 'string') {
-    const imagesRoot = resolvePath(PATHS.images) + PATH_SEP;
-    const resolved = resolvePath(initImagePath);
-    if (resolved.startsWith(imagesRoot) && existsSync(resolved)) validInitImagePath = resolved;
-  }
+  // i2i: defense in depth — the route already validated a fresh request,
+  // but an old sidecar replay can carry a stale absolute path outside the
+  // gallery. Re-anchor through resolveGalleryImage before handing to mflux.
+  const validInitImagePath = (initImagePath && typeof initImagePath === 'string')
+    ? resolveGalleryImage(initImagePath)
+    : null;
   const validInitImageStrength = validInitImagePath && initImageStrength != null
     ? Math.max(0, Math.min(1, Number(initImageStrength)))
     : null;

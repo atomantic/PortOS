@@ -7,14 +7,14 @@
  */
 
 import { Router } from 'express';
-import { existsSync, statSync } from 'fs';
+import { existsSync } from 'fs';
 import { copyFile, unlink } from 'fs/promises';
 import { randomUUID } from 'crypto';
-import { join, basename, resolve as resolvePath, sep as PATH_SEP, extname } from 'path';
+import { join, extname } from 'path';
 import { z } from 'zod';
 import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
 import { uploadFields } from '../lib/multipart.js';
-import { PATHS, ensureDir } from '../lib/fileUtils.js';
+import { PATHS, ensureDir, resolveGalleryImage } from '../lib/fileUtils.js';
 import { safeUnder } from '../lib/ffmpeg.js';
 import { getSettings } from '../services/settings.js';
 import {
@@ -154,31 +154,6 @@ router.get('/status', asyncHandler(async (_req, res) => {
 router.get('/models', (_req, res) => {
   res.json(listVideoModels());
 });
-
-// Path-traversal guard: basename() strips dirs, then resolve+prefix-check
-// against PATHS.images so a unicode trick can't escape data/images. Also
-// reject `.`/`..`/empty basenames and require the resolved entry to be a
-// regular file — otherwise the images-root directory itself would resolve
-// (existsSync is true for dirs) and flow into ffmpeg as an "image path"
-// where it'd fail in confusing ways.
-//
-// Wrap statSync in try/catch (one of the few "strictly necessary" uses):
-// throwIfNoEntry: false silences ENOENT but not EACCES/permissions or
-// transient I/O errors — those should be treated as "not a valid gallery
-// reference" and produce a clean validation null, not bubble up as a 500.
-const resolveGalleryImage = (name) => {
-  const safe = basename(name);
-  if (!safe || safe === '.' || safe === '..') return null;
-  const imagesRoot = resolvePath(PATHS.images) + PATH_SEP;
-  const localPath = resolvePath(join(PATHS.images, safe));
-  if (!localPath.startsWith(imagesRoot) || !existsSync(localPath)) return null;
-  try {
-    const stat = statSync(localPath, { throwIfNoEntry: false });
-    return stat?.isFile() ? localPath : null;
-  } catch {
-    return null;
-  }
-};
 
 router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
   // Pre-enqueue cleanup hook: every throw path below MUST drop ALL multipart

@@ -91,7 +91,6 @@ For project goals, see [GOALS.md](./GOALS.md). For completed work, see [DONE.md]
 
 ### Code quality / dedup (from `/simplify` passes)
 
-- [ ] **Promote `resolveGalleryImage` to `server/lib/fileUtils.js`.** Basename + `resolvePath` + `startsWith(imagesRoot)` security check reimplemented in 5 places (videoGen, imageGen, visualStages, sceneRunner, imageGen/local). Pick up the `isFile()` symlink-following defense the four non-videoGen sites are missing.
 - [ ] **Route-level tests for proof/final `target` + `useProofAsBase`.** Three test cases on `comicPageRenderSchema` + `comicCoverRenderSchema`.
 - [ ] **Extract `useSwipeNav` hook + `lib/clipboard.js`.** `MediaLightbox` swipe nav; clipboard inlined across 8+ call sites. Clipboard can move now.
 - [ ] **Route `MediaLightbox` settings drawer through `components/Drawer.jsx`.** Reconcile `Drawer`'s flat Esc handler with the lightbox's layered Escape cascade.

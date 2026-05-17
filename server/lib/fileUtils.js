@@ -5,11 +5,11 @@
  */
 
 import { mkdir, readFile, writeFile, rename, unlink } from 'fs/promises';
-import { existsSync } from 'fs';
+import { existsSync, statSync } from 'fs';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { randomUUID } from 'crypto';
-import { join, dirname, basename } from 'path';
+import { join, dirname, basename, resolve as resolvePath, sep as PATH_SEP } from 'path';
 import { fileURLToPath } from 'url';
 import { homedir } from 'os';
 import { ServerError } from './errorHandler.js';
@@ -592,6 +592,52 @@ export function assertSafeFilename(filename, { extensions, subject = 'filename',
   const extOk = extensions.some((ext) => lower.endsWith(String(ext).toLowerCase()));
   if (!extOk || hasSeparator || isExactTraversal || !isPureBasename) {
     throw new ServerError(`Invalid ${subjectText}`, { status: 400, code: 'VALIDATION_ERROR' });
+  }
+}
+
+/**
+ * Resolve a user-supplied gallery image filename to an absolute path under
+ * `PATHS.images`. Returns `null` on any failure so callers can decide whether
+ * to throw, log-and-skip, or substitute a fallback.
+ *
+ * Defense in depth:
+ *  1. `basename()` strips dirs (so `../../etc/passwd` → `passwd`).
+ *  2. Reject `.`/`..`/empty basenames outright.
+ *  3. `resolve` + `startsWith(imagesRoot)` so unicode tricks can't escape.
+ *  4. When `mustExist`, `statSync({ throwIfNoEntry: false }).isFile()` rejects
+ *     directories (the images root itself would otherwise pass an existsSync
+ *     check and flow into ffmpeg as an "image path" where it'd fail in
+ *     confusing ways). Note: `statSync` follows symlinks, so a symlink inside
+ *     `data/images/` pointing to a regular file outside the gallery still
+ *     passes. PortOS is single-user (see CLAUDE.md "Security Model") so we
+ *     accept that — if you need to reject symlinks too, use `lstatSync`.
+ *
+ * Pass `{ mustExist: false }` for code paths that intentionally skip the
+ * existence check (e.g. when the path is resolved at request time but read
+ * later — TOCTOU between resolve and use isn't worth the extra syscall, and
+ * the downstream renderer surfaces a clear error if the file vanished).
+ *
+ * @param {string} name - Filename to resolve (basenamed internally)
+ * @param {object} [opts]
+ * @param {boolean} [opts.mustExist=true] - Require the resolved path to be an existing regular file
+ * @returns {string|null} Absolute path inside PATHS.images, or null
+ */
+export function resolveGalleryImage(name, { mustExist = true } = {}) {
+  if (typeof name !== 'string' || !name) return null;
+  const safe = basename(name);
+  if (!safe || safe === '.' || safe === '..') return null;
+  const imagesRoot = resolvePath(PATHS.images) + PATH_SEP;
+  const localPath = resolvePath(join(PATHS.images, safe));
+  if (!localPath.startsWith(imagesRoot)) return null;
+  if (!mustExist) return localPath;
+  // throwIfNoEntry:false swallows ENOENT but not EACCES / transient I/O —
+  // treat those as "not a valid gallery reference" too rather than bubbling
+  // a 500 out of the route layer.
+  try {
+    const stat = statSync(localPath, { throwIfNoEntry: false });
+    return stat?.isFile() ? localPath : null;
+  } catch {
+    return null;
   }
 }
 

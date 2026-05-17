@@ -62,14 +62,21 @@ vi.mock('../lib/fileUtils.js', () => ({
   // Route awaits ensureDir before staging the upload; no-op for tests since
   // we mock copyFile too.
   ensureDir: vi.fn(async () => {}),
+  // The route resolves user-supplied basenames through this helper before
+  // handing them to the renderer. Mirror the real helper's basename-strip
+  // + dot-segment rejection so the "strips path-traversal" test below
+  // genuinely exercises the documented behavior (otherwise the mock would
+  // happily forward `../../etc/passwd` through unchanged).
+  resolveGalleryImage: vi.fn((name) => {
+    if (typeof name !== 'string' || !name) return null;
+    const safe = name.split(/[/\\]/).pop();
+    if (!safe || safe === '.' || safe === '..') return null;
+    return `/mock/images/${safe}`;
+  }),
 }));
 
 vi.mock('fs', () => ({
   existsSync: vi.fn(() => true),
-  // statSync gates resolveGalleryImage onto regular-file checks — the route
-  // rejects directories, so the mock has to look like a file for the
-  // gallery-image plumbing tests to pass.
-  statSync: vi.fn(() => ({ isFile: () => true })),
 }));
 vi.mock('fs/promises', () => ({
   unlink: vi.fn(async () => {}),
@@ -210,12 +217,13 @@ describe('videoGen routes', () => {
       // Documented-safe behavior: `basename()` strips dirs so the resolved
       // path is `/mock/images/passwd` (under PATHS.images). The route does
       // NOT 400 — it just consumes whatever's safely under the images root.
-      // What this test really locks in: the request succeeds + the route
-      // never enqueues a job that points outside PATHS.images.
       expect(r.status).toBe(200);
       expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({
         kind: 'video',
-        params: expect.objectContaining({ prompt: 'a cat' }),
+        params: expect.objectContaining({
+          prompt: 'a cat',
+          sourceImagePath: '/mock/images/passwd',
+        }),
       }));
     });
 

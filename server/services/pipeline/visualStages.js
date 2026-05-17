@@ -23,12 +23,11 @@
  * path drives the Creative Director scene runner end-to-end.
  */
 
-import { basename, join, resolve as resolvePath, sep as PATH_SEP } from 'node:path';
 import { enqueueJob } from '../mediaJobQueue/index.js';
 import { getSettings } from '../settings.js';
 import { getSeries } from './series.js';
 import { getIssue, updateStage, VISUAL_STAGE_IDS } from './issues.js';
-import { PATHS } from '../../lib/fileUtils.js';
+import { resolveGalleryImage } from '../../lib/fileUtils.js';
 import { buildComicPagesOwner, buildSeasonCoverOwner, buildStoryboardsShotOwner } from './owners.js';
 import { getUniverse, joinInfluenceList } from '../universeBuilder.js';
 import { ServerError } from '../../lib/errorHandler.js';
@@ -113,10 +112,10 @@ export { buildRenderSlot } from '../../lib/renderSlot.js';
 const PROOF_AS_BASE_DEFAULT_STRENGTH = 0.25;
 
 // Resolve a stored proof filename (e.g. "abc123.png") to an absolute path
-// under PATHS.images, enforcing the gallery prefix. Skips existsSync — the
-// downstream image-gen runner reads the path and will surface a clear error
-// if the file vanished between enqueue and exec; an existsSync here would
-// add a TOCTOU race for no real benefit.
+// under PATHS.images, enforcing the gallery prefix. `mustExist:false` skips
+// the existsSync check — the downstream image-gen runner reads the path and
+// will surface a clear error if the file vanished between enqueue and exec;
+// an existsSync here would add a TOCTOU race for no real benefit.
 const resolveProofInitImage = (proofImage, label) => {
   const name = proofImage?.filename;
   if (typeof name !== 'string' || !name) {
@@ -125,10 +124,8 @@ const resolveProofInitImage = (proofImage, label) => {
       { status: 400, code: 'PIPELINE_COMIC_PROOF_MISSING' },
     );
   }
-  const candidate = join(PATHS.images, basename(name));
-  const imagesRoot = resolvePath(PATHS.images) + PATH_SEP;
-  const resolved = resolvePath(candidate);
-  if (!resolved.startsWith(imagesRoot)) {
+  const resolved = resolveGalleryImage(name, { mustExist: false });
+  if (!resolved) {
     throw new ServerError(
       `Proof image path escaped the gallery for ${label}: ${name}`,
       { status: 400, code: 'PIPELINE_COMIC_PROOF_NOT_FOUND' },
