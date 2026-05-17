@@ -75,7 +75,10 @@ export const NAME_MAX_LENGTH = 100;
 // A render can enqueue up to 5 categories × 50 variations × 20 batchPerVariation
 // = 5000 jobs. Cap at 10k to leave headroom against future bumps to those caps.
 const MAX_RUN_JOB_IDS = 10000;
-export const STARTER_PROMPT_MAX = 4000;
+// The starter idea is whatever the user wants to write — anything from a
+// one-line pitch to a multi-page treatment. Cap is a sanity ceiling against
+// runaway payloads, not an artificial brevity constraint.
+export const STARTER_PROMPT_MAX = 200_000;
 export const PROMPT_FRAGMENT_MAX = 2000;
 export const COMPOSITE_PROMPT_MAX = 4000;
 export const VARIATION_LABEL_MAX = 120;
