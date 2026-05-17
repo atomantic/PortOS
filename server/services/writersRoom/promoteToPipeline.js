@@ -112,12 +112,16 @@ export async function promoteWorkToPipeline(workId, { force = false } = {}) {
     objects,
   });
 
-  // Roll back the universe + (partial) series if any downstream write fails —
-  // otherwise a series/issue validation error would leave an orphan universe
-  // record with no series linked and the manifest still unlinked, with no
-  // path back to it from the writers-room UI. Try/catch is appropriate here
-  // (multi-step write that needs atomic-ish rollback, not error swallowing —
-  // we re-throw after cleanup so the caller still sees the original error).
+  // Roll back the universe + (partial) series + issue if ANY downstream
+  // write fails — otherwise a series/issue/link error would leave an orphan
+  // record set with the manifest still unlinked, and the next promote
+  // (which only consults manifest ids for the idempotent fast-path) would
+  // create duplicates with no path back to the originals. Try/catch is
+  // appropriate here (multi-step write that needs atomic-ish rollback, not
+  // error swallowing — we re-throw after cleanup so the caller still sees
+  // the original error). linkToPipeline is INSIDE the try block because
+  // its failure leaves exactly the same orphan state as a createIssue
+  // failure: a universe + series + issue with no manifest link.
   let series = null;
   let issue = null;
   try {
@@ -144,16 +148,19 @@ export async function promoteWorkToPipeline(workId, { force = false } = {}) {
           : { status: 'empty' },
       },
     });
+
+    await wrLocal.linkToPipeline(workId, { seriesId: series.id, issueId: issue.id });
   } catch (err) {
     // Best-effort cleanup; swallow cleanup errors so the original cause
     // (validation failure, etc.) reaches the caller instead of a misleading
-    // delete-failed message.
+    // delete-failed message. Cleanup in reverse dependency order: issue
+    // first (depends on series), then series (depends on universe), then
+    // universe.
+    if (issue) await issuesSvc.deleteIssue(issue.id).catch(() => {});
     if (series) await seriesSvc.deleteSeries(series.id).catch(() => {});
     await deleteUniverse(universe.id).catch(() => {});
     throw err;
   }
-
-  await wrLocal.linkToPipeline(workId, { seriesId: series.id, issueId: issue.id });
 
   return { series, issue, reused: false };
 }

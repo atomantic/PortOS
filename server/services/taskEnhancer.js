@@ -107,7 +107,11 @@ export async function enhanceTaskPrompt(description, context = '') {
   const { text, model: effectiveModel } = await runPromptThroughProvider({
     provider, prompt: fullPrompt, source: 'task-enhancement', model,
   });
-  model = effectiveModel;
+  // Keep the caller's chosen model (or provider default) when the runner
+  // resolves to a null effectiveModel — overwriting unconditionally would
+  // report `model: null` in logs + return values even though we explicitly
+  // chose one upstream.
+  model = effectiveModel || model || provider.defaultModel || null;
 
   // Clean up the response - remove any leading/trailing whitespace and common prefixes
   let enhancedDescription = text.trim();
