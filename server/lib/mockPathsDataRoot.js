@@ -14,21 +14,16 @@
  *       });
  *     });
  *
- * This module gives the same behavior via a single helper.
+ * This module gives the same behavior via a single helper. The relative path
+ * to `fileUtils.js` stays at each call site because `vi.mock` is hoisted to
+ * module top before any test code runs — Vitest must see a string literal to
+ * a real file from the *test's* directory. The helper computes the temp dir
+ * and exposes a Proxy factory; the caller still writes the one-liner
+ * `vi.mock(...)` so Vitest's hoister can find it. See `mockPathsDataRoot()`
+ * below for the canonical usage example.
  *
- * USAGE — replace the inline block with two lines:
- *
- *     import { mockPathsDataRoot } from '../lib/mockPathsDataRoot.js';
- *     const tempRoot = mockPathsDataRoot('../lib/fileUtils.js');
- *
- * The relative path to `fileUtils.js` is supplied by the caller because
- * `vi.mock` is hoisted to module top before any test code runs — Vitest must
- * see a string literal to a real file from the *test's* directory. The helper
- * itself only computes the temp dir and exposes a Proxy factory; the caller
- * still writes the one-liner `vi.mock(...)` so Vitest's hoister can find it.
- *
- * To keep the call site to two lines and avoid forcing every test to write
- * the Proxy block, this module exports BOTH:
+ * To keep the call site short and avoid forcing every test to write the Proxy
+ * block, this module exports:
  *
  *   - `makePathsProxy(actual, { dataRoot, extraOverrides? })` — used inside
  *     the test's own `vi.mock` factory. Returns the Proxy.

@@ -39,12 +39,13 @@ describe('storyBible — sanitizeCharacter', () => {
     expect(sanitizeCharacter({ name: '   ' })).toBeNull();
   });
 
-  it('ignores the legacy `description` alias (migration 017 normalizes it on disk)', () => {
+  it('lifts the legacy `description` alias into `physicalDescription` on read', () => {
     const out = sanitizeCharacter({ name: 'Aria', description: 'tall, dark hair' });
-    expect(out.physicalDescription).toBe('');
+    expect(out.physicalDescription).toBe('tall, dark hair');
+    expect(out).not.toHaveProperty('description');
   });
 
-  it('reads `physicalDescription` exclusively even when both fields are present', () => {
+  it('prefers `physicalDescription` when both fields are present', () => {
     const out = sanitizeCharacter({ name: 'Aria', description: 'old', physicalDescription: 'new' });
     expect(out.physicalDescription).toBe('new');
   });

@@ -186,8 +186,8 @@ export const generateThumbnail = async (videoPath, jobId) => {
     args: ['-ss', seekSec.toFixed(2), '-i', videoPath, '-vframes', '1', '-q:v', '5', '-y', thumbPath],
     stderrTailBytes: 0,
   });
-  if (!result.ok && result.reason?.startsWith('spawn failed')) {
-    console.log(`⚠️ ffmpeg thumbnail failed to spawn: ${result.reason}`);
+  if (!result.ok && result.reason?.startsWith('spawn failed: ')) {
+    console.log(`⚠️ ffmpeg thumbnail failed to spawn: ${result.reason.slice('spawn failed: '.length)}`);
   }
   return result.ok ? thumbFilename : null;
 };
@@ -303,8 +303,8 @@ export const extractEvaluationFrames = async (videoPath, jobId, count = 5) => {
     args: ['-i', videoPath, '-vf', `select='${selectExpr}'`, '-vsync', 'vfr', '-q:v', '5', '-y', outPattern],
     stderrTailBytes: 0,
   });
-  if (!result.ok && result.reason?.startsWith('spawn failed')) {
-    console.log(`⚠️ ffmpeg multi-frame extract failed to spawn: ${result.reason}`);
+  if (!result.ok && result.reason?.startsWith('spawn failed: ')) {
+    console.log(`⚠️ ffmpeg multi-frame extract failed to spawn: ${result.reason.slice('spawn failed: '.length)}`);
   }
   if (!result.ok) return [];
   // ffmpeg's image2 muxer numbers output starting at 1 in match order, so

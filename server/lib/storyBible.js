@@ -240,16 +240,17 @@ function applyCanonExtras(raw) {
   return out;
 }
 
-// Pipeline + writers-room shapes both use `physicalDescription`. The legacy
-// pipeline `description` alias was migrated forward by migration 017; this
-// sanitizer reads `physicalDescription` only. Records that still carry the
-// legacy field after migration are normalized on next save through this path.
+// Pipeline + writers-room shapes both use `physicalDescription`. Migration 019
+// rewrites the legacy `description` alias forward, but the read-side fallback
+// stays in place so a load-before-migration doesn't silently drop the text on
+// next save (only `physicalDescription` is written back, so any record that
+// survives this read normalizes on its next persist).
 export function sanitizeCharacter(raw, { idPrefix = DEFAULT_ID_PREFIX.character, preserveTimestamps = true } = {}) {
   if (!raw || typeof raw !== 'object') return null;
   const name = trimTo(raw.name, BIBLE_LIMITS.NAME_MAX);
   if (!name) return null;
   const physicalDescription = trimTo(
-    raw.physicalDescription || '',
+    raw.physicalDescription || raw.description || '',
     BIBLE_LIMITS.PHYSICAL_DESCRIPTION_MAX,
   );
   const created = preserveTimestamps && isStr(raw.createdAt) ? raw.createdAt : nowIso();

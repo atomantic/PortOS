@@ -4,11 +4,12 @@
  *
  * Background: pipeline early on used `description` as the visual descriptor
  * field for characters; the writers-room/canon refactor moved everything to
- * `physicalDescription`. `sanitizeCharacter` previously accepted both keys
- * via `raw.physicalDescription || raw.description` for back-compat. That
- * fallback has now been dropped (PLAN.md "Code quality / dedup") so the
- * sanitizer reads `physicalDescription` only — this migration rewrites
- * any character record that still carries the legacy alias.
+ * `physicalDescription`. `sanitizeCharacter` keeps a defensive read-side
+ * fallback (`raw.physicalDescription || raw.description`) so a load that
+ * happens before this migration runs doesn't silently drop the text on save,
+ * but the persisted alias is otherwise dead weight — this migration rewrites
+ * any character record that still carries it so the on-disk shape matches
+ * what the sanitizer writes back.
  *
  * Targeted files (each may or may not exist depending on the install):
  *   data/pipeline-series.json   — series.characters[]

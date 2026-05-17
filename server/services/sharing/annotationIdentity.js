@@ -11,11 +11,11 @@
  *
  * Result is memoized for `CACHE_TTL_MS` so hot annotation paths (sync flush,
  * bucket export, every setAnnotation) don't re-read settings.json off disk
- * once per call. Settings.js doesn't emit a `settings:updated` event today,
- * so a 30-second TTL is the cheapest invalidation that keeps the user's
- * display-name rename visible without requiring a server restart. Callers
- * that need a fresh read (e.g. a test asserting a just-saved value) can
- * call `invalidateGlobalDisplayNameCache()`.
+ * once per call. settings.js emits `settings:updated` on every save and the
+ * lazy listener invalidates the cache; the 30-second TTL covers hand-edited
+ * settings.json + the brief race window before the listener attaches.
+ * Callers that need a fresh read (e.g. a test asserting a just-saved value)
+ * can call `invalidateGlobalDisplayNameCache()`.
  */
 
 import * as os from 'os';

@@ -32,9 +32,11 @@ async function run() {
     applied = parsed;
   }
 
-  // Scan for migration files (*.js, sorted by filename)
+  // Scan for migration files (*.js, sorted by filename). Test files live
+  // alongside their migration; exclude them so the runner doesn't try to
+  // import a vitest module as a migration.
   const files = (await readdir(migrationsDir))
-    .filter(f => f.endsWith('.js'))
+    .filter(f => f.endsWith('.js') && !f.endsWith('.test.js'))
     .sort();
 
   let ran = 0;
