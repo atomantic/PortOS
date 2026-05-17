@@ -24,6 +24,7 @@ const {
   isBlank,
   normalizeBibleName,
   normalizeSlugline,
+  findBibleEntryByName,
   BIBLE_LIMITS,
   BIBLE_KIND,
   createBibleStore,
@@ -532,6 +533,40 @@ describe('storyBible — helpers', () => {
   it('normalizeBibleName lowercases + trims', () => {
     expect(normalizeBibleName('  Aria Reyes  ')).toBe('aria reyes');
     expect(normalizeBibleName(null)).toBe('');
+  });
+
+  describe('findBibleEntryByName', () => {
+    const list = [
+      { id: 'a', name: 'Ashley', aliases: ['Ash', 'Ash-bot'] },
+      { id: 'b', name: 'Crystalline Canyon' }, // no aliases array
+      { id: 'c', name: 'Reyes', aliases: null }, // null aliases tolerated
+      null, // null entry tolerated
+    ];
+
+    it('matches by case-insensitive name', () => {
+      expect(findBibleEntryByName(list, 'ashley')?.id).toBe('a');
+      expect(findBibleEntryByName(list, '  ASHLEY  ')?.id).toBe('a');
+    });
+
+    it('matches by alias when present', () => {
+      expect(findBibleEntryByName(list, 'ash')?.id).toBe('a');
+      expect(findBibleEntryByName(list, 'Ash-Bot')?.id).toBe('a');
+    });
+
+    it('returns undefined when no entry matches', () => {
+      expect(findBibleEntryByName(list, 'Nobody')).toBeUndefined();
+    });
+
+    it('returns undefined for blank/missing needles', () => {
+      expect(findBibleEntryByName(list, '')).toBeUndefined();
+      expect(findBibleEntryByName(list, '   ')).toBeUndefined();
+      expect(findBibleEntryByName(list, null)).toBeUndefined();
+    });
+
+    it('returns undefined for a non-array list', () => {
+      expect(findBibleEntryByName(null, 'Ashley')).toBeUndefined();
+      expect(findBibleEntryByName(undefined, 'Ashley')).toBeUndefined();
+    });
   });
 });
 

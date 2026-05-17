@@ -27,6 +27,7 @@
  */
 
 import { createRun, executeApiRun, executeCliRun, extractBakedModel, hasModelFlag, stopRun, patchRunMetadata } from '../services/runner.js';
+import { getActiveProvider, getProviderById } from '../services/providers.js';
 import { executeTuiRun } from './tuiPromptRunner.js';
 
 const DEFAULT_TIMEOUT_MS = 300000;
@@ -75,6 +76,24 @@ export function resolveEffectiveModel(provider, callerModel) {
     ? extractBakedModel(provider.args)
     : null;
   return baked || provider?.defaultModel || provider?.models?.[0] || null;
+}
+
+/**
+ * Resolve `{provider, selectedModel}` for an LLM caller. Prefers
+ * `providerId` (swallowing errors so a stale id falls through), then
+ * `getActiveProvider`. Returns `{provider: null, selectedModel: null}`
+ * when nothing resolves so callers throw their own typed error.
+ *
+ * @param {object} args
+ * @param {string} [args.providerId]
+ * @param {string} [args.model]
+ * @returns {Promise<{ provider: object|null, selectedModel: string|null }>}
+ */
+export async function resolveProviderAndModel({ providerId, model } = {}) {
+  let provider = providerId ? await getProviderById(providerId).catch(() => null) : null;
+  if (!provider) provider = await getActiveProvider();
+  const selectedModel = provider ? resolveEffectiveModel(provider, model) : null;
+  return { provider, selectedModel };
 }
 
 /**

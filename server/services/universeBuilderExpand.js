@@ -11,7 +11,6 @@
  * model so the UI still works for users who haven't configured a stage.
  */
 
-import { getActiveProvider, getProviderById } from "./providers.js";
 import {
   WORLD_CATEGORIES,
   CATEGORY_KINDS,
@@ -33,7 +32,7 @@ import { sanitizeBibleList, stripCanonControlFields, BIBLE_KIND, BIBLE_SOURCE } 
 import { ServerError } from "../lib/errorHandler.js";
 import { extractJson as extractJsonShared } from "../lib/jsonExtract.js";
 import {
-  resolveEffectiveModel,
+  resolveProviderAndModel,
   runPromptThroughProvider,
 } from "../lib/promptRunner.js";
 
@@ -341,18 +340,11 @@ export async function expandWorldTemplate({
   // the LLM prompt or the returned result. Empty / missing → empty lists.
   const safeInfluences = sanitizeInfluences(influences);
 
-  let provider = providerId
-    ? await getProviderById(providerId).catch(() => null)
-    : null;
-  if (!provider) provider = await getActiveProvider();
+  // Resolve the model the runner will ACTUALLY execute (honoring CLI baked
+  // --model flags) so the log line + returned `llm.model` don't lie.
+  const { provider, selectedModel } = await resolveProviderAndModel({ providerId, model });
   if (!provider)
     throw new Error("No AI provider available for universe expansion");
-  // resolveEffectiveModel mirrors what promptRunner resolves internally
-  // so the log line below + the returned `llm.model` field reflect what
-  // actually executed. For CLI providers with a baked --model/-m flag
-  // in args it returns the args-pinned id (not provider.defaultModel,
-  // which can diverge).
-  const selectedModel = resolveEffectiveModel(provider, model);
 
   const fullPrompt = buildExpansionPrompt({
     starterPrompt: starterPrompt.trim(),
@@ -593,10 +585,8 @@ export async function generateCategoryVariations({
     ? existingLabels.filter((l) => typeof l === "string" && l.trim()).map((l) => l.trim())
     : [];
 
-  let provider = providerId ? await getProviderById(providerId).catch(() => null) : null;
-  if (!provider) provider = await getActiveProvider();
+  const { provider, selectedModel } = await resolveProviderAndModel({ providerId, model });
   if (!provider) throw new Error("No AI provider available for variation generation");
-  const selectedModel = resolveEffectiveModel(provider, model);
 
   const fullPrompt = buildCategoryGeneratePrompt({
     category: category.trim(),

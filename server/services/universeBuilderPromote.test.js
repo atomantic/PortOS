@@ -18,20 +18,17 @@ vi.mock('crypto', async () => {
   return { ...actual, randomUUID: () => `uuid-${++uuidCounter}` };
 });
 
-// Stub the provider + LLM dispatch so tests don't need a live runner. The
+// Stub the LLM dispatch so tests don't need a live runner. The
 // `runPromptThroughProvider` mock is overridden per-test to return the
-// per-kind JSON shape we expect from the LLM.
-const getActiveProviderMock = vi.fn();
-const getProviderByIdMock = vi.fn();
-vi.mock('./providers.js', () => ({
-  getActiveProvider: (...a) => getActiveProviderMock(...a),
-  getProviderById: (...a) => getProviderByIdMock(...a),
-}));
-
+// per-kind JSON shape we expect from the LLM. `resolveProviderAndModel`
+// is stubbed flat — `promptRunner.test.js` already exercises its real
+// branching, so re-mirroring it here would just double-mock the same
+// contract.
+const resolveProviderAndModelMock = vi.fn();
 const runPromptThroughProviderMock = vi.fn();
 vi.mock('../lib/promptRunner.js', () => ({
   runPromptThroughProvider: (...a) => runPromptThroughProviderMock(...a),
-  resolveEffectiveModel: (_provider, model) => model || 'mock-default',
+  resolveProviderAndModel: (...a) => resolveProviderAndModelMock(...a),
 }));
 
 // Pull services AFTER mocks register so module-level imports resolve through
@@ -62,11 +59,11 @@ const mockLlm = (entry) => {
 beforeEach(() => {
   fileStore.clear();
   uuidCounter = 0;
-  getActiveProviderMock.mockReset();
-  getProviderByIdMock.mockReset();
+  resolveProviderAndModelMock.mockReset();
   runPromptThroughProviderMock.mockReset();
-  getActiveProviderMock.mockResolvedValue({
-    id: 'provider-mock', name: 'Mock', type: 'api', defaultModel: 'mock-default',
+  resolveProviderAndModelMock.mockResolvedValue({
+    provider: { id: 'provider-mock', name: 'Mock', type: 'api', defaultModel: 'mock-default' },
+    selectedModel: 'mock-default',
   });
 });
 
@@ -95,8 +92,13 @@ describe('universeBuilderPromote — happy path', () => {
     const result = await promoteSvc.promoteVariationToCanon(w.id, {
       category: 'landscapes',
       label: 'Crystalline canyon',
+      providerId: 'p-explicit',
+      model: 'm-explicit',
     });
 
+    // Arg-shape pin: a future typo (provider/Provider/etc.) would silently
+    // pass under a flat resolver mock without this assertion.
+    expect(resolveProviderAndModelMock).toHaveBeenCalledWith({ providerId: 'p-explicit', model: 'm-explicit' });
     expect(result.targetKind).toBe('settings');
     expect(result.entry.name).toBe('Crystalline Canyon');
     expect(result.entry.palette).toContain('pale violet');

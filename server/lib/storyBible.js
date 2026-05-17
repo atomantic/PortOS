@@ -174,6 +174,21 @@ export const isBlank = (v) => {
 
 export const normalizeBibleName = (name) => String(name || '').trim().toLowerCase();
 
+/**
+ * Case-insensitive lookup by `name` OR `aliases[]` (using
+ * `normalizeBibleName`). Returns the first match or undefined; tolerates a
+ * non-array list, blank needle, and null entries. Settings use sluglines
+ * for their primary identity; use `normalizeSlugline` + a Map lookup for
+ * those instead — this helper is name-keyed.
+ */
+export function findBibleEntryByName(list, name) {
+  if (!Array.isArray(list)) return undefined;
+  const needle = normalizeBibleName(name);
+  if (!needle) return undefined;
+  return list.find((e) => normalizeBibleName(e?.name) === needle
+    || (Array.isArray(e?.aliases) && e.aliases.some((a) => normalizeBibleName(a) === needle)));
+}
+
 // Fields the LLM should NEVER set on a canon entry it just generated.
 // `id/createdAt/updatedAt` get freshly minted by the per-kind sanitizer; a
 // hallucinated `locked: true` would block user edits without a Lock UI click;

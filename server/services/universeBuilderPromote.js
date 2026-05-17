@@ -5,7 +5,6 @@
  * patch so the transition is atomic.
  */
 
-import { getActiveProvider, getProviderById } from './providers.js';
 import {
   getUniverse,
   updateUniverse,
@@ -15,17 +14,14 @@ import {
 import {
   sanitizeBibleList,
   stripCanonControlFields,
-  normalizeBibleName,
+  findBibleEntryByName,
   BIBLE_FIELD,
   BIBLE_SOURCE,
   BIBLE_LIMITS,
 } from '../lib/storyBible.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { extractJson as extractJsonShared } from '../lib/jsonExtract.js';
-import {
-  resolveEffectiveModel,
-  runPromptThroughProvider,
-} from '../lib/promptRunner.js';
+import { resolveProviderAndModel, runPromptThroughProvider } from '../lib/promptRunner.js';
 
 // Inverse of BIBLE_FIELD: trunk-name (canon array key) → singular BIBLE_KIND.
 // Derived from the source-of-truth map so the two can't drift. `other` is
@@ -209,9 +205,7 @@ export async function promoteVariationToCanon(universeId, options = {}) {
   // existing entry" or "rename then promote" rather than producing a second
   // record that the merge logic would silently swallow on next save.
   const existingCanon = Array.isArray(universe[bibleField]) ? universe[bibleField] : [];
-  const labelKey = normalizeBibleName(variation.label);
-  const collision = existingCanon.find((e) => normalizeBibleName(e?.name) === labelKey
-    || (Array.isArray(e?.aliases) && e.aliases.some((a) => normalizeBibleName(a) === labelKey)));
+  const collision = findBibleEntryByName(existingCanon, variation.label);
   if (collision) {
     throw new ServerError(
       `Canon ${targetKind} "${variation.label}" already exists — rename the variation or open the existing entry`,
@@ -223,14 +217,12 @@ export async function promoteVariationToCanon(universeId, options = {}) {
     );
   }
 
-  let provider = providerId ? await getProviderById(providerId).catch(() => null) : null;
-  if (!provider) provider = await getActiveProvider();
+  const { provider, selectedModel } = await resolveProviderAndModel({ providerId, model });
   if (!provider) {
     throw new ServerError('No AI provider available for variation promotion', {
       status: 503, code: 'UNIVERSE_PROMOTE_NO_PROVIDER',
     });
   }
-  const selectedModel = resolveEffectiveModel(provider, model);
 
   const prompt = buildPromotePrompt({
     targetKind,
