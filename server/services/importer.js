@@ -59,6 +59,68 @@ const DEFAULT_TARGET_ISSUE_COUNT_HINT = Object.freeze({
 const normName = (s) => String(s || '').trim().toLowerCase();
 const isStr = (v) => typeof v === 'string';
 
+/**
+ * Merge incoming seasons with the existing `series.seasons[]` array,
+ * matching by `number`. Pure function — no I/O. Extracted so the merge
+ * logic (used number set, auto-assign for omitted numbers, update vs
+ * create per number, change-aware updatedAt bump, union back with
+ * retained existing) can be reasoned about + unit-tested in isolation.
+ *
+ * Contract:
+ *   - Incoming seasons with an explicit integer `number >= 1` keep it.
+ *   - Incoming seasons that omit `number` are assigned the next free
+ *     integer above the union of existing + already-assigned numbers.
+ *   - Where the assigned number matches an existing season, the existing
+ *     season's id (+ timestamps) are preserved — re-import is a metadata
+ *     refresh, not a new season. `updatedAt` bumps only when title /
+ *     logline / synopsis actually changed.
+ *   - Existing seasons not touched by this merge are retained as-is.
+ *   - Caller is responsible for `sanitizeSeasonList` on the result.
+ */
+export function mergeSeasons(existingSeasons, incomingSeasons, buildSeasonImpl = buildSeason) {
+  const existingByNumber = new Map(
+    existingSeasons.filter((s) => Number.isFinite(s.number)).map((s) => [s.number, s]),
+  );
+  const usedNumbers = new Set([...existingByNumber.keys()]);
+  for (const s of incomingSeasons) {
+    if (Number.isInteger(s?.number) && s.number >= 1) usedNumbers.add(s.number);
+  }
+  let nextFreeNumber = (usedNumbers.size === 0) ? 1 : Math.max(...usedNumbers) + 1;
+  const nowIso = new Date().toISOString();
+  const incomingBuilt = incomingSeasons.map((s) => {
+    const num = (Number.isInteger(s?.number) && s.number >= 1) ? s.number : nextFreeNumber++;
+    const existing = existingByNumber.get(num);
+    if (existing) {
+      const titleChanged = !!(s.title && s.title !== existing.title);
+      const loglineChanged = !!(s.logline && s.logline !== existing.logline);
+      const synopsisChanged = !!(s.synopsis && s.synopsis !== existing.synopsis);
+      return {
+        ...existing,
+        title: s.title || existing.title || `Season ${num}`,
+        logline: s.logline || existing.logline || '',
+        synopsis: s.synopsis || existing.synopsis || '',
+        endingHook: s.endingHook || existing.endingHook || '',
+        episodeCountTarget: s.episodeCountTarget ?? existing.episodeCountTarget ?? 0,
+        ...((titleChanged || loglineChanged || synopsisChanged) ? { updatedAt: nowIso } : {}),
+      };
+    }
+    return buildSeasonImpl({
+      number: num,
+      title: s.title || `Season ${num}`,
+      logline: s.logline || '',
+      synopsis: s.synopsis || '',
+      endingHook: s.endingHook || '',
+      episodeCountTarget: s.episodeCountTarget ?? 0,
+      status: 'draft',
+    });
+  });
+  // Union: existing seasons NOT in the incoming set + the (updated or
+  // freshly built) incoming entries. Caller runs sanitizeSeasonList.
+  const incomingNumbers = new Set(incomingBuilt.map((s) => s.number));
+  const retained = existingSeasons.filter((s) => !incomingNumbers.has(s.number));
+  return [...retained, ...incomingBuilt];
+}
+
 // Build the "existing canon" prompt block in JS rather than as a Mustache
 // `{{#section}}{{{var}}}{{/section}}` so the user-supplied canon JSON
 // passes through the template engine's TRIPLE_RE substitution exactly
@@ -411,8 +473,11 @@ export async function commitImport({
     // arcPosition is the issue's slot in the series — Zod enforces int >= 1
     // at the route layer, but commitImport is also called directly from
     // tests + future internal callers; mirror the schema gate here so the
-    // service contract holds regardless of caller.
-    if (!Number.isInteger(proposal.arcPosition) || proposal.arcPosition < 1) {
+    // service contract holds regardless of caller. Allow undefined here —
+    // an auto-assign pass below picks the next free slot. Reject anything
+    // else that isn't a valid >=1 integer.
+    if (proposal.arcPosition !== undefined && proposal.arcPosition !== null
+        && (!Number.isInteger(proposal.arcPosition) || proposal.arcPosition < 1)) {
       throw makeErr(
         `Issue at position ${i + 1} has invalid arcPosition (must be integer >= 1) — commit refused before any state changed.`,
         ERR_VALIDATION,
@@ -430,6 +495,36 @@ export async function commitImport({
       }
     }
   }
+  // Reject duplicate explicit arcPosition values across the incoming
+  // issues array — downstream sorting collapses ties to insertion order
+  // and the renumber pass would silently re-key, leaving the user
+  // wondering why issue #3 became #4. Auto-assign for omitted positions
+  // happens below.
+  const seenArcPositions = new Set();
+  for (let i = 0; i < issues.length; i++) {
+    const pos = issues[i]?.arcPosition;
+    if (Number.isInteger(pos) && pos >= 1) {
+      if (seenArcPositions.has(pos)) {
+        throw makeErr(
+          `Duplicate arcPosition ${pos} at issue position ${i + 1} — commit refused before any state changed.`,
+          ERR_VALIDATION,
+        );
+      }
+      seenArcPositions.add(pos);
+    }
+  }
+  // Auto-assign sequential arcPositions to incoming issues that omit one.
+  // Mirrors the seasons auto-assign in the merge path. Issues with an
+  // explicit position keep it; gaps get filled by the next free integer.
+  let nextFreeArcPos = (seenArcPositions.size === 0) ? 1 : Math.max(...seenArcPositions) + 1;
+  const issuesWithPositions = issues.map((proposal) => {
+    if (Number.isInteger(proposal.arcPosition) && proposal.arcPosition >= 1) {
+      return proposal;
+    }
+    const assigned = nextFreeArcPos++;
+    return { ...proposal, arcPosition: assigned };
+  });
+
   // Same contract for seasons: route Zod enforces `number: int >= 1`,
   // commitImport mirrors it so the service is safe under direct calls.
   // Also reject duplicate season numbers — the merge keys by `number`,
@@ -490,70 +585,9 @@ export async function commitImport({
   const sanitizedArc = sanitizeArc(arc);
   let updatedSeries = series;
   if (sanitizedArc || seasons.length > 0) {
-    // Thread B fix: merge incoming seasons with the existing series.seasons[]
-    // instead of wholesale-replacing them. Match by `number` (the stable
-    // addressing key for seasons — buildSeason always assigns a canonical
-    // number). For each incoming season: if an existing season with the same
-    // number is found, preserve its id and timestamps (so issue pointers stay
-    // intact); otherwise build a fresh season. Seasons absent from the
-    // incoming list are kept as-is so a re-import never deletes user-authored
-    // seasons that weren't in the source.
     const existingSeasons = Array.isArray(series.seasons) ? series.seasons : [];
-    const existingByNumber = new Map(
-      existingSeasons.filter((s) => Number.isFinite(s.number)).map((s) => [s.number, s]),
-    );
-    // Auto-assign sequential numbers to incoming seasons that omit one
-    // (the route schema allows omission). Without this, multiple
-    // unnumbered seasons would all default to `1` and silently collapse.
-    // Resolution: scan max-of-(existing ∪ already-assigned-in-this-call)
-    // and pick `max + 1` for each unnumbered season.
-    const usedNumbers = new Set([...existingByNumber.keys()]);
-    for (const s of seasons) {
-      if (Number.isInteger(s?.number) && s.number >= 1) usedNumbers.add(s.number);
-    }
-    let nextFreeNumber = (usedNumbers.size === 0) ? 1 : Math.max(...usedNumbers) + 1;
-    const nowIso = new Date().toISOString();
-    const incomingBuilt = seasons.map((s) => {
-      let num;
-      if (Number.isInteger(s?.number) && s.number >= 1) {
-        num = s.number;
-      } else {
-        num = nextFreeNumber++;
-      }
-      const existing = existingByNumber.get(num);
-      const titleChanged = !!(s.title && existing && s.title !== existing.title);
-      const loglineChanged = !!(s.logline && existing && s.logline !== existing.logline);
-      const synopsisChanged = !!(s.synopsis && existing && s.synopsis !== existing.synopsis);
-      if (existing) {
-        // Preserve the existing season's id — re-import with the same
-        // season number is a metadata refresh, not a new season. Bump
-        // `updatedAt` only when an importable field actually changed so
-        // LWW reasoning and "last edited" UIs stay accurate.
-        return {
-          ...existing,
-          title: s.title || existing.title || `Season ${num}`,
-          logline: s.logline || existing.logline || '',
-          synopsis: s.synopsis || existing.synopsis || '',
-          endingHook: s.endingHook || existing.endingHook || '',
-          episodeCountTarget: s.episodeCountTarget ?? existing.episodeCountTarget ?? 0,
-          ...((titleChanged || loglineChanged || synopsisChanged) ? { updatedAt: nowIso } : {}),
-        };
-      }
-      return buildSeason({
-        number: num,
-        title: s.title || `Season ${num}`,
-        logline: s.logline || '',
-        synopsis: s.synopsis || '',
-        endingHook: s.endingHook || '',
-        episodeCountTarget: s.episodeCountTarget ?? 0,
-        status: 'draft',
-      });
-    });
-    // Merge: union of existing seasons + updated/new incoming seasons,
-    // deduped and sorted by sanitizeSeasonList (LWW by id, then by number).
-    const incomingNumbers = new Set(incomingBuilt.map((s) => s.number));
-    const retained = existingSeasons.filter((s) => !incomingNumbers.has(s.number));
-    const builtSeasons = sanitizeSeasonList([...retained, ...incomingBuilt]);
+    const merged = mergeSeasons(existingSeasons, seasons);
+    const builtSeasons = sanitizeSeasonList(merged);
 
     updatedSeries = await updateSeries(series.id, {
       ...(sanitizedArc ? { arc: sanitizedArc } : {}),
@@ -583,7 +617,7 @@ export async function commitImport({
   // user-confirmed data; only the issue set is all-or-nothing from the
   // commit's perspective.
   try {
-    for (const proposal of issues) {
+    for (const proposal of issuesWithPositions) {
       let seasonId = fallbackSeasonId;
       if (proposal.seasonNumber != null) {
         const matched = seasonByNumber.get(proposal.seasonNumber);

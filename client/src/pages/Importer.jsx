@@ -224,7 +224,12 @@ function IntakeForm({ intake, setIntake, intakeValid, sourceLen, sourceOver, sou
   return (
     <form
       className="space-y-4 bg-port-card border border-port-border rounded-lg p-4 sm:p-6"
-      onSubmit={(e) => { e.preventDefault(); if (intakeValid && !analyzing) onAnalyze(); }}
+      // Swallow default form submission so an accidental Enter in any input
+      // doesn't trigger Analyze — Analyze fires three heavy-tier LLM calls
+      // and accidental triggering costs real money. Tab to the button + Space
+      // is the keyboard path; the round-4 Enter-submits flow was reverted in
+      // round 6 after this cost trade-off was surfaced.
+      onSubmit={(e) => e.preventDefault()}
     >
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
@@ -330,7 +335,8 @@ function IntakeForm({ intake, setIntake, intakeValid, sourceLen, sourceOver, sou
 
       <div className="flex items-center justify-end gap-2 pt-2">
         <button
-          type="submit"
+          type="button"
+          onClick={onAnalyze}
           disabled={!intakeValid || analyzing}
           className="bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded text-sm font-medium flex items-center gap-2"
         >
@@ -557,7 +563,12 @@ function ArcReviewSection({ arc, setArc, seasons, setSeasons }) {
                       min="1"
                       max="99"
                       value={s.number ?? ''}
-                      onChange={(e) => updateAt(seasons, setSeasons, idx, { number: Number(e.target.value) })}
+                      onChange={(e) => updateAt(seasons, setSeasons, idx, {
+                        // Empty input -> undefined so the service's auto-assign
+                        // path picks the next free number. Avoids `Number('') = 0`
+                        // landing in state and failing the `>= 1` gate at commit.
+                        number: e.target.value === '' ? undefined : Number(e.target.value),
+                      })}
                       className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-sm"
                     />
                   </div>
@@ -615,7 +626,12 @@ function IssuesReviewSection({ issues, setIssues, seasons, arcRoles }) {
                   min="1"
                   max="9999"
                   value={it.arcPosition ?? idx + 1}
-                  onChange={(e) => updateAt(issues, setIssues, idx, { arcPosition: Number(e.target.value) })}
+                  onChange={(e) => updateAt(issues, setIssues, idx, {
+                    // Empty input -> undefined so the service's auto-assign
+                    // path picks the next free position. Avoids `Number('') = 0`
+                    // landing in state and failing the `>= 1` gate at commit.
+                    arcPosition: e.target.value === '' ? undefined : Number(e.target.value),
+                  })}
                   className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-sm"
                 />
               </div>

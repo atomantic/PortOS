@@ -13,8 +13,8 @@
  * back to whatever the active provider's default model is.
  */
 
-import { access, copyFile, readFile, writeFile, constants } from 'fs/promises';
-import { join } from 'path';
+import { access, copyFile, mkdir, readFile, writeFile, constants } from 'fs/promises';
+import { dirname, join } from 'path';
 
 const FILENAMES = [
   'importer-canon-extract.md',
@@ -33,8 +33,14 @@ export default {
     let copied = 0;
     let present = 0;
     let skipped = 0;
+    // Ensure the destination directory exists — sparse installs that
+    // never ran setup-data for the prompts subtree would otherwise hit
+    // ENOENT on every copy below and end up with a wall of warnings
+    // and no prompts seeded.
+    const stagesDir = join(rootDir, 'data', 'prompts', 'stages');
+    await mkdir(stagesDir, { recursive: true });
     for (const filename of FILENAMES) {
-      const dataPath = join(rootDir, 'data', 'prompts', 'stages', filename);
+      const dataPath = join(stagesDir, filename);
       const samplePath = join(rootDir, 'data.sample', 'prompts', 'stages', filename);
 
       const exists = await access(dataPath, constants.F_OK).then(() => true, () => false);
@@ -93,6 +99,7 @@ export default {
         added++;
       }
       if (added > 0) {
+        await mkdir(dirname(installedConfigPath), { recursive: true });
         await writeFile(installedConfigPath, JSON.stringify(installed, null, 2) + '\n', 'utf8');
       }
       console.log(`📝 importer stage-config: ${added} added, ${preserved} already present`);

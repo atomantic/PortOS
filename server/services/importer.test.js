@@ -485,3 +485,74 @@ describe('commitImport', () => {
     expect(s2).toBeDefined();
   });
 });
+
+describe('mergeSeasons (pure helper)', () => {
+  const stubBuildSeason = (input) => ({
+    id: `built-${input.number}`,
+    number: input.number,
+    title: input.title,
+    logline: input.logline,
+    synopsis: input.synopsis,
+    endingHook: input.endingHook,
+    episodeCountTarget: input.episodeCountTarget,
+    status: input.status,
+    createdAt: '2025-01-01T00:00:00.000Z',
+    updatedAt: '2025-01-01T00:00:00.000Z',
+  });
+
+  it('auto-assigns sequential numbers when incoming seasons omit number', () => {
+    const incoming = [
+      { title: 'A' },
+      { title: 'B' },
+      { title: 'C' },
+    ];
+    const result = importerSvc.mergeSeasons([], incoming, stubBuildSeason);
+    const numbers = result.map((s) => s.number).sort((a, b) => a - b);
+    expect(numbers).toEqual([1, 2, 3]);
+  });
+
+  it('preserves existing ids when incoming season number matches', () => {
+    const existing = [
+      { id: 'existing-1', number: 1, title: 'Old', logline: '', synopsis: '', updatedAt: '2020-01-01T00:00:00.000Z' },
+    ];
+    const incoming = [{ number: 1, title: 'Old', logline: '', synopsis: '' }];
+    const result = importerSvc.mergeSeasons(existing, incoming, stubBuildSeason);
+    expect(result).toHaveLength(1);
+    expect(result[0].id).toBe('existing-1');
+  });
+
+  it('bumps updatedAt only when an importable field changes', () => {
+    const existing = [
+      { id: 'e1', number: 1, title: 'Original', logline: 'L1', synopsis: 'S1', updatedAt: '2020-01-01T00:00:00.000Z' },
+    ];
+    // No change → updatedAt preserved
+    const noChange = importerSvc.mergeSeasons(existing, [{ number: 1, title: 'Original' }], stubBuildSeason);
+    expect(noChange[0].updatedAt).toBe('2020-01-01T00:00:00.000Z');
+    // Title change → updatedAt bumped (to a value newer than the original)
+    const titleChange = importerSvc.mergeSeasons(existing, [{ number: 1, title: 'New title' }], stubBuildSeason);
+    expect(titleChange[0].updatedAt > '2020-01-01T00:00:00.000Z').toBe(true);
+  });
+
+  it('retains existing seasons that the incoming list does not touch', () => {
+    const existing = [
+      { id: 'e1', number: 1, title: 'One', logline: '', synopsis: '' },
+      { id: 'e2', number: 2, title: 'Two', logline: '', synopsis: '' },
+    ];
+    const incoming = [{ number: 1, title: 'One updated' }];
+    const result = importerSvc.mergeSeasons(existing, incoming, stubBuildSeason);
+    expect(result).toHaveLength(2);
+    expect(result.find((s) => s.number === 2)?.id).toBe('e2');
+  });
+
+  it('skips over existing numbers when auto-assigning', () => {
+    const existing = [
+      { id: 'e1', number: 1, title: 'One', logline: '', synopsis: '' },
+      { id: 'e2', number: 3, title: 'Three', logline: '', synopsis: '' },
+    ];
+    const incoming = [{ title: 'New A' }, { title: 'New B' }];
+    const result = importerSvc.mergeSeasons(existing, incoming, stubBuildSeason);
+    const newNumbers = result.filter((s) => s.id.startsWith('built-')).map((s) => s.number).sort((a, b) => a - b);
+    // nextFree = max(1,3) + 1 = 4 → [4, 5]
+    expect(newNumbers).toEqual([4, 5]);
+  });
+});
