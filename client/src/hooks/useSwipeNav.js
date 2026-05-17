@@ -5,11 +5,17 @@ import { useRef, useCallback } from 'react';
 const SWIPE_MIN_PX = 50;
 const HORIZONTAL_BIAS = 1.2;
 
-// Ignore touches whose start OR end target is an inline button: a tap on the
-// surface (e.g. fullscreen toggle) shouldn't seed a swipe, and a swipe that
-// happens to release over a button shouldn't double-fire as nav + a synthetic
-// button click. Optional-chain on `closest` because touch targets aren't
-// guaranteed to be Elements (e.g. Text nodes, jsdom-style envs).
+// Ignore touches that *originate* on an inline button so a tap on the
+// surface (e.g. the fullscreen toggle) isn't seeded as a swipe-start. The
+// gate runs only on touchstart: `Touch.target` on a touchend event is the
+// element the touch *began* on (per spec), not where the finger released —
+// so a symmetrical check in onTouchEnd would just re-check the start
+// element. We don't gate on the end position either: a deliberate swipe
+// crossing SWIPE_MIN_PX won't synthesize a click on a button the finger
+// happens to release over (the browser's tap-slop is much smaller than
+// 50px), so nav-on-release-over-button is safe to allow.
+// Optional-chain on `closest` because touch targets aren't guaranteed to
+// be Elements (e.g. Text nodes, jsdom-style envs).
 const isButtonTouch = (e) => !!e.target?.closest?.('button');
 
 export function useSwipeNav({ onPrevious, onNext, hasPrevious = false, hasNext = false } = {}) {
@@ -24,7 +30,6 @@ export function useSwipeNav({ onPrevious, onNext, hasPrevious = false, hasNext =
   const onTouchEnd = useCallback((e) => {
     const start = touchStart.current;
     if (start.x == null) return;
-    if (isButtonTouch(e)) { touchStart.current = { x: null, y: null }; return; }
     const end = e.changedTouches[0];
     const dx = end.clientX - start.x;
     const dy = end.clientY - start.y;

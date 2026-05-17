@@ -91,16 +91,25 @@ describe('copyToClipboard', () => {
     expect(toastMock.success).not.toHaveBeenCalled();
   });
 
-  it('toasts the insecure-context error and returns false when clipboard is unavailable', async () => {
+  it('toasts the insecure-context error when isSecureContext is false', async () => {
     setClipboard(undefined);
+    vi.stubGlobal('isSecureContext', false);
     expect(await copyToClipboard('hello')).toBe(false);
     expect(toastMock.error).toHaveBeenCalledWith('Clipboard unavailable on insecure context');
   });
 
-  it('toasts the insecure-context error when navigator itself is undefined', async () => {
-    unsetNavigator();
+  it('toasts the generic error when clipboard is missing on a secure context', async () => {
+    setClipboard(undefined);
+    vi.stubGlobal('isSecureContext', true);
     expect(await copyToClipboard('hello')).toBe(false);
-    expect(toastMock.error).toHaveBeenCalledWith('Clipboard unavailable on insecure context');
+    expect(toastMock.error).toHaveBeenCalledWith('Clipboard unavailable');
+  });
+
+  it('toasts the generic error when navigator itself is undefined and isSecureContext is unknown', async () => {
+    unsetNavigator();
+    // isSecureContext deliberately not stubbed — undefined ≠ false
+    expect(await copyToClipboard('hello')).toBe(false);
+    expect(toastMock.error).toHaveBeenCalledWith('Clipboard unavailable');
   });
 
   it('toasts the failure and returns false when writeText throws', async () => {

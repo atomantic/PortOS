@@ -27,7 +27,12 @@ export async function copyToClipboard(text, successMessage = 'Copied') {
   if (!text) return false;
   const c = clipboard();
   if (!c?.writeText) {
-    toast.error('Clipboard unavailable on insecure context');
+    // `navigator.clipboard` can be missing on insecure origins *or* on secure
+    // origins where the API is disabled (unsupported browser, Permissions
+    // Policy, etc.). Only call out the insecure-context case when we can
+    // confirm it — otherwise stay generic so the message isn't misleading.
+    const insecure = globalThis.isSecureContext === false;
+    toast.error(insecure ? 'Clipboard unavailable on insecure context' : 'Clipboard unavailable');
     return false;
   }
   try {
