@@ -13,6 +13,7 @@ import {
 import * as api from '../../services/api';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
+import { writeClipboardSilently } from '../../lib/clipboard';
 import { ENRICHMENT_CATEGORIES } from './constants';
 import ScaleInput from './ScaleInput';
 
@@ -242,8 +243,8 @@ export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
                   {prompt}
                 </pre>
                 <button
-                  onClick={() => {
-                    navigator.clipboard.writeText(prompt);
+                  onClick={async () => {
+                    if (!(await writeClipboardSilently(prompt))) return;
                     setCopied(true);
                     setTimeout(() => setCopied(false), 2000);
                   }}
@@ -383,8 +384,8 @@ export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
                   {buildContinuationPrompt(activeGap.dimension, activeGap)}
                 </pre>
                 <button
-                  onClick={() => {
-                    navigator.clipboard.writeText(buildContinuationPrompt(activeGap.dimension, activeGap));
+                  onClick={async () => {
+                    if (!(await writeClipboardSilently(buildContinuationPrompt(activeGap.dimension, activeGap)))) return;
                     setCopied(true);
                     setTimeout(() => setCopied(false), 2000);
                   }}

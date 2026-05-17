@@ -7,6 +7,7 @@ import '@xterm/xterm/css/xterm.css';
 import { useSocket } from '../hooks/useSocket';
 import { RefreshCw, Power, PowerOff, FolderOpen, ChevronDown, Plus, X, Terminal as TerminalIcon, ClipboardPaste, OctagonX } from 'lucide-react';
 import * as api from '../services/api';
+import { readClipboard } from '../lib/clipboard';
 
 // Must match MAX_TOTAL_SESSIONS in server/services/shell.js
 const MAX_SESSIONS = 5;
@@ -150,14 +151,10 @@ export default function Shell() {
 
   const sendCommand = useCallback((cmd) => emitShellInput(cmd + '\n'), [emitShellInput]);
   const sendCtrlC = useCallback(() => emitShellInput('\x03'), [emitShellInput]);
-  const handlePaste = useCallback(() => {
-    if (navigator.clipboard?.readText) {
-      navigator.clipboard.readText()
-        .then(text => { if (text) emitShellInput(text); })
-        .catch(() => setShowPasteInput(true));
-    } else {
-      setShowPasteInput(true);
-    }
+  const handlePaste = useCallback(async () => {
+    const text = await readClipboard();
+    if (text == null) { setShowPasteInput(true); return; }
+    if (text) emitShellInput(text);
   }, [emitShellInput]);
 
   const handlePasteInputEvent = useCallback((e) => {

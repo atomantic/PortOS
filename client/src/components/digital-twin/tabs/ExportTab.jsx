@@ -11,6 +11,7 @@ import {Download,
 import BrailleSpinner from '../../BrailleSpinner';
 import * as api from '../../../services/api';
 import toast from '../../ui/Toast';
+import { copyToClipboard } from '../../../lib/clipboard';
 
 import { DOCUMENT_CATEGORIES } from '../constants';
 
@@ -65,17 +66,18 @@ export default function ExportTab({ onRefresh: _onRefresh }) {
     setExporting(false);
   };
 
-  const copyToClipboard = async () => {
+  const handleCopyExport = async () => {
     if (!exportResult) return;
 
     const content = typeof exportResult.content === 'string'
       ? exportResult.content
       : JSON.stringify(exportResult.content, null, 2);
 
-    await navigator.clipboard.writeText(content);
-    setCopied(true);
-    toast.success('Copied to clipboard');
-    setTimeout(() => setCopied(false), 2000);
+    const ok = await copyToClipboard(content, 'Copied to clipboard');
+    if (ok) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
   };
 
   const downloadFile = () => {
@@ -264,7 +266,7 @@ export default function ExportTab({ onRefresh: _onRefresh }) {
                 ~{exportResult.tokenEstimate?.toLocaleString()} tokens
               </span>
               <button
-                onClick={copyToClipboard}
+                onClick={handleCopyExport}
                 className="p-2 min-h-[40px] min-w-[40px] flex items-center justify-center text-gray-400 hover:text-white transition-colors"
                 title="Copy to clipboard"
               >

@@ -7,6 +7,7 @@ import {FileText,
   Check} from 'lucide-react';
 import * as api from '../services/api';
 import BrailleSpinner from '../components/BrailleSpinner';
+import { writeClipboardSilently } from '../lib/clipboard';
 
 function ReportCard({ report, onClick, isSelected }) {
   return (
@@ -61,7 +62,7 @@ function ReportDetail({ report }) {
 
   const handleCopy = async () => {
     const plain = statusText.replace(/\*\*/g, '');
-    await navigator.clipboard.writeText(plain);
+    await writeClipboardSilently(plain);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
