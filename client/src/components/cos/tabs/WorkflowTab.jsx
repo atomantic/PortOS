@@ -270,8 +270,8 @@ export default function WorkflowTab() {
       )}
 
       {graph && (
-        <div className="lg:overflow-x-auto pb-2">
-          <div className="flex flex-col lg:flex-row lg:items-stretch gap-4 lg:gap-0 lg:min-w-min">
+        <div className="2xl:overflow-x-auto pb-2">
+          <div className="flex flex-col 2xl:flex-row 2xl:items-stretch gap-4 2xl:gap-0 2xl:min-w-min">
             {populatedStages.map((stage, i) => (
               <Fragment key={stage.id}>
                 <StageColumn
