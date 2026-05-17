@@ -76,11 +76,20 @@ export async function fileCoverIntoUniverseCollection({ seriesId, filename }) {
     const liveUniverse = await universeSvc.getUniverse(series.universeId).catch(() => null);
     if (!liveUniverse) return;
 
+    // Honor the file header's contract: "Failures are logged and swallowed
+    // — bookkeeping must never fail the user's render." A
+    // findOrCreateUniverseCollection rejection (validation, I/O) would
+    // otherwise reject out of this helper and crash any direct caller that
+    // doesn't already wrap it.
     const collection = await findOrCreateUniverseCollection({
       universeId: liveUniverse.id,
       universeName: liveUniverse.name,
       description: `Renders for "${liveUniverse.name}"`,
+    }).catch((err) => {
+      console.error(`❌ cover → universe collection provision failed for ${filename}: ${err?.message || err}`);
+      return null;
     });
+    if (!collection) return;
 
     // Delete-race guard: deleteUniverse may have fired between the
     // getUniverse above and findOrCreateUniverseCollection's write,

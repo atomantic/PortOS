@@ -240,6 +240,29 @@ describe('mediaCollections service', () => {
       expect(result.updatedAt).toBe(linked.updatedAt);
     });
 
+    it('renameCollectionForUniverse updates ALL matching collections (handles hand-edited duplicates)', async () => {
+      // Two linked collections with the same universeId — could happen from
+      // a pre-serialization race or a hand-edited file. Both must be
+      // renamed; otherwise the straggler stays rename-locked under the
+      // stale name.
+      const a = await svc.findOrCreateCollectionByName({
+        name: 'Universe: OldName', universeId: 'u-1',
+      });
+      fileStore.set('/mock/data/media-collections.json', {
+        collections: [
+          a,
+          { ...a, id: 'dup-id', name: 'Universe: OldName' },
+        ],
+      });
+      await svc.renameCollectionForUniverse('u-1', 'NewName');
+      const all = await svc.listCollections();
+      const linked = all.filter((c) => c.universeId === 'u-1');
+      expect(linked).toHaveLength(2);
+      expect(linked.map((c) => c.name).sort()).toEqual([
+        'Universe: NewName', 'Universe: NewName',
+      ]);
+    });
+
     it('unlinkCollectionsForUniverse clears the universeId on linked collections (preserves items)', async () => {
       const linked = await svc.findOrCreateCollectionByName({
         name: 'Universe: Foo', universeId: 'u-1',

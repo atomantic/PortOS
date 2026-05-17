@@ -84,8 +84,12 @@ async function mergeCollectionPayload(payload, availableAssetKeys = null) {
   // Derive a display name for the canonical "Universe: <X>" pattern. The
   // manifest carries the full pre-formatted name (`Universe: Foo`); strip
   // the prefix so `universeCollectionNameFor` produces the same canonical
-  // string on the receiver. Fall back to `universeId` when name is absent.
-  const universeName = (payload.name || '')
+  // string on the receiver. Coerce any non-string into '' first — a
+  // malformed or older manifest with a non-string name shouldn't crash
+  // the whole import with `replace is not a function`; service-layer
+  // validation will reject the upstream call anyway if it matters.
+  const rawName = typeof payload.name === 'string' ? payload.name : '';
+  const universeName = rawName
     .replace(/^Universe:\s*/i, '')
     .trim() || payload.universeId;
   const collection = await findOrCreateUniverseCollection({

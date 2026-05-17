@@ -282,9 +282,17 @@ export async function findOrCreateUniverseCollection({ universeId, universeName,
     const all = await listCollections();
     const linked = all.find((c) => c.universeId === universeId);
     if (linked) return linked;
-    // No universeId match — always create fresh. Adopting a same-named
-    // unlinked collection (legacy bucket OR a post-`deleteUniverse` orphan)
-    // would mix renders across universes.
+    // No universeId match — always create fresh. The runtime intentionally
+    // does NOT adopt a same-named unlinked collection here: it can't tell
+    // a true pre-link legacy bucket apart from a post-`deleteUniverse`
+    // orphan, and adopting the orphan would silently mix the deleted
+    // universe's renders into the new same-named universe.
+    //
+    // Upgrade path for pre-link installs: migration 021
+    // (`scripts/migrations/021-link-orphan-universe-collections.js`) does
+    // a one-shot name-match link at boot — safe because at install/upgrade
+    // time the orphan case doesn't exist yet. New collisions after the
+    // migration belong to "ambiguous, leave it" rather than "auto-adopt."
     const now = new Date().toISOString();
     const next = {
       id: randomUUID(),
@@ -326,24 +334,36 @@ export async function unlinkCollectionsForUniverse(universeId) {
   });
 }
 
-// Cascade a universe rename to its linked collection. Skips the rename-lock
-// guard in updateCollection by writing the name directly — the lock exists
-// to block user-driven renames, not system-driven cascades from the
-// universe rename itself.
+// Cascade a universe rename to its linked collection(s). Skips the
+// rename-lock guard in updateCollection by writing the name directly — the
+// lock exists to block user-driven renames, not system-driven cascades from
+// the universe rename itself. Renames EVERY collection linked to this
+// universe, not just the first match: hand-edited state or a pre-
+// serialization race could have left duplicate linked rows behind, and the
+// stragglers would otherwise stay rename-locked under the old name forever.
+// Returns the first updated collection (back-compat) — callers that need the
+// full list can re-read after.
 export async function renameCollectionForUniverse(universeId, newUniverseName) {
   if (!universeId) return null;
   return serializeFileWrite(async () => {
     const all = await listCollections();
-    const idx = all.findIndex((c) => c.universeId === universeId);
-    if (idx < 0) return null;
-    const target = all[idx];
+    const matchIdxs = all
+      .map((c, i) => (c.universeId === universeId ? i : -1))
+      .filter((i) => i >= 0);
+    if (!matchIdxs.length) return null;
     const desired = universeCollectionNameFor(newUniverseName);
-    if (!desired || desired === target.name) return target;
-    const merged = { ...target, name: desired, updatedAt: new Date().toISOString() };
+    if (!desired) return all[matchIdxs[0]];
+    const now = new Date().toISOString();
     const next = [...all];
-    next[idx] = merged;
+    let changed = false;
+    for (const i of matchIdxs) {
+      if (next[i].name === desired) continue;
+      next[i] = { ...next[i], name: desired, updatedAt: now };
+      changed = true;
+    }
+    if (!changed) return all[matchIdxs[0]];
     await writeAll(next);
-    return merged;
+    return next[matchIdxs[0]];
   });
 }
 
