@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-import { readdir, readFile, writeFile, mkdir } from 'fs/promises';
-import { join, dirname } from 'path';
+import { readdir, readFile, writeFile, mkdir, realpath } from 'fs/promises';
+import { join, dirname, resolve } from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -66,10 +66,20 @@ export async function runMigrations({ rootDir = DEFAULT_ROOT_DIR } = {}) {
 }
 
 // Only run as CLI when invoked directly (not when imported as a module).
-// URL-vs-URL comparison normalizes slashes / drive-letter casing on Windows
-// and tolerates symlinked npm bin shims.
-const invokedAsScript = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
-if (invokedAsScript) {
+// `pathToFileURL()` requires an absolute path, so we `resolve()` argv[1] first
+// (it may be relative when launched as `node scripts/run-migrations.js`).
+// Then realpath both sides to follow npm bin shims / symlinks, falling back
+// to the resolved path if realpath fails (e.g. file no longer exists).
+async function isInvokedAsScript() {
+  if (!process.argv[1]) return false;
+  const absArgv = resolve(process.argv[1]);
+  const realArgv = await realpath(absArgv).catch(() => absArgv);
+  const selfPath = fileURLToPath(import.meta.url);
+  const realSelf = await realpath(selfPath).catch(() => selfPath);
+  return realArgv === realSelf;
+}
+
+if (await isInvokedAsScript()) {
   runMigrations().catch(err => {
     console.error(`❌ Migration failed: ${err.message}`);
     process.exit(1);
