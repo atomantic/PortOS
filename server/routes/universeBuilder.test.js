@@ -389,25 +389,19 @@ describe('universe-builder routes', () => {
     expect(second.body.collectionName).not.toMatch(/\d{4}-\d{2}-\d{2}/);
   });
 
-  it('POST /:id/render ignores body.collectionName — repeat renders reuse the universeId-linked bucket regardless of name hint', async () => {
+  it('POST /:id/render rejects body.collectionName with a clear error (deprecated field)', async () => {
     const app = buildApp();
     const created = await request(app).post('/api/universe-builder').send({
-      name: 'Custom Bucket Universe',
+      name: 'Reject CollectionName Universe',
       categories: {
         landscapes: { variations: [{ label: 'A', prompt: 'a' }] },
       },
     });
-    const first = await request(app)
+    const res = await request(app)
       .post(`/api/universe-builder/${created.body.id}/render`)
       .send({ mode: 'local', collectionName: 'Shared Bucket' });
-    const second = await request(app)
-      .post(`/api/universe-builder/${created.body.id}/render`)
-      .send({ mode: 'local', collectionName: 'totally different name' });
-    expect(second.body.collectionId).toBe(first.body.collectionId);
-    // Canonical "Universe: <name>" wins — the user's hint is dropped because
-    // the rename-lock would just revert it.
-    expect(first.body.collectionName).toBe('Universe: Custom Bucket Universe');
-    expect(second.body.collectionName).toBe('Universe: Custom Bucket Universe');
+    expect(res.status).toBe(400);
+    expect(JSON.stringify(res.body)).toMatch(/collectionName/i);
   });
 
   it('POST /:id/render rejects when no variations exist', async () => {

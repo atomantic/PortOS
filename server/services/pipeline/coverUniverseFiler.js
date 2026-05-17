@@ -55,10 +55,21 @@ const enqueueForUniverse = (universeId, task) => {
 export async function fileCoverIntoUniverseCollection({ seriesId, filename }) {
   if (!seriesId || typeof filename !== 'string' || !filename) return;
 
-  const series = await seriesSvc.getSeries(seriesId).catch(() => null);
-  if (!series?.universeId) return;
+  // Pre-queue read: we need a universeId to pick a serialization key.
+  // Re-read inside the queued task to catch a series that was unlinked
+  // (or moved to another universe) while we waited in the queue.
+  const initialSeries = await seriesSvc.getSeries(seriesId).catch(() => null);
+  if (!initialSeries?.universeId) return;
 
-  return enqueueForUniverse(series.universeId, async () => {
+  return enqueueForUniverse(initialSeries.universeId, async () => {
+    // Re-read series inside the queue — a parallel updateSeries (or another
+    // hook) could have unlinked it (universeId=null) or re-pointed it at a
+    // different universe while earlier filings for the original universe
+    // worked through the queue. Filing into the stale link would
+    // mis-attribute the cover.
+    const series = await seriesSvc.getSeries(seriesId).catch(() => null);
+    if (!series?.universeId || series.universeId !== initialSeries.universeId) return;
+
     // Revalidate as close as possible to collection creation so we do not
     // stamp a newly-created collection with a universe id/name fetched from a
     // universe that has already been deleted.

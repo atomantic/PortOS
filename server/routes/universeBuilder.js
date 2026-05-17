@@ -238,11 +238,12 @@ const selectionSchema = z.record(
 });
 
 const renderSchema = z.object({
-  // Accepted for backward compat but ignored — the linked collection's name
-  // is enforced as "Universe: <name>" by the rename-lock so a per-render
-  // override would just be reverted on the next access. The route resolves
-  // the collection by `universeId`, not name.
-  collectionName: z.string().trim().min(1).max(COLLECTION_NAME_MAX).optional(),
+  // Removed: callers that still send `collectionName` get an explicit 400
+  // (see the .refine() below) instead of a confusing silent no-op. The
+  // canonical "Universe: <name>" identity is owned by the universe and
+  // enforced by the rename-lock — per-render overrides have no semantic
+  // home in that model.
+  collectionName: z.unknown().optional(),
   // Image-gen knobs — these mirror /api/image-gen/generate so the user can
   // pick mode/size/steps without bouncing to the Image page first.
   mode: z.enum(['external', 'local', 'codex']).optional(),
@@ -258,6 +259,9 @@ const renderSchema = z.object({
   batchPerVariation: z.number().int().min(1).max(20).optional().default(1),
   selection: selectionSchema.optional(),
   sheetSelection: z.union([z.literal('all'), z.array(z.string().trim().min(1).max(svc.VARIATION_LABEL_MAX)).max(svc.COMPOSITE_SHEETS_MAX)]).optional(),
+}).refine((body) => body.collectionName === undefined, {
+  message: 'collectionName is no longer supported — the linked collection follows the universe name automatically. Remove this field.',
+  path: ['collectionName'],
 });
 
 router.get('/', asyncHandler(async (_req, res) => {
