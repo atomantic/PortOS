@@ -349,11 +349,6 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
     );
   };
 
-  const i2iSupported = imageCfg.mode !== 'codex';
-  const i2iDisabledReason = i2iSupported
-    ? null
-    : 'Codex (gpt-image-2) does not support image-to-image. Switch backend in the image-gen settings to use the proof as a base.';
-
   // Shared script-persist (cover / backCover) — server-side updatePipelineIssue
   // does a deep merge under stages.comicPages.<field>. Only the script text
   // is sent; render slots are written exclusively by the render route to
@@ -372,7 +367,7 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
     const isBack = field === 'backCover';
     const useProofToggle = isBack ? useProofForBackFinal : useProofForCoverFinal;
     setBusyFor(field, variant, true);
-    const useProofAsBase = variant === 'final' && useProofToggle && i2iSupported;
+    const useProofAsBase = variant === 'final' && useProofToggle;
     const draftText = isBack ? draftBackCoverScript : draftCoverScript;
     const apiCall = isBack ? generatePipelineComicBackCover : generatePipelineComicCover;
     const bodyScriptKey = isBack ? 'backCoverScript' : 'coverScript';
@@ -543,14 +538,13 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
               Render proof
             </button>
             <label
-              className={`flex items-center gap-1 text-[11px] text-gray-400 ${i2iSupported ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`}
-              title={i2iDisabledReason || 'Use the proof image as the base for the final render — preserves composition.'}
+              className="flex items-center gap-1 text-[11px] text-gray-400 cursor-pointer"
+              title="Use the proof image as the base for the final render — preserves composition."
             >
               <input
                 type="checkbox"
-                checked={i2iSupported && useProofForCoverFinal}
+                checked={useProofForCoverFinal}
                 onChange={(e) => setUseProofForCoverFinal(e.target.checked)}
-                disabled={!i2iSupported}
                 className="rounded"
               />
               from proof
@@ -560,12 +554,12 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
               onClick={() => handleRenderCoverField('cover', 'final')}
               disabled={
                 busy.coverFinal || coverFinalInFlight || actionsGated
-                || (i2iSupported && useProofForCoverFinal && !coverProof?.filename)
+                || (useProofForCoverFinal && !coverProof?.filename)
               }
               title={finalButtonTooltip({
                 gated: actionsGated,
                 inFlight: coverFinalInFlight,
-                needsProof: i2iSupported && useProofForCoverFinal && !coverProof?.filename,
+                needsProof: useProofForCoverFinal && !coverProof?.filename,
                 defaultMsg: 'Render the hi-res final cover at the configured size. Tick "from proof" to upscale the proof rather than redraw it.',
               })}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-port-accent text-white text-xs font-medium hover:bg-port-accent/90 disabled:opacity-40 disabled:cursor-not-allowed"
@@ -627,14 +621,13 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
               Render proof
             </button>
             <label
-              className={`flex items-center gap-1 text-[11px] text-gray-400 ${i2iSupported ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`}
-              title={i2iDisabledReason || 'Use the proof image as the base for the final render — preserves composition.'}
+              className="flex items-center gap-1 text-[11px] text-gray-400 cursor-pointer"
+              title="Use the proof image as the base for the final render — preserves composition."
             >
               <input
                 type="checkbox"
-                checked={i2iSupported && useProofForBackFinal}
+                checked={useProofForBackFinal}
                 onChange={(e) => setUseProofForBackFinal(e.target.checked)}
-                disabled={!i2iSupported}
                 className="rounded"
               />
               from proof
@@ -644,12 +637,12 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
               onClick={() => handleRenderCoverField('backCover', 'final')}
               disabled={
                 busy.backFinal || backFinalInFlight || actionsGated
-                || (i2iSupported && useProofForBackFinal && !backProof?.filename)
+                || (useProofForBackFinal && !backProof?.filename)
               }
               title={finalButtonTooltip({
                 gated: actionsGated,
                 inFlight: backFinalInFlight,
-                needsProof: i2iSupported && useProofForBackFinal && !backProof?.filename,
+                needsProof: useProofForBackFinal && !backProof?.filename,
                 defaultMsg: 'Render the hi-res final back-cover at the configured size. Tick "from proof" to upscale the proof rather than redraw it.',
               })}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-port-accent text-white text-xs font-medium hover:bg-port-accent/90 disabled:opacity-40 disabled:cursor-not-allowed"
@@ -699,8 +692,6 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
             pageIndex={pi}
             page={page}
             renderOpts={renderOpts}
-            i2iSupported={i2iSupported}
-            i2iDisabledReason={i2iDisabledReason}
             onStageUpdate={onStageUpdate}
             onPreview={openPreview}
             onFilenameKnown={onFilenameKnown}
@@ -740,7 +731,6 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
 
 function PageRow({
   issue, pageIndex, page, renderOpts = {},
-  i2iSupported = true, i2iDisabledReason = null,
   onStageUpdate, onPreview, onFilenameKnown,
 }) {
   const rawText = useMemo(
@@ -782,7 +772,7 @@ function PageRow({
   const handleRender = async (target) => {
     const setFlight = target === 'final' ? setRenderingFinal : setRenderingProof;
     setFlight(true);
-    const useProofAsBase = target === 'final' && useProofForFinal && i2iSupported;
+    const useProofAsBase = target === 'final' && useProofForFinal;
     const res = await generatePipelineComicPage(issue.id, pageIndex, {
       ...renderOpts,
       target,
@@ -807,7 +797,7 @@ function PageRow({
     }
   };
 
-  const finalNeedsProof = i2iSupported && useProofForFinal && !proofSlot?.filename;
+  const finalNeedsProof = useProofForFinal && !proofSlot?.filename;
 
   return (
     <li className="rounded-lg border border-port-border bg-port-card/40">
@@ -842,14 +832,13 @@ function PageRow({
             Proof
           </button>
           <label
-            className={`flex items-center gap-1 text-[11px] text-gray-400 px-1 ${i2iSupported ? 'cursor-pointer' : 'cursor-not-allowed opacity-60'}`}
-            title={i2iDisabledReason || 'Use the proof image as the base for the final render — preserves panel layout.'}
+            className="flex items-center gap-1 text-[11px] text-gray-400 px-1 cursor-pointer"
+            title="Use the proof image as the base for the final render — preserves panel layout."
           >
             <input
               type="checkbox"
-              checked={i2iSupported && useProofForFinal}
+              checked={useProofForFinal}
               onChange={(e) => setUseProofForFinal(e.target.checked)}
-              disabled={!i2iSupported}
               className="rounded"
             />
             from proof

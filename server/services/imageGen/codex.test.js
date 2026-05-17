@@ -132,6 +132,41 @@ describe('codex provider — generateImage', () => {
     await expect(codex.generateImage({ prompt: '   ' })).rejects.toThrow(/Prompt is required/);
   });
 
+  it('forwards initImagePath via `-i <FILE>` and reshapes the prompt for image-edit', async () => {
+    await codex.generateImage({
+      prompt: 'cover art',
+      width: 1024, height: 1536,
+      initImagePath: '/abs/path/to/proof.png',
+      initImageStrength: 0.2,
+    });
+    const { args } = spawnCalls[0];
+    const iIdx = args.indexOf('-i');
+    expect(iIdx).toBeGreaterThan(-1);
+    expect(args[iIdx + 1]).toBe('/abs/path/to/proof.png');
+    const promptArg = args[args.length - 1];
+    // The `$imagegen` prefix is preserved so the bundled skill still triggers.
+    expect(promptArg.startsWith('$imagegen ')).toBe(true);
+    // Edit-prefix tells codex to use the attachment rather than redraw.
+    expect(promptArg).toMatch(/edit the attached reference image/i);
+    // Low strength → composition-preserving fidelity phrase.
+    expect(promptArg).toMatch(/preserve composition/i);
+    expect(promptArg).toContain('cover art');
+    spawnCalls[0].child.exitCode = 1;
+    spawnCalls[0].child.emit('close', 1, null);
+    await flush();
+  });
+
+  it('omits `-i` and the edit-prefix when no initImagePath is passed', async () => {
+    await codex.generateImage({ prompt: 'cover art', width: 1024, height: 1024 });
+    const { args } = spawnCalls[0];
+    expect(args).not.toContain('-i');
+    const promptArg = args[args.length - 1];
+    expect(promptArg).not.toMatch(/edit the attached reference image/i);
+    spawnCalls[0].child.exitCode = 1;
+    spawnCalls[0].child.emit('close', 1, null);
+    await flush();
+  });
+
   it('allows concurrent generations (parallel codex lane)', async () => {
     const a = await codex.generateImage({ prompt: 'one' });
     const b = await codex.generateImage({ prompt: 'two' });
