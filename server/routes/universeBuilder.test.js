@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
+import { enqueueJob } from '../services/mediaJobQueue/index.js';
 
 const fileStore = new Map();
 
@@ -455,7 +456,8 @@ describe('universe-builder routes', () => {
     expect(JSON.stringify(res.body)).toMatch(/collectionName/i);
   });
 
-  it('POST /:id/render accepts seed/negativePrompt/extraStyle/loras overrides', async () => {
+  it('POST /:id/render forwards seed + LoRAs in the wire format local image gen reads', async () => {
+    vi.mocked(enqueueJob).mockClear();
     const app = buildApp();
     const created = await request(app).post('/api/universe-builder').send({
       name: 'Override Universe',
@@ -467,13 +469,39 @@ describe('universe-builder routes', () => {
       .post(`/api/universe-builder/${created.body.id}/render`)
       .send({
         mode: 'local',
-        seed: 'abc123',
+        seed: 42,
         negativePrompt: 'low quality',
         extraStyle: 'high contrast',
-        loras: [{ filename: 'foo.safetensors', name: 'Foo', scale: 0.8 }],
+        loras: [
+          { filename: 'foo.safetensors', name: 'Foo', scale: 0.8 },
+          { filename: 'bar.safetensors', name: 'Bar', scale: 1.2 },
+        ],
       });
     expect(res.status).toBe(200);
     expect(res.body.promptCount).toBe(1);
+    // Verify the enqueued job carries the local-runner wire shape
+    // (loraFilenames + loraScales as parallel arrays), not the UI's
+    // [{filename, scale}] objects which the runner would silently ignore.
+    expect(vi.mocked(enqueueJob)).toHaveBeenCalledTimes(1);
+    const enqueuedParams = vi.mocked(enqueueJob).mock.calls[0][0].params;
+    expect(enqueuedParams.seed).toBe(42);
+    expect(enqueuedParams.loraFilenames).toEqual(['foo.safetensors', 'bar.safetensors']);
+    expect(enqueuedParams.loraScales).toEqual([0.8, 1.2]);
+    expect(enqueuedParams.loras).toBeUndefined();
+  });
+
+  it('POST /:id/render rejects non-numeric seed (local image gen would NaN)', async () => {
+    const app = buildApp();
+    const created = await request(app).post('/api/universe-builder').send({
+      name: 'Bad Seed Universe',
+      categories: {
+        landscapes: { variations: [{ label: 'A', prompt: 'a' }] },
+      },
+    });
+    const res = await request(app)
+      .post(`/api/universe-builder/${created.body.id}/render`)
+      .send({ mode: 'local', seed: 'abc123' });
+    expect(res.status).toBe(400);
   });
 
   it('POST /:id/render rejects when no variations exist', async () => {

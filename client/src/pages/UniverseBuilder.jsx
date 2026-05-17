@@ -1235,6 +1235,16 @@ export default function UniverseBuilder() {
       ?? (needsCanonDefault
         ? { characters: 'all', settings: 'all', objects: 'all' }
         : undefined);
+    // Per-batch overrides from the ImageGenSettingsForm. Empty strings →
+    // undefined so the server falls back to the universe's stored influences.
+    // Seed coerces to a non-negative int (matching /api/image-gen/generate
+    // semantics) — non-numeric strings become undefined rather than NaN.
+    const seedRaw = renderOpts.seed;
+    const seedNum = seedRaw === '' || seedRaw == null ? null : Number(seedRaw);
+    const seed = Number.isFinite(seedNum) && seedNum >= 0 ? Math.trunc(seedNum) : undefined;
+    const loras = Array.isArray(renderOpts.loras) && renderOpts.loras.length
+      ? renderOpts.loras
+      : undefined;
     setRendering(true);
     const result = await renderWorld(selectedId, {
       mode: effectiveMode,
@@ -1250,6 +1260,11 @@ export default function UniverseBuilder() {
       selection: scope?.selection,
       sheetSelection: scope?.sheetSelection,
       canonSelection: effectiveCanonSelection,
+      seed,
+      negativePrompt: renderOpts.negativePrompt?.trim() || undefined,
+      extraStyle: renderOpts.extraStyle?.trim() || undefined,
+      stylePresetId: renderOpts.stylePreset?.id || undefined,
+      loras,
     }).catch((e) => { toast.error(`Render failed: ${e.message}`); return null; });
     setRendering(false);
     if (!result) return;

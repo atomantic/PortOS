@@ -292,7 +292,10 @@ const renderSchema = z.object({
   canonSelection: canonSelectionSchema.optional(),
   // Per-batch overrides surfaced through the full Image-Gen form. All optional;
   // empty values are treated as "use the universe's existing influences."
-  seed: z.union([z.string().trim().max(40), z.number().int()]).optional(),
+  // `seed` matches /api/image-gen/generate's contract (non-negative integer) —
+  // local image gen coerces via Number(seed) and would yield NaN for arbitrary
+  // strings, so reject early at the boundary.
+  seed: z.number().int().min(0).optional(),
   negativePrompt: z.string().trim().max(svc.PROMPT_FRAGMENT_MAX).optional(),
   extraStyle: z.string().trim().max(svc.PROMPT_FRAGMENT_MAX).optional(),
   stylePresetId: z.string().trim().max(80).optional(),
@@ -443,14 +446,15 @@ router.post('/:id/render', asyncHandler(async (req, res) => {
   // dispatcher), so without this mapping the Universe Builder UI's CFG control
   // would silently no-op for local renders.
   const guidance = body.guidance ?? body.cfgScale;
-  // Normalize seed: schema accepts string or number; empty string from the
-  // client form means "no seed override." Anything else passes through to the
-  // image runner which handles its own seed-sequence semantics across batches.
-  const seedRaw = body.seed;
-  const seed = (seedRaw === '' || seedRaw === undefined || seedRaw === null)
-    ? undefined
-    : seedRaw;
-  const loras = Array.isArray(body.loras) && body.loras.length ? body.loras : undefined;
+  // Local image gen reads `loraFilenames` (basenames) + `loraScales` (parallel
+  // array of numbers), not the `[{filename, scale}]` UI shape. Convert here so
+  // every enqueued job actually applies the user's LoRA selection.
+  const loraFilenames = Array.isArray(body.loras) && body.loras.length
+    ? body.loras.map((l) => l.filename)
+    : undefined;
+  const loraScales = Array.isArray(body.loras) && body.loras.length
+    ? body.loras.map((l) => l.scale)
+    : undefined;
   const baseParams = {
     width: body.width,
     height: body.height,
@@ -458,8 +462,9 @@ router.post('/:id/render', asyncHandler(async (req, res) => {
     cfgScale: body.cfgScale,
     guidance,
     quantize: body.quantize,
-    seed,
-    loras,
+    seed: body.seed,
+    loraFilenames,
+    loraScales,
   };
 
   for (const item of compiled) {
