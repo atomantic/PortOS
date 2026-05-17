@@ -16,12 +16,24 @@
  *   landing in the fresh bucket and the legacy renders stranded.
  *
  * What this does:
- *   For each collection whose name matches `Universe: <X>` and whose
- *   `universeId` is null, look for exactly ONE universe whose name (after
- *   the `Universe: ` prefix is stripped) matches `<X>`. If found, stamp
- *   `universeId` onto the collection. Skip collections that match zero or
- *   multiple universes — the ambiguous case is the same risk this PR
- *   shipped to avoid.
+ *   Index universes by the *canonical collection name* they'd produce
+ *   (`"Universe: " + name`, truncated to 80 chars — the same transform the
+ *   runtime helper uses). For each unlinked collection whose name matches
+ *   exactly one universe's canonical name (case-insensitive), stamp the
+ *   `universeId` AND canonicalize the visible name to the freshly-computed
+ *   canonical form. Skip zero/multi matches — the ambiguous case is the
+ *   same risk this PR shipped to avoid.
+ *
+ *   Indexing by canonical (truncated) name closes two upgrade-path gaps:
+ *     1. Long universe names: the runtime truncates the collection name to
+ *        80 chars, so an install with a 100-char universe name has a
+ *        collection holding only the truncated suffix. Comparing against
+ *        the raw universe name would miss it.
+ *     2. Casing/whitespace drift: a legacy bucket named `universe: bar`
+ *        (lowercase) gets relinked AND its display name is canonicalized
+ *        to `Universe: bar` in the same write — without canonicalization
+ *        the rename-lock kicks in immediately and the user is stuck with
+ *        the bad-casing name forever.
  *
  * Idempotent: re-runs skip collections that already carry a `universeId`,
  * so this is safe to leave in place forever.
@@ -30,7 +42,7 @@
 import { readFile, writeFile } from 'fs/promises';
 import { join } from 'path';
 
-const UNIVERSE_NAME_PREFIX_RE = /^Universe:\s*(.+)$/i;
+const COLLECTION_NAME_MAX = 80;
 
 const readJson = async (path, fallback) => {
   const raw = await readFile(path, 'utf-8').catch((err) => {
@@ -44,11 +56,11 @@ const readJson = async (path, fallback) => {
 const writeJson = (path, value) =>
   writeFile(path, JSON.stringify(value, null, 2) + '\n');
 
-const universeNameFromCollectionName = (name) => {
-  if (typeof name !== 'string') return null;
-  const m = UNIVERSE_NAME_PREFIX_RE.exec(name.trim());
-  return m ? m[1].trim() : null;
-};
+// Mirrors `universeCollectionNameFor` in server/services/mediaCollections.js
+// — duplicated inline so this one-shot migration's contract is frozen
+// against future runtime changes to the naming convention.
+const canonicalCollectionName = (universeName) =>
+  `Universe: ${typeof universeName === 'string' ? universeName : ''}`.slice(0, COLLECTION_NAME_MAX);
 
 const norm = (s) => (typeof s === 'string' ? s.trim().toLowerCase() : '');
 
@@ -66,14 +78,17 @@ export default {
       return { linked: 0, reason: 'no-universes' };
     }
 
-    // Build a name → [universe...] index so the ambiguous case is detectable.
-    const universesByName = new Map();
+    // Index universes by the canonical collection-name they'd produce, so
+    // long names (truncated) and short names match through the same path.
+    // Value is a list — multi-match means ambiguous, skip.
+    const universesByCanonicalName = new Map();
     for (const u of universesDoc.universes) {
-      const key = norm(u?.name);
-      if (!key) continue;
-      const bucket = universesByName.get(key) || [];
+      const canonical = canonicalCollectionName(u?.name);
+      const key = norm(canonical);
+      if (!key || key === norm('Universe: ')) continue; // skip universes with empty/whitespace names
+      const bucket = universesByCanonicalName.get(key) || [];
       bucket.push(u);
-      universesByName.set(key, bucket);
+      universesByCanonicalName.set(key, bucket);
     }
 
     let linked = 0;
@@ -81,23 +96,28 @@ export default {
     const now = new Date().toISOString();
     for (const c of collectionsDoc.collections) {
       if (c?.universeId) continue;
-      const universeName = universeNameFromCollectionName(c?.name);
-      if (!universeName) continue;
-      const matches = universesByName.get(norm(universeName));
+      if (typeof c?.name !== 'string') continue;
+      const key = norm(c.name);
+      const matches = universesByCanonicalName.get(key);
       if (!matches || matches.length === 0) continue;
       if (matches.length > 1) {
         ambiguous += 1;
         console.warn(`⚠️ migration 021: collection "${c.name}" matches ${matches.length} universes — skipping (ambiguous link).`);
         continue;
       }
-      c.universeId = matches[0].id;
+      const universe = matches[0];
+      c.universeId = universe.id;
+      // Canonicalize the visible name in the same write. After link the
+      // rename-lock takes effect, so this is the user's last chance to
+      // get the correct casing/whitespace without hand-editing JSON.
+      c.name = canonicalCollectionName(universe.name);
       c.updatedAt = now;
       linked += 1;
     }
 
     if (linked > 0) {
       await writeJson(collectionsPath, collectionsDoc);
-      console.log(`🔗 migration 021: linked ${linked} legacy "Universe: <name>" collection(s) by name match.`);
+      console.log(`🔗 migration 021: linked ${linked} legacy "Universe: <name>" collection(s) by canonical-name match.`);
     }
     if (ambiguous > 0) {
       console.log(`ℹ️ migration 021: ${ambiguous} collection(s) skipped due to multiple same-named universes.`);

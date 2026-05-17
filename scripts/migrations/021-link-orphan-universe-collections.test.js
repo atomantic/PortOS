@@ -86,8 +86,8 @@ describe('migration 021 — link orphan universe collections', () => {
     expect(after.collections[0].universeId).toBeNull();
   });
 
-  it('matches case-insensitively and tolerates surrounding whitespace', async () => {
-    writeJson(universesPath, { universes: [{ id: 'u-1', name: '  bar  ' }] });
+  it('matches case-insensitively AND canonicalizes the visible name on link', async () => {
+    writeJson(universesPath, { universes: [{ id: 'u-1', name: 'bar' }] });
     writeJson(collectionsPath, {
       collections: [
         { id: 'c-1', name: 'universe: BAR', universeId: null, items: [] },
@@ -97,6 +97,31 @@ describe('migration 021 — link orphan universe collections', () => {
     expect(result.linked).toBe(1);
     const after = readJson(collectionsPath);
     expect(after.collections[0].universeId).toBe('u-1');
+    // Canonicalized — the rename-lock now activates, so this is the user's
+    // last chance to get the right casing without hand-editing the JSON.
+    expect(after.collections[0].name).toBe('Universe: bar');
+  });
+
+  it('links a long-name universe whose canonical collection name is truncated to 80 chars', async () => {
+    // 100-char universe name — `Universe: <100-char>` truncates to
+    // "Universe: " + first 70 chars. The migration must match on the
+    // truncated canonical name, not the raw universe name.
+    const longName = 'x'.repeat(100);
+    const expectedCanonical = ('Universe: ' + longName).slice(0, 80);
+    writeJson(universesPath, { universes: [{ id: 'u-long', name: longName }] });
+    writeJson(collectionsPath, {
+      collections: [
+        // The collection on disk has the truncated name (that's what the
+        // sanitizer would have written when the bucket was originally
+        // created pre-link).
+        { id: 'c-long', name: expectedCanonical, universeId: null, items: [] },
+      ],
+    });
+    const result = await migration.up({ rootDir });
+    expect(result.linked).toBe(1);
+    const after = readJson(collectionsPath);
+    expect(after.collections[0].universeId).toBe('u-long');
+    expect(after.collections[0].name).toBe(expectedCanonical);
   });
 
   it('no-ops when the media-collections file does not exist', async () => {

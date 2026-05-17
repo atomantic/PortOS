@@ -99,9 +99,10 @@ describe('fileCoverIntoUniverseCollection', () => {
   it('serializes concurrent filings for the same universe (no orphan collections from a race)', async () => {
     const universe = await universeSvc.createUniverse({ name: 'Race' });
     const series = await seriesSvc.createSeries({ name: 'S', universeId: universe.id });
-    // Two completions back-to-back before the collection exists — the per-
-    // universe queue must funnel both through the same create-or-find write
-    // so only one collection is persisted and both filenames land in it.
+    // Two completions back-to-back before the collection exists — the
+    // shared file-level write tail in mediaCollections.js must serialize
+    // the create-or-find write so only one collection is persisted and
+    // both filenames land in it.
     await Promise.all([
       fileCoverIntoUniverseCollection({ seriesId: series.id, filename: 'cover.png' }),
       fileCoverIntoUniverseCollection({ seriesId: series.id, filename: 'back.png' }),
