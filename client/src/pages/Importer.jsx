@@ -82,7 +82,14 @@ export default function Importer() {
         sourceCharLimit: Number.isFinite(cfg.sourceCharLimit) ? cfg.sourceCharLimit : IMPORTER_SOURCE_CHAR_LIMIT_FALLBACK,
         arcRoles: Array.isArray(cfg.arcRoles) && cfg.arcRoles.length > 0 ? cfg.arcRoles : IMPORTER_ARC_ROLES_FALLBACK,
       });
-    }).catch(() => { /* keep fallbacks */ });
+    }).catch((err) => {
+      // Aborts (analyze fires first, unmount) are expected — silent.
+      // Real network/server errors are NOT expected — surface them so a
+      // misconfigured /importer/config doesn't silently fall back to
+      // client defaults forever without operator feedback.
+      if (ac.signal.aborted) return;
+      console.warn(`⚠️ Importer config fetch failed — using client fallbacks: ${err?.message || err}`);
+    });
     return () => ac.abort();
   }, []);
 

@@ -94,13 +94,22 @@ export function mergeSeasons(existingSeasons, incomingSeasons, buildSeasonImpl =
   const existingByNumber = new Map(
     existingSeasons.filter((s) => Number.isFinite(s.number)).map((s) => [s.number, s]),
   );
-  // Dedup-check explicit incoming numbers here too — commitImport's route
-  // path also gates against this, but a direct caller (a future internal
-  // consumer of the pure helper, or a test) would otherwise silently
-  // collapse two incoming seasons sharing a number into one merge target.
+  // Dedup-check + ceiling-check explicit incoming numbers — commitImport's
+  // route path Zod gates against both, but a direct caller (a future
+  // internal consumer of the pure helper, or a test) would otherwise
+  // silently collapse two incoming seasons sharing a number into one merge
+  // target, or land a number > SEASON_NUMBER_MAX that the wire wouldn't
+  // accept. Auto-assign path enforces the ceiling below; the explicit
+  // path enforces it here for symmetry.
   const seenIncomingNumbers = new Set();
   for (const s of incomingSeasons) {
     if (Number.isInteger(s?.number) && s.number >= 1) {
+      if (s.number > SEASON_NUMBER_MAX) {
+        throw makeErr(
+          `mergeSeasons: explicit season number ${s.number} exceeds the max of ${SEASON_NUMBER_MAX}.`,
+          ERR_VALIDATION,
+        );
+      }
       if (seenIncomingNumbers.has(s.number)) {
         throw makeErr(
           `mergeSeasons: duplicate explicit season number ${s.number} in incoming list — caller must pre-dedupe.`,
@@ -365,8 +374,10 @@ export async function analyzeImport({
   // returnsJson gates extractJson() in stageRunner — required even though
   // the stage-config also declares `returnsJson: true` (that field is
   // metadata for the Prompts UI; the runtime only consults the per-call
-  // option).
-  const llmOpts = { providerOverride, source: 'importer-analyze', returnsJson: true };
+  // option). Helper returns a FRESH object each call so a future runner
+  // that decides to add bookkeeping (`opts.attempt`, `opts.startedAt`)
+  // can't leak state across our parallel canon + arc invocations.
+  const buildLlmOpts = () => ({ providerOverride, source: 'importer-analyze', returnsJson: true });
 
   const userRequestedCount = Number.isFinite(targetIssueCount) && targetIssueCount > 0;
   const issueCountHint = userRequestedCount
@@ -399,13 +410,13 @@ export async function analyzeImport({
       source,
       existingCanonBlock: buildExistingCanonBlock(existingCanon),
       ...typeFlags,
-    }, llmOpts),
+    }, buildLlmOpts()),
     runStagedLLM('importer-arc-extract', {
       seriesName: promptSeriesName,
       contentType,
       source,
       ...typeFlags,
-    }, llmOpts),
+    }, buildLlmOpts()),
   ]);
 
   // Pull the arc summary in before issue-proposal so the issue boundaries
@@ -428,7 +439,7 @@ export async function analyzeImport({
     // a per-type hint isn't presented as a hard user constraint.
     targetIssueCount: issueCountHint,
     isUserRequestedCount: userRequestedCount,
-  }, llmOpts);
+  }, buildLlmOpts());
 
   // All LLM calls succeeded — now persist any new records. Pre-existing
   // records are returned as-is; new records are created here at the end so
@@ -542,16 +553,19 @@ export async function commitImport({
         ERR_VALIDATION,
       );
     }
-    // arcPosition is the issue's slot in the series — Zod enforces int >= 1
-    // at the route layer, but commitImport is also called directly from
-    // tests + future internal callers; mirror the schema gate here so the
-    // service contract holds regardless of caller. Allow undefined here —
-    // an auto-assign pass below picks the next free slot. Reject anything
-    // else that isn't a valid >=1 integer.
+    // arcPosition is the issue's slot in the series — Zod enforces
+    // int 1..ARC_POSITION_MAX at the route layer, but commitImport is
+    // also called directly from tests + future internal callers; mirror
+    // both the floor and the ceiling here so the service contract holds
+    // regardless of caller. Allow undefined — an auto-assign pass below
+    // picks the next free slot. Reject anything that isn't a valid
+    // integer in [1, ARC_POSITION_MAX].
     if (proposal.arcPosition !== undefined && proposal.arcPosition !== null
-        && (!Number.isInteger(proposal.arcPosition) || proposal.arcPosition < 1)) {
+        && (!Number.isInteger(proposal.arcPosition)
+            || proposal.arcPosition < 1
+            || proposal.arcPosition > ARC_POSITION_MAX)) {
       throw makeErr(
-        `Issue at position ${i + 1} has invalid arcPosition (must be integer >= 1) — commit refused before any state changed.`,
+        `Issue at position ${i + 1} has invalid arcPosition (must be integer 1..${ARC_POSITION_MAX}) — commit refused before any state changed.`,
         ERR_VALIDATION,
       );
     }
@@ -605,6 +619,20 @@ export async function commitImport({
       existingArcPositions.add(ex.arcPosition);
     }
   }
+  // Symmetry with the auto-assign branch: reject incoming issues whose
+  // EXPLICIT arcPosition collides with an arcPosition already used by an
+  // existing issue on the series. The auto-assign branch dodges this via
+  // the union-set seed; the explicit-position branch would otherwise let
+  // createIssue happily land a duplicate.
+  for (let i = 0; i < issues.length; i++) {
+    const pos = issues[i]?.arcPosition;
+    if (Number.isInteger(pos) && pos >= 1 && existingArcPositions.has(pos)) {
+      throw makeErr(
+        `Issue at position ${i + 1} explicit arcPosition ${pos} collides with an existing issue on the series — commit refused before any state changed. Either renumber the incoming issue or omit arcPosition to auto-assign.`,
+        ERR_VALIDATION,
+      );
+    }
+  }
   const allUsedArcPositions = new Set([...seenArcPositions, ...existingArcPositions]);
   let nextFreeArcPos = (allUsedArcPositions.size === 0) ? 1 : Math.max(...allUsedArcPositions) + 1;
   const issuesWithPositions = issues.map((proposal) => {
@@ -621,18 +649,18 @@ export async function commitImport({
     return { ...proposal, arcPosition: assigned };
   });
 
-  // Same contract for seasons: route Zod enforces `number: int >= 1`,
-  // commitImport mirrors it so the service is safe under direct calls.
-  // Also reject duplicate season numbers — the merge keys by `number`,
-  // so two incoming seasons with the same number would silently collapse
-  // into one entry post sanitizeSeasonList.
+  // Same contract for seasons: route Zod enforces `number: int 1..99`,
+  // commitImport mirrors both the floor AND the ceiling so the service is
+  // safe under direct calls. Also reject duplicate season numbers — the
+  // merge keys by `number`, so two incoming seasons sharing one would
+  // silently collapse into a single entry post sanitizeSeasonList.
   const seenSeasonNumbers = new Set();
   for (let i = 0; i < seasons.length; i++) {
     const s = seasons[i];
     if (s?.number !== undefined && s?.number !== null) {
-      if (!Number.isInteger(s.number) || s.number < 1) {
+      if (!Number.isInteger(s.number) || s.number < 1 || s.number > SEASON_NUMBER_MAX) {
         throw makeErr(
-          `Season at position ${i + 1} has invalid number (must be integer >= 1) — commit refused before any state changed.`,
+          `Season at position ${i + 1} has invalid number (must be integer 1..${SEASON_NUMBER_MAX}) — commit refused before any state changed.`,
           ERR_VALIDATION,
         );
       }

@@ -529,6 +529,40 @@ describe('commitImport', () => {
     expect(s2).toBeDefined();
   });
 
+  // Round-10 review: round-9's auto-assign fix only covered the omitted
+  // case. An incoming issue that EXPLICITLY sets `arcPosition: 1` while
+  // the series already holds an issue at position 1 must be rejected
+  // fail-fast, not silently land a duplicate.
+  it('refuses commit when an explicit arcPosition collides with an existing issue', async () => {
+    const { uni, ser } = await setupForCommit();
+    await importerSvc.commitImport({
+      universeId: uni.id, seriesId: ser.id,
+      canonSelections: { characters: [], places: [], objects: [] },
+      arc: null,
+      seasons: [],
+      issues: [{ title: 'I1', arcPosition: 1, proseExcerpt: 'p1' }],
+    });
+    let caught;
+    try {
+      await importerSvc.commitImport({
+        universeId: uni.id, seriesId: ser.id,
+        canonSelections: { characters: [], places: [], objects: [] },
+        arc: null,
+        seasons: [],
+        // Explicit arcPosition 1 — already used by I1 above.
+        issues: [{ title: 'Collision', arcPosition: 1, proseExcerpt: 'p2' }],
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeDefined();
+    expect(caught.code).toBe(importerSvc.ERR_VALIDATION);
+    expect(caught.message).toMatch(/collides with an existing issue/i);
+    // No issue created — the gate fires before createIssue.
+    const all = await issuesSvc.listIssues({ seriesId: ser.id });
+    expect(all).toHaveLength(1);
+  });
+
   // Round-9 review: arcPosition auto-assign must seed `nextFreeArcPos`
   // from the union of explicit incoming positions AND pre-existing
   // series.issues[].arcPosition — re-import on a series that already
