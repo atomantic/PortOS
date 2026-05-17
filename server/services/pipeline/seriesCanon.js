@@ -6,7 +6,13 @@
 
 import { getUniverse } from '../universeBuilder.js';
 
-const EMPTY = Object.freeze({ characters: [], settings: [], objects: [] });
+// Frozen inner arrays too — otherwise a careless `canon.characters.push(...)`
+// at a caller would silently pollute every future orphan-series read.
+const EMPTY = Object.freeze({
+  characters: Object.freeze([]),
+  settings: Object.freeze([]),
+  objects: Object.freeze([]),
+});
 
 /**
  * Shape a universe record into `{ characters, settings, objects }` arrays,

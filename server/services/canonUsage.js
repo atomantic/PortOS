@@ -98,7 +98,7 @@ export async function getUniverseCanonUsage(universeId) {
           issueIds: [...issueIds],
           issueCount: issueIds.size,
         }))
-        .sort((a, b) => b.issueCount - a.issueCount || a.seriesName.localeCompare(b.seriesName));
+        .sort((a, b) => b.issueCount - a.issueCount || (a.seriesName || '').localeCompare(b.seriesName || ''));
     }
     return out;
   };

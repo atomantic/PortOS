@@ -11,6 +11,13 @@
  * creating duplicates. Pass `force: true` to make a fresh series anyway
  * (useful for re-syncing after a destructive pipeline-side edit).
  *
+ * `force: true` mints a brand-new universe alongside the fresh series — it
+ * does NOT delete the previously-linked universe. That's intentional: when
+ * canon has accumulated across crossover series sharing a universe, a
+ * destructive force-rebuild of one series shouldn't take its siblings' shared
+ * universe with it. The orphaned link is dropped from the work's manifest;
+ * the user can delete the stale universe explicitly if desired.
+ *
  * One-way: this is only the WR → Pipeline transfer. The link is stable
  * forever, but content does NOT auto-sync — calling this again on a linked
  * work returns the existing pair without re-copying. A future "re-sync"
