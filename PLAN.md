@@ -91,7 +91,6 @@ For project goals, see [GOALS.md](./GOALS.md). For completed work, see [DONE.md]
 
 ### Code quality / dedup (from `/simplify` passes)
 
-- [ ] **Route-level tests for proof/final `target` + `useProofAsBase`.** Three test cases on `comicPageRenderSchema` + `comicCoverRenderSchema`.
 - [ ] **Extract `useSwipeNav` hook + `lib/clipboard.js`.** `MediaLightbox` swipe nav; clipboard inlined across 8+ call sites. Clipboard can move now.
 - [ ] **Route `MediaLightbox` settings drawer through `components/Drawer.jsx`.** Reconcile `Drawer`'s flat Esc handler with the lightbox's layered Escape cascade.
 - [ ] **Extract `<ModelSelect>` component for the active+Legacy optgroup pattern.** `VideoGen.jsx` + `CreativeDirector.jsx` render identical blocks differing only in `m.name` vs `m.name || m.id`.
