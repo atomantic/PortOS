@@ -9,7 +9,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Loader2, Sparkles, ImageIcon, Save, Trash2, ChevronDown, ChevronRight, Settings as SettingsIcon, FileDown, Layers } from 'lucide-react';
+import { Loader2, Sparkles, ImageIcon, Save, Trash2, ChevronDown, ChevronRight, Settings as SettingsIcon, FileDown, Layers, Wand2 } from 'lucide-react';
 import toast from '../../ui/Toast';
 import {
   generatePipelineStage,
@@ -17,6 +17,7 @@ import {
   generatePipelineComicPage,
   generatePipelineComicCover,
   generatePipelineComicBackCover,
+  generatePipelineComicCoverConcepts,
   updatePipelineComicPage,
   updatePipelineIssue,
   updateIssueStageVisualStyle,
@@ -286,6 +287,49 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
   const [useProofForCoverFinal, setUseProofForCoverFinal] = useState(true);
   const [useProofForBackFinal, setUseProofForBackFinal] = useState(true);
 
+  const [generatingConcept, setGeneratingConcept] = useState({ cover: false, backCover: false });
+
+  const handleGenerateConcept = async (target) => {
+    setGeneratingConcept((g) => ({ ...g, [target]: true }));
+    const result = await generatePipelineComicCoverConcepts(issue.id, {
+      target,
+      commit: true,
+      providerOverride: series?.llm?.provider || undefined,
+      modelOverride: series?.llm?.model || undefined,
+    }).catch((err) => {
+      toast.error(err.message || 'Failed to generate cover concept');
+      return null;
+    });
+    setGeneratingConcept((g) => ({ ...g, [target]: false }));
+    if (!result) return;
+    if (result.stage) onStageUpdate?.('comicPages', result.stage, result.issue);
+    const label = target === 'backCover' ? 'Back cover' : 'Cover';
+    const seededThis = target === 'backCover' ? result.seeded?.backCover : result.seeded?.cover;
+    toast.success(seededThis
+      ? `${label} concept seeded`
+      : `${label} concept generated (existing edit preserved)`);
+  };
+
+  const renderConceptButton = (target, script) => {
+    const generating = generatingConcept[target];
+    const filled = !!(script || '').trim();
+    const noun = target === 'backCover' ? 'back-cover' : 'cover';
+    return (
+      <button
+        type="button"
+        onClick={() => handleGenerateConcept(target)}
+        disabled={generating || filled}
+        title={filled
+          ? `Clear the ${noun} concept first — the LLM only seeds blank concepts to avoid clobbering your edits.`
+          : `Have the LLM propose a ${noun} concept for this issue`}
+        className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-port-accent hover:text-white border border-port-border bg-port-bg hover:border-port-accent/40 disabled:opacity-40 disabled:cursor-not-allowed"
+      >
+        {generating ? <Loader2 size={12} className="animate-spin" /> : <Wand2 size={12} />}
+        Generate concept (LLM)
+      </button>
+    );
+  };
+
   const i2iSupported = imageCfg.mode !== 'codex';
   const i2iDisabledReason = i2iSupported
     ? null
@@ -464,6 +508,7 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
         <div className="flex items-center justify-between gap-2 flex-wrap">
           <span className="text-xs uppercase tracking-wider text-gray-500">Cover</span>
           <div className="flex items-center gap-2 flex-wrap">
+            {renderConceptButton('cover', cover.script)}
             <button
               type="button"
               onClick={() => handleRenderCoverField('cover', 'proof')}
@@ -547,6 +592,7 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
         <div className="flex items-center justify-between gap-2 flex-wrap">
           <span className="text-xs uppercase tracking-wider text-gray-500">Back cover</span>
           <div className="flex items-center gap-2 flex-wrap">
+            {renderConceptButton('backCover', backCover.script)}
             <button
               type="button"
               onClick={() => handleRenderCoverField('backCover', 'proof')}

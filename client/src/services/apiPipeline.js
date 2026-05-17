@@ -177,6 +177,18 @@ export const generatePipelineComicBackCover = (issueId, opts = {}, options = {})
     ...options,
   });
 
+// Ask the LLM to propose front + back cover concepts for one comic issue.
+// `opts.target` ('cover' | 'backCover' | 'both', default 'both') gates which
+// slot(s) get seeded when `commit: true` — the UI button on each card sends
+// its own target so the user can regenerate one card's concept without
+// touching the other. Seeds only blank scripts; never clobbers a user edit.
+// Returns the proposed text plus the updated issue + comicPages stage.
+export const generatePipelineComicCoverConcepts = (issueId, opts = {}) =>
+  request(`/pipeline/issues/${encodeURIComponent(issueId)}/cover-concepts/generate`, {
+    method: 'POST',
+    body: JSON.stringify(opts),
+  });
+
 // Volume (season) cover render. Persists in-flight slot on
 // series.seasons[].cover via the season write tail.
 // Returns { jobId, mode, prompt, coverScript, season, series, variant, fromProof }.

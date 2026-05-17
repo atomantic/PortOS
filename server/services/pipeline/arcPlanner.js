@@ -22,7 +22,7 @@
 import { runStagedLLM } from '../../lib/stageRunner.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { getSeries, updateSeries, updateSeasonOnSeries } from './series.js';
-import { listIssues, updateIssue, recomputeIssueNumbersForSeries } from './issues.js';
+import { listIssues, updateIssue, recomputeIssueNumbersForSeries, getIssue, updateStageWithLatest } from './issues.js';
 import { emitRecordUpdated, withReexportSuppressed } from '../sharing/recordEvents.js';
 import { getSeason } from './seasons.js';
 import {
@@ -476,6 +476,93 @@ export async function generateVolumeCoverConcepts(seriesId, seasonId, options = 
   return {
     season: updatedSeries ? (updatedSeries.seasons || []).find((s) => s.id === seasonId) : season,
     series: updatedSeries,
+    coverConcept,
+    backCoverConcept,
+    seeded,
+    raw: content,
+    runId,
+    providerId,
+    model,
+  };
+}
+
+/**
+ * Generate FRONT + BACK cover-art concepts for one comic issue. Per-issue
+ * sibling of `generateVolumeCoverConcepts`: returns the proposed text and,
+ * when `commit: true`, seeds blank `stages.comicPages.cover.script` /
+ * `stages.comicPages.backCover.script` slots without clobbering user edits.
+ *
+ * `options.target` ('cover' | 'backCover' | 'both', default 'both') gates
+ * which slots can be seeded — the UI buttons live per-card so the user can
+ * regenerate one without touching the other, even though the LLM returns
+ * the pair so the back can complement the front.
+ */
+export async function generateComicCoverConcepts(issueId, options = {}) {
+  const target = options.target || 'both';
+  if (target !== 'cover' && target !== 'backCover' && target !== 'both') {
+    throw makeErr(`Invalid target: ${target}`, ERR_VALIDATION);
+  }
+  const issue = await getIssue(issueId);
+  const series = await getSeries(issue.seriesId);
+  const proseFull = (issue.stages?.prose?.output || '').trim();
+  // Cap prose at a generous excerpt so very long drafts don't blow the
+  // prompt budget — the LLM only needs enough scene material to anchor a
+  // cover image, not the full text.
+  const proseExcerpt = proseFull.length > 4000 ? `${proseFull.slice(0, 4000)}…` : proseFull;
+  const ctx = {
+    series: {
+      name: series.name,
+      logline: series.logline,
+      styleNotes: series.styleNotes,
+    },
+    issue: {
+      number: issue.number,
+      title: issue.title,
+      synopsis: (issue.stages?.idea?.input || '').trim(),
+      beats: (issue.stages?.idea?.output || '').trim(),
+      proseExcerpt,
+    },
+  };
+  const { content, runId, providerId, model } = await runStagedLLM(
+    'pipeline-comic-cover-concepts',
+    ctx,
+    {
+      providerOverride: options.providerOverride,
+      modelOverride: options.modelOverride,
+      returnsJson: true,
+      source: 'pipeline-comic-cover-concepts',
+    },
+  );
+  const coverConcept = (typeof content?.coverConcept === 'string' ? content.coverConcept : '').trim();
+  const backCoverConcept = (typeof content?.backCoverConcept === 'string' ? content.backCoverConcept : '').trim();
+  const wantCover = target === 'cover' || target === 'both';
+  const wantBack = target === 'backCover' || target === 'both';
+  let updatedIssue = null;
+  let updatedStage = null;
+  const seeded = { cover: false, backCover: false };
+  if (options.commit) {
+    // Read the freshest persisted stage inside the queue so a concurrent
+    // blur-save on either cover script can't be silently overwritten —
+    // same "only seed when blank" pattern as the volume variant.
+    const result = await updateStageWithLatest(issueId, 'comicPages', (cur) => {
+      const patch = {};
+      if (wantCover && coverConcept && !(cur?.cover?.script || '')) {
+        patch.cover = { ...(cur?.cover || {}), script: coverConcept };
+        seeded.cover = true;
+      }
+      if (wantBack && backCoverConcept && !(cur?.backCover?.script || '')) {
+        patch.backCover = { ...(cur?.backCover || {}), script: backCoverConcept };
+        seeded.backCover = true;
+      }
+      return patch;
+    });
+    updatedIssue = result.issue;
+    updatedStage = result.stage;
+  }
+  return {
+    issue: updatedIssue,
+    stage: updatedStage,
+    target,
     coverConcept,
     backCoverConcept,
     seeded,
