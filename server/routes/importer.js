@@ -24,7 +24,7 @@ const router = Router();
 // not an importer-prefixed alias — map those to 404.
 const SERVICE_ERROR_STATUS = {
   [ERR_VALIDATION]: 400,
-  [ERR_LOCKED]: 400,
+  [ERR_LOCKED]: 409,
   [universeSvc.ERR_NOT_FOUND]: 404,
   [seriesSvc.ERR_NOT_FOUND]: 404,
 };

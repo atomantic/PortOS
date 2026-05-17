@@ -393,7 +393,7 @@ describe('commitImport', () => {
     expect(ariaEntries[0].physicalDescription).toBe('tall');
   });
 
-  it('refuses commit when at least one issue is missing', async () => {
+  it('refuses commit when the issues array is empty', async () => {
     const { uni, ser } = await setupForCommit();
     let caught;
     try {
@@ -410,5 +410,78 @@ describe('commitImport', () => {
     }
     expect(caught).toBeDefined();
     expect(caught.code).toBe(importerSvc.ERR_VALIDATION);
+  });
+
+  it('refuses commit when at least one issue in the array is missing a title', async () => {
+    // Exercises the per-entry title validation loop (importer.js lines 315-323).
+    // A non-empty issues array where one entry has no title must be rejected
+    // fail-fast, before any state is written to disk.
+    const { uni, ser } = await setupForCommit();
+    let caught;
+    try {
+      await importerSvc.commitImport({
+        universeId: uni.id,
+        seriesId: ser.id,
+        canonSelections: { characters: [], places: [], objects: [] },
+        arc: null,
+        seasons: [],
+        issues: [
+          { title: 'Valid Issue', arcPosition: 1, proseExcerpt: 'p1' },
+          { title: '', arcPosition: 2, proseExcerpt: 'p2' },
+        ],
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeDefined();
+    expect(caught.code).toBe(importerSvc.ERR_VALIDATION);
+    expect(caught.message).toMatch(/position 2/i);
+    // Confirm no issues were created — the fail-fast guard prevented any write.
+    const issuesAfter = await issuesSvc.listIssues({ seriesId: ser.id });
+    expect(issuesAfter).toHaveLength(0);
+  });
+
+  it('second-pass seasons are MERGED into existing seasons, not replaced', async () => {
+    // Regression guard for importer.js:360 destructive-replace behavior.
+    // Both passes supply non-empty seasons arrays; after the second commit the
+    // series must contain seasons from BOTH calls (merge), not just the second.
+    //
+    // NOTE: this test asserts the intended post-fix MERGE behavior. If the
+    // parallel agent's merge fix in importer.js has not landed yet, this test
+    // will fail loudly — that is the correct signal.
+    const { uni, ser } = await setupForCommit();
+
+    // First pass: season 1.
+    const first = await importerSvc.commitImport({
+      universeId: uni.id,
+      seriesId: ser.id,
+      canonSelections: { characters: [], places: [], objects: [] },
+      arc: null,
+      seasons: [{ number: 1, title: 'Season One', logline: 'Beginning', synopsis: 'a', endingHook: '' }],
+      issues: [{ title: 'I1', arcPosition: 1, proseExcerpt: 'p1' }],
+    });
+    expect(first.series.seasons).toHaveLength(1);
+    expect(first.series.seasons[0].title).toBe('Season One');
+
+    // Second pass: season 2 — the importer must MERGE this with season 1.
+    const second = await importerSvc.commitImport({
+      universeId: uni.id,
+      seriesId: ser.id,
+      canonSelections: { characters: [], places: [], objects: [] },
+      arc: null,
+      seasons: [{ number: 2, title: 'Season Two', logline: 'Escalation', synopsis: 'b', endingHook: '' }],
+      issues: [{ title: 'I2', arcPosition: 2, proseExcerpt: 'p2' }],
+    });
+
+    // After merge: series must contain both seasons.
+    expect(second.series.seasons).toHaveLength(2);
+    const titles = second.series.seasons.map((s) => s.title);
+    expect(titles).toContain('Season One');
+    expect(titles).toContain('Season Two');
+    // Season numbers must also be preserved correctly.
+    const s1 = second.series.seasons.find((s) => s.number === 1);
+    const s2 = second.series.seasons.find((s) => s.number === 2);
+    expect(s1).toBeDefined();
+    expect(s2).toBeDefined();
   });
 });

@@ -1139,13 +1139,14 @@ const importerIssueEntry = z.object({
   logline: z.string().max(500).optional(),
   synopsis: z.string().max(4000).optional(),
   // 500K cap matches the issue's stages.prose.output limit so a long
-  // novel chapter can land verbatim. Require non-empty + trim-validated
-  // content (whitespace-only excerpts would seed prose.output with
-  // whitespace and mark the stage `ready`, misleading the pipeline).
+  // novel chapter can land verbatim. Optional — the LLM may omit the
+  // excerpt on some issues. When present, must be non-empty + non-whitespace
+  // so it doesn't seed prose.output with whitespace and mark the stage
+  // `ready` misleadingly.
   proseExcerpt: z.string().min(1).max(500_000).refine(
     (s) => s.trim().length > 0,
     { message: 'proseExcerpt must contain non-whitespace content' },
-  ),
+  ).optional(),
 }).strict();
 
 export const importerCommitSchema = z.object({

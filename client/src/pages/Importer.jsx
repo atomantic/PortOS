@@ -73,7 +73,13 @@ export default function Importer() {
 
   // Review-phase editable state. Held separately from `preview` so the user
   // can experiment without losing the LLM's original suggestions.
+  //
+  // `canonSelections` holds the clean (no UI flags) LLM-extracted entries.
+  // `selectedCanon` tracks which indexes are checked via parallel Sets — one
+  // per kind — so no UI flag ever touches the canon entry objects that flow
+  // to the commit payload.
   const [canonSelections, setCanonSelections] = useState({ characters: [], places: [], objects: [] });
+  const [selectedCanon, setSelectedCanon] = useState({ characters: new Set(), places: new Set(), objects: new Set() });
   const [arcDraft, setArcDraft] = useState(null);
   const [seasonsDraft, setSeasonsDraft] = useState([]);
   const [issuesDraft, setIssuesDraft] = useState([]);
@@ -99,10 +105,15 @@ export default function Importer() {
     if (!result) return null;
     // Seed the editable Review-phase state from the preview.
     setPreview(result);
-    setCanonSelections({
-      characters: (result.canonPreview?.characters || []).map((e) => ({ ...e, _selected: true })),
-      places: (result.canonPreview?.places || []).map((e) => ({ ...e, _selected: true })),
-      objects: (result.canonPreview?.objects || []).map((e) => ({ ...e, _selected: true })),
+    const chars = result.canonPreview?.characters || [];
+    const places = result.canonPreview?.places || [];
+    const objects = result.canonPreview?.objects || [];
+    setCanonSelections({ characters: chars, places, objects });
+    // All entries selected by default — track via index Sets, not object flags.
+    setSelectedCanon({
+      characters: new Set(chars.map((_, i) => i)),
+      places: new Set(places.map((_, i) => i)),
+      objects: new Set(objects.map((_, i) => i)),
     });
     // arcDraft is sent verbatim as the commit's `arc` field — strip non-arc
     // keys (e.g. the LLM's top-level `seasons`) at seed time so they can't
@@ -130,13 +141,13 @@ export default function Importer() {
       universeId: preview.universe.id,
       seriesId: preview.series.id,
       canonSelections: {
-        characters: canonSelections.characters.filter((e) => e._selected).map(stripPrivate),
-        places: canonSelections.places.filter((e) => e._selected).map(stripPrivate),
-        objects: canonSelections.objects.filter((e) => e._selected).map(stripPrivate),
+        characters: canonSelections.characters.filter((_, i) => selectedCanon.characters.has(i)),
+        places: canonSelections.places.filter((_, i) => selectedCanon.places.has(i)),
+        objects: canonSelections.objects.filter((_, i) => selectedCanon.objects.has(i)),
       },
       arc: pickArcFields(arcDraft),
       seasons: seasonsDraft,
-      issues: issuesDraft.map(stripPrivate),
+      issues: issuesDraft,
     };
     const result = await commitImport(payload, { silent: true });
     if (!result) return null;
@@ -183,7 +194,8 @@ export default function Importer() {
         <ReviewPanel
           preview={preview}
           canonSelections={canonSelections}
-          setCanonSelections={setCanonSelections}
+          selectedCanon={selectedCanon}
+          setSelectedCanon={setSelectedCanon}
           arcDraft={arcDraft}
           setArcDraft={setArcDraft}
           seasonsDraft={seasonsDraft}
@@ -198,11 +210,6 @@ export default function Importer() {
       )}
     </div>
   );
-}
-
-function stripPrivate(entry) {
-  const { _selected, ...rest } = entry;
-  return rest;
 }
 
 function IntakeForm({ intake, setIntake, intakeValid, sourceLen, sourceOver, sourceCharLimit, analyzing, onAnalyze }) {
@@ -326,17 +333,19 @@ function IntakeForm({ intake, setIntake, intakeValid, sourceLen, sourceOver, sou
 }
 
 function ReviewPanel({
-  preview, canonSelections, setCanonSelections,
+  preview, canonSelections,
+  selectedCanon, setSelectedCanon,
   arcDraft, setArcDraft, seasonsDraft, setSeasonsDraft,
   issuesDraft, setIssuesDraft,
   arcRoles,
   committing, onCommit, onBack,
 }) {
   const toggleSelected = (kind, idx) => {
-    setCanonSelections((cs) => ({
-      ...cs,
-      [kind]: cs[kind].map((e, i) => i === idx ? { ...e, _selected: !e._selected } : e),
-    }));
+    setSelectedCanon((sc) => {
+      const next = new Set(sc[kind]);
+      if (next.has(idx)) next.delete(idx); else next.add(idx);
+      return { ...sc, [kind]: next };
+    });
   };
 
   return (
@@ -363,6 +372,7 @@ function ReviewPanel({
         title="Characters"
         kind="characters"
         entries={canonSelections.characters}
+        selectedIdxs={selectedCanon.characters}
         onToggle={(idx) => toggleSelected('characters', idx)}
         renderSubtitle={(e) => e.role || ''}
         renderBody={(e) => [e.physicalDescription, e.personality, e.background].filter(Boolean).join(' • ')}
@@ -372,6 +382,7 @@ function ReviewPanel({
         title="Places"
         kind="places"
         entries={canonSelections.places}
+        selectedIdxs={selectedCanon.places}
         onToggle={(idx) => toggleSelected('places', idx)}
         renderSubtitle={(e) => e.slugline || ''}
         renderBody={(e) => e.description || ''}
@@ -381,6 +392,7 @@ function ReviewPanel({
         title="Objects"
         kind="objects"
         entries={canonSelections.objects}
+        selectedIdxs={selectedCanon.objects}
         onToggle={(idx) => toggleSelected('objects', idx)}
         renderSubtitle={() => ''}
         renderBody={(e) => [e.description, e.significance].filter(Boolean).join(' • ')}
@@ -411,7 +423,7 @@ function ReviewPanel({
   );
 }
 
-function CanonReviewSection({ title, kind, entries, onToggle, renderSubtitle, renderBody }) {
+function CanonReviewSection({ title, kind, entries, selectedIdxs, onToggle, renderSubtitle, renderBody }) {
   if (entries.length === 0) {
     return (
       <section className="bg-port-card border border-port-border rounded-lg p-4">
@@ -420,7 +432,7 @@ function CanonReviewSection({ title, kind, entries, onToggle, renderSubtitle, re
       </section>
     );
   }
-  const selectedCount = entries.filter((e) => e._selected).length;
+  const selectedCount = selectedIdxs.size;
   return (
     <section className="bg-port-card border border-port-border rounded-lg p-4">
       <div className="flex items-center justify-between mb-3">
@@ -433,12 +445,12 @@ function CanonReviewSection({ title, kind, entries, onToggle, renderSubtitle, re
           <label
             key={`${kind}-${idx}`}
             className={`flex items-start gap-3 border rounded p-3 cursor-pointer text-sm ${
-              entry._selected ? 'border-port-accent bg-port-accent/5' : 'border-port-border opacity-60'
+              selectedIdxs.has(idx) ? 'border-port-accent bg-port-accent/5' : 'border-port-border opacity-60'
             }`}
           >
             <input
               type="checkbox"
-              checked={!!entry._selected}
+              checked={selectedIdxs.has(idx)}
               onChange={() => onToggle(idx)}
               className="mt-1 accent-port-accent"
             />
@@ -456,6 +468,11 @@ function CanonReviewSection({ title, kind, entries, onToggle, renderSubtitle, re
       </div>
     </section>
   );
+}
+
+// Immutably update the element at `idx` in a state-managed list.
+function updateAt(list, setList, idx, patch) {
+  setList(list.map((e, i) => i === idx ? { ...e, ...patch } : e));
 }
 
 function ArcReviewSection({ arc, setArc, seasons, setSeasons }) {
@@ -645,8 +662,4 @@ function IssuesReviewSection({ issues, setIssues, seasons, arcRoles }) {
       </div>
     </section>
   );
-}
-
-function updateAt(list, setList, idx, patch) {
-  setList(list.map((e, i) => i === idx ? { ...e, ...patch } : e));
 }

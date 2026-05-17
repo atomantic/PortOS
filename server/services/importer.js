@@ -24,7 +24,7 @@ import {
   createSeries,
   updateSeries,
 } from './pipeline/series.js';
-import { createIssue } from './pipeline/issues.js';
+import { createIssue, deleteIssue } from './pipeline/issues.js';
 import { sanitizeArc, sanitizeSeasonList, buildSeason, ARC_SHAPE_IDS, ARC_ROLES } from '../lib/storyArc.js';
 import { mergeExtractedBible, BIBLE_KIND } from '../lib/storyBible.js';
 
@@ -79,20 +79,6 @@ export async function findSeriesByName(name, universeId) {
   ) || null;
 }
 
-async function findOrCreateUniverse(name) {
-  const found = await findUniverseByName(name);
-  if (found) return { universe: found, isExisting: true };
-  const created = await createUniverse({ name });
-  return { universe: created, isExisting: false };
-}
-
-async function findOrCreateSeries(name, universeId) {
-  const found = await findSeriesByName(name, universeId);
-  if (found) return { series: found, isExisting: true };
-  const created = await createSeries({ name, universeId });
-  return { series: created, isExisting: false };
-}
-
 /**
  * Render the existing universe canon as a compact JSON block so the
  * canon-extract LLM can dedup by name before returning. Drops fields that
@@ -134,6 +120,12 @@ function compactCanonForPrompt(universe) {
  * phase. Nothing canonical (arc, seasons, issues) is persisted yet — only
  * the find-or-created universe + series exist on disk so the commit phase
  * has stable ids to reference.
+ *
+ * Partial-failure safety (Thread A): universe + series are NOT written to
+ * disk until after all three LLM calls succeed. Pre-existing records are
+ * looked up first; new records are persisted only at the end. A network
+ * timeout or parse failure during any LLM stage therefore leaves no
+ * orphaned half-created records behind.
  */
 export async function analyzeImport({
   universeName,
@@ -159,20 +151,35 @@ export async function analyzeImport({
     );
   }
 
-  const { universe, isExisting: isExistingUniverse } = await findOrCreateUniverse(universeName);
-  const { series, isExisting: isExistingSeries } = await findOrCreateSeries(seriesName, universe.id);
+  // Look up pre-existing records WITHOUT creating anything yet. Creation is
+  // deferred until after all LLM calls succeed so a failure above never
+  // leaves orphaned data on disk.
+  const existingUniverse = await findUniverseByName(universeName);
+  const isExistingUniverse = existingUniverse !== null;
+
+  // Series lookup requires a universe id. For new universes we skip the
+  // series lookup — there can't be an existing series in a universe that
+  // doesn't exist yet.
+  const existingSeries = isExistingUniverse
+    ? await findSeriesByName(seriesName, existingUniverse.id)
+    : null;
+  const isExistingSeries = existingSeries !== null;
 
   // If the user re-runs the importer on a series whose arc is locked, fail
   // FAST — no point spending heavy-tier tokens to extract an arc the commit
   // phase will refuse to apply.
-  if (series.locked?.arc === true) {
+  if (existingSeries?.locked?.arc === true) {
     throw makeErr(
-      `Series "${series.name}" has a locked arc. Unlock it on the Arc Canvas before importing — or rename the import's series so a fresh series is created.`,
+      `Series "${existingSeries.name}" has a locked arc. Unlock it on the Arc Canvas before importing — or rename the import's series so a fresh series is created.`,
       ERR_LOCKED,
     );
   }
 
-  const existingCanon = compactCanonForPrompt(universe);
+  // Build the existing-canon prompt hint from the pre-existing universe (if
+  // any). For a brand-new universe this is null — the LLM gets no prior
+  // context, which is correct.
+  const existingCanon = existingUniverse ? compactCanonForPrompt(existingUniverse) : null;
+
   // returnsJson gates extractJson() in stageRunner — required even though
   // the stage-config also declares `returnsJson: true` (that field is
   // metadata for the Prompts UI; the runtime only consults the per-call
@@ -194,20 +201,25 @@ export async function analyzeImport({
     isComicScript: contentType === 'comic-script',
   };
 
+  // Use the known persisted name for prompt variables when the record
+  // already exists; fall back to the trimmed input for new records.
+  const promptUniverseName = existingUniverse?.name ?? universeName.trim();
+  const promptSeriesName = existingSeries?.name ?? seriesName.trim();
+
   // Canon + arc are independent reads of the same source — fire in
   // parallel. Issue-proposal depends on the arc summary, so chain after
   // arc resolves.
   const [canonRun, arcRun] = await Promise.all([
     runStagedLLM('importer-canon-extract', {
-      universeName: universe.name,
-      seriesName: series.name,
+      universeName: promptUniverseName,
+      seriesName: promptSeriesName,
       contentType,
       source,
       existingCanonJson: existingCanon ? JSON.stringify(existingCanon, null, 2) : '',
       ...typeFlags,
     }, llmOpts),
     runStagedLLM('importer-arc-extract', {
-      seriesName: series.name,
+      seriesName: promptSeriesName,
       contentType,
       source,
       ...typeFlags,
@@ -217,14 +229,13 @@ export async function analyzeImport({
   // Pull the arc summary in before issue-proposal so the issue boundaries
   // align with the arc's act structure. Falls back to logline if summary
   // is empty (older / smaller models sometimes return just logline).
-  const arcSummary = String(
-    arcRun.content?.summary
-    || arcRun.content?.logline
-    || `${series.name} — ${contentType}`,
-  );
+  const arcContent = (typeof arcRun.content === 'object' && arcRun.content !== null)
+    ? arcRun.content
+    : {};
+  const arcSummary = arcContent.summary || arcContent.logline || `${promptSeriesName} — ${contentType}`;
 
   const issuesRun = await runStagedLLM('importer-issue-proposal', {
-    seriesName: series.name,
+    seriesName: promptSeriesName,
     contentType,
     source,
     ...typeFlags,
@@ -236,6 +247,16 @@ export async function analyzeImport({
     targetIssueCount: issueCountHint,
     isUserRequestedCount: userRequestedCount,
   }, llmOpts);
+
+  // All LLM calls succeeded — now persist any new records. Pre-existing
+  // records are returned as-is; new records are created here at the end so
+  // a failure above never leaves orphaned data on disk.
+  const universe = isExistingUniverse
+    ? existingUniverse
+    : await createUniverse({ name: universeName.trim() });
+  const series = isExistingSeries
+    ? existingSeries
+    : await createSeries({ name: seriesName.trim(), universeId: universe.id });
 
   return {
     universe,
@@ -307,11 +328,11 @@ export async function commitImport({
     );
   }
 
-  // Fail-fast validation BEFORE any state mutation: a missing-title issue
-  // would otherwise let the canon merge + arc/seasons write land on disk
-  // and only fail mid-issues-loop, leaving the system half-imported. We
-  // require `title` here because `createIssue` requires it and there is no
-  // rollback path for partial writes.
+  // Thread C fix — fail-fast validation BEFORE any state mutation. Run
+  // every issue through all gates that createIssue enforces so that a bad
+  // payload is rejected here, before the universe + series are written.
+  // `createIssue` also requires `seriesId` (supplied below) and generates
+  // its own `id`, so those two fields don't need pre-checking.
   for (let i = 0; i < issues.length; i++) {
     const proposal = issues[i];
     if (!isStr(proposal?.title) || !proposal.title.trim()) {
@@ -346,17 +367,49 @@ export async function commitImport({
   const sanitizedArc = sanitizeArc(arc);
   let updatedSeries = series;
   if (sanitizedArc || seasons.length > 0) {
-    const builtSeasons = sanitizeSeasonList(
-      seasons.map((s) => buildSeason({
-        number: s.number ?? 1,
-        title: s.title || `Season ${s.number ?? 1}`,
+    // Thread B fix: merge incoming seasons with the existing series.seasons[]
+    // instead of wholesale-replacing them. Match by `number` (the stable
+    // addressing key for seasons — buildSeason always assigns a canonical
+    // number). For each incoming season: if an existing season with the same
+    // number is found, preserve its id and timestamps (so issue pointers stay
+    // intact); otherwise build a fresh season. Seasons absent from the
+    // incoming list are kept as-is so a re-import never deletes user-authored
+    // seasons that weren't in the source.
+    const existingSeasons = Array.isArray(series.seasons) ? series.seasons : [];
+    const existingByNumber = new Map(
+      existingSeasons.filter((s) => Number.isFinite(s.number)).map((s) => [s.number, s]),
+    );
+    const incomingBuilt = seasons.map((s) => {
+      const num = s.number ?? 1;
+      const existing = existingByNumber.get(num);
+      if (existing) {
+        // Preserve the existing season's id and timestamps — re-import with
+        // the same season number is a metadata refresh, not a new season.
+        return {
+          ...existing,
+          title: s.title || existing.title || `Season ${num}`,
+          logline: s.logline || existing.logline || '',
+          synopsis: s.synopsis || existing.synopsis || '',
+          endingHook: s.endingHook || existing.endingHook || '',
+          episodeCountTarget: s.episodeCountTarget ?? existing.episodeCountTarget ?? 0,
+        };
+      }
+      return buildSeason({
+        number: num,
+        title: s.title || `Season ${num}`,
         logline: s.logline || '',
         synopsis: s.synopsis || '',
         endingHook: s.endingHook || '',
         episodeCountTarget: s.episodeCountTarget ?? 0,
         status: 'draft',
-      })),
-    );
+      });
+    });
+    // Merge: union of existing seasons + updated/new incoming seasons,
+    // deduped and sorted by sanitizeSeasonList (LWW by id, then by number).
+    const incomingNumbers = new Set(incomingBuilt.map((s) => s.number));
+    const retained = existingSeasons.filter((s) => !incomingNumbers.has(s.number));
+    const builtSeasons = sanitizeSeasonList([...retained, ...incomingBuilt]);
+
     updatedSeries = await updateSeries(series.id, {
       ...(sanitizedArc ? { arc: sanitizedArc } : {}),
       ...(builtSeasons.length > 0 ? { seasons: builtSeasons } : {}),
@@ -376,44 +429,64 @@ export async function commitImport({
   // but it doesn't exist — landed in season 1." Silent reassignment hides
   // user intent; an explicit list lets the caller toast it.
   const remappedIssues = [];
-  for (const proposal of issues) {
-    let seasonId = fallbackSeasonId;
-    if (proposal.seasonNumber != null) {
-      const matched = seasonByNumber.get(proposal.seasonNumber);
-      if (matched) {
-        seasonId = matched;
-      } else {
-        remappedIssues.push({
-          title: proposal.title,
-          arcPosition: proposal.arcPosition,
-          requestedSeasonNumber: proposal.seasonNumber,
-          actualSeasonId: fallbackSeasonId,
-        });
+
+  // Thread C fix — issue-loop with rollback on failure. The universe +
+  // series are already written above. If createIssue throws mid-loop (e.g.
+  // transient FS error) we delete every issue created so far and re-throw,
+  // leaving the universe + series in their updated state but with no partial
+  // issue set. The universe + series writes are kept because they represent
+  // user-confirmed data; only the issue set is all-or-nothing from the
+  // commit's perspective.
+  try {
+    for (const proposal of issues) {
+      let seasonId = fallbackSeasonId;
+      if (proposal.seasonNumber != null) {
+        const matched = seasonByNumber.get(proposal.seasonNumber);
+        if (matched) {
+          seasonId = matched;
+        } else {
+          remappedIssues.push({
+            title: proposal.title,
+            arcPosition: proposal.arcPosition,
+            requestedSeasonNumber: proposal.seasonNumber,
+            actualSeasonId: fallbackSeasonId,
+          });
+        }
       }
+      // Bundle stage seeds into the initial createIssue payload so the
+      // serialized write tail handles one write per issue instead of
+      // create + updateStage(prose) + updateStage(idea).
+      const stages = {};
+      if (proposal.proseExcerpt) {
+        stages.prose = { status: 'ready', output: proposal.proseExcerpt };
+      }
+      const ideaSeed = [
+        proposal.logline && `Logline: ${proposal.logline}`,
+        proposal.synopsis && `Synopsis: ${proposal.synopsis}`,
+      ].filter(Boolean).join('\n\n');
+      if (ideaSeed) {
+        stages.idea = { status: 'ready', input: ideaSeed };
+      }
+      const issue = await createIssue({
+        seriesId: updatedSeries.id,
+        title: proposal.title,
+        seasonId,
+        arcPosition: proposal.arcPosition,
+        arcRole: proposal.arcRole,
+        stages,
+      });
+      createdIssueIds.push(issue.id);
     }
-    // Bundle stage seeds into the initial createIssue payload so the
-    // serialized write tail handles one write per issue instead of
-    // create + updateStage(prose) + updateStage(idea).
-    const stages = {};
-    if (proposal.proseExcerpt) {
-      stages.prose = { status: 'ready', output: proposal.proseExcerpt };
+  } catch (issueErr) {
+    // Roll back any issues already written so the system isn't left with a
+    // partial issue set. Rollback failures are logged but don't mask the
+    // original error — the user gets the real error and can re-commit.
+    for (const id of createdIssueIds) {
+      await deleteIssue(id).catch((delErr) =>
+        console.error(`❌ commitImport rollback: failed to delete issue ${id}: ${delErr.message}`),
+      );
     }
-    const ideaSeed = [
-      proposal.logline && `Logline: ${proposal.logline}`,
-      proposal.synopsis && `Synopsis: ${proposal.synopsis}`,
-    ].filter(Boolean).join('\n\n');
-    if (ideaSeed) {
-      stages.idea = { status: 'ready', input: ideaSeed };
-    }
-    const issue = await createIssue({
-      seriesId: updatedSeries.id,
-      title: proposal.title,
-      seasonId,
-      arcPosition: proposal.arcPosition,
-      arcRole: proposal.arcRole,
-      stages,
-    });
-    createdIssueIds.push(issue.id);
+    throw issueErr;
   }
 
   return {
@@ -424,4 +497,3 @@ export async function commitImport({
   };
 }
 
-export { ARC_SHAPE_IDS };
