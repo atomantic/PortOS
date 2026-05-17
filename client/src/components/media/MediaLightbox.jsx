@@ -3,10 +3,11 @@ import {
   X, Copy, Sparkles, Film, Image as ImageIcon, Download, Eraser,
   ChevronLeft, ChevronRight, Maximize2, Minimize2, Star,
 } from 'lucide-react';
-import toast from '../ui/Toast';
 import PromptRefineModal from './PromptRefineModal';
 import AddToCollectionMenu from './AddToCollectionMenu';
 import { useScrollLock } from '../../hooks/useScrollLock';
+import { useSwipeNav } from '../../hooks/useSwipeNav';
+import { copyToClipboard } from '../../lib/clipboard';
 
 // Intentionally NOT migrated to <ui/Modal>. The prev/next buttons sit as
 // viewport-edge siblings of the card (not children of a constrained panel
@@ -32,10 +33,6 @@ const isEditableTarget = (e) => {
 // new level, drop a label here and the pill renders automatically.
 const CLEAN_LEVEL_LABELS = { light: 'Light', aggressive: 'Aggressive' };
 
-// Touch thresholds. dx > dy×1.2 keeps a diagonal scroll from being read as a
-// nav swipe but stays forgiving for a real thumb swipe.
-const SWIPE_MIN_PX = 50;
-
 // onClean(item, level) — optional. Returning a rejected promise keeps the
 // lightbox open (e.g. on error) so the user can retry.
 export default function MediaLightbox({
@@ -54,7 +51,6 @@ export default function MediaLightbox({
 }) {
   const [fullScreen, setFullScreen] = useState(false);
   const [refineOpen, setRefineOpen] = useState(false);
-  const touchStart = useRef({ x: null, y: null });
   useScrollLock(!!item);
   // Read callbacks + frequently-changing values from refs so the keydown
   // listener and the note-save debounce don't tear down on every parent
@@ -103,16 +99,13 @@ export default function MediaLightbox({
   // Reset refine modal when the previewed item changes.
   useEffect(() => { setRefineOpen(false); }, [item?.key]);
 
+  const { onTouchStart, onTouchEnd } = useSwipeNav({ onPrevious, onNext, hasPrevious, hasNext });
+
   if (!item) return null;
   const isVideo = item.kind === 'video';
 
   const copy = (text, label = 'Prompt') => {
-    if (!text) return;
-    if (!navigator.clipboard?.writeText) { toast.error('Clipboard unavailable on insecure context'); return; }
-    navigator.clipboard.writeText(text).then(
-      () => toast.success(`${label} copied`),
-      () => toast.error('Copy failed')
-    );
+    copyToClipboard(text, `${label} copied`);
   };
 
   const isCodex = item.mode === 'codex';
@@ -132,28 +125,6 @@ export default function MediaLightbox({
     ['FPS', item.fps],
     ['Created', item.createdAt && new Date(item.createdAt).toLocaleString()],
   ].filter(([, v]) => v != null && v !== '');
-
-  // Ignore touches that originate on inline buttons (max/min toggle) so a
-  // button tap isn't also read as a swipe-start on the image.
-  const isButtonTouch = (e) => !!e.target.closest('button');
-  const onTouchStart = (e) => {
-    if (isButtonTouch(e)) { touchStart.current = { x: null, y: null }; return; }
-    const t = e.touches[0];
-    touchStart.current = { x: t.clientX, y: t.clientY };
-  };
-  const onTouchEnd = (e) => {
-    const start = touchStart.current;
-    if (start.x == null) return;
-    if (isButtonTouch(e)) { touchStart.current = { x: null, y: null }; return; }
-    const end = e.changedTouches[0];
-    const dx = end.clientX - start.x;
-    const dy = end.clientY - start.y;
-    touchStart.current = { x: null, y: null };
-    if (Math.abs(dx) >= SWIPE_MIN_PX && Math.abs(dx) > Math.abs(dy) * 1.2) {
-      if (dx > 0 && hasPrevious) onPrevious?.();
-      else if (dx < 0 && hasNext) onNext?.();
-    }
-  };
 
   const cardClasses = fullScreen
     ? 'relative w-full h-full bg-black flex'

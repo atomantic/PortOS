@@ -246,6 +246,34 @@ function formatBalloon(character, line) {
   return `Speech balloon reads: "${cleanText}" ${attribution}.`;
 }
 
+// Build the masthead clause for a front cover. When `series.titleLogo` is set,
+// it replaces the generic "bold comic-book logo typography" fallback with the
+// LLM-designed (or user-edited) design description so every cover renders a
+// consistent logo. The series name is still rendered verbatim — the titleLogo
+// describes HOW it looks (letterform, finish, color), not WHAT it says.
+function buildMastheadClause(series) {
+  const seriesName = (series?.name || '').trim();
+  const logoDesign = (series?.titleLogo || '').trim();
+  if (!seriesName) {
+    return logoDesign
+      ? `Render a bold comic-book series masthead near the top of the cover. Logo design: ${logoDesign}`
+      : 'Render a bold comic-book series masthead as large logo typography near the top of the cover.';
+  }
+  return logoDesign
+    ? `Render the series masthead "${seriesName}" as large comic-book logo typography near the top of the cover. Logo design: ${logoDesign}`
+    : `Render the series masthead "${seriesName}" as bold, large comic-book logo typography near the top of the cover.`;
+}
+
+// Optional author byline injected near the bottom of front covers + trade
+// paperback fronts. Skipped when the series has no author set so older series
+// still render without an empty "By —" caption.
+const buildAuthorClause = (series) => {
+  const author = (series?.author || '').trim();
+  return author
+    ? ` Include a small author byline reading "By ${author}" near the bottom of the cover — restrained, lettered in a smaller weight than the masthead.`
+    : '';
+};
+
 /**
  * Compose a comic-book front-cover prompt. The cover always renders the
  * series masthead (logo-style title) and the issue number tag in the
@@ -258,7 +286,6 @@ function formatBalloon(character, line) {
 export function composeComicCoverPrompt({
   series, world, issue, coverScript = '', extraStyle = '',
 }) {
-  const seriesName = (series?.name || '').trim();
   const issueNumber = Number.isFinite(issue?.number) ? Math.max(1, Math.floor(issue.number)) : 1;
   const issueTitle = (issue?.title || '').trim();
   const concept = (coverScript || '').trim();
@@ -270,22 +297,57 @@ export function composeComicCoverPrompt({
   // typography is the part image-gen models get most wrong on the first
   // pass — without a hard cue the model often emits panels instead of
   // a cover, or skips the issue-number tag.
-  const titleBlock = seriesName
-    ? `Render the series masthead "${seriesName}" as bold, large comic-book logo typography near the top of the cover.`
-    : 'Render a bold comic-book series masthead as large logo typography near the top of the cover.';
+  const titleBlock = buildMastheadClause(series);
   const numberBlock = `Include a clearly legible issue-number tag reading "#${issueNumber}" in the top-left corner — small but readable.`;
   const titleLine = issueTitle
     ? ` Include the issue title "${issueTitle}" as a secondary banner below the masthead.`
     : '';
+  const authorLine = buildAuthorClause(series);
 
   // Fall back to the issue title so a one-click render against a fresh cover
   // still produces something thematically on-target instead of a blank canvas.
   const sceneDescription = concept
     || (issueTitle ? `A single dramatic hero image evoking "${issueTitle}".` : 'A single dramatic hero image of the protagonist mid-action.');
 
-  const layout = `A single full printable comic-book front cover for a serialized issue. ${titleBlock} ${numberBlock}${titleLine} The rest of the cover is one bold hero image (no panel borders, no multi-panel layout — this is the cover, not an interior page).${styleClause}`;
+  const layout = `A single full printable comic-book front cover for a serialized issue. ${titleBlock} ${numberBlock}${titleLine}${authorLine} The rest of the cover is one bold hero image (no panel borders, no multi-panel layout — this is the cover, not an interior page).${styleClause}`;
   const body = `Cover concept: ${sceneDescription}`;
   return applyWorldStyle(`${layout}\n\n${body}`, world, series);
+}
+
+/**
+ * Compose a TV episode title-screen prompt. Reuses the same masthead/logo
+ * cue the comic covers do — `series.titleLogo` describes the letterform +
+ * finish, the series name is lettered verbatim, and `series.author` lands as
+ * a small byline. The episode's number + title appear as secondary
+ * typography so the screen identifies the specific episode, not just the
+ * series. Returns the full prompt with world style baked in when present.
+ *
+ * Caller decides where to render the result — there is no auto-prepend into
+ * the episode video pipeline today. Future title-card stages can call this
+ * directly; for now it is the single source of truth for "what should the TV
+ * title card for this episode look like."
+ */
+export function composeTitleScreenPrompt({
+  series, world, issue, extraStyle = '',
+}) {
+  const seriesName = (series?.name || '').trim();
+  const issueNumber = Number.isFinite(issue?.number) ? Math.max(1, Math.floor(issue.number)) : null;
+  const issueTitle = (issue?.title || '').trim();
+
+  const styleStack = stackStyle(series, extraStyle);
+  const styleClause = styleStack ? ` Art style: ${styleStack}.` : '';
+
+  const titleBlock = buildMastheadClause(series);
+  const numberLine = issueNumber
+    ? ` Render an "EPISODE ${issueNumber}" tag in restrained smaller typography, positioned above the masthead.`
+    : '';
+  const titleLine = issueTitle
+    ? ` Render the episode title "${issueTitle}" as a secondary banner below the masthead in a complementary but lighter weight.`
+    : '';
+  const authorLine = buildAuthorClause(series);
+
+  const layout = `A single TV episode title screen — a static title card meant to hold on-screen for a few seconds, NOT a story panel. Centered hero typography, generous negative space, cinematic 16:9 framing. ${titleBlock}${numberLine}${titleLine}${authorLine} Subtle background imagery only — atmospheric texture, signature color of the universe, no characters, no narrative scene.${styleClause}`;
+  return applyWorldStyle(layout, world, series);
 }
 
 /**
@@ -416,7 +478,6 @@ const loadSeasonContext = async (seriesId, seasonId) => {
 export function composeVolumeCoverPrompt({
   series, world, season, coverScript = '', extraStyle = '',
 }) {
-  const seriesName = (series?.name || '').trim();
   const volumeNumber = Number.isFinite(season?.number) ? Math.max(1, Math.floor(season.number)) : 1;
   const volumeTitle = (season?.title || '').trim();
   const concept = (coverScript || '').trim();
@@ -424,20 +485,19 @@ export function composeVolumeCoverPrompt({
   const styleStack = stackStyle(series, extraStyle);
   const styleClause = styleStack ? ` Art style: ${styleStack}.` : '';
 
-  const titleBlock = seriesName
-    ? `Render the series masthead "${seriesName}" as bold, large comic-book logo typography near the top of the cover.`
-    : 'Render a bold comic-book series masthead as large logo typography near the top of the cover.';
+  const titleBlock = buildMastheadClause(series);
   const numberBlock = `Include a clearly legible volume tag reading "VOL. ${volumeNumber}" in the top-left corner — small but readable.`;
   const titleLine = volumeTitle
     ? ` Include the volume title "${volumeTitle}" as a secondary banner below the masthead.`
     : '';
+  const authorLine = buildAuthorClause(series);
 
   const sceneDescription = concept
     || (volumeTitle
       ? `A single dramatic hero image evoking the volume "${volumeTitle}" — the collected arc, not any single issue.`
       : 'A single dramatic hero image of the protagonist that embodies the collected arc.');
 
-  const layout = `A single full printable comic-book trade-paperback FRONT cover collecting an entire volume of issues. ${titleBlock} ${numberBlock}${titleLine} The rest of the cover is one bold hero image — bigger and more iconic than any single-issue cover (no panel borders, no multi-panel layout — this is a collected-edition cover).${styleClause}`;
+  const layout = `A single full printable comic-book trade-paperback FRONT cover collecting an entire volume of issues. ${titleBlock} ${numberBlock}${titleLine}${authorLine} The rest of the cover is one bold hero image — bigger and more iconic than any single-issue cover (no panel borders, no multi-panel layout — this is a collected-edition cover).${styleClause}`;
   const body = `Volume cover concept: ${sceneDescription}`;
   return applyWorldStyle(`${layout}\n\n${body}`, world, series);
 }

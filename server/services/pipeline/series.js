@@ -56,6 +56,11 @@ export const LOGLINE_MAX = 500;
 export const PREMISE_MAX = 8000;
 export const STYLE_NOTES_MAX = 4000;
 export const STYLE_PROMPT_OVERRIDE_MAX = 1000;
+// Title/logo design concept — prose description injected into cover + TV
+// title-screen prompts as the "logo design" cue. Generated from the universe's
+// style notes on series creation; editable in the bible.
+export const TITLE_LOGO_MAX = 2000;
+export const AUTHOR_MAX = 120;
 export const UNIVERSE_ID_MAX = 64;
 export const WRITERS_ROOM_WORK_ID_MAX = 64;
 export const TARGET_FORMATS = Object.freeze(['comic', 'tv', 'comic+tv']);
@@ -107,6 +112,8 @@ const sanitizeSeries = (raw) => {
     seasons: sanitizeSeasonList(raw.seasons),
     locked: sanitizeSeriesLocked(raw.locked),
     styleNotes: trimTo(raw.styleNotes, STYLE_NOTES_MAX),
+    titleLogo: trimTo(raw.titleLogo, TITLE_LOGO_MAX),
+    author: trimTo(raw.author, AUTHOR_MAX),
     // Per-series override that prepends ahead of the linked universe's
     // stylePrompt during image-gen composition. Lets a single series in a
     // shared universe deviate slightly (e.g. a noir spin-off) without
@@ -168,6 +175,8 @@ export async function createSeries(input = {}) {
       seasons: input.seasons || [],
       locked: input.locked || {},
       styleNotes: input.styleNotes || '',
+      titleLogo: input.titleLogo || '',
+      author: input.author || '',
       stylePromptOverride: input.stylePromptOverride || '',
       targetFormat: input.targetFormat || 'comic+tv',
       issueCountTarget: input.issueCountTarget || 0,
@@ -229,6 +238,8 @@ export async function updateSeries(id, patch = {}) {
       // Wholesale replace — `locked: {}` clears every lock; omission preserves.
       ...('locked' in patch ? { locked: patch.locked } : {}),
       ...('styleNotes' in patch ? { styleNotes: patch.styleNotes } : {}),
+      ...('titleLogo' in patch ? { titleLogo: patch.titleLogo } : {}),
+      ...('author' in patch ? { author: patch.author } : {}),
       ...('stylePromptOverride' in patch ? { stylePromptOverride: patch.stylePromptOverride } : {}),
       ...('visualStyleDefault' in patch ? { visualStyleDefault: patch.visualStyleDefault } : {}),
       ...('targetFormat' in patch ? { targetFormat: patch.targetFormat } : {}),

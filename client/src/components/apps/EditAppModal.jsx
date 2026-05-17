@@ -6,6 +6,7 @@ import * as api from '../../services/api';
 import { PORTOS_APP_ID } from '../../services/apiCore';
 import toast from '../ui/Toast';
 import Modal from '../ui/Modal';
+import { copyToClipboard } from '../../lib/clipboard';
 
 export default function EditAppModal({ app, onClose, onSave }) {
   const [formData, setFormData] = useState({
@@ -291,7 +292,7 @@ export default function EditAppModal({ app, onClose, onSave }) {
                     <pre className="bg-black/40 text-gray-200 p-2 rounded overflow-x-auto font-mono text-[11px] leading-tight">{tlsResult.snippet}</pre>
                     <button
                       type="button"
-                      onClick={() => { navigator.clipboard.writeText(tlsResult.snippet); toast.success('Snippet copied'); }}
+                      onClick={() => copyToClipboard(tlsResult.snippet, 'Snippet copied')}
                       className="absolute top-1 right-1 p-1 bg-port-border/60 hover:bg-port-border rounded"
                       aria-label="Copy snippet"
                     >

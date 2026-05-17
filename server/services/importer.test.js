@@ -57,8 +57,11 @@ vi.mock('../lib/stageRunner.js', () => ({
 // (hoisted before imports) and the beforeEach reset (runs later). Default
 // behavior passes through to the real module so the dozen other tests that
 // expect real createIssue behavior keep working unchanged.
-const { mockCreateIssue, realIssuesRef } = vi.hoisted(() => ({
+// `mockDeleteIssue` follows the same pattern so the replaceMode-abort test
+// can force a delete failure mid-wipe.
+const { mockCreateIssue, mockDeleteIssue, realIssuesRef } = vi.hoisted(() => ({
   mockCreateIssue: vi.fn(),
+  mockDeleteIssue: vi.fn(),
   realIssuesRef: { current: null },
 }));
 vi.mock('./pipeline/issues.js', async () => {
@@ -67,6 +70,7 @@ vi.mock('./pipeline/issues.js', async () => {
   return {
     ...actual,
     createIssue: (...args) => mockCreateIssue(...args),
+    deleteIssue: (...args) => mockDeleteIssue(...args),
   };
 });
 
@@ -90,10 +94,13 @@ function wipeTempRoot() {
 beforeEach(() => {
   wipeTempRoot();
   mockRunStagedLLM.mockReset();
-  // Default createIssue to pass-through to the real module — only the
-  // rollback test overrides this to inject a mid-loop throw.
+  // Default createIssue + deleteIssue to pass-through to the real module —
+  // only the rollback and replace-abort tests override these to inject
+  // failures.
   mockCreateIssue.mockReset();
   mockCreateIssue.mockImplementation((...args) => realIssuesRef.current.createIssue(...args));
+  mockDeleteIssue.mockReset();
+  mockDeleteIssue.mockImplementation((...args) => realIssuesRef.current.deleteIssue(...args));
 });
 
 afterAll(() => {
@@ -309,6 +316,152 @@ describe('analyzeImport', () => {
     expect(caught).toBeDefined();
     expect(caught.code).toBe(importerSvc.ERR_LOCKED);
     expect(mockRunStagedLLM).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// classifyImportContent — hallucination-guard coverage
+//
+// Copilot review: route tests mock classifyImportContent entirely, so the
+// service-level sanitization logic (dropping out-of-enum contentType /
+// confidence, truncating reasoning, handling non-object run.content) had
+// no test coverage. A regression that accidentally accepted `raw.contentType`
+// without enum-membership would not have been caught. These tests pin every
+// guard branch directly against the service.
+// ---------------------------------------------------------------------------
+
+describe('classifyImportContent', () => {
+  it('passes valid contentType + confidence + reasoning through verbatim', async () => {
+    mockRunStagedLLM.mockResolvedValueOnce({
+      content: { contentType: 'screenplay', confidence: 'high', reasoning: 'has FADE IN markers' },
+      model: 'mock',
+      providerId: 'mock',
+      runId: 'run-classify-1',
+    });
+    const result = await importerSvc.classifyImportContent({ source: 'INT. ROOM - DAY' });
+    expect(result.contentType).toBe('screenplay');
+    expect(result.confidence).toBe('high');
+    expect(result.reasoning).toBe('has FADE IN markers');
+    expect(result.runId).toBe('run-classify-1');
+  });
+
+  it('drops a hallucinated contentType not in IMPORTER_CONTENT_TYPES to null', async () => {
+    mockRunStagedLLM.mockResolvedValueOnce({
+      content: { contentType: 'manga', confidence: 'high', reasoning: 'panels' },
+      model: 'mock',
+      providerId: 'mock',
+      runId: 'run-x',
+    });
+    const result = await importerSvc.classifyImportContent({ source: 'some prose' });
+    expect(result.contentType).toBeNull();
+    // Confidence + reasoning are independent guards — they stay valid.
+    expect(result.confidence).toBe('high');
+    expect(result.reasoning).toBe('panels');
+  });
+
+  it('drops a hallucinated confidence not in {high|medium|low} to null', async () => {
+    mockRunStagedLLM.mockResolvedValueOnce({
+      content: { contentType: 'novel', confidence: 'extremely-high', reasoning: 'chapters' },
+      model: 'mock',
+      providerId: 'mock',
+      runId: 'run-x',
+    });
+    const result = await importerSvc.classifyImportContent({ source: 'some prose' });
+    expect(result.contentType).toBe('novel');
+    expect(result.confidence).toBeNull();
+    expect(result.reasoning).toBe('chapters');
+  });
+
+  it('truncates reasoning to 500 chars', async () => {
+    const longReasoning = 'a'.repeat(2_000);
+    mockRunStagedLLM.mockResolvedValueOnce({
+      content: { contentType: 'short-story', confidence: 'medium', reasoning: longReasoning },
+      model: 'mock',
+      providerId: 'mock',
+      runId: 'run-x',
+    });
+    const result = await importerSvc.classifyImportContent({ source: 'some prose' });
+    expect(result.reasoning).toHaveLength(500);
+    expect(result.reasoning).toBe('a'.repeat(500));
+  });
+
+  it('coerces non-string reasoning to null', async () => {
+    mockRunStagedLLM.mockResolvedValueOnce({
+      content: { contentType: 'comic-script', confidence: 'low', reasoning: 42 },
+      model: 'mock',
+      providerId: 'mock',
+      runId: 'run-x',
+    });
+    const result = await importerSvc.classifyImportContent({ source: 'some prose' });
+    expect(result.reasoning).toBeNull();
+    expect(result.contentType).toBe('comic-script');
+    expect(result.confidence).toBe('low');
+  });
+
+  it('treats a non-object run.content as empty — all fields land at null', async () => {
+    mockRunStagedLLM.mockResolvedValueOnce({
+      content: 'I am a plain string, not JSON',
+      model: 'mock',
+      providerId: 'mock',
+      runId: 'run-x',
+    });
+    const result = await importerSvc.classifyImportContent({ source: 'some prose' });
+    expect(result.contentType).toBeNull();
+    expect(result.confidence).toBeNull();
+    expect(result.reasoning).toBeNull();
+    expect(result.runId).toBe('run-x');
+  });
+
+  it('treats a null run.content as empty', async () => {
+    mockRunStagedLLM.mockResolvedValueOnce({
+      content: null,
+      model: 'mock',
+      providerId: 'mock',
+      runId: 'run-x',
+    });
+    const result = await importerSvc.classifyImportContent({ source: 'some prose' });
+    expect(result.contentType).toBeNull();
+    expect(result.confidence).toBeNull();
+    expect(result.reasoning).toBeNull();
+  });
+
+  it('rejects missing source with ERR_VALIDATION before calling the LLM', async () => {
+    let caught;
+    try {
+      await importerSvc.classifyImportContent({ source: '' });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeDefined();
+    expect(caught.code).toBe(importerSvc.ERR_VALIDATION);
+    expect(mockRunStagedLLM).not.toHaveBeenCalled();
+  });
+
+  it('rejects oversized source with ERR_VALIDATION before calling the LLM', async () => {
+    const oversized = 'x'.repeat(importerSvc.IMPORTER_SOURCE_CHAR_LIMIT + 1);
+    let caught;
+    try {
+      await importerSvc.classifyImportContent({ source: oversized });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeDefined();
+    expect(caught.code).toBe(importerSvc.ERR_VALIDATION);
+    expect(mockRunStagedLLM).not.toHaveBeenCalled();
+  });
+
+  it('only passes the first CLASSIFY_SOURCE_HEAD_CHARS to the LLM', async () => {
+    mockRunStagedLLM.mockResolvedValueOnce({
+      content: { contentType: 'novel', confidence: 'low', reasoning: 'r' },
+      model: 'mock',
+      providerId: 'mock',
+      runId: 'run-x',
+    });
+    const big = 'a'.repeat(importerSvc.CLASSIFY_SOURCE_HEAD_CHARS + 5_000);
+    await importerSvc.classifyImportContent({ source: big });
+    expect(mockRunStagedLLM).toHaveBeenCalled();
+    const vars = mockRunStagedLLM.mock.calls[0][1];
+    expect(vars.sourceHead).toHaveLength(importerSvc.CLASSIFY_SOURCE_HEAD_CHARS);
   });
 });
 
@@ -728,6 +881,15 @@ describe('commitImport', () => {
     expect(caught.code).toBe('IMPORTER_PARTIAL_COMMIT_ISSUES');
     expect(caught.message).toMatch(/universe and series were updated/i);
     expect(caught.message).toMatch(/simulated mid-loop FS error/);
+    // The error carries the structured context the client needs to shape
+    // its retry — universe + series ids (so a re-fetch isn't required) and
+    // `arcAlreadyPersisted` (so the retry drops arc + seasons + canon from
+    // the payload and lets the server-side state stand).
+    expect(caught.context).toBeDefined();
+    expect(caught.context.universeId).toBe(uni.id);
+    expect(caught.context.seriesId).toBe(ser.id);
+    expect(caught.context.arcAlreadyPersisted).toBe(true);
+    expect(caught.context.skipArcOnRetry).toBe(true);
 
     // Universe + series writes survive (user-confirmed, idempotent).
     const universeAfter = await universeSvc.getUniverse(uni.id);
@@ -739,6 +901,185 @@ describe('commitImport', () => {
     // No leftover issues from the partial loop.
     const issuesAfter = await issuesSvc.listIssues({ seriesId: ser.id });
     expect(issuesAfter).toHaveLength(0);
+  });
+
+  // Round-N: replaceMode behavior. Seed a series with one issue + one arc
+  // shape; re-commit with replaceMode=true and assert the existing issue
+  // is wiped, the new issue is created, and the arc was overwritten.
+  it('replaceMode=true wipes existing issues + overwrites arc + seasons', async () => {
+    const { uni, ser } = await setupForCommit();
+    // Seed pass — one issue, one season, "rags-to-riches" arc.
+    await importerSvc.commitImport({
+      universeId: uni.id,
+      seriesId: ser.id,
+      canonSelections: { characters: [], places: [], objects: [] },
+      arc: { logline: 'Old', summary: 'Old', shape: 'rags-to-riches' },
+      seasons: [{ number: 1, title: 'Old S1', logline: '', synopsis: '', endingHook: '' }],
+      issues: [{ title: 'Old Issue', arcPosition: 1, proseExcerpt: 'old prose' }],
+    });
+    const beforeIssues = await issuesSvc.listIssues({ seriesId: ser.id });
+    expect(beforeIssues).toHaveLength(1);
+
+    // Replace pass — different arc shape, different issue.
+    const result = await importerSvc.commitImport({
+      universeId: uni.id,
+      seriesId: ser.id,
+      canonSelections: { characters: [], places: [], objects: [] },
+      arc: { logline: 'New', summary: 'New', shape: 'tragedy' },
+      seasons: [{ number: 1, title: 'New S1', logline: '', synopsis: '', endingHook: '' }],
+      issues: [{ title: 'New Issue', arcPosition: 1, proseExcerpt: 'new prose' }],
+      replaceMode: true,
+    });
+
+    // Old issue gone, only new issue remains.
+    const afterIssues = await issuesSvc.listIssues({ seriesId: ser.id });
+    expect(afterIssues).toHaveLength(1);
+    expect(afterIssues[0].title).toBe('New Issue');
+    expect(result.createdIssueIds).toEqual([afterIssues[0].id]);
+    // Arc was overwritten — shape is now `tragedy`.
+    expect(result.series.arc.shape).toBe('tragedy');
+    expect(result.series.arc.logline).toBe('New');
+    // Season title was overwritten.
+    expect(result.series.seasons[0].title).toBe('New S1');
+  });
+
+  // Copilot review: in replaceMode, a swallowed per-issue delete failure
+  // would leave the old issue on disk AND create a new one with a reused
+  // arcPosition (additive-mode's collision check is skipped in replace),
+  // producing duplicates the additive path explicitly rejects. The fix is
+  // to abort the commit before any new state is written if any delete
+  // fails. This test pins that contract — single-issue case: nothing got
+  // deleted before the failure, so the abort is fully transactional.
+  it('replaceMode=true aborts the commit when a delete fails — no new issues, arc unchanged', async () => {
+    const { uni, ser } = await setupForCommit();
+    // Seed pass — one issue, arc shape `rags-to-riches`.
+    await importerSvc.commitImport({
+      universeId: uni.id,
+      seriesId: ser.id,
+      canonSelections: { characters: [], places: [], objects: [] },
+      arc: { logline: 'Old', summary: 'Old', shape: 'rags-to-riches' },
+      seasons: [],
+      issues: [{ title: 'Old Issue', arcPosition: 1, proseExcerpt: 'old prose' }],
+    });
+    const beforeIssues = await issuesSvc.listIssues({ seriesId: ser.id });
+    expect(beforeIssues).toHaveLength(1);
+    const seededIssueId = beforeIssues[0].id;
+
+    // Inject a delete failure for the seeded issue id.
+    mockDeleteIssue.mockImplementationOnce(async () => {
+      throw new Error('disk full');
+    });
+
+    // Replace pass — should abort before universe/series/issue writes.
+    await expect(importerSvc.commitImport({
+      universeId: uni.id,
+      seriesId: ser.id,
+      canonSelections: { characters: [], places: [], objects: [] },
+      arc: { logline: 'New', summary: 'New', shape: 'tragedy' },
+      seasons: [],
+      issues: [{ title: 'New Issue', arcPosition: 1, proseExcerpt: 'new prose' }],
+      replaceMode: true,
+    })).rejects.toThrowError(/Replace mode aborted on first delete failure/);
+
+    // Old issue still on disk, no new issue created.
+    const afterIssues = await issuesSvc.listIssues({ seriesId: ser.id });
+    expect(afterIssues).toHaveLength(1);
+    expect(afterIssues[0].id).toBe(seededIssueId);
+    expect(afterIssues[0].title).toBe('Old Issue');
+    // Arc shape was NOT overwritten — series write never happened.
+    const seriesAfter = await seriesSvc.getSeries(ser.id);
+    expect(seriesAfter.arc.shape).toBe('rags-to-riches');
+    expect(seriesAfter.arc.logline).toBe('Old');
+  });
+
+  // Second Copilot review iteration: aborting on the FIRST delete failure
+  // (not after looping through all of them) minimizes the destructive
+  // surface. With 3 seeded issues + a failure injected on the 2nd call,
+  // only 1 should be deleted before the abort fires — the 3rd issue's
+  // delete must NEVER be attempted.
+  it('replaceMode=true aborts on the FIRST delete failure, leaving subsequent issues untouched', async () => {
+    const { uni, ser } = await setupForCommit();
+    // Seed pass — three issues at arcPositions 1, 2, 3.
+    await importerSvc.commitImport({
+      universeId: uni.id,
+      seriesId: ser.id,
+      canonSelections: { characters: [], places: [], objects: [] },
+      arc: null,
+      seasons: [],
+      issues: [
+        { title: 'Old A', arcPosition: 1, proseExcerpt: 'a' },
+        { title: 'Old B', arcPosition: 2, proseExcerpt: 'b' },
+        { title: 'Old C', arcPosition: 3, proseExcerpt: 'c' },
+      ],
+    });
+    const seeded = await issuesSvc.listIssues({ seriesId: ser.id });
+    expect(seeded).toHaveLength(3);
+
+    // First call succeeds (real passthrough); second call throws; we must
+    // never reach a third call. Track call count + which id failed.
+    let deleteCallCount = 0;
+    let failedId = null;
+    mockDeleteIssue.mockImplementation(async (id) => {
+      deleteCallCount += 1;
+      if (deleteCallCount === 2) {
+        failedId = id;
+        throw new Error('disk full');
+      }
+      return realIssuesRef.current.deleteIssue(id);
+    });
+
+    await expect(importerSvc.commitImport({
+      universeId: uni.id,
+      seriesId: ser.id,
+      canonSelections: { characters: [], places: [], objects: [] },
+      arc: null,
+      seasons: [],
+      issues: [{ title: 'New', arcPosition: 1, proseExcerpt: 'new' }],
+      replaceMode: true,
+    })).rejects.toThrowError(/Replace mode aborted on first delete failure/);
+
+    // Exactly two delete calls happened (one success + one failure);
+    // the third issue was NEVER touched.
+    expect(deleteCallCount).toBe(2);
+
+    // Two issues remain on disk: the one that failed to delete, and the
+    // one that was never attempted. Exactly one issue was actually
+    // deleted before the abort.
+    const remaining = await issuesSvc.listIssues({ seriesId: ser.id });
+    expect(remaining).toHaveLength(2);
+    expect(remaining.map((i) => i.id)).toContain(failedId);
+    // No new issue was created — replace aborted before issue-loop.
+    expect(remaining.map((i) => i.title)).not.toContain('New');
+  });
+
+  // Same arcPosition between old + new issues — additive mode would reject
+  // with "explicit arcPosition collides", but replaceMode wipes the old
+  // first so the collision is gone by the time we write the new set.
+  it('replaceMode=true tolerates arcPosition reuse from the wiped set', async () => {
+    const { uni, ser } = await setupForCommit();
+    await importerSvc.commitImport({
+      universeId: uni.id,
+      seriesId: ser.id,
+      canonSelections: { characters: [], places: [], objects: [] },
+      arc: null,
+      seasons: [],
+      issues: [{ title: 'Old', arcPosition: 1, proseExcerpt: 'old' }],
+    });
+    // Same arcPosition=1 — additive would throw, replace accepts.
+    const result = await importerSvc.commitImport({
+      universeId: uni.id,
+      seriesId: ser.id,
+      canonSelections: { characters: [], places: [], objects: [] },
+      arc: null,
+      seasons: [],
+      issues: [{ title: 'New', arcPosition: 1, proseExcerpt: 'new' }],
+      replaceMode: true,
+    });
+    expect(result.createdIssueIds).toHaveLength(1);
+    const after = await issuesSvc.listIssues({ seriesId: ser.id });
+    expect(after).toHaveLength(1);
+    expect(after[0].title).toBe('New');
+    expect(after[0].arcPosition).toBe(1);
   });
 });
 

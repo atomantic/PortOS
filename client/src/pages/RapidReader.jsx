@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Zap, ClipboardPaste, Eraser } from 'lucide-react';
 import RapidReader from '../components/RapidReader';
+import { readClipboard } from '../lib/clipboard';
 
 const SAMPLE = `Speed reading is a collection of techniques used to scan text quickly while still understanding what you've read. Most people read in chunks of three or four words at a time, which slows them down. Rapid serial visual presentation flashes one word at a time at a fixed location, removing the need to move your eyes. With practice, comprehension stays intact at three to five hundred words per minute, and many readers can push past six hundred for familiar material.`;
 
@@ -30,8 +31,7 @@ export default function RapidReaderPage() {
   };
 
   const pasteFromClipboard = async () => {
-    if (!navigator.clipboard?.readText) return;
-    const t = await navigator.clipboard.readText().catch(() => '');
+    const t = await readClipboard();
     if (t) setText(t);
   };
 

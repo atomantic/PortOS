@@ -132,6 +132,7 @@ import { recoverStuckAutoRuns } from './services/pipeline/autoRunner.js';
 import { initBridge as initBrainMemoryBridge } from './services/brainMemoryBridge.js';
 import { initDrillCache } from './services/meatspacePostDrillCache.js';
 import { createAIToolkit } from './lib/aiToolkit/index.js';
+import { runMigrations } from '../scripts/run-migrations.js';
 import { createPortOSProviderRoutes } from './routes/providers.js';
 import { createPortOSRunsRoutes } from './routes/runs.js';
 import { createPortOSPromptsRoutes } from './routes/prompts.js';
@@ -168,6 +169,18 @@ initSocket(io);
 // Build absolute paths - use centralized PATHS for data, __dirname for non-data paths
 const DATA_DIR = PATHS.data;
 const DATA_SAMPLE_DIR = join(__dirname, '..', 'data.sample');
+
+// Apply pending data migrations BEFORE the AI toolkit reads stage-config.json
+// and providers.json. Without this, a plain pull-and-restart (no update.sh)
+// leaves new prompt stages and other shipped data changes unregistered —
+// existing installs hit "Stage X not found" until the user manually runs
+// `npm run migrations` or `npm run update`. Idempotent and cheap when the
+// applied-list is already current.
+await runMigrations({ rootDir: join(__dirname, '..') }).catch(err => {
+  // Log the full stack (or stringified err for non-Error throws) so failures
+  // during boot are diagnosable without rerunning under a debugger.
+  console.error(`❌ Migration run failed at startup: ${err?.stack ?? err}`);
+});
 
 // Lifecycle hooks shared between AI Toolkit and PortOS runner shim
 const aiToolkitHooks = {

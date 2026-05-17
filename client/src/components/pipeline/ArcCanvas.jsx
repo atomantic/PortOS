@@ -1092,7 +1092,7 @@ function VolumeCoversPanel({ series, season, seasons, onSeriesUpdate }) {
       commit: true,
       providerOverride: series.llm?.provider || undefined,
       modelOverride: series.llm?.model || undefined,
-    }).catch((err) => {
+    }, { silent: true }).catch((err) => {
       toast.error(err.message || 'Failed to generate cover concepts');
       return null;
     });

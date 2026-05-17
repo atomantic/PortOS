@@ -13,7 +13,7 @@ export default defineConfig({
     include: [
       '**/*.test.js',
       '../client/src/**/*.test.js',
-      '../scripts/migrations/**/*.test.js',
+      '../scripts/**/*.test.js',
     ],
     coverage: {
       provider: 'v8',

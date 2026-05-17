@@ -108,6 +108,38 @@ describe('pipeline series service', () => {
     expect(s.objects).toBeUndefined();
   });
 
+  describe('titleLogo + author fields', () => {
+    it('createSeries persists titleLogo + author when provided', async () => {
+      const s = await svc.createSeries({
+        name: 'Salt Run',
+        titleLogo: 'Hand-lettered slab serif in salt-crusted iron, with a single hairline crack through the O.',
+        author: 'A. Foundryworker',
+      });
+      expect(s.titleLogo).toContain('Hand-lettered slab serif');
+      expect(s.author).toBe('A. Foundryworker');
+    });
+
+    it('createSeries defaults titleLogo + author to empty strings', async () => {
+      const s = await svc.createSeries({ name: 'X' });
+      expect(s.titleLogo).toBe('');
+      expect(s.author).toBe('');
+    });
+
+    it('updateSeries replaces titleLogo + author independently', async () => {
+      const s = await svc.createSeries({ name: 'X', titleLogo: 'first', author: 'first' });
+      const updated = await svc.updateSeries(s.id, { titleLogo: 'second' });
+      expect(updated.titleLogo).toBe('second');
+      expect(updated.author).toBe('first'); // omitted keys preserve
+    });
+
+    it('updateSeries can clear titleLogo + author to empty', async () => {
+      const s = await svc.createSeries({ name: 'X', titleLogo: 'present', author: 'present' });
+      const cleared = await svc.updateSeries(s.id, { titleLogo: '', author: '' });
+      expect(cleared.titleLogo).toBe('');
+      expect(cleared.author).toBe('');
+    });
+  });
+
   describe('insertSeriesWithId', () => {
     it('preserves the caller-supplied id', async () => {
       const s = await svc.insertSeriesWithId({ id: 'ser-fixed-abc', name: 'Imported' });

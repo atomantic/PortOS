@@ -27,6 +27,7 @@ import OutputBlocks from '../OutputBlocks';
 import MarkdownOutput from '../MarkdownOutput';
 import Modal from '../../ui/Modal';
 import toast from '../../ui/Toast';
+import { copyToClipboard } from '../../../lib/clipboard';
 
 // Extract task type from description (matches server-side extractTaskType)
 function extractTaskType(description) {
@@ -173,10 +174,7 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
   }, [agent.id, promptContent, loadingPrompt]);
 
   const copyPromptToClipboard = useCallback(() => {
-    if (!promptContent) return;
-    navigator.clipboard.writeText(promptContent)
-      .then(() => toast.success('Prompt copied to clipboard'))
-      .catch(err => toast.error(`Failed to copy: ${err.message}`));
+    copyToClipboard(promptContent, 'Prompt copied to clipboard');
   }, [promptContent]);
 
   // Send BTW message to running agent
