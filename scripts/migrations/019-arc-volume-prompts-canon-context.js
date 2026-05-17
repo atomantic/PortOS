@@ -41,7 +41,9 @@ const md5 = (str) => {
 // Hashes the file may have on disk pre-migration (per-file array — most
 // recent shipped hash first, then older). Any match is treated as
 // "unmodified by user → safe to replace."
-const ACCEPTED_OLD_MD5 = {
+// Exported so the test suite can import these tables and detect drift without
+// maintaining local copies that can silently fall out of sync.
+export const ACCEPTED_OLD_MD5 = {
   'pipeline-arc-overview.md': [
     'd34d72b8e49ba303d38607845dd87f1c', // current (pre-Phase B) shipped
     '6a3ecab43d1f46b7ef9aab6c69ea0326', // pre-005 (shape-aware), still in setup-data.js OLD list
@@ -61,7 +63,9 @@ const ACCEPTED_OLD_MD5 = {
 };
 
 // New shipped hashes — what data.sample carries post-migration.
-const NEW_SHIPPED_MD5 = {
+// Exported so the test suite can import and assert against these tables
+// directly rather than maintaining local copies.
+export const NEW_SHIPPED_MD5 = {
   'pipeline-arc-overview.md':   '0a1f6ffa6908522e3690c5e9e53a6ee0',
   'pipeline-arc-verify.md':     '36aa70cdfc25d7549573a4d556e7702c',
   'pipeline-arc-resolve.md':    '8e348f3d1894382889f9f0ee7d5c6792',

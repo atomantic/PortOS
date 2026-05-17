@@ -12,38 +12,11 @@ import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { createHash } from 'crypto';
 
-import migration, { applyMigration } from './019-arc-volume-prompts-canon-context.js';
+import migration, { applyMigration, ACCEPTED_OLD_MD5, NEW_SHIPPED_MD5 } from './019-arc-volume-prompts-canon-context.js';
 
 const md5 = (str) => createHash('md5')
   .update(str.replace(/\r\n/g, '\n').replace(/\r/g, '\n'))
   .digest('hex');
-
-// Mirror of the migration's hash table — when these change the test fixtures
-// below need to mirror the change too.
-const ACCEPTED_OLD_MD5 = {
-  'pipeline-arc-overview.md': [
-    'd34d72b8e49ba303d38607845dd87f1c',
-    '6a3ecab43d1f46b7ef9aab6c69ea0326',
-  ],
-  'pipeline-arc-verify.md': [
-    'ff56d8387162017e08d5d0491060ddd6',
-    '52e31abc93e3105176236fcaa5d1575a',
-  ],
-  'pipeline-arc-resolve.md': [
-    'a8677bbe1eb38f871fb152a5b0fec7c6',
-    '87bc5c01f1a8a97b681727a38b05edc6',
-  ],
-  'pipeline-volume-verify.md': [
-    '03f3c874cb80e1c98abcf03168fa7a92',
-    'c6ea28e972ad6e229bafb2d602b4dda3',
-  ],
-};
-const NEW_SHIPPED_MD5 = {
-  'pipeline-arc-overview.md':   '0a1f6ffa6908522e3690c5e9e53a6ee0',
-  'pipeline-arc-verify.md':     '36aa70cdfc25d7549573a4d556e7702c',
-  'pipeline-arc-resolve.md':    '8e348f3d1894382889f9f0ee7d5c6792',
-  'pipeline-volume-verify.md':  '49458d36700cb94e34806d536ffe2940',
-};
 
 // Lookup the real data.sample file for a given prompt; used to seed
 // fixtures and to compute "current" file bodies for round-trip checks.
@@ -95,7 +68,16 @@ describe('migration 019 — arc/volume prompt canon context', () => {
     const before = Object.fromEntries(
       Object.keys(NEW_SHIPPED_MD5).map((f) => [f, readFileSync(join(stagesDir, f), 'utf-8')]),
     );
-    await migration.up({ rootDir });
+    // Use applyMigration with the migration's real tables (imported, not local
+    // copies) so drift in the migration's hash constants is caught here — if
+    // NEW_SHIPPED_MD5 no longer matches data.sample, applyMigration reports
+    // skipped > 0 instead of alreadyCurrent, and this assertion fails.
+    const result = await applyMigration({ rootDir });
+    expect(result).toMatchObject({
+      updated: 0,
+      alreadyCurrent: Object.keys(NEW_SHIPPED_MD5).length,
+      skipped: 0,
+    });
     for (const filename of Object.keys(NEW_SHIPPED_MD5)) {
       const after = readFileSync(join(stagesDir, filename), 'utf-8');
       expect(after).toBe(before[filename]); // unchanged

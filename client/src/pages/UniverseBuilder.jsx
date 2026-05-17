@@ -508,19 +508,27 @@ export default function UniverseBuilder() {
       // For update with canonDirty: refetch + merge ONLY the pending-additions
       // ledger (not the full stale draft) so concurrent deletions in other
       // tabs aren't resurrected.
-      let baseCanon = { characters: draft.characters || [], settings: draft.settings || [], objects: draft.objects || [] };
+      // If the refetch fails for an existing universe, abort the save entirely:
+      // falling back to the stale draft would replace the server's canon wholesale
+      // and could undo concurrent canon edits/deletions in other tabs.
       if (selectedId) {
         const fresh = await getUniverse(selectedId).catch(() => null);
-        if (fresh) {
-          const additions = pendingCanonAdditionsRef.current;
-          baseCanon = {
-            characters: mergeCanonByName(fresh.characters || [], additions.characters, 'character'),
-            settings: mergeCanonByName(fresh.settings || [], additions.settings, 'setting'),
-            objects: mergeCanonByName(fresh.objects || [], additions.objects, 'object'),
-          };
+        if (!fresh) {
+          setSaving(false);
+          toast.error('Save failed: could not fetch latest canon — please try again');
+          return;
         }
+        const additions = pendingCanonAdditionsRef.current;
+        const baseCanon = {
+          characters: mergeCanonByName(fresh.characters || [], additions.characters, 'character'),
+          settings: mergeCanonByName(fresh.settings || [], additions.settings, 'setting'),
+          objects: mergeCanonByName(fresh.objects || [], additions.objects, 'object'),
+        };
+        payload = { ...basePayload, ...baseCanon };
+      } else {
+        const baseCanon = { characters: draft.characters || [], settings: draft.settings || [], objects: draft.objects || [] };
+        payload = { ...basePayload, ...baseCanon };
       }
-      payload = { ...basePayload, ...baseCanon };
     }
     const result = selectedId
       ? await updateUniverse(selectedId, payload).catch((e) => { toast.error(`Save failed: ${e.message}`); return null; })
@@ -629,12 +637,18 @@ export default function UniverseBuilder() {
       const locked = preservedVariations[cat] || [];
       const fresh = (llmCategories[cat]?.variations || []);
       // Preserve the bucket's `kind` so the category-to-canon-trunk contract
-      // survives the round-trip. Precedence: existing draft kind (the user
-      // may have curated it) → LLM-returned kind for this bucket → undefined
-      // (server's sanitizeCategory then falls back to the default-map / 'other').
+      // survives the round-trip. Precedence:
+      //   - existing non-'other' draft kind (user curated it to a specific trunk)
+      //   - LLM-returned kind for this expand round (fresh classification)
+      //   - existing 'other' draft kind (Phase-B default for custom buckets)
+      //   - undefined (server's sanitizeCategory falls back to default-map / 'other')
+      // Allowing a fresh LLM kind to supersede an existing 'other' is intentional:
+      // pre-Phase-B "factions" buckets saved as `other` can be promoted to
+      // `characters` by a re-expand without requiring the user to manually change
+      // the trunk. User-curated non-`other` kinds (e.g. `settings`) are preserved.
       const existingKind = draft.categories?.[cat]?.kind;
       const freshKind = llmCategories[cat]?.kind;
-      const kind = existingKind || freshKind;
+      const kind = (existingKind && existingKind !== 'other') ? existingKind : (freshKind || existingKind);
       mergedCategories[cat] = {
         ...(kind ? { kind } : {}),
         variations: mergeVariations(locked, fresh),
@@ -740,9 +754,13 @@ export default function UniverseBuilder() {
       // (both disabled on `saving`) can't double-fire during the
       // getUniverse await window below.
       setSaving(true);
-      // For updates: refetch the server's canon and merge in the local
-      // additions so a concurrent canon edit (Nouns stage, another tab)
-      // landing during the LLM call isn't wholesale-clobbered.
+      // For updates: refetch the server's canon and merge in ONLY the local
+      // additions ledger so a concurrent canon edit (Nouns stage, another tab)
+      // landing during the LLM call isn't wholesale-clobbered. If the refetch
+      // fails for an existing record, skip the auto-save (mark canonDirty so
+      // the user can retry via manual Save) rather than falling back to the
+      // stale draft, which would replace the server's canon wholesale and undo
+      // any concurrent deletions/edits.
       let canonForPayload = {
         characters: expandedDraft.characters || [],
         settings: expandedDraft.settings || [],
@@ -750,17 +768,29 @@ export default function UniverseBuilder() {
       };
       if (selectedId) {
         const fresh = await getUniverse(selectedId).catch(() => null);
-        if (fresh) {
-          canonForPayload = {
-            // Merge ONLY pending additions onto refetched server canon
-            // (not the full stale draft). Without this, concurrent canon
-            // deletions in other tabs/surfaces get resurrected because the
-            // deleted entry is still present in the stale draft.
-            characters: mergeCanonByName(fresh.characters || [], pendingCanonAdditionsRef.current.characters, 'character'),
-            settings: mergeCanonByName(fresh.settings || [], pendingCanonAdditionsRef.current.settings, 'setting'),
-            objects: mergeCanonByName(fresh.objects || [], pendingCanonAdditionsRef.current.objects, 'object'),
-          };
+        if (!fresh) {
+          // Refetch failed — skip auto-save for this update to avoid a stale
+          // canon write. The new entries are already in the draft and the
+          // canonDirty flag is already set, so the user's manual Save will
+          // retry the refetch+merge path.
+          setSaving(false);
+          toast.success(expandToast({
+            variationCount: total,
+            sheetCount: expandedDraft.compositeSheets?.length || 0,
+            addedCanonCount,
+            saved: false,
+          }));
+          return;
         }
+        canonForPayload = {
+          // Merge ONLY pending additions onto refetched server canon
+          // (not the full stale draft). Without this, concurrent canon
+          // deletions in other tabs/surfaces get resurrected because the
+          // deleted entry is still present in the stale draft.
+          characters: mergeCanonByName(fresh.characters || [], pendingCanonAdditionsRef.current.characters, 'character'),
+          settings: mergeCanonByName(fresh.settings || [], pendingCanonAdditionsRef.current.settings, 'setting'),
+          objects: mergeCanonByName(fresh.objects || [], pendingCanonAdditionsRef.current.objects, 'object'),
+        };
       }
       const payload = {
         name: expandedDraft.name.trim(),

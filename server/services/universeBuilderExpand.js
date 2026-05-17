@@ -435,15 +435,18 @@ export async function expandWorldTemplate({
   // instead of being silently dropped on auto-save round-trip.
   const rawCategories = parsed.categories && typeof parsed.categories === 'object' ? parsed.categories : {};
   let rawCharacters = Array.isArray(parsed.characters) ? [...parsed.characters] : [];
-  // Match ANY raw key that normalizes to `characters` (e.g. "Characters",
-  // "character variations", "Character_Variations"). Without this, an LLM
-  // emitting a slightly different key would slip past the literal lookup
-  // and have its entries dropped by sanitizeCategories on save instead of
-  // folding into canon.
+  // Match ANY raw key whose first word is "character(s)" — covers exact
+  // ("characters"), case variants ("Characters"), and multi-word aliases
+  // ("character variations", "Character_Variations") that normalizeCategoryKey
+  // encodes as "character_variations" (i.e. NOT equal to "characters").
+  // Without this, an LLM emitting a slightly renamed retired-characters key
+  // would slip past the exact-equality check and have its entries dropped by
+  // sanitizeCategories on save instead of folding into canon.
+  const isCharactersBucket = (rawKey) => /^characters?(_|$)/i.test(normalizeCategoryKey(rawKey));
   const survivingCategories = {};
   let foldedAnything = false;
   for (const [rawKey, value] of Object.entries(rawCategories)) {
-    if (normalizeCategoryKey(rawKey) === 'characters') {
+    if (isCharactersBucket(rawKey)) {
       const variations = Array.isArray(value)
         ? value
         : Array.isArray(value?.variations)

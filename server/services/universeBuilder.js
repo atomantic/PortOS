@@ -449,14 +449,16 @@ function foldRetiredCharactersBucket(raw, canon) {
   const categories = raw && raw.categories && typeof raw.categories === 'object'
     ? raw.categories
     : {};
-  // Match ANY key that normalizes to `characters` — sanitizeCategories runs
-  // normalizeCategoryKey on each key before dropping retired buckets, so a
-  // payload using `Characters` or `character variations` would otherwise
-  // slip past the literal `categories.characters` lookup and have its
-  // variations silently dropped on save instead of folded into canon.
+  // Match ANY key whose first word is "character(s)" — covers exact match
+  // ("characters"), case variants ("Characters"), and multi-word aliases
+  // ("character variations", "Character_Variations") that normalizeCategoryKey
+  // encodes as "character_variations" (not equal to the literal "characters").
+  // Without this, a payload using those variant keys slips past the exact check
+  // and has its variations silently dropped on save instead of folded into canon.
+  const isCharactersBucket = (k) => /^characters?(_|$)/i.test(normalizeCategoryKey(k));
   let variations = null;
   for (const [rawKey, value] of Object.entries(categories)) {
-    if (normalizeCategoryKey(rawKey) !== 'characters') continue;
+    if (!isCharactersBucket(rawKey)) continue;
     const fromKey = Array.isArray(value)
       ? value
       : Array.isArray(value?.variations)
