@@ -8,6 +8,13 @@ import { EventEmitter } from 'events';
 // Global error event emitter for broadcasting errors
 export const errorEvents = new EventEmitter();
 
+// Fields commonly attached to Node system errors (e.g. ECONNREFUSED, ENOTFOUND)
+// — preserved when unwrapping err.cause for diagnostic logging.
+const SYSTEM_ERROR_KEYS = ['code', 'errno', 'syscall', 'hostname', 'address', 'port'];
+
+const causeSuffix = (error) =>
+  error.context?.causeChain ? ` ← ${error.context.causeChain}` : '';
+
 /**
  * Enhanced error object with metadata
  */
@@ -47,9 +54,11 @@ export function asyncHandler(fn) {
       const error = normalizeError(err);
 
       // Log the error (skip stack traces for upstream platform issues)
-      const logMsg = `❌ Route error: ${error.message}`;
+      const route = `${req.method} ${req.originalUrl || req.url}`;
+      const suffix = causeSuffix(error);
+      const logMsg = `❌ Route error [${route}]: ${error.message}${suffix}`;
       if (error.code === 'PLATFORM_UNAVAILABLE') {
-        console.warn(`⚠️ Platform unavailable: ${error.message}`);
+        console.warn(`⚠️ Platform unavailable [${route}]: ${error.message}${suffix}`);
       } else if (error.severity === 'warning') {
         // Expected high-volume 404s (e.g. speculative media-job archive
         // lookups) — already classified as benign; don't pollute server logs.
@@ -60,20 +69,46 @@ export function asyncHandler(fn) {
         console.error(details ? `${logMsg}: ${JSON.stringify(details)}` : logMsg);
       }
 
-      // Emit Socket.IO event for UI notification
+      const safeContext = sanitizeContext(error.context);
+
       if (io) {
-        emitErrorEvent(io, error);
+        emitErrorEvent(io, error, safeContext);
       }
 
-      // Send error response
       return res.status(error.status).json({
         error: error.message,
         code: error.code,
         timestamp: error.timestamp,
-        ...(error.context && Object.keys(error.context).length > 0 && { context: error.context })
+        ...(safeContext && Object.keys(safeContext).length > 0 && { context: safeContext })
       });
     });
   };
+}
+
+/**
+ * Walk an Error's `cause` chain (Node's native fetch wraps the actual reason
+ * in `err.cause` — without unwrapping, server logs show only "fetch failed").
+ * Returns context fields ready to merge: { causeChain: "Foo: msg → Bar: msg",
+ * cause: [{ name, message, ...SYSTEM_ERROR_KEYS }] }, or null if no cause.
+ */
+function describeCauseChain(err) {
+  const cause = [];
+  const labels = [];
+  let current = err?.cause;
+  const seen = new Set();
+  while (current && !seen.has(current) && cause.length < 5) {
+    seen.add(current);
+    const name = current?.constructor?.name || current?.name || 'Unknown';
+    const message = current?.message ?? String(current);
+    labels.push(`${name}: ${message}`);
+    const entry = { name, message };
+    for (const key of SYSTEM_ERROR_KEYS) {
+      if (current[key] !== undefined) entry[key] = current[key];
+    }
+    cause.push(entry);
+    current = current.cause;
+  }
+  return cause.length ? { causeChain: labels.join(' → '), cause } : null;
 }
 
 /**
@@ -87,11 +122,8 @@ export function normalizeError(err) {
   if (err instanceof Error) {
     const status = err.status || 500;
     const code = err.code || getErrorCode(status);
-    return new ServerError(err.message, {
-      status,
-      code,
-      context: { originalError: err.constructor.name }
-    });
+    const context = { originalError: err.constructor.name, ...describeCauseChain(err) };
+    return new ServerError(err.message, { status, code, context });
   }
 
   // Handle string or other error types
@@ -146,12 +178,16 @@ function sanitizeContext(context) {
 }
 
 /**
- * Emit error event via Socket.IO to alert UI
+ * Emit error event via Socket.IO to alert UI.
+ * `precomputedSafeContext` lets callers sanitize once and share with the HTTP
+ * response so the two channels can't drift on what's stripped.
  */
-export function emitErrorEvent(io, error) {
+export function emitErrorEvent(io, error, precomputedSafeContext) {
   errorEvents.emit('error', error);
 
-  const safeContext = sanitizeContext(error.context);
+  const safeContext = precomputedSafeContext !== undefined
+    ? precomputedSafeContext
+    : sanitizeContext(error.context);
 
   // Broadcast to all connected clients
   io.emit('error:occurred', {
@@ -184,7 +220,8 @@ export function errorMiddleware(err, req, res, next) {
   const error = normalizeError(err);
 
   // Log the error
-  const logMsg = `❌ Server error: ${error.message}`;
+  const route = `${req.method} ${req.originalUrl || req.url}`;
+  const logMsg = `❌ Server error [${route}]: ${error.message}${causeSuffix(error)}`;
   if (error.status >= 500) {
     console.error(logMsg);
     if (err.stack) console.error(err.stack);
@@ -214,7 +251,7 @@ export function setupProcessErrorHandlers(io) {
     const error = normalizeError(reason);
     error.severity = 'critical';
 
-    console.error(`❌ Unhandled Promise Rejection: ${error.message}`);
+    console.error(`❌ Unhandled Promise Rejection: ${error.message}${causeSuffix(error)}`);
     if (reason instanceof Error) {
       console.error(reason.stack);
     }
