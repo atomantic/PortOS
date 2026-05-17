@@ -144,7 +144,6 @@ export async function runPromptThroughProvider({ provider, prompt, source, model
   let effectiveProvider = provider;
   let effectiveModel = resolveEffectiveModel(effectiveProvider, model);
   const effectiveCwd = cwdOverride ?? process.cwd();
-  const effectiveTimeout = timeoutOverride ?? provider?.timeout ?? DEFAULT_TIMEOUT_MS;
 
   // Some call sites (stageRunner, loops) create the run themselves so
   // they can log the runId before the LLM call starts. When provided,
@@ -175,6 +174,14 @@ export async function runPromptThroughProvider({ provider, prompt, source, model
       effectiveModel = resolveEffectiveModel(effectiveProvider, model);
     }
   }
+
+  // Compute timeout AFTER the possible fallback switch so it reflects
+  // the provider that actually runs — providers can have wildly different
+  // `timeout` settings (a 5-min CLI vs a 30-s API), and using the
+  // original provider's timeout against a fallback would either time out
+  // a still-working run early or let a stuck one hang past its
+  // intended cap.
+  const effectiveTimeout = timeoutOverride ?? effectiveProvider?.timeout ?? DEFAULT_TIMEOUT_MS;
 
   return new Promise((resolve, reject) => {
     let text = '';
