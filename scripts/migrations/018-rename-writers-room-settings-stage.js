@@ -183,7 +183,15 @@ const migratePromptFile = async (rootDir) => {
       console.log(`📝 ${PROMPTS_STAGES_DIR_REL}/${NEW_PROMPT_FILE}: legacy matched shipped baseline, installed current sample`);
     } else {
       await writeFile(newPath, legacyContent);
-      console.log(`📝 ${PROMPTS_STAGES_DIR_REL}/${NEW_PROMPT_FILE}: promoted from legacy ${LEGACY_PROMPT_FILE}`);
+      // Mirror the auto-seeded customized path's warning: the promoted
+      // legacy content lacks migration 007's intExt / timeOfDay fields,
+      // so the user needs to know to re-merge them manually.
+      console.warn(
+        `⚠️  ${PROMPTS_STAGES_DIR_REL}/${NEW_PROMPT_FILE}: promoted from legacy ${LEGACY_PROMPT_FILE}.\n` +
+        `   Note: if you had not picked up migration 007 (intExt / timeOfDay fields), diff against\n` +
+        `     ${SAMPLE_STAGES_DIR_REL}/${NEW_PROMPT_FILE}\n` +
+        `   and merge the new field bullets + JSON keys manually.`,
+      );
     }
   }
 
