@@ -4,11 +4,12 @@ import { join, dirname } from 'path';
 import { fileURLToPath, pathToFileURL } from 'url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const rootDir = join(__dirname, '..');
-const migrationsDir = join(__dirname, 'migrations');
-const appliedFile = join(rootDir, 'data', 'migrations.applied.json');
+const DEFAULT_ROOT_DIR = join(__dirname, '..');
+const MIGRATIONS_DIR = join(__dirname, 'migrations');
 
-async function run() {
+export async function runMigrations({ rootDir = DEFAULT_ROOT_DIR } = {}) {
+  const appliedFile = join(rootDir, 'data', 'migrations.applied.json');
+
   // Ensure data/ exists so we can persist applied state (migrationsDir
   // ships in the repo and always exists).
   await mkdir(dirname(appliedFile), { recursive: true });
@@ -35,7 +36,7 @@ async function run() {
   // Scan for migration files (*.js, sorted by filename). Test files live
   // alongside their migration; exclude them so the runner doesn't try to
   // import a vitest module as a migration.
-  const files = (await readdir(migrationsDir))
+  const files = (await readdir(MIGRATIONS_DIR))
     .filter(f => f.endsWith('.js') && !f.endsWith('.test.js'))
     .sort();
 
@@ -44,12 +45,12 @@ async function run() {
     if (applied.includes(file)) continue;
 
     console.log(`🔄 Running migration: ${file}`);
-    const mod = await import(pathToFileURL(join(migrationsDir, file)).href);
+    const mod = await import(pathToFileURL(join(MIGRATIONS_DIR, file)).href);
     const migration = (mod?.default && typeof mod.default.up === 'function') ? mod.default : mod;
     if (!migration || typeof migration.up !== 'function') {
       throw new Error(`Migration "${file}" does not export an up() function`);
     }
-    await migration.up({ rootDir, migrationsDir });
+    await migration.up({ rootDir, migrationsDir: MIGRATIONS_DIR });
     applied.push(file);
     await writeFile(appliedFile, JSON.stringify(applied, null, 2) + '\n');
     ran++;
@@ -61,9 +62,16 @@ async function run() {
   } else {
     console.log(`✅ ${ran} migration(s) applied`);
   }
+  return ran;
 }
 
-run().catch(err => {
-  console.error(`❌ Migration failed: ${err.message}`);
-  process.exit(1);
-});
+// Only run as CLI when invoked directly (not when imported as a module).
+// URL-vs-URL comparison normalizes slashes / drive-letter casing on Windows
+// and tolerates symlinked npm bin shims.
+const invokedAsScript = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (invokedAsScript) {
+  runMigrations().catch(err => {
+    console.error(`❌ Migration failed: ${err.message}`);
+    process.exit(1);
+  });
+}
