@@ -77,9 +77,17 @@ export function createRunsRoutes(runnerService, options = {}) {
         }
       );
     } else if (provider.type === 'tui' && typeof runnerService.executeTuiRun === 'function') {
+      // Honor the user-picked model from the Runs UI — `executeTuiRun` reads
+      // `provider.defaultModel` for its `--model` injection, so without the
+      // clone every TUI run would silently fall back to the provider's saved
+      // default even when the user picked something else. Matches the API
+      // branch's `model` parameter being passed through.
+      const effectiveProvider = model
+        ? { ...provider, defaultModel: model }
+        : provider;
       runnerService.executeTuiRun(
         runId,
-        provider,
+        effectiveProvider,
         prompt,
         workspacePath,
         (data) => {
