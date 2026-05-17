@@ -1147,7 +1147,7 @@ const importerIssueEntry = z.object({
     (s) => s.trim().length > 0,
     { message: 'proseExcerpt must contain non-whitespace content' },
   ).optional(),
-}).strict();
+}).passthrough();
 
 export const importerCommitSchema = z.object({
   universeId: z.string().trim().min(1).max(120),

@@ -10,6 +10,7 @@ import {
   commitImport,
   ERR_VALIDATION,
   ERR_LOCKED,
+  ERR_PARTIAL_COMMIT_ISSUES,
   IMPORTER_SOURCE_CHAR_LIMIT,
 } from '../services/importer.js';
 import { ARC_ROLES } from '../lib/storyArc.js';
@@ -25,6 +26,7 @@ const router = Router();
 const SERVICE_ERROR_STATUS = {
   [ERR_VALIDATION]: 400,
   [ERR_LOCKED]: 409,
+  [ERR_PARTIAL_COMMIT_ISSUES]: 500,
   [universeSvc.ERR_NOT_FOUND]: 404,
   [seriesSvc.ERR_NOT_FOUND]: 404,
 };

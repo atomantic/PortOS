@@ -7,14 +7,14 @@ import * as universeSvc from '../services/universeBuilder.js';
 import * as seriesSvc from '../services/pipeline/series.js';
 import { ARC_ROLES } from '../lib/storyArc.js';
 
-vi.mock('../services/importer.js', () => ({
-  analyzeImport: vi.fn(),
-  commitImport: vi.fn(),
-  ERR_VALIDATION: 'IMPORTER_VALIDATION',
-  ERR_LOCKED: 'IMPORTER_LOCKED',
-  IMPORTER_SOURCE_CHAR_LIMIT: 200_000,
-  ARC_SHAPE_IDS: [],
-}));
+vi.mock('../services/importer.js', async () => {
+  const actual = await vi.importActual('../services/importer.js');
+  return {
+    ...actual,               // real ERR_VALIDATION, ERR_LOCKED, IMPORTER_SOURCE_CHAR_LIMIT, etc.
+    analyzeImport: vi.fn(),  // mocked behavior
+    commitImport: vi.fn(),   // mocked behavior
+  };
+});
 
 vi.mock('../services/universeBuilder.js', () => ({
   ERR_NOT_FOUND: 'UNIVERSE_NOT_FOUND',

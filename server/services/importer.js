@@ -17,6 +17,7 @@ import {
   getUniverse,
   createUniverse,
   updateUniverse,
+  deleteUniverse,
 } from './universeBuilder.js';
 import {
   listSeries,
@@ -32,6 +33,10 @@ import { mergeExtractedBible, BIBLE_KIND } from '../lib/storyBible.js';
 // with stable codes.
 export const ERR_VALIDATION = 'IMPORTER_VALIDATION';
 export const ERR_LOCKED = 'IMPORTER_LOCKED';
+// Thrown when the issue-loop fails mid-flight after universe + series writes
+// already landed. Universe/series are preserved; the partial issue set is
+// rolled back. Retrying commit is safe (merges are idempotent).
+export const ERR_PARTIAL_COMMIT_ISSUES = 'IMPORTER_PARTIAL_COMMIT_ISSUES';
 
 const makeErr = (message, code) => Object.assign(new Error(message), { code });
 
@@ -109,6 +114,27 @@ function compactCanonForPrompt(universe) {
     slim(o, ['name', 'aliases', 'description']));
   if (!characters.length && !places.length && !objects.length) return null;
   return { characters, places, objects };
+}
+
+/**
+ * Build a sanitized arc preview from a raw LLM arc response. Whitelists the
+ * known fields (matching `importerArcShape` in validation.js) so hallucinated
+ * or future extra keys never silently reach the client or commit path. Also
+ * validates `shape` against `ARC_SHAPE_IDS` — an invalid/misspelled shape is
+ * dropped to `null` so the UI renders "— pick one —" immediately rather than
+ * hiding the error until Zod rejects it at commit time.
+ * Threads B + C combined.
+ */
+function buildArcPreview(raw) {
+  if (raw == null || typeof raw !== 'object') return null;
+  const shape = isStr(raw.shape) && ARC_SHAPE_IDS.includes(raw.shape) ? raw.shape : null;
+  return {
+    logline: isStr(raw.logline) ? raw.logline : null,
+    summary: isStr(raw.summary) ? raw.summary : null,
+    protagonistArc: isStr(raw.protagonistArc) ? raw.protagonistArc : null,
+    themes: Array.isArray(raw.themes) ? raw.themes : [],
+    shape,
+  };
 }
 
 /**
@@ -251,12 +277,31 @@ export async function analyzeImport({
   // All LLM calls succeeded — now persist any new records. Pre-existing
   // records are returned as-is; new records are created here at the end so
   // a failure above never leaves orphaned data on disk.
-  const universe = isExistingUniverse
+  //
+  // Thread A: wrap the two-step create in a try/catch so a `createSeries`
+  // failure doesn't leave an orphaned universe on disk. We only delete the
+  // universe if we created it in this call — a pre-existing universe must
+  // never be removed as a side-effect of a series-create failure.
+  let universe = isExistingUniverse
     ? existingUniverse
     : await createUniverse({ name: universeName.trim() });
-  const series = isExistingSeries
-    ? existingSeries
-    : await createSeries({ name: seriesName.trim(), universeId: universe.id });
+  const universeWasCreated = !isExistingUniverse;
+
+  let series;
+  try {
+    series = isExistingSeries
+      ? existingSeries
+      : await createSeries({ name: seriesName.trim(), universeId: universe.id });
+  } catch (seriesErr) {
+    if (universeWasCreated) {
+      await deleteUniverse(universe.id).catch((delErr) =>
+        console.error(`❌ analyzeImport rollback: failed to delete orphaned universe ${universe.id}: ${delErr.message}`),
+      );
+    }
+    throw seriesErr;
+  }
+
+  const arcPreview = buildArcPreview(arcRun.content);
 
   return {
     universe,
@@ -268,7 +313,7 @@ export async function analyzeImport({
       places: Array.isArray(canonRun.content?.places) ? canonRun.content.places : [],
       objects: Array.isArray(canonRun.content?.objects) ? canonRun.content.objects : [],
     },
-    arcPreview: arcRun.content || null,
+    arcPreview,
     seasonsPreview: Array.isArray(arcRun.content?.seasons) ? arcRun.content.seasons : [],
     issueProposals: Array.isArray(issuesRun.content?.issues) ? issuesRun.content.issues : [],
     runIds: {
@@ -486,7 +531,18 @@ export async function commitImport({
         console.error(`❌ commitImport rollback: failed to delete issue ${id}: ${delErr.message}`),
       );
     }
-    throw issueErr;
+    // Surface a distinct code + message so the UI can tell the user that the
+    // universe and series were saved but the issues were rolled back. Retrying
+    // commit is safe: universe/series merges are idempotent and season ids are
+    // stable, so only the issue creation re-runs.
+    const n = issues.length;
+    const partial = Object.assign(
+      new Error(
+        `The universe and series were updated successfully, but ${createdIssueIds.length} of ${n} issue${n === 1 ? '' : 's'} failed and were rolled back — retry to create the remaining issues. (Original error: ${issueErr.message})`,
+      ),
+      { code: ERR_PARTIAL_COMMIT_ISSUES },
+    );
+    throw partial;
   }
 
   return {
