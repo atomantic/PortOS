@@ -34,6 +34,7 @@ import { richCanonDescriptorFragments } from '../lib/canonPrompt.js';
 import {
   sanitizeBibleList, BIBLE_KIND, BIBLE_FIELD, BIBLE_LIMITS, BIBLE_SOURCE,
   SERVER_OWNED_CHARACTER_FIELDS,
+  pruneStaleReferenceSheets,
   normalizeBibleName, isStr, trimTo,
 } from '../lib/storyBible.js';
 import { sanitizeOrigin } from '../lib/sharingOrigin.js';
@@ -910,6 +911,16 @@ export async function updateUniverse(id, patchOrMutator = {}) {
       updatedAt: new Date().toISOString(),
     });
     if (!mergedRecord) throw makeErr('Invalid universe payload', ERR_VALIDATION);
+    // Persist the stale-reference-sheet null at write time so the on-disk
+    // record catches up with what the GET-route pruner shows. Otherwise a
+    // PATCH that omits `characters` (e.g. rename) merges from `cur` and
+    // returns the stale filename, and the UI re-renders the broken thumbnail.
+    // Render-completion writes are unaffected — the renderer copies the file
+    // BEFORE its mutator runs, so the just-stamped pointer resolves on disk
+    // and the prune skips it.
+    if (Array.isArray(mergedRecord.characters)) {
+      mergedRecord.characters = pruneStaleReferenceSheets(mergedRecord.characters);
+    }
     state.universes[idx] = mergedRecord;
     await writeState(state);
     return { merged: mergedRecord, nameChanged: mergedRecord.name !== cur.name, skipped: false };

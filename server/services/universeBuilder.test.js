@@ -427,6 +427,30 @@ describe("universeBuilder service", () => {
     refSheetFilesByName.delete("sheet-DEAD.png");
   });
 
+  it("updateUniverse persists null for stale referenceSheetImageRef on the write path, not just GET", async () => {
+    // Reviewer-found bug: the GET-route pruner nulled the response but the
+    // on-disk record kept the stale filename, so a later PATCH that omitted
+    // `characters` (e.g. rename) merged from cur and returned the stale value.
+    // The write-time prune in updateUniverse fixes this — any PATCH catches
+    // the on-disk record up.
+    const w = await seedWorld();
+    await svc.updateUniverse(w.id, (latest) => ({
+      characters: [...(latest.characters || []), {
+        id: "c-rename", name: "Anchor", referenceSheetImageRef: "sheet-RENAME.png",
+      }],
+    }));
+    refSheetFilesByName.set("sheet-RENAME.png", null);
+    // PATCH that does NOT include `characters` — only renames the universe.
+    const renamed = await svc.updateUniverse(w.id, { name: "Renamed" });
+    const char = renamed.characters.find((c) => c.id === "c-rename");
+    expect(char?.referenceSheetImageRef).toBeNull();
+    // And a follow-up GET sees the same null — disk is now consistent.
+    const reread = await svc.getUniverse(w.id);
+    const charReread = reread.characters.find((c) => c.id === "c-rename");
+    expect(charReread?.referenceSheetImageRef).toBeNull();
+    refSheetFilesByName.delete("sheet-RENAME.png");
+  });
+
   it("deleteUniverse removes the universe and its runs", async () => {
     const w = await seedWorld();
     await svc.recordRun({

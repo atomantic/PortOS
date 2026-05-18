@@ -330,9 +330,12 @@ function deriveReferenceSheetImageRef(raw) {
  * just here at the "GET universe / verify before render" boundary.
  *
  * `resolveImageRef(mustExist: true)` does the FS stat synchronously; for
- * a typical 5-50 character universe this is sub-millisecond. Call from the
- * GET universe route (or any boundary about to surface the pointer to a UI
- * that would render `<img src="/data/image-refs/<x>">`).
+ * a typical 5-50 character universe this is sub-millisecond.
+ *
+ * CONVENTION: call from BOTH the GET universe route AND `updateUniverse`'s
+ * write path. GET alone is not sufficient — without the write-time call,
+ * stale values stay on disk and a later PATCH that omits `characters`
+ * (e.g. rename) resurfaces the stale filename in the response.
  */
 export function pruneStaleReferenceSheets(characters) {
   if (!Array.isArray(characters)) return characters;
