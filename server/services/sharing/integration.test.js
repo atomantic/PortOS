@@ -767,6 +767,81 @@ describe('sharing round-trip', () => {
     expect(senders).toEqual(['inst-ME', 'inst-OTHER']);
   });
 
+  it('persists a rotation-orphan cull even when the freshness gate forces an early inbox-has-newer return', async () => {
+    // Regression: the cull mutates inbox.items before the freshness gate
+    // runs. If an older manifest from the same sender arrives after the
+    // newer one is already in the inbox, the freshness gate short-circuits
+    // with `inbox-has-newer` — the cull removals on the OTHER (rotated)
+    // sender's row must still be persisted, otherwise the orphan survives
+    // until the next non-stale arrival.
+    const bucket = await buckets.createBucket({ name: 'RotateAndStaleBucket', path: tempBucket, mode: 'inbox' });
+    const universeBuilder = await import('../universeBuilder.js');
+    const u = await universeBuilder.createUniverse({ name: 'Multi-state Universe' });
+
+    const sixtyDaysAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString();
+    const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const fs = await import('fs');
+    const inboxFile = join(tempData, 'sharing', 'inbox', `${bucket.id}.json`);
+    mkdirSync(join(tempData, 'sharing', 'inbox'), { recursive: true });
+    fs.writeFileSync(inboxFile, JSON.stringify({ items: [
+      // Rotation orphan — different sender, same source, 60 days old.
+      // Must be culled by the incoming manifest.
+      {
+        manifestId: 'rotation-orphan',
+        manifestFilename: `sub-universe-${u.id}-inst-OLD.json`,
+        kind: 'universe',
+        subscription: { recordKind: 'universe', recordId: u.id },
+        source: 'remote-peer',
+        sourceBio: null,
+        senderInstanceId: 'inst-OLD',
+        createdAt: sixtyDaysAgo,
+        receivedAt: sixtyDaysAgo,
+        recordIds: [u.id],
+        assetCount: 0,
+      },
+      // Same-sender row newer than the incoming manifest below — triggers
+      // the freshness gate's `inbox-has-newer` early return.
+      {
+        manifestId: 'fresh-newer',
+        manifestFilename: `sub-universe-${u.id}-inst-NEW.json`,
+        kind: 'universe',
+        subscription: { recordKind: 'universe', recordId: u.id },
+        source: 'remote-peer',
+        sourceBio: null,
+        senderInstanceId: 'inst-NEW',
+        createdAt: yesterday,
+        receivedAt: yesterday,
+        recordIds: [u.id],
+        assetCount: 0,
+      },
+    ] }));
+
+    // Synthesize an OLDER manifest from the same fresh sender so the
+    // freshness gate fires (existing.createdAt > manifest.createdAt).
+    const exp = await exporter.exportUniverse(u.id, bucket.id, {
+      subscription: { recordKind: 'universe', recordId: u.id },
+    });
+    simulateRemoteSender(tempBucket, exp.filename, 'inst-NEW');
+    const manifestPath = join(tempBucket, 'manifests', exp.filename);
+    const m = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+    m.source = 'remote-peer';
+    // Older than the pre-seeded `fresh-newer` row.
+    const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
+    m.createdAt = twoDaysAgo;
+    fs.writeFileSync(manifestPath, JSON.stringify(m));
+
+    const outcome = await importer.processManifest(bucket.id, exp.filename);
+    expect(outcome.outcome?.queued).toBe(false);
+    expect(outcome.outcome?.reason).toBe('inbox-has-newer');
+
+    // Despite the early return, the cull must have persisted: only the
+    // newer same-sender row remains.
+    const after = await importer.listInbox(bucket.id);
+    expect(after).toHaveLength(1);
+    expect(after[0].manifestId).toBe('fresh-newer');
+    expect(after[0].senderInstanceId).toBe('inst-NEW');
+  });
+
   it('preserves a different-source row even when older than the rotation cull window', async () => {
     const bucket = await buckets.createBucket({ name: 'OtherSourceBucket', path: tempBucket, mode: 'inbox' });
     const universeBuilder = await import('../universeBuilder.js');

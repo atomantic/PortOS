@@ -455,6 +455,12 @@ async function applyInbox(bucket, manifest, manifestFilename, records) {
   const inbox = await readInbox(bucket.id);
   inbox.items = Array.isArray(inbox.items) ? inbox.items : [];
   const sub = manifest.subscription;
+  // Tracks whether the rotation-orphan cull (or any other pre-write mutation)
+  // changed `inbox.items` so early-return paths below can still persist the
+  // pruned list. Without this, a cull followed by an `inbox-has-newer` /
+  // `already-in-inbox` short-circuit would silently drop the cull removals
+  // and the orphan rows would survive until the next non-stale arrival.
+  let inboxMutatedPreWrite = false;
   if (sub?.recordKind && sub?.recordId) {
     const senderId = manifest.senderInstanceId || null;
     const incomingSource = manifest.source || null;
@@ -463,6 +469,7 @@ async function applyInbox(bucket, manifest, manifestFilename, records) {
     // — a row with no display name can't be attributed to a peer identity.
     if (incomingSource) {
       const cullThresholdMs = Date.now() - ROTATION_CULL_MS;
+      const beforeLen = inbox.items.length;
       inbox.items = inbox.items.filter((it) => {
         if (!it.subscription) return true;
         if (it.subscription.recordKind !== sub.recordKind) return true;
@@ -475,6 +482,7 @@ async function applyInbox(bucket, manifest, manifestFilename, records) {
         console.log(`🧹 sharing: bucket=${bucket.name} culled rotation-orphan inbox row source="${incomingSource}" recordKind=${sub.recordKind} recordId=${sub.recordId} oldSender=${it.senderInstanceId || 'null'} newSender=${senderId || 'null'}`);
         return false;
       });
+      if (inbox.items.length !== beforeLen) inboxMutatedPreWrite = true;
     }
     const existing = inbox.items.find((it) => it.subscription
       && it.subscription.recordKind === sub.recordKind
@@ -489,12 +497,14 @@ async function applyInbox(bucket, manifest, manifestFilename, records) {
     // when the incoming manifest is older than what we already have.
     if (existing && existing.createdAt && manifest.createdAt
       && existing.createdAt > manifest.createdAt) {
+      if (inboxMutatedPreWrite) await writeInbox(bucket.id, inbox);
       return { queued: false, reason: 'inbox-has-newer' };
     }
     if (existing) {
       inbox.items = inbox.items.filter((it) => it !== existing);
     }
   } else if (inbox.items.some((it) => it.manifestId === manifest.id)) {
+    if (inboxMutatedPreWrite) await writeInbox(bucket.id, inbox);
     return { queued: false, reason: 'already-in-inbox' };
   }
   inbox.items.push({
