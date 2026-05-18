@@ -30,16 +30,18 @@ export function createImageGenWaiter({
   const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
   promise.catch(() => {});
 
-  const onCompletedEvent = (ev) => { if (ev?.generationId === registeredId) { cleanup(); resolve(ev); } };
-  const onFailedEvent = (ev) => { if (ev?.generationId === registeredId) { cleanup(); reject(onFailed(ev)); } };
-
-  const timer = setTimeout(() => { cleanup(); reject(onTimeout()); }, timeoutMs);
-
+  let onCompletedEvent;
+  let onFailedEvent;
+  let timer;
   const cleanup = () => {
     clearTimeout(timer);
     imageGenEvents.off('completed', onCompletedEvent);
     imageGenEvents.off('failed', onFailedEvent);
   };
+
+  onCompletedEvent = (ev) => { if (ev?.generationId === registeredId) { cleanup(); resolve(ev); } };
+  onFailedEvent = (ev) => { if (ev?.generationId === registeredId) { cleanup(); reject(onFailed(ev)); } };
+  timer = setTimeout(() => { cleanup(); reject(onTimeout()); }, timeoutMs);
 
   imageGenEvents.on('completed', onCompletedEvent);
   imageGenEvents.on('failed', onFailedEvent);

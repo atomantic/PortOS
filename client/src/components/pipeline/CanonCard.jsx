@@ -174,9 +174,12 @@ function WardrobeSection({ wardrobes, editable, onChange }) {
       if ((current[field] || '') === value) return;
       const nextPending = pendingNew.map((p, i) => i === pendingIdx ? { ...p, [field]: value } : p);
       // Once a pending row has a non-empty name it's safe to promote into
-      // the persisted list (server sanitizer no longer drops it).
+      // the persisted list (server sanitizer no longer drops it). Strip the
+      // client-only `pending-wardrobe-*` id so server `ensureId('wd-')` mints
+      // a fresh `wd-<uuid>` — `ensureId` preserves any non-empty string, so
+      // an unstripped prefix would round-trip onto the persisted row.
       if (field === 'name' && value.trim()) {
-        const promoted = nextPending[pendingIdx];
+        const { id: _pendingId, ...promoted } = nextPending[pendingIdx];
         setPendingNew(nextPending.filter((_, i) => i !== pendingIdx));
         onChange([...wardrobes, promoted]);
       } else {
