@@ -12,6 +12,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Camera, Loader2, RefreshCcw, ExternalLink } from 'lucide-react';
 import { renderCharacterReferenceSheet } from '../../services/apiUniverseBuilder';
 import useMediaJobProgress from '../../hooks/useMediaJobProgress';
+import useMounted from '../../hooks/useMounted';
 import toast from '../ui/Toast';
 
 // HEAD-poll for the rendered sheet at its destination URL, with backoff. The
@@ -48,9 +49,11 @@ export default function CharacterReferenceSheetPanel({
   const settledRef = useRef(null);
   // mountedRef gates the post-completion HEAD-poll callback so an unmount
   // (universe switch, parent collapsing the section, etc.) mid-poll doesn't
-  // fire `onSheetCompleted` against a stale entry/universe.
-  const mountedRef = useRef(true);
-  useEffect(() => () => { mountedRef.current = false; }, []);
+  // fire `onSheetCompleted` against a stale entry/universe. useMounted resets
+  // the ref to true on every effect setup — a plain `useRef(true)` plus a
+  // cleanup-only effect leaves the ref permanently false after React 18
+  // StrictMode's mount→cleanup→remount cycle in dev.
+  const mountedRef = useMounted();
 
   const { status, filename, error, progress } = useMediaJobProgress(jobId);
 

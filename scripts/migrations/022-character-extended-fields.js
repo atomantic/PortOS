@@ -1,50 +1,116 @@
 /**
- * Extend universe canon characters with novelist + graphic-novelist depth:
- *   - identity: pronouns, age, coreTheme, speechAccent, visualNotes
- *   - visual:   silhouetteNotes, postureNotes, specialTraits, visualIdentity
- *   - narrative: motivations, likes, dislikes, mannerisms, relationships, skills
- *   - lists:     stats[], colorPalette[], props[], expressions[], handGestures[]
- *   - operational: referenceSheetImageRef (filename in data/image-refs/)
+ * Universe canon characters — extended schema + reference-sheet assets.
  *
- * Why this migration is record-only:
- *   `sanitizeCharacter` in server/lib/storyBible.js already fills every new
- *   field with a default ('' / []) on next read of an old record, so no on-disk
- *   rewrite is required for the schema extension to take effect. The migration
- *   exists so the version pin is explicit (so a future reader of the applied
- *   list sees where the extension landed) AND so the shipped reference-sheet
- *   template asset is present on existing installs — `scripts/setup-data.js`
- *   auto-copies the file on next start, but the migration provides a deterministic
- *   guarantee for the no-restart upgrade path (`npm run migrations` alone).
+ * Schema extension itself is record-only: `sanitizeCharacter` in
+ * `server/lib/storyBible.js` fills the new fields with defaults on next read,
+ * so no on-disk character rewrite is required.
  *
- * Side effect: copies `data.sample/templates/character-reference-sheet.png`
- * into `data/templates/character-reference-sheet.png` when missing.
+ * Side effects this migration is responsible for (so an upgrade via plain
+ * git-pull + pm2 restart, without re-running `npm run install:all` /
+ * `scripts/setup-data.js`, still has everything the runtime expects):
+ *
+ *  1. Copies `data.sample/templates/character-reference-sheet.png` →
+ *     `data/templates/character-reference-sheet.png` for the FLUX.2 init
+ *     image anchor used by the reference-sheet renderer.
+ *  2. Copies `data.sample/prompts/stages/universe-character-expand.md` →
+ *     `data/prompts/stages/universe-character-expand.md` for the
+ *     `expandUniverseCharacter` LLM stage.
+ *  3. Merges the `universe-character-expand` entry into the installed
+ *     `data/prompts/stage-config.json` so `runStagedLLM` can resolve the
+ *     stage. Mirrors the pattern in `017-volume-cover-concepts-stage.js` /
+ *     `020-comic-cover-concepts-stage.js`.
  */
 
-import { existsSync, mkdirSync, cpSync } from 'fs';
-import { join } from 'path';
+import { access, copyFile, mkdir, readFile, writeFile, constants } from 'fs/promises';
+import { dirname, join } from 'path';
 
-export async function up({ rootDir }) {
-  const sampleTemplate = join(rootDir, 'data.sample', 'templates', 'character-reference-sheet.png');
-  const targetDir = join(rootDir, 'data', 'templates');
-  const targetTemplate = join(targetDir, 'character-reference-sheet.png');
+const PROMPT_FILENAME = 'universe-character-expand.md';
+const STAGE_KEY = 'universe-character-expand';
+const TEMPLATE_FILENAME = 'character-reference-sheet.png';
 
-  if (!existsSync(targetDir)) {
-    mkdirSync(targetDir, { recursive: true });
-    console.log(`📁 Created ${targetDir}`);
-  }
-  if (!existsSync(targetTemplate)) {
-    if (!existsSync(sampleTemplate)) {
-      // setup-data.js's auto-copy of missing files runs alongside the
-      // migrations on every start, so a one-off missing-shipped-asset case
-      // is harmless — log + continue rather than failing the whole run.
-      console.warn(`⚠️ Character reference sheet template missing at ${sampleTemplate} — skipping copy. Run \`npm run install:all\` to provision.`);
-    } else {
-      cpSync(sampleTemplate, targetTemplate);
-      console.log(`📄 Copied character-reference-sheet.png → data/templates/`);
+export default {
+  async up({ rootDir }) {
+    // 1. Visual template asset — the reference-sheet renderer's init image.
+    {
+      const targetDir = join(rootDir, 'data', 'templates');
+      const targetTemplate = join(targetDir, TEMPLATE_FILENAME);
+      const sampleTemplate = join(rootDir, 'data.sample', 'templates', TEMPLATE_FILENAME);
+      await mkdir(targetDir, { recursive: true });
+      const exists = await access(targetTemplate, constants.F_OK).then(() => true, () => false);
+      if (exists) {
+        console.log(`📝 character-reference-sheet.png: already present`);
+      } else {
+        const sampleExists = await access(sampleTemplate, constants.F_OK).then(() => true, () => false);
+        if (!sampleExists) {
+          console.warn(`⚠️ character-reference-sheet.png: sample missing at ${sampleTemplate} — skipping`);
+        } else {
+          try {
+            await copyFile(sampleTemplate, targetTemplate);
+            console.log(`✅ seeded ${TEMPLATE_FILENAME}`);
+          } catch (err) {
+            console.warn(`⚠️ character-reference-sheet.png copy failed: ${err.message}`);
+          }
+        }
+      }
     }
-  }
-  // No universe-builder.json rewrite — sanitizer fills the new fields on
-  // next read. This keeps the migration idempotent and tiny.
-}
 
-export default { up };
+    // 2. LLM stage prompt.
+    {
+      const stagesDir = join(rootDir, 'data', 'prompts', 'stages');
+      await mkdir(stagesDir, { recursive: true });
+      const dataPath = join(stagesDir, PROMPT_FILENAME);
+      const samplePath = join(rootDir, 'data.sample', 'prompts', 'stages', PROMPT_FILENAME);
+      const exists = await access(dataPath, constants.F_OK).then(() => true, () => false);
+      if (exists) {
+        console.log(`📝 ${PROMPT_FILENAME}: already present`);
+      } else {
+        const sampleExists = await access(samplePath, constants.F_OK).then(() => true, () => false);
+        if (!sampleExists) {
+          console.warn(`⚠️ ${PROMPT_FILENAME}: sample missing — skipping copy`);
+        } else {
+          try {
+            await copyFile(samplePath, dataPath);
+            console.log(`✅ seeded ${PROMPT_FILENAME}`);
+          } catch (err) {
+            console.warn(`⚠️ ${PROMPT_FILENAME}: copy failed: ${err.message}`);
+          }
+        }
+      }
+    }
+
+    // 3. stage-config entry — without this, runStagedLLM can't resolve the
+    //    universe-character-expand stage and the expand route 500s.
+    {
+      const installedConfigPath = join(rootDir, 'data', 'prompts', 'stage-config.json');
+      const sampleConfigPath = join(rootDir, 'data.sample', 'prompts', 'stage-config.json');
+      const sampleConfigExists = await access(sampleConfigPath, constants.F_OK).then(() => true, () => false);
+      if (!sampleConfigExists) {
+        console.warn(`⚠️ universe-character-expand: data.sample stage-config.json missing — skipping config write`);
+        return;
+      }
+      try {
+        const sample = JSON.parse(await readFile(sampleConfigPath, 'utf8'));
+        const installedExists = await access(installedConfigPath, constants.F_OK).then(() => true, () => false);
+        const installed = installedExists
+          ? JSON.parse(await readFile(installedConfigPath, 'utf8'))
+          : { stages: {} };
+        installed.stages = installed.stages || {};
+        if (installed.stages[STAGE_KEY]) {
+          console.log(`📝 ${STAGE_KEY} stage-config: already present`);
+          return;
+        }
+        if (!sample?.stages?.[STAGE_KEY]) {
+          console.warn(`⚠️ ${STAGE_KEY}: sample stage-config missing the entry — skipping`);
+          return;
+        }
+        installed.stages[STAGE_KEY] = sample.stages[STAGE_KEY];
+        await mkdir(dirname(installedConfigPath), { recursive: true });
+        await writeFile(installedConfigPath, JSON.stringify(installed, null, 2) + '\n', 'utf8');
+        const action = installedExists ? 'merged' : 'created';
+        console.log(`📝 ${STAGE_KEY} stage-config (${action}): 1 added`);
+      } catch (err) {
+        console.warn(`⚠️ ${STAGE_KEY}: stage-config merge failed: ${err.message}`);
+      }
+    }
+  },
+};
