@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import * as api from '../services/api';
 import { BookOpen, Search, Network, FileText, BarChart3, Activity } from 'lucide-react';
 import BrailleSpinner from '../components/BrailleSpinner';
+import TabPills from '../components/ui/TabPills';
 
 import WikiOverviewTab from '../components/wiki/tabs/OverviewTab';
 import WikiBrowseTab from '../components/wiki/tabs/BrowseTab';
@@ -143,29 +144,7 @@ export default function Wiki() {
         </div>
       </div>
 
-      {/* Tab navigation */}
-      <div className="flex border-b border-port-border">
-        {TABS.map((tabItem) => {
-          const Icon = tabItem.icon;
-          const isActive = activeTab === tabItem.id;
-          return (
-            <button
-              key={tabItem.id}
-              onClick={() => navigate(`/wiki/${tabItem.id}`)}
-              className={`flex items-center gap-2 px-4 py-3 text-sm font-medium transition-colors ${
-                isActive
-                  ? 'text-port-accent border-b-2 border-port-accent bg-port-accent/5'
-                  : 'text-gray-400 hover:text-white hover:bg-port-card'
-              }`}
-              role="tab"
-              aria-selected={isActive}
-            >
-              <Icon size={16} aria-hidden="true" />
-              {tabItem.label}
-            </button>
-          );
-        })}
-      </div>
+      <TabPills tabs={TABS} activeTab={activeTab} onChange={(id) => navigate(`/wiki/${id}`)} ariaLabel="Wiki sections" />
 
       {/* Tab content */}
       <div className="flex-1 overflow-auto p-4">

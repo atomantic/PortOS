@@ -48,7 +48,7 @@ export default function TabPills({
             >
               {visibleTabs.map((t) => (
                 <option key={t.id} value={t.id}>
-                  {t.label}{t.count != null ? ` (${t.count})` : ''}
+                  {t.label}{t.count != null && t.count > 0 ? ` (${t.count})` : ''}
                 </option>
               ))}
             </select>
@@ -85,7 +85,7 @@ export default function TabPills({
                   ? <Loader2 size={sz.icon} className="animate-spin shrink-0" />
                   : (Icon && <Icon size={sz.icon} aria-hidden="true" />)}
                 {t.label}
-                {t.count != null && (
+                {t.count != null && t.count > 0 && (
                   <span className={`text-[10px] ${active ? 'text-port-accent/70' : 'text-gray-500'}`}>
                     {t.count}
                   </span>
@@ -121,7 +121,7 @@ export default function TabPills({
             id={controlsIdPrefix ? `tab-${t.id}` : undefined}
             disabled={t.disabled}
             onClick={() => onChange(t.id)}
-            title={t.label}
+            title={hideLabelOnMobile ? t.label : undefined}
             className={`flex items-center ${stretch ? 'flex-1 min-w-0 justify-center' : 'shrink-0 justify-center'} ${sz.gap} ${sz.padding} ${sz.text} font-medium transition-colors whitespace-nowrap min-h-[44px] sm:min-h-[40px] border-b-2 -mb-px ${
               active
                 ? 'text-port-accent border-port-accent bg-port-accent/5'
