@@ -734,7 +734,11 @@ function VaultSetup({ detectedVaults, vaults, customPath, setCustomPath, adding,
             placeholder="/path/to/obsidian/vault"
             className="flex-1 min-w-0 bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-white placeholder-gray-500"
           />
-          <FolderPicker value={customPath} onChange={setCustomPath} />
+          <FolderPicker
+            value={customPath}
+            onChange={setCustomPath}
+            defaultPath="~/Library/Mobile Documents/iCloud~md~obsidian/Documents"
+          />
           <button
             onClick={() => {
               if (customPath.trim()) {

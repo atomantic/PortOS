@@ -28,7 +28,17 @@ router.get('/directories', asyncHandler(async (req, res) => {
 
   // Default to parent of PortOS project if no path provided
   const defaultPath = resolve(join(__dirname, '../../..'));
-  const targetPath = dirPath === '~' ? homedir() : dirPath ? resolve(dirPath) : defaultPath;
+  let targetPath;
+  if (!dirPath) {
+    targetPath = defaultPath;
+  } else if (dirPath === '~') {
+    targetPath = homedir();
+  } else if (dirPath.startsWith('~/') || dirPath.startsWith('~\\')) {
+    // Expand leading ~ only; preserve embedded ~ chars (e.g. iCloud~md~obsidian)
+    targetPath = resolve(join(homedir(), dirPath.slice(2)));
+  } else {
+    targetPath = resolve(dirPath);
+  }
 
   // Validate path exists and is a directory
   if (!existsSync(targetPath)) {
