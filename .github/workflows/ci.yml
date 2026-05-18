@@ -40,6 +40,9 @@ jobs:
       - name: Run server tests
         run: npm run test:ci --prefix server
 
+      - name: Run client tests
+        run: npm test --prefix client
+
       - name: Build client
         run: npm run build --prefix client
 

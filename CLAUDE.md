@@ -17,6 +17,7 @@ npm run dev
 # Run tests
 cd server && npm test
 cd server && npm run test:watch  # Watch mode
+cd client && npm test            # Vitest (jsdom) — component/unit tests
 
 # PM2 management
 pm2 start ecosystem.config.cjs

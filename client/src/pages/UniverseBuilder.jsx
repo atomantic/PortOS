@@ -2133,7 +2133,7 @@ const GENERATE_PRESETS = [3, 5, 10];
 const GENERATE_CUSTOM_MIN = 1;
 const GENERATE_CUSTOM_MAX = 50;
 
-function CategoryEditor({
+export function CategoryEditor({
   category, variations, canRemove = false, onChange, onRemove,
   canRender = false, onRenderCategory = null, onRenderVariation = null,
   onGenerate = null,
@@ -2855,7 +2855,7 @@ function BucketChipStrip({ buckets, activeBucket, setBucket, showAll = true, ext
 //   - blank (default "All"): renders canon + every variation under this trunk
 //   - BUCKET_CANON: renders only canon entries (via the existing UniverseCanonSection)
 //   - <bucketKey>: renders that bucket's variations via CategoryEditor
-function TrunkView({
+export function TrunkView({
   trunk, draft, selectedId, buckets, activeBucket, setBucket,
   canRender, canPromote, imageCfg, onUniverseChange,
   onRemoveBucket, onUpdateBucket, onGenerateInBucket, onPromoteVariation,
