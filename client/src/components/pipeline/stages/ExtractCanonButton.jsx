@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { Loader2, BookOpen } from 'lucide-react';
 import toast from '../../ui/Toast';
 import { extractPipelineCanonFromScript, PIPELINE_STAGE_LABELS } from '../../../services/apiPipeline';
@@ -17,6 +17,7 @@ function getTooltip({ gated, hasContent, hasUniverse, busy, stageLabel }) {
 
 export default function ExtractCanonButton({ issue, series, stageId, gated = false }) {
   const [busy, setBusy] = useState(false);
+  const hintId = useId();
   const hasContent = !!(issue.stages?.[stageId]?.output || '').trim();
   const hasUniverse = !!series?.universeId;
   const disabled = busy || gated || !hasContent || !hasUniverse;
@@ -41,18 +42,27 @@ export default function ExtractCanonButton({ issue, series, stageId, gated = fal
     );
   };
 
+  // `aria-describedby` (not `aria-label`) preserves "Extract canon" as the
+  // accessible name (WCAG 2.5.3 "Label in Name") and surfaces the
+  // disabled-state reason as supplementary context for screen-reader +
+  // keyboard users — `title` alone hides the blocker from non-mouse users.
+  // Matches the pattern in ComicScriptStage.jsx#renderConceptButton.
   return (
-    <button
-      type="button"
-      onClick={disabled ? undefined : handleClick}
-      aria-disabled={disabled || undefined}
-      title={tooltip}
-      className={`inline-flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs border bg-port-card text-gray-300 hover:border-port-accent/50 hover:text-white border-port-border ${
-        disabled ? 'opacity-40 cursor-not-allowed' : ''
-      }`}
-    >
-      {busy ? <Loader2 size={12} className="animate-spin" /> : <BookOpen size={12} />}
-      Extract canon
-    </button>
+    <>
+      <button
+        type="button"
+        onClick={disabled ? undefined : handleClick}
+        aria-disabled={disabled || undefined}
+        aria-describedby={hintId}
+        title={tooltip}
+        className={`inline-flex items-center gap-1 px-2 py-1.5 rounded-lg text-xs border bg-port-card text-gray-300 hover:border-port-accent/50 hover:text-white border-port-border ${
+          disabled ? 'opacity-40 cursor-not-allowed' : ''
+        }`}
+      >
+        {busy ? <Loader2 size={12} className="animate-spin" /> : <BookOpen size={12} />}
+        Extract canon
+      </button>
+      <span id={hintId} className="sr-only">{tooltip}</span>
+    </>
   );
 }
