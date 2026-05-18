@@ -94,7 +94,7 @@ _Nothing currently parked — pick the next item from the Backlog._
 
 ### Image / Video Gen UI
 
-- [ ] [multi-reference-image-editing-for-flux-2-ui] **Multi-reference image editing for FLUX.2.** UI accepting 2+ reference images + edit prompt. Swap registry's 9B entry to `FLUX.2-klein-9B-kv` for 2.5× speedup on multi-reference workflows. Gated repo — request access.
+- [ ] [flux2-multi-reference-python-runner] **FLUX.2 multi-reference Python runner.** The UI + server contract for multi-reference editing shipped 2026-05-17 (slug `multi-reference-image-editing-for-flux-2-ui`); the Python runner (`scripts/flux2_macos.py`) currently ignores the `--reference-images`/`--reference-strengths` args that `local.js` now passes. Wire diffusers' multi-reference API in the runner and swap `server/lib/mediaModels.js#flux2-klein-9b` `tokenizerRepo` to `FLUX.2-klein-9B-kv` (gated repo — requires the user to accept the license on HF). Validate end-to-end with 2–4 uploaded refs.
 - [ ] [world-builder-phase-2-external-sd-api-per-bucket] **World Builder Phase 2 — external SD-API + per-bucket model overrides.** Wire Together / Replicate / Fal into world-builder batch path so high-end renders are practical; let each bucket pick its own model.
 - [ ] [unify-videogen-resolutions-with-shared-image-gen] **Unify VideoGen `RESOLUTIONS` with shared image-gen list.** Move to `client/src/lib/videoGenResolutions.js` (or extend imageGenResolutions with `media: 'image'|'video'`) so dropdown + custom-fallback live in one place.
 

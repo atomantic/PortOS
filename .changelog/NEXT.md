@@ -19,6 +19,7 @@
 ### Media Gen
 
 - **Removed duplicate Universe Builder tab.** The MediaGen tab strip no longer shows a Universe Builder entry — the Create sidebar already links straight to `/universe-builder`. Legacy `/media/universe-builder/*` URLs redirect to the top-level routes so bookmarks keep working.
+- **Image Gen — multi-reference editing for FLUX.2 (UI + server contract).** A 4-slot reference-image picker appears under the Init Image block whenever a FLUX.2 model is selected. Each slot accepts a PNG/JPG/WebP upload with a 0..1 strength slider; populated slots are packed in submit order and posted as `referenceImage1`…`referenceImage4` multipart fields with a parallel `referenceStrengths` array. New `optionalUploadFields` helper in `server/lib/multipart.js`; the Image Gen route extends `generateSchema` with `referenceStrengths` (max 4 entries, 0..1 each), copies each upload into `data/images/ref-<uuid>.<ext>`, and threads the paths + strengths through `local.js` → `buildArgs` → the FLUX.2 Python runner via `--reference-images`/`--reference-strengths`. The Python runner currently ignores these flags pending the `FLUX.2-klein-9B-kv` model swap (see PLAN.md `[flux2-multi-reference-python-runner]`).
 
 ### Sharing
 

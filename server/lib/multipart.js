@@ -85,6 +85,18 @@ export function optionalUpload(fieldName, opts) {
   };
 }
 
+// Multi-field version of optionalUpload — same JSON-body passthrough, but
+// accepts the uploadFields field-name list. Files land on req.files keyed by
+// field name; non-multipart JSON requests skip the parser entirely.
+export function optionalUploadFields(fieldNames, opts) {
+  const uploader = uploadFields(fieldNames, opts);
+  return (req, res, next) => {
+    const ct = req.headers['content-type'] || '';
+    if (!ct.toLowerCase().startsWith('multipart/form-data')) return next();
+    return uploader(req, res, next);
+  };
+}
+
 function streamMultipart(req, boundary, acceptedNames, maxSize, fileFilter, next) {
   const PART_DELIM = Buffer.from('\r\n--' + boundary);
   const FIRST_DELIM = Buffer.from('--' + boundary);

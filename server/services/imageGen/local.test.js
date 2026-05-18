@@ -181,6 +181,65 @@ describe('imageGen local.buildArgs flux2 dispatch', () => {
     expect(args[args.indexOf('--image-strength') + 1]).toBe('0.7');
   });
 
+  it('emits --reference-images + --reference-strengths for flux2 multi-ref edits', () => {
+    mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
+    const { args } = buildArgs({
+      ...baseInput,
+      referenceImagePaths: ['/safe/path/ref-a.png', '/safe/path/ref-b.jpg'],
+      referenceImageStrengths: [0.85, 0.5],
+      model: {
+        id: 'flux2-klein-9b',
+        runner: 'flux2',
+        quantization: 'sdnq',
+        repo: 'Disty0/FLUX.2-klein-9B-SDNQ-4bit-dynamic-svd-r32',
+        tokenizerRepo: 'black-forest-labs/FLUX.2-klein-9B',
+      },
+    });
+    const refIdx = args.indexOf('--reference-images');
+    expect(refIdx).toBeGreaterThan(-1);
+    // Both paths land immediately after the flag, in submit order.
+    expect(args[refIdx + 1]).toBe('/safe/path/ref-a.png');
+    expect(args[refIdx + 2]).toBe('/safe/path/ref-b.jpg');
+    const strIdx = args.indexOf('--reference-strengths');
+    expect(strIdx).toBeGreaterThan(-1);
+    expect(args[strIdx + 1]).toBe('0.85');
+    expect(args[strIdx + 2]).toBe('0.5');
+  });
+
+  it('omits --reference-images entirely when no reference paths are supplied', () => {
+    mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
+    const { args } = buildArgs({
+      ...baseInput,
+      model: {
+        id: 'flux2-klein-4b',
+        runner: 'flux2',
+        quantization: 'sdnq',
+        repo: 'Disty0/FLUX.2-klein-4B-SDNQ-4bit-dynamic',
+        tokenizerRepo: 'black-forest-labs/FLUX.2-klein-4B',
+      },
+    });
+    expect(args).not.toContain('--reference-images');
+    expect(args).not.toContain('--reference-strengths');
+  });
+
+  it('skips --reference-strengths when paths are supplied without strengths', () => {
+    mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
+    const { args } = buildArgs({
+      ...baseInput,
+      referenceImagePaths: ['/safe/path/ref-only.png'],
+      referenceImageStrengths: [],
+      model: {
+        id: 'flux2-klein-4b',
+        runner: 'flux2',
+        quantization: 'sdnq',
+        repo: 'Disty0/FLUX.2-klein-4B-SDNQ-4bit-dynamic',
+        tokenizerRepo: 'black-forest-labs/FLUX.2-klein-4B',
+      },
+    });
+    expect(args).toContain('--reference-images');
+    expect(args).not.toContain('--reference-strengths');
+  });
+
   it('falls back to mflux dispatch for non-flux2 models on macOS', () => {
     // No flux2 mock needed — the branch shouldn't be taken at all.
     mockResolveFlux2Python.mockReturnValue(null);

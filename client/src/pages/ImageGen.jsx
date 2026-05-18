@@ -44,6 +44,12 @@ import { safeParseJSON } from '../lib/genUtils';
 
 const DEFAULT_NEGATIVE = 'blurry, low quality, distorted, deformed, ugly, watermark, text, signature';
 
+// Multi-reference editing (FLUX.2 only) — 4 fixed slots, each carrying an
+// uploaded File + a 0..1 strength weight. Slots are positional so the
+// blob-URL revoke pairs with the slot the user cleared.
+const REFERENCE_SLOT_COUNT = 4;
+const EMPTY_REF_SLOT = { file: null, previewUrl: null, strength: 1.0 };
+
 // Append LoRA trigger words to a prompt comma-separated, skipping any
 // already present. Compares against comma-separated prompt segments rather
 // than raw substrings so a short trigger like "cat" doesn't false-match
@@ -135,6 +141,9 @@ export default function ImageGen() {
   // the whole object so previewUrl can never out-live its file/name.
   const [initImage, setInitImage] = useState({ source: null, file: null, name: null, previewUrl: null });
   const [initImageStrength, setInitImageStrength] = useState(0.4);
+  // Form posts populated slots as `referenceImage1` … `referenceImage4`
+  // multipart fields with a parallel `referenceStrengths` array.
+  const [referenceImages, setReferenceImages] = useState(() => Array.from({ length: REFERENCE_SLOT_COUNT }, () => ({ ...EMPTY_REF_SLOT })));
 
   // Batch size: how many renders this submit kicks off. Only meaningful for
   // async modes (local + codex); external is synchronous and runs N=1.
@@ -368,9 +377,43 @@ export default function ImageGen() {
     if (initImage.previewUrl?.startsWith('blob:')) URL.revokeObjectURL(initImage.previewUrl);
     setInitImage({ source: null, file: null, name: null, previewUrl: null });
   };
-  // Object URL cleanup on unmount.
+
+  const handlePickReferenceImage = async (slotIndex, e) => {
+    const raw = e.target.files?.[0];
+    if (!raw) return;
+    const file = await normalizeImageOrientation(raw);
+    setReferenceImages((prev) => {
+      const next = [...prev];
+      const prior = next[slotIndex];
+      if (prior?.previewUrl?.startsWith('blob:')) URL.revokeObjectURL(prior.previewUrl);
+      next[slotIndex] = { file, previewUrl: URL.createObjectURL(file), strength: prior?.strength ?? 1.0 };
+      return next;
+    });
+  };
+  const handleClearReferenceImage = (slotIndex) => {
+    setReferenceImages((prev) => {
+      const next = [...prev];
+      const prior = next[slotIndex];
+      if (prior?.previewUrl?.startsWith('blob:')) URL.revokeObjectURL(prior.previewUrl);
+      next[slotIndex] = { ...EMPTY_REF_SLOT };
+      return next;
+    });
+  };
+  const handleReferenceStrengthChange = (slotIndex, strength) => {
+    setReferenceImages((prev) => {
+      const next = [...prev];
+      next[slotIndex] = { ...next[slotIndex], strength };
+      return next;
+    });
+  };
+
+  // Object URL cleanup on unmount — both the single init image and any
+  // populated reference slots.
   useEffect(() => () => {
     if (initImage.previewUrl?.startsWith('blob:')) URL.revokeObjectURL(initImage.previewUrl);
+    for (const slot of referenceImages) {
+      if (slot.previewUrl?.startsWith('blob:')) URL.revokeObjectURL(slot.previewUrl);
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -512,12 +555,24 @@ export default function ImageGen() {
       mode: 'local',
     };
     const hasInitImage = isLocalMode && initImage.source != null;
-    if (hasInitImage) {
-      const fd = buildFormData({
-        ...payload,
+    // Multi-reference editing is FLUX.2-only; gate the slot read so it can't
+    // accidentally fire on mflux or codex, and pack the populated slots so a
+    // gap (e.g. slots 1,3 filled, 2 empty) collapses to a packed two-image
+    // submit that aligns with the server's positional pairing.
+    const populatedRefs = (isLocalMode && isFlux2Model)
+      ? referenceImages.filter((s) => s.file != null)
+      : [];
+    const hasReferenceImages = populatedRefs.length > 0;
+    if (hasInitImage || hasReferenceImages) {
+      const initFields = hasInitImage ? {
         ...(initImage.source === 'upload' ? { initImage: initImage.file } : { initImageFile: initImage.name }),
         initImageStrength,
-      });
+      } : {};
+      const refFields = hasReferenceImages ? {
+        ...Object.fromEntries(populatedRefs.map((slot, i) => [`referenceImage${i + 1}`, slot.file])),
+        referenceStrengths: populatedRefs.map((s) => s.strength),
+      } : {};
+      const fd = buildFormData({ ...payload, ...initFields, ...refFields });
       const res = await fetch('/api/image-gen/generate', { method: 'POST', body: fd });
       if (!res.ok) {
         const body = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
@@ -938,6 +993,72 @@ export default function ImageGen() {
                   <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={handlePickInitImage} disabled={statusLoading} />
                 </label>
               )}
+            </div>
+          )}
+
+          {isLocalMode && isFlux2Model && (
+            <div>
+              <label className="block text-xs font-medium text-gray-400 mb-1">
+                Reference images <span className="text-gray-500 font-normal">(2–4 images for FLUX.2 multi-reference edit)</span>
+              </label>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                {referenceImages.map((slot, i) => {
+                  const slotId = `ref-image-${i}`;
+                  const strengthId = `ref-strength-${i}`;
+                  return (
+                    <div key={i} className="flex flex-col gap-1 p-2 rounded-lg border border-port-border bg-port-bg/30">
+                      <div className="text-[10px] uppercase tracking-wide text-gray-500">Ref {i + 1}</div>
+                      {slot.previewUrl ? (
+                        <>
+                          <div className="relative">
+                            <img
+                              src={slot.previewUrl}
+                              alt={`Reference ${i + 1}`}
+                              className="w-full h-16 object-cover rounded border border-port-border bg-port-bg"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => handleClearReferenceImage(i)}
+                              disabled={statusLoading}
+                              className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-port-card border border-port-border text-gray-300 hover:text-white hover:bg-port-error/40 flex items-center justify-center disabled:opacity-50"
+                              title={`Remove reference ${i + 1}`}
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          </div>
+                          <label htmlFor={strengthId} className="block text-[10px] text-gray-500">
+                            Strength {slot.strength.toFixed(2)}
+                          </label>
+                          <input
+                            id={strengthId}
+                            type="range" min={0} max={1} step={0.05}
+                            value={slot.strength}
+                            disabled={statusLoading}
+                            onChange={(e) => handleReferenceStrengthChange(i, Number(e.target.value))}
+                            className="w-full accent-port-accent"
+                          />
+                        </>
+                      ) : (
+                        <label
+                          htmlFor={slotId}
+                          className="flex flex-col items-center justify-center gap-1 h-[88px] border border-dashed border-port-border rounded text-[10px] text-gray-500 hover:text-white hover:border-port-accent cursor-pointer transition-colors"
+                        >
+                          <ImageIcon className="w-4 h-4" />
+                          Add
+                          <input
+                            id={slotId}
+                            type="file"
+                            accept="image/png,image/jpeg,image/webp"
+                            className="hidden"
+                            onChange={(e) => handlePickReferenceImage(i, e)}
+                            disabled={statusLoading}
+                          />
+                        </label>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           )}
 
