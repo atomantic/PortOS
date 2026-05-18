@@ -13,7 +13,7 @@ _Nothing currently parked — pick the next item from the Backlog._
 ### Sharing
 
 - [ ] [multi-hop-provenance-chains-re-share-authors-a] **Multi-hop provenance chains.** Re-share authors a fresh `origin` block; `chain[]` would preserve full attribution. Defer until users ask.
-- [ ] [same-collection-export-pattern-for-pipeline-series] **Same collection-export pattern for pipeline series with auto-collections.** Series renders that get auto-filed into a per-series collection should also flow through `manifest.collection`.
+- [ ] [coverautofiler-dispatcher-redundant-getseries] **`fileCoverIntoAutoCollection` dispatcher reads `series` 3-4× per cover completion.** `server/services/pipeline/coverUniverseFiler.js:43-52` does `seriesSvc.getSeries(seriesId)` purely to branch on `series.universeId`, then both leaf functions (`fileCoverIntoUniverseCollection` lines ~65/~71, `fileCoverIntoSeriesCollection` lines ~133/~154) re-fetch series via their own `getSeries` calls — worst case 4 full series.json reads per universe-linked cover, 3 for a series-linked one. Cover completion is human-pace (one or a few per render burst) so absolute waste is tiny, but trivially fixable: pass the dispatcher's already-fetched `series` into the leaf functions as an optional `_preloaded` arg to skip their first read. The mid-flight re-read (line ~71 in the universe path) is intentional race-detection and must stay. Surfaced by /simplify during the `[same-collection-export-pattern-for-pipeline-series]` PR; deferred to keep that diff focused on the new feature.
 
 ### Importer (deferred research)
 
