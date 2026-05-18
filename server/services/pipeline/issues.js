@@ -649,3 +649,43 @@ export function updateStageWithLatest(issueId, stageId, computeFn) {
   return { issue: mergedIssue, stage: mergedIssue.stages[stageId] };
   }); // end queueIssueWrite
 }
+
+/**
+ * Sync-orchestrator entry point. Merges a remote peer's issues array into
+ * local state INSIDE `queueIssueWrite`, so the read-modify-write window can't
+ * clobber (or be clobbered by) a concurrent updateIssue / updateStage /
+ * cover-render PATCH running through the same queue. Each incoming record
+ * passes through `sanitizeIssue` for shape enforcement (stage statuses,
+ * trimmed fields, valid id format). LWW by `updatedAt`; returns
+ * `{ applied, count }` where `count` is the number of issues actually
+ * changed/added.
+ */
+export function mergeIssuesFromSync(remoteIssues) {
+  if (!Array.isArray(remoteIssues)) return Promise.resolve({ applied: false, count: 0 });
+  return queueIssueWrite(async () => {
+    const state = await readState();
+    const localById = new Map(state.issues.map((i) => [i.id, i]));
+    let changed = 0;
+    for (const remote of remoteIssues) {
+      if (!remote || typeof remote !== 'object' || !isStr(remote.id)) continue;
+      const sanitized = sanitizeIssue(remote);
+      if (!sanitized) continue;
+      const local = localById.get(sanitized.id);
+      if (!local) {
+        localById.set(sanitized.id, sanitized);
+        changed++;
+      } else {
+        const localTs = local.updatedAt || '';
+        const remoteTs = sanitized.updatedAt || '';
+        if (remoteTs > localTs) {
+          localById.set(sanitized.id, sanitized);
+          changed++;
+        }
+      }
+    }
+    if (changed === 0) return { applied: false, count: 0 };
+    state.issues = Array.from(localById.values());
+    await writeState(state);
+    return { applied: true, count: changed };
+  });
+}

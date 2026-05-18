@@ -309,3 +309,42 @@ export async function deleteSeries(id) {
     return { id };
   });
 }
+
+/**
+ * Sync-orchestrator entry point. Merges a remote peer's series array into
+ * local state INSIDE `queueSeriesWrite`, so the read-modify-write window
+ * can't clobber (or be clobbered by) a concurrent bible edit, season-metadata
+ * PATCH, season-cover render PATCH, or season-cover filename hook also running
+ * through the same queue. Each incoming record passes through `sanitizeSeries`
+ * for shape enforcement. LWW by `updatedAt`; returns `{ applied, count }`
+ * where `count` is the number of series actually changed/added.
+ */
+export async function mergeSeriesFromSync(remoteSeries) {
+  if (!Array.isArray(remoteSeries)) return { applied: false, count: 0 };
+  return queueSeriesWrite(async () => {
+    const state = await readState();
+    const localById = new Map(state.series.map((s) => [s.id, s]));
+    let changed = 0;
+    for (const remote of remoteSeries) {
+      if (!remote || typeof remote !== 'object' || !isStr(remote.id)) continue;
+      const sanitized = sanitizeSeries(remote);
+      if (!sanitized) continue;
+      const local = localById.get(sanitized.id);
+      if (!local) {
+        localById.set(sanitized.id, sanitized);
+        changed++;
+      } else {
+        const localTs = local.updatedAt || '';
+        const remoteTs = sanitized.updatedAt || '';
+        if (remoteTs > localTs) {
+          localById.set(sanitized.id, sanitized);
+          changed++;
+        }
+      }
+    }
+    if (changed === 0) return { applied: false, count: 0 };
+    state.series = Array.from(localById.values());
+    await writeState(state);
+    return { applied: true, count: changed };
+  });
+}

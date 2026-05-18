@@ -107,15 +107,21 @@ describe('dataSync — universe category', () => {
   });
 
   it('applyRemote preserves local-only `runs[]` when only universes change', async () => {
-    writeJSON(UNIVERSE_PATH, {
-      universes: [],
-      runs: [{ id: 'r1', kind: 'expand' }]
-    });
+    // Runs need a valid shape — `sanitizeRun` requires id + universeId since
+    // the merge now routes through the service-level entry point that
+    // sanitizes every read.
+    const localRun = {
+      id: 'r1', universeId: 'u-local', collectionId: null,
+      jobIds: [], promptCount: 0, createdAt: '2026-05-17T09:00:00Z',
+    };
+    writeJSON(UNIVERSE_PATH, { universes: [], runs: [localRun] });
     await dataSync.applyRemote('universe', {
       universes: [{ id: 'u1', name: 'X', updatedAt: '2026-05-17T10:00:00Z' }]
     });
     const persisted = readJSON(UNIVERSE_PATH);
-    expect(persisted.runs).toEqual([{ id: 'r1', kind: 'expand' }]);
+    expect(persisted.runs).toHaveLength(1);
+    expect(persisted.runs[0].id).toBe('r1');
+    expect(persisted.runs[0].universeId).toBe('u-local');
   });
 });
 
@@ -139,7 +145,7 @@ describe('dataSync — pipeline category', () => {
     expect(snap.data.issues).toEqual([]);
   });
 
-  it('applyRemote merges series + issues; count reports issues (the primary entity)', async () => {
+  it('applyRemote merges series + issues; count reports records actually changed', async () => {
     writeJSON(SERIES_PATH, { series: [{ id: 'ser-1', name: 'Old', updatedAt: '2026-05-17T10:00:00Z' }] });
     writeJSON(ISSUES_PATH, { issues: [] });
 
@@ -153,10 +159,13 @@ describe('dataSync — pipeline category', () => {
       ]
     });
     expect(result.applied).toBe(true);
-    // `count` matches the other categories' single-entity-type semantic — for
-    // pipeline that's `issues` (user-facing primary); mixing series+issues
-    // would over-report when callers sum across categories.
-    expect(result.count).toBe(1);
+    // `count` is records actually changed/added this cycle, NOT total post-
+    // merge records (which would over-report when callers sum across cycles
+    // or categories). Two series updated/added + one issue added = 3.
+    expect(result.count).toBe(3);
+    // Per-side breakdown surfaced for telemetry that wants to distinguish them.
+    expect(result.seriesChanged).toBe(2);
+    expect(result.issuesChanged).toBe(1);
 
     const persistedSeries = readJSON(SERIES_PATH).series;
     expect(persistedSeries).toHaveLength(2);
@@ -166,6 +175,22 @@ describe('dataSync — pipeline category', () => {
     const persistedIssues = readJSON(ISSUES_PATH).issues;
     expect(persistedIssues).toHaveLength(1);
     expect(persistedIssues[0].seriesId).toBe('ser-2');
+  });
+
+  it('applyRemote count reports only the changed side when only series differs', async () => {
+    writeJSON(SERIES_PATH, { series: [{ id: 'ser-1', name: 'Old', updatedAt: '2026-05-17T10:00:00Z' }] });
+    // Local issues exist but won't change — sync must not inflate count to
+    // include them (the pre-fix bug counted total post-merge issues).
+    writeJSON(ISSUES_PATH, { issues: [{ id: 'iss-1', seriesId: 'ser-1', title: 'Local', updatedAt: '2026-05-17T10:00:00Z' }] });
+
+    const result = await dataSync.applyRemote('pipeline', {
+      series: [{ id: 'ser-1', name: 'New', updatedAt: '2026-05-17T11:00:00Z' }],
+      issues: [{ id: 'iss-1', seriesId: 'ser-1', title: 'Stale', updatedAt: '2026-05-17T09:00:00Z' }], // older, skipped
+    });
+    expect(result.applied).toBe(true);
+    expect(result.count).toBe(1); // one series change; issues side unchanged
+    expect(result.seriesChanged).toBe(1);
+    expect(result.issuesChanged).toBe(0);
   });
 
   it('applyRemote is a no-op when nothing is newer', async () => {
@@ -186,10 +211,11 @@ describe('dataSync — pipeline category', () => {
     writeJSON(SERIES_PATH, { series: [{ id: 'ser-1', updatedAt: '2026-05-17T10:00:00Z' }] });
     writeJSON(ISSUES_PATH, { issues: [] });
 
-    // Only issues change.
+    // Only issues change. Use a valid issue payload (id + seriesId + title)
+    // since the merge now routes through sanitizeIssue.
     await dataSync.applyRemote('pipeline', {
       series: [{ id: 'ser-1', updatedAt: '2026-05-17T09:00:00Z' }], // older → skipped
-      issues: [{ id: 'iss-new', seriesId: 'ser-1', updatedAt: '2026-05-17T11:00:00Z' }]
+      issues: [{ id: 'iss-new', seriesId: 'ser-1', title: 'New Issue', updatedAt: '2026-05-17T11:00:00Z' }]
     });
 
     // Series file untouched (no incidental rewrite that could clobber a

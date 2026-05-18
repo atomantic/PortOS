@@ -912,6 +912,53 @@ export async function deleteUniverse(id) {
   return { id };
 }
 
+/**
+ * Sync-orchestrator entry point. Merges a remote peer's universe array into
+ * local state INSIDE `queueUniverseWrite`, so the read-modify-write window
+ * can't clobber (or be clobbered by) a concurrent local LLM auto-save,
+ * promote-variation, or handleSave running through the same queue.
+ *
+ * Each incoming remote record passes through `sanitizeTemplate` so older-
+ * schema payloads (pre-v4 universes missing `kind`, prose stylePrompt/
+ * negativePrompt, retired `characters` bucket) land on disk already migrated —
+ * matching every other entry path into this file (`createUniverse`,
+ * `insertUniverseWithId`, `updateUniverse`).
+ *
+ * LWW semantics by `updatedAt`. Local-only `runs[]` survives the merge
+ * (ephemeral, per-peer). Returns `{ applied, count }` where `count` is the
+ * number of universes actually changed/added by this merge — NOT the total
+ * post-merge count — so callers summing across categories don't over-report.
+ */
+export async function mergeUniversesFromSync(remoteUniverses) {
+  if (!Array.isArray(remoteUniverses)) return { applied: false, count: 0 };
+  return queueUniverseWrite(async () => {
+    const state = await readState();
+    const localById = new Map(state.universes.map((u) => [u.id, u]));
+    let changed = 0;
+    for (const remote of remoteUniverses) {
+      if (!remote || typeof remote !== 'object' || !isStr(remote.id)) continue;
+      const sanitized = sanitizeTemplate(remote);
+      if (!sanitized) continue;
+      const local = localById.get(sanitized.id);
+      if (!local) {
+        localById.set(sanitized.id, sanitized);
+        changed++;
+      } else {
+        const localTs = local.updatedAt || '';
+        const remoteTs = sanitized.updatedAt || '';
+        if (remoteTs > localTs) {
+          localById.set(sanitized.id, sanitized);
+          changed++;
+        }
+      }
+    }
+    if (changed === 0) return { applied: false, count: 0 };
+    state.universes = Array.from(localById.values());
+    await writeState(state);
+    return { applied: true, count: changed };
+  });
+}
+
 export async function recordRun(run) {
   const sanitized = sanitizeRun(run);
   if (!sanitized) throw makeErr('Invalid run payload', ERR_VALIDATION);

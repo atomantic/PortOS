@@ -10,6 +10,9 @@ import crypto from 'crypto';
 import { writeFile } from 'fs/promises';
 import { join } from 'path';
 import { ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
+import { mergeUniversesFromSync } from './universeBuilder.js';
+import { mergeSeriesFromSync } from './pipeline/series.js';
+import { mergeIssuesFromSync } from './pipeline/issues.js';
 
 // --- Category Definitions ---
 
@@ -357,24 +360,17 @@ async function getUniverseSnapshot() {
 
 async function applyUniverseRemote(remoteData) {
   if (!remoteData) return { applied: false, count: 0 };
-
-  const local = await readJSONFile(UNIVERSE_BUILDER_FILE, { universes: [], runs: [] });
-  const { merged: mergedUniverses, changed } = mergeArraysByKey(
-    local.universes || [],
-    remoteData.universes || [],
-    'id',
-    'updatedAt'
-  );
-
-  if (!changed) return { applied: false, count: 0 };
-
-  await ensureDir(PATHS.data);
-  await writeFile(
-    UNIVERSE_BUILDER_FILE,
-    JSON.stringify({ ...local, universes: mergedUniverses }, null, 2)
-  );
-  console.log(`🔄 Universe sync: merged ${mergedUniverses.length} universe(s)`);
-  return { applied: true, count: mergedUniverses.length };
+  // Routes through `mergeUniversesFromSync` so the read-modify-write runs
+  // INSIDE `queueUniverseWrite` (serialized against every other writer:
+  // create / update / promote-variation / handleSave) and each incoming
+  // remote record passes through `sanitizeTemplate` for schema-version
+  // backfill — older peers landing pre-v4 records get them migrated on the
+  // way in instead of polluting disk with un-backfilled state.
+  const result = await mergeUniversesFromSync(remoteData.universes || []);
+  if (result.applied) {
+    console.log(`🔄 Universe sync: merged ${result.count} universe(s)`);
+  }
+  return result;
 }
 
 // --- Category: Pipeline ---
@@ -393,43 +389,33 @@ async function getPipelineSnapshot() {
 
 async function applyPipelineRemote(remoteData) {
   if (!remoteData) return { applied: false, count: 0 };
-
-  const [localSeries, localIssues] = await Promise.all([
-    readJSONFile(PIPELINE_SERIES_FILE, { series: [] }),
-    readJSONFile(PIPELINE_ISSUES_FILE, { issues: [] }),
+  // Routes through the per-file merge entry points so each side's
+  // read-modify-write runs INSIDE its own file-level write queue
+  // (`queueSeriesWrite` / `queueIssueWrite`) — serialized against every other
+  // local writer (bible edits, season metadata PATCH, season-cover render
+  // PATCH, updateStage, etc.). Each incoming record passes through its
+  // service's sanitizer for shape enforcement on the way in.
+  const [seriesResult, issuesResult] = await Promise.all([
+    mergeSeriesFromSync(remoteData.series || []),
+    mergeIssuesFromSync(remoteData.issues || []),
   ]);
 
-  const { merged: mergedSeries, changed: seriesChanged } = mergeArraysByKey(
-    localSeries.series || [],
-    remoteData.series || [],
-    'id',
-    'updatedAt'
-  );
-  const { merged: mergedIssues, changed: issuesChanged } = mergeArraysByKey(
-    localIssues.issues || [],
-    remoteData.issues || [],
-    'id',
-    'updatedAt'
-  );
+  const seriesChanged = seriesResult.count;
+  const issuesChanged = issuesResult.count;
+  if (seriesChanged === 0 && issuesChanged === 0) return { applied: false, count: 0 };
 
-  if (!seriesChanged && !issuesChanged) return { applied: false, count: 0 };
-
-  await ensureDir(PATHS.data);
-  await Promise.all([
-    seriesChanged
-      ? writeFile(PIPELINE_SERIES_FILE, JSON.stringify({ ...localSeries, series: mergedSeries }, null, 2))
-      : null,
-    issuesChanged
-      ? writeFile(PIPELINE_ISSUES_FILE, JSON.stringify({ ...localIssues, issues: mergedIssues }, null, 2))
-      : null,
-  ].filter(Boolean));
-
-  // Return the issue count — `issues` are this category's user-facing primary
-  // records, so the per-category summary stays comparable across categories
-  // (each reports one entity-type count). Summing series+issues would
-  // over-report when callers aggregate across categories.
-  console.log(`🔄 Pipeline sync: merged ${mergedSeries.length} series + ${mergedIssues.length} issue(s)`);
-  return { applied: true, count: mergedIssues.length };
+  // `count` is the total number of records actually changed/added by this
+  // merge (NOT total post-merge records — that would over-report when callers
+  // sum across categories or compare cycle-over-cycle deltas). `seriesChanged`
+  // / `issuesChanged` are surfaced separately so per-side telemetry stays
+  // distinguishable.
+  console.log(`🔄 Pipeline sync: merged ${seriesChanged} series + ${issuesChanged} issue(s)`);
+  return {
+    applied: true,
+    count: seriesChanged + issuesChanged,
+    seriesChanged,
+    issuesChanged,
+  };
 }
 
 // --- Public API ---
