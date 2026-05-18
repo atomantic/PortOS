@@ -615,8 +615,8 @@ router.post('/:id/characters/:entryId/expand', asyncHandler(async (req, res) => 
 }));
 
 // Generate a single dense artist reference sheet (turnaround + expressions +
-// palette + wardrobe + props + hand gestures) using the shipped layout
-// template + the character's primary portrait as multi-reference inputs.
+// palette + wardrobe + props + hand gestures) from a structured TEXT prompt
+// — no init image required, so it works across codex / local backends.
 // Returns immediately with `{ jobId, generationId }`; client subscribes to
 // SSE for progress, and the server-side completion handler stamps
 // `character.referenceSheetImageRef` on success.
@@ -624,7 +624,6 @@ const renderReferenceSheetSchema = z.object({
   overridePrompt: z.string().trim().max(8000).optional(),
   overrideNegativePrompt: z.string().trim().max(2000).optional(),
   modelId: z.string().trim().max(64).optional(),
-  template: z.string().trim().max(120).optional(),
 });
 router.post('/:id/characters/:entryId/render-reference-sheet', asyncHandler(async (req, res) => {
   const body = validateRequest(renderReferenceSheetSchema, req.body ?? {});

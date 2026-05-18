@@ -2,10 +2,12 @@
  * Character Reference Sheet panel — embeds inside the universe Cast section.
  *
  * Shows the existing sheet (if any) as a thumbnail that opens a lightbox, plus
- * a Generate / Regenerate button that kicks off the FLUX.2 render. Subscribes
- * to media-job SSE for live progress; calls `onSheetCompleted(entryId, filename)`
- * so the parent can drop the new filename into the universe draft without
- * needing a fresh GET (the server has already persisted it).
+ * a Generate / Regenerate button that kicks off the render. The renderer is
+ * text-template-based and works across codex + local image-gen modes (the
+ * user's current Image Gen setting decides). Subscribes to media-job SSE
+ * for live progress; calls `onSheetCompleted(entryId, filename)` so the
+ * parent can drop the new filename into the universe draft without needing
+ * a fresh GET (the server has already persisted it).
  */
 
 import { useEffect, useRef, useState } from 'react';
@@ -66,11 +68,11 @@ export default function CharacterReferenceSheetPanel({
       const entryId = entry?.id;
       destFilenameRef.current = null;
       setJobId(null);
-      // The SSE 'completed' event fires when the FLUX.2 child exits — BEFORE
-      // the server-side onSheetComplete listener has copied the gallery PNG
-      // into /data/image-refs/ and stamped the character. Verify the file is
-      // actually reachable before flipping the UI; otherwise the <img>
-      // renders a 404 that the browser caches.
+      // The SSE 'completed' event fires when the image-gen child exits —
+      // BEFORE the server-side onSheetComplete listener has copied the
+      // gallery PNG into /data/image-refs/ and stamped the character.
+      // Verify the file is actually reachable before flipping the UI;
+      // otherwise the <img> renders a 404 that the browser caches.
       waitForImageRef(dest).then((ok) => {
         if (!mountedRef.current) return;
         if (ok) onSheetCompleted?.(entryId, dest);

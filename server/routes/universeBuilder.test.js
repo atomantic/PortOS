@@ -782,18 +782,18 @@ describe('universe-builder routes', () => {
       expect(renderCharacterReferenceSheetMock).not.toHaveBeenCalled();
     });
 
-    it('maps a service "template missing" error onto a 500 with the right code', async () => {
+    it('maps a service "unsupported mode" error onto a 400 with the right code', async () => {
       renderCharacterReferenceSheetMock.mockRejectedValueOnce(
-        Object.assign(new Error('Character reference sheet template not found'), {
-          status: 500,
-          code: 'UNIVERSE_CHARACTER_SHEET_NO_TEMPLATE',
+        Object.assign(new Error('Character reference sheet rendering needs codex or local image-gen mode'), {
+          status: 400,
+          code: 'UNIVERSE_CHARACTER_SHEET_UNSUPPORTED_MODE',
         }),
       );
       const res = await request(buildApp())
         .post('/api/universe-builder/u-1/characters/c-1/render-reference-sheet')
         .send({});
-      expect(res.status).toBe(500);
-      expect(res.body.code).toBe('UNIVERSE_CHARACTER_SHEET_NO_TEMPLATE');
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('UNIVERSE_CHARACTER_SHEET_UNSUPPORTED_MODE');
     });
   });
 });

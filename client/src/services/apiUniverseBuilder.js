@@ -186,11 +186,11 @@ export const expandUniverseCharacter = (universeId, entryId, { providerId, model
 // SSE for live progress. Server-side completion handler stamps the resulting
 // filename onto `character.referenceSheetImageRef` automatically.
 export const renderCharacterReferenceSheet = (universeId, entryId, {
-  overridePrompt, overrideNegativePrompt, modelId, template,
+  overridePrompt, overrideNegativePrompt, modelId,
 } = {}) =>
   request(`/universe-builder/${encodeURIComponent(universeId)}/characters/${encodeURIComponent(entryId)}/render-reference-sheet`, {
     method: 'POST',
-    body: JSON.stringify({ overridePrompt, overrideNegativePrompt, modelId, template }),
+    body: JSON.stringify({ overridePrompt, overrideNegativePrompt, modelId }),
   });
 
 // Cast-wide differentiate — single LLM call rewrites every character so the

@@ -1,59 +1,49 @@
 /**
- * Universe Character — Reference Sheet Renderer.
+ * Universe Character — Reference Sheet Renderer (text-template).
  *
  * Generates a single dense artist reference sheet per universe canon
- * character using the shipped layout template as a low-strength init image
- * plus the character's primary portrait as a FLUX.2 multi-reference input.
+ * character from a structured TEXT prompt that describes every zone of
+ * the sheet (turnaround, expressions, palette, wardrobe, props, gestures).
+ * No init image or multi-reference input is required — the rich prompt
+ * itself is the "template", so the renderer works equally well across
+ * any image-gen backend (codex, local, future nano-banana).
  *
  * The route returns the generation id immediately; this module subscribes
- * to `imageGenEvents` to copy the result into data/image-refs/ and stamp
+ * to mediaJobEvents to copy the result into data/image-refs/ and stamp
  * `character.referenceSheetImageRef` once the render completes.
  */
 
 import { copyFile } from 'fs/promises';
 import { join, basename } from 'path';
-import { PATHS, resolveTemplateAsset, resolveGalleryImage, ensureDir } from '../lib/fileUtils.js';
+import { PATHS, ensureDir } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { getSettings } from './settings.js';
 import { getUniverse, updateUniverse } from './universeBuilder.js';
 import { buildStyleClause } from './universeCanon.js';
-import { getImageModels, isFlux2 } from '../lib/mediaModels.js';
+import { getImageModels } from '../lib/mediaModels.js';
 import { enqueueJob, mediaJobEvents } from './mediaJobQueue/index.js';
 
-const DEFAULT_TEMPLATE = 'character-reference-sheet.png';
-// 2048×1536 keeps panel labels legible while staying inside FLUX.2 Klein's
-// comfort envelope on Apple Silicon (≈10–15s/iter).
+// 2048×1536 keeps panel labels legible while still rendering in a single
+// pass on Apple Silicon local backends. Codex / nano-banana ignore the
+// hint past 1536 max edge but still honor the aspect ratio.
 const DEFAULT_WIDTH = 2048;
 const DEFAULT_HEIGHT = 1536;
 
-// Resolve the model id with a FLUX.2-first preference: the reference sheet's
-// init-image + multi-reference portrait anchoring only flow through FLUX.2's
-// CLI flags, so a non-FLUX.2 model would silently drop the portrait. Order:
-//  1. Explicit override — trust the user's deliberate choice even if it's
-//     not FLUX.2 (degraded output is their call).
-//  2. Settings model IF it's FLUX.2 — honors the user's persisted preference
-//     when it's a valid sheet-renderer model.
-//  3. First FLUX.2 model in the registry — best default for the sheet.
-//  4. Settings model regardless of family — degraded output but at least the
-//     user's chosen backend.
-//  5. First available local model — last-resort fallback.
+// Resolve the local-mode model id. With pure text-template rendering we no
+// longer depend on FLUX.2-specific init-image / multi-ref flags, so any
+// registered model is fair game. Order:
+//   1. Explicit override (when it matches a registered model).
+//   2. settings.imageGen.local.modelId.
+//   3. First available local model.
 // Returns null when nothing is registered; caller surfaces the 400.
 export function resolveSheetModelId({ override, settings, allModels }) {
   const findById = (id) => (typeof id === 'string' ? allModels.find((m) => m.id === id) : null);
   const trimmedOverride = typeof override === 'string' ? override.trim() : '';
-  const overrideModel = findById(trimmedOverride);
-  if (overrideModel) return overrideModel.id;
-  const settingsModel = findById(settings?.imageGen?.local?.modelId);
-  if (settingsModel && isFlux2(settingsModel)) return settingsModel.id;
-  const firstFlux2 = allModels.find(isFlux2);
-  if (firstFlux2) return firstFlux2.id;
-  if (settingsModel) return settingsModel.id;
-  return allModels[0]?.id || null;
+  return findById(trimmedOverride)?.id
+    ?? findById(settings?.imageGen?.local?.modelId)?.id
+    ?? allModels[0]?.id
+    ?? null;
 }
-// The template anchors panel layout, not content — keep the strength low so
-// the character + style are still driven by the prompt + portrait reference.
-const TEMPLATE_INIT_STRENGTH = 0.25;
-const PORTRAIT_REFERENCE_STRENGTH = 0.85;
 
 const DEFAULT_EXPRESSIONS = Object.freeze([
   'neutral', 'curious', 'worried', 'surprised', 'amused', 'determined', 'relaxed',
@@ -123,15 +113,14 @@ const flattenNamedList = (items, defaults) => {
 /**
  * Build the prompt + render options for one character's reference sheet.
  * Pure function — does no I/O, doesn't enqueue anything. The route handler
- * combines this with `getUniverse` / `generateImage` to drive the actual
- * render.
+ * combines this with `getUniverse` / the media-job queue to drive the
+ * actual render. Pure text — no init image, no multi-reference plumbing.
  *
- * Returns `{ prompt, negativePrompt, width, height, modelId, initImagePath,
- * initImageStrength, referenceImagePaths, referenceImageStrengths }`. Paths
- * are absolute (already through resolveTemplateAsset / resolveImageRef);
- * missing paths fall through to omitted args (the runner handles that).
+ * Returns `{ prompt, negativePrompt, width, height, modelId }`. modelId is
+ * always null here; the renderer fills it in once the active image-gen
+ * mode is known.
  */
-export function buildCharacterReferenceSheetPrompt(universe, character, { template = DEFAULT_TEMPLATE } = {}) {
+export function buildCharacterReferenceSheetPrompt(universe, character) {
   if (!universe || !character) {
     throw new ServerError('buildCharacterReferenceSheetPrompt: universe and character are required', {
       status: 400, code: 'VALIDATION_ERROR',
@@ -198,27 +187,10 @@ export function buildCharacterReferenceSheetPrompt(universe, character, { templa
     propsLine ? `Prop showcase panel (lower middle): a small still-life of the character's signature props — ${propsLine}.` : '',
     `Hand gestures panel (lower right): a row of five labeled hand close-ups showing the character's habitual gestures — ${gesturesLine}.`,
     'Layout: thin black panel borders on off-white paper. Light grey labels under each zone. Consistent character proportions across every view. Render in the same illustrated style throughout the page — do NOT mix art styles between panels.',
-    'Honor the layout shown in the reference image: keep the same panel grid, label positions, and zone proportions. Do NOT add panels that aren\'t in the template; do NOT omit panels that are.',
   ].filter(Boolean);
 
   const prompt = promptParts.join('\n\n');
   const negativePrompt = 'multiple characters in the same panel, photographs, text artifacts, watermark, signature, blurry, distorted anatomy, low contrast labels';
-
-  const initImagePath = resolveTemplateAsset(template);
-  // `primaryImageRef` is a gallery filename (lives in PATHS.images, same as
-  // the rest of the character's imageRefs[]). Use resolveGalleryImage —
-  // resolveImageRef looks in PATHS.imageRefs and would always return null.
-  //
-  // CAVEAT: the FLUX.2 Python runner currently accepts `--reference-images`
-  // as a no-op argparse stub (see PLAN.md `[flux2-multi-reference-python-runner]`),
-  // so the portrait anchor is BEST-EFFORT until that wiring lands —
-  // the prompt enumeration + template init image still produce a usable
-  // sheet, just without portrait-driven facial consistency across panels.
-  // We still plumb the path end-to-end so when the runner adopts multi-ref
-  // the feature works without a server-side change.
-  const portraitRef = trim(character.primaryImageRef) ? resolveGalleryImage(character.primaryImageRef) : null;
-  const referenceImagePaths = portraitRef ? [portraitRef] : [];
-  const referenceImageStrengths = portraitRef ? [PORTRAIT_REFERENCE_STRENGTH] : [];
 
   return {
     prompt,
@@ -229,10 +201,6 @@ export function buildCharacterReferenceSheetPrompt(universe, character, { templa
     // resolveSheetModelId. Returned as null here so the prompt builder stays
     // pure (no settings I/O) and the renderer is the single decision point.
     modelId: null,
-    initImagePath,
-    initImageStrength: initImagePath ? TEMPLATE_INIT_STRENGTH : null,
-    referenceImagePaths,
-    referenceImageStrengths,
   };
 }
 
@@ -275,15 +243,7 @@ export async function renderCharacterReferenceSheet(universeId, entryId, options
     );
   }
 
-  const built = buildCharacterReferenceSheetPrompt(universe, character, {
-    template: options.template || DEFAULT_TEMPLATE,
-  });
-  if (!built.initImagePath) {
-    throw new ServerError(
-      'Character reference sheet template not found — run `npm run install:all` to provision data/templates/.',
-      { status: 500, code: 'UNIVERSE_CHARACTER_SHEET_NO_TEMPLATE' },
-    );
-  }
+  const built = buildCharacterReferenceSheetPrompt(universe, character);
 
   const prompt = typeof options.overridePrompt === 'string' && options.overridePrompt.trim()
     ? options.overridePrompt.trim()
@@ -293,57 +253,52 @@ export async function renderCharacterReferenceSheet(universeId, entryId, options
     : built.negativePrompt;
 
   const settings = await getSettings();
-  // Honor the user's current image-gen mode. The reference-sheet renderer
-  // relies on init-image + multi-ref editing (FLUX.2 features) — codex /
-  // external backends would silently drop those args and produce a sheet
-  // without the layout anchor. Surface that as a 400 with a clear remediation
-  // so the user knows to switch in Settings → Image Gen rather than getting
-  // a poor render with no explanation.
+  // Text-template rendering works with any image-gen backend. Route through
+  // the media-job queue with the active mode set; codex and local are both
+  // first-class. External SD-API has no multi-zone layout support, so it
+  // gets a clear remediation rather than a silently-degraded render.
   const activeMode = settings.imageGen?.mode || 'local';
-  if (activeMode !== 'local') {
+  const baseParams = {
+    mode: activeMode,
+    prompt,
+    negativePrompt,
+    width: built.width,
+    height: built.height,
+  };
+
+  let modelId = null;
+  let params;
+  if (activeMode === 'codex') {
+    const c = settings.imageGen?.codex || {};
+    if (!c.enabled) {
+      throw new ServerError(
+        'Codex Imagegen is disabled — enable it in Settings → Image Gen first',
+        { status: 400, code: 'CODEX_IMAGEGEN_DISABLED' },
+      );
+    }
+    modelId = c.model || 'codex';
+    params = { ...baseParams, codexPath: c.codexPath, model: c.model };
+  } else if (activeMode === 'local') {
+    const allModels = getImageModels();
+    modelId = resolveSheetModelId({ override: options.modelId, settings, allModels });
+    if (!modelId) {
+      throw new ServerError(
+        'No local image-gen models are registered. Install a model via `bash scripts/setup-image-video.sh` before generating a reference sheet.',
+        { status: 400, code: 'UNIVERSE_CHARACTER_SHEET_NO_MODEL' },
+      );
+    }
+    params = { ...baseParams, pythonPath: settings.imageGen?.local?.pythonPath || null, modelId };
+  } else {
     throw new ServerError(
-      `Character reference sheet rendering requires local image-gen mode (currently: ${activeMode}). The sheet uses the layout template as a low-strength init image and the character's primary portrait as a FLUX.2 multi-reference input — both unsupported by ${activeMode}. Switch in Settings → Image Gen.`,
-      { status: 400, code: 'UNIVERSE_CHARACTER_SHEET_REQUIRES_LOCAL' },
+      `Character reference sheet rendering needs codex or local image-gen mode (currently: ${activeMode}). External SD-API doesn't support the multi-zone layout this renderer produces — switch in Settings → Image Gen.`,
+      { status: 400, code: 'UNIVERSE_CHARACTER_SHEET_UNSUPPORTED_MODE' },
     );
   }
-  const allModels = getImageModels();
-  const modelId = resolveSheetModelId({ override: options.modelId, settings, allModels });
-  if (!modelId) {
-    throw new ServerError(
-      'No local image-gen models are registered. Install a FLUX.2 (or other local) model via `bash scripts/setup-image-video.sh` before generating a reference sheet.',
-      { status: 400, code: 'UNIVERSE_CHARACTER_SHEET_NO_MODEL' },
-    );
-  }
-  const pythonPath = settings.imageGen?.local?.pythonPath || null;
 
-  // One-line operator visibility: if a portrait was supplied AND the model
-  // can't actually consume it (the FLUX.2 runner currently ignores
-  // --reference-images per PLAN.md `[flux2-multi-reference-python-runner]`,
-  // and non-FLUX.2 models drop the arg entirely), log that the anchor is
-  // best-effort so a confused user can see why face consistency wandered.
-  if (built.referenceImagePaths.length > 0) {
-    console.log(`ℹ️ Character sheet portrait anchor is best-effort — model=${modelId} runner currently ignores --reference-images. Sheet still renders via prompt + template.`);
-  }
-
-  // Enqueue through mediaJobQueue so the render serializes through the GPU
-  // lane alongside Image Gen / Universe Builder renders. Direct generateImage
-  // calls would clobber imageGen/local.js's module-level activeProcess state
-  // when two sheets are requested back-to-back AND wouldn't appear in
-  // /api/media-jobs for reconnects. The queue assigns its own jobId — we use
-  // it as the per-character "latest pending render" key.
-  const queued = enqueueJob({
-    kind: 'image',
-    params: {
-      pythonPath, modelId,
-      prompt, negativePrompt,
-      width: built.width,
-      height: built.height,
-      initImagePath: built.initImagePath,
-      initImageStrength: built.initImageStrength,
-      referenceImagePaths: built.referenceImagePaths,
-      referenceImageStrengths: built.referenceImageStrengths,
-    },
-  });
+  // Enqueue through mediaJobQueue so the render serializes through the right
+  // backend lane alongside Image Gen / Universe Builder renders. The queue
+  // dispatches by `params.mode` (codex → codex lane, local → GPU lane).
+  const queued = enqueueJob({ kind: 'image', params });
   const jobId = queued.jobId;
   // Claim the latest-pending slot for this character. onSheetComplete checks
   // it before stamping — guards against an older-but-slower render finishing
@@ -392,7 +347,7 @@ export async function renderCharacterReferenceSheet(universeId, entryId, options
   // can patch optimistically on SSE completion without a universe refetch.
   // onSheetComplete derives the same filename from the same inputs.
   const destFilename = sheetFilename(universeId, entryId, jobId);
-  console.log(`🎨 Universe character sheet render — universe=${universeId.slice(0, 8)} entry=${entryId.slice(0, 8)} job=${jobId.slice(0, 8)} model=${modelId} position=${queued.position}`);
+  console.log(`🎨 Universe character sheet render — universe=${universeId.slice(0, 8)} entry=${entryId.slice(0, 8)} job=${jobId.slice(0, 8)} mode=${activeMode} model=${modelId} position=${queued.position}`);
   return {
     jobId,
     // `generationId` retained for client back-compat (older clients keyed
@@ -455,7 +410,6 @@ export async function onSheetComplete({ universeId, entryId, jobId, sourceFilena
 }
 
 export const REFERENCE_SHEET_CONSTANTS = Object.freeze({
-  DEFAULT_TEMPLATE, DEFAULT_WIDTH, DEFAULT_HEIGHT,
-  TEMPLATE_INIT_STRENGTH, PORTRAIT_REFERENCE_STRENGTH,
+  DEFAULT_WIDTH, DEFAULT_HEIGHT,
   DEFAULT_EXPRESSIONS, DEFAULT_HAND_GESTURES,
 });

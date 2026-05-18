@@ -1,23 +1,5 @@
-import { describe, it, expect, beforeAll } from 'vitest';
-import { copyFileSync, existsSync, mkdirSync } from 'fs';
-import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
+import { describe, it, expect } from 'vitest';
 import { buildCharacterReferenceSheetPrompt, REFERENCE_SHEET_CONSTANTS, resolveSheetModelId } from './universeCharacterSheet.js';
-import { PATHS } from '../lib/fileUtils.js';
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const SAMPLE_TEMPLATE = join(__dirname, '..', '..', 'data.sample', 'templates', 'character-reference-sheet.png');
-
-// Clean checkouts may not have `data/templates/` (created by setup/migration);
-// provision the tracked sample asset so the resolver finds it without
-// depending on a separate `npm run install:all` step before `npm test`.
-beforeAll(() => {
-  if (!existsSync(PATHS.visualTemplates)) mkdirSync(PATHS.visualTemplates, { recursive: true });
-  const dest = join(PATHS.visualTemplates, 'character-reference-sheet.png');
-  if (!existsSync(dest) && existsSync(SAMPLE_TEMPLATE)) {
-    copyFileSync(SAMPLE_TEMPLATE, dest);
-  }
-});
 
 const baseUniverse = {
   id: 'u-123',
@@ -148,45 +130,19 @@ describe('universeCharacterSheet — buildCharacterReferenceSheetPrompt', () => 
     expect(out.negativePrompt).toContain('text artifacts');
   });
 
-  it('resolves the shipped template asset path under /data/templates/ (NOT /data/images/)', () => {
-    // Regression guard for: previously the builder returned a template-dir
-    // path, but generateImage's `resolveGalleryImage` re-validation only
-    // accepted /data/images/ and silently dropped the template — meaning the
-    // sheet was rendered with no init-image anchor at all. local.js now uses
-    // resolveImageInputPath which accepts both roots.
+  it('returns pure-text payload — no init image or multi-reference fields', () => {
+    // Regression guard for the text-template refactor: the renderer must not
+    // re-introduce init-image / multi-ref plumbing without an explicit
+    // backend-support audit. Codex (gpt-image-2) and external SD-API don't
+    // share FLUX.2's CLI surface, and the user-validated path is text-only.
     const out = buildCharacterReferenceSheetPrompt(baseUniverse, richCharacter);
-    expect(out.initImagePath).toBeTruthy();
-    expect(out.initImagePath).toContain('character-reference-sheet.png');
-    expect(out.initImagePath).toMatch(/data\/templates\//);
-    expect(out.initImagePath).not.toMatch(/data\/images\//);
-    expect(out.initImageStrength).toBe(REFERENCE_SHEET_CONSTANTS.TEMPLATE_INIT_STRENGTH);
-  });
-
-  it('falls back to no reference images when the character has no primaryImageRef', () => {
-    const out = buildCharacterReferenceSheetPrompt(baseUniverse, richCharacter);
-    expect(out.referenceImagePaths).toEqual([]);
-    expect(out.referenceImageStrengths).toEqual([]);
-  });
-
-  it('resolves character.primaryImageRef against the gallery (where canon portraits live), NOT image-refs', () => {
-    // Regression guard for: primaryImageRef is a gallery filename (lives in
-    // data/images/, alongside the rest of character.imageRefs[]). Previously
-    // the builder ran it through resolveImageRef which only looks under
-    // data/image-refs/ — so the portrait was always null and never made it
-    // to FLUX.2 as a multi-ref input.
-    const galleryDir = PATHS.images;
-    if (!existsSync(galleryDir)) mkdirSync(galleryDir, { recursive: true });
-    const fixtureName = 'portos-test-portrait.png';
-    const fixturePath = join(galleryDir, fixtureName);
-    if (!existsSync(fixturePath) && existsSync(SAMPLE_TEMPLATE)) {
-      copyFileSync(SAMPLE_TEMPLATE, fixturePath);
-    }
-    const charWithPortrait = { ...richCharacter, imageRefs: [fixtureName], primaryImageRef: fixtureName };
-    const out = buildCharacterReferenceSheetPrompt(baseUniverse, charWithPortrait);
-    expect(out.referenceImagePaths).toHaveLength(1);
-    expect(out.referenceImagePaths[0]).toMatch(/data\/images\//);
-    expect(out.referenceImagePaths[0]).toContain(fixtureName);
-    expect(out.referenceImageStrengths[0]).toBe(REFERENCE_SHEET_CONSTANTS.PORTRAIT_REFERENCE_STRENGTH);
+    expect(out).not.toHaveProperty('initImagePath');
+    expect(out).not.toHaveProperty('initImageStrength');
+    expect(out).not.toHaveProperty('referenceImagePaths');
+    expect(out).not.toHaveProperty('referenceImageStrengths');
+    // The "Honor the reference image" line was specific to the dropped init
+    // image — keep it gone so the prompt doesn't hallucinate a missing input.
+    expect(out.prompt).not.toMatch(/reference image/i);
   });
 
   it('throws a 400 when called with no universe or no character', () => {
@@ -197,65 +153,31 @@ describe('universeCharacterSheet — buildCharacterReferenceSheetPrompt', () => 
 
 describe('universeCharacterSheet — resolveSheetModelId', () => {
   const flux2Model = { id: 'flux2-klein-9b', runner: 'flux2' };
-  const flux2Small = { id: 'flux2-klein-4b', runner: 'flux2' };
   const devModel = { id: 'dev', runner: 'mflux' };
 
-  it('honors an explicit override when the model exists in the registry (even non-FLUX.2)', () => {
-    // Explicit user choice wins even if it loses the portrait anchor.
+  it('honors an explicit override when the model exists in the registry', () => {
     const out = resolveSheetModelId({
       override: 'dev',
       settings: { imageGen: { local: { modelId: 'flux2-klein-9b' } } },
-      allModels: [flux2Model, flux2Small, devModel],
+      allModels: [flux2Model, devModel],
     });
     expect(out).toBe('dev');
   });
 
-  it('ignores an override that does not match any registered model', () => {
-    // Falls through to the FLUX.2-first precedence — settings says dev
-    // (non-FLUX.2), so the first FLUX.2 model wins instead.
+  it('ignores an override that does not match any registered model, falling through to settings', () => {
     const out = resolveSheetModelId({
       override: 'made-up-model',
       settings: { imageGen: { local: { modelId: 'dev' } } },
       allModels: [flux2Model, devModel],
     });
-    expect(out).toBe('flux2-klein-9b');
+    expect(out).toBe('dev');
   });
 
-  it('honors the user-configured local modelId from settings when it IS FLUX.2', () => {
-    const out = resolveSheetModelId({
-      override: '',
-      settings: { imageGen: { local: { modelId: 'flux2-klein-4b' } } },
-      allModels: [flux2Model, flux2Small, devModel],
-    });
-    expect(out).toBe('flux2-klein-4b');
-  });
-
-  it('REGRESSION: prefers an available FLUX.2 model over a non-FLUX.2 settings model', () => {
-    // Without this preference, picking the user's settings model (dev) would
-    // silently drop the portrait multi-ref input. Better to upgrade to FLUX.2
-    // automatically and only fall back to dev when no FLUX.2 is registered.
+  it('honors the user-configured local modelId from settings', () => {
     const out = resolveSheetModelId({
       override: '',
       settings: { imageGen: { local: { modelId: 'dev' } } },
       allModels: [flux2Model, devModel],
-    });
-    expect(out).toBe('flux2-klein-9b');
-  });
-
-  it('falls back to the first FLUX.2 model when no override and no FLUX.2 settings', () => {
-    const out = resolveSheetModelId({
-      override: undefined,
-      settings: {},
-      allModels: [devModel, flux2Small, flux2Model],
-    });
-    expect(out).toBe('flux2-klein-4b');
-  });
-
-  it('falls back to the settings model (non-FLUX.2) when no FLUX.2 is registered', () => {
-    const out = resolveSheetModelId({
-      override: '',
-      settings: { imageGen: { local: { modelId: 'dev' } } },
-      allModels: [devModel],
     });
     expect(out).toBe('dev');
   });
@@ -264,7 +186,7 @@ describe('universeCharacterSheet — resolveSheetModelId', () => {
     const out = resolveSheetModelId({
       override: undefined,
       settings: {},
-      allModels: [devModel],
+      allModels: [devModel, flux2Model],
     });
     expect(out).toBe('dev');
   });
