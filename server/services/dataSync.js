@@ -338,8 +338,6 @@ async function applyMeatspaceRemote(remoteData) {
   return { applied: totalApplied > 0, count: totalApplied };
 }
 
-// --- Category: Universe ---
-
 // Pipeline + universe sync covers the creative pipeline state (series, issues,
 // universes) over Tailscale between same-network peers. Same-content image and
 // video blobs continue to flow through the share-bucket system (cloud-synced
@@ -347,11 +345,13 @@ async function applyMeatspaceRemote(remoteData) {
 // service uses. Sync here is record-level only: serialized state for the
 // records, no media blobs.
 
+// --- Category: Universe ---
+
 async function getUniverseSnapshot() {
   const data = await readJSONFile(UNIVERSE_BUILDER_FILE, { universes: [] });
   // Skip `runs[]` — that's local LLM run history (transcripts, ephemeral),
   // not user-edited universe state. Each peer keeps its own history.
-  const universesOnly = { universes: Array.isArray(data.universes) ? data.universes : [] };
+  const universesOnly = { universes: data.universes || [] };
   return { data: universesOnly, checksum: computeChecksum(universesOnly) };
 }
 
@@ -380,11 +380,13 @@ async function applyUniverseRemote(remoteData) {
 // --- Category: Pipeline ---
 
 async function getPipelineSnapshot() {
-  const seriesFile = await readJSONFile(PIPELINE_SERIES_FILE, { series: [] });
-  const issuesFile = await readJSONFile(PIPELINE_ISSUES_FILE, { issues: [] });
+  const [seriesFile, issuesFile] = await Promise.all([
+    readJSONFile(PIPELINE_SERIES_FILE, { series: [] }),
+    readJSONFile(PIPELINE_ISSUES_FILE, { issues: [] }),
+  ]);
   const data = {
-    series: Array.isArray(seriesFile.series) ? seriesFile.series : [],
-    issues: Array.isArray(issuesFile.issues) ? issuesFile.issues : [],
+    series: seriesFile.series || [],
+    issues: issuesFile.issues || [],
   };
   return { data, checksum: computeChecksum(data) };
 }
@@ -392,13 +394,11 @@ async function getPipelineSnapshot() {
 async function applyPipelineRemote(remoteData) {
   if (!remoteData) return { applied: false, count: 0 };
 
-  const localSeries = await readJSONFile(PIPELINE_SERIES_FILE, { series: [] });
-  const localIssues = await readJSONFile(PIPELINE_ISSUES_FILE, { issues: [] });
+  const [localSeries, localIssues] = await Promise.all([
+    readJSONFile(PIPELINE_SERIES_FILE, { series: [] }),
+    readJSONFile(PIPELINE_ISSUES_FILE, { issues: [] }),
+  ]);
 
-  // Series merge first — issues reference seriesId so a series insert before
-  // its issues keeps the local store internally consistent during the write
-  // (an issue referencing a not-yet-merged series is an orphan, which the
-  // pipeline UI tolerates but the sync log line would lie about).
   const { merged: mergedSeries, changed: seriesChanged } = mergeArraysByKey(
     localSeries.series || [],
     remoteData.series || [],
@@ -415,22 +415,21 @@ async function applyPipelineRemote(remoteData) {
   if (!seriesChanged && !issuesChanged) return { applied: false, count: 0 };
 
   await ensureDir(PATHS.data);
-  if (seriesChanged) {
-    await writeFile(
-      PIPELINE_SERIES_FILE,
-      JSON.stringify({ ...localSeries, series: mergedSeries }, null, 2)
-    );
-  }
-  if (issuesChanged) {
-    await writeFile(
-      PIPELINE_ISSUES_FILE,
-      JSON.stringify({ ...localIssues, issues: mergedIssues }, null, 2)
-    );
-  }
+  await Promise.all([
+    seriesChanged
+      ? writeFile(PIPELINE_SERIES_FILE, JSON.stringify({ ...localSeries, series: mergedSeries }, null, 2))
+      : null,
+    issuesChanged
+      ? writeFile(PIPELINE_ISSUES_FILE, JSON.stringify({ ...localIssues, issues: mergedIssues }, null, 2))
+      : null,
+  ].filter(Boolean));
 
-  const totalApplied = mergedSeries.length + mergedIssues.length;
+  // Return the issue count — `issues` are this category's user-facing primary
+  // records, so the per-category summary stays comparable across categories
+  // (each reports one entity-type count). Summing series+issues would
+  // over-report when callers aggregate across categories.
   console.log(`🔄 Pipeline sync: merged ${mergedSeries.length} series + ${mergedIssues.length} issue(s)`);
-  return { applied: true, count: totalApplied };
+  return { applied: true, count: mergedIssues.length };
 }
 
 // --- Public API ---

@@ -139,7 +139,7 @@ describe('dataSync — pipeline category', () => {
     expect(snap.data.issues).toEqual([]);
   });
 
-  it('applyRemote merges series + issues and reports total applied', async () => {
+  it('applyRemote merges series + issues; count reports issues (the primary entity)', async () => {
     writeJSON(SERIES_PATH, { series: [{ id: 'ser-1', name: 'Old', updatedAt: '2026-05-17T10:00:00Z' }] });
     writeJSON(ISSUES_PATH, { issues: [] });
 
@@ -153,6 +153,10 @@ describe('dataSync — pipeline category', () => {
       ]
     });
     expect(result.applied).toBe(true);
+    // `count` matches the other categories' single-entity-type semantic — for
+    // pipeline that's `issues` (user-facing primary); mixing series+issues
+    // would over-report when callers sum across categories.
+    expect(result.count).toBe(1);
 
     const persistedSeries = readJSON(SERIES_PATH).series;
     expect(persistedSeries).toHaveLength(2);
