@@ -1,5 +1,6 @@
 import { useCallback } from 'react';
 import toast from '../components/ui/Toast';
+import { upsertByIdPrepend } from '../lib/upsertByIdPrepend';
 
 // Scaffolding for LLM-driven universe mutations that follow the
 // "guarded API call → setWorlds → stale-write-checked setDraft" pattern.
@@ -70,10 +71,7 @@ export default function useUniverseAction({ selectedId, mountedRef, setWorlds })
     // away mid-flight, the persisted shape changed and other surfaces
     // (list page, palette) should see it.
     const updated = result.universe;
-    setWorlds((prev) => {
-      const without = prev.filter((w) => w.id !== updated.id);
-      return [updated, ...without];
-    });
+    setWorlds((prev) => upsertByIdPrepend(prev, updated));
 
     if (!mountedRef.current || capturedId !== selectedId) {
       if (toastId) toast.dismiss(toastId);

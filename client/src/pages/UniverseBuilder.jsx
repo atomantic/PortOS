@@ -40,6 +40,7 @@ import { deriveAvailableBackends, IMAGE_GEN_MODE } from '../lib/imageGenBackends
 import { PIPELINE_IMAGE_DEFAULTS, readPipelineImageSettings } from '../lib/pipelineImageDefaults';
 import { normalizeSlugline } from '../lib/scenePrompt';
 import { hasCanonDescriptorContent } from '../lib/canonPrompt';
+import { upsertByIdPrepend } from '../lib/upsertByIdPrepend';
 
 const CATEGORY_LABELS = {
   landscapes: 'Landscapes',
@@ -757,10 +758,7 @@ export default function UniverseBuilder() {
     setSaving(false);
     if (!result) return;
     toast.success('World created');
-    setWorlds((prev) => {
-      const without = prev.filter((w) => w.id !== result.id);
-      return [result, ...without];
-    });
+    setWorlds((prev) => upsertByIdPrepend(prev, result));
     goToWorld(result.id);
   };
 
@@ -839,10 +837,7 @@ export default function UniverseBuilder() {
       }
       markDraftSaved(payload);
       toast.success(selectedId ? 'World updated' : 'World created');
-      setWorlds((prev) => {
-        const without = prev.filter((w) => w.id !== result.id);
-        return [result, ...without];
-      });
+      setWorlds((prev) => upsertByIdPrepend(prev, result));
       // After Create: jump to the new id's URL so back-button / refresh
       // returns to the same world. After Update: id is unchanged, but
       // navigating is harmless (replace-style).
@@ -1109,10 +1104,7 @@ export default function UniverseBuilder() {
         .catch((e) => { toast.error(`Auto-save after expand failed: ${e.message}`); return null; })
         .finally(() => setSaving(false));
       if (saved) {
-        setWorlds((prev) => {
-          const without = prev.filter((w) => w.id !== saved.id);
-          return [saved, ...without];
-        });
+        setWorlds((prev) => upsertByIdPrepend(prev, saved));
         // Auto-save succeeded — server now has the merged canon, so a
         // subsequent manual Save shouldn't re-send it (avoids the
         // concurrent-edit clobber). Drain the additions ledger too since
@@ -1178,10 +1170,7 @@ export default function UniverseBuilder() {
       const updated = await updateUniverse(selectedId, refinePayload)
         .catch((e) => { toast.error(`Auto-save after refine failed: ${e.message}`); return null; });
       if (updated) {
-        setWorlds((prev) => {
-          const without = prev.filter((w) => w.id !== updated.id);
-          return [updated, ...without];
-        });
+        setWorlds((prev) => upsertByIdPrepend(prev, updated));
         markDraftSaved(refinePayload);
       }
     }
@@ -1428,10 +1417,7 @@ export default function UniverseBuilder() {
     const updated = await updateUniverse(selectedId, { categories: { [bucket]: nextBucket } }, { silent: true })
       .catch((e) => { toast.error(`Move failed: ${e.message}`); return null; });
     if (updated) {
-      setWorlds((prev) => {
-        const without = prev.filter((w) => w.id !== updated.id);
-        return [updated, ...without];
-      });
+      setWorlds((prev) => upsertByIdPrepend(prev, updated));
       toast.success(`Moved "${humanizeCategory(bucket)}" to ${trunk.label}`);
     }
   };
@@ -1530,10 +1516,7 @@ export default function UniverseBuilder() {
       const updated = await updateUniverse(selectedId, { categories: nextDraft.categories })
         .catch((e) => { toast.error(`Auto-save after generate failed: ${e.message}`); return null; });
       if (updated) {
-        setWorlds((prev) => {
-          const without = prev.filter((w) => w.id !== updated.id);
-          return [updated, ...without];
-        });
+        setWorlds((prev) => upsertByIdPrepend(prev, updated));
         markDraftSaved(nextDraft);
         toast.success(`Added ${additionCount} variation${additionCount === 1 ? '' : 's'} to ${humanizeCategory(cat)} — saved`);
         return;
