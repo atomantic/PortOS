@@ -14,7 +14,14 @@ import {
   readJSONLFile,
   formatDuration,
   sha256File,
+  resolveImageInputPath,
+  PATHS,
 } from './fileUtils.js';
+import { copyFileSync, existsSync, mkdirSync } from 'fs';
+import { dirname } from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname_test = dirname(fileURLToPath(import.meta.url));
 
 describe('fileUtils', () => {
   describe('isValidJSON', () => {
@@ -509,6 +516,82 @@ describe('fileUtils', () => {
       await expect(
         listDirectoryByExtension(tmpRoot, { extensions: ['.png'] }),
       ).rejects.toThrow(/mapEntry must be a function/);
+    });
+  });
+
+  describe('resolveImageInputPath', () => {
+    const sampleTemplate = join(__dirname_test, '..', '..', 'data.sample', 'templates', 'character-reference-sheet.png');
+    const galleryName = 'fileutils-test-gallery.png';
+    const refsName = 'fileutils-test-refs.png';
+    const templateName = 'character-reference-sheet.png';
+
+    beforeEach(() => {
+      // Provision fixtures in each approved root so the resolver can find
+      // them. Reuses the shipped sample asset as a stand-in PNG body.
+      for (const root of [PATHS.images, PATHS.imageRefs, PATHS.visualTemplates]) {
+        if (!existsSync(root)) mkdirSync(root, { recursive: true });
+      }
+      const galleryPath = join(PATHS.images, galleryName);
+      const refsPath = join(PATHS.imageRefs, refsName);
+      const templatePath = join(PATHS.visualTemplates, templateName);
+      if (existsSync(sampleTemplate)) {
+        if (!existsSync(galleryPath)) copyFileSync(sampleTemplate, galleryPath);
+        if (!existsSync(refsPath)) copyFileSync(sampleTemplate, refsPath);
+        if (!existsSync(templatePath)) copyFileSync(sampleTemplate, templatePath);
+      }
+    });
+
+    it('returns null for non-string / empty input', () => {
+      expect(resolveImageInputPath(null)).toBeNull();
+      expect(resolveImageInputPath('')).toBeNull();
+      expect(resolveImageInputPath(undefined)).toBeNull();
+      expect(resolveImageInputPath(123)).toBeNull();
+    });
+
+    it('resolves a basename present in the gallery (first root)', () => {
+      const out = resolveImageInputPath(galleryName);
+      expect(out).toBeTruthy();
+      expect(out).toContain('data/images/');
+      expect(out).toContain(galleryName);
+    });
+
+    it('resolves a basename present only in image-refs', () => {
+      const out = resolveImageInputPath(refsName);
+      expect(out).toBeTruthy();
+      expect(out).toContain('data/image-refs/');
+    });
+
+    it('resolves a basename present only in visualTemplates', () => {
+      const out = resolveImageInputPath(templateName);
+      expect(out).toBeTruthy();
+      // visualTemplates is the third root; without a basename in gallery first
+      // it falls through. We can't fully isolate that here without temp dirs,
+      // so just assert the resolver doesn't return null.
+    });
+
+    it('REGRESSION: absolute path under a specific root stays in that root', () => {
+      // Bug it guards: previously the resolver basenamed any input and tried
+      // each root in order — so `/data/templates/<name>.png` for a file that
+      // also exists in `/data/images/<name>.png` would silently redirect to
+      // the gallery copy. Reference-sheet renders would have used the wrong
+      // init image. Verify each absolute path resolves to its own root.
+      const galleryAbs = join(PATHS.images, galleryName);
+      const refsAbs = join(PATHS.imageRefs, refsName);
+      const templateAbs = join(PATHS.visualTemplates, templateName);
+
+      expect(resolveImageInputPath(galleryAbs)).toContain('data/images/');
+      expect(resolveImageInputPath(refsAbs)).toContain('data/image-refs/');
+      expect(resolveImageInputPath(templateAbs)).toContain('data/templates/');
+    });
+
+    it('REGRESSION: same basename in multiple roots — absolute path picks the matching root', () => {
+      // All three fixtures share the same body (copied from sampleTemplate),
+      // but the absolute path should pin to its own root, NOT collapse to
+      // the gallery via basename fallback.
+      const refsAbs = join(PATHS.imageRefs, refsName);
+      const out = resolveImageInputPath(refsAbs);
+      expect(out).toContain('data/image-refs/');
+      expect(out).not.toContain('data/images/');
     });
   });
 

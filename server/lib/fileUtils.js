@@ -703,12 +703,27 @@ export function resolveImageRef(name, { mustExist = true } = {}) {
  */
 export function resolveImageInputPath(rawPath) {
   if (typeof rawPath !== 'string' || !rawPath) return null;
-  for (const resolver of [resolveGalleryImage, resolveImageRef, resolveTemplateAsset]) {
+  // For ABSOLUTE inputs, dispatch by prefix. The single-root resolvers
+  // basename their input for defense-in-depth, so trying them in order on an
+  // absolute path can silently redirect a `/data/templates/foo.png` input
+  // to `/data/images/foo.png` whenever a same-named file lives in the gallery.
+  // Validate against the matching root only.
+  const ROOTS = [
+    [PATHS.images, resolveGalleryImage],
+    [PATHS.imageRefs, resolveImageRef],
+    [PATHS.visualTemplates, resolveTemplateAsset],
+  ];
+  const resolvedInput = resolvePath(rawPath);
+  for (const [rootDir, resolver] of ROOTS) {
+    const rootPrefix = resolvePath(rootDir) + PATH_SEP;
+    if (resolvedInput.startsWith(rootPrefix)) return resolver(rawPath);
+  }
+  // For basename / relative input (no matching prefix), fall through the
+  // resolvers in order. First match wins; basename collisions across roots
+  // are accepted as ambiguous and resolve to the first defined root.
+  for (const [, resolver] of ROOTS) {
     const candidate = resolver(rawPath);
     if (candidate) return candidate;
-    // The single-root resolvers basename their input — for absolute paths
-    // they only succeed when the basename happens to also exist in the
-    // resolver's target root. That's the correct behavior here.
   }
   return null;
 }

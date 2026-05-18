@@ -107,15 +107,29 @@ export async function expandUniverseCharacter(universeId, entryId, options = {})
     });
   }
 
-  const { merged: next, updatedFields } = applyExpansion(target, content);
   const rationale = typeof content.rationale === 'string' ? content.rationale.trim() : '';
 
+  // Re-derive the merge INSIDE the write queue against the freshest persisted
+  // universe so a user edit (or another LLM call) that landed during the
+  // expand LLM round-trip isn't silently overwritten. The mutator returns
+  // null to short-circuit the write when nothing changed.
+  let updatedFields = [];
+  const updated = await updateUniverse(universeId, (latest) => {
+    const latestList = Array.isArray(latest.characters) ? latest.characters : [];
+    const latestIdx = latestList.findIndex((e) => e.id === entryId);
+    if (latestIdx < 0) return null;
+    const latestTarget = latestList[latestIdx];
+    // Re-check the lock — could have been set during the LLM call.
+    if (latestTarget.locked === true) return null;
+    const { merged: next, updatedFields: fields } = applyExpansion(latestTarget, content);
+    updatedFields = fields;
+    if (fields.length === 0) return null;
+    const nextList = latestList.map((e, i) => (i === latestIdx ? next : e));
+    return { characters: nextList };
+  });
   if (updatedFields.length === 0) {
-    return { universe, entry: target, rationale, runId, providerId, model, updatedFields };
+    return { universe: updated, entry: (updated.characters || []).find((e) => e.id === entryId) || target, rationale, runId, providerId, model, updatedFields };
   }
-
-  const nextList = list.map((e, i) => (i === idx ? next : e));
-  const updated = await updateUniverse(universeId, { characters: nextList });
   const updatedEntry = (updated.characters || []).find((e) => e.id === entryId) || null;
   console.log(`✨ Universe character expand — universe=${universeId.slice(0, 8)} entry=${entryId.slice(0, 8)} fields=${updatedFields.length} runId=${(runId || '').slice(0, 8)}`);
   return { universe: updated, entry: updatedEntry, rationale, runId, providerId, model, updatedFields };

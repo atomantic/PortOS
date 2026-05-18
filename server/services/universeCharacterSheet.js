@@ -332,23 +332,29 @@ export async function onSheetComplete({ universeId, entryId, generationId, sourc
 
   // Re-read so a concurrent edit on the character isn't clobbered;
   // updateUniverse goes through the sanitizer which re-validates the pointer.
-  const universe = await getUniverse(universeId);
-  const list = Array.isArray(universe.characters) ? universe.characters : [];
-  const idx = list.findIndex((c) => c.id === entryId);
-  if (idx < 0) {
+  // Stamp inside the write queue against the freshest persisted universe so a
+  // concurrent user edit (or a sibling reference-sheet render landing close
+  // in time) can't clobber unrelated character fields. Stamp ONLY
+  // `referenceSheetImageRef` — the sheet lives in data/image-refs/ (served at
+  // /data/image-refs/), distinct from `imageRefs[]` which carries gallery
+  // filenames served at /data/images/. Polluting imageRefs would produce a
+  // 404 thumbnail in the CanonCard footer (wrong base URL).
+  let stamped = false;
+  await updateUniverse(universeId, (latest) => {
+    const latestList = Array.isArray(latest.characters) ? latest.characters : [];
+    const latestIdx = latestList.findIndex((c) => c.id === entryId);
+    if (latestIdx < 0) return null;
+    const nextList = latestList.map((e, i) => (i === latestIdx ? {
+      ...e,
+      referenceSheetImageRef: destFilename,
+    } : e));
+    stamped = true;
+    return { characters: nextList };
+  });
+  if (!stamped) {
     console.log(`⚠️ Character ${entryId} not found post-render — sheet saved but not linked`);
     return null;
   }
-  // Stamp ONLY `referenceSheetImageRef` — the sheet lives in data/image-refs/
-  // (served at /data/image-refs/), distinct from `imageRefs[]` which carries
-  // gallery filenames served at /data/images/. Polluting imageRefs would
-  // produce a 404 thumbnail in the CanonCard footer (wrong base URL) and
-  // surface the sheet as if it were a candidate per-panel reference.
-  const nextList = list.map((e, i) => (i === idx ? {
-    ...e,
-    referenceSheetImageRef: destFilename,
-  } : e));
-  await updateUniverse(universeId, { characters: nextList });
   console.log(`📌 Character ${entryId.slice(0, 8)}.referenceSheetImageRef = ${destFilename}`);
   return { filename: destFilename, path: destPath };
 }
