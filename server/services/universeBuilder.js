@@ -785,6 +785,34 @@ export async function getUniverse(id) {
   return w;
 }
 
+// Returns true when the raw on-disk universe carries variations or composite
+// sheets that are missing a stable `id` field — i.e. sanitizeTemplate would
+// mint fresh UUIDs (and those UUIDs would differ on every read until the
+// migration is persisted). The render route uses this to gate a one-time
+// no-op write before queueing jobs whose `entryRef.id` must match the on-disk
+// record at completion time. Reads raw JSON without sanitizing, so callers
+// can skip the write entirely when the universe is already fully migrated —
+// avoiding unwanted `updatedAt` bumps that would otherwise interfere with
+// LWW sync and trigger spurious re-export/notification emits.
+export async function needsEntryIdPersist(id) {
+  await ensureDir(PATHS.data);
+  const raw = await readJSONFile(statePath(), DEFAULT_STATE, { logError: false });
+  const rec = Array.isArray(raw.universes) ? raw.universes.find((u) => u?.id === id) : null;
+  if (!rec) return false;
+  const cats = rec.categories && typeof rec.categories === 'object' ? rec.categories : {};
+  for (const cat of Object.values(cats)) {
+    const vars = Array.isArray(cat?.variations) ? cat.variations : [];
+    for (const v of vars) {
+      if (!isStr(v?.id) || !v.id.trim()) return true;
+    }
+  }
+  const sheets = Array.isArray(rec.compositeSheets) ? rec.compositeSheets : [];
+  for (const s of sheets) {
+    if (!isStr(s?.id) || !s.id.trim()) return true;
+  }
+  return false;
+}
+
 export async function createUniverse(input = {}) {
   const name = trimTo(input.name, NAME_MAX_LENGTH);
   if (!name) throw makeErr(`Universe name is required (1..${NAME_MAX_LENGTH} chars)`, ERR_VALIDATION);

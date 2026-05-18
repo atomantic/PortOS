@@ -1494,6 +1494,51 @@ describe("universeBuilder service", () => {
       expect(d.categories.landscapes.variations[0].imageRefs).toEqual(["after-persist.png"]);
     });
 
+    it("needsEntryIdPersist returns true only when raw-disk variations or sheets lack ids", async () => {
+      // Mixed fixture: one universe has ids on disk, the other doesn't.
+      // The render route uses this helper to skip the no-op write when the
+      // universe is already migrated — so already-upgraded records don't
+      // bump updatedAt (which would interfere with LWW sync + spuriously
+      // emit recordUpdated on every render).
+      fileStore.set("/mock/data/universe-builder.json", {
+        universes: [
+          {
+            id: "fresh",
+            name: "Fresh",
+            schemaVersion: svc.CURRENT_SCHEMA_VERSION,
+            categories: {
+              landscapes: { kind: "places", variations: [{ id: "var-on-disk", label: "L", prompt: "p" }] },
+            },
+            compositeSheets: [{ id: "sheet-on-disk", kind: "reference_sheet", label: "S", prompt: "sp" }],
+            createdAt: "2024-01-01T00:00:00Z",
+          },
+          {
+            id: "legacy",
+            name: "Legacy",
+            schemaVersion: svc.CURRENT_SCHEMA_VERSION,
+            categories: {
+              landscapes: { kind: "places", variations: [{ label: "L", prompt: "p" }] },
+            },
+            compositeSheets: [],
+            createdAt: "2024-01-01T00:00:00Z",
+          },
+          {
+            id: "legacy-sheet",
+            name: "LegacySheet",
+            schemaVersion: svc.CURRENT_SCHEMA_VERSION,
+            categories: {},
+            compositeSheets: [{ kind: "reference_sheet", label: "S", prompt: "sp" }],
+            createdAt: "2024-01-01T00:00:00Z",
+          },
+        ],
+        runs: [],
+      });
+      expect(await svc.needsEntryIdPersist("fresh")).toBe(false);
+      expect(await svc.needsEntryIdPersist("legacy")).toBe(true);
+      expect(await svc.needsEntryIdPersist("legacy-sheet")).toBe(true);
+      expect(await svc.needsEntryIdPersist("does-not-exist")).toBe(false);
+    });
+
     it("appendEntryImageRef appends to a variation's imageRefs by id", async () => {
       const u = await svc.createUniverse({
         name: "Bucket",

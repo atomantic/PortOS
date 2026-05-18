@@ -400,16 +400,18 @@ router.get('/:id/runs', asyncHandler(async (req, res) => {
 
 router.post('/:id/render', asyncHandler(async (req, res) => {
   const body = validateRequest(renderSchema, req.body ?? {});
-  // No-op mutator forces sanitizeTemplate to run through writeState so any
-  // freshly-minted variation/sheet ids land on disk before we compile
-  // `entryRef.id`s into render jobs. Without this, a legacy universe (no
-  // ids stored) hands out fresh UUIDs on every read — the ids encoded into
-  // queued jobs would no longer match the on-disk record by the time the
-  // completion hook tries to append imageRefs, so renders would never accrue
-  // to their source entries. readState() intentionally does not persist
-  // migrations (race against concurrent writers), so the route is the right
-  // place to force-persist on demand.
-  const universe = await svc.updateUniverse(req.params.id, () => ({})).catch((err) => { throw mapServiceError(err); });
+  // Legacy universes carry no variation/sheet ids on disk. sanitizeTemplate
+  // mints fresh UUIDs on every read but readState() intentionally does not
+  // persist them (race against concurrent writers). The render route needs
+  // ids that are stable across the read→queue→completion lifecycle so the
+  // collection hook can find the source entry by `entryRef.id`. Gate the
+  // one-time no-op write on the raw-disk inspection: fully-migrated
+  // universes skip the write so `updatedAt` doesn't bump on every render
+  // (which would interfere with LWW sync + trigger spurious re-export).
+  if (await svc.needsEntryIdPersist(req.params.id)) {
+    await svc.updateUniverse(req.params.id, () => ({})).catch((err) => { throw mapServiceError(err); });
+  }
+  const universe = await svc.getUniverse(req.params.id).catch((err) => { throw mapServiceError(err); });
 
   // Resolve a style preset (server-side authoritative list) so the embrace
   // tokens are deterministic for this render even if the client sent a stale
