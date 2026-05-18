@@ -1,5 +1,5 @@
 /**
- * Canonical story-bible shapes (Character / Setting / Object) shared by the
+ * Canonical story-bible shapes (Character / Place / Object) shared by the
  * Writers Room (per-work bibles) and the Pipeline (per-series bibles).
  *
  * Owns the shape + sanitization + merge-extracted-entries algorithm AND the
@@ -14,7 +14,7 @@ import { PATHS, atomicWrite, ensureDir, readJSONFile } from './fileUtils.js';
 import { ServerError } from './errorHandler.js';
 
 // Re-export so callers (writers-room domain files) can import a single
-// canonical normalizer when they need to match settings by slugline.
+// canonical normalizer when they need to match places by slugline.
 export { normalizeSlugline };
 
 export const BIBLE_LIMITS = Object.freeze({
@@ -35,13 +35,13 @@ export const BIBLE_LIMITS = Object.freeze({
   WARDROBES_PER_CHARACTER_MAX: 10,
   EVIDENCE_ITEM_MAX: 500,
   EVIDENCE_PER_ENTRY_MAX: 20,
-  // Settings
+  // Places
   SLUGLINE_MAX: 200,
   PALETTE_MAX: 200,
   ERA_MAX: 200,
   WEATHER_MAX: 200,
   RECURRING_DETAILS_MAX: 1000,
-  SETTING_DESCRIPTION_MAX: 2000,
+  PLACE_DESCRIPTION_MAX: 2000,
   // Objects
   OBJECT_DESCRIPTION_MAX: 2000,
   SIGNIFICANCE_MAX: 1000,
@@ -74,17 +74,17 @@ const SOURCES = new Set([
 
 export const BIBLE_KIND = Object.freeze({
   CHARACTER: 'character',
-  SETTING: 'setting',
+  PLACE: 'place',
   OBJECT: 'object',
 });
 
-// Enums for the location-classification fields on Setting canon entries.
+// Enums for the location-classification fields on Place canon entries.
 // Mirrors AnyFilm's INT/EXT + time-of-day taxonomy so generated panels and
 // scene starts inherit lighting/composition cues for free.
-export const SETTING_INT_EXT = Object.freeze(['INT', 'EXT']);
-export const SETTING_TIME_OF_DAY = Object.freeze(['dawn', 'day', 'dusk', 'night']);
-const SETTING_INT_EXT_SET = new Set(SETTING_INT_EXT);
-const SETTING_TIME_OF_DAY_SET = new Set(SETTING_TIME_OF_DAY);
+export const PLACE_INT_EXT = Object.freeze(['INT', 'EXT']);
+export const PLACE_TIME_OF_DAY = Object.freeze(['dawn', 'day', 'dusk', 'night']);
+const PLACE_INT_EXT_SET = new Set(PLACE_INT_EXT);
+const PLACE_TIME_OF_DAY_SET = new Set(PLACE_TIME_OF_DAY);
 
 const trimEnum = (raw, allowed) => {
   if (typeof raw !== 'string') return null;
@@ -101,7 +101,7 @@ const trimEnum = (raw, allowed) => {
 // extractor LLM envelope key — all the same string, consolidated here.
 export const BIBLE_FIELD = Object.freeze({
   [BIBLE_KIND.CHARACTER]: 'characters',
-  [BIBLE_KIND.SETTING]: 'settings',
+  [BIBLE_KIND.PLACE]: 'places',
   [BIBLE_KIND.OBJECT]: 'objects',
 });
 
@@ -119,7 +119,7 @@ export const BIBLE_KINDS = Object.freeze(Object.values(BIBLE_KIND));
 // stage's bibles context (evaluator). Excludes ids/timestamps/source/notes.
 export const PROMPT_FIELDS = Object.freeze({
   [BIBLE_KIND.CHARACTER]: ['name', 'aliases', 'role', 'physicalDescription', 'personality', 'background', 'voiceId', 'wardrobes', 'prompt', 'tags'],
-  [BIBLE_KIND.SETTING]: ['name', 'slugline', 'description', 'palette', 'era', 'weather', 'intExt', 'timeOfDay', 'recurringDetails', 'prompt', 'tags'],
+  [BIBLE_KIND.PLACE]: ['name', 'slugline', 'description', 'palette', 'era', 'weather', 'intExt', 'timeOfDay', 'recurringDetails', 'prompt', 'tags'],
   [BIBLE_KIND.OBJECT]: ['name', 'aliases', 'description', 'significance', 'prompt', 'tags'],
 });
 
@@ -132,11 +132,13 @@ export function pickPromptFields(kind, entry) {
 }
 
 // Default id prefix per kind. Pipeline accepts these defaults; writers-room
-// passes its own `wr-char-` / `wr-setting-` / `wr-object-` prefixes via the
-// sanitizer options.
+// passes its own `wr-char-` / `wr-place-` / `wr-object-` prefixes via the
+// sanitizer options. Pipeline retains the legacy `set-` prefix for places
+// so existing series-state ids round-trip; the bible-domain rename is a
+// terminology cleanup, not an id-format break.
 const DEFAULT_ID_PREFIX = Object.freeze({
   character: 'chr-',
-  setting: 'set-',
+  place: 'set-',
   object: 'obj-',
 });
 
@@ -177,7 +179,7 @@ export const normalizeBibleName = (name) => String(name || '').trim().toLowerCas
 /**
  * Case-insensitive lookup by `name` OR `aliases[]` (using
  * `normalizeBibleName`). Returns the first match or undefined; tolerates a
- * non-array list, blank needle, and null entries. Settings use sluglines
+ * non-array list, blank needle, and null entries. Places use sluglines
  * for their primary identity; use `normalizeSlugline` + a Map lookup for
  * those instead — this helper is name-keyed.
  */
@@ -315,11 +317,11 @@ export function sanitizeCharacter(raw, { idPrefix = DEFAULT_ID_PREFIX.character,
   };
 }
 
-export function sanitizeSetting(raw, { idPrefix = DEFAULT_ID_PREFIX.setting, preserveTimestamps = true } = {}) {
+export function sanitizePlace(raw, { idPrefix = DEFAULT_ID_PREFIX.place, preserveTimestamps = true } = {}) {
   if (!raw || typeof raw !== 'object') return null;
   const name = trimTo(raw.name, BIBLE_LIMITS.NAME_MAX);
   const slugline = trimTo(raw.slugline, BIBLE_LIMITS.SLUGLINE_MAX);
-  // A setting needs at least one identifier (name OR slugline). Without
+  // A place needs at least one identifier (name OR slugline). Without
   // either there's nothing for a scene matcher to key on.
   if (!name && !slugline) return null;
   const created = preserveTimestamps && isStr(raw.createdAt) ? raw.createdAt : nowIso();
@@ -328,15 +330,15 @@ export function sanitizeSetting(raw, { idPrefix = DEFAULT_ID_PREFIX.setting, pre
     id: ensureId(raw.id, idPrefix),
     name,
     slugline,
-    description: trimTo(raw.description, BIBLE_LIMITS.SETTING_DESCRIPTION_MAX),
+    description: trimTo(raw.description, BIBLE_LIMITS.PLACE_DESCRIPTION_MAX),
     palette: trimTo(raw.palette, BIBLE_LIMITS.PALETTE_MAX),
     era: trimTo(raw.era, BIBLE_LIMITS.ERA_MAX),
     weather: trimTo(raw.weather, BIBLE_LIMITS.WEATHER_MAX),
     // INT/EXT + time-of-day enums (Cluster A). null when unset — scene-prompt
-    // composer skips the metadata fragment in that case so legacy settings
+    // composer skips the metadata fragment in that case so legacy places
     // keep rendering with description-only prompts.
-    intExt: trimEnum(raw.intExt, SETTING_INT_EXT_SET),
-    timeOfDay: trimEnum(raw.timeOfDay, SETTING_TIME_OF_DAY_SET),
+    intExt: trimEnum(raw.intExt, PLACE_INT_EXT_SET),
+    timeOfDay: trimEnum(raw.timeOfDay, PLACE_TIME_OF_DAY_SET),
     recurringDetails: trimTo(raw.recurringDetails, BIBLE_LIMITS.RECURRING_DETAILS_MAX),
     notes: trimTo(raw.notes, BIBLE_LIMITS.NOTES_MAX),
     imageRefs,
@@ -394,7 +396,7 @@ export function sanitizeBibleList(rawList, kind, opts = {}) {
 
 const SANITIZERS = Object.freeze({
   character: sanitizeCharacter,
-  setting: sanitizeSetting,
+  place: sanitizePlace,
   object: sanitizeObject,
 });
 
@@ -413,7 +415,7 @@ const MERGE_CONFIG = Object.freeze({
       { field: 'aliases', normalize: normalizeBibleName },
     ],
   },
-  setting: {
+  place: {
     userEditable: ['description', 'palette', 'era', 'weather', 'intExt', 'timeOfDay', 'recurringDetails'],
     keyFields: [
       { field: 'slugline', normalize: normalizeSlugline },
@@ -461,20 +463,20 @@ function lookupExisting(map, incoming, keyFields) {
   return null;
 }
 
-// Sort key per kind. Settings can legitimately have an empty `name` while
+// Sort key per kind. Places can legitimately have an empty `name` while
 // `slugline` is the primary identifier (scene-matcher keys on it), so a
 // pure name-sort drifts all slugline-only entries to the top of the list
-// AND diverges from `writersRoom/settings.js#listSettings` which uses
+// AND diverges from `writersRoom/places.js#listPlaces` which uses
 // `slugline || name`. Characters / objects always have a name; key on it.
 const sortKey = (kind) => (entry) => {
-  if (kind === BIBLE_KIND.SETTING) return (entry.slugline || entry.name || '').toLowerCase();
+  if (kind === BIBLE_KIND.PLACE) return (entry.slugline || entry.name || '').toLowerCase();
   return (entry.name || '').toLowerCase();
 };
 
 /**
  * Merge AI-extracted entries into a bible array. Mutates and returns
  * `existing`, sorted by the kind-specific key (`slugline || name` for
- * settings, `name` for characters/objects — matches the per-kind list
+ * places, `name` for characters/objects — matches the per-kind list
  * helpers so callers don't observe an ordering flip after a merge).
  * Per-kind rules in `MERGE_CONFIG`:
  *   - match by case-insensitive name/alias/slugline
@@ -583,14 +585,14 @@ export function mergeExtractedBible(existing, incoming, kind, {
 
 /**
  * createBibleStore — per-work CRUD + merge factory. Collapses the three
- * writers-room domain files (characters/settings/objects) onto one
+ * writers-room domain files (characters/places/objects) onto one
  * implementation. `remove` (not `delete`) because the latter is a JS keyword.
  */
 
 const WORK_ID_RE = /^wr-work-[0-9a-f-]+$/i;
 const ID_SUFFIX_RE = /^[0-9a-f-]+$/i;
-const FILE_NAME = Object.freeze({ character: 'characters.json', setting: 'settings.json', object: 'objects.json' });
-const LIST_KEY = Object.freeze({ character: 'characters', setting: 'settings', object: 'objects' });
+const FILE_NAME = Object.freeze({ character: 'characters.json', place: 'places.json', object: 'objects.json' });
+const LIST_KEY = Object.freeze({ character: 'characters', place: 'places', object: 'objects' });
 const badReq = (message) => new ServerError(message, { status: 400, code: 'VALIDATION_ERROR' });
 const notFoundErr = (what) => new ServerError(`${what} not found`, { status: 404, code: 'NOT_FOUND' });
 const wrDir = (workId) => {
@@ -656,8 +658,8 @@ export function createBibleStore(opts) {
     for (const field of editableFields) {
       if (patch[field] !== undefined) draft[field] = patch[field];
     }
-    // Settings: if both name and slugline are primary, missing name + present
-    // slugline → mirror slugline → name (preserves old createSetting behavior).
+    // Places: if both name and slugline are primary, missing name + present
+    // slugline → mirror slugline → name (preserves old createPlace behavior).
     if (primaryFields.includes('name') && primaryFields.includes('slugline') && !draft.name && draft.slugline) {
       draft.name = draft.slugline;
     }
@@ -674,7 +676,7 @@ export function createBibleStore(opts) {
     if (idx < 0) throw notFoundErr(notFoundLabel);
     const next = { ...state[listKey][idx] };
     // Primary fields: single-primary kinds reject blank; multi-primary
-    // settings allow blanks here and rely on validateAfterUpdate for the
+    // places allow blanks here and rely on validateAfterUpdate for the
     // combined-blank invariant.
     for (const field of primaryFields) {
       if (patch[field] === undefined) continue;

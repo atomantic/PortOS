@@ -18,8 +18,8 @@ import {
   writersRoomAnalysisCreateSchema,
   writersRoomCharacterCreateSchema,
   writersRoomCharacterUpdateSchema,
-  writersRoomSettingCreateSchema,
-  writersRoomSettingUpdateSchema,
+  writersRoomPlaceCreateSchema,
+  writersRoomPlaceUpdateSchema,
   writersRoomObjectCreateSchema,
   writersRoomObjectUpdateSchema,
 } from '../lib/validation.js';
@@ -37,8 +37,8 @@ import {
   listCharacters, createCharacter, updateCharacter, deleteCharacter,
 } from '../services/writersRoom/characters.js';
 import {
-  listSettings, createSetting, updateSetting, deleteSetting,
-} from '../services/writersRoom/settings.js';
+  listPlaces, createPlace, updatePlace, deletePlace,
+} from '../services/writersRoom/places.js';
 import {
   listObjects, createObject, updateObject, deleteObject,
 } from '../services/writersRoom/objects.js';
@@ -194,24 +194,24 @@ router.delete('/works/:id/characters/:characterId', asyncHandler(async (req, res
   res.json(await deleteCharacter(req.params.id, req.params.characterId));
 }));
 
-// ---------- settings (locations / universe bible) ----------
+// ---------- places (locations / universe bible) ----------
 
-router.get('/works/:id/settings', asyncHandler(async (req, res) => {
-  res.json(await listSettings(req.params.id));
+router.get('/works/:id/places', asyncHandler(async (req, res) => {
+  res.json(await listPlaces(req.params.id));
 }));
 
-router.post('/works/:id/settings', asyncHandler(async (req, res) => {
-  const data = validateRequest(writersRoomSettingCreateSchema, req.body || {});
-  res.status(201).json(await createSetting(req.params.id, data));
+router.post('/works/:id/places', asyncHandler(async (req, res) => {
+  const data = validateRequest(writersRoomPlaceCreateSchema, req.body || {});
+  res.status(201).json(await createPlace(req.params.id, data));
 }));
 
-router.patch('/works/:id/settings/:settingId', asyncHandler(async (req, res) => {
-  const data = validateRequest(writersRoomSettingUpdateSchema, req.body || {});
-  res.json(await updateSetting(req.params.id, req.params.settingId, data));
+router.patch('/works/:id/places/:placeId', asyncHandler(async (req, res) => {
+  const data = validateRequest(writersRoomPlaceUpdateSchema, req.body || {});
+  res.json(await updatePlace(req.params.id, req.params.placeId, data));
 }));
 
-router.delete('/works/:id/settings/:settingId', asyncHandler(async (req, res) => {
-  res.json(await deleteSetting(req.params.id, req.params.settingId));
+router.delete('/works/:id/places/:placeId', asyncHandler(async (req, res) => {
+  res.json(await deletePlace(req.params.id, req.params.placeId));
 }));
 
 // ---------- objects (recurring symbolic items) ----------

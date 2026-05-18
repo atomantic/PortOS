@@ -130,7 +130,7 @@ Return a SINGLE JSON object. NO markdown, NO commentary. The object MUST have th
 - styleNotes:     string. A prose paragraph (≤4000 chars) describing the visual + tonal style for the story bible — references (artists, films, comics, games), mood, palette, pacing, narrative voice. This is read by writers + creative directors, not the image model, so use full sentences instead of comma-separated tokens.
 - influences:     object { "embrace": [string], "avoid": [string] }. THIS IS THE UNIVERSE'S STYLE + NEGATIVE PROMPT. Each list is a set of short prompt tokens (max 120 chars each, max 30 per list). The "embrace" list is joined verbatim as the positive style prompt prepended to every render (palette, lighting, render quality, artist references — e.g. "moebius linework", "cel-shading", "dust palette"). The "avoid" list is joined verbatim as the negative prompt (e.g. "blurry", "lowres", "watermark", "extra fingers"). Use short token-style labels, NOT full sentences. When influence input is provided above, preserve those entries unless the starter idea explicitly contradicts them.
 - characters: array. Named cast members central to this universe. Each item has { "name": string (max 120 chars), "physicalDescription": string (max 1000 chars, what they look like — face, build, age range, distinguishing marks), "personality": string (max 600 chars), "background": string (max 800 chars, where they come from + role in the world), "prompt": string (max 400 chars, the render-prompt fragment used for reference images), "tags": [string] (1-3 short labels like "protagonist", "antagonist", "supporting") }. Generate 0-8 leads. Distinct from category "variations" (which are exploratory render prompts) — these are first-class entities that downstream pipeline stages address by name.
-- settings: array. Named recurring places in this universe. Each item has { "name": string (max 120 chars, human label like "Foundry City"), "slugline": string (max 120 chars, screenplay-style location header like "EXT. FOUNDRY CITY — DAY"), "description": string (max 1000 chars), "palette": string (max 300 chars, dominant colors), "recurringDetails": string (max 600 chars, recognizable motifs that recur across scenes), "prompt": string (max 400 chars, render-prompt fragment), "tags": [string] }. Generate 0-8 key places.
+- places: array. Named recurring places in this universe. Each item has { "name": string (max 120 chars, human label like "Foundry City"), "slugline": string (max 120 chars, screenplay-style location header like "EXT. FOUNDRY CITY — DAY"), "description": string (max 1000 chars), "palette": string (max 300 chars, dominant colors), "recurringDetails": string (max 600 chars, recognizable motifs that recur across scenes), "prompt": string (max 400 chars, render-prompt fragment), "tags": [string] }. Generate 0-8 key places.
 - objects: array. Named props / vehicles / artifacts with story weight. Each item has { "name": string (max 120 chars), "description": string (max 1000 chars, what it looks like + what it does), "significance": string (max 600 chars, why it matters to the story), "prompt": string (max 400 chars, render-prompt fragment), "tags": [string] }. Generate 0-5 hero objects.
 - categories: object. Atomic reusable buckets for VISUAL EXPLORATION — bulk-render N variations to see a range of options. Use snake_case keys. Start from these common buckets when useful:
 ${WORLD_CATEGORIES.map((c) => `    - ${c}`).join("\n")}
@@ -138,14 +138,14 @@ ${WORLD_CATEGORIES.map((c) => `    - ${c}`).join("\n")}
   Useful extra buckets include colonies, factions, tribes, species, cultures, clothing_styles, material_palettes, fasteners_and_closures, tools, rituals, raider_clans, vehicles, settlements, and artifacts.
 - compositeSheets: array. Complete, ready-to-render composite board prompts. Each item has { "kind": "reference_sheet" | "world_pitch_poster", "label": string, "prompt": string up to 4000 chars }. These are NOT atomic fragments; each prompt must describe one complete board/poster that combines multiple buckets into a single image.
 
-Each category value is an object with TWO fields: { "kind": one of ${CATEGORY_KINDS.map((k) => `"${k}"`).join(" | ")}, "variations": array }. The "kind" tags which canon trunk the bucket belongs to — use "characters" for buckets of people/groups (factions, tribes, clans), "settings" for places (landscapes, environments, colonies, structures), "objects" for things (vehicles, tools, artifacts), and "other" when nothing else fits. Each variation has the shape { "label": string (max 80 chars), "prompt": string (max 400 chars, comma-separated tokens describing ONE specific subject in this category) }. Concrete example for one category:
-    "landscapes": { "kind": "settings", "variations": [
+Each category value is an object with TWO fields: { "kind": one of ${CATEGORY_KINDS.map((k) => `"${k}"`).join(" | ")}, "variations": array }. The "kind" tags which canon trunk the bucket belongs to — use "characters" for buckets of people/groups (factions, tribes, clans), "places" for locations (landscapes, environments, colonies, structures), "objects" for things (vehicles, tools, artifacts), and "other" when nothing else fits. Each variation has the shape { "label": string (max 80 chars), "prompt": string (max 400 chars, comma-separated tokens describing ONE specific subject in this category) }. Concrete example for one category:
+    "landscapes": { "kind": "places", "variations": [
       { "label": "Crystalline canyon basin", "prompt": "vast crystalline canyon, salt flats, low horizon" },
       { "label": "Scrap-iron dune sea", "prompt": "rolling dunes of rusted scrap, half-buried machinery" }
     ] }
 Do NOT use \`[...]\`, \`…\`, or any other placeholder/elision tokens — every array MUST contain real variation objects.
 
-Canon vs categories: a single named entity belongs in CANON (characters/settings/objects) — the protagonist "Ash" goes in characters[], not in a category. A bucket of N exploratory looks belongs in categories — "what could 5 different faction outfit styles look like" goes in a "factions" category with variations[]. The user will iterate on each surface separately.
+Canon vs categories: a single named entity belongs in CANON (characters/places/objects) — the protagonist "Ash" goes in characters[], not in a category. A bucket of N exploratory looks belongs in categories — "what could 5 different faction outfit styles look like" goes in a "factions" category with variations[]. The user will iterate on each surface separately.
 
 Concrete compositeSheets examples:
     { "kind": "reference_sheet", "label": "Gas-Giant Drifters costume sheet", "prompt": "Create a clean illustrated costume reference sheet for Gas-Giant Drifters, a human colony living on floating platforms and balloon settlements high in a gas giant atmosphere. Show a simplified character lineup with five figures: kite child, storm scout, main hero, sky elder, and rig worker. Include material swatches for sailcloth, balloon-skin, rubberized algae fabric, salvaged foil, flex-ceramic patches, storm-glass lenses, braided tether cord, and copper wire ornament. Include fastener/accessory icons for buckles, spring clips, pressure rings, carabiner hooks, breathing collar, goggles, tether belt, strapped sky boots, and wind streamer tabs. Include a color strip: storm blue, saffron, hot coral, orange, slate gray, cream, electric cyan, copper, cloud white. Minimal readable layout, elegant negative space, light background hints of balloon platforms and storm clouds, not baroque, not hyper-detailed." }
@@ -185,7 +185,7 @@ const isExpansionShape = (o) =>
     (o.categories && typeof o.categories === "object") ||
     Array.isArray(o.compositeSheets) ||
     Array.isArray(o.characters) ||
-    Array.isArray(o.settings) ||
+    Array.isArray(o.places) ||
     Array.isArray(o.objects));
 
 const extractJson = (raw) => {
@@ -307,11 +307,11 @@ const normalizeCanonArray = (raw, kind) => {
 /**
  * Expand a starter prompt into a structured universe template draft.
  * Returns { logline, premise, styleNotes, influences, categories, compositeSheets,
- *           characters, settings, objects, llm: { provider, model } }.
+ *           characters, places, objects, llm: { provider, model } }.
  *
- * Canon arrays (characters/settings/objects) are sanitized through
+ * Canon arrays (characters/places/objects) are sanitized through
  * sanitizeBibleList so they're shape-compatible with universe.characters[],
- * universe.settings[], universe.objects[] — the client merges them into the
+ * universe.places[], universe.objects[] — the client merges them into the
  * draft's canon arrays alongside the category merge.
  *
  * @param {object} options
@@ -450,7 +450,7 @@ export async function expandWorldTemplate({
   // entry before sanitize, so provenance lands on disk consistently with the
   // existing categories→canon backfill in universeBuilder.js.
   const characters = normalizeCanonArray(rawCharacters, BIBLE_KIND.CHARACTER);
-  const settings = normalizeCanonArray(parsed.settings, BIBLE_KIND.SETTING);
+  const places = normalizeCanonArray(parsed.places, BIBLE_KIND.PLACE);
   const objects = normalizeCanonArray(parsed.objects, BIBLE_KIND.OBJECT);
   // sanitizeInfluences enforces the same per-entry cap, list cap, and
   // case-insensitive dedupe used everywhere else. Distinguish "LLM omitted
@@ -473,9 +473,9 @@ export async function expandWorldTemplate({
     0,
   );
   console.log(
-    `🌍 Universe Builder expansion complete — runId=${runId} ${totalVariations} variations, ${compositeSheets.length} composite sheets, canon=${characters.length}/${settings.length}/${objects.length} (chars/places/objs), bible=${logline ? "yes" : "no"} (${perCat})`,
+    `🌍 Universe Builder expansion complete — runId=${runId} ${totalVariations} variations, ${compositeSheets.length} composite sheets, canon=${characters.length}/${places.length}/${objects.length} (chars/places/objs), bible=${logline ? "yes" : "no"} (${perCat})`,
   );
-  if (totalVariations === 0 && compositeSheets.length === 0 && characters.length === 0 && settings.length === 0 && objects.length === 0) {
+  if (totalVariations === 0 && compositeSheets.length === 0 && characters.length === 0 && places.length === 0 && objects.length === 0) {
     console.warn(
       `⚠️ Universe Builder expansion produced 0 variations + 0 canon — inspect data/runs/${runId}/output.txt for the raw LLM response`,
     );
@@ -489,7 +489,7 @@ export async function expandWorldTemplate({
     categories,
     compositeSheets,
     characters,
-    settings,
+    places,
     objects,
     llm: { provider: provider.id, model: selectedModel || null },
   };

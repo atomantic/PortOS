@@ -6,11 +6,11 @@
 
 const trim = (s) => (typeof s === 'string' ? s.trim() : '');
 
-// SHORT spec: chars/objects use single-with-fallback; settings uses a
+// SHORT spec: chars/objects use single-with-fallback; places uses a
 // sequence so palette can carry its prefix.
 const SHORT_SPEC = Object.freeze({
   characters: Object.freeze({ primary: 'physicalDescription', fallback: 'description' }),
-  settings: Object.freeze({
+  places: Object.freeze({
     sequence: Object.freeze([
       { field: 'description' },
       { field: 'palette', prefix: 'Palette' },
@@ -27,7 +27,7 @@ const RICH_SPEC = Object.freeze({
     { field: 'physicalDescription' },
     { field: 'role' },
   ]),
-  settings: Object.freeze([
+  places: Object.freeze([
     { field: 'description' },
     { field: 'palette', prefix: 'Palette' },
     { field: 'era', prefix: 'Era' },
@@ -43,7 +43,7 @@ const RICH_SPEC = Object.freeze({
 function normalizeKind(kind) {
   const k = String(kind || '').toLowerCase();
   if (k === 'character' || k === 'characters') return 'characters';
-  if (k === 'setting' || k === 'settings') return 'settings';
+  if (k === 'place' || k === 'places') return 'places';
   if (k === 'object' || k === 'objects') return 'objects';
   return null;
 }

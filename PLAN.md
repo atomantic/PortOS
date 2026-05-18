@@ -26,28 +26,6 @@ _Nothing currently parked — pick the next item from the Backlog._
 - [x] ~~**Universe expand LLM contract enrichment.**~~ Shipped via the Universe Builder redesign Phase B — expand contract now returns rich canon arrays alongside categories.
 - [x] ~~**arcPlanner prompt context — include canon characters/places/objects.**~~ Shipped via the Universe Builder redesign Phase B (`renderCanonForPrompt(world)` + `worldCanonText` + migration 019 for `pipeline-arc-overview`, `pipeline-arc-verify`, `pipeline-arc-resolve`, `pipeline-volume-verify`). Follow-up still open: sweep `grep -rn "world\.categories" server/services/pipeline server/services/universeBuilder*.js` for other prompt builders that read categories but not canon.
 
-- [ ] [bible-kind-setting-rename-to-place] **Bible `SETTING` kind rename to `PLACE`.** Rename the bible-domain "setting" entity to "place" everywhere it's an identifier (NOT app settings — `data/settings.json` and `/api/settings` are unrelated and stay). Migration 018 (2026-05-17, PR #265) already renamed the `writers-room-settings` stage-config key + prompt template file; this is the broader enum/field/route/data-shape rename it explicitly deferred.
-
-  **Code changes (~14 files, verified via grep 2026-05-17):**
-  - `server/lib/storyBible.js` — `BIBLE_KIND.SETTING: 'setting'` → `PLACE: 'place'`; `BIBLE_FIELD[…SETTING]: 'settings'` → `'places'`; `PROMPT_FIELDS` key; constants `SETTING_INT_EXT`, `SETTING_TIME_OF_DAY`, `SETTING_DESCRIPTION_MAX`, `SETTING_INT_EXT_SET`, `SETTING_TIME_OF_DAY_SET` → `PLACE_*`.
-  - `server/lib/{bibleExtractor,sceneExtractor}.js` — prompt-variable name `existingSettingsJson` → `existingPlacesJson` (5 sites incl. 3 in `server/services/pipeline/arcPlanner.js`).
-  - `server/services/writersRoom/settings.js` → rename file to `places.js`; function exports `listSettings/createSetting/updateSetting/deleteSetting/mergeExtractedSettings` → `listPlaces/…/mergeExtractedPlaces`; id prefix `'wr-setting-'` → `'wr-place-'`; error labels.
-  - `server/services/writersRoom/{evaluator,promoteToPipeline}.js` — import sites + `BIBLE_KIND.SETTING` usages.
-  - `server/services/{universeBuilder,universeBuilderExpand,universeBuilderPromote,universeCanon,importer}.js` + `pipeline/{arcPlanner,visualStages}.js` — `BIBLE_KIND.SETTING` swaps; `canonSelection` key `'settings'` → `'places'`; property accesses `canon.settings`, `universe.settings`.
-  - `server/routes/writersRoom.js` — route `/works/:id/settings/:settingId` → `/works/:id/places/:placeId`; param + handler renames.
-  - `client/src/pages/UniverseBuilder.jsx` — `kind === 'setting'` checks, `mergeCanonByName(..., 'setting')` calls (4 sites), `TRUNK_TABS` kind value `'settings'` → `'places'`.
-  - `client/src/components/pipeline/CanonCard.jsx` — `SETTING_INT_EXT_OPTIONS` / `SETTING_TIME_OF_DAY_OPTIONS` → `PLACE_*`.
-  - `client/src/components/{pipeline/stages/NounsStage,universe/UniverseCanonSection}.jsx` — `key: 'settings'` / `apiKind: 'setting'` shape.
-  - All `*.test.js` for the above (`storyBible.test.js`, `bibleExtractor.test.js`, `writersRoom.test.js`, `settings.test.js`, etc. — ~6 test files with fixture ids `'wr-setting-1'`, kind enums, expected error messages).
-
-  **Migration NNN-rename-bible-setting-to-place.js (required — touches persisted state):**
-  - Walk every `data/universes/*.json`, `data/series/*.json`, and any writers-room work record. For each: rename the `settings: [...]` array key → `places: [...]`, and rewrite each entry's `kind: 'setting'` → `kind: 'place'`. Idempotent guard: skip if `places` is already present.
-  - Coordinate with migration 018: 018 already renamed the stage-config KEY (`writers-room-settings` → `writers-room-places`) but did NOT touch `BIBLE_KIND.SETTING` values in canon entries; this migration is purely the record-internal rename. No conflict, but they must run in order (018 → NNN).
-  - The `existingSettingsJson` → `existingPlacesJson` prompt-variable rename also requires updating prompt template files `data.sample/prompts/stages/writers-room-places.md` and `data.sample/prompts/_partials/bible-deference.md` (currently reference `{{existingSettingsJson}}`). Stage-prompt migration pattern (see `scripts/migrations/003-…`) with `OLD_SHIPPED_MD5` / `NEW_SHIPPED_MD5` so user-customized templates aren't clobbered.
-
-  **Non-goals / out of scope:** `data/settings.json`, the Settings page, the `/api/settings` routes, app-level user-prefs — all stay as "settings".
-
-  **Why now:** with the 3-canon-trunks architecture (Cast / Places / Objects) fully shipped (see the Universe Builder redesign in DONE.md, 2026-05-17), the user-facing terminology is "Places" everywhere except inside the bible code. This finishes that alignment so a future contributor doesn't have to mentally translate `setting ↔ place`.
 
 - [ ] [use-rendered-reference-images-as-i2i-anchors-in] **Use rendered reference images as i2i anchors in downstream comic-page renders for models that support it.** SDXL/Flux pipelines anchor every panel render on the per-character rendered ref.
 

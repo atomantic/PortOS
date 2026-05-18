@@ -30,11 +30,11 @@ vi.mock('../services/writersRoom/characters.js', () => ({
   deleteCharacter: vi.fn(async () => ({ ok: true })),
 }));
 
-vi.mock('../services/writersRoom/settings.js', () => ({
-  listSettings: vi.fn(async () => [{ id: 'wr-setting-1', slugline: 'INT. KITCHEN — NIGHT' }]),
-  createSetting: vi.fn(async (workId, data) => ({ id: 'wr-setting-new', ...data })),
-  updateSetting: vi.fn(async (workId, settingId, data) => ({ id: settingId, ...data })),
-  deleteSetting: vi.fn(async () => ({ ok: true })),
+vi.mock('../services/writersRoom/places.js', () => ({
+  listPlaces: vi.fn(async () => [{ id: 'wr-place-1', slugline: 'INT. KITCHEN — NIGHT' }]),
+  createPlace: vi.fn(async (workId, data) => ({ id: 'wr-place-new', ...data })),
+  updatePlace: vi.fn(async (workId, placeId, data) => ({ id: placeId, ...data })),
+  deletePlace: vi.fn(async () => ({ ok: true })),
 }));
 
 vi.mock('../services/writersRoom/evaluator.js', () => ({
@@ -56,7 +56,7 @@ vi.mock('../services/writersRoom/promoteToPipeline.js', () => ({
 
 import * as svc from '../services/writersRoom/local.js';
 import * as charSvc from '../services/writersRoom/characters.js';
-import * as settingsSvc from '../services/writersRoom/settings.js';
+import * as placesSvc from '../services/writersRoom/places.js';
 import writersRoomRoutes from './writersRoom.js';
 
 describe('writersRoom routes', () => {
@@ -237,50 +237,50 @@ describe('writersRoom routes', () => {
     });
   });
 
-  describe('settings', () => {
-    it('GET /works/:id/settings returns the bible', async () => {
-      const r = await request(app).get('/api/writers-room/works/wr-work-1/settings');
+  describe('places', () => {
+    it('GET /works/:id/places returns the bible', async () => {
+      const r = await request(app).get('/api/writers-room/works/wr-work-1/places');
       expect(r.status).toBe(200);
-      expect(r.body[0].id).toBe('wr-setting-1');
-      expect(settingsSvc.listSettings).toHaveBeenCalledWith('wr-work-1');
+      expect(r.body[0].id).toBe('wr-place-1');
+      expect(placesSvc.listPlaces).toHaveBeenCalledWith('wr-work-1');
     });
 
-    it('POST /works/:id/settings rejects payload missing both slugline and name', async () => {
-      const r = await request(app).post('/api/writers-room/works/wr-work-1/settings').send({});
+    it('POST /works/:id/places rejects payload missing both slugline and name', async () => {
+      const r = await request(app).post('/api/writers-room/works/wr-work-1/places').send({});
       expect(r.status).toBe(400);
-      expect(settingsSvc.createSetting).not.toHaveBeenCalled();
+      expect(placesSvc.createPlace).not.toHaveBeenCalled();
     });
 
-    it('POST /works/:id/settings accepts slugline-only payload', async () => {
+    it('POST /works/:id/places accepts slugline-only payload', async () => {
       const r = await request(app)
-        .post('/api/writers-room/works/wr-work-1/settings')
+        .post('/api/writers-room/works/wr-work-1/places')
         .send({ slugline: 'INT. KITCHEN — NIGHT', description: 'cozy' });
       expect(r.status).toBe(201);
-      expect(settingsSvc.createSetting).toHaveBeenCalledWith('wr-work-1', {
+      expect(placesSvc.createPlace).toHaveBeenCalledWith('wr-work-1', {
         slugline: 'INT. KITCHEN — NIGHT',
         description: 'cozy',
       });
     });
 
-    it('POST /works/:id/settings rejects unknown extra fields', async () => {
+    it('POST /works/:id/places rejects unknown extra fields', async () => {
       const r = await request(app)
-        .post('/api/writers-room/works/wr-work-1/settings')
+        .post('/api/writers-room/works/wr-work-1/places')
         .send({ slugline: 'INT. ATTIC — DUSK', tags: ['a'] });
       expect(r.status).toBe(400);
     });
 
-    it('PATCH /works/:id/settings/:settingId forwards a partial update', async () => {
+    it('PATCH /works/:id/places/:placeId forwards a partial update', async () => {
       const r = await request(app)
-        .patch('/api/writers-room/works/wr-work-1/settings/wr-setting-1')
+        .patch('/api/writers-room/works/wr-work-1/places/wr-place-1')
         .send({ palette: 'amber and ochre' });
       expect(r.status).toBe(200);
-      expect(settingsSvc.updateSetting).toHaveBeenCalledWith('wr-work-1', 'wr-setting-1', { palette: 'amber and ochre' });
+      expect(placesSvc.updatePlace).toHaveBeenCalledWith('wr-work-1', 'wr-place-1', { palette: 'amber and ochre' });
     });
 
-    it('DELETE /works/:id/settings/:settingId forwards to the service', async () => {
-      const r = await request(app).delete('/api/writers-room/works/wr-work-1/settings/wr-setting-1');
+    it('DELETE /works/:id/places/:placeId forwards to the service', async () => {
+      const r = await request(app).delete('/api/writers-room/works/wr-work-1/places/wr-place-1');
       expect(r.status).toBe(200);
-      expect(settingsSvc.deleteSetting).toHaveBeenCalledWith('wr-work-1', 'wr-setting-1');
+      expect(placesSvc.deletePlace).toHaveBeenCalledWith('wr-work-1', 'wr-place-1');
     });
   });
 

@@ -84,22 +84,22 @@ export const deleteWritersRoomCharacter = (workId, characterId) =>
     method: 'DELETE',
   });
 
-// Settings / world bible (editable, persists across analysis runs, drives
+// Places / world bible (editable, persists across analysis runs, drives
 // scene image gen via slugline match in SceneCard)
-export const listWritersRoomSettings = (workId) =>
-  request(`/writers-room/works/${enc(workId)}/settings`);
-export const createWritersRoomSetting = (workId, data) =>
-  request(`/writers-room/works/${enc(workId)}/settings`, {
+export const listWritersRoomPlaces = (workId) =>
+  request(`/writers-room/works/${enc(workId)}/places`);
+export const createWritersRoomPlace = (workId, data) =>
+  request(`/writers-room/works/${enc(workId)}/places`, {
     method: 'POST',
     body: JSON.stringify(data),
   });
-export const updateWritersRoomSetting = (workId, settingId, patch) =>
-  request(`/writers-room/works/${enc(workId)}/settings/${enc(settingId)}`, {
+export const updateWritersRoomPlace = (workId, placeId, patch) =>
+  request(`/writers-room/works/${enc(workId)}/places/${enc(placeId)}`, {
     method: 'PATCH',
     body: JSON.stringify(patch),
   });
-export const deleteWritersRoomSetting = (workId, settingId) =>
-  request(`/writers-room/works/${enc(workId)}/settings/${enc(settingId)}`, {
+export const deleteWritersRoomPlace = (workId, placeId) =>
+  request(`/writers-room/works/${enc(workId)}/places/${enc(placeId)}`, {
     method: 'DELETE',
   });
 

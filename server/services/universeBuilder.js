@@ -45,7 +45,7 @@ import { renameCollectionForUniverse, unlinkCollectionsForUniverse } from './med
 //        split on commas and merged into influences.embrace / influences.avoid
 //        so there is a single token-list editing surface.
 //   v4 — categories carry a `kind` field tagging them to one of the 3 canon
-//        trunks (characters/settings/objects/other); the default `characters`
+//        trunks (characters/places/objects/other); the default `characters`
 //        category is retired and any variations get folded into canon
 //        characters[]. See "Categories vs canon — decision" in PLAN.md.
 export const CURRENT_SCHEMA_VERSION = 4;
@@ -153,7 +153,7 @@ export const WORLD_CATEGORIES = Object.freeze([
 // knows which canon trunk to render it under. `other` is the sink for
 // un-classified custom buckets; an "Auto-sort" UI action LLM-classifies them
 // into one of the 3 real kinds.
-export const CATEGORY_KINDS = Object.freeze(['characters', 'settings', 'objects', 'other']);
+export const CATEGORY_KINDS = Object.freeze(['characters', 'places', 'objects', 'other']);
 export const DEFAULT_CATEGORY_KIND = 'other';
 
 
@@ -162,9 +162,9 @@ export const DEFAULT_CATEGORY_KIND = 'other';
 // to DEFAULT_CATEGORY_KIND ('other') unless the input carries an explicit
 // valid `kind`.
 export const WORLD_CATEGORY_DEFAULT_KINDS = Object.freeze({
-  landscapes: 'settings',
-  environments: 'settings',
-  structures: 'settings',
+  landscapes: 'places',
+  environments: 'places',
+  structures: 'places',
   vehicles: 'objects',
 });
 
@@ -181,8 +181,8 @@ const resolveCategoryKind = (key, rawKind) => {
 // by the optional pre-v4 backfill for legacy `landscapes/vehicles/etc` buckets.
 const CATEGORY_TO_CANON = Object.freeze({
   characters:   { kind: BIBLE_KIND.CHARACTER, tags: [] },
-  landscapes:   { kind: BIBLE_KIND.SETTING,   tags: ['landscape'] },
-  environments: { kind: BIBLE_KIND.SETTING,   tags: ['environment'] },
+  landscapes:   { kind: BIBLE_KIND.PLACE,   tags: ['landscape'] },
+  environments: { kind: BIBLE_KIND.PLACE,   tags: ['environment'] },
   structures:   { kind: BIBLE_KIND.OBJECT,    tags: ['structure'] },
   vehicles:     { kind: BIBLE_KIND.OBJECT,    tags: ['vehicle'] },
 });
@@ -240,7 +240,7 @@ const sanitizeCompositeSheet = (raw) => {
 const sanitizeCategory = (raw, key) => {
   // Per-category structure: { kind, variations: [{ label, prompt }] }. Cap so a
   // runaway LLM can't blow up the universe template; matches the route schema.
-  // `kind` tags the bucket to one of the 3 canon trunks (characters/settings/
+  // `kind` tags the bucket to one of the 3 canon trunks (characters/places/
   // objects) or 'other'; resolveCategoryKind picks the best value from
   // (explicit input || built-in default || 'other').
   if (!raw || typeof raw !== 'object') {
@@ -474,7 +474,7 @@ function foldRetiredCharactersBucket(raw, canon) {
   if (!variations) return canon;
   const next = {
     characters: Array.isArray(canon.characters) ? [...canon.characters] : [],
-    settings: canon.settings,
+    places: canon.places,
     objects: canon.objects,
   };
   // Index existing canon character names AND aliases — server-side
@@ -526,14 +526,14 @@ function foldRetiredCharactersBucket(raw, canon) {
 // retired `characters` bucket is handled by foldRetiredCharactersBucket
 // before this runs; here we only fold the *other* legacy categories
 // (landscapes/environments/structures/vehicles + customs) into
-// settings/objects for the v3→v4 transition.
+// places/objects for the v3→v4 transition.
 function backfillCanonFromCategories(raw, existingCanon) {
   // v4 hot path — already backfilled. Sanitize through the kind sanitizers
   // once and return; no category scan needed.
   if (raw.schemaVersion >= CURRENT_SCHEMA_VERSION) {
     return {
       characters: sanitizeBibleList(existingCanon.characters, BIBLE_KIND.CHARACTER),
-      settings: sanitizeBibleList(existingCanon.settings, BIBLE_KIND.SETTING),
+      places: sanitizeBibleList(existingCanon.places, BIBLE_KIND.PLACE),
       objects: sanitizeBibleList(existingCanon.objects, BIBLE_KIND.OBJECT),
       schemaVersion: raw.schemaVersion,
     };
@@ -541,12 +541,12 @@ function backfillCanonFromCategories(raw, existingCanon) {
 
   const next = {
     characters: Array.isArray(existingCanon.characters) ? [...existingCanon.characters] : [],
-    settings: Array.isArray(existingCanon.settings) ? [...existingCanon.settings] : [],
+    places: Array.isArray(existingCanon.places) ? [...existingCanon.places] : [],
     objects: Array.isArray(existingCanon.objects) ? [...existingCanon.objects] : [],
   };
   const nameSeen = {
     characters: new Set(next.characters.map((e) => normalizeBibleName(e?.name))),
-    settings: new Set(next.settings.map((e) => normalizeBibleName(e?.name))),
+    places: new Set(next.places.map((e) => normalizeBibleName(e?.name))),
     objects: new Set(next.objects.map((e) => normalizeBibleName(e?.name))),
   };
 
@@ -572,9 +572,9 @@ function backfillCanonFromCategories(raw, existingCanon) {
         source: BIBLE_SOURCE.UNIVERSE_EXPAND,
       };
       if (variation?.locked === true) entry.locked = true;
-      // Setting sanitizer requires a name OR slugline; planting the label as
+      // Place sanitizer requires a name OR slugline; planting the label as
       // both preserves the variation identity for scene-matchers.
-      if (kind === BIBLE_KIND.SETTING) entry.slugline = label;
+      if (kind === BIBLE_KIND.PLACE) entry.slugline = label;
       next[targetField].push(entry);
       nameSeen[targetField].add(nameKey);
     }
@@ -582,7 +582,7 @@ function backfillCanonFromCategories(raw, existingCanon) {
 
   return {
     characters: sanitizeBibleList(next.characters, BIBLE_KIND.CHARACTER),
-    settings: sanitizeBibleList(next.settings, BIBLE_KIND.SETTING),
+    places: sanitizeBibleList(next.places, BIBLE_KIND.PLACE),
     objects: sanitizeBibleList(next.objects, BIBLE_KIND.OBJECT),
     schemaVersion: CURRENT_SCHEMA_VERSION,
   };
@@ -615,16 +615,16 @@ const sanitizeTemplate = (raw) => {
   //      bucket arriving from any write path folds into universe.characters[].
   //   2. backfillCanonFromCategories — legacy v3→v4 migration. Runs ONLY for
   //      pre-v4 reads, folds all OTHER category buckets (landscapes/vehicles/
-  //      custom) into settings/objects. New v4 universes skip this so Phase
+  //      custom) into places/objects. New v4 universes skip this so Phase
   //      B's separation of canon (named entities) and categories (exploratory
   //      variations) stays clean.
   const foldedCanon = foldRetiredCharactersBucket(raw, {
     characters: raw.characters,
-    settings: raw.settings,
+    places: raw.places,
     objects: raw.objects,
   });
   const canonBackfill = backfillCanonFromCategories(raw, foldedCanon);
-  const { characters, settings, objects, schemaVersion } = canonBackfill;
+  const { characters, places, objects, schemaVersion } = canonBackfill;
   const llm = raw.llm && typeof raw.llm === 'object'
     ? {
       provider: trimTo(raw.llm.provider, 80) || null,
@@ -645,7 +645,7 @@ const sanitizeTemplate = (raw) => {
     influences,
     locked,
     characters,
-    settings,
+    places,
     objects,
     schemaVersion,
     llm,
@@ -736,12 +736,12 @@ export async function createUniverse(input = {}) {
       // (writers-room promote, share-bucket import). sanitizeTemplate runs
       // each through sanitizeBibleList, so per-entry shape is enforced.
       characters: input.characters || [],
-      settings: input.settings || [],
+      places: input.places || [],
       objects: input.objects || [],
       // Stamp the current schema so backfillCanonFromCategories takes its
       // hot-path skip on first read. Without this, the legacy categories→
       // canon backfill fires on every brand-new universe and re-pollutes
-      // `characters/settings/objects` with every category variation —
+      // `characters/places/objects` with every category variation —
       // counter to Phase B's separation of canon (named entities) from
       // categories (exploratory variations). New universes are always at
       // CURRENT_SCHEMA_VERSION; the backfill exists only for legacy reads.
@@ -847,7 +847,7 @@ export async function updateUniverse(id, patchOrMutator = {}) {
       'logline', 'premise', 'styleNotes', 'compositeSheets',
       // Canon entity arrays — patched wholesale (the sanitizer reruns
       // sanitizeBibleList so per-entry shape is enforced on every save).
-      'characters', 'settings', 'objects',
+      'characters', 'places', 'objects',
       // Share-bucket origin metadata (importer sets it; user clears via wholesale null).
       'origin',
     ];
@@ -1049,7 +1049,7 @@ export function buildUniverseStyleContext(universe, options = {}) {
 // the compiled-prompts list is stable across renders.
 const CANON_TRUNKS = Object.freeze([
   { key: 'characters', category: 'canon:characters' },
-  { key: 'settings',   category: 'canon:settings' },
+  { key: 'places',     category: 'canon:places' },
   { key: 'objects',    category: 'canon:objects' },
 ]);
 
@@ -1061,12 +1061,12 @@ export function synthesizeCanonPrompt(kind, entry) {
   if (!entry) return '';
   if (typeof entry.prompt === 'string' && entry.prompt.trim()) return entry.prompt.trim();
   // Identifier seed: `name` is the shared anchor for all kinds. For
-  // `settings`, the bible sanitizer allows entries whose ONLY identifier is
+  // `places`, the bible sanitizer allows entries whose ONLY identifier is
   // a slugline (e.g. "EXT. FOUNDRY CITY — DAY") with no separate name — fall
   // back to slugline so those entries don't synthesize to an empty seed and
   // get silently skipped at render time.
   const name = typeof entry.name === 'string' ? entry.name.trim() : '';
-  const sluglineId = (kind === 'settings' && typeof entry.slugline === 'string')
+  const sluglineId = (kind === 'places' && typeof entry.slugline === 'string')
     ? entry.slugline.trim()
     : '';
   const identifier = name || sluglineId;
@@ -1089,10 +1089,10 @@ export function synthesizeCanonPrompt(kind, entry) {
  *     - array of labels → only those labels (case-insensitive match)
  *     - missing key → skip the category entirely
  *
- *   canonSelection: { characters?: 'all' | string[], settings?: ..., objects?: ... }
+ *   canonSelection: { characters?: 'all' | string[], places?: ..., objects?: ... }
  *     - 'all' → render every entry in that canon trunk
  *     - array of names → only those names (case-insensitive match against
- *       `name` and, for settings, `slugline`)
+ *       `name` and, for places, `slugline`)
  *     - missing key → skip the trunk entirely
  *
  *   batchPerVariation: how many renders per variation (1..20)
@@ -1190,11 +1190,11 @@ export function compilePrompts(universe, options = {}) {
           : entries.filter((e) => Array.isArray(sel) && sel.some((s) => {
               const needle = s.toLowerCase();
               if (typeof e.name === 'string' && e.name.toLowerCase() === needle) return true;
-              // Slugline is settings-only (see canonSelection docstring above
+              // Slugline is places-only (see canonSelection docstring above
               // and BIBLE_FIELD_WHITELIST). Avoid matching a stray slugline
               // field on a character/object payload — that field isn't part of
               // the canon contract for those kinds.
-              if (trunk.key === 'settings'
+              if (trunk.key === 'places'
                   && typeof e.slugline === 'string'
                   && e.slugline.toLowerCase() === needle) return true;
               return false;

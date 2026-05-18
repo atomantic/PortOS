@@ -109,7 +109,7 @@ const mapServiceError = (err) => {
 
 // ---- Series schemas ----
 //
-// Canon (characters / settings / objects) is no longer carried on a series
+// Canon (characters / places / objects) is no longer carried on a series
 // payload — it lives on the linked universe (Phase B.4). The bible-entry
 // Zod shapes (`characterSchema` et al.) and the `BIBLE_KIND` plumbing moved
 // out of this file when the series-side canon routes were retired.
@@ -328,7 +328,7 @@ const generateSchema = z.object({
 
 const visualGenerateSchema = z.object({
   description: z.string().trim().min(1).max(8000),
-  // Matched against the series settings bible when present.
+  // Matched against the series places bible when present.
   slugline: z.string().trim().max(200).optional(),
   negativePrompt: z.string().trim().max(2000).optional(),
   extraStyle: z.string().trim().max(2000).optional(),
@@ -980,7 +980,7 @@ router.post('/series/:id/seasons/:seasonId/episodes/generate', asyncHandler(asyn
       if (extractRes) {
         bibleExtracted = {
           characters: extractRes.results.characters?.extracted?.length || 0,
-          settings: extractRes.results.settings?.extracted?.length || 0,
+          places: extractRes.results.places?.extracted?.length || 0,
           objects: extractRes.results.objects?.extracted?.length || 0,
           universe: extractRes.universe,
         };
@@ -1251,13 +1251,13 @@ router.post('/issues/:id/stages/storyboards/extract-scenes', asyncHandler(async 
   // provider/model picked in the issue header (which mirrors series.llm).
   // Canon lives on the linked universe (Phase B.4). Orphan series render
   // with empty canon — extractScenes can still produce scenes from the
-  // source text alone, just without character/setting/object grounding.
+  // source text alone, just without character/place/object grounding.
   const canon = await getSeriesCanon(series);
   const result = await extractScenes({
     source,
     sourceKind,
     characters: canon.characters,
-    settings: canon.settings,
+    places: canon.places,
     objects: canon.objects,
     work: { title: issue.title, kind: 'tv-episode' },
     series: { name: series.name, styleNotes: series.styleNotes },

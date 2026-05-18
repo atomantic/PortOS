@@ -162,8 +162,11 @@ const SHIPPED_PROMPT_OLD_MD5 = {
   'pipeline-arc-resolve.md':    ['87bc5c01f1a8a97b681727a38b05edc6', 'a8677bbe1eb38f871fb152a5b0fec7c6'],
   // Shot decomposition additions (migration 006).
   'pipeline-extract-scenes.md':  '59fa5ee305ce53d91eb15224d8b546d3',
-  // INT/EXT + time-of-day additions to the places extractor (migration 007).
-  'writers-room-places.md':      '7f1f80eb63d67a21161994cde115045e',
+  // setting→place rename, migration 022. Two known auto-updatable hashes:
+  // pre-019 (`7f1f80…`, INT/EXT addition) and pre-022 (`24a336…`, the
+  // hash that was the NEW shipped before this rename). Both can be
+  // auto-bumped to the post-rename shape.
+  'writers-room-places.md':      ['7f1f80eb63d67a21161994cde115045e', '24a33628cc94d80fa5ca60831d973daf'],
   // CoS agent prompt: drop obsolete "# Chief of Staff Agent Briefing" header
   // and "You are an autonomous agent…" preamble (migration 009). Every
   // historical shipped hash is auto-updatable to the new sample.
@@ -187,7 +190,7 @@ const SHIPPED_PROMPT_NEW_MD5 = {
   'pipeline-volume-verify.md':  '49458d36700cb94e34806d536ffe2940',
   'pipeline-arc-resolve.md':    '8e348f3d1894382889f9f0ee7d5c6792',
   'pipeline-extract-scenes.md': 'c51fb208568d0d903eb43b437478b0ba',
-  'writers-room-places.md':     '24a33628cc94d80fa5ca60831d973daf',
+  'writers-room-places.md':     'a7f68e51dd6b4421d20f5bd9d855d9b4',
   'cos-agent-briefing.md':      'dccb392a43cbd3dac900fee12c31619a',
 };
 const SHIPPED_PROMPT_FILES = Object.keys(SHIPPED_PROMPT_OLD_MD5);

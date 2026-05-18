@@ -93,11 +93,11 @@ function matchEntriesByCandidates(text, entries, candidatesFn) {
   return matched;
 }
 
-// Scan free-form prose for bible-canonical settings. Mirrors
-// `matchCharactersInText` but tests against `name` (settings have no aliases
+// Scan free-form prose for bible-canonical places. Mirrors
+// `matchCharactersInText` but tests against `name` (places have no aliases
 // in the canonical schema — slugline is for screenplay matching, not prose).
-export function matchSettingsInText(text, allSettings) {
-  return matchEntriesByCandidates(text, allSettings, (s) => [s.name]);
+export function matchPlacesInText(text, allPlaces) {
+  return matchEntriesByCandidates(text, allPlaces, (p) => [p.name]);
 }
 
 // Scan free-form prose for bible-canonical objects. Mirrors
@@ -151,7 +151,7 @@ export function buildScenePrompt(workTitle, scene, matchedCharacters, worldStyle
   // boundary so palette + recurringDetails don't run together when the
   // budget-truncation join collapses fragments with a single space.
   const baselineFrags = matchedSetting
-    ? shortCanonDescriptorFragments('setting', matchedSetting)
+    ? shortCanonDescriptorFragments('place', matchedSetting)
       .map((f) => (f.prefix ? `${f.prefix}: ${f.value}.` : f.value))
     : [];
   const settingFrags = matchedSetting ? [

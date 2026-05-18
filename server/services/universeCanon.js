@@ -1,4 +1,4 @@
-// Canon entities on the universe — characters, settings, objects. Mirrors
+// Canon entities on the universe — characters, places, objects. Mirrors
 // `pipeline/series.js`'s extract+refine paths but writes into the universe
 // so multiple series can share a cast (Phase A of the Universe-as-canon
 // refactor). The series-side helpers stay live until Phase B migrates
@@ -49,7 +49,7 @@ export async function extractCanonFromProse(universeId, opts = {}) {
   const universe = await getUniverse(universeId);
   const rawKinds = (opts.kinds && opts.kinds.length)
     ? opts.kinds
-    : [BIBLE_KIND.CHARACTER, BIBLE_KIND.SETTING, BIBLE_KIND.OBJECT];
+    : [BIBLE_KIND.CHARACTER, BIBLE_KIND.PLACE, BIBLE_KIND.OBJECT];
   const kinds = [...new Set(rawKinds)];
   if (typeof opts.corpus !== 'string' || !opts.corpus.trim()) {
     throw new ServerError('extractCanonFromProse: corpus is required', {
@@ -257,7 +257,7 @@ export async function setCanonEntryLock(universeId, kind, entryId, locked) {
 
 /**
  * Strip a filename from every `imageRefs[]` across every universe's
- * characters/settings/objects. Mirror of the series-side purge so the image-
+ * characters/places/objects. Mirror of the series-side purge so the image-
  * delete route can clean both stores in one pass.
  */
 export async function purgeImageRefFromAllUniverses(filename) {

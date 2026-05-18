@@ -1,10 +1,10 @@
 import { Fragment, useMemo } from 'react';
 
-// proseTokenizer — finds character / setting / object name occurrences in a
+// proseTokenizer — finds character / place / object name occurrences in a
 // paragraph and wraps them in styled spans.
 //
 // Algorithm: leftmost-longest greedy match.
-//   1. Flatten characters/settings/objects into a list of {term, kind, refId, label}
+//   1. Flatten characters/places/objects into a list of {term, kind, refId, label}
 //      entries. Drop terms < 3 chars to avoid pronoun spam ("It", "An").
 //   2. For each entry, find every case-insensitive occurrence in the paragraph
 //      via a sliding indexOf.
@@ -32,7 +32,7 @@ const TOKEN_CLASS = {
   },
 };
 
-export function buildTokenIndex({ characters = [], settings = [], objects = [] } = {}) {
+export function buildTokenIndex({ characters = [], places = [], objects = [] } = {}) {
   const entries = [];
   const push = (kind, refId, label, term) => {
     if (!term || typeof term !== 'string') return;
@@ -45,11 +45,11 @@ export function buildTokenIndex({ characters = [], settings = [], objects = [] }
     push('char', c.id, c.name || '', c.name);
     for (const a of c.aliases || []) push('char', c.id, c.name || a, a);
   }
-  for (const s of settings) {
-    if (!s?.id) continue;
-    const label = s.name || s.slugline || '';
-    if (s.name) push('place', s.id, label, s.name);
-    if (s.slugline && s.slugline !== s.name) push('place', s.id, label, s.slugline);
+  for (const p of places) {
+    if (!p?.id) continue;
+    const label = p.name || p.slugline || '';
+    if (p.name) push('place', p.id, label, p.name);
+    if (p.slugline && p.slugline !== p.name) push('place', p.id, label, p.slugline);
   }
   for (const o of objects) {
     if (!o?.id) continue;
@@ -92,7 +92,7 @@ export function tokenizeParagraph(text, entries) {
 export function renderTokenized(text, {
   entries = null,
   characters = [],
-  settings = [],
+  places = [],
   objects = [],
   hotRef = null,
   onTokenEnter,
@@ -103,7 +103,7 @@ export function renderTokenized(text, {
   // Prefer the caller's pre-built index (paid once per bibles change). Fall
   // back to building per-call when only raw bible arrays are passed — handy
   // for ad-hoc renders, but not what ProseReader does.
-  const idx = entries || buildTokenIndex({ characters, settings, objects });
+  const idx = entries || buildTokenIndex({ characters, places, objects });
   const annotations = tokenizeParagraph(text, idx);
   if (!annotations.length) return <Fragment>{text}</Fragment>;
   const out = [];
@@ -155,6 +155,6 @@ export function renderTokenized(text, {
 
 // Convenience hook: memoize the entries so paragraphs don't rebuild the index
 // on every render. Pair with paragraph-level useMemo for the annotation pass.
-export function useTokenEntries({ characters, settings, objects }) {
-  return useMemo(() => buildTokenIndex({ characters, settings, objects }), [characters, settings, objects]);
+export function useTokenEntries({ characters, places, objects }) {
+  return useMemo(() => buildTokenIndex({ characters, places, objects }), [characters, places, objects]);
 }

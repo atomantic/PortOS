@@ -76,7 +76,7 @@ describe('universeBuilderAutoSort — happy path', () => {
     expect(w.categories.relics.kind).toBe('other');
 
     mockLlmClassifications([
-      { key: 'colonies', kind: 'settings' },
+      { key: 'colonies', kind: 'places' },
       { key: 'factions', kind: 'characters' },
       { key: 'relics', kind: 'objects' },
     ]);
@@ -88,11 +88,11 @@ describe('universeBuilderAutoSort — happy path', () => {
 
     expect(resolveProviderAndModelMock).toHaveBeenCalledWith({ providerId: 'p-explicit', model: 'm-explicit' });
     expect(result.results).toEqual([
-      { sourceKey: 'colonies', kind: 'settings', suggestedKey: null },
+      { sourceKey: 'colonies', kind: 'places', suggestedKey: null },
       { sourceKey: 'factions', kind: 'characters', suggestedKey: null },
       { sourceKey: 'relics', kind: 'objects', suggestedKey: null },
     ]);
-    expect(result.universe.categories.colonies.kind).toBe('settings');
+    expect(result.universe.categories.colonies.kind).toBe('places');
     expect(result.universe.categories.factions.kind).toBe('characters');
     expect(result.universe.categories.relics.kind).toBe('objects');
     // Variations are preserved through the patch — the bucket itself moves
@@ -106,7 +106,7 @@ describe('universeBuilderAutoSort — happy path', () => {
   it('short-circuits with no LLM call when no other-kinded buckets exist', async () => {
     const w = await seedUniverseWithBuckets({
       landscapes: {
-        kind: 'settings',
+        kind: 'places',
         variations: [{ label: 'Crystalline canyon', prompt: 'salt flats' }],
       },
     });
@@ -120,7 +120,7 @@ describe('universeBuilderAutoSort — happy path', () => {
   it('leaves non-other buckets untouched in the patch', async () => {
     const w = await seedUniverseWithBuckets({
       landscapes: {
-        kind: 'settings',
+        kind: 'places',
         variations: [{ label: 'Crystalline canyon', prompt: 'salt flats' }],
       },
       colonies: {
@@ -128,15 +128,15 @@ describe('universeBuilderAutoSort — happy path', () => {
       },
     });
     mockLlmClassifications([
-      { key: 'colonies', kind: 'settings' },
+      { key: 'colonies', kind: 'places' },
     ]);
 
     const result = await autoSortSvc.autoSortOtherBuckets(w.id);
 
     // The settings-kinded `landscapes` bucket is preserved exactly.
-    expect(result.universe.categories.landscapes.kind).toBe('settings');
+    expect(result.universe.categories.landscapes.kind).toBe('places');
     expect(result.universe.categories.landscapes.variations[0].label).toBe('Crystalline canyon');
-    expect(result.universe.categories.colonies.kind).toBe('settings');
+    expect(result.universe.categories.colonies.kind).toBe('places');
   });
 });
 
@@ -186,7 +186,7 @@ describe('universeBuilderAutoSort — LLM-shaped failures', () => {
       },
     });
     mockLlmClassifications([
-      { key: 'colonies', kind: 'settings' },
+      { key: 'colonies', kind: 'places' },
       { key: 'hallucinated_bucket', kind: 'characters' },
     ]);
 
@@ -202,7 +202,7 @@ describe('universeBuilderAutoSort — LLM-shaped failures', () => {
       },
     });
     mockLlmClassifications([
-      { key: 'hallucinated_only', kind: 'settings' },
+      { key: 'hallucinated_only', kind: 'places' },
     ]);
     await expect(
       autoSortSvc.autoSortOtherBuckets(w.id),

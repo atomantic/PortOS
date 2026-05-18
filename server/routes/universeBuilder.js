@@ -6,7 +6,7 @@
  *   GET    /api/universe-builder/:id                    → Universe
  *   PATCH  /api/universe-builder/:id                    → Universe
  *   DELETE /api/universe-builder/:id                    → { id }
- *   POST   /api/universe-builder/expand                 → { logline, premise, styleNotes, influences, categories, compositeSheets, characters, settings, objects, llm }
+ *   POST   /api/universe-builder/expand                 → { logline, premise, styleNotes, influences, categories, compositeSheets, characters, places, objects, llm }
  *   POST   /api/universe-builder/:id/render             → { runId, collectionId, jobIds, promptCount }
  *   GET    /api/universe-builder/:id/runs               → Run[]
  */
@@ -62,7 +62,7 @@ const compositeSheetSchema = z.object({
 const categoryShape = z.object({
   // Tags this bucket to one of the 3 canon trunks (or 'other' as the
   // un-classified sink). Optional on input — sanitizeCategories resolves a
-  // sensible default from the built-in map (landscapes→settings etc.) or
+  // sensible default from the built-in map (landscapes→places etc.) or
   // falls to 'other'. Added in schema v4.
   kind: z.enum(svc.CATEGORY_KINDS).optional(),
   variations: z.array(variationSchema).max(svc.VARIATIONS_PER_CATEGORY_MAX),
@@ -131,7 +131,7 @@ const createSchema = z.object({
   // import, and tests can seed a universe with canon at create time instead
   // of needing a second PATCH round-trip.
   characters: canonArrayField,
-  settings: canonArrayField,
+  places: canonArrayField,
   objects: canonArrayField,
 });
 // `origin` is a share-bucket provenance block written by the importer + cleared
@@ -159,7 +159,7 @@ const patchSchema = z.object({
   // patch (PATCHABLE_SCALARS in services/universeBuilder.js reads them
   // from the post-Zod body, so they'd never reach the writer).
   characters: canonArrayField,
-  settings: canonArrayField,
+  places: canonArrayField,
   objects: canonArrayField,
   origin: originField,
 }).refine((p) => Object.keys(p).length > 0, { message: 'patch must include at least one field' });
@@ -264,9 +264,9 @@ const selectionSchema = z.record(
 // tab can target an entry the user filed by slugline ("INT. FOUNDRY — DAY").
 // Per-trunk cap mirrors the bible sanitizer (`ENTRIES_PER_BIBLE_MAX`) so this
 // can't enqueue more entries than the server actually persists; per-string cap
-// uses the looser of `NAME_MAX` / `SLUGLINE_MAX` so a settings entry filed by
+// uses the looser of `NAME_MAX` / `SLUGLINE_MAX` so a places entry filed by
 // slugline isn't rejected if those limits ever diverge (both 200 today).
-const CANON_TRUNK_KEYS = ['characters', 'settings', 'objects'];
+const CANON_TRUNK_KEYS = ['characters', 'places', 'objects'];
 const CANON_NEEDLE_MAX = Math.max(BIBLE_LIMITS.NAME_MAX, BIBLE_LIMITS.SLUGLINE_MAX);
 const canonSelectionValueSchema = z.union([
   z.literal('all'),

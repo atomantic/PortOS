@@ -1,4 +1,4 @@
-// Resolves a series's effective canon (characters, settings, objects) by
+// Resolves a series's effective canon (characters, places, objects) by
 // reading the linked universe. Series no longer carries canon arrays of its
 // own (Phase B.4) — every active series is universe-linked, so this is just
 // a thin async lookup that returns empty arrays when the series has no
@@ -10,19 +10,19 @@ import { getUniverse } from '../universeBuilder.js';
 // at a caller would silently pollute every future orphan-series read.
 const EMPTY = Object.freeze({
   characters: Object.freeze([]),
-  settings: Object.freeze([]),
+  places: Object.freeze([]),
   objects: Object.freeze([]),
 });
 
 /**
- * Shape a universe record into `{ characters, settings, objects }` arrays,
+ * Shape a universe record into `{ characters, places, objects }` arrays,
  * tolerating missing/non-array fields. Exposed so callers that already have
  * a universe in scope (e.g. `visualStages.loadBibleContext`) can avoid the
  * round-trip through `getSeriesCanon`.
  */
 export const pickCanon = (universe) => ({
   characters: Array.isArray(universe?.characters) ? universe.characters : [],
-  settings: Array.isArray(universe?.settings) ? universe.settings : [],
+  places: Array.isArray(universe?.places) ? universe.places : [],
   objects: Array.isArray(universe?.objects) ? universe.objects : [],
 });
 
@@ -31,7 +31,7 @@ export const pickCanon = (universe) => ({
  * universe record in scope. Returns frozen-empty when the series is orphan
  * (no universeId) or the linked universe is missing.
  *
- * @returns {Promise<{ characters, settings, objects }>}
+ * @returns {Promise<{ characters, places, objects }>}
  */
 export async function getSeriesCanon(series) {
   if (!series?.universeId) return EMPTY;

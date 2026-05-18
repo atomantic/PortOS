@@ -42,8 +42,8 @@ const KINDS = [
     descFor: (c) => descriptorForCanonEntry('characters', c),
   },
   {
-    key: 'settings', apiKind: 'setting', label: 'Places', singular: 'place', icon: MapPin,
-    descFor: (s) => descriptorForCanonEntry('settings', s),
+    key: 'places', apiKind: 'place', label: 'Places', singular: 'place', icon: MapPin,
+    descFor: (p) => descriptorForCanonEntry('places', p),
   },
   {
     key: 'objects', apiKind: 'object', label: 'Objects', singular: 'object', icon: Package,
@@ -273,7 +273,7 @@ export default function UniverseCanonSection({ universe, universeId, onUniverseC
 
   const handleRenderCleanPlate = async (entry) => {
     // Match CanonCard's button-enable predicate (descFor includes palette +
-    // recurringDetails for settings) — composeCleanPlatePrompt builds a valid
+    // recurringDetails for places) — composeCleanPlatePrompt builds a valid
     // prompt from any of {description, palette, recurringDetails}, so gating
     // on `description` alone produces a button that fails with this toast
     // even though the composer would have succeeded.
@@ -361,7 +361,7 @@ export default function UniverseCanonSection({ universe, universeId, onUniverseC
           </h2>
           <p className="text-xs text-gray-500 mt-0.5">
             {kindFilter === 'characters' && 'Recurring people in this universe. Series share the same canon — issues reference these entries so a character renders consistently across crossovers.'}
-            {kindFilter === 'settings' && 'Recurring places in this universe. Series share the same canon — slugline-anchored entries can be referenced across issues.'}
+            {kindFilter === 'places' && 'Recurring places in this universe. Series share the same canon — slugline-anchored entries can be referenced across issues.'}
             {kindFilter === 'objects' && 'Recurring objects/items in this universe. Series share the same canon — issues reference these entries for visual continuity.'}
             {!kindFilter && 'People, places, and things that exist in this universe. Series in this universe share the same canon — episodes/issues reference these entries so a character renders consistently across crossovers.'}
           </p>
@@ -392,7 +392,7 @@ export default function UniverseCanonSection({ universe, universeId, onUniverseC
             <Library size={12} /> Extract from prose
           </button>
           {/* "AI: differentiate cast" is a character-only operation. When the
-              parent passes `kindFilter` to scope this section to settings or
+              parent passes `kindFilter` to scope this section to places or
               objects, hide the action so it doesn't look applicable to the
               current trunk. Keep it visible on the all-kinds view + on the
               characters-filtered view. */}

@@ -23,7 +23,7 @@ vi.mock('crypto', async () => {
 // Default mock just echoes back a minimal canon entry shape so the route
 // returns 200 and the schema/validation paths get exercised end-to-end.
 const promoteVariationToCanonMock = vi.fn(async (_universeId, body = {}) => ({
-  universe: { id: _universeId, characters: [], settings: [], objects: [] },
+  universe: { id: _universeId, characters: [], places: [], objects: [] },
   entry: { id: 'mock-entry', name: body.label },
   targetKind: body.targetKind || 'characters',
   removed: { category: body.category, label: body.label },
@@ -45,7 +45,7 @@ vi.mock('../services/universeBuilderPromote.js', async () => {
 // exercised without shelling out to a real LLM.
 const autoSortOtherBucketsMock = vi.fn(async (universeId, body = {}) => ({
   universe: { id: universeId, categories: {} },
-  results: [{ sourceKey: 'colonies', kind: 'settings', suggestedKey: null }],
+  results: [{ sourceKey: 'colonies', kind: 'places', suggestedKey: null }],
   llm: { provider: 'mock', model: body.model || null },
   runId: 'mock-autosort-run',
 }));
@@ -174,7 +174,7 @@ describe('universe-builder routes', () => {
     expect(Object.keys(res.body.categories).sort()).toEqual(
       ['environments', 'landscapes', 'structures', 'vehicles'],
     );
-    expect(res.body.categories.landscapes.kind).toBe('settings');
+    expect(res.body.categories.landscapes.kind).toBe('places');
     expect(res.body.categories.vehicles.kind).toBe('objects');
   });
 
@@ -185,12 +185,12 @@ describe('universe-builder routes', () => {
         name: 'Kinded',
         categories: {
           factions: { kind: 'characters', variations: [{ label: 'Iron Reach', prompt: 'x' }] },
-          colonies: { kind: 'settings', variations: [{ label: 'Tycho', prompt: 'y' }] },
+          colonies: { kind: 'places', variations: [{ label: 'Tycho', prompt: 'y' }] },
         },
       });
     expect(res.status).toBe(201);
     expect(res.body.categories.factions.kind).toBe('characters');
-    expect(res.body.categories.colonies.kind).toBe('settings');
+    expect(res.body.categories.colonies.kind).toBe('places');
   });
 
   it('POST / rejects an invalid `kind` enum value via Zod', async () => {
@@ -339,15 +339,15 @@ describe('universe-builder routes', () => {
       .patch(`/api/universe-builder/${c.body.id}`)
       .send({
         characters: [{ name: 'Jean', physicalDescription: 'tall, dark hair' }],
-        settings: [{ slugline: 'INT. BAR — NIGHT', intExt: 'INT', timeOfDay: 'night' }],
+        places: [{ slugline: 'INT. BAR — NIGHT', intExt: 'INT', timeOfDay: 'night' }],
         objects: [{ name: 'Gold pocket watch', description: 'tarnished brass casing' }],
       });
     expect(res.status).toBe(200);
     expect(res.body.characters).toHaveLength(1);
     expect(res.body.characters[0].name).toBe('Jean');
-    expect(res.body.settings).toHaveLength(1);
-    expect(res.body.settings[0].intExt).toBe('INT');
-    expect(res.body.settings[0].timeOfDay).toBe('night');
+    expect(res.body.places).toHaveLength(1);
+    expect(res.body.places[0].intExt).toBe('INT');
+    expect(res.body.places[0].timeOfDay).toBe('night');
     expect(res.body.objects).toHaveLength(1);
     expect(res.body.objects[0].name).toBe('Gold pocket watch');
   });
@@ -622,7 +622,7 @@ describe('universe-builder routes', () => {
         providerId: 'p1',
         model: 'm1',
       }));
-      expect(res.body.results[0].kind).toBe('settings');
+      expect(res.body.results[0].kind).toBe('places');
       expect(res.body.runId).toBe('mock-autosort-run');
     });
 

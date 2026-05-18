@@ -17,7 +17,7 @@ vi.mock('./fileUtils.js', async () => {
 const storyBible = await import('./storyBible.js');
 const {
   sanitizeCharacter,
-  sanitizeSetting,
+  sanitizePlace,
   sanitizeObject,
   sanitizeBibleList,
   mergeExtractedBible,
@@ -136,7 +136,7 @@ describe('storyBible — sanitizeCharacter', () => {
   });
 
   it('extras apply identically to settings + objects', () => {
-    const s = sanitizeSetting({ name: 'Bubble Room', tags: ['indoor'], prompt: 'pastel lab', locked: true });
+    const s = sanitizePlace({ name: 'Bubble Room', tags: ['indoor'], prompt: 'pastel lab', locked: true });
     expect(s.tags).toEqual(['indoor']);
     expect(s.prompt).toBe('pastel lab');
     expect(s.locked).toBe(true);
@@ -176,7 +176,7 @@ describe('storyBible — sanitizeCharacter', () => {
     });
 
     it('applies identically to settings and objects', () => {
-      const s = sanitizeSetting({
+      const s = sanitizePlace({
         name: 'Bar',
         imageRefs: ['plate.png'],
         primaryImageRef: 'plate.png',
@@ -259,15 +259,15 @@ describe('storyBible — sanitizeCharacter', () => {
   });
 });
 
-describe('storyBible — sanitizeSetting', () => {
+describe('storyBible — sanitizePlace', () => {
   it('requires either name or slugline', () => {
-    expect(sanitizeSetting({ description: 'x' })).toBeNull();
-    expect(sanitizeSetting({ name: 'A bar' }).name).toBe('A bar');
-    expect(sanitizeSetting({ slugline: 'INT. BAR — NIGHT' }).slugline).toBe('INT. BAR — NIGHT');
+    expect(sanitizePlace({ description: 'x' })).toBeNull();
+    expect(sanitizePlace({ name: 'A bar' }).name).toBe('A bar');
+    expect(sanitizePlace({ slugline: 'INT. BAR — NIGHT' }).slugline).toBe('INT. BAR — NIGHT');
   });
 
   it('preserves all fields and caps lengths', () => {
-    const out = sanitizeSetting({
+    const out = sanitizePlace({
       slugline: 'INT. BAR — NIGHT',
       name: 'The Foundry',
       description: 'cramped chrome bar',
@@ -285,25 +285,25 @@ describe('storyBible — sanitizeSetting', () => {
 
   describe('intExt + timeOfDay (Cluster A)', () => {
     it('persists valid enums', () => {
-      const out = sanitizeSetting({ name: 'Bar', intExt: 'INT', timeOfDay: 'night' });
+      const out = sanitizePlace({ name: 'Bar', intExt: 'INT', timeOfDay: 'night' });
       expect(out.intExt).toBe('INT');
       expect(out.timeOfDay).toBe('night');
     });
 
     it('normalizes case on both fields', () => {
-      const out = sanitizeSetting({ name: 'Bar', intExt: 'ext', timeOfDay: 'DUSK' });
+      const out = sanitizePlace({ name: 'Bar', intExt: 'ext', timeOfDay: 'DUSK' });
       expect(out.intExt).toBe('EXT');
       expect(out.timeOfDay).toBe('dusk');
     });
 
     it('drops invalid enum values to null instead of throwing', () => {
-      const out = sanitizeSetting({ name: 'Bar', intExt: 'underwater', timeOfDay: 'midnight-snack' });
+      const out = sanitizePlace({ name: 'Bar', intExt: 'underwater', timeOfDay: 'midnight-snack' });
       expect(out.intExt).toBeNull();
       expect(out.timeOfDay).toBeNull();
     });
 
     it('treats missing/empty as null (legacy settings)', () => {
-      const out = sanitizeSetting({ name: 'Bar' });
+      const out = sanitizePlace({ name: 'Bar' });
       expect(out.intExt).toBeNull();
       expect(out.timeOfDay).toBeNull();
     });
@@ -457,20 +457,20 @@ describe('storyBible — mergeExtractedBible (characters)', () => {
   });
 });
 
-describe('storyBible — mergeExtractedBible (settings)', () => {
+describe('storyBible — mergeExtractedBible (places)', () => {
   it('matches by slugline, fills blank fields only', () => {
-    const existing = [sanitizeSetting({ id: 's1', slugline: 'INT. BAR — NIGHT', description: 'cramped chrome bar', palette: '', recurringDetails: '' })];
+    const existing = [sanitizePlace({ id: 's1', slugline: 'INT. BAR — NIGHT', description: 'cramped chrome bar', palette: '', recurringDetails: '' })];
     const merged = mergeExtractedBible(existing, [
       { slugline: 'INT. BAR — NIGHT', description: 'overwrite attempt', palette: 'amber', recurringDetails: 'jukebox' },
-    ], 'setting');
+    ], 'place');
     expect(merged[0].description).toBe('cramped chrome bar'); // user wins
     expect(merged[0].palette).toBe('amber');
     expect(merged[0].recurringDetails).toBe('jukebox');
   });
 
   it('matches with em-dash / hyphen drift on the slugline', () => {
-    const existing = [sanitizeSetting({ id: 's1', slugline: 'INT. BAR — NIGHT', description: 'cramped' })];
-    const merged = mergeExtractedBible(existing, [{ slugline: 'INT BAR - NIGHT', recurringDetails: 'jukebox' }], 'setting');
+    const existing = [sanitizePlace({ id: 's1', slugline: 'INT. BAR — NIGHT', description: 'cramped' })];
+    const merged = mergeExtractedBible(existing, [{ slugline: 'INT BAR - NIGHT', recurringDetails: 'jukebox' }], 'place');
     expect(merged.length).toBe(1);
     expect(merged[0].recurringDetails).toBe('jukebox');
   });
@@ -482,11 +482,11 @@ describe('storyBible — mergeExtractedBible (settings)', () => {
   // consistent and callers don't observe an ordering flip after a merge.
   it('sorts settings by slugline (or name as fallback), not by name alone', () => {
     const existing = [
-      sanitizeSetting({ id: 's1', slugline: 'INT. ZINC FOUNDRY — NIGHT' }),
-      sanitizeSetting({ id: 's2', name: 'Alpha Lab' }),                        // name-only
-      sanitizeSetting({ id: 's3', slugline: 'EXT. BEACH — DAWN' }),
+      sanitizePlace({ id: 's1', slugline: 'INT. ZINC FOUNDRY — NIGHT' }),
+      sanitizePlace({ id: 's2', name: 'Alpha Lab' }),                        // name-only
+      sanitizePlace({ id: 's3', slugline: 'EXT. BEACH — DAWN' }),
     ];
-    const merged = mergeExtractedBible(existing, [], 'setting');
+    const merged = mergeExtractedBible(existing, [], 'place');
     // Keys (slugline || name) → 'alpha lab', 'ext. beach — dawn', 'int. zinc foundry — night'
     expect(merged.map((e) => e.slugline || e.name)).toEqual([
       'Alpha Lab',
@@ -592,8 +592,8 @@ function characterStore() {
 
 function settingStore() {
   return createBibleStore({
-    kind: BIBLE_KIND.SETTING,
-    idPrefix: 'wr-setting-',
+    kind: BIBLE_KIND.PLACE,
+    idPrefix: 'wr-place-',
     dedupKey: (entry) => normalizeSlugline(entry?.slugline || entry?.name || ''),
     primaryFields: ['slugline', 'name'],
     editableFields: ['description', 'palette'],

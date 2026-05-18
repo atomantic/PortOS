@@ -78,8 +78,8 @@ function matchEntriesByCandidates(text, entries, candidatesFn) {
   return matched;
 }
 
-export function matchSettingsInText(text, allSettings) {
-  return matchEntriesByCandidates(text, allSettings, (s) => [s.name]);
+export function matchPlacesInText(text, allPlaces) {
+  return matchEntriesByCandidates(text, allPlaces, (p) => [p.name]);
 }
 
 export function matchObjectsInText(text, allObjects) {
@@ -101,7 +101,7 @@ export function buildScenePrompt(workTitle, scene, matchedCharacters, worldStyle
     : '';
   const settingMetaFrag = [intExtPart, todPart].filter(Boolean).join(', ');
   const baselineFrags = matchedSetting
-    ? shortCanonDescriptorFragments('setting', matchedSetting)
+    ? shortCanonDescriptorFragments('place', matchedSetting)
       .map((f) => (f.prefix ? `${f.prefix}: ${f.value}.` : f.value))
     : [];
   const settingFrags = matchedSetting ? [

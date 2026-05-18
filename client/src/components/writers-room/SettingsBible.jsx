@@ -2,10 +2,10 @@ import { useEffect, useState } from 'react';
 import { AlertTriangle, Check, Loader2, MapPin, Pencil, Plus, Trash2, X } from 'lucide-react';
 import toast from '../ui/Toast';
 import {
-  listWritersRoomSettings,
-  createWritersRoomSetting,
-  updateWritersRoomSetting,
-  deleteWritersRoomSetting,
+  listWritersRoomPlaces,
+  createWritersRoomPlace,
+  updateWritersRoomPlace,
+  deleteWritersRoomPlace,
 } from '../../services/apiWritersRoom';
 import useMounted from '../../hooks/useMounted';
 
@@ -36,7 +36,7 @@ export default function SettingsBible({ workId, settings: settingsProp, onSettin
     if (settingsProp) return;
     if (!workId) return;
     setLoading(true);
-    listWritersRoomSettings(workId)
+    listWritersRoomPlaces(workId)
       .then((list) => { if (mountedRef.current) setInternalSettings(list); })
       .catch(() => { if (mountedRef.current) setInternalSettings([]); })
       .finally(() => { if (mountedRef.current) setLoading(false); });
@@ -227,8 +227,8 @@ function SettingEditor({ workId, setting, onSaved, onDeleted, onCancel }) {
       payload[f.key] = draft[f.key];
     }
     const result = await (isCreate
-      ? createWritersRoomSetting(workId, payload)
-      : updateWritersRoomSetting(workId, setting.id, payload)
+      ? createWritersRoomPlace(workId, payload)
+      : updateWritersRoomPlace(workId, setting.id, payload)
     ).catch((err) => {
       toast.error(`Save failed: ${err.message}`);
       return null;
@@ -242,7 +242,7 @@ function SettingEditor({ workId, setting, onSaved, onDeleted, onCancel }) {
   const remove = async () => {
     if (!setting) return;
     setSaving(true);
-    const ok = await deleteWritersRoomSetting(workId, setting.id).then(() => true).catch((err) => {
+    const ok = await deleteWritersRoomPlace(workId, setting.id).then(() => true).catch((err) => {
       toast.error(`Delete failed: ${err.message}`);
       return false;
     });

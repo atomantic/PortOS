@@ -16,8 +16,8 @@ import useMediaJobProgress from '../../hooks/useMediaJobProgress';
 import MediaJobThumb from './MediaJobThumb';
 import EntryCard from '../universe/EntryCard';
 
-// Setting metadata enums — kept in lock-step with `SETTING_INT_EXT` and
-// `SETTING_TIME_OF_DAY` in `server/lib/storyBible.js`. Mirror is fine: a
+// Place metadata enums — kept in lock-step with `PLACE_INT_EXT` and
+// `PLACE_TIME_OF_DAY` in `server/lib/storyBible.js`. Mirror is fine: a
 // drift would surface immediately as a Zod 400 on the next save.
 const INT_EXT_OPTIONS = ['INT', 'EXT'];
 const TIME_OF_DAY_OPTIONS = ['dawn', 'day', 'dusk', 'night'];
@@ -321,7 +321,7 @@ export default function CanonCard({
       <p className="text-xs text-gray-400 mt-1 line-clamp-3 whitespace-pre-wrap">
         {description || <em className="text-gray-600">No description yet.</em>}
       </p>
-      {kind.key === 'settings' && onPatchEntry && !locked ? (
+      {kind.key === 'places' && onPatchEntry && !locked ? (
         <div className="flex flex-wrap items-center gap-2 mt-2">
           <ChipPicker
             label="INT/EXT"
@@ -336,7 +336,7 @@ export default function CanonCard({
             onChange={(v) => onPatchEntry(entry.id, { timeOfDay: v })}
           />
         </div>
-      ) : kind.key === 'settings' && (entry.intExt || entry.timeOfDay) ? (
+      ) : kind.key === 'places' && (entry.intExt || entry.timeOfDay) ? (
         <div className="flex flex-wrap items-center gap-1 mt-2">
           {entry.intExt ? <ReadonlyChip>{entry.intExt}</ReadonlyChip> : null}
           {entry.timeOfDay ? <ReadonlyChip>{entry.timeOfDay}</ReadonlyChip> : null}
@@ -394,7 +394,7 @@ export default function CanonCard({
         {inFlightJobId ? <Loader2 size={10} className="animate-spin" /> : <ImagePlus size={10} />}
         Render reference
       </button>
-      {kind.key === 'settings' && onRenderCleanPlate ? (
+      {kind.key === 'places' && onRenderCleanPlate ? (
         <button
           type="button"
           onClick={() => onRenderCleanPlate(entry)}

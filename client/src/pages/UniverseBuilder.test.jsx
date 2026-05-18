@@ -75,7 +75,7 @@ describe('CategoryEditor — promote wiring', () => {
     await user.click(screen.getByRole('menuitem', { name: 'Places' }));
 
     expect(onPromote).toHaveBeenCalledTimes(1);
-    expect(onPromote).toHaveBeenCalledWith(sampleVariation, { targetKind: 'settings' });
+    expect(onPromote).toHaveBeenCalledWith(sampleVariation, { targetKind: 'places' });
   });
 });
 

@@ -4,11 +4,10 @@
  * Reverse-engineers a finished short story / novel / screenplay / comic
  * script into universe canon + series arc + prose-seeded issues.
  *
- * Canon kind mapping: the prompts + wire shape use the forward-looking
- * `places` label (matches the in-flight Phase 0b SETTING→PLACE rename),
- * but the on-disk universe schema still stores them under `settings`.
- * Mapping happens at the orchestrator boundary so the UI + LLM never see
- * the legacy field name.
+ * Canon kind mapping: the prompts, wire shape, AND on-disk universe schema
+ * all use `places` after the bible-kind SETTING→PLACE rename. The mapping
+ * table below preserves the orchestrator's wire-vs-storage tuple so a
+ * future schema change only has to flip the third column.
  */
 
 import { runStagedLLM } from '../lib/stageRunner.js';
@@ -292,8 +291,8 @@ function compactCanonForPrompt(universe) {
   // name variant.
   const characters = (universe.characters || []).map((c) =>
     slim(c, ['name', 'aliases', 'role', 'physicalDescription']));
-  const places = (universe.settings || []).map((s) =>
-    slim(s, ['name', 'aliases', 'slugline', 'description']));
+  const places = (universe.places || []).map((p) =>
+    slim(p, ['name', 'aliases', 'slugline', 'description']));
   const objects = (universe.objects || []).map((o) =>
     slim(o, ['name', 'aliases', 'description']));
   if (!characters.length && !places.length && !objects.length) return null;
@@ -817,12 +816,11 @@ export async function commitImport({
     }
   }
 
-  // Wire field `places` maps to storage field `settings` until the
-  // Phase 0b rename lands; the table keeps the three near-identical
-  // merge calls + universe.update payload in one place.
+  // Wire field, BIBLE_KIND, and storage field collapsed to one row per kind
+  // so a future schema change updates one tuple instead of three call sites.
   const KIND_MAP = [
     ['characters', BIBLE_KIND.CHARACTER, 'characters'],
-    ['places',     BIBLE_KIND.SETTING,   'settings'],
+    ['places',     BIBLE_KIND.PLACE,     'places'],
     ['objects',    BIBLE_KIND.OBJECT,    'objects'],
   ];
   // Only merge kinds the user actually supplied entries for — calling

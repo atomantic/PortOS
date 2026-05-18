@@ -68,10 +68,10 @@ beforeEach(() => {
 });
 
 describe('universeBuilderPromote — happy path', () => {
-  it('promotes a variation from a settings-kinded bucket into universe.settings[]', async () => {
+  it('promotes a variation from a settings-kinded bucket into universe.places[]', async () => {
     const w = await seedUniverseWithBucket({
       landscapes: {
-        kind: 'settings',
+        kind: 'places',
         variations: [
           { label: 'Crystalline canyon', prompt: 'vast crystalline canyon, salt flats' },
           { label: 'Scrap dune sea', prompt: 'rolling dunes of rusted scrap' },
@@ -99,10 +99,10 @@ describe('universeBuilderPromote — happy path', () => {
     // Arg-shape pin: a future typo (provider/Provider/etc.) would silently
     // pass under a flat resolver mock without this assertion.
     expect(resolveProviderAndModelMock).toHaveBeenCalledWith({ providerId: 'p-explicit', model: 'm-explicit' });
-    expect(result.targetKind).toBe('settings');
+    expect(result.targetKind).toBe('places');
     expect(result.entry.name).toBe('Crystalline Canyon');
     expect(result.entry.palette).toContain('pale violet');
-    expect(result.universe.settings.some((e) => e.name === 'Crystalline Canyon')).toBe(true);
+    expect(result.universe.places.some((e) => e.name === 'Crystalline Canyon')).toBe(true);
     // The source variation is removed from its bucket.
     const remainingLabels = result.universe.categories.landscapes.variations.map((v) => v.label);
     expect(remainingLabels).toEqual(['Scrap dune sea']);
@@ -141,7 +141,7 @@ describe('universeBuilderPromote — happy path', () => {
   it('matches variation labels case-insensitively', async () => {
     const w = await seedUniverseWithBucket({
       colonies: {
-        kind: 'settings',
+        kind: 'places',
         variations: [{ label: 'Gas-Giant Drifters', prompt: 'balloon settlements in the upper atmosphere' }],
       },
     });
@@ -152,7 +152,7 @@ describe('universeBuilderPromote — happy path', () => {
       label: 'gas-giant drifters', // lowercase
     });
 
-    expect(result.universe.settings.find((s) => s.name === 'Gas-Giant Drifters')).toBeTruthy();
+    expect(result.universe.places.find((s) => s.name === 'Gas-Giant Drifters')).toBeTruthy();
   });
 
   it('seeds entry.name from the variation label when the LLM omits name', async () => {
@@ -233,11 +233,11 @@ describe('universeBuilderPromote — targetKind override + other-bucket gate', (
   it('rejects invalid targetKind even for non-other buckets', async () => {
     const w = await seedUniverseWithBucket({
       landscapes: {
-        kind: 'settings',
+        kind: 'places',
         variations: [{ label: 'Salt flats', prompt: 'horizon-spanning salt flats' }],
       },
     });
-    // The bucket kind is 'settings', so the server should ignore an
+    // The bucket kind is 'places', so the server should ignore an
     // ill-typed targetKind and proceed with the bucket-derived kind. (The
     // route schema would reject the bad value before reaching here in prod.)
     mockLlm({ name: 'Salt Flats', description: 'A flat expanse.', prompt: 'horizon salt flats' });
@@ -246,7 +246,7 @@ describe('universeBuilderPromote — targetKind override + other-bucket gate', (
       label: 'Salt flats',
       targetKind: 'invalid',
     });
-    expect(result.targetKind).toBe('settings');
+    expect(result.targetKind).toBe('places');
   });
 });
 
@@ -254,7 +254,7 @@ describe('universeBuilderPromote — error paths', () => {
   it('404s when the category does not exist', async () => {
     const w = await seedUniverseWithBucket({
       landscapes: {
-        kind: 'settings',
+        kind: 'places',
         variations: [{ label: 'A', prompt: 'a' }],
       },
     });
@@ -266,7 +266,7 @@ describe('universeBuilderPromote — error paths', () => {
   it('404s when the variation label does not match', async () => {
     const w = await seedUniverseWithBucket({
       landscapes: {
-        kind: 'settings',
+        kind: 'places',
         variations: [{ label: 'A', prompt: 'a' }],
       },
     });
@@ -296,11 +296,11 @@ describe('universeBuilderPromote — error paths', () => {
     const w = await seedUniverseWithBucket(
       {
         landscapes: {
-          kind: 'settings',
+          kind: 'places',
           variations: [{ label: 'Crystalline Canyon', prompt: 'salt-crystal walls' }],
         },
       },
-      { settings: existing },
+      { places: existing },
     );
     await expect(
       promoteSvc.promoteVariationToCanon(w.id, {
@@ -325,11 +325,11 @@ describe('universeBuilderPromote — error paths', () => {
     const w = await seedUniverseWithBucket(
       {
         landscapes: {
-          kind: 'settings',
+          kind: 'places',
           variations: [{ label: 'EXT. FOUNDRY CITY - DAY', prompt: 'dawn light over docks' }],
         },
       },
-      { settings: existing },
+      { places: existing },
     );
     await expect(
       promoteSvc.promoteVariationToCanon(w.id, {
@@ -343,7 +343,7 @@ describe('universeBuilderPromote — error paths', () => {
   it('throws 502 when the LLM returns invalid JSON', async () => {
     const w = await seedUniverseWithBucket({
       landscapes: {
-        kind: 'settings',
+        kind: 'places',
         variations: [{ label: 'A', prompt: 'a' }],
       },
     });
@@ -387,7 +387,7 @@ describe('universeBuilderPromote — control field stripping', () => {
   it('drops hallucinated id / locked / imageRefs from the LLM response', async () => {
     const w = await seedUniverseWithBucket({
       landscapes: {
-        kind: 'settings',
+        kind: 'places',
         variations: [{ label: 'Salt Flats', prompt: 'horizon salt flats' }],
       },
     });
@@ -418,7 +418,7 @@ describe('universeBuilderPromote — atomicity', () => {
   it('writes the canon entry and variation removal in a single atomicWrite', async () => {
     const w = await seedUniverseWithBucket({
       landscapes: {
-        kind: 'settings',
+        kind: 'places',
         variations: [
           { label: 'A', prompt: 'a' },
           { label: 'B', prompt: 'b' },
@@ -439,7 +439,7 @@ describe('universeBuilderPromote — atomicity', () => {
     // Re-read from the persistence layer (mirrors what a sibling tab would
     // see): canon has the new entry AND the bucket has lost the variation.
     const reread = (await svc.listUniverses())[0];
-    expect(reread.settings.find((s) => s.name === 'Place A')).toBeTruthy();
+    expect(reread.places.find((s) => s.name === 'Place A')).toBeTruthy();
     expect(reread.categories.landscapes.variations.map((v) => v.label)).toEqual(['B']);
   });
 });
@@ -476,7 +476,7 @@ describe('universeBuilderPromote — prompt content', () => {
     expect(charPrompt).toContain('personality');
 
     const settingPrompt = promoteSvc.__testing.buildPromotePrompt({
-      targetKind: 'settings',
+      targetKind: 'places',
       variation: { label: 'x', prompt: 'x' },
       category: 'h',
       universe: {},

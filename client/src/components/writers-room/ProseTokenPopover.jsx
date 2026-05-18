@@ -7,7 +7,7 @@ import { ExternalLink, X } from 'lucide-react';
 // re-reads getBoundingClientRect on every reflow (scroll, resize, content
 // height change) so the card stays attached to the token rather than
 // freezing at the rect captured on hover. We resolve refId against the
-// characters/settings/objects lists prop'd in.
+// characters/places/objects lists prop'd in.
 //
 // Hover semantics: 200ms open delay, 150ms close grace handled by the parent
 // (WorkEditor) — this component just renders or doesn't.
@@ -40,9 +40,9 @@ function clampToViewport(rect, measuredHeight) {
   return { left, top, width: w };
 }
 
-function resolveProfile({ kind, refId, characters, settings, objects }) {
+function resolveProfile({ kind, refId, characters, places, objects }) {
   if (kind === 'char') return characters.find((c) => c.id === refId) || null;
-  if (kind === 'place') return settings.find((s) => s.id === refId) || null;
+  if (kind === 'place') return places.find((p) => p.id === refId) || null;
   if (kind === 'object') return objects.find((o) => o.id === refId) || null;
   return null;
 }
@@ -93,7 +93,7 @@ export default function ProseTokenPopover({
   kind,
   refId,
   characters = [],
-  settings = [],
+  places = [],
   objects = [],
   onOpenProfile,
   onClose,
@@ -175,7 +175,7 @@ export default function ProseTokenPopover({
 
   if (!open || !pos) return null;
 
-  const profile = resolveProfile({ kind, refId, characters, settings, objects });
+  const profile = resolveProfile({ kind, refId, characters, places, objects });
   if (!profile) return null;
 
   const rows = fieldRows(kind, profile);

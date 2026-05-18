@@ -12,25 +12,25 @@
  *   - `KINDS[].descFor` (client/src/components/universe/UniverseCanonSection.jsx) →
  *     UI summary + handleRenderRef button-enable predicate (SHORT fields)
  *   - `settingFrags` (server/lib/scenePrompt.js) → scene-prompt framing
- *     for settings (SHORT fields)
+ *     for places (SHORT fields)
  *
  * SHORT vs RICH:
  *   - SHORT = the visual descriptor subset shown in UI cards. For
  *     chars/objects: single primary field with a single fallback (mirrors
- *     the legacy `descFor` `||` chain). For settings: description +
- *     palette + recurringDetails (the "setting baseline" from scenePrompt).
+ *     the legacy `descFor` `||` chain). For places: description +
+ *     palette + recurringDetails (the "place baseline" from scenePrompt).
  *   - RICH = every descriptive field that contributes to a render prompt.
- *     Adds `role` (chars), `era`+`weather` (settings), additive
+ *     Adds `role` (chars), `era`+`weather` (places), additive
  *     `significance` (objects).
  */
 
 const trim = (s) => (typeof s === 'string' ? s.trim() : '');
 
-// SHORT spec: chars/objects use single-with-fallback; settings uses a
+// SHORT spec: chars/objects use single-with-fallback; places uses a
 // sequence so palette can carry its prefix.
 const SHORT_SPEC = Object.freeze({
   characters: Object.freeze({ primary: 'physicalDescription', fallback: 'description' }),
-  settings: Object.freeze({
+  places: Object.freeze({
     sequence: Object.freeze([
       { field: 'description' },
       { field: 'palette', prefix: 'Palette' },
@@ -47,7 +47,7 @@ const RICH_SPEC = Object.freeze({
     { field: 'physicalDescription' },
     { field: 'role' },
   ]),
-  settings: Object.freeze([
+  places: Object.freeze([
     { field: 'description' },
     { field: 'palette', prefix: 'Palette' },
     { field: 'era', prefix: 'Era' },
@@ -63,7 +63,7 @@ const RICH_SPEC = Object.freeze({
 function normalizeKind(kind) {
   const k = String(kind || '').toLowerCase();
   if (k === 'character' || k === 'characters') return 'characters';
-  if (k === 'setting' || k === 'settings') return 'settings';
+  if (k === 'place' || k === 'places') return 'places';
   if (k === 'object' || k === 'objects') return 'objects';
   return null;
 }
@@ -124,7 +124,7 @@ export function richCanonDescriptorFragments(kind, entry) {
  * Flatten SHORT fragments into a sentence-style descriptor string.
  * Matches the legacy `KINDS[].descFor` output:
  *   characters: "physicalDescription" else "description"
- *   settings:   "description. Palette: <palette>. recurringDetails"
+ *   places:     "description. Palette: <palette>. recurringDetails"
  *   objects:    "description" else "significance"
  */
 export function descriptorForCanonEntry(kind, entry) {
