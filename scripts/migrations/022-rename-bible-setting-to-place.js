@@ -44,7 +44,7 @@
  *   - Stage-config key `writers-room-places` (handled by migration 018).
  */
 
-import { readFile, writeFile, rename, readdir, stat } from 'fs/promises';
+import { readFile, writeFile, unlink, readdir, stat } from 'fs/promises';
 import { join } from 'path';
 import { createHash } from 'crypto';
 
@@ -171,9 +171,15 @@ const migrateWritersRoomWorks = async (rootDir) => {
     if (!legacyExists) continue;
     const newExists = await fileExists(newPath);
     if (newExists) {
-      // Both exist — keep the newer (places.json) and drop the legacy file
-      // since we can't safely merge two parallel writes.
-      console.log(`⚠️ ${join('data/writers-room/works', entry.name)}: both settings.json and places.json exist — keeping places.json`);
+      // Both files exist — `places.json` is the post-rename truth (a prior
+      // partial migration run or hand-edit produced it). Drop the legacy
+      // `settings.json` orphan so the next migration tick doesn't re-fire
+      // this branch every run. We can't safely merge two parallel writes,
+      // and `places.json` is what the runtime reads.
+      await unlink(legacyPath).catch((err) => {
+        console.warn(`⚠️ ${join('data/writers-room/works', entry.name)}: failed to remove legacy settings.json — ${err.message}`);
+      });
+      console.log(`🧹 ${join('data/writers-room/works', entry.name)}: both settings.json and places.json existed — kept places.json, removed legacy settings.json`);
       continue;
     }
     const raw = await readFile(legacyPath, 'utf-8').catch(() => null);
@@ -187,10 +193,9 @@ const migrateWritersRoomWorks = async (rootDir) => {
     } else {
       await writeJson(newPath, parsed || { places: [], updatedAt: null });
     }
-    await rename(legacyPath, `${legacyPath}.migrated`).catch(() => {});
-    // Best-effort cleanup of the .migrated breadcrumb; safe to leave if removal fails.
-    const { unlink } = await import('fs/promises');
-    await unlink(`${legacyPath}.migrated`).catch(() => {});
+    await unlink(legacyPath).catch((err) => {
+      console.warn(`⚠️ ${join('data/writers-room/works', entry.name)}: failed to remove legacy settings.json after writing places.json — ${err.message}`);
+    });
     renamedFiles += 1;
   }
   if (renamedFiles > 0) {

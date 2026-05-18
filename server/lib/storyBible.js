@@ -131,14 +131,22 @@ export function pickPromptFields(kind, entry) {
   return out;
 }
 
+// Pipeline retains the legacy `'set-'` id prefix for places so every
+// pre-rename `set-<uuid>` id on disk still round-trips through the
+// sanitizer without a per-record id-rewrite migration. The bible-domain
+// SETTING→PLACE rename is terminology only — ids are opaque after
+// creation, and changing the prefix would force a second migration over
+// every persisted canon entry for zero functional gain. Named here so a
+// future reader doesn't mistake `place: 'set-'` for a typo introduced by
+// the rename and "fix" it (which would silently break id round-tripping).
+const LEGACY_PLACE_ID_PREFIX = 'set-';
+
 // Default id prefix per kind. Pipeline accepts these defaults; writers-room
 // passes its own `wr-char-` / `wr-place-` / `wr-object-` prefixes via the
-// sanitizer options. Pipeline retains the legacy `set-` prefix for places
-// so existing series-state ids round-trip; the bible-domain rename is a
-// terminology cleanup, not an id-format break.
+// sanitizer options.
 const DEFAULT_ID_PREFIX = Object.freeze({
   character: 'chr-',
-  place: 'set-',
+  place: LEGACY_PLACE_ID_PREFIX,
   object: 'obj-',
 });
 

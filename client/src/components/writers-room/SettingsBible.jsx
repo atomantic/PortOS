@@ -18,29 +18,29 @@ const SETTING_FIELDS = [
   { key: 'notes',            label: 'Notes',             placeholder: 'Anything else worth tracking',                                                                                 kind: 'multiline', rows: 2 },
 ];
 
-// Editable setting/world bible — persistent across analysis runs and consumed
+// Editable places/world bible — persistent across analysis runs and consumed
 // by image gen to inject location descriptions into per-scene prompts.
 //
-// Controlled vs. uncontrolled: caller may pass `settings` to keep multiple
+// Controlled vs. uncontrolled: caller may pass  to keep multiple
 // mounts in sync (e.g. drawer + storyboard chip count). When omitted we fetch
 // and own the list so this can stand alone.
-export default function SettingsBible({ workId, settings: settingsProp, onSettingsChange, readingTheme = 'dark', hotRefId = null }) {
-  const [internalSettings, setInternalSettings] = useState(settingsProp || []);
-  const settings = settingsProp ?? internalSettings;
+export default function SettingsBible({ workId, places: placesProp, onPlacesChange, readingTheme = 'dark', hotRefId = null }) {
+  const [internalPlaces, setInternalPlaces] = useState(placesProp || []);
+  const places = placesProp ?? internalPlaces;
   const [editingId, setEditingId] = useState(null);
   const [creating, setCreating] = useState(false);
   const [loading, setLoading] = useState(false);
   const mountedRef = useMounted();
 
   useEffect(() => {
-    if (settingsProp) return;
+    if (placesProp) return;
     if (!workId) return;
     setLoading(true);
     listWritersRoomPlaces(workId)
-      .then((list) => { if (mountedRef.current) setInternalSettings(list); })
-      .catch(() => { if (mountedRef.current) setInternalSettings([]); })
+      .then((list) => { if (mountedRef.current) setInternalPlaces(list); })
+      .catch(() => { if (mountedRef.current) setInternalPlaces([]); })
       .finally(() => { if (mountedRef.current) setLoading(false); });
-  }, [workId, settingsProp, mountedRef]);
+  }, [workId, placesProp, mountedRef]);
 
   const upsert = (next) => {
     const update = (prev) => {
@@ -51,21 +51,21 @@ export default function SettingsBible({ workId, settings: settingsProp, onSettin
       copy[idx] = next;
       return sorted(copy);
     };
-    setInternalSettings(update);
-    onSettingsChange?.(update(settings));
+    setInternalPlaces(update);
+    onPlacesChange?.(update(places));
   };
 
   const removeOne = (id) => {
-    const next = settings.filter((s) => s.id !== id);
-    setInternalSettings(next);
-    onSettingsChange?.(next);
+    const next = places.filter((s) => s.id !== id);
+    setInternalPlaces(next);
+    onPlacesChange?.(next);
   };
 
   return (
     <div className="text-xs">
       <div className="flex items-center justify-between mb-2">
         <div className="text-[11px] text-gray-500">
-          {settings.length} location{settings.length === 1 ? '' : 's'} · Edits persist across re-runs and feed image gen.
+          {places.length} location{places.length === 1 ? '' : 's'} · Edits persist across re-runs and feed image gen.
         </div>
         <button
           onClick={() => { setCreating(true); setEditingId(null); }}
@@ -75,11 +75,11 @@ export default function SettingsBible({ workId, settings: settingsProp, onSettin
         </button>
       </div>
 
-      {loading && settings.length === 0 && (
+      {loading && places.length === 0 && (
         <div className="text-gray-500 italic">Loading…</div>
       )}
 
-      {!loading && settings.length === 0 && !creating && (
+      {!loading && places.length === 0 && !creating && (
         <div className="text-gray-500 italic px-1 mb-2">
           No locations yet. Click "Refresh from prose" above to extract them, or add one manually.
         </div>
@@ -95,7 +95,7 @@ export default function SettingsBible({ workId, settings: settingsProp, onSettin
       )}
 
       <ul className="space-y-1.5">
-        {settings.map((s) => {
+        {places.map((s) => {
           const isEditing = editingId === s.id;
           if (isEditing) {
             return (

@@ -312,7 +312,7 @@ export default function StoryboardPanel({
           <BibleTab
             kind="world"
             workId={work.id}
-            items={settings}
+            items={places}
             onItemsChange={onPlacesChange}
             onRefresh={onRunPlaces}
             running={runningKind === 'places'}

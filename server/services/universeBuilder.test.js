@@ -1135,11 +1135,11 @@ describe("universeBuilder service", () => {
       expect(alex.prompt).toBe("field lead detective");
       expect(alex.tags).toEqual([]);
       expect(alex.source).toBe("universe-expand");
-      // Settings — landscape + environment
+      // Places — landscape + environment
       const canyon = w.places.find((s) => s.name === "Crystal Canyon");
       expect(canyon.tags).toEqual(["landscape"]);
       expect(canyon.locked).toBe(true); // variation lock carries through
-      expect(canyon.slugline).toBe("Crystal Canyon"); // settings need slugline
+      expect(canyon.slugline).toBe("Crystal Canyon"); // places need slugline
       const bubble = w.places.find((s) => s.name === "Bubble Room");
       expect(bubble.tags).toEqual(["environment"]);
       // Objects — vehicle + structure + custom 'factions'
