@@ -27,7 +27,7 @@
 
 import { join } from 'path';
 import { randomUUID } from 'crypto';
-import { PATHS, atomicWrite, readJSONFile, ensureDir } from '../lib/fileUtils.js';
+import { PATHS, atomicWrite, readJSONFile, ensureDir, resolveImageRef } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { composeStyledPrompt } from '../lib/composeStyledPrompt.js';
 import { richCanonDescriptorFragments } from '../lib/canonPrompt.js';
@@ -879,7 +879,19 @@ export async function updateUniverse(id, patchOrMutator = {}) {
         const prev = c?.id ? curById.get(c.id) : null;
         if (!prev) return c;
         const preserved = { ...c };
-        for (const f of SERVER_OWNED_CHARACTER_FIELDS) preserved[f] = prev[f];
+        // Preserve cur's value ONLY when it still resolves on disk. Without
+        // the FS check, this guard reintroduces stale pointers that the
+        // GET route's lazy `pruneStaleReferenceSheets` already nulled out:
+        // GET → null (file gone) → client PATCH carries null → guard
+        // overwrites null with cur's stale filename → thumbnail 404s
+        // again. The pruner returns null for non-existent files, so we
+        // skip preservation in that case and let the patch's value (the
+        // pruned null) survive.
+        for (const f of SERVER_OWNED_CHARACTER_FIELDS) {
+          if (prev[f] && resolveImageRef(prev[f], { mustExist: true })) {
+            preserved[f] = prev[f];
+          }
+        }
         return preserved;
       });
     }

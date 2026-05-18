@@ -2,6 +2,12 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const fileStore = new Map();
 
+// Per-test reference-sheet "what exists on disk" — keys are filenames the
+// referenceSheetImageRef preservation guard / pruner asks about. Default
+// behavior is "non-empty filename resolves" so existing tests using fake
+// names like 'sheet-B.png' still pass; the stale-prune test overrides
+// resolveImageRef to return null for the stale filename.
+const refSheetFilesByName = new Map();
 vi.mock("../lib/fileUtils.js", () => ({
   PATHS: { data: "/mock/data" },
   ensureDir: vi.fn().mockResolvedValue(undefined),
@@ -11,6 +17,15 @@ vi.mock("../lib/fileUtils.js", () => ({
   readJSONFile: vi.fn(async (path, fallback) =>
     fileStore.has(path) ? fileStore.get(path) : fallback,
   ),
+  // mustExist: true → return a non-null path when the filename either
+  // appears in refSheetFilesByName or has no explicit "missing" entry.
+  // Tests opt into "this file is gone" by calling
+  // refSheetFilesByName.set('foo.png', null).
+  resolveImageRef: vi.fn((ref) => {
+    if (typeof ref !== 'string' || !ref) return null;
+    if (refSheetFilesByName.has(ref)) return refSheetFilesByName.get(ref);
+    return `/mock/refs/${ref}`;
+  }),
 }));
 
 let uuidCounter = 0;
@@ -382,6 +397,34 @@ describe("universeBuilder service", () => {
     });
     const charAfterStamp = afterRenderStamp.characters.find((c) => c.id === "c-1");
     expect(charAfterStamp?.referenceSheetImageRef).toBe("sheet-C.png");
+  });
+
+  it("updateUniverse preservation skips when cur's referenceSheetImageRef no longer resolves on disk", async () => {
+    // GET /:id runs pruneStaleReferenceSheets, returning null when the
+    // underlying file is gone. Client PATCHes carry the pruned null. The
+    // preservation guard MUST honor that null by skipping preservation —
+    // otherwise the stale filename comes back from cur and the UI 404s
+    // again. resolveImageRef returning null is the "file missing" signal.
+    const w = await seedWorld();
+    // Stamp a sheet (mutator path is trusted).
+    await svc.updateUniverse(w.id, (latest) => {
+      const next = [...(latest.characters || []), {
+        id: "c-stale", name: "Stale", referenceSheetImageRef: "sheet-DEAD.png",
+      }];
+      return { characters: next };
+    });
+    // Mark that filename as missing for the resolveImageRef mock.
+    refSheetFilesByName.set("sheet-DEAD.png", null);
+    // Client PATCH that carries the pruned null (matching what GET would
+    // surface after pruneStaleReferenceSheets ran). Preservation should
+    // detect the stale cur value and skip, so the null wins.
+    const after = await svc.updateUniverse(w.id, {
+      characters: [{ id: "c-stale", name: "Stale", referenceSheetImageRef: null }],
+    });
+    const stale = after.characters.find((c) => c.id === "c-stale");
+    expect(stale?.referenceSheetImageRef).toBeNull();
+    // Clean up the per-test FS shim so later tests start clean.
+    refSheetFilesByName.delete("sheet-DEAD.png");
   });
 
   it("deleteUniverse removes the universe and its runs", async () => {
