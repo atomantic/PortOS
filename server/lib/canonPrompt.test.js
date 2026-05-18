@@ -56,9 +56,9 @@ describe('canonPrompt.js', () => {
       });
     });
 
-    describe('settings', () => {
+    describe('places', () => {
       it('joins description + palette + recurringDetails in order', () => {
-        expect(descriptorForCanonEntry('settings', {
+        expect(descriptorForCanonEntry('places', {
           description: 'a dusty plaza',
           palette: 'ochre and copper',
           recurringDetails: 'cracked statue at center',
@@ -66,18 +66,18 @@ describe('canonPrompt.js', () => {
       });
 
       it('prefixes palette with "Palette:"', () => {
-        expect(descriptorForCanonEntry('settings', { palette: 'noir' })).toBe('Palette: noir');
+        expect(descriptorForCanonEntry('places', { palette: 'noir' })).toBe('Palette: noir');
       });
 
       it('omits missing fields', () => {
-        expect(descriptorForCanonEntry('settings', {
+        expect(descriptorForCanonEntry('places', {
           description: 'plaza',
           recurringDetails: 'statue',
         })).toBe('plaza. statue');
       });
 
       it('does NOT include era or weather (rich-only)', () => {
-        expect(descriptorForCanonEntry('settings', {
+        expect(descriptorForCanonEntry('places', {
           description: 'plaza',
           era: '2099',
           weather: 'foggy',
@@ -85,7 +85,7 @@ describe('canonPrompt.js', () => {
       });
 
       it('trims whitespace-only fields', () => {
-        expect(descriptorForCanonEntry('settings', {
+        expect(descriptorForCanonEntry('places', {
           description: '  plaza  ',
           palette: '   ',
           recurringDetails: 'statue',
@@ -117,8 +117,8 @@ describe('canonPrompt.js', () => {
       expect(shortCanonDescriptorFragments('unknown', { description: 'x' })).toEqual([]);
     });
 
-    it('returns ordered fragments for settings', () => {
-      const frags = shortCanonDescriptorFragments('settings', {
+    it('returns ordered fragments for places', () => {
+      const frags = shortCanonDescriptorFragments('places', {
         description: 'plaza',
         palette: 'noir',
         recurringDetails: 'statue',
@@ -153,8 +153,8 @@ describe('canonPrompt.js', () => {
       ]);
     });
 
-    it('includes era and weather for settings', () => {
-      const frags = richCanonDescriptorFragments('settings', {
+    it('includes era and weather for places', () => {
+      const frags = richCanonDescriptorFragments('places', {
         description: 'plaza',
         palette: 'noir',
         era: '2099',
@@ -190,14 +190,14 @@ describe('canonPrompt.js', () => {
     it('is true when any rich field is set', () => {
       expect(hasCanonDescriptorContent('characters', { physicalDescription: 'tall' })).toBe(true);
       expect(hasCanonDescriptorContent('characters', { role: 'protagonist' })).toBe(true);
-      expect(hasCanonDescriptorContent('settings', { palette: 'noir' })).toBe(true);
-      expect(hasCanonDescriptorContent('settings', { weather: 'foggy' })).toBe(true);
+      expect(hasCanonDescriptorContent('places', { palette: 'noir' })).toBe(true);
+      expect(hasCanonDescriptorContent('places', { weather: 'foggy' })).toBe(true);
       expect(hasCanonDescriptorContent('objects', { significance: 'x' })).toBe(true);
     });
 
     it('is false when no rich field is set', () => {
       expect(hasCanonDescriptorContent('characters', { name: 'Alice' })).toBe(false);
-      expect(hasCanonDescriptorContent('settings', { name: 'Plaza' })).toBe(false);
+      expect(hasCanonDescriptorContent('places', { name: 'Plaza' })).toBe(false);
       expect(hasCanonDescriptorContent('objects', {})).toBe(false);
     });
 
@@ -217,7 +217,7 @@ describe('canonPrompt.js', () => {
       // Sanity-check that adding extra blank fields after the first hit
       // doesn't change the result — guards against accidental regression
       // back to length-of-array-based implementation.
-      expect(hasCanonDescriptorContent('settings', {
+      expect(hasCanonDescriptorContent('places', {
         description: 'plaza',
         palette: '',
         era: '',
@@ -228,8 +228,8 @@ describe('canonPrompt.js', () => {
   });
 
   describe('richCanonDescriptorFragments edge cases', () => {
-    it('returns [] for empty settings entry', () => {
-      expect(richCanonDescriptorFragments('settings', {})).toEqual([]);
+    it('returns [] for empty places entry', () => {
+      expect(richCanonDescriptorFragments('places', {})).toEqual([]);
     });
 
     it('coerces non-string field values to empty (no fragment)', () => {

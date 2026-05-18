@@ -16,7 +16,7 @@ import { BIBLE_KIND } from '../../lib/storyBible.js';
 import { ANALYSIS_KINDS } from '../../lib/writersRoomPresets.js';
 import { getWorkWithBody } from './local.js';
 import { listCharacters, mergeExtractedCharacters } from './characters.js';
-import { listSettings, mergeExtractedSettings } from './settings.js';
+import { listPlaces, mergeExtractedPlaces } from './places.js';
 import { listObjects, mergeExtractedObjects } from './objects.js';
 import { nowIso, badRequest, notFound, assertValidWorkId } from './_shared.js';
 
@@ -27,7 +27,7 @@ const KIND_META = {
   format:     { stage: 'writers-room-format',     returnsJson: false },
   script:     { stage: 'writers-room-script',     returnsJson: true },
   characters: { stage: 'writers-room-characters', returnsJson: true },
-  settings:   { stage: 'writers-room-places',     returnsJson: true },
+  places:     { stage: 'writers-room-places',     returnsJson: true },
   objects:    { stage: 'writers-room-objects',    returnsJson: true },
 };
 
@@ -40,7 +40,7 @@ const root = () => join(PATHS.data, 'writers-room');
 const analysisDir = (workId) => {
   // Defense-in-depth: refuse path-traversal-shaped workIds before
   // interpolating them into the on-disk path. Mirrors the guard in
-  // characters.js / settings.js.
+  // characters.js / places.js.
   assertValidWorkId(workId);
   return join(root(), 'works', workId, 'analysis');
 };
@@ -75,14 +75,14 @@ const SHAPERS = {
       suggestions: Array.isArray(parsed.suggestions) ? parsed.suggestions.filter((s) => s && typeof s === 'object') : [],
     };
   },
-  // characters / settings / objects route through `extractBible`,
+  // characters / places / objects route through `extractBible`,
   // and `script` routes through `extractScenes` — no per-kind shaper here.
 };
 
 const BIBLE_ANALYSIS = Object.freeze({
-  characters: { kind: BIBLE_KIND.CHARACTER, list: listCharacters, merge: mergeExtractedCharacters },
-  settings:   { kind: BIBLE_KIND.SETTING,   list: listSettings,   merge: mergeExtractedSettings },
-  objects:    { kind: BIBLE_KIND.OBJECT,    list: listObjects,    merge: mergeExtractedObjects },
+  characters: { kind: BIBLE_KIND.CHARACTER, list: listCharacters,  merge: mergeExtractedCharacters },
+  places:     { kind: BIBLE_KIND.PLACE,     list: listPlaces,      merge: mergeExtractedPlaces },
+  objects:    { kind: BIBLE_KIND.OBJECT,    list: listObjects,     merge: mergeExtractedObjects },
 });
 
 const isBibleKind = (k) => k in BIBLE_ANALYSIS;
@@ -312,13 +312,13 @@ export async function runAnalysis(workId, { kind } = {}) {
     }
 
     if (kind === 'script') {
-      const [characters, settings, objects] = await Promise.all([
-        listCharacters(workId), listSettings(workId), listObjects(workId),
+      const [characters, places, objects] = await Promise.all([
+        listCharacters(workId), listPlaces(workId), listObjects(workId),
       ]);
       const { extracted, runId, providerId, model } = await extractScenes({
         source: body,
         sourceKind: SOURCE_KIND.PROSE,
-        characters, settings, objects,
+        characters, places, objects,
         work: workCtx,
         tag: 'writers-room-script',
       });

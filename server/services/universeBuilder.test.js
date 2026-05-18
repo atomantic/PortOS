@@ -77,7 +77,7 @@ describe("universeBuilder service", () => {
       expect(svc.CATEGORY_KINDS).toContain(w.categories[c].kind);
     }
     expect(w.categories.landscapes.variations).toHaveLength(2);
-    expect(w.categories.landscapes.kind).toBe("settings");
+    expect(w.categories.landscapes.kind).toBe("places");
     expect(w.categories.vehicles.kind).toBe("objects");
     expect(w.categories.environments.variations).toHaveLength(0);
     // Custom (un-defaulted) bucket falls to 'other'.
@@ -391,7 +391,7 @@ describe("universeBuilder service", () => {
     });
 
     it("synthesizes from identifier + RICH descriptor for settings (capitalized prefixes)", () => {
-      expect(svc.synthesizeCanonPrompt("settings", {
+      expect(svc.synthesizeCanonPrompt("places", {
         name: "Foundry City",
         description: "vast smelting works",
         palette: "rust + bone",
@@ -402,7 +402,7 @@ describe("universeBuilder service", () => {
     });
 
     it("falls back to slugline as identifier for settings without name", () => {
-      expect(svc.synthesizeCanonPrompt("settings", {
+      expect(svc.synthesizeCanonPrompt("places", {
         slugline: "INT. FOUNDRY — DAY",
         description: "ore furnace",
       })).toBe("INT. FOUNDRY — DAY — ore furnace");
@@ -706,7 +706,7 @@ describe("universeBuilder service", () => {
           },
           { name: "Vex", physicalDescription: "tall, scarred, plate-armor smith" },
         ],
-        settings: [
+        places: [
           {
             name: "Foundry City",
             slugline: "EXT. FOUNDRY CITY — DAY",
@@ -723,7 +723,7 @@ describe("universeBuilder service", () => {
         const w = canonWorld();
         const compiled = svc.compilePrompts(w, {
           promptMode: "canon",
-          canonSelection: { characters: "all", settings: "all", objects: "all" },
+          canonSelection: { characters: "all", places: "all", objects: "all" },
         });
         // 2 characters + 1 setting + 1 object = 4
         expect(compiled).toHaveLength(4);
@@ -734,7 +734,7 @@ describe("universeBuilder service", () => {
         );
         expect(mira.negativePrompt).toBe("blurry");
         const place = compiled.find((c) => c.label === "Foundry City");
-        expect(place.category).toBe("canon:settings");
+        expect(place.category).toBe("canon:places");
         expect(place.prompt).toContain("Foundry City");
         expect(place.prompt).toContain("Palette: rust + bone");
       });
@@ -743,10 +743,10 @@ describe("universeBuilder service", () => {
         const w = canonWorld();
         const compiled = svc.compilePrompts(w, {
           promptMode: "canon",
-          canonSelection: { settings: "all" },
+          canonSelection: { places: "all" },
         });
         expect(compiled).toHaveLength(1);
-        expect(compiled[0].category).toBe("canon:settings");
+        expect(compiled[0].category).toBe("canon:places");
       });
 
       it("canonSelection: array filters by name (case-insensitive)", () => {
@@ -765,14 +765,14 @@ describe("universeBuilder service", () => {
         // to slugline as the identifier seed so such entries don't silently
         // synthesize to '' and get skipped at render time.
         const w = canonWorld();
-        w.settings.push({
+        w.places.push({
           // No name — only a slugline identifier + description.
           slugline: "INT. OLD ARCHIVE — NIGHT",
           description: "lantern-lit shelves of ledgers",
         });
         const compiled = svc.compilePrompts(w, {
           promptMode: "canon",
-          canonSelection: { settings: "all" },
+          canonSelection: { places: "all" },
         });
         // Two settings now: the named Foundry City + the slugline-only Archive.
         expect(compiled).toHaveLength(2);
@@ -786,7 +786,7 @@ describe("universeBuilder service", () => {
         const w = canonWorld();
         const compiled = svc.compilePrompts(w, {
           promptMode: "canon",
-          canonSelection: { settings: ["EXT. FOUNDRY CITY — DAY"] },
+          canonSelection: { places: ["EXT. FOUNDRY CITY — DAY"] },
         });
         expect(compiled).toHaveLength(1);
         expect(compiled[0].label).toBe("Foundry City");
@@ -1135,12 +1135,12 @@ describe("universeBuilder service", () => {
       expect(alex.prompt).toBe("field lead detective");
       expect(alex.tags).toEqual([]);
       expect(alex.source).toBe("universe-expand");
-      // Settings — landscape + environment
-      const canyon = w.settings.find((s) => s.name === "Crystal Canyon");
+      // Places — landscape + environment
+      const canyon = w.places.find((s) => s.name === "Crystal Canyon");
       expect(canyon.tags).toEqual(["landscape"]);
       expect(canyon.locked).toBe(true); // variation lock carries through
-      expect(canyon.slugline).toBe("Crystal Canyon"); // settings need slugline
-      const bubble = w.settings.find((s) => s.name === "Bubble Room");
+      expect(canyon.slugline).toBe("Crystal Canyon"); // places need slugline
+      const bubble = w.places.find((s) => s.name === "Bubble Room");
       expect(bubble.tags).toEqual(["environment"]);
       // Objects — vehicle + structure + custom 'factions'
       const rover = w.objects.find((o) => o.name === "Rover");
@@ -1216,9 +1216,9 @@ describe("universeBuilder service", () => {
   describe("category kind (schema v4)", () => {
     it("assigns built-in default kinds (landscapes/environments/structures→settings, vehicles→objects)", async () => {
       const w = await seedWorld();
-      expect(w.categories.landscapes.kind).toBe("settings");
-      expect(w.categories.environments.kind).toBe("settings");
-      expect(w.categories.structures.kind).toBe("settings");
+      expect(w.categories.landscapes.kind).toBe("places");
+      expect(w.categories.environments.kind).toBe("places");
+      expect(w.categories.structures.kind).toBe("places");
       expect(w.categories.vehicles.kind).toBe("objects");
     });
 
@@ -1252,7 +1252,7 @@ describe("universeBuilder service", () => {
           colonies: { kind: null, variations: [{ label: "Tycho", prompt: "x" }] },
         },
       });
-      expect(w.categories.landscapes.kind).toBe("settings"); // built-in default
+      expect(w.categories.landscapes.kind).toBe("places"); // built-in default
       expect(w.categories.vehicles.kind).toBe("objects"); // built-in default
       expect(w.categories.colonies.kind).toBe("other"); // custom fallback
     });

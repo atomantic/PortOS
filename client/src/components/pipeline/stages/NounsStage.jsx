@@ -27,7 +27,7 @@ import {
 import { getSettings, updateSettings, generateImage } from '../../../services/apiSystem';
 import { listImageModels } from '../../../services/apiImageVideo';
 import {
-  matchCharactersInText, matchSettingsInText, matchObjectsInText,
+  matchCharactersInText, matchPlacesInText, matchObjectsInText,
 } from '../../../lib/scenePrompt';
 import { composeStyledPrompt } from '../../../lib/composeStyledPrompt';
 import { composeCleanPlatePrompt } from '../../../lib/cleanPlatePrompt';
@@ -54,13 +54,13 @@ const KINDS = [
     match: matchCharactersInText,
   },
   {
-    key: 'settings', label: 'Settings', singular: 'setting', icon: MapPin,
-    descFor: (s) => [
-      s.description,
-      s.palette ? `Palette: ${s.palette}` : '',
-      s.recurringDetails,
+    key: 'places', label: 'Places', singular: 'place', icon: MapPin,
+    descFor: (p) => [
+      p.description,
+      p.palette ? `Palette: ${p.palette}` : '',
+      p.recurringDetails,
     ].filter(Boolean).join('. '),
-    match: matchSettingsInText,
+    match: matchPlacesInText,
   },
   {
     key: 'objects', label: 'Objects', singular: 'object', icon: Package,

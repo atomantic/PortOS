@@ -8,13 +8,13 @@ import { getUniverse, ERR_NOT_FOUND } from './universeBuilder.js';
 import { listSeries } from './pipeline/series.js';
 import { listIssues } from './pipeline/issues.js';
 import {
-  matchCharactersInText, matchSettingsInText, matchObjectsInText,
+  matchCharactersInText, matchPlacesInText, matchObjectsInText,
 } from '../lib/scenePrompt.js';
 import { ServerError } from '../lib/errorHandler.js';
 
 const MATCHERS = Object.freeze({
   characters: matchCharactersInText,
-  settings: matchSettingsInText,
+  places: matchPlacesInText,
   objects: matchObjectsInText,
 });
 
@@ -64,7 +64,7 @@ export async function listLinkedSeriesNames(universeId) {
  * Shape:
  * {
  *   characters: { [entryId]: [{ seriesId, seriesName, issueIds, issueCount }, ...] },
- *   settings:   { [entryId]: [...] },
+ *   places:     { [entryId]: [...] },
  *   objects:    { [entryId]: [...] },
  *   seriesNameMap: { [seriesId]: seriesName }, // every linked series, even ones with no prose match
  *   seriesCount,         // how many series link to this universe
@@ -84,7 +84,7 @@ export async function getUniverseCanonUsage(universeId) {
   const seriesNameMap = Object.fromEntries(linkedSeries.map((s) => [s.id, s.name]));
 
   // Per (kind, entryId) → Map(seriesId → { seriesName, issueIds: Set })
-  const tally = { characters: new Map(), settings: new Map(), objects: new Map() };
+  const tally = { characters: new Map(), places: new Map(), objects: new Map() };
 
   let issueCount = 0;
   for (const series of linkedSeries) {
@@ -133,7 +133,7 @@ export async function getUniverseCanonUsage(universeId) {
 
   return {
     characters: shape(tally.characters),
-    settings: shape(tally.settings),
+    places: shape(tally.places),
     objects: shape(tally.objects),
     seriesNameMap,
     seriesCount: linkedSeries.length,

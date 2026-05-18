@@ -4,8 +4,8 @@ import {
   normCharKey,
   buildCharByKey,
   matchSceneCharacters,
-  buildSettingByKey,
-  matchSceneSetting,
+  buildPlaceByKey,
+  matchScenePlace,
   buildScenePrompt,
   __testing,
 } from './scenePrompt.js';
@@ -68,28 +68,28 @@ describe('scenePrompt — buildCharByKey + matchSceneCharacters', () => {
   });
 });
 
-describe('scenePrompt — buildSettingByKey + matchSceneSetting', () => {
+describe('scenePrompt — buildPlaceByKey + matchScenePlace', () => {
   const settings = [
     { id: 's1', slugline: 'INT. KITCHEN — NIGHT', description: 'cramped tile', palette: 'amber' },
     { id: 's2', name: 'EXT. ROOFTOP', slugline: '', description: 'wind-swept' },
   ];
 
   it('keys by slugline (preferred) then name (fallback)', () => {
-    const map = buildSettingByKey(settings);
+    const map = buildPlaceByKey(settings);
     expect(map.get(normalizeSlugline('INT. KITCHEN — NIGHT'))?.id).toBe('s1');
     expect(map.get(normalizeSlugline('EXT. ROOFTOP'))?.id).toBe('s2');
   });
 
   it('matches with em-dash / hyphen drift', () => {
-    const map = buildSettingByKey(settings);
-    expect(matchSceneSetting('INT KITCHEN - NIGHT', map)?.id).toBe('s1');
-    expect(matchSceneSetting('int kitchen — night', map)?.id).toBe('s1');
+    const map = buildPlaceByKey(settings);
+    expect(matchScenePlace('INT KITCHEN - NIGHT', map)?.id).toBe('s1');
+    expect(matchScenePlace('int kitchen — night', map)?.id).toBe('s1');
   });
 
   it('returns null when slugline is empty or unmatched', () => {
-    const map = buildSettingByKey(settings);
-    expect(matchSceneSetting('', map)).toBeNull();
-    expect(matchSceneSetting('INT. SUBMARINE — DAWN', map)).toBeNull();
+    const map = buildPlaceByKey(settings);
+    expect(matchScenePlace('', map)).toBeNull();
+    expect(matchScenePlace('INT. SUBMARINE — DAWN', map)).toBeNull();
   });
 });
 

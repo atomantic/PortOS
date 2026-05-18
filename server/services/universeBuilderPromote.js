@@ -38,13 +38,13 @@ export const VALID_TARGET_KINDS = Object.freeze(Object.keys(KIND_TO_BIBLE));
 
 const isCharacterShape = (o) =>
   o && typeof o === 'object' && typeof o.name === 'string';
-const isSettingShape = (o) =>
+const isPlaceShape = (o) =>
   o && typeof o === 'object' && (typeof o.name === 'string' || typeof o.slugline === 'string');
 const isObjectShape = isCharacterShape;
 
 const SHAPE_PREDICATE = {
   characters: isCharacterShape,
-  settings: isSettingShape,
+  places: isPlaceShape,
   objects: isObjectShape,
 };
 
@@ -70,11 +70,11 @@ const buildPromotePrompt = ({
 - role: string (max ${BIBLE_LIMITS.ROLE_MAX} chars). Their function in the story (protagonist / mentor / faction lead / etc).
 - prompt: string (max ${BIBLE_LIMITS.PROMPT_MAX} chars). Render-prompt fragment for reference images — comma-separated tokens; do NOT repeat universe style tokens (they're prepended at render time).
 - tags: array of 1-3 short labels (e.g. "protagonist", "antagonist", "supporting").`;
-  } else if (targetKind === 'settings') {
-    outputContract = `Return a SINGLE JSON object describing one SETTING / PLACE. Required fields:
+  } else if (targetKind === 'places') {
+    outputContract = `Return a SINGLE JSON object describing one PLACE. Required fields:
 - name: string (max ${BIBLE_LIMITS.NAME_MAX} chars). Human label like "Foundry City". Default the variation label when no clearer name is implied.
 - slugline: string (max ${BIBLE_LIMITS.SLUGLINE_MAX} chars). Screenplay-style location header like "EXT. FOUNDRY CITY — DAY". Leave empty string when no obvious slugline applies.
-- description: string (max ${BIBLE_LIMITS.SETTING_DESCRIPTION_MAX} chars). What the place looks like + feels like.
+- description: string (max ${BIBLE_LIMITS.PLACE_DESCRIPTION_MAX} chars). What the place looks like + feels like.
 - palette: string (max ${BIBLE_LIMITS.PALETTE_MAX} chars). Dominant colors.
 - era: string (max ${BIBLE_LIMITS.ERA_MAX} chars). Time period / technology level.
 - weather: string (max ${BIBLE_LIMITS.WEATHER_MAX} chars). Typical conditions.
@@ -105,14 +105,14 @@ ${outputContract}
 - Stay tonally consistent with the LOGLINE / STYLE NOTES / EMBRACE INFLUENCES above when present.`;
 };
 
-// Find a canon entry that collides with `label` (and, for settings, the
+// Find a canon entry that collides with `label` (and, for places, the
 // slugline derived from `label` or `secondarySlug`). Run pre-LLM against
 // the prompt-building snapshot AND post-LLM against the latest persisted
 // canon — keeps the duplicate-detection logic in one place.
 const findCanonCollision = (canon, label, targetKind, secondarySlug = '') => {
   const direct = findBibleEntryByName(canon, label);
   if (direct) return direct;
-  if (targetKind !== 'settings') return null;
+  if (targetKind !== 'places') return null;
   const needleSlug = normalizeSlugline(label);
   const secondary = normalizeSlugline(secondarySlug);
   if (!needleSlug && !secondary) return null;
@@ -158,7 +158,7 @@ const extractEntryJson = (raw, kind) => {
  * @param {string} options.category — bucket key (case-insensitive)
  * @param {string} options.label — variation label (case-insensitive); the
  *   first matching variation in the bucket is promoted.
- * @param {'characters'|'settings'|'objects'} [options.targetKind] — required
+ * @param {'characters'|'places'|'objects'} [options.targetKind] — required
  *   when the source category's `kind` is 'other'; ignored otherwise.
  * @param {string} [options.providerId]
  * @param {string} [options.model]
@@ -196,7 +196,7 @@ export async function promoteVariationToCanon(universeId, options = {}) {
   if (targetKind === 'other' || !VALID_TARGET_KINDS.includes(targetKind)) {
     if (!VALID_TARGET_KINDS.includes(rawTargetKind)) {
       throw new ServerError(
-        `Bucket "${categoryKey}" has kind "${bucket.kind || 'other'}" — pass targetKind (characters|settings|objects) to promote variations from it`,
+        `Bucket "${categoryKey}" has kind "${bucket.kind || 'other'}" — pass targetKind (characters|places|objects) to promote variations from it`,
         { status: 400, code: 'UNIVERSE_PROMOTE_NO_TARGET_KIND' },
       );
     }
@@ -220,7 +220,7 @@ export async function promoteVariationToCanon(universeId, options = {}) {
   // label already exists, surface a 409 so the UI can suggest "open the
   // existing entry" or "rename then promote" rather than producing a second
   // record that the merge logic would silently swallow on next save. For
-  // settings (kind whose identity is slugline-keyed via MERGE_CONFIG), also
+  // places (kind whose identity is slugline-keyed via MERGE_CONFIG), also
   // match the variation label against existing entries' `slugline` so a
   // dash-variant or slug-vs-name promotion doesn't slip past name-only
   // matching.
@@ -318,7 +318,7 @@ export async function promoteVariationToCanon(universeId, options = {}) {
     // concurrent promote (or manual canon add) in another tab could have
     // landed an entry with the same name while the LLM was thinking. The
     // sanitized entry's slugline is included as a secondary key for the
-    // settings case, since the LLM might have emitted a clean slugline
+    // places case, since the LLM might have emitted a clean slugline
     // that collides with an existing entry whose name doesn't match.
     const latestCanon = Array.isArray(latest[bibleField]) ? latest[bibleField] : [];
     const lateCollision = findCanonCollision(latestCanon, sanitized.name, targetKind, sanitized.slugline);

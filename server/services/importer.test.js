@@ -512,7 +512,7 @@ describe('commitImport', () => {
 
     // Universe canon was merged.
     expect(result.universe.characters.find((c) => c.name === 'Aria')).toBeDefined();
-    expect(result.universe.settings.find((s) => s.name === 'The Foundry')).toBeDefined();
+    expect(result.universe.places.find((s) => s.name === 'The Foundry')).toBeDefined();
     expect(result.universe.objects.find((o) => o.name === 'The Locket')).toBeDefined();
     // Series got arc + seasons.
     expect(result.series.arc.shape).toBe('man-in-hole');

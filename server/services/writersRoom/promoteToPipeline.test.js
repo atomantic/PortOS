@@ -14,7 +14,7 @@ vi.mock('../../lib/fileUtils.js', async () => {
 const wrLocal = await import('./local.js');
 const { promoteWorkToPipeline, ERR_NO_DRAFT_BODY } = await import('./promoteToPipeline.js');
 const { createCharacter } = await import('./characters.js');
-const { createSetting } = await import('./settings.js');
+const { createPlace } = await import('./places.js');
 const { createObject } = await import('./objects.js');
 const seriesSvc = await import('../pipeline/series.js');
 const issuesSvc = await import('../pipeline/issues.js');
@@ -77,10 +77,10 @@ describe('promoteWorkToPipeline', () => {
     expect(reloadedSeries.writersRoomWorkId).toBe(work.id);
   });
 
-  it('carries over characters / settings / objects bibles into the linked universe (Phase B.4)', async () => {
+  it('carries over characters / places / objects bibles into the linked universe (Phase B.4)', async () => {
     const work = await seedWorkWithProse();
     await createCharacter(work.id, { name: 'Aria', physicalDescription: 'tall, freckles' });
-    await createSetting(work.id, { name: 'The Foundry', slugline: 'INT. FOUNDRY — NIGHT', description: 'molten light' });
+    await createPlace(work.id, { name: 'The Foundry', slugline: 'INT. FOUNDRY — NIGHT', description: 'molten light' });
     await createObject(work.id, { name: 'The Locket', significance: "mother's keepsake" });
 
     const { series } = await promoteWorkToPipeline(work.id);
@@ -94,8 +94,8 @@ describe('promoteWorkToPipeline', () => {
     expect(universe.characters).toHaveLength(1);
     expect(universe.characters[0].name).toBe('Aria');
     expect(universe.characters[0].physicalDescription).toBe('tall, freckles');
-    expect(universe.settings).toHaveLength(1);
-    expect(universe.settings[0].slugline).toBe('INT. FOUNDRY — NIGHT');
+    expect(universe.places).toHaveLength(1);
+    expect(universe.places[0].slugline).toBe('INT. FOUNDRY — NIGHT');
     expect(universe.objects).toHaveLength(1);
     expect(universe.objects[0].name).toBe('The Locket');
   });

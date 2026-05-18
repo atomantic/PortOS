@@ -666,18 +666,18 @@ export const writersRoomCharacterUpdateSchema = z.object({
   wardrobes: wrWardrobeField.optional(),
 }).strict();
 
-const wrSettingTextField = z.string().max(2000);
+const wrPlaceTextField = z.string().max(2000);
 // Inner ZodObject (without refine) — exposed so the Pipeline can `.extend()`
 // it; `.refine()` returns a ZodEffects which has no `.extend()`.
-const writersRoomSettingCreateObject = z.object({
+const writersRoomPlaceCreateObject = z.object({
   name: z.string().trim().max(200).optional(),
   slugline: z.string().trim().max(200).optional(),
-  description: wrSettingTextField.optional(),
-  palette: wrSettingTextField.optional(),
-  era: wrSettingTextField.optional(),
-  weather: wrSettingTextField.optional(),
-  recurringDetails: wrSettingTextField.optional(),
-  notes: wrSettingTextField.optional(),
+  description: wrPlaceTextField.optional(),
+  palette: wrPlaceTextField.optional(),
+  era: wrPlaceTextField.optional(),
+  weather: wrPlaceTextField.optional(),
+  recurringDetails: wrPlaceTextField.optional(),
+  notes: wrPlaceTextField.optional(),
   // Cluster A — INT/EXT + time-of-day taxonomy. Case-insensitive accept
   // mirrors the sanitizer (`INT`/`int` both normalize to `INT`).
   intExt: z.preprocess(
@@ -689,21 +689,21 @@ const writersRoomSettingCreateObject = z.object({
     z.enum(['dawn', 'day', 'dusk', 'night']),
   ).nullable().optional(),
 }).strict();
-const settingHasIdentifier = (v) =>
+const placeHasIdentifier = (v) =>
   (v.name && v.name.trim()) || (v.slugline && v.slugline.trim());
-export const writersRoomSettingCreateSchema = writersRoomSettingCreateObject.refine(
-  settingHasIdentifier,
-  { message: 'Setting requires either a slugline or a name' },
+export const writersRoomPlaceCreateSchema = writersRoomPlaceCreateObject.refine(
+  placeHasIdentifier,
+  { message: 'Place requires either a slugline or a name' },
 );
-export const writersRoomSettingUpdateSchema = z.object({
+export const writersRoomPlaceUpdateSchema = z.object({
   name: z.string().trim().max(200).optional(),
   slugline: z.string().trim().max(200).optional(),
-  description: wrSettingTextField.optional(),
-  palette: wrSettingTextField.optional(),
-  era: wrSettingTextField.optional(),
-  weather: wrSettingTextField.optional(),
-  recurringDetails: wrSettingTextField.optional(),
-  notes: wrSettingTextField.optional(),
+  description: wrPlaceTextField.optional(),
+  palette: wrPlaceTextField.optional(),
+  era: wrPlaceTextField.optional(),
+  weather: wrPlaceTextField.optional(),
+  recurringDetails: wrPlaceTextField.optional(),
+  notes: wrPlaceTextField.optional(),
   // Cluster A — INT/EXT + time-of-day taxonomy. Case-insensitive accept
   // mirrors the sanitizer (`INT`/`int` both normalize to `INT`).
   intExt: z.preprocess(
@@ -735,12 +735,12 @@ export const writersRoomObjectUpdateSchema = z.object({
 // Generic bible-entry schemas — re-exports of the writers-room schemas under
 // kind-neutral names so the Pipeline routes share the same validation
 // surface and funnel through the canonical sanitizer in storyBible.js.
-// `settingBibleCreateSchema` is the un-refined ZodObject (not the refined
-// `writersRoomSettingCreateSchema`) so Pipeline can `.extend()` it.
+// `placeBibleCreateSchema` is the un-refined ZodObject (not the refined
+// `writersRoomPlaceCreateSchema`) so Pipeline can `.extend()` it.
 export const characterBibleCreateSchema = writersRoomCharacterCreateSchema;
 export const characterBibleUpdateSchema = writersRoomCharacterUpdateSchema;
-export const settingBibleCreateSchema = writersRoomSettingCreateObject;
-export const settingBibleUpdateSchema = writersRoomSettingUpdateSchema;
+export const placeBibleCreateSchema = writersRoomPlaceCreateObject;
+export const placeBibleUpdateSchema = writersRoomPlaceUpdateSchema;
 export const objectBibleCreateSchema = writersRoomObjectCreateSchema;
 export const objectBibleUpdateSchema = writersRoomObjectUpdateSchema;
 

@@ -336,7 +336,7 @@ describe("universeBuilderExpand.normalizeCanonArray", () => {
         { slugline: "INT. FOUNDRY CITY — DAY" },
         { description: "no name no slugline — dropped" },
       ],
-      "setting",
+      "place",
     );
     expect(out).toHaveLength(2);
     expect(out[0].name).toBe("Foundry City");
@@ -387,15 +387,15 @@ describe("universeBuilderExpand.EXPANSION_PROMPT", () => {
     expect(EXPANSION_PROMPT).toContain('"avoid"');
   });
 
-  it("asks the LLM to emit canon arrays (characters / settings / objects) with rich metadata", () => {
+  it("asks the LLM to emit canon arrays (characters / places / objects) with rich metadata", () => {
     // Phase B contract: canon arrays are first-class outputs of the expand
-    // call. The client merges them into universe.characters[]/.settings[]/.objects[]
+    // call. The client merges them into universe.characters[]/.places[]/.objects[]
     // and the redesigned UI surfaces them under their canon trunks. If this
     // assertion fails, also verify normalizeCanonArray + expandWorldTemplate
     // still surface the returned values in the response payload.
     expect(EXPANSION_PROMPT).toContain("characters:");
     expect(EXPANSION_PROMPT).toContain("physicalDescription");
-    expect(EXPANSION_PROMPT).toContain("settings:");
+    expect(EXPANSION_PROMPT).toContain("places:");
     expect(EXPANSION_PROMPT).toContain("slugline");
     expect(EXPANSION_PROMPT).toContain("recurringDetails");
     expect(EXPANSION_PROMPT).toContain("objects:");
@@ -407,7 +407,7 @@ describe("universeBuilderExpand.EXPANSION_PROMPT", () => {
     // new bucket under 'other' until the user hand-sorts.
     expect(EXPANSION_PROMPT).toContain('"kind"');
     expect(EXPANSION_PROMPT).toContain('"characters"');
-    expect(EXPANSION_PROMPT).toContain('"settings"');
+    expect(EXPANSION_PROMPT).toContain('"places"');
     expect(EXPANSION_PROMPT).toContain('"objects"');
     expect(EXPANSION_PROMPT).toContain('"other"');
   });

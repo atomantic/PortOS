@@ -20,7 +20,7 @@ import { getSeriesCanon } from './seriesCanon.js';
 import { createProject as createCDProject, setTreatment as setCDTreatment } from '../creativeDirector/local.js';
 import { startCreativeDirectorProject } from '../creativeDirector/completionHook.js';
 import { getDefaultVideoModelId } from '../../lib/mediaModels.js';
-import { buildSettingByKey } from '../../lib/scenePrompt.js';
+import { buildPlaceByKey } from '../../lib/scenePrompt.js';
 import { getSettings } from '../settings.js';
 
 export const ERR_NO_STORYBOARDS = 'PIPELINE_EPISODE_NO_STORYBOARDS';
@@ -90,12 +90,12 @@ export function buildTreatmentFromStoryboards({ issue, series, canon = null }) {
     );
   }
   const shortIssueId = issue.id.slice(-8);
-  // Canon settings live on the linked universe (Phase B.4). Build the
-  // settingByKey once and reuse across every scene's composeVisualPrompt
+  // Canon places live on the linked universe (Phase B.4). Build the
+  // placeByKey once and reuse across every scene's composeVisualPrompt
   // call rather than rebuilding per-call.
-  const settingByKey = buildSettingByKey(canon?.settings);
+  const placeByKey = buildPlaceByKey(canon?.places);
   const baselinePrompt = (description, slugline) =>
-    composeVisualPrompt({ series, description, slugline: slugline || '', settingByKey });
+    composeVisualPrompt({ series, description, slugline: slugline || '', placeByKey });
 
   const flattened = [];
   for (let idx = 0; idx < usable.length; idx += 1) {
@@ -138,8 +138,8 @@ export async function startEpisodeVideoForIssue(issueId, options = {}) {
 
   const existing = issue.stages?.episodeVideo?.cdProjectId;
   const series = await getSeries(issue.seriesId);
-  // Canon (characters / settings / objects) lives on the linked universe
-  // — load it so the per-scene baseline prompt can inject setting baseline
+  // Canon (characters / places / objects) lives on the linked universe
+  // — load it so the per-scene baseline prompt can inject place baseline
   // context (INT/EXT, timeOfDay, palette, recurring details) for matched
   // sluglines. Orphan series render with empty canon.
   const canon = await getSeriesCanon(series);

@@ -68,7 +68,7 @@ const BUCKET_CANON = 'canon';
 // the canon-trunk identifier the server's `canonSelection` schema accepts.
 const TRUNK_TABS = [
   { id: TAB_CAST, kind: 'characters', label: 'Cast', icon: Users },
-  { id: TAB_PLACES, kind: 'settings', label: 'Places', icon: MapPin },
+  { id: TAB_PLACES, kind: 'places', label: 'Places', icon: MapPin },
   { id: TAB_OBJECTS, kind: 'objects', label: 'Objects', icon: Package },
 ];
 const TRUNK_BY_ID = Object.fromEntries(TRUNK_TABS.map((t) => [t.id, t]));
@@ -77,7 +77,7 @@ const TRUNK_BY_KIND = Object.fromEntries(TRUNK_TABS.map((t) => [t.kind, t]));
 // Group category buckets by their `kind` tag. Buckets with an unknown / missing
 // kind fall into the `other` bin — that bin drives whether the Other tab shows.
 const groupBucketsByKind = (categories = {}) => {
-  const out = { characters: [], settings: [], objects: [], other: [] };
+  const out = { characters: [], places: [], objects: [], other: [] };
   for (const [key, bucket] of Object.entries(categories || {})) {
     const kind = bucket?.kind || 'other';
     if (out[kind]) out[kind].push(key);
@@ -126,8 +126,8 @@ const mergeVariations = (existing, fresh) => {
 //                          character "Ashley" with alias "Ash" would not
 //                          collide with an LLM-returned "Ash", producing a
 //                          duplicate canon entry the user has to merge by hand.
-//   - settings           → `normalizeSlugline` for BOTH `slugline` AND `name`
-//                          (`storyBible.js` MERGE_CONFIG.setting.keyFields).
+//   - places             → `normalizeSlugline` for BOTH `slugline` AND `name`
+//                          (`storyBible.js` MERGE_CONFIG.place.keyFields).
 //                          Without this, sluglines that differ only in dash
 //                          style or punctuation ("INT. FOUNDRY CITY — DAY"
 //                          vs "INT FOUNDRY CITY - DAY") would land as two
@@ -144,16 +144,16 @@ const mergeCanonByName = (existing, fresh, kind = 'character') => {
   // Empty/missing fresh — return `existing` unchanged (preserve reference so
   // a no-op expand doesn't trigger downstream identity-comparing effects).
   if (!fresh?.length) return existing || [];
-  const isSetting = kind === 'setting';
-  const normName = isSetting
+  const isPlace = kind === 'place';
+  const normName = isPlace
     ? (s) => (typeof s === 'string' ? normalizeSlugline(s) : '')
     : (s) => (typeof s === 'string' ? s.trim().toLowerCase() : '');
   const normSlug = (s) => (typeof s === 'string' ? normalizeSlugline(s) : '');
-  // Aliases participate in identity for character/object only — settings use
-  // slugline collision instead (the server's MERGE_CONFIG.setting has no
+  // Aliases participate in identity for character/object only — places use
+  // slugline collision instead (the server's MERGE_CONFIG.place has no
   // aliases field).
   const aliasKeys = (entry) => {
-    if (isSetting || !Array.isArray(entry?.aliases)) return [];
+    if (isPlace || !Array.isArray(entry?.aliases)) return [];
     return entry.aliases.map(normName).filter(Boolean);
   };
   const seen = new Set();
@@ -619,9 +619,9 @@ export default function UniverseBuilder() {
   // wins because our ledger doesn't contain it, so the refetched canon
   // (which already lacks the deleted entry) is the final state. Cleared on
   // successful save and on universe-switch.
-  const pendingCanonAdditionsRef = useRef({ characters: [], settings: [], objects: [] });
+  const pendingCanonAdditionsRef = useRef({ characters: [], places: [], objects: [] });
   const clearPendingCanonAdditions = () => {
-    pendingCanonAdditionsRef.current = { characters: [], settings: [], objects: [] };
+    pendingCanonAdditionsRef.current = { characters: [], places: [], objects: [] };
   };
 
   // Per-page render knobs. Persisted to localStorage so the user's
@@ -813,12 +813,12 @@ export default function UniverseBuilder() {
         const additions = pendingCanonAdditionsRef.current;
         const baseCanon = {
           characters: mergeCanonByName(fresh.characters || [], additions.characters, 'character'),
-          settings: mergeCanonByName(fresh.settings || [], additions.settings, 'setting'),
+          places: mergeCanonByName(fresh.places || [], additions.places, 'place'),
           objects: mergeCanonByName(fresh.objects || [], additions.objects, 'object'),
         };
         payload = { ...basePayload, ...baseCanon };
       } else {
-        const baseCanon = { characters: draft.characters || [], settings: draft.settings || [], objects: draft.objects || [] };
+        const baseCanon = { characters: draft.characters || [], places: draft.places || [], objects: draft.objects || [] };
         payload = { ...basePayload, ...baseCanon };
       }
     }
@@ -936,7 +936,7 @@ export default function UniverseBuilder() {
       // Allowing a fresh LLM kind to supersede an existing 'other' is intentional:
       // pre-Phase-B "factions" buckets saved as `other` can be promoted to
       // `characters` by a re-expand without requiring the user to manually change
-      // the trunk. User-curated non-`other` kinds (e.g. `settings`) are preserved.
+      // the trunk. User-curated non-`other` kinds (e.g. `places`) are preserved.
       const existingKind = draft.categories?.[cat]?.kind;
       const freshKind = llmCategories[cat]?.kind;
       const kind = (existingKind && existingKind !== 'other') ? existingKind : (freshKind || existingKind);
@@ -964,8 +964,8 @@ export default function UniverseBuilder() {
     // clobber hand-authored or series-extracted records. mergeCanonByName
     // short-circuits when `fresh` is empty so identity is preserved.
     //
-    // `kind` is passed so settings use `normalizeSlugline` for both `name` and
-    // `slugline` (matching the server's MERGE_CONFIG.setting.keyFields) —
+    // `kind` is passed so places use `normalizeSlugline` for both `name` and
+    // `slugline` (matching the server's MERGE_CONFIG.place.keyFields) —
     // dash/punct-variant identifiers collide instead of duplicating.
     const pickCanon = (key, kind) => mergeCanonByName(
       draft[key] || [],
@@ -973,7 +973,7 @@ export default function UniverseBuilder() {
       kind,
     );
     const mergedCharacters = pickCanon('characters', 'character');
-    const mergedSettings = pickCanon('settings', 'setting');
+    const mergedPlaces = pickCanon('places', 'place');
     const mergedObjects = pickCanon('objects', 'object');
     // Count NEW canon entries this expand added (post-merge minus pre-existing).
     // Used by the toast so a re-expand on a populated universe doesn't claim
@@ -981,7 +981,7 @@ export default function UniverseBuilder() {
     // on collision in mergeCanonByName, so the delta is always non-negative.
     const addedCanonCount =
       (mergedCharacters.length - (draft.characters?.length || 0))
-      + (mergedSettings.length - (draft.settings?.length || 0))
+      + (mergedPlaces.length - (draft.places?.length || 0))
       + (mergedObjects.length - (draft.objects?.length || 0));
 
     const expandedDraft = {
@@ -994,7 +994,7 @@ export default function UniverseBuilder() {
       categories: ensureDraftCategories(mergedCategories),
       compositeSheets: mergedSheets,
       characters: mergedCharacters,
-      settings: mergedSettings,
+      places: mergedPlaces,
       objects: mergedObjects,
       llm: result.llm || draft.llm,
     };
@@ -1018,7 +1018,7 @@ export default function UniverseBuilder() {
       };
       pendingCanonAdditionsRef.current = {
         characters: [...pendingCanonAdditionsRef.current.characters, ...computeAdditions(draft.characters, mergedCharacters)],
-        settings: [...pendingCanonAdditionsRef.current.settings, ...computeAdditions(draft.settings, mergedSettings)],
+        places: [...pendingCanonAdditionsRef.current.places, ...computeAdditions(draft.places, mergedPlaces)],
         objects: [...pendingCanonAdditionsRef.current.objects, ...computeAdditions(draft.objects, mergedObjects)],
       };
     }
@@ -1054,7 +1054,7 @@ export default function UniverseBuilder() {
       // any concurrent deletions/edits.
       let canonForPayload = {
         characters: expandedDraft.characters || [],
-        settings: expandedDraft.settings || [],
+        places: expandedDraft.places || [],
         objects: expandedDraft.objects || [],
       };
       if (selectedId) {
@@ -1079,7 +1079,7 @@ export default function UniverseBuilder() {
           // deletions in other tabs/surfaces get resurrected because the
           // deleted entry is still present in the stale draft.
           characters: mergeCanonByName(fresh.characters || [], pendingCanonAdditionsRef.current.characters, 'character'),
-          settings: mergeCanonByName(fresh.settings || [], pendingCanonAdditionsRef.current.settings, 'setting'),
+          places: mergeCanonByName(fresh.places || [], pendingCanonAdditionsRef.current.places, 'place'),
           objects: mergeCanonByName(fresh.objects || [], pendingCanonAdditionsRef.current.objects, 'object'),
         };
       }
@@ -1343,7 +1343,7 @@ export default function UniverseBuilder() {
         return {
           ...d,
           characters: mergeCanonByName(updated.characters || [], additions.characters, 'character'),
-          settings: mergeCanonByName(updated.settings || [], additions.settings, 'setting'),
+          places: mergeCanonByName(updated.places || [], additions.places, 'place'),
           objects: mergeCanonByName(updated.objects || [], additions.objects, 'object'),
           updatedAt: updated.updatedAt,
         };
@@ -1351,7 +1351,7 @@ export default function UniverseBuilder() {
       return {
         ...d,
         characters: updated.characters,
-        settings: updated.settings,
+        places: updated.places,
         objects: updated.objects,
         updatedAt: updated.updatedAt,
       };
@@ -1422,7 +1422,7 @@ export default function UniverseBuilder() {
     }
   };
   // Auto-sort with AI — one LLM call classifies every Other-tab bucket into
-  // characters/settings/objects. Each bucket's `kind` is reassigned via a
+  // characters/places/objects. Each bucket's `kind` is reassigned via a
   // single atomic patch server-side so the universe ends up consistent or
   // unchanged. Renames the LLM suggests are surfaced in the toast but not
   // auto-applied (the user can rename manually if they want it).
@@ -1555,7 +1555,7 @@ export default function UniverseBuilder() {
         const newDraft = {
           ...baseDraft,
           characters: updated.characters,
-          settings: updated.settings,
+          places: updated.places,
           objects: updated.objects,
           categories: { ...baseDraft.categories, [result.removed.category]: updated.categories?.[result.removed.category] },
           schemaVersion: updated.schemaVersion,
@@ -1734,7 +1734,7 @@ export default function UniverseBuilder() {
           tabs={[
             { id: TAB_BIBLE, label: 'Bible', icon: BookOpen },
             { id: TAB_CAST, label: 'Cast', icon: Users, count: (draft.characters?.length || 0) + bucketsByKind.characters.reduce((n, k) => n + (draft.categories?.[k]?.variations?.length || 0), 0) },
-            { id: TAB_PLACES, label: 'Places', icon: MapPin, count: (draft.settings?.length || 0) + bucketsByKind.settings.reduce((n, k) => n + (draft.categories?.[k]?.variations?.length || 0), 0) },
+            { id: TAB_PLACES, label: 'Places', icon: MapPin, count: (draft.places?.length || 0) + bucketsByKind.places.reduce((n, k) => n + (draft.categories?.[k]?.variations?.length || 0), 0) },
             { id: TAB_OBJECTS, label: 'Objects', icon: Package, count: (draft.objects?.length || 0) + bucketsByKind.objects.reduce((n, k) => n + (draft.categories?.[k]?.variations?.length || 0), 0) },
             hasOtherBuckets && { id: TAB_OTHER, label: 'Other', icon: FolderTree, count: bucketsByKind.other.reduce((n, k) => n + (draft.categories?.[k]?.variations?.length || 0), 0) },
             { id: TAB_COMPOSITES, label: 'Composites', icon: Layers, count: totalSheets },
@@ -1893,11 +1893,11 @@ const hasNonBlankString = (v) => typeof v === 'string' && v.trim().length > 0;
 const canonEntryHasContent = (e, kind) => {
   if (!e) return false;
   if (hasNonBlankString(e.prompt)) return true;
-  // Identifier anchors per kind — settings allow slugline-only entries (bible
+  // Identifier anchors per kind — places allow slugline-only entries (bible
   // sanitizer); characters/objects ignore stray slugline. Mirrors server
   // synthesizeCanonPrompt's identifier-seed rule.
   if (hasNonBlankString(e.name)) return true;
-  if (kind === 'settings' && hasNonBlankString(e.slugline)) return true;
+  if (kind === 'places' && hasNonBlankString(e.slugline)) return true;
   return hasCanonDescriptorContent(kind, e);
 };
 
@@ -1909,7 +1909,7 @@ function renderPromptCount(world, promptMode = 'variations') {
   const sheets = world.compositeSheets?.length || 0;
   if (promptMode === 'sheets') return sheets;
   const canon = countCanonWithContent(world, 'characters')
-    + countCanonWithContent(world, 'settings')
+    + countCanonWithContent(world, 'places')
     + countCanonWithContent(world, 'objects');
   if (promptMode === 'canon') return canon;
   return totalVariationCount(world) + sheets + canon;
@@ -1959,7 +1959,7 @@ function scopedPromptCount(world, scope) {
   }
   if (mode === 'canon' || mode === 'all') {
     if (scope.canonSelection) {
-      for (const trunk of ['characters', 'settings', 'objects']) {
+      for (const trunk of ['characters', 'places', 'objects']) {
         const pick = scope.canonSelection[trunk];
         if (!pick) continue;
         const entries = Array.isArray(world[trunk]) ? world[trunk] : [];
@@ -1967,12 +1967,12 @@ function scopedPromptCount(world, scope) {
         if (pick === 'all') n += withContent.length;
         else if (Array.isArray(pick)) {
           const needles = new Set(pick.map((p) => p.toLowerCase()));
-          // Mirror server: slugline matching is settings-only — name is the
+          // Mirror server: slugline matching is places-only — name is the
           // shared anchor for characters/objects.
           n += withContent.filter((e) => {
             const name = (e.name || '').toLowerCase();
             if (needles.has(name)) return true;
-            if (trunk === 'settings') {
+            if (trunk === 'places') {
               const slug = (e.slugline || '').toLowerCase();
               if (needles.has(slug)) return true;
             }
@@ -2964,7 +2964,7 @@ export function TrunkView({
               value={newBucketName}
               onChange={(e) => setNewBucketName(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') handleAddBucket(); }}
-              placeholder={trunk.kind === 'characters' ? 'heroes, villains, factions' : trunk.kind === 'settings' ? 'colonies, ruins' : 'weapons, vehicles'}
+              placeholder={trunk.kind === 'characters' ? 'heroes, villains, factions' : trunk.kind === 'places' ? 'colonies, ruins' : 'weapons, vehicles'}
               className="flex-1 min-w-[160px] bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-sm focus:outline-none focus:border-port-accent"
               maxLength={WORLD_CATEGORY_KEY_MAX}
               autoFocus
@@ -3063,7 +3063,7 @@ export function OtherTab({
             onClick={onAutoSort}
             disabled={autoSorting}
             className="text-xs px-2 py-1.5 bg-port-accent/15 hover:bg-port-accent/25 disabled:opacity-50 text-port-accent rounded flex items-center gap-1 min-h-[32px]"
-            title="Auto-sort with AI — sends every Other-tab bucket to the active LLM and assigns each to characters / settings / objects"
+            title="Auto-sort with AI — sends every Other-tab bucket to the active LLM and assigns each to characters / places / objects"
           >
             {autoSorting ? <Loader2 size={12} className="animate-spin" /> : <Wand2 size={12} />}
             {autoSorting ? 'Sorting…' : 'Auto-sort with AI'}
@@ -3119,7 +3119,7 @@ function RenderTab({
     const totalSheets = draft.compositeSheets?.length || 0;
     const totalVariations = totalVariationCount(draft);
     const totalCanon = countCanonWithContent(draft, 'characters')
-      + countCanonWithContent(draft, 'settings')
+      + countCanonWithContent(draft, 'places')
       + countCanonWithContent(draft, 'objects');
     const otherBuckets = bucketsByKind?.other || [];
     const totalOtherVariations = otherBuckets.reduce(

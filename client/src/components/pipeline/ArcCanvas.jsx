@@ -864,7 +864,7 @@ function SeasonRow({ series, season, seasons, issues, onSeriesUpdate, onIssuesUp
     const n = result.createdIssues?.length || 0;
     const extracted = result.bibleExtracted;
     const extractedSummary = extracted
-      ? ` (+${extracted.characters} chars, +${extracted.settings} settings, +${extracted.objects} objects extracted)`
+      ? ` (+${extracted.characters} chars, +${extracted.places} places, +${extracted.objects} objects extracted)`
       : '';
     toast.success(`Generated ${n} issue${n === 1 ? '' : 's'} / episode${n === 1 ? '' : 's'}${extractedSummary}`);
   };

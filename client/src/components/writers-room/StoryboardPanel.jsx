@@ -23,10 +23,10 @@ import { ImageGenTab } from '../settings/ImageGenTab';
 import SceneCard from './SceneCard';
 import StagePromptModelPicker from './StagePromptModelPicker';
 import CharactersBible from './CharactersBible';
-import SettingsBible from './SettingsBible';
+import PlacesBible from './PlacesBible';
 import ObjectsBible from './ObjectsBible';
 import { WR_IMAGE_DEFAULTS, readWrImageSettings, STYLE_ID, EMPTY_IMAGE_STYLE } from '../../lib/wrImageDefaults';
-import { buildCharByKey, buildSettingByKey } from '../../lib/scenePrompt';
+import { buildCharByKey, buildPlaceByKey } from '../../lib/scenePrompt';
 
 const SCRIPT_STAGE = 'writers-room-script';
 
@@ -53,7 +53,7 @@ export const STORYBOARD_TAB_VALUES = Object.values(TAB);
 
 const RUN_LABEL = {
   characters: 'Refreshing characters',
-  settings: 'Refreshing world',
+  places: 'Refreshing world',
   objects: 'Refreshing objects',
   script: 'Running Adapt',
   evaluate: 'Editorial pass',
@@ -63,12 +63,12 @@ const RUN_LABEL = {
 export default function StoryboardPanel({
   work,
   characters = [],
-  settings = [],
+  places = [],
   onJumpToScene,
   onDebug,
   onRunAdapt,
   onRunCharacters,
-  onRunSettings,
+  onRunPlaces,
   onRunFullPipeline,
   runningAdapt = false,
   runningKind = null,
@@ -76,7 +76,7 @@ export default function StoryboardPanel({
   activeSceneId = null,
   onStyleChange,
   onCharactersChange,
-  onSettingsChange,
+  onPlacesChange,
   onScenesChange,
   objects = [],
   onObjectsChange,
@@ -249,7 +249,7 @@ export default function StoryboardPanel({
   }, []);
 
   const charByKey = useMemo(() => buildCharByKey(characters), [characters]);
-  const settingByKey = useMemo(() => buildSettingByKey(settings), [settings]);
+  const placeByKey = useMemo(() => buildPlaceByKey(places), [places]);
   const scenesCount = useMemo(
     () => (activeDraft?.segmentIndex || []).filter((s) => s.kind === 'scene').length,
     [activeDraft?.segmentIndex]
@@ -279,7 +279,7 @@ export default function StoryboardPanel({
         runningKind={runningKind}
         tabs={[
           { id: TAB.CHARACTERS, label: 'Characters', icon: Users, count: characters.length, runningKind: 'characters' },
-          { id: TAB.WORLD, label: 'World', icon: MapPinIcon, count: settings.length, runningKind: 'settings' },
+          { id: TAB.WORLD, label: 'World', icon: MapPinIcon, count: places.length, runningKind: 'places' },
           { id: TAB.OBJECTS, label: 'Objects', icon: Package, count: objects.length, runningKind: 'objects' },
           { id: TAB.SCENES, label: 'Scenes', icon: ListTree, count: scenesCount },
           { id: TAB.BOARDS, label: 'Boards', icon: Clapperboard, count: scenes.length, runningKind: 'script' },
@@ -312,10 +312,10 @@ export default function StoryboardPanel({
           <BibleTab
             kind="world"
             workId={work.id}
-            items={settings}
-            onItemsChange={onSettingsChange}
-            onRefresh={onRunSettings}
-            running={runningKind === 'settings'}
+            items={places}
+            onItemsChange={onPlacesChange}
+            onRefresh={onRunPlaces}
+            running={runningKind === 'places'}
             anyRunning={!!runningKind}
             readingTheme={readingTheme}
             hotRefId={hotRef?.kind === 'place' ? hotRef.refId : null}
@@ -350,15 +350,15 @@ export default function StoryboardPanel({
             imageStyle={imageStyle}
             stylePresets={stylePresets}
             charByKey={charByKey}
-            settingByKey={settingByKey}
+            placeByKey={placeByKey}
             charactersCount={characters.length}
-            settingsCount={settings.length}
+            placesCount={places.length}
             sceneRefs={sceneRefs}
             onJumpToScene={onJumpToScene}
             onDebug={onDebug}
             onRunAdapt={onRunAdapt}
             onRunCharacters={onRunCharacters}
-            onRunSettings={onRunSettings}
+            onRunPlaces={onRunPlaces}
             onRunFullPipeline={onRunFullPipeline}
             runningAdapt={runningAdapt}
             runningKind={runningKind}
@@ -401,12 +401,12 @@ const BIBLE_KINDS = {
     changeProp: 'onCharactersChange',
   },
   world: {
-    label: 'World / setting bible',
+    label: 'World / places bible',
     sub: 'Locations keyed by slugline · feeds image-gen prompts',
     refreshNoun: 'world',
-    Component: SettingsBible,
-    propName: 'settings',
-    changeProp: 'onSettingsChange',
+    Component: PlacesBible,
+    propName: 'places',
+    changeProp: 'onPlacesChange',
   },
   objects: {
     label: 'Recurring objects',
@@ -517,15 +517,15 @@ function BoardsTab({
   imageStyle,
   stylePresets,
   charByKey,
-  settingByKey,
+  placeByKey,
   charactersCount,
-  settingsCount,
+  placesCount,
   sceneRefs,
   onJumpToScene,
   onDebug,
   onRunAdapt,
   onRunCharacters,
-  onRunSettings,
+  onRunPlaces,
   onRunFullPipeline,
   runningAdapt,
   runningKind,
@@ -575,9 +575,9 @@ function BoardsTab({
       {!loading && !latestScript && !latestFailure && (
         <StoryboardSetup
           charactersCount={charactersCount}
-          settingsCount={settingsCount}
+          placesCount={placesCount}
           onRunCharacters={onRunCharacters}
-          onRunSettings={onRunSettings}
+          onRunPlaces={onRunPlaces}
           onRunAdapt={onRunAdapt}
           onRunFullPipeline={onRunFullPipeline}
           runningKind={runningKind}
@@ -588,12 +588,12 @@ function BoardsTab({
         <StaleBanner onRunAdapt={onRunAdapt} runningAdapt={runningAdapt} />
       )}
 
-      {!loading && latestScript && !isStale && !latestFailure && (charactersCount === 0 || settingsCount === 0) && (
+      {!loading && latestScript && !isStale && !latestFailure && (charactersCount === 0 || placesCount === 0) && (
         <BiblesMissingNotice
           charactersMissing={charactersCount === 0}
-          settingsMissing={settingsCount === 0}
+          placesMissing={placesCount === 0}
           onRunCharacters={onRunCharacters}
-          onRunSettings={onRunSettings}
+          onRunPlaces={onRunPlaces}
           runningKind={runningKind}
         />
       )}
@@ -623,7 +623,7 @@ function BoardsTab({
             initialImage={sceneImages[sceneId] || null}
             readingTheme={readingTheme}
             charByKey={charByKey}
-            settingByKey={settingByKey}
+            placeByKey={placeByKey}
             isActive={sceneId === activeSceneId}
             onJumpToProse={onJumpToScene ? () => onJumpToScene(scene, i, scenes.length) : null}
             onDebug={onDebug}
@@ -685,20 +685,20 @@ function ConfigTab({ imageCfg, models, availableBackends, onCfgChange, stylePres
 // click "Run all in order" to fire the sequential pipeline.
 function StoryboardSetup({
   charactersCount,
-  settingsCount,
+  placesCount,
   onRunCharacters,
-  onRunSettings,
+  onRunPlaces,
   onRunAdapt,
   onRunFullPipeline,
   runningKind,
 }) {
   const isRunning = !!runningKind;
   const charDone = charactersCount > 0;
-  const setDone = settingsCount > 0;
+  const setDone = placesCount > 0;
 
   const Step = ({ n, kind, done, label, sublabel, hint, onClick, primary = false }) => {
     const running = runningKind === kind;
-    const Icon = done ? Check : kind === 'characters' ? Users : kind === 'settings' ? MapPinIcon : Clapperboard;
+    const Icon = done ? Check : kind === 'characters' ? Users : kind === 'places' ? MapPinIcon : Clapperboard;
     return (
       <div className={`flex items-start gap-2.5 p-2.5 border rounded ${
         done ? 'border-port-success/40 bg-port-success/5' :
@@ -761,12 +761,12 @@ function StoryboardSetup({
         />
         <Step
           n={2}
-          kind="settings"
+          kind="places"
           done={setDone}
-          label="Extract settings / world"
-          sublabel={`${settingsCount} location${settingsCount === 1 ? '' : 's'}`}
+          label="Extract places / world"
+          sublabel={`${placesCount} location${placesCount === 1 ? '' : 's'}`}
           hint="Locations keyed by slugline (description, palette, era, recurring details)"
-          onClick={onRunSettings}
+          onClick={onRunPlaces}
         />
         <Step
           n={3}
@@ -848,11 +848,11 @@ function FailedAdaptBanner({ failure, onRunAdapt, runningAdapt, onOpenConfig, ha
 // the user gets visual drift across scenes. Inline run buttons let them
 // fix it without leaving the panel; re-running Adapt afterwards picks up
 // the populated bibles.
-function BiblesMissingNotice({ charactersMissing, settingsMissing, onRunCharacters, onRunSettings, runningKind }) {
+function BiblesMissingNotice({ charactersMissing, placesMissing, onRunCharacters, onRunPlaces, runningKind }) {
   const isRunning = !!runningKind;
   const missing = [
     charactersMissing && 'character bible',
-    settingsMissing && 'setting bible',
+    placesMissing && 'places bible',
   ].filter(Boolean);
   return (
     <div className="flex items-start gap-2 p-2 mb-1 border border-port-warning/40 bg-port-warning/5 rounded text-[11px]">
@@ -875,14 +875,14 @@ function BiblesMissingNotice({ charactersMissing, settingsMissing, onRunCharacte
               Extract characters
             </button>
           )}
-          {settingsMissing && (
+          {placesMissing && (
             <button
-              onClick={onRunSettings}
-              disabled={isRunning || !onRunSettings}
+              onClick={onRunPlaces}
+              disabled={isRunning || !onRunPlaces}
               className="flex items-center gap-1 px-2 py-1 border border-port-border text-gray-300 rounded text-[10px] hover:bg-port-border/40 disabled:opacity-50"
             >
-              {runningKind === 'settings' ? <Loader2 size={10} className="animate-spin" /> : <MapPinIcon size={10} />}
-              Extract settings
+              {runningKind === 'places' ? <Loader2 size={10} className="animate-spin" /> : <MapPinIcon size={10} />}
+              Extract places
             </button>
           )}
         </div>

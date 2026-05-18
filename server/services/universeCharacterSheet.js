@@ -15,6 +15,7 @@
 
 import { copyFile } from 'fs/promises';
 import { join, basename } from 'path';
+import { randomUUID } from 'crypto';
 import { PATHS, ensureDir } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { getSettings } from './settings.js';
@@ -22,6 +23,7 @@ import { getUniverse, updateUniverse } from './universeBuilder.js';
 import { buildStyleClause } from './universeCanon.js';
 import { getImageModels } from '../lib/mediaModels.js';
 import { enqueueJob, mediaJobEvents } from './mediaJobQueue/index.js';
+import { findOrCreateUniverseCollection } from './mediaCollections.js';
 
 // 2048×1536 keeps panel labels legible while still rendering in a single
 // pass on Apple Silicon local backends. Codex / nano-banana ignore the
@@ -293,6 +295,31 @@ export async function renderCharacterReferenceSheet(universeId, entryId, options
       `Character reference sheet rendering needs codex or local image-gen mode (currently: ${activeMode}). External SD-API doesn't support the multi-zone layout this renderer produces — switch in Settings → Image Gen.`,
       { status: 400, code: 'UNIVERSE_CHARACTER_SHEET_UNSUPPORTED_MODE' },
     );
+  }
+
+  // Resolve (or create) the universe's media collection up front, then attach
+  // a `universeRun` tag to the job so `universeBuilderCollectionHook` files
+  // the rendered gallery filename (`<jobId>.png`, distinct from the
+  // /data/image-refs/ copy `onSheetComplete` makes for the character pointer)
+  // into the same "Universe: <name>" bucket as the rest of the universe's
+  // concept art. Bookkeeping is best-effort — if provisioning fails we still
+  // run the render, just without the collection-filing side-effect.
+  const collection = await findOrCreateUniverseCollection({
+    universeId: universe.id,
+    universeName: universe.name,
+    description: `Universe Builder renders for "${universe.name}"`,
+  }).catch((err) => {
+    console.error(`❌ character sheet → universe collection provision failed: ${err?.message || err}`);
+    return null;
+  });
+  if (collection) {
+    params.universeRun = {
+      runId: randomUUID(),
+      universeId: universe.id,
+      collectionId: collection.id,
+      category: 'character-sheet',
+      label: character.name,
+    };
   }
 
   // Enqueue through mediaJobQueue so the render serializes through the right

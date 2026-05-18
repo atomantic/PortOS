@@ -153,7 +153,7 @@ export function sanitizeSceneList(raw, { maxScenes = 200 } = {}) {
  * @param {string} args.source          prose body OR teleplay markdown
  * @param {string} args.sourceKind      'prose' | 'teleplay'
  * @param {Array}  [args.characters]    bible entries (for deference)
- * @param {Array}  [args.settings]      bible entries (for deference)
+ * @param {Array}  [args.places]        bible entries (for deference)
  * @param {Array}  [args.objects]       bible entries (for deference)
  * @param {object} [args.work]          variables consumed by writers-room-script (`work.title`, `work.kind`, `work.wordCount`)
  * @param {object} [args.series]        variables consumed by pipeline-extract-scenes (`series.name`, `series.styleNotes`)
@@ -166,7 +166,7 @@ export async function extractScenes({
   source,
   sourceKind = SOURCE_KIND.PROSE,
   characters = [],
-  settings = [],
+  places = [],
   objects = [],
   work,
   series,
@@ -182,14 +182,14 @@ export async function extractScenes({
   }
 
   // Both prompts read the same `existing<X>Json` envelope so the model can
-  // defer to canonical character/setting names instead of re-improvising.
+  // defer to canonical character/place names instead of re-improvising.
   // Pipeline's series.characters and Writers Room's per-work characters both
   // sanitize through `pickPromptFields` to strip ids/timestamps/source/notes.
   const variables = {
     returnsJson: true,
     sourceKind,
     existingCharactersJson: JSON.stringify((characters || []).map((c) => pickPromptFields(BIBLE_KIND.CHARACTER, c))),
-    existingSettingsJson: JSON.stringify((settings || []).map((s) => pickPromptFields(BIBLE_KIND.SETTING, s))),
+    existingPlacesJson: JSON.stringify((places || []).map((p) => pickPromptFields(BIBLE_KIND.PLACE, p))),
     existingObjectsJson: JSON.stringify((objects || []).map((o) => pickPromptFields(BIBLE_KIND.OBJECT, o))),
   };
   // Variable-shape compat: writers-room-script.md reads `{{draftBody}}` +
