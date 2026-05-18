@@ -22,6 +22,7 @@ import toast from '../../ui/Toast';
 import {
   getUniverse, updateUniverse,
   extractUniverseCanon, refineUniverseCharacter,
+  getUniverseCanonUsage,
 } from '../../../services/apiUniverseBuilder';
 import { getSettings, updateSettings, generateImage } from '../../../services/apiSystem';
 import { listImageModels } from '../../../services/apiImageVideo';
@@ -147,6 +148,22 @@ export default function NounsStage({ issue, series }) {
       if (cancelled || !mountedRef.current) return;
       setUniverse(w || null);
     }).catch(() => { if (mountedRef.current) setUniverse(null); });
+    return () => { cancelled = true; };
+  }, [series?.universeId, mountedRef]);
+
+  // Sibling-series name lookup for the canon-card "from <series>" chip.
+  // The current series is in `series.name`; everything else (including the
+  // entries that surface in the "Other series canon" details panel) needs the
+  // server-side aggregation. Failure is non-fatal — chips just fall back to
+  // the id-tooltip form.
+  const [seriesNameMap, setSeriesNameMap] = useState(null);
+  useEffect(() => {
+    if (!series?.universeId) { setSeriesNameMap(null); return; }
+    let cancelled = false;
+    getUniverseCanonUsage(series.universeId).then((u) => {
+      if (cancelled || !mountedRef.current) return;
+      setSeriesNameMap(u?.seriesNameMap || null);
+    }).catch(() => { /* non-fatal */ });
     return () => { cancelled = true; };
   }, [series?.universeId, mountedRef]);
 
@@ -396,6 +413,7 @@ export default function NounsStage({ issue, series }) {
           refiningCharacterId={refiningCharacterId}
           onPatchEntry={(entryId, patch) => handlePatchEntry(kind, entryId, patch)}
           onRenderCleanPlate={handleRenderCleanPlate}
+          seriesNameMap={seriesNameMap}
         />
       ))}
 
@@ -413,7 +431,7 @@ export default function NounsStage({ issue, series }) {
   );
 }
 
-function KindSection({ kind, all, prose, renderingJobs, onRender, onJobCompleted, onJobFailed, onPreview, onRefine, refiningCharacterId, onPatchEntry, onRenderCleanPlate }) {
+function KindSection({ kind, all, prose, renderingJobs, onRender, onJobCompleted, onJobFailed, onPreview, onRefine, refiningCharacterId, onPatchEntry, onRenderCleanPlate, seriesNameMap }) {
   const Icon = kind.icon;
   const inIssue = useMemo(() => kind.match(prose, all), [prose, all, kind]);
   const inIssueIds = useMemo(() => new Set(inIssue.map((e) => e.id || e.name)), [inIssue]);
@@ -459,6 +477,7 @@ function KindSection({ kind, all, prose, renderingJobs, onRender, onJobCompleted
                   refineDisabled={!!refiningCharacterId && refiningCharacterId !== entry.id}
                   onPatchEntry={onPatchEntry}
                   onRenderCleanPlate={onRenderCleanPlate}
+                  seriesNameMap={seriesNameMap}
                 />
               ))}
             </ul>
@@ -487,6 +506,7 @@ function KindSection({ kind, all, prose, renderingJobs, onRender, onJobCompleted
                   refineDisabled={!!refiningCharacterId && refiningCharacterId !== entry.id}
                   onPatchEntry={onPatchEntry}
                   onRenderCleanPlate={onRenderCleanPlate}
+                  seriesNameMap={seriesNameMap}
                 />
               ))}
             </ul>

@@ -473,6 +473,7 @@ export default function UniverseCanonSection({ universe, universeId, onUniverseC
           togglingLockId={togglingLockId}
           onPatchEntry={(entryId, patch) => handlePatchEntry(kind, entryId, patch)}
           onRenderCleanPlate={handleRenderCleanPlate}
+          seriesNameMap={usage?.seriesNameMap || null}
         />
       ))}
 
@@ -481,7 +482,7 @@ export default function UniverseCanonSection({ universe, universeId, onUniverseC
   );
 }
 
-function KindSection({ kind, all, totalCount, filtered, usage, renderingJobs, onRender, onJobCompleted, onJobFailed, onPreview, onRefine, refiningId, onToggleLock, togglingLockId, onPatchEntry, onRenderCleanPlate }) {
+function KindSection({ kind, all, totalCount, filtered, usage, renderingJobs, onRender, onJobCompleted, onJobFailed, onPreview, onRefine, refiningId, onToggleLock, togglingLockId, onPatchEntry, onRenderCleanPlate, seriesNameMap }) {
   const Icon = kind.icon;
   return (
     <section className="rounded border border-port-border bg-port-bg/60">
@@ -517,6 +518,7 @@ function KindSection({ kind, all, totalCount, filtered, usage, renderingJobs, on
                 togglingLock={togglingLockId === entry.id}
                 onPatchEntry={onPatchEntry}
                 onRenderCleanPlate={onRenderCleanPlate}
+                seriesNameMap={seriesNameMap}
               />
             ))}
           </ul>
