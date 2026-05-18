@@ -558,6 +558,13 @@ export default function UniverseCanonSection({ universe, universeId, onUniverseC
 }
 
 function KindSection({ kind, universeId, all, totalCount, filtered, usage, renderingJobs, onRender, onJobCompleted, onJobFailed, onPreview, onRefine, refiningId, onExpandCharacter, expandingId, onSheetCompleted, onToggleLock, togglingLockId, onPatchEntry, onRenderCleanPlate, seriesNameMap }) {
+  // Universe-only character wiring — `null` for non-character kinds so
+  // CanonCard's gate stays `kind === 'characters' && characterExtensions`.
+  // Memoized so re-renders don't pass fresh-by-identity props into every card.
+  const characterExtensions = useMemo(
+    () => (kind.key === 'characters' ? { universeId, onExpandCharacter, onSheetCompleted } : null),
+    [kind.key, universeId, onExpandCharacter, onSheetCompleted],
+  );
   const Icon = kind.icon;
   return (
     <section className="rounded border border-port-border bg-port-bg/60">
@@ -594,10 +601,9 @@ function KindSection({ kind, universeId, all, totalCount, filtered, usage, rende
                 onPatchEntry={onPatchEntry}
                 onRenderCleanPlate={onRenderCleanPlate}
                 seriesNameMap={seriesNameMap}
-                universeId={kind.key === 'characters' ? universeId : null}
-                onExpandCharacter={kind.key === 'characters' ? onExpandCharacter : null}
-                expanding={kind.key === 'characters' && expandingId === entry.id}
-                onSheetCompleted={kind.key === 'characters' ? onSheetCompleted : null}
+                characterExtensions={characterExtensions
+                  ? { ...characterExtensions, expanding: expandingId === entry.id }
+                  : null}
               />
             ))}
           </ul>

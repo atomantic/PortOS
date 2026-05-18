@@ -451,6 +451,20 @@ export function getDateString(date = new Date()) {
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
+ * Truncate an id to a fixed prefix for human-readable log lines. Null-safe
+ * so callers can pass a possibly-missing field directly (`shortId(run?.id)`)
+ * without an outer truthiness check.
+ *
+ * @param {*} id - id-like value; coerced to string
+ * @param {number} [n=8] - prefix length
+ * @returns {string} prefix of length `n`, or `''` when `id` is null/undefined
+ */
+export function shortId(id, n = 8) {
+  if (id == null) return '';
+  return String(id).slice(0, n);
+}
+
+/**
  * Safely parse a date value to epoch milliseconds.
  * Returns 0 for invalid/missing dates instead of NaN.
  *
@@ -606,78 +620,120 @@ export function assertSafeFilename(filename, { extensions, subject = 'filename',
 }
 
 /**
- * Resolve a user-supplied gallery image filename to an absolute path under
- * `PATHS.images`. Returns `null` on any failure so callers can decide whether
- * to throw, log-and-skip, or substitute a fallback.
+ * Build a single-root path resolver that returns a function with the same
+ * signature as `resolveGalleryImage` / `resolveImageRef` / `resolveTemplateAsset`.
  *
- * Defense in depth:
+ * Defense in depth (applied on every call):
  *  1. `basename()` strips dirs (so `../../etc/passwd` → `passwd`).
  *  2. Reject `.`/`..`/empty basenames outright.
- *  3. `resolve` + `startsWith(imagesRoot)` so unicode tricks can't escape.
- *  4. When `mustExist`, `statSync({ throwIfNoEntry: false }).isFile()` rejects
- *     directories (the images root itself would otherwise pass an existsSync
- *     check and flow into ffmpeg as an "image path" where it'd fail in
- *     confusing ways). Note: `statSync` follows symlinks, so a symlink inside
- *     `data/images/` pointing to a regular file outside the gallery still
- *     passes. PortOS is single-user (see CLAUDE.md "Security Model") so we
- *     accept that — if you need to reject symlinks too, use `lstatSync`.
+ *  3. `resolve` + `startsWith(rootPrefix)` so unicode tricks can't escape.
+ *  4. Optional extension allow-list (case-insensitive) before any FS syscall.
+ *  5. When `mustExist`, `statSync({ throwIfNoEntry: false }).isFile()` rejects
+ *     directories (the root itself would otherwise pass an existsSync check
+ *     and flow into ffmpeg / image-gen as an "image path" where it'd fail in
+ *     confusing ways). Note: `statSync` follows symlinks, so a symlink under
+ *     the root pointing to a regular file outside still passes. PortOS is
+ *     single-user (see CLAUDE.md "Security Model") so we accept that — for
+ *     symlink rejection, swap to `lstatSync`.
  *
- * Pass `{ mustExist: false }` for code paths that intentionally skip the
- * existence check (e.g. when the path is resolved at request time but read
- * later — TOCTOU between resolve and use isn't worth the extra syscall, and
- * the downstream renderer surfaces a clear error if the file vanished).
+ * Pass `{ mustExist: false }` at call time for code paths that intentionally
+ * skip the existence check (e.g. when the path is resolved at request time
+ * but read later — TOCTOU between resolve and use isn't worth the extra
+ * syscall, and the downstream renderer surfaces a clear error if the file
+ * vanished).
  *
- * @param {string} name - Filename to resolve (basenamed internally)
+ * @param {() => string} getRoot - Thunk returning the absolute directory.
+ *   A thunk (not a literal) so tests that mutate `PATHS.x` at mock-eval
+ *   time still steer the resolver — the value is captured on first call
+ *   and cached thereafter (recomputed only if the thunk later returns a
+ *   different value, which production code never does).
  * @param {object} [opts]
- * @param {boolean} [opts.mustExist=true] - Require the resolved path to be an existing regular file
- * @returns {string|null} Absolute path inside PATHS.images, or null
+ * @param {string[]} [opts.extensions] - allowed extensions WITHOUT the leading
+ *   dot (`['png', 'jpg', 'jpeg', 'webp']`). When omitted, all extensions are
+ *   accepted (matches the legacy gallery/refs behavior — extension checks
+ *   happen elsewhere on those paths).
+ * @param {boolean} [opts.cache=false] - Memoize successful resolutions. Only
+ *   safe for shipped/stable assets (templates) where the basename → path
+ *   binding is stable for the process lifetime; never enable for user-mutable
+ *   dirs (gallery, refs) since deletions would be masked.
+ * @returns {(name: string, opts?: { mustExist?: boolean }) => string|null}
  */
-export function resolveGalleryImage(name, { mustExist = true } = {}) {
-  if (typeof name !== 'string' || !name) return null;
-  const safe = basename(name);
-  if (!safe || safe === '.' || safe === '..') return null;
-  const imagesRoot = resolvePath(PATHS.images) + PATH_SEP;
-  const localPath = resolvePath(join(PATHS.images, safe));
-  if (!localPath.startsWith(imagesRoot)) return null;
-  if (!mustExist) return localPath;
-  // throwIfNoEntry:false swallows ENOENT but not EACCES / transient I/O —
-  // treat those as "not a valid gallery reference" too rather than bubbling
-  // a 500 out of the route layer.
-  try {
-    const stat = statSync(localPath, { throwIfNoEntry: false });
-    return stat?.isFile() ? localPath : null;
-  } catch {
-    return null;
+export function makePathResolver(getRoot, { extensions, cache = false } = {}) {
+  if (typeof getRoot !== 'function') {
+    throw new Error('makePathResolver: getRoot must be a function returning the root dir');
   }
+  const extRegex = Array.isArray(extensions) && extensions.length > 0
+    ? new RegExp(`\\.(${extensions.map((e) => String(e).replace(/^\./, '')).join('|')})$`, 'i')
+    : null;
+  const memo = cache ? new Map() : null;
+  // Resolved-root cache so the hot path doesn't re-run `resolvePath(root) +
+  // PATH_SEP` per call. Recomputes only when `getRoot()` returns a different
+  // value — picks up test-time `PATHS.x = ...` mutation on first call, then
+  // stays warm for the rest of the process.
+  let _root = null;
+  let _rootAbsPrefix = null;
+
+  return (name, { mustExist = true } = {}) => {
+    if (typeof name !== 'string' || !name) return null;
+    const safe = basename(name);
+    if (!safe || safe === '.' || safe === '..') return null;
+    if (extRegex && !extRegex.test(safe)) return null;
+    const cacheKey = memo ? (mustExist ? `must:${safe}` : `nostat:${safe}`) : null;
+    if (memo && memo.has(cacheKey)) return memo.get(cacheKey);
+    const root = getRoot();
+    if (root !== _root) {
+      _root = root;
+      _rootAbsPrefix = resolvePath(root) + PATH_SEP;
+    }
+    const localPath = resolvePath(join(root, safe));
+    if (!localPath.startsWith(_rootAbsPrefix)) return null;
+    if (!mustExist) {
+      if (memo) memo.set(cacheKey, localPath);
+      return localPath;
+    }
+    // throwIfNoEntry:false swallows ENOENT but not EACCES / transient I/O —
+    // treat those as "not a valid reference" too rather than bubbling a 500
+    // out of the route layer.
+    let resolved = null;
+    try {
+      const stat = statSync(localPath, { throwIfNoEntry: false });
+      resolved = stat?.isFile() ? localPath : null;
+    } catch { /* falls through to null */ }
+    // Only cache successful resolutions — a missing-then-installed asset
+    // should pick up on the next call (e.g. setup-data.js racing a render).
+    if (memo && resolved) memo.set(cacheKey, resolved);
+    return resolved;
+  };
 }
+
+/**
+ * Resolve a user-supplied gallery image filename to an absolute path under
+ * `PATHS.images`. Returns `null` on any failure so callers can decide whether
+ * to throw, log-and-skip, or substitute a fallback. See `makePathResolver`
+ * for the defense-in-depth checks. Late-binds via a thunk so tests that
+ * mutate `PATHS.images` at mock-eval time still steer the resolver.
+ */
+export const resolveGalleryImage = makePathResolver(() => PATHS.images);
 
 /**
  * Resolve a user-supplied reference-image filename to an absolute path under
  * `PATHS.imageRefs`. Multi-reference uploads land in a sibling dir to keep
- * them out of the gallery enumeration; this helper enforces the same
- * defense-in-depth checks as `resolveGalleryImage` but anchored at the refs
- * root.
- *
- * @param {string} name - Filename to resolve (basenamed internally)
- * @param {object} [opts]
- * @param {boolean} [opts.mustExist=true] - Require the resolved path to be an existing regular file
- * @returns {string|null} Absolute path inside PATHS.imageRefs, or null
+ * them out of the gallery enumeration; same defense-in-depth as the gallery
+ * resolver but anchored at the refs root.
  */
-export function resolveImageRef(name, { mustExist = true } = {}) {
-  if (typeof name !== 'string' || !name) return null;
-  const safe = basename(name);
-  if (!safe || safe === '.' || safe === '..') return null;
-  const refsRoot = resolvePath(PATHS.imageRefs) + PATH_SEP;
-  const localPath = resolvePath(join(PATHS.imageRefs, safe));
-  if (!localPath.startsWith(refsRoot)) return null;
-  if (!mustExist) return localPath;
-  try {
-    const stat = statSync(localPath, { throwIfNoEntry: false });
-    return stat?.isFile() ? localPath : null;
-  } catch {
-    return null;
-  }
-}
+export const resolveImageRef = makePathResolver(() => PATHS.imageRefs);
+
+/**
+ * Resolve a shipped visual template filename (e.g. character reference-sheet
+ * layout PNG) to an absolute path under `PATHS.visualTemplates`. Caches
+ * successful resolutions because the template assets are shipped and stable
+ * for the lifetime of the process — keeps reference-sheet rendering off the
+ * statSync hot path.
+ */
+export const resolveTemplateAsset = makePathResolver(() => PATHS.visualTemplates, {
+  extensions: ['png', 'jpg', 'jpeg', 'webp'],
+  cache: true,
+});
 
 /**
  * Resolve any user-supplied image input (init image OR multi-reference image)
@@ -686,13 +742,7 @@ export function resolveImageRef(name, { mustExist = true } = {}) {
  * or the shipped visual-template dir (`PATHS.visualTemplates`). Used by the
  * image-gen runner to re-validate paths that originated from internal
  * features (gallery picks, reference-sheet renders) which may legitimately
- * cross dir boundaries — a portrait pinned from the gallery passed as a
- * multi-ref input, a template PNG used as an init-image anchor.
- *
- * The defense-in-depth checks (basename strip, traversal block, root prefix,
- * existence + isFile gate) apply at each candidate root just like the
- * single-root resolvers (`resolveGalleryImage`, `resolveImageRef`,
- * `resolveTemplateAsset`).
+ * cross dir boundaries.
  *
  * Accepts both basename input (`"foo.png"`) and already-resolved absolute
  * paths (the local image-gen runner re-validates the same input on every
@@ -701,6 +751,15 @@ export function resolveImageRef(name, { mustExist = true } = {}) {
  * @param {string} rawPath - basename or absolute path
  * @returns {string|null} validated absolute path, or null
  */
+// Module-load prefixes — PATHS.* values don't change at runtime, so
+// `resolvePath() + PATH_SEP` is computed once instead of every call. Each
+// entry pairs the prefix to its matching resolver for the dispatch loop.
+const IMAGE_INPUT_ROOTS = [
+  [resolvePath(PATHS.images) + PATH_SEP, resolveGalleryImage],
+  [resolvePath(PATHS.imageRefs) + PATH_SEP, resolveImageRef],
+  [resolvePath(PATHS.visualTemplates) + PATH_SEP, resolveTemplateAsset],
+];
+
 export function resolveImageInputPath(rawPath) {
   if (typeof rawPath !== 'string' || !rawPath) return null;
   // For ABSOLUTE inputs, dispatch by prefix. The single-root resolvers
@@ -708,67 +767,18 @@ export function resolveImageInputPath(rawPath) {
   // absolute path can silently redirect a `/data/templates/foo.png` input
   // to `/data/images/foo.png` whenever a same-named file lives in the gallery.
   // Validate against the matching root only.
-  const ROOTS = [
-    [PATHS.images, resolveGalleryImage],
-    [PATHS.imageRefs, resolveImageRef],
-    [PATHS.visualTemplates, resolveTemplateAsset],
-  ];
   const resolvedInput = resolvePath(rawPath);
-  for (const [rootDir, resolver] of ROOTS) {
-    const rootPrefix = resolvePath(rootDir) + PATH_SEP;
+  for (const [rootPrefix, resolver] of IMAGE_INPUT_ROOTS) {
     if (resolvedInput.startsWith(rootPrefix)) return resolver(rawPath);
   }
   // For basename / relative input (no matching prefix), fall through the
   // resolvers in order. First match wins; basename collisions across roots
   // are accepted as ambiguous and resolve to the first defined root.
-  for (const [, resolver] of ROOTS) {
+  for (const [, resolver] of IMAGE_INPUT_ROOTS) {
     const candidate = resolver(rawPath);
     if (candidate) return candidate;
   }
   return null;
-}
-
-/**
- * Resolve a shipped visual template filename (e.g. character reference-sheet
- * layout PNG) to an absolute path under `PATHS.visualTemplates`. Mirrors
- * `resolveImageRef` / `resolveGalleryImage`: basename + traversal + root-prefix
- * + existence checks. Allows PNG/JPG/JPEG/WEBP since the template assets are
- * shipped image files.
- *
- * @param {string} name - Filename (basenamed internally)
- * @param {object} [opts]
- * @param {boolean} [opts.mustExist=true] - Require an existing regular file
- * @returns {string|null} Absolute path inside PATHS.visualTemplates, or null
- */
-// Templates are shipped assets — once a basename resolves to a file the path
-// is stable for the lifetime of the process, so cache the result. This stays
-// off the hot path of every reference-sheet render without sacrificing the
-// defense-in-depth basename + traversal + extension checks.
-const _templateAssetCache = new Map();
-export function resolveTemplateAsset(name, { mustExist = true } = {}) {
-  if (typeof name !== 'string' || !name) return null;
-  const safe = basename(name);
-  if (!safe || safe === '.' || safe === '..') return null;
-  const lower = safe.toLowerCase();
-  if (!/\.(png|jpg|jpeg|webp)$/.test(lower)) return null;
-  const cacheKey = mustExist ? `must:${safe}` : `nostat:${safe}`;
-  if (_templateAssetCache.has(cacheKey)) return _templateAssetCache.get(cacheKey);
-  const root = resolvePath(PATHS.visualTemplates) + PATH_SEP;
-  const localPath = resolvePath(join(PATHS.visualTemplates, safe));
-  if (!localPath.startsWith(root)) return null;
-  if (!mustExist) {
-    _templateAssetCache.set(cacheKey, localPath);
-    return localPath;
-  }
-  let resolved = null;
-  try {
-    const stat = statSync(localPath, { throwIfNoEntry: false });
-    resolved = stat?.isFile() ? localPath : null;
-  } catch { /* falls through to null */ }
-  // Only cache successful resolutions — a missing-then-installed template
-  // should pick up on the next call (e.g. setup-data.js races a render).
-  if (resolved) _templateAssetCache.set(cacheKey, resolved);
-  return resolved;
 }
 
 /**

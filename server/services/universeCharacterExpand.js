@@ -13,9 +13,10 @@
 
 import { getUniverse, updateUniverse } from './universeBuilder.js';
 import { buildStyleClause } from './universeCanon.js';
-import { runStagedLLM } from '../lib/stageRunner.js';
+import { runPromptRefineRaw } from './pipeline/refineHelpers.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { sanitizeCharacter } from '../lib/storyBible.js';
+import { shortId } from '../lib/fileUtils.js';
 
 // Adding a new extended field on `sanitizeCharacter` requires adding it here
 // too — otherwise the expand response key is silently dropped.
@@ -104,31 +105,23 @@ export async function expandUniverseCharacter(universeId, entryId, options = {})
   }
   const peers = list.filter((_, i) => i !== idx);
 
-  const { content, runId, providerId, model } = await runStagedLLM(
-    'universe-character-expand',
-    {
+  // logTag: null — emit a context-rich log AFTER the merge so universeId,
+  // entryId, and the field count are all available.
+  const { content, rationale, runId, providerId, model } = await runPromptRefineRaw({
+    templateName: 'universe-character-expand',
+    variables: {
       styleClause: buildStyleClause(universe),
       characterJson: JSON.stringify(target),
       peersJson: JSON.stringify(peers.map(peerForExpandPrompt)),
     },
-    {
-      providerOverride: options.providerId,
-      modelOverride: options.model,
-      returnsJson: true,
-      source: 'universe-character-expand',
+    options: { providerId: options.providerId, model: options.model },
+    source: 'universe-character-expand',
+    logTag: null,
+    emptyError: {
+      code: 'UNIVERSE_CHARACTER_EXPAND_EMPTY',
+      message: 'LLM returned an empty character expansion',
     },
-  );
-
-  // Reject array AND non-object — `typeof [] === 'object'` would otherwise
-  // let an LLM that returned `[{...}]` slip through `applyExpansion` as a
-  // valid-but-empty payload (no string keys match) and silently no-op.
-  if (!content || typeof content !== 'object' || Array.isArray(content)) {
-    throw new ServerError('LLM returned an empty character expansion', {
-      status: 502, code: 'UNIVERSE_CHARACTER_EXPAND_EMPTY',
-    });
-  }
-
-  const rationale = typeof content.rationale === 'string' ? content.rationale.trim() : '';
+  });
 
   // Re-derive the merge INSIDE the write queue against the freshest persisted
   // universe so a user edit (or another LLM call) that landed during the
@@ -163,7 +156,7 @@ export async function expandUniverseCharacter(universeId, entryId, options = {})
   if (updatedFields.length === 0) {
     return { universe: updated, entry: latestEntry, rationale, runId, providerId, model, updatedFields };
   }
-  console.log(`✨ Universe character expand — universe=${universeId.slice(0, 8)} entry=${entryId.slice(0, 8)} fields=${updatedFields.length} runId=${(runId || '').slice(0, 8)}`);
+  console.log(`✨ Universe character expand — universe=${shortId(universeId)} entry=${shortId(entryId)} fields=${updatedFields.length} runId=${shortId(runId)}`);
   return { universe: updated, entry: latestEntry, rationale, runId, providerId, model, updatedFields };
 }
 

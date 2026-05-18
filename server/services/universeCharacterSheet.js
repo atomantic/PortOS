@@ -16,7 +16,7 @@
 import { copyFile } from 'fs/promises';
 import { join, basename } from 'path';
 import { randomUUID } from 'crypto';
-import { PATHS, ensureDir } from '../lib/fileUtils.js';
+import { PATHS, ensureDir, shortId } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { getSettings } from './settings.js';
 import { getUniverse, updateUniverse } from './universeBuilder.js';
@@ -24,6 +24,9 @@ import { buildStyleClause } from './universeCanon.js';
 import { getImageModels } from '../lib/mediaModels.js';
 import { enqueueJob, mediaJobEvents } from './mediaJobQueue/index.js';
 import { findOrCreateUniverseCollection } from './mediaCollections.js';
+import {
+  flattenStats, flattenPalette, flattenWardrobes, flattenProps, flattenNamedList,
+} from '../lib/canonPrompt.js';
 
 // 2048×1536 keeps panel labels legible while still rendering in a single
 // pass on Apple Silicon local backends. Codex / nano-banana ignore the
@@ -55,62 +58,6 @@ const DEFAULT_HAND_GESTURES = Object.freeze([
 ]);
 
 const trim = (s) => (typeof s === 'string' ? s.trim() : '');
-
-const flattenStats = (stats) => {
-  if (!Array.isArray(stats) || stats.length === 0) return '';
-  return stats
-    .map((s) => (s?.label && s?.value ? `${s.label}: ${s.value}` : s?.label || ''))
-    .filter(Boolean)
-    .join(' | ');
-};
-
-const flattenPalette = (palette) => {
-  if (!Array.isArray(palette) || palette.length === 0) return '';
-  return palette
-    .map((c, i) => {
-      const name = trim(c?.name);
-      const hex = trim(c?.hex);
-      const role = trim(c?.role);
-      if (!name) return '';
-      const hexBit = hex ? ` ${hex}` : '';
-      const roleBit = role ? ` — ${role}` : '';
-      return `Swatch ${i + 1}: ${name}${hexBit}${roleBit}`;
-    })
-    .filter(Boolean)
-    .join(', ');
-};
-
-const flattenWardrobes = (wardrobes) => {
-  if (!Array.isArray(wardrobes) || wardrobes.length === 0) return '';
-  return wardrobes
-    .map((w) => (w?.name && w?.description ? `"${w.name}": ${w.description}` : w?.name || ''))
-    .filter(Boolean)
-    .join(' | ');
-};
-
-const flattenProps = (props) => {
-  if (!Array.isArray(props) || props.length === 0) return '';
-  return props
-    .map((p) => {
-      const name = trim(p?.name);
-      const purpose = trim(p?.purpose);
-      const materials = trim(p?.materials);
-      if (!name) return '';
-      const bits = [purpose ? `(${purpose})` : '', materials ? `[${materials}]` : '']
-        .filter(Boolean)
-        .join(' ');
-      return bits ? `${name} ${bits}` : name;
-    })
-    .filter(Boolean)
-    .join(' | ');
-};
-
-const flattenNamedList = (items, defaults) => {
-  const list = Array.isArray(items) && items.length > 0
-    ? items.map((e) => (e?.name && e?.description ? `${e.name} (${e.description})` : trim(e?.name))).filter(Boolean)
-    : [...defaults];
-  return list.slice(0, 7).join(', ');
-};
 
 /**
  * Build the prompt + render options for one character's reference sheet.
@@ -210,7 +157,7 @@ export function buildCharacterReferenceSheetPrompt(universe, character) {
 // "live" sheet pointer on the character (`referenceSheetImageRef`) always
 // names the newest, but older files stay on disk for rollback.
 const sheetFilename = (universeId, characterId, generationId) =>
-  `universe-${String(universeId).slice(0, 8)}-${String(characterId).slice(0, 8)}-sheet-${String(generationId).slice(0, 8)}.png`;
+  `universe-${shortId(universeId)}-${shortId(characterId)}-sheet-${shortId(generationId)}.png`;
 
 // `(universeId, characterId) → latest generationId requested`. When a new
 // render starts for a character it claims the slot; when a render completes,
@@ -381,7 +328,7 @@ export async function renderCharacterReferenceSheet(universeId, entryId, options
   const armTimeout = (ms, reason) => {
     if (timeoutHandle) clearTimeout(timeoutHandle);
     timeoutHandle = setTimeout(() => {
-      console.log(`⏱️ Character sheet render ${reason} [${jobId.slice(0, 8)}] — detaching`);
+      console.log(`⏱️ Character sheet render ${reason} [${shortId(jobId)}] — detaching`);
       detach();
     }, ms);
     timeoutHandle.unref?.();
@@ -396,7 +343,7 @@ export async function renderCharacterReferenceSheet(universeId, entryId, options
       detach();
       const sourceFilename = job.result?.filename;
       await onSheetComplete({ universeId, entryId, jobId, sourceFilename }).catch((err) => {
-        console.error(`❌ Character sheet post-completion failed [${jobId.slice(0, 8)}]: ${err?.message}`);
+        console.error(`❌ Character sheet post-completion failed [${shortId(jobId)}]: ${err?.message}`);
       });
     },
     onFailed: (job) => {
@@ -405,7 +352,7 @@ export async function renderCharacterReferenceSheet(universeId, entryId, options
       if (_latestPendingByCharacter.get(pendingKey(universeId, entryId)) === jobId) {
         _latestPendingByCharacter.delete(pendingKey(universeId, entryId));
       }
-      console.log(`⚠️ Character sheet render ${job.status} [${jobId.slice(0, 8)}]: ${job.error || 'unknown'}`);
+      console.log(`⚠️ Character sheet render ${job.status} [${shortId(jobId)}]: ${job.error || 'unknown'}`);
     },
   });
   armTimeout(QUEUE_WAIT_MS, 'queue-wait timeout');
@@ -414,7 +361,7 @@ export async function renderCharacterReferenceSheet(universeId, entryId, options
   // can patch optimistically on SSE completion without a universe refetch.
   // onSheetComplete derives the same filename from the same inputs.
   const destFilename = sheetFilename(universeId, entryId, jobId);
-  console.log(`🎨 Universe character sheet render — universe=${universeId.slice(0, 8)} entry=${entryId.slice(0, 8)} job=${jobId.slice(0, 8)} mode=${activeMode} model=${modelId} position=${queued.position}`);
+  console.log(`🎨 Universe character sheet render — universe=${shortId(universeId)} entry=${shortId(entryId)} job=${shortId(jobId)} mode=${activeMode} model=${modelId} position=${queued.position}`);
   return {
     jobId,
     // `generationId` retained for client back-compat (older clients keyed
@@ -445,7 +392,7 @@ export async function onSheetComplete({ universeId, entryId, jobId, sourceFilena
   // an older-but-slower render could overwrite a newer-but-finished pointer.
   const key = pendingKey(universeId, entryId);
   if (_latestPendingByCharacter.get(key) !== jobId) {
-    console.log(`⏭️ Character sheet [${jobId.slice(0, 8)}] superseded by newer render — file saved, pointer not stamped`);
+    console.log(`⏭️ Character sheet [${shortId(jobId)}] superseded by newer render — file saved, pointer not stamped`);
     return { filename: destFilename, path: destPath, superseded: true };
   }
   // Stamp ONLY `referenceSheetImageRef` inside the write queue against the
@@ -480,7 +427,7 @@ export async function onSheetComplete({ universeId, entryId, jobId, sourceFilena
     console.log(`⚠️ Character ${entryId} not found post-render — sheet saved but not linked`);
     return null;
   }
-  console.log(`📌 Character ${entryId.slice(0, 8)}.referenceSheetImageRef = ${destFilename}`);
+  console.log(`📌 Character ${shortId(entryId)}.referenceSheetImageRef = ${destFilename}`);
   return { filename: destFilename, path: destPath };
 }
 
