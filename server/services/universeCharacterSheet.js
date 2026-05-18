@@ -221,6 +221,28 @@ const sheetFilename = (universeId, characterId, generationId) =>
 const _latestPendingByCharacter = new Map();
 const pendingKey = (universeId, characterId) => `${universeId}:${characterId}`;
 
+// Single-dispatcher subscription so N pending sheets don't attach 4*N
+// listeners on the global `mediaJobEvents` emitter (Node defaults to a
+// 10-listener soft cap before warning). Each render claims an entry by
+// jobId; the four module-level listeners route events to the right
+// subscriber's handlers via O(1) Map lookup instead of N filters.
+const sheetSubscribers = new Map(); // jobId → { onStarted, onCompleted, onFailed }
+let _sheetListenersAttached = false;
+function ensureSheetDispatchListeners() {
+  if (_sheetListenersAttached) return;
+  _sheetListenersAttached = true;
+  mediaJobEvents.on('started', (job) => sheetSubscribers.get(job?.id)?.onStarted?.(job));
+  mediaJobEvents.on('completed', (job) => sheetSubscribers.get(job?.id)?.onCompleted?.(job));
+  const onTerminal = (job) => sheetSubscribers.get(job?.id)?.onFailed?.(job);
+  mediaJobEvents.on('failed', onTerminal);
+  mediaJobEvents.on('canceled', onTerminal);
+}
+function subscribeToSheetJob(jobId, handlers) {
+  ensureSheetDispatchListeners();
+  sheetSubscribers.set(jobId, handlers);
+  return () => { sheetSubscribers.delete(jobId); };
+}
+
 /**
  * Returns immediately with `{ jobId, generationId, filename, path }`.
  * Deferred copy + character stamp run when imageGenEvents emits 'completed';
@@ -332,16 +354,21 @@ export async function renderCharacterReferenceSheet(universeId, entryId, options
   // after a newer one and overwriting the newer pointer.
   _latestPendingByCharacter.set(pendingKey(universeId, entryId), jobId);
 
-  // Subscribe to the queue's completion bus (NOT imageGenEvents directly —
-  // the queue's dispatcher mediates the imageGen lifecycle and re-emits on
-  // mediaJobEvents with the full job record). Two-stage timeout guard so a
-  // sheet queued behind a long video / first-run-download doesn't detach its
-  // listeners before the render actually starts: a generous queue-wait
-  // window covers the pre-start gap, then the `started` event resets the
-  // timer to the tighter run window. Without the reset, a sheet waiting
-  // 30+ minutes behind a video job would detach mid-queue, the render would
-  // complete successfully on disk, but onSheetComplete would never fire —
-  // file copy + character pointer stamp lost.
+  // Subscribe to the queue's completion bus via the shared sheet
+  // dispatcher (NOT imageGenEvents directly — the queue mediates the
+  // imageGen lifecycle and re-emits on mediaJobEvents with the full job
+  // record). The shared dispatcher caps listeners at 4 regardless of how
+  // many sheets are pending (see `subscribeToSheetJob` above), so a user
+  // running 10+ parallel character renders won't trip
+  // MaxListenersExceededWarning on the global emitter.
+  //
+  // Two-stage timeout: a generous queue-wait window covers the pre-start
+  // gap (so a sheet queued behind a long video / first-run-download
+  // doesn't detach mid-queue), then the `started` event resets the timer
+  // to the tighter run window. Without the reset, a sheet waiting 30+
+  // minutes behind a video job would lose its bookkeeping listener
+  // before onSheetComplete had a chance to run — file copy + character
+  // pointer stamp lost.
   const QUEUE_WAIT_MS = 4 * 60 * 60 * 1000; // 4h — generous; survives chained video jobs.
   // 30min sits comfortably above the codex backend's 20min CODEX_TIMEOUT_MS
   // watchdog and the typical local FLUX.2 ceiling, so a legitimate slow
@@ -350,6 +377,7 @@ export async function renderCharacterReferenceSheet(universeId, entryId, options
   // bookkeeping safety net for "queue never emits a terminal event".
   const RUN_TIMEOUT_MS = 30 * 60 * 1000;
   let timeoutHandle = null;
+  let unsubscribe = null;
   const armTimeout = (ms, reason) => {
     if (timeoutHandle) clearTimeout(timeoutHandle);
     timeoutHandle = setTimeout(() => {
@@ -360,36 +388,26 @@ export async function renderCharacterReferenceSheet(universeId, entryId, options
   };
   const detach = () => {
     if (timeoutHandle) { clearTimeout(timeoutHandle); timeoutHandle = null; }
-    mediaJobEvents.off('started', onStarted);
-    mediaJobEvents.off('completed', onCompleted);
-    mediaJobEvents.off('failed', onFailed);
-    mediaJobEvents.off('canceled', onFailed);
+    if (unsubscribe) { unsubscribe(); unsubscribe = null; }
   };
-  const onStarted = (job) => {
-    if (job.id !== jobId) return;
-    armTimeout(RUN_TIMEOUT_MS, 'exceeded run window');
-  };
-  const onCompleted = async (job) => {
-    if (job.id !== jobId) return;
-    detach();
-    const sourceFilename = job.result?.filename;
-    await onSheetComplete({ universeId, entryId, jobId, sourceFilename }).catch((err) => {
-      console.error(`❌ Character sheet post-completion failed [${jobId.slice(0, 8)}]: ${err?.message}`);
-    });
-  };
-  const onFailed = (job) => {
-    if (job.id !== jobId) return;
-    detach();
-    // Release the slot so a retry render doesn't get superseded by this dead one.
-    if (_latestPendingByCharacter.get(pendingKey(universeId, entryId)) === jobId) {
-      _latestPendingByCharacter.delete(pendingKey(universeId, entryId));
-    }
-    console.log(`⚠️ Character sheet render ${job.status} [${jobId.slice(0, 8)}]: ${job.error || 'unknown'}`);
-  };
-  mediaJobEvents.on('started', onStarted);
-  mediaJobEvents.on('completed', onCompleted);
-  mediaJobEvents.on('failed', onFailed);
-  mediaJobEvents.on('canceled', onFailed);
+  unsubscribe = subscribeToSheetJob(jobId, {
+    onStarted: () => armTimeout(RUN_TIMEOUT_MS, 'exceeded run window'),
+    onCompleted: async (job) => {
+      detach();
+      const sourceFilename = job.result?.filename;
+      await onSheetComplete({ universeId, entryId, jobId, sourceFilename }).catch((err) => {
+        console.error(`❌ Character sheet post-completion failed [${jobId.slice(0, 8)}]: ${err?.message}`);
+      });
+    },
+    onFailed: (job) => {
+      detach();
+      // Release the slot so a retry render doesn't get superseded by this dead one.
+      if (_latestPendingByCharacter.get(pendingKey(universeId, entryId)) === jobId) {
+        _latestPendingByCharacter.delete(pendingKey(universeId, entryId));
+      }
+      console.log(`⚠️ Character sheet render ${job.status} [${jobId.slice(0, 8)}]: ${job.error || 'unknown'}`);
+    },
+  });
   armTimeout(QUEUE_WAIT_MS, 'queue-wait timeout');
 
   // Deterministic destination filename — uses the queue's jobId so the client

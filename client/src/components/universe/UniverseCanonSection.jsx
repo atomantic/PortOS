@@ -79,6 +79,14 @@ export default function UniverseCanonSection({ universe, universeId, onUniverseC
   // repopulate `usage` with stale data after fast navigation.
   const currentUniverseIdRef = useRef(universeId);
   useEffect(() => { currentUniverseIdRef.current = universeId; }, [universeId]);
+
+  // Latest-universe ref so callbacks fired after async waits (e.g. the
+  // sheet panel's HEAD-poll for the rendered file) merge against the
+  // CURRENT draft instead of a snapshot captured at callback-creation
+  // time. Without this, a concurrent character edit landing during the
+  // poll window would be clobbered by the stale `universe` closure.
+  const latestUniverseRef = useRef(universe);
+  useEffect(() => { latestUniverseRef.current = universe; }, [universe]);
   const refreshUsage = useCallback(() => {
     if (!universeId) return;
     const requestedFor = universeId;
@@ -290,17 +298,21 @@ export default function UniverseCanonSection({ universe, universeId, onUniverseC
       : `${result.entry?.name || 'Character'} already complete — nothing to fill`);
   };
 
-  // Server already stamped the character via imageGenEvents — merge the
+  // Server already stamped the character via mediaJobEvents — merge the
   // filename into the local draft instead of refetching the whole universe.
+  // Read from `latestUniverseRef` (not closed-over `universe`) so an edit
+  // that landed during the panel's HEAD-poll wait isn't clobbered by an
+  // older snapshot. No deps on `universe` keeps the callback stable.
   const handleSheetCompleted = useCallback((entryId, destFilename) => {
-    if (!universe || !destFilename) return;
-    const nextCharacters = (universe.characters || []).map((c) =>
+    const latest = latestUniverseRef.current;
+    if (!latest || !destFilename) return;
+    const nextCharacters = (latest.characters || []).map((c) =>
       c.id === entryId ? { ...c, referenceSheetImageRef: destFilename } : c,
     );
-    onUniverseChange({ ...universe, characters: nextCharacters });
+    onUniverseChange({ ...latest, characters: nextCharacters });
     const entryName = nextCharacters.find((c) => c.id === entryId)?.name || 'Character';
     toast.success(`${entryName} reference sheet ready`);
-  }, [universe, onUniverseChange]);
+  }, [onUniverseChange]);
 
   const handleRenderRef = async (kind, entry) => {
     const description = kind.descFor(entry);
