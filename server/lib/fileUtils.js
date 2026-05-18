@@ -662,8 +662,14 @@ export function makePathResolver(getRoot, { extensions, cache = false } = {}) {
   if (typeof getRoot !== 'function') {
     throw new Error('makePathResolver: getRoot must be a function returning the root dir');
   }
+  // Escape regex metacharacters in each extension before interpolating —
+  // current callers pass plain alphanumeric tokens (png/jpg/jpeg/webp), but
+  // the exported factory shouldn't behave incorrectly if a future caller
+  // passes an extension containing `.`/`+`/etc.
   const extRegex = Array.isArray(extensions) && extensions.length > 0
-    ? new RegExp(`\\.(${extensions.map((e) => String(e).replace(/^\./, '')).join('|')})$`, 'i')
+    ? new RegExp(`\\.(${extensions
+      .map((e) => String(e).replace(/^\./, '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+      .join('|')})$`, 'i')
     : null;
   const memo = cache ? new Map() : null;
   // Resolved-root cache so the hot path doesn't re-run `resolvePath(root) +

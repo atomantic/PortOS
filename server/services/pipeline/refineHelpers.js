@@ -44,13 +44,18 @@ export async function runPromptRefine({
   ...rest
 }) {
   const validateContent = (c) => {
-    const refined = (c?.[resultField] || '').trim();
+    // Type-gate: an LLM that returned `{ prompt: 42 }` or `{ prompt: { ... } }`
+    // would otherwise blow up on `.trim()` or silently coerce to garbage. Treat
+    // any non-string as missing.
+    const raw = c?.[resultField];
+    const refined = typeof raw === 'string' ? raw.trim() : '';
     if (!refined) {
       throw new ServerError(emptyError.message, { status: 502, code: emptyError.code });
     }
   };
   const { content, ...meta } = await runPromptRefineRaw({ ...rest, validateContent, emptyError });
-  const refined = String(content[resultField]).trim();
+  // `validateContent` already guarantees a non-empty string at this index.
+  const refined = content[resultField].trim();
   const changes = Array.isArray(content.changes)
     ? content.changes.map((c) => String(c).slice(0, 240)).filter(Boolean).slice(0, changesLimit)
     : [];
