@@ -330,45 +330,46 @@ Use Playwright MCP to test the app at different viewport sizes:
 Your goal is to implement the next planned item from PLAN.md, or brainstorm a new feature if no plan exists.
 
 Repository: {repoPath}
-
+{planConstraint}
 ## Phase 1 — Find the Next Task
 
 1. Read PLAN.md from {repoPath}
 2. Read DONE.md from {repoPath} (if it exists) to understand what has already been implemented
-3. If PLAN.md does not exist, is empty, or has no unchecked items (\`- [ ]\`), go to **Phase 4 — Brainstorm**.
-4. Find the first unchecked item (\`- [ ]\`) that does NOT have a \`<!-- NEEDS_INPUT -->\` annotation
-5. If all unchecked items have \`<!-- NEEDS_INPUT -->\`, go to **Phase 4 — Brainstorm**.
+3. If the **Item Constraint** block above named a specific \`[plan-id]\`, find the matching \`- [ ]\` line and use that — do NOT pick a different one, do NOT brainstorm. If the line is missing, has been checked, or carries \`<!-- NEEDS_INPUT -->\`, exit cleanly without commits or PR.
+4. Otherwise, if PLAN.md does not exist, is empty, or has no unchecked items (\`- [ ]\`), go to **Phase 4 — Brainstorm**.
+5. Otherwise, find the first unchecked item (\`- [ ]\`) that does NOT have a \`<!-- NEEDS_INPUT -->\` annotation.
+6. If all unchecked items have \`<!-- NEEDS_INPUT -->\`, go to **Phase 4 — Brainstorm**.
 
 ## Phase 2 — Evaluate Feasibility
 
-6. Read relevant source files to understand the scope of the item
-7. Determine: can this be implemented without user clarification?
+7. Read relevant source files to understand the scope of the item
+8. Determine: can this be implemented without user clarification?
    - Consider: are requirements clear? Are there ambiguous design choices? Does it depend on external decisions?
 
 ## Phase 3a — Implement (if feasible)
 
-8. Implement the feature:
+9. Implement the feature:
    - Write clean, tested code following existing patterns
    - Run tests to ensure nothing is broken
-9. Run \`/simplify\` to review changed code for reuse, quality, and efficiency. Fix any issues found.
-10. Check the PLAN.md item: change \`- [ ]\` to \`- [x]\`
-11. Commit with a clear description referencing the PLAN.md item
+10. Run \`/simplify\` to review changed code for reuse, quality, and efficiency. Fix any issues found.
+11. Check the PLAN.md item: change \`- [ ]\` to \`- [x]\`. **Preserve the \`[plan-id]\` slug verbatim** — only the box character flips, never the ID. Reference the slug in the commit message (e.g. \`feat([plan-id]): …\`).
+12. Commit with a clear description referencing the PLAN.md item
 
 ## Phase 3b — Request Clarification (if not feasible)
 
-8. Create a file named \`.plan-questions.md\` in the repository root with this format:
+9. Create a file named \`.plan-questions.md\` in the repository root with this format:
    \`\`\`
    # Plan Question: <short title summarizing the PLAN.md item>
 
    ## PLAN.md Item
-   <the exact text of the unchecked item>
+   <the exact text of the unchecked item, including its [plan-id]>
 
    ## Questions
    - <question 1>
    - <question 2>
    \`\`\`
-9. **Move the unchecked item to the bottom of PLAN.md and annotate it with \` <!-- NEEDS_INPUT -->\`** — remove the line from its current position and append it at the end of the file with the annotation. This keeps the queue moving so the next \`feature-ideas\` run picks up a different actionable item instead of repeatedly tripping on this one.
-10. Commit both changes (the new \`.plan-questions.md\` file and the PLAN.md move) with message \`chore: flag PLAN.md item needing user input\`. Then proceed to the **Completion** section below so the clarification PR is opened for the user to review — do NOT leave the worktree orphaned.
+10. **Move the unchecked item to the bottom of PLAN.md and annotate it with \` <!-- NEEDS_INPUT -->\`** — remove the line from its current position and append it at the end of the file with the annotation, **preserving its \`[plan-id]\` slug**. This keeps the queue moving so the next \`feature-ideas\` run picks up a different actionable item instead of repeatedly tripping on this one.
+11. Commit both changes (the new \`.plan-questions.md\` file and the PLAN.md move) with message \`chore: flag PLAN.md item needing user input\`. Then proceed to the **Completion** section below so the clarification PR is opened for the user to review — do NOT leave the worktree orphaned.
 
 ## Phase 4 — Brainstorm a New Feature
 
@@ -388,23 +389,24 @@ When PLAN.md is missing, empty, or fully completed, brainstorm and implement a n
    - Write clean, tested code following existing patterns
    - Run tests to ensure nothing is broken
 6. Run \`/simplify\` to review changed code for reuse, quality, and efficiency. Fix any issues found.
-7. Add the feature as a checked item in PLAN.md (create the file if needed):
+7. Add the feature as a checked item in PLAN.md (create the file if needed) **with a slug ID** derived from the feature title (lowercase kebab-case, ≤50 chars, unique against every existing \`[slug]\` in PLAN.md and DONE.md):
    \`\`\`
-   - [x] <description of the feature you implemented>
+   - [x] [<slug-of-feature>] <description of the feature you implemented>
    \`\`\`
 8. Commit with a clear description of the feature and rationale`,
 
   'plan-task': `[Plan Task: {appName}] Execute Next PLAN.md Item
 
 Implement the next unchecked item from PLAN.md and archive it to DONE.md. No brainstorming, no scope expansion — just execute what is already planned.
-
+{planConstraint}
 ## Phase 1 — Find the Next Task
 
 1. Read PLAN.md and DONE.md (if present, for archive-format reference).
-2. Pick the first unchecked item (\`- [ ]\`) that does NOT have a \`<!-- NEEDS_INPUT -->\` annotation.
-3. If PLAN.md is missing, has no unchecked items, or every unchecked item is annotated \`<!-- NEEDS_INPUT -->\`, **stop here** — exit cleanly without commits or PR. Brainstorming is handled by the \`feature-ideas\` task.
+2. If the **Item Constraint** block above named a specific \`[plan-id]\`, find the matching \`- [ ]\` line and use that — do NOT pick a different one. If the line is missing, has been checked, or carries \`<!-- NEEDS_INPUT -->\`, exit cleanly without commits or PR.
+3. Otherwise pick the first unchecked item (\`- [ ]\`) that does NOT have a \`<!-- NEEDS_INPUT -->\` annotation.
+4. If PLAN.md is missing, has no unchecked items, or every unchecked item is annotated \`<!-- NEEDS_INPUT -->\`, **stop here** — exit cleanly without commits or PR. Brainstorming is handled by the \`feature-ideas\` task.
 
-Capture the exact text of the selected item (without the leading \`- [ ]\`) verbatim — DONE.md will reuse it.
+Capture the exact text of the selected item (without the leading \`- [ ]\`) verbatim, **including its \`[plan-id]\` slug** — DONE.md will reuse both.
 
 ## Phase 2 — Decide
 
@@ -416,7 +418,7 @@ Read relevant source files. Can this be implemented without user clarification (
 2. **Move the item from PLAN.md to DONE.md (do NOT leave a checked \`- [x]\` behind in PLAN.md):**
    - Remove the item's line(s) from PLAN.md entirely. If removing it leaves a heading empty, leave the heading alone — plan curation is the \`do-replan\` task's job.
    - Append the entry to DONE.md under today's date heading (\`## YYYY-MM-DD\`). Insert today's heading directly below the top-of-file preamble if it doesn't exist yet.
-   - Entry format: \`- **<short title from the PLAN.md item>** — <1–3 sentences on what was implemented, key files touched, and any caveats>\`. Mirror the prose style of recent DONE.md entries.
+   - Entry format: \`- **[<plan-id>] <short title from the PLAN.md item>** — <1–3 sentences on what was implemented, key files touched, and any caveats>\`. The \`[plan-id]\` MUST match the slug from the PLAN.md line. Mirror the prose style of recent DONE.md entries.
 
 ## Phase 3b — Request Clarification (if not feasible)
 
@@ -425,13 +427,13 @@ Read relevant source files. Can this be implemented without user clarification (
    # Plan Question: <short title summarizing the PLAN.md item>
 
    ## PLAN.md Item
-   <the exact text of the unchecked item>
+   <the exact text of the unchecked item, including its [plan-id]>
 
    ## Questions
    - <question 1>
    - <question 2>
    \`\`\`
-2. **Move the unchecked item to the bottom of PLAN.md and annotate it with \` <!-- NEEDS_INPUT -->\`** — remove from its current position and append at the end with the annotation. This keeps the queue moving so the next \`plan-task\` run picks up a different actionable item.`,
+2. **Move the unchecked item to the bottom of PLAN.md and annotate it with \` <!-- NEEDS_INPUT -->\`** — remove from its current position and append at the end with the annotation, **preserving the \`[plan-id]\` slug**. This keeps the queue moving so the next \`plan-task\` run picks up a different actionable item.`,
 
   'code-reviewer-review': `[Review: {appName}] Deep Codebase Review (Stage 1)
 
@@ -1062,8 +1064,8 @@ For each reference above:
 // Prompt versions — bump when a default prompt changes so existing instances auto-upgrade.
 // Only non-customized prompts (promptCustomized !== true) are upgraded.
 const PROMPT_VERSIONS = {
-  'feature-ideas': 7,  // v7: Phase 3b reorders item to bottom + commits clarification PR instead of orphaning the worktree
-  'plan-task': 3,      // v3: drop Constraints section + {repoPath} refs + commit/simplify steps already covered by the Completion Workflow
+  'feature-ideas': 8,  // v8: plan-item ID system — {planConstraint} placeholder, preserve [slug] on edits, brainstorm path generates a new slug
+  'plan-task': 4,      // v4: plan-item ID system — {planConstraint} placeholder, DONE.md archive entry prefixed with [plan-id]
   'pr-reviewer': 3,    // v3: multi-stage pipeline (security scan → code review + merge)
   'code-reviewer-a': 1, // v1: 2-stage pipeline (codebase review → triage & implement)
   'code-reviewer-b': 1, // v1: 2-stage pipeline (codebase review → triage & implement)
@@ -1320,7 +1322,117 @@ When PLAN.md is missing, empty, or fully completed, brainstorm and implement a n
    \`\`\`
    - [x] <description of the feature you implemented>
    \`\`\`
+8. Commit with a clear description of the feature and rationale`,
+    // v7 default prompt (before plan-item ID system)
+    `[Improvement: {appName}] Implement Next Planned Feature
+
+Your goal is to implement the next planned item from PLAN.md, or brainstorm a new feature if no plan exists.
+
+Repository: {repoPath}
+
+## Phase 1 — Find the Next Task
+
+1. Read PLAN.md from {repoPath}
+2. Read DONE.md from {repoPath} (if it exists) to understand what has already been implemented
+3. If PLAN.md does not exist, is empty, or has no unchecked items (\`- [ ]\`), go to **Phase 4 — Brainstorm**.
+4. Find the first unchecked item (\`- [ ]\`) that does NOT have a \`<!-- NEEDS_INPUT -->\` annotation
+5. If all unchecked items have \`<!-- NEEDS_INPUT -->\`, go to **Phase 4 — Brainstorm**.
+
+## Phase 2 — Evaluate Feasibility
+
+6. Read relevant source files to understand the scope of the item
+7. Determine: can this be implemented without user clarification?
+   - Consider: are requirements clear? Are there ambiguous design choices? Does it depend on external decisions?
+
+## Phase 3a — Implement (if feasible)
+
+8. Implement the feature:
+   - Write clean, tested code following existing patterns
+   - Run tests to ensure nothing is broken
+9. Run \`/simplify\` to review changed code for reuse, quality, and efficiency. Fix any issues found.
+10. Check the PLAN.md item: change \`- [ ]\` to \`- [x]\`
+11. Commit with a clear description referencing the PLAN.md item
+
+## Phase 3b — Request Clarification (if not feasible)
+
+8. Create a file named \`.plan-questions.md\` in the repository root with this format:
+   \`\`\`
+   # Plan Question: <short title summarizing the PLAN.md item>
+
+   ## PLAN.md Item
+   <the exact text of the unchecked item>
+
+   ## Questions
+   - <question 1>
+   - <question 2>
+   \`\`\`
+9. **Move the unchecked item to the bottom of PLAN.md and annotate it with \` <!-- NEEDS_INPUT -->\`** — remove the line from its current position and append it at the end of the file with the annotation. This keeps the queue moving so the next \`feature-ideas\` run picks up a different actionable item instead of repeatedly tripping on this one.
+10. Commit both changes (the new \`.plan-questions.md\` file and the PLAN.md move) with message \`chore: flag PLAN.md item needing user input\`. Then proceed to the **Completion** section below so the clarification PR is opened for the user to review — do NOT leave the worktree orphaned.
+
+## Phase 4 — Brainstorm a New Feature
+
+When PLAN.md is missing, empty, or fully completed, brainstorm and implement a new feature:
+
+1. Read GOALS.md from {repoPath} for context on the app's goals and priorities.
+   If no GOALS.md exists, focus on general improvements.
+2. Read DONE.md from {repoPath} (if it exists) to avoid re-implementing completed features
+3. Review the codebase structure, recent git log, and any README or docs to understand the app
+4. Identify ONE small, high-impact feature that:
+   - Aligns with GOALS.md priorities (if available)
+   - Is NOT already in DONE.md (avoid re-implementing shipped features)
+   - Saves user time, improves UX, or makes the app more useful
+   - Is self-contained and completable in one session
+   - Does NOT duplicate existing functionality
+5. Implement the feature:
+   - Write clean, tested code following existing patterns
+   - Run tests to ensure nothing is broken
+6. Run \`/simplify\` to review changed code for reuse, quality, and efficiency. Fix any issues found.
+7. Add the feature as a checked item in PLAN.md (create the file if needed):
+   \`\`\`
+   - [x] <description of the feature you implemented>
+   \`\`\`
 8. Commit with a clear description of the feature and rationale`
+  ],
+  'plan-task': [
+    // v3 default prompt (before plan-item ID system)
+    `[Plan Task: {appName}] Execute Next PLAN.md Item
+
+Implement the next unchecked item from PLAN.md and archive it to DONE.md. No brainstorming, no scope expansion — just execute what is already planned.
+
+## Phase 1 — Find the Next Task
+
+1. Read PLAN.md and DONE.md (if present, for archive-format reference).
+2. Pick the first unchecked item (\`- [ ]\`) that does NOT have a \`<!-- NEEDS_INPUT -->\` annotation.
+3. If PLAN.md is missing, has no unchecked items, or every unchecked item is annotated \`<!-- NEEDS_INPUT -->\`, **stop here** — exit cleanly without commits or PR. Brainstorming is handled by the \`feature-ideas\` task.
+
+Capture the exact text of the selected item (without the leading \`- [ ]\`) verbatim — DONE.md will reuse it.
+
+## Phase 2 — Decide
+
+Read relevant source files. Can this be implemented without user clarification (requirements clear, no ambiguous design choices, no blocking external decisions)?
+
+## Phase 3a — Implement (if feasible)
+
+1. Implement the change. Write clean, tested code following existing patterns and run tests.
+2. **Move the item from PLAN.md to DONE.md (do NOT leave a checked \`- [x]\` behind in PLAN.md):**
+   - Remove the item's line(s) from PLAN.md entirely. If removing it leaves a heading empty, leave the heading alone — plan curation is the \`do-replan\` task's job.
+   - Append the entry to DONE.md under today's date heading (\`## YYYY-MM-DD\`). Insert today's heading directly below the top-of-file preamble if it doesn't exist yet.
+   - Entry format: \`- **<short title from the PLAN.md item>** — <1–3 sentences on what was implemented, key files touched, and any caveats>\`. Mirror the prose style of recent DONE.md entries.
+
+## Phase 3b — Request Clarification (if not feasible)
+
+1. Create \`.plan-questions.md\`:
+   \`\`\`
+   # Plan Question: <short title summarizing the PLAN.md item>
+
+   ## PLAN.md Item
+   <the exact text of the unchecked item>
+
+   ## Questions
+   - <question 1>
+   - <question 2>
+   \`\`\`
+2. **Move the unchecked item to the bottom of PLAN.md and annotate it with \` <!-- NEEDS_INPUT -->\`** — remove from its current position and append at the end with the annotation. This keeps the queue moving so the next \`plan-task\` run picks up a different actionable item.`
   ],
   'pr-reviewer': [
     // v1 default prompt (required global slash-do install)

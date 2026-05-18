@@ -7,8 +7,10 @@ import { join } from 'path';
  */
 
 describe('Worktree Branch Naming', () => {
-  function buildBranchName(taskId, agentId) {
-    return `cos/${taskId}/${agentId}`;
+  function buildBranchName(taskId, agentId, planId) {
+    return planId
+      ? `cos/${taskId}/${planId}/${agentId}`
+      : `cos/${taskId}/${agentId}`;
   }
 
   it('should include task ID and agent ID', () => {
@@ -24,6 +26,16 @@ describe('Worktree Branch Naming', () => {
   it('should handle system task IDs', () => {
     const branch = buildBranchName('sys-001', 'agent-00000001');
     expect(branch).toBe('cos/sys-001/agent-00000001');
+  });
+
+  it('should splice planId between taskId and agentId when provided', () => {
+    const branch = buildBranchName('task-abc', 'agent-xyz', 'extract-resolve-provider-helper');
+    expect(branch).toBe('cos/task-abc/extract-resolve-provider-helper/agent-xyz');
+  });
+
+  it('should fall back to the two-segment form when planId is empty', () => {
+    expect(buildBranchName('task-abc', 'agent-xyz', '')).toBe('cos/task-abc/agent-xyz');
+    expect(buildBranchName('task-abc', 'agent-xyz', undefined)).toBe('cos/task-abc/agent-xyz');
   });
 });
 

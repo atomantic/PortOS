@@ -2,6 +2,11 @@
 
 ## Features
 
+### CoS / Scheduled Tasks
+
+- **Plan-item ID system for parallel-safe agent work.** Every `- [ ]` checkbox in a managed app's PLAN.md now carries a stable `[<slug>]` ID, and CoS scheduled `feature-ideas` / `plan-task` jobs encode the slug in their worktree branch name (`cos/<task>/<slug>/<agent>`). Before spawning, the scheduler reads PLAN.md, parses checkboxes, scans `git branch -a` + `gh pr list` for any slug already in flight, and pre-picks the first unclaimed item — concurrent agents now sit on distinct items instead of stomping on the same one. Brainstorm runs (no eligible item) generate a slug at insert time. New helper `server/lib/planIds.js` (slugify + parser + scanner + picker, 17 tests). `taskSchedule.js` prompts bump to feature-ideas v8 / plan-task v4 with a new `{planConstraint}` block; `worktreeManager.createWorktree` accepts `options.planId`; `agentLifecycle.js` plumbs it through both spawn paths. Backed by slashdo v2.15.0 which owns the ID-assignment pass via `do:replan` Phase 0 and preserves slugs across all `do:*` commands that edit PLAN.md.
+- **slashdo submodule bumped to v2.15.0.** Brings drift detection in `do:replan` (flags pending items whose execution would regress newer features) and a persistent `Monitor` in `do:rpr` (one stream emits events for new Copilot reviews + CI bucket transitions, replacing the 5+ background subshells that previously accumulated per multi-round review).
+
 ### Universe Builder
 
 - **Other tab — manual trunk assignment.** Each bucket on the Other tab now has an **Assign to…** menu (Cast / Places / Objects) that retags `categories[bucket].kind` so the bucket moves out of Other into the matching trunk on next render. Variations stay in place; per-variation promote-to-canon remains a separate action.

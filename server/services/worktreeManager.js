@@ -38,6 +38,7 @@ const AUTO_GENERATED_LOCKFILES = ['package-lock.json', 'yarn.lock', 'pnpm-lock.y
  * @param {object} options - Optional configuration
  * @param {string} options.baseBranch - Branch to base the worktree on (auto-detected if omitted)
  * @param {string} options.existingBranch - Pre-existing branch to attach (creates from origin/<branch> if no local copy)
+ * @param {string} options.planId - PLAN.md item slug ID — when provided, spliced into the branch name as `cos/<taskId>/<planId>/<agentId>` so other agents can detect this item is in flight by scanning branches/PRs
  * @returns {{ worktreePath: string, branchName: string, baseBranch: string|null, existingBranch?: boolean }} paths for the new worktree
  */
 export async function createWorktree(agentId, sourceWorkspace, taskId, options = {}) {
@@ -79,7 +80,9 @@ export async function createWorktree(agentId, sourceWorkspace, taskId, options =
     return { worktreePath, branchName, baseBranch: null, existingBranch: true };
   }
 
-  const branchName = `cos/${taskId}/${agentId}`;
+  const branchName = options.planId
+    ? `cos/${taskId}/${options.planId}/${agentId}`
+    : `cos/${taskId}/${agentId}`;
 
   // Determine the base: explicit option > remote default branch > current HEAD
   let baseBranch = options.baseBranch;
