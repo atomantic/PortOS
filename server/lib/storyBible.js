@@ -384,9 +384,12 @@ function sanitizeProp(raw, { preserveTimestamps = true } = {}) {
     purpose: trimTo(raw.purpose, BIBLE_LIMITS.PROP_PURPOSE_MAX),
     materials: trimTo(raw.materials, BIBLE_LIMITS.PROP_MATERIALS_MAX),
     notes: trimTo(raw.notes, BIBLE_LIMITS.PROP_NOTES_MAX),
-    // Per-prop reference image is optional. Validated through derive helper so
-    // a stale filename (no longer in the character's imageRefs) collapses to
-    // null — same invariant as primaryImageRef.
+    // Per-prop reference image is optional. Stored as a trimmed string only —
+    // there's no derive-against-imageRefs[] check here because a prop image is
+    // free-standing (the user can upload directly to the prop card; it doesn't
+    // need to be a member of the character's gallery imageRefs[]). Stale
+    // filenames are tolerated and produce a 404 in the UI rather than a
+    // sanitizer collapse. Treat this string as untrusted at render time.
     imageRef: isStr(raw.imageRef) && raw.imageRef.trim() ? raw.imageRef.trim().slice(0, BIBLE_LIMITS.IMAGE_REF_MAX) : null,
     createdAt: preserveTimestamps && isStr(raw.createdAt) ? raw.createdAt : nowIso(),
     updatedAt: preserveTimestamps && isStr(raw.updatedAt) ? raw.updatedAt : nowIso(),

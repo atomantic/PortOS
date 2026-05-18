@@ -854,6 +854,19 @@ export async function updateUniverse(id, patchOrMutator = {}) {
     const scalarPatch = Object.fromEntries(
       PATCHABLE_SCALARS.filter((k) => k in patch).map((k) => [k, patch[k]]),
     );
+    // Server owns `referenceSheetImageRef` — only the render-completion
+    // handler should ever stamp it. A client PATCH that round-trips a
+    // character body it loaded before a newer render finished would
+    // otherwise clobber the newer pointer (multi-tab / parallel render
+    // race). Preserve cur's value per-id; new characters in the patch
+    // (no matching cur id) start fresh.
+    if (Array.isArray(scalarPatch.characters) && Array.isArray(cur.characters)) {
+      const curById = new Map(cur.characters.filter((c) => c?.id).map((c) => [c.id, c]));
+      scalarPatch.characters = scalarPatch.characters.map((c) => {
+        const prev = c?.id ? curById.get(c.id) : null;
+        return prev ? { ...c, referenceSheetImageRef: prev.referenceSheetImageRef } : c;
+      });
+    }
 
     const mergedRecord = sanitizeTemplate({
       ...cur,

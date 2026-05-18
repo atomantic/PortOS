@@ -343,7 +343,12 @@ export async function renderCharacterReferenceSheet(universeId, entryId, options
   // complete successfully on disk, but onSheetComplete would never fire —
   // file copy + character pointer stamp lost.
   const QUEUE_WAIT_MS = 4 * 60 * 60 * 1000; // 4h — generous; survives chained video jobs.
-  const RUN_TIMEOUT_MS = 15 * 60 * 1000;    // 15min — actual render budget once started.
+  // 30min sits comfortably above the codex backend's 20min CODEX_TIMEOUT_MS
+  // watchdog and the typical local FLUX.2 ceiling, so a legitimate slow
+  // render lands its completion (or watchdog-failure) event before this
+  // listener detaches. Bumping further is cheap — the detach is purely a
+  // bookkeeping safety net for "queue never emits a terminal event".
+  const RUN_TIMEOUT_MS = 30 * 60 * 1000;
   let timeoutHandle = null;
   const armTimeout = (ms, reason) => {
     if (timeoutHandle) clearTimeout(timeoutHandle);

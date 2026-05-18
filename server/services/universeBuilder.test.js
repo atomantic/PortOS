@@ -337,6 +337,40 @@ describe("universeBuilder service", () => {
     expect(patched.name).toBe("Solo Rename");
   });
 
+  it("updateUniverse preserves server-owned referenceSheetImageRef across character PATCHes", async () => {
+    // Multi-tab race: tab B finished a newer sheet render (server pointer is
+    // 'sheet-B.png'), tab A PATCH-saves with a character body it loaded
+    // BEFORE the render landed (still carrying the previous 'sheet-A.png',
+    // or null). Without server-side preservation the older PATCH would
+    // clobber the newer server pointer and the UI would 404 on the stale
+    // filename. The render-completion handler bypasses this preservation
+    // path because it writes referenceSheetImageRef inside its own
+    // updateUniverse mutator from the latest record state.
+    const w = await seedWorld();
+    // Simulate the render-completion stamp via an in-queue mutator (same
+    // path the real onSheetComplete uses).
+    await svc.updateUniverse(w.id, (latest) => {
+      const next = [...(latest.characters || []), {
+        id: "c-1", name: "Vale", referenceSheetImageRef: "sheet-B.png",
+      }];
+      return { characters: next };
+    });
+    // Client PATCH that round-trips a stale body — sheet pointer is the
+    // OLD value (or null). Server should keep 'sheet-B.png' regardless.
+    const afterClientPatch = await svc.updateUniverse(w.id, {
+      characters: [{ id: "c-1", name: "Vale", referenceSheetImageRef: "sheet-A.png" }],
+    });
+    const char = afterClientPatch.characters.find((c) => c.id === "c-1");
+    expect(char?.referenceSheetImageRef).toBe("sheet-B.png");
+
+    // Same invariant when client PATCHes with the field omitted entirely.
+    const afterOmitPatch = await svc.updateUniverse(w.id, {
+      characters: [{ id: "c-1", name: "Vale" }],
+    });
+    const charOmit = afterOmitPatch.characters.find((c) => c.id === "c-1");
+    expect(charOmit?.referenceSheetImageRef).toBe("sheet-B.png");
+  });
+
   it("deleteUniverse removes the universe and its runs", async () => {
     const w = await seedWorld();
     await svc.recordRun({
