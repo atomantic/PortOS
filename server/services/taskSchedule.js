@@ -493,7 +493,7 @@ Run the relevant test suite as you go.
 <optional body>
 \`\`\`
 
-Use \`feat:\` / \`fix:\` / \`refactor:\` / \`chore:\` / etc.
+Use \`feat:\` / \`fix:\` / \`refactor:\` / \`chore:\` / etc. (The bracketed-scope form \`([<slug>])\` is intentional and matches the project's existing convention — grep \`git log --oneline\` for prior examples. The brackets carry the PLAN.md \`[<slug>]\` ID syntax through to commits, branches, and PRs so a single slug grep finds the whole trail.)
 
 ## Phase 5 — Update PLAN.md and DONE.md
 
