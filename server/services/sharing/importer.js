@@ -26,7 +26,7 @@ import { copyFile, readdir } from 'fs/promises';
 import { existsSync } from 'fs';
 import { EventEmitter } from 'events';
 import { PATHS, ensureDir, atomicWrite, readJSONFile } from '../../lib/fileUtils.js';
-import { getBucket, bucketBlobPath, bucketBlobSidecarPath, imageSidecarName } from './buckets.js';
+import { getBucket, bucketBlobPath, bucketBlobSidecarPath, imageSidecarName, isHexHash } from './buckets.js';
 import { readManifest, markProcessed, readCursor, hasBeenProcessed, forgetProcessed } from './manifest.js';
 import { SHARING_SCHEMA_VERSION, isManifestCompatible } from './version.js';
 import { insertSeriesWithId, updateSeries, getSeries } from '../pipeline/series.js';
@@ -148,8 +148,23 @@ function manifestAssetRefs(manifest) {
     // hash is optional — only v2+ manifests carry it. Collection items have
     // never carried per-item hashes (they reference filenames in the user's
     // local data dir), so the legacy filename path covers them.
+    //
+    // Hashes are UNTRUSTED peer input. Accept only well-formed SHA-256
+    // (64 lowercase hex chars) so `bucketBlobPath(bucketPath, hash)` can't
+    // be coerced into a `path.join('.../assets/blobs', '../../etc/hosts')`
+    // path-traversal primitive that would `copyFile` an arbitrary file from
+    // the user's filesystem into `data/{images,videos}/`. A malformed hash
+    // means the manifest is broken or hostile — drop the ref entirely
+    // rather than fall back to the legacy filename path (a v2 manifest
+    // that sets a bogus hash isn't a v1 manifest).
     const entry = { kind, ref: filename };
-    if (isStr(raw.hash)) entry.hash = raw.hash;
+    if (raw.hash !== undefined && raw.hash !== null) {
+      if (!isHexHash(raw.hash)) {
+        console.log(`⚠️ sharing.importer: dropping asset ref with invalid hash: ${kind}/${filename}`);
+        return;
+      }
+      entry.hash = raw.hash;
+    }
     refs.push(entry);
   };
   for (const ref of manifest?.assetRefs || []) push(ref);

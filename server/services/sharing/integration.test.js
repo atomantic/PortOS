@@ -661,6 +661,91 @@ describe('sharing round-trip', () => {
     expect(fs.readFileSync(join(tempData, 'images', 'beta.png'), 'utf-8')).toBe(sharedBytes);
   });
 
+  it('importer rejects manifest asset refs whose hash is not a 64-char hex string (path-traversal guard)', async () => {
+    const bucket = await buckets.createBucket({ name: 'HostileBucket', path: tempBucket, mode: 'auto-merge' });
+    const fs = await import('fs');
+    const { SHARING_SCHEMA_VERSION } = await import('./version.js');
+
+    // Plant a file outside the blob dir that a path-traversal attempt would target.
+    const secretsDir = mkdtempSync(join(tmpdir(), 'portos-sharing-hostile-secret-'));
+    const secretPath = join(secretsDir, 'secret.txt');
+    fs.writeFileSync(secretPath, 'SECRET-CONTENT-DO-NOT-LEAK');
+
+    // Compute the traversal that would escape <bucket>/assets/blobs/ and
+    // land on the planted secret. Use forward slashes — path.join normalizes.
+    const rel = ['..', '..', '..', '..', '..', '..', '..', '..', '..'].join('/')
+      + secretPath.replace(/\\/g, '/');
+
+    const universeBuilder = await import('../universeBuilder.js');
+    const u = await universeBuilder.createUniverse({ name: 'Hostile Universe' });
+    fs.mkdirSync(join(tempBucket, 'records', 'universes'), { recursive: true });
+    fs.writeFileSync(join(tempBucket, 'records', 'universes', `${u.id}.json`), JSON.stringify({
+      ...u,
+      origin: {
+        bucketId: bucket.id, bucketName: bucket.name,
+        source: 'hostile-peer', sourceBio: null,
+        manifestId: 'mfst-hostile', importedAt: new Date().toISOString(),
+      },
+    }));
+    await universeBuilder.deleteUniverse(u.id);
+
+    // Hostile manifest: hash is a relative path traversing out of the blob dir.
+    const hostileManifest = {
+      id: 'mfst-hostile',
+      schemaVersion: SHARING_SCHEMA_VERSION,
+      sharingSchemaVersion: SHARING_SCHEMA_VERSION,
+      producedByVersion: '9.9.9',
+      createdAt: new Date().toISOString(),
+      kind: 'universe',
+      senderInstanceId: 'hostile-peer',
+      source: 'Hostile Peer',
+      sourceBio: null,
+      bucketId: bucket.id,
+      bucketName: bucket.name,
+      recordIds: [u.id],
+      assetRefs: [{ kind: 'image', ref: 'pwned.png', hash: rel }],
+      note: null,
+    };
+    const filename = `2099-01-01T00-00-00-000Z-hostile-peer-${hostileManifest.id}.json`;
+    fs.mkdirSync(join(tempBucket, 'manifests'), { recursive: true });
+    fs.writeFileSync(join(tempBucket, 'manifests', filename), JSON.stringify(hostileManifest));
+
+    const result = await importer.processManifest(bucket.id, filename);
+    // The universe record imports fine; the asset ref is dropped at the
+    // manifest-parse boundary so no file copy is attempted.
+    expect(result.processed).toBe(true);
+    // The hostile file MUST NOT have been copied into the local data dirs.
+    expect(fs.existsSync(join(tempData, 'images', 'pwned.png'))).toBe(false);
+    expect(fs.existsSync(join(tempData, 'images', 'secret.txt'))).toBe(false);
+
+    // The secret on disk should be untouched.
+    expect(fs.readFileSync(secretPath, 'utf-8')).toBe('SECRET-CONTENT-DO-NOT-LEAK');
+
+    rmSync(secretsDir, { recursive: true, force: true });
+  });
+
+  it('bucketBlobPath / bucketBlobSidecarPath throw on malformed hash (defense-in-depth)', async () => {
+    const bogus = [
+      '../../../../etc/hosts',
+      'ABCDEF', // uppercase — must be lowercase
+      'g'.repeat(64), // not hex
+      '0'.repeat(63), // wrong length
+      '0'.repeat(65),
+      '',
+      null,
+      undefined,
+      42,
+    ];
+    for (const h of bogus) {
+      expect(() => buckets.bucketBlobPath(tempBucket, h)).toThrow();
+      expect(() => buckets.bucketBlobSidecarPath(tempBucket, h)).toThrow();
+    }
+    // Valid hash passes.
+    const ok = sha256Hex('whatever');
+    expect(buckets.bucketBlobPath(tempBucket, ok)).toBe(join(tempBucket, 'assets', 'blobs', ok));
+    expect(buckets.bucketBlobSidecarPath(tempBucket, ok)).toBe(join(tempBucket, 'assets', 'blobs', `${ok}.metadata.json`));
+  });
+
   it('importer falls back to legacy assets/<kind>/<filename> when manifest asset ref omits hash (v1 compat)', async () => {
     const bucket = await buckets.createBucket({ name: 'LegacyImportBucket', path: tempBucket, mode: 'auto-merge' });
     const fs = await import('fs');
