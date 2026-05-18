@@ -205,7 +205,10 @@ function WardrobeSection({ wardrobes, editable, onChange }) {
     // Mint a server-shaped `wd-<uuid>` client-side so the React key stays
     // stable across the pending → persisted promotion. Server `ensureId`
     // preserves any non-empty string, so this id round-trips unchanged.
-    const id = `wd-${(crypto?.randomUUID?.() ?? Date.now().toString(36) + Math.random().toString(36).slice(2))}`;
+    // `globalThis.crypto` — bare `crypto?.…` ReferenceErrors when the
+     // identifier is undeclared (e.g. some non-secure contexts); going
+     // through `globalThis` short-circuits cleanly to the Date+Math fallback.
+    const id = `wd-${(globalThis.crypto?.randomUUID?.() ?? Date.now().toString(36) + Math.random().toString(36).slice(2))}`;
     setPendingNew((prev) => [...prev, { id, name: '', description: '' }]);
   };
 

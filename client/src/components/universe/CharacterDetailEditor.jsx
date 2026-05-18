@@ -246,7 +246,7 @@ export default function CharacterDetailEditor({ entry, onPatch, onExpand, expand
     // mints a fresh `<kind>-<uuid>` id under its own convention; without
     // that strip the sanitizer would round-trip the client prefix back onto
     // the persisted row.
-    const id = `pending-${section.key}-${(crypto?.randomUUID?.() ?? Date.now().toString(36) + Math.random().toString(36).slice(2))}`;
+    const id = `pending-${section.key}-${(globalThis.crypto?.randomUUID?.() ?? Date.now().toString(36) + Math.random().toString(36).slice(2))}`;
     const blank = { id, ...Object.fromEntries(section.columns.map((c) => [c.name, ''])) };
     setPendingByList((prev) => ({
       ...prev,

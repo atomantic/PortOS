@@ -110,6 +110,13 @@ export default function CharacterReferenceSheetPanel({
 
   const handleGenerate = async () => {
     if (jobId || !universeId || !entry?.id) return;
+    // Abort any in-flight HEAD poll from a previous render before kicking
+    // off a new one. Without this a superseded render's poll could still
+    // resolve and call `onSheetCompleted` with the stale filename — the
+    // server-side supersede check skips the pointer stamp but the client
+    // would have already swapped the displayed filename.
+    pollAbortRef.current?.abort();
+    pollAbortRef.current = null;
     const queued = await renderCharacterReferenceSheet(universeId, entry.id)
       .catch((err) => { toast.error(err.message || 'Sheet render failed to start'); return null; });
     if (!queued?.jobId) return;

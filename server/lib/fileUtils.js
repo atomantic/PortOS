@@ -678,13 +678,18 @@ export function makePathResolver(getRoot, { extensions, cache = false } = {}) {
     const safe = basename(name);
     if (!safe || safe === '.' || safe === '..') return null;
     if (extRegex && !extRegex.test(safe)) return null;
-    const cacheKey = memo ? (mustExist ? `must:${safe}` : `nostat:${safe}`) : null;
-    if (memo && memo.has(cacheKey)) return memo.get(cacheKey);
+    // Refresh the root cache BEFORE the memo lookup so a getRoot() that
+    // suddenly returns a new value (e.g. a test re-mocks `PATHS.x` mid-run)
+    // invalidates the memo too — otherwise the old root's cached
+    // resolutions would shadow the new root forever.
     const root = getRoot();
     if (root !== _root) {
       _root = root;
       _rootAbsPrefix = resolvePath(root) + PATH_SEP;
+      if (memo) memo.clear();
     }
+    const cacheKey = memo ? (mustExist ? `must:${safe}` : `nostat:${safe}`) : null;
+    if (memo && memo.has(cacheKey)) return memo.get(cacheKey);
     const localPath = resolvePath(join(root, safe));
     if (!localPath.startsWith(_rootAbsPrefix)) return null;
     if (!mustExist) {
