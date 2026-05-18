@@ -395,45 +395,156 @@ When PLAN.md is missing, empty, or fully completed, brainstorm and implement a n
    \`\`\`
 8. Commit with a clear description of the feature and rationale`,
 
-  'plan-task': `[Plan Task: {appName}] Execute Next PLAN.md Item
+  'plan-task': `[Plan Task: {appName}] Claim and ship next PLAN.md item
 
-Implement the next unchecked item from PLAN.md and archive it to DONE.md. No brainstorming, no scope expansion — just execute what is already planned.
+Pick the next unclaimed PLAN.md item by its \`[<slug>]\` ID, **create your own worktree at \`claim/<slug>\`**, implement, ship a PR, and clean up. Mirrors the \`/claim\` slash command — same in-flight scan, same branch naming, same no-local-merge cleanup. Do NOT modify files in the source repo directly; ALL editing happens inside the worktree you create.
 {planConstraint}
-## Phase 1 — Find the Next Task
 
-1. Read PLAN.md and DONE.md (if present, for archive-format reference).
-2. If the **Item Constraint** block above named a specific \`[plan-id]\`, find the matching \`- [ ]\` line and use that — do NOT pick a different one. If the line is missing, has been checked, or carries \`<!-- NEEDS_INPUT -->\`, exit cleanly without commits or PR.
-3. Otherwise pick the first unchecked item (\`- [ ]\`) that does NOT have a \`<!-- NEEDS_INPUT -->\` annotation.
-4. If PLAN.md is missing, has no unchecked items, or every unchecked item is annotated \`<!-- NEEDS_INPUT -->\`, **stop here** — exit cleanly without commits or PR. Brainstorming is handled by the \`feature-ideas\` task.
+**How claiming works.** Every PLAN.md checkbox carries a \`[<slug>]\` ID. A slug is "in flight" when it appears as the slug-position segment in either a \`claim/<slug>\` ref (the human/TUI pattern) or a \`cos/<task>/<slug>/<agent>\` ref (the CoS sub-agent pattern) — across local branches, remote branches, or open PR head refs. Pick the first \`- [ ]\` whose slug is NOT in flight and create a \`claim/<slug>\` branch — that branch name IS the claim, visible to every other agent and to the human running \`/claim\` in a TUI.
 
-Capture the exact text of the selected item (without the leading \`- [ ]\`) verbatim, **including its \`[plan-id]\` slug** — DONE.md will reuse both.
+## Phase 1 — Pick
 
-## Phase 2 — Decide
+1. Read PLAN.md and DONE.md from the repo root.
+2. **If any \`- [ ]\` line lacks an \`[<slug>]\` ID, stop and exit cleanly** — \`do-replan\` populates IDs in one pass; without IDs, this task has nothing to claim.
+3. Build the in-flight set. Collect every ref from these sources:
+   \`\`\`bash
+   git fetch --prune 2>/dev/null
+   git branch -a --no-color --format='%(refname:short)'
+   gh pr list --state open --json headRefName -q '.[].headRefName' 2>/dev/null
+   \`\`\`
+   For each ref, extract the slug **only when the ref matches one of these documented patterns** (after stripping any leading remote prefix like \`origin/\` or \`upstream/\`):
+   - \`claim/<slug>\` — the slug is everything after \`claim/\`.
+   - \`cos/<task>/<slug>/<agent>\` — the slug is the third \`/\`-separated segment.
 
-Read relevant source files. Can this be implemented without user clarification (requirements clear, no ambiguous design choices, no blocking external decisions)?
+   A slug is "in flight" iff it appears in a ref matching one of those patterns AND is present in PLAN.md. **Do NOT** flag a slug just because the bare word appears as some other segment of a ref — that would falsely flag any slug literally named \`main\`, \`fix\`, \`feature\`, \`release\`, \`dev\`, etc. against virtually every branch in the repo.
+4. **Pick the target slug:**
+   - **If the Item Constraint above named a specific \`[plan-id]\`**: use that. If the line is missing, has been checked, carries \`<!-- NEEDS_INPUT -->\`, or its slug IS in the in-flight set, exit cleanly without commits or PR.
+   - **Otherwise**: walk PLAN.md top-to-bottom and pick the FIRST \`- [ ]\` line where ALL of the following are true:
+     - The slug is NOT in the in-flight set.
+     - The immediately-preceding line does NOT start with \`> ⚠️ DRIFT:\`.
+     - The line does NOT carry the \`<!-- NEEDS_INPUT -->\` annotation.
+5. **If no eligible item exists**, exit cleanly — that's a healthy plan state, not a failure. Brainstorming is handled by the \`feature-ideas\` task; do NOT add new items here.
 
-## Phase 3a — Implement (if feasible)
+Capture the exact text of the selected item (without the leading \`- [ ]\`) verbatim, **including its \`[<slug>]\` ID** — DONE.md will reuse both.
 
-1. Implement the change. Write clean, tested code following existing patterns and run tests.
-2. **Move the item from PLAN.md to DONE.md (do NOT leave a checked \`- [x]\` behind in PLAN.md):**
-   - Remove the item's line(s) from PLAN.md entirely. If removing it leaves a heading empty, leave the heading alone — plan curation is the \`do-replan\` task's job.
-   - Append the entry to DONE.md under today's date heading (\`## YYYY-MM-DD\`). Insert today's heading directly below the top-of-file preamble if it doesn't exist yet.
-   - Entry format: \`- **[<plan-id>] <short title from the PLAN.md item>** — <1–3 sentences on what was implemented, key files touched, and any caveats>\`. The \`[plan-id]\` MUST match the slug from the PLAN.md line. Mirror the prose style of recent DONE.md entries.
+## Phase 2 — Claim (worktree)
 
-## Phase 3b — Request Clarification (if not feasible)
+Create the worktree on a branch named \`claim/<slug>\`. This branch name is the claim — once created and pushed, no other agent or \`/claim\` session will pick the same slug. Do all editing inside the worktree, NEVER in the source repo's working tree (which may have the user's in-flight work).
 
-1. Create \`.plan-questions.md\`:
+\`\`\`bash
+SLUG=<picked-slug>
+WORKTREE="data/cos/worktrees/claim-\${SLUG}"
+mkdir -p data/cos/worktrees
+git fetch origin main
+git worktree add -b "claim/\${SLUG}" "\${WORKTREE}" origin/main
+cd "\${WORKTREE}"
+\`\`\`
+
+Stash the worktree path; you'll need it for Phase 7 cleanup.
+
+## Phase 3 — Verify still valid
+
+Before writing any code, sanity-check that executing the item won't regress newer work. **If ANY of these are true, jump to Phase 3b** (clarification path, not implementation):
+
+- The picked line is preceded by a \`> ⚠️ DRIFT:\` blockquote (you should already have filtered it; double-check).
+- The item description references a function, file, or component that no longer exists. Run \`grep -rn\` for the named identifiers — if they're gone, the item is stale.
+- The item depends on a predecessor that hasn't shipped (e.g. "Phase B work" when Phase B isn't done).
+- The work would require touching files outside the inferred scope (>5 unrelated files), suggesting the item is bigger than originally estimated.
+
+Otherwise: can this be implemented without user clarification (requirements clear, no ambiguous design choices)? If NOT, jump to Phase 3b. If yes, proceed to Phase 4.
+
+## Phase 3b — Request Clarification (alternative exit from Phase 3)
+
+Done from INSIDE the worktree (you've already created \`claim/<slug>\` in Phase 2):
+
+1. Create \`.plan-questions.md\` in the worktree:
    \`\`\`
    # Plan Question: <short title summarizing the PLAN.md item>
 
    ## PLAN.md Item
-   <the exact text of the unchecked item, including its [plan-id]>
+   <the exact text of the unchecked item, including its [<slug>]>
 
    ## Questions
    - <question 1>
    - <question 2>
    \`\`\`
-2. **Move the unchecked item to the bottom of PLAN.md and annotate it with \` <!-- NEEDS_INPUT -->\`** — remove from its current position and append at the end with the annotation, **preserving the \`[plan-id]\` slug**. This keeps the queue moving so the next \`plan-task\` run picks up a different actionable item.`,
+2. **Move the unchecked item to the bottom of PLAN.md and annotate it with \` <!-- NEEDS_INPUT -->\`** — remove from its current position and append at the end with the annotation, **preserving the \`[<slug>]\` ID**. This keeps the queue moving so the next \`plan-task\` run picks a different actionable item.
+3. Commit, push the branch (\`git push -u origin claim/<slug>\`), and open a PR with \`gh pr create\` so the user can see the questions. **Do NOT merge** — the user resolves \`.plan-questions.md\` first.
+4. Then run the **Phase 3b cleanup** (which differs from Phase 7 — the PR is intentionally unmerged here, so the local branch must NOT be deleted):
+   \`\`\`bash
+   cd {repoPath}
+   git worktree remove "\${WORKTREE}"
+   \`\`\`
+   Leave the local \`claim/<slug>\` branch alone — \`git branch -d\` will refuse (PR not merged) and \`-D\` would discard work that's still in flight. The branch lives on locally and remotely until the user resolves the questions and the PR merges; \`git branch -d "claim/<slug>"\` becomes safe only after that point.
+
+After Phase 3b runs, **exit** — do NOT proceed to Phase 4. The implementing path resumes only when the user reopens the slug post-clarification.
+
+## Phase 4 — Implement
+
+Write the code, tests, and any docs the item requires. Follow the repo conventions in CLAUDE.md (no try/catch in route handlers, functional programming, Zod validation, Tailwind tokens, reactive UI updates).
+
+Run the relevant test suite as you go.
+
+**Commit messages reference the slug** so the work is grep-able across DONE.md, branches, and PR titles:
+
+\`\`\`
+<type>([<slug>]): <one-line description>
+
+<optional body>
+\`\`\`
+
+Use \`feat:\` / \`fix:\` / \`refactor:\` / \`chore:\` / etc. (The bracketed-scope form \`([<slug>])\` is intentional and matches the project's existing convention — grep \`git log --oneline\` for prior examples. The brackets carry the PLAN.md \`[<slug>]\` ID syntax through to commits, branches, and PRs so a single slug grep finds the whole trail.)
+
+## Phase 5 — Update PLAN.md and DONE.md
+
+**Move the item out of PLAN.md and into DONE.md.** Do NOT leave a checked \`- [x]\` behind in PLAN.md.
+
+1. Remove the picked \`- [ ]\` line from PLAN.md entirely. If removing it leaves a heading empty, leave the heading alone — section curation is \`do-replan\`'s job.
+2. Append to DONE.md under today's date heading (\`## YYYY-MM-DD\`). Insert today's heading directly below the top-of-file preamble if it doesn't exist yet.
+3. Entry format — **slug lifted verbatim from PLAN.md, never re-derived**:
+
+   \`\`\`markdown
+   - **[<slug>] <Title from the PLAN.md line>** — <1–3 sentences on what shipped, key files touched, any caveats>
+   \`\`\`
+
+Stage both files and commit:
+
+\`\`\`bash
+git add PLAN.md DONE.md
+git commit -m "docs([<slug>]): archive to DONE.md"
+\`\`\`
+
+## Phase 6 — Review and ship
+
+1. Run \`/simplify\` (three-agent reuse/quality/efficiency review) against your own diff and fix findings in the same diff. BEFORE opening the PR, not retroactively.
+2. Push the branch: \`git push -u origin claim/<slug>\`
+3. Open the PR with \`gh pr create\` — title MUST encode the slug: \`<type>([<slug>]): <description>\`. Body should summarize what shipped + test plan.
+4. **Merge via \`gh pr merge\`** — NEVER a local \`git merge\` into main or any other branch. The repo may allow only one of \`--merge\` / \`--squash\` / \`--rebase\`, so don't hardcode a method. Try in this order and use the first one that succeeds:
+   \`\`\`bash
+   gh pr merge <num> --auto --delete-branch \\
+     || gh pr merge <num> --squash --delete-branch \\
+     || gh pr merge <num> --merge --delete-branch \\
+     || gh pr merge <num> --rebase --delete-branch
+   \`\`\`
+   \`--auto\` lets GitHub apply the repo's configured default once required checks pass; the explicit-method fallbacks cover repos that disallow auto-merge or restrict to a single method. \`--delete-branch\` removes the remote branch atomically on merge.
+
+## Phase 7 — Clean up (post-merge ONLY)
+
+This phase runs only after the PR was merged via Phase 6. If you exited via Phase 3b instead, you already did the 3b-specific cleanup — do NOT also run Phase 7.
+
+From the **source repo** (cd back to {repoPath} first; you are currently inside the worktree):
+
+\`\`\`bash
+cd {repoPath}
+git worktree remove "\${WORKTREE}"
+git branch -d "claim/\${SLUG}"
+\`\`\`
+
+If \`git branch -d\` refuses (the PR squash-merged on GitHub but local doesn't know yet), use \`-D\` — the PR is confirmed merged via Phase 6, so the local branch is genuinely redundant.
+
+**Do NOT \`git pull\` from inside this phase** (no \`--rebase\`, no \`--autostash\`, no plain \`pull\`). The agent's work is already integrated on GitHub via \`gh pr merge\`; pulling locally provides no functional benefit and risks rebasing the user's in-progress branch / shuffling their uncommitted changes through stash if the source repo HEAD happens to be on a tracking feature branch when the agent runs. Leave the user's working tree alone.
+
+_(Phase 3b is defined above, right after Phase 3 — see the "alternative exit from Phase 3" section.)_`,
 
   'code-reviewer-review': `[Review: {appName}] Deep Codebase Review (Stage 1)
 
@@ -1065,7 +1176,7 @@ For each reference above:
 // Only non-customized prompts (promptCustomized !== true) are upgraded.
 const PROMPT_VERSIONS = {
   'feature-ideas': 8,  // v8: plan-item ID system — {planConstraint} placeholder, preserve [slug] on edits, brainstorm path generates a new slug
-  'plan-task': 4,      // v4: plan-item ID system — {planConstraint} placeholder, DONE.md archive entry prefixed with [plan-id]
+  'plan-task': 5,      // v5: /claim-style flow — agent creates its own claim/<slug> worktree, ships via gh pr merge, no local merge-back
   'pr-reviewer': 3,    // v3: multi-stage pipeline (security scan → code review + merge)
   'code-reviewer-a': 1, // v1: 2-stage pipeline (codebase review → triage & implement)
   'code-reviewer-b': 1, // v1: 2-stage pipeline (codebase review → triage & implement)
@@ -1432,7 +1543,47 @@ Read relevant source files. Can this be implemented without user clarification (
    - <question 1>
    - <question 2>
    \`\`\`
-2. **Move the unchecked item to the bottom of PLAN.md and annotate it with \` <!-- NEEDS_INPUT -->\`** — remove from its current position and append at the end with the annotation. This keeps the queue moving so the next \`plan-task\` run picks up a different actionable item.`
+2. **Move the unchecked item to the bottom of PLAN.md and annotate it with \` <!-- NEEDS_INPUT -->\`** — remove from its current position and append at the end with the annotation. This keeps the queue moving so the next \`plan-task\` run picks up a different actionable item.`,
+    // v4 default prompt (plan-item ID system — {planConstraint} placeholder, [plan-id]-prefixed DONE.md entries; superseded by v5 /claim-style flow)
+    `[Plan Task: {appName}] Execute Next PLAN.md Item
+
+Implement the next unchecked item from PLAN.md and archive it to DONE.md. No brainstorming, no scope expansion — just execute what is already planned.
+{planConstraint}
+## Phase 1 — Find the Next Task
+
+1. Read PLAN.md and DONE.md (if present, for archive-format reference).
+2. If the **Item Constraint** block above named a specific \`[plan-id]\`, find the matching \`- [ ]\` line and use that — do NOT pick a different one. If the line is missing, has been checked, or carries \`<!-- NEEDS_INPUT -->\`, exit cleanly without commits or PR.
+3. Otherwise pick the first unchecked item (\`- [ ]\`) that does NOT have a \`<!-- NEEDS_INPUT -->\` annotation.
+4. If PLAN.md is missing, has no unchecked items, or every unchecked item is annotated \`<!-- NEEDS_INPUT -->\`, **stop here** — exit cleanly without commits or PR. Brainstorming is handled by the \`feature-ideas\` task.
+
+Capture the exact text of the selected item (without the leading \`- [ ]\`) verbatim, **including its \`[plan-id]\` slug** — DONE.md will reuse both.
+
+## Phase 2 — Decide
+
+Read relevant source files. Can this be implemented without user clarification (requirements clear, no ambiguous design choices, no blocking external decisions)?
+
+## Phase 3a — Implement (if feasible)
+
+1. Implement the change. Write clean, tested code following existing patterns and run tests.
+2. **Move the item from PLAN.md to DONE.md (do NOT leave a checked \`- [x]\` behind in PLAN.md):**
+   - Remove the item's line(s) from PLAN.md entirely. If removing it leaves a heading empty, leave the heading alone — plan curation is the \`do-replan\` task's job.
+   - Append the entry to DONE.md under today's date heading (\`## YYYY-MM-DD\`). Insert today's heading directly below the top-of-file preamble if it doesn't exist yet.
+   - Entry format: \`- **[<plan-id>] <short title from the PLAN.md item>** — <1–3 sentences on what was implemented, key files touched, and any caveats>\`. The \`[plan-id]\` MUST match the slug from the PLAN.md line. Mirror the prose style of recent DONE.md entries.
+
+## Phase 3b — Request Clarification (if not feasible)
+
+1. Create \`.plan-questions.md\`:
+   \`\`\`
+   # Plan Question: <short title summarizing the PLAN.md item>
+
+   ## PLAN.md Item
+   <the exact text of the unchecked item, including its [plan-id]>
+
+   ## Questions
+   - <question 1>
+   - <question 2>
+   \`\`\`
+2. **Move the unchecked item to the bottom of PLAN.md and annotate it with \` <!-- NEEDS_INPUT -->\`** — remove from its current position and append at the end with the annotation, **preserving the \`[plan-id]\` slug**. This keeps the queue moving so the next \`plan-task\` run picks up a different actionable item.`
   ],
   'pr-reviewer': [
     // v1 default prompt (required global slash-do install)
@@ -1581,7 +1732,14 @@ const DEFAULT_TASK_INTERVALS = {
   // plan-task is a strict executor of PLAN.md items — no brainstorm fallback, no
   // runAfter deps. Picks the next unchecked item, implements it, and moves it
   // from PLAN.md to DONE.md in the same commit.
-  'plan-task':           { type: INTERVAL_TYPES.DAILY, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: true, openPR: true, simplify: true } },
+  // plan-task (prompt v5+) drives the /claim flow itself — the agent creates its OWN `claim/<slug>` worktree, opens the PR, merges via `gh pr merge`, and cleans up.
+  // Both `useWorktree` and `openPR` are OFF on the CoS side:
+  //   * `useWorktree: false` — CoS pre-creating a worktree under `cos/<task>/<agent>` would hide the slug from the in-flight branch scan AND trigger
+  //     `cleanupAgentWorktree`'s auto-merge into whatever the source repo's HEAD is on (clobbering a TUI user's in-flight claim branch).
+  //   * `openPR: false` — keeps the cos.js "openPR implies useWorktree" invariant from forcing useWorktree back on. The agent opens its own PR via `gh pr create`
+  //     and merges via `gh pr merge`, so CoS doesn't need to.
+  // The agent runs in the source repo's working directory; `git worktree add` doesn't touch that working tree, so it's safe even with uncommitted user changes.
+  'plan-task':           { type: INTERVAL_TYPES.DAILY, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: false, openPR: false, simplify: true } },
   'error-handling':      { type: INTERVAL_TYPES.ROTATION, enabled: false, providerId: null, model: null, prompt: null },
   'typing':              { type: INTERVAL_TYPES.ONCE, enabled: false, providerId: null, model: null, prompt: null },
   'release-check':       { type: INTERVAL_TYPES.ON_DEMAND, enabled: false, providerId: null, model: null, prompt: null },

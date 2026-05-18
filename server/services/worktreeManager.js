@@ -20,6 +20,29 @@ const WORKTREES_DIR = PATHS.worktrees;
 const AUTO_GENERATED_LOCKFILES = ['package-lock.json', 'yarn.lock', 'pnpm-lock.yaml'];
 
 /**
+ * Decide whether an auto-merge into `currentBranch` should be refused.
+ *
+ * Pure helper for the defense-in-depth gate in `removeWorktree`: an agent's
+ * branch must NEVER be merged into a feature/claim branch — only into the
+ * source repo's configured default (`main`, `master`, etc.). When the user
+ * is mid-claim on `claim/foo`, a CoS task finishing its work must not
+ * fast-forward `claim/foo` onto the agent's branch. The PR flow
+ * (`gh pr merge`) is the only sanctioned integration path for non-default
+ * targets.
+ *
+ * Returns `true` when the caller must skip the merge and preserve the
+ * agent's branch for manual / PR-driven integration. Falsy default branch
+ * means detection failed — refuse rather than guess, since the worst-case
+ * cost of a refusal (preserved branch) is much smaller than the worst-case
+ * cost of a wrong merge (clobbered user work).
+ */
+export function shouldRefuseDefaultBranchMerge(currentBranch, defaultBranch) {
+  if (!currentBranch) return true;
+  if (!defaultBranch) return true;
+  return currentBranch !== defaultBranch;
+}
+
+/**
  * Create a git worktree for an agent.
  *
  * Creates a new branch and worktree directory that the agent can work in
@@ -188,6 +211,7 @@ export async function removeWorktree(agentId, sourceWorkspace, branchName, optio
 
   let merged = false;
   let commitsAhead = 0;
+  let mergeRefused = false;
 
   if (options.merge) {
     const currentBranch = (await execGit(
@@ -195,19 +219,29 @@ export async function removeWorktree(agentId, sourceWorkspace, branchName, optio
       sourceWorkspace
     )).stdout.trim();
 
-    commitsAhead = parseInt((await execGit(
-      ['rev-list', '--count', `${currentBranch}..${branchName}`],
-      sourceWorkspace
-    ).catch(() => ({ stdout: '0' }))).stdout.trim(), 10) || 0;
+    // Defense-in-depth: NEVER merge the agent branch into a non-default branch.
+    // See shouldRefuseDefaultBranchMerge for the rationale.
+    const { getDefaultBranch } = await import('./git.js');
+    const defaultBranch = await getDefaultBranch(sourceWorkspace).catch(() => null);
+    if (shouldRefuseDefaultBranchMerge(currentBranch, defaultBranch)) {
+      console.log(`🌳 Refusing auto-merge of ${branchName} into '${currentBranch}' (default branch is '${defaultBranch || 'unknown'}'). Use \`gh pr merge\` for non-default targets.`);
+      warnings.push(`Auto-merge skipped — source repo HEAD is on '${currentBranch}', not default '${defaultBranch || 'unknown'}'. Branch ${branchName} preserved for manual review.`);
+      mergeRefused = true;
+    } else {
+      commitsAhead = parseInt((await execGit(
+        ['rev-list', '--count', `${currentBranch}..${branchName}`],
+        sourceWorkspace
+      ).catch(() => ({ stdout: '0' }))).stdout.trim(), 10) || 0;
 
-    if (commitsAhead > 0) {
-      await execGit(['merge', branchName, '--no-edit'], sourceWorkspace)
-        .then(() => { merged = true; })
-        .catch(async (err) => {
-          console.log(`⚠️ Could not auto-merge ${branchName}: ${err.message}`);
-          await execGit(['merge', '--abort'], sourceWorkspace).catch(() => {});
-          warnings.push(`Auto-merge failed for branch ${branchName} — branch preserved for manual recovery`);
-        });
+      if (commitsAhead > 0) {
+        await execGit(['merge', branchName, '--no-edit'], sourceWorkspace)
+          .then(() => { merged = true; })
+          .catch(async (err) => {
+            console.log(`⚠️ Could not auto-merge ${branchName}: ${err.message}`);
+            await execGit(['merge', '--abort'], sourceWorkspace).catch(() => {});
+            warnings.push(`Auto-merge failed for branch ${branchName} — branch preserved for manual recovery`);
+          });
+      }
     }
   }
 
@@ -222,8 +256,10 @@ export async function removeWorktree(agentId, sourceWorkspace, branchName, optio
       });
     });
 
-  // Only preserve branch when merge was attempted, failed, and there were unmerged commits
-  const hasUnmergedCommits = options.merge && !merged && commitsAhead > 0;
+  // Preserve branch when (a) merge was attempted, failed, and has unmerged commits,
+  // OR (b) merge was refused because HEAD is on a non-default branch — the commits
+  // are still there and the user / a follow-up task may want to integrate manually.
+  const hasUnmergedCommits = options.merge && !merged && (commitsAhead > 0 || mergeRefused);
   if (hasUnmergedCommits) {
     console.log(`⚠️ Preserving branch ${branchName} — merge failed, commits need manual recovery`);
   } else {
