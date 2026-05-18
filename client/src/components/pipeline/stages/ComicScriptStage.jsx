@@ -41,12 +41,22 @@ import {
 
 // Legacy records (pre-proof/final split) carry `imageJobId`/`filename` at
 // the record root; surface those as the proof slot so the UI keeps showing
-// the old render until the user re-renders into the new shape.
+// the old render until the user re-renders into the new shape. Carry
+// `rec.prompt` onto the synthesized slot so the lightbox prompt (and any
+// downstream slot.prompt readers) still see the original generation prompt
+// before the server migrates the record into the new shape on the next
+// render — `comicPagesFilenameHook` propagates `record.prompt` /
+// `page.prompt` into the new slot via `legacySlotRecord` for the persisted
+// migration; this mirror keeps the unmigrated client view consistent.
 const getProofSlot = (rec) => {
   if (!rec) return null;
   if (rec.proofImage?.jobId || rec.proofImage?.filename) return rec.proofImage;
   if (rec.imageJobId || rec.filename) {
-    return { jobId: rec.imageJobId || null, filename: rec.filename || null };
+    return {
+      jobId: rec.imageJobId || null,
+      filename: rec.filename || null,
+      prompt: rec.prompt || null,
+    };
   }
   return null;
 };
