@@ -1612,7 +1612,7 @@ describe("universeBuilder service", () => {
             categories: {
               landscapes: {
                 kind: "places",
-                variations: [{ id: "var-1", label: "L", prompt: "p", imageRefs: ["../escape.png", "normal.png", "/abs/path.png", "ok.png"] }],
+                variations: [{ id: "var-1", label: "L", prompt: "p", imageRefs: ["../escape.png", "normal.png", "/abs/path.png", "..\\windows.png", "sub\\dir.png", "ok.png"] }],
               },
             },
             compositeSheets: [],

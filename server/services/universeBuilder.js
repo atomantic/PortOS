@@ -246,9 +246,12 @@ const sanitizeImageRefFilename = (raw) => {
   if (!isStr(raw)) return '';
   const trimmed = raw.trim().slice(0, IMAGE_REF_FILENAME_MAX);
   if (!trimmed) return '';
+  // Reject any path separator before basename() — POSIX basename() doesn't
+  // treat `\` as a separator, so a Windows-style traversal like `..\foo.png`
+  // would otherwise pass through as a single token.
+  if (/[/\\]/.test(trimmed)) return '';
   const safe = basename(trimmed);
   if (!safe || safe === '.' || safe === '..') return '';
-  if (safe !== trimmed) return ''; // path separators were present — reject
   return safe;
 };
 
