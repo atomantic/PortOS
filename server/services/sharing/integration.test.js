@@ -477,6 +477,73 @@ describe('sharing round-trip', () => {
     expect(stillThere.id).toBe(u.id);
   });
 
+  it('inbox dedup keeps newer per-sender row when older legacy file processes after it (upgrade scenario)', async () => {
+    // During the v1→v2 upgrade a bucket may briefly hold both the new
+    // `sub-<kind>-<id>-<sender>.json` and the legacy `sub-<kind>-<id>.json`
+    // for the same sender. Lexicographic backlog order visits the new file
+    // (with `-`) before the legacy file (with `.`), so without a freshness
+    // gate the older legacy manifest would clobber the newer inbox row.
+    const bucket = await buckets.createBucket({ name: 'UpgradeBucket', path: tempBucket, mode: 'inbox' });
+    const universeBuilder = await import('../universeBuilder.js');
+    const u = await universeBuilder.createUniverse({ name: 'U-upgrade' });
+
+    const manifestsDir = join(tempBucket, 'manifests');
+    mkdirSync(manifestsDir, { recursive: true });
+
+    // Hand-craft both manifests for the same (universe, sender) pair. The
+    // legacy file is OLDER (5 minutes earlier) and uses the pre-v2 name.
+    // The per-sender file is NEWER and uses the v2 name.
+    const olderTs = '2026-01-01T00:00:00.000Z';
+    const newerTs = '2026-01-01T00:05:00.000Z';
+    const baseManifest = {
+      schemaVersion: 1,
+      sharingSchemaVersion: 1,
+      producedByVersion: '1.0.0',
+      kind: 'universe',
+      subscription: { recordKind: 'universe', recordId: u.id },
+      senderInstanceId: 'remote-peer-id',
+      source: 'remote peer',
+      sourceBio: null,
+      bucketId: bucket.id,
+      bucketName: bucket.name,
+      recordIds: [u.id],
+      assetRefs: [],
+      collection: null,
+      note: null,
+    };
+    const legacyName = `sub-universe-${u.id}.json`;
+    const perSenderName = `sub-universe-${u.id}-remote-peer-id.json`;
+    writeFileSync(join(manifestsDir, legacyName), JSON.stringify({
+      ...baseManifest, id: 'mfst-legacy-old', createdAt: olderTs,
+    }));
+    writeFileSync(join(manifestsDir, perSenderName), JSON.stringify({
+      ...baseManifest, id: 'mfst-per-sender-new', createdAt: newerTs,
+    }));
+
+    // Sanity: lex-sort puts the per-sender file first, legacy after — this is
+    // the order the importer's backlog scan walks the directory in.
+    expect([legacyName, perSenderName].sort()).toEqual([perSenderName, legacyName]);
+
+    // Mirror records/ so processManifest can locate the universe payload.
+    mkdirSync(join(tempBucket, 'records', 'universes'), { recursive: true });
+    writeFileSync(
+      join(tempBucket, 'records', 'universes', `${u.id}.json`),
+      JSON.stringify({ ...u, updatedAt: newerTs }),
+    );
+
+    const r1 = await importer.processManifest(bucket.id, perSenderName);
+    expect(r1.processed).toBe(true);
+    const r2 = await importer.processManifest(bucket.id, legacyName);
+    // The older legacy manifest should NOT replace the newer inbox row.
+    expect(r2.outcome?.queued).toBe(false);
+    expect(r2.outcome?.reason).toBe('inbox-has-newer');
+
+    const finalInbox = await importer.listInbox(bucket.id);
+    expect(finalInbox).toHaveLength(1);
+    expect(finalInbox[0].manifestId).toBe('mfst-per-sender-new');
+    expect(finalInbox[0].createdAt).toBe(newerTs);
+  });
+
   it('adopts an imported universe subscription so the source bucket is selected for sharing', async () => {
     const { listSubscriptions, subscriptionFilename, __resetForTests } = await import('./subscriptions.js');
     __resetForTests();

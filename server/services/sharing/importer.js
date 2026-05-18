@@ -403,10 +403,24 @@ async function applyInbox(bucket, manifest, manifestFilename, records) {
   const sub = manifest.subscription;
   if (sub?.recordKind && sub?.recordId) {
     const senderId = manifest.senderInstanceId || null;
-    inbox.items = inbox.items.filter((it) => !(it.subscription
+    const existing = inbox.items.find((it) => it.subscription
       && it.subscription.recordKind === sub.recordKind
       && it.subscription.recordId === sub.recordId
-      && (it.senderInstanceId || null) === senderId));
+      && (it.senderInstanceId || null) === senderId);
+    // Freshness gate: during upgrade a bucket may hold both the new
+    // `sub-<kind>-<id>-<sender>.json` and the pre-v2 legacy
+    // `sub-<kind>-<id>.json` for the same sender, and lexicographic
+    // backlog order visits the new file before the legacy one
+    // (`-` (0x2D) < `.` (0x2E)). Without a createdAt compare, the
+    // older legacy manifest would replace the newer inbox row. Skip
+    // when the incoming manifest is older than what we already have.
+    if (existing && existing.createdAt && manifest.createdAt
+      && existing.createdAt > manifest.createdAt) {
+      return { queued: false, reason: 'inbox-has-newer' };
+    }
+    if (existing) {
+      inbox.items = inbox.items.filter((it) => it !== existing);
+    }
   } else if (inbox.items.some((it) => it.manifestId === manifest.id)) {
     return { queued: false, reason: 'already-in-inbox' };
   }
