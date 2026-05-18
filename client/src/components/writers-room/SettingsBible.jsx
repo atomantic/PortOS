@@ -9,7 +9,7 @@ import {
 } from '../../services/apiWritersRoom';
 import useMounted from '../../hooks/useMounted';
 
-const SETTING_FIELDS = [
+const PLACE_FIELDS = [
   { key: 'description',      label: 'Description',       placeholder: 'Architecture, scale, materials, lighting sources, recurring set-dressing. Used directly in image-gen prompts.', kind: 'multiline', rows: 3 },
   { key: 'palette',          label: 'Palette',           placeholder: 'Comma-separated dominant colors / lighting cues',                                                              kind: 'text' },
   { key: 'era',              label: 'Era',               placeholder: 'near-future, 1950s noir, present day…',                                                                        kind: 'text' },
@@ -21,7 +21,7 @@ const SETTING_FIELDS = [
 // Editable places/world bible — persistent across analysis runs and consumed
 // by image gen to inject location descriptions into per-scene prompts.
 //
-// Controlled vs. uncontrolled: caller may pass  to keep multiple
+// Controlled vs. uncontrolled: caller may pass `places` to keep multiple
 // mounts in sync (e.g. drawer + storyboard chip count). When omitted we fetch
 // and own the list so this can stand alone.
 export default function SettingsBible({ workId, places: placesProp, onPlacesChange, readingTheme = 'dark', hotRefId = null }) {
@@ -131,7 +131,7 @@ export default function SettingsBible({ workId, places: placesProp, onPlacesChan
 
 function SettingRow({ setting, onEdit, readingTheme }) {
   const light = readingTheme === 'light';
-  const blanks = SETTING_FIELDS.filter((f) => {
+  const blanks = PLACE_FIELDS.filter((f) => {
     if (f.key === 'notes') return false;
     return !String(setting[f.key] || '').trim();
   });
@@ -204,7 +204,7 @@ function SettingEditor({ workId, setting, onSaved, onDeleted, onCancel }) {
       slugline: setting?.slugline || '',
       name: setting?.name || '',
     };
-    for (const f of SETTING_FIELDS) {
+    for (const f of PLACE_FIELDS) {
       seed[f.key] = setting?.[f.key] || '';
     }
     return seed;
@@ -223,7 +223,7 @@ function SettingEditor({ workId, setting, onSaved, onDeleted, onCancel }) {
       slugline: draft.slugline.trim(),
       name: draft.name.trim(),
     };
-    for (const f of SETTING_FIELDS) {
+    for (const f of PLACE_FIELDS) {
       payload[f.key] = draft[f.key];
     }
     const result = await (isCreate
@@ -277,7 +277,7 @@ function SettingEditor({ workId, setting, onSaved, onDeleted, onCancel }) {
         <span className="text-[9px] uppercase tracking-wider text-gray-500">Name (optional, human-readable)</span>
         <input value={draft.name} onChange={set('name')} placeholder="The Kitchen, Curry O'City…" className={inputCls} />
       </label>
-      {SETTING_FIELDS.map((f) => (
+      {PLACE_FIELDS.map((f) => (
         <label key={f.key} className="block">
           <span className="text-[9px] uppercase tracking-wider text-gray-500">{f.label}</span>
           {f.kind === 'multiline' ? (

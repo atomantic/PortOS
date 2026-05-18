@@ -475,12 +475,12 @@ describe('storyBible — mergeExtractedBible (places)', () => {
     expect(merged[0].recurringDetails).toBe('jukebox');
   });
 
-  // Settings can legitimately have an empty `name` (slugline is the primary
+  // Places can legitimately have an empty `name` (slugline is the primary
   // identifier). Sorting by `name` would float every slugline-only entry to
-  // the top AND diverge from `writersRoom/settings.js#listSettings`'s
+  // the top AND diverge from `writersRoom/places.js#listPlaces`'s
   // `slugline || name` order. Keep the merge sort kind-aware so the API is
   // consistent and callers don't observe an ordering flip after a merge.
-  it('sorts settings by slugline (or name as fallback), not by name alone', () => {
+  it('sorts places by slugline (or name as fallback), not by name alone', () => {
     const existing = [
       sanitizePlace({ id: 's1', slugline: 'INT. ZINC FOUNDRY — NIGHT' }),
       sanitizePlace({ id: 's2', name: 'Alpha Lab' }),                        // name-only

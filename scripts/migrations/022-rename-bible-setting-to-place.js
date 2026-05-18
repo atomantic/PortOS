@@ -44,7 +44,7 @@
  *   - Stage-config key `writers-room-places` (handled by migration 018).
  */
 
-import { readFile, writeFile, unlink, readdir, stat } from 'fs/promises';
+import { readFile, writeFile, unlink, rename, readdir, stat } from 'fs/promises';
 import { join } from 'path';
 import { createHash } from 'crypto';
 
@@ -87,14 +87,22 @@ const NEW_PROMPTS_PLACES_MD5 = 'a7f68e51dd6b4421d20f5bd9d855d9b4';
 const OLD_PROMPTS_DEFERENCE_MD5 = '218f0e85643609ed85a12b1ccc7b5a8d';
 const NEW_PROMPTS_DEFERENCE_MD5 = 'a4681348c27776e414acf6e0be566a99';
 
+// Each template has a sample twin at the same relative path under
+// `data.sample/…`. When an installed copy still hashes to the pre-rename
+// baseline (`oldHash`), the migration copies the bundled `data.sample`
+// file verbatim — that's the only way to pick up *every* string the
+// rename touched (`## Existing settings` → `## Existing places`, etc.)
+// without enumerating the full prose diff here.
 const PROMPT_TEMPLATES = [
   {
     rel: 'data/prompts/stages/writers-room-places.md',
+    sampleRel: 'data.sample/prompts/stages/writers-room-places.md',
     oldHash: OLD_PROMPTS_PLACES_MD5,
     newHash: NEW_PROMPTS_PLACES_MD5,
   },
   {
     rel: 'data/prompts/_partials/bible-deference.md',
+    sampleRel: 'data.sample/prompts/_partials/bible-deference.md',
     oldHash: OLD_PROMPTS_DEFERENCE_MD5,
     newHash: NEW_PROMPTS_DEFERENCE_MD5,
   },
@@ -172,14 +180,18 @@ const migrateWritersRoomWorks = async (rootDir) => {
     const newExists = await fileExists(newPath);
     if (newExists) {
       // Both files exist — `places.json` is the post-rename truth (a prior
-      // partial migration run or hand-edit produced it). Drop the legacy
-      // `settings.json` orphan so the next migration tick doesn't re-fire
-      // this branch every run. We can't safely merge two parallel writes,
-      // and `places.json` is what the runtime reads.
-      await unlink(legacyPath).catch((err) => {
-        console.warn(`⚠️ ${join('data/writers-room/works', entry.name)}: failed to remove legacy settings.json — ${err.message}`);
+      // partial migration run or hand-edit produced it). Move the legacy
+      // `settings.json` aside as `.bak-022` rather than `unlink`-ing it: if
+      // the two diverged (e.g. user hand-created `places.json` from a
+      // non-empty subset), the legacy file may contain entries the user
+      // would otherwise lose silently. The next migration tick won't re-fire
+      // this branch because `settings.json` is gone; the .bak sits as a
+      // recovery breadcrumb the user can diff if anything looks missing.
+      const backupPath = `${legacyPath}.bak-022`;
+      await rename(legacyPath, backupPath).catch((err) => {
+        console.warn(`⚠️ ${join('data/writers-room/works', entry.name)}: failed to back up legacy settings.json → settings.json.bak-022 — ${err.message}`);
       });
-      console.log(`🧹 ${join('data/writers-room/works', entry.name)}: both settings.json and places.json existed — kept places.json, removed legacy settings.json`);
+      console.log(`🧹 ${join('data/writers-room/works', entry.name)}: both settings.json and places.json existed — kept places.json, backed up legacy settings.json → settings.json.bak-022 (diff if anything looks missing)`);
       continue;
     }
     const raw = await readFile(legacyPath, 'utf-8').catch(() => null);
@@ -205,7 +217,7 @@ const migrateWritersRoomWorks = async (rootDir) => {
   }
 };
 
-const migratePromptTemplate = async (rootDir, { rel, oldHash, newHash }) => {
+const migratePromptTemplate = async (rootDir, { rel, sampleRel, oldHash, newHash }) => {
   const path = join(rootDir, rel);
   const raw = await readFile(path, 'utf-8').catch((err) => {
     if (err.code === 'ENOENT') return null;
@@ -221,14 +233,24 @@ const migratePromptTemplate = async (rootDir, { rel, oldHash, newHash }) => {
     console.log(`⚠️ ${rel}: customized (hash ${currentHash.slice(0, 8)}) — not auto-updating. Diff against data.sample to pick up the {{existingPlacesJson}} rename.`);
     return;
   }
-  const next = raw
-    .replace(/\{\{existingSettingsJson\}\}/g, '{{existingPlacesJson}}')
-    .replace(/"settings":\s*\[/g, '"places": [')
-    .replace(/Setting \/ World Bible Extraction/g, 'Place / World Bible Extraction')
-    .replace(/setting bible \(canonical/g, 'places bible (canonical')
-    .replace(/## Setting bible/g, '## Places bible');
-  await writeFile(path, next);
-  console.log(`📝 ${rel}: updated existingSettingsJson → existingPlacesJson + "settings": → "places":`);
+  // Pre-rename baseline → copy the bundled `data.sample` file verbatim.
+  // A surgical regex chain can't catch every prose substitution the rename
+  // touched (`## Existing settings` → `## Existing places`, `attach a setting
+  // to a scene` → `attach a place…`, etc.) without enumerating each one
+  // brittle-ly here; the sample twin already carries the full post-rename
+  // text. Hash check above guarantees we only overwrite an unmodified
+  // shipped default — customized templates land in the warning branch.
+  const samplePath = join(rootDir, sampleRel);
+  const sample = await readFile(samplePath, 'utf-8').catch((err) => {
+    if (err.code === 'ENOENT') return null;
+    throw err;
+  });
+  if (sample == null) {
+    console.warn(`⚠️ ${rel}: bundled sample missing at ${sampleRel} — skipping auto-update`);
+    return;
+  }
+  await writeFile(path, sample);
+  console.log(`📝 ${rel}: replaced pre-rename shipped default with current data.sample bundle`);
 };
 
 export default {
