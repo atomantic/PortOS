@@ -692,28 +692,6 @@ export async function listDirectoryByExtension(dir, { extensions, mapEntry, requ
 // Returns 0 + logs on failure (missing tool, permission denied, timeout) so
 // the Media Models endpoint stays responsive even on unusual systems instead
 // of throwing and 500ing the whole route.
-/**
- * SHA-256 a file as hex. One-shot read under 512 KB; streams above so multi-GB
- * videos don't blow heap. Threshold matches `server/services/backup.js`'s
- * snapshot manifest generator.
- */
-const SHA256_STREAM_THRESHOLD = 512 * 1024;
-export async function sha256File(path) {
-  const info = await stat(path);
-  if (info.size < SHA256_STREAM_THRESHOLD) {
-    const buf = await readFile(path);
-    return createHash('sha256').update(buf).digest('hex');
-  }
-  return new Promise((resolve, reject) => {
-    const hasher = createHash('sha256');
-    const stream = createReadStream(path);
-    stream.on('error', reject);
-    stream.pipe(hasher);
-    hasher.on('finish', () => resolve(hasher.digest('hex')));
-    hasher.on('error', reject);
-  });
-}
-
 export async function dirSize(path) {
   if (!existsSync(path)) return 0;
   if (IS_WIN) {
@@ -736,4 +714,26 @@ export async function dirSize(path) {
   }
   const kb = parseInt(result.stdout.split('\t')[0], 10) || 0;
   return kb * 1024;
+}
+
+/**
+ * SHA-256 a file as hex. One-shot read under 512 KB; streams above so multi-GB
+ * videos don't blow heap. Threshold matches `server/services/backup.js`'s
+ * snapshot manifest generator.
+ */
+const SHA256_STREAM_THRESHOLD = 512 * 1024;
+export async function sha256File(path) {
+  const info = await stat(path);
+  if (info.size < SHA256_STREAM_THRESHOLD) {
+    const buf = await readFile(path);
+    return createHash('sha256').update(buf).digest('hex');
+  }
+  return new Promise((resolve, reject) => {
+    const hasher = createHash('sha256');
+    const stream = createReadStream(path);
+    stream.on('error', reject);
+    stream.pipe(hasher);
+    hasher.on('finish', () => resolve(hasher.digest('hex')));
+    hasher.on('error', reject);
+  });
 }
