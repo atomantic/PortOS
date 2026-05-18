@@ -2,10 +2,13 @@
  * Universe Character — LLM expansion.
  *
  * One LLM call that fleshes out blank fields on a universe canon character
- * without clobbering populated content. Merge follows the CLAUDE.md
- * "LLM response merging — distinguish absent vs intentionally empty"
- * convention: missing key = preserve, empty value = clear, populated proposal
- * = fill only when target field is blank.
+ * without clobbering populated content. Strict "fill blanks only" semantics:
+ *   - key absent from LLM response → preserve existing value
+ *   - key present with empty string/array → IGNORED (no-op; expand flow has
+ *     no "clear" intent — an empty proposal just means the LLM had nothing
+ *     to add). Distinct from the CLAUDE.md merge convention used for
+ *     direct-user PATCHes, where empty CAN mean clear.
+ *   - key present with non-empty value → fill ONLY when target field is blank.
  */
 
 import { getUniverse, updateUniverse } from './universeBuilder.js';

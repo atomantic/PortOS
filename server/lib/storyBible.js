@@ -234,13 +234,14 @@ export function findBibleEntryByName(list, name) {
 // `id/createdAt/updatedAt` get freshly minted by the per-kind sanitizer; a
 // hallucinated `locked: true` would block user edits without a Lock UI click;
 // `sourceSeriesId` is provenance owned by series imports; `imageRefs` +
-// `primaryImageRef` are operational (set by the Render UI / extraction).
+// `primaryImageRef` + `referenceSheetImageRef` are operational (set by the
+// Render UI / reference-sheet completion handler).
 export function stripCanonControlFields(entry) {
   if (!entry || typeof entry !== 'object') return entry;
   const {
     id: _id, createdAt: _ca, updatedAt: _ua,
     locked: _locked, sourceSeriesId: _ssi,
-    imageRefs: _imgs, primaryImageRef: _primary,
+    imageRefs: _imgs, primaryImageRef: _primary, referenceSheetImageRef: _sheet,
     ...rest
   } = entry;
   return rest;

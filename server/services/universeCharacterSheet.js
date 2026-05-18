@@ -238,6 +238,15 @@ export function buildCharacterReferenceSheetPrompt(universe, character, { templa
 const sheetFilename = (universeId, characterId, generationId) =>
   `universe-${String(universeId).slice(0, 8)}-${String(characterId).slice(0, 8)}-sheet-${String(generationId).slice(0, 8)}.png`;
 
+// `(universeId, characterId) → latest generationId requested`. When a new
+// render starts for a character it claims the slot; when a render completes,
+// we only stamp `referenceSheetImageRef` if the slot STILL holds our
+// generationId (no newer render started during ours). Prevents an
+// older-but-slower render from clobbering a newer-but-finished one. The map
+// grows bounded by the number of characters ever rendered.
+const _latestPendingByCharacter = new Map();
+const pendingKey = (universeId, characterId) => `${universeId}:${characterId}`;
+
 /**
  * Returns immediately with `{ jobId, generationId, filename, path }`.
  * Deferred copy + character stamp run when imageGenEvents emits 'completed';
@@ -304,6 +313,11 @@ export async function renderCharacterReferenceSheet(universeId, entryId, options
   const pythonPath = settings.imageGen?.local?.pythonPath || null;
 
   const generationId = randomUUID();
+  // Claim the "latest pending render" slot for this character. onSheetComplete
+  // checks the slot still holds OUR id before stamping — guards against an
+  // older-but-slower render finishing after a newer one and overwriting the
+  // newer pointer with its stale filename.
+  _latestPendingByCharacter.set(pendingKey(universeId, entryId), generationId);
   // Attach listeners BEFORE generateImage spawns so a fast Python child can't
   // emit before we're listening. A timeout guard detaches if the runner
   // hangs or never emits a terminal event for this generationId — otherwise
@@ -376,18 +390,27 @@ export async function onSheetComplete({ universeId, entryId, generationId, sourc
   const destFilename = sheetFilename(universeId, entryId, generationId);
   const srcPath = join(PATHS.images, basename(sourceFilename));
   const destPath = join(PATHS.imageRefs, destFilename);
+  // ALWAYS copy the file — even superseded renders are kept on disk for
+  // rollback/comparison (they live at `data/image-refs/<...>-sheet-<gen>.png`
+  // with a unique per-generation filename).
   await copyFile(srcPath, destPath);
   console.log(`📸 Character sheet copied to image-refs: ${destFilename}`);
 
-  // Re-read so a concurrent edit on the character isn't clobbered;
-  // updateUniverse goes through the sanitizer which re-validates the pointer.
-  // Stamp inside the write queue against the freshest persisted universe so a
-  // concurrent user edit (or a sibling reference-sheet render landing close
-  // in time) can't clobber unrelated character fields. Stamp ONLY
-  // `referenceSheetImageRef` — the sheet lives in data/image-refs/ (served at
-  // /data/image-refs/), distinct from `imageRefs[]` which carries gallery
-  // filenames served at /data/images/. Polluting imageRefs would produce a
-  // 404 thumbnail in the CanonCard footer (wrong base URL).
+  // If a newer render has been started for this character while ours was in
+  // flight, the slot now holds someone else's generationId. Skip the stamp —
+  // the newer render will stamp its own filename when it finishes. Without
+  // this, an older-but-slower render could overwrite a newer-but-finished
+  // pointer.
+  const key = pendingKey(universeId, entryId);
+  if (_latestPendingByCharacter.get(key) !== generationId) {
+    console.log(`⏭️ Character sheet [${generationId.slice(0, 8)}] superseded by newer render — file saved, pointer not stamped`);
+    return { filename: destFilename, path: destPath, superseded: true };
+  }
+  // Stamp ONLY `referenceSheetImageRef` inside the write queue against the
+  // freshest persisted universe so a concurrent user edit (or sibling render
+  // landing close in time) can't clobber unrelated character fields. The
+  // sheet lives in data/image-refs/, distinct from `imageRefs[]` (gallery,
+  // /data/images/) — polluting imageRefs would 404 the CanonCard thumbnail.
   let stamped = false;
   await updateUniverse(universeId, (latest) => {
     const latestList = Array.isArray(latest.characters) ? latest.characters : [];
@@ -400,6 +423,9 @@ export async function onSheetComplete({ universeId, entryId, generationId, sourc
     stamped = true;
     return { characters: nextList };
   });
+  // Release the slot only after a successful stamp — a failed stamp leaves
+  // the slot owned by us so the next render-start cleanly overwrites it.
+  _latestPendingByCharacter.delete(key);
   if (!stamped) {
     console.log(`⚠️ Character ${entryId} not found post-render — sheet saved but not linked`);
     return null;

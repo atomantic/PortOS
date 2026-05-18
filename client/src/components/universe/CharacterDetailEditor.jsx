@@ -101,7 +101,7 @@ const LIST_SECTIONS = Object.freeze([
 ]);
 
 // Buffered text input — local draft state, commits to onCommit on blur.
-function DraftField({ field, value, onCommit, disabled }) {
+function DraftField({ field, value, onCommit, disabled, idPrefix }) {
   const [draft, setDraft] = useState(undefined);
   const current = draft !== undefined ? draft : (value || '');
   const commit = () => {
@@ -118,7 +118,10 @@ function DraftField({ field, value, onCommit, disabled }) {
     placeholder: field.placeholder,
     maxLength: field.max,
     className: 'w-full px-2 py-1 text-xs bg-port-bg border border-port-border rounded text-white disabled:opacity-50',
-    id: `chr-field-${field.name}`,
+    // idPrefix scopes the field id to one editor instance so two open
+    // character cards don't render duplicate `chr-field-pronouns` DOM ids
+    // and break the label/input association.
+    id: `chr-field-${idPrefix || 'unknown'}-${field.name}`,
   };
   return (
     <div className="space-y-0.5">
@@ -299,6 +302,7 @@ export default function CharacterDetailEditor({ entry, onPatch, onExpand, expand
               value={entry[field.name]}
               onCommit={(v) => patchField(field.name, v)}
               disabled={disabled}
+              idPrefix={entry.id}
             />
           ))}
         </CollapsibleSection>
