@@ -260,6 +260,22 @@ const emptyTemplate = () => ({
   llm: { provider: null, model: null },
 });
 
+// Stable serialization of the draft fields handleSave persists. Canon arrays
+// are excluded — they're owned by UniverseCanonSection/NounsStage's targeted
+// PATCHes, not this page's draft.
+const draftSnapshotForDirty = (d = {}) => JSON.stringify({
+  name: (d.name || '').trim(),
+  starterPrompt: d.starterPrompt || '',
+  logline: d.logline || '',
+  premise: d.premise || '',
+  styleNotes: d.styleNotes || '',
+  categories: d.categories || {},
+  compositeSheets: d.compositeSheets || [],
+  influences: ensureInfluences(d.influences),
+  locked: d.locked || {},
+  llm: d.llm || { provider: null, model: null },
+});
+
 
 // Renders a small lock-toggle button to the right of a field label. The user
 // clicks it to pin a field against AI refinement/expansion. The icon flips
@@ -562,6 +578,18 @@ export default function UniverseBuilder() {
   // categories instead of the stale closure value.
   const draftRef = useRef(null);
   useEffect(() => { draftRef.current = draft; }, [draft]);
+  // Server-side baseline of the draft. LLM-driven mutators (auto-sort /
+  // promote / generate) compare current draft against this baseline and
+  // flush via handleSave() when they diverge so the server doesn't operate
+  // on a stale copy.
+  const savedDraftSnapshotRef = useRef(draftSnapshotForDirty(emptyTemplate()));
+  const markDraftSaved = useCallback((snapshotSource) => {
+    savedDraftSnapshotRef.current = draftSnapshotForDirty(snapshotSource);
+  }, []);
+  const isDraftDirty = useCallback(
+    () => savedDraftSnapshotRef.current !== draftSnapshotForDirty(draftRef.current || draft),
+    [draft],
+  );
   // Page-level in-flight gate for the promote action. Ref + state pair so
   // the disable check stays synchronous (ref) while still triggering renders
   // (state). Promote writes to `universe[bibleField]` and `categories[key]`
@@ -662,7 +690,9 @@ export default function UniverseBuilder() {
     setCanonDirty(false);
     clearPendingCanonAdditions();
     if (!selectedId) {
-      setDraft(emptyTemplate());
+      const empty = emptyTemplate();
+      setDraft(empty);
+      markDraftSaved(empty);
       setRuns([]);
       return;
     }
@@ -673,7 +703,7 @@ export default function UniverseBuilder() {
     ]).then(([w, r]) => {
       if (cancelled) return;
       if (w) {
-        setDraft({
+        const hydrated = {
           ...w,
           // Ensure starter buckets exist, but preserve custom buckets returned
           // by the LLM or added by the user.
@@ -685,7 +715,9 @@ export default function UniverseBuilder() {
           influences: ensureInfluences(w.influences),
           locked: w.locked || {},
           llm: w.llm || { provider: null, model: null },
-        });
+        };
+        setDraft(hydrated);
+        markDraftSaved(hydrated);
       }
       setRuns(r);
     });
@@ -735,7 +767,7 @@ export default function UniverseBuilder() {
   const handleSave = async () => {
     if (!draft.name?.trim()) {
       toast.error('Name is required');
-      return;
+      return null;
     }
     setSaving(true);
     const basePayload = {
@@ -778,7 +810,7 @@ export default function UniverseBuilder() {
         if (!fresh) {
           setSaving(false);
           toast.error('Save failed: could not fetch latest canon — please try again');
-          return;
+          return null;
         }
         const additions = pendingCanonAdditionsRef.current;
         const baseCanon = {
@@ -805,6 +837,7 @@ export default function UniverseBuilder() {
         setCanonDirty(false);
         clearPendingCanonAdditions();
       }
+      markDraftSaved(payload);
       toast.success(selectedId ? 'World updated' : 'World created');
       setWorlds((prev) => {
         const without = prev.filter((w) => w.id !== result.id);
@@ -815,6 +848,7 @@ export default function UniverseBuilder() {
       // navigating is harmless (replace-style).
       if (result.id !== selectedId) goToWorld(result.id);
     }
+    return result;
   };
 
   const handleDelete = async () => {
@@ -1085,6 +1119,7 @@ export default function UniverseBuilder() {
         // those entries are now on the server.
         setCanonDirty(false);
         clearPendingCanonAdditions();
+        markDraftSaved(payload);
         // New record: route to its id so the canon section gates flip and
         // subsequent draft state reflects the persisted record.
         if (!selectedId) goToWorld(saved.id);
@@ -1128,7 +1163,7 @@ export default function UniverseBuilder() {
     if (Array.isArray(patch.compositeSheets)) next.compositeSheets = patch.compositeSheets;
     setDraft(next);
     if (selectedId && next.name?.trim()) {
-      const updated = await updateUniverse(selectedId, {
+      const refinePayload = {
         name: next.name.trim(),
         starterPrompt: next.starterPrompt || '',
         logline: next.logline || '',
@@ -1139,12 +1174,15 @@ export default function UniverseBuilder() {
         influences: ensureInfluences(next.influences),
         locked: next.locked || {},
         llm: next.llm || {},
-      }).catch((e) => { toast.error(`Auto-save after refine failed: ${e.message}`); return null; });
+      };
+      const updated = await updateUniverse(selectedId, refinePayload)
+        .catch((e) => { toast.error(`Auto-save after refine failed: ${e.message}`); return null; });
       if (updated) {
         setWorlds((prev) => {
           const without = prev.filter((w) => w.id !== updated.id);
           return [updated, ...without];
         });
+        markDraftSaved(refinePayload);
       }
     }
   };
@@ -1402,12 +1440,21 @@ export default function UniverseBuilder() {
   // single atomic patch server-side so the universe ends up consistent or
   // unchanged. Renames the LLM suggests are surfaced in the toast but not
   // auto-applied (the user can rename manually if they want it).
+  // Returns true when the draft is clean or save succeeded; false (with
+  // handleSave's own error toast already raised) when save failed.
+  const flushDraftIfDirty = useCallback(async () => {
+    if (!isDraftDirty()) return true;
+    const saved = await handleSave();
+    return !!saved;
+  }, [isDraftDirty]);
+
   const handleAutoSort = () => runUniverseAction({
     ref: autoSortingRef,
     setBusy: setAutoSorting,
     loadingMessage: 'Auto-sorting buckets with AI…',
     errorPrefix: 'Auto-sort failed',
     notSavedMessage: 'Save the universe first — auto-sort needs the persisted record',
+    preflight: flushDraftIfDirty,
     action: (capturedId) => autoSortBuckets(capturedId, {
       providerId: draft.llm?.provider || undefined,
       model: draft.llm?.model || undefined,
@@ -1417,19 +1464,22 @@ export default function UniverseBuilder() {
       // Merge only the reclassified buckets into the draft — wholesale-
       // replacing `categories` with the server snapshot would discard any
       // user edits to OTHER buckets made while the LLM call was in flight.
+      // Compute the merge from draftRef so React strict-mode's double-fire
+      // of state updaters doesn't double-stringify the dirty baseline.
       const sortedKeys = new Set((result.results || []).map((r) => r.sourceKey));
-      setDraft((d) => {
-        const next = { ...(d.categories || {}) };
-        for (const key of sortedKeys) {
-          if (updated.categories?.[key]) next[key] = updated.categories[key];
-        }
-        return {
-          ...d,
-          categories: next,
-          schemaVersion: updated.schemaVersion,
-          updatedAt: updated.updatedAt,
-        };
-      });
+      const baseDraft = draftRef.current || draft;
+      const nextCategories = { ...(baseDraft.categories || {}) };
+      for (const key of sortedKeys) {
+        if (updated.categories?.[key]) nextCategories[key] = updated.categories[key];
+      }
+      const newDraft = {
+        ...baseDraft,
+        categories: nextCategories,
+        schemaVersion: updated.schemaVersion,
+        updatedAt: updated.updatedAt,
+      };
+      setDraft(newDraft);
+      markDraftSaved(newDraft);
       const sortedCount = result.results?.length || 0;
       const renames = (result.results || []).filter((r) => r.suggestedKey);
       const summary = sortedCount
@@ -1443,6 +1493,10 @@ export default function UniverseBuilder() {
   });
 
   const handleGenerateInCategory = async (cat, count) => {
+    // Match the runUniverseAction-based handlers — flush dirty draft so the
+    // subsequent auto-save can't clobber unrelated fields with a stale spread.
+    const flushed = await flushDraftIfDirty();
+    if (!flushed) return;
     const current = draft.categories?.[cat]?.variations || [];
     const existingLabels = current.map((v) => v.label).filter(Boolean);
     const result = await generateCategoryVariations({
@@ -1480,6 +1534,7 @@ export default function UniverseBuilder() {
           const without = prev.filter((w) => w.id !== updated.id);
           return [updated, ...without];
         });
+        markDraftSaved(nextDraft);
         toast.success(`Added ${additionCount} variation${additionCount === 1 ? '' : 's'} to ${humanizeCategory(cat)} — saved`);
         return;
       }
@@ -1498,6 +1553,7 @@ export default function UniverseBuilder() {
       loadingMessage: `Promoting "${variation.label}" to canon…`,
       errorPrefix: 'Promote failed',
       notSavedMessage: 'Save the universe first — promote needs the persisted record',
+      preflight: flushDraftIfDirty,
       action: (capturedId) => promoteVariationToCanon(capturedId, {
         category,
         label: variation.label,
@@ -1510,15 +1566,20 @@ export default function UniverseBuilder() {
         // Selective merge: only the canon array + the affected category bucket
         // changed server-side. Preserve every other draft field (the user may
         // have typed into logline/premise/influences during the LLM call).
-        setDraft((d) => ({
-          ...d,
+        // Compute outside setDraft so strict-mode's double-invoke doesn't
+        // re-stringify the dirty baseline.
+        const baseDraft = draftRef.current || draft;
+        const newDraft = {
+          ...baseDraft,
           characters: updated.characters,
           settings: updated.settings,
           objects: updated.objects,
-          categories: { ...d.categories, [result.removed.category]: updated.categories?.[result.removed.category] },
+          categories: { ...baseDraft.categories, [result.removed.category]: updated.categories?.[result.removed.category] },
           schemaVersion: updated.schemaVersion,
           updatedAt: updated.updatedAt,
-        }));
+        };
+        setDraft(newDraft);
+        markDraftSaved(newDraft);
         return `Promoted "${variation.label}" → ${result.targetKind} canon`;
       },
     });

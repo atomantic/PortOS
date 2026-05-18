@@ -780,16 +780,41 @@ export async function insertUniverseWithId(input = {}) {
   });
 }
 
-export async function updateUniverse(id, patch = {}) {
+export async function updateUniverse(id, patchOrMutator = {}) {
   // The queued section covers only the universe-builder read/modify/write
   // cycle. The cross-file media-collection rename runs *after* the queue
   // releases so a slow/stuck collection write can't block unrelated universe
   // mutators (the universe row is already persisted by then).
-  const { merged, nameChanged } = await queueUniverseWrite(async () => {
+  //
+  // `patchOrMutator` overloads:
+  //   - Plain object: patch is applied directly inside the queue (legacy).
+  //   - `async (latest) => patch | null`: mutator runs INSIDE the queue with
+  //     the freshest persisted record so callers whose read-modify-write
+  //     straddles a slow LLM call can't race a concurrent edit. Returning
+  //     `null`/`undefined` short-circuits the write and resolves with the
+  //     unchanged record (no `updatedAt` bump, no rename cascade, no
+  //     `recordUpdated` emit).
+  const isMutator = typeof patchOrMutator === 'function';
+  const { merged, nameChanged, skipped } = await queueUniverseWrite(async () => {
     const state = await readState();
     const idx = state.universes.findIndex((w) => w.id === id);
     if (idx < 0) throw makeErr(`Universe not found: ${id}`, ERR_NOT_FOUND);
     const cur = state.universes[idx];
+
+    let patch;
+    if (isMutator) {
+      patch = await patchOrMutator(cur);
+      if (patch === null || patch === undefined) {
+        return { merged: cur, nameChanged: false, skipped: true };
+      }
+      // `typeof === 'object'` matches arrays and null — reject both so a stray
+      // `return []` can't slip through and silently no-op the categories merge.
+      if (Array.isArray(patch) || typeof patch !== 'object') {
+        throw makeErr('updateUniverse mutator must return a plain object or null', ERR_VALIDATION);
+      }
+    } else {
+      patch = patchOrMutator;
+    }
 
     // Merge `categories` per-key — a partial PATCH that only includes
     // `landscapes` must NOT wipe characters/structures/etc. Whole categories
@@ -846,8 +871,9 @@ export async function updateUniverse(id, patch = {}) {
     if (!mergedRecord) throw makeErr('Invalid universe payload', ERR_VALIDATION);
     state.universes[idx] = mergedRecord;
     await writeState(state);
-    return { merged: mergedRecord, nameChanged: mergedRecord.name !== cur.name };
+    return { merged: mergedRecord, nameChanged: mergedRecord.name !== cur.name, skipped: false };
   });
+  if (skipped) return merged;
   // Cascade rename onto the linked media collection — log but don't fail
   // the save: a stale collection name is recoverable, a failed save isn't.
   // Runs OUTSIDE the queue so the media-collections write tail can't stall

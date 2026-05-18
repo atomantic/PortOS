@@ -259,6 +259,61 @@ describe("universeBuilder service", () => {
     ).rejects.toMatchObject({ code: svc.ERR_NOT_FOUND });
   });
 
+  it("updateUniverse accepts a mutator(latest) callback that runs inside the queue", async () => {
+    const w = await seedWorld({ logline: "before" });
+    const mutator = vi.fn(async (latest) => {
+      expect(latest.id).toBe(w.id);
+      return { logline: `${latest.logline} → after` };
+    });
+    const patched = await svc.updateUniverse(w.id, mutator);
+    expect(mutator).toHaveBeenCalledTimes(1);
+    expect(patched.logline).toBe("before → after");
+  });
+
+  it("updateUniverse short-circuits with no write when the mutator returns null", async () => {
+    const w = await seedWorld();
+    const beforeUpdatedAt = w.updatedAt;
+    const patched = await svc.updateUniverse(w.id, async () => null);
+    // No write happened: updatedAt unchanged, no rename cascade fired.
+    expect(patched.updatedAt).toBe(beforeUpdatedAt);
+    expect(patched.id).toBe(w.id);
+  });
+
+  it("updateUniverse mutator that throws propagates without writing", async () => {
+    const w = await seedWorld({ logline: "untouched" });
+    await expect(
+      svc.updateUniverse(w.id, async () => { throw new Error("mutator boom"); }),
+    ).rejects.toThrow("mutator boom");
+    const fresh = await svc.getUniverse(w.id);
+    expect(fresh.logline).toBe("untouched");
+  });
+
+  it("updateUniverse mutator returning a non-object value throws ERR_VALIDATION", async () => {
+    const w = await seedWorld();
+    await expect(
+      svc.updateUniverse(w.id, async () => "not-an-object"),
+    ).rejects.toMatchObject({ code: svc.ERR_VALIDATION });
+    // Arrays are `typeof 'object'` but would silently no-op the categories
+    // merge — reject them explicitly.
+    await expect(
+      svc.updateUniverse(w.id, async () => []),
+    ).rejects.toMatchObject({ code: svc.ERR_VALIDATION });
+  });
+
+  it("updateUniverse mutator sees concurrent writes that landed before it ran (queued)", async () => {
+    const w = await seedWorld({ logline: "v0" });
+    // Two updates issued in parallel against the same record. The queue
+    // serializes them: the mutator sees the result of the first write.
+    const [first, second] = await Promise.all([
+      svc.updateUniverse(w.id, { logline: "v1" }),
+      svc.updateUniverse(w.id, async (latest) => ({
+        logline: `${latest.logline}+v2`,
+      })),
+    ]);
+    expect(first.logline).toBe("v1");
+    expect(second.logline).toBe("v1+v2");
+  });
+
   it("updateUniverse cascades a name change onto the linked media collection", async () => {
     const collections = await import("./mediaCollections.js");
     const w = await seedWorld();

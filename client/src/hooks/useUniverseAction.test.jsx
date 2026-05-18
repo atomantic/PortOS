@@ -140,6 +140,65 @@ describe('useUniverseAction', () => {
     expect(toastMock.success).not.toHaveBeenCalled();
   });
 
+  it('preflight returning false aborts before action, resets ref + busy', async () => {
+    const { run } = buildHook();
+    const ref = { current: false };
+    const setBusy = vi.fn();
+    const action = vi.fn();
+    const preflight = vi.fn(async () => false);
+    const out = await run({
+      ref, setBusy,
+      loadingMessage: 'go',
+      action,
+      preflight,
+    });
+    expect(out).toBeNull();
+    expect(preflight).toHaveBeenCalledTimes(1);
+    expect(action).not.toHaveBeenCalled();
+    expect(toastMock.loading).not.toHaveBeenCalled();
+    expect(ref.current).toBe(false);
+    expect(setBusy).toHaveBeenNthCalledWith(1, true);
+    expect(setBusy).toHaveBeenNthCalledWith(2, false);
+  });
+
+  it('preflight rejecting (throw) aborts the same as returning false', async () => {
+    const { run } = buildHook();
+    const ref = { current: false };
+    const action = vi.fn();
+    const preflight = vi.fn(async () => { throw new Error('save failed'); });
+    const out = await run({ ref, action, preflight });
+    expect(out).toBeNull();
+    expect(action).not.toHaveBeenCalled();
+    expect(ref.current).toBe(false);
+  });
+
+  it('preflight returning true allows the action to run', async () => {
+    const { run } = buildHook();
+    const ref = { current: false };
+    const action = vi.fn(async (id) => ({ universe: { id, name: 'after-flush' } }));
+    const preflight = vi.fn(async () => true);
+    const out = await run({
+      ref,
+      action,
+      preflight,
+      onFreshResult: () => 'ok',
+    });
+    expect(preflight).toHaveBeenCalledTimes(1);
+    expect(action).toHaveBeenCalledWith('u1');
+    expect(out).toEqual({ universe: { id: 'u1', name: 'after-flush' } });
+  });
+
+  it('preflight runs AFTER the ref guard so double-clicks short-circuit before flushing', async () => {
+    const { run } = buildHook();
+    const ref = { current: true };
+    const preflight = vi.fn(async () => true);
+    const action = vi.fn();
+    const out = await run({ ref, action, preflight });
+    expect(out).toBeNull();
+    expect(preflight).not.toHaveBeenCalled();
+    expect(action).not.toHaveBeenCalled();
+  });
+
   it('unmount before action resolves: ref/busy NOT reset, but setWorlds still fires (cross-navigation list update)', async () => {
     const setWorlds = vi.fn();
     const { run, mountedRef } = buildHook({ setWorlds });

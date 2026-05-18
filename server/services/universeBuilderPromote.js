@@ -105,6 +105,27 @@ ${outputContract}
 - Stay tonally consistent with the LOGLINE / STYLE NOTES / EMBRACE INFLUENCES above when present.`;
 };
 
+// Find a canon entry that collides with `label` (and, for settings, the
+// slugline derived from `label` or `secondarySlug`). Run pre-LLM against
+// the prompt-building snapshot AND post-LLM against the latest persisted
+// canon — keeps the duplicate-detection logic in one place.
+const findCanonCollision = (canon, label, targetKind, secondarySlug = '') => {
+  const direct = findBibleEntryByName(canon, label);
+  if (direct) return direct;
+  if (targetKind !== 'settings') return null;
+  const needleSlug = normalizeSlugline(label);
+  const secondary = normalizeSlugline(secondarySlug);
+  if (!needleSlug && !secondary) return null;
+  return canon.find((e) => {
+    if (!e || typeof e !== 'object') return false;
+    const eSlug = normalizeSlugline(e.slugline);
+    const eName = normalizeSlugline(e.name);
+    if (needleSlug && (eSlug === needleSlug || eName === needleSlug)) return true;
+    if (secondary && (eSlug === secondary || eName === secondary)) return true;
+    return false;
+  }) || null;
+};
+
 const extractEntryJson = (raw, kind) => {
   if (!raw || typeof raw !== 'string') throw new Error('Empty LLM response');
   const predicate = SHAPE_PREDICATE[kind] || isCharacterShape;
@@ -204,18 +225,7 @@ export async function promoteVariationToCanon(universeId, options = {}) {
   // dash-variant or slug-vs-name promotion doesn't slip past name-only
   // matching.
   const existingCanon = Array.isArray(universe[bibleField]) ? universe[bibleField] : [];
-  let collision = findBibleEntryByName(existingCanon, variation.label);
-  if (!collision && targetKind === 'settings') {
-    const needleSlug = normalizeSlugline(variation.label);
-    if (needleSlug) {
-      collision = existingCanon.find((e) => {
-        if (!e || typeof e !== 'object') return false;
-        if (normalizeSlugline(e.slugline) === needleSlug) return true;
-        if (normalizeSlugline(e.name) === needleSlug) return true;
-        return false;
-      });
-    }
-  }
+  const collision = findCanonCollision(existingCanon, variation.label, targetKind);
   if (collision) {
     throw new ServerError(
       `Canon ${targetKind} "${variation.label}" already exists — rename the variation or open the existing entry`,
@@ -278,15 +288,61 @@ export async function promoteVariationToCanon(universeId, options = {}) {
   // Build the patch: append the new canon entry + drop the source variation
   // from its bucket. Both writes go through one updateUniverse so the
   // transition is atomic (success = entry in canon AND variation gone).
-  const nextCanon = [...existingCanon, sanitized];
-  const nextVariations = variations.filter((_, i) => i !== sourceIdx);
-  const patch = {
-    [bibleField]: nextCanon,
-    categories: {
-      [categoryKey]: { kind: bucket.kind, variations: nextVariations },
-    },
-  };
-  const updated = await updateUniverse(universeId, patch);
+  //
+  // The mutator runs INSIDE the file-level write queue so a concurrent edit
+  // between the (pre-LLM) duplicate check and the persist can't slip a
+  // colliding canon entry in, and the source variation is re-located by
+  // label on the freshest persisted bucket — the original `sourceIdx` is
+  // stale once the queue releases.
+  const updated = await updateUniverse(universeId, async (latest) => {
+    const latestBucket = latest.categories?.[categoryKey];
+    if (!latestBucket) {
+      throw new ServerError(
+        `Category "${categoryKey}" was deleted while promoting — re-open the universe and try again`,
+        { status: 409, code: 'UNIVERSE_PROMOTE_CATEGORY_GONE' },
+      );
+    }
+    const latestVariations = Array.isArray(latestBucket.variations) ? latestBucket.variations : [];
+    // Re-locate by label (case-insensitive). The pre-LLM `sourceIdx` is
+    // stale — concurrent edits could have reordered or removed entries.
+    const latestSourceIdx = latestVariations.findIndex(
+      (v) => typeof v?.label === 'string' && v.label.toLowerCase() === needle,
+    );
+    if (latestSourceIdx < 0) {
+      throw new ServerError(
+        `Variation "${rawLabel}" was removed from bucket "${categoryKey}" during promotion`,
+        { status: 409, code: 'UNIVERSE_PROMOTE_VARIATION_GONE' },
+      );
+    }
+    // Re-check the duplicate-name collision against the LATEST canon — a
+    // concurrent promote (or manual canon add) in another tab could have
+    // landed an entry with the same name while the LLM was thinking. The
+    // sanitized entry's slugline is included as a secondary key for the
+    // settings case, since the LLM might have emitted a clean slugline
+    // that collides with an existing entry whose name doesn't match.
+    const latestCanon = Array.isArray(latest[bibleField]) ? latest[bibleField] : [];
+    const lateCollision = findCanonCollision(latestCanon, sanitized.name, targetKind, sanitized.slugline);
+    if (lateCollision) {
+      throw new ServerError(
+        `Canon ${targetKind} "${sanitized.name}" already exists — rename the variation or open the existing entry`,
+        {
+          status: 409,
+          code: 'UNIVERSE_PROMOTE_DUPLICATE',
+          context: { details: { existingId: lateCollision.id } },
+        },
+      );
+    }
+
+    return {
+      [bibleField]: [...latestCanon, sanitized],
+      categories: {
+        [categoryKey]: {
+          kind: latestBucket.kind,
+          variations: latestVariations.filter((_, i) => i !== latestSourceIdx),
+        },
+      },
+    };
+  });
   // updateUniverse re-runs sanitizers; pull the merged entry back out by
   // id so the response reflects the canonical persisted shape.
   const persisted = (updated[bibleField] || []).find((e) => e.id === sanitized.id) || sanitized;

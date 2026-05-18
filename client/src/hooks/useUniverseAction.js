@@ -14,6 +14,11 @@ import toast from '../components/ui/Toast';
 // toasts only fire from this hook (per CLAUDE.md "Custom catch ⇒ silent").
 // `onFreshResult(result, { capturedId })` runs only when the user is still
 // on the same universe; return a string to use as the success toast.
+// `preflight()` runs AFTER the ref/savedId guards (so duplicate clicks short-
+// circuit before it fires) but BEFORE the loading toast + LLM action. Return
+// a falsy value to abort (the preflight is responsible for any failure toast).
+// Used to flush a dirty draft via handleSave() so the LLM action operates
+// against the user's latest local edits rather than a stale persisted copy.
 export default function useUniverseAction({ selectedId, mountedRef, setWorlds }) {
   return useCallback(async function runUniverseAction({
     ref,
@@ -23,6 +28,7 @@ export default function useUniverseAction({ selectedId, mountedRef, setWorlds })
     notSavedMessage = 'Save the universe first',
     action,
     onFreshResult,
+    preflight,
   }) {
     if (!selectedId) {
       toast.error(notSavedMessage);
@@ -31,6 +37,16 @@ export default function useUniverseAction({ selectedId, mountedRef, setWorlds })
     if (ref?.current) return null;
     if (ref) ref.current = true;
     setBusy?.(true);
+    if (typeof preflight === 'function') {
+      const ok = await preflight().catch(() => false);
+      if (!ok) {
+        if (mountedRef.current) {
+          if (ref) ref.current = false;
+          setBusy?.(false);
+        }
+        return null;
+      }
+    }
     const capturedId = selectedId;
     const toastId = loadingMessage ? toast.loading(loadingMessage) : null;
 

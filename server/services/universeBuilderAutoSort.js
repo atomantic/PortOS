@@ -175,61 +175,66 @@ export async function autoSortOtherBuckets(universeId, options = {}) {
 
   const classifications = extractClassifications(raw);
 
-  // Re-fetch the latest universe state immediately before the write so
-  // concurrent edits made to OTHER buckets (in another tab) during the
-  // LLM call aren't overwritten. We still build the patch keyed only on
-  // the buckets the LLM classified, but each bucket's spread uses the
-  // freshest persisted shape — so a variation added mid-LLM-call to a
-  // bucket that's about to be reclassified is preserved.
-  const latest = await getUniverse(universeId);
-  const latestCategories = latest.categories || {};
-  const byKey = new Map(
-    Object.entries(latestCategories)
-      .filter(([, c]) => c && c.kind === 'other')
-      .map(([key, c]) => [key, c]),
-  );
-  const categoriesPatch = {};
-  const results = [];
-  const seenSourceKeys = new Set();
-
-  for (const c of classifications) {
-    // Defensive per-entry kind gate. The shape predicate above only filters
-    // which parsed block extractJson returns — when only one block parses,
-    // it's returned as a fallback even if its entries fail the predicate.
-    // Without this guard a hallucinated `kind: "magic"` would flow into the
-    // categories patch and the universe sanitizer would silently coerce it
-    // to 'other', undoing the auto-sort the user just ran.
-    if (!c || typeof c !== 'object') continue;
-    if (typeof c.key !== 'string') continue;
-    if (!SORTABLE_KINDS.includes(c.kind)) continue;
-    const sourceKey = normalizeCategoryKey(c.key);
-    if (!sourceKey || seenSourceKeys.has(sourceKey)) continue;
-    // Drop classifications for buckets that no longer exist or are no
-    // longer kind:'other' on the latest state — a concurrent assignBucketKind
-    // or removeCategory call would otherwise be silently reverted here.
-    const latestBucket = byKey.get(sourceKey);
-    if (!latestBucket) continue;
-    seenSourceKeys.add(sourceKey);
-
-    // updateUniverse does per-key replacement on categories (not per-field
-    // merge), so spread the whole latest bucket record to preserve any
-    // variations / fields added mid-flight.
-    categoriesPatch[sourceKey] = { ...latestBucket, kind: c.kind };
-
-    const suggested = typeof c.suggestedKey === 'string' ? normalizeCategoryKey(c.suggestedKey) : '';
-    const suggestedKey = (suggested && suggested !== sourceKey) ? suggested : null;
-
-    results.push({ sourceKey, kind: c.kind, suggestedKey });
-  }
-
-  if (results.length === 0) {
-    throw new ServerError(
-      'LLM returned no valid classifications for any bucket. Try a different model or rerun.',
-      { status: 502, code: 'UNIVERSE_AUTOSORT_NO_CLASSIFICATIONS' },
+  // Resolve classifications into a patch INSIDE the write queue so the
+  // read-modify-write straddling the LLM call can't lose a concurrent edit.
+  // The mutator receives the freshest persisted record and rebuilds the
+  // categories patch keyed off the latest `kind: 'other'` buckets — bucket
+  // spreads use the latest variations[] so a variation added mid-LLM-call
+  // is preserved; reclassifications targeting buckets the user deleted or
+  // already auto-sorted from another tab are dropped silently.
+  let results = [];
+  const updated = await updateUniverse(universeId, async (latest) => {
+    const latestCategories = latest.categories || {};
+    const byKey = new Map(
+      Object.entries(latestCategories)
+        .filter(([, c]) => c && c.kind === 'other')
+        .map(([key, c]) => [key, c]),
     );
-  }
+    const categoriesPatch = {};
+    const seenSourceKeys = new Set();
+    const localResults = [];
 
-  const updated = await updateUniverse(universeId, { categories: categoriesPatch });
+    for (const c of classifications) {
+      // Defensive per-entry kind gate. The shape predicate above only filters
+      // which parsed block extractJson returns — when only one block parses,
+      // it's returned as a fallback even if its entries fail the predicate.
+      // Without this guard a hallucinated `kind: "magic"` would flow into the
+      // categories patch and the universe sanitizer would silently coerce it
+      // to 'other', undoing the auto-sort the user just ran.
+      if (!c || typeof c !== 'object') continue;
+      if (typeof c.key !== 'string') continue;
+      if (!SORTABLE_KINDS.includes(c.kind)) continue;
+      const sourceKey = normalizeCategoryKey(c.key);
+      if (!sourceKey || seenSourceKeys.has(sourceKey)) continue;
+      // Drop classifications for buckets that no longer exist or are no
+      // longer kind:'other' on the latest state — a concurrent
+      // assignBucketKind or removeCategory call would otherwise be silently
+      // reverted here.
+      const latestBucket = byKey.get(sourceKey);
+      if (!latestBucket) continue;
+      seenSourceKeys.add(sourceKey);
+
+      // updateUniverse does per-key replacement on categories (not per-field
+      // merge), so spread the whole latest bucket record to preserve any
+      // variations / fields added mid-flight.
+      categoriesPatch[sourceKey] = { ...latestBucket, kind: c.kind };
+
+      const suggested = typeof c.suggestedKey === 'string' ? normalizeCategoryKey(c.suggestedKey) : '';
+      const suggestedKey = (suggested && suggested !== sourceKey) ? suggested : null;
+
+      localResults.push({ sourceKey, kind: c.kind, suggestedKey });
+    }
+
+    if (localResults.length === 0) {
+      throw new ServerError(
+        'LLM returned no valid classifications for any bucket. Try a different model or rerun.',
+        { status: 502, code: 'UNIVERSE_AUTOSORT_NO_CLASSIFICATIONS' },
+      );
+    }
+
+    results = localResults;
+    return { categories: categoriesPatch };
+  });
 
   console.log(
     `🪄 Universe Builder auto-sort complete — universe=${universeId.slice(0, 8)} classified=${results.length} runId=${runId.slice(0, 8)}`,
