@@ -80,9 +80,16 @@ export function resolveEffectiveModel(provider, callerModel) {
 
 /**
  * Resolve `{provider, selectedModel}` for an LLM caller. Prefers
- * `providerId` (swallowing errors so a stale id falls through), then
- * `getActiveProvider`. Returns `{provider: null, selectedModel: null}`
- * when nothing resolves so callers throw their own typed error.
+ * `providerId` (swallowing errors so a stale id falls through to
+ * `getActiveProvider`). Returns `{provider: null, selectedModel: null}`
+ * when neither resolves a provider (e.g. no providers configured),
+ * so callers throw their own typed error.
+ *
+ * Note: errors from `getActiveProvider` (e.g. toolkit not initialized)
+ * still propagate — only the stale-id case is swallowed. This mirrors
+ * the inline pattern this helper replaced. If a caller wants total
+ * "always-null on failure" semantics, wrap the call in their own
+ * try/catch.
  *
  * @param {object} args
  * @param {string} [args.providerId]

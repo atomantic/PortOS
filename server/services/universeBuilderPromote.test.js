@@ -313,6 +313,33 @@ describe('universeBuilderPromote — error paths', () => {
     expect(runPromptThroughProviderMock).not.toHaveBeenCalled();
   });
 
+  it('409s on settings slugline collision (name differs, slugline matches)', async () => {
+    // Variation label maps to an existing setting via slugline normalization
+    // — the name-only check would miss this, but the kind-specific slugline
+    // fallback catches it.
+    const existing = [{
+      name: 'Foundry City Bay',
+      slugline: 'EXT. FOUNDRY CITY — DAY',
+      description: 'A pre-existing canon entry keyed by slugline.',
+    }];
+    const w = await seedUniverseWithBucket(
+      {
+        landscapes: {
+          kind: 'settings',
+          variations: [{ label: 'EXT. FOUNDRY CITY - DAY', prompt: 'dawn light over docks' }],
+        },
+      },
+      { settings: existing },
+    );
+    await expect(
+      promoteSvc.promoteVariationToCanon(w.id, {
+        category: 'landscapes',
+        label: 'EXT. FOUNDRY CITY - DAY',
+      }),
+    ).rejects.toMatchObject({ status: 409, code: 'UNIVERSE_PROMOTE_DUPLICATE' });
+    expect(runPromptThroughProviderMock).not.toHaveBeenCalled();
+  });
+
   it('throws 502 when the LLM returns invalid JSON', async () => {
     const w = await seedUniverseWithBucket({
       landscapes: {
