@@ -7,7 +7,7 @@ import {
   Database, Brain, CheckCircle2, AlertCircle, Clock,
   RefreshCcw, Timer,
   Target, Sword, Fingerprint, HeartPulse, ChevronDown, ChevronRight,
-  Lock, Globe, Info
+  Lock, Globe, Info, Sparkles, Film
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import socket from '../services/socket';
@@ -411,7 +411,9 @@ const SYNC_CATEGORY_META = [
   { key: 'goals', label: 'Goals', icon: Target, description: 'Life goals, milestones, progress tracking' },
   { key: 'character', label: 'Character', icon: Sword, description: 'XP, HP, level, events, character sheet' },
   { key: 'digitalTwin', label: 'Digital Twin', icon: Fingerprint, description: 'Identity, chronotype, longevity, feedback' },
-  { key: 'meatspace', label: 'Meatspace', icon: HeartPulse, description: 'Daily logs, blood tests, body metrics, eyes' }
+  { key: 'meatspace', label: 'Meatspace', icon: HeartPulse, description: 'Daily logs, blood tests, body metrics, eyes' },
+  { key: 'universe', label: 'Universe', icon: Sparkles, description: 'Universe Builder canon: characters, places, objects' },
+  { key: 'pipeline', label: 'Pipeline', icon: Film, description: 'Series + issues record state (no image/video blobs)' }
 ];
 
 // Snapshot categories (excludes delta-based brain/memory)

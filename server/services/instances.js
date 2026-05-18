@@ -155,7 +155,9 @@ const DEFAULT_SYNC_CATEGORIES = {
   goals: false,
   character: false,
   digitalTwin: false,
-  meatspace: false
+  meatspace: false,
+  universe: false,
+  pipeline: false
 };
 
 export { DEFAULT_SYNC_CATEGORIES };

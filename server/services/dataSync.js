@@ -20,6 +20,9 @@ const CHRONOTYPE_FILE = join(PATHS.digitalTwin, 'chronotype.json');
 const LONGEVITY_FILE = join(PATHS.digitalTwin, 'longevity.json');
 const FEEDBACK_FILE = join(PATHS.digitalTwin, 'feedback.json');
 const MEATSPACE_DIR = PATHS.meatspace;
+const PIPELINE_SERIES_FILE = join(PATHS.data, 'pipeline-series.json');
+const PIPELINE_ISSUES_FILE = join(PATHS.data, 'pipeline-issues.json');
+const UNIVERSE_BUILDER_FILE = join(PATHS.data, 'universe-builder.json');
 
 const MEATSPACE_FILES = {
   'daily-log.json': { arrayKey: 'entries', idField: 'date' },
@@ -335,13 +338,110 @@ async function applyMeatspaceRemote(remoteData) {
   return { applied: totalApplied > 0, count: totalApplied };
 }
 
+// --- Category: Universe ---
+
+// Pipeline + universe sync covers the creative pipeline state (series, issues,
+// universes) over Tailscale between same-network peers. Same-content image and
+// video blobs continue to flow through the share-bucket system (cloud-synced
+// folders) — those are too large for the snapshot-every-cycle pattern this
+// service uses. Sync here is record-level only: serialized state for the
+// records, no media blobs.
+
+async function getUniverseSnapshot() {
+  const data = await readJSONFile(UNIVERSE_BUILDER_FILE, { universes: [] });
+  // Skip `runs[]` — that's local LLM run history (transcripts, ephemeral),
+  // not user-edited universe state. Each peer keeps its own history.
+  const universesOnly = { universes: Array.isArray(data.universes) ? data.universes : [] };
+  return { data: universesOnly, checksum: computeChecksum(universesOnly) };
+}
+
+async function applyUniverseRemote(remoteData) {
+  if (!remoteData) return { applied: false, count: 0 };
+
+  const local = await readJSONFile(UNIVERSE_BUILDER_FILE, { universes: [], runs: [] });
+  const { merged: mergedUniverses, changed } = mergeArraysByKey(
+    local.universes || [],
+    remoteData.universes || [],
+    'id',
+    'updatedAt'
+  );
+
+  if (!changed) return { applied: false, count: 0 };
+
+  await ensureDir(PATHS.data);
+  await writeFile(
+    UNIVERSE_BUILDER_FILE,
+    JSON.stringify({ ...local, universes: mergedUniverses }, null, 2)
+  );
+  console.log(`🔄 Universe sync: merged ${mergedUniverses.length} universe(s)`);
+  return { applied: true, count: mergedUniverses.length };
+}
+
+// --- Category: Pipeline ---
+
+async function getPipelineSnapshot() {
+  const seriesFile = await readJSONFile(PIPELINE_SERIES_FILE, { series: [] });
+  const issuesFile = await readJSONFile(PIPELINE_ISSUES_FILE, { issues: [] });
+  const data = {
+    series: Array.isArray(seriesFile.series) ? seriesFile.series : [],
+    issues: Array.isArray(issuesFile.issues) ? issuesFile.issues : [],
+  };
+  return { data, checksum: computeChecksum(data) };
+}
+
+async function applyPipelineRemote(remoteData) {
+  if (!remoteData) return { applied: false, count: 0 };
+
+  const localSeries = await readJSONFile(PIPELINE_SERIES_FILE, { series: [] });
+  const localIssues = await readJSONFile(PIPELINE_ISSUES_FILE, { issues: [] });
+
+  // Series merge first — issues reference seriesId so a series insert before
+  // its issues keeps the local store internally consistent during the write
+  // (an issue referencing a not-yet-merged series is an orphan, which the
+  // pipeline UI tolerates but the sync log line would lie about).
+  const { merged: mergedSeries, changed: seriesChanged } = mergeArraysByKey(
+    localSeries.series || [],
+    remoteData.series || [],
+    'id',
+    'updatedAt'
+  );
+  const { merged: mergedIssues, changed: issuesChanged } = mergeArraysByKey(
+    localIssues.issues || [],
+    remoteData.issues || [],
+    'id',
+    'updatedAt'
+  );
+
+  if (!seriesChanged && !issuesChanged) return { applied: false, count: 0 };
+
+  await ensureDir(PATHS.data);
+  if (seriesChanged) {
+    await writeFile(
+      PIPELINE_SERIES_FILE,
+      JSON.stringify({ ...localSeries, series: mergedSeries }, null, 2)
+    );
+  }
+  if (issuesChanged) {
+    await writeFile(
+      PIPELINE_ISSUES_FILE,
+      JSON.stringify({ ...localIssues, issues: mergedIssues }, null, 2)
+    );
+  }
+
+  const totalApplied = mergedSeries.length + mergedIssues.length;
+  console.log(`🔄 Pipeline sync: merged ${mergedSeries.length} series + ${mergedIssues.length} issue(s)`);
+  return { applied: true, count: totalApplied };
+}
+
 // --- Public API ---
 
 const CATEGORIES = {
   goals: { getSnapshot: getGoalsSnapshot, applyRemote: applyGoalsRemote },
   character: { getSnapshot: getCharacterSnapshot, applyRemote: applyCharacterRemote },
   digitalTwin: { getSnapshot: getDigitalTwinSnapshot, applyRemote: applyDigitalTwinRemote },
-  meatspace: { getSnapshot: getMeatspaceSnapshot, applyRemote: applyMeatspaceRemote }
+  meatspace: { getSnapshot: getMeatspaceSnapshot, applyRemote: applyMeatspaceRemote },
+  universe: { getSnapshot: getUniverseSnapshot, applyRemote: applyUniverseRemote },
+  pipeline: { getSnapshot: getPipelineSnapshot, applyRemote: applyPipelineRemote }
 };
 
 export function getSupportedCategories() {
