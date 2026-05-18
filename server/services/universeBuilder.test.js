@@ -1458,6 +1458,42 @@ describe("universeBuilder service", () => {
       expect(list[0].compositeSheets[0].id).toBe("sheet-keep-me");
     });
 
+    it("legacy universe (no variation ids on disk) gets unstable in-memory ids until persisted, then stable after a write", async () => {
+      // Plant a pre-PR universe shape with no variation/sheet ids. Reads
+      // through readState() mint fresh UUIDs each call because the migration
+      // is not persisted there (race-safety against concurrent writers — see
+      // readState() docstring). After a no-op updateUniverse() forces a write,
+      // ids land on disk and every subsequent read returns the same ones.
+      fileStore.set("/mock/data/universe-builder.json", {
+        universes: [
+          {
+            id: "legacy-universe",
+            name: "Legacy",
+            schemaVersion: svc.CURRENT_SCHEMA_VERSION,
+            categories: {
+              landscapes: { kind: "places", variations: [{ label: "L1", prompt: "p1" }] },
+            },
+            compositeSheets: [],
+            createdAt: "2024-01-01T00:00:00Z",
+          },
+        ],
+        runs: [],
+      });
+      const a = await svc.getUniverse("legacy-universe");
+      const b = await svc.getUniverse("legacy-universe");
+      expect(a.categories.landscapes.variations[0].id).not.toBe(b.categories.landscapes.variations[0].id);
+      // No-op mutator persists the in-memory sanitized shape (the render
+      // route uses this to lock in entryRef.id before queueing jobs).
+      const persisted = await svc.updateUniverse("legacy-universe", () => ({}));
+      const variationIdPersisted = persisted.categories.landscapes.variations[0].id;
+      const c = await svc.getUniverse("legacy-universe");
+      expect(c.categories.landscapes.variations[0].id).toBe(variationIdPersisted);
+      // appendEntryImageRef against the persisted id now succeeds.
+      await svc.appendEntryImageRef("legacy-universe", { kind: "variation", categoryKey: "landscapes", id: variationIdPersisted }, "after-persist.png");
+      const d = await svc.getUniverse("legacy-universe");
+      expect(d.categories.landscapes.variations[0].imageRefs).toEqual(["after-persist.png"]);
+    });
+
     it("appendEntryImageRef appends to a variation's imageRefs by id", async () => {
       const u = await svc.createUniverse({
         name: "Bucket",
