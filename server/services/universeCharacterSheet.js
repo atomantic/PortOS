@@ -208,6 +208,14 @@ export function buildCharacterReferenceSheetPrompt(universe, character, { templa
   // `primaryImageRef` is a gallery filename (lives in PATHS.images, same as
   // the rest of the character's imageRefs[]). Use resolveGalleryImage —
   // resolveImageRef looks in PATHS.imageRefs and would always return null.
+  //
+  // CAVEAT: the FLUX.2 Python runner currently accepts `--reference-images`
+  // as a no-op argparse stub (see PLAN.md `[flux2-multi-reference-python-runner]`),
+  // so the portrait anchor is BEST-EFFORT until that wiring lands —
+  // the prompt enumeration + template init image still produce a usable
+  // sheet, just without portrait-driven facial consistency across panels.
+  // We still plumb the path end-to-end so when the runner adopts multi-ref
+  // the feature works without a server-side change.
   const portraitRef = trim(character.primaryImageRef) ? resolveGalleryImage(character.primaryImageRef) : null;
   const referenceImagePaths = portraitRef ? [portraitRef] : [];
   const referenceImageStrengths = portraitRef ? [PORTRAIT_REFERENCE_STRENGTH] : [];
@@ -307,6 +315,15 @@ export async function renderCharacterReferenceSheet(universeId, entryId, options
     );
   }
   const pythonPath = settings.imageGen?.local?.pythonPath || null;
+
+  // One-line operator visibility: if a portrait was supplied AND the model
+  // can't actually consume it (the FLUX.2 runner currently ignores
+  // --reference-images per PLAN.md `[flux2-multi-reference-python-runner]`,
+  // and non-FLUX.2 models drop the arg entirely), log that the anchor is
+  // best-effort so a confused user can see why face consistency wandered.
+  if (built.referenceImagePaths.length > 0) {
+    console.log(`ℹ️ Character sheet portrait anchor is best-effort — model=${modelId} runner currently ignores --reference-images. Sheet still renders via prompt + template.`);
+  }
 
   // Enqueue through mediaJobQueue so the render serializes through the GPU
   // lane alongside Image Gen / Universe Builder renders. Direct generateImage

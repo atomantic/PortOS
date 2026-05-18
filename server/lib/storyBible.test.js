@@ -28,6 +28,7 @@ const {
   BIBLE_LIMITS,
   BIBLE_KIND,
   createBibleStore,
+  pruneStaleReferenceSheets,
 } = storyBible;
 
 const WORK_ID = 'wr-work-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
@@ -425,6 +426,39 @@ describe('storyBible — sanitizeCharacter', () => {
       expect(sanitizeCharacter({ name: 'A', referenceSheetImageRef: '..' }).referenceSheetImageRef).toBeNull();
       expect(sanitizeCharacter({ name: 'A', referenceSheetImageRef: '.hidden.png' }).referenceSheetImageRef).toBeNull();
     });
+  });
+});
+
+describe('storyBible — pruneStaleReferenceSheets', () => {
+  // Lives outside the sanitizeCharacter describe because it does FS I/O
+  // (intentionally outside the sanitizer's pure contract). It collapses any
+  // character.referenceSheetImageRef whose underlying file is missing from
+  // PATHS.imageRefs — what the universe-builder GET route surfaces to the UI.
+
+  it('returns the input unchanged when nothing is stale', () => {
+    // No character has a pointer → nothing to check, returns the same array.
+    const list = [{ name: 'A' }, { name: 'B', referenceSheetImageRef: null }];
+    const out = pruneStaleReferenceSheets(list);
+    expect(out).toBe(list);
+  });
+
+  it('nulls out pointers whose file does not exist (without persisting back)', () => {
+    const list = [
+      { name: 'A', referenceSheetImageRef: 'definitely-not-on-disk.png' },
+      { name: 'B' },
+    ];
+    const out = pruneStaleReferenceSheets(list);
+    expect(out).not.toBe(list); // new array on change
+    expect(out[0].referenceSheetImageRef).toBeNull();
+    // Untouched character pass-through (same reference).
+    expect(out[1]).toBe(list[1]);
+    expect(out).toHaveLength(2);
+  });
+
+  it('passes through a non-array input', () => {
+    expect(pruneStaleReferenceSheets(null)).toBeNull();
+    expect(pruneStaleReferenceSheets(undefined)).toBeUndefined();
+    expect(pruneStaleReferenceSheets('not array')).toBe('not array');
   });
 });
 

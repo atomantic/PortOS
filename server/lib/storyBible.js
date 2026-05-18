@@ -10,7 +10,7 @@
 import { randomUUID } from 'crypto';
 import { join } from 'path';
 import { normalizeSlugline } from './scenePrompt.js';
-import { PATHS, atomicWrite, ensureDir, readJSONFile } from './fileUtils.js';
+import { PATHS, atomicWrite, ensureDir, readJSONFile, resolveImageRef } from './fileUtils.js';
 import { ServerError } from './errorHandler.js';
 
 // Re-export so callers (writers-room domain files) can import a single
@@ -276,12 +276,11 @@ function derivePrimaryImageRef(raw, imageRefs) {
 }
 
 // Generated character reference sheet pointer. Server-owned (set by the
-// render-completion handler), but the sanitizer still validates incoming
-// values defensively — an LLM-extracted canon payload that hallucinates this
-// field must NOT persist a path that the UI would try to load as
-// `/data/image-refs/<x>`. Strict basename only: no path separators, no
-// exact-traversal (`.` / `..`), no leading dot. Returns null for anything
-// rejected so the next render-completion can stamp cleanly.
+// render-completion handler), basename-only-validated here (synchronous,
+// keeps the sanitizer pure so it stays cheap on every universe read).
+// Stale-file collapse happens at GET time via `pruneStaleReferenceSheets`
+// below — a deleted file lazily nulls on the next universe load, but the
+// sanitizer doesn't pay an FS stat on every character it sanitizes.
 function deriveReferenceSheetImageRef(raw) {
   if (!isStr(raw) || !raw.trim()) return null;
   const trimmed = raw.trim().slice(0, BIBLE_LIMITS.IMAGE_REF_MAX);
@@ -289,6 +288,30 @@ function deriveReferenceSheetImageRef(raw) {
   if (trimmed.includes('/') || trimmed.includes('\\')) return null;
   if (trimmed.startsWith('.')) return null;
   return trimmed;
+}
+
+/**
+ * Walk a character list and null out any `referenceSheetImageRef` whose
+ * underlying file no longer exists in PATHS.imageRefs. Returns a NEW list
+ * (cheap shallow copy per character) so callers can persist the cleaned
+ * state. Pure with respect to the sanitizer — no FS I/O during sanitize,
+ * just here at the "GET universe / verify before render" boundary.
+ *
+ * `resolveImageRef(mustExist: true)` does the FS stat synchronously; for
+ * a typical 5-50 character universe this is sub-millisecond. Call from the
+ * GET universe route (or any boundary about to surface the pointer to a UI
+ * that would render `<img src="/data/image-refs/<x>">`).
+ */
+export function pruneStaleReferenceSheets(characters) {
+  if (!Array.isArray(characters)) return characters;
+  let changed = false;
+  const out = characters.map((c) => {
+    if (!c || !c.referenceSheetImageRef) return c;
+    if (resolveImageRef(c.referenceSheetImageRef, { mustExist: true })) return c;
+    changed = true;
+    return { ...c, referenceSheetImageRef: null };
+  });
+  return changed ? out : characters;
 }
 
 // Wardrobe sanitizer (A2). One entry per outfit/styling variant; the
