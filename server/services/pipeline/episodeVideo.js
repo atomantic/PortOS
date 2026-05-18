@@ -90,10 +90,10 @@ export function buildTreatmentFromStoryboards({ issue, series, canon = null }) {
     );
   }
   const shortIssueId = issue.id.slice(-8);
-  // Canon settings live on the linked universe (Phase B.4). Build the
+  // Canon places live on the linked universe (Phase B.4). Build the
   // settingByKey once and reuse across every scene's composeVisualPrompt
   // call rather than rebuilding per-call.
-  const settingByKey = buildSettingByKey(canon?.settings);
+  const settingByKey = buildSettingByKey(canon?.places);
   const baselinePrompt = (description, slugline) =>
     composeVisualPrompt({ series, description, slugline: slugline || '', settingByKey });
 

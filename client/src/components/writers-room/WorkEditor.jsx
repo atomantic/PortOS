@@ -314,7 +314,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   useEffect(() => { setStatus(work.status); }, [work.status]);
   useEffect(() => { setTitle(work.title); }, [work.title]);
 
-  // The CharactersBible / SettingsBible drawers are the canonical editors;
+  // The CharactersBible / PlacesBible drawers are the canonical editors;
   // mirror their lists here so the storyboard's image-prompt enrichment picks
   // up edits immediately.
   useEffect(() => {

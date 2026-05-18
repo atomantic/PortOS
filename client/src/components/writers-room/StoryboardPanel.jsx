@@ -23,7 +23,7 @@ import { ImageGenTab } from '../settings/ImageGenTab';
 import SceneCard from './SceneCard';
 import StagePromptModelPicker from './StagePromptModelPicker';
 import CharactersBible from './CharactersBible';
-import SettingsBible from './SettingsBible';
+import PlacesBible from './PlacesBible';
 import ObjectsBible from './ObjectsBible';
 import { WR_IMAGE_DEFAULTS, readWrImageSettings, STYLE_ID, EMPTY_IMAGE_STYLE } from '../../lib/wrImageDefaults';
 import { buildCharByKey, buildSettingByKey } from '../../lib/scenePrompt';
@@ -404,7 +404,7 @@ const BIBLE_KINDS = {
     label: 'World / places bible',
     sub: 'Locations keyed by slugline · feeds image-gen prompts',
     refreshNoun: 'world',
-    Component: SettingsBible,
+    Component: PlacesBible,
     propName: 'places',
     changeProp: 'onPlacesChange',
   },

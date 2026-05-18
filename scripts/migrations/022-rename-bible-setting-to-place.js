@@ -89,10 +89,31 @@ const NEW_PROMPTS_DEFERENCE_MD5 = 'a4681348c27776e414acf6e0be566a99';
 
 // Each template has a sample twin at the same relative path under
 // `data.sample/…`. When an installed copy still hashes to the pre-rename
-// baseline (`oldHash`), the migration copies the bundled `data.sample`
-// file verbatim — that's the only way to pick up *every* string the
-// rename touched (`## Existing settings` → `## Existing places`, etc.)
-// without enumerating the full prose diff here.
+// baseline (`oldHash`), the migration prefers copying the bundled
+// `data.sample` file verbatim — that picks up *every* string the rename
+// touched (`## Existing settings` → `## Existing places`, etc.) without
+// enumerating the full prose diff. If the bundled sample is missing
+// (distributions that strip `data.sample/`, or tests that point `rootDir`
+// at a relocated data tree), we fall back to a surgical replace covering
+// the rename-critical substitutions so the prompt's runtime contract
+// (`{{existingPlacesJson}}` envelope variable + `"places":` LLM output
+// envelope key) still works — better to leave some stale prose in
+// section headers than to break the extractor on the next request.
+const RENAME_SUBSTITUTIONS = [
+  // Rename-critical: variable + envelope key. The extractor breaks
+  // without these, so they MUST land regardless of fallback path.
+  [/\{\{existingSettingsJson\}\}/g, '{{existingPlacesJson}}'],
+  [/"settings":\s*\[/g, '"places": ['],
+  // Cosmetic but cheap and exhaustive over the known shipped templates.
+  [/Setting \/ World Bible Extraction/g, 'Place / World Bible Extraction'],
+  [/## Existing settings/g, '## Existing places'],
+  [/## Setting bible/g, '## Places bible'],
+  [/setting bible \(canonical/g, 'places bible (canonical'],
+  [/back to settings automatically/g, 'back to places automatically'],
+  [/attach a setting to a scene/g, 'attach a place to a scene'],
+  [/the setting's baseline description/g, "the place's baseline description"],
+];
+
 const PROMPT_TEMPLATES = [
   {
     rel: 'data/prompts/stages/writers-room-places.md',
@@ -205,9 +226,25 @@ const migrateWritersRoomWorks = async (rootDir) => {
     } else {
       await writeJson(newPath, parsed || { places: [], updatedAt: null });
     }
-    await unlink(legacyPath).catch((err) => {
-      console.warn(`⚠️ ${join('data/writers-room/works', entry.name)}: failed to remove legacy settings.json after writing places.json — ${err.message}`);
-    });
+    // Try unlink first (clean removal of the now-redundant legacy file).
+    // If unlink fails (Windows file-lock, EACCES, etc.) the residual
+    // `settings.json` would otherwise be re-discovered by the next
+    // migration tick as a phantom "both files exist" case — confusing the
+    // user with a "diff if anything looks missing" warning even though
+    // both files came from the same migration run. Fall back to renaming
+    // it aside as `.bak-022` so the next run sees only `places.json` and
+    // exits cleanly.
+    const unlinkErr = await unlink(legacyPath).then(() => null, (err) => err);
+    if (unlinkErr) {
+      const backupPath = `${legacyPath}.bak-022`;
+      await rename(legacyPath, backupPath).catch((renameErr) => {
+        console.warn(
+          `⚠️ ${join('data/writers-room/works', entry.name)}: failed to clean up legacy settings.json after writing places.json — ` +
+          `unlink: ${unlinkErr.message}; rename to .bak-022: ${renameErr.message}. ` +
+          `Next migration run will treat this as a phantom "both files exist" case.`,
+        );
+      });
+    }
     renamedFiles += 1;
   }
   if (renamedFiles > 0) {
@@ -233,24 +270,31 @@ const migratePromptTemplate = async (rootDir, { rel, sampleRel, oldHash, newHash
     console.log(`⚠️ ${rel}: customized (hash ${currentHash.slice(0, 8)}) — not auto-updating. Diff against data.sample to pick up the {{existingPlacesJson}} rename.`);
     return;
   }
-  // Pre-rename baseline → copy the bundled `data.sample` file verbatim.
-  // A surgical regex chain can't catch every prose substitution the rename
-  // touched (`## Existing settings` → `## Existing places`, `attach a setting
-  // to a scene` → `attach a place…`, etc.) without enumerating each one
-  // brittle-ly here; the sample twin already carries the full post-rename
-  // text. Hash check above guarantees we only overwrite an unmodified
-  // shipped default — customized templates land in the warning branch.
+  // Pre-rename baseline. Prefer copying the bundled `data.sample` twin
+  // verbatim — it carries every prose substitution the rename touched.
+  // When `data.sample` is missing (stripped distribution, relocated
+  // rootDir), fall back to a surgical replace covering the
+  // rename-critical substitutions enumerated in RENAME_SUBSTITUTIONS,
+  // so the prompt's runtime contract still works even if some prose
+  // strings stay stale. Hash check above guarantees we only rewrite an
+  // unmodified shipped default — customized templates land in the
+  // warning branch and the user-customized version is preserved.
   const samplePath = join(rootDir, sampleRel);
   const sample = await readFile(samplePath, 'utf-8').catch((err) => {
     if (err.code === 'ENOENT') return null;
     throw err;
   });
-  if (sample == null) {
-    console.warn(`⚠️ ${rel}: bundled sample missing at ${sampleRel} — skipping auto-update`);
+  if (sample != null) {
+    await writeFile(path, sample);
+    console.log(`📝 ${rel}: replaced pre-rename shipped default with current data.sample bundle`);
     return;
   }
-  await writeFile(path, sample);
-  console.log(`📝 ${rel}: replaced pre-rename shipped default with current data.sample bundle`);
+  const next = RENAME_SUBSTITUTIONS.reduce((acc, [from, to]) => acc.replace(from, to), raw);
+  await writeFile(path, next);
+  console.warn(
+    `⚠️ ${rel}: bundled sample missing at ${sampleRel} — fell back to surgical replace ` +
+    `(rename-critical substitutions applied; some stale prose may remain in section headers).`,
+  );
 };
 
 export default {
