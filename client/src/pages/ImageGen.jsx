@@ -1011,6 +1011,20 @@ export default function ImageGen() {
               <label className="block text-xs font-medium text-gray-400 mb-1">
                 Reference images <span className="text-gray-500 font-normal">(up to 4 images for FLUX.2 multi-reference edit)</span>
               </label>
+              {/*
+                Experimental: the server contract (upload slots, packing, sidecar
+                metadata, CLI flag emission) is wired end-to-end, but the bundled
+                FLUX.2 Python runner currently accepts `--reference-images` /
+                `--reference-strengths` as no-op argparse stubs — the references
+                are NOT yet conditioned into the diffusion graph. Full multi-ref
+                inference is tracked as `[flux2-multi-reference-python-runner]`
+                in PLAN.md (gated on the FLUX.2-klein-9B-kv HF license).
+              */}
+              <div className="mb-2 px-2 py-1.5 text-[11px] text-port-warning/90 bg-port-warning/10 border border-port-warning/30 rounded">
+                <strong className="font-semibold">Experimental — no-op today:</strong> Uploads + strengths are
+                staged and forwarded to the runner, but the FLUX.2 Python script ignores them. Final inference wiring
+                is pending the multi-reference runner upgrade.
+              </div>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                 {referenceImages.map((slot, i) => {
                   const slotId = `ref-image-${i}`;

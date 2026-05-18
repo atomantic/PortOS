@@ -166,15 +166,46 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
     .filter(Boolean)
     .map((upload, packedIndex) => ({ upload, strength: data.referenceStrengths?.[packedIndex] }));
 
-  // Multi-reference is a FLUX.2-only feature — local.js's buildArgs only
-  // emits --reference-images/--reference-strengths inside the isFlux2 branch.
+  // Best-effort cleanup of every multer-staged file currently on `req.files`.
+  // The multipart parser writes uploads to `os.tmpdir()` as they stream in,
+  // so a 400 thrown from validation BEFORE we've registered the `res.on('close')`
+  // sweep would otherwise leak those temp files. Call this from any pre-stage
+  // throw site (FLUX.2-only gate, non-local-backend gate).
+  const cleanupReqFilesTemp = () => {
+    if (!req.files) return;
+    for (const f of Object.values(req.files)) {
+      if (f?.path) unlink(f.path).catch(() => {});
+    }
+  };
+
+  // Resolve the effective backend BEFORE staging reference uploads — only the
+  // local FLUX.2 runner consumes `referenceImagePaths`; an `external` or `codex`
+  // request that uploaded refs would otherwise stage files under
+  // `PATHS.imageRefs` and write sidecar metadata claiming references were used,
+  // while the actual generation silently ignored them. (Reading settings here
+  // is cheap — it's already read again below for the per-mode dispatch.)
+  const settings = await getSettings();
+  const mode = data.mode || settings.imageGen?.mode || 'external';
+
+  // Multi-reference is a FLUX.2-only, local-backend-only feature — local.js's
+  // buildArgs only emits --reference-images/--reference-strengths inside the
+  // isFlux2 branch, and codex/external backends don't read these fields at all.
   // Reject up-front rather than copying the uploads to PATHS.imageRefs and
-  // silently dropping them downstream (which would orphan files on disk).
+  // silently dropping them downstream (which would orphan files on disk and
+  // produce metadata sidecars that lie about how the render was conditioned).
   if (referenceUploads.length) {
+    if (mode !== 'local') {
+      cleanupReqFilesTemp();
+      throw new ServerError(
+        'Reference images are only supported for local FLUX.2 renders',
+        { status: 400, code: 'REFERENCE_IMAGES_LOCAL_ONLY' },
+      );
+    }
     const candidate = getImageModels().find((m) => m.id === data.modelId)
       ?? getImageModels().find((m) => m.id === 'dev')
       ?? getImageModels()[0];
     if (!isFlux2(candidate)) {
+      cleanupReqFilesTemp();
       throw new ServerError(
         'Reference images are only supported for FLUX.2 models',
         { status: 400, code: 'REFERENCE_IMAGES_FLUX2_ONLY' },
@@ -238,9 +269,9 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
   }
   // Local + codex both go through mediaJobQueue (separate lanes — codex
   // doesn't share MLX). External SD-API stays synchronous: it's a remote
-  // call with no local single-flight constraint to absorb.
-  const settings = await getSettings();
-  const mode = data.mode || settings.imageGen?.mode || 'external';
+  // call with no local single-flight constraint to absorb. `settings` and
+  // `mode` were already resolved above (so the FLUX.2 + local-backend gate
+  // could fire before staging any uploads).
   if (mode === 'codex') {
     // Reject up-front rather than enqueueing a doomed job — codex is gated
     // behind an explicit toggle since not every Codex account has access to

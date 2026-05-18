@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, beforeAll, afterAll, vi } from 'vites
 import express from 'express';
 import { createServer } from 'http';
 import { mkdtemp, rm, readdir, readFile, unlink } from 'fs/promises';
-import { join } from 'path';
+import { join, parse as parsePath } from 'path';
 import { tmpdir } from 'os';
 import { errorMiddleware } from '../lib/errorHandler.js';
 
@@ -37,8 +37,12 @@ vi.mock('../services/imageGen/index.js', async () => {
 // Local-mode test: route enqueues into the queue rather than running the
 // renderer; assert the params landing in enqueueJob carry the packed reference
 // arrays in submit order.
+// `getSettings` is mocked per-test so we can flip the effective backend
+// (`local` vs. `external` vs. `codex`) and exercise the route's mode-aware
+// reference-image gate. Default: `mode: 'local'` with a fake pythonPath.
+let mockedSettings = { imageGen: { mode: 'local', local: { pythonPath: '/usr/bin/python3' } } };
 vi.mock('../services/settings.js', () => ({
-  getSettings: vi.fn(async () => ({ imageGen: { mode: 'local', local: { pythonPath: '/usr/bin/python3' } } })),
+  getSettings: vi.fn(async () => mockedSettings),
 }));
 
 vi.mock('../services/mediaJobQueue/index.js', () => ({
@@ -128,6 +132,9 @@ describe('POST /api/image-gen/generate — multipart reference-image packing', (
     app.use('/api/image-gen', imageGenRoutes);
     app.use(errorMiddleware);
     vi.clearAllMocks();
+    // Reset the mode-mock to the default `local` so a previous test that
+    // flipped it to `external`/`codex` doesn't bleed into the next one.
+    mockedSettings = { imageGen: { mode: 'local', local: { pythonPath: '/usr/bin/python3' } } };
     // Empty both sandbox dirs so each test's file-presence assertions reflect
     // ONLY that test's uploads — leftover ref-* files from prior tests would
     // make the "gate rejects before copy" test see stale data.
@@ -152,9 +159,17 @@ describe('POST /api/image-gen/generate — multipart reference-image packing', (
     expect(enqueueJob).toHaveBeenCalledTimes(1);
     const params = enqueueJob.mock.calls[0][0].params;
     // Both refs landed in PATHS.imageRefs (sandboxed) with submit-order positions.
+    // Compare via path utilities rather than building a regex from the sandbox
+    // path — temp paths on Windows (backslashes) and any sandbox path containing
+    // regex metacharacters (`.`, `(`, `[`) would otherwise be interpreted by
+    // the regex engine instead of matched literally.
     expect(params.referenceImagePaths).toHaveLength(2);
-    expect(params.referenceImagePaths[0]).toMatch(new RegExp(`^${refsSandbox}/ref-.*\\.png$`));
-    expect(params.referenceImagePaths[1]).toMatch(new RegExp(`^${refsSandbox}/ref-.*\\.png$`));
+    for (const refPath of params.referenceImagePaths) {
+      const { dir, name, ext } = parsePath(refPath);
+      expect(dir).toBe(refsSandbox);
+      expect(name.startsWith('ref-')).toBe(true);
+      expect(ext).toBe('.png');
+    }
     expect(params.referenceImageStrengths).toEqual([0.8, 0.3]);
     // Files were actually copied (gallery enumeration would never see them
     // because they're outside PATHS.images).
@@ -217,5 +232,48 @@ describe('POST /api/image-gen/generate — multipart reference-image packing', (
     // behind by a request the route already knows it can't honor).
     const refDirContents = await readdir(refsSandbox).catch(() => []);
     expect(refDirContents.filter((f) => f.startsWith('ref-'))).toHaveLength(0);
+  });
+
+  it('rejects refs when the effective backend is not local (codex/external) — even with a FLUX.2 modelId', async () => {
+    // FLUX.2 model selected, but settings.imageGen.mode flips to a backend
+    // that doesn't consume `referenceImagePaths`. The gate must fire BEFORE
+    // any file is staged into PATHS.imageRefs.
+    mockedSettings = { imageGen: { mode: 'external' } };
+    const res = await postMultipart(app, '/api/image-gen/generate', [
+      { name: 'prompt', value: 'flux2 ref on wrong backend' },
+      { name: 'modelId', value: 'flux2-klein-4b' },
+      { name: 'referenceImage1', filename: 'a.png', contentType: 'image/png', value: PNG_FIXTURE },
+    ]);
+
+    expect(res.status).toBe(400);
+    expect(res.body.error || res.body).toMatch(/local/i);
+    expect(enqueueJob).not.toHaveBeenCalled();
+    const refDirContents = await readdir(refsSandbox).catch(() => []);
+    expect(refDirContents.filter((f) => f.startsWith('ref-'))).toHaveLength(0);
+  });
+
+  it('rejecting a non-FLUX.2 ref upload deletes the multer-staged tmp file (no os.tmpdir leak)', async () => {
+    // Snapshot the tmpdir's `upload-*` entries before and after the request.
+    // The multipart parser writes uploads as `upload-<uuid><ext>`, so the
+    // post-cleanup diff must be empty for the rejected request.
+    const tmpRoot = tmpdir();
+    const before = new Set((await readdir(tmpRoot).catch(() => []))
+      .filter((f) => f.startsWith('upload-')));
+
+    const res = await postMultipart(app, '/api/image-gen/generate', [
+      { name: 'prompt', value: 'wrong-model ref tmp-cleanup' },
+      { name: 'modelId', value: 'dev' },
+      { name: 'referenceImage1', filename: 'a.png', contentType: 'image/png', value: PNG_FIXTURE },
+    ]);
+    expect(res.status).toBe(400);
+
+    // unlink() is fire-and-forget — give it a microtask tick to settle so the
+    // post-snapshot reflects the cleanup.
+    await new Promise((r) => setTimeout(r, 50));
+    const after = new Set((await readdir(tmpRoot).catch(() => []))
+      .filter((f) => f.startsWith('upload-')));
+    // Any `upload-*` entry that's new vs. the pre-request snapshot is a leak.
+    const leaked = [...after].filter((f) => !before.has(f));
+    expect(leaked).toEqual([]);
   });
 });
