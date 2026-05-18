@@ -4,6 +4,7 @@ import { FileInput, Loader2, ArrowLeft, CheckCircle2, AlertTriangle, ChevronDown
 import toast from '../components/ui/Toast';
 import { useAsyncAction } from '../hooks/useAsyncAction';
 import { STORY_SHAPES } from '../components/pipeline/StoryShapes';
+import EntryCard from '../components/universe/EntryCard';
 import {
   analyzeImport,
   classifyImport,
@@ -544,32 +545,30 @@ function CanonReviewSection({ title, kind, entries, selectedIdxs, onToggle, rend
           {title} <span className="text-sm font-normal text-port-text-muted">({selectedCount} / {entries.length} selected)</span>
         </h2>
       </div>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-        {entries.map((entry, idx) => (
-          <label
-            key={`${kind}-${idx}`}
-            className={`flex items-start gap-3 border rounded p-3 cursor-pointer text-sm ${
-              selectedIdxs.has(idx) ? 'border-port-accent bg-port-accent/5' : 'border-port-border opacity-60'
-            }`}
-          >
-            <input
-              type="checkbox"
-              checked={selectedIdxs.has(idx)}
-              onChange={() => onToggle(idx)}
-              className="mt-1 accent-port-accent"
+      <ul className="grid grid-cols-1 md:grid-cols-2 gap-2">
+        {entries.map((entry, idx) => {
+          const subtitle = renderSubtitle(entry);
+          const bodyText = renderBody(entry);
+          const name = entry.name || '(unnamed)';
+          return (
+            <EntryCard
+              key={`${kind}-${idx}`}
+              selectable={{
+                selected: selectedIdxs.has(idx),
+                onToggle: () => onToggle(idx),
+                label: `Include ${name}`,
+              }}
+              title={<div className="font-medium truncate text-sm">{name}</div>}
+              body={(
+                <>
+                  {subtitle ? <div className="text-xs text-port-text-muted truncate">{subtitle}</div> : null}
+                  {bodyText ? <div className="text-xs text-port-text-muted mt-1 line-clamp-3">{bodyText}</div> : null}
+                </>
+              )}
             />
-            <div className="flex-1 min-w-0">
-              <div className="font-medium truncate">{entry.name || '(unnamed)'}</div>
-              {renderSubtitle(entry) && (
-                <div className="text-xs text-port-text-muted truncate">{renderSubtitle(entry)}</div>
-              )}
-              {renderBody(entry) && (
-                <div className="text-xs text-port-text-muted mt-1 line-clamp-3">{renderBody(entry)}</div>
-              )}
-            </div>
-          </label>
-        ))}
-      </div>
+          );
+        })}
+      </ul>
     </section>
   );
 }
