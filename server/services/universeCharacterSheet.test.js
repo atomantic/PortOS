@@ -145,14 +145,17 @@ describe('universeCharacterSheet — buildCharacterReferenceSheetPrompt', () => 
     expect(out.negativePrompt).toContain('text artifacts');
   });
 
-  it('resolves the shipped template asset path', () => {
-    // Repo ships data.sample/templates/character-reference-sheet.png; the
-    // setup-data flow copies it into data/templates/ which resolveTemplateAsset
-    // queries. The local dev tree has both, so initImagePath should be
-    // non-null. If a future move breaks the resolution, this test catches it.
+  it('resolves the shipped template asset path under /data/templates/ (NOT /data/images/)', () => {
+    // Regression guard for: previously the builder returned a template-dir
+    // path, but generateImage's `resolveGalleryImage` re-validation only
+    // accepted /data/images/ and silently dropped the template — meaning the
+    // sheet was rendered with no init-image anchor at all. local.js now uses
+    // resolveImageInputPath which accepts both roots.
     const out = buildCharacterReferenceSheetPrompt(baseUniverse, richCharacter);
     expect(out.initImagePath).toBeTruthy();
     expect(out.initImagePath).toContain('character-reference-sheet.png');
+    expect(out.initImagePath).toMatch(/data\/templates\//);
+    expect(out.initImagePath).not.toMatch(/data\/images\//);
     expect(out.initImageStrength).toBe(REFERENCE_SHEET_CONSTANTS.TEMPLATE_INIT_STRENGTH);
   });
 
@@ -160,6 +163,27 @@ describe('universeCharacterSheet — buildCharacterReferenceSheetPrompt', () => 
     const out = buildCharacterReferenceSheetPrompt(baseUniverse, richCharacter);
     expect(out.referenceImagePaths).toEqual([]);
     expect(out.referenceImageStrengths).toEqual([]);
+  });
+
+  it('resolves character.primaryImageRef against the gallery (where canon portraits live), NOT image-refs', () => {
+    // Regression guard for: primaryImageRef is a gallery filename (lives in
+    // data/images/, alongside the rest of character.imageRefs[]). Previously
+    // the builder ran it through resolveImageRef which only looks under
+    // data/image-refs/ — so the portrait was always null and never made it
+    // to FLUX.2 as a multi-ref input.
+    const galleryDir = PATHS.images;
+    if (!existsSync(galleryDir)) mkdirSync(galleryDir, { recursive: true });
+    const fixtureName = 'portos-test-portrait.png';
+    const fixturePath = join(galleryDir, fixtureName);
+    if (!existsSync(fixturePath) && existsSync(SAMPLE_TEMPLATE)) {
+      copyFileSync(SAMPLE_TEMPLATE, fixturePath);
+    }
+    const charWithPortrait = { ...richCharacter, imageRefs: [fixtureName], primaryImageRef: fixtureName };
+    const out = buildCharacterReferenceSheetPrompt(baseUniverse, charWithPortrait);
+    expect(out.referenceImagePaths).toHaveLength(1);
+    expect(out.referenceImagePaths[0]).toMatch(/data\/images\//);
+    expect(out.referenceImagePaths[0]).toContain(fixtureName);
+    expect(out.referenceImageStrengths[0]).toBe(REFERENCE_SHEET_CONSTANTS.PORTRAIT_REFERENCE_STRENGTH);
   });
 
   it('throws a 400 when called with no universe or no character', () => {

@@ -13,7 +13,7 @@
 import { copyFile } from 'fs/promises';
 import { join, basename } from 'path';
 import { randomUUID } from 'crypto';
-import { PATHS, resolveTemplateAsset, resolveImageRef, ensureDir } from '../lib/fileUtils.js';
+import { PATHS, resolveTemplateAsset, resolveGalleryImage, ensureDir } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { imageGenEvents } from './imageGenEvents.js';
 import { getSettings } from './settings.js';
@@ -192,7 +192,10 @@ export function buildCharacterReferenceSheetPrompt(universe, character, { templa
   const negativePrompt = 'multiple characters in the same panel, photographs, text artifacts, watermark, signature, blurry, distorted anatomy, low contrast labels';
 
   const initImagePath = resolveTemplateAsset(template);
-  const portraitRef = trim(character.primaryImageRef) ? resolveImageRef(character.primaryImageRef) : null;
+  // `primaryImageRef` is a gallery filename (lives in PATHS.images, same as
+  // the rest of the character's imageRefs[]). Use resolveGalleryImage —
+  // resolveImageRef looks in PATHS.imageRefs and would always return null.
+  const portraitRef = trim(character.primaryImageRef) ? resolveGalleryImage(character.primaryImageRef) : null;
   const referenceImagePaths = portraitRef ? [portraitRef] : [];
   const referenceImageStrengths = portraitRef ? [PORTRAIT_REFERENCE_STRENGTH] : [];
 

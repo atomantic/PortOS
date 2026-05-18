@@ -18,7 +18,7 @@ import { existsSync, watch as fsWatch } from 'fs';
 import { join, dirname, resolve as resolvePath, sep as PATH_SEP, basename } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
-import { assertSafeFilename, ensureDir, listDirectoryByExtension, PATHS, safeJSONParse, resolveGalleryImage, resolveImageRef } from '../../lib/fileUtils.js';
+import { assertSafeFilename, ensureDir, listDirectoryByExtension, PATHS, safeJSONParse, resolveGalleryImage, resolveImageInputPath } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { imageGenEvents } from '../imageGenEvents.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, PYTHON_NOISE_RE } from '../../lib/sseUtils.js';
@@ -282,9 +282,11 @@ export async function generateImage({ pythonPath, prompt, negativePrompt = '', m
   const validLoraFilenames = validLoras.map((p) => basename(p));
   // i2i: defense in depth — the route already validated a fresh request,
   // but an old sidecar replay can carry a stale absolute path outside the
-  // gallery. Re-anchor through resolveGalleryImage before handing to mflux.
+  // approved image roots. resolveImageInputPath accepts gallery + image-refs
+  // + visual templates — the latter so the universe-builder reference-sheet
+  // renderer can use a shipped layout template as the init-image anchor.
   const validInitImagePath = (initImagePath && typeof initImagePath === 'string')
-    ? resolveGalleryImage(initImagePath)
+    ? resolveImageInputPath(initImagePath)
     : null;
   // Clamp 0..1 with a finite-fallback — Math.max/min preserve NaN, so a
   // corrupt sidecar value like Number('bad') would slip through and end up
@@ -299,15 +301,17 @@ export async function generateImage({ pythonPath, prompt, negativePrompt = '', m
   const validInitImageStrength = validInitImagePath && initImageStrength != null
     ? clampStrength01(initImageStrength, null)
     : null;
-  // Multi-reference: re-anchor each path through resolveImageRef so a sidecar
-  // replay can't sneak a path outside PATHS.imageRefs into the runner. Pair
-  // each path with its strength BEFORE filtering so a rejected entry doesn't
-  // shift the strength array — otherwise the surviving path would inherit the
-  // wrong slot's strength.
+  // Multi-reference: re-anchor each path through resolveImageInputPath so a
+  // sidecar replay can't sneak a path outside the approved image roots into
+  // the runner. Accepts gallery + image-refs + visual templates — the gallery
+  // path lets a canon portrait (e.g. character.primaryImageRef) flow in as a
+  // multi-ref input. Pair each path with its strength BEFORE filtering so a
+  // rejected entry doesn't shift the strength array — otherwise the surviving
+  // path would inherit the wrong slot's strength.
   const rawRefPaths = Array.isArray(referenceImagePaths) ? referenceImagePaths : [];
   const validReferences = rawRefPaths
     .map((p, i) => {
-      const resolved = typeof p === 'string' ? resolveImageRef(p) : null;
+      const resolved = typeof p === 'string' ? resolveImageInputPath(p) : null;
       if (!resolved) return null;
       const rawStrength = referenceImageStrengths?.[i];
       const strength = rawStrength != null ? clampStrength01(rawStrength, 1.0) : 1.0;

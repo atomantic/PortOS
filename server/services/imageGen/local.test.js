@@ -240,6 +240,30 @@ describe('imageGen local.buildArgs flux2 dispatch', () => {
     expect(args).not.toContain('--reference-strengths');
   });
 
+  // Templates land at /data/templates/, not /data/images/ — the runner-side
+  // resolver (generateImage) accepts them via resolveImageInputPath (covered
+  // in fileUtils.test.js). Pin that buildArgs emits the validated absolute
+  // path verbatim so a future refactor can't silently drop the template anchor.
+  it('emits --image-path verbatim for a pre-validated template path', () => {
+    mockResolveFlux2Python.mockReturnValue('/fake/venv-flux2/bin/python3');
+    const { args } = buildArgs({
+      ...baseInput,
+      initImagePath: '/data/templates/character-reference-sheet.png',
+      initImageStrength: 0.25,
+      model: {
+        id: 'flux2-klein-9b',
+        runner: 'flux2',
+        quantization: 'sdnq',
+        repo: 'Disty0/FLUX.2-klein-9B-SDNQ-4bit-dynamic-svd-r32',
+        tokenizerRepo: 'black-forest-labs/FLUX.2-klein-9B',
+      },
+    });
+    expect(args).toContain('--image-path');
+    expect(args[args.indexOf('--image-path') + 1]).toBe('/data/templates/character-reference-sheet.png');
+    expect(args).toContain('--image-strength');
+    expect(args[args.indexOf('--image-strength') + 1]).toBe('0.25');
+  });
+
   it('falls back to mflux dispatch for non-flux2 models on macOS', () => {
     // No flux2 mock needed — the branch shouldn't be taken at all.
     mockResolveFlux2Python.mockReturnValue(null);

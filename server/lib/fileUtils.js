@@ -680,6 +680,40 @@ export function resolveImageRef(name, { mustExist = true } = {}) {
 }
 
 /**
+ * Resolve any user-supplied image input (init image OR multi-reference image)
+ * to an absolute path under one of PortOS's approved image roots — the
+ * gallery (`PATHS.images`), the multi-ref upload dir (`PATHS.imageRefs`),
+ * or the shipped visual-template dir (`PATHS.visualTemplates`). Used by the
+ * image-gen runner to re-validate paths that originated from internal
+ * features (gallery picks, reference-sheet renders) which may legitimately
+ * cross dir boundaries — a portrait pinned from the gallery passed as a
+ * multi-ref input, a template PNG used as an init-image anchor.
+ *
+ * The defense-in-depth checks (basename strip, traversal block, root prefix,
+ * existence + isFile gate) apply at each candidate root just like the
+ * single-root resolvers (`resolveGalleryImage`, `resolveImageRef`,
+ * `resolveTemplateAsset`).
+ *
+ * Accepts both basename input (`"foo.png"`) and already-resolved absolute
+ * paths (the local image-gen runner re-validates the same input on every
+ * call so we need to accept both shapes).
+ *
+ * @param {string} rawPath - basename or absolute path
+ * @returns {string|null} validated absolute path, or null
+ */
+export function resolveImageInputPath(rawPath) {
+  if (typeof rawPath !== 'string' || !rawPath) return null;
+  for (const resolver of [resolveGalleryImage, resolveImageRef, resolveTemplateAsset]) {
+    const candidate = resolver(rawPath);
+    if (candidate) return candidate;
+    // The single-root resolvers basename their input — for absolute paths
+    // they only succeed when the basename happens to also exist in the
+    // resolver's target root. That's the correct behavior here.
+  }
+  return null;
+}
+
+/**
  * Resolve a shipped visual template filename (e.g. character reference-sheet
  * layout PNG) to an absolute path under `PATHS.visualTemplates`. Mirrors
  * `resolveImageRef` / `resolveGalleryImage`: basename + traversal + root-prefix
