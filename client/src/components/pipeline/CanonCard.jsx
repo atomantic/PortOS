@@ -173,15 +173,15 @@ function WardrobeSection({ wardrobes, editable, onChange }) {
       const current = pendingNew[pendingIdx] || { name: '', description: '' };
       if ((current[field] || '') === value) return;
       const nextPending = pendingNew.map((p, i) => i === pendingIdx ? { ...p, [field]: value } : p);
-      // Once a pending row has a non-empty name it's safe to promote into
-      // the persisted list (server sanitizer no longer drops it). Strip the
-      // client-only `pending-wardrobe-*` id so server `ensureId('wd-')` mints
-      // a fresh `wd-<uuid>` — `ensureId` preserves any non-empty string, so
-      // an unstripped prefix would round-trip onto the persisted row.
+      // Promote on name-non-empty. The pending row already carries a
+      // server-shaped `wd-<uuid>` id (minted client-side in `addOne`) so
+      // it persists verbatim — and crucially, the React key stays stable
+      // across promotion so the `WardrobeRow` instance doesn't unmount
+      // and lose any uncommitted description draft buffered inside its
+      // `useFieldDraft` hook.
       if (field === 'name' && value.trim()) {
-        const { id: _pendingId, ...promoted } = nextPending[pendingIdx];
         setPendingNew(nextPending.filter((_, i) => i !== pendingIdx));
-        onChange([...wardrobes, promoted]);
+        onChange([...wardrobes, nextPending[pendingIdx]]);
       } else {
         setPendingNew(nextPending);
       }
@@ -202,9 +202,10 @@ function WardrobeSection({ wardrobes, editable, onChange }) {
 
   const addOne = () => {
     setOpen(true);
-    // Client-only id so React keys are stable across re-renders before the
-    // row promotes into the persisted list (server mints its own id then).
-    const id = `pending-wardrobe-${(crypto?.randomUUID?.() ?? Date.now().toString(36) + Math.random().toString(36).slice(2))}`;
+    // Mint a server-shaped `wd-<uuid>` client-side so the React key stays
+    // stable across the pending → persisted promotion. Server `ensureId`
+    // preserves any non-empty string, so this id round-trips unchanged.
+    const id = `wd-${(crypto?.randomUUID?.() ?? Date.now().toString(36) + Math.random().toString(36).slice(2))}`;
     setPendingNew((prev) => [...prev, { id, name: '', description: '' }]);
   };
 

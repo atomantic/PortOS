@@ -158,6 +158,10 @@ export function hasCanonDescriptorContent(kind, entry) {
 // Flatteners for character bible list fields — used by the reference-sheet
 // builder and future per-page render prompts so the join logic stays in one
 // place. Each returns `''` when the input is missing/empty.
+//
+// Server-only — NOT part of the `client/src/lib/canonPrompt.js` mirror
+// contract. Adding them client-side would bloat the bundle for code that
+// only runs in image-gen / prompt-building paths.
 export function flattenStats(stats) {
   if (!Array.isArray(stats) || stats.length === 0) return '';
   return stats

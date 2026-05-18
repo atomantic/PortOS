@@ -560,7 +560,12 @@ export default function UniverseCanonSection({ universe, universeId, onUniverseC
 function KindSection({ kind, universeId, all, totalCount, filtered, usage, renderingJobs, onRender, onJobCompleted, onJobFailed, onPreview, onRefine, refiningId, onExpandCharacter, expandingId, onSheetCompleted, onToggleLock, togglingLockId, onPatchEntry, onRenderCleanPlate, seriesNameMap }) {
   // Universe-only character wiring — `null` for non-character kinds so
   // CanonCard's gate stays `kind === 'characters' && characterExtensions`.
-  // Memoized so re-renders don't pass fresh-by-identity props into every card.
+  // Memoized so the BASE object is stable across re-renders that aren't
+  // expansion-related (refining, lock toggle, etc). The per-card spread
+  // below still allocates a fresh object every render to fold in
+  // `expanding: expandingId === entry.id`; that's unavoidable without
+  // per-card memoization and isn't worth the complexity at typical cast
+  // sizes.
   const characterExtensions = useMemo(
     () => (kind.key === 'characters' ? { universeId, onExpandCharacter, onSheetCompleted } : null),
     [kind.key, universeId, onExpandCharacter, onSheetCompleted],

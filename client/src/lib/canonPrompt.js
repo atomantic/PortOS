@@ -1,8 +1,13 @@
-// Mirror of server/lib/canonPrompt.js — logic kept in sync (specs + helpers
-// must match exactly). Header comments differ intentionally (the server copy
-// carries the full JSDoc); when editing, port logic changes verbatim and
-// leave commentary scoped to each side. The server copy is authoritative;
-// tests in server/lib/canonPrompt.test.js are the contract.
+// Mirror of server/lib/canonPrompt.js — the SHORT_SPEC / RICH_SPEC tables
+// + `shortCanonDescriptorFragments` / `richCanonDescriptorFragments` /
+// `descriptorForCanonEntry` / `hasCanonDescriptorContent` helpers must
+// match the server side exactly. The server-only `flatten*` exports
+// (`flattenStats`/`flattenPalette`/etc.) are NOT part of the mirror —
+// they're consumed by reference-sheet rendering paths that don't run in
+// the client and would only bloat the bundle. Header comments differ
+// intentionally; when editing the mirrored helpers, port logic changes
+// verbatim and leave commentary scoped to each side. The server copy is
+// authoritative; tests in server/lib/canonPrompt.test.js are the contract.
 
 const trim = (s) => (typeof s === 'string' ? s.trim() : '');
 
