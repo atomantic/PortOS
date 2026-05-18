@@ -18,6 +18,7 @@ import { deriveAvailableBackends, IMAGE_GEN_MODE } from '../../lib/imageGenBacke
 import { timeAgo } from '../../utils/formatters';
 import useMounted from '../../hooks/useMounted';
 import Drawer from '../Drawer';
+import TabPills from '../ui/TabPills';
 import { ImageGenTab } from '../settings/ImageGenTab';
 import SceneCard from './SceneCard';
 import StagePromptModelPicker from './StagePromptModelPicker';
@@ -270,15 +271,20 @@ export default function StoryboardPanel({
 
   return (
     <div className="flex flex-col h-full">
-      <TabNav
-        tab={tab}
-        setTab={setTab}
+      <TabPills
+        size="xs"
+        stretch
+        activeTab={tab}
+        onChange={setTab}
         runningKind={runningKind}
-        charactersCount={characters.length}
-        settingsCount={settings.length}
-        objectsCount={objects.length}
-        scenesCount={scenesCount}
-        boardsCount={scenes.length}
+        tabs={[
+          { id: TAB.CHARACTERS, label: 'Characters', icon: Users, count: characters.length, runningKind: 'characters' },
+          { id: TAB.WORLD, label: 'World', icon: MapPinIcon, count: settings.length, runningKind: 'settings' },
+          { id: TAB.OBJECTS, label: 'Objects', icon: Package, count: objects.length, runningKind: 'objects' },
+          { id: TAB.SCENES, label: 'Scenes', icon: ListTree, count: scenesCount },
+          { id: TAB.BOARDS, label: 'Boards', icon: Clapperboard, count: scenes.length, runningKind: 'script' },
+          { id: TAB.CONFIG, label: 'Config', icon: SlidersHorizontal },
+        ]}
       />
 
       {runningKind && (
@@ -381,60 +387,6 @@ export default function StoryboardPanel({
       <Drawer open={settingsOpen} onClose={closeImageGenSettings} title="Image Gen Settings">
         <ImageGenTab />
       </Drawer>
-    </div>
-  );
-}
-
-function TabNav({
-  tab,
-  setTab,
-  runningKind,
-  charactersCount,
-  settingsCount,
-  objectsCount,
-  scenesCount,
-  boardsCount,
-}) {
-  const tabs = [
-    { id: TAB.CHARACTERS, label: 'Characters', icon: Users,        count: charactersCount, runningWhen: 'characters' },
-    { id: TAB.WORLD,      label: 'World',      icon: MapPinIcon,   count: settingsCount,   runningWhen: 'settings' },
-    { id: TAB.OBJECTS,    label: 'Objects',    icon: Package,      count: objectsCount,    runningWhen: 'objects' },
-    { id: TAB.SCENES,     label: 'Scenes',     icon: ListTree,     count: scenesCount,     runningWhen: null },
-    { id: TAB.BOARDS,     label: 'Boards',     icon: Clapperboard, count: boardsCount,     runningWhen: 'script' },
-    { id: TAB.CONFIG,     label: 'Config',     icon: SlidersHorizontal, count: null,       runningWhen: null },
-  ];
-  return (
-    <div className="flex items-stretch border-b border-port-border bg-port-bg/40 shrink-0 overflow-x-auto">
-      {tabs.map((t) => {
-        const active = t.id === tab;
-        const running = runningKind && t.runningWhen === runningKind;
-        const Icon = t.icon;
-        return (
-          <button
-            key={t.id}
-            type="button"
-            onClick={() => setTab(t.id)}
-            className={`flex-1 min-w-0 flex items-center justify-center gap-1 px-2 py-2 text-[11px] border-b-2 transition-colors ${
-              active
-                ? 'border-port-accent text-white bg-port-card/40'
-                : 'border-transparent text-gray-500 hover:text-gray-200 hover:bg-port-card/20'
-            }`}
-            title={t.label}
-            aria-pressed={active}
-          >
-            {running
-              ? <Loader2 size={11} className="animate-spin text-port-accent shrink-0" />
-              : <Icon size={11} className="shrink-0" />
-            }
-            <span className="truncate">{t.label}</span>
-            {t.count != null && t.count > 0 && (
-              <span className={`text-[9px] px-1 rounded ${active ? 'text-gray-400' : 'text-gray-600'}`}>
-                {t.count}
-              </span>
-            )}
-          </button>
-        );
-      })}
     </div>
   );
 }

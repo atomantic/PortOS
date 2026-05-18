@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import * as api from '../services/api';
 import { Heart } from 'lucide-react';
 import BrailleSpinner from '../components/BrailleSpinner';
+import TabPills from '../components/ui/TabPills';
 
 import { TABS, getHealthColor, getHealthLabel } from '../components/digital-twin/constants';
 
@@ -123,30 +124,13 @@ export default function DigitalTwin() {
         )}
       </div>
 
-      {/* Tab navigation */}
-      <div className="flex gap-1 overflow-x-auto border-b border-port-border scrollbar-hide">
-        {TABS.map((tabItem) => {
-          const Icon = tabItem.icon;
-          const isActive = activeTab === tabItem.id;
-          return (
-            <button
-              key={tabItem.id}
-              onClick={() => handleTabChange(tabItem.id)}
-              className={`flex items-center gap-2 px-3 sm:px-4 py-3 text-sm font-medium transition-colors whitespace-nowrap min-h-[44px] border-b-2 -mb-px ${
-                isActive
-                  ? 'text-port-accent border-port-accent bg-port-accent/5'
-                  : 'text-gray-400 border-transparent hover:text-white hover:bg-port-card'
-              }`}
-              role="tab"
-              aria-selected={isActive}
-            >
-              <Icon size={16} aria-hidden="true" />
-              <span className="hidden sm:inline">{tabItem.label}</span>
-              <span className="sr-only sm:hidden">{tabItem.label}</span>
-            </button>
-          );
-        })}
-      </div>
+      <TabPills
+        tabs={TABS}
+        activeTab={activeTab}
+        onChange={handleTabChange}
+        hideLabelOnMobile
+        ariaLabel="Digital Twin sections"
+      />
 
       {/* Tab content */}
       <div className="flex-1 overflow-auto p-4">

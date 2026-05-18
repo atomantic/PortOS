@@ -3,6 +3,7 @@ import { CalendarDays, Calendar as CalendarIcon, ClipboardList, Clock, Columns, 
 import { useState, useEffect, useCallback } from 'react';
 import * as api from '../services/api';
 import BrailleSpinner from '../components/BrailleSpinner';
+import TabPills from '../components/ui/TabPills';
 
 import AgendaTab from '../components/calendar/AgendaTab';
 import DayView from '../components/calendar/DayView';
@@ -92,28 +93,7 @@ export default function Calendar() {
         </div>
       </div>
 
-      <div className="flex border-b border-port-border">
-        {TABS.map((tabItem) => {
-          const Icon = tabItem.icon;
-          const isActive = activeTab === tabItem.id;
-          return (
-            <button
-              key={tabItem.id}
-              onClick={() => handleTabChange(tabItem.id)}
-              className={`flex items-center gap-2 px-4 py-3 text-sm font-medium transition-colors ${
-                isActive
-                  ? 'text-port-accent border-b-2 border-port-accent bg-port-accent/5'
-                  : 'text-gray-400 hover:text-white hover:bg-port-card'
-              }`}
-              role="tab"
-              aria-selected={isActive}
-            >
-              <Icon size={16} aria-hidden="true" />
-              {tabItem.label}
-            </button>
-          );
-        })}
-      </div>
+      <TabPills tabs={TABS} activeTab={activeTab} onChange={handleTabChange} ariaLabel="Calendar sections" />
 
       <div className="flex-1 overflow-auto p-4">
         {renderTabContent()}
