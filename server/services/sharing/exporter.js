@@ -250,9 +250,9 @@ function collectAssetReferences(record) {
  *     resolution on canon entries)
  *
  * The serialized `collection` payload in the manifest carries the raw
- * items + the linked universeId + the canonical name; the recipient's
- * importer reuses these to find-or-create a local collection of the
- * same name and add the items.
+ * items + the linked owner id (universeId OR seriesId) + the canonical
+ * name; the recipient's importer reuses these to find-or-create a local
+ * collection of the same name and add the items.
  */
 function collectCollectionAssets(collection) {
   const assetFilenames = [];
