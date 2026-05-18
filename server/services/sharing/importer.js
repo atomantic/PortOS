@@ -134,12 +134,17 @@ async function mergeCollectionPayload(payload, availableAssetKeys = null) {
   return { itemsAdded: added, itemsDeferred: deferred };
 }
 
+// `image-ref` covers files under data/image-refs/ (character reference
+// sheets). Unknown kinds collapse to 'image' for back-compat with v1
+// peers that only emitted 'image' / 'video'.
+const KNOWN_ASSET_KINDS = new Set(['video', 'image', 'image-ref']);
+
 function manifestAssetRefs(manifest) {
   const refs = [];
   const seen = new Set();
   const push = (raw) => {
     if (!raw || !isStr(raw.ref)) return;
-    const kind = raw.kind === 'video' ? 'video' : 'image';
+    const kind = KNOWN_ASSET_KINDS.has(raw.kind) ? raw.kind : 'image';
     const filename = basename(raw.ref);
     if (!filename || filename !== raw.ref) return;
     const key = `${kind}:${filename}`;
@@ -196,19 +201,28 @@ function resolveBucketAssetPaths(bucketPath, ref) {
   };
 }
 
+// Local target dir per asset kind. 'image-ref' covers character reference
+// sheets (data/image-refs/). Unknown kinds route to the gallery for
+// safety — peer manifests using a kind we don't recognize land there.
+const LOCAL_TARGET_DIRS = Object.freeze({
+  video: PATHS.videos,
+  image: PATHS.images,
+  'image-ref': PATHS.imageRefs,
+});
+
 /** Copy bundled assets from the bucket into local data dirs. Runs in parallel. */
 async function copyAssetsLocally(bucketPath, assetRefs) {
   await ensureDir(PATHS.images);
   await ensureDir(PATHS.videos);
+  await ensureDir(PATHS.imageRefs);
   const copied = [];
   const available = [];
   const missing = [];
   await Promise.all((assetRefs || []).map(async (ref) => {
     if (!ref || !isStr(ref.ref)) return;
     const filename = basename(ref.ref);
-    const isVideo = ref.kind === 'video';
-    const kind = isVideo ? 'video' : 'image';
-    const targetDir = isVideo ? PATHS.videos : PATHS.images;
+    const kind = ref.kind;
+    const targetDir = LOCAL_TARGET_DIRS[kind] || PATHS.images;
     const targetPath = join(targetDir, filename);
     const { blobPath, sidecarPath } = resolveBucketAssetPaths(bucketPath, ref);
     if (!existsSync(blobPath)) {

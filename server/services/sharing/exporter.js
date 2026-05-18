@@ -69,11 +69,20 @@ async function resolveSourceBio(bucket) {
  * gen params in practice, so the second writer's (possibly missing) sidecar
  * doesn't overwrite the first's.
  */
+// 'image-ref' covers files under data/image-refs/ (multi-ref upload inputs
+// + generated character reference sheets). No sidecar handling — these
+// don't carry the gen-params metadata sidecar that gallery images do.
+const ASSET_SOURCE_DIRS = Object.freeze({
+  video: PATHS.videos,
+  image: PATHS.images,
+  'image-ref': PATHS.imageRefs,
+});
+
 async function copyAssetIfPresent(filename, kind, bucketPath) {
   if (!filename || typeof filename !== 'string') return null;
   const base = basename(filename);
   if (!base || base !== filename) return null; // refuse path traversal
-  const sourceDir = kind === 'video' ? PATHS.videos : PATHS.images;
+  const sourceDir = ASSET_SOURCE_DIRS[kind] || PATHS.images;
   await ensureDir(bucketBlobsDir(bucketPath));
   const sourcePath = join(sourceDir, base);
   if (!existsSync(sourcePath)) {
@@ -200,6 +209,10 @@ function collectAssetReferences(record) {
   const jobIds = new Set();
   const directImageFilenames = new Set();
   const directVideoFilenames = new Set();
+  // Character reference sheets — files live under data/image-refs/, distinct
+  // from the gallery (data/images/). Tracked separately so the export loop
+  // can route them through the 'image-ref' source-dir branch.
+  const directImageRefFilenames = new Set();
 
   const walk = (node) => {
     if (!node) return;
@@ -211,6 +224,7 @@ function collectAssetReferences(record) {
     if (Array.isArray(node.imageRefs)) {
       for (const r of node.imageRefs) if (isStr(r)) directImageFilenames.add(r);
     }
+    if (isStr(node.referenceSheetImageRef)) directImageRefFilenames.add(node.referenceSheetImageRef);
     if (isStr(node.videoPath)) directVideoFilenames.add(basename(node.videoPath));
     for (const k of Object.keys(node)) {
       const v = node[k];
@@ -223,6 +237,7 @@ function collectAssetReferences(record) {
     jobIds: [...jobIds],
     directImageFilenames: [...directImageFilenames],
     directVideoFilenames: [...directVideoFilenames],
+    directImageRefFilenames: [...directImageRefFilenames],
   };
 }
 
@@ -358,11 +373,13 @@ export async function exportSeries(seriesId, bucketId, opts = {}) {
   const allJobIds = new Set();
   const allImageFiles = new Set();
   const allVideoFiles = new Set();
+  const allImageRefFiles = new Set();
   for (const rec of [series, ...issues, universe].filter(Boolean)) {
     const refs = collectAssetReferences(rec);
     refs.jobIds.forEach((j) => allJobIds.add(j));
     refs.directImageFilenames.forEach((f) => allImageFiles.add(f));
     refs.directVideoFilenames.forEach((f) => allVideoFiles.add(f));
+    refs.directImageRefFilenames.forEach((f) => allImageRefFiles.add(f));
   }
   if (linkedCollection) {
     const collAssets = collectCollectionAssets(linkedCollection);
@@ -372,14 +389,15 @@ export async function exportSeries(seriesId, bucketId, opts = {}) {
     }
   }
 
-  // Copy media-job records + their assets — run all three groups in parallel.
+  // Copy media-job records + their assets — run all four groups in parallel.
   const mediaRecordsDir = join(bucket.path, 'records', 'media');
-  const [jobRefGroups, imageRefs, videoRefs] = await Promise.all([
+  const [jobRefGroups, imageRefs, videoRefs, imageRefRefs] = await Promise.all([
     Promise.all([...allJobIds].map((jobId) => exportMediaJobAndAsset(jobId, bucket.path, mediaRecordsDir))),
     Promise.all([...allImageFiles].map((f) => copyAssetIfPresent(f, 'image', bucket.path))),
     Promise.all([...allVideoFiles].map((f) => copyAssetIfPresent(f, 'video', bucket.path))),
+    Promise.all([...allImageRefFiles].map((f) => copyAssetIfPresent(f, 'image-ref', bucket.path))),
   ]);
-  const assetRefs = [...jobRefGroups.flat(), ...imageRefs.filter(Boolean), ...videoRefs.filter(Boolean)];
+  const assetRefs = [...jobRefGroups.flat(), ...imageRefs.filter(Boolean), ...videoRefs.filter(Boolean), ...imageRefRefs.filter(Boolean)];
 
   const manifest = { ...manifestStub, recordIds, assetRefs };
   const filename = await writeManifest(bucket.path, manifest);
@@ -430,14 +448,16 @@ export async function exportUniverse(universeId, bucketId, opts = {}) {
   const allVideoFiles = new Set(
     collectionAssets.assetFilenames.filter((a) => a.kind === 'video').map((a) => a.ref),
   );
+  const allImageRefFiles = new Set(universeRefs.directImageRefFilenames);
 
   const mediaRecordsDir = join(bucket.path, 'records', 'media');
-  const [jobRefGroups, imageRefs, videoRefs] = await Promise.all([
+  const [jobRefGroups, imageRefs, videoRefs, imageRefRefs] = await Promise.all([
     Promise.all([...allJobIds].map((jobId) => exportMediaJobAndAsset(jobId, bucket.path, mediaRecordsDir))),
     Promise.all([...allImageFiles].map((f) => copyAssetIfPresent(f, 'image', bucket.path))),
     Promise.all([...allVideoFiles].map((f) => copyAssetIfPresent(f, 'video', bucket.path))),
+    Promise.all([...allImageRefFiles].map((f) => copyAssetIfPresent(f, 'image-ref', bucket.path))),
   ]);
-  const assetRefs = [...jobRefGroups.flat(), ...imageRefs.filter(Boolean), ...videoRefs.filter(Boolean)];
+  const assetRefs = [...jobRefGroups.flat(), ...imageRefs.filter(Boolean), ...videoRefs.filter(Boolean), ...imageRefRefs.filter(Boolean)];
 
   const manifest = { ...manifestStub, recordIds: [universe.id], assetRefs };
   const filename = await writeManifest(bucket.path, manifest);
