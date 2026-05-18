@@ -233,6 +233,12 @@ const isCharactersBucket = (k) => /^characters?(_|$)/i.test(normalizeCategoryKey
 // every read/write, so callers controlling ids (sync importer) should supply
 // already-normalized values to ensure verbatim round-trip — any leading/trailing
 // whitespace or excess length will be silently truncated.
+//
+// WARNING: minted ids are NOT persisted by readState() — every read of a
+// legacy record mints a fresh UUID. Callers that queue async work referencing
+// the id (e.g. an `entryRef` on a render job that a completion hook will
+// resolve later) must force a write first via `needsEntryIdPersist(id)` +
+// `updateUniverse(id, () => ({}))` so the queued id matches the next read.
 const ensureEntryId = (raw, prefix) => {
   if (isStr(raw) && raw.trim()) return raw.trim().slice(0, 80);
   return `${prefix}${randomUUID()}`;
