@@ -334,15 +334,35 @@ export async function renderCharacterReferenceSheet(universeId, entryId, options
 
   // Subscribe to the queue's completion bus (NOT imageGenEvents directly —
   // the queue's dispatcher mediates the imageGen lifecycle and re-emits on
-  // mediaJobEvents with the full job record). Timeout guard detaches if the
-  // job somehow never reaches a terminal state.
-  const LISTENER_TIMEOUT_MS = 15 * 60 * 1000;
+  // mediaJobEvents with the full job record). Two-stage timeout guard so a
+  // sheet queued behind a long video / first-run-download doesn't detach its
+  // listeners before the render actually starts: a generous queue-wait
+  // window covers the pre-start gap, then the `started` event resets the
+  // timer to the tighter run window. Without the reset, a sheet waiting
+  // 30+ minutes behind a video job would detach mid-queue, the render would
+  // complete successfully on disk, but onSheetComplete would never fire —
+  // file copy + character pointer stamp lost.
+  const QUEUE_WAIT_MS = 4 * 60 * 60 * 1000; // 4h — generous; survives chained video jobs.
+  const RUN_TIMEOUT_MS = 15 * 60 * 1000;    // 15min — actual render budget once started.
   let timeoutHandle = null;
+  const armTimeout = (ms, reason) => {
+    if (timeoutHandle) clearTimeout(timeoutHandle);
+    timeoutHandle = setTimeout(() => {
+      console.log(`⏱️ Character sheet render ${reason} [${jobId.slice(0, 8)}] — detaching`);
+      detach();
+    }, ms);
+    timeoutHandle.unref?.();
+  };
   const detach = () => {
     if (timeoutHandle) { clearTimeout(timeoutHandle); timeoutHandle = null; }
+    mediaJobEvents.off('started', onStarted);
     mediaJobEvents.off('completed', onCompleted);
     mediaJobEvents.off('failed', onFailed);
     mediaJobEvents.off('canceled', onFailed);
+  };
+  const onStarted = (job) => {
+    if (job.id !== jobId) return;
+    armTimeout(RUN_TIMEOUT_MS, 'exceeded run window');
   };
   const onCompleted = async (job) => {
     if (job.id !== jobId) return;
@@ -361,14 +381,11 @@ export async function renderCharacterReferenceSheet(universeId, entryId, options
     }
     console.log(`⚠️ Character sheet render ${job.status} [${jobId.slice(0, 8)}]: ${job.error || 'unknown'}`);
   };
+  mediaJobEvents.on('started', onStarted);
   mediaJobEvents.on('completed', onCompleted);
   mediaJobEvents.on('failed', onFailed);
   mediaJobEvents.on('canceled', onFailed);
-  timeoutHandle = setTimeout(() => {
-    console.log(`⏱️ Character sheet render timed out waiting for queue event [${jobId.slice(0, 8)}] — detaching`);
-    detach();
-  }, LISTENER_TIMEOUT_MS);
-  timeoutHandle.unref?.();
+  armTimeout(QUEUE_WAIT_MS, 'queue-wait timeout');
 
   // Deterministic destination filename — uses the queue's jobId so the client
   // can patch optimistically on SSE completion without a universe refetch.

@@ -143,9 +143,18 @@ function ListRow({ row, idx, columns, swatchHex, onChange, onDelete, disabled })
   const commit = (col) => {
     if (!(col in drafts)) return;
     const v = drafts[col];
+    if (v === (row[col] || '')) {
+      setDrafts((prev) => { const next = { ...prev }; delete next[col]; return next; });
+      return;
+    }
+    // Spread `row` AND any other pending drafts so a fast A-blur → B-blur
+    // sequence doesn't lose column A: if the parent hasn't re-rendered with
+    // the committed A value by the time B blurs, B's commit would otherwise
+    // spread the stale `row` prop and overwrite A back to its original. By
+    // merging in `drafts`, the in-flight edits on sibling columns ride along.
+    const nextRow = { ...row, ...drafts, [col]: v };
     setDrafts((prev) => { const next = { ...prev }; delete next[col]; return next; });
-    if (v === (row[col] || '')) return;
-    onChange({ ...row, [col]: v });
+    onChange(nextRow);
   };
   return (
     <div className="flex items-start gap-1.5">

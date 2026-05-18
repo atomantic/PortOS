@@ -15,6 +15,7 @@ import { getUniverse, updateUniverse } from './universeBuilder.js';
 import { buildStyleClause } from './universeCanon.js';
 import { runStagedLLM } from '../lib/stageRunner.js';
 import { ServerError } from '../lib/errorHandler.js';
+import { sanitizeCharacter } from '../lib/storyBible.js';
 
 // Adding a new extended field on `sanitizeCharacter` requires adding it here
 // too — otherwise the expand response key is silently dropped.
@@ -68,7 +69,21 @@ export function applyExpansion(target, content) {
     if (isAbsent(proposed) || !Array.isArray(proposed)) continue;
     if (!isBlankArray(target[field])) continue;
     if (isBlankArray(proposed)) continue;
-    merged[field] = proposed;
+    // Sanitize the proposed list before recording the update. The bible
+    // sanitizer drops rows missing required keys (stats without `label`,
+    // props/expressions/gestures without `name`, palette without `name`),
+    // so a raw acceptance would report `updatedFields: ['stats']` while
+    // the persisted character actually saves `stats: []`. Run the proposal
+    // through `sanitizeCharacter` (target's name carries the record so the
+    // top-level sanitizer accepts it) and use the cleaned rows; skip the
+    // field entirely when nothing survives.
+    const sanitized = sanitizeCharacter(
+      { name: target.name, [field]: proposed },
+      { preserveTimestamps: false },
+    );
+    const cleaned = Array.isArray(sanitized?.[field]) ? sanitized[field] : [];
+    if (cleaned.length === 0) continue;
+    merged[field] = cleaned;
     updatedFields.push(field);
   }
   return { merged, updatedFields };
