@@ -76,6 +76,18 @@ async function assertPathUsable(path) {
   }
 }
 
+/**
+ * Path helpers for the per-bucket content-addressed blob store. v2 manifests
+ * (`SHARING_SCHEMA_VERSION >= 2`) reference assets via their SHA-256 hash;
+ * blobs and their `.metadata.json` sidecars live alongside each other under
+ * `assets/blobs/` so storage-layout changes only touch this file.
+ */
+export const IMAGE_EXT_RE = /\.(png|jpe?g|webp)$/i;
+export function bucketBlobsDir(bucketPath) { return join(bucketPath, 'assets', 'blobs'); }
+export function bucketBlobPath(bucketPath, hash) { return join(bucketBlobsDir(bucketPath), hash); }
+export function bucketBlobSidecarPath(bucketPath, hash) { return join(bucketBlobsDir(bucketPath), `${hash}.metadata.json`); }
+export function imageSidecarName(filename) { return filename.replace(IMAGE_EXT_RE, '') + '.metadata.json'; }
+
 /** Lay out the canonical bucket structure (idempotent). */
 export async function ensureBucketLayout(bucket) {
   const base = bucket.path;
@@ -87,6 +99,7 @@ export async function ensureBucketLayout(bucket) {
   await ensureDir(join(base, 'records', 'media'));
   await ensureDir(join(base, 'assets', 'images'));
   await ensureDir(join(base, 'assets', 'videos'));
+  await ensureDir(join(base, 'assets', 'blobs'));
   const bucketJsonPath = join(base, 'bucket.json');
   const existing = await readJSONFile(bucketJsonPath, null, { logError: false });
   if (!existing) {

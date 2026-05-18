@@ -12,6 +12,11 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, existsSync, mkdirSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { createHash } from 'crypto';
+
+function sha256Hex(buf) {
+  return createHash('sha256').update(buf).digest('hex');
+}
 
 // Universe builder evaluates `join(PATHS.data, …)` at module-top, so PATHS
 // must point at a real dir from the very first import. Allocate a single
@@ -103,11 +108,12 @@ describe('sharing round-trip', () => {
     expect(exp.recordCount).toBe(3); // series + issue + universe
     expect(exp.assetCount).toBeGreaterThanOrEqual(1);
 
-    // Verify the bucket layout.
+    // Verify the bucket layout. v2 stores blobs content-addressed.
     expect(existsSync(join(tempBucket, 'manifests', exp.filename))).toBe(true);
     expect(existsSync(join(tempBucket, 'records', 'series', `${s.id}.json`))).toBe(true);
     expect(existsSync(join(tempBucket, 'records', 'issues', `${iss.id}.json`))).toBe(true);
-    expect(existsSync(join(tempBucket, 'assets', 'images', 'fakeasset.png'))).toBe(true);
+    const fakeHash = sha256Hex('PNGSTUB');
+    expect(existsSync(join(tempBucket, 'assets', 'blobs', fakeHash))).toBe(true);
 
     // Process as inbox (the bucket mode is 'inbox'). The manifest should
     // queue, not auto-apply.
@@ -233,7 +239,7 @@ describe('sharing round-trip', () => {
     const manifest = JSON.parse(fs.readFileSync(join(tempBucket, 'manifests', manifestFile), 'utf-8'));
     expect(manifest.collection).toMatchObject({ universeId: u.id });
     expect(manifest.collection.items).toHaveLength(2);
-    expect(fs.existsSync(join(tempBucket, 'assets', 'images', 'second.png'))).toBe(true);
+    expect(fs.existsSync(join(tempBucket, 'assets', 'blobs', sha256Hex('PNG2')))).toBe(true);
 
     // Drop the local collection + universe, then re-process: the importer
     // should recreate both, find-or-create the local collection by
@@ -300,7 +306,8 @@ describe('sharing round-trip', () => {
     await mediaCollections.addItem(collection.id, { kind: 'image', ref: 'late.png' });
 
     const exp = await exporter.exportUniverse(u.id, bucket.id);
-    fs.rmSync(join(tempBucket, 'assets', 'images', 'late.png'), { force: true });
+    const lateHash = sha256Hex('LATEPNG');
+    fs.rmSync(join(tempBucket, 'assets', 'blobs', lateHash), { force: true });
     fs.rmSync(join(tempData, 'images', 'late.png'), { force: true });
     await mediaCollections.deleteCollection(collection.id);
     await universeBuilder.deleteUniverse(u.id);
@@ -317,7 +324,7 @@ describe('sharing round-trip', () => {
     let cursor = await readCursor(bucket.id);
     expect(hasBeenProcessed(cursor, exp.filename, exp.manifestId)).toBe(false);
 
-    fs.writeFileSync(join(tempBucket, 'assets', 'images', 'late.png'), 'LATEPNG');
+    fs.writeFileSync(join(tempBucket, 'assets', 'blobs', lateHash), 'LATEPNG');
     const retry = await importer.processBacklog(bucket.id);
     expect(retry.processed).toBe(1);
 
@@ -595,6 +602,114 @@ describe('sharing round-trip', () => {
 
     expect(await importer.listInbox(bucket.id)).toEqual([]);
     expect(updates).toHaveLength(1);
+  });
+
+  it('content-addressed blob is shared when two manifests reference identical bytes under different filenames', async () => {
+    const bucket = await buckets.createBucket({ name: 'DedupBucket', path: tempBucket, mode: 'auto-merge' });
+    const fs = await import('fs');
+    const universeBuilder = await import('../universeBuilder.js');
+    const mediaCollections = await import('../mediaCollections.js');
+
+    // Two distinct filenames, identical bytes.
+    const sharedBytes = 'SHARED-PNG-PAYLOAD';
+    fs.writeFileSync(join(tempData, 'images', 'alpha.png'), sharedBytes);
+    fs.writeFileSync(join(tempData, 'images', 'beta.png'), sharedBytes);
+    const hash = sha256Hex(sharedBytes);
+
+    // Universe A references alpha.png.
+    const uniA = await universeBuilder.createUniverse({ name: 'UA' });
+    const collA = await mediaCollections.findOrCreateCollectionByName({
+      name: `Universe: ${uniA.name}`, description: '', universeId: uniA.id,
+    });
+    await mediaCollections.addItem(collA.id, { kind: 'image', ref: 'alpha.png' });
+    const expA = await exporter.exportUniverse(uniA.id, bucket.id);
+
+    // Universe B references beta.png — same bytes, different filename.
+    const uniB = await universeBuilder.createUniverse({ name: 'UB' });
+    const collB = await mediaCollections.findOrCreateCollectionByName({
+      name: `Universe: ${uniB.name}`, description: '', universeId: uniB.id,
+    });
+    await mediaCollections.addItem(collB.id, { kind: 'image', ref: 'beta.png' });
+    const expB = await exporter.exportUniverse(uniB.id, bucket.id);
+
+    // Both manifests point at the same blob path; only one on-disk file exists.
+    expect(fs.existsSync(join(tempBucket, 'assets', 'blobs', hash))).toBe(true);
+    expect(fs.readdirSync(join(tempBucket, 'assets', 'blobs'))).toEqual([hash]);
+
+    // Each manifest's assetRef carries the hash + its own original filename.
+    const mA = JSON.parse(fs.readFileSync(join(tempBucket, 'manifests', expA.filename), 'utf-8'));
+    const mB = JSON.parse(fs.readFileSync(join(tempBucket, 'manifests', expB.filename), 'utf-8'));
+    expect(mA.assetRefs).toContainEqual({ kind: 'image', ref: 'alpha.png', hash });
+    expect(mB.assetRefs).toContainEqual({ kind: 'image', ref: 'beta.png', hash });
+
+    // Import path: each manifest restores its filename in the local data dir.
+    fs.rmSync(join(tempData, 'images', 'alpha.png'), { force: true });
+    fs.rmSync(join(tempData, 'images', 'beta.png'), { force: true });
+    await mediaCollections.deleteCollection(collA.id);
+    await mediaCollections.deleteCollection(collB.id);
+    await universeBuilder.deleteUniverse(uniA.id);
+    await universeBuilder.deleteUniverse(uniB.id);
+
+    simulateRemoteSender(tempBucket, expA.filename);
+    simulateRemoteSender(tempBucket, expB.filename);
+    await importer.processManifest(bucket.id, expA.filename);
+    await importer.processManifest(bucket.id, expB.filename);
+
+    expect(fs.existsSync(join(tempData, 'images', 'alpha.png'))).toBe(true);
+    expect(fs.existsSync(join(tempData, 'images', 'beta.png'))).toBe(true);
+    expect(fs.readFileSync(join(tempData, 'images', 'alpha.png'), 'utf-8')).toBe(sharedBytes);
+    expect(fs.readFileSync(join(tempData, 'images', 'beta.png'), 'utf-8')).toBe(sharedBytes);
+  });
+
+  it('importer falls back to legacy assets/<kind>/<filename> when manifest asset ref omits hash (v1 compat)', async () => {
+    const bucket = await buckets.createBucket({ name: 'LegacyImportBucket', path: tempBucket, mode: 'auto-merge' });
+    const fs = await import('fs');
+    const { SHARING_SCHEMA_VERSION } = await import('./version.js');
+
+    // Hand-craft a v1-style bucket: blob lives at assets/images/<filename>,
+    // manifest's assetRefs has no `hash` field, schemaVersion: 1.
+    fs.mkdirSync(join(tempBucket, 'assets', 'images'), { recursive: true });
+    fs.writeFileSync(join(tempBucket, 'assets', 'images', 'legacy-v1.png'), 'V1BYTES');
+
+    const universeBuilder = await import('../universeBuilder.js');
+    const u = await universeBuilder.createUniverse({ name: 'Legacy v1 Universe' });
+    fs.writeFileSync(join(tempBucket, 'records', 'universes', `${u.id}.json`), JSON.stringify({
+      ...u,
+      origin: {
+        bucketId: bucket.id, bucketName: bucket.name,
+        source: 'old-peer', sourceBio: null,
+        manifestId: 'mfst-v1', importedAt: new Date().toISOString(),
+      },
+    }));
+    await universeBuilder.deleteUniverse(u.id);
+
+    const v1Manifest = {
+      id: 'mfst-v1',
+      schemaVersion: 1,
+      sharingSchemaVersion: 1,
+      producedByVersion: '1.0.0',
+      createdAt: new Date().toISOString(),
+      kind: 'universe',
+      senderInstanceId: 'old-peer',
+      source: 'Old Peer',
+      sourceBio: null,
+      bucketId: bucket.id,
+      bucketName: bucket.name,
+      recordIds: [u.id],
+      assetRefs: [{ kind: 'image', ref: 'legacy-v1.png' }],   // no hash
+      note: null,
+    };
+    const filename = `2000-01-01T00-00-00-000Z-old-peer-${v1Manifest.id}.json`;
+    fs.writeFileSync(join(tempBucket, 'manifests', filename), JSON.stringify(v1Manifest));
+    expect(SHARING_SCHEMA_VERSION).toBeGreaterThanOrEqual(2); // sanity
+
+    const result = await importer.processManifest(bucket.id, filename);
+    expect(result.processed).toBe(true);
+    expect(result.pending).toBeFalsy();
+
+    // Asset blob made it to the local data dir via the legacy path.
+    expect(fs.existsSync(join(tempData, 'images', 'legacy-v1.png'))).toBe(true);
+    expect(fs.readFileSync(join(tempData, 'images', 'legacy-v1.png'), 'utf-8')).toBe('V1BYTES');
   });
 
   it('refuses a manifest with a sharingSchemaVersion newer than local + emits incompatible event', async () => {

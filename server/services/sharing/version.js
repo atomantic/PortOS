@@ -11,6 +11,14 @@
  *       source, sourceBio?, bucketId, bucketName, recordIds[], assetRefs[], note? }.
  *       assetRefs use { kind: 'image'|'video', ref: '<filename>' }.
  *       Record bundles in `records/{series,issues,universes,media}/<id>.json`.
+ *       Asset blobs at `assets/{images,videos}/<filename>`.
+ *   2 — content-addressed asset blobs. assetRefs now `{ kind, ref, hash }`
+ *       (sha256). Blobs live at `assets/blobs/<hash>`; sidecar metadata at
+ *       `assets/blobs/<hash>.metadata.json`. The importer prefers the hash
+ *       lookup and falls back to `assets/<kind>/<filename>` when `hash` is
+ *       absent (so v1 manifests still in-bucket continue to import). Two
+ *       manifests that reference identical bytes under different filenames
+ *       share one on-disk blob, eliminating duplicate-blob storage.
  *
  * Compatibility rules:
  *   - A peer can read a manifest with `sharingSchemaVersion <= local
@@ -28,7 +36,7 @@
  * load-bearing for compat decisions.
  */
 
-export const SHARING_SCHEMA_VERSION = 1;
+export const SHARING_SCHEMA_VERSION = 2;
 
 let cachedAppVersion = null;
 let cachedAt = 0;

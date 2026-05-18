@@ -7,12 +7,10 @@
  */
 
 import { spawn } from 'child_process';
-import { createHash } from 'crypto';
-import { createReadStream } from 'fs';
-import { access, readFile, readdir, stat, writeFile } from 'fs/promises';
+import { access, readdir, stat, writeFile } from 'fs/promises';
 import { hostname } from 'os';
 import { join, resolve, relative, isAbsolute } from 'path';
-import { PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';
+import { PATHS, ensureDir, readJSONFile, sha256File } from '../lib/fileUtils.js';
 import { getEvent } from './eventScheduler.js';
 import { checkHealth } from '../lib/db.js';
 
@@ -269,27 +267,7 @@ export async function generateManifest(snapshotDataDir, manifestPath) {
     const filePath = join(snapshotDataDir, entry);
     const info = await stat(filePath).catch(() => null);
     if (!info || !info.isFile()) continue;
-
-    const relativePath = entry;
-    let hash;
-
-    if (info.size < 512 * 1024) {
-      // Small file: read all at once
-      const content = await readFile(filePath);
-      hash = createHash('sha256').update(content).digest('hex');
-    } else {
-      // Large file: streaming hash
-      hash = await new Promise((resolve, reject) => {
-        const stream = createReadStream(filePath);
-        const hasher = createHash('sha256');
-        stream.pipe(hasher);
-        stream.on('error', reject);
-        hasher.on('finish', () => resolve(hasher.digest('hex')));
-        hasher.on('error', reject);
-      });
-    }
-
-    files[relativePath] = hash;
+    files[entry] = await sha256File(filePath);
   }
 
   const manifest = {

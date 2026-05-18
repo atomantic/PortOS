@@ -6,18 +6,20 @@
  * for full-fidelity re-render metadata) into the bucket, then writes a manifest
  * pointing at the bundled records.
  *
- * Asset filenames are already UUIDs (data/images/<uuid>.png), so collisions
- * between peers' exports are extremely unlikely. We skip-if-present rather than
- * overwrite — a re-share that includes the same asset is a no-op for the blob
- * copy, but the manifest still references it so the recipient knows the asset
- * belongs to the latest share.
+ * Asset blobs are content-addressed by SHA-256 and stored at
+ * `<bucket>/assets/blobs/<hash>` (sidecar metadata at `<hash>.metadata.json`).
+ * Two manifests that reference identical content under different filenames
+ * share one blob on disk — the recipient maps the manifest's per-entry
+ * filename back to the local `data/{kind}/<filename>` location. The asset ref
+ * carries `{ kind, ref, hash }`; legacy v1 manifests without `hash` still
+ * import via the `assets/{kind}/<filename>` fallback path.
  */
 
 import { join, basename } from 'path';
 import { copyFile, readFile, writeFile, stat } from 'fs/promises';
 import { existsSync } from 'fs';
-import { PATHS, ensureDir, atomicWrite, readJSONFile } from '../../lib/fileUtils.js';
-import { getBucket, ensureBucketLayout } from './buckets.js';
+import { PATHS, ensureDir, atomicWrite, readJSONFile, sha256File } from '../../lib/fileUtils.js';
+import { getBucket, ensureBucketLayout, bucketBlobsDir, bucketBlobPath, bucketBlobSidecarPath, imageSidecarName } from './buckets.js';
 import { buildManifest, writeManifest, pruneBucketManifests } from './manifest.js';
 import { listSeries, getSeries } from '../pipeline/series.js';
 import { listIssues } from '../pipeline/issues.js';
@@ -57,33 +59,40 @@ async function resolveSourceBio(bucket) {
   return null;
 }
 
-/** Copy an asset file from `data/images` or `data/videos` into the bucket. Returns ref entry. */
+/**
+ * Copy `<sourceDir>/<filename>` into the bucket's content-addressed blob store.
+ * Returns `{ kind, ref, hash }`; the recipient maps `ref` (the original
+ * filename) back to its `data/{kind}/<ref>` slot. Two manifests that ship
+ * identical bytes under different filenames share one blob.
+ *
+ * First-writer wins on sidecar collision: identical bytes imply identical
+ * gen params in practice, so the second writer's (possibly missing) sidecar
+ * doesn't overwrite the first's.
+ */
 async function copyAssetIfPresent(filename, kind, bucketPath) {
   if (!filename || typeof filename !== 'string') return null;
   const base = basename(filename);
   if (!base || base !== filename) return null; // refuse path traversal
   const sourceDir = kind === 'video' ? PATHS.videos : PATHS.images;
-  const targetDir = join(bucketPath, 'assets', kind === 'video' ? 'videos' : 'images');
-  await ensureDir(targetDir);
+  await ensureDir(bucketBlobsDir(bucketPath));
   const sourcePath = join(sourceDir, base);
   if (!existsSync(sourcePath)) {
     console.log(`⚠️ sharing.exporter: asset not found locally, skipping: ${sourcePath}`);
     return null;
   }
-  const targetPath = join(targetDir, base);
-  if (!existsSync(targetPath)) {
-    await copyFile(sourcePath, targetPath);
+  const hash = await sha256File(sourcePath);
+  const blobPath = bucketBlobPath(bucketPath, hash);
+  if (!existsSync(blobPath)) {
+    await copyFile(sourcePath, blobPath);
   }
-  // Also copy the sidecar metadata.json (image-gen path stamps prompts there).
   if (kind === 'image') {
-    const sidecarBase = base.replace(/\.(png|jpe?g|webp)$/i, '') + '.metadata.json';
-    const sidecarSource = join(sourceDir, sidecarBase);
+    const sidecarSource = join(sourceDir, imageSidecarName(base));
     if (existsSync(sidecarSource)) {
-      const sidecarTarget = join(targetDir, sidecarBase);
+      const sidecarTarget = bucketBlobSidecarPath(bucketPath, hash);
       if (!existsSync(sidecarTarget)) await copyFile(sidecarSource, sidecarTarget);
     }
   }
-  return { kind, ref: base };
+  return { kind, ref: base, hash };
 }
 
 /**
