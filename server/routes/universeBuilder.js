@@ -48,8 +48,10 @@ const mapServiceError = (err) => {
 
 // ---- shared zod fragments ----
 // `id` is optional on input — the service-layer sanitizer mints one with a
-// `var-`/`sheet-` prefix when absent. Existing non-empty ids round-trip
-// verbatim so renames + bucket-moves preserve the link to imageRefs[].
+// `var-`/`sheet-` prefix when absent. Existing non-empty ids are normalized
+// on read/write (trimmed + capped to 80 chars) so renames + bucket-moves
+// preserve the link to imageRefs[]; callers should treat the normalized
+// form as the canonical id rather than the raw value they supplied.
 const entryIdField = z.string().trim().min(1).max(80).optional();
 const entryImageRefField = z.string().trim().min(1).max(svc.IMAGE_REF_FILENAME_MAX);
 const entryImageRefsField = z.array(entryImageRefField).max(svc.IMAGE_REFS_PER_ENTRY_MAX).optional();

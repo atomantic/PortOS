@@ -2311,9 +2311,12 @@ export function CategoryEditor({
     const next = [...variations];
     // Preserve `id`, `locked`, and `imageRefs` — only label + prompt are
     // editable in this row. A naive replacement would re-mint the variation's
-    // id (breaking the link to its render history) and drop accrued imageRefs
-    // because the server's stale-PATCH guard treats fewer-or-equal as current
-    // and lets the empty list through.
+    // id (breaking the link to its render history) and drop accrued imageRefs.
+    // The server's stale-PATCH guard catches some of this via length + tail
+    // comparison (variations with NEW renders in cur survive an empty patch),
+    // but a stale variation whose history hasn't grown server-side since the
+    // client loaded would still get its imageRefs cleared if we sent an empty
+    // array. Echoing cur's array verbatim avoids relying on the guard.
     next[editIdx] = {
       ...next[editIdx],
       label: label.slice(0, 120),

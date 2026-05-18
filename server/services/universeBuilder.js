@@ -970,9 +970,12 @@ export async function updateUniverse(id, patchOrMutator = {}) {
     // round-trips the variation body the client loaded before a render
     // completed would otherwise clobber the freshly-appended filename. Match
     // by `id` and preserve cur's `imageRefs` when it has more entries than
-    // the patch — fewer-or-equal means the client is current and the patch's
-    // value (which may legitimately reflect an explicit clear, though the
-    // current UI doesn't expose that) survives.
+    // the patch OR when their tails differ (the at-cap rotation case, where
+    // an append drops the oldest and lengths stay equal). Same-length +
+    // same-tail means the client is current and the patch survives — note
+    // that as a corollary, an empty patched list against a non-empty cur is
+    // treated as stale and cur's history is preserved (the current UI has
+    // no explicit-clear control, so this is the safer default).
     if (!isMutator && 'categories' in patch && patch.categories && typeof patch.categories === 'object') {
       for (const [catKey, catVal] of Object.entries(mergedCategories)) {
         if (!catVal || !Array.isArray(catVal.variations)) continue;
