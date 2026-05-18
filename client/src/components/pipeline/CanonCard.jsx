@@ -56,6 +56,19 @@ function ReadonlyChip({ children }) {
   );
 }
 
+function SourceSeriesChip({ sourceSeriesId, seriesName }) {
+  return (
+    <span
+      className="inline-flex items-center px-1.5 py-0.5 rounded bg-port-card border border-port-border text-[9px] uppercase tracking-wider text-gray-400"
+      title={seriesName
+        ? `Introduced by series "${seriesName}" (${sourceSeriesId})`
+        : `Introduced by series ${sourceSeriesId}`}
+    >
+      {seriesName ? `from ${seriesName}` : 'from series'}
+    </span>
+  );
+}
+
 // Wardrobes (A2) — collapsed summary by default; click to expand into an
 // inline editor when `editable`. Per-field edits are buffered in a draft
 // state and only PATCHed on blur, so a textarea keystroke doesn't fire a
@@ -227,6 +240,10 @@ export default function CanonCard({
   // Optional — settings-only "Render clean plate" affordance. Called with
   // `(entry)` so the parent can build the no-people prompt variant.
   onRenderCleanPlate = null,
+  // Optional `{ [seriesId]: name }` lookup so the "from series" chip can
+  // render the actual series name. Null/empty falls back to the id-tooltip
+  // form for callers that don't have the map handy.
+  seriesNameMap = null,
 }) {
   const description = kind.descFor(entry);
   const refs = Array.isArray(entry.imageRefs) ? entry.imageRefs : [];
@@ -282,12 +299,10 @@ export default function CanonCard({
         </span>
       ) : null}
       {entry.sourceSeriesId ? (
-        <span
-          className="inline-flex items-center px-1.5 py-0.5 rounded bg-port-card border border-port-border text-[9px] uppercase tracking-wider text-gray-400"
-          title={`Introduced by series ${entry.sourceSeriesId}`}
-        >
-          from series
-        </span>
+        <SourceSeriesChip
+          sourceSeriesId={entry.sourceSeriesId}
+          seriesName={seriesNameMap?.[entry.sourceSeriesId]}
+        />
       ) : null}
     </div>
   );
