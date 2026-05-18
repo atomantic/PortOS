@@ -255,4 +255,43 @@ describe('fileCoverIntoAutoCollection (dispatcher)', () => {
     await fileCoverIntoAutoCollection({ seriesId: 'ser-x', filename: '' });
     expect(await collections.listCollections()).toEqual([]);
   });
+
+  it('preloads the dispatcher-fetched series into the universe leaf — skips the leaf\'s initial getSeries', async () => {
+    // Universe-linked path: with the dispatcher passing _preloadedSeries,
+    // the leaf must skip its `initialSeries` read but still perform the
+    // race-detection re-read. Net effect: 2 getSeries calls total
+    // (dispatcher + leaf re-read) instead of 3 (dispatcher + leaf initial
+    // + leaf re-read). Capture call count before restoring the spy so a
+    // failing assertion doesn't leak the spy into later tests.
+    const universe = await universeSvc.createUniverse({ name: 'Pre' });
+    const series = await seriesSvc.createSeries({ name: 'S', universeId: universe.id });
+    const spy = vi.spyOn(seriesSvc, 'getSeries');
+    await fileCoverIntoAutoCollection({ seriesId: series.id, filename: 'cover.png' });
+    const callCount = spy.mock.calls.length;
+    spy.mockRestore();
+    expect(callCount).toBe(2);
+    expect(await collections.findCollectionByUniverseId(universe.id)).toMatchObject({
+      items: [expect.objectContaining({ ref: 'cover.png' })],
+    });
+  });
+
+  it('does NOT preload the series leaf — its first read is the early re-route check', async () => {
+    // The universeless branch deliberately keeps the series leaf's own
+    // first getSeries call. That read is the race window for "a universe
+    // link was added between dispatcher and leaf entry": catching it
+    // there re-routes the cover into the universe collection. If we
+    // collapsed that read by preloading, the cover would file into the
+    // per-series collection and merely get orphaned by recovery —
+    // landing nowhere useful. Pin the un-optimized 3-call shape so a
+    // future "let's also preload the series leaf" refactor fails loud.
+    const series = await seriesSvc.createSeries({ name: 'Indie' });
+    const spy = vi.spyOn(seriesSvc, 'getSeries');
+    await fileCoverIntoAutoCollection({ seriesId: series.id, filename: 'cover.png' });
+    const callCount = spy.mock.calls.length;
+    spy.mockRestore();
+    expect(callCount).toBe(3);
+    expect(await collections.findCollectionBySeriesId(series.id)).toMatchObject({
+      items: [expect.objectContaining({ ref: 'cover.png' })],
+    });
+  });
 });

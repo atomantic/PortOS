@@ -45,9 +45,19 @@ export async function fileCoverIntoAutoCollection({ seriesId, filename }) {
   const series = await seriesSvc.getSeries(seriesId).catch(() => null);
   if (!series) return;
   if (series.universeId) {
-    await fileCoverIntoUniverseCollection({ seriesId, filename });
+    // Forward the dispatcher's fetched series so the universe leaf can
+    // skip its initial getSeries pin — its job there is just to capture
+    // the universeId, which is already in hand. The leaf still re-reads
+    // mid-flight for race-detection.
+    await fileCoverIntoUniverseCollection({ seriesId, filename, _preloadedSeries: series });
     return;
   }
+  // Series-leaf intentionally does NOT receive a preload: its own first
+  // read is the early re-route check for "universe link added between
+  // dispatcher and leaf entry" — collapsing that to the dispatcher's
+  // earlier read would let a newly-linked series land in the per-series
+  // collection (and just get orphaned by recovery) instead of being
+  // re-routed into the universe collection.
   await fileCoverIntoSeriesCollection({ seriesId, filename });
 }
 
@@ -55,14 +65,20 @@ export async function fileCoverIntoAutoCollection({ seriesId, filename }) {
 // `seriesId` is the bridge — series → universeId → universe → collection.
 // Silent no-op when the series has no universe link (a common case for
 // quick experiments with no canon yet).
-export async function fileCoverIntoUniverseCollection({ seriesId, filename }) {
+//
+// `_preloadedSeries` is an internal optimization hook: the dispatcher
+// (`fileCoverIntoAutoCollection`) has already fetched the series record
+// purely to branch — passing it through here skips the initial getSeries
+// read. The mid-flight re-read below is intentional race-detection and
+// is preserved either way.
+export async function fileCoverIntoUniverseCollection({ seriesId, filename, _preloadedSeries } = {}) {
   if (!seriesId || typeof filename !== 'string' || !filename) return;
 
   // Pin the universeId we observed up front. After this await the series's
   // link could change (a parallel updateSeries unlinks or re-points it);
   // every downstream step compares against this snapshot so a mid-flight
   // re-link doesn't mis-attribute the cover to the new universe.
-  const initialSeries = await seriesSvc.getSeries(seriesId).catch(() => null);
+  const initialSeries = _preloadedSeries ?? await seriesSvc.getSeries(seriesId).catch(() => null);
   if (!initialSeries?.universeId) return;
   const universeId = initialSeries.universeId;
 
@@ -121,6 +137,15 @@ export async function fileCoverIntoUniverseCollection({ seriesId, filename }) {
 
 // Per-series fallback when `series.universeId` is null. Same shape +
 // delete-race recovery as the universe path above.
+//
+// This leaf does NOT accept a `_preloadedSeries` arg from the dispatcher
+// even though the universe leaf does. The reason: this leaf's first read
+// (below) is the *early re-route check* for "a universe link was added
+// between the dispatcher's fetch and this leaf's entry." If we collapsed
+// that read to the dispatcher's earlier snapshot, a newly-linked series
+// would proceed down the per-series path and get filed into the wrong
+// bucket — the post-`addItem` recovery would then unlink it, leaving the
+// cover orphaned instead of where it belonged (the universe collection).
 export async function fileCoverIntoSeriesCollection({ seriesId, filename }) {
   if (!seriesId || typeof filename !== 'string' || !filename) return;
 
