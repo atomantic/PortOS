@@ -375,10 +375,17 @@ async function applyAutoMerge(bucket, manifest, records, { availableAssetKeys = 
   };
 
   // Universes first — series may reference them via universeId.
+  // Wrap updateUniverse in a mutator form so the service-side
+  // `referenceSheetImageRef` preservation guard (gated on `!isMutator`) is
+  // skipped: sync's intent is that the remote's newer record wins LWW,
+  // including server-owned operational pointers like the rendered sheet
+  // filename. A literal-patch call would let the local stale pointer
+  // overwrite the remote's freshly-rendered one.
   for (const uni of records.universes) {
     await mergeOne({
       kind: 'universe', record: uni, label: uni.name,
-      getFn: getUniverse, insertFn: insertUniverseWithId, updateFn: updateUniverse,
+      getFn: getUniverse, insertFn: insertUniverseWithId,
+      updateFn: (id, record) => updateUniverse(id, () => record),
     });
   }
   for (const s of records.series) {
