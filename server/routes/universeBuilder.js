@@ -23,6 +23,7 @@ import { getUniverseCanonUsage } from '../services/canonUsage.js';
 import { expandWorldTemplate, generateCategoryVariations } from '../services/universeBuilderExpand.js';
 import { refineWorldPrompts } from '../services/universeBuilderRefine.js';
 import { promoteVariationToCanon, VALID_TARGET_KINDS } from '../services/universeBuilderPromote.js';
+import { autoSortOtherBuckets } from '../services/universeBuilderAutoSort.js';
 import { enqueueJob } from '../services/mediaJobQueue/index.js';
 import { getSettings } from '../services/settings.js';
 import { findOrCreateUniverseCollection } from '../services/mediaCollections.js';
@@ -194,6 +195,14 @@ const promoteVariationSchema = z.object({
   category: z.string().trim().min(1).max(svc.WORLD_CATEGORY_KEY_MAX),
   label: z.string().trim().min(1).max(svc.VARIATION_LABEL_MAX),
   targetKind: z.enum(VALID_TARGET_KINDS).optional(),
+  providerId: z.string().trim().max(80).optional(),
+  model: z.string().trim().max(200).optional(),
+});
+
+// Auto-sort takes no bucket selection — the service scans for every
+// `kind: 'other'` bucket on the universe. Provider/model are optional;
+// the service falls back to the active provider when omitted.
+const autoSortSchema = z.object({
   providerId: z.string().trim().max(80).optional(),
   model: z.string().trim().max(200).optional(),
 });
@@ -557,6 +566,17 @@ router.post('/:id/extract-canon', asyncHandler(async (req, res) => {
 router.post('/:id/promote-variation', asyncHandler(async (req, res) => {
   const body = validateRequest(promoteVariationSchema, req.body ?? {});
   const result = await promoteVariationToCanon(req.params.id, body)
+    .catch((err) => { throw mapServiceError(err); });
+  res.json(result);
+}));
+
+// Bulk-classify every `kind: 'other'` bucket via one LLM call. Each bucket's
+// `kind` is updated atomically in one `updateUniverse` patch; renames the
+// LLM suggests are surfaced in the response but not auto-applied (the UI
+// can present them as opt-in suggestions).
+router.post('/:id/auto-sort', asyncHandler(async (req, res) => {
+  const body = validateRequest(autoSortSchema, req.body ?? {});
+  const result = await autoSortOtherBuckets(req.params.id, body)
     .catch((err) => { throw mapServiceError(err); });
   res.json(result);
 }));
