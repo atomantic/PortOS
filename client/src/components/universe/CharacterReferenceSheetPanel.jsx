@@ -46,6 +46,11 @@ export default function CharacterReferenceSheetPanel({
   // Prevent the completion callback from firing twice under React 18 StrictMode
   // dev double-mount.
   const settledRef = useRef(null);
+  // mountedRef gates the post-completion HEAD-poll callback so an unmount
+  // (universe switch, parent collapsing the section, etc.) mid-poll doesn't
+  // fire `onSheetCompleted` against a stale entry/universe.
+  const mountedRef = useRef(true);
+  useEffect(() => () => { mountedRef.current = false; }, []);
 
   const { status, filename, error, progress } = useMediaJobProgress(jobId);
 
@@ -55,15 +60,17 @@ export default function CharacterReferenceSheetPanel({
     if (status === 'completed' && filename) {
       settledRef.current = jobId;
       const dest = destFilenameRef.current;
+      const entryId = entry?.id;
       destFilenameRef.current = null;
       setJobId(null);
       // The SSE 'completed' event fires when the FLUX.2 child exits — BEFORE
       // the server-side onSheetComplete listener has copied the gallery PNG
       // into /data/image-refs/ and stamped the character. Verify the file is
-      // actually reachable before we flip the UI to show it, otherwise the
-      // <img> renders a 404 that the browser caches.
+      // actually reachable before flipping the UI; otherwise the <img>
+      // renders a 404 that the browser caches.
       waitForImageRef(dest).then((ok) => {
-        if (ok) onSheetCompleted?.(entry.id, dest);
+        if (!mountedRef.current) return;
+        if (ok) onSheetCompleted?.(entryId, dest);
         else toast.error('Sheet render finished but the image never appeared — refresh to see it');
       });
     } else if (status === 'failed' || status === 'canceled') {

@@ -101,7 +101,10 @@ export async function expandUniverseCharacter(universeId, entryId, options = {})
     },
   );
 
-  if (!content || typeof content !== 'object') {
+  // Reject array AND non-object — `typeof [] === 'object'` would otherwise
+  // let an LLM that returned `[{...}]` slip through `applyExpansion` as a
+  // valid-but-empty payload (no string keys match) and silently no-op.
+  if (!content || typeof content !== 'object' || Array.isArray(content)) {
     throw new ServerError('LLM returned an empty character expansion', {
       status: 502, code: 'UNIVERSE_CHARACTER_EXPAND_EMPTY',
     });

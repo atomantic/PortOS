@@ -108,4 +108,16 @@ describe('universeCharacterExpand — applyExpansion (no-clobber merge semantics
     // 15 strings + 5 lists = 20 fields total in the expand contract.
     expect(updatedFields).toHaveLength(20);
   });
+
+  it('REGRESSION: top-level array LLM response no-ops in applyExpansion (route-level rejection lives in expandUniverseCharacter)', () => {
+    // `typeof [] === 'object'`, so `applyExpansion` accepts an array and
+    // produces no updates — the route caller is responsible for the 502.
+    // This test pins the pure no-op behavior so applyExpansion can stay
+    // permissive; the upstream rejection is enforced in
+    // expandUniverseCharacter and covered by the route mocks.
+    const target = { name: 'Vale', pronouns: '' };
+    const { merged, updatedFields } = applyExpansion(target, [{ pronouns: 'she/her' }]);
+    expect(updatedFields).toEqual([]);
+    expect(merged.pronouns).toBe('');
+  });
 });

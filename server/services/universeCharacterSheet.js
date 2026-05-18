@@ -267,7 +267,17 @@ export async function renderCharacterReferenceSheet(universeId, entryId, options
 
   const generationId = randomUUID();
   // Attach listeners BEFORE generateImage spawns so a fast Python child can't
-  // emit before we're listening.
+  // emit before we're listening. A timeout guard detaches if the runner
+  // hangs or never emits a terminal event for this generationId — otherwise
+  // every abandoned render leaves two listeners on the shared imageGenEvents
+  // emitter and they accumulate into MaxListeners warnings.
+  const LISTENER_TIMEOUT_MS = 15 * 60 * 1000;
+  let timeoutHandle = null;
+  const detach = () => {
+    if (timeoutHandle) { clearTimeout(timeoutHandle); timeoutHandle = null; }
+    imageGenEvents.off('completed', onCompleted);
+    imageGenEvents.off('failed', onFailed);
+  };
   const onCompleted = async (ev) => {
     if (ev.generationId !== generationId) return;
     detach();
@@ -280,12 +290,13 @@ export async function renderCharacterReferenceSheet(universeId, entryId, options
     detach();
     console.log(`⚠️ Character sheet render failed [${generationId.slice(0, 8)}]: ${ev.error || 'unknown'}`);
   };
-  const detach = () => {
-    imageGenEvents.off('completed', onCompleted);
-    imageGenEvents.off('failed', onFailed);
-  };
   imageGenEvents.on('completed', onCompleted);
   imageGenEvents.on('failed', onFailed);
+  timeoutHandle = setTimeout(() => {
+    console.log(`⏱️ Character sheet render timed out (no terminal event in ${LISTENER_TIMEOUT_MS / 60000}m) — detaching listeners [${generationId.slice(0, 8)}]`);
+    detach();
+  }, LISTENER_TIMEOUT_MS);
+  timeoutHandle.unref?.();
 
   const generateImage = await loadGenerateImage();
   const job = await generateImage({
