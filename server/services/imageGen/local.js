@@ -18,7 +18,7 @@ import { existsSync, watch as fsWatch } from 'fs';
 import { join, dirname, resolve as resolvePath, sep as PATH_SEP, basename } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
-import { assertSafeFilename, ensureDir, listDirectoryByExtension, PATHS, safeJSONParse, resolveGalleryImage } from '../../lib/fileUtils.js';
+import { assertSafeFilename, ensureDir, listDirectoryByExtension, PATHS, safeJSONParse, resolveGalleryImage, resolveImageRef } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { imageGenEvents } from '../imageGenEvents.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, PYTHON_NOISE_RE } from '../../lib/sseUtils.js';
@@ -289,18 +289,23 @@ export async function generateImage({ pythonPath, prompt, negativePrompt = '', m
   const validInitImageStrength = validInitImagePath && initImageStrength != null
     ? Math.max(0, Math.min(1, Number(initImageStrength)))
     : null;
-  // Multi-reference: same defense-in-depth as initImagePath — re-anchor each
-  // path through resolveGalleryImage so a sidecar replay can't sneak a path
-  // outside PATHS.images into the runner. Strengths are clamped element-wise
-  // and padded to the path-count so the parallel arrays always line up.
-  const validReferenceImagePaths = (Array.isArray(referenceImagePaths) ? referenceImagePaths : [])
-    .filter((p) => typeof p === 'string')
-    .map((p) => resolveGalleryImage(p))
+  // Multi-reference: re-anchor each path through resolveImageRef so a sidecar
+  // replay can't sneak a path outside PATHS.imageRefs into the runner. Pair
+  // each path with its strength BEFORE filtering so a rejected entry doesn't
+  // shift the strength array — otherwise the surviving path would inherit the
+  // wrong slot's strength.
+  const rawRefPaths = Array.isArray(referenceImagePaths) ? referenceImagePaths : [];
+  const validReferences = rawRefPaths
+    .map((p, i) => {
+      const resolved = typeof p === 'string' ? resolveImageRef(p) : null;
+      if (!resolved) return null;
+      const rawStrength = referenceImageStrengths?.[i];
+      const strength = rawStrength != null ? Math.max(0, Math.min(1, Number(rawStrength))) : 1.0;
+      return { path: resolved, strength };
+    })
     .filter(Boolean);
-  const validReferenceImageStrengths = validReferenceImagePaths.map((_, i) => {
-    const s = referenceImageStrengths?.[i];
-    return s != null ? Math.max(0, Math.min(1, Number(s))) : 1.0;
-  });
+  const validReferenceImagePaths = validReferences.map((r) => r.path);
+  const validReferenceImageStrengths = validReferences.map((r) => r.strength);
   const meta = { id: jobId, prompt, negativePrompt, modelId, seed: actualSeed, width: Number(width), height: Number(height), steps: actualSteps, guidance: actualGuidance, quantize, filename, loraFilenames: validLoraFilenames, loraPaths: validLoras, loraScales, initImageFilename: validInitImagePath ? basename(validInitImagePath) : null, initImageStrength: validInitImageStrength, referenceImageFilenames: validReferenceImagePaths.map((p) => basename(p)), referenceImageStrengths: validReferenceImageStrengths, createdAt: new Date().toISOString() };
   const job = { ...meta, clients: [], status: 'running' };
   jobs.set(jobId, job);

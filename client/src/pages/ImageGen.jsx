@@ -408,13 +408,23 @@ export default function ImageGen() {
   };
 
   // Object URL cleanup on unmount — both the single init image and any
-  // populated reference slots.
+  // populated reference slots. Mirror the live URLs into a ref so the
+  // empty-deps unmount cleanup walks the LATEST set, not the initial empty
+  // closure snapshot (per-action handlers already revoke when a slot is
+  // replaced/cleared; this catches the one held at unmount).
+  const previewUrlsRef = useRef({ init: null, refs: [] });
+  useEffect(() => {
+    previewUrlsRef.current = {
+      init: initImage.previewUrl,
+      refs: referenceImages.map((s) => s.previewUrl),
+    };
+  });
   useEffect(() => () => {
-    if (initImage.previewUrl?.startsWith('blob:')) URL.revokeObjectURL(initImage.previewUrl);
-    for (const slot of referenceImages) {
-      if (slot.previewUrl?.startsWith('blob:')) URL.revokeObjectURL(slot.previewUrl);
+    const { init, refs } = previewUrlsRef.current;
+    if (init?.startsWith('blob:')) URL.revokeObjectURL(init);
+    for (const url of refs) {
+      if (url?.startsWith('blob:')) URL.revokeObjectURL(url);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // When the user closes the Settings drawer, settings may have changed

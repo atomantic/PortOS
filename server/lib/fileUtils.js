@@ -63,6 +63,11 @@ export const PATHS = {
   missions: join(__lib_dirname, '../../data/cos/missions'),
   tools: join(__lib_dirname, '../../data/tools'),
   images: join(__lib_dirname, '../../data/images'),
+  // Uploaded multi-reference inputs for FLUX.2 multi-ref edits. Sibling of
+  // `images/` rather than a subdir so the gallery's flat `.png` enumeration
+  // never surfaces them, and so a future per-render cleanup pass can drop
+  // the whole dir without touching the gallery.
+  imageRefs: join(__lib_dirname, '../../data/image-refs'),
   loras: join(__lib_dirname, '../../data/loras'),
   videos: join(__lib_dirname, '../../data/videos'),
   videoThumbnails: join(__lib_dirname, '../../data/video-thumbnails'),
@@ -633,6 +638,34 @@ export function resolveGalleryImage(name, { mustExist = true } = {}) {
   // throwIfNoEntry:false swallows ENOENT but not EACCES / transient I/O —
   // treat those as "not a valid gallery reference" too rather than bubbling
   // a 500 out of the route layer.
+  try {
+    const stat = statSync(localPath, { throwIfNoEntry: false });
+    return stat?.isFile() ? localPath : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resolve a user-supplied reference-image filename to an absolute path under
+ * `PATHS.imageRefs`. Multi-reference uploads land in a sibling dir to keep
+ * them out of the gallery enumeration; this helper enforces the same
+ * defense-in-depth checks as `resolveGalleryImage` but anchored at the refs
+ * root.
+ *
+ * @param {string} name - Filename to resolve (basenamed internally)
+ * @param {object} [opts]
+ * @param {boolean} [opts.mustExist=true] - Require the resolved path to be an existing regular file
+ * @returns {string|null} Absolute path inside PATHS.imageRefs, or null
+ */
+export function resolveImageRef(name, { mustExist = true } = {}) {
+  if (typeof name !== 'string' || !name) return null;
+  const safe = basename(name);
+  if (!safe || safe === '.' || safe === '..') return null;
+  const refsRoot = resolvePath(PATHS.imageRefs) + PATH_SEP;
+  const localPath = resolvePath(join(PATHS.imageRefs, safe));
+  if (!localPath.startsWith(refsRoot)) return null;
+  if (!mustExist) return localPath;
   try {
     const stat = statSync(localPath, { throwIfNoEntry: false });
     return stat?.isFile() ? localPath : null;

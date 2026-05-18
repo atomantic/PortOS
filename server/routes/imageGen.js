@@ -156,14 +156,18 @@ router.post('/generate', initImageUpload, asyncHandler(async (req, res) => {
   const initUpload = req.files?.initImage;
   const referenceImagePaths = [];
   const referenceImageStrengths = [];
-  const referenceUploads = REFERENCE_IMAGE_FIELDS.map((field, i) => ({
-    upload: req.files?.[field],
-    strength: data.referenceStrengths?.[i],
-  })).filter((entry) => entry.upload);
+  // Pair strengths by PACK position (post-filter), not slot position — the
+  // client renumbers populated slots into `referenceImage1..N` and sends a
+  // parallel `referenceStrengths` array sized N. A curl user could leave a
+  // gap (`referenceImage2` + `referenceImage4` only); the strength at index 0
+  // still pairs with the first surviving upload in slot order.
+  const referenceUploads = REFERENCE_IMAGE_FIELDS
+    .map((field) => req.files?.[field])
+    .filter(Boolean)
+    .map((upload, packedIndex) => ({ upload, strength: data.referenceStrengths?.[packedIndex] }));
 
-  if (initUpload || referenceUploads.length) {
-    await ensureDir(PATHS.images);
-  }
+  if (initUpload) await ensureDir(PATHS.images);
+  if (referenceUploads.length) await ensureDir(PATHS.imageRefs);
   if (initUpload) {
     // Trust the validated mimetype from the fileFilter — picking the ext
     // off the original filename can mismatch the bytes (e.g. HEIC saved
@@ -187,7 +191,7 @@ router.post('/generate', initImageUpload, asyncHandler(async (req, res) => {
   for (const { upload, strength } of referenceUploads) {
     const ext = MIME_TO_EXT[(upload.mimetype || '').toLowerCase()] || '.png';
     const refFilename = `ref-${randomUUID()}${ext}`;
-    const refPath = join(PATHS.images, refFilename);
+    const refPath = join(PATHS.imageRefs, refFilename);
     await copyFile(upload.path, refPath);
     uploadedTempPaths.push(upload.path);
     referenceImagePaths.push(refPath);
