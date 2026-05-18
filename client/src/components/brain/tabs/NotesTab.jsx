@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
 import toast from '../../ui/Toast';
+import FolderPicker from '../../FolderPicker';
 import { timeAgo, formatBytes } from '../../../utils/formatters';
 
 export default function NotesTab({ onRefresh }) {
@@ -731,8 +732,9 @@ function VaultSetup({ detectedVaults, vaults, customPath, setCustomPath, adding,
             value={customPath}
             onChange={e => setCustomPath(e.target.value)}
             placeholder="/path/to/obsidian/vault"
-            className="flex-1 bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-white placeholder-gray-500"
+            className="flex-1 min-w-0 bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-white placeholder-gray-500"
           />
+          <FolderPicker value={customPath} onChange={setCustomPath} />
           <button
             onClick={() => {
               if (customPath.trim()) {
