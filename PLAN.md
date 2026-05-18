@@ -14,7 +14,6 @@ _Nothing currently parked — pick the next item from the Backlog._
 
 - [ ] [multi-hop-provenance-chains-re-share-authors-a] **Multi-hop provenance chains.** Re-share authors a fresh `origin` block; `chain[]` would preserve full attribution. Defer until users ask.
 - [ ] [same-collection-export-pattern-for-pipeline-series] **Same collection-export pattern for pipeline series with auto-collections.** Series renders that get auto-filed into a per-series collection should also flow through `manifest.collection`.
-- [ ] [sharing-inbox-live-subscription-badge] **"🔄 live" badge on inbox subscription rows.** No badge UI today; mark rows whose subscription file has updated within the last sync window.
 
 ### Importer (deferred research)
 
