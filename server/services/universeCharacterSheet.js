@@ -465,9 +465,17 @@ export async function onSheetComplete({ universeId, entryId, jobId, sourceFilena
     stamped = true;
     return { characters: nextList };
   });
-  // Release the slot only after a successful stamp — a failed stamp leaves
-  // the slot owned by us so the next render-start cleanly overwrites it.
-  _latestPendingByCharacter.delete(key);
+  // Release the slot only after a successful stamp AND only if it still
+  // belongs to us — between the supersede check and this delete, a newer
+  // render could have started, claimed the slot, and arrived here in
+  // parallel. An unconditional delete would wipe the newer render's slot
+  // and cause its onSheetComplete to see "superseded" (slot empty ≠ jobId)
+  // and skip its own stamp — leaving the older filename persisted. A
+  // failed stamp leaves the slot owned by us so the next render-start
+  // cleanly overwrites it.
+  if (_latestPendingByCharacter.get(key) === jobId) {
+    _latestPendingByCharacter.delete(key);
+  }
   if (!stamped) {
     console.log(`⚠️ Character ${entryId} not found post-render — sheet saved but not linked`);
     return null;

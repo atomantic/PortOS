@@ -281,6 +281,11 @@ export function stripCanonControlFields(entry) {
 
 const nowIso = () => new Date().toISOString();
 
+// Any non-empty string `raw` round-trips verbatim — the `idPrefix` arg is
+// ONLY used to mint a fresh id when `raw` is absent/blank. Callers that
+// need to enforce a per-shape prefix (e.g. drop a client-supplied
+// `pending-*` placeholder so a fresh `<kind>-<uuid>` gets minted) must
+// strip the offending id before calling.
 function ensureId(raw, idPrefix) {
   if (isStr(raw) && raw) return raw;
   return `${idPrefix}${randomUUID()}`;

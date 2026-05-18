@@ -245,9 +245,11 @@ export default function CharacterDetailEditor({ entry, onPatch, onExpand, expand
     // Client-only id on pending rows so ListRow's local draft state stays
     // bound to THIS row across re-renders and after-deletes — without it,
     // the React key falls through to index and an earlier-row delete shifts
-    // a different row's drafts buffer onto this one. The server sanitizer
-    // strips this client id and assigns its own when the row promotes, so
-    // round-tripped persisted rows keep stable server-stamped ids.
+    // a different row's drafts buffer onto this one. The `pending-` prefix
+    // is stripped at promotion (see updateRow) so the server's `ensureId`
+    // mints a fresh `<kind>-<uuid>` id under its own convention; without
+    // that strip the sanitizer would round-trip the client prefix back onto
+    // the persisted row.
     const id = `pending-${section.key}-${(crypto?.randomUUID?.() ?? Date.now().toString(36) + Math.random().toString(36).slice(2))}`;
     const blank = { id, ...Object.fromEntries(section.columns.map((c) => [c.name, ''])) };
     setPendingByList((prev) => ({
@@ -269,10 +271,15 @@ export default function CharacterDetailEditor({ entry, onPatch, onExpand, expand
     const pending = pendingFor(section);
     const requiredFilled = String(nextRow[requiredColumn(section)] || '').trim().length > 0;
     if (requiredFilled) {
-      // Promote into persisted; drop from pending.
+      // Promote into persisted; drop from pending. Strip the client-only
+      // `pending-*` id so the server's sanitizer mints a fresh `<kind>-<uuid>`
+      // under its own convention (sanitizer's `ensureId` preserves any
+      // non-empty string id verbatim, so an unstripped pending prefix would
+      // round-trip onto the persisted row).
       const remaining = pending.filter((_, i) => i !== pIdx);
       setPendingByList((prev) => ({ ...prev, [section.key]: remaining }));
-      patchList(section.field, [...persistedFor(section), nextRow]);
+      const { id: _pendingId, ...promoted } = nextRow;
+      patchList(section.field, [...persistedFor(section), promoted]);
       return;
     }
     const next = pending.map((r, i) => (i === pIdx ? nextRow : r));
