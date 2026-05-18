@@ -46,6 +46,15 @@ const RICH_SPEC = Object.freeze({
   characters: Object.freeze([
     { field: 'physicalDescription' },
     { field: 'role' },
+    // Extended visual descriptors — flow into per-page render prompts so the
+    // model has continuity beyond the bare physicalDescription. Structured
+    // fields (colorPalette, props, expressions) are flattened by the
+    // reference-sheet builder, not here, to keep this spec field-keyed.
+    { field: 'visualNotes' },
+    { field: 'silhouetteNotes' },
+    { field: 'postureNotes' },
+    { field: 'specialTraits' },
+    { field: 'visualIdentity' },
   ]),
   settings: Object.freeze([
     { field: 'description' },

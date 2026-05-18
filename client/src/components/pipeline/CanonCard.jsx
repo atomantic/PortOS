@@ -11,10 +11,12 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { Loader2, ImagePlus, WandSparkles, Lock, Unlock, Shirt, Plus, Trash2, ChevronDown, ChevronRight, Star, Square } from 'lucide-react';
+import { Loader2, ImagePlus, WandSparkles, Lock, Unlock, Shirt, Plus, Trash2, ChevronDown, ChevronRight, Star, Square, BookOpen } from 'lucide-react';
 import useMediaJobProgress from '../../hooks/useMediaJobProgress';
 import MediaJobThumb from './MediaJobThumb';
 import EntryCard from '../universe/EntryCard';
+import CharacterDetailEditor from '../universe/CharacterDetailEditor';
+import CharacterReferenceSheetPanel from '../universe/CharacterReferenceSheetPanel';
 
 // Setting metadata enums — kept in lock-step with `SETTING_INT_EXT` and
 // `SETTING_TIME_OF_DAY` in `server/lib/storyBible.js`. Mirror is fine: a
@@ -53,6 +55,28 @@ function ReadonlyChip({ children }) {
     <span className="px-1.5 py-0.5 rounded text-[10px] uppercase tracking-wider bg-port-card border border-port-border text-gray-400">
       {children}
     </span>
+  );
+}
+
+// Collapsible wrapper for the universe-only character details panel
+// (CharacterDetailEditor + CharacterReferenceSheetPanel). Single toggle so the
+// card stays terse by default — the user opens it only when filling in
+// novelist / graphic-novelist fields or generating a reference sheet.
+function CharacterDetailsToggle({ children }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="mt-2">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wider text-gray-500 hover:text-white"
+      >
+        {open ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
+        <BookOpen size={10} />
+        Character details {open ? '' : '+ reference sheet'}
+      </button>
+      {open ? <div>{children}</div> : null}
+    </div>
   );
 }
 
@@ -244,6 +268,14 @@ export default function CanonCard({
   // render the actual series name. Null/empty falls back to the id-tooltip
   // form for callers that don't have the map handy.
   seriesNameMap = null,
+  // Universe-only character extensions. When provided + kind is 'characters',
+  // CanonCard reveals an Expand → CharacterDetailEditor section and a
+  // Reference Sheet panel. NounsStage (series view) omits these so the
+  // per-series cast list stays focused on naming + visual refs.
+  universeId = null,
+  onExpandCharacter = null,
+  expanding = false,
+  onSheetCompleted = null,
 }) {
   const description = kind.descFor(entry);
   const refs = Array.isArray(entry.imageRefs) ? entry.imageRefs : [];
@@ -348,6 +380,27 @@ export default function CanonCard({
           editable={!!onPatchEntry && !locked}
           onChange={(next) => onPatchEntry?.(entry.id, { wardrobes: next })}
         />
+      ) : null}
+      {/* Universe-only: extended character detail editor + AI expand action.
+          Hidden when the caller didn't pass the universe wiring (pipeline
+          series view). Locked characters render read-only inputs. */}
+      {kind.key === 'characters' && universeId && onPatchEntry ? (
+        <CharacterDetailsToggle>
+          <CharacterDetailEditor
+            entry={entry}
+            onPatch={(patch) => onPatchEntry(entry.id, patch)}
+            onExpand={onExpandCharacter ? () => onExpandCharacter(entry.id) : null}
+            expanding={expanding}
+            disabled={locked}
+          />
+          <CharacterReferenceSheetPanel
+            universeId={universeId}
+            entry={entry}
+            locked={locked}
+            onSheetCompleted={onSheetCompleted}
+            onOpenLightbox={(filename) => onPreview?.(filename)}
+          />
+        </CharacterDetailsToggle>
       ) : null}
     </>
   );

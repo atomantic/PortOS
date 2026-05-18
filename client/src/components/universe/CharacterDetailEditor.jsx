@@ -1,0 +1,306 @@
+/**
+ * CharacterDetailEditor — sectioned form for the extended character fields
+ * (pronouns, motivations, stats, color palette, props, expressions, hand
+ * gestures, etc.) used by the Universe Builder Cast tab.
+ *
+ * Mirrors the WardrobeSection draft+blur pattern in CanonCard.jsx: per-field
+ * drafts buffered locally and PATCHed on blur (or row mutation) so typing
+ * doesn't fire a universe-wide round-trip per keystroke. The parent owns the
+ * persisted `entry` and the `onPatch(patch)` write channel — this component
+ * only knows the field shape.
+ */
+
+import { useState } from 'react';
+import {
+  ChevronDown, ChevronRight, Plus, Trash2, WandSparkles, Loader2,
+  Palette, Hand, Smile, Package, BookOpen, Eye, Activity,
+} from 'lucide-react';
+
+const SECTIONS = Object.freeze([
+  {
+    key: 'identity', label: 'Identity', icon: BookOpen,
+    fields: [
+      { name: 'pronouns', label: 'Pronouns', placeholder: 'she/her · they/them · it/its', max: 60, type: 'input' },
+      { name: 'age', label: 'Age', placeholder: '27 · centuries old · unknown', max: 80, type: 'input' },
+      { name: 'coreTheme', label: 'Core theme', placeholder: 'one-sentence essence', max: 500, type: 'textarea' },
+      { name: 'speechAccent', label: 'Speech / accent', placeholder: 'clipped Edinburgh; rarely contracts; nautical metaphors', max: 500, type: 'textarea' },
+      { name: 'visualNotes', label: 'Visual notes (at-a-glance)', placeholder: 'layered streetwear; faded mustard + charcoal; chunky boots', max: 1000, type: 'textarea' },
+    ],
+  },
+  {
+    key: 'personality', label: 'Personality & motivations', icon: Smile,
+    fields: [
+      { name: 'motivations', label: 'Motivations', placeholder: 'what they WANT and what they fear losing', max: 2000, type: 'textarea' },
+      { name: 'likes', label: 'Likes', placeholder: 'short prose; comma-separated', max: 1500, type: 'textarea' },
+      { name: 'dislikes', label: 'Dislikes', placeholder: 'short prose; comma-separated', max: 1500, type: 'textarea' },
+      { name: 'mannerisms', label: 'Mannerisms', placeholder: 'habitual physical / verbal tics', max: 1500, type: 'textarea' },
+      { name: 'relationships', label: 'Relationships', placeholder: 'who they\'re connected to and the tenor of each connection', max: 2000, type: 'textarea' },
+      { name: 'skills', label: 'Skills', placeholder: 'concrete abilities, soft and hard', max: 2000, type: 'textarea' },
+    ],
+  },
+  {
+    key: 'visualIdentity', label: 'Visual identity', icon: Eye,
+    fields: [
+      { name: 'silhouetteNotes', label: 'Silhouette notes', placeholder: 'compact upper body; tapered lower half; short hair adds 5cm height', max: 2000, type: 'textarea' },
+      { name: 'postureNotes', label: 'Posture notes', placeholder: 'slight forward lean; weight in left foot; shoulders loose', max: 1000, type: 'textarea' },
+      { name: 'specialTraits', label: 'Special traits', placeholder: 'quick hands; scar on right eyebrow; observant', max: 2000, type: 'textarea' },
+      { name: 'visualIdentity', label: 'Visual identity (design language)', placeholder: 'knobs + sights; urban utilitarian; analog tech feel', max: 1000, type: 'textarea' },
+    ],
+  },
+]);
+
+const LIST_SECTIONS = Object.freeze([
+  {
+    key: 'stats', label: 'Stats', icon: Activity, field: 'stats',
+    addLabel: 'Add stat', singular: 'stat',
+    columns: [
+      { name: 'label', placeholder: 'Height · Eyes · Form', max: 80 },
+      { name: 'value', placeholder: '5\'7" · amber · vapor', max: 200 },
+    ],
+    summary: (s) => `${s.label}${s.value ? `: ${s.value}` : ''}`,
+  },
+  {
+    key: 'colorPalette', label: 'Color palette', icon: Palette, field: 'colorPalette',
+    addLabel: 'Add swatch', singular: 'swatch',
+    columns: [
+      { name: 'name', placeholder: 'amber', max: 80 },
+      { name: 'hex', placeholder: '#f59e0b', max: 10, narrow: true },
+      { name: 'role', placeholder: 'skin · jacket primary · boot leather', max: 120 },
+    ],
+    summary: (c) => `${c.name}${c.hex ? ` ${c.hex}` : ''}${c.role ? ` — ${c.role}` : ''}`,
+    swatchHex: (row) => row.hex,
+  },
+  {
+    key: 'props', label: 'Props', icon: Package, field: 'props',
+    addLabel: 'Add prop', singular: 'prop',
+    columns: [
+      { name: 'name', placeholder: 'Radio · Map case', max: 120 },
+      { name: 'purpose', placeholder: 'comms · navigation · talisman', max: 400 },
+      { name: 'materials', placeholder: 'aluminum + ABS plastic', max: 200 },
+    ],
+    summary: (p) => `${p.name}${p.purpose ? ` (${p.purpose})` : ''}`,
+  },
+  {
+    key: 'expressions', label: 'Expression sheet', icon: Smile, field: 'expressions',
+    addLabel: 'Add expression', singular: 'expression',
+    columns: [
+      { name: 'name', placeholder: 'neutral · curious · worried', max: 80 },
+      { name: 'description', placeholder: 'wide eyes; lips parted; brow raised', max: 400 },
+    ],
+    summary: (e) => `${e.name}${e.description ? ` — ${e.description}` : ''}`,
+  },
+  {
+    key: 'handGestures', label: 'Hand gestures', icon: Hand, field: 'handGestures',
+    addLabel: 'Add gesture', singular: 'gesture',
+    columns: [
+      { name: 'name', placeholder: 'pointing · peace sign · gripping radio', max: 80 },
+      { name: 'description', placeholder: 'open palm; index extended; relaxed', max: 300 },
+    ],
+    summary: (g) => `${g.name}${g.description ? ` — ${g.description}` : ''}`,
+  },
+]);
+
+// Buffered text input — local draft state, commits to onCommit on blur.
+function DraftField({ field, value, onCommit, disabled }) {
+  const [draft, setDraft] = useState(undefined);
+  const current = draft !== undefined ? draft : (value || '');
+  const commit = () => {
+    if (draft === undefined) return;
+    if (draft === (value || '')) { setDraft(undefined); return; }
+    onCommit(draft);
+    setDraft(undefined);
+  };
+  const common = {
+    value: current,
+    onChange: (e) => setDraft(e.target.value),
+    onBlur: commit,
+    disabled,
+    placeholder: field.placeholder,
+    maxLength: field.max,
+    className: 'w-full px-2 py-1 text-xs bg-port-bg border border-port-border rounded text-white disabled:opacity-50',
+    id: `chr-field-${field.name}`,
+  };
+  return (
+    <div className="space-y-0.5">
+      <label htmlFor={common.id} className="block text-[10px] uppercase tracking-wider text-gray-500">
+        {field.label}
+      </label>
+      {field.type === 'textarea'
+        ? <textarea {...common} rows={2} />
+        : <input type="text" {...common} />}
+    </div>
+  );
+}
+
+// Generic list editor row — one input per `columns` spec, plus delete.
+function ListRow({ row, idx, columns, swatchHex, onChange, onDelete, disabled }) {
+  const [drafts, setDrafts] = useState({});
+  const draftFor = (col) => (col in drafts ? drafts[col] : (row[col] || ''));
+  const setDraft = (col, v) => setDrafts((p) => ({ ...p, [col]: v }));
+  const commit = (col) => {
+    if (!(col in drafts)) return;
+    const v = drafts[col];
+    setDrafts((prev) => { const next = { ...prev }; delete next[col]; return next; });
+    if (v === (row[col] || '')) return;
+    onChange({ ...row, [col]: v });
+  };
+  return (
+    <div className="flex items-start gap-1.5">
+      {swatchHex ? (
+        <span
+          className="shrink-0 w-6 h-6 rounded border border-port-border mt-0.5"
+          style={{ background: swatchHex(row) || 'transparent' }}
+          title={`Preview ${swatchHex(row) || 'no hex'}`}
+        />
+      ) : null}
+      {columns.map((col) => (
+        <input
+          key={col.name}
+          type="text"
+          value={draftFor(col.name)}
+          onChange={(e) => setDraft(col.name, e.target.value)}
+          onBlur={() => commit(col.name)}
+          placeholder={col.placeholder}
+          maxLength={col.max}
+          disabled={disabled}
+          className={`${col.narrow ? 'w-24 shrink-0' : 'flex-1 min-w-0'} px-1.5 py-0.5 text-xs bg-port-bg border border-port-border rounded text-white disabled:opacity-50`}
+          aria-label={`row ${idx + 1} ${col.name}`}
+        />
+      ))}
+      <button
+        type="button"
+        onClick={() => onDelete(idx)}
+        disabled={disabled}
+        title="Remove row"
+        className="shrink-0 text-gray-500 hover:text-port-error disabled:opacity-30"
+      >
+        <Trash2 size={12} />
+      </button>
+    </div>
+  );
+}
+
+function CollapsibleSection({ icon: Icon, label, summary, defaultOpen = false, children }) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className="rounded border border-port-border bg-port-bg/50">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center gap-1.5 px-2 py-1.5 text-[10px] uppercase tracking-wider text-gray-400 hover:text-white"
+      >
+        {open ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
+        <Icon size={11} />
+        <span className="text-gray-300">{label}</span>
+        {summary && !open ? <span className="text-gray-500 normal-case truncate">— {summary}</span> : null}
+      </button>
+      {open ? <div className="px-2.5 pb-2.5 pt-1 space-y-2">{children}</div> : null}
+    </div>
+  );
+}
+
+export default function CharacterDetailEditor({ entry, onPatch, onExpand, expanding = false, disabled = false }) {
+  if (!entry) return null;
+
+  const patchField = (name, value) => onPatch?.({ [name]: value });
+  const patchList = (field, next) => onPatch?.({ [field]: next });
+
+  const sectionSummary = (section) => {
+    const filled = section.fields.filter((f) => (entry[f.name] || '').trim()).length;
+    return filled ? `${filled}/${section.fields.length} filled` : 'empty';
+  };
+  const listSummary = (section) => {
+    const list = Array.isArray(entry[section.field]) ? entry[section.field] : [];
+    if (list.length === 0) return 'empty';
+    return `${list.length} ${list.length === 1 ? section.singular : section.singular + 's'}`;
+  };
+
+  const addRow = (section) => {
+    const list = Array.isArray(entry[section.field]) ? entry[section.field] : [];
+    const blank = Object.fromEntries(section.columns.map((c) => [c.name, '']));
+    patchList(section.field, [...list, blank]);
+  };
+  const updateRow = (section, idx, nextRow) => {
+    const list = Array.isArray(entry[section.field]) ? entry[section.field] : [];
+    patchList(section.field, list.map((r, i) => (i === idx ? nextRow : r)));
+  };
+  const removeRow = (section, idx) => {
+    const list = Array.isArray(entry[section.field]) ? entry[section.field] : [];
+    patchList(section.field, list.filter((_, i) => i !== idx));
+  };
+
+  return (
+    <div className="mt-2 space-y-1.5">
+      {onExpand ? (
+        <button
+          type="button"
+          onClick={onExpand}
+          disabled={expanding || disabled}
+          className="inline-flex items-center gap-1.5 px-2 py-1 text-[10px] rounded border border-port-accent/40 bg-port-accent/10 text-port-accent hover:bg-port-accent/20 disabled:opacity-40"
+          title={`Fill blank fields on ${entry.name} via one LLM call. Populated fields are preserved.`}
+        >
+          {expanding ? <Loader2 size={10} className="animate-spin" /> : <WandSparkles size={10} />}
+          AI: expand character
+        </button>
+      ) : null}
+
+      {SECTIONS.map((section) => (
+        <CollapsibleSection
+          key={section.key}
+          icon={section.icon}
+          label={section.label}
+          summary={sectionSummary(section)}
+        >
+          {section.fields.map((field) => (
+            <DraftField
+              key={field.name}
+              field={field}
+              value={entry[field.name]}
+              onCommit={(v) => patchField(field.name, v)}
+              disabled={disabled}
+            />
+          ))}
+        </CollapsibleSection>
+      ))}
+
+      {LIST_SECTIONS.map((section) => {
+        const list = Array.isArray(entry[section.field]) ? entry[section.field] : [];
+        return (
+          <CollapsibleSection
+            key={section.key}
+            icon={section.icon}
+            label={section.label}
+            summary={listSummary(section)}
+          >
+            {list.length === 0 ? (
+              <p className="text-[11px] text-gray-500 italic">No {section.label.toLowerCase()} yet.</p>
+            ) : (
+              <div className="space-y-1.5">
+                {list.map((row, idx) => (
+                  <ListRow
+                    key={row.id || `${section.key}-${idx}`}
+                    row={row}
+                    idx={idx}
+                    columns={section.columns}
+                    swatchHex={section.swatchHex}
+                    onChange={(next) => updateRow(section, idx, next)}
+                    onDelete={() => removeRow(section, idx)}
+                    disabled={disabled}
+                  />
+                ))}
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={() => addRow(section)}
+              disabled={disabled}
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded border border-port-border text-gray-400 hover:text-white hover:border-gray-500 disabled:opacity-40"
+            >
+              <Plus size={10} /> {section.addLabel}
+            </button>
+          </CollapsibleSection>
+        );
+      })}
+    </div>
+  );
+}

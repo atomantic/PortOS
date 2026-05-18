@@ -18,6 +18,8 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import * as svc from '../services/universeBuilder.js';
 import * as canonSvc from '../services/universeCanon.js';
+import { expandUniverseCharacter } from '../services/universeCharacterExpand.js';
+import { renderCharacterReferenceSheet } from '../services/universeCharacterSheet.js';
 import { BIBLE_KINDS, BIBLE_LIMITS } from '../lib/storyBible.js';
 import { getUniverseCanonUsage, listLinkedSeriesNames } from '../services/canonUsage.js';
 import { expandWorldTemplate, generateCategoryVariations } from '../services/universeBuilderExpand.js';
@@ -589,6 +591,36 @@ const refineCharSchema = z.object({
 router.post('/:id/characters/:entryId/refine', asyncHandler(async (req, res) => {
   const body = validateRequest(refineCharSchema, req.body ?? {});
   const result = await canonSvc.refineUniverseCharacter(req.params.id, req.params.entryId, body)
+    .catch((err) => { throw mapServiceError(err); });
+  res.json(result);
+}));
+
+// Expand a character via one LLM call — fills BLANK extended fields
+// (pronouns/age/stats/colorPalette/expressions/...) so a novelist + graphic
+// novelist have full reference data. No-clobber on populated fields; locked
+// characters return `{ locked: true }` with no LLM call.
+router.post('/:id/characters/:entryId/expand', asyncHandler(async (req, res) => {
+  const body = validateRequest(refineCharSchema, req.body ?? {});
+  const result = await expandUniverseCharacter(req.params.id, req.params.entryId, body)
+    .catch((err) => { throw mapServiceError(err); });
+  res.json(result);
+}));
+
+// Generate a single dense artist reference sheet (turnaround + expressions +
+// palette + wardrobe + props + hand gestures) using the shipped layout
+// template + the character's primary portrait as multi-reference inputs.
+// Returns immediately with `{ jobId, generationId }`; client subscribes to
+// SSE for progress, and the server-side completion handler stamps
+// `character.referenceSheetImageRef` on success.
+const renderReferenceSheetSchema = z.object({
+  overridePrompt: z.string().trim().max(8000).optional(),
+  overrideNegativePrompt: z.string().trim().max(2000).optional(),
+  modelId: z.string().trim().max(64).optional(),
+  template: z.string().trim().max(120).optional(),
+});
+router.post('/:id/characters/:entryId/render-reference-sheet', asyncHandler(async (req, res) => {
+  const body = validateRequest(renderReferenceSheetSchema, req.body ?? {});
+  const result = await renderCharacterReferenceSheet(req.params.id, req.params.entryId, body)
     .catch((err) => { throw mapServiceError(err); });
   res.json(result);
 }));

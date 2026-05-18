@@ -24,6 +24,7 @@ import {
   updateUniverse,
   getUniverseCanonUsage,
   setUniverseCanonLock,
+  expandUniverseCharacter,
 } from '../../services/apiUniverseBuilder';
 import { generateImage } from '../../services/apiSystem';
 import { composeStyledPrompt } from '../../lib/composeStyledPrompt';
@@ -57,6 +58,7 @@ export default function UniverseCanonSection({ universe, universeId, onUniverseC
   const seriesFilter = searchParams.get('series') || '';
   const [renderingJobs, setRenderingJobs] = useState({});
   const [refiningId, setRefiningId] = useState(null);
+  const [expandingId, setExpandingId] = useState(null);
   const [differentiating, setDifferentiating] = useState(false);
   const [togglingLockId, setTogglingLockId] = useState(null);
   // Ref mirrors togglingLockId for the reentrancy guard so handleToggleLock
@@ -167,6 +169,20 @@ export default function UniverseCanonSection({ universe, universeId, onUniverseC
             prompt: `${entry.name}: ${kind.descFor(entry) || ''}`.trim().replace(/:\s*$/, ''),
           });
         }
+        // Reference sheets live in data/image-refs/ — different static prefix
+        // than the gallery. Built into the same list so the existing
+        // MediaPreview lightbox + arrow navigation work uniformly.
+        if (kind.key === 'characters' && typeof entry.referenceSheetImageRef === 'string' && entry.referenceSheetImageRef) {
+          const filename = entry.referenceSheetImageRef;
+          out.push({
+            key: `canon-sheet:${filename}`,
+            kind: 'image',
+            filename,
+            previewUrl: `/data/image-refs/${filename}`,
+            downloadUrl: `/data/image-refs/${filename}`,
+            prompt: `${entry.name} — character reference sheet`,
+          });
+        }
       }
     }
     return out;
@@ -248,6 +264,43 @@ export default function UniverseCanonSection({ universe, universeId, onUniverseC
     onUniverseChange(result.universe);
     toast.success(`Refined — ${(result.rationale || result.changes?.[0] || 'description rewritten').slice(0, 140)}`);
   };
+
+  // One LLM call fleshes out the extended character fields (motivations,
+  // stats, color palette, expressions, etc.). No-clobber on populated fields.
+  // Locked characters return `{ locked: true }` so the toast surfaces the
+  // reason rather than a successful no-op.
+  const handleExpandCharacter = async (entryId) => {
+    if (!universe || expandingId) return;
+    setExpandingId(entryId);
+    const capturedId = universeId;
+    const providerId = universe.llm?.provider || undefined;
+    const model = universe.llm?.model || undefined;
+    const result = await expandUniverseCharacter(universeId, entryId, { providerId, model })
+      .catch((err) => { toast.error(err.message || 'Expand failed'); return null; });
+    if (mountedRef.current) setExpandingId(null);
+    if (!result || !isStillCurrent(capturedId)) return;
+    if (result.locked) {
+      toast.error(`${result.entry?.name || 'Character'} is locked — unlock before expanding`);
+      return;
+    }
+    if (result.universe) onUniverseChange(result.universe);
+    const fields = Array.isArray(result.updatedFields) ? result.updatedFields : [];
+    toast.success(fields.length
+      ? `Expanded ${result.entry?.name || 'character'} — filled ${fields.length} field${fields.length === 1 ? '' : 's'}`
+      : `${result.entry?.name || 'Character'} already complete — nothing to fill`);
+  };
+
+  // Server already stamped the character via imageGenEvents — merge the
+  // filename into the local draft instead of refetching the whole universe.
+  const handleSheetCompleted = useCallback((entryId, destFilename) => {
+    if (!universe || !destFilename) return;
+    const nextCharacters = (universe.characters || []).map((c) =>
+      c.id === entryId ? { ...c, referenceSheetImageRef: destFilename } : c,
+    );
+    onUniverseChange({ ...universe, characters: nextCharacters });
+    const entryName = nextCharacters.find((c) => c.id === entryId)?.name || 'Character';
+    toast.success(`${entryName} reference sheet ready`);
+  }, [universe, onUniverseChange]);
 
   const handleRenderRef = async (kind, entry) => {
     const description = kind.descFor(entry);
@@ -458,6 +511,7 @@ export default function UniverseCanonSection({ universe, universeId, onUniverseC
         <KindSection
           key={kind.key}
           kind={kind}
+          universeId={universeId}
           all={filteredByKind[kind.key] || []}
           totalCount={(universe[kind.key] || []).length}
           filtered={!!seriesFilter}
@@ -469,6 +523,9 @@ export default function UniverseCanonSection({ universe, universeId, onUniverseC
           onPreview={openPreview}
           onRefine={handleRefineCharacter}
           refiningId={refiningId}
+          onExpandCharacter={handleExpandCharacter}
+          expandingId={expandingId}
+          onSheetCompleted={handleSheetCompleted}
           onToggleLock={(entryId, nextLocked) => handleToggleLock(kind, entryId, nextLocked)}
           togglingLockId={togglingLockId}
           onPatchEntry={(entryId, patch) => handlePatchEntry(kind, entryId, patch)}
@@ -482,7 +539,7 @@ export default function UniverseCanonSection({ universe, universeId, onUniverseC
   );
 }
 
-function KindSection({ kind, all, totalCount, filtered, usage, renderingJobs, onRender, onJobCompleted, onJobFailed, onPreview, onRefine, refiningId, onToggleLock, togglingLockId, onPatchEntry, onRenderCleanPlate, seriesNameMap }) {
+function KindSection({ kind, universeId, all, totalCount, filtered, usage, renderingJobs, onRender, onJobCompleted, onJobFailed, onPreview, onRefine, refiningId, onExpandCharacter, expandingId, onSheetCompleted, onToggleLock, togglingLockId, onPatchEntry, onRenderCleanPlate, seriesNameMap }) {
   const Icon = kind.icon;
   return (
     <section className="rounded border border-port-border bg-port-bg/60">
@@ -519,6 +576,10 @@ function KindSection({ kind, all, totalCount, filtered, usage, renderingJobs, on
                 onPatchEntry={onPatchEntry}
                 onRenderCleanPlate={onRenderCleanPlate}
                 seriesNameMap={seriesNameMap}
+                universeId={kind.key === 'characters' ? universeId : null}
+                onExpandCharacter={kind.key === 'characters' ? onExpandCharacter : null}
+                expanding={kind.key === 'characters' && expandingId === entry.id}
+                onSheetCompleted={kind.key === 'characters' ? onSheetCompleted : null}
               />
             ))}
           </ul>

@@ -28,6 +28,47 @@ export const BIBLE_LIMITS = Object.freeze({
   NOTES_MAX: 4000,
   IMAGE_REF_MAX: 500,
   IMAGE_REFS_PER_ENTRY_MAX: 12,
+  // Extended character identity (novelist + graphic-novelist needs). All
+  // optional; sanitizer trims missing/blank to empty string. These flow into
+  // the bible-extraction prompt + the universe-character-expand LLM call.
+  PRONOUNS_MAX: 60,
+  AGE_MAX: 80,
+  CORE_THEME_MAX: 500,
+  SPEECH_ACCENT_MAX: 500,
+  VISUAL_NOTES_MAX: 1000,
+  SILHOUETTE_NOTES_MAX: 2000,
+  POSTURE_NOTES_MAX: 1000,
+  SPECIAL_TRAITS_MAX: 2000,
+  VISUAL_IDENTITY_MAX: 1000,
+  MOTIVATIONS_MAX: 2000,
+  LIKES_MAX: 1500,
+  DISLIKES_MAX: 1500,
+  MANNERISMS_MAX: 1500,
+  RELATIONSHIPS_MAX: 2000,
+  SKILLS_MAX: 2000,
+  // Flexible stats list — open key/value so non-humans aren't forced into
+  // human anatomy ("Number of eyes: 8", "Form: spectral vapor", etc).
+  STAT_LABEL_MAX: 80,
+  STAT_VALUE_MAX: 200,
+  STATS_PER_CHARACTER_MAX: 30,
+  // Color palette: named hex swatches with role hints ("amber #f59e0b — skin").
+  COLOR_NAME_MAX: 80,
+  COLOR_HEX_MAX: 10,
+  COLOR_ROLE_MAX: 120,
+  COLORS_PER_PALETTE_MAX: 12,
+  // Props (graphic-novelist reference): per-prop name + purpose + materials.
+  PROP_NAME_MAX: 120,
+  PROP_PURPOSE_MAX: 400,
+  PROP_MATERIALS_MAX: 200,
+  PROP_NOTES_MAX: 600,
+  PROPS_PER_CHARACTER_MAX: 12,
+  // Expressions + hand gestures: named visual cues for reference-sheet panels.
+  EXPRESSION_NAME_MAX: 80,
+  EXPRESSION_DESC_MAX: 400,
+  EXPRESSIONS_PER_CHARACTER_MAX: 16,
+  GESTURE_NAME_MAX: 80,
+  GESTURE_DESC_MAX: 300,
+  GESTURES_PER_CHARACTER_MAX: 12,
   // Wardrobes per character — A2 in the AnyFilm gap analysis. Each entry
   // is an outfit/styling variant; first one is the visual default.
   WARDROBE_NAME_MAX: 120,
@@ -118,7 +159,7 @@ export const BIBLE_KINDS = Object.freeze(Object.values(BIBLE_KIND));
 // `existing<X>Json` prompt variable (bibleExtractor) and into the script
 // stage's bibles context (evaluator). Excludes ids/timestamps/source/notes.
 export const PROMPT_FIELDS = Object.freeze({
-  [BIBLE_KIND.CHARACTER]: ['name', 'aliases', 'role', 'physicalDescription', 'personality', 'background', 'voiceId', 'wardrobes', 'prompt', 'tags'],
+  [BIBLE_KIND.CHARACTER]: ['name', 'aliases', 'role', 'pronouns', 'age', 'coreTheme', 'speechAccent', 'visualNotes', 'physicalDescription', 'personality', 'background', 'silhouetteNotes', 'postureNotes', 'specialTraits', 'visualIdentity', 'motivations', 'likes', 'dislikes', 'mannerisms', 'relationships', 'skills', 'stats', 'colorPalette', 'props', 'expressions', 'handGestures', 'voiceId', 'wardrobes', 'prompt', 'tags'],
   [BIBLE_KIND.SETTING]: ['name', 'slugline', 'description', 'palette', 'era', 'weather', 'intExt', 'timeOfDay', 'recurringDetails', 'prompt', 'tags'],
   [BIBLE_KIND.OBJECT]: ['name', 'aliases', 'description', 'significance', 'prompt', 'tags'],
 });
@@ -257,6 +298,70 @@ function sanitizeWardrobeList(raw, opts = {}) {
   );
 }
 
+// Flexible stat entry — open label/value so non-humans aren't shoehorned into
+// "height/weight/eyes" assumptions. Both fields are strings; the LLM expand
+// flow may emit "Unknown" / "N/A" rather than blank, which is fine.
+function sanitizeStat(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const label = trimTo(raw.label, BIBLE_LIMITS.STAT_LABEL_MAX);
+  if (!label) return null;
+  return { label, value: trimTo(raw.value, BIBLE_LIMITS.STAT_VALUE_MAX) };
+}
+
+// Color palette swatch. `hex` is optional — pure-name palettes still flow
+// through; the prompt builder skips the "#xxxxxx" fragment when blank. We
+// don't validate hex strictness here; the LLM may emit "amber" / "off-white".
+function sanitizePaletteColor(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const name = trimTo(raw.name, BIBLE_LIMITS.COLOR_NAME_MAX);
+  if (!name) return null;
+  return {
+    name,
+    hex: trimTo(raw.hex, BIBLE_LIMITS.COLOR_HEX_MAX),
+    role: trimTo(raw.role, BIBLE_LIMITS.COLOR_ROLE_MAX),
+  };
+}
+
+// Prop entry — gets a UUID id like wardrobes for stable React keys. Name is
+// required; everything else is free-form prose for the artist.
+function sanitizeProp(raw, { preserveTimestamps = true } = {}) {
+  if (!raw || typeof raw !== 'object') return null;
+  const name = trimTo(raw.name, BIBLE_LIMITS.PROP_NAME_MAX);
+  if (!name) return null;
+  return {
+    id: ensureId(raw.id, 'prop-'),
+    name,
+    purpose: trimTo(raw.purpose, BIBLE_LIMITS.PROP_PURPOSE_MAX),
+    materials: trimTo(raw.materials, BIBLE_LIMITS.PROP_MATERIALS_MAX),
+    notes: trimTo(raw.notes, BIBLE_LIMITS.PROP_NOTES_MAX),
+    // Per-prop reference image is optional. Validated through derive helper so
+    // a stale filename (no longer in the character's imageRefs) collapses to
+    // null — same invariant as primaryImageRef.
+    imageRef: isStr(raw.imageRef) && raw.imageRef.trim() ? raw.imageRef.trim().slice(0, BIBLE_LIMITS.IMAGE_REF_MAX) : null,
+    createdAt: preserveTimestamps && isStr(raw.createdAt) ? raw.createdAt : nowIso(),
+    updatedAt: preserveTimestamps && isStr(raw.updatedAt) ? raw.updatedAt : nowIso(),
+  };
+}
+
+// Expression entry — name + 1-line prose description. The reference-sheet
+// builder uses up to 7; remaining entries are still available to per-page
+// shot prompts that key on a named expression.
+function sanitizeExpression(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const name = trimTo(raw.name, BIBLE_LIMITS.EXPRESSION_NAME_MAX);
+  if (!name) return null;
+  return { name, description: trimTo(raw.description, BIBLE_LIMITS.EXPRESSION_DESC_MAX) };
+}
+
+// Hand-gesture entry — name + 1-line prose. Mirrors expression shape so the
+// editor UI can reuse the same row component.
+function sanitizeHandGesture(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const name = trimTo(raw.name, BIBLE_LIMITS.GESTURE_NAME_MAX);
+  if (!name) return null;
+  return { name, description: trimTo(raw.description, BIBLE_LIMITS.GESTURE_DESC_MAX) };
+}
+
 // Shared canon extras applied to every kind. `locked` follows the on-disk
 // minimization pattern from universe-builder variations: only `true` is
 // persisted, missing/false collapses to absent.
@@ -291,10 +396,43 @@ export function sanitizeCharacter(raw, { idPrefix = DEFAULT_ID_PREFIX.character,
     name,
     aliases: cleanStringArray(raw.aliases, BIBLE_LIMITS.ALIAS_MAX, BIBLE_LIMITS.ALIASES_PER_ENTRY_MAX),
     role: trimTo(raw.role, BIBLE_LIMITS.ROLE_MAX),
+    // Identity (novelist-grade depth). All optional; downstream consumers
+    // (LLM extractor, render-prompt builder, reference-sheet renderer) check
+    // for blank and skip the corresponding fragment.
+    pronouns: trimTo(raw.pronouns, BIBLE_LIMITS.PRONOUNS_MAX),
+    age: trimTo(raw.age, BIBLE_LIMITS.AGE_MAX),
+    coreTheme: trimTo(raw.coreTheme, BIBLE_LIMITS.CORE_THEME_MAX),
+    speechAccent: trimTo(raw.speechAccent, BIBLE_LIMITS.SPEECH_ACCENT_MAX),
+    visualNotes: trimTo(raw.visualNotes, BIBLE_LIMITS.VISUAL_NOTES_MAX),
     physicalDescription,
     personality: trimTo(raw.personality, BIBLE_LIMITS.PERSONALITY_MAX),
     background: trimTo(raw.background, BIBLE_LIMITS.BACKGROUND_MAX),
+    // Visual identity (graphic-novelist-grade). These feed the
+    // reference-sheet renderer and per-page shot prompts.
+    silhouetteNotes: trimTo(raw.silhouetteNotes, BIBLE_LIMITS.SILHOUETTE_NOTES_MAX),
+    postureNotes: trimTo(raw.postureNotes, BIBLE_LIMITS.POSTURE_NOTES_MAX),
+    specialTraits: trimTo(raw.specialTraits, BIBLE_LIMITS.SPECIAL_TRAITS_MAX),
+    visualIdentity: trimTo(raw.visualIdentity, BIBLE_LIMITS.VISUAL_IDENTITY_MAX),
+    // Narrative depth — drives dialogue + arc planning.
+    motivations: trimTo(raw.motivations, BIBLE_LIMITS.MOTIVATIONS_MAX),
+    likes: trimTo(raw.likes, BIBLE_LIMITS.LIKES_MAX),
+    dislikes: trimTo(raw.dislikes, BIBLE_LIMITS.DISLIKES_MAX),
+    mannerisms: trimTo(raw.mannerisms, BIBLE_LIMITS.MANNERISMS_MAX),
+    relationships: trimTo(raw.relationships, BIBLE_LIMITS.RELATIONSHIPS_MAX),
+    skills: trimTo(raw.skills, BIBLE_LIMITS.SKILLS_MAX),
     notes: trimTo(raw.notes, BIBLE_LIMITS.NOTES_MAX),
+    // Flexible stats list. Open key/value so ghosts/spiders/clouds aren't
+    // forced into human anatomy categories.
+    stats: sanitizeListWith(raw.stats, sanitizeStat, BIBLE_LIMITS.STATS_PER_CHARACTER_MAX),
+    // Named color palette for the artist reference sheet + per-page render.
+    colorPalette: sanitizeListWith(raw.colorPalette, sanitizePaletteColor, BIBLE_LIMITS.COLORS_PER_PALETTE_MAX),
+    // Props the character carries / interacts with. Persists across panels;
+    // the reference sheet renders these as prop-detail cards.
+    props: sanitizeListWith(raw.props, (p) => sanitizeProp(p, { preserveTimestamps }), BIBLE_LIMITS.PROPS_PER_CHARACTER_MAX),
+    // Expression + gesture menus drive the per-panel reference sheet zones
+    // and can be cited from page-render prompts ("expression: 'curious'").
+    expressions: sanitizeListWith(raw.expressions, sanitizeExpression, BIBLE_LIMITS.EXPRESSIONS_PER_CHARACTER_MAX),
+    handGestures: sanitizeListWith(raw.handGestures, sanitizeHandGesture, BIBLE_LIMITS.GESTURES_PER_CHARACTER_MAX),
     // Voice binding for VO synthesis (kokoro/piper local OSS, ElevenLabs
     // when configured). null = use the project default at synth time.
     voiceId: trimTo(raw.voiceId, BIBLE_LIMITS.VOICE_ID_MAX) || null,
@@ -302,6 +440,13 @@ export function sanitizeCharacter(raw, { idPrefix = DEFAULT_ID_PREFIX.character,
     // Pinned visual anchor (A3). One of imageRefs marked canonical so
     // downstream renders + the UI know which to lean on.
     primaryImageRef: derivePrimaryImageRef(raw.primaryImageRef, imageRefs),
+    // Generated character reference sheet filename (lives in data/image-refs/,
+    // not in imageRefs[] — the sheet is operational metadata, not a candidate
+    // for arbitrary panel reference). Validated through the same stale-pointer
+    // helper so renaming/deleting the file collapses to null.
+    referenceSheetImageRef: isStr(raw.referenceSheetImageRef) && raw.referenceSheetImageRef.trim()
+      ? raw.referenceSheetImageRef.trim().slice(0, BIBLE_LIMITS.IMAGE_REF_MAX)
+      : null,
     // Wardrobes (A2): outfit/styling variants applied on top of
     // physicalDescription. Empty array stays the legacy shape — every
     // existing character keeps rendering through physicalDescription alone.
@@ -407,7 +552,18 @@ const SANITIZERS = Object.freeze({
 // so a later entry in the same batch resolves to the canonical record.
 const MERGE_CONFIG = Object.freeze({
   character: {
-    userEditable: ['role', 'physicalDescription', 'personality', 'background', 'wardrobes'],
+    userEditable: [
+      'role', 'physicalDescription', 'personality', 'background', 'wardrobes',
+      // Extended character fields — fill only when blank on the existing entry
+      // (LLM extractor's "no-clobber" contract). The reference-sheet
+      // operational fields (`referenceSheetImageRef`, `primaryImageRef`,
+      // `imageRefs`) intentionally aren't here — those are owned by the
+      // render flow, not the prose extractor.
+      'pronouns', 'age', 'coreTheme', 'speechAccent', 'visualNotes',
+      'silhouetteNotes', 'postureNotes', 'specialTraits', 'visualIdentity',
+      'motivations', 'likes', 'dislikes', 'mannerisms', 'relationships', 'skills',
+      'stats', 'colorPalette', 'props', 'expressions', 'handGestures',
+    ],
     keyFields: [
       { field: 'name', normalize: normalizeBibleName },
       { field: 'aliases', normalize: normalizeBibleName },

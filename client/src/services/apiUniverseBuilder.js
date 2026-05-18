@@ -171,6 +171,28 @@ export const refineUniverseCharacter = (universeId, entryId, { providerId, model
     body: JSON.stringify({ providerId, model }),
   });
 
+// One LLM call fills BLANK extended character fields (pronouns / age / stats /
+// motivations / colorPalette / expressions / hand gestures / ...). No-clobber
+// on populated fields. Locked characters return `{ locked: true }` instead of
+// a 4xx — the UI surfaces this as a "Locked" badge.
+export const expandUniverseCharacter = (universeId, entryId, { providerId, model } = {}) =>
+  request(`/universe-builder/${encodeURIComponent(universeId)}/characters/${encodeURIComponent(entryId)}/expand`, {
+    method: 'POST',
+    body: JSON.stringify({ providerId, model }),
+  });
+
+// Kick off a character reference sheet render. Returns immediately with
+// `{ jobId, generationId, filename, path }`; the caller subscribes to media-job
+// SSE for live progress. Server-side completion handler stamps the resulting
+// filename onto `character.referenceSheetImageRef` automatically.
+export const renderCharacterReferenceSheet = (universeId, entryId, {
+  overridePrompt, overrideNegativePrompt, modelId, template,
+} = {}) =>
+  request(`/universe-builder/${encodeURIComponent(universeId)}/characters/${encodeURIComponent(entryId)}/render-reference-sheet`, {
+    method: 'POST',
+    body: JSON.stringify({ overridePrompt, overrideNegativePrompt, modelId, template }),
+  });
+
 // Cast-wide differentiate — single LLM call rewrites every character so the
 // whole cast has no visually-colliding pairs.
 export const differentiateUniverseCast = (universeId, { providerId, model } = {}) =>

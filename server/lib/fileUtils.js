@@ -59,6 +59,11 @@ export const PATHS = {
   decisions: join(__lib_dirname, '../../data/cos/decisions'),
   telegram: join(__lib_dirname, '../../data/telegram'),
   templates: join(__lib_dirname, '../../data/prompts/templates'),
+  // Visual template assets (e.g. the character reference-sheet layout PNG used
+  // as the init-image anchor by the universe-builder character sheet renderer).
+  // Distinct from `templates` above, which is the legacy prompt-template dir.
+  // Files here are shipped via data.sample/templates/ on first install.
+  visualTemplates: join(__lib_dirname, '../../data/templates'),
   settings: join(__lib_dirname, '../../data/settings'),
   missions: join(__lib_dirname, '../../data/cos/missions'),
   tools: join(__lib_dirname, '../../data/tools'),
@@ -672,6 +677,49 @@ export function resolveImageRef(name, { mustExist = true } = {}) {
   } catch {
     return null;
   }
+}
+
+/**
+ * Resolve a shipped visual template filename (e.g. character reference-sheet
+ * layout PNG) to an absolute path under `PATHS.visualTemplates`. Mirrors
+ * `resolveImageRef` / `resolveGalleryImage`: basename + traversal + root-prefix
+ * + existence checks. Allows PNG/JPG/JPEG/WEBP since the template assets are
+ * shipped image files.
+ *
+ * @param {string} name - Filename (basenamed internally)
+ * @param {object} [opts]
+ * @param {boolean} [opts.mustExist=true] - Require an existing regular file
+ * @returns {string|null} Absolute path inside PATHS.visualTemplates, or null
+ */
+// Templates are shipped assets — once a basename resolves to a file the path
+// is stable for the lifetime of the process, so cache the result. This stays
+// off the hot path of every reference-sheet render without sacrificing the
+// defense-in-depth basename + traversal + extension checks.
+const _templateAssetCache = new Map();
+export function resolveTemplateAsset(name, { mustExist = true } = {}) {
+  if (typeof name !== 'string' || !name) return null;
+  const safe = basename(name);
+  if (!safe || safe === '.' || safe === '..') return null;
+  const lower = safe.toLowerCase();
+  if (!/\.(png|jpg|jpeg|webp)$/.test(lower)) return null;
+  const cacheKey = mustExist ? `must:${safe}` : `nostat:${safe}`;
+  if (_templateAssetCache.has(cacheKey)) return _templateAssetCache.get(cacheKey);
+  const root = resolvePath(PATHS.visualTemplates) + PATH_SEP;
+  const localPath = resolvePath(join(PATHS.visualTemplates, safe));
+  if (!localPath.startsWith(root)) return null;
+  if (!mustExist) {
+    _templateAssetCache.set(cacheKey, localPath);
+    return localPath;
+  }
+  let resolved = null;
+  try {
+    const stat = statSync(localPath, { throwIfNoEntry: false });
+    resolved = stat?.isFile() ? localPath : null;
+  } catch { /* falls through to null */ }
+  // Only cache successful resolutions — a missing-then-installed template
+  // should pick up on the next call (e.g. setup-data.js races a render).
+  if (resolved) _templateAssetCache.set(cacheKey, resolved);
+  return resolved;
 }
 
 /**

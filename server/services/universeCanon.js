@@ -13,7 +13,7 @@ import { runStagedLLM } from '../lib/stageRunner.js';
 import { runPromptRefine } from './pipeline/refineHelpers.js';
 import { ServerError } from '../lib/errorHandler.js';
 
-const peerForPrompt = (entry) => ({
+export const peerForPrompt = (entry) => ({
   id: entry.id,
   name: entry.name,
   aliases: Array.isArray(entry.aliases) ? entry.aliases : [],
@@ -27,7 +27,7 @@ const targetForPrompt = (entry) => ({
   firstAppearance: entry.firstAppearance || null,
 });
 
-const buildStyleClause = (universe) => {
+export const buildStyleClause = (universe) => {
   const embraceTokens = joinInfluenceList(universe.influences?.embrace);
   const bits = [
     embraceTokens ? `Universe aesthetic: ${embraceTokens}` : null,

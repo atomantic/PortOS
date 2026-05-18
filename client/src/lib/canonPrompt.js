@@ -26,6 +26,11 @@ const RICH_SPEC = Object.freeze({
   characters: Object.freeze([
     { field: 'physicalDescription' },
     { field: 'role' },
+    { field: 'visualNotes' },
+    { field: 'silhouetteNotes' },
+    { field: 'postureNotes' },
+    { field: 'specialTraits' },
+    { field: 'visualIdentity' },
   ]),
   settings: Object.freeze([
     { field: 'description' },

@@ -53,6 +53,32 @@ vi.mock('../services/universeBuilderAutoSort.js', () => ({
   autoSortOtherBuckets: (...args) => autoSortOtherBucketsMock(...args),
 }));
 
+// Stub the character-expand LLM call.
+const expandUniverseCharacterMock = vi.fn(async (universeId, entryId) => ({
+  universe: { id: universeId, characters: [{ id: entryId, name: 'Vale', motivations: 'survive' }] },
+  entry: { id: entryId, name: 'Vale', motivations: 'survive' },
+  updatedFields: ['motivations'],
+  rationale: 'mock rationale',
+  runId: 'mock-expand-run',
+  providerId: 'mock', model: 'mock',
+}));
+vi.mock('../services/universeCharacterExpand.js', () => ({
+  expandUniverseCharacter: (...args) => expandUniverseCharacterMock(...args),
+}));
+
+// Stub the reference-sheet renderer — only the route contract is verified
+// here; the actual prompt builder is exercised in universeCharacterSheet.test.js.
+const renderCharacterReferenceSheetMock = vi.fn(async (universeId, entryId, body = {}) => ({
+  jobId: `job-${entryId}`,
+  generationId: `gen-${entryId}`,
+  filename: `${entryId}.png`,
+  path: `/data/images/${entryId}.png`,
+  promptPreview: `mock prompt for ${entryId} (override:${!!body.overridePrompt})`,
+}));
+vi.mock('../services/universeCharacterSheet.js', () => ({
+  renderCharacterReferenceSheet: (...args) => renderCharacterReferenceSheetMock(...args),
+}));
+
 // Stub the LLM expander so the route test doesn't shell out to a real provider.
 vi.mock('../services/universeBuilderExpand.js', () => ({
   expandWorldTemplate: vi.fn(async ({ starterPrompt }) => ({
@@ -657,6 +683,108 @@ describe('universe-builder routes', () => {
         .send({});
       expect(res.status).toBe(503);
       expect(res.body.code).toBe('UNIVERSE_AUTOSORT_NO_PROVIDER');
+    });
+  });
+
+  describe('POST /:id/characters/:entryId/expand', () => {
+    beforeEach(() => expandUniverseCharacterMock.mockClear());
+
+    it('200s and forwards providerId / model to the service', async () => {
+      const res = await request(buildApp())
+        .post('/api/universe-builder/u-1/characters/c-1/expand')
+        .send({ providerId: 'anthropic', model: 'claude' });
+      expect(res.status).toBe(200);
+      expect(expandUniverseCharacterMock).toHaveBeenCalledWith('u-1', 'c-1', expect.objectContaining({
+        providerId: 'anthropic',
+        model: 'claude',
+      }));
+      expect(res.body.updatedFields).toEqual(['motivations']);
+      expect(res.body.entry.id).toBe('c-1');
+    });
+
+    it('accepts an empty body (providerId + model are optional)', async () => {
+      const res = await request(buildApp())
+        .post('/api/universe-builder/u-1/characters/c-1/expand')
+        .send({});
+      expect(res.status).toBe(200);
+      expect(expandUniverseCharacterMock).toHaveBeenCalled();
+    });
+
+    it('surfaces `locked: true` as a 200 — UI shows a Locked badge instead of a toast', async () => {
+      expandUniverseCharacterMock.mockResolvedValueOnce({
+        universe: { id: 'u-1', characters: [] },
+        entry: { id: 'c-2', name: 'Frozen', locked: true },
+        locked: true,
+        updatedFields: [],
+      });
+      const res = await request(buildApp())
+        .post('/api/universe-builder/u-1/characters/c-2/expand')
+        .send({});
+      expect(res.status).toBe(200);
+      expect(res.body.locked).toBe(true);
+      expect(res.body.updatedFields).toEqual([]);
+    });
+
+    it('maps service NOT_FOUND status onto a 404', async () => {
+      expandUniverseCharacterMock.mockRejectedValueOnce(
+        Object.assign(new Error('Character cx not found in universe'), {
+          status: 404,
+          code: 'UNIVERSE_CANON_NOT_FOUND',
+        }),
+      );
+      const res = await request(buildApp())
+        .post('/api/universe-builder/u-1/characters/cx/expand')
+        .send({});
+      expect(res.status).toBe(404);
+      expect(res.body.code).toBe('UNIVERSE_CANON_NOT_FOUND');
+    });
+  });
+
+  describe('POST /:id/characters/:entryId/render-reference-sheet', () => {
+    beforeEach(() => renderCharacterReferenceSheetMock.mockClear());
+
+    it('200s with { jobId, generationId } and forwards overrides to the service', async () => {
+      const res = await request(buildApp())
+        .post('/api/universe-builder/u-1/characters/c-1/render-reference-sheet')
+        .send({ overridePrompt: 'custom prompt', modelId: 'flux2-klein-9b' });
+      expect(res.status).toBe(200);
+      expect(renderCharacterReferenceSheetMock).toHaveBeenCalledWith('u-1', 'c-1', expect.objectContaining({
+        overridePrompt: 'custom prompt',
+        modelId: 'flux2-klein-9b',
+      }));
+      expect(res.body.jobId).toBe('job-c-1');
+      expect(res.body.generationId).toBe('gen-c-1');
+      expect(res.body.filename).toBe('c-1.png');
+    });
+
+    it('accepts an empty body (every override is optional)', async () => {
+      const res = await request(buildApp())
+        .post('/api/universe-builder/u-1/characters/c-1/render-reference-sheet')
+        .send({});
+      expect(res.status).toBe(200);
+      expect(renderCharacterReferenceSheetMock).toHaveBeenCalledWith('u-1', 'c-1', {});
+    });
+
+    it('400s when overridePrompt exceeds the 8000-char Zod cap', async () => {
+      const res = await request(buildApp())
+        .post('/api/universe-builder/u-1/characters/c-1/render-reference-sheet')
+        .send({ overridePrompt: 'x'.repeat(8001) });
+      expect(res.status).toBe(400);
+      expect(renderCharacterReferenceSheetMock).not.toHaveBeenCalled();
+    });
+
+    it('maps a service "template missing" error onto a 500 with the right code', async () => {
+      renderCharacterReferenceSheetMock.mockRejectedValueOnce(
+        Object.assign(new Error('Character reference sheet template not found'), {
+          status: 500,
+          code: 'UNIVERSE_CHARACTER_SHEET_NO_TEMPLATE',
+        }),
+      );
+      const res = await request(buildApp())
+        .post('/api/universe-builder/u-1/characters/c-1/render-reference-sheet')
+        .send({});
+      expect(res.status).toBe(500);
+      expect(res.body.code).toBe('UNIVERSE_CHARACTER_SHEET_NO_TEMPLATE');
     });
   });
 });

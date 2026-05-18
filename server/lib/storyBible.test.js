@@ -257,6 +257,163 @@ describe('storyBible — sanitizeCharacter', () => {
       expect(out.wardrobes).toEqual([]);
     });
   });
+
+  describe('extended character fields (novelist + graphic-novelist depth)', () => {
+    it('defaults every new string field to empty + every list field to []', () => {
+      const out = sanitizeCharacter({ name: 'Bare' });
+      // String defaults
+      expect(out.pronouns).toBe('');
+      expect(out.age).toBe('');
+      expect(out.coreTheme).toBe('');
+      expect(out.speechAccent).toBe('');
+      expect(out.visualNotes).toBe('');
+      expect(out.silhouetteNotes).toBe('');
+      expect(out.postureNotes).toBe('');
+      expect(out.specialTraits).toBe('');
+      expect(out.visualIdentity).toBe('');
+      expect(out.motivations).toBe('');
+      expect(out.likes).toBe('');
+      expect(out.dislikes).toBe('');
+      expect(out.mannerisms).toBe('');
+      expect(out.relationships).toBe('');
+      expect(out.skills).toBe('');
+      // List defaults
+      expect(out.stats).toEqual([]);
+      expect(out.colorPalette).toEqual([]);
+      expect(out.props).toEqual([]);
+      expect(out.expressions).toEqual([]);
+      expect(out.handGestures).toEqual([]);
+      // Operational
+      expect(out.referenceSheetImageRef).toBeNull();
+    });
+
+    it('round-trips a fully-populated character', () => {
+      const out = sanitizeCharacter({
+        name: 'Vale',
+        pronouns: 'she/her',
+        age: '27',
+        coreTheme: 'cartographer of grief',
+        speechAccent: 'clipped Edinburgh',
+        visualNotes: 'layered streetwear',
+        silhouetteNotes: 'compact upper body',
+        postureNotes: 'slight forward lean',
+        specialTraits: 'quick hands, restless energy',
+        visualIdentity: 'urban utilitarian; analog tech feel',
+        motivations: 'finish the map; protect her sister',
+        likes: 'thunderstorms, fresh ink',
+        dislikes: 'small talk, fluorescent light',
+        mannerisms: 'touches the back of her neck when lying',
+        relationships: 'estranged from her father; ride-or-die with Park',
+        skills: 'conversational Mandarin, sleight-of-hand',
+      });
+      expect(out.pronouns).toBe('she/her');
+      expect(out.age).toBe('27');
+      expect(out.coreTheme).toBe('cartographer of grief');
+      expect(out.skills).toBe('conversational Mandarin, sleight-of-hand');
+    });
+
+    it('caps every new string field at its BIBLE_LIMITS bound', () => {
+      const longs = {
+        pronouns: 'p'.repeat(BIBLE_LIMITS.PRONOUNS_MAX + 5),
+        age: 'a'.repeat(BIBLE_LIMITS.AGE_MAX + 5),
+        coreTheme: 't'.repeat(BIBLE_LIMITS.CORE_THEME_MAX + 50),
+        motivations: 'm'.repeat(BIBLE_LIMITS.MOTIVATIONS_MAX + 50),
+        skills: 's'.repeat(BIBLE_LIMITS.SKILLS_MAX + 50),
+      };
+      const out = sanitizeCharacter({ name: 'A', ...longs });
+      expect(out.pronouns.length).toBe(BIBLE_LIMITS.PRONOUNS_MAX);
+      expect(out.age.length).toBe(BIBLE_LIMITS.AGE_MAX);
+      expect(out.coreTheme.length).toBe(BIBLE_LIMITS.CORE_THEME_MAX);
+      expect(out.motivations.length).toBe(BIBLE_LIMITS.MOTIVATIONS_MAX);
+      expect(out.skills.length).toBe(BIBLE_LIMITS.SKILLS_MAX);
+    });
+
+    it('keeps the open key/value stats list (non-human characters supported)', () => {
+      const out = sanitizeCharacter({
+        name: 'The Reach',
+        stats: [
+          { label: 'Form', value: 'translucent vapor' },
+          { label: 'Eyes', value: 'none (echolocates)' },
+          { label: 'Limbs', value: '6 segmented' },
+        ],
+      });
+      expect(out.stats).toHaveLength(3);
+      expect(out.stats[0]).toEqual({ label: 'Form', value: 'translucent vapor' });
+      expect(out.stats[2].label).toBe('Limbs');
+    });
+
+    it('drops stats entries missing a label, caps overall list', () => {
+      const tooMany = Array.from({ length: BIBLE_LIMITS.STATS_PER_CHARACTER_MAX + 5 }, (_, i) => ({ label: `s${i}`, value: 'v' }));
+      const out = sanitizeCharacter({
+        name: 'A',
+        stats: [
+          { value: 'no label' },
+          ...tooMany,
+        ],
+      });
+      // Nameless entry dropped; list capped at the limit.
+      expect(out.stats).toHaveLength(BIBLE_LIMITS.STATS_PER_CHARACTER_MAX);
+      expect(out.stats[0]).toEqual({ label: 's0', value: 'v' });
+    });
+
+    it('color palette accepts hex + role; drops nameless rows', () => {
+      const out = sanitizeCharacter({
+        name: 'A',
+        colorPalette: [
+          { name: 'amber', hex: '#f59e0b', role: 'skin' },
+          { name: 'olive', hex: '', role: '' },
+          { role: 'no name' },
+        ],
+      });
+      expect(out.colorPalette).toHaveLength(2);
+      expect(out.colorPalette[0]).toEqual({ name: 'amber', hex: '#f59e0b', role: 'skin' });
+      expect(out.colorPalette[1]).toEqual({ name: 'olive', hex: '', role: '' });
+    });
+
+    it('props get a UUID id and round-trip caller-supplied ids', () => {
+      const out = sanitizeCharacter({
+        name: 'A',
+        props: [
+          { name: 'Radio', purpose: 'comms', materials: 'plastic + alloy' },
+          { id: 'prop-fixed-1', name: 'Compass' },
+        ],
+      });
+      expect(out.props).toHaveLength(2);
+      expect(out.props[0].id).toMatch(/^prop-/);
+      expect(out.props[1].id).toBe('prop-fixed-1');
+      expect(out.props[0].purpose).toBe('comms');
+    });
+
+    it('expressions + handGestures drop rows without a name', () => {
+      const out = sanitizeCharacter({
+        name: 'A',
+        expressions: [
+          { name: 'neutral', description: 'baseline' },
+          { description: 'no name' },
+        ],
+        handGestures: [
+          { description: 'no name' },
+          { name: 'pointing', description: 'index out' },
+        ],
+      });
+      expect(out.expressions).toHaveLength(1);
+      expect(out.expressions[0].name).toBe('neutral');
+      expect(out.handGestures).toHaveLength(1);
+      expect(out.handGestures[0].name).toBe('pointing');
+    });
+
+    it('referenceSheetImageRef accepts a filename and trims it', () => {
+      const out = sanitizeCharacter({ name: 'A', referenceSheetImageRef: '  universe-abc-character-sheet.png  ' });
+      expect(out.referenceSheetImageRef).toBe('universe-abc-character-sheet.png');
+    });
+
+    it('referenceSheetImageRef collapses to null for non-string / blank', () => {
+      expect(sanitizeCharacter({ name: 'A', referenceSheetImageRef: '' }).referenceSheetImageRef).toBeNull();
+      expect(sanitizeCharacter({ name: 'A', referenceSheetImageRef: '   ' }).referenceSheetImageRef).toBeNull();
+      expect(sanitizeCharacter({ name: 'A', referenceSheetImageRef: 123 }).referenceSheetImageRef).toBeNull();
+      expect(sanitizeCharacter({ name: 'A' }).referenceSheetImageRef).toBeNull();
+    });
+  });
 });
 
 describe('storyBible — sanitizeSetting', () => {

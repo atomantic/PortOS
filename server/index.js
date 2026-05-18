@@ -498,6 +498,9 @@ restoreLoops().catch(err => console.error(`❌ Loop restore failed: ${err.messag
 
 // Serve generated images from configured images directory
 app.use('/data/images', express.static(PATHS.images));
+// Reference images (multi-ref upload inputs + generated character reference
+// sheets) — served read-only so the UI can render thumbnails by URL.
+app.use('/data/image-refs', express.static(PATHS.imageRefs));
 // Serve generated videos + thumbnails so the Media UI and tailnet clients
 // can pull them by URL without going through an explicit download route.
 app.use('/data/videos', express.static(PATHS.videos));
