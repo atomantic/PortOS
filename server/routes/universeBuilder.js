@@ -408,7 +408,10 @@ router.post('/:id/render', asyncHandler(async (req, res) => {
   // one-time no-op write on the raw-disk inspection: fully-migrated
   // universes skip the write so `updatedAt` doesn't bump on every render
   // (which would interfere with LWW sync + trigger spurious re-export).
-  if (await svc.needsEntryIdPersist(req.params.id)) {
+  // Skip entirely for canon-only renders — canon entries already carry
+  // stable ids (storyBible.js sanitizer), so the raw-disk read + write
+  // would be pure overhead.
+  if (body.promptMode !== 'canon' && await svc.needsEntryIdPersist(req.params.id)) {
     await svc.updateUniverse(req.params.id, () => ({})).catch((err) => { throw mapServiceError(err); });
   }
   const universe = await svc.getUniverse(req.params.id).catch((err) => { throw mapServiceError(err); });
