@@ -159,8 +159,8 @@ describe("universeBuilderExpand.normalizeCategories", () => {
       landscapes: ["Crystalline canyon basin", "Salt flat ruins"],
     });
     expect(out.landscapes.variations).toEqual([
-      { label: "Crystalline canyon basin", prompt: "Crystalline canyon basin" },
-      { label: "Salt flat ruins", prompt: "Salt flat ruins" },
+      { id: expect.stringMatching(/^var-/), label: "Crystalline canyon basin", prompt: "Crystalline canyon basin", imageRefs: [] },
+      { id: expect.stringMatching(/^var-/), label: "Salt flat ruins", prompt: "Salt flat ruins", imageRefs: [] },
     ]);
   });
 
@@ -183,7 +183,7 @@ describe("universeBuilderExpand.normalizeCategories", () => {
       },
     });
     expect(out.vehicles.variations).toEqual([
-      { label: "Walker mech", prompt: "rusted six-leg walker mech" },
+      { id: expect.stringMatching(/^var-/), label: "Walker mech", prompt: "rusted six-leg walker mech", imageRefs: [] },
     ]);
   });
 
@@ -200,7 +200,7 @@ describe("universeBuilderExpand.normalizeCategories", () => {
       },
     });
     expect(out.structures.variations).toEqual([
-      { label: "Tower", prompt: "spire of obsidian" },
+      { id: expect.stringMatching(/^var-/), label: "Tower", prompt: "spire of obsidian", imageRefs: [] },
     ]);
   });
 
@@ -215,7 +215,7 @@ describe("universeBuilderExpand.normalizeCategories", () => {
     });
     expect(out.landscapes.variations).toHaveLength(1);
     expect(out.raider_pirate_clans.variations).toEqual([
-      { label: "Wake Jackals", prompt: "spare moebius scavenger raiders" },
+      { id: expect.stringMatching(/^var-/), label: "Wake Jackals", prompt: "spare moebius scavenger raiders", imageRefs: [] },
     ]);
   });
 
@@ -258,10 +258,12 @@ describe("universeBuilderExpand.normalizeCompositeSheets", () => {
     ]);
     expect(out).toEqual([
       {
+        id: expect.stringMatching(/^sheet-/),
         kind: "reference_sheet",
         label: "Gas-Giant Drifters costume sheet",
         prompt:
           "Create a clean illustrated costume reference sheet with five figures, material swatches, fasteners, accessories, color palette strip, and simple floating-platform background.",
+        imageRefs: [],
       },
     ]);
   });
@@ -270,9 +272,11 @@ describe("universeBuilderExpand.normalizeCompositeSheets", () => {
     const out = normalizeCompositeSheets(["Canopy Symbiotes reference board"]);
     expect(out).toEqual([
       {
+        id: expect.stringMatching(/^sheet-/),
         kind: "reference_sheet",
         label: "Canopy Symbiotes reference board",
         prompt: "Canopy Symbiotes reference board",
+        imageRefs: [],
       },
     ]);
   });
@@ -288,10 +292,12 @@ describe("universeBuilderExpand.normalizeCompositeSheets", () => {
     ]);
     expect(out).toEqual([
       {
+        id: expect.stringMatching(/^sheet-/),
         kind: "world_pitch_poster",
         label: "Universe summary concept pitch poster",
         prompt:
           "Create a cinematic universe summary concept pitch poster with hero panorama, inset environments, culture callouts, palette, materials, light atmosphere, and theme icons.",
+        imageRefs: [],
       },
     ]);
   });

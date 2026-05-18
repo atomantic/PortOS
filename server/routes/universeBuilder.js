@@ -47,19 +47,34 @@ const mapServiceError = (err) => {
 };
 
 // ---- shared zod fragments ----
+// `id` is optional on input — the service-layer sanitizer mints one with a
+// `var-`/`sheet-` prefix when absent. Existing non-empty ids are normalized
+// on read/write (trimmed + capped to 80 chars) so renames + bucket-moves
+// preserve the link to imageRefs[]; callers should treat the normalized
+// form as the canonical id rather than the raw value they supplied.
+const entryIdField = z.string().trim().min(1).max(80).optional();
+const entryImageRefField = z.string().trim().min(1).max(svc.IMAGE_REF_FILENAME_MAX);
+const entryImageRefsField = z.array(entryImageRefField).max(svc.IMAGE_REFS_PER_ENTRY_MAX).optional();
 const variationSchema = z.object({
+  id: entryIdField,
   label: z.string().trim().min(1).max(svc.VARIATION_LABEL_MAX),
   prompt: z.string().trim().min(1).max(svc.PROMPT_FRAGMENT_MAX),
   // Per-item lock — when true, expand preserves this variation across
   // re-runs instead of letting the LLM regenerate it.
   locked: z.boolean().optional(),
+  // Render history (newest last). Server stamps this via the collection hook
+  // when a render completes; clients echo it back on PATCH-the-whole-list flows
+  // so the sanitizer can preserve it across rename/bucket-move.
+  imageRefs: entryImageRefsField,
 });
 const compositeSheetSchema = z.object({
+  id: entryIdField,
   kind: z.enum(svc.COMPOSITE_SHEET_KINDS).optional(),
   label: z.string().trim().min(1).max(svc.VARIATION_LABEL_MAX),
   prompt: z.string().trim().min(1).max(svc.COMPOSITE_PROMPT_MAX),
   // Per-item lock for composite boards (same semantics as variations).
   locked: z.boolean().optional(),
+  imageRefs: entryImageRefsField,
 });
 const categoryShape = z.object({
   // Tags this bucket to one of the 3 canon trunks (or 'other' as the
@@ -385,6 +400,20 @@ router.get('/:id/runs', asyncHandler(async (req, res) => {
 
 router.post('/:id/render', asyncHandler(async (req, res) => {
   const body = validateRequest(renderSchema, req.body ?? {});
+  // Legacy universes carry no variation/sheet ids on disk. sanitizeTemplate
+  // mints fresh UUIDs on every read but readState() intentionally does not
+  // persist them (race against concurrent writers). The render route needs
+  // ids that are stable across the read→queue→completion lifecycle so the
+  // collection hook can find the source entry by `entryRef.id`. Gate the
+  // one-time no-op write on the raw-disk inspection: fully-migrated
+  // universes skip the write so `updatedAt` doesn't bump on every render
+  // (which would interfere with LWW sync + trigger spurious re-export).
+  // Skip entirely for canon-only renders — canon entries already carry
+  // stable ids (storyBible.js sanitizer), so the raw-disk read + write
+  // would be pure overhead.
+  if (body.promptMode !== 'canon' && await svc.needsEntryIdPersist(req.params.id)) {
+    await svc.updateUniverse(req.params.id, () => ({})).catch((err) => { throw mapServiceError(err); });
+  }
   const universe = await svc.getUniverse(req.params.id).catch((err) => { throw mapServiceError(err); });
 
   // Resolve a style preset (server-side authoritative list) so the embrace
@@ -497,13 +526,19 @@ router.post('/:id/render', asyncHandler(async (req, res) => {
       negativePrompt: item.negativePrompt || undefined,
       // Tag every job so the completion hook can route the result back
       // into the run's collection without us having to thread additional
-      // arguments through the queue.
+      // arguments through the queue. `entryRef` (when present — variations
+      // and composite sheets gain it once the universe has been written
+      // through the current sanitizer) lets the hook also append the
+      // rendered filename to the source variation/sheet/canon entry's
+      // `imageRefs[]` so the Universe Builder can show the latest render
+      // as an avatar next to each item.
       universeRun: {
         runId,
         universeId: universe.id,
         collectionId: collection.id,
         category: item.category,
         label: item.label,
+        ...(item.entryRef ? { entryRef: item.entryRef } : {}),
       },
     };
     if (mode === 'codex') {

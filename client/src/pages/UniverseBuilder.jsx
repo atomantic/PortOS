@@ -2028,7 +2028,14 @@ function CompositeSheetsEditor({ sheets, onChange, canRender = false, onRender =
     const prompt = editPrompt.trim();
     if (!label || !prompt) return;
     const next = [...sheets];
-    next[editIdx] = { kind: editKind, label: label.slice(0, 120), prompt: prompt.slice(0, COMPOSITE_PROMPT_MAX) };
+    // Preserve `id`, `locked`, `imageRefs` — see VariationCard.saveEdit for
+    // the rationale. The editor only owns kind/label/prompt.
+    next[editIdx] = {
+      ...next[editIdx],
+      kind: editKind,
+      label: label.slice(0, 120),
+      prompt: prompt.slice(0, COMPOSITE_PROMPT_MAX),
+    };
     onChange(next);
     setEditIdx(null);
   };
@@ -2302,7 +2309,19 @@ export function CategoryEditor({
     // the user can't see why they vanished.
     if (!label || !prompt) return;
     const next = [...variations];
-    next[editIdx] = { label: label.slice(0, 120), prompt: prompt.slice(0, 2000) };
+    // Preserve `id`, `locked`, and `imageRefs` — only label + prompt are
+    // editable in this row. A naive replacement would re-mint the variation's
+    // id (breaking the link to its render history) and drop accrued imageRefs.
+    // The server's stale-PATCH guard catches some of this via length + tail
+    // comparison (variations with NEW renders in cur survive an empty patch),
+    // but a stale variation whose history hasn't grown server-side since the
+    // client loaded would still get its imageRefs cleared if we sent an empty
+    // array. Echoing cur's array verbatim avoids relying on the guard.
+    next[editIdx] = {
+      ...next[editIdx],
+      label: label.slice(0, 120),
+      prompt: prompt.slice(0, 2000),
+    };
     onChange(next);
     setEditIdx(null);
   };
@@ -2547,6 +2566,21 @@ function VariationCard({
       ? 'Promote to canon — pick a trunk'
       : 'Promote to canon — LLM expands this variation into a full canon entry';
 
+  // Show the most recent render as an avatar. `imageRefs` is chronological
+  // (renders append to the end). EntryCardThumbnail falls back through the
+  // history on `onError` so a deleted gallery file degrades gracefully. The
+  // thumbnail column collapses when there are no renders yet — matching the
+  // contract that nothing shows until at least one image has been generated.
+  const renders = Array.isArray(v.imageRefs) ? v.imageRefs : [];
+  const latestRender = renders[renders.length - 1] || null;
+  const thumbnail = latestRender
+    ? {
+      filename: latestRender,
+      alt: `${v.label} render`,
+      fallbackRefs: renders,
+    }
+    : null;
+
   const title = <div className="text-sm text-white font-medium truncate">{v.label}</div>;
   const body = <div className="text-xs text-gray-400 line-clamp-2 mt-1">{v.prompt}</div>;
   const actions = (
@@ -2628,7 +2662,7 @@ function VariationCard({
     </div>
   );
 
-  return <EntryCard locked={locked} title={title} body={body} actions={actions} />;
+  return <EntryCard locked={locked} thumbnail={thumbnail} title={title} body={body} actions={actions} />;
 }
 
 function BibleTab({

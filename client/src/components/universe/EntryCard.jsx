@@ -6,10 +6,15 @@
  * Slot contract:
  * - `title`, `body`, `actions`, `footer` — ReactNode. Consumers own internal
  *   layout (e.g. column vs. row for `actions`) so EntryCard stays unopinionated.
- * - `thumbnail` — descriptor object `{ filename, alt?, onClick?, isPrimary? }`
- *   (NOT a ReactNode). Spread into the internal `EntryCardThumbnail` renderer
- *   so the 12x12 frame, primary-star badge, and zoom-in button styling stay
- *   consistent across consumers. Pass `null`/omit to skip the thumbnail column.
+ * - `thumbnail` — descriptor object `{ filename, alt?, onClick?, isPrimary?,
+ *   fallbackRefs? }` (NOT a ReactNode). Spread into the internal
+ *   `EntryCardThumbnail` renderer so the 12x12 frame, primary-star badge, and
+ *   zoom-in button styling stay consistent across consumers. Pass `null`/omit
+ *   to skip the thumbnail column. `fallbackRefs` is an optional chronological
+ *   list of older filenames — when the primary one fails to load (file
+ *   deleted), the thumbnail walks back through this list to the next existing
+ *   render rather than producing a broken image; if none load, the column
+ *   collapses to nothing.
  * - `selectable` — descriptor `{ selected, onToggle, label? }`. Turns the row
  *   into a checkbox-driven selection card (used by the Importer review for
  *   pre-commit canon picks). Selected accent matches `locked`'s family;
@@ -20,7 +25,7 @@
  *   overlay so they remain independently clickable without nesting interactive
  *   controls inside a `<label>` (invalid HTML).
  */
-import { useId } from 'react';
+import { useId, useState, useEffect } from 'react';
 import { Star } from 'lucide-react';
 
 export default function EntryCard({
@@ -63,9 +68,7 @@ export default function EntryCard({
           />
         ) : null}
         {thumbnail ? (
-          <div className={thumbnail.onClick ? 'relative z-10' : undefined}>
-            <EntryCardThumbnail {...thumbnail} />
-          </div>
+          <EntryCardThumbnail {...thumbnail} />
         ) : null}
         <div className="flex-1 min-w-0">
           {title}
@@ -78,13 +81,40 @@ export default function EntryCard({
   );
 }
 
-function EntryCardThumbnail({ filename, alt, onClick, isPrimary = false }) {
+function EntryCardThumbnail({ filename, alt, onClick, isPrimary = false, fallbackRefs = null }) {
+  // Build a walk-back list: primary first, then any older filenames (most
+  // recent of the fallbacks first since the consumer passes chronological,
+  // newest last — reverse so we step back through history). `filename` is
+  // de-duplicated from `fallbackRefs` so it isn't tried twice.
+  const candidates = [];
+  if (filename) candidates.push(filename);
+  if (Array.isArray(fallbackRefs)) {
+    for (let i = fallbackRefs.length - 1; i >= 0; i -= 1) {
+      const f = fallbackRefs[i];
+      if (typeof f === 'string' && f && f !== filename && !candidates.includes(f)) {
+        candidates.push(f);
+      }
+    }
+  }
+  // Reset the walk-back when the candidates list changes (new render landed,
+  // entry swapped, etc.). Keyed on the joined list so React rebuilds local
+  // state when the input genuinely changes vs. a parent re-render.
+  const candidateKey = candidates.join('|');
+  const [idx, setIdx] = useState(0);
+  useEffect(() => { setIdx(0); }, [candidateKey]);
+  // Walked past the end → all files are missing on disk. Collapse rather than
+  // render a broken `<img>`; matches the contract that no avatar shows when
+  // there are no resolvable renders.
+  if (!candidates.length || idx >= candidates.length) return null;
+  const currentFilename = candidates[idx];
+
   const img = (
     <img
-      src={`/data/images/${filename}`}
-      alt={alt || filename}
+      src={`/data/images/${currentFilename}`}
+      alt={alt || currentFilename}
       className="w-full h-full object-cover"
       loading="lazy"
+      onError={() => setIdx((n) => n + 1)}
     />
   );
   const frame = (
@@ -106,10 +136,10 @@ function EntryCardThumbnail({ filename, alt, onClick, isPrimary = false }) {
   return (
     <button
       type="button"
-      onClick={onClick}
-      title={`Preview ${alt || filename}`}
-      aria-label={`Preview ${alt || filename}`}
-      className="p-0 bg-transparent border-0 cursor-zoom-in"
+      onClick={() => onClick(currentFilename)}
+      title={`Preview ${alt || currentFilename}`}
+      aria-label={`Preview ${alt || currentFilename}`}
+      className="p-0 bg-transparent border-0 cursor-zoom-in relative z-10"
     >
       {frame}
     </button>
