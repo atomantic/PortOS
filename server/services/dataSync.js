@@ -10,6 +10,9 @@ import crypto from 'crypto';
 import { writeFile } from 'fs/promises';
 import { join } from 'path';
 import { ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
+import { mergeUniversesFromSync } from './universeBuilder.js';
+import { mergeSeriesFromSync } from './pipeline/series.js';
+import { mergeIssuesFromSync } from './pipeline/issues.js';
 
 // --- Category Definitions ---
 
@@ -20,6 +23,9 @@ const CHRONOTYPE_FILE = join(PATHS.digitalTwin, 'chronotype.json');
 const LONGEVITY_FILE = join(PATHS.digitalTwin, 'longevity.json');
 const FEEDBACK_FILE = join(PATHS.digitalTwin, 'feedback.json');
 const MEATSPACE_DIR = PATHS.meatspace;
+const PIPELINE_SERIES_FILE = join(PATHS.data, 'pipeline-series.json');
+const PIPELINE_ISSUES_FILE = join(PATHS.data, 'pipeline-issues.json');
+const UNIVERSE_BUILDER_FILE = join(PATHS.data, 'universe-builder.json');
 
 const MEATSPACE_FILES = {
   'daily-log.json': { arrayKey: 'entries', idField: 'date' },
@@ -335,13 +341,92 @@ async function applyMeatspaceRemote(remoteData) {
   return { applied: totalApplied > 0, count: totalApplied };
 }
 
+// Pipeline + universe sync covers the creative pipeline state (series, issues,
+// universes) over Tailscale between same-network peers. Same-content image and
+// video blobs continue to flow through the share-bucket system (cloud-synced
+// folders) — those are too large for the snapshot-every-cycle pattern this
+// service uses. Sync here is record-level only: serialized state for the
+// records, no media blobs.
+
+// --- Category: Universe ---
+
+async function getUniverseSnapshot() {
+  const data = await readJSONFile(UNIVERSE_BUILDER_FILE, { universes: [] });
+  // Skip `runs[]` — that's local LLM run history (transcripts, ephemeral),
+  // not user-edited universe state. Each peer keeps its own history.
+  const universesOnly = { universes: data.universes || [] };
+  return { data: universesOnly, checksum: computeChecksum(universesOnly) };
+}
+
+async function applyUniverseRemote(remoteData) {
+  if (!remoteData) return { applied: false, count: 0 };
+  // Routes through `mergeUniversesFromSync` so the read-modify-write runs
+  // INSIDE `queueUniverseWrite` (serialized against every other writer:
+  // create / update / promote-variation / handleSave) and each incoming
+  // remote record passes through `sanitizeTemplate` for schema-version
+  // backfill — older peers landing pre-v4 records get them migrated on the
+  // way in instead of polluting disk with un-backfilled state.
+  const result = await mergeUniversesFromSync(remoteData.universes || []);
+  if (result.applied) {
+    console.log(`🔄 Universe sync: merged ${result.count} universe(s)`);
+  }
+  return result;
+}
+
+// --- Category: Pipeline ---
+
+async function getPipelineSnapshot() {
+  const [seriesFile, issuesFile] = await Promise.all([
+    readJSONFile(PIPELINE_SERIES_FILE, { series: [] }),
+    readJSONFile(PIPELINE_ISSUES_FILE, { issues: [] }),
+  ]);
+  const data = {
+    series: seriesFile.series || [],
+    issues: issuesFile.issues || [],
+  };
+  return { data, checksum: computeChecksum(data) };
+}
+
+async function applyPipelineRemote(remoteData) {
+  if (!remoteData) return { applied: false, count: 0 };
+  // Routes through the per-file merge entry points so each side's
+  // read-modify-write runs INSIDE its own file-level write queue
+  // (`queueSeriesWrite` / `queueIssueWrite`) — serialized against every other
+  // local writer (bible edits, season metadata PATCH, season-cover render
+  // PATCH, updateStage, etc.). Each incoming record passes through its
+  // service's sanitizer for shape enforcement on the way in.
+  const [seriesResult, issuesResult] = await Promise.all([
+    mergeSeriesFromSync(remoteData.series || []),
+    mergeIssuesFromSync(remoteData.issues || []),
+  ]);
+
+  const seriesChanged = seriesResult.count;
+  const issuesChanged = issuesResult.count;
+  if (seriesChanged === 0 && issuesChanged === 0) return { applied: false, count: 0 };
+
+  // `count` is the total number of records actually changed/added by this
+  // merge (NOT total post-merge records — that would over-report when callers
+  // sum across categories or compare cycle-over-cycle deltas). `seriesChanged`
+  // / `issuesChanged` are surfaced separately so per-side telemetry stays
+  // distinguishable.
+  console.log(`🔄 Pipeline sync: merged ${seriesChanged} series + ${issuesChanged} issue(s)`);
+  return {
+    applied: true,
+    count: seriesChanged + issuesChanged,
+    seriesChanged,
+    issuesChanged,
+  };
+}
+
 // --- Public API ---
 
 const CATEGORIES = {
   goals: { getSnapshot: getGoalsSnapshot, applyRemote: applyGoalsRemote },
   character: { getSnapshot: getCharacterSnapshot, applyRemote: applyCharacterRemote },
   digitalTwin: { getSnapshot: getDigitalTwinSnapshot, applyRemote: applyDigitalTwinRemote },
-  meatspace: { getSnapshot: getMeatspaceSnapshot, applyRemote: applyMeatspaceRemote }
+  meatspace: { getSnapshot: getMeatspaceSnapshot, applyRemote: applyMeatspaceRemote },
+  universe: { getSnapshot: getUniverseSnapshot, applyRemote: applyUniverseRemote },
+  pipeline: { getSnapshot: getPipelineSnapshot, applyRemote: applyPipelineRemote }
 };
 
 export function getSupportedCategories() {
