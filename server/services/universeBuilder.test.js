@@ -1551,6 +1551,27 @@ describe("universeBuilder service", () => {
       expect(updated.categories.landscapes.variations[0].imageRefs).toEqual(["rendered-1.png", "rendered-2.png"]);
     });
 
+    it("appendEntryImageRef rejects pathy filenames up-front (no queued write)", async () => {
+      // A renderer that ever returns a path-laden filename should be
+      // rejected at the helper boundary — letting it through would trigger
+      // a no-op write (sanitizer strips it later) and pointlessly bump
+      // updatedAt + emit recordUpdated.
+      const u = await svc.createUniverse({
+        name: "PathReject",
+        categories: { landscapes: { variations: [{ label: "L1", prompt: "p1" }] } },
+      });
+      const variationId = u.categories.landscapes.variations[0].id;
+      const before = (await svc.getUniverse(u.id)).updatedAt;
+      const result1 = await svc.appendEntryImageRef(u.id, { kind: "variation", categoryKey: "landscapes", id: variationId }, "../escape.png");
+      const result2 = await svc.appendEntryImageRef(u.id, { kind: "variation", categoryKey: "landscapes", id: variationId }, "sub/file.png");
+      const result3 = await svc.appendEntryImageRef(u.id, { kind: "variation", categoryKey: "landscapes", id: variationId }, "..\\windows.png");
+      expect(result1).toBe(null);
+      expect(result2).toBe(null);
+      expect(result3).toBe(null);
+      const after = (await svc.getUniverse(u.id)).updatedAt;
+      expect(after).toBe(before);
+    });
+
     it("appendEntryImageRef dedupes a same-filename repeat render", async () => {
       const u = await svc.createUniverse({
         name: "Dedupe",

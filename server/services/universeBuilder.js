@@ -1170,7 +1170,11 @@ export async function listRuns(universeId = null) {
 // on the same universe.
 export async function appendEntryImageRef(universeId, entryRef, filename) {
   if (!isStr(universeId) || !entryRef || typeof entryRef !== 'object') return null;
-  const safe = trimTo(filename, IMAGE_REF_FILENAME_MAX);
+  // Apply the same filename guard the sanitizer uses on round-trip so a
+  // pathy or traversal-laden filename is rejected up-front rather than
+  // entering the queued write and triggering a no-op `updatedAt` bump
+  // when sanitizeTemplate strips it on the way out.
+  const safe = sanitizeImageRefFilename(filename);
   if (!safe) return null;
   return updateUniverse(universeId, (cur) => {
     if (entryRef.kind === ENTRY_REF_KIND.VARIATION && isStr(entryRef.categoryKey) && isStr(entryRef.id)) {
