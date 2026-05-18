@@ -25,7 +25,10 @@ export function createImageGenWaiter({
   // a `(ev) => new ServerError(...)` for a typed rejection.
   onFailed = (ev) => ev,
 } = {}) {
-  let registeredId = null;
+  // Sentinel — strict equality against a fresh symbol never matches anything
+  // else, so a `completed` event with `generationId: null` (or omitted) that
+  // fires BEFORE `register()` runs can't accidentally resolve the waiter.
+  let registeredId = Symbol('unregistered');
   let resolve, reject;
   const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
   promise.catch(() => {});

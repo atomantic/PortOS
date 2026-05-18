@@ -756,13 +756,13 @@ export const resolveTemplateAsset = makePathResolver(() => PATHS.visualTemplates
  * @param {string} rawPath - basename or absolute path
  * @returns {string|null} validated absolute path, or null
  */
-// Module-load prefixes — PATHS.* values don't change at runtime, so
-// `resolvePath() + PATH_SEP` is computed once instead of every call. Each
-// entry pairs the prefix to its matching resolver for the dispatch loop.
-const IMAGE_INPUT_ROOTS = [
-  [resolvePath(PATHS.images) + PATH_SEP, resolveGalleryImage],
-  [resolvePath(PATHS.imageRefs) + PATH_SEP, resolveImageRef],
-  [resolvePath(PATHS.visualTemplates) + PATH_SEP, resolveTemplateAsset],
+// Pairs of (PATHS-key, resolver). Read PATHS at CALL time so tests that
+// mutate `PATHS.x` at mock-eval time still steer the prefix dispatch — a
+// module-load snapshot would freeze the pre-mock paths.
+const IMAGE_INPUT_RESOLVERS = [
+  ['images', resolveGalleryImage],
+  ['imageRefs', resolveImageRef],
+  ['visualTemplates', resolveTemplateAsset],
 ];
 
 export function resolveImageInputPath(rawPath) {
@@ -773,13 +773,14 @@ export function resolveImageInputPath(rawPath) {
   // to `/data/images/foo.png` whenever a same-named file lives in the gallery.
   // Validate against the matching root only.
   const resolvedInput = resolvePath(rawPath);
-  for (const [rootPrefix, resolver] of IMAGE_INPUT_ROOTS) {
+  for (const [key, resolver] of IMAGE_INPUT_RESOLVERS) {
+    const rootPrefix = resolvePath(PATHS[key]) + PATH_SEP;
     if (resolvedInput.startsWith(rootPrefix)) return resolver(rawPath);
   }
   // For basename / relative input (no matching prefix), fall through the
   // resolvers in order. First match wins; basename collisions across roots
   // are accepted as ambiguous and resolve to the first defined root.
-  for (const [, resolver] of IMAGE_INPUT_ROOTS) {
+  for (const [, resolver] of IMAGE_INPUT_RESOLVERS) {
     const candidate = resolver(rawPath);
     if (candidate) return candidate;
   }
