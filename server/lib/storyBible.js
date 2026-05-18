@@ -346,6 +346,13 @@ export function pruneStaleReferenceSheets(characters) {
   return changed ? out : characters;
 }
 
+// CONVENTION: every per-row sanitizer below stamps a stable `id` via
+// `ensureId`. The character editor (CharacterDetailEditor.jsx) binds local
+// draft state to each `ListRow` via its React key — without a server-stamped
+// id, the key falls back to row index and a delete-then-edit sequence carries
+// the wrong drafts buffer onto the wrong row. New list shapes added here
+// MUST include `id: ensureId(raw.id, '<prefix>-')`.
+
 // Wardrobe sanitizer (A2). One entry per outfit/styling variant; the
 // description is image-gen-ready prose ("worn linen suit, gold pocket watch,
 // scuffed wingtips"). Reference images per wardrobe land in a follow-up.

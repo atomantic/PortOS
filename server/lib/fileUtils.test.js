@@ -519,12 +519,19 @@ describe('fileUtils', () => {
     });
   });
 
+  // CONVENTION: this block writes fixtures into the REAL `data/images`,
+  // `data/image-refs`, and `data/templates` roots because `PATHS` is module-
+  // evaluated and not easily overridable. Two rules to keep dev/CI worktrees
+  // clean and avoid clobbering shipped assets:
+  //   1. Every fixture name MUST start with the `fileutils-test-` prefix so
+  //      the cleanup below can target it unambiguously (and so the basenames
+  //      don't shadow any real asset the resolver would otherwise find).
+  //   2. Cleanup goes in `afterAll`, NOT a recursive remove of the root —
+  //      the data/ roots hold the user's universe content and shipped templates.
   describe('resolveImageInputPath', () => {
     const sampleTemplate = join(__dirname_test, '..', '..', 'data.sample', 'templates', 'character-reference-sheet.png');
     const galleryName = 'fileutils-test-gallery.png';
     const refsName = 'fileutils-test-refs.png';
-    // Unique template name so cleanup doesn't unlink the shipped asset that
-    // other tests / dev runs depend on at `data/templates/character-reference-sheet.png`.
     const templateName = 'fileutils-test-template.png';
     const galleryPath = join(PATHS.images, galleryName);
     const refsPath = join(PATHS.imageRefs, refsName);
