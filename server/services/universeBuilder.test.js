@@ -1540,6 +1540,40 @@ describe("universeBuilder service", () => {
       expect(final.compositeSheets[0].imageRefs).toEqual(["sheet.png"]);
     });
 
+    it("stale at-cap PATCH detects rotation via tail mismatch (variations)", async () => {
+      // Seed a variation whose imageRefs is already at the cap. A server-side
+      // append rotates the list (drops oldest, pushes newest) — lengths stay
+      // equal, so the stale-PATCH guard must compare the tail element, not
+      // just the length.
+      const cap = svc.IMAGE_REFS_PER_ENTRY_MAX;
+      const capRefs = Array.from({ length: cap }, (_, i) => `r${i}.png`);
+      const u = await svc.createUniverse({
+        name: "Capped",
+        categories: { landscapes: { variations: [{ label: "L1", prompt: "p1", imageRefs: capRefs }] } },
+      });
+      const variationId = u.categories.landscapes.variations[0].id;
+      // Server appends a new render — list rotates (r0.png drops off, fresh.png appended).
+      await svc.appendEntryImageRef(u.id, { kind: "variation", categoryKey: "landscapes", id: variationId }, "fresh.png");
+      // Stale client (loaded BEFORE the rotation) PATCHes with the
+      // pre-rotation list — same length, but tail is r{cap-1}.png instead of
+      // fresh.png. Without the tail check, the stale list would clobber the
+      // server-stamped fresh.png.
+      await svc.updateUniverse(u.id, {
+        categories: {
+          landscapes: {
+            kind: "places",
+            variations: [{ id: variationId, label: "L1 renamed", prompt: "p1", imageRefs: capRefs }],
+          },
+        },
+      });
+      const final = await svc.getUniverse(u.id);
+      const v = final.categories.landscapes.variations[0];
+      expect(v.label).toBe("L1 renamed");
+      // Tail should still be fresh.png (the server-stamped newest), not the
+      // pre-rotation r{cap-1}.png from the stale patch.
+      expect(v.imageRefs[v.imageRefs.length - 1]).toBe("fresh.png");
+    });
+
     it("compilePrompts stamps entryRef on each compiled prompt", () => {
       const universe = {
         id: "w1",

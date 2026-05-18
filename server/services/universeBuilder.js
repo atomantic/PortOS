@@ -229,8 +229,10 @@ const isCharactersBucket = (k) => /^characters?(_|$)/i.test(normalizeCategoryKey
 // Mint a stable id when raw is missing/blank. Variations and composite sheets
 // historically had no id (just label+prompt); ensuring one now means rename and
 // bucket-move preserve the linkage to the entry's rendered imageRefs[]. Existing
-// non-empty ids round-trip verbatim so callers controlling ids (sync importer)
-// retain them.
+// non-empty ids are normalized (whitespace-trimmed and capped to 80 chars) on
+// every read/write, so callers controlling ids (sync importer) should supply
+// already-normalized values to ensure verbatim round-trip — any leading/trailing
+// whitespace or excess length will be silently truncated.
 const ensureEntryId = (raw, prefix) => {
   if (isStr(raw) && raw.trim()) return raw.trim().slice(0, 80);
   return `${prefix}${randomUUID()}`;
@@ -1158,8 +1160,14 @@ export async function appendEntryImageRef(universeId, entryRef, filename) {
 }
 
 // Preserve cur's `imageRefs` on entries the patch round-tripped from a stale
-// load. Match by `id`; when cur's list has strictly more entries than the
-// patch's, the patch is stale and we restore cur's history. Used by both the
+// load. Match by `id`; we consider the patch stale (and restore cur's history)
+// when EITHER cur's list has more entries than the patch's OR the newest entry
+// (tail) differs between cur and patch. The tail check catches the at-cap case:
+// once imageRefs is at IMAGE_REFS_PER_ENTRY_MAX (12), a server-side append
+// rotates the list — pushing the new filename and dropping the oldest — so
+// lengths stay equal even though cur is strictly newer. Comparing tails
+// detects this; a stale client PATCH (with the pre-rotation list) has a
+// different last element than the freshly-appended cur. Used by both the
 // variations and composite-sheets preservation paths in updateUniverse.
 function preserveImageRefsById(next, prev) {
   if (!Array.isArray(next) || !Array.isArray(prev)) return next;
@@ -1169,7 +1177,14 @@ function preserveImageRefsById(next, prev) {
     if (!p) return n;
     const prevRefs = Array.isArray(p.imageRefs) ? p.imageRefs : [];
     const nextRefs = Array.isArray(n.imageRefs) ? n.imageRefs : [];
-    return prevRefs.length > nextRefs.length ? { ...n, imageRefs: prevRefs } : n;
+    if (prevRefs.length === 0) return n;
+    // Restore when cur has strictly more refs (patch dropped some) OR cur has
+    // a different newest entry than the patch (server-side rotation at cap).
+    // Equal-length + same tail means the patch is current and survives.
+    const isStale =
+      prevRefs.length > nextRefs.length ||
+      (prevRefs.length > 0 && prevRefs[prevRefs.length - 1] !== nextRefs[nextRefs.length - 1]);
+    return isStale ? { ...n, imageRefs: prevRefs } : n;
   });
 }
 
