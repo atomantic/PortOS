@@ -293,11 +293,13 @@ export default function CanonCard({
   const blockedByLock = locked;
 
   // Visual at-a-glance without scrolling to the footer ref grid. Falls back
-  // to the first ref when nothing is pinned so a freshly-rendered entry isn't
-  // thumbnail-less just because the user hasn't picked a primary yet.
+  // to the MOST RECENT ref when nothing is pinned so a freshly-rendered entry
+  // isn't thumbnail-less just because the user hasn't picked a primary yet,
+  // and a re-render lands as the avatar instead of being buried behind older
+  // takes. `imageRefs` is chronological (renders append to the end).
   const thumbnailRef = (entry.primaryImageRef && refs.includes(entry.primaryImageRef))
     ? entry.primaryImageRef
-    : (refs[0] || null);
+    : (refs[refs.length - 1] || null);
 
   // settledRef prevents duplicate completion callbacks under React 18
   // StrictMode's mount→cleanup→mount double-fire in dev. MediaJobThumb
@@ -539,12 +541,19 @@ export default function CanonCard({
     </>
   );
 
+  // `fallbackRefs` lets EntryCardThumbnail walk back through prior renders
+  // when the chosen primary file no longer exists on disk — so a deleted
+  // gallery image gracefully degrades to the next existing render rather
+  // than producing a broken thumbnail. `onClick` receives the currently
+  // displayed filename (which may be a fallback) so the lightbox previews
+  // what the user actually sees rather than the absent primary.
   const thumbnail = thumbnailRef
     ? {
       filename: thumbnailRef,
       alt: `${entry.name} reference`,
-      onClick: () => onPreview?.(thumbnailRef),
+      onClick: (visibleFilename) => onPreview?.(visibleFilename || thumbnailRef),
       isPrimary: !!entry.primaryImageRef && entry.primaryImageRef === thumbnailRef,
+      fallbackRefs: refs,
     }
     : null;
 

@@ -47,19 +47,32 @@ const mapServiceError = (err) => {
 };
 
 // ---- shared zod fragments ----
+// `id` is optional on input — the service-layer sanitizer mints one with a
+// `var-`/`sheet-` prefix when absent. Existing non-empty ids round-trip
+// verbatim so renames + bucket-moves preserve the link to imageRefs[].
+const entryIdField = z.string().trim().min(1).max(80).optional();
+const entryImageRefField = z.string().trim().min(1).max(svc.IMAGE_REF_FILENAME_MAX);
+const entryImageRefsField = z.array(entryImageRefField).max(svc.IMAGE_REFS_PER_ENTRY_MAX).optional();
 const variationSchema = z.object({
+  id: entryIdField,
   label: z.string().trim().min(1).max(svc.VARIATION_LABEL_MAX),
   prompt: z.string().trim().min(1).max(svc.PROMPT_FRAGMENT_MAX),
   // Per-item lock — when true, expand preserves this variation across
   // re-runs instead of letting the LLM regenerate it.
   locked: z.boolean().optional(),
+  // Render history (newest last). Server stamps this via the collection hook
+  // when a render completes; clients echo it back on PATCH-the-whole-list flows
+  // so the sanitizer can preserve it across rename/bucket-move.
+  imageRefs: entryImageRefsField,
 });
 const compositeSheetSchema = z.object({
+  id: entryIdField,
   kind: z.enum(svc.COMPOSITE_SHEET_KINDS).optional(),
   label: z.string().trim().min(1).max(svc.VARIATION_LABEL_MAX),
   prompt: z.string().trim().min(1).max(svc.COMPOSITE_PROMPT_MAX),
   // Per-item lock for composite boards (same semantics as variations).
   locked: z.boolean().optional(),
+  imageRefs: entryImageRefsField,
 });
 const categoryShape = z.object({
   // Tags this bucket to one of the 3 canon trunks (or 'other' as the
@@ -497,13 +510,19 @@ router.post('/:id/render', asyncHandler(async (req, res) => {
       negativePrompt: item.negativePrompt || undefined,
       // Tag every job so the completion hook can route the result back
       // into the run's collection without us having to thread additional
-      // arguments through the queue.
+      // arguments through the queue. `entryRef` (when present — variations
+      // and composite sheets gain it once the universe has been written
+      // through the current sanitizer) lets the hook also append the
+      // rendered filename to the source variation/sheet/canon entry's
+      // `imageRefs[]` so the Universe Builder can show the latest render
+      // as an avatar next to each item.
       universeRun: {
         runId,
         universeId: universe.id,
         collectionId: collection.id,
         category: item.category,
         label: item.label,
+        ...(item.entryRef ? { entryRef: item.entryRef } : {}),
       },
     };
     if (mode === 'codex') {

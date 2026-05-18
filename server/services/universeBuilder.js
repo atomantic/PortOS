@@ -25,7 +25,7 @@
  * other name the user picks at kickoff).
  */
 
-import { join } from 'path';
+import { join, basename } from 'path';
 import { randomUUID } from 'crypto';
 import { PATHS, atomicWrite, readJSONFile, ensureDir, resolveImageRef } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
@@ -98,6 +98,17 @@ export const COMPOSITE_SHEET_KINDS = Object.freeze([
 ]);
 export const WORLD_CATEGORY_KEY_MAX = 64;
 export const WORLD_CATEGORY_COUNT_MAX = 30;
+// Per-entry render history caps reuse the bible's existing limits so a
+// variation/sheet entry can't accrue more refs than canon already allows.
+export const IMAGE_REFS_PER_ENTRY_MAX = BIBLE_LIMITS.IMAGE_REFS_PER_ENTRY_MAX;
+export const IMAGE_REF_FILENAME_MAX = BIBLE_LIMITS.IMAGE_REF_MAX;
+// `entryRef.kind` discriminator — the kind tag that universeRun job tags carry
+// so the collection hook knows which list to append the rendered filename to.
+export const ENTRY_REF_KIND = Object.freeze({
+  VARIATION: 'variation',
+  SHEET: 'sheet',
+  CANON: 'canon',
+});
 
 // Influences — structured token lists that ARE the universe's style + negative
 // prompts. Surfaced in the UI as "Style prompt" (embrace) and "Negative prompt"
@@ -215,6 +226,49 @@ export const normalizeCategoryKey = (raw) => {
 // ("character_variations", "Characters", etc.) after key normalization.
 const isCharactersBucket = (k) => /^characters?(_|$)/i.test(normalizeCategoryKey(k));
 
+// Mint a stable id when raw is missing/blank. Variations and composite sheets
+// historically had no id (just label+prompt); ensuring one now means rename and
+// bucket-move preserve the linkage to the entry's rendered imageRefs[]. Existing
+// non-empty ids round-trip verbatim so callers controlling ids (sync importer)
+// retain them.
+const ensureEntryId = (raw, prefix) => {
+  if (isStr(raw) && raw.trim()) return raw.trim().slice(0, 80);
+  return `${prefix}${randomUUID()}`;
+};
+
+// Sanitize a filename-only image reference. Basename strip + traversal guards
+// mirror server/lib/fileUtils.js#resolveGalleryImage — no FS check here because
+// sanitize runs on every read. Stale-file collapse happens in the UI via the
+// thumbnail's onError fallback.
+const sanitizeImageRefFilename = (raw) => {
+  if (!isStr(raw)) return '';
+  const trimmed = raw.trim().slice(0, IMAGE_REF_FILENAME_MAX);
+  if (!trimmed) return '';
+  const safe = basename(trimmed);
+  if (!safe || safe === '.' || safe === '..') return '';
+  if (safe !== trimmed) return ''; // path separators were present — reject
+  return safe;
+};
+
+// Render history for variations + composite sheets. Newest last. Deduped so a
+// re-render that produced the same gallery filename doesn't bloat the list.
+const sanitizeEntryImageRefs = (raw) => {
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  const seen = new Set();
+  for (const v of raw) {
+    const safe = sanitizeImageRefFilename(v);
+    if (!safe || seen.has(safe)) continue;
+    seen.add(safe);
+    out.push(safe);
+  }
+  // Keep the most recent `IMAGE_REFS_PER_ENTRY_MAX` entries — older ones drop
+  // off the front so the cap doesn't strand new renders.
+  return out.length > IMAGE_REFS_PER_ENTRY_MAX
+    ? out.slice(-IMAGE_REFS_PER_ENTRY_MAX)
+    : out;
+};
+
 const sanitizeVariation = (raw) => {
   if (!raw || typeof raw !== 'object') return null;
   const label = trimTo(raw.label, VARIATION_LABEL_MAX);
@@ -223,7 +277,12 @@ const sanitizeVariation = (raw) => {
   // Per-item lock — when true, expand merges preserve this entry instead of
   // letting the LLM regenerate it. Only `true` is recorded; missing/false
   // collapses to undefined so the on-disk shape stays minimal.
-  const out = { label, prompt };
+  const out = {
+    id: ensureEntryId(raw.id, 'var-'),
+    label,
+    prompt,
+    imageRefs: sanitizeEntryImageRefs(raw.imageRefs),
+  };
   if (raw.locked === true) out.locked = true;
   return out;
 };
@@ -234,7 +293,13 @@ const sanitizeCompositeSheet = (raw) => {
   const prompt = trimTo(raw.prompt, COMPOSITE_PROMPT_MAX);
   if (!label || !prompt) return null;
   const kind = COMPOSITE_SHEET_KINDS.includes(raw.kind) ? raw.kind : 'reference_sheet';
-  const out = { kind, label, prompt };
+  const out = {
+    id: ensureEntryId(raw.id, 'sheet-'),
+    kind,
+    label,
+    prompt,
+    imageRefs: sanitizeEntryImageRefs(raw.imageRefs),
+  };
   if (raw.locked === true) out.locked = true;
   return out;
 };
@@ -897,6 +962,33 @@ export async function updateUniverse(id, patchOrMutator = {}) {
       });
     }
 
+    // Server-stamped render history on variations + composite sheets. The
+    // collection hook is the sole writer (via the mutator-form of
+    // updateUniverse, which bypasses this guard). A literal-object PATCH that
+    // round-trips the variation body the client loaded before a render
+    // completed would otherwise clobber the freshly-appended filename. Match
+    // by `id` and preserve cur's `imageRefs` when it has more entries than
+    // the patch — fewer-or-equal means the client is current and the patch's
+    // value (which may legitimately reflect an explicit clear, though the
+    // current UI doesn't expose that) survives.
+    if (!isMutator && 'categories' in patch && patch.categories && typeof patch.categories === 'object') {
+      for (const [catKey, catVal] of Object.entries(mergedCategories)) {
+        if (!catVal || !Array.isArray(catVal.variations)) continue;
+        const curCat = cur.categories?.[catKey];
+        if (!curCat || !Array.isArray(curCat.variations)) continue;
+        // Only run preservation against categories the patch actually sent —
+        // categories preserved verbatim from cur already have the right imageRefs.
+        if (!(catKey in patch.categories)) continue;
+        mergedCategories[catKey] = {
+          ...catVal,
+          variations: preserveImageRefsById(catVal.variations, curCat.variations),
+        };
+      }
+    }
+    if (!isMutator && Array.isArray(scalarPatch.compositeSheets) && Array.isArray(cur.compositeSheets)) {
+      scalarPatch.compositeSheets = preserveImageRefsById(scalarPatch.compositeSheets, cur.compositeSheets);
+    }
+
     const mergedRecord = sanitizeTemplate({
       ...cur,
       ...scalarPatch,
@@ -1028,6 +1120,71 @@ export async function listRuns(universeId = null) {
   const { runs } = await readState();
   const filtered = universeId ? runs.filter((r) => r.universeId === universeId) : runs;
   return [...filtered].sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+}
+
+// Append a rendered gallery filename to the imageRefs[] of the entry the job
+// targeted. `entryRef` shape mirrors what `compilePrompts` stamps onto each
+// job (see `universeRun.entryRef`); the mutator branches on `kind`:
+//   - 'variation' → `universe.categories[categoryKey].variations[id]`
+//   - 'sheet'     → `universe.compositeSheets[id]`
+//   - 'canon'     → `universe[kindKey][id]` (characters/places/objects)
+// Dedupes against the existing list so a re-render that produces the same
+// filename doesn't bloat the history. Runs through `updateUniverse`'s mutator
+// form so the read→modify→write window is serialized against concurrent edits
+// on the same universe.
+export async function appendEntryImageRef(universeId, entryRef, filename) {
+  if (!isStr(universeId) || !entryRef || typeof entryRef !== 'object') return null;
+  const safe = trimTo(filename, IMAGE_REF_FILENAME_MAX);
+  if (!safe) return null;
+  return updateUniverse(universeId, (cur) => {
+    if (entryRef.kind === ENTRY_REF_KIND.VARIATION && isStr(entryRef.categoryKey) && isStr(entryRef.id)) {
+      const cat = cur.categories?.[entryRef.categoryKey];
+      const variations = mapAppendImageRef(cat?.variations, entryRef.id, safe);
+      if (!variations) return null;
+      return { categories: { [entryRef.categoryKey]: { ...cat, variations } } };
+    }
+    if (entryRef.kind === ENTRY_REF_KIND.SHEET && isStr(entryRef.id)) {
+      const sheets = mapAppendImageRef(cur.compositeSheets, entryRef.id, safe);
+      if (!sheets) return null;
+      return { compositeSheets: sheets };
+    }
+    if (entryRef.kind === ENTRY_REF_KIND.CANON && isStr(entryRef.kindKey) && isStr(entryRef.id)) {
+      const list = mapAppendImageRef(cur[entryRef.kindKey], entryRef.id, safe);
+      if (!list) return null;
+      return { [entryRef.kindKey]: list };
+    }
+    return null;
+  });
+}
+
+// Preserve cur's `imageRefs` on entries the patch round-tripped from a stale
+// load. Match by `id`; when cur's list has strictly more entries than the
+// patch's, the patch is stale and we restore cur's history. Used by both the
+// variations and composite-sheets preservation paths in updateUniverse.
+function preserveImageRefsById(next, prev) {
+  if (!Array.isArray(next) || !Array.isArray(prev)) return next;
+  const prevById = new Map(prev.filter((p) => p?.id).map((p) => [p.id, p]));
+  return next.map((n) => {
+    const p = n?.id ? prevById.get(n.id) : null;
+    if (!p) return n;
+    const prevRefs = Array.isArray(p.imageRefs) ? p.imageRefs : [];
+    const nextRefs = Array.isArray(n.imageRefs) ? n.imageRefs : [];
+    return prevRefs.length > nextRefs.length ? { ...n, imageRefs: prevRefs } : n;
+  });
+}
+
+// Append `filename` (deduped + capped to IMAGE_REFS_PER_ENTRY_MAX) to the
+// imageRefs[] of the entry in `list` matched by `id`. Returns the new list,
+// or `null` when the id isn't present so the caller can short-circuit.
+function mapAppendImageRef(list, id, filename) {
+  if (!Array.isArray(list) || !list.some((e) => e?.id === id)) return null;
+  return list.map((e) => {
+    if (e?.id !== id) return e;
+    const refs = Array.isArray(e.imageRefs) ? e.imageRefs : [];
+    if (refs.includes(filename)) return e;
+    const next = [...refs, filename];
+    return { ...e, imageRefs: next.length > IMAGE_REFS_PER_ENTRY_MAX ? next.slice(-IMAGE_REFS_PER_ENTRY_MAX) : next };
+  });
 }
 
 // Join an influence list (embrace or avoid) into the comma-separated string
@@ -1199,6 +1356,13 @@ export function compilePrompts(universe, options = {}) {
             prompt,
             negativePrompt,
             batchIndex: i,
+            // `entryRef` lets the collection hook stamp the rendered filename
+            // back onto this exact variation regardless of subsequent label
+            // edits or bucket moves. Older universes can be missing `id` until
+            // the next write through sanitizeTemplate — fall through silently
+            // when that happens; the variation just won't accrue a render
+            // history until it next gets persisted.
+            ...(variation.id ? { entryRef: { kind: ENTRY_REF_KIND.VARIATION, categoryKey: category, id: variation.id } } : {}),
           });
         }
       }
@@ -1223,6 +1387,7 @@ export function compilePrompts(universe, options = {}) {
           prompt,
           negativePrompt,
           batchIndex: i,
+          ...(sheet.id ? { entryRef: { kind: ENTRY_REF_KIND.SHEET, id: sheet.id } } : {}),
         });
       }
     }
@@ -1265,6 +1430,7 @@ export function compilePrompts(universe, options = {}) {
               prompt,
               negativePrompt,
               batchIndex: i,
+              ...(entry.id ? { entryRef: { kind: ENTRY_REF_KIND.CANON, kindKey: trunk.key, id: entry.id } } : {}),
             });
           }
         }
