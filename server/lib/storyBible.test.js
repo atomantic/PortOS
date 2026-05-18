@@ -29,6 +29,9 @@ const {
   BIBLE_KIND,
   createBibleStore,
   pruneStaleReferenceSheets,
+  stripCanonControlFields,
+  CANON_CONTROL_FIELDS,
+  SERVER_OWNED_CHARACTER_FIELDS,
 } = storyBible;
 
 const WORK_ID = 'wr-work-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
@@ -426,6 +429,49 @@ describe('storyBible — sanitizeCharacter', () => {
       expect(sanitizeCharacter({ name: 'A', referenceSheetImageRef: '..' }).referenceSheetImageRef).toBeNull();
       expect(sanitizeCharacter({ name: 'A', referenceSheetImageRef: '.hidden.png' }).referenceSheetImageRef).toBeNull();
     });
+  });
+});
+
+describe('storyBible — canon control + server-owned field invariants', () => {
+  // These constants are the single source of truth for "fields the LLM /
+  // client shouldn't be the writer of". `stripCanonControlFields` reads
+  // CANON_CONTROL_FIELDS; `updateUniverse`'s PATCH-preservation guard
+  // reads SERVER_OWNED_CHARACTER_FIELDS. Pin both so a new operational
+  // field added to one constant without updating the other (or its
+  // consumer) gets caught.
+
+  it('stripCanonControlFields drops every CANON_CONTROL_FIELD on an entry', () => {
+    const entry = {
+      id: 'c-1', createdAt: 'x', updatedAt: 'y',
+      locked: true, sourceSeriesId: 'sr-1',
+      imageRefs: ['a.png'], primaryImageRef: 'a.png',
+      referenceSheetImageRef: 'sheet.png',
+      // Non-control field — must survive.
+      name: 'Vale', personality: 'alert',
+    };
+    const stripped = stripCanonControlFields(entry);
+    for (const f of CANON_CONTROL_FIELDS) {
+      expect(stripped).not.toHaveProperty(f);
+    }
+    expect(stripped.name).toBe('Vale');
+    expect(stripped.personality).toBe('alert');
+  });
+
+  it('SERVER_OWNED_CHARACTER_FIELDS is a subset of CANON_CONTROL_FIELDS', () => {
+    // The PATCH-preservation guard reads server-owned fields; the
+    // strip-from-LLM guard reads control fields. Server-owned MUST be a
+    // strict subset — otherwise a new server-owned field could appear
+    // in literal PATCH bodies that bypass `stripCanonControlFields`.
+    const ctrl = new Set(CANON_CONTROL_FIELDS);
+    for (const f of SERVER_OWNED_CHARACTER_FIELDS) {
+      expect(ctrl.has(f)).toBe(true);
+    }
+  });
+
+  it('SERVER_OWNED_CHARACTER_FIELDS lists exactly the render-completion-stamped pointers', () => {
+    // Pin the current set so a new server-owned addition is a deliberate
+    // change (update both this test AND the corresponding render flow).
+    expect([...SERVER_OWNED_CHARACTER_FIELDS]).toEqual(['referenceSheetImageRef']);
   });
 });
 

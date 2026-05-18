@@ -240,20 +240,42 @@ export function findBibleEntryByName(list, name) {
     || (Array.isArray(e?.aliases) && e.aliases.some((a) => normalizeBibleName(a) === needle)));
 }
 
-// Fields the LLM should NEVER set on a canon entry it just generated.
-// `id/createdAt/updatedAt` get freshly minted by the per-kind sanitizer; a
-// hallucinated `locked: true` would block user edits without a Lock UI click;
-// `sourceSeriesId` is provenance owned by series imports; `imageRefs` +
-// `primaryImageRef` + `referenceSheetImageRef` are operational (set by the
-// Render UI / reference-sheet completion handler).
+// Single source of truth for fields that LIVE on a canon entry but are
+// NOT freely user-editable through the normal LLM/client flow. Each entry
+// names *why* a guard exists; the consumers below read from this list so
+// adding a new operational field is one edit, not three.
+//
+// - `id/createdAt/updatedAt`: freshly minted by the per-kind sanitizer.
+// - `locked`: a hallucinated `true` would block user edits without a Lock
+//   UI click — purely a user-driven toggle.
+// - `sourceSeriesId`: provenance owned by series imports.
+// - `imageRefs` / `primaryImageRef`: user-uploaded gallery references —
+//   the user is the writer here, but the LLM should not hallucinate
+//   filenames into the gallery.
+// - `referenceSheetImageRef`: SERVER-stamped operational pointer. The
+//   render-completion mutator is the sole writer. Distinct from the
+//   `imageRefs[]` gallery — lives in `data/image-refs/`.
+//
+// `SERVER_OWNED_CHARACTER_FIELDS` is a strict subset: ONLY the pointers
+// that the *server* writes via render-completion mutators (never the
+// client, never the LLM). `updateUniverse` preserves these across
+// literal-object PATCHes so a stale client body can't clobber a newer
+// server stamp (multi-tab / parallel render race). Mutator-form callers
+// are trusted to update these (they read `cur` themselves).
+export const CANON_CONTROL_FIELDS = Object.freeze([
+  'id', 'createdAt', 'updatedAt',
+  'locked', 'sourceSeriesId',
+  'imageRefs', 'primaryImageRef', 'referenceSheetImageRef',
+]);
+
+export const SERVER_OWNED_CHARACTER_FIELDS = Object.freeze([
+  'referenceSheetImageRef',
+]);
+
 export function stripCanonControlFields(entry) {
   if (!entry || typeof entry !== 'object') return entry;
-  const {
-    id: _id, createdAt: _ca, updatedAt: _ua,
-    locked: _locked, sourceSeriesId: _ssi,
-    imageRefs: _imgs, primaryImageRef: _primary, referenceSheetImageRef: _sheet,
-    ...rest
-  } = entry;
+  const rest = { ...entry };
+  for (const f of CANON_CONTROL_FIELDS) delete rest[f];
   return rest;
 }
 

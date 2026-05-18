@@ -33,6 +33,7 @@ import { composeStyledPrompt } from '../lib/composeStyledPrompt.js';
 import { richCanonDescriptorFragments } from '../lib/canonPrompt.js';
 import {
   sanitizeBibleList, BIBLE_KIND, BIBLE_FIELD, BIBLE_LIMITS, BIBLE_SOURCE,
+  SERVER_OWNED_CHARACTER_FIELDS,
   normalizeBibleName, isStr, trimTo,
 } from '../lib/storyBible.js';
 import { sanitizeOrigin } from '../lib/sharingOrigin.js';
@@ -854,25 +855,32 @@ export async function updateUniverse(id, patchOrMutator = {}) {
     const scalarPatch = Object.fromEntries(
       PATCHABLE_SCALARS.filter((k) => k in patch).map((k) => [k, patch[k]]),
     );
-    // Server owns `referenceSheetImageRef` — only the render-completion
-    // handler should ever stamp it. A client PATCH that round-trips a
-    // character body it loaded before a newer render finished would
-    // otherwise clobber the newer pointer (multi-tab / parallel render
-    // race). Preserve cur's value per-id; new characters in the patch
-    // (no matching cur id) start fresh.
+    // Server-owned operational fields on characters (see
+    // SERVER_OWNED_CHARACTER_FIELDS in storyBible.js) are written only by
+    // server-side render-completion mutators. A literal-object PATCH that
+    // round-trips a character body the client loaded before a newer
+    // render finished would otherwise clobber the freshly-stamped
+    // pointer (multi-tab / parallel render race). Preserve cur's value
+    // per-(id, field); new characters in the patch start fresh.
     //
-    // ONLY applies to literal-object patches. The mutator path
-    // (`onSheetComplete`) reads `cur` itself, intentionally constructs a
-    // patch with the newly stamped filename, and is the trusted writer of
-    // this field — applying preservation there would clobber the stamp
-    // back to the OLD/null value and the sheet would never persist.
+    // ONLY applies to literal-object patches. The mutator path is the
+    // trusted writer here — `onSheetComplete` reads `cur` itself and
+    // intentionally constructs a patch with the newly stamped value, so
+    // running preservation against its output would clobber the stamp
+    // back to the OLD/null value and the sheet would never persist. The
+    // sharing importer wraps `updateUniverse(id, () => record)` for the
+    // same reason — sync's intent is LWW including operational pointers,
+    // so it opts into the mutator-bypass.
     if (!isMutator
       && Array.isArray(scalarPatch.characters)
       && Array.isArray(cur.characters)) {
       const curById = new Map(cur.characters.filter((c) => c?.id).map((c) => [c.id, c]));
       scalarPatch.characters = scalarPatch.characters.map((c) => {
         const prev = c?.id ? curById.get(c.id) : null;
-        return prev ? { ...c, referenceSheetImageRef: prev.referenceSheetImageRef } : c;
+        if (!prev) return c;
+        const preserved = { ...c };
+        for (const f of SERVER_OWNED_CHARACTER_FIELDS) preserved[f] = prev[f];
+        return preserved;
       });
     }
 

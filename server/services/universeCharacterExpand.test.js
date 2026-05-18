@@ -109,6 +109,55 @@ describe('universeCharacterExpand — applyExpansion (no-clobber merge semantics
     expect(updatedFields).toHaveLength(20);
   });
 
+  it('REGRESSION: list proposals whose rows all fail bible sanitization are NOT marked as updated', () => {
+    // Without the pre-sanitize check inside applyExpansion, the route
+    // would report `updatedFields: ['stats', 'props', 'colorPalette',
+    // 'expressions', 'handGestures']` but the persisted character would
+    // have empty lists across the board — the bible sanitizer drops
+    // rows missing required keys (stats without `label`, name-keyed
+    // entries without `name`). Pin both the field-skip and the merge
+    // result so the next refactor of either layer keeps them in sync.
+    const target = {
+      name: 'Vale',
+      stats: [], props: [], colorPalette: [], expressions: [], handGestures: [],
+    };
+    const content = {
+      // sanitizeStat drops rows missing `label`.
+      stats: [{ value: "5'7\"" }, { value: 'amber' }],
+      // sanitizeProp drops rows missing `name`.
+      props: [{ purpose: 'comms' }],
+      // sanitizePaletteColor drops rows missing `name`.
+      colorPalette: [{ hex: '#f59e0b' }],
+      // sanitizeExpression drops rows missing `name`.
+      expressions: [{ description: 'baseline' }],
+      // sanitizeHandGesture drops rows missing `name`.
+      handGestures: [{ description: 'pointing' }],
+    };
+    const { merged, updatedFields } = applyExpansion(target, content);
+    expect(updatedFields).toEqual([]);
+    expect(merged.stats).toEqual([]);
+    expect(merged.props).toEqual([]);
+    expect(merged.colorPalette).toEqual([]);
+    expect(merged.expressions).toEqual([]);
+    expect(merged.handGestures).toEqual([]);
+  });
+
+  it('REGRESSION: partial-row drop — surviving rows land in merged, field marked as updated', () => {
+    // Mixed-validity LLM payload: one valid stat, one invalid. The
+    // valid row survives sanitization and the field IS legitimately
+    // updated (sanitized length > 0). Without this case the previous
+    // regression could be satisfied by a too-aggressive "drop the
+    // whole field on any invalid row" implementation.
+    const target = { name: 'Vale', stats: [] };
+    const content = {
+      stats: [{ label: 'Height', value: "5'7\"" }, { value: 'no-label' }],
+    };
+    const { merged, updatedFields } = applyExpansion(target, content);
+    expect(updatedFields).toEqual(['stats']);
+    expect(merged.stats).toHaveLength(1);
+    expect(merged.stats[0]).toMatchObject({ label: 'Height', value: "5'7\"" });
+  });
+
   it('REGRESSION: top-level array LLM response no-ops in applyExpansion (route-level rejection lives in expandUniverseCharacter)', () => {
     // `typeof [] === 'object'`, so `applyExpansion` accepts an array and
     // produces no updates — the route caller is responsible for the 502.
