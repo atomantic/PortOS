@@ -5,6 +5,7 @@ import toast from '../components/ui/Toast';
 import { useAsyncAction } from '../hooks/useAsyncAction';
 import { STORY_SHAPES } from '../components/pipeline/StoryShapes';
 import EntryCard from '../components/universe/EntryCard';
+import { previewCanonFragments } from '../lib/canonPrompt';
 import {
   analyzeImport,
   classifyImport,
@@ -471,8 +472,6 @@ function ReviewPanel({
         entries={canonSelections.characters}
         selectedIdxs={selectedCanon.characters}
         onToggle={(idx) => toggleSelected('characters', idx)}
-        renderSubtitle={(e) => e.role || ''}
-        renderBody={(e) => [e.physicalDescription, e.personality, e.background].filter(Boolean).join(' • ')}
       />
 
       <CanonReviewSection
@@ -481,8 +480,6 @@ function ReviewPanel({
         entries={canonSelections.places}
         selectedIdxs={selectedCanon.places}
         onToggle={(idx) => toggleSelected('places', idx)}
-        renderSubtitle={(e) => e.slugline || ''}
-        renderBody={(e) => e.description || ''}
       />
 
       <CanonReviewSection
@@ -491,8 +488,6 @@ function ReviewPanel({
         entries={canonSelections.objects}
         selectedIdxs={selectedCanon.objects}
         onToggle={(idx) => toggleSelected('objects', idx)}
-        renderSubtitle={() => ''}
-        renderBody={(e) => [e.description, e.significance].filter(Boolean).join(' • ')}
       />
 
       <ArcReviewSection arc={arcDraft} setArc={setArcDraft} seasons={seasonsDraft} setSeasons={setSeasonsDraft} arcShapeIds={arcShapeIds} />
@@ -528,7 +523,7 @@ function ReviewPanel({
   );
 }
 
-function CanonReviewSection({ title, kind, entries, selectedIdxs, onToggle, renderSubtitle, renderBody }) {
+function CanonReviewSection({ title, kind, entries, selectedIdxs, onToggle }) {
   if (entries.length === 0) {
     return (
       <section className="bg-port-card border border-port-border rounded-lg p-4">
@@ -547,8 +542,8 @@ function CanonReviewSection({ title, kind, entries, selectedIdxs, onToggle, rend
       </div>
       <ul className="grid grid-cols-1 md:grid-cols-2 gap-2">
         {entries.map((entry, idx) => {
-          const subtitle = renderSubtitle(entry);
-          const bodyText = renderBody(entry);
+          const { subtitle, body } = previewCanonFragments(kind, entry);
+          const bodyText = body.map((f) => f.value).join(' • ');
           const name = entry.name || '(unnamed)';
           return (
             <EntryCard

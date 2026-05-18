@@ -20,6 +20,35 @@ const SHORT_SPEC = Object.freeze({
   objects: Object.freeze({ primary: 'description', fallback: 'significance' }),
 });
 
+// PREVIEW spec: importer pre-commit review surface. Wider than SHORT (the
+// user needs to see narrative-only fields like `personality` / `background`
+// to judge "include this character?") and intentionally distinct from RICH
+// (RICH drives render prompts; preview is about identity disambiguation).
+// `subtitleField` is the single-line tagline; `bodyFields` uses the same
+// `[{ field }]` sequence shape as RICH_SPEC so `fragmentsFromSequence` can
+// be reused (no prefixes — importer cards render values verbatim).
+const PREVIEW_SPEC = Object.freeze({
+  characters: Object.freeze({
+    subtitleField: 'role',
+    bodyFields: Object.freeze([
+      { field: 'physicalDescription' },
+      { field: 'personality' },
+      { field: 'background' },
+    ]),
+  }),
+  places: Object.freeze({
+    subtitleField: 'slugline',
+    bodyFields: Object.freeze([{ field: 'description' }]),
+  }),
+  objects: Object.freeze({
+    subtitleField: null,
+    bodyFields: Object.freeze([
+      { field: 'description' },
+      { field: 'significance' },
+    ]),
+  }),
+});
+
 // RICH spec: ordered list of all descriptor fields. Prefixes capitalized
 // uniformly so flattened output reads as natural sentence fragments.
 const RICH_SPEC = Object.freeze({
@@ -116,6 +145,30 @@ export function descriptorForCanonEntry(kind, entry) {
   return shortCanonDescriptorFragments(kind, entry)
     .map((f) => (f.prefix ? `${f.prefix}: ${f.value}` : f.value))
     .join('. ');
+}
+
+/**
+ * PREVIEW fragments — importer pre-commit review surface.
+ *
+ * Returns `{ subtitle, body }` where `subtitle` is a single trimmed string
+ * (empty when the kind has no subtitle field or the value is blank) and
+ * `body` is an ordered `[{ field, value }]` array of non-blank fields,
+ * intended for ` • `-joined rendering in importer cards. Unknown kinds and
+ * non-object entries return the empty shape so callers can render
+ * unconditionally.
+ *
+ * This is intentionally wider than `shortCanonDescriptorFragments` (which
+ * is scoped to the visual subset that drives render-prompts and ref-image
+ * gating). PREVIEW exists so the user can disambiguate which character /
+ * place / object to commit, so it surfaces narrative-only fields
+ * (`personality`, `background`, `slugline`) that have no visual role.
+ */
+export function previewCanonFragments(kind, entry) {
+  if (!entry || typeof entry !== 'object') return { subtitle: '', body: [] };
+  const spec = PREVIEW_SPEC[normalizeKind(kind)];
+  if (!spec) return { subtitle: '', body: [] };
+  const subtitle = spec.subtitleField ? trim(entry[spec.subtitleField]) : '';
+  return { subtitle, body: fragmentsFromSequence(spec.bodyFields, entry) };
 }
 
 /**

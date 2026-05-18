@@ -4,6 +4,7 @@ import {
   richCanonDescriptorFragments,
   descriptorForCanonEntry,
   hasCanonDescriptorContent,
+  previewCanonFragments,
 } from './canonPrompt.js';
 
 describe('canonPrompt.js', () => {
@@ -224,6 +225,123 @@ describe('canonPrompt.js', () => {
         weather: '',
         recurringDetails: '',
       })).toBe(true);
+    });
+  });
+
+  describe('previewCanonFragments', () => {
+    it('returns empty shape for null/non-object entry', () => {
+      expect(previewCanonFragments('characters', null)).toEqual({ subtitle: '', body: [] });
+      expect(previewCanonFragments('characters', undefined)).toEqual({ subtitle: '', body: [] });
+      expect(previewCanonFragments('characters', 'nope')).toEqual({ subtitle: '', body: [] });
+    });
+
+    it('returns empty shape for unknown kind', () => {
+      expect(previewCanonFragments('unknown', { name: 'x', description: 'y' }))
+        .toEqual({ subtitle: '', body: [] });
+    });
+
+    it('accepts singular and plural kinds (normalizeKind passthrough)', () => {
+      const entry = { physicalDescription: 'tall', role: 'protagonist' };
+      expect(previewCanonFragments('character', entry).subtitle).toBe('protagonist');
+      expect(previewCanonFragments('CHARACTERS', entry).subtitle).toBe('protagonist');
+      expect(previewCanonFragments('place', { slugline: 'INT. — DAY' }).subtitle).toBe('INT. — DAY');
+    });
+
+    describe('characters', () => {
+      it('returns role as subtitle and physicalDescription/personality/background as body in order', () => {
+        expect(previewCanonFragments('characters', {
+          name: 'Alice',
+          role: 'protagonist',
+          physicalDescription: 'tall, dark hair',
+          personality: 'curious, restless',
+          background: 'orphaned at twelve',
+        })).toEqual({
+          subtitle: 'protagonist',
+          body: [
+            { field: 'physicalDescription', value: 'tall, dark hair' },
+            { field: 'personality', value: 'curious, restless' },
+            { field: 'background', value: 'orphaned at twelve' },
+          ],
+        });
+      });
+
+      it('omits blank body fields and yields blank subtitle when role missing', () => {
+        expect(previewCanonFragments('characters', {
+          physicalDescription: 'tall',
+          background: '',
+        })).toEqual({
+          subtitle: '',
+          body: [{ field: 'physicalDescription', value: 'tall' }],
+        });
+      });
+
+      it('trims whitespace-only fields', () => {
+        expect(previewCanonFragments('characters', {
+          role: '   ',
+          physicalDescription: '  tall  ',
+          personality: '',
+          background: '  ',
+        })).toEqual({
+          subtitle: '',
+          body: [{ field: 'physicalDescription', value: 'tall' }],
+        });
+      });
+
+      it('does NOT include description as a fallback (preview is field-keyed, not legacy-fallback)', () => {
+        expect(previewCanonFragments('characters', { description: 'old desc' }))
+          .toEqual({ subtitle: '', body: [] });
+      });
+    });
+
+    describe('places', () => {
+      it('returns slugline as subtitle and description as body', () => {
+        expect(previewCanonFragments('places', {
+          name: 'The Plaza',
+          slugline: 'EXT. — DUSK',
+          description: 'a dusty plaza with a cracked statue',
+        })).toEqual({
+          subtitle: 'EXT. — DUSK',
+          body: [{ field: 'description', value: 'a dusty plaza with a cracked statue' }],
+        });
+      });
+
+      it('does NOT include palette/era/weather/recurringDetails (those are RICH-only)', () => {
+        expect(previewCanonFragments('places', {
+          slugline: 'INT.',
+          description: 'plaza',
+          palette: 'noir',
+          era: '2099',
+          weather: 'foggy',
+          recurringDetails: 'statue',
+        })).toEqual({
+          subtitle: 'INT.',
+          body: [{ field: 'description', value: 'plaza' }],
+        });
+      });
+    });
+
+    describe('objects', () => {
+      it('returns empty subtitle and description+significance body', () => {
+        expect(previewCanonFragments('objects', {
+          name: 'Brass Key',
+          description: 'tarnished brass key with a green ribbon',
+          significance: 'opens the vault under the chapel',
+        })).toEqual({
+          subtitle: '',
+          body: [
+            { field: 'description', value: 'tarnished brass key with a green ribbon' },
+            { field: 'significance', value: 'opens the vault under the chapel' },
+          ],
+        });
+      });
+
+      it('returns significance additively (not as fallback)', () => {
+        expect(previewCanonFragments('objects', { significance: 'opens the vault' }))
+          .toEqual({
+            subtitle: '',
+            body: [{ field: 'significance', value: 'opens the vault' }],
+          });
+      });
     });
   });
 
