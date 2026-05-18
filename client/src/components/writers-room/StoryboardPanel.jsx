@@ -26,7 +26,7 @@ import CharactersBible from './CharactersBible';
 import PlacesBible from './PlacesBible';
 import ObjectsBible from './ObjectsBible';
 import { WR_IMAGE_DEFAULTS, readWrImageSettings, STYLE_ID, EMPTY_IMAGE_STYLE } from '../../lib/wrImageDefaults';
-import { buildCharByKey, buildSettingByKey } from '../../lib/scenePrompt';
+import { buildCharByKey, buildPlaceByKey } from '../../lib/scenePrompt';
 
 const SCRIPT_STAGE = 'writers-room-script';
 
@@ -249,7 +249,7 @@ export default function StoryboardPanel({
   }, []);
 
   const charByKey = useMemo(() => buildCharByKey(characters), [characters]);
-  const settingByKey = useMemo(() => buildSettingByKey(places), [places]);
+  const placeByKey = useMemo(() => buildPlaceByKey(places), [places]);
   const scenesCount = useMemo(
     () => (activeDraft?.segmentIndex || []).filter((s) => s.kind === 'scene').length,
     [activeDraft?.segmentIndex]
@@ -350,7 +350,7 @@ export default function StoryboardPanel({
             imageStyle={imageStyle}
             stylePresets={stylePresets}
             charByKey={charByKey}
-            settingByKey={settingByKey}
+            placeByKey={placeByKey}
             charactersCount={characters.length}
             placesCount={places.length}
             sceneRefs={sceneRefs}
@@ -517,7 +517,7 @@ function BoardsTab({
   imageStyle,
   stylePresets,
   charByKey,
-  settingByKey,
+  placeByKey,
   charactersCount,
   placesCount,
   sceneRefs,
@@ -623,7 +623,7 @@ function BoardsTab({
             initialImage={sceneImages[sceneId] || null}
             readingTheme={readingTheme}
             charByKey={charByKey}
-            settingByKey={settingByKey}
+            placeByKey={placeByKey}
             isActive={sceneId === activeSceneId}
             onJumpToProse={onJumpToScene ? () => onJumpToScene(scene, i, scenes.length) : null}
             onDebug={onDebug}

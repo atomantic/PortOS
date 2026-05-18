@@ -195,23 +195,43 @@ const SHIPPED_PROMPT_NEW_MD5 = {
 };
 const SHIPPED_PROMPT_FILES = Object.keys(SHIPPED_PROMPT_OLD_MD5);
 
-const sampleStagesDir = join(sampleDir, 'prompts', 'stages');
-const dataStagesDir   = join(dataDir,   'prompts', 'stages');
-if (existsSync(sampleStagesDir) && existsSync(dataStagesDir)) {
-  const md5 = (s) => {
-    const normalized = s.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-    return createHash('md5').update(normalized).digest('hex');
-  };
+// Shared `_partials/*.md` fragments are mustache-rendered into multiple
+// stage prompts (e.g. `bible-deference.md` is included by every stage
+// that references both character + place bibles). They get their own
+// drift table so the loop below scans them in parallel with stage
+// prompts and warns the user when a migration's pending.
+const SHIPPED_PARTIAL_OLD_MD5 = {
+  // setting→place rename, migration 022.
+  'bible-deference.md': '218f0e85643609ed85a12b1ccc7b5a8d',
+};
+const SHIPPED_PARTIAL_NEW_MD5 = {
+  'bible-deference.md': 'a4681348c27776e414acf6e0be566a99',
+};
+const SHIPPED_PARTIAL_FILES = Object.keys(SHIPPED_PARTIAL_OLD_MD5);
 
+const md5 = (s) => {
+  const normalized = s.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  return createHash('md5').update(normalized).digest('hex');
+};
+
+// Walk one directory's worth of shipped prompt files against a hash table
+// and partition them into auto-updatable (still on a known old hash) vs.
+// customized (hash matches neither old nor new). Used twice — once for
+// stage prompts, once for partial fragments.
+const collectDrift = ({ sampleSubdir, dataSubdir, files, oldMap, newMap }) => {
+  const sampleSubpath = join(sampleDir, ...sampleSubdir);
+  const dataSubpath   = join(dataDir,   ...dataSubdir);
+  if (!existsSync(sampleSubpath) || !existsSync(dataSubpath)) {
+    return { autoUpdatable: [], customized: [] };
+  }
   const autoUpdatable = [];
   const customized    = [];
-
-  for (const f of SHIPPED_PROMPT_FILES) {
-    const dataPath = join(dataStagesDir, f);
-    if (!existsSync(dataPath)) continue; // missing files handled above
+  for (const f of files) {
+    const dataPath = join(dataSubpath, f);
+    if (!existsSync(dataPath)) continue;
     const dataMd5 = md5(readFileSync(dataPath, 'utf8'));
-    if (dataMd5 === SHIPPED_PROMPT_NEW_MD5[f]) continue; // already up to date
-    const oldExpected = SHIPPED_PROMPT_OLD_MD5[f];
+    if (dataMd5 === newMap[f]) continue;
+    const oldExpected = oldMap[f];
     const oldHashes = Array.isArray(oldExpected) ? oldExpected : [oldExpected];
     if (oldHashes.includes(dataMd5)) {
       autoUpdatable.push(f);
@@ -219,22 +239,47 @@ if (existsSync(sampleStagesDir) && existsSync(dataStagesDir)) {
       customized.push(f);
     }
   }
+  return { autoUpdatable, customized };
+};
 
-  if (autoUpdatable.length > 0) {
-    console.warn(
-      `\n⚠️  ${autoUpdatable.length} pipeline stage prompt(s) have a pending migration — run \`npm run migrations\` to auto-update:\n` +
-      autoUpdatable.map(f => `   • ${f}`).join('\n') + '\n',
-    );
-  }
+const stageDrift = collectDrift({
+  sampleSubdir: ['prompts', 'stages'],
+  dataSubdir:   ['prompts', 'stages'],
+  files: SHIPPED_PROMPT_FILES,
+  oldMap: SHIPPED_PROMPT_OLD_MD5,
+  newMap: SHIPPED_PROMPT_NEW_MD5,
+});
+const partialDrift = collectDrift({
+  sampleSubdir: ['prompts', '_partials'],
+  dataSubdir:   ['prompts', '_partials'],
+  files: SHIPPED_PARTIAL_FILES,
+  oldMap: SHIPPED_PARTIAL_OLD_MD5,
+  newMap: SHIPPED_PARTIAL_NEW_MD5,
+});
 
-  if (customized.length > 0) {
-    console.warn(
-      `\n⚠️  ${customized.length} pipeline stage prompt(s) are customized and cannot be auto-updated.\n` +
-      `   Manually merge the new template variables into each file:\n` +
-      customized.map(f =>
-        `   • data/prompts/stages/${f}\n` +
-        `     Compare with: data.sample/prompts/stages/${f}`,
-      ).join('\n') + '\n',
-    );
-  }
+const autoUpdatable = [
+  ...stageDrift.autoUpdatable.map((f) => ({ file: f, relDir: 'data/prompts/stages' })),
+  ...partialDrift.autoUpdatable.map((f) => ({ file: f, relDir: 'data/prompts/_partials' })),
+];
+const customized = [
+  ...stageDrift.customized.map((f) => ({ file: f, relDir: 'data/prompts/stages', sampleDir: 'data.sample/prompts/stages' })),
+  ...partialDrift.customized.map((f) => ({ file: f, relDir: 'data/prompts/_partials', sampleDir: 'data.sample/prompts/_partials' })),
+];
+
+if (autoUpdatable.length > 0) {
+  console.warn(
+    `\n⚠️  ${autoUpdatable.length} pipeline prompt(s) have a pending migration — run \`npm run migrations\` to auto-update:\n` +
+    autoUpdatable.map(({ file, relDir }) => `   • ${relDir}/${file}`).join('\n') + '\n',
+  );
+}
+
+if (customized.length > 0) {
+  console.warn(
+    `\n⚠️  ${customized.length} pipeline prompt(s) are customized and cannot be auto-updated.\n` +
+    `   Manually merge the new template variables into each file:\n` +
+    customized.map(({ file, relDir, sampleDir: sd }) =>
+      `   • ${relDir}/${file}\n` +
+      `     Compare with: ${sd}/${file}`,
+    ).join('\n') + '\n',
+  );
 }

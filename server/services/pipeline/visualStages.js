@@ -32,7 +32,7 @@ import { buildComicPagesOwner, buildSeasonCoverOwner, buildStoryboardsShotOwner 
 import { getUniverse, joinInfluenceList } from '../universeBuilder.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import {
-  buildScenePrompt, buildSettingByKey, matchSceneSetting,
+  buildScenePrompt, buildPlaceByKey, matchScenePlace,
   buildCharByKey, matchSceneCharacters, matchCharactersInText,
   matchPlacesInText, matchObjectsInText,
 } from '../../lib/scenePrompt.js';
@@ -186,18 +186,18 @@ const enqueueImageJob = ({ prompt, world, settings, options, mode, owner, logLin
 };
 
 // Canon places now live on the linked universe (Phase B.4). Callers can
-// either pass a pre-built `settingByKey` (when they've already computed it
+// either pass a pre-built `placeByKey` (when they've already computed it
 // for reuse across many scenes — see episodeVideo) or pass `canon` and let
 // us build the map here. `series?.places` is no longer read — that field
 // was retired with the series-side canon teardown.
-export function composeVisualPrompt({ series, description, slugline = '', extraStyle = '', settingByKey = null, matchedCharacters = [], world = null, canon = null }) {
-  const map = settingByKey || buildSettingByKey(canon?.places);
+export function composeVisualPrompt({ series, description, slugline = '', extraStyle = '', placeByKey = null, matchedCharacters = [], world = null, canon = null }) {
+  const map = placeByKey || buildPlaceByKey(canon?.places);
   const scenePrompt = buildScenePrompt(
     series?.name || '',
     { visualPrompt: description || '', slugline },
     matchedCharacters,
     stackStyle(series, extraStyle),
-    matchSceneSetting(slugline, map),
+    matchScenePlace(slugline, map),
   );
   return applyWorldStyle(scenePrompt, world, series);
 }
@@ -601,7 +601,7 @@ export function composeComicPagePrompt({
     .join('; ');
 
   // Place baseline: pull description + palette + recurringDetails per matched
-  // place. Same pattern as buildScenePrompt's settingFrags, but multi-place
+  // place. Same pattern as buildScenePrompt's placeFrags, but multi-place
   // (a single comic page can span more than one location).
   const placesClause = (matchedPlaces || [])
     .map((p) => {

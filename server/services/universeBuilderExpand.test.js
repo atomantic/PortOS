@@ -387,7 +387,7 @@ describe("universeBuilderExpand.EXPANSION_PROMPT", () => {
     expect(EXPANSION_PROMPT).toContain('"avoid"');
   });
 
-  it("asks the LLM to emit canon arrays (characters / settings / objects) with rich metadata", () => {
+  it("asks the LLM to emit canon arrays (characters / places / objects) with rich metadata", () => {
     // Phase B contract: canon arrays are first-class outputs of the expand
     // call. The client merges them into universe.characters[]/.places[]/.objects[]
     // and the redesigned UI surfaces them under their canon trunks. If this
