@@ -76,6 +76,33 @@ async function assertPathUsable(path) {
   }
 }
 
+/**
+ * Path helpers for the per-bucket content-addressed blob store. v2 manifests
+ * (`SHARING_SCHEMA_VERSION >= 2`) reference assets via their SHA-256 hash;
+ * blobs and their `.metadata.json` sidecars live alongside each other under
+ * `assets/blobs/` so storage-layout changes only touch this file.
+ *
+ * Hashes from manifests are UNTRUSTED — a hostile peer could ship
+ * `hash: '../../../../etc/hosts'` to traverse out of the blob dir on import.
+ * `isHexHash` enforces the SHA-256 shape (64 lowercase hex chars) so
+ * `bucketBlobPath(...)` can never produce a path outside `assets/blobs/`.
+ * The path helpers throw on bad input; the importer also drops bad refs at
+ * the manifest boundary so a single broken entry doesn't poison a batch.
+ */
+export const IMAGE_EXT_RE = /\.(png|jpe?g|webp)$/i;
+const HEX_HASH_RE = /^[0-9a-f]{64}$/;
+export function isHexHash(v) { return typeof v === 'string' && HEX_HASH_RE.test(v); }
+export function bucketBlobsDir(bucketPath) { return join(bucketPath, 'assets', 'blobs'); }
+export function bucketBlobPath(bucketPath, hash) {
+  if (!isHexHash(hash)) throw makeErr(`Invalid asset hash: ${hash}`, ERR_VALIDATION);
+  return join(bucketBlobsDir(bucketPath), hash);
+}
+export function bucketBlobSidecarPath(bucketPath, hash) {
+  if (!isHexHash(hash)) throw makeErr(`Invalid asset hash: ${hash}`, ERR_VALIDATION);
+  return join(bucketBlobsDir(bucketPath), `${hash}.metadata.json`);
+}
+export function imageSidecarName(filename) { return filename.replace(IMAGE_EXT_RE, '') + '.metadata.json'; }
+
 /** Lay out the canonical bucket structure (idempotent). */
 export async function ensureBucketLayout(bucket) {
   const base = bucket.path;
@@ -87,6 +114,7 @@ export async function ensureBucketLayout(bucket) {
   await ensureDir(join(base, 'records', 'media'));
   await ensureDir(join(base, 'assets', 'images'));
   await ensureDir(join(base, 'assets', 'videos'));
+  await ensureDir(join(base, 'assets', 'blobs'));
   const bucketJsonPath = join(base, 'bucket.json');
   const existing = await readJSONFile(bucketJsonPath, null, { logError: false });
   if (!existing) {

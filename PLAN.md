@@ -12,7 +12,6 @@ _Nothing currently parked — pick the next item from the Backlog._
 
 ### Sharing
 
-- [ ] [content-addressed-asset-dedup-today-asset-copies] **Content-addressed asset dedup.** Today asset copies skip-if-filename-exists. Hash-based dedup would let multiple manifests share the same blob even when filenames differ.
 - [ ] [extend-syncorchestrator-to-cover-pipeline-universe] **Extend `syncOrchestrator` to cover pipeline/universe over Tailscale.** Same-network peers should sync these categories without going through a bucket.
 - [ ] [multi-hop-provenance-chains-re-share-authors-a] **Multi-hop provenance chains.** Re-share authors a fresh `origin` block; `chain[]` would preserve full attribution. Defer until users ask.
 - [ ] [same-collection-export-pattern-for-pipeline-series] **Same collection-export pattern for pipeline series with auto-collections.** Series renders that get auto-filed into a per-series collection should also flow through `manifest.collection`.
@@ -99,6 +98,11 @@ _Nothing currently parked — pick the next item from the Backlog._
 - [ ] [multi-reference-image-editing-for-flux-2-ui] **Multi-reference image editing for FLUX.2.** UI accepting 2+ reference images + edit prompt. Swap registry's 9B entry to `FLUX.2-klein-9B-kv` for 2.5× speedup on multi-reference workflows. Gated repo — request access.
 - [ ] [world-builder-phase-2-external-sd-api-per-bucket] **World Builder Phase 2 — external SD-API + per-bucket model overrides.** Wire Together / Replicate / Fal into world-builder batch path so high-end renders are practical; let each bucket pick its own model.
 - [ ] [unify-videogen-resolutions-with-shared-image-gen] **Unify VideoGen `RESOLUTIONS` with shared image-gen list.** Move to `client/src/lib/videoGenResolutions.js` (or extend imageGenResolutions with `media: 'image'|'video'`) so dropdown + custom-fallback live in one place.
+
+### Sharing — performance follow-ups (deferred from content-addressed asset dedup, 2026-05-18)
+
+- [ ] [sharing-exporter-cache-sourcefile-hash-by-mtime] **Cache `sha256File` results in the exporter by `(sourcePath, mtime, size)`.** `copyAssetIfPresent` (`server/services/sharing/exporter.js`) re-hashes every referenced asset on every export, even when the blob already exists in the bucket. A subscription re-export of a 200MB series re-reads 200MB just to confirm "blob already there." Maintain a sidecar `<bucket>/assets/blobs/.index.json` mapping `<sourcePath>:<mtime>:<size> → <hash>`; skip the hash + copy when the cached entry matches and the blob is present. Invalidate purely on mtime change. ~30 LOC + one JSON file.
+- [ ] [sharing-annotationssync-cache-bucket-asset-keys] **Cache `listBucketAssetKeys` per (bucket, manifests-dir mtime).** Today `annotationsSync.js#listBucketAssetKeys` re-scans every manifest in every auto-merge bucket on every 2s-debounced annotation flush (post-v2 because content-addressed blob paths don't carry filenames, so manifests are the only source of truth). Memoize `Map<bucketPath, { mtime, keys }>` keyed on the manifests dir mtime; invalidate when mtime advances. The legacy `assets/{images,videos}/` dir scan is still needed as a fall-through for pre-v2 buckets and can run un-cached.
 
 ### Code quality / dedup (from `/simplify` passes)
 

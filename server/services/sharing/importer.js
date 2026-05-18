@@ -13,10 +13,12 @@
  * the manifest before its assets, the importer applies/copies what is available
  * and leaves the manifest retryable until the remaining blobs arrive.
  *
- * Asset blobs referenced by the manifest are copied from the bucket's
- * `assets/{images,videos}/` into the local `data/{images,videos}/` directories
- * (skip-if-present). Media-job records bundled in `records/media/` are merged
- * into `data/media-jobs.json` so re-render workflows have the prompt + params.
+ * Asset blobs referenced by the manifest are copied from the bucket into the
+ * local `data/{images,videos}/` directories (skip-if-present). v2+ manifests
+ * use a content-addressed source at `assets/blobs/<hash>`; legacy v1 manifests
+ * fall back to `assets/{images,videos}/<filename>`. Media-job records bundled
+ * in `records/media/` are merged into `data/media-jobs.json` so re-render
+ * workflows have the prompt + params.
  */
 
 import { join, basename } from 'path';
@@ -24,7 +26,7 @@ import { copyFile, readdir } from 'fs/promises';
 import { existsSync } from 'fs';
 import { EventEmitter } from 'events';
 import { PATHS, ensureDir, atomicWrite, readJSONFile } from '../../lib/fileUtils.js';
-import { getBucket } from './buckets.js';
+import { getBucket, bucketBlobPath, bucketBlobSidecarPath, imageSidecarName, isHexHash } from './buckets.js';
 import { readManifest, markProcessed, readCursor, hasBeenProcessed, forgetProcessed } from './manifest.js';
 import { SHARING_SCHEMA_VERSION, isManifestCompatible } from './version.js';
 import { insertSeriesWithId, updateSeries, getSeries } from '../pipeline/series.js';
@@ -143,7 +145,27 @@ function manifestAssetRefs(manifest) {
     const key = `${kind}:${filename}`;
     if (seen.has(key)) return;
     seen.add(key);
-    refs.push({ kind, ref: filename });
+    // hash is optional — only v2+ manifests carry it. Collection items have
+    // never carried per-item hashes (they reference filenames in the user's
+    // local data dir), so the legacy filename path covers them.
+    //
+    // Hashes are UNTRUSTED peer input. Accept only well-formed SHA-256
+    // (64 lowercase hex chars) so `bucketBlobPath(bucketPath, hash)` can't
+    // be coerced into a `path.join('.../assets/blobs', '../../etc/hosts')`
+    // path-traversal primitive that would `copyFile` an arbitrary file from
+    // the user's filesystem into `data/{images,videos}/`. A malformed hash
+    // means the manifest is broken or hostile — drop the ref entirely
+    // rather than fall back to the legacy filename path (a v2 manifest
+    // that sets a bogus hash isn't a v1 manifest).
+    const entry = { kind, ref: filename };
+    if (raw.hash !== undefined && raw.hash !== null) {
+      if (!isHexHash(raw.hash)) {
+        console.log(`⚠️ sharing.importer: dropping asset ref with invalid hash: ${kind}/${filename}`);
+        return;
+      }
+      entry.hash = raw.hash;
+    }
+    refs.push(entry);
   };
   for (const ref of manifest?.assetRefs || []) push(ref);
   // Universe collection payloads are also asset membership. Import from the
@@ -151,6 +173,27 @@ function manifestAssetRefs(manifest) {
   // even if assetRefs was incomplete in an older manifest.
   for (const item of manifest?.collection?.items || []) push(item);
   return refs;
+}
+
+/**
+ * Resolve the bucket-side blob + optional sidecar paths for an asset ref.
+ * v2 manifests carry `hash` and read from `assets/blobs/`; legacy v1
+ * manifests fall back to `assets/{images,videos}/<filename>`. Videos have no
+ * sidecar convention.
+ */
+function resolveBucketAssetPaths(bucketPath, ref) {
+  const isVideo = ref.kind === 'video';
+  if (ref.hash) {
+    return {
+      blobPath: bucketBlobPath(bucketPath, ref.hash),
+      sidecarPath: isVideo ? null : bucketBlobSidecarPath(bucketPath, ref.hash),
+    };
+  }
+  const legacyDir = join(bucketPath, 'assets', isVideo ? 'videos' : 'images');
+  return {
+    blobPath: join(legacyDir, ref.ref),
+    sidecarPath: isVideo ? null : join(legacyDir, imageSidecarName(ref.ref)),
+  };
 }
 
 /** Copy bundled assets from the bucket into local data dirs. Runs in parallel. */
@@ -164,26 +207,22 @@ async function copyAssetsLocally(bucketPath, assetRefs) {
     if (!ref || !isStr(ref.ref)) return;
     const filename = basename(ref.ref);
     const isVideo = ref.kind === 'video';
-    const sourceDir = join(bucketPath, 'assets', isVideo ? 'videos' : 'images');
+    const kind = isVideo ? 'video' : 'image';
     const targetDir = isVideo ? PATHS.videos : PATHS.images;
-    const sourcePath = join(sourceDir, filename);
     const targetPath = join(targetDir, filename);
-    if (!existsSync(sourcePath)) {
-      missing.push({ kind: isVideo ? 'video' : 'image', ref: filename });
+    const { blobPath, sidecarPath } = resolveBucketAssetPaths(bucketPath, ref);
+    if (!existsSync(blobPath)) {
+      missing.push({ kind, ref: filename });
       return;
     }
-    available.push({ kind: isVideo ? 'video' : 'image', ref: filename });
+    available.push({ kind, ref: filename });
     if (!existsSync(targetPath)) {
-      await copyFile(sourcePath, targetPath);
-      copied.push({ kind: isVideo ? 'video' : 'image', ref: filename });
+      await copyFile(blobPath, targetPath);
+      copied.push({ kind, ref: filename });
     }
-    if (!isVideo) {
-      const sidecarBase = filename.replace(/\.(png|jpe?g|webp)$/i, '') + '.metadata.json';
-      const sidecarSource = join(sourceDir, sidecarBase);
-      if (existsSync(sidecarSource)) {
-        const sidecarTarget = join(targetDir, sidecarBase);
-        if (!existsSync(sidecarTarget)) await copyFile(sidecarSource, sidecarTarget);
-      }
+    if (sidecarPath && existsSync(sidecarPath)) {
+      const sidecarTarget = join(targetDir, imageSidecarName(filename));
+      if (!existsSync(sidecarTarget)) await copyFile(sidecarPath, sidecarTarget);
     }
   }));
   return { copied, available, missing };

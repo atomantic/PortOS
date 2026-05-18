@@ -45,6 +45,7 @@ describe('sharing/buckets', () => {
     expect(fs.existsSync(join(bucketTargetDir, 'records', 'media'))).toBe(true);
     expect(fs.existsSync(join(bucketTargetDir, 'assets', 'images'))).toBe(true);
     expect(fs.existsSync(join(bucketTargetDir, 'assets', 'videos'))).toBe(true);
+    expect(fs.existsSync(join(bucketTargetDir, 'assets', 'blobs'))).toBe(true);
     expect(fs.existsSync(join(bucketTargetDir, 'bucket.json'))).toBe(true);
   });
 

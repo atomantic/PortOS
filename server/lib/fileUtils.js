@@ -5,10 +5,10 @@
  */
 
 import { mkdir, readFile, readdir, stat, writeFile, rename, unlink } from 'fs/promises';
-import { existsSync, statSync } from 'fs';
+import { existsSync, statSync, createReadStream } from 'fs';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { join, dirname, basename, extname, resolve as resolvePath, sep as PATH_SEP } from 'path';
 import { fileURLToPath } from 'url';
 import { homedir } from 'os';
@@ -714,4 +714,26 @@ export async function dirSize(path) {
   }
   const kb = parseInt(result.stdout.split('\t')[0], 10) || 0;
   return kb * 1024;
+}
+
+/**
+ * SHA-256 a file as hex. One-shot read under 512 KB; streams above so multi-GB
+ * videos don't blow heap. Threshold matches `server/services/backup.js`'s
+ * snapshot manifest generator.
+ */
+const SHA256_STREAM_THRESHOLD = 512 * 1024;
+export async function sha256File(path) {
+  const info = await stat(path);
+  if (info.size < SHA256_STREAM_THRESHOLD) {
+    const buf = await readFile(path);
+    return createHash('sha256').update(buf).digest('hex');
+  }
+  return new Promise((resolve, reject) => {
+    const hasher = createHash('sha256');
+    const stream = createReadStream(path);
+    stream.on('error', reject);
+    stream.pipe(hasher);
+    hasher.on('finish', () => resolve(hasher.digest('hex')));
+    hasher.on('error', reject);
+  });
 }

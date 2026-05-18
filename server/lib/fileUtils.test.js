@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { writeFile, rm, mkdir } from 'fs/promises';
+import { mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { createHash } from 'crypto';
 import {
   assertSafeFilename,
   isValidJSON,
@@ -10,7 +12,8 @@ import {
   safeJSONLParse,
   readJSONFile,
   readJSONLFile,
-  formatDuration
+  formatDuration,
+  sha256File,
 } from './fileUtils.js';
 
 describe('fileUtils', () => {
@@ -506,6 +509,41 @@ describe('fileUtils', () => {
       await expect(
         listDirectoryByExtension(tmpRoot, { extensions: ['.png'] }),
       ).rejects.toThrow(/mapEntry must be a function/);
+    });
+  });
+
+  describe('sha256File', () => {
+    let dir;
+    beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'portos-sha256-')); });
+    afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
+
+    it('hashes a small file in one shot and matches createHash digest', async () => {
+      const p = join(dir, 'small.bin');
+      writeFileSync(p, 'hello world');
+      const expected = createHash('sha256').update('hello world').digest('hex');
+      expect(await sha256File(p)).toBe(expected);
+    });
+
+    it('hashes a large file via streaming (>= 512KB)', async () => {
+      const p = join(dir, 'big.bin');
+      const buf = Buffer.alloc(600 * 1024, 0x42);
+      writeFileSync(p, buf);
+      const expected = createHash('sha256').update(buf).digest('hex');
+      expect(await sha256File(p)).toBe(expected);
+    });
+
+    it('returns identical digests for identical content under different paths', async () => {
+      const a = join(dir, 'a.bin'); const b = join(dir, 'b.bin');
+      writeFileSync(a, 'same-content');
+      writeFileSync(b, 'same-content');
+      expect(await sha256File(a)).toBe(await sha256File(b));
+    });
+
+    it('returns different digests for different content', async () => {
+      const a = join(dir, 'a.bin'); const b = join(dir, 'b.bin');
+      writeFileSync(a, 'one');
+      writeFileSync(b, 'two');
+      expect(await sha256File(a)).not.toBe(await sha256File(b));
     });
   });
 });
