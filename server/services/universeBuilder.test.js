@@ -1208,6 +1208,83 @@ describe("universeBuilder service", () => {
     });
   });
 
+  describe("setVariationsLockAll", () => {
+    const seedTwoBuckets = () =>
+      seedWorld({
+        categories: {
+          landscapes: {
+            variations: [
+              { label: "A", prompt: "a" },
+              { label: "B", prompt: "b", locked: false },
+            ],
+          },
+          outfits: {
+            variations: [
+              { label: "X", prompt: "x" },
+              { label: "Y", prompt: "y" },
+            ],
+          },
+        },
+      });
+
+    it("scopes total + changed counts to a single bucket when categoryKey is set", async () => {
+      // Regression guard: previously `total += variations.length` ran before
+      // the categoryKey filter, so a single-bucket call over-reported the
+      // denominator as every variation universe-wide.
+      const w = await seedTwoBuckets();
+      const res = await svc.setVariationsLockAll(w.id, {
+        categoryKey: "landscapes",
+        locked: false,
+      });
+      expect(res.total).toBe(2); // only landscapes' variations counted
+      expect(res.changed).toBe(1); // only "A" flipped (true → false); "B" already false
+      const reread = (await svc.listUniverses())[0];
+      expect(reread.categories.landscapes.variations.every((v) => v.locked === false)).toBe(true);
+      // Other bucket untouched.
+      expect(reread.categories.outfits.variations.every((v) => v.locked === true)).toBe(true);
+    });
+
+    it("universe-wide path locks every variation across every bucket", async () => {
+      const w = await seedTwoBuckets();
+      // First, unlock everything explicitly so the test's "lock all" call has
+      // real work to do (sanitizer defaults new variations to locked).
+      await svc.setVariationsLockAll(w.id, { locked: false });
+      const res = await svc.setVariationsLockAll(w.id, { locked: true });
+      expect(res.total).toBe(4); // 2 landscapes + 2 outfits
+      expect(res.changed).toBe(4);
+      const reread = (await svc.listUniverses())[0];
+      for (const bucket of Object.values(reread.categories)) {
+        expect(bucket.variations.every((v) => v.locked === true)).toBe(true);
+      }
+    });
+
+    it("includeSheets: true also flips composite sheets in the same call (only when no categoryKey)", async () => {
+      const w = await seedWorld({
+        compositeSheets: [
+          { label: "Cover board", prompt: "cover board prompt long enough" },
+        ],
+      });
+      await svc.setVariationsLockAll(w.id, { locked: false, includeSheets: true });
+      const reread = (await svc.listUniverses())[0];
+      expect(reread.compositeSheets[0].locked).toBe(false);
+    });
+
+    it("ignores includeSheets when a categoryKey is set (single-bucket scope is strict)", async () => {
+      const w = await seedWorld({
+        compositeSheets: [
+          { label: "Cover board", prompt: "cover board prompt long enough" },
+        ],
+      });
+      await svc.setVariationsLockAll(w.id, {
+        categoryKey: "landscapes",
+        locked: false,
+        includeSheets: true,
+      });
+      const reread = (await svc.listUniverses())[0];
+      expect(reread.compositeSheets[0].locked).toBe(true); // still locked
+    });
+  });
+
   describe("locked", () => {
     it("round-trips a sparse lock map and replaces wholesale on patch", async () => {
       const w = await seedWorld({

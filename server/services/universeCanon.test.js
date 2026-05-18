@@ -104,6 +104,53 @@ describe('universeCanon — setCanonEntryLock', () => {
   });
 });
 
+describe('universeCanon — setCanonKindLockAll', () => {
+  it('locks every entry of the kind, counts only entries whose state changed', async () => {
+    // Two already-locked + one explicitly-unlocked: only the unlocked entry
+    // should count toward `changed`. Pins the "no-op on already-target"
+    // contract that the toast relies on for "Locked N characters".
+    const w = await seedUniverseWithCharacters([
+      { name: 'Alex', physicalDescription: 'a', locked: true },
+      { name: 'Beth', physicalDescription: 'b', locked: true },
+      { name: 'Cara', physicalDescription: 'c', locked: false },
+    ]);
+    const result = await canonSvc.setCanonKindLockAll(w.id, 'character', true);
+    expect(result.changed).toBe(1);
+    expect(result.total).toBe(3);
+    expect(result.locked).toBe(true);
+    // Persisted: every entry comes back `locked: true` on the next read.
+    const reread = (await svc.listUniverses())[0];
+    expect(reread.characters.every((c) => c.locked === true)).toBe(true);
+  });
+
+  it('unlock-all writes explicit locked:false so the bit survives the lock-by-default sanitizer', async () => {
+    const w = await seedUniverseWithCharacters([
+      { name: 'Alex', physicalDescription: 'a', locked: true },
+      { name: 'Beth', physicalDescription: 'b', locked: true },
+    ]);
+    const result = await canonSvc.setCanonKindLockAll(w.id, 'character', false);
+    expect(result.changed).toBe(2);
+    const reread = (await svc.listUniverses())[0];
+    expect(reread.characters.every((c) => c.locked === false)).toBe(true);
+  });
+
+  it('short-circuits a write when nothing changes', async () => {
+    const w = await seedUniverseWithCharacters([
+      { name: 'Alex', physicalDescription: 'a', locked: true },
+    ]);
+    const result = await canonSvc.setCanonKindLockAll(w.id, 'character', true);
+    expect(result.changed).toBe(0);
+    expect(result.total).toBe(1);
+  });
+
+  it('rejects unknown kind with a 400-coded ServerError', async () => {
+    const w = await seedUniverseWithCharacters([]);
+    await expect(
+      canonSvc.setCanonKindLockAll(w.id, 'monster', true),
+    ).rejects.toMatchObject({ status: 400, code: 'UNIVERSE_CANON_INVALID_KIND' });
+  });
+});
+
 describe('universeCanon — refineUniverseCharacter respects locks', () => {
   it('refuses with 409 when the target character is locked', async () => {
     const w = await seedUniverseWithCharacters([

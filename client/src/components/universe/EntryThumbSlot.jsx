@@ -31,16 +31,19 @@ export default function EntryThumbSlot({
   onPreview = null,
   canRender = true,
   alt = 'Render',
-  // When true, render the empty-state box with an even bigger Sparkles
-  // affordance (used by canon rows that ride a wider card). Defaults to the
-  // compact 48x48 footprint shared with variations.
+  // `'lg'` renders the empty-state box at 64x96 with a bigger Sparkles
+  // affordance (reserved for slots that ride a wider card). Defaults to the
+  // compact 48x80 (w-12 h-20) portrait footprint shared with variation +
+  // canon avatar rows — matched to the 2:3 aspect of typical 1024x1536
+  // universe renders so the slot doesn't crop the subject.
   size = 'sm',
 }) {
   if (inFlightJobId) {
-    // `xs` (48x48) matches the empty + completed states below so all three
-    // states share a footprint and the row doesn't jump mid-render. `lg`
-    // upgrades the pending box to 64x64 when the slot is configured for the
-    // larger size (kept available for parity with the empty placeholder).
+    // `xs` (48x80) matches the empty + completed states below so all three
+    // states share a footprint and the row doesn't jump mid-render. `'lg'`
+    // upgrades the pending box to `sm` (64x64) when the slot is configured
+    // for the larger size — note `MediaJobThumb` doesn't have a portrait
+    // 64x96 variant, so the larger slot's pending state is square.
     return (
       <MediaJobThumb
         jobId={inFlightJobId}

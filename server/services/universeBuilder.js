@@ -1209,11 +1209,14 @@ export async function setVariationsLockAll(universeId, { categoryKey = null, loc
     let touchedCategories = false;
     for (const [key, bucket] of Object.entries(categories)) {
       const variations = Array.isArray(bucket?.variations) ? bucket.variations : [];
-      total += variations.length;
       if (categoryKey && key !== categoryKey) {
         nextCategories[key] = bucket;
         continue;
       }
+      // Increment `total` only for buckets the caller actually targeted —
+      // otherwise a single-bucket lock-all would report every variation in
+      // every bucket as the denominator and the response toast lies.
+      total += variations.length;
       let bucketTouched = false;
       const nextVariations = variations.map((v) => {
         if (!v || typeof v !== 'object') return v;
