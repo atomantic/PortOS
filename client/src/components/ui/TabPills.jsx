@@ -5,7 +5,8 @@
 // spinner; `stretch` makes each tab `flex-1` (StoryboardPanel); `mobileDropdown`
 // collapses to a `<select>` below `sm` (UniverseBuilder); `controlsIdPrefix`
 // wires `aria-controls` (and `id="tab-<id>"`) to matching tabpanels — pass
-// `'tabpanel'` to mirror ChiefOfStaff's wiring.
+// `'tabpanel'` to mirror ChiefOfStaff's wiring. `t.trailing` is an optional
+// ReactNode rendered after the count (e.g. PipelineIssue's per-stage status dot).
 import { Loader2 } from 'lucide-react';
 
 const SIZE = {
@@ -91,6 +92,7 @@ export default function TabPills({
                     {t.count}
                   </span>
                 )}
+                {t.trailing}
               </button>
             );
           })}
@@ -147,6 +149,7 @@ export default function TabPills({
                 {t.count}
               </span>
             )}
+            {t.trailing}
           </button>
         );
       })}

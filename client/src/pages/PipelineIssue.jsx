@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import Modal from '../components/ui/Modal';
+import TabPills from '../components/ui/TabPills';
 import {
   getPipelineIssue, getPipelineSeries, updatePipelineIssue,
   startPipelineAutoRunText, cancelPipelineAutoRunText,
@@ -191,12 +192,15 @@ export default function PipelineIssue() {
     // the strip uncluttered. Showing the audio data still works for users
     // who navigate to `/pipeline/issues/:id/audio` directly.
     .filter((id) => id !== 'audio' || series?.targetFormat !== 'comic')
-    .map((id) => ({
-      id,
-      label: PIPELINE_STAGE_LABELS[id],
-      Icon: STAGE_ICONS[id],
-      status: issue?.stages?.[id]?.status || 'empty',
-    })), [issue, series?.targetFormat]);
+    .map((id) => {
+      const status = issue?.stages?.[id]?.status || 'empty';
+      return {
+        id,
+        label: PIPELINE_STAGE_LABELS[id],
+        icon: STAGE_ICONS[id],
+        trailing: <span className={`w-1.5 h-1.5 rounded-full ${STATUS_DOT[status] || STATUS_DOT.empty}`} aria-hidden="true" />,
+      };
+    }), [issue, series?.targetFormat]);
 
   if (loading) return <div className="p-6 text-gray-500 text-sm">Loading issue…</div>;
   if (!issue) return null;
@@ -295,28 +299,12 @@ export default function PipelineIssue() {
       </div>
 
       {/* Stage tabs */}
-      <div className="flex border-b border-port-border overflow-x-auto" role="tablist">
-        {stageTabs.map(({ id, label, Icon, status }) => {
-          const isActive = id === stageId;
-          return (
-            <button
-              key={id}
-              onClick={() => navigate(`/pipeline/issues/${issueId}/${id}`)}
-              role="tab"
-              aria-selected={isActive}
-              className={`flex items-center gap-2 px-4 py-3 text-sm font-medium transition-colors whitespace-nowrap ${
-                isActive
-                  ? 'text-port-accent border-b-2 border-port-accent bg-port-accent/5'
-                  : 'text-gray-400 hover:text-white hover:bg-port-card'
-              }`}
-            >
-              <Icon size={14} aria-hidden="true" />
-              {label}
-              <span className={`w-1.5 h-1.5 rounded-full ${STATUS_DOT[status] || STATUS_DOT.empty}`} aria-hidden="true" />
-            </button>
-          );
-        })}
-      </div>
+      <TabPills
+        tabs={stageTabs}
+        activeTab={stageId}
+        onChange={(id) => navigate(`/pipeline/issues/${issueId}/${id}`)}
+        ariaLabel="Pipeline stages"
+      />
 
       {/* Active stage panel */}
       <div className="flex-1 overflow-auto p-4 md:p-6">

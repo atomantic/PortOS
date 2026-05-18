@@ -107,3 +107,25 @@ describe('TabPills — runningKind', () => {
     expect(container.querySelector('.lucide-loader-2, .lucide-loader-circle')).toBeTruthy();
   });
 });
+
+describe('TabPills — trailing slot', () => {
+  it('renders t.trailing inside the tab button after the count, in both variants', () => {
+    const tabs = [
+      { id: 'a', label: 'A', count: 2, trailing: <span data-testid="dot-a" /> },
+      { id: 'b', label: 'B', trailing: <span data-testid="dot-b" /> },
+    ];
+    // underline variant
+    const { rerender } = render(<TabPills tabs={tabs} activeTab="a" onChange={() => {}} />);
+    const aBtn = screen.getByRole('tab', { name: /A/i });
+    expect(within(aBtn).getByTestId('dot-a')).toBeInTheDocument();
+    // Count node sits before the trailing node in DOM order so the dot trails it.
+    const children = Array.from(aBtn.children);
+    const countIdx = children.findIndex((c) => c.textContent === '2');
+    const dotIdx = children.findIndex((c) => c.getAttribute('data-testid') === 'dot-a');
+    expect(countIdx).toBeGreaterThanOrEqual(0);
+    expect(dotIdx).toBeGreaterThan(countIdx);
+    // pills variant: same contract
+    rerender(<TabPills variant="pills" tabs={tabs} activeTab="a" onChange={() => {}} />);
+    expect(within(screen.getByRole('tab', { name: /B/i })).getByTestId('dot-b')).toBeInTheDocument();
+  });
+});
