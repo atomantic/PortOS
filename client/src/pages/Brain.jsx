@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import * as api from '../services/api';
 import {Brain as BrainIcon} from 'lucide-react';
 import BrailleSpinner from '../components/BrailleSpinner';
+import TabPills from '../components/ui/TabPills';
 
 import { TABS } from '../components/brain/constants';
 import { timeAgo } from '../utils/formatters';
@@ -123,31 +124,13 @@ export default function Brain() {
         )}
       </div>
 
-      {/* Tab navigation — horizontal scroll on mobile, icon-only below sm */}
-      <div className="flex border-b border-port-border overflow-x-auto">
-        {TABS.map((tabItem) => {
-          const Icon = tabItem.icon;
-          const isActive = activeTab === tabItem.id;
-          return (
-            <button
-              key={tabItem.id}
-              onClick={() => handleTabChange(tabItem.id)}
-              className={`shrink-0 flex items-center gap-2 px-3 sm:px-4 py-2 sm:py-3 text-sm font-medium min-h-[40px] transition-colors ${
-                isActive
-                  ? 'text-port-accent border-b-2 border-port-accent bg-port-accent/5'
-                  : 'text-gray-400 hover:text-white hover:bg-port-card'
-              }`}
-              role="tab"
-              aria-selected={isActive}
-              aria-label={tabItem.label}
-              title={tabItem.label}
-            >
-              <Icon size={16} aria-hidden="true" />
-              <span className="hidden sm:inline">{tabItem.label}</span>
-            </button>
-          );
-        })}
-      </div>
+      <TabPills
+        tabs={TABS}
+        activeTab={activeTab}
+        onChange={handleTabChange}
+        hideLabelOnMobile
+        ariaLabel="Brain sections"
+      />
 
       {/* Tab content */}
       <div className="flex-1 overflow-auto p-4">

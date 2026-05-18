@@ -1,5 +1,6 @@
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
 import { Layers, Image as ImageIcon, Film, History, HardDrive, Scissors, FolderOpen, Clapperboard, Sparkles } from 'lucide-react';
+import TabPills from '../components/ui/TabPills';
 
 const TABS = [
   { id: 'image', label: 'Image', icon: ImageIcon },
@@ -24,27 +25,7 @@ export default function MediaGen() {
         <h1 className="text-2xl font-bold text-white">Media Gen</h1>
       </div>
 
-      <div className="flex border-b border-port-border overflow-x-auto" role="tablist">
-        {TABS.map(({ id, label, icon: Icon }) => {
-          const isActive = activeTab === id;
-          return (
-            <button
-              key={id}
-              onClick={() => navigate(`/media/${id}`)}
-              className={`flex items-center gap-2 px-4 py-3 text-sm font-medium transition-colors whitespace-nowrap ${
-                isActive
-                  ? 'text-port-accent border-b-2 border-port-accent bg-port-accent/5'
-                  : 'text-gray-400 hover:text-white hover:bg-port-card'
-              }`}
-              role="tab"
-              aria-selected={isActive}
-            >
-              <Icon size={16} aria-hidden="true" />
-              {label}
-            </button>
-          );
-        })}
-      </div>
+      <TabPills tabs={TABS} activeTab={activeTab} onChange={(id) => navigate(`/media/${id}`)} ariaLabel="Media Gen sections" />
 
       <div className="flex-1 overflow-auto p-4">
         <Outlet />

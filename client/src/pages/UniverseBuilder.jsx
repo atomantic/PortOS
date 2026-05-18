@@ -34,6 +34,7 @@ import ShareToButton from '../components/sharing/ShareToButton';
 import OriginBadge from '../components/sharing/OriginBadge';
 import UniverseCanonSection from '../components/universe/UniverseCanonSection';
 import EntryCard from '../components/universe/EntryCard';
+import TabPills from '../components/ui/TabPills';
 import { deriveAvailableBackends, IMAGE_GEN_MODE } from '../lib/imageGenBackends';
 import { PIPELINE_IMAGE_DEFAULTS, readPipelineImageSettings } from '../lib/pipelineImageDefaults';
 import { normalizeSlugline } from '../lib/scenePrompt';
@@ -1646,17 +1647,22 @@ export default function UniverseBuilder() {
           )}
         </header>
 
-        <TabNav
+        <TabPills
+          variant="pills"
+          size="sm"
+          mobileDropdown
+          mobileSelectId="ub-tab-select"
           activeTab={activeTab}
-          setTab={setTab}
-          hasOtherBuckets={hasOtherBuckets}
-          counts={{
-            cast: (draft.characters?.length || 0) + bucketsByKind.characters.reduce((n, k) => n + (draft.categories?.[k]?.variations?.length || 0), 0),
-            places: (draft.settings?.length || 0) + bucketsByKind.settings.reduce((n, k) => n + (draft.categories?.[k]?.variations?.length || 0), 0),
-            objects: (draft.objects?.length || 0) + bucketsByKind.objects.reduce((n, k) => n + (draft.categories?.[k]?.variations?.length || 0), 0),
-            other: bucketsByKind.other.reduce((n, k) => n + (draft.categories?.[k]?.variations?.length || 0), 0),
-            composites: totalSheets,
-          }}
+          onChange={setTab}
+          tabs={[
+            { id: TAB_BIBLE, label: 'Bible', icon: BookOpen },
+            { id: TAB_CAST, label: 'Cast', icon: Users, count: (draft.characters?.length || 0) + bucketsByKind.characters.reduce((n, k) => n + (draft.categories?.[k]?.variations?.length || 0), 0) },
+            { id: TAB_PLACES, label: 'Places', icon: MapPin, count: (draft.settings?.length || 0) + bucketsByKind.settings.reduce((n, k) => n + (draft.categories?.[k]?.variations?.length || 0), 0) },
+            { id: TAB_OBJECTS, label: 'Objects', icon: Package, count: (draft.objects?.length || 0) + bucketsByKind.objects.reduce((n, k) => n + (draft.categories?.[k]?.variations?.length || 0), 0) },
+            hasOtherBuckets && { id: TAB_OTHER, label: 'Other', icon: FolderTree, count: bucketsByKind.other.reduce((n, k) => n + (draft.categories?.[k]?.variations?.length || 0), 0) },
+            { id: TAB_COMPOSITES, label: 'Composites', icon: Layers, count: totalSheets },
+            { id: TAB_RENDER, label: 'Render', icon: ImagePlus },
+          ]}
         />
 
         {activeTab === TAB_BIBLE && (
@@ -2572,70 +2578,6 @@ function VariationCard({
   );
 
   return <EntryCard locked={locked} title={title} body={body} actions={actions} />;
-}
-
-// Tab nav — desktop shows a horizontal pill row; mobile collapses to a
-// <select> dropdown (CLAUDE.md "Mobile responsive"). The Other tab only
-// renders when at least one un-kinded bucket exists, per Phase C spec.
-function TabNav({ activeTab, setTab, hasOtherBuckets, counts }) {
-  const tabs = [
-    { id: TAB_BIBLE, label: 'Bible', icon: BookOpen, count: null },
-    { id: TAB_CAST, label: 'Cast', icon: Users, count: counts.cast },
-    { id: TAB_PLACES, label: 'Places', icon: MapPin, count: counts.places },
-    { id: TAB_OBJECTS, label: 'Objects', icon: Package, count: counts.objects },
-    ...(hasOtherBuckets ? [{ id: TAB_OTHER, label: 'Other', icon: FolderTree, count: counts.other }] : []),
-    { id: TAB_COMPOSITES, label: 'Composites', icon: Layers, count: counts.composites },
-    { id: TAB_RENDER, label: 'Render', icon: ImagePlus, count: null },
-  ];
-  return (
-    <>
-      {/* Mobile dropdown */}
-      <div className="sm:hidden">
-        <label htmlFor="ub-tab-select" className="sr-only">Section</label>
-        <select
-          id="ub-tab-select"
-          value={activeTab}
-          onChange={(e) => setTab(e.target.value)}
-          className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-port-accent min-h-[40px]"
-        >
-          {tabs.map((t) => (
-            <option key={t.id} value={t.id}>
-              {t.label}{t.count != null ? ` (${t.count})` : ''}
-            </option>
-          ))}
-        </select>
-      </div>
-      {/* Desktop pill row */}
-      <div className="hidden sm:flex items-center gap-1 bg-port-card border border-port-border rounded p-1 overflow-x-auto" role="tablist">
-        {tabs.map((t) => {
-          const Icon = t.icon;
-          const active = t.id === activeTab;
-          return (
-            <button
-              key={t.id}
-              type="button"
-              role="tab"
-              aria-selected={active}
-              onClick={() => setTab(t.id)}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-sm transition-colors whitespace-nowrap ${
-                active
-                  ? 'bg-port-accent/20 text-port-accent border border-port-accent/40'
-                  : 'text-gray-300 hover:bg-port-bg border border-transparent'
-              }`}
-            >
-              <Icon size={14} />
-              {t.label}
-              {t.count != null && (
-                <span className={`text-[10px] ${active ? 'text-port-accent/70' : 'text-gray-500'}`}>
-                  {t.count}
-                </span>
-              )}
-            </button>
-          );
-        })}
-      </div>
-    </>
-  );
 }
 
 function BibleTab({

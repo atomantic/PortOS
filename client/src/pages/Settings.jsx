@@ -6,6 +6,7 @@ import { GeneralTab } from '../components/settings/GeneralTab';
 import { MortalLoomTab } from '../components/settings/MortalLoomTab';
 import { SharingTab } from '../components/settings/SharingTab';
 import { VoiceTab } from '../components/settings/VoiceTab';
+import TabPills from '../components/ui/TabPills';
 
 const TABS = [
   { id: 'general', label: 'General' },
@@ -56,23 +57,7 @@ export default function Settings() {
         <h1 className="text-2xl font-bold text-white">Settings</h1>
       </div>
 
-      <div className="flex border-b border-port-border overflow-x-auto" role="tablist">
-        {TABS.map(({ id, label }) => (
-          <button
-            key={id}
-            onClick={() => handleTabChange(id)}
-            role="tab"
-            aria-selected={activeTab === id}
-            className={`px-4 py-3 text-sm font-medium transition-colors whitespace-nowrap border-b-2 -mb-px ${
-              activeTab === id
-                ? 'text-port-accent border-port-accent bg-port-accent/5'
-                : 'text-gray-400 border-transparent hover:text-white hover:border-port-border'
-            }`}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
+      <TabPills tabs={TABS} activeTab={activeTab} onChange={handleTabChange} ariaLabel="Settings sections" />
 
       <div className="flex-1 overflow-auto p-4">
         {renderTabContent()}
