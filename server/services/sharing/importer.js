@@ -32,7 +32,7 @@ import { SHARING_SCHEMA_VERSION, isManifestCompatible } from './version.js';
 import { insertSeriesWithId, updateSeries, getSeries } from '../pipeline/series.js';
 import { insertIssueWithId, updateIssue, getIssue } from '../pipeline/issues.js';
 import { insertUniverseWithId, updateUniverse, getUniverse } from '../universeBuilder.js';
-import { findOrCreateUniverseCollection, addItem as addCollectionItem, ERR_DUPLICATE as COLLECTION_ERR_DUPLICATE } from '../mediaCollections.js';
+import { findOrCreateUniverseCollection, findOrCreateSeriesCollection, addItem as addCollectionItem, ERR_DUPLICATE as COLLECTION_ERR_DUPLICATE } from '../mediaCollections.js';
 import { adoptImportedSubscription, withReexportSuppressed } from './subscriptions.js';
 import { getInstanceId } from '../instances.js';
 import { mergePeerAnnotations } from '../mediaAnnotations.js';
@@ -68,13 +68,14 @@ function remoteWins(localTs, remoteTs) {
 
 /**
  * Merge a manifest's `collection` payload into local state. Find-or-create
- * the universe-linked collection via the universeId-first helper, then
- * add each remote item via `addItem` — `ERR_DUPLICATE` errors are expected
- * and swallowed (the item already exists locally; nothing to do).
+ * the universe-linked OR series-linked collection via the id-first helper
+ * (universeId wins when both are present), then add each remote item via
+ * `addItem` — `ERR_DUPLICATE` errors are expected and swallowed (the item
+ * already exists locally; nothing to do).
  *
- * Routing is by `universeId`, never by name — a manifest from a peer whose
- * universe happens to share a display name with a local universe of a
- * different id must NOT silently land in the local universe's bucket.
+ * Routing is by `universeId` / `seriesId`, never by name — a manifest from
+ * a peer whose universe or series happens to share a display name with a
+ * local one of a different id must NOT silently land in the local bucket.
  *
  * The asset blobs are NOT copied here — `copyAssetsLocally` (called in
  * `processManifest`) already pulled every available asset entry. This function
@@ -82,39 +83,58 @@ function remoteWins(localTs, remoteTs) {
  * UI does not point at files that Google Drive has not synced yet.
  */
 async function mergeCollectionPayload(payload, availableAssetKeys = null) {
-  if (!payload?.universeId || !Array.isArray(payload.items)) return { itemsAdded: 0 };
+  if (!payload || !Array.isArray(payload.items)) return { itemsAdded: 0 };
+  if (!payload.universeId && !payload.seriesId) return { itemsAdded: 0 };
 
-  // Defer the merge until the referenced universe exists locally. Creating
-  // a stamped (rename-locked) collection for a universe we haven't
-  // imported yet leaves the user with an unfixable orphan if the universe
-  // record fails to import or arrives in a later manifest. processManifest
-  // re-runs the merge attempt on each pass, so a deferred merge will be
-  // applied as soon as the universe lands.
-  const localUniverse = await getUniverse(payload.universeId).catch(() => null);
-  if (!localUniverse) {
-    return { itemsAdded: 0, itemsDeferred: payload.items.length, missingUniverse: true };
+  // Resolve the local owner record (universe OR series). Defer the merge
+  // until it exists locally — creating a stamped (rename-locked) collection
+  // for an owner we haven't imported yet leaves the user with an unfixable
+  // orphan. processManifest re-runs the merge on each pass, so a deferred
+  // merge applies as soon as the owner record lands.
+  let collection;
+  if (payload.universeId) {
+    const localUniverse = await getUniverse(payload.universeId).catch(() => null);
+    if (!localUniverse) {
+      return { itemsAdded: 0, itemsDeferred: payload.items.length, missingUniverse: true };
+    }
+    // Use the LOCAL owner's name (authoritative for the linked collection's
+    // locked name) over the manifest's `payload.name`. A peer exporting a
+    // stale or tampered collection payload must not be able to mint a
+    // locked collection on the receiver with the wrong visible name —
+    // once the id is stamped, no cascade fixes it. Fall back to a
+    // sanitized payload.name only when the local name is unusable.
+    const fallbackRaw = typeof payload.name === 'string' ? payload.name : '';
+    const fallbackName = fallbackRaw.replace(/^Universe:\s*/i, '').trim() || payload.universeId;
+    const universeName = typeof localUniverse.name === 'string' && localUniverse.name.trim()
+      ? localUniverse.name
+      : fallbackName;
+    collection = await findOrCreateUniverseCollection({
+      universeId: payload.universeId,
+      universeName,
+      description: payload.description || '',
+    }).catch((err) => {
+      console.log(`⚠️ sharing.importer: findOrCreateUniverseCollection failed: ${err.message}`);
+      return null;
+    });
+  } else {
+    const localSeries = await getSeries(payload.seriesId).catch(() => null);
+    if (!localSeries) {
+      return { itemsAdded: 0, itemsDeferred: payload.items.length, missingSeries: true };
+    }
+    const fallbackRaw = typeof payload.name === 'string' ? payload.name : '';
+    const fallbackName = fallbackRaw.replace(/^Series:\s*/i, '').trim() || payload.seriesId;
+    const seriesName = typeof localSeries.name === 'string' && localSeries.name.trim()
+      ? localSeries.name
+      : fallbackName;
+    collection = await findOrCreateSeriesCollection({
+      seriesId: payload.seriesId,
+      seriesName,
+      description: payload.description || '',
+    }).catch((err) => {
+      console.log(`⚠️ sharing.importer: findOrCreateSeriesCollection failed: ${err.message}`);
+      return null;
+    });
   }
-
-  // Use the LOCAL universe's name (authoritative for the linked
-  // collection's locked name) over the manifest's `payload.name`. A peer
-  // exporting a stale or tampered collection payload must not be able to
-  // mint a locked collection on the receiver with the wrong visible name
-  // — once the universeId is stamped, no cascade fixes it. Fall back to
-  // a sanitized payload.name only when localUniverse.name is unusable.
-  const fallbackRaw = typeof payload.name === 'string' ? payload.name : '';
-  const fallbackName = fallbackRaw.replace(/^Universe:\s*/i, '').trim() || payload.universeId;
-  const universeName = typeof localUniverse.name === 'string' && localUniverse.name.trim()
-    ? localUniverse.name
-    : fallbackName;
-
-  const collection = await findOrCreateUniverseCollection({
-    universeId: payload.universeId,
-    universeName,
-    description: payload.description || '',
-  }).catch((err) => {
-    console.log(`⚠️ sharing.importer: findOrCreateUniverseCollection failed: ${err.message}`);
-    return null;
-  });
   if (!collection) return { itemsAdded: 0 };
   let added = 0;
   let deferred = 0;
@@ -401,25 +421,33 @@ async function applyAutoMerge(bucket, manifest, records, { availableAssetKeys = 
     });
   }
 
-  // Universe shares can carry a linked media collection payload. Items
-  // are unioned into a local "Universe: <name>" collection so peer-
-  // generated images appear alongside the universe in the recipient's UI.
+  // Universe and series shares can both carry a linked media collection
+  // payload. Items are unioned into a local "Universe: <name>" or
+  // "Series: <name>" collection so peer-generated images appear alongside
+  // the owner record in the recipient's UI.
   let itemsAdded = 0;
   let itemsDeferred = 0;
   let collectionPendingUniverse = null;
+  let collectionPendingSeries = null;
   if (manifest.collection) {
-    const r = await withReexportSuppressed('universe', manifest.collection.universeId, () =>
+    // Suppress re-export of the owner record while the collection items
+    // land — the items themselves drive recordEvents, which would loop
+    // back through the receiver's own subscriptions if not gated.
+    const ownerKind = manifest.collection.universeId ? 'universe' : 'series';
+    const ownerId = manifest.collection.universeId || manifest.collection.seriesId;
+    const r = await withReexportSuppressed(ownerKind, ownerId, () =>
       mergeCollectionPayload(manifest.collection, availableAssetKeys));
     itemsAdded = r.itemsAdded;
     itemsDeferred = r.itemsDeferred || 0;
     if (itemsAdded > 0) applied += itemsAdded;
-    // `mergeCollectionPayload` defers when the referenced universe hasn't
-    // been imported locally yet. Propagate that as a pending condition so
-    // processManifest leaves the cursor un-advanced and the watcher
-    // retries — otherwise the manifest is marked processed and the
-    // deferred items never land if the universe record arrives in a
+    // `mergeCollectionPayload` defers when the referenced owner record
+    // hasn't been imported locally yet. Propagate that as a pending
+    // condition so processManifest leaves the cursor un-advanced and the
+    // watcher retries — otherwise the manifest is marked processed and
+    // the deferred items never land if the owner record arrives in a
     // later (independent) sync.
     if (r.missingUniverse) collectionPendingUniverse = manifest.collection.universeId;
+    if (r.missingSeries) collectionPendingSeries = manifest.collection.seriesId;
   }
 
   let adoptedSubscription = null;
@@ -439,6 +467,7 @@ async function applyAutoMerge(bucket, manifest, records, { availableAssetKeys = 
     collectionItemsAdded: itemsAdded,
     collectionItemsDeferred: itemsDeferred,
     collectionPendingUniverse,
+    collectionPendingSeries,
     adoptedSubscription: adoptedSubscription
       ? { id: adoptedSubscription.id, bucketId: adoptedSubscription.bucketId, recordKind: adoptedSubscription.recordKind, recordId: adoptedSubscription.recordId }
       : null,
@@ -643,18 +672,21 @@ export async function processManifest(bucketId, manifestFilename) {
     outcome = { mode: 'inbox', ...(await applyInbox(bucket, manifest, manifestFilename, records)) };
   }
   // A manifest is pending when any of these still need to land before the
-  // cursor advances: asset blobs, referenced record JSONs, OR a universe
-  // referenced by the manifest's collection payload that hasn't been
-  // imported yet. The third case can happen when the universe record
-  // failed to import (corrupt JSON, schema-version mismatch) or the
-  // manifest references a universeId not listed in `recordIds`.
+  // cursor advances: asset blobs, referenced record JSONs, OR an owner
+  // record (universe or series) referenced by the manifest's collection
+  // payload that hasn't been imported yet. The last two cases can happen
+  // when the owner record failed to import (corrupt JSON, schema-version
+  // mismatch) or the manifest references an owner id not listed in
+  // `recordIds`.
   const collectionPendingUniverse = outcome?.collectionPendingUniverse || null;
-  if (assetCopy.missing.length > 0 || missingRecords.length > 0 || collectionPendingUniverse) {
+  const collectionPendingSeries = outcome?.collectionPendingSeries || null;
+  if (assetCopy.missing.length > 0 || missingRecords.length > 0 || collectionPendingUniverse || collectionPendingSeries) {
     if (assetCopy.missing.length > 0) outcome.pendingAssets = assetCopy.missing;
     if (missingRecords.length > 0) outcome.pendingRecords = missingRecords;
     if (collectionPendingUniverse) outcome.pendingCollectionUniverse = collectionPendingUniverse;
+    if (collectionPendingSeries) outcome.pendingCollectionSeries = collectionPendingSeries;
     sharingEvents.emit('manifest-processed', { bucketId, manifestId: manifest.id, manifestFilename, outcome });
-    console.log(`⏳ sharing: bucket=${bucket.name} manifest=${manifest.id} kind=${manifest.kind} mode=${bucket.mode} waitingForAssets=${assetCopy.missing.length} waitingForRecords=${missingRecords.length}${collectionPendingUniverse ? ` waitingForUniverse=${collectionPendingUniverse}` : ''}`);
+    console.log(`⏳ sharing: bucket=${bucket.name} manifest=${manifest.id} kind=${manifest.kind} mode=${bucket.mode} waitingForAssets=${assetCopy.missing.length} waitingForRecords=${missingRecords.length}${collectionPendingUniverse ? ` waitingForUniverse=${collectionPendingUniverse}` : ''}${collectionPendingSeries ? ` waitingForSeries=${collectionPendingSeries}` : ''}`);
     return { processed: true, pending: true, manifest, outcome };
   }
   await markProcessed(bucketId, manifestFilename, manifest.id);
@@ -767,14 +799,20 @@ export async function promoteInboxItem(bucketId, manifestId) {
   const availableAssetKeys = new Set(assetCopy.available.map((ref) => `${ref.kind}:${ref.ref}`));
   const outcome = await applyAutoMerge(bucket, manifest, records, { availableAssetKeys });
   // Mirror the missing-record/asset gates above: if the collection
-  // payload deferred because its universe isn't present locally yet,
-  // throw a pending error instead of silently dropping the inbox item.
-  // Otherwise the user's "promote" click would consume the inbox row
-  // while the collection items never landed.
+  // payload deferred because its owner (universe or series) isn't
+  // present locally yet, throw a pending error instead of silently
+  // dropping the inbox item. Otherwise the user's "promote" click
+  // would consume the inbox row while the collection items never landed.
   if (outcome.collectionPendingUniverse) {
     throw Object.assign(new Error(`Collection payload waiting on universe ${outcome.collectionPendingUniverse} to be imported first`), {
       code: 'SHARING_UNIVERSE_PENDING',
       pendingCollectionUniverse: outcome.collectionPendingUniverse,
+    });
+  }
+  if (outcome.collectionPendingSeries) {
+    throw Object.assign(new Error(`Collection payload waiting on series ${outcome.collectionPendingSeries} to be imported first`), {
+      code: 'SHARING_SERIES_PENDING',
+      pendingCollectionSeries: outcome.collectionPendingSeries,
     });
   }
   // Drop from inbox.

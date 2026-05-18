@@ -20,6 +20,7 @@ import { readdir, rename } from 'fs/promises';
 import { PATHS, atomicWrite, readJSONFile, ensureDir } from '../../lib/fileUtils.js';
 import { SHARING_SCHEMA_VERSION, getProducedByVersion } from './version.js';
 import { isStr } from '../../lib/storyBible.js';
+import { universeCollectionNameFor, seriesCollectionNameFor } from '../mediaCollections.js';
 
 export const MANIFEST_KIND = Object.freeze(['series', 'universe', 'media', 'media-annotations']);
 
@@ -162,13 +163,21 @@ export function buildManifest({
     bucketName: bucketName || bucketId,
     recordIds: Array.isArray(recordIds) ? recordIds : [],
     assetRefs: Array.isArray(assetRefs) ? assetRefs : [],
-    // Optional payload for universe shares — the linked media collection so
-    // recipients gain the same set of generated images and the link is
-    // restored on their side.
-    collection: collection && collection.universeId && Array.isArray(collection.items)
+    // Optional payload for universe/series shares — the linked media
+    // collection so recipients gain the same set of generated images and
+    // the link is restored on their side. Either `universeId` (universe-
+    // owned auto-collection, or a universe-linked series' bundle) OR
+    // `seriesId` (per-series auto-collection for universeless series) is
+    // present, never both.
+    collection: collection && Array.isArray(collection.items)
+      && (collection.universeId || collection.seriesId)
       ? {
-        name: collection.name || `Universe: ${collection.universeId}`,
-        universeId: collection.universeId,
+        name: collection.name
+          || (collection.universeId
+            ? universeCollectionNameFor(collection.universeId)
+            : seriesCollectionNameFor(collection.seriesId)),
+        ...(collection.universeId ? { universeId: collection.universeId } : {}),
+        ...(collection.seriesId && !collection.universeId ? { seriesId: collection.seriesId } : {}),
         description: collection.description || '',
         items: collection.items.map((it) => ({ kind: it.kind, ref: it.ref, addedAt: it.addedAt || null })),
       }

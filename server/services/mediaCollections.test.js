@@ -495,6 +495,120 @@ describe('mediaCollections service', () => {
     });
   });
 
+  describe('series-linked collections', () => {
+    it('updateCollection rejects a name change when the collection is series-linked', async () => {
+      const linked = await svc.findOrCreateSeriesCollection({
+        seriesId: 'ser-1', seriesName: 'Foo',
+      });
+      await expect(svc.updateCollection(linked.id, { name: 'Renamed' }))
+        .rejects.toMatchObject({ code: svc.ERR_VALIDATION });
+    });
+
+    it('seriesCollectionNameFor produces the canonical "Series: <name>" string and truncates', () => {
+      expect(svc.seriesCollectionNameFor('Foo')).toBe('Series: Foo');
+      const long = 'x'.repeat(200);
+      expect(svc.seriesCollectionNameFor(long).length).toBe(svc.NAME_MAX_LENGTH);
+    });
+
+    it('findCollectionBySeriesId locates the linked collection (or returns null)', async () => {
+      expect(await svc.findCollectionBySeriesId('ser-ghost')).toBeNull();
+      const linked = await svc.findOrCreateSeriesCollection({
+        seriesId: 'ser-1', seriesName: 'Foo',
+      });
+      const found = await svc.findCollectionBySeriesId('ser-1');
+      expect(found?.id).toBe(linked.id);
+    });
+
+    it('findOrCreateSeriesCollection returns the existing series-linked collection on second call', async () => {
+      const first = await svc.findOrCreateSeriesCollection({
+        seriesId: 'ser-1', seriesName: 'Foo',
+      });
+      const second = await svc.findOrCreateSeriesCollection({
+        seriesId: 'ser-1', seriesName: 'Foo',
+      });
+      expect(second.id).toBe(first.id);
+      expect(await svc.listCollections()).toHaveLength(1);
+    });
+
+    it('findOrCreateSeriesCollection requires both seriesId and seriesName', async () => {
+      await expect(svc.findOrCreateSeriesCollection({ seriesName: 'X' }))
+        .rejects.toMatchObject({ code: svc.ERR_VALIDATION });
+      await expect(svc.findOrCreateSeriesCollection({ seriesId: 'ser-1' }))
+        .rejects.toMatchObject({ code: svc.ERR_VALIDATION });
+    });
+
+    it('renameCollectionForSeries cascades a new name onto the linked collection', async () => {
+      const linked = await svc.findOrCreateSeriesCollection({
+        seriesId: 'ser-1', seriesName: 'Foo',
+      });
+      const updated = await svc.renameCollectionForSeries('ser-1', 'Bar');
+      expect(updated.id).toBe(linked.id);
+      expect(updated.name).toBe('Series: Bar');
+    });
+
+    it('unlinkCollectionsForSeries clears the seriesId (preserves items)', async () => {
+      const linked = await svc.findOrCreateSeriesCollection({
+        seriesId: 'ser-1', seriesName: 'Foo',
+      });
+      await svc.addItem(linked.id, { kind: 'image', ref: 'cover.png' });
+      const cleared = await svc.unlinkCollectionsForSeries('ser-1');
+      expect(cleared).toEqual([linked.id]);
+      const fresh = await svc.getCollection(linked.id);
+      expect(fresh.seriesId).toBeNull();
+      expect(fresh.items).toHaveLength(1);
+      // Lock released — renames now succeed.
+      const renamed = await svc.updateCollection(linked.id, { name: 'Orphan' });
+      expect(renamed.name).toBe('Orphan');
+    });
+
+    it('addItem on a series-linked collection emits recordUpdated("series", seriesId)', async () => {
+      const events = [];
+      const { recordEvents } = await import('./sharing/recordEvents.js');
+      const listener = (evt) => events.push(evt);
+      recordEvents.on('updated', listener);
+      try {
+        const linked = await svc.findOrCreateSeriesCollection({
+          seriesId: 'ser-1', seriesName: 'Foo',
+        });
+        events.length = 0;
+        await svc.addItem(linked.id, { kind: 'image', ref: 'x.png' });
+        expect(events).toContainEqual(expect.objectContaining({ recordKind: 'series', recordId: 'ser-1' }));
+      } finally {
+        recordEvents.off('updated', listener);
+      }
+    });
+
+    it('deleteCollection emits recordUpdated("series", seriesId) when the deleted collection was series-linked', async () => {
+      const events = [];
+      const { recordEvents } = await import('./sharing/recordEvents.js');
+      const listener = (evt) => events.push(evt);
+      recordEvents.on('updated', listener);
+      try {
+        const linked = await svc.findOrCreateSeriesCollection({
+          seriesId: 'ser-1', seriesName: 'Foo',
+        });
+        events.length = 0;
+        await svc.deleteCollection(linked.id);
+        expect(events).toContainEqual(expect.objectContaining({ recordKind: 'series', recordId: 'ser-1' }));
+      } finally {
+        recordEvents.off('updated', listener);
+      }
+    });
+
+    it('sanitizer drops seriesId when universeId is also set (universeId wins)', async () => {
+      fileStore.set('/mock/data/media-collections.json', {
+        collections: [{
+          id: 'c1', name: 'Mixed', items: [],
+          universeId: 'u-1', seriesId: 'ser-1',
+          createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+        }],
+      });
+      const [c] = await svc.listCollections();
+      expect(c.universeId).toBe('u-1');
+      expect(c.seriesId).toBeNull();
+    });
+  });
+
   it('sanitizes hand-edited JSON with bogus items', async () => {
     fileStore.set('/mock/data/media-collections.json', {
       collections: [

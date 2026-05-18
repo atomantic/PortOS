@@ -20,6 +20,7 @@ import { sanitizeArc, sanitizeSeasonList } from '../../lib/storyArc.js';
 import { sanitizeVisualStyleRef } from '../../lib/visualStyles.js';
 import { sanitizeOrigin } from '../../lib/sharingOrigin.js';
 import { emitRecordUpdated, emitRecordDeleted } from '../sharing/recordEvents.js';
+import { renameCollectionForSeries, unlinkCollectionsForSeries } from '../mediaCollections.js';
 
 // Lazy resolution — PATHS.data may not be available at module-load time
 // (e.g. tests that swap it through a Proxy mock).
@@ -207,7 +208,7 @@ export async function insertSeriesWithId(input = {}) {
 }
 
 export async function updateSeries(id, patch = {}) {
-  return queueSeriesWrite(async () => {
+  const { merged, nameChanged } = await queueSeriesWrite(async () => {
     const state = await readState();
     const idx = state.series.findIndex((s) => s.id === id);
     if (idx < 0) throw makeErr(`Series not found: ${id}`, ERR_NOT_FOUND);
@@ -216,7 +217,7 @@ export async function updateSeries(id, patch = {}) {
     const mergedLlm = 'llm' in patch
       ? { ...(cur.llm || {}), ...(patch.llm || {}) }
       : cur.llm;
-    const merged = sanitizeSeries({
+    const next = sanitizeSeries({
       ...cur,
       ...('name' in patch ? { name: patch.name } : {}),
       ...('logline' in patch ? { logline: patch.logline } : {}),
@@ -238,12 +239,23 @@ export async function updateSeries(id, patch = {}) {
       llm: mergedLlm,
       updatedAt: new Date().toISOString(),
     });
-    if (!merged) throw makeErr('Invalid series payload', ERR_VALIDATION);
-    state.series[idx] = merged;
+    if (!next) throw makeErr('Invalid series payload', ERR_VALIDATION);
+    state.series[idx] = next;
     await writeState(state);
-    emitRecordUpdated('series', merged.id);
-    return merged;
+    emitRecordUpdated('series', next.id);
+    return { merged: next, nameChanged: next.name !== cur.name };
   });
+  // Cascade rename onto the linked per-series media collection (if any) —
+  // log but don't fail the save. Runs OUTSIDE the queue so the media-
+  // collections write tail can't stall subsequent series mutators. No-op
+  // when no series-linked collection exists (the common case for
+  // universe-backed series, where the universe owns the auto-collection).
+  if (nameChanged) {
+    await renameCollectionForSeries(merged.id, merged.name).catch((err) => {
+      console.error(`❌ series-collection rename cascade failed for ${merged.id}: ${err?.message || err}`);
+    });
+  }
+  return merged;
 }
 
 /**
@@ -297,7 +309,7 @@ export async function updateSeasonOnSeries(seriesId, seasonId, patchFn) {
 }
 
 export async function deleteSeries(id) {
-  return queueSeriesWrite(async () => {
+  const result = await queueSeriesWrite(async () => {
     const state = await readState();
     const before = state.series.length;
     state.series = state.series.filter((s) => s.id !== id);
@@ -308,6 +320,13 @@ export async function deleteSeries(id) {
     emitRecordDeleted('series', id);
     return { id };
   });
+  // Release the rename-lock on any linked per-series media collection so
+  // the orphan becomes a normal user-owned bucket. Runs OUTSIDE the series
+  // write tail; best-effort, mirrors the universe-side flow.
+  await unlinkCollectionsForSeries(id).catch((err) => {
+    console.error(`❌ unlink media collections for deleted series ${id} failed: ${err?.message || err}`);
+  });
+  return result;
 }
 
 /**

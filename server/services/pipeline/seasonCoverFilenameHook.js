@@ -21,7 +21,7 @@
 import { mediaJobEvents } from '../mediaJobQueue/index.js';
 import { parseSeasonCoverOwner, slotKeyForVariant } from './owners.js';
 import * as seriesSvc from './series.js';
-import { fileCoverIntoUniverseCollection } from './coverUniverseFiler.js';
+import { fileCoverIntoAutoCollection } from './coverUniverseFiler.js';
 
 let registeredHandler = null;
 
@@ -64,7 +64,7 @@ const handler = (job) => {
 
     if (reducerStamped && writeOk) {
       console.log(`📎 seasonCover filename stamped — series=${seriesId.slice(0, 8)} season=${seasonId.slice(0, 8)} ${target}.${slotKey} ← ${filename}`);
-      await fileCoverIntoUniverseCollection({ seriesId, filename });
+      await fileCoverIntoAutoCollection({ seriesId, filename });
     }
   })().catch((err) => {
     console.error(`❌ seasonCover filename hook crashed: ${err?.message || err}`);

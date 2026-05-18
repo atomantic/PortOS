@@ -17,7 +17,7 @@ import { parseComicPagesOwner, slotKeyForVariant } from './owners.js';
 import { createFilenameHook } from './filenameHookFactory.js';
 import { buildRenderSlot } from './visualStages.js';
 import { getIssue } from './issues.js';
-import { fileCoverIntoUniverseCollection } from './coverUniverseFiler.js';
+import { fileCoverIntoAutoCollection } from './coverUniverseFiler.js';
 
 // Slot record for a legacy in-flight completion (job enqueued before the
 // proof/final split). `job.params` carries the originally-requested width
@@ -113,7 +113,7 @@ const hook = createFilenameHook({
     if (parsed.target !== 'cover' && parsed.target !== 'backCover') return;
     const issue = await getIssue(parsed.issueId).catch(() => null);
     if (!issue?.seriesId) return;
-    await fileCoverIntoUniverseCollection({ seriesId: issue.seriesId, filename });
+    await fileCoverIntoAutoCollection({ seriesId: issue.seriesId, filename });
   },
 });
 
