@@ -15,36 +15,38 @@ import {
   ChevronDown, ChevronRight, Plus, Trash2, WandSparkles, Loader2,
   Palette, Hand, Smile, Package, BookOpen, Eye, Activity,
 } from 'lucide-react';
+import { BIBLE_LIMITS as L } from '../../lib/bibleLimits';
+import useFieldDraft from '../../hooks/useFieldDraft';
 
 const SECTIONS = Object.freeze([
   {
     key: 'identity', label: 'Identity', icon: BookOpen,
     fields: [
-      { name: 'pronouns', label: 'Pronouns', placeholder: 'she/her · they/them · it/its', max: 60, type: 'input' },
-      { name: 'age', label: 'Age', placeholder: '27 · centuries old · unknown', max: 80, type: 'input' },
-      { name: 'coreTheme', label: 'Core theme', placeholder: 'one-sentence essence', max: 500, type: 'textarea' },
-      { name: 'speechAccent', label: 'Speech / accent', placeholder: 'clipped Edinburgh; rarely contracts; nautical metaphors', max: 500, type: 'textarea' },
-      { name: 'visualNotes', label: 'Visual notes (at-a-glance)', placeholder: 'layered streetwear; faded mustard + charcoal; chunky boots', max: 1000, type: 'textarea' },
+      { name: 'pronouns', label: 'Pronouns', placeholder: 'she/her · they/them · it/its', max: L.PRONOUNS_MAX, type: 'input' },
+      { name: 'age', label: 'Age', placeholder: '27 · centuries old · unknown', max: L.AGE_MAX, type: 'input' },
+      { name: 'coreTheme', label: 'Core theme', placeholder: 'one-sentence essence', max: L.CORE_THEME_MAX, type: 'textarea' },
+      { name: 'speechAccent', label: 'Speech / accent', placeholder: 'clipped Edinburgh; rarely contracts; nautical metaphors', max: L.SPEECH_ACCENT_MAX, type: 'textarea' },
+      { name: 'visualNotes', label: 'Visual notes (at-a-glance)', placeholder: 'layered streetwear; faded mustard + charcoal; chunky boots', max: L.VISUAL_NOTES_MAX, type: 'textarea' },
     ],
   },
   {
     key: 'personality', label: 'Personality & motivations', icon: Smile,
     fields: [
-      { name: 'motivations', label: 'Motivations', placeholder: 'what they WANT and what they fear losing', max: 2000, type: 'textarea' },
-      { name: 'likes', label: 'Likes', placeholder: 'short prose; comma-separated', max: 1500, type: 'textarea' },
-      { name: 'dislikes', label: 'Dislikes', placeholder: 'short prose; comma-separated', max: 1500, type: 'textarea' },
-      { name: 'mannerisms', label: 'Mannerisms', placeholder: 'habitual physical / verbal tics', max: 1500, type: 'textarea' },
-      { name: 'relationships', label: 'Relationships', placeholder: 'who they\'re connected to and the tenor of each connection', max: 2000, type: 'textarea' },
-      { name: 'skills', label: 'Skills', placeholder: 'concrete abilities, soft and hard', max: 2000, type: 'textarea' },
+      { name: 'motivations', label: 'Motivations', placeholder: 'what they WANT and what they fear losing', max: L.MOTIVATIONS_MAX, type: 'textarea' },
+      { name: 'likes', label: 'Likes', placeholder: 'short prose; comma-separated', max: L.LIKES_MAX, type: 'textarea' },
+      { name: 'dislikes', label: 'Dislikes', placeholder: 'short prose; comma-separated', max: L.DISLIKES_MAX, type: 'textarea' },
+      { name: 'mannerisms', label: 'Mannerisms', placeholder: 'habitual physical / verbal tics', max: L.MANNERISMS_MAX, type: 'textarea' },
+      { name: 'relationships', label: 'Relationships', placeholder: 'who they\'re connected to and the tenor of each connection', max: L.RELATIONSHIPS_MAX, type: 'textarea' },
+      { name: 'skills', label: 'Skills', placeholder: 'concrete abilities, soft and hard', max: L.SKILLS_MAX, type: 'textarea' },
     ],
   },
   {
     key: 'visualIdentity', label: 'Visual identity', icon: Eye,
     fields: [
-      { name: 'silhouetteNotes', label: 'Silhouette notes', placeholder: 'compact upper body; tapered lower half; short hair adds 5cm height', max: 2000, type: 'textarea' },
-      { name: 'postureNotes', label: 'Posture notes', placeholder: 'slight forward lean; weight in left foot; shoulders loose', max: 1000, type: 'textarea' },
-      { name: 'specialTraits', label: 'Special traits', placeholder: 'quick hands; scar on right eyebrow; observant', max: 2000, type: 'textarea' },
-      { name: 'visualIdentity', label: 'Visual identity (design language)', placeholder: 'knobs + sights; urban utilitarian; analog tech feel', max: 1000, type: 'textarea' },
+      { name: 'silhouetteNotes', label: 'Silhouette notes', placeholder: 'compact upper body; tapered lower half; short hair adds 5cm height', max: L.SILHOUETTE_NOTES_MAX, type: 'textarea' },
+      { name: 'postureNotes', label: 'Posture notes', placeholder: 'slight forward lean; weight in left foot; shoulders loose', max: L.POSTURE_NOTES_MAX, type: 'textarea' },
+      { name: 'specialTraits', label: 'Special traits', placeholder: 'quick hands; scar on right eyebrow; observant', max: L.SPECIAL_TRAITS_MAX, type: 'textarea' },
+      { name: 'visualIdentity', label: 'Visual identity (design language)', placeholder: 'knobs + sights; urban utilitarian; analog tech feel', max: L.VISUAL_IDENTITY_MAX, type: 'textarea' },
     ],
   },
 ]);
@@ -54,8 +56,8 @@ const LIST_SECTIONS = Object.freeze([
     key: 'stats', label: 'Stats', icon: Activity, field: 'stats',
     addLabel: 'Add stat', singular: 'stat',
     columns: [
-      { name: 'label', placeholder: 'Height · Eyes · Form', max: 80 },
-      { name: 'value', placeholder: '5\'7" · amber · vapor', max: 200 },
+      { name: 'label', placeholder: 'Height · Eyes · Form', max: L.STAT_LABEL_MAX },
+      { name: 'value', placeholder: '5\'7" · amber · vapor', max: L.STAT_VALUE_MAX },
     ],
     summary: (s) => `${s.label}${s.value ? `: ${s.value}` : ''}`,
   },
@@ -63,9 +65,9 @@ const LIST_SECTIONS = Object.freeze([
     key: 'colorPalette', label: 'Color palette', icon: Palette, field: 'colorPalette',
     addLabel: 'Add swatch', singular: 'swatch',
     columns: [
-      { name: 'name', placeholder: 'amber', max: 80 },
-      { name: 'hex', placeholder: '#f59e0b', max: 10, narrow: true },
-      { name: 'role', placeholder: 'skin · jacket primary · boot leather', max: 120 },
+      { name: 'name', placeholder: 'amber', max: L.COLOR_NAME_MAX },
+      { name: 'hex', placeholder: '#f59e0b', max: L.COLOR_HEX_MAX, narrow: true },
+      { name: 'role', placeholder: 'skin · jacket primary · boot leather', max: L.COLOR_ROLE_MAX },
     ],
     summary: (c) => `${c.name}${c.hex ? ` ${c.hex}` : ''}${c.role ? ` — ${c.role}` : ''}`,
     swatchHex: (row) => row.hex,
@@ -74,9 +76,9 @@ const LIST_SECTIONS = Object.freeze([
     key: 'props', label: 'Props', icon: Package, field: 'props',
     addLabel: 'Add prop', singular: 'prop',
     columns: [
-      { name: 'name', placeholder: 'Radio · Map case', max: 120 },
-      { name: 'purpose', placeholder: 'comms · navigation · talisman', max: 400 },
-      { name: 'materials', placeholder: 'aluminum + ABS plastic', max: 200 },
+      { name: 'name', placeholder: 'Radio · Map case', max: L.PROP_NAME_MAX },
+      { name: 'purpose', placeholder: 'comms · navigation · talisman', max: L.PROP_PURPOSE_MAX },
+      { name: 'materials', placeholder: 'aluminum + ABS plastic', max: L.PROP_MATERIALS_MAX },
     ],
     summary: (p) => `${p.name}${p.purpose ? ` (${p.purpose})` : ''}`,
   },
@@ -84,8 +86,8 @@ const LIST_SECTIONS = Object.freeze([
     key: 'expressions', label: 'Expression sheet', icon: Smile, field: 'expressions',
     addLabel: 'Add expression', singular: 'expression',
     columns: [
-      { name: 'name', placeholder: 'neutral · curious · worried', max: 80 },
-      { name: 'description', placeholder: 'wide eyes; lips parted; brow raised', max: 400 },
+      { name: 'name', placeholder: 'neutral · curious · worried', max: L.EXPRESSION_NAME_MAX },
+      { name: 'description', placeholder: 'wide eyes; lips parted; brow raised', max: L.EXPRESSION_DESC_MAX },
     ],
     summary: (e) => `${e.name}${e.description ? ` — ${e.description}` : ''}`,
   },
@@ -93,39 +95,33 @@ const LIST_SECTIONS = Object.freeze([
     key: 'handGestures', label: 'Hand gestures', icon: Hand, field: 'handGestures',
     addLabel: 'Add gesture', singular: 'gesture',
     columns: [
-      { name: 'name', placeholder: 'pointing · peace sign · gripping radio', max: 80 },
-      { name: 'description', placeholder: 'open palm; index extended; relaxed', max: 300 },
+      { name: 'name', placeholder: 'pointing · peace sign · gripping radio', max: L.GESTURE_NAME_MAX },
+      { name: 'description', placeholder: 'open palm; index extended; relaxed', max: L.GESTURE_DESC_MAX },
     ],
     summary: (g) => `${g.name}${g.description ? ` — ${g.description}` : ''}`,
   },
 ]);
 
-// Buffered text input — local draft state, commits to onCommit on blur.
+// Buffered text input — wraps useFieldDraft, commits to onCommit on blur.
 function DraftField({ field, value, onCommit, disabled, idPrefix }) {
-  const [draft, setDraft] = useState(undefined);
-  const current = draft !== undefined ? draft : (value || '');
-  const commit = () => {
-    if (draft === undefined) return;
-    if (draft === (value || '')) { setDraft(undefined); return; }
-    onCommit(draft);
-    setDraft(undefined);
-  };
+  const draft = useFieldDraft(value, onCommit);
+  // idPrefix scopes the field id to one editor instance so two open
+  // character cards don't render duplicate `chr-field-pronouns` DOM ids
+  // and break the label/input association.
+  const id = `chr-field-${idPrefix || 'unknown'}-${field.name}`;
   const common = {
-    value: current,
-    onChange: (e) => setDraft(e.target.value),
-    onBlur: commit,
+    id,
+    value: draft.value,
+    onChange: draft.onChange,
+    onBlur: draft.onBlur,
     disabled,
     placeholder: field.placeholder,
     maxLength: field.max,
     className: 'w-full px-2 py-1 text-xs bg-port-bg border border-port-border rounded text-white disabled:opacity-50',
-    // idPrefix scopes the field id to one editor instance so two open
-    // character cards don't render duplicate `chr-field-pronouns` DOM ids
-    // and break the label/input association.
-    id: `chr-field-${idPrefix || 'unknown'}-${field.name}`,
   };
   return (
     <div className="space-y-0.5">
-      <label htmlFor={common.id} className="block text-[10px] uppercase tracking-wider text-gray-500">
+      <label htmlFor={id} className="block text-[10px] uppercase tracking-wider text-gray-500">
         {field.label}
       </label>
       {field.type === 'textarea'

@@ -1001,3 +1001,13 @@ describe('storyBible — createBibleStore (multi-primary-field kind / settings)'
     ).rejects.toThrow(/already exists/i);
   });
 });
+
+describe('BIBLE_LIMITS client mirror', () => {
+  it('matches client/src/lib/bibleLimits.js verbatim', async () => {
+    // The client mirror at `client/src/lib/bibleLimits.js` exists so the
+    // CharacterDetailEditor's `max:` literals can't drift from the server
+    // sanitizer caps. If this fails, update the client file to match.
+    const clientMirror = await import('../../client/src/lib/bibleLimits.js');
+    expect(clientMirror.BIBLE_LIMITS).toEqual(BIBLE_LIMITS);
+  });
+});

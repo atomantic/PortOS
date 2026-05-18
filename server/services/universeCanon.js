@@ -12,6 +12,7 @@ import {
 import { runStagedLLM } from '../lib/stageRunner.js';
 import { runPromptRefine } from './pipeline/refineHelpers.js';
 import { ServerError } from '../lib/errorHandler.js';
+import { shortId } from '../lib/fileUtils.js';
 
 export const peerForPrompt = (entry) => ({
   id: entry.id,
@@ -123,7 +124,7 @@ export async function refineUniverseCharacter(universeId, entryId, options = {})
     },
     options,
     source: 'universe-character-refine',
-    logTag: `Universe character refine — universe=${universeId.slice(0, 8)} entry=${entryId.slice(0, 8)}`,
+    logTag: `Universe character refine — universe=${shortId(universeId)} entry=${shortId(entryId)}`,
     resultField: 'physicalDescription',
     emptyError: { code: 'UNIVERSE_CANON_REFINE_EMPTY', message: 'LLM returned an empty physicalDescription' },
     changesLimit: 12,
@@ -209,7 +210,7 @@ export async function differentiateUniverseCast(universeId, options = {}) {
 
   const updated = await updateUniverse(universeId, { characters: nextList });
   const rationale = typeof result.content?.rationale === 'string' ? result.content.rationale.trim() : '';
-  console.log(`✨ Universe cast differentiate — universe=${universeId.slice(0, 8)} touched=${touched}/${list.length} skippedLocked=${skippedLocked} runId=${(result.runId || '').slice(0, 8)}`);
+  console.log(`✨ Universe cast differentiate — universe=${shortId(universeId)} touched=${touched}/${list.length} skippedLocked=${skippedLocked} runId=${shortId(result.runId)}`);
   return {
     universe: updated,
     touched,
