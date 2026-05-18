@@ -196,9 +196,15 @@ export default function UniverseCanonSection({ universe, universeId, onUniverseC
     return out;
   }, [universe]);
 
-  const openPreview = useCallback((filename) => {
+  const openPreview = useCallback((filename, opts) => {
     if (!filename) return;
-    const match = previewItems.find((i) => i.filename === filename);
+    // Match on the kind-tagged key when the caller indicates a sheet —
+    // gallery `imageRefs[]` and `referenceSheetImageRef` can theoretically
+    // collide on basename, in which case a filename-only find would route
+    // the lightbox to the wrong static prefix (/data/images vs /data/image-refs).
+    const targetKey = opts?.isSheet ? `canon-sheet:${filename}` : `canon:${filename}`;
+    const match = previewItems.find((i) => i.key === targetKey)
+      || previewItems.find((i) => i.filename === filename);
     if (match) setPreview(match);
   }, [previewItems]);
 

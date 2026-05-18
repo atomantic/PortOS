@@ -342,8 +342,21 @@ describe('storyBible — sanitizeCharacter', () => {
         ],
       });
       expect(out.stats).toHaveLength(3);
-      expect(out.stats[0]).toEqual({ label: 'Form', value: 'translucent vapor' });
+      expect(out.stats[0]).toMatchObject({ label: 'Form', value: 'translucent vapor' });
+      expect(out.stats[0].id).toMatch(/^stat-/);
       expect(out.stats[2].label).toBe('Limbs');
+    });
+
+    it('stats round-trip caller-supplied id and assign UUIDs to fresh rows', () => {
+      const out = sanitizeCharacter({
+        name: 'A',
+        stats: [
+          { label: 'Form', value: 'vapor' },
+          { id: 'stat-fixed-1', label: 'Limbs', value: '6' },
+        ],
+      });
+      expect(out.stats[0].id).toMatch(/^stat-/);
+      expect(out.stats[1].id).toBe('stat-fixed-1');
     });
 
     it('drops stats entries missing a label, caps overall list', () => {
@@ -357,7 +370,7 @@ describe('storyBible — sanitizeCharacter', () => {
       });
       // Nameless entry dropped; list capped at the limit.
       expect(out.stats).toHaveLength(BIBLE_LIMITS.STATS_PER_CHARACTER_MAX);
-      expect(out.stats[0]).toEqual({ label: 's0', value: 'v' });
+      expect(out.stats[0]).toMatchObject({ label: 's0', value: 'v' });
     });
 
     it('color palette accepts hex + role; drops nameless rows', () => {
@@ -370,8 +383,9 @@ describe('storyBible — sanitizeCharacter', () => {
         ],
       });
       expect(out.colorPalette).toHaveLength(2);
-      expect(out.colorPalette[0]).toEqual({ name: 'amber', hex: '#f59e0b', role: 'skin' });
-      expect(out.colorPalette[1]).toEqual({ name: 'olive', hex: '', role: '' });
+      expect(out.colorPalette[0]).toMatchObject({ name: 'amber', hex: '#f59e0b', role: 'skin' });
+      expect(out.colorPalette[0].id).toMatch(/^color-/);
+      expect(out.colorPalette[1]).toMatchObject({ name: 'olive', hex: '', role: '' });
     });
 
     it('props get a UUID id and round-trip caller-supplied ids', () => {
@@ -402,8 +416,10 @@ describe('storyBible — sanitizeCharacter', () => {
       });
       expect(out.expressions).toHaveLength(1);
       expect(out.expressions[0].name).toBe('neutral');
+      expect(out.expressions[0].id).toMatch(/^expr-/);
       expect(out.handGestures).toHaveLength(1);
       expect(out.handGestures[0].name).toBe('pointing');
+      expect(out.handGestures[0].id).toMatch(/^gesture-/);
     });
 
     it('referenceSheetImageRef accepts a filename and trims it', () => {

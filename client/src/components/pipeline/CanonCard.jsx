@@ -398,7 +398,7 @@ export default function CanonCard({
             entry={entry}
             locked={locked}
             onSheetCompleted={onSheetCompleted}
-            onOpenLightbox={(filename) => onPreview?.(filename)}
+            onOpenLightbox={(filename) => onPreview?.(filename, { isSheet: true })}
           />
         </CharacterDetailsToggle>
       ) : null}

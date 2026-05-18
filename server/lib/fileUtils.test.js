@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import { writeFile, rm, mkdir } from 'fs/promises';
 import { mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
@@ -523,7 +523,12 @@ describe('fileUtils', () => {
     const sampleTemplate = join(__dirname_test, '..', '..', 'data.sample', 'templates', 'character-reference-sheet.png');
     const galleryName = 'fileutils-test-gallery.png';
     const refsName = 'fileutils-test-refs.png';
-    const templateName = 'character-reference-sheet.png';
+    // Unique template name so cleanup doesn't unlink the shipped asset that
+    // other tests / dev runs depend on at `data/templates/character-reference-sheet.png`.
+    const templateName = 'fileutils-test-template.png';
+    const galleryPath = join(PATHS.images, galleryName);
+    const refsPath = join(PATHS.imageRefs, refsName);
+    const templatePath = join(PATHS.visualTemplates, templateName);
 
     beforeEach(() => {
       // Provision fixtures in each approved root so the resolver can find
@@ -531,13 +536,20 @@ describe('fileUtils', () => {
       for (const root of [PATHS.images, PATHS.imageRefs, PATHS.visualTemplates]) {
         if (!existsSync(root)) mkdirSync(root, { recursive: true });
       }
-      const galleryPath = join(PATHS.images, galleryName);
-      const refsPath = join(PATHS.imageRefs, refsName);
-      const templatePath = join(PATHS.visualTemplates, templateName);
       if (existsSync(sampleTemplate)) {
         if (!existsSync(galleryPath)) copyFileSync(sampleTemplate, galleryPath);
         if (!existsSync(refsPath)) copyFileSync(sampleTemplate, refsPath);
         if (!existsSync(templatePath)) copyFileSync(sampleTemplate, templatePath);
+      }
+    });
+
+    afterAll(() => {
+      // Remove ONLY the per-test fixture files (uniquely-named so dev/CI
+      // worktrees aren't polluted and later basename lookups don't keep
+      // finding stale resolver hits). Never recursively remove the real
+      // `data/images` / `data/image-refs` / `data/templates` roots.
+      for (const p of [galleryPath, refsPath, templatePath]) {
+        if (existsSync(p)) rmSync(p, { force: true });
       }
     });
 

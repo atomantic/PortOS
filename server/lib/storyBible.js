@@ -377,7 +377,10 @@ function sanitizeStat(raw) {
   if (!raw || typeof raw !== 'object') return null;
   const label = trimTo(raw.label, BIBLE_LIMITS.STAT_LABEL_MAX);
   if (!label) return null;
-  return { label, value: trimTo(raw.value, BIBLE_LIMITS.STAT_VALUE_MAX) };
+  // Stable id so the editor's per-row local state (drafts buffer in
+  // ListRow.jsx) doesn't carry over when an earlier row is deleted — without
+  // it, React falls back to an index key and reuses the wrong row instance.
+  return { id: ensureId(raw.id, 'stat-'), label, value: trimTo(raw.value, BIBLE_LIMITS.STAT_VALUE_MAX) };
 }
 
 // Color palette swatch. `hex` is optional — pure-name palettes still flow
@@ -388,6 +391,7 @@ function sanitizePaletteColor(raw) {
   const name = trimTo(raw.name, BIBLE_LIMITS.COLOR_NAME_MAX);
   if (!name) return null;
   return {
+    id: ensureId(raw.id, 'color-'),
     name,
     hex: trimTo(raw.hex, BIBLE_LIMITS.COLOR_HEX_MAX),
     role: trimTo(raw.role, BIBLE_LIMITS.COLOR_ROLE_MAX),
@@ -425,7 +429,7 @@ function sanitizeExpression(raw) {
   if (!raw || typeof raw !== 'object') return null;
   const name = trimTo(raw.name, BIBLE_LIMITS.EXPRESSION_NAME_MAX);
   if (!name) return null;
-  return { name, description: trimTo(raw.description, BIBLE_LIMITS.EXPRESSION_DESC_MAX) };
+  return { id: ensureId(raw.id, 'expr-'), name, description: trimTo(raw.description, BIBLE_LIMITS.EXPRESSION_DESC_MAX) };
 }
 
 // Hand-gesture entry — name + 1-line prose. Mirrors expression shape so the
@@ -434,7 +438,7 @@ function sanitizeHandGesture(raw) {
   if (!raw || typeof raw !== 'object') return null;
   const name = trimTo(raw.name, BIBLE_LIMITS.GESTURE_NAME_MAX);
   if (!name) return null;
-  return { name, description: trimTo(raw.description, BIBLE_LIMITS.GESTURE_DESC_MAX) };
+  return { id: ensureId(raw.id, 'gesture-'), name, description: trimTo(raw.description, BIBLE_LIMITS.GESTURE_DESC_MAX) };
 }
 
 // Shared canon extras applied to every kind. `locked` follows the on-disk

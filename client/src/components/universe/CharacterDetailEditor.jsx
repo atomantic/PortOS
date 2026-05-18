@@ -242,7 +242,14 @@ export default function CharacterDetailEditor({ entry, onPatch, onExpand, expand
   };
 
   const addRow = (section) => {
-    const blank = Object.fromEntries(section.columns.map((c) => [c.name, '']));
+    // Client-only id on pending rows so ListRow's local draft state stays
+    // bound to THIS row across re-renders and after-deletes — without it,
+    // the React key falls through to index and an earlier-row delete shifts
+    // a different row's drafts buffer onto this one. The server sanitizer
+    // strips this client id and assigns its own when the row promotes, so
+    // round-tripped persisted rows keep stable server-stamped ids.
+    const id = `pending-${section.key}-${(crypto?.randomUUID?.() ?? Date.now().toString(36) + Math.random().toString(36).slice(2))}`;
+    const blank = { id, ...Object.fromEntries(section.columns.map((c) => [c.name, ''])) };
     setPendingByList((prev) => ({
       ...prev,
       [section.key]: [...(prev[section.key] || []), blank],
@@ -332,6 +339,12 @@ export default function CharacterDetailEditor({ entry, onPatch, onExpand, expand
               <div className="space-y-1.5">
                 {merged.map((row, idx) => (
                   <ListRow
+                    // Every persisted row carries a server-stamped id (see
+                    // sanitizeStat / sanitizePaletteColor / etc.) and every
+                    // pending row gets a client-only id from `addRow`. The
+                    // index fallback would tie ListRow's local `drafts` state
+                    // to a slot, so a delete on an earlier row would shift
+                    // another row's drafts onto this one.
                     key={row.id || `${section.key}-${idx}`}
                     row={row}
                     idx={idx}
