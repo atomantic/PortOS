@@ -39,11 +39,12 @@ export default function TabPills({
       <>
         {mobileDropdown && (
           <div className="sm:hidden">
-            {mobileSelectId && <label htmlFor={mobileSelectId} className="sr-only">Section</label>}
+            {mobileSelectId && <label htmlFor={mobileSelectId} className="sr-only">{ariaLabel || 'Section'}</label>}
             <select
               id={mobileSelectId}
               value={activeTab}
               onChange={(e) => onChange(e.target.value)}
+              aria-label={mobileSelectId ? undefined : (ariaLabel || 'Section')}
               className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-port-accent min-h-[40px]"
             >
               {visibleTabs.map((t) => (

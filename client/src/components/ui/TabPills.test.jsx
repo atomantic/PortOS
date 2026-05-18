@@ -25,7 +25,8 @@ describe('TabPills — underline variant (default)', () => {
     const user = userEvent.setup();
     render(<TabPills tabs={sampleTabs} activeTab="cast" onChange={onChange} />);
     await user.click(screen.getByRole('tab', { name: /Places/i }));
-    expect(onChange).toHaveBeenCalledExactlyOnceWith('places');
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenCalledWith('places');
   });
 
   it('shows the count next to the label when count > 0, hides it at 0 or undefined', () => {
@@ -73,6 +74,23 @@ describe('TabPills — pills variant', () => {
     // Count appears in option text when present
     expect(within(select).getByRole('option', { name: /Cast \(3\)/i })).toBeInTheDocument();
     expect(within(select).getByRole('option', { name: 'Objects' })).toBeInTheDocument();
+  });
+
+  it('mobile <select> falls back to aria-label when mobileSelectId is omitted', () => {
+    render(
+      <TabPills
+        variant="pills"
+        mobileDropdown
+        ariaLabel="Universe sections"
+        tabs={sampleTabs}
+        activeTab="cast"
+        onChange={() => {}}
+      />
+    );
+    // No <label> renders without an id, so the accessible name must come from aria-label
+    const select = screen.getByRole('combobox', { name: 'Universe sections' });
+    expect(select).toHaveAttribute('aria-label', 'Universe sections');
+    expect(select).not.toHaveAttribute('id');
   });
 });
 
