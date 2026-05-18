@@ -32,6 +32,7 @@ import MediaPreview from '../../media/MediaPreview';
 import VisualStylePicker from '../VisualStylePicker';
 import Drawer from '../../Drawer';
 import ImageGenSettingsForm from '../../imageGen/ImageGenSettingsForm';
+import ExtractCanonButton from './ExtractCanonButton';
 import { deriveAvailableBackends } from '../../../lib/imageGenBackends';
 import {
   PIPELINE_IMAGE_DEFAULTS,
@@ -491,6 +492,12 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
           >
             <SettingsIcon size={12} /> Image gen
           </button>
+          <ExtractCanonButton
+            issue={issue}
+            series={series}
+            stageId="comicScript"
+            gated={actionsGated}
+          />
           {hasScript && pages.length === 0 ? (
             <button
               type="button"

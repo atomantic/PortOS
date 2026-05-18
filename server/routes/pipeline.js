@@ -52,6 +52,7 @@ import {
   buildRenderSlot,
 } from '../services/pipeline/visualStages.js';
 import { extractCanonFromProse } from '../services/universeCanon.js';
+import { IMPORTER_SOURCE_CHAR_LIMIT } from '../services/importer.js';
 import { getSeriesCanon } from '../services/pipeline/seriesCanon.js';
 import { startEpisodeVideoForIssue, ERR_NO_STORYBOARDS } from '../services/pipeline/episodeVideo.js';
 import { generateSeriesTitleLogo } from '../services/pipeline/seriesTitleLogo.js';
@@ -447,6 +448,24 @@ const extractScenesSchema = z.object({
 
 const extractComicPagesSchema = z.object({
   force: z.boolean().optional(),
+});
+
+const extractCanonFromScriptSchema = z.object({
+  providerOverride: z.string().trim().max(80).optional(),
+});
+
+// Reuses the importer's source-size ceiling — both feed the same
+// `extractBible` machinery, so a single constant keeps the safe-corpus
+// budget in sync. `STAGE_OUTPUT_MAX` (400KB) is large enough that long
+// scripts can exceed most provider context windows; clamp before forwarding.
+const EXTRACT_CANON_CORPUS_MAX = IMPORTER_SOURCE_CHAR_LIMIT;
+
+// Collapses the `extractCanonFromProse` result-shape trio used by both the
+// season-episodes continuity extract and the manual script-stage extract.
+const countExtractedCanon = (results) => ({
+  characters: results.characters?.extracted?.length || 0,
+  places: results.places?.extracted?.length || 0,
+  objects: results.objects?.extracted?.length || 0,
 });
 
 const comicPagePatchSchema = z.object({
@@ -979,9 +998,7 @@ router.post('/series/:id/seasons/:seasonId/episodes/generate', asyncHandler(asyn
       });
       if (extractRes) {
         bibleExtracted = {
-          characters: extractRes.results.characters?.extracted?.length || 0,
-          places: extractRes.results.places?.extracted?.length || 0,
-          objects: extractRes.results.objects?.extracted?.length || 0,
+          ...countExtractedCanon(extractRes.results),
           universe: extractRes.universe,
         };
       }
@@ -1357,6 +1374,60 @@ router.post('/issues/:id/stages/comicPages/extract-pages', asyncHandler(async (r
     stage,
     pageCount: pages.length,
     panelCount,
+  });
+}));
+
+// Auto-extract runs only after `prose` (textStages.js:233); this endpoint
+// lets the writer pull canon from a script stage on demand so characters
+// introduced only in panel directions or dialogue cues land in the bible.
+// Same autoLock + sourceSeriesId stamping as prose extraction so script-
+// derived entries survive later AI refines.
+router.post('/issues/:id/stages/:stageId/extract-canon', asyncHandler(async (req, res) => {
+  const { id, stageId } = req.params;
+  if (stageId !== 'comicScript' && stageId !== 'teleplay') {
+    throw new ServerError(
+      `Stage "${stageId}" does not support canon extraction — supported: comicScript, teleplay`,
+      { status: 400, code: 'PIPELINE_CANON_EXTRACT_BAD_STAGE' },
+    );
+  }
+  const body = validateRequest(extractCanonFromScriptSchema, req.body ?? {});
+  const issue = await issuesSvc.getIssue(id).catch((err) => { throw mapServiceError(err); });
+  const rawCorpus = (issue.stages?.[stageId]?.output || '').trim();
+  if (!rawCorpus) {
+    throw new ServerError(
+      `Cannot extract canon — issue's ${stageId} stage is empty`,
+      { status: 400, code: 'PIPELINE_CANON_EXTRACT_NO_CORPUS' },
+    );
+  }
+  const truncated = rawCorpus.length > EXTRACT_CANON_CORPUS_MAX;
+  const corpus = truncated ? rawCorpus.slice(0, EXTRACT_CANON_CORPUS_MAX) : rawCorpus;
+  if (truncated) {
+    console.warn(`⚠️ Pipeline canon extract — issue=${id.slice(0, 8)} stage=${stageId} corpus truncated ${rawCorpus.length}→${EXTRACT_CANON_CORPUS_MAX}`);
+  }
+  const series = await seriesSvc.getSeries(issue.seriesId).catch((err) => { throw mapServiceError(err); });
+  if (!series.universeId) {
+    throw new ServerError(
+      `Cannot extract canon — series has no linked universe. Link a universe in the series settings first.`,
+      { status: 400, code: 'PIPELINE_CANON_EXTRACT_NO_UNIVERSE' },
+    );
+  }
+  const result = await extractCanonFromProse(series.universeId, {
+    corpus,
+    // Fall back to the series' configured LLM when the client doesn't pass
+    // an explicit override — matches every other Pipeline LLM action
+    // (e.g. storyboards/extract-scenes) so a manual extract honors the
+    // provider picked in the series header instead of the global default.
+    providerOverride: body.providerOverride || series.llm?.provider || undefined,
+    parallel: true,
+    autoLock: true,
+    sourceSeriesId: series.id,
+  }).catch((err) => { throw mapServiceError(err); });
+
+  res.json({
+    universe: result.universe,
+    extracted: countExtractedCanon(result.results),
+    sourceStage: stageId,
+    truncated,
   });
 }));
 
