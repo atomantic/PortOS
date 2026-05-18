@@ -41,12 +41,22 @@ import {
 
 // Legacy records (pre-proof/final split) carry `imageJobId`/`filename` at
 // the record root; surface those as the proof slot so the UI keeps showing
-// the old render until the user re-renders into the new shape.
+// the old render until the user re-renders into the new shape. Carry
+// `rec.prompt` onto the synthesized slot so the lightbox prompt (and any
+// downstream slot.prompt readers) still see the original generation prompt
+// before the server migrates the record into the new shape on the next
+// render — `comicPagesFilenameHook` propagates `record.prompt` /
+// `page.prompt` into the new slot via `legacySlotRecord` for the persisted
+// migration; this mirror keeps the unmigrated client view consistent.
 const getProofSlot = (rec) => {
   if (!rec) return null;
   if (rec.proofImage?.jobId || rec.proofImage?.filename) return rec.proofImage;
   if (rec.imageJobId || rec.filename) {
-    return { jobId: rec.imageJobId || null, filename: rec.filename || null };
+    return {
+      jobId: rec.imageJobId || null,
+      filename: rec.filename || null,
+      prompt: rec.prompt || null,
+    };
   }
   return null;
 };
@@ -177,13 +187,17 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
     if (!jobId || !filename) return;
     setFilenameByJobId((prev) => prev[jobId] === filename ? prev : { ...prev, [jobId]: filename });
   }, []);
-  const buildPageItem = useCallback((pageIndex, page, filename) => ({
+  // Prompt lives on the render slot (proofImage/finalImage), not at the page
+  // root — the server stamps the prompt it sent to the image-gen backend on
+  // each slot as it's enqueued. Read from there so the lightbox surfaces the
+  // actual generation prompt (and "Refine Prompt" has something to refine).
+  const buildPageItem = useCallback((pageIndex, slot, filename) => ({
     key: `comic-page:${filename}`,
     kind: 'image',
     filename,
     previewUrl: `/data/images/${filename}`,
     downloadUrl: `/data/images/${filename}`,
-    prompt: page?.prompt || `Page ${pageIndex + 1}`,
+    prompt: slot?.prompt || `Page ${pageIndex + 1}`,
   }), []);
   const previewItems = useMemo(() => {
     const pageList = Array.isArray(comicPages.pages) ? comicPages.pages : [];
@@ -196,14 +210,25 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
         if (!slot?.jobId) return null;
         const filename = slot.filename || filenameByJobId[slot.jobId];
         if (!filename) return null;
-        return buildPageItem(idx, p, filename);
+        return buildPageItem(idx, slot, filename);
       })
       .filter(Boolean);
   }, [comicPages.pages, filenameByJobId, buildPageItem]);
   const openPreview = useCallback((pageIndex, filename, page) => {
     if (!filename) return;
-    setPreview(buildPageItem(pageIndex, page, filename));
-  }, [buildPageItem]);
+    // Proof and final renders carry their own prompts (the user can re-render
+    // one without the other), so match the clicked filename against each slot
+    // to surface the prompt that produced *this* image. A slot's filename can
+    // still be null while the job is in-flight, so also consult the
+    // jobId→filename map the thumbs report up via onFilenameKnown.
+    const finalSlot = getFinalSlot(page);
+    const proofSlot = getProofSlot(page);
+    const matches = (slot) => !!slot && (
+      slot.filename === filename || (slot.jobId && filenameByJobId[slot.jobId] === filename)
+    );
+    const slot = [finalSlot, proofSlot].find(matches) || getPreferredSlot(page);
+    setPreview(buildPageItem(pageIndex, slot, filename));
+  }, [buildPageItem, filenameByJobId]);
   const availableBackends = useMemo(
     () => deriveAvailableBackends(sysSettings, { excludeExternal: true }),
     [sysSettings],
