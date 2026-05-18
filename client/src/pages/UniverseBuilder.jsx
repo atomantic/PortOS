@@ -18,7 +18,7 @@ import {
 import toast from '../components/ui/Toast';
 import {
   listUniverses, getUniverse, createUniverse, updateUniverse, deleteUniverse, expandUniverse,
-  generateCategoryVariations, promoteVariationToCanon,
+  generateCategoryVariations, promoteVariationToCanon, autoSortBuckets,
   renderWorld, listWorldRuns, getProviders, refineWorldPrompts, WORLD_CATEGORIES,
   WORLD_CATEGORY_KEY_MAX, COMPOSITE_PROMPT_MAX, WORLD_LOGLINE_MAX,
   WORLD_PREMISE_MAX, WORLD_STYLE_NOTES_MAX, WORLD_LOCKABLE_FIELDS,
@@ -566,6 +566,8 @@ export default function UniverseBuilder() {
   // first's canon append.
   const [promoting, setPromoting] = useState(false);
   const promotingRef = useRef(false);
+  const [autoSorting, setAutoSorting] = useState(false);
+  const autoSortingRef = useRef(false);
   const [newCategoryName, setNewCategoryName] = useState('');
   // True when handleExpand merged new canon entries into the draft that the
   // server doesn't yet know about (auto-save failed or hasn't run). On the
@@ -1387,6 +1389,60 @@ export default function UniverseBuilder() {
       toast.success(`Moved "${humanizeCategory(bucket)}" to ${trunk.label}`);
     }
   };
+  // Auto-sort with AI — one LLM call classifies every Other-tab bucket into
+  // characters/settings/objects. Each bucket's `kind` is reassigned via a
+  // single atomic patch server-side so the universe ends up consistent or
+  // unchanged. Renames the LLM suggests are surfaced in the toast but not
+  // auto-applied (the user can rename manually if they want it).
+  const handleAutoSort = async () => {
+    if (!selectedId) {
+      toast.error('Save the universe first — auto-sort needs the persisted record');
+      return;
+    }
+    if (autoSortingRef.current) return;
+    autoSortingRef.current = true;
+    setAutoSorting(true);
+    const capturedId = selectedId;
+    const toastId = toast.loading('Auto-sorting buckets with AI…');
+    const result = await autoSortBuckets(selectedId, {
+      providerId: draft.llm?.provider || undefined,
+      model: draft.llm?.model || undefined,
+    }, { silent: true }).catch((e) => {
+      toast.dismiss(toastId);
+      toast.error(`Auto-sort failed: ${e.message}`);
+      return null;
+    });
+    if (mountedRef.current) {
+      autoSortingRef.current = false;
+      setAutoSorting(false);
+    }
+    if (!result?.universe) return;
+    const updated = result.universe;
+    setWorlds((prev) => {
+      const without = prev.filter((w) => w.id !== updated.id);
+      return [updated, ...without];
+    });
+    if (!mountedRef.current || capturedId !== selectedId) return;
+    // Only the categories changed server-side — preserve other in-progress
+    // draft edits the user might have made while the LLM call was in flight.
+    setDraft((d) => ({
+      ...d,
+      categories: updated.categories,
+      schemaVersion: updated.schemaVersion,
+      updatedAt: updated.updatedAt,
+    }));
+    toast.dismiss(toastId);
+    const sortedCount = result.results?.length || 0;
+    const renames = (result.results || []).filter((r) => r.suggestedKey);
+    const summary = sortedCount
+      ? `Sorted ${sortedCount} bucket${sortedCount === 1 ? '' : 's'} into canon trunks`
+      : 'No buckets were classified';
+    const renameHint = renames.length
+      ? ` — ${renames.length} rename suggestion${renames.length === 1 ? '' : 's'} available`
+      : '';
+    toast.success(`${summary}${renameHint}`);
+  };
+
   const handleGenerateInCategory = async (cat, count) => {
     const current = draft.categories?.[cat]?.variations || [];
     const existingLabels = current.map((v) => v.label).filter(Boolean);
@@ -1735,9 +1791,8 @@ export default function UniverseBuilder() {
             onBulkRenderBucket={(bucket) => runRender({ promptMode: 'variations', selection: { [bucket]: 'all' } })}
             onRenderVariation={(bucket, v) => runRender({ promptMode: 'variations', selection: { [bucket]: [v.label] } })}
             onAssignBucketKind={assignBucketKind}
-            onAutoSort={() => {
-              toast('Auto-sort with AI is wired in a follow-up. Re-run "Generate From Idea" — Phase B\'s expand call now classifies buckets into the right trunk.', { icon: 'ℹ️' });
-            }}
+            onAutoSort={handleAutoSort}
+            autoSorting={autoSorting}
           />
         )}
 
@@ -3011,6 +3066,7 @@ function OtherTab({
   draft, buckets, activeBucket, setBucket, canRender, canPromote,
   onUpdateBucket, onRemoveBucket, onGenerateInBucket, onPromoteVariation,
   onBulkRenderBucket, onRenderVariation, onAssignBucketKind, onAutoSort,
+  autoSorting = false,
 }) {
   return (
     <>
@@ -3024,16 +3080,18 @@ function OtherTab({
           <button
             type="button"
             onClick={onAutoSort}
-            className="text-xs px-2 py-1.5 bg-port-accent/15 hover:bg-port-accent/25 text-port-accent rounded flex items-center gap-1 min-h-[32px]"
-            title="Auto-sort with AI — shows guidance until the dedicated endpoint lands (tracked in PLAN.md)"
+            disabled={autoSorting}
+            className="text-xs px-2 py-1.5 bg-port-accent/15 hover:bg-port-accent/25 disabled:opacity-50 text-port-accent rounded flex items-center gap-1 min-h-[32px]"
+            title="Auto-sort with AI — sends every Other-tab bucket to the active LLM and assigns each to characters / settings / objects"
           >
-            <Wand2 size={12} /> Auto-sort with AI
+            {autoSorting ? <Loader2 size={12} className="animate-spin" /> : <Wand2 size={12} />}
+            {autoSorting ? 'Sorting…' : 'Auto-sort with AI'}
           </button>
         </div>
         <p className="text-[11px] text-gray-500">
           These buckets aren't tagged as Cast / Places / Objects yet — they were
           either added manually or imported from a pre-Phase-A universe. Auto-sort
-          will classify each bucket into the right trunk with a meaningful name.
+          asks the active LLM to classify every bucket into the right trunk.
         </p>
       </section>
 

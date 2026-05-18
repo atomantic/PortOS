@@ -208,3 +208,13 @@ export const promoteVariationToCanon = (universeId, {
     body: JSON.stringify({ category, label, targetKind, providerId, model }),
     ...options,
   });
+
+// Bulk-classify every `kind: 'other'` bucket on a universe. Server returns
+// `{ universe, results: [{ sourceKey, kind, suggestedKey? }], llm, runId }`.
+// Pass `{ silent: true }` when the caller owns its own error toast.
+export const autoSortBuckets = (universeId, { providerId, model } = {}, options = {}) =>
+  request(`/universe-builder/${encodeURIComponent(universeId)}/auto-sort`, {
+    method: 'POST',
+    body: JSON.stringify({ providerId, model }),
+    ...options,
+  });

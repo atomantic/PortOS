@@ -40,6 +40,19 @@ vi.mock('../services/universeBuilderPromote.js', async () => {
   };
 });
 
+// Stub the auto-sort service — same shape as promote, just returns a mock
+// classification batch so the route's Zod schema + error mapping are
+// exercised without shelling out to a real LLM.
+const autoSortOtherBucketsMock = vi.fn(async (universeId, body = {}) => ({
+  universe: { id: universeId, categories: {} },
+  results: [{ sourceKey: 'colonies', kind: 'settings', suggestedKey: null }],
+  llm: { provider: 'mock', model: body.model || null },
+  runId: 'mock-autosort-run',
+}));
+vi.mock('../services/universeBuilderAutoSort.js', () => ({
+  autoSortOtherBuckets: (...args) => autoSortOtherBucketsMock(...args),
+}));
+
 // Stub the LLM expander so the route test doesn't shell out to a real provider.
 vi.mock('../services/universeBuilderExpand.js', () => ({
   expandWorldTemplate: vi.fn(async ({ starterPrompt }) => ({
@@ -591,6 +604,59 @@ describe('universe-builder routes', () => {
         .send({ category: 'nonexistent', label: 'A' });
       expect(res.status).toBe(404);
       expect(res.body.code).toBe('UNIVERSE_PROMOTE_NO_CATEGORY');
+    });
+  });
+
+  describe('POST /:id/auto-sort', () => {
+    beforeEach(() => {
+      autoSortOtherBucketsMock.mockClear();
+    });
+
+    it('forwards the body to the service and returns the result', async () => {
+      const app = buildApp();
+      const res = await request(app)
+        .post('/api/universe-builder/some-id/auto-sort')
+        .send({ providerId: 'p1', model: 'm1' });
+      expect(res.status).toBe(200);
+      expect(autoSortOtherBucketsMock).toHaveBeenCalledWith('some-id', expect.objectContaining({
+        providerId: 'p1',
+        model: 'm1',
+      }));
+      expect(res.body.results[0].kind).toBe('settings');
+      expect(res.body.runId).toBe('mock-autosort-run');
+    });
+
+    it('accepts an empty body (providerId + model are optional)', async () => {
+      const app = buildApp();
+      const res = await request(app)
+        .post('/api/universe-builder/some-id/auto-sort')
+        .send({});
+      expect(res.status).toBe(200);
+      expect(autoSortOtherBucketsMock).toHaveBeenCalled();
+    });
+
+    it('400s when providerId exceeds the schema cap (Zod schema)', async () => {
+      const app = buildApp();
+      const res = await request(app)
+        .post('/api/universe-builder/some-id/auto-sort')
+        .send({ providerId: 'a'.repeat(100) });
+      expect(res.status).toBe(400);
+      expect(autoSortOtherBucketsMock).not.toHaveBeenCalled();
+    });
+
+    it('maps service ServerError status onto the HTTP response', async () => {
+      autoSortOtherBucketsMock.mockRejectedValueOnce(
+        Object.assign(new Error('No provider'), {
+          status: 503,
+          code: 'UNIVERSE_AUTOSORT_NO_PROVIDER',
+        }),
+      );
+      const app = buildApp();
+      const res = await request(app)
+        .post('/api/universe-builder/some-id/auto-sort')
+        .send({});
+      expect(res.status).toBe(503);
+      expect(res.body.code).toBe('UNIVERSE_AUTOSORT_NO_PROVIDER');
     });
   });
 });
