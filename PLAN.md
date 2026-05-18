@@ -45,7 +45,6 @@ _Nothing currently parked — pick the next item from the Backlog._
 ### Pipeline continuity / approval
 
 - [ ] [extraction-after-comicscript-teleplay-stages] **Extraction after comicScript / teleplay stages.** Decide whether to also run extraction post-script or accept the gap for minor characters introduced only at script time.
-- [ ] [solidify-character-descriptions-before-visual] **Solidify character descriptions before visual render.** "Solidify characters" action in the bible sidebar runs an LLM pass synthesizing one canonical `physicalDescription` from all accumulated evidence.
 - [ ] [resolve-issues-inherits-verify-gaps-verify-the] **Resolve-issues inherits verify gaps.** Verify the resolve prompt USES episode synopses when patching the arc.
 - [ ] [per-season-and-per-field-locks-extend-arc-lock] **Per-season + per-field locks.** Arc-level lock shipped (`LOCKABLE_STAGES = ['arc']` in `server/services/pipeline/series.js:59`, enforced at `server/services/pipeline/arcPlanner.js:231`); extend to seasons and per-field. Gate bulk runners (`bulkReassignSeason` at `server/services/pipeline/issues.js:418` has no lock check today). Surface a stage-progress strip in `client/src/pages/PipelineIssue.jsx`.
 - [ ] [pipeline-idea-stage-character-detail-plumbing] **Plumb character `physicalDescription`/`personality`/`background` into idea-stage prompt.** Today `data.sample/prompts/stages/pipeline-idea-expansion.md:16` iterates `{{#series.characters}}` with `name`/`description` only — richer bible fields are dropped.
