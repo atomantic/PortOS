@@ -157,9 +157,10 @@ const SHIPPED_PROMPT_OLD_MD5 = {
   // volume-verify: c6ea28… (pre-005) and 03f3c8… (post-005, pre-019) both
   // auto-updatable to the post-019 (worldCanonText) hash.
   'pipeline-volume-verify.md':  ['c6ea28e972ad6e229bafb2d602b4dda3', '03f3c874cb80e1c98abcf03168fa7a92'],
-  // arc-resolve: 87bc5c… (pre-005) and a8677b… (post-005, pre-019) both
-  // auto-updatable to the post-019 (worldCanonText) hash.
-  'pipeline-arc-resolve.md':    ['87bc5c01f1a8a97b681727a38b05edc6', 'a8677bbe1eb38f871fb152a5b0fec7c6'],
+  // arc-resolve: 87bc5c… (pre-005), a8677b… (post-005, pre-019), and
+  // 8e348f… (post-019, pre-023) all auto-updatable to the post-023
+  // (per-episode-synopsis anchor) hash.
+  'pipeline-arc-resolve.md':    ['87bc5c01f1a8a97b681727a38b05edc6', 'a8677bbe1eb38f871fb152a5b0fec7c6', '8e348f3d1894382889f9f0ee7d5c6792'],
   // Shot decomposition additions (migration 006).
   'pipeline-extract-scenes.md':  '59fa5ee305ce53d91eb15224d8b546d3',
   // setting→place rename, migration 022. Two known auto-updatable hashes:
@@ -188,7 +189,7 @@ const SHIPPED_PROMPT_NEW_MD5 = {
   'pipeline-arc-overview.md':   '0a1f6ffa6908522e3690c5e9e53a6ee0',
   'pipeline-arc-verify.md':     '36aa70cdfc25d7549573a4d556e7702c',
   'pipeline-volume-verify.md':  '49458d36700cb94e34806d536ffe2940',
-  'pipeline-arc-resolve.md':    '8e348f3d1894382889f9f0ee7d5c6792',
+  'pipeline-arc-resolve.md':    '5b340885c6e8f8afc63424d6b5bc7eb7',
   'pipeline-extract-scenes.md': 'c51fb208568d0d903eb43b437478b0ba',
   'writers-room-places.md':     'a7f68e51dd6b4421d20f5bd9d855d9b4',
   'cos-agent-briefing.md':      'dccb392a43cbd3dac900fee12c31619a',

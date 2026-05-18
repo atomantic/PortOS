@@ -82,13 +82,14 @@ The verification pass flagged these problems. Resolve **every** one of them in y
 
 ## How to resolve
 
-1. **Read each finding's `problem` + `suggestion`.** The suggestion is a hint, not gospel — feel free to take a different path if it cleans up the arc better, but the resulting arc MUST make the finding go away.
-2. **Volume-count-vs-weight mismatches** (the most common finding) — usually the right fix is to **trim or expand a volume's `synopsis`** so it matches its `episodeCountTarget`, OR adjust `episodeCountTarget` toward the structural recommendation. Don't split a volume into two unless the structural recommendation calls for more volumes than currently exist.
-3. **Character contradictions** — adjust the offending volume's `synopsis` (or the protagonist arc) so the contradiction disappears. Do not silently delete the contradicting beat — replace it with one that preserves the dramatic intent.
-4. **Dropped subplots** — add the missing payoff to a later volume's `synopsis` or `endingHook`, OR remove the dangling setup from the earlier volume if the payoff would derail the arc.
-5. **Unresolved finale hooks / theme drift** — surface the missing theme or arc payoff in the final volume's `synopsis`.
-6. **Preserve volume `id`** for every existing volume you keep. Only assign no `id` to brand-new volumes you are adding. If you remove a volume, simply omit it from the response — the server will reconcile child issues separately.
-7. **Do NOT edit per-episode (issue) records.** Those are the user's hand-authored scripts. If a finding only resolves by deleting issues, write that in the `notes` field instead of doing it.
+1. **Anchor every edit in the per-episode `synopsis` entries.** Each volume's `episodes[]` array carries the user's authored episode lineup — those `synopsis` strings are the ground truth for what actually happens. Volume-level `synopsis` rewrites must summarize what the child episodes describe; don't invent beats no episode synopsis covers, and don't paper over contradictions that originate at the episode level. When a finding cites an episode (e.g. `season:2 / episode:5`), the fix usually means re-framing the volume around what that episode already shows — not contradicting it. Empty/null episode synopses mean the user hasn't drafted that issue yet; treat that volume as load-bearing on its own `synopsis` only.
+2. **Read each finding's `problem` + `suggestion`.** The suggestion is a hint, not gospel — feel free to take a different path if it cleans up the arc better, but the resulting arc MUST make the finding go away.
+3. **Volume-count-vs-weight mismatches** (the most common finding) — usually the right fix is to **trim or expand a volume's `synopsis`** so it matches its `episodeCountTarget`, OR adjust `episodeCountTarget` toward the structural recommendation. Don't split a volume into two unless the structural recommendation calls for more volumes than currently exist.
+4. **Character contradictions** — adjust the offending volume's `synopsis` (or the protagonist arc) so the contradiction disappears. Do not silently delete the contradicting beat — replace it with one that preserves the dramatic intent.
+5. **Dropped subplots** — add the missing payoff to a later volume's `synopsis` or `endingHook`, OR remove the dangling setup from the earlier volume if the payoff would derail the arc.
+6. **Unresolved finale hooks / theme drift** — surface the missing theme or arc payoff in the final volume's `synopsis`.
+7. **Preserve volume `id`** for every existing volume you keep. Only assign no `id` to brand-new volumes you are adding. If you remove a volume, simply omit it from the response — the server will reconcile child issues separately.
+8. **Do NOT edit per-episode (issue) records.** Those are the user's hand-authored scripts. If a finding only resolves by deleting issues, write that in the `notes` field instead of doing it.
 
 ## Output contract
 

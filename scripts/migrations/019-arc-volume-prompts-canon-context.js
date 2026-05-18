@@ -62,14 +62,21 @@ export const ACCEPTED_OLD_MD5 = {
   ],
 };
 
-// New shipped hashes — what data.sample carries post-migration.
+// New shipped hashes — tracks the LIVE `data.sample` hash, not strictly the
+// post-019 commit-time hash. Later migrations that further evolve any of
+// these files (e.g. migration 023 amended `pipeline-arc-resolve.md`) must
+// also bump the corresponding entry here so that:
+//   - fresh installs whose `data/` was seeded from the latest sample report
+//     `alreadyCurrent` instead of a misleading "customized" warning, and
+//   - the drift-catch test below stays in lock-step with the live sample.
+// Each entry comment records who last advanced it.
 // Exported so the test suite can import and assert against these tables
 // directly rather than maintaining local copies.
 export const NEW_SHIPPED_MD5 = {
-  'pipeline-arc-overview.md':   '0a1f6ffa6908522e3690c5e9e53a6ee0',
-  'pipeline-arc-verify.md':     '36aa70cdfc25d7549573a4d556e7702c',
-  'pipeline-arc-resolve.md':    '8e348f3d1894382889f9f0ee7d5c6792',
-  'pipeline-volume-verify.md':  '49458d36700cb94e34806d536ffe2940',
+  'pipeline-arc-overview.md':   '0a1f6ffa6908522e3690c5e9e53a6ee0', // post-019
+  'pipeline-arc-verify.md':     '36aa70cdfc25d7549573a4d556e7702c', // post-019
+  'pipeline-arc-resolve.md':    '5b340885c6e8f8afc63424d6b5bc7eb7', // post-023 (episode-synopsis anchor)
+  'pipeline-volume-verify.md':  '49458d36700cb94e34806d536ffe2940', // post-019
 };
 
 // Pure core — exposed for unit tests so the OLD→NEW upgrade branch can be
