@@ -8,9 +8,10 @@ const mockSeriesList = [];
 const mockIssuesBySeries = new Map();
 
 vi.mock('./universeBuilder.js', () => ({
+  ERR_NOT_FOUND: 'NOT_FOUND',
   getUniverse: vi.fn(async (id) => {
     const u = mockUniverses.get(id);
-    if (!u) throw new Error(`Universe not found: ${id}`);
+    if (!u) throw Object.assign(new Error(`Universe not found: ${id}`), { code: 'NOT_FOUND' });
     return u;
   }),
 }));
@@ -23,6 +24,7 @@ vi.mock('./pipeline/issues.js', () => ({
   listIssues: vi.fn(async ({ seriesId }) => mockIssuesBySeries.get(seriesId) || []),
 }));
 
+const { listIssues } = await import('./pipeline/issues.js');
 const { getUniverseCanonUsage, listLinkedSeriesNames } = await import('./canonUsage.js');
 
 beforeEach(() => {
@@ -78,15 +80,18 @@ describe('canonUsage — listLinkedSeriesNames', () => {
       { id: 'ser-c', name: 'Gamma', universeId: 'uni-other' },
     );
     // Seed issues to prove the thin variant skips the prose scan entirely —
-    // if it accidentally routed through canon-usage these would show up in
-    // the per-entry tally (which doesn't exist on this return shape).
+    // the explicit listIssues assertion below is what locks that in; the
+    // seeded data just ensures the assertion would catch a regression.
     mockIssuesBySeries.set('ser-a', [{ id: 'iss-1', stages: { prose: { output: 'long prose' } } }]);
 
+    listIssues.mockClear();
     const result = await listLinkedSeriesNames('uni-1');
     expect(result).toEqual([
       { id: 'ser-a', name: 'Alpha' },
       { id: 'ser-b', name: 'Beta' },
     ]);
+    // The thin endpoint must NOT scan issues — that's the whole point.
+    expect(listIssues).not.toHaveBeenCalled();
   });
 
   it('returns an empty array when no series link to the universe', async () => {

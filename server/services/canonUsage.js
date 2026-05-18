@@ -4,7 +4,7 @@
 // same pattern the comic-page renderer uses to decide which characters to
 // cite in the diffusion prompt.
 
-import { getUniverse } from './universeBuilder.js';
+import { getUniverse, ERR_NOT_FOUND } from './universeBuilder.js';
 import { listSeries } from './pipeline/series.js';
 import { listIssues } from './pipeline/issues.js';
 import {
@@ -44,8 +44,13 @@ function corpusForIssue(issue) {
  */
 export async function listLinkedSeriesNames(universeId) {
   // Validate the universe exists so 404s line up with the heavier endpoint.
+  // Only translate the explicit not-found condition to 404; let I/O / parse
+  // errors bubble so they don't masquerade as "not found".
   await getUniverse(universeId).catch((err) => {
-    throw new ServerError(err.message || 'Universe not found', { status: 404, code: 'UNIVERSE_NOT_FOUND' });
+    if (err?.code === ERR_NOT_FOUND) {
+      throw new ServerError('Universe not found', { status: 404, code: 'UNIVERSE_NOT_FOUND' });
+    }
+    throw err;
   });
   const allSeries = await listSeries();
   return allSeries
