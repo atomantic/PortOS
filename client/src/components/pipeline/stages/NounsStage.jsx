@@ -159,7 +159,10 @@ export default function NounsStage({ issue, series }) {
   // issue prose scan that /canon-usage also runs.
   const [seriesNameMap, setSeriesNameMap] = useState(null);
   useEffect(() => {
-    if (!series?.universeId) { setSeriesNameMap(null); return; }
+    // Reset immediately so chips fall back to id-tooltip form while loading
+    // rather than briefly rendering names from the previous universe.
+    setSeriesNameMap(null);
+    if (!series?.universeId) return;
     let cancelled = false;
     getUniverseSeriesNames(series.universeId).then((list) => {
       if (cancelled || !mountedRef.current) return;
