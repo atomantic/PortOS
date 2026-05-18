@@ -19,7 +19,7 @@ import { validateRequest } from '../lib/validation.js';
 import * as svc from '../services/universeBuilder.js';
 import * as canonSvc from '../services/universeCanon.js';
 import { BIBLE_KINDS, BIBLE_LIMITS } from '../lib/storyBible.js';
-import { getUniverseCanonUsage } from '../services/canonUsage.js';
+import { getUniverseCanonUsage, listLinkedSeriesNames } from '../services/canonUsage.js';
 import { expandWorldTemplate, generateCategoryVariations } from '../services/universeBuilderExpand.js';
 import { refineWorldPrompts } from '../services/universeBuilderRefine.js';
 import { promoteVariationToCanon, VALID_TARGET_KINDS } from '../services/universeBuilderPromote.js';
@@ -609,6 +609,15 @@ router.post('/:id/characters/differentiate-cast', asyncHandler(async (req, res) 
 // see crossover/cameo footprint at a glance on the Universe Canon page.
 router.get('/:id/canon-usage', asyncHandler(async (req, res) => {
   const result = await getUniverseCanonUsage(req.params.id)
+    .catch((err) => { throw mapServiceError(err); });
+  res.json(result);
+}));
+
+// Thin lookup: linked-series id/name pairs for callers (e.g. NounsStage) that
+// only need to label canon-card "from <series>" chips. Skips the O(series ×
+// issues × matchers) prose scan that /canon-usage runs.
+router.get('/:id/series-names', asyncHandler(async (req, res) => {
+  const result = await listLinkedSeriesNames(req.params.id)
     .catch((err) => { throw mapServiceError(err); });
   res.json(result);
 }));

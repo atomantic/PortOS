@@ -36,6 +36,24 @@ function corpusForIssue(issue) {
 }
 
 /**
+ * Thin variant of getUniverseCanonUsage that only returns the linked-series
+ * id/name pairs — no per-issue prose scan, no canon matchers. Callers that
+ * just need the seriesId → seriesName lookup (e.g. NounsStage's "from
+ * <series>" canon-card chip) should prefer this; the full cross-reference
+ * endpoint is O(series × issues × matchers).
+ */
+export async function listLinkedSeriesNames(universeId) {
+  // Validate the universe exists so 404s line up with the heavier endpoint.
+  await getUniverse(universeId).catch((err) => {
+    throw new ServerError(err.message || 'Universe not found', { status: 404, code: 'UNIVERSE_NOT_FOUND' });
+  });
+  const allSeries = await listSeries();
+  return allSeries
+    .filter((s) => s.universeId === universeId)
+    .map((s) => ({ id: s.id, name: s.name }));
+}
+
+/**
  * Return per-canon-entry usage across the universe's series.
  *
  * Shape:

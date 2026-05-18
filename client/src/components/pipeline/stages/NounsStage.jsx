@@ -22,7 +22,7 @@ import toast from '../../ui/Toast';
 import {
   getUniverse, updateUniverse,
   extractUniverseCanon, refineUniverseCharacter,
-  getUniverseCanonUsage,
+  getUniverseSeriesNames,
 } from '../../../services/apiUniverseBuilder';
 import { getSettings, updateSettings, generateImage } from '../../../services/apiSystem';
 import { listImageModels } from '../../../services/apiImageVideo';
@@ -154,15 +154,17 @@ export default function NounsStage({ issue, series }) {
   // Sibling-series name lookup for the canon-card "from <series>" chip.
   // The current series is in `series.name`; everything else (including the
   // entries that surface in the "Other series canon" details panel) needs the
-  // server-side aggregation. Failure is non-fatal — chips just fall back to
-  // the id-tooltip form.
+  // server-side lookup. Failure is non-fatal — chips just fall back to the
+  // id-tooltip form. Uses the thin /series-names endpoint to skip the per-
+  // issue prose scan that /canon-usage also runs.
   const [seriesNameMap, setSeriesNameMap] = useState(null);
   useEffect(() => {
     if (!series?.universeId) { setSeriesNameMap(null); return; }
     let cancelled = false;
-    getUniverseCanonUsage(series.universeId).then((u) => {
+    getUniverseSeriesNames(series.universeId).then((list) => {
       if (cancelled || !mountedRef.current) return;
-      setSeriesNameMap(u?.seriesNameMap || null);
+      const map = Object.fromEntries((Array.isArray(list) ? list : []).map((s) => [s.id, s.name]));
+      setSeriesNameMap(map);
     }).catch(() => { /* non-fatal */ });
     return () => { cancelled = true; };
   }, [series?.universeId, mountedRef]);

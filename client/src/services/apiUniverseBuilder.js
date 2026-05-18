@@ -186,6 +186,12 @@ export const differentiateUniverseCast = (universeId, { providerId, model } = {}
 export const getUniverseCanonUsage = (universeId) =>
   request(`/universe-builder/${encodeURIComponent(universeId)}/canon-usage`);
 
+// Thin lookup: every series that links to this universe as `[{ id, name }]`.
+// Use this when only the seriesId → seriesName mapping is needed — the full
+// /canon-usage endpoint also runs prose-matching scans across every issue.
+export const getUniverseSeriesNames = (universeId) =>
+  request(`/universe-builder/${encodeURIComponent(universeId)}/series-names`);
+
 // Toggle the `locked` flag on a single canon entry. Locked entries are
 // protected from AI rewrite paths (refine returns 409; differentiate skips
 // them at apply time; re-extract appends evidence only). `kind` must be
