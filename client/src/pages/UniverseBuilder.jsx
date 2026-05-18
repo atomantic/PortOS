@@ -1371,16 +1371,21 @@ export default function UniverseBuilder() {
     }).catch((e) => { toast.error(`Render failed: ${e.message}`); return null; });
     setRendering(false);
     if (!result) return;
-    // Stamp per-entry pending state so each variation / composite sheet row can
-    // swap its thumbnail for a MediaJobThumb spinner. Canon entries take a
-    // different render path (UniverseCanonSection's `generateImage`) so
-    // entryJobs entries with `kind: 'canon'` are intentionally ignored here.
+    // Stamp per-entry pending state so each variation row can swap its
+    // thumbnail for a MediaJobThumb spinner. Canon entries take a different
+    // render path (UniverseCanonSection's `generateImage`) and composite
+    // sheets don't yet subscribe to this map (CompositeSheetsEditor has no
+    // pending-thumb UI), so we explicitly include only `variation` kinds —
+    // otherwise sheet jobs would accumulate here forever with no consumer to
+    // clear them. When CompositeSheetsEditor grows per-row pending state,
+    // widen this filter to include 'sheet' and wire the matching cleared /
+    // completed callbacks through it.
     if (Array.isArray(result.entryJobs) && result.entryJobs.length > 0) {
       setPendingByEntryId((prev) => {
         const next = { ...prev };
         for (const { jobId, entryRef } of result.entryJobs) {
           if (!jobId || !entryRef?.id) continue;
-          if (entryRef.kind === 'canon') continue;
+          if (entryRef.kind !== 'variation') continue;
           next[entryRef.id] = jobId;
         }
         return next;
@@ -1995,6 +2000,16 @@ export default function UniverseBuilder() {
           />
         )}
       </section>
+
+      {/* Page-level lightbox for variation + composite-sheet thumb clicks.
+          UniverseCanonSection owns its own MediaPreview for canon entries
+          (which routes character reference sheets through a different
+          static prefix), so we deliberately don't include canon refs in
+          `previewItems` above — they're handled there. Mounted at the page
+          level (not inside RenderTab) so the lightbox state is in scope; it
+          renders regardless of active tab because variation thumbs in the
+          Cast / Places / Objects / Other tabs all open the same modal. */}
+      <MediaPreview preview={preview} setPreview={setPreview} items={previewItems} />
     </div>
   );
 }
@@ -2717,6 +2732,28 @@ function VariationCard({
   inFlightJobId = null, onJobCompleted = null, onJobFailed = null,
 }) {
   const locked = !!v.locked;
+  // Hooks MUST run unconditionally and in stable order — calling them after
+  // the editMode early-return below would change the hook count between
+  // display ↔ edit toggles and crash React with "Rendered more hooks than
+  // during the previous render". Subscribe to the row's in-flight job here
+  // so completion / failure callbacks fire back up to the parent (which
+  // clears pending state + appends the new filename to the variation's
+  // imageRefs[] optimistically). settledRef prevents duplicate fires under
+  // React 18 StrictMode's mount → cleanup → mount dev double-fire.
+  const { status: jobStatus, filename: jobFilename, error: jobError } = useMediaJobProgress(inFlightJobId);
+  const settledRef = useRef(null);
+  useEffect(() => {
+    if (!inFlightJobId) { settledRef.current = null; return; }
+    if (settledRef.current === inFlightJobId) return;
+    if (jobStatus === 'completed' && jobFilename) {
+      settledRef.current = inFlightJobId;
+      onJobCompleted?.(v.id, jobFilename);
+    } else if (jobStatus === 'failed' || jobStatus === 'canceled') {
+      settledRef.current = inFlightJobId;
+      onJobFailed?.(v.id, jobError || jobStatus);
+    }
+  }, [inFlightJobId, jobStatus, jobFilename, jobError, v.id, onJobCompleted, onJobFailed]);
+
   if (editMode) {
     return (
       <EntryCard
@@ -2752,26 +2789,10 @@ function VariationCard({
       ? 'Promote to canon — pick a trunk'
       : 'Promote to canon — LLM expands this variation into a full canon entry';
 
-  // Thumbnail slot is now three-state (pending / empty / completed) — see
-  // `EntryThumbSlot`. Subscribe to the row's in-flight job so we can fire the
-  // completion / failure callbacks back up to the parent (which clears
-  // pending state + appends the new filename to the variation's imageRefs[]
-  // optimistically). settledRef prevents duplicate fires under React 18
-  // StrictMode's mount → cleanup → mount dev double-fire.
+  // Thumbnail slot is three-state (pending / empty / completed) — see
+  // `EntryThumbSlot`. Hook subscription that drives this lives above the
+  // editMode early-return so the hook order stays stable across toggles.
   const renders = Array.isArray(v.imageRefs) ? v.imageRefs : [];
-  const { status: jobStatus, filename: jobFilename, error: jobError } = useMediaJobProgress(inFlightJobId);
-  const settledRef = useRef(null);
-  useEffect(() => {
-    if (!inFlightJobId) { settledRef.current = null; return; }
-    if (settledRef.current === inFlightJobId) return;
-    if (jobStatus === 'completed' && jobFilename) {
-      settledRef.current = inFlightJobId;
-      onJobCompleted?.(v.id, jobFilename);
-    } else if (jobStatus === 'failed' || jobStatus === 'canceled') {
-      settledRef.current = inFlightJobId;
-      onJobFailed?.(v.id, jobError || jobStatus);
-    }
-  }, [inFlightJobId, jobStatus, jobFilename, jobError, v.id, onJobCompleted, onJobFailed]);
   const thumbnail = (
     <EntryThumbSlot
       inFlightJobId={inFlightJobId}
@@ -3620,12 +3641,6 @@ function RenderTab({
         </section>
       )}
 
-      {/* Page-level lightbox for variation + composite-sheet thumb clicks.
-          UniverseCanonSection owns its own MediaPreview for canon entries
-          (which routes character reference sheets through a different
-          static prefix), so we deliberately don't include canon refs in
-          `previewItems` above — they're handled there. */}
-      <MediaPreview preview={preview} setPreview={setPreview} items={previewItems} />
     </>
   );
 }
