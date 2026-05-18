@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, beforeAll, afterAll, vi } from 'vitest';
 import express from 'express';
 import { createServer } from 'http';
-import { mkdtemp, rm, readdir, readFile } from 'fs/promises';
+import { mkdtemp, rm, readdir, readFile, unlink } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { errorMiddleware } from '../lib/errorHandler.js';
@@ -122,17 +122,25 @@ async function postMultipart(app, path, parts) {
 describe('POST /api/image-gen/generate — multipart reference-image packing', () => {
   let app;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     app = express();
     app.use(express.json());
     app.use('/api/image-gen', imageGenRoutes);
     app.use(errorMiddleware);
     vi.clearAllMocks();
+    // Empty both sandbox dirs so each test's file-presence assertions reflect
+    // ONLY that test's uploads — leftover ref-* files from prior tests would
+    // make the "gate rejects before copy" test see stale data.
+    for (const dir of [imagesSandbox, refsSandbox]) {
+      const existing = await readdir(dir).catch(() => []);
+      await Promise.all(existing.map((f) => unlink(join(dir, f)).catch(() => {})));
+    }
   });
 
   it('packs populated reference slots into referenceImagePaths in submit order with parallel strengths', async () => {
     const res = await postMultipart(app, '/api/image-gen/generate', [
       { name: 'prompt', value: 'multi-ref test' },
+      { name: 'modelId', value: 'flux2-klein-4b' },
       { name: 'referenceImage1', filename: 'a.png', contentType: 'image/png', value: PNG_FIXTURE },
       { name: 'referenceImage2', filename: 'b.png', contentType: 'image/png', value: PNG_FIXTURE },
       { name: 'referenceStrengths', value: '0.8' },
@@ -165,6 +173,7 @@ describe('POST /api/image-gen/generate — multipart reference-image packing', (
   it('packs only the filled slots (gaps in the slot numbering collapse to a packed array)', async () => {
     const res = await postMultipart(app, '/api/image-gen/generate', [
       { name: 'prompt', value: 'sparse multi-ref' },
+      { name: 'modelId', value: 'flux2-klein-4b' },
       // Slot 1 empty, slots 2 + 4 filled, slot 3 empty.
       { name: 'referenceImage2', filename: 'b.png', contentType: 'image/png', value: PNG_FIXTURE },
       { name: 'referenceImage4', filename: 'd.png', contentType: 'image/png', value: PNG_FIXTURE },
@@ -182,6 +191,7 @@ describe('POST /api/image-gen/generate — multipart reference-image packing', (
   it('defaults missing strengths to 1.0 (full influence)', async () => {
     const res = await postMultipart(app, '/api/image-gen/generate', [
       { name: 'prompt', value: 'no-strengths multi-ref' },
+      { name: 'modelId', value: 'flux2-klein-4b' },
       { name: 'referenceImage1', filename: 'a.png', contentType: 'image/png', value: PNG_FIXTURE },
       // No referenceStrengths sent.
     ]);
@@ -190,5 +200,22 @@ describe('POST /api/image-gen/generate — multipart reference-image packing', (
     const params = enqueueJob.mock.calls[0][0].params;
     expect(params.referenceImagePaths).toHaveLength(1);
     expect(params.referenceImageStrengths).toEqual([1.0]);
+  });
+
+  it('rejects refs uploaded for a non-FLUX.2 model before any file is copied', async () => {
+    const res = await postMultipart(app, '/api/image-gen/generate', [
+      { name: 'prompt', value: 'wrong-model ref' },
+      // `dev` is the default mflux Flux.1 model — NOT FLUX.2.
+      { name: 'modelId', value: 'dev' },
+      { name: 'referenceImage1', filename: 'a.png', contentType: 'image/png', value: PNG_FIXTURE },
+    ]);
+
+    expect(res.status).toBe(400);
+    expect(res.body.error || res.body).toMatch(/FLUX\.2/i);
+    expect(enqueueJob).not.toHaveBeenCalled();
+    // The upload was never persisted to PATHS.imageRefs (no orphan files left
+    // behind by a request the route already knows it can't honor).
+    const refDirContents = await readdir(refsSandbox).catch(() => []);
+    expect(refDirContents.filter((f) => f.startsWith('ref-'))).toHaveLength(0);
   });
 });

@@ -286,8 +286,18 @@ export async function generateImage({ pythonPath, prompt, negativePrompt = '', m
   const validInitImagePath = (initImagePath && typeof initImagePath === 'string')
     ? resolveGalleryImage(initImagePath)
     : null;
+  // Clamp 0..1 with a finite-fallback — Math.max/min preserve NaN, so a
+  // corrupt sidecar value like Number('bad') would slip through and end up
+  // serialized into metadata / the CLI flag. `null` here means "no strength
+  // sent" (init-image), which the args builder already gates on; for refs
+  // (below) we fall back to 1.0 (full influence).
+  const clampStrength01 = (raw, fallback) => {
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return fallback;
+    return Math.max(0, Math.min(1, n));
+  };
   const validInitImageStrength = validInitImagePath && initImageStrength != null
-    ? Math.max(0, Math.min(1, Number(initImageStrength)))
+    ? clampStrength01(initImageStrength, null)
     : null;
   // Multi-reference: re-anchor each path through resolveImageRef so a sidecar
   // replay can't sneak a path outside PATHS.imageRefs into the runner. Pair
@@ -300,7 +310,7 @@ export async function generateImage({ pythonPath, prompt, negativePrompt = '', m
       const resolved = typeof p === 'string' ? resolveImageRef(p) : null;
       if (!resolved) return null;
       const rawStrength = referenceImageStrengths?.[i];
-      const strength = rawStrength != null ? Math.max(0, Math.min(1, Number(rawStrength))) : 1.0;
+      const strength = rawStrength != null ? clampStrength01(rawStrength, 1.0) : 1.0;
       return { path: resolved, strength };
     })
     .filter(Boolean);

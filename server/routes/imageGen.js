@@ -88,9 +88,9 @@ const MIME_TO_EXT = { 'image/png': '.png', 'image/jpeg': '.jpg', 'image/webp': '
 // The legacy single `initImage` upload (mflux i2i) stays on its own slot so a
 // FLUX.2 multi-ref upload and an mflux i2i upload don't collide.
 const REFERENCE_IMAGE_FIELDS = ['referenceImage1', 'referenceImage2', 'referenceImage3', 'referenceImage4'];
-const INIT_IMAGE_UPLOAD_FIELDS = ['initImage', ...REFERENCE_IMAGE_FIELDS];
+const IMAGE_UPLOAD_FIELDS = ['initImage', ...REFERENCE_IMAGE_FIELDS];
 
-const initImageUpload = optionalUploadFields(INIT_IMAGE_UPLOAD_FIELDS, {
+const imageGenUploads = optionalUploadFields(IMAGE_UPLOAD_FIELDS, {
   limits: { fileSize: 20 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => cb(null, ACCEPTED_INIT_IMAGE_MIME.has((file.mimetype || '').toLowerCase())),
 });
@@ -147,7 +147,7 @@ const queuedImageResponse = ({ jobId, position, status, mode, model }) => ({
   position,
 });
 
-router.post('/generate', initImageUpload, asyncHandler(async (req, res) => {
+router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
   const data = validateRequest(generateSchema, coerceFormFields(req.body));
   // Resolve init image source: uploaded file > gallery filename. The local
   // service double-checks that the path stays under PATHS.images.
@@ -165,6 +165,22 @@ router.post('/generate', initImageUpload, asyncHandler(async (req, res) => {
     .map((field) => req.files?.[field])
     .filter(Boolean)
     .map((upload, packedIndex) => ({ upload, strength: data.referenceStrengths?.[packedIndex] }));
+
+  // Multi-reference is a FLUX.2-only feature — local.js's buildArgs only
+  // emits --reference-images/--reference-strengths inside the isFlux2 branch.
+  // Reject up-front rather than copying the uploads to PATHS.imageRefs and
+  // silently dropping them downstream (which would orphan files on disk).
+  if (referenceUploads.length) {
+    const candidate = getImageModels().find((m) => m.id === data.modelId)
+      ?? getImageModels().find((m) => m.id === 'dev')
+      ?? getImageModels()[0];
+    if (!isFlux2(candidate)) {
+      throw new ServerError(
+        'Reference images are only supported for FLUX.2 models',
+        { status: 400, code: 'REFERENCE_IMAGES_FLUX2_ONLY' },
+      );
+    }
+  }
 
   if (initUpload) await ensureDir(PATHS.images);
   if (referenceUploads.length) await ensureDir(PATHS.imageRefs);

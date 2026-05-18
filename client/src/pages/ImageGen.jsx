@@ -1009,7 +1009,7 @@ export default function ImageGen() {
           {isLocalMode && isFlux2Model && (
             <div>
               <label className="block text-xs font-medium text-gray-400 mb-1">
-                Reference images <span className="text-gray-500 font-normal">(2–4 images for FLUX.2 multi-reference edit)</span>
+                Reference images <span className="text-gray-500 font-normal">(up to 4 images for FLUX.2 multi-reference edit)</span>
               </label>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                 {referenceImages.map((slot, i) => {
