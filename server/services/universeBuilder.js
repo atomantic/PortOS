@@ -30,6 +30,7 @@ import { randomUUID } from 'crypto';
 import { PATHS, atomicWrite, readJSONFile, ensureDir } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { composeStyledPrompt } from '../lib/composeStyledPrompt.js';
+import { richCanonDescriptorFragments } from '../lib/canonPrompt.js';
 import {
   sanitizeBibleList, BIBLE_KIND, BIBLE_FIELD, BIBLE_LIMITS, BIBLE_SOURCE,
   normalizeBibleName, isStr, trimTo,
@@ -923,14 +924,10 @@ const CANON_TRUNKS = Object.freeze([
   { key: 'objects',    category: 'canon:objects' },
 ]);
 
-// Synthesize a render prompt from a canon entry. `entry.prompt` wins when the
-// user has hand-authored one; otherwise stitch together the descriptive fields
-// that exist for this kind (per-kind contract in `BIBLE_FIELD_WHITELIST`):
-//   - characters: physicalDescription, role
-//   - settings:   description, palette, era, weather, recurringDetails
-//   - objects:    description, significance
-// The output is fed through `composeStyledPrompt(...)` so the universe's
-// embrace tokens still prefix every canon render.
+// Synthesize a render prompt from a canon entry. `entry.prompt` wins when
+// hand-authored; otherwise stitch the kind's descriptive fields. Output is
+// fed through `composeStyledPrompt(...)` so the universe's embrace tokens
+// still prefix every canon render.
 export function synthesizeCanonPrompt(kind, entry) {
   if (!entry) return '';
   if (typeof entry.prompt === 'string' && entry.prompt.trim()) return entry.prompt.trim();
@@ -944,21 +941,9 @@ export function synthesizeCanonPrompt(kind, entry) {
     ? entry.slugline.trim()
     : '';
   const identifier = name || sluglineId;
-  const parts = [];
-  if (kind === 'characters') {
-    if (entry.physicalDescription) parts.push(entry.physicalDescription);
-    if (entry.role) parts.push(entry.role);
-  } else if (kind === 'settings') {
-    if (entry.description) parts.push(entry.description);
-    if (entry.palette) parts.push(`palette: ${entry.palette}`);
-    if (entry.era) parts.push(`era: ${entry.era}`);
-    if (entry.weather) parts.push(`weather: ${entry.weather}`);
-    if (entry.recurringDetails) parts.push(entry.recurringDetails);
-  } else if (kind === 'objects') {
-    if (entry.description) parts.push(entry.description);
-    if (entry.significance) parts.push(`significance: ${entry.significance}`);
-  }
-  const body = parts.map((p) => String(p).trim()).filter(Boolean).join('. ');
+  const body = richCanonDescriptorFragments(kind, entry)
+    .map((f) => (f.prefix ? `${f.prefix}: ${f.value}` : f.value))
+    .join('. ');
   if (identifier && body) return `${identifier} — ${body}`;
   return identifier || body;
 }

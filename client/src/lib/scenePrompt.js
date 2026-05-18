@@ -1,6 +1,8 @@
 // Mirror of server/lib/scenePrompt.js — keep byte-for-byte in sync.
 // The shape-invariant tests in server/lib/scenePrompt.test.js are the contract.
 
+import { shortCanonDescriptorFragments } from './canonPrompt.js';
+
 const PROMPT_MAX = 1900;
 
 export const normalizeSlugline = (s) => String(s || '')
@@ -98,11 +100,13 @@ export function buildScenePrompt(workTitle, scene, matchedCharacters, worldStyle
     ? matchedSetting.timeOfDay
     : '';
   const settingMetaFrag = [intExtPart, todPart].filter(Boolean).join(', ');
+  const baselineFrags = matchedSetting
+    ? shortCanonDescriptorFragments('setting', matchedSetting)
+      .map((f) => (f.prefix ? `${f.prefix}: ${f.value}.` : f.value))
+    : [];
   const settingFrags = matchedSetting ? [
     settingMetaFrag ? `${settingMetaFrag}.` : '',
-    matchedSetting.description?.trim() || '',
-    matchedSetting.palette ? `Palette: ${matchedSetting.palette.trim()}.` : '',
-    matchedSetting.recurringDetails?.trim() || '',
+    ...baselineFrags,
   ].filter(Boolean) : [];
 
   // Accept either `physicalDescription` (writers-room shape) or

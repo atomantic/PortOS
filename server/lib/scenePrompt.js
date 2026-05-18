@@ -3,6 +3,8 @@
  * deps — mirrored to `client/src/lib/scenePrompt.js` for the client bundle.
  */
 
+import { shortCanonDescriptorFragments } from './canonPrompt.js';
+
 const PROMPT_MAX = 1900;
 
 // Normalize a screenplay slugline so case/punctuation/dash variants collapse:
@@ -139,11 +141,19 @@ export function buildScenePrompt(workTitle, scene, matchedCharacters, worldStyle
     ? matchedSetting.timeOfDay
     : '';
   const settingMetaFrag = [intExtPart, todPart].filter(Boolean).join(', ');
+  // Pull descriptor fragments via the shared canon-prompt helper so the
+  // setting baseline stays in sync with `KINDS[].descFor` (UI) and
+  // `synthesizeCanonPrompt` (canon-render synthesis). Trailing-period on
+  // prefixed fragments preserves the pre-extraction "Palette: X." sentence
+  // boundary so palette + recurringDetails don't run together when the
+  // budget-truncation join collapses fragments with a single space.
+  const baselineFrags = matchedSetting
+    ? shortCanonDescriptorFragments('setting', matchedSetting)
+      .map((f) => (f.prefix ? `${f.prefix}: ${f.value}.` : f.value))
+    : [];
   const settingFrags = matchedSetting ? [
     settingMetaFrag ? `${settingMetaFrag}.` : '',
-    matchedSetting.description?.trim() || '',
-    matchedSetting.palette ? `Palette: ${matchedSetting.palette.trim()}.` : '',
-    matchedSetting.recurringDetails?.trim() || '',
+    ...baselineFrags,
   ].filter(Boolean) : [];
 
   // Accept either `physicalDescription` (writers-room shape) or

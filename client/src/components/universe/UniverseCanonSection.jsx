@@ -34,23 +34,20 @@ import CanonCard from '../pipeline/CanonCard';
 import MediaPreview from '../media/MediaPreview';
 import { pipelineImageCfgToRenderOpts } from '../../lib/pipelineImageDefaults';
 import { universeStylePreset } from '../../lib/universeStylePreset';
+import { descriptorForCanonEntry } from '../../lib/canonPrompt';
 
 const KINDS = [
   {
     key: 'characters', apiKind: 'character', label: 'Characters', singular: 'character', icon: Users,
-    descFor: (c) => c.physicalDescription || c.description || '',
+    descFor: (c) => descriptorForCanonEntry('characters', c),
   },
   {
     key: 'settings', apiKind: 'setting', label: 'Places', singular: 'place', icon: MapPin,
-    descFor: (s) => [
-      s.description,
-      s.palette ? `Palette: ${s.palette}` : '',
-      s.recurringDetails,
-    ].filter(Boolean).join('. '),
+    descFor: (s) => descriptorForCanonEntry('settings', s),
   },
   {
     key: 'objects', apiKind: 'object', label: 'Objects', singular: 'object', icon: Package,
-    descFor: (o) => o.description || o.significance || '',
+    descFor: (o) => descriptorForCanonEntry('objects', o),
   },
 ];
 

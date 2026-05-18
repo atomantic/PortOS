@@ -318,6 +318,50 @@ describe("universeBuilder service", () => {
     ).resolves.toMatchObject({ name: "User-Renamed" });
   });
 
+  describe("synthesizeCanonPrompt", () => {
+    it("hand-authored prompt wins over field synthesis", () => {
+      expect(svc.synthesizeCanonPrompt("characters", {
+        name: "Mira",
+        prompt: "custom prompt",
+        physicalDescription: "weathered scavenger",
+      })).toBe("custom prompt");
+    });
+
+    it("synthesizes from identifier + RICH descriptor for characters", () => {
+      expect(svc.synthesizeCanonPrompt("characters", {
+        name: "Mira",
+        physicalDescription: "weathered scavenger",
+        role: "protagonist",
+      })).toBe("Mira — weathered scavenger. protagonist");
+    });
+
+    it("synthesizes from identifier + RICH descriptor for settings (capitalized prefixes)", () => {
+      expect(svc.synthesizeCanonPrompt("settings", {
+        name: "Foundry City",
+        description: "vast smelting works",
+        palette: "rust + bone",
+        era: "post-collapse",
+        weather: "ash haze",
+        recurringDetails: "broken statue at center",
+      })).toBe("Foundry City — vast smelting works. Palette: rust + bone. Era: post-collapse. Weather: ash haze. broken statue at center");
+    });
+
+    it("falls back to slugline as identifier for settings without name", () => {
+      expect(svc.synthesizeCanonPrompt("settings", {
+        slugline: "INT. FOUNDRY — DAY",
+        description: "ore furnace",
+      })).toBe("INT. FOUNDRY — DAY — ore furnace");
+    });
+
+    it("returns identifier alone when no descriptive fields are set", () => {
+      expect(svc.synthesizeCanonPrompt("characters", { name: "Mira" })).toBe("Mira");
+    });
+
+    it("returns empty string for null entry", () => {
+      expect(svc.synthesizeCanonPrompt("characters", null)).toBe("");
+    });
+  });
+
   describe("compilePrompts", () => {
     it("returns one prompt per variation across selected categories with style prefix", async () => {
       const w = await seedWorld();
@@ -563,7 +607,7 @@ describe("universeBuilder service", () => {
         const place = compiled.find((c) => c.label === "Foundry City");
         expect(place.category).toBe("canon:settings");
         expect(place.prompt).toContain("Foundry City");
-        expect(place.prompt).toContain("palette: rust + bone");
+        expect(place.prompt).toContain("Palette: rust + bone");
       });
 
       it("canonSelection: missing trunk skips it", () => {

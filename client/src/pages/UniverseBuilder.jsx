@@ -38,6 +38,7 @@ import TabPills from '../components/ui/TabPills';
 import { deriveAvailableBackends, IMAGE_GEN_MODE } from '../lib/imageGenBackends';
 import { PIPELINE_IMAGE_DEFAULTS, readPipelineImageSettings } from '../lib/pipelineImageDefaults';
 import { normalizeSlugline } from '../lib/scenePrompt';
+import { hasCanonDescriptorContent } from '../lib/canonPrompt';
 
 const CATEGORY_LABELS = {
   landscapes: 'Landscapes',
@@ -1881,19 +1882,11 @@ function totalVariationCount(world) {
   return getCategoryKeys(world.categories).reduce((n, c) => n + (world.categories?.[c]?.variations?.length || 0), 0);
 }
 
-// Match server-side `synthesizeCanonPrompt` (server/services/universeBuilder.js)
-// per-kind: entries with no identity-anchor (name / slugline / hand-authored
-// prompt) AND no descriptive content for that kind compile to an empty seed and
-// get skipped. Mirror the predicate here so the "Render N images" button count
-// doesn't overshoot what the server will actually enqueue.
-//
-// IMPORTANT: keep the per-kind field lists in sync with server's
-// `synthesizeCanonPrompt`. Drift between client/server here makes scoped render
-// counts and disabled states lie about what will actually be enqueued.
-// Server's `synthesizeCanonPrompt` trims each string field before pushing into
-// `parts` and then filters out empty results via `String(p).trim().filter(Boolean)`.
-// A whitespace-only field doesn't anchor renderability there — mirror that here
-// so client-side counts/disable states agree under optimistic edits.
+// Mirror the server's synthesizeCanonPrompt skip rule: entries with no
+// identity-anchor (name / slugline / prompt) AND no descriptive content for
+// the kind compile to an empty seed and get skipped at render time. The
+// "Render N images" button count must not overshoot what the server will
+// actually enqueue.
 const hasNonBlankString = (v) => typeof v === 'string' && v.trim().length > 0;
 
 const canonEntryHasContent = (e, kind) => {
@@ -1904,38 +1897,21 @@ const canonEntryHasContent = (e, kind) => {
   // synthesizeCanonPrompt's identifier-seed rule.
   if (hasNonBlankString(e.name)) return true;
   if (kind === 'settings' && hasNonBlankString(e.slugline)) return true;
-  if (kind === 'characters') {
-    return hasNonBlankString(e.physicalDescription) || hasNonBlankString(e.role);
-  }
-  if (kind === 'settings') {
-    return hasNonBlankString(e.description) || hasNonBlankString(e.palette)
-      || hasNonBlankString(e.era) || hasNonBlankString(e.weather)
-      || hasNonBlankString(e.recurringDetails);
-  }
-  if (kind === 'objects') {
-    return hasNonBlankString(e.description) || hasNonBlankString(e.significance);
-  }
-  // Unknown kind — fall back to the inclusive union so an unrecognized trunk
-  // doesn't silently collapse to 0.
-  return hasNonBlankString(e.physicalDescription) || hasNonBlankString(e.description)
-    || hasNonBlankString(e.palette) || hasNonBlankString(e.era) || hasNonBlankString(e.weather)
-    || hasNonBlankString(e.recurringDetails) || hasNonBlankString(e.role)
-    || hasNonBlankString(e.significance);
+  return hasCanonDescriptorContent(kind, e);
 };
 
 const countCanonWithContent = (world, kind) =>
   (Array.isArray(world?.[kind]) ? world[kind] : []).filter((e) => canonEntryHasContent(e, kind)).length;
 
 function renderPromptCount(world, promptMode = 'variations') {
-  const variations = totalVariationCount(world);
+  if (promptMode === 'variations') return totalVariationCount(world);
   const sheets = world.compositeSheets?.length || 0;
+  if (promptMode === 'sheets') return sheets;
   const canon = countCanonWithContent(world, 'characters')
     + countCanonWithContent(world, 'settings')
     + countCanonWithContent(world, 'objects');
-  if (promptMode === 'sheets') return sheets;
   if (promptMode === 'canon') return canon;
-  if (promptMode === 'all') return variations + sheets + canon;
-  return variations;
+  return totalVariationCount(world) + sheets + canon;
 }
 
 // Mirrors the server's compilePrompts for selection/sheetSelection/canonSelection
