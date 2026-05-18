@@ -406,6 +406,12 @@ export default function UniverseCanonSection({
     toast.success(`Rendering clean plate for ${entry.name}`);
   };
 
+  // Section-local renders go through `generateImage` directly with no
+  // `universeRun` tag, so the server-side `appendEntryImageRef` collection
+  // hook never fires — the client MUST round-trip a PATCH to persist the
+  // new filename onto the canon entry. The list shape passed in is built
+  // from `universe`, but section-local renders are user-driven one-at-a-
+  // time so the read-modify-write window is small and tolerable.
   const handleRefCompleted = useCallback(async (kindKey, entryId, filename) => {
     if (!filename || !universe) return;
     setRenderingJobs((prev) => {
@@ -422,6 +428,32 @@ export default function UniverseCanonSection({
       .catch((err) => { toast.error(`Save failed: ${err.message}`); return null; });
     if (updated && mountedRef.current && currentUniverseIdRef.current === capturedId) onUniverseChange(updated);
   }, [universe, universeId, onUniverseChange, mountedRef]);
+
+  // External (batch-render) canon completions follow a different path:
+  // (a) the server's `appendEntryImageRef` collection hook has ALREADY
+  //     stamped the filename onto the persisted record, so a client-side
+  //     `updateUniverse` here is redundant and would clobber concurrent
+  //     sibling appends with a stale full-array patch built from the
+  //     `universe` snapshot the parent re-rendered with.
+  // (b) the parent's draft is the source of truth for UI display, so we
+  //     update it through `onUniverseChange` only — dedupe on `includes`
+  //     so duplicate completion events don't double-stamp the same ref.
+  // (c) `latestUniverseRef` (not the closed-over `universe` prop) is used
+  //     so back-to-back sibling completions all see the freshest state
+  //     and chain their appends instead of clobbering each other.
+  const handleExternalCanonRefCompleted = useCallback((kindKey, entryId, filename) => {
+    if (!filename) return;
+    const latest = latestUniverseRef.current;
+    if (!latest) return;
+    const list = Array.isArray(latest[kindKey]) ? latest[kindKey] : [];
+    const nextList = list.map((e) => {
+      if (e?.id !== entryId) return e;
+      const refs = Array.isArray(e.imageRefs) ? e.imageRefs : [];
+      if (refs.includes(filename)) return e;
+      return { ...e, imageRefs: [...refs, filename] };
+    });
+    onUniverseChange({ ...latest, [kindKey]: nextList });
+  }, [onUniverseChange]);
 
   const handleRefFailed = useCallback((entryId, errMsg) => {
     setRenderingJobs((prev) => {
@@ -571,20 +603,32 @@ export default function UniverseCanonSection({
           renderingJobs={renderingJobs}
           onRender={(entry) => handleRenderRef(kind, entry)}
           onJobCompleted={(entryId, filename, completedJobId) => {
-            handleRefCompleted(kind.key, entryId, filename);
-            // Shift the completed jobId off the universe-page's pending
-            // queue for this entry. Only fires when the jobId came from the
-            // external (batch-render) source — section-local renders
-            // route through `renderingJobs` which `handleRefCompleted`
-            // already clears.
-            if (completedJobId && externalPendingByEntryId?.[entryId] === completedJobId) {
+            // Discriminate by which pending map owns the completed jobId:
+            //   - section-local renders (`generateImage`) populate
+            //     `renderingJobs[entryId]`; their server side has no
+            //     `appendEntryImageRef` hook so the client must persist
+            //     via `handleRefCompleted`.
+            //   - external batch renders flow through the page-level
+            //     `externalPendingByEntryId`; the server collection hook
+            //     already stamped imageRefs, so the client only needs to
+            //     update local state + clear the pending queue.
+            const isExternal = completedJobId
+              && externalPendingByEntryId?.[entryId] === completedJobId;
+            if (isExternal) {
+              handleExternalCanonRefCompleted(kind.key, entryId, filename);
               onExternalCanonJobSettled?.(entryId, completedJobId);
+            } else {
+              handleRefCompleted(kind.key, entryId, filename);
             }
           }}
           onJobFailed={(entryId, errMsg, failedJobId) => {
-            handleRefFailed(entryId, errMsg);
-            if (failedJobId && externalPendingByEntryId?.[entryId] === failedJobId) {
+            const isExternal = failedJobId
+              && externalPendingByEntryId?.[entryId] === failedJobId;
+            if (isExternal) {
               onExternalCanonJobSettled?.(entryId, failedJobId);
+              if (errMsg) toast.error(`Render failed: ${errMsg}`);
+            } else {
+              handleRefFailed(entryId, errMsg);
             }
           }}
           onPreview={openPreview}
