@@ -53,7 +53,8 @@ export const ACCEPTED_OLD_MD5 = {
     '52e31abc93e3105176236fcaa5d1575a', // pre-005 (shape-aware), still in setup-data.js OLD list
   ],
   'pipeline-arc-resolve.md': [
-    'a8677bbe1eb38f871fb152a5b0fec7c6', // current (pre-Phase B) shipped
+    '8e348f3d1894382889f9f0ee7d5c6792', // post-019 / pre-023 — the hash this migration originally produced; included so a re-run after a `data/migrations.applied.json` reset can cleanly advance an install at the intermediate state to the post-023 live sample
+    'a8677bbe1eb38f871fb152a5b0fec7c6', // pre-019 (pre-Phase B) shipped
     '87bc5c01f1a8a97b681727a38b05edc6', // pre-005 (shape-aware), still in setup-data.js OLD list
   ],
   'pipeline-volume-verify.md': [
@@ -65,10 +66,16 @@ export const ACCEPTED_OLD_MD5 = {
 // New shipped hashes — tracks the LIVE `data.sample` hash, not strictly the
 // post-019 commit-time hash. Later migrations that further evolve any of
 // these files (e.g. migration 023 amended `pipeline-arc-resolve.md`) must
-// also bump the corresponding entry here so that:
-//   - fresh installs whose `data/` was seeded from the latest sample report
-//     `alreadyCurrent` instead of a misleading "customized" warning, and
-//   - the drift-catch test below stays in lock-step with the live sample.
+// do TWO things:
+//   1. Bump the corresponding entry in `NEW_SHIPPED_MD5` here so that fresh
+//      installs (whose `data/` was seeded from the latest sample) report
+//      `alreadyCurrent` instead of a misleading "customized" warning, and
+//      so the drift-catch test stays in lock-step with the live sample.
+//   2. Append the OLD `NEW_SHIPPED_MD5` value (the hash this migration
+//      originally produced) to `ACCEPTED_OLD_MD5` above so a re-run after a
+//      `data/migrations.applied.json` reset still cleanly advances an
+//      install at the intermediate state. Without this, re-running 019
+//      on a post-019 install would misclassify it as "customized."
 // Each entry comment records who last advanced it.
 // Exported so the test suite can import and assert against these tables
 // directly rather than maintaining local copies.
