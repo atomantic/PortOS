@@ -24,35 +24,20 @@ import { PATHS } from '../lib/fileUtils.js';
 import { getSettings } from '../services/settings.js';
 import { generateImage, getMode, getActiveJob } from '../services/imageGen/index.js';
 import { local as localImage } from '../services/imageGen/index.js';
-import { imageGenEvents } from '../services/imageGenEvents.js';
+import { createImageGenWaiter } from '../services/imageGenWaiter.js';
 import { listVideoModels, defaultVideoModelId } from '../services/videoGen/local.js';
 
 const router = Router();
 
-// Build a completion waiter for a future generationId. Listeners attach
-// immediately so a fast Python child can't emit 'completed' before we're
-// listening, but the id-match check uses a registered id (set by .register()
-// once generateImage returns). 5-minute timeout matches the external client.
-// The returned `cleanup()` is exposed so the caller can detach listeners
-// even if generateImage throws before we ever resolve/reject.
+// `onTimeout` + `onFailed` map the shared waiter's rejections onto the
+// ServerError shape sdapi routes need; centralized middleware surfaces the
+// status + code on the HTTP response.
 function createCompletionWaiter() {
-  let registeredId = null;
-  let resolve, reject;
-  // Swallow the unhandled-rejection if the caller never awaits .promise
-  // (e.g. generateImage throws and the route exits via the error path).
-  const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
-  promise.catch(() => {});
-  const onComplete = (ev) => { if (ev.generationId === registeredId) { cleanup(); resolve(ev); } };
-  const onFailed = (ev) => { if (ev.generationId === registeredId) { cleanup(); reject(new ServerError(ev.error || 'Generation failed', { status: 500, code: 'GEN_FAILED' })); } };
-  const timer = setTimeout(() => { cleanup(); reject(new ServerError('Generation timed out', { status: 504, code: 'GEN_TIMEOUT' })); }, 5 * 60 * 1000);
-  const cleanup = () => {
-    clearTimeout(timer);
-    imageGenEvents.off('completed', onComplete);
-    imageGenEvents.off('failed', onFailed);
-  };
-  imageGenEvents.on('completed', onComplete);
-  imageGenEvents.on('failed', onFailed);
-  return { register: (id) => { registeredId = id; }, promise, cleanup };
+  return createImageGenWaiter({
+    timeoutMs: 5 * 60 * 1000,
+    onTimeout: () => new ServerError('Generation timed out', { status: 504, code: 'GEN_TIMEOUT' }),
+    onFailed: (ev) => new ServerError(ev?.error || 'Generation failed', { status: 500, code: 'GEN_FAILED' }),
+  });
 }
 
 const ensureExposed = async () => {

@@ -13,10 +13,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { Loader2, ImagePlus, WandSparkles, Lock, Unlock, Shirt, Plus, Trash2, ChevronDown, ChevronRight, Star, Square, BookOpen } from 'lucide-react';
 import useMediaJobProgress from '../../hooks/useMediaJobProgress';
+import useFieldDraft from '../../hooks/useFieldDraft';
 import MediaJobThumb from './MediaJobThumb';
 import EntryCard from '../universe/EntryCard';
 import CharacterDetailEditor from '../universe/CharacterDetailEditor';
 import CharacterReferenceSheetPanel from '../universe/CharacterReferenceSheetPanel';
+import { BIBLE_LIMITS } from '../../lib/bibleLimits';
 
 // Place metadata enums — kept in lock-step with `PLACE_INT_EXT` and
 // `PLACE_TIME_OF_DAY` in `server/lib/storyBible.js`. Mirror is fine: a
@@ -93,15 +95,64 @@ function SourceSeriesChip({ sourceSeriesId, seriesName }) {
   );
 }
 
+// One wardrobe row — per-field drafts live inside `useFieldDraft` so the
+// state belongs to the row instance, not an indexed map in the parent.
+// `onCommit('name'|'description', value)` lets the parent decide between
+// patching an existing row, promoting a pending row once name is non-empty,
+// or skipping a no-op.
+function WardrobeRow({ wardrobe, editable, onCommit, onRemove }) {
+  const nameDraft = useFieldDraft(wardrobe.name, (v) => onCommit('name', v));
+  const descDraft = useFieldDraft(wardrobe.description, (v) => onCommit('description', v));
+  if (!editable) {
+    return (
+      <div className="space-y-1">
+        <div className="text-xs text-port-accent font-medium">{wardrobe.name}</div>
+        {wardrobe.description
+          ? <p className="text-[11px] text-gray-400 whitespace-pre-wrap">{wardrobe.description}</p>
+          : null}
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center gap-1.5">
+        <input
+          type="text"
+          value={nameDraft.value}
+          onChange={nameDraft.onChange}
+          onBlur={nameDraft.onBlur}
+          placeholder="Outfit name (e.g. Wedding)"
+          className="flex-1 min-w-0 px-1.5 py-0.5 text-xs bg-port-bg border border-port-border rounded text-white"
+          maxLength={BIBLE_LIMITS.WARDROBE_NAME_MAX}
+        />
+        <button
+          type="button"
+          onClick={onRemove}
+          title={`Remove ${wardrobe.name || 'this outfit'}`}
+          className="shrink-0 text-gray-500 hover:text-port-error"
+        >
+          <Trash2 size={12} />
+        </button>
+      </div>
+      <textarea
+        value={descDraft.value}
+        onChange={descDraft.onChange}
+        onBlur={descDraft.onBlur}
+        placeholder="What's the character wearing? (image-gen-ready prose)"
+        rows={2}
+        className="w-full px-1.5 py-0.5 text-xs bg-port-bg border border-port-border rounded text-white"
+        maxLength={BIBLE_LIMITS.WARDROBE_DESCRIPTION_MAX}
+      />
+    </div>
+  );
+}
+
 // Wardrobes (A2) — collapsed summary by default; click to expand into an
-// inline editor when `editable`. Per-field edits are buffered in a draft
-// state and only PATCHed on blur, so a textarea keystroke doesn't fire a
+// inline editor when `editable`. Per-field edits are buffered inside each
+// `WardrobeRow` via `useFieldDraft`, so a keystroke doesn't fire a
 // universe-wide round-trip per character.
 function WardrobeSection({ wardrobes, editable, onChange }) {
   const [open, setOpen] = useState(false);
-  // Per-field drafts keyed by `${idx}:${field}`. `undefined` means the
-  // textarea reflects the persisted value verbatim.
-  const [drafts, setDrafts] = useState({});
   // Pending new rows live entirely client-side until the user types a name
   // — committing immediately would PATCH a nameless entry, the server-side
   // sanitizer would drop it, and the row would vanish mid-type.
@@ -115,19 +166,8 @@ function WardrobeSection({ wardrobes, editable, onChange }) {
 
   const summary = merged.map((w) => w.name).filter(Boolean).join(', ');
   const isPending = (idx) => idx >= wardrobes.length;
-  const draftValue = (idx, field, fallback) => {
-    const key = `${idx}:${field}`;
-    return key in drafts ? drafts[key] : (fallback ?? '');
-  };
-  const setDraft = (idx, field, value) => {
-    setDrafts((prev) => ({ ...prev, [`${idx}:${field}`]: value }));
-  };
-  const commitField = (idx, field) => {
-    const key = `${idx}:${field}`;
-    if (!(key in drafts)) return;
-    const value = drafts[key];
-    setDrafts((prev) => { const next = { ...prev }; delete next[key]; return next; });
 
+  const commit = (idx, field, value) => {
     if (isPending(idx)) {
       const pendingIdx = idx - wardrobes.length;
       const current = pendingNew[pendingIdx] || { name: '', description: '' };
@@ -137,35 +177,18 @@ function WardrobeSection({ wardrobes, editable, onChange }) {
       // the persisted list (server sanitizer no longer drops it).
       if (field === 'name' && value.trim()) {
         const promoted = nextPending[pendingIdx];
-        const remaining = nextPending.filter((_, i) => i !== pendingIdx);
-        setPendingNew(remaining);
+        setPendingNew(nextPending.filter((_, i) => i !== pendingIdx));
         onChange([...wardrobes, promoted]);
       } else {
         setPendingNew(nextPending);
       }
       return;
     }
-
     if ((wardrobes[idx]?.[field] || '') === value) return;
-    const nextList = wardrobes.map((w, i) => (i === idx ? { ...w, [field]: value } : w));
-    onChange(nextList);
+    onChange(wardrobes.map((w, i) => (i === idx ? { ...w, [field]: value } : w)));
   };
+
   const removeAt = (idx) => {
-    // Selective draft pruning — keep drafts in earlier indices untouched
-    // so editing outfit 3 while deleting outfit 1 doesn't lose the
-    // outfit-3 keystrokes. Indices past the removed row shift down by 1.
-    setDrafts((prev) => {
-      const next = {};
-      for (const [k, v] of Object.entries(prev)) {
-        const sep = k.indexOf(':');
-        if (sep < 0) continue;
-        const i = Number(k.slice(0, sep));
-        const field = k.slice(sep + 1);
-        if (i < idx) next[k] = v;
-        else if (i > idx) next[`${i - 1}:${field}`] = v;
-      }
-      return next;
-    });
     if (isPending(idx)) {
       const pendingIdx = idx - wardrobes.length;
       setPendingNew(pendingNew.filter((_, i) => i !== pendingIdx));
@@ -173,9 +196,13 @@ function WardrobeSection({ wardrobes, editable, onChange }) {
     }
     onChange(wardrobes.filter((_, i) => i !== idx));
   };
+
   const addOne = () => {
     setOpen(true);
-    setPendingNew((prev) => [...prev, { name: '', description: '' }]);
+    // Client-only id so React keys are stable across re-renders before the
+    // row promotes into the persisted list (server mints its own id then).
+    const id = `pending-wardrobe-${(crypto?.randomUUID?.() ?? Date.now().toString(36) + Math.random().toString(36).slice(2))}`;
+    setPendingNew((prev) => [...prev, { id, name: '', description: '' }]);
   };
 
   return (
@@ -192,44 +219,13 @@ function WardrobeSection({ wardrobes, editable, onChange }) {
       {open ? (
         <div className="mt-1.5 pl-3 border-l border-port-border space-y-1.5">
           {merged.map((w, i) => (
-            <div key={w.id || i} className="space-y-1">
-              {editable ? (
-                <div className="flex items-center gap-1.5">
-                  <input
-                    type="text"
-                    value={draftValue(i, 'name', w.name)}
-                    onChange={(e) => setDraft(i, 'name', e.target.value)}
-                    onBlur={() => commitField(i, 'name')}
-                    placeholder="Outfit name (e.g. Wedding)"
-                    className="flex-1 min-w-0 px-1.5 py-0.5 text-xs bg-port-bg border border-port-border rounded text-white"
-                    maxLength={120}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => removeAt(i)}
-                    title={`Remove ${w.name || 'this outfit'}`}
-                    className="shrink-0 text-gray-500 hover:text-port-error"
-                  >
-                    <Trash2 size={12} />
-                  </button>
-                </div>
-              ) : (
-                <div className="text-xs text-port-accent font-medium">{w.name}</div>
-              )}
-              {editable ? (
-                <textarea
-                  value={draftValue(i, 'description', w.description)}
-                  onChange={(e) => setDraft(i, 'description', e.target.value)}
-                  onBlur={() => commitField(i, 'description')}
-                  placeholder="What's the character wearing? (image-gen-ready prose)"
-                  rows={2}
-                  className="w-full px-1.5 py-0.5 text-xs bg-port-bg border border-port-border rounded text-white"
-                  maxLength={800}
-                />
-              ) : w.description ? (
-                <p className="text-[11px] text-gray-400 whitespace-pre-wrap">{w.description}</p>
-              ) : null}
-            </div>
+            <WardrobeRow
+              key={w.id || i}
+              wardrobe={w}
+              editable={editable}
+              onCommit={(field, value) => commit(i, field, value)}
+              onRemove={() => removeAt(i)}
+            />
           ))}
           {editable ? (
             <button
@@ -270,12 +266,10 @@ export default function CanonCard({
   seriesNameMap = null,
   // Universe-only character extensions. When provided + kind is 'characters',
   // CanonCard reveals an Expand → CharacterDetailEditor section and a
-  // Reference Sheet panel. NounsStage (series view) omits these so the
+  // Reference Sheet panel. NounsStage (series view) omits this so the
   // per-series cast list stays focused on naming + visual refs.
-  universeId = null,
-  onExpandCharacter = null,
-  expanding = false,
-  onSheetCompleted = null,
+  // Shape: { universeId, onExpandCharacter, expanding, onSheetCompleted }
+  characterExtensions = null,
 }) {
   const description = kind.descFor(entry);
   const refs = Array.isArray(entry.imageRefs) ? entry.imageRefs : [];
@@ -384,22 +378,22 @@ export default function CanonCard({
         />
       ) : null}
       {/* Universe-only: extended character detail editor + AI expand action.
-          Hidden when the caller didn't pass the universe wiring (pipeline
+          Hidden when the caller didn't pass `characterExtensions` (pipeline
           series view). Locked characters render read-only inputs. */}
-      {kind.key === 'characters' && universeId && onPatchEntry ? (
+      {kind.key === 'characters' && characterExtensions && onPatchEntry ? (
         <CharacterDetailsToggle>
           <CharacterDetailEditor
             entry={entry}
             onPatch={(patch) => onPatchEntry(entry.id, patch)}
-            onExpand={onExpandCharacter ? () => onExpandCharacter(entry.id) : null}
-            expanding={expanding}
+            onExpand={characterExtensions.onExpandCharacter ? () => characterExtensions.onExpandCharacter(entry.id) : null}
+            expanding={!!characterExtensions.expanding}
             disabled={locked}
           />
           <CharacterReferenceSheetPanel
-            universeId={universeId}
+            universeId={characterExtensions.universeId}
             entry={entry}
             locked={locked}
-            onSheetCompleted={onSheetCompleted}
+            onSheetCompleted={characterExtensions.onSheetCompleted}
             onOpenLightbox={(filename) => onPreview?.(filename, { isSheet: true })}
           />
         </CharacterDetailsToggle>

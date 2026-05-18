@@ -22,17 +22,27 @@ import toast from '../ui/Toast';
 // /data/image-refs/ AFTER the SSE 'completed' event fires (the listener is
 // async, the event was sync), so claiming the file exists at SSE-completion
 // time races and shows a 404 thumbnail. Returns true once the file is
-// reachable, false after ~3s of polling.
-async function waitForImageRef(filename, { maxMs = 3000, intervalMs = 150 } = {}) {
+// reachable, false after ~3s of polling, or `null` when the signal aborts
+// (so the caller can distinguish "give up + warn the user" from "navigated
+// away, ignore").
+async function waitForImageRef(filename, { maxMs = 3000, intervalMs = 150, signal } = {}) {
   if (!filename) return false;
+  if (signal?.aborted) return null;
   const url = `/data/image-refs/${filename}`;
   const deadline = Date.now() + maxMs;
   while (Date.now() < deadline) {
+    if (signal?.aborted) return null;
     // cache: 'no-store' so a transient 404 isn't cached by the browser and
-    // poisoning subsequent <img> tags.
-    const res = await fetch(url, { method: 'HEAD', cache: 'no-store' }).catch(() => null);
+    // poisoning subsequent <img> tags. `signal` aborts the in-flight HEAD too
+    // (not just the inter-attempt sleep).
+    const res = await fetch(url, { method: 'HEAD', cache: 'no-store', signal })
+      .catch(() => null);
+    if (signal?.aborted) return null;
     if (res?.ok) return true;
-    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    await new Promise((resolve) => {
+      const timer = setTimeout(resolve, intervalMs);
+      signal?.addEventListener('abort', () => { clearTimeout(timer); resolve(); }, { once: true });
+    });
   }
   return false;
 }
@@ -56,6 +66,10 @@ export default function CharacterReferenceSheetPanel({
   // cleanup-only effect leaves the ref permanently false after React 18
   // StrictMode's mount→cleanup→remount cycle in dev.
   const mountedRef = useMounted();
+  // Cancels the in-flight `waitForImageRef` HEAD-poll loop on unmount or on
+  // a new render kicking off. Without this the loop keeps issuing requests
+  // against a dead component for the full ~3s budget.
+  const pollAbortRef = useRef(null);
 
   const { status, filename, error, progress } = useMediaJobProgress(jobId);
 
@@ -73,8 +87,13 @@ export default function CharacterReferenceSheetPanel({
       // gallery PNG into /data/image-refs/ and stamped the character.
       // Verify the file is actually reachable before flipping the UI;
       // otherwise the <img> renders a 404 that the browser caches.
-      waitForImageRef(dest).then((ok) => {
+      pollAbortRef.current?.abort();
+      const controller = new AbortController();
+      pollAbortRef.current = controller;
+      waitForImageRef(dest, { signal: controller.signal }).then((ok) => {
+        if (pollAbortRef.current === controller) pollAbortRef.current = null;
         if (!mountedRef.current) return;
+        if (ok === null) return; // aborted — caller already moved on
         if (ok) onSheetCompleted?.(entryId, dest);
         else toast.error('Sheet render finished but the image never appeared — refresh to see it');
       });
@@ -85,6 +104,9 @@ export default function CharacterReferenceSheetPanel({
       setJobId(null);
     }
   }, [jobId, status, filename, error, entry?.id, onSheetCompleted]);
+
+  // Abort any in-flight HEAD poll when the panel unmounts.
+  useEffect(() => () => { pollAbortRef.current?.abort(); }, []);
 
   const handleGenerate = async () => {
     if (jobId || !universeId || !entry?.id) return;

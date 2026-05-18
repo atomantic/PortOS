@@ -212,3 +212,66 @@ export function hasCanonDescriptorContent(kind, entry) {
   if (!sequence) return false;
   return sequenceHasAnyField(sequence, entry);
 }
+
+// Flatteners for character bible list fields — used by the reference-sheet
+// builder and future per-page render prompts so the join logic stays in one
+// place. Each returns `''` when the input is missing/empty.
+export function flattenStats(stats) {
+  if (!Array.isArray(stats) || stats.length === 0) return '';
+  return stats
+    .map((s) => (s?.label && s?.value ? `${s.label}: ${s.value}` : s?.label || ''))
+    .filter(Boolean)
+    .join(' | ');
+}
+
+export function flattenPalette(palette) {
+  if (!Array.isArray(palette) || palette.length === 0) return '';
+  return palette
+    .map((c, i) => {
+      const name = trim(c?.name);
+      const hex = trim(c?.hex);
+      const role = trim(c?.role);
+      if (!name) return '';
+      const hexBit = hex ? ` ${hex}` : '';
+      const roleBit = role ? ` — ${role}` : '';
+      return `Swatch ${i + 1}: ${name}${hexBit}${roleBit}`;
+    })
+    .filter(Boolean)
+    .join(', ');
+}
+
+export function flattenWardrobes(wardrobes) {
+  if (!Array.isArray(wardrobes) || wardrobes.length === 0) return '';
+  return wardrobes
+    .map((w) => (w?.name && w?.description ? `"${w.name}": ${w.description}` : w?.name || ''))
+    .filter(Boolean)
+    .join(' | ');
+}
+
+export function flattenProps(props) {
+  if (!Array.isArray(props) || props.length === 0) return '';
+  return props
+    .map((p) => {
+      const name = trim(p?.name);
+      const purpose = trim(p?.purpose);
+      const materials = trim(p?.materials);
+      if (!name) return '';
+      const bits = [purpose ? `(${purpose})` : '', materials ? `[${materials}]` : '']
+        .filter(Boolean)
+        .join(' ');
+      return bits ? `${name} ${bits}` : name;
+    })
+    .filter(Boolean)
+    .join(' | ');
+}
+
+// `defaults` is consulted when the entry has no items at all — keeps the
+// reference-sheet prompt's expression / hand-gesture panels populated even
+// when the bible omitted them. Caps at 7 entries so the rendered sheet
+// stays legible across providers (codex/local both honor the cap).
+export function flattenNamedList(items, defaults) {
+  const list = Array.isArray(items) && items.length > 0
+    ? items.map((e) => (e?.name && e?.description ? `${e.name} (${e.description})` : trim(e?.name))).filter(Boolean)
+    : [...defaults];
+  return list.slice(0, 7).join(', ');
+}

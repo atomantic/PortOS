@@ -9,6 +9,7 @@ vi.mock('../lib/fileUtils.js', () => ({
   ensureDir: vi.fn().mockResolvedValue(undefined),
   atomicWrite: vi.fn(async (path, data) => { fileStore.set(path, data); }),
   readJSONFile: vi.fn(async (path, fallback) => (fileStore.has(path) ? fileStore.get(path) : fallback)),
+  shortId: (id, n = 8) => (id == null ? '' : String(id).slice(0, n)),
 }));
 
 let uuidCounter = 0;
