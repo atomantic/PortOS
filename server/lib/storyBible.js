@@ -275,6 +275,22 @@ function derivePrimaryImageRef(raw, imageRefs) {
   return imageRefs.includes(trimmed) ? trimmed : null;
 }
 
+// Generated character reference sheet pointer. Server-owned (set by the
+// render-completion handler), but the sanitizer still validates incoming
+// values defensively — an LLM-extracted canon payload that hallucinates this
+// field must NOT persist a path that the UI would try to load as
+// `/data/image-refs/<x>`. Strict basename only: no path separators, no
+// exact-traversal (`.` / `..`), no leading dot. Returns null for anything
+// rejected so the next render-completion can stamp cleanly.
+function deriveReferenceSheetImageRef(raw) {
+  if (!isStr(raw) || !raw.trim()) return null;
+  const trimmed = raw.trim().slice(0, BIBLE_LIMITS.IMAGE_REF_MAX);
+  if (trimmed === '.' || trimmed === '..') return null;
+  if (trimmed.includes('/') || trimmed.includes('\\')) return null;
+  if (trimmed.startsWith('.')) return null;
+  return trimmed;
+}
+
 // Wardrobe sanitizer (A2). One entry per outfit/styling variant; the
 // description is image-gen-ready prose ("worn linen suit, gold pocket watch,
 // scuffed wingtips"). Reference images per wardrobe land in a follow-up.
@@ -443,11 +459,10 @@ export function sanitizeCharacter(raw, { idPrefix = DEFAULT_ID_PREFIX.character,
     primaryImageRef: derivePrimaryImageRef(raw.primaryImageRef, imageRefs),
     // Generated character reference sheet filename (lives in data/image-refs/,
     // not in imageRefs[] — the sheet is operational metadata, not a candidate
-    // for arbitrary panel reference). Validated through the same stale-pointer
-    // helper so renaming/deleting the file collapses to null.
-    referenceSheetImageRef: isStr(raw.referenceSheetImageRef) && raw.referenceSheetImageRef.trim()
-      ? raw.referenceSheetImageRef.trim().slice(0, BIBLE_LIMITS.IMAGE_REF_MAX)
-      : null,
+    // for arbitrary panel reference). Basename-validated so an LLM-extracted
+    // payload that snuck past stripCanonControlFields can't persist a path
+    // the UI would 404 on or that would escape PATHS.imageRefs at render time.
+    referenceSheetImageRef: deriveReferenceSheetImageRef(raw.referenceSheetImageRef),
     // Wardrobes (A2): outfit/styling variants applied on top of
     // physicalDescription. Empty array stays the legacy shape — every
     // existing character keeps rendering through physicalDescription alone.

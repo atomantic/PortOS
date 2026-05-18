@@ -413,6 +413,18 @@ describe('storyBible — sanitizeCharacter', () => {
       expect(sanitizeCharacter({ name: 'A', referenceSheetImageRef: 123 }).referenceSheetImageRef).toBeNull();
       expect(sanitizeCharacter({ name: 'A' }).referenceSheetImageRef).toBeNull();
     });
+
+    it('REGRESSION: referenceSheetImageRef rejects path separators + traversal', () => {
+      // Defense-in-depth against an LLM-extracted payload that bypassed
+      // stripCanonControlFields. The runtime route serves /data/image-refs/<x>
+      // — a value with separators or dot-prefix would 404 OR escape the dir.
+      expect(sanitizeCharacter({ name: 'A', referenceSheetImageRef: '../etc/passwd' }).referenceSheetImageRef).toBeNull();
+      expect(sanitizeCharacter({ name: 'A', referenceSheetImageRef: 'foo/bar.png' }).referenceSheetImageRef).toBeNull();
+      expect(sanitizeCharacter({ name: 'A', referenceSheetImageRef: 'foo\\bar.png' }).referenceSheetImageRef).toBeNull();
+      expect(sanitizeCharacter({ name: 'A', referenceSheetImageRef: '.' }).referenceSheetImageRef).toBeNull();
+      expect(sanitizeCharacter({ name: 'A', referenceSheetImageRef: '..' }).referenceSheetImageRef).toBeNull();
+      expect(sanitizeCharacter({ name: 'A', referenceSheetImageRef: '.hidden.png' }).referenceSheetImageRef).toBeNull();
+    });
   });
 });
 

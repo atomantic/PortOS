@@ -68,13 +68,7 @@ vi.mock('../services/universeCharacterExpand.js', () => ({
 
 // Stub the reference-sheet renderer — only the route contract is verified
 // here; the actual prompt builder is exercised in universeCharacterSheet.test.js.
-const renderCharacterReferenceSheetMock = vi.fn(async (universeId, entryId, body = {}) => ({
-  jobId: `job-${entryId}`,
-  generationId: `gen-${entryId}`,
-  filename: `${entryId}.png`,
-  path: `/data/images/${entryId}.png`,
-  promptPreview: `mock prompt for ${entryId} (override:${!!body.overridePrompt})`,
-}));
+const renderCharacterReferenceSheetMock = vi.fn();
 vi.mock('../services/universeCharacterSheet.js', () => ({
   renderCharacterReferenceSheet: (...args) => renderCharacterReferenceSheetMock(...args),
 }));
@@ -741,7 +735,19 @@ describe('universe-builder routes', () => {
   });
 
   describe('POST /:id/characters/:entryId/render-reference-sheet', () => {
-    beforeEach(() => renderCharacterReferenceSheetMock.mockClear());
+    beforeEach(() => {
+      renderCharacterReferenceSheetMock.mockReset();
+      renderCharacterReferenceSheetMock.mockImplementation(async (universeId, entryId, body = {}) => ({
+        jobId: `job-${entryId}`,
+        // generationId is now an alias for jobId per the client back-compat
+        // contract — keep them identical in the mock so the test reflects prod.
+        generationId: `job-${entryId}`,
+        queuePosition: 1,
+        destFilename: `universe-${universeId}-${entryId}-sheet-job-${entryId}.png`,
+        destPath: `/data/image-refs/universe-${universeId}-${entryId}-sheet-job-${entryId}.png`,
+        promptPreview: `mock prompt for ${entryId} (override:${!!body.overridePrompt})`,
+      }));
+    });
 
     it('200s with { jobId, generationId } and forwards overrides to the service', async () => {
       const res = await request(buildApp())
@@ -753,8 +759,11 @@ describe('universe-builder routes', () => {
         modelId: 'flux2-klein-9b',
       }));
       expect(res.body.jobId).toBe('job-c-1');
-      expect(res.body.generationId).toBe('gen-c-1');
-      expect(res.body.filename).toBe('c-1.png');
+      // generationId is now an alias for jobId (client back-compat).
+      expect(res.body.generationId).toBe('job-c-1');
+      expect(res.body.queuePosition).toBe(1);
+      expect(res.body.destFilename).toContain('-sheet-');
+      expect(res.body.destPath).toContain('/data/image-refs/');
     });
 
     it('accepts an empty body (every override is optional)', async () => {

@@ -12,25 +12,13 @@
 
 import { copyFile } from 'fs/promises';
 import { join, basename } from 'path';
-import { randomUUID } from 'crypto';
 import { PATHS, resolveTemplateAsset, resolveGalleryImage, ensureDir } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
-import { imageGenEvents } from './imageGenEvents.js';
 import { getSettings } from './settings.js';
 import { getUniverse, updateUniverse } from './universeBuilder.js';
 import { buildStyleClause } from './universeCanon.js';
 import { getImageModels, isFlux2 } from '../lib/mediaModels.js';
-
-// Lazy-loaded so importing this module doesn't pay imageGen/local.js's
-// module-load side-effects (mediaModels.seedIfMissing → ensureDir(PATHS.data)),
-// which break pipeline tests that mock PATHS.data to a non-existent path.
-let _generateImageImpl = null;
-const loadGenerateImage = async () => {
-  if (_generateImageImpl) return _generateImageImpl;
-  const mod = await import('./imageGen/local.js');
-  _generateImageImpl = mod.generateImage;
-  return _generateImageImpl;
-};
+import { enqueueJob, mediaJobEvents } from './mediaJobQueue/index.js';
 
 const DEFAULT_TEMPLATE = 'character-reference-sheet.png';
 // 2048×1536 keeps panel labels legible while staying inside FLUX.2 Klein's
@@ -38,20 +26,28 @@ const DEFAULT_TEMPLATE = 'character-reference-sheet.png';
 const DEFAULT_WIDTH = 2048;
 const DEFAULT_HEIGHT = 1536;
 
-// Resolve the model id from (in order): explicit override, the user's
-// currently-configured local model in settings, the first available FLUX.2
-// model (best fit since template + multi-ref need it), then any local model.
-// Returns null when no local image models are registered — caller surfaces
-// the actionable error so the user knows what to set up.
+// Resolve the model id with a FLUX.2-first preference: the reference sheet's
+// init-image + multi-reference portrait anchoring only flow through FLUX.2's
+// CLI flags, so a non-FLUX.2 model would silently drop the portrait. Order:
+//  1. Explicit override — trust the user's deliberate choice even if it's
+//     not FLUX.2 (degraded output is their call).
+//  2. Settings model IF it's FLUX.2 — honors the user's persisted preference
+//     when it's a valid sheet-renderer model.
+//  3. First FLUX.2 model in the registry — best default for the sheet.
+//  4. Settings model regardless of family — degraded output but at least the
+//     user's chosen backend.
+//  5. First available local model — last-resort fallback.
+// Returns null when nothing is registered; caller surfaces the 400.
 export function resolveSheetModelId({ override, settings, allModels }) {
-  const trimmed = typeof override === 'string' ? override.trim() : '';
-  if (trimmed && allModels.some((m) => m.id === trimmed)) return trimmed;
-  const settingsModel = settings?.imageGen?.local?.modelId;
-  if (typeof settingsModel === 'string' && allModels.some((m) => m.id === settingsModel)) {
-    return settingsModel;
-  }
+  const findById = (id) => (typeof id === 'string' ? allModels.find((m) => m.id === id) : null);
+  const trimmedOverride = typeof override === 'string' ? override.trim() : '';
+  const overrideModel = findById(trimmedOverride);
+  if (overrideModel) return overrideModel.id;
+  const settingsModel = findById(settings?.imageGen?.local?.modelId);
+  if (settingsModel && isFlux2(settingsModel)) return settingsModel.id;
   const firstFlux2 = allModels.find(isFlux2);
   if (firstFlux2) return firstFlux2.id;
+  if (settingsModel) return settingsModel.id;
   return allModels[0]?.id || null;
 }
 // The template anchors panel layout, not content — keep the strength low so
@@ -312,98 +308,105 @@ export async function renderCharacterReferenceSheet(universeId, entryId, options
   }
   const pythonPath = settings.imageGen?.local?.pythonPath || null;
 
-  const generationId = randomUUID();
-  // Claim the "latest pending render" slot for this character. onSheetComplete
-  // checks the slot still holds OUR id before stamping — guards against an
-  // older-but-slower render finishing after a newer one and overwriting the
-  // newer pointer with its stale filename.
-  _latestPendingByCharacter.set(pendingKey(universeId, entryId), generationId);
-  // Attach listeners BEFORE generateImage spawns so a fast Python child can't
-  // emit before we're listening. A timeout guard detaches if the runner
-  // hangs or never emits a terminal event for this generationId — otherwise
-  // every abandoned render leaves two listeners on the shared imageGenEvents
-  // emitter and they accumulate into MaxListeners warnings.
+  // Enqueue through mediaJobQueue so the render serializes through the GPU
+  // lane alongside Image Gen / Universe Builder renders. Direct generateImage
+  // calls would clobber imageGen/local.js's module-level activeProcess state
+  // when two sheets are requested back-to-back AND wouldn't appear in
+  // /api/media-jobs for reconnects. The queue assigns its own jobId — we use
+  // it as the per-character "latest pending render" key.
+  const queued = enqueueJob({
+    kind: 'image',
+    params: {
+      pythonPath, modelId,
+      prompt, negativePrompt,
+      width: built.width,
+      height: built.height,
+      initImagePath: built.initImagePath,
+      initImageStrength: built.initImageStrength,
+      referenceImagePaths: built.referenceImagePaths,
+      referenceImageStrengths: built.referenceImageStrengths,
+    },
+  });
+  const jobId = queued.jobId;
+  // Claim the latest-pending slot for this character. onSheetComplete checks
+  // it before stamping — guards against an older-but-slower render finishing
+  // after a newer one and overwriting the newer pointer.
+  _latestPendingByCharacter.set(pendingKey(universeId, entryId), jobId);
+
+  // Subscribe to the queue's completion bus (NOT imageGenEvents directly —
+  // the queue's dispatcher mediates the imageGen lifecycle and re-emits on
+  // mediaJobEvents with the full job record). Timeout guard detaches if the
+  // job somehow never reaches a terminal state.
   const LISTENER_TIMEOUT_MS = 15 * 60 * 1000;
   let timeoutHandle = null;
   const detach = () => {
     if (timeoutHandle) { clearTimeout(timeoutHandle); timeoutHandle = null; }
-    imageGenEvents.off('completed', onCompleted);
-    imageGenEvents.off('failed', onFailed);
+    mediaJobEvents.off('completed', onCompleted);
+    mediaJobEvents.off('failed', onFailed);
+    mediaJobEvents.off('canceled', onFailed);
   };
-  const onCompleted = async (ev) => {
-    if (ev.generationId !== generationId) return;
+  const onCompleted = async (job) => {
+    if (job.id !== jobId) return;
     detach();
-    await onSheetComplete({ universeId, entryId, generationId, sourceFilename: ev.filename }).catch((err) => {
-      console.error(`❌ Character sheet post-completion failed [${generationId.slice(0, 8)}]: ${err?.message}`);
+    const sourceFilename = job.result?.filename;
+    await onSheetComplete({ universeId, entryId, jobId, sourceFilename }).catch((err) => {
+      console.error(`❌ Character sheet post-completion failed [${jobId.slice(0, 8)}]: ${err?.message}`);
     });
   };
-  const onFailed = (ev) => {
-    if (ev.generationId !== generationId) return;
+  const onFailed = (job) => {
+    if (job.id !== jobId) return;
     detach();
-    console.log(`⚠️ Character sheet render failed [${generationId.slice(0, 8)}]: ${ev.error || 'unknown'}`);
+    // Release the slot so a retry render doesn't get superseded by this dead one.
+    if (_latestPendingByCharacter.get(pendingKey(universeId, entryId)) === jobId) {
+      _latestPendingByCharacter.delete(pendingKey(universeId, entryId));
+    }
+    console.log(`⚠️ Character sheet render ${job.status} [${jobId.slice(0, 8)}]: ${job.error || 'unknown'}`);
   };
-  imageGenEvents.on('completed', onCompleted);
-  imageGenEvents.on('failed', onFailed);
+  mediaJobEvents.on('completed', onCompleted);
+  mediaJobEvents.on('failed', onFailed);
+  mediaJobEvents.on('canceled', onFailed);
   timeoutHandle = setTimeout(() => {
-    console.log(`⏱️ Character sheet render timed out (no terminal event in ${LISTENER_TIMEOUT_MS / 60000}m) — detaching listeners [${generationId.slice(0, 8)}]`);
+    console.log(`⏱️ Character sheet render timed out waiting for queue event [${jobId.slice(0, 8)}] — detaching`);
     detach();
   }, LISTENER_TIMEOUT_MS);
   timeoutHandle.unref?.();
 
-  const generateImage = await loadGenerateImage();
-  const job = await generateImage({
-    pythonPath,
-    prompt,
-    negativePrompt,
-    modelId,
-    width: built.width,
-    height: built.height,
-    initImagePath: built.initImagePath,
-    initImageStrength: built.initImageStrength,
-    referenceImagePaths: built.referenceImagePaths,
-    referenceImageStrengths: built.referenceImageStrengths,
-    jobId: generationId,
-  }).catch((err) => {
-    detach();
-    throw err;
-  });
-
-  // The deterministic destination — exposed upfront so the client can patch
-  // the character optimistically on SSE completion without a universe refetch.
+  // Deterministic destination filename — uses the queue's jobId so the client
+  // can patch optimistically on SSE completion without a universe refetch.
   // onSheetComplete derives the same filename from the same inputs.
-  const destFilename = sheetFilename(universeId, entryId, generationId);
-  console.log(`🎨 Universe character sheet render — universe=${universeId.slice(0, 8)} entry=${entryId.slice(0, 8)} gen=${generationId.slice(0, 8)} model=${modelId}`);
+  const destFilename = sheetFilename(universeId, entryId, jobId);
+  console.log(`🎨 Universe character sheet render — universe=${universeId.slice(0, 8)} entry=${entryId.slice(0, 8)} job=${jobId.slice(0, 8)} model=${modelId} position=${queued.position}`);
   return {
-    jobId: job.jobId,
-    generationId,
-    filename: job.filename,
-    path: job.path,
+    jobId,
+    // `generationId` retained for client back-compat (older clients keyed
+    // SSE attachment on this name); it's now an alias for `jobId`.
+    generationId: jobId,
+    queuePosition: queued.position,
     destFilename,
     destPath: `/data/image-refs/${destFilename}`,
     promptPreview: prompt.slice(0, 800),
   };
 }
 
-export async function onSheetComplete({ universeId, entryId, generationId, sourceFilename }) {
+export async function onSheetComplete({ universeId, entryId, jobId, sourceFilename }) {
   if (!sourceFilename) return null;
   await ensureDir(PATHS.imageRefs);
-  const destFilename = sheetFilename(universeId, entryId, generationId);
+  const destFilename = sheetFilename(universeId, entryId, jobId);
   const srcPath = join(PATHS.images, basename(sourceFilename));
   const destPath = join(PATHS.imageRefs, destFilename);
   // ALWAYS copy the file — even superseded renders are kept on disk for
-  // rollback/comparison (they live at `data/image-refs/<...>-sheet-<gen>.png`
-  // with a unique per-generation filename).
+  // rollback/comparison (they live at `data/image-refs/<...>-sheet-<job>.png`
+  // with a unique per-job filename).
   await copyFile(srcPath, destPath);
   console.log(`📸 Character sheet copied to image-refs: ${destFilename}`);
 
   // If a newer render has been started for this character while ours was in
-  // flight, the slot now holds someone else's generationId. Skip the stamp —
-  // the newer render will stamp its own filename when it finishes. Without
-  // this, an older-but-slower render could overwrite a newer-but-finished
-  // pointer.
+  // flight, the slot now holds someone else's jobId. Skip the stamp — the
+  // newer render will stamp its own filename when it finishes. Without this,
+  // an older-but-slower render could overwrite a newer-but-finished pointer.
   const key = pendingKey(universeId, entryId);
-  if (_latestPendingByCharacter.get(key) !== generationId) {
-    console.log(`⏭️ Character sheet [${generationId.slice(0, 8)}] superseded by newer render — file saved, pointer not stamped`);
+  if (_latestPendingByCharacter.get(key) !== jobId) {
+    console.log(`⏭️ Character sheet [${jobId.slice(0, 8)}] superseded by newer render — file saved, pointer not stamped`);
     return { filename: destFilename, path: destPath, superseded: true };
   }
   // Stamp ONLY `referenceSheetImageRef` inside the write queue against the
