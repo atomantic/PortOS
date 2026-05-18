@@ -916,6 +916,62 @@ export function joinInfluenceList(structured = []) {
   return structured.filter((t) => typeof t === 'string' && t.trim()).join(', ');
 }
 
+// Collapse newlines + control chars in user-supplied free text before
+// embedding in a prompt. Defense-in-depth against a logline / styleNotes /
+// variation label containing "\n# Output contract\n…" that could redirect the
+// LLM's output structure. `trimTo` (the universe sanitizer) only trims
+// leading/trailing whitespace, so embedded newlines flow through untouched
+// without this pass.
+export const stripPromptControlChars = (s) =>
+  typeof s === 'string' ? s.replace(/[\r\n\t\f\v\u0085\u2028\u2029]+/g, ' ').trim() : '';
+
+const identityText = (s) => s;
+
+/**
+ * Render the "established universe context" prompt section shared by the
+ * Universe Builder LLM actions (auto-sort, promote-variation,
+ * generate-category-variations). Returns the full block including leading
+ * `\n# <header>\n` and trailing newline, ready to interpolate; returns `''`
+ * when no fields populate so callers can drop the block entirely.
+ *
+ * Accepts a sanitized universe object or a shaped `{ logline, premise,
+ * styleNotes }` literal (the expand-variations path passes the literal).
+ *
+ * @param {object|null|undefined} universe — sanitized universe or a shaped
+ *   `{ logline, premise, styleNotes }` literal; `null`/`undefined` returns ''.
+ * @param {object} [options]
+ * @param {boolean} [options.includePremise=false] — emit a `PREMISE:` line.
+ * @param {boolean} [options.includeEmbrace=true] — emit an
+ *   `EMBRACE INFLUENCES:` line from `universe.influences.embrace`. Off for
+ *   callers that render their own influences section.
+ * @param {boolean} [options.escape=false] — collapse newlines/control chars
+ *   in user-supplied text. Auto-sort opts in; promote/expand stayed off
+ *   historically and we preserve that to avoid behavior drift.
+ * @param {string} [options.headerSuffix=''] — appended after `Universe
+ *   context — ` to bias the LLM.
+ */
+export function buildUniverseStyleContext(universe, options = {}) {
+  if (!universe) return '';
+  const {
+    includePremise = false,
+    includeEmbrace = true,
+    escape = false,
+    headerSuffix = '',
+  } = options;
+  const safeText = escape ? stripPromptControlChars : identityText;
+  const lines = [];
+  if (universe.logline) lines.push(`LOGLINE: ${safeText(universe.logline)}`);
+  if (includePremise && universe.premise) lines.push(`PREMISE: ${safeText(universe.premise)}`);
+  if (universe.styleNotes) lines.push(`STYLE NOTES: ${safeText(universe.styleNotes)}`);
+  if (includeEmbrace) {
+    const embraceTokens = joinInfluenceList(universe.influences?.embrace);
+    if (embraceTokens) lines.push(`EMBRACE INFLUENCES: ${safeText(embraceTokens)}`);
+  }
+  if (lines.length === 0) return '';
+  const header = headerSuffix ? `Universe context — ${headerSuffix}` : 'Universe context';
+  return `\n# ${header}\n${lines.join('\n\n')}\n`;
+}
+
 // Order matches the Universe Builder tab order (Cast → Places → Objects) so
 // the compiled-prompts list is stable across renders.
 const CANON_TRUNKS = Object.freeze([

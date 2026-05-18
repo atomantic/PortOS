@@ -9,7 +9,7 @@ import {
   getUniverse,
   updateUniverse,
   normalizeCategoryKey,
-  joinInfluenceList,
+  buildUniverseStyleContext,
 } from './universeBuilder.js';
 import {
   sanitizeBibleList,
@@ -54,15 +54,9 @@ const buildPromotePrompt = ({
   category,
   universe,
 }) => {
-  const embraceTokens = joinInfluenceList(universe.influences?.embrace);
-  const styleContext = [
-    universe.logline ? `LOGLINE: ${universe.logline}` : null,
-    universe.styleNotes ? `STYLE NOTES: ${universe.styleNotes}` : null,
-    embraceTokens ? `EMBRACE INFLUENCES: ${embraceTokens}` : null,
-  ].filter(Boolean).join('\n\n');
-  const styleSection = styleContext
-    ? `\n# Universe context — keep the new canon entry consistent with this established setting\n${styleContext}\n`
-    : '';
+  const styleSection = buildUniverseStyleContext(universe, {
+    headerSuffix: 'keep the new canon entry consistent with this established setting',
+  });
 
   // Per-kind output contract. The sanitizer drops unknown fields, so
   // listing the field whitelist here is the LLM's only contract.

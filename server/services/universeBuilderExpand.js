@@ -22,6 +22,7 @@ import {
   LOGLINE_MAX,
   PREMISE_MAX,
   STYLE_NOTES_MAX,
+  buildUniverseStyleContext,
   isInfluenceLockField,
   normalizeCategoryKey,
   sanitizeCategories,
@@ -509,14 +510,17 @@ function buildCategoryGeneratePrompt({
     ? `\n# Influences (embrace = style prompt, avoid = negative prompt)\nEmbrace: ${embrace.join(", ") || "(none)"}\nAvoid: ${avoid.join(", ") || "(none)"}\n`
     : "";
 
-  const stateLines = [
-    logline && `LOGLINE: ${logline}`,
-    premise && `PREMISE: ${premise}`,
-    styleNotes && `STYLE NOTES: ${styleNotes}`,
-  ].filter(Boolean);
-  const stateSection = stateLines.length
-    ? `\n# Universe context — keep new variations consistent with this established setting\n${stateLines.join('\n\n')}\n`
-    : "";
+  // Influences ship in their own section above; the universe-context helper
+  // skips EMBRACE INFLUENCES here so the variations prompt doesn't render
+  // them twice with different framing.
+  const stateSection = buildUniverseStyleContext(
+    { logline, premise, styleNotes },
+    {
+      includePremise: true,
+      includeEmbrace: false,
+      headerSuffix: 'keep new variations consistent with this established setting',
+    },
+  );
 
   const existingSection = existingLabels.length
     ? `\n# Existing "${category}" variations — DO NOT regenerate these labels or close paraphrases\n${existingLabels.map((l) => `- "${l}"`).join('\n')}\n`

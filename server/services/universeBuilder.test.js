@@ -362,6 +362,80 @@ describe("universeBuilder service", () => {
     });
   });
 
+  describe("buildUniverseStyleContext", () => {
+    const universe = {
+      logline: "A foundry city goes silent.",
+      premise: "post-collapse industrial sprawl",
+      styleNotes: "moebius linework, ash palette",
+      influences: { embrace: ["moebius linework", "cel-shading"], avoid: ["blurry"] },
+    };
+
+    it("returns '' for null universe", () => {
+      expect(svc.buildUniverseStyleContext(null)).toBe("");
+    });
+
+    it("returns '' when no fields populate", () => {
+      expect(svc.buildUniverseStyleContext({})).toBe("");
+    });
+
+    it("default options render bare `# Universe context` header with logline + styleNotes + embrace", () => {
+      expect(svc.buildUniverseStyleContext(universe))
+        .toBe("\n# Universe context\nLOGLINE: A foundry city goes silent.\n\nSTYLE NOTES: moebius linework, ash palette\n\nEMBRACE INFLUENCES: moebius linework, cel-shading\n");
+    });
+
+    it("headerSuffix appears after `Universe context — `", () => {
+      const out = svc.buildUniverseStyleContext(
+        { logline: "X" },
+        { headerSuffix: "keep the new canon entry consistent with this established setting" },
+      );
+      expect(out).toBe("\n# Universe context — keep the new canon entry consistent with this established setting\nLOGLINE: X\n");
+    });
+
+    it("includePremise inserts PREMISE between LOGLINE and STYLE NOTES", () => {
+      const out = svc.buildUniverseStyleContext(universe, { includePremise: true });
+      expect(out.indexOf("LOGLINE:")).toBeLessThan(out.indexOf("PREMISE:"));
+      expect(out.indexOf("PREMISE:")).toBeLessThan(out.indexOf("STYLE NOTES:"));
+      expect(out).toContain("PREMISE: post-collapse industrial sprawl");
+    });
+
+    it("includeEmbrace:false suppresses the embrace line", () => {
+      const out = svc.buildUniverseStyleContext(universe, { includeEmbrace: false });
+      expect(out).not.toContain("EMBRACE INFLUENCES:");
+      expect(out).toContain("LOGLINE:");
+      expect(out).toContain("STYLE NOTES:");
+    });
+
+    it("escape:true collapses embedded newlines in styleNotes/logline", () => {
+      const out = svc.buildUniverseStyleContext(
+        { logline: "line1\nline2", styleNotes: "para1\n\npara2" },
+        { escape: true },
+      );
+      expect(out).toContain("LOGLINE: line1 line2");
+      expect(out).toContain("STYLE NOTES: para1 para2");
+    });
+
+    it("escape:false (default) preserves embedded newlines verbatim", () => {
+      const out = svc.buildUniverseStyleContext({ logline: "line1\nline2" });
+      expect(out).toContain("LOGLINE: line1\nline2");
+    });
+
+    it("returns '' when only premise is set but includePremise is false (the default)", () => {
+      expect(svc.buildUniverseStyleContext({ premise: "p" })).toBe("");
+    });
+
+    it("expand-variations call shape (includePremise + includeEmbrace:false + headerSuffix) renders only logline/premise/styleNotes", () => {
+      const out = svc.buildUniverseStyleContext(
+        { logline: "L", premise: "P", styleNotes: "S", influences: { embrace: ["should-not-appear"] } },
+        {
+          includePremise: true,
+          includeEmbrace: false,
+          headerSuffix: "keep new variations consistent with this established setting",
+        },
+      );
+      expect(out).toBe("\n# Universe context — keep new variations consistent with this established setting\nLOGLINE: L\n\nPREMISE: P\n\nSTYLE NOTES: S\n");
+    });
+  });
+
   describe("compilePrompts", () => {
     it("returns one prompt per variation across selected categories with style prefix", async () => {
       const w = await seedWorld();

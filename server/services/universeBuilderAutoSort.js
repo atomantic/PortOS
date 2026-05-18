@@ -17,7 +17,8 @@ import {
   getUniverse,
   updateUniverse,
   normalizeCategoryKey,
-  joinInfluenceList,
+  buildUniverseStyleContext,
+  stripPromptControlChars,
 } from './universeBuilder.js';
 import { VALID_TARGET_KINDS } from './universeBuilderPromote.js';
 import { ServerError } from '../lib/errorHandler.js';
@@ -30,34 +31,25 @@ const SORTABLE_KINDS = VALID_TARGET_KINDS;
 
 const VARIATION_SAMPLE_PER_BUCKET = 10;
 
-// Collapse newlines + control chars in user-supplied free text before embedding
-// in the prompt. Variation labels + logline + styleNotes are user-owned strings
-// that pass sanitization but aren't newline-stripped — without this a label
-// containing "\n# Output contract\n..." could redirect the LLM's structure.
-// Downstream gates (per-entry kind filter, byKey lookup) keep the blast radius
-// bounded even if injection lands, but stripping at the embed layer is the
-// cheap defense.
-const escapePromptText = (s) =>
-  typeof s === 'string' ? s.replace(/[\r\n\t\f\v\u0085\u2028\u2029]+/g, ' ').trim() : '';
+// Variation labels are user-owned strings that pass sanitization but aren't
+// newline-stripped — without `stripPromptControlChars` a label containing
+// "\n# Output contract\n..." could redirect the LLM's structure. The
+// universe-context block applies the same defense via
+// `buildUniverseStyleContext(universe, { escape: true })` below. Downstream
+// gates (per-entry kind filter, byKey lookup) keep the blast radius bounded
+// even if injection lands, but stripping at the embed layer is the cheap
+// defense.
 
 const kindUnionForPrompt = SORTABLE_KINDS.map((k) => `"${k}"`).join(' | ');
 const kindListForPrompt = SORTABLE_KINDS.join(', ');
 
 const buildAutoSortPrompt = ({ buckets, universe }) => {
-  const embraceTokens = joinInfluenceList(universe.influences?.embrace);
-  const styleContext = [
-    universe.logline ? `LOGLINE: ${escapePromptText(universe.logline)}` : null,
-    universe.styleNotes ? `STYLE NOTES: ${escapePromptText(universe.styleNotes)}` : null,
-    embraceTokens ? `EMBRACE INFLUENCES: ${escapePromptText(embraceTokens)}` : null,
-  ].filter(Boolean).join('\n\n');
-  const styleSection = styleContext
-    ? `\n# Universe context\n${styleContext}\n`
-    : '';
+  const styleSection = buildUniverseStyleContext(universe, { escape: true });
 
   const bucketBlock = buckets.map(({ key, variations }) => {
     const sample = variations
       .slice(0, VARIATION_SAMPLE_PER_BUCKET)
-      .map((v) => `  - ${escapePromptText(v.label)}`)
+      .map((v) => `  - ${stripPromptControlChars(v.label)}`)
       .join('\n');
     const body = sample || '  (no variations yet)';
     return `## ${key}\n${body}`;
