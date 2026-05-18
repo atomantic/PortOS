@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import { copyFileSync, existsSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { buildCharacterReferenceSheetPrompt, REFERENCE_SHEET_CONSTANTS } from './universeCharacterSheet.js';
+import { buildCharacterReferenceSheetPrompt, REFERENCE_SHEET_CONSTANTS, resolveSheetModelId } from './universeCharacterSheet.js';
 import { PATHS } from '../lib/fileUtils.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -140,7 +140,10 @@ describe('universeCharacterSheet — buildCharacterReferenceSheetPrompt', () => 
     const out = buildCharacterReferenceSheetPrompt(baseUniverse, richCharacter);
     expect(out.width).toBe(REFERENCE_SHEET_CONSTANTS.DEFAULT_WIDTH);
     expect(out.height).toBe(REFERENCE_SHEET_CONSTANTS.DEFAULT_HEIGHT);
-    expect(out.modelId).toBe(REFERENCE_SHEET_CONSTANTS.DEFAULT_MODEL);
+    // modelId resolution is deferred to render time (uses current settings,
+    // not a hardcoded default). Pure prompt builder returns null so the
+    // caller chooses — see resolveSheetModelId.
+    expect(out.modelId).toBeNull();
     expect(out.negativePrompt).toContain('watermark');
     expect(out.negativePrompt).toContain('text artifacts');
   });
@@ -189,5 +192,63 @@ describe('universeCharacterSheet — buildCharacterReferenceSheetPrompt', () => 
   it('throws a 400 when called with no universe or no character', () => {
     expect(() => buildCharacterReferenceSheetPrompt(null, richCharacter)).toThrow(/required/);
     expect(() => buildCharacterReferenceSheetPrompt(baseUniverse, null)).toThrow(/required/);
+  });
+});
+
+describe('universeCharacterSheet — resolveSheetModelId', () => {
+  const flux2Model = { id: 'flux2-klein-9b', runner: 'flux2' };
+  const flux2Small = { id: 'flux2-klein-4b', runner: 'flux2' };
+  const devModel = { id: 'dev', runner: 'mflux' };
+
+  it('honors an explicit override when the model exists in the registry', () => {
+    const out = resolveSheetModelId({
+      override: 'flux2-klein-4b',
+      settings: { imageGen: { local: { modelId: 'dev' } } },
+      allModels: [flux2Model, flux2Small, devModel],
+    });
+    expect(out).toBe('flux2-klein-4b');
+  });
+
+  it('ignores an override that does not match any registered model', () => {
+    const out = resolveSheetModelId({
+      override: 'made-up-model',
+      settings: { imageGen: { local: { modelId: 'dev' } } },
+      allModels: [flux2Model, devModel],
+    });
+    expect(out).toBe('dev');
+  });
+
+  it('falls back to the user-configured local modelId from settings', () => {
+    const out = resolveSheetModelId({
+      override: '',
+      settings: { imageGen: { local: { modelId: 'dev' } } },
+      allModels: [flux2Model, devModel],
+    });
+    expect(out).toBe('dev');
+  });
+
+  it('falls back to the first FLUX.2 model when no override and no settings', () => {
+    // Multi-ref + init-image work best on FLUX.2 — prefer it over an
+    // older mflux model when nothing else picked.
+    const out = resolveSheetModelId({
+      override: undefined,
+      settings: {},
+      allModels: [devModel, flux2Small, flux2Model],
+    });
+    expect(out).toBe('flux2-klein-4b');
+  });
+
+  it('falls back to the first available local model when no FLUX.2 is registered', () => {
+    const out = resolveSheetModelId({
+      override: undefined,
+      settings: {},
+      allModels: [devModel],
+    });
+    expect(out).toBe('dev');
+  });
+
+  it('returns null when no models are registered (caller surfaces the 400)', () => {
+    const out = resolveSheetModelId({ override: undefined, settings: {}, allModels: [] });
+    expect(out).toBeNull();
   });
 });

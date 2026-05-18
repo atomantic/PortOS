@@ -19,6 +19,7 @@ import { imageGenEvents } from './imageGenEvents.js';
 import { getSettings } from './settings.js';
 import { getUniverse, updateUniverse } from './universeBuilder.js';
 import { buildStyleClause } from './universeCanon.js';
+import { getImageModels, isFlux2 } from '../lib/mediaModels.js';
 
 // Lazy-loaded so importing this module doesn't pay imageGen/local.js's
 // module-load side-effects (mediaModels.seedIfMissing → ensureDir(PATHS.data)),
@@ -32,11 +33,27 @@ const loadGenerateImage = async () => {
 };
 
 const DEFAULT_TEMPLATE = 'character-reference-sheet.png';
-const DEFAULT_MODEL = 'flux2-klein-9b';
 // 2048×1536 keeps panel labels legible while staying inside FLUX.2 Klein's
 // comfort envelope on Apple Silicon (≈10–15s/iter).
 const DEFAULT_WIDTH = 2048;
 const DEFAULT_HEIGHT = 1536;
+
+// Resolve the model id from (in order): explicit override, the user's
+// currently-configured local model in settings, the first available FLUX.2
+// model (best fit since template + multi-ref need it), then any local model.
+// Returns null when no local image models are registered — caller surfaces
+// the actionable error so the user knows what to set up.
+export function resolveSheetModelId({ override, settings, allModels }) {
+  const trimmed = typeof override === 'string' ? override.trim() : '';
+  if (trimmed && allModels.some((m) => m.id === trimmed)) return trimmed;
+  const settingsModel = settings?.imageGen?.local?.modelId;
+  if (typeof settingsModel === 'string' && allModels.some((m) => m.id === settingsModel)) {
+    return settingsModel;
+  }
+  const firstFlux2 = allModels.find(isFlux2);
+  if (firstFlux2) return firstFlux2.id;
+  return allModels[0]?.id || null;
+}
 // The template anchors panel layout, not content — keep the strength low so
 // the character + style are still driven by the prompt + portrait reference.
 const TEMPLATE_INIT_STRENGTH = 0.25;
@@ -204,7 +221,10 @@ export function buildCharacterReferenceSheetPrompt(universe, character, { templa
     negativePrompt,
     width: DEFAULT_WIDTH,
     height: DEFAULT_HEIGHT,
-    modelId: DEFAULT_MODEL,
+    // modelId is resolved at render time from current settings — see
+    // resolveSheetModelId. Returned as null here so the prompt builder stays
+    // pure (no settings I/O) and the renderer is the single decision point.
+    modelId: null,
     initImagePath,
     initImageStrength: initImagePath ? TEMPLATE_INIT_STRENGTH : null,
     referenceImagePaths,
@@ -258,11 +278,29 @@ export async function renderCharacterReferenceSheet(universeId, entryId, options
   const negativePrompt = typeof options.overrideNegativePrompt === 'string' && options.overrideNegativePrompt.trim()
     ? options.overrideNegativePrompt.trim()
     : built.negativePrompt;
-  const modelId = typeof options.modelId === 'string' && options.modelId.trim()
-    ? options.modelId.trim()
-    : built.modelId;
 
   const settings = await getSettings();
+  // Honor the user's current image-gen mode. The reference-sheet renderer
+  // relies on init-image + multi-ref editing (FLUX.2 features) — codex /
+  // external backends would silently drop those args and produce a sheet
+  // without the layout anchor. Surface that as a 400 with a clear remediation
+  // so the user knows to switch in Settings → Image Gen rather than getting
+  // a poor render with no explanation.
+  const activeMode = settings.imageGen?.mode || 'local';
+  if (activeMode !== 'local') {
+    throw new ServerError(
+      `Character reference sheet rendering requires local image-gen mode (currently: ${activeMode}). The sheet uses the layout template as a low-strength init image and the character's primary portrait as a FLUX.2 multi-reference input — both unsupported by ${activeMode}. Switch in Settings → Image Gen.`,
+      { status: 400, code: 'UNIVERSE_CHARACTER_SHEET_REQUIRES_LOCAL' },
+    );
+  }
+  const allModels = getImageModels();
+  const modelId = resolveSheetModelId({ override: options.modelId, settings, allModels });
+  if (!modelId) {
+    throw new ServerError(
+      'No local image-gen models are registered. Install a FLUX.2 (or other local) model via `bash scripts/setup-image-video.sh` before generating a reference sheet.',
+      { status: 400, code: 'UNIVERSE_CHARACTER_SHEET_NO_MODEL' },
+    );
+  }
   const pythonPath = settings.imageGen?.local?.pythonPath || null;
 
   const generationId = randomUUID();
@@ -371,7 +409,7 @@ export async function onSheetComplete({ universeId, entryId, generationId, sourc
 }
 
 export const REFERENCE_SHEET_CONSTANTS = Object.freeze({
-  DEFAULT_TEMPLATE, DEFAULT_MODEL, DEFAULT_WIDTH, DEFAULT_HEIGHT,
+  DEFAULT_TEMPLATE, DEFAULT_WIDTH, DEFAULT_HEIGHT,
   TEMPLATE_INIT_STRENGTH, PORTRAIT_REFERENCE_STRENGTH,
   DEFAULT_EXPRESSIONS, DEFAULT_HAND_GESTURES,
 });
