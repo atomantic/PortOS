@@ -860,7 +860,15 @@ export async function updateUniverse(id, patchOrMutator = {}) {
     // otherwise clobber the newer pointer (multi-tab / parallel render
     // race). Preserve cur's value per-id; new characters in the patch
     // (no matching cur id) start fresh.
-    if (Array.isArray(scalarPatch.characters) && Array.isArray(cur.characters)) {
+    //
+    // ONLY applies to literal-object patches. The mutator path
+    // (`onSheetComplete`) reads `cur` itself, intentionally constructs a
+    // patch with the newly stamped filename, and is the trusted writer of
+    // this field — applying preservation there would clobber the stamp
+    // back to the OLD/null value and the sheet would never persist.
+    if (!isMutator
+      && Array.isArray(scalarPatch.characters)
+      && Array.isArray(cur.characters)) {
       const curById = new Map(cur.characters.filter((c) => c?.id).map((c) => [c.id, c]));
       scalarPatch.characters = scalarPatch.characters.map((c) => {
         const prev = c?.id ? curById.get(c.id) : null;

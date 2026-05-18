@@ -369,6 +369,19 @@ describe("universeBuilder service", () => {
     });
     const charOmit = afterOmitPatch.characters.find((c) => c.id === "c-1");
     expect(charOmit?.referenceSheetImageRef).toBe("sheet-B.png");
+
+    // Mutator path (the render-completion handler) IS trusted to update
+    // referenceSheetImageRef — it constructs the patch from the latest
+    // record. Preservation must NOT run against mutator output, or the
+    // newly-stamped filename gets clobbered back to the old value.
+    const afterRenderStamp = await svc.updateUniverse(w.id, (latest) => {
+      const next = (latest.characters || []).map((c) =>
+        c.id === "c-1" ? { ...c, referenceSheetImageRef: "sheet-C.png" } : c,
+      );
+      return { characters: next };
+    });
+    const charAfterStamp = afterRenderStamp.characters.find((c) => c.id === "c-1");
+    expect(charAfterStamp?.referenceSheetImageRef).toBe("sheet-C.png");
   });
 
   it("deleteUniverse removes the universe and its runs", async () => {
