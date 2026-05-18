@@ -229,6 +229,15 @@ export async function renderCharacterReferenceSheet(universeId, entryId, options
       status: 404, code: 'UNIVERSE_CANON_NOT_FOUND',
     });
   }
+  // Same frozen-identity guard the character refine/expand flows enforce —
+  // the UI gates this too, but the route is reachable directly so the lock
+  // has to be enforced server-side as well. 409 mirrors refineUniverseCharacter.
+  if (character.locked === true) {
+    throw new ServerError(
+      `Character "${character.name}" is locked — unlock it before rendering a reference sheet`,
+      { status: 409, code: 'UNIVERSE_CANON_LOCKED' },
+    );
+  }
 
   const built = buildCharacterReferenceSheetPrompt(universe, character, {
     template: options.template || DEFAULT_TEMPLATE,

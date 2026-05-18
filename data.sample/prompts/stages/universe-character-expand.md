@@ -36,7 +36,7 @@ For every BLANK field in the character JSON above, propose a value that:
 - `speechAccent` — written speech pattern + accent ("clipped Edinburgh, rarely contracts; uses nautical metaphors").
 - `visualNotes` — 1–2 sentences capturing the at-a-glance silhouette and palette ("layered practical streetwear in faded mustard + charcoal; chunky boots; ever-present beanie").
 - `silhouetteNotes` — bulleted-as-prose distinctive shape features ("compact upper body; layered silhouette; tapered lower half; short hair adds 5cm height").
-- `postureNotes` — habitual posture cues ("slight forward lean; weight in left foot; shoulders loose; ready-to-move; head eyes constantly").
+- `postureNotes` — habitual posture cues ("slight forward lean; weight in left foot; shoulders loose; ready-to-move; eyes constantly scanning").
 - `specialTraits` — non-redundant standout details ("quick hands; chipped nail polish; scar on right eyebrow; restless energy; observant").
 - `visualIdentity` — design language axes ("knobs + sights; urban utilitarian; analog tech feel; small signals of story; hard to pin down").
 - `motivations` — primary drives in 2–3 sentences. What does the character WANT, and what does the character fear losing?

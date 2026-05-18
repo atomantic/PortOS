@@ -1,5 +1,23 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll } from 'vitest';
+import { copyFileSync, existsSync, mkdirSync } from 'fs';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
 import { buildCharacterReferenceSheetPrompt, REFERENCE_SHEET_CONSTANTS } from './universeCharacterSheet.js';
+import { PATHS } from '../lib/fileUtils.js';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const SAMPLE_TEMPLATE = join(__dirname, '..', '..', 'data.sample', 'templates', 'character-reference-sheet.png');
+
+// Clean checkouts may not have `data/templates/` (created by setup/migration);
+// provision the tracked sample asset so the resolver finds it without
+// depending on a separate `npm run install:all` step before `npm test`.
+beforeAll(() => {
+  if (!existsSync(PATHS.visualTemplates)) mkdirSync(PATHS.visualTemplates, { recursive: true });
+  const dest = join(PATHS.visualTemplates, 'character-reference-sheet.png');
+  if (!existsSync(dest) && existsSync(SAMPLE_TEMPLATE)) {
+    copyFileSync(SAMPLE_TEMPLATE, dest);
+  }
+});
 
 const baseUniverse = {
   id: 'u-123',

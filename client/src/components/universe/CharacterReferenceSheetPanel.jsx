@@ -14,6 +14,26 @@ import { renderCharacterReferenceSheet } from '../../services/apiUniverseBuilder
 import useMediaJobProgress from '../../hooks/useMediaJobProgress';
 import toast from '../ui/Toast';
 
+// HEAD-poll for the rendered sheet at its destination URL, with backoff. The
+// server-side onSheetComplete listener copies the gallery PNG into
+// /data/image-refs/ AFTER the SSE 'completed' event fires (the listener is
+// async, the event was sync), so claiming the file exists at SSE-completion
+// time races and shows a 404 thumbnail. Returns true once the file is
+// reachable, false after ~3s of polling.
+async function waitForImageRef(filename, { maxMs = 3000, intervalMs = 150 } = {}) {
+  if (!filename) return false;
+  const url = `/data/image-refs/${filename}`;
+  const deadline = Date.now() + maxMs;
+  while (Date.now() < deadline) {
+    // cache: 'no-store' so a transient 404 isn't cached by the browser and
+    // poisoning subsequent <img> tags.
+    const res = await fetch(url, { method: 'HEAD', cache: 'no-store' }).catch(() => null);
+    if (res?.ok) return true;
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  return false;
+}
+
 export default function CharacterReferenceSheetPanel({
   universeId, entry, locked, onSheetCompleted, onOpenLightbox,
 }) {
@@ -34,9 +54,18 @@ export default function CharacterReferenceSheetPanel({
     if (settledRef.current === jobId) return;
     if (status === 'completed' && filename) {
       settledRef.current = jobId;
-      onSheetCompleted?.(entry.id, destFilenameRef.current);
+      const dest = destFilenameRef.current;
       destFilenameRef.current = null;
       setJobId(null);
+      // The SSE 'completed' event fires when the FLUX.2 child exits — BEFORE
+      // the server-side onSheetComplete listener has copied the gallery PNG
+      // into /data/image-refs/ and stamped the character. Verify the file is
+      // actually reachable before we flip the UI to show it, otherwise the
+      // <img> renders a 404 that the browser caches.
+      waitForImageRef(dest).then((ok) => {
+        if (ok) onSheetCompleted?.(entry.id, dest);
+        else toast.error('Sheet render finished but the image never appeared — refresh to see it');
+      });
     } else if (status === 'failed' || status === 'canceled') {
       settledRef.current = jobId;
       destFilenameRef.current = null;

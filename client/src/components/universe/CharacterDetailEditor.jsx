@@ -200,33 +200,74 @@ function CollapsibleSection({ icon: Icon, label, summary, defaultOpen = false, c
 }
 
 export default function CharacterDetailEditor({ entry, onPatch, onExpand, expanding = false, disabled = false }) {
+  // Per-section pending rows — kept local until the required column (first
+  // column on each LIST_SECTION, always `name` or `label`) is non-empty.
+  // Persisting a blank row immediately would round-trip a row the server
+  // sanitizer drops, and the user's first keystroke would land in a row that
+  // disappears on the next render. Mirrors WardrobeSection's pendingNew
+  // pattern in CanonCard.jsx.
+  const [pendingByList, setPendingByList] = useState({});
+
   if (!entry) return null;
 
   const patchField = (name, value) => onPatch?.({ [name]: value });
   const patchList = (field, next) => onPatch?.({ [field]: next });
+
+  const persistedFor = (section) =>
+    (Array.isArray(entry[section.field]) ? entry[section.field] : []);
+  const pendingFor = (section) => pendingByList[section.key] || [];
+  const mergedFor = (section) => [...persistedFor(section), ...pendingFor(section)];
+  const requiredColumn = (section) => section.columns[0].name;
 
   const sectionSummary = (section) => {
     const filled = section.fields.filter((f) => (entry[f.name] || '').trim()).length;
     return filled ? `${filled}/${section.fields.length} filled` : 'empty';
   };
   const listSummary = (section) => {
-    const list = Array.isArray(entry[section.field]) ? entry[section.field] : [];
-    if (list.length === 0) return 'empty';
-    return `${list.length} ${list.length === 1 ? section.singular : section.singular + 's'}`;
+    const merged = mergedFor(section);
+    if (merged.length === 0) return 'empty';
+    return `${merged.length} ${merged.length === 1 ? section.singular : section.singular + 's'}`;
   };
 
   const addRow = (section) => {
-    const list = Array.isArray(entry[section.field]) ? entry[section.field] : [];
     const blank = Object.fromEntries(section.columns.map((c) => [c.name, '']));
-    patchList(section.field, [...list, blank]);
+    setPendingByList((prev) => ({
+      ...prev,
+      [section.key]: [...(prev[section.key] || []), blank],
+    }));
   };
+
+  const isPendingIdx = (section, idx) => idx >= persistedFor(section).length;
+  const pendingIdxOf = (section, idx) => idx - persistedFor(section).length;
+
   const updateRow = (section, idx, nextRow) => {
-    const list = Array.isArray(entry[section.field]) ? entry[section.field] : [];
-    patchList(section.field, list.map((r, i) => (i === idx ? nextRow : r)));
+    if (!isPendingIdx(section, idx)) {
+      const persisted = persistedFor(section);
+      patchList(section.field, persisted.map((r, i) => (i === idx ? nextRow : r)));
+      return;
+    }
+    const pIdx = pendingIdxOf(section, idx);
+    const pending = pendingFor(section);
+    const requiredFilled = String(nextRow[requiredColumn(section)] || '').trim().length > 0;
+    if (requiredFilled) {
+      // Promote into persisted; drop from pending.
+      const remaining = pending.filter((_, i) => i !== pIdx);
+      setPendingByList((prev) => ({ ...prev, [section.key]: remaining }));
+      patchList(section.field, [...persistedFor(section), nextRow]);
+      return;
+    }
+    const next = pending.map((r, i) => (i === pIdx ? nextRow : r));
+    setPendingByList((prev) => ({ ...prev, [section.key]: next }));
   };
+
   const removeRow = (section, idx) => {
-    const list = Array.isArray(entry[section.field]) ? entry[section.field] : [];
-    patchList(section.field, list.filter((_, i) => i !== idx));
+    if (isPendingIdx(section, idx)) {
+      const pIdx = pendingIdxOf(section, idx);
+      const next = pendingFor(section).filter((_, i) => i !== pIdx);
+      setPendingByList((prev) => ({ ...prev, [section.key]: next }));
+      return;
+    }
+    patchList(section.field, persistedFor(section).filter((_, i) => i !== idx));
   };
 
   return (
@@ -264,7 +305,7 @@ export default function CharacterDetailEditor({ entry, onPatch, onExpand, expand
       ))}
 
       {LIST_SECTIONS.map((section) => {
-        const list = Array.isArray(entry[section.field]) ? entry[section.field] : [];
+        const merged = mergedFor(section);
         return (
           <CollapsibleSection
             key={section.key}
@@ -272,11 +313,11 @@ export default function CharacterDetailEditor({ entry, onPatch, onExpand, expand
             label={section.label}
             summary={listSummary(section)}
           >
-            {list.length === 0 ? (
+            {merged.length === 0 ? (
               <p className="text-[11px] text-gray-500 italic">No {section.label.toLowerCase()} yet.</p>
             ) : (
               <div className="space-y-1.5">
-                {list.map((row, idx) => (
+                {merged.map((row, idx) => (
                   <ListRow
                     key={row.id || `${section.key}-${idx}`}
                     row={row}
