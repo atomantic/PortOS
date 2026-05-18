@@ -378,7 +378,7 @@ describe("universeBuilder service", () => {
       expect(svc.buildUniverseStyleContext({})).toBe("");
     });
 
-    it("default options match promote-prompt shape (logline + styleNotes + embrace)", () => {
+    it("default options render bare `# Universe context` header with logline + styleNotes + embrace", () => {
       expect(svc.buildUniverseStyleContext(universe))
         .toBe("\n# Universe context\nLOGLINE: A foundry city goes silent.\n\nSTYLE NOTES: moebius linework, ash palette\n\nEMBRACE INFLUENCES: moebius linework, cel-shading\n");
     });
