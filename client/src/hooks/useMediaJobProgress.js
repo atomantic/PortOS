@@ -32,6 +32,20 @@ const INITIAL_STATE = Object.freeze({
 
 export default function useMediaJobProgress(jobId, { kind = 'image' } = {}) {
   const [state, setState] = useState(INITIAL_STATE);
+  // SYNCHRONOUS reset when `jobId` changes — React's "adjusting state on
+  // prop change" pattern. Doing this in a `useEffect` (as we used to)
+  // means the FIRST render after `jobId` flips still returns the previous
+  // job's `status` / `filename`. Consumers that fire `onJobCompleted` on
+  // status='completed' would mis-attribute the prior job's filename to the
+  // NEW jobId and prematurely clear the rest of a queued batch. With this
+  // pattern React discards the in-progress render and re-runs the
+  // component immediately, so the new jobId is never observed against
+  // stale state.
+  const prevJobIdRef = useRef(jobId);
+  if (prevJobIdRef.current !== jobId) {
+    prevJobIdRef.current = jobId;
+    setState(INITIAL_STATE);
+  }
   // Track mount so the initial fetch's setState doesn't fire after unmount
   // (the panel could be removed while the GET is in flight).
   //
@@ -48,10 +62,6 @@ export default function useMediaJobProgress(jobId, { kind = 'image' } = {}) {
   }, []);
 
   useEffect(() => {
-    // Reset state on every jobId change so the previous job's filename /
-    // currentImage doesn't briefly leak into the new job's render window
-    // (between the listener attach and the new fetch resolving).
-    setState(INITIAL_STATE);
     if (!jobId) return undefined;
 
     // Hydrate from the server. The job may already be completed (the user

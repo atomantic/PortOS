@@ -1,4 +1,4 @@
-// Canon entities on the universe — characters, settings, objects. Mirrors
+// Canon entities on the universe — characters, places, objects. Mirrors
 // `pipeline/series.js`'s extract+refine paths but writes into the universe
 // so multiple series can share a cast (Phase A of the Universe-as-canon
 // refactor). The series-side helpers stay live until Phase B migrates
@@ -12,8 +12,9 @@ import {
 import { runStagedLLM } from '../lib/stageRunner.js';
 import { runPromptRefine } from './pipeline/refineHelpers.js';
 import { ServerError } from '../lib/errorHandler.js';
+import { shortId } from '../lib/fileUtils.js';
 
-const peerForPrompt = (entry) => ({
+export const peerForPrompt = (entry) => ({
   id: entry.id,
   name: entry.name,
   aliases: Array.isArray(entry.aliases) ? entry.aliases : [],
@@ -27,7 +28,7 @@ const targetForPrompt = (entry) => ({
   firstAppearance: entry.firstAppearance || null,
 });
 
-const buildStyleClause = (universe) => {
+export const buildStyleClause = (universe) => {
   const embraceTokens = joinInfluenceList(universe.influences?.embrace);
   const bits = [
     embraceTokens ? `Universe aesthetic: ${embraceTokens}` : null,
@@ -49,7 +50,7 @@ export async function extractCanonFromProse(universeId, opts = {}) {
   const universe = await getUniverse(universeId);
   const rawKinds = (opts.kinds && opts.kinds.length)
     ? opts.kinds
-    : [BIBLE_KIND.CHARACTER, BIBLE_KIND.SETTING, BIBLE_KIND.OBJECT];
+    : [BIBLE_KIND.CHARACTER, BIBLE_KIND.PLACE, BIBLE_KIND.OBJECT];
   const kinds = [...new Set(rawKinds)];
   if (typeof opts.corpus !== 'string' || !opts.corpus.trim()) {
     throw new ServerError('extractCanonFromProse: corpus is required', {
@@ -70,16 +71,47 @@ export async function extractCanonFromProse(universeId, opts = {}) {
     ? await Promise.all(kinds.map(runOne))
     : await kinds.reduce(async (acc, kind) => [...(await acc), await runOne(kind)], Promise.resolve([]));
 
+  const wantsLock = opts.autoLock !== false;
   const mergeOpts = {
     source: opts.source || BIBLE_SOURCE.SERIES_EXTRACT,
-    autoLock: opts.autoLock === true,
+    // Default to locked-on-insert. New canon entries are protected from AI
+    // overwrite from the moment they land so users don't have to chase a
+    // batch extract with a Lock All click. Callers can opt out with an
+    // explicit `autoLock: false` — in that case we still stamp `locked:
+    // false` on the new entries below so the universe-side
+    // lock-by-default contract (sanitizeTemplate.defaultLockCanon) doesn't
+    // silently re-lock them on the next read.
+    autoLock: wantsLock,
     sourceSeriesId: opts.sourceSeriesId || null,
   };
   const results = {};
   const patch = {};
   for (const { kind, result } of completed) {
     const field = BIBLE_FIELD[kind];
-    patch[field] = mergeExtractedBible(universe[field] || [], result.extracted, kind, mergeOpts);
+    // Capture existing ids BEFORE the merge — mergeExtractedBible mutates the
+    // existing list in place via push(), so reading universe[field] after the
+    // merge already includes the new inserts and breaks the "is this an
+    // already-known entry?" check below.
+    const existingIds = wantsLock
+      ? null
+      : new Set((universe[field] || []).map((e) => e?.id).filter(Boolean));
+    const merged = mergeExtractedBible(universe[field] || [], result.extracted, kind, mergeOpts);
+    // Opt-out path: caller asked for unlocked inserts. The merge step left
+    // `locked` absent on new entries; sanitizeTemplate.defaultLockCanon
+    // would then read them back as locked. Force explicit `locked: false`
+    // on every new insert so the opt-out survives the round-trip — even
+    // if the extractor payload tried to set `locked: true`, `autoLock:
+    // false` is the explicit override. Existing entries are skipped via
+    // existingIds (they keep their current lock state).
+    if (!wantsLock) {
+      patch[field] = merged.map((e) => {
+        if (!e || typeof e !== 'object') return e;
+        if (existingIds.has(e.id)) return e;
+        return { ...e, locked: false };
+      });
+    } else {
+      patch[field] = merged;
+    }
     results[field] = {
       extracted: result.extracted, runId: result.runId,
       providerId: result.providerId, model: result.model,
@@ -123,7 +155,7 @@ export async function refineUniverseCharacter(universeId, entryId, options = {})
     },
     options,
     source: 'universe-character-refine',
-    logTag: `Universe character refine — universe=${universeId.slice(0, 8)} entry=${entryId.slice(0, 8)}`,
+    logTag: `Universe character refine — universe=${shortId(universeId)} entry=${shortId(entryId)}`,
     resultField: 'physicalDescription',
     emptyError: { code: 'UNIVERSE_CANON_REFINE_EMPTY', message: 'LLM returned an empty physicalDescription' },
     changesLimit: 12,
@@ -209,7 +241,7 @@ export async function differentiateUniverseCast(universeId, options = {}) {
 
   const updated = await updateUniverse(universeId, { characters: nextList });
   const rationale = typeof result.content?.rationale === 'string' ? result.content.rationale.trim() : '';
-  console.log(`✨ Universe cast differentiate — universe=${universeId.slice(0, 8)} touched=${touched}/${list.length} skippedLocked=${skippedLocked} runId=${(result.runId || '').slice(0, 8)}`);
+  console.log(`✨ Universe cast differentiate — universe=${shortId(universeId)} touched=${touched}/${list.length} skippedLocked=${skippedLocked} runId=${shortId(result.runId)}`);
   return {
     universe: updated,
     touched,
@@ -232,32 +264,76 @@ export async function setCanonEntryLock(universeId, kind, entryId, locked) {
       { status: 400, code: 'UNIVERSE_CANON_INVALID_KIND' },
     );
   }
-  const universe = await getUniverse(universeId);
   const field = BIBLE_FIELD[kind];
-  const list = Array.isArray(universe[field]) ? universe[field] : [];
-  const idx = list.findIndex((e) => e.id === entryId);
-  if (idx < 0) {
+  let found = false;
+  // Mutator form (same as setCanonKindLockAll) so the flip is computed from
+  // the freshest persisted state inside updateUniverse's write queue. A
+  // read-modify-write split (getUniverse → updateUniverse(patchObject))
+  // would replace the full canon array via PATCHABLE_SCALARS and could
+  // clobber a concurrent render-completion `imageRefs[]` append landing
+  // between the read and the write.
+  const updated = await updateUniverse(universeId, (cur) => {
+    const list = Array.isArray(cur[field]) ? cur[field] : [];
+    const idx = list.findIndex((e) => e.id === entryId);
+    if (idx < 0) return null;
+    found = true;
+    const target = list[idx];
+    // No-op short-circuit avoids a write + updatedAt churn on redundant toggles.
+    if ((target.locked === true) === (locked === true)) return null;
+    // applyCanonExtras now persists explicit locked:false (the universe-builder
+    // contract), so the bit survives the round-trip and the unlock sticks.
+    const nextList = list.map((e, i) => (i === idx ? { ...e, locked } : e));
+    return { [field]: nextList };
+  });
+  if (!found) {
     throw new ServerError(
       `Canon ${kind} ${entryId} not found in universe`,
       { status: 404, code: 'UNIVERSE_CANON_NOT_FOUND' },
     );
   }
-  const target = list[idx];
-  // No-op short-circuit avoids a write + updatedAt churn on redundant toggles.
-  if ((target.locked === true) === (locked === true)) {
-    return { universe, entry: target };
-  }
-  // applyCanonExtras strips locked: false on save, so we can pass it through
-  // directly instead of destructure-stripping here.
-  const nextList = list.map((e, i) => (i === idx ? { ...e, locked } : e));
-  const updated = await updateUniverse(universeId, { [field]: nextList });
   const entry = (updated[field] || []).find((e) => e.id === entryId) || null;
   return { universe: updated, entry };
 }
 
 /**
+ * Bulk-set the `locked` flag on every canon entry of a single kind. Returns
+ * the updated universe plus the count of entries whose lock state actually
+ * changed (no-op on entries already in the target state, so the response
+ * carries enough info for a toast like "Locked 7 characters").
+ */
+export async function setCanonKindLockAll(universeId, kind, locked) {
+  if (!BIBLE_KINDS.includes(kind)) {
+    throw new ServerError(
+      `Invalid canon kind "${kind}" — expected one of: ${BIBLE_KINDS.join(', ')}`,
+      { status: 400, code: 'UNIVERSE_CANON_INVALID_KIND' },
+    );
+  }
+  const field = BIBLE_FIELD[kind];
+  let changed = 0;
+  let total = 0;
+  // Run inside `updateUniverse`'s file-write queue (mutator form) so the
+  // patch is built from the freshest persisted state. A read-modify-write
+  // split (getUniverse → updateUniverse(patchObject)) would clobber a
+  // concurrent render-completion `imageRefs[]` append or an inline canon
+  // edit landing between the two calls — the patch's full-array shape
+  // replaces wholesale via PATCHABLE_SCALARS. Mirrors `setVariationsLockAll`.
+  const updated = await updateUniverse(universeId, (cur) => {
+    const list = Array.isArray(cur[field]) ? cur[field] : [];
+    total = list.length;
+    const nextList = list.map((e) => {
+      if ((e.locked === true) === (locked === true)) return e;
+      changed += 1;
+      return { ...e, locked };
+    });
+    if (changed === 0) return null; // no-op short-circuit
+    return { [field]: nextList };
+  });
+  return { universe: updated, kind, locked, changed, total };
+}
+
+/**
  * Strip a filename from every `imageRefs[]` across every universe's
- * characters/settings/objects. Mirror of the series-side purge so the image-
+ * characters/places/objects. Mirror of the series-side purge so the image-
  * delete route can clean both stores in one pass.
  */
 export async function purgeImageRefFromAllUniverses(filename) {

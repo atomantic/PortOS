@@ -22,9 +22,10 @@ export const createUniverse = (data) => request('/universe-builder', {
   body: JSON.stringify(data),
 });
 
-export const updateUniverse = (id, patch) => request(`/universe-builder/${encodeURIComponent(id)}`, {
+export const updateUniverse = (id, patch, options = {}) => request(`/universe-builder/${encodeURIComponent(id)}`, {
   method: 'PATCH',
   body: JSON.stringify(patch),
+  ...options,
 });
 
 export const deleteUniverse = (id) => request(`/universe-builder/${encodeURIComponent(id)}`, {
@@ -170,6 +171,28 @@ export const refineUniverseCharacter = (universeId, entryId, { providerId, model
     body: JSON.stringify({ providerId, model }),
   });
 
+// One LLM call fills BLANK extended character fields (pronouns / age / stats /
+// motivations / colorPalette / expressions / hand gestures / ...). No-clobber
+// on populated fields. Locked characters return `{ locked: true }` instead of
+// a 4xx — the UI surfaces this as a "Locked" badge.
+export const expandUniverseCharacter = (universeId, entryId, { providerId, model } = {}) =>
+  request(`/universe-builder/${encodeURIComponent(universeId)}/characters/${encodeURIComponent(entryId)}/expand`, {
+    method: 'POST',
+    body: JSON.stringify({ providerId, model }),
+  });
+
+// Kick off a character reference sheet render. Returns immediately with
+// `{ jobId, generationId, filename, path }`; the caller subscribes to media-job
+// SSE for live progress. Server-side completion handler stamps the resulting
+// filename onto `character.referenceSheetImageRef` automatically.
+export const renderCharacterReferenceSheet = (universeId, entryId, {
+  overridePrompt, overrideNegativePrompt, modelId,
+} = {}) =>
+  request(`/universe-builder/${encodeURIComponent(universeId)}/characters/${encodeURIComponent(entryId)}/render-reference-sheet`, {
+    method: 'POST',
+    body: JSON.stringify({ overridePrompt, overrideNegativePrompt, modelId }),
+  });
+
 // Cast-wide differentiate — single LLM call rewrites every character so the
 // whole cast has no visually-colliding pairs.
 export const differentiateUniverseCast = (universeId, { providerId, model } = {}) =>
@@ -185,6 +208,12 @@ export const differentiateUniverseCast = (universeId, { providerId, model } = {}
 export const getUniverseCanonUsage = (universeId) =>
   request(`/universe-builder/${encodeURIComponent(universeId)}/canon-usage`);
 
+// Thin lookup: every series that links to this universe as `[{ id, name }]`.
+// Use this when only the seriesId → seriesName mapping is needed — the full
+// /canon-usage endpoint also runs prose-matching scans across every issue.
+export const getUniverseSeriesNames = (universeId) =>
+  request(`/universe-builder/${encodeURIComponent(universeId)}/series-names`);
+
 // Toggle the `locked` flag on a single canon entry. Locked entries are
 // protected from AI rewrite paths (refine returns 409; differentiate skips
 // them at apply time; re-extract appends evidence only). `kind` must be
@@ -193,6 +222,23 @@ export const setUniverseCanonLock = (universeId, kind, entryId, locked) =>
   request(`/universe-builder/${encodeURIComponent(universeId)}/canon/${encodeURIComponent(kind)}/${encodeURIComponent(entryId)}/lock`, {
     method: 'PATCH',
     body: JSON.stringify({ locked }),
+  });
+
+// Bulk lock/unlock every canon entry of a single kind. Returns
+// `{ universe, kind, locked, changed, total }`.
+export const setUniverseCanonLockAll = (universeId, kind, locked) =>
+  request(`/universe-builder/${encodeURIComponent(universeId)}/canon/${encodeURIComponent(kind)}/lock-all`, {
+    method: 'PATCH',
+    body: JSON.stringify({ locked }),
+  });
+
+// Bulk lock/unlock variations across one bucket (`category`) or every bucket
+// (`category: null`). Pass `includeSheets: true` to also flip composite
+// sheets in the same call.
+export const setUniverseVariationsLockAll = (universeId, { locked, category = null, includeSheets = false } = {}) =>
+  request(`/universe-builder/${encodeURIComponent(universeId)}/variations/lock-all`, {
+    method: 'PATCH',
+    body: JSON.stringify({ locked, category, includeSheets }),
   });
 
 // Promote a category variation into a full canon entry. `targetKind` is
@@ -205,5 +251,15 @@ export const promoteVariationToCanon = (universeId, {
   request(`/universe-builder/${encodeURIComponent(universeId)}/promote-variation`, {
     method: 'POST',
     body: JSON.stringify({ category, label, targetKind, providerId, model }),
+    ...options,
+  });
+
+// Bulk-classify every `kind: 'other'` bucket on a universe. Server returns
+// `{ universe, results: [{ sourceKey, kind, suggestedKey? }], llm, runId }`.
+// Pass `{ silent: true }` when the caller owns its own error toast.
+export const autoSortBuckets = (universeId, { providerId, model } = {}, options = {}) =>
+  request(`/universe-builder/${encodeURIComponent(universeId)}/auto-sort`, {
+    method: 'POST',
+    body: JSON.stringify({ providerId, model }),
     ...options,
   });

@@ -3,6 +3,8 @@
  * deps — mirrored to `client/src/lib/scenePrompt.js` for the client bundle.
  */
 
+import { richCanonDescriptorFragments } from './canonPrompt.js';
+
 const PROMPT_MAX = 1900;
 
 // Normalize a screenplay slugline so case/punctuation/dash variants collapse:
@@ -52,7 +54,7 @@ export function matchCharactersInText(text, allCharacters) {
   return matchEntriesByCandidates(text, allCharacters, (c) => [c.name, ...(c.aliases || [])]);
 }
 
-export function buildSettingByKey(allSettings) {
+export function buildPlaceByKey(allSettings) {
   const map = new Map();
   for (const setting of allSettings || []) {
     const key = normalizeSlugline(setting.slugline || setting.name);
@@ -62,9 +64,9 @@ export function buildSettingByKey(allSettings) {
   return map;
 }
 
-export function matchSceneSetting(sceneSlugline, settingByKey) {
+export function matchScenePlace(sceneSlugline, placeByKey) {
   if (!sceneSlugline) return null;
-  return settingByKey?.get(normalizeSlugline(sceneSlugline)) || null;
+  return placeByKey?.get(normalizeSlugline(sceneSlugline)) || null;
 }
 
 // Shared word-boundary scanner used by the *-InText helpers below. Returns
@@ -91,11 +93,11 @@ function matchEntriesByCandidates(text, entries, candidatesFn) {
   return matched;
 }
 
-// Scan free-form prose for bible-canonical settings. Mirrors
-// `matchCharactersInText` but tests against `name` (settings have no aliases
+// Scan free-form prose for bible-canonical places. Mirrors
+// `matchCharactersInText` but tests against `name` (places have no aliases
 // in the canonical schema — slugline is for screenplay matching, not prose).
-export function matchSettingsInText(text, allSettings) {
-  return matchEntriesByCandidates(text, allSettings, (s) => [s.name]);
+export function matchPlacesInText(text, allPlaces) {
+  return matchEntriesByCandidates(text, allPlaces, (p) => [p.name]);
 }
 
 // Scan free-form prose for bible-canonical objects. Mirrors
@@ -110,19 +112,21 @@ export function matchObjectsInText(text, allObjects) {
  * weight earlier tokens heaviest):
  *   1. worldStyle preset (cinematic / film-noir / etc.) — broadest aesthetic
  *   2. workTitle — gives the model story-context cues
- *   3. setting baseline (description / palette / recurring details) — the place
+ *   3. setting baseline (description / palette / era / weather / recurring) — the place
  *   4. Featuring — char1: desc, char2: desc — the subjects
  *   5. scene.visualPrompt — what's NEW this beat
  *
  * Truncation priority is the inverse: visualPrompt survives unconditionally,
  * then setting baseline, then characters. Style + title are short so they're
  * always kept. Featuring drops characters one-by-one to fit; setting drops
- * secondary fields (palette, recurring) before description.
+ * trailing fragments first (recurringDetails → weather → era → palette →
+ * description) so the most identity-defining field — description — survives
+ * longest under budget pressure.
  *
  * Positional API kept for parity with the long-running Writers Room caller
  * (`SceneCard.jsx`) — adding new optional kwargs at the tail is fine.
  */
-export function buildScenePrompt(workTitle, scene, matchedCharacters, worldStyle = '', matchedSetting = null) {
+export function buildScenePrompt(workTitle, scene, matchedCharacters, worldStyle = '', matchedPlace = null) {
   const stylePart = worldStyle && worldStyle.trim() ? `${worldStyle.trim()}. ` : '';
   const titlePart = workTitle ? `${workTitle}. ` : '';
   const visual = scene?.visualPrompt || scene?.description || '';
@@ -130,20 +134,29 @@ export function buildScenePrompt(workTitle, scene, matchedCharacters, worldStyle
   // INT/EXT + time-of-day claim the first setting slot — they're cheap
   // (≤30 chars combined) and load-bearing for lighting/composition cues
   // diffusion models actually weight.
-  const intExtPart = matchedSetting?.intExt === 'INT'
+  const intExtPart = matchedPlace?.intExt === 'INT'
     ? 'Interior'
-    : matchedSetting?.intExt === 'EXT'
+    : matchedPlace?.intExt === 'EXT'
       ? 'Exterior'
       : '';
-  const todPart = typeof matchedSetting?.timeOfDay === 'string' && matchedSetting.timeOfDay
-    ? matchedSetting.timeOfDay
+  const todPart = typeof matchedPlace?.timeOfDay === 'string' && matchedPlace.timeOfDay
+    ? matchedPlace.timeOfDay
     : '';
-  const settingMetaFrag = [intExtPart, todPart].filter(Boolean).join(', ');
-  const settingFrags = matchedSetting ? [
-    settingMetaFrag ? `${settingMetaFrag}.` : '',
-    matchedSetting.description?.trim() || '',
-    matchedSetting.palette ? `Palette: ${matchedSetting.palette.trim()}.` : '',
-    matchedSetting.recurringDetails?.trim() || '',
+  const placeMetaFrag = [intExtPart, todPart].filter(Boolean).join(', ');
+  // RICH spec (description / Palette / Era / Weather / recurringDetails) —
+  // era + weather are continuity-critical visual cues that diffusion models
+  // weight for lighting / atmosphere / period dress. UI card summaries use the
+  // narrower SHORT spec via `KINDS[].descFor`; both stay coherent through the
+  // shared helper but are not byte-equivalent. Per-frag trailing period
+  // preserves "Palette: X." sentence boundaries when the budget-truncation
+  // join collapses fragments with a single space.
+  const baselineFrags = matchedPlace
+    ? richCanonDescriptorFragments('place', matchedPlace)
+      .map((f) => (f.prefix ? `${f.prefix}: ${f.value}.` : f.value))
+    : [];
+  const placeFrags = matchedPlace ? [
+    placeMetaFrag ? `${placeMetaFrag}.` : '',
+    ...baselineFrags,
   ].filter(Boolean) : [];
 
   // Accept either `physicalDescription` (writers-room shape) or
@@ -160,11 +173,11 @@ export function buildScenePrompt(workTitle, scene, matchedCharacters, worldStyle
 
   // Setting first claim on remaining budget (place baseline > characters
   // for visual continuity across scenes).
-  const settingFit = [];
-  for (const frag of settingFrags) {
-    const cost = (settingFit.length === 0 ? 0 : 1) + frag.length;
+  const placeFit = [];
+  for (const frag of placeFrags) {
+    const cost = (placeFit.length === 0 ? 0 : 1) + frag.length;
     if (cost > budget) break;
-    settingFit.push(frag);
+    placeFit.push(frag);
     budget -= cost;
   }
 
@@ -181,7 +194,7 @@ export function buildScenePrompt(workTitle, scene, matchedCharacters, worldStyle
   const segs = [];
   if (stylePart) segs.push(stylePart.trim());
   if (titlePart) segs.push(titlePart.trim());
-  if (settingFit.length > 0) segs.push(settingFit.join(' '));
+  if (placeFit.length > 0) segs.push(placeFit.join(' '));
   if (charFit.length > 0) segs.push(`${PREFIX}${charFit.join(' ')}`);
   if (visual) segs.push(visual);
   return segs.filter(Boolean).join(' ').slice(0, PROMPT_MAX);

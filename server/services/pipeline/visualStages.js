@@ -32,10 +32,11 @@ import { buildComicPagesOwner, buildSeasonCoverOwner, buildStoryboardsShotOwner 
 import { getUniverse, joinInfluenceList } from '../universeBuilder.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import {
-  buildScenePrompt, buildSettingByKey, matchSceneSetting,
+  buildScenePrompt, buildPlaceByKey, matchScenePlace,
   buildCharByKey, matchSceneCharacters, matchCharactersInText,
-  matchSettingsInText, matchObjectsInText,
+  matchPlacesInText, matchObjectsInText,
 } from '../../lib/scenePrompt.js';
+import { richCanonDescriptorFragments } from '../../lib/canonPrompt.js';
 import { composeStyledPrompt } from '../../lib/composeStyledPrompt.js';
 import { resolveVisualStyle } from '../../lib/visualStyles.js';
 import { getDefaultVideoModelId, getVideoModels } from '../../lib/mediaModels.js';
@@ -185,19 +186,19 @@ const enqueueImageJob = ({ prompt, world, settings, options, mode, owner, logLin
   return jobId;
 };
 
-// Canon settings now live on the linked universe (Phase B.4). Callers can
-// either pass a pre-built `settingByKey` (when they've already computed it
+// Canon places now live on the linked universe (Phase B.4). Callers can
+// either pass a pre-built `placeByKey` (when they've already computed it
 // for reuse across many scenes — see episodeVideo) or pass `canon` and let
-// us build the map here. `series?.settings` is no longer read — that field
+// us build the map here. `series?.places` is no longer read — that field
 // was retired with the series-side canon teardown.
-export function composeVisualPrompt({ series, description, slugline = '', extraStyle = '', settingByKey = null, matchedCharacters = [], world = null, canon = null }) {
-  const map = settingByKey || buildSettingByKey(canon?.settings);
+export function composeVisualPrompt({ series, description, slugline = '', extraStyle = '', placeByKey = null, matchedCharacters = [], world = null, canon = null }) {
+  const map = placeByKey || buildPlaceByKey(canon?.places);
   const scenePrompt = buildScenePrompt(
     series?.name || '',
     { visualPrompt: description || '', slugline },
     matchedCharacters,
     stackStyle(series, extraStyle),
-    matchSceneSetting(slugline, map),
+    matchScenePlace(slugline, map),
   );
   return applyWorldStyle(scenePrompt, world, series);
 }
@@ -587,7 +588,7 @@ export async function enqueueVolumeBackCover(seriesId, seasonId, options = {}) {
 
 export function composeComicPagePrompt({
   series, world, page, pageNumber, extraStyle = '',
-  matchedCharacters = [], matchedSettings = [], matchedObjects = [],
+  matchedCharacters = [], matchedPlaces = [], matchedObjects = [],
 }) {
   const panels = Array.isArray(page?.panels) ? page.panels : [];
   if (panels.length === 0) return '';
@@ -600,18 +601,19 @@ export function composeComicPagePrompt({
     .map((c) => `${c.name}: ${c.desc}`)
     .join('; ');
 
-  // Setting baseline: pull description + palette + recurringDetails per matched
-  // setting. Same pattern as buildScenePrompt's settingFrags, but multi-setting
-  // (a single comic page can span more than one location).
-  const settingsClause = (matchedSettings || [])
-    .map((s) => {
-      const parts = [s.name && `${s.name}:`, (s.description || '').trim()].filter(Boolean);
-      const head = parts.join(' ');
-      const tail = [
-        s.palette ? `palette: ${s.palette.trim()}` : '',
-        (s.recurringDetails || '').trim(),
-      ].filter(Boolean).join('; ');
-      return [head, tail].filter(Boolean).join('. ');
+  // Place baseline: pull the full RICH descriptor set per matched place
+  // (description / Palette / Era / Weather / recurringDetails). Same shared
+  // helper that drives buildScenePrompt's placeFrags + synthesizeCanonPrompt's
+  // body, so comic-page renders pick up the same era/weather/atmosphere cues
+  // diffusion models weight for lighting + period dress. Multi-place per page
+  // is supported (a single page can span more than one location).
+  const placesClause = (matchedPlaces || [])
+    .map((p) => {
+      const body = richCanonDescriptorFragments('place', p)
+        .map((f) => (f.prefix ? `${f.prefix}: ${f.value}` : f.value))
+        .join('. ');
+      const head = p.name ? `${p.name}:` : '';
+      return [head, body].filter(Boolean).join(' ');
     })
     .filter(Boolean)
     .join(' | ');
@@ -664,10 +666,10 @@ export function composeComicPagePrompt({
 
   const layout = `A single full printable comic book page${seriesClause}, page ${pageNumber}. Render a balanced multi-panel comic page layout with ${panels.length} clearly bordered panel${panels.length === 1 ? '' : 's'} arranged for left-to-right, top-to-bottom reading. Include lettered speech balloons for dialogue, rectangular narration boxes for captions, and stylized SFX where indicated. **Balloon lettering rule: each speech balloon contains ONLY the quoted text shown after "Speech balloon reads:". NEVER letter the speaker's name, role, or any parenthetical attribution (e.g. "(EARPIECE)", "(WHISPERED)", "(OFF-PANEL)") inside the balloon — those are tail-direction and balloon-styling cues for the artist, not lettered content.** Each panel must be visually distinct, with consistent character designs across panels.${styleClause}`;
   const featuringClause = featuring ? `\n\nFeaturing — ${featuring}` : '';
-  const settingClause = settingsClause ? `\n\nSetting — ${settingsClause}` : '';
+  const placeClause = placesClause ? `\n\nSetting — ${placesClause}` : '';
   const notableClause = notable ? `\n\nNotable — ${notable}` : '';
 
-  return applyWorldStyle(`${layout}${featuringClause}${settingClause}${notableClause}\n\n${panelLines.join('\n\n')}`, world, series);
+  return applyWorldStyle(`${layout}${featuringClause}${placeClause}${notableClause}\n\n${panelLines.join('\n\n')}`, world, series);
 }
 
 /**
@@ -740,10 +742,10 @@ export async function enqueueVisualComicPage(issueId, options = {}) {
     return true;
   });
 
-  // Settings + objects: text-match against the panel prose. Codex can't take
+  // Places + objects: text-match against the panel prose. Codex can't take
   // reference images, so rich text descriptions in the prompt are how we
   // keep environments and signature props visually consistent page-to-page.
-  const matchedSettings = matchSettingsInText(proseHaystack, canon.settings);
+  const matchedPlaces = matchPlacesInText(proseHaystack, canon.places);
   const matchedObjects = matchObjectsInText(proseHaystack, canon.objects);
 
   // composeComicPagePrompt only returns '' when panels.length === 0, which is
@@ -752,7 +754,7 @@ export async function enqueueVisualComicPage(issueId, options = {}) {
   const prompt = composeComicPagePrompt({
     series, world, page, pageNumber: pageIndex + 1,
     extraStyle: composeExtraStyle(series, issue, 'comicPages', options.extraStyle),
-    matchedCharacters, matchedSettings, matchedObjects,
+    matchedCharacters, matchedPlaces, matchedObjects,
   });
 
   const jobId = enqueueImageJob({

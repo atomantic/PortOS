@@ -48,6 +48,7 @@ const queueIssueWrite = createFileWriteQueue();
 export const ERR_NOT_FOUND = 'PIPELINE_ISSUE_NOT_FOUND';
 export const ERR_VALIDATION = 'PIPELINE_ISSUE_VALIDATION';
 export const ERR_DUPLICATE = 'PIPELINE_ISSUE_DUPLICATE';
+export const ERR_SEASON_LOCKED = 'PIPELINE_ISSUE_SEASON_LOCKED';
 const makeErr = (message, code) => Object.assign(new Error(message), { code });
 
 const ISSUE_ID_RE = /^iss-[A-Za-z0-9-]+$/;
@@ -415,8 +416,26 @@ export function recomputeIssueNumbersForSeries(seriesId, fromSeasonId = null) {
  * the renumber pass — callers under `withReexportSuppressed` get exactly one
  * `series:updated` event regardless of the issue count.
  */
-export function bulkReassignSeason(seriesId, fromSeasonId, toSeasonId = null) {
+export function bulkReassignSeason(seriesId, fromSeasonId, toSeasonId = null, { _preloadedSeries = null } = {}) {
   return queueIssueWrite(async () => {
+    // Honor per-season locks — refuse to move issues OUT of or INTO a locked
+    // volume. Series lives in a different write queue, so this is best-effort
+    // single-user gating, not strict serialization (fine per CLAUDE.md).
+    // Callers that already hold a fresh series (e.g. `deleteSeason` reads it
+    // for the reassign-target validation) can pass `_preloadedSeries` to skip
+    // the duplicate read.
+    if (fromSeasonId || toSeasonId) {
+      const series = _preloadedSeries || await seriesSvc.getSeries(seriesId);
+      const seasons = Array.isArray(series.seasons) ? series.seasons : [];
+      const findLocked = (id) => (id ? seasons.find((s) => s.id === id && s.locked === true) : null);
+      const blocker = findLocked(fromSeasonId) || findLocked(toSeasonId);
+      if (blocker) {
+        throw makeErr(
+          `Season "${blocker.title || blocker.number}" is locked — unlock it before reassigning issues`,
+          ERR_SEASON_LOCKED,
+        );
+      }
+    }
     const state = await readState();
     let reassigned = 0;
     const now = new Date().toISOString();
@@ -648,4 +667,44 @@ export function updateStageWithLatest(issueId, stageId, computeFn) {
   emitRecordUpdated('series', mergedIssue.seriesId);
   return { issue: mergedIssue, stage: mergedIssue.stages[stageId] };
   }); // end queueIssueWrite
+}
+
+/**
+ * Sync-orchestrator entry point. Merges a remote peer's issues array into
+ * local state INSIDE `queueIssueWrite`, so the read-modify-write window can't
+ * clobber (or be clobbered by) a concurrent updateIssue / updateStage /
+ * cover-render PATCH running through the same queue. Each incoming record
+ * passes through `sanitizeIssue` for shape enforcement (stage statuses,
+ * trimmed fields, valid id format). LWW by `updatedAt`; returns
+ * `{ applied, count }` where `count` is the number of issues actually
+ * changed/added.
+ */
+export function mergeIssuesFromSync(remoteIssues) {
+  if (!Array.isArray(remoteIssues)) return Promise.resolve({ applied: false, count: 0 });
+  return queueIssueWrite(async () => {
+    const state = await readState();
+    const localById = new Map(state.issues.map((i) => [i.id, i]));
+    let changed = 0;
+    for (const remote of remoteIssues) {
+      if (!remote || typeof remote !== 'object' || !isStr(remote.id)) continue;
+      const sanitized = sanitizeIssue(remote);
+      if (!sanitized) continue;
+      const local = localById.get(sanitized.id);
+      if (!local) {
+        localById.set(sanitized.id, sanitized);
+        changed++;
+      } else {
+        const localTs = local.updatedAt || '';
+        const remoteTs = sanitized.updatedAt || '';
+        if (remoteTs > localTs) {
+          localById.set(sanitized.id, sanitized);
+          changed++;
+        }
+      }
+    }
+    if (changed === 0) return { applied: false, count: 0 };
+    state.issues = Array.from(localById.values());
+    await writeState(state);
+    return { applied: true, count: changed };
+  });
 }

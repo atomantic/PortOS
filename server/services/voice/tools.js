@@ -15,7 +15,7 @@ import * as journal from '../brainJournal.js';
 import { resolveNavCommand, normalizeLabel } from '../../lib/navManifest.js';
 import { runAsk, VALID_MODES as ASK_VALID_MODES } from '../askService.js';
 import * as imageGen from '../imageGen/index.js';
-import { imageGenEvents } from '../imageGenEvents.js';
+import { createImageGenWaiter } from '../imageGenWaiter.js';
 import { getSettings } from '../settings.js';
 import { isDestructiveLabel, buildPending } from './confirmGate.js';
 
@@ -1317,25 +1317,9 @@ const TOOLS = [
       // emit 'completed' before we attach. External backends await the
       // upstream HTTP call internally and the file is on disk by the time
       // generateImage resolves — wait() is a no-op there.
-      let resolveDone, rejectDone;
-      const completionPromise = new Promise((res, rej) => { resolveDone = res; rejectDone = rej; });
-      let registeredId = null;
-      const onCompleted = (ev) => { if (ev.generationId === registeredId) cleanup(resolveDone, ev); };
-      const onFailed = (ev) => { if (ev.generationId === registeredId) cleanup(rejectDone, ev); };
-      const cleanup = (fn, ev) => {
-        clearTimeout(timeout);
-        imageGenEvents.off('completed', onCompleted);
-        imageGenEvents.off('failed', onFailed);
-        fn(ev);
-      };
       // 5-min cap mirrors the codex provider's own timeout — a stuck job
       // shouldn't leak listeners into the voice/palette dispatcher forever.
-      const timeout = setTimeout(() => cleanup(rejectDone, { error: 'image generation timed out' }), 5 * 60 * 1000);
-      imageGenEvents.on('completed', onCompleted);
-      imageGenEvents.on('failed', onFailed);
-      // Swallow unhandled rejection if generateImage throws before we
-      // register; the catch block below handles it.
-      completionPromise.catch(() => {});
+      const waiter = createImageGenWaiter({ timeoutMs: 5 * 60 * 1000 });
 
       let result;
       try {
@@ -1347,7 +1331,7 @@ const TOOLS = [
           mode: requestedMode,
         });
       } catch (err) {
-        cleanup(() => {}, null);
+        waiter.cleanup();
         return { ok: false, summary: `Image generation failed: ${err?.message || err}` };
       }
 
@@ -1355,7 +1339,7 @@ const TOOLS = [
       const isAsync = usedMode === 'local' || usedMode === 'codex';
       // External resolves with the file already on disk — short-circuit.
       if (!isAsync) {
-        cleanup(() => {}, null);
+        waiter.cleanup();
         return {
           ok: true,
           path: result?.path,
@@ -1365,8 +1349,8 @@ const TOOLS = [
         };
       }
 
-      registeredId = result.generationId;
-      const ev = await completionPromise.catch((errEv) => ({ __failed: true, ...errEv }));
+      waiter.register(result.generationId);
+      const ev = await waiter.promise.catch((errEv) => ({ __failed: true, ...errEv }));
       if (ev?.__failed) {
         return { ok: false, summary: `Image generation failed: ${ev.error || 'unknown'}` };
       }

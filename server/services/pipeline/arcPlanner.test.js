@@ -313,6 +313,15 @@ describe('arcPlanner — generateSeasonEpisodes', () => {
       .rejects.toMatchObject({ code: planner.ERR_VALIDATION });
   });
 
+  it('refuses + skips the LLM call when the target season is locked', async () => {
+    const { series, seasons } = await setupSeriesWithSeasons();
+    await seasonsSvc.updateSeason(series.id, seasons[0].id, { locked: true });
+    stageRunnerSpy = vi.fn();
+    await expect(planner.generateSeasonEpisodes(series.id, seasons[0].id))
+      .rejects.toMatchObject({ code: planner.ERR_VALIDATION });
+    expect(stageRunnerSpy).not.toHaveBeenCalled();
+  });
+
   it('shapes episodes, drops untitled entries, and validates arcRole', async () => {
     const { series, seasons } = await setupSeriesWithSeasons();
     stageRunnerSpy = vi.fn(async () => ({

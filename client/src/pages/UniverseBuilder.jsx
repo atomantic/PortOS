@@ -10,32 +10,54 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
-  Globe2, Plus, Trash2, Sparkles, Wand2, Loader2, Save, FolderOpen,
+  Plus, Trash2, Sparkles, Wand2, Loader2, Save, FolderOpen,
   Edit3, X, MessageSquarePlus, Play, Lock, Unlock,
-  PanelLeftClose, PanelLeftOpen, ArrowUpCircle,
+  ArrowUpCircle, Search, ChevronDown, Check,
   BookOpen, Users, MapPin, Package, Layers, ImagePlus, FolderTree,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import {
   listUniverses, getUniverse, createUniverse, updateUniverse, deleteUniverse, expandUniverse,
-  generateCategoryVariations, promoteVariationToCanon,
+  generateCategoryVariations, promoteVariationToCanon, autoSortBuckets,
   renderWorld, listWorldRuns, getProviders, refineWorldPrompts, WORLD_CATEGORIES,
   WORLD_CATEGORY_KEY_MAX, COMPOSITE_PROMPT_MAX, WORLD_LOGLINE_MAX,
   WORLD_PREMISE_MAX, WORLD_STYLE_NOTES_MAX, WORLD_LOCKABLE_FIELDS,
   ensureInfluences, isInfluenceLockField, mergeInfluencesWithLocks,
-  listImageModels, getSettings,
+  listImageModels, listLorasFull, getSettings,
 } from '../services/api';
 import useClickOutside from '../hooks/useClickOutside';
-import { useLocalStorageBool, useLocalStoragePersisted } from '../hooks/useLocalStorageBool';
+import { useLocalStoragePersisted } from '../hooks/useLocalStorageBool';
+import useUniverseAction from '../hooks/useUniverseAction';
 import InfluenceChipsInput from '../components/universeBuilder/InfluenceChipsInput';
-import BackendChipStrip from '../components/media/BackendChipStrip';
-import ImageGenControls from '../components/imageGen/ImageGenControls';
+import ImageGenSettingsForm from '../components/imageGen/ImageGenSettingsForm';
+import { RUNNER_FAMILIES } from '../lib/runnerFamilies';
 import ShareToButton from '../components/sharing/ShareToButton';
 import OriginBadge from '../components/sharing/OriginBadge';
 import UniverseCanonSection from '../components/universe/UniverseCanonSection';
+import EntryCard from '../components/universe/EntryCard';
+import EntryThumbSlot from '../components/universe/EntryThumbSlot';
+import useMediaJobProgress from '../hooks/useMediaJobProgress';
+import MediaPreview from '../components/media/MediaPreview';
+import useImagePreviewActions from '../hooks/useImagePreviewActions';
+import { useMediaAnnotations } from '../hooks/useMediaAnnotations';
+import { listImageGallery } from '../services/apiImageVideo';
+import TabPills from '../components/ui/TabPills';
 import { deriveAvailableBackends, IMAGE_GEN_MODE } from '../lib/imageGenBackends';
 import { PIPELINE_IMAGE_DEFAULTS, readPipelineImageSettings } from '../lib/pipelineImageDefaults';
 import { normalizeSlugline } from '../lib/scenePrompt';
+import { hasCanonDescriptorContent } from '../lib/canonPrompt';
+import { upsertByIdPrepend } from '../lib/upsertByIdPrepend';
+import { BIBLE_LIMITS } from '../lib/bibleLimits';
+
+// Mirror of server-side appendEntryImageRef cap (most recent N wins). Used
+// so optimistic on-completion appends produce the same final array shape
+// the server would, preventing a brief window where a save round-trip
+// could reorder the visible thumbnails.
+const capImageRefs = (refs) => (
+  refs.length > BIBLE_LIMITS.IMAGE_REFS_PER_ENTRY_MAX
+    ? refs.slice(-BIBLE_LIMITS.IMAGE_REFS_PER_ENTRY_MAX)
+    : refs
+);
 
 const CATEGORY_LABELS = {
   landscapes: 'Landscapes',
@@ -63,7 +85,7 @@ const BUCKET_CANON = 'canon';
 // the canon-trunk identifier the server's `canonSelection` schema accepts.
 const TRUNK_TABS = [
   { id: TAB_CAST, kind: 'characters', label: 'Cast', icon: Users },
-  { id: TAB_PLACES, kind: 'settings', label: 'Places', icon: MapPin },
+  { id: TAB_PLACES, kind: 'places', label: 'Places', icon: MapPin },
   { id: TAB_OBJECTS, kind: 'objects', label: 'Objects', icon: Package },
 ];
 const TRUNK_BY_ID = Object.fromEntries(TRUNK_TABS.map((t) => [t.id, t]));
@@ -72,7 +94,7 @@ const TRUNK_BY_KIND = Object.fromEntries(TRUNK_TABS.map((t) => [t.kind, t]));
 // Group category buckets by their `kind` tag. Buckets with an unknown / missing
 // kind fall into the `other` bin — that bin drives whether the Other tab shows.
 const groupBucketsByKind = (categories = {}) => {
-  const out = { characters: [], settings: [], objects: [], other: [] };
+  const out = { characters: [], places: [], objects: [], other: [] };
   for (const [key, bucket] of Object.entries(categories || {})) {
     const kind = bucket?.kind || 'other';
     if (out[kind]) out[kind].push(key);
@@ -121,8 +143,8 @@ const mergeVariations = (existing, fresh) => {
 //                          character "Ashley" with alias "Ash" would not
 //                          collide with an LLM-returned "Ash", producing a
 //                          duplicate canon entry the user has to merge by hand.
-//   - settings           → `normalizeSlugline` for BOTH `slugline` AND `name`
-//                          (`storyBible.js` MERGE_CONFIG.setting.keyFields).
+//   - places             → `normalizeSlugline` for BOTH `slugline` AND `name`
+//                          (`storyBible.js` MERGE_CONFIG.place.keyFields).
 //                          Without this, sluglines that differ only in dash
 //                          style or punctuation ("INT. FOUNDRY CITY — DAY"
 //                          vs "INT FOUNDRY CITY - DAY") would land as two
@@ -139,16 +161,16 @@ const mergeCanonByName = (existing, fresh, kind = 'character') => {
   // Empty/missing fresh — return `existing` unchanged (preserve reference so
   // a no-op expand doesn't trigger downstream identity-comparing effects).
   if (!fresh?.length) return existing || [];
-  const isSetting = kind === 'setting';
-  const normName = isSetting
+  const isPlace = kind === 'place';
+  const normName = isPlace
     ? (s) => (typeof s === 'string' ? normalizeSlugline(s) : '')
     : (s) => (typeof s === 'string' ? s.trim().toLowerCase() : '');
   const normSlug = (s) => (typeof s === 'string' ? normalizeSlugline(s) : '');
-  // Aliases participate in identity for character/object only — settings use
-  // slugline collision instead (the server's MERGE_CONFIG.setting has no
+  // Aliases participate in identity for character/object only — places use
+  // slugline collision instead (the server's MERGE_CONFIG.place has no
   // aliases field).
   const aliasKeys = (entry) => {
-    if (isSetting || !Array.isArray(entry?.aliases)) return [];
+    if (isPlace || !Array.isArray(entry?.aliases)) return [];
     return entry.aliases.map(normName).filter(Boolean);
   };
   const seen = new Set();
@@ -225,6 +247,13 @@ const DEFAULT_RENDER_OPTS = {
   mode: '',
   promptMode: 'variations',
   batchPerVariation: 1,
+  // Extended Image Gen surface used by the batch render form. Server accepts
+  // these as optional patches on top of the universe's stored influences.
+  seed: '',
+  negativePrompt: '',
+  extraStyle: '',
+  stylePreset: null,
+  loras: [],
 };
 
 // Mirror of COMPOSITE_SHEET_KINDS in server/services/universeBuilder.js — keep
@@ -247,6 +276,22 @@ const emptyTemplate = () => ({
   influences: { embrace: [], avoid: [] },
   locked: {},
   llm: { provider: null, model: null },
+});
+
+// Stable serialization of the draft fields handleSave persists. Canon arrays
+// are excluded — they're owned by UniverseCanonSection/NounsStage's targeted
+// PATCHes, not this page's draft.
+const draftSnapshotForDirty = (d = {}) => JSON.stringify({
+  name: (d.name || '').trim(),
+  starterPrompt: d.starterPrompt || '',
+  logline: d.logline || '',
+  premise: d.premise || '',
+  styleNotes: d.styleNotes || '',
+  categories: d.categories || {},
+  compositeSheets: d.compositeSheets || [],
+  influences: ensureInfluences(d.influences),
+  locked: d.locked || {},
+  llm: d.llm || { provider: null, model: null },
 });
 
 
@@ -329,6 +374,175 @@ function StyleNegativePromptEditor({ influences, onChange, locked, onToggleLock 
   );
 }
 
+// Universe autocomplete combobox: search existing universes or create one when
+// the trimmed query doesn't exactly match any. `onCreate` is wired to a
+// dedicated create path (not handleSave) so typing a new name while an existing
+// universe is selected never accidentally renames it.
+const LIST_ID = 'universe-selector-list';
+const OPTION_ID_PREFIX = 'universe-option-';
+const CREATE_OPTION_ID = 'universe-option-create';
+
+function UniverseSelector({ universes, selectedId, value, onChange, onPick, onCreate, busy }) {
+  const wrapRef = useRef(null);
+  const [open, setOpen] = useState(false);
+  const [activeIdx, setActiveIdx] = useState(0);
+  // Memoize the close callback so useClickOutside doesn't rebind its window
+  // listener on every render of the parent (which re-renders per keystroke).
+  const close = useCallback(() => setOpen(false), []);
+  useClickOutside(wrapRef, open, close);
+
+  const trimmed = (value || '').trim();
+  const lower = trimmed.toLowerCase();
+
+  // Exclude current — clicking it would be a navigation no-op.
+  const filtered = useMemo(() => {
+    if (!Array.isArray(universes) || universes.length === 0) return [];
+    return universes
+      .filter((u) => u.id !== selectedId)
+      .filter((u) => !lower || (u.name || '').toLowerCase().includes(lower))
+      .slice(0, 20);
+  }, [universes, selectedId, lower]);
+
+  // exactMatch still considers the current one so renaming-to-same doesn't
+  // surface a misleading Create option.
+  const exactMatch = useMemo(() => {
+    if (!trimmed) return false;
+    return (universes || []).some((u) => (u.name || '').trim().toLowerCase() === lower);
+  }, [universes, trimmed, lower]);
+
+  const showCreateOption = !!trimmed && !exactMatch;
+  const totalItems = filtered.length + (showCreateOption ? 1 : 0);
+
+  // Reset on result change to avoid stale Enter target.
+  useEffect(() => { setActiveIdx(0); }, [filtered.length, showCreateOption]);
+
+  const activeOptionId = open
+    ? (activeIdx < filtered.length
+      ? `${OPTION_ID_PREFIX}${filtered[activeIdx]?.id}`
+      : (showCreateOption ? CREATE_OPTION_ID : undefined))
+    : undefined;
+
+  const handleKeyDown = (e) => {
+    if (!open && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+      setOpen(true);
+      e.preventDefault();
+      return;
+    }
+    if (!open) return;
+    if (e.key === 'Escape') { setOpen(false); e.preventDefault(); return; }
+    if (e.key === 'ArrowDown') {
+      setActiveIdx((i) => (totalItems ? Math.min(totalItems - 1, i + 1) : 0));
+      e.preventDefault();
+      return;
+    }
+    if (e.key === 'ArrowUp') {
+      setActiveIdx((i) => Math.max(0, i - 1));
+      e.preventDefault();
+      return;
+    }
+    if (e.key === 'Enter') {
+      if (activeIdx < filtered.length) {
+        const u = filtered[activeIdx];
+        if (u) { onPick(u.id); setOpen(false); }
+        e.preventDefault();
+      } else if (showCreateOption) {
+        onCreate();
+        setOpen(false);
+        e.preventDefault();
+      }
+    }
+  };
+
+  return (
+    <div ref={wrapRef} className="relative flex-1 min-w-[200px]">
+      <div className="relative">
+        <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-500 pointer-events-none" />
+        <input
+          id="universe-name"
+          type="text"
+          value={value}
+          onChange={(e) => { onChange(e.target.value); setOpen(true); }}
+          onFocus={() => setOpen(true)}
+          onKeyDown={handleKeyDown}
+          placeholder="Search universes or type a new name…"
+          className="w-full bg-port-bg border border-port-border rounded pl-8 pr-9 py-2 text-white focus:outline-none focus:border-port-accent"
+          maxLength={100}
+          autoComplete="off"
+          role="combobox"
+          aria-autocomplete="list"
+          aria-expanded={open}
+          aria-controls={LIST_ID}
+          aria-activedescendant={activeOptionId}
+        />
+        <button
+          type="button"
+          onClick={() => setOpen((p) => !p)}
+          className="absolute right-1 top-1/2 -translate-y-1/2 p-1 text-gray-500 hover:text-white"
+          aria-label={open ? 'Close universe list' : 'Open universe list'}
+          tabIndex={-1}
+        >
+          <ChevronDown size={14} className={`transition-transform ${open ? 'rotate-180' : ''}`} />
+        </button>
+      </div>
+      {open && (
+        <ul
+          id={LIST_ID}
+          role="listbox"
+          className="absolute left-0 right-0 top-full mt-1 z-30 max-h-80 overflow-y-auto bg-port-card border border-port-border rounded shadow-lg"
+        >
+          {filtered.length === 0 && !showCreateOption && (
+            <li className="px-3 py-2 text-xs text-gray-500">
+              {(universes?.length || 0) === 0 ? 'No universes yet — type a name and Create.' : 'No matches'}
+            </li>
+          )}
+          {filtered.map((u, i) => (
+            <li key={u.id}>
+              <button
+                type="button"
+                id={`${OPTION_ID_PREFIX}${u.id}`}
+                role="option"
+                aria-selected={u.id === selectedId}
+                onClick={() => { onPick(u.id); setOpen(false); }}
+                onMouseEnter={() => setActiveIdx(i)}
+                className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 ${
+                  i === activeIdx ? 'bg-port-bg text-white' : 'text-gray-300 hover:bg-port-bg'
+                }`}
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="font-medium truncate">{u.name}</div>
+                  <div className="text-[11px] text-gray-500 truncate">{u.starterPrompt || 'No starter prompt'}</div>
+                </div>
+                {u.id === selectedId && <Check size={14} className="text-port-accent" />}
+              </button>
+            </li>
+          ))}
+          {showCreateOption && (
+            <li>
+              <button
+                type="button"
+                id={CREATE_OPTION_ID}
+                role="option"
+                aria-selected={false}
+                disabled={busy}
+                onClick={() => { onCreate(); setOpen(false); }}
+                onMouseEnter={() => setActiveIdx(filtered.length)}
+                className={`w-full text-left px-3 py-2 text-sm flex items-center gap-2 border-t border-port-border disabled:opacity-50 ${
+                  activeIdx === filtered.length
+                    ? 'bg-port-accent/20 text-port-accent'
+                    : 'text-port-accent hover:bg-port-accent/15'
+                }`}
+              >
+                {busy ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
+                Create &ldquo;{trimmed}&rdquo;
+              </button>
+            </li>
+          )}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 export default function UniverseBuilder() {
   // The selected world id lives in the URL so deep-linking + back/forward
   // work. The page is mounted at /universe-builder, /universe-builder/:universeId,
@@ -354,10 +568,50 @@ export default function UniverseBuilder() {
   const [saving, setSaving] = useState(false);
   const [expanding, setExpanding] = useState(false);
   const [rendering, setRendering] = useState(false);
+  // entryId → jobId[] queue for any row with one or more in-flight renders.
+  // Stores an ARRAY because `batchPerVariation > 1` (or any path that queues
+  // multiple jobs for the same entry) lands several jobIds against the same
+  // entryId — a scalar would overwrite siblings and the spinner would clear
+  // as soon as the first finished, even though others are still running.
+  // Canon entries are included here too (the batch `/render` route compiles
+  // canon prompts when the user picks "all" / "canon" mode, and those jobs
+  // don't go through `UniverseCanonSection.renderingJobs`).
+  const [pendingByEntryId, setPendingByEntryId] = useState({});
+  // First-jobId-per-entry view for components that just need a single
+  // subscription per row (MediaJobThumb takes one jobId). When the head
+  // finishes we shift it off and the next jobId in the queue takes over.
+  const pendingHeadByEntryId = useMemo(() => {
+    const out = {};
+    for (const [entryId, jobs] of Object.entries(pendingByEntryId)) {
+      if (Array.isArray(jobs) && jobs.length > 0) out[entryId] = jobs[0];
+    }
+    return out;
+  }, [pendingByEntryId]);
+  // Remove a specific completed jobId from the entry's queue (preferred path
+  // — handlers know which jobId finished). When called without a jobId
+  // (failure paths that want to bail entirely on the entry), drops every
+  // pending job for that entry.
+  const clearPendingForEntry = useCallback((entryId, jobId = null) => {
+    if (!entryId) return;
+    setPendingByEntryId((prev) => {
+      const jobs = prev[entryId];
+      if (!Array.isArray(jobs) || jobs.length === 0) return prev;
+      const next = { ...prev };
+      if (jobId == null) {
+        delete next[entryId];
+        return next;
+      }
+      const remaining = jobs.filter((j) => j !== jobId);
+      if (remaining.length === 0) delete next[entryId];
+      else next[entryId] = remaining;
+      return next;
+    });
+  }, []);
   const [providers, setProviders] = useState([]);
   const [activeProviderId, setActiveProviderId] = useState(null);
   // Image-gen plumbing for the batch-render form (reused from Image Gen).
   const [imageModels, setImageModels] = useState([]);
+  const [availableLoras, setAvailableLoras] = useState([]);
   const [availableBackends, setAvailableBackends] = useState([]);
   const [defaultMode, setDefaultMode] = useState(null);
   // Per-render config used by the embedded Canon section for reference
@@ -374,6 +628,25 @@ export default function UniverseBuilder() {
   // double-mount stays clean.
   const mountedRef = useRef(true);
   useEffect(() => () => { mountedRef.current = false; }, []);
+  // Always-current draft snapshot. Click handlers that close over `draft`
+  // can race against in-flight setDraft calls (e.g. handleGenerateInCategory
+  // finishes its auto-save between render and click) — read draftRef.current
+  // for the freshest local state so PATCH payloads carry the latest merged
+  // categories instead of the stale closure value.
+  const draftRef = useRef(null);
+  useEffect(() => { draftRef.current = draft; }, [draft]);
+  // Server-side baseline of the draft. LLM-driven mutators (auto-sort /
+  // promote / generate) compare current draft against this baseline and
+  // flush via handleSave() when they diverge so the server doesn't operate
+  // on a stale copy.
+  const savedDraftSnapshotRef = useRef(draftSnapshotForDirty(emptyTemplate()));
+  const markDraftSaved = useCallback((snapshotSource) => {
+    savedDraftSnapshotRef.current = draftSnapshotForDirty(snapshotSource);
+  }, []);
+  const isDraftDirty = useCallback(
+    () => savedDraftSnapshotRef.current !== draftSnapshotForDirty(draftRef.current || draft),
+    [draft],
+  );
   // Page-level in-flight gate for the promote action. Ref + state pair so
   // the disable check stays synchronous (ref) while still triggering renders
   // (state). Promote writes to `universe[bibleField]` and `categories[key]`
@@ -382,6 +655,12 @@ export default function UniverseBuilder() {
   // first's canon append.
   const [promoting, setPromoting] = useState(false);
   const promotingRef = useRef(false);
+  const [autoSorting, setAutoSorting] = useState(false);
+  const autoSortingRef = useRef(false);
+  // Scaffolding shared by handlePromoteVariation + handleAutoSort:
+  // selectedId guard, ref re-entrancy, capturedId + toast lifecycle,
+  // setWorlds always-update, stale-write detection. See the hook header.
+  const runUniverseAction = useUniverseAction({ selectedId, mountedRef, setWorlds });
   const [newCategoryName, setNewCategoryName] = useState('');
   // True when handleExpand merged new canon entries into the draft that the
   // server doesn't yet know about (auto-save failed or hasn't run). On the
@@ -396,9 +675,9 @@ export default function UniverseBuilder() {
   // wins because our ledger doesn't contain it, so the refetched canon
   // (which already lacks the deleted entry) is the final state. Cleared on
   // successful save and on universe-switch.
-  const pendingCanonAdditionsRef = useRef({ characters: [], settings: [], objects: [] });
+  const pendingCanonAdditionsRef = useRef({ characters: [], places: [], objects: [] });
   const clearPendingCanonAdditions = () => {
-    pendingCanonAdditionsRef.current = { characters: [], settings: [], objects: [] };
+    pendingCanonAdditionsRef.current = { characters: [], places: [], objects: [] };
   };
 
   // Per-page render knobs. Persisted to localStorage so the user's
@@ -414,6 +693,117 @@ export default function UniverseBuilder() {
   );
 
   const [runs, setRuns] = useState([]);
+  // Page-level lightbox state for variation + composite-sheet thumbs. Canon
+  // entries route through `UniverseCanonSection`'s own MediaPreview; this
+  // one covers the category-bucket rows so clicking a variation thumb opens
+  // the same full-detail modal the gallery / history uses.
+  const [preview, setPreview] = useState(null);
+  // Filename → full image-metadata-sidecar record (prompt, negativePrompt,
+  // modelId, width, height, seed, etc.). Hydrates `previewItems` with the
+  // ACTUAL prompt that was used to render the image — without this the
+  // modal would only see the variation's label, and Refine Prompt / Remix
+  // / Send to Video would all open with empty fields. Loaded once per
+  // mount via `listImageGallery()` (the same call the History page uses)
+  // and refreshed whenever a render completes (universe `runs` advances).
+  const [galleryByFilename, setGalleryByFilename] = useState(() => new Map());
+  // Bumped on every job completion so the gallery-metadata fetch below
+  // re-runs once the new sidecar exists on disk. Keying the fetch only on
+  // `runs.length` was insufficient: that advances when a run is queued or
+  // loaded, NOT when one of its jobs completes — so a freshly rendered
+  // thumb would open the lightbox with label-only metadata until a full
+  // page reload.
+  const [galleryRefreshKey, setGalleryRefreshKey] = useState(0);
+  const bumpGalleryRefresh = useCallback(() => setGalleryRefreshKey((k) => k + 1), []);
+  useEffect(() => {
+    let cancelled = false;
+    listImageGallery().then((list) => {
+      if (cancelled) return;
+      const map = new Map();
+      for (const item of Array.isArray(list) ? list : []) {
+        if (item?.filename) map.set(item.filename, item);
+      }
+      setGalleryByFilename(map);
+    }).catch(() => { /* non-fatal; modal falls back to filename-only display */ });
+    return () => { cancelled = true; };
+    // `runs.length` covers initial-load and queue-time; `galleryRefreshKey`
+    // covers per-job completion (see bumpGalleryRefresh callers).
+  }, [runs.length, galleryRefreshKey]);
+  const { annotations, updateAnnotation } = useMediaAnnotations();
+  const previewItems = useMemo(() => {
+    const out = [];
+    const seen = new Set();
+    const pushFilename = (filename, label) => {
+      if (typeof filename !== 'string' || !filename) return;
+      if (seen.has(filename)) return;
+      seen.add(filename);
+      // Pull the real prompt + render settings out of the gallery metadata
+      // map when available so the lightbox shows the full prompt that was
+      // sent to the renderer (with universe style influences, variation
+      // prompt fragment, etc.), not just the row's display label.
+      // Falls back to the label-only shape for filenames not in the gallery
+      // (legacy renders or pending re-fetch).
+      const meta = galleryByFilename.get(filename) || null;
+      out.push({
+        // Same `image:<filename>` key normalizeImage() stamps everywhere
+        // else — History, Collections, ImageGen — so a star/note added
+        // from this lightbox is the SAME annotation record those pages
+        // already read. A page-local key would silently fork the user's
+        // favorites by surface.
+        key: `image:${filename}`,
+        kind: 'image',
+        filename,
+        previewUrl: `/data/images/${filename}`,
+        downloadUrl: `/data/images/${filename}`,
+        prompt: meta?.prompt || label || filename,
+        negativePrompt: meta?.negativePrompt || null,
+        modelId: meta?.modelId || meta?.model || null,
+        width: meta?.width ?? null,
+        height: meta?.height ?? null,
+        seed: meta?.seed ?? null,
+        steps: meta?.steps ?? null,
+        guidance: meta?.guidance ?? null,
+        quantize: meta?.quantize ?? null,
+        // `raw` carries the original sidecar so MediaLightbox's "Refine
+        // Prompt" / clean / remix downstream handlers can pull any field
+        // the spec doesn't surface at the top level.
+        raw: meta,
+      });
+    };
+    const cats = draft?.categories && typeof draft.categories === 'object' ? draft.categories : {};
+    for (const [bucketKey, bucket] of Object.entries(cats)) {
+      const variations = Array.isArray(bucket?.variations) ? bucket.variations : [];
+      for (const v of variations) {
+        const refs = Array.isArray(v?.imageRefs) ? v.imageRefs : [];
+        for (const f of refs) pushFilename(f, `${bucketKey} · ${v.label}`);
+      }
+    }
+    const sheets = Array.isArray(draft?.compositeSheets) ? draft.compositeSheets : [];
+    for (const s of sheets) {
+      const refs = Array.isArray(s?.imageRefs) ? s.imageRefs : [];
+      for (const f of refs) pushFilename(f, `Composite · ${s.label}`);
+    }
+    return out;
+  }, [draft, galleryByFilename]);
+  // Shared preview action handlers (Remix / SendToVideo / Clean) so the
+  // universe lightbox opens the same downstream pages with the same params
+  // as the History grid + Image Gen page. `onCleanComplete` splices the
+  // cleaned image into the local gallery map so the next preview open
+  // shows it immediately — no full refetch needed.
+  const previewActions = useImagePreviewActions({
+    onCleanComplete: useCallback((cleaned) => {
+      if (!cleaned?.filename) return;
+      setGalleryByFilename((prev) => {
+        const next = new Map(prev);
+        next.set(cleaned.filename, cleaned);
+        return next;
+      });
+    }, []),
+  });
+  const openVariationPreview = useCallback((filename) => {
+    if (!filename) return;
+    const match = previewItems.find((i) => i.filename === filename);
+    if (match) setPreview(match);
+  }, [previewItems]);
 
   // Two-click delete: first click flips this to the world id; a second
   // click within the live render confirms. Avoids window.confirm per
@@ -433,27 +823,20 @@ export default function UniverseBuilder() {
     setRefineChanges([]);
   };
 
-  // Universes list collapsed state — desktop only (mobile stacks the sidebar
-  // above the editor and there's no horizontal-space tradeoff to make).
-  // Persists across visits so users who prefer a maximized editor stay there.
-  const [worldsCollapsed, setWorldsCollapsed] = useLocalStorageBool(
-    'universeBuilder.worldsCollapsed',
-    false,
-  );
-  const toggleWorldsCollapsed = () => setWorldsCollapsed((prev) => !prev);
-
   const refresh = async () => {
     setLoading(true);
-    const [list, provData, models, settings] = await Promise.all([
+    const [list, provData, models, loras, settings] = await Promise.all([
       listUniverses().catch(() => []),
       getProviders().catch(() => ({ providers: [] })),
       listImageModels().catch(() => []),
+      listLorasFull().catch(() => []),
       getSettings().catch(() => ({})),
     ]);
     setWorlds(list);
     setProviders(provData.providers || []);
     setActiveProviderId(provData.activeProvider || null);
     setImageModels(models || []);
+    setAvailableLoras(Array.isArray(loras) ? loras : []);
     // Batch render rejects external (would block the request for the whole
     // batch), so hide that chip even if it's configured.
     const backends = deriveAvailableBackends(settings, { excludeExternal: true });
@@ -475,7 +858,9 @@ export default function UniverseBuilder() {
     setCanonDirty(false);
     clearPendingCanonAdditions();
     if (!selectedId) {
-      setDraft(emptyTemplate());
+      const empty = emptyTemplate();
+      setDraft(empty);
+      markDraftSaved(empty);
       setRuns([]);
       return;
     }
@@ -486,7 +871,7 @@ export default function UniverseBuilder() {
     ]).then(([w, r]) => {
       if (cancelled) return;
       if (w) {
-        setDraft({
+        const hydrated = {
           ...w,
           // Ensure starter buckets exist, but preserve custom buckets returned
           // by the LLM or added by the user.
@@ -498,7 +883,9 @@ export default function UniverseBuilder() {
           influences: ensureInfluences(w.influences),
           locked: w.locked || {},
           llm: w.llm || { provider: null, model: null },
-        });
+        };
+        setDraft(hydrated);
+        markDraftSaved(hydrated);
       }
       setRuns(r);
     });
@@ -523,16 +910,29 @@ export default function UniverseBuilder() {
     return () => clearTimeout(t);
   }, [location.hash, selectedId, draft.id]);
 
-  const handleNew = () => {
-    goToWorld(null);
-    setDraft(emptyTemplate());
-    setRuns([]);
+  // Create-from-selector path: builds a universe from just the typed name
+  // (everything else empty) and navigates to it. Distinct from handleSave so
+  // typing a new name while an existing universe is selected doesn't rename
+  // that universe — Create always makes a new record.
+  const handleCreateNamed = async (rawName) => {
+    const name = (rawName || '').trim();
+    if (!name) { toast.error('Name is required'); return; }
+    setSaving(true);
+    const result = await createUniverse({
+      ...emptyTemplate(),
+      name,
+    }).catch((e) => { toast.error(`Create failed: ${e.message}`); return null; });
+    setSaving(false);
+    if (!result) return;
+    toast.success('World created');
+    setWorlds((prev) => upsertByIdPrepend(prev, result));
+    goToWorld(result.id);
   };
 
   const handleSave = async () => {
     if (!draft.name?.trim()) {
       toast.error('Name is required');
-      return;
+      return null;
     }
     setSaving(true);
     const basePayload = {
@@ -575,17 +975,17 @@ export default function UniverseBuilder() {
         if (!fresh) {
           setSaving(false);
           toast.error('Save failed: could not fetch latest canon — please try again');
-          return;
+          return null;
         }
         const additions = pendingCanonAdditionsRef.current;
         const baseCanon = {
           characters: mergeCanonByName(fresh.characters || [], additions.characters, 'character'),
-          settings: mergeCanonByName(fresh.settings || [], additions.settings, 'setting'),
+          places: mergeCanonByName(fresh.places || [], additions.places, 'place'),
           objects: mergeCanonByName(fresh.objects || [], additions.objects, 'object'),
         };
         payload = { ...basePayload, ...baseCanon };
       } else {
-        const baseCanon = { characters: draft.characters || [], settings: draft.settings || [], objects: draft.objects || [] };
+        const baseCanon = { characters: draft.characters || [], places: draft.places || [], objects: draft.objects || [] };
         payload = { ...basePayload, ...baseCanon };
       }
     }
@@ -602,16 +1002,15 @@ export default function UniverseBuilder() {
         setCanonDirty(false);
         clearPendingCanonAdditions();
       }
+      markDraftSaved(payload);
       toast.success(selectedId ? 'World updated' : 'World created');
-      setWorlds((prev) => {
-        const without = prev.filter((w) => w.id !== result.id);
-        return [result, ...without];
-      });
+      setWorlds((prev) => upsertByIdPrepend(prev, result));
       // After Create: jump to the new id's URL so back-button / refresh
       // returns to the same world. After Update: id is unchanged, but
       // navigating is harmless (replace-style).
       if (result.id !== selectedId) goToWorld(result.id);
     }
+    return result;
   };
 
   const handleDelete = async () => {
@@ -704,7 +1103,7 @@ export default function UniverseBuilder() {
       // Allowing a fresh LLM kind to supersede an existing 'other' is intentional:
       // pre-Phase-B "factions" buckets saved as `other` can be promoted to
       // `characters` by a re-expand without requiring the user to manually change
-      // the trunk. User-curated non-`other` kinds (e.g. `settings`) are preserved.
+      // the trunk. User-curated non-`other` kinds (e.g. `places`) are preserved.
       const existingKind = draft.categories?.[cat]?.kind;
       const freshKind = llmCategories[cat]?.kind;
       const kind = (existingKind && existingKind !== 'other') ? existingKind : (freshKind || existingKind);
@@ -732,8 +1131,8 @@ export default function UniverseBuilder() {
     // clobber hand-authored or series-extracted records. mergeCanonByName
     // short-circuits when `fresh` is empty so identity is preserved.
     //
-    // `kind` is passed so settings use `normalizeSlugline` for both `name` and
-    // `slugline` (matching the server's MERGE_CONFIG.setting.keyFields) —
+    // `kind` is passed so places use `normalizeSlugline` for both `name` and
+    // `slugline` (matching the server's MERGE_CONFIG.place.keyFields) —
     // dash/punct-variant identifiers collide instead of duplicating.
     const pickCanon = (key, kind) => mergeCanonByName(
       draft[key] || [],
@@ -741,7 +1140,7 @@ export default function UniverseBuilder() {
       kind,
     );
     const mergedCharacters = pickCanon('characters', 'character');
-    const mergedSettings = pickCanon('settings', 'setting');
+    const mergedPlaces = pickCanon('places', 'place');
     const mergedObjects = pickCanon('objects', 'object');
     // Count NEW canon entries this expand added (post-merge minus pre-existing).
     // Used by the toast so a re-expand on a populated universe doesn't claim
@@ -749,7 +1148,7 @@ export default function UniverseBuilder() {
     // on collision in mergeCanonByName, so the delta is always non-negative.
     const addedCanonCount =
       (mergedCharacters.length - (draft.characters?.length || 0))
-      + (mergedSettings.length - (draft.settings?.length || 0))
+      + (mergedPlaces.length - (draft.places?.length || 0))
       + (mergedObjects.length - (draft.objects?.length || 0));
 
     const expandedDraft = {
@@ -762,7 +1161,7 @@ export default function UniverseBuilder() {
       categories: ensureDraftCategories(mergedCategories),
       compositeSheets: mergedSheets,
       characters: mergedCharacters,
-      settings: mergedSettings,
+      places: mergedPlaces,
       objects: mergedObjects,
       llm: result.llm || draft.llm,
     };
@@ -786,7 +1185,7 @@ export default function UniverseBuilder() {
       };
       pendingCanonAdditionsRef.current = {
         characters: [...pendingCanonAdditionsRef.current.characters, ...computeAdditions(draft.characters, mergedCharacters)],
-        settings: [...pendingCanonAdditionsRef.current.settings, ...computeAdditions(draft.settings, mergedSettings)],
+        places: [...pendingCanonAdditionsRef.current.places, ...computeAdditions(draft.places, mergedPlaces)],
         objects: [...pendingCanonAdditionsRef.current.objects, ...computeAdditions(draft.objects, mergedObjects)],
       };
     }
@@ -822,7 +1221,7 @@ export default function UniverseBuilder() {
       // any concurrent deletions/edits.
       let canonForPayload = {
         characters: expandedDraft.characters || [],
-        settings: expandedDraft.settings || [],
+        places: expandedDraft.places || [],
         objects: expandedDraft.objects || [],
       };
       if (selectedId) {
@@ -847,7 +1246,7 @@ export default function UniverseBuilder() {
           // deletions in other tabs/surfaces get resurrected because the
           // deleted entry is still present in the stale draft.
           characters: mergeCanonByName(fresh.characters || [], pendingCanonAdditionsRef.current.characters, 'character'),
-          settings: mergeCanonByName(fresh.settings || [], pendingCanonAdditionsRef.current.settings, 'setting'),
+          places: mergeCanonByName(fresh.places || [], pendingCanonAdditionsRef.current.places, 'place'),
           objects: mergeCanonByName(fresh.objects || [], pendingCanonAdditionsRef.current.objects, 'object'),
         };
       }
@@ -872,16 +1271,14 @@ export default function UniverseBuilder() {
         .catch((e) => { toast.error(`Auto-save after expand failed: ${e.message}`); return null; })
         .finally(() => setSaving(false));
       if (saved) {
-        setWorlds((prev) => {
-          const without = prev.filter((w) => w.id !== saved.id);
-          return [saved, ...without];
-        });
+        setWorlds((prev) => upsertByIdPrepend(prev, saved));
         // Auto-save succeeded — server now has the merged canon, so a
         // subsequent manual Save shouldn't re-send it (avoids the
         // concurrent-edit clobber). Drain the additions ledger too since
         // those entries are now on the server.
         setCanonDirty(false);
         clearPendingCanonAdditions();
+        markDraftSaved(payload);
         // New record: route to its id so the canon section gates flip and
         // subsequent draft state reflects the persisted record.
         if (!selectedId) goToWorld(saved.id);
@@ -925,7 +1322,7 @@ export default function UniverseBuilder() {
     if (Array.isArray(patch.compositeSheets)) next.compositeSheets = patch.compositeSheets;
     setDraft(next);
     if (selectedId && next.name?.trim()) {
-      const updated = await updateUniverse(selectedId, {
+      const refinePayload = {
         name: next.name.trim(),
         starterPrompt: next.starterPrompt || '',
         logline: next.logline || '',
@@ -936,12 +1333,12 @@ export default function UniverseBuilder() {
         influences: ensureInfluences(next.influences),
         locked: next.locked || {},
         llm: next.llm || {},
-      }).catch((e) => { toast.error(`Auto-save after refine failed: ${e.message}`); return null; });
+      };
+      const updated = await updateUniverse(selectedId, refinePayload)
+        .catch((e) => { toast.error(`Auto-save after refine failed: ${e.message}`); return null; });
       if (updated) {
-        setWorlds((prev) => {
-          const without = prev.filter((w) => w.id !== updated.id);
-          return [updated, ...without];
-        });
+        setWorlds((prev) => upsertByIdPrepend(prev, updated));
+        markDraftSaved(refinePayload);
       }
     }
   };
@@ -1047,8 +1444,18 @@ export default function UniverseBuilder() {
     const needsCanonDefault = !scope && (promptMode === 'canon' || promptMode === 'all');
     const effectiveCanonSelection = scope?.canonSelection
       ?? (needsCanonDefault
-        ? { characters: 'all', settings: 'all', objects: 'all' }
+        ? Object.fromEntries(TRUNK_TABS.map((t) => [t.kind, 'all']))
         : undefined);
+    // Per-batch overrides from the ImageGenSettingsForm. Empty strings →
+    // undefined so the server falls back to the universe's stored influences.
+    // Seed coerces to a non-negative int (matching /api/image-gen/generate
+    // semantics) — non-numeric strings become undefined rather than NaN.
+    const seedRaw = renderOpts.seed;
+    const seedNum = seedRaw === '' || seedRaw == null ? null : Number(seedRaw);
+    const seed = Number.isFinite(seedNum) && seedNum >= 0 ? Math.trunc(seedNum) : undefined;
+    const loras = Array.isArray(renderOpts.loras) && renderOpts.loras.length
+      ? renderOpts.loras
+      : undefined;
     setRendering(true);
     const result = await renderWorld(selectedId, {
       mode: effectiveMode,
@@ -1064,9 +1471,43 @@ export default function UniverseBuilder() {
       selection: scope?.selection,
       sheetSelection: scope?.sheetSelection,
       canonSelection: effectiveCanonSelection,
+      seed,
+      negativePrompt: renderOpts.negativePrompt?.trim() || undefined,
+      extraStyle: renderOpts.extraStyle?.trim() || undefined,
+      stylePresetId: renderOpts.stylePreset?.id || undefined,
+      loras,
     }).catch((e) => { toast.error(`Render failed: ${e.message}`); return null; });
     setRendering(false);
     if (!result) return;
+    // Stamp per-entry pending state so each variation / canon row can swap
+    // its thumbnail for a MediaJobThumb spinner. `variation` covers the
+    // category-bucket rows; `canon` covers the trunk-canon rows that the
+    // `/render` route compiles when `promptMode` is "canon" / "all" / a
+    // per-trunk scope (the canon section's own one-off renders go through
+    // `UniverseCanonSection`'s `generateImage` path and populate its
+    // separate `renderingJobs` map; both maps merge at the read site).
+    // Composite sheets are skipped because `CompositeSheetsEditor` has no
+    // pending-thumb UI yet — sheet jobs would accumulate forever with no
+    // consumer to clear them. When sheets grow per-row pending UI, widen
+    // this allow-list to include 'sheet' and wire matching callbacks.
+    //
+    // Each kind's jobIds are APPENDED to a per-entry queue: `batchPerVariation
+    // > 1` queues multiple jobs against the same id, and back-to-back
+    // renders on the same row should all stay tracked. Each completion
+    // shifts its jobId out (see `clearPendingForEntry`); the head jobId
+    // is the one MediaJobThumb subscribes to at any moment.
+    if (Array.isArray(result.entryJobs) && result.entryJobs.length > 0) {
+      setPendingByEntryId((prev) => {
+        const next = { ...prev };
+        for (const { jobId, entryRef } of result.entryJobs) {
+          if (!jobId || !entryRef?.id) continue;
+          if (entryRef.kind !== 'variation' && entryRef.kind !== 'canon') continue;
+          const existing = Array.isArray(next[entryRef.id]) ? next[entryRef.id] : [];
+          next[entryRef.id] = [...existing, jobId];
+        }
+        return next;
+      });
+    }
     toast.success(`Queued ${result.promptCount} renders → "${result.collectionName}"`);
     const updated = await listWorldRuns(selectedId).catch(() => runs);
     setRuns(updated);
@@ -1098,7 +1539,7 @@ export default function UniverseBuilder() {
         return {
           ...d,
           characters: mergeCanonByName(updated.characters || [], additions.characters, 'character'),
-          settings: mergeCanonByName(updated.settings || [], additions.settings, 'setting'),
+          places: mergeCanonByName(updated.places || [], additions.places, 'place'),
           objects: mergeCanonByName(updated.objects || [], additions.objects, 'object'),
           updatedAt: updated.updatedAt,
         };
@@ -1106,7 +1547,7 @@ export default function UniverseBuilder() {
       return {
         ...d,
         characters: updated.characters,
-        settings: updated.settings,
+        places: updated.places,
         objects: updated.objects,
         updatedAt: updated.updatedAt,
       };
@@ -1140,7 +1581,104 @@ export default function UniverseBuilder() {
     // trunk to `other`.
     categories: { ...d.categories, [cat]: { ...(d.categories?.[cat] || {}), variations } },
   }));
+  // Retag an Other-tab bucket as a canon trunk (Cast / Places / Objects).
+  // Variations stay in place; the bucket simply moves out of the Other tab
+  // into the matching trunk on next render via groupBucketsByKind.
+  const assignBucketKind = async (bucket, targetKind) => {
+    if (!TRUNK_BY_KIND[targetKind]) return;
+    // Read from draftRef so a generate's just-landed auto-save (which set
+    // draft via setDraft) is visible here even if React hasn't committed a
+    // re-render yet — without this, the PATCH below could overwrite the new
+    // variations with the closure's stale ones.
+    const latestDraft = draftRef.current || draft;
+    const current = latestDraft.categories?.[bucket];
+    if (!current) return;
+    const nextBucket = { ...current, kind: targetKind };
+    // Only the affected bucket is sent in the PATCH — the server's categories
+    // patch is keyed (per-bucket replace), so omitting other keys leaves them
+    // untouched. That keeps concurrent edits to other buckets safe even when
+    // this handler raced an in-flight setDraft.
+    setDraft((d) => ({
+      ...d,
+      categories: {
+        ...d.categories,
+        [bucket]: { ...(d.categories?.[bucket] || current), kind: targetKind },
+      },
+    }));
+    const trunk = TRUNK_BY_KIND[targetKind];
+    if (!selectedId) {
+      toast.success(`Tagged "${humanizeCategory(bucket)}" as ${trunk.label} — save to persist`);
+      return;
+    }
+    const updated = await updateUniverse(selectedId, { categories: { [bucket]: nextBucket } }, { silent: true })
+      .catch((e) => { toast.error(`Move failed: ${e.message}`); return null; });
+    if (updated) {
+      setWorlds((prev) => upsertByIdPrepend(prev, updated));
+      toast.success(`Moved "${humanizeCategory(bucket)}" to ${trunk.label}`);
+    }
+  };
+  // Auto-sort with AI — one LLM call classifies every Other-tab bucket into
+  // characters/places/objects. Each bucket's `kind` is reassigned via a
+  // single atomic patch server-side so the universe ends up consistent or
+  // unchanged. Renames the LLM suggests are surfaced in the toast but not
+  // auto-applied (the user can rename manually if they want it).
+  // Returns true when the draft is clean or save succeeded; false (with
+  // handleSave's own error toast already raised) when save failed.
+  const flushDraftIfDirty = useCallback(async () => {
+    if (!isDraftDirty()) return true;
+    const saved = await handleSave();
+    return !!saved;
+  }, [isDraftDirty]);
+
+  const handleAutoSort = () => runUniverseAction({
+    ref: autoSortingRef,
+    setBusy: setAutoSorting,
+    loadingMessage: 'Auto-sorting buckets with AI…',
+    errorPrefix: 'Auto-sort failed',
+    notSavedMessage: 'Save the universe first — auto-sort needs the persisted record',
+    preflight: flushDraftIfDirty,
+    action: (capturedId) => autoSortBuckets(capturedId, {
+      providerId: draft.llm?.provider || undefined,
+      model: draft.llm?.model || undefined,
+    }, { silent: true }),
+    onFreshResult: (result) => {
+      const updated = result.universe;
+      // Merge only the reclassified buckets into the draft — wholesale-
+      // replacing `categories` with the server snapshot would discard any
+      // user edits to OTHER buckets made while the LLM call was in flight.
+      // Compute the merge from draftRef so React strict-mode's double-fire
+      // of state updaters doesn't double-stringify the dirty baseline.
+      const sortedKeys = new Set((result.results || []).map((r) => r.sourceKey));
+      const baseDraft = draftRef.current || draft;
+      const nextCategories = { ...(baseDraft.categories || {}) };
+      for (const key of sortedKeys) {
+        if (updated.categories?.[key]) nextCategories[key] = updated.categories[key];
+      }
+      const newDraft = {
+        ...baseDraft,
+        categories: nextCategories,
+        schemaVersion: updated.schemaVersion,
+        updatedAt: updated.updatedAt,
+      };
+      setDraft(newDraft);
+      markDraftSaved(newDraft);
+      const sortedCount = result.results?.length || 0;
+      const renames = (result.results || []).filter((r) => r.suggestedKey);
+      const summary = sortedCount
+        ? `Sorted ${sortedCount} bucket${sortedCount === 1 ? '' : 's'} into canon trunks`
+        : 'No buckets were classified';
+      const renameHint = renames.length
+        ? ` — ${renames.length} rename suggestion${renames.length === 1 ? '' : 's'} available`
+        : '';
+      return `${summary}${renameHint}`;
+    },
+  });
+
   const handleGenerateInCategory = async (cat, count) => {
+    // Match the runUniverseAction-based handlers — flush dirty draft so the
+    // subsequent auto-save can't clobber unrelated fields with a stale spread.
+    const flushed = await flushDraftIfDirty();
+    if (!flushed) return;
     const current = draft.categories?.[cat]?.variations || [];
     const existingLabels = current.map((v) => v.label).filter(Boolean);
     const result = await generateCategoryVariations({
@@ -1174,10 +1712,8 @@ export default function UniverseBuilder() {
       const updated = await updateUniverse(selectedId, { categories: nextDraft.categories })
         .catch((e) => { toast.error(`Auto-save after generate failed: ${e.message}`); return null; });
       if (updated) {
-        setWorlds((prev) => {
-          const without = prev.filter((w) => w.id !== updated.id);
-          return [updated, ...without];
-        });
+        setWorlds((prev) => upsertByIdPrepend(prev, updated));
+        markDraftSaved(nextDraft);
         toast.success(`Added ${additionCount} variation${additionCount === 1 ? '' : 's'} to ${humanizeCategory(cat)} — saved`);
         return;
       }
@@ -1188,58 +1724,44 @@ export default function UniverseBuilder() {
   // so an unsaved draft can't be promoted from. The page-level `promoting`
   // gate prevents two promotes (across buckets or trunks) from racing each
   // other to stale-snapshot writes against the same universe.
-  const handlePromoteVariation = async (category, variation, { targetKind } = {}) => {
-    if (!selectedId) {
-      toast.error('Save the universe first — promote needs the persisted record');
-      return;
-    }
-    if (!variation?.label) return;
-    if (promotingRef.current) return;
-    promotingRef.current = true;
-    setPromoting(true);
-    const capturedId = selectedId;
-    const toastId = toast.loading(`Promoting "${variation.label}" to canon…`);
-    const result = await promoteVariationToCanon(selectedId, {
-      category,
-      label: variation.label,
-      targetKind,
-      providerId: draft.llm?.provider || undefined,
-      model: draft.llm?.model || undefined,
-    }, { silent: true }).catch((e) => {
-      toast.dismiss(toastId);
-      toast.error(`Promote failed: ${e.message}`);
-      return null;
+  const handlePromoteVariation = (category, variation, { targetKind } = {}) => {
+    if (!variation?.label) return Promise.resolve(null);
+    return runUniverseAction({
+      ref: promotingRef,
+      setBusy: setPromoting,
+      loadingMessage: `Promoting "${variation.label}" to canon…`,
+      errorPrefix: 'Promote failed',
+      notSavedMessage: 'Save the universe first — promote needs the persisted record',
+      preflight: flushDraftIfDirty,
+      action: (capturedId) => promoteVariationToCanon(capturedId, {
+        category,
+        label: variation.label,
+        targetKind,
+        providerId: draft.llm?.provider || undefined,
+        model: draft.llm?.model || undefined,
+      }, { silent: true }),
+      onFreshResult: (result) => {
+        const updated = result.universe;
+        // Selective merge: only the canon array + the affected category bucket
+        // changed server-side. Preserve every other draft field (the user may
+        // have typed into logline/premise/influences during the LLM call).
+        // Compute outside setDraft so strict-mode's double-invoke doesn't
+        // re-stringify the dirty baseline.
+        const baseDraft = draftRef.current || draft;
+        const newDraft = {
+          ...baseDraft,
+          characters: updated.characters,
+          places: updated.places,
+          objects: updated.objects,
+          categories: { ...baseDraft.categories, [result.removed.category]: updated.categories?.[result.removed.category] },
+          schemaVersion: updated.schemaVersion,
+          updatedAt: updated.updatedAt,
+        };
+        setDraft(newDraft);
+        markDraftSaved(newDraft);
+        return `Promoted "${variation.label}" → ${result.targetKind} canon`;
+      },
     });
-    if (mountedRef.current) {
-      promotingRef.current = false;
-      setPromoting(false);
-    }
-    if (!result?.universe) return;
-    const updated = result.universe;
-    // Always update the cached list — even when the user navigated away mid-
-    // flight, the persisted shape changed and other surfaces should see it.
-    setWorlds((prev) => {
-      const without = prev.filter((w) => w.id !== updated.id);
-      return [updated, ...without];
-    });
-    // Guard: if the user navigated to a different universe during the LLM
-    // call, the response belongs to the previous one — don't clobber the
-    // new draft. The list update above still surfaces the change.
-    if (!mountedRef.current || capturedId !== selectedId) return;
-    // Selective merge: only the canon array + the affected category bucket
-    // changed server-side. Preserve every other draft field (the user may
-    // have typed into logline/premise/influences during the LLM call).
-    setDraft((d) => ({
-      ...d,
-      characters: updated.characters,
-      settings: updated.settings,
-      objects: updated.objects,
-      categories: { ...d.categories, [result.removed.category]: updated.categories?.[result.removed.category] },
-      schemaVersion: updated.schemaVersion,
-      updatedAt: updated.updatedAt,
-    }));
-    toast.dismiss(toastId);
-    toast.success(`Promoted "${variation.label}" → ${result.targetKind} canon`);
   };
   const updateCompositeSheets = (sheets) => setDraft((d) => ({ ...d, compositeSheets: sheets }));
   const addCategory = () => {
@@ -1353,106 +1875,23 @@ export default function UniverseBuilder() {
     setSearchParams(next, { replace: true });
   }, [activeTab, activeBucket, bucketsByKind, searchParams, setSearchParams]);
 
-  // Mobile = flex column (grid template ignored); lg+ = grid where the inline
-  // `gridTemplateColumns` swap between collapsed/expanded widths takes effect.
-  // Flipping `display` at the breakpoint (rather than overriding grid-cols-1
-  // with an inline style) keeps the mobile stack working. Collapsed track is
-  // 0px (not a thin rail) — matches CoS pattern where a floating expand
-  // button stands in for the rail.
-  const desktopGridCols = worldsCollapsed ? '0px minmax(0, 1fr)' : '260px minmax(0, 1fr)';
-
   return (
     <div className="flex flex-col h-full">
-      <div
-        className="relative flex-1 flex flex-col lg:grid min-h-0 transition-[grid-template-columns] duration-200"
-        style={{ gridTemplateColumns: desktopGridCols }}
-      >
-      {/* Sidebar — world list. Collapses entirely on desktop (no rail) —
-          a floating expand button at the nav edge stands in. Mobile keeps the
-          full sidebar inline (the page stacks vertically below `lg`, so
-          collapsing doesn't help there). Border-r + tinted bg matches
-          WritersRoom's tight integrated look — the editor area flows directly
-          off the sidebar without a card gap. */}
-      {worldsCollapsed && (
-        <button
-          onClick={toggleWorldsCollapsed}
-          className="hidden lg:flex absolute left-0 top-2 z-20 p-1.5 text-gray-500 hover:text-white transition-colors rounded-r-md hover:bg-port-card bg-port-card/60 border border-l-0 border-port-border"
-          title="Show universes"
-          aria-label="Show universes"
-        >
-          <PanelLeftOpen size={16} />
-        </button>
-      )}
-      {worldsCollapsed ? (
-        <div className="hidden lg:block overflow-hidden min-w-0" />
-      ) : (
-        <aside className="border-b lg:border-b-0 lg:border-r border-port-border bg-port-card/40 px-3 py-3 flex flex-col gap-2 lg:overflow-y-auto">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-white flex items-center gap-2">
-              <Globe2 size={16} className="text-port-accent" /> Universes
-            </h2>
-            <div className="flex items-center gap-1">
-              <button
-                onClick={handleNew}
-                className="text-xs px-2 py-1 bg-port-accent/15 hover:bg-port-accent/25 text-port-accent rounded flex items-center gap-1 min-h-[40px] sm:min-h-0"
-                title="New world"
-              >
-                <Plus size={14} /> New
-              </button>
-              <button
-                onClick={toggleWorldsCollapsed}
-                className="hidden lg:inline-flex p-1.5 text-gray-500 hover:text-white"
-                title="Collapse universes"
-                aria-label="Collapse universes"
-              >
-                <PanelLeftClose size={14} />
-              </button>
-            </div>
-          </div>
-          {loading ? (
-            <p className="text-xs text-gray-500">Loading…</p>
-          ) : universes.length === 0 ? (
-            <p className="text-xs text-gray-500">No universes yet — click <span className="text-port-accent">New</span> to start.</p>
-          ) : (
-            <ul className="flex flex-col gap-1 overflow-y-auto">
-              {universes.map((w) => {
-                const active = w.id === selectedId;
-                return (
-                  <li key={w.id}>
-                    <button
-                      onClick={() => goToWorld(w.id)}
-                      className={`w-full text-left px-2 py-2 rounded text-sm transition-colors min-h-[40px] ${
-                        active
-                          ? 'bg-port-accent/15 text-port-accent border border-port-accent/40'
-                          : 'text-gray-300 hover:bg-port-bg border border-transparent'
-                      }`}
-                    >
-                      <div className="font-medium truncate">{w.name}</div>
-                      <div className="text-[11px] text-gray-500 truncate">{w.starterPrompt || 'No starter prompt'}</div>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </aside>
-      )}
-
-      {/* Editor — owns its own scroll inside the full-width main so the
-          sidebar can stay pinned while the long card stack scrolls. */}
-      <section className="flex flex-col gap-3 p-4 min-h-0 lg:overflow-y-auto">
-        {/* Thin action header — name + Save + Share + Delete sit above the
-            tab nav so they're reachable from any tab. The Bible-tab actions
-            (Generate / Refine, starter idea, story-bible fields) live inside
-            the Bible tab itself, per Phase C "Bible is its own tab". */}
+      <section className="flex-1 flex flex-col gap-3 p-4 min-h-0 overflow-y-auto">
+        {/* Thin action header — autocomplete universe selector doubles as the
+            name field; Save + Share + Delete sit beside it so they're reachable
+            from any tab. The Bible-tab actions (Generate / Refine, starter
+            idea, story-bible fields) live inside the Bible tab itself, per
+            Phase C "Bible is its own tab". */}
         <header className="bg-port-card border border-port-border rounded p-3 flex items-center gap-2 flex-wrap">
-          <input
-            type="text"
-            value={draft.name}
-            onChange={(e) => updateDraft({ name: e.target.value })}
-            placeholder="World name (e.g. Moebius / Scavenger sci-fi)"
-            className="flex-1 min-w-[180px] bg-port-bg border border-port-border rounded px-3 py-2 text-white focus:outline-none focus:border-port-accent"
-            maxLength={100}
+          <UniverseSelector
+            universes={universes}
+            selectedId={selectedId}
+            value={draft.name || ''}
+            onChange={(name) => updateDraft({ name })}
+            onPick={(id) => goToWorld(id)}
+            onCreate={() => handleCreateNamed(draft.name)}
+            busy={saving || loading}
           />
           <button
             onClick={handleSave}
@@ -1481,17 +1920,22 @@ export default function UniverseBuilder() {
           )}
         </header>
 
-        <TabNav
+        <TabPills
+          variant="pills"
+          size="sm"
+          mobileDropdown
+          mobileSelectId="ub-tab-select"
           activeTab={activeTab}
-          setTab={setTab}
-          hasOtherBuckets={hasOtherBuckets}
-          counts={{
-            cast: (draft.characters?.length || 0) + bucketsByKind.characters.reduce((n, k) => n + (draft.categories?.[k]?.variations?.length || 0), 0),
-            places: (draft.settings?.length || 0) + bucketsByKind.settings.reduce((n, k) => n + (draft.categories?.[k]?.variations?.length || 0), 0),
-            objects: (draft.objects?.length || 0) + bucketsByKind.objects.reduce((n, k) => n + (draft.categories?.[k]?.variations?.length || 0), 0),
-            other: bucketsByKind.other.reduce((n, k) => n + (draft.categories?.[k]?.variations?.length || 0), 0),
-            composites: totalSheets,
-          }}
+          onChange={setTab}
+          tabs={[
+            { id: TAB_BIBLE, label: 'Bible', icon: BookOpen },
+            { id: TAB_CAST, label: 'Cast', icon: Users, count: (draft.characters?.length || 0) + bucketsByKind.characters.reduce((n, k) => n + (draft.categories?.[k]?.variations?.length || 0), 0) },
+            { id: TAB_PLACES, label: 'Places', icon: MapPin, count: (draft.places?.length || 0) + bucketsByKind.places.reduce((n, k) => n + (draft.categories?.[k]?.variations?.length || 0), 0) },
+            { id: TAB_OBJECTS, label: 'Objects', icon: Package, count: (draft.objects?.length || 0) + bucketsByKind.objects.reduce((n, k) => n + (draft.categories?.[k]?.variations?.length || 0), 0) },
+            hasOtherBuckets && { id: TAB_OTHER, label: 'Other', icon: FolderTree, count: bucketsByKind.other.reduce((n, k) => n + (draft.categories?.[k]?.variations?.length || 0), 0) },
+            { id: TAB_COMPOSITES, label: 'Composites', icon: Layers, count: totalSheets },
+            { id: TAB_RENDER, label: 'Render', icon: ImagePlus },
+          ]}
         />
 
         {activeTab === TAB_BIBLE && (
@@ -1535,6 +1979,36 @@ export default function UniverseBuilder() {
               onPromoteVariation={(bucket, v) => handlePromoteVariation(bucket, v)}
               onBulkRenderBucket={(bucket) => runRender({ promptMode: 'variations', selection: { [bucket]: 'all' } })}
               onRenderVariation={(bucket, v) => runRender({ promptMode: 'variations', selection: { [bucket]: [v.label] } })}
+              onPreviewVariation={openVariationPreview}
+              pendingByEntryId={pendingHeadByEntryId}
+              externalPendingByEntryId={pendingHeadByEntryId}
+              onPendingCleared={clearPendingForEntry}
+              onJobCompletedForEntry={(entryId, filename, bucket, completedJobId = null) => {
+                if (!filename || !bucket) {
+                  clearPendingForEntry(entryId, completedJobId);
+                  return;
+                }
+                // Optimistically append the new filename to the variation's
+                // imageRefs[] so the row swaps from spinner → rendered image
+                // without a roundtrip. Server already stamped this via the
+                // collection hook; the next universe refetch will agree.
+                setDraft((d) => {
+                  const cat = d.categories?.[bucket];
+                  if (!cat?.variations) return d;
+                  const variations = cat.variations.map((v) => {
+                    if (v.id !== entryId) return v;
+                    const refs = Array.isArray(v.imageRefs) ? v.imageRefs : [];
+                    if (refs.includes(filename)) return v;
+                    return { ...v, imageRefs: capImageRefs([...refs, filename]) };
+                  });
+                  return { ...d, categories: { ...d.categories, [bucket]: { ...cat, variations } } };
+                });
+                clearPendingForEntry(entryId, completedJobId);
+                // The new sidecar exists now — pull it into galleryByFilename
+                // so the lightbox opens with the real prompt/settings rather
+                // than label-only metadata.
+                bumpGalleryRefresh();
+              }}
               onBulkRenderTrunk={() => {
                 const selection = Object.fromEntries(
                   (bucketsByKind[trunk.kind] || []).map((b) => [b, 'all']),
@@ -1570,8 +2044,33 @@ export default function UniverseBuilder() {
             onPromoteVariation={(bucket, v, opts) => handlePromoteVariation(bucket, v, opts)}
             onBulkRenderBucket={(bucket) => runRender({ promptMode: 'variations', selection: { [bucket]: 'all' } })}
             onRenderVariation={(bucket, v) => runRender({ promptMode: 'variations', selection: { [bucket]: [v.label] } })}
-            onAutoSort={() => {
-              toast('Auto-sort with AI is wired in a follow-up. Re-run "Generate From Idea" — Phase B\'s expand call now classifies buckets into the right trunk.', { icon: 'ℹ️' });
+            onPreviewVariation={openVariationPreview}
+            onAssignBucketKind={assignBucketKind}
+            onAutoSort={handleAutoSort}
+            autoSorting={autoSorting}
+            pendingByEntryId={pendingHeadByEntryId}
+            onPendingCleared={clearPendingForEntry}
+            onJobCompletedForEntry={(entryId, filename, bucket, completedJobId = null) => {
+              if (!filename || !bucket) {
+                clearPendingForEntry(entryId, completedJobId);
+                return;
+              }
+              setDraft((d) => {
+                const cat = d.categories?.[bucket];
+                if (!cat?.variations) return d;
+                const variations = cat.variations.map((v) => {
+                  if (v.id !== entryId) return v;
+                  const refs = Array.isArray(v.imageRefs) ? v.imageRefs : [];
+                  if (refs.includes(filename)) return v;
+                  return { ...v, imageRefs: capImageRefs([...refs, filename]) };
+                });
+                return { ...d, categories: { ...d.categories, [bucket]: { ...cat, variations } } };
+              });
+              clearPendingForEntry(entryId, completedJobId);
+              // Pull the new sidecar into galleryByFilename so the lightbox
+              // opens with the real prompt/settings (mirrors the Cast/Places
+              // path's onJobCompletedForEntry above).
+              bumpGalleryRefresh();
             }}
           />
         )}
@@ -1620,13 +2119,37 @@ export default function UniverseBuilder() {
             availableBackends={availableBackends}
             defaultMode={defaultMode}
             imageModels={imageModels}
+            availableLoras={availableLoras}
             handleRender={handleRender}
             rendering={rendering}
             runs={runs}
           />
         )}
       </section>
-      </div>
+
+      {/* Page-level lightbox for variation + composite-sheet thumb clicks.
+          UniverseCanonSection owns its own MediaPreview for canon entries
+          (which routes character reference sheets through a different
+          static prefix), so we deliberately don't include canon refs in
+          `previewItems` above — they're handled there. Mounted at the page
+          level (not inside RenderTab) so the lightbox state is in scope; it
+          renders regardless of active tab because variation thumbs in the
+          Cast / Places / Objects / Other tabs all open the same modal.
+          Action handlers (Remix / SendToVideo / Clean / Continue) and the
+          annotations channel come from the shared `useImagePreviewActions`
+          + `useMediaAnnotations` hooks so the surface matches History /
+          MediaCollectionDetail / ImageGen exactly. */}
+      <MediaPreview
+        preview={preview}
+        setPreview={setPreview}
+        items={previewItems}
+        annotations={annotations}
+        updateAnnotation={updateAnnotation}
+        onRemix={previewActions.handleRemix}
+        onSendToVideo={previewActions.handleSendToVideo}
+        onClean={(item, level) => previewActions.handleClean(item?.raw || item, level)}
+        onContinue={(item) => previewActions.handleContinue(item?.raw || item)}
+      />
     </div>
   );
 }
@@ -1635,61 +2158,36 @@ function totalVariationCount(world) {
   return getCategoryKeys(world.categories).reduce((n, c) => n + (world.categories?.[c]?.variations?.length || 0), 0);
 }
 
-// Match server-side `synthesizeCanonPrompt` (server/services/universeBuilder.js)
-// per-kind: entries with no identity-anchor (name / slugline / hand-authored
-// prompt) AND no descriptive content for that kind compile to an empty seed and
-// get skipped. Mirror the predicate here so the "Render N images" button count
-// doesn't overshoot what the server will actually enqueue.
-//
-// IMPORTANT: keep the per-kind field lists in sync with server's
-// `synthesizeCanonPrompt`. Drift between client/server here makes scoped render
-// counts and disabled states lie about what will actually be enqueued.
-// Server's `synthesizeCanonPrompt` trims each string field before pushing into
-// `parts` and then filters out empty results via `String(p).trim().filter(Boolean)`.
-// A whitespace-only field doesn't anchor renderability there — mirror that here
-// so client-side counts/disable states agree under optimistic edits.
+// Mirror the server's synthesizeCanonPrompt skip rule: entries with no
+// identity-anchor (name / slugline / prompt) AND no descriptive content for
+// the kind compile to an empty seed and get skipped at render time. The
+// "Render N images" button count must not overshoot what the server will
+// actually enqueue.
 const hasNonBlankString = (v) => typeof v === 'string' && v.trim().length > 0;
 
 const canonEntryHasContent = (e, kind) => {
   if (!e) return false;
   if (hasNonBlankString(e.prompt)) return true;
-  // Identifier anchors per kind — settings allow slugline-only entries (bible
+  // Identifier anchors per kind — places allow slugline-only entries (bible
   // sanitizer); characters/objects ignore stray slugline. Mirrors server
   // synthesizeCanonPrompt's identifier-seed rule.
   if (hasNonBlankString(e.name)) return true;
-  if (kind === 'settings' && hasNonBlankString(e.slugline)) return true;
-  if (kind === 'characters') {
-    return hasNonBlankString(e.physicalDescription) || hasNonBlankString(e.role);
-  }
-  if (kind === 'settings') {
-    return hasNonBlankString(e.description) || hasNonBlankString(e.palette)
-      || hasNonBlankString(e.era) || hasNonBlankString(e.weather)
-      || hasNonBlankString(e.recurringDetails);
-  }
-  if (kind === 'objects') {
-    return hasNonBlankString(e.description) || hasNonBlankString(e.significance);
-  }
-  // Unknown kind — fall back to the inclusive union so an unrecognized trunk
-  // doesn't silently collapse to 0.
-  return hasNonBlankString(e.physicalDescription) || hasNonBlankString(e.description)
-    || hasNonBlankString(e.palette) || hasNonBlankString(e.era) || hasNonBlankString(e.weather)
-    || hasNonBlankString(e.recurringDetails) || hasNonBlankString(e.role)
-    || hasNonBlankString(e.significance);
+  if (kind === 'places' && hasNonBlankString(e.slugline)) return true;
+  return hasCanonDescriptorContent(kind, e);
 };
 
 const countCanonWithContent = (world, kind) =>
   (Array.isArray(world?.[kind]) ? world[kind] : []).filter((e) => canonEntryHasContent(e, kind)).length;
 
 function renderPromptCount(world, promptMode = 'variations') {
-  const variations = totalVariationCount(world);
+  if (promptMode === 'variations') return totalVariationCount(world);
   const sheets = world.compositeSheets?.length || 0;
-  const canon = countCanonWithContent(world, 'characters')
-    + countCanonWithContent(world, 'settings')
-    + countCanonWithContent(world, 'objects');
   if (promptMode === 'sheets') return sheets;
+  const canon = countCanonWithContent(world, 'characters')
+    + countCanonWithContent(world, 'places')
+    + countCanonWithContent(world, 'objects');
   if (promptMode === 'canon') return canon;
-  if (promptMode === 'all') return variations + sheets + canon;
-  return variations;
+  return totalVariationCount(world) + sheets + canon;
 }
 
 // Mirrors the server's compilePrompts for selection/sheetSelection/canonSelection
@@ -1736,7 +2234,7 @@ function scopedPromptCount(world, scope) {
   }
   if (mode === 'canon' || mode === 'all') {
     if (scope.canonSelection) {
-      for (const trunk of ['characters', 'settings', 'objects']) {
+      for (const trunk of ['characters', 'places', 'objects']) {
         const pick = scope.canonSelection[trunk];
         if (!pick) continue;
         const entries = Array.isArray(world[trunk]) ? world[trunk] : [];
@@ -1744,12 +2242,12 @@ function scopedPromptCount(world, scope) {
         if (pick === 'all') n += withContent.length;
         else if (Array.isArray(pick)) {
           const needles = new Set(pick.map((p) => p.toLowerCase()));
-          // Mirror server: slugline matching is settings-only — name is the
+          // Mirror server: slugline matching is places-only — name is the
           // shared anchor for characters/objects.
           n += withContent.filter((e) => {
             const name = (e.name || '').toLowerCase();
             if (needles.has(name)) return true;
-            if (trunk === 'settings') {
+            if (trunk === 'places') {
               const slug = (e.slugline || '').toLowerCase();
               if (needles.has(slug)) return true;
             }
@@ -1776,7 +2274,11 @@ function CompositeSheetsEditor({ sheets, onChange, canRender = false, onRender =
     const label = newLabel.trim();
     const prompt = newPrompt.trim();
     if (!label || !prompt) return;
-    onChange([...sheets, { kind: newKind, label: label.slice(0, 120), prompt: prompt.slice(0, COMPOSITE_PROMPT_MAX) }]);
+    // Stamp `locked: true` up front so the in-draft row matches the
+    // lock-by-default contract before the next save round-trips through
+    // sanitizeCompositeSheet — otherwise the bulk-toggle's locked-count
+    // gate would treat freshly-added boards as unlocked.
+    onChange([...sheets, { kind: newKind, label: label.slice(0, 120), prompt: prompt.slice(0, COMPOSITE_PROMPT_MAX), locked: true }]);
     setNewKind('reference_sheet');
     setNewLabel('');
     setNewPrompt('');
@@ -1785,12 +2287,11 @@ function CompositeSheetsEditor({ sheets, onChange, canRender = false, onRender =
 
   const removeAt = (idx) => onChange(sheets.filter((_, i) => i !== idx));
 
+  // Sheets default to locked at the sanitizer (locked-by-default contract);
+  // persist an unlock as explicit `false` so it survives the next read.
   const toggleLockAt = (idx) => onChange(sheets.map((s, i) => {
     if (i !== idx) return s;
-    const next = { ...s };
-    if (next.locked) delete next.locked;
-    else next.locked = true;
-    return next;
+    return { ...s, locked: !s.locked };
   }));
 
   const startEdit = (idx, sheet) => {
@@ -1805,10 +2306,22 @@ function CompositeSheetsEditor({ sheets, onChange, canRender = false, onRender =
     const prompt = editPrompt.trim();
     if (!label || !prompt) return;
     const next = [...sheets];
-    next[editIdx] = { kind: editKind, label: label.slice(0, 120), prompt: prompt.slice(0, COMPOSITE_PROMPT_MAX) };
+    // Preserve `id`, `locked`, `imageRefs` — see VariationCard.saveEdit for
+    // the rationale. The editor only owns kind/label/prompt.
+    next[editIdx] = {
+      ...next[editIdx],
+      kind: editKind,
+      label: label.slice(0, 120),
+      prompt: prompt.slice(0, COMPOSITE_PROMPT_MAX),
+    };
     onChange(next);
     setEditIdx(null);
   };
+
+  const setAllSheetsLocked = (nextLocked) =>
+    onChange(sheets.map((s) => (s?.locked === nextLocked ? s : { ...s, locked: nextLocked })));
+  const sheetsLockedCount = sheets.filter((s) => s?.locked === true).length;
+  const allSheetsLocked = sheets.length > 0 && sheetsLockedCount === sheets.length;
 
   return (
     <section className="bg-port-card border border-port-border rounded p-4 flex flex-col gap-3">
@@ -1817,12 +2330,31 @@ function CompositeSheetsEditor({ sheets, onChange, canRender = false, onRender =
           Composite boards
           <span className="ml-2 text-xs text-gray-500">{sheets.length}</span>
         </h2>
-        <button
-          onClick={() => setAdding((v) => !v)}
-          className="text-xs px-2 py-1 bg-port-accent/15 hover:bg-port-accent/25 text-port-accent rounded flex items-center gap-1 min-h-[40px] sm:min-h-0"
-        >
-          <Plus size={12} /> Add
-        </button>
+        <div className="flex items-center gap-1">
+          {sheets.length > 0 && (
+            <button
+              onClick={() => setAllSheetsLocked(!allSheetsLocked)}
+              title={allSheetsLocked
+                ? 'Unlock all composite boards — Expand may overwrite them'
+                : 'Lock all composite boards — Expand will preserve them'}
+              aria-label={allSheetsLocked ? 'Unlock all composite boards' : 'Lock all composite boards'}
+              aria-pressed={allSheetsLocked}
+              className={`p-1 rounded ${
+                allSheetsLocked
+                  ? 'text-port-accent hover:bg-port-accent/20'
+                  : 'text-gray-500 hover:text-gray-300'
+              }`}
+            >
+              {allSheetsLocked ? <Lock size={14} /> : <Unlock size={14} />}
+            </button>
+          )}
+          <button
+            onClick={() => setAdding((v) => !v)}
+            className="text-xs px-2 py-1 bg-port-accent/15 hover:bg-port-accent/25 text-port-accent rounded flex items-center gap-1 min-h-[40px] sm:min-h-0"
+          >
+            <Plus size={12} /> Add
+          </button>
+        </div>
       </div>
       {adding && (
         <div className="bg-port-bg border border-port-border rounded p-2 flex flex-col gap-2">
@@ -1968,7 +2500,7 @@ const GENERATE_PRESETS = [3, 5, 10];
 const GENERATE_CUSTOM_MIN = 1;
 const GENERATE_CUSTOM_MAX = 50;
 
-function CategoryEditor({
+export function CategoryEditor({
   category, variations, canRemove = false, onChange, onRemove,
   canRender = false, onRenderCategory = null, onRenderVariation = null,
   onGenerate = null,
@@ -1976,6 +2508,18 @@ function CategoryEditor({
   // the picker opens to choose a trunk; otherwise we promote directly.
   // `canPromote` gates on universe-persisted (the action reads the saved record).
   canPromote = false, bucketKind = null, onPromote = null,
+  // Only set by OtherTab — clicking opens a picker that retags the bucket's
+  // `kind` to a canon trunk. Variations stay in place; bucket moves tabs.
+  onAssignBucketKind = null,
+  // Clicking the row's thumbnail opens the page-level MediaPreview lightbox
+  // (same modal that the history / gallery uses). Receives the visible
+  // filename so the modal lands on the exact ref the user saw, not a stale
+  // primary that may have walked-back on a 404.
+  onPreviewVariation = null,
+  // Per-row render-pending plumbing — `pendingByEntryId[v.id]` returns the
+  // in-flight jobId (or undefined). Completion / failure callbacks fire when
+  // the row's MediaJobThumb settles.
+  pendingByEntryId = {}, onJobCompleted = null, onJobFailed = null,
 }) {
   const requiresTargetKind = !TRUNK_BY_KIND[bucketKind];
   const [adding, setAdding] = useState(false);
@@ -1989,11 +2533,14 @@ function CategoryEditor({
   const [generating, setGenerating] = useState(false);
   const [promotingIdx, setPromotingIdx] = useState(null);
   const [pickerIdx, setPickerIdx] = useState(null);
+  const [assignOpen, setAssignOpen] = useState(false);
   const genWrapRef = useRef(null);
   const pickerWrapRef = useRef(null);
+  const assignWrapRef = useRef(null);
 
   useClickOutside(genWrapRef, genOpen, () => setGenOpen(false));
   useClickOutside(pickerWrapRef, pickerIdx !== null, () => setPickerIdx(null));
+  useClickOutside(assignWrapRef, assignOpen, () => setAssignOpen(false));
   useEffect(() => {
     if (!genOpen) return undefined;
     const onKey = (e) => { if (e.key === 'Escape') setGenOpen(false); };
@@ -2006,6 +2553,12 @@ function CategoryEditor({
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
   }, [pickerIdx]);
+  useEffect(() => {
+    if (!assignOpen) return undefined;
+    const onKey = (e) => { if (e.key === 'Escape') setAssignOpen(false); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [assignOpen]);
 
   const editorMountedRef = useRef(true);
   useEffect(() => () => { editorMountedRef.current = false; }, []);
@@ -2037,7 +2590,11 @@ function CategoryEditor({
     const label = newLabel.trim();
     const prompt = newPrompt.trim();
     if (!label || !prompt) return;
-    onChange([...variations, { label: label.slice(0, 120), prompt: prompt.slice(0, 2000) }]);
+    // Stamp `locked: true` so the in-draft row matches the lock-by-default
+    // contract before the next save round-trips through sanitizeVariation.
+    // Without this, the bulk-toggle counts a freshly-added variation as
+    // unlocked even though the user expects every new entry to land locked.
+    onChange([...variations, { label: label.slice(0, 120), prompt: prompt.slice(0, 2000), locked: true }]);
     setNewLabel('');
     setNewPrompt('');
     setAdding(false);
@@ -2045,13 +2602,20 @@ function CategoryEditor({
 
   const removeAt = (idx) => onChange(variations.filter((_, i) => i !== idx));
 
+  // Variations default to locked at the sanitizer (locked-by-default contract),
+  // so an unlock must persist as explicit `false` — not as an absent key —
+  // otherwise the next read would re-lock the entry the user just unlocked.
   const toggleLockAt = (idx) => onChange(variations.map((v, i) => {
     if (i !== idx) return v;
-    const next = { ...v };
-    if (next.locked) delete next.locked;
-    else next.locked = true;
-    return next;
+    return { ...v, locked: !v.locked };
   }));
+
+  // Bulk lock/unlock everything in this bucket. Same persistence contract:
+  // unlock writes explicit `false` so it survives the round-trip.
+  const setAllLocked = (nextLocked) =>
+    onChange(variations.map((v) => (v?.locked === nextLocked ? v : { ...v, locked: nextLocked })));
+  const lockedCount = variations.filter((v) => v?.locked === true).length;
+  const allLocked = variations.length > 0 && lockedCount === variations.length;
 
   const startEdit = (idx, v) => {
     setEditIdx(idx);
@@ -2067,7 +2631,19 @@ function CategoryEditor({
     // the user can't see why they vanished.
     if (!label || !prompt) return;
     const next = [...variations];
-    next[editIdx] = { label: label.slice(0, 120), prompt: prompt.slice(0, 2000) };
+    // Preserve `id`, `locked`, and `imageRefs` — only label + prompt are
+    // editable in this row. A naive replacement would re-mint the variation's
+    // id (breaking the link to its render history) and drop accrued imageRefs.
+    // The server's stale-PATCH guard catches some of this via length + tail
+    // comparison (variations with NEW renders in cur survive an empty patch),
+    // but a stale variation whose history hasn't grown server-side since the
+    // client loaded would still get its imageRefs cleared if we sent an empty
+    // array. Echoing cur's array verbatim avoids relying on the guard.
+    next[editIdx] = {
+      ...next[editIdx],
+      label: label.slice(0, 120),
+      prompt: prompt.slice(0, 2000),
+    };
     onChange(next);
     setEditIdx(null);
   };
@@ -2089,6 +2665,42 @@ function CategoryEditor({
             >
               <Play size={12} /> Render
             </button>
+          )}
+          {onAssignBucketKind && requiresTargetKind && (
+            <div className="relative" ref={assignWrapRef}>
+              <button
+                onClick={() => setAssignOpen((v) => !v)}
+                className="text-xs px-2 py-1 bg-port-accent/15 hover:bg-port-accent/25 text-port-accent rounded flex items-center gap-1 min-h-[40px] sm:min-h-0"
+                title="Move this bucket into a canon trunk (variations stay in place)"
+                aria-haspopup="menu"
+                aria-expanded={assignOpen}
+              >
+                <FolderTree size={12} /> Assign to…
+              </button>
+              {assignOpen && (
+                <div
+                  role="menu"
+                  className="absolute right-0 top-full mt-1 z-20 w-44 bg-port-card border border-port-border rounded shadow-lg p-1 flex flex-col gap-0.5"
+                >
+                  <div className="px-2 pt-1 pb-1 text-[10px] uppercase tracking-wide text-gray-500">
+                    Move bucket to trunk
+                  </div>
+                  {TRUNK_TABS.map((trunk) => {
+                    const TrunkIcon = trunk.icon;
+                    return (
+                      <button
+                        key={trunk.kind}
+                        role="menuitem"
+                        onClick={() => { setAssignOpen(false); onAssignBucketKind(trunk.kind); }}
+                        className="text-left text-xs px-2 py-1.5 text-gray-200 hover:bg-port-accent/20 rounded flex items-center gap-2"
+                      >
+                        <TrunkIcon size={12} className="text-port-accent" /> {trunk.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           )}
           {onGenerate && (
             <div className="relative" ref={genWrapRef}>
@@ -2141,6 +2753,27 @@ function CategoryEditor({
                 </div>
               )}
             </div>
+          )}
+          {variations.length > 0 && (
+            // Single toggle — mirrors the per-row lock button. Lock icon when
+            // every variation is locked (click unlocks all); Unlock icon for
+            // the all-unlocked + mixed cases so a click always locks the
+            // holdouts.
+            <button
+              onClick={() => setAllLocked(!allLocked)}
+              title={allLocked
+                ? 'Unlock all variations — Expand / Generate may overwrite them'
+                : 'Lock all variations — Expand / Generate will preserve them'}
+              aria-label={allLocked ? 'Unlock all variations' : 'Lock all variations'}
+              aria-pressed={allLocked}
+              className={`p-1 rounded ${
+                allLocked
+                  ? 'text-port-accent hover:bg-port-accent/20'
+                  : 'text-gray-500 hover:text-gray-300'
+              }`}
+            >
+              {allLocked ? <Lock size={14} /> : <Unlock size={14} />}
+            </button>
           )}
           {canRemove && (
             <button
@@ -2198,119 +2831,35 @@ function CategoryEditor({
       ) : (
         <ul className="flex flex-col gap-1.5 max-h-72 overflow-y-auto">
           {variations.map((v, idx) => (
-            <li key={`${v.label}-${idx}`} className={`bg-port-bg border rounded p-2 text-sm ${v.locked ? 'border-port-accent/50' : 'border-port-border'}`}>
-              {editIdx === idx ? (
-                <div className="flex flex-col gap-1">
-                  <input
-                    value={editLabel}
-                    onChange={(e) => setEditLabel(e.target.value)}
-                    className="bg-port-card border border-port-border rounded px-2 py-1 text-white text-sm"
-                    maxLength={120}
-                  />
-                  <textarea
-                    value={editPrompt}
-                    onChange={(e) => setEditPrompt(e.target.value)}
-                    rows={3}
-                    className="bg-port-card border border-port-border rounded px-2 py-1 text-white text-sm"
-                    maxLength={2000}
-                  />
-                  <div className="flex gap-2">
-                    <button onClick={saveEdit} className="text-xs px-2 py-1 bg-port-accent text-white rounded min-h-[40px] sm:min-h-0">Save</button>
-                    <button onClick={() => setEditIdx(null)} className="text-xs px-2 py-1 bg-port-bg text-gray-300 rounded min-h-[40px] sm:min-h-0">Cancel</button>
-                  </div>
-                </div>
-              ) : (
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex-1 min-w-0">
-                    <div className="text-white font-medium truncate">{v.label}</div>
-                    <div className="text-xs text-gray-400 line-clamp-2">{v.prompt}</div>
-                  </div>
-                  <div className="flex items-center gap-1 shrink-0">
-                    {onPromote && (() => {
-                      const promoteTitle = !canPromote
-                        ? 'Save the universe first to enable promote'
-                        : requiresTargetKind
-                          ? 'Promote to canon — pick a trunk'
-                          : 'Promote to canon — LLM expands this variation into a full canon entry';
-                      return (
-                      <div className="relative" ref={pickerIdx === idx ? pickerWrapRef : null}>
-                        <button
-                          onClick={() => {
-                            if (requiresTargetKind) {
-                              setPickerIdx(pickerIdx === idx ? null : idx);
-                              return;
-                            }
-                            runPromote(idx, v);
-                          }}
-                          disabled={!canPromote || promotingIdx !== null}
-                          className="p-1 text-gray-400 hover:text-port-success disabled:opacity-30 disabled:cursor-not-allowed rounded"
-                          title={promoteTitle}
-                          aria-haspopup={requiresTargetKind ? 'menu' : undefined}
-                          aria-expanded={requiresTargetKind ? pickerIdx === idx : undefined}
-                        >
-                          {promotingIdx === idx
-                            ? <Loader2 size={14} className="animate-spin" />
-                            : <ArrowUpCircle size={14} />}
-                        </button>
-                        {pickerIdx === idx && requiresTargetKind && (
-                          <div
-                            role="menu"
-                            className="absolute right-0 top-full mt-1 z-20 w-44 bg-port-card border border-port-border rounded shadow-lg p-1 flex flex-col gap-0.5"
-                          >
-                            <div className="px-2 pt-1 pb-1 text-[10px] uppercase tracking-wide text-gray-500">
-                              Promote to canon as…
-                            </div>
-                            {TRUNK_TABS.map((trunk) => (
-                              <button
-                                key={trunk.kind}
-                                role="menuitem"
-                                onClick={() => runPromote(idx, v, { targetKind: trunk.kind })}
-                                className="text-left text-xs px-2 py-1.5 text-gray-200 hover:bg-port-success/20 rounded"
-                              >
-                                {trunk.label}
-                              </button>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                      );
-                    })()}
-                    {onRenderVariation && (
-                      <button
-                        onClick={() => onRenderVariation(v)}
-                        disabled={!canRender}
-                        className="p-1 text-gray-400 hover:text-port-accent disabled:opacity-30 disabled:cursor-not-allowed rounded"
-                        title={canRender ? 'Render this variation' : 'Save the world and configure a render backend to enable'}
-                      >
-                        <Play size={14} />
-                      </button>
-                    )}
-                    <button
-                      onClick={() => toggleLockAt(idx)}
-                      className={`p-1 rounded ${v.locked ? 'text-port-accent hover:bg-port-accent/20' : 'text-gray-500 hover:text-gray-300'}`}
-                      title={v.locked ? 'Locked — AI expand will preserve this variation' : 'Lock this variation against AI expand'}
-                      aria-pressed={!!v.locked}
-                    >
-                      {v.locked ? <Lock size={14} /> : <Unlock size={14} />}
-                    </button>
-                    <button
-                      onClick={() => startEdit(idx, v)}
-                      className="p-1 text-gray-400 hover:text-port-accent rounded"
-                      title="Edit"
-                    >
-                      <Edit3 size={14} />
-                    </button>
-                    <button
-                      onClick={() => removeAt(idx)}
-                      className="p-1 text-gray-400 hover:text-red-400 rounded"
-                      title="Remove"
-                    >
-                      <X size={14} />
-                    </button>
-                  </div>
-                </div>
-              )}
-            </li>
+            <VariationCard
+              key={`${v.label}-${idx}`}
+              variation={v}
+              idx={idx}
+              editMode={editIdx === idx}
+              editLabel={editLabel}
+              editPrompt={editPrompt}
+              setEditLabel={setEditLabel}
+              setEditPrompt={setEditPrompt}
+              saveEdit={saveEdit}
+              cancelEdit={() => setEditIdx(null)}
+              startEdit={() => startEdit(idx, v)}
+              toggleLock={() => toggleLockAt(idx)}
+              remove={() => removeAt(idx)}
+              onPromote={onPromote}
+              canPromote={canPromote}
+              requiresTargetKind={requiresTargetKind}
+              promotingIdx={promotingIdx}
+              pickerIdx={pickerIdx}
+              setPickerIdx={setPickerIdx}
+              pickerWrapRef={pickerWrapRef}
+              runPromote={runPromote}
+              onRenderVariation={onRenderVariation}
+              canRender={canRender}
+              onPreviewVariation={onPreviewVariation}
+              inFlightJobId={pendingByEntryId[v.id] || null}
+              onJobCompleted={onJobCompleted}
+              onJobFailed={onJobFailed}
+            />
           ))}
         </ul>
       )}
@@ -2318,68 +2867,177 @@ function CategoryEditor({
   );
 }
 
-// Tab nav — desktop shows a horizontal pill row; mobile collapses to a
-// <select> dropdown (CLAUDE.md "Mobile responsive"). The Other tab only
-// renders when at least one un-kinded bucket exists, per Phase C spec.
-function TabNav({ activeTab, setTab, hasOtherBuckets, counts }) {
-  const tabs = [
-    { id: TAB_BIBLE, label: 'Bible', icon: BookOpen, count: null },
-    { id: TAB_CAST, label: 'Cast', icon: Users, count: counts.cast },
-    { id: TAB_PLACES, label: 'Places', icon: MapPin, count: counts.places },
-    { id: TAB_OBJECTS, label: 'Objects', icon: Package, count: counts.objects },
-    ...(hasOtherBuckets ? [{ id: TAB_OTHER, label: 'Other', icon: FolderTree, count: counts.other }] : []),
-    { id: TAB_COMPOSITES, label: 'Composites', icon: Layers, count: counts.composites },
-    { id: TAB_RENDER, label: 'Render', icon: ImagePlus, count: null },
-  ];
-  return (
-    <>
-      {/* Mobile dropdown */}
-      <div className="sm:hidden">
-        <label htmlFor="ub-tab-select" className="sr-only">Section</label>
-        <select
-          id="ub-tab-select"
-          value={activeTab}
-          onChange={(e) => setTab(e.target.value)}
-          className="w-full bg-port-card border border-port-border rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-port-accent min-h-[40px]"
-        >
-          {tabs.map((t) => (
-            <option key={t.id} value={t.id}>
-              {t.label}{t.count != null ? ` (${t.count})` : ''}
-            </option>
-          ))}
-        </select>
-      </div>
-      {/* Desktop pill row */}
-      <div className="hidden sm:flex items-center gap-1 bg-port-card border border-port-border rounded p-1 overflow-x-auto" role="tablist">
-        {tabs.map((t) => {
-          const Icon = t.icon;
-          const active = t.id === activeTab;
-          return (
-            <button
-              key={t.id}
-              type="button"
-              role="tab"
-              aria-selected={active}
-              onClick={() => setTab(t.id)}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-sm transition-colors whitespace-nowrap ${
-                active
-                  ? 'bg-port-accent/20 text-port-accent border border-port-accent/40'
-                  : 'text-gray-300 hover:bg-port-bg border border-transparent'
-              }`}
-            >
-              <Icon size={14} />
-              {t.label}
-              {t.count != null && (
-                <span className={`text-[10px] ${active ? 'text-port-accent/70' : 'text-gray-500'}`}>
-                  {t.count}
-                </span>
-              )}
-            </button>
-          );
-        })}
-      </div>
-    </>
+// Renders through `EntryCard` so the locked accent + layout stay in
+// lock-step with `CanonCard`.
+function VariationCard({
+  variation: v, idx, editMode,
+  editLabel, editPrompt, setEditLabel, setEditPrompt,
+  saveEdit, cancelEdit, startEdit, toggleLock, remove,
+  onPromote, canPromote, requiresTargetKind, promotingIdx,
+  pickerIdx, setPickerIdx, pickerWrapRef, runPromote,
+  onRenderVariation, canRender,
+  onPreviewVariation = null,
+  inFlightJobId = null, onJobCompleted = null, onJobFailed = null,
+}) {
+  const locked = !!v.locked;
+  // Hooks MUST run unconditionally and in stable order — calling them after
+  // the editMode early-return below would change the hook count between
+  // display ↔ edit toggles and crash React with "Rendered more hooks than
+  // during the previous render". Subscribe to the row's in-flight job here
+  // so completion / failure callbacks fire back up to the parent (which
+  // clears pending state + appends the new filename to the variation's
+  // imageRefs[] optimistically). settledRef prevents duplicate fires under
+  // React 18 StrictMode's mount → cleanup → mount dev double-fire.
+  const { status: jobStatus, filename: jobFilename, error: jobError } = useMediaJobProgress(inFlightJobId);
+  const settledRef = useRef(null);
+  useEffect(() => {
+    if (!inFlightJobId) { settledRef.current = null; return; }
+    if (settledRef.current === inFlightJobId) return;
+    if (jobStatus === 'completed' && jobFilename) {
+      settledRef.current = inFlightJobId;
+      // Pass `inFlightJobId` back so the parent can shift exactly this jobId
+      // out of its per-entry queue. Without the jobId, `clearPendingForEntry`
+      // would drop every queued job for the row — wrong when `batchPerVariation
+      // > 1` queues N siblings and only one has just finished.
+      onJobCompleted?.(v.id, jobFilename, inFlightJobId);
+    } else if (jobStatus === 'failed' || jobStatus === 'canceled') {
+      settledRef.current = inFlightJobId;
+      onJobFailed?.(v.id, jobError || jobStatus, inFlightJobId);
+    }
+  }, [inFlightJobId, jobStatus, jobFilename, jobError, v.id, onJobCompleted, onJobFailed]);
+
+  if (editMode) {
+    return (
+      <EntryCard
+        locked={locked}
+        body={(
+          <div className="flex flex-col gap-1">
+            <input
+              value={editLabel}
+              onChange={(e) => setEditLabel(e.target.value)}
+              className="bg-port-card border border-port-border rounded px-2 py-1 text-white text-sm"
+              maxLength={120}
+            />
+            <textarea
+              value={editPrompt}
+              onChange={(e) => setEditPrompt(e.target.value)}
+              rows={3}
+              className="bg-port-card border border-port-border rounded px-2 py-1 text-white text-sm"
+              maxLength={2000}
+            />
+            <div className="flex gap-2">
+              <button onClick={saveEdit} className="text-xs px-2 py-1 bg-port-accent text-white rounded min-h-[40px] sm:min-h-0">Save</button>
+              <button onClick={cancelEdit} className="text-xs px-2 py-1 bg-port-bg text-gray-300 rounded min-h-[40px] sm:min-h-0">Cancel</button>
+            </div>
+          </div>
+        )}
+      />
+    );
+  }
+
+  const promoteTitle = !canPromote
+    ? 'Save the universe first to enable promote'
+    : requiresTargetKind
+      ? 'Promote to canon — pick a trunk'
+      : 'Promote to canon — LLM expands this variation into a full canon entry';
+
+  // Thumbnail slot is three-state (pending / empty / completed) — see
+  // `EntryThumbSlot`. Hook subscription that drives this lives above the
+  // editMode early-return so the hook order stays stable across toggles.
+  const renders = Array.isArray(v.imageRefs) ? v.imageRefs : [];
+  const thumbnail = (
+    <EntryThumbSlot
+      inFlightJobId={inFlightJobId}
+      imageRefs={renders}
+      alt={`${v.label} render`}
+      canRender={!!onRenderVariation && canRender}
+      onRender={onRenderVariation ? () => onRenderVariation(v) : null}
+      onPreview={onPreviewVariation || null}
+    />
   );
+
+  const title = <div className="text-sm text-white font-medium truncate">{v.label}</div>;
+  const body = <div className="text-xs text-gray-400 line-clamp-2 mt-1">{v.prompt}</div>;
+  const actions = (
+    <div className="flex items-center gap-1">
+      {onPromote && (
+        <div className="relative" ref={pickerIdx === idx ? pickerWrapRef : null}>
+          <button
+            onClick={() => {
+              if (requiresTargetKind) {
+                setPickerIdx(pickerIdx === idx ? null : idx);
+                return;
+              }
+              runPromote(idx, v);
+            }}
+            disabled={!canPromote || promotingIdx !== null}
+            className="p-1 text-gray-400 hover:text-port-success disabled:opacity-30 disabled:cursor-not-allowed rounded"
+            title={promoteTitle}
+            aria-haspopup={requiresTargetKind ? 'menu' : undefined}
+            aria-expanded={requiresTargetKind ? pickerIdx === idx : undefined}
+          >
+            {promotingIdx === idx
+              ? <Loader2 size={14} className="animate-spin" />
+              : <ArrowUpCircle size={14} />}
+          </button>
+          {pickerIdx === idx && requiresTargetKind && (
+            <div
+              role="menu"
+              className="absolute right-0 top-full mt-1 z-20 w-44 bg-port-card border border-port-border rounded shadow-lg p-1 flex flex-col gap-0.5"
+            >
+              <div className="px-2 pt-1 pb-1 text-[10px] uppercase tracking-wide text-gray-500">
+                Promote to canon as…
+              </div>
+              {TRUNK_TABS.map((trunk) => (
+                <button
+                  key={trunk.kind}
+                  role="menuitem"
+                  onClick={() => runPromote(idx, v, { targetKind: trunk.kind })}
+                  className="text-left text-xs px-2 py-1.5 text-gray-200 hover:bg-port-success/20 rounded"
+                >
+                  {trunk.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+      {onRenderVariation && (
+        <button
+          onClick={() => onRenderVariation(v)}
+          disabled={!canRender}
+          className="p-1 text-gray-400 hover:text-port-accent disabled:opacity-30 disabled:cursor-not-allowed rounded"
+          title={canRender ? 'Render this variation' : 'Save the world and configure a render backend to enable'}
+        >
+          <Play size={14} />
+        </button>
+      )}
+      <button
+        onClick={toggleLock}
+        className={`p-1 rounded ${locked ? 'text-port-accent hover:bg-port-accent/20' : 'text-gray-500 hover:text-gray-300'}`}
+        title={locked ? 'Locked — AI expand will preserve this variation' : 'Lock this variation against AI expand'}
+        aria-pressed={locked}
+      >
+        {locked ? <Lock size={14} /> : <Unlock size={14} />}
+      </button>
+      <button
+        onClick={startEdit}
+        className="p-1 text-gray-400 hover:text-port-accent rounded"
+        title="Edit"
+      >
+        <Edit3 size={14} />
+      </button>
+      <button
+        onClick={remove}
+        className="p-1 text-gray-400 hover:text-red-400 rounded"
+        title="Remove"
+      >
+        <X size={14} />
+      </button>
+    </div>
+  );
+
+  return <EntryCard locked={locked} thumbnail={thumbnail} title={title} body={body} actions={actions} />;
 }
 
 function BibleTab({
@@ -2410,7 +3068,6 @@ function BibleTab({
               placeholder="moebius and scavengers reign meets Prophet inspired sci fi universe"
               className="w-full bg-port-bg border border-port-border rounded px-3 py-2 text-white text-sm focus:outline-none focus:border-port-accent"
               rows={2}
-              maxLength={4000}
             />
           </div>
           <div>
@@ -2643,12 +3300,18 @@ function BucketChipStrip({ buckets, activeBucket, setBucket, showAll = true, ext
 //   - blank (default "All"): renders canon + every variation under this trunk
 //   - BUCKET_CANON: renders only canon entries (via the existing UniverseCanonSection)
 //   - <bucketKey>: renders that bucket's variations via CategoryEditor
-function TrunkView({
+export function TrunkView({
   trunk, draft, selectedId, buckets, activeBucket, setBucket,
   canRender, canPromote, imageCfg, onUniverseChange,
   onRemoveBucket, onUpdateBucket, onGenerateInBucket, onPromoteVariation,
   onBulkRenderBucket, onRenderVariation, onBulkRenderTrunk,
   onAddBucket,
+  onPreviewVariation = null,
+  pendingByEntryId = {},
+  // Same pending head-map, passed through to UniverseCanonSection so canon
+  // rows show a spinner when a batch `/render` queues canon prompts.
+  externalPendingByEntryId = null,
+  onPendingCleared = null, onJobCompletedForEntry = null,
 }) {
   const canonList = Array.isArray(draft[trunk.kind]) ? draft[trunk.kind] : [];
   // Only count canon entries the server will actually compile — mirror the
@@ -2716,7 +3379,7 @@ function TrunkView({
               value={newBucketName}
               onChange={(e) => setNewBucketName(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') handleAddBucket(); }}
-              placeholder={trunk.kind === 'characters' ? 'heroes, villains, factions' : trunk.kind === 'settings' ? 'colonies, ruins' : 'weapons, vehicles'}
+              placeholder={trunk.kind === 'characters' ? 'heroes, villains, factions' : trunk.kind === 'places' ? 'colonies, ruins' : 'weapons, vehicles'}
               className="flex-1 min-w-[160px] bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-sm focus:outline-none focus:border-port-accent"
               maxLength={WORLD_CATEGORY_KEY_MAX}
               autoFocus
@@ -2748,6 +3411,8 @@ function TrunkView({
           onUniverseChange={onUniverseChange}
           imageCfg={imageCfg}
           kindFilter={trunk.kind}
+          externalPendingByEntryId={externalPendingByEntryId}
+          onExternalCanonJobSettled={onPendingCleared}
         />
       ) : null}
 
@@ -2782,6 +3447,19 @@ function TrunkView({
                   canPromote={canPromote}
                   bucketKind={draft.categories?.[cat]?.kind ?? trunk.kind}
                   onPromote={onPromoteVariation ? (v) => onPromoteVariation(cat, v) : null}
+                  onPreviewVariation={onPreviewVariation}
+                  pendingByEntryId={pendingByEntryId}
+                  onJobCompleted={(entryId, filename, completedJobId) =>
+                    onJobCompletedForEntry?.(entryId, filename, cat, completedJobId)}
+                  onJobFailed={(entryId, err, failedJobId) => {
+                    // Toast BEFORE clearing — clearing removes the
+                    // MediaJobThumb from the row and the failure state
+                    // disappears with it. Without the toast, a failed
+                    // variation render collapses silently to the empty
+                    // thumbnail (mirrors UniverseCanonSection.onJobFailed).
+                    if (err) toast.error(`Render failed: ${typeof err === 'string' ? err : (err.message || err)}`);
+                    onPendingCleared?.(entryId, failedJobId);
+                  }}
                 />
               ))}
             </section>
@@ -2795,10 +3473,13 @@ function TrunkView({
 // Other tab — un-kinded buckets that haven't been sorted into a trunk yet.
 // Same card grid as TrunkView but no canon plumbing, plus an "Auto-sort"
 // action that (eventually) LLM-classifies each bucket into the right trunk.
-function OtherTab({
+export function OtherTab({
   draft, buckets, activeBucket, setBucket, canRender, canPromote,
   onUpdateBucket, onRemoveBucket, onGenerateInBucket, onPromoteVariation,
-  onBulkRenderBucket, onRenderVariation, onAutoSort,
+  onBulkRenderBucket, onRenderVariation, onAssignBucketKind, onAutoSort,
+  autoSorting = false,
+  onPreviewVariation = null,
+  pendingByEntryId = {}, onPendingCleared = null, onJobCompletedForEntry = null,
 }) {
   return (
     <>
@@ -2812,16 +3493,18 @@ function OtherTab({
           <button
             type="button"
             onClick={onAutoSort}
-            className="text-xs px-2 py-1.5 bg-port-accent/15 hover:bg-port-accent/25 text-port-accent rounded flex items-center gap-1 min-h-[32px]"
-            title="Auto-sort with AI — shows guidance until the dedicated endpoint lands (tracked in PLAN.md)"
+            disabled={autoSorting}
+            className="text-xs px-2 py-1.5 bg-port-accent/15 hover:bg-port-accent/25 disabled:opacity-50 text-port-accent rounded flex items-center gap-1 min-h-[32px]"
+            title="Auto-sort with AI — sends every Other-tab bucket to the active LLM and assigns each to characters / places / objects"
           >
-            <Wand2 size={12} /> Auto-sort with AI
+            {autoSorting ? <Loader2 size={12} className="animate-spin" /> : <Wand2 size={12} />}
+            {autoSorting ? 'Sorting…' : 'Auto-sort with AI'}
           </button>
         </div>
         <p className="text-[11px] text-gray-500">
           These buckets aren't tagged as Cast / Places / Objects yet — they were
           either added manually or imported from a pre-Phase-A universe. Auto-sort
-          will classify each bucket into the right trunk with a meaningful name.
+          asks the active LLM to classify every bucket into the right trunk.
         </p>
       </section>
 
@@ -2841,6 +3524,18 @@ function OtherTab({
             canPromote={canPromote}
             bucketKind={draft.categories?.[cat]?.kind}
             onPromote={onPromoteVariation ? (v, opts) => onPromoteVariation(cat, v, opts) : null}
+            onAssignBucketKind={onAssignBucketKind ? (targetKind) => onAssignBucketKind(cat, targetKind) : null}
+            onPreviewVariation={onPreviewVariation}
+            pendingByEntryId={pendingByEntryId}
+            onJobCompleted={(entryId, filename, completedJobId) =>
+              onJobCompletedForEntry?.(entryId, filename, cat, completedJobId)}
+            onJobFailed={(entryId, err, failedJobId) => {
+              // Same surface-then-clear order as the Trunk-tab handler above:
+              // MediaJobThumb is unmounted on clear, so the toast must fire
+              // first or the user gets no signal that the render failed.
+              if (err) toast.error(`Render failed: ${typeof err === 'string' ? err : (err.message || err)}`);
+              onPendingCleared?.(entryId, failedJobId);
+            }}
           />
         ))}
       </section>
@@ -2850,74 +3545,63 @@ function OtherTab({
 
 function RenderTab({
   draft, selectedId, bucketsByKind, renderOpts, setRenderOpts,
-  availableBackends, defaultMode, imageModels, handleRender, rendering, runs,
+  availableBackends, defaultMode, imageModels, availableLoras = [],
+  handleRender, rendering, runs,
 }) {
-  const totalSheets = draft.compositeSheets?.length || 0;
-  const totalVariations = totalVariationCount(draft);
-  // Mirror server-side compile skip rules — `renderPromptCount` already filters
-  // canon via `canonEntryHasContent`, so the "All canon (N)" option label and
-  // the actual enqueued count agree.
-  const totalCanon = countCanonWithContent(draft, 'characters')
-    + countCanonWithContent(draft, 'settings')
-    + countCanonWithContent(draft, 'objects');
-  const renderTotal = renderPromptCount(draft, renderOpts.promptMode || 'variations');
+  const currentRunnerFamily = useMemo(() => {
+    const currentModel = imageModels.find((m) => m.id === renderOpts.modelId);
+    return currentModel?.runner || RUNNER_FAMILIES.MFLUX;
+  }, [imageModels, renderOpts.modelId]);
+  // Memoize the counts that drive button labels + disable states. Drafts can
+  // be large (full canon + variations + sheets) and ImageGenSettingsForm
+  // re-renders RenderTab on every keystroke into the per-batch fields.
+  const counts = useMemo(() => {
+    // Mirror server-side compile skip rules — `renderPromptCount` already
+    // filters canon via `canonEntryHasContent`, so each trunk's counts and
+    // the "Render everything" total agree with what the server enqueues.
+    const totalSheets = draft.compositeSheets?.length || 0;
+    const totalVariations = totalVariationCount(draft);
+    const totalCanon = countCanonWithContent(draft, 'characters')
+      + countCanonWithContent(draft, 'places')
+      + countCanonWithContent(draft, 'objects');
+    const otherBuckets = bucketsByKind?.other || [];
+    const totalOtherVariations = otherBuckets.reduce(
+      (n, k) => n + (draft.categories?.[k]?.variations?.length || 0),
+      0,
+    );
+    return {
+      totalSheets,
+      totalVariations,
+      totalCanon,
+      otherBuckets,
+      totalOtherVariations,
+      totalEverything: totalSheets + totalVariations + totalCanon,
+    };
+  }, [draft, bucketsByKind]);
+  const { totalSheets, totalCanon, otherBuckets, totalOtherVariations, totalEverything } = counts;
+  const perPrompt = renderOpts.batchPerVariation || 1;
 
   return (
     <>
       <section className="bg-port-card border border-port-border rounded p-4 flex flex-col gap-3">
-        <div className="flex items-center justify-between gap-2 flex-wrap">
-          <h2 className="text-sm font-semibold text-white flex items-center gap-2">
-            <FolderOpen size={16} className="text-port-accent" /> Batch render
-          </h2>
-          {availableBackends.length > 1 && (
-            <BackendChipStrip
-              availableBackends={availableBackends}
-              value={renderOpts.mode || defaultMode}
-              onChange={(id) => setRenderOpts((r) => ({ ...r, mode: id }))}
-              titlePrefix="Render via"
-            />
-          )}
-        </div>
+        <h2 className="text-sm font-semibold text-white flex items-center gap-2">
+          <FolderOpen size={16} className="text-port-accent" /> Batch render
+        </h2>
         {availableBackends.length === 0 && (
           <p className="text-xs text-port-warning">
             Configure a local mflux Python path or enable Codex Imagegen in Settings → Image Gen
             to enable batch render.
           </p>
         )}
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          <div>
-            <label htmlFor="world-render-prompt-mode" className="block text-xs font-medium text-gray-400 mb-1">Prompt set</label>
-            <select
-              id="world-render-prompt-mode"
-              value={renderOpts.promptMode || 'variations'}
-              onChange={(e) => setRenderOpts((r) => ({ ...r, promptMode: e.target.value }))}
-              className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent min-h-[40px]"
-            >
-              <option value="variations" disabled={totalVariations === 0}>Atomic variations ({totalVariations})</option>
-              <option value="sheets" disabled={totalSheets === 0}>Composite boards ({totalSheets})</option>
-              <option value="canon" disabled={totalCanon === 0}>All canon ({totalCanon})</option>
-              <option value="all" disabled={totalSheets + totalVariations + totalCanon === 0}>
-                Everything ({totalSheets + totalVariations + totalCanon})
-              </option>
-            </select>
-          </div>
-        </div>
-        <ImageGenControls
-          mode={renderOpts.mode || defaultMode || 'local'}
+        <ImageGenSettingsForm
+          value={{ ...renderOpts, mode: renderOpts.mode || defaultMode || 'local' }}
+          onChange={(next) => setRenderOpts(next)}
           models={imageModels}
-          modelId={renderOpts.modelId}
-          onModelChange={(id) => setRenderOpts((r) => ({ ...r, modelId: id, steps: '', guidance: '' }))}
-          width={renderOpts.width}
-          height={renderOpts.height}
-          onResolutionChange={(w, h) => setRenderOpts((r) => ({ ...r, width: w, height: h }))}
-          steps={renderOpts.steps}
-          onStepsChange={(v) => setRenderOpts((r) => ({ ...r, steps: v }))}
-          guidance={renderOpts.guidance}
-          onGuidanceChange={(v) => setRenderOpts((r) => ({ ...r, guidance: v }))}
-          cfgScale={renderOpts.cfgScale}
-          onCfgScaleChange={(v) => setRenderOpts((r) => ({ ...r, cfgScale: v }))}
-          quantize={renderOpts.quantize}
-          onQuantizeChange={(v) => setRenderOpts((r) => ({ ...r, quantize: v }))}
+          availableBackends={availableBackends}
+          showLoras
+          availableLoras={availableLoras}
+          currentRunnerFamily={currentRunnerFamily}
+          showStylePreset
         />
         <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
           <div>
@@ -2936,13 +3620,23 @@ function RenderTab({
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <button
-            onClick={() => handleRender()}
-            disabled={rendering || !selectedId || renderTotal === 0 || availableBackends.length === 0}
+            onClick={() => handleRender({
+              promptMode: 'all',
+              // Both `scopedPromptCount` (client) and `compilePrompts` (server)
+              // skip canon entirely when `canonSelection` is omitted. The button
+              // label promises "everything", so we must explicitly select every
+              // canon trunk — derived from TRUNK_TABS so the set stays in sync
+              // when a new trunk is added.
+              canonSelection: Object.fromEntries(TRUNK_TABS.map((t) => [t.kind, 'all'])),
+            })}
+            disabled={rendering || !selectedId || totalEverything === 0 || availableBackends.length === 0}
             className="px-4 py-2 bg-port-accent hover:bg-port-accent/90 disabled:opacity-50 text-white rounded flex items-center gap-2 min-h-[40px]"
+            title="Render every canon entry + every variation + every composite board with these knobs"
           >
             {rendering ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />}
-            Render {renderTotal * (renderOpts.batchPerVariation || 1)} image{renderTotal * (renderOpts.batchPerVariation || 1) === 1 ? '' : 's'}
+            Render everything ({totalEverything * perPrompt} image{totalEverything * perPrompt === 1 ? '' : 's'})
           </button>
+          <span className="text-[11px] text-gray-500">…or pick a narrower scope below.</span>
         </div>
         {!selectedId && <p className="text-xs text-gray-500">Save the world first to enable rendering.</p>}
       </section>
@@ -3012,6 +3706,49 @@ function RenderTab({
               </div>
             );
           })}
+          {otherBuckets.length > 0 && totalOtherVariations > 0 ? (
+            <div className="border border-port-border rounded p-2 bg-port-bg flex flex-col gap-1.5">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <div className="flex items-center gap-2 text-sm text-gray-200">
+                  <FolderTree size={14} className="text-port-accent" />
+                  <span className="font-medium">Other</span>
+                  <span className="text-[11px] text-gray-500">
+                    {otherBuckets.length} bucket{otherBuckets.length === 1 ? '' : 's'}
+                    {' · '}{totalOtherVariations} variation{totalOtherVariations === 1 ? '' : 's'}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleRender({
+                    promptMode: 'variations',
+                    selection: Object.fromEntries(otherBuckets.map((b) => [b, 'all'])),
+                  })}
+                  disabled={!selectedId || availableBackends.length === 0 || rendering}
+                  className="text-xs px-2 py-1 bg-port-accent/15 hover:bg-port-accent/25 disabled:opacity-30 disabled:cursor-not-allowed text-port-accent rounded min-h-[32px]"
+                  title="Render every variation in every Other bucket"
+                >
+                  Bulk-render all ({totalOtherVariations})
+                </button>
+              </div>
+              <div className="flex flex-wrap items-center gap-1 pl-5">
+                {otherBuckets.map((bucket) => {
+                  const count = draft.categories?.[bucket]?.variations?.length || 0;
+                  return (
+                    <button
+                      key={bucket}
+                      type="button"
+                      onClick={() => handleRender({ promptMode: 'variations', selection: { [bucket]: 'all' } })}
+                      disabled={count === 0 || !selectedId || availableBackends.length === 0 || rendering}
+                      className="text-[11px] px-1.5 py-0.5 bg-port-card border border-port-border hover:border-port-accent disabled:opacity-30 disabled:cursor-not-allowed text-gray-300 rounded"
+                      title={count === 0 ? 'No variations yet' : `Bulk-render ${humanizeCategory(bucket)} (${count})`}
+                    >
+                      {humanizeCategory(bucket)} ({count})
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
           {totalCanon > 0 ? (
             <div className="border border-port-border rounded p-2 bg-port-bg flex items-center justify-between gap-2">
               <span className="text-sm text-gray-200 flex items-center gap-2">
@@ -3025,11 +3762,7 @@ function RenderTab({
                 type="button"
                 onClick={() => handleRender({
                   promptMode: 'canon',
-                  canonSelection: {
-                    characters: 'all',
-                    settings: 'all',
-                    objects: 'all',
-                  },
+                  canonSelection: Object.fromEntries(TRUNK_TABS.map((t) => [t.kind, 'all'])),
                 })}
                 disabled={!selectedId || availableBackends.length === 0 || rendering}
                 className="text-xs px-2 py-1 bg-port-accent/15 hover:bg-port-accent/25 disabled:opacity-30 disabled:cursor-not-allowed text-port-accent rounded min-h-[32px]"
@@ -3081,6 +3814,7 @@ function RenderTab({
           </ul>
         </section>
       )}
+
     </>
   );
 }

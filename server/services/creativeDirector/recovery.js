@@ -29,14 +29,15 @@ import { listProjects, updateScene, updateRun, updateProject } from './local.js'
 import { listJobs, cancelJob } from '../mediaJobQueue/index.js';
 import { updateTask } from '../cos.js';
 
-// Boot-time coordination: cos.js eagerly calls resetOrphanedTasks() during
-// module import, which would respawn stale CD treatment/evaluate tasks
-// BEFORE recoverInFlightProjects() has had a chance to retire them via
-// updateTask. Two concurrent agents would then race on the same project.
-// Expose a promise that cos.init() awaits before its first
-// resetOrphanedTasks call, so the order is always:
+// Boot-time coordination: cos.start() (entered from cos.init() when
+// alwaysOn/autoStart is configured) calls resetOrphanedTasks(), which
+// would respawn stale CD treatment/evaluate tasks BEFORE
+// recoverInFlightProjects() has had a chance to retire them via updateTask.
+// Two concurrent agents would then race on the same project. Expose a
+// promise that cos.start() awaits before its resetOrphanedTasks call,
+// so the order is always:
 //   1. recoverInFlightProjects retires stale CD tasks (status='completed').
-//   2. cos.resetOrphanedTasks runs and finds nothing CD-related to respawn.
+//   2. resetOrphanedTasks runs and finds nothing CD-related to respawn.
 let resolveRecoveryDone;
 export const cdRecoveryDone = new Promise((resolve) => {
   resolveRecoveryDone = resolve;
@@ -66,8 +67,8 @@ export async function recoverInFlightProjects() {
     (p) => RECOVERABLE_STATUSES.has(p.status) || CLEANUP_ONLY_STATUSES.has(p.status),
   );
   if (!needsCleanup.length) {
-    // Must resolve the gate even on the no-op path or cos.init's
-    // resetOrphanedTasks await would sit on its 5s timeout for nothing
+    // Must resolve the gate even on the no-op path or cos.start's
+    // resetOrphanedTasks await would sit on its 60s timeout for nothing
     // every daemon start/auto-start.
     resolveRecoveryDone();
     return { resumed: 0 };

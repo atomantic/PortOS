@@ -2,6 +2,12 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const fileStore = new Map();
 
+// Per-test reference-sheet "what exists on disk" — keys are filenames the
+// referenceSheetImageRef preservation guard / pruner asks about. Default
+// behavior is "non-empty filename resolves" so existing tests using fake
+// names like 'sheet-B.png' still pass; the stale-prune test overrides
+// resolveImageRef to return null for the stale filename.
+const refSheetFilesByName = new Map();
 vi.mock("../lib/fileUtils.js", () => ({
   PATHS: { data: "/mock/data" },
   ensureDir: vi.fn().mockResolvedValue(undefined),
@@ -11,6 +17,15 @@ vi.mock("../lib/fileUtils.js", () => ({
   readJSONFile: vi.fn(async (path, fallback) =>
     fileStore.has(path) ? fileStore.get(path) : fallback,
   ),
+  // mustExist: true → return a non-null path when the filename either
+  // appears in refSheetFilesByName or has no explicit "missing" entry.
+  // Tests opt into "this file is gone" by calling
+  // refSheetFilesByName.set('foo.png', null).
+  resolveImageRef: vi.fn((ref) => {
+    if (typeof ref !== 'string' || !ref) return null;
+    if (refSheetFilesByName.has(ref)) return refSheetFilesByName.get(ref);
+    return `/mock/refs/${ref}`;
+  }),
 }));
 
 let uuidCounter = 0;
@@ -77,7 +92,7 @@ describe("universeBuilder service", () => {
       expect(svc.CATEGORY_KINDS).toContain(w.categories[c].kind);
     }
     expect(w.categories.landscapes.variations).toHaveLength(2);
-    expect(w.categories.landscapes.kind).toBe("settings");
+    expect(w.categories.landscapes.kind).toBe("places");
     expect(w.categories.vehicles.kind).toBe("objects");
     expect(w.categories.environments.variations).toHaveLength(0);
     // Custom (un-defaulted) bucket falls to 'other'.
@@ -108,8 +123,13 @@ describe("universeBuilder service", () => {
     });
     expect(w.categories.clothing_styles.variations).toEqual([
       {
+        id: expect.stringMatching(/^var-/),
         label: "Rib-Cage Nomads",
         prompt: "reference sheet, layered sailcloth, bone toggles",
+        imageRefs: [],
+        // Variations now lock-by-default — see sanitizeVariation in
+        // services/universeBuilder.js for the contract.
+        locked: true,
       },
     ]);
     expect(w.categories.factions.variations).toHaveLength(1);
@@ -128,10 +148,14 @@ describe("universeBuilder service", () => {
     });
     expect(w.compositeSheets).toEqual([
       {
+        id: expect.stringMatching(/^sheet-/),
         kind: "reference_sheet",
         label: "Gas-Giant Drifters costume sheet",
         prompt:
           "Create a clean illustrated costume reference sheet with five figures, materials swatches, fasteners, accessories, and color palette strip.",
+        imageRefs: [],
+        // Composite sheets lock-by-default — see sanitizeCompositeSheet.
+        locked: true,
       },
     ]);
   });
@@ -149,10 +173,14 @@ describe("universeBuilder service", () => {
     });
     expect(w.compositeSheets).toEqual([
       {
+        id: expect.stringMatching(/^sheet-/),
         kind: "world_pitch_poster",
         label: "Universe summary concept pitch poster",
         prompt:
           "Create a cinematic universe summary concept pitch poster with hero panorama, inset environments, cultures, creatures, visual language, color palette, materials, light atmosphere, and theme icons.",
+        imageRefs: [],
+        // Composite sheets lock-by-default — see sanitizeCompositeSheet.
+        locked: true,
       },
     ]);
   });
@@ -209,6 +237,29 @@ describe("universeBuilder service", () => {
     expect(w.styleNotes).toHaveLength(svc.STYLE_NOTES_MAX);
   });
 
+  // Starter idea is intentionally uncapped at the legacy 4000-char limit —
+  // the cap was raised to 200,000 (a sanity ceiling, not an artificial
+  // brevity constraint). These tests pin the new boundary so a future
+  // refactor can't silently regress to the old 4k limit.
+  it("createUniverse preserves a starterPrompt well beyond the legacy 4000-char limit", async () => {
+    const longPrompt = "a".repeat(50_000);
+    const w = await seedWorld({ starterPrompt: longPrompt });
+    expect(w.starterPrompt).toHaveLength(50_000);
+    expect(w.starterPrompt).toBe(longPrompt);
+  });
+
+  it("createUniverse trims a starterPrompt exceeding STARTER_PROMPT_MAX (200k)", async () => {
+    const w = await seedWorld({
+      starterPrompt: "b".repeat(svc.STARTER_PROMPT_MAX + 5_000),
+    });
+    expect(w.starterPrompt).toHaveLength(svc.STARTER_PROMPT_MAX);
+  });
+
+  it("STARTER_PROMPT_MAX is at least the documented 200k ceiling", async () => {
+    // Guard against accidental regression to the legacy 4k cap.
+    expect(svc.STARTER_PROMPT_MAX).toBeGreaterThanOrEqual(200_000);
+  });
+
   it("updateUniverse merges partial patches", async () => {
     const w = await seedWorld();
     const patched = await svc.updateUniverse(w.id, {
@@ -236,6 +287,61 @@ describe("universeBuilder service", () => {
     ).rejects.toMatchObject({ code: svc.ERR_NOT_FOUND });
   });
 
+  it("updateUniverse accepts a mutator(latest) callback that runs inside the queue", async () => {
+    const w = await seedWorld({ logline: "before" });
+    const mutator = vi.fn(async (latest) => {
+      expect(latest.id).toBe(w.id);
+      return { logline: `${latest.logline} → after` };
+    });
+    const patched = await svc.updateUniverse(w.id, mutator);
+    expect(mutator).toHaveBeenCalledTimes(1);
+    expect(patched.logline).toBe("before → after");
+  });
+
+  it("updateUniverse short-circuits with no write when the mutator returns null", async () => {
+    const w = await seedWorld();
+    const beforeUpdatedAt = w.updatedAt;
+    const patched = await svc.updateUniverse(w.id, async () => null);
+    // No write happened: updatedAt unchanged, no rename cascade fired.
+    expect(patched.updatedAt).toBe(beforeUpdatedAt);
+    expect(patched.id).toBe(w.id);
+  });
+
+  it("updateUniverse mutator that throws propagates without writing", async () => {
+    const w = await seedWorld({ logline: "untouched" });
+    await expect(
+      svc.updateUniverse(w.id, async () => { throw new Error("mutator boom"); }),
+    ).rejects.toThrow("mutator boom");
+    const fresh = await svc.getUniverse(w.id);
+    expect(fresh.logline).toBe("untouched");
+  });
+
+  it("updateUniverse mutator returning a non-object value throws ERR_VALIDATION", async () => {
+    const w = await seedWorld();
+    await expect(
+      svc.updateUniverse(w.id, async () => "not-an-object"),
+    ).rejects.toMatchObject({ code: svc.ERR_VALIDATION });
+    // Arrays are `typeof 'object'` but would silently no-op the categories
+    // merge — reject them explicitly.
+    await expect(
+      svc.updateUniverse(w.id, async () => []),
+    ).rejects.toMatchObject({ code: svc.ERR_VALIDATION });
+  });
+
+  it("updateUniverse mutator sees concurrent writes that landed before it ran (queued)", async () => {
+    const w = await seedWorld({ logline: "v0" });
+    // Two updates issued in parallel against the same record. The queue
+    // serializes them: the mutator sees the result of the first write.
+    const [first, second] = await Promise.all([
+      svc.updateUniverse(w.id, { logline: "v1" }),
+      svc.updateUniverse(w.id, async (latest) => ({
+        logline: `${latest.logline}+v2`,
+      })),
+    ]);
+    expect(first.logline).toBe("v1");
+    expect(second.logline).toBe("v1+v2");
+  });
+
   it("updateUniverse cascades a name change onto the linked media collection", async () => {
     const collections = await import("./mediaCollections.js");
     const w = await seedWorld();
@@ -257,6 +363,105 @@ describe("universeBuilder service", () => {
     const w = await seedWorld();
     const patched = await svc.updateUniverse(w.id, { name: "Solo Rename" });
     expect(patched.name).toBe("Solo Rename");
+  });
+
+  it("updateUniverse preserves server-owned referenceSheetImageRef across character PATCHes", async () => {
+    // Multi-tab race: tab B finished a newer sheet render (server pointer is
+    // 'sheet-B.png'), tab A PATCH-saves with a character body it loaded
+    // BEFORE the render landed (still carrying the previous 'sheet-A.png',
+    // or null). Without server-side preservation the older PATCH would
+    // clobber the newer server pointer and the UI would 404 on the stale
+    // filename. The render-completion handler bypasses this preservation
+    // path because it writes referenceSheetImageRef inside its own
+    // updateUniverse mutator from the latest record state.
+    const w = await seedWorld();
+    // Simulate the render-completion stamp via an in-queue mutator (same
+    // path the real onSheetComplete uses).
+    await svc.updateUniverse(w.id, (latest) => {
+      const next = [...(latest.characters || []), {
+        id: "c-1", name: "Vale", referenceSheetImageRef: "sheet-B.png",
+      }];
+      return { characters: next };
+    });
+    // Client PATCH that round-trips a stale body — sheet pointer is the
+    // OLD value (or null). Server should keep 'sheet-B.png' regardless.
+    const afterClientPatch = await svc.updateUniverse(w.id, {
+      characters: [{ id: "c-1", name: "Vale", referenceSheetImageRef: "sheet-A.png" }],
+    });
+    const char = afterClientPatch.characters.find((c) => c.id === "c-1");
+    expect(char?.referenceSheetImageRef).toBe("sheet-B.png");
+
+    // Same invariant when client PATCHes with the field omitted entirely.
+    const afterOmitPatch = await svc.updateUniverse(w.id, {
+      characters: [{ id: "c-1", name: "Vale" }],
+    });
+    const charOmit = afterOmitPatch.characters.find((c) => c.id === "c-1");
+    expect(charOmit?.referenceSheetImageRef).toBe("sheet-B.png");
+
+    // Mutator path (the render-completion handler) IS trusted to update
+    // referenceSheetImageRef — it constructs the patch from the latest
+    // record. Preservation must NOT run against mutator output, or the
+    // newly-stamped filename gets clobbered back to the old value.
+    const afterRenderStamp = await svc.updateUniverse(w.id, (latest) => {
+      const next = (latest.characters || []).map((c) =>
+        c.id === "c-1" ? { ...c, referenceSheetImageRef: "sheet-C.png" } : c,
+      );
+      return { characters: next };
+    });
+    const charAfterStamp = afterRenderStamp.characters.find((c) => c.id === "c-1");
+    expect(charAfterStamp?.referenceSheetImageRef).toBe("sheet-C.png");
+  });
+
+  it("updateUniverse preservation skips when cur's referenceSheetImageRef no longer resolves on disk", async () => {
+    // GET /:id runs pruneStaleReferenceSheets, returning null when the
+    // underlying file is gone. Client PATCHes carry the pruned null. The
+    // preservation guard MUST honor that null by skipping preservation —
+    // otherwise the stale filename comes back from cur and the UI 404s
+    // again. resolveImageRef returning null is the "file missing" signal.
+    const w = await seedWorld();
+    // Stamp a sheet (mutator path is trusted).
+    await svc.updateUniverse(w.id, (latest) => {
+      const next = [...(latest.characters || []), {
+        id: "c-stale", name: "Stale", referenceSheetImageRef: "sheet-DEAD.png",
+      }];
+      return { characters: next };
+    });
+    // Mark that filename as missing for the resolveImageRef mock.
+    refSheetFilesByName.set("sheet-DEAD.png", null);
+    // Client PATCH that carries the pruned null (matching what GET would
+    // surface after pruneStaleReferenceSheets ran). Preservation should
+    // detect the stale cur value and skip, so the null wins.
+    const after = await svc.updateUniverse(w.id, {
+      characters: [{ id: "c-stale", name: "Stale", referenceSheetImageRef: null }],
+    });
+    const stale = after.characters.find((c) => c.id === "c-stale");
+    expect(stale?.referenceSheetImageRef).toBeNull();
+    // Clean up the per-test FS shim so later tests start clean.
+    refSheetFilesByName.delete("sheet-DEAD.png");
+  });
+
+  it("updateUniverse persists null for stale referenceSheetImageRef on the write path, not just GET", async () => {
+    // Reviewer-found bug: the GET-route pruner nulled the response but the
+    // on-disk record kept the stale filename, so a later PATCH that omitted
+    // `characters` (e.g. rename) merged from cur and returned the stale value.
+    // The write-time prune in updateUniverse fixes this — any PATCH catches
+    // the on-disk record up.
+    const w = await seedWorld();
+    await svc.updateUniverse(w.id, (latest) => ({
+      characters: [...(latest.characters || []), {
+        id: "c-rename", name: "Anchor", referenceSheetImageRef: "sheet-RENAME.png",
+      }],
+    }));
+    refSheetFilesByName.set("sheet-RENAME.png", null);
+    // PATCH that does NOT include `characters` — only renames the universe.
+    const renamed = await svc.updateUniverse(w.id, { name: "Renamed" });
+    const char = renamed.characters.find((c) => c.id === "c-rename");
+    expect(char?.referenceSheetImageRef).toBeNull();
+    // And a follow-up GET sees the same null — disk is now consistent.
+    const reread = await svc.getUniverse(w.id);
+    const charReread = reread.characters.find((c) => c.id === "c-rename");
+    expect(charReread?.referenceSheetImageRef).toBeNull();
+    refSheetFilesByName.delete("sheet-RENAME.png");
   });
 
   it("deleteUniverse removes the universe and its runs", async () => {
@@ -293,6 +498,124 @@ describe("universeBuilder service", () => {
     await expect(
       collections.updateCollection(fresh.id, { name: "User-Renamed" }),
     ).resolves.toMatchObject({ name: "User-Renamed" });
+  });
+
+  describe("synthesizeCanonPrompt", () => {
+    it("hand-authored prompt wins over field synthesis", () => {
+      expect(svc.synthesizeCanonPrompt("characters", {
+        name: "Mira",
+        prompt: "custom prompt",
+        physicalDescription: "weathered scavenger",
+      })).toBe("custom prompt");
+    });
+
+    it("synthesizes from identifier + RICH descriptor for characters", () => {
+      expect(svc.synthesizeCanonPrompt("characters", {
+        name: "Mira",
+        physicalDescription: "weathered scavenger",
+        role: "protagonist",
+      })).toBe("Mira — weathered scavenger. protagonist");
+    });
+
+    it("synthesizes from identifier + RICH descriptor for settings (capitalized prefixes)", () => {
+      expect(svc.synthesizeCanonPrompt("places", {
+        name: "Foundry City",
+        description: "vast smelting works",
+        palette: "rust + bone",
+        era: "post-collapse",
+        weather: "ash haze",
+        recurringDetails: "broken statue at center",
+      })).toBe("Foundry City — vast smelting works. Palette: rust + bone. Era: post-collapse. Weather: ash haze. broken statue at center");
+    });
+
+    it("falls back to slugline as identifier for settings without name", () => {
+      expect(svc.synthesizeCanonPrompt("places", {
+        slugline: "INT. FOUNDRY — DAY",
+        description: "ore furnace",
+      })).toBe("INT. FOUNDRY — DAY — ore furnace");
+    });
+
+    it("returns identifier alone when no descriptive fields are set", () => {
+      expect(svc.synthesizeCanonPrompt("characters", { name: "Mira" })).toBe("Mira");
+    });
+
+    it("returns empty string for null entry", () => {
+      expect(svc.synthesizeCanonPrompt("characters", null)).toBe("");
+    });
+  });
+
+  describe("buildUniverseStyleContext", () => {
+    const universe = {
+      logline: "A foundry city goes silent.",
+      premise: "post-collapse industrial sprawl",
+      styleNotes: "moebius linework, ash palette",
+      influences: { embrace: ["moebius linework", "cel-shading"], avoid: ["blurry"] },
+    };
+
+    it("returns '' for null universe", () => {
+      expect(svc.buildUniverseStyleContext(null)).toBe("");
+    });
+
+    it("returns '' when no fields populate", () => {
+      expect(svc.buildUniverseStyleContext({})).toBe("");
+    });
+
+    it("default options render bare `# Universe context` header with logline + styleNotes + embrace", () => {
+      expect(svc.buildUniverseStyleContext(universe))
+        .toBe("\n# Universe context\nLOGLINE: A foundry city goes silent.\n\nSTYLE NOTES: moebius linework, ash palette\n\nEMBRACE INFLUENCES: moebius linework, cel-shading\n");
+    });
+
+    it("headerSuffix appears after `Universe context — `", () => {
+      const out = svc.buildUniverseStyleContext(
+        { logline: "X" },
+        { headerSuffix: "keep the new canon entry consistent with this established setting" },
+      );
+      expect(out).toBe("\n# Universe context — keep the new canon entry consistent with this established setting\nLOGLINE: X\n");
+    });
+
+    it("includePremise inserts PREMISE between LOGLINE and STYLE NOTES", () => {
+      const out = svc.buildUniverseStyleContext(universe, { includePremise: true });
+      expect(out.indexOf("LOGLINE:")).toBeLessThan(out.indexOf("PREMISE:"));
+      expect(out.indexOf("PREMISE:")).toBeLessThan(out.indexOf("STYLE NOTES:"));
+      expect(out).toContain("PREMISE: post-collapse industrial sprawl");
+    });
+
+    it("includeEmbrace:false suppresses the embrace line", () => {
+      const out = svc.buildUniverseStyleContext(universe, { includeEmbrace: false });
+      expect(out).not.toContain("EMBRACE INFLUENCES:");
+      expect(out).toContain("LOGLINE:");
+      expect(out).toContain("STYLE NOTES:");
+    });
+
+    it("escape:true collapses embedded newlines in styleNotes/logline", () => {
+      const out = svc.buildUniverseStyleContext(
+        { logline: "line1\nline2", styleNotes: "para1\n\npara2" },
+        { escape: true },
+      );
+      expect(out).toContain("LOGLINE: line1 line2");
+      expect(out).toContain("STYLE NOTES: para1 para2");
+    });
+
+    it("escape:false (default) preserves embedded newlines verbatim", () => {
+      const out = svc.buildUniverseStyleContext({ logline: "line1\nline2" });
+      expect(out).toContain("LOGLINE: line1\nline2");
+    });
+
+    it("returns '' when only premise is set but includePremise is false (the default)", () => {
+      expect(svc.buildUniverseStyleContext({ premise: "p" })).toBe("");
+    });
+
+    it("expand-variations call shape (includePremise + includeEmbrace:false + headerSuffix) renders only logline/premise/styleNotes", () => {
+      const out = svc.buildUniverseStyleContext(
+        { logline: "L", premise: "P", styleNotes: "S", influences: { embrace: ["should-not-appear"] } },
+        {
+          includePremise: true,
+          includeEmbrace: false,
+          headerSuffix: "keep new variations consistent with this established setting",
+        },
+      );
+      expect(out).toBe("\n# Universe context — keep new variations consistent with this established setting\nLOGLINE: L\n\nPREMISE: P\n\nSTYLE NOTES: S\n");
+    });
   });
 
   describe("compilePrompts", () => {
@@ -388,6 +711,40 @@ describe("universeBuilder service", () => {
       expect(compiled[0].label).toBe("Wake Jackals");
     });
 
+    it("layers per-batch overrides on top of universe influences", async () => {
+      const w = await seedWorld();
+      const compiled = svc.compilePrompts(w, {
+        selection: { landscapes: ["crystal canyon"] },
+        extraStyle: "high contrast",
+        extraNegative: "low quality",
+        stylePresetPrompt: "noir cinematography",
+        stylePresetNegative: "color photo",
+      });
+      expect(compiled).toHaveLength(1);
+      // Baseline + preset + extra are comma-joined into the stylePreset prefix
+      // and composeStyledPrompt sticks ". " between style and variation.
+      expect(compiled[0].prompt).toBe(
+        "moebius linework, scavengers reign palette, noir cinematography, high contrast. crystalline canyon, alien sun",
+      );
+      // Negative parts are comma-joined; composeStyledPrompt also adds a comma
+      // when the user negative is non-empty, but here userNegative is empty so
+      // we just see baseline + preset + extra.
+      expect(compiled[0].negativePrompt).toBe(
+        "blurry, lowres, color photo, low quality",
+      );
+    });
+
+    it("override fields default to baseline influences when omitted", async () => {
+      const w = await seedWorld();
+      const compiled = svc.compilePrompts(w, {
+        selection: { landscapes: ["crystal canyon"] },
+      });
+      expect(compiled[0].prompt).toBe(
+        "moebius linework, scavengers reign palette. crystalline canyon, alien sun",
+      );
+      expect(compiled[0].negativePrompt).toBe("blurry, lowres");
+    });
+
     it("clamps batchPerVariation to 1..20", async () => {
       const w = await seedWorld();
       // 0 → 1
@@ -476,7 +833,7 @@ describe("universeBuilder service", () => {
           },
           { name: "Vex", physicalDescription: "tall, scarred, plate-armor smith" },
         ],
-        settings: [
+        places: [
           {
             name: "Foundry City",
             slugline: "EXT. FOUNDRY CITY — DAY",
@@ -493,7 +850,7 @@ describe("universeBuilder service", () => {
         const w = canonWorld();
         const compiled = svc.compilePrompts(w, {
           promptMode: "canon",
-          canonSelection: { characters: "all", settings: "all", objects: "all" },
+          canonSelection: { characters: "all", places: "all", objects: "all" },
         });
         // 2 characters + 1 setting + 1 object = 4
         expect(compiled).toHaveLength(4);
@@ -504,19 +861,19 @@ describe("universeBuilder service", () => {
         );
         expect(mira.negativePrompt).toBe("blurry");
         const place = compiled.find((c) => c.label === "Foundry City");
-        expect(place.category).toBe("canon:settings");
+        expect(place.category).toBe("canon:places");
         expect(place.prompt).toContain("Foundry City");
-        expect(place.prompt).toContain("palette: rust + bone");
+        expect(place.prompt).toContain("Palette: rust + bone");
       });
 
       it("canonSelection: missing trunk skips it", () => {
         const w = canonWorld();
         const compiled = svc.compilePrompts(w, {
           promptMode: "canon",
-          canonSelection: { settings: "all" },
+          canonSelection: { places: "all" },
         });
         expect(compiled).toHaveLength(1);
-        expect(compiled[0].category).toBe("canon:settings");
+        expect(compiled[0].category).toBe("canon:places");
       });
 
       it("canonSelection: array filters by name (case-insensitive)", () => {
@@ -535,14 +892,14 @@ describe("universeBuilder service", () => {
         // to slugline as the identifier seed so such entries don't silently
         // synthesize to '' and get skipped at render time.
         const w = canonWorld();
-        w.settings.push({
+        w.places.push({
           // No name — only a slugline identifier + description.
           slugline: "INT. OLD ARCHIVE — NIGHT",
           description: "lantern-lit shelves of ledgers",
         });
         const compiled = svc.compilePrompts(w, {
           promptMode: "canon",
-          canonSelection: { settings: "all" },
+          canonSelection: { places: "all" },
         });
         // Two settings now: the named Foundry City + the slugline-only Archive.
         expect(compiled).toHaveLength(2);
@@ -556,7 +913,7 @@ describe("universeBuilder service", () => {
         const w = canonWorld();
         const compiled = svc.compilePrompts(w, {
           promptMode: "canon",
-          canonSelection: { settings: ["EXT. FOUNDRY CITY — DAY"] },
+          canonSelection: { places: ["EXT. FOUNDRY CITY — DAY"] },
         });
         expect(compiled).toHaveLength(1);
         expect(compiled[0].label).toBe("Foundry City");
@@ -783,27 +1140,30 @@ describe("universeBuilder service", () => {
   });
 
   describe("per-item locks", () => {
-    it("round-trips a `locked: true` flag on variations", async () => {
+    it("defaults variations to locked + preserves explicit lock state", async () => {
+      // Variations now lock-by-default: an entry with no `locked` field
+      // reads as locked, and explicit `false` survives the round-trip so
+      // a user-unlock isn't silently re-locked on the next read.
       const w = await seedWorld({
         categories: {
           landscapes: {
             variations: [
-              {
-                label: "Pinned canyon",
-                prompt: "pinned canyon prompt",
-                locked: true,
-              },
+              { label: "Pinned canyon", prompt: "pinned canyon prompt", locked: true },
               { label: "Open canyon", prompt: "open canyon prompt" },
+              { label: "Hand-unlocked", prompt: "hand unlocked prompt", locked: false },
             ],
           },
         },
       });
       const vs = w.categories.landscapes.variations;
       expect(vs.find((v) => v.label === "Pinned canyon").locked).toBe(true);
-      expect(vs.find((v) => v.label === "Open canyon").locked).toBeUndefined();
+      expect(vs.find((v) => v.label === "Open canyon").locked).toBe(true);
+      expect(vs.find((v) => v.label === "Hand-unlocked").locked).toBe(false);
     });
 
-    it("drops non-true `locked` values rather than recording them", async () => {
+    it("coerces non-boolean `locked` values to the locked-by-default state", async () => {
+      // Anything other than `false` collapses to the default (true); only
+      // explicit `false` records an unlock.
       const w = await seedWorld({
         categories: {
           landscapes: {
@@ -818,12 +1178,12 @@ describe("universeBuilder service", () => {
       const labels = Object.fromEntries(
         w.categories.landscapes.variations.map((v) => [v.label, v.locked]),
       );
-      expect(labels.A).toBeUndefined();
-      expect(labels.B).toBeUndefined();
-      expect(labels.C).toBeUndefined();
+      expect(labels.A).toBe(false);
+      expect(labels.B).toBe(true);
+      expect(labels.C).toBe(true);
     });
 
-    it("round-trips a `locked: true` flag on composite sheets", async () => {
+    it("defaults composite sheets to locked + preserves explicit lock state", async () => {
       const w = await seedWorld({
         compositeSheets: [
           {
@@ -833,6 +1193,7 @@ describe("universeBuilder service", () => {
             locked: true,
           },
           { label: "Open sheet", prompt: "open sheet prompt long enough" },
+          { label: "Unlocked sheet", prompt: "unlocked sheet prompt long enough", locked: false },
         ],
       });
       expect(
@@ -840,7 +1201,87 @@ describe("universeBuilder service", () => {
       ).toBe(true);
       expect(
         w.compositeSheets.find((s) => s.label === "Open sheet").locked,
-      ).toBeUndefined();
+      ).toBe(true);
+      expect(
+        w.compositeSheets.find((s) => s.label === "Unlocked sheet").locked,
+      ).toBe(false);
+    });
+  });
+
+  describe("setVariationsLockAll", () => {
+    const seedTwoBuckets = () =>
+      seedWorld({
+        categories: {
+          landscapes: {
+            variations: [
+              { label: "A", prompt: "a" },
+              { label: "B", prompt: "b", locked: false },
+            ],
+          },
+          outfits: {
+            variations: [
+              { label: "X", prompt: "x" },
+              { label: "Y", prompt: "y" },
+            ],
+          },
+        },
+      });
+
+    it("scopes total + changed counts to a single bucket when categoryKey is set", async () => {
+      // Regression guard: previously `total += variations.length` ran before
+      // the categoryKey filter, so a single-bucket call over-reported the
+      // denominator as every variation universe-wide.
+      const w = await seedTwoBuckets();
+      const res = await svc.setVariationsLockAll(w.id, {
+        categoryKey: "landscapes",
+        locked: false,
+      });
+      expect(res.total).toBe(2); // only landscapes' variations counted
+      expect(res.changed).toBe(1); // only "A" flipped (true → false); "B" already false
+      const reread = (await svc.listUniverses())[0];
+      expect(reread.categories.landscapes.variations.every((v) => v.locked === false)).toBe(true);
+      // Other bucket untouched.
+      expect(reread.categories.outfits.variations.every((v) => v.locked === true)).toBe(true);
+    });
+
+    it("universe-wide path locks every variation across every bucket", async () => {
+      const w = await seedTwoBuckets();
+      // First, unlock everything explicitly so the test's "lock all" call has
+      // real work to do (sanitizer defaults new variations to locked).
+      await svc.setVariationsLockAll(w.id, { locked: false });
+      const res = await svc.setVariationsLockAll(w.id, { locked: true });
+      expect(res.total).toBe(4); // 2 landscapes + 2 outfits
+      expect(res.changed).toBe(4);
+      const reread = (await svc.listUniverses())[0];
+      for (const bucket of Object.values(reread.categories)) {
+        expect(bucket.variations.every((v) => v.locked === true)).toBe(true);
+      }
+    });
+
+    it("includeSheets: true also flips composite sheets in the same call (only when no categoryKey)", async () => {
+      const w = await seedWorld({
+        compositeSheets: [
+          { label: "Cover board", prompt: "cover board prompt long enough" },
+        ],
+      });
+      await svc.setVariationsLockAll(w.id, { locked: false, includeSheets: true });
+      const reread = (await svc.listUniverses())[0];
+      expect(reread.compositeSheets[0].locked).toBe(false);
+    });
+
+    it("ignores includeSheets when a categoryKey is set (single-bucket scope is strict)", async () => {
+      const w = await seedWorld({
+        compositeSheets: [
+          { label: "Cover board", prompt: "cover board prompt long enough" },
+        ],
+      });
+      await svc.setVariationsLockAll(w.id, {
+        categoryKey: "landscapes",
+        locked: false,
+        includeSheets: true,
+      });
+      const reread = (await svc.listUniverses())[0];
+      expect(reread.compositeSheets[0].locked).toBe(true); // still locked
     });
   });
 
@@ -905,12 +1346,12 @@ describe("universeBuilder service", () => {
       expect(alex.prompt).toBe("field lead detective");
       expect(alex.tags).toEqual([]);
       expect(alex.source).toBe("universe-expand");
-      // Settings — landscape + environment
-      const canyon = w.settings.find((s) => s.name === "Crystal Canyon");
+      // Places — landscape + environment
+      const canyon = w.places.find((s) => s.name === "Crystal Canyon");
       expect(canyon.tags).toEqual(["landscape"]);
       expect(canyon.locked).toBe(true); // variation lock carries through
-      expect(canyon.slugline).toBe("Crystal Canyon"); // settings need slugline
-      const bubble = w.settings.find((s) => s.name === "Bubble Room");
+      expect(canyon.slugline).toBe("Crystal Canyon"); // places need slugline
+      const bubble = w.places.find((s) => s.name === "Bubble Room");
       expect(bubble.tags).toEqual(["environment"]);
       // Objects — vehicle + structure + custom 'factions'
       const rover = w.objects.find((o) => o.name === "Rover");
@@ -986,9 +1427,9 @@ describe("universeBuilder service", () => {
   describe("category kind (schema v4)", () => {
     it("assigns built-in default kinds (landscapes/environments/structures→settings, vehicles→objects)", async () => {
       const w = await seedWorld();
-      expect(w.categories.landscapes.kind).toBe("settings");
-      expect(w.categories.environments.kind).toBe("settings");
-      expect(w.categories.structures.kind).toBe("settings");
+      expect(w.categories.landscapes.kind).toBe("places");
+      expect(w.categories.environments.kind).toBe("places");
+      expect(w.categories.structures.kind).toBe("places");
       expect(w.categories.vehicles.kind).toBe("objects");
     });
 
@@ -1022,7 +1463,7 @@ describe("universeBuilder service", () => {
           colonies: { kind: null, variations: [{ label: "Tycho", prompt: "x" }] },
         },
       });
-      expect(w.categories.landscapes.kind).toBe("settings"); // built-in default
+      expect(w.categories.landscapes.kind).toBe("places"); // built-in default
       expect(w.categories.vehicles.kind).toBe("objects"); // built-in default
       expect(w.categories.colonies.kind).toBe("other"); // custom fallback
     });
@@ -1064,6 +1505,317 @@ describe("universeBuilder service", () => {
         categories: { factions: { kind: "characters", variations: [{ label: "Iron Reach", prompt: "x" }] } },
       });
       expect(patched.categories.factions.kind).toBe("characters");
+    });
+  });
+
+  describe("entry ids + render history", () => {
+    it("sanitizeTemplate mints stable ids for variations + composite sheets", async () => {
+      const u = await svc.createUniverse({
+        name: "Avatars",
+        categories: {
+          landscapes: { variations: [{ label: "L1", prompt: "p1" }] },
+        },
+        compositeSheets: [{ kind: "reference_sheet", label: "S1", prompt: "sp" }],
+      });
+      const v = u.categories.landscapes.variations[0];
+      expect(v.id).toMatch(/^var-/);
+      expect(v.imageRefs).toEqual([]);
+      const sheet = u.compositeSheets[0];
+      expect(sheet.id).toMatch(/^sheet-/);
+      expect(sheet.imageRefs).toEqual([]);
+    });
+
+    it("sanitizeTemplate round-trips existing variation + sheet ids verbatim", async () => {
+      fileStore.set("/mock/data/universe-builder.json", {
+        universes: [
+          {
+            id: "w1",
+            name: "X",
+            schemaVersion: svc.CURRENT_SCHEMA_VERSION,
+            categories: {
+              landscapes: {
+                kind: "places",
+                variations: [{ id: "var-keep-me", label: "V1", prompt: "p1" }],
+              },
+            },
+            compositeSheets: [{ id: "sheet-keep-me", kind: "reference_sheet", label: "S1", prompt: "sp" }],
+            createdAt: "2024-01-01T00:00:00Z",
+          },
+        ],
+        runs: [],
+      });
+      const list = await svc.listUniverses();
+      expect(list[0].categories.landscapes.variations[0].id).toBe("var-keep-me");
+      expect(list[0].compositeSheets[0].id).toBe("sheet-keep-me");
+    });
+
+    it("legacy universe (no variation ids on disk) gets unstable in-memory ids until persisted, then stable after a write", async () => {
+      // Plant a pre-PR universe shape with no variation/sheet ids. Reads
+      // through readState() mint fresh UUIDs each call because the migration
+      // is not persisted there (race-safety against concurrent writers — see
+      // readState() docstring). After a no-op updateUniverse() forces a write,
+      // ids land on disk and every subsequent read returns the same ones.
+      fileStore.set("/mock/data/universe-builder.json", {
+        universes: [
+          {
+            id: "legacy-universe",
+            name: "Legacy",
+            schemaVersion: svc.CURRENT_SCHEMA_VERSION,
+            categories: {
+              landscapes: { kind: "places", variations: [{ label: "L1", prompt: "p1" }] },
+            },
+            compositeSheets: [],
+            createdAt: "2024-01-01T00:00:00Z",
+          },
+        ],
+        runs: [],
+      });
+      const a = await svc.getUniverse("legacy-universe");
+      const b = await svc.getUniverse("legacy-universe");
+      expect(a.categories.landscapes.variations[0].id).not.toBe(b.categories.landscapes.variations[0].id);
+      // No-op mutator persists the in-memory sanitized shape (the render
+      // route uses this to lock in entryRef.id before queueing jobs).
+      const persisted = await svc.updateUniverse("legacy-universe", () => ({}));
+      const variationIdPersisted = persisted.categories.landscapes.variations[0].id;
+      const c = await svc.getUniverse("legacy-universe");
+      expect(c.categories.landscapes.variations[0].id).toBe(variationIdPersisted);
+      // appendEntryImageRef against the persisted id now succeeds.
+      await svc.appendEntryImageRef("legacy-universe", { kind: "variation", categoryKey: "landscapes", id: variationIdPersisted }, "after-persist.png");
+      const d = await svc.getUniverse("legacy-universe");
+      expect(d.categories.landscapes.variations[0].imageRefs).toEqual(["after-persist.png"]);
+    });
+
+    it("needsEntryIdPersist returns true only when raw-disk variations or sheets lack ids", async () => {
+      // Mixed fixture: one universe has ids on disk, the other doesn't.
+      // The render route uses this helper to skip the no-op write when the
+      // universe is already migrated — so already-upgraded records don't
+      // bump updatedAt (which would interfere with LWW sync + spuriously
+      // emit recordUpdated on every render).
+      fileStore.set("/mock/data/universe-builder.json", {
+        universes: [
+          {
+            id: "fresh",
+            name: "Fresh",
+            schemaVersion: svc.CURRENT_SCHEMA_VERSION,
+            categories: {
+              landscapes: { kind: "places", variations: [{ id: "var-on-disk", label: "L", prompt: "p" }] },
+            },
+            compositeSheets: [{ id: "sheet-on-disk", kind: "reference_sheet", label: "S", prompt: "sp" }],
+            createdAt: "2024-01-01T00:00:00Z",
+          },
+          {
+            id: "legacy",
+            name: "Legacy",
+            schemaVersion: svc.CURRENT_SCHEMA_VERSION,
+            categories: {
+              landscapes: { kind: "places", variations: [{ label: "L", prompt: "p" }] },
+            },
+            compositeSheets: [],
+            createdAt: "2024-01-01T00:00:00Z",
+          },
+          {
+            id: "legacy-sheet",
+            name: "LegacySheet",
+            schemaVersion: svc.CURRENT_SCHEMA_VERSION,
+            categories: {},
+            compositeSheets: [{ kind: "reference_sheet", label: "S", prompt: "sp" }],
+            createdAt: "2024-01-01T00:00:00Z",
+          },
+        ],
+        runs: [],
+      });
+      expect(await svc.needsEntryIdPersist("fresh")).toBe(false);
+      expect(await svc.needsEntryIdPersist("legacy")).toBe(true);
+      expect(await svc.needsEntryIdPersist("legacy-sheet")).toBe(true);
+      expect(await svc.needsEntryIdPersist("does-not-exist")).toBe(false);
+    });
+
+    it("appendEntryImageRef appends to a variation's imageRefs by id", async () => {
+      const u = await svc.createUniverse({
+        name: "Bucket",
+        categories: { landscapes: { variations: [{ label: "L1", prompt: "p1" }] } },
+      });
+      const variationId = u.categories.landscapes.variations[0].id;
+      await svc.appendEntryImageRef(u.id, { kind: "variation", categoryKey: "landscapes", id: variationId }, "rendered-1.png");
+      await svc.appendEntryImageRef(u.id, { kind: "variation", categoryKey: "landscapes", id: variationId }, "rendered-2.png");
+      const updated = await svc.getUniverse(u.id);
+      expect(updated.categories.landscapes.variations[0].imageRefs).toEqual(["rendered-1.png", "rendered-2.png"]);
+    });
+
+    it("appendEntryImageRef rejects pathy filenames up-front (no queued write)", async () => {
+      // A renderer that ever returns a path-laden filename should be
+      // rejected at the helper boundary — letting it through would trigger
+      // a no-op write (sanitizer strips it later) and pointlessly bump
+      // updatedAt + emit recordUpdated.
+      const u = await svc.createUniverse({
+        name: "PathReject",
+        categories: { landscapes: { variations: [{ label: "L1", prompt: "p1" }] } },
+      });
+      const variationId = u.categories.landscapes.variations[0].id;
+      const before = (await svc.getUniverse(u.id)).updatedAt;
+      const result1 = await svc.appendEntryImageRef(u.id, { kind: "variation", categoryKey: "landscapes", id: variationId }, "../escape.png");
+      const result2 = await svc.appendEntryImageRef(u.id, { kind: "variation", categoryKey: "landscapes", id: variationId }, "sub/file.png");
+      const result3 = await svc.appendEntryImageRef(u.id, { kind: "variation", categoryKey: "landscapes", id: variationId }, "..\\windows.png");
+      expect(result1).toBe(null);
+      expect(result2).toBe(null);
+      expect(result3).toBe(null);
+      const after = (await svc.getUniverse(u.id)).updatedAt;
+      expect(after).toBe(before);
+    });
+
+    it("appendEntryImageRef dedupes a same-filename repeat render", async () => {
+      const u = await svc.createUniverse({
+        name: "Dedupe",
+        compositeSheets: [{ kind: "reference_sheet", label: "S1", prompt: "sp" }],
+      });
+      const sheetId = u.compositeSheets[0].id;
+      await svc.appendEntryImageRef(u.id, { kind: "sheet", id: sheetId }, "x.png");
+      await svc.appendEntryImageRef(u.id, { kind: "sheet", id: sheetId }, "x.png");
+      const updated = await svc.getUniverse(u.id);
+      expect(updated.compositeSheets[0].imageRefs).toEqual(["x.png"]);
+    });
+
+    it("appendEntryImageRef appends to a canon entry's imageRefs by id", async () => {
+      const u = await svc.createUniverse({
+        name: "Canon",
+        places: [{ id: "set-abc", name: "Library" }],
+      });
+      await svc.appendEntryImageRef(u.id, { kind: "canon", kindKey: "places", id: "set-abc" }, "place-render.png");
+      const updated = await svc.getUniverse(u.id);
+      expect(updated.places[0].imageRefs).toContain("place-render.png");
+    });
+
+    it("appendEntryImageRef is a no-op when entry id no longer exists", async () => {
+      const u = await svc.createUniverse({ name: "Gone" });
+      const result = await svc.appendEntryImageRef(u.id, { kind: "variation", categoryKey: "landscapes", id: "var-missing" }, "x.png");
+      // The mutator returns null → updateUniverse skips the write and resolves
+      // with the unchanged record. Either shape is fine; we just want no throw.
+      expect(result).toBeTruthy();
+    });
+
+    it("stale literal-object PATCH does not clobber server-stamped imageRefs (variations)", async () => {
+      const u = await svc.createUniverse({
+        name: "Stale",
+        categories: { landscapes: { variations: [{ label: "L1", prompt: "p1" }] } },
+      });
+      const variationId = u.categories.landscapes.variations[0].id;
+      // Server stamps a render history while the client is editing.
+      await svc.appendEntryImageRef(u.id, { kind: "variation", categoryKey: "landscapes", id: variationId }, "fresh.png");
+      // Client (loaded BEFORE the render landed) PATCHes a label edit with
+      // an empty imageRefs list. The stale-guard must preserve the freshly
+      // appended filename.
+      await svc.updateUniverse(u.id, {
+        categories: {
+          landscapes: {
+            kind: "places",
+            variations: [{ id: variationId, label: "L1 renamed", prompt: "p1", imageRefs: [] }],
+          },
+        },
+      });
+      const final = await svc.getUniverse(u.id);
+      const v = final.categories.landscapes.variations[0];
+      expect(v.label).toBe("L1 renamed");
+      expect(v.imageRefs).toEqual(["fresh.png"]);
+    });
+
+    it("stale literal-object PATCH does not clobber server-stamped imageRefs (composite sheets)", async () => {
+      const u = await svc.createUniverse({
+        name: "StaleSheet",
+        compositeSheets: [{ kind: "reference_sheet", label: "S1", prompt: "sp" }],
+      });
+      const sheetId = u.compositeSheets[0].id;
+      await svc.appendEntryImageRef(u.id, { kind: "sheet", id: sheetId }, "sheet.png");
+      await svc.updateUniverse(u.id, {
+        compositeSheets: [{ id: sheetId, kind: "reference_sheet", label: "S1 renamed", prompt: "sp" }],
+      });
+      const final = await svc.getUniverse(u.id);
+      expect(final.compositeSheets[0].label).toBe("S1 renamed");
+      expect(final.compositeSheets[0].imageRefs).toEqual(["sheet.png"]);
+    });
+
+    it("stale at-cap PATCH detects rotation via tail mismatch (variations)", async () => {
+      // Seed a variation whose imageRefs is already at the cap. A server-side
+      // append rotates the list (drops oldest, pushes newest) — lengths stay
+      // equal, so the stale-PATCH guard must compare the tail element, not
+      // just the length.
+      const cap = svc.IMAGE_REFS_PER_ENTRY_MAX;
+      const capRefs = Array.from({ length: cap }, (_, i) => `r${i}.png`);
+      const u = await svc.createUniverse({
+        name: "Capped",
+        categories: { landscapes: { variations: [{ label: "L1", prompt: "p1", imageRefs: capRefs }] } },
+      });
+      const variationId = u.categories.landscapes.variations[0].id;
+      // Server appends a new render — list rotates (r0.png drops off, fresh.png appended).
+      await svc.appendEntryImageRef(u.id, { kind: "variation", categoryKey: "landscapes", id: variationId }, "fresh.png");
+      // Stale client (loaded BEFORE the rotation) PATCHes with the
+      // pre-rotation list — same length, but tail is r{cap-1}.png instead of
+      // fresh.png. Without the tail check, the stale list would clobber the
+      // server-stamped fresh.png.
+      await svc.updateUniverse(u.id, {
+        categories: {
+          landscapes: {
+            kind: "places",
+            variations: [{ id: variationId, label: "L1 renamed", prompt: "p1", imageRefs: capRefs }],
+          },
+        },
+      });
+      const final = await svc.getUniverse(u.id);
+      const v = final.categories.landscapes.variations[0];
+      expect(v.label).toBe("L1 renamed");
+      // Tail should still be fresh.png (the server-stamped newest), not the
+      // pre-rotation r{cap-1}.png from the stale patch.
+      expect(v.imageRefs[v.imageRefs.length - 1]).toBe("fresh.png");
+    });
+
+    it("compilePrompts stamps entryRef on each compiled prompt", () => {
+      const universe = {
+        id: "w1",
+        influences: { embrace: [], avoid: [] },
+        categories: {
+          landscapes: { kind: "places", variations: [{ id: "var-1", label: "L1", prompt: "p1" }] },
+        },
+        compositeSheets: [{ id: "sheet-1", kind: "reference_sheet", label: "S1", prompt: "sp" }],
+        characters: [],
+        places: [{ id: "set-abc", name: "Library" }],
+        objects: [],
+      };
+      const variationCompiled = svc.compilePrompts(universe, { promptMode: "variations" });
+      expect(variationCompiled).toHaveLength(1);
+      expect(variationCompiled[0].entryRef).toEqual({ kind: "variation", categoryKey: "landscapes", id: "var-1" });
+
+      const sheetCompiled = svc.compilePrompts(universe, { promptMode: "sheets" });
+      expect(sheetCompiled).toHaveLength(1);
+      expect(sheetCompiled[0].entryRef).toEqual({ kind: "sheet", id: "sheet-1" });
+
+      const canonCompiled = svc.compilePrompts(universe, {
+        promptMode: "canon",
+        canonSelection: { places: "all" },
+      });
+      expect(canonCompiled).toHaveLength(1);
+      expect(canonCompiled[0].entryRef).toEqual({ kind: "canon", kindKey: "places", id: "set-abc" });
+    });
+
+    it("imageRefs basename guard rejects path-separator filenames", async () => {
+      fileStore.set("/mock/data/universe-builder.json", {
+        universes: [
+          {
+            id: "w1",
+            name: "Guard",
+            schemaVersion: svc.CURRENT_SCHEMA_VERSION,
+            categories: {
+              landscapes: {
+                kind: "places",
+                variations: [{ id: "var-1", label: "L", prompt: "p", imageRefs: ["../escape.png", "normal.png", "/abs/path.png", "..\\windows.png", "sub\\dir.png", "ok.png"] }],
+              },
+            },
+            compositeSheets: [],
+            createdAt: "2024-01-01T00:00:00Z",
+          },
+        ],
+        runs: [],
+      });
+      const list = await svc.listUniverses();
+      expect(list[0].categories.landscapes.variations[0].imageRefs).toEqual(["normal.png", "ok.png"]);
     });
   });
 

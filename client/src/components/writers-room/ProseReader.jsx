@@ -67,7 +67,7 @@ export default function ProseReader({
   body,
   scenes = [],
   characters = [],
-  settings = [],
+  places = [],
   objects = [],
   readingTheme = 'dark',
   activeSceneId = null,
@@ -88,7 +88,7 @@ export default function ProseReader({
   // change instead of rebuilding per paragraph. ProseReader passes the
   // pre-built `entries` to renderTokenized so each paragraph only pays the
   // O(text × entries) scan cost, not the index-build cost.
-  const entries = useTokenEntries({ characters, settings, objects });
+  const entries = useTokenEntries({ characters, places, objects });
 
   const light = readingTheme === 'light';
 

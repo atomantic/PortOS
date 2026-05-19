@@ -212,6 +212,14 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--device", default="auto", choices=["auto", "mps", "cuda", "cpu"])
     p.add_argument("--lora-paths", nargs="*", default=[], help="absolute paths to LoRA .safetensors files")
     p.add_argument("--lora-scales", nargs="*", default=[], help="scale per LoRA, parallel to --lora-paths")
+    # Multi-reference editing — accepted but currently ignored. The Node side
+    # already plumbs these end-to-end so the UI + server contract is shippable;
+    # the diffusers multi-reference pipeline wiring lands with the
+    # FLUX.2-klein-9B-kv model swap (see PLAN.md `flux2-multi-reference-python-runner`).
+    # Without these stubs argparse would reject the args with "unrecognized
+    # arguments" and break every single-init FLUX.2 render once the route is live.
+    p.add_argument("--reference-images", nargs="*", default=[], help="(reserved) absolute paths to reference images")
+    p.add_argument("--reference-strengths", nargs="*", default=[], help="(reserved) 0..1 strength per reference image, parallel to --reference-images")
     return p.parse_args()
 
 

@@ -50,9 +50,11 @@ export async function runMigrations({
   // files (*.test.js) are excluded — they don't export `up()` and would
   // throw the runner if imported as migrations. The vitest config picks
   // them up via its own glob (`../scripts/**/*.test.js` in
-  // server/vitest.config.js).
+  // server/vitest.config.js). `_`-prefixed files (e.g. `_lib.js`,
+  // `_testHelpers.js`) are shared helpers consumed by migration files and
+  // their tests — they're never migrations themselves.
   const files = (await readdir(migrationsDir))
-    .filter(f => f.endsWith('.js') && !f.endsWith('.test.js'))
+    .filter(f => f.endsWith('.js') && !f.endsWith('.test.js') && !f.startsWith('_'))
     .sort();
 
   let ran = 0;

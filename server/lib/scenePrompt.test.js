@@ -4,8 +4,8 @@ import {
   normCharKey,
   buildCharByKey,
   matchSceneCharacters,
-  buildSettingByKey,
-  matchSceneSetting,
+  buildPlaceByKey,
+  matchScenePlace,
   buildScenePrompt,
   __testing,
 } from './scenePrompt.js';
@@ -68,28 +68,28 @@ describe('scenePrompt — buildCharByKey + matchSceneCharacters', () => {
   });
 });
 
-describe('scenePrompt — buildSettingByKey + matchSceneSetting', () => {
+describe('scenePrompt — buildPlaceByKey + matchScenePlace', () => {
   const settings = [
     { id: 's1', slugline: 'INT. KITCHEN — NIGHT', description: 'cramped tile', palette: 'amber' },
     { id: 's2', name: 'EXT. ROOFTOP', slugline: '', description: 'wind-swept' },
   ];
 
   it('keys by slugline (preferred) then name (fallback)', () => {
-    const map = buildSettingByKey(settings);
+    const map = buildPlaceByKey(settings);
     expect(map.get(normalizeSlugline('INT. KITCHEN — NIGHT'))?.id).toBe('s1');
     expect(map.get(normalizeSlugline('EXT. ROOFTOP'))?.id).toBe('s2');
   });
 
   it('matches with em-dash / hyphen drift', () => {
-    const map = buildSettingByKey(settings);
-    expect(matchSceneSetting('INT KITCHEN - NIGHT', map)?.id).toBe('s1');
-    expect(matchSceneSetting('int kitchen — night', map)?.id).toBe('s1');
+    const map = buildPlaceByKey(settings);
+    expect(matchScenePlace('INT KITCHEN - NIGHT', map)?.id).toBe('s1');
+    expect(matchScenePlace('int kitchen — night', map)?.id).toBe('s1');
   });
 
   it('returns null when slugline is empty or unmatched', () => {
-    const map = buildSettingByKey(settings);
-    expect(matchSceneSetting('', map)).toBeNull();
-    expect(matchSceneSetting('INT. SUBMARINE — DAWN', map)).toBeNull();
+    const map = buildPlaceByKey(settings);
+    expect(matchScenePlace('', map)).toBeNull();
+    expect(matchScenePlace('INT. SUBMARINE — DAWN', map)).toBeNull();
   });
 });
 
@@ -158,6 +158,51 @@ describe('scenePrompt — buildScenePrompt', () => {
   it('skips characters with no visual descriptor (avoids "Aria: " junk fragments)', () => {
     const out = buildScenePrompt('S', baseScene, [{ name: 'Aria' }], '', null);
     expect(out).not.toContain('Featuring');
+  });
+
+  it('injects palette / era / weather / recurringDetails into the setting baseline (RICH spec)', () => {
+    const out = buildScenePrompt(
+      '',
+      baseScene,
+      [],
+      '',
+      {
+        description: 'cramped chrome bar',
+        palette: 'amber',
+        era: 'late 1970s post-industrial',
+        weather: 'sodium-vapor rain outside',
+        recurringDetails: 'broken jukebox in corner',
+      },
+    );
+    expect(out).toContain('cramped chrome bar');
+    expect(out).toContain('Palette: amber');
+    expect(out).toContain('Era: late 1970s post-industrial');
+    expect(out).toContain('Weather: sodium-vapor rain outside');
+    expect(out).toContain('broken jukebox in corner');
+    // Description must precede every secondary fragment so the diffusion
+    // model anchors on identity before atmospheric cues.
+    expect(out.indexOf('cramped chrome bar'))
+      .toBeLessThan(out.indexOf('Palette:'));
+    expect(out.indexOf('Palette:'))
+      .toBeLessThan(out.indexOf('Era:'));
+    expect(out.indexOf('Era:'))
+      .toBeLessThan(out.indexOf('Weather:'));
+    expect(out.indexOf('Weather:'))
+      .toBeLessThan(out.indexOf('broken jukebox'));
+  });
+
+  it('omits era / weather fragments when the matched place has no value for them', () => {
+    const out = buildScenePrompt(
+      '',
+      baseScene,
+      [],
+      '',
+      { description: 'cramped chrome bar', palette: 'amber' },
+    );
+    expect(out).toContain('cramped chrome bar');
+    expect(out).toContain('Palette: amber');
+    expect(out).not.toContain('Era:');
+    expect(out).not.toContain('Weather:');
   });
 
   it('drops palette + recurringDetails before description when budget runs out', () => {

@@ -20,7 +20,14 @@ import { emitRecordUpdated, withReexportSuppressed } from '../sharing/recordEven
 export const ERR_NOT_FOUND = 'PIPELINE_SEASON_NOT_FOUND';
 export const ERR_VALIDATION = 'PIPELINE_SEASON_VALIDATION';
 export const ERR_REASSIGN_TARGET = 'PIPELINE_SEASON_REASSIGN_TARGET_INVALID';
+export const ERR_LOCKED = 'PIPELINE_SEASON_LOCKED';
 const makeErr = (message, code) => Object.assign(new Error(message), { code });
+
+// Fields a locked-season patch MUST NOT touch. `locked` itself is allowed
+// (the user has to be able to unlock); `status` is allowed because it tracks
+// production progress (e.g. flipping `verified` → `in-production`) which is
+// orthogonal to editorial content. Timestamps are set by the sanitizer.
+const LOCKED_SEASON_ALLOWED_KEYS = new Set(['locked', 'status']);
 
 export async function listSeasons(seriesId) {
   const series = await seriesSvc.getSeries(seriesId);
@@ -65,6 +72,18 @@ export async function updateSeason(seriesId, seasonId, patch = {}) {
   let priorNumber = null;
   let nextNumber = null;
   const updated = await seriesSvc.updateSeasonOnSeries(seriesId, seasonId, (cur) => {
+    // Locked seasons accept only `locked: false` or status patches — any
+    // other content key requires an unlock-in-same-patch so the UI can
+    // offer "unlock + edit" as one round-trip.
+    if (cur.locked === true && patch.locked !== false) {
+      const forbidden = Object.keys(patch).filter((k) => !LOCKED_SEASON_ALLOWED_KEYS.has(k));
+      if (forbidden.length > 0) {
+        throw makeErr(
+          `Season "${cur.title || cur.number}" is locked — unlock it before editing (${forbidden.join(', ')})`,
+          ERR_LOCKED,
+        );
+      }
+    }
     priorNumber = cur.number;
     const next = sanitizeSeason({
       ...cur,
@@ -97,6 +116,15 @@ export async function deleteSeason(seriesId, seasonId, { reassignTo = null } = {
   const seasons = series.seasons || [];
   const cur = seasons.find((s) => s.id === seasonId);
   if (!cur) throw makeErr(`Season not found: ${seasonId}`, ERR_NOT_FOUND);
+  // Refuse to delete a locked season — destructive ops on locked records
+  // must require an explicit unlock first. Matches the editorial-freeze
+  // semantics that block `updateSeason` content patches above.
+  if (cur.locked === true) {
+    throw makeErr(
+      `Season "${cur.title || cur.number}" is locked — unlock it before deleting`,
+      ERR_LOCKED,
+    );
+  }
   // Validate the reassign target up front. Passing a non-existent sibling id
   // here is a user-side bug (stale state, copy-paste error) — surfacing it
   // before any disk writes means the caller can retry cleanly.
@@ -126,7 +154,9 @@ export async function deleteSeason(seriesId, seasonId, { reassignTo = null } = {
   const merged = seasons.filter((s) => s.id !== seasonId);
   let reassignedIssueCount = 0;
   await withReexportSuppressed('series', seriesId, async () => {
-    const result = await issuesSvc.bulkReassignSeason(seriesId, seasonId, reassignTo);
+    // Pass the series we already loaded so bulkReassignSeason's lock check
+    // doesn't re-fetch — same micro-opt as the cover-filer dispatcher.
+    const result = await issuesSvc.bulkReassignSeason(seriesId, seasonId, reassignTo, { _preloadedSeries: series });
     reassignedIssueCount = result.reassigned;
     await seriesSvc.updateSeries(seriesId, { seasons: merged });
   });

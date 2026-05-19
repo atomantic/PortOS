@@ -9,7 +9,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import {
-  Share2, Plus, Trash2, Folder, Inbox, History, Save, Loader2, Check, X, Users, AlertCircle,
+  Share2, Plus, Trash2, Folder, Inbox, History, Save, Loader2, Check, X, Users, AlertCircle, RefreshCw,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import FolderPicker from '../components/FolderPicker';
@@ -21,6 +21,19 @@ import {
 } from '../services/api';
 
 const emptyForm = () => ({ name: '', path: '', mode: 'inbox', displayNameOverride: '', bioOverride: '' });
+
+// A subscription row counts as "live" when its latest manifest was queued
+// within this window. Re-exports fire on every record edit (debounced ~3s
+// server-side) and propagate via chokidar in <1s — so a row received this
+// recently means the sender is actively editing the record right now.
+const SUBSCRIPTION_LIVE_WINDOW_MS = 5 * 60 * 1000;
+
+export function isLiveSubscription(item, now = Date.now()) {
+  if (!item || !item.subscription) return false;
+  const receivedMs = Date.parse(item.receivedAt);
+  if (!Number.isFinite(receivedMs)) return false;
+  return (now - receivedMs) < SUBSCRIPTION_LIVE_WINDOW_MS;
+}
 
 export default function Sharing() {
   const [buckets, setBuckets] = useState([]);
@@ -485,13 +498,22 @@ function Inboxlist({ bucket, items, onPromote, onDismiss }) {
         <li key={item.manifestId} className="p-3 bg-port-card border border-port-border rounded-lg">
           <div className="flex items-start justify-between gap-3">
             <div className="flex-1 min-w-0">
-              <div className="text-sm text-white">
+              <div className="text-sm text-white flex items-center gap-2 flex-wrap">
                 <span className="text-port-accent">{item.source}</span>
                 {item.producedByVersion && item.producedByVersion !== 'unknown' && (
-                  <span className="text-gray-500 text-[11px]"> (PortOS {item.producedByVersion})</span>
+                  <span className="text-gray-500 text-[11px]">(PortOS {item.producedByVersion})</span>
                 )}
-                <span className="text-gray-600"> · {item.kind}</span>
-                <span className="text-gray-600"> · {new Date(item.receivedAt || item.createdAt).toLocaleString()}</span>
+                <span className="text-gray-600">· {item.kind}</span>
+                <span className="text-gray-600">· {new Date(item.receivedAt || item.createdAt).toLocaleString()}</span>
+                {isLiveSubscription(item) && (
+                  <span
+                    className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-port-success/10 border border-port-success/30 text-[10px] text-port-success"
+                    title={`Subscription refreshed within the last ${SUBSCRIPTION_LIVE_WINDOW_MS / 60000} minutes — sender is actively editing`}
+                  >
+                    <RefreshCw size={9} className="animate-spin [animation-duration:3s]" />
+                    live
+                  </span>
+                )}
               </div>
               {item.sourceBio ? (
                 <div className="text-[11px] text-gray-500 mt-0.5 italic">{item.sourceBio}</div>

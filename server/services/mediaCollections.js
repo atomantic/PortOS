@@ -67,6 +67,7 @@ const sanitizeItem = (raw) => {
 };
 
 const UNIVERSE_ID_MAX = 80;
+const SERIES_ID_MAX = 80;
 
 const sanitizeCollection = (raw) => {
   if (!raw || typeof raw !== 'object') return null;
@@ -102,9 +103,15 @@ const sanitizeCollection = (raw) => {
   const universeId = typeof raw.universeId === 'string' && raw.universeId
     ? raw.universeId.slice(0, UNIVERSE_ID_MAX)
     : null;
+  // Mutually exclusive with universeId on read — a hand-edited record
+  // carrying both is resolved to the universe link (older, established
+  // relationship) so a single collection can't drive two subscriptions.
+  const seriesId = !universeId && typeof raw.seriesId === 'string' && raw.seriesId
+    ? raw.seriesId.slice(0, SERIES_ID_MAX)
+    : null;
   const createdAt = typeof raw.createdAt === 'string' ? raw.createdAt : new Date().toISOString();
   const updatedAt = typeof raw.updatedAt === 'string' ? raw.updatedAt : createdAt;
-  return { id: raw.id, name, description, coverKey, universeId, items, createdAt, updatedAt };
+  return { id: raw.id, name, description, coverKey, universeId, seriesId, items, createdAt, updatedAt };
 };
 
 export async function listCollections() {
@@ -312,6 +319,99 @@ export async function findOrCreateUniverseCollection({ universeId, universeName,
   });
 }
 
+// Series-side mirror of the universe collection helpers above
+// (`universeCollectionNameFor`, `findCollectionByUniverseId`,
+// `findOrCreateUniverseCollection`, `unlinkCollectionsForUniverse`,
+// `renameCollectionForUniverse`). Same resolution-order + orphan-avoidance
+// rules — see those functions' docstrings for the rationale.
+export const seriesCollectionNameFor = (seriesName) =>
+  `Series: ${typeof seriesName === 'string' ? seriesName : ''}`.slice(0, NAME_MAX_LENGTH);
+
+export async function findCollectionBySeriesId(seriesId) {
+  if (typeof seriesId !== 'string' || !seriesId) return null;
+  const needle = seriesId.slice(0, SERIES_ID_MAX);
+  const all = await listCollections();
+  return all.find((c) => c.seriesId === needle) || null;
+}
+
+export async function findOrCreateSeriesCollection({ seriesId, seriesName, description = '' }) {
+  if (!seriesId || typeof seriesId !== 'string') {
+    throw makeErr('seriesId is required', ERR_VALIDATION);
+  }
+  if (typeof seriesName !== 'string' || !seriesName.trim()) {
+    throw makeErr('seriesName is required', ERR_VALIDATION);
+  }
+  const normalizedSeriesId = seriesId.slice(0, SERIES_ID_MAX);
+  const desiredName = seriesCollectionNameFor(seriesName);
+  const trimmedDescription = typeof description === 'string'
+    ? description.trim().slice(0, DESCRIPTION_MAX_LENGTH)
+    : '';
+  return serializeFileWrite(async () => {
+    const all = await listCollections();
+    const linked = all.find((c) => c.seriesId === normalizedSeriesId);
+    if (linked) return linked;
+    const now = new Date().toISOString();
+    const next = {
+      id: randomUUID(),
+      name: desiredName,
+      description: trimmedDescription,
+      coverKey: null,
+      seriesId: normalizedSeriesId,
+      items: [],
+      createdAt: now,
+      updatedAt: now,
+    };
+    await writeAll([...all, next]);
+    return next;
+  });
+}
+
+export async function unlinkCollectionsForSeries(seriesId) {
+  if (typeof seriesId !== 'string' || !seriesId) return [];
+  const needle = seriesId.slice(0, SERIES_ID_MAX);
+  return serializeFileWrite(async () => {
+    const all = await listCollections();
+    const matches = all
+      .map((c, i) => (c.seriesId === needle ? i : -1))
+      .filter((i) => i >= 0);
+    if (!matches.length) return [];
+    const now = new Date().toISOString();
+    const next = [...all];
+    const unlinkedIds = [];
+    for (const i of matches) {
+      next[i] = { ...all[i], seriesId: null, updatedAt: now };
+      unlinkedIds.push(all[i].id);
+    }
+    await writeAll(next);
+    return unlinkedIds;
+  });
+}
+
+export async function renameCollectionForSeries(seriesId, newSeriesName) {
+  if (typeof seriesId !== 'string' || !seriesId) return null;
+  const needle = seriesId.slice(0, SERIES_ID_MAX);
+  return serializeFileWrite(async () => {
+    const all = await listCollections();
+    const matchIdxs = all
+      .map((c, i) => (c.seriesId === needle ? i : -1))
+      .filter((i) => i >= 0);
+    if (!matchIdxs.length) return null;
+    const desired = seriesCollectionNameFor(newSeriesName);
+    if (!desired) return all[matchIdxs[0]];
+    const now = new Date().toISOString();
+    const next = [...all];
+    let changed = false;
+    for (const i of matchIdxs) {
+      if (next[i].name === desired) continue;
+      next[i] = { ...next[i], name: desired, updatedAt: now };
+      changed = true;
+    }
+    if (!changed) return all[matchIdxs[0]];
+    await writeAll(next);
+    return next[matchIdxs[0]];
+  });
+}
+
 // Clear the `universeId` link on any collection bound to this universe.
 // Used by deleteUniverse to release the rename-lock so the orphaned bucket
 // becomes a normal user-owned collection (renamable, deletable, etc.). The
@@ -391,6 +491,12 @@ export async function updateCollection(id, patch) {
         ERR_VALIDATION,
       );
     }
+    if ('name' in patch && cur.seriesId && patch.name !== cur.name) {
+      throw makeErr(
+        'This collection is linked to a Series — rename the series to rename it.',
+        ERR_VALIDATION,
+      );
+    }
     // Cover key validation is deferred to sanitizeCollection on read, but we
     // also reject up-front so the API gives a clear error rather than silently
     // dropping the cover.
@@ -412,12 +518,12 @@ export async function updateCollection(id, patch) {
 }
 
 export async function deleteCollection(id) {
-  const deletedUniverseId = await serializeFileWrite(async () => {
+  const { universeId: deletedUniverseId, seriesId: deletedSeriesId } = await serializeFileWrite(async () => {
     const all = await listCollections();
     const target = all.find((c) => c.id === id);
     if (!target) throw makeErr(`Collection not found: ${id}`, ERR_NOT_FOUND);
     await writeAll(all.filter((c) => c.id !== id));
-    return target.universeId || null;
+    return { universeId: target.universeId || null, seriesId: target.seriesId || null };
   });
   // Mirror addItem/removeItem/bulkUpdateCollectionItems — universe-linked
   // shares need to know membership changed so the subscriber doesn't keep
@@ -425,6 +531,7 @@ export async function deleteCollection(id) {
   // fires. Emit outside the serialized critical section so subscribers'
   // own reads don't deadlock the tail.
   if (deletedUniverseId) emitRecordUpdated('universe', deletedUniverseId);
+  if (deletedSeriesId) emitRecordUpdated('series', deletedSeriesId);
   return { id };
 }
 
@@ -469,6 +576,7 @@ export async function addItem(id, item) {
   // Emit outside the serialized critical section — subscribers may issue
   // their own collection reads and we don't want to deadlock the tail.
   if (merged.universeId) emitRecordUpdated('universe', merged.universeId);
+  if (merged.seriesId) emitRecordUpdated('series', merged.seriesId);
   return merged;
 }
 
@@ -547,8 +655,9 @@ export async function bulkUpdateCollectionItems(id, { add = [], remove = [] } = 
     await writeAll(next);
     return { collection: merged, added: additions.length, removed };
   });
-  if (result.collection.universeId && (result.added || result.removed)) {
-    emitRecordUpdated('universe', result.collection.universeId);
+  if (result.added || result.removed) {
+    if (result.collection.universeId) emitRecordUpdated('universe', result.collection.universeId);
+    if (result.collection.seriesId) emitRecordUpdated('series', result.collection.seriesId);
   }
   return result;
 }
@@ -577,5 +686,6 @@ export async function removeItem(id, key) {
     return updated;
   });
   if (merged.universeId) emitRecordUpdated('universe', merged.universeId);
+  if (merged.seriesId) emitRecordUpdated('series', merged.seriesId);
   return merged;
 }

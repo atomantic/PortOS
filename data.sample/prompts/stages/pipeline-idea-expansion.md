@@ -14,7 +14,7 @@ You are a story consultant who turns a rough seed idea into a tight beat sheet f
 ### Characters in the series
 
 {{#series.characters}}
-- **{{name}}** — {{description}}
+- **{{name}}**{{#role}} ({{role}}){{/role}} — {{#physicalDescription}}{{physicalDescription}}{{/physicalDescription}}{{^physicalDescription}}{{description}}{{/physicalDescription}}{{#personality}} | personality: {{personality}}{{/personality}}{{#background}} | background: {{background}}{{/background}}
 {{/series.characters}}
 {{^series.characters}}
 *(No characters defined yet — invent placeholders only if absolutely required.)*

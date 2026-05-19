@@ -157,6 +157,20 @@ export const extractPipelineComicPages = (issueId, { force } = {}) =>
     body: JSON.stringify({ force }),
   });
 
+// Run canon extraction (characters/places/objects) against an issue's
+// comicScript or teleplay stage output and merge the result into the series'
+// linked universe. Auto-extract only fires after prose; this lets the writer
+// pull in minor entities introduced only in script-stage panel directions or
+// dialogue cues. Returns { universe, extracted: { characters, places, objects },
+// sourceStage, truncated } — `truncated` is true when the script exceeded
+// the server's 200K-char extract cap and was clamped before being sent to the LLM.
+export const extractPipelineCanonFromScript = (issueId, stageId, { providerOverride } = {}, options = {}) =>
+  request(`/pipeline/issues/${encodeURIComponent(issueId)}/stages/${encodeURIComponent(stageId)}/extract-canon`, {
+    method: 'POST',
+    body: JSON.stringify({ providerOverride }),
+    ...options,
+  });
+
 // Render a full comic page (multi-panel layout in one image) — the default
 // for cloud image models (Codex / Google), draft-quality for local models.
 // Server persists the returned jobId on stages.comicPages.pages[pageIndex].

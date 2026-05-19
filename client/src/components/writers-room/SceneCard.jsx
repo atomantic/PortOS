@@ -19,7 +19,7 @@ import { WR_IMAGE_DEFAULTS } from '../../lib/wrImageDefaults';
 import {
   buildScenePrompt,
   matchSceneCharacters,
-  matchSceneSetting,
+  matchScenePlace,
   normCharKey,
 } from '../../lib/scenePrompt';
 
@@ -34,7 +34,7 @@ const SceneCard = forwardRef(function SceneCard({
   initialImage = null,
   readingTheme = 'dark',
   charByKey = null,
-  settingByKey = null,
+  placeByKey = null,
   isActive = false,
   onJumpToProse = null,
   onDebug = null,
@@ -48,9 +48,9 @@ const SceneCard = forwardRef(function SceneCard({
     () => matchSceneCharacters(scene.characters, charByKey),
     [scene.characters, charByKey]
   );
-  const matchedSetting = useMemo(
-    () => matchSceneSetting(scene.slugline, settingByKey),
-    [scene.slugline, settingByKey]
+  const matchedPlace = useMemo(
+    () => matchScenePlace(scene.slugline, placeByKey),
+    [scene.slugline, placeByKey]
   );
   // Per-chip lookup map — name/alias keys → matched character profile. Built
   // once so the chip render is O(1) per chip instead of an O(chars × aliases)
@@ -158,7 +158,7 @@ const SceneCard = forwardRef(function SceneCard({
     setError(null);
     setProgress(null);
     setGenerated(null);
-    const prompt = buildScenePrompt(workTitle, scene, matchedCharacters, imageStyle?.prompt || '', matchedSetting);
+    const prompt = buildScenePrompt(workTitle, scene, matchedCharacters, imageStyle?.prompt || '', matchedPlace);
     const stepsNum = imageCfg.steps ? Number(imageCfg.steps) : undefined;
     const seedNum = imageCfg.seed && Number(imageCfg.seed) >= 0 ? Number(imageCfg.seed) : undefined;
     const res = await generateImage({
@@ -265,7 +265,7 @@ const SceneCard = forwardRef(function SceneCard({
           {scene.slugline && (
             <div
               className={`text-[10px] uppercase tracking-wide truncate transition-all ${
-                hotPlaceId && matchedSetting?.id === hotPlaceId
+                hotPlaceId && matchedPlace?.id === hotPlaceId
                   ? 'text-white bg-port-accent/30 ring-1 ring-port-accent rounded px-1 -mx-1'
                   : 'text-port-accent'
               }`}

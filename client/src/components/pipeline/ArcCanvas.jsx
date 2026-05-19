@@ -759,6 +759,8 @@ function SeasonRow({ series, season, seasons, issues, onSeriesUpdate, onIssuesUp
   const [editing, setEditing] = useState(false);
   const [verifying, setVerifying] = useState(false);
   const [verifyIssues, setVerifyIssues] = useState(null);
+  const [lockBusy, setLockBusy] = useState(false);
+  const seasonLocked = season.locked === true;
   // Volume beat-sheet bulk run — `active` gates SSE subscription; the latest
   // frame drives the per-issue label on the button.
   const [beatsActive, setBeatsActive] = useState(false);
@@ -864,9 +866,27 @@ function SeasonRow({ series, season, seasons, issues, onSeriesUpdate, onIssuesUp
     const n = result.createdIssues?.length || 0;
     const extracted = result.bibleExtracted;
     const extractedSummary = extracted
-      ? ` (+${extracted.characters} chars, +${extracted.settings} settings, +${extracted.objects} objects extracted)`
+      ? ` (+${extracted.characters} chars, +${extracted.places} places, +${extracted.objects} objects extracted)`
       : '';
     toast.success(`Generated ${n} issue${n === 1 ? '' : 's'} / episode${n === 1 ? '' : 's'}${extractedSummary}`);
+  };
+
+  const toggleSeasonLock = async () => {
+    const next = !seasonLocked;
+    setLockBusy(true);
+    const updated = await updatePipelineSeason(series.id, season.id, { locked: next }).catch((err) => {
+      toast.error(err.message || 'Lock toggle failed');
+      return null;
+    });
+    setLockBusy(false);
+    if (!updated) return;
+    onSeriesUpdate({
+      ...series,
+      seasons: seasons.map((s) => (s.id === season.id ? updated : s)),
+    });
+    toast.success(next
+      ? `Volume ${season.number} locked — generation, delete, and content edits are blocked`
+      : `Volume ${season.number} unlocked`);
   };
 
   // 'idle' | 'confirm' | 'deleting' — drives an inline confirm row that swaps
@@ -915,6 +935,25 @@ function SeasonRow({ series, season, seasons, issues, onSeriesUpdate, onIssuesUp
             <>
               <button
                 type="button"
+                onClick={toggleSeasonLock}
+                disabled={lockBusy}
+                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs border disabled:opacity-50 ${
+                  seasonLocked
+                    ? 'border-port-warning/40 text-port-warning hover:bg-port-warning/10'
+                    : 'border-port-border text-gray-400 hover:text-white'
+                }`}
+                title={seasonLocked
+                  ? 'Volume is locked — click to unlock and allow regeneration, delete, and content edits'
+                  : 'Lock this volume to prevent regeneration, delete, and content edits'}
+                aria-pressed={seasonLocked}
+              >
+                {lockBusy
+                  ? <Loader2 size={12} className="animate-spin" />
+                  : (seasonLocked ? <Lock size={12} /> : <Unlock size={12} />)}
+                {seasonLocked ? 'Locked' : 'Lock'}
+              </button>
+              <button
+                type="button"
                 onClick={() => setEditing(!editing)}
                 className="text-xs text-gray-400 hover:text-white"
               >
@@ -923,9 +962,12 @@ function SeasonRow({ series, season, seasons, issues, onSeriesUpdate, onIssuesUp
               <button
                 type="button"
                 onClick={() => setDeleteMode('confirm')}
-                className="p-1.5 text-gray-500 hover:text-port-error"
+                disabled={seasonLocked}
+                className="p-1.5 text-gray-500 hover:text-port-error disabled:opacity-40 disabled:hover:text-gray-500"
                 aria-label={`Delete volume / season ${season.title}`}
-                title="Delete volume / season"
+                title={seasonLocked
+                  ? 'Volume is locked — unlock to delete'
+                  : 'Delete volume / season'}
               >
                 <Trash2 size={12} />
               </button>
@@ -960,7 +1002,13 @@ function SeasonRow({ series, season, seasons, issues, onSeriesUpdate, onIssuesUp
       </div>
 
       {editing ? (
-        <SeasonEditor series={series} season={season} seasons={seasons} onSeriesUpdate={onSeriesUpdate} />
+        <SeasonEditor
+          series={series}
+          season={season}
+          seasons={seasons}
+          onSeriesUpdate={onSeriesUpdate}
+          seasonLocked={seasonLocked}
+        />
       ) : !collapsed && (season.logline || season.synopsis) ? (
         <div className="px-3 pb-2 text-xs text-gray-400 space-y-1">
           {season.logline ? <p className="italic">{season.logline}</p> : null}
@@ -971,6 +1019,12 @@ function SeasonRow({ series, season, seasons, issues, onSeriesUpdate, onIssuesUp
             </details>
           ) : null}
           {season.endingHook ? <p className="text-port-accent/80">↪ {season.endingHook}</p> : null}
+        </div>
+      ) : null}
+
+      {!collapsed && seasonLocked ? (
+        <div className="px-3 pb-2 text-xs text-port-warning flex items-center gap-1.5">
+          <Lock size={11} /> Volume locked — generation, delete, and content edits are blocked. Unlock above to make changes.
         </div>
       ) : null}
 
@@ -1004,6 +1058,7 @@ function SeasonRow({ series, season, seasons, issues, onSeriesUpdate, onIssuesUp
           <SeasonActions
             series={series}
             season={season}
+            seasonLocked={seasonLocked}
             hasArc={hasArc}
             hasEpisodes={hasEpisodes}
             generatingEpisodes={generatingEpisodes}
@@ -1275,21 +1330,29 @@ function VolumeCoverEditorBox({
   );
 }
 
-function SeasonEditor({ series, season, seasons, onSeriesUpdate }) {
+function SeasonEditor({ series, season, seasons, onSeriesUpdate, seasonLocked = false }) {
   const [draft, setDraft] = useState(season);
   const [saving, setSaving] = useState(false);
+  // Content fields (title/number/logline/synopsis/endingHook/episodeCountTarget)
+  // are frozen when the season is locked — status stays editable since
+  // production workflow can advance independently of editorial freeze.
+  // Server's `LOCKED_SEASON_ALLOWED_KEYS` mirrors this contract.
+  const contentDisabled = seasonLocked;
 
   const save = async () => {
     setSaving(true);
-    const updated = await updatePipelineSeason(series.id, season.id, {
-      title: draft.title,
-      number: Number(draft.number) || season.number,
-      logline: draft.logline,
-      synopsis: draft.synopsis,
-      endingHook: draft.endingHook,
-      episodeCountTarget: Number(draft.episodeCountTarget) || 0,
-      status: draft.status,
-    }).catch((err) => {
+    const patch = seasonLocked
+      ? { status: draft.status }
+      : {
+        title: draft.title,
+        number: Number(draft.number) || season.number,
+        logline: draft.logline,
+        synopsis: draft.synopsis,
+        endingHook: draft.endingHook,
+        episodeCountTarget: Number(draft.episodeCountTarget) || 0,
+        status: draft.status,
+      };
+    const updated = await updatePipelineSeason(series.id, season.id, patch).catch((err) => {
       toast.error(err.message || 'Save failed');
       return null;
     });
@@ -1302,22 +1365,26 @@ function SeasonEditor({ series, season, seasons, onSeriesUpdate }) {
     toast.success('Volume / season saved');
   };
 
+  const contentInputClass = `px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm ${contentDisabled ? 'opacity-60' : ''}`;
+
   return (
     <div className="px-3 pb-3 space-y-2 bg-port-bg/40 border-t border-port-border">
       <div className="grid grid-cols-[1fr_auto] gap-2 pt-2">
         <input
           value={draft.title || ''}
           onChange={(e) => setDraft({ ...draft, title: e.target.value })}
+          disabled={contentDisabled}
           placeholder="Title"
-          className="px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm"
+          className={contentInputClass}
           maxLength={200}
         />
         <input
           type="number"
           value={draft.number || 0}
           onChange={(e) => setDraft({ ...draft, number: parseInt(e.target.value, 10) || 0 })}
+          disabled={contentDisabled}
           placeholder="#"
-          className="w-16 px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm"
+          className={`w-16 ${contentInputClass}`}
           min={0}
           max={99}
         />
@@ -1325,33 +1392,37 @@ function SeasonEditor({ series, season, seasons, onSeriesUpdate }) {
       <input
         value={draft.logline || ''}
         onChange={(e) => setDraft({ ...draft, logline: e.target.value })}
+        disabled={contentDisabled}
         placeholder="One-sentence logline"
-        className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm"
+        className={`w-full ${contentInputClass}`}
         maxLength={500}
       />
       <textarea
         value={draft.synopsis || ''}
         onChange={(e) => setDraft({ ...draft, synopsis: e.target.value })}
+        disabled={contentDisabled}
         placeholder="Season synopsis (~200 words)"
         rows={4}
-        className="w-full px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm"
+        className={`w-full ${contentInputClass}`}
         maxLength={4000}
       />
       <div className="grid grid-cols-2 gap-2">
         <input
           value={draft.endingHook || ''}
           onChange={(e) => setDraft({ ...draft, endingHook: e.target.value })}
+          disabled={contentDisabled}
           placeholder="Ending hook"
-          className="px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm"
+          className={contentInputClass}
           maxLength={1000}
         />
         <input
           type="number"
           value={draft.episodeCountTarget || 0}
           onChange={(e) => setDraft({ ...draft, episodeCountTarget: parseInt(e.target.value, 10) || 0 })}
+          disabled={contentDisabled}
           placeholder="Issue / episode target"
           title="Issue / episode count target for this volume / season"
-          className="px-2 py-1.5 bg-port-bg border border-port-border rounded text-white text-sm"
+          className={contentInputClass}
           min={0}
         />
       </div>
@@ -1392,7 +1463,7 @@ const BEATS_FRAME_LABELS = {
 };
 
 function SeasonActions({
-  series, season, hasArc, hasEpisodes, generatingEpisodes,
+  series, season, seasonLocked = false, hasArc, hasEpisodes, generatingEpisodes,
   verifying, onGenerateEpisodes, onValidateVolume, onIssuesUpdate,
   beatsActive, beatsStarting, beatsLatest, onStartBeats, onCancelBeats,
 }) {
@@ -1487,13 +1558,15 @@ function SeasonActions({
             <button
               type="button"
               onClick={onGenerateEpisodes}
-              disabled={generatingEpisodes || hasEpisodes || !seasonHasContext}
+              disabled={generatingEpisodes || hasEpisodes || !seasonHasContext || seasonLocked}
               title={
-                hasEpisodes
-                  ? 'Volume already has issues / episodes'
-                  : !seasonHasContext
-                    ? 'Add a volume logline or synopsis first'
-                    : 'Have an LLM plan the per-issue / per-episode breakdown'
+                seasonLocked
+                  ? 'Volume is locked — unlock to generate episodes'
+                  : hasEpisodes
+                    ? 'Volume already has issues / episodes'
+                    : !seasonHasContext
+                      ? 'Add a volume logline or synopsis first'
+                      : 'Have an LLM plan the per-issue / per-episode breakdown'
               }
               className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs text-port-accent hover:text-white border border-port-border bg-port-bg hover:border-port-accent/40 disabled:opacity-40 disabled:hover:text-port-accent"
             >

@@ -20,6 +20,7 @@ Most developers juggle a dozen tools — PM2 terminals, JIRA boards, AI chat win
 
 - **One dashboard** for all your apps, agents, and knowledge
 - **AI agents that work while you sleep** — autonomous task execution with multi-model orchestration
+- **A complete creative studio** — write prose, generate stills/video, plan multi-issue series, and ship to friends over a synced share folder
 - **Your identity, quantified** — genomics, chronotype, taste profiling, and mortality-aware goal tracking
 - **Second brain included** — capture thoughts, auto-classify them, and surface insights with daily digests
 - **Mobile-first design** — manage your entire dev environment from your phone
@@ -35,6 +36,10 @@ Most developers juggle a dozen tools — PM2 terminals, JIRA boards, AI chat win
 | App Wizard | PM2 Processes | Chief of Staff Tasks |
 |:-:|:-:|:-:|
 | ![App Wizard](./docs/media/portos_4.png) | ![PM2 Processes](./docs/media/portos_5.png) | ![Chief of Staff Tasks](./docs/media/portos_6.png) |
+
+| Login | CyberCity |
+|:-:|:-:|
+| ![Login](./docs/media/portos_0.png) | ![CyberCity](./docs/media/portos_7.png) |
 
 ---
 
@@ -65,6 +70,23 @@ An autonomous AI agent orchestrator that manages your development workflow. Subm
 - **Productivity Analytics** — Work streaks, hourly/daily patterns, milestones, and AI-generated weekly digests
 - **Decision Transparency** — Every skip, switch, and routing decision is logged with reasons, surfaced on the dashboard
 
+### Create Suite
+
+A full creative studio for taking an idea from blank page to finished media. Each surface feeds the next — prose drafted in Writers Room becomes a series in the Pipeline, the Pipeline pulls characters and locations from a Universe Builder canon, the canon generates reference images through Media Gen, and finished work goes out through Sharing.
+
+- **Writers Room** — Distraction-free writing environment with folders, works, drafts, and version history. Includes a "write for 10" timed exercise with live word count and explicit AI passes (summary, character/scene extraction, expansion recommendations, prose-to-script, media planning) ([Writers Room docs](./docs/features/writers-room.md))
+- **Universe Builder** — Describe a world in one prompt, expand it into a full bible (logline, premise, style notes, characters, locations, items, factions, lore), generate per-category variations, promote them to canon, and render reference images that all land in one auto-named collection. Lockable fields prevent regenerate-overwrites of approved canon
+- **Series Pipeline** — Long-lived parent for multi-issue/episode productions. Each series carries its own arc shape (Pixar / Save the Cat / Freytag / custom), volume + season outlines, story bible, and per-issue stages (script → storyboard → comic pages or video render). Arc-stage approval locks freeze the approved version against accidental regeneration
+- **Media Gen** — Unified surface for image and video generation across local and external backends:
+  - **Image** — FLUX.1, FLUX.2 (klein), Z-Image via MFLUX/diffusers locally; A1111 / external endpoints; OpenAI Codex `gpt-image` mode
+  - **Video** — LTX models via `mlx_video` on macOS, diffusers on Windows. Modes: text-to-video, image-to-video, first/last-frame, extend, audio-to-video
+  - **Creative Director** — Treatment → scene plan → render orchestration for short films, with a media job queue serializing local GPU work
+  - **Timeline Editor** — Stitch clips, scenes, and audio into longer videos
+  - **Collections / History / Models / LoRAs** — Browse generated assets, install Civitai LoRAs by URL, and manage installed model weights
+- **Importer** — Drop in an external manuscript (short story, novel, screenplay, comic script). The importer analyzes the text, suggests an arc shape, classifies characters/locations/scenes, and commits the result as either a new Writers Room work or a Pipeline series with a pre-filled bible
+- **Sharing** — Cross-network share buckets via cloud-synced folders (Dropbox / iCloud / etc.). Register a bucket, pick `auto-merge` or `inbox` mode, and outgoing PortOS records (universes, series, characters, media) propagate to friends running their own PortOS instance. Live subscription indicators surface when the sender is actively editing
+- **Image Cleaner** — Strip backgrounds, remove unwanted elements, and prep stills for downstream renders
+
 ### Digital Twin
 
 An identity scaffolding system for building a quantified AI representation of yourself. Your digital twin informs every agent prompt, ensuring AI interactions align with your values and style. ([Full docs](./docs/features/digital-twin.md) | [Identity System docs](./docs/features/identity-system.md))
@@ -72,11 +94,16 @@ An identity scaffolding system for building a quantified AI representation of yo
 - **Genome Analysis** — Upload 23andMe data for 117 curated SNP markers across 32 categories with ClinVar integration ([Soul System docs](./docs/features/soul-system.md))
 - **Chronotype Profiling** — 5 sleep-related genetic markers derive evening/morning preference with caffeine and meal timing recommendations
 - **Taste Profiling** — Likert-scale preference scoring across 7 aesthetic domains (movies, music, art, architecture, food, fashion, digital) with AI-generated summaries
-- **Mortality-Aware Goals** — Life expectancy from actuarial data + 10 genome longevity markers, with urgency scoring for goal prioritization
+- **Mortality-Aware Goals** — Life expectancy from actuarial data + 10 genome longevity markers, with urgency scoring for goal prioritization (Goals tab supports tree + list views)
 - **Behavioral Testing** — Run alignment tests across 14 dimensions with multi-model comparison
 - **Contradiction Detection** — AI analysis flags inconsistencies across identity documents
 - **Enrichment Questionnaire** — Guided questions across 14 categories to deepen the identity model
 - **Writing Style Analysis** — Extract voice patterns and communication style from writing samples
+- **Autobiography** — Long-form narrative biography assembled from identity, documents, and journal data
+- **Ask Yourself** — Chat with your own twin: ask questions and get answers grounded in your identity, goals, memory, and Brain content
+- **Character Sheet** — RPG-style aggregate view of your stats, traits, achievements, and current quests
+- **Time Capsule** — Snapshot your current twin and seal it; the future can replay how you saw yourself today
+- **Accounts** — Aggregate external accounts (Spotify, Google, etc.) that feed identity signals
 - **Import/Export** — Import from Spotify and other sources; export as system prompt, CLAUDE.md, JSON, or individual files
 - **Creation Wizard** — 5-step guided setup for building a new digital twin from scratch
 
@@ -86,11 +113,39 @@ A thought capture and knowledge management system — your offline-first externa
 
 - **Thought Capture** — Natural language input with AI-powered auto-classification into People, Projects, Ideas, and Admin
 - **Inbox Review** — Validate and correct AI classifications before they're filed (confidence threshold gating)
-- **Knowledge Links** — Build a graph of connections between thoughts, people, and projects
+- **Daily Log + Notes** — Append-only daily journal alongside long-form notes; both flow into the same retrieval surface
+- **Feeds (RSS)** — Subscribe to RSS sources; new items land in the Brain inbox for review/triage
+- **Rapid Reader** — Speed-reading view for long inbox items with adjustable WPM
+- **Knowledge Links + Graph** — Build a graph of connections between thoughts, people, and projects; visualize it
 - **Memory System** — Long-term memory storage with vector similarity search, BM25 retrieval, and automatic consolidation ([Memory docs](./docs/features/memory-system.md))
+- **Insights** — Cross-domain narratives (genome↔health correlations, taste↔identity themes) generated from captured data
 - **Daily/Weekly Digest** — AI-curated summaries of captured knowledge (< 150 / 250 words)
 - **Trust Scoring** — Rate data source reliability for better knowledge hygiene
+- **Import** — Pull in data from external sources into the Brain pipeline
 - **JSONL Audit Trail** — Full provenance tracking for every classified item
+
+### Comms
+
+Unified inbox for everything that talks back at you — email, chat, agent-generated drafts, and external operator chats.
+
+- **Inbox / Drafts / Sync** — Aggregated message inbox with AI-generated drafts you can approve, edit, or discard before sending
+- **OpenClaw** — In-app chat with external operator agents (computer-use, Anthropic operator, etc.) with app context, attachments, and streaming responses ([OpenClaw docs](./docs/features/openclaw-operator-chat.md))
+- **Social Agents** — Personality-driven agents that handle specific accounts/personas
+
+### Calendar
+
+A unified calendar surface that pulls from Google Calendar (and other sources) and lays them out across multiple horizons.
+
+- **Day / Week / Month / Agenda** — Standard calendar views with edit-in-place event handling
+- **Lifetime View** — Your life as a grid of weeks against actuarial-derived life expectancy (powered by MortalLoom)
+- **Review** — End-of-period retrospective surface that pulls in completed tasks, CoS digests, and journal entries
+- **Sync** — Configurable bidirectional sync with external calendars
+
+### Wiki
+
+Personal long-form knowledge base — separate from Brain (capture surface) and Notes (drafts) — for curated, evergreen reference material.
+
+- **Browse / Search / Graph / Log** — Wiki-style page navigation with full-text search, backlink graph, and edit history
 
 ### POST (Daily Cognitive Training)
 
@@ -107,15 +162,24 @@ A gamified daily cognitive self-test in ~5 minutes across 5 domains. ([Full docs
 
 Everything you need to manage your dev environment without leaving the browser.
 
-- **Web Shell** — Full terminal emulator (xterm.js + node-pty) with multi-session support and Ghostty theme integration
+- **Web Shell** — Full terminal emulator (xterm.js + node-pty) with multi-session support, attach/detach across browsers, and Ghostty theme integration
 - **AI Runner** — Execute prompts across any configured provider directly from the UI ([Prompt Manager docs](./docs/features/prompt-manager.md))
+- **AI Runs / AI Agents** — Live + historical views of every AI invocation across PortOS with runtime stats, app badges, and JIRA ticket links
+- **Feature Agents** — Long-running, scoped agents that own a feature area and pick up work autonomously
 - **Process Monitor** — View all PM2 processes with live memory, CPU, uptime, and restart controls
-- **Agent Tracker** — Monitor running AI agents with runtime stats, app badges, and JIRA ticket links
-- **Git Management** — Branch status, release workflows, and PR creation
+- **GitHub** — Per-repo branch/PR status, release workflows, and PR creation from the dashboard
+- **Submodules** — Track and update git submodules across all registered apps
+- **JIRA + JIRA Reports** — Per-app sprint board, ticket creation, and weekly/monthly reporting ([Sprint Manager docs](./docs/features/jira-sprint-manager.md))
+- **DataDog** — Wire in a DataDog API key to surface logs/metrics from monitored apps
+- **Loops** — Schedule recurring work (cron-style) for any PortOS action or agent task
 - **Action History** — Searchable log of all executed actions with filtering and statistics
+- **Usage** — Token spend and cost tracking across all configured AI providers
 - **CyberCity** — 3D voxel city visualization of your apps and agents in real-time ([CyberCity V2 docs](./docs/features/cybercity-v2.md))
 - **Browser Control** — Remote Chrome DevTools Protocol integration for headless browser management ([Browser docs](./docs/features/browser.md))
 - **Code Runner** — In-app code execution with syntax highlighting
+- **Reference Repos** — Cross-app index of reference repositories (libraries you read but don't own) for grounding agents
+- **Templates** — Scaffold new apps from pre-built templates wired up to your AI providers
+- **Review Hub** — Single inbox for actionable items (CoS approvals, alerts, todos, briefings) across every PortOS subsystem
 
 ### Voice Mode (Local)
 
@@ -144,12 +208,18 @@ Track your biological self alongside your digital one.
 ### Infrastructure
 
 - **Mobile Ready** — Responsive design with collapsible sidebar for on-the-go access
-- **Multi-Provider AI** — Configure Claude, OpenAI, Gemini, Ollama, LM Studio, and more with model tiers and fallback chains (via [portos-ai-toolkit](https://www.npmjs.com/package/portos-ai-toolkit))
+- **Ambient Mode** — Full-screen "always-on display" view for a wall tablet or spare monitor (clock, agenda, death-clock, key metrics)
+- **Command Palette (⌘K)** — Fuzzy-search every page, action, and dashboard layout in PortOS from one input. The same manifest powers voice navigation (`ui_navigate`)
+- **Dashboard Layouts** — Multiple named dashboard layouts (default, focus, morning-review, ops) with a 12-column drag/resize grid; switch between them from `⌘K`
+- **Theming** — Day/night theme pairs with one-click toggle
+- **Multi-Provider AI** — Configure Claude, OpenAI, Gemini, Ollama, LM Studio, and more with model tiers, fallback chains, and per-provider availability tracking
 - **Secret Management** — Environment variable masking, API key redaction, and PTY shell allowlisting
 - **File Uploads** — Drag-and-drop file storage with preview support
 - **Multi-Instance** — Peer-to-peer networking between PortOS instances with app and agent availability across nodes
+- **Cross-Network Sharing** — Sync universes, series, characters, and media to friends via cloud-folder share buckets (Dropbox, iCloud, etc.) without a central server
 - **Telegram Integration** — Bot integration for notification routing
 - **Database Backups** — Scheduled PostgreSQL backups with cron configuration
+- **Filesystem Backups** — rsync-based scheduled backups with overridable default-excludes for re-downloadable assets (LoRAs, model weights, COS caches)
 - **Graceful Error Handling** — Centralized error normalization with real-time UI notifications and automatic CoS task creation for critical failures ([Error Handling docs](./docs/features/error-handling.md))
 
 ---
@@ -209,11 +279,13 @@ PortOS binds to `0.0.0.0` so you can access it from any device on your Tailscale
 
 ```
 PortOS/
-├── client/              # React + Vite frontend (port 5554)
-├── server/              # Express.js API (port 5555)
-├── data/                # Runtime data (apps, providers, history)
-├── data.sample/         # Sample configurations to copy
+├── client/              # React + Vite frontend (Vite dev on :5554)
+├── server/              # Express.js API (always serves on :5555)
+├── data/                # Runtime data (apps, providers, history, brain, pipeline, …)
+├── data.sample/         # Sample configurations to copy on first install
 ├── docs/                # Documentation and screenshots
+├── lib/slashdo/         # Slashdo submodule (provides /do:* slash commands)
+├── scripts/             # Setup, migration, and maintenance scripts
 └── ecosystem.config.cjs # PM2 configuration
 ```
 
@@ -278,6 +350,8 @@ Configure AI providers for the runner and Chief of Staff:
 - [CyberCity V2](./docs/features/cybercity-v2.md) — 3D systems visualization
 - [Prompt Manager](./docs/features/prompt-manager.md) — Customizable AI prompt templates
 - [JIRA Sprint Manager](./docs/features/jira-sprint-manager.md) — Autonomous JIRA triage and implementation
+- [Writers Room](./docs/features/writers-room.md) — Prose-to-media writing environment with explicit AI passes
+- [OpenClaw](./docs/features/openclaw-operator-chat.md) — In-app operator-agent chat
 - [Error Handling](./docs/features/error-handling.md) — Centralized error normalization and recovery
 
 ## Contributing

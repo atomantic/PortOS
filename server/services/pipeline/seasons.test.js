@@ -145,4 +145,59 @@ describe('pipeline seasons service', () => {
     await expect(svc.deleteSeason(s.id, 'sea-nope'))
       .rejects.toMatchObject({ code: svc.ERR_NOT_FOUND });
   });
+
+  // ─── Per-season editorial lock ───────────────────────────────────────────
+  // A locked season freezes its content fields against rewriters; only an
+  // unlock (locked: false) or a production-status flip may patch through.
+  // Pairs with `LOCKED_SEASON_ALLOWED_KEYS` server-side.
+  it('updateSeason allows toggling lock on + off without other fields', async () => {
+    const s = await setupSeries();
+    const a = await svc.createSeason(s.id, { title: 'Pilot' });
+    const locked = await svc.updateSeason(s.id, a.id, { locked: true });
+    expect(locked.locked).toBe(true);
+    const unlocked = await svc.updateSeason(s.id, a.id, { locked: false });
+    expect(unlocked.locked).toBe(false);
+  });
+
+  it('updateSeason refuses content patches on a locked season', async () => {
+    const s = await setupSeries();
+    const a = await svc.createSeason(s.id, { title: 'Pilot' });
+    await svc.updateSeason(s.id, a.id, { locked: true });
+    await expect(svc.updateSeason(s.id, a.id, { logline: 'New' }))
+      .rejects.toMatchObject({ code: svc.ERR_LOCKED });
+    // Content unchanged.
+    const reloaded = (await svc.listSeasons(s.id))[0];
+    expect(reloaded.logline).toBe('');
+    expect(reloaded.locked).toBe(true);
+  });
+
+  it('updateSeason allows status flips on a locked season', async () => {
+    const s = await setupSeries();
+    const a = await svc.createSeason(s.id, { title: 'Pilot' });
+    await svc.updateSeason(s.id, a.id, { locked: true });
+    // status is in `LOCKED_SEASON_ALLOWED_KEYS` — production workflow can
+    // advance without an editorial unlock.
+    const patched = await svc.updateSeason(s.id, a.id, { status: 'in-production' });
+    expect(patched.status).toBe('in-production');
+    expect(patched.locked).toBe(true);
+  });
+
+  it('updateSeason allows unlock + edit in one patch', async () => {
+    const s = await setupSeries();
+    const a = await svc.createSeason(s.id, { title: 'Pilot' });
+    await svc.updateSeason(s.id, a.id, { locked: true });
+    const patched = await svc.updateSeason(s.id, a.id, { locked: false, logline: 'Reopened' });
+    expect(patched.locked).toBe(false);
+    expect(patched.logline).toBe('Reopened');
+  });
+
+  it('deleteSeason refuses to delete a locked season', async () => {
+    const s = await setupSeries();
+    const a = await svc.createSeason(s.id, { title: 'Pilot' });
+    await svc.updateSeason(s.id, a.id, { locked: true });
+    await expect(svc.deleteSeason(s.id, a.id))
+      .rejects.toMatchObject({ code: svc.ERR_LOCKED });
+    // Season still present.
+    expect((await svc.listSeasons(s.id)).map((x) => x.id)).toEqual([a.id]);
+  });
 });

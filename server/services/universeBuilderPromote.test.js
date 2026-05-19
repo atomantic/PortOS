@@ -18,20 +18,17 @@ vi.mock('crypto', async () => {
   return { ...actual, randomUUID: () => `uuid-${++uuidCounter}` };
 });
 
-// Stub the provider + LLM dispatch so tests don't need a live runner. The
+// Stub the LLM dispatch so tests don't need a live runner. The
 // `runPromptThroughProvider` mock is overridden per-test to return the
-// per-kind JSON shape we expect from the LLM.
-const getActiveProviderMock = vi.fn();
-const getProviderByIdMock = vi.fn();
-vi.mock('./providers.js', () => ({
-  getActiveProvider: (...a) => getActiveProviderMock(...a),
-  getProviderById: (...a) => getProviderByIdMock(...a),
-}));
-
+// per-kind JSON shape we expect from the LLM. `resolveProviderAndModel`
+// is stubbed flat — `promptRunner.test.js` already exercises its real
+// branching, so re-mirroring it here would just double-mock the same
+// contract.
+const resolveProviderAndModelMock = vi.fn();
 const runPromptThroughProviderMock = vi.fn();
 vi.mock('../lib/promptRunner.js', () => ({
   runPromptThroughProvider: (...a) => runPromptThroughProviderMock(...a),
-  resolveEffectiveModel: (_provider, model) => model || 'mock-default',
+  resolveProviderAndModel: (...a) => resolveProviderAndModelMock(...a),
 }));
 
 // Pull services AFTER mocks register so module-level imports resolve through
@@ -62,19 +59,19 @@ const mockLlm = (entry) => {
 beforeEach(() => {
   fileStore.clear();
   uuidCounter = 0;
-  getActiveProviderMock.mockReset();
-  getProviderByIdMock.mockReset();
+  resolveProviderAndModelMock.mockReset();
   runPromptThroughProviderMock.mockReset();
-  getActiveProviderMock.mockResolvedValue({
-    id: 'provider-mock', name: 'Mock', type: 'api', defaultModel: 'mock-default',
+  resolveProviderAndModelMock.mockResolvedValue({
+    provider: { id: 'provider-mock', name: 'Mock', type: 'api', defaultModel: 'mock-default' },
+    selectedModel: 'mock-default',
   });
 });
 
 describe('universeBuilderPromote — happy path', () => {
-  it('promotes a variation from a settings-kinded bucket into universe.settings[]', async () => {
+  it('promotes a variation from a settings-kinded bucket into universe.places[]', async () => {
     const w = await seedUniverseWithBucket({
       landscapes: {
-        kind: 'settings',
+        kind: 'places',
         variations: [
           { label: 'Crystalline canyon', prompt: 'vast crystalline canyon, salt flats' },
           { label: 'Scrap dune sea', prompt: 'rolling dunes of rusted scrap' },
@@ -95,12 +92,17 @@ describe('universeBuilderPromote — happy path', () => {
     const result = await promoteSvc.promoteVariationToCanon(w.id, {
       category: 'landscapes',
       label: 'Crystalline canyon',
+      providerId: 'p-explicit',
+      model: 'm-explicit',
     });
 
-    expect(result.targetKind).toBe('settings');
+    // Arg-shape pin: a future typo (provider/Provider/etc.) would silently
+    // pass under a flat resolver mock without this assertion.
+    expect(resolveProviderAndModelMock).toHaveBeenCalledWith({ providerId: 'p-explicit', model: 'm-explicit' });
+    expect(result.targetKind).toBe('places');
     expect(result.entry.name).toBe('Crystalline Canyon');
     expect(result.entry.palette).toContain('pale violet');
-    expect(result.universe.settings.some((e) => e.name === 'Crystalline Canyon')).toBe(true);
+    expect(result.universe.places.some((e) => e.name === 'Crystalline Canyon')).toBe(true);
     // The source variation is removed from its bucket.
     const remainingLabels = result.universe.categories.landscapes.variations.map((v) => v.label);
     expect(remainingLabels).toEqual(['Scrap dune sea']);
@@ -139,7 +141,7 @@ describe('universeBuilderPromote — happy path', () => {
   it('matches variation labels case-insensitively', async () => {
     const w = await seedUniverseWithBucket({
       colonies: {
-        kind: 'settings',
+        kind: 'places',
         variations: [{ label: 'Gas-Giant Drifters', prompt: 'balloon settlements in the upper atmosphere' }],
       },
     });
@@ -150,7 +152,7 @@ describe('universeBuilderPromote — happy path', () => {
       label: 'gas-giant drifters', // lowercase
     });
 
-    expect(result.universe.settings.find((s) => s.name === 'Gas-Giant Drifters')).toBeTruthy();
+    expect(result.universe.places.find((s) => s.name === 'Gas-Giant Drifters')).toBeTruthy();
   });
 
   it('seeds entry.name from the variation label when the LLM omits name', async () => {
@@ -231,11 +233,11 @@ describe('universeBuilderPromote — targetKind override + other-bucket gate', (
   it('rejects invalid targetKind even for non-other buckets', async () => {
     const w = await seedUniverseWithBucket({
       landscapes: {
-        kind: 'settings',
+        kind: 'places',
         variations: [{ label: 'Salt flats', prompt: 'horizon-spanning salt flats' }],
       },
     });
-    // The bucket kind is 'settings', so the server should ignore an
+    // The bucket kind is 'places', so the server should ignore an
     // ill-typed targetKind and proceed with the bucket-derived kind. (The
     // route schema would reject the bad value before reaching here in prod.)
     mockLlm({ name: 'Salt Flats', description: 'A flat expanse.', prompt: 'horizon salt flats' });
@@ -244,7 +246,7 @@ describe('universeBuilderPromote — targetKind override + other-bucket gate', (
       label: 'Salt flats',
       targetKind: 'invalid',
     });
-    expect(result.targetKind).toBe('settings');
+    expect(result.targetKind).toBe('places');
   });
 });
 
@@ -252,7 +254,7 @@ describe('universeBuilderPromote — error paths', () => {
   it('404s when the category does not exist', async () => {
     const w = await seedUniverseWithBucket({
       landscapes: {
-        kind: 'settings',
+        kind: 'places',
         variations: [{ label: 'A', prompt: 'a' }],
       },
     });
@@ -264,7 +266,7 @@ describe('universeBuilderPromote — error paths', () => {
   it('404s when the variation label does not match', async () => {
     const w = await seedUniverseWithBucket({
       landscapes: {
-        kind: 'settings',
+        kind: 'places',
         variations: [{ label: 'A', prompt: 'a' }],
       },
     });
@@ -294,11 +296,11 @@ describe('universeBuilderPromote — error paths', () => {
     const w = await seedUniverseWithBucket(
       {
         landscapes: {
-          kind: 'settings',
+          kind: 'places',
           variations: [{ label: 'Crystalline Canyon', prompt: 'salt-crystal walls' }],
         },
       },
-      { settings: existing },
+      { places: existing },
     );
     await expect(
       promoteSvc.promoteVariationToCanon(w.id, {
@@ -311,10 +313,37 @@ describe('universeBuilderPromote — error paths', () => {
     expect(runPromptThroughProviderMock).not.toHaveBeenCalled();
   });
 
+  it('409s on settings slugline collision (name differs, slugline matches)', async () => {
+    // Variation label maps to an existing setting via slugline normalization
+    // — the name-only check would miss this, but the kind-specific slugline
+    // fallback catches it.
+    const existing = [{
+      name: 'Foundry City Bay',
+      slugline: 'EXT. FOUNDRY CITY — DAY',
+      description: 'A pre-existing canon entry keyed by slugline.',
+    }];
+    const w = await seedUniverseWithBucket(
+      {
+        landscapes: {
+          kind: 'places',
+          variations: [{ label: 'EXT. FOUNDRY CITY - DAY', prompt: 'dawn light over docks' }],
+        },
+      },
+      { places: existing },
+    );
+    await expect(
+      promoteSvc.promoteVariationToCanon(w.id, {
+        category: 'landscapes',
+        label: 'EXT. FOUNDRY CITY - DAY',
+      }),
+    ).rejects.toMatchObject({ status: 409, code: 'UNIVERSE_PROMOTE_DUPLICATE' });
+    expect(runPromptThroughProviderMock).not.toHaveBeenCalled();
+  });
+
   it('throws 502 when the LLM returns invalid JSON', async () => {
     const w = await seedUniverseWithBucket({
       landscapes: {
-        kind: 'settings',
+        kind: 'places',
         variations: [{ label: 'A', prompt: 'a' }],
       },
     });
@@ -358,7 +387,7 @@ describe('universeBuilderPromote — control field stripping', () => {
   it('drops hallucinated id / locked / imageRefs from the LLM response', async () => {
     const w = await seedUniverseWithBucket({
       landscapes: {
-        kind: 'settings',
+        kind: 'places',
         variations: [{ label: 'Salt Flats', prompt: 'horizon salt flats' }],
       },
     });
@@ -377,8 +406,11 @@ describe('universeBuilderPromote — control field stripping', () => {
     });
     // ID stripped → sanitizer mints a fresh one.
     expect(result.entry.id).not.toBe('set-hallucinated');
-    // `locked` stripped → user has to explicitly lock from the canon UI.
-    expect(result.entry.locked).toBeUndefined();
+    // LLM's `locked` flag is stripped, but promote stamps `locked: true` at
+    // the service layer as part of the universe-builder lock-by-default
+    // contract — promoted identities are user-deliberate so AI rewrite paths
+    // should skip them until the user explicitly unlocks.
+    expect(result.entry.locked).toBe(true);
     // Image refs stripped → those are operational, owned by the render UI.
     expect(result.entry.imageRefs).toEqual([]);
     expect(result.entry.primaryImageRef).toBe(null);
@@ -389,7 +421,7 @@ describe('universeBuilderPromote — atomicity', () => {
   it('writes the canon entry and variation removal in a single atomicWrite', async () => {
     const w = await seedUniverseWithBucket({
       landscapes: {
-        kind: 'settings',
+        kind: 'places',
         variations: [
           { label: 'A', prompt: 'a' },
           { label: 'B', prompt: 'b' },
@@ -410,7 +442,7 @@ describe('universeBuilderPromote — atomicity', () => {
     // Re-read from the persistence layer (mirrors what a sibling tab would
     // see): canon has the new entry AND the bucket has lost the variation.
     const reread = (await svc.listUniverses())[0];
-    expect(reread.settings.find((s) => s.name === 'Place A')).toBeTruthy();
+    expect(reread.places.find((s) => s.name === 'Place A')).toBeTruthy();
     expect(reread.categories.landscapes.variations.map((v) => v.label)).toEqual(['B']);
   });
 });
@@ -447,7 +479,7 @@ describe('universeBuilderPromote — prompt content', () => {
     expect(charPrompt).toContain('personality');
 
     const settingPrompt = promoteSvc.__testing.buildPromotePrompt({
-      targetKind: 'settings',
+      targetKind: 'places',
       variation: { label: 'x', prompt: 'x' },
       category: 'h',
       universe: {},

@@ -4,6 +4,8 @@ import { FileInput, Loader2, ArrowLeft, CheckCircle2, AlertTriangle, ChevronDown
 import toast from '../components/ui/Toast';
 import { useAsyncAction } from '../hooks/useAsyncAction';
 import { STORY_SHAPES } from '../components/pipeline/StoryShapes';
+import EntryCard from '../components/universe/EntryCard';
+import { previewCanonFragments } from '../lib/canonPrompt';
 import {
   analyzeImport,
   classifyImport,
@@ -204,11 +206,11 @@ export default function Importer() {
   }, { errorMessage: 'Failed to commit import' });
 
   return (
-    <div className="max-w-6xl mx-auto p-4 sm:p-6 text-port-text">
-      <header className="mb-6 flex items-start gap-3">
+    <div className="space-y-6">
+      <header className="flex items-start gap-3">
         <FileInput className="w-7 h-7 text-port-accent mt-1" />
         <div>
-          <h1 className="text-2xl font-bold">Importer</h1>
+          <h1 className="text-2xl font-bold text-white">Importer</h1>
           <p className="text-sm text-port-text-muted mt-1">
             Reverse-engineer a finished story, novel, screenplay, or comic script into the pipeline.
             The LLM extracts universe canon, the story arc, and a proposed issue split; you review,
@@ -470,8 +472,6 @@ function ReviewPanel({
         entries={canonSelections.characters}
         selectedIdxs={selectedCanon.characters}
         onToggle={(idx) => toggleSelected('characters', idx)}
-        renderSubtitle={(e) => e.role || ''}
-        renderBody={(e) => [e.physicalDescription, e.personality, e.background].filter(Boolean).join(' • ')}
       />
 
       <CanonReviewSection
@@ -480,8 +480,6 @@ function ReviewPanel({
         entries={canonSelections.places}
         selectedIdxs={selectedCanon.places}
         onToggle={(idx) => toggleSelected('places', idx)}
-        renderSubtitle={(e) => e.slugline || ''}
-        renderBody={(e) => e.description || ''}
       />
 
       <CanonReviewSection
@@ -490,8 +488,6 @@ function ReviewPanel({
         entries={canonSelections.objects}
         selectedIdxs={selectedCanon.objects}
         onToggle={(idx) => toggleSelected('objects', idx)}
-        renderSubtitle={() => ''}
-        renderBody={(e) => [e.description, e.significance].filter(Boolean).join(' • ')}
       />
 
       <ArcReviewSection arc={arcDraft} setArc={setArcDraft} seasons={seasonsDraft} setSeasons={setSeasonsDraft} arcShapeIds={arcShapeIds} />
@@ -527,7 +523,7 @@ function ReviewPanel({
   );
 }
 
-function CanonReviewSection({ title, kind, entries, selectedIdxs, onToggle, renderSubtitle, renderBody }) {
+function CanonReviewSection({ title, kind, entries, selectedIdxs, onToggle }) {
   if (entries.length === 0) {
     return (
       <section className="bg-port-card border border-port-border rounded-lg p-4">
@@ -544,32 +540,30 @@ function CanonReviewSection({ title, kind, entries, selectedIdxs, onToggle, rend
           {title} <span className="text-sm font-normal text-port-text-muted">({selectedCount} / {entries.length} selected)</span>
         </h2>
       </div>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-        {entries.map((entry, idx) => (
-          <label
-            key={`${kind}-${idx}`}
-            className={`flex items-start gap-3 border rounded p-3 cursor-pointer text-sm ${
-              selectedIdxs.has(idx) ? 'border-port-accent bg-port-accent/5' : 'border-port-border opacity-60'
-            }`}
-          >
-            <input
-              type="checkbox"
-              checked={selectedIdxs.has(idx)}
-              onChange={() => onToggle(idx)}
-              className="mt-1 accent-port-accent"
+      <ul className="grid grid-cols-1 md:grid-cols-2 gap-2">
+        {entries.map((entry, idx) => {
+          const { subtitle, body } = previewCanonFragments(kind, entry);
+          const bodyText = body.map((f) => f.value).join(' • ');
+          const name = entry.name || '(unnamed)';
+          return (
+            <EntryCard
+              key={`${kind}-${idx}`}
+              selectable={{
+                selected: selectedIdxs.has(idx),
+                onToggle: () => onToggle(idx),
+                label: `Include ${name}`,
+              }}
+              title={<div className="font-medium truncate text-sm">{name}</div>}
+              body={(
+                <>
+                  {subtitle ? <div className="text-xs text-port-text-muted truncate">{subtitle}</div> : null}
+                  {bodyText ? <div className="text-xs text-port-text-muted mt-1 line-clamp-3">{bodyText}</div> : null}
+                </>
+              )}
             />
-            <div className="flex-1 min-w-0">
-              <div className="font-medium truncate">{entry.name || '(unnamed)'}</div>
-              {renderSubtitle(entry) && (
-                <div className="text-xs text-port-text-muted truncate">{renderSubtitle(entry)}</div>
-              )}
-              {renderBody(entry) && (
-                <div className="text-xs text-port-text-muted mt-1 line-clamp-3">{renderBody(entry)}</div>
-              )}
-            </div>
-          </label>
-        ))}
-      </div>
+          );
+        })}
+      </ul>
     </section>
   );
 }

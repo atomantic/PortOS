@@ -15,7 +15,7 @@ const OBJECT_FIELDS = [
   { key: 'notes',        label: 'Notes',        placeholder: 'Anything else worth tracking',                                                                                     kind: 'multiline', rows: 2 },
 ];
 
-// Editable recurring-objects bible. Mirrors CharactersBible / SettingsBible.
+// Editable recurring-objects bible. Mirrors CharactersBible / PlacesBible.
 // Distinct from analysis snapshots — this is the canonical roster that
 // survives across `objects` analysis runs and accepts hand-edits.
 export default function ObjectsBible({ workId, objects: objectsProp, onObjectsChange, readingTheme = 'dark', hotRefId = null }) {

@@ -290,6 +290,14 @@ export function sanitizeSeason(raw, { preserveTimestamps = true } = {}) {
     cover: sanitizeCoverLike(raw.cover),
     backCover: sanitizeCoverLike(raw.backCover),
     status,
+    // Per-season editorial lock. When true the season's metadata (title,
+    // logline, synopsis, etc.) is frozen against rewriters: the
+    // generateSeasonEpisodes LLM pass refuses to seed new issues, deleteSeason
+    // refuses, and bulkReassignSeason refuses to move issues into or out of
+    // it. Mirrors the binary semantics of `series.locked.arc`. Sibling to
+    // `status` — `status` is descriptive (where am I in the workflow?) while
+    // `locked` is enforcement (don't let LLM-driven jobs touch this).
+    locked: raw.locked === true,
     createdAt: created,
     updatedAt: updated,
   };

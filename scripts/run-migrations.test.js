@@ -93,4 +93,19 @@ export default {
     expect(corruptSiblings()).toHaveLength(0);
     expect(warnSpy).not.toHaveBeenCalled();
   });
+
+  it('skips `_`-prefixed shared-helper files (never imports them as migrations)', async () => {
+    // _lib.js / _testHelpers.js are imported by migration files + tests but
+    // they don't export `up()` — if the runner tried to load them it would
+    // throw "does not export an up() function".
+    writeFileSync(join(migrationsDir, '_lib.js'), `
+export const md5 = (s) => s;
+// no default export, no up() — would throw if the runner picked this up.
+`);
+
+    const ran = await runMigrations({ rootDir, migrationsDir });
+
+    expect(ran).toBe(1); // only 001-fixture.js ran
+    expect(JSON.parse(readFileSync(appliedFile, 'utf-8'))).toEqual(['001-fixture.js']);
+  });
 });

@@ -14,7 +14,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
-  Library, Loader2, Users, MapPin, Package, Wand2, Filter,
+  Library, Loader2, Users, MapPin, Package, Wand2, Filter, Lock, Unlock,
 } from 'lucide-react';
 import toast from '../ui/Toast';
 import {
@@ -24,6 +24,8 @@ import {
   updateUniverse,
   getUniverseCanonUsage,
   setUniverseCanonLock,
+  setUniverseCanonLockAll,
+  expandUniverseCharacter,
 } from '../../services/apiUniverseBuilder';
 import { generateImage } from '../../services/apiSystem';
 import { composeStyledPrompt } from '../../lib/composeStyledPrompt';
@@ -34,32 +36,49 @@ import CanonCard from '../pipeline/CanonCard';
 import MediaPreview from '../media/MediaPreview';
 import { pipelineImageCfgToRenderOpts } from '../../lib/pipelineImageDefaults';
 import { universeStylePreset } from '../../lib/universeStylePreset';
+import { descriptorForCanonEntry } from '../../lib/canonPrompt';
+import { BIBLE_LIMITS } from '../../lib/bibleLimits';
+
+const capImageRefs = (refs) => (
+  refs.length > BIBLE_LIMITS.IMAGE_REFS_PER_ENTRY_MAX
+    ? refs.slice(-BIBLE_LIMITS.IMAGE_REFS_PER_ENTRY_MAX)
+    : refs
+);
 
 const KINDS = [
   {
     key: 'characters', apiKind: 'character', label: 'Characters', singular: 'character', icon: Users,
-    descFor: (c) => c.physicalDescription || c.description || '',
+    descFor: (c) => descriptorForCanonEntry('characters', c),
   },
   {
-    key: 'settings', apiKind: 'setting', label: 'Places', singular: 'place', icon: MapPin,
-    descFor: (s) => [
-      s.description,
-      s.palette ? `Palette: ${s.palette}` : '',
-      s.recurringDetails,
-    ].filter(Boolean).join('. '),
+    key: 'places', apiKind: 'place', label: 'Places', singular: 'place', icon: MapPin,
+    descFor: (p) => descriptorForCanonEntry('places', p),
   },
   {
     key: 'objects', apiKind: 'object', label: 'Objects', singular: 'object', icon: Package,
-    descFor: (o) => o.description || o.significance || '',
+    descFor: (o) => descriptorForCanonEntry('objects', o),
   },
 ];
 
-export default function UniverseCanonSection({ universe, universeId, onUniverseChange, imageCfg, kindFilter = null }) {
+export default function UniverseCanonSection({
+  universe, universeId, onUniverseChange, imageCfg, kindFilter = null,
+  // entryId → jobId head-map from the universe-page-level pending tracker.
+  // Lets canon rows show a MediaJobThumb spinner when a batch `/render` queues
+  // canon prompts (the batch path doesn't flow through `renderingJobs` here,
+  // which is populated only by this section's own per-entry render calls).
+  externalPendingByEntryId = null,
+  // Fired when a batch-rendered canon job settles so the parent can shift its
+  // completed jobId out of the page-level pending queue. Without this, the
+  // queue accumulates completed jobIds forever and a follow-up batch render
+  // would show the previous run's image instead of the new spinner.
+  onExternalCanonJobSettled = null,
+}) {
   const mountedRef = useMounted();
   const [searchParams, setSearchParams] = useSearchParams();
   const seriesFilter = searchParams.get('series') || '';
   const [renderingJobs, setRenderingJobs] = useState({});
   const [refiningId, setRefiningId] = useState(null);
+  const [expandingId, setExpandingId] = useState(null);
   const [differentiating, setDifferentiating] = useState(false);
   const [togglingLockId, setTogglingLockId] = useState(null);
   // Ref mirrors togglingLockId for the reentrancy guard so handleToggleLock
@@ -80,6 +99,14 @@ export default function UniverseCanonSection({ universe, universeId, onUniverseC
   // repopulate `usage` with stale data after fast navigation.
   const currentUniverseIdRef = useRef(universeId);
   useEffect(() => { currentUniverseIdRef.current = universeId; }, [universeId]);
+
+  // Latest-universe ref so callbacks fired after async waits (e.g. the
+  // sheet panel's HEAD-poll for the rendered file) merge against the
+  // CURRENT draft instead of a snapshot captured at callback-creation
+  // time. Without this, a concurrent character edit landing during the
+  // poll window would be clobbered by the stale `universe` closure.
+  const latestUniverseRef = useRef(universe);
+  useEffect(() => { latestUniverseRef.current = universe; }, [universe]);
   const refreshUsage = useCallback(() => {
     if (!universeId) return;
     const requestedFor = universeId;
@@ -170,14 +197,34 @@ export default function UniverseCanonSection({ universe, universeId, onUniverseC
             prompt: `${entry.name}: ${kind.descFor(entry) || ''}`.trim().replace(/:\s*$/, ''),
           });
         }
+        // Reference sheets live in data/image-refs/ — different static prefix
+        // than the gallery. Built into the same list so the existing
+        // MediaPreview lightbox + arrow navigation work uniformly.
+        if (kind.key === 'characters' && typeof entry.referenceSheetImageRef === 'string' && entry.referenceSheetImageRef) {
+          const filename = entry.referenceSheetImageRef;
+          out.push({
+            key: `canon-sheet:${filename}`,
+            kind: 'image',
+            filename,
+            previewUrl: `/data/image-refs/${filename}`,
+            downloadUrl: `/data/image-refs/${filename}`,
+            prompt: `${entry.name} — character reference sheet`,
+          });
+        }
       }
     }
     return out;
   }, [universe]);
 
-  const openPreview = useCallback((filename) => {
+  const openPreview = useCallback((filename, opts) => {
     if (!filename) return;
-    const match = previewItems.find((i) => i.filename === filename);
+    // Match on the kind-tagged key when the caller indicates a sheet —
+    // gallery `imageRefs[]` and `referenceSheetImageRef` can theoretically
+    // collide on basename, in which case a filename-only find would route
+    // the lightbox to the wrong static prefix (/data/images vs /data/image-refs).
+    const targetKey = opts?.isSheet ? `canon-sheet:${filename}` : `canon:${filename}`;
+    const match = previewItems.find((i) => i.key === targetKey)
+      || previewItems.find((i) => i.filename === filename);
     if (match) setPreview(match);
   }, [previewItems]);
 
@@ -224,6 +271,27 @@ export default function UniverseCanonSection({ universe, universeId, onUniverseC
     toast.success(`Differentiated ${result.touched}/${result.touched + result.skipped} characters — ${(result.rationale || '').slice(0, 140)}`);
   };
 
+  // Track which kind has a bulk-lock in flight so we can disable its buttons
+  // and show a spinner. Keyed by `kind.key` (characters / places / objects)
+  // because the action is scoped to that section.
+  const [bulkLockingKindKey, setBulkLockingKindKey] = useState(null);
+
+  const handleBulkLockKind = useCallback(async (kind, nextLocked) => {
+    if (bulkLockingKindKey) return;
+    setBulkLockingKindKey(kind.key);
+    const capturedId = universeId;
+    const result = await setUniverseCanonLockAll(universeId, kind.apiKind, nextLocked)
+      .catch((err) => { toast.error(err.message || `Bulk ${nextLocked ? 'lock' : 'unlock'} failed`); return null; });
+    if (mountedRef.current) setBulkLockingKindKey(null);
+    if (!result || !mountedRef.current || currentUniverseIdRef.current !== capturedId) return;
+    if (result.universe) onUniverseChange(result.universe);
+    if (result.changed === 0) {
+      toast.success(`All ${kind.label.toLowerCase()} already ${nextLocked ? 'locked' : 'unlocked'}`);
+    } else {
+      toast.success(`${nextLocked ? 'Locked' : 'Unlocked'} ${result.changed} ${kind.label.toLowerCase()}`);
+    }
+  }, [universeId, onUniverseChange, mountedRef, bulkLockingKindKey]);
+
   const handleToggleLock = useCallback(async (kind, entryId, nextLocked) => {
     if (togglingLockRef.current) return;
     togglingLockRef.current = entryId;
@@ -252,6 +320,47 @@ export default function UniverseCanonSection({ universe, universeId, onUniverseC
     toast.success(`Refined — ${(result.rationale || result.changes?.[0] || 'description rewritten').slice(0, 140)}`);
   };
 
+  // One LLM call fleshes out the extended character fields (motivations,
+  // stats, color palette, expressions, etc.). No-clobber on populated fields.
+  // Locked characters return `{ locked: true }` so the toast surfaces the
+  // reason rather than a successful no-op.
+  const handleExpandCharacter = async (entryId) => {
+    if (!universe || expandingId) return;
+    setExpandingId(entryId);
+    const capturedId = universeId;
+    const providerId = universe.llm?.provider || undefined;
+    const model = universe.llm?.model || undefined;
+    const result = await expandUniverseCharacter(universeId, entryId, { providerId, model })
+      .catch((err) => { toast.error(err.message || 'Expand failed'); return null; });
+    if (mountedRef.current) setExpandingId(null);
+    if (!result || !isStillCurrent(capturedId)) return;
+    if (result.locked) {
+      toast.error(`${result.entry?.name || 'Character'} is locked — unlock before expanding`);
+      return;
+    }
+    if (result.universe) onUniverseChange(result.universe);
+    const fields = Array.isArray(result.updatedFields) ? result.updatedFields : [];
+    toast.success(fields.length
+      ? `Expanded ${result.entry?.name || 'character'} — filled ${fields.length} field${fields.length === 1 ? '' : 's'}`
+      : `${result.entry?.name || 'Character'} already complete — nothing to fill`);
+  };
+
+  // Server already stamped the character via mediaJobEvents — merge the
+  // filename into the local draft instead of refetching the whole universe.
+  // Read from `latestUniverseRef` (not closed-over `universe`) so an edit
+  // that landed during the panel's HEAD-poll wait isn't clobbered by an
+  // older snapshot. No deps on `universe` keeps the callback stable.
+  const handleSheetCompleted = useCallback((entryId, destFilename) => {
+    const latest = latestUniverseRef.current;
+    if (!latest || !destFilename) return;
+    const nextCharacters = (latest.characters || []).map((c) =>
+      c.id === entryId ? { ...c, referenceSheetImageRef: destFilename } : c,
+    );
+    onUniverseChange({ ...latest, characters: nextCharacters });
+    const entryName = nextCharacters.find((c) => c.id === entryId)?.name || 'Character';
+    toast.success(`${entryName} reference sheet ready`);
+  }, [onUniverseChange]);
+
   const handleRenderRef = async (kind, entry) => {
     const description = kind.descFor(entry);
     if (!description.trim()) {
@@ -276,7 +385,7 @@ export default function UniverseCanonSection({ universe, universeId, onUniverseC
 
   const handleRenderCleanPlate = async (entry) => {
     // Match CanonCard's button-enable predicate (descFor includes palette +
-    // recurringDetails for settings) — composeCleanPlatePrompt builds a valid
+    // recurringDetails for places) — composeCleanPlatePrompt builds a valid
     // prompt from any of {description, palette, recurringDetails}, so gating
     // on `description` alone produces a button that fails with this toast
     // even though the composer would have succeeded.
@@ -304,6 +413,12 @@ export default function UniverseCanonSection({ universe, universeId, onUniverseC
     toast.success(`Rendering clean plate for ${entry.name}`);
   };
 
+  // Section-local renders go through `generateImage` directly with no
+  // `universeRun` tag, so the server-side `appendEntryImageRef` collection
+  // hook never fires — the client MUST round-trip a PATCH to persist the
+  // new filename onto the canon entry. The list shape passed in is built
+  // from `universe`, but section-local renders are user-driven one-at-a-
+  // time so the read-modify-write window is small and tolerable.
   const handleRefCompleted = useCallback(async (kindKey, entryId, filename) => {
     if (!filename || !universe) return;
     setRenderingJobs((prev) => {
@@ -320,6 +435,36 @@ export default function UniverseCanonSection({ universe, universeId, onUniverseC
       .catch((err) => { toast.error(`Save failed: ${err.message}`); return null; });
     if (updated && mountedRef.current && currentUniverseIdRef.current === capturedId) onUniverseChange(updated);
   }, [universe, universeId, onUniverseChange, mountedRef]);
+
+  // External (batch-render) canon completions follow a different path:
+  // (a) the server's `appendEntryImageRef` collection hook has ALREADY
+  //     stamped the filename onto the persisted record, so a client-side
+  //     `updateUniverse` here is redundant and would clobber concurrent
+  //     sibling appends with a stale full-array patch built from the
+  //     `universe` snapshot the parent re-rendered with.
+  // (b) the parent's draft is the source of truth for UI display, so we
+  //     update it through `onUniverseChange` only — dedupe on `includes`
+  //     so duplicate completion events don't double-stamp the same ref.
+  // (c) `latestUniverseRef` (not the closed-over `universe` prop) is used
+  //     so back-to-back sibling completions all see the freshest state
+  //     and chain their appends instead of clobbering each other.
+  const handleExternalCanonRefCompleted = useCallback((kindKey, entryId, filename) => {
+    if (!filename) return;
+    const latest = latestUniverseRef.current;
+    if (!latest) return;
+    const list = Array.isArray(latest[kindKey]) ? latest[kindKey] : [];
+    const nextList = list.map((e) => {
+      if (e?.id !== entryId) return e;
+      const refs = Array.isArray(e.imageRefs) ? e.imageRefs : [];
+      if (refs.includes(filename)) return e;
+      // Mirror the server-side appendEntryImageRef cap (last N wins) so
+      // an external batch completion arriving at a full row doesn't leave
+      // the optimistic state holding an overlong array that a subsequent
+      // save would have to trim.
+      return { ...e, imageRefs: capImageRefs([...refs, filename]) };
+    });
+    onUniverseChange({ ...latest, [kindKey]: nextList });
+  }, [onUniverseChange]);
 
   const handleRefFailed = useCallback((entryId, errMsg) => {
     setRenderingJobs((prev) => {
@@ -364,7 +509,7 @@ export default function UniverseCanonSection({ universe, universeId, onUniverseC
           </h2>
           <p className="text-xs text-gray-500 mt-0.5">
             {kindFilter === 'characters' && 'Recurring people in this universe. Series share the same canon — issues reference these entries so a character renders consistently across crossovers.'}
-            {kindFilter === 'settings' && 'Recurring places in this universe. Series share the same canon — slugline-anchored entries can be referenced across issues.'}
+            {kindFilter === 'places' && 'Recurring places in this universe. Series share the same canon — slugline-anchored entries can be referenced across issues.'}
             {kindFilter === 'objects' && 'Recurring objects/items in this universe. Series share the same canon — issues reference these entries for visual continuity.'}
             {!kindFilter && 'People, places, and things that exist in this universe. Series in this universe share the same canon — episodes/issues reference these entries so a character renders consistently across crossovers.'}
           </p>
@@ -395,7 +540,7 @@ export default function UniverseCanonSection({ universe, universeId, onUniverseC
             <Library size={12} /> Extract from prose
           </button>
           {/* "AI: differentiate cast" is a character-only operation. When the
-              parent passes `kindFilter` to scope this section to settings or
+              parent passes `kindFilter` to scope this section to places or
               objects, hide the action so it doesn't look applicable to the
               current trunk. Keep it visible on the all-kinds view + on the
               characters-filtered view. */}
@@ -461,21 +606,57 @@ export default function UniverseCanonSection({ universe, universeId, onUniverseC
         <KindSection
           key={kind.key}
           kind={kind}
+          universeId={universeId}
           all={filteredByKind[kind.key] || []}
           totalCount={(universe[kind.key] || []).length}
           filtered={!!seriesFilter}
           usage={usage?.[kind.key] || null}
           renderingJobs={renderingJobs}
           onRender={(entry) => handleRenderRef(kind, entry)}
-          onJobCompleted={(entryId, filename) => handleRefCompleted(kind.key, entryId, filename)}
-          onJobFailed={handleRefFailed}
+          onJobCompleted={(entryId, filename, completedJobId) => {
+            // Discriminate by which pending map owns the completed jobId:
+            //   - section-local renders (`generateImage`) populate
+            //     `renderingJobs[entryId]`; their server side has no
+            //     `appendEntryImageRef` hook so the client must persist
+            //     via `handleRefCompleted`.
+            //   - external batch renders flow through the page-level
+            //     `externalPendingByEntryId`; the server collection hook
+            //     already stamped imageRefs, so the client only needs to
+            //     update local state + clear the pending queue.
+            const isExternal = completedJobId
+              && externalPendingByEntryId?.[entryId] === completedJobId;
+            if (isExternal) {
+              handleExternalCanonRefCompleted(kind.key, entryId, filename);
+              onExternalCanonJobSettled?.(entryId, completedJobId);
+            } else {
+              handleRefCompleted(kind.key, entryId, filename);
+            }
+          }}
+          onJobFailed={(entryId, errMsg, failedJobId) => {
+            const isExternal = failedJobId
+              && externalPendingByEntryId?.[entryId] === failedJobId;
+            if (isExternal) {
+              onExternalCanonJobSettled?.(entryId, failedJobId);
+              if (errMsg) toast.error(`Render failed: ${errMsg}`);
+            } else {
+              handleRefFailed(entryId, errMsg);
+            }
+          }}
           onPreview={openPreview}
           onRefine={handleRefineCharacter}
           refiningId={refiningId}
+          onExpandCharacter={handleExpandCharacter}
+          expandingId={expandingId}
+          onSheetCompleted={handleSheetCompleted}
           onToggleLock={(entryId, nextLocked) => handleToggleLock(kind, entryId, nextLocked)}
           togglingLockId={togglingLockId}
           onPatchEntry={(entryId, patch) => handlePatchEntry(kind, entryId, patch)}
           onRenderCleanPlate={handleRenderCleanPlate}
+          seriesNameMap={usage?.seriesNameMap || null}
+          onBulkLock={(nextLocked) => handleBulkLockKind(kind, nextLocked)}
+          bulkLocking={bulkLockingKindKey === kind.key}
+          fullList={Array.isArray(universe[kind.key]) ? universe[kind.key] : []}
+          externalPendingByEntryId={externalPendingByEntryId}
         />
       ))}
 
@@ -484,8 +665,30 @@ export default function UniverseCanonSection({ universe, universeId, onUniverseC
   );
 }
 
-function KindSection({ kind, all, totalCount, filtered, usage, renderingJobs, onRender, onJobCompleted, onJobFailed, onPreview, onRefine, refiningId, onToggleLock, togglingLockId, onPatchEntry, onRenderCleanPlate }) {
+function KindSection({ kind, universeId, all, totalCount, filtered, usage, renderingJobs, onRender, onJobCompleted, onJobFailed, onPreview, onRefine, refiningId, onExpandCharacter, expandingId, onSheetCompleted, onToggleLock, togglingLockId, onPatchEntry, onRenderCleanPlate, seriesNameMap, onBulkLock, bulkLocking, fullList, externalPendingByEntryId = null }) {
+  // Universe-only character wiring — `null` for non-character kinds so
+  // CanonCard's gate stays `kind === 'characters' && characterExtensions`.
+  // Memoized so the BASE object is stable across re-renders that aren't
+  // expansion-related (refining, lock toggle, etc). The per-card spread
+  // below still allocates a fresh object every render to fold in
+  // `expanding: expandingId === entry.id`; that's unavoidable without
+  // per-card memoization and isn't worth the complexity at typical cast
+  // sizes.
+  const characterExtensions = useMemo(
+    () => (kind.key === 'characters' ? { universeId, onExpandCharacter, onSheetCompleted } : null),
+    [kind.key, universeId, onExpandCharacter, onSheetCompleted],
+  );
   const Icon = kind.icon;
+  // Bulk lock-state summary computed off the FULL list (not the series-filtered
+  // view) so the buttons reflect the universe-wide state the bulk action will
+  // change. A mixed list (some locked, some not) enables BOTH buttons so the
+  // user can pick a direction without first having to inspect.
+  const lockedCount = fullList.filter((e) => e?.locked === true).length;
+  // "All locked" gates the toggle button's icon + action direction. A mixed
+  // list (some locked, some not) falls into the same bucket as all-unlocked
+  // so the next click locks the remaining holdouts.
+  const allLocked = fullList.length > 0 && lockedCount === fullList.length;
+  const bulkDisabled = !onBulkLock || bulkLocking || fullList.length === 0;
   return (
     <section className="rounded border border-port-border bg-port-bg/60">
       <div className="flex items-center gap-2 px-3 py-2 border-b border-port-border">
@@ -494,6 +697,31 @@ function KindSection({ kind, all, totalCount, filtered, usage, renderingJobs, on
         <span className="text-[10px] text-gray-500">
           {filtered ? `${all.length} / ${totalCount}` : all.length}
         </span>
+        {fullList.length > 0 && onBulkLock ? (
+          // Single toggle button — mirrors the per-item lock-toggle visual.
+          // Lock icon when every entry is already locked (click unlocks all);
+          // Unlock icon for the all-unlocked + mixed cases (click locks all)
+          // so "the next click locks the holdouts" is always the action.
+          <button
+            type="button"
+            onClick={() => onBulkLock(!allLocked)}
+            disabled={bulkDisabled}
+            title={allLocked
+              ? `Unlock all ${kind.label.toLowerCase()} — AI refine / differentiate may overwrite them`
+              : `Lock all ${kind.label.toLowerCase()} — AI refine / differentiate will skip them`}
+            aria-label={allLocked ? `Unlock all ${kind.label}` : `Lock all ${kind.label}`}
+            aria-pressed={allLocked}
+            className={`ml-auto p-1 rounded disabled:opacity-30 disabled:cursor-not-allowed ${
+              allLocked
+                ? 'text-port-accent hover:bg-port-accent/20'
+                : 'text-gray-500 hover:text-gray-300'
+            }`}
+          >
+            {bulkLocking
+              ? <Loader2 size={14} className="animate-spin" />
+              : allLocked ? <Lock size={14} /> : <Unlock size={14} />}
+          </button>
+        ) : null}
       </div>
       <div className="p-3">
         {all.length === 0 ? (
@@ -507,7 +735,14 @@ function KindSection({ kind, all, totalCount, filtered, usage, renderingJobs, on
                 key={entry.id || entry.name}
                 kind={kind}
                 entry={entry}
-                inFlightJobId={renderingJobs[entry.id]}
+                // Merge the section-local pending map (one-off renders) with
+                // the universe-page-level map (batch `/render` jobs). The
+                // section's own state wins because its completion handler is
+                // the one that does the optimistic imageRefs[] append for
+                // canon entries (`handleRefCompleted`); the external map is
+                // a presentation-only fallback so the spinner shows for
+                // batch-queued canon jobs too.
+                inFlightJobId={renderingJobs[entry.id] || externalPendingByEntryId?.[entry.id] || null}
                 onRender={() => onRender(entry)}
                 onJobCompleted={onJobCompleted}
                 onJobFailed={onJobFailed}
@@ -520,6 +755,10 @@ function KindSection({ kind, all, totalCount, filtered, usage, renderingJobs, on
                 togglingLock={togglingLockId === entry.id}
                 onPatchEntry={onPatchEntry}
                 onRenderCleanPlate={onRenderCleanPlate}
+                seriesNameMap={seriesNameMap}
+                characterExtensions={characterExtensions
+                  ? { ...characterExtensions, expanding: expandingId === entry.id }
+                  : null}
               />
             ))}
           </ul>

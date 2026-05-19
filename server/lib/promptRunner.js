@@ -27,6 +27,7 @@
  */
 
 import { createRun, executeApiRun, executeCliRun, extractBakedModel, hasModelFlag, stopRun, patchRunMetadata } from '../services/runner.js';
+import { getActiveProvider, getProviderById } from '../services/providers.js';
 import { executeTuiRun } from './tuiPromptRunner.js';
 
 const DEFAULT_TIMEOUT_MS = 300000;
@@ -75,6 +76,32 @@ export function resolveEffectiveModel(provider, callerModel) {
     ? extractBakedModel(provider.args)
     : null;
   return baked || provider?.defaultModel || provider?.models?.[0] || null;
+}
+
+/**
+ * Resolve `{provider, selectedModel}` for an LLM caller. Prefers
+ * `providerId` — any `getProviderById` failure (stale id, lookup
+ * error, network blip) falls through to `getActiveProvider`. Returns
+ * `{provider: null, selectedModel: null}` when neither resolves a
+ * provider (e.g. no providers configured), so callers throw their own
+ * typed error.
+ *
+ * Note: errors from `getActiveProvider` (e.g. toolkit not initialized)
+ * still propagate — only `getProviderById` failures are swallowed.
+ * This mirrors the inline pattern this helper replaced. If a caller
+ * wants total "always-null on failure" semantics, wrap the call in
+ * their own try/catch.
+ *
+ * @param {object} args
+ * @param {string} [args.providerId]
+ * @param {string} [args.model]
+ * @returns {Promise<{ provider: object|null, selectedModel: string|null }>}
+ */
+export async function resolveProviderAndModel({ providerId, model } = {}) {
+  let provider = providerId ? await getProviderById(providerId).catch(() => null) : null;
+  if (!provider) provider = await getActiveProvider();
+  const selectedModel = provider ? resolveEffectiveModel(provider, model) : null;
+  return { provider, selectedModel };
 }
 
 /**

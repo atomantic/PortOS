@@ -2,14 +2,14 @@ import { useEffect, useState } from 'react';
 import { AlertTriangle, Check, Loader2, MapPin, Pencil, Plus, Trash2, X } from 'lucide-react';
 import toast from '../ui/Toast';
 import {
-  listWritersRoomSettings,
-  createWritersRoomSetting,
-  updateWritersRoomSetting,
-  deleteWritersRoomSetting,
+  listWritersRoomPlaces,
+  createWritersRoomPlace,
+  updateWritersRoomPlace,
+  deleteWritersRoomPlace,
 } from '../../services/apiWritersRoom';
 import useMounted from '../../hooks/useMounted';
 
-const SETTING_FIELDS = [
+const PLACE_FIELDS = [
   { key: 'description',      label: 'Description',       placeholder: 'Architecture, scale, materials, lighting sources, recurring set-dressing. Used directly in image-gen prompts.', kind: 'multiline', rows: 3 },
   { key: 'palette',          label: 'Palette',           placeholder: 'Comma-separated dominant colors / lighting cues',                                                              kind: 'text' },
   { key: 'era',              label: 'Era',               placeholder: 'near-future, 1950s noir, present day…',                                                                        kind: 'text' },
@@ -18,29 +18,29 @@ const SETTING_FIELDS = [
   { key: 'notes',            label: 'Notes',             placeholder: 'Anything else worth tracking',                                                                                 kind: 'multiline', rows: 2 },
 ];
 
-// Editable setting/world bible — persistent across analysis runs and consumed
+// Editable places/world bible — persistent across analysis runs and consumed
 // by image gen to inject location descriptions into per-scene prompts.
 //
-// Controlled vs. uncontrolled: caller may pass `settings` to keep multiple
+// Controlled vs. uncontrolled: caller may pass `places` to keep multiple
 // mounts in sync (e.g. drawer + storyboard chip count). When omitted we fetch
 // and own the list so this can stand alone.
-export default function SettingsBible({ workId, settings: settingsProp, onSettingsChange, readingTheme = 'dark', hotRefId = null }) {
-  const [internalSettings, setInternalSettings] = useState(settingsProp || []);
-  const settings = settingsProp ?? internalSettings;
+export default function PlacesBible({ workId, places: placesProp, onPlacesChange, readingTheme = 'dark', hotRefId = null }) {
+  const [internalPlaces, setInternalPlaces] = useState(placesProp || []);
+  const places = placesProp ?? internalPlaces;
   const [editingId, setEditingId] = useState(null);
   const [creating, setCreating] = useState(false);
   const [loading, setLoading] = useState(false);
   const mountedRef = useMounted();
 
   useEffect(() => {
-    if (settingsProp) return;
+    if (placesProp) return;
     if (!workId) return;
     setLoading(true);
-    listWritersRoomSettings(workId)
-      .then((list) => { if (mountedRef.current) setInternalSettings(list); })
-      .catch(() => { if (mountedRef.current) setInternalSettings([]); })
+    listWritersRoomPlaces(workId)
+      .then((list) => { if (mountedRef.current) setInternalPlaces(list); })
+      .catch(() => { if (mountedRef.current) setInternalPlaces([]); })
       .finally(() => { if (mountedRef.current) setLoading(false); });
-  }, [workId, settingsProp, mountedRef]);
+  }, [workId, placesProp, mountedRef]);
 
   const upsert = (next) => {
     const update = (prev) => {
@@ -51,21 +51,21 @@ export default function SettingsBible({ workId, settings: settingsProp, onSettin
       copy[idx] = next;
       return sorted(copy);
     };
-    setInternalSettings(update);
-    onSettingsChange?.(update(settings));
+    setInternalPlaces(update);
+    onPlacesChange?.(update(places));
   };
 
   const removeOne = (id) => {
-    const next = settings.filter((s) => s.id !== id);
-    setInternalSettings(next);
-    onSettingsChange?.(next);
+    const next = places.filter((s) => s.id !== id);
+    setInternalPlaces(next);
+    onPlacesChange?.(next);
   };
 
   return (
     <div className="text-xs">
       <div className="flex items-center justify-between mb-2">
         <div className="text-[11px] text-gray-500">
-          {settings.length} location{settings.length === 1 ? '' : 's'} · Edits persist across re-runs and feed image gen.
+          {places.length} location{places.length === 1 ? '' : 's'} · Edits persist across re-runs and feed image gen.
         </div>
         <button
           onClick={() => { setCreating(true); setEditingId(null); }}
@@ -75,34 +75,34 @@ export default function SettingsBible({ workId, settings: settingsProp, onSettin
         </button>
       </div>
 
-      {loading && settings.length === 0 && (
+      {loading && places.length === 0 && (
         <div className="text-gray-500 italic">Loading…</div>
       )}
 
-      {!loading && settings.length === 0 && !creating && (
+      {!loading && places.length === 0 && !creating && (
         <div className="text-gray-500 italic px-1 mb-2">
           No locations yet. Click "Refresh from prose" above to extract them, or add one manually.
         </div>
       )}
 
       {creating && (
-        <SettingEditor
+        <PlaceEditor
           workId={workId}
-          setting={null}
+          place={null}
           onSaved={(s) => { upsert(s); setCreating(false); }}
           onCancel={() => setCreating(false)}
         />
       )}
 
       <ul className="space-y-1.5">
-        {settings.map((s) => {
+        {places.map((s) => {
           const isEditing = editingId === s.id;
           if (isEditing) {
             return (
               <li key={s.id}>
-                <SettingEditor
+                <PlaceEditor
                   workId={workId}
-                  setting={s}
+                  place={s}
                   onSaved={(updated) => { upsert(updated); setEditingId(null); }}
                   onDeleted={() => { removeOne(s.id); setEditingId(null); }}
                   onCancel={() => setEditingId(null)}
@@ -120,7 +120,7 @@ export default function SettingsBible({ workId, settings: settingsProp, onSettin
                   : 'border-port-border'
               }`}
             >
-              <SettingRow setting={s} onEdit={() => setEditingId(s.id)} readingTheme={readingTheme} />
+              <PlaceRow place={s} onEdit={() => setEditingId(s.id)} readingTheme={readingTheme} />
             </li>
           );
         })}
@@ -129,11 +129,11 @@ export default function SettingsBible({ workId, settings: settingsProp, onSettin
   );
 }
 
-function SettingRow({ setting, onEdit, readingTheme }) {
+function PlaceRow({ place, onEdit, readingTheme }) {
   const light = readingTheme === 'light';
-  const blanks = SETTING_FIELDS.filter((f) => {
+  const blanks = PLACE_FIELDS.filter((f) => {
     if (f.key === 'notes') return false;
-    return !String(setting[f.key] || '').trim();
+    return !String(place[f.key] || '').trim();
   });
   return (
     <div className="px-3 py-2">
@@ -141,36 +141,36 @@ function SettingRow({ setting, onEdit, readingTheme }) {
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <MapPin size={11} className="text-port-accent shrink-0" />
-            {setting.slugline ? (
-              <span className={`font-mono text-[11px] uppercase ${light ? 'text-gray-900' : 'text-white'}`}>{setting.slugline}</span>
+            {place.slugline ? (
+              <span className={`font-mono text-[11px] uppercase ${light ? 'text-gray-900' : 'text-white'}`}>{place.slugline}</span>
             ) : (
-              <span className={`font-semibold ${light ? 'text-gray-900' : 'text-white'}`}>{setting.name}</span>
+              <span className={`font-semibold ${light ? 'text-gray-900' : 'text-white'}`}>{place.name}</span>
             )}
-            {setting.slugline && setting.name && setting.name !== setting.slugline && (
-              <span className="text-[10px] text-gray-500 truncate">aka {setting.name}</span>
+            {place.slugline && place.name && place.name !== place.slugline && (
+              <span className="text-[10px] text-gray-500 truncate">aka {place.name}</span>
             )}
-            {setting.era && (
-              <span className="text-[9px] uppercase tracking-wider text-port-accent">{setting.era}</span>
+            {place.era && (
+              <span className="text-[9px] uppercase tracking-wider text-port-accent">{place.era}</span>
             )}
-            {setting.source === 'ai' && (
+            {place.source === 'ai' && (
               <span className="text-[9px] text-gray-500" title="Created by AI extraction — edit to mark as user-curated">ai</span>
             )}
           </div>
-          {setting.description ? (
+          {place.description ? (
             <div className={`text-[11px] mt-0.5 ${light ? 'text-gray-700' : 'text-gray-400'}`}>
-              {setting.description}
+              {place.description}
             </div>
           ) : (
             <div className="text-[11px] mt-0.5 text-port-warning italic">No description — image gen will use the scene's visualPrompt only</div>
           )}
-          {setting.palette && (
+          {place.palette && (
             <div className="text-[10px] text-gray-500 mt-1">
-              <span className="uppercase tracking-wider text-[9px]">Palette:</span> {setting.palette}
+              <span className="uppercase tracking-wider text-[9px]">Palette:</span> {place.palette}
             </div>
           )}
-          {setting.recurringDetails && (
+          {place.recurringDetails && (
             <div className="text-[10px] text-gray-500 mt-0.5">
-              <span className="uppercase tracking-wider text-[9px]">Anchors:</span> {setting.recurringDetails}
+              <span className="uppercase tracking-wider text-[9px]">Anchors:</span> {place.recurringDetails}
             </div>
           )}
           {blanks.length > 0 && (
@@ -178,17 +178,17 @@ function SettingRow({ setting, onEdit, readingTheme }) {
               <AlertTriangle size={9} /> Missing: {blanks.map((f) => f.label.toLowerCase()).join(', ')}
             </div>
           )}
-          {setting.missingFromProse?.length > 0 && (
+          {place.missingFromProse?.length > 0 && (
             <div className="text-[10px] text-gray-500 mt-1">
-              <span className="uppercase tracking-wider text-[9px]">Prose gaps:</span> {setting.missingFromProse.join(', ')}
+              <span className="uppercase tracking-wider text-[9px]">Prose gaps:</span> {place.missingFromProse.join(', ')}
             </div>
           )}
         </div>
         <button
           onClick={onEdit}
           className="text-gray-500 hover:text-port-accent shrink-0"
-          title="Edit setting"
-          aria-label={`Edit ${setting.slugline || setting.name}`}
+          title="Edit place"
+          aria-label={`Edit ${place.slugline || place.name}`}
         >
           <Pencil size={11} />
         </button>
@@ -197,15 +197,15 @@ function SettingRow({ setting, onEdit, readingTheme }) {
   );
 }
 
-function SettingEditor({ workId, setting, onSaved, onDeleted, onCancel }) {
-  const isCreate = !setting;
+function PlaceEditor({ workId, place, onSaved, onDeleted, onCancel }) {
+  const isCreate = !place;
   const [draft, setDraft] = useState(() => {
     const seed = {
-      slugline: setting?.slugline || '',
-      name: setting?.name || '',
+      slugline: place?.slugline || '',
+      name: place?.name || '',
     };
-    for (const f of SETTING_FIELDS) {
-      seed[f.key] = setting?.[f.key] || '';
+    for (const f of PLACE_FIELDS) {
+      seed[f.key] = place?.[f.key] || '';
     }
     return seed;
   });
@@ -223,12 +223,12 @@ function SettingEditor({ workId, setting, onSaved, onDeleted, onCancel }) {
       slugline: draft.slugline.trim(),
       name: draft.name.trim(),
     };
-    for (const f of SETTING_FIELDS) {
+    for (const f of PLACE_FIELDS) {
       payload[f.key] = draft[f.key];
     }
     const result = await (isCreate
-      ? createWritersRoomSetting(workId, payload)
-      : updateWritersRoomSetting(workId, setting.id, payload)
+      ? createWritersRoomPlace(workId, payload)
+      : updateWritersRoomPlace(workId, place.id, payload)
     ).catch((err) => {
       toast.error(`Save failed: ${err.message}`);
       return null;
@@ -240,15 +240,15 @@ function SettingEditor({ workId, setting, onSaved, onDeleted, onCancel }) {
   };
 
   const remove = async () => {
-    if (!setting) return;
+    if (!place) return;
     setSaving(true);
-    const ok = await deleteWritersRoomSetting(workId, setting.id).then(() => true).catch((err) => {
+    const ok = await deleteWritersRoomPlace(workId, place.id).then(() => true).catch((err) => {
       toast.error(`Delete failed: ${err.message}`);
       return false;
     });
     setSaving(false);
     if (ok) {
-      toast.success(`${setting.slugline || setting.name} removed`);
+      toast.success(`${place.slugline || place.name} removed`);
       onDeleted?.();
     }
   };
@@ -277,7 +277,7 @@ function SettingEditor({ workId, setting, onSaved, onDeleted, onCancel }) {
         <span className="text-[9px] uppercase tracking-wider text-gray-500">Name (optional, human-readable)</span>
         <input value={draft.name} onChange={set('name')} placeholder="The Kitchen, Curry O'City…" className={inputCls} />
       </label>
-      {SETTING_FIELDS.map((f) => (
+      {PLACE_FIELDS.map((f) => (
         <label key={f.key} className="block">
           <span className="text-[9px] uppercase tracking-wider text-gray-500">{f.label}</span>
           {f.kind === 'multiline' ? (

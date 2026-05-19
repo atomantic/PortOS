@@ -133,6 +133,16 @@ describe('storyArc — sanitizeSeason', () => {
     expect(next.createdAt).not.toBe(original.createdAt); // both flipped
     expect(next.updatedAt > original.updatedAt).toBe(true);
   });
+
+  // `locked` defaults to false and only accepts strict-true so a typo
+  // ("locked: 'yes'") can't accidentally freeze a season.
+  it('defaults locked to false and coerces truthy non-booleans away', () => {
+    expect(sanitizeSeason({ title: 'x' }).locked).toBe(false);
+    expect(sanitizeSeason({ title: 'x', locked: false }).locked).toBe(false);
+    expect(sanitizeSeason({ title: 'x', locked: 'yes' }).locked).toBe(false);
+    expect(sanitizeSeason({ title: 'x', locked: 1 }).locked).toBe(false);
+    expect(sanitizeSeason({ title: 'x', locked: true }).locked).toBe(true);
+  });
 });
 
 describe('storyArc — sanitizeSeasonList', () => {

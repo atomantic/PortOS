@@ -15,7 +15,8 @@
  * Subscriptions are local-only state (data/sharing/subscriptions.json) — the
  * bucket itself only holds the deterministic manifest file. Multiple peers
  * may both be subscribing the same bucket; each writes their own
- * sub-<kind>-<recordId>.json with their own source attribution.
+ * sub-<kind>-<recordId>-<senderInstanceId>.json with their own source
+ * attribution, so two peers sharing the same record don't collide.
  */
 
 import { join } from 'path';
@@ -35,7 +36,8 @@ import {
 // Re-export so existing callers (importer.js etc.) keep their import path
 // stable; the canonical implementation now lives in recordEvents.js.
 export { withReexportSuppressed };
-import { subscriptionFilename } from './manifest.js';
+import { subscriptionFilename, legacySubscriptionFilename } from './manifest.js';
+import { getInstanceId } from '../instances.js';
 
 // Re-export from the canonical source so other modules can import the
 // filename helper from either side without forcing a manifest.js import.
@@ -185,14 +187,34 @@ export async function unsubscribe(id) {
   // path may be unmounted; the subscription record removal still wins so the
   // user's "I want to stop sharing" intent is honored regardless. Importers
   // on other peers see the file vanish via chokidar `unlink`.
+  //
+  // Also clean up the pre-sharing-v2 legacy filename (`sub-<kind>-<id>.json`)
+  // if it exists AND was authored by THIS instance — a peer that subscribed
+  // pre-upgrade and unsubscribed post-upgrade would otherwise leave a phantom
+  // file in the bucket. Read the file's `senderInstanceId` before unlinking
+  // so we don't stomp on a different peer's pre-upgrade share. We only unlink
+  // on a strict positive match — a legacy file missing `senderInstanceId`
+  // (very early v1 or malformed) is left alone, since ownership cannot be
+  // verified and removing a peer's share is worse than leaving a phantom.
   const bucket = await getBucket(sub.bucketId).catch(() => null);
   if (bucket) {
-    const filename = subscriptionFilename(sub);
+    const myInstanceId = await getInstanceId().catch(() => null);
+    const filename = subscriptionFilename({ ...sub, senderInstanceId: myInstanceId });
     const filePath = join(bucket.path, 'manifests', filename);
     if (existsSync(filePath)) {
       await unlink(filePath).catch((err) => {
         console.log(`⚠️ sharing.subscriptions: failed to remove ${filePath}: ${err.message}`);
       });
+    }
+    const legacyName = legacySubscriptionFilename(sub);
+    const legacyPath = join(bucket.path, 'manifests', legacyName);
+    if (existsSync(legacyPath) && isStr(myInstanceId)) {
+      const legacy = await readJSONFile(legacyPath, null, { logError: false });
+      if (legacy && legacy.senderInstanceId === myInstanceId) {
+        await unlink(legacyPath).catch((err) => {
+          console.log(`⚠️ sharing.subscriptions: failed to remove legacy ${legacyPath}: ${err.message}`);
+        });
+      }
     }
   }
 

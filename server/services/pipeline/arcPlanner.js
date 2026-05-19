@@ -76,7 +76,7 @@ function renderPriorSeason(s, priorIssues) {
 
 // The world is the canonical source for factions, characters, environments,
 // etc. — without this, the arc planner would only see the series' own
-// characters/settings/objects which are usually empty pre-prose.
+// characters/places/objects which are usually empty pre-prose.
 async function loadWorldContext(universeId) {
   if (!universeId) return null;
   const world = await getUniverse(universeId).catch(() => null);
@@ -199,7 +199,7 @@ async function buildArcOverviewContext(series, preloadedWorld) {
     pickedShapeId: arc.shape || '',
     allowedShapeIdsCsv: ARC_SHAPE_IDS.join(', '),
     existingCharactersJson: JSON.stringify(canon.characters, null, 2),
-    existingSettingsJson: JSON.stringify(canon.settings, null, 2),
+    existingPlacesJson: JSON.stringify(canon.places, null, 2),
     existingObjectsJson: JSON.stringify(canon.objects, null, 2),
   };
 }
@@ -315,7 +315,7 @@ async function buildSeasonEpisodesContext(series, season, priorSeasons, priorIss
       episodeCountTarget: season.episodeCountTarget,
     },
     existingCharactersJson: JSON.stringify(canon.characters, null, 2),
-    existingSettingsJson: JSON.stringify(canon.settings, null, 2),
+    existingPlacesJson: JSON.stringify(canon.places, null, 2),
     existingObjectsJson: JSON.stringify(canon.objects, null, 2),
   };
 }
@@ -374,6 +374,16 @@ export async function generateSeasonEpisodes(seriesId, seasonId, options = {}) {
   const season = seasons.find((s) => s.id === seasonId);
   if (!season) {
     throw makeErr(`Season not found on series: ${seasonId}`, ERR_VALIDATION);
+  }
+  // Per-season lock — same semantics as the arc-level lock above, scoped to
+  // this volume. Generating episodes seeds new issue records under the
+  // season; a locked season's shape is frozen, so refuse before the LLM call.
+  // Verify (read-only) stays available so the user can still inspect findings.
+  if (season.locked === true) {
+    throw makeErr(
+      `Season "${season.title || season.number}" is locked — unlock it before generating episodes`,
+      ERR_VALIDATION,
+    );
   }
   // A season with no synopsis + no logline gives the LLM nothing to riff
   // against — fail loud so the user sees the misconfiguration instead of
@@ -651,7 +661,7 @@ async function buildVerifyContext(series, preloadedWorld) {
     ...base,
     seasonsTreeJson: JSON.stringify(tree, null, 2),
     existingCharactersJson: JSON.stringify(canon.characters, null, 2),
-    existingSettingsJson: JSON.stringify(canon.settings, null, 2),
+    existingPlacesJson: JSON.stringify(canon.places, null, 2),
     existingObjectsJson: JSON.stringify(canon.objects, null, 2),
   };
 }

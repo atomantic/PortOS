@@ -17,7 +17,7 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import {
   validateRequest, imageEdgeSchema, refineImagePixelCap, PIXEL_CAP_MESSAGE,
 } from '../lib/validation.js';
-import { optionalUpload } from '../lib/multipart.js';
+import { optionalUploadFields } from '../lib/multipart.js';
 import * as imageGen from '../services/imageGen/index.js';
 import { local, IMAGE_GEN_MODES } from '../services/imageGen/index.js';
 import { enqueueJob, attachSseClient as attachQueueSseClient, cancelJob, listJobs } from '../services/mediaJobQueue/index.js';
@@ -66,6 +66,13 @@ const generateSchema = z.object({
   // upload. Strength: 0.0 = ignore source, 1.0 = max influence.
   initImageFile: z.string().max(256).regex(/^[^/\\]+\.(png|jpg|jpeg|webp)$/i, 'init image must be a basename ending in png/jpg/jpeg/webp').optional(),
   initImageStrength: z.number().min(0).max(1).optional(),
+  // Multi-reference image editing (FLUX.2). Up to 4 reference images are
+  // uploaded as separate multipart fields `referenceImage1` … `referenceImage4`;
+  // `referenceStrengths` is a parallel array of weights (0.0 = ignore the
+  // reference, 1.0 = full influence). The schema only constrains the strengths
+  // array — file presence is enforced at the upload layer, and the route
+  // pairs filled slots with their strengths positionally.
+  referenceStrengths: z.array(z.number().min(0).max(1)).max(4).optional(),
 }).refine(refineImagePixelCap, { message: PIXEL_CAP_MESSAGE, path: ['width'] });
 
 // JSON callers (SDAPI bridge, avatar route, the Imagine page's old payload
@@ -77,18 +84,30 @@ const generateSchema = z.object({
 const ACCEPTED_INIT_IMAGE_MIME = new Set(['image/png', 'image/jpeg', 'image/webp']);
 const MIME_TO_EXT = { 'image/png': '.png', 'image/jpeg': '.jpg', 'image/webp': '.webp' };
 
-const initImageUpload = optionalUpload('initImage', {
+// Multi-reference editing accepts up to 4 references on dedicated field names.
+// The legacy single `initImage` upload (mflux i2i) stays on its own slot so a
+// FLUX.2 multi-ref upload and an mflux i2i upload don't collide.
+const REFERENCE_IMAGE_FIELDS = ['referenceImage1', 'referenceImage2', 'referenceImage3', 'referenceImage4'];
+const IMAGE_UPLOAD_FIELDS = ['initImage', ...REFERENCE_IMAGE_FIELDS];
+
+const imageGenUploads = optionalUploadFields(IMAGE_UPLOAD_FIELDS, {
   limits: { fileSize: 20 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => cb(null, ACCEPTED_INIT_IMAGE_MIME.has((file.mimetype || '').toLowerCase())),
 });
 
 // Numerics arrive as strings from FormData — coerce before Zod validation.
+// `referenceStrengths` is a repeated key (one per slot), which arrives as a
+// string OR an array of strings; coerce element-wise so Zod sees numbers.
 function coerceFormFields(body) {
   const numericFields = ['width', 'height', 'steps', 'cfgScale', 'guidance', 'seed', 'initImageStrength'];
   for (const f of numericFields) {
     if (typeof body[f] === 'string' && body[f] !== '') body[f] = Number(body[f]);
   }
   if (typeof body.quantize === 'string' && /^\d+$/.test(body.quantize)) body.quantize = Number(body.quantize);
+  if (body.referenceStrengths != null) {
+    const raw = Array.isArray(body.referenceStrengths) ? body.referenceStrengths : [body.referenceStrengths];
+    body.referenceStrengths = raw.map((v) => (typeof v === 'string' && v !== '' ? Number(v) : v));
+  }
   return body;
 }
 
@@ -128,22 +147,83 @@ const queuedImageResponse = ({ jobId, position, status, mode, model }) => ({
   position,
 });
 
-router.post('/generate', initImageUpload, asyncHandler(async (req, res) => {
+router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
   const data = validateRequest(generateSchema, coerceFormFields(req.body));
   // Resolve init image source: uploaded file > gallery filename. The local
   // service double-checks that the path stays under PATHS.images.
   let initImagePath = null;
-  let uploadedInitTempPath = null;
-  if (req.file) {
-    await ensureDir(PATHS.images);
+  const uploadedTempPaths = [];
+  const initUpload = req.files?.initImage;
+  const referenceImagePaths = [];
+  const referenceImageStrengths = [];
+  // Pair strengths by PACK position (post-filter), not slot position — the
+  // client renumbers populated slots into `referenceImage1..N` and sends a
+  // parallel `referenceStrengths` array sized N. A curl user could leave a
+  // gap (`referenceImage2` + `referenceImage4` only); the strength at index 0
+  // still pairs with the first surviving upload in slot order.
+  const referenceUploads = REFERENCE_IMAGE_FIELDS
+    .map((field) => req.files?.[field])
+    .filter(Boolean)
+    .map((upload, packedIndex) => ({ upload, strength: data.referenceStrengths?.[packedIndex] }));
+
+  // Best-effort cleanup of every multer-staged file currently on `req.files`.
+  // The multipart parser writes uploads to `os.tmpdir()` as they stream in,
+  // so a 400 thrown from validation BEFORE we've registered the `res.on('close')`
+  // sweep would otherwise leak those temp files. Call this from any pre-stage
+  // throw site (FLUX.2-only gate, non-local-backend gate).
+  const cleanupReqFilesTemp = () => {
+    if (!req.files) return;
+    for (const f of Object.values(req.files)) {
+      if (f?.path) unlink(f.path).catch(() => {});
+    }
+  };
+
+  // Resolve the effective backend BEFORE staging reference uploads — only the
+  // local FLUX.2 runner consumes `referenceImagePaths`; an `external` or `codex`
+  // request that uploaded refs would otherwise stage files under
+  // `PATHS.imageRefs` and write sidecar metadata claiming references were used,
+  // while the actual generation silently ignored them. (Reading settings here
+  // is cheap — it's already read again below for the per-mode dispatch.)
+  const settings = await getSettings();
+  const mode = data.mode || settings.imageGen?.mode || 'external';
+
+  // Multi-reference is a FLUX.2-only, local-backend-only feature — local.js's
+  // buildArgs only emits --reference-images/--reference-strengths inside the
+  // isFlux2 branch, and codex/external backends don't read these fields at all.
+  // Reject up-front rather than copying the uploads to PATHS.imageRefs and
+  // silently dropping them downstream (which would orphan files on disk and
+  // produce metadata sidecars that lie about how the render was conditioned).
+  if (referenceUploads.length) {
+    if (mode !== 'local') {
+      cleanupReqFilesTemp();
+      throw new ServerError(
+        'Reference images are only supported for local FLUX.2 renders',
+        { status: 400, code: 'REFERENCE_IMAGES_LOCAL_ONLY' },
+      );
+    }
+    const candidate = getImageModels().find((m) => m.id === data.modelId)
+      ?? getImageModels().find((m) => m.id === 'dev')
+      ?? getImageModels()[0];
+    if (!isFlux2(candidate)) {
+      cleanupReqFilesTemp();
+      throw new ServerError(
+        'Reference images are only supported for FLUX.2 models',
+        { status: 400, code: 'REFERENCE_IMAGES_FLUX2_ONLY' },
+      );
+    }
+  }
+
+  if (initUpload) await ensureDir(PATHS.images);
+  if (referenceUploads.length) await ensureDir(PATHS.imageRefs);
+  if (initUpload) {
     // Trust the validated mimetype from the fileFilter — picking the ext
     // off the original filename can mismatch the bytes (e.g. HEIC saved
     // as .jpg). MIME_TO_EXT only contains formats the fileFilter accepts.
-    const ext = MIME_TO_EXT[(req.file.mimetype || '').toLowerCase()] || '.png';
+    const ext = MIME_TO_EXT[(initUpload.mimetype || '').toLowerCase()] || '.png';
     const initFilename = `init-${randomUUID()}${ext}`;
     initImagePath = join(PATHS.images, initFilename);
-    await copyFile(req.file.path, initImagePath);
-    uploadedInitTempPath = req.file.path;
+    await copyFile(initUpload.path, initImagePath);
+    uploadedTempPaths.push(initUpload.path);
   } else if (data.initImageFile) {
     const resolved = resolveGalleryImage(data.initImageFile);
     if (!resolved) {
@@ -151,25 +231,47 @@ router.post('/generate', initImageUpload, asyncHandler(async (req, res) => {
     }
     initImagePath = resolved;
   }
-  // Strip the route-only `initImageFile` field — providers expect `initImagePath`.
+  // Multi-reference editing (FLUX.2). Walk packed slot entries in submit
+  // order — each contributes a path + its parallel strength. Empty slots
+  // are filtered out above so the runner sees `referenceImagePaths: [p1, ...]`
+  // and aligns strengths by index.
+  for (const { upload, strength } of referenceUploads) {
+    const ext = MIME_TO_EXT[(upload.mimetype || '').toLowerCase()] || '.png';
+    const refFilename = `ref-${randomUUID()}${ext}`;
+    const refPath = join(PATHS.imageRefs, refFilename);
+    await copyFile(upload.path, refPath);
+    uploadedTempPaths.push(upload.path);
+    referenceImagePaths.push(refPath);
+    // Default to 1.0 when the client didn't send a parallel strength entry,
+    // matching the "full influence" intent of an uploaded reference.
+    referenceImageStrengths.push(typeof strength === 'number' ? strength : 1.0);
+  }
+  // Strip the route-only fields — providers expect normalized `…Path(s)`.
   delete data.initImageFile;
+  delete data.referenceStrengths;
   if (initImagePath) data.initImagePath = initImagePath;
+  if (referenceImagePaths.length) {
+    data.referenceImagePaths = referenceImagePaths;
+    data.referenceImageStrengths = referenceImageStrengths;
+  }
   if (data.guidance == null && data.cfgScale != null) {
     data.guidance = data.cfgScale;
   }
 
   // Multer's tmp upload is no longer needed once we've copied it into
-  // PATHS.images. Use res.on('close') so the temp file is cleaned up whether
+  // PATHS.images. Use res.on('close') so the temp files are cleaned up whether
   // generateImage resolves, throws (handled by errorHandler middleware), or
   // the client drops the connection mid-flight.
-  if (uploadedInitTempPath) {
-    res.on('close', () => { unlink(uploadedInitTempPath).catch(() => {}); });
+  if (uploadedTempPaths.length) {
+    res.on('close', () => {
+      for (const p of uploadedTempPaths) unlink(p).catch(() => {});
+    });
   }
   // Local + codex both go through mediaJobQueue (separate lanes — codex
   // doesn't share MLX). External SD-API stays synchronous: it's a remote
-  // call with no local single-flight constraint to absorb.
-  const settings = await getSettings();
-  const mode = data.mode || settings.imageGen?.mode || 'external';
+  // call with no local single-flight constraint to absorb. `settings` and
+  // `mode` were already resolved above (so the FLUX.2 + local-backend gate
+  // could fire before staging any uploads).
   if (mode === 'codex') {
     // Reject up-front rather than enqueueing a doomed job — codex is gated
     // behind an explicit toggle since not every Codex account has access to

@@ -14,9 +14,9 @@ import {
   listMediaCollections,
   addMediaCollectionItem, removeMediaCollectionItem,
   listImageGallery, listVideoHistory,
-  extractLastFrame, cleanGalleryImage,
   deleteImage, deleteVideoHistoryItem,
 } from '../services/api';
+import useImagePreviewActions from '../hooks/useImagePreviewActions';
 
 // Hydrate a collection's "<kind>:<ref>" pointer list into the same
 // normalized records MediaCard expects. We do this on the client so the
@@ -238,52 +238,28 @@ export default function MediaCollectionDetail() {
     else toast.success(`${verb} ${added} to "${targetName}"${note}`);
   };
 
-  // Image-Gen "Remix" and "Send to Video" piping — same patterns as
-  // MediaHistory, kept here so the collection grid is a fully usable
-  // surface for action workflows, not just a viewer.
-  const handleRemix = (item) => {
-    const params = new URLSearchParams({ remix: item.filename });
-    if (item.prompt) params.set('prompt', item.prompt);
-    navigate(`/media/image?${params.toString()}`);
-  };
-  const handleSendToVideo = (item) => {
-    const params = new URLSearchParams({ sourceImageFile: item.filename });
-    if (item.width) params.set('w', String(item.width));
-    if (item.height) params.set('h', String(item.height));
-    navigate(`/media/video?${params.toString()}`);
-  };
-  const handleClean = async (img, level) => {
-    if (!img?.filename) throw new Error('Missing filename');
-    const cleaned = await cleanGalleryImage(img.filename, level).catch((err) => {
-      toast.error(err.message || 'Failed to clean image');
-      throw err;
-    });
-    const updated = await addMediaCollectionItem(collection.id, {
-      kind: 'image',
-      ref: cleaned.filename,
-    }).catch(() => null);
-    if (updated) setCollection(updated);
-    // Seed imagesByName so hydrate() can render the cleaned file immediately
-    // — without this the next render misses it until refresh() reruns.
-    setImagesByName((m) => {
-      const next = new Map(m);
-      next.set(cleaned.filename, cleaned);
-      return next;
-    });
-    toast.success(`Cleaned (${level}) → ${cleaned.filename}`);
-  };
-
-  const handleContinue = async (item) => {
-    const { filename } = await extractLastFrame(item.id).catch((err) => {
-      toast.error(err.message || 'Failed to extract last frame');
-      return {};
-    });
-    if (!filename) return;
-    const params = new URLSearchParams({ sourceImageFile: filename });
-    if (item.width) params.set('w', String(item.width));
-    if (item.height) params.set('h', String(item.height));
-    navigate(`/media/video?${params.toString()}`);
-  };
+  // Remix / SendToVideo / Continue / Clean share a single implementation
+  // with MediaHistory, ImageGen, and the Universe Builder lightbox via
+  // `useImagePreviewActions`. The collection-specific post-clean step (add
+  // the cleaned image to THIS collection + seed imagesByName so hydrate()
+  // renders it immediately, no refresh round-trip) is wired through
+  // `onCleanComplete`.
+  const { handleRemix, handleSendToVideo, handleContinue, handleClean } = useImagePreviewActions({
+    onCleanComplete: async (cleaned) => {
+      const updated = await addMediaCollectionItem(collection.id, {
+        kind: 'image',
+        ref: cleaned.filename,
+      }).catch(() => null);
+      if (updated) setCollection(updated);
+      // Without this the next render misses the cleaned file until
+      // refresh() reruns.
+      setImagesByName((m) => {
+        const next = new Map(m);
+        next.set(cleaned.filename, cleaned);
+        return next;
+      });
+    },
+  });
 
   if (loading) return <div className="text-gray-500 text-sm">Loading…</div>;
   if (!collection) return (

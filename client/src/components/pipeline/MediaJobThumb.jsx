@@ -53,11 +53,17 @@ export default function MediaJobThumb({
   // `fill` fills the parent container's width with the image's natural
   // aspect (object-contain). State-only branches (spinner, missing, failed)
   // keep a fixed footprint so the row doesn't collapse mid-render.
+  // `xs` (48x80, 3:5 portrait) matches the universe-builder avatar slot used
+  // by variation and canon rows — portrait shape so the typical 1024x1536
+  // universe render shows the full subject without aggressive center-crop.
+  // The larger square sizes (`sm`/`md`/`lg`) are used by the pipeline
+  // comic-pages / storyboard stages where 1:1 still reads best.
   const isFill = size === 'fill';
   const dims = isFill
     ? 'w-full'
     : size === 'lg' ? 'w-32 h-32'
-    : size === 'md' ? 'w-24 h-24' : 'w-16 h-16';
+    : size === 'md' ? 'w-24 h-24'
+    : size === 'xs' ? 'w-12 h-20' : 'w-16 h-16';
   const stateDims = isFill ? 'w-full min-h-[200px]' : dims;
   const imgFit = isFill ? 'w-full h-auto max-h-[640px] object-contain' : 'w-full h-full object-cover';
 

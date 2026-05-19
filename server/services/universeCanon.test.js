@@ -9,6 +9,7 @@ vi.mock('../lib/fileUtils.js', () => ({
   ensureDir: vi.fn().mockResolvedValue(undefined),
   atomicWrite: vi.fn(async (path, data) => { fileStore.set(path, data); }),
   readJSONFile: vi.fn(async (path, fallback) => (fileStore.has(path) ? fileStore.get(path) : fallback)),
+  shortId: (id, n = 8) => (id == null ? '' : String(id).slice(0, n)),
 }));
 
 let uuidCounter = 0;
@@ -69,13 +70,19 @@ describe('universeCanon — setCanonEntryLock', () => {
     expect(reread.characters.find((c) => c.id === entryId).locked).toBe(true);
   });
 
-  it('removes the locked field entirely on unlock (minimal on-disk shape)', async () => {
+  it('persists explicit locked: false on unlock so the bit survives round-trips', async () => {
+    // After PR #N the universe-builder canon contract is "locked by default":
+    // a missing `locked` field reads as locked. Unlock therefore MUST persist
+    // explicit `false` rather than collapsing to absent — otherwise the next
+    // read of the same record would re-lock it.
     const w = await seedUniverseWithCharacters([
       { name: 'Alex', physicalDescription: 'jacket', locked: true },
     ]);
     const entryId = w.characters[0].id;
     const { entry } = await canonSvc.setCanonEntryLock(w.id, 'character', entryId, false);
-    expect(entry.locked).toBeUndefined();
+    expect(entry.locked).toBe(false);
+    const reread = (await svc.listUniverses())[0];
+    expect(reread.characters.find((c) => c.id === entryId).locked).toBe(false);
   });
 
   it('rejects unknown kind with a 400-coded ServerError', async () => {
@@ -97,6 +104,53 @@ describe('universeCanon — setCanonEntryLock', () => {
   });
 });
 
+describe('universeCanon — setCanonKindLockAll', () => {
+  it('locks every entry of the kind, counts only entries whose state changed', async () => {
+    // Two already-locked + one explicitly-unlocked: only the unlocked entry
+    // should count toward `changed`. Pins the "no-op on already-target"
+    // contract that the toast relies on for "Locked N characters".
+    const w = await seedUniverseWithCharacters([
+      { name: 'Alex', physicalDescription: 'a', locked: true },
+      { name: 'Beth', physicalDescription: 'b', locked: true },
+      { name: 'Cara', physicalDescription: 'c', locked: false },
+    ]);
+    const result = await canonSvc.setCanonKindLockAll(w.id, 'character', true);
+    expect(result.changed).toBe(1);
+    expect(result.total).toBe(3);
+    expect(result.locked).toBe(true);
+    // Persisted: every entry comes back `locked: true` on the next read.
+    const reread = (await svc.listUniverses())[0];
+    expect(reread.characters.every((c) => c.locked === true)).toBe(true);
+  });
+
+  it('unlock-all writes explicit locked:false so the bit survives the lock-by-default sanitizer', async () => {
+    const w = await seedUniverseWithCharacters([
+      { name: 'Alex', physicalDescription: 'a', locked: true },
+      { name: 'Beth', physicalDescription: 'b', locked: true },
+    ]);
+    const result = await canonSvc.setCanonKindLockAll(w.id, 'character', false);
+    expect(result.changed).toBe(2);
+    const reread = (await svc.listUniverses())[0];
+    expect(reread.characters.every((c) => c.locked === false)).toBe(true);
+  });
+
+  it('short-circuits a write when nothing changes', async () => {
+    const w = await seedUniverseWithCharacters([
+      { name: 'Alex', physicalDescription: 'a', locked: true },
+    ]);
+    const result = await canonSvc.setCanonKindLockAll(w.id, 'character', true);
+    expect(result.changed).toBe(0);
+    expect(result.total).toBe(1);
+  });
+
+  it('rejects unknown kind with a 400-coded ServerError', async () => {
+    const w = await seedUniverseWithCharacters([]);
+    await expect(
+      canonSvc.setCanonKindLockAll(w.id, 'monster', true),
+    ).rejects.toMatchObject({ status: 400, code: 'UNIVERSE_CANON_INVALID_KIND' });
+  });
+});
+
 describe('universeCanon — refineUniverseCharacter respects locks', () => {
   it('refuses with 409 when the target character is locked', async () => {
     const w = await seedUniverseWithCharacters([
@@ -110,9 +164,12 @@ describe('universeCanon — refineUniverseCharacter respects locks', () => {
   });
 
   it('proceeds when the character is unlocked', async () => {
+    // Universe canon is locked-by-default — seed entries with explicit
+    // `locked: false` to put them in the unlocked state the refine guard
+    // requires.
     const w = await seedUniverseWithCharacters([
-      { name: 'Alex', physicalDescription: 'jacket' },
-      { name: 'Beth', physicalDescription: 'coat' },
+      { name: 'Alex', physicalDescription: 'jacket', locked: false },
+      { name: 'Beth', physicalDescription: 'coat', locked: false },
     ]);
     runPromptRefineMock.mockResolvedValue({
       refined: 'fresh description', changes: [], rationale: 'distinct from Beth',
@@ -126,9 +183,11 @@ describe('universeCanon — refineUniverseCharacter respects locks', () => {
 
 describe('universeCanon — differentiateUniverseCast respects locks', () => {
   it('skips locked entries at apply time even though the LLM saw them', async () => {
+    // Beth is explicitly unlocked so the cast isn't all-locked (the guard
+    // before the LLM call) while Alex stays protected at apply time.
     const w = await seedUniverseWithCharacters([
       { name: 'Alex', physicalDescription: 'jacket', locked: true },
-      { name: 'Beth', physicalDescription: 'coat' },
+      { name: 'Beth', physicalDescription: 'coat', locked: false },
     ]);
     const [alex, beth] = w.characters;
     runStagedLLMMock.mockResolvedValue({
@@ -181,7 +240,10 @@ describe('universeCanon — extractCanonFromProse passes autoLock + sourceSeries
     expect(inserted.sourceSeriesId).toBe('ser-active');
   });
 
-  it('without autoLock, new entries are unlocked (universe-side direct extraction)', async () => {
+  it('without an explicit autoLock=false, new entries lock by default', async () => {
+    // The universe-builder default is "lock new canon on insert" so users
+    // don't have to chase batch extracts with a Lock All click; only an
+    // explicit `autoLock: false` opts out.
     const w = await seedUniverseWithCharacters([]);
     extractBibleMock.mockImplementation(async ({ kind }) => ({
       extracted: kind === 'character' ? [{ name: 'Newby' }] : [],
@@ -192,7 +254,22 @@ describe('universeCanon — extractCanonFromProse passes autoLock + sourceSeries
       kinds: ['character'],
     });
     const inserted = result.universe.characters.find((c) => c.name === 'Newby');
-    expect(inserted.locked).toBeUndefined();
+    expect(inserted.locked).toBe(true);
     expect(inserted.source).toBe('series-extract'); // default new vocab
+  });
+
+  it('autoLock=false opts out so the entry lands unlocked', async () => {
+    const w = await seedUniverseWithCharacters([]);
+    extractBibleMock.mockImplementation(async ({ kind }) => ({
+      extracted: kind === 'character' ? [{ name: 'Optout' }] : [],
+      runId: 'r', providerId: 'p', model: 'm',
+    }));
+    const result = await canonSvc.extractCanonFromProse(w.id, {
+      corpus: 'some prose',
+      kinds: ['character'],
+      autoLock: false,
+    });
+    const inserted = result.universe.characters.find((c) => c.name === 'Optout');
+    expect(inserted.locked).not.toBe(true);
   });
 });

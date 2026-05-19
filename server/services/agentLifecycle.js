@@ -385,7 +385,8 @@ export async function spawnAgentForTask(task) {
 
       worktreeInfo = await createWorktree(agentId, workspacePath, task.id, {
         baseBranch: detectedBase || undefined,
-        existingBranch: existingBranch || undefined
+        existingBranch: existingBranch || undefined,
+        planId: task.metadata?.planId || undefined
       }).catch(err => {
         emitLog('warn', `🌳 Worktree creation failed, using shared workspace: ${err.message}`, { taskId: task.id });
         return null;
@@ -414,7 +415,9 @@ export async function spawnAgentForTask(task) {
           reason: conflictResult.reason
         });
 
-        worktreeInfo = await createWorktree(agentId, workspacePath, task.id).catch(err => {
+        worktreeInfo = await createWorktree(agentId, workspacePath, task.id, {
+          planId: task.metadata?.planId || undefined
+        }).catch(err => {
           emitLog('warn', `🌳 Worktree creation failed, using shared workspace: ${err.message}`, { taskId: task.id });
           return null;
         });

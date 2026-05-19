@@ -12,9 +12,7 @@
  */
 
 import { ServerError } from "../lib/errorHandler.js";
-import { getActiveProvider, getProviderById } from "./providers.js";
-import { runPromptThroughProvider } from "../lib/promptRunner.js";
-import { resolveEffectiveModel } from "../lib/promptRunner.js";
+import { resolveProviderAndModel, runPromptThroughProvider } from "../lib/promptRunner.js";
 import {
   renderCategoriesForPrompt as renderCategoriesShared,
   renderCompositesForPrompt as renderCompositesShared,
@@ -410,10 +408,7 @@ export async function refineWorldPrompts({
     );
   }
 
-  let provider = providerId
-    ? await getProviderById(providerId).catch(() => null)
-    : null;
-  if (!provider) provider = await getActiveProvider();
+  const { provider, selectedModel } = await resolveProviderAndModel({ providerId, model });
   if (!provider) {
     throw new ServerError("No AI provider available for universe refinement", {
       status: 400,
@@ -427,11 +422,6 @@ export async function refineWorldPrompts({
     );
   }
 
-  // Resolve the model id that will ACTUALLY execute so the response /
-  // run record / log line match the args-pinned id when a CLI provider's
-  // args have a baked --model/-m flag. Shared helper documents the
-  // decision table.
-  const selectedModel = resolveEffectiveModel(provider, model) || "";
   if (!selectedModel && provider.type === "api") {
     throw new ServerError("Model is required for universe refinement", {
       status: 400,

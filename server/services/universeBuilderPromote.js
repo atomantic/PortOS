@@ -5,27 +5,24 @@
  * patch so the transition is atomic.
  */
 
-import { getActiveProvider, getProviderById } from './providers.js';
 import {
   getUniverse,
   updateUniverse,
   normalizeCategoryKey,
-  joinInfluenceList,
+  buildUniverseStyleContext,
 } from './universeBuilder.js';
 import {
   sanitizeBibleList,
   stripCanonControlFields,
-  normalizeBibleName,
+  findBibleEntryByName,
+  normalizeSlugline,
   BIBLE_FIELD,
   BIBLE_SOURCE,
   BIBLE_LIMITS,
 } from '../lib/storyBible.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { extractJson as extractJsonShared } from '../lib/jsonExtract.js';
-import {
-  resolveEffectiveModel,
-  runPromptThroughProvider,
-} from '../lib/promptRunner.js';
+import { resolveProviderAndModel, runPromptThroughProvider } from '../lib/promptRunner.js';
 
 // Inverse of BIBLE_FIELD: trunk-name (canon array key) → singular BIBLE_KIND.
 // Derived from the source-of-truth map so the two can't drift. `other` is
@@ -41,13 +38,13 @@ export const VALID_TARGET_KINDS = Object.freeze(Object.keys(KIND_TO_BIBLE));
 
 const isCharacterShape = (o) =>
   o && typeof o === 'object' && typeof o.name === 'string';
-const isSettingShape = (o) =>
+const isPlaceShape = (o) =>
   o && typeof o === 'object' && (typeof o.name === 'string' || typeof o.slugline === 'string');
 const isObjectShape = isCharacterShape;
 
 const SHAPE_PREDICATE = {
   characters: isCharacterShape,
-  settings: isSettingShape,
+  places: isPlaceShape,
   objects: isObjectShape,
 };
 
@@ -57,15 +54,9 @@ const buildPromotePrompt = ({
   category,
   universe,
 }) => {
-  const embraceTokens = joinInfluenceList(universe.influences?.embrace);
-  const styleContext = [
-    universe.logline ? `LOGLINE: ${universe.logline}` : null,
-    universe.styleNotes ? `STYLE NOTES: ${universe.styleNotes}` : null,
-    embraceTokens ? `EMBRACE INFLUENCES: ${embraceTokens}` : null,
-  ].filter(Boolean).join('\n\n');
-  const styleSection = styleContext
-    ? `\n# Universe context — keep the new canon entry consistent with this established setting\n${styleContext}\n`
-    : '';
+  const styleSection = buildUniverseStyleContext(universe, {
+    headerSuffix: 'keep the new canon entry consistent with this established setting',
+  });
 
   // Per-kind output contract. The sanitizer drops unknown fields, so
   // listing the field whitelist here is the LLM's only contract.
@@ -79,11 +70,11 @@ const buildPromotePrompt = ({
 - role: string (max ${BIBLE_LIMITS.ROLE_MAX} chars). Their function in the story (protagonist / mentor / faction lead / etc).
 - prompt: string (max ${BIBLE_LIMITS.PROMPT_MAX} chars). Render-prompt fragment for reference images — comma-separated tokens; do NOT repeat universe style tokens (they're prepended at render time).
 - tags: array of 1-3 short labels (e.g. "protagonist", "antagonist", "supporting").`;
-  } else if (targetKind === 'settings') {
-    outputContract = `Return a SINGLE JSON object describing one SETTING / PLACE. Required fields:
+  } else if (targetKind === 'places') {
+    outputContract = `Return a SINGLE JSON object describing one PLACE. Required fields:
 - name: string (max ${BIBLE_LIMITS.NAME_MAX} chars). Human label like "Foundry City". Default the variation label when no clearer name is implied.
 - slugline: string (max ${BIBLE_LIMITS.SLUGLINE_MAX} chars). Screenplay-style location header like "EXT. FOUNDRY CITY — DAY". Leave empty string when no obvious slugline applies.
-- description: string (max ${BIBLE_LIMITS.SETTING_DESCRIPTION_MAX} chars). What the place looks like + feels like.
+- description: string (max ${BIBLE_LIMITS.PLACE_DESCRIPTION_MAX} chars). What the place looks like + feels like.
 - palette: string (max ${BIBLE_LIMITS.PALETTE_MAX} chars). Dominant colors.
 - era: string (max ${BIBLE_LIMITS.ERA_MAX} chars). Time period / technology level.
 - weather: string (max ${BIBLE_LIMITS.WEATHER_MAX} chars). Typical conditions.
@@ -112,6 +103,27 @@ ${outputContract}
 - Output JUST the JSON object. NO markdown, NO commentary, NO array wrapper.
 - Use empty strings for optional fields you can't honestly infer — do NOT invent backstory or motifs unsupported by the source variation + universe context.
 - Stay tonally consistent with the LOGLINE / STYLE NOTES / EMBRACE INFLUENCES above when present.`;
+};
+
+// Find a canon entry that collides with `label` (and, for places, the
+// slugline derived from `label` or `secondarySlug`). Run pre-LLM against
+// the prompt-building snapshot AND post-LLM against the latest persisted
+// canon — keeps the duplicate-detection logic in one place.
+const findCanonCollision = (canon, label, targetKind, secondarySlug = '') => {
+  const direct = findBibleEntryByName(canon, label);
+  if (direct) return direct;
+  if (targetKind !== 'places') return null;
+  const needleSlug = normalizeSlugline(label);
+  const secondary = normalizeSlugline(secondarySlug);
+  if (!needleSlug && !secondary) return null;
+  return canon.find((e) => {
+    if (!e || typeof e !== 'object') return false;
+    const eSlug = normalizeSlugline(e.slugline);
+    const eName = normalizeSlugline(e.name);
+    if (needleSlug && (eSlug === needleSlug || eName === needleSlug)) return true;
+    if (secondary && (eSlug === secondary || eName === secondary)) return true;
+    return false;
+  }) || null;
 };
 
 const extractEntryJson = (raw, kind) => {
@@ -146,7 +158,7 @@ const extractEntryJson = (raw, kind) => {
  * @param {string} options.category — bucket key (case-insensitive)
  * @param {string} options.label — variation label (case-insensitive); the
  *   first matching variation in the bucket is promoted.
- * @param {'characters'|'settings'|'objects'} [options.targetKind] — required
+ * @param {'characters'|'places'|'objects'} [options.targetKind] — required
  *   when the source category's `kind` is 'other'; ignored otherwise.
  * @param {string} [options.providerId]
  * @param {string} [options.model]
@@ -184,7 +196,7 @@ export async function promoteVariationToCanon(universeId, options = {}) {
   if (targetKind === 'other' || !VALID_TARGET_KINDS.includes(targetKind)) {
     if (!VALID_TARGET_KINDS.includes(rawTargetKind)) {
       throw new ServerError(
-        `Bucket "${categoryKey}" has kind "${bucket.kind || 'other'}" — pass targetKind (characters|settings|objects) to promote variations from it`,
+        `Bucket "${categoryKey}" has kind "${bucket.kind || 'other'}" — pass targetKind (characters|places|objects) to promote variations from it`,
         { status: 400, code: 'UNIVERSE_PROMOTE_NO_TARGET_KIND' },
       );
     }
@@ -207,11 +219,13 @@ export async function promoteVariationToCanon(universeId, options = {}) {
   // Refuse silent duplicate creation: if a canon entry with the variation's
   // label already exists, surface a 409 so the UI can suggest "open the
   // existing entry" or "rename then promote" rather than producing a second
-  // record that the merge logic would silently swallow on next save.
+  // record that the merge logic would silently swallow on next save. For
+  // places (kind whose identity is slugline-keyed via MERGE_CONFIG), also
+  // match the variation label against existing entries' `slugline` so a
+  // dash-variant or slug-vs-name promotion doesn't slip past name-only
+  // matching.
   const existingCanon = Array.isArray(universe[bibleField]) ? universe[bibleField] : [];
-  const labelKey = normalizeBibleName(variation.label);
-  const collision = existingCanon.find((e) => normalizeBibleName(e?.name) === labelKey
-    || (Array.isArray(e?.aliases) && e.aliases.some((a) => normalizeBibleName(a) === labelKey)));
+  const collision = findCanonCollision(existingCanon, variation.label, targetKind);
   if (collision) {
     throw new ServerError(
       `Canon ${targetKind} "${variation.label}" already exists — rename the variation or open the existing entry`,
@@ -223,14 +237,12 @@ export async function promoteVariationToCanon(universeId, options = {}) {
     );
   }
 
-  let provider = providerId ? await getProviderById(providerId).catch(() => null) : null;
-  if (!provider) provider = await getActiveProvider();
+  const { provider, selectedModel } = await resolveProviderAndModel({ providerId, model });
   if (!provider) {
     throw new ServerError('No AI provider available for variation promotion', {
       status: 503, code: 'UNIVERSE_PROMOTE_NO_PROVIDER',
     });
   }
-  const selectedModel = resolveEffectiveModel(provider, model);
 
   const prompt = buildPromotePrompt({
     targetKind,
@@ -260,6 +272,10 @@ export async function promoteVariationToCanon(universeId, options = {}) {
     ...stripCanonControlFields(parsed),
     name: (typeof parsed?.name === 'string' && parsed.name.trim()) ? parsed.name.trim() : variation.label,
     source: BIBLE_SOURCE.UNIVERSE_EXPAND,
+    // Default-lock promoted canon entries. Promotion produces a named identity
+    // the user picked deliberately; treat it as user-authoritative so AI
+    // refine/differentiate paths skip it until the user explicitly unlocks.
+    locked: true,
   };
   if (!enriched.prompt && typeof variation.prompt === 'string' && variation.prompt.trim()) {
     enriched.prompt = variation.prompt.trim();
@@ -276,15 +292,61 @@ export async function promoteVariationToCanon(universeId, options = {}) {
   // Build the patch: append the new canon entry + drop the source variation
   // from its bucket. Both writes go through one updateUniverse so the
   // transition is atomic (success = entry in canon AND variation gone).
-  const nextCanon = [...existingCanon, sanitized];
-  const nextVariations = variations.filter((_, i) => i !== sourceIdx);
-  const patch = {
-    [bibleField]: nextCanon,
-    categories: {
-      [categoryKey]: { kind: bucket.kind, variations: nextVariations },
-    },
-  };
-  const updated = await updateUniverse(universeId, patch);
+  //
+  // The mutator runs INSIDE the file-level write queue so a concurrent edit
+  // between the (pre-LLM) duplicate check and the persist can't slip a
+  // colliding canon entry in, and the source variation is re-located by
+  // label on the freshest persisted bucket — the original `sourceIdx` is
+  // stale once the queue releases.
+  const updated = await updateUniverse(universeId, async (latest) => {
+    const latestBucket = latest.categories?.[categoryKey];
+    if (!latestBucket) {
+      throw new ServerError(
+        `Category "${categoryKey}" was deleted while promoting — re-open the universe and try again`,
+        { status: 409, code: 'UNIVERSE_PROMOTE_CATEGORY_GONE' },
+      );
+    }
+    const latestVariations = Array.isArray(latestBucket.variations) ? latestBucket.variations : [];
+    // Re-locate by label (case-insensitive). The pre-LLM `sourceIdx` is
+    // stale — concurrent edits could have reordered or removed entries.
+    const latestSourceIdx = latestVariations.findIndex(
+      (v) => typeof v?.label === 'string' && v.label.toLowerCase() === needle,
+    );
+    if (latestSourceIdx < 0) {
+      throw new ServerError(
+        `Variation "${rawLabel}" was removed from bucket "${categoryKey}" during promotion`,
+        { status: 409, code: 'UNIVERSE_PROMOTE_VARIATION_GONE' },
+      );
+    }
+    // Re-check the duplicate-name collision against the LATEST canon — a
+    // concurrent promote (or manual canon add) in another tab could have
+    // landed an entry with the same name while the LLM was thinking. The
+    // sanitized entry's slugline is included as a secondary key for the
+    // places case, since the LLM might have emitted a clean slugline
+    // that collides with an existing entry whose name doesn't match.
+    const latestCanon = Array.isArray(latest[bibleField]) ? latest[bibleField] : [];
+    const lateCollision = findCanonCollision(latestCanon, sanitized.name, targetKind, sanitized.slugline);
+    if (lateCollision) {
+      throw new ServerError(
+        `Canon ${targetKind} "${sanitized.name}" already exists — rename the variation or open the existing entry`,
+        {
+          status: 409,
+          code: 'UNIVERSE_PROMOTE_DUPLICATE',
+          context: { details: { existingId: lateCollision.id } },
+        },
+      );
+    }
+
+    return {
+      [bibleField]: [...latestCanon, sanitized],
+      categories: {
+        [categoryKey]: {
+          kind: latestBucket.kind,
+          variations: latestVariations.filter((_, i) => i !== latestSourceIdx),
+        },
+      },
+    };
+  });
   // updateUniverse re-runs sanitizers; pull the merged entry back out by
   // id so the response reflects the canonical persisted shape.
   const persisted = (updated[bibleField] || []).find((e) => e.id === sanitized.id) || sanitized;

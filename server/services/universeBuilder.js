@@ -25,13 +25,16 @@
  * other name the user picks at kickoff).
  */
 
-import { join } from 'path';
+import { join, basename } from 'path';
 import { randomUUID } from 'crypto';
-import { PATHS, atomicWrite, readJSONFile, ensureDir } from '../lib/fileUtils.js';
+import { PATHS, atomicWrite, readJSONFile, ensureDir, resolveImageRef } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { composeStyledPrompt } from '../lib/composeStyledPrompt.js';
+import { richCanonDescriptorFragments } from '../lib/canonPrompt.js';
 import {
   sanitizeBibleList, BIBLE_KIND, BIBLE_FIELD, BIBLE_LIMITS, BIBLE_SOURCE,
+  SERVER_OWNED_CHARACTER_FIELDS,
+  pruneStaleReferenceSheets,
   normalizeBibleName, isStr, trimTo,
 } from '../lib/storyBible.js';
 import { sanitizeOrigin } from '../lib/sharingOrigin.js';
@@ -44,7 +47,7 @@ import { renameCollectionForUniverse, unlinkCollectionsForUniverse } from './med
 //        split on commas and merged into influences.embrace / influences.avoid
 //        so there is a single token-list editing surface.
 //   v4 — categories carry a `kind` field tagging them to one of the 3 canon
-//        trunks (characters/settings/objects/other); the default `characters`
+//        trunks (characters/places/objects/other); the default `characters`
 //        category is retired and any variations get folded into canon
 //        characters[]. See "Categories vs canon — decision" in PLAN.md.
 export const CURRENT_SCHEMA_VERSION = 4;
@@ -75,7 +78,10 @@ export const NAME_MAX_LENGTH = 100;
 // A render can enqueue up to 5 categories × 50 variations × 20 batchPerVariation
 // = 5000 jobs. Cap at 10k to leave headroom against future bumps to those caps.
 const MAX_RUN_JOB_IDS = 10000;
-export const STARTER_PROMPT_MAX = 4000;
+// The starter idea is whatever the user wants to write — anything from a
+// one-line pitch to a multi-page treatment. Cap is a sanity ceiling against
+// runaway payloads, not an artificial brevity constraint.
+export const STARTER_PROMPT_MAX = 200_000;
 export const PROMPT_FRAGMENT_MAX = 2000;
 export const COMPOSITE_PROMPT_MAX = 4000;
 export const VARIATION_LABEL_MAX = 120;
@@ -92,6 +98,17 @@ export const COMPOSITE_SHEET_KINDS = Object.freeze([
 ]);
 export const WORLD_CATEGORY_KEY_MAX = 64;
 export const WORLD_CATEGORY_COUNT_MAX = 30;
+// Per-entry render history caps reuse the bible's existing limits so a
+// variation/sheet entry can't accrue more refs than canon already allows.
+export const IMAGE_REFS_PER_ENTRY_MAX = BIBLE_LIMITS.IMAGE_REFS_PER_ENTRY_MAX;
+export const IMAGE_REF_FILENAME_MAX = BIBLE_LIMITS.IMAGE_REF_MAX;
+// `entryRef.kind` discriminator — the kind tag that universeRun job tags carry
+// so the collection hook knows which list to append the rendered filename to.
+export const ENTRY_REF_KIND = Object.freeze({
+  VARIATION: 'variation',
+  SHEET: 'sheet',
+  CANON: 'canon',
+});
 
 // Influences — structured token lists that ARE the universe's style + negative
 // prompts. Surfaced in the UI as "Style prompt" (embrace) and "Negative prompt"
@@ -149,7 +166,7 @@ export const WORLD_CATEGORIES = Object.freeze([
 // knows which canon trunk to render it under. `other` is the sink for
 // un-classified custom buckets; an "Auto-sort" UI action LLM-classifies them
 // into one of the 3 real kinds.
-export const CATEGORY_KINDS = Object.freeze(['characters', 'settings', 'objects', 'other']);
+export const CATEGORY_KINDS = Object.freeze(['characters', 'places', 'objects', 'other']);
 export const DEFAULT_CATEGORY_KIND = 'other';
 
 
@@ -158,9 +175,9 @@ export const DEFAULT_CATEGORY_KIND = 'other';
 // to DEFAULT_CATEGORY_KIND ('other') unless the input carries an explicit
 // valid `kind`.
 export const WORLD_CATEGORY_DEFAULT_KINDS = Object.freeze({
-  landscapes: 'settings',
-  environments: 'settings',
-  structures: 'settings',
+  landscapes: 'places',
+  environments: 'places',
+  structures: 'places',
   vehicles: 'objects',
 });
 
@@ -177,8 +194,8 @@ const resolveCategoryKind = (key, rawKind) => {
 // by the optional pre-v4 backfill for legacy `landscapes/vehicles/etc` buckets.
 const CATEGORY_TO_CANON = Object.freeze({
   characters:   { kind: BIBLE_KIND.CHARACTER, tags: [] },
-  landscapes:   { kind: BIBLE_KIND.SETTING,   tags: ['landscape'] },
-  environments: { kind: BIBLE_KIND.SETTING,   tags: ['environment'] },
+  landscapes:   { kind: BIBLE_KIND.PLACE,   tags: ['landscape'] },
+  environments: { kind: BIBLE_KIND.PLACE,   tags: ['environment'] },
   structures:   { kind: BIBLE_KIND.OBJECT,    tags: ['structure'] },
   vehicles:     { kind: BIBLE_KIND.OBJECT,    tags: ['vehicle'] },
 });
@@ -209,16 +226,77 @@ export const normalizeCategoryKey = (raw) => {
 // ("character_variations", "Characters", etc.) after key normalization.
 const isCharactersBucket = (k) => /^characters?(_|$)/i.test(normalizeCategoryKey(k));
 
+// Mint a stable id when raw is missing/blank. Variations and composite sheets
+// historically had no id (just label+prompt); ensuring one now means rename and
+// bucket-move preserve the linkage to the entry's rendered imageRefs[]. Existing
+// non-empty ids are normalized (whitespace-trimmed and capped to 80 chars) on
+// every read/write, so callers controlling ids (sync importer) should supply
+// already-normalized values to ensure verbatim round-trip — any leading/trailing
+// whitespace or excess length will be silently truncated.
+//
+// WARNING: minted ids are NOT persisted by readState() — every read of a
+// legacy record mints a fresh UUID. Callers that queue async work referencing
+// the id (e.g. an `entryRef` on a render job that a completion hook will
+// resolve later) must force a write first via `needsEntryIdPersist(id)` +
+// `updateUniverse(id, () => ({}))` so the queued id matches the next read.
+const ensureEntryId = (raw, prefix) => {
+  if (isStr(raw) && raw.trim()) return raw.trim().slice(0, 80);
+  return `${prefix}${randomUUID()}`;
+};
+
+// Sanitize a filename-only image reference. Basename strip + traversal guards
+// mirror server/lib/fileUtils.js#resolveGalleryImage — no FS check here because
+// sanitize runs on every read. Stale-file collapse happens in the UI via the
+// thumbnail's onError fallback.
+const sanitizeImageRefFilename = (raw) => {
+  if (!isStr(raw)) return '';
+  const trimmed = raw.trim().slice(0, IMAGE_REF_FILENAME_MAX);
+  if (!trimmed) return '';
+  // Reject any path separator before basename() — POSIX basename() doesn't
+  // treat `\` as a separator, so a Windows-style traversal like `..\foo.png`
+  // would otherwise pass through as a single token.
+  if (/[/\\]/.test(trimmed)) return '';
+  const safe = basename(trimmed);
+  if (!safe || safe === '.' || safe === '..') return '';
+  return safe;
+};
+
+// Render history for variations + composite sheets. Newest last. Deduped so a
+// re-render that produced the same gallery filename doesn't bloat the list.
+const sanitizeEntryImageRefs = (raw) => {
+  if (!Array.isArray(raw)) return [];
+  const out = [];
+  const seen = new Set();
+  for (const v of raw) {
+    const safe = sanitizeImageRefFilename(v);
+    if (!safe || seen.has(safe)) continue;
+    seen.add(safe);
+    out.push(safe);
+  }
+  // Keep the most recent `IMAGE_REFS_PER_ENTRY_MAX` entries — older ones drop
+  // off the front so the cap doesn't strand new renders.
+  return out.length > IMAGE_REFS_PER_ENTRY_MAX
+    ? out.slice(-IMAGE_REFS_PER_ENTRY_MAX)
+    : out;
+};
+
 const sanitizeVariation = (raw) => {
   if (!raw || typeof raw !== 'object') return null;
   const label = trimTo(raw.label, VARIATION_LABEL_MAX);
   const prompt = trimTo(raw.prompt, PROMPT_FRAGMENT_MAX);
   if (!label || !prompt) return null;
   // Per-item lock — when true, expand merges preserve this entry instead of
-  // letting the LLM regenerate it. Only `true` is recorded; missing/false
-  // collapses to undefined so the on-disk shape stays minimal.
-  const out = { label, prompt };
-  if (raw.locked === true) out.locked = true;
+  // letting the LLM regenerate it. Default is `true` (locked) so newly-arriving
+  // variations from extract / generate / manual add are protected by default;
+  // only explicit `locked: false` records the user's unlock so it survives
+  // round-trips through the sanitizer.
+  const out = {
+    id: ensureEntryId(raw.id, 'var-'),
+    label,
+    prompt,
+    imageRefs: sanitizeEntryImageRefs(raw.imageRefs),
+    locked: raw.locked === false ? false : true,
+  };
   return out;
 };
 
@@ -228,15 +306,23 @@ const sanitizeCompositeSheet = (raw) => {
   const prompt = trimTo(raw.prompt, COMPOSITE_PROMPT_MAX);
   if (!label || !prompt) return null;
   const kind = COMPOSITE_SHEET_KINDS.includes(raw.kind) ? raw.kind : 'reference_sheet';
-  const out = { kind, label, prompt };
-  if (raw.locked === true) out.locked = true;
+  // Default to locked — same rationale as sanitizeVariation; user explicitly
+  // unlocks via `locked: false` and that survives round-trips.
+  const out = {
+    id: ensureEntryId(raw.id, 'sheet-'),
+    kind,
+    label,
+    prompt,
+    imageRefs: sanitizeEntryImageRefs(raw.imageRefs),
+    locked: raw.locked === false ? false : true,
+  };
   return out;
 };
 
 const sanitizeCategory = (raw, key) => {
   // Per-category structure: { kind, variations: [{ label, prompt }] }. Cap so a
   // runaway LLM can't blow up the universe template; matches the route schema.
-  // `kind` tags the bucket to one of the 3 canon trunks (characters/settings/
+  // `kind` tags the bucket to one of the 3 canon trunks (characters/places/
   // objects) or 'other'; resolveCategoryKind picks the best value from
   // (explicit input || built-in default || 'other').
   if (!raw || typeof raw !== 'object') {
@@ -470,7 +556,7 @@ function foldRetiredCharactersBucket(raw, canon) {
   if (!variations) return canon;
   const next = {
     characters: Array.isArray(canon.characters) ? [...canon.characters] : [],
-    settings: canon.settings,
+    places: canon.places,
     objects: canon.objects,
   };
   // Index existing canon character names AND aliases — server-side
@@ -478,7 +564,10 @@ function foldRetiredCharactersBucket(raw, canon) {
   // variation matching an existing alias should collide and NOT create a
   // duplicate. Without alias indexing, an "Ashley" character with alias
   // "Ash" plus a `categories.characters: [{label: "Ash"}]` payload would
-  // produce two records.
+  // produce two records. We keep a Set (rather than re-scanning the live
+  // array via findBibleEntryByName each iteration) so the per-variation
+  // membership test stays O(1) — folding a large retired bucket against a
+  // large canon would otherwise be O(n*m).
   const seen = new Set();
   for (const e of next.characters) {
     if (e?.name) seen.add(normalizeBibleName(e.name));
@@ -519,14 +608,14 @@ function foldRetiredCharactersBucket(raw, canon) {
 // retired `characters` bucket is handled by foldRetiredCharactersBucket
 // before this runs; here we only fold the *other* legacy categories
 // (landscapes/environments/structures/vehicles + customs) into
-// settings/objects for the v3→v4 transition.
+// places/objects for the v3→v4 transition.
 function backfillCanonFromCategories(raw, existingCanon) {
   // v4 hot path — already backfilled. Sanitize through the kind sanitizers
   // once and return; no category scan needed.
   if (raw.schemaVersion >= CURRENT_SCHEMA_VERSION) {
     return {
       characters: sanitizeBibleList(existingCanon.characters, BIBLE_KIND.CHARACTER),
-      settings: sanitizeBibleList(existingCanon.settings, BIBLE_KIND.SETTING),
+      places: sanitizeBibleList(existingCanon.places, BIBLE_KIND.PLACE),
       objects: sanitizeBibleList(existingCanon.objects, BIBLE_KIND.OBJECT),
       schemaVersion: raw.schemaVersion,
     };
@@ -534,12 +623,12 @@ function backfillCanonFromCategories(raw, existingCanon) {
 
   const next = {
     characters: Array.isArray(existingCanon.characters) ? [...existingCanon.characters] : [],
-    settings: Array.isArray(existingCanon.settings) ? [...existingCanon.settings] : [],
+    places: Array.isArray(existingCanon.places) ? [...existingCanon.places] : [],
     objects: Array.isArray(existingCanon.objects) ? [...existingCanon.objects] : [],
   };
   const nameSeen = {
     characters: new Set(next.characters.map((e) => normalizeBibleName(e?.name))),
-    settings: new Set(next.settings.map((e) => normalizeBibleName(e?.name))),
+    places: new Set(next.places.map((e) => normalizeBibleName(e?.name))),
     objects: new Set(next.objects.map((e) => normalizeBibleName(e?.name))),
   };
 
@@ -565,9 +654,9 @@ function backfillCanonFromCategories(raw, existingCanon) {
         source: BIBLE_SOURCE.UNIVERSE_EXPAND,
       };
       if (variation?.locked === true) entry.locked = true;
-      // Setting sanitizer requires a name OR slugline; planting the label as
+      // Place sanitizer requires a name OR slugline; planting the label as
       // both preserves the variation identity for scene-matchers.
-      if (kind === BIBLE_KIND.SETTING) entry.slugline = label;
+      if (kind === BIBLE_KIND.PLACE) entry.slugline = label;
       next[targetField].push(entry);
       nameSeen[targetField].add(nameKey);
     }
@@ -575,7 +664,7 @@ function backfillCanonFromCategories(raw, existingCanon) {
 
   return {
     characters: sanitizeBibleList(next.characters, BIBLE_KIND.CHARACTER),
-    settings: sanitizeBibleList(next.settings, BIBLE_KIND.SETTING),
+    places: sanitizeBibleList(next.places, BIBLE_KIND.PLACE),
     objects: sanitizeBibleList(next.objects, BIBLE_KIND.OBJECT),
     schemaVersion: CURRENT_SCHEMA_VERSION,
   };
@@ -608,16 +697,27 @@ const sanitizeTemplate = (raw) => {
   //      bucket arriving from any write path folds into universe.characters[].
   //   2. backfillCanonFromCategories — legacy v3→v4 migration. Runs ONLY for
   //      pre-v4 reads, folds all OTHER category buckets (landscapes/vehicles/
-  //      custom) into settings/objects. New v4 universes skip this so Phase
+  //      custom) into places/objects. New v4 universes skip this so Phase
   //      B's separation of canon (named entities) and categories (exploratory
   //      variations) stays clean.
   const foldedCanon = foldRetiredCharactersBucket(raw, {
     characters: raw.characters,
-    settings: raw.settings,
+    places: raw.places,
     objects: raw.objects,
   });
   const canonBackfill = backfillCanonFromCategories(raw, foldedCanon);
-  const { characters, settings, objects, schemaVersion } = canonBackfill;
+  const { schemaVersion } = canonBackfill;
+  // Default-lock universe canon entries. Existing records on disk that pre-
+  // date the lock-by-default contract have no `locked` field; stamp `true`
+  // here so reads return a locked view. Explicit `locked: false` is preserved
+  // verbatim so a user-unlock survives round-trips (applyCanonExtras now
+  // persists both true and false).
+  const defaultLockCanon = (list) => (Array.isArray(list) ? list : []).map((e) =>
+    e && typeof e === 'object' && e.locked === undefined ? { ...e, locked: true } : e
+  );
+  const characters = defaultLockCanon(canonBackfill.characters);
+  const places = defaultLockCanon(canonBackfill.places);
+  const objects = defaultLockCanon(canonBackfill.objects);
   const llm = raw.llm && typeof raw.llm === 'object'
     ? {
       provider: trimTo(raw.llm.provider, 80) || null,
@@ -638,7 +738,7 @@ const sanitizeTemplate = (raw) => {
     influences,
     locked,
     characters,
-    settings,
+    places,
     objects,
     schemaVersion,
     llm,
@@ -706,6 +806,34 @@ export async function getUniverse(id) {
   return w;
 }
 
+// Returns true when the raw on-disk universe carries variations or composite
+// sheets that are missing a stable `id` field — i.e. sanitizeTemplate would
+// mint fresh UUIDs (and those UUIDs would differ on every read until the
+// migration is persisted). The render route uses this to gate a one-time
+// no-op write before queueing jobs whose `entryRef.id` must match the on-disk
+// record at completion time. Reads raw JSON without sanitizing, so callers
+// can skip the write entirely when the universe is already fully migrated —
+// avoiding unwanted `updatedAt` bumps that would otherwise interfere with
+// LWW sync and trigger spurious re-export/notification emits.
+export async function needsEntryIdPersist(id) {
+  await ensureDir(PATHS.data);
+  const raw = await readJSONFile(statePath(), DEFAULT_STATE, { logError: false });
+  const rec = Array.isArray(raw.universes) ? raw.universes.find((u) => u?.id === id) : null;
+  if (!rec) return false;
+  const cats = rec.categories && typeof rec.categories === 'object' ? rec.categories : {};
+  for (const cat of Object.values(cats)) {
+    const vars = Array.isArray(cat?.variations) ? cat.variations : [];
+    for (const v of vars) {
+      if (!isStr(v?.id) || !v.id.trim()) return true;
+    }
+  }
+  const sheets = Array.isArray(rec.compositeSheets) ? rec.compositeSheets : [];
+  for (const s of sheets) {
+    if (!isStr(s?.id) || !s.id.trim()) return true;
+  }
+  return false;
+}
+
 export async function createUniverse(input = {}) {
   const name = trimTo(input.name, NAME_MAX_LENGTH);
   if (!name) throw makeErr(`Universe name is required (1..${NAME_MAX_LENGTH} chars)`, ERR_VALIDATION);
@@ -729,12 +857,12 @@ export async function createUniverse(input = {}) {
       // (writers-room promote, share-bucket import). sanitizeTemplate runs
       // each through sanitizeBibleList, so per-entry shape is enforced.
       characters: input.characters || [],
-      settings: input.settings || [],
+      places: input.places || [],
       objects: input.objects || [],
       // Stamp the current schema so backfillCanonFromCategories takes its
       // hot-path skip on first read. Without this, the legacy categories→
       // canon backfill fires on every brand-new universe and re-pollutes
-      // `characters/settings/objects` with every category variation —
+      // `characters/places/objects` with every category variation —
       // counter to Phase B's separation of canon (named entities) from
       // categories (exploratory variations). New universes are always at
       // CURRENT_SCHEMA_VERSION; the backfill exists only for legacy reads.
@@ -773,16 +901,41 @@ export async function insertUniverseWithId(input = {}) {
   });
 }
 
-export async function updateUniverse(id, patch = {}) {
+export async function updateUniverse(id, patchOrMutator = {}) {
   // The queued section covers only the universe-builder read/modify/write
   // cycle. The cross-file media-collection rename runs *after* the queue
   // releases so a slow/stuck collection write can't block unrelated universe
   // mutators (the universe row is already persisted by then).
-  const { merged, nameChanged } = await queueUniverseWrite(async () => {
+  //
+  // `patchOrMutator` overloads:
+  //   - Plain object: patch is applied directly inside the queue (legacy).
+  //   - `async (latest) => patch | null`: mutator runs INSIDE the queue with
+  //     the freshest persisted record so callers whose read-modify-write
+  //     straddles a slow LLM call can't race a concurrent edit. Returning
+  //     `null`/`undefined` short-circuits the write and resolves with the
+  //     unchanged record (no `updatedAt` bump, no rename cascade, no
+  //     `recordUpdated` emit).
+  const isMutator = typeof patchOrMutator === 'function';
+  const { merged, nameChanged, skipped } = await queueUniverseWrite(async () => {
     const state = await readState();
     const idx = state.universes.findIndex((w) => w.id === id);
     if (idx < 0) throw makeErr(`Universe not found: ${id}`, ERR_NOT_FOUND);
     const cur = state.universes[idx];
+
+    let patch;
+    if (isMutator) {
+      patch = await patchOrMutator(cur);
+      if (patch === null || patch === undefined) {
+        return { merged: cur, nameChanged: false, skipped: true };
+      }
+      // `typeof === 'object'` matches arrays and null — reject both so a stray
+      // `return []` can't slip through and silently no-op the categories merge.
+      if (Array.isArray(patch) || typeof patch !== 'object') {
+        throw makeErr('updateUniverse mutator must return a plain object or null', ERR_VALIDATION);
+      }
+    } else {
+      patch = patchOrMutator;
+    }
 
     // Merge `categories` per-key — a partial PATCH that only includes
     // `landscapes` must NOT wipe characters/structures/etc. Whole categories
@@ -815,13 +968,83 @@ export async function updateUniverse(id, patch = {}) {
       'logline', 'premise', 'styleNotes', 'compositeSheets',
       // Canon entity arrays — patched wholesale (the sanitizer reruns
       // sanitizeBibleList so per-entry shape is enforced on every save).
-      'characters', 'settings', 'objects',
+      'characters', 'places', 'objects',
       // Share-bucket origin metadata (importer sets it; user clears via wholesale null).
       'origin',
     ];
     const scalarPatch = Object.fromEntries(
       PATCHABLE_SCALARS.filter((k) => k in patch).map((k) => [k, patch[k]]),
     );
+    // Server-owned operational fields on characters (see
+    // SERVER_OWNED_CHARACTER_FIELDS in storyBible.js) are written only by
+    // server-side render-completion mutators. A literal-object PATCH that
+    // round-trips a character body the client loaded before a newer
+    // render finished would otherwise clobber the freshly-stamped
+    // pointer (multi-tab / parallel render race). Preserve cur's value
+    // per-(id, field); new characters in the patch start fresh.
+    //
+    // ONLY applies to literal-object patches. The mutator path is the
+    // trusted writer here — `onSheetComplete` reads `cur` itself and
+    // intentionally constructs a patch with the newly stamped value, so
+    // running preservation against its output would clobber the stamp
+    // back to the OLD/null value and the sheet would never persist. The
+    // sharing importer wraps `updateUniverse(id, () => record)` for the
+    // same reason — sync's intent is LWW including operational pointers,
+    // so it opts into the mutator-bypass.
+    if (!isMutator
+      && Array.isArray(scalarPatch.characters)
+      && Array.isArray(cur.characters)) {
+      const curById = new Map(cur.characters.filter((c) => c?.id).map((c) => [c.id, c]));
+      scalarPatch.characters = scalarPatch.characters.map((c) => {
+        const prev = c?.id ? curById.get(c.id) : null;
+        if (!prev) return c;
+        const preserved = { ...c };
+        // Preserve cur's value ONLY when it still resolves on disk. Without
+        // the FS check, this guard reintroduces stale pointers that the
+        // GET route's lazy `pruneStaleReferenceSheets` already nulled out:
+        // GET → null (file gone) → client PATCH carries null → guard
+        // overwrites null with cur's stale filename → thumbnail 404s
+        // again. The pruner returns null for non-existent files, so we
+        // skip preservation in that case and let the patch's value (the
+        // pruned null) survive.
+        for (const f of SERVER_OWNED_CHARACTER_FIELDS) {
+          if (prev[f] && resolveImageRef(prev[f], { mustExist: true })) {
+            preserved[f] = prev[f];
+          }
+        }
+        return preserved;
+      });
+    }
+
+    // Server-stamped render history on variations + composite sheets. The
+    // collection hook is the sole writer (via the mutator-form of
+    // updateUniverse, which bypasses this guard). A literal-object PATCH that
+    // round-trips the variation body the client loaded before a render
+    // completed would otherwise clobber the freshly-appended filename. Match
+    // by `id` and preserve cur's `imageRefs` when it has more entries than
+    // the patch OR when their tails differ (the at-cap rotation case, where
+    // an append drops the oldest and lengths stay equal). Same-length +
+    // same-tail means the client is current and the patch survives — note
+    // that as a corollary, an empty patched list against a non-empty cur is
+    // treated as stale and cur's history is preserved (the current UI has
+    // no explicit-clear control, so this is the safer default).
+    if (!isMutator && 'categories' in patch && patch.categories && typeof patch.categories === 'object') {
+      for (const [catKey, catVal] of Object.entries(mergedCategories)) {
+        if (!catVal || !Array.isArray(catVal.variations)) continue;
+        const curCat = cur.categories?.[catKey];
+        if (!curCat || !Array.isArray(curCat.variations)) continue;
+        // Only run preservation against categories the patch actually sent —
+        // categories preserved verbatim from cur already have the right imageRefs.
+        if (!(catKey in patch.categories)) continue;
+        mergedCategories[catKey] = {
+          ...catVal,
+          variations: preserveImageRefsById(catVal.variations, curCat.variations),
+        };
+      }
+    }
+    if (!isMutator && Array.isArray(scalarPatch.compositeSheets) && Array.isArray(cur.compositeSheets)) {
+      scalarPatch.compositeSheets = preserveImageRefsById(scalarPatch.compositeSheets, cur.compositeSheets);
+    }
 
     const mergedRecord = sanitizeTemplate({
       ...cur,
@@ -837,10 +1060,21 @@ export async function updateUniverse(id, patch = {}) {
       updatedAt: new Date().toISOString(),
     });
     if (!mergedRecord) throw makeErr('Invalid universe payload', ERR_VALIDATION);
+    // Persist the stale-reference-sheet null at write time so the on-disk
+    // record catches up with what the GET-route pruner shows. Otherwise a
+    // PATCH that omits `characters` (e.g. rename) merges from `cur` and
+    // returns the stale filename, and the UI re-renders the broken thumbnail.
+    // Render-completion writes are unaffected — the renderer copies the file
+    // BEFORE its mutator runs, so the just-stamped pointer resolves on disk
+    // and the prune skips it.
+    if (Array.isArray(mergedRecord.characters)) {
+      mergedRecord.characters = pruneStaleReferenceSheets(mergedRecord.characters);
+    }
     state.universes[idx] = mergedRecord;
     await writeState(state);
-    return { merged: mergedRecord, nameChanged: mergedRecord.name !== cur.name };
+    return { merged: mergedRecord, nameChanged: mergedRecord.name !== cur.name, skipped: false };
   });
+  if (skipped) return merged;
   // Cascade rename onto the linked media collection — log but don't fail
   // the save: a stale collection name is recoverable, a failed save isn't.
   // Runs OUTSIDE the queue so the media-collections write tail can't stall
@@ -879,6 +1113,53 @@ export async function deleteUniverse(id) {
   return { id };
 }
 
+/**
+ * Sync-orchestrator entry point. Merges a remote peer's universe array into
+ * local state INSIDE `queueUniverseWrite`, so the read-modify-write window
+ * can't clobber (or be clobbered by) a concurrent local LLM auto-save,
+ * promote-variation, or handleSave running through the same queue.
+ *
+ * Each incoming remote record passes through `sanitizeTemplate` so older-
+ * schema payloads (pre-v4 universes missing `kind`, prose stylePrompt/
+ * negativePrompt, retired `characters` bucket) land on disk already migrated —
+ * matching every other entry path into this file (`createUniverse`,
+ * `insertUniverseWithId`, `updateUniverse`).
+ *
+ * LWW semantics by `updatedAt`. Local-only `runs[]` survives the merge
+ * (ephemeral, per-peer). Returns `{ applied, count }` where `count` is the
+ * number of universes actually changed/added by this merge — NOT the total
+ * post-merge count — so callers summing across categories don't over-report.
+ */
+export async function mergeUniversesFromSync(remoteUniverses) {
+  if (!Array.isArray(remoteUniverses)) return { applied: false, count: 0 };
+  return queueUniverseWrite(async () => {
+    const state = await readState();
+    const localById = new Map(state.universes.map((u) => [u.id, u]));
+    let changed = 0;
+    for (const remote of remoteUniverses) {
+      if (!remote || typeof remote !== 'object' || !isStr(remote.id)) continue;
+      const sanitized = sanitizeTemplate(remote);
+      if (!sanitized) continue;
+      const local = localById.get(sanitized.id);
+      if (!local) {
+        localById.set(sanitized.id, sanitized);
+        changed++;
+      } else {
+        const localTs = local.updatedAt || '';
+        const remoteTs = sanitized.updatedAt || '';
+        if (remoteTs > localTs) {
+          localById.set(sanitized.id, sanitized);
+          changed++;
+        }
+      }
+    }
+    if (changed === 0) return { applied: false, count: 0 };
+    state.universes = Array.from(localById.values());
+    await writeState(state);
+    return { applied: true, count: changed };
+  });
+}
+
 export async function recordRun(run) {
   const sanitized = sanitizeRun(run);
   if (!sanitized) throw makeErr('Invalid run payload', ERR_VALIDATION);
@@ -898,6 +1179,148 @@ export async function listRuns(universeId = null) {
   return [...filtered].sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
 }
 
+// Append a rendered gallery filename to the imageRefs[] of the entry the job
+// targeted. `entryRef` shape mirrors what `compilePrompts` stamps onto each
+// job (see `universeRun.entryRef`); the mutator branches on `kind`:
+//   - 'variation' → `universe.categories[categoryKey].variations[id]`
+//   - 'sheet'     → `universe.compositeSheets[id]`
+//   - 'canon'     → `universe[kindKey][id]` (characters/places/objects)
+// Dedupes against the existing list so a re-render that produces the same
+// filename doesn't bloat the history. Runs through `updateUniverse`'s mutator
+// form so the read→modify→write window is serialized against concurrent edits
+// on the same universe.
+/**
+ * Bulk-set `locked` on every variation in a category bucket. When
+ * `categoryKey` is null, every variation in every bucket of the universe is
+ * affected. Composite sheets are included in the universe-wide path (caller
+ * intent for "lock everything" is consistent across both lists). Returns the
+ * updated universe plus the count of variations whose state actually changed
+ * — entries already at the target state are no-ops so the toast can read
+ * "Locked N variations".
+ */
+export async function setVariationsLockAll(universeId, { categoryKey = null, locked, includeSheets = false } = {}) {
+  const target = locked === true;
+  let changed = 0;
+  let total = 0;
+  const updated = await updateUniverse(universeId, (cur) => {
+    const patch = {};
+    const categories = cur.categories || {};
+    const nextCategories = {};
+    let touchedCategories = false;
+    for (const [key, bucket] of Object.entries(categories)) {
+      const variations = Array.isArray(bucket?.variations) ? bucket.variations : [];
+      if (categoryKey && key !== categoryKey) {
+        nextCategories[key] = bucket;
+        continue;
+      }
+      // Increment `total` only for buckets the caller actually targeted —
+      // otherwise a single-bucket lock-all would report every variation in
+      // every bucket as the denominator and the response toast lies.
+      total += variations.length;
+      let bucketTouched = false;
+      const nextVariations = variations.map((v) => {
+        if (!v || typeof v !== 'object') return v;
+        if ((v.locked === true) === target) return v;
+        changed += 1;
+        bucketTouched = true;
+        return { ...v, locked: target };
+      });
+      nextCategories[key] = bucketTouched ? { ...bucket, variations: nextVariations } : bucket;
+      if (bucketTouched) touchedCategories = true;
+    }
+    if (touchedCategories) patch.categories = nextCategories;
+
+    if (!categoryKey && includeSheets && Array.isArray(cur.compositeSheets)) {
+      total += cur.compositeSheets.length;
+      let sheetsTouched = false;
+      const nextSheets = cur.compositeSheets.map((s) => {
+        if (!s || typeof s !== 'object') return s;
+        if ((s.locked === true) === target) return s;
+        changed += 1;
+        sheetsTouched = true;
+        return { ...s, locked: target };
+      });
+      if (sheetsTouched) patch.compositeSheets = nextSheets;
+    }
+
+    if (!Object.keys(patch).length) return null;
+    return patch;
+  });
+  return { universe: updated, locked: target, changed, total, categoryKey: categoryKey || null };
+}
+
+export async function appendEntryImageRef(universeId, entryRef, filename) {
+  if (!isStr(universeId) || !entryRef || typeof entryRef !== 'object') return null;
+  // Apply the same filename guard the sanitizer uses on round-trip so a
+  // pathy or traversal-laden filename is rejected up-front rather than
+  // entering the queued write and triggering a no-op `updatedAt` bump
+  // when sanitizeTemplate strips it on the way out.
+  const safe = sanitizeImageRefFilename(filename);
+  if (!safe) return null;
+  return updateUniverse(universeId, (cur) => {
+    if (entryRef.kind === ENTRY_REF_KIND.VARIATION && isStr(entryRef.categoryKey) && isStr(entryRef.id)) {
+      const cat = cur.categories?.[entryRef.categoryKey];
+      const variations = mapAppendImageRef(cat?.variations, entryRef.id, safe);
+      if (!variations) return null;
+      return { categories: { [entryRef.categoryKey]: { ...cat, variations } } };
+    }
+    if (entryRef.kind === ENTRY_REF_KIND.SHEET && isStr(entryRef.id)) {
+      const sheets = mapAppendImageRef(cur.compositeSheets, entryRef.id, safe);
+      if (!sheets) return null;
+      return { compositeSheets: sheets };
+    }
+    if (entryRef.kind === ENTRY_REF_KIND.CANON && isStr(entryRef.kindKey) && isStr(entryRef.id)) {
+      const list = mapAppendImageRef(cur[entryRef.kindKey], entryRef.id, safe);
+      if (!list) return null;
+      return { [entryRef.kindKey]: list };
+    }
+    return null;
+  });
+}
+
+// Preserve cur's `imageRefs` on entries the patch round-tripped from a stale
+// load. Match by `id`; we consider the patch stale (and restore cur's history)
+// when EITHER cur's list has more entries than the patch's OR the newest entry
+// (tail) differs between cur and patch. The tail check catches the at-cap case:
+// once imageRefs is at IMAGE_REFS_PER_ENTRY_MAX (12), a server-side append
+// rotates the list — pushing the new filename and dropping the oldest — so
+// lengths stay equal even though cur is strictly newer. Comparing tails
+// detects this; a stale client PATCH (with the pre-rotation list) has a
+// different last element than the freshly-appended cur. Used by both the
+// variations and composite-sheets preservation paths in updateUniverse.
+function preserveImageRefsById(next, prev) {
+  if (!Array.isArray(next) || !Array.isArray(prev)) return next;
+  const prevById = new Map(prev.filter((p) => p?.id).map((p) => [p.id, p]));
+  return next.map((n) => {
+    const p = n?.id ? prevById.get(n.id) : null;
+    if (!p) return n;
+    const prevRefs = Array.isArray(p.imageRefs) ? p.imageRefs : [];
+    const nextRefs = Array.isArray(n.imageRefs) ? n.imageRefs : [];
+    if (prevRefs.length === 0) return n;
+    // Restore when cur has strictly more refs (patch dropped some) OR cur has
+    // a different newest entry than the patch (server-side rotation at cap).
+    // Equal-length + same tail means the patch is current and survives.
+    const isStale =
+      prevRefs.length > nextRefs.length ||
+      (prevRefs.length > 0 && prevRefs[prevRefs.length - 1] !== nextRefs[nextRefs.length - 1]);
+    return isStale ? { ...n, imageRefs: prevRefs } : n;
+  });
+}
+
+// Append `filename` (deduped + capped to IMAGE_REFS_PER_ENTRY_MAX) to the
+// imageRefs[] of the entry in `list` matched by `id`. Returns the new list,
+// or `null` when the id isn't present so the caller can short-circuit.
+function mapAppendImageRef(list, id, filename) {
+  if (!Array.isArray(list) || !list.some((e) => e?.id === id)) return null;
+  return list.map((e) => {
+    if (e?.id !== id) return e;
+    const refs = Array.isArray(e.imageRefs) ? e.imageRefs : [];
+    if (refs.includes(filename)) return e;
+    const next = [...refs, filename];
+    return { ...e, imageRefs: next.length > IMAGE_REFS_PER_ENTRY_MAX ? next.slice(-IMAGE_REFS_PER_ENTRY_MAX) : next };
+  });
+}
+
 // Join an influence list (embrace or avoid) into the comma-separated string
 // shape the renderer's `composeStyledPrompt` consumes. Tokens have already
 // been deduped + capped by `sanitizeInfluenceList` at write time, so this is
@@ -909,50 +1332,90 @@ export function joinInfluenceList(structured = []) {
   return structured.filter((t) => typeof t === 'string' && t.trim()).join(', ');
 }
 
+// Collapse newlines + control chars in user-supplied free text before
+// embedding in a prompt. Defense-in-depth against a logline / styleNotes /
+// variation label containing "\n# Output contract\n…" that could redirect the
+// LLM's output structure. `trimTo` (the universe sanitizer) only trims
+// leading/trailing whitespace, so embedded newlines flow through untouched
+// without this pass.
+export const stripPromptControlChars = (s) =>
+  typeof s === 'string' ? s.replace(/[\r\n\t\f\v\u0085\u2028\u2029]+/g, ' ').trim() : '';
+
+const identityText = (s) => s;
+
+/**
+ * Render the "established universe context" prompt section shared by the
+ * Universe Builder LLM actions (auto-sort, promote-variation,
+ * generate-category-variations). Returns the full block including leading
+ * `\n# <header>\n` and trailing newline, ready to interpolate; returns `''`
+ * when no fields populate so callers can drop the block entirely.
+ *
+ * Accepts a sanitized universe object or a shaped `{ logline, premise,
+ * styleNotes }` literal (the expand-variations path passes the literal).
+ *
+ * @param {object|null|undefined} universe — sanitized universe or a shaped
+ *   `{ logline, premise, styleNotes }` literal; `null`/`undefined` returns ''.
+ * @param {object} [options]
+ * @param {boolean} [options.includePremise=false] — emit a `PREMISE:` line.
+ * @param {boolean} [options.includeEmbrace=true] — emit an
+ *   `EMBRACE INFLUENCES:` line from `universe.influences.embrace`. Off for
+ *   callers that render their own influences section.
+ * @param {boolean} [options.escape=false] — collapse newlines/control chars
+ *   in user-supplied text. Auto-sort opts in; promote/expand stayed off
+ *   historically and we preserve that to avoid behavior drift.
+ * @param {string} [options.headerSuffix=''] — appended after `Universe
+ *   context — ` to bias the LLM.
+ */
+export function buildUniverseStyleContext(universe, options = {}) {
+  if (!universe) return '';
+  const {
+    includePremise = false,
+    includeEmbrace = true,
+    escape = false,
+    headerSuffix = '',
+  } = options;
+  const safeText = escape ? stripPromptControlChars : identityText;
+  const lines = [];
+  if (universe.logline) lines.push(`LOGLINE: ${safeText(universe.logline)}`);
+  if (includePremise && universe.premise) lines.push(`PREMISE: ${safeText(universe.premise)}`);
+  if (universe.styleNotes) lines.push(`STYLE NOTES: ${safeText(universe.styleNotes)}`);
+  if (includeEmbrace) {
+    const embraceTokens = joinInfluenceList(universe.influences?.embrace);
+    if (embraceTokens) lines.push(`EMBRACE INFLUENCES: ${safeText(embraceTokens)}`);
+  }
+  if (lines.length === 0) return '';
+  const header = headerSuffix ? `Universe context — ${headerSuffix}` : 'Universe context';
+  return `\n# ${header}\n${lines.join('\n\n')}\n`;
+}
+
 // Order matches the Universe Builder tab order (Cast → Places → Objects) so
 // the compiled-prompts list is stable across renders.
 const CANON_TRUNKS = Object.freeze([
   { key: 'characters', category: 'canon:characters' },
-  { key: 'settings',   category: 'canon:settings' },
+  { key: 'places',     category: 'canon:places' },
   { key: 'objects',    category: 'canon:objects' },
 ]);
 
-// Synthesize a render prompt from a canon entry. `entry.prompt` wins when the
-// user has hand-authored one; otherwise stitch together the descriptive fields
-// that exist for this kind (per-kind contract in `BIBLE_FIELD_WHITELIST`):
-//   - characters: physicalDescription, role
-//   - settings:   description, palette, era, weather, recurringDetails
-//   - objects:    description, significance
-// The output is fed through `composeStyledPrompt(...)` so the universe's
-// embrace tokens still prefix every canon render.
+// Synthesize a render prompt from a canon entry. `entry.prompt` wins when
+// hand-authored; otherwise stitch the kind's descriptive fields. Output is
+// fed through `composeStyledPrompt(...)` so the universe's embrace tokens
+// still prefix every canon render.
 export function synthesizeCanonPrompt(kind, entry) {
   if (!entry) return '';
   if (typeof entry.prompt === 'string' && entry.prompt.trim()) return entry.prompt.trim();
   // Identifier seed: `name` is the shared anchor for all kinds. For
-  // `settings`, the bible sanitizer allows entries whose ONLY identifier is
+  // `places`, the bible sanitizer allows entries whose ONLY identifier is
   // a slugline (e.g. "EXT. FOUNDRY CITY — DAY") with no separate name — fall
   // back to slugline so those entries don't synthesize to an empty seed and
   // get silently skipped at render time.
   const name = typeof entry.name === 'string' ? entry.name.trim() : '';
-  const sluglineId = (kind === 'settings' && typeof entry.slugline === 'string')
+  const sluglineId = (kind === 'places' && typeof entry.slugline === 'string')
     ? entry.slugline.trim()
     : '';
   const identifier = name || sluglineId;
-  const parts = [];
-  if (kind === 'characters') {
-    if (entry.physicalDescription) parts.push(entry.physicalDescription);
-    if (entry.role) parts.push(entry.role);
-  } else if (kind === 'settings') {
-    if (entry.description) parts.push(entry.description);
-    if (entry.palette) parts.push(`palette: ${entry.palette}`);
-    if (entry.era) parts.push(`era: ${entry.era}`);
-    if (entry.weather) parts.push(`weather: ${entry.weather}`);
-    if (entry.recurringDetails) parts.push(entry.recurringDetails);
-  } else if (kind === 'objects') {
-    if (entry.description) parts.push(entry.description);
-    if (entry.significance) parts.push(`significance: ${entry.significance}`);
-  }
-  const body = parts.map((p) => String(p).trim()).filter(Boolean).join('. ');
+  const body = richCanonDescriptorFragments(kind, entry)
+    .map((f) => (f.prefix ? `${f.prefix}: ${f.value}` : f.value))
+    .join('. ');
   if (identifier && body) return `${identifier} — ${body}`;
   return identifier || body;
 }
@@ -969,10 +1432,10 @@ export function synthesizeCanonPrompt(kind, entry) {
  *     - array of labels → only those labels (case-insensitive match)
  *     - missing key → skip the category entirely
  *
- *   canonSelection: { characters?: 'all' | string[], settings?: ..., objects?: ... }
+ *   canonSelection: { characters?: 'all' | string[], places?: ..., objects?: ... }
  *     - 'all' → render every entry in that canon trunk
  *     - array of names → only those names (case-insensitive match against
- *       `name` and, for settings, `slugline`)
+ *       `name` and, for places, `slugline`)
  *     - missing key → skip the trunk entirely
  *
  *   batchPerVariation: how many renders per variation (1..20)
@@ -992,9 +1455,21 @@ export function compilePrompts(universe, options = {}) {
   }
   const batchPerVariation = Math.max(1, Math.min(20, Number(options.batchPerVariation) || 1));
 
+  // The universe's stored influences are the baseline; per-batch overrides
+  // append on top so the user can layer an extra-style chip, a style preset,
+  // or an extra negative without editing the persistent influences. Token
+  // lists are comma-joined to match composeStyledPrompt's input expectation.
+  const baselineEmbrace = joinInfluenceList(universe.influences?.embrace);
+  const baselineAvoid = joinInfluenceList(universe.influences?.avoid);
+  const embraceParts = [baselineEmbrace, options.stylePresetPrompt, options.extraStyle]
+    .map((s) => (typeof s === 'string' ? s.trim() : ''))
+    .filter(Boolean);
+  const avoidParts = [baselineAvoid, options.stylePresetNegative, options.extraNegative]
+    .map((s) => (typeof s === 'string' ? s.trim() : ''))
+    .filter(Boolean);
   const stylePreset = {
-    prompt: joinInfluenceList(universe.influences?.embrace),
-    negativePrompt: joinInfluenceList(universe.influences?.avoid),
+    prompt: embraceParts.join(', '),
+    negativePrompt: avoidParts.join(', '),
   };
   const compiled = [];
 
@@ -1015,6 +1490,13 @@ export function compilePrompts(universe, options = {}) {
             prompt,
             negativePrompt,
             batchIndex: i,
+            // `entryRef` lets the collection hook stamp the rendered filename
+            // back onto this exact variation regardless of subsequent label
+            // edits or bucket moves. Older universes can be missing `id` until
+            // the next write through sanitizeTemplate — fall through silently
+            // when that happens; the variation just won't accrue a render
+            // history until it next gets persisted.
+            ...(variation.id ? { entryRef: { kind: ENTRY_REF_KIND.VARIATION, categoryKey: category, id: variation.id } } : {}),
           });
         }
       }
@@ -1039,6 +1521,7 @@ export function compilePrompts(universe, options = {}) {
           prompt,
           negativePrompt,
           batchIndex: i,
+          ...(sheet.id ? { entryRef: { kind: ENTRY_REF_KIND.SHEET, id: sheet.id } } : {}),
         });
       }
     }
@@ -1058,11 +1541,11 @@ export function compilePrompts(universe, options = {}) {
           : entries.filter((e) => Array.isArray(sel) && sel.some((s) => {
               const needle = s.toLowerCase();
               if (typeof e.name === 'string' && e.name.toLowerCase() === needle) return true;
-              // Slugline is settings-only (see canonSelection docstring above
+              // Slugline is places-only (see canonSelection docstring above
               // and BIBLE_FIELD_WHITELIST). Avoid matching a stray slugline
               // field on a character/object payload — that field isn't part of
               // the canon contract for those kinds.
-              if (trunk.key === 'settings'
+              if (trunk.key === 'places'
                   && typeof e.slugline === 'string'
                   && e.slugline.toLowerCase() === needle) return true;
               return false;
@@ -1081,6 +1564,7 @@ export function compilePrompts(universe, options = {}) {
               prompt,
               negativePrompt,
               batchIndex: i,
+              ...(entry.id ? { entryRef: { kind: ENTRY_REF_KIND.CANON, kindKey: trunk.key, id: entry.id } } : {}),
             });
           }
         }

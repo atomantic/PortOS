@@ -284,6 +284,13 @@
       "returnsJson": true,
       "variables": []
     },
+    "universe-character-expand": {
+      "name": "Universe — Expand Character Profile",
+      "description": "Flesh out blank fields on one universe canon character — novelist depth (motivations / likes / mannerisms / relationships) plus graphic-novelist visual fields (silhouette / palette / expressions / props / hand gestures). Preserves populated fields and stays distinct from peer characters.",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
     "importer-classify": {
       "name": "Importer — Content-Type Classification",
       "description": "Classify the first chunk of a source as short-story / novel / screenplay / comic-script. Runs at `light` tier — only sees ~4K chars from the head of the source, costs are negligible compared to the canon/arc/issue extractors.",

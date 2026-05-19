@@ -14,10 +14,11 @@ import FavoritesFilterChip from '../components/media/FavoritesFilterChip';
 import { normalizeImage, normalizeVideo } from '../components/media/normalize';
 import { useMediaCompletionRefresh } from '../hooks/useMediaCompletionRefresh';
 import { useMediaAnnotations } from '../hooks/useMediaAnnotations';
+import useImagePreviewActions from '../hooks/useImagePreviewActions';
 import {
-  listVideoHistory, deleteVideoHistoryItem, extractLastFrame, stitchVideos,
+  listVideoHistory, deleteVideoHistoryItem, stitchVideos,
   upscaleVideo,
-  listImageGallery, deleteImage, cleanGalleryImage,
+  listImageGallery, deleteImage,
 } from '../services/api';
 
 const FILTERS = [
@@ -136,42 +137,18 @@ export default function MediaHistory() {
     }
   };
 
-  const handleContinue = async (item) => {
-    try {
-      const { filename } = await extractLastFrame(item.id);
-      const params = new URLSearchParams({ sourceImageFile: filename });
-      if (item?.width) params.set('w', String(item.width));
-      if (item?.height) params.set('h', String(item.height));
-      navigate(`/media/video?${params.toString()}`);
-    } catch (err) {
-      toast.error(err.message || 'Failed to extract last frame');
-    }
-  };
-
-  const handleClean = async (img, level) => {
-    if (!img?.filename) throw new Error('Missing filename');
-    const cleaned = await cleanGalleryImage(img.filename, level).catch((err) => {
-      toast.error(err.message || 'Failed to clean image');
-      throw err;
-    });
-    const normalized = normalizeImage(cleaned);
-    setItems((prev) => [normalized, ...prev.filter((x) => x.key !== normalized.key)]);
-    toast.success(`Cleaned (${level}) → ${cleaned.filename}`);
-  };
-
-  const handleRemix = (item) => {
-    const params = new URLSearchParams();
-    if (item.prompt && item.prompt !== '(no prompt)') params.set('prompt', item.prompt);
-    if (item.negativePrompt) params.set('negativePrompt', item.negativePrompt);
-    if (item.modelId) params.set('modelId', item.modelId);
-    if (item.width) params.set('width', String(item.width));
-    if (item.height) params.set('height', String(item.height));
-    if (item.seed != null) params.set('seed', String(item.seed));
-    if (item.steps) params.set('steps', String(item.steps));
-    if (item.guidance != null) params.set('guidance', String(item.guidance));
-    if (item.quantize) params.set('quantize', String(item.quantize));
-    navigate(`/media/image?${params}`);
-  };
+  // Remix / SendToVideo / Continue / Clean all share a single implementation
+  // with MediaCollectionDetail, ImageGen, and the Universe Builder lightbox
+  // via `useImagePreviewActions`. Only the post-clean side effect (splicing
+  // the cleaned image to the top of the local list) is page-specific —
+  // wired through `onCleanComplete` so the cleaned record lands in `items`
+  // without a full gallery refetch.
+  const { handleRemix, handleSendToVideo, handleContinue, handleClean } = useImagePreviewActions({
+    onCleanComplete: (cleaned) => {
+      const normalized = normalizeImage(cleaned);
+      setItems((prev) => [normalized, ...prev.filter((x) => x.key !== normalized.key)]);
+    },
+  });
 
   const [upscalingId, setUpscalingId] = useState(null);
   const handleUpscale = async (item) => {
@@ -187,14 +164,6 @@ export default function MediaHistory() {
       setItems((all) => [normalizeVideo(result.video), ...all]);
       toast.success('Upscaled 2×');
     }
-  };
-
-  const handleSendToVideo = (item) => {
-    const params = new URLSearchParams({ sourceImageFile: item.filename });
-    if (item.prompt && item.prompt !== '(no prompt)') params.set('prompt', item.prompt);
-    const neg = item.negativePrompt || item.raw?.negativePrompt || item.raw?.negative_prompt;
-    if (neg) params.set('negativePrompt', neg);
-    navigate(`/media/video?${params}`);
   };
 
   return (

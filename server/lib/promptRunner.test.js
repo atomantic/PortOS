@@ -22,9 +22,18 @@ vi.mock('./tuiPromptRunner.js', () => ({
   executeTuiRun: vi.fn(),
 }));
 
+// providers.js is a compatibility shim that throws when the toolkit hasn't
+// been initialized via setAIToolkit(). Mock it so the resolveProviderAndModel
+// tests can drive the active/by-id lookups directly.
+vi.mock('../services/providers.js', () => ({
+  getActiveProvider: vi.fn(),
+  getProviderById: vi.fn(),
+}));
+
 const runner = await import('../services/runner.js');
 const tuiRunner = await import('./tuiPromptRunner.js');
-const { runPromptThroughProvider } = await import('./promptRunner.js');
+const providers = await import('../services/providers.js');
+const { runPromptThroughProvider, resolveProviderAndModel } = await import('./promptRunner.js');
 
 const apiProvider = (extra = {}) => ({
   id: 'mock-api', type: 'api', defaultModel: 'm-default', ...extra,
@@ -537,5 +546,55 @@ describe('promptRunner — API timeout enforcement', () => {
     await vi.advanceTimersByTimeAsync(10000);
     expect(runner.stopRun).not.toHaveBeenCalled();
     vi.useRealTimers();
+  });
+});
+
+describe('resolveProviderAndModel', () => {
+  beforeEach(() => {
+    providers.getActiveProvider.mockReset();
+    providers.getProviderById.mockReset();
+  });
+
+  it('uses providerId when it resolves; selectedModel falls back to defaultModel', async () => {
+    providers.getProviderById.mockResolvedValue({ id: 'p-1', type: 'api', defaultModel: 'm-default' });
+    const out = await resolveProviderAndModel({ providerId: 'p-1' });
+    expect(providers.getProviderById).toHaveBeenCalledWith('p-1');
+    expect(providers.getActiveProvider).not.toHaveBeenCalled();
+    expect(out.provider?.id).toBe('p-1');
+    expect(out.selectedModel).toBe('m-default');
+  });
+
+  it('caller model wins over provider.defaultModel when the provider honors overrides', async () => {
+    providers.getProviderById.mockResolvedValue({ id: 'p-1', type: 'api', defaultModel: 'm-default' });
+    const out = await resolveProviderAndModel({ providerId: 'p-1', model: 'm-override' });
+    expect(out.selectedModel).toBe('m-override');
+  });
+
+  it('falls back to getActiveProvider when providerId lookup throws', async () => {
+    providers.getProviderById.mockRejectedValue(new Error('stale id'));
+    providers.getActiveProvider.mockResolvedValue({ id: 'active-1', type: 'api', defaultModel: 'm-default' });
+    const out = await resolveProviderAndModel({ providerId: 'p-stale' });
+    expect(out.provider?.id).toBe('active-1');
+    expect(out.selectedModel).toBe('m-default');
+  });
+
+  it('falls back to getActiveProvider when providerId resolves to null', async () => {
+    providers.getProviderById.mockResolvedValue(null);
+    providers.getActiveProvider.mockResolvedValue({ id: 'active-1', type: 'api', defaultModel: 'm-default' });
+    const out = await resolveProviderAndModel({ providerId: 'p-missing' });
+    expect(out.provider?.id).toBe('active-1');
+  });
+
+  it('skips getProviderById entirely when no providerId is given', async () => {
+    providers.getActiveProvider.mockResolvedValue({ id: 'active-1', type: 'api', defaultModel: 'm-default' });
+    const out = await resolveProviderAndModel({});
+    expect(providers.getProviderById).not.toHaveBeenCalled();
+    expect(out.provider?.id).toBe('active-1');
+  });
+
+  it('returns { provider: null, selectedModel: null } when neither resolves', async () => {
+    providers.getActiveProvider.mockResolvedValue(null);
+    const out = await resolveProviderAndModel({});
+    expect(out).toEqual({ provider: null, selectedModel: null });
   });
 });

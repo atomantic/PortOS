@@ -159,8 +159,8 @@ describe("universeBuilderExpand.normalizeCategories", () => {
       landscapes: ["Crystalline canyon basin", "Salt flat ruins"],
     });
     expect(out.landscapes.variations).toEqual([
-      { label: "Crystalline canyon basin", prompt: "Crystalline canyon basin" },
-      { label: "Salt flat ruins", prompt: "Salt flat ruins" },
+      { id: expect.stringMatching(/^var-/), label: "Crystalline canyon basin", prompt: "Crystalline canyon basin", imageRefs: [], locked: true },
+      { id: expect.stringMatching(/^var-/), label: "Salt flat ruins", prompt: "Salt flat ruins", imageRefs: [], locked: true },
     ]);
   });
 
@@ -183,7 +183,7 @@ describe("universeBuilderExpand.normalizeCategories", () => {
       },
     });
     expect(out.vehicles.variations).toEqual([
-      { label: "Walker mech", prompt: "rusted six-leg walker mech" },
+      { id: expect.stringMatching(/^var-/), label: "Walker mech", prompt: "rusted six-leg walker mech", imageRefs: [], locked: true },
     ]);
   });
 
@@ -200,7 +200,7 @@ describe("universeBuilderExpand.normalizeCategories", () => {
       },
     });
     expect(out.structures.variations).toEqual([
-      { label: "Tower", prompt: "spire of obsidian" },
+      { id: expect.stringMatching(/^var-/), label: "Tower", prompt: "spire of obsidian", imageRefs: [], locked: true },
     ]);
   });
 
@@ -215,7 +215,7 @@ describe("universeBuilderExpand.normalizeCategories", () => {
     });
     expect(out.landscapes.variations).toHaveLength(1);
     expect(out.raider_pirate_clans.variations).toEqual([
-      { label: "Wake Jackals", prompt: "spare moebius scavenger raiders" },
+      { id: expect.stringMatching(/^var-/), label: "Wake Jackals", prompt: "spare moebius scavenger raiders", imageRefs: [], locked: true },
     ]);
   });
 
@@ -258,10 +258,13 @@ describe("universeBuilderExpand.normalizeCompositeSheets", () => {
     ]);
     expect(out).toEqual([
       {
+        id: expect.stringMatching(/^sheet-/),
         kind: "reference_sheet",
         label: "Gas-Giant Drifters costume sheet",
         prompt:
           "Create a clean illustrated costume reference sheet with five figures, material swatches, fasteners, accessories, color palette strip, and simple floating-platform background.",
+        imageRefs: [],
+        locked: true,
       },
     ]);
   });
@@ -270,9 +273,12 @@ describe("universeBuilderExpand.normalizeCompositeSheets", () => {
     const out = normalizeCompositeSheets(["Canopy Symbiotes reference board"]);
     expect(out).toEqual([
       {
+        id: expect.stringMatching(/^sheet-/),
         kind: "reference_sheet",
         label: "Canopy Symbiotes reference board",
         prompt: "Canopy Symbiotes reference board",
+        imageRefs: [],
+        locked: true,
       },
     ]);
   });
@@ -288,10 +294,13 @@ describe("universeBuilderExpand.normalizeCompositeSheets", () => {
     ]);
     expect(out).toEqual([
       {
+        id: expect.stringMatching(/^sheet-/),
         kind: "world_pitch_poster",
         label: "Universe summary concept pitch poster",
         prompt:
           "Create a cinematic universe summary concept pitch poster with hero panorama, inset environments, culture callouts, palette, materials, light atmosphere, and theme icons.",
+        imageRefs: [],
+        locked: true,
       },
     ]);
   });
@@ -336,7 +345,7 @@ describe("universeBuilderExpand.normalizeCanonArray", () => {
         { slugline: "INT. FOUNDRY CITY — DAY" },
         { description: "no name no slugline — dropped" },
       ],
-      "setting",
+      "place",
     );
     expect(out).toHaveLength(2);
     expect(out[0].name).toBe("Foundry City");
@@ -387,15 +396,15 @@ describe("universeBuilderExpand.EXPANSION_PROMPT", () => {
     expect(EXPANSION_PROMPT).toContain('"avoid"');
   });
 
-  it("asks the LLM to emit canon arrays (characters / settings / objects) with rich metadata", () => {
+  it("asks the LLM to emit canon arrays (characters / places / objects) with rich metadata", () => {
     // Phase B contract: canon arrays are first-class outputs of the expand
-    // call. The client merges them into universe.characters[]/.settings[]/.objects[]
+    // call. The client merges them into universe.characters[]/.places[]/.objects[]
     // and the redesigned UI surfaces them under their canon trunks. If this
     // assertion fails, also verify normalizeCanonArray + expandWorldTemplate
     // still surface the returned values in the response payload.
     expect(EXPANSION_PROMPT).toContain("characters:");
     expect(EXPANSION_PROMPT).toContain("physicalDescription");
-    expect(EXPANSION_PROMPT).toContain("settings:");
+    expect(EXPANSION_PROMPT).toContain("places:");
     expect(EXPANSION_PROMPT).toContain("slugline");
     expect(EXPANSION_PROMPT).toContain("recurringDetails");
     expect(EXPANSION_PROMPT).toContain("objects:");
@@ -407,7 +416,7 @@ describe("universeBuilderExpand.EXPANSION_PROMPT", () => {
     // new bucket under 'other' until the user hand-sorts.
     expect(EXPANSION_PROMPT).toContain('"kind"');
     expect(EXPANSION_PROMPT).toContain('"characters"');
-    expect(EXPANSION_PROMPT).toContain('"settings"');
+    expect(EXPANSION_PROMPT).toContain('"places"');
     expect(EXPANSION_PROMPT).toContain('"objects"');
     expect(EXPANSION_PROMPT).toContain('"other"');
   });

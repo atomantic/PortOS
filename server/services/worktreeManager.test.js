@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { join } from 'path';
+import { shouldRefuseDefaultBranchMerge } from './worktreeManager.js';
 
 /**
  * Tests for the worktree manager service.
@@ -7,8 +8,10 @@ import { join } from 'path';
  */
 
 describe('Worktree Branch Naming', () => {
-  function buildBranchName(taskId, agentId) {
-    return `cos/${taskId}/${agentId}`;
+  function buildBranchName(taskId, agentId, planId) {
+    return planId
+      ? `cos/${taskId}/${planId}/${agentId}`
+      : `cos/${taskId}/${agentId}`;
   }
 
   it('should include task ID and agent ID', () => {
@@ -24,6 +27,16 @@ describe('Worktree Branch Naming', () => {
   it('should handle system task IDs', () => {
     const branch = buildBranchName('sys-001', 'agent-00000001');
     expect(branch).toBe('cos/sys-001/agent-00000001');
+  });
+
+  it('should splice planId between taskId and agentId when provided', () => {
+    const branch = buildBranchName('task-abc', 'agent-xyz', 'extract-resolve-provider-helper');
+    expect(branch).toBe('cos/task-abc/extract-resolve-provider-helper/agent-xyz');
+  });
+
+  it('should fall back to the two-segment form when planId is empty', () => {
+    expect(buildBranchName('task-abc', 'agent-xyz', '')).toBe('cos/task-abc/agent-xyz');
+    expect(buildBranchName('task-abc', 'agent-xyz', undefined)).toBe('cos/task-abc/agent-xyz');
   });
 });
 
@@ -313,5 +326,45 @@ describe('Orphaned Worktree Detection', () => {
     const orphans = findOrphanedWorktrees(worktrees, '/data/cos/worktrees', activeIds);
 
     expect(orphans).toHaveLength(0);
+  });
+});
+
+describe('Default-Branch Merge Gate (defense-in-depth)', () => {
+  it('allows merge when source repo HEAD matches the default branch', () => {
+    expect(shouldRefuseDefaultBranchMerge('main', 'main')).toBe(false);
+  });
+
+  it('allows merge for a non-main default (e.g. master, dev)', () => {
+    expect(shouldRefuseDefaultBranchMerge('master', 'master')).toBe(false);
+    expect(shouldRefuseDefaultBranchMerge('develop', 'develop')).toBe(false);
+  });
+
+  it('refuses merge when HEAD is on a TUI claim branch', () => {
+    expect(shouldRefuseDefaultBranchMerge('claim/extend-syncorchestrator', 'main')).toBe(true);
+  });
+
+  it('refuses merge when HEAD is on any feature branch', () => {
+    expect(shouldRefuseDefaultBranchMerge('feature/x', 'main')).toBe(true);
+    expect(shouldRefuseDefaultBranchMerge('fix/bug-123', 'main')).toBe(true);
+  });
+
+  it('refuses merge when HEAD is on another in-flight CoS branch', () => {
+    expect(shouldRefuseDefaultBranchMerge('cos/task-abc/agent-xyz', 'main')).toBe(true);
+  });
+
+  it('refuses merge when default branch detection failed (fail closed)', () => {
+    expect(shouldRefuseDefaultBranchMerge('main', null)).toBe(true);
+    expect(shouldRefuseDefaultBranchMerge('main', '')).toBe(true);
+    expect(shouldRefuseDefaultBranchMerge('main', undefined)).toBe(true);
+  });
+
+  it('refuses merge when source repo HEAD is unknown', () => {
+    expect(shouldRefuseDefaultBranchMerge('', 'main')).toBe(true);
+    expect(shouldRefuseDefaultBranchMerge(null, 'main')).toBe(true);
+    expect(shouldRefuseDefaultBranchMerge(undefined, 'main')).toBe(true);
+  });
+
+  it('refuses merge when both inputs are missing', () => {
+    expect(shouldRefuseDefaultBranchMerge(null, null)).toBe(true);
   });
 });

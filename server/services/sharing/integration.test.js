@@ -12,6 +12,11 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync, writeFileSync, existsSync, mkdirSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { createHash } from 'crypto';
+
+function sha256Hex(buf) {
+  return createHash('sha256').update(buf).digest('hex');
+}
 
 // Universe builder evaluates `join(PATHS.data, …)` at module-top, so PATHS
 // must point at a real dir from the very first import. Allocate a single
@@ -103,11 +108,12 @@ describe('sharing round-trip', () => {
     expect(exp.recordCount).toBe(3); // series + issue + universe
     expect(exp.assetCount).toBeGreaterThanOrEqual(1);
 
-    // Verify the bucket layout.
+    // Verify the bucket layout. v2 stores blobs content-addressed.
     expect(existsSync(join(tempBucket, 'manifests', exp.filename))).toBe(true);
     expect(existsSync(join(tempBucket, 'records', 'series', `${s.id}.json`))).toBe(true);
     expect(existsSync(join(tempBucket, 'records', 'issues', `${iss.id}.json`))).toBe(true);
-    expect(existsSync(join(tempBucket, 'assets', 'images', 'fakeasset.png'))).toBe(true);
+    const fakeHash = sha256Hex('PNGSTUB');
+    expect(existsSync(join(tempBucket, 'assets', 'blobs', fakeHash))).toBe(true);
 
     // Process as inbox (the bucket mode is 'inbox'). The manifest should
     // queue, not auto-apply.
@@ -233,7 +239,7 @@ describe('sharing round-trip', () => {
     const manifest = JSON.parse(fs.readFileSync(join(tempBucket, 'manifests', manifestFile), 'utf-8'));
     expect(manifest.collection).toMatchObject({ universeId: u.id });
     expect(manifest.collection.items).toHaveLength(2);
-    expect(fs.existsSync(join(tempBucket, 'assets', 'images', 'second.png'))).toBe(true);
+    expect(fs.existsSync(join(tempBucket, 'assets', 'blobs', sha256Hex('PNG2')))).toBe(true);
 
     // Drop the local collection + universe, then re-process: the importer
     // should recreate both, find-or-create the local collection by
@@ -253,6 +259,187 @@ describe('sharing round-trip', () => {
     expect(restoredCollection.items.map((i) => i.ref).sort()).toEqual(['fakeasset.png', 'second.png']);
     // Asset blobs are back in the local data/images pool.
     expect(fs.existsSync(join(tempData, 'images', 'second.png'))).toBe(true);
+  });
+
+  it('series export bundles the per-series collection when the series has no universe', async () => {
+    // A series without a universeId — covers auto-file into a per-series
+    // "Series: <name>" collection (mediaCollections.seriesId stamp) and the
+    // exporter must bundle that into manifest.collection so the recipient
+    // sees the same covers alongside the series record.
+    const bucket = await buckets.createBucket({ name: 'SeriesCollBucket', path: tempBucket, mode: 'auto-merge' });
+    const mediaCollections = await import('../mediaCollections.js');
+    const s = await series.createSeries({ name: 'Indie Saga', logline: 'L' });
+
+    const fs = await import('fs');
+    fs.writeFileSync(join(tempData, 'images', 'cover-a.png'), 'COVA');
+    fs.writeFileSync(join(tempData, 'images', 'cover-b.png'), 'COVB');
+    const collection = await mediaCollections.findOrCreateSeriesCollection({
+      seriesId: s.id, seriesName: s.name,
+    });
+    await mediaCollections.addItem(collection.id, { kind: 'image', ref: 'cover-a.png' });
+    await mediaCollections.addItem(collection.id, { kind: 'image', ref: 'cover-b.png' });
+
+    // Export — manifest must carry the seriesId-keyed collection payload.
+    const exp = await exporter.exportSeries(s.id, bucket.id);
+    const manifest = JSON.parse(fs.readFileSync(join(tempBucket, 'manifests', exp.filename), 'utf-8'));
+    expect(manifest.collection).toMatchObject({ seriesId: s.id });
+    expect(manifest.collection.universeId).toBeUndefined();
+    expect(manifest.collection.items.map((i) => i.ref).sort()).toEqual(['cover-a.png', 'cover-b.png']);
+    expect(fs.existsSync(join(tempBucket, 'assets', 'blobs', sha256Hex('COVA')))).toBe(true);
+    expect(fs.existsSync(join(tempBucket, 'assets', 'blobs', sha256Hex('COVB')))).toBe(true);
+
+    // Drop the local collection + series, then re-process: importer
+    // restores the series and find-or-creates the local per-series
+    // collection by seriesId, unioning the items in.
+    await mediaCollections.deleteCollection(collection.id);
+    await series.deleteSeries(s.id);
+    expect((await mediaCollections.listCollections()).find((c) => c.seriesId === s.id)).toBeUndefined();
+
+    simulateRemoteSender(tempBucket, exp.filename);
+    const r = await importer.processManifest(bucket.id, exp.filename);
+    expect(r.processed).toBe(true);
+    expect(r.outcome.collectionItemsAdded).toBe(2);
+
+    const localCollections = await mediaCollections.listCollections();
+    const restored = localCollections.find((c) => c.seriesId === s.id);
+    expect(restored).toBeTruthy();
+    expect(restored.name).toBe('Series: Indie Saga');
+    expect(restored.items.map((i) => i.ref).sort()).toEqual(['cover-a.png', 'cover-b.png']);
+    // Asset blobs are back in the local data/images pool.
+    expect(fs.existsSync(join(tempData, 'images', 'cover-a.png'))).toBe(true);
+    expect(fs.existsSync(join(tempData, 'images', 'cover-b.png'))).toBe(true);
+  });
+
+  it('series export prefers the universe-linked collection when both exist', async () => {
+    // A series can in principle be linked to a universe (universe-owned
+    // collection) AND have a stray per-series collection (e.g. from a
+    // prior universeless phase). The exporter prefers the universe one
+    // since it represents the canonical bucket for that universe.
+    const bucket = await buckets.createBucket({ name: 'BothBucket', path: tempBucket, mode: 'auto-merge' });
+    const universeBuilder = await import('../universeBuilder.js');
+    const mediaCollections = await import('../mediaCollections.js');
+    const u = await universeBuilder.createUniverse({ name: 'Linked' });
+    const s = await series.createSeries({ name: 'Series', universeId: u.id });
+
+    const fs = await import('fs');
+    fs.writeFileSync(join(tempData, 'images', 'uni.png'), 'UNI');
+    fs.writeFileSync(join(tempData, 'images', 'ser.png'), 'SER');
+
+    const uniColl = await mediaCollections.findOrCreateUniverseCollection({
+      universeId: u.id, universeName: u.name,
+    });
+    await mediaCollections.addItem(uniColl.id, { kind: 'image', ref: 'uni.png' });
+
+    const serColl = await mediaCollections.findOrCreateSeriesCollection({
+      seriesId: s.id, seriesName: s.name,
+    });
+    await mediaCollections.addItem(serColl.id, { kind: 'image', ref: 'ser.png' });
+
+    const exp = await exporter.exportSeries(s.id, bucket.id);
+    const manifest = JSON.parse(fs.readFileSync(join(tempBucket, 'manifests', exp.filename), 'utf-8'));
+    expect(manifest.collection).toMatchObject({ universeId: u.id });
+    expect(manifest.collection.items.map((i) => i.ref)).toEqual(['uni.png']);
+  });
+
+  it('linked series never falls through to a stray seriesId-stamped collection', async () => {
+    // A series can be linked to a universe AND have a stray per-series
+    // collection from a prior universeless phase (or an orphan after
+    // `unlinkCollectionsForUniverse` recovery). When the universe-linked
+    // collection happens to be absent at export time (mid-migration, or
+    // a manual deletion), the exporter must NOT silently fall back to the
+    // stale seriesId-stamped collection — linked series export under the
+    // universe-collection contract or no collection payload at all.
+    const bucket = await buckets.createBucket({ name: 'LinkedNoUniColl', path: tempBucket, mode: 'auto-merge' });
+    const universeBuilder = await import('../universeBuilder.js');
+    const mediaCollections = await import('../mediaCollections.js');
+    const u = await universeBuilder.createUniverse({ name: 'CanonOnly' });
+    const s = await series.createSeries({ name: 'Bound', universeId: u.id });
+
+    const fs = await import('fs');
+    fs.writeFileSync(join(tempData, 'images', 'stale.png'), 'STALE');
+    // Stamp a seriesId collection directly (simulating a leftover from a
+    // prior universeless phase). No universe collection exists.
+    const serColl = await mediaCollections.findOrCreateSeriesCollection({
+      seriesId: s.id, seriesName: s.name,
+    });
+    await mediaCollections.addItem(serColl.id, { kind: 'image', ref: 'stale.png' });
+    expect(await mediaCollections.findCollectionByUniverseId(u.id)).toBeNull();
+
+    const exp = await exporter.exportSeries(s.id, bucket.id);
+    const manifest = JSON.parse(fs.readFileSync(join(tempBucket, 'manifests', exp.filename), 'utf-8'));
+    // No collection payload — the stale seriesId bucket was correctly ignored.
+    expect(manifest.collection).toBeNull();
+  });
+
+  it('series collection import re-routes to the universe collection when the local series is now universe-linked', async () => {
+    // Peer's manifest was produced when the series was universeless (so it
+    // carries `collection.seriesId`), but the local series has since been
+    // linked to a universe. Importer must NOT mint a fresh seriesId-stamped
+    // collection — that would leave a rename-locked stale per-series bucket
+    // attached to a linked series, breaking the contract the exporter and
+    // cover filer enforce. Re-route the payload into the universe collection.
+    const bucket = await buckets.createBucket({ name: 'StaleSeriesPayload', path: tempBucket, mode: 'auto-merge' });
+    const mediaCollections = await import('../mediaCollections.js');
+    const universeBuilder = await import('../universeBuilder.js');
+    const fs = await import('fs');
+
+    // Sender side: universeless series + per-series collection with one cover.
+    const s = await series.createSeries({ name: 'WillLink', logline: 'L' });
+    fs.writeFileSync(join(tempData, 'images', 'stale-cover.png'), 'STALE');
+    const senderColl = await mediaCollections.findOrCreateSeriesCollection({
+      seriesId: s.id, seriesName: s.name,
+    });
+    await mediaCollections.addItem(senderColl.id, { kind: 'image', ref: 'stale-cover.png' });
+    const exp = await exporter.exportSeries(s.id, bucket.id);
+
+    // Now (still on the sender — same env, simpler test setup) link the
+    // series to a universe and drop the per-series collection. The "local"
+    // state from the importer's perspective is: linked series, no per-series
+    // collection. Recipient re-applies the manifest.
+    const u = await universeBuilder.createUniverse({ name: 'NewCanon' });
+    await series.updateSeries(s.id, { universeId: u.id });
+    await mediaCollections.deleteCollection(senderColl.id);
+
+    simulateRemoteSender(tempBucket, exp.filename);
+    const r = await importer.processManifest(bucket.id, exp.filename);
+    expect(r.processed).toBe(true);
+    expect(r.outcome.collectionItemsAdded).toBe(1);
+
+    // The cover landed in the UNIVERSE collection, not a new seriesId bucket.
+    const universeColl = await mediaCollections.findCollectionByUniverseId(u.id);
+    expect(universeColl).toBeTruthy();
+    expect(universeColl.items.map((i) => i.ref)).toEqual(['stale-cover.png']);
+    // No seriesId-stamped collection exists for the now-linked series.
+    expect(await mediaCollections.findCollectionBySeriesId(s.id)).toBeNull();
+  });
+
+  it('series collection import defers when the local series is missing', async () => {
+    // Mirrors the universe-pending case: the manifest references a
+    // seriesId we haven't imported locally. The cursor must stay
+    // un-advanced so a later sync of the series unblocks the merge.
+    const bucket = await buckets.createBucket({ name: 'DeferBucket', path: tempBucket, mode: 'auto-merge' });
+    const mediaCollections = await import('../mediaCollections.js');
+    const s = await series.createSeries({ name: 'Will Vanish' });
+    const fs = await import('fs');
+    fs.writeFileSync(join(tempData, 'images', 'late-cover.png'), 'LATE');
+    const collection = await mediaCollections.findOrCreateSeriesCollection({
+      seriesId: s.id, seriesName: s.name,
+    });
+    await mediaCollections.addItem(collection.id, { kind: 'image', ref: 'late-cover.png' });
+
+    const exp = await exporter.exportSeries(s.id, bucket.id);
+    // Delete the series locally so the importer sees an orphaned payload.
+    await mediaCollections.deleteCollection(collection.id);
+    await series.deleteSeries(s.id);
+    // Also drop the series record from the bucket so insertSeriesWithId
+    // doesn't restore it — this isolates the "collection waits on series"
+    // case rather than "round-trip restores everything."
+    fs.rmSync(join(tempBucket, 'records', 'series', `${s.id}.json`), { force: true });
+
+    simulateRemoteSender(tempBucket, exp.filename);
+    const r = await importer.processManifest(bucket.id, exp.filename);
+    expect(r.pending).toBe(true);
+    expect(r.outcome.pendingCollectionSeries).toBe(s.id);
   });
 
   it('universe export ignores a same-named unlinked collection (universeId-only routing)', async () => {
@@ -300,7 +487,8 @@ describe('sharing round-trip', () => {
     await mediaCollections.addItem(collection.id, { kind: 'image', ref: 'late.png' });
 
     const exp = await exporter.exportUniverse(u.id, bucket.id);
-    fs.rmSync(join(tempBucket, 'assets', 'images', 'late.png'), { force: true });
+    const lateHash = sha256Hex('LATEPNG');
+    fs.rmSync(join(tempBucket, 'assets', 'blobs', lateHash), { force: true });
     fs.rmSync(join(tempData, 'images', 'late.png'), { force: true });
     await mediaCollections.deleteCollection(collection.id);
     await universeBuilder.deleteUniverse(u.id);
@@ -317,7 +505,7 @@ describe('sharing round-trip', () => {
     let cursor = await readCursor(bucket.id);
     expect(hasBeenProcessed(cursor, exp.filename, exp.manifestId)).toBe(false);
 
-    fs.writeFileSync(join(tempBucket, 'assets', 'images', 'late.png'), 'LATEPNG');
+    fs.writeFileSync(join(tempBucket, 'assets', 'blobs', lateHash), 'LATEPNG');
     const retry = await importer.processBacklog(bucket.id);
     expect(retry.processed).toBe(1);
 
@@ -437,7 +625,7 @@ describe('sharing round-trip', () => {
 
     // Subscribe — first export writes a deterministic-named file.
     const sub = await subscribe({ bucketId: bucket.id, recordKind: 'universe', recordId: u.id });
-    const filename = subscriptionFilename(sub);
+    const filename = subscriptionFilename({ ...sub, senderInstanceId: 'test-instance-id' });
     const filePath = join(tempBucket, 'manifests', filename);
     const fs = await import('fs');
     expect(fs.existsSync(filePath)).toBe(true);
@@ -477,6 +665,73 @@ describe('sharing round-trip', () => {
     expect(stillThere.id).toBe(u.id);
   });
 
+  it('inbox dedup keeps newer per-sender row when older legacy file processes after it (upgrade scenario)', async () => {
+    // During the v1→v2 upgrade a bucket may briefly hold both the new
+    // `sub-<kind>-<id>-<sender>.json` and the legacy `sub-<kind>-<id>.json`
+    // for the same sender. Lexicographic backlog order visits the new file
+    // (with `-`) before the legacy file (with `.`), so without a freshness
+    // gate the older legacy manifest would clobber the newer inbox row.
+    const bucket = await buckets.createBucket({ name: 'UpgradeBucket', path: tempBucket, mode: 'inbox' });
+    const universeBuilder = await import('../universeBuilder.js');
+    const u = await universeBuilder.createUniverse({ name: 'U-upgrade' });
+
+    const manifestsDir = join(tempBucket, 'manifests');
+    mkdirSync(manifestsDir, { recursive: true });
+
+    // Hand-craft both manifests for the same (universe, sender) pair. The
+    // legacy file is OLDER (5 minutes earlier) and uses the pre-v2 name.
+    // The per-sender file is NEWER and uses the v2 name.
+    const olderTs = '2026-01-01T00:00:00.000Z';
+    const newerTs = '2026-01-01T00:05:00.000Z';
+    const baseManifest = {
+      schemaVersion: 1,
+      sharingSchemaVersion: 1,
+      producedByVersion: '1.0.0',
+      kind: 'universe',
+      subscription: { recordKind: 'universe', recordId: u.id },
+      senderInstanceId: 'remote-peer-id',
+      source: 'remote peer',
+      sourceBio: null,
+      bucketId: bucket.id,
+      bucketName: bucket.name,
+      recordIds: [u.id],
+      assetRefs: [],
+      collection: null,
+      note: null,
+    };
+    const legacyName = `sub-universe-${u.id}.json`;
+    const perSenderName = `sub-universe-${u.id}-remote-peer-id.json`;
+    writeFileSync(join(manifestsDir, legacyName), JSON.stringify({
+      ...baseManifest, id: 'mfst-legacy-old', createdAt: olderTs,
+    }));
+    writeFileSync(join(manifestsDir, perSenderName), JSON.stringify({
+      ...baseManifest, id: 'mfst-per-sender-new', createdAt: newerTs,
+    }));
+
+    // Sanity: lex-sort puts the per-sender file first, legacy after — this is
+    // the order the importer's backlog scan walks the directory in.
+    expect([legacyName, perSenderName].sort()).toEqual([perSenderName, legacyName]);
+
+    // Mirror records/ so processManifest can locate the universe payload.
+    mkdirSync(join(tempBucket, 'records', 'universes'), { recursive: true });
+    writeFileSync(
+      join(tempBucket, 'records', 'universes', `${u.id}.json`),
+      JSON.stringify({ ...u, updatedAt: newerTs }),
+    );
+
+    const r1 = await importer.processManifest(bucket.id, perSenderName);
+    expect(r1.processed).toBe(true);
+    const r2 = await importer.processManifest(bucket.id, legacyName);
+    // The older legacy manifest should NOT replace the newer inbox row.
+    expect(r2.outcome?.queued).toBe(false);
+    expect(r2.outcome?.reason).toBe('inbox-has-newer');
+
+    const finalInbox = await importer.listInbox(bucket.id);
+    expect(finalInbox).toHaveLength(1);
+    expect(finalInbox[0].manifestId).toBe('mfst-per-sender-new');
+    expect(finalInbox[0].createdAt).toBe(newerTs);
+  });
+
   it('adopts an imported universe subscription so the source bucket is selected for sharing', async () => {
     const { listSubscriptions, subscriptionFilename, __resetForTests } = await import('./subscriptions.js');
     __resetForTests();
@@ -487,7 +742,9 @@ describe('sharing round-trip', () => {
     const exp = await exporter.exportUniverse(u.id, bucket.id, {
       subscription: { recordKind: 'universe', recordId: u.id },
     });
-    expect(exp.filename).toBe(subscriptionFilename({ recordKind: 'universe', recordId: u.id }));
+    expect(exp.filename).toBe(subscriptionFilename({
+      recordKind: 'universe', recordId: u.id, senderInstanceId: 'test-instance-id',
+    }));
 
     await universeBuilder.deleteUniverse(u.id);
     expect(await listSubscriptions({ recordKind: 'universe', recordId: u.id })).toEqual([]);
@@ -595,6 +852,410 @@ describe('sharing round-trip', () => {
 
     expect(await importer.listInbox(bucket.id)).toEqual([]);
     expect(updates).toHaveLength(1);
+  });
+
+  // Rotation-orphan cull — peer reincarnates with a new senderInstanceId
+  // (factory reset, new device), and the old identity's inbox row would
+  // otherwise persist forever. Cull when same source + same record, but
+  // different senderInstanceId, AND the existing row is older than 30 days.
+  it('culls a rotation-orphan inbox row when the same source re-shares from a new senderInstanceId after 30+ days', async () => {
+    const bucket = await buckets.createBucket({ name: 'RotateBucket', path: tempBucket, mode: 'inbox' });
+    const universeBuilder = await import('../universeBuilder.js');
+    const u = await universeBuilder.createUniverse({ name: 'Shared Universe' });
+
+    // Pre-seed the inbox with a stale row from peer "Adam's old laptop"
+    // (senderInstanceId inst-OLD) — same source as the incoming manifest,
+    // same record, 60 days old.
+    const sixtyDaysAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString();
+    const fs = await import('fs');
+    const inboxFile = join(tempData, 'sharing', 'inbox', `${bucket.id}.json`);
+    mkdirSync(join(tempData, 'sharing', 'inbox'), { recursive: true });
+    fs.writeFileSync(inboxFile, JSON.stringify({ items: [{
+      manifestId: 'stale-mfst',
+      manifestFilename: `sub-universe-${u.id}-inst-OLD.json`,
+      kind: 'universe',
+      subscription: { recordKind: 'universe', recordId: u.id },
+      source: 'remote-peer',
+      sourceBio: null,
+      senderInstanceId: 'inst-OLD',
+      createdAt: sixtyDaysAgo,
+      receivedAt: sixtyDaysAgo,
+      recordIds: [u.id],
+      assetCount: 0,
+    }] }));
+
+    // Now export from the SAME source name but a fresh senderInstanceId.
+    const exp = await exporter.exportUniverse(u.id, bucket.id, {
+      subscription: { recordKind: 'universe', recordId: u.id },
+    });
+    simulateRemoteSender(tempBucket, exp.filename, 'inst-NEW');
+    // The exporter stamps `source` from the bucket's display name resolver;
+    // override on disk to match the pre-seeded row's source so the cull fires.
+    const manifestPath = join(tempBucket, 'manifests', exp.filename);
+    const m = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+    m.source = 'remote-peer';
+    fs.writeFileSync(manifestPath, JSON.stringify(m));
+
+    await importer.processManifest(bucket.id, exp.filename);
+
+    const after = await importer.listInbox(bucket.id);
+    expect(after).toHaveLength(1);
+    expect(after[0].senderInstanceId).toBe('inst-NEW');
+    expect(after[0].manifestId).not.toBe('stale-mfst');
+  });
+
+  it('preserves a same-source-different-sender row that is younger than the rotation cull window', async () => {
+    const bucket = await buckets.createBucket({ name: 'FreshSourceBucket', path: tempBucket, mode: 'inbox' });
+    const universeBuilder = await import('../universeBuilder.js');
+    const u = await universeBuilder.createUniverse({ name: 'Co-shared Universe' });
+
+    // Same source name, different senderInstanceId, only 2 days old —
+    // could plausibly be a second device of the same user (both named
+    // "MacBook") rather than a rotation orphan. Preserve it.
+    const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
+    const fs = await import('fs');
+    const inboxFile = join(tempData, 'sharing', 'inbox', `${bucket.id}.json`);
+    mkdirSync(join(tempData, 'sharing', 'inbox'), { recursive: true });
+    fs.writeFileSync(inboxFile, JSON.stringify({ items: [{
+      manifestId: 'fresh-other',
+      manifestFilename: `sub-universe-${u.id}-inst-OTHER.json`,
+      kind: 'universe',
+      subscription: { recordKind: 'universe', recordId: u.id },
+      source: 'shared-name',
+      sourceBio: null,
+      senderInstanceId: 'inst-OTHER',
+      createdAt: twoDaysAgo,
+      receivedAt: twoDaysAgo,
+      recordIds: [u.id],
+      assetCount: 0,
+    }] }));
+
+    const exp = await exporter.exportUniverse(u.id, bucket.id, {
+      subscription: { recordKind: 'universe', recordId: u.id },
+    });
+    simulateRemoteSender(tempBucket, exp.filename, 'inst-ME');
+    const manifestPath = join(tempBucket, 'manifests', exp.filename);
+    const m = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+    m.source = 'shared-name';
+    fs.writeFileSync(manifestPath, JSON.stringify(m));
+
+    await importer.processManifest(bucket.id, exp.filename);
+
+    const after = await importer.listInbox(bucket.id);
+    // Both rows should remain — fresh peer + new arrival.
+    expect(after).toHaveLength(2);
+    const senders = after.map((r) => r.senderInstanceId).sort();
+    expect(senders).toEqual(['inst-ME', 'inst-OTHER']);
+  });
+
+  it('persists a rotation-orphan cull even when the freshness gate forces an early inbox-has-newer return', async () => {
+    // Regression: the cull mutates inbox.items before the freshness gate
+    // runs. If an older manifest from the same sender arrives after the
+    // newer one is already in the inbox, the freshness gate short-circuits
+    // with `inbox-has-newer` — the cull removals on the OTHER (rotated)
+    // sender's row must still be persisted, otherwise the orphan survives
+    // until the next non-stale arrival.
+    const bucket = await buckets.createBucket({ name: 'RotateAndStaleBucket', path: tempBucket, mode: 'inbox' });
+    const universeBuilder = await import('../universeBuilder.js');
+    const u = await universeBuilder.createUniverse({ name: 'Multi-state Universe' });
+
+    const sixtyDaysAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString();
+    const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const fs = await import('fs');
+    const inboxFile = join(tempData, 'sharing', 'inbox', `${bucket.id}.json`);
+    mkdirSync(join(tempData, 'sharing', 'inbox'), { recursive: true });
+    fs.writeFileSync(inboxFile, JSON.stringify({ items: [
+      // Rotation orphan — different sender, same source, 60 days old.
+      // Must be culled by the incoming manifest.
+      {
+        manifestId: 'rotation-orphan',
+        manifestFilename: `sub-universe-${u.id}-inst-OLD.json`,
+        kind: 'universe',
+        subscription: { recordKind: 'universe', recordId: u.id },
+        source: 'remote-peer',
+        sourceBio: null,
+        senderInstanceId: 'inst-OLD',
+        createdAt: sixtyDaysAgo,
+        receivedAt: sixtyDaysAgo,
+        recordIds: [u.id],
+        assetCount: 0,
+      },
+      // Same-sender row newer than the incoming manifest below — triggers
+      // the freshness gate's `inbox-has-newer` early return.
+      {
+        manifestId: 'fresh-newer',
+        manifestFilename: `sub-universe-${u.id}-inst-NEW.json`,
+        kind: 'universe',
+        subscription: { recordKind: 'universe', recordId: u.id },
+        source: 'remote-peer',
+        sourceBio: null,
+        senderInstanceId: 'inst-NEW',
+        createdAt: yesterday,
+        receivedAt: yesterday,
+        recordIds: [u.id],
+        assetCount: 0,
+      },
+    ] }));
+
+    // Synthesize an OLDER manifest from the same fresh sender so the
+    // freshness gate fires (existing.createdAt > manifest.createdAt).
+    const exp = await exporter.exportUniverse(u.id, bucket.id, {
+      subscription: { recordKind: 'universe', recordId: u.id },
+    });
+    simulateRemoteSender(tempBucket, exp.filename, 'inst-NEW');
+    const manifestPath = join(tempBucket, 'manifests', exp.filename);
+    const m = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+    m.source = 'remote-peer';
+    // Older than the pre-seeded `fresh-newer` row.
+    const twoDaysAgo = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
+    m.createdAt = twoDaysAgo;
+    fs.writeFileSync(manifestPath, JSON.stringify(m));
+
+    const outcome = await importer.processManifest(bucket.id, exp.filename);
+    expect(outcome.outcome?.queued).toBe(false);
+    expect(outcome.outcome?.reason).toBe('inbox-has-newer');
+
+    // Despite the early return, the cull must have persisted: only the
+    // newer same-sender row remains.
+    const after = await importer.listInbox(bucket.id);
+    expect(after).toHaveLength(1);
+    expect(after[0].manifestId).toBe('fresh-newer');
+    expect(after[0].senderInstanceId).toBe('inst-NEW');
+  });
+
+  it('preserves a different-source row even when older than the rotation cull window', async () => {
+    const bucket = await buckets.createBucket({ name: 'OtherSourceBucket', path: tempBucket, mode: 'inbox' });
+    const universeBuilder = await import('../universeBuilder.js');
+    const u = await universeBuilder.createUniverse({ name: 'Public Universe' });
+
+    // Different source name, different senderInstanceId — definitely a
+    // different peer, regardless of age. Preserve.
+    const sixtyDaysAgo = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000).toISOString();
+    const fs = await import('fs');
+    const inboxFile = join(tempData, 'sharing', 'inbox', `${bucket.id}.json`);
+    mkdirSync(join(tempData, 'sharing', 'inbox'), { recursive: true });
+    fs.writeFileSync(inboxFile, JSON.stringify({ items: [{
+      manifestId: 'different-peer',
+      manifestFilename: `sub-universe-${u.id}-inst-PEER-B.json`,
+      kind: 'universe',
+      subscription: { recordKind: 'universe', recordId: u.id },
+      source: 'peer-bob',
+      sourceBio: null,
+      senderInstanceId: 'inst-PEER-B',
+      createdAt: sixtyDaysAgo,
+      receivedAt: sixtyDaysAgo,
+      recordIds: [u.id],
+      assetCount: 0,
+    }] }));
+
+    const exp = await exporter.exportUniverse(u.id, bucket.id, {
+      subscription: { recordKind: 'universe', recordId: u.id },
+    });
+    simulateRemoteSender(tempBucket, exp.filename, 'inst-PEER-A');
+    const manifestPath = join(tempBucket, 'manifests', exp.filename);
+    const m = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+    m.source = 'peer-alice';
+    fs.writeFileSync(manifestPath, JSON.stringify(m));
+
+    await importer.processManifest(bucket.id, exp.filename);
+
+    const after = await importer.listInbox(bucket.id);
+    expect(after).toHaveLength(2);
+    const sources = after.map((r) => r.source).sort();
+    expect(sources).toEqual(['peer-alice', 'peer-bob']);
+  });
+
+  it('content-addressed blob is shared when two manifests reference identical bytes under different filenames', async () => {
+    const bucket = await buckets.createBucket({ name: 'DedupBucket', path: tempBucket, mode: 'auto-merge' });
+    const fs = await import('fs');
+    const universeBuilder = await import('../universeBuilder.js');
+    const mediaCollections = await import('../mediaCollections.js');
+
+    // Two distinct filenames, identical bytes.
+    const sharedBytes = 'SHARED-PNG-PAYLOAD';
+    fs.writeFileSync(join(tempData, 'images', 'alpha.png'), sharedBytes);
+    fs.writeFileSync(join(tempData, 'images', 'beta.png'), sharedBytes);
+    const hash = sha256Hex(sharedBytes);
+
+    // Universe A references alpha.png.
+    const uniA = await universeBuilder.createUniverse({ name: 'UA' });
+    const collA = await mediaCollections.findOrCreateCollectionByName({
+      name: `Universe: ${uniA.name}`, description: '', universeId: uniA.id,
+    });
+    await mediaCollections.addItem(collA.id, { kind: 'image', ref: 'alpha.png' });
+    const expA = await exporter.exportUniverse(uniA.id, bucket.id);
+
+    // Universe B references beta.png — same bytes, different filename.
+    const uniB = await universeBuilder.createUniverse({ name: 'UB' });
+    const collB = await mediaCollections.findOrCreateCollectionByName({
+      name: `Universe: ${uniB.name}`, description: '', universeId: uniB.id,
+    });
+    await mediaCollections.addItem(collB.id, { kind: 'image', ref: 'beta.png' });
+    const expB = await exporter.exportUniverse(uniB.id, bucket.id);
+
+    // Both manifests point at the same blob path; only one on-disk file exists.
+    expect(fs.existsSync(join(tempBucket, 'assets', 'blobs', hash))).toBe(true);
+    expect(fs.readdirSync(join(tempBucket, 'assets', 'blobs'))).toEqual([hash]);
+
+    // Each manifest's assetRef carries the hash + its own original filename.
+    const mA = JSON.parse(fs.readFileSync(join(tempBucket, 'manifests', expA.filename), 'utf-8'));
+    const mB = JSON.parse(fs.readFileSync(join(tempBucket, 'manifests', expB.filename), 'utf-8'));
+    expect(mA.assetRefs).toContainEqual({ kind: 'image', ref: 'alpha.png', hash });
+    expect(mB.assetRefs).toContainEqual({ kind: 'image', ref: 'beta.png', hash });
+
+    // Import path: each manifest restores its filename in the local data dir.
+    fs.rmSync(join(tempData, 'images', 'alpha.png'), { force: true });
+    fs.rmSync(join(tempData, 'images', 'beta.png'), { force: true });
+    await mediaCollections.deleteCollection(collA.id);
+    await mediaCollections.deleteCollection(collB.id);
+    await universeBuilder.deleteUniverse(uniA.id);
+    await universeBuilder.deleteUniverse(uniB.id);
+
+    simulateRemoteSender(tempBucket, expA.filename);
+    simulateRemoteSender(tempBucket, expB.filename);
+    await importer.processManifest(bucket.id, expA.filename);
+    await importer.processManifest(bucket.id, expB.filename);
+
+    expect(fs.existsSync(join(tempData, 'images', 'alpha.png'))).toBe(true);
+    expect(fs.existsSync(join(tempData, 'images', 'beta.png'))).toBe(true);
+    expect(fs.readFileSync(join(tempData, 'images', 'alpha.png'), 'utf-8')).toBe(sharedBytes);
+    expect(fs.readFileSync(join(tempData, 'images', 'beta.png'), 'utf-8')).toBe(sharedBytes);
+  });
+
+  it('importer rejects manifest asset refs whose hash is not a 64-char hex string (path-traversal guard)', async () => {
+    const bucket = await buckets.createBucket({ name: 'HostileBucket', path: tempBucket, mode: 'auto-merge' });
+    const fs = await import('fs');
+    const { SHARING_SCHEMA_VERSION } = await import('./version.js');
+
+    // Plant a file outside the blob dir that a path-traversal attempt would target.
+    const secretsDir = mkdtempSync(join(tmpdir(), 'portos-sharing-hostile-secret-'));
+    const secretPath = join(secretsDir, 'secret.txt');
+    fs.writeFileSync(secretPath, 'SECRET-CONTENT-DO-NOT-LEAK');
+
+    // Compute the traversal that would escape <bucket>/assets/blobs/ and
+    // land on the planted secret. Use forward slashes — path.join normalizes.
+    const rel = ['..', '..', '..', '..', '..', '..', '..', '..', '..'].join('/')
+      + secretPath.replace(/\\/g, '/');
+
+    const universeBuilder = await import('../universeBuilder.js');
+    const u = await universeBuilder.createUniverse({ name: 'Hostile Universe' });
+    fs.mkdirSync(join(tempBucket, 'records', 'universes'), { recursive: true });
+    fs.writeFileSync(join(tempBucket, 'records', 'universes', `${u.id}.json`), JSON.stringify({
+      ...u,
+      origin: {
+        bucketId: bucket.id, bucketName: bucket.name,
+        source: 'hostile-peer', sourceBio: null,
+        manifestId: 'mfst-hostile', importedAt: new Date().toISOString(),
+      },
+    }));
+    await universeBuilder.deleteUniverse(u.id);
+
+    // Hostile manifest: hash is a relative path traversing out of the blob dir.
+    const hostileManifest = {
+      id: 'mfst-hostile',
+      schemaVersion: SHARING_SCHEMA_VERSION,
+      sharingSchemaVersion: SHARING_SCHEMA_VERSION,
+      producedByVersion: '9.9.9',
+      createdAt: new Date().toISOString(),
+      kind: 'universe',
+      senderInstanceId: 'hostile-peer',
+      source: 'Hostile Peer',
+      sourceBio: null,
+      bucketId: bucket.id,
+      bucketName: bucket.name,
+      recordIds: [u.id],
+      assetRefs: [{ kind: 'image', ref: 'pwned.png', hash: rel }],
+      note: null,
+    };
+    const filename = `2099-01-01T00-00-00-000Z-hostile-peer-${hostileManifest.id}.json`;
+    fs.mkdirSync(join(tempBucket, 'manifests'), { recursive: true });
+    fs.writeFileSync(join(tempBucket, 'manifests', filename), JSON.stringify(hostileManifest));
+
+    const result = await importer.processManifest(bucket.id, filename);
+    // The universe record imports fine; the asset ref is dropped at the
+    // manifest-parse boundary so no file copy is attempted.
+    expect(result.processed).toBe(true);
+    // The hostile file MUST NOT have been copied into the local data dirs.
+    expect(fs.existsSync(join(tempData, 'images', 'pwned.png'))).toBe(false);
+    expect(fs.existsSync(join(tempData, 'images', 'secret.txt'))).toBe(false);
+
+    // The secret on disk should be untouched.
+    expect(fs.readFileSync(secretPath, 'utf-8')).toBe('SECRET-CONTENT-DO-NOT-LEAK');
+
+    rmSync(secretsDir, { recursive: true, force: true });
+  });
+
+  it('bucketBlobPath / bucketBlobSidecarPath throw on malformed hash (defense-in-depth)', async () => {
+    const bogus = [
+      '../../../../etc/hosts',
+      'ABCDEF', // uppercase — must be lowercase
+      'g'.repeat(64), // not hex
+      '0'.repeat(63), // wrong length
+      '0'.repeat(65),
+      '',
+      null,
+      undefined,
+      42,
+    ];
+    for (const h of bogus) {
+      expect(() => buckets.bucketBlobPath(tempBucket, h)).toThrow();
+      expect(() => buckets.bucketBlobSidecarPath(tempBucket, h)).toThrow();
+    }
+    // Valid hash passes.
+    const ok = sha256Hex('whatever');
+    expect(buckets.bucketBlobPath(tempBucket, ok)).toBe(join(tempBucket, 'assets', 'blobs', ok));
+    expect(buckets.bucketBlobSidecarPath(tempBucket, ok)).toBe(join(tempBucket, 'assets', 'blobs', `${ok}.metadata.json`));
+  });
+
+  it('importer falls back to legacy assets/<kind>/<filename> when manifest asset ref omits hash (v1 compat)', async () => {
+    const bucket = await buckets.createBucket({ name: 'LegacyImportBucket', path: tempBucket, mode: 'auto-merge' });
+    const fs = await import('fs');
+    const { SHARING_SCHEMA_VERSION } = await import('./version.js');
+
+    // Hand-craft a v1-style bucket: blob lives at assets/images/<filename>,
+    // manifest's assetRefs has no `hash` field, schemaVersion: 1.
+    fs.mkdirSync(join(tempBucket, 'assets', 'images'), { recursive: true });
+    fs.writeFileSync(join(tempBucket, 'assets', 'images', 'legacy-v1.png'), 'V1BYTES');
+
+    const universeBuilder = await import('../universeBuilder.js');
+    const u = await universeBuilder.createUniverse({ name: 'Legacy v1 Universe' });
+    fs.writeFileSync(join(tempBucket, 'records', 'universes', `${u.id}.json`), JSON.stringify({
+      ...u,
+      origin: {
+        bucketId: bucket.id, bucketName: bucket.name,
+        source: 'old-peer', sourceBio: null,
+        manifestId: 'mfst-v1', importedAt: new Date().toISOString(),
+      },
+    }));
+    await universeBuilder.deleteUniverse(u.id);
+
+    const v1Manifest = {
+      id: 'mfst-v1',
+      schemaVersion: 1,
+      sharingSchemaVersion: 1,
+      producedByVersion: '1.0.0',
+      createdAt: new Date().toISOString(),
+      kind: 'universe',
+      senderInstanceId: 'old-peer',
+      source: 'Old Peer',
+      sourceBio: null,
+      bucketId: bucket.id,
+      bucketName: bucket.name,
+      recordIds: [u.id],
+      assetRefs: [{ kind: 'image', ref: 'legacy-v1.png' }],   // no hash
+      note: null,
+    };
+    const filename = `2000-01-01T00-00-00-000Z-old-peer-${v1Manifest.id}.json`;
+    fs.writeFileSync(join(tempBucket, 'manifests', filename), JSON.stringify(v1Manifest));
+    expect(SHARING_SCHEMA_VERSION).toBeGreaterThanOrEqual(2); // sanity
+
+    const result = await importer.processManifest(bucket.id, filename);
+    expect(result.processed).toBe(true);
+    expect(result.pending).toBeFalsy();
+
+    // Asset blob made it to the local data dir via the legacy path.
+    expect(fs.existsSync(join(tempData, 'images', 'legacy-v1.png'))).toBe(true);
+    expect(fs.readFileSync(join(tempData, 'images', 'legacy-v1.png'), 'utf-8')).toBe('V1BYTES');
   });
 
   it('refuses a manifest with a sharingSchemaVersion newer than local + emits incompatible event', async () => {

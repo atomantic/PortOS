@@ -54,9 +54,14 @@ describe('sharing/subscriptions', () => {
     expect(sub.lastManifestId).toBeTruthy();
 
     const fs = await import('fs');
-    const filename = subs.subscriptionFilename({ recordKind: 'universe', recordId: u.id });
-    expect(filename).toBe(`sub-universe-${u.id}.json`);
+    const filename = subs.subscriptionFilename({ recordKind: 'universe', recordId: u.id, senderInstanceId: 'inst-test' });
+    expect(filename).toBe(`sub-universe-${u.id}-inst-test.json`);
     expect(fs.existsSync(join(tempBucket, 'manifests', filename))).toBe(true);
+  });
+
+  it('subscriptionFilename falls back to "unknown" sender when missing', async () => {
+    const filename = subs.subscriptionFilename({ recordKind: 'series', recordId: 'ser-x' });
+    expect(filename).toBe('sub-series-ser-x-unknown.json');
   });
 
   it('subscribe is idempotent — second call re-exports onto the same file with a new manifestId', async () => {
@@ -75,7 +80,7 @@ describe('sharing/subscriptions', () => {
     const bucket = await buckets.createBucket({ name: 'B', path: tempBucket });
     const u = await universeBuilder.createUniverse({ name: 'U3' });
     const sub = await subs.subscribe({ bucketId: bucket.id, recordKind: 'universe', recordId: u.id });
-    const filename = subs.subscriptionFilename(sub);
+    const filename = subs.subscriptionFilename({ ...sub, senderInstanceId: 'inst-test' });
     const filePath = join(tempBucket, 'manifests', filename);
     const fs = await import('fs');
     expect(fs.existsSync(filePath)).toBe(true);
@@ -83,6 +88,48 @@ describe('sharing/subscriptions', () => {
     await subs.unsubscribe(sub.id);
     expect(fs.existsSync(filePath)).toBe(false);
     expect(await subs.listSubscriptions()).toEqual([]);
+  });
+
+  it('unsubscribe also cleans up the pre-sharing-v2 legacy filename when authored by this instance', async () => {
+    const bucket = await buckets.createBucket({ name: 'B', path: tempBucket });
+    const u = await universeBuilder.createUniverse({ name: 'U-legacy' });
+    const fs = await import('fs');
+
+    const sub = await subs.subscribe({ bucketId: bucket.id, recordKind: 'universe', recordId: u.id });
+    const legacyPath = join(tempBucket, 'manifests', `sub-universe-${u.id}.json`);
+    fs.writeFileSync(legacyPath, JSON.stringify({ senderInstanceId: 'inst-test' }));
+
+    await subs.unsubscribe(sub.id);
+    expect(fs.existsSync(legacyPath)).toBe(false);
+  });
+
+  it('unsubscribe preserves a legacy filename authored by a DIFFERENT peer', async () => {
+    const bucket = await buckets.createBucket({ name: 'B', path: tempBucket });
+    const u = await universeBuilder.createUniverse({ name: 'U-legacy-other' });
+    const fs = await import('fs');
+
+    const sub = await subs.subscribe({ bucketId: bucket.id, recordKind: 'universe', recordId: u.id });
+    const legacyPath = join(tempBucket, 'manifests', `sub-universe-${u.id}.json`);
+    fs.writeFileSync(legacyPath, JSON.stringify({ senderInstanceId: 'some-other-peer' }));
+
+    await subs.unsubscribe(sub.id);
+    expect(fs.existsSync(legacyPath)).toBe(true);
+  });
+
+  it('unsubscribe preserves a legacy filename with no senderInstanceId (ownership unverifiable)', async () => {
+    // A pre-v2 or malformed legacy file with no `senderInstanceId` could
+    // belong to any peer; deleting it on unsubscribe risks stomping a
+    // peer's share. The strict-equality gate must leave it in place.
+    const bucket = await buckets.createBucket({ name: 'B', path: tempBucket });
+    const u = await universeBuilder.createUniverse({ name: 'U-legacy-anon' });
+    const fs = await import('fs');
+
+    const sub = await subs.subscribe({ bucketId: bucket.id, recordKind: 'universe', recordId: u.id });
+    const legacyPath = join(tempBucket, 'manifests', `sub-universe-${u.id}.json`);
+    fs.writeFileSync(legacyPath, JSON.stringify({ /* senderInstanceId absent */ }));
+
+    await subs.unsubscribe(sub.id);
+    expect(fs.existsSync(legacyPath)).toBe(true);
   });
 
   it('listSubscriptions filters by bucketId / recordKind / recordId', async () => {

@@ -70,13 +70,13 @@ const formatCharacter = (c) => {
 // Place: prefer name; show slugline when present (screenplay-style location
 // header used by scene matchers); include recurringDetails — the expand
 // contract collects all three and the LLM uses them as continuity anchors.
-const formatSetting = (s) => {
-  const label = s.name || s.slugline || '(unnamed)';
-  const sluglineTag = s.name && s.slugline ? ` (${s.slugline})` : '';
-  const palette = s.palette ? ` palette: ${s.palette}` : '';
+const formatPlace = (p) => {
+  const label = p.name || p.slugline || '(unnamed)';
+  const sluglineTag = p.name && p.slugline ? ` (${p.slugline})` : '';
+  const palette = p.palette ? ` palette: ${p.palette}` : '';
   const parts = [
-    truncDesc(s.description || ''),
-    s.recurringDetails ? `recurring: ${truncDesc(s.recurringDetails)}` : '',
+    truncDesc(p.description || ''),
+    p.recurringDetails ? `recurring: ${truncDesc(p.recurringDetails)}` : '',
   ].filter(Boolean);
   const body = parts.length ? `: ${parts.join('. ')}` : '';
   return `  - ${label}${sluglineTag}${body}${palette}`;
@@ -90,11 +90,11 @@ const formatObject = (o) => {
 
 const CANON_SECTIONS = [
   { field: 'characters', header: 'characters', formatEntry: formatCharacter },
-  { field: 'settings', header: 'places', formatEntry: formatSetting },
+  { field: 'places', header: 'places', formatEntry: formatPlace },
   { field: 'objects', header: 'objects', formatEntry: formatObject },
 ];
 
-// Render the universe's canon arrays (characters/settings/objects) into a
+// Render the universe's canon arrays (characters/places/objects) into a
 // prompt-friendly text block. Distinct from renderCategoriesForPrompt because
 // canon entries are first-class named entities with rich metadata, not
 // exploratory variations — the arc planner references them by name.

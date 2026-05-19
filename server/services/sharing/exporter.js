@@ -6,23 +6,25 @@
  * for full-fidelity re-render metadata) into the bucket, then writes a manifest
  * pointing at the bundled records.
  *
- * Asset filenames are already UUIDs (data/images/<uuid>.png), so collisions
- * between peers' exports are extremely unlikely. We skip-if-present rather than
- * overwrite — a re-share that includes the same asset is a no-op for the blob
- * copy, but the manifest still references it so the recipient knows the asset
- * belongs to the latest share.
+ * Asset blobs are content-addressed by SHA-256 and stored at
+ * `<bucket>/assets/blobs/<hash>` (sidecar metadata at `<hash>.metadata.json`).
+ * Two manifests that reference identical content under different filenames
+ * share one blob on disk — the recipient maps the manifest's per-entry
+ * filename back to the local `data/{kind}/<filename>` location. The asset ref
+ * carries `{ kind, ref, hash }`; legacy v1 manifests without `hash` still
+ * import via the `assets/{kind}/<filename>` fallback path.
  */
 
 import { join, basename } from 'path';
 import { copyFile, readFile, writeFile, stat } from 'fs/promises';
 import { existsSync } from 'fs';
-import { PATHS, ensureDir, atomicWrite, readJSONFile } from '../../lib/fileUtils.js';
-import { getBucket, ensureBucketLayout } from './buckets.js';
+import { PATHS, ensureDir, atomicWrite, readJSONFile, sha256File } from '../../lib/fileUtils.js';
+import { getBucket, ensureBucketLayout, bucketBlobsDir, bucketBlobPath, bucketBlobSidecarPath, imageSidecarName } from './buckets.js';
 import { buildManifest, writeManifest, pruneBucketManifests } from './manifest.js';
 import { listSeries, getSeries } from '../pipeline/series.js';
 import { listIssues } from '../pipeline/issues.js';
 import { getUniverse } from '../universeBuilder.js';
-import { listCollections } from '../mediaCollections.js';
+import { findCollectionByUniverseId, findCollectionBySeriesId } from '../mediaCollections.js';
 import { getJob } from '../mediaJobQueue/index.js';
 import { getInstanceId } from '../instances.js';
 import { getSettings } from '../settings.js';
@@ -57,33 +59,49 @@ async function resolveSourceBio(bucket) {
   return null;
 }
 
-/** Copy an asset file from `data/images` or `data/videos` into the bucket. Returns ref entry. */
+/**
+ * Copy `<sourceDir>/<filename>` into the bucket's content-addressed blob store.
+ * Returns `{ kind, ref, hash }`; the recipient maps `ref` (the original
+ * filename) back to its `data/{kind}/<ref>` slot. Two manifests that ship
+ * identical bytes under different filenames share one blob.
+ *
+ * First-writer wins on sidecar collision: identical bytes imply identical
+ * gen params in practice, so the second writer's (possibly missing) sidecar
+ * doesn't overwrite the first's.
+ */
+// 'image-ref' covers files under data/image-refs/ (multi-ref upload inputs
+// + generated character reference sheets). No sidecar handling — these
+// don't carry the gen-params metadata sidecar that gallery images do.
+const ASSET_SOURCE_DIRS = Object.freeze({
+  video: PATHS.videos,
+  image: PATHS.images,
+  'image-ref': PATHS.imageRefs,
+});
+
 async function copyAssetIfPresent(filename, kind, bucketPath) {
   if (!filename || typeof filename !== 'string') return null;
   const base = basename(filename);
   if (!base || base !== filename) return null; // refuse path traversal
-  const sourceDir = kind === 'video' ? PATHS.videos : PATHS.images;
-  const targetDir = join(bucketPath, 'assets', kind === 'video' ? 'videos' : 'images');
-  await ensureDir(targetDir);
+  const sourceDir = ASSET_SOURCE_DIRS[kind] || PATHS.images;
+  await ensureDir(bucketBlobsDir(bucketPath));
   const sourcePath = join(sourceDir, base);
   if (!existsSync(sourcePath)) {
     console.log(`⚠️ sharing.exporter: asset not found locally, skipping: ${sourcePath}`);
     return null;
   }
-  const targetPath = join(targetDir, base);
-  if (!existsSync(targetPath)) {
-    await copyFile(sourcePath, targetPath);
+  const hash = await sha256File(sourcePath);
+  const blobPath = bucketBlobPath(bucketPath, hash);
+  if (!existsSync(blobPath)) {
+    await copyFile(sourcePath, blobPath);
   }
-  // Also copy the sidecar metadata.json (image-gen path stamps prompts there).
   if (kind === 'image') {
-    const sidecarBase = base.replace(/\.(png|jpe?g|webp)$/i, '') + '.metadata.json';
-    const sidecarSource = join(sourceDir, sidecarBase);
+    const sidecarSource = join(sourceDir, imageSidecarName(base));
     if (existsSync(sidecarSource)) {
-      const sidecarTarget = join(targetDir, sidecarBase);
+      const sidecarTarget = bucketBlobSidecarPath(bucketPath, hash);
       if (!existsSync(sidecarTarget)) await copyFile(sidecarSource, sidecarTarget);
     }
   }
-  return { kind, ref: base };
+  return { kind, ref: base, hash };
 }
 
 /**
@@ -191,6 +209,10 @@ function collectAssetReferences(record) {
   const jobIds = new Set();
   const directImageFilenames = new Set();
   const directVideoFilenames = new Set();
+  // Character reference sheets — files live under data/image-refs/, distinct
+  // from the gallery (data/images/). Tracked separately so the export loop
+  // can route them through the 'image-ref' source-dir branch.
+  const directImageRefFilenames = new Set();
 
   const walk = (node) => {
     if (!node) return;
@@ -202,6 +224,7 @@ function collectAssetReferences(record) {
     if (Array.isArray(node.imageRefs)) {
       for (const r of node.imageRefs) if (isStr(r)) directImageFilenames.add(r);
     }
+    if (isStr(node.referenceSheetImageRef)) directImageRefFilenames.add(node.referenceSheetImageRef);
     if (isStr(node.videoPath)) directVideoFilenames.add(basename(node.videoPath));
     for (const k of Object.keys(node)) {
       const v = node[k];
@@ -214,32 +237,10 @@ function collectAssetReferences(record) {
     jobIds: [...jobIds],
     directImageFilenames: [...directImageFilenames],
     directVideoFilenames: [...directVideoFilenames],
+    directImageRefFilenames: [...directImageRefFilenames],
   };
 }
 
-/**
- * Find the media collection linked to a universe. universeId-only routing
- * — no name-based legacy fallback. Two reasons the legacy fallback was
- * removed:
- *   1. A post-`deleteUniverse` orphan (now name-matching some new
- *      same-named universe) would otherwise be picked up and its old
- *      items would be serialized as the new universe's collection,
- *      reintroducing the cross-universe mixing this PR set out to
- *      prevent.
- *   2. An ambiguous case that migration 021 deliberately skipped (two
- *      universes share a display name, no safe link) would otherwise be
- *      exported under whichever universe ran the export — same
- *      mis-attribution risk.
- *
- * Pre-link installs converge on universeId stamps via migration 021 at
- * boot, so the runtime fallback is no longer needed for the upgrade
- * path. Returns null when no collection is linked.
- */
-async function findCollectionForUniverse(universe) {
-  if (!universe?.id) return null;
-  const all = await listCollections().catch(() => []);
-  return all.find((c) => c.universeId === universe.id) || null;
-}
 
 /**
  * Walk a collection's items and return:
@@ -249,9 +250,9 @@ async function findCollectionForUniverse(universe) {
  *     resolution on canon entries)
  *
  * The serialized `collection` payload in the manifest carries the raw
- * items + the linked universeId + the canonical name; the recipient's
- * importer reuses these to find-or-create a local collection of the
- * same name and add the items.
+ * items + the linked owner id (universeId OR seriesId) + the canonical
+ * name; the recipient's importer reuses these to find-or-create a local
+ * collection of the same name and add the items.
  */
 function collectCollectionAssets(collection) {
   const assetFilenames = [];
@@ -288,8 +289,9 @@ function stampOrigin(record, { bucket, source, sourceBio, manifestId }) {
  *
  * `opts.subscription` (optional): when set to `{ recordKind, recordId }` the
  * manifest is marked as a subscription — bucket-side filename becomes
- * deterministic (`sub-series-<id>.json`) so re-exports overwrite in place
- * instead of accumulating. Omit for one-shot legacy shares.
+ * deterministic (`sub-series-<id>-<senderInstanceId>.json`) so re-exports
+ * overwrite in place instead of accumulating, and two peers sharing the same
+ * series don't collide on the bucket file. Omit for one-shot legacy shares.
  */
 export async function exportSeries(seriesId, bucketId, opts = {}) {
   const bucket = await getBucket(bucketId);
@@ -300,7 +302,17 @@ export async function exportSeries(seriesId, bucketId, opts = {}) {
   let linkedCollection = null;
   if (series.universeId) {
     universe = await getUniverse(series.universeId).catch(() => null);
-    if (universe) linkedCollection = await findCollectionForUniverse(universe);
+    if (universe) linkedCollection = await findCollectionByUniverseId(universe.id);
+  }
+  // Per-series fallback so a universeless series still ships with its
+  // auto-filed cover renders via the seriesId-stamped collection. Gate on
+  // `series.universeId` being absent — a series that has been linked to a
+  // universe must always export under the universe-collection contract,
+  // even if a stale seriesId-stamped collection survives from before the
+  // link (orphaned mid-flight by `unlinkCollectionsForUniverse` recovery, or
+  // a legacy bucket from an earlier universeless state).
+  if (!linkedCollection && !series.universeId) {
+    linkedCollection = await findCollectionBySeriesId(series.id);
   }
 
   const [source, sourceBio, senderInstanceId, producedByVersion] = await Promise.all([
@@ -348,11 +360,13 @@ export async function exportSeries(seriesId, bucketId, opts = {}) {
   const allJobIds = new Set();
   const allImageFiles = new Set();
   const allVideoFiles = new Set();
+  const allImageRefFiles = new Set();
   for (const rec of [series, ...issues, universe].filter(Boolean)) {
     const refs = collectAssetReferences(rec);
     refs.jobIds.forEach((j) => allJobIds.add(j));
     refs.directImageFilenames.forEach((f) => allImageFiles.add(f));
     refs.directVideoFilenames.forEach((f) => allVideoFiles.add(f));
+    refs.directImageRefFilenames.forEach((f) => allImageRefFiles.add(f));
   }
   if (linkedCollection) {
     const collAssets = collectCollectionAssets(linkedCollection);
@@ -362,14 +376,15 @@ export async function exportSeries(seriesId, bucketId, opts = {}) {
     }
   }
 
-  // Copy media-job records + their assets — run all three groups in parallel.
+  // Copy media-job records + their assets — run all four groups in parallel.
   const mediaRecordsDir = join(bucket.path, 'records', 'media');
-  const [jobRefGroups, imageRefs, videoRefs] = await Promise.all([
+  const [jobRefGroups, imageRefs, videoRefs, imageRefRefs] = await Promise.all([
     Promise.all([...allJobIds].map((jobId) => exportMediaJobAndAsset(jobId, bucket.path, mediaRecordsDir))),
     Promise.all([...allImageFiles].map((f) => copyAssetIfPresent(f, 'image', bucket.path))),
     Promise.all([...allVideoFiles].map((f) => copyAssetIfPresent(f, 'video', bucket.path))),
+    Promise.all([...allImageRefFiles].map((f) => copyAssetIfPresent(f, 'image-ref', bucket.path))),
   ]);
-  const assetRefs = [...jobRefGroups.flat(), ...imageRefs.filter(Boolean), ...videoRefs.filter(Boolean)];
+  const assetRefs = [...jobRefGroups.flat(), ...imageRefs.filter(Boolean), ...videoRefs.filter(Boolean), ...imageRefRefs.filter(Boolean)];
 
   const manifest = { ...manifestStub, recordIds, assetRefs };
   const filename = await writeManifest(bucket.path, manifest);
@@ -382,7 +397,7 @@ export async function exportUniverse(universeId, bucketId, opts = {}) {
   const bucket = await getBucket(bucketId);
   await ensureBucketLayout(bucket);
   const universe = await getUniverse(universeId);
-  const linkedCollection = await findCollectionForUniverse(universe);
+  const linkedCollection = await findCollectionByUniverseId(universe.id);
 
   const [source, sourceBio, senderInstanceId, producedByVersion] = await Promise.all([
     resolveSourceName(bucket),
@@ -420,14 +435,16 @@ export async function exportUniverse(universeId, bucketId, opts = {}) {
   const allVideoFiles = new Set(
     collectionAssets.assetFilenames.filter((a) => a.kind === 'video').map((a) => a.ref),
   );
+  const allImageRefFiles = new Set(universeRefs.directImageRefFilenames);
 
   const mediaRecordsDir = join(bucket.path, 'records', 'media');
-  const [jobRefGroups, imageRefs, videoRefs] = await Promise.all([
+  const [jobRefGroups, imageRefs, videoRefs, imageRefRefs] = await Promise.all([
     Promise.all([...allJobIds].map((jobId) => exportMediaJobAndAsset(jobId, bucket.path, mediaRecordsDir))),
     Promise.all([...allImageFiles].map((f) => copyAssetIfPresent(f, 'image', bucket.path))),
     Promise.all([...allVideoFiles].map((f) => copyAssetIfPresent(f, 'video', bucket.path))),
+    Promise.all([...allImageRefFiles].map((f) => copyAssetIfPresent(f, 'image-ref', bucket.path))),
   ]);
-  const assetRefs = [...jobRefGroups.flat(), ...imageRefs.filter(Boolean), ...videoRefs.filter(Boolean)];
+  const assetRefs = [...jobRefGroups.flat(), ...imageRefs.filter(Boolean), ...videoRefs.filter(Boolean), ...imageRefRefs.filter(Boolean)];
 
   const manifest = { ...manifestStub, recordIds: [universe.id], assetRefs };
   const filename = await writeManifest(bucket.path, manifest);

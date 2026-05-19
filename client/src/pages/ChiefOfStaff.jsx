@@ -6,6 +6,7 @@ import * as api from '../services/api';
 import { Play, Square, Clock, CheckCircle, AlertCircle, Cpu, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Brain, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import BrailleSpinner from '../components/BrailleSpinner';
+import TabPills from '../components/ui/TabPills';
 
 // Import from modular components
 import {
@@ -824,37 +825,17 @@ export default function ChiefOfStaff() {
               <ChevronRight size={18} className="text-gray-400" />
             </button>
           )}
-          <div
-            ref={tabsRef}
-            role="tablist"
-            aria-label="Chief of Staff sections"
-            className="flex gap-1 border-b border-port-border overflow-x-auto scrollbar-hide pb-px"
+          <TabPills
+            tabs={TABS}
+            activeTab={activeTab}
+            onChange={(id) => navigate(`/cos/${id}`)}
+            hideLabelOnMobile
+            ariaLabel="Chief of Staff sections"
+            controlsIdPrefix="tabpanel"
+            listRef={tabsRef}
             onScroll={checkTabsScroll}
-          >
-            {TABS.map(tabItem => {
-              const Icon = tabItem.icon;
-              const isSelected = activeTab === tabItem.id;
-              return (
-                <button
-                  key={tabItem.id}
-                  role="tab"
-                  aria-selected={isSelected}
-                  aria-controls={`tabpanel-${tabItem.id}`}
-                  id={`tab-${tabItem.id}`}
-                  onClick={() => navigate(`/cos/${tabItem.id}`)}
-                  className={`flex items-center justify-center gap-1.5 sm:gap-2 px-3 sm:px-4 min-w-[44px] min-h-[44px] sm:min-w-0 sm:min-h-[40px] text-sm font-medium transition-colors border-b-2 -mb-px whitespace-nowrap shrink-0 ${
-                    isSelected
-                      ? 'text-port-accent border-port-accent'
-                      : 'text-gray-500 border-transparent hover:text-white'
-                  }`}
-                >
-                  <Icon size={16} aria-hidden="true" />
-                  <span className="hidden sm:inline">{tabItem.label}</span>
-                  <span className="sr-only sm:hidden">{tabItem.label}</span>
-                </button>
-              );
-            })}
-          </div>
+            className="pb-px"
+          />
         </div>
 
         {/* Tab Content */}

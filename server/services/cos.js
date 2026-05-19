@@ -84,6 +84,48 @@ let initialStartup = false;
 
 // Internal imports for functions used in this module
 import { pruneOldAgentArchives, archiveStaleAgents as _archiveStaleAgents, loadAgentIndex } from './cosAgents.js';
+import { parsePlanItems, extractAllIds, findInProgressIds, pickFirstAvailable } from '../lib/planIds.js';
+
+// Task types where the scheduler pre-picks a PLAN.md item by ID so the agent's
+// worktree branch encodes the claim. `do-replan` is excluded — it assigns IDs
+// rather than picking one off the list.
+const PLAN_PICK_TASK_TYPES = new Set(['feature-ideas', 'plan-task']);
+
+/**
+ * For feature-ideas / plan-task, read the target repo's PLAN.md (+ DONE.md
+ * for the uniqueness set), find which item IDs are already in flight via
+ * branch/PR scan, and pick the first available item. Mutates `metadata` in
+ * place by setting `planId` when a pick succeeds. Falls back silently when
+ * PLAN.md is missing or every item is unavailable — the prompt's own
+ * brainstorm/exit-clean fallback handles those cases.
+ */
+async function applyPlanIdMetadata(taskType, repoPath, metadata) {
+  if (!PLAN_PICK_TASK_TYPES.has(taskType)) return;
+  if (!repoPath) return;
+  const [planMd, doneMd] = await Promise.all([
+    readFile(join(repoPath, 'PLAN.md'), 'utf-8').catch(() => ''),
+    readFile(join(repoPath, 'DONE.md'), 'utf-8').catch(() => '')
+  ]);
+  if (!planMd) return;
+  const items = parsePlanItems(planMd);
+  const knownIds = new Set([...extractAllIds(planMd), ...extractAllIds(doneMd)]);
+  const inFlight = await findInProgressIds(repoPath, knownIds).catch(() => new Set());
+  const pick = pickFirstAvailable(items, inFlight);
+  if (pick?.id) metadata.planId = pick.id;
+}
+
+/**
+ * Build the `{planConstraint}` substitution block. Empty when no planId —
+ * the prompt's existing Phase 1 fallback (brainstorm or exit-clean) takes over.
+ */
+function buildPlanConstraintBlock(planId) {
+  if (!planId) return '';
+  return `
+## Item Constraint
+
+The scheduler has reserved PLAN.md item \`[${planId}]\` for you. You MUST work on that exact item — do not pick a different one, do not brainstorm. If the line is missing from PLAN.md, has already been checked, or carries \`<!-- NEEDS_INPUT -->\`, exit cleanly without commits or PR.
+`;
+}
 
 /**
  * Get current CoS status
@@ -1847,13 +1889,17 @@ async function generateManagedAppImprovementTask(app, state) {
   initializePipelineMetadata(metadata);
   if (shouldSkipForPrecondition(metadata, app, nextType)) return null;
 
+  await applyPlanIdMetadata(nextType, app.repoPath, metadata);
+  const planConstraintBlock = buildPlanConstraintBlock(metadata.planId);
+
   const promptTemplate = metadata.pipeline?.stages
     ? await taskSchedule.getStagePrompt(nextType, 0)
     : await taskSchedule.getTaskPrompt(nextType);
   const description = promptTemplate
     .replace(/\{appName\}/g, app.name)
     .replace(/\{repoPath\}/g, app.repoPath)
-    .replace(/\{appId\}/g, app.id);
+    .replace(/\{appId\}/g, app.id)
+    .replace(/\{planConstraint\}/g, () => planConstraintBlock);
 
   applyAppWorktreeDefault(metadata, app);
 
@@ -1974,6 +2020,9 @@ async function generateManagedAppImprovementTaskForType(taskType, app, state, { 
     referenceDataBlock = blocks.join('\n\n---\n\n');
   }
 
+  await applyPlanIdMetadata(taskType, app.repoPath, metadata);
+  const planConstraintBlock = buildPlanConstraintBlock(metadata.planId);
+
   const description = promptTemplate
     .replace(/\{appName\}/g, app.name)
     .replace(/\{repoPath\}/g, app.repoPath)
@@ -1982,7 +2031,8 @@ async function generateManagedAppImprovementTaskForType(taskType, app, state, { 
     // interprets `$&`, `$1`, etc. as backreferences. Commit subjects/authors
     // legitimately contain `$` (env-var docs, prices, awk snippets) and
     // would get mangled. The function form passes the value verbatim.
-    .replace(/\{referenceData\}/g, () => referenceDataBlock);
+    .replace(/\{referenceData\}/g, () => referenceDataBlock)
+    .replace(/\{planConstraint\}/g, () => planConstraintBlock);
 
   applyAppWorktreeDefault(metadata, app);
 
@@ -3031,9 +3081,10 @@ async function scheduleNextImprovementCheck() {
 }
 
 /**
- * Initialize on module load
+ * Wire event listeners, load state, and auto-start the daemon when configured.
+ * Called once from `server/index.js` during boot.
  */
-async function init() {
+export async function init() {
   await ensureDirectories();
 
   // When an agent completes, immediately try to dequeue the next pending task
@@ -3137,9 +3188,3 @@ async function init() {
   }
 }
 
-// Initialize asynchronously — vitest sets NODE_ENV=test by default, so this
-// skips eager init (and its listeners/timers) in unit tests and avoids
-// circular-import side effects.
-if (process.env.NODE_ENV !== 'test' && process.env.VITEST !== 'true') {
-  init();
-}

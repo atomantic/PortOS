@@ -22,6 +22,7 @@ import { RUNNER_FAMILIES } from '../lib/runnerFamilies';
 import Flux2InstallModal from '../components/imageGen/Flux2InstallModal';
 import HfTokenBanner from '../components/imageGen/HfTokenBanner';
 import ImageGenControls from '../components/imageGen/ImageGenControls';
+import LoraPicker from '../components/imageGen/LoraPicker';
 import MediaJobsQueue from '../components/media/MediaJobsQueue';
 import { useMediaCompletionRefresh } from '../hooks/useMediaCompletionRefresh';
 import { useMediaAnnotations } from '../hooks/useMediaAnnotations';
@@ -42,6 +43,12 @@ import {
 import { safeParseJSON } from '../lib/genUtils';
 
 const DEFAULT_NEGATIVE = 'blurry, low quality, distorted, deformed, ugly, watermark, text, signature';
+
+// Multi-reference editing (FLUX.2 only) — 4 fixed slots, each carrying an
+// uploaded File + a 0..1 strength weight. Slots are positional so the
+// blob-URL revoke pairs with the slot the user cleared.
+const REFERENCE_SLOT_COUNT = 4;
+const EMPTY_REF_SLOT = { file: null, previewUrl: null, strength: 1.0 };
 
 // Append LoRA trigger words to a prompt comma-separated, skipping any
 // already present. Compares against comma-separated prompt segments rather
@@ -134,6 +141,9 @@ export default function ImageGen() {
   // the whole object so previewUrl can never out-live its file/name.
   const [initImage, setInitImage] = useState({ source: null, file: null, name: null, previewUrl: null });
   const [initImageStrength, setInitImageStrength] = useState(0.4);
+  // Form posts populated slots as `referenceImage1` … `referenceImage4`
+  // multipart fields with a parallel `referenceStrengths` array.
+  const [referenceImages, setReferenceImages] = useState(() => Array.from({ length: REFERENCE_SLOT_COUNT }, () => ({ ...EMPTY_REF_SLOT })));
 
   // Batch size: how many renders this submit kicks off. Only meaningful for
   // async modes (local + codex); external is synchronous and runs N=1.
@@ -367,10 +377,54 @@ export default function ImageGen() {
     if (initImage.previewUrl?.startsWith('blob:')) URL.revokeObjectURL(initImage.previewUrl);
     setInitImage({ source: null, file: null, name: null, previewUrl: null });
   };
-  // Object URL cleanup on unmount.
+
+  const handlePickReferenceImage = async (slotIndex, e) => {
+    const raw = e.target.files?.[0];
+    if (!raw) return;
+    const file = await normalizeImageOrientation(raw);
+    setReferenceImages((prev) => {
+      const next = [...prev];
+      const prior = next[slotIndex];
+      if (prior?.previewUrl?.startsWith('blob:')) URL.revokeObjectURL(prior.previewUrl);
+      next[slotIndex] = { file, previewUrl: URL.createObjectURL(file), strength: prior?.strength ?? 1.0 };
+      return next;
+    });
+  };
+  const handleClearReferenceImage = (slotIndex) => {
+    setReferenceImages((prev) => {
+      const next = [...prev];
+      const prior = next[slotIndex];
+      if (prior?.previewUrl?.startsWith('blob:')) URL.revokeObjectURL(prior.previewUrl);
+      next[slotIndex] = { ...EMPTY_REF_SLOT };
+      return next;
+    });
+  };
+  const handleReferenceStrengthChange = (slotIndex, strength) => {
+    setReferenceImages((prev) => {
+      const next = [...prev];
+      next[slotIndex] = { ...next[slotIndex], strength };
+      return next;
+    });
+  };
+
+  // Object URL cleanup on unmount — both the single init image and any
+  // populated reference slots. Mirror the live URLs into a ref so the
+  // empty-deps unmount cleanup walks the LATEST set, not the initial empty
+  // closure snapshot (per-action handlers already revoke when a slot is
+  // replaced/cleared; this catches the one held at unmount).
+  const previewUrlsRef = useRef({ init: null, refs: [] });
+  useEffect(() => {
+    previewUrlsRef.current = {
+      init: initImage.previewUrl,
+      refs: referenceImages.map((s) => s.previewUrl),
+    };
+  });
   useEffect(() => () => {
-    if (initImage.previewUrl?.startsWith('blob:')) URL.revokeObjectURL(initImage.previewUrl);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    const { init, refs } = previewUrlsRef.current;
+    if (init?.startsWith('blob:')) URL.revokeObjectURL(init);
+    for (const url of refs) {
+      if (url?.startsWith('blob:')) URL.revokeObjectURL(url);
+    }
   }, []);
 
   // When the user closes the Settings drawer, settings may have changed
@@ -387,12 +441,8 @@ export default function ImageGen() {
   const currentModel = models.find((m) => m.id === modelId);
   const isFlux2Model = currentModel?.runner === RUNNER_FAMILIES.FLUX2;
   // mflux is the default runner for entries with no explicit `runner` field.
-  // Used to filter the LoRA picker so users only see compatible weights for
-  // the selected model. LoRAs with `runnerFamily === null` (legacy / unknown
-  // base) are shown too with a warning indicator — the runner may still
-  // accept them, or surface a clear error.
+  // LoraPicker filters compatible weights itself; we just pass the family.
   const currentRunnerFamily = currentModel?.runner || RUNNER_FAMILIES.MFLUX;
-  const compatibleLoras = availableLoras.filter((l) => !l.runnerFamily || l.runnerFamily === currentRunnerFamily);
 
   const refreshFlux2Status = useCallback((signal) => {
     return fetch('/api/image-gen/setup/flux2-status', { signal })
@@ -515,12 +565,24 @@ export default function ImageGen() {
       mode: 'local',
     };
     const hasInitImage = isLocalMode && initImage.source != null;
-    if (hasInitImage) {
-      const fd = buildFormData({
-        ...payload,
+    // Multi-reference editing is FLUX.2-only; gate the slot read so it can't
+    // accidentally fire on mflux or codex, and pack the populated slots so a
+    // gap (e.g. slots 1,3 filled, 2 empty) collapses to a packed two-image
+    // submit that aligns with the server's positional pairing.
+    const populatedRefs = (isLocalMode && isFlux2Model)
+      ? referenceImages.filter((s) => s.file != null)
+      : [];
+    const hasReferenceImages = populatedRefs.length > 0;
+    if (hasInitImage || hasReferenceImages) {
+      const initFields = hasInitImage ? {
         ...(initImage.source === 'upload' ? { initImage: initImage.file } : { initImageFile: initImage.name }),
         initImageStrength,
-      });
+      } : {};
+      const refFields = hasReferenceImages ? {
+        ...Object.fromEntries(populatedRefs.map((slot, i) => [`referenceImage${i + 1}`, slot.file])),
+        referenceStrengths: populatedRefs.map((s) => s.strength),
+      } : {};
+      const fd = buildFormData({ ...payload, ...initFields, ...refFields });
       const res = await fetch('/api/image-gen/generate', { method: 'POST', body: fd });
       if (!res.ok) {
         const body = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
@@ -886,79 +948,15 @@ export default function ImageGen() {
             disabled={statusLoading}
           />
 
-          {isLocalMode && availableLoras.length > 0 && (
-            <div>
-              <div className="flex items-center justify-between mb-1">
-                <label className="block text-xs font-medium text-gray-400">
-                  LoRAs <span className="text-gray-600 font-normal">({compatibleLoras.length}/{availableLoras.length} compatible)</span>
-                </label>
-                <Link to="/media/loras" className="text-[11px] text-port-accent hover:underline">Manage →</Link>
-              </div>
-              {compatibleLoras.length === 0 ? (
-                <p className="text-xs text-gray-500 italic">No LoRAs match this model's runner. Install one matching <code>{currentRunnerFamily}</code> on the LoRAs page.</p>
-              ) : (
-                <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
-                  {compatibleLoras.map((lora) => {
-                    const selected = selectedLoras.find((s) => s.filename === lora.filename);
-                    const recommended = typeof lora.recommendedScale === 'number' ? lora.recommendedScale : 1.0;
-                    return (
-                      <div key={lora.filename} className="flex items-center gap-2">
-                        <label className="flex items-center gap-2 cursor-pointer flex-1 min-w-0">
-                          <input
-                            type="checkbox"
-                            checked={!!selected}
-                            disabled={statusLoading}
-                            onChange={(e) => {
-                              if (e.target.checked) setSelectedLoras((p) => [...p, { filename: lora.filename, name: lora.name, scale: recommended }]);
-                              else setSelectedLoras((p) => p.filter((s) => s.filename !== lora.filename));
-                            }}
-                            className="rounded"
-                          />
-                          <span className="text-xs text-gray-300 truncate flex-1" title={(lora.triggerWords || []).length ? `Trigger words: ${lora.triggerWords.join(', ')}` : lora.name}>
-                            {lora.name}
-                            {/* baseModel suffix disambiguates multiple installed
-                                versions of the same model (e.g. ZImageBase vs
-                                ZImageTurbo, both mapping to 'z-image' family). */}
-                            {lora.civitai?.baseModel && (
-                              <span className="ml-1.5 text-[10px] text-gray-600 font-mono">[{lora.civitai.baseModel}]</span>
-                            )}
-                            {(lora.triggerWords || []).length > 0 && (
-                              <span className="ml-2 text-[10px] text-gray-500 font-mono">{lora.triggerWords.slice(0, 2).join(', ')}{lora.triggerWords.length > 2 ? '…' : ''}</span>
-                            )}
-                          </span>
-                        </label>
-                        {selected && (
-                          <div className="flex items-center gap-2">
-                            {(lora.triggerWords || []).length > 0 && (
-                              <button
-                                type="button"
-                                onClick={() => setPrompt((p) => appendTriggerWords(p, lora.triggerWords))}
-                                disabled={statusLoading}
-                                title={`Append to prompt: ${lora.triggerWords.join(', ')}`}
-                                className="text-[11px] px-2 py-1 rounded bg-port-accent/10 text-port-accent border border-port-accent/30 hover:bg-port-accent/20 disabled:opacity-50 whitespace-nowrap"
-                              >
-                                + trigger
-                              </button>
-                            )}
-                            <span className="text-xs text-gray-500" title={`Recommended: ${recommended.toFixed(2)}`}>Scale</span>
-                            <input
-                              type="number" min={0} max={2} step={0.1}
-                              value={selected.scale}
-                              disabled={statusLoading}
-                              onChange={(e) => {
-                                const scale = parseFloat(e.target.value) || 0;
-                                setSelectedLoras((p) => p.map((s) => s.filename === lora.filename ? { ...s, scale } : s));
-                              }}
-                              className="w-20 bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-gray-200"
-                            />
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
+          {isLocalMode && (
+            <LoraPicker
+              availableLoras={availableLoras}
+              selected={selectedLoras}
+              onChange={setSelectedLoras}
+              currentRunnerFamily={currentRunnerFamily}
+              onAppendTrigger={(words) => setPrompt((p) => appendTriggerWords(p, words))}
+              disabled={statusLoading}
+            />
           )}
 
           {isLocalMode && (
@@ -1005,6 +1003,86 @@ export default function ImageGen() {
                   <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" onChange={handlePickInitImage} disabled={statusLoading} />
                 </label>
               )}
+            </div>
+          )}
+
+          {isLocalMode && isFlux2Model && (
+            <div>
+              <label className="block text-xs font-medium text-gray-400 mb-1">
+                Reference images <span className="text-gray-500 font-normal">(up to 4 images for FLUX.2 multi-reference edit)</span>
+              </label>
+              {/*
+                Experimental: the server contract (upload slots, packing, sidecar
+                metadata, CLI flag emission) is wired end-to-end, but the bundled
+                FLUX.2 Python runner currently accepts `--reference-images` /
+                `--reference-strengths` as no-op argparse stubs — the references
+                are NOT yet conditioned into the diffusion graph. Full multi-ref
+                inference is tracked as `[flux2-multi-reference-python-runner]`
+                in PLAN.md (gated on the FLUX.2-klein-9B-kv HF license).
+              */}
+              <div className="mb-2 px-2 py-1.5 text-[11px] text-port-warning/90 bg-port-warning/10 border border-port-warning/30 rounded">
+                <strong className="font-semibold">Experimental — no-op today:</strong> Uploads + strengths are
+                staged and forwarded to the runner, but the FLUX.2 Python script ignores them. Final inference wiring
+                is pending the multi-reference runner upgrade.
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                {referenceImages.map((slot, i) => {
+                  const slotId = `ref-image-${i}`;
+                  const strengthId = `ref-strength-${i}`;
+                  return (
+                    <div key={i} className="flex flex-col gap-1 p-2 rounded-lg border border-port-border bg-port-bg/30">
+                      <div className="text-[10px] uppercase tracking-wide text-gray-500">Ref {i + 1}</div>
+                      {slot.previewUrl ? (
+                        <>
+                          <div className="relative">
+                            <img
+                              src={slot.previewUrl}
+                              alt={`Reference ${i + 1}`}
+                              className="w-full h-16 object-cover rounded border border-port-border bg-port-bg"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => handleClearReferenceImage(i)}
+                              disabled={statusLoading}
+                              className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-port-card border border-port-border text-gray-300 hover:text-white hover:bg-port-error/40 flex items-center justify-center disabled:opacity-50"
+                              title={`Remove reference ${i + 1}`}
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          </div>
+                          <label htmlFor={strengthId} className="block text-[10px] text-gray-500">
+                            Strength {slot.strength.toFixed(2)}
+                          </label>
+                          <input
+                            id={strengthId}
+                            type="range" min={0} max={1} step={0.05}
+                            value={slot.strength}
+                            disabled={statusLoading}
+                            onChange={(e) => handleReferenceStrengthChange(i, Number(e.target.value))}
+                            className="w-full accent-port-accent"
+                          />
+                        </>
+                      ) : (
+                        <label
+                          htmlFor={slotId}
+                          className="flex flex-col items-center justify-center gap-1 h-[88px] border border-dashed border-port-border rounded text-[10px] text-gray-500 hover:text-white hover:border-port-accent cursor-pointer transition-colors"
+                        >
+                          <ImageIcon className="w-4 h-4" />
+                          Add
+                          <input
+                            id={slotId}
+                            type="file"
+                            accept="image/png,image/jpeg,image/webp"
+                            className="hidden"
+                            onChange={(e) => handlePickReferenceImage(i, e)}
+                            disabled={statusLoading}
+                          />
+                        </label>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           )}
 

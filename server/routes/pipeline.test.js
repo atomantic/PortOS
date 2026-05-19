@@ -244,7 +244,10 @@ const universeSvc = await import('../services/universeBuilder.js');
 
 function makeApp() {
   const app = express();
-  app.use(express.json());
+  // Mirror production's `express.json({ limit: '55mb' })` in server/index.js so
+  // tests can exercise the route's own size handling (e.g. 200K-char extract
+  // corpus truncation) without hitting the default 100KB body cap first.
+  app.use(express.json({ limit: '55mb' }));
   app.use('/api/pipeline', pipelineRouter);
   app.use(errorMiddleware);
   return app;
@@ -767,6 +770,146 @@ describe('pipeline routes', () => {
     // The existing cover must be preserved exactly — no clobber
     expect(r.body.stage.cover.script).toBe('user edit');
     expect(r.body.issue.stages.comicPages.cover.script).toBe('user edit');
+  });
+
+  // ---- :stageId/extract-canon (manual canon extraction from comicScript / teleplay) ----
+
+  it('POST /issues/:id/stages/:stageId/extract-canon 400s when stage is not comicScript or teleplay', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    const r = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/prose/extract-canon`)
+      .send({});
+    expect(r.status).toBe(400);
+    expect(r.body.code).toBe('PIPELINE_CANON_EXTRACT_BAD_STAGE');
+  });
+
+  it('POST /issues/:id/stages/:stageId/extract-canon 400s when the script stage is empty', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    const r = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/comicScript/extract-canon`)
+      .send({});
+    expect(r.status).toBe(400);
+    expect(r.body.code).toBe('PIPELINE_CANON_EXTRACT_NO_CORPUS');
+  });
+
+  it('POST /issues/:id/stages/:stageId/extract-canon 400s when series has no linked universe', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
+      stages: { comicScript: { status: 'ready', output: '## Page 1\n\n### Panel 1\n**Description:** A barkeep slides a glass.' } },
+    });
+    const r = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/comicScript/extract-canon`)
+      .send({});
+    expect(r.status).toBe(400);
+    expect(r.body.code).toBe('PIPELINE_CANON_EXTRACT_NO_UNIVERSE');
+  });
+
+  it('POST /issues/:id/stages/comicScript/extract-canon merges into the linked universe and returns counts', async () => {
+    const canonSvc = await import('../services/universeCanon.js');
+    const spy = vi.spyOn(canonSvc, 'extractCanonFromProse').mockImplementation(async (universeId, opts) => ({
+      universe: { id: universeId, name: 'U', characters: [{ id: 'c1', name: 'Barkeep' }], places: [], objects: [] },
+      results: {
+        characters: { extracted: [{ name: 'Barkeep' }], runId: 'run-c' },
+        places: { extracted: [], runId: 'run-p' },
+        objects: { extracted: [], runId: 'run-o' },
+      },
+      _spiedOpts: opts,
+    }));
+
+    const app = makeApp();
+    const uni = await universeSvc.createUniverse({ name: 'U' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: uni.id });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
+      stages: {
+        comicScript: { status: 'ready', output: '## Page 1\n\n### Panel 1\n**Description:** A barkeep slides a glass to Lina.' },
+      },
+    });
+    const r = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/comicScript/extract-canon`)
+      .send({});
+    expect(r.status).toBe(200);
+    expect(r.body.sourceStage).toBe('comicScript');
+    expect(r.body.extracted).toEqual({ characters: 1, places: 0, objects: 0 });
+    expect(r.body.universe.id).toBe(uni.id);
+    expect(r.body.truncated).toBe(false);
+
+    // Service was called with the script's output as corpus + stamp opts.
+    expect(spy).toHaveBeenCalledTimes(1);
+    const [calledUniverseId, calledOpts] = spy.mock.calls[0];
+    expect(calledUniverseId).toBe(uni.id);
+    expect(calledOpts.corpus).toContain('A barkeep slides a glass to Lina.');
+    expect(calledOpts.parallel).toBe(true);
+    expect(calledOpts.autoLock).toBe(true);
+    expect(calledOpts.sourceSeriesId).toBe(ser.body.id);
+    spy.mockRestore();
+  });
+
+  it('POST /issues/:id/stages/:stageId/extract-canon truncates corpus over 200K chars and flags it', async () => {
+    const canonSvc = await import('../services/universeCanon.js');
+    const spy = vi.spyOn(canonSvc, 'extractCanonFromProse').mockResolvedValue({
+      universe: { id: 'u-mock', characters: [], places: [], objects: [] },
+      results: {
+        characters: { extracted: [] },
+        places: { extracted: [] },
+        objects: { extracted: [] },
+      },
+    });
+
+    const app = makeApp();
+    const uni = await universeSvc.createUniverse({ name: 'U' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: uni.id });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    // 250K chars — exceeds the 200K extract cap (well under STAGE_OUTPUT_MAX=400K).
+    const oversized = 'PANEL DESCRIPTION. '.repeat(14_000);
+    expect(oversized.length).toBeGreaterThan(200_000);
+    await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
+      stages: { comicScript: { status: 'ready', output: oversized } },
+    });
+    const r = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/comicScript/extract-canon`)
+      .send({});
+    expect(r.status).toBe(200);
+    expect(r.body.truncated).toBe(true);
+    // Service receives a clamped corpus, not the full 250K input.
+    expect(spy.mock.calls[0][1].corpus.length).toBe(200_000);
+    spy.mockRestore();
+  });
+
+  it('POST /issues/:id/stages/teleplay/extract-canon reads the teleplay stage output', async () => {
+    const canonSvc = await import('../services/universeCanon.js');
+    const spy = vi.spyOn(canonSvc, 'extractCanonFromProse').mockResolvedValue({
+      universe: { id: 'u-mock', characters: [], places: [], objects: [] },
+      results: {
+        characters: { extracted: [{ name: 'Hostess' }, { name: 'Bouncer' }] },
+        places: { extracted: [{ name: 'The Velvet Room' }] },
+        objects: { extracted: [] },
+      },
+    });
+
+    const app = makeApp();
+    const uni = await universeSvc.createUniverse({ name: 'U' });
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S', universeId: uni.id });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    await request(app).patch(`/api/pipeline/issues/${iss.body.id}`).send({
+      stages: {
+        teleplay: { status: 'ready', output: 'INT. VELVET ROOM - NIGHT\n\nHOSTESS greets the BOUNCER at the door.' },
+      },
+    });
+    const r = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/teleplay/extract-canon`)
+      .send({});
+    expect(r.status).toBe(200);
+    expect(r.body.sourceStage).toBe('teleplay');
+    expect(r.body.extracted).toEqual({ characters: 2, places: 1, objects: 0 });
+    expect(spy.mock.calls[0][1].corpus).toContain('VELVET ROOM');
+    spy.mockRestore();
   });
 
   // ---- comicPages/pages/:pageIndex/render ----

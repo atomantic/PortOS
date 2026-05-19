@@ -4,17 +4,17 @@
 // same pattern the comic-page renderer uses to decide which characters to
 // cite in the diffusion prompt.
 
-import { getUniverse } from './universeBuilder.js';
+import { getUniverse, ERR_NOT_FOUND } from './universeBuilder.js';
 import { listSeries } from './pipeline/series.js';
 import { listIssues } from './pipeline/issues.js';
 import {
-  matchCharactersInText, matchSettingsInText, matchObjectsInText,
+  matchCharactersInText, matchPlacesInText, matchObjectsInText,
 } from '../lib/scenePrompt.js';
 import { ServerError } from '../lib/errorHandler.js';
 
 const MATCHERS = Object.freeze({
   characters: matchCharactersInText,
-  settings: matchSettingsInText,
+  places: matchPlacesInText,
   objects: matchObjectsInText,
 });
 
@@ -36,13 +36,37 @@ function corpusForIssue(issue) {
 }
 
 /**
+ * Thin variant of getUniverseCanonUsage that only returns the linked-series
+ * id/name pairs — no per-issue prose scan, no canon matchers. Callers that
+ * just need the seriesId → seriesName lookup (e.g. NounsStage's "from
+ * <series>" canon-card chip) should prefer this; the full cross-reference
+ * endpoint is O(series × issues × matchers).
+ */
+export async function listLinkedSeriesNames(universeId) {
+  // Validate the universe exists so 404s line up with the heavier endpoint.
+  // Only translate the explicit not-found condition to 404; let I/O / parse
+  // errors bubble so they don't masquerade as "not found".
+  await getUniverse(universeId).catch((err) => {
+    if (err?.code === ERR_NOT_FOUND) {
+      throw new ServerError('Universe not found', { status: 404, code: 'UNIVERSE_NOT_FOUND' });
+    }
+    throw err;
+  });
+  const allSeries = await listSeries();
+  return allSeries
+    .filter((s) => s.universeId === universeId)
+    .map((s) => ({ id: s.id, name: s.name }));
+}
+
+/**
  * Return per-canon-entry usage across the universe's series.
  *
  * Shape:
  * {
  *   characters: { [entryId]: [{ seriesId, seriesName, issueIds, issueCount }, ...] },
- *   settings:   { [entryId]: [...] },
+ *   places:     { [entryId]: [...] },
  *   objects:    { [entryId]: [...] },
+ *   seriesNameMap: { [seriesId]: seriesName }, // every linked series, even ones with no prose match
  *   seriesCount,         // how many series link to this universe
  *   issueCount,          // total issues scanned
  * }
@@ -54,9 +78,13 @@ export async function getUniverseCanonUsage(universeId) {
 
   const allSeries = await listSeries();
   const linkedSeries = allSeries.filter((s) => s.universeId === universeId);
+  // Cover entries whose `sourceSeriesId` points at a linked series that has no
+  // prose-match — the per-entry rows would otherwise miss that series, but the
+  // chip-label lookup on the client still needs its name.
+  const seriesNameMap = Object.fromEntries(linkedSeries.map((s) => [s.id, s.name]));
 
   // Per (kind, entryId) → Map(seriesId → { seriesName, issueIds: Set })
-  const tally = { characters: new Map(), settings: new Map(), objects: new Map() };
+  const tally = { characters: new Map(), places: new Map(), objects: new Map() };
 
   let issueCount = 0;
   for (const series of linkedSeries) {
@@ -105,8 +133,9 @@ export async function getUniverseCanonUsage(universeId) {
 
   return {
     characters: shape(tally.characters),
-    settings: shape(tally.settings),
+    places: shape(tally.places),
     objects: shape(tally.objects),
+    seriesNameMap,
     seriesCount: linkedSeries.length,
     issueCount,
   };

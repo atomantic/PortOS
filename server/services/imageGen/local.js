@@ -18,7 +18,7 @@ import { existsSync, watch as fsWatch } from 'fs';
 import { join, dirname, resolve as resolvePath, sep as PATH_SEP, basename } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
-import { assertSafeFilename, ensureDir, listDirectoryByExtension, PATHS, safeJSONParse, resolveGalleryImage } from '../../lib/fileUtils.js';
+import { assertSafeFilename, ensureDir, listDirectoryByExtension, PATHS, safeJSONParse, resolveGalleryImage, resolveImageInputPath } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { imageGenEvents } from '../imageGenEvents.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, PYTHON_NOISE_RE } from '../../lib/sseUtils.js';
@@ -65,7 +65,7 @@ export const cancel = () => {
   return true;
 };
 
-export const buildArgs = ({ pythonPath, model, prompt, negativePrompt, width, height, steps, guidance, seed, quantize, outputPath, loraPaths = [], loraScales = [], stepwiseDir, initImagePath, initImageStrength }) => {
+export const buildArgs = ({ pythonPath, model, prompt, negativePrompt, width, height, steps, guidance, seed, quantize, outputPath, loraPaths = [], loraScales = [], stepwiseDir, initImagePath, initImageStrength, referenceImagePaths = [], referenceImageStrengths = [] }) => {
   const modelId = model?.id;
   if (isZImage(model) || isErnie(model)) {
     if (!model.repo) {
@@ -163,6 +163,19 @@ export const buildArgs = ({ pythonPath, model, prompt, negativePrompt, width, he
     if (negativePrompt) args.push('--negative-prompt', negativePrompt);
     if (initImagePath) args.push('--image-path', initImagePath);
     if (initImagePath && initImageStrength != null) args.push('--image-strength', String(initImageStrength));
+    // Multi-reference editing for FLUX.2. The Python runner currently ignores
+    // these flags — they're plumbed end-to-end so the UI + server contract is
+    // in place, but the actual multi-reference diffusers wiring is gated on
+    // the FLUX.2-klein-9B-kv model swap (see PLAN.md) since the user-facing
+    // model that supports this hasn't been validated yet. Adding them here
+    // (rather than waiting) keeps the wiring testable + avoids a second PR
+    // that touches the same lines.
+    if (referenceImagePaths?.length) {
+      args.push('--reference-images', ...referenceImagePaths);
+      if (referenceImageStrengths?.length) {
+        args.push('--reference-strengths', ...referenceImageStrengths.map(String));
+      }
+    }
     if (stepwiseDir) args.push('--stepwise-image-output-dir', stepwiseDir);
     if (loraPaths?.length) args.push('--lora-paths', ...loraPaths);
     if (loraScales?.length) args.push('--lora-scales', ...loraScales.map(String));
@@ -199,7 +212,7 @@ export const buildArgs = ({ pythonPath, model, prompt, negativePrompt, width, he
   return { bin, args };
 };
 
-export async function generateImage({ pythonPath, prompt, negativePrompt = '', modelId = 'dev', width = 1024, height = 1024, steps, guidance, seed, quantize = '8', loraFilenames = [], loraPaths = [], loraScales = [], initImagePath = null, initImageStrength = null, jobId: providedJobId = null }) {
+export async function generateImage({ pythonPath, prompt, negativePrompt = '', modelId = 'dev', width = 1024, height = 1024, steps, guidance, seed, quantize = '8', loraFilenames = [], loraPaths = [], loraScales = [], initImagePath = null, initImageStrength = null, referenceImagePaths = [], referenceImageStrengths = [], jobId: providedJobId = null }) {
   if (!prompt?.trim()) throw new ServerError('Prompt is required', { status: 400, code: 'VALIDATION_ERROR' });
   // Single-flight is enforced by the mediaJobQueue worker upstream. Direct
   // callers that bypass the queue must not run two concurrent renders — the
@@ -269,14 +282,45 @@ export async function generateImage({ pythonPath, prompt, negativePrompt = '', m
   const validLoraFilenames = validLoras.map((p) => basename(p));
   // i2i: defense in depth — the route already validated a fresh request,
   // but an old sidecar replay can carry a stale absolute path outside the
-  // gallery. Re-anchor through resolveGalleryImage before handing to mflux.
+  // approved image roots. resolveImageInputPath accepts gallery + image-refs
+  // + visual templates — the latter so the universe-builder reference-sheet
+  // renderer can use a shipped layout template as the init-image anchor.
   const validInitImagePath = (initImagePath && typeof initImagePath === 'string')
-    ? resolveGalleryImage(initImagePath)
+    ? resolveImageInputPath(initImagePath)
     : null;
+  // Clamp 0..1 with a finite-fallback — Math.max/min preserve NaN, so a
+  // corrupt sidecar value like Number('bad') would slip through and end up
+  // serialized into metadata / the CLI flag. `null` here means "no strength
+  // sent" (init-image), which the args builder already gates on; for refs
+  // (below) we fall back to 1.0 (full influence).
+  const clampStrength01 = (raw, fallback) => {
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return fallback;
+    return Math.max(0, Math.min(1, n));
+  };
   const validInitImageStrength = validInitImagePath && initImageStrength != null
-    ? Math.max(0, Math.min(1, Number(initImageStrength)))
+    ? clampStrength01(initImageStrength, null)
     : null;
-  const meta = { id: jobId, prompt, negativePrompt, modelId, seed: actualSeed, width: Number(width), height: Number(height), steps: actualSteps, guidance: actualGuidance, quantize, filename, loraFilenames: validLoraFilenames, loraPaths: validLoras, loraScales, initImageFilename: validInitImagePath ? basename(validInitImagePath) : null, initImageStrength: validInitImageStrength, createdAt: new Date().toISOString() };
+  // Multi-reference: re-anchor each path through resolveImageInputPath so a
+  // sidecar replay can't sneak a path outside the approved image roots into
+  // the runner. Accepts gallery + image-refs + visual templates — the gallery
+  // path lets a canon portrait (e.g. character.primaryImageRef) flow in as a
+  // multi-ref input. Pair each path with its strength BEFORE filtering so a
+  // rejected entry doesn't shift the strength array — otherwise the surviving
+  // path would inherit the wrong slot's strength.
+  const rawRefPaths = Array.isArray(referenceImagePaths) ? referenceImagePaths : [];
+  const validReferences = rawRefPaths
+    .map((p, i) => {
+      const resolved = typeof p === 'string' ? resolveImageInputPath(p) : null;
+      if (!resolved) return null;
+      const rawStrength = referenceImageStrengths?.[i];
+      const strength = rawStrength != null ? clampStrength01(rawStrength, 1.0) : 1.0;
+      return { path: resolved, strength };
+    })
+    .filter(Boolean);
+  const validReferenceImagePaths = validReferences.map((r) => r.path);
+  const validReferenceImageStrengths = validReferences.map((r) => r.strength);
+  const meta = { id: jobId, prompt, negativePrompt, modelId, seed: actualSeed, width: Number(width), height: Number(height), steps: actualSteps, guidance: actualGuidance, quantize, filename, loraFilenames: validLoraFilenames, loraPaths: validLoras, loraScales, initImageFilename: validInitImagePath ? basename(validInitImagePath) : null, initImageStrength: validInitImageStrength, referenceImageFilenames: validReferenceImagePaths.map((p) => basename(p)), referenceImageStrengths: validReferenceImageStrengths, createdAt: new Date().toISOString() };
   const job = { ...meta, clients: [], status: 'running' };
   jobs.set(jobId, job);
 
@@ -284,7 +328,7 @@ export async function generateImage({ pythonPath, prompt, negativePrompt = '', m
   // per inference step here; we watch and stream the latest as `currentImage`.
   const stepwiseDir = await mkdtemp(join(tmpdir(), 'portos-stepwise-'));
 
-  const { bin, args } = buildArgs({ pythonPath, model, prompt, negativePrompt, width: Number(width), height: Number(height), steps: actualSteps, guidance: actualGuidance, seed: actualSeed, quantize, outputPath, loraPaths: validLoras, loraScales, stepwiseDir, initImagePath: validInitImagePath, initImageStrength: validInitImageStrength });
+  const { bin, args } = buildArgs({ pythonPath, model, prompt, negativePrompt, width: Number(width), height: Number(height), steps: actualSteps, guidance: actualGuidance, seed: actualSeed, quantize, outputPath, loraPaths: validLoras, loraScales, stepwiseDir, initImagePath: validInitImagePath, initImageStrength: validInitImageStrength, referenceImagePaths: validReferenceImagePaths, referenceImageStrengths: validReferenceImageStrengths });
 
   console.log(`🎨 Generating image [${jobId.slice(0, 8)}] local: ${modelId} ${width}x${height} steps=${actualSteps}`);
   imageGenEvents.emit('started', { generationId: jobId, totalSteps: actualSteps });

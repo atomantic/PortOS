@@ -1,6 +1,8 @@
 // Mirror of server/lib/scenePrompt.js — keep byte-for-byte in sync.
 // The shape-invariant tests in server/lib/scenePrompt.test.js are the contract.
 
+import { richCanonDescriptorFragments } from './canonPrompt.js';
+
 const PROMPT_MAX = 1900;
 
 export const normalizeSlugline = (s) => String(s || '')
@@ -39,7 +41,7 @@ export function matchCharactersInText(text, allCharacters) {
   return matchEntriesByCandidates(text, allCharacters, (c) => [c.name, ...(c.aliases || [])]);
 }
 
-export function buildSettingByKey(allSettings) {
+export function buildPlaceByKey(allSettings) {
   const map = new Map();
   for (const setting of allSettings || []) {
     const key = normalizeSlugline(setting.slugline || setting.name);
@@ -49,9 +51,9 @@ export function buildSettingByKey(allSettings) {
   return map;
 }
 
-export function matchSceneSetting(sceneSlugline, settingByKey) {
+export function matchScenePlace(sceneSlugline, placeByKey) {
   if (!sceneSlugline) return null;
-  return settingByKey?.get(normalizeSlugline(sceneSlugline)) || null;
+  return placeByKey?.get(normalizeSlugline(sceneSlugline)) || null;
 }
 
 function matchEntriesByCandidates(text, entries, candidatesFn) {
@@ -76,33 +78,35 @@ function matchEntriesByCandidates(text, entries, candidatesFn) {
   return matched;
 }
 
-export function matchSettingsInText(text, allSettings) {
-  return matchEntriesByCandidates(text, allSettings, (s) => [s.name]);
+export function matchPlacesInText(text, allPlaces) {
+  return matchEntriesByCandidates(text, allPlaces, (p) => [p.name]);
 }
 
 export function matchObjectsInText(text, allObjects) {
   return matchEntriesByCandidates(text, allObjects, (o) => [o.name, ...(o.aliases || [])]);
 }
 
-export function buildScenePrompt(workTitle, scene, matchedCharacters, worldStyle = '', matchedSetting = null) {
+export function buildScenePrompt(workTitle, scene, matchedCharacters, worldStyle = '', matchedPlace = null) {
   const stylePart = worldStyle && worldStyle.trim() ? `${worldStyle.trim()}. ` : '';
   const titlePart = workTitle ? `${workTitle}. ` : '';
   const visual = scene?.visualPrompt || scene?.description || '';
 
-  const intExtPart = matchedSetting?.intExt === 'INT'
+  const intExtPart = matchedPlace?.intExt === 'INT'
     ? 'Interior'
-    : matchedSetting?.intExt === 'EXT'
+    : matchedPlace?.intExt === 'EXT'
       ? 'Exterior'
       : '';
-  const todPart = typeof matchedSetting?.timeOfDay === 'string' && matchedSetting.timeOfDay
-    ? matchedSetting.timeOfDay
+  const todPart = typeof matchedPlace?.timeOfDay === 'string' && matchedPlace.timeOfDay
+    ? matchedPlace.timeOfDay
     : '';
-  const settingMetaFrag = [intExtPart, todPart].filter(Boolean).join(', ');
-  const settingFrags = matchedSetting ? [
-    settingMetaFrag ? `${settingMetaFrag}.` : '',
-    matchedSetting.description?.trim() || '',
-    matchedSetting.palette ? `Palette: ${matchedSetting.palette.trim()}.` : '',
-    matchedSetting.recurringDetails?.trim() || '',
+  const placeMetaFrag = [intExtPart, todPart].filter(Boolean).join(', ');
+  const baselineFrags = matchedPlace
+    ? richCanonDescriptorFragments('place', matchedPlace)
+      .map((f) => (f.prefix ? `${f.prefix}: ${f.value}.` : f.value))
+    : [];
+  const placeFrags = matchedPlace ? [
+    placeMetaFrag ? `${placeMetaFrag}.` : '',
+    ...baselineFrags,
   ].filter(Boolean) : [];
 
   // Accept either `physicalDescription` (writers-room shape) or
@@ -117,11 +121,11 @@ export function buildScenePrompt(workTitle, scene, matchedCharacters, worldStyle
   const reserveCore = stylePart.length + titlePart.length + visual.length + 4;
   let budget = PROMPT_MAX - reserveCore;
 
-  const settingFit = [];
-  for (const frag of settingFrags) {
-    const cost = (settingFit.length === 0 ? 0 : 1) + frag.length;
+  const placeFit = [];
+  for (const frag of placeFrags) {
+    const cost = (placeFit.length === 0 ? 0 : 1) + frag.length;
     if (cost > budget) break;
-    settingFit.push(frag);
+    placeFit.push(frag);
     budget -= cost;
   }
 
@@ -137,7 +141,7 @@ export function buildScenePrompt(workTitle, scene, matchedCharacters, worldStyle
   const segs = [];
   if (stylePart) segs.push(stylePart.trim());
   if (titlePart) segs.push(titlePart.trim());
-  if (settingFit.length > 0) segs.push(settingFit.join(' '));
+  if (placeFit.length > 0) segs.push(placeFit.join(' '));
   if (charFit.length > 0) segs.push(`${PREFIX}${charFit.join(' ')}`);
   if (visual) segs.push(visual);
   return segs.filter(Boolean).join(' ').slice(0, PROMPT_MAX);

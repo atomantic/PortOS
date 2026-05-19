@@ -75,13 +75,13 @@ describe('bibleExtractor — extractBible (characters)', () => {
   });
 });
 
-describe('bibleExtractor — extractBible (settings + objects)', () => {
-  it('settings: pulls inner array, sanitizes via setting shape', async () => {
+describe('bibleExtractor — extractBible (places + objects)', () => {
+  it('places: pulls inner array, sanitizes via place shape', async () => {
     stageRunner.runStagedLLM.mockResolvedValue({
-      content: { settings: [{ slugline: 'INT. BAR — NIGHT', description: 'cramped chrome bar', palette: 'amber' }] },
+      content: { places: [{ slugline: 'INT. BAR — NIGHT', description: 'cramped chrome bar', palette: 'amber' }] },
       runId: '', providerId: '', model: '',
     });
-    const out = await extractBible({ kind: 'setting', corpus: 'prose' });
+    const out = await extractBible({ kind: 'place', corpus: 'prose' });
     expect(out.extracted).toHaveLength(1);
     expect(out.extracted[0].slugline).toBe('INT. BAR — NIGHT');
     expect(out.extracted[0].palette).toBe('amber');

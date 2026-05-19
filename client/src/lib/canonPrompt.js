@@ -1,0 +1,190 @@
+// Mirror of server/lib/canonPrompt.js — the SHORT_SPEC / RICH_SPEC tables
+// + `shortCanonDescriptorFragments` / `richCanonDescriptorFragments` /
+// `descriptorForCanonEntry` / `hasCanonDescriptorContent` helpers must
+// match the server side exactly. The server-only `flatten*` exports
+// (`flattenStats`/`flattenPalette`/etc.) are NOT part of the mirror —
+// they're consumed by reference-sheet rendering paths that don't run in
+// the client and would only bloat the bundle. Header comments differ
+// intentionally; when editing the mirrored helpers, port logic changes
+// verbatim and leave commentary scoped to each side. The server copy is
+// authoritative; tests in server/lib/canonPrompt.test.js are the contract.
+
+const trim = (s) => (typeof s === 'string' ? s.trim() : '');
+
+// SHORT spec: chars/objects use single-with-fallback; places uses a
+// sequence so palette can carry its prefix.
+const SHORT_SPEC = Object.freeze({
+  characters: Object.freeze({ primary: 'physicalDescription', fallback: 'description' }),
+  places: Object.freeze({
+    sequence: Object.freeze([
+      { field: 'description' },
+      { field: 'palette', prefix: 'Palette' },
+      { field: 'recurringDetails' },
+    ]),
+  }),
+  objects: Object.freeze({ primary: 'description', fallback: 'significance' }),
+});
+
+// PREVIEW spec: importer pre-commit review surface. Wider than SHORT (the
+// user needs to see narrative-only fields like `personality` / `background`
+// to judge "include this character?") and intentionally distinct from RICH
+// (RICH drives render prompts; preview is about identity disambiguation).
+// `subtitleField` is the single-line tagline; `bodyFields` uses the same
+// `[{ field }]` sequence shape as RICH_SPEC so `fragmentsFromSequence` can
+// be reused (no prefixes — importer cards render values verbatim).
+const PREVIEW_SPEC = Object.freeze({
+  characters: Object.freeze({
+    subtitleField: 'role',
+    bodyFields: Object.freeze([
+      { field: 'physicalDescription' },
+      { field: 'personality' },
+      { field: 'background' },
+    ]),
+  }),
+  places: Object.freeze({
+    subtitleField: 'slugline',
+    bodyFields: Object.freeze([{ field: 'description' }]),
+  }),
+  objects: Object.freeze({
+    subtitleField: null,
+    bodyFields: Object.freeze([
+      { field: 'description' },
+      { field: 'significance' },
+    ]),
+  }),
+});
+
+// RICH spec: ordered list of all descriptor fields. Prefixes capitalized
+// uniformly so flattened output reads as natural sentence fragments.
+const RICH_SPEC = Object.freeze({
+  characters: Object.freeze([
+    { field: 'physicalDescription' },
+    { field: 'role' },
+    { field: 'visualNotes' },
+    { field: 'silhouetteNotes' },
+    { field: 'postureNotes' },
+    { field: 'specialTraits' },
+    { field: 'visualIdentity' },
+  ]),
+  places: Object.freeze([
+    { field: 'description' },
+    { field: 'palette', prefix: 'Palette' },
+    { field: 'era', prefix: 'Era' },
+    { field: 'weather', prefix: 'Weather' },
+    { field: 'recurringDetails' },
+  ]),
+  objects: Object.freeze([
+    { field: 'description' },
+    { field: 'significance', prefix: 'Significance' },
+  ]),
+});
+
+function normalizeKind(kind) {
+  const k = String(kind || '').toLowerCase();
+  if (k === 'character' || k === 'characters') return 'characters';
+  if (k === 'place' || k === 'places') return 'places';
+  if (k === 'object' || k === 'objects') return 'objects';
+  return null;
+}
+
+function fragmentsFromSequence(sequence, entry) {
+  const out = [];
+  for (const spec of sequence) {
+    const value = trim(entry[spec.field]);
+    if (!value) continue;
+    out.push(spec.prefix ? { field: spec.field, value, prefix: spec.prefix } : { field: spec.field, value });
+  }
+  return out;
+}
+
+// Short-circuit "any non-blank field in this sequence" — used by
+// `hasCanonDescriptorContent` so per-entry render-count filters don't
+// allocate a full fragments array just to read `.length > 0`.
+function sequenceHasAnyField(sequence, entry) {
+  for (const spec of sequence) {
+    if (trim(entry[spec.field])) return true;
+  }
+  return false;
+}
+
+/**
+ * SHORT descriptor fragments — the visual subset used in canon UI cards
+ * and the render-ref button-enable predicate.
+ *
+ * Returns `[{ field, value, prefix? }]` in display order. Empty/missing
+ * fields produce no fragment. For chars/objects this is at most a single
+ * fragment (primary with single-field fallback).
+ */
+export function shortCanonDescriptorFragments(kind, entry) {
+  if (!entry || typeof entry !== 'object') return [];
+  const spec = SHORT_SPEC[normalizeKind(kind)];
+  if (!spec) return [];
+  if (spec.sequence) return fragmentsFromSequence(spec.sequence, entry);
+  const primary = trim(entry[spec.primary]);
+  if (primary) return [{ field: spec.primary, value: primary }];
+  const fallback = trim(entry[spec.fallback]);
+  if (fallback) return [{ field: spec.fallback, value: fallback }];
+  return [];
+}
+
+/**
+ * RICH descriptor fragments — every descriptive field that contributes to
+ * a render prompt body. Used by render-synthesis and the
+ * "has any content?" gate.
+ */
+export function richCanonDescriptorFragments(kind, entry) {
+  if (!entry || typeof entry !== 'object') return [];
+  const sequence = RICH_SPEC[normalizeKind(kind)];
+  if (!sequence) return [];
+  return fragmentsFromSequence(sequence, entry);
+}
+
+/**
+ * Flatten SHORT fragments into a sentence-style descriptor string.
+ * Matches the legacy `KINDS[].descFor` output:
+ *   characters: "physicalDescription" else "description"
+ *   settings:   "description. Palette: <palette>. recurringDetails"
+ *   objects:    "description" else "significance"
+ */
+export function descriptorForCanonEntry(kind, entry) {
+  return shortCanonDescriptorFragments(kind, entry)
+    .map((f) => (f.prefix ? `${f.prefix}: ${f.value}` : f.value))
+    .join('. ');
+}
+
+/**
+ * PREVIEW fragments — importer pre-commit review surface.
+ *
+ * Returns `{ subtitle, body }` where `subtitle` is a single trimmed string
+ * (empty when the kind has no subtitle field or the value is blank) and
+ * `body` is an ordered `[{ field, value }]` array of non-blank fields,
+ * intended for ` • `-joined rendering in importer cards. Unknown kinds and
+ * non-object entries return the empty shape so callers can render
+ * unconditionally.
+ *
+ * This is intentionally wider than `shortCanonDescriptorFragments` (which
+ * is scoped to the visual subset that drives render-prompts and ref-image
+ * gating). PREVIEW exists so the user can disambiguate which character /
+ * place / object to commit, so it surfaces narrative-only fields
+ * (`personality`, `background`, `slugline`) that have no visual role.
+ */
+export function previewCanonFragments(kind, entry) {
+  if (!entry || typeof entry !== 'object') return { subtitle: '', body: [] };
+  const spec = PREVIEW_SPEC[normalizeKind(kind)];
+  if (!spec) return { subtitle: '', body: [] };
+  const subtitle = spec.subtitleField ? trim(entry[spec.subtitleField]) : '';
+  return { subtitle, body: fragmentsFromSequence(spec.bodyFields, entry) };
+}
+
+/**
+ * True when the entry has any non-blank value across the RICH field set.
+ * Mirrors `canonEntryHasContent`'s per-kind union check (UniverseBuilder.jsx)
+ * and is the read-side mirror of `synthesizeCanonPrompt`'s skip-empty-seed
+ * rule.
+ */
+export function hasCanonDescriptorContent(kind, entry) {
+  if (!entry || typeof entry !== 'object') return false;
+  const sequence = RICH_SPEC[normalizeKind(kind)];
+  if (!sequence) return false;
+  return sequenceHasAnyField(sequence, entry);
+}

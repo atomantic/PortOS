@@ -5,10 +5,10 @@
  */
 
 import { mkdir, readFile, readdir, stat, writeFile, rename, unlink } from 'fs/promises';
-import { existsSync, statSync } from 'fs';
+import { existsSync, statSync, createReadStream } from 'fs';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { join, dirname, basename, extname, resolve as resolvePath, sep as PATH_SEP } from 'path';
 import { fileURLToPath } from 'url';
 import { homedir } from 'os';
@@ -59,10 +59,20 @@ export const PATHS = {
   decisions: join(__lib_dirname, '../../data/cos/decisions'),
   telegram: join(__lib_dirname, '../../data/telegram'),
   templates: join(__lib_dirname, '../../data/prompts/templates'),
+  // Visual template assets (e.g. the character reference-sheet layout PNG used
+  // as the init-image anchor by the universe-builder character sheet renderer).
+  // Distinct from `templates` above, which is the legacy prompt-template dir.
+  // Files here are shipped via data.sample/templates/ on first install.
+  visualTemplates: join(__lib_dirname, '../../data/templates'),
   settings: join(__lib_dirname, '../../data/settings'),
   missions: join(__lib_dirname, '../../data/cos/missions'),
   tools: join(__lib_dirname, '../../data/tools'),
   images: join(__lib_dirname, '../../data/images'),
+  // Uploaded multi-reference inputs for FLUX.2 multi-ref edits. Sibling of
+  // `images/` rather than a subdir so the gallery's flat `.png` enumeration
+  // never surfaces them, and so a future per-render cleanup pass can drop
+  // the whole dir without touching the gallery.
+  imageRefs: join(__lib_dirname, '../../data/image-refs'),
   loras: join(__lib_dirname, '../../data/loras'),
   videos: join(__lib_dirname, '../../data/videos'),
   videoThumbnails: join(__lib_dirname, '../../data/video-thumbnails'),
@@ -441,6 +451,20 @@ export function getDateString(date = new Date()) {
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
+ * Truncate an id to a fixed prefix for human-readable log lines. Null-safe
+ * so callers can pass a possibly-missing field directly (`shortId(run?.id)`)
+ * without an outer truthiness check.
+ *
+ * @param {*} id - id-like value; coerced to string
+ * @param {number} [n=8] - prefix length
+ * @returns {string} prefix of length `n`, or `''` when `id` is null/undefined
+ */
+export function shortId(id, n = 8) {
+  if (id == null) return '';
+  return String(id).slice(0, n);
+}
+
+/**
  * Safely parse a date value to epoch milliseconds.
  * Returns 0 for invalid/missing dates instead of NaN.
  *
@@ -596,49 +620,177 @@ export function assertSafeFilename(filename, { extensions, subject = 'filename',
 }
 
 /**
- * Resolve a user-supplied gallery image filename to an absolute path under
- * `PATHS.images`. Returns `null` on any failure so callers can decide whether
- * to throw, log-and-skip, or substitute a fallback.
+ * Build a single-root path resolver that returns a function with the same
+ * signature as `resolveGalleryImage` / `resolveImageRef` / `resolveTemplateAsset`.
  *
- * Defense in depth:
+ * Defense in depth (applied on every call):
  *  1. `basename()` strips dirs (so `../../etc/passwd` → `passwd`).
  *  2. Reject `.`/`..`/empty basenames outright.
- *  3. `resolve` + `startsWith(imagesRoot)` so unicode tricks can't escape.
- *  4. When `mustExist`, `statSync({ throwIfNoEntry: false }).isFile()` rejects
- *     directories (the images root itself would otherwise pass an existsSync
- *     check and flow into ffmpeg as an "image path" where it'd fail in
- *     confusing ways). Note: `statSync` follows symlinks, so a symlink inside
- *     `data/images/` pointing to a regular file outside the gallery still
- *     passes. PortOS is single-user (see CLAUDE.md "Security Model") so we
- *     accept that — if you need to reject symlinks too, use `lstatSync`.
+ *  3. `resolve` + `startsWith(rootPrefix)` so unicode tricks can't escape.
+ *  4. Optional extension allow-list (case-insensitive) before any FS syscall.
+ *  5. When `mustExist`, `statSync({ throwIfNoEntry: false }).isFile()` rejects
+ *     directories (the root itself would otherwise pass an existsSync check
+ *     and flow into ffmpeg / image-gen as an "image path" where it'd fail in
+ *     confusing ways). Note: `statSync` follows symlinks, so a symlink under
+ *     the root pointing to a regular file outside still passes. PortOS is
+ *     single-user (see CLAUDE.md "Security Model") so we accept that — for
+ *     symlink rejection, swap to `lstatSync`.
  *
- * Pass `{ mustExist: false }` for code paths that intentionally skip the
- * existence check (e.g. when the path is resolved at request time but read
- * later — TOCTOU between resolve and use isn't worth the extra syscall, and
- * the downstream renderer surfaces a clear error if the file vanished).
+ * Pass `{ mustExist: false }` at call time for code paths that intentionally
+ * skip the existence check (e.g. when the path is resolved at request time
+ * but read later — TOCTOU between resolve and use isn't worth the extra
+ * syscall, and the downstream renderer surfaces a clear error if the file
+ * vanished).
  *
- * @param {string} name - Filename to resolve (basenamed internally)
+ * @param {() => string} getRoot - Thunk returning the absolute directory.
+ *   A thunk (not a literal) so tests that mutate `PATHS.x` at mock-eval
+ *   time still steer the resolver — the value is captured on first call
+ *   and cached thereafter (recomputed only if the thunk later returns a
+ *   different value, which production code never does).
  * @param {object} [opts]
- * @param {boolean} [opts.mustExist=true] - Require the resolved path to be an existing regular file
- * @returns {string|null} Absolute path inside PATHS.images, or null
+ * @param {string[]} [opts.extensions] - allowed extensions WITHOUT the leading
+ *   dot (`['png', 'jpg', 'jpeg', 'webp']`). When omitted, all extensions are
+ *   accepted (matches the legacy gallery/refs behavior — extension checks
+ *   happen elsewhere on those paths).
+ * @param {boolean} [opts.cache=false] - Memoize successful resolutions. Only
+ *   safe for shipped/stable assets (templates) where the basename → path
+ *   binding is stable for the process lifetime; never enable for user-mutable
+ *   dirs (gallery, refs) since deletions would be masked.
+ * @returns {(name: string, opts?: { mustExist?: boolean }) => string|null}
  */
-export function resolveGalleryImage(name, { mustExist = true } = {}) {
-  if (typeof name !== 'string' || !name) return null;
-  const safe = basename(name);
-  if (!safe || safe === '.' || safe === '..') return null;
-  const imagesRoot = resolvePath(PATHS.images) + PATH_SEP;
-  const localPath = resolvePath(join(PATHS.images, safe));
-  if (!localPath.startsWith(imagesRoot)) return null;
-  if (!mustExist) return localPath;
-  // throwIfNoEntry:false swallows ENOENT but not EACCES / transient I/O —
-  // treat those as "not a valid gallery reference" too rather than bubbling
-  // a 500 out of the route layer.
-  try {
-    const stat = statSync(localPath, { throwIfNoEntry: false });
-    return stat?.isFile() ? localPath : null;
-  } catch {
-    return null;
+export function makePathResolver(getRoot, { extensions, cache = false } = {}) {
+  if (typeof getRoot !== 'function') {
+    throw new Error('makePathResolver: getRoot must be a function returning the root dir');
   }
+  // Escape regex metacharacters in each extension before interpolating —
+  // current callers pass plain alphanumeric tokens (png/jpg/jpeg/webp), but
+  // the exported factory shouldn't behave incorrectly if a future caller
+  // passes an extension containing `.`/`+`/etc.
+  const extRegex = Array.isArray(extensions) && extensions.length > 0
+    ? new RegExp(`\\.(${extensions
+      .map((e) => String(e).replace(/^\./, '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+      .join('|')})$`, 'i')
+    : null;
+  const memo = cache ? new Map() : null;
+  // Resolved-root cache so the hot path doesn't re-run `resolvePath(root) +
+  // PATH_SEP` per call. Recomputes only when `getRoot()` returns a different
+  // value — picks up test-time `PATHS.x = ...` mutation on first call, then
+  // stays warm for the rest of the process.
+  let _root = null;
+  let _rootAbsPrefix = null;
+
+  return (name, { mustExist = true } = {}) => {
+    if (typeof name !== 'string' || !name) return null;
+    const safe = basename(name);
+    if (!safe || safe === '.' || safe === '..') return null;
+    if (extRegex && !extRegex.test(safe)) return null;
+    // Refresh the root cache BEFORE the memo lookup so a getRoot() that
+    // suddenly returns a new value (e.g. a test re-mocks `PATHS.x` mid-run)
+    // invalidates the memo too — otherwise the old root's cached
+    // resolutions would shadow the new root forever.
+    const root = getRoot();
+    if (root !== _root) {
+      _root = root;
+      _rootAbsPrefix = resolvePath(root) + PATH_SEP;
+      if (memo) memo.clear();
+    }
+    const cacheKey = memo ? (mustExist ? `must:${safe}` : `nostat:${safe}`) : null;
+    if (memo && memo.has(cacheKey)) return memo.get(cacheKey);
+    const localPath = resolvePath(join(root, safe));
+    if (!localPath.startsWith(_rootAbsPrefix)) return null;
+    if (!mustExist) {
+      if (memo) memo.set(cacheKey, localPath);
+      return localPath;
+    }
+    // throwIfNoEntry:false swallows ENOENT but not EACCES / transient I/O —
+    // treat those as "not a valid reference" too rather than bubbling a 500
+    // out of the route layer.
+    let resolved = null;
+    try {
+      const stat = statSync(localPath, { throwIfNoEntry: false });
+      resolved = stat?.isFile() ? localPath : null;
+    } catch { /* falls through to null */ }
+    // Only cache successful resolutions — a missing-then-installed asset
+    // should pick up on the next call (e.g. setup-data.js racing a render).
+    if (memo && resolved) memo.set(cacheKey, resolved);
+    return resolved;
+  };
+}
+
+/**
+ * Resolve a user-supplied gallery image filename to an absolute path under
+ * `PATHS.images`. Returns `null` on any failure so callers can decide whether
+ * to throw, log-and-skip, or substitute a fallback. See `makePathResolver`
+ * for the defense-in-depth checks. Late-binds via a thunk so tests that
+ * mutate `PATHS.images` at mock-eval time still steer the resolver.
+ */
+export const resolveGalleryImage = makePathResolver(() => PATHS.images);
+
+/**
+ * Resolve a user-supplied reference-image filename to an absolute path under
+ * `PATHS.imageRefs`. Multi-reference uploads land in a sibling dir to keep
+ * them out of the gallery enumeration; same defense-in-depth as the gallery
+ * resolver but anchored at the refs root.
+ */
+export const resolveImageRef = makePathResolver(() => PATHS.imageRefs);
+
+/**
+ * Resolve a shipped visual template filename (e.g. character reference-sheet
+ * layout PNG) to an absolute path under `PATHS.visualTemplates`. Caches
+ * successful resolutions because the template assets are shipped and stable
+ * for the lifetime of the process — keeps reference-sheet rendering off the
+ * statSync hot path.
+ */
+export const resolveTemplateAsset = makePathResolver(() => PATHS.visualTemplates, {
+  extensions: ['png', 'jpg', 'jpeg', 'webp'],
+  cache: true,
+});
+
+/**
+ * Resolve any user-supplied image input (init image OR multi-reference image)
+ * to an absolute path under one of PortOS's approved image roots — the
+ * gallery (`PATHS.images`), the multi-ref upload dir (`PATHS.imageRefs`),
+ * or the shipped visual-template dir (`PATHS.visualTemplates`). Used by the
+ * image-gen runner to re-validate paths that originated from internal
+ * features (gallery picks, reference-sheet renders) which may legitimately
+ * cross dir boundaries.
+ *
+ * Accepts both basename input (`"foo.png"`) and already-resolved absolute
+ * paths (the local image-gen runner re-validates the same input on every
+ * call so we need to accept both shapes).
+ *
+ * @param {string} rawPath - basename or absolute path
+ * @returns {string|null} validated absolute path, or null
+ */
+// Pairs of (PATHS-key, resolver). Read PATHS at CALL time so tests that
+// mutate `PATHS.x` at mock-eval time still steer the prefix dispatch — a
+// module-load snapshot would freeze the pre-mock paths.
+const IMAGE_INPUT_RESOLVERS = [
+  ['images', resolveGalleryImage],
+  ['imageRefs', resolveImageRef],
+  ['visualTemplates', resolveTemplateAsset],
+];
+
+export function resolveImageInputPath(rawPath) {
+  if (typeof rawPath !== 'string' || !rawPath) return null;
+  // For ABSOLUTE inputs, dispatch by prefix. The single-root resolvers
+  // basename their input for defense-in-depth, so trying them in order on an
+  // absolute path can silently redirect a `/data/templates/foo.png` input
+  // to `/data/images/foo.png` whenever a same-named file lives in the gallery.
+  // Validate against the matching root only.
+  const resolvedInput = resolvePath(rawPath);
+  for (const [key, resolver] of IMAGE_INPUT_RESOLVERS) {
+    const rootPrefix = resolvePath(PATHS[key]) + PATH_SEP;
+    if (resolvedInput.startsWith(rootPrefix)) return resolver(rawPath);
+  }
+  // For basename / relative input (no matching prefix), fall through the
+  // resolvers in order. First match wins; basename collisions across roots
+  // are accepted as ambiguous and resolve to the first defined root.
+  for (const [, resolver] of IMAGE_INPUT_RESOLVERS) {
+    const candidate = resolver(rawPath);
+    if (candidate) return candidate;
+  }
+  return null;
 }
 
 /**
@@ -714,4 +866,26 @@ export async function dirSize(path) {
   }
   const kb = parseInt(result.stdout.split('\t')[0], 10) || 0;
   return kb * 1024;
+}
+
+/**
+ * SHA-256 a file as hex. One-shot read under 512 KB; streams above so multi-GB
+ * videos don't blow heap. Threshold matches `server/services/backup.js`'s
+ * snapshot manifest generator.
+ */
+const SHA256_STREAM_THRESHOLD = 512 * 1024;
+export async function sha256File(path) {
+  const info = await stat(path);
+  if (info.size < SHA256_STREAM_THRESHOLD) {
+    const buf = await readFile(path);
+    return createHash('sha256').update(buf).digest('hex');
+  }
+  return new Promise((resolve, reject) => {
+    const hasher = createHash('sha256');
+    const stream = createReadStream(path);
+    stream.on('error', reject);
+    stream.pipe(hasher);
+    hasher.on('finish', () => resolve(hasher.digest('hex')));
+    hasher.on('error', reject);
+  });
 }

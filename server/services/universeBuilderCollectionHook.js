@@ -24,6 +24,7 @@
 import { mediaJobEvents } from './mediaJobQueue/index.js';
 import { addItem, ERR_DUPLICATE } from './mediaCollections.js';
 import { withReexportSuppressed, emitRecordUpdated } from './sharing/recordEvents.js';
+import { appendEntryImageRef } from './universeBuilder.js';
 
 // runId → { universeId, pending }. Pure in-memory; lost on restart.
 const activeRuns = new Map();
@@ -76,13 +77,34 @@ export function initUniverseBuilderCollectionHook() {
           return 'failed';
         });
 
+      // Append the rendered filename to the source entry's `imageRefs[]` so
+      // the Universe Builder can show the latest render as an avatar. Wrapped
+      // alongside `addItem` under the same re-export-suppression scope, so a
+      // single coalesced emit fires when the run finishes. Best-effort —
+      // bookkeeping must never crash the server or fail the user's render.
+      const appendEntryRefCall = () => {
+        if (!tag.entryRef || !tag.universeId) return Promise.resolve(null);
+        return appendEntryImageRef(tag.universeId, tag.entryRef, filename).catch((err) => {
+          console.log(`⚠️ universe-builder entry-ref append failed for ${filename}: ${err?.message || String(err)}`);
+          return null;
+        });
+      };
+
       try {
         // When the run is tracked, swallow the per-item emitRecordUpdated so a
         // 160-image batch doesn't fan into 160 debounced re-exports. The final
         // emit below fires once when pending hits zero.
+        // The two writes touch independent files (media-collections.json vs
+        // universe-builder.json) and have no ordering dependency — fire them
+        // in parallel so a 160-image batch run doesn't pay double the
+        // per-completion serialization cost.
+        const work = async () => {
+          const [s] = await Promise.all([addItemCall(), appendEntryRefCall()]);
+          return s;
+        };
         const status = runActive && tag.universeId
-          ? await withReexportSuppressed('universe', tag.universeId, addItemCall)
-          : await addItemCall();
+          ? await withReexportSuppressed('universe', tag.universeId, work)
+          : await work();
 
         if (status === 'added') {
           console.log(`🌍 universe-builder run=${tag.runId?.slice(0, 8)} category=${tag.category} → ${filename}`);

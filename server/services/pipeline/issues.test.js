@@ -562,5 +562,33 @@ describe('pipeline issues service', () => {
       expect(otherList).toHaveLength(1);
       expect(otherList[0].seasonId).toBe(otherSeason.id);
     });
+
+    // Per-season editorial lock — refuses to move issues OUT of or INTO a
+    // locked season. Pairs with `seasons.updateSeason`'s LOCKED_SEASON gate.
+    it('refuses to reassign OUT of a locked source season', async () => {
+      const { series, a, b } = await setup();
+      await seasonsSvc.updateSeason(series.id, a.id, { locked: true });
+      await expect(svc.bulkReassignSeason(series.id, a.id, b.id))
+        .rejects.toMatchObject({ code: svc.ERR_SEASON_LOCKED });
+      // Issues stayed put — unchanged seasonId.
+      const list = await svc.listIssues({ seriesId: series.id });
+      expect(list.filter((i) => i.seasonId === a.id)).toHaveLength(3);
+    });
+
+    it('refuses to reassign INTO a locked target season', async () => {
+      const { series, a, b } = await setup();
+      await seasonsSvc.updateSeason(series.id, b.id, { locked: true });
+      await expect(svc.bulkReassignSeason(series.id, a.id, b.id))
+        .rejects.toMatchObject({ code: svc.ERR_SEASON_LOCKED });
+    });
+
+    it('allows reassignment when neither season is locked', async () => {
+      const { series, a, b } = await setup();
+      // Sanity — explicitly lock and unlock to prove the gate clears.
+      await seasonsSvc.updateSeason(series.id, a.id, { locked: true });
+      await seasonsSvc.updateSeason(series.id, a.id, { locked: false });
+      const result = await svc.bulkReassignSeason(series.id, a.id, b.id);
+      expect(result.reassigned).toBe(3);
+    });
   });
 });

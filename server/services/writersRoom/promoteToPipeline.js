@@ -2,7 +2,7 @@
  * Writers Room ↔ Pipeline bridge (item 6 of the DRY unification).
  *
  * `promoteWorkToPipeline(workId)` creates a Pipeline Series + first Issue from
- * a Writers Room work — carrying over bibles (characters / settings / objects),
+ * a Writers Room work — carrying over bibles (characters / places / objects),
  * the active draft body, and the latest script-analysis scenes — then records
  * the bidirectional id link on both sides.
  *
@@ -26,7 +26,7 @@
 
 import * as wrLocal from './local.js';
 import { listCharacters } from './characters.js';
-import { listSettings } from './settings.js';
+import { listPlaces } from './places.js';
 import { listObjects } from './objects.js';
 import { getAnalysis } from './evaluator.js';
 import * as seriesSvc from '../pipeline/series.js';
@@ -91,9 +91,9 @@ export async function promoteWorkToPipeline(workId, { force = false } = {}) {
     await wrLocal.linkToPipeline(workId, { seriesId: null, issueId: null });
   }
 
-  const [characters, settings, objects, scriptScenes] = await Promise.all([
+  const [characters, places, objects, scriptScenes] = await Promise.all([
     listCharacters(workId),
-    listSettings(workId),
+    listPlaces(workId),
     listObjects(workId),
     loadScriptScenes(workId),
   ]);
@@ -108,7 +108,7 @@ export async function promoteWorkToPipeline(workId, { force = false } = {}) {
   const universe = await createUniverse({
     name: manifest.title,
     characters,
-    settings,
+    places,
     objects,
   });
 

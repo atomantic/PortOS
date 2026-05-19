@@ -53,7 +53,8 @@ export const ACCEPTED_OLD_MD5 = {
     '52e31abc93e3105176236fcaa5d1575a', // pre-005 (shape-aware), still in setup-data.js OLD list
   ],
   'pipeline-arc-resolve.md': [
-    'a8677bbe1eb38f871fb152a5b0fec7c6', // current (pre-Phase B) shipped
+    '8e348f3d1894382889f9f0ee7d5c6792', // post-019 / pre-023 — the hash this migration originally produced; included so a re-run after a `data/migrations.applied.json` reset can cleanly advance an install at the intermediate state to the post-023 live sample
+    'a8677bbe1eb38f871fb152a5b0fec7c6', // pre-019 (pre-Phase B) shipped
     '87bc5c01f1a8a97b681727a38b05edc6', // pre-005 (shape-aware), still in setup-data.js OLD list
   ],
   'pipeline-volume-verify.md': [
@@ -62,14 +63,27 @@ export const ACCEPTED_OLD_MD5 = {
   ],
 };
 
-// New shipped hashes — what data.sample carries post-migration.
+// New shipped hashes — tracks the LIVE `data.sample` hash, not strictly the
+// post-019 commit-time hash. Later migrations that further evolve any of
+// these files (e.g. migration 023 amended `pipeline-arc-resolve.md`) must
+// do TWO things:
+//   1. Bump the corresponding entry in `NEW_SHIPPED_MD5` here so that fresh
+//      installs (whose `data/` was seeded from the latest sample) report
+//      `alreadyCurrent` instead of a misleading "customized" warning, and
+//      so the drift-catch test stays in lock-step with the live sample.
+//   2. Append the OLD `NEW_SHIPPED_MD5` value (the hash this migration
+//      originally produced) to `ACCEPTED_OLD_MD5` above so a re-run after a
+//      `data/migrations.applied.json` reset still cleanly advances an
+//      install at the intermediate state. Without this, re-running 019
+//      on a post-019 install would misclassify it as "customized."
+// Each entry comment records who last advanced it.
 // Exported so the test suite can import and assert against these tables
 // directly rather than maintaining local copies.
 export const NEW_SHIPPED_MD5 = {
-  'pipeline-arc-overview.md':   '0a1f6ffa6908522e3690c5e9e53a6ee0',
-  'pipeline-arc-verify.md':     '36aa70cdfc25d7549573a4d556e7702c',
-  'pipeline-arc-resolve.md':    '8e348f3d1894382889f9f0ee7d5c6792',
-  'pipeline-volume-verify.md':  '49458d36700cb94e34806d536ffe2940',
+  'pipeline-arc-overview.md':   '0a1f6ffa6908522e3690c5e9e53a6ee0', // post-019
+  'pipeline-arc-verify.md':     '36aa70cdfc25d7549573a4d556e7702c', // post-019
+  'pipeline-arc-resolve.md':    '5b340885c6e8f8afc63424d6b5bc7eb7', // post-023 (episode-synopsis anchor)
+  'pipeline-volume-verify.md':  '49458d36700cb94e34806d536ffe2940', // post-019
 };
 
 // Pure core — exposed for unit tests so the OLD→NEW upgrade branch can be

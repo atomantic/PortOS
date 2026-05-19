@@ -33,7 +33,7 @@ import {
   updateWritersRoomWork,
   runWritersRoomAnalysis,
   listWritersRoomCharacters,
-  listWritersRoomSettings,
+  listWritersRoomPlaces,
   listWritersRoomObjects,
   promoteWritersRoomWorkToPipeline,
 } from '../../services/apiWritersRoom';
@@ -46,14 +46,14 @@ import ProseTokenPopover from './ProseTokenPopover';
 import WritersRoomDock from './WritersRoomDock';
 import useImageGenQueue from '../../hooks/useImageGenQueue';
 
-const ANALYSIS_KIND = { SCRIPT: 'script', CHARACTERS: 'characters', SETTINGS: 'settings', OBJECTS: 'objects', EVALUATE: 'evaluate', FORMAT: 'format' };
+const ANALYSIS_KIND = { SCRIPT: 'script', CHARACTERS: 'characters', PLACES: 'places', OBJECTS: 'objects', EVALUATE: 'evaluate', FORMAT: 'format' };
 const DRAWER = { VERSIONS: 'versions', HISTORY: 'history' };
 const MOBILE_TAB = { WRITING: 'writing', STORYBOARD: 'storyboard' };
 
 const ANALYSIS_LABELS = {
   [ANALYSIS_KIND.SCRIPT]: 'Adapt',
   [ANALYSIS_KIND.CHARACTERS]: 'Characters',
-  [ANALYSIS_KIND.SETTINGS]: 'Settings',
+  [ANALYSIS_KIND.PLACES]: 'Places',
   [ANALYSIS_KIND.OBJECTS]: 'Objects',
   [ANALYSIS_KIND.EVALUATE]: 'Editorial pass',
   [ANALYSIS_KIND.FORMAT]: 'Format pass',
@@ -100,7 +100,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   const [saving, setSaving] = useState(false);
   const [readingTheme, setReadingTheme] = useState(readReadingTheme);
   const [characters, setCharacters] = useState([]);
-  const [settings, setSettings] = useState([]);
+  const [places, setPlaces] = useState([]);
   const [objects, setObjects] = useState([]);
   const [runningKind, setRunningKind] = useState(null);
   const [drawer, setDrawer] = useState(null);
@@ -314,17 +314,17 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   useEffect(() => { setStatus(work.status); }, [work.status]);
   useEffect(() => { setTitle(work.title); }, [work.title]);
 
-  // The CharactersBible / SettingsBible drawers are the canonical editors;
+  // The CharactersBible / PlacesBible drawers are the canonical editors;
   // mirror their lists here so the storyboard's image-prompt enrichment picks
   // up edits immediately.
   useEffect(() => {
     Promise.all([
       listWritersRoomCharacters(work.id).catch(() => []),
-      listWritersRoomSettings(work.id).catch(() => []),
+      listWritersRoomPlaces(work.id).catch(() => []),
       listWritersRoomObjects(work.id).catch(() => []),
-    ]).then(([chars, sets, objs]) => {
+    ]).then(([chars, plcs, objs]) => {
       setCharacters(chars || []);
-      setSettings(sets || []);
+      setPlaces(plcs || []);
       setObjects(objs || []);
     });
   }, [work.id]);
@@ -483,8 +483,8 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
     if (kind === 'characters' && Array.isArray(snapshot.result?.mergedProfiles)) {
       setCharacters(snapshot.result.mergedProfiles);
     }
-    if (kind === 'settings' && Array.isArray(snapshot.result?.mergedProfiles)) {
-      setSettings(snapshot.result.mergedProfiles);
+    if (kind === 'places' && Array.isArray(snapshot.result?.mergedProfiles)) {
+      setPlaces(snapshot.result.mergedProfiles);
     }
     if (kind === 'objects' && Array.isArray(snapshot.result?.mergedProfiles)) {
       setObjects(snapshot.result.mergedProfiles);
@@ -497,14 +497,14 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   }, [runningKind, work.id]);
 
   // Sequential pipeline for the 3-step storyboard setup. Run characters →
-  // settings → script in order so each later step has the earlier bible to
+  // places → script in order so each later step has the earlier bible to
   // reference. Bails on first failure (the failed step's toast already fired).
   const runFullPipeline = useCallback(async () => {
     if (runningKind) return;
     const okChars = await runAnalysis(ANALYSIS_KIND.CHARACTERS);
     if (!okChars || !mountedRef.current) return;
-    const okSettings = await runAnalysis(ANALYSIS_KIND.SETTINGS);
-    if (!okSettings || !mountedRef.current) return;
+    const okPlaces = await runAnalysis(ANALYSIS_KIND.PLACES);
+    if (!okPlaces || !mountedRef.current) return;
     await runAnalysis(ANALYSIS_KIND.SCRIPT);
   }, [runAnalysis, runningKind]);
 
@@ -718,7 +718,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
               <MenuSection label="AI">
                 <MenuItem icon={Clapperboard} label="Run Adapt (rebuild storyboard)" running={runningKind === ANALYSIS_KIND.SCRIPT} onClick={closeOverflowAnd(() => runAnalysis(ANALYSIS_KIND.SCRIPT))} />
                 <MenuItem icon={Users} label="Refresh characters" running={runningKind === ANALYSIS_KIND.CHARACTERS} onClick={closeOverflowAnd(() => runAnalysis(ANALYSIS_KIND.CHARACTERS))} />
-                <MenuItem icon={MapPin} label="Refresh settings" running={runningKind === ANALYSIS_KIND.SETTINGS} onClick={closeOverflowAnd(() => runAnalysis(ANALYSIS_KIND.SETTINGS))} />
+                <MenuItem icon={MapPin} label="Refresh places" running={runningKind === ANALYSIS_KIND.PLACES} onClick={closeOverflowAnd(() => runAnalysis(ANALYSIS_KIND.PLACES))} />
                 <MenuItem icon={Sparkles} label="Editorial pass" running={runningKind === ANALYSIS_KIND.EVALUATE} onClick={closeOverflowAnd(() => runAnalysis(ANALYSIS_KIND.EVALUATE))} />
                 <MenuItem icon={FileSignature} label="Format pass" running={runningKind === ANALYSIS_KIND.FORMAT} onClick={closeOverflowAnd(() => runAnalysis(ANALYSIS_KIND.FORMAT))} />
               </MenuSection>
@@ -776,7 +776,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
                 body={body}
                 scenes={latestScenes}
                 characters={characters}
-                settings={settings}
+                places={places}
                 objects={objects}
                 readingTheme={readingTheme}
                 activeSceneId={activeSceneId}
@@ -834,10 +834,10 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
           <StoryboardPanel
             work={work}
             characters={characters}
-            settings={settings}
+            places={places}
             objects={objects}
             onCharactersChange={setCharacters}
-            onSettingsChange={setSettings}
+            onPlacesChange={setPlaces}
             onObjectsChange={setObjects}
             onRunObjects={() => runAnalysis(ANALYSIS_KIND.OBJECTS)}
             onScenesChange={setLatestScenes}
@@ -845,7 +845,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
             onDebug={handleDebug}
             onRunAdapt={() => runAnalysis(ANALYSIS_KIND.SCRIPT)}
             onRunCharacters={() => runAnalysis(ANALYSIS_KIND.CHARACTERS)}
-            onRunSettings={() => runAnalysis(ANALYSIS_KIND.SETTINGS)}
+            onRunPlaces={() => runAnalysis(ANALYSIS_KIND.PLACES)}
             onRunFullPipeline={runFullPipeline}
             runningAdapt={runningKind === ANALYSIS_KIND.SCRIPT}
             runningKind={runningKind}
@@ -868,7 +868,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
         kind={pop?.kind}
         refId={pop?.refId}
         characters={characters}
-        settings={settings}
+        places={places}
         objects={objects}
         onOpenProfile={handleOpenProfile}
         onClose={handlePopClose}

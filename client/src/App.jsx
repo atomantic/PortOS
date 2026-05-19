@@ -113,6 +113,19 @@ function CanonRedirect() {
   return <Navigate to={`${pathname.replace(/\/canon\/?$/, '')}${search}#canon`} replace />;
 }
 
+// /media/universe-builder/* → /universe-builder/* redirect for legacy bookmarks
+// after the MediaGen tab for Universe Builder was removed in favor of the
+// Create sidebar link. The canon variant forces `#canon` to scroll the
+// embedded canon section; non-canon preserves whatever hash the user had.
+function UniverseBuilderRedirect({ canon = false }) {
+  const { pathname, search, hash } = useLocation();
+  const rest = pathname.replace(/^\/media\/universe-builder/, '');
+  const target = canon
+    ? `/universe-builder${rest.replace(/\/canon\/?$/, '')}${search}#canon`
+    : `/universe-builder${rest}${search}${hash}`;
+  return <Navigate to={target} replace />;
+}
+
 // Force full reload on HMR — partial hot-replacement of the route tree
 // causes stale lazy imports and React Router errors on nested paths
 if (import.meta.hot) {
@@ -221,9 +234,12 @@ export default function App() {
             <Route path="timeline/:projectId" element={<VideoTimelineEditor />} />
             <Route path="models" element={<MediaModels />} />
             <Route path="loras" element={<Loras />} />
-            <Route path="universe-builder" element={<UniverseBuilder />} />
-            <Route path="universe-builder/:universeId" element={<UniverseBuilder />} />
-            <Route path="universe-builder/:universeId/canon" element={<CanonRedirect />} />
+            {/* Universe Builder lives at /universe-builder (Create sidebar
+                link). These redirects keep legacy /media/universe-builder
+                bookmarks working after the MediaGen tab was removed. */}
+            <Route path="universe-builder" element={<Navigate to="/universe-builder" replace />} />
+            <Route path="universe-builder/:universeId" element={<UniverseBuilderRedirect />} />
+            <Route path="universe-builder/:universeId/canon" element={<UniverseBuilderRedirect canon />} />
           </Route>
           <Route path="image-gen" element={<RedirectWithSearch to="/media/image" />} />
           <Route path="video-gen" element={<RedirectWithSearch to="/media/video" />} />

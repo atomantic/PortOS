@@ -236,19 +236,71 @@ describe('sharing/manifest', () => {
     });
   });
 
-  it('manifestFilename is deterministic when subscription is set', () => {
+  it('manifestFilename is deterministic per-sender when subscription is set', () => {
     const m = manifest.buildManifest({
-      kind: 'universe', source: 'me', bucketId: 'b1', bucketName: 'c',
+      kind: 'universe', source: 'me', senderInstanceId: 'inst-A',
+      bucketId: 'b1', bucketName: 'c',
       recordIds: [], assetRefs: [],
       subscription: { recordKind: 'universe', recordId: 'uni-abc-123' },
     });
-    expect(manifest.manifestFilename(m)).toBe('sub-universe-uni-abc-123.json');
-    // Same record → same filename regardless of timestamp.
+    expect(manifest.manifestFilename(m)).toBe('sub-universe-uni-abc-123-inst-A.json');
+    // Same record + same sender → same filename regardless of timestamp.
     const m2 = manifest.buildManifest({
-      kind: 'universe', source: 'me', bucketId: 'b1', bucketName: 'c',
+      kind: 'universe', source: 'me', senderInstanceId: 'inst-A',
+      bucketId: 'b1', bucketName: 'c',
       recordIds: [], assetRefs: [],
       subscription: { recordKind: 'universe', recordId: 'uni-abc-123' },
     });
     expect(manifest.manifestFilename(m2)).toBe(manifest.manifestFilename(m));
+  });
+
+  it('manifestFilename produces distinct names for two peers sharing the same record', () => {
+    const peerA = manifest.buildManifest({
+      kind: 'universe', source: 'A', senderInstanceId: 'inst-A',
+      bucketId: 'b1', bucketName: 'c', recordIds: [], assetRefs: [],
+      subscription: { recordKind: 'universe', recordId: 'uni-shared' },
+    });
+    const peerB = manifest.buildManifest({
+      kind: 'universe', source: 'B', senderInstanceId: 'inst-B',
+      bucketId: 'b1', bucketName: 'c', recordIds: [], assetRefs: [],
+      subscription: { recordKind: 'universe', recordId: 'uni-shared' },
+    });
+    expect(manifest.manifestFilename(peerA)).not.toBe(manifest.manifestFilename(peerB));
+    expect(manifest.manifestFilename(peerA)).toBe('sub-universe-uni-shared-inst-A.json');
+    expect(manifest.manifestFilename(peerB)).toBe('sub-universe-uni-shared-inst-B.json');
+  });
+
+  it('legacySubscriptionFilename returns the pre-v2 sender-less name', () => {
+    expect(manifest.legacySubscriptionFilename({ recordKind: 'series', recordId: 'ser-1' }))
+      .toBe('sub-series-ser-1.json');
+  });
+
+  it('subscriptionFilename sanitizes path separators and other unsafe chars from senderInstanceId', () => {
+    // A malformed persisted instance id with path separators must not be
+    // able to escape the manifests directory or create nested paths.
+    const f1 = manifest.subscriptionFilename({
+      recordKind: 'universe', recordId: 'uni-1', senderInstanceId: '../../../etc/passwd',
+    });
+    expect(f1).not.toMatch(/[/\\]/);
+    expect(f1).toBe('sub-universe-uni-1-_________etc_passwd.json');
+
+    const f2 = manifest.subscriptionFilename({
+      recordKind: 'series', recordId: 'ser-1', senderInstanceId: 'inst/with\\slashes',
+    });
+    expect(f2).not.toMatch(/[/\\]/);
+    expect(f2).toBe('sub-series-ser-1-inst_with_slashes.json');
+
+    // Length cap: a wildly oversized id is truncated to 80 chars.
+    const long = 'A'.repeat(200);
+    const f3 = manifest.subscriptionFilename({
+      recordKind: 'universe', recordId: 'uni-1', senderInstanceId: long,
+    });
+    expect(f3).toBe(`sub-universe-uni-1-${'A'.repeat(80)}.json`);
+
+    // An id of all separator chars is fully escaped, never empty.
+    const f4 = manifest.subscriptionFilename({
+      recordKind: 'universe', recordId: 'uni-1', senderInstanceId: '///',
+    });
+    expect(f4).toBe('sub-universe-uni-1-___.json');
   });
 });

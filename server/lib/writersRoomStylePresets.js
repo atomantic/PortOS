@@ -347,6 +347,14 @@ export const STYLE_PRESETS = [
 
 export const STYLE_PRESET_IDS = STYLE_PRESETS.map((p) => p.id);
 
+// id → preset map for O(1) lookups; callers that hand-roll
+// STYLE_PRESETS.find(p => p.id === id) should use this instead.
+const STYLE_PRESET_BY_ID = new Map(STYLE_PRESETS.map((p) => [p.id, p]));
+export function getStylePresetById(id) {
+  if (!id || typeof id !== 'string') return null;
+  return STYLE_PRESET_BY_ID.get(id) || null;
+}
+
 // 'custom' = user wrote their own prompt without picking a preset.
 // 'none' = no style applied (image-gen uses scene visualPrompt verbatim).
 export const STYLE_ID = { NONE: 'none', CUSTOM: 'custom' };

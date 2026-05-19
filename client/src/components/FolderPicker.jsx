@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { Folder, FolderOpen, ChevronUp, HardDrive, Home, X, Check, AlertCircle } from 'lucide-react';
 import * as api from '../services/api';
 
-export default function FolderPicker({ value, onChange }) {
+export default function FolderPicker({ value, onChange, defaultPath }) {
   const [isOpen, setIsOpen] = useState(false);
   const [currentPath, setCurrentPath] = useState('');
   const [parentPath, setParentPath] = useState(null);
@@ -11,20 +11,50 @@ export default function FolderPicker({ value, onChange }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const modalRef = useRef(null);
+  // Remember when `defaultPath` has already failed once so re-opens skip the
+  // wasted round trip (and the server-side 400 it logs). Ref-not-state because
+  // changing it must not re-trigger the open effect.
+  const defaultPathUnavailableRef = useRef(false);
 
-  // Load directory contents
-  const loadDirectory = useCallback(async (path = null) => {
+  // Load directory contents. When fallbackToDefault is true and the requested
+  // path fails BECAUSE IT DOESN'T EXIST (e.g. iCloud Obsidian folder absent),
+  // silently retry with the server's default so the picker still opens
+  // somewhere usable. Other failures (server down, permission denied,
+  // transient 5xx) propagate as errors and do NOT poison the
+  // defaultPathUnavailable cache — otherwise a one-time network blip would
+  // permanently disable the default for the rest of the session.
+  const loadDirectory = useCallback(async (path = null, { fallbackToDefault = false } = {}) => {
+    // Local helper so it stays inside the useCallback closure — keeps
+    // react-hooks/exhaustive-deps quiet and rules out stale-closure surprises
+    // if it ever starts reading state/props in the future.
+    const isPathAbsentError = (err) => (
+      err?.status === 400 && (err.code === 'INVALID_PATH' || err.code === 'NOT_A_DIRECTORY')
+    );
     setLoading(true);
     setError(null);
-    const result = await api.getDirectories(path).catch((err) => {
-      setError(err.message || 'Failed to load directory');
-      return null;
-    });
-    if (result) {
+    const applyResult = (result) => {
       setCurrentPath(result.currentPath);
       setParentPath(result.parentPath);
       setDirectories(result.directories || []);
       setDrives(result.drives ?? null);
+    };
+    let lastError = null;
+    let result = await api.getDirectories(path).catch((err) => {
+      lastError = err;
+      return null;
+    });
+    if (!result && fallbackToDefault && path != null && isPathAbsentError(lastError)) {
+      defaultPathUnavailableRef.current = true;
+      lastError = null;
+      result = await api.getDirectories(null).catch((err) => {
+        lastError = err;
+        return null;
+      });
+    }
+    if (result) {
+      applyResult(result);
+    } else if (lastError) {
+      setError(lastError.message || 'Failed to load directory');
     }
     setLoading(false);
   }, []);
@@ -32,9 +62,17 @@ export default function FolderPicker({ value, onChange }) {
   // Load initial directory when opened
   useEffect(() => {
     if (isOpen) {
-      loadDirectory(value || null);
+      const useDefault = !value && !!defaultPath && !defaultPathUnavailableRef.current;
+      const initialPath = value || (useDefault ? defaultPath : null);
+      loadDirectory(initialPath, { fallbackToDefault: useDefault });
     }
-  }, [isOpen, loadDirectory, value]);
+  }, [isOpen, loadDirectory, value, defaultPath]);
+
+  // Reset the "default unavailable" cache when the caller changes which
+  // defaultPath to try — a different path is worth probing again.
+  useEffect(() => {
+    defaultPathUnavailableRef.current = false;
+  }, [defaultPath]);
 
   // Close on click outside
   useEffect(() => {

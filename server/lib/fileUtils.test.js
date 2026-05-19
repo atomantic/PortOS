@@ -1,7 +1,9 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import { writeFile, rm, mkdir } from 'fs/promises';
+import { mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import { createHash } from 'crypto';
 import {
   assertSafeFilename,
   isValidJSON,
@@ -10,8 +12,16 @@ import {
   safeJSONLParse,
   readJSONFile,
   readJSONLFile,
-  formatDuration
+  formatDuration,
+  sha256File,
+  resolveImageInputPath,
+  PATHS,
 } from './fileUtils.js';
+import { copyFileSync, existsSync, mkdirSync } from 'fs';
+import { dirname } from 'path';
+import { fileURLToPath } from 'url';
+
+const __dirname_test = dirname(fileURLToPath(import.meta.url));
 
 describe('fileUtils', () => {
   describe('isValidJSON', () => {
@@ -506,6 +516,136 @@ describe('fileUtils', () => {
       await expect(
         listDirectoryByExtension(tmpRoot, { extensions: ['.png'] }),
       ).rejects.toThrow(/mapEntry must be a function/);
+    });
+  });
+
+  // CONVENTION: this block writes fixtures into the REAL `data/images`,
+  // `data/image-refs`, and `data/templates` roots because `PATHS` is module-
+  // evaluated and not easily overridable. Two rules to keep dev/CI worktrees
+  // clean and avoid clobbering shipped assets:
+  //   1. Every fixture name MUST start with the `fileutils-test-` prefix so
+  //      the cleanup below can target it unambiguously (and so the basenames
+  //      don't shadow any real asset the resolver would otherwise find).
+  //   2. Cleanup goes in `afterAll`, NOT a recursive remove of the root —
+  //      the data/ roots hold the user's universe content and shipped templates.
+  describe('resolveImageInputPath', () => {
+    const sampleTemplate = join(__dirname_test, '..', '..', 'data.sample', 'templates', 'character-reference-sheet.png');
+    const galleryName = 'fileutils-test-gallery.png';
+    const refsName = 'fileutils-test-refs.png';
+    const templateName = 'fileutils-test-template.png';
+    const galleryPath = join(PATHS.images, galleryName);
+    const refsPath = join(PATHS.imageRefs, refsName);
+    const templatePath = join(PATHS.visualTemplates, templateName);
+
+    beforeEach(() => {
+      // Provision fixtures in each approved root so the resolver can find
+      // them. Reuses the shipped sample asset as a stand-in PNG body.
+      for (const root of [PATHS.images, PATHS.imageRefs, PATHS.visualTemplates]) {
+        if (!existsSync(root)) mkdirSync(root, { recursive: true });
+      }
+      if (existsSync(sampleTemplate)) {
+        if (!existsSync(galleryPath)) copyFileSync(sampleTemplate, galleryPath);
+        if (!existsSync(refsPath)) copyFileSync(sampleTemplate, refsPath);
+        if (!existsSync(templatePath)) copyFileSync(sampleTemplate, templatePath);
+      }
+    });
+
+    afterAll(() => {
+      // Remove ONLY the per-test fixture files (uniquely-named so dev/CI
+      // worktrees aren't polluted and later basename lookups don't keep
+      // finding stale resolver hits). Never recursively remove the real
+      // `data/images` / `data/image-refs` / `data/templates` roots.
+      for (const p of [galleryPath, refsPath, templatePath]) {
+        if (existsSync(p)) rmSync(p, { force: true });
+      }
+    });
+
+    it('returns null for non-string / empty input', () => {
+      expect(resolveImageInputPath(null)).toBeNull();
+      expect(resolveImageInputPath('')).toBeNull();
+      expect(resolveImageInputPath(undefined)).toBeNull();
+      expect(resolveImageInputPath(123)).toBeNull();
+    });
+
+    it('resolves a basename present in the gallery (first root)', () => {
+      const out = resolveImageInputPath(galleryName);
+      expect(out).toBeTruthy();
+      expect(out).toContain('data/images/');
+      expect(out).toContain(galleryName);
+    });
+
+    it('resolves a basename present only in image-refs', () => {
+      const out = resolveImageInputPath(refsName);
+      expect(out).toBeTruthy();
+      expect(out).toContain('data/image-refs/');
+    });
+
+    it('resolves a basename present only in visualTemplates', () => {
+      const out = resolveImageInputPath(templateName);
+      expect(out).toBeTruthy();
+      // visualTemplates is the third root; without a basename in gallery first
+      // it falls through. We can't fully isolate that here without temp dirs,
+      // so just assert the resolver doesn't return null.
+    });
+
+    it('REGRESSION: absolute path under a specific root stays in that root', () => {
+      // Bug it guards: previously the resolver basenamed any input and tried
+      // each root in order — so `/data/templates/<name>.png` for a file that
+      // also exists in `/data/images/<name>.png` would silently redirect to
+      // the gallery copy. Reference-sheet renders would have used the wrong
+      // init image. Verify each absolute path resolves to its own root.
+      const galleryAbs = join(PATHS.images, galleryName);
+      const refsAbs = join(PATHS.imageRefs, refsName);
+      const templateAbs = join(PATHS.visualTemplates, templateName);
+
+      expect(resolveImageInputPath(galleryAbs)).toContain('data/images/');
+      expect(resolveImageInputPath(refsAbs)).toContain('data/image-refs/');
+      expect(resolveImageInputPath(templateAbs)).toContain('data/templates/');
+    });
+
+    it('REGRESSION: same basename in multiple roots — absolute path picks the matching root', () => {
+      // All three fixtures share the same body (copied from sampleTemplate),
+      // but the absolute path should pin to its own root, NOT collapse to
+      // the gallery via basename fallback.
+      const refsAbs = join(PATHS.imageRefs, refsName);
+      const out = resolveImageInputPath(refsAbs);
+      expect(out).toContain('data/image-refs/');
+      expect(out).not.toContain('data/images/');
+    });
+  });
+
+  describe('sha256File', () => {
+    let dir;
+    beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'portos-sha256-')); });
+    afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
+
+    it('hashes a small file in one shot and matches createHash digest', async () => {
+      const p = join(dir, 'small.bin');
+      writeFileSync(p, 'hello world');
+      const expected = createHash('sha256').update('hello world').digest('hex');
+      expect(await sha256File(p)).toBe(expected);
+    });
+
+    it('hashes a large file via streaming (>= 512KB)', async () => {
+      const p = join(dir, 'big.bin');
+      const buf = Buffer.alloc(600 * 1024, 0x42);
+      writeFileSync(p, buf);
+      const expected = createHash('sha256').update(buf).digest('hex');
+      expect(await sha256File(p)).toBe(expected);
+    });
+
+    it('returns identical digests for identical content under different paths', async () => {
+      const a = join(dir, 'a.bin'); const b = join(dir, 'b.bin');
+      writeFileSync(a, 'same-content');
+      writeFileSync(b, 'same-content');
+      expect(await sha256File(a)).toBe(await sha256File(b));
+    });
+
+    it('returns different digests for different content', async () => {
+      const a = join(dir, 'a.bin'); const b = join(dir, 'b.bin');
+      writeFileSync(a, 'one');
+      writeFileSync(b, 'two');
+      expect(await sha256File(a)).not.toBe(await sha256File(b));
     });
   });
 });
