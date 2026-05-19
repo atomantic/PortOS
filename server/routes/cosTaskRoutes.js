@@ -7,7 +7,8 @@ import * as cos from '../services/cos.js';
 import * as taskWatcher from '../services/taskWatcher.js';
 import { enhanceTaskPrompt } from '../services/taskEnhancer.js';
 import { loadSlashdoCommand } from '../services/subAgentSpawner.js';
-import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
+import { createCosTaskSchema, updateCosTaskSchema } from '../lib/validation.js';
 
 const SLASHDO_COMMANDS = {
   push:           { label: 'Push', description: 'Commit and push all work with changelog' },
@@ -98,15 +99,9 @@ router.post('/tasks/slashdo', asyncHandler(async (req, res) => {
 
 // POST /api/cos/tasks - Add a new task
 router.post('/tasks', asyncHandler(async (req, res) => {
-  const { description, priority, context, model, provider, app, type = 'user', approvalRequired, screenshots, attachments, position = 'bottom', createJiraTicket, jiraTicketId, jiraTicketUrl, useWorktree, openPR, simplify, reviewLoop } = req.body;
-
-  if (!description) {
-    throw new ServerError('Description is required', { status: 400, code: 'VALIDATION_ERROR' });
-  }
-
-  // Coerce boolean flags — values from req.body may arrive as strings like 'false' (truthy in JS)
-  const toBool = (v) => v === true || v === 'true' ? true : v === false || v === 'false' ? false : undefined;
-  const taskData = { description, priority, context, model, provider, app, approvalRequired, screenshots, attachments, position, createJiraTicket: toBool(createJiraTicket), jiraTicketId, jiraTicketUrl, useWorktree: toBool(useWorktree), openPR: toBool(openPR), simplify: toBool(simplify), reviewLoop: toBool(reviewLoop) };
+  const parsed = createCosTaskSchema.safeParse(req.body);
+  if (!parsed.success) failValidation(parsed);
+  const { type, ...taskData } = parsed.data;
   const result = await cos.addTask(taskData, type);
 
   if (result?.duplicate) {
@@ -119,19 +114,21 @@ router.post('/tasks', asyncHandler(async (req, res) => {
 // PUT /api/cos/tasks/:id - Update a task
 router.put('/tasks/:id', asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const { description, priority, status, context, model, provider, app, blockedReason, type = 'user' } = req.body;
+  const parsedUpdate = updateCosTaskSchema.safeParse(req.body);
+  if (!parsedUpdate.success) failValidation(parsedUpdate);
+  const { type, blockedReason, ...fields } = parsedUpdate.data;
 
   const updates = {};
-  if (description !== undefined) updates.description = description;
-  if (priority !== undefined) updates.priority = priority;
-  if (status !== undefined) updates.status = status;
-  if (context !== undefined) updates.context = context;
-  if (model !== undefined) updates.model = model;
-  if (provider !== undefined) updates.provider = provider;
-  if (app !== undefined) updates.app = app;
+  if (fields.description !== undefined) updates.description = fields.description;
+  if (fields.priority !== undefined) updates.priority = fields.priority;
+  if (fields.status !== undefined) updates.status = fields.status;
+  if (fields.context !== undefined) updates.context = fields.context;
+  if (fields.model !== undefined) updates.model = fields.model;
+  if (fields.provider !== undefined) updates.provider = fields.provider;
+  if (fields.app !== undefined) updates.app = fields.app;
 
   // Set blocker metadata when marking as blocked
-  if (status === 'blocked' && blockedReason) {
+  if (fields.status === 'blocked' && blockedReason) {
     updates.metadata = { blocker: blockedReason };
   }
 

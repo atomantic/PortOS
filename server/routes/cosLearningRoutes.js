@@ -6,7 +6,13 @@ import { Router } from 'express';
 import * as taskLearning from '../services/taskLearning.js';
 import * as weeklyDigest from '../services/weeklyDigest.js';
 import { loadState } from '../services/cosState.js';
-import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
+import {
+  recordLearningInsightSchema,
+  dismissRecommendationSchema,
+  restoreRecommendationSchema,
+  generateWeeklyDigestSchema,
+} from '../lib/validation.js';
 
 const router = Router();
 
@@ -93,10 +99,9 @@ router.get('/learning/insights', asyncHandler(async (req, res) => {
 
 // POST /api/cos/learning/insights - Record a learning insight
 router.post('/learning/insights', asyncHandler(async (req, res) => {
-  const { type, message, taskType, context } = req.body;
-  if (!message) {
-    throw new ServerError('Insight message is required', { status: 400, code: 'VALIDATION_ERROR' });
-  }
+  const parsedInsight = recordLearningInsightSchema.safeParse(req.body);
+  if (!parsedInsight.success) failValidation(parsedInsight);
+  const { type, message, taskType, context } = parsedInsight.data;
   const insight = await taskLearning.recordLearningInsight({
     type: type || 'observation',
     message,
@@ -129,20 +134,18 @@ router.get('/learning/recommendations/dismissed', asyncHandler(async (req, res) 
 
 // POST /api/cos/learning/recommendations/dismiss - Dismiss an AI recommendation
 router.post('/learning/recommendations/dismiss', asyncHandler(async (req, res) => {
-  const { id, snapshot } = req.body || {};
-  if (!id || typeof id !== 'string') {
-    throw new ServerError('Recommendation id is required', { status: 400, code: 'VALIDATION_ERROR' });
-  }
+  const parsedDismiss = dismissRecommendationSchema.safeParse(req.body || {});
+  if (!parsedDismiss.success) failValidation(parsedDismiss);
+  const { id, snapshot } = parsedDismiss.data;
   const result = await taskLearning.dismissRecommendation(id, snapshot ?? null);
   res.json(result);
 }));
 
 // POST /api/cos/learning/recommendations/restore - Restore a dismissed recommendation
 router.post('/learning/recommendations/restore', asyncHandler(async (req, res) => {
-  const { id } = req.body || {};
-  if (!id || typeof id !== 'string') {
-    throw new ServerError('Recommendation id is required', { status: 400, code: 'VALIDATION_ERROR' });
-  }
+  const parsedRestore = restoreRecommendationSchema.safeParse(req.body || {});
+  if (!parsedRestore.success) failValidation(parsedRestore);
+  const { id } = parsedRestore.data;
   const result = await taskLearning.restoreRecommendation(id);
   res.json(result);
 }));
@@ -252,7 +255,9 @@ router.get('/digest/:weekId', asyncHandler(async (req, res) => {
 
 // POST /api/cos/digest/generate - Force generate digest for a week
 router.post('/digest/generate', asyncHandler(async (req, res) => {
-  const { weekId } = req.body;
+  const parsedDigest = generateWeeklyDigestSchema.safeParse(req.body || {});
+  if (!parsedDigest.success) failValidation(parsedDigest);
+  const { weekId } = parsedDigest.data;
   const digest = await weeklyDigest.generateWeeklyDigest(weekId || null);
   res.json(digest);
 }));

@@ -2,7 +2,7 @@ import toast from '../components/ui/Toast';
 import { request, API_BASE } from './apiCore.js';
 
 // Apps
-export const getApps = () => request('/apps');
+export const getApps = (options) => request('/apps', options);
 export const getApp = (id) => request(`/apps/${id}`);
 export const createApp = (data) => request('/apps', {
   method: 'POST',
