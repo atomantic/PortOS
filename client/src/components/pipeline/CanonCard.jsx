@@ -276,7 +276,7 @@ export default function CanonCard({
   // CanonCard reveals an Expand → CharacterDetailEditor section and a
   // Reference Sheet panel. NounsStage (series view) omits this so the
   // per-series cast list stays focused on naming + visual refs.
-  // Shape: { universeId, onExpandCharacter, expanding, onSheetCompleted }
+  // Shape: { universeId, onExpandCharacter, expanding, onSheetCompleted, onSheetDeleted }
   characterExtensions = null,
 }) {
   const description = kind.descFor(entry);
@@ -404,6 +404,7 @@ export default function CanonCard({
             entry={entry}
             locked={locked}
             onSheetCompleted={characterExtensions.onSheetCompleted}
+            onSheetDeleted={characterExtensions.onSheetDeleted}
             onOpenLightbox={(filename) => onPreview?.(filename, { isSheet: true })}
           />
         </CharacterDetailsToggle>

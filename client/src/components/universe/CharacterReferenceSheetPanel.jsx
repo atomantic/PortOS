@@ -11,8 +11,11 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import { Camera, Loader2, RefreshCcw, ExternalLink } from 'lucide-react';
-import { renderCharacterReferenceSheet } from '../../services/apiUniverseBuilder';
+import { Camera, Loader2, RefreshCcw, ExternalLink, Trash2 } from 'lucide-react';
+import {
+  renderCharacterReferenceSheet,
+  deleteCharacterReferenceSheet,
+} from '../../services/apiUniverseBuilder';
 import useMediaJobProgress from '../../hooks/useMediaJobProgress';
 import useMounted from '../../hooks/useMounted';
 import toast from '../ui/Toast';
@@ -48,10 +51,12 @@ async function waitForImageRef(filename, { maxMs = 3000, intervalMs = 150, signa
 }
 
 export default function CharacterReferenceSheetPanel({
-  universeId, entry, locked, onSheetCompleted, onOpenLightbox,
+  universeId, entry, locked, onSheetCompleted, onSheetDeleted, onOpenLightbox,
 }) {
   const existing = entry?.referenceSheetImageRef || null;
   const [jobId, setJobId] = useState(null);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   // destFilename for the in-flight render — captured from the route response
   // so the SSE-completion handler can pass the real refs-dir filename up to
   // the parent without a universe refetch.
@@ -108,6 +113,18 @@ export default function CharacterReferenceSheetPanel({
   // Abort any in-flight HEAD poll when the panel unmounts.
   useEffect(() => () => { pollAbortRef.current?.abort(); }, []);
 
+  const handleDelete = async () => {
+    if (deleting || !universeId || !entry?.id || !existing) return;
+    setDeleting(true);
+    const result = await deleteCharacterReferenceSheet(universeId, entry.id, { silent: true })
+      .catch((err) => { toast.error(err.message || 'Failed to delete reference sheet'); return null; })
+      .finally(() => { setDeleting(false); });
+    if (!result) return;
+    setConfirmingDelete(false);
+    onSheetDeleted?.(entry.id);
+    toast.success(`Deleted reference sheet for ${entry.name}`);
+  };
+
   const handleGenerate = async () => {
     if (jobId || !universeId || !entry?.id) return;
     const queued = await renderCharacterReferenceSheet(universeId, entry.id)
@@ -140,22 +157,60 @@ export default function CharacterReferenceSheetPanel({
           Reference sheet
         </div>
         <div className="flex items-center gap-1">
-          <button
-            type="button"
-            onClick={handleGenerate}
-            disabled={inFlight || locked}
-            title={locked
-              ? `Unlock ${entry.name} to render a reference sheet`
-              : (existing ? 'Regenerate the character reference sheet' : 'Generate a character reference sheet')}
-            className="inline-flex items-center gap-1 px-2 py-1 text-[10px] rounded border border-port-border text-gray-300 hover:bg-port-border/40 hover:text-white disabled:opacity-40"
-          >
-            {inFlight
-              ? <Loader2 size={10} className="animate-spin" />
-              : (existing ? <RefreshCcw size={10} /> : <Camera size={10} />)}
-            {inFlight
-              ? `Rendering${pctLabel}`
-              : (existing ? 'Regenerate sheet' : 'Generate sheet')}
-          </button>
+          {confirmingDelete ? (
+            <>
+              <button
+                type="button"
+                onClick={() => setConfirmingDelete(false)}
+                disabled={deleting}
+                className="inline-flex items-center gap-1 px-2 py-1 text-[10px] rounded border border-port-border text-gray-300 hover:bg-port-border/40 hover:text-white disabled:opacity-40"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleDelete}
+                disabled={deleting}
+                className="inline-flex items-center gap-1 px-2 py-1 text-[10px] rounded border border-port-error/60 text-port-error hover:bg-port-error/15 disabled:opacity-40"
+              >
+                {deleting ? <Loader2 size={10} className="animate-spin" /> : <Trash2 size={10} />}
+                {deleting ? 'Deleting' : 'Delete sheet'}
+              </button>
+            </>
+          ) : (
+            <>
+              {existing && !inFlight ? (
+                <button
+                  type="button"
+                  onClick={() => setConfirmingDelete(true)}
+                  disabled={locked}
+                  title={locked
+                    ? `Unlock ${entry.name} to delete the reference sheet`
+                    : 'Delete the current reference sheet'}
+                  className="inline-flex items-center gap-1 px-2 py-1 text-[10px] rounded border border-port-border text-gray-400 hover:border-port-error/60 hover:text-port-error disabled:opacity-40"
+                  aria-label={`Delete reference sheet for ${entry.name}`}
+                >
+                  <Trash2 size={10} />
+                </button>
+              ) : null}
+              <button
+                type="button"
+                onClick={handleGenerate}
+                disabled={inFlight || locked}
+                title={locked
+                  ? `Unlock ${entry.name} to render a reference sheet`
+                  : (existing ? 'Regenerate the character reference sheet' : 'Generate a character reference sheet')}
+                className="inline-flex items-center gap-1 px-2 py-1 text-[10px] rounded border border-port-border text-gray-300 hover:bg-port-border/40 hover:text-white disabled:opacity-40"
+              >
+                {inFlight
+                  ? <Loader2 size={10} className="animate-spin" />
+                  : (existing ? <RefreshCcw size={10} /> : <Camera size={10} />)}
+                {inFlight
+                  ? `Rendering${pctLabel}`
+                  : (existing ? 'Regenerate sheet' : 'Generate sheet')}
+              </button>
+            </>
+          )}
         </div>
       </div>
       {existing ? (

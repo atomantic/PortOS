@@ -361,6 +361,19 @@ export default function UniverseCanonSection({
     toast.success(`${entryName} reference sheet ready`);
   }, [onUniverseChange]);
 
+  // Server already deleted the file + purged the pointer via the DELETE
+  // route. Mirror the change into the local draft so the thumbnail clears
+  // without a refetch. Reads from `latestUniverseRef` for the same staleness
+  // reason as `handleSheetCompleted`.
+  const handleSheetDeleted = useCallback((entryId) => {
+    const latest = latestUniverseRef.current;
+    if (!latest) return;
+    const nextCharacters = (latest.characters || []).map((c) =>
+      c.id === entryId ? { ...c, referenceSheetImageRef: null } : c,
+    );
+    onUniverseChange({ ...latest, characters: nextCharacters });
+  }, [onUniverseChange]);
+
   const handleRenderRef = async (kind, entry) => {
     const description = kind.descFor(entry);
     if (!description.trim()) {
@@ -648,6 +661,7 @@ export default function UniverseCanonSection({
           onExpandCharacter={handleExpandCharacter}
           expandingId={expandingId}
           onSheetCompleted={handleSheetCompleted}
+          onSheetDeleted={handleSheetDeleted}
           onToggleLock={(entryId, nextLocked) => handleToggleLock(kind, entryId, nextLocked)}
           togglingLockId={togglingLockId}
           onPatchEntry={(entryId, patch) => handlePatchEntry(kind, entryId, patch)}
@@ -665,7 +679,7 @@ export default function UniverseCanonSection({
   );
 }
 
-function KindSection({ kind, universeId, all, totalCount, filtered, usage, renderingJobs, onRender, onJobCompleted, onJobFailed, onPreview, onRefine, refiningId, onExpandCharacter, expandingId, onSheetCompleted, onToggleLock, togglingLockId, onPatchEntry, onRenderCleanPlate, seriesNameMap, onBulkLock, bulkLocking, fullList, externalPendingByEntryId = null }) {
+function KindSection({ kind, universeId, all, totalCount, filtered, usage, renderingJobs, onRender, onJobCompleted, onJobFailed, onPreview, onRefine, refiningId, onExpandCharacter, expandingId, onSheetCompleted, onSheetDeleted, onToggleLock, togglingLockId, onPatchEntry, onRenderCleanPlate, seriesNameMap, onBulkLock, bulkLocking, fullList, externalPendingByEntryId = null }) {
   // Universe-only character wiring — `null` for non-character kinds so
   // CanonCard's gate stays `kind === 'characters' && characterExtensions`.
   // Memoized so the BASE object is stable across re-renders that aren't
@@ -675,8 +689,8 @@ function KindSection({ kind, universeId, all, totalCount, filtered, usage, rende
   // per-card memoization and isn't worth the complexity at typical cast
   // sizes.
   const characterExtensions = useMemo(
-    () => (kind.key === 'characters' ? { universeId, onExpandCharacter, onSheetCompleted } : null),
-    [kind.key, universeId, onExpandCharacter, onSheetCompleted],
+    () => (kind.key === 'characters' ? { universeId, onExpandCharacter, onSheetCompleted, onSheetDeleted } : null),
+    [kind.key, universeId, onExpandCharacter, onSheetCompleted, onSheetDeleted],
   );
   const Icon = kind.icon;
   // Bulk lock-state summary computed off the FULL list (not the series-filtered

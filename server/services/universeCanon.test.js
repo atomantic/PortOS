@@ -5,11 +5,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const fileStore = new Map();
 
 vi.mock('../lib/fileUtils.js', () => ({
-  PATHS: { data: '/mock/data' },
+  PATHS: { data: '/mock/data', imageRefs: '/mock/data/image-refs' },
   ensureDir: vi.fn().mockResolvedValue(undefined),
   atomicWrite: vi.fn(async (path, data) => { fileStore.set(path, data); }),
   readJSONFile: vi.fn(async (path, fallback) => (fileStore.has(path) ? fileStore.get(path) : fallback)),
   shortId: (id, n = 8) => (id == null ? '' : String(id).slice(0, n)),
+  // Stub: pretend every referenced sheet file exists, so the GET-time lazy
+  // `pruneStaleReferenceSheets` doesn't null out pointers between seed and
+  // assertion. The purge tests below don't depend on stale-collapse behavior.
+  resolveImageRef: vi.fn((filename) => (filename ? `/mock/data/image-refs/${filename}` : null)),
 }));
 
 let uuidCounter = 0;
@@ -271,5 +275,69 @@ describe('universeCanon — extractCanonFromProse passes autoLock + sourceSeries
     });
     const inserted = result.universe.characters.find((c) => c.name === 'Optout');
     expect(inserted.locked).not.toBe(true);
+  });
+});
+
+describe('universeCanon — purgeReferenceSheetFromAllUniverses', () => {
+  it('nulls referenceSheetImageRef on every matching character across every universe', async () => {
+    const w1 = await seedUniverseWithCharacters([
+      { name: 'Alex', physicalDescription: 'a', referenceSheetImageRef: 'sheet-A.png' },
+      { name: 'Beth', physicalDescription: 'b', referenceSheetImageRef: 'sheet-B.png' },
+    ]);
+    const w2Initial = await svc.createUniverse({ name: 'Universe Two', starterPrompt: 'x', stylePrompt: 'y' });
+    const w2 = await svc.updateUniverse(w2Initial.id, {
+      characters: [{ name: 'Cara', physicalDescription: 'c', referenceSheetImageRef: 'sheet-A.png' }],
+    });
+
+    const result = await canonSvc.purgeReferenceSheetFromAllUniverses('sheet-A.png');
+    expect(result.cleared).toBe(2);
+
+    const reread = await svc.listUniverses();
+    const reread1 = reread.find((u) => u.id === w1.id);
+    const reread2 = reread.find((u) => u.id === w2.id);
+    expect(reread1.characters.find((c) => c.name === 'Alex').referenceSheetImageRef).toBeNull();
+    // Untouched: Beth's sheet name doesn't match the purge target.
+    expect(reread1.characters.find((c) => c.name === 'Beth').referenceSheetImageRef).toBe('sheet-B.png');
+    expect(reread2.characters.find((c) => c.name === 'Cara').referenceSheetImageRef).toBeNull();
+  });
+
+  it('returns cleared:0 and skips writes when no character matches', async () => {
+    await seedUniverseWithCharacters([
+      { name: 'Alex', physicalDescription: 'a', referenceSheetImageRef: 'sheet-A.png' },
+    ]);
+    const result = await canonSvc.purgeReferenceSheetFromAllUniverses('sheet-missing.png');
+    expect(result.cleared).toBe(0);
+  });
+
+  it('returns cleared:0 when filename is empty / non-string (defensive guard)', async () => {
+    await seedUniverseWithCharacters([
+      { name: 'Alex', physicalDescription: 'a', referenceSheetImageRef: 'sheet-A.png' },
+    ]);
+    expect(await canonSvc.purgeReferenceSheetFromAllUniverses('')).toEqual({ cleared: 0 });
+    expect(await canonSvc.purgeReferenceSheetFromAllUniverses(null)).toEqual({ cleared: 0 });
+    expect(await canonSvc.purgeReferenceSheetFromAllUniverses(undefined)).toEqual({ cleared: 0 });
+  });
+});
+
+describe('universeCanon — purgeImageRefFromAllUniverses', () => {
+  it('strips a filename from every imageRefs[] across canon kinds', async () => {
+    const w = await seedUniverseWithCharacters([
+      { name: 'Alex', physicalDescription: 'a', imageRefs: ['shared.png', 'other.png'] },
+      { name: 'Beth', physicalDescription: 'b', imageRefs: ['shared.png'] },
+    ]);
+    const result = await canonSvc.purgeImageRefFromAllUniverses('shared.png');
+    expect(result.removed).toBe(2);
+    const reread = (await svc.listUniverses()).find((u) => u.id === w.id);
+    expect(reread.characters.find((c) => c.name === 'Alex').imageRefs).toEqual(['other.png']);
+    expect(reread.characters.find((c) => c.name === 'Beth').imageRefs).toEqual([]);
+  });
+
+  it('returns removed:0 when nothing matches or input is invalid', async () => {
+    await seedUniverseWithCharacters([
+      { name: 'Alex', physicalDescription: 'a', imageRefs: ['only.png'] },
+    ]);
+    expect(await canonSvc.purgeImageRefFromAllUniverses('nope.png')).toEqual({ removed: 0 });
+    expect(await canonSvc.purgeImageRefFromAllUniverses('')).toEqual({ removed: 0 });
+    expect(await canonSvc.purgeImageRefFromAllUniverses(null)).toEqual({ removed: 0 });
   });
 });

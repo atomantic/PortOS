@@ -13,14 +13,14 @@
  * `character.referenceSheetImageRef` once the render completes.
  */
 
-import { copyFile } from 'fs/promises';
+import { copyFile, unlink } from 'fs/promises';
 import { join, basename } from 'path';
 import { randomUUID } from 'crypto';
-import { PATHS, ensureDir, shortId } from '../lib/fileUtils.js';
+import { PATHS, ensureDir, shortId, assertSafeFilename } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { getSettings } from './settings.js';
 import { getUniverse, updateUniverse } from './universeBuilder.js';
-import { buildStyleClause } from './universeCanon.js';
+import { buildStyleClause, purgeReferenceSheetFromAllUniverses } from './universeCanon.js';
 import { getImageModels } from '../lib/mediaModels.js';
 import { enqueueJob, mediaJobEvents } from './mediaJobQueue/index.js';
 import { findOrCreateUniverseCollection } from './mediaCollections.js';
@@ -428,6 +428,55 @@ export async function onSheetComplete({ universeId, entryId, jobId, sourceFilena
   }
   console.log(`📌 Character ${shortId(entryId)}.referenceSheetImageRef = ${destFilename}`);
   return { filename: destFilename, path: destPath };
+}
+
+/**
+ * Delete the character's current reference sheet — unlinks the file from
+ * `PATHS.imageRefs` and clears `referenceSheetImageRef` on every matching
+ * character via `purgeReferenceSheetFromAllUniverses`. Returns
+ * `{ filename, fileDeleted, cleared }`; a missing file is not an error
+ * (the lazy `pruneStaleReferenceSheets` may have already nulled the pointer
+ * out-of-band) — `fileDeleted: false` distinguishes that case.
+ *
+ * Mirrors the renderer's lock check so a locked character's sheet stays
+ * delete-protected alongside its other AI-managed fields.
+ */
+export async function deleteCharacterReferenceSheet(universeId, entryId) {
+  const universe = await getUniverse(universeId);
+  const list = Array.isArray(universe.characters) ? universe.characters : [];
+  const character = list.find((c) => c.id === entryId);
+  if (!character) {
+    throw new ServerError(`Character ${entryId} not found in universe`, {
+      status: 404, code: 'UNIVERSE_CANON_NOT_FOUND',
+    });
+  }
+  if (character.locked === true) {
+    throw new ServerError(
+      `Character "${character.name}" is locked — unlock it before deleting the reference sheet`,
+      { status: 409, code: 'UNIVERSE_CANON_LOCKED' },
+    );
+  }
+  const filename = character.referenceSheetImageRef;
+  if (!filename) {
+    return { filename: null, fileDeleted: false, cleared: 0 };
+  }
+  // Defense-in-depth: the filename was server-stamped via `sheetFilename()`,
+  // but re-validate before passing to `unlink` so a hand-edited universes
+  // JSON can't smuggle a traversal segment into the filesystem call.
+  assertSafeFilename(filename, { extensions: ['.png'], subject: 'reference sheet filename' });
+
+  const target = join(PATHS.imageRefs, filename);
+  // ENOENT is benign — the on-disk file may already be gone (out-of-band
+  // cleanup, sample-data reset). The pointer-purge below is the canonical
+  // clean and runs regardless.
+  let fileDeleted = true;
+  await unlink(target).catch((err) => {
+    if (err?.code === 'ENOENT') { fileDeleted = false; return; }
+    throw err;
+  });
+  const { cleared } = await purgeReferenceSheetFromAllUniverses(filename);
+  console.log(`🗑️ Deleted character sheet ${filename} (file=${fileDeleted}, pointers cleared=${cleared})`);
+  return { filename, fileDeleted, cleared };
 }
 
 export const REFERENCE_SHEET_CONSTANTS = Object.freeze({

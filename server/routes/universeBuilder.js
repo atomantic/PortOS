@@ -19,7 +19,7 @@ import { validateRequest } from '../lib/validation.js';
 import * as svc from '../services/universeBuilder.js';
 import * as canonSvc from '../services/universeCanon.js';
 import { expandUniverseCharacter } from '../services/universeCharacterExpand.js';
-import { renderCharacterReferenceSheet } from '../services/universeCharacterSheet.js';
+import { renderCharacterReferenceSheet, deleteCharacterReferenceSheet } from '../services/universeCharacterSheet.js';
 import { BIBLE_KINDS, BIBLE_LIMITS, pruneStaleReferenceSheets } from '../lib/storyBible.js';
 import { getUniverseCanonUsage, listLinkedSeriesNames } from '../services/canonUsage.js';
 import { expandWorldTemplate, generateCategoryVariations } from '../services/universeBuilderExpand.js';
@@ -673,6 +673,16 @@ const renderReferenceSheetSchema = z.object({
 router.post('/:id/characters/:entryId/render-reference-sheet', asyncHandler(async (req, res) => {
   const body = validateRequest(renderReferenceSheetSchema, req.body ?? {});
   const result = await renderCharacterReferenceSheet(req.params.id, req.params.entryId, body)
+    .catch((err) => { throw mapServiceError(err); });
+  res.json(result);
+}));
+
+// Delete the character's current reference sheet — unlinks the PNG from
+// `data/image-refs/` and nulls `referenceSheetImageRef` on every matching
+// character (via `purgeReferenceSheetFromAllUniverses`) so the UI clears
+// reactively without a refetch.
+router.delete('/:id/characters/:entryId/reference-sheet', asyncHandler(async (req, res) => {
+  const result = await deleteCharacterReferenceSheet(req.params.id, req.params.entryId)
     .catch((err) => { throw mapServiceError(err); });
   res.json(result);
 }));
