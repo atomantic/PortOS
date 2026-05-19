@@ -622,7 +622,7 @@ export const createCosJobSchema = z.object({
   cronExpression: z.string().optional(),
   enabled: z.boolean().optional(),
   priority: z.string().optional(),
-  autonomyLevel: z.enum(['full', 'supervised', 'manual']).optional(),
+  autonomyLevel: z.enum(['standby', 'assistant', 'manager', 'yolo']).optional(),
   promptTemplate: z.string().optional(),
   command: z.string().optional(),
   triggerAction: z.preprocess(v => v === '' ? undefined : v, z.string().optional()),
