@@ -10,10 +10,6 @@ _Nothing currently parked — pick the next item from the Backlog._
 
 ## Backlog
 
-### Sharing
-
-- [ ] [coverautofiler-preload-universe-record] **Mirror the `_preloadedSeries` pattern for `universeSvc.getUniverse`.** `server/services/pipeline/coverUniverseFiler.js#fileCoverIntoUniverseCollection` calls `universeSvc.getUniverse(universeId)` twice — once near the create (line ~83) and once for delete-race detection after `addItem` (line ~117). The second call must stay (race-detection contract). The first could be skipped via an optional `_preloadedUniverse` arg if a caller ever has the universe in hand; today neither hook caller does, so add a follow-up when a 3rd direct caller appears with a fresh universe. Surfaced by /simplify during the `[coverautofiler-dispatcher-redundant-getseries]` PR; deferred because no current caller would feed it.
-
 ### Universe-as-Canon — Phase 2 + extensions
 
 - [ ] [purge-reference-sheet-image-ref-on-sheet-delete] **Active-purge `character.referenceSheetImageRef` when its sheet file is deleted.** Today there is no delete-route for sheet files; the GET-time lazy `pruneStaleReferenceSheets` masks staleness at read-time. When a sheet-delete route lands it must also call into a new `purgeReferenceSheetFromAllUniverses(filename)` helper mirroring `purgeImageRefFromAllUniverses` in `server/services/universeCanon.js:263`. Deferred from `[character-bible-simplify-followups]` because the delete route doesn't exist yet.
