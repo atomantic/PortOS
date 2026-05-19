@@ -133,6 +133,7 @@ export async function ensureDirs(dirs) {
  */
 export async function atomicWrite(filePath, data) {
   const payload = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+  await ensureDir(dirname(filePath));
   const tmp = `${filePath}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`;
   await writeFile(tmp, payload);
   // Node's fs.rename uses MoveFileExW with MOVEFILE_REPLACE_EXISTING on Windows (atomic

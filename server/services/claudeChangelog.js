@@ -8,7 +8,7 @@
 
 import { join } from 'path'
 import sax from 'sax'
-import { atomicWrite, readJSONFile, PATHS, ensureDir } from '../lib/fileUtils.js'
+import { atomicWrite, readJSONFile, PATHS } from '../lib/fileUtils.js'
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js'
 
 const FEED_URL = 'https://github.com/anthropics/claude-code/releases.atom'

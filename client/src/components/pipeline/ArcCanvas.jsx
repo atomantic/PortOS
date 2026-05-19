@@ -572,7 +572,15 @@ function FieldLockToggle({ series, field, label, onSeriesUpdate }) {
   return (
     <button
       type="button"
-      onClick={() => toggle(locked)}
+      onClick={(e) => {
+        // Several callers render this button inside a <details><summary>...
+        // tree (Summary, Protagonist arc). A click on the lock would otherwise
+        // bubble to the summary and toggle the disclosure. Stop here so the
+        // user only flips the lock.
+        e.stopPropagation();
+        e.preventDefault();
+        toggle(locked);
+      }}
       disabled={saving}
       aria-pressed={locked}
       title={locked
