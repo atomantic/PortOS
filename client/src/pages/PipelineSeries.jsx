@@ -363,6 +363,10 @@ function BibleSidebar({ series, universes, patchSeries, onSeriesUpdate, onFlushP
             onChange={(e) => patchSeries({ universeId: e.target.value })}
             className="flex-1 px-3 py-2 bg-port-bg border border-port-border rounded text-white"
           >
+            {/* Legacy / imported series may still carry `universeId: null` —
+                offer a sentinel option so the picker doesn't auto-snap them
+                to whatever the first universe in the list happens to be. */}
+            {!series.universeId ? <option value="">— Pick a universe —</option> : null}
             {universes.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
           </select>
           <Link
@@ -403,15 +407,22 @@ function BibleSidebar({ series, universes, patchSeries, onSeriesUpdate, onFlushP
 
       <div>
         <h3 className="text-xs uppercase tracking-wider text-gray-500 mb-2">Canon</h3>
-        {/* `#canon` scrolls to the embedded canon section (id="canon" on
-            UniverseCanonSection) so users land on the folded-in canon UI
-            instead of the bible at the top of the builder. */}
-        <Link
-          to={`/universe-builder/${encodeURIComponent(series.universeId)}#canon`}
-          className="block text-xs text-port-accent hover:underline"
-        >
-          Manage characters, places, and objects on the linked Universe →
-        </Link>
+        {series.universeId ? (
+          // `#canon` scrolls to the embedded canon section (id="canon" on
+          // UniverseCanonSection) so users land on the folded-in canon UI
+          // instead of the bible at the top of the builder.
+          <Link
+            to={`/universe-builder/${encodeURIComponent(series.universeId)}#canon`}
+            className="block text-xs text-port-accent hover:underline"
+          >
+            Manage characters, places, and objects on the linked Universe →
+          </Link>
+        ) : (
+          <p className="text-xs text-gray-600 italic">
+            Link a universe above to author characters, places, and objects shared
+            across this series' issues.
+          </p>
+        )}
       </div>
     </section>
   );
