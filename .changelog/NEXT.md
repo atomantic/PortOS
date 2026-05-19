@@ -10,6 +10,7 @@
 ## Changed
 
 - `/claim` slash command now hard-requires an isolated worktree with absolute paths, a single-Bash-invocation flow, and a `pwd` verification checkpoint — eliminates the failure mode where the claim branch was checked out in the main repo and blocked further parallel claims.
+- `/claim` slash command accepts `--review-with=<copilot|codex|gemini|claude>` to pick the post-PR reviewer. Default `copilot` preserves the existing `/do:pr` Copilot loop; `codex`/`gemini`/`claude` skip the Copilot loop and drive an iterative CLI-based review against `gh pr diff` instead (CLIs invoked the same way the PortOS AI Toolkit drives them — `codex exec -`, `gemini -p`, `claude -p -`).
 - Removed the CLAUDE.md "Worktrees" section that prohibited TUI worktrees; it conflicted with `/claim`'s explicit worktree requirement.
 - **`atomicWrite` migration.** 10 services + 4 aiToolkit modules switched from inline `ensureDir + writeFile + JSON.stringify` to the `atomicWrite` helper (toolkit gets a self-contained copy at `server/lib/aiToolkit/internal/atomicWrite.js`). Prevents partial-write corruption on shared JSON state files.
 - **AI Toolkit runner: PortOS-aware `deleteRun` override.** Now stops the live child process before deleting the run on disk (closes a zombie-process leak when an in-flight CLI run was deleted via the UI).

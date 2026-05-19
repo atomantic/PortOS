@@ -1,6 +1,6 @@
 ---
 description: Claim the next unclaimed PLAN.md item by its [slug] ID, do the work in an isolated worktree, ship a PR, and clean up.
-argument-hint: "[<slug>]"
+argument-hint: "[<slug>] [--review-with=<copilot|codex|gemini|claude>]"
 ---
 
 # Claim — Pick the next PLAN.md item and ship it
@@ -9,7 +9,10 @@ Claim the next unclaimed `- [ ]` item from PLAN.md via the slug-ID system, work 
 
 **How the claim works.** Every PLAN.md checkbox carries a `[<slug>]` ID (see [lib/slashdo/lib/plan-id-format.md](../../lib/slashdo/lib/plan-id-format.md)). A slug is "in flight" when it appears as a `/`-separated segment in any local or remote branch (`git branch -a`) or any open PR head ref (`gh pr list --state open`). This command picks the first `- [ ]` whose slug is NOT in flight and creates a `claim/<slug>` branch — that branch name becomes the claim, visible to every other agent and human running this command.
 
-**Argument.** If you pass `$ARGUMENTS` as a slug, claim THAT specific item instead of auto-picking — useful for cherry-picking out-of-order work. The slug must already exist in PLAN.md as a `- [ ]` line; this command never assigns new IDs (that's `/do:replan`'s job).
+**Arguments.** Parse `$ARGUMENTS` by splitting on whitespace — tokens starting with `--` are flags, the first remaining token is the slug. Either order works (`auth-bug --review-with=codex` and `--review-with=codex auth-bug` are equivalent).
+
+- **`<slug>`** — claim THAT specific item instead of auto-picking. Useful for cherry-picking out-of-order work. The slug must already exist in PLAN.md as a `- [ ]` line; this command never assigns new IDs (that's `/do:replan`'s job).
+- **`--review-with=<copilot|codex|gemini|claude>`** — pick which reviewer runs the post-PR review loop in Phase 6. Default: `copilot` (current behavior — `/do:pr` drives the GitHub Copilot review-and-fix loop). `codex`/`gemini`/`claude` skip the Copilot loop and run an iterative CLI-based review against the PR diff instead. Record the parsed value as `REVIEWER` and reference it in Phase 6.
 
 ## Phase 1: Pick
 
@@ -118,14 +121,66 @@ git commit -m "docs([<slug>]): archive to DONE.md"
 ## Phase 6: Review and ship
 
 1. **`/simplify`** — run the three-agent reuse/quality/efficiency review against your own diff and fix findings in the same diff (per the `feedback_simplify_after_significant_work` memory). Do this BEFORE opening the PR, not retroactively.
-2. **`/do:pr`** — this command already runs `/do:review` as its local-review gate AND drives the Copilot review-and-fix loop. Do NOT run `/do:review` separately first — `/do:pr` does it. Trust the loop.
-3. When `/do:pr` reports the PR is clean (zero unresolved Copilot comments, or you've judged the remaining findings to be nitpicks not worth another round), the PR is ready to merge.
-4. **Encode the slug in the PR title** for grep-ability — `/do:pr` doesn't do this automatically:
+
+2. **Open the PR and run the review loop.** Branch on `REVIEWER` (parsed from `--review-with`, default `copilot`):
+
+   ### 6.2a — `REVIEWER=copilot` (default)
+
+   Run **`/do:pr`**. It runs `/do:review` as a local-review gate AND drives the Copilot review-and-fix loop. Do NOT run `/do:review` separately first — `/do:pr` does it. Trust the loop. When `/do:pr` reports the PR is clean (zero unresolved Copilot comments, or you've judged the remaining findings to be nitpicks not worth another round), the PR is ready to merge.
+
+   ### 6.2b — `REVIEWER` is `codex`, `gemini`, or `claude`
+
+   Skip `/do:pr` entirely (it bakes in the Copilot loop). Open the PR manually, then drive an iterative CLI-based review using the chosen reviewer.
+
+   1. **Local review gate** — `/simplify` (step 1) already covered the reuse/quality/efficiency pass. Run `/do:review` here for the full code-review checklist before pushing. Fix anything it finds in the same diff.
+   2. **Push and open the PR:**
+      ```bash
+      git push -u origin "claim/${SLUG}"
+      gh pr create --base main --head "claim/${SLUG}" \
+        --title "feat([${SLUG}]): <description>" \
+        --body "<PR body>"
+      ```
+      Capture the PR number as `PR_NUM`.
+   3. **Pick the CLI invocation for `REVIEWER`:**
+      | `REVIEWER` | Command |
+      |---|---|
+      | `codex`  | `codex exec -` (prompt + diff via stdin) |
+      | `gemini` | `gemini -p "$PROMPT"` (diff via stdin) |
+      | `claude` | `claude -p - ` (prompt + diff via stdin) |
+   4. **Review-and-fix loop** — max 5 iterations (same guardrail spirit as the Copilot loop's 10-iteration cap; CLI passes converge faster). Each iteration:
+      ```bash
+      # 1. Capture the latest diff
+      gh pr diff "${PR_NUM}" > /tmp/claim-${SLUG}-pr.diff
+
+      # 2. Build the review prompt — point the CLI at the code-review checklist used by
+      #    /do:pr's local gate so findings match the project's convention.
+      cat > /tmp/claim-${SLUG}-prompt.md <<EOF
+Review the following PR diff against PortOS conventions in CLAUDE.md and the checklist at lib/slashdo/lib/code-review-checklist.md. Report findings in this format:
+- [SEVERITY] file:line — issue. Suggested fix: ...
+End with a one-line verdict: either "CLEAN — no actionable findings" or "FINDINGS — N actionable items".
+
+--- DIFF ---
+$(cat /tmp/claim-${SLUG}-pr.diff)
+EOF
+
+      # 3. Run the chosen CLI against the prompt
+      <CLI_CMD for REVIEWER> < /tmp/claim-${SLUG}-prompt.md > /tmp/claim-${SLUG}-review.md
+
+      # 4. Inspect the review:
+      #    - If it ends with "CLEAN — no actionable findings", break the loop.
+      #    - If only nit-level findings remain (style/naming, no correctness/security/contract impact),
+      #      record them as deferred-work in PLAN.md and break.
+      #    - Otherwise: apply the suggested fixes in the worktree, commit
+      #      (`fix([<slug>]): address <reviewer> review`), push, and re-loop.
+      ```
+   5. After 5 iterations without convergence, stop and report the remaining findings to the user — do not loop indefinitely. Same guardrail philosophy as the Copilot sub-agent's "ask before continuing past 10".
+
+3. **Encode the slug in the PR title** for grep-ability if it's not already there:
    ```bash
    gh pr edit <num> --title "feat([<slug>]): <description>"
    ```
-   (Skip this step if `/do:pr` already produced a title that includes the slug.)
-5. **Merge:**
+   (Skip if Phase 6.2 already produced a title that includes the slug.)
+4. **Merge:**
    ```bash
    gh pr merge <num> --merge --delete-branch
    ```
