@@ -6,9 +6,10 @@
  */
 
 import { EventEmitter } from 'events';
-import { readFile, writeFile, mkdir } from 'fs/promises';
+import { readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, dirname } from 'path';
+import { atomicWrite } from './internal/atomicWrite.js';
 
 export function createProviderStatusService(config = {}) {
   const {
@@ -38,12 +39,8 @@ export function createProviderStatusService(config = {}) {
   }
 
   async function saveStatus(status) {
-    const dir = dirname(STATUS_PATH);
-    if (!existsSync(dir)) {
-      await mkdir(dir, { recursive: true });
-    }
     status.lastUpdated = new Date().toISOString();
-    await writeFile(STATUS_PATH, JSON.stringify(status, null, 2));
+    await atomicWrite(STATUS_PATH, status);
     statusCache = status;
   }
 

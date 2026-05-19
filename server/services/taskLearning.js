@@ -6,11 +6,10 @@
  * to provide smarter task prioritization and model selection.
  */
 
-import { readFile } from 'fs/promises';
 import { existsSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { cosEvents, emitLog } from './cosEvents.js';
-import { ensureDir, readJSONFile, PATHS, atomicWrite } from '../lib/fileUtils.js';
+import { ensureDir, readJSONFile, PATHS, atomicWrite, tryReadFile } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
 
 const withLock = createMutex();
@@ -1333,7 +1332,7 @@ export async function recalculateDurationStats() {
     }
 
     const results = await Promise.all(
-      metaPaths.map(p => readFile(p, 'utf-8').catch(() => null))
+      metaPaths.map(p => tryReadFile(p))
     );
 
     for (const raw of results) {

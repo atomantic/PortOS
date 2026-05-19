@@ -1,8 +1,8 @@
-import { readFile, writeFile } from 'fs/promises';
+import { writeFile } from 'fs/promises';
 import { join } from 'path';
 import crypto from 'crypto';
 import { v4 as uuidv4 } from '../lib/uuid.js';
-import { ensureDir, PATHS, safeJSONParse } from '../lib/fileUtils.js';
+import { ensureDir, PATHS, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
 import { findOrOpenPage, listCdpPages, isAuthPage, evaluateOnPage } from './browserService.js';
 
 // Compat re-exports — older consumers and test mocks import these from here
@@ -23,7 +23,7 @@ function makeExternalId(date, sender, subject) {
 }
 
 export async function getSelectors() {
-  const content = await readFile(SELECTORS_FILE, 'utf-8').catch(() => null);
+  const content = await tryReadFile(SELECTORS_FILE);
   if (!content) return {};
   const parsed = safeJSONParse(content, {}, { context: 'messageSelectors' });
   return (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : {};

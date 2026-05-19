@@ -7,6 +7,7 @@ export const NAV_COMMANDS = [
   { id: 'nav.dashboard', path: '/', label: 'Dashboard', section: 'Main', aliases: ['dashboard', 'home'], keywords: ['overview', 'start'] },
   { id: 'nav.review-hub', path: '/review', label: 'Review Hub', section: 'Main', aliases: ['review', 'review-hub'] },
   { id: 'nav.cybercity', path: '/city', label: 'CyberCity', section: 'Main', aliases: ['city', 'cybercity'], keywords: ['3d', 'visualization'] },
+  { id: 'nav.cybercity.settings', path: '/city/settings', label: 'CyberCity Settings', section: 'Main', aliases: ['city settings', 'cybercity settings', 'city-settings', 'cybercity-config'], keywords: ['cybercity', 'settings', '3d', 'configure'] },
   { id: 'nav.apps', path: '/apps', label: 'Apps', section: 'Main', aliases: ['apps'] },
   { id: 'nav.reference-repos', path: '/reference-repos', label: 'Reference Repos', section: 'Main', aliases: ['reference-repos', 'references', 'reference', 'upstream', 'watch'], keywords: ['upstream', 'reference code', 'borrowed code', 'fork', 'git watch', 'commit watch', 'phosphene'] },
 
@@ -131,6 +132,7 @@ export const NAV_COMMANDS = [
   { id: 'nav.settings.telegram', path: '/settings/telegram', label: 'Telegram', section: 'Settings', aliases: ['settings-telegram', 'telegram'] },
   { id: 'nav.settings.voice', path: '/settings/voice', label: 'Voice', section: 'Settings', aliases: ['settings-voice', 'voice', 'voice-settings'], keywords: ['mic', 'microphone', 'speech', 'tts', 'whisper', 'kokoro'] },
 
+  { id: 'nav.ambient', path: '/ambient', label: 'Ambient', section: 'System', aliases: ['ambient', 'ambient-mode', 'ambient mode'], keywords: ['idle', 'background', 'display', 'screensaver', 'fullscreen'] },
   { id: 'nav.data', path: '/data', label: 'Data', section: 'System', aliases: ['data'] },
   { id: 'nav.cos.health', path: '/cos/health', label: 'Health', section: 'System', aliases: ['cos-health'] },
   { id: 'nav.instances', path: '/instances', label: 'Instances', section: 'System', aliases: ['instances'] },

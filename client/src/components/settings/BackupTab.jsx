@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useId } from 'react';
 import { Save, Plus, X, Play, ShieldOff } from 'lucide-react';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
@@ -35,6 +35,9 @@ const shadowsDefault = (customPath, defaultPath) => {
 };
 
 export function BackupTab() {
+  const destPathId = useId();
+  const cronId = useId();
+  const additionalExcludeId = useId();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [destPath, setDestPath] = useState('');
@@ -147,9 +150,10 @@ export function BackupTab() {
   return (
     <div className="bg-port-card border border-port-border rounded-xl p-4 sm:p-6 space-y-5">
       <div className="space-y-1">
-        <label className="block text-sm text-gray-400">Destination Path</label>
+        <label htmlFor={destPathId} className="block text-sm text-gray-400">Destination Path</label>
         <div className="flex gap-2 items-stretch">
           <input
+            id={destPathId}
             type="text"
             value={destPath}
             onChange={e => setDestPath(e.target.value)}
@@ -171,8 +175,9 @@ export function BackupTab() {
       </div>
 
       <div className="space-y-1">
-        <label className="block text-sm text-gray-400">Schedule (cron)</label>
+        <label htmlFor={cronId} className="block text-sm text-gray-400">Schedule (cron)</label>
         <input
+          id={cronId}
           type="text"
           value={cronExpression}
           onChange={e => setCronExpression(e.target.value)}
@@ -229,10 +234,11 @@ export function BackupTab() {
       )}
 
       <div className="space-y-2">
-        <label className="block text-sm text-gray-400">Additional Exclude Paths</label>
+        <label htmlFor={additionalExcludeId} className="block text-sm text-gray-400">Additional Exclude Paths</label>
         <p className="text-xs text-gray-500">Custom directories/patterns to skip during backup (relative to data/)</p>
         <div className="flex gap-2">
           <input
+            id={additionalExcludeId}
             type="text"
             value={newExclude}
             onChange={e => setNewExclude(e.target.value)}

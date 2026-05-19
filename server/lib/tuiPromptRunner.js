@@ -26,9 +26,9 @@
  */
 
 import { spawn as ptySpawn } from 'node-pty';
-import { readFile } from 'fs/promises';
+
 import { join, resolve } from 'path';
-import { ensureDir, PATHS } from './fileUtils.js';
+import { ensureDir, PATHS, tryReadFile } from './fileUtils.js';
 import { createStreamingAnsiStripper } from './ansiStrip.js';
 import { getRunsPath, finalizeRunRecord, emitRunStarted, registerActiveRun, unregisterActiveRun } from '../services/runner.js';
 import {
@@ -394,7 +394,7 @@ ${prompt}`;
  */
 export async function resolveTuiResponseText({ success, responseFilePath, outputBuffer, wrappedPrompt }) {
   if (success) {
-    const fileText = await readFile(responseFilePath, 'utf8').catch(() => null);
+    const fileText = await tryReadFile(responseFilePath);
     if (typeof fileText === 'string' && fileText.trim()) {
       return { text: fileText.trim(), usedResponseFile: true };
     }

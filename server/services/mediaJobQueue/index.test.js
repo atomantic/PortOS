@@ -28,7 +28,8 @@ vi.mock('../../lib/fileUtils.js', async () => {
 // 'completed' or 'failed' for the worker to advance — we drive those events
 // directly from each test.
 const stubs = {
-  generateVideo: vi.fn(async () => ({ jobId: 'whatever' })),
+  generateVideo: vi.fn(async () => ({
+tryReadFile: vi.fn().mockResolvedValue(null), jobId: 'whatever' })),
   generateChainedVideo: vi.fn(async () => ({ jobId: 'whatever' })),
   generateImage: vi.fn(async () => ({ jobId: 'whatever' })),
   generateImageCodex: vi.fn(async () => ({ jobId: 'whatever' })),

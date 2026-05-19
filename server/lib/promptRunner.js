@@ -29,6 +29,7 @@
 import { createRun, executeApiRun, executeCliRun, extractBakedModel, hasModelFlag, stopRun, patchRunMetadata } from '../services/runner.js';
 import { getActiveProvider, getProviderById } from '../services/providers.js';
 import { executeTuiRun } from './tuiPromptRunner.js';
+import { ServerError } from './errorHandler.js';
 
 const DEFAULT_TIMEOUT_MS = 300000;
 const APPEND_CHUNK = (acc, chunk) => acc + (typeof chunk === 'string' ? chunk : (chunk?.text || ''));
@@ -102,6 +103,26 @@ export async function resolveProviderAndModel({ providerId, model } = {}) {
   if (!provider) provider = await getActiveProvider();
   const selectedModel = provider ? resolveEffectiveModel(provider, model) : null;
   return { provider, selectedModel };
+}
+
+/**
+ * Throw a typed "no AI provider available" error when `provider` is falsy.
+ *
+ * Sites that surface to HTTP route handlers should pass `code` (+ optional
+ * `status`, defaults to 503) so the centralized error middleware emits a
+ * structured response. Sites that are internal-only (service-to-service)
+ * can omit both and get a plain `Error` — matching the legacy shape.
+ *
+ * @param {object|null} provider
+ * @param {object} opts
+ * @param {string} opts.message — human-readable error message
+ * @param {string} [opts.code] — error code constant (e.g. `NO_PROVIDER`)
+ * @param {number} [opts.status=503] — HTTP status; only used when `code` is set
+ */
+export function assertProvider(provider, { message, code, status = 503 } = {}) {
+  if (provider) return;
+  if (code) throw new ServerError(message, { status, code });
+  throw new Error(message);
 }
 
 /**
@@ -228,8 +249,12 @@ export async function runPromptThroughProvider({ provider, prompt, source, model
     const safeResolve = (value) => { if (!settled) { settled = true; if (apiTimeoutHandle) clearTimeout(apiTimeoutHandle); resolve(value); } };
     const safeReject = (err) => { if (!settled) { settled = true; if (apiTimeoutHandle) clearTimeout(apiTimeoutHandle); reject(err); } };
 
+    // TUI runs discard `text` and use `result.text` from executeTuiRun (see
+    // onComplete below), so the per-chunk APPEND_CHUNK concat is pure waste —
+    // TUI streams can emit hundreds of KB of screen redraws per run.
+    const isTui = effectiveProvider.type === 'tui';
     const onData = (chunk) => {
-      text = APPEND_CHUNK(text, chunk);
+      if (!isTui) text = APPEND_CHUNK(text, chunk);
       if (onDataCallback) {
         const chunkText = typeof chunk === 'string' ? chunk : (chunk?.text || '');
         if (chunkText) onDataCallback(chunkText);

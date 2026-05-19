@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const fileStore = new Map();
 
 vi.mock('../../lib/fileUtils.js', () => ({
+tryReadFile: vi.fn().mockResolvedValue(null),
   PATHS: { data: '/mock/data' },
   ensureDir: vi.fn().mockResolvedValue(undefined),
   atomicWrite: vi.fn(async (path, data) => { fileStore.set(path, data); }),
@@ -90,6 +91,31 @@ describe('pipeline series service', () => {
   it('targetFormat falls back to comic+tv when invalid', async () => {
     const s = await svc.createSeries({ name: 'X', targetFormat: 'nonsense' });
     expect(s.targetFormat).toBe('comic+tv');
+  });
+
+  describe('stylePromptOverrideMode', () => {
+    it('defaults to "prepend" when not supplied', async () => {
+      const s = await svc.createSeries({ name: 'X' });
+      expect(s.stylePromptOverrideMode).toBe('prepend');
+    });
+
+    it('accepts "append" and "override" on create', async () => {
+      const a = await svc.createSeries({ name: 'A', stylePromptOverrideMode: 'append' });
+      const b = await svc.createSeries({ name: 'B', stylePromptOverrideMode: 'override' });
+      expect(a.stylePromptOverrideMode).toBe('append');
+      expect(b.stylePromptOverrideMode).toBe('override');
+    });
+
+    it('coerces an unknown value back to "prepend"', async () => {
+      const s = await svc.createSeries({ name: 'X', stylePromptOverrideMode: 'nonsense' });
+      expect(s.stylePromptOverrideMode).toBe('prepend');
+    });
+
+    it('round-trips through updateSeries', async () => {
+      const s = await svc.createSeries({ name: 'X' });
+      const u = await svc.updateSeries(s.id, { stylePromptOverrideMode: 'override' });
+      expect(u.stylePromptOverrideMode).toBe('override');
+    });
   });
 
   it('silently drops legacy canon fields on create (Phase B.4: canon moved to universe)', async () => {
@@ -210,6 +236,20 @@ describe('pipeline series service', () => {
       const updated = await svc.updateSeries(s.id, { logline: 'new logline' });
       expect(updated.locked).toEqual({ arc: true });
       expect(updated.logline).toBe('new logline');
+    });
+
+    it('setArcFieldLock merges against latest arcFields without clobbering siblings', async () => {
+      const s = await svc.createSeries({ name: 'X', locked: { arcFields: { logline: true } } });
+      const updated = await svc.setArcFieldLock(s.id, 'themes', true);
+      expect(updated.locked.arcFields).toEqual({ logline: true, themes: true });
+      const cleared = await svc.setArcFieldLock(s.id, 'logline', false);
+      expect(cleared.locked.arcFields).toEqual({ themes: true });
+    });
+
+    it('setArcFieldLock rejects unknown arc fields', async () => {
+      const s = await svc.createSeries({ name: 'X' });
+      await expect(svc.setArcFieldLock(s.id, 'bogus', true))
+        .rejects.toMatchObject({ code: svc.ERR_VALIDATION });
     });
   });
 });

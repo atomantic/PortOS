@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 vi.mock('./fileUtils.js', () => ({
+tryReadFile: vi.fn().mockResolvedValue(null),
   PATHS: { data: '/mock/data' },
   safeJSONParse: (s, fallback) => { try { return JSON.parse(s); } catch { return fallback; } }
 }));

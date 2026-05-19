@@ -17,10 +17,12 @@
 import { runStagedLLM } from '../../lib/stageRunner.js';
 import { getSeries } from './series.js';
 import { extractCanonFromProse } from '../universeCanon.js';
-import { getIssue, listIssues, updateStage, TEXT_STAGE_IDS } from './issues.js';
+import { getIssue, listIssues, updateStage, assertStageUnlocked, TEXT_STAGE_IDS } from './issues.js';
 import { getSeriesCanon } from './seriesCanon.js';
-import { compareIssuesByPosition } from './arcPlanner.js';
+import { getUniverse } from '../universeBuilder.js';
+import { compareIssuesByPosition, NO_LINKED_UNIVERSE_PLACEHOLDER } from './arcPlanner.js';
 import { computeIssueTargets } from '../../lib/issueLength.js';
+import { renderEntitiesSummary } from '../../lib/universePromptRenderers.js';
 
 const STAGE_TO_TEMPLATE = Object.freeze({
   idea: 'pipeline-idea-expansion',
@@ -134,7 +136,7 @@ async function buildIdeaContextAugment(series, issue) {
  * bible (`series.*`) and every *prior* text stage's content (`stages.*`).
  * Visual stages aren't included — text templates don't need rendered images.
  */
-function buildStageContext({ series, canon, issue, stageId, seedInput }) {
+function buildStageContext({ series, canon, world, issue, stageId, seedInput }) {
   const stages = {};
   for (const id of TEXT_STAGE_IDS) {
     if (id === stageId) break; // only include stages BEFORE the current one
@@ -146,6 +148,14 @@ function buildStageContext({ series, canon, issue, stageId, seedInput }) {
       content: (cur.input?.trim() || cur.output?.trim() || ''),
     };
   }
+  // Compact one-line-per-kind synopsis of the linked universe's canon. Lets
+  // per-issue text prompts reference named entities without paying the full
+  // canon-block token cost — `series.characters` already covers the bible-
+  // sized character context, this adds places/objects + other characters not
+  // pulled into the series-canon for continuity anchors.
+  const worldEntitiesSummary = world
+    ? (renderEntitiesSummary(world) || '(none)')
+    : NO_LINKED_UNIVERSE_PLACEHOLDER;
   return {
     series: {
       name: series.name,
@@ -159,6 +169,7 @@ function buildStageContext({ series, canon, issue, stageId, seedInput }) {
       number: issue.number,
       title: issue.title,
     },
+    worldEntitiesSummary,
     // Fed into every text template via {{lengthTargets.*}}. Always populated
     // (defaults to 'standard') so templates can use the fields unconditionally.
     lengthTargets: computeIssueTargets(issue),
@@ -186,11 +197,23 @@ export async function generateStage(issueId, stageId, options = {}) {
   const template = STAGE_TO_TEMPLATE[stageId];
   const issue = await getIssue(issueId);
   const series = await getSeries(issue.seriesId);
-  const canon = await getSeriesCanon(series);
+  // Universe canon is best-effort — an orphaned series (no universeId) or a
+  // missing universe record just skips the entities summary instead of
+  // failing the run.
+  const [canon, world] = await Promise.all([
+    getSeriesCanon(series),
+    series.universeId ? getUniverse(series.universeId).catch(() => null) : Promise.resolve(null),
+  ]);
+
+  // Per-stage editorial lock — refuse before touching the stage record so a
+  // locked stage doesn't get bumped to 'generating' status only to be reset.
+  // Sibling to the arc / season checks elsewhere in the planner; any of the
+  // three rejects.
+  assertStageUnlocked(issue, stageId);
 
   await updateStage(issueId, stageId, { status: 'generating', errorMessage: '' });
 
-  const ctx = buildStageContext({ series, canon, issue, stageId, seedInput: options.seedInput });
+  const ctx = buildStageContext({ series, canon, world, issue, stageId, seedInput: options.seedInput });
   if (stageId === 'idea') {
     Object.assign(ctx, await buildIdeaContextAugment(series, issue));
   }

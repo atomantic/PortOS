@@ -9,6 +9,7 @@ const fileStore = new Map();
 // resolveImageRef to return null for the stale filename.
 const refSheetFilesByName = new Map();
 vi.mock("../lib/fileUtils.js", () => ({
+tryReadFile: vi.fn().mockResolvedValue(null),
   PATHS: { data: "/mock/data" },
   ensureDir: vi.fn().mockResolvedValue(undefined),
   atomicWrite: vi.fn(async (path, data) => {
@@ -1954,6 +1955,72 @@ describe("universeBuilder service", () => {
       expect(final.premise).toBe("P");
       expect(runs).toHaveLength(2);
       expect(runs.map((r) => r.id).sort()).toEqual(["run-1", "run-2"]);
+    });
+  });
+
+  // The slot map is in-process state; without these wirings entries persist
+  // until the Node process restarts even after the character/universe is gone.
+  describe("pending sheet slot cleanup", () => {
+    it("updateUniverse clears slots for characters dropped from the PATCH", async () => {
+      const slot = await import("./universeCharacterSheetSlot.js");
+      const u = await svc.createUniverse({ name: "SlotPatchTest" });
+      // Plant two characters via mutator (trusted path).
+      await svc.updateUniverse(u.id, () => ({
+        characters: [
+          { id: "c-keep", name: "Keep" },
+          { id: "c-drop", name: "Drop" },
+        ],
+      }));
+      // Simulate two in-flight renders.
+      slot.claimPendingSheetSlot(u.id, "c-keep", "job-keep");
+      slot.claimPendingSheetSlot(u.id, "c-drop", "job-drop");
+      // Drop one character via PATCH.
+      await svc.updateUniverse(u.id, {
+        characters: [{ id: "c-keep", name: "Keep" }],
+      });
+      // Slot for the dropped character is released; the survivor's slot
+      // is untouched.
+      expect(slot.getPendingSheetSlot(u.id, "c-drop")).toBeUndefined();
+      expect(slot.getPendingSheetSlot(u.id, "c-keep")).toBe("job-keep");
+      // teardown
+      slot.clearPendingSheetSlotsForUniverse(u.id);
+    });
+
+    it("updateUniverse leaves slots intact when the PATCH does not remove characters", async () => {
+      const slot = await import("./universeCharacterSheetSlot.js");
+      const u = await svc.createUniverse({ name: "SlotIdempotentTest" });
+      await svc.updateUniverse(u.id, () => ({
+        characters: [{ id: "c-1", name: "One" }],
+      }));
+      slot.claimPendingSheetSlot(u.id, "c-1", "job-1");
+      // PATCH that adds a sibling character — the original's slot must
+      // survive.
+      await svc.updateUniverse(u.id, {
+        characters: [
+          { id: "c-1", name: "One" },
+          { id: "c-2", name: "Two" },
+        ],
+      });
+      expect(slot.getPendingSheetSlot(u.id, "c-1")).toBe("job-1");
+      // PATCH that touches an unrelated scalar must not disturb either.
+      await svc.updateUniverse(u.id, { logline: "irrelevant" });
+      expect(slot.getPendingSheetSlot(u.id, "c-1")).toBe("job-1");
+      slot.clearPendingSheetSlotsForUniverse(u.id);
+    });
+
+    it("deleteUniverse releases every slot keyed by the universe", async () => {
+      const slot = await import("./universeCharacterSheetSlot.js");
+      const u1 = await svc.createUniverse({ name: "SlotDeleteA" });
+      const u2 = await svc.createUniverse({ name: "SlotDeleteB" });
+      slot.claimPendingSheetSlot(u1.id, "char-1", "job-a1");
+      slot.claimPendingSheetSlot(u1.id, "char-2", "job-a2");
+      slot.claimPendingSheetSlot(u2.id, "char-1", "job-b1");
+      await svc.deleteUniverse(u1.id);
+      expect(slot.getPendingSheetSlot(u1.id, "char-1")).toBeUndefined();
+      expect(slot.getPendingSheetSlot(u1.id, "char-2")).toBeUndefined();
+      // Sibling universe's slot survives.
+      expect(slot.getPendingSheetSlot(u2.id, "char-1")).toBe("job-b1");
+      slot.clearPendingSheetSlotsForUniverse(u2.id);
     });
   });
 });

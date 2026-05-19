@@ -193,6 +193,16 @@ export const renderCharacterReferenceSheet = (universeId, entryId, {
     body: JSON.stringify({ overridePrompt, overrideNegativePrompt, modelId }),
   });
 
+// Delete the character's current reference sheet (file + pointer). Server
+// unlinks the PNG from /data/image-refs/ and clears every matching
+// `referenceSheetImageRef` across all universes. Returns
+// `{ filename, fileDeleted, cleared }`.
+export const deleteCharacterReferenceSheet = (universeId, entryId, options = {}) =>
+  request(`/universe-builder/${encodeURIComponent(universeId)}/characters/${encodeURIComponent(entryId)}/reference-sheet`, {
+    method: 'DELETE',
+    ...options,
+  });
+
 // Cast-wide differentiate — single LLM call rewrites every character so the
 // whole cast has no visually-colliding pairs.
 export const differentiateUniverseCast = (universeId, { providerId, model } = {}) =>

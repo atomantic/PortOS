@@ -5,10 +5,9 @@
  * Includes recent activity context to avoid repetition.
  */
 
-import { getActiveProvider, getProviderById } from './providers.js';
 import * as agentActivity from './agentActivity.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
-import { runPromptThroughProvider } from '../lib/promptRunner.js';
+import { assertProvider, resolveProviderAndModel, runPromptThroughProvider } from '../lib/promptRunner.js';
 
 /**
  * Parse JSON from AI response text (handles markdown blocks, extra text)
@@ -78,16 +77,8 @@ export async function getRecentAgentContent(agentId, actionType, limit = 5) {
  * Run AI generation using the same pattern as agentPersonalityGenerator
  */
 async function runAIGeneration(prompt, providerId, model, source) {
-  let provider;
-  if (providerId) {
-    provider = await getProviderById(providerId).catch(() => null);
-  }
-  if (!provider) {
-    provider = await getActiveProvider();
-  }
-  if (!provider) {
-    throw new Error('No AI provider available for content generation');
-  }
+  const { provider } = await resolveProviderAndModel({ providerId, model });
+  assertProvider(provider, { message: 'No AI provider available for content generation' });
 
   const { text: responseText, model: selectedModel } = await runPromptThroughProvider({
     provider, prompt, source, model,

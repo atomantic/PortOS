@@ -38,6 +38,7 @@ import { atomicWrite } from '../lib/fileUtils.js';
 import { resetTaskTypeLearning, getSkippedTaskTypes, recordTaskCompletion, getRoutingAccuracy, suggestModelTier, recalculateModelTierMetrics, clearLearningCache, getTaskTypeConfidence, getConfidenceLevels, dismissRecommendation, restoreRecommendation, getDismissedRecommendations, clearDismissedRecommendations, getLearningInsights } from './taskLearning.js';
 
 const makeLearningData = (overrides = {}) => ({
+tryReadFile: vi.fn().mockResolvedValue(null),
   version: 1,
   lastUpdated: '2026-01-26T00:00:00.000Z',
   byTaskType: {

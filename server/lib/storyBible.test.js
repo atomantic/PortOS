@@ -242,6 +242,7 @@ describe('storyBible — sanitizeCharacter', () => {
 
     it('caps the list at BIBLE_LIMITS.WARDROBES_PER_CHARACTER_MAX', () => {
       const tooMany = Array.from({ length: BIBLE_LIMITS.WARDROBES_PER_CHARACTER_MAX + 5 }, (_, i) => ({
+tryReadFile: vi.fn().mockResolvedValue(null),
         name: `Outfit ${i}`,
       }));
       const out = sanitizeCharacter({ name: 'A', wardrobes: tooMany });
@@ -274,6 +275,7 @@ describe('storyBible — sanitizeCharacter', () => {
       expect(out.age).toBe('');
       expect(out.coreTheme).toBe('');
       expect(out.speechAccent).toBe('');
+      expect(out.speechPattern).toBe('');
       expect(out.visualNotes).toBe('');
       expect(out.silhouetteNotes).toBe('');
       expect(out.postureNotes).toBe('');
@@ -302,6 +304,7 @@ describe('storyBible — sanitizeCharacter', () => {
         age: '27',
         coreTheme: 'cartographer of grief',
         speechAccent: 'clipped Edinburgh',
+        speechPattern: 'rarely contracts; nautical metaphors; ends statements as questions',
         visualNotes: 'layered streetwear',
         silhouetteNotes: 'compact upper body',
         postureNotes: 'slight forward lean',
@@ -318,6 +321,7 @@ describe('storyBible — sanitizeCharacter', () => {
       expect(out.age).toBe('27');
       expect(out.coreTheme).toBe('cartographer of grief');
       expect(out.skills).toBe('conversational Mandarin, sleight-of-hand');
+      expect(out.speechPattern).toBe('rarely contracts; nautical metaphors; ends statements as questions');
     });
 
     it('caps every new string field at its BIBLE_LIMITS bound', () => {

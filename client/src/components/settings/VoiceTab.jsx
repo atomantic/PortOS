@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useId, Children, cloneElement, isValidElement } from 'react';
 import { Save, Mic, Play, Zap } from 'lucide-react';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
@@ -77,13 +77,22 @@ const ServiceBadge = ({ label, probe }) => {
   );
 };
 
-const Field = ({ label, hint, children, className = '' }) => (
-  <div className={`space-y-1 ${className}`}>
-    <label className="block text-sm text-gray-400">{label}</label>
-    {hint && <p className="text-xs text-gray-500">{hint}</p>}
-    {children}
-  </div>
-);
+const Field = ({ label, hint, children, className = '' }) => {
+  const id = useId();
+  // Inject `id` into the first child element so the label's htmlFor resolves.
+  const augmented = Children.map(children, (child, i) =>
+    i === 0 && isValidElement(child) && !child.props.id
+      ? cloneElement(child, { id })
+      : child
+  );
+  return (
+    <div className={`space-y-1 ${className}`}>
+      <label htmlFor={id} className="block text-sm text-gray-400">{label}</label>
+      {hint && <p className="text-xs text-gray-500">{hint}</p>}
+      {augmented}
+    </div>
+  );
+};
 
 const inputCls = 'w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent';
 

@@ -3,7 +3,7 @@ import { existsSync } from 'fs';
 import { join, basename } from 'path';
 import { homedir } from 'os';
 import { execPm2 } from './pm2.js';
-import { safeJSONParse } from '../lib/fileUtils.js';
+import { safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
 import { detectAppIcon } from './appIconDetect.js';
 
 /** App types that do not use PM2 for process management */
@@ -535,7 +535,7 @@ export async function streamDetection(socket, dirPath) {
   const pkgPath = join(dirPath, 'package.json');
 
   if (existsSync(pkgPath)) {
-    const content = await readFile(pkgPath, 'utf-8').catch(() => null);
+    const content = await tryReadFile(pkgPath);
     if (content) {
       const pkg = safeJSONParse(content, null);
       if (!pkg) {

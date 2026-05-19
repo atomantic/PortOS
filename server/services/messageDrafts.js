@@ -1,21 +1,20 @@
-import { readFile, writeFile } from 'fs/promises';
+
 import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
-import { ensureDir, PATHS, safeJSONParse } from '../lib/fileUtils.js';
+import { atomicWrite, ensureDir, PATHS, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
 
 const DRAFTS_FILE = join(PATHS.messages, 'drafts.json');
 
 async function loadDrafts() {
   await ensureDir(PATHS.messages);
-  const content = await readFile(DRAFTS_FILE, 'utf-8').catch(() => null);
+  const content = await tryReadFile(DRAFTS_FILE);
   if (!content) return [];
   const parsed = safeJSONParse(content, [], { context: 'messageDrafts' });
   return Array.isArray(parsed) ? parsed : [];
 }
 
 async function saveDrafts(drafts) {
-  await ensureDir(PATHS.messages);
-  await writeFile(DRAFTS_FILE, JSON.stringify(drafts, null, 2));
+  await atomicWrite(DRAFTS_FILE, drafts);
 }
 
 export async function listDrafts(filters = {}) {

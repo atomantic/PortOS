@@ -1,6 +1,7 @@
-import { readFile, writeFile, mkdir } from 'fs/promises';
+import { readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
+import { atomicWrite } from './internal/atomicWrite.js';
 
 export function createPromptsService(config = {}) {
   const {
@@ -12,13 +13,6 @@ export function createPromptsService(config = {}) {
 
   let stageConfig = null;
   let variables = null;
-
-  // mkdir -p the prompts dir before writes — on a fresh data directory the
-  // dir may not exist yet and writes to `stage-config.json` / `variables.json`
-  // would fail with ENOENT before the per-write `stagesDir` mkdir runs.
-  async function ensurePromptsDir() {
-    if (!existsSync(PROMPTS_PATH)) await mkdir(PROMPTS_PATH, { recursive: true });
-  }
 
   async function loadPrompts() {
     const configPath = join(PROMPTS_PATH, 'stage-config.json');
@@ -87,16 +81,13 @@ export function createPromptsService(config = {}) {
     },
 
     async updateStageTemplate(stageName, content) {
-      const stagesDir = join(PROMPTS_PATH, 'stages');
-      if (!existsSync(stagesDir)) await mkdir(stagesDir, { recursive: true });
-      await writeFile(join(stagesDir, `${stageName}.md`), content);
+      await atomicWrite(join(PROMPTS_PATH, 'stages', `${stageName}.md`), content);
     },
 
     async updateStageConfig(stageName, updatedConfig) {
       if (!stageConfig) await loadPrompts();
       stageConfig.stages[stageName] = { ...stageConfig.stages[stageName], ...updatedConfig };
-      await ensurePromptsDir();
-      await writeFile(join(PROMPTS_PATH, 'stage-config.json'), JSON.stringify(stageConfig, null, 2));
+      await atomicWrite(join(PROMPTS_PATH, 'stage-config.json'), stageConfig);
     },
 
     async createStage(stageName, config, template = '') {
@@ -105,12 +96,8 @@ export function createPromptsService(config = {}) {
         throw new Error(`Stage ${stageName} already exists`);
       }
       stageConfig.stages[stageName] = config;
-      await ensurePromptsDir();
-      await writeFile(join(PROMPTS_PATH, 'stage-config.json'), JSON.stringify(stageConfig, null, 2));
-
-      const stagesDir = join(PROMPTS_PATH, 'stages');
-      if (!existsSync(stagesDir)) await mkdir(stagesDir, { recursive: true });
-      await writeFile(join(stagesDir, `${stageName}.md`), template);
+      await atomicWrite(join(PROMPTS_PATH, 'stage-config.json'), stageConfig);
+      await atomicWrite(join(PROMPTS_PATH, 'stages', `${stageName}.md`), template);
 
       console.log(`✅ Created prompt stage: ${stageName}`);
     },
@@ -121,8 +108,7 @@ export function createPromptsService(config = {}) {
         throw new Error(`Stage ${stageName} not found`);
       }
       delete stageConfig.stages[stageName];
-      await ensurePromptsDir();
-      await writeFile(join(PROMPTS_PATH, 'stage-config.json'), JSON.stringify(stageConfig, null, 2));
+      await atomicWrite(join(PROMPTS_PATH, 'stage-config.json'), stageConfig);
 
       const templatePath = join(PROMPTS_PATH, 'stages', `${stageName}.md`);
       if (existsSync(templatePath)) {
@@ -144,8 +130,7 @@ export function createPromptsService(config = {}) {
     async updateVariable(key, data) {
       if (!variables) await loadPrompts();
       variables.variables[key] = { ...variables.variables[key], ...data };
-      await ensurePromptsDir();
-      await writeFile(join(PROMPTS_PATH, 'variables.json'), JSON.stringify(variables, null, 2));
+      await atomicWrite(join(PROMPTS_PATH, 'variables.json'), variables);
     },
 
     async createVariable(key, data) {
@@ -154,15 +139,13 @@ export function createPromptsService(config = {}) {
         throw new Error(`Variable ${key} already exists`);
       }
       variables.variables[key] = data;
-      await ensurePromptsDir();
-      await writeFile(join(PROMPTS_PATH, 'variables.json'), JSON.stringify(variables, null, 2));
+      await atomicWrite(join(PROMPTS_PATH, 'variables.json'), variables);
     },
 
     async deleteVariable(key) {
       if (!variables) await loadPrompts();
       delete variables.variables[key];
-      await ensurePromptsDir();
-      await writeFile(join(PROMPTS_PATH, 'variables.json'), JSON.stringify(variables, null, 2));
+      await atomicWrite(join(PROMPTS_PATH, 'variables.json'), variables);
     },
 
     async buildPrompt(stageName, data = {}) {

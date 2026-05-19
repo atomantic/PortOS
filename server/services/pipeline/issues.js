@@ -27,7 +27,7 @@ import {
   CUSTOM_PAGE_MIN, CUSTOM_PAGE_MAX, CUSTOM_MINUTE_MIN, CUSTOM_MINUTE_MAX,
 } from '../../lib/issueLength.js';
 import { sanitizeOrigin } from '../../lib/sharingOrigin.js';
-import { sanitizeVisualStyleRef } from '../../lib/visualStyles.js';
+import { ServerError } from '../../lib/errorHandler.js';
 import { ARC_ROLES } from '../../lib/storyArc.js';
 import { isStr, trimTo } from '../../lib/storyBible.js';
 import { sanitizeCoverLike } from '../../lib/renderSlot.js';
@@ -49,6 +49,7 @@ export const ERR_NOT_FOUND = 'PIPELINE_ISSUE_NOT_FOUND';
 export const ERR_VALIDATION = 'PIPELINE_ISSUE_VALIDATION';
 export const ERR_DUPLICATE = 'PIPELINE_ISSUE_DUPLICATE';
 export const ERR_SEASON_LOCKED = 'PIPELINE_ISSUE_SEASON_LOCKED';
+export const ERR_STAGE_LOCKED = 'PIPELINE_STAGE_LOCKED';
 const makeErr = (message, code) => Object.assign(new Error(message), { code });
 
 const ISSUE_ID_RE = /^iss-[A-Za-z0-9-]+$/;
@@ -99,7 +100,25 @@ const emptyStage = () => ({
   lastRunId: null,
   errorMessage: '',
   updatedAt: null,
+  locked: false,
 });
+
+/**
+ * Throw a 400 ServerError when `issue.stages[stageId].locked === true`.
+ * Every code path that regenerates a stage's primary artifact (LLM text run,
+ * image render, video render, audio synth, refine-prompt, extract-scenes /
+ * extract-pages) must call this so the lock contract is uniform. Sibling to
+ * the series-level (`series.locked.arc`) and season-level (`season.locked`)
+ * checks elsewhere — any of the three rejects.
+ */
+export function assertStageUnlocked(issue, stageId) {
+  if (issue?.stages?.[stageId]?.locked === true) {
+    throw new ServerError(
+      `Stage "${stageId}" is locked — unlock it before regenerating`,
+      { status: 400, code: ERR_STAGE_LOCKED },
+    );
+  }
+}
 
 const sanitizeStage = (raw) => {
   if (!raw || typeof raw !== 'object') return emptyStage();
@@ -111,6 +130,11 @@ const sanitizeStage = (raw) => {
     lastRunId: isStr(raw.lastRunId) && raw.lastRunId ? raw.lastRunId : null,
     errorMessage: trimTo(raw.errorMessage, STAGE_NOTES_MAX),
     updatedAt: isStr(raw.updatedAt) ? raw.updatedAt : null,
+    // Per-stage editorial lock. When true, `generateStage` (text) and the
+    // visual stage `enqueueXxx` entry points refuse — lets the user freeze a
+    // finalized comic script while still iterating storyboards. Independent
+    // of `series.locked.arc` and `season.locked`; any of the three rejects.
+    locked: raw.locked === true,
   };
 };
 
@@ -175,9 +199,6 @@ const sanitizeVisualStage = (raw, stageId = null) => {
     // enforces the rule.
     cover: stageId === null || stageId === 'comicPages' ? sanitizeCoverLike(raw?.cover) : null,
     backCover: stageId === null || stageId === 'comicPages' ? sanitizeCoverLike(raw?.backCover) : null,
-    // Per-stage override so a series can mix aesthetics
-    // (e.g. graphic-novel panels + cinematic storyboards).
-    visualStyleOverride: sanitizeVisualStyleRef(raw?.visualStyleOverride),
   };
 };
 
@@ -306,15 +327,19 @@ async function writeState(state) {
   await atomicWrite(statePath(), state);
 }
 
-export async function listIssues({ seriesId = null } = {}) {
+export async function listIssues({ seriesId = null, offset = 0, limit = ISSUES_PER_RESPONSE_MAX, paginated = false } = {}) {
   const { issues } = await readState();
   const filtered = seriesId ? issues.filter((i) => i.seriesId === seriesId) : issues;
-  return [...filtered]
-    .sort((a, b) => {
-      if (a.seriesId !== b.seriesId) return a.seriesId.localeCompare(b.seriesId);
-      return (a.number || 0) - (b.number || 0);
-    })
-    .slice(0, ISSUES_PER_RESPONSE_MAX);
+  const sorted = [...filtered].sort((a, b) => {
+    if (a.seriesId !== b.seriesId) return a.seriesId.localeCompare(b.seriesId);
+    return (a.number || 0) - (b.number || 0);
+  });
+  const safeLimit = Math.min(Math.max(1, limit), ISSUES_PER_RESPONSE_MAX);
+  const safeOffset = Math.max(0, offset);
+  if (paginated) {
+    return { items: sorted.slice(safeOffset, safeOffset + safeLimit), total: sorted.length, offset: safeOffset, limit: safeLimit };
+  }
+  return sorted.slice(0, ISSUES_PER_RESPONSE_MAX);
 }
 
 /**

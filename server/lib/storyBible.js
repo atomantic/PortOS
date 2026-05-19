@@ -35,6 +35,11 @@ export const BIBLE_LIMITS = Object.freeze({
   AGE_MAX: 80,
   CORE_THEME_MAX: 500,
   SPEECH_ACCENT_MAX: 500,
+  // Written speech-pattern: cadence, sentence-structure, lexical tics, vocal
+  // habits — *not* the regional accent (that lives in SPEECH_ACCENT_MAX).
+  // Roomier than accent because writers tend to describe rhythm + vocabulary
+  // + idiom in one paragraph.
+  SPEECH_PATTERN_MAX: 1000,
   VISUAL_NOTES_MAX: 1000,
   SILHOUETTE_NOTES_MAX: 2000,
   POSTURE_NOTES_MAX: 1000,
@@ -159,7 +164,7 @@ export const BIBLE_KINDS = Object.freeze(Object.values(BIBLE_KIND));
 // `existing<X>Json` prompt variable (bibleExtractor) and into the script
 // stage's bibles context (evaluator). Excludes ids/timestamps/source/notes.
 export const PROMPT_FIELDS = Object.freeze({
-  [BIBLE_KIND.CHARACTER]: ['name', 'aliases', 'role', 'pronouns', 'age', 'coreTheme', 'speechAccent', 'visualNotes', 'physicalDescription', 'personality', 'background', 'silhouetteNotes', 'postureNotes', 'specialTraits', 'visualIdentity', 'motivations', 'likes', 'dislikes', 'mannerisms', 'relationships', 'skills', 'stats', 'colorPalette', 'props', 'expressions', 'handGestures', 'voiceId', 'wardrobes', 'prompt', 'tags'],
+  [BIBLE_KIND.CHARACTER]: ['name', 'aliases', 'role', 'pronouns', 'age', 'coreTheme', 'speechAccent', 'speechPattern', 'visualNotes', 'physicalDescription', 'personality', 'background', 'silhouetteNotes', 'postureNotes', 'specialTraits', 'visualIdentity', 'motivations', 'likes', 'dislikes', 'mannerisms', 'relationships', 'skills', 'stats', 'colorPalette', 'props', 'expressions', 'handGestures', 'voiceId', 'wardrobes', 'prompt', 'tags'],
   [BIBLE_KIND.PLACE]: ['name', 'slugline', 'description', 'palette', 'era', 'weather', 'intExt', 'timeOfDay', 'recurringDetails', 'prompt', 'tags'],
   [BIBLE_KIND.OBJECT]: ['name', 'aliases', 'description', 'significance', 'prompt', 'tags'],
 });
@@ -499,6 +504,11 @@ export function sanitizeCharacter(raw, { idPrefix = DEFAULT_ID_PREFIX.character,
     age: trimTo(raw.age, BIBLE_LIMITS.AGE_MAX),
     coreTheme: trimTo(raw.coreTheme, BIBLE_LIMITS.CORE_THEME_MAX),
     speechAccent: trimTo(raw.speechAccent, BIBLE_LIMITS.SPEECH_ACCENT_MAX),
+    // Written speech-pattern (cadence, sentence-structure, lexical tics) —
+    // distinct from `voiceId` (TTS engine pointer) and `speechAccent`
+    // (regional/cultural accent). Used by script + script-adjacent prompts so
+    // dialogue carries the character's prose voice, not just their accent.
+    speechPattern: trimTo(raw.speechPattern, BIBLE_LIMITS.SPEECH_PATTERN_MAX),
     visualNotes: trimTo(raw.visualNotes, BIBLE_LIMITS.VISUAL_NOTES_MAX),
     physicalDescription,
     personality: trimTo(raw.personality, BIBLE_LIMITS.PERSONALITY_MAX),
@@ -654,7 +664,7 @@ const MERGE_CONFIG = Object.freeze({
       // operational fields (`referenceSheetImageRef`, `primaryImageRef`,
       // `imageRefs`) intentionally aren't here — those are owned by the
       // render flow, not the prose extractor.
-      'pronouns', 'age', 'coreTheme', 'speechAccent', 'visualNotes',
+      'pronouns', 'age', 'coreTheme', 'speechAccent', 'speechPattern', 'visualNotes',
       'silhouetteNotes', 'postureNotes', 'specialTraits', 'visualIdentity',
       'motivations', 'likes', 'dislikes', 'mannerisms', 'relationships', 'skills',
       'stats', 'colorPalette', 'props', 'expressions', 'handGestures',

@@ -33,7 +33,8 @@ For every BLANK field in the character JSON above, propose a value that:
 - `pronouns` — short form ("she/her", "they/them", "it/its", "no pronouns — referred to as 'the Reach'").
 - `age` — flexible string ("27", "centuries old", "newly hatched", "unknown — appears mid-30s"). Don't force a number.
 - `coreTheme` — the character's one-sentence thematic essence ("a cartographer of grief", "the city's last honest broker").
-- `speechAccent` — written speech pattern + accent ("clipped Edinburgh, rarely contracts; uses nautical metaphors").
+- `speechAccent` — regional / cultural accent only ("clipped Edinburgh", "Brooklyn drawl", "off-world inflection — vowels stretch"). Keep narrow; the rhythm + lexicon goes in `speechPattern`.
+- `speechPattern` — written speech rhythm: sentence structure, cadence, vocabulary tics, recurring phrases ("rarely contracts; uses nautical metaphors; trails off into ellipses when uncertain; never swears, prefers archaic substitutes like 'damnation'"). Distinct from `voiceId` (the TTS engine pointer) — this drives how dialogue *reads* on the page, before any voice synth.
 - `visualNotes` — 1–2 sentences capturing the at-a-glance silhouette and palette ("layered practical streetwear in faded mustard + charcoal; chunky boots; ever-present beanie").
 - `silhouetteNotes` — bulleted-as-prose distinctive shape features ("compact upper body; layered silhouette; tapered lower half; short hair adds 5cm height").
 - `postureNotes` — habitual posture cues ("slight forward lean; weight in left foot; shoulders loose; ready-to-move; eyes constantly scanning").
@@ -61,6 +62,7 @@ Return ONLY valid JSON, no markdown fence, no commentary. Include ONLY the keys 
   "age": "string",
   "coreTheme": "string",
   "speechAccent": "string",
+  "speechPattern": "string",
   "visualNotes": "string",
   "silhouetteNotes": "string",
   "postureNotes": "string",

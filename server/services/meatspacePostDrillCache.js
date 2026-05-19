@@ -5,9 +5,9 @@
  * background replenishment kicks in. Cache persists to disk.
  */
 
-import { readFile, writeFile, mkdir } from 'fs/promises';
-import { join, dirname } from 'path';
-import { PATHS, safeJSONParse } from '../lib/fileUtils.js';
+import { readFile } from 'fs/promises';
+import { join } from 'path';
+import { atomicWrite, ensureDir, PATHS, safeJSONParse } from '../lib/fileUtils.js';
 import { generateLlmDrill } from './meatspacePostLlm.js';
 
 const CACHE_FILE = join(PATHS.data, 'meatspace', 'post-drill-cache.json');
@@ -34,8 +34,8 @@ async function loadCache() {
 }
 
 async function saveCache() {
-  await mkdir(dirname(CACHE_FILE), { recursive: true });
-  await writeFile(CACHE_FILE, JSON.stringify(cache, null, 2));
+  await ensureDir(PATHS.meatspace);
+  await atomicWrite(CACHE_FILE, cache);
 }
 
 function debouncedSave() {

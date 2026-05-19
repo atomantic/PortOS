@@ -5,7 +5,7 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import { getActiveProvider, getProviderById } from './providers.js';
 import { spawn } from 'child_process';
-import { safeJSONParse } from '../lib/fileUtils.js';
+import { safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
 import { runPromptThroughProvider } from '../lib/promptRunner.js';
 
 const execAsync = promisify(exec);
@@ -38,14 +38,14 @@ async function gatherConfigContext(dirPath) {
   // Read package.json
   const pkgPath = join(dirPath, 'package.json');
   if (existsSync(pkgPath)) {
-    context.packageJson = await readFile(pkgPath, 'utf-8').catch(() => null);
+    context.packageJson = await tryReadFile(pkgPath);
   }
 
   // Read ecosystem.config
   for (const name of ['ecosystem.config.cjs', 'ecosystem.config.js']) {
     const path = join(dirPath, name);
     if (existsSync(path)) {
-      context.ecosystemConfig = await readFile(path, 'utf-8').catch(() => null);
+      context.ecosystemConfig = await tryReadFile(path);
       context.ecosystemPath = name;
       break;
     }
@@ -383,7 +383,7 @@ export async function applyStandardization(repoPath, plan, { skipBackup = false 
     const filePath = join(repoPath, stray.file);
     if (!existsSync(filePath)) continue;
 
-    const content = await readFile(filePath, 'utf-8').catch(() => null);
+    const content = await tryReadFile(filePath);
     if (!content) continue;
 
     // Remove the port line from .env files

@@ -17,6 +17,7 @@ const cosEvents = {
 vi.mock('./cosEvents.js', () => ({ cosEvents }));
 
 vi.mock('../lib/fileUtils.js', () => ({
+tryReadFile: vi.fn().mockResolvedValue(null),
   ensureDir: vi.fn(),
   atomicWrite: vi.fn().mockResolvedValue(undefined),
   PATHS: {

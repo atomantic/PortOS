@@ -20,6 +20,7 @@ vi.mock('../lib/fileUtils.js', async () => {
 });
 
 vi.mock('../lib/timezone.js', () => ({
+tryReadFile: vi.fn().mockResolvedValue(null),
   getUserTimezone: () => Promise.resolve('UTC'),
   todayInTimezone: () => '2026-04-17',
 }));

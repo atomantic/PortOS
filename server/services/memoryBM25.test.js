@@ -9,6 +9,7 @@ vi.mock('fs', () => ({
 }))
 
 vi.mock('../lib/fileUtils.js', () => ({
+tryReadFile: vi.fn().mockResolvedValue(null),
   ensureDir: vi.fn().mockResolvedValue(),
   PATHS: { memory: '/mock/data/memory' }
 }))

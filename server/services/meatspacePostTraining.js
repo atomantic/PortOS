@@ -5,10 +5,9 @@
  * Training mode: progressive difficulty, hints, immediate feedback.
  */
 
-import { writeFile } from 'fs/promises';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
-import { PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';
+import { atomicWrite, PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';
 
 const MEATSPACE_DIR = PATHS.meatspace;
 const TRAINING_LOG_FILE = join(MEATSPACE_DIR, 'post-training-log.json');
@@ -21,7 +20,7 @@ async function loadTrainingLog() {
 
 async function saveTrainingLog(data) {
   await ensureDir(MEATSPACE_DIR);
-  await writeFile(TRAINING_LOG_FILE, JSON.stringify(data, null, 2));
+  await atomicWrite(TRAINING_LOG_FILE, data);
 }
 
 /**

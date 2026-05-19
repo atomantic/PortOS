@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const fileStore = new Map();
 
 vi.mock('../../lib/fileUtils.js', () => ({
+tryReadFile: vi.fn().mockResolvedValue(null),
   PATHS: { data: '/mock/data' },
   ensureDir: vi.fn().mockResolvedValue(undefined),
   atomicWrite: vi.fn(async (path, data) => { fileStore.set(path, data); }),
@@ -126,7 +127,41 @@ describe('pipeline issues service', () => {
     for (const id of svc.STAGE_IDS) {
       expect(i.stages[id].status).toBe('empty');
       expect(i.stages[id].output).toBe('');
+      // Per-stage lock defaults to false so existing issues stay regenerable.
+      expect(i.stages[id].locked).toBe(false);
     }
+  });
+
+  describe('per-stage lock', () => {
+    it('round-trips locked:true through updateStage', async () => {
+      const i = await svc.createIssue({ seriesId: 'ser-1', title: 'L' });
+      const { stage } = await svc.updateStage(i.id, 'comicScript', { locked: true });
+      expect(stage.locked).toBe(true);
+    });
+
+    it('updateStage with non-boolean locked coerces back to false', async () => {
+      const i = await svc.createIssue({ seriesId: 'ser-1', title: 'L' });
+      await svc.updateStage(i.id, 'idea', { locked: true });
+      // Anything that isn't strictly `true` clears the lock — guards against
+      // a truthy-but-not-boolean payload silently locking the stage.
+      const after = await svc.updateStage(i.id, 'idea', { locked: 'yes' });
+      expect(after.stage.locked).toBe(false);
+    });
+
+    it('assertStageUnlocked throws ERR_STAGE_LOCKED when stage is locked', () => {
+      const issue = { stages: { idea: { locked: true } } };
+      expect(() => svc.assertStageUnlocked(issue, 'idea')).toThrow(/locked/);
+      try { svc.assertStageUnlocked(issue, 'idea'); } catch (err) {
+        expect(err.code).toBe(svc.ERR_STAGE_LOCKED);
+        expect(err.status).toBe(400);
+      }
+    });
+
+    it('assertStageUnlocked is a no-op when stage is unlocked or missing', () => {
+      expect(() => svc.assertStageUnlocked({ stages: { idea: { locked: false } } }, 'idea')).not.toThrow();
+      expect(() => svc.assertStageUnlocked({ stages: {} }, 'idea')).not.toThrow();
+      expect(() => svc.assertStageUnlocked(null, 'idea')).not.toThrow();
+    });
   });
 
   it('updateStage patches only the named stage', async () => {
@@ -167,6 +202,46 @@ describe('pipeline issues service', () => {
     const list1 = await svc.listIssues({ seriesId: 'ser-1' });
     expect(list1.map((i) => i.number)).toEqual([1, 2]);
     expect(list1.every((i) => i.seriesId === 'ser-1')).toBe(true);
+  });
+
+  describe('listIssues pagination', () => {
+    it('returns raw array when paginated is false (legacy default)', async () => {
+      await svc.createIssue({ seriesId: 'ser-1', title: 'A' });
+      await svc.createIssue({ seriesId: 'ser-1', title: 'B' });
+      const result = await svc.listIssues({ seriesId: 'ser-1' });
+      expect(Array.isArray(result)).toBe(true);
+      expect(result).toHaveLength(2);
+    });
+
+    it('returns paginated envelope when paginated:true', async () => {
+      await svc.createIssue({ seriesId: 'ser-1', title: 'A' });
+      await svc.createIssue({ seriesId: 'ser-1', title: 'B' });
+      await svc.createIssue({ seriesId: 'ser-1', title: 'C' });
+      const result = await svc.listIssues({ seriesId: 'ser-1', offset: 0, limit: 2, paginated: true });
+      expect(result.total).toBe(3);
+      expect(result.offset).toBe(0);
+      expect(result.limit).toBe(2);
+      expect(result.items).toHaveLength(2);
+      expect(result.items[0].title).toBe('A');
+      expect(result.items[1].title).toBe('B');
+    });
+
+    it('respects offset when paginated:true', async () => {
+      await svc.createIssue({ seriesId: 'ser-1', title: 'A' });
+      await svc.createIssue({ seriesId: 'ser-1', title: 'B' });
+      await svc.createIssue({ seriesId: 'ser-1', title: 'C' });
+      const result = await svc.listIssues({ seriesId: 'ser-1', offset: 2, limit: 10, paginated: true });
+      expect(result.total).toBe(3);
+      expect(result.items).toHaveLength(1);
+      expect(result.items[0].title).toBe('C');
+    });
+
+    it('offset beyond total returns empty items but correct total', async () => {
+      await svc.createIssue({ seriesId: 'ser-1', title: 'A' });
+      const result = await svc.listIssues({ seriesId: 'ser-1', offset: 100, limit: 10, paginated: true });
+      expect(result.total).toBe(1);
+      expect(result.items).toHaveLength(0);
+    });
   });
 
   describe('listRecentIssues', () => {
@@ -446,7 +521,7 @@ describe('pipeline issues service', () => {
       const i = await svc.createIssue({ seriesId: 'ser-1', title: 'P' });
       expect(i.stages.audio).toEqual({
         status: 'empty', input: '', output: '', lastRunId: null,
-        errorMessage: '', updatedAt: null, lines: [], music: null,
+        errorMessage: '', updatedAt: null, lines: [], music: null, locked: false,
       });
     });
 
@@ -589,6 +664,30 @@ describe('pipeline issues service', () => {
       await seasonsSvc.updateSeason(series.id, a.id, { locked: false });
       const result = await svc.bulkReassignSeason(series.id, a.id, b.id);
       expect(result.reassigned).toBe(3);
+    });
+  });
+
+  describe('concurrent write serialization', () => {
+    it('two concurrent writes do not clobber each other — both fields survive in final state', async () => {
+      // This is the key regression test for the queueIssueWrite tail.
+      // If the write queue is bypassed or broken, both calls read the same
+      // pre-write snapshot and the last one to land wins — exactly one of
+      // the two writes is silently dropped.
+      const issue = await svc.createIssue({ seriesId: 'ser-1', title: 'Concurrency target' });
+
+      // Fire two writes concurrently without awaiting individually.
+      // updateStage writes to `idea.output`; updateIssue writes to top-level `status`.
+      // A clobbering race would lose whichever write landed second (its pre-image
+      // read captured an empty idea.output or no status change).
+      await Promise.all([
+        svc.updateStage(issue.id, 'idea', { status: 'ready', output: 'beat sheet content' }),
+        svc.updateIssue(issue.id, { status: 'needs-review' }),
+      ]);
+
+      const final = await svc.getIssue(issue.id);
+      // Both mutations must survive — if either is missing, the write tail is broken.
+      expect(final.stages.idea.output).toBe('beat sheet content');
+      expect(final.status).toBe('needs-review');
     });
   });
 });

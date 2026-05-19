@@ -5,9 +5,10 @@
 // display, this module re-extracts the real assistant tail from the
 // matching output.txt and rewrites metadata.json in place.
 
-import { readFile, writeFile } from 'fs/promises';
+import { writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
+import { tryReadFile } from '../lib/fileUtils.js';
 import { extractCodexAssistantTail } from '../lib/codexAssistantExtract.js';
 
 // Any taskSummary above this size is almost certainly a transcript dump —
@@ -33,7 +34,7 @@ export async function repairCodexTaskSummary(agentDir, agent) {
   const outputFile = join(agentDir, 'output.txt');
   if (!existsSync(outputFile)) return null;
 
-  const fullOutput = await readFile(outputFile, 'utf-8').catch(() => null);
+  const fullOutput = await tryReadFile(outputFile);
   if (!fullOutput) return null;
 
   const repaired = extractCodexAssistantTail(fullOutput);
@@ -41,7 +42,7 @@ export async function repairCodexTaskSummary(agentDir, agent) {
   if (repaired === storedTask && !simplifyWonky) return null;
 
   const metaPath = join(agentDir, 'metadata.json');
-  const rawContent = await readFile(metaPath, 'utf-8').catch(() => null);
+  const rawContent = await tryReadFile(metaPath);
   if (!rawContent) return null;
   const raw = JSON.parse(rawContent);
   raw.metadata = { ...(raw.metadata || {}), taskSummary: repaired, simplifySummary: null };

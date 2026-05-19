@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useId } from 'react';
 import { Save, Download, ExternalLink, CheckCircle2, AlertCircle } from 'lucide-react';
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
@@ -11,6 +11,7 @@ import {
 import { formatBytes } from '../../utils/formatters';
 
 export function MortalLoomTab() {
+  const icloudPathId = useId();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [importing, setImporting] = useState(false);
@@ -115,8 +116,9 @@ export function MortalLoomTab() {
         </div>
 
         <div className="space-y-1">
-          <label className="block text-sm text-gray-400">iCloud file path</label>
+          <label htmlFor={icloudPathId} className="block text-sm text-gray-400">iCloud file path</label>
           <input
+            id={icloudPathId}
             type="text"
             value={path}
             onChange={e => setPath(e.target.value)}

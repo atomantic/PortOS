@@ -1,11 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Mock dependencies before importing the module
-vi.mock('fs/promises', () => ({
-  readFile: vi.fn()
-}));
-
 vi.mock('../lib/fileUtils.js', () => ({
+  tryReadFile: vi.fn(),
   readJSONFile: vi.fn(),
   PATHS: {
     root: '/mock',
@@ -14,8 +11,8 @@ vi.mock('../lib/fileUtils.js', () => ({
   }
 }));
 
-import { readFile } from 'fs/promises';
-import { readJSONFile } from '../lib/fileUtils.js';
+import { tryReadFile, readJSONFile } from '../lib/fileUtils.js';
+const readFile = tryReadFile;
 import {
   getGoalProgress,
   getGoalProgressSummary,
@@ -78,7 +75,7 @@ describe('goalProgress.js', () => {
     });
 
     it('should return empty array when file does not exist', async () => {
-      readFile.mockRejectedValue(new Error('ENOENT'));
+      readFile.mockResolvedValue(null);
 
       const result = await parseGoalsFile();
 

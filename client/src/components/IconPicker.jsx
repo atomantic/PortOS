@@ -6,9 +6,10 @@ export default function IconPicker({ value, onChange }) {
 
   return (
     <div className="relative">
-      <label className="block text-sm text-gray-400 mb-1">Icon</label>
+      <span className="block text-sm text-gray-400 mb-1">Icon</span>
       <button
         type="button"
+        aria-label="Icon picker"
         onClick={() => setIsOpen(!isOpen)}
         className="flex items-center gap-3 w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white hover:border-port-accent/50 focus:border-port-accent focus:outline-hidden transition-colors"
       >

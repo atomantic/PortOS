@@ -30,7 +30,8 @@ vi.mock('../lib/fileUtils.js', async () => {
 
 // These mocks satisfy the module's top-level side-effect imports that are
 // irrelevant to syncSkillTemplatesFromSample — avoids loading PM2, etc.
-vi.mock('./cosEvents.js', () => ({ cosEvents: { emit: vi.fn() } }))
+vi.mock('./cosEvents.js', () => ({
+tryReadFile: vi.fn().mockResolvedValue(null), cosEvents: { emit: vi.fn() } }))
 vi.mock('./autobiography.js', () => ({ checkAndPrompt: vi.fn() }))
 vi.mock('./goalCheckIn.js', () => ({ runGoalCheckIn: vi.fn() }))
 vi.mock('./eventScheduler.js', () => ({ parseCronToNextRun: vi.fn() }))

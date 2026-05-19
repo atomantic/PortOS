@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const fileStore = new Map();
 
 vi.mock('../../lib/fileUtils.js', () => ({
+tryReadFile: vi.fn().mockResolvedValue(null),
   PATHS: { data: '/mock/data' },
   ensureDir: vi.fn().mockResolvedValue(undefined),
   atomicWrite: vi.fn(async (path, data) => { fileStore.set(path, data); }),
@@ -55,6 +56,7 @@ vi.mock('../promptService.js', () => ({
 const issuesSvc = await import('./issues.js');
 const seriesSvc = await import('./series.js');
 const seasonsSvc = await import('./seasons.js');
+const universeSvc = await import('../universeBuilder.js');
 const textStages = await import('./textStages.js');
 
 // Strip the `RENDERED:<stage>:` prefix that the mocked buildPrompt prepends
@@ -122,6 +124,43 @@ describe('pipeline text stage generator', () => {
   it('rejects unsupported stage ids', async () => {
     const { issue } = await seed();
     await expect(textStages.generateStage(issue.id, 'comicPages')).rejects.toThrow(/unsupported stageId/);
+  });
+
+  it('refuses regeneration when the per-stage lock is set, and leaves status untouched', async () => {
+    const { issue } = await seed();
+    await issuesSvc.updateStage(issue.id, 'idea', { locked: true, status: 'ready', output: 'final beats' });
+    await expect(textStages.generateStage(issue.id, 'idea'))
+      .rejects.toMatchObject({ code: issuesSvc.ERR_STAGE_LOCKED });
+    // No status drift to 'generating' — the guard runs before the updateStage call.
+    const after = await issuesSvc.getIssue(issue.id);
+    expect(after.stages.idea.status).toBe('ready');
+    expect(after.stages.idea.output).toBe('final beats');
+    expect(after.stages.idea.locked).toBe(true);
+  });
+
+  it('prompt context carries worldEntitiesSummary fallback when series has no universe link', async () => {
+    const { issue } = await seed();
+    await textStages.generateStage(issue.id, 'idea');
+    const ctx = ctxFromCall(llmCalls[0]);
+    expect(ctx.worldEntitiesSummary).toBe('(none — series has no linked Universe Builder world)');
+  });
+
+  it('prompt context carries a rendered worldEntitiesSummary when series links a universe', async () => {
+    const { series, issue } = await seed();
+    const world = await universeSvc.createUniverse({ name: 'Salt Verse' });
+    await universeSvc.updateUniverse(world.id, {
+      characters: [
+        { name: 'Mira', role: 'surveyor', physicalDescription: 'broad-shouldered' },
+        { name: 'Jonas', role: 'foreman', personality: 'cunning' },
+      ],
+      places: [{ name: 'The Foundry', description: 'industrial district' }],
+    });
+    await seriesSvc.updateSeries(series.id, { universeId: world.id });
+    await textStages.generateStage(issue.id, 'idea');
+    const ctx = ctxFromCall(llmCalls[0]);
+    expect(ctx.worldEntitiesSummary).toContain('Mira (surveyor — broad-shouldered)');
+    expect(ctx.worldEntitiesSummary).toContain('Jonas (foreman — cunning)');
+    expect(ctx.worldEntitiesSummary).toContain('The Foundry (industrial district)');
   });
 
   it('prompt context carries lengthTargets from a named non-default profile (extended)', async () => {

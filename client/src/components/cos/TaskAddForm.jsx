@@ -341,7 +341,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
                     <button
                       onClick={(e) => deleteTemplate(template.id, e)}
                       className="flex md:hidden md:group-hover:flex absolute -top-1 -right-1 w-4 h-4 bg-port-error rounded-full items-center justify-center"
-                      title="Delete template"
+                      aria-label="Delete template"
                     >
                       <X size={10} />
                     </button>

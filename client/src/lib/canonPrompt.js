@@ -140,6 +140,27 @@ export function richCanonDescriptorFragments(kind, entry) {
 }
 
 /**
+ * Render `[{ prefix?, value }]` fragments as an array of display strings.
+ * Mirror of server `mapCanonDescriptorFragments`. See server docstring.
+ */
+export function mapCanonDescriptorFragments(fragments, { trailingPeriod = false } = {}) {
+  if (!Array.isArray(fragments)) return [];
+  return fragments.map((f) => {
+    if (!f) return '';
+    const body = f.prefix ? `${f.prefix}: ${f.value}` : (f.value ?? '');
+    return f.prefix && trailingPeriod ? `${body}.` : body;
+  });
+}
+
+/**
+ * Flatten `[{ prefix?, value }]` fragments to a single sentence-style string.
+ * Mirror of server `flattenCanonDescriptorFragments`. See server docstring.
+ */
+export function flattenCanonDescriptorFragments(fragments, { separator = '. ', trailingPeriod = false } = {}) {
+  return mapCanonDescriptorFragments(fragments, { trailingPeriod }).join(separator);
+}
+
+/**
  * Flatten SHORT fragments into a sentence-style descriptor string.
  * Matches the legacy `KINDS[].descFor` output:
  *   characters: "physicalDescription" else "description"
@@ -147,9 +168,7 @@ export function richCanonDescriptorFragments(kind, entry) {
  *   objects:    "description" else "significance"
  */
 export function descriptorForCanonEntry(kind, entry) {
-  return shortCanonDescriptorFragments(kind, entry)
-    .map((f) => (f.prefix ? `${f.prefix}: ${f.value}` : f.value))
-    .join('. ');
+  return flattenCanonDescriptorFragments(shortCanonDescriptorFragments(kind, entry));
 }
 
 /**

@@ -6,6 +6,7 @@ vi.mock('child_process', () => ({
 }));
 
 vi.mock('../lib/fileUtils.js', () => ({
+tryReadFile: vi.fn().mockResolvedValue(null),
   PATHS: { root: '/mock', data: '/mock/data' }
 }));
 

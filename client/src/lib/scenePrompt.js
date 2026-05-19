@@ -1,7 +1,7 @@
 // Mirror of server/lib/scenePrompt.js — keep byte-for-byte in sync.
 // The shape-invariant tests in server/lib/scenePrompt.test.js are the contract.
 
-import { richCanonDescriptorFragments } from './canonPrompt.js';
+import { mapCanonDescriptorFragments, richCanonDescriptorFragments } from './canonPrompt.js';
 
 const PROMPT_MAX = 1900;
 
@@ -101,8 +101,7 @@ export function buildScenePrompt(workTitle, scene, matchedCharacters, worldStyle
     : '';
   const placeMetaFrag = [intExtPart, todPart].filter(Boolean).join(', ');
   const baselineFrags = matchedPlace
-    ? richCanonDescriptorFragments('place', matchedPlace)
-      .map((f) => (f.prefix ? `${f.prefix}: ${f.value}.` : f.value))
+    ? mapCanonDescriptorFragments(richCanonDescriptorFragments('place', matchedPlace), { trailingPeriod: true })
     : [];
   const placeFrags = matchedPlace ? [
     placeMetaFrag ? `${placeMetaFrag}.` : '',

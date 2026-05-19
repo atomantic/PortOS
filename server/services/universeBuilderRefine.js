@@ -12,7 +12,7 @@
  */
 
 import { ServerError } from "../lib/errorHandler.js";
-import { resolveProviderAndModel, runPromptThroughProvider } from "../lib/promptRunner.js";
+import { assertProvider, resolveProviderAndModel, runPromptThroughProvider } from "../lib/promptRunner.js";
 import {
   renderCategoriesForPrompt as renderCategoriesShared,
   renderCompositesForPrompt as renderCompositesShared,
@@ -409,12 +409,11 @@ export async function refineWorldPrompts({
   }
 
   const { provider, selectedModel } = await resolveProviderAndModel({ providerId, model });
-  if (!provider) {
-    throw new ServerError("No AI provider available for universe refinement", {
-      status: 400,
-      code: "NO_PROVIDER",
-    });
-  }
+  assertProvider(provider, {
+    message: "No AI provider available for universe refinement",
+    code: "NO_PROVIDER",
+    status: 400,
+  });
   if (provider.enabled === false) {
     throw new ServerError(
       `Provider "${provider.name || provider.id}" is disabled — enable it in Settings → Providers first`,

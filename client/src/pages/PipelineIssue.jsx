@@ -10,7 +10,7 @@ import { useEffect, useState, useMemo } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, Sparkles, Loader2, X, Lightbulb, BookOpen, FileText, Film as FilmIcon,
-  LayoutGrid, Image as ImageIcon, Clapperboard, Users, Settings, Mic, Lock,
+  LayoutGrid, Image as ImageIcon, Clapperboard, Users, Settings, Mic, Lock, Unlock,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import Modal from '../components/ui/Modal';
@@ -21,6 +21,7 @@ import {
   PIPELINE_STAGES, PIPELINE_TAB_STAGES, PIPELINE_STAGE_LABELS,
 } from '../services/api';
 import { usePipelineAutoRunProgress } from '../hooks/usePipelineAutoRunProgress';
+import { useLockToggle } from '../hooks/useLockToggle';
 import IdeaStage from '../components/pipeline/stages/IdeaStage';
 import ProseStage from '../components/pipeline/stages/ProseStage';
 import NounsStage from '../components/pipeline/stages/NounsStage';
@@ -72,6 +73,12 @@ const STATUS_DOT = {
   edited: 'bg-port-warning',
   'needs-review': 'bg-port-warning',
   error: 'bg-port-error',
+};
+
+const lockStageIdsForTab = (id) => {
+  if (id === 'nouns') return [];
+  if (id === 'comicScript') return ['comicScript', 'comicPages'];
+  return [id];
 };
 
 export default function PipelineIssue() {
@@ -155,7 +162,7 @@ export default function PipelineIssue() {
   // routes lengthProfile / pageTarget / minutesTarget straight onto the record.
   const handleLengthChange = async (patch) => {
     setLengthProfileSaving(true);
-    updatePipelineIssue(issueId, patch)
+    updatePipelineIssue(issueId, patch, { silent: true })
       .then((updated) => { if (updated) setIssue(updated); })
       .catch((err) => { toast.error(err.message || 'Save failed'); })
       .finally(() => setLengthProfileSaving(false));
@@ -168,11 +175,36 @@ export default function PipelineIssue() {
     setGenConfigSaving(true);
     const updated = await updatePipelineIssue(issueId, {
       stages: { [stageId]: { genConfig: next } },
-    }).catch((err) => {
+    }, { silent: true }).catch((err) => {
       toast.error(err.message || 'Save failed');
       return null;
     }).finally(() => setGenConfigSaving(false));
     if (updated) setIssue(updated);
+  };
+
+  const activeLockStageIds = useMemo(() => lockStageIdsForTab(stageId), [stageId]);
+  const activeStageLocked = activeLockStageIds.some((id) => issue?.stages?.[id]?.locked === true);
+  const canLockActiveStage = activeLockStageIds.length > 0;
+
+  // Toggle the per-stage lock for the currently-active tab. Routes through
+  // the generic issue PATCH path so the issue sanitizer + write queue handle
+  // the merge; the server enforces the lock semantics at the regenerate
+  // boundary (textStages.generateStage, visualStages.enqueueXxx, etc.).
+  // The merged Comic tab owns both text (`comicScript`) and render/page
+  // artifacts (`comicPages`), so it toggles both persisted stages together.
+  const { busy: stageLockSaving, toggle: toggleStageLock } = useLockToggle({
+    patchFn: (next) => {
+      const stages = Object.fromEntries(activeLockStageIds.map((id) => [id, { locked: next }]));
+      return updatePipelineIssue(issueId, { stages }, { silent: true });
+    },
+    onSuccess: (updated) => setIssue(updated),
+    lockedMessage: `${PIPELINE_STAGE_LABELS[stageId]} locked — regeneration is now blocked`,
+    unlockedMessage: `${PIPELINE_STAGE_LABELS[stageId]} unlocked`,
+    errorMessage: `${PIPELINE_STAGE_LABELS[stageId]} lock update failed`,
+  });
+  const handleStageLockToggle = () => {
+    if (!issue || !canLockActiveStage) return;
+    toggleStageLock(activeStageLocked);
   };
 
   const handleStageUpdate = (id, updatedStage, updatedIssue) => {
@@ -191,13 +223,17 @@ export default function PipelineIssue() {
   // server-side, so the user sees WHY the buttons inside each stage panel
   // refuse to fire. The lock indicator replaces the status dot when locked
   // because lock > status (a locked stage's status is frozen by definition).
+  // Per-stage locks (issue.stages.{id}.locked) layer on top — they refuse
+  // regeneration of one stage while sibling stages remain runnable. The
+  // pill trailing element prefers per-stage lock first, then the arc/season-
+  // wide lock, then the status dot.
   const parentSeason = useMemo(() => {
     if (!series?.seasons || !issue?.seasonId) return null;
     return series.seasons.find((s) => s.id === issue.seasonId) || null;
   }, [series?.seasons, issue?.seasonId]);
   const seasonLocked = parentSeason?.locked === true;
   const arcLocked = series?.locked?.arc === true;
-  const lockHint = seasonLocked
+  const ambientLockHint = seasonLocked
     ? `Volume ${parentSeason.number || ''} is locked — unlock it on the Arc Canvas to enable regeneration`
     : arcLocked
       ? 'Arc is locked — unlock it on the Arc Canvas to enable regeneration'
@@ -211,8 +247,13 @@ export default function PipelineIssue() {
     .filter((id) => id !== 'audio' || series?.targetFormat !== 'comic')
     .map((id) => {
       const status = issue?.stages?.[id]?.status || 'empty';
-      const trailing = lockHint
-        ? <Lock size={11} className="text-port-warning" aria-label={lockHint} />
+      const tabLockStageIds = lockStageIdsForTab(id);
+      const stageLocked = tabLockStageIds.some((lockId) => issue?.stages?.[lockId]?.locked === true);
+      const tabLockHint = stageLocked
+        ? `${PIPELINE_STAGE_LABELS[id]} stage is locked — unlock it to regenerate`
+        : ambientLockHint;
+      const trailing = tabLockHint
+        ? <Lock size={11} className="text-port-warning" aria-label={tabLockHint} />
         : <span className={`w-1.5 h-1.5 rounded-full ${STATUS_DOT[status] || STATUS_DOT.empty}`} aria-hidden="true" />;
       return {
         id,
@@ -220,7 +261,13 @@ export default function PipelineIssue() {
         icon: STAGE_ICONS[id],
         trailing,
       };
-    }), [issue, series?.targetFormat, lockHint]);
+    }), [issue, series?.targetFormat, ambientLockHint]);
+
+  // Active-tab specific banner: prefer per-stage lock when the current tab is
+  // locked, fall back to the arc/season-wide message otherwise.
+  const lockHint = activeStageLocked
+    ? `${PIPELINE_STAGE_LABELS[stageId]} stage is locked — unlock it to regenerate`
+    : ambientLockHint;
 
   if (loading) return <div className="p-6 text-gray-500 text-sm">Loading issue…</div>;
   if (!issue) return null;
@@ -303,6 +350,27 @@ export default function PipelineIssue() {
                 <Settings size={16} />
               </button>
             )}
+            {canLockActiveStage ? (
+              <button
+                type="button"
+                onClick={handleStageLockToggle}
+                disabled={stageLockSaving || autoRunStarting || autoRunActive}
+                aria-pressed={activeStageLocked}
+                title={activeStageLocked
+                  ? `Unlock ${PIPELINE_STAGE_LABELS[stageId]} — allows regeneration again`
+                  : `Lock ${PIPELINE_STAGE_LABELS[stageId]} — blocks regeneration of this stage; siblings stay runnable`}
+                aria-label={activeStageLocked ? `Unlock ${PIPELINE_STAGE_LABELS[stageId]}` : `Lock ${PIPELINE_STAGE_LABELS[stageId]}`}
+                className={`inline-flex items-center justify-center p-2 rounded-lg border text-sm transition-colors disabled:opacity-40 ${
+                  activeStageLocked
+                    ? 'bg-port-warning/10 text-port-warning border-port-warning/40 hover:bg-port-warning/20'
+                    : 'bg-port-card text-gray-300 border-port-border hover:text-white hover:border-port-accent/40'
+                }`}
+              >
+                {stageLockSaving
+                  ? <Loader2 size={16} className="animate-spin" />
+                  : (activeStageLocked ? <Lock size={16} /> : <Unlock size={16} />)}
+              </button>
+            ) : null}
           </div>
         </div>
 

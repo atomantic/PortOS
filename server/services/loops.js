@@ -13,8 +13,8 @@ import { join } from 'path';
 import { PATHS, ensureDir } from '../lib/fileUtils.js';
 import { randomUUID } from 'crypto';
 import { createRun } from './runner.js';
-import { runPromptThroughProvider } from '../lib/promptRunner.js';
-import { getProviderById, getAllProviders, getActiveProvider } from './providers.js';
+import { resolveProviderAndModel, runPromptThroughProvider } from '../lib/promptRunner.js';
+import { getAllProviders, getActiveProvider } from './providers.js';
 
 export const loopEvents = new EventEmitter();
 
@@ -61,13 +61,8 @@ async function executeIteration(loop) {
 
   loopEvents.emit('iteration:start', { id, iteration: iterationNum, timestamp: Date.now() });
 
-  let provider;
-  if (loop.providerId) {
-    provider = await getProviderById(loop.providerId).catch(() => null);
-  }
-  if (!provider) {
-    provider = await getActiveProvider().catch(() => null);
-  }
+  const { provider } = await resolveProviderAndModel({ providerId: loop.providerId })
+    .catch(() => ({ provider: null }));
   if (!provider) {
     const msg = 'No AI provider available';
     loopEvents.emit('iteration:error', { id, iteration: iterationNum, error: msg, timestamp: Date.now() });

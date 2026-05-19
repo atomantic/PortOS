@@ -164,6 +164,38 @@ export function richCanonDescriptorFragments(kind, entry) {
 }
 
 /**
+ * Render `[{ prefix?, value }]` fragments as an array of display strings.
+ *
+ * When `trailingPeriod` is true, each prefixed fragment is rendered as
+ * `${prefix}: ${value}.` so that a downstream caller can later join the array
+ * with a single space and still preserve "Palette: red. Era: Victorian."
+ * sentence boundaries (see `buildScenePrompt`'s budget-truncation join).
+ * Bare-value fragments never get a trailing period — the caller controls
+ * sentence punctuation when no prefix is involved.
+ */
+export function mapCanonDescriptorFragments(fragments, { trailingPeriod = false } = {}) {
+  if (!Array.isArray(fragments)) return [];
+  return fragments.map((f) => {
+    if (!f) return '';
+    const body = f.prefix ? `${f.prefix}: ${f.value}` : (f.value ?? '');
+    return f.prefix && trailingPeriod ? `${body}.` : body;
+  });
+}
+
+/**
+ * Flatten `[{ prefix?, value }]` fragments to a single sentence-style string.
+ *
+ * Shared by `descriptorForCanonEntry` (SHORT spec, `. ` separator),
+ * `composeComicPagePrompt` (RICH spec, `. ` separator), and
+ * `synthesizeCanonPrompt` (RICH spec, `. ` separator). The 4-arg
+ * `mapCanonDescriptorFragments` companion supports the scene-prompt budget
+ * truncator that needs the array form (`buildScenePrompt`).
+ */
+export function flattenCanonDescriptorFragments(fragments, { separator = '. ', trailingPeriod = false } = {}) {
+  return mapCanonDescriptorFragments(fragments, { trailingPeriod }).join(separator);
+}
+
+/**
  * Flatten SHORT fragments into a sentence-style descriptor string.
  * Matches the legacy `KINDS[].descFor` output:
  *   characters: "physicalDescription" else "description"
@@ -171,9 +203,7 @@ export function richCanonDescriptorFragments(kind, entry) {
  *   objects:    "description" else "significance"
  */
 export function descriptorForCanonEntry(kind, entry) {
-  return shortCanonDescriptorFragments(kind, entry)
-    .map((f) => (f.prefix ? `${f.prefix}: ${f.value}` : f.value))
-    .join('. ');
+  return flattenCanonDescriptorFragments(shortCanonDescriptorFragments(kind, entry));
 }
 
 /**

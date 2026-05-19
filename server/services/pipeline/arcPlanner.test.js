@@ -4,6 +4,7 @@ const fileStore = new Map();
 let stageRunnerSpy;
 
 vi.mock('../../lib/fileUtils.js', () => ({
+tryReadFile: vi.fn().mockResolvedValue(null),
   PATHS: { data: '/mock/data' },
   ensureDir: vi.fn().mockResolvedValue(undefined),
   atomicWrite: vi.fn(async (path, data) => { fileStore.set(path, data); }),
@@ -792,6 +793,226 @@ describe('arcPlanner — commitSeasonsWithRemap', () => {
     expect(out.reassignedIssueCount).toBe(1);
     const finalI1 = await issuesSvc.getIssue(i1.id);
     expect(finalI1.seasonId).toBeNull();
+  });
+
+  it('preserves locked arc fields when commit rewrites the arc', async () => {
+    const s = await setupSeries({
+      arc: {
+        logline: 'KEEP THIS LOGLINE',
+        summary: 'rewrite the summary',
+        themes: ['keep', 'these'],
+        protagonistArc: 'rewrite the pa',
+        shape: 'rags-to-riches',
+        status: 'draft',
+      },
+      locked: { arcFields: { logline: true, themes: true } },
+    });
+    const cur = await seriesSvc.getSeries(s.id);
+    const out = await planner.commitSeasonsWithRemap(cur, {
+      arc: {
+        logline: 'NEW LOGLINE (should be ignored)',
+        summary: 'a fresh summary',
+        themes: ['fresh', 'replaced'],
+        protagonistArc: 'a fresh pa',
+        shape: 'icarus',
+        status: 'draft',
+      },
+      seasons: [],
+    });
+    // Locked fields preserved verbatim from the existing arc.
+    expect(out.series.arc.logline).toBe('KEEP THIS LOGLINE');
+    expect(out.series.arc.themes).toEqual(['keep', 'these']);
+    // Unlocked fields took the new value.
+    expect(out.series.arc.summary).toBe('a fresh summary');
+    expect(out.series.arc.protagonistArc).toBe('a fresh pa');
+    expect(out.series.arc.shape).toBe('icarus');
+  });
+
+  it('honors arc field locks toggled after the caller snapshot was read', async () => {
+    const s = await setupSeries({
+      arc: {
+        logline: 'original logline',
+        summary: 'original summary',
+        themes: [],
+        protagonistArc: '',
+        shape: null,
+        status: 'draft',
+      },
+    });
+    const stale = await seriesSvc.getSeries(s.id);
+    await seriesSvc.updateSeries(s.id, {
+      arc: { ...stale.arc, logline: 'latest locked logline' },
+      locked: { arcFields: { logline: true } },
+    });
+    const out = await planner.commitSeasonsWithRemap(stale, {
+      arc: {
+        ...stale.arc,
+        logline: 'incoming overwrite',
+        summary: 'incoming summary',
+      },
+      seasons: [],
+    });
+    expect(out.series.arc.logline).toBe('latest locked logline');
+    expect(out.series.arc.summary).toBe('incoming summary');
+  });
+});
+
+describe('arcPlanner — mergeSeasonsWithLocks', () => {
+  it('replaces an LLM-proposed season with the existing locked record when ids match', () => {
+    const current = [
+      { id: 'sea-a', number: 1, title: 'Locked Title', logline: 'locked log', locked: true },
+      { id: 'sea-b', number: 2, title: 'Unlocked', logline: 'old log', locked: false },
+    ];
+    const next = [
+      { id: 'sea-a', number: 1, title: 'LLM rewrite', logline: 'LLM log' },
+      { id: 'sea-b', number: 2, title: 'Unlocked rewritten', logline: 'new log' },
+    ];
+    const merged = planner.__testing.mergeSeasonsWithLocks(current, next);
+    expect(merged[0]).toBe(current[0]);
+    expect(merged[0].title).toBe('Locked Title');
+    expect(merged[1].title).toBe('Unlocked rewritten');
+  });
+
+  it('re-inserts a locked season that the LLM dropped from the new shape', () => {
+    const current = [
+      { id: 'sea-a', number: 1, title: 'Drop me', locked: true },
+      { id: 'sea-b', number: 2, title: 'Keep me', locked: false },
+    ];
+    const next = [
+      { id: 'sea-b', number: 2, title: 'Keep me' },
+    ];
+    const merged = planner.__testing.mergeSeasonsWithLocks(current, next);
+    expect(merged).toHaveLength(2);
+    expect(merged.find((s) => s.id === 'sea-a')).toBe(current[0]);
+  });
+
+  it('returns next unchanged when no current season is locked', () => {
+    const current = [{ id: 'sea-a', number: 1, locked: false }];
+    const next = [{ id: 'sea-a', number: 1, title: 'rewrite' }];
+    expect(planner.__testing.mergeSeasonsWithLocks(current, next)).toBe(next);
+  });
+
+  it('returns next unchanged when currentSeasons is not an array', () => {
+    const next = [{ id: 'sea-a', number: 1 }];
+    expect(planner.__testing.mergeSeasonsWithLocks(undefined, next)).toBe(next);
+    expect(planner.__testing.mergeSeasonsWithLocks(null, next)).toBe(next);
+  });
+
+  it('returns nextSeasons untouched when nextSeasons is not an array', () => {
+    expect(planner.__testing.mergeSeasonsWithLocks([{ id: 'a', locked: true }], null)).toBeNull();
+    expect(planner.__testing.mergeSeasonsWithLocks([{ id: 'a', locked: true }], undefined)).toBeUndefined();
+  });
+});
+
+describe('arcPlanner — commitSeasonsWithRemap (season locks)', () => {
+  beforeEach(() => {
+    fileStore.clear();
+    uuidCounter = 0;
+    stageRunnerSpy = undefined;
+  });
+
+  it('preserves a locked season verbatim when the LLM tries to rewrite its content', async () => {
+    const s = await setupSeries();
+    const s1 = await seasonsSvc.createSeason(s.id, {
+      title: 'Locked Title',
+      logline: 'locked logline',
+      synopsis: 'locked synopsis',
+      episodeCountTarget: 3,
+      number: 1,
+    });
+    await seasonsSvc.updateSeason(s.id, s1.id, { locked: true });
+    const cur = await seriesSvc.getSeries(s.id);
+    const out = await planner.commitSeasonsWithRemap(cur, {
+      arc: { logline: 'L', summary: '', themes: [], protagonistArc: '', shape: null, status: 'draft' },
+      seasons: [
+        // LLM tries to rewrite the locked season's content under the same id.
+        { id: s1.id, number: 1, title: 'LLM rewrite', logline: 'LLM logline', synopsis: 'LLM synopsis', endingHook: '', episodeCountTarget: 9, themes: [] },
+      ],
+    });
+    const persisted = out.series.seasons.find((x) => x.id === s1.id);
+    expect(persisted.title).toBe('Locked Title');
+    expect(persisted.logline).toBe('locked logline');
+    expect(persisted.synopsis).toBe('locked synopsis');
+    expect(persisted.episodeCountTarget).toBe(3);
+    expect(persisted.locked).toBe(true);
+  });
+
+  it('re-inserts a locked season the LLM dropped, with no issue reassignment', async () => {
+    const s = await setupSeries();
+    const s1 = await seasonsSvc.createSeason(s.id, { title: 'Locked', episodeCountTarget: 3, number: 1 });
+    await seasonsSvc.updateSeason(s.id, s1.id, { locked: true });
+    const i1 = await issuesSvc.createIssue({ seriesId: s.id, seasonId: s1.id, title: 'Pilot' });
+    const cur = await seriesSvc.getSeries(s.id);
+    const out = await planner.commitSeasonsWithRemap(cur, {
+      arc: { logline: 'L', summary: '', themes: [], protagonistArc: '', shape: null, status: 'draft' },
+      // LLM proposed dropping the locked season entirely.
+      seasons: [],
+    });
+    expect(out.series.seasons.map((x) => x.id)).toContain(s1.id);
+    expect(out.reassignedIssueCount).toBe(0);
+    const finalI1 = await issuesSvc.getIssue(i1.id);
+    expect(finalI1.seasonId).toBe(s1.id);
+  });
+
+  it('still rewrites unlocked sibling seasons while preserving the locked one', async () => {
+    const s = await setupSeries();
+    const locked = await seasonsSvc.createSeason(s.id, { title: 'Frozen', episodeCountTarget: 4, number: 1 });
+    await seasonsSvc.updateSeason(s.id, locked.id, { locked: true });
+    const unlocked = await seasonsSvc.createSeason(s.id, { title: 'Editable', episodeCountTarget: 4, number: 2 });
+    const cur = await seriesSvc.getSeries(s.id);
+    const out = await planner.commitSeasonsWithRemap(cur, {
+      arc: { logline: 'L', summary: '', themes: [], protagonistArc: '', shape: null, status: 'draft' },
+      seasons: [
+        { id: locked.id, number: 1, title: 'LLM rewrite of frozen', logline: '', synopsis: '', endingHook: '', episodeCountTarget: 1, themes: [] },
+        { id: unlocked.id, number: 2, title: 'Editable v2', logline: 'updated', synopsis: '', endingHook: '', episodeCountTarget: 5, themes: [] },
+      ],
+    });
+    const frozenAfter = out.series.seasons.find((x) => x.id === locked.id);
+    const editableAfter = out.series.seasons.find((x) => x.id === unlocked.id);
+    expect(frozenAfter.title).toBe('Frozen');
+    expect(frozenAfter.locked).toBe(true);
+    expect(editableAfter.title).toBe('Editable v2');
+    expect(editableAfter.episodeCountTarget).toBe(5);
+  });
+});
+
+describe('arcPlanner — mergeArcWithLocks', () => {
+  it('replaces locked fields with the current arc values', () => {
+    const current = { logline: 'a', summary: 'b', themes: ['t1'], protagonistArc: 'c', shape: 's1' };
+    const next = { logline: 'A', summary: 'B', themes: ['t2'], protagonistArc: 'C', shape: 's2' };
+    const merged = planner.__testing.mergeArcWithLocks(current, next, { logline: true, themes: true });
+    expect(merged.logline).toBe('a');
+    expect(merged.themes).toEqual(['t1']);
+    expect(merged.summary).toBe('B');
+    expect(merged.shape).toBe('s2');
+  });
+
+  it('returns next unchanged when lockedFields is empty / absent', () => {
+    const current = { logline: 'a' };
+    const next = { logline: 'A' };
+    expect(planner.__testing.mergeArcWithLocks(current, next, {})).toEqual({ logline: 'A' });
+    expect(planner.__testing.mergeArcWithLocks(current, next, null)).toEqual({ logline: 'A' });
+    expect(planner.__testing.mergeArcWithLocks(current, next, undefined)).toEqual({ logline: 'A' });
+  });
+
+  it('passes next through when there is no current arc to preserve from', () => {
+    const next = { logline: 'A' };
+    expect(planner.__testing.mergeArcWithLocks(null, next, { logline: true })).toEqual({ logline: 'A' });
+  });
+
+  it('returns next when next is null/undefined (no-op)', () => {
+    expect(planner.__testing.mergeArcWithLocks({ logline: 'a' }, null, { logline: true })).toBeNull();
+    expect(planner.__testing.mergeArcWithLocks({ logline: 'a' }, undefined, { logline: true })).toBeUndefined();
+  });
+
+  it('ignores unknown lock keys (only ARC_LOCKABLE_FIELDS are honored)', () => {
+    const current = { logline: 'a', summary: 'b' };
+    const next = { logline: 'A', summary: 'B' };
+    const merged = planner.__testing.mergeArcWithLocks(current, next, { logline: true, bogusKey: true });
+    expect(merged.logline).toBe('a');
+    expect(merged.summary).toBe('B');
+    // bogusKey didn't survive into the merged shape.
+    expect(merged.bogusKey).toBeUndefined();
   });
 });
 

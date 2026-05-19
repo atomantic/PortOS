@@ -40,6 +40,7 @@ vi.mock('../lib/digitalTwinValidation.js', () => ({
 }));
 
 vi.mock('../lib/fileUtils.js', () => ({
+tryReadFile: vi.fn().mockResolvedValue(null),
   ensureDir: vi.fn(),
   safeJSONParse: vi.fn((str, defaultValue) => {
     if (!str || !str.trim()) return defaultValue;

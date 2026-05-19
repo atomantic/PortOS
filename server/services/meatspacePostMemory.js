@@ -5,10 +5,9 @@
  * Built-in content: Tom Lehrer's "The Elements" song.
  */
 
-import { writeFile } from 'fs/promises';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
-import { PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';
+import { atomicWrite, PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';
 
 const MEATSPACE_DIR = PATHS.meatspace;
 const MEMORY_ITEMS_FILE = join(MEATSPACE_DIR, 'post-memory-items.json');
@@ -161,7 +160,7 @@ async function loadMemoryItems() {
 
 async function saveMemoryItems(items) {
   await ensureDir(MEATSPACE_DIR);
-  await writeFile(MEMORY_ITEMS_FILE, JSON.stringify({ items }, null, 2));
+  await atomicWrite(MEMORY_ITEMS_FILE, { items });
 }
 
 async function loadTrainingLog() {
@@ -170,7 +169,7 @@ async function loadTrainingLog() {
 
 async function saveTrainingLog(log) {
   await ensureDir(MEATSPACE_DIR);
-  await writeFile(TRAINING_LOG_FILE, JSON.stringify(log, null, 2));
+  await atomicWrite(TRAINING_LOG_FILE, log);
 }
 
 // =============================================================================

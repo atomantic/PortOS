@@ -1,7 +1,7 @@
-import { readFile, writeFile } from 'fs/promises';
+import { writeFile } from 'fs/promises';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
-import { PATHS, ensureDir, safeJSONParse } from '../lib/fileUtils.js';
+import { PATHS, ensureDir, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
 
 const DATA_DIR = PATHS.meatspace;
 const EPIGENETIC_FILE = join(DATA_DIR, 'epigenetic.json');
@@ -192,7 +192,7 @@ export const CURATED_INTERVENTIONS = [
 
 async function loadData() {
   await ensureDir(DATA_DIR);
-  const raw = await readFile(EPIGENETIC_FILE, 'utf-8').catch(() => null);
+  const raw = await tryReadFile(EPIGENETIC_FILE);
   if (!raw) return { ...DEFAULT_DATA };
   return safeJSONParse(raw, { ...DEFAULT_DATA });
 }

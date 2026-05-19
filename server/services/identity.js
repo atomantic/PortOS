@@ -1,7 +1,7 @@
-import { readFile, writeFile } from 'fs/promises';
+import { writeFile } from 'fs/promises';
 import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
-import { PATHS, ensureDir, safeJSONParse } from '../lib/fileUtils.js';
+import { PATHS, ensureDir, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { getGenomeSummary } from './genome.js';
 import { getTasteProfile } from './taste-questionnaire.js';
@@ -175,7 +175,7 @@ async function ensureIdentityDir() {
 }
 
 async function loadJSON(filePath, defaultVal) {
-  const raw = await readFile(filePath, 'utf-8').catch(() => null);
+  const raw = await tryReadFile(filePath);
   const data = raw ? safeJSONParse(raw, structuredClone(defaultVal)) : structuredClone(defaultVal);
   // When MortalLoom iCloud sync is enabled, the goals array is sourced from
   // MortalLoom.json; birthDate and lifeExpectancy metadata stay in local PortOS.

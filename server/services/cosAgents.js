@@ -11,7 +11,7 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { cosEvents, emitLog } from './cosEvents.js';
 import { loadState, saveState, withStateLock, AGENTS_DIR } from './cosState.js';
-import { ensureDir, safeJSONParse } from '../lib/fileUtils.js';
+import { ensureDir, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
 import { repairCodexTaskSummary } from './codexSummaryRepair.js';
 
 const INDEX_FILE = join(AGENTS_DIR, 'index.json');
@@ -126,7 +126,7 @@ async function migrateAgentsToDateBuckets() {
 
     // Try to get date from metadata
     if (existsSync(metaPath)) {
-      const content = await readFile(metaPath, 'utf-8').catch(() => null);
+      const content = await tryReadFile(metaPath);
       if (content) {
         const raw = safeJSONParse(content, null);
         if (raw?.completedAt) {
@@ -426,7 +426,7 @@ export async function getAgentsByDate(date) {
     const batch = agentDirs.slice(i, i + BATCH_SIZE);
     const reads = batch.map(async (entry) => {
       const metaPath = join(dateDir, entry.name, 'metadata.json');
-      const content = await readFile(metaPath, 'utf-8').catch(() => null);
+      const content = await tryReadFile(metaPath);
       if (!content) return;
       const raw = safeJSONParse(content, null);
       if (!raw) return;
@@ -454,7 +454,7 @@ export async function getAgent(agentId) {
     const dateStr = idx.get(agentId);
     if (dateStr) {
       const metaPath = join(AGENTS_DIR, dateStr, agentId, 'metadata.json');
-      const content = await readFile(metaPath, 'utf-8').catch(() => null);
+      const content = await tryReadFile(metaPath);
       if (content) {
         const raw = safeJSONParse(content, null);
         if (raw) {
@@ -736,7 +736,7 @@ export async function submitAgentFeedback(agentId, feedback) {
       const agentDir = getAgentDir(agentId, dateBucket);
       const metaPath = join(agentDir, 'metadata.json');
       if (existsSync(metaPath)) {
-        const content = await readFile(metaPath, 'utf-8').catch(() => null);
+        const content = await tryReadFile(metaPath);
         if (content) {
           const raw = safeJSONParse(content, null);
           if (raw) {
@@ -757,7 +757,7 @@ export async function submitAgentFeedback(agentId, feedback) {
     if (!dateStr) return { error: 'Agent not found' };
 
     const metaPath = join(AGENTS_DIR, dateStr, agentId, 'metadata.json');
-    const content = await readFile(metaPath, 'utf-8').catch(() => null);
+    const content = await tryReadFile(metaPath);
     if (!content) return { error: 'Agent not found' };
 
     const raw = safeJSONParse(content, null);
@@ -883,7 +883,7 @@ export async function archiveStaleAgents() {
             await ensureDir(targetDir);
             const files = await readdir(flatDir).catch(() => []);
             for (const file of files) {
-              const content = await readFile(join(flatDir, file)).catch(() => null);
+              const content = await tryReadFile(join(flatDir, file), null);
               if (content !== null) await writeFile(join(targetDir, file), content);
             }
             await rm(flatDir, { recursive: true }).catch(() => {});

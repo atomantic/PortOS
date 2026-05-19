@@ -33,6 +33,7 @@ import { sanitizeBibleList, stripCanonControlFields, BIBLE_KIND, BIBLE_SOURCE } 
 import { ServerError } from "../lib/errorHandler.js";
 import { extractJson as extractJsonShared } from "../lib/jsonExtract.js";
 import {
+  assertProvider,
   resolveProviderAndModel,
   runPromptThroughProvider,
 } from "../lib/promptRunner.js";
@@ -344,8 +345,7 @@ export async function expandWorldTemplate({
   // Resolve the model the runner will ACTUALLY execute (honoring CLI baked
   // --model flags) so the log line + returned `llm.model` don't lie.
   const { provider, selectedModel } = await resolveProviderAndModel({ providerId, model });
-  if (!provider)
-    throw new Error("No AI provider available for universe expansion");
+  assertProvider(provider, { message: "No AI provider available for universe expansion" });
 
   const fullPrompt = buildExpansionPrompt({
     starterPrompt: starterPrompt.trim(),
@@ -590,7 +590,7 @@ export async function generateCategoryVariations({
     : [];
 
   const { provider, selectedModel } = await resolveProviderAndModel({ providerId, model });
-  if (!provider) throw new Error("No AI provider available for variation generation");
+  assertProvider(provider, { message: "No AI provider available for variation generation" });
 
   const fullPrompt = buildCategoryGeneratePrompt({
     category: category.trim(),

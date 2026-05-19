@@ -33,13 +33,14 @@ import {
 import toast from '../ui/Toast';
 import { timeAgo } from '../../utils/formatters';
 import { useArmedAction } from '../../hooks/useArmedAction';
+import { useLockToggle } from '../../hooks/useLockToggle';
 import {
   createPipelineIssue, deletePipelineIssue, updatePipelineIssue,
   createPipelineSeason, updatePipelineSeason, deletePipelineSeason,
   generatePipelineArcOverview, generatePipelineSeasonEpisodes, verifyPipelineArc,
   verifyPipelineVolume,
   resolvePipelineArcIssues,
-  listPipelineIssues, updatePipelineSeries,
+  listPipelineIssues, updatePipelineSeries, setPipelineArcFieldLock,
   startPipelineVolumeBeats, cancelPipelineVolumeBeats,
   generatePipelineVolumeCover, generatePipelineVolumeBackCover,
   generatePipelineVolumeCoverConcepts,
@@ -175,7 +176,18 @@ function ArcHeader({ series, onSeriesUpdate, onIssuesUpdate, onFlushPending }) {
   // show its own spinner without blocking the rest of the page.
   const [resolvingIdx, setResolvingIdx] = useState(new Set());
   const [confirmingRegen, setConfirmingRegen] = useState(false);
-  const [lockBusy, setLockBusy] = useState(false);
+  const { busy: lockBusy, toggle: toggleArcLock } = useLockToggle({
+    patchFn: (next) => updatePipelineSeries(series.id, {
+      locked: { ...(series.locked || {}), arc: next },
+    }, { silent: true }),
+    onSuccess: (updated, next) => {
+      onSeriesUpdate(updated);
+      if (next) setConfirmingRegen(false);
+    },
+    lockedMessage: 'Arc locked — regeneration and auto-resolve are now blocked',
+    unlockedMessage: 'Arc unlocked',
+    errorMessage: 'Failed to update lock',
+  });
 
   const llmOverride = useMemo(() => ({
     providerOverride: series.llm?.provider || undefined,
@@ -205,23 +217,6 @@ function ArcHeader({ series, onSeriesUpdate, onIssuesUpdate, onFlushPending }) {
     toast.success('Arc generated and saved');
   };
 
-  const toggleArcLock = async () => {
-    const next = !arcLocked;
-    setLockBusy(true);
-    const updated = await updatePipelineSeries(series.id, {
-      locked: { ...(series.locked || {}), arc: next },
-    }).catch((err) => {
-      toast.error(err.message || 'Failed to update lock');
-      return null;
-    });
-    setLockBusy(false);
-    if (!updated) return;
-    onSeriesUpdate(updated);
-    if (next) setConfirmingRegen(false);
-    toast.success(next
-      ? 'Arc locked — regeneration and auto-resolve are now blocked'
-      : 'Arc unlocked');
-  };
   const runVerify = async () => {
     setRunning('verify');
     const result = await withFlush(() =>
@@ -317,7 +312,7 @@ function ArcHeader({ series, onSeriesUpdate, onIssuesUpdate, onFlushPending }) {
           {hasGeneratedArc ? (
             <button
               type="button"
-              onClick={toggleArcLock}
+              onClick={() => toggleArcLock(arcLocked)}
               disabled={lockBusy || !!running}
               title={arcLocked
                 ? 'Arc is locked — click to unlock and allow regeneration'
@@ -560,6 +555,49 @@ function ThemeChips({ series, arc, onSeriesUpdate }) {
   );
 }
 
+// Per-field arc lock toggle. Click flips `series.locked.arcFields[field]`; the
+// server-side `commitSeasonsWithRemap` honors the map so auto-resolve /
+// regenerate rewrite unlocked fields while preserving locked ones verbatim.
+// Subtle inline icon — not a full button — to stay out of the read flow.
+function FieldLockToggle({ series, field, label, onSeriesUpdate }) {
+  const lockedFields = series.locked?.arcFields || {};
+  const locked = lockedFields[field] === true;
+  const { busy: saving, toggle } = useLockToggle({
+    patchFn: (next) => setPipelineArcFieldLock(series.id, field, next, { silent: true }),
+    onSuccess: (updated) => onSeriesUpdate(updated),
+    lockedMessage: `${label} locked — preserved on regenerate / auto-resolve`,
+    unlockedMessage: `${label} unlocked`,
+    errorMessage: `${label} lock update failed`,
+  });
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        // Several callers render this button inside a <details><summary>...
+        // tree (Summary, Protagonist arc). A click on the lock would otherwise
+        // bubble to the summary and toggle the disclosure. Stop here so the
+        // user only flips the lock.
+        e.stopPropagation();
+        e.preventDefault();
+        toggle(locked);
+      }}
+      disabled={saving}
+      aria-pressed={locked}
+      title={locked
+        ? `${label} is locked — click to unlock`
+        : `Lock ${label} to preserve it through regenerate / auto-resolve`}
+      aria-label={locked ? `Unlock ${label}` : `Lock ${label}`}
+      className={`inline-flex items-center justify-center w-4 h-4 rounded transition-colors disabled:opacity-40 ${
+        locked ? 'text-port-warning hover:text-port-warning/80' : 'text-gray-600 hover:text-gray-300'
+      }`}
+    >
+      {saving
+        ? <Loader2 size={10} className="animate-spin" />
+        : (locked ? <Lock size={10} /> : <Unlock size={10} />)}
+    </button>
+  );
+}
+
 function ArcContent({ series, onSeriesUpdate }) {
   const arc = series.arc;
   const [editing, setEditing] = useState(false);
@@ -649,28 +687,45 @@ function ArcContent({ series, onSeriesUpdate }) {
 
   return (
     <div className="space-y-2">
-      {arc.logline ? <p className="text-sm text-white">{arc.logline}</p> : null}
+      {arc.logline ? (
+        <div className="flex items-start gap-2">
+          <p className="text-sm text-white flex-1">{arc.logline}</p>
+          <FieldLockToggle series={series} field="logline" label="Logline" onSeriesUpdate={onSeriesUpdate} />
+        </div>
+      ) : null}
       <div className="flex flex-wrap items-center gap-1.5">
         {shapeDef ? (
-          <span
-            className="inline-flex items-center gap-1.5 text-[10px] uppercase tracking-wider px-2 py-0.5 rounded bg-port-bg border border-port-accent/40 text-port-accent"
-            title={shapeDef.description}
-          >
-            <ArcShapeSparkline shape={shapeDef} width={48} height={16} />
-            {shapeDef.label}
-          </span>
+          <>
+            <span
+              className="inline-flex items-center gap-1.5 text-[10px] uppercase tracking-wider px-2 py-0.5 rounded bg-port-bg border border-port-accent/40 text-port-accent"
+              title={shapeDef.description}
+            >
+              <ArcShapeSparkline shape={shapeDef} width={48} height={16} />
+              {shapeDef.label}
+            </span>
+            <FieldLockToggle series={series} field="shape" label="Shape" onSeriesUpdate={onSeriesUpdate} />
+          </>
         ) : null}
         <ThemeChips series={series} arc={arc} onSeriesUpdate={onSeriesUpdate} />
+        {(arc.themes?.length ?? 0) > 0 ? (
+          <FieldLockToggle series={series} field="themes" label="Themes" onSeriesUpdate={onSeriesUpdate} />
+        ) : null}
       </div>
       {arc.summary ? (
         <details className="text-xs text-gray-400">
-          <summary className="cursor-pointer hover:text-white">Summary</summary>
+          <summary className="cursor-pointer hover:text-white inline-flex items-center gap-1.5">
+            Summary
+            <FieldLockToggle series={series} field="summary" label="Summary" onSeriesUpdate={onSeriesUpdate} />
+          </summary>
           <p className="mt-2 whitespace-pre-wrap">{arc.summary}</p>
         </details>
       ) : null}
       {arc.protagonistArc ? (
         <details className="text-xs text-gray-400">
-          <summary className="cursor-pointer hover:text-white">Protagonist arc</summary>
+          <summary className="cursor-pointer hover:text-white inline-flex items-center gap-1.5">
+            Protagonist arc
+            <FieldLockToggle series={series} field="protagonistArc" label="Protagonist arc" onSeriesUpdate={onSeriesUpdate} />
+          </summary>
           <p className="mt-2 whitespace-pre-wrap">{arc.protagonistArc}</p>
         </details>
       ) : null}
@@ -759,8 +814,17 @@ function SeasonRow({ series, season, seasons, issues, onSeriesUpdate, onIssuesUp
   const [editing, setEditing] = useState(false);
   const [verifying, setVerifying] = useState(false);
   const [verifyIssues, setVerifyIssues] = useState(null);
-  const [lockBusy, setLockBusy] = useState(false);
   const seasonLocked = season.locked === true;
+  const { busy: lockBusy, toggle: toggleSeasonLock } = useLockToggle({
+    patchFn: (next) => updatePipelineSeason(series.id, season.id, { locked: next }),
+    onSuccess: (updated) => onSeriesUpdate({
+      ...series,
+      seasons: seasons.map((s) => (s.id === season.id ? updated : s)),
+    }),
+    lockedMessage: `Volume ${season.number} locked — generation, delete, and content edits are blocked`,
+    unlockedMessage: `Volume ${season.number} unlocked`,
+    errorMessage: 'Lock toggle failed',
+  });
   // Volume beat-sheet bulk run — `active` gates SSE subscription; the latest
   // frame drives the per-issue label on the button.
   const [beatsActive, setBeatsActive] = useState(false);
@@ -871,24 +935,6 @@ function SeasonRow({ series, season, seasons, issues, onSeriesUpdate, onIssuesUp
     toast.success(`Generated ${n} issue${n === 1 ? '' : 's'} / episode${n === 1 ? '' : 's'}${extractedSummary}`);
   };
 
-  const toggleSeasonLock = async () => {
-    const next = !seasonLocked;
-    setLockBusy(true);
-    const updated = await updatePipelineSeason(series.id, season.id, { locked: next }).catch((err) => {
-      toast.error(err.message || 'Lock toggle failed');
-      return null;
-    });
-    setLockBusy(false);
-    if (!updated) return;
-    onSeriesUpdate({
-      ...series,
-      seasons: seasons.map((s) => (s.id === season.id ? updated : s)),
-    });
-    toast.success(next
-      ? `Volume ${season.number} locked — generation, delete, and content edits are blocked`
-      : `Volume ${season.number} unlocked`);
-  };
-
   // 'idle' | 'confirm' | 'deleting' — drives an inline confirm row that swaps
   // in for the Edit/Trash buttons. Two-click "arm" was confusing (see
   // feedback memory); inline confirm matches LayoutEditor's pattern.
@@ -935,7 +981,7 @@ function SeasonRow({ series, season, seasons, issues, onSeriesUpdate, onIssuesUp
             <>
               <button
                 type="button"
-                onClick={toggleSeasonLock}
+                onClick={() => toggleSeasonLock(seasonLocked)}
                 disabled={lockBusy}
                 className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs border disabled:opacity-50 ${
                   seasonLocked

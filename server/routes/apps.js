@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { spawn } from 'child_process';
 import { readFile, writeFile, stat, access, mkdir } from 'fs/promises';
 import { join, resolve, extname } from 'path';
-import { PATHS } from '../lib/fileUtils.js';
+import { PATHS, tryReadFile } from '../lib/fileUtils.js';
 import * as appsService from '../services/apps.js';
 import { notifyAppsChanged, PORTOS_APP_ID } from '../services/apps.js';
 import * as pm2Service from '../services/pm2.js';
@@ -971,7 +971,7 @@ router.post('/:id/refresh-config', loadApp, asyncHandler(async (req, res) => {
   // Detect buildCommand from package.json if not already set
   if (!app.buildCommand) {
     const pkgPath = join(app.repoPath, 'package.json');
-    const pkgContent = await readFile(pkgPath, 'utf-8').catch(() => null);
+    const pkgContent = await tryReadFile(pkgPath);
     if (pkgContent) {
       const pkg = safeJSONParse(pkgContent);
       if (pkg?.scripts?.build) updates.buildCommand = 'npm run build';

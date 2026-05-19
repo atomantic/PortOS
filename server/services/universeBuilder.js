@@ -30,7 +30,7 @@ import { randomUUID } from 'crypto';
 import { PATHS, atomicWrite, readJSONFile, ensureDir, resolveImageRef } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { composeStyledPrompt } from '../lib/composeStyledPrompt.js';
-import { richCanonDescriptorFragments } from '../lib/canonPrompt.js';
+import { flattenCanonDescriptorFragments, richCanonDescriptorFragments } from '../lib/canonPrompt.js';
 import {
   sanitizeBibleList, BIBLE_KIND, BIBLE_FIELD, BIBLE_LIMITS, BIBLE_SOURCE,
   SERVER_OWNED_CHARACTER_FIELDS,
@@ -40,6 +40,9 @@ import {
 import { sanitizeOrigin } from '../lib/sharingOrigin.js';
 import { emitRecordUpdated, emitRecordDeleted } from './sharing/recordEvents.js';
 import { renameCollectionForUniverse, unlinkCollectionsForUniverse } from './mediaCollections.js';
+import {
+  clearPendingSheetSlot, clearPendingSheetSlotsForUniverse,
+} from './universeCharacterSheetSlot.js';
 
 // Bumped when a sanitizer-time backfill changes how on-disk universes are
 // shaped, so future migrations can gate on the prior version.
@@ -916,7 +919,7 @@ export async function updateUniverse(id, patchOrMutator = {}) {
   //     unchanged record (no `updatedAt` bump, no rename cascade, no
   //     `recordUpdated` emit).
   const isMutator = typeof patchOrMutator === 'function';
-  const { merged, nameChanged, skipped } = await queueUniverseWrite(async () => {
+  const { merged, nameChanged, skipped, removedCharacterIds } = await queueUniverseWrite(async () => {
     const state = await readState();
     const idx = state.universes.findIndex((w) => w.id === id);
     if (idx < 0) throw makeErr(`Universe not found: ${id}`, ERR_NOT_FOUND);
@@ -1072,9 +1075,30 @@ export async function updateUniverse(id, patchOrMutator = {}) {
     }
     state.universes[idx] = mergedRecord;
     await writeState(state);
-    return { merged: mergedRecord, nameChanged: mergedRecord.name !== cur.name, skipped: false };
+    // Diff inside the queue so we read against the freshest merged state;
+    // gate on patches that could have touched characters (mutator or
+    // literal-PATCH carrying `characters`) — rename/scalar PATCHes are the
+    // common case and skip the Set construction entirely.
+    let removedCharacterIds = null;
+    if (isMutator || 'characters' in patch) {
+      const idsOf = (arr) => (Array.isArray(arr)
+        ? arr.filter((c) => c?.id).map((c) => c.id) : []);
+      const prevIds = new Set(idsOf(cur.characters));
+      const nextIds = new Set(idsOf(mergedRecord.characters));
+      removedCharacterIds = [...prevIds].filter((id) => !nextIds.has(id));
+    }
+    return {
+      merged: mergedRecord,
+      nameChanged: mergedRecord.name !== cur.name,
+      skipped: false,
+      removedCharacterIds,
+    };
   });
   if (skipped) return merged;
+  // Slot map is in-process; without this it persists past the logical delete.
+  for (const removedId of removedCharacterIds ?? []) {
+    clearPendingSheetSlot(id, removedId);
+  }
   // Cascade rename onto the linked media collection — log but don't fail
   // the save: a stale collection name is recoverable, a failed save isn't.
   // Runs OUTSIDE the queue so the media-collections write tail can't stall
@@ -1109,6 +1133,8 @@ export async function deleteUniverse(id) {
   await unlinkCollectionsForUniverse(id).catch((err) => {
     console.error(`❌ unlink media collections for deleted universe ${id} failed: ${err?.message || err}`);
   });
+  // Slot map is in-process; persists across the logical delete without this.
+  clearPendingSheetSlotsForUniverse(id);
   emitRecordDeleted('universe', id);
   return { id };
 }
@@ -1413,9 +1439,7 @@ export function synthesizeCanonPrompt(kind, entry) {
     ? entry.slugline.trim()
     : '';
   const identifier = name || sluglineId;
-  const body = richCanonDescriptorFragments(kind, entry)
-    .map((f) => (f.prefix ? `${f.prefix}: ${f.value}` : f.value))
-    .join('. ');
+  const body = flattenCanonDescriptorFragments(richCanonDescriptorFragments(kind, entry));
   if (identifier && body) return `${identifier} — ${body}`;
   return identifier || body;
 }

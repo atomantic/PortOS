@@ -101,6 +101,7 @@ vi.mock('./taskLearning.js', () => ({
 }));
 
 vi.mock('../lib/fileUtils.js', () => ({
+tryReadFile: vi.fn().mockResolvedValue(null),
   ensureDir: vi.fn().mockResolvedValue(undefined),
   readJSONFile: vi.fn().mockResolvedValue({}),
   PATHS: {

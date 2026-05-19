@@ -18,7 +18,7 @@ import { existsSync, watch as fsWatch } from 'fs';
 import { join, dirname, resolve as resolvePath, sep as PATH_SEP, basename } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
-import { assertSafeFilename, ensureDir, listDirectoryByExtension, PATHS, safeJSONParse, resolveGalleryImage, resolveImageInputPath } from '../../lib/fileUtils.js';
+import { assertSafeFilename, ensureDir, listDirectoryByExtension, PATHS, safeJSONParse, resolveGalleryImage, resolveImageInputPath, tryReadFile } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { imageGenEvents } from '../imageGenEvents.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, PYTHON_NOISE_RE } from '../../lib/sseUtils.js';
@@ -591,7 +591,7 @@ export async function readImageSidecar(filename) {
   const portosSidecar = join(PATHS.images, filename.replace('.png', '.metadata.json'));
   const altSidecar = join(PATHS.images, `${filename}.metadata.json`);
   for (const path of [portosSidecar, altSidecar]) {
-    const raw = await readFile(path, 'utf-8').catch(() => null);
+    const raw = await tryReadFile(path);
     if (raw != null) return { path, metadata: safeJSONParse(raw, {}) };
   }
   return { path: portosSidecar, metadata: {} };

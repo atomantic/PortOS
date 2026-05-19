@@ -26,7 +26,7 @@
 import { enqueueJob } from '../mediaJobQueue/index.js';
 import { getSettings } from '../settings.js';
 import { getSeries } from './series.js';
-import { getIssue, updateStage, VISUAL_STAGE_IDS } from './issues.js';
+import { getIssue, updateStage, assertStageUnlocked, VISUAL_STAGE_IDS } from './issues.js';
 import { resolveGalleryImage } from '../../lib/fileUtils.js';
 import { buildComicPagesOwner, buildSeasonCoverOwner, buildStoryboardsShotOwner } from './owners.js';
 import { getUniverse, joinInfluenceList } from '../universeBuilder.js';
@@ -36,35 +36,35 @@ import {
   buildCharByKey, matchSceneCharacters, matchCharactersInText,
   matchPlacesInText, matchObjectsInText,
 } from '../../lib/scenePrompt.js';
-import { richCanonDescriptorFragments } from '../../lib/canonPrompt.js';
+import { flattenCanonDescriptorFragments, richCanonDescriptorFragments } from '../../lib/canonPrompt.js';
 import { composeStyledPrompt } from '../../lib/composeStyledPrompt.js';
-import { resolveVisualStyle } from '../../lib/visualStyles.js';
 import { getDefaultVideoModelId, getVideoModels } from '../../lib/mediaModels.js';
 import { runStagedLLM } from '../../lib/stageRunner.js';
 import { runPromptRefine } from './refineHelpers.js';
 import { pickCanon } from './seriesCanon.js';
+import { STYLE_PROMPT_OVERRIDE_MODE_DEFAULT } from './series.js';
 import { ASPECT_PRESETS } from '../../lib/creativeDirectorPresets.js';
 
 const joinStyleParts = (...parts) =>
   parts.map((s) => (s || '').trim()).filter(Boolean).join(', ');
 
+const joinStyleSentences = (...parts) =>
+  parts.map((s) => (s || '').trim()).filter(Boolean).join('. ');
+
 const stackStyle = (series, extraStyle) => joinStyleParts(series?.styleNotes, extraStyle);
 
-// Resolved fragment leads so the curated aesthetic dominates over the caller's
-// free-text additions.
-const composeExtraStyle = (series, issue, stageId, callerExtraStyle = '') =>
-  joinStyleParts(resolveVisualStyle(series, issue, stageId)?.promptFragment, callerExtraStyle);
-
-// Build the style-prompt prefix for a series + universe pair. The per-series
-// override prepends ahead of the universe's embrace influences so a single
-// series can deviate (e.g. a noir spin-off) without forking the universe;
-// the universe's broader aesthetic still trails so it stays visible to the
-// diffusion model. Returns '' when neither side has content — caller skips
-// the composeStyledPrompt wrap in that case.
+// Composes `series.stylePromptOverride` against the universe's embrace
+// influences. The mode (prepend/append/override) is documented next to the
+// `STYLE_PROMPT_OVERRIDE_MODES` constant in series.js — it's the single
+// source of truth.
 const buildStyleClause = (world, series) => {
   const override = (series?.stylePromptOverride || '').trim();
+  const mode = series?.stylePromptOverrideMode || STYLE_PROMPT_OVERRIDE_MODE_DEFAULT;
+  if (override && mode === 'override') return override;
   const universeStyle = joinInfluenceList(world?.influences?.embrace);
-  return [override, universeStyle].filter(Boolean).join('. ');
+  return mode === 'append'
+    ? joinStyleSentences(universeStyle, override)
+    : joinStyleSentences(override, universeStyle);
 };
 
 const applyWorldStyle = (prompt, world, series = null) => {
@@ -139,10 +139,10 @@ const loadBibleContext = async (issueId) => {
   const issueChain = (async () => {
     const issue = await getIssue(issueId);
     const series = await getSeries(issue.seriesId);
-    const world = series.universeId ? await getUniverse(series.universeId).catch(() => null) : null;
-    // Orphan series (no universeId or a dangling reference) render against
-    // empty canon — the visual prompt still includes scene description,
-    // just without character/setting/object metadata.
+    // `.catch(() => null)` covers a dangling universe reference. Empty
+    // canon still lets scene description flow through; downstream stages
+    // just lose character / place / object metadata.
+    const world = await getUniverse(series.universeId).catch(() => null);
     return { issue, series, world, canon: pickCanon(world) };
   })();
   const [chain, settings] = await Promise.all([issueChain, getSettings()]);
@@ -398,6 +398,7 @@ async function enqueueComicCoverLike(issueId, target, options = {}) {
     throw new Error(`enqueueComicCoverLike: unknown target "${target}"`);
   }
   const { issue, settings, series, world } = await loadBibleContext(issueId);
+  assertStageUnlocked(issue, 'comicPages');
   const record = issue.stages?.comicPages?.[target] || null;
   const scriptOptionKey = target === 'cover' ? 'coverScript' : 'backCoverScript';
   const script = typeof options[scriptOptionKey] === 'string'
@@ -412,7 +413,7 @@ async function enqueueComicCoverLike(issueId, target, options = {}) {
   const initImageStrength = fromProof
     ? (Number.isFinite(options.initImageStrength) ? options.initImageStrength : PROOF_AS_BASE_DEFAULT_STRENGTH)
     : undefined;
-  const extraStyle = composeExtraStyle(series, issue, 'comicPages', options.extraStyle);
+  const extraStyle = options.extraStyle || '';
   const prompt = target === 'cover'
     ? composeComicCoverPrompt({ series, world, issue, coverScript: script, extraStyle })
     : composeComicBackCoverPrompt({ series, world, issue, backCoverScript: script, extraStyle });
@@ -464,7 +465,7 @@ export async function enqueueComicBackCover(issueId, options = {}) {
 const loadSeasonContext = async (seriesId, seasonId) => {
   const seriesChain = (async () => {
     const series = await getSeries(seriesId);
-    const world = series.universeId ? await getUniverse(series.universeId).catch(() => null) : null;
+    const world = await getUniverse(series.universeId).catch(() => null);
     return { series, world };
   })();
   const [chain, settings] = await Promise.all([seriesChain, getSettings()]);
@@ -551,10 +552,7 @@ async function enqueueVolumeCoverLike(seriesId, seasonId, target, options = {}) 
   const initImageStrength = fromProof
     ? (Number.isFinite(options.initImageStrength) ? options.initImageStrength : PROOF_AS_BASE_DEFAULT_STRENGTH)
     : undefined;
-  // Volume covers use the series-level visual style (no per-issue override,
-  // since a volume spans many issues that may have different overrides).
-  const styleFragment = resolveVisualStyle(series, null, 'comicPages')?.promptFragment || '';
-  const extraStyle = joinStyleParts(styleFragment, options.extraStyle);
+  const extraStyle = options.extraStyle || '';
   const prompt = target === 'cover'
     ? composeVolumeCoverPrompt({ series, world, season, coverScript: script, extraStyle })
     : composeVolumeBackCoverPrompt({ series, world, season, backCoverScript: script, extraStyle });
@@ -609,9 +607,7 @@ export function composeComicPagePrompt({
   // is supported (a single page can span more than one location).
   const placesClause = (matchedPlaces || [])
     .map((p) => {
-      const body = richCanonDescriptorFragments('place', p)
-        .map((f) => (f.prefix ? `${f.prefix}: ${f.value}` : f.value))
-        .join('. ');
+      const body = flattenCanonDescriptorFragments(richCanonDescriptorFragments('place', p));
       const head = p.name ? `${p.name}:` : '';
       return [head, body].filter(Boolean).join(' ');
     })
@@ -693,6 +689,7 @@ export async function enqueueVisualComicPage(issueId, options = {}) {
     });
   }
   const { issue, settings, series, world, canon } = await loadBibleContext(issueId);
+  assertStageUnlocked(issue, 'comicPages');
   const pages = Array.isArray(issue.stages?.comicPages?.pages) ? issue.stages.comicPages.pages : [];
   const page = pages[pageIndex];
   if (!page) {
@@ -753,7 +750,7 @@ export async function enqueueVisualComicPage(issueId, options = {}) {
   // covers panels with no description, so the prompt is non-empty by here.
   const prompt = composeComicPagePrompt({
     series, world, page, pageNumber: pageIndex + 1,
-    extraStyle: composeExtraStyle(series, issue, 'comicPages', options.extraStyle),
+    extraStyle: options.extraStyle || '',
     matchedCharacters, matchedPlaces, matchedObjects,
   });
 
@@ -780,13 +777,14 @@ export async function enqueueVisualImage(issueId, stageId, options = {}) {
     });
   }
   const { issue, settings, series, world, canon } = await loadBibleContext(issueId);
+  assertStageUnlocked(issue, stageId);
   const mode = resolveMode(options, settings);
   const matchedCharacters = matchCharactersInText(options.description || '', canon.characters);
   const prompt = composeVisualPrompt({
     series,
     description: options.description,
     slugline: options.slugline,
-    extraStyle: composeExtraStyle(series, issue, stageId, options.extraStyle),
+    extraStyle: options.extraStyle || '',
     matchedCharacters,
     world,
     canon,
@@ -824,6 +822,7 @@ export async function enqueueStoryboardSceneVideo(issueId, sceneIndex, options =
     });
   }
   const { issue, settings, series, world, canon } = await loadBibleContext(issueId);
+  assertStageUnlocked(issue, 'storyboards');
   const pythonPath = settings.imageGen?.local?.pythonPath || null;
   if (!pythonPath) {
     throw new ServerError(
@@ -854,7 +853,7 @@ export async function enqueueStoryboardSceneVideo(issueId, sceneIndex, options =
     series,
     description: scene.description,
     slugline: scene.slugline || '',
-    extraStyle: composeExtraStyle(series, issue, 'storyboards', options.extraStyle),
+    extraStyle: options.extraStyle || '',
     matchedCharacters,
     world,
     canon,
@@ -916,6 +915,7 @@ export async function enqueueStoryboardShotStartFrame(issueId, sceneIndex, shotI
     });
   }
   const { issue, settings, series, world, canon } = await loadBibleContext(issueId);
+  assertStageUnlocked(issue, 'storyboards');
   const scenes = Array.isArray(issue.stages?.storyboards?.scenes)
     ? [...issue.stages.storyboards.scenes]
     : [];
@@ -950,7 +950,7 @@ export async function enqueueStoryboardShotStartFrame(issueId, sceneIndex, shotI
     series,
     description,
     slugline: scene.slugline || '',
-    extraStyle: composeExtraStyle(series, issue, 'storyboards', options.extraStyle),
+    extraStyle: options.extraStyle || '',
     matchedCharacters,
     world,
     canon,
@@ -1005,6 +1005,7 @@ export async function refineComicPanelPrompt(issueId, pageIndex, panelIndex, opt
     });
   }
   const { issue, series } = await loadRefineContext(issueId);
+  assertStageUnlocked(issue, 'comicPages');
   const pages = Array.isArray(issue.stages?.comicPages?.pages) ? [...issue.stages.comicPages.pages] : [];
   const page = pages[pi];
   if (!page) {
@@ -1087,6 +1088,7 @@ export async function refineStoryboardScenePrompt(issueId, sceneIndex, options =
     });
   }
   const { issue, series } = await loadRefineContext(issueId);
+  assertStageUnlocked(issue, 'storyboards');
   const scenes = Array.isArray(issue.stages?.storyboards?.scenes)
     ? [...issue.stages.storyboards.scenes]
     : [];

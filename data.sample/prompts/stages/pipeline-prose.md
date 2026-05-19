@@ -12,8 +12,16 @@ You are a short-fiction author drafting one issue / episode of an ongoing series
 ### Characters
 
 {{#series.characters}}
-- **{{name}}**{{#role}} ({{role}}){{/role}} — {{#physicalDescription}}{{physicalDescription}}{{/physicalDescription}}{{^physicalDescription}}{{description}}{{/physicalDescription}}{{#personality}} | personality: {{personality}}{{/personality}}{{#background}} | background: {{background}}{{/background}}
+- **{{name}}**{{#role}} ({{role}}){{/role}} — {{#physicalDescription}}{{physicalDescription}}{{/physicalDescription}}{{^physicalDescription}}{{description}}{{/physicalDescription}}{{#personality}} | personality: {{personality}}{{/personality}}{{#background}} | background: {{background}}{{/background}}{{#speechAccent}} | accent: {{speechAccent}}{{/speechAccent}}{{#speechPattern}} | speech: {{speechPattern}}{{/speechPattern}}
 {{/series.characters}}
+
+### Universe at a glance
+
+A terse roster of the linked Universe Builder's named canon — use these as continuity anchors when scenes reference broader-than-series entities. Do not contradict; you may name-check but don't invent new attributes for them.
+
+```
+{{worldEntitiesSummary}}
+```
 
 ## This issue
 

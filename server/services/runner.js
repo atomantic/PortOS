@@ -5,7 +5,7 @@
 import { spawn } from 'child_process';
 import { writeFile, readFile } from 'fs/promises';
 import { join } from 'path';
-import { ensureDir } from '../lib/fileUtils.js';
+import { ensureDir, tryReadFile } from '../lib/fileUtils.js';
 import { resolveCliModel, hasModelFlag, extractBakedModel } from '../lib/providerModels.js';
 
 // Re-exported so `server/lib/promptRunner.js` can import via the runner
@@ -202,7 +202,7 @@ export function emitRunStarted({ runId, provider, model }) {
 export async function patchRunMetadata(runId, patch) {
   if (!patch || typeof patch !== 'object') return;
   const metadataPath = join(getRunsPath(), runId, 'metadata.json');
-  const metadataStr = await readFile(metadataPath, 'utf-8').catch(() => null);
+  const metadataStr = await tryReadFile(metadataPath);
   if (!metadataStr) return;
   let metadata;
   try { metadata = JSON.parse(metadataStr); } catch { return; }

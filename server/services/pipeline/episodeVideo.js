@@ -14,7 +14,7 @@
  * surface the final stitched video when complete.
  */
 import { composeVisualPrompt } from './visualStages.js';
-import { getIssue, updateStage } from './issues.js';
+import { getIssue, updateStage, assertStageUnlocked } from './issues.js';
 import { getSeries } from './series.js';
 import { getSeriesCanon } from './seriesCanon.js';
 import { createProject as createCDProject, setTreatment as setCDTreatment } from '../creativeDirector/local.js';
@@ -136,6 +136,10 @@ export function buildTreatmentFromStoryboards({ issue, series, canon = null }) {
 export async function startEpisodeVideoForIssue(issueId, options = {}) {
   const [issue, settings] = await Promise.all([getIssue(issueId), getSettings()]);
 
+  // Reuse path (existing cdProjectId) is still allowed when locked — locking
+  // a stage freezes regeneration, not status reads. The fresh-start branch
+  // below builds a new CD project + treatment, which IS regeneration; the
+  // lock check gates that branch only.
   const existing = issue.stages?.episodeVideo?.cdProjectId;
   const series = await getSeries(issue.seriesId);
   // Canon (characters / places / objects) lives on the linked universe
@@ -151,6 +155,9 @@ export async function startEpisodeVideoForIssue(issueId, options = {}) {
     // times, so the user sees "N scenes" matching what was actually queued.
     return { cdProjectId: existing, reused: true, scenes: treatment.scenes.length };
   }
+  // Fresh-start branch — gate on the per-stage lock now that we know we're
+  // about to spin up a new CD project + render run.
+  assertStageUnlocked(issue, 'episodeVideo');
   const aspectRatio = options.aspectRatio || '16:9';
   const quality = options.quality || 'standard';
   const modelId = options.modelId || settings?.videoGen?.defaultModelId || getDefaultVideoModelId();

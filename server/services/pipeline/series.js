@@ -17,7 +17,6 @@ import { PATHS, atomicWrite, readJSONFile, ensureDir } from '../../lib/fileUtils
 import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
 import { isStr, trimTo } from '../../lib/storyBible.js';
 import { sanitizeArc, sanitizeSeasonList } from '../../lib/storyArc.js';
-import { sanitizeVisualStyleRef } from '../../lib/visualStyles.js';
 import { sanitizeOrigin } from '../../lib/sharingOrigin.js';
 import { emitRecordUpdated, emitRecordDeleted } from '../sharing/recordEvents.js';
 import { renameCollectionForSeries, unlinkCollectionsForSeries } from '../mediaCollections.js';
@@ -47,6 +46,15 @@ export const LOGLINE_MAX = 500;
 export const PREMISE_MAX = 8000;
 export const STYLE_NOTES_MAX = 4000;
 export const STYLE_PROMPT_OVERRIDE_MAX = 1000;
+// How `stylePromptOverride` composes with the universe's style influences:
+//   'prepend'  — override leads, universe trails (the historical default
+//                — slight deviation, universe still visible)
+//   'append'   — universe leads, override trails (universe-dominant)
+//   'override' — universe style is dropped entirely (full spinoff look)
+// Default 'prepend' so existing series migrate forward without a writer
+// pass and the field can be absent in JSON.
+export const STYLE_PROMPT_OVERRIDE_MODES = Object.freeze(['prepend', 'append', 'override']);
+export const STYLE_PROMPT_OVERRIDE_MODE_DEFAULT = 'prepend';
 // Title/logo design concept — prose description injected into cover + TV
 // title-screen prompts as the "logo design" cue. Generated from the universe's
 // style notes on series creation; editable in the bible.
@@ -59,11 +67,26 @@ export const ISSUE_COUNT_TARGET_MAX = 999;
 
 export const LOCKABLE_STAGES = Object.freeze(['arc']);
 
+// Per-field arc lock targets. Each field can be individually frozen so
+// `resolveVerifyIssues` / `commitSeasonsWithRemap` rewrite unlocked fields
+// while preserving locked ones verbatim. Sibling to the binary `locked.arc`
+// (which freezes everything); the two stack — `locked.arc: true` always wins.
+export const ARC_LOCKABLE_FIELDS = Object.freeze([
+  'logline', 'summary', 'protagonistArc', 'themes', 'shape',
+]);
+
 const sanitizeSeriesLocked = (raw = {}) => {
   if (!raw || typeof raw !== 'object') return {};
   const out = {};
   for (const key of LOCKABLE_STAGES) {
     if (raw[key] === true) out[key] = true;
+  }
+  if (raw.arcFields && typeof raw.arcFields === 'object') {
+    const arcFields = {};
+    for (const k of ARC_LOCKABLE_FIELDS) {
+      if (raw.arcFields[k] === true) arcFields[k] = true;
+    }
+    if (Object.keys(arcFields).length > 0) out.arcFields = arcFields;
   }
   return out;
 };
@@ -111,11 +134,9 @@ const sanitizeSeries = (raw) => {
     // forking the universe. Empty string = no override; fall through to
     // universe-only style.
     stylePromptOverride: trimTo(raw.stylePromptOverride, STYLE_PROMPT_OVERRIDE_MAX),
-    // Series-level default visual style (catalog id + optional custom prompt).
-    // `null` when the user hasn't picked one — stage-level fallbacks in
-    // resolveVisualStyle() handle that case so legacy series keep rendering
-    // without a writer pass.
-    visualStyleDefault: sanitizeVisualStyleRef(raw.visualStyleDefault),
+    stylePromptOverrideMode: STYLE_PROMPT_OVERRIDE_MODES.includes(raw.stylePromptOverrideMode)
+      ? raw.stylePromptOverrideMode
+      : STYLE_PROMPT_OVERRIDE_MODE_DEFAULT,
     targetFormat,
     issueCountTarget,
     llm,
@@ -169,6 +190,7 @@ export async function createSeries(input = {}) {
       titleLogo: input.titleLogo || '',
       author: input.author || '',
       stylePromptOverride: input.stylePromptOverride || '',
+      stylePromptOverrideMode: input.stylePromptOverrideMode,
       targetFormat: input.targetFormat || 'comic+tv',
       issueCountTarget: input.issueCountTarget || 0,
       llm: input.llm || null,
@@ -232,7 +254,7 @@ export async function updateSeries(id, patch = {}) {
       ...('titleLogo' in patch ? { titleLogo: patch.titleLogo } : {}),
       ...('author' in patch ? { author: patch.author } : {}),
       ...('stylePromptOverride' in patch ? { stylePromptOverride: patch.stylePromptOverride } : {}),
-      ...('visualStyleDefault' in patch ? { visualStyleDefault: patch.visualStyleDefault } : {}),
+      ...('stylePromptOverrideMode' in patch ? { stylePromptOverrideMode: patch.stylePromptOverrideMode } : {}),
       ...('targetFormat' in patch ? { targetFormat: patch.targetFormat } : {}),
       ...('issueCountTarget' in patch ? { issueCountTarget: patch.issueCountTarget } : {}),
       ...('origin' in patch ? { origin: patch.origin } : {}),
@@ -256,6 +278,34 @@ export async function updateSeries(id, patch = {}) {
     });
   }
   return merged;
+}
+
+export async function setArcFieldLock(id, field, locked) {
+  if (!ARC_LOCKABLE_FIELDS.includes(field)) {
+    throw makeErr(`Unknown arc lock field: ${field}`, ERR_VALIDATION);
+  }
+  return queueSeriesWrite(async () => {
+    const state = await readState();
+    const idx = state.series.findIndex((s) => s.id === id);
+    if (idx < 0) throw makeErr(`Series not found: ${id}`, ERR_NOT_FOUND);
+    const cur = state.series[idx];
+    const arcFields = { ...(cur.locked?.arcFields || {}) };
+    if (locked === true) arcFields[field] = true;
+    else delete arcFields[field];
+    const nextLocked = { ...(cur.locked || {}) };
+    if (Object.keys(arcFields).length > 0) nextLocked.arcFields = arcFields;
+    else delete nextLocked.arcFields;
+    const next = sanitizeSeries({
+      ...cur,
+      locked: nextLocked,
+      updatedAt: new Date().toISOString(),
+    });
+    if (!next) throw makeErr('Invalid series payload', ERR_VALIDATION);
+    state.series[idx] = next;
+    await writeState(state);
+    emitRecordUpdated('series', next.id);
+    return next;
+  });
 }
 
 /**

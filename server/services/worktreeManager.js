@@ -10,9 +10,9 @@
  */
 
 import { existsSync, realpathSync } from 'fs';
-import { readdir, readFile, rm, stat } from 'fs/promises';
+import { readdir, rm, stat } from 'fs/promises';
 import { join } from 'path';
-import { ensureDir, PATHS } from '../lib/fileUtils.js';
+import { ensureDir, PATHS, tryReadFile } from '../lib/fileUtils.js';
 import { execGit } from '../lib/execGit.js';
 
 const WORKTREES_DIR = PATHS.worktrees;
@@ -511,7 +511,7 @@ async function cleanupExternalRepoWorktrees(activeAgentIds, alreadyHandled) {
       // This is a normal git repo, not a worktree — skip to avoid accidental data loss
       continue;
     }
-    const gitContent = gitStat ? await readFile(gitFile, 'utf-8').catch(() => null) : null;
+    const gitContent = gitStat ? await tryReadFile(gitFile) : null;
     if (!gitContent?.startsWith('gitdir:')) {
       // No .git file or unreadable — skip rather than removing potentially valuable data
       console.log(`🌳 Skipping worktree directory ${agentId} — cannot determine parent repo`);

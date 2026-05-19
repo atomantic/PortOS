@@ -4,12 +4,12 @@
  * Stores config in data/browser-config.json
  */
 
-import { readFile, writeFile, readdir, stat, unlink } from 'fs/promises';
+import { writeFile, readdir, stat, unlink } from 'fs/promises';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { join, basename, resolve, extname } from 'path';
 import { EventEmitter } from 'events';
-import { ensureDir, safeJSONParse, PATHS } from '../lib/fileUtils.js';
+import { ensureDir, safeJSONParse, PATHS, tryReadFile } from '../lib/fileUtils.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
 
 const execFileAsync = promisify(execFile);
@@ -48,7 +48,7 @@ let cachedConfig = null;
 
 export async function loadConfig() {
   if (cachedConfig) return cachedConfig;
-  const raw = await readFile(CONFIG_FILE, 'utf-8').catch(() => null);
+  const raw = await tryReadFile(CONFIG_FILE);
   const parsed = safeJSONParse(raw, null);
   cachedConfig = parsed ? { ...DEFAULT_CONFIG, ...parsed } : { ...DEFAULT_CONFIG };
   return cachedConfig;

@@ -13,6 +13,7 @@ vi.mock('fs/promises', () => ({
 }));
 
 vi.mock('../lib/fileUtils.js', () => ({
+tryReadFile: vi.fn().mockResolvedValue(null),
   ensureDir: vi.fn().mockResolvedValue(undefined),
   PATHS: { data: '/fake/data', root: '/fake/root' },
   readJSONFile: vi.fn()
@@ -23,19 +24,24 @@ vi.mock('./runner.js', () => ({
 }));
 
 vi.mock('../lib/promptRunner.js', () => ({
-  runPromptThroughProvider: vi.fn()
+assertProvider: (provider, { message, code, status = 503 } = {}) => {
+    if (provider) return;
+    const err = new Error(message || 'No AI provider available');
+    if (code) { err.status = status; err.code = code; }
+    throw err;
+  },
+  runPromptThroughProvider: vi.fn(),
+  resolveProviderAndModel: vi.fn(),
 }));
 
 vi.mock('./providers.js', () => ({
-  getProviderById: vi.fn(),
   getAllProviders: vi.fn(),
-  getActiveProvider: vi.fn()
+  getActiveProvider: vi.fn(),
 }));
 
 import { readFile, writeFile } from 'fs/promises';
 import { createRun } from './runner.js';
-import { runPromptThroughProvider } from '../lib/promptRunner.js';
-import { getProviderById, getActiveProvider } from './providers.js';
+import { runPromptThroughProvider, resolveProviderAndModel } from '../lib/promptRunner.js';
 import {
   createLoop,
   stopLoop,
@@ -47,8 +53,9 @@ import {
 // Convenience aliases after import
 const mockCreateRun = createRun;
 const mockRunPrompt = runPromptThroughProvider;
-const mockGetProviderById = getProviderById;
-const mockGetActiveProvider = getActiveProvider;
+const mockResolveProvider = resolveProviderAndModel;
+const mockGetProviderById = { mockResolvedValue: (v) => mockResolveProvider.mockResolvedValue({ provider: v, selectedModel: null }) };
+const mockGetActiveProvider = mockGetProviderById;
 
 const MOCK_PROVIDER = {
   id: 'claude',

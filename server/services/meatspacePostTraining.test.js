@@ -1,16 +1,14 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-vi.mock('fs/promises', () => ({
-  writeFile: vi.fn().mockResolvedValue(undefined),
-}));
 vi.mock('../lib/fileUtils.js', () => ({
+tryReadFile: vi.fn().mockResolvedValue(null),
+  atomicWrite: vi.fn().mockResolvedValue(undefined),
   PATHS: { meatspace: '/tmp/test-meatspace' },
   ensureDir: vi.fn().mockResolvedValue(undefined),
   readJSONFile: vi.fn().mockResolvedValue({ entries: [] }),
 }));
 
-import { readJSONFile } from '../lib/fileUtils.js';
-import { writeFile } from 'fs/promises';
+import { readJSONFile, atomicWrite } from '../lib/fileUtils.js';
 import {
   submitTrainingEntry,
   getTrainingStats,
@@ -42,7 +40,7 @@ describe('submitTrainingEntry', () => {
     expect(entry.id).toBeTruthy();
     expect(entry.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     expect(entry.timestamp).toBeTruthy();
-    expect(writeFile).toHaveBeenCalledOnce();
+    expect(atomicWrite).toHaveBeenCalledOnce();
   });
 
   it('appends to existing entries', async () => {
@@ -58,7 +56,7 @@ describe('submitTrainingEntry', () => {
       totalMs: 30000,
     });
 
-    const savedData = JSON.parse(writeFile.mock.calls[0][1]);
+    const savedData = atomicWrite.mock.calls[0][1];
     expect(savedData.entries).toHaveLength(2);
     expect(savedData.entries[0].id).toBe('old');
     expect(savedData.entries[1].module).toBe('llm-drills');

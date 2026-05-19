@@ -2,8 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Film, ExternalLink, Loader2, Sparkles, AlertCircle, CheckCircle2 } from 'lucide-react';
 import toast from '../../ui/Toast';
-import { generatePipelineVisualImage, updateIssueStageVisualStyle } from '../../../services/api';
-import VisualStylePicker from '../VisualStylePicker';
+import { generatePipelineVisualImage } from '../../../services/api';
 import { getCreativeDirectorProject } from '../../../services/apiCreativeDirector';
 import { getSceneStatusBadge, PROJECT_STATUS_LABEL } from '../../creative-director/sceneStatus';
 import ScenePreview from '../../creative-director/ScenePreview';
@@ -146,16 +145,6 @@ export default function EpisodeVideoStage({ issue, series, onStageUpdate }) {
         </div>
         {!cdProjectId ? (
           <div className="flex items-center gap-2 flex-wrap">
-            <VisualStylePicker
-              compact
-              value={stage.visualStyleOverride || null}
-              inheritedLabel={series?.visualStyleDefault?.id ? 'Series default' : 'Pick style'}
-              onChange={async (next) => {
-                const updated = await updateIssueStageVisualStyle(issue.id, 'episodeVideo', next)
-                  .catch((err) => { toast.error(err.message || 'Save failed'); return null; });
-                if (updated) onStageUpdate?.('episodeVideo', updated.stages.episodeVideo, updated);
-              }}
-            />
             <select
               value={aspectRatio}
               onChange={(e) => setAspectRatio(e.target.value)}

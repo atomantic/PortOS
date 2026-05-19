@@ -21,7 +21,7 @@ import { shortId } from '../lib/fileUtils.js';
 // Adding a new extended field on `sanitizeCharacter` requires adding it here
 // too — otherwise the expand response key is silently dropped.
 const STRING_FIELDS = Object.freeze([
-  'pronouns', 'age', 'coreTheme', 'speechAccent', 'visualNotes',
+  'pronouns', 'age', 'coreTheme', 'speechAccent', 'speechPattern', 'visualNotes',
   'silhouetteNotes', 'postureNotes', 'specialTraits', 'visualIdentity',
   'motivations', 'likes', 'dislikes', 'mannerisms', 'relationships', 'skills',
 ]);

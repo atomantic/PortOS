@@ -117,3 +117,79 @@ export function renderCanonForPrompt(world) {
   }
   return sections.join('\n\n');
 }
+
+// Per-kind caps for the compact entity summary. The summary is meant for
+// per-issue text stages (prose/teleplay/comic-script) where the full canon
+// dump would dominate the prompt — keep one short line per kind so the LLM
+// gets continuity anchors without the budget hit.
+export const ENTITIES_SUMMARY_MAX_PER_KIND = 8;
+export const ENTITIES_SUMMARY_DESCRIPTOR_MAX = 80;
+
+const truncOneLine = (s) => {
+  if (typeof s !== 'string') return '';
+  const flat = s.trim().replace(/\s+/g, ' ');
+  if (!flat) return '';
+  if (flat.length <= ENTITIES_SUMMARY_DESCRIPTOR_MAX) return flat;
+  return `${flat.slice(0, ENTITIES_SUMMARY_DESCRIPTOR_MAX - 1).trimEnd()}…`;
+};
+
+// Pick the most useful 1-line descriptor available per kind. Characters lead
+// with role + a sliver of physicalDescription/personality; places use a slice
+// of description; objects pull from significance or description. The goal is
+// a quick orientation glance, not a substitute for the full canon block.
+const summarizeCharacter = (c) => {
+  const role = c.role ? `${c.role}` : '';
+  const body = truncOneLine(c.physicalDescription || c.personality || c.description || c.background || '');
+  if (role && body) return `${c.name} (${role} — ${body})`;
+  if (role) return `${c.name} (${role})`;
+  if (body) return `${c.name} (${body})`;
+  return c.name;
+};
+
+const summarizePlace = (p) => {
+  const label = p.name || p.slugline || '(unnamed)';
+  const desc = truncOneLine(p.description || p.recurringDetails || '');
+  return desc ? `${label} (${desc})` : label;
+};
+
+const summarizeObject = (o) => {
+  const desc = truncOneLine(o.significance || o.description || '');
+  return desc ? `${o.name} (${desc})` : o.name;
+};
+
+const SUMMARY_SECTIONS = [
+  { field: 'characters', header: 'Characters', formatEntry: summarizeCharacter },
+  { field: 'places',     header: 'Places',     formatEntry: summarizePlace },
+  { field: 'objects',    header: 'Objects',    formatEntry: summarizeObject },
+];
+
+/**
+ * Render a compact one-line-per-kind synopsis of the universe's named canon.
+ *
+ * Shape: each non-empty kind becomes `<Header>: name (descriptor); name; …`
+ * joined with newlines. Top-N entries per kind (canon list order = LLM-
+ * generated importance order). Returns an empty string when there is no
+ * canon — callers gate against that for the `(none)` placeholder.
+ *
+ * Distinct from `renderCanonForPrompt`:
+ *   - canon block: multi-line, rich metadata per entry, intended for arc-
+ *     level prompts that benefit from the full bible.
+ *   - this summary: terse one-line tags meant for per-issue text stages
+ *     (prose/teleplay/comic-script) where the budget can't afford the full
+ *     dump but the LLM still needs continuity anchors.
+ */
+export function renderEntitiesSummary(world, { maxPerKind = ENTITIES_SUMMARY_MAX_PER_KIND } = {}) {
+  if (!world || typeof world !== 'object') return '';
+  const lines = [];
+  for (const { field, header, formatEntry } of SUMMARY_SECTIONS) {
+    const entries = Array.isArray(world[field]) ? world[field] : [];
+    if (!entries.length) continue;
+    const shown = entries.slice(0, maxPerKind);
+    const hidden = entries.length - shown.length;
+    const tags = shown.map(formatEntry).filter(Boolean);
+    if (!tags.length) continue;
+    const joined = tags.join('; ');
+    lines.push(hidden > 0 ? `${header}: ${joined}; (+${hidden} more)` : `${header}: ${joined}`);
+  }
+  return lines.join('\n');
+}

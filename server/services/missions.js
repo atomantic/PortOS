@@ -9,7 +9,7 @@ import { promises as fs } from 'fs'
 import path from 'path'
 import { v4 as uuidv4 } from '../lib/uuid.js'
 import { cosEvents } from './cosEvents.js'
-import { safeJSONParse, ensureDir, PATHS } from '../lib/fileUtils.js'
+import { atomicWrite, safeJSONParse, ensureDir, PATHS, tryReadFile } from '../lib/fileUtils.js'
 
 const DATA_DIR = PATHS.missions
 
@@ -32,7 +32,7 @@ async function loadMissions() {
     if (!file.endsWith('.json')) continue
 
     const filePath = path.join(DATA_DIR, file)
-    const content = await fs.readFile(filePath, 'utf-8').catch(() => null)
+    const content = await tryReadFile(filePath)
     if (content) {
       const mission = safeJSONParse(content, null, { context: `mission:${file}` })
       if (mission) missions.push(mission)
@@ -50,7 +50,7 @@ async function loadMissions() {
 async function saveMission(mission) {
   await ensureDir(DATA_DIR)
   const filePath = path.join(DATA_DIR, `${mission.id}.json`)
-  await fs.writeFile(filePath, JSON.stringify(mission, null, 2))
+  await atomicWrite(filePath, mission)
 
   // Update cache
   if (missionsCache) {

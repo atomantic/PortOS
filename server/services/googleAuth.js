@@ -1,7 +1,7 @@
 import { google } from 'googleapis';
-import { readFile, writeFile } from 'fs/promises';
+import { writeFile } from 'fs/promises';
 import { join } from 'path';
-import { ensureDir, PATHS } from '../lib/fileUtils.js';
+import { ensureDir, PATHS, tryReadFile } from '../lib/fileUtils.js';
 
 const AUTH_DIR = join(PATHS.calendar, 'google-auth');
 const CREDENTIALS_FILE = join(AUTH_DIR, 'credentials.json');
@@ -20,7 +20,7 @@ async function ensureAuthDir() {
 
 export async function getCredentials() {
   await ensureAuthDir();
-  const raw = await readFile(CREDENTIALS_FILE, 'utf-8').catch(() => null);
+  const raw = await tryReadFile(CREDENTIALS_FILE);
   if (!raw) return null;
   return JSON.parse(raw);
 }
@@ -36,7 +36,7 @@ export async function saveCredentials({ clientId, clientSecret }) {
 
 export async function getTokens() {
   await ensureAuthDir();
-  const raw = await readFile(TOKENS_FILE, 'utf-8').catch(() => null);
+  const raw = await tryReadFile(TOKENS_FILE);
   if (!raw) return null;
   return JSON.parse(raw);
 }

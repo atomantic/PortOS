@@ -51,6 +51,15 @@ export { generateReport, getReport, getTodayReport, listReports, listBriefings, 
 
 const AGENT_ARCHIVE_RETENTION_DAYS = 90;
 const RESUME_DEQUEUE_DELAY_MS = 500;
+// CD recovery normally resolves in <100ms; hold start() at most this long so
+// a stuck recovery doesn't block daemon boot indefinitely.
+const CD_RECOVERY_BOOT_TIMEOUT_MS = 60_000;
+// Initial idle-review queue kicks off after start() — far enough back that
+// a fresh install isn't overwhelmed but close enough to not stall users.
+const POST_STARTUP_QUEUE_DELAY_MS = 30_000;
+// A task whose agent reported completed within this window is treated as
+// "recently completed" and protected from resetOrphanedTasks's reaper.
+const RECENT_COMPLETION_GRACE_MS = 60_000;
 
 // First non-empty line of a string. Used by addTask dedup: stored descriptions
 // are flattened to a single line by generateTasksMarkdown, so the comparison
@@ -218,7 +227,7 @@ export async function start() {
   const { cdRecoveryDone } = await import('./creativeDirector/recovery.js');
   await Promise.race([
     cdRecoveryDone,
-    new Promise((resolve) => setTimeout(resolve, 60000)),
+    new Promise((resolve) => setTimeout(resolve, CD_RECOVERY_BOOT_TIMEOUT_MS)),
   ]);
 
   // Then reset any orphaned in_progress tasks (no running agent)
@@ -359,7 +368,7 @@ export async function start() {
       await queueEligibleImprovementTasks(state, cosTaskData);
       setImmediate(() => dequeueNextTask());
     }).catch(err => emitLog('warn', `Post-startup improvement queuing failed: ${err.message}`));
-  }, 30000);
+  }, POST_STARTUP_QUEUE_DELAY_MS);
 
   return { success: true };
 }
@@ -562,7 +571,7 @@ async function resetOrphanedTasks() {
   const recentlyCompletedTaskIds = new Set(
     Object.values(state.agents)
       .filter(a => a.status === 'completed' && a.completedAt &&
-        (Date.now() - new Date(a.completedAt).getTime()) < 60000)
+        (Date.now() - new Date(a.completedAt).getTime()) < RECENT_COMPLETION_GRACE_MS)
       .map(a => a.taskId)
   );
 

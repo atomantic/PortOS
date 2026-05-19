@@ -1,4 +1,5 @@
-import { mkdir, writeFile, readFile, readdir, rm } from 'fs/promises';
+import { mkdir, readFile, readdir, rm } from 'fs/promises';
+import { atomicWrite } from './internal/atomicWrite.js';
 import { existsSync } from 'fs';
 import { join, extname } from 'path';
 import { spawn } from 'child_process';
@@ -165,9 +166,9 @@ export function createRunnerService(config = {}) {
         outputSize: 0
       };
 
-      await writeFile(join(runDir, 'metadata.json'), JSON.stringify(metadata, null, 2));
-      await writeFile(join(runDir, 'prompt.txt'), prompt);
-      await writeFile(join(runDir, 'output.txt'), '');
+      await atomicWrite(join(runDir, 'metadata.json'), metadata);
+      await atomicWrite(join(runDir, 'prompt.txt'), prompt);
+      await atomicWrite(join(runDir, 'output.txt'), '');
 
       hooks.onRunCreated?.(metadata);
       console.log(`🤖 AI run [${source}]: ${provider.name}/${metadata.model}`);
@@ -228,7 +229,7 @@ export function createRunnerService(config = {}) {
         clearTimeout(timeoutHandle);
         activeRuns.delete(runId);
 
-        await writeFile(outputPath, output);
+        await atomicWrite(outputPath, output);
 
         const metadata = safeJsonParse(await readFile(metadataPath, 'utf-8').catch(() => '{}'));
         metadata.endTime = new Date().toISOString();
@@ -250,7 +251,7 @@ export function createRunnerService(config = {}) {
           }
         }
 
-        await writeFile(metadataPath, JSON.stringify(metadata, null, 2));
+        await atomicWrite(metadataPath, metadata);
 
         if (metadata.success) {
           hooks.onRunCompleted?.(metadata, output);
@@ -347,7 +348,7 @@ export function createRunnerService(config = {}) {
           await handleProviderError(provider.id, errorAnalysis, responseBody);
         }
 
-        await writeFile(metadataPath, JSON.stringify(metadata, null, 2));
+        await atomicWrite(metadataPath, metadata);
 
         hooks.onRunFailed?.(metadata, metadata.error, '');
         onComplete?.(metadata);
@@ -397,7 +398,7 @@ export function createRunnerService(config = {}) {
           onData?.({ text: reasoning, isReasoning: true });
         }
 
-        await writeFile(outputPath, output);
+        await atomicWrite(outputPath, output);
         activeRuns.delete(runId);
 
         const metadata = safeJsonParse(await readFile(metadataPath, 'utf-8').catch(() => '{}'));
@@ -408,7 +409,7 @@ export function createRunnerService(config = {}) {
         metadata.outputSize = Buffer.byteLength(output);
         metadata.hadReasoning = reasoning.length > 0;
         metadata.usedReasoningAsFallback = usedReasoningAsFallback;
-        await writeFile(metadataPath, JSON.stringify(metadata, null, 2));
+        await atomicWrite(metadataPath, metadata);
 
         hooks.onRunCompleted?.(metadata, output);
         onComplete?.(metadata);
@@ -418,7 +419,7 @@ export function createRunnerService(config = {}) {
         activeRuns.delete(runId);
 
         if (output) {
-          await writeFile(outputPath, output).catch(() => {});
+          await atomicWrite(outputPath, output).catch(() => {});
         }
 
         const metadata = safeJsonParse(await readFile(metadataPath, 'utf-8').catch(() => '{}'));
@@ -438,7 +439,7 @@ export function createRunnerService(config = {}) {
           await handleProviderError(provider.id, errorAnalysis, output);
         }
 
-        await writeFile(metadataPath, JSON.stringify(metadata, null, 2));
+        await atomicWrite(metadataPath, metadata);
 
         hooks.onRunFailed?.(metadata, metadata.error, output);
         onComplete?.(metadata);

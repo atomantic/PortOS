@@ -1,6 +1,5 @@
-import { writeFile } from 'fs/promises';
 import { join } from 'path';
-import { ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';
+import { atomicWrite, ensureDir, PATHS, readJSONFile } from '../lib/fileUtils.js';
 import * as calendarSync from './calendarSync.js';
 import * as calendarAccounts from './calendarAccounts.js';
 import { addProgressEntry, getGoals } from './identity.js';
@@ -13,8 +12,7 @@ async function loadReview(date) {
 }
 
 async function saveReview(date, data) {
-  await ensureDir(REVIEW_DIR);
-  await writeFile(join(REVIEW_DIR, `${date}.json`), JSON.stringify(data, null, 2));
+  await atomicWrite(join(REVIEW_DIR, `${date}.json`), data);
 }
 
 export async function getDailyReview(date) {

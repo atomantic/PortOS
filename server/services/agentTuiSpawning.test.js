@@ -75,6 +75,7 @@ vi.mock('fs/promises', () => ({
 }));
 
 vi.mock('../lib/fileUtils.js', () => ({
+tryReadFile: vi.fn().mockResolvedValue(null),
   PATHS: { root: '/tmp/portos-root' }
 }));
 

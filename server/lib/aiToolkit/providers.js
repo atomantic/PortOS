@@ -1,6 +1,7 @@
-import { readFile, writeFile, mkdir } from 'fs/promises';
+import { readFile, rename } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, dirname } from 'path';
+import { atomicWrite } from './internal/atomicWrite.js';
 import { fileURLToPath } from 'url';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
@@ -49,29 +50,47 @@ export function createProviderService(config = {}) {
 
   const PROVIDERS_PATH = join(dataDir, providersFile);
 
-  async function ensureDataDir() {
-    if (!existsSync(dataDir)) {
-      await mkdir(dataDir, { recursive: true });
+  // JSON.parse with a corrupt-file rescue. A garbled providers.json (truncated
+  // write, hand-edit typo, disk corruption) would otherwise crash server boot.
+  // Rename the bad file to <path>.corrupt + start from empty so the CLI can
+  // reseed from the sample on next save.
+  async function parseOrRescue(content, source) {
+    try {
+      return JSON.parse(content);
+    } catch (err) {
+      const corruptPath = `${source}.corrupt.${Date.now()}`;
+      console.error(`❌ providers.json parse failed (${err.message}); renamed to ${corruptPath} and starting from empty`);
+      await rename(source, corruptPath).catch(() => {});
+      return { activeProvider: null, providers: {} };
     }
   }
 
   async function loadProviders() {
-    await ensureDataDir();
-
     if (!existsSync(PROVIDERS_PATH)) {
       if (sampleFile && existsSync(sampleFile)) {
         const sample = await readFile(sampleFile, 'utf-8');
-        await writeFile(PROVIDERS_PATH, sample);
-        return JSON.parse(sample);
+        // Parse BEFORE persisting — if the shipped sample is malformed we
+        // don't want to seed user-side providers.json with garbage, and
+        // parseOrRescue's rename target must be the user file, not the
+        // shared sample (which would silently move it aside on every boot).
+        let parsed;
+        try {
+          parsed = JSON.parse(sample);
+        } catch (err) {
+          console.error(`❌ sample providers file ${sampleFile} parse failed (${err.message}); starting from empty`);
+          return { activeProvider: null, providers: {} };
+        }
+        await atomicWrite(PROVIDERS_PATH, sample);
+        return parsed;
       }
       return { activeProvider: null, providers: {} };
     }
 
     const content = await readFile(PROVIDERS_PATH, 'utf-8');
-    const data = JSON.parse(content);
+    const data = await parseOrRescue(content, PROVIDERS_PATH);
 
     if (migrateCodexProvider(data)) {
-      await writeFile(PROVIDERS_PATH, JSON.stringify(data, null, 2));
+      await atomicWrite(PROVIDERS_PATH, data);
       console.log('🔧 Migrated codex provider config to codex-configured-default sentinel');
     }
 
@@ -79,8 +98,7 @@ export function createProviderService(config = {}) {
   }
 
   async function saveProviders(data) {
-    await ensureDataDir();
-    await writeFile(PROVIDERS_PATH, JSON.stringify(data, null, 2));
+    await atomicWrite(PROVIDERS_PATH, data);
   }
 
   return {

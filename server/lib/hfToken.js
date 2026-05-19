@@ -5,15 +5,15 @@
 // Final fallback reads ~/.cache/huggingface/token (written by `hf auth login`)
 // so the FLUX.2 banner doesn't nag users who already authenticated via the CLI.
 
-import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { tryReadFile } from './fileUtils.js';
 import { getSettings } from '../services/settings.js';
 
 const HF_CLI_TOKEN_PATH = join(homedir(), '.cache', 'huggingface', 'token');
 
 async function readHfCliToken() {
-  const buf = await readFile(HF_CLI_TOKEN_PATH, 'utf8').catch(() => null);
+  const buf = await tryReadFile(HF_CLI_TOKEN_PATH);
   const trimmed = buf?.trim();
   return trimmed || null;
 }

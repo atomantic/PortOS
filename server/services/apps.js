@@ -1,8 +1,7 @@
-import { writeFile } from 'fs/promises';
 import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import EventEmitter from 'events';
-import { ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
+import { atomicWrite, ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
 import { NON_PM2_TYPES, usesPm2 } from './streamingDetect.js';
 import { listProcesses } from './pm2.js';
 import { SELF_IMPROVEMENT_TASK_TYPES } from './taskSchedule.js';
@@ -95,7 +94,7 @@ async function loadApps() {
   const baseline = buildPortosApp();
   if (!data.apps[PORTOS_APP_ID]) {
     data.apps[PORTOS_APP_ID] = baseline;
-    await writeFile(APPS_FILE, JSON.stringify(data, null, 2));
+    await atomicWrite(APPS_FILE, data);
     console.log('📦 Seeded baseline PortOS app into apps registry');
   } else {
     // Reconcile: merge new baseline fields into existing entry (preserves user overrides)
@@ -115,7 +114,7 @@ async function loadApps() {
       }
     }
     if (dirty) {
-      await writeFile(APPS_FILE, JSON.stringify(data, null, 2));
+      await atomicWrite(APPS_FILE, data);
       console.log('📦 Reconciled PortOS baseline app with latest fields');
     }
   }
@@ -130,7 +129,7 @@ async function loadApps() {
  */
 async function saveApps(data) {
   await ensureDir(DATA_DIR);
-  await writeFile(APPS_FILE, JSON.stringify(data, null, 2));
+  await atomicWrite(APPS_FILE, data);
   // Update cache with saved data
   appsCache = data;
   cacheTimestamp = Date.now();

@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 // Mock dependencies before importing the module
 vi.mock('../lib/fileUtils.js', () => ({
+tryReadFile: vi.fn().mockResolvedValue(null),
   ensureDir: vi.fn(),
   readJSONFile: vi.fn(),
   PATHS: { cos: '/tmp/test/cos' }

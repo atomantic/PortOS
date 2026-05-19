@@ -26,18 +26,15 @@ vi.mock('../services/videoGen/local.js', () => ({
   defaultVideoModelId: vi.fn(() => 'ltx_video'),
 }));
 
-vi.mock('fs/promises', () => ({
-  readFile: vi.fn(),
-}));
-
 vi.mock('../lib/fileUtils.js', () => ({
+  tryReadFile: vi.fn(),
   PATHS: { images: '/mock/images' },
 }));
 
 import { getSettings } from '../services/settings.js';
 import * as imageGen from '../services/imageGen/index.js';
 import { imageGenEvents as realEmitter } from '../services/imageGenEvents.js';
-import { readFile } from 'fs/promises';
+import { tryReadFile } from '../lib/fileUtils.js';
 import sdapiRoutes from './sdapi.js';
 
 const enabled = () => getSettings.mockResolvedValue({ imageGen: { expose: { a1111: true } } });
@@ -144,7 +141,7 @@ describe('sdapi routes — A1111-compatible surface', () => {
         generationId: 'g-1', filename: 'g-1.png', path: '/data/images/g-1.png',
         mode: 'external', model: 'sd-1.5', seed: 1234,
       });
-      readFile.mockResolvedValue(Buffer.from([1, 2, 3]));
+      tryReadFile.mockResolvedValue(Buffer.from([1, 2, 3]));
 
       const r = await request(app).post('/sdapi/v1/txt2img').send({ prompt: 'a cat', width: 512, height: 512 });
 
@@ -163,7 +160,7 @@ describe('sdapi routes — A1111-compatible surface', () => {
         generationId: 'g-2', filename: 'g-2.png', path: '/data/images/g-2.png',
         mode: 'external', model: 'sd-1.5', seed: 1,
       });
-      readFile.mockResolvedValue(null);
+      tryReadFile.mockResolvedValue(null);
 
       const r = await request(app).post('/sdapi/v1/txt2img').send({ prompt: 'a cat' });
       expect(r.status).toBe(500);
@@ -186,7 +183,7 @@ describe('sdapi routes — A1111-compatible surface', () => {
         setImmediate(() => realEmitter.emit('completed', { generationId: 'g-3', seed: 4242 }));
         return result;
       });
-      readFile.mockResolvedValue(Buffer.from('png'));
+      tryReadFile.mockResolvedValue(Buffer.from('png'));
 
       const r = await request(app).post('/sdapi/v1/txt2img').send({ prompt: 'fire' });
       expect(r.status).toBe(200);

@@ -15,6 +15,7 @@ vi.mock('./cosEvents.js', () => ({
 }));
 
 vi.mock('../lib/fileUtils.js', () => ({
+tryReadFile: vi.fn().mockResolvedValue(null),
   ensureDir: vi.fn(),
   PATHS: { cos: '/mock/data/cos' },
   readJSONFile: vi.fn()

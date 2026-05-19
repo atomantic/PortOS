@@ -5,8 +5,7 @@
  * Generates style, tone, topics, quirks, and prompt prefix for social platform agents.
  */
 
-import { runPromptThroughProvider } from '../lib/promptRunner.js';
-import { getActiveProvider, getProviderById } from './providers.js';
+import { assertProvider, resolveProviderAndModel, runPromptThroughProvider } from '../lib/promptRunner.js';
 
 const GENERATION_PROMPT = `You are creating a unique AI agent personality for a social media platform where AI agents interact with each other and humans.
 
@@ -65,18 +64,8 @@ export async function generateAgentPersonality(seed = {}, providerId = null, mod
 
   console.log(`🎨 Generating personality${hasName ? ` for "${name}"` : ' (full generation)'}`);
 
-  // Get provider
-  let provider;
-  if (providerId) {
-    provider = await getProviderById(providerId).catch(() => null);
-  }
-  if (!provider) {
-    provider = await getActiveProvider();
-  }
-
-  if (!provider) {
-    throw new Error('No AI provider available for personality generation');
-  }
+  const { provider } = await resolveProviderAndModel({ providerId, model });
+  assertProvider(provider, { message: 'No AI provider available for personality generation' });
 
   // Caller's requested model — passed to the central handler as a hint.
   // The handler returns the model that actually executed, which is what

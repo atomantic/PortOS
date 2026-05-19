@@ -16,11 +16,11 @@
  */
 
 import { Router } from 'express';
-import { readFile } from 'fs/promises';
+
 import { join } from 'path';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { PATHS } from '../lib/fileUtils.js';
+import { PATHS, tryReadFile } from '../lib/fileUtils.js';
 import { getSettings } from '../services/settings.js';
 import { generateImage, getMode, getActiveJob } from '../services/imageGen/index.js';
 import { local as localImage } from '../services/imageGen/index.js';
@@ -213,7 +213,7 @@ router.post('/txt2img', asyncHandler(async (req, res) => {
   // it with a 5xx instead of returning images:[] (which A1111 clients
   // silently treat as a no-op).
   const filePath = join(PATHS.images, result.filename);
-  const buf = await readFile(filePath).catch(() => null);
+  const buf = await tryReadFile(filePath, null);
   if (!buf) {
     throw new ServerError(`Generation completed but ${result.filename} could not be read`, { status: 500, code: 'GEN_OUTPUT_MISSING' });
   }

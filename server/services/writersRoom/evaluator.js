@@ -6,7 +6,7 @@
 
 import { join } from 'path';
 import { readFile, readdir, rm } from 'fs/promises';
-import { PATHS, atomicWrite, ensureDir, safeJSONParse } from '../../lib/fileUtils.js';
+import { PATHS, atomicWrite, ensureDir, safeJSONParse, tryReadFile } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { stripCodeFences } from '../../lib/aiProvider.js';
 import { runStagedLLM } from '../../lib/stageRunner.js';
@@ -188,7 +188,7 @@ async function migrateLegacyAnalyses(workId) {
   if (legacy.length === 0) return 0;
   const loaded = (await Promise.all(legacy.map(async (id) => {
     const path = join(dir, `${id}.json`);
-    const content = await readFile(path, 'utf-8').catch(() => null);
+    const content = await tryReadFile(path);
     if (content === null) return null;
     const parsed = safeJSONParse(content, null, { allowArray: false, logError: true, context: path });
     return parsed ? { id, snapshot: parsed } : null;

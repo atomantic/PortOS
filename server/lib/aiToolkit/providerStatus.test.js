@@ -365,4 +365,46 @@ describe('Provider Status Service', () => {
       expect(newService.isAvailable('test-provider')).toBe(true);
     });
   });
+
+  describe('stale recovery on read', () => {
+    beforeEach(() => vi.useFakeTimers());
+    afterEach(() => vi.useRealTimers());
+
+    it('getStatus returns available:false while estimatedRecovery is in the future', async () => {
+      const now = Date.now();
+      vi.setSystemTime(now);
+      // defaultUsageLimitWait is 1000ms in our test setup — recovery 60s out
+      // means the 1000ms window is irrelevant; we control estimatedRecovery
+      // directly via fake timers.
+      await statusService.markUsageLimit('prov-a', { message: 'limit hit' });
+      // markUsageLimit uses Date.now() internally — with fake timers it lands
+      // exactly at `now`. The service sets estimatedRecovery = now + 1000ms.
+      // We are still AT `now`, so recovery is 1000ms in the future.
+      const status = statusService.getStatus('prov-a');
+      expect(status.available).toBe(false);
+    });
+
+    it('getStatus and getAllStatuses both flip to available:true after recovery deadline', async () => {
+      const now = Date.now();
+      vi.setSystemTime(now);
+      await statusService.markUsageLimit('prov-b', { message: 'limit hit' });
+      // Advance past the 1000ms defaultUsageLimitWait used in test setup
+      vi.setSystemTime(now + 1001);
+      const single = statusService.getStatus('prov-b');
+      expect(single.available).toBe(true);
+      const all = statusService.getAllStatuses();
+      expect(all.providers['prov-b'].available).toBe(true);
+    });
+
+    it('isAvailable returns true after the recovery deadline lapses', async () => {
+      const now = Date.now();
+      vi.setSystemTime(now);
+      await statusService.markUsageLimit('prov-c', { message: 'limit hit' });
+      // Still unavailable right now
+      expect(statusService.isAvailable('prov-c')).toBe(false);
+      // Advance time past deadline
+      vi.setSystemTime(now + 1001);
+      expect(statusService.isAvailable('prov-c')).toBe(true);
+    });
+  });
 });

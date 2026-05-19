@@ -8,6 +8,7 @@ vi.mock('./cosEvents.js', () => ({
 // fileUtils mock: include every named export consumed by ./cosState.js too,
 // so vi.importActual('./cosState.js') below resolves cleanly.
 vi.mock('../lib/fileUtils.js', () => ({
+tryReadFile: vi.fn().mockResolvedValue(null),
   ensureDir: vi.fn().mockResolvedValue(),
   ensureDirs: vi.fn().mockResolvedValue(),
   readJSONFile: vi.fn(),

@@ -1,7 +1,7 @@
-import { readFile, writeFile, unlink } from 'fs/promises';
+import { writeFile, unlink } from 'fs/promises';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
-import { PATHS, ensureDir, safeJSONParse } from '../lib/fileUtils.js';
+import { PATHS, ensureDir, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
 import { CURATED_MARKERS, MARKER_CATEGORIES, classifyGenotype, formatGenotype, resolveApoeHaplotype } from '../lib/curatedGenomeMarkers.js';
 
 const GENOME_DIR = PATHS.meatspace;
@@ -29,7 +29,7 @@ async function ensureGenomeDir() {
 
 async function loadMeta() {
   await ensureGenomeDir();
-  const raw = await readFile(META_FILE, 'utf-8').catch(() => null);
+  const raw = await tryReadFile(META_FILE);
   if (!raw) return { ...DEFAULT_META };
   return safeJSONParse(raw, { ...DEFAULT_META });
 }
@@ -86,7 +86,7 @@ export async function getSnpIndex() {
     return snpIndex;
   }
 
-  const content = await readFile(RAW_FILE, 'utf-8').catch(() => null);
+  const content = await tryReadFile(RAW_FILE);
   if (!content) {
     snpIndex = null;
     return null;

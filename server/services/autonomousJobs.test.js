@@ -6,6 +6,7 @@ vi.mock('./cosEvents.js', () => ({
 }))
 
 vi.mock('../lib/fileUtils.js', () => ({
+tryReadFile: vi.fn().mockResolvedValue(null),
   readJSONFile: vi.fn(),
   ensureDir: vi.fn().mockResolvedValue(),
   atomicWrite: vi.fn().mockResolvedValue(),

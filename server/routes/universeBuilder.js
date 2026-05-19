@@ -15,11 +15,11 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { randomUUID } from 'crypto';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import { validateRequest, optionalBooleanMap } from '../lib/validation.js';
 import * as svc from '../services/universeBuilder.js';
 import * as canonSvc from '../services/universeCanon.js';
 import { expandUniverseCharacter } from '../services/universeCharacterExpand.js';
-import { renderCharacterReferenceSheet } from '../services/universeCharacterSheet.js';
+import { renderCharacterReferenceSheet, deleteCharacterReferenceSheet } from '../services/universeCharacterSheet.js';
 import { BIBLE_KINDS, BIBLE_LIMITS, pruneStaleReferenceSheets } from '../lib/storyBible.js';
 import { getUniverseCanonUsage, listLinkedSeriesNames } from '../services/canonUsage.js';
 import { expandWorldTemplate, generateCategoryVariations } from '../services/universeBuilderExpand.js';
@@ -103,7 +103,7 @@ export const llmSchema = z.object({
 // PATCHing a previously saved lock map still pass validation (sanitizeLocked
 // rewrites it on read into the per-list keys).
 const lockedSchema = z.object({
-  ...Object.fromEntries(svc.LOCKABLE_FIELDS.map((k) => [k, z.boolean().optional()])),
+  ...optionalBooleanMap(svc.LOCKABLE_FIELDS),
   influences: z.boolean().optional(),
 }).strict();
 
@@ -673,6 +673,16 @@ const renderReferenceSheetSchema = z.object({
 router.post('/:id/characters/:entryId/render-reference-sheet', asyncHandler(async (req, res) => {
   const body = validateRequest(renderReferenceSheetSchema, req.body ?? {});
   const result = await renderCharacterReferenceSheet(req.params.id, req.params.entryId, body)
+    .catch((err) => { throw mapServiceError(err); });
+  res.json(result);
+}));
+
+// Delete the character's current reference sheet — unlinks the PNG from
+// `data/image-refs/` and nulls `referenceSheetImageRef` on every matching
+// character (via `purgeReferenceSheetFromAllUniverses`) so the UI clears
+// reactively without a refetch.
+router.delete('/:id/characters/:entryId/reference-sheet', asyncHandler(async (req, res) => {
+  const result = await deleteCharacterReferenceSheet(req.params.id, req.params.entryId)
     .catch((err) => { throw mapServiceError(err); });
   res.json(result);
 }));

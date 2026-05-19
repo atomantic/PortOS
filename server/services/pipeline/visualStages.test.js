@@ -31,15 +31,18 @@ const updateStageMock = vi.fn(async (issueId, stageId, patch) => ({
   issue: { ...mockIssue, stages: { ...mockIssue.stages, [stageId]: { ...mockIssue.stages[stageId], ...patch } } },
   stage: { ...mockIssue.stages[stageId], ...patch },
 }));
+const assertStageUnlockedMock = vi.fn(() => undefined);
 vi.mock('./issues.js', () => ({
   getIssue: (...a) => getIssueMock(...a),
   updateStage: (...a) => updateStageMock(...a),
+  assertStageUnlocked: (...a) => assertStageUnlockedMock(...a),
   VISUAL_STAGE_IDS: ['comicPages', 'storyboards', 'episodeVideo'],
   STAGE_IDS: ['idea', 'prose', 'comicScript', 'teleplay', 'comicPages', 'storyboards', 'episodeVideo'],
 }));
 
 vi.mock('./series.js', () => ({
   getSeries: vi.fn(async () => ({ id: 'ser-test', name: 'Test', styleNotes: 'noir', characters: [], settings: [] })),
+  STYLE_PROMPT_OVERRIDE_MODE_DEFAULT: 'prepend',
 }));
 
 vi.mock('../settings.js', () => ({
@@ -83,6 +86,7 @@ const {
 beforeEach(() => {
   getIssueMock.mockClear();
   updateStageMock.mockClear();
+  assertStageUnlockedMock.mockClear();
   enqueueJobMock.mockClear();
   runStagedLLMMock.mockClear();
 });
@@ -205,11 +209,11 @@ describe('composeComicPagePrompt', () => {
     expect(prompt).toMatch(/cinematic ink illustration/);
   });
 
-  it('prepends series.stylePromptOverride ahead of the universe embrace tokens', () => {
+  it('mode=prepend (default): override leads, universe embrace tokens trail', () => {
     // A per-series override lets one series in a shared universe deviate
     // visually (e.g. a noir spin-off) without forking the universe. The
-    // override prepends so its tokens land in the heaviest position, with
-    // the universe style trailing — both must appear, override first.
+    // default 'prepend' mode places override first so its tokens land in
+    // the heaviest position, with the universe style trailing.
     const world = {
       influences: {
         embrace: ['cinematic ink illustration', 'dramatic lighting'],
@@ -225,20 +229,42 @@ describe('composeComicPagePrompt', () => {
     expect(overrideAt).toBeLessThan(universeAt);
   });
 
-  it('falls through to universe-only style when stylePromptOverride is empty', () => {
+  it('mode=append: universe leads, override trails', () => {
+    const world = {
+      influences: { embrace: ['cinematic ink illustration', 'dramatic lighting'], avoid: [] },
+    };
+    const series = { ...SERIES, stylePromptOverride: 'moody noir lighting', stylePromptOverrideMode: 'append' };
+    const prompt = composeComicPagePrompt({ series, world, page: PAGE, pageNumber: 1 });
+    const overrideAt = prompt.indexOf('moody noir lighting');
+    const universeAt = prompt.indexOf('cinematic ink illustration');
+    expect(overrideAt).toBeGreaterThan(universeAt);
+  });
+
+  it('mode=override: drops the universe embrace tokens entirely', () => {
+    const world = {
+      influences: { embrace: ['cinematic ink illustration', 'dramatic lighting'], avoid: [] },
+    };
+    const series = { ...SERIES, stylePromptOverride: 'moody noir lighting', stylePromptOverrideMode: 'override' };
+    const prompt = composeComicPagePrompt({ series, world, page: PAGE, pageNumber: 1 });
+    expect(prompt).toMatch(/moody noir lighting/);
+    expect(prompt).not.toMatch(/cinematic ink illustration/);
+  });
+
+  it('falls through to universe-only style when stylePromptOverride is empty (any mode)', () => {
     const world = {
       influences: { embrace: ['cinematic ink illustration'], avoid: [] },
     };
-    const seriesNoOverride = { ...SERIES, stylePromptOverride: '' };
-    const prompt = composeComicPagePrompt({ series: seriesNoOverride, world, page: PAGE, pageNumber: 1 });
-    expect(prompt).toMatch(/cinematic ink illustration/);
-    expect(prompt).not.toMatch(/moody noir/);
+    // Mode is ignored when there's no override text — universe always wins.
+    for (const mode of ['prepend', 'append', 'override']) {
+      const series = { ...SERIES, stylePromptOverride: '', stylePromptOverrideMode: mode };
+      const prompt = composeComicPagePrompt({ series, world, page: PAGE, pageNumber: 1 });
+      expect(prompt).toMatch(/cinematic ink illustration/);
+    }
   });
 
   it('applies stylePromptOverride even without a universe (no embrace tokens)', () => {
-    // The override is independent of the universe — if the series has an
-    // override but isn't linked to a universe (or the universe has no
-    // embrace tokens), the override still prepends to the prompt.
+    // The override is independent of the universe — if the universe has no
+    // embrace tokens, the override still threads through.
     const seriesWithOverride = { ...SERIES, stylePromptOverride: 'experimental rotoscope' };
     const prompt = composeComicPagePrompt({ series: seriesWithOverride, page: PAGE, pageNumber: 1 });
     expect(prompt).toMatch(/experimental rotoscope/);
@@ -329,45 +355,16 @@ describe('composeComicPagePrompt', () => {
   });
 });
 
-describe('visual style resolution threads into image prompts', () => {
-  it('applies series.visualStyleDefault catalog fragment to the cover prompt', async () => {
-    const seriesMod = await import('./series.js');
-    seriesMod.getSeries.mockResolvedValueOnce({
-      id: 'ser-test', name: 'Test', styleNotes: '', characters: [], settings: [],
-      visualStyleDefault: { id: 'graphic-novel', customPrompt: null },
-    });
-    const result = await enqueueComicCover('iss-test', {});
-    // The graphic-novel preset's promptFragment lands inside the cover prompt's
-    // `Art style: ...` clause via stackStyle's composition.
-    expect(result.prompt).toMatch(/Art style:.*halftone/i);
+
+describe('per-stage lock enforcement', () => {
+  it('checks the comicPages lock before queueing a cover render', async () => {
+    await enqueueComicCover('iss-test', {});
+    expect(assertStageUnlockedMock).toHaveBeenCalledWith(expect.objectContaining({ id: 'iss-test' }), 'comicPages');
   });
 
-  it('stage override beats series default for comic page prompts', async () => {
-    const seriesMod = await import('./series.js');
-    seriesMod.getSeries.mockResolvedValueOnce({
-      id: 'ser-test', name: 'Test', styleNotes: '', characters: [], settings: [],
-      visualStyleDefault: { id: 'graphic-novel', customPrompt: null },
-    });
-    getIssueMock.mockResolvedValueOnce({
-      ...structuredClone(mockIssue),
-      stages: {
-        ...mockIssue.stages,
-        comicPages: {
-          ...mockIssue.stages.comicPages,
-          visualStyleOverride: { id: 'anime', customPrompt: null },
-        },
-      },
-    });
-    const result = await enqueueComicCover('iss-test', {});
-    expect(result.prompt).toMatch(/anime|cel-shaded/i);
-    expect(result.prompt).not.toMatch(/halftone/i);
-  });
-
-  it('falls back to the storyboards catalog default (cinematic) when nothing is configured', async () => {
-    const result = await enqueueStoryboardSceneVideo('iss-test', 0, { aspectRatio: '16:9' });
-    // 'cinematic' fragment includes "photorealistic" and "35mm film".
-    const params = enqueueJobMock.mock.calls.at(-1)[0].params;
-    expect(params.prompt).toMatch(/photorealistic|35mm film/i);
+  it('checks the storyboards lock before queueing a scene video', async () => {
+    await enqueueStoryboardSceneVideo('iss-test', 0, { aspectRatio: '16:9' });
+    expect(assertStageUnlockedMock).toHaveBeenCalledWith(expect.objectContaining({ id: 'iss-test' }), 'storyboards');
   });
 });
 

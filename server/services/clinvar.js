@@ -1,10 +1,10 @@
 import { createWriteStream, createReadStream } from 'fs';
-import { readFile, writeFile, stat, unlink } from 'fs/promises';
+import { writeFile, stat, unlink } from 'fs/promises';
 import { join } from 'path';
 import { createGunzip } from 'zlib';
 import { createInterface } from 'readline';
 import { pipeline } from 'stream/promises';
-import { PATHS, ensureDir, safeJSONParse } from '../lib/fileUtils.js';
+import { PATHS, ensureDir, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
 
 const GENOME_DIR = PATHS.meatspace;
 const CLINVAR_GZ = join(GENOME_DIR, 'clinvar-raw.txt.gz');
@@ -44,7 +44,7 @@ let clinvarIndex = null;
  */
 export async function getClinvarStatus() {
   await ensureDir(GENOME_DIR);
-  const meta = await readFile(CLINVAR_META, 'utf-8').catch(() => null);
+  const meta = await tryReadFile(CLINVAR_META);
   if (!meta) return { synced: false };
   return JSON.parse(meta);
 }
@@ -290,7 +290,7 @@ export async function syncClinvar(onProgress) {
 async function loadClinvarIndex() {
   if (clinvarIndex) return clinvarIndex;
 
-  const raw = await readFile(CLINVAR_INDEX, 'utf-8').catch(() => null);
+  const raw = await tryReadFile(CLINVAR_INDEX);
   if (!raw) return null;
 
   clinvarIndex = safeJSONParse(raw, null, { logError: true, context: 'ClinVar index' });

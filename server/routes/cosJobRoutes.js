@@ -7,7 +7,8 @@ import * as cos from '../services/cos.js';
 import * as autonomousJobs from '../services/autonomousJobs.js';
 import { checkJobGate, hasGate, getRegisteredGates } from '../services/jobGates.js';
 import { parseCronToNextRun } from '../services/eventScheduler.js';
-import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
+import { createCosJobSchema, updateCosJobSchema } from '../lib/validation.js';
 
 const router = Router();
 
@@ -69,15 +70,10 @@ router.get('/jobs/:id', asyncHandler(async (req, res) => {
 
 // POST /api/cos/jobs - Create a new autonomous job
 router.post('/jobs', asyncHandler(async (req, res) => {
-  const { name, description, category, type, interval, intervalMs, scheduledTime, cronExpression, enabled, priority, autonomyLevel, promptTemplate, command, triggerAction } = req.body;
+  const parsedJob = createCosJobSchema.safeParse(req.body);
+  if (!parsedJob.success) failValidation(parsedJob);
+  const { name, description, category, type, interval, intervalMs, scheduledTime, cronExpression, enabled, priority, autonomyLevel, promptTemplate, command, triggerAction } = parsedJob.data;
 
-  const VALID_JOB_TYPES = ['agent', 'shell', 'script'];
-  if (!name) {
-    throw new ServerError('name is required', { status: 400, code: 'VALIDATION_ERROR' });
-  }
-  if (type && !VALID_JOB_TYPES.includes(type)) {
-    throw new ServerError(`Invalid job type: ${type}. Must be one of: ${VALID_JOB_TYPES.join(', ')}`, { status: 400, code: 'VALIDATION_ERROR' });
-  }
   if (type === 'shell' && !command?.trim()) {
     throw new ServerError('command is required for shell jobs', { status: 400, code: 'VALIDATION_ERROR' });
   }
@@ -111,8 +107,10 @@ router.post('/jobs', asyncHandler(async (req, res) => {
 
 // PUT /api/cos/jobs/:id - Update a job
 router.put('/jobs/:id', asyncHandler(async (req, res) => {
+  const parsedJobUpdate = updateCosJobSchema.safeParse(req.body);
+  if (!parsedJobUpdate.success) failValidation(parsedJobUpdate);
   const { name, description, category, type, interval, intervalMs, scheduledTime, cronExpression,
-    enabled, priority, autonomyLevel, promptTemplate, command, triggerAction, weekdaysOnly } = req.body;
+    enabled, priority, autonomyLevel, promptTemplate, command, triggerAction, weekdaysOnly } = parsedJobUpdate.data;
   if (cronExpression) {
     const parts = cronExpression.trim().split(/\s+/);
     if (parts.length !== 5) {

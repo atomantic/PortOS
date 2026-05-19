@@ -3,7 +3,7 @@ import { existsSync } from 'fs';
 import { join, basename } from 'path';
 import { getActiveProvider, getProviderById } from './providers.js';
 import { spawn } from 'child_process';
-import { safeJSONParse } from '../lib/fileUtils.js';
+import { safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
 
 /**
  * Gather project context for AI analysis
@@ -24,7 +24,7 @@ async function gatherProjectContext(dirPath) {
   // Read package.json
   const pkgPath = join(dirPath, 'package.json');
   if (existsSync(pkgPath)) {
-    const content = await readFile(pkgPath, 'utf-8').catch(() => null);
+    const content = await tryReadFile(pkgPath);
     if (content) {
       context.packageJson = content;
     }
@@ -43,7 +43,7 @@ async function gatherProjectContext(dirPath) {
   for (const pattern of configPatterns) {
     const configPath = join(dirPath, pattern);
     if (existsSync(configPath)) {
-      const content = await readFile(configPath, 'utf-8').catch(() => null);
+      const content = await tryReadFile(configPath);
       if (content) {
         context.configFiles.push({ name: pattern, content: content.substring(0, 2000) });
       }

@@ -1,0 +1,169 @@
+# server/lib/ — shared server helpers
+
+Pure / side-effect-free helpers, validators, parsers, prompt builders, and shared constants.
+**Before adding a new helper here, grep this catalog first** — if a similar module exists,
+extend it. When you add a new module, add it to `index.js` AND add a row here.
+
+Service-layer orchestration (multi-step business logic) lives in `server/services/`, not here.
+
+## Discovery rule
+
+```
+grep -i "what you want to do" server/lib/README.md
+```
+
+The barrel `server/lib/index.js` is a machine-checkable enumeration of every public surface;
+`server/lib/index.test.js` verifies that every non-test `.js` file is re-exported AND appears in this README, AND that no two flat-exported modules share an identifier name.
+
+**Namespace exports.** The validation modules (`brainValidation`, `digitalTwinValidation`, etc.), `runners`, `stageRunner`, and `storyBible` are surfaced through the barrel as namespace exports — `barrel.brainValidation.settingsUpdateInputSchema`, not bare `settingsUpdateInputSchema` — because their generic names collide with peers. Direct deep imports (`import { settingsUpdateInputSchema } from './brainValidation.js'`) are unaffected.
+
+---
+
+## Validation (Zod schemas + request validators)
+
+| Module | Purpose |
+|---|---|
+| `validation.js` | Catch-all Zod schemas + the `validateRequest` middleware + shared helpers (`optionalBooleanMap`). Most route inputs validate through here. |
+| `appleHealthValidation.js` | Apple Health import payloads. |
+| `brainValidation.js` | Brain/memory route schemas (search, ingest, edit). |
+| `digitalTwinValidation.js` | Digital twin document/category schemas. |
+| `genomeValidation.js` | Genome upload + search schemas. |
+| `identityValidation.js` | Identity section + chronotype + scheduling schemas. |
+| `meatspaceValidation.js` | Meatspace (location/health log) schemas. |
+| `memoryValidation.js` | Memory record + retrieval schemas. |
+| `notesValidation.js` | Notes route schemas + safe-relative-path guard. |
+| `postValidation.js` | Social post schemas. |
+| `socketValidation.js` | Socket event payload schemas. |
+| `telegramValidation.js` | Telegram bot config + test schemas. |
+
+## Story & narrative
+
+| Module | Purpose |
+|---|---|
+| `storyBible.js` | Canonical Character / Place / Object shapes + `BIBLE_LIMITS`. |
+| `storyArc.js` | Canonical Arc + Season shapes for pipeline arc planning. |
+| `canonPrompt.js` | Per-kind field-precedence rules; SHORT/RICH/PREVIEW spec tables; `flattenCanonDescriptorFragments` / `mapCanonDescriptorFragments` / `descriptorForCanonEntry`. |
+| `scenePrompt.js` | Scene-prompt composer + bible matchers (chars/places/objects in text). |
+| `sceneExtractor.js` | Split prose or teleplay into scene list via LLM. |
+| `seasonStructure.js` | Season/episode structure recommendation. |
+| `bibleExtractor.js` | LLM bible-extraction stage + sanitization. |
+| `comicScriptParser.js` | Marvel/DC-format comic script parser. |
+| `composeStyledPrompt.js` | Compose user prompt + negative with an optional style preset. |
+| `creativeDirectorPresets.js` | Locked-at-creation aspect ratio + quality presets for the Creative Director. |
+| `creativeDirectorPrompts.js` | Creative Director agent prompt builders. |
+| `universePromptRenderers.js` | Renderers that turn a universe's `categories` map + canon into prompt context. |
+| `writersRoomPresets.js` | Writers Room enums (WORK_KINDS, WORK_STATUSES, ANALYSIS_KINDS). |
+| `writersRoomStylePresets.js` | Curated style presets for storyboards + universe. |
+
+## Prompt & AI
+
+| Module | Purpose |
+|---|---|
+| `aiToolkit/` | Vendored toolkit (providers + runner + prompts + status). See `aiToolkit/index.js`. |
+| `aiProvider.js` | Shared AI provider utilities for LLM calls. |
+| `promptRunner.js` | Shared LLM runner wrapper. |
+| `tuiPromptRunner.js` | One-shot TUI prompt runner (PTY-driven). |
+| `tuiHandshake.js` | Shared TUI invocation + paste-handshake constants. |
+| `stageRunner.js` | Shared staged-LLM runner. |
+| `promptTemplate.js` | Mustache-flavored, dot-notation-aware prompt template engine. |
+| `promptPartials.js` | Mustache-style partial expansion. |
+| `mediaModels.js` | Single source of truth for image/video model metadata. |
+| `providerModels.js` | Provider model resolution sentinel + helpers. |
+| `runners.js` | Image-runner family constants. |
+| `codexAssistantExtract.js` | Strip Codex CLI banner + echoed metadata from session transcript. |
+| `codexCliOutput.js` | Network/system error patterns for `agentErrorAnalysis.js`. |
+| `ansiStrip.js` | Streaming ANSI / control-byte stripper. |
+| `hfToken.js` | HuggingFace token resolution (settings > env > CLI). |
+
+## File & I/O
+
+| Module | Purpose |
+|---|---|
+| `fileUtils.js` | `PATHS` constants, `atomicWrite`, `tryReadFile`, `safeJSONParse`, dir scans, hashes, JSON helpers. Most paths/file work goes through here. |
+| `fileWriteQueue.js` | Single-tail promise chain for serializing writes to a file. |
+| `multipart.js` | Streaming multipart/form-data parser. |
+| `pdfImageEmbed.js` | PDF image embed helpers for comic / volume PDFs. |
+| `zipStream.js` | Streaming ZIP parser. |
+
+## Process execution
+
+| Module | Purpose |
+|---|---|
+| `commandSecurity.js` | Allowlist of safe shell commands. |
+| `execGit.js` | `execGit` utility imported by `git.js` + worktree manager. |
+| `ffmpeg.js` | Shared ffmpeg helpers (videoGen + videoTimeline). |
+| `pythonSetup.js` | Python venv / runner setup helpers. |
+
+## Networking
+
+| Module | Purpose |
+|---|---|
+| `httpClient.js` | Fetch-based HTTP client factory (axios.create replacement). |
+| `fetchWithTimeout.js` | `fetch` wrapper with AbortController timeout. |
+| `peerHttpClient.js` | Federation HTTP/Socket.IO client (TLS validation off — Tailnet is the trust boundary). |
+| `peerSelfHost.js` | Tailscale-issued hostname this PortOS sends in federation. |
+| `peerUrl.js` | Build the base URL for a peer. |
+| `sharingOrigin.js` | Origin metadata for records imported from share buckets. |
+| `tailscale.js` | Common paths where the Tailscale CLI binary is found. |
+| `httpsState.js` | Captures whether PortOS booted with HTTPS active. |
+
+## Search & indexing
+
+| Module | Purpose |
+|---|---|
+| `bm25.js` | BM25 ranking + inverted-index helpers. |
+| `vectorMath.js` | Vector math utilities (cosine, etc.). |
+| `memoryStats.js` | macOS-correct memory accounting (handles "Pages free" quirk). |
+
+## Extraction & parsing
+
+| Module | Purpose |
+|---|---|
+| `jsonExtract.js` | Pull JSON blocks out of LLM responses. |
+| `taskParser.js` | Parse `TASKS.md` format. |
+
+## Curated static data
+
+| Module | Purpose |
+|---|---|
+| `curatedGenomeMarkers.js` | Curated SNP database with classification logic. |
+
+## Domain utilities
+
+| Module | Purpose |
+|---|---|
+| `civitai.js` | Civitai URL parsing + API client. |
+| `issueLength.js` | Per-issue size targets fed into text stages. |
+| `mediaItemKey.js` | `<kind>:<ref>` key vocabulary for media items. |
+| `navManifest.js` | Single source of truth for nav (`⌘K` palette + voice). Add an entry when you add a page. |
+| `pipelineIssueOrder.js` | Pure renumber algorithm for pipeline issues. |
+| `planIds.js` | Utilities for PLAN.md `[slug]` IDs. |
+| `renderSlot.js` | Render-slot helpers for `(proof\|final)Image` per stage. |
+| `telegramClient.js` | Telegram bot client. |
+
+## Model & config
+
+| Module | Purpose |
+|---|---|
+| `db.js` | PostgreSQL connection pool. |
+| `ports.js` | Canonical PORTS object (re-exported from `ecosystem.config.cjs`). |
+| `platform.js` | Platform/OS detection helpers. |
+| `timezone.js` | Timezone utilities for scheduling. |
+| `buildId.js` | Build-ID derived from the built client bundle. |
+
+## General utilities
+
+| Module | Purpose |
+|---|---|
+| `asyncMutex.js` | Promise-based async mutex. |
+| `errorHandler.js` | `ServerError` + `asyncHandler` middleware. |
+| `objects.js` | Object utilities (deep merge, etc.). |
+| `sseUtils.js` | Per-job SSE stream helpers (imageGen + others). |
+| `uuid.js` | `v4()` thin wrapper over `crypto.randomUUID()`. |
+
+## Test support
+
+| Module | Purpose |
+|---|---|
+| `mockPathsDataRoot.js` | Shared `vi.mock` factory for `PATHS.data → temp dir`. |
+| `testHelper.js` | Test HTTP request helper. |

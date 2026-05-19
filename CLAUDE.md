@@ -135,15 +135,61 @@ PortOS bundles [slashdo](https://github.com/atomantic/slashdo) as a git submodul
 - CoS agents can use `loadSlashdoCommand(name)` from `subAgentSpawner.js` to inline command content into prompts (resolves `!cat` lib includes automatically)
 - The `.claude/commands/do/` symlinks make all `/do:*` commands available as project-level Claude Code slash commands
 
+## Module Organization
+
+PortOS has reached the size where re-implementing a helper is now cheaper to *start* than to find what already exists. To keep that pressure off, every directory that holds reusable code carries a catalog `README.md` and an enumerable `index.js` barrel. **Before writing a helper, grep the catalog.**
+
+### Where new code lives
+
+- **Pure / side-effect-free helpers** → `server/lib/` or `client/src/lib/`
+- **React hooks (state + lifecycle)** → `client/src/hooks/`. Names start with `use`.
+- **Formatting helpers (pure, no React)** → `client/src/utils/` (`formatters.js`, `cronHelpers.js`, etc.)
+- **HTTP / Socket / browser clients** → `client/src/services/`. API wrappers start with `api*`.
+- **Express handlers** → `server/routes/`. Use `validateRequest` + `lib/validation.js` schemas.
+- **Domain orchestration (multi-step business logic over models + services)** → `server/services/`.
+
+One concern per file. Tests live next to their source as `<name>.test.js`. Naming is camelCase with a domain prefix (`brainValidation.js`, `creativeDirectorPrompts.js`).
+
+### Discovery rule (BEFORE writing a helper)
+
+Grep the catalog for the directory most likely to hold it:
+
+```
+grep -i "what you want to do" server/lib/README.md
+grep -i "what you want to do" client/src/lib/README.md
+grep -i "what you want to do" client/src/hooks/README.md
+grep -i "what you want to do" client/src/services/README.md
+```
+
+If a close match exists, **extend it or use it**. Only add a new module when no existing one fits. Examples of pre-existing helpers that are easy to miss but should be reused:
+
+- `tryReadFile` in `server/lib/fileUtils.js` — collapses `readFile(path).catch(() => null)`.
+- `atomicWrite` in `server/lib/fileUtils.js` — `ensureDir + writeFile + JSON.stringify` in one call.
+- `optionalBooleanMap(keys)` in `server/lib/validation.js` — `z.object(Object.fromEntries(KEYS.map(k => [k, z.boolean().optional()])))` collapsed.
+- `flattenCanonDescriptorFragments` / `mapCanonDescriptorFragments` in `server/lib/canonPrompt.js` (mirrored to client) — render `[{ prefix?, value }]` fragments to a sentence string or array.
+- `copyToClipboard` / `writeClipboardSilently` / `readClipboard` in `client/src/lib/clipboard.js` — safe across insecure-origin contexts. Do not use `navigator.clipboard.writeText` inline.
+- `useLockToggle` in `client/src/hooks/useLockToggle.js` — optimistic-PATCH lock-toggle for any new lock button.
+- `useSseProgress` in `client/src/hooks/useSseProgress.js` — generic JSON-frame EventSource subscriber; build new progress hooks on top of this.
+- `formatBytes` / `formatTimecode` / `formatDateShort` / `formatDurationMs` / `timeAgo` in `client/src/utils/formatters.js` — do not re-define formatters inside components.
+
+### Maintenance rule (WHEN adding a public module)
+
+Any new file added to `server/lib/`, `client/src/lib/`, `client/src/hooks/`, or a new `apiX.js` in `client/src/services/` **MUST**:
+
+1. Be re-exported from the same-directory `index.js` barrel (or, for `services/`, from `api.js`).
+2. Get a one-line row in the same-directory `README.md`.
+
+This is the one rule that keeps catalogs from rotting. The barrel is enforced by `server/lib/index.test.js` (and matching client tests) which verify that every non-test `.js` file appears both in the barrel AND in the README — boot will fail loudly if either drifts.
+
+**Name collisions.** When two modules in the same directory export the same identifier (e.g. `settingsUpdateInputSchema` in both `brainValidation.js` and `digitalTwinValidation.js`), the barrel uses `export * as <name>` namespace exports so the collision is unambiguous: callers reach for `brainValidation.settingsUpdateInputSchema` explicitly. The catch-all `validation.js` (and similar central modules) stays flat. The collision-detector test fails if two flat-`export *` modules ever share an identifier — forcing namespace resolution at the point the conflict is introduced.
+
+Existing deep imports (`import { x } from '../lib/foo.js'`) keep working — the barrel exists for *discovery*, not to force a re-import. New code may use either form.
+
+The worked example for "barrel + documented exports" is `server/lib/aiToolkit/index.js`.
+
 ## Scope Boundary
 
 When CoS agents or AI tools work on managed apps outside PortOS, all research, plans, docs, and code for those apps must be written to the target app's own repository/directory -- never to this repo. PortOS stores only its own features, plans, and documentation. If an agent generates a PLAN.md, research doc, or feature spec for another app, it goes in that app's directory.
-
-## Worktrees
-
-When working **directly in the Claude Code TUI** with the user driving, edit the main repo directly — don't spawn a worktree. Use normal feature branches and PRs (or push to `main`) when the work is done. The user is at the keyboard, so there is no risk of stepping on in-flight work.
-
-**Worktrees are required only for CoS sub-agents** spawned out of `server/services/cos/subAgentSpawner.js`. Those run unattended in parallel and need isolation so they don't trample each other or the user's working tree. The worktree manager (`server/services/cos/worktreeManager.js`) handles this automatically — TUI sessions should not duplicate that behavior.
 
 ## Code Conventions
 

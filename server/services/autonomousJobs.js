@@ -14,14 +14,14 @@
  * - Custom user-defined jobs
  */
 
-import { writeFile, readFile, rename, readdir, stat, rm } from 'fs/promises'
+import { writeFile, rename, readdir, stat, rm } from 'fs/promises'
 import { join, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { existsSync } from 'fs'
 import { v4 as uuidv4 } from '../lib/uuid.js'
 import { spawn } from 'child_process'
 import { cosEvents } from './cosEvents.js'
-import { DAY, ensureDir, HOUR, PATHS, readJSONFile, atomicWrite } from '../lib/fileUtils.js'
+import { DAY, ensureDir, HOUR, PATHS, readJSONFile, atomicWrite, tryReadFile } from '../lib/fileUtils.js'
 import { createMutex } from '../lib/asyncMutex.js'
 import { checkAndPrompt as autobiographyCheckAndPrompt } from './autobiography.js'
 import { runGoalCheckIn } from './goalCheckIn.js'
@@ -481,9 +481,9 @@ async function syncSkillTemplatesFromSample() {
     if (!file.endsWith('.md')) continue
     const destPath = join(JOBS_SKILLS_DIR, file)
     const shippedPath = join(shippedDir, file)
-    const sampleContent = await readFile(join(sampleDir, file), 'utf-8').catch(() => null)
+    const sampleContent = await tryReadFile(join(sampleDir, file))
     if (!sampleContent) continue
-    const existingContent = await readFile(destPath, 'utf-8').catch(() => null)
+    const existingContent = await tryReadFile(destPath)
     if (!existingContent) {
       // Case a: fresh install — seed file and record shipped snapshot
       await writeFile(destPath, sampleContent)
@@ -493,11 +493,11 @@ async function syncSkillTemplatesFromSample() {
     }
     if (existingContent === sampleContent) {
       // Case b: file already matches sample — ensure .shipped is current
-      const shippedContent = await readFile(shippedPath, 'utf-8').catch(() => null)
+      const shippedContent = await tryReadFile(shippedPath)
       if (shippedContent !== sampleContent) await writeFile(shippedPath, sampleContent)
       continue
     }
-    const shippedContent = await readFile(shippedPath, 'utf-8').catch(() => null)
+    const shippedContent = await tryReadFile(shippedPath)
     if (existingContent === shippedContent) {
       // Case c: file matches last-shipped snapshot but sample has changed — safe to update
       await writeFile(destPath, sampleContent)
@@ -537,7 +537,7 @@ async function loadJobs() {
  */
 async function migrateScriptsState(jobsData) {
   const scriptsFile = join(DATA_DIR, 'scripts-state.json')
-  const raw = await readFile(scriptsFile, 'utf-8').catch(() => null)
+  const raw = await tryReadFile(scriptsFile)
   if (!raw) return false
 
   let scriptsState
@@ -1101,7 +1101,7 @@ async function toggleJob(jobId) {
  */
 async function loadJobSkillTemplate(skillName) {
   const filePath = join(JOBS_SKILLS_DIR, `${skillName}.md`)
-  const content = await readFile(filePath, 'utf-8').catch(() => null)
+  const content = await tryReadFile(filePath)
   if (content) {
     console.log(`🎯 Loaded job skill template: ${skillName}`)
   }
@@ -1378,7 +1378,6 @@ async function executeScriptJob(job) {
 
   return result
 }
-
 
 /**
  * Execute a shell job directly (no AI agent needed)

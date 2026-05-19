@@ -163,19 +163,10 @@ router.post('/test', asyncHandler(async (req, res) => {
   }
   const voice = (req.body?.voice || '').toString().trim() || undefined;
   const engine = validEngine((req.body?.engine || '').toString().trim());
-  // synthesize() throws "unknown piper voice: X" when a client supplies a
-  // voice id that isn't in the curated catalog — that's user input, not a
-  // server failure, so map to 400 instead of asyncHandler's default 500.
-  let wav; let latencyMs;
-  try {
-    ({ wav, latencyMs } = await synthesize(text, { voice, engine }));
-  } catch (err) {
-    // String check couples to synthesize() internals; also accept err.code for future typed errors
-    if (err?.code === 'UNKNOWN_VOICE' || err?.message?.startsWith('unknown piper voice:')) {
-      return res.status(400).json({ error: err.message });
-    }
-    throw err;
-  }
+  // synthesize() throws a ServerError(`status: 400, code: 'UNKNOWN_VOICE'`)
+  // when the client supplies a voice id that isn't in the curated catalog;
+  // asyncHandler maps the ServerError status, so no inline try/catch needed.
+  const { wav, latencyMs } = await synthesize(text, { voice, engine });
   res.setHeader('Content-Type', 'audio/wav');
   res.setHeader('X-TTS-Latency-Ms', String(latencyMs));
   res.send(wav);

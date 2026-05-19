@@ -6,10 +6,10 @@
  * In-memory cache avoids disk I/O on hot paths (agent spawning).
  */
 
-import { writeFile, readdir, unlink } from 'fs/promises';
+import { readdir, unlink } from 'fs/promises';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
-import { ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
+import { atomicWrite, ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
 
 const TOOL_ID_PATTERN = /^[a-zA-Z0-9_-]{1,100}$/;
 
@@ -68,7 +68,7 @@ export async function registerTool(config) {
     createdAt: now,
     updatedAt: now
   };
-  await writeFile(toolPath(tool.id), JSON.stringify(tool, null, 2) + '\n');
+  await atomicWrite(toolPath(tool.id), tool);
   invalidateCache();
   console.log(`🔧 Tool registered: ${tool.name} (${tool.id})`);
   return tool;
@@ -83,7 +83,7 @@ export async function updateTool(id, updates) {
     id,
     updatedAt: new Date().toISOString()
   };
-  await writeFile(toolPath(id), JSON.stringify(merged, null, 2) + '\n');
+  await atomicWrite(toolPath(id), merged);
   invalidateCache();
   console.log(`🔧 Tool updated: ${merged.name} (${id})`);
   return merged;

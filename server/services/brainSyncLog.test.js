@@ -13,6 +13,7 @@ vi.mock('../lib/asyncMutex.js', () => ({
   createMutex: () => async (fn) => fn()
 }));
 vi.mock('../lib/fileUtils.js', () => ({
+tryReadFile: vi.fn().mockResolvedValue(null),
   ensureDir: vi.fn(),
   atomicWrite: vi.fn().mockResolvedValue(undefined),
   safeJSONParse: (str, fallback) => {

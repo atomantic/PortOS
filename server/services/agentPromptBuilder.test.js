@@ -35,6 +35,12 @@ vi.mock('./providers.js', () => ({
   getActiveProvider: vi.fn().mockResolvedValue(null),
 }));
 vi.mock('../lib/promptRunner.js', () => ({
+assertProvider: (provider, { message, code, status = 503 } = {}) => {
+    if (provider) return;
+    const err = new Error(message || 'No AI provider available');
+    if (code) { err.status = status; err.code = code; }
+    throw err;
+  },
   runPromptThroughProvider: vi.fn().mockResolvedValue(null),
 }));
 vi.mock('../lib/fileUtils.js', async (importOriginal) => {
@@ -45,6 +51,7 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) => {
   };
 });
 vi.mock('./jira.js', () => ({
+tryReadFile: vi.fn().mockResolvedValue(null),
   createTicket: vi.fn().mockResolvedValue(null),
 }));
 

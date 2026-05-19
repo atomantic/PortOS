@@ -22,7 +22,7 @@ import {
 } from '../lib/storyBible.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { extractJson as extractJsonShared } from '../lib/jsonExtract.js';
-import { resolveProviderAndModel, runPromptThroughProvider } from '../lib/promptRunner.js';
+import { assertProvider, resolveProviderAndModel, runPromptThroughProvider } from '../lib/promptRunner.js';
 
 // Inverse of BIBLE_FIELD: trunk-name (canon array key) → singular BIBLE_KIND.
 // Derived from the source-of-truth map so the two can't drift. `other` is
@@ -238,11 +238,10 @@ export async function promoteVariationToCanon(universeId, options = {}) {
   }
 
   const { provider, selectedModel } = await resolveProviderAndModel({ providerId, model });
-  if (!provider) {
-    throw new ServerError('No AI provider available for variation promotion', {
-      status: 503, code: 'UNIVERSE_PROMOTE_NO_PROVIDER',
-    });
-  }
+  assertProvider(provider, {
+    message: 'No AI provider available for variation promotion',
+    code: 'UNIVERSE_PROMOTE_NO_PROVIDER',
+  });
 
   const prompt = buildPromotePrompt({
     targetKind,

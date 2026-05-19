@@ -31,6 +31,7 @@ vi.mock('./instanceEvents.js', () => ({
   instanceEvents: { on: vi.fn(), removeListener: vi.fn() }
 }));
 vi.mock('../lib/fileUtils.js', () => ({
+tryReadFile: vi.fn().mockResolvedValue(null),
   readJSONFile: vi.fn().mockResolvedValue({}),
   ensureDir: vi.fn().mockResolvedValue(),
   atomicWrite: vi.fn().mockResolvedValue(),

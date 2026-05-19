@@ -60,6 +60,7 @@ import {
 
 // Helper: build stories data
 const makeStoriesData = (overrides = {}) => ({
+tryReadFile: vi.fn().mockResolvedValue(null),
   version: 1,
   stories: [],
   usedPrompts: [],

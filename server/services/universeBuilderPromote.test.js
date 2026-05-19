@@ -6,6 +6,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const fileStore = new Map();
 
 vi.mock('../lib/fileUtils.js', () => ({
+tryReadFile: vi.fn().mockResolvedValue(null),
   PATHS: { data: '/mock/data' },
   ensureDir: vi.fn().mockResolvedValue(undefined),
   atomicWrite: vi.fn(async (path, data) => { fileStore.set(path, data); }),
@@ -27,6 +28,12 @@ vi.mock('crypto', async () => {
 const resolveProviderAndModelMock = vi.fn();
 const runPromptThroughProviderMock = vi.fn();
 vi.mock('../lib/promptRunner.js', () => ({
+assertProvider: (provider, { message, code, status = 503 } = {}) => {
+    if (provider) return;
+    const err = new Error(message || 'No AI provider available');
+    if (code) { err.status = status; err.code = code; }
+    throw err;
+  },
   runPromptThroughProvider: (...a) => runPromptThroughProviderMock(...a),
   resolveProviderAndModel: (...a) => resolveProviderAndModelMock(...a),
 }));

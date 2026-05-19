@@ -3,7 +3,7 @@
  * deps — mirrored to `client/src/lib/scenePrompt.js` for the client bundle.
  */
 
-import { richCanonDescriptorFragments } from './canonPrompt.js';
+import { mapCanonDescriptorFragments, richCanonDescriptorFragments } from './canonPrompt.js';
 
 const PROMPT_MAX = 1900;
 
@@ -151,8 +151,7 @@ export function buildScenePrompt(workTitle, scene, matchedCharacters, worldStyle
   // preserves "Palette: X." sentence boundaries when the budget-truncation
   // join collapses fragments with a single space.
   const baselineFrags = matchedPlace
-    ? richCanonDescriptorFragments('place', matchedPlace)
-      .map((f) => (f.prefix ? `${f.prefix}: ${f.value}.` : f.value))
+    ? mapCanonDescriptorFragments(richCanonDescriptorFragments('place', matchedPlace), { trailingPeriod: true })
     : [];
   const placeFrags = matchedPlace ? [
     placeMetaFrag ? `${placeMetaFrag}.` : '',

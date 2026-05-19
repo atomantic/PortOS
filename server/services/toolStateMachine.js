@@ -32,6 +32,7 @@ const TRANSITIONS = {
 
 // In-memory execution storage
 const executions = new Map()
+const MAX_EXECUTIONS = 1000
 
 // Execution history (limited to last 1000)
 const executionHistory = []
@@ -65,6 +66,10 @@ function createToolExecution(toolId, agentId, metadata = {}) {
     createdAt: now
   }
 
+  if (executions.size >= MAX_EXECUTIONS) {
+    const oldestKey = executions.keys().next().value;
+    executions.delete(oldestKey);
+  }
   executions.set(executionId, execution)
   return execution
 }

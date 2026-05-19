@@ -9,9 +9,9 @@
  * Reads chat ID from ~/.claude/channels/telegram/access.json (first allowFrom entry)
  */
 
-import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { homedir } from 'os';
+import { tryReadFile } from '../lib/fileUtils.js';
 import { notificationEvents, NOTIFICATION_TYPES } from './notifications.js';
 
 const CHANNELS_DIR = join(homedir(), '.claude', 'channels', 'telegram');
@@ -77,7 +77,7 @@ function escapeHtml(text) {
  * Read bot token from MCP plugin's .env file
  */
 async function loadBotToken() {
-  const content = await readFile(ENV_FILE, 'utf-8').catch(() => null);
+  const content = await tryReadFile(ENV_FILE);
   if (!content) return null;
   const match = content.match(/^TELEGRAM_BOT_TOKEN=(.+)$/m);
   return match ? match[1].trim() : null;
@@ -87,7 +87,7 @@ async function loadBotToken() {
  * Read first allowed chat ID from MCP plugin's access.json
  */
 async function loadChatId() {
-  const content = await readFile(ACCESS_FILE, 'utf-8').catch(() => null);
+  const content = await tryReadFile(ACCESS_FILE);
   if (!content) return null;
   const access = JSON.parse(content);
   return access.allowFrom?.[0] || null;

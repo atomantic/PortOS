@@ -509,15 +509,12 @@ export async function exportMedia(items, bucketId) {
 export async function exportByKind({ kind, ids, items, bucketId }) {
   if (kind === 'series') {
     if (!Array.isArray(ids) || ids.length === 0) throw new Error('exportByKind: ids required for series');
-    // For v1 we export one series per request; loop if multiple are passed.
-    const results = [];
-    for (const id of ids) results.push(await exportSeries(id, bucketId));
+    const results = await Promise.all(ids.map((id) => exportSeries(id, bucketId)));
     return { exports: results };
   }
   if (kind === 'universe') {
     if (!Array.isArray(ids) || ids.length === 0) throw new Error('exportByKind: ids required for universe');
-    const results = [];
-    for (const id of ids) results.push(await exportUniverse(id, bucketId));
+    const results = await Promise.all(ids.map((id) => exportUniverse(id, bucketId)));
     return { exports: results };
   }
   if (kind === 'media') {

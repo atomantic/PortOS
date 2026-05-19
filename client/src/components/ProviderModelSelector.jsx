@@ -11,6 +11,8 @@
  * @param {boolean} [props.disabled] - Disable both selectors
  * @param {boolean} [props.compact] - Hide labels for inline/toolbar use
  */
+import { useId } from 'react';
+
 export default function ProviderModelSelector({
   providers,
   selectedProviderId,
@@ -22,11 +24,14 @@ export default function ProviderModelSelector({
   disabled = false,
   compact = false
 }) {
+  const providerSelectId = useId();
+  const modelSelectId = useId();
   return (
     <div className="flex items-center gap-2">
       <div className="flex-1 min-w-0">
-        {!compact && <label className="block text-xs text-gray-500 mb-1">{label}</label>}
+        {!compact && <label htmlFor={providerSelectId} className="block text-xs text-gray-500 mb-1">{label}</label>}
         <select
+          id={providerSelectId}
           value={selectedProviderId}
           onChange={(e) => onProviderChange(e.target.value)}
           disabled={disabled}
@@ -40,8 +45,9 @@ export default function ProviderModelSelector({
       </div>
       {availableModels.length > 0 && (
         <div className="flex-1 min-w-0">
-          {!compact && <label className="block text-xs text-gray-500 mb-1">Model</label>}
+          {!compact && <label htmlFor={modelSelectId} className="block text-xs text-gray-500 mb-1">Model</label>}
           <select
+            id={modelSelectId}
             value={selectedModel}
             onChange={(e) => onModelChange(e.target.value)}
             disabled={disabled}

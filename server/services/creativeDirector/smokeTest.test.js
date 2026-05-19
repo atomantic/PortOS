@@ -5,6 +5,7 @@ const mockAtomicWrite = vi.fn();
 const mockEnsureDir = vi.fn();
 
 vi.mock('../../lib/fileUtils.js', () => ({
+tryReadFile: vi.fn().mockResolvedValue(null),
   PATHS: { data: '/fake/data' },
   readJSONFile: (...args) => mockReadJSONFile(...args),
   atomicWrite: (...args) => mockAtomicWrite(...args),

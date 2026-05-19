@@ -118,6 +118,56 @@ describe('Provider Service', () => {
     ).rejects.toThrow('Provider with this ID already exists');
   });
 
+  // Guards the regression noted in CLAUDE.md: `updateProvider` uses spread so
+  // existing providers preserve custom fields, but `createProvider` has an
+  // explicit field list. A field added to the schema without being added to
+  // `createProvider` would silently disappear on the create → save → load
+  // round-trip. Exhaust every field in the explicit list.
+  it('round-trips every field defined by createProvider through save + reload', async () => {
+    const seed = {
+      id: 'parity-fixture',
+      name: 'Parity Fixture',
+      type: 'tui',
+      command: 'codex',
+      args: ['exec', '--full-auto'],
+      endpoint: 'https://api.example.com/v1',
+      apiKey: 'sk-test-secret',
+      models: ['model-a', 'model-b', 'model-c'],
+      defaultModel: 'model-a',
+      lightModel: 'model-b',
+      mediumModel: 'model-a',
+      heavyModel: 'model-c',
+      fallbackProvider: 'fallback-provider-id',
+      timeout: 600000,
+      enabled: false,
+      envVars: { OPENAI_BASE_URL: 'https://example.com', LOG_LEVEL: 'debug' },
+      secretEnvVars: ['OPENAI_API_KEY', 'ANTHROPIC_API_KEY'],
+      headlessArgs: ['--quiet', '--no-color'],
+      tuiPromptDelayMs: 5000,
+      tuiIdleTimeoutMs: 120000,
+    };
+
+    const created = await providerService.createProvider(seed);
+
+    // First-pass: createProvider itself returns the full record
+    for (const key of Object.keys(seed)) {
+      expect(created[key]).toStrictEqual(seed[key]);
+    }
+
+    // Second-pass: after a fresh service instance reads from disk, every field
+    // must survive the JSON write + parse round-trip
+    const reloadedService = createProviderService({
+      dataDir: TEST_DATA_DIR,
+      providersFile: 'providers.json'
+    });
+    const reloaded = await reloadedService.getProviderById('parity-fixture');
+
+    expect(reloaded).not.toBeNull();
+    for (const key of Object.keys(seed)) {
+      expect(reloaded[key]).toStrictEqual(seed[key]);
+    }
+  });
+
   describe('getSampleProviders', () => {
     it('should return sample providers from default sample file', async () => {
       // No providers created yet — all samples should be returned

@@ -281,7 +281,18 @@ aiToolkit.services.runner.isRunActive = (runId) => {
   if (aiToolkit.services.runner._portosActiveRuns?.has(runId)) return true;
   return originalIsRunActive(runId);
 };
-console.log('🔧 Patched aiToolkit runner.executeCliRun + stopRun + isRunActive with PortOS CLI variants');
+// Patch deleteRun so that deleting an in-flight PortOS CLI run also kills the
+// child process before removing the on-disk directory. Without this patch,
+// deleteRun only checks the toolkit's internal `activeRuns` map (which is
+// empty for PortOS CLI runs) and silently leaves a zombie child process running.
+const originalDeleteRun = aiToolkit.services.runner.deleteRun.bind(aiToolkit.services.runner);
+aiToolkit.services.runner.deleteRun = async function (runId, ...args) {
+  if (this._portosActiveRuns?.has?.(runId)) {
+    await this.stopRun(runId);
+  }
+  return originalDeleteRun.call(this, runId, ...args);
+};
+console.log('🔧 Patched aiToolkit runner.executeCliRun + stopRun + isRunActive + deleteRun with PortOS CLI variants');
 
 // Note: prompts service is initialized automatically by createAIToolkit()
 

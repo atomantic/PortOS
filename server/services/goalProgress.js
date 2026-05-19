@@ -8,9 +8,8 @@
  * Task completions are categorized by keywords and mapped to goal progress.
  */
 
-import { readFile } from 'fs/promises'
 import { join } from 'path'
-import { readJSONFile, PATHS } from '../lib/fileUtils.js'
+import { readJSONFile, PATHS, tryReadFile } from '../lib/fileUtils.js'
 
 const GOALS_FILE = join(PATHS.root, 'GOALS.md')
 const LEARNING_FILE = join(PATHS.cos, 'learning.json')
@@ -57,7 +56,7 @@ const GOAL_MAPPINGS = {
  * @returns {Promise<Array>} Parsed goals with titles and items
  */
 async function parseGoalsFile() {
-  const content = await readFile(GOALS_FILE, 'utf-8').catch(() => null)
+  const content = await tryReadFile(GOALS_FILE)
   if (!content) return []
 
   const goals = []

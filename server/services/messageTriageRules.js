@@ -1,12 +1,12 @@
-import { readFile, writeFile } from 'fs/promises';
+import { writeFile } from 'fs/promises';
 import { join } from 'path';
-import { ensureDir, PATHS, safeJSONParse } from '../lib/fileUtils.js';
+import { ensureDir, PATHS, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
 
 const RULES_FILE = join(PATHS.messages, 'triage-rules.json');
 
 async function loadRules() {
   await ensureDir(PATHS.messages);
-  const content = await readFile(RULES_FILE, 'utf-8').catch(() => null);
+  const content = await tryReadFile(RULES_FILE);
   if (!content) return { rules: [] };
   return safeJSONParse(content, { rules: [] }, { context: 'triage-rules' });
 }

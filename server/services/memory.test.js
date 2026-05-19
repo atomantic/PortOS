@@ -37,6 +37,7 @@ vi.mock('./notifications.js', () => ({
 
 // Mock fileUtils
 vi.mock('../lib/fileUtils.js', () => ({
+tryReadFile: vi.fn().mockResolvedValue(null),
   ensureDir: vi.fn(),
   ensureDirs: vi.fn(),
   readJSONFile: vi.fn(),

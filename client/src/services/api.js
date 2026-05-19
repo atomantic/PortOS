@@ -42,6 +42,9 @@ export * from './apiWritersRoom.js';
 export * from './apiUniverseBuilder.js';
 export * from './apiPipeline.js';
 export * from './apiSharing.js';
+export * from './apiCreativeDirector.js';
+export * from './apiImporter.js';
+export * from './apiVoice.js';
 
 // Default export for simplified imports (get/post/put/delete helpers)
 export { default } from './apiCore.js';

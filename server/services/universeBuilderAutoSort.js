@@ -23,7 +23,7 @@ import {
 import { VALID_TARGET_KINDS } from './universeBuilderPromote.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { extractJson as extractJsonShared } from '../lib/jsonExtract.js';
-import { resolveProviderAndModel, runPromptThroughProvider } from '../lib/promptRunner.js';
+import { assertProvider, resolveProviderAndModel, runPromptThroughProvider } from '../lib/promptRunner.js';
 
 // The 3 real trunks — derived from BIBLE_FIELD via universeBuilderPromote so
 // adding a new canon kind reaches this resolver automatically.
@@ -153,12 +153,10 @@ export async function autoSortOtherBuckets(universeId, options = {}) {
   }
 
   const { provider, selectedModel } = await resolveProviderAndModel({ providerId, model });
-  if (!provider) {
-    throw new ServerError('No AI provider available for auto-sort', {
-      status: 503,
-      code: 'UNIVERSE_AUTOSORT_NO_PROVIDER',
-    });
-  }
+  assertProvider(provider, {
+    message: 'No AI provider available for auto-sort',
+    code: 'UNIVERSE_AUTOSORT_NO_PROVIDER',
+  });
 
   const prompt = buildAutoSortPrompt({ buckets: otherBuckets, universe });
   console.log(

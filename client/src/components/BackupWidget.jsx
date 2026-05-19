@@ -1,4 +1,4 @@
-import { useState, memo, useCallback } from 'react';
+import { useState, memo, useCallback, useId } from 'react';
 import { Link } from 'react-router-dom';
 import {HardDrive,
   ChevronDown,
@@ -72,6 +72,7 @@ const HEALTH_STYLES = {
 // ---------------------------------------------------------------------------
 
 function RestorePanel({ snapshot, onClose }) {
+  const filterId = useId();
   const [filter, setFilter] = useState('');
   const [preview, setPreview] = useState(null);
   const [previewing, setPreviewing] = useState(false);
@@ -125,10 +126,11 @@ function RestorePanel({ snapshot, onClose }) {
 
       {/* Subdirectory filter */}
       <div>
-        <label className="block text-xs text-gray-500 mb-1">
+        <label htmlFor={filterId} className="block text-xs text-gray-500 mb-1">
           Selective restore (optional)
         </label>
         <input
+          id={filterId}
           type="text"
           value={filter}
           onChange={e => setFilter(e.target.value)}

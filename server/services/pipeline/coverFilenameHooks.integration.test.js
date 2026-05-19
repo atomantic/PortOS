@@ -58,6 +58,7 @@ const updateStageWithLatestMock = vi.fn(async (issueId, _stageId, computeFn) => 
 });
 
 vi.mock('./series.js', () => ({
+tryReadFile: vi.fn().mockResolvedValue(null),
   getSeries: vi.fn(async (id) => seriesStore.get(id) || null),
   updateSeasonOnSeries: updateSeasonOnSeriesMock,
 }));

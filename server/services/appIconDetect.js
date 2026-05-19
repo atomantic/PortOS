@@ -1,7 +1,7 @@
 import { existsSync } from 'fs';
-import { readFile, readdir } from 'fs/promises';
+import { readdir } from 'fs/promises';
 import { join, extname } from 'path';
-import { safeJSONParse } from '../lib/fileUtils.js';
+import { safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
 
 /**
  * Well-known icon paths to check, ordered by priority.
@@ -61,7 +61,7 @@ const CONTENT_TYPES = {
 // even though the file exists. Skip them and let detection fall through to a
 // sibling PNG/raster file. Inline data: URIs are fine.
 export async function isUsableSvg(filePath) {
-  const content = await readFile(filePath, 'utf-8').catch(() => null);
+  const content = await tryReadFile(filePath);
   if (content === null) return false;
   const externalImage = /<image\b[^>]*\b(?:xlink:)?href\s*=\s*['"](?!data:)/i;
   return !externalImage.test(content);
@@ -115,7 +115,7 @@ async function findXcodeAppIcon(repoPath) {
       // Read Contents.json to find actual icon filenames and sizes
       const contentsPath = join(iconSetPath, 'Contents.json');
       if (existsSync(contentsPath)) {
-        const contents = await readFile(contentsPath, 'utf-8').catch(() => null);
+        const contents = await tryReadFile(contentsPath);
         if (contents) {
           const parsed = safeJSONParse(contents, {})?.images || [];
           // Find the largest icon by parsing size (prefer 1024x1024, then smaller)

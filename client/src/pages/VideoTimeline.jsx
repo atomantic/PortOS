@@ -3,13 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Plus, Film, Trash2, Clock } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import * as api from '../services/api';
-
-const formatDuration = (sec) => {
-  if (!sec || !Number.isFinite(sec)) return '—';
-  const m = Math.floor(sec / 60);
-  const s = Math.floor(sec % 60);
-  return `${m}:${String(s).padStart(2, '0')}`;
-};
+import { formatDurationSec } from '../utils/formatters';
 
 export default function VideoTimeline() {
   const navigate = useNavigate();
@@ -142,7 +136,7 @@ export default function VideoTimeline() {
                   </div>
                   <div className="flex items-center gap-3 text-xs text-gray-400">
                     <span className="flex items-center gap-1"><Film className="w-3 h-3" />{(project.clips || []).length} clips</span>
-                    <span className="flex items-center gap-1"><Clock className="w-3 h-3" />{formatDuration(totalSec)}</span>
+                    <span className="flex items-center gap-1"><Clock className="w-3 h-3" />{formatDurationSec(totalSec)}</span>
                   </div>
                 </div>
               </div>

@@ -6,10 +6,9 @@
  * Used by the daily briefing to alert the user of new Claude Code features.
  */
 
-import { writeFile } from 'fs/promises'
 import { join } from 'path'
 import sax from 'sax'
-import { readJSONFile, PATHS, ensureDir } from '../lib/fileUtils.js'
+import { atomicWrite, readJSONFile, PATHS } from '../lib/fileUtils.js'
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js'
 
 const FEED_URL = 'https://github.com/anthropics/claude-code/releases.atom'
@@ -143,8 +142,7 @@ export async function checkChangelog() {
     entries
   }
 
-  await ensureDir(PATHS.data)
-  await writeFile(STATE_FILE, JSON.stringify(newState, null, 2))
+  await atomicWrite(STATE_FILE, newState)
 
   console.log(`📋 Claude changelog: ${entries.length} entries, ${newEntries.length} new since ${state.lastCheck || 'first check'}`)
 

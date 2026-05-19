@@ -10,8 +10,16 @@ You are a TV writer adapting a prose draft into a single-episode teleplay in sta
 ### Characters
 
 {{#series.characters}}
-- **{{name}}**{{#role}} ({{role}}){{/role}} — {{#physicalDescription}}{{physicalDescription}}{{/physicalDescription}}{{^physicalDescription}}{{description}}{{/physicalDescription}}{{#personality}} | personality: {{personality}}{{/personality}}{{#background}} | background: {{background}}{{/background}}
+- **{{name}}**{{#role}} ({{role}}){{/role}} — {{#physicalDescription}}{{physicalDescription}}{{/physicalDescription}}{{^physicalDescription}}{{description}}{{/physicalDescription}}{{#personality}} | personality: {{personality}}{{/personality}}{{#background}} | background: {{background}}{{/background}}{{#speechAccent}} | accent: {{speechAccent}}{{/speechAccent}}{{#speechPattern}} | speech: {{speechPattern}}{{/speechPattern}}
 {{/series.characters}}
+
+### Universe at a glance
+
+Terse roster of the linked Universe Builder's named canon — use as continuity anchors for scenes/locations the teleplay touches. Do not contradict; you may name-check but don't invent new attributes for them.
+
+```
+{{worldEntitiesSummary}}
+```
 
 ## This episode
 

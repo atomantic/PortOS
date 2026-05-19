@@ -2,13 +2,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Mock fs/promises before importing the module
 vi.mock('fs/promises', () => ({
-  readFile: vi.fn(),
   writeFile: vi.fn(),
   readdir: vi.fn(),
   unlink: vi.fn()
 }));
 
 vi.mock('../lib/fileUtils.js', () => ({
+  tryReadFile: vi.fn(),
+  atomicWrite: vi.fn().mockResolvedValue(undefined),
   ensureDir: vi.fn(),
   PATHS: { messages: '/mock/data/messages' },
   safeJSONParse: vi.fn((content, fallback) => {
@@ -43,7 +44,8 @@ vi.mock('./messagePlaywrightSync.js', () => ({
   syncPlaywright: vi.fn()
 }));
 
-import { readFile, writeFile, readdir, unlink } from 'fs/promises';
+import { readdir, unlink } from 'fs/promises';
+import { tryReadFile as readFile, atomicWrite } from '../lib/fileUtils.js';
 import { getMessages, getMessage, syncAccount, deleteCache, getSyncStatus } from './messageSync.js';
 import { getAccount, updateSyncStatus } from './messageAccounts.js';
 import { syncGmail } from './messageGmailSync.js';
@@ -54,9 +56,8 @@ const VALID_UUID_2 = '22222222-2222-2222-2222-222222222222';
 
 beforeEach(() => {
   vi.clearAllMocks();
-  // Default: cache file not found
-  readFile.mockRejectedValue(new Error('ENOENT'));
-  writeFile.mockResolvedValue();
+  // Default: cache file not found — tryReadFile returns null on read error
+  readFile.mockResolvedValue(null);
 });
 
 // ─── Cache I/O: getMessages ───
@@ -294,7 +295,7 @@ describe('syncAccount', () => {
     const result = await syncAccount(VALID_UUID, mockIo);
 
     expect(syncGmail).toHaveBeenCalled();
-    expect(writeFile).toHaveBeenCalled();
+    expect(atomicWrite).toHaveBeenCalled();
     expect(result.newMessages).toBe(1);
     expect(result.total).toBe(1);
     expect(result.status).toBe('success');
@@ -351,7 +352,7 @@ describe('syncAccount', () => {
     expect(result.newMessages).toBe(1);
     expect(result.total).toBe(2); // 1 existing + 1 new
     // Verify saved cache has 2 messages
-    const savedData = JSON.parse(writeFile.mock.calls[0][1]);
+    const savedData = atomicWrite.mock.calls[0][1];
     expect(savedData.messages).toHaveLength(2);
   });
 
@@ -387,7 +388,7 @@ describe('syncAccount', () => {
     const result = await syncAccount(VALID_UUID, mockIo);
 
     expect(result.total).toBe(2); // trimmed from 3 to 2
-    const savedData = JSON.parse(writeFile.mock.calls[0][1]);
+    const savedData = atomicWrite.mock.calls[0][1];
     expect(savedData.messages).toHaveLength(2);
     // Oldest message should have been trimmed
     const ids = savedData.messages.map(m => m.id);

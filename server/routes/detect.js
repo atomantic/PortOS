@@ -7,7 +7,7 @@ import { promisify } from 'util';
 import { execPm2 } from '../services/pm2.js';
 import { detectAppWithAi } from '../services/aiDetect.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { safeJSONParse } from '../lib/fileUtils.js';
+import { safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
 
 const execAsync = promisify(exec);
 const router = Router();
@@ -53,7 +53,7 @@ router.post('/repo', asyncHandler(async (req, res) => {
   const packageJsonPath = join(path, 'package.json');
   if (existsSync(packageJsonPath)) {
     result.hasPackageJson = true;
-    const content = await readFile(packageJsonPath, 'utf-8').catch(() => null);
+    const content = await tryReadFile(packageJsonPath);
     if (content) {
       const pkg = safeJSONParse(content, null);
       if (!pkg) {

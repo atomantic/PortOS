@@ -89,13 +89,13 @@ describe('universeCharacterExpand — applyExpansion (no-clobber merge semantics
 
   it('respects the full extended-field set (smoke check the field list stays in sync)', () => {
     const target = {
-      name: 'Vale', pronouns: '', age: '', coreTheme: '', speechAccent: '', visualNotes: '',
+      name: 'Vale', pronouns: '', age: '', coreTheme: '', speechAccent: '', speechPattern: '', visualNotes: '',
       silhouetteNotes: '', postureNotes: '', specialTraits: '', visualIdentity: '',
       motivations: '', likes: '', dislikes: '', mannerisms: '', relationships: '', skills: '',
       stats: [], colorPalette: [], props: [], expressions: [], handGestures: [],
     };
     const content = {
-      pronouns: 'she/her', age: '27', coreTheme: 't', speechAccent: 'a', visualNotes: 'v',
+      pronouns: 'she/her', age: '27', coreTheme: 't', speechAccent: 'a', speechPattern: 'sp', visualNotes: 'v',
       silhouetteNotes: 's', postureNotes: 'p', specialTraits: 'st', visualIdentity: 'vi',
       motivations: 'm', likes: 'l', dislikes: 'd', mannerisms: 'mn', relationships: 'r', skills: 'sk',
       stats: [{ label: 'L', value: 'V' }],
@@ -105,8 +105,9 @@ describe('universeCharacterExpand — applyExpansion (no-clobber merge semantics
       handGestures: [{ name: 'n' }],
     };
     const { updatedFields } = applyExpansion(target, content);
-    // 15 strings + 5 lists = 20 fields total in the expand contract.
-    expect(updatedFields).toHaveLength(20);
+    // 16 strings + 5 lists = 21 fields total in the expand contract.
+    expect(updatedFields).toHaveLength(21);
+    expect(updatedFields).toContain('speechPattern');
   });
 
   it('REGRESSION: list proposals whose rows all fail bible sanitization are NOT marked as updated', () => {

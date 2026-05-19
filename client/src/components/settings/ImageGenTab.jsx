@@ -6,7 +6,7 @@
  * lives in the always-visible Codex CLI Imagegen section.
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useId } from 'react';
 import {
   Save, Image as ImageIcon, Zap, Wrench, Cloud, Cpu, Globe, AlertTriangle,
   Sparkles, Terminal, Key, Check, Trash2
@@ -47,10 +47,18 @@ export function ImageGenTab() {
   const [codexPath, setCodexPath] = useState('');
   const [codexModel, setCodexModel] = useState('');
   const [codexParallelLimit, setCodexParallelLimit] = useState(1);
+  // Raw string held while the user is typing in the parallel-limit input.
+  // Clamping is deferred to onBlur so multi-digit entry isn't blocked.
+  const [parallelLimitDraft, setParallelLimitDraft] = useState('1');
   // Server-authoritative bounds for the parallel-limit input. Populated from
   // /api/settings's `imageGen.codex.parallelLimitBounds`; falls back to local
   // constants until the first fetch resolves.
   const [parallelBounds, setParallelBounds] = useState(PARALLEL_FALLBACK);
+
+  // Stable ids for label/input associations
+  const codexPathId = useId();
+  const codexModelId = useId();
+  const codexParallelId = useId();
 
   // Snapshot of saved values so we can show the "dirty" state
   const [saved, setSaved] = useState({
@@ -136,6 +144,7 @@ export function ImageGenTab() {
         setCodexPath(cxPath);
         setCodexModel(cxModel);
         setCodexParallelLimit(cxParallel);
+        setParallelLimitDraft(String(cxParallel));
         setSaved({
           mode: m, sdapiUrl: url, pythonPath: py, exposeA1111: expose,
           codexEnabled: cxEnabled, codexPath: cxPath, codexModel: cxModel,
@@ -194,7 +203,10 @@ export function ImageGenTab() {
         codexEnabled, codexPath: cxPath || '', codexModel: cxModel || '',
         codexParallelLimit: cxParallel,
       });
-      if (cxParallel !== codexParallelLimit) setCodexParallelLimit(cxParallel);
+      if (cxParallel !== codexParallelLimit) {
+        setCodexParallelLimit(cxParallel);
+        setParallelLimitDraft(String(cxParallel));
+      }
       // Reflect the normalization back into the inputs so what the user
       // sees matches what was saved.
       if (cxPath !== codexPath) setCodexPath(cxPath || '');
@@ -447,8 +459,9 @@ export function ImageGenTab() {
         {codexEnabled && (
           <div className="space-y-3 pl-6 border-l-2 border-port-border">
             <div>
-              <label className="block text-xs font-medium text-gray-400 mb-1">Codex binary path (optional)</label>
+              <label htmlFor={codexPathId} className="block text-xs font-medium text-gray-400 mb-1">Codex binary path (optional)</label>
               <input
+                id={codexPathId}
                 type="text"
                 value={codexPath}
                 onChange={(e) => setCodexPath(e.target.value)}
@@ -458,8 +471,9 @@ export function ImageGenTab() {
               <p className="text-xs text-gray-500 mt-1">Leave empty to invoke <code>codex</code> from $PATH.</p>
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-400 mb-1">Model override (optional)</label>
+              <label htmlFor={codexModelId} className="block text-xs font-medium text-gray-400 mb-1">Model override (optional)</label>
               <input
+                id={codexModelId}
                 type="text"
                 value={codexModel}
                 onChange={(e) => setCodexModel(e.target.value)}
@@ -469,14 +483,20 @@ export function ImageGenTab() {
               <p className="text-xs text-gray-500 mt-1">Passed as <code>codex exec -m &lt;model&gt;</code>. Leave empty to use Codex's default.</p>
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-400 mb-1">Parallel render limit</label>
+              <label htmlFor={codexParallelId} className="block text-xs font-medium text-gray-400 mb-1">Parallel render limit</label>
               <input
+                id={codexParallelId}
                 type="number"
                 min={parallelBounds.min}
                 max={parallelBounds.max}
                 step={1}
-                value={codexParallelLimit}
-                onChange={(e) => setCodexParallelLimit(clampParallel(e.target.value, parallelBounds))}
+                value={parallelLimitDraft}
+                onChange={(e) => setParallelLimitDraft(e.target.value)}
+                onBlur={() => {
+                  const clamped = clampParallel(parallelLimitDraft, parallelBounds);
+                  setCodexParallelLimit(clamped);
+                  setParallelLimitDraft(String(clamped));
+                }}
                 className="w-24 bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
               />
               <p className="text-xs text-gray-500 mt-1">

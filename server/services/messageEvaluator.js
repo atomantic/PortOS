@@ -1,9 +1,9 @@
-import { readFile } from 'fs/promises';
+
 import { join } from 'path';
 import { getSettings } from './settings.js';
 import { getProviderById, getAllProviders } from './providers.js';
 import { buildRulesPromptSection } from './messageTriageRules.js';
-import { PATHS } from '../lib/fileUtils.js';
+import { PATHS, tryReadFile } from '../lib/fileUtils.js';
 import { runPromptThroughProvider } from '../lib/promptRunner.js';
 import { extractJson } from '../lib/jsonExtract.js';
 
@@ -139,7 +139,7 @@ const VOICE_DOCS = ['SOUL.md', 'COMMUNICATION.md', 'PERSONALITY.md', 'VALUES.md'
 async function loadVoiceContext() {
   const contents = await Promise.all(
     VOICE_DOCS.map(filename =>
-      readFile(join(PATHS.digitalTwin, filename), 'utf-8').catch(() => null)
+      tryReadFile(join(PATHS.digitalTwin, filename))
     )
   );
   const sections = contents

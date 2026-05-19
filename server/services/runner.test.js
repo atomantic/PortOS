@@ -7,6 +7,7 @@ vi.mock('child_process', async (importOriginal) => {
 });
 
 vi.mock('../lib/fileUtils.js', () => ({
+tryReadFile: vi.fn().mockResolvedValue(null),
   ensureDir: vi.fn().mockResolvedValue(undefined),
 }));
 

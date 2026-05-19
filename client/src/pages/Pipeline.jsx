@@ -91,6 +91,10 @@ export default function Pipeline() {
       toast.error('Series name is required');
       return;
     }
+    if (!form.universeId) {
+      toast.error('Pick a universe — series must be linked to one');
+      return;
+    }
     setCreating(true);
     const target = parseInt(form.issueCountTarget, 10);
     const created = await createPipelineSeries({
@@ -99,7 +103,7 @@ export default function Pipeline() {
       premise: form.premise.trim(),
       styleNotes: form.styleNotes.trim(),
       author: form.author.trim(),
-      universeId: form.universeId || undefined,
+      universeId: form.universeId,
       issueCountTarget: Number.isFinite(target) && target > 0 ? target : undefined,
       arc: form.shape ? { shape: form.shape } : undefined,
     }).catch((err) => {
@@ -186,25 +190,26 @@ export default function Pipeline() {
             </div>
             <div>
               <label htmlFor="series-world" className="block text-xs uppercase tracking-wider text-gray-500 mb-1">
-                <span className="inline-flex items-center gap-1"><Globe2 size={12} /> World (optional)</span>
+                <span className="inline-flex items-center gap-1"><Globe2 size={12} /> Universe (required)</span>
               </label>
               <select
                 id="series-world"
                 value={form.universeId}
                 onChange={(e) => handleWorldChange(e.target.value)}
+                required
                 className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
               >
-                <option value="">— None —</option>
+                <option value="">— Pick a universe —</option>
                 {universes.map((w) => (
                   <option key={w.id} value={w.id}>{w.name}</option>
                 ))}
               </select>
               <p className="text-[11px] text-gray-500 mt-1">
                 {form.universeId
-                  ? 'Logline / premise / style notes pulled from the world — edit below.'
+                  ? 'Logline / premise / style notes pulled from the universe — edit below.'
                   : universes.length === 0
-                    ? 'No universes yet. Build one in Media Gen → Universe Builder.'
-                    : 'Pick a world to auto-fill the bible.'}
+                    ? 'No universes yet. Build one in Media Gen → Universe Builder before creating a series.'
+                    : 'Series carry style + canon from their universe — pick one to continue.'}
               </p>
             </div>
           </div>
@@ -295,8 +300,9 @@ export default function Pipeline() {
           <div className="flex gap-2">
             <button
               type="submit"
-              disabled={creating}
+              disabled={creating || !form.universeId || !form.name.trim()}
               className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-port-accent text-white text-sm font-medium disabled:opacity-50"
+              title={!form.universeId ? 'Pick a universe to create the series' : undefined}
             >
               {creating ? <Loader2 size={14} className="animate-spin" /> : null}
               Create

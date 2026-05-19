@@ -7,7 +7,7 @@
  */
 
 import { join } from 'path';
-import { readFile, stat } from 'fs/promises';
+import { stat } from 'fs/promises';
 import { homedir } from 'os';
 import { getMemorySection } from './memoryRetriever.js';
 import { getDigitalTwinForPrompt } from './digital-twin.js';
@@ -15,7 +15,7 @@ import { buildPrompt } from './promptService.js';
 import { getToolsSummaryForPrompt } from './tools.js';
 import { getActiveProvider } from './providers.js';
 import { runPromptThroughProvider } from '../lib/promptRunner.js';
-import { readJSONFile, loadSlashdoFile, PATHS } from '../lib/fileUtils.js';
+import { readJSONFile, loadSlashdoFile, PATHS, tryReadFile } from '../lib/fileUtils.js';
 import * as jiraService from './jira.js';
 import { emitLog } from './cosEvents.js';
 
@@ -76,7 +76,7 @@ export function detectSkillTemplate(task) {
  * @returns {Promise<string|null>} Template content or null
  */
 export async function loadSkillTemplate(skillName) {
-  const content = await readFile(join(SKILLS_DIR, `${skillName}.md`), 'utf-8').catch(() => null);
+  const content = await tryReadFile(join(SKILLS_DIR, `${skillName}.md`));
   if (content) console.log(`🎯 Loaded skill template: ${skillName}`);
   return content;
 }
@@ -90,14 +90,14 @@ export async function getClaudeMdContext(workspaceDir) {
 
   // Try to read global CLAUDE.md from ~/.claude/CLAUDE.md
   const globalPath = join(homedir(), '.claude', 'CLAUDE.md');
-  const globalContent = await readFile(globalPath, 'utf-8').catch(() => null);
+  const globalContent = await tryReadFile(globalPath);
   if (globalContent?.trim()) {
     contexts.push({ type: 'Global Instructions', path: globalPath, content: globalContent.trim() });
   }
 
   // Try to read project-specific CLAUDE.md from workspace directory
   const projectPath = join(workspaceDir, 'CLAUDE.md');
-  const projectContent = await readFile(projectPath, 'utf-8').catch(() => null);
+  const projectContent = await tryReadFile(projectPath);
   if (projectContent?.trim()) {
     contexts.push({ type: 'Project Instructions', path: projectPath, content: projectContent.trim() });
   }
@@ -478,9 +478,9 @@ ${task.metadata.jiraBranch ? 'Commit your changes to this branch. Do NOT switch 
     if (hasPlanningDir) {
       const planningParts = [];
       const [stateContent, concernsContent, roadmapContent] = await Promise.all([
-        readFile(join(planningPath, 'STATE.md'), 'utf-8').catch(() => null),
-        readFile(join(planningPath, 'CONCERNS.md'), 'utf-8').catch(() => null),
-        readFile(join(planningPath, 'ROADMAP.md'), 'utf-8').catch(() => null)
+        tryReadFile(join(planningPath, 'STATE.md')),
+        tryReadFile(join(planningPath, 'CONCERNS.md')),
+        tryReadFile(join(planningPath, 'ROADMAP.md'))
       ]);
       if (stateContent) planningParts.push(`### Current State\n\`\`\`\n${stateContent.slice(0, 1000)}\n\`\`\``);
       if (concernsContent) planningParts.push(`### Known Concerns\n\`\`\`\n${concernsContent.slice(0, 1500)}\n\`\`\``);

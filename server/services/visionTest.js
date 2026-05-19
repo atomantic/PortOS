@@ -113,14 +113,19 @@ async function callVisionAPI({ endpoint, apiKey, model, imageDataUrl, prompt, ti
 export async function testVision({ imagePath, prompt, expectedContent, providerId = 'lmstudio', model }) {
   const startTime = Date.now();
 
-  // Get provider configuration
+  // Get provider configuration. The AI toolkit warms at server boot, so an
+  // AI_TOOLKIT_NOT_INITIALIZED code only fires from a vision test that races
+  // boot — surface the boot state directly rather than masquerading as "not
+  // found", which would send the user looking for the wrong root cause.
   let provider;
   try {
     provider = await getProviderById(providerId);
   } catch (err) {
     return {
       success: false,
-      error: err.message.includes('not initialized') ? `Provider '${providerId}' not found` : err.message,
+      error: err.code === 'AI_TOOLKIT_NOT_INITIALIZED'
+        ? 'AI provider service is still initializing — try again in a moment'
+        : err.message,
       duration: Date.now() - startTime
     };
   }

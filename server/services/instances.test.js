@@ -7,6 +7,7 @@ vi.mock('fs/promises', () => ({
 }));
 
 vi.mock('../lib/fileUtils.js', () => ({
+tryReadFile: vi.fn().mockResolvedValue(null),
   dataPath: (name) => `/mock/data/${name}`,
   readJSONFile: vi.fn(),
   ensureDir: vi.fn().mockResolvedValue(undefined),

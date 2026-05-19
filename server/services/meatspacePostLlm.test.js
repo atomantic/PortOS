@@ -10,6 +10,12 @@ vi.mock('./providers.js', () => ({
 // + fetch directly, but now delegates to runPromptThroughProvider. Runner
 // internals (spawn args, --model flag injection) are covered by runner.test.js.
 vi.mock('../lib/promptRunner.js', () => ({
+assertProvider: (provider, { message, code, status = 503 } = {}) => {
+    if (provider) return;
+    const err = new Error(message || 'No AI provider available');
+    if (code) { err.status = status; err.code = code; }
+    throw err;
+  },
   runPromptThroughProvider: vi.fn()
 }));
 

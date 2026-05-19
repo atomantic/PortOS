@@ -21,6 +21,7 @@ const MOCK_PATHS = {
 };
 
 vi.mock('../../lib/fileUtils.js', () => ({
+tryReadFile: vi.fn().mockResolvedValue(null),
   ensureDir: vi.fn(async () => {}),
   PATHS: MOCK_PATHS,
   readJSONFile: vi.fn(async () => []),

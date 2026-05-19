@@ -2,9 +2,9 @@ import { getAccount } from './messageAccounts.js';
 import { getMessage } from './messageSync.js';
 import { findOrOpenPage, getPages, isAuthPage, evaluateOnPage } from './messagePlaywrightSync.js';
 import { recordCorrection } from './messageTriageRules.js';
-import { readFile, writeFile } from 'fs/promises';
+import { writeFile } from 'fs/promises';
 import { join } from 'path';
-import { ensureDir, PATHS, safeJSONParse, UUID_RE } from '../lib/fileUtils.js';
+import { ensureDir, PATHS, safeJSONParse, UUID_RE, tryReadFile } from '../lib/fileUtils.js';
 
 const CACHE_DIR = join(PATHS.messages, 'cache');
 
@@ -16,7 +16,7 @@ const PROVIDER_URLS = {
 async function loadCache(accountId) {
   await ensureDir(CACHE_DIR);
   const filePath = join(CACHE_DIR, `${accountId}.json`);
-  const content = await readFile(filePath, 'utf-8').catch(() => null);
+  const content = await tryReadFile(filePath);
   if (!content) return { syncCursor: null, messages: [] };
   return safeJSONParse(content, { syncCursor: null, messages: [] }, { context: `messageCache:${accountId}` });
 }

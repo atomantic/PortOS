@@ -72,6 +72,7 @@ vi.mock('../lib/validation.js', () => ({
 
 // Mock fileUtils
 vi.mock('../lib/fileUtils.js', () => ({
+tryReadFile: vi.fn().mockResolvedValue(null),
   safeJSONParse: vi.fn((str, defaultVal) => {
     if (!str) return defaultVal;
     try { return JSON.parse(str); } catch { return defaultVal; }
@@ -84,6 +85,12 @@ vi.mock('../lib/fileUtils.js', () => ({
 // flag injection, stdio shape, gemini-cli --output-format) are covered by
 // runner.test.js, not here.
 vi.mock('../lib/promptRunner.js', () => ({
+assertProvider: (provider, { message, code, status = 503 } = {}) => {
+    if (provider) return;
+    const err = new Error(message || 'No AI provider available');
+    if (code) { err.status = status; err.code = code; }
+    throw err;
+  },
   runPromptThroughProvider: vi.fn()
 }));
 

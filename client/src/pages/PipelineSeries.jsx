@@ -18,7 +18,7 @@ import {
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import ArcCanvas from '../components/pipeline/ArcCanvas';
-import VisualStylePicker from '../components/pipeline/VisualStylePicker';
+import TabPills from '../components/ui/TabPills';
 import {
   getPipelineSeries, updatePipelineSeries,
   listPipelineIssues,
@@ -30,6 +30,15 @@ import { recommendStructure, describeStructure } from '../lib/seasonStructure';
 import { useLocalStorageBool } from '../hooks/useLocalStorageBool';
 
 const PIPELINE_SIDEBAR_KEY = 'portos-pipeline-series-sidebar-collapsed';
+
+// Mirrors `STYLE_PROMPT_OVERRIDE_MODES` on the server (series.js). The
+// default lives there too — keep this list in sync if a new mode lands.
+const STYLE_OVERRIDE_MODE_DEFAULT = 'prepend';
+const STYLE_OVERRIDE_MODE_TABS = [
+  { id: 'prepend', label: 'Prepend' },
+  { id: 'append', label: 'Append' },
+  { id: 'override', label: 'Replace' },
+];
 
 export default function PipelineSeries() {
   const { seriesId } = useParams();
@@ -92,7 +101,7 @@ export default function PipelineSeries() {
   const flushPending = async () => {
     if (!series) return false;
     const saved = lastSavedRef.current || series;
-    const fields = ['name', 'logline', 'premise', 'styleNotes', 'titleLogo', 'author', 'stylePromptOverride', 'issueCountTarget', 'universeId'];
+    const fields = ['name', 'logline', 'premise', 'styleNotes', 'titleLogo', 'author', 'stylePromptOverride', 'stylePromptOverrideMode', 'issueCountTarget', 'universeId'];
     const dirty = fields.some((k) => (series[k] ?? '') !== (saved[k] ?? ''))
       || JSON.stringify(series.llm || {}) !== JSON.stringify(saved.llm || {});
     if (!dirty) return false;
@@ -100,11 +109,12 @@ export default function PipelineSeries() {
       name: series.name,
       logline: series.logline,
       premise: series.premise,
-      universeId: series.universeId || null,
+      universeId: series.universeId,
       styleNotes: series.styleNotes,
       titleLogo: series.titleLogo || '',
       author: series.author || '',
       stylePromptOverride: series.stylePromptOverride || '',
+      stylePromptOverrideMode: series.stylePromptOverrideMode || STYLE_OVERRIDE_MODE_DEFAULT,
       issueCountTarget: series.issueCountTarget,
       llm: series.llm || { provider: null, model: null },
     }).catch((err) => {
@@ -346,53 +356,54 @@ function BibleSidebar({ series, universes, patchSeries, onSeriesUpdate, onFlushP
         </p>
       </div>
 
-      <Field label="Visual style preset">
-        <div className="flex items-center gap-2">
-          <VisualStylePicker
-            value={series.visualStyleDefault || null}
-            onChange={(next) => patchSeries({ visualStyleDefault: next })}
-          />
-          <span className="text-xs text-gray-500">
-            Applied to comic pages, storyboards, and episode video unless a stage overrides it.
-          </span>
-        </div>
-      </Field>
-
-      <Field label="Linked World (from Universe Builder)">
+      <Field label="Linked Universe">
         <div className="flex items-center gap-2">
           <select
             value={series.universeId || ''}
-            onChange={(e) => patchSeries({ universeId: e.target.value || null })}
+            onChange={(e) => patchSeries({ universeId: e.target.value })}
             className="flex-1 px-3 py-2 bg-port-bg border border-port-border rounded text-white"
           >
-            <option value="">— None —</option>
+            {/* Legacy / imported series may still carry `universeId: null` —
+                offer a sentinel option so the picker doesn't auto-snap them
+                to whatever the first universe in the list happens to be. */}
+            {!series.universeId ? <option value="">— Pick a universe —</option> : null}
             {universes.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
           </select>
           <Link
-            to={series.universeId ? `/universe-builder` : '/universe-builder'}
+            to="/universe-builder"
             className="inline-flex items-center gap-1 text-xs text-port-accent hover:underline whitespace-nowrap"
           >
-            <Globe size={12} />
-            {series.universeId ? 'Open' : 'Create'}
+            <Globe size={12} /> Open
           </Link>
         </div>
       </Field>
 
-      {series.universeId ? (
-        <Field label="Universe style override (this series only)">
-          <textarea
-            value={series.stylePromptOverride || ''}
-            onChange={(e) => patchSeries({ stylePromptOverride: e.target.value })}
-            rows={2}
-            className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
-            maxLength={1000}
-            placeholder="moody noir lighting, high contrast monochrome. Prepended ahead of the universe's style so this series can deviate without forking the universe."
+      <Field label="Universe style override (this series only)">
+        <div className="mb-2">
+          <TabPills
+            variant="pills"
+            size="xs"
+            tabs={STYLE_OVERRIDE_MODE_TABS}
+            activeTab={series.stylePromptOverrideMode || STYLE_OVERRIDE_MODE_DEFAULT}
+            onChange={(id) => {
+              if (id === (series.stylePromptOverrideMode || STYLE_OVERRIDE_MODE_DEFAULT)) return;
+              patchSeries({ stylePromptOverrideMode: id });
+            }}
+            ariaLabel="Universe style override mode"
           />
-          <p className="text-[11px] text-gray-500 mt-1">
-            Prepended ahead of the linked universe's <em>stylePrompt</em> for every image-gen call from this series. Leave blank to use the universe style verbatim.
-          </p>
-        </Field>
-      ) : null}
+        </div>
+        <textarea
+          value={series.stylePromptOverride || ''}
+          onChange={(e) => patchSeries({ stylePromptOverride: e.target.value })}
+          rows={2}
+          className="w-full px-3 py-2 bg-port-bg border border-port-border rounded text-white"
+          maxLength={1000}
+          placeholder="moody noir lighting, high contrast monochrome. Composed with the universe's style for every image-gen call from this series."
+        />
+        <p className="text-[11px] text-gray-500 mt-1">
+          <strong>Prepend</strong> (default) puts the override ahead of the universe's <em>stylePrompt</em>; <strong>Append</strong> trails it; <strong>Replace</strong> drops the universe style entirely. Leave the box blank to use the universe style verbatim.
+        </p>
+      </Field>
 
       <div>
         <h3 className="text-xs uppercase tracking-wider text-gray-500 mb-2">Canon</h3>
