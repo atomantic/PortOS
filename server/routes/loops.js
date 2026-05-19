@@ -1,6 +1,7 @@
 import { Router } from 'express';
-import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
 import * as loopsService from '../services/loops.js';
+import { createLoopSchema } from '../lib/validation.js';
 
 const router = Router();
 
@@ -25,25 +26,9 @@ router.get('/:id', asyncHandler(async (req, res) => {
 
 // POST /api/loops
 router.post('/', asyncHandler(async (req, res) => {
-  const { prompt, interval, name, cwd, providerId, timeout, runImmediately } = req.body;
-  if (!prompt || typeof prompt !== 'string') throw new ServerError('Prompt is required', { status: 400, code: 'VALIDATION_ERROR' });
-  if (!interval) throw new ServerError('Interval is required', { status: 400, code: 'VALIDATION_ERROR' });
-  if (typeof interval !== 'string' && typeof interval !== 'number') {
-    throw new ServerError('Interval must be a string (e.g. "30s", "5m") or number of milliseconds', { status: 400, code: 'VALIDATION_ERROR' });
-  }
-  if (timeout !== undefined && typeof timeout !== 'number') {
-    throw new ServerError('Timeout must be a number of milliseconds', { status: 400, code: 'VALIDATION_ERROR' });
-  }
-  if (name !== undefined && typeof name !== 'string') {
-    throw new ServerError('Name must be a string', { status: 400, code: 'VALIDATION_ERROR' });
-  }
-  if (cwd !== undefined && typeof cwd !== 'string') {
-    throw new ServerError('cwd must be a string', { status: 400, code: 'VALIDATION_ERROR' });
-  }
-  if (providerId !== undefined && typeof providerId !== 'string') {
-    throw new ServerError('providerId must be a string', { status: 400, code: 'VALIDATION_ERROR' });
-  }
-
+  const parsedLoop = createLoopSchema.safeParse(req.body);
+  if (!parsedLoop.success) failValidation(parsedLoop);
+  const { prompt, interval, name, cwd, providerId, timeout, runImmediately } = parsedLoop.data;
   const loop = await loopsService.createLoop({
     prompt, interval, name, cwd, providerId, timeout,
     runImmediately: runImmediately !== false

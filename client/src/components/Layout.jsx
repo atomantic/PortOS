@@ -382,9 +382,11 @@ export default function Layout() {
   const [sidebarApps, setSidebarApps] = useState([]);
   useEffect(() => {
     const fetchApps = () => {
-      api.getApps().then(apps => {
+      api.getApps({ silent: true }).then(apps => {
         setSidebarApps((apps || []).filter(a => !a.archived).sort((a, b) => a.name.localeCompare(b.name)));
-      }).catch(() => {});
+      }).catch((err) => {
+        console.warn(`⚠️ Layout: getApps refresh failed: ${err?.message || err}`);
+      });
     };
     fetchApps();
     socket.on('apps:changed', fetchApps);

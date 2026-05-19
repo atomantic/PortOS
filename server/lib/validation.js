@@ -535,6 +535,121 @@ export const searchQuerySchema = z.object({
 });
 
 // =============================================================================
+// COS TASK SCHEMAS
+// =============================================================================
+
+export const createCosTaskSchema = z.object({
+  description: z.string().min(1),
+  priority: z.string().optional(),
+  context: z.string().optional(),
+  model: z.string().optional(),
+  provider: z.string().optional(),
+  app: z.string().optional(),
+  type: z.string().optional().default('user'),
+  approvalRequired: z.boolean().optional(),
+  screenshots: z.array(z.string()).optional(),
+  attachments: z.array(z.string()).optional(),
+  position: z.enum(['top', 'bottom']).optional().default('bottom'),
+  createJiraTicket: z.preprocess(
+    v => v === 'true' ? true : v === 'false' ? false : v,
+    z.boolean().optional()
+  ),
+  jiraTicketId: z.string().optional(),
+  jiraTicketUrl: z.string().optional(),
+  useWorktree: z.preprocess(
+    v => v === 'true' ? true : v === 'false' ? false : v,
+    z.boolean().optional()
+  ),
+  openPR: z.preprocess(
+    v => v === 'true' ? true : v === 'false' ? false : v,
+    z.boolean().optional()
+  ),
+  simplify: z.preprocess(
+    v => v === 'true' ? true : v === 'false' ? false : v,
+    z.boolean().optional()
+  ),
+  reviewLoop: z.preprocess(
+    v => v === 'true' ? true : v === 'false' ? false : v,
+    z.boolean().optional()
+  ),
+});
+
+export const updateCosTaskSchema = z.object({
+  description: z.string().min(1).optional(),
+  priority: z.string().optional(),
+  status: z.string().optional(),
+  context: z.string().optional(),
+  model: z.string().optional(),
+  provider: z.string().optional(),
+  app: z.string().optional(),
+  blockedReason: z.string().optional(),
+  type: z.string().optional().default('user'),
+});
+
+// =============================================================================
+// LOOP SCHEMAS
+// =============================================================================
+
+export const createLoopSchema = z.object({
+  prompt: z.string().min(1),
+  interval: z.union([z.string().min(1), z.number().positive()]),
+  name: z.string().optional(),
+  cwd: z.string().optional(),
+  providerId: z.preprocess(v => v === '' ? undefined : v, z.string().optional()),
+  timeout: z.number().positive().optional(),
+  runImmediately: z.boolean().optional(),
+});
+
+// =============================================================================
+// COS JOB SCHEMAS
+// =============================================================================
+
+export const createCosJobSchema = z.object({
+  name: z.string().min(1),
+  description: z.string().optional(),
+  category: z.string().optional(),
+  type: z.enum(['agent', 'shell', 'script']).optional(),
+  interval: z.string().optional(),
+  intervalMs: z.number().positive().int().optional(),
+  scheduledTime: z.string().optional(),
+  cronExpression: z.string().optional(),
+  enabled: z.boolean().optional(),
+  priority: z.string().optional(),
+  autonomyLevel: z.enum(['full', 'supervised', 'manual']).optional(),
+  promptTemplate: z.string().optional(),
+  command: z.string().optional(),
+  triggerAction: z.preprocess(v => v === '' ? undefined : v, z.string().optional()),
+});
+
+export const updateCosJobSchema = createCosJobSchema.partial().extend({
+  weekdaysOnly: z.boolean().optional(),
+});
+
+// =============================================================================
+// COS LEARNING SCHEMAS
+// =============================================================================
+
+export const recordLearningInsightSchema = z.object({
+  type: z.string().optional(),
+  message: z.string().min(1),
+  taskType: z.string().optional(),
+  context: z.record(z.unknown()).optional(),
+});
+
+export const dismissRecommendationSchema = z.object({
+  id: z.string().min(1),
+  snapshot: z.unknown().optional(),
+});
+
+export const restoreRecommendationSchema = z.object({
+  id: z.string().min(1),
+});
+
+export const generateWeeklyDigestSchema = z.object({
+  weekId: z.string().optional(),
+});
+
+// =============================================================================
 // BACKUP SCHEMAS
 // =============================================================================
 
@@ -1213,3 +1328,15 @@ export const importerCommitSchema = z.object({
   // Defaults to false to preserve the additive merge behavior.
   replaceMode: z.boolean().optional().default(false),
 }).strict();
+
+// =============================================================================
+// PIPELINE ISSUE QUERY SCHEMAS
+// =============================================================================
+
+// Query params for GET /api/pipeline/series/:id/issues — both are optional;
+// when either is present the route returns { items, total, offset, limit }
+// instead of the legacy raw array so callers can page large series.
+export const issuesListQuerySchema = z.object({
+  offset: z.preprocess((v) => (v === undefined ? 0 : Number(v)), z.number().int().min(0)).default(0),
+  limit: z.preprocess((v) => (v === undefined ? 1000 : Number(v)), z.number().int().min(1).max(1000)).default(1000),
+});
