@@ -429,26 +429,34 @@ export async function spawnTuiAgent({
   // comply.
   const doneSentinelPath = workspacePath ? join(workspacePath, DONE_SENTINEL_NAME) : null;
   const doneSentinelTimer = doneSentinelPath ? setInterval(() => {
-    if (finalized) return;
-    if (!existsSync(doneSentinelPath)) return;
-    clearInterval(doneSentinelTimer);
-    readFile(doneSentinelPath, 'utf8')
-      .then(contents => {
-        const trimmed = contents.trim();
-        if (!trimmed) return;
-        appendLine(`✅ Agent signaled completion`);
-        // Cap at 4 KB so a runaway agent that pasted the entire diff into
-        // the sentinel doesn't blow up the agent record / downstream
-        // memory-extraction prompts.
-        const truncated = trimmed.length > 4096 ? `${trimmed.slice(0, 4096)}\n…[truncated]` : trimmed;
-        for (const line of truncated.split('\n')) appendLine(line);
-      })
-      .catch(() => {})
-      .finally(() => {
-        finish({ success: true, exitCode: 0, reason: 'agent-signaled-done' }).catch(err => {
-          emitLog('error', `Failed to finalize TUI agent ${agentId} after sentinel: ${err.message}`, { agentId });
+    try {
+      if (finalized) return;
+      if (!existsSync(doneSentinelPath)) return;
+      clearInterval(doneSentinelTimer);
+      readFile(doneSentinelPath, 'utf8')
+        .then(contents => {
+          const trimmed = contents.trim();
+          if (!trimmed) return;
+          appendLine(`✅ Agent signaled completion`);
+          // Cap at 4 KB so a runaway agent that pasted the entire diff into
+          // the sentinel doesn't blow up the agent record / downstream
+          // memory-extraction prompts.
+          const truncated = trimmed.length > 4096 ? `${trimmed.slice(0, 4096)}\n…[truncated]` : trimmed;
+          for (const line of truncated.split('\n')) appendLine(line);
+        })
+        .catch(err => console.error(`❌ doneSentinelTimer readFile failed: ${err.message}`))
+        .finally(() => {
+          try {
+            finish({ success: true, exitCode: 0, reason: 'agent-signaled-done' }).catch(err => {
+              emitLog('error', `Failed to finalize TUI agent ${agentId} after sentinel: ${err.message}`, { agentId });
+            });
+          } catch (err) {
+            console.error(`❌ doneSentinelTimer finish call failed: ${err.message}`);
+          }
         });
-      });
+    } catch (err) {
+      console.error(`❌ doneSentinelTimer interval callback failed: ${err.message}`);
+    }
   }, DONE_POLL_INTERVAL_MS) : null;
 
   activeAgents.set(agentId, {

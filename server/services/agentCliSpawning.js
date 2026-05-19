@@ -11,7 +11,7 @@ import { existsSync } from 'fs';
 import { spawn } from 'child_process';
 import { homedir } from 'os';
 import { cosEvents, emitLog } from './cosEvents.js';
-import { updateAgent, completeAgent, appendAgentOutput } from './cosAgents.js';
+import { updateAgent, completeAgent, appendAgentOutput, appendAgentOutputLines } from './cosAgents.js';
 import { registerSpawnedAgent, unregisterSpawnedAgent } from './agents.js';
 import { release } from './executionLanes.js';
 import { completeExecution, errorExecution } from './toolStateMachine.js';
@@ -410,48 +410,53 @@ export async function spawnDirectly({
   }, 3000);
 
   claudeProcess.stdout.on('data', async (data) => {
-    const text = data.toString();
+    try {
+      const text = data.toString();
 
-    if (!hasStartedWorking) {
-      hasStartedWorking = true;
-      await updateAgent(agentId, { metadata: { phase: 'working' } });
-      emitLog('info', `Agent ${agentId} working...`, { agentId, phase: 'working' });
-    }
+      if (!hasStartedWorking) {
+        hasStartedWorking = true;
+        await updateAgent(agentId, { metadata: { phase: 'working' } });
+        emitLog('info', `Agent ${agentId} working...`, { agentId, phase: 'working' });
+      }
 
-    if (streamParser) {
-      // Parse stream-json and emit extracted text lines (cap buffer at 512KB for error analysis)
-      rawStreamBuffer += text;
-      if (rawStreamBuffer.length > 512 * 1024) {
-        rawStreamBuffer = rawStreamBuffer.slice(-512 * 1024);
+      if (streamParser) {
+        // Parse stream-json and emit extracted text lines (cap buffer at 512KB for error analysis)
+        rawStreamBuffer += text;
+        if (rawStreamBuffer.length > 512 * 1024) {
+          rawStreamBuffer = rawStreamBuffer.slice(-512 * 1024);
+        }
+        const lines = streamParser.processChunk(text);
+        for (const line of lines) outputBuffer += line + '\n';
+        await appendAgentOutputLines(agentId, lines);
+        await writeFile(outputFile, outputBuffer).catch(() => {});
+      } else {
+        // Non-stream providers: emit raw stdout as before
+        outputBuffer += text;
+        await writeFile(outputFile, outputBuffer).catch(() => {});
+        await appendAgentOutput(agentId, text);
       }
-      const lines = streamParser.processChunk(text);
-      for (const line of lines) {
-        outputBuffer += line + '\n';
-        await appendAgentOutput(agentId, line);
-      }
-      await writeFile(outputFile, outputBuffer).catch(() => {});
-    } else {
-      // Non-stream providers: emit raw stdout as before
-      outputBuffer += text;
-      await writeFile(outputFile, outputBuffer).catch(() => {});
-      await appendAgentOutput(agentId, text);
+    } catch (err) {
+      console.error(`❌ agentCli stdout handler failed: ${err.message}`);
     }
   });
 
   claudeProcess.stderr.on('data', async (data) => {
-    const text = data.toString();
-    // Codex stderr: show thinking + tool names, skip config dump and command output
-    if (codexStderrFormatter) {
-      for (const line of codexStderrFormatter.processChunk(text)) {
-        outputBuffer += line + '\n';
-        await appendAgentOutput(agentId, line);
+    try {
+      const text = data.toString();
+      // Codex stderr: show thinking + tool names, skip config dump and command output
+      if (codexStderrFormatter) {
+        const lines = codexStderrFormatter.processChunk(text);
+        for (const line of lines) outputBuffer += line + '\n';
+        await appendAgentOutputLines(agentId, lines);
+        await writeFile(outputFile, outputBuffer).catch(() => {});
+        return;
       }
+      outputBuffer += `[stderr] ${text}`;
       await writeFile(outputFile, outputBuffer).catch(() => {});
-      return;
+      await appendAgentOutput(agentId, `[stderr] ${text}`);
+    } catch (err) {
+      console.error(`❌ agentCli stderr handler failed: ${err.message}`);
     }
-    outputBuffer += `[stderr] ${text}`;
-    await writeFile(outputFile, outputBuffer).catch(() => {});
-    await appendAgentOutput(agentId, `[stderr] ${text}`);
   });
 
   claudeProcess.on('error', async (err) => {

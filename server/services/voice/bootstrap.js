@@ -231,7 +231,7 @@ const LMS_BASE = () => (process.env.LM_STUDIO_URL || 'http://localhost:1234')
   .replace(/\/+$/, '').replace(/\/v1$/, '');
 
 const listLmStudioModels = async () => {
-  const res = await fetch(`${LMS_BASE()}/v1/models`).catch(() => null);
+  const res = await fetch(`${LMS_BASE()}/v1/models`, { signal: AbortSignal.timeout(5000) }).catch(() => null);
   if (!res?.ok) return [];
   const body = await res.json().catch(() => ({}));
   return (body?.data || []).map((m) => m.id);

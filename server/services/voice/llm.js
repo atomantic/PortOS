@@ -96,7 +96,7 @@ const sortBySpeed = (list) => list.slice().sort((a, b) => {
 });
 
 const resolveModel = async (requested, { requireTools = false } = {}) => {
-  const res = await fetch(`${LM_STUDIO_BASE()}/v1/models`).catch(() => null);
+  const res = await fetch(`${LM_STUDIO_BASE()}/v1/models`, { signal: AbortSignal.timeout(5000) }).catch(() => null);
   if (!res || !res.ok) return requested && requested !== 'auto' ? requested : null;
   const body = await res.json();
   const ids = (body?.data || []).map((m) => m.id);
