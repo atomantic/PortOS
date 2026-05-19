@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { BIBLE_LIMITS as L } from '../../lib/bibleLimits';
 import useFieldDraft from '../../hooks/useFieldDraft';
+import useRowDraft from '../../hooks/useRowDraft';
 
 const SECTIONS = Object.freeze([
   {
@@ -132,26 +133,9 @@ function DraftField({ field, value, onCommit, disabled, idPrefix }) {
 }
 
 // Generic list editor row — one input per `columns` spec, plus delete.
+// Multi-column draft+blur (with sibling ride-along) lives in `useRowDraft`.
 function ListRow({ row, idx, columns, swatchHex, onChange, onDelete, disabled }) {
-  const [drafts, setDrafts] = useState({});
-  const draftFor = (col) => (col in drafts ? drafts[col] : (row[col] || ''));
-  const setDraft = (col, v) => setDrafts((p) => ({ ...p, [col]: v }));
-  const commit = (col) => {
-    if (!(col in drafts)) return;
-    const v = drafts[col];
-    if (v === (row[col] || '')) {
-      setDrafts((prev) => { const next = { ...prev }; delete next[col]; return next; });
-      return;
-    }
-    // Spread `row` AND any other pending drafts so a fast A-blur → B-blur
-    // sequence doesn't lose column A: if the parent hasn't re-rendered with
-    // the committed A value by the time B blurs, B's commit would otherwise
-    // spread the stale `row` prop and overwrite A back to its original. By
-    // merging in `drafts`, the in-flight edits on sibling columns ride along.
-    const nextRow = { ...row, ...drafts, [col]: v };
-    setDrafts((prev) => { const next = { ...prev }; delete next[col]; return next; });
-    onChange(nextRow);
-  };
+  const { draftFor, setDraft, commit } = useRowDraft(row, onChange);
   return (
     <div className="flex items-start gap-1.5">
       {swatchHex ? (
