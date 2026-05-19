@@ -360,3 +360,42 @@ export async function purgeImageRefFromAllUniverses(filename) {
   }
   return { removed };
 }
+
+/**
+ * Null out `character.referenceSheetImageRef` on every character (across every
+ * universe) whose pointer matches `filename`. Mirrors `purgeImageRefFromAllUniverses`
+ * but targets the single-string sheet pointer rather than the `imageRefs[]` array.
+ *
+ * Wired into the sheet-delete route so the eager pointer-clear lands the same
+ * moment the file is unlinked. The GET-time lazy `pruneStaleReferenceSheets`
+ * is still the safety net for files deleted out-of-band (filesystem cleanup,
+ * sample-data resets) — this helper is the eager path.
+ *
+ * Uses `updateUniverse`'s mutator form because `referenceSheetImageRef` is in
+ * `SERVER_OWNED_CHARACTER_FIELDS` — a literal-object PATCH would be guarded
+ * against clobbering the server-stamped pointer (the guard preserves cur's
+ * value when its file still resolves on disk). The purge IS the server-side
+ * writer, so it has to bypass that guard via the mutator form.
+ */
+export async function purgeReferenceSheetFromAllUniverses(filename) {
+  if (!filename || typeof filename !== 'string') return { cleared: 0 };
+  const universes = await listUniverses();
+  let cleared = 0;
+  for (const universe of universes) {
+    const characters = Array.isArray(universe.characters) ? universe.characters : null;
+    if (!characters) continue;
+    if (!characters.some((entry) => entry?.referenceSheetImageRef === filename)) continue;
+    await updateUniverse(universe.id, (cur) => {
+      const list = Array.isArray(cur.characters) ? cur.characters : [];
+      let touched = false;
+      const nextList = list.map((entry) => {
+        if (entry?.referenceSheetImageRef !== filename) return entry;
+        cleared += 1;
+        touched = true;
+        return { ...entry, referenceSheetImageRef: null };
+      });
+      return touched ? { characters: nextList } : null;
+    });
+  }
+  return { cleared };
+}
