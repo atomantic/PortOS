@@ -12,12 +12,7 @@ _Nothing currently parked — pick the next item from the Backlog._
 
 ### Sharing
 
-- [ ] [multi-hop-provenance-chains-re-share-authors-a] **Multi-hop provenance chains.** Re-share authors a fresh `origin` block; `chain[]` would preserve full attribution. Defer until users ask.
 - [ ] [coverautofiler-preload-universe-record] **Mirror the `_preloadedSeries` pattern for `universeSvc.getUniverse`.** `server/services/pipeline/coverUniverseFiler.js#fileCoverIntoUniverseCollection` calls `universeSvc.getUniverse(universeId)` twice — once near the create (line ~83) and once for delete-race detection after `addItem` (line ~117). The second call must stay (race-detection contract). The first could be skipped via an optional `_preloadedUniverse` arg if a caller ever has the universe in hand; today neither hook caller does, so add a follow-up when a 3rd direct caller appears with a fresh universe. Surfaced by /simplify during the `[coverautofiler-dispatcher-redundant-getseries]` PR; deferred because no current caller would feed it.
-
-### Importer (deferred research)
-
-- [ ] [chunked-extraction-for-source-200k-chars-today-s] **Chunked extraction for source > 200K chars.** Today's `IMPORTER_SOURCE_CHAR_LIMIT` hard-rejects. Once a real import hits the cap, route through per-chunk canon extraction + rolling synopsis. **Investigate chunk-overlap / merge strategy first — research-required, not a drop-in feature.** Plan sketch: pick a chunk size that fits all three importer prompts (canon/arc/issue-proposal) under the smallest provider's context window after overhead; per-chunk canon-extract feeds back into `existingCanon` for the next chunk so dedup is rolling; rolling synopsis is generated after each chunk and prepended as `priorSynopsis` to the next; arc-extract runs against the final concatenated synopsis, not the raw source; issue-proposal honors chunk boundaries only when a chapter/issue marker straddles them. Open questions: (a) is overlap needed at all, or are chapter markers reliable enough to clean-cut at? (b) how to merge per-chunk arcs when chunks disagree on theme/protagonist? (c) progress UI — single bar or per-chunk? Defer until a real import actually hits the 200K cap; the hard-reject + "trim source" guidance is acceptable for now.
 
 ### Universe-as-Canon — Phase 2 + extensions
 
@@ -29,8 +24,6 @@ _Nothing currently parked — pick the next item from the Backlog._
 - [x] ~~**Universe expand LLM contract enrichment.**~~ Shipped via the Universe Builder redesign Phase B — expand contract now returns rich canon arrays alongside categories.
 - [x] ~~**arcPlanner prompt context — include canon characters/places/objects.**~~ Shipped via the Universe Builder redesign Phase B (`renderCanonForPrompt(world)` + `worldCanonText` + migration 019 for `pipeline-arc-overview`, `pipeline-arc-verify`, `pipeline-arc-resolve`, `pipeline-volume-verify`). Follow-up still open: sweep `grep -rn "world\.categories" server/services/pipeline server/services/universeBuilder*.js` for other prompt builders that read categories but not canon.
 
-
-- [ ] [use-rendered-reference-images-as-i2i-anchors-in] **Use rendered reference images as i2i anchors in downstream comic-page renders for models that support it.** SDXL/Flux pipelines anchor every panel render on the per-character rendered ref.
 
 ### Pipeline continuity / approval
 
