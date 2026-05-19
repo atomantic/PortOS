@@ -3,7 +3,7 @@
  * deps — mirrored to `client/src/lib/scenePrompt.js` for the client bundle.
  */
 
-import { shortCanonDescriptorFragments } from './canonPrompt.js';
+import { richCanonDescriptorFragments } from './canonPrompt.js';
 
 const PROMPT_MAX = 1900;
 
@@ -112,14 +112,16 @@ export function matchObjectsInText(text, allObjects) {
  * weight earlier tokens heaviest):
  *   1. worldStyle preset (cinematic / film-noir / etc.) — broadest aesthetic
  *   2. workTitle — gives the model story-context cues
- *   3. setting baseline (description / palette / recurring details) — the place
+ *   3. setting baseline (description / palette / era / weather / recurring) — the place
  *   4. Featuring — char1: desc, char2: desc — the subjects
  *   5. scene.visualPrompt — what's NEW this beat
  *
  * Truncation priority is the inverse: visualPrompt survives unconditionally,
  * then setting baseline, then characters. Style + title are short so they're
  * always kept. Featuring drops characters one-by-one to fit; setting drops
- * secondary fields (palette, recurring) before description.
+ * trailing fragments first (recurringDetails → weather → era → palette →
+ * description) so the most identity-defining field — description — survives
+ * longest under budget pressure.
  *
  * Positional API kept for parity with the long-running Writers Room caller
  * (`SceneCard.jsx`) — adding new optional kwargs at the tail is fine.
@@ -141,17 +143,15 @@ export function buildScenePrompt(workTitle, scene, matchedCharacters, worldStyle
     ? matchedPlace.timeOfDay
     : '';
   const placeMetaFrag = [intExtPart, todPart].filter(Boolean).join(', ');
-  // Pull descriptor fragments via the shared canon-prompt helper so the
-  // setting baseline shares the *SHORT* spec subset (description / Palette /
-  // recurringDetails) with `KINDS[].descFor` (UI summary). Note:
-  // `synthesizeCanonPrompt` uses the *RICH* spec — same helper, broader
-  // field set (adds era / weather). Both call sites stay coherent via the
-  // shared helper, but they are not byte-equivalent prompts. Trailing-period
-  // on prefixed fragments preserves the pre-extraction "Palette: X." sentence
-  // boundary so palette + recurringDetails don't run together when the
-  // budget-truncation join collapses fragments with a single space.
+  // RICH spec (description / Palette / Era / Weather / recurringDetails) —
+  // era + weather are continuity-critical visual cues that diffusion models
+  // weight for lighting / atmosphere / period dress. UI card summaries use the
+  // narrower SHORT spec via `KINDS[].descFor`; both stay coherent through the
+  // shared helper but are not byte-equivalent. Per-frag trailing period
+  // preserves "Palette: X." sentence boundaries when the budget-truncation
+  // join collapses fragments with a single space.
   const baselineFrags = matchedPlace
-    ? shortCanonDescriptorFragments('place', matchedPlace)
+    ? richCanonDescriptorFragments('place', matchedPlace)
       .map((f) => (f.prefix ? `${f.prefix}: ${f.value}.` : f.value))
     : [];
   const placeFrags = matchedPlace ? [

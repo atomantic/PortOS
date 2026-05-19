@@ -277,6 +277,56 @@ describe('composeComicPagePrompt', () => {
     expect(prompt).toMatch(/Panel 1: A solitary frame\./);
     expect(prompt).toMatch(/SFX lettering: fmp\./);
   });
+
+  it('injects matched-place palette / era / weather / recurringDetails into the Setting clause', () => {
+    const matchedPlaces = [
+      {
+        name: 'The Rib',
+        description: 'cathedral-scale fossil interior',
+        palette: 'bone-white, dust-gold',
+        era: 'nine thousand years post-titan',
+        weather: 'still air, soft dawn shafts',
+        recurringDetails: 'beetles tracking across polished bone',
+      },
+    ];
+    const prompt = composeComicPagePrompt({ series: SERIES, page: PAGE, pageNumber: 1, matchedPlaces });
+    expect(prompt).toMatch(/Setting — The Rib: cathedral-scale fossil interior/);
+    expect(prompt).toMatch(/Palette: bone-white, dust-gold/);
+    expect(prompt).toMatch(/Era: nine thousand years post-titan/);
+    expect(prompt).toMatch(/Weather: still air, soft dawn shafts/);
+    expect(prompt).toMatch(/beetles tracking across polished bone/);
+    // Order within the per-place clause mirrors RICH_SPEC: description first
+    // (identity anchor), then palette/era/weather, then recurringDetails.
+    const settingBlock = prompt.match(/Setting — [^\n]+/)?.[0] || '';
+    expect(settingBlock.indexOf('cathedral-scale fossil interior'))
+      .toBeLessThan(settingBlock.indexOf('Palette:'));
+    expect(settingBlock.indexOf('Palette:'))
+      .toBeLessThan(settingBlock.indexOf('Era:'));
+    expect(settingBlock.indexOf('Era:'))
+      .toBeLessThan(settingBlock.indexOf('Weather:'));
+    expect(settingBlock.indexOf('Weather:'))
+      .toBeLessThan(settingBlock.indexOf('beetles'));
+  });
+
+  it('skips per-place empty fragments without emitting bare prefixes', () => {
+    const matchedPlaces = [
+      { name: 'The Rib', description: 'fossil interior', palette: '', era: '', weather: '', recurringDetails: '' },
+    ];
+    const prompt = composeComicPagePrompt({ series: SERIES, page: PAGE, pageNumber: 1, matchedPlaces });
+    expect(prompt).toMatch(/Setting — The Rib: fossil interior/);
+    expect(prompt).not.toMatch(/Palette:/);
+    expect(prompt).not.toMatch(/Era:/);
+    expect(prompt).not.toMatch(/Weather:/);
+  });
+
+  it('joins multiple matched places with " | " in the Setting clause', () => {
+    const matchedPlaces = [
+      { name: 'The Rib', description: 'fossil interior', era: 'post-titan' },
+      { name: 'Sun Pier', description: 'wooden dock', weather: 'salt fog' },
+    ];
+    const prompt = composeComicPagePrompt({ series: SERIES, page: PAGE, pageNumber: 1, matchedPlaces });
+    expect(prompt).toMatch(/The Rib: fossil interior\. Era: post-titan \| Sun Pier: wooden dock\. Weather: salt fog/);
+  });
 });
 
 describe('visual style resolution threads into image prompts', () => {

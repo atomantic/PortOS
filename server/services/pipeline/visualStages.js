@@ -36,6 +36,7 @@ import {
   buildCharByKey, matchSceneCharacters, matchCharactersInText,
   matchPlacesInText, matchObjectsInText,
 } from '../../lib/scenePrompt.js';
+import { richCanonDescriptorFragments } from '../../lib/canonPrompt.js';
 import { composeStyledPrompt } from '../../lib/composeStyledPrompt.js';
 import { resolveVisualStyle } from '../../lib/visualStyles.js';
 import { getDefaultVideoModelId, getVideoModels } from '../../lib/mediaModels.js';
@@ -600,18 +601,19 @@ export function composeComicPagePrompt({
     .map((c) => `${c.name}: ${c.desc}`)
     .join('; ');
 
-  // Place baseline: pull description + palette + recurringDetails per matched
-  // place. Same pattern as buildScenePrompt's placeFrags, but multi-place
-  // (a single comic page can span more than one location).
+  // Place baseline: pull the full RICH descriptor set per matched place
+  // (description / Palette / Era / Weather / recurringDetails). Same shared
+  // helper that drives buildScenePrompt's placeFrags + synthesizeCanonPrompt's
+  // body, so comic-page renders pick up the same era/weather/atmosphere cues
+  // diffusion models weight for lighting + period dress. Multi-place per page
+  // is supported (a single page can span more than one location).
   const placesClause = (matchedPlaces || [])
     .map((p) => {
-      const parts = [p.name && `${p.name}:`, (p.description || '').trim()].filter(Boolean);
-      const head = parts.join(' ');
-      const tail = [
-        p.palette ? `palette: ${p.palette.trim()}` : '',
-        (p.recurringDetails || '').trim(),
-      ].filter(Boolean).join('; ');
-      return [head, tail].filter(Boolean).join('. ');
+      const body = richCanonDescriptorFragments('place', p)
+        .map((f) => (f.prefix ? `${f.prefix}: ${f.value}` : f.value))
+        .join('. ');
+      const head = p.name ? `${p.name}:` : '';
+      return [head, body].filter(Boolean).join(' ');
     })
     .filter(Boolean)
     .join(' | ');

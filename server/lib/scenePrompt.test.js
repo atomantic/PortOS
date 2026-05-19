@@ -160,6 +160,51 @@ describe('scenePrompt — buildScenePrompt', () => {
     expect(out).not.toContain('Featuring');
   });
 
+  it('injects palette / era / weather / recurringDetails into the setting baseline (RICH spec)', () => {
+    const out = buildScenePrompt(
+      '',
+      baseScene,
+      [],
+      '',
+      {
+        description: 'cramped chrome bar',
+        palette: 'amber',
+        era: 'late 1970s post-industrial',
+        weather: 'sodium-vapor rain outside',
+        recurringDetails: 'broken jukebox in corner',
+      },
+    );
+    expect(out).toContain('cramped chrome bar');
+    expect(out).toContain('Palette: amber');
+    expect(out).toContain('Era: late 1970s post-industrial');
+    expect(out).toContain('Weather: sodium-vapor rain outside');
+    expect(out).toContain('broken jukebox in corner');
+    // Description must precede every secondary fragment so the diffusion
+    // model anchors on identity before atmospheric cues.
+    expect(out.indexOf('cramped chrome bar'))
+      .toBeLessThan(out.indexOf('Palette:'));
+    expect(out.indexOf('Palette:'))
+      .toBeLessThan(out.indexOf('Era:'));
+    expect(out.indexOf('Era:'))
+      .toBeLessThan(out.indexOf('Weather:'));
+    expect(out.indexOf('Weather:'))
+      .toBeLessThan(out.indexOf('broken jukebox'));
+  });
+
+  it('omits era / weather fragments when the matched place has no value for them', () => {
+    const out = buildScenePrompt(
+      '',
+      baseScene,
+      [],
+      '',
+      { description: 'cramped chrome bar', palette: 'amber' },
+    );
+    expect(out).toContain('cramped chrome bar');
+    expect(out).toContain('Palette: amber');
+    expect(out).not.toContain('Era:');
+    expect(out).not.toContain('Weather:');
+  });
+
   it('drops palette + recurringDetails before description when budget runs out', () => {
     // Reserve space for `description` (20) + a separator + the prefix-less
     // setting baseline, but NOT enough for `Palette: AMBER.` (15) on top.
