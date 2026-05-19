@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import * as api from '../services/api';
+import { formatTimecode } from '../utils/formatters';
 
 // Map project-time t (every clip contributes its trimmed duration) to the
 // (clipIndex, withinClipSec) pair the preview <video> element needs. The
@@ -37,13 +38,6 @@ const findClipAt = (clips, t) => {
 };
 
 const totalDuration = (clips) => clips.reduce((s, c) => s + Math.max(0, c.outSec - c.inSec), 0);
-
-const formatTime = (sec) => {
-  if (!Number.isFinite(sec) || sec < 0) return '0:00.00';
-  const m = Math.floor(sec / 60);
-  const s = sec - m * 60;
-  return `${m}:${s.toFixed(2).padStart(5, '0')}`;
-};
 
 // Draggable+sortable timeline block. Snaps the trimmed duration to a width
 // derived from `pxPerSec` so longer clips visibly take more horizontal space.
@@ -506,7 +500,7 @@ export default function VideoTimelineEditor() {
             }}
             className="bg-transparent text-white font-medium text-lg focus:outline-none focus:bg-port-card focus:px-2 rounded transition-all"
           />
-          <span className="text-xs text-gray-500">{clips.length} clips · {formatTime(total)}</span>
+          <span className="text-xs text-gray-500">{clips.length} clips · {formatTimecode(total)}</span>
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -592,7 +586,7 @@ export default function VideoTimelineEditor() {
               disabled={clips.length === 0}
             />
             <span className="font-mono text-[11px] tabular-nums">
-              {formatTime(t)} / {formatTime(total)}
+              {formatTimecode(t)} / {formatTimecode(total)}
             </span>
             <label className="flex items-center gap-1 ml-2">
               <span>zoom</span>

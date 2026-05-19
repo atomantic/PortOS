@@ -3,6 +3,8 @@
  * Re-exports toolkit provider service functions
  */
 
+import { ServerError } from '../lib/errorHandler.js';
+
 // This will be initialized by server/index.js and set via setAIToolkit()
 let aiToolkitInstance = null;
 
@@ -10,47 +12,50 @@ export function setAIToolkit(toolkit) {
   aiToolkitInstance = toolkit;
 }
 
+// Centralized typed-error so callers can gate on `err.code === 'AI_TOOLKIT_NOT_INITIALIZED'`
+// instead of string-matching the message; status 503 (service-unavailable)
+// because the toolkit warms at boot and a not-initialized state means the
+// service hasn't finished starting.
+function requireToolkit() {
+  if (aiToolkitInstance) return aiToolkitInstance;
+  throw new ServerError('AI Toolkit not initialized', {
+    status: 503,
+    code: 'AI_TOOLKIT_NOT_INITIALIZED',
+  });
+}
+
 export async function getAllProviders() {
-  if (!aiToolkitInstance) throw new Error('AI Toolkit not initialized');
-  return aiToolkitInstance.services.providers.getAllProviders();
+  return requireToolkit().services.providers.getAllProviders();
 }
 
 export async function getProviderById(id) {
-  if (!aiToolkitInstance) throw new Error('AI Toolkit not initialized');
-  return aiToolkitInstance.services.providers.getProviderById(id);
+  return requireToolkit().services.providers.getProviderById(id);
 }
 
 export async function getActiveProvider() {
-  if (!aiToolkitInstance) throw new Error('AI Toolkit not initialized');
-  return aiToolkitInstance.services.providers.getActiveProvider();
+  return requireToolkit().services.providers.getActiveProvider();
 }
 
 export async function setActiveProvider(id) {
-  if (!aiToolkitInstance) throw new Error('AI Toolkit not initialized');
-  return aiToolkitInstance.services.providers.setActiveProvider(id);
+  return requireToolkit().services.providers.setActiveProvider(id);
 }
 
 export async function createProvider(data) {
-  if (!aiToolkitInstance) throw new Error('AI Toolkit not initialized');
-  return aiToolkitInstance.services.providers.createProvider(data);
+  return requireToolkit().services.providers.createProvider(data);
 }
 
 export async function updateProvider(id, data) {
-  if (!aiToolkitInstance) throw new Error('AI Toolkit not initialized');
-  return aiToolkitInstance.services.providers.updateProvider(id, data);
+  return requireToolkit().services.providers.updateProvider(id, data);
 }
 
 export async function deleteProvider(id) {
-  if (!aiToolkitInstance) throw new Error('AI Toolkit not initialized');
-  return aiToolkitInstance.services.providers.deleteProvider(id);
+  return requireToolkit().services.providers.deleteProvider(id);
 }
 
 export async function testProvider(id) {
-  if (!aiToolkitInstance) throw new Error('AI Toolkit not initialized');
-  return aiToolkitInstance.services.providers.testProvider(id);
+  return requireToolkit().services.providers.testProvider(id);
 }
 
 export async function refreshProviderModels(id) {
-  if (!aiToolkitInstance) throw new Error('AI Toolkit not initialized');
-  return aiToolkitInstance.services.providers.refreshProviderModels(id);
+  return requireToolkit().services.providers.refreshProviderModels(id);
 }

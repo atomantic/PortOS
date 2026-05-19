@@ -9,11 +9,15 @@ import { cosEvents } from './cosEvents.js'
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js'
 
 const AVAILABILITY_CACHE_TTL_MS = 30_000
+const DEFAULT_REQUEST_TIMEOUT_MS = 30_000
+// Availability probe is short — if the local server is down we'd rather fail
+// fast and degrade to "no LM Studio" than block 30s on every cold check.
+const AVAILABILITY_PROBE_TIMEOUT_MS = 5_000
 
 // Default LM Studio configuration
 const DEFAULT_CONFIG = {
   baseUrl: (process.env.LM_STUDIO_URL || 'http://localhost:1234').replace(/\/+$/, '').replace(/\/v1$/, ''),
-  timeout: 30000,
+  timeout: DEFAULT_REQUEST_TIMEOUT_MS,
   defaultThinkingModel: 'gpt-oss-20b'
 }
 
@@ -69,7 +73,7 @@ async function checkLMStudioAvailable() {
   }
 
   try {
-    await lmStudioRequest('/v1/models', { timeout: 5000 })
+    await lmStudioRequest('/v1/models', { timeout: AVAILABILITY_PROBE_TIMEOUT_MS })
     isAvailable = true
     status.lastSuccessAt = now
     status.consecutiveErrors = 0

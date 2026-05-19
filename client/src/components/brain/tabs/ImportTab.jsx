@@ -13,7 +13,7 @@ import {Upload,
 import * as api from '../../../services/api';
 import toast from '../../ui/Toast';
 import BrailleSpinner from '../../BrailleSpinner';
-import { formatBytes } from '../../../utils/formatters';
+import { formatBytes, formatDateShort } from '../../../utils/formatters';
 
 // Sources we plan to support. Only `available` ones are clickable.
 const SOURCES = [
@@ -52,13 +52,6 @@ const STEPS = [
   { id: 'run', label: 'Import' },
   { id: 'done', label: 'Done' }
 ];
-
-const formatDate = (iso) => {
-  if (!iso) return '—';
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return '—';
-  return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
-};
 
 export default function ImportTab() {
   const navigate = useNavigate();
@@ -428,8 +421,8 @@ function StepPreview({ preview, fileMeta, onNext, onBack }) {
         <Stat label="Messages" value={summary.totalMessages.toLocaleString()} />
         <Stat label="Total chars" value={summary.totalChars.toLocaleString()} />
         <Stat label="Custom GPTs" value={summary.gizmoCount.toString()} />
-        <Stat label="Earliest" value={formatDate(summary.earliest)} />
-        <Stat label="Latest" value={formatDate(summary.latest)} />
+        <Stat label="Earliest" value={formatDateShort(summary.earliest)} />
+        <Stat label="Latest" value={formatDateShort(summary.latest)} />
       </div>
 
       <div className="border border-port-border rounded">
@@ -441,7 +434,7 @@ function StepPreview({ preview, fileMeta, onNext, onBack }) {
             <li key={c.id || c.title} className="px-3 py-2 flex items-center justify-between gap-2">
               <span className="text-sm text-white truncate">{c.title}</span>
               <span className="text-xs text-gray-500 flex-shrink-0">
-                {c.messageCount} msg · {formatDate(c.createTime)}
+                {c.messageCount} msg · {formatDateShort(c.createTime)}
               </span>
             </li>
           ))}

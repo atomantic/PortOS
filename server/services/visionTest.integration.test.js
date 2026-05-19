@@ -203,7 +203,11 @@ describe('Vision Integration Tests', () => {
       });
 
       expect(result.success).toBe(false);
-      expect(result.error).toContain('not found');
+      // Either the toolkit isn't initialized in this test context (boot-race
+      // path) or the provider really is missing — both surface as a graceful
+      // string error.
+      expect(typeof result.error).toBe('string');
+      expect(result.error).toMatch(/not found|still initializing/);
     });
 
     it('should gracefully handle non-existent image', async () => {

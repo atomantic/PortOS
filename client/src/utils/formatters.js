@@ -148,6 +148,40 @@ export function formatDateTime(value) {
 }
 
 /**
+ * Format a number of seconds as M:SS (e.g. 75 → "1:15"). For coarse durations
+ * like a stitched video's runtime. Returns `'—'` for missing/invalid input.
+ */
+export function formatDurationSec(seconds) {
+  if (!seconds || !Number.isFinite(seconds)) return '—';
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+/**
+ * Format a number of seconds as M:SS.ss for video-editor timecodes
+ * (e.g. 95.42 → "1:35.42"). Negative or non-finite inputs render as "0:00.00".
+ */
+export function formatTimecode(seconds) {
+  if (!Number.isFinite(seconds) || seconds < 0) return '0:00.00';
+  const m = Math.floor(seconds / 60);
+  const s = seconds - m * 60;
+  return `${m}:${s.toFixed(2).padStart(5, '0')}`;
+}
+
+/**
+ * Format a date with a short month label (e.g., "Mar 5, 2026"). Returns
+ * `'—'` for missing/invalid input — pair with `formatDate` (long month, null
+ * fallback) depending on the surrounding UI.
+ */
+export function formatDateShort(value) {
+  if (!value) return '—';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '—';
+  return date.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+}
+
+/**
  * Format a duration in milliseconds as a human-readable string
  * @param {number} ms - Duration in milliseconds
  * @returns {string} Formatted duration (e.g., "45s", "3m 12s", "2h 5m")

@@ -4,6 +4,7 @@ import { getVoiceConfig, piperVoiceTildePath } from './config.js';
 import { synthesizeKokoro, listKokoroVoices } from './tts-kokoro.js';
 import { synthesizePiper, listPiperVoices } from './tts-piper.js';
 import { findPiperVoice } from './piper-voices.js';
+import { ServerError } from '../../lib/errorHandler.js';
 
 // Single source of truth for the supported TTS engine names. Imported by
 // routes/voice.js, routes/pipeline.js, and services/pipeline/audio.js so a
@@ -43,7 +44,12 @@ export const synthesize = async (text, opts = {}) => {
       // otherwise `voice` would change but `voicePath` would remain the
       // previous config value, silently synthesizing the wrong voice.
       const catalog = findPiperVoice(opts.voice);
-      if (!catalog) throw new Error(`unknown piper voice: ${opts.voice}`);
+      if (!catalog) {
+        throw new ServerError(`unknown piper voice: ${opts.voice}`, {
+          status: 400,
+          code: 'UNKNOWN_VOICE',
+        });
+      }
       ttsCfg = {
         ...cfg.tts,
         piper: {

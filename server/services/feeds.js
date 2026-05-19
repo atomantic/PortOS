@@ -22,6 +22,39 @@ const FETCH_TIMEOUT_MS = 15000;
 const DEFAULT_DATA = { feeds: [], items: [] };
 const store = createCachedStore(FEEDS_FILE, DEFAULT_DATA, { context: 'feeds' });
 
+// Compare items newest-first by pubDate (or fetchedAt fallback). Both writes
+// and the legacy normalization pass use this so getItems can skip the sort.
+const itemSortKey = (item) => Date.parse(item.pubDate || item.fetchedAt) || 0;
+const compareItemsNewestFirst = (a, b) => itemSortKey(b) - itemSortKey(a);
+
+// Sort runs on writes only; getItems trusts the invariant. Legacy unsorted
+// state on disk gets normalized once on first read (see ensureItemsSorted).
+// The invariant assumes this module owns all writes to feeds.json — out-of-band
+// edits while the process is running won't retrigger normalization.
+let _itemsSorted = false;
+const sortItemsNewestFirst = (items) => {
+  items.sort(compareItemsNewestFirst);
+  _itemsSorted = true;
+};
+
+const isSortedNewestFirst = (items) => {
+  for (let i = 1; i < items.length; i++) {
+    if (compareItemsNewestFirst(items[i - 1], items[i]) > 0) return false;
+  }
+  return true;
+};
+
+async function ensureItemsSorted() {
+  if (_itemsSorted) return;
+  const data = await store.load();
+  if (!isSortedNewestFirst(data.items)) {
+    sortItemsNewestFirst(data.items);
+    await store.save(data);
+  } else {
+    _itemsSorted = true;
+  }
+}
+
 // ─── RSS/Atom Parser ────────────────────────────────────────────────────────
 
 /**
@@ -152,6 +185,7 @@ export async function addFeed(url) {
     fetchedAt: new Date().toISOString()
   }));
   data.items.push(...newItems);
+  sortItemsNewestFirst(data.items);
 
   await store.save(data);
   console.log(`📡 Feed added: ${feed.title} (${newItems.length} items)`);
@@ -215,6 +249,7 @@ export async function refreshFeed(id) {
   feed.itemCount = data.items.filter(i => i.feedId === id).length;
   if (parsed.title) feed.title = parsed.title;
 
+  sortItemsNewestFirst(data.items);
   await store.save(data);
   console.log(`🔄 Feed refreshed: ${feed.title} (+${newItems.length} new)`);
 
@@ -267,6 +302,9 @@ function applyParsedFeed(data, feed, parsed) {
   return newItems.length;
 }
 
+// refreshAllFeeds defers sort to a single end-of-batch pass — applyParsedFeed
+// runs per feed inside the loop and we'd otherwise re-sort the whole array
+// N times for an N-feed refresh.
 export async function refreshAllFeeds() {
   const data = await store.load();
   const CONCURRENCY = 5;
@@ -295,24 +333,19 @@ export async function refreshAllFeeds() {
     }
   }
 
+  if (totalNew > 0) sortItemsNewestFirst(data.items);
   await store.save(data);
   console.log(`📡 All feeds refreshed: +${totalNew} new items, ${totalFailed} failures`);
   return { refreshed: data.feeds.length, newItems: totalNew, failures: totalFailed };
 }
 
 export async function getItems({ feedId, unreadOnly, limit, offset = 0 } = {}) {
+  await ensureItemsSorted();
   const data = await store.load();
   let items = data.items;
 
   if (feedId) items = items.filter(i => i.feedId === feedId);
   if (unreadOnly) items = items.filter(i => !i.read);
-
-  // Sort newest first by pubDate or fetchedAt
-  items.sort((a, b) => {
-    const da = new Date(a.pubDate || a.fetchedAt);
-    const db = new Date(b.pubDate || b.fetchedAt);
-    return db - da;
-  });
 
   if (limit != null) return items.slice(offset, offset + limit);
   return items.slice(offset);
