@@ -21,8 +21,8 @@
 
 import { runStagedLLM } from '../../lib/stageRunner.js';
 import { ServerError } from '../../lib/errorHandler.js';
-import { getSeries, updateSeries, updateSeasonOnSeries } from './series.js';
-import { listIssues, updateIssue, recomputeIssueNumbersForSeries, getIssue, updateStageWithLatest } from './issues.js';
+import { getSeries, updateSeries, updateSeasonOnSeries, ARC_LOCKABLE_FIELDS } from './series.js';
+import { listIssues, updateIssue, recomputeIssueNumbersForSeries, getIssue, updateStageWithLatest, assertStageUnlocked } from './issues.js';
 import { emitRecordUpdated, withReexportSuppressed } from '../sharing/recordEvents.js';
 import { getSeason } from './seasons.js';
 import {
@@ -530,6 +530,10 @@ export async function generateComicCoverConcepts(issueId, options = {}) {
     throw makeErr(`Invalid target: ${target}`, ERR_VALIDATION);
   }
   const issue = await getIssue(issueId);
+  // `commit: true` mutates `stages.comicPages.cover/backCover.script` —
+  // refuse when the stage is locked. Preview-only (`commit !== true`) is
+  // allowed: it just returns the LLM output without persisting.
+  if (options.commit) assertStageUnlocked(issue, 'comicPages');
   const series = await getSeries(issue.seriesId);
   const proseFull = (issue.stages?.prose?.output || '').trim();
   // Cap prose at a generous excerpt so very long drafts don't blow the
@@ -962,6 +966,21 @@ export async function resolveVerifyIssues(seriesId, options = {}) {
   };
 }
 
+// Preserve per-field arc locks. When `currentSeries.locked.arcFields[k]` is
+// true, the incoming arc's value for `k` is replaced with the existing one so
+// auto-resolve / regenerate flows can rewrite unlocked fields without
+// clobbering user-frozen ones. `null` next-arc (no incoming arc) is passed
+// through unchanged — the persist layer's sanitizer drops it.
+export function mergeArcWithLocks(currentArc, nextArc, lockedFields) {
+  if (!nextArc || !lockedFields || typeof lockedFields !== 'object') return nextArc;
+  if (!currentArc) return nextArc;
+  const merged = { ...nextArc };
+  for (const field of ARC_LOCKABLE_FIELDS) {
+    if (lockedFields[field] === true) merged[field] = currentArc[field];
+  }
+  return merged;
+}
+
 /**
  * Persist a new `arc` + `seasons[]` onto a series, migrating any child issues
  * whose `seasonId` referenced a season that the new shape dropped or renamed.
@@ -973,11 +992,16 @@ export async function resolveVerifyIssues(seriesId, options = {}) {
  * positional 1:1 fallback. Unmatched orphans get `seasonId: null` so they fall
  * into the visible "Un-grouped" bucket instead of vanishing.
  *
+ * Per-field arc locks (`series.locked.arcFields`) are honored: locked fields
+ * are restored from `currentSeries.arc` before the persist, so an auto-resolve
+ * that proposes a new logline can preserve the user-frozen themes verbatim.
+ *
  * `currentSeries` is the pre-write snapshot; pass the result of `getSeries(id)`
  * so we know which ids existed before the write.
  */
 export async function commitSeasonsWithRemap(currentSeries, { arc, seasons }) {
   const seriesId = currentSeries.id;
+  const mergedArc = mergeArcWithLocks(currentSeries.arc, arc, currentSeries.locked?.arcFields);
   const newIds = new Set((seasons || []).map((s) => s.id));
   const droppedOldSeasons = (currentSeries.seasons || []).filter((s) => !newIds.has(s.id));
   const oldIds = new Set((currentSeries.seasons || []).map((s) => s.id));
@@ -1000,7 +1024,7 @@ export async function commitSeasonsWithRemap(currentSeries, { arc, seasons }) {
   // the exact orphan state this helper was written to prevent.
   let updated;
   await withReexportSuppressed('series', seriesId, async () => {
-    updated = await updateSeries(seriesId, { arc, seasons });
+    updated = await updateSeries(seriesId, { arc: mergedArc, seasons });
     for (const iss of reassignList) {
       const target = remap.get(iss.seasonId) ?? null;
       await updateIssue(iss.id, { seasonId: target }, { skipRenumber: true });
@@ -1085,4 +1109,5 @@ export const __testing = {
   shapeFindings,
   renderVolumeIssue,
   buildNeighborVolumes,
+  mergeArcWithLocks,
 };

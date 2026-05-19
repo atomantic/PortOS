@@ -59,11 +59,26 @@ export const ISSUE_COUNT_TARGET_MAX = 999;
 
 export const LOCKABLE_STAGES = Object.freeze(['arc']);
 
+// Per-field arc lock targets. Each field can be individually frozen so
+// `resolveVerifyIssues` / `commitSeasonsWithRemap` rewrite unlocked fields
+// while preserving locked ones verbatim. Sibling to the binary `locked.arc`
+// (which freezes everything); the two stack — `locked.arc: true` always wins.
+export const ARC_LOCKABLE_FIELDS = Object.freeze([
+  'logline', 'summary', 'protagonistArc', 'themes', 'shape',
+]);
+
 const sanitizeSeriesLocked = (raw = {}) => {
   if (!raw || typeof raw !== 'object') return {};
   const out = {};
   for (const key of LOCKABLE_STAGES) {
     if (raw[key] === true) out[key] = true;
+  }
+  if (raw.arcFields && typeof raw.arcFields === 'object') {
+    const arcFields = {};
+    for (const k of ARC_LOCKABLE_FIELDS) {
+      if (raw.arcFields[k] === true) arcFields[k] = true;
+    }
+    if (Object.keys(arcFields).length > 0) out.arcFields = arcFields;
   }
   return out;
 };

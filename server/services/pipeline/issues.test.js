@@ -126,7 +126,41 @@ describe('pipeline issues service', () => {
     for (const id of svc.STAGE_IDS) {
       expect(i.stages[id].status).toBe('empty');
       expect(i.stages[id].output).toBe('');
+      // Per-stage lock defaults to false so existing issues stay regenerable.
+      expect(i.stages[id].locked).toBe(false);
     }
+  });
+
+  describe('per-stage lock', () => {
+    it('round-trips locked:true through updateStage', async () => {
+      const i = await svc.createIssue({ seriesId: 'ser-1', title: 'L' });
+      const { stage } = await svc.updateStage(i.id, 'comicScript', { locked: true });
+      expect(stage.locked).toBe(true);
+    });
+
+    it('updateStage with non-boolean locked coerces back to false', async () => {
+      const i = await svc.createIssue({ seriesId: 'ser-1', title: 'L' });
+      await svc.updateStage(i.id, 'idea', { locked: true });
+      // Anything that isn't strictly `true` clears the lock — guards against
+      // a truthy-but-not-boolean payload silently locking the stage.
+      const after = await svc.updateStage(i.id, 'idea', { locked: 'yes' });
+      expect(after.stage.locked).toBe(false);
+    });
+
+    it('assertStageUnlocked throws ERR_STAGE_LOCKED when stage is locked', () => {
+      const issue = { stages: { idea: { locked: true } } };
+      expect(() => svc.assertStageUnlocked(issue, 'idea')).toThrow(/locked/);
+      try { svc.assertStageUnlocked(issue, 'idea'); } catch (err) {
+        expect(err.code).toBe(svc.ERR_STAGE_LOCKED);
+        expect(err.status).toBe(400);
+      }
+    });
+
+    it('assertStageUnlocked is a no-op when stage is unlocked or missing', () => {
+      expect(() => svc.assertStageUnlocked({ stages: { idea: { locked: false } } }, 'idea')).not.toThrow();
+      expect(() => svc.assertStageUnlocked({ stages: {} }, 'idea')).not.toThrow();
+      expect(() => svc.assertStageUnlocked(null, 'idea')).not.toThrow();
+    });
   });
 
   it('updateStage patches only the named stage', async () => {
@@ -446,7 +480,7 @@ describe('pipeline issues service', () => {
       const i = await svc.createIssue({ seriesId: 'ser-1', title: 'P' });
       expect(i.stages.audio).toEqual({
         status: 'empty', input: '', output: '', lastRunId: null,
-        errorMessage: '', updatedAt: null, lines: [], music: null,
+        errorMessage: '', updatedAt: null, lines: [], music: null, locked: false,
       });
     });
 

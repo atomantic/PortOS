@@ -124,6 +124,18 @@ describe('pipeline text stage generator', () => {
     await expect(textStages.generateStage(issue.id, 'comicPages')).rejects.toThrow(/unsupported stageId/);
   });
 
+  it('refuses regeneration when the per-stage lock is set, and leaves status untouched', async () => {
+    const { issue } = await seed();
+    await issuesSvc.updateStage(issue.id, 'idea', { locked: true, status: 'ready', output: 'final beats' });
+    await expect(textStages.generateStage(issue.id, 'idea'))
+      .rejects.toMatchObject({ code: issuesSvc.ERR_STAGE_LOCKED });
+    // No status drift to 'generating' — the guard runs before the updateStage call.
+    const after = await issuesSvc.getIssue(issue.id);
+    expect(after.stages.idea.status).toBe('ready');
+    expect(after.stages.idea.output).toBe('final beats');
+    expect(after.stages.idea.locked).toBe(true);
+  });
+
   it('prompt context carries lengthTargets from a named non-default profile (extended)', async () => {
     const { series } = await seed();
     // Create an issue with the 'extended' profile — distinct from 'standard' so

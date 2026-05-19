@@ -793,6 +793,79 @@ describe('arcPlanner — commitSeasonsWithRemap', () => {
     const finalI1 = await issuesSvc.getIssue(i1.id);
     expect(finalI1.seasonId).toBeNull();
   });
+
+  it('preserves locked arc fields when commit rewrites the arc', async () => {
+    const s = await setupSeries({
+      arc: {
+        logline: 'KEEP THIS LOGLINE',
+        summary: 'rewrite the summary',
+        themes: ['keep', 'these'],
+        protagonistArc: 'rewrite the pa',
+        shape: 'rags-to-riches',
+        status: 'draft',
+      },
+      locked: { arcFields: { logline: true, themes: true } },
+    });
+    const cur = await seriesSvc.getSeries(s.id);
+    const out = await planner.commitSeasonsWithRemap(cur, {
+      arc: {
+        logline: 'NEW LOGLINE (should be ignored)',
+        summary: 'a fresh summary',
+        themes: ['fresh', 'replaced'],
+        protagonistArc: 'a fresh pa',
+        shape: 'icarus',
+        status: 'draft',
+      },
+      seasons: [],
+    });
+    // Locked fields preserved verbatim from the existing arc.
+    expect(out.series.arc.logline).toBe('KEEP THIS LOGLINE');
+    expect(out.series.arc.themes).toEqual(['keep', 'these']);
+    // Unlocked fields took the new value.
+    expect(out.series.arc.summary).toBe('a fresh summary');
+    expect(out.series.arc.protagonistArc).toBe('a fresh pa');
+    expect(out.series.arc.shape).toBe('icarus');
+  });
+});
+
+describe('arcPlanner — mergeArcWithLocks', () => {
+  it('replaces locked fields with the current arc values', () => {
+    const current = { logline: 'a', summary: 'b', themes: ['t1'], protagonistArc: 'c', shape: 's1' };
+    const next = { logline: 'A', summary: 'B', themes: ['t2'], protagonistArc: 'C', shape: 's2' };
+    const merged = planner.__testing.mergeArcWithLocks(current, next, { logline: true, themes: true });
+    expect(merged.logline).toBe('a');
+    expect(merged.themes).toEqual(['t1']);
+    expect(merged.summary).toBe('B');
+    expect(merged.shape).toBe('s2');
+  });
+
+  it('returns next unchanged when lockedFields is empty / absent', () => {
+    const current = { logline: 'a' };
+    const next = { logline: 'A' };
+    expect(planner.__testing.mergeArcWithLocks(current, next, {})).toEqual({ logline: 'A' });
+    expect(planner.__testing.mergeArcWithLocks(current, next, null)).toEqual({ logline: 'A' });
+    expect(planner.__testing.mergeArcWithLocks(current, next, undefined)).toEqual({ logline: 'A' });
+  });
+
+  it('passes next through when there is no current arc to preserve from', () => {
+    const next = { logline: 'A' };
+    expect(planner.__testing.mergeArcWithLocks(null, next, { logline: true })).toEqual({ logline: 'A' });
+  });
+
+  it('returns next when next is null/undefined (no-op)', () => {
+    expect(planner.__testing.mergeArcWithLocks({ logline: 'a' }, null, { logline: true })).toBeNull();
+    expect(planner.__testing.mergeArcWithLocks({ logline: 'a' }, undefined, { logline: true })).toBeUndefined();
+  });
+
+  it('ignores unknown lock keys (only ARC_LOCKABLE_FIELDS are honored)', () => {
+    const current = { logline: 'a', summary: 'b' };
+    const next = { logline: 'A', summary: 'B' };
+    const merged = planner.__testing.mergeArcWithLocks(current, next, { logline: true, bogusKey: true });
+    expect(merged.logline).toBe('a');
+    expect(merged.summary).toBe('B');
+    // bogusKey didn't survive into the merged shape.
+    expect(merged.bogusKey).toBeUndefined();
+  });
 });
 
 describe('arcPlanner — buildSeasonRemap', () => {

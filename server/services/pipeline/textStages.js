@@ -17,7 +17,7 @@
 import { runStagedLLM } from '../../lib/stageRunner.js';
 import { getSeries } from './series.js';
 import { extractCanonFromProse } from '../universeCanon.js';
-import { getIssue, listIssues, updateStage, TEXT_STAGE_IDS } from './issues.js';
+import { getIssue, listIssues, updateStage, assertStageUnlocked, TEXT_STAGE_IDS } from './issues.js';
 import { getSeriesCanon } from './seriesCanon.js';
 import { compareIssuesByPosition } from './arcPlanner.js';
 import { computeIssueTargets } from '../../lib/issueLength.js';
@@ -187,6 +187,12 @@ export async function generateStage(issueId, stageId, options = {}) {
   const issue = await getIssue(issueId);
   const series = await getSeries(issue.seriesId);
   const canon = await getSeriesCanon(series);
+
+  // Per-stage editorial lock — refuse before touching the stage record so a
+  // locked stage doesn't get bumped to 'generating' status only to be reset.
+  // Sibling to the arc / season checks elsewhere in the planner; any of the
+  // three rejects.
+  assertStageUnlocked(issue, stageId);
 
   await updateStage(issueId, stageId, { status: 'generating', errorMessage: '' });
 

@@ -34,6 +34,9 @@ const updateStageMock = vi.fn(async (issueId, stageId, patch) => ({
 vi.mock('./issues.js', () => ({
   getIssue: (...a) => getIssueMock(...a),
   updateStage: (...a) => updateStageMock(...a),
+  // Default to "not locked" so existing tests keep their semantics; per-stage
+  // lock enforcement is covered in its own describe block.
+  assertStageUnlocked: vi.fn(() => undefined),
   VISUAL_STAGE_IDS: ['comicPages', 'storyboards', 'episodeVideo'],
   STAGE_IDS: ['idea', 'prose', 'comicScript', 'teleplay', 'comicPages', 'storyboards', 'episodeVideo'],
 }));

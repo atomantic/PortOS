@@ -560,6 +560,51 @@ function ThemeChips({ series, arc, onSeriesUpdate }) {
   );
 }
 
+// Per-field arc lock toggle. Click flips `series.locked.arcFields[field]`; the
+// server-side `commitSeasonsWithRemap` honors the map so auto-resolve /
+// regenerate rewrite unlocked fields while preserving locked ones verbatim.
+// Subtle inline icon — not a full button — to stay out of the read flow.
+function FieldLockToggle({ series, field, label, onSeriesUpdate }) {
+  const lockedFields = series.locked?.arcFields || {};
+  const locked = lockedFields[field] === true;
+  const [saving, setSaving] = useState(false);
+  const toggle = async () => {
+    if (saving) return;
+    const nextFields = { ...lockedFields };
+    if (locked) delete nextFields[field];
+    else nextFields[field] = true;
+    setSaving(true);
+    // `updatePipelineSeries` toasts the error itself on rejection — silent: false
+    // by default in apiCore.request. No custom catch needed; just short-circuit.
+    const updated = await updatePipelineSeries(series.id, {
+      locked: { ...(series.locked || {}), arcFields: nextFields },
+    }).catch(() => null);
+    setSaving(false);
+    if (!updated) return;
+    onSeriesUpdate(updated);
+    toast.success(locked ? `${label} unlocked` : `${label} locked — preserved on regenerate / auto-resolve`);
+  };
+  return (
+    <button
+      type="button"
+      onClick={toggle}
+      disabled={saving}
+      aria-pressed={locked}
+      title={locked
+        ? `${label} is locked — click to unlock`
+        : `Lock ${label} to preserve it through regenerate / auto-resolve`}
+      aria-label={locked ? `Unlock ${label}` : `Lock ${label}`}
+      className={`inline-flex items-center justify-center w-4 h-4 rounded transition-colors disabled:opacity-40 ${
+        locked ? 'text-port-warning hover:text-port-warning/80' : 'text-gray-600 hover:text-gray-300'
+      }`}
+    >
+      {saving
+        ? <Loader2 size={10} className="animate-spin" />
+        : (locked ? <Lock size={10} /> : <Unlock size={10} />)}
+    </button>
+  );
+}
+
 function ArcContent({ series, onSeriesUpdate }) {
   const arc = series.arc;
   const [editing, setEditing] = useState(false);
@@ -649,28 +694,45 @@ function ArcContent({ series, onSeriesUpdate }) {
 
   return (
     <div className="space-y-2">
-      {arc.logline ? <p className="text-sm text-white">{arc.logline}</p> : null}
+      {arc.logline ? (
+        <div className="flex items-start gap-2">
+          <p className="text-sm text-white flex-1">{arc.logline}</p>
+          <FieldLockToggle series={series} field="logline" label="Logline" onSeriesUpdate={onSeriesUpdate} />
+        </div>
+      ) : null}
       <div className="flex flex-wrap items-center gap-1.5">
         {shapeDef ? (
-          <span
-            className="inline-flex items-center gap-1.5 text-[10px] uppercase tracking-wider px-2 py-0.5 rounded bg-port-bg border border-port-accent/40 text-port-accent"
-            title={shapeDef.description}
-          >
-            <ArcShapeSparkline shape={shapeDef} width={48} height={16} />
-            {shapeDef.label}
-          </span>
+          <>
+            <span
+              className="inline-flex items-center gap-1.5 text-[10px] uppercase tracking-wider px-2 py-0.5 rounded bg-port-bg border border-port-accent/40 text-port-accent"
+              title={shapeDef.description}
+            >
+              <ArcShapeSparkline shape={shapeDef} width={48} height={16} />
+              {shapeDef.label}
+            </span>
+            <FieldLockToggle series={series} field="shape" label="Shape" onSeriesUpdate={onSeriesUpdate} />
+          </>
         ) : null}
         <ThemeChips series={series} arc={arc} onSeriesUpdate={onSeriesUpdate} />
+        {(arc.themes?.length ?? 0) > 0 ? (
+          <FieldLockToggle series={series} field="themes" label="Themes" onSeriesUpdate={onSeriesUpdate} />
+        ) : null}
       </div>
       {arc.summary ? (
         <details className="text-xs text-gray-400">
-          <summary className="cursor-pointer hover:text-white">Summary</summary>
+          <summary className="cursor-pointer hover:text-white inline-flex items-center gap-1.5">
+            Summary
+            <FieldLockToggle series={series} field="summary" label="Summary" onSeriesUpdate={onSeriesUpdate} />
+          </summary>
           <p className="mt-2 whitespace-pre-wrap">{arc.summary}</p>
         </details>
       ) : null}
       {arc.protagonistArc ? (
         <details className="text-xs text-gray-400">
-          <summary className="cursor-pointer hover:text-white">Protagonist arc</summary>
+          <summary className="cursor-pointer hover:text-white inline-flex items-center gap-1.5">
+            Protagonist arc
+            <FieldLockToggle series={series} field="protagonistArc" label="Protagonist arc" onSeriesUpdate={onSeriesUpdate} />
+          </summary>
           <p className="mt-2 whitespace-pre-wrap">{arc.protagonistArc}</p>
         </details>
       ) : null}

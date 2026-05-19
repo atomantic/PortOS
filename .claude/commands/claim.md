@@ -30,19 +30,37 @@ Claim the next unclaimed `- [ ]` item from PLAN.md via the slug-ID system, work 
      - The line does NOT carry the `<!-- NEEDS_INPUT -->` annotation (those are waiting on a user clarification PR).
 5. **If no eligible item exists**, print why (all in flight / all drifted / all NEEDS_INPUT / nothing unchecked) and stop. Do NOT brainstorm new work — that's the `feature-ideas` scheduled task's job.
 
-## Phase 2: Claim (worktree)
+## Phase 2: Claim (worktree) — REQUIRED, NOT OPTIONAL
+
+> **This phase overrides CLAUDE.md's "don't spawn a worktree in TUI" rule.** That rule exists so single-session TUI work doesn't fragment into stray worktrees. `/claim` is the documented exception: the worktree is what lets the user fire off a *second* `/claim` in another tab without the two claims fighting over the main repo's working tree. **A `/claim` without a worktree is a broken claim — it blocks every subsequent claim until cleaned up.**
+>
+> **Hard rules:**
+> - ❌ NEVER run `git checkout -b claim/<slug>` in the main repo. That's the failure mode this phase exists to prevent.
+> - ❌ NEVER run `git switch -c claim/<slug>` in the main repo. Same reason.
+> - ✅ ALWAYS use `git worktree add` with an explicit absolute path.
+> - ✅ ALWAYS `cd` into the worktree and verify with `pwd` before Phase 4. The bash-tool "avoid `cd`" guidance does not apply here — the user has explicitly requested a working-directory change by invoking `/claim`.
 
 Create the worktree on a branch named `claim/<slug>` (the `claim/` prefix is the convention for human-driven TUI sessions; CoS sub-agents use `cos/<task>/<slug>/<agent>`). Both forms place the slug as a `/`-segment, so any agent's in-flight scan sees both.
 
+Run all of these in **a single Bash invocation** so the shell variables stay in scope, and substitute `<picked-slug>` with the real slug from Phase 1:
+
 ```bash
-SLUG=<picked-slug>
-WORKTREE="data/cos/worktrees/claim-${SLUG}"
-git fetch origin main
-git worktree add -b "claim/${SLUG}" "${WORKTREE}" origin/main
-cd "${WORKTREE}"
+SLUG="<picked-slug>" && \
+REPO_ROOT="/Users/adameivy/github.com/atomantic/PortOS" && \
+WORKTREE="${REPO_ROOT}/data/cos/worktrees/claim-${SLUG}" && \
+mkdir -p "${REPO_ROOT}/data/cos/worktrees" && \
+cd "${REPO_ROOT}" && \
+git fetch origin main && \
+git worktree add -b "claim/${SLUG}" "${WORKTREE}" origin/main && \
+cd "${WORKTREE}" && \
+pwd
 ```
 
-If `data/cos/worktrees/` doesn't exist, create it (`mkdir -p`). Stash the worktree path; you'll need it for cleanup.
+**Verify the output of `pwd` is exactly `${WORKTREE}`** (i.e. `/Users/adameivy/github.com/atomantic/PortOS/data/cos/worktrees/claim-<slug>`). If `pwd` prints the main repo path instead, the worktree creation or `cd` failed — STOP, report the error to the user, and do not proceed to Phase 3.
+
+**Re-anchor every subsequent Bash call.** Working directory persists between Bash tool calls, but a stray `cd` elsewhere or a fresh shell can drop you back at the main repo silently. Start each later Bash call in this flow with either `cd "${WORKTREE}"` (re-export the variable if needed) or use absolute paths under the worktree. Re-run `pwd` if you're ever unsure.
+
+Stash the absolute worktree path; you'll need it for Phase 7 cleanup.
 
 ## Phase 3: Verify still valid
 
@@ -115,13 +133,19 @@ git commit -m "docs([<slug>]): archive to DONE.md"
 
 ## Phase 7: Clean up
 
-From the **source repo** (not the worktree — `cd` back to `/Users/adameivy/github.com/atomantic/PortOS` first):
+From the **source repo** (not the worktree). Run as a single Bash invocation, re-substituting the slug and absolute worktree path you stashed in Phase 2:
 
 ```bash
-git worktree remove "${WORKTREE}"
-git branch -d "claim/${SLUG}"   # safe-delete; -D only if you know there's unmerged work
-git pull --rebase --autostash    # pull the merge commit into local main
+SLUG="<picked-slug>" && \
+REPO_ROOT="/Users/adameivy/github.com/atomantic/PortOS" && \
+WORKTREE="${REPO_ROOT}/data/cos/worktrees/claim-${SLUG}" && \
+cd "${REPO_ROOT}" && \
+git worktree remove "${WORKTREE}" && \
+git branch -d "claim/${SLUG}" && \
+git pull --rebase --autostash
 ```
+
+(`git branch -d` is safe-delete; only fall back to `-D` if you've confirmed there's no unmerged work. `git pull --rebase --autostash` brings the merge commit into local main.)
 
 Print a one-line summary:
 

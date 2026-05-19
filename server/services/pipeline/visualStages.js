@@ -26,7 +26,7 @@
 import { enqueueJob } from '../mediaJobQueue/index.js';
 import { getSettings } from '../settings.js';
 import { getSeries } from './series.js';
-import { getIssue, updateStage, VISUAL_STAGE_IDS } from './issues.js';
+import { getIssue, updateStage, assertStageUnlocked, VISUAL_STAGE_IDS } from './issues.js';
 import { resolveGalleryImage } from '../../lib/fileUtils.js';
 import { buildComicPagesOwner, buildSeasonCoverOwner, buildStoryboardsShotOwner } from './owners.js';
 import { getUniverse, joinInfluenceList } from '../universeBuilder.js';
@@ -398,6 +398,7 @@ async function enqueueComicCoverLike(issueId, target, options = {}) {
     throw new Error(`enqueueComicCoverLike: unknown target "${target}"`);
   }
   const { issue, settings, series, world } = await loadBibleContext(issueId);
+  assertStageUnlocked(issue, 'comicPages');
   const record = issue.stages?.comicPages?.[target] || null;
   const scriptOptionKey = target === 'cover' ? 'coverScript' : 'backCoverScript';
   const script = typeof options[scriptOptionKey] === 'string'
@@ -693,6 +694,7 @@ export async function enqueueVisualComicPage(issueId, options = {}) {
     });
   }
   const { issue, settings, series, world, canon } = await loadBibleContext(issueId);
+  assertStageUnlocked(issue, 'comicPages');
   const pages = Array.isArray(issue.stages?.comicPages?.pages) ? issue.stages.comicPages.pages : [];
   const page = pages[pageIndex];
   if (!page) {
@@ -780,6 +782,7 @@ export async function enqueueVisualImage(issueId, stageId, options = {}) {
     });
   }
   const { issue, settings, series, world, canon } = await loadBibleContext(issueId);
+  assertStageUnlocked(issue, stageId);
   const mode = resolveMode(options, settings);
   const matchedCharacters = matchCharactersInText(options.description || '', canon.characters);
   const prompt = composeVisualPrompt({
@@ -824,6 +827,7 @@ export async function enqueueStoryboardSceneVideo(issueId, sceneIndex, options =
     });
   }
   const { issue, settings, series, world, canon } = await loadBibleContext(issueId);
+  assertStageUnlocked(issue, 'storyboards');
   const pythonPath = settings.imageGen?.local?.pythonPath || null;
   if (!pythonPath) {
     throw new ServerError(
@@ -916,6 +920,7 @@ export async function enqueueStoryboardShotStartFrame(issueId, sceneIndex, shotI
     });
   }
   const { issue, settings, series, world, canon } = await loadBibleContext(issueId);
+  assertStageUnlocked(issue, 'storyboards');
   const scenes = Array.isArray(issue.stages?.storyboards?.scenes)
     ? [...issue.stages.storyboards.scenes]
     : [];
@@ -1005,6 +1010,7 @@ export async function refineComicPanelPrompt(issueId, pageIndex, panelIndex, opt
     });
   }
   const { issue, series } = await loadRefineContext(issueId);
+  assertStageUnlocked(issue, 'comicPages');
   const pages = Array.isArray(issue.stages?.comicPages?.pages) ? [...issue.stages.comicPages.pages] : [];
   const page = pages[pi];
   if (!page) {
@@ -1087,6 +1093,7 @@ export async function refineStoryboardScenePrompt(issueId, sceneIndex, options =
     });
   }
   const { issue, series } = await loadRefineContext(issueId);
+  assertStageUnlocked(issue, 'storyboards');
   const scenes = Array.isArray(issue.stages?.storyboards?.scenes)
     ? [...issue.stages.storyboards.scenes]
     : [];
