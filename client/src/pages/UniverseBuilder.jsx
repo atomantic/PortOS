@@ -47,6 +47,17 @@ import { PIPELINE_IMAGE_DEFAULTS, readPipelineImageSettings } from '../lib/pipel
 import { normalizeSlugline } from '../lib/scenePrompt';
 import { hasCanonDescriptorContent } from '../lib/canonPrompt';
 import { upsertByIdPrepend } from '../lib/upsertByIdPrepend';
+import { BIBLE_LIMITS } from '../lib/bibleLimits';
+
+// Mirror of server-side appendEntryImageRef cap (most recent N wins). Used
+// so optimistic on-completion appends produce the same final array shape
+// the server would, preventing a brief window where a save round-trip
+// could reorder the visible thumbnails.
+const capImageRefs = (refs) => (
+  refs.length > BIBLE_LIMITS.IMAGE_REFS_PER_ENTRY_MAX
+    ? refs.slice(-BIBLE_LIMITS.IMAGE_REFS_PER_ENTRY_MAX)
+    : refs
+);
 
 const CATEGORY_LABELS = {
   landscapes: 'Landscapes',
@@ -1988,7 +1999,7 @@ export default function UniverseBuilder() {
                     if (v.id !== entryId) return v;
                     const refs = Array.isArray(v.imageRefs) ? v.imageRefs : [];
                     if (refs.includes(filename)) return v;
-                    return { ...v, imageRefs: [...refs, filename] };
+                    return { ...v, imageRefs: capImageRefs([...refs, filename]) };
                   });
                   return { ...d, categories: { ...d.categories, [bucket]: { ...cat, variations } } };
                 });
@@ -2051,7 +2062,7 @@ export default function UniverseBuilder() {
                   if (v.id !== entryId) return v;
                   const refs = Array.isArray(v.imageRefs) ? v.imageRefs : [];
                   if (refs.includes(filename)) return v;
-                  return { ...v, imageRefs: [...refs, filename] };
+                  return { ...v, imageRefs: capImageRefs([...refs, filename]) };
                 });
                 return { ...d, categories: { ...d.categories, [bucket]: { ...cat, variations } } };
               });
@@ -3440,7 +3451,15 @@ export function TrunkView({
                   pendingByEntryId={pendingByEntryId}
                   onJobCompleted={(entryId, filename, completedJobId) =>
                     onJobCompletedForEntry?.(entryId, filename, cat, completedJobId)}
-                  onJobFailed={(entryId, _err, failedJobId) => onPendingCleared?.(entryId, failedJobId)}
+                  onJobFailed={(entryId, err, failedJobId) => {
+                    // Toast BEFORE clearing — clearing removes the
+                    // MediaJobThumb from the row and the failure state
+                    // disappears with it. Without the toast, a failed
+                    // variation render collapses silently to the empty
+                    // thumbnail (mirrors UniverseCanonSection.onJobFailed).
+                    if (err) toast.error(`Render failed: ${typeof err === 'string' ? err : (err.message || err)}`);
+                    onPendingCleared?.(entryId, failedJobId);
+                  }}
                 />
               ))}
             </section>
@@ -3510,7 +3529,13 @@ export function OtherTab({
             pendingByEntryId={pendingByEntryId}
             onJobCompleted={(entryId, filename, completedJobId) =>
               onJobCompletedForEntry?.(entryId, filename, cat, completedJobId)}
-            onJobFailed={(entryId, _err, failedJobId) => onPendingCleared?.(entryId, failedJobId)}
+            onJobFailed={(entryId, err, failedJobId) => {
+              // Same surface-then-clear order as the Trunk-tab handler above:
+              // MediaJobThumb is unmounted on clear, so the toast must fire
+              // first or the user gets no signal that the render failed.
+              if (err) toast.error(`Render failed: ${typeof err === 'string' ? err : (err.message || err)}`);
+              onPendingCleared?.(entryId, failedJobId);
+            }}
           />
         ))}
       </section>

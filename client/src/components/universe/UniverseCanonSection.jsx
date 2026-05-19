@@ -37,6 +37,13 @@ import MediaPreview from '../media/MediaPreview';
 import { pipelineImageCfgToRenderOpts } from '../../lib/pipelineImageDefaults';
 import { universeStylePreset } from '../../lib/universeStylePreset';
 import { descriptorForCanonEntry } from '../../lib/canonPrompt';
+import { BIBLE_LIMITS } from '../../lib/bibleLimits';
+
+const capImageRefs = (refs) => (
+  refs.length > BIBLE_LIMITS.IMAGE_REFS_PER_ENTRY_MAX
+    ? refs.slice(-BIBLE_LIMITS.IMAGE_REFS_PER_ENTRY_MAX)
+    : refs
+);
 
 const KINDS = [
   {
@@ -450,7 +457,11 @@ export default function UniverseCanonSection({
       if (e?.id !== entryId) return e;
       const refs = Array.isArray(e.imageRefs) ? e.imageRefs : [];
       if (refs.includes(filename)) return e;
-      return { ...e, imageRefs: [...refs, filename] };
+      // Mirror the server-side appendEntryImageRef cap (last N wins) so
+      // an external batch completion arriving at a full row doesn't leave
+      // the optimistic state holding an overlong array that a subsequent
+      // save would have to trim.
+      return { ...e, imageRefs: capImageRefs([...refs, filename]) };
     });
     onUniverseChange({ ...latest, [kindKey]: nextList });
   }, [onUniverseChange]);
