@@ -26,7 +26,12 @@
 //   - Variations/sheets aren't lock-scoped, but per-item `locked: true` rows
 //     are preserved and merged ahead of LLM output.
 //   - Canon arrays merge by name/slugline/alias collision (existing wins).
-import { mergeInfluencesWithLocks } from '../services/api';
+// Imports the influence-merge from the targeted apiUniverseBuilder module
+// (NOT the global `services/api` barrel) — the helpers are pure functions
+// that happen to be exported alongside HTTP wrappers, and tracing through
+// the barrel pulls all ~40 service modules into this lib's dep graph,
+// defeating the point of a `lib/` vs `services/` boundary.
+import { mergeInfluencesWithLocks } from '../services/apiUniverseBuilder';
 import { BIBLE_LIMITS } from './bibleLimits';
 import { normalizeSlugline } from './scenePrompt';
 
@@ -178,18 +183,18 @@ const mergeCategoriesWithLocks = (draftCategories, llmCategories, preservedVaria
   return mergedCategories;
 };
 
-// Composite-sheet merge follows the same locked-first + dedupe-by-label pattern
-// as variations. Labels are case-insensitive; sheets without a label are dropped
-// (mirrors mergeVariations' missing-key handling).
+// Composite-sheet merge: preserved (locked) sheets keep their slot at the top
+// unconditionally — the upstream invariant (only `locked: true` rows reach
+// here) means a missing label is a bug elsewhere, not a row to silently drop.
+// Their labels still seed the dedupe Set so a fresh LLM sheet with the same
+// label is suppressed. Mirrors the pre-extraction handleExpand behavior
+// byte-for-byte (a malformed preserved sheet with no `label` would have
+// crashed the pre-refactor code on `.toLowerCase()` — keeping the same fault
+// surface so this is a pure boundary move, not a behavior change).
 const mergeCompositeSheets = (preservedSheets, llmSheets) => {
-  const seen = new Set();
-  const out = [];
-  for (const s of preservedSheets || []) {
-    const key = s?.label?.toLowerCase();
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
-    out.push(s);
-  }
+  const preserved = preservedSheets || [];
+  const seen = new Set(preserved.map((s) => s.label.toLowerCase()));
+  const out = [...preserved];
   for (const s of llmSheets || []) {
     const key = s?.label?.toLowerCase();
     if (!key || seen.has(key)) continue;

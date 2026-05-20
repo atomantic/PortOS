@@ -219,6 +219,20 @@ describe('mergeExpandIntoDraft', () => {
     expect(expandedDraft.categories.factions.kind).toBe('characters');
   });
 
+  it('locked composite sheets without a label crash on merge (pre-refactor byte-equivalence)', () => {
+    // The pre-extraction handleExpand code did
+    //   `new Set(preservedCompositeSheets.map((s) => s.label.toLowerCase()))`
+    // which throws TypeError when a locked sheet lacks `label`. We preserve
+    // that fault surface so the refactor is a behavioral no-op — the upstream
+    // invariant (only `locked: true` rows reach here) means a label-less
+    // preserved sheet is a producer bug, not a row to silently drop. Test
+    // pins the throw so a future "defensive" rewrite is loud.
+    const draft = draftFixture({
+      compositeSheets: [{ locked: true /* missing label */ }],
+    });
+    expect(() => mergeExpandIntoDraft(draft, {})).toThrow(TypeError);
+  });
+
   it('locked composite sheets survive; LLM dups dropped by case-insensitive label', () => {
     const draft = draftFixture({
       compositeSheets: [
