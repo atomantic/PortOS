@@ -41,6 +41,7 @@ grep -i "what you want to do" client/src/lib/README.md
 | `wrImageDefaults.js` | Writers Room per-scene image-gen defaults + style discriminators. |
 | `imageGenBackends.js` | `IMAGE_GEN_MODE` enum (local / codex / external) + metadata. |
 | `imageGenResolutions.js` | Shared resolution presets for image generation. |
+| `videoGenResolutions.js` | Shared resolution presets for video generation (companion to image side; LTX-2 latent-friendly sizes). |
 
 ## Graph & sim
 

@@ -53,17 +53,8 @@ import {
   listImageGallery,
 } from '../services/api';
 import { randomSeed, safeParseJSON } from '../lib/genUtils';
-
-const RESOLUTIONS = [
-  { label: '512×320 (16:10)', w: 512, h: 320 },
-  { label: '640×384 (5:3)', w: 640, h: 384 },
-  { label: '704×448 (16:10)', w: 704, h: 448 },
-  { label: '768×512 (3:2 default)', w: 768, h: 512 },
-  { label: '1024×576 (16:9)', w: 1024, h: 576 },
-  { label: '512×768 (portrait)', w: 512, h: 768 },
-  { label: '512×512 (1:1)', w: 512, h: 512 },
-  { label: '768×768 (1:1)', w: 768, h: 768 },
-];
+import { VIDEO_RESOLUTIONS } from '../lib/videoGenResolutions';
+import { resolveResolutionLabel } from '../lib/imageGenResolutions';
 
 // Values follow LTX-2's 8k+1 latent boundary so the model doesn't silently
 // snap. 241 = 10s @ 24fps is the comfortable single-pass ceiling on 48 GB
@@ -325,12 +316,11 @@ export default function VideoGen() {
   }, [refreshStatus]);
 
   const currentModel = models.find((m) => m.id === modelId);
-  const matchedResolution = RESOLUTIONS.find((r) => r.w === width && r.h === height);
-  const resolutionLabel = matchedResolution?.label || `${width}×${height}`;
+  const { matched: matchedResolution, label: resolutionLabel } = resolveResolutionLabel(VIDEO_RESOLUTIONS, width, height);
   const progressPct = progress?.progress != null ? Math.round(progress.progress * 100) : null;
 
   const handleResolutionChange = (e) => {
-    const r = RESOLUTIONS.find((r) => r.label === e.target.value);
+    const r = VIDEO_RESOLUTIONS.find((r) => r.label === e.target.value);
     if (r) { setWidth(r.w); setHeight(r.h); }
   };
   const handleRandomSeed = () => setSeed(randomSeed());
@@ -1051,7 +1041,7 @@ export default function VideoGen() {
                 {!matchedResolution && (
                   <option value={resolutionLabel}>{`${width}×${height} (custom)`}</option>
                 )}
-                {RESOLUTIONS.map((r) => <option key={r.label} value={r.label}>{r.label}</option>)}
+                {VIDEO_RESOLUTIONS.map((r) => <option key={r.label} value={r.label}>{r.label}</option>)}
               </select>
             </div>
 

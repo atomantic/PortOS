@@ -58,3 +58,15 @@ export const filterResolutions = (mode, runner) => {
   const key = compatibilityKey(mode, runner);
   return RESOLUTIONS.filter((r) => !r.compatible || r.compatible.includes(key));
 };
+
+// Shared dropdown resolver — find the matching preset for an arbitrary w/h
+// pair (returning its preset label) or fall back to a `${w}×${h}` custom
+// label so the dropdown can render an "(custom)" option for unmatched
+// dimensions. Works on any list shaped like RESOLUTIONS / VIDEO_RESOLUTIONS,
+// so both Image Gen and Video Gen consume the same helper.
+export const resolveResolutionLabel = (list, w, h) => {
+  const matched = list.find((r) => r.w === w && r.h === h);
+  if (matched) return { matched, label: matched.label };
+  if (!w || !h) return { matched: null, label: '' };
+  return { matched: null, label: `${w}×${h}` };
+};

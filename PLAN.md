@@ -19,7 +19,6 @@ _Nothing currently parked — pick the next item from the Backlog._
 ### Image / Video Gen UI
 
 - [ ] [flux2-multi-reference-python-runner] **FLUX.2 multi-reference Python runner.** The UI + server contract for multi-reference editing shipped 2026-05-17 (slug `multi-reference-image-editing-for-flux-2-ui`); the Python runner (`scripts/flux2_macos.py`) currently ignores the `--reference-images`/`--reference-strengths` args that `local.js` now passes. Wire diffusers' multi-reference API in the runner and swap `server/lib/mediaModels.js#flux2-klein-9b` `tokenizerRepo` to `FLUX.2-klein-9B-kv` (gated repo — requires the user to accept the license on HF). Validate end-to-end with 2–4 uploaded refs.
-- [ ] [unify-videogen-resolutions-with-shared-image-gen] **Unify VideoGen `RESOLUTIONS` with shared image-gen list.** Move to `client/src/lib/videoGenResolutions.js` (or extend imageGenResolutions with `media: 'image'|'video'`) so dropdown + custom-fallback live in one place.
 
 ### Sharing — performance follow-ups (deferred from content-addressed asset dedup, 2026-05-18)
 

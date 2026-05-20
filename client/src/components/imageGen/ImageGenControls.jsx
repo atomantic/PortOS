@@ -9,7 +9,7 @@
 // resolution; external swaps guidance for cfgScale; local shows guidance + quantize.
 
 import { Dice5 } from 'lucide-react';
-import { filterResolutions } from '../../lib/imageGenResolutions';
+import { filterResolutions, resolveResolutionLabel } from '../../lib/imageGenResolutions';
 import { randomSeed } from '../../lib/genUtils';
 import { RUNNER_FAMILIES } from '../../lib/runnerFamilies';
 
@@ -49,8 +49,7 @@ export default function ImageGenControls({
   // falls through to the (custom) <option> below so the value stays visible
   // until the user picks a supported one.
   const availableResolutions = filterResolutions(mode, currentModel?.runner);
-  const matched = availableResolutions.find((r) => r.w === width && r.h === height);
-  const resolutionLabel = matched?.label || (width && height ? `${width}×${height}` : '');
+  const { matched, label: resolutionLabel } = resolveResolutionLabel(availableResolutions, width, height);
   const handleResolution = (e) => {
     const r = availableResolutions.find((opt) => opt.label === e.target.value);
     if (r) onResolutionChange?.(r.w, r.h);
