@@ -6,6 +6,7 @@ import * as api from '../../services/api';
 import { processScreenshotUploads, processAttachmentUploads } from '../../utils/fileUpload';
 import { formatBytes } from '../../utils/formatters';
 import { filterSelectableModels } from '../../utils/providers';
+import { REVIEWER_OPTIONS, DEFAULT_REVIEWER } from './constants';
 
 const isCodexProvider = (provider) => {
   if (!provider) return false;
@@ -23,6 +24,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
   const [openPR, setOpenPR] = useState(false);
   const [simplify, setSimplify] = useState(true);
   const [reviewLoop, setReviewLoop] = useState(false);
+  const [reviewer, setReviewer] = useState(DEFAULT_REVIEWER);
   const [createJiraTicket, setCreateJiraTicket] = useState(false);
   const [screenshots, setScreenshots] = useState([]);
   const [attachments, setAttachments] = useState([]);
@@ -219,6 +221,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
       openPR,
       simplify,
       reviewLoop,
+      reviewer: reviewLoop ? reviewer : undefined,
       screenshots: screenshots.length > 0 ? screenshots.map(s => s.path) : undefined,
       attachments: attachments.length > 0 ? attachments.map(a => ({
         filename: a.filename,
@@ -450,6 +453,19 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
               Review Loop
             </span>
           </label>
+          {reviewLoop && (
+            <select
+              value={reviewer}
+              onChange={(e) => setReviewer(e.target.value)}
+              className="px-1.5 py-0.5 bg-port-bg border border-port-border rounded text-xs text-gray-300 min-h-[28px]"
+              title="Override the default reviewer for the review loop (--review-with)"
+              aria-label="Reviewer for review loop"
+            >
+              {REVIEWER_OPTIONS.map(opt => (
+                <option key={opt.value} value={opt.value} title={opt.description}>{opt.label}</option>
+              ))}
+            </select>
+          )}
           {appHasJira && (
             <label className="flex items-center gap-2 cursor-pointer select-none whitespace-nowrap py-1">
               <input

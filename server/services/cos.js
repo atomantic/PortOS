@@ -2309,6 +2309,7 @@ export async function addTask(taskData, taskType = 'user', { raw = false } = {})
     else if (taskData.simplify === false) metadata.simplify = false;
     if (taskData.reviewLoop === true) metadata.reviewLoop = true;
     else if (taskData.reviewLoop === false) metadata.reviewLoop = false;
+    if (typeof taskData.reviewer === 'string' && taskData.reviewer) metadata.reviewer = taskData.reviewer;
     if (taskData.jiraTicketId) metadata.jiraTicketId = taskData.jiraTicketId;
     if (taskData.jiraTicketUrl) metadata.jiraTicketUrl = taskData.jiraTicketUrl;
     if (taskData.screenshots?.length > 0) metadata.screenshots = taskData.screenshots;

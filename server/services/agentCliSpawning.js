@@ -18,7 +18,8 @@ import { completeExecution, errorExecution } from './toolStateMachine.js';
 import { analyzeAgentFailure } from './agentErrorAnalysis.js';
 import { completeAgentRun } from './agentRunTracking.js';
 import { finalizeAgent, releaseAgentLane } from './agentLifecycle.js';
-import { activeAgents, userTerminatedAgents } from './agentState.js';
+import { activeAgents, userTerminatedAgents, metaStringOr } from './agentState.js';
+import { DEFAULT_REVIEWER } from '../lib/validation.js';
 import { safeJSONParse, PATHS } from '../lib/fileUtils.js';
 import { createCodexStderrFormatter } from '../lib/codexCliOutput.js';
 
@@ -580,6 +581,7 @@ export async function spawnDirectly({
       await cleanupWorktreeFn(agentId, finalSuccess, {
         openPR: directAgentOwnsPR ? false : directOpenPR,
         requestCopilotReview: !directAgentOwnsPR && directOpenPR && isTruthyMetaFn(task.metadata?.reviewLoop),
+        reviewer: metaStringOr(task.metadata?.reviewer, DEFAULT_REVIEWER),
         skipMerge: directReviewLoopFollowUp || directAgentOwnsPR,
         description: task.description,
         agentOutput: outputBuffer,

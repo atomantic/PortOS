@@ -28,6 +28,7 @@ import MarkdownOutput from '../MarkdownOutput';
 import Modal from '../../ui/Modal';
 import toast from '../../ui/Toast';
 import { copyToClipboard } from '../../../lib/clipboard';
+import { DEFAULT_REVIEWER } from '../constants';
 
 // Extract task type from description (matches server-side extractTaskType)
 function extractTaskType(description) {
@@ -606,9 +607,9 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
             )}
             {agent.metadata.configReviewLoop && (
               <span className="flex items-center gap-1 px-1.5 py-0.5 text-[11px] rounded bg-indigo-500/15 text-indigo-400"
-                    title="Review loop enabled — agent will iterate on PR feedback">
+                    title={`Review loop enabled — agent will iterate on PR feedback (reviewer: ${agent.metadata.configReviewer || DEFAULT_REVIEWER})`}>
                 <RefreshCw size={10} aria-hidden="true" />
-                Review
+                Review{agent.metadata.configReviewer && agent.metadata.configReviewer !== DEFAULT_REVIEWER ? `: ${agent.metadata.configReviewer}` : ''}
               </span>
             )}
           </div>

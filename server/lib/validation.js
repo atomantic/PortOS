@@ -545,6 +545,13 @@ export const searchQuerySchema = z.object({
 // COS TASK SCHEMAS
 // =============================================================================
 
+// Reviewer choices for the Review Loop. `copilot` is the default and requests a
+// native GitHub Copilot review; the others instruct the review-loop follow-up
+// agent to invoke the named CLI to critique the PR diff. Mirrored in
+// client/src/components/cos/constants.js → REVIEWER_OPTIONS.
+export const REVIEWER_VALUES = ['copilot', 'claude', 'gemini', 'codex'];
+export const DEFAULT_REVIEWER = 'copilot';
+
 export const createCosTaskSchema = z.object({
   description: z.string().min(1),
   priority: z.string().optional(),
@@ -578,6 +585,10 @@ export const createCosTaskSchema = z.object({
   reviewLoop: z.preprocess(
     v => v === 'true' ? true : v === 'false' ? false : v,
     z.boolean().optional()
+  ),
+  reviewer: z.preprocess(
+    v => v === '' ? undefined : v,
+    z.enum(REVIEWER_VALUES).optional()
   ),
 });
 
@@ -992,6 +1003,11 @@ export function sanitizeTaskMetadata(raw) {
       clean[key] = raw[key];
       hasKeys = true;
     }
+  }
+  // `reviewer` is a constrained string (copilot/claude/gemini/codex), not a boolean.
+  if (Object.prototype.hasOwnProperty.call(raw, 'reviewer') && REVIEWER_VALUES.includes(raw.reviewer)) {
+    clean.reviewer = raw.reviewer;
+    hasKeys = true;
   }
   // Pass through pipeline config (validated shape: object with stages array)
   if (raw.pipeline && typeof raw.pipeline === 'object' && Array.isArray(raw.pipeline.stages)) {
