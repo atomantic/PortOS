@@ -51,8 +51,9 @@ function extractTaskType(description) {
     if (d.includes('dependency')) return 'task:dependency-updates';
     if (d.includes('jira') && d.includes('report')) return 'task:jira-status-report';
     if (d.includes('jira') || d.includes('sprint')) return 'task:jira-sprint-manager';
-    // plan-task matches before do-replan because its description ("Execute next
-    // PLAN.md item and archive it to DONE.md") also contains "plan.md".
+    // plan-task matches before do-replan because both descriptions contain
+    // "plan.md" — plan-task's "Execute next PLAN.md item" must win over
+    // replan's "Audit plan.md" generic match.
     if (d.includes('plan-task') || (d.includes('execute next') && d.includes('plan.md'))) return 'task:plan-task';
     if (d.includes('replan') || d.includes('audit plan.md') || d.includes('plan.md')) return 'task:do-replan';
   }

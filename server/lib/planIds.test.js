@@ -112,7 +112,7 @@ describe('planIds.js', () => {
       expect(twice.assigned).toHaveLength(0);
     });
 
-    it('respects extraIds (e.g. DONE.md) so retired slugs are not reused', () => {
+    it('respects extraIds (e.g. retired/in-flight slugs) so they are not reused', () => {
       const planMd = '- [ ] **Foo.**';
       const { content } = assignMissingIds(planMd, ['foo']);
       expect(content).toContain('[foo-2]');

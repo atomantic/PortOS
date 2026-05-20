@@ -7,7 +7,7 @@
  *   - slugify(title, takenIds)            → string  (deterministic, unique within `takenIds`)
  *   - parsePlanItems(markdown)            → PlanItem[]
  *   - assignMissingIds(markdown, extraIds)→ { content, assigned[] }
- *   - extractAllIds(markdown)             → string[]   (PLAN.md or DONE.md, every `[slug]`)
+ *   - extractAllIds(markdown)             → string[]   (every `[slug]` in PLAN.md)
  *   - findInProgressIds(repoPath, ids)    → Set<string> (subset present in branch/PR names)
  *   - pickFirstAvailable(items, takenIds) → PlanItem | null
  *
@@ -113,9 +113,10 @@ export function parsePlanItems(markdown) {
 }
 
 /**
- * Return every `[slug]` ID that appears in a PLAN.md / DONE.md document.
- * Captures both checkbox-prefixed IDs (parsePlanItems) AND DONE.md archive
- * entries where IDs are embedded inline like `- **[slug] Title**`.
+ * Return every `[slug]` ID that appears in a PLAN.md-style document.
+ * Captures both checkbox-prefixed IDs (parsePlanItems) AND any `[slug]`
+ * marker embedded inline in narrative copy (e.g. cross-references in
+ * design-log entries left as `- [x] [slug] …` for posterity).
  */
 export function extractAllIds(markdown) {
   if (!markdown) return [];
@@ -123,10 +124,11 @@ export function extractAllIds(markdown) {
   for (const item of parsePlanItems(markdown)) {
     if (item.id) ids.add(item.id);
   }
-  // Pick up DONE.md-style `[slug]` markers not on checkbox lines.
-  // Length range 2–81 chars is intentionally wider than slugify()'s 50-char cap
-  // so legacy DONE.md entries with longer slugs are still recognized for the
-  // uniqueness check (we never want to re-issue a retired slug).
+  // Pick up inline `[slug]` markers not on checkbox lines (e.g. design-log
+  // back-references in `## Shipped` sections or PR descriptions inlined here).
+  // Length range 2–81 chars is intentionally wider than slugify()'s 50-char
+  // cap so historical slugs that exceeded the modern length limit are still
+  // recognized for the uniqueness check (we never want to re-issue one).
   const inlineRe = /\[([a-z0-9][a-z0-9-]{1,80})\]/g;
   let m;
   while ((m = inlineRe.exec(markdown)) !== null) {
@@ -141,7 +143,8 @@ export function extractAllIds(markdown) {
 /**
  * Assign a slug ID to every `- [ ]` / `- [x]` line that doesn't already have one.
  * Idempotent: existing IDs are preserved verbatim. `extraIds` lets the caller
- * pass IDs from a sibling document (e.g. DONE.md) into the uniqueness check.
+ * pass IDs from sibling sources (e.g. an in-flight branch scan) into the
+ * uniqueness check.
  *
  * @param {string} markdown
  * @param {string[]|Set<string>} extraIds
