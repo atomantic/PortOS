@@ -143,9 +143,20 @@ export default function VoicePicker({
         ) : null}
         {engineKeys.map((engine) => (
           <optgroup key={engine} label={engine.charAt(0).toUpperCase() + engine.slice(1)}>
-            {byEngine[engine].map((v) => (
-              <option key={v.id} value={v.id}>{formatVoiceLabel(v)}</option>
-            ))}
+            {byEngine[engine].map((v) => {
+              // Piper voices with `downloaded: false` are catalog stubs —
+              // selecting one would persist a `piper:<name>` voiceId that
+              // `synthesizePiper` rejects at preview/render time. Keep them
+              // visible (so the user sees what the catalog offers) but
+              // unbindable from this picker — the user downloads them via
+              // settings → Voice (`fetchPiperVoice`) before binding here.
+              const undownloaded = v.engine === 'piper' && v.downloaded === false;
+              return (
+                <option key={v.id} value={v.id} disabled={undownloaded}>
+                  {formatVoiceLabel(v)}
+                </option>
+              );
+            })}
           </optgroup>
         ))}
       </select>

@@ -63,6 +63,24 @@ describe('VoicePicker', () => {
     expect(onChange).toHaveBeenCalledWith(null);
   });
 
+  it('renders undownloaded Piper voices as disabled options (visible but unbindable)', async () => {
+    listPipelineTtsVoices.mockResolvedValue({
+      voices: [
+        ...SAMPLE_VOICES,
+        { id: 'piper:glados', engine: 'piper', voice: 'glados', name: 'glados', downloaded: false },
+      ],
+    });
+    render(<VoicePicker value={null} onChange={() => {}} />);
+    await waitFor(() => {
+      expect(document.querySelector('option[value="piper:glados"]')).toBeInTheDocument();
+    });
+    const stub = document.querySelector('option[value="piper:glados"]');
+    expect(stub.disabled).toBe(true);
+    // Downloaded Piper voices stay enabled.
+    const downloaded = document.querySelector('option[value="piper:lessac-medium"]');
+    expect(downloaded.disabled).toBe(false);
+  });
+
   it('preserves an unavailable saved voiceId so the user sees what was bound', async () => {
     listPipelineTtsVoices.mockResolvedValue({ voices: SAMPLE_VOICES });
     render(<VoicePicker value="kokoro:retired-voice" onChange={() => {}} />);
