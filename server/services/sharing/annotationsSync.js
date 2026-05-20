@@ -188,6 +188,15 @@ export async function exportAnnotationsToBucket(bucket, localAnnotations, sender
     producedByVersion,
   });
   const filename = await writeManifest(bucket.path, manifest);
+  // The annotation manifest we just wrote bumps the manifests-dir mtime, but
+  // its `assetRefs: []` means the bucket's asset-key set is unchanged. Roll
+  // the cached mtime forward so the next flush still hits this bucket's
+  // cache instead of re-parsing every other manifest in the dir.
+  const cached = manifestKeysCache.get(bucket.path);
+  if (cached) {
+    const dirStat = await stat(join(bucket.path, 'manifests')).catch(() => null);
+    if (dirStat) cached.manifestsMtimeMs = dirStat.mtimeMs;
+  }
   return { skipped: false, filename, entryCount: Object.keys(filtered).length };
 }
 

@@ -225,6 +225,37 @@ describe('sharing/annotationsSync.listBucketAssetKeys cache', () => {
     expect(readManifest).toHaveBeenCalledTimes(1);
   });
 
+  it('rolls the cached mtime forward after a successful annotation write so the next flush still hits', async () => {
+    // exportAnnotationsToBucket calls writeManifest, which atomicWrite's
+    // temp+rename bumps the manifests-dir mtime. Without the post-write
+    // refresh, the very next flush against the same bucket misses the cache
+    // and re-parses every other manifest — defeating the optimization in
+    // the common "buckets I've actually written to" case.
+    const { listManifestFilenames, readManifest } = await import('./manifest.js');
+    listManifestFilenames.mockClear();
+    readManifest.mockClear();
+    listManifestFilenames.mockResolvedValue(['a.manifest.json']);
+    readManifest.mockResolvedValue({ assetRefs: [{ kind: 'image', ref: 'a.png' }], collection: null });
+
+    const ann = { 'image:a.png': { starred: true, note: 'hi', updatedAt: '2026-01-01T00:00:00.000Z' } };
+    // First call: cache miss, populates entry, then writes manifest. Simulate
+    // the post-write stat returning a NEW mtime (rename bumped it).
+    statMock.mockResolvedValueOnce({ mtimeMs: 100 }); // pre-scan stat
+    statMock.mockResolvedValueOnce({ mtimeMs: 200 }); // post-write stat
+    const r1 = await svc.exportAnnotationsToBucket(bucket(), ann, 'local-instance');
+    expect(r1.skipped).toBe(false);
+
+    // Second call: cache lookup sees mtime 200 (rolled forward post-write)
+    // and the live stat also returns 200 — cache hit, no re-parse.
+    statMock.mockResolvedValueOnce({ mtimeMs: 200 });
+    statMock.mockResolvedValueOnce({ mtimeMs: 300 }); // post-write of 2nd flush
+    await svc.exportAnnotationsToBucket(bucket(), ann, 'local-instance');
+
+    // Manifest parse only ran on the first flush — the post-write refresh
+    // prevented a spurious invalidation between flushes.
+    expect(listManifestFilenames).toHaveBeenCalledTimes(1);
+  });
+
   it('invalidates when manifests-dir mtime advances (new/removed manifest)', async () => {
     const { listManifestFilenames, readManifest } = await import('./manifest.js');
     listManifestFilenames.mockClear();
