@@ -136,7 +136,14 @@ ${buildSANs(ips)}
 
 function readMeta() {
   if (!existsSync(META_PATH)) return null;
-  return JSON.parse(readFileSync(META_PATH, 'utf-8'));
+  try {
+    return JSON.parse(readFileSync(META_PATH, 'utf-8'));
+  } catch {
+    // Partial/corrupt meta.json (e.g. interrupted write) — treat as absent so
+    // the script falls through to its normal "no usable cert state" branches
+    // instead of crashing `npm start` before the server can even boot HTTP.
+    return null;
+  }
 }
 
 function certExpiresAt() {
