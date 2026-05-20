@@ -41,8 +41,9 @@ import {
 import { videoGenEvents } from '../videoGen/events.js';
 import { imageGenEvents } from '../imageGenEvents.js';
 import { getSettings } from '../settings.js';
+import { IMAGE_GEN_MODE } from '../imageGen/modes.js';
 
-const isCodexJob = (j) => j.kind === 'image' && j.params?.mode === 'codex';
+const isCodexJob = (j) => j.kind === 'image' && j.params?.mode === IMAGE_GEN_MODE.CODEX;
 
 const JOBS_FILE = join(PATHS.data, 'media-jobs.json');
 const COMPLETED_TTL_MS = 24 * 60 * 60 * 1000;
@@ -107,7 +108,7 @@ export const JOB_STATUSES = Object.freeze(['queued', 'running', 'completed', 'fa
 // so a new provider addition is one edit instead of three.
 function getGenModuleForJob(job) {
   if (job.kind === 'video') return import('../videoGen/local.js');
-  if (job.kind === 'image' && job.params?.mode === 'codex') return import('../imageGen/codex.js');
+  if (job.kind === 'image' && job.params?.mode === IMAGE_GEN_MODE.CODEX) return import('../imageGen/codex.js');
   if (job.kind === 'image') return import('../imageGen/local.js');
   return Promise.resolve(null);
 }

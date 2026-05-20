@@ -3455,7 +3455,7 @@ function RenderTab({
           </p>
         )}
         <ImageGenSettingsForm
-          value={{ ...renderOpts, mode: renderOpts.mode || defaultMode || 'local' }}
+          value={{ ...renderOpts, mode: renderOpts.mode || defaultMode || IMAGE_GEN_MODE.LOCAL }}
           onChange={(next) => setRenderOpts(next)}
           models={imageModels}
           availableBackends={availableBackends}

@@ -5,6 +5,8 @@
 // the /api/image-gen/style-presets endpoint at runtime; only the two
 // special discriminators live here.
 
+import { IMAGE_GEN_MODE } from './imageGenBackends';
+
 export const STYLE_ID = Object.freeze({ NONE: 'none', CUSTOM: 'custom' });
 export const EMPTY_IMAGE_STYLE = Object.freeze({ presetId: STYLE_ID.NONE, prompt: '', negativePrompt: '' });
 
@@ -15,7 +17,7 @@ export const EMPTY_IMAGE_STYLE = Object.freeze({ presetId: STYLE_ID.NONE, prompt
 // for seed. Parsed to numbers at the generateImage boundary in SceneCard.
 export const WR_IMAGE_DEFAULTS = Object.freeze({
   modelId: 'flux2-klein-4b',
-  mode: 'local',
+  mode: IMAGE_GEN_MODE.LOCAL,
   width: 768,
   height: 512,
   steps: '',

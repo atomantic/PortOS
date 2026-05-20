@@ -7,6 +7,7 @@
 // ERNIE were trained at 1024² and degrade past ~1280, and gpt-image-2's
 // native sizes are 1024² / 1024×1536 / 1536×1024.
 import { RUNNER_FAMILIES } from './runnerFamilies';
+import { IMAGE_GEN_MODE } from './imageGenBackends';
 
 // `flux1` and `external` aren't members of RUNNER_FAMILIES — they're synthetic
 // compatibility-only keys ('flux1' = mflux/diffusers fallback when no `runner`
@@ -44,8 +45,8 @@ export const RESOLUTIONS = [
 // Flux 1 (mflux/diffusers, `dev` / `schnell`) has no `runner` field — it's
 // the fallback for local mode when nothing more specific matches.
 export const compatibilityKey = (mode, runner) => {
-  if (mode === 'codex') return 'codex';
-  if (mode === 'external') return 'external';
+  if (mode === IMAGE_GEN_MODE.CODEX) return 'codex';
+  if (mode === IMAGE_GEN_MODE.EXTERNAL) return 'external';
   if (runner === RUNNER_FAMILIES.FLUX2
       || runner === RUNNER_FAMILIES.Z_IMAGE
       || runner === RUNNER_FAMILIES.ERNIE) {

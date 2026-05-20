@@ -29,6 +29,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { autoCleanGeneratedImage } from '../../lib/imageClean.js';
 import { imageGenEvents } from '../imageGenEvents.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
+import { IMAGE_GEN_MODE } from './modes.js';
 
 // 20 minutes — built-in `image_gen` typically returns in 30–90s, but with the
 // parallel codex lane several renders share OpenAI throughput and a single
@@ -109,11 +110,11 @@ export async function checkConnection({ codexPath } = {}) {
   proc.stdout.on('data', (c) => { out += c.toString(); });
   proc.stderr.on('data', (c) => { out += c.toString(); });
   return new Promise((resolve) => {
-    proc.on('error', (err) => resolve({ connected: false, mode: 'codex', reason: `Codex CLI not found (${err.message})` }));
+    proc.on('error', (err) => resolve({ connected: false, mode: IMAGE_GEN_MODE.CODEX, reason: `Codex CLI not found (${err.message})` }));
     proc.on('close', (code) => {
-      if (code !== 0) return resolve({ connected: false, mode: 'codex', reason: `codex --version exited ${code}` });
+      if (code !== 0) return resolve({ connected: false, mode: IMAGE_GEN_MODE.CODEX, reason: `codex --version exited ${code}` });
       const versionMatch = out.match(/codex-cli\s+([\d.]+)/i) || out.match(/(\d+\.\d+\.\d+)/);
-      resolve({ connected: true, mode: 'codex', model: versionMatch ? `codex-cli ${versionMatch[1]}` : 'codex-cli' });
+      resolve({ connected: true, mode: IMAGE_GEN_MODE.CODEX, model: versionMatch ? `codex-cli ${versionMatch[1]}` : 'codex-cli' });
     });
   });
 }
@@ -185,7 +186,7 @@ export async function generateImage({
   const meta = {
     id: jobId, prompt: prompt.trim(), negativePrompt: negativePrompt || '',
     width: width ? Number(width) : null, height: height ? Number(height) : null,
-    filename, mode: 'codex', model: model || 'codex',
+    filename, mode: IMAGE_GEN_MODE.CODEX, model: model || 'codex',
     createdAt: new Date().toISOString(),
   };
   const job = { ...meta, clients: [], status: 'running' };
@@ -205,7 +206,7 @@ export async function generateImage({
 
   return {
     jobId, filename, path: `/data/images/${filename}`, generationId: jobId,
-    mode: 'codex', model: model || null,
+    mode: IMAGE_GEN_MODE.CODEX, model: model || null,
     // Async callers gate UI state on `status`; without 'running' they flip
     // to 'done' before the PNG lands. SSE / socket 'completed' fires later.
     status: 'running',
@@ -314,7 +315,7 @@ async function runCodex(job, jobId, bin, args, outputPath, filename, meta, { aut
       // SSE complete + completed events so subscribers see the cleaned bytes.
       // codex output is the highest-value target for cleaning because gpt-image
       // is the one provider that embeds C2PA provenance.
-      await autoCleanGeneratedImage({ enabled: autoClean, pngPath: outputPath, sidecarPath: sidecar, mode: 'codex' });
+      await autoCleanGeneratedImage({ enabled: autoClean, pngPath: outputPath, sidecarPath: sidecar, mode: IMAGE_GEN_MODE.CODEX });
       job.status = 'complete';
       if (activeProcs.get(jobId) === proc) activeProcs.delete(jobId);
       activeJobs.delete(jobId);

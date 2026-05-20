@@ -44,6 +44,7 @@ import { runPromptRefine } from './refineHelpers.js';
 import { pickCanon } from './seriesCanon.js';
 import { STYLE_PROMPT_OVERRIDE_MODE_DEFAULT } from './series.js';
 import { ASPECT_PRESETS } from '../../lib/creativeDirectorPresets.js';
+import { IMAGE_GEN_MODE } from '../imageGen/modes.js';
 
 const joinStyleParts = (...parts) =>
   parts.map((s) => (s || '').trim()).filter(Boolean).join(', ');
@@ -87,13 +88,13 @@ const applyWorldStyle = (prompt, world, series = null) => {
 //      local diffusion (flux-1) the way the original default behaved.
 const resolveMode = (options, settings) => {
   const codexEnabled = settings?.imageGen?.codex?.enabled === true;
-  if (options.mode === 'codex' && codexEnabled) return 'codex';
-  if (options.mode === 'local') return 'local';
+  if (options.mode === IMAGE_GEN_MODE.CODEX && codexEnabled) return IMAGE_GEN_MODE.CODEX;
+  if (options.mode === IMAGE_GEN_MODE.LOCAL) return IMAGE_GEN_MODE.LOCAL;
   const settingsMode = settings?.imageGen?.mode;
-  if (settingsMode === 'codex' && codexEnabled) return 'codex';
-  if (settingsMode === 'local') return 'local';
-  if (codexEnabled) return 'codex';
-  return 'local';
+  if (settingsMode === IMAGE_GEN_MODE.CODEX && codexEnabled) return IMAGE_GEN_MODE.CODEX;
+  if (settingsMode === IMAGE_GEN_MODE.LOCAL) return IMAGE_GEN_MODE.LOCAL;
+  if (codexEnabled) return IMAGE_GEN_MODE.CODEX;
+  return IMAGE_GEN_MODE.LOCAL;
 };
 
 // Defensive fallback — an unrecognized value must never land in the final
@@ -178,8 +179,8 @@ const enqueueImageJob = ({ prompt, world, settings, options, mode, owner, logLin
     ...(options.initImagePath ? { initImagePath: options.initImagePath } : {}),
     ...(Number.isFinite(options.initImageStrength) ? { initImageStrength: options.initImageStrength } : {}),
   };
-  const params = mode === 'codex'
-    ? { mode: 'codex', codexPath: settings.imageGen?.codex?.codexPath, model: settings.imageGen?.codex?.model, ...baseParams }
+  const params = mode === IMAGE_GEN_MODE.CODEX
+    ? { mode: IMAGE_GEN_MODE.CODEX, codexPath: settings.imageGen?.codex?.codexPath, model: settings.imageGen?.codex?.model, ...baseParams }
     : { pythonPath: settings.imageGen?.local?.pythonPath || null, modelId: options.modelId, ...baseParams };
   const { jobId } = enqueueJob({ kind: 'image', params, owner });
   console.log(`${logLine} mode=${mode} jobId=${jobId.slice(0, 8)}`);

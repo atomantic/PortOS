@@ -23,6 +23,7 @@ import { randomUUID } from 'crypto';
 import { PATHS, atomicWrite, readJSONFile, ensureDir } from '../../lib/fileUtils.js';
 import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
 import { isPlainObject } from '../../lib/objects.js';
+import { IMAGE_GEN_MODE } from '../imageGen/modes.js';
 import {
   LENGTH_PROFILE_NAMES, DEFAULT_LENGTH_PROFILE,
   CUSTOM_PAGE_MIN, CUSTOM_PAGE_MAX, CUSTOM_MINUTE_MIN, CUSTOM_MINUTE_MAX,
@@ -150,7 +151,7 @@ const QUALITY_VALUES = new Set(['draft', 'standard', 'high']);
 // `imageMode: 'auto'` defers to the server resolver (codex when enabled,
 // local otherwise). Returns null when nothing was set so the persisted
 // JSON stays clean for issues that never opened the panel.
-const IMAGE_MODE_VALUES = new Set(['auto', 'local', 'codex']);
+const IMAGE_MODE_VALUES = new Set(['auto', IMAGE_GEN_MODE.LOCAL, IMAGE_GEN_MODE.CODEX]);
 const GEN_CONFIG_STR_MAX = 200;
 const sanitizeGenConfig = (raw) => {
   if (!raw || typeof raw !== 'object') return null;
@@ -158,7 +159,7 @@ const sanitizeGenConfig = (raw) => {
   // imageModelId is only meaningful for local diffusion — clear it for other
   // modes so a previously-pinned model doesn't silently persist in the config
   // and mislead the UI or any future reader that doesn't filter by mode.
-  const imageModelId = imageMode === 'local'
+  const imageModelId = imageMode === IMAGE_GEN_MODE.LOCAL
     ? (trimTo(raw.imageModelId, GEN_CONFIG_STR_MAX) || null)
     : null;
   const refineProvider = trimTo(raw.refineProvider, GEN_CONFIG_STR_MAX) || null;

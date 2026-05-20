@@ -17,9 +17,15 @@ import { ServerError } from '../../lib/errorHandler.js';
 import * as external from './external.js';
 import * as local from './local.js';
 import * as codex from './codex.js';
+import { IMAGE_GEN_MODE, IMAGE_GEN_MODES } from './modes.js';
 
-export const IMAGE_GEN_MODES = Object.freeze(['external', 'local', 'codex']);
-const DEFAULT_MODE = 'external';
+// Re-export the enum + array so the existing import surface from this module
+// keeps working. `IMAGE_GEN_MODE.X` is the preferred form at dispatch sites
+// (server + client); `IMAGE_GEN_MODES` is the alphabet for Zod / OpenAI
+// tool-spec enums. Defined in `./modes.js` to avoid a circular import with
+// the provider modules above.
+export { IMAGE_GEN_MODE, IMAGE_GEN_MODES };
+const DEFAULT_MODE = IMAGE_GEN_MODE.EXTERNAL;
 
 const cfg = (s) => s?.imageGen || {};
 const sdapiUrl = (s) => cfg(s).external?.sdapiUrl || cfg(s).sdapiUrl || null;
@@ -43,12 +49,12 @@ export async function getMode() {
 export async function checkConnection({ mode: modeOverride } = {}) {
   const s = await getSettings();
   const mode = modeOverride || cfg(s).mode || DEFAULT_MODE;
-  if (mode === 'local') {
+  if (mode === IMAGE_GEN_MODE.LOCAL) {
     const py = pythonPath(s);
     if (!py) return { connected: false, mode, reason: 'Python path not configured' };
     return { connected: true, mode, model: 'mflux/local', pythonPath: py };
   }
-  if (mode === 'codex') {
+  if (mode === IMAGE_GEN_MODE.CODEX) {
     const c = codexCfg(s);
     if (!c.enabled) return { connected: false, mode, reason: 'Codex Imagegen is disabled in settings' };
     return codex.checkConnection({ codexPath: c.codexPath });
@@ -74,7 +80,7 @@ export async function generateImage(params) {
   // (gpt-image-2 image-edit via codex CLI's -i flag). External SD-API has no
   // i2i wiring in this codebase, so drop the init image there rather than
   // failing the whole render — the prompt still produces a useful txt2img.
-  if (mode === 'external' && (normalized.initImagePath || normalized.initImageStrength != null)) {
+  if (mode === IMAGE_GEN_MODE.EXTERNAL && (normalized.initImagePath || normalized.initImageStrength != null)) {
     delete normalized.initImagePath;
     delete normalized.initImageStrength;
   }
@@ -85,7 +91,7 @@ export async function generateImage(params) {
   // the spread.
   const autoClean = resolveAutoClean(normalized.autoClean, s, mode);
   delete normalized.autoClean;
-  if (mode === 'codex') {
+  if (mode === IMAGE_GEN_MODE.CODEX) {
     const c = codexCfg(s);
     if (!c.enabled) {
       throw new ServerError(
@@ -95,7 +101,7 @@ export async function generateImage(params) {
     }
     return codex.generateImage({ codexPath: c.codexPath, model: c.model, autoClean, ...normalized });
   }
-  if (mode === 'local') {
+  if (mode === IMAGE_GEN_MODE.LOCAL) {
     return local.generateImage({ pythonPath: pythonPath(s), autoClean, ...normalized });
   }
   return external.generateImage({ sdapiUrl: sdapiUrl(s), autoClean, ...normalized });

@@ -25,6 +25,7 @@ import { imageGenEvents } from '../imageGenEvents.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, PYTHON_NOISE_RE } from '../../lib/sseUtils.js';
 import { resolveFlux2Python, FLUX2_VENV_DEFAULT } from '../../lib/pythonSetup.js';
 import { hfTokenEnv } from '../../lib/hfToken.js';
+import { IMAGE_GEN_MODE } from './modes.js';
 
 const IS_WIN = process.platform === 'win32';
 
@@ -333,7 +334,7 @@ export async function generateImage({ pythonPath, prompt, negativePrompt = '', m
 
   console.log(`🎨 Generating image [${jobId.slice(0, 8)}] local: ${modelId} ${width}x${height} steps=${actualSteps}`);
   imageGenEvents.emit('started', { generationId: jobId, totalSteps: actualSteps });
-  activeJob = { ...meta, generationId: jobId, totalSteps: actualSteps, step: 0, progress: 0, currentImage: null, mode: 'local' };
+  activeJob = { ...meta, generationId: jobId, totalSteps: actualSteps, step: 0, progress: 0, currentImage: null, mode: IMAGE_GEN_MODE.LOCAL };
 
   const proc = spawn(bin, args, { env: { ...process.env, ...(await hfTokenEnv()) }, stdio: ['ignore', 'pipe', 'pipe'] });
   activeProcess = proc;
@@ -559,7 +560,7 @@ export async function generateImage({ pythonPath, prompt, negativePrompt = '', m
       await writeFile(sidecar, JSON.stringify(meta, null, 2)).catch(() => {});
       // Auto-clean (settings.imageGen.local.autoClean) — runs BEFORE the
       // SSE complete + completed events so subscribers see the cleaned bytes.
-      await autoCleanGeneratedImage({ enabled: autoClean, pngPath: outputPath, sidecarPath: sidecar, mode: 'local' });
+      await autoCleanGeneratedImage({ enabled: autoClean, pngPath: outputPath, sidecarPath: sidecar, mode: IMAGE_GEN_MODE.LOCAL });
       console.log(`✅ Image generated [${jobId.slice(0, 8)}]: ${filename}`);
       const result = { filename, seed: actualSeed, path: `/data/images/${filename}` };
       broadcastSse(job, { type: 'complete', result });
@@ -570,7 +571,7 @@ export async function generateImage({ pythonPath, prompt, negativePrompt = '', m
     closeJobAfterDelay(jobs, jobId);
   });
 
-  return { jobId, filename, path: `/data/images/${filename}`, generationId: jobId, mode: 'local', model: modelId, seed: actualSeed };
+  return { jobId, filename, path: `/data/images/${filename}`, generationId: jobId, mode: IMAGE_GEN_MODE.LOCAL, model: modelId, seed: actualSeed };
 }
 
 // Validate a gallery filename: PNG-only, basename only, no path separators.

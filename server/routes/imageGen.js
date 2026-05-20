@@ -19,7 +19,7 @@ import {
 } from '../lib/validation.js';
 import { optionalUploadFields } from '../lib/multipart.js';
 import * as imageGen from '../services/imageGen/index.js';
-import { local, IMAGE_GEN_MODES, resolveAutoClean } from '../services/imageGen/index.js';
+import { local, IMAGE_GEN_MODE, IMAGE_GEN_MODES, resolveAutoClean } from '../services/imageGen/index.js';
 import { enqueueJob, attachSseClient as attachQueueSseClient, cancelJob, listJobs } from '../services/mediaJobQueue/index.js';
 import { getSettings, saveSettings } from '../services/settings.js';
 import { getHfToken, getHfTokenInfo, HF_TOKEN_REGEX } from '../lib/hfToken.js';
@@ -195,7 +195,7 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
   // while the actual generation silently ignored them. (Reading settings here
   // is cheap — it's already read again below for the per-mode dispatch.)
   const settings = await getSettings();
-  const mode = data.mode || settings.imageGen?.mode || 'external';
+  const mode = data.mode || settings.imageGen?.mode || IMAGE_GEN_MODE.EXTERNAL;
   // Resolve autoClean ONCE at the route layer so all three dispatch paths
   // (synchronous external, codex queue, local queue) see the same value.
   // Stamp onto `data` so the value flows through the spread-into-params
@@ -209,7 +209,7 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
   // silently dropping them downstream (which would orphan files on disk and
   // produce metadata sidecars that lie about how the render was conditioned).
   if (referenceUploads.length) {
-    if (mode !== 'local') {
+    if (mode !== IMAGE_GEN_MODE.LOCAL) {
       cleanupReqFilesTemp();
       throw new ServerError(
         'Reference images are only supported for local FLUX.2 renders',
@@ -287,7 +287,7 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
   // call with no local single-flight constraint to absorb. `settings` and
   // `mode` were already resolved above (so the FLUX.2 + local-backend gate
   // could fire before staging any uploads).
-  if (mode === 'codex') {
+  if (mode === IMAGE_GEN_MODE.CODEX) {
     // Reject up-front rather than enqueueing a doomed job — codex is gated
     // behind an explicit toggle since not every Codex account has access to
     // the image_gen tool.
@@ -300,19 +300,19 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
     }
     const queued = enqueueJob({
       kind: 'image',
-      // `mode: 'codex'` is the queue's discriminator — laneForJob() routes
-      // codex jobs to the codex lane, and runJob's image branch dispatches
-      // to imageGen/codex.js when it sees this flag.
+      // `mode: IMAGE_GEN_MODE.CODEX` is the queue's discriminator —
+      // laneForJob() routes codex jobs to the codex lane, and runJob's image
+      // branch dispatches to imageGen/codex.js when it sees this flag.
       params: {
-        mode: 'codex',
+        mode: IMAGE_GEN_MODE.CODEX,
         codexPath: c.codexPath,
         model: c.model,
         ...data,
       },
     });
-    return res.json(queuedImageResponse({ ...queued, mode: 'codex', model: c.model || null }));
+    return res.json(queuedImageResponse({ ...queued, mode: IMAGE_GEN_MODE.CODEX, model: c.model || null }));
   }
-  if (mode === 'local') {
+  if (mode === IMAGE_GEN_MODE.LOCAL) {
     const py = settings.imageGen?.local?.pythonPath || null;
     // Pre-validate config: mflux models need pythonPath, FLUX.2 doesn't
     // (it uses its own bundled venv). Without this guard, the queue would
@@ -345,7 +345,7 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
     // modelId → 'dev' → allModels[0]) rather than just the requested id.
     return res.json(queuedImageResponse({
       ...queued,
-      mode: 'local',
+      mode: IMAGE_GEN_MODE.LOCAL,
       model: selectedModel?.id || data.modelId || 'dev',
     }));
   }

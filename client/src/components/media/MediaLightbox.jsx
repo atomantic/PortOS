@@ -8,6 +8,7 @@ import AddToCollectionMenu from './AddToCollectionMenu';
 import { useScrollLock } from '../../hooks/useScrollLock';
 import { useSwipeNav } from '../../hooks/useSwipeNav';
 import { copyToClipboard } from '../../lib/clipboard';
+import { IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
 
 // Intentionally NOT migrated to <ui/Modal> or <components/Drawer>. The
 // prev/next buttons sit as viewport-edge siblings of the card (not children
@@ -138,7 +139,7 @@ export default function MediaLightbox({
     copyToClipboard(text, `${label} copied`);
   };
 
-  const isCodex = item.mode === 'codex';
+  const isCodex = item.mode === IMAGE_GEN_MODE.CODEX;
   // Map raw `entryKind` tokens to user-facing labels — the sidecar stores
   // 'canon' / 'variation' / 'sheet' (ENTRY_REF_KIND values) for parity with
   // the server contract; users shouldn't see the wire tokens.
