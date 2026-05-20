@@ -109,6 +109,55 @@ describe('mediaAnnotations service (multi-author)', () => {
     expect(all['image:a.png'].others[0].note).toBe('newer');
   });
 
+  it('mergePeerAnnotations refuses an older tombstone (tombstones go through LWW)', async () => {
+    // Critical correctness invariant: a stale or replayed tombstone must NOT
+    // erase a newer prior peer entry. Without the LWW gate on the tombstone
+    // branch, any garbage-collected delete from the past would clobber live
+    // state.
+    fileStore.set(STATE_PATH, {
+      annotations: {
+        'image:a.png': {
+          authors: {
+            'peer-1': { authorName: 'Sam', starred: true, note: 'live', updatedAt: '2026-02-01T00:00:00.000Z' },
+          },
+        },
+      },
+    });
+    const result = await svc.mergePeerAnnotations({
+      instanceId: 'peer-1',
+      authorName: 'Sam',
+      annotations: {
+        // Tombstone (starred:false, note:'') with an older timestamp.
+        'image:a.png': { starred: false, note: '', updatedAt: '2026-01-01T00:00:00.000Z' },
+      },
+    });
+    expect(result.changed).toEqual([]);
+    const all = await svc.listAnnotations();
+    expect(all['image:a.png'].others[0].note).toBe('live');
+  });
+
+  it('mergePeerAnnotations applies a newer tombstone (tombstones win when fresher)', async () => {
+    fileStore.set(STATE_PATH, {
+      annotations: {
+        'image:a.png': {
+          authors: {
+            'peer-1': { authorName: 'Sam', starred: true, note: 'stale', updatedAt: '2026-01-01T00:00:00.000Z' },
+          },
+        },
+      },
+    });
+    const result = await svc.mergePeerAnnotations({
+      instanceId: 'peer-1',
+      authorName: 'Sam',
+      annotations: {
+        'image:a.png': { starred: false, note: '', updatedAt: '2026-02-01T00:00:00.000Z' },
+      },
+    });
+    expect(result.changed).toEqual(['image:a.png']);
+    const all = await svc.listAnnotations();
+    expect(all['image:a.png']).toBeUndefined();
+  });
+
   it('mergePeerAnnotations refuses to write under local instanceId', async () => {
     const result = await svc.mergePeerAnnotations({
       instanceId: LOCAL_INSTANCE,

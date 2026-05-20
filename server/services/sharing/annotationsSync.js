@@ -119,18 +119,8 @@ export async function exportAnnotationsToBucket(bucket, localAnnotations, sender
     annotations: filtered,
   };
   await atomicWrite(recordPath, record);
-  const manifest = buildManifestForAnnotations({
-    senderInstanceId,
-    sourceName,
-    bucket,
-    recordId,
-  });
-  const filename = await writeManifest(bucket.path, manifest);
-  return { skipped: false, filename, entryCount: Object.keys(filtered).length };
-}
-
-function buildManifestForAnnotations({ senderInstanceId, sourceName, bucket, recordId }) {
-  return buildManifest({
+  const producedByVersion = await getProducedByVersion();
+  const manifest = buildManifest({
     kind: 'media-annotations',
     senderInstanceId,
     source: sourceName,
@@ -139,8 +129,10 @@ function buildManifestForAnnotations({ senderInstanceId, sourceName, bucket, rec
     assetRefs: [],
     bucketId: bucket.id,
     bucketName: bucket.name,
-    producedByVersion: getProducedByVersion(),
+    producedByVersion,
   });
+  const filename = await writeManifest(bucket.path, manifest);
+  return { skipped: false, filename, entryCount: Object.keys(filtered).length };
 }
 
 async function flushAll() {

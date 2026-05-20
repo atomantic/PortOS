@@ -132,7 +132,7 @@ describe('sharing/annotationsSync.exportAnnotationsToBucket', () => {
     expect(written.authorName).toBe('Global Name');
   });
 
-  it('honors per-bucket displayNameOverride in the written record', async () => {
+  it('honors per-bucket displayNameOverride in both the written record AND the manifest envelope', async () => {
     await stubBucketAssets('/mock/bucket', ['image:a.png']);
 
     await svc.exportAnnotationsToBucket(
@@ -140,7 +140,17 @@ describe('sharing/annotationsSync.exportAnnotationsToBucket', () => {
       { 'image:a.png': { starred: true, note: 'hi', updatedAt: '2026-01-01T00:00:00.000Z' } },
       'local-instance',
     );
+    // Record's authorName carries the per-bucket alias.
     expect(writeCalls[0].data.authorName).toBe('Per-Bucket Alias');
+    // Manifest envelope's `source` (the field consumed by peers when
+    // attributing the bucket's authorship) carries the same alias — this is
+    // the surface that previously regressed by stamping the global name.
+    expect(writeManifestMock).toHaveBeenCalledTimes(1);
+    const manifest = writeManifestMock.mock.calls[0][1];
+    expect(manifest.source).toBe('Per-Bucket Alias');
+    // producedByVersion must be a string, not an unawaited Promise.
+    expect(typeof manifest.producedByVersion).toBe('string');
+    expect(manifest.producedByVersion).toBe('1.0.0-test');
   });
 
   it('emits tombstones for keys that were previously published but no longer applicable', async () => {

@@ -36,23 +36,17 @@ function emitLocalChange(key) {
 
 const isValidIsoTimestamp = (v) => typeof v === 'string' && !Number.isNaN(Date.parse(v));
 
-function sanitizeAuthorEntry(raw, { clampUpdatedAtTo = null } = {}) {
+function sanitizeAuthorEntry(raw) {
   if (!raw || typeof raw !== 'object') return null;
   const starred = raw.starred === true;
   const note = typeof raw.note === 'string' ? raw.note.slice(0, NOTE_MAX_LENGTH) : '';
   if (!starred && !note) return null;
   // Read-path callers (legacy migration, on-disk hydration) tolerate a missing
   // updatedAt and stamp `now` so the entry is still usable. The merge path
-  // pre-rejects malformed payloads in `mergePeerAnnotations` before calling
-  // here, so a peer record with a missing updatedAt never reaches this fallback.
-  let updatedAt = isValidIsoTimestamp(raw.updatedAt) ? raw.updatedAt : new Date().toISOString();
-  // Merge path clamps a future-skewed peer timestamp to local-now: a peer
-  // whose clock is years ahead would otherwise dominate every subsequent LWW
-  // round on the same key. Clamping caps the upper bound at local-now without
-  // disturbing reasonable timestamps.
-  if (clampUpdatedAtTo && Date.parse(updatedAt) > clampUpdatedAtTo) {
-    updatedAt = new Date(clampUpdatedAtTo).toISOString();
-  }
+  // pre-validates AND clamps `updatedAt` in `mergePeerAnnotations` before
+  // calling here so the LWW gate sees the clamped value for both content
+  // entries and tombstones.
+  const updatedAt = isValidIsoTimestamp(raw.updatedAt) ? raw.updatedAt : new Date().toISOString();
   const authorName = typeof raw.authorName === 'string' && raw.authorName.trim()
     ? raw.authorName.trim().slice(0, 120)
     : '';
@@ -173,12 +167,23 @@ export async function mergePeerAnnotations(payload) {
     // null for BOTH "empty tombstone" and "malformed", and the tombstone branch
     // would otherwise delete the prior peer entry on any garbage payload.
     if (!isValidIsoTimestamp(rawEntry?.updatedAt)) continue;
-    const sane = sanitizeAuthorEntry(
-      { ...rawEntry, authorName: rawEntry?.authorName || payload.authorName },
-      { clampUpdatedAtTo },
-    );
+    // Clamp the incoming timestamp here so BOTH content entries AND tombstones
+    // go through the same LWW gate (sanitize returns null for tombstones, so
+    // we lose access to the timestamp downstream). A future-skewed peer can't
+    // dominate forever — its clamped tombstone competes fairly against a
+    // newer-prior peer entry.
+    const incomingMs = Math.min(Date.parse(rawEntry.updatedAt), clampUpdatedAtTo);
+    const incomingUpdatedAt = new Date(incomingMs).toISOString();
     const prior = all[key]?.authors?.[peerInstanceId] ?? null;
+    // LWW gate applies to both content writes and tombstone deletes. Without
+    // the gate, an older tombstone (or a stale replay of an old delete) would
+    // erase a newer prior peer entry.
+    if (prior && (prior.updatedAt || '') >= incomingUpdatedAt) continue;
+    const sane = sanitizeAuthorEntry(
+      { ...rawEntry, authorName: rawEntry?.authorName || payload.authorName, updatedAt: incomingUpdatedAt },
+    );
     if (!sane) {
+      // Tombstone wins LWW — delete the prior peer entry.
       if (prior) {
         delete all[key].authors[peerInstanceId];
         if (Object.keys(all[key].authors).length === 0) delete all[key];
@@ -186,7 +191,6 @@ export async function mergePeerAnnotations(payload) {
       }
       continue;
     }
-    if (prior && (prior.updatedAt || '') >= sane.updatedAt) continue;
     if (!all[key]) all[key] = { authors: {} };
     all[key].authors[peerInstanceId] = sane;
     changed.push(key);
