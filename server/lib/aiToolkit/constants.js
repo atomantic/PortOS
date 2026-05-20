@@ -2,10 +2,11 @@
  * Shared constants for the in-tree AI toolkit (formerly portos-ai-toolkit npm).
  */
 
-export const PROVIDER_TYPES = {
+export const PROVIDER_TYPES = Object.freeze({
   CLI: 'cli',
+  TUI: 'tui',
   API: 'api'
-};
+});
 
 export const MODEL_TIERS = {
   LIGHT: 'light',
