@@ -1182,6 +1182,12 @@ describe('pipeline routes', () => {
       .send({ target: 'final', useProofAsBase: true });
     expect(second.status).toBe(200);
     expect(second.body.backCover.script).toBe('Quiet rain over the empty market');
+    // Explicit empty string clears — distinct from absent.
+    const cleared = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/comicPages/back-cover/render`)
+      .send({ backCoverScript: '' });
+    expect(cleared.status).toBe(200);
+    expect(cleared.body.backCover.script).toBe('');
   });
 
   it('POST /series/:id/seasons/:seasonId/cover/render preserves persisted cover.script when body omits coverScript', async () => {
@@ -1198,6 +1204,11 @@ describe('pipeline routes', () => {
       .send({ target: 'final', useProofAsBase: true });
     expect(second.status).toBe(200);
     expect(second.body.season.cover.script).toBe('Collected arc hero shot');
+    const cleared = await request(app)
+      .post(`/api/pipeline/series/${ser.body.id}/seasons/${sea.body.id}/cover/render`)
+      .send({ coverScript: '' });
+    expect(cleared.status).toBe(200);
+    expect(cleared.body.season.cover.script).toBe('');
   });
 
   it('POST /series/:id/seasons/:seasonId/back-cover/render preserves persisted backCover.script when body omits backCoverScript', async () => {
@@ -1214,6 +1225,11 @@ describe('pipeline routes', () => {
       .send({ target: 'final', useProofAsBase: true });
     expect(second.status).toBe(200);
     expect(second.body.season.backCover.script).toBe('Atmospheric companion image');
+    const cleared = await request(app)
+      .post(`/api/pipeline/series/${ser.body.id}/seasons/${sea.body.id}/back-cover/render`)
+      .send({ backCoverScript: '' });
+    expect(cleared.status).toBe(200);
+    expect(cleared.body.season.backCover.script).toBe('');
   });
 
   // -----------------------
