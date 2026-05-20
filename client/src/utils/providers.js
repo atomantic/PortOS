@@ -40,6 +40,20 @@ export const isTuiProvider = (provider) => provider?.type === PROVIDER_TYPES.TUI
 export const isCliProvider = (provider) => provider?.type === PROVIDER_TYPES.CLI;
 
 /**
+ * Check if a provider is an HTTP-API provider (e.g. OpenAI, Anthropic, LM Studio),
+ * as opposed to a process-backed CLI/TUI agent. Use this anywhere you'd write
+ * `provider.type === 'api'` against a saved provider.
+ */
+export const isApiProvider = (provider) => provider?.type === 'api';
+
+/**
+ * Stable, module-scoped filter for `useProviderModels({ filter })` and other
+ * call sites that need "enabled HTTP-API providers only". Hoisted so the
+ * identity is the same across renders (callers may pass it as a dependency).
+ */
+export const enabledApiProviderFilter = (provider) => Boolean(provider?.enabled) && isApiProvider(provider);
+
+/**
  * Check if a provider is process-backed (cli or tui), as opposed to an
  * HTTP-API provider. Use this for "shows a Command + args" config predicates.
  */

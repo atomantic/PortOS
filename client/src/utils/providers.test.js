@@ -5,7 +5,9 @@ import {
   filterSelectableModels,
   isTuiProvider,
   isCliProvider,
+  isApiProvider,
   isProcessProvider,
+  enabledApiProviderFilter,
   providerTypeClass,
 } from './providers.js';
 import { PROVIDER_TYPES as SERVER_PROVIDER_TYPES } from '../../../server/lib/aiToolkit/constants.js';
@@ -60,6 +62,12 @@ describe('provider type predicates', () => {
     expect(isCliProvider(api)).toBe(false);
   });
 
+  it('isApiProvider matches only api providers', () => {
+    expect(isApiProvider(api)).toBe(true);
+    expect(isApiProvider(cli)).toBe(false);
+    expect(isApiProvider(tui)).toBe(false);
+  });
+
   it('isProcessProvider matches cli and tui but not api', () => {
     expect(isProcessProvider(cli)).toBe(true);
     expect(isProcessProvider(tui)).toBe(true);
@@ -70,7 +78,26 @@ describe('provider type predicates', () => {
     expect(isTuiProvider(null)).toBe(false);
     expect(isTuiProvider(undefined)).toBe(false);
     expect(isCliProvider(null)).toBe(false);
+    expect(isApiProvider(null)).toBe(false);
+    expect(isApiProvider(undefined)).toBe(false);
     expect(isProcessProvider(null)).toBe(false);
+  });
+});
+
+describe('enabledApiProviderFilter', () => {
+  it('keeps only enabled api providers', () => {
+    const list = [
+      { type: 'api', enabled: true, id: 'a' },
+      { type: 'api', enabled: false, id: 'b' },
+      { type: 'cli', enabled: true, id: 'c' },
+      { type: 'tui', enabled: true, id: 'd' },
+    ];
+    expect(list.filter(enabledApiProviderFilter).map(p => p.id)).toEqual(['a']);
+  });
+
+  it('safely rejects nullish entries', () => {
+    expect(enabledApiProviderFilter(null)).toBe(false);
+    expect(enabledApiProviderFilter(undefined)).toBe(false);
   });
 });
 

@@ -9,8 +9,7 @@ import GoalDetailPanel, { CATEGORY_CONFIG, HORIZON_OPTIONS, GOAL_TYPE_CONFIG, DE
 import { applyOrganizationSuggestion } from './applyOrganization';
 import useProviderModels from '../../hooks/useProviderModels';
 import ProviderModelSelector from '../ProviderModelSelector';
-
-const API_PROVIDER_FILTER = p => p.enabled && p.type === 'api';
+import { enabledApiProviderFilter } from '../../utils/providers';
 
 function urgencyIndicator(urgency) {
   if (urgency == null) return null;
@@ -198,7 +197,7 @@ export default function GoalsListView({ data, onRefresh }) {
   const {
     providers, selectedProviderId, selectedModel, availableModels,
     setSelectedProviderId, setSelectedModel, loading: providersLoading
-  } = useProviderModels({ filter: API_PROVIDER_FILTER });
+  } = useProviderModels({ filter: enabledApiProviderFilter });
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 8 } }));
 
