@@ -1,9 +1,7 @@
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { existsSync } from 'fs';
 import { ensureDir, PATHS, safeJSONParse } from '../lib/fileUtils.js';
-import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
-
-const DEFAULT_AI_TIMEOUT_MS = 300000;
+import { runPromptThroughProvider } from '../lib/promptRunner.js';
 
 export const DIGITAL_TWIN_DIR = PATHS.digitalTwin;
 
@@ -51,80 +49,24 @@ export async function ensureSoulDir() {
 }
 
 /**
- * Call any AI provider (API or CLI) with a prompt and return the response text.
+ * Call any AI provider (CLI / API / TUI) with a prompt and return the response text.
+ *
+ * Dispatches through the shared `runPromptThroughProvider` so TUI providers
+ * (claude-code, etc.) no longer fall into the legacy CLI spawn branch — that
+ * branch piped raw stdin into a process that wanted an interactive PTY and
+ * either hung or echoed banner chrome into the captured output. The shared
+ * runner picks the right transport per provider type and strips TUI chrome
+ * before returning the cleaned response.
+ *
+ * Returns `{ text }` on success, `{ error }` on failure — preserved from the
+ * legacy shape so the parse-and-fallback patterns in callers keep working.
  */
-export async function callProviderAI(provider, model, prompt, { temperature = 0.3, max_tokens = 4000 } = {}) {
-  const timeout = provider.timeout || DEFAULT_AI_TIMEOUT_MS;
-
-  if (provider.type === 'api') {
-    const headers = { 'Content-Type': 'application/json' };
-    if (provider.apiKey) headers['Authorization'] = `Bearer ${provider.apiKey}`;
-
-    const response = await fetchWithTimeout(`${provider.endpoint}/chat/completions`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        model,
-        messages: [{ role: 'user', content: prompt }],
-        temperature,
-        max_tokens
-      })
-    }, timeout).catch((err) => ({ ok: false, _fetchError: err.name === 'AbortError' ? 'AI request timed out' : err.message }));
-
-    if (response._fetchError) {
-      return { error: response._fetchError };
-    }
-
-    if (!response.ok) {
-      return { error: `Provider API error: ${response.status}` };
-    }
-
-    const data = await response.json();
-    return { text: data.choices?.[0]?.message?.content || '' };
-  }
-
-  // CLI provider — pipe prompt via stdin to avoid arg length limits on large prompts
-  const { spawn } = await import('child_process');
-  return new Promise((resolve) => {
-    const args = [...(provider.args || [])];
-    let output = '';
-    let resolved = false;
-
-    const child = spawn(provider.command, args, {
-      env: (() => { const e = { ...process.env, ...provider.envVars }; delete e.CLAUDECODE; return e; })(),
-      shell: false,
-      stdio: ['pipe', 'pipe', 'pipe'],
-      windowsHide: true
-    });
-
-    // Pipe prompt via stdin
-    child.stdin.write(prompt);
-    child.stdin.end();
-
-    child.stdout.on('data', (data) => { output += data.toString(); });
-    child.stderr.on('data', (data) => { output += data.toString(); });
-    const timeoutHandle = setTimeout(() => {
-      if (resolved) return;
-      resolved = true;
-      child.kill();
-      resolve({ error: 'AI request timed out' });
-    }, timeout);
-
-    child.on('close', (code) => {
-      clearTimeout(timeoutHandle);
-      if (resolved) return;
-      resolved = true;
-      if (code === 0) {
-        resolve({ text: output });
-      } else {
-        resolve({ error: `CLI exited with code ${code}: ${output.substring(0, 500)}` });
-      }
-    });
-    child.on('error', (err) => {
-      clearTimeout(timeoutHandle);
-      if (resolved) return;
-      resolved = true;
-      resolve({ error: err.message });
-    });
-  });
+export async function callProviderAI(provider, model, prompt) {
+  return runPromptThroughProvider({
+    provider,
+    prompt,
+    model,
+    source: 'digital-twin',
+  }).then(({ text }) => ({ text: text || '' }))
+    .catch((err) => ({ error: err?.message || 'AI request failed' }));
 }

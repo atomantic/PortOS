@@ -18,7 +18,6 @@ _Nothing currently parked — pick the next item from the Backlog._
 
 ### v2.1.0 pre-release review residue (deferred from main→release multi-agent review, 2026-05-16)
 
-- [ ] [med-ai-dispatch-server-services-digital-twin] **[MED][AI-DISPATCH]** `server/services/digital-twin-helpers.js:56-130` — `callProviderAI` still has ad-hoc CLI/API split with TUI falling into the CLI branch (will hang or render banner into pipe). Migrate to `runPromptThroughProvider`.
 - [ ] [med-ai-dispatch-server-lib-tuipromptrunner-js-198] **[MED][AI-DISPATCH]** `server/lib/tuiPromptRunner.js:198-200` — `OUTPUT_BUFFER_CAP = 1MB` silently truncates the _head_ of TUI responses >1.25MB mid-token. Persists to disk AND returns truncated. Either stream incrementally to `output.txt` (like agentTuiSpawning does) or raise the cap + log a warning.
 - [ ] [med-tests-no-direct-tests-for-executetuirun-pty] **[MED][TESTS]** No direct tests for `executeTuiRun` PTY mechanics — idle-complete, hard-timeout, missing-binary early-fail, `emitRunStarted` shape, CLAUDECODE env stripping. The new `tuiPromptRunner.test.js` only covers `cleanTuiResponse`.
 - [ ] [med-importer-server-routes-importer-test-js-no] **[MED][IMPORTER]** `server/routes/importer.test.js` — no test pins `ERR_PARTIAL_COMMIT_ISSUES → 207` status mapping. Future refactor that drops the entry from `SERVICE_ERROR_STATUS` would 500 on partial commits and trigger pager alerts (the in-code comment's stated regression).

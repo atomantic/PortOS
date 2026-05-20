@@ -73,6 +73,10 @@ vi.mock('./socialAccounts.js', () => ({
   getAllAccounts: vi.fn(() => [])
 }));
 
+vi.mock('../lib/promptRunner.js', () => ({
+  runPromptThroughProvider: vi.fn()
+}));
+
 // ============================================================================
 // Imports
 // ============================================================================
@@ -82,6 +86,7 @@ import { existsSync } from 'fs';
 import { getProviderById, getActiveProvider } from './providers.js';
 import { buildPrompt } from './promptService.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
+import { runPromptThroughProvider } from '../lib/promptRunner.js';
 
 import {
   digitalTwinEvents,
@@ -1249,13 +1254,10 @@ Should mention core values.
       getProviderById.mockResolvedValue(mockProvider);
       buildPrompt.mockResolvedValue(null); // Force fallback prompt
 
-      // Mock fetch for callProviderAI
-      const originalFetch = global.fetch;
-      global.fetch = vi.fn().mockResolvedValue({
-        ok: true,
-        json: async () => ({
-          choices: [{ message: { content: '```json\n{"insights": {"patterns": ["voracious reader"]}, "rawSummary": "test"}\n```' } }]
-        })
+      runPromptThroughProvider.mockResolvedValue({
+        text: '```json\n{"insights": {"patterns": ["voracious reader"]}, "rawSummary": "test"}\n```',
+        runId: 'run-1',
+        model: 'model-1'
       });
 
       safeJSONParse.mockImplementation((str, defaultValue) => {
@@ -1266,8 +1268,6 @@ Should mention core values.
       const result = await analyzeImportedData('goodreads', csv, 'p1', 'model-1');
       expect(result.source).toBe('goodreads');
       expect(result.itemCount).toBe(2);
-
-      global.fetch = originalFetch;
     });
   });
 

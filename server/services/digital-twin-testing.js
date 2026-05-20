@@ -98,7 +98,7 @@ async function runSingleTest(test, soulContext, providerId, model) {
   // Combine system prompt with user prompt for callProviderAI (single-message interface)
   const combinedPrompt = `You are embodying the following identity. Respond as this person would, based on the soul document below:\n\n${soulContext}\n\nUser: ${test.prompt}`;
 
-  const result = await callProviderAI(provider, model, combinedPrompt, { temperature: 0.7, max_tokens: 1000 });
+  const result = await callProviderAI(provider, model, combinedPrompt);
   if (result.error) {
     throw new Error(result.error);
   }
@@ -142,7 +142,7 @@ async function scoreTestResponse(test, response, providerId, model) {
   }
 
   const provider = await getProviderById(providerId);
-  const result = await callProviderAI(provider, model, prompt, { temperature: 0.1, max_tokens: 500 });
+  const result = await callProviderAI(provider, model, prompt);
 
   if (!result.error && result.text) {
     return parseScoreResponse(result.text);
