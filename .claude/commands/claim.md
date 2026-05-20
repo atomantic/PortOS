@@ -16,7 +16,7 @@ Claim the next unclaimed `- [ ]` item from PLAN.md via the slug-ID system, work 
 
 ## Phase 1: Pick
 
-1. Read `PLAN.md` and `DONE.md` from the repo root.
+1. Read `PLAN.md` from the repo root.
 2. **If any `- [ ]` line lacks an `[<slug>]` ID, stop and run `/do:replan` first** — Phase 0 of `/do:replan` populates IDs in one pass, after which `/claim` can find work to claim.
 3. Build the in-flight set:
    ```bash
@@ -88,7 +88,7 @@ Write the code, tests, and any docs the item requires. Follow the repo conventio
 
 Run the relevant test suite as you go (`cd server && npm test -- <area>` for focused runs).
 
-**Commit messages.** Reference the slug in the subject line so the work is grep-able across DONE.md, branches, and PR titles:
+**Commit messages.** Reference the slug in the subject line so the work is grep-able across the changelog, branches, and PR titles:
 
 ```
 feat([<slug>]): <one-line description>
@@ -98,24 +98,23 @@ feat([<slug>]): <one-line description>
 
 Use `feat:` / `fix:` / `refactor:` / `chore:` / etc. per conventional commit prefixes — PortOS uses these throughout.
 
-## Phase 5: Update PLAN.md and DONE.md
+## Phase 5: Update PLAN.md
 
-**Move the item out of PLAN.md and into DONE.md.** Do NOT leave a checked `- [x]` behind in PLAN.md — that's only the convention for items intentionally left as a design log (rejected items, shipped items with rich completion notes, etc.).
+**Remove the item from PLAN.md outright.** The audit trail for shipped work lives in `git log` and `.changelog/` — slashdo v2.18.0 retired the DONE.md archive, and PortOS follows the same convention. Do NOT leave a checked `- [x]` behind in PLAN.md — that's only the convention for items intentionally left as a design log (rejected items, items with rich completion notes the human wants preserved on the active plan, etc.).
 
 1. Remove the picked `- [ ]` line from PLAN.md entirely. If removing it leaves a heading empty, leave the heading alone — section curation is `/do:replan`'s job.
-2. Append to DONE.md under today's date heading (`## YYYY-MM-DD`). Insert today's heading directly below the top-of-file preamble if it doesn't exist yet.
-3. Entry shape — **slug lifted verbatim from PLAN.md, never re-derived from the description**:
+2. **Add an entry to `.changelog/NEXT.md`** capturing what shipped. Mirror the prose style of other entries in `NEXT.md`. Lead with the slug in brackets so `git log` and `.changelog/` greps line up:
 
    ```markdown
    - **[<slug>] <Title from the PLAN.md line>** — <1–3 sentences on what shipped, key files touched, any caveats>
    ```
 
-   The slug is immutable (per [lib/slashdo/lib/plan-id-format.md](../../lib/slashdo/lib/plan-id-format.md)). The bold-wrapped title format makes the slug greppable across DONE.md and lets the next `/do:replan` Phase 0 collision scan parse the line deterministically.
+   The slug is immutable (per [lib/slashdo/lib/plan-id-format.md](../../lib/slashdo/lib/plan-id-format.md)). Bracketing it makes the change findable via `git log --grep='<slug>'` and `grep -rn '<slug>' .changelog/`.
 
-Stage both files (`git add PLAN.md DONE.md`) and commit:
+Stage both files (`git add PLAN.md .changelog/NEXT.md`) and commit:
 
 ```bash
-git commit -m "docs([<slug>]): archive to DONE.md"
+git commit -m "docs([<slug>]): remove from PLAN.md and log to changelog"
 ```
 
 ## Phase 6: Review and ship

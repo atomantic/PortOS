@@ -1026,7 +1026,7 @@ router.post('/:id/refresh-config', loadApp, asyncHandler(async (req, res) => {
 // Document Endpoints
 // ============================================================
 
-const ALLOWED_DOCUMENTS = ['PLAN.md', 'DONE.md', 'CLAUDE.md', 'GOALS.md', 'REVIEW.md', 'REJECTED.md'];
+const ALLOWED_DOCUMENTS = ['PLAN.md', 'CLAUDE.md', 'GOALS.md', 'REVIEW.md', 'REJECTED.md'];
 
 const documentUpdateSchema = z.object({
   content: z.string().max(500000),

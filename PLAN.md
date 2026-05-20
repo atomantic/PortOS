@@ -1,6 +1,6 @@
 # PortOS — Development Plan
 
-For project goals, see [GOALS.md](./GOALS.md). For completed work, see [DONE.md](./DONE.md).
+For project goals, see [GOALS.md](./GOALS.md). For completed work, see [.changelog/](./.changelog/) and `git log`.
 
 ---
 
