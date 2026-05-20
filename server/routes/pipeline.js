@@ -1137,18 +1137,19 @@ router.post('/series/:id/seasons/:seasonId/cover/render', asyncHandler(async (re
     slotKey, jobId: result.jobId, prompt: result.prompt,
     width: body.width, height: body.height, fromProof: result.fromProof,
   });
+  // Only update `script` when the request body actually carried the field.
+  // Blur-save (PATCH stages/.../cover) owns the script — render races against
+  // it, so writing the *resolved* value (which falls back to the persisted
+  // record's script when absent) would clobber a concurrent blur. Distinguish
+  // absent (preserve) from empty string (intentional clear).
   const series = await seriesSvc.updateSeasonOnSeries(
     req.params.id,
     req.params.seasonId,
     (cur) => {
       const currentCover = cur?.cover || {};
-      return {
-        cover: {
-          ...currentCover,
-          script: result.coverScript || '',
-          [slotKey]: slotRecord,
-        },
-      };
+      const nextCover = { ...currentCover, [slotKey]: slotRecord };
+      if (typeof body.coverScript === 'string') nextCover.script = body.coverScript;
+      return { cover: nextCover };
     },
   ).catch((err) => { throw mapServiceError(err); });
   const season = (series.seasons || []).find((s) => s.id === req.params.seasonId);
@@ -1165,18 +1166,15 @@ router.post('/series/:id/seasons/:seasonId/back-cover/render', asyncHandler(asyn
     slotKey, jobId: result.jobId, prompt: result.prompt,
     width: body.width, height: body.height, fromProof: result.fromProof,
   });
+  // Same script-gate rationale as the front-cover route above.
   const series = await seriesSvc.updateSeasonOnSeries(
     req.params.id,
     req.params.seasonId,
     (cur) => {
       const currentBack = cur?.backCover || {};
-      return {
-        backCover: {
-          ...currentBack,
-          script: result.backCoverScript || '',
-          [slotKey]: slotRecord,
-        },
-      };
+      const nextBack = { ...currentBack, [slotKey]: slotRecord };
+      if (typeof body.backCoverScript === 'string') nextBack.script = body.backCoverScript;
+      return { backCover: nextBack };
     },
   ).catch((err) => { throw mapServiceError(err); });
   const season = (series.seasons || []).find((s) => s.id === req.params.seasonId);
@@ -1542,18 +1540,17 @@ router.post('/issues/:id/stages/comicPages/cover/render', asyncHandler(async (re
     slotKey, jobId: result.jobId, prompt: result.prompt,
     width: body.width, height: body.height, fromProof: result.fromProof,
   });
+  // Only update `script` when the request body actually carried the field —
+  // blur-save (PATCH /issues/:id { stages.comicPages.cover.script }) owns the
+  // field. See the equivalent gate on the volume route above for rationale.
   const { issue: updatedIssue, stage } = await issuesSvc.updateStageWithLatest(
     req.params.id,
     'comicPages',
     (currentStage) => {
       const currentCover = currentStage?.cover || {};
-      return {
-        cover: {
-          ...currentCover,
-          script: result.coverScript || '',
-          [slotKey]: slotRecord,
-        },
-      };
+      const nextCover = { ...currentCover, [slotKey]: slotRecord };
+      if (typeof body.coverScript === 'string') nextCover.script = body.coverScript;
+      return { cover: nextCover };
     },
   ).catch((err) => { throw mapServiceError(err); });
   res.json({ ...result, cover: stage.cover, issue: updatedIssue, stage });
@@ -1574,18 +1571,15 @@ router.post('/issues/:id/stages/comicPages/back-cover/render', asyncHandler(asyn
     slotKey, jobId: result.jobId, prompt: result.prompt,
     width: body.width, height: body.height, fromProof: result.fromProof,
   });
+  // Same script-gate rationale as the front-cover route above.
   const { issue: updatedIssue, stage } = await issuesSvc.updateStageWithLatest(
     req.params.id,
     'comicPages',
     (currentStage) => {
       const currentBack = currentStage?.backCover || {};
-      return {
-        backCover: {
-          ...currentBack,
-          script: result.backCoverScript || '',
-          [slotKey]: slotRecord,
-        },
-      };
+      const nextBack = { ...currentBack, [slotKey]: slotRecord };
+      if (typeof body.backCoverScript === 'string') nextBack.script = body.backCoverScript;
+      return { backCover: nextBack };
     },
   ).catch((err) => { throw mapServiceError(err); });
   res.json({ ...result, backCover: stage.backCover, issue: updatedIssue, stage });
