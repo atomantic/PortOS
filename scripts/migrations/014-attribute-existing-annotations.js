@@ -51,10 +51,13 @@ async function ensureSelfIdentity(instancesPath) {
   const data = await readJsonOr(instancesPath, { self: null, peers: [] });
   // Strict: only reuse a real-looking identity. Reject the `'unknown'` sentinel
   // (this is exactly the value we're trying to never persist), reject non-string
-  // shapes, and reject empty strings — any of those would re-introduce the
-  // phantom-author bug we're fixing. Fall through to fresh-identity creation.
-  const existingId = data?.self?.instanceId;
-  if (typeof existingId === 'string' && existingId && existingId !== 'unknown') {
+  // shapes, and reject empty / whitespace-only / padded-sentinel strings —
+  // any of those would re-introduce the phantom-author bug we're fixing.
+  // Trim before comparing so `'  unknown  '` is rejected the same as `'unknown'`.
+  // Fall through to fresh-identity creation when invalid.
+  const rawId = data?.self?.instanceId;
+  const normalizedId = typeof rawId === 'string' ? rawId.trim() : '';
+  if (normalizedId && normalizedId !== 'unknown') {
     return data.self;
   }
   const self = { instanceId: crypto.randomUUID(), name: os.hostname() };

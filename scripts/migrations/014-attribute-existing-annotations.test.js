@@ -171,6 +171,29 @@ describe('migration 014 — attribute existing annotations', () => {
     expect(instances.self.instanceId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-/);
   });
 
+  it('rejects whitespace-only or padded "unknown" sentinel and creates a fresh identity', async () => {
+    // A hand-edited or whitespace-corrupted instances.json mustn't slip past
+    // the sentinel guard — `'  unknown  '` is the same phantom as `'unknown'`.
+    writeInstances({ self: { instanceId: '   unknown   ', name: 'old' }, peers: [] });
+    writeAnnotations({
+      'image:foo.png': { starred: true, updatedAt: '2025-01-01T00:00:00.000Z' },
+    });
+    await migration.up({ rootDir });
+    const instances = readInstances();
+    expect(instances.self.instanceId.trim()).not.toBe('unknown');
+    expect(instances.self.instanceId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-/);
+  });
+
+  it('rejects whitespace-only self.instanceId and creates a fresh identity', async () => {
+    writeInstances({ self: { instanceId: '   ', name: 'host' }, peers: [] });
+    writeAnnotations({
+      'image:foo.png': { starred: true, updatedAt: '2025-01-01T00:00:00.000Z' },
+    });
+    await migration.up({ rootDir });
+    const instances = readInstances();
+    expect(instances.self.instanceId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-/);
+  });
+
   it('rejects empty-string self.instanceId and creates a fresh identity', async () => {
     writeInstances({ self: { instanceId: '', name: 'host' }, peers: [] });
     writeAnnotations({
