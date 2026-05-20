@@ -25,6 +25,7 @@ import { getImageModels } from '../lib/mediaModels.js';
 import { enqueueJob, mediaJobEvents } from './mediaJobQueue/index.js';
 import { findOrCreateUniverseCollection } from './mediaCollections.js';
 import { IMAGE_GEN_MODE } from './imageGen/modes.js';
+import { resolveAutoClean } from './imageGen/index.js';
 import {
   flattenStats, flattenPalette, flattenWardrobes, flattenProps, flattenNamedList,
 } from '../lib/canonPrompt.js';
@@ -234,12 +235,19 @@ export async function renderCharacterReferenceSheet(universeId, entryId, options
   // first-class. External SD-API has no multi-zone layout support, so it
   // gets a clear remediation rather than a silently-degraded render.
   const activeMode = settings.imageGen?.mode || IMAGE_GEN_MODE.LOCAL;
+  // The queue dispatches directly to imageGen/{codex,local}.generateImage,
+  // bypassing imageGen/index.js's dispatcher that resolves autoClean for
+  // direct callers. Resolve here so saved settings.imageGen[mode].autoClean
+  // applies to character reference-sheet renders the same way it does for
+  // /api/image-gen/generate, pipeline, and Universe Builder batch renders.
+  const autoClean = resolveAutoClean(undefined, settings, activeMode);
   const baseParams = {
     mode: activeMode,
     prompt,
     negativePrompt,
     width: built.width,
     height: built.height,
+    autoClean,
   };
 
   let modelId = null;

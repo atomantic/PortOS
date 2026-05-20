@@ -44,11 +44,34 @@ describe('usePreviewRoute', () => {
     expect(result.current.pair[0]).toBeNull();
   });
 
-  it('setPreview(item) writes the filename to the URL', () => {
+  it('setPreview(item) writes the key (URL-encoded) when present', () => {
+    // The URL contract is "write key, fall back to filename" — without the key
+    // in the URL a basename-collision case (canon-sheet:foo.png vs
+    // image:foo.png on the same items list) would open the wrong asset on
+    // reload / share. URL search params encode `:` as `%3A`.
     const { result } = renderWithRouter([FOO, BAR]);
     act(() => result.current.pair[1](BAR));
-    expect(result.current.location.search).toContain('preview=bar.png');
+    expect(result.current.location.search).toContain('preview=image%3Abar.png');
     expect(result.current.pair[0]).toBe(BAR);
+  });
+
+  it('setPreview(item) falls back to filename when key is absent', () => {
+    const BAR_NO_KEY = { filename: 'bar.png', prompt: 'bar' };
+    const { result } = renderWithRouter([{ filename: 'foo.png' }, BAR_NO_KEY]);
+    act(() => result.current.pair[1](BAR_NO_KEY));
+    expect(result.current.location.search).toContain('preview=bar.png');
+    expect(result.current.pair[0]).toBe(BAR_NO_KEY);
+  });
+
+  it('keyed setPreview survives a basename collision on reload', () => {
+    // SHEET and FOO share filename 'foo.png'. Writing the bare filename to the
+    // URL would resolve back to whichever item is first in the list (FOO), so
+    // setPreview(SHEET) followed by a reload would open the wrong asset. Writing
+    // the key preserves identity.
+    const { result } = renderWithRouter([FOO, SHEET]);
+    act(() => result.current.pair[1](SHEET));
+    expect(result.current.location.search).toContain('preview=canon-sheet%3Afoo.png');
+    expect(result.current.pair[0]).toBe(SHEET);
   });
 
   it('setPreview(null) drops the preview param but preserves siblings', () => {
@@ -63,7 +86,7 @@ describe('usePreviewRoute', () => {
     const { result } = renderWithRouter([FOO, BAR], '/x?preview=foo.png');
     expect(result.current.pair[0]).toBe(FOO);
     act(() => result.current.pair[1](BAR));
-    expect(result.current.location.search).toContain('preview=bar.png');
+    expect(result.current.location.search).toContain('preview=image%3Abar.png');
     expect(result.current.pair[0]).toBe(BAR);
   });
 });

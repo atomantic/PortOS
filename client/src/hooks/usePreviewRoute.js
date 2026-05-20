@@ -5,7 +5,13 @@ import { useSearchParams } from 'react-router-dom';
 // shape every MediaPreview host already expects, but the source of truth is a
 // `?preview=<filename>` query param so previews are deep-linkable, reload-safe,
 // and shareable. setPreview(null) drops the param; setPreview(item) writes the
-// item's filename (falling back to its key).
+// item's key (falling back to its filename). Pages that mix multiple static
+// prefixes in the same items list — UniverseBuilder hosts gallery images
+// (/data/images) AND character reference sheets (/data/image-refs) under the
+// same modal — rely on the key prefix (`canon-sheet:foo.png` vs `image:foo.png`)
+// to disambiguate basename collisions; without the prefix in the URL the
+// resolver's filename-match below picks the first hit (typically the gallery
+// image) and the wrong asset opens.
 //
 // Match strategy against the host's items list (in order):
 //   1. exact filename match
@@ -38,7 +44,7 @@ export default function usePreviewRoute(items, { paramName = 'preview' } = {}) {
     const isOpen = !!item;
     const next = new URLSearchParams(searchParams);
     if (!item) next.delete(paramName);
-    else next.set(paramName, item.filename || item.key || '');
+    else next.set(paramName, item.key || item.filename || '');
     setSearchParams(next, { replace: wasOpen || !isOpen });
   }, [searchParams, setSearchParams, paramName]);
 
