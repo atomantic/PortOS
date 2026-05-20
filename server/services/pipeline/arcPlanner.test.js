@@ -1034,6 +1034,25 @@ describe('arcPlanner — buildSeasonRemap', () => {
     expect(remap.get('old1')).toBe('new2');
   });
 
+  it('pairs 2-old × 2-new entirely via unique-number when titles diverge but numbers match', () => {
+    // Pre-tightening this case used to flow through Pass 3 (positional fallback);
+    // now Pass 2 handles it because the numbers 1↔1 and 2↔2 are each unique.
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const dropped = [
+      { id: 'old1', number: 1, title: 'A' },
+      { id: 'old2', number: 2, title: 'B' },
+    ];
+    const minted = [
+      { id: 'new1', number: 1, title: 'X' },
+      { id: 'new2', number: 2, title: 'Y' },
+    ];
+    const remap = planner.buildSeasonRemap(dropped, minted);
+    expect(remap.get('old1')).toBe('new1');
+    expect(remap.get('old2')).toBe('new2');
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
   it('falls back positionally when exactly one unmatched on each side (forced 1↔1)', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const dropped = [{ id: 'old1', number: 1, title: 'A' }];

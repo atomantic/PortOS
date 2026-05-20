@@ -1154,9 +1154,13 @@ export function buildSeasonRemap(droppedOldSeasons, newlyMintedSeasons) {
     // the stable id when the title is empty after sanitization.
     const safeLabel = (s) => {
       const raw = typeof s.title === 'string' ? s.title : '';
-      // stripAnsi removes full ESC + CSI/OSC sequences (so "[31m" payload
-      // tails don't leak through); the trailing control-char sweep catches
-      // any bare C0/C1 bytes the regex doesn't match.
+      // stripAnsi removes full ESC + CSI sequences (so "[31m" payload tails
+      // don't leak through). Note: per PLAN.md
+      // [ansistrip-osc-alternative-unreachable], OSC sequence bodies do leak
+      // through stripAnsi today — extremely unlikely in LLM-generated season
+      // titles, but called out here so a future fix to ANSI_PATTERN naturally
+      // tightens this path. The trailing control-char sweep catches any bare
+      // C0/C1 bytes the regex doesn't match.
       const t = stripAnsi(raw)
         .replace(/[\u0000-\u001F\u007F-\u009F]+/g, ' ')
         .replace(/\s+/g, ' ')
