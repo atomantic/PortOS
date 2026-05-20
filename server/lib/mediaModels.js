@@ -19,6 +19,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
 import { join, dirname } from 'path';
 import { PATHS } from './fileUtils.js';
+import { isPlainObject } from './objects.js';
 import { RUNNER_FAMILIES } from './runners.js';
 // fileUtils.ensureDir is async/Promise-returning; this module needs a
 // synchronous version because `loadMediaModels()` is called at import-time
@@ -180,7 +181,6 @@ const seedIfMissing = () => {
 // getVideoModels / buildAppModels would throw at module import-time and
 // take down server startup. If a user supplies a real array, that's their
 // list, full stop — we don't deep-merge entries.
-const isPlainObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 const arrayOrDefault = (v, fallback) => (Array.isArray(v) ? v : fallback);
 
 // Pre-flux2 stored entries had `broken: 'macos'` and no `runner` field. Merge

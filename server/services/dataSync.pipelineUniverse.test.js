@@ -224,3 +224,41 @@ describe('dataSync — pipeline category', () => {
     expect(readJSON(ISSUES_PATH).issues).toHaveLength(1);
   });
 });
+
+describe('dataSync — getChecksum cache', () => {
+  it('returns the same checksum across consecutive calls and matches getSnapshot', async () => {
+    writeJSON(UNIVERSE_PATH, {
+      universes: [{ id: 'u1', name: 'A', updatedAt: '2026-05-17T10:00:00Z' }],
+    });
+    const c1 = await dataSync.getChecksum('universe');
+    const c2 = await dataSync.getChecksum('universe');
+    const snap = await dataSync.getSnapshot('universe');
+    expect(c1.checksum).toBe(c2.checksum);
+    expect(c1.checksum).toBe(snap.checksum);
+  });
+
+  it('invalidates the cache after applyRemote bumps the underlying file mtime', async () => {
+    writeJSON(UNIVERSE_PATH, {
+      universes: [{ id: 'u1', name: 'A', updatedAt: '2026-05-17T10:00:00Z' }],
+    });
+    const before = await dataSync.getChecksum('universe');
+    await dataSync.applyRemote('universe', {
+      universes: [{ id: 'u1', name: 'B', updatedAt: '2026-05-17T11:00:00Z' }],
+    });
+    const after = await dataSync.getChecksum('universe');
+    expect(after.checksum).not.toBe(before.checksum);
+    expect(after.checksum).toBe((await dataSync.getSnapshot('universe')).checksum);
+  });
+
+  it('reflects an out-of-band file mutation (pipeline series changes outside this service)', async () => {
+    writeJSON(SERIES_PATH, { series: [{ id: 'ser-1', updatedAt: '2026-05-17T10:00:00Z' }] });
+    writeJSON(ISSUES_PATH, { issues: [] });
+    const before = await dataSync.getChecksum('pipeline');
+    // Force a different mtime — vitest can run faster than the FS's ms tick,
+    // so wait long enough that the mtime is guaranteed to advance.
+    await new Promise((r) => setTimeout(r, 5));
+    writeJSON(SERIES_PATH, { series: [{ id: 'ser-1', updatedAt: '2026-05-17T11:00:00Z' }] });
+    const after = await dataSync.getChecksum('pipeline');
+    expect(after.checksum).not.toBe(before.checksum);
+  });
+});

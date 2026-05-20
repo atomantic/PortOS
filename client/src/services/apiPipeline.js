@@ -398,6 +398,25 @@ export const pipelineAutoRunSseUrl = (issueId) =>
   `/api/pipeline/issues/${encodeURIComponent(issueId)}/auto-run-text/progress`;
 
 // ---- Audio stage ----
+// Flat list of every voice the active engines expose, namespaced as
+// `engine:voiceName` (e.g. `kokoro:af_bella`, `piper:lessac-medium`). The
+// character voice picker + per-line override picker pull from this single
+// list so a new engine surfaces in every consumer with one server-side edit.
+// Silent — VoicePicker owns its own inline error UI.
+export const listPipelineTtsVoices = () => request('/pipeline/tts/voices', { silent: true });
+
+// Audition a voice — returns the rendered WAV as an ArrayBuffer so callers
+// can feed it to `playWav` from voiceClient. Optional `text` overrides the
+// server-side default preview line. Silent — VoicePicker owns its own
+// inline error toast.
+export const previewPipelineTtsVoice = (voiceId, text) =>
+  request('/pipeline/tts/preview', {
+    method: 'POST',
+    body: JSON.stringify(text ? { voiceId, text } : { voiceId }),
+    responseType: 'arraybuffer',
+    silent: true,
+  });
+
 // Walks storyboards.scenes[].dialogue and populates stages.audio.lines[].
 // Pass { force: true } to replace existing lines wholesale (server defaults
 // to a 409 when lines[] is already populated so a stray click can't wipe

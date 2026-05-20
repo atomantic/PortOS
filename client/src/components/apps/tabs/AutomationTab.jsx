@@ -211,14 +211,21 @@ export default function AutomationTab({ appId, appName }) {
                     {AGENT_OPTIONS.map(({ field, shortLabel, label }) => {
                       const effective = override.taskMetadata?.[field] ?? globalConfig.taskMetadata?.[field] ?? false;
                       const hasOverride = override.taskMetadata?.[field] !== undefined;
+                      const managed = globalConfig.managedAgentOptions?.includes(field);
+                      const titleText = managed
+                        ? `${label}: managed internally by ${taskType}`
+                        : `${label}: ${effective ? 'on' : 'off'}${hasOverride ? ' (app override)' : ' (inherited)'}`;
                       return (
                         <button
                           key={field}
                           onClick={() => handleMetaToggle(taskType, field, globalConfig.taskMetadata)}
+                          disabled={managed}
                           aria-pressed={effective}
-                          aria-label={`${label}: ${effective ? 'on' : 'off'}${hasOverride ? ' (app override)' : ' (inherited)'}`}
-                          className={`text-xs px-1.5 py-0.5 rounded transition-colors border ${agentOptionButtonClass(effective, hasOverride)}`}
-                          title={`${label}: ${effective ? 'on' : 'off'}${hasOverride ? ' (app override)' : ' (inherited)'}`}
+                          aria-label={managed
+                            ? `${label}: managed by task`
+                            : `${label}: ${effective ? 'on' : 'off'}${hasOverride ? ' (app override)' : ' (inherited)'}`}
+                          className={`text-xs px-1.5 py-0.5 rounded transition-colors border ${agentOptionButtonClass(effective, hasOverride)} ${managed ? 'opacity-50 cursor-not-allowed' : ''}`}
+                          title={titleText}
                         >
                           {shortLabel}
                         </button>

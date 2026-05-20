@@ -9,18 +9,10 @@ export const fetchPiperVoice = (voice) => api.post('/voice/piper/fetch', { voice
 // Returns the raw WAV bytes of the test utterance. Optional `voice` and
 // `engine` overrides let the voice-picker preview audition a voice from a
 // different engine than the saved one — without forcing a save first.
-export const testTts = async (text, voice, engine) => {
+// Silent — VoiceTab callers own their own error toasts.
+export const testTts = (text, voice, engine) => {
   const body = { text };
   if (voice) body.voice = voice;
   if (engine) body.engine = engine;
-  const res = await fetch('/api/voice/test', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
-    throw new Error(err.error || 'TTS test failed');
-  }
-  return res.arrayBuffer();
+  return api.post('/voice/test', body, { responseType: 'arraybuffer', silent: true });
 };

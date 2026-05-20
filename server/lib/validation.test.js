@@ -493,6 +493,23 @@ describe('validation.js', () => {
       expect(sanitizeTaskMetadata({ useWorktree: true, foo: 'bar' })).toEqual({ useWorktree: true });
     });
 
+    it('should accept a valid reviewer string', () => {
+      expect(sanitizeTaskMetadata({ reviewer: 'copilot' })).toEqual({ reviewer: 'copilot' });
+      expect(sanitizeTaskMetadata({ reviewer: 'claude' })).toEqual({ reviewer: 'claude' });
+      expect(sanitizeTaskMetadata({ reviewer: 'gemini' })).toEqual({ reviewer: 'gemini' });
+      expect(sanitizeTaskMetadata({ reviewer: 'codex' })).toEqual({ reviewer: 'codex' });
+      expect(sanitizeTaskMetadata({ reviewLoop: true, reviewer: 'claude' }))
+        .toEqual({ reviewLoop: true, reviewer: 'claude' });
+    });
+
+    it('should drop unknown reviewer values', () => {
+      expect(sanitizeTaskMetadata({ reviewer: 'unknown' })).toBeNull();
+      expect(sanitizeTaskMetadata({ reviewer: '' })).toBeNull();
+      expect(sanitizeTaskMetadata({ reviewer: 42 })).toBeNull();
+      expect(sanitizeTaskMetadata({ useWorktree: true, reviewer: 'bogus' }))
+        .toEqual({ useWorktree: true });
+    });
+
     it('should reject prototype pollution keys', () => {
       expect(sanitizeTaskMetadata({ __proto__: { malicious: true } })).toBeNull();
       expect(sanitizeTaskMetadata({ constructor: true })).toBeNull();

@@ -179,13 +179,20 @@ TAG="$TAG" ROOT_DIR="$ROOT_DIR" node -e '
   fs.writeFileSync(path.join(process.env.ROOT_DIR, "data", "update-complete.json.tmp"), marker);
 ' && mv "$ROOT_DIR/data/update-complete.json.tmp" "$ROOT_DIR/data/update-complete.json"
 
-# Restart PM2 apps — remove marker if restart fails so it isn't misread on boot
-step "restart" "running" "Restarting PortOS..."
-if ! run npm run pm2:restart; then
+# Start PM2 apps — `pm2 kill` above tore down the daemon, so use `start` not
+# `restart` (restart against a config doesn't reliably start processes that
+# aren't currently managed, leaving the app stopped after an update that ran
+# while PortOS wasn't running). `delete --silent` first so a partial prior
+# state doesn't make `start` a no-op, then `save` so the apps come back on
+# reboot. Remove the completion marker if start fails so it isn't misread on boot.
+step "restart" "running" "Starting PortOS..."
+run node ./node_modules/pm2/bin/pm2 delete ecosystem.config.cjs --silent || true
+if ! run node ./node_modules/pm2/bin/pm2 start ecosystem.config.cjs; then
   rm -f "$ROOT_DIR/data/update-complete.json"
   exit 1
 fi
-step "restart" "done" "PortOS restarted"
+run node ./node_modules/pm2/bin/pm2 save || true
+step "restart" "done" "PortOS started"
 log ""
 
 # Open the dashboard in the PortOS-managed browser. Fail-soft — never blocks

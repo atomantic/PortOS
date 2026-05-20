@@ -7,6 +7,7 @@ import { PORTS } from './lib/ports.js';
 import { existsSync } from 'fs';
 import { readFile, unlink } from 'fs/promises';
 import { createTailscaleServers } from '../lib/tailscale-https.js';
+import { certPaths } from '../lib/certPaths.js';
 import { getSelfHost } from './lib/peerSelfHost.js';
 import { getBuildId, getStampedIndexHtml } from './lib/buildId.js';
 
@@ -17,6 +18,7 @@ import systemHealthRoutes from './routes/systemHealth.js';
 import appsRoutes from './routes/apps.js';
 import referenceReposRoutes from './routes/referenceRepos.js';
 import portsRoutes from './routes/ports.js';
+import networkExposureRoutes from './routes/networkExposure.js';
 import logsRoutes from './routes/logs.js';
 import detectRoutes from './routes/detect.js';
 import scaffoldRoutes from './routes/scaffold.js';
@@ -149,7 +151,7 @@ const PORT = process.env.PORT || 5555;
 const HOST = process.env.HOST || '0.0.0.0';
 
 // Delegates HTTPS / HTTP-mirror wiring to lib/tailscale-https.js — see there.
-const CERT_DIR = join(PATHS.data, 'certs');
+const { dir: CERT_DIR } = certPaths(PATHS.data);
 const { server: httpServer, mirror: localHttpServer, httpsEnabled } =
   createTailscaleServers(app, { certDir: CERT_DIR });
 const scheme = httpsEnabled ? 'https' : 'http';
@@ -327,6 +329,7 @@ app.use('/api/system', systemHealthRoutes);
 app.use('/api/apps', appsRoutes);
 app.use('/api/apps/:appId/reference-repos', referenceReposRoutes);
 app.use('/api/ports', portsRoutes);
+app.use('/api/network-exposure', networkExposureRoutes);
 app.use('/api/logs', logsRoutes);
 app.use('/api/detect', detectRoutes);
 app.use('/api/scaffold', scaffoldRoutes);

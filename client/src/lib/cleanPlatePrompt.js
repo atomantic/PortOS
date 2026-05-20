@@ -9,7 +9,13 @@
  * prompt that explicitly excludes people.
  *
  * Output mirrors `composeStyledPrompt`: `{ prompt, negativePrompt }`.
+ *
+ * Descriptor body delegates to `richCanonDescriptorFragments('place', …)` so
+ * `era` / `weather` flow through alongside `description` / `palette` /
+ * `recurringDetails` — visual prompts benefit from period/atmosphere cues.
  */
+
+import { mapCanonDescriptorFragments, richCanonDescriptorFragments } from './canonPrompt.js';
 
 const CLEAN_PLATE_PREFIX = 'Empty location, no characters, no people, edge-to-edge composition';
 const CLEAN_PLATE_NEGATIVE = 'people, characters, faces, hands, figures, person';
@@ -23,11 +29,10 @@ export function composeCleanPlatePrompt(setting, userNegative = '') {
   const intExt = setting.intExt === 'INT' ? 'interior' : setting.intExt === 'EXT' ? 'exterior' : '';
   const tod = typeof setting.timeOfDay === 'string' && setting.timeOfDay ? setting.timeOfDay : '';
   const meta = [intExt, tod].filter(Boolean).join(', ');
-  const descParts = [
-    setting.description?.trim() || '',
-    setting.palette?.trim() ? `Palette: ${setting.palette.trim()}.` : '',
-    setting.recurringDetails?.trim() || '',
-  ].filter(Boolean);
+  const descParts = mapCanonDescriptorFragments(
+    richCanonDescriptorFragments('place', setting),
+    { trailingPeriod: true },
+  );
   const promptSegs = [
     CLEAN_PLATE_PREFIX,
     meta ? `(${meta})` : '',

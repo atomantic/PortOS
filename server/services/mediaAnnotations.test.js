@@ -14,6 +14,7 @@ tryReadFile: vi.fn().mockResolvedValue(null),
 const LOCAL_INSTANCE = 'local-instance-id';
 vi.mock('./instances.js', () => ({
   getInstanceId: vi.fn(async () => LOCAL_INSTANCE),
+  UNKNOWN_INSTANCE_ID: 'unknown',
 }));
 vi.mock('./sharing/annotationIdentity.js', () => ({
   resolveLocalAuthorName: vi.fn(async () => 'Local User'),
@@ -109,6 +110,55 @@ describe('mediaAnnotations service (multi-author)', () => {
     expect(all['image:a.png'].others[0].note).toBe('newer');
   });
 
+  it('mergePeerAnnotations refuses an older tombstone (tombstones go through LWW)', async () => {
+    // Critical correctness invariant: a stale or replayed tombstone must NOT
+    // erase a newer prior peer entry. Without the LWW gate on the tombstone
+    // branch, any garbage-collected delete from the past would clobber live
+    // state.
+    fileStore.set(STATE_PATH, {
+      annotations: {
+        'image:a.png': {
+          authors: {
+            'peer-1': { authorName: 'Sam', starred: true, note: 'live', updatedAt: '2026-02-01T00:00:00.000Z' },
+          },
+        },
+      },
+    });
+    const result = await svc.mergePeerAnnotations({
+      instanceId: 'peer-1',
+      authorName: 'Sam',
+      annotations: {
+        // Tombstone (starred:false, note:'') with an older timestamp.
+        'image:a.png': { starred: false, note: '', updatedAt: '2026-01-01T00:00:00.000Z' },
+      },
+    });
+    expect(result.changed).toEqual([]);
+    const all = await svc.listAnnotations();
+    expect(all['image:a.png'].others[0].note).toBe('live');
+  });
+
+  it('mergePeerAnnotations applies a newer tombstone (tombstones win when fresher)', async () => {
+    fileStore.set(STATE_PATH, {
+      annotations: {
+        'image:a.png': {
+          authors: {
+            'peer-1': { authorName: 'Sam', starred: true, note: 'stale', updatedAt: '2026-01-01T00:00:00.000Z' },
+          },
+        },
+      },
+    });
+    const result = await svc.mergePeerAnnotations({
+      instanceId: 'peer-1',
+      authorName: 'Sam',
+      annotations: {
+        'image:a.png': { starred: false, note: '', updatedAt: '2026-02-01T00:00:00.000Z' },
+      },
+    });
+    expect(result.changed).toEqual(['image:a.png']);
+    const all = await svc.listAnnotations();
+    expect(all['image:a.png']).toBeUndefined();
+  });
+
   it('mergePeerAnnotations refuses to write under local instanceId', async () => {
     const result = await svc.mergePeerAnnotations({
       instanceId: LOCAL_INSTANCE,
@@ -118,6 +168,122 @@ describe('mediaAnnotations service (multi-author)', () => {
       },
     });
     expect(result.changed).toEqual([]);
+  });
+
+  it('mergePeerAnnotations refuses peerInstanceId of "unknown"', async () => {
+    const result = await svc.mergePeerAnnotations({
+      instanceId: 'unknown',
+      authorName: 'Anon',
+      annotations: {
+        'image:a.png': { starred: true, note: 'note', updatedAt: '2026-01-01T00:00:00.000Z' },
+      },
+    });
+    expect(result.changed).toEqual([]);
+  });
+
+  it('mergePeerAnnotations refuses empty peerInstanceId', async () => {
+    const result = await svc.mergePeerAnnotations({
+      instanceId: '',
+      authorName: 'Anon',
+      annotations: {
+        'image:a.png': { starred: true, note: 'note', updatedAt: '2026-01-01T00:00:00.000Z' },
+      },
+    });
+    expect(result.changed).toEqual([]);
+  });
+
+  it('mergePeerAnnotations drops entries with missing updatedAt (strict on merge)', async () => {
+    fileStore.set(STATE_PATH, {
+      annotations: {
+        'image:a.png': {
+          authors: {
+            'peer-1': { authorName: 'Sam', starred: true, note: 'existing', updatedAt: '2026-02-01T00:00:00.000Z' },
+          },
+        },
+      },
+    });
+    const result = await svc.mergePeerAnnotations({
+      instanceId: 'peer-1',
+      authorName: 'Sam',
+      annotations: {
+        // No updatedAt — must NOT win LWW by getting a fresh `now` stamp.
+        'image:a.png': { starred: true, note: 'no-timestamp' },
+      },
+    });
+    expect(result.changed).toEqual([]);
+    const all = await svc.listAnnotations();
+    expect(all['image:a.png'].others[0].note).toBe('existing');
+  });
+
+  it('mergePeerAnnotations drops entries with invalid updatedAt (strict on merge)', async () => {
+    const result = await svc.mergePeerAnnotations({
+      instanceId: 'peer-1',
+      authorName: 'Sam',
+      annotations: {
+        'image:a.png': { starred: true, note: 'malformed', updatedAt: 'not-a-date' },
+      },
+    });
+    expect(result.changed).toEqual([]);
+  });
+
+  it('mergePeerAnnotations clamps future-skewed peer updatedAt to local-now', async () => {
+    // Peer clock is years ahead. Without clamping, every subsequent LWW round
+    // for the same key would defer to this peer forever.
+    const futureTs = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString();
+    const beforeMerge = Date.now();
+    await svc.mergePeerAnnotations({
+      instanceId: 'peer-1',
+      authorName: 'Sam',
+      annotations: {
+        'image:a.png': { starred: true, note: 'future-skewed', updatedAt: futureTs },
+      },
+    });
+    const afterMerge = Date.now();
+    const all = await svc.listAnnotations();
+    const stored = all['image:a.png'].others[0];
+    const storedMs = Date.parse(stored.updatedAt);
+    expect(storedMs).toBeGreaterThanOrEqual(beforeMerge);
+    expect(storedMs).toBeLessThanOrEqual(afterMerge);
+  });
+
+  it('heals authors.unknown → local instanceId on read (post-migration-014 phantom)', async () => {
+    // Migration 014 wrote `'unknown'` as a phantom author key when it ran
+    // before ensureSelf() created the local identity. readAll() must re-key
+    // those into the real localInstanceId so they project as the user's own
+    // (otherwise setAnnotation refuses to merge with them and the sharing
+    // export silently drops them).
+    fileStore.set(STATE_PATH, {
+      annotations: {
+        'image:phantom.png': {
+          authors: {
+            unknown: { authorName: 'pre-id-host', starred: true, note: 'pre-id', updatedAt: '2026-01-01T00:00:00.000Z' },
+          },
+        },
+      },
+    });
+    const all = await svc.listAnnotations();
+    expect(all['image:phantom.png'].own).toMatchObject({ starred: true, note: 'pre-id' });
+    expect(all['image:phantom.png'].others).toEqual([]);
+    const mine = await svc.listLocalAuthorAnnotations();
+    expect(mine['image:phantom.png']).toBeDefined();
+  });
+
+  it('heals authors.unknown but prefers an existing real local entry when both are present', async () => {
+    // If a real local entry already exists, that's the source of truth — the
+    // unknown phantom must be dropped, not merged or favored.
+    fileStore.set(STATE_PATH, {
+      annotations: {
+        'image:both.png': {
+          authors: {
+            unknown: { authorName: 'old-host', starred: true, note: 'phantom', updatedAt: '2026-01-01T00:00:00.000Z' },
+            [LOCAL_INSTANCE]: { authorName: 'Local User', starred: false, note: 'real', updatedAt: '2026-02-01T00:00:00.000Z' },
+          },
+        },
+      },
+    });
+    const all = await svc.listAnnotations();
+    expect(all['image:both.png'].own).toMatchObject({ note: 'real', starred: false });
+    expect(all['image:both.png'].others).toEqual([]); // unknown bucket dropped, not exposed as a peer
   });
 
   it('legacy single-author entries are lifted into the local author bucket on read', async () => {

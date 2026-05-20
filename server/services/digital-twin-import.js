@@ -286,7 +286,7 @@ async function analyzeWithPrompt(prompt, providerId, model, source, parsedData) 
     return { error: 'Provider not found or disabled' };
   }
 
-  const result = await callProviderAI(provider, model, prompt, { temperature: 0.4, max_tokens: 3000 });
+  const result = await callProviderAI(provider, model, prompt);
   if (!result.error && result.text) {
     return parseImportAnalysisResponse(result.text, source, parsedData);
   }
@@ -514,7 +514,7 @@ export async function analyzeAssessment(content, providerId, model) {
 
   // 3. Call AI for analysis
   console.log(`🧪 [${now()}] Calling ${provider.name} (${model}), prompt=${analysisPrompt.length} chars`);
-  const aiResponse = await callProviderAI(provider, model, analysisPrompt, { temperature: 0.3, max_tokens: 4000 });
+  const aiResponse = await callProviderAI(provider, model, analysisPrompt);
 
   if (aiResponse.error) {
     return { error: aiResponse.error };

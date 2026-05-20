@@ -9,7 +9,13 @@ vi.mock('../services/imageGen/index.js', () => ({
   generateAvatar: vi.fn(),
   attachSseClient: vi.fn(() => false),
   cancel: vi.fn(() => false),
+  IMAGE_GEN_MODE: { EXTERNAL: 'external', LOCAL: 'local', CODEX: 'codex' },
   IMAGE_GEN_MODES: ['external', 'local', 'codex'],
+  // Mirror the real precedence so route-level resolution behaves correctly
+  // under test: explicit body bool wins, otherwise fall back to settings.
+  resolveAutoClean: (bodyValue, settings, mode) => (typeof bodyValue === 'boolean'
+    ? bodyValue
+    : settings?.imageGen?.[mode]?.autoClean === true),
   local: {
     listImageModels: vi.fn(() => []),
     listLoraFilenames: vi.fn(async () => []),
@@ -323,6 +329,72 @@ describe('Image Gen Routes', () => {
         params: expect.objectContaining({ mode: 'codex' }),
       }));
       expect(imageGen.generateImage).not.toHaveBeenCalled();
+    });
+
+    describe('autoClean resolution (body wins over saved setting)', () => {
+      it('external mode: body autoClean=true overrides saved setting=false', async () => {
+        getSettings.mockResolvedValueOnce({
+          imageGen: { mode: 'external', external: { autoClean: false } },
+        });
+        imageGen.generateImage.mockResolvedValue({ filename: 'x.png', path: '/data/images/x.png' });
+
+        await request(app).post('/api/image-gen/generate').send({ prompt: 'p', autoClean: true });
+
+        expect(imageGen.generateImage).toHaveBeenCalledWith(expect.objectContaining({ autoClean: true }));
+      });
+
+      it('external mode: omitted body inherits saved setting=true', async () => {
+        getSettings.mockResolvedValueOnce({
+          imageGen: { mode: 'external', external: { autoClean: true } },
+        });
+        imageGen.generateImage.mockResolvedValue({ filename: 'x.png', path: '/data/images/x.png' });
+
+        await request(app).post('/api/image-gen/generate').send({ prompt: 'p' });
+
+        expect(imageGen.generateImage).toHaveBeenCalledWith(expect.objectContaining({ autoClean: true }));
+      });
+
+      it('local mode: body autoClean=true flows through into enqueued params (was previously dropped)', async () => {
+        getSettings.mockResolvedValueOnce({
+          imageGen: { mode: 'local', local: { pythonPath: '/p', autoClean: false } },
+        });
+
+        await request(app).post('/api/image-gen/generate').send({ prompt: 'p', autoClean: true });
+
+        const [call] = mediaJobQueue.enqueueJob.mock.calls;
+        expect(call[0].params.autoClean).toBe(true);
+      });
+
+      it('local mode: omitted body inherits saved setting=true on enqueued params', async () => {
+        getSettings.mockResolvedValueOnce({
+          imageGen: { mode: 'local', local: { pythonPath: '/p', autoClean: true } },
+        });
+
+        await request(app).post('/api/image-gen/generate').send({ prompt: 'p' });
+
+        const [call] = mediaJobQueue.enqueueJob.mock.calls;
+        expect(call[0].params.autoClean).toBe(true);
+      });
+
+      it('codex mode: body autoClean=false overrides saved setting=true on enqueued params', async () => {
+        getSettings.mockResolvedValueOnce({
+          imageGen: { mode: 'codex', codex: { enabled: true, autoClean: true } },
+        });
+
+        await request(app).post('/api/image-gen/generate').send({ prompt: 'p', autoClean: false });
+
+        const [call] = mediaJobQueue.enqueueJob.mock.calls;
+        expect(call[0].params.autoClean).toBe(false);
+      });
+
+      it('defaults to false when neither body nor settings specify', async () => {
+        getSettings.mockResolvedValueOnce({ imageGen: { mode: 'external' } });
+        imageGen.generateImage.mockResolvedValue({ filename: 'x.png', path: '/data/images/x.png' });
+
+        await request(app).post('/api/image-gen/generate').send({ prompt: 'p' });
+
+        expect(imageGen.generateImage).toHaveBeenCalledWith(expect.objectContaining({ autoClean: false }));
+      });
     });
 
     // Codex with the toggle off rejects up-front rather than enqueueing.

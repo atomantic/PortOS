@@ -1,4 +1,5 @@
 import BackupWidget from '../BackupWidget';
+import NetworkExposureWidget from '../NetworkExposureWidget';
 import SystemHealthWidget from '../SystemHealthWidget';
 import CosDashboardWidget from '../CosDashboardWidget';
 import GoalProgressWidget from '../GoalProgressWidget';
@@ -39,6 +40,7 @@ export const WIDGETS = [
   { id: 'proactive-alerts',  label: 'Proactive Alerts',      Component: ProactiveAlertsWidget,  width: 'quarter', defaultH: 4, module: { id: '04', status: 'ALERTS',  glyph: 'warning-tri' } },
   { id: 'review-hub',        label: 'Review Hub',            Component: ReviewHubCard,          width: 'quarter', defaultH: 4, module: { id: '05', status: 'REVIEW',  glyph: 'reticle' } },
   { id: 'system-health',     label: 'System Health',         Component: SystemHealthWidget,     width: 'quarter', defaultH: 8, module: { id: '01', status: 'HEALTH',  glyph: 'matrix' } },
+  { id: 'network-exposure',  label: 'Network Exposure',      Component: NetworkExposureWidget,  width: 'quarter', defaultH: 5, module: { id: '07', status: 'EXPOSURE', glyph: 'reticle' } },
   { id: 'backup',            label: 'Backup',                Component: BackupWidget,           width: 'quarter', defaultH: 5 },
   { id: 'death-clock',       label: 'Death Clock',           Component: DeathClockWidget,       width: 'quarter', defaultH: 4 },
   { id: 'quick-stats',       label: 'Quick Stats',           Component: QuickStatsWidget,       width: 'quarter', defaultH: 3, gate: (s) => s.apps.length > 0 },

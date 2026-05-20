@@ -21,6 +21,7 @@
 
 import { runStagedLLM } from '../../lib/stageRunner.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { stripAnsi } from '../../lib/ansiStrip.js';
 import { getSeries, updateSeries, updateSeasonOnSeries, ARC_LOCKABLE_FIELDS } from './series.js';
 import { listIssues, updateIssue, recomputeIssueNumbersForSeries, getIssue, updateStageWithLatest, assertStageUnlocked } from './issues.js';
 import { emitRecordUpdated, withReexportSuppressed } from '../sharing/recordEvents.js';
@@ -1103,7 +1104,12 @@ export async function commitSeasonsWithRemap(currentSeries, { arc, seasons }) {
 // and the freshly-minted ones in the same resolve. Matching priority:
 //   1. normalized title equality (LLM was told to preserve titles when it can)
 //   2. `number` equality (only when the target number is unique among new ones)
-//   3. positional fallback (only when counts match and ordering aligns)
+//   3. positional fallback — only fires when exactly ONE unmatched on each
+//      side. With a single pair the mapping is forced and unambiguous; with
+//      2+ unmatched the LLM may have reshuffled/renamed everything and
+//      positional guessing silently invents wrong mappings (the bug that
+//      motivated this guard). Skipped runs log a warning and let those
+//      orphans fall through to the ungrouped bucket below.
 // Anything that can't be matched maps to null so the issue lands in the
 // ungrouped bucket instead of staying stranded behind a defunct id.
 export function buildSeasonRemap(droppedOldSeasons, newlyMintedSeasons) {
@@ -1137,20 +1143,47 @@ export function buildSeasonRemap(droppedOldSeasons, newlyMintedSeasons) {
     }
   }
 
-  // Pass 3: positional fallback when the unclaimed sets line up 1:1
+  // Pass 3: positional fallback — only when the unmatched sets are exactly
+  // 1↔1, where the pairing is forced.
   const oldRemaining = droppedOldSeasons.filter((s) => !remap.has(s.id));
   const newRemaining = newlyMintedSeasons.filter((n) => !claimed.has(n.id));
-  if (oldRemaining.length && oldRemaining.length === newRemaining.length) {
-    const oldSorted = [...oldRemaining].sort(
-      (a, b) => (a.number ?? 0) - (b.number ?? 0),
+  if (oldRemaining.length === 1 && newRemaining.length === 1) {
+    // Sanitize titles before logging — LLM-generated text can carry newlines,
+    // C0/C1 control chars, or ANSI escapes that would break the project's
+    // single-line logging convention or corrupt terminal output; fall back to
+    // the stable id when the title is empty after sanitization.
+    const safeLabel = (s) => {
+      const raw = typeof s.title === 'string' ? s.title : '';
+      // stripAnsi removes full ESC + CSI sequences (so "[31m" payload tails
+      // don't leak through). Note: per PLAN.md
+      // [ansistrip-osc-alternative-unreachable], OSC sequence bodies do leak
+      // through stripAnsi today — extremely unlikely in LLM-generated season
+      // titles, but called out here so a future fix to ANSI_PATTERN naturally
+      // tightens this path. The trailing control-char sweep catches any bare
+      // C0/C1 bytes the regex doesn't match.
+      const t = stripAnsi(raw)
+        .replace(/[\u0000-\u001F\u007F-\u009F]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 60);
+      return t || s.id;
+    };
+    console.warn(
+      `⚠️ buildSeasonRemap Pass 3 fired: forced 1↔1 pairing "${safeLabel(oldRemaining[0])}" → "${safeLabel(newRemaining[0])}"`,
     );
-    const newSorted = [...newRemaining].sort(
-      (a, b) => (a.number ?? 0) - (b.number ?? 0),
+    remap.set(oldRemaining[0].id, newRemaining[0].id);
+    claimed.add(newRemaining[0].id);
+  } else if (
+    oldRemaining.length === newRemaining.length
+    && oldRemaining.length > 1
+  ) {
+    // Suppression warn ONLY for the cases where the previous behavior would
+    // have fired the positional fallback (equal counts ≥ 2). Unequal counts
+    // were never positional-fallback candidates, so they don't deserve a
+    // "skipped" message.
+    console.warn(
+      `⚠️ buildSeasonRemap skipped positional fallback (${oldRemaining.length} old × ${newRemaining.length} new unmatched) — orphan issues route to ungrouped`,
     );
-    for (let i = 0; i < oldSorted.length; i += 1) {
-      remap.set(oldSorted[i].id, newSorted[i].id);
-      claimed.add(newSorted[i].id);
-    }
   }
 
   // Anything still unmapped → null (ungrouped bucket).

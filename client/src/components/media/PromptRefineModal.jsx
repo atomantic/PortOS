@@ -6,6 +6,7 @@ import Modal from '../ui/Modal';
 import useProviderModels from '../../hooks/useProviderModels';
 import { generateImage, generateVideo, refineMediaPrompt } from '../../services/api';
 import { getRenderConfigForItem } from './normalize';
+import { IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
 
 // Refine→queue forces text-to-video; the source image/last-frame from the
 // original render isn't carried into the modal, so image-to-video can't be
@@ -95,7 +96,7 @@ export default function PromptRefineModal({ item, open, onClose }) {
       // external image-gen mode returns synchronously with the filename and
       // no queue position — the render already completed by the time this
       // resolves. Local / codex / video return a queued jobId+position.
-      const isAlreadyDone = item.kind === 'image' && result?.mode === 'external';
+      const isAlreadyDone = item.kind === 'image' && result?.mode === IMAGE_GEN_MODE.EXTERNAL;
       const message = isAlreadyDone
         ? 'Render complete'
         : result.position ? `Queued #${result.position}` : 'Render queued';

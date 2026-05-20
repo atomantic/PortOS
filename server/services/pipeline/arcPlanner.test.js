@@ -1034,7 +1034,10 @@ describe('arcPlanner — buildSeasonRemap', () => {
     expect(remap.get('old1')).toBe('new2');
   });
 
-  it('falls back positionally when counts match and unique-number is ambiguous', () => {
+  it('pairs 2-old × 2-new entirely via unique-number when titles diverge but numbers match', () => {
+    // Pre-tightening this case used to flow through Pass 3 (positional fallback);
+    // now Pass 2 handles it because the numbers 1↔1 and 2↔2 are each unique.
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const dropped = [
       { id: 'old1', number: 1, title: 'A' },
       { id: 'old2', number: 2, title: 'B' },
@@ -1046,6 +1049,69 @@ describe('arcPlanner — buildSeasonRemap', () => {
     const remap = planner.buildSeasonRemap(dropped, minted);
     expect(remap.get('old1')).toBe('new1');
     expect(remap.get('old2')).toBe('new2');
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  it('falls back positionally when exactly one unmatched on each side (forced 1↔1)', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const dropped = [{ id: 'old1', number: 1, title: 'A' }];
+    const minted = [{ id: 'new1', number: 2, title: 'X' }];
+    const remap = planner.buildSeasonRemap(dropped, minted);
+    expect(remap.get('old1')).toBe('new1');
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Pass 3 fired'),
+    );
+    warnSpy.mockRestore();
+  });
+
+  it('sanitizes multi-line / control-char titles in the Pass 3 warning to keep logging single-line', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const dropped = [{ id: 'old1', number: 1, title: 'A\n\tWith newline' }];
+    const minted = [{ id: 'new1', number: 2, title: '' }];
+    planner.buildSeasonRemap(dropped, minted);
+    const msg = warnSpy.mock.calls[0][0];
+    expect(msg).not.toMatch(/\n/);
+    expect(msg).toContain('A With newline');
+    expect(msg).toContain('new1'); // empty title → falls back to id
+    warnSpy.mockRestore();
+  });
+
+  it('strips C0/C1 control chars and full ANSI CSI sequences from titles before logging', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const dropped = [{ id: 'old1', number: 1, title: 'Pre\x1b[31mEvil\x1b[0mSuffix\x07' }];
+    const minted = [{ id: 'new1', number: 2, title: 'Clean\u0085Title' }]; // U+0085 = NEL (C1)
+    planner.buildSeasonRemap(dropped, minted);
+    const msg = warnSpy.mock.calls[0][0];
+    expect(msg).not.toMatch(/[\u0000-\u001F\u007F-\u009F]/);
+    // stripAnsi removes the full CSI sequences (ESC + '[31m' / ESC + '[0m'),
+    // not just the ESC byte — so the '[31m' / '[0m' payload tails do NOT leak.
+    expect(msg).toContain('PreEvilSuffix');
+    expect(msg).not.toMatch(/\[31m|\[0m/);
+    expect(msg).toContain('Clean Title');
+    warnSpy.mockRestore();
+  });
+
+  it('drops orphans to null when 2+ unmatched on each side after pass 1/2', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    // Titles diverge AND numbers diverge → Pass 1 (title) and Pass 2 (unique
+    // number) leave 2-old × 2-new unmatched. Old behavior would positionally
+    // pair them; new behavior refuses and warns.
+    const dropped = [
+      { id: 'old1', number: 10, title: 'A' },
+      { id: 'old2', number: 20, title: 'B' },
+    ];
+    const minted = [
+      { id: 'new1', number: 1, title: 'X' },
+      { id: 'new2', number: 2, title: 'Y' },
+    ];
+    const remap = planner.buildSeasonRemap(dropped, minted);
+    expect(remap.get('old1')).toBeNull();
+    expect(remap.get('old2')).toBeNull();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('skipped positional fallback'),
+    );
+    warnSpy.mockRestore();
   });
 
   it('maps to null when nothing plausible exists', () => {

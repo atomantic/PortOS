@@ -60,6 +60,7 @@ import { startEpisodeVideoForIssue, ERR_NO_STORYBOARDS } from '../services/pipel
 import { generateSeriesTitleLogo } from '../services/pipeline/seriesTitleLogo.js';
 import { COMIC_PAGE_VARIANTS, slotKeyForVariant } from '../services/pipeline/owners.js';
 import { ASPECT_RATIOS, QUALITIES } from '../lib/creativeDirectorPresets.js';
+import { IMAGE_GEN_MODE } from '../services/imageGen/modes.js';
 import { extractScenes, SOURCE_KIND } from '../lib/sceneExtractor.js';
 import { buildComicPdf, PAGE_SIZES, DEFAULT_PAGE_SIZE, ERR_NO_RENDERED_PAGES } from '../services/pipeline/comicPdf.js';
 import {
@@ -144,13 +145,15 @@ const arcSchema = z.object({
 // pre-split legacy fields. Render-slot details (`proofImage`, `finalImage`)
 // arrive only from the render route's PATCH path, which builds them
 // server-side; PATCHes of the season metadata only carry the user-editable
-// `script`. Explicit shape (not `.passthrough()`) so the "all inputs
-// validated" CLAUDE.md convention holds for new fields.
+// `script`. `.passthrough()` keeps the door open for a "save full series"
+// round-trip echoing back server-built render fields (proofImage /
+// finalImage) without 400'ing — the parent seasonSchema is already
+// passthrough for the same reason.
 const seasonCoverSchema = z.object({
   script: z.string().max(8000).optional(),
   imageJobId: z.string().trim().max(200).nullable().optional(),
   prompt: z.string().max(16_000).nullable().optional(),
-});
+}).passthrough();
 
 const seasonSchema = z.object({
   id: z.string().trim().min(1).max(64).optional(),
@@ -276,7 +279,7 @@ const visualStageInputSchema = stageInputSchema.extend({
   // refine-LLM override. Sanitizer drops the field entirely when nothing
   // is set, so a `null` here clears it.
   genConfig: z.object({
-    imageMode: z.enum(['auto', 'local', 'codex']).optional(),
+    imageMode: z.enum(['auto', IMAGE_GEN_MODE.LOCAL, IMAGE_GEN_MODE.CODEX]).optional(),
     imageModelId: z.string().trim().max(200).nullable().optional(),
     refineProvider: z.string().trim().max(200).nullable().optional(),
     refineModel: z.string().trim().max(200).nullable().optional(),
@@ -347,7 +350,7 @@ const visualGenerateSchema = z.object({
   slugline: z.string().trim().max(200).optional(),
   negativePrompt: z.string().trim().max(2000).optional(),
   extraStyle: z.string().trim().max(2000).optional(),
-  mode: z.enum(['local', 'codex']).optional(),
+  mode: z.enum([IMAGE_GEN_MODE.LOCAL, IMAGE_GEN_MODE.CODEX]).optional(),
   modelId: z.string().trim().max(64).optional(),
   width: imageEdgeSchema,
   height: imageEdgeSchema,
@@ -374,7 +377,7 @@ const makeCoverRenderSchema = (scriptField) => z.object({
   [scriptField]: z.string().max(8000).optional(),
   negativePrompt: z.string().trim().max(2000).optional(),
   extraStyle: z.string().trim().max(2000).optional(),
-  mode: z.enum(['local', 'codex']).optional(),
+  mode: z.enum([IMAGE_GEN_MODE.LOCAL, IMAGE_GEN_MODE.CODEX]).optional(),
   modelId: z.string().trim().max(64).optional(),
   width: imageEdgeSchema,
   height: imageEdgeSchema,
@@ -410,7 +413,7 @@ const comicCoverConceptsSchema = z.object({
 const comicPageRenderSchema = z.object({
   negativePrompt: z.string().trim().max(2000).optional(),
   extraStyle: z.string().trim().max(2000).optional(),
-  mode: z.enum(['local', 'codex']).optional(),
+  mode: z.enum([IMAGE_GEN_MODE.LOCAL, IMAGE_GEN_MODE.CODEX]).optional(),
   modelId: z.string().trim().max(64).optional(),
   width: imageEdgeSchema,
   height: imageEdgeSchema,
@@ -740,8 +743,8 @@ const musicUpload = uploadSingle('track', {
 // The audio stage status reflects whether the *VO line list* is ready, since
 // music alone doesn't make an episode renderable. So music-only mutations
 // leave status at 'empty' when no lines exist and bump to 'edited' otherwise.
-const audioStatusAfterMusicChange = (issue) =>
-  ((issue.stages?.audio?.lines || []).length ? 'edited' : 'empty');
+const audioStatusAfterMusicChange = (stage) =>
+  (stage.lines?.length ? 'edited' : 'empty');
 
 router.get('/audio/music-library', asyncHandler(async (_req, res) => {
   res.json({ tracks: await listMusicLibrary() });
@@ -753,16 +756,22 @@ router.post('/issues/:id/stages/audio/music/upload', musicUpload, asyncHandler(a
       status: 400, code: 'PIPELINE_MUSIC_NO_FILE',
     });
   }
-  const issue = await issuesSvc.getIssue(req.params.id).catch((err) => { throw mapServiceError(err); });
+  // Guard the filesystem write that follows — `updateStageWithLatest`'s 404
+  // would otherwise orphan the imported file in the music library.
+  await issuesSvc.getIssue(req.params.id).catch((err) => { throw mapServiceError(err); });
   const { filename, sizeBytes } = await importUploadedTrack(req.file.path, req.file.originalname);
   const label = typeof req.body?.label === 'string' && req.body.label.trim()
     ? req.body.label.trim()
     : null;
-  const { issue: updatedIssue, stage } = await issuesSvc.updateStage(req.params.id, 'audio', {
-    status: audioStatusAfterMusicChange(issue),
-    music: { source: MUSIC_SOURCE.UPLOAD, trackFilename: filename, label },
-    errorMessage: '',
-  });
+  const { issue: updatedIssue, stage } = await issuesSvc.updateStageWithLatest(
+    req.params.id,
+    'audio',
+    (current) => ({
+      status: audioStatusAfterMusicChange(current),
+      music: { source: MUSIC_SOURCE.UPLOAD, trackFilename: filename, label },
+      errorMessage: '',
+    }),
+  ).catch((err) => { throw mapServiceError(err); });
   res.json({ issue: updatedIssue, stage, music: stage.music, sizeBytes });
 }));
 
@@ -779,26 +788,32 @@ router.post('/issues/:id/stages/audio/music/attach', asyncHandler(async (req, re
       status: 404, code: 'PIPELINE_MUSIC_NOT_FOUND',
     });
   }
-  const issue = await issuesSvc.getIssue(req.params.id).catch((err) => { throw mapServiceError(err); });
-  const { issue: updatedIssue, stage } = await issuesSvc.updateStage(req.params.id, 'audio', {
-    status: audioStatusAfterMusicChange(issue),
-    music: {
-      source: MUSIC_SOURCE.LIBRARY,
-      trackFilename: body.trackFilename,
-      label: body.label?.trim() || found.label,
-    },
-    errorMessage: '',
-  });
+  const { issue: updatedIssue, stage } = await issuesSvc.updateStageWithLatest(
+    req.params.id,
+    'audio',
+    (current) => ({
+      status: audioStatusAfterMusicChange(current),
+      music: {
+        source: MUSIC_SOURCE.LIBRARY,
+        trackFilename: body.trackFilename,
+        label: body.label?.trim() || found.label,
+      },
+      errorMessage: '',
+    }),
+  ).catch((err) => { throw mapServiceError(err); });
   res.json({ issue: updatedIssue, stage, music: stage.music });
 }));
 
 router.delete('/issues/:id/stages/audio/music', asyncHandler(async (req, res) => {
-  const issue = await issuesSvc.getIssue(req.params.id).catch((err) => { throw mapServiceError(err); });
-  const { issue: updatedIssue, stage } = await issuesSvc.updateStage(req.params.id, 'audio', {
-    status: audioStatusAfterMusicChange(issue),
-    music: null,
-    errorMessage: '',
-  });
+  const { issue: updatedIssue, stage } = await issuesSvc.updateStageWithLatest(
+    req.params.id,
+    'audio',
+    (current) => ({
+      status: audioStatusAfterMusicChange(current),
+      music: null,
+      errorMessage: '',
+    }),
+  ).catch((err) => { throw mapServiceError(err); });
   res.json({ issue: updatedIssue, stage });
 }));
 
@@ -1119,65 +1134,70 @@ router.post('/series/:id/seasons/:seasonId/cover-concepts/generate', asyncHandle
   res.json(result);
 }));
 
+// Cover-render factory — shared by the four cover-render routes (volume
+// front/back + comic-issue front/back).
+//
+// Script-gate semantics: only update `script` when the body carried the
+// field as a string — absent preserves, empty-string intentionally clears.
+// Blur-save (PATCH stages/.../cover) owns the script field and races
+// against render; writing the *resolved* value (which falls back to the
+// persisted record's script when absent) would clobber a concurrent blur.
+const buildCoverPatchFn = ({ slotField, scriptField, body, slotKey, slotRecord }) => (current) => {
+  const currentSlot = current?.[slotField] || {};
+  const nextSlot = { ...currentSlot, [slotKey]: slotRecord };
+  if (typeof body[scriptField] === 'string') nextSlot.script = body[scriptField];
+  return { [slotField]: nextSlot };
+};
+
+const makeCoverRenderHandler = ({
+  schema, slotField, scriptField, enqueue, applyWrite, buildResponse,
+}) => asyncHandler(async (req, res) => {
+  const body = validateRequest(schema, req.body ?? {});
+  const result = await enqueue(req, body).catch((err) => { throw mapServiceError(err); });
+
+  const slotKey = slotKeyForVariant(result.variant);
+  const slotRecord = buildRenderSlot({
+    slotKey, jobId: result.jobId, prompt: result.prompt,
+    width: body.width, height: body.height, fromProof: result.fromProof,
+  });
+  const computeFn = buildCoverPatchFn({ slotField, scriptField, body, slotKey, slotRecord });
+  const writeResult = await applyWrite(req, computeFn)
+    .catch((err) => { throw mapServiceError(err); });
+  res.json(buildResponse({ result, writeResult, req }));
+});
+
+const buildVolumeCoverResponse = ({ result, writeResult: series, req }) => {
+  const season = (series.seasons || []).find((s) => s.id === req.params.seasonId);
+  return { ...result, season, series };
+};
+
+const updateVolumeSeason = (req, computeFn) =>
+  seriesSvc.updateSeasonOnSeries(req.params.id, req.params.seasonId, computeFn);
+
+const updateComicPagesStage = (req, computeFn) =>
+  issuesSvc.updateStageWithLatest(req.params.id, 'comicPages', computeFn);
+
 // Render the volume front cover. Persists the in-flight render slot onto
 // season.cover via seriesSvc.updateSeasonOnSeries (queue-serialized) — the
 // season-cover filename hook stamps the completed filename later.
 // (Missing series / season surface as PIPELINE_SEASON_NOT_FOUND from
 // enqueueVolumeCover's loadSeasonContext, mapped to 404 by mapServiceError.)
-router.post('/series/:id/seasons/:seasonId/cover/render', asyncHandler(async (req, res) => {
-  const body = validateRequest(volumeCoverRenderSchema, req.body ?? {});
-  const result = await enqueueVolumeCover(req.params.id, req.params.seasonId, body)
-    .catch((err) => { throw mapServiceError(err); });
-
-  const slotKey = slotKeyForVariant(result.variant);
-  const slotRecord = buildRenderSlot({
-    slotKey, jobId: result.jobId, prompt: result.prompt,
-    width: body.width, height: body.height, fromProof: result.fromProof,
-  });
-  const series = await seriesSvc.updateSeasonOnSeries(
-    req.params.id,
-    req.params.seasonId,
-    (cur) => {
-      const currentCover = cur?.cover || {};
-      return {
-        cover: {
-          ...currentCover,
-          script: result.coverScript || '',
-          [slotKey]: slotRecord,
-        },
-      };
-    },
-  ).catch((err) => { throw mapServiceError(err); });
-  const season = (series.seasons || []).find((s) => s.id === req.params.seasonId);
-  res.json({ ...result, season, series });
+router.post('/series/:id/seasons/:seasonId/cover/render', makeCoverRenderHandler({
+  schema: volumeCoverRenderSchema,
+  slotField: 'cover',
+  scriptField: 'coverScript',
+  enqueue: (req, body) => enqueueVolumeCover(req.params.id, req.params.seasonId, body),
+  applyWrite: updateVolumeSeason,
+  buildResponse: buildVolumeCoverResponse,
 }));
 
-router.post('/series/:id/seasons/:seasonId/back-cover/render', asyncHandler(async (req, res) => {
-  const body = validateRequest(volumeBackCoverRenderSchema, req.body ?? {});
-  const result = await enqueueVolumeBackCover(req.params.id, req.params.seasonId, body)
-    .catch((err) => { throw mapServiceError(err); });
-
-  const slotKey = slotKeyForVariant(result.variant);
-  const slotRecord = buildRenderSlot({
-    slotKey, jobId: result.jobId, prompt: result.prompt,
-    width: body.width, height: body.height, fromProof: result.fromProof,
-  });
-  const series = await seriesSvc.updateSeasonOnSeries(
-    req.params.id,
-    req.params.seasonId,
-    (cur) => {
-      const currentBack = cur?.backCover || {};
-      return {
-        backCover: {
-          ...currentBack,
-          script: result.backCoverScript || '',
-          [slotKey]: slotRecord,
-        },
-      };
-    },
-  ).catch((err) => { throw mapServiceError(err); });
-  const season = (series.seasons || []).find((s) => s.id === req.params.seasonId);
-  res.json({ ...result, season, series });
+router.post('/series/:id/seasons/:seasonId/back-cover/render', makeCoverRenderHandler({
+  schema: volumeBackCoverRenderSchema,
+  slotField: 'backCover',
+  scriptField: 'backCoverScript',
+  enqueue: (req, body) => enqueueVolumeBackCover(req.params.id, req.params.seasonId, body),
+  applyWrite: updateVolumeSeason,
+  buildResponse: buildVolumeCoverResponse,
 }));
 
 // Compile a trade-paperback PDF: volume front → for each issue
@@ -1521,71 +1541,32 @@ router.post('/issues/:id/cover-concepts/generate', asyncHandler(async (req, res)
 // returned jobId on stages.comicPages.cover.imageJobId. Pass `coverScript`
 // in the body to override or update the persisted cover concept in the
 // same call. Returns { jobId, mode, prompt, cover, issue, stage }.
-router.post('/issues/:id/stages/comicPages/cover/render', asyncHandler(async (req, res) => {
-  const body = validateRequest(comicCoverRenderSchema, req.body ?? {});
-  // Make sure the issue exists up front — defense in depth + clean 404
-  // before we spend the bible-context load.
-  await issuesSvc.getIssue(req.params.id).catch((err) => { throw mapServiceError(err); });
-
-  const result = await enqueueComicCover(req.params.id, body)
-    .catch((err) => { throw mapServiceError(err); });
-
-  // Seed the in-flight render into the matching slot. The filename hook
-  // stamps `filename` on completion; `filename: null` here lets the UI
-  // render an "in-flight" thumb without showing the previous render's
-  // image while the new job is running.
-  const slotKey = slotKeyForVariant(result.variant);
-  const slotRecord = buildRenderSlot({
-    slotKey, jobId: result.jobId, prompt: result.prompt,
-    width: body.width, height: body.height, fromProof: result.fromProof,
-  });
-  const { issue: updatedIssue, stage } = await issuesSvc.updateStageWithLatest(
-    req.params.id,
-    'comicPages',
-    (currentStage) => {
-      const currentCover = currentStage?.cover || {};
-      return {
-        cover: {
-          ...currentCover,
-          script: result.coverScript || '',
-          [slotKey]: slotRecord,
-        },
-      };
-    },
-  ).catch((err) => { throw mapServiceError(err); });
-  res.json({ ...result, cover: stage.cover, issue: updatedIssue, stage });
+// Missing issue surfaces as PIPELINE_ISSUE_NOT_FOUND from enqueueComicCover's
+// loadBibleContext (its first step is getIssue), mapped to 404 by
+// mapServiceError. The seeded slot's `filename: null` lets the UI render an
+// "in-flight" thumb without showing the previous render while the new job is
+// running; the filename hook stamps `filename` on completion.
+router.post('/issues/:id/stages/comicPages/cover/render', makeCoverRenderHandler({
+  schema: comicCoverRenderSchema,
+  slotField: 'cover',
+  scriptField: 'coverScript',
+  enqueue: (req, body) => enqueueComicCover(req.params.id, body),
+  applyWrite: updateComicPagesStage,
+  buildResponse: ({ result, writeResult: { issue, stage } }) =>
+    ({ ...result, cover: stage.cover, issue, stage }),
 }));
 
 // Render the comic-issue BACK cover. Same flow as the front-cover route;
 // differs in the prompt (no masthead, explicit no-text negative) and the
 // persisted slot (`stages.comicPages.backCover.{proofImage|finalImage}`).
-router.post('/issues/:id/stages/comicPages/back-cover/render', asyncHandler(async (req, res) => {
-  const body = validateRequest(comicBackCoverRenderSchema, req.body ?? {});
-  await issuesSvc.getIssue(req.params.id).catch((err) => { throw mapServiceError(err); });
-
-  const result = await enqueueComicBackCover(req.params.id, body)
-    .catch((err) => { throw mapServiceError(err); });
-
-  const slotKey = slotKeyForVariant(result.variant);
-  const slotRecord = buildRenderSlot({
-    slotKey, jobId: result.jobId, prompt: result.prompt,
-    width: body.width, height: body.height, fromProof: result.fromProof,
-  });
-  const { issue: updatedIssue, stage } = await issuesSvc.updateStageWithLatest(
-    req.params.id,
-    'comicPages',
-    (currentStage) => {
-      const currentBack = currentStage?.backCover || {};
-      return {
-        backCover: {
-          ...currentBack,
-          script: result.backCoverScript || '',
-          [slotKey]: slotRecord,
-        },
-      };
-    },
-  ).catch((err) => { throw mapServiceError(err); });
-  res.json({ ...result, backCover: stage.backCover, issue: updatedIssue, stage });
+router.post('/issues/:id/stages/comicPages/back-cover/render', makeCoverRenderHandler({
+  schema: comicBackCoverRenderSchema,
+  slotField: 'backCover',
+  scriptField: 'backCoverScript',
+  enqueue: (req, body) => enqueueComicBackCover(req.params.id, body),
+  applyWrite: updateComicPagesStage,
+  buildResponse: ({ result, writeResult: { issue, stage } }) =>
+    ({ ...result, backCover: stage.backCover, issue, stage }),
 }));
 
 // Render a full comic page (multi-panel layout in one image) — the

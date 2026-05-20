@@ -3,9 +3,13 @@
  * Provisions a TLS cert for PortOS at data/certs/{cert,key}.pem.
  *
  * Prefers a real Let's Encrypt cert via `tailscale cert` (browsers trust it,
- * no click-through). Falls back to a self-signed cert covering localhost +
- * every non-internal IPv4 on the host (including the Tailscale IP) when
- * Tailscale HTTPS isn't available.
+ * no click-through). Will only generate a self-signed cert when the user opts
+ * in via `--self-signed` OR a self-signed cert is already present on disk
+ * (renewal/IP-rotation path). On a fresh install without Tailscale and without
+ * `--self-signed`, this script exits cleanly and PortOS keeps serving plain
+ * HTTP on :5555 — silently flipping a vanilla install to HTTPS with a
+ * self-signed cert breaks the documented `http://localhost:5555` URL and
+ * forces a click-through warning, which is a worse first-run UX than HTTP.
  *
  * Why we prefer Tailscale: Let's Encrypt does not issue certs for bare IPs.
  * Tailscale owns `ts.net` and provisions LE certs against your tailnet's
@@ -28,13 +32,12 @@ import { networkInterfaces } from 'os';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { findTailscale } from '../server/lib/tailscale.js';
+import { hasTailscaleCert } from '../lib/tailscale-https.js';
+import { certPaths } from '../lib/certPaths.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
-const CERT_DIR = join(ROOT, 'data', 'certs');
-const KEY_PATH = join(CERT_DIR, 'key.pem');
-const CERT_PATH = join(CERT_DIR, 'cert.pem');
-const META_PATH = join(CERT_DIR, 'meta.json');
+const { dir: CERT_DIR, cert: CERT_PATH, key: KEY_PATH, meta: META_PATH } = certPaths(join(ROOT, 'data'));
 
 const FORCE = process.argv.includes('--force');
 const SELF_SIGNED_ONLY = process.argv.includes('--self-signed');
@@ -131,7 +134,14 @@ ${buildSANs(ips)}
 
 function readMeta() {
   if (!existsSync(META_PATH)) return null;
-  return JSON.parse(readFileSync(META_PATH, 'utf-8'));
+  try {
+    return JSON.parse(readFileSync(META_PATH, 'utf-8'));
+  } catch {
+    // Partial/corrupt meta.json (e.g. interrupted write) — treat as absent so
+    // the script falls through to its normal "no usable cert state" branches
+    // instead of crashing `npm start` before the server can even boot HTTP.
+    return null;
+  }
 }
 
 function certExpiresAt() {
@@ -147,7 +157,11 @@ function daysUntil(date) {
 
 function shouldRegenTailscale(hostname) {
   if (FORCE) return true;
-  if (!existsSync(CERT_PATH) || !existsSync(KEY_PATH)) return true;
+  // hasTailscaleCert covers BOTH file presence AND PEM parseability — so a
+  // half-written cert from an interrupted prior run regenerates instead of
+  // being preserved (the file would be present but createSecureContext would
+  // throw at server boot).
+  if (!hasTailscaleCert(CERT_DIR)) return true;
   const meta = readMeta();
   if (!meta || meta.mode !== 'tailscale' || meta.hostname !== hostname) return true;
   const expiry = certExpiresAt();
@@ -159,7 +173,7 @@ function shouldRegenTailscale(hostname) {
 
 function shouldRegenSelfSigned(ips) {
   if (FORCE) return true;
-  if (!existsSync(CERT_PATH) || !existsSync(KEY_PATH)) return true;
+  if (!hasTailscaleCert(CERT_DIR)) return true;
   const meta = readMeta();
   if (!meta || meta.mode !== 'self-signed') return true;
   const prev = (meta.ips || []).slice().sort().join(',');
@@ -178,6 +192,51 @@ function trySelfSigned() {
   }
 }
 
+// Implicit fallback gate. Decides what to do (and what to tell the user) when
+// the Tailscale provisioning path didn't run / failed. Three cases — picked by
+// what's actually on disk, because `server/lib/tailscale-https.js` boots HTTPS
+// purely on cert+key file presence (not on meta.mode):
+//   1. Self-signed cert on disk → renewal path (regenerate on IP changes).
+//   2. Tailscale (or unknown-mode) cert on disk → keep the existing cert in
+//      place; the server will still boot HTTPS. We deliberately don't silently
+//      flip cert types or delete the user's files. Tell the user accurately.
+//   3. No cert files at all → server boots HTTP. Print HTTPS opt-in guidance.
+// Case 2 is what stops the "Tailscale was broken since last run, but cert
+// files are stale on disk and the server still serves TLS" surprise.
+function maybeFallbackSelfSigned() {
+  const meta = readMeta();
+  const hasCert = hasTailscaleCert(CERT_DIR);
+
+  // Files exist but are unparseable (interrupted provisioning). hasTailscaleCert
+  // already returned false, so the server will boot HTTP — but the user has
+  // cert files on disk wondering why HTTPS isn't active. Tell them explicitly.
+  if (!hasCert && existsSync(CERT_PATH) && existsSync(KEY_PATH)) {
+    console.log(`⚠️  data/certs/{cert,key}.pem present but unreadable — server will boot HTTP-only.`);
+    console.log(`   To recover: \`npm run setup:cert -- --self-signed\` to regenerate, or delete the files to revert.`);
+    return;
+  }
+
+  if (hasCert && meta?.mode === 'self-signed') {
+    trySelfSigned();
+    return;
+  }
+
+  if (hasCert) {
+    const modeLabel = meta?.mode ? `existing ${meta.mode} cert` : 'existing cert';
+    console.log(`ℹ️  Keeping ${modeLabel} at data/certs/{cert,key}.pem — server will boot HTTPS on :5555.`);
+    if (meta?.mode === 'tailscale') {
+      console.log(`   To refresh the LE cert, fix Tailscale and re-run \`npm run setup:cert\`.`);
+    }
+    console.log(`   To revert to HTTP-only, delete data/certs/{cert,key}.pem and restart.`);
+    return;
+  }
+
+  console.log(`ℹ️  Staying HTTP-only on :5555 (no Tailscale cert provisioned).`);
+  console.log(`   To enable HTTPS (required for in-browser mic), choose one:`);
+  console.log(`     • Install Tailscale + enable HTTPS in the tailnet admin, then \`npm run setup:cert\``);
+  console.log(`     • Generate a self-signed cert (browser warning): \`npm run setup:cert -- --self-signed\``);
+}
+
 if (SELF_SIGNED_ONLY) {
   trySelfSigned();
   process.exit(0);
@@ -185,8 +244,8 @@ if (SELF_SIGNED_ONLY) {
 
 const bin = findTailscale();
 if (!bin) {
-  console.log(`ℹ️  Tailscale CLI not found — falling back to self-signed cert.`);
-  trySelfSigned();
+  console.log(`ℹ️  Tailscale CLI not found.`);
+  maybeFallbackSelfSigned();
   process.exit(0);
 }
 
@@ -194,15 +253,15 @@ let status;
 try {
   status = tailscaleStatus(bin);
 } catch (err) {
-  console.log(`ℹ️  tailscale status failed (${err.message}) — falling back to self-signed cert.`);
-  trySelfSigned();
+  console.log(`ℹ️  tailscale status failed (${err.message}).`);
+  maybeFallbackSelfSigned();
   process.exit(0);
 }
 
 const hostname = tailscaleHostname(status);
 if (!hostname || status.BackendState !== 'Running') {
-  console.log(`ℹ️  Tailscale not running or no DNSName — falling back to self-signed cert.`);
-  trySelfSigned();
+  console.log(`ℹ️  Tailscale not running or no DNSName.`);
+  maybeFallbackSelfSigned();
   process.exit(0);
 }
 
@@ -217,15 +276,15 @@ console.log(`🔒 Fetching Let's Encrypt cert for ${hostname} via Tailscale...`)
 try {
   runTailscaleCert(bin, hostname);
 } catch (err) {
-  console.log(`⚠️  tailscale cert failed (${err.message}) — falling back to self-signed cert.`);
+  console.log(`⚠️  tailscale cert failed (${err.message}).`);
   console.log(`   (Common cause: HTTPS Certificates not enabled in the tailnet admin console at login.tailscale.com/admin/dns)`);
-  trySelfSigned();
+  maybeFallbackSelfSigned();
   process.exit(0);
 }
 
 if (!existsSync(CERT_PATH) || !existsSync(KEY_PATH)) {
-  console.log(`⚠️  tailscale cert returned success but files missing — falling back to self-signed.`);
-  trySelfSigned();
+  console.log(`⚠️  tailscale cert returned success but files missing.`);
+  maybeFallbackSelfSigned();
   process.exit(0);
 }
 

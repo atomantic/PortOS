@@ -8,7 +8,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useParams, useSearchParams } from 'react-router-dom';
 import {
   Plus, Trash2, Sparkles, Wand2, Loader2, Save, FolderOpen,
   Edit3, X, MessageSquarePlus, Play, Lock, Unlock,
@@ -22,12 +22,13 @@ import {
   renderWorld, listWorldRuns, getProviders, refineWorldPrompts, WORLD_CATEGORIES,
   WORLD_CATEGORY_KEY_MAX, COMPOSITE_PROMPT_MAX, WORLD_LOGLINE_MAX,
   WORLD_PREMISE_MAX, WORLD_STYLE_NOTES_MAX, WORLD_LOCKABLE_FIELDS,
-  ensureInfluences, isInfluenceLockField, mergeInfluencesWithLocks,
+  ensureInfluences, isInfluenceLockField,
   listImageModels, listLorasFull, getSettings,
 } from '../services/api';
 import useClickOutside from '../hooks/useClickOutside';
 import { useLocalStoragePersisted } from '../hooks/useLocalStorageBool';
 import useUniverseAction from '../hooks/useUniverseAction';
+import { useUniverseNav } from '../hooks/useUniverseNav';
 import InfluenceChipsInput from '../components/universeBuilder/InfluenceChipsInput';
 import ImageGenSettingsForm from '../components/imageGen/ImageGenSettingsForm';
 import { RUNNER_FAMILIES } from '../lib/runnerFamilies';
@@ -39,15 +40,18 @@ import EntryThumbSlot from '../components/universe/EntryThumbSlot';
 import useMediaJobProgress from '../hooks/useMediaJobProgress';
 import MediaPreview from '../components/media/MediaPreview';
 import useImagePreviewActions from '../hooks/useImagePreviewActions';
+import usePreviewRoute from '../hooks/usePreviewRoute';
 import { useMediaAnnotations } from '../hooks/useMediaAnnotations';
 import { listImageGallery } from '../services/apiImageVideo';
 import TabPills from '../components/ui/TabPills';
 import { deriveAvailableBackends, IMAGE_GEN_MODE } from '../lib/imageGenBackends';
 import { PIPELINE_IMAGE_DEFAULTS, readPipelineImageSettings } from '../lib/pipelineImageDefaults';
-import { normalizeSlugline } from '../lib/scenePrompt';
-import { hasCanonDescriptorContent } from '../lib/canonPrompt';
+import { hasCanonDescriptorContent, descriptorForCanonEntry } from '../lib/canonPrompt';
 import { upsertByIdPrepend } from '../lib/upsertByIdPrepend';
 import { BIBLE_LIMITS } from '../lib/bibleLimits';
+import {
+  mergeVariations, mergeCanonByName, mergeExpandIntoDraft, extractPreservedFromDraft,
+} from '../lib/universeBuilderExpand';
 
 // Mirror of server-side appendEntryImageRef cap (most recent N wins). Used
 // so optimistic on-completion appends produce the same final array shape
@@ -111,96 +115,6 @@ const normalizeCategoryKey = (raw) => (raw || '')
   .replace(/^_+|_+$/g, '')
   .replace(/_{2,}/g, '_')
   .slice(0, WORLD_CATEGORY_KEY_MAX);
-
-// Merge `fresh` items after `existing`, case-insensitively deduping by label.
-// Used by both Expand (locked + LLM result) and per-category Generate (current
-// + LLM additions); pinned/existing entries keep their slot at the top.
-// Rows with a missing/non-string label (older universes pre-rename, partial
-// LLM payloads) are dropped from both sides — keeping them in `merged` while
-// excluding from the dedup Set would let a fresh row with the same missing
-// label silently duplicate.
-const mergeVariations = (existing, fresh) => {
-  const merged = [];
-  const seen = new Set();
-  for (const v of [...(existing || []), ...(fresh || [])]) {
-    const key = v?.label?.toLowerCase();
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
-    merged.push(v);
-  }
-  return merged;
-};
-
-// Merge LLM-expanded canon entries into the draft's existing canon array.
-// Existing entries always win on collision (lock or no — the user authored
-// them; the LLM's repeat is a hallucination at this point). Mirrors the
-// server-side dedupe in backfillCanonFromCategories + storyBible's
-// MERGE_CONFIG (`storyBible.js` keyFields).
-//
-// Identity rules are kind-aware to match the server's MERGE_CONFIG:
-//   - characters/objects → `normalizeBibleName` (trim + lowercase) on `name`
-//                          AND `aliases[]`. Without aliases, an existing
-//                          character "Ashley" with alias "Ash" would not
-//                          collide with an LLM-returned "Ash", producing a
-//                          duplicate canon entry the user has to merge by hand.
-//   - places             → `normalizeSlugline` for BOTH `slugline` AND `name`
-//                          (`storyBible.js` MERGE_CONFIG.place.keyFields).
-//                          Without this, sluglines that differ only in dash
-//                          style or punctuation ("INT. FOUNDRY CITY — DAY"
-//                          vs "INT FOUNDRY CITY - DAY") would land as two
-//                          separate place-canon entries, and `Foundry-City`
-//                          vs `Foundry City` would duplicate by name even
-//                          though every downstream lookup treats them as one.
-// Match server's BIBLE_LIMITS.ENTRIES_PER_BIBLE_MAX so the client doesn't
-// optimistically display + count entries the server will silently truncate
-// at sanitize time. Without this cap, the post-expand toast can claim
-// "+12 canon entries" while the server-saved record only kept some of them.
-const CLIENT_CANON_MAX = 200;
-
-const mergeCanonByName = (existing, fresh, kind = 'character') => {
-  // Empty/missing fresh — return `existing` unchanged (preserve reference so
-  // a no-op expand doesn't trigger downstream identity-comparing effects).
-  if (!fresh?.length) return existing || [];
-  const isPlace = kind === 'place';
-  const normName = isPlace
-    ? (s) => (typeof s === 'string' ? normalizeSlugline(s) : '')
-    : (s) => (typeof s === 'string' ? s.trim().toLowerCase() : '');
-  const normSlug = (s) => (typeof s === 'string' ? normalizeSlugline(s) : '');
-  // Aliases participate in identity for character/object only — places use
-  // slugline collision instead (the server's MERGE_CONFIG.place has no
-  // aliases field).
-  const aliasKeys = (entry) => {
-    if (isPlace || !Array.isArray(entry?.aliases)) return [];
-    return entry.aliases.map(normName).filter(Boolean);
-  };
-  const seen = new Set();
-  for (const e of existing || []) {
-    if (e?.name) seen.add(normName(e.name));
-    if (e?.slugline) seen.add(normSlug(e.slugline));
-    for (const k of aliasKeys(e)) seen.add(k);
-  }
-  const merged = [...(existing || [])];
-  for (const e of fresh) {
-    const nameKey = normName(e?.name);
-    const sluglineKey = normSlug(e?.slugline);
-    const aliasMatches = aliasKeys(e);
-    const collides = (nameKey && seen.has(nameKey))
-      || (sluglineKey && seen.has(sluglineKey))
-      || aliasMatches.some((k) => seen.has(k));
-    // On collision, still register every identity key the fresh entry
-    // carried — so a *later* fresh entry with overlapping aliases/sluglines
-    // is recognized as a within-batch duplicate too. Without this, fresh
-    // entry A (collides on alias) gets skipped silently and fresh entry B
-    // (uses A's primary name) slips in as a duplicate of the existing record.
-    if (nameKey) seen.add(nameKey);
-    if (sluglineKey) seen.add(sluglineKey);
-    for (const k of aliasMatches) seen.add(k);
-    if (collides) continue;
-    if (merged.length >= CLIENT_CANON_MAX) break;
-    merged.push(e);
-  }
-  return merged;
-};
 
 const humanizeCategory = (key) => CATEGORY_LABELS[key]
   || key.replace(/_/g, ' ').replace(/\b\w/g, (ch) => ch.toUpperCase());
@@ -382,7 +296,7 @@ const LIST_ID = 'universe-selector-list';
 const OPTION_ID_PREFIX = 'universe-option-';
 const CREATE_OPTION_ID = 'universe-option-create';
 
-function UniverseSelector({ universes, selectedId, value, onChange, onPick, onCreate, busy }) {
+export function UniverseSelector({ universes, selectedId, value, onChange, onPick, onCreate, busy }) {
   const wrapRef = useRef(null);
   const [open, setOpen] = useState(false);
   const [activeIdx, setActiveIdx] = useState(0);
@@ -394,14 +308,20 @@ function UniverseSelector({ universes, selectedId, value, onChange, onPick, onCr
   const trimmed = (value || '').trim();
   const lower = trimmed.toLowerCase();
 
+  // When the input still mirrors the selected universe's name, the user is
+  // browsing the list (just clicked the chevron) rather than searching — show
+  // every universe instead of filtering down to the one we then exclude.
+  const selectedName = (universes || []).find((u) => u.id === selectedId)?.name || '';
+  const isBrowsing = !!selectedId && lower === selectedName.trim().toLowerCase();
+
   // Exclude current — clicking it would be a navigation no-op.
   const filtered = useMemo(() => {
     if (!Array.isArray(universes) || universes.length === 0) return [];
     return universes
       .filter((u) => u.id !== selectedId)
-      .filter((u) => !lower || (u.name || '').toLowerCase().includes(lower))
+      .filter((u) => isBrowsing || !lower || (u.name || '').toLowerCase().includes(lower))
       .slice(0, 20);
-  }, [universes, selectedId, lower]);
+  }, [universes, selectedId, lower, isBrowsing]);
 
   // exactMatch still considers the current one so renaming-to-same doesn't
   // surface a misleading Create option.
@@ -549,19 +469,14 @@ export default function UniverseBuilder() {
   // and /media/universe-builder(/:universeId) — strip any trailing /<id> off the
   // current pathname to derive the base for navigation back to the list.
   const params = useParams();
-  const navigate = useNavigate();
   const location = useLocation();
   const selectedId = params.universeId || null;
-  const basePath = location.pathname.replace(/\/universe-builder(?:\/.*)?$/, '/universe-builder');
-  // Preserve the `?tab=&bucket=` (and `?series=`) query string so the
-  // auto-save → create path doesn't snap the user back to the Bible tab
+  // `goToWorld` preserves `location.search` (e.g. `?tab=&bucket=&series=`) so
+  // the auto-save → create path doesn't snap the user back to the Bible tab
   // after they triggered Generate From Idea from inside Cast/Places/Objects.
   // The stale-bucket effect already strips any bucket that no longer exists
   // under the new universe's categories.
-  const goToWorld = (id) => navigate({
-    pathname: id ? `${basePath}/${encodeURIComponent(id)}` : basePath,
-    search: location.search,
-  });
+  const goToWorld = useUniverseNav();
 
   const [universes, setWorlds] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -693,11 +608,15 @@ export default function UniverseBuilder() {
   );
 
   const [runs, setRuns] = useState([]);
-  // Page-level lightbox state for variation + composite-sheet thumbs. Canon
-  // entries route through `UniverseCanonSection`'s own MediaPreview; this
-  // one covers the category-bucket rows so clicking a variation thumb opens
-  // the same full-detail modal the gallery / history uses.
-  const [preview, setPreview] = useState(null);
+  // Page-level lightbox state. Single MediaPreview at this level covers
+  // EVERY thumb on the page: variations, composite sheets, canon imageRefs,
+  // and character reference sheets — so clicking any image opens the same
+  // full-detail modal History / Collections / ImageGen use, with the same
+  // actions (Refine / Remix / SendToVideo / Clean / AddToCollection /
+  // Download / notes). Canon previews used to live inside UniverseCanonSection
+  // and showed only a refine/add/download subset against the character
+  // description; lifting state up here is what unifies them. URL-driven
+  // (`?preview=<filename>`) via `usePreviewRoute(previewItems)` below.
   // Filename → full image-metadata-sidecar record (prompt, negativePrompt,
   // modelId, width, height, seed, etc.). Hydrates `previewItems` with the
   // ACTUAL prompt that was used to render the image — without this the
@@ -731,11 +650,17 @@ export default function UniverseBuilder() {
   const { annotations, updateAnnotation } = useMediaAnnotations();
   const previewItems = useMemo(() => {
     const out = [];
+    // Dedupe by full namespaced key (`image:<filename>` vs
+    // `canon-sheet:<filename>`) so a gallery image and a character reference
+    // sheet that share a basename can coexist in the items list — without the
+    // namespace, the first-pushed item would suppress the second and the
+    // preview-URL resolver would never see the other asset.
     const seen = new Set();
     const pushFilename = (filename, label) => {
       if (typeof filename !== 'string' || !filename) return;
-      if (seen.has(filename)) return;
-      seen.add(filename);
+      const key = `image:${filename}`;
+      if (seen.has(key)) return;
+      seen.add(key);
       // Pull the real prompt + render settings out of the gallery metadata
       // map when available so the lightbox shows the full prompt that was
       // sent to the renderer (with universe style influences, variation
@@ -782,8 +707,45 @@ export default function UniverseBuilder() {
       const refs = Array.isArray(s?.imageRefs) ? s.imageRefs : [];
       for (const f of refs) pushFilename(f, `Composite · ${s.label}`);
     }
+    // Canon refs — characters / places / objects. Hydrate from the gallery
+    // sidecar so the modal shows the ACTUAL render prompt (the same one the
+    // History page sees), not just the character description. The descriptor
+    // string is only used as a fallback label when no sidecar exists (legacy
+    // canon renders without metadata). Character reference sheets live in a
+    // different static prefix (`/data/image-refs/`) so they get a dedicated
+    // `canon-sheet:<filename>` key + don't collide with gallery entries.
+    const canonKinds = [
+      { key: 'characters', singular: 'character' },
+      { key: 'places', singular: 'place' },
+      { key: 'objects', singular: 'object' },
+    ];
+    for (const kind of canonKinds) {
+      const list = Array.isArray(draft?.[kind.key]) ? draft[kind.key] : [];
+      for (const entry of list) {
+        const descriptor = descriptorForCanonEntry(kind.key, entry) || '';
+        const fallbackLabel = `${entry.name}${descriptor ? `: ${descriptor}` : ''}`;
+        const refs = Array.isArray(entry?.imageRefs) ? entry.imageRefs : [];
+        for (const f of refs) pushFilename(f, fallbackLabel);
+        if (kind.key === 'characters' && typeof entry.referenceSheetImageRef === 'string' && entry.referenceSheetImageRef) {
+          const filename = entry.referenceSheetImageRef;
+          const sheetKey = `canon-sheet:${filename}`;
+          if (!seen.has(sheetKey)) {
+            seen.add(sheetKey);
+            out.push({
+              key: sheetKey,
+              kind: 'image',
+              filename,
+              previewUrl: `/data/image-refs/${filename}`,
+              downloadUrl: `/data/image-refs/${filename}`,
+              prompt: `${entry.name} — character reference sheet`,
+            });
+          }
+        }
+      }
+    }
     return out;
   }, [draft, galleryByFilename]);
+  const [preview, setPreview] = usePreviewRoute(previewItems);
   // Shared preview action handlers (Remix / SendToVideo / Clean) so the
   // universe lightbox opens the same downstream pages with the same params
   // as the History grid + Image Gen page. `onCleanComplete` splices the
@@ -799,11 +761,22 @@ export default function UniverseBuilder() {
       });
     }, []),
   });
-  const openVariationPreview = useCallback((filename) => {
+  // Generic filename → preview opener used by every clickable thumb on the
+  // page (variation grids, composite sheets, canon entries, character
+  // reference sheets). `opts.isSheet` forces a key match against the
+  // `canon-sheet:` prefix so a basename collision with a gallery image
+  // can't route the lightbox to `/data/images/` instead of
+  // `/data/image-refs/`.
+  const openPreviewByFilename = useCallback((filename, opts) => {
     if (!filename) return;
-    const match = previewItems.find((i) => i.filename === filename);
+    const targetKey = opts?.isSheet ? `canon-sheet:${filename}` : null;
+    const match = (targetKey && previewItems.find((i) => i.key === targetKey))
+      || previewItems.find((i) => i.filename === filename);
     if (match) setPreview(match);
-  }, [previewItems]);
+  }, [previewItems, setPreview]);
+  // Legacy name retained for the variation/composite call sites that pass a
+  // single filename — same implementation, different label.
+  const openVariationPreview = openPreviewByFilename;
 
   // Two-click delete: first click flips this to the world id; a second
   // click within the live render confirms. Avoids window.confirm per
@@ -1041,16 +1014,11 @@ export default function UniverseBuilder() {
       toast.error('Add a starter prompt to expand');
       return;
     }
-    // Extract per-item locks so the server can include them in the LLM
-    // prompt (avoid duplicate generation) AND we can merge them back in
-    // after the result returns. Only LOCKED entries are forwarded — the
+    // Extract per-item locks so the server can include them in the LLM prompt
+    // (avoid duplicate generation) AND mergeExpandIntoDraft can merge them back
+    // in after the result returns. Only LOCKED entries are forwarded — the
     // unlocked items get fully replaced.
-    const preservedVariations = {};
-    for (const [cat, bucket] of Object.entries(draft.categories || {})) {
-      const locked = (bucket?.variations || []).filter((v) => v?.locked === true);
-      if (locked.length) preservedVariations[cat] = locked;
-    }
-    const preservedCompositeSheets = (draft.compositeSheets || []).filter((s) => s?.locked === true);
+    const { preservedVariations, preservedCompositeSheets } = extractPreservedFromDraft(draft);
 
     setExpanding(true);
     const result = await expandUniverse({
@@ -1069,102 +1037,9 @@ export default function UniverseBuilder() {
     }).catch((e) => { toast.error(`Expansion failed: ${e.message}`); return null; });
     setExpanding(false);
     if (!result) return;
-    // For each lockable field: pick the LLM's value when unlocked (falling
-    // back to the draft if the LLM produced empty); pick the draft's value
-    // verbatim when locked. Categories + compositeSheets aren't lockable
-    // (the lock UI scopes to the bible/prompt scalars), so they always
-    // come from the LLM. `starterPrompt` is normally untouched by expand
-    // (the LLM doesn't return one), but if it ever did, lock honoring
-    // protects the user's edits.
-    const locks = draft.locked || {};
-    // Distinguish "LLM omitted the field" (null/undefined → keep draft) from
-    // "LLM returned empty string" (a legitimate "" — the user's `||` would
-    // silently restore a stale value they wanted gone).
-    const pick = (key, llmValue) => {
-      if (locks[key]) return draft[key];
-      return llmValue == null ? draft[key] : llmValue;
-    };
-    const refinedInfluences = mergeInfluencesWithLocks(locks, result.influences, draft.influences);
-    const llmCategories = result.categories || {};
-    const mergedCategories = {};
-    const allCatKeys = new Set([
-      ...Object.keys(preservedVariations),
-      ...Object.keys(llmCategories),
-    ]);
-    for (const cat of allCatKeys) {
-      const locked = preservedVariations[cat] || [];
-      const fresh = (llmCategories[cat]?.variations || []);
-      // Preserve the bucket's `kind` so the category-to-canon-trunk contract
-      // survives the round-trip. Precedence:
-      //   - existing non-'other' draft kind (user curated it to a specific trunk)
-      //   - LLM-returned kind for this expand round (fresh classification)
-      //   - existing 'other' draft kind (Phase-B default for custom buckets)
-      //   - undefined (server's sanitizeCategory falls back to default-map / 'other')
-      // Allowing a fresh LLM kind to supersede an existing 'other' is intentional:
-      // pre-Phase-B "factions" buckets saved as `other` can be promoted to
-      // `characters` by a re-expand without requiring the user to manually change
-      // the trunk. User-curated non-`other` kinds (e.g. `places`) are preserved.
-      const existingKind = draft.categories?.[cat]?.kind;
-      const freshKind = llmCategories[cat]?.kind;
-      const kind = (existingKind && existingKind !== 'other') ? existingKind : (freshKind || existingKind);
-      mergedCategories[cat] = {
-        ...(kind ? { kind } : {}),
-        variations: mergeVariations(locked, fresh),
-      };
-    }
-    // Composite sheets merge follows the same locked-first + dedupe pattern.
-    const mergedSheets = (() => {
-      const llmSheets = result.compositeSheets || [];
-      const seen = new Set(preservedCompositeSheets.map((s) => s.label.toLowerCase()));
-      const out = [...preservedCompositeSheets];
-      for (const s of llmSheets) {
-        const key = s.label?.toLowerCase();
-        if (!key || seen.has(key)) continue;
-        seen.add(key);
-        out.push(s);
-      }
-      return out;
-    })();
-
-    // Merge LLM-emitted canon arrays into the draft's existing canon. Existing
-    // entries always win on name/slugline collision so a re-expand can't
-    // clobber hand-authored or series-extracted records. mergeCanonByName
-    // short-circuits when `fresh` is empty so identity is preserved.
-    //
-    // `kind` is passed so places use `normalizeSlugline` for both `name` and
-    // `slugline` (matching the server's MERGE_CONFIG.place.keyFields) —
-    // dash/punct-variant identifiers collide instead of duplicating.
-    const pickCanon = (key, kind) => mergeCanonByName(
-      draft[key] || [],
-      Array.isArray(result[key]) ? result[key] : [],
-      kind,
-    );
-    const mergedCharacters = pickCanon('characters', 'character');
-    const mergedPlaces = pickCanon('places', 'place');
-    const mergedObjects = pickCanon('objects', 'object');
-    // Count NEW canon entries this expand added (post-merge minus pre-existing).
-    // Used by the toast so a re-expand on a populated universe doesn't claim
-    // credit for entries the user already authored. Existing entries always win
-    // on collision in mergeCanonByName, so the delta is always non-negative.
-    const addedCanonCount =
-      (mergedCharacters.length - (draft.characters?.length || 0))
-      + (mergedPlaces.length - (draft.places?.length || 0))
-      + (mergedObjects.length - (draft.objects?.length || 0));
-
-    const expandedDraft = {
-      ...draft,
-      starterPrompt: pick('starterPrompt', result.starterPrompt),
-      logline: pick('logline', result.logline),
-      premise: pick('premise', result.premise),
-      styleNotes: pick('styleNotes', result.styleNotes),
-      influences: refinedInfluences,
-      categories: ensureDraftCategories(mergedCategories),
-      compositeSheets: mergedSheets,
-      characters: mergedCharacters,
-      places: mergedPlaces,
-      objects: mergedObjects,
-      llm: result.llm || draft.llm,
-    };
+    const {
+      expandedDraft, addedCanonCount, pendingAdditions, lockedKeys,
+    } = mergeExpandIntoDraft(draft, result, { ensureDraftCategories });
     setDraft(expandedDraft);
     // Flag the merged-but-not-yet-persisted canon so a subsequent manual
     // Save (if auto-save fails or is bypassed) includes the new entries.
@@ -1173,23 +1048,12 @@ export default function UniverseBuilder() {
     // full stale draft.
     if (addedCanonCount > 0) {
       setCanonDirty(true);
-      const computeAdditions = (existing, merged) => {
-        const norm = (s) => (typeof s === 'string' ? s.trim().toLowerCase() : '');
-        const existingNames = new Set((existing || []).map((e) => norm(e?.name)).filter(Boolean));
-        const existingSluglines = new Set((existing || []).map((e) => norm(e?.slugline)).filter(Boolean));
-        return (merged || []).filter((e) => {
-          const n = norm(e?.name);
-          const s = norm(e?.slugline);
-          return !(n && existingNames.has(n)) && !(s && existingSluglines.has(s));
-        });
-      };
       pendingCanonAdditionsRef.current = {
-        characters: [...pendingCanonAdditionsRef.current.characters, ...computeAdditions(draft.characters, mergedCharacters)],
-        places: [...pendingCanonAdditionsRef.current.places, ...computeAdditions(draft.places, mergedPlaces)],
-        objects: [...pendingCanonAdditionsRef.current.objects, ...computeAdditions(draft.objects, mergedObjects)],
+        characters: [...pendingCanonAdditionsRef.current.characters, ...pendingAdditions.characters],
+        places: [...pendingCanonAdditionsRef.current.places, ...pendingAdditions.places],
+        objects: [...pendingCanonAdditionsRef.current.objects, ...pendingAdditions.objects],
       };
     }
-    const lockedKeys = Object.keys(locks).filter((k) => locks[k]);
     if (lockedKeys.length) {
       console.log(`🔒 Universe Builder expand preserved ${lockedKeys.length} locked field(s): ${lockedKeys.join(', ')}`);
     }
@@ -1980,6 +1844,7 @@ export default function UniverseBuilder() {
               onBulkRenderBucket={(bucket) => runRender({ promptMode: 'variations', selection: { [bucket]: 'all' } })}
               onRenderVariation={(bucket, v) => runRender({ promptMode: 'variations', selection: { [bucket]: [v.label] } })}
               onPreviewVariation={openVariationPreview}
+              onCanonPreview={openPreviewByFilename}
               pendingByEntryId={pendingHeadByEntryId}
               externalPendingByEntryId={pendingHeadByEntryId}
               onPendingCleared={clearPendingForEntry}
@@ -2127,28 +1992,32 @@ export default function UniverseBuilder() {
         )}
       </section>
 
-      {/* Page-level lightbox for variation + composite-sheet thumb clicks.
-          UniverseCanonSection owns its own MediaPreview for canon entries
-          (which routes character reference sheets through a different
-          static prefix), so we deliberately don't include canon refs in
-          `previewItems` above — they're handled there. Mounted at the page
-          level (not inside RenderTab) so the lightbox state is in scope; it
-          renders regardless of active tab because variation thumbs in the
-          Cast / Places / Objects / Other tabs all open the same modal.
-          Action handlers (Remix / SendToVideo / Clean / Continue) and the
-          annotations channel come from the shared `useImagePreviewActions`
-          + `useMediaAnnotations` hooks so the surface matches History /
-          MediaCollectionDetail / ImageGen exactly. */}
+      {/* Single page-level lightbox for every thumb on the page: variation
+          grids, composite sheets, canon imageRefs (characters / places /
+          objects), and character reference sheets. UniverseCanonSection used
+          to host its own MediaPreview with a reduced action set + character
+          description in place of the prompt; that fork is gone — canon
+          clicks now bubble up through `openPreviewByFilename` and hit this
+          modal, so the canon surface matches History / Collections / ImageGen
+          exactly (Refine / Remix / SendToVideo / Clean / AddToCollection /
+          Download / notes, all hydrated from the gallery sidecar). URL-driven
+          via `usePreviewRoute` so `?preview=<filename>` deep-links open the
+          same modal on reload. */}
+      {/* Character reference sheets live under /data/image-refs/, but
+          Remix / Send-to-Video / Clean / Continue all resolve filenames
+          under /data/images/ (the gallery). Suppress those handlers when
+          the current preview is a canon-sheet item so the lightbox doesn't
+          offer actions that would 404 on the bare filename. */}
       <MediaPreview
         preview={preview}
         setPreview={setPreview}
         items={previewItems}
         annotations={annotations}
         updateAnnotation={updateAnnotation}
-        onRemix={previewActions.handleRemix}
-        onSendToVideo={previewActions.handleSendToVideo}
-        onClean={(item, level) => previewActions.handleClean(item?.raw || item, level)}
-        onContinue={(item) => previewActions.handleContinue(item?.raw || item)}
+        onRemix={preview?.key?.startsWith('canon-sheet:') ? undefined : previewActions.handleRemix}
+        onSendToVideo={preview?.key?.startsWith('canon-sheet:') ? undefined : previewActions.handleSendToVideo}
+        onClean={preview?.key?.startsWith('canon-sheet:') ? undefined : (item) => previewActions.handleClean(item?.raw || item)}
+        onContinue={preview?.key?.startsWith('canon-sheet:') ? undefined : (item) => previewActions.handleContinue(item?.raw || item)}
       />
     </div>
   );
@@ -2660,22 +2529,24 @@ export function CategoryEditor({
             <button
               onClick={onRenderCategory}
               disabled={!canRender || variations.length === 0}
-              className="text-xs px-2 py-1 bg-port-accent/15 hover:bg-port-accent/25 disabled:opacity-30 disabled:cursor-not-allowed text-port-accent rounded flex items-center gap-1 min-h-[40px] sm:min-h-0"
+              className="p-1 text-port-accent hover:bg-port-accent/20 disabled:opacity-30 disabled:cursor-not-allowed rounded"
               title={variations.length === 0 ? 'Add variations first' : 'Render this category'}
+              aria-label="Render this category"
             >
-              <Play size={12} /> Render
+              <Play size={14} />
             </button>
           )}
           {onAssignBucketKind && requiresTargetKind && (
             <div className="relative" ref={assignWrapRef}>
               <button
                 onClick={() => setAssignOpen((v) => !v)}
-                className="text-xs px-2 py-1 bg-port-accent/15 hover:bg-port-accent/25 text-port-accent rounded flex items-center gap-1 min-h-[40px] sm:min-h-0"
+                className="p-1 text-port-accent hover:bg-port-accent/20 rounded"
                 title="Move this bucket into a canon trunk (variations stay in place)"
+                aria-label="Assign bucket to a canon trunk"
                 aria-haspopup="menu"
                 aria-expanded={assignOpen}
               >
-                <FolderTree size={12} /> Assign to…
+                <FolderTree size={14} />
               </button>
               {assignOpen && (
                 <div
@@ -2707,13 +2578,13 @@ export function CategoryEditor({
               <button
                 onClick={() => setGenOpen((v) => !v)}
                 disabled={generating}
-                className="text-xs px-2 py-1 bg-port-accent/15 hover:bg-port-accent/25 disabled:opacity-30 disabled:cursor-not-allowed text-port-accent rounded flex items-center gap-1 min-h-[40px] sm:min-h-0"
+                className="p-1 text-port-accent hover:bg-port-accent/20 disabled:opacity-30 disabled:cursor-not-allowed rounded"
                 title="Ask the LLM for more variations in this category"
+                aria-label="Generate more variations"
                 aria-haspopup="menu"
                 aria-expanded={genOpen}
               >
-                {generating ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
-                Generate
+                {generating ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
               </button>
               {genOpen && (
                 <div
@@ -3307,6 +3178,7 @@ export function TrunkView({
   onBulkRenderBucket, onRenderVariation, onBulkRenderTrunk,
   onAddBucket,
   onPreviewVariation = null,
+  onCanonPreview = null,
   pendingByEntryId = {},
   // Same pending head-map, passed through to UniverseCanonSection so canon
   // rows show a spinner when a batch `/render` queues canon prompts.
@@ -3413,6 +3285,7 @@ export function TrunkView({
           kindFilter={trunk.kind}
           externalPendingByEntryId={externalPendingByEntryId}
           onExternalCanonJobSettled={onPendingCleared}
+          onPreview={onCanonPreview}
         />
       ) : null}
 
@@ -3594,7 +3467,7 @@ function RenderTab({
           </p>
         )}
         <ImageGenSettingsForm
-          value={{ ...renderOpts, mode: renderOpts.mode || defaultMode || 'local' }}
+          value={{ ...renderOpts, mode: renderOpts.mode || defaultMode || IMAGE_GEN_MODE.LOCAL }}
           onChange={(next) => setRenderOpts(next)}
           models={imageModels}
           availableBackends={availableBackends}

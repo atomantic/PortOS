@@ -5,19 +5,20 @@
 //
 // Fail-soft: every failure path logs and exits 0 — never break setup/update
 // because Chrome happens to be unreachable.
-import { existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { hasTailscaleCert } from '../lib/tailscale-https.js';
+import { certPaths } from '../lib/certPaths.js';
 
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
-const CERT_PATH = join(ROOT, 'data', 'certs', 'cert.pem');
-const KEY_PATH = join(ROOT, 'data', 'certs', 'key.pem');
+const { dir: CERT_DIR } = certPaths(join(ROOT, 'data'));
 const API_PORT = Number(process.env.PORT) || 5555;
 const HTTP_LOOPBACK_PORT = Number(process.env.PORTOS_HTTP_PORT) || 5553;
-// The server only enables HTTPS when BOTH cert and key exist (matches
-// lib/tailscale-https.js loadCert) — checking only cert.pem would falsely
-// route to the loopback mirror during a half-finished setup:cert.
-const HTTPS_MODE = existsSync(CERT_PATH) && existsSync(KEY_PATH);
+// Share the same cert predicate the server's HTTPS gate uses (file presence
+// AND PEM parseability). A presence-only check would route us to :5553 even
+// when corrupt PEMs forced the server back to plain HTTP-on-:5555, so the
+// poll would time out on a port the server never bound.
+const HTTPS_MODE = hasTailscaleCert(CERT_DIR);
 
 // When HTTPS is on, :5555 speaks TLS only — plain http:// requests hit a TLS
 // mismatch and time out. The loopback HTTP mirror on :5553 serves the same

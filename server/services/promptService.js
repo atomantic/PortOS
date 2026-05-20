@@ -14,6 +14,7 @@ import { join } from 'path';
 import { applyTemplate } from '../lib/promptTemplate.js';
 import { expandPartials } from '../lib/promptPartials.js';
 import { PATHS } from '../lib/fileUtils.js';
+import { ServerError } from '../lib/errorHandler.js';
 
 // This will be initialized by server/index.js and set via setAIToolkit()
 let aiToolkitInstance = null;
@@ -22,64 +23,63 @@ export function setAIToolkit(toolkit) {
   aiToolkitInstance = toolkit;
 }
 
+// Mirrors the helper in `server/services/providers.js` + `runner.js` so callers
+// can gate on `err.code === 'AI_TOOLKIT_NOT_INITIALIZED'` instead of string-
+// matching the message; status 503 because the toolkit warms at boot.
+function requireToolkit() {
+  if (aiToolkitInstance) return aiToolkitInstance;
+  throw new ServerError('AI Toolkit not initialized', {
+    status: 503,
+    code: 'AI_TOOLKIT_NOT_INITIALIZED',
+  });
+}
+
 export async function loadPrompts() {
-  if (!aiToolkitInstance) throw new Error('AI Toolkit not initialized');
-  return aiToolkitInstance.services.prompts.init();
+  return requireToolkit().services.prompts.init();
 }
 
 export function getStages() {
-  if (!aiToolkitInstance) throw new Error('AI Toolkit not initialized');
-  return aiToolkitInstance.services.prompts.getStages();
+  return requireToolkit().services.prompts.getStages();
 }
 
 export function getStage(stageName) {
-  if (!aiToolkitInstance) throw new Error('AI Toolkit not initialized');
-  return aiToolkitInstance.services.prompts.getStage(stageName);
+  return requireToolkit().services.prompts.getStage(stageName);
 }
 
 export async function getStageTemplate(stageName) {
-  if (!aiToolkitInstance) throw new Error('AI Toolkit not initialized');
-  return aiToolkitInstance.services.prompts.getStageTemplate(stageName);
+  return requireToolkit().services.prompts.getStageTemplate(stageName);
 }
 
 export async function updateStageTemplate(stageName, content) {
-  if (!aiToolkitInstance) throw new Error('AI Toolkit not initialized');
-  return aiToolkitInstance.services.prompts.updateStageTemplate(stageName, content);
+  return requireToolkit().services.prompts.updateStageTemplate(stageName, content);
 }
 
 export async function updateStageConfig(stageName, config) {
-  if (!aiToolkitInstance) throw new Error('AI Toolkit not initialized');
-  return aiToolkitInstance.services.prompts.updateStageConfig(stageName, config);
+  return requireToolkit().services.prompts.updateStageConfig(stageName, config);
 }
 
 export function getVariables() {
-  if (!aiToolkitInstance) throw new Error('AI Toolkit not initialized');
-  return aiToolkitInstance.services.prompts.getVariables();
+  return requireToolkit().services.prompts.getVariables();
 }
 
 export function getVariable(key) {
-  if (!aiToolkitInstance) throw new Error('AI Toolkit not initialized');
-  return aiToolkitInstance.services.prompts.getVariable(key);
+  return requireToolkit().services.prompts.getVariable(key);
 }
 
 export async function updateVariable(key, data) {
-  if (!aiToolkitInstance) throw new Error('AI Toolkit not initialized');
-  return aiToolkitInstance.services.prompts.updateVariable(key, data);
+  return requireToolkit().services.prompts.updateVariable(key, data);
 }
 
 export async function createVariable(key, data) {
-  if (!aiToolkitInstance) throw new Error('AI Toolkit not initialized');
-  return aiToolkitInstance.services.prompts.createVariable(key, data);
+  return requireToolkit().services.prompts.createVariable(key, data);
 }
 
 export async function deleteVariable(key) {
-  if (!aiToolkitInstance) throw new Error('AI Toolkit not initialized');
-  return aiToolkitInstance.services.prompts.deleteVariable(key);
+  return requireToolkit().services.prompts.deleteVariable(key);
 }
 
 export async function buildPrompt(stageName, data = {}) {
-  if (!aiToolkitInstance) throw new Error('AI Toolkit not initialized');
-  const prompts = aiToolkitInstance.services.prompts;
+  const prompts = requireToolkit().services.prompts;
   const stage = prompts.getStage(stageName);
   if (!stage) throw new Error(`Stage ${stageName} not found`);
   const rawTemplate = await prompts.getStageTemplate(stageName);

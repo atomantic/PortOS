@@ -18,6 +18,8 @@ import {
 import { BIBLE_LIMITS as L } from '../../lib/bibleLimits';
 import useFieldDraft from '../../hooks/useFieldDraft';
 import useRowDraft from '../../hooks/useRowDraft';
+import usePendingListRows from '../../hooks/usePendingListRows';
+import VoicePicker from '../voice/VoicePicker';
 
 const SECTIONS = Object.freeze([
   {
@@ -192,89 +194,76 @@ function CollapsibleSection({ icon: Icon, label, summary, defaultOpen = false, c
   );
 }
 
-export default function CharacterDetailEditor({ entry, onPatch, onExpand, expanding = false, disabled = false }) {
-  // Per-section pending rows — kept local until the required column (first
-  // column on each LIST_SECTION, always `name` or `label`) is non-empty.
-  // Persisting a blank row immediately would round-trip a row the server
-  // sanitizer drops, and the user's first keystroke would land in a row that
-  // disappears on the next render. Mirrors WardrobeSection's pendingNew
-  // pattern in CanonCard.jsx.
-  const [pendingByList, setPendingByList] = useState({});
+// One LIST_SECTION's row buffer + UI. Extracted so each section gets its
+// own `usePendingListRows` instance (hooks can't be called inside the parent's
+// `LIST_SECTIONS.map`). Pending ids carry the `pending-<key>-<uuid>` prefix
+// and are stripped on promotion so the server's `ensureId` mints a fresh
+// `<kind>-<uuid>` under its own convention — see usePendingListRows.js for
+// the trade-off this strip implies for sibling drafts.
+function ListSectionEditor({ section, entry, onPatchList, disabled }) {
+  const persisted = Array.isArray(entry[section.field]) ? entry[section.field] : [];
+  const { merged, addRow, updateRow, removeRow } = usePendingListRows({
+    persisted,
+    requiredColumn: section.columns[0].name,
+    idPrefix: `pending-${section.key}-`,
+    stripIdOnPromote: true,
+    blankRow: () => Object.fromEntries(section.columns.map((c) => [c.name, ''])),
+    onChange: (next) => onPatchList(section.field, next),
+  });
+  const summary = merged.length === 0
+    ? 'empty'
+    : `${merged.length} ${merged.length === 1 ? section.singular : section.singular + 's'}`;
+  return (
+    <CollapsibleSection
+      icon={section.icon}
+      label={section.label}
+      summary={summary}
+    >
+      {merged.length === 0 ? (
+        <p className="text-[11px] text-gray-500 italic">No {section.label.toLowerCase()} yet.</p>
+      ) : (
+        <div className="space-y-1.5">
+          {merged.map((row, idx) => (
+            <ListRow
+              // Every persisted row carries a server-stamped id (see
+              // sanitizeStat / sanitizePaletteColor / etc.) and every
+              // pending row gets a client-only id from `addRow`. The
+              // index fallback would tie ListRow's local `drafts` state
+              // to a slot, so a delete on an earlier row would shift
+              // another row's drafts onto this one.
+              key={row.id || `${section.key}-${idx}`}
+              row={row}
+              idx={idx}
+              columns={section.columns}
+              swatchHex={section.swatchHex}
+              onChange={(next) => updateRow(idx, next)}
+              onDelete={() => removeRow(idx)}
+              disabled={disabled}
+            />
+          ))}
+        </div>
+      )}
+      <button
+        type="button"
+        onClick={addRow}
+        disabled={disabled}
+        className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded border border-port-border text-gray-400 hover:text-white hover:border-gray-500 disabled:opacity-40"
+      >
+        <Plus size={10} /> {section.addLabel}
+      </button>
+    </CollapsibleSection>
+  );
+}
 
+export default function CharacterDetailEditor({ entry, onPatch, onExpand, expanding = false, disabled = false }) {
   if (!entry) return null;
 
   const patchField = (name, value) => onPatch?.({ [name]: value });
   const patchList = (field, next) => onPatch?.({ [field]: next });
 
-  const persistedFor = (section) =>
-    (Array.isArray(entry[section.field]) ? entry[section.field] : []);
-  const pendingFor = (section) => pendingByList[section.key] || [];
-  const mergedFor = (section) => [...persistedFor(section), ...pendingFor(section)];
-  const requiredColumn = (section) => section.columns[0].name;
-
   const sectionSummary = (section) => {
     const filled = section.fields.filter((f) => (entry[f.name] || '').trim()).length;
     return filled ? `${filled}/${section.fields.length} filled` : 'empty';
-  };
-  const listSummary = (section) => {
-    const merged = mergedFor(section);
-    if (merged.length === 0) return 'empty';
-    return `${merged.length} ${merged.length === 1 ? section.singular : section.singular + 's'}`;
-  };
-
-  const addRow = (section) => {
-    // Client-only id on pending rows so ListRow's local draft state stays
-    // bound to THIS row across re-renders and after-deletes — without it,
-    // the React key falls through to index and an earlier-row delete shifts
-    // a different row's drafts buffer onto this one. The `pending-` prefix
-    // is stripped at promotion (see updateRow) so the server's `ensureId`
-    // mints a fresh `<kind>-<uuid>` id under its own convention; without
-    // that strip the sanitizer would round-trip the client prefix back onto
-    // the persisted row.
-    const id = `pending-${section.key}-${(globalThis.crypto?.randomUUID?.() ?? Date.now().toString(36) + Math.random().toString(36).slice(2))}`;
-    const blank = { id, ...Object.fromEntries(section.columns.map((c) => [c.name, ''])) };
-    setPendingByList((prev) => ({
-      ...prev,
-      [section.key]: [...(prev[section.key] || []), blank],
-    }));
-  };
-
-  const isPendingIdx = (section, idx) => idx >= persistedFor(section).length;
-  const pendingIdxOf = (section, idx) => idx - persistedFor(section).length;
-
-  const updateRow = (section, idx, nextRow) => {
-    if (!isPendingIdx(section, idx)) {
-      const persisted = persistedFor(section);
-      patchList(section.field, persisted.map((r, i) => (i === idx ? nextRow : r)));
-      return;
-    }
-    const pIdx = pendingIdxOf(section, idx);
-    const pending = pendingFor(section);
-    const requiredFilled = String(nextRow[requiredColumn(section)] || '').trim().length > 0;
-    if (requiredFilled) {
-      // Promote into persisted; drop from pending. Strip the client-only
-      // `pending-*` id so the server's sanitizer mints a fresh `<kind>-<uuid>`
-      // under its own convention (sanitizer's `ensureId` preserves any
-      // non-empty string id verbatim, so an unstripped pending prefix would
-      // round-trip onto the persisted row).
-      const remaining = pending.filter((_, i) => i !== pIdx);
-      setPendingByList((prev) => ({ ...prev, [section.key]: remaining }));
-      const { id: _pendingId, ...promoted } = nextRow;
-      patchList(section.field, [...persistedFor(section), promoted]);
-      return;
-    }
-    const next = pending.map((r, i) => (i === pIdx ? nextRow : r));
-    setPendingByList((prev) => ({ ...prev, [section.key]: next }));
-  };
-
-  const removeRow = (section, idx) => {
-    if (isPendingIdx(section, idx)) {
-      const pIdx = pendingIdxOf(section, idx);
-      const next = pendingFor(section).filter((_, i) => i !== pIdx);
-      setPendingByList((prev) => ({ ...prev, [section.key]: next }));
-      return;
-    }
-    patchList(section.field, persistedFor(section).filter((_, i) => i !== idx));
   };
 
   return (
@@ -309,53 +298,28 @@ export default function CharacterDetailEditor({ entry, onPatch, onExpand, expand
               idPrefix={entry.id}
             />
           ))}
+          {section.key === 'identity' ? (
+            <VoicePicker
+              label="Voice (TTS)"
+              value={entry.voiceId || null}
+              onChange={(v) => patchField('voiceId', v)}
+              disabled={disabled}
+              placeholder="Project default voice"
+              previewText={entry.name ? `Hi, I'm ${entry.name}. This is how I sound.` : undefined}
+            />
+          ) : null}
         </CollapsibleSection>
       ))}
 
-      {LIST_SECTIONS.map((section) => {
-        const merged = mergedFor(section);
-        return (
-          <CollapsibleSection
-            key={section.key}
-            icon={section.icon}
-            label={section.label}
-            summary={listSummary(section)}
-          >
-            {merged.length === 0 ? (
-              <p className="text-[11px] text-gray-500 italic">No {section.label.toLowerCase()} yet.</p>
-            ) : (
-              <div className="space-y-1.5">
-                {merged.map((row, idx) => (
-                  <ListRow
-                    // Every persisted row carries a server-stamped id (see
-                    // sanitizeStat / sanitizePaletteColor / etc.) and every
-                    // pending row gets a client-only id from `addRow`. The
-                    // index fallback would tie ListRow's local `drafts` state
-                    // to a slot, so a delete on an earlier row would shift
-                    // another row's drafts onto this one.
-                    key={row.id || `${section.key}-${idx}`}
-                    row={row}
-                    idx={idx}
-                    columns={section.columns}
-                    swatchHex={section.swatchHex}
-                    onChange={(next) => updateRow(section, idx, next)}
-                    onDelete={() => removeRow(section, idx)}
-                    disabled={disabled}
-                  />
-                ))}
-              </div>
-            )}
-            <button
-              type="button"
-              onClick={() => addRow(section)}
-              disabled={disabled}
-              className="inline-flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded border border-port-border text-gray-400 hover:text-white hover:border-gray-500 disabled:opacity-40"
-            >
-              <Plus size={10} /> {section.addLabel}
-            </button>
-          </CollapsibleSection>
-        );
-      })}
+      {LIST_SECTIONS.map((section) => (
+        <ListSectionEditor
+          key={section.key}
+          section={section}
+          entry={entry}
+          onPatchList={patchList}
+          disabled={disabled}
+        />
+      ))}
     </div>
   );
 }

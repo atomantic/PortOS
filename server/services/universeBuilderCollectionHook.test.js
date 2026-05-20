@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync } from 'fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -24,6 +24,14 @@ const { mediaJobEvents } = await import('./mediaJobQueue/index.js');
 const collections = await import('./mediaCollections.js');
 const recordEvents = await import('./sharing/recordEvents.js');
 const hook = await import('./universeBuilderCollectionHook.js');
+const universeBuilder = await import('./universeBuilder.js');
+
+const sidecarPath = (filename) => join(tempData, 'images', filename.replace('.png', '.metadata.json'));
+const writeSidecar = (filename, data) => {
+  mkdirSync(join(tempData, 'images'), { recursive: true });
+  writeFileSync(sidecarPath(filename), JSON.stringify(data, null, 2));
+};
+const readSidecar = (filename) => JSON.parse(readFileSync(sidecarPath(filename), 'utf-8'));
 
 async function waitFor(predicate, { timeoutMs = 2000, intervalMs = 5 } = {}) {
   const deadline = Date.now() + timeoutMs;
@@ -132,5 +140,186 @@ describe('universeBuilderCollectionHook', () => {
     const unsuppressed = () => forUniverse().filter((u) => !u.suppressed);
     await waitFor(() => unsuppressed().length >= 2);
     expect(unsuppressed()).toHaveLength(2);
+  });
+
+  // Seed a fully-formed universe doc on disk so getUniverse() inside the hook
+  // can resolve canon names. Returns the seeded universe — callers use its
+  // `id` field as the universeId in `universeRun` tags.
+  async function seedUniverse({ name, characters = [], categoryKey = 'characters', variations = [] }) {
+    const created = await universeBuilder.createUniverse({
+      name,
+      characters,
+      categories: { [categoryKey]: { variations } },
+    });
+    return created;
+  }
+
+  it('enriches the image sidecar with canon entry name + universe context', async () => {
+    const universeName = 'TestVerse';
+    const characterId = 'char-ash';
+    const character = { id: characterId, name: 'Ash', physicalDescription: 'red hair' };
+    const seeded = await seedUniverse({ name: universeName, characters: [character] });
+    const c = await makeCollection(seeded.id);
+    const filename = 'canon-render.png';
+    writeSidecar(filename, { id: 'canon-render', prompt: 'a confident pyromancer', seed: 42 });
+    hook.registerUniverseBuilderRun({ runId: 'r-canon', universeId: seeded.id, jobCount: 1 });
+
+    mediaJobEvents.emit('completed', {
+      kind: 'image',
+      result: { filename },
+      params: {
+        universeRun: {
+          runId: 'r-canon',
+          universeId: seeded.id,
+          collectionId: c.id,
+          category: 'characters',
+          label: 'Ash — pyromancer cut',
+          entryRef: { kind: 'canon', kindKey: 'characters', id: characterId },
+        },
+      },
+    });
+
+    await waitFor(() => {
+      const sc = readSidecar(filename);
+      return sc.entryName === 'Ash';
+    });
+    const sc = readSidecar(filename);
+    expect(sc.universeId).toBe(seeded.id);
+    expect(sc.universeName).toBe(universeName);
+    expect(sc.universeRunId).toBe('r-canon');
+    expect(sc.entryKind).toBe('canon');
+    expect(sc.entryCategory).toBe('characters');
+    expect(sc.entryId).toBe(characterId);
+    expect(sc.entryName).toBe('Ash');           // canonical name wins
+    expect(sc.entryLabel).toBe('Ash — pyromancer cut'); // compiled label preserved
+    // Original sidecar fields untouched.
+    expect(sc.prompt).toBe('a confident pyromancer');
+    expect(sc.seed).toBe(42);
+  });
+
+  it('uses the compiled label as entryName for variation entries (no canon name)', async () => {
+    const variationId = 'var-charm-slinger';
+    const seeded = await seedUniverse({
+      name: 'CategoryVerse',
+      categoryKey: 'characters',
+      variations: [{ id: variationId, label: 'Field Lead: Charm-Slinger Detective', prompt: 'detective in a charm bandolier' }],
+    });
+    const c = await makeCollection(seeded.id);
+    const filename = 'variation-render.png';
+    writeSidecar(filename, { id: 'variation-render', prompt: 'detective in a charm bandolier' });
+    hook.registerUniverseBuilderRun({ runId: 'r-var', universeId: seeded.id, jobCount: 1 });
+
+    mediaJobEvents.emit('completed', {
+      kind: 'image',
+      result: { filename },
+      params: {
+        universeRun: {
+          runId: 'r-var',
+          universeId: seeded.id,
+          collectionId: c.id,
+          category: 'characters',
+          label: 'Field Lead: Charm-Slinger Detective',
+          entryRef: { kind: 'variation', categoryKey: 'characters', id: variationId },
+        },
+      },
+    });
+
+    await waitFor(() => readSidecar(filename).entryKind === 'variation');
+    const sc = readSidecar(filename);
+    expect(sc.entryKind).toBe('variation');
+    expect(sc.entryCategory).toBe('characters');
+    expect(sc.entryId).toBe(variationId);
+    expect(sc.entryName).toBe('Field Lead: Charm-Slinger Detective');
+    expect(sc.entryLabel).toBe('Field Lead: Charm-Slinger Detective');
+  });
+
+  it('does not touch the sidecar of a non-Universe render (no universeRun tag)', async () => {
+    const filename = 'plain-render.png';
+    writeSidecar(filename, { id: 'plain-render', prompt: 'just a sunset' });
+    mediaJobEvents.emit('completed', {
+      kind: 'image',
+      result: { filename },
+      params: {}, // no universeRun
+    });
+    // Give the hook a beat to (not) write anything.
+    await new Promise((r) => setTimeout(r, 50));
+    const sc = readSidecar(filename);
+    expect(sc).toEqual({ id: 'plain-render', prompt: 'just a sunset' });
+    expect(sc.universeId).toBeUndefined();
+  });
+
+  it('preserves an existing universe tag — re-render of the same filename does not clobber', async () => {
+    const seeded = await seedUniverse({
+      name: 'PreservedVerse',
+      characters: [{ id: 'char-original', name: 'Original' }],
+    });
+    const c = await makeCollection(seeded.id);
+    const filename = 'preserved.png';
+    // Sidecar already carries a different universe's tag (e.g. a moved/renamed
+    // file from a prior render).
+    writeSidecar(filename, {
+      id: 'preserved',
+      universeId: 'uni-existing',
+      universeName: 'OldVerse',
+      entryName: 'Original',
+    });
+
+    mediaJobEvents.emit('completed', {
+      kind: 'image',
+      result: { filename },
+      params: {
+        universeRun: {
+          runId: 'r-preserve',
+          universeId: seeded.id,
+          collectionId: c.id,
+          category: 'characters',
+          label: 'New label',
+          entryRef: { kind: 'canon', kindKey: 'characters', id: 'char-original' },
+        },
+      },
+    });
+    await new Promise((r) => setTimeout(r, 50));
+    const sc = readSidecar(filename);
+    // Existing values preserved.
+    expect(sc.universeId).toBe('uni-existing');
+    expect(sc.universeName).toBe('OldVerse');
+    expect(sc.entryName).toBe('Original');
+    // But absent fields get filled in.
+    expect(sc.universeRunId).toBe('r-preserve');
+    expect(sc.entryKind).toBe('canon');
+  });
+
+  it('enriches every sidecar in a batch — all N images get tagged', async () => {
+    const seeded = await seedUniverse({
+      name: 'BatchVerse',
+      characters: [{ id: 'char-batch', name: 'Batchy' }],
+    });
+    const c = await makeCollection(seeded.id);
+    for (let i = 0; i < 5; i += 1) {
+      writeSidecar(`batch-${i}.png`, { id: `batch-${i}`, prompt: 'p' });
+    }
+    hook.registerUniverseBuilderRun({ runId: 'r-batch', universeId: seeded.id, jobCount: 5 });
+    for (let i = 0; i < 5; i += 1) {
+      mediaJobEvents.emit('completed', {
+        kind: 'image',
+        result: { filename: `batch-${i}.png` },
+        params: {
+          universeRun: {
+            runId: 'r-batch',
+            universeId: seeded.id,
+            collectionId: c.id,
+            category: 'characters',
+            label: 'l',
+            entryRef: { kind: 'canon', kindKey: 'characters', id: 'char-batch' },
+          },
+        },
+      });
+    }
+    await waitFor(() => existsSync(sidecarPath('batch-4.png')) && readSidecar('batch-4.png').entryName === 'Batchy');
+    for (let i = 0; i < 5; i += 1) {
+      const sc = readSidecar(`batch-${i}.png`);
+      expect(sc.entryName).toBe('Batchy');
+      expect(sc.universeName).toBe('BatchVerse');
+    }
   });
 });

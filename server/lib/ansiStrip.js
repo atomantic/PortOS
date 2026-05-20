@@ -17,9 +17,18 @@ const INCOMPLETE_CSI = /^\x1B\[[0-?]*[ -/]*$/;
 const INCOMPLETE_OSC = /^\x1B\][^\x07\x1B]*$/;
 const INCOMPLETE_ESC_2BYTE = /^\x1B$/;
 
+// `[@-_]` (0x40-0x5F) is the byte range that legitimately follows an `\x1B`
+// in a complete sequence: covers `[` (0x5B) for CSI, `]` (0x5D) for OSC, plus
+// the single-byte escape forms (`\x1B@` ... `\x1B_`) caught by the main
+// pattern's first branch. The lookahead spares those starts so the main
+// pattern can match them on the current or next chunk.
+const STRIP = (s) => s
+  .replace(ANSI_PATTERN, '')
+  .replace(/\x1B(?![@-_])/g, '')
+  .replace(/\x00/g, '');
+
 export function createStreamingAnsiStripper() {
   let tail = '';
-  const strip = (s) => s.replace(ANSI_PATTERN, '').replace(/\x00/g, '');
   return (text) => {
     const combined = tail + text;
     tail = '';
@@ -35,10 +44,10 @@ export function createStreamingAnsiStripper() {
         || INCOMPLETE_CSI.test(candidate)
         || INCOMPLETE_OSC.test(candidate)) {
         tail = candidate;
-        return strip(combined.slice(0, lastEsc));
+        return STRIP(combined.slice(0, lastEsc));
       }
     }
-    return strip(combined);
+    return STRIP(combined);
   };
 }
 
@@ -48,5 +57,5 @@ export function createStreamingAnsiStripper() {
  */
 export function stripAnsi(text) {
   if (typeof text !== 'string') return '';
-  return text.replace(ANSI_PATTERN, '').replace(/\x00/g, '');
+  return STRIP(text);
 }

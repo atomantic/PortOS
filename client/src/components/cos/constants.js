@@ -59,6 +59,18 @@ export const AGENT_OPTIONS = [
   { field: 'reviewLoop', label: 'Review Loop', shortLabel: 'RL', description: 'After the agent opens a PR during its run, keep iterating on review feedback until checks pass. Only applies when Open PR is not enabled (manual PR creation by agent).' }
 ];
 
+// Reviewer choices for the Review Loop. `copilot` requests a GitHub Copilot
+// review via the native reviewer API; the others instruct the follow-up agent
+// to invoke the named CLI to critique the PR diff (via `/do:rpr --review-with`).
+// Keep in sync with the `reviewer` enum in `server/lib/validation.js`.
+export const REVIEWER_OPTIONS = [
+  { value: 'copilot', label: 'Copilot', description: 'GitHub Copilot (default, GitHub-only)' },
+  { value: 'claude', label: 'Claude', description: 'Claude CLI reviews the PR diff' },
+  { value: 'gemini', label: 'Gemini', description: 'Gemini CLI reviews the PR diff' },
+  { value: 'codex', label: 'Codex', description: 'Codex CLI reviews the PR diff' }
+];
+export const DEFAULT_REVIEWER = 'copilot';
+
 // Returns the Tailwind className string for an agent option toggle button.
 // effective: whether the option is on (global + override resolved)
 // hasOverride: whether there's an explicit per-app override set

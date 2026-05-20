@@ -7,6 +7,7 @@
 // ERNIE were trained at 1024² and degrade past ~1280, and gpt-image-2's
 // native sizes are 1024² / 1024×1536 / 1536×1024.
 import { RUNNER_FAMILIES } from './runnerFamilies';
+import { IMAGE_GEN_MODE } from './imageGenBackends';
 
 // `flux1` and `external` aren't members of RUNNER_FAMILIES — they're synthetic
 // compatibility-only keys ('flux1' = mflux/diffusers fallback when no `runner`
@@ -44,8 +45,8 @@ export const RESOLUTIONS = [
 // Flux 1 (mflux/diffusers, `dev` / `schnell`) has no `runner` field — it's
 // the fallback for local mode when nothing more specific matches.
 export const compatibilityKey = (mode, runner) => {
-  if (mode === 'codex') return 'codex';
-  if (mode === 'external') return 'external';
+  if (mode === IMAGE_GEN_MODE.CODEX) return 'codex';
+  if (mode === IMAGE_GEN_MODE.EXTERNAL) return 'external';
   if (runner === RUNNER_FAMILIES.FLUX2
       || runner === RUNNER_FAMILIES.Z_IMAGE
       || runner === RUNNER_FAMILIES.ERNIE) {
@@ -57,4 +58,16 @@ export const compatibilityKey = (mode, runner) => {
 export const filterResolutions = (mode, runner) => {
   const key = compatibilityKey(mode, runner);
   return RESOLUTIONS.filter((r) => !r.compatible || r.compatible.includes(key));
+};
+
+// Shared dropdown resolver — find the matching preset for an arbitrary w/h
+// pair (returning its preset label) or fall back to a `${w}×${h}` custom
+// label so the dropdown can render an "(custom)" option for unmatched
+// dimensions. Works on any list shaped like RESOLUTIONS / VIDEO_RESOLUTIONS,
+// so both Image Gen and Video Gen consume the same helper.
+export const resolveResolutionLabel = (list, w, h) => {
+  const matched = list.find((r) => r.w === w && r.h === h);
+  if (matched) return { matched, label: matched.label };
+  if (!w || !h) return { matched: null, label: '' };
+  return { matched: null, label: `${w}×${h}` };
 };

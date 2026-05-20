@@ -6,7 +6,7 @@ export const API_BASE = '/api'; // exported for sub-modules that use fetch() dir
 export const PORTOS_APP_ID = 'portos-default';
 
 export async function request(endpoint, options = {}) {
-  const { silent, ...fetchOptions } = options;
+  const { silent, responseType, ...fetchOptions } = options;
   const url = `${API_BASE}${endpoint}`;
   // Skip the JSON content-type header for FormData bodies — the browser must
   // set `multipart/form-data; boundary=…` itself, and any pre-supplied value
@@ -53,6 +53,10 @@ export async function request(endpoint, options = {}) {
   // Handle 204 No Content
   if (response.status === 204) {
     return null;
+  }
+
+  if (responseType === 'arraybuffer') {
+    return response.arrayBuffer();
   }
 
   return response.json();

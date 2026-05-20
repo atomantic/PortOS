@@ -26,6 +26,7 @@ import LoraPicker from '../components/imageGen/LoraPicker';
 import MediaJobsQueue from '../components/media/MediaJobsQueue';
 import { useMediaCompletionRefresh } from '../hooks/useMediaCompletionRefresh';
 import { useMediaAnnotations } from '../hooks/useMediaAnnotations';
+import usePreviewRoute from '../hooks/usePreviewRoute';
 import {
   Image as ImageIcon, Sparkles, Download, RefreshCw, Settings as SettingsIcon,
   AlertTriangle, X, Film,
@@ -107,7 +108,8 @@ export default function ImageGen() {
   const [models, setModels] = useState([]);
   const [availableLoras, setAvailableLoras] = useState([]);
   const [gallery, setGallery] = useState([]);
-  const [preview, setPreview] = useState(null);
+  // `preview` is URL-driven via `usePreviewRoute(previewItems)` — declared
+  // after `previewItems` below so the resolver can match against it.
   const [showHidden, setShowHidden] = useState(false);
   const [favoritesOnly, setFavoritesOnly] = useState(false);
   const { annotations, updateAnnotation, getCardProps } = useMediaAnnotations();
@@ -121,6 +123,10 @@ export default function ImageGen() {
   const [hfTokenPresent, setHfTokenPresent] = useState(null);
 
   const [selectedMode, setSelectedMode] = useState(null);
+  // Mirror selectedMode in a ref so callbacks (reloadBackends) can read the
+  // latest value without re-creating themselves on every mode flip.
+  const selectedModeRef = useRef(null);
+  selectedModeRef.current = selectedMode;
   const [availableBackends, setAvailableBackends] = useState([]);
 
   const [prompt, setPrompt] = useState('');
@@ -149,6 +155,19 @@ export default function ImageGen() {
   // async modes (local + codex); external is synchronous and runs N=1.
   const [batchCount, setBatchCount] = useState(1);
 
+  // Per-render auto-clean override. Seeded from
+  // `settings.imageGen.{mode}.autoClean` whenever the active mode changes;
+  // the user can flip the checkbox to override the saved default for this
+  // submit. The server's /generate route stamps the resolved value into the
+  // payload so all three dispatch paths (external sync, codex queue, local
+  // queue) see the same boolean.
+  const [autoClean, setAutoClean] = useState(false);
+  // Saved per-mode default — keeps the "(overrides saved default)" hint
+  // reactive to settings reloads. Held as state (not a ref) so when the user
+  // edits a saved default in the Settings drawer and closes it, the hint
+  // re-evaluates even if `autoClean` happens to match the new saved value.
+  const [savedAutoCleanByMode, setSavedAutoCleanByMode] = useState({});
+
   const [generating, setGenerating] = useState(false);
   const [statusMsg, setStatusMsg] = useState('');
   const [errorMeta, setErrorMeta] = useState(null); // { kind, repo } for typed-error guidance
@@ -174,9 +193,9 @@ export default function ImageGen() {
 
   // selectedMode is null until settings load — fall back to status.mode
   // so the form doesn't flicker between defaults.
-  const effectiveMode = selectedMode || status?.mode || 'external';
-  const isLocalMode = effectiveMode === 'local';
-  const isCodexMode = effectiveMode === 'codex';
+  const effectiveMode = selectedMode || status?.mode || IMAGE_GEN_MODE.EXTERNAL;
+  const isLocalMode = effectiveMode === IMAGE_GEN_MODE.LOCAL;
+  const isCodexMode = effectiveMode === IMAGE_GEN_MODE.CODEX;
   const isAsyncMode = isLocalMode || isCodexMode;
   // Prefer the socket-driven hook (carries currentImage for both modes since
   // local mflux now writes stepwise frames). Fall back to the local SSE's
@@ -220,19 +239,36 @@ export default function ImageGen() {
   const reloadBackends = useCallback(() => {
     return getSettings().then((s) => {
       const backends = deriveAvailableBackends(s);
-      setAvailableBackends(backends);
+      const savedMap = {
+        external: s?.imageGen?.external?.autoClean === true,
+        local: s?.imageGen?.local?.autoClean === true,
+        codex: s?.imageGen?.codex?.autoClean === true,
+      };
       const saved = s?.imageGen?.mode || IMAGE_GEN_MODE.EXTERNAL;
       // If the user just disabled the currently-selected backend, fall
       // through to the first viable one — a just-toggled provider should
-      // Just Work without a page reload.
-      setSelectedMode((prev) => {
-        if (prev && backends.find((b) => b.id === prev)) return prev;
-        if (backends.find((b) => b.id === saved)) return saved;
-        if (backends.length) return backends[0].id;
-        return saved;
-      });
+      // Just Work without a page reload. Reading `selectedMode` here instead
+      // of inside a setSelectedMode updater keeps the state update pure
+      // (React updaters must not call other setters).
+      const prev = selectedModeRef.current;
+      const next = (prev && backends.find((b) => b.id === prev)) ? prev
+        : backends.find((b) => b.id === saved) ? saved
+        : backends.length ? backends[0].id
+        : saved;
+      setAvailableBackends(backends);
+      setSavedAutoCleanByMode(savedMap);
+      setSelectedMode(next);
+      setAutoClean(savedMap[next] === true);
     }).catch(() => {});
   }, []);
+
+  // Re-seed the autoClean checkbox when the user manually picks a different
+  // backend chip — without this, switching external→local would leave the
+  // external autoClean value in the form.
+  const handleSelectMode = useCallback((next) => {
+    setSelectedMode(next);
+    setAutoClean(savedAutoCleanByMode[next] === true);
+  }, [savedAutoCleanByMode]);
 
   useEffect(() => {
     listImageModels().then((m) => {
@@ -479,8 +515,11 @@ export default function ImageGen() {
 
   // Lazy-fetch HF token presence for legacy mflux gated models (FLUX.1-dev).
   // FLUX.2 has its own combined status fetch above (which also covers the
-  // venv install), so skip the duplicate request when isFlux2Model.
-  const needsHfTokenGate = !!currentModel?.requiresHfToken && !isFlux2Model;
+  // venv install), so skip the duplicate request when isFlux2Model. The
+  // `isLocalMode` gate is the important one: codex + external don't run mflux,
+  // so a stale Flux modelId left in state from a prior local session must not
+  // surface the HF banner under those backends.
+  const needsHfTokenGate = isLocalMode && !!currentModel?.requiresHfToken && !isFlux2Model;
   useEffect(() => {
     if (!needsHfTokenGate) { setHfTokenPresent(null); return; }
     const controller = new AbortController();
@@ -537,6 +576,7 @@ export default function ImageGen() {
     ...visibleGallery.map(normalizeImage),
     ...(showHidden ? hiddenGallery.map(normalizeImage) : []),
   ], [visibleGallery, hiddenGallery, showHidden]);
+  const [preview, setPreview] = usePreviewRoute(previewItems);
 
   // Snapshots current form state into a server payload + POSTs it to the
   // mediaJobQueue. Returns the queue's response ({ jobId, position, ... }).
@@ -550,7 +590,8 @@ export default function ImageGen() {
       prompt: composed.prompt,
       negativePrompt: composed.negativePrompt || undefined,
       width, height,
-      mode: 'codex',
+      mode: IMAGE_GEN_MODE.CODEX,
+      autoClean,
     } : {
       prompt: composed.prompt,
       negativePrompt: composed.negativePrompt || undefined,
@@ -562,7 +603,8 @@ export default function ImageGen() {
       quantize,
       loraFilenames: selectedLoras.map((l) => l.filename),
       loraScales: selectedLoras.map((l) => l.scale),
-      mode: 'local',
+      mode: IMAGE_GEN_MODE.LOCAL,
+      autoClean,
     };
     const hasInitImage = isLocalMode && initImage.source != null;
     // Multi-reference editing is FLUX.2-only; gate the slot read so it can't
@@ -705,7 +747,8 @@ export default function ImageGen() {
           width, height,
           steps: steps ? Number(steps) : 25,
           cfgScale,
-          mode: 'external',
+          mode: IMAGE_GEN_MODE.EXTERNAL,
+          autoClean,
         };
         if (seed && Number(seed) >= 0) payload.seed = Number(seed);
         const data = await generateImage(payload);
@@ -755,14 +798,14 @@ export default function ImageGen() {
     if (result) toast.success(nextHidden ? 'Image hidden' : 'Image unhidden');
   };
 
-  const handleClean = async (img, level) => {
+  const handleClean = async (img) => {
     if (!img?.filename) throw new Error('Missing filename');
-    const cleaned = await cleanGalleryImage(img.filename, level).catch((err) => {
+    const cleaned = await cleanGalleryImage(img.filename).catch((err) => {
       toast.error(err.message || 'Failed to clean image');
       throw err;
     });
     setGallery((g) => [cleaned, ...g.filter((x) => x.filename !== cleaned.filename)]);
-    toast.success(`Cleaned (${level}) → ${cleaned.filename}`);
+    toast.success(`Cleaned → ${cleaned.filename}`);
   };
 
   const sendToVideo = (img) => {
@@ -822,7 +865,7 @@ export default function ImageGen() {
                 : 'border-port-error/40 bg-port-error/10 text-port-error'
             }`}>
               {status.connected ? (
-                <><span className="w-2 h-2 rounded-full bg-port-success" /> {status.model || (status.mode === 'local' ? 'mflux/local' : status.mode === 'codex' ? 'codex CLI' : 'external SD API')}</>
+                <><span className="w-2 h-2 rounded-full bg-port-success" /> {status.model || (status.mode === IMAGE_GEN_MODE.LOCAL ? 'mflux/local' : status.mode === IMAGE_GEN_MODE.CODEX ? 'codex CLI' : 'external SD API')}</>
               ) : (
                 <>
                   <AlertTriangle className="w-3 h-3" />
@@ -838,7 +881,7 @@ export default function ImageGen() {
             <BackendChipStrip
               availableBackends={availableBackends}
               value={effectiveMode}
-              onChange={setSelectedMode}
+              onChange={handleSelectMode}
               disabled={statusLoading}
               loadingId={statusLoading ? effectiveMode : null}
               titlePrefix="Use"
@@ -1130,6 +1173,24 @@ export default function ImageGen() {
             )}
           </div>
 
+          <label
+            className="flex items-center gap-2 text-xs text-gray-400 cursor-pointer select-none"
+            title="Re-encode + denoise this render in place: removes the C2PA metadata chunk (when present) and reduces visible AI artifacts. Does NOT defeat SynthID — gpt-image renders stay detectable by openai.com/synthid after a clean. Overrides the saved Settings → Image Gen default for this generation only."
+          >
+            <input
+              type="checkbox"
+              checked={autoClean}
+              onChange={(e) => setAutoClean(e.target.checked)}
+              className="rounded"
+            />
+            <span>
+              Auto-clean this render
+              {savedAutoCleanByMode[effectiveMode] !== undefined && autoClean !== savedAutoCleanByMode[effectiveMode] && (
+                <span className="ml-1 text-port-warning">(overrides saved default)</span>
+              )}
+            </span>
+          </label>
+
           {error && (
             <div className="rounded-lg border border-port-error/40 bg-port-error/10 px-3 py-3 text-xs text-port-error space-y-2">
               <div className="font-semibold text-sm">
@@ -1290,7 +1351,7 @@ export default function ImageGen() {
         updateAnnotation={updateAnnotation}
         onRemix={(item) => item?.raw && handleRemix(item.raw)}
         onSendToVideo={(item) => item?.raw?.filename && sendToVideo(item.raw)}
-        onClean={(item, level) => handleClean(item?.raw, level)}
+        onClean={(item) => handleClean(item?.raw)}
       />
 
 

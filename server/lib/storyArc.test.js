@@ -1,4 +1,8 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 let uuidCounter = 0;
 vi.mock('crypto', async () => {
@@ -162,18 +166,87 @@ describe('storyArc — sanitizeSeasonList', () => {
     expect(out.map((s) => s.title)).toEqual(['B', 'C', 'A']);
   });
 
-  it('deduplicates by id (last write wins)', () => {
+  it('deduplicates by id (last write wins) and warns on collision', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const out = sanitizeSeasonList([
       { id: 'sea-dup', title: 'first', number: 1 },
       { id: 'sea-dup', title: 'second', number: 1 },
     ]);
     expect(out).toHaveLength(1);
     expect(out[0].title).toBe('second');
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const msg = warnSpy.mock.calls[0][0];
+    expect(msg).toContain('sea-dup');
+    expect(msg).toContain('duplicate');
+    warnSpy.mockRestore();
+  });
+
+  it('does not warn when ids are unique', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    sanitizeSeasonList([
+      { id: 'sea-a', title: 'A', number: 1 },
+      { id: 'sea-b', title: 'B', number: 2 },
+    ]);
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  it('reports every duplicate id when multiple ids collide', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    sanitizeSeasonList([
+      { id: 'sea-a', title: 'A1', number: 1 },
+      { id: 'sea-a', title: 'A2', number: 1 },
+      { id: 'sea-b', title: 'B1', number: 2 },
+      { id: 'sea-b', title: 'B2', number: 2 },
+    ]);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const msg = warnSpy.mock.calls[0][0];
+    expect(msg).toContain('sea-a');
+    expect(msg).toContain('sea-b');
+    expect(msg).toContain('2 duplicate');
+    expect(msg).toContain('2 colliding');
+    warnSpy.mockRestore();
+  });
+
+  it('does not repeat the same id in the warning when one id collides 3+ times', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    sanitizeSeasonList([
+      { id: 'sea-a', title: 'A1', number: 1 },
+      { id: 'sea-a', title: 'A2', number: 1 },
+      { id: 'sea-a', title: 'A3', number: 1 },
+    ]);
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    const msg = warnSpy.mock.calls[0][0];
+    const matches = msg.match(/sea-a/g) || [];
+    expect(matches).toHaveLength(1);
+    expect(msg).toContain('2 duplicate');
+    expect(msg).toContain('1 colliding');
+    warnSpy.mockRestore();
   });
 
   it('caps at SEASONS_PER_SERIES_MAX', () => {
     const many = Array.from({ length: ARC_LIMITS.SEASONS_PER_SERIES_MAX + 5 }, (_, i) => ({ title: `s${i}`, number: i + 1 }));
     expect(sanitizeSeasonList(many)).toHaveLength(ARC_LIMITS.SEASONS_PER_SERIES_MAX);
+  });
+
+  it('warns about post-cap duplicate ids without overwriting the surviving entry', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const filler = Array.from(
+      { length: ARC_LIMITS.SEASONS_PER_SERIES_MAX },
+      (_, i) => ({ id: `sea-fill-${i}`, title: `f${i}`, number: i + 1 }),
+    );
+    const out = sanitizeSeasonList([
+      ...filler,
+      { id: 'sea-fill-0', title: 'should-not-overwrite-past-cap', number: 1 },
+    ]);
+    expect(out).toHaveLength(ARC_LIMITS.SEASONS_PER_SERIES_MAX);
+    // Past-cap duplicates surface via the warning but do NOT LWW-overwrite —
+    // preserves the historical first-wins-past-cap behavior so adding the
+    // detector is purely additive.
+    const surviving = out.find((s) => s.id === 'sea-fill-0');
+    expect(surviving.title).toBe('f0');
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0][0]).toContain('sea-fill-0');
   });
 });
 

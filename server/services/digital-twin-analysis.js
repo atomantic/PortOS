@@ -145,7 +145,7 @@ export async function detectContradictions(providerId, model) {
     return { issues: [], error: 'Provider not found or disabled' };
   }
 
-  const result = await callProviderAI(provider, model, prompt, { temperature: 0.3, max_tokens: 2000 });
+  const result = await callProviderAI(provider, model, prompt);
   if (!result.error && result.text) {
     return parseContradictionResponse(result.text);
   }
@@ -190,7 +190,7 @@ export async function generateDynamicTests(providerId, model) {
     return { tests: [], error: 'Provider not found or disabled' };
   }
 
-  const result = await callProviderAI(provider, model, prompt, { temperature: 0.7, max_tokens: 3000 });
+  const result = await callProviderAI(provider, model, prompt);
   if (!result.error && result.text) {
     return parseGeneratedTests(result.text);
   }
@@ -235,7 +235,7 @@ export async function analyzeWritingSamples(samples, providerId, model) {
     return { error: 'Provider not found or disabled' };
   }
 
-  const result = await callProviderAI(provider, model, prompt, { temperature: 0.5, max_tokens: 2000 });
+  const result = await callProviderAI(provider, model, prompt);
   if (!result.error && result.text) {
     return parseWritingAnalysis(result.text);
   }
@@ -368,7 +368,7 @@ export async function analyzeTraits(providerId, model, forceReanalyze = false) {
     return { error: 'Provider not found or disabled' };
   }
 
-  const result = await callProviderAI(provider, model, prompt, { temperature: 0.3, max_tokens: 3000 });
+  const result = await callProviderAI(provider, model, prompt);
   if (result.error) {
     return { error: result.error };
   }
@@ -449,7 +449,7 @@ export async function calculateConfidence(providerId, model) {
     return calculateLocalConfidence(twinContent, currentTraits, meta);
   }
 
-  const result = await callProviderAI(provider, model, prompt, { temperature: 0.3, max_tokens: 2000 });
+  const result = await callProviderAI(provider, model, prompt);
   if (!result.error && result.text) {
     const parsed = parseConfidenceResponse(result.text);
 

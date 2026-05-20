@@ -138,6 +138,14 @@ export async function spawnTuiAgent({
   let lastOutputAt = Date.now();
   let lastLine = '';
   let sessionId = null;
+  // True once the respective buffer crossed its HEADROOM and the head was
+  // dropped. Mirrors `outputBufferTruncated` in `tuiPromptRunner.js`: warn
+  // once per buffer and surface via agent metadata so the agent record
+  // distinguishes a long-run-with-overflow from a clean short run. The raw
+  // buffer feeds analyzeAgentFailure on failure, so a silent slice there can
+  // hide the actual failure tail behind chatty progress redraws.
+  let outputBufferTruncated = false;
+  let rawBufferTruncated = false;
 
   let pendingLines = [];
   let flushTimer = null;
@@ -176,6 +184,12 @@ export async function spawnTuiAgent({
     outputBuffer += `${cleanLine}\n`;
     if (outputBuffer.length > OUTPUT_BUFFER_HEADROOM) {
       outputBuffer = outputBuffer.slice(-OUTPUT_BUFFER_CAP);
+      if (!outputBufferTruncated) {
+        outputBufferTruncated = true;
+        console.warn(`⚠️ TUI agent ${agentId} parsed-output buffer exceeded ${Math.round(OUTPUT_BUFFER_HEADROOM / 1024 / 1024)}MB — head dropped (output.txt is the authoritative on-disk record)`);
+        updateAgent(agentId, { metadata: { outputBufferTruncated: true } })
+          .catch(err => console.error(`❌ TUI agent ${agentId} outputBufferTruncated metadata write failed: ${err.message}`));
+      }
     }
     pendingLines.push(cleanLine);
     scheduleFlush();
@@ -271,7 +285,15 @@ export async function spawnTuiAgent({
   const handleData = async (data) => {
     const text = data.toString();
     rawBuffer += text;
-    if (rawBuffer.length > RAW_BUFFER_HEADROOM) rawBuffer = rawBuffer.slice(-RAW_BUFFER_CAP);
+    if (rawBuffer.length > RAW_BUFFER_HEADROOM) {
+      rawBuffer = rawBuffer.slice(-RAW_BUFFER_CAP);
+      if (!rawBufferTruncated) {
+        rawBufferTruncated = true;
+        console.warn(`⚠️ TUI agent ${agentId} raw PTY buffer exceeded ${Math.round(RAW_BUFFER_HEADROOM / 1024 / 1024)}MB — head dropped (failure analysis may miss earlier symptoms)`);
+        updateAgent(agentId, { metadata: { rawBufferTruncated: true } })
+          .catch(err => console.error(`❌ TUI agent ${agentId} rawBufferTruncated metadata write failed: ${err.message}`));
+      }
+    }
     lastOutputAt = Date.now();
     if (firstOutputAt === null) firstOutputAt = lastOutputAt;
 

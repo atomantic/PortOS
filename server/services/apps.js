@@ -8,6 +8,7 @@ import { SELF_IMPROVEMENT_TASK_TYPES } from './taskSchedule.js';
 import { sanitizeTaskMetadata } from '../lib/validation.js';
 import { PORTS } from '../lib/ports.js';
 import { hasTailscaleCert } from '../../lib/tailscale-https.js';
+import { certPaths } from '../../lib/certPaths.js';
 
 const DATA_DIR = PATHS.data;
 const APPS_FILE = join(DATA_DIR, 'apps.json');
@@ -21,7 +22,7 @@ export const PORTOS_APP_ID = 'portos-default';
 function buildPortosApp() {
   // tlsPort reflects whether the Tailscale cert is actually on disk; if not,
   // don't advertise HTTPS so the Launch button doesn't target a broken scheme.
-  const certPresent = hasTailscaleCert(join(PATHS.data, 'certs'));
+  const certPresent = hasTailscaleCert(certPaths(PATHS.data).dir);
   return {
     name: 'PortOS',
     description: 'Local App OS portal for dev machines',

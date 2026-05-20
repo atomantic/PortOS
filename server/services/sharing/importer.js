@@ -32,13 +32,12 @@ import { SHARING_SCHEMA_VERSION, isManifestCompatible } from './version.js';
 import { insertSeriesWithId, updateSeries, getSeries } from '../pipeline/series.js';
 import { insertIssueWithId, updateIssue, getIssue } from '../pipeline/issues.js';
 import { insertUniverseWithId, updateUniverse, getUniverse } from '../universeBuilder.js';
+import { applyLegacySeriesCanonToUniverse } from '../pipeline/migrateSeriesCanon.js';
 import { findOrCreateUniverseCollection, findOrCreateSeriesCollection, addItem as addCollectionItem, ERR_DUPLICATE as COLLECTION_ERR_DUPLICATE } from '../mediaCollections.js';
 import { adoptImportedSubscription, withReexportSuppressed } from './subscriptions.js';
-import { getInstanceId } from '../instances.js';
+import { getInstanceId, UNKNOWN_INSTANCE_ID } from '../instances.js';
 import { mergePeerAnnotations } from '../mediaAnnotations.js';
 import { isStr } from '../../lib/storyBible.js';
-
-const UNKNOWN_INSTANCE_ID = 'unknown';
 
 function isSelfAuthored(senderInstanceId, localInstanceId) {
   return !!localInstanceId
@@ -432,7 +431,74 @@ async function applyAutoMerge(bucket, manifest, records, { availableAssetKeys = 
       updateFn: (id, record) => updateUniverse(id, () => record),
     });
   }
+  // Pre-B.4 peers ship series records with legacy canon arrays (`characters /
+  // settings|places / objects`) that `sanitizeSeries` strips on insert —
+  // silent data loss for cross-peer imports authored before the B.4 schema
+  // teardown. Mirror the CLI migration here, so the canon lands on the
+  // linked (or freshly-created) universe before mergeOne writes the
+  // sanitized series. Both `settings` (pre-022) and `places` (post-022) wire
+  // names are recognized; the helper coalesces them. No-op for post-B.4
+  // records (the helper returns 'no-legacy' immediately).
+  //
+  // If the migration can't land the canon (helper threw, OR the peer linked
+  // to a universe that isn't in this manifest and isn't local), skip the
+  // sanitized-series insert for that record — otherwise the canon arrays
+  // get silently stripped by `sanitizeSeries` and the bug we just fixed
+  // recurs. The bucket record stays untouched and the relevant pending list
+  // surfaces upward to the manifest-pending check, so the watcher retries
+  // when the underlying cause resolves instead of cursor-advancing into
+  // permanent skip.
+  const skipSeriesMerge = new Set();
+  const legacyCanonPendingUniverses = [];
+  const legacyCanonPendingFailures = [];
   for (const s of records.series) {
+    const hasLegacyCanon = ['characters', 'settings', 'places', 'objects']
+      .some((field) => Array.isArray(s[field]) && s[field].length > 0);
+    if (!hasLegacyCanon) continue;
+
+    // Retry idempotency: when a local series record already exists from a
+    // prior pass (manifest is being retried because some OTHER pending
+    // condition held the cursor back), reuse its persisted universeId so
+    // we don't keep minting fresh "<name> (auto-migrated)" universes per
+    // retry. And if LWW would no-op the upcoming series merge, skip the
+    // helper entirely — re-merging stale remote canon over a locally-newer
+    // universe would just reset provenance.
+    const existing = await getSeries(s.id).catch(() => null);
+    if (existing) {
+      if (!remoteWins(existing.updatedAt, s.updatedAt)) continue;
+      if (!s.universeId && existing.universeId) s.universeId = existing.universeId;
+    }
+
+    const r = await applyLegacySeriesCanonToUniverse(s).catch((err) => {
+      console.log(`⚠️ sharing.importer: legacy series canon migration for ${s.id} failed: ${err.message}`);
+      return null;
+    });
+    if (!r) {
+      // Helper threw — keep the manifest retryable so a transient I/O
+      // failure doesn't permanently lose this series. The failure id
+      // flows through `pendingLegacyCanonFailures` so processManifest
+      // leaves the cursor un-advanced.
+      skipSeriesMerge.add(s.id);
+      legacyCanonPendingFailures.push(s.id);
+      continue;
+    }
+    if (r.skipped === 'missing-universe') {
+      console.log(`⚠️ sharing.importer: skipping series ${s.id} merge — missing universe ${r.universeId}`);
+      skipSeriesMerge.add(s.id);
+      if (r.universeId) legacyCanonPendingUniverses.push(r.universeId);
+      continue;
+    }
+    // Stamp the freshly-created orphan universe id onto the in-memory record
+    // so the upcoming insertSeriesWithId call preserves the link. (We can't
+    // call updateSeries here like the CLI batch does — the series record
+    // hasn't been inserted yet.)
+    if (r.universeCreated && r.universeId) {
+      s.universeId = r.universeId;
+    }
+  }
+
+  for (const s of records.series) {
+    if (skipSeriesMerge.has(s.id)) continue;
     await mergeOne({
       kind: 'series', record: s, label: s.name,
       getFn: getSeries, insertFn: insertSeriesWithId, updateFn: updateSeries,
@@ -492,6 +558,8 @@ async function applyAutoMerge(bucket, manifest, records, { availableAssetKeys = 
     collectionItemsDeferred: itemsDeferred,
     collectionPendingUniverse,
     collectionPendingSeries,
+    legacyCanonPendingUniverses: legacyCanonPendingUniverses.length > 0 ? legacyCanonPendingUniverses : null,
+    legacyCanonPendingFailures: legacyCanonPendingFailures.length > 0 ? legacyCanonPendingFailures : null,
     adoptedSubscription: adoptedSubscription
       ? { id: adoptedSubscription.id, bucketId: adoptedSubscription.bucketId, recordKind: adoptedSubscription.recordKind, recordId: adoptedSubscription.recordId }
       : null,
@@ -704,13 +772,17 @@ export async function processManifest(bucketId, manifestFilename) {
   // `recordIds`.
   const collectionPendingUniverse = outcome?.collectionPendingUniverse || null;
   const collectionPendingSeries = outcome?.collectionPendingSeries || null;
-  if (assetCopy.missing.length > 0 || missingRecords.length > 0 || collectionPendingUniverse || collectionPendingSeries) {
+  const legacyCanonPendingUniverses = outcome?.legacyCanonPendingUniverses || null;
+  const legacyCanonPendingFailures = outcome?.legacyCanonPendingFailures || null;
+  if (assetCopy.missing.length > 0 || missingRecords.length > 0 || collectionPendingUniverse || collectionPendingSeries || legacyCanonPendingUniverses || legacyCanonPendingFailures) {
     if (assetCopy.missing.length > 0) outcome.pendingAssets = assetCopy.missing;
     if (missingRecords.length > 0) outcome.pendingRecords = missingRecords;
     if (collectionPendingUniverse) outcome.pendingCollectionUniverse = collectionPendingUniverse;
     if (collectionPendingSeries) outcome.pendingCollectionSeries = collectionPendingSeries;
+    if (legacyCanonPendingUniverses) outcome.pendingLegacyCanonUniverses = legacyCanonPendingUniverses;
+    if (legacyCanonPendingFailures) outcome.pendingLegacyCanonFailures = legacyCanonPendingFailures;
     sharingEvents.emit('manifest-processed', { bucketId, manifestId: manifest.id, manifestFilename, outcome });
-    console.log(`⏳ sharing: bucket=${bucket.name} manifest=${manifest.id} kind=${manifest.kind} mode=${bucket.mode} waitingForAssets=${assetCopy.missing.length} waitingForRecords=${missingRecords.length}${collectionPendingUniverse ? ` waitingForUniverse=${collectionPendingUniverse}` : ''}${collectionPendingSeries ? ` waitingForSeries=${collectionPendingSeries}` : ''}`);
+    console.log(`⏳ sharing: bucket=${bucket.name} manifest=${manifest.id} kind=${manifest.kind} mode=${bucket.mode} waitingForAssets=${assetCopy.missing.length} waitingForRecords=${missingRecords.length}${collectionPendingUniverse ? ` waitingForUniverse=${collectionPendingUniverse}` : ''}${collectionPendingSeries ? ` waitingForSeries=${collectionPendingSeries}` : ''}${legacyCanonPendingUniverses ? ` waitingForLegacyCanonUniverses=${legacyCanonPendingUniverses.join(',')}` : ''}${legacyCanonPendingFailures ? ` legacyCanonFailures=${legacyCanonPendingFailures.join(',')}` : ''}`);
     return { processed: true, pending: true, manifest, outcome };
   }
   await markProcessed(bucketId, manifestFilename, manifest.id);
@@ -837,6 +909,23 @@ export async function promoteInboxItem(bucketId, manifestId) {
     throw Object.assign(new Error(`Collection payload waiting on series ${outcome.collectionPendingSeries} to be imported first`), {
       code: 'SHARING_SERIES_PENDING',
       pendingCollectionSeries: outcome.collectionPendingSeries,
+    });
+  }
+  // Same gate for the legacy-canon migration: a pre-B.4 series whose linked
+  // universe isn't local or whose helper threw transiently must keep the
+  // inbox row so the user can re-promote after fixing the missing universe
+  // or the transient I/O issue. Without this, the user's "promote" click
+  // would consume the inbox row while the series merge silently skipped.
+  if (outcome.legacyCanonPendingUniverses) {
+    throw Object.assign(new Error(`Legacy series canon waiting on universe ${outcome.legacyCanonPendingUniverses.join(', ')} to be imported first`), {
+      code: 'SHARING_LEGACY_CANON_UNIVERSE_PENDING',
+      pendingLegacyCanonUniverses: outcome.legacyCanonPendingUniverses,
+    });
+  }
+  if (outcome.legacyCanonPendingFailures) {
+    throw Object.assign(new Error(`Legacy series canon migration failed for ${outcome.legacyCanonPendingFailures.join(', ')} — retry after resolving the underlying error`), {
+      code: 'SHARING_LEGACY_CANON_FAILED',
+      pendingLegacyCanonFailures: outcome.legacyCanonPendingFailures,
     });
   }
   // Drop from inbox.

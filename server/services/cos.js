@@ -101,23 +101,20 @@ import { parsePlanItems, extractAllIds, findInProgressIds, pickFirstAvailable } 
 const PLAN_PICK_TASK_TYPES = new Set(['feature-ideas', 'plan-task']);
 
 /**
- * For feature-ideas / plan-task, read the target repo's PLAN.md (+ DONE.md
- * for the uniqueness set), find which item IDs are already in flight via
- * branch/PR scan, and pick the first available item. Mutates `metadata` in
- * place by setting `planId` when a pick succeeds. Falls back silently when
- * PLAN.md is missing or every item is unavailable — the prompt's own
- * brainstorm/exit-clean fallback handles those cases.
+ * For feature-ideas / plan-task, read the target repo's PLAN.md, find which
+ * item IDs are already in flight via branch/PR scan, and pick the first
+ * available item. Mutates `metadata` in place by setting `planId` when a
+ * pick succeeds. Falls back silently when PLAN.md is missing or every item
+ * is unavailable — the prompt's own brainstorm/exit-clean fallback handles
+ * those cases.
  */
 async function applyPlanIdMetadata(taskType, repoPath, metadata) {
   if (!PLAN_PICK_TASK_TYPES.has(taskType)) return;
   if (!repoPath) return;
-  const [planMd, doneMd] = await Promise.all([
-    readFile(join(repoPath, 'PLAN.md'), 'utf-8').catch(() => ''),
-    readFile(join(repoPath, 'DONE.md'), 'utf-8').catch(() => '')
-  ]);
+  const planMd = await readFile(join(repoPath, 'PLAN.md'), 'utf-8').catch(() => '');
   if (!planMd) return;
   const items = parsePlanItems(planMd);
-  const knownIds = new Set([...extractAllIds(planMd), ...extractAllIds(doneMd)]);
+  const knownIds = new Set(extractAllIds(planMd));
   const inFlight = await findInProgressIds(repoPath, knownIds).catch(() => new Set());
   const pick = pickFirstAvailable(items, inFlight);
   if (pick?.id) metadata.planId = pick.id;
@@ -1150,11 +1147,11 @@ function getTaskDescription(taskType, appName) {
       'ui-bugs': `Review UI for visual bugs in ${appName}`,
       'mobile-responsive': `Check mobile responsiveness of ${appName}`,
       'feature-ideas': `Implement a feature idea for ${appName} aligned with GOALS.md and PLAN.md (worktree+PR)`,
-      'plan-task': `Execute next PLAN.md item for ${appName} and archive it to DONE.md (worktree+PR)`,
+      'plan-task': `Execute next PLAN.md item for ${appName}, remove it from PLAN.md, log to changelog (worktree+PR)`,
       'release-check': `Verify release readiness for ${appName}`,
       'jira-sprint-manager': `Triage and implement JIRA sprint tickets for ${appName} (worktree+PR)`,
       'jira-status-report': `Generate JIRA weekly status report for ${appName}`,
-      'do-replan': `Replan: audit PLAN.md for ${appName}, archive done items, prune stale work (worktree+PR)`
+      'do-replan': `Replan: audit PLAN.md for ${appName}, prune completed and stale work (worktree+PR)`
     };
     return descriptions[taskType] ?? null;
   }
@@ -1168,7 +1165,7 @@ function getTaskDescription(taskType, appName) {
     'test-coverage': 'Add missing tests for uncovered code paths',
     'documentation': 'Update documentation, comments, and README files',
     'feature-ideas': 'Implement a feature idea aligned with GOALS.md and PLAN.md (worktree+PR)',
-    'plan-task': 'Execute next PLAN.md item and archive it to DONE.md (worktree+PR)',
+    'plan-task': 'Execute next PLAN.md item, remove it from PLAN.md, log to changelog (worktree+PR)',
     'accessibility': 'Audit and fix accessibility issues (ARIA, keyboard nav, contrast)',
     'dependency-updates': 'Check for and safely update outdated dependencies',
     'error-handling': 'Improve error handling patterns and recovery logic',
@@ -1176,7 +1173,7 @@ function getTaskDescription(taskType, appName) {
     'release-check': 'Verify release readiness (changelog, version, tests)',
     'jira-sprint-manager': 'Triage and implement JIRA sprint tickets (worktree+PR)',
     'jira-status-report': 'Generate JIRA weekly status report',
-    'do-replan': 'Replan: audit PLAN.md, archive done items, prune stale work (worktree+PR)'
+    'do-replan': 'Replan: audit PLAN.md, prune completed and stale work (worktree+PR)'
   };
   return descriptions[taskType] ?? null;
 }
@@ -1603,9 +1600,9 @@ Use model: claude-opus-4-5-20251101 for comprehensive test design`,
 
 Review and improve PortOS documentation:
 
-1. Update PLAN.md and DONE.md:
-   - Move completed milestones from PLAN.md to DONE.md
-   - Add any new features implemented to DONE.md
+1. Update PLAN.md:
+   - Remove completed milestones from PLAN.md outright (do NOT archive to a DONE.md — that file is retired; \`git log\` and \`.changelog/\` are the audit trail)
+   - Add any new features implemented as entries in \`.changelog/NEXT.md\` (mirror the prose style of recent entries)
    - Keep PLAN.md focused on next actions and future work
 
 2. Check docs/ folder:
@@ -1640,7 +1637,7 @@ Your goal is to implement ONE feature.
 
 1. Read GOALS.md for context on user goals and priorities
 2. Read PLAN.md for the current roadmap and planned work (next actions, audit findings, future ideas)
-3. Read DONE.md to understand what has already been implemented (avoid re-implementing existing features)
+3. Skim recent \`.changelog/\` entries and \`git log\` to understand what has already shipped (avoid re-implementing existing features)
 4. Search for existing feature idea documents:
    - Check .planning/research/FEATURES.md for planned features
    - Check .planning/ directory for any feature specs or research docs
@@ -1652,7 +1649,7 @@ Your goal is to implement ONE feature.
 
 7. Choose ONE feature to implement that:
    - Aligns with GOALS.md priorities
-   - Is NOT already completed in DONE.md (avoid re-implementing shipped features)
+   - Is NOT already shipped per recent \`.changelog/\` entries or \`git log\` (avoid re-implementing shipped features)
    - Is NOT already planned in PLAN.md (avoid duplicating roadmap work)
    - Is NOT already documented in existing feature idea files
    - Is a small, self-contained improvement (completable in one session)
@@ -1888,9 +1885,15 @@ async function generateManagedAppImprovementTask(app, state) {
     Object.assign(metadata, sanitizedGlobalMeta);
   }
 
-  // Apply sanitized per-app taskMetadata overrides (merge on top of global)
+  // Apply sanitized per-app taskMetadata overrides (merge on top of global).
+  // Strip managed-agent fields from the override first so an existing
+  // app-level value for a now-managed field can't overwrite the global's
+  // enforced default (the UI locks the toggle, the merge has to honor that).
   const appOverrides = await getAppTaskTypeOverrides(app.id);
-  const sanitizedAppMeta = sanitizeTaskMetadata(appOverrides[nextType]?.taskMetadata);
+  const strippedAppOverride = taskSchedule.stripManagedAgentOptionsFromOverride(
+    nextType, appOverrides[nextType]?.taskMetadata
+  );
+  const sanitizedAppMeta = sanitizeTaskMetadata(strippedAppOverride);
   if (sanitizedAppMeta) {
     Object.assign(metadata, sanitizedAppMeta);
   }
@@ -1977,9 +1980,14 @@ async function generateManagedAppImprovementTaskForType(taskType, app, state, { 
     Object.assign(metadata, sanitizedGlobalMeta);
   }
 
-  // Apply sanitized per-app taskMetadata overrides (merge on top of global)
+  // Apply sanitized per-app taskMetadata overrides (merge on top of global).
+  // Strip managed-agent fields first — see comment in the sibling
+  // generateManagedAppTask path for the full rationale.
   const appOverrides = await getAppTaskTypeOverrides(app.id);
-  const sanitizedAppMeta = sanitizeTaskMetadata(appOverrides[taskType]?.taskMetadata);
+  const strippedAppOverride = taskSchedule.stripManagedAgentOptionsFromOverride(
+    taskType, appOverrides[taskType]?.taskMetadata
+  );
+  const sanitizedAppMeta = sanitizeTaskMetadata(strippedAppOverride);
   if (sanitizedAppMeta) {
     Object.assign(metadata, sanitizedAppMeta);
   }
@@ -2309,6 +2317,7 @@ export async function addTask(taskData, taskType = 'user', { raw = false } = {})
     else if (taskData.simplify === false) metadata.simplify = false;
     if (taskData.reviewLoop === true) metadata.reviewLoop = true;
     else if (taskData.reviewLoop === false) metadata.reviewLoop = false;
+    if (typeof taskData.reviewer === 'string' && taskData.reviewer) metadata.reviewer = taskData.reviewer;
     if (taskData.jiraTicketId) metadata.jiraTicketId = taskData.jiraTicketId;
     if (taskData.jiraTicketUrl) metadata.jiraTicketUrl = taskData.jiraTicketUrl;
     if (taskData.screenshots?.length > 0) metadata.screenshots = taskData.screenshots;

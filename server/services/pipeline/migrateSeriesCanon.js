@@ -32,80 +32,137 @@ const KIND_BY_FIELD = Object.freeze(
   Object.fromEntries(Object.entries(BIBLE_FIELD).map(([kind, field]) => [field, kind])),
 );
 
+const formatCounts = (counts) =>
+  Object.entries(counts).map(([k, n]) => `${n} ${k}`).join(', ');
+
+/**
+ * Move a single series record's legacy `characters/settings/objects` arrays
+ * into its linked (or freshly-created) universe. Pure orchestrator: does NOT
+ * write the series itself — the caller decides whether to call `updateSeries`
+ * (CLI batch) or stamp `universeId` onto an in-memory record (sharing
+ * importer) so `sanitizeSeries` doesn't strip the new link before the record
+ * lands.
+ *
+ * Returns:
+ *   - `perKindSeen`     — raw incoming counts per field on the source record.
+ *   - `perKindApplied`  — incoming counts only where the universe-side patch
+ *                         actually grew or changed (zero when the universe
+ *                         already had every entry).
+ *   - `universeId`      — the universe the series should be linked to (existing
+ *                         or freshly-created), null when the helper couldn't
+ *                         resolve one (dry-run orphan, missing universe).
+ *   - `universeCreated` — true when this call created a new orphan universe.
+ *   - `migrated`        — true when the universe was actually patched.
+ *   - `skipped`         — `'no-legacy' | 'missing-universe' | 'dry-run-orphan' | null`.
+ */
+export async function applyLegacySeriesCanonToUniverse(series, { dryRun = false, log = console.log } = {}) {
+  // Coalesce the pre-022 `settings[]` alias onto `places[]` so peers that
+  // shipped from a pre-rename install still migrate cleanly. Local disk is
+  // post-rename (migration 022 ran at setup), so this is a no-op for the
+  // CLI batch and only carries weight for cross-peer share-bucket imports.
+  const incomingPlaces = Array.isArray(series.places) && series.places.length > 0
+    ? series.places
+    : (Array.isArray(series.settings) ? series.settings : []);
+  const normalized = { ...series, places: incomingPlaces };
+
+  const perKindSeen = {
+    characters: Array.isArray(normalized.characters) ? normalized.characters.length : 0,
+    places: incomingPlaces.length,
+    objects: Array.isArray(normalized.objects) ? normalized.objects.length : 0,
+  };
+  const perKindApplied = { characters: 0, places: 0, objects: 0 };
+  if (perKindSeen.characters + perKindSeen.places + perKindSeen.objects === 0) {
+    return { perKindSeen, perKindApplied, universeId: normalized.universeId || null, universeCreated: false, migrated: false, skipped: 'no-legacy' };
+  }
+  series = normalized;
+
+  let universeId = series.universeId;
+  let universeCreated = false;
+  if (!universeId) {
+    if (dryRun) {
+      log(`📋 [dry-run] Would create universe for orphan series "${series.name}" (${series.id})`);
+      return { perKindSeen, perKindApplied, universeId: null, universeCreated: false, migrated: false, skipped: 'dry-run-orphan' };
+    }
+    const newUniverse = await createUniverse({
+      name: `${series.name} (auto-migrated)`,
+      starterPrompt: series.logline || series.premise?.slice(0, 500) || '',
+    });
+    universeId = newUniverse.id;
+    universeCreated = true;
+    log(`🌌 Created universe "${newUniverse.name}" (${newUniverse.id}) for orphan series "${series.name}"`);
+  }
+
+  const universe = await getUniverse(universeId).catch(() => null);
+  if (!universe) {
+    log(`⚠️ Series "${series.name}" links to missing universe ${universeId} — skipping`);
+    return { perKindSeen, perKindApplied, universeId, universeCreated, migrated: false, skipped: 'missing-universe' };
+  }
+
+  const patch = {};
+  for (const [field, kind] of Object.entries(KIND_BY_FIELD)) {
+    const incoming = Array.isArray(series[field]) ? series[field] : [];
+    if (incoming.length === 0) continue;
+    // mergeExtractedBible mutates its first arg AND can mutate matched
+    // entries in place (firstAppearance / evidence / missingFromProse).
+    // `[...arr]` is only a shallow clone, so a mutation would also reach
+    // the live universe object AND defeat the post-merge diff check
+    // (stringifying the mutated object on both sides hides the change).
+    // Snapshot to JSON before the call, run the merge on a deep clone, and
+    // diff against the frozen snapshot.
+    const beforeJson = JSON.stringify(Array.isArray(universe[field]) ? universe[field] : []);
+    // Mirror the live extract path's provenance (textStages.js +
+    // routes/pipeline.js): series-driven canon enters the universe as
+    // SERIES_EXTRACT with autoLock so a later AI refine/differentiate can't
+    // silently rewrite it. Without these opts the migrated entries default
+    // to source:'ai' + autoLock:false, leaving them one click away from
+    // being clobbered — the opposite of what the live path promises.
+    const merged = mergeExtractedBible(JSON.parse(beforeJson), incoming, kind, {
+      source: BIBLE_SOURCE.SERIES_EXTRACT,
+      autoLock: true,
+      sourceSeriesId: series.id,
+    });
+    if (JSON.stringify(merged) !== beforeJson) {
+      patch[field] = merged;
+      perKindApplied[field] = incoming.length;
+    }
+  }
+
+  let migrated = false;
+  if (Object.keys(patch).length > 0) {
+    if (dryRun) {
+      log(`📋 [dry-run] Would merge into universe "${universe.name}": ${formatCounts(perKindSeen)} from series "${series.name}"`);
+    } else {
+      await updateUniverse(universeId, patch);
+      migrated = true;
+      log(`✅ Migrated series "${series.name}" → universe "${universe.name}": ${formatCounts(perKindSeen)}`);
+    }
+  }
+
+  return { perKindSeen, perKindApplied, universeId, universeCreated, migrated, skipped: null };
+}
+
 export async function migrateSeriesCanon({ dryRun = false, log = console.log } = {}) {
   const { series: rawSeries } = await readRawSeriesState();
   const series = Array.isArray(rawSeries) ? rawSeries : [];
-  const summary = { seriesScanned: 0, seriesMigrated: 0, universesCreated: 0, perKind: { characters: 0, settings: 0, objects: 0 } };
+  const summary = { seriesScanned: 0, seriesMigrated: 0, universesCreated: 0, perKind: { characters: 0, places: 0, objects: 0 } };
 
   for (const s of series) {
     summary.seriesScanned += 1;
-    const counts = {
-      characters: Array.isArray(s.characters) ? s.characters.length : 0,
-      settings: Array.isArray(s.settings) ? s.settings.length : 0,
-      objects: Array.isArray(s.objects) ? s.objects.length : 0,
-    };
-    if (counts.characters + counts.settings + counts.objects === 0) continue;
-
-    // Auto-create a universe for orphan series so the migration completes
-    // without manual linking. Named after the series so the user can find it
-    // and merge later if desired.
-    let universeId = s.universeId;
-    if (!universeId) {
-      if (dryRun) {
-        log(`📋 [dry-run] Would create universe for orphan series "${s.name}" (${s.id})`);
-      } else {
-        const newUniverse = await createUniverse({
-          name: `${s.name} (auto-migrated)`,
-          starterPrompt: s.logline || s.premise?.slice(0, 500) || '',
-        });
-        await updateSeries(s.id, { universeId: newUniverse.id });
-        universeId = newUniverse.id;
-        summary.universesCreated += 1;
-        log(`🌌 Created universe "${newUniverse.name}" (${newUniverse.id}) for orphan series "${s.name}"`);
-      }
-    }
-
-    const universe = await getUniverse(universeId).catch(() => null);
-    if (!universe) {
-      log(`⚠️ Series "${s.name}" links to missing universe ${universeId} — skipping`);
-      continue;
-    }
-
-    const patch = {};
-    for (const [field, kind] of Object.entries(KIND_BY_FIELD)) {
-      const incoming = Array.isArray(s[field]) ? s[field] : [];
-      if (incoming.length === 0) continue;
-      // mergeExtractedBible mutates its first arg (pushes new entries into
-      // the array, then sorts in place). Snapshot the universe side BEFORE
-      // the call so the diff check below sees the pre-merge length, and
-      // pass a clone so the live universe object isn't mutated mid-loop.
-      const before = Array.isArray(universe[field]) ? universe[field] : [];
-      // Mirror the live extract path's provenance (textStages.js +
-      // routes/pipeline.js): series-driven canon enters the universe as
-      // SERIES_EXTRACT with autoLock so a later AI refine/differentiate
-      // can't silently rewrite it. Without these opts the migrated
-      // entries default to source:'ai' + autoLock:false, leaving them one
-      // click away from being clobbered — the opposite of what the live
-      // path promises.
-      const merged = mergeExtractedBible([...before], incoming, kind, {
-        source: BIBLE_SOURCE.SERIES_EXTRACT,
-        autoLock: true,
-        sourceSeriesId: s.id,
-      });
-      if (merged.length > before.length || JSON.stringify(merged) !== JSON.stringify(before)) {
-        patch[field] = merged;
-        summary.perKind[field] += incoming.length;
-      }
-    }
-
-    if (Object.keys(patch).length > 0) {
-      if (dryRun) {
-        log(`📋 [dry-run] Would merge into universe "${universe.name}": ${Object.entries(counts).map(([k, n]) => `${n} ${k}`).join(', ')} from series "${s.name}"`);
-      } else {
-        await updateUniverse(universeId, patch);
-        summary.seriesMigrated += 1;
-        log(`✅ Migrated series "${s.name}" → universe "${universe.name}": ${Object.entries(counts).map(([k, n]) => `${n} ${k}`).join(', ')}`);
-      }
+    // For orphan series, defer the link-to-universe write until AFTER the
+    // canon has landed in the universe. The link write strips the series'
+    // legacy `characters/settings/objects` (sanitizeSeries no longer
+    // round-trips them post-B.4), so a crash between linking and merging
+    // would leave the series stripped + the new universe empty.
+    const r = await applyLegacySeriesCanonToUniverse(s, { dryRun, log });
+    if (r.skipped === 'no-legacy') continue;
+    if (r.universeCreated) summary.universesCreated += 1;
+    if (r.migrated) summary.seriesMigrated += 1;
+    for (const field of Object.keys(summary.perKind)) summary.perKind[field] += r.perKindApplied[field];
+    // Link the orphan series to the (now-populated) universe — sanitizeSeries
+    // strips legacy canon during this write, but it's already in the universe
+    // so the data isn't lost.
+    if (r.universeCreated && !dryRun) {
+      await updateSeries(s.id, { universeId: r.universeId });
     }
   }
 

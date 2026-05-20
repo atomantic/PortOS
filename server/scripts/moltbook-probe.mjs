@@ -18,6 +18,7 @@
 import { readFile } from 'fs/promises';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { isPlainObject } from '../lib/objects.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = resolve(__dirname, '..', '..');
@@ -97,7 +98,7 @@ async function rawRequest(apiKey, method, endpoint, body = null) {
 
       // Also check nested objects for challenge fields
       for (const [key, value] of Object.entries(data)) {
-        if (value && typeof value === 'object' && !Array.isArray(value)) {
+        if (isPlainObject(value)) {
           const nestedFound = Object.keys(value).filter(k => challengeKeys.includes(k.toLowerCase()));
           if (nestedFound.length > 0) {
             console.log(`\n🔐 NESTED CHALLENGE in "${key}"! Keys: ${nestedFound.join(', ')}`);

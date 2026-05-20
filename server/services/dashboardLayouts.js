@@ -38,7 +38,7 @@ const DEFAULT_LAYOUTS = [
       'quick-brain', 'quick-task',
       'apps',
       'cos', 'goal-progress', 'upcoming-tasks',
-      'proactive-alerts', 'review-hub', 'system-health', 'backup', 'death-clock', 'quick-stats', 'decision-log',
+      'proactive-alerts', 'review-hub', 'system-health', 'network-exposure', 'backup', 'death-clock', 'quick-stats', 'decision-log',
       'activity-streak', 'hourly-activity',
     ],
     // Above-the-fold capture row stretches to h=5 so the Quick Task card
@@ -60,6 +60,7 @@ const DEFAULT_LAYOUTS = [
       { id: 'backup',           x: 0,  y: 10, w: 3, h: 4 },
       { id: 'quick-stats',      x: 3,  y: 10, w: 3, h: 3 },
       { id: 'goal-progress',    x: 6,  y: 10, w: 3, h: 4 },
+      { id: 'network-exposure', x: 9,  y: 10, w: 3, h: 5 },
       // Row 14–17: lower-priority + cos
       { id: 'decision-log',     x: 0,  y: 14, w: 4, h: 2 },
       { id: 'cos',              x: 4,  y: 14, w: 5, h: 4 },
@@ -104,17 +105,18 @@ const DEFAULT_LAYOUTS = [
     id: 'ops',
     name: 'Ops',
     builtIn: true,
-    widgets: ['system-health', 'cos', 'backup', 'apps', 'quick-stats'],
+    widgets: ['system-health', 'network-exposure', 'cos', 'backup', 'apps', 'quick-stats'],
     // System monitoring focus — system-health takes the tall left column
     // (the primary alarm surface), cos in the center for ChiefOfStaff
     // status, backup + quick-stats stacked on the right, apps grid fills
     // the empty cell below cos so all 5 widgets fit above the fold.
     grid: [
-      { id: 'system-health', x: 0, y: 0, w: 6, h: 5 },
-      { id: 'quick-stats',   x: 6, y: 0, w: 6, h: 3 },
-      { id: 'cos',           x: 6, y: 3, w: 6, h: 4 },
-      { id: 'backup',        x: 0, y: 5, w: 6, h: 3 },
-      { id: 'apps',          x: 0, y: 8, w: 12, h: 11 },
+      { id: 'system-health',    x: 0, y: 0,  w: 6,  h: 5 },
+      { id: 'quick-stats',      x: 6, y: 0,  w: 6,  h: 3 },
+      { id: 'cos',              x: 6, y: 3,  w: 6,  h: 4 },
+      { id: 'backup',           x: 0, y: 5,  w: 3,  h: 3 },
+      { id: 'network-exposure', x: 3, y: 5,  w: 3,  h: 5 },
+      { id: 'apps',             x: 0, y: 10, w: 12, h: 11 },
     ],
   },
 ];

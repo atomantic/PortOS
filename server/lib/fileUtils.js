@@ -132,7 +132,9 @@ export async function ensureDirs(dirs) {
  * await atomicWrite(LOG_FILE, 'raw string content');
  */
 export async function atomicWrite(filePath, data) {
-  const payload = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+  // Buffer must pass through unchanged — JSON.stringify on a Buffer produces
+  // `{"type":"Buffer","data":[...]}` which corrupts binary writes (PNG, etc.).
+  const payload = typeof data === 'string' || Buffer.isBuffer(data) ? data : JSON.stringify(data, null, 2);
   await ensureDir(dirname(filePath));
   const tmp = `${filePath}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`;
   await writeFile(tmp, payload);

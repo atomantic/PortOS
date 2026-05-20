@@ -73,6 +73,87 @@ describe('CanonCard — "from series" provenance chip', () => {
   });
 });
 
+describe('CanonCard — inline description editor', () => {
+  const editableKind = {
+    key: 'characters',
+    label: 'Characters',
+    descFor: (e) => e.physicalDescription || e.description || '',
+    descField: 'physicalDescription',
+    descFieldFallback: 'description',
+    descFieldMax: 2000,
+  };
+
+  it('stays read-only when locked even with onPatchEntry wired', () => {
+    const onPatchEntry = vi.fn();
+    render(
+      <CanonCard
+        kind={editableKind}
+        entry={{ ...baseEntry, physicalDescription: 'Tall.', locked: true }}
+        onRender={() => {}}
+        onPatchEntry={onPatchEntry}
+      />,
+    );
+    expect(screen.getByText('Tall.')).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText(/Describe Lyra/)).not.toBeInTheDocument();
+  });
+
+  it('renders a buffered textarea when unlocked + onPatchEntry + kind.descField is wired', () => {
+    const onPatchEntry = vi.fn();
+    render(
+      <CanonCard
+        kind={editableKind}
+        entry={{ ...baseEntry, physicalDescription: 'Tall.' }}
+        onRender={() => {}}
+        onPatchEntry={onPatchEntry}
+      />,
+    );
+    const textarea = screen.getByPlaceholderText(/Describe Lyra/);
+    expect(textarea).toHaveValue('Tall.');
+    fireEvent.change(textarea, { target: { value: 'Tall, sharp-eyed cartographer.' } });
+    // Buffered — no PATCH until blur.
+    expect(onPatchEntry).not.toHaveBeenCalled();
+    fireEvent.blur(textarea);
+    expect(onPatchEntry).toHaveBeenCalledWith('ent-1', { physicalDescription: 'Tall, sharp-eyed cartographer.' });
+  });
+
+  it('pre-fills from the legacy fallback field and migrates to the canonical field on save', () => {
+    const onPatchEntry = vi.fn();
+    render(
+      <CanonCard
+        kind={editableKind}
+        // Legacy entry: only `description` (the fallback), no `physicalDescription`.
+        entry={{ ...baseEntry, description: 'Cartographer-spy.' }}
+        onRender={() => {}}
+        onPatchEntry={onPatchEntry}
+      />,
+    );
+    const textarea = screen.getByPlaceholderText(/Describe Lyra/);
+    expect(textarea).toHaveValue('Cartographer-spy.');
+    fireEvent.change(textarea, { target: { value: 'Cartographer-spy with a forged passport.' } });
+    fireEvent.blur(textarea);
+    // Migrates onto the canonical field — descFor will now prefer it.
+    expect(onPatchEntry).toHaveBeenCalledWith('ent-1', { physicalDescription: 'Cartographer-spy with a forged passport.' });
+  });
+
+  it('falls back to read-only when kind.descField is absent (NounsStage / series view)', () => {
+    const seriesKind = {
+      key: 'characters', label: 'Characters',
+      descFor: (e) => e.description || '',
+      // No descField — series view stays read-only on canon descriptions.
+    };
+    render(
+      <CanonCard
+        kind={seriesKind}
+        entry={baseEntry}
+        onRender={() => {}}
+        onPatchEntry={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('Cartographer-spy.')).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText(/Describe Lyra/)).not.toBeInTheDocument();
+  });
+});
+
 describe('CanonCard — wardrobe pending-row promotion', () => {
   const renderEditable = (onPatchEntry) => render(
     <CanonCard
@@ -123,5 +204,27 @@ describe('CanonCard — wardrobe pending-row promotion', () => {
     fireEvent.change(nameInput, { target: { value: '   ' } });
     fireEvent.blur(nameInput);
     expect(onPatchEntry).not.toHaveBeenCalled();
+  });
+
+  it('promotes via ride-along when description blurs first with a pending name draft', () => {
+    // Sibling-draft ride-along: useRowDraft ships BOTH columns on either
+    // commit, so a fast desc-blur after typing a name (without ever blurring
+    // the name input) still promotes the row with name intact. Pre-useRowDraft
+    // this case stayed in pendingNew because description's commit didn't see
+    // the name draft.
+    const onPatchEntry = vi.fn();
+    renderEditable(onPatchEntry);
+    fireEvent.click(screen.getByText(/Outfits/));
+    fireEvent.click(screen.getByText(/Add outfit/));
+    const nameInput = screen.getByPlaceholderText(/Outfit name/);
+    const descInput = screen.getByPlaceholderText(/What's the character wearing/);
+    fireEvent.change(nameInput, { target: { value: 'Wedding' } });
+    fireEvent.change(descInput, { target: { value: 'Cream linen' } });
+    fireEvent.blur(descInput);
+    expect(onPatchEntry).toHaveBeenCalledTimes(1);
+    const [, patch] = onPatchEntry.mock.calls[0];
+    expect(patch.wardrobes).toHaveLength(1);
+    expect(patch.wardrobes[0].name).toBe('Wedding');
+    expect(patch.wardrobes[0].description).toBe('Cream linen');
   });
 });

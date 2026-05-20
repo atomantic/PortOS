@@ -101,6 +101,9 @@ export function bucketBlobSidecarPath(bucketPath, hash) {
   if (!isHexHash(hash)) throw makeErr(`Invalid asset hash: ${hash}`, ERR_VALIDATION);
   return join(bucketBlobsDir(bucketPath), `${hash}.metadata.json`);
 }
+// Sidecar mapping `<sourcePath>:<mtimeMs>:<size> → <hash>` so the exporter can
+// skip `sha256File` + `copyFile` on re-export of unchanged assets.
+export function bucketBlobIndexPath(bucketPath) { return join(bucketBlobsDir(bucketPath), '.index.json'); }
 export function imageSidecarName(filename) { return filename.replace(IMAGE_EXT_RE, '') + '.metadata.json'; }
 
 /** Lay out the canonical bucket structure (idempotent). */

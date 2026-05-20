@@ -1288,7 +1288,7 @@ const TOOLS = [
       // and not every plan exposes image_gen. The dispatcher would also
       // reject this, but catching it here lets us return a friendlier
       // summary to the voice agent / palette.
-      if (requestedMode === 'codex') {
+      if (requestedMode === imageGen.IMAGE_GEN_MODE.CODEX) {
         const s = await getSettings();
         if (!s?.imageGen?.codex?.enabled) {
           return { ok: false, summary: 'Codex Imagegen is disabled — enable it in Settings → Image Gen first.' };
@@ -1336,7 +1336,7 @@ const TOOLS = [
       }
 
       const usedMode = result?.mode || requestedMode || 'default';
-      const isAsync = usedMode === 'local' || usedMode === 'codex';
+      const isAsync = usedMode === imageGen.IMAGE_GEN_MODE.LOCAL || usedMode === imageGen.IMAGE_GEN_MODE.CODEX;
       // External resolves with the file already on disk — short-circuit.
       if (!isAsync) {
         waiter.cleanup();

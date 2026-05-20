@@ -23,7 +23,9 @@ vi.mock('../../lib/fileUtils.js', async () => {
   });
 });
 vi.mock('../instances.js', () => ({
-tryReadFile: vi.fn().mockResolvedValue(null), getInstanceId: () => Promise.resolve('inst-test') }));
+  getInstanceId: () => Promise.resolve('inst-test'),
+  UNKNOWN_INSTANCE_ID: 'unknown',
+}));
 vi.mock('../mediaJobQueue/index.js', () => ({ getJob: () => null }));
 
 const buckets = await import('./buckets.js');

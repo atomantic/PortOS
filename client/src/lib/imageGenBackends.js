@@ -1,6 +1,6 @@
 import { Cpu, Terminal, Cloud } from 'lucide-react';
 
-export const IMAGE_GEN_MODE = { LOCAL: 'local', CODEX: 'codex', EXTERNAL: 'external' };
+export const IMAGE_GEN_MODE = Object.freeze({ LOCAL: 'local', CODEX: 'codex', EXTERNAL: 'external' });
 
 const META = {
   [IMAGE_GEN_MODE.LOCAL]:    { label: 'Local',    icon: Cpu },

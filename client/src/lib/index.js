@@ -17,6 +17,7 @@ export * from './imageGenResolutions.js';
 export * from './issueLength.js';
 export * from './pipelineImageDefaults.js';
 export * from './runnerFamilies.js';
+export * from './videoGenResolutions.js';
 export * from './wrImageDefaults.js';
 
 // === Graph & sim ===
@@ -26,6 +27,11 @@ export * from './graphSimulation.js';
 export * from './clipboard.js';
 export * from './genUtils.js';
 export * from './joinInfluenceList.js';
+export * from './loopbackHost.js';
 export * from './mediaNavigation.js';
 export * from './unsorted.js';
 export * from './upsertByIdPrepend.js';
+export * from './voiceLabel.js';
+
+// === Page-scoped pure helpers ===
+export * from './universeBuilderExpand.js';

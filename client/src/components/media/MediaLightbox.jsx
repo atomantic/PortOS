@@ -8,13 +8,24 @@ import AddToCollectionMenu from './AddToCollectionMenu';
 import { useScrollLock } from '../../hooks/useScrollLock';
 import { useSwipeNav } from '../../hooks/useSwipeNav';
 import { copyToClipboard } from '../../lib/clipboard';
+import { IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
 
-// Intentionally NOT migrated to <ui/Modal>. The prev/next buttons sit as
-// viewport-edge siblings of the card (not children of a constrained panel
-// box), and the Esc cascade refineOpen → fullScreen → close is layered
-// into the window keydown handler below. Modal would wrap children in a
-// panel container and add its own Esc listener — both fight this
-// lightbox's existing UX.
+// Intentionally NOT migrated to <ui/Modal> or <components/Drawer>. The
+// prev/next buttons sit as viewport-edge siblings of the card (not children
+// of a constrained panel box), and the Esc cascade refineOpen → fullScreen
+// → close is layered into the window keydown handler below.
+//   - Modal wraps children in a panel container (which the viewport-edge
+//     chevrons can't live inside) and owns Esc via a stack-aware global
+//     handler that stopImmediatePropagation's the keystroke — the lightbox's
+//     own window keydown listener never sees Esc and the cascade dies. Could
+//     be threaded through Modal's onEsc prop, but at the cost of bypassing
+//     the stack model for this one caller.
+//   - Drawer is a right-side slide-in over a normal page; SettingsPane below
+//     is an inline layout sibling of the image, not a slide-in. Its flat Esc
+//     listener also calls onClose directly, racing the lightbox's own window
+//     keydown listener.
+// (A mobile tap-to-open bottom-sheet drawer existed pre-ed0e4859 and was
+// removed because it covered the image area in fullscreen.)
 
 const NOTE_MAX = 2000;
 const NOTE_DEBOUNCE_MS = 500;
@@ -29,12 +40,30 @@ const isEditableTarget = (e) => {
   return !!(t && (t.tagName === 'TEXTAREA' || t.tagName === 'INPUT' || t.isContentEditable));
 };
 
-// Mirror of CLEAN_LEVELS in server/routes/imageClean.js. If the server adds a
-// new level, drop a label here and the pill renders automatically.
-const CLEAN_LEVEL_LABELS = { light: 'Light', aggressive: 'Aggressive' };
+const CLEAN_TOOLTIP = 'Re-encode and denoise: removes the C2PA metadata chunk (when present) and reduces visible AI-generation artifacts. Does NOT defeat SynthID — gpt-image / Imagen / Gemini renders remain detectable by their vendor watermark checkers. Saves a new image alongside the original.';
 
-// onClean(item, level) — optional. Returning a rejected promise keeps the
-// lightbox open (e.g. on error) so the user can retry.
+// Three lineage cases:
+//   - auto-cleaned (replaced in place): "Auto-cleaned (aggressive)"
+//   - manually cleaned (sidecar copy):  "Cleaned (aggressive) from <orig>"
+//   - neither: returns null and the meta row is dropped by the null-filter
+function describeCleanedLineage(item) {
+  if (item.autoCleaned) {
+    return `Auto-cleaned (${item.cleanLevel || 'aggressive'})${item.c2paStripped ? ' · C2PA stripped' : ''}`;
+  }
+  if (item.cleanedFrom) {
+    return `${item.cleanLevel ? `Cleaned (${item.cleanLevel}) ` : 'Cleaned '}from ${item.cleanedFrom}`;
+  }
+  return null;
+}
+
+// onClean(item) — optional. Returning a rejected promise keeps the lightbox
+// open (e.g. on error) so the user can retry.
+//
+// variantGroup — optional `{ active, group: [{ label, item }, ...] }` shape
+// from `computeImageVariantGroup` (in `./variants.js`). When present, the
+// SettingsPane renders a segmented control to swap between the original
+// image and its cleaned copies without closing the modal. `onSelectVariant`
+// is the click handler — typically wired to the host page's `setPreview`.
 export default function MediaLightbox({
   item,
   onClose,
@@ -48,6 +77,8 @@ export default function MediaLightbox({
   hasNext = false,
   annotation = null,
   onAnnotationChange,
+  variantGroup = null,
+  onSelectVariant,
 }) {
   const [fullScreen, setFullScreen] = useState(false);
   const [refineOpen, setRefineOpen] = useState(false);
@@ -108,8 +139,21 @@ export default function MediaLightbox({
     copyToClipboard(text, `${label} copied`);
   };
 
-  const isCodex = item.mode === 'codex';
+  const isCodex = item.mode === IMAGE_GEN_MODE.CODEX;
+  // Map raw `entryKind` tokens to user-facing labels — the sidecar stores
+  // 'canon' / 'variation' / 'sheet' (ENTRY_REF_KIND values) for parity with
+  // the server contract; users shouldn't see the wire tokens.
+  const entryKindLabel = ({ canon: 'Canon entry', variation: 'Category variation', sheet: 'Composite sheet' })[item.entryKind] || item.entryKind;
+  const cleanedLabel = describeCleanedLineage(item);
+
   const meta = [
+    // Universe Builder context — placed first so "this is Ash from MyVerse"
+    // reads before the technical render params. Sidecars without a universe
+    // tag fall through the existing null-filter at the end.
+    ['Universe', item.universeName],
+    ['Entity', item.entryName],
+    ['Kind', entryKindLabel],
+    ['Category', item.entryCategory],
     ['Model', item.modelId],
     ['Resolution', item.width && item.height ? `${item.width}×${item.height}` : null],
     ['Steps', item.steps],
@@ -121,6 +165,7 @@ export default function MediaLightbox({
     // unique-run identifier.
     ['Seed', item.seed ?? (isCodex ? 'n/a (gpt-image-2)' : null)],
     ['Codex session', item.codexSessionId],
+    ['Cleaned', cleanedLabel],
     ['Frames', item.numFrames],
     ['FPS', item.fps],
     ['Created', item.createdAt && new Date(item.createdAt).toLocaleString()],
@@ -215,6 +260,8 @@ export default function MediaLightbox({
             onRefine={() => setRefineOpen(true)}
             annotation={annotation}
             onAnnotationChange={onAnnotationChange}
+            variantGroup={variantGroup}
+            onSelectVariant={onSelectVariant}
           />
         )}
       </div>
@@ -253,9 +300,10 @@ function SettingsPane({
   onClose, onRemix, onSendToVideo, onContinue, onClean,
   copy, onRefine,
   annotation, onAnnotationChange,
+  variantGroup, onSelectVariant,
 }) {
   const asideClasses = 'md:w-80 lg:w-96 shrink-0 flex flex-col border-t md:border-t-0 md:border-l border-port-border max-h-[40vh] md:max-h-[92vh]';
-  const [cleaning, setCleaning] = useState(null);
+  const [cleaning, setCleaning] = useState(false);
   const starred = !!annotation?.starred;
   // Local draft state debounces saves so each keystroke doesn't PATCH.
   // onSaveRef keeps the debounce effect off the parent's render churn —
@@ -392,6 +440,32 @@ function SettingsPane({
           </div>
         )}
 
+        {variantGroup && onSelectVariant && (
+          <div>
+            <div className="text-gray-500 uppercase tracking-wide text-xs mb-1">View</div>
+            <div className="flex items-stretch rounded overflow-hidden border border-port-border">
+              {variantGroup.group.map((entry) => {
+                const isActive = entry.item.filename === item.filename;
+                return (
+                  <button
+                    key={entry.item.filename}
+                    type="button"
+                    onClick={() => { if (!isActive) onSelectVariant(entry.item); }}
+                    aria-pressed={isActive}
+                    className={`flex-1 px-2 py-1.5 text-xs border-r border-port-border last:border-r-0 transition-colors ${
+                      isActive
+                        ? 'bg-port-accent text-white cursor-default'
+                        : 'bg-port-bg text-gray-300 hover:text-white hover:bg-port-border/50'
+                    }`}
+                  >
+                    {entry.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         {meta.length > 0 && (
           <dl className="grid grid-cols-[auto,1fr] gap-x-3 gap-y-1">
             {meta.map(([k, v]) => {
@@ -448,39 +522,29 @@ function SettingsPane({
           </button>
         )}
         {!isVideo && onClean && (
-          <div
-            className="flex items-stretch rounded overflow-hidden border border-port-border"
-            role="group"
+          <button
+            type="button"
+            disabled={cleaning}
+            onClick={async () => {
+              if (cleaning) return;
+              setCleaning(true);
+              let ok = false;
+              try {
+                await onClean(item);
+                ok = true;
+              } catch {
+                // Caller toasts its own error; stay open so the user can retry.
+              } finally {
+                setCleaning(false);
+              }
+              if (ok) onClose();
+            }}
+            title={CLEAN_TOOLTIP}
             aria-label="Clean image"
+            className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs bg-port-warning/80 text-white hover:opacity-90 rounded disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            <span className="flex items-center gap-1 px-2 py-1.5 text-xs bg-port-border/40 text-gray-300">
-              <Eraser className="w-3.5 h-3.5" /> Clean
-            </span>
-            {Object.entries(CLEAN_LEVEL_LABELS).map(([level, label]) => (
-              <button
-                key={level}
-                type="button"
-                disabled={cleaning != null}
-                onClick={async () => {
-                  if (cleaning) return;
-                  setCleaning(level);
-                  let ok = false;
-                  try {
-                    await onClean(item, level);
-                    ok = true;
-                  } catch {
-                    // Caller toasts its own error; stay open so the user can retry.
-                  } finally {
-                    setCleaning(null);
-                  }
-                  if (ok) onClose();
-                }}
-                className={`px-2 py-1.5 text-xs border-l border-port-border text-white hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed ${level === 'aggressive' ? 'bg-port-warning/80' : 'bg-port-border/70'}`}
-              >
-                {cleaning === level ? '…' : label}
-              </button>
-            ))}
-          </div>
+            <Eraser className="w-3.5 h-3.5" /> {cleaning ? 'Cleaning…' : 'Clean'}
+          </button>
         )}
         {isVideo && onContinue && (
           <button

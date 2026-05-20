@@ -69,6 +69,7 @@ export * from './tuiPromptRunner.js';
 // === File & I/O ===
 export * from './fileUtils.js';
 export * from './fileWriteQueue.js';
+export * from './imageClean.js';
 export * from './multipart.js';
 export * from './pdfImageEmbed.js';
 export * from './zipStream.js';
@@ -83,6 +84,7 @@ export * from './pythonSetup.js';
 export * from './fetchWithTimeout.js';
 export * from './httpClient.js';
 export * from './httpsState.js';
+export * from './networkExposure.js';
 export * from './peerHttpClient.js';
 export * from './peerSelfHost.js';
 export * from './peerUrl.js';

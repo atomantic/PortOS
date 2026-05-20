@@ -34,7 +34,8 @@ import { extractCodexAssistantTail } from '../lib/codexAssistantExtract.js';
 import { buildTuiSpawnConfig, spawnTuiAgent } from './agentTuiSpawning.js';
 import { selectModelForTask } from './agentModelSelection.js';
 import { processAgentCompletion } from './agentCompletion.js';
-import { activeAgents, runnerAgents, spawningTasks, useRunner, isTruthyMeta, isFalsyMeta } from './agentState.js';
+import { activeAgents, runnerAgents, spawningTasks, useRunner, isTruthyMeta, isFalsyMeta, metaStringOr } from './agentState.js';
+import { DEFAULT_REVIEWER } from '../lib/validation.js';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { writeFile } from 'fs/promises';
 
@@ -490,6 +491,7 @@ export async function spawnAgentForTask(task) {
     configOpenPR: isTruthyMeta(task.metadata?.openPR),
     configSimplify: isTruthyMeta(task.metadata?.simplify),
     configReviewLoop: isTruthyMeta(task.metadata?.reviewLoop),
+    configReviewer: metaStringOr(task.metadata?.reviewer, null),
     configUseWorktree: !!worktreeInfo,
     configWorktreeAutoDetected: !!worktreeInfo && !explicitWorktree,
     configCodingOnMain: !worktreeInfo && !jiraBranchName
@@ -1267,6 +1269,7 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
       const cleanupWarnings = await cleanupAgentWorktree(agentId, effectiveSuccess, {
         openPR: agentOwnsPR ? false : taskOpenPR,
         requestCopilotReview: !agentOwnsPR && taskOpenPR && taskReviewLoop,
+        reviewer: metaStringOr(agent.task?.metadata?.reviewer, DEFAULT_REVIEWER),
         skipMerge: taskReviewLoopFollowUp || agentOwnsPR,
         description: task?.description,
         agentOutput: outputBuffer,
@@ -1313,12 +1316,14 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
  * When requestCopilotReview is also true, requests an initial Copilot review on the new
  * PR and spawns a follow-up internal task that runs the full /do:rpr loop and merges
  * once the review is clean — that follow-up is the part the user expects to "keep
- * looping until ready to merge."
+ * looping until ready to merge." `reviewer` selects which reviewer the follow-up uses
+ * (default `copilot` requests a native GitHub Copilot review; `claude`/`gemini`/`codex`
+ * skip the GH reviewer-API call and let the follow-up agent drive the CLI-based review).
  * When skipMerge is true (review-loop follow-up agents), the cleanup never auto-merges
  * the worktree branch into the source workspace because `gh pr merge` already handled it.
  * Otherwise, merges the worktree branch back to the source branch on success.
  */
-export async function cleanupAgentWorktree(agentId, success, { openPR = false, requestCopilotReview: shouldRequestCopilot = false, skipMerge = false, description = null, agentOutput = null, originalTask = null } = {}) {
+export async function cleanupAgentWorktree(agentId, success, { openPR = false, requestCopilotReview: shouldRequestCopilot = false, reviewer = DEFAULT_REVIEWER, skipMerge = false, description = null, agentOutput = null, originalTask = null } = {}) {
   const { getAgent: getAgentState } = await import('./cos.js');
   const agentState = await getAgentState(agentId).catch(() => null);
   if (!agentState?.metadata?.isWorktree) return [];
@@ -1398,7 +1403,11 @@ export async function cleanupAgentWorktree(agentId, success, { openPR = false, r
 
       let copilotReviewOk = false;
       let copilotReviewSkipped = false;
-      if (shouldRequestCopilot) {
+      const usesCopilotReviewer = reviewer === DEFAULT_REVIEWER;
+      // Only the `copilot` reviewer maps to the GitHub native reviewer API. For
+      // claude/gemini/codex, the follow-up agent invokes the CLI itself, so we
+      // skip the GH pre-request but still spawn the follow-up below.
+      if (shouldRequestCopilot && usesCopilotReviewer) {
         const reviewResult = await git.requestCopilotReview(worktreePath, prResult.url).catch(err => ({ success: false, error: err.message }));
         if (reviewResult.success && reviewResult.skipped) {
           // Non-GitHub forge (e.g. GitLab MR) — Copilot reviewer doesn't exist there. Log info, no warning.
@@ -1411,20 +1420,27 @@ export async function cleanupAgentWorktree(agentId, success, { openPR = false, r
           emitLog('warn', `🤖 Failed to request Copilot review on ${prResult.url}: ${reviewResult.error}`, { agentId, prUrl: prResult.url });
           warnings.push(`Copilot review request failed for ${prResult.url}: ${reviewResult.error}`);
         }
+      } else if (shouldRequestCopilot && !usesCopilotReviewer) {
+        emitLog('info', `🤖 Skipping native Copilot review request — follow-up will use ${reviewer} CLI`, { agentId, prUrl: prResult.url, reviewer });
       }
 
       // Spawn the review-loop follow-up agent that runs /do:rpr until clean and merges.
       // Without this, the loop stops after the initial review request — the user-reported
       // "they only handle one review loop and then finish" bug.
-      // Only spawn for GitHub PRs (Copilot reviewer is GitHub-only) and only when the
-      // initial review request succeeded — otherwise the follow-up has nothing to wait for.
-      if (shouldRequestCopilot && copilotReviewOk && !copilotReviewSkipped) {
+      // For the `copilot` reviewer: only spawn when the GH review request succeeded
+      // (the follow-up waits on a Copilot comment). For non-Copilot reviewers there's
+      // no pre-request to wait on — the follow-up invokes the CLI itself.
+      const canSpawnFollowUp = usesCopilotReviewer
+        ? (copilotReviewOk && !copilotReviewSkipped)
+        : shouldRequestCopilot;
+      if (canSpawnFollowUp) {
         await spawnReviewLoopFollowUp({
           originalAgentId: agentId,
           originalTask,
           prUrl: prResult.url,
           prBranch: worktreeBranch,
-          sourceWorkspace
+          sourceWorkspace,
+          reviewer
         }).catch(err => {
           emitLog('warn', `🤖 Failed to spawn review-loop follow-up for ${prResult.url}: ${err.message}`, { agentId, prUrl: prResult.url });
           warnings.push(`Review-loop follow-up spawn failed for ${prResult.url}: ${err.message}`);
@@ -1474,12 +1490,13 @@ export async function cleanupAgentWorktree(agentId, success, { openPR = false, r
  * branch (via createWorktree's `existingBranch` option) so it can fix-and-push
  * without trampling concurrent agents.
  */
-export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, prUrl, prBranch, sourceWorkspace }) {
+export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, prUrl, prBranch, sourceWorkspace, reviewer = DEFAULT_REVIEWER }) {
   if (!prUrl || !prBranch) return null;
 
   const parsedPr = git.parsePullRequestUrl(prUrl);
-  // Copilot loop is only meaningful on GitHub — on other forges, skip silently
-  if (parsedPr && parsedPr.host && parsedPr.host !== 'github.com') return null;
+  // Copilot reviewer is GitHub-only; CLI-based reviewers (claude/gemini/codex)
+  // work on any forge because the agent invokes the CLI directly.
+  if (reviewer === DEFAULT_REVIEWER && parsedPr && parsedPr.host && parsedPr.host !== 'github.com') return null;
 
   const appId = originalTask?.metadata?.app || null;
   const sourceTaskDesc = originalTask?.description || 'CoS automated task';
@@ -1512,6 +1529,7 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
       reviewLoopPRHost: parsedPr?.host ?? null,
       reviewLoopPROwner: parsedPr?.owner ?? null,
       reviewLoopPRRepo: parsedPr?.repo ?? null,
+      reviewLoopReviewer: reviewer,
       sourceTaskId: originalTask?.id || null,
       sourceAgentId: originalAgentId || null,
       // skipCommitCheck: this task may exit cleanly with zero new commits if the

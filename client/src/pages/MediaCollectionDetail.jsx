@@ -17,6 +17,7 @@ import {
   deleteImage, deleteVideoHistoryItem,
 } from '../services/api';
 import useImagePreviewActions from '../hooks/useImagePreviewActions';
+import usePreviewRoute from '../hooks/usePreviewRoute';
 
 // Hydrate a collection's "<kind>:<ref>" pointer list into the same
 // normalized records MediaCard expects. We do this on the client so the
@@ -53,7 +54,8 @@ export default function MediaCollectionDetail() {
   const [loading, setLoading] = useState(true);
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState('');
-  const [preview, setPreview] = useState(null);
+  // Preview state is URL-driven (`?preview=<filename>`) — see `usePreviewRoute`
+  // call below, declared after `items` so the resolver can match against it.
   const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
@@ -100,6 +102,7 @@ export default function MediaCollectionDetail() {
     () => collection ? hydrate(collection, imagesByName, videosById) : [],
     [collection, imagesByName, videosById]
   );
+  const [preview, setPreview] = usePreviewRoute(items);
 
   const handleRename = async () => {
     const trimmed = nameDraft.trim();
@@ -246,11 +249,19 @@ export default function MediaCollectionDetail() {
   // `onCleanComplete`.
   const { handleRemix, handleSendToVideo, handleContinue, handleClean } = useImagePreviewActions({
     onCleanComplete: async (cleaned) => {
+      // The server's clean route auto-files the cleaned filename into every
+      // collection that contained the source — including this one — so this
+      // client-side add usually returns ERR_DUPLICATE. Catch both shapes:
+      // when the add wins (cleaning from outside any collection containing
+      // the source) we get an updated collection; when it loses to the
+      // server's pre-fill we get null and need to refresh from the server
+      // so collection.items picks up the new entry.
       const updated = await addMediaCollectionItem(collection.id, {
         kind: 'image',
         ref: cleaned.filename,
       }).catch(() => null);
       if (updated) setCollection(updated);
+      else await refresh();
       // Without this the next render misses the cleaned file until
       // refresh() reruns.
       setImagesByName((m) => {
@@ -505,7 +516,7 @@ export default function MediaCollectionDetail() {
         onRemix={handleRemix}
         onSendToVideo={handleSendToVideo}
         onContinue={(i) => handleContinue(i.raw || i)}
-        onClean={(i, level) => handleClean(i?.raw || i, level)}
+        onClean={(i) => handleClean(i?.raw || i)}
       />
     </div>
   );

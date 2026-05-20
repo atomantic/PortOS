@@ -85,10 +85,29 @@ vi.mock('../lib/providerModels.js', () => ({
   resolveCliModel: vi.fn((m) => (m === 'codex-configured-default' || !m) ? null : m)
 }));
 
+// Shrink buffer thresholds so the truncation tests can trip them with tiny
+// inputs. Real values (640 KB raw, 10 MB output) would force tests to push
+// millions of bytes through the spawner; the wiring under test is identical.
+// OUTPUT_BUFFER_HEADROOM is intentionally 1 byte so ANY appendLine call
+// trips it — otherwise the output-buffer overflow test would assert on the
+// byte count of the two spawn-startup string literals (which would silently
+// stop tripping if those strings change).
+vi.mock('../lib/tuiHandshake.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    OUTPUT_BUFFER_HEADROOM: 1,
+    OUTPUT_BUFFER_CAP: 1,
+    RAW_BUFFER_HEADROOM: 200,
+    RAW_BUFFER_CAP: 100,
+  };
+});
+
 import { buildTuiSpawnConfig, spawnTuiAgent } from './agentTuiSpawning.js';
 import * as shellService from './shell.js';
 import * as agentLifecycle from './agentLifecycle.js';
 import * as agentErrorAnalysis from './agentErrorAnalysis.js';
+import * as cosAgents from './cosAgents.js';
 import { activeAgents, userTerminatedAgents } from './agentState.js';
 
 describe('agent TUI spawning', () => {
@@ -234,6 +253,8 @@ describe('spawnTuiAgent runtime', () => {
     });
   }
 
+  let warnSpy = null;
+
   beforeEach(() => {
     vi.useFakeTimers();
     vi.clearAllMocks();
@@ -244,6 +265,13 @@ describe('spawnTuiAgent runtime', () => {
 
     capturedOnData = null;
     capturedOnExit = null;
+
+    // Silence the truncation warn globally for this describe block — the
+    // mocked tiny OUTPUT_BUFFER_HEADROOM (above) makes every spawn trip it
+    // via the two initial appendLine calls, so non-truncation tests would
+    // otherwise spam stderr. The truncation-specific tests below reach for
+    // this same spy to assert the warn fired.
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
     // Default createShellSession captures callbacks and returns a valid session id
     vi.mocked(shellService.createShellSession).mockImplementation((_socket, opts) => {
@@ -258,6 +286,7 @@ describe('spawnTuiAgent runtime', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    warnSpy?.mockRestore();
   });
 
   // The TUI spawn path delegates the central completion sequence
@@ -398,5 +427,77 @@ describe('spawnTuiAgent runtime', () => {
         completionReason: 'spawn-error',
       })
     );
+  });
+
+  // ── 6. Raw-buffer truncation warning + metadata flag ────────────────────────
+  // Mirrors `outputBufferTruncated` in tuiPromptRunner.js — long-running TUI
+  // agents whose raw PTY stream overflows RAW_BUFFER_HEADROOM silently dropped
+  // the head before this change; analyzeAgentFailure then operated on a slice
+  // missing the failure tail with no signal that anything was clipped.
+  it('rawBuffer overflow: warns once and writes rawBufferTruncated:true to agent metadata', async () => {
+    runSpawn();
+    await flushMicrotasks();
+
+    // Feed a chunk larger than the mocked 200-byte HEADROOM in one go so the
+    // raw buffer trips on the first handleData call.
+    await capturedOnData(Buffer.from('x'.repeat(300)));
+    await flushMicrotasks();
+
+    // Second chunk: should NOT emit a second warn or metadata write — the
+    // flag is a once-per-run signal, not a per-overflow counter.
+    await capturedOnData(Buffer.from('x'.repeat(300)));
+    await flushMicrotasks();
+
+    const truncWarns = warnSpy.mock.calls.filter(args =>
+      typeof args[0] === 'string' && args[0].includes('raw PTY buffer exceeded')
+    );
+    expect(truncWarns).toHaveLength(1);
+
+    const truncMetaCalls = vi.mocked(cosAgents.updateAgent).mock.calls.filter(
+      ([_id, payload]) => payload?.metadata?.rawBufferTruncated === true
+    );
+    expect(truncMetaCalls).toHaveLength(1);
+    expect(truncMetaCalls[0][0]).toBe('agent-1');
+  });
+
+  it('rawBuffer below threshold: no truncation warn or metadata flag', async () => {
+    runSpawn();
+    await flushMicrotasks();
+
+    // 150 bytes is under the mocked 200-byte HEADROOM.
+    await capturedOnData(Buffer.from('x'.repeat(150)));
+    await flushMicrotasks();
+
+    const truncWarns = warnSpy.mock.calls.filter(args =>
+      typeof args[0] === 'string' && args[0].includes('raw PTY buffer exceeded')
+    );
+    expect(truncWarns).toHaveLength(0);
+
+    const truncMetaCalls = vi.mocked(cosAgents.updateAgent).mock.calls.filter(
+      ([_id, payload]) => payload?.metadata?.rawBufferTruncated === true
+    );
+    expect(truncMetaCalls).toHaveLength(0);
+  });
+
+  // ── 7. Output-buffer truncation warning + metadata flag ─────────────────────
+  // outputBuffer is filled via appendLine, which fires on initial spawn
+  // (session-started + open-shell-tab) plus the prompt-pasted notice. With
+  // the mocked 1-byte HEADROOM the first spawn line trips the cap, so the
+  // wiring is exercised on every spawn — but only ONCE per run regardless
+  // of how many subsequent lines arrive.
+  it('outputBuffer overflow: warns once and writes outputBufferTruncated:true to agent metadata', async () => {
+    runSpawn();
+    await flushMicrotasks();
+
+    const truncWarns = warnSpy.mock.calls.filter(args =>
+      typeof args[0] === 'string' && args[0].includes('parsed-output buffer exceeded')
+    );
+    expect(truncWarns).toHaveLength(1);
+
+    const truncMetaCalls = vi.mocked(cosAgents.updateAgent).mock.calls.filter(
+      ([_id, payload]) => payload?.metadata?.outputBufferTruncated === true
+    );
+    expect(truncMetaCalls).toHaveLength(1);
+    expect(truncMetaCalls[0][0]).toBe('agent-1');
   });
 });

@@ -14,11 +14,13 @@ import {
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
 import LocalSetupPanel from './LocalSetupPanel';
+import { isLoopbackHost } from '../../lib/loopbackHost.js';
 import {
   getSettings, updateSettings, getImageGenStatus, generateImage,
   registerTool, updateTool, getToolsList,
   getHfTokenStatus, saveHfToken, clearHfToken,
 } from '../../services/api';
+import { IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
 
 const SDAPI_TOOL_ID = 'sdapi';
 const CODEX_TOOL_ID = 'codex-imagegen';
@@ -37,7 +39,7 @@ export function ImageGenTab() {
   const [saving, setSaving] = useState(false);
 
   // Mode + per-mode config
-  const [mode, setMode] = useState('external');
+  const [mode, setMode] = useState(IMAGE_GEN_MODE.EXTERNAL);
   const [sdapiUrl, setSdapiUrl] = useState('');
   const [pythonPath, setPythonPath] = useState('');
   const [exposeA1111, setExposeA1111] = useState(false);
@@ -47,6 +49,14 @@ export function ImageGenTab() {
   const [codexPath, setCodexPath] = useState('');
   const [codexModel, setCodexModel] = useState('');
   const [codexParallelLimit, setCodexParallelLimit] = useState(1);
+  // Auto-clean toggles — per-provider so users can opt in selectively. The
+  // clean runs after the PNG lands and before the SSE complete event so
+  // subscribers see the cleaned bytes. Scope: removes the C2PA metadata chunk
+  // (when present) and reduces visible AI-generation artifacts via a median
+  // pass + sharpen. Does NOT defeat SynthID — gpt-image embeds SynthID and our
+  // median+sharpen+re-encode falls inside Google's stated robustness envelope.
+  const [autoCleanByMode, setAutoCleanByMode] = useState({ external: false, local: false, codex: false });
+  const setAutoCleanFor = (m) => (v) => setAutoCleanByMode((p) => ({ ...p, [m]: v }));
   // Raw string held while the user is typing in the parallel-limit input.
   // Clamping is deferred to onBlur so multi-digit entry isn't blocked.
   const [parallelLimitDraft, setParallelLimitDraft] = useState('1');
@@ -62,8 +72,9 @@ export function ImageGenTab() {
 
   // Snapshot of saved values so we can show the "dirty" state
   const [saved, setSaved] = useState({
-    mode: 'external', sdapiUrl: '', pythonPath: '', exposeA1111: false,
+    mode: IMAGE_GEN_MODE.EXTERNAL, sdapiUrl: '', pythonPath: '', exposeA1111: false,
     codexEnabled: false, codexPath: '', codexModel: '', codexParallelLimit: 1,
+    autoCleanByMode: { external: false, local: false, codex: false },
   });
 
   const [status, setStatus] = useState(null);
@@ -123,7 +134,7 @@ export function ImageGenTab() {
     Promise.all([getSettings(), getToolsList()])
       .then(([s, tools]) => {
         const ig = s?.imageGen || {};
-        const m = ig.mode || 'external';
+        const m = ig.mode || IMAGE_GEN_MODE.EXTERNAL;
         const url = normalizeUrl(ig.external?.sdapiUrl || ig.sdapiUrl);
         const py = ig.local?.pythonPath || '';
         const expose = ig.expose?.a1111 === true;
@@ -136,6 +147,11 @@ export function ImageGenTab() {
           : PARALLEL_FALLBACK;
         setParallelBounds(bounds);
         const cxParallel = clampParallel(cx.parallelLimit, bounds);
+        const ac = {
+          codex: cx.autoClean === true,
+          local: ig.local?.autoClean === true,
+          external: ig.external?.autoClean === true,
+        };
         setMode(m);
         setSdapiUrl(url);
         setPythonPath(py);
@@ -145,10 +161,12 @@ export function ImageGenTab() {
         setCodexModel(cxModel);
         setCodexParallelLimit(cxParallel);
         setParallelLimitDraft(String(cxParallel));
+        setAutoCleanByMode(ac);
         setSaved({
           mode: m, sdapiUrl: url, pythonPath: py, exposeA1111: expose,
           codexEnabled: cxEnabled, codexPath: cxPath, codexModel: cxModel,
           codexParallelLimit: cxParallel,
+          autoCleanByMode: ac,
         });
         setToolRegistered(tools.some((t) => t.id === SDAPI_TOOL_ID));
         setCodexToolRegistered(tools.some((t) => t.id === CODEX_TOOL_ID));
@@ -172,7 +190,10 @@ export function ImageGenTab() {
     || codexEnabled !== saved.codexEnabled
     || codexPath !== saved.codexPath
     || codexModel !== saved.codexModel
-    || codexParallelLimit !== saved.codexParallelLimit;
+    || codexParallelLimit !== saved.codexParallelLimit
+    || autoCleanByMode.codex !== saved.autoCleanByMode.codex
+    || autoCleanByMode.local !== saved.autoCleanByMode.local
+    || autoCleanByMode.external !== saved.autoCleanByMode.external;
 
   const handleSave = async () => {
     setSaving(true);
@@ -183,9 +204,12 @@ export function ImageGenTab() {
     const patch = {
       imageGen: {
         mode,
-        external: { sdapiUrl: url },
-        local: { pythonPath: pythonPath || undefined },
-        codex: { enabled: codexEnabled, codexPath: cxPath, model: cxModel, parallelLimit: cxParallel },
+        external: { sdapiUrl: url, autoClean: autoCleanByMode.external },
+        local: { pythonPath: pythonPath || undefined, autoClean: autoCleanByMode.local },
+        codex: {
+          enabled: codexEnabled, codexPath: cxPath, model: cxModel, parallelLimit: cxParallel,
+          autoClean: autoCleanByMode.codex,
+        },
         expose: { a1111: exposeA1111 },
         // Keep the legacy field populated so anything still reading
         // `imageGen.sdapiUrl` directly stays working.
@@ -202,6 +226,7 @@ export function ImageGenTab() {
         mode, sdapiUrl: url || '', pythonPath, exposeA1111,
         codexEnabled, codexPath: cxPath || '', codexModel: cxModel || '',
         codexParallelLimit: cxParallel,
+        autoCleanByMode,
       });
       if (cxParallel !== codexParallelLimit) {
         setCodexParallelLimit(cxParallel);
@@ -220,9 +245,9 @@ export function ImageGenTab() {
 
     // Both tool entries are independent — sync them in parallel so a
     // tailnet save doesn't pay two sequential HTTP round-trips.
-    const sdEnabled = mode === 'external' ? !!url : (mode === 'local' ? !!pythonPath : false);
+    const sdEnabled = mode === IMAGE_GEN_MODE.EXTERNAL ? !!url : (mode === IMAGE_GEN_MODE.LOCAL ? !!pythonPath : false);
     const sdToolData = {
-      name: mode === 'external' ? 'Stable Diffusion (External)' : (mode === 'local' ? 'Stable Diffusion (Local mflux)' : 'Stable Diffusion'),
+      name: mode === IMAGE_GEN_MODE.EXTERNAL ? 'Stable Diffusion (External)' : (mode === IMAGE_GEN_MODE.LOCAL ? 'Stable Diffusion (Local mflux)' : 'Stable Diffusion'),
       category: 'image-generation',
       description: 'Generate images via the active PortOS image gen backend',
       enabled: sdEnabled,
@@ -285,7 +310,7 @@ export function ImageGenTab() {
       // mark the render complete on the `complete` event (or fail on
       // `error`). External mode awaits internally and the file is on disk
       // by the time generateImage resolves, so we can short-circuit.
-      const isAsync = (result?.mode === 'local' || result?.mode === 'codex');
+      const isAsync = (result?.mode === IMAGE_GEN_MODE.LOCAL || result?.mode === IMAGE_GEN_MODE.CODEX);
       if (isAsync && result?.generationId) {
         await new Promise((resolve, reject) => {
           const es = new EventSource(`/api/image-gen/${result.generationId}/events`);
@@ -330,7 +355,7 @@ export function ImageGenTab() {
     const h = window.location.hostname;
     // Local dev / loopback mirror — we can't infer the tailnet hostname
     // from the browser; tell the user to look it up.
-    if (h === 'localhost' || h === '127.0.0.1' || h === '::1') return null;
+    if (isLoopbackHost(h)) return null;
     // Real tailnet host — use the canonical user-facing port (:5555) and
     // match the currently-active scheme so the hint works in both HTTPS-on
     // (Tailscale cert provisioned) and HTTP-only PortOS deployments.
@@ -354,8 +379,8 @@ export function ImageGenTab() {
         <div className={`grid grid-cols-1 sm:grid-cols-2 ${codexEnabled ? 'lg:grid-cols-3' : ''} gap-3`}>
           <button
             type="button"
-            onClick={() => setMode('external')}
-            className={`text-left p-4 rounded-lg border transition-colors ${mode === 'external' ? 'border-port-accent bg-port-accent/10 text-white' : 'border-port-border text-gray-400 hover:bg-port-border/30 hover:text-white'}`}
+            onClick={() => setMode(IMAGE_GEN_MODE.EXTERNAL)}
+            className={`text-left p-4 rounded-lg border transition-colors ${mode === IMAGE_GEN_MODE.EXTERNAL ? 'border-port-accent bg-port-accent/10 text-white' : 'border-port-border text-gray-400 hover:bg-port-border/30 hover:text-white'}`}
           >
             <div className="flex items-center gap-2">
               <Cloud className="w-4 h-4" />
@@ -365,8 +390,8 @@ export function ImageGenTab() {
           </button>
           <button
             type="button"
-            onClick={() => setMode('local')}
-            className={`text-left p-4 rounded-lg border transition-colors ${mode === 'local' ? 'border-port-accent bg-port-accent/10 text-white' : 'border-port-border text-gray-400 hover:bg-port-border/30 hover:text-white'}`}
+            onClick={() => setMode(IMAGE_GEN_MODE.LOCAL)}
+            className={`text-left p-4 rounded-lg border transition-colors ${mode === IMAGE_GEN_MODE.LOCAL ? 'border-port-accent bg-port-accent/10 text-white' : 'border-port-border text-gray-400 hover:bg-port-border/30 hover:text-white'}`}
           >
             <div className="flex items-center gap-2">
               <Cpu className="w-4 h-4" />
@@ -377,8 +402,8 @@ export function ImageGenTab() {
           {codexEnabled && (
             <button
               type="button"
-              onClick={() => setMode('codex')}
-              className={`text-left p-4 rounded-lg border transition-colors ${mode === 'codex' ? 'border-port-accent bg-port-accent/10 text-white' : 'border-port-border text-gray-400 hover:bg-port-border/30 hover:text-white'}`}
+              onClick={() => setMode(IMAGE_GEN_MODE.CODEX)}
+              className={`text-left p-4 rounded-lg border transition-colors ${mode === IMAGE_GEN_MODE.CODEX ? 'border-port-accent bg-port-accent/10 text-white' : 'border-port-border text-gray-400 hover:bg-port-border/30 hover:text-white'}`}
             >
               <div className="flex items-center gap-2">
                 <Terminal className="w-4 h-4" />
@@ -391,7 +416,7 @@ export function ImageGenTab() {
       </div>
 
       {/* External-mode config */}
-      {mode === 'external' && (
+      {mode === IMAGE_GEN_MODE.EXTERNAL && (
         <div className="bg-port-card border border-port-border rounded-xl p-6 space-y-4">
           <h3 className="text-sm font-medium text-gray-300">External AUTOMATIC1111 / Forge URL</h3>
           <input
@@ -402,11 +427,12 @@ export function ImageGenTab() {
             placeholder="http://localhost:7860"
           />
           <p className="text-xs text-gray-500">Base URL for the SD WebUI server PortOS should send generation requests to.</p>
+          <AutoCleanToggle checked={autoCleanByMode.external} onChange={setAutoCleanFor(IMAGE_GEN_MODE.EXTERNAL)} />
         </div>
       )}
 
       {/* Local-mode config */}
-      {mode === 'local' && (
+      {mode === IMAGE_GEN_MODE.LOCAL && (
         <div className="bg-port-card border border-port-border rounded-xl p-6 space-y-4">
           <h3 className="text-sm font-medium text-gray-300">Local Python (mflux + mlx_video)</h3>
           <p className="text-xs text-gray-500">
@@ -415,6 +441,7 @@ export function ImageGenTab() {
             and are surfaced in <a href="/media/models" className="text-port-accent hover:underline">Media → Models</a>.
           </p>
           <LocalSetupPanel pythonPath={pythonPath} onPythonPathChange={setPythonPath} />
+          <AutoCleanToggle checked={autoCleanByMode.local} onChange={setAutoCleanFor(IMAGE_GEN_MODE.LOCAL)} />
         </div>
       )}
 
@@ -446,10 +473,9 @@ export function ImageGenTab() {
               // external if a URL is set, else external as a last resort
               // (so the user lands on a non-broken default rather than
               // sticking with codex or hopping to an unconfigured backend).
-              if (!v && mode === 'codex') {
+              if (!v && mode === IMAGE_GEN_MODE.CODEX) {
                 const hasLocal = !!pythonPath?.trim();
-                const hasExternal = !!normalizeUrl(sdapiUrl);
-                setMode(hasLocal ? 'local' : (hasExternal ? 'external' : 'external'));
+                setMode(hasLocal ? IMAGE_GEN_MODE.LOCAL : IMAGE_GEN_MODE.EXTERNAL);
               }
             }}
             className="rounded"
@@ -510,6 +536,7 @@ export function ImageGenTab() {
                 )}
               </p>
             </div>
+            <AutoCleanToggle checked={autoCleanByMode.codex} onChange={setAutoCleanFor(IMAGE_GEN_MODE.CODEX)} />
           </div>
         )}
       </div>
@@ -710,6 +737,31 @@ export function ImageGenTab() {
         )}
       </div>
     </div>
+  );
+}
+
+// Shared per-provider "auto-clean after generation" checkbox. The user-visible
+// helper text below already explains scope (C2PA removed, SynthID not
+// defeated) so the comment doesn't need to repeat it. Ordering invariant:
+// the clean must run before the SSE complete event fires so subscribers see
+// the cleaned bytes on first fetch — enforced by the provider success paths,
+// not here.
+function AutoCleanToggle({ checked, onChange }) {
+  return (
+    <label className="flex items-start gap-3 cursor-pointer pt-1">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+        className="rounded mt-0.5"
+      />
+      <span className="text-sm text-gray-300">
+        Auto-clean after generation
+        <span className="block text-xs text-gray-500 mt-0.5">
+          Remove the C2PA metadata chunk (when present) and reduce visible AI-generation artifacts on every render. Does NOT defeat SynthID — gpt-image / Imagen renders stay detectable by their vendor watermark checkers. The cleaned image replaces the original on disk.
+        </span>
+      </span>
+    </label>
   );
 }
 

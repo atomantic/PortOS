@@ -54,4 +54,30 @@ describe('composeCleanPlatePrompt', () => {
     expect(composeCleanPlatePrompt(null).prompt).toBe(CLEAN_PLATE_PREFIX);
     expect(composeCleanPlatePrompt('not an object').prompt).toBe(CLEAN_PLATE_PREFIX);
   });
+
+  it('includes era and weather when present (rich-fragment migration)', () => {
+    const out = composeCleanPlatePrompt({
+      description: 'a rooftop helipad',
+      palette: 'rust, sodium',
+      era: '1980s near-future',
+      weather: 'acid drizzle',
+      recurringDetails: 'cracked landing-pad markings',
+    });
+    expect(out.prompt).toContain('a rooftop helipad');
+    expect(out.prompt).toContain('Palette: rust, sodium');
+    expect(out.prompt).toContain('Era: 1980s near-future');
+    expect(out.prompt).toContain('Weather: acid drizzle');
+    expect(out.prompt).toContain('cracked landing-pad markings');
+  });
+
+  it('omits era / weather when blank without leaving dangling separators', () => {
+    const out = composeCleanPlatePrompt({
+      description: 'a rooftop helipad',
+      era: '',
+      weather: '   ',
+    });
+    expect(out.prompt).not.toContain('Era:');
+    expect(out.prompt).not.toContain('Weather:');
+    expect(out.prompt).toContain('a rooftop helipad');
+  });
 });

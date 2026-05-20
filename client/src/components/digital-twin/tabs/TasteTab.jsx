@@ -24,6 +24,7 @@ import BrailleSpinner from '../../BrailleSpinner';
 import * as api from '../../../services/api';
 import toast from '../../ui/Toast';
 import MarkdownOutput from '../../cos/MarkdownOutput';
+import { isApiProvider } from '../../../utils/providers';
 
 const SECTION_ICONS = {
   movies: Film,
@@ -90,7 +91,7 @@ export default function TasteTab({ onRefresh }) {
     // Taste summaries / personalized questions need a chat-completions endpoint —
     // CLI providers (Claude Code, Codex, Gemini CLI) can't run them. Filter the
     // picker so the user can't accidentally select an incompatible default.
-    const apiProviders = (data.providers || []).filter(p => p.enabled && p.type === 'api');
+    const apiProviders = (data.providers || []).filter(p => p.enabled && isApiProvider(p));
     setProviders(apiProviders);
     if (apiProviders.length > 0) {
       setSelectedProvider({ providerId: apiProviders[0].id, model: apiProviders[0].defaultModel });

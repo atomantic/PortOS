@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Zap, History, Settings, Play, Brain, BookOpen, Dumbbell, Timer, Radio } from 'lucide-react';
 import { getProviders } from '../../../services/api';
+import { isApiProvider } from '../../../utils/providers';
 import { DOMAINS, DRILL_TO_DOMAIN, DRILL_LABELS } from './constants';
 
 export default function PostSessionLauncher({ config, recentSessions, onStart, onViewHistory, onViewConfig, onViewMemory, onViewMorse }) {
@@ -9,7 +10,7 @@ export default function PostSessionLauncher({ config, recentSessions, onStart, o
   const [providers, setProviders] = useState([]);
 
   useEffect(() => {
-    getProviders().then(p => setProviders((p || []).filter(pr => pr.enabled && pr.type === 'api'))).catch(() => {});
+    getProviders().then(p => setProviders((p || []).filter(pr => pr.enabled && isApiProvider(pr)))).catch(() => {});
   }, []);
 
   if (!config) {

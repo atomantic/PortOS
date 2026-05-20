@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 import importerRoutes from './importer.js';
-import { ERR_VALIDATION, ERR_LOCKED, IMPORTER_SOURCE_CHAR_LIMIT } from '../services/importer.js';
+import { ERR_VALIDATION, ERR_LOCKED, ERR_PARTIAL_COMMIT_ISSUES, IMPORTER_SOURCE_CHAR_LIMIT } from '../services/importer.js';
 import * as universeSvc from '../services/universeBuilder.js';
 import * as seriesSvc from '../services/pipeline/series.js';
 import { ARC_ROLES, ARC_SHAPE_IDS } from '../lib/storyArc.js';
@@ -201,5 +201,43 @@ describe('POST /api/importer/commit', () => {
     // falls through to the generic 500 handler and the status assertion
     // alone wouldn't catch the regression.
     expect(res.body.code).toBe(universeSvc.ERR_NOT_FOUND);
+  });
+
+  it('returns 422 with preserved context when the service throws ERR_PARTIAL_COMMIT_ISSUES', async () => {
+    // Pins the SERVICE_ERROR_STATUS entry for ERR_PARTIAL_COMMIT_ISSUES.
+    // Dropping the entry would fall through to the generic 500 handler,
+    // pager-alert on a user-action-recoverable partial commit, and strip
+    // the arcAlreadyPersisted/skipArcOnRetry retry signals the client
+    // gates the retry-without-arc-overwrite path on.
+    const err = Object.assign(
+      new Error('universe and series saved; 2 of 3 issues failed and were rolled back'),
+      {
+        code: ERR_PARTIAL_COMMIT_ISSUES,
+        context: {
+          universeId: 'uni-1',
+          seriesId: 'ser-1',
+          arcAlreadyPersisted: true,
+          skipArcOnRetry: true,
+        },
+      },
+    );
+    importerSvc.commitImport.mockRejectedValue(err);
+    const app = buildApp();
+    const res = await request(app).post('/api/importer/commit').send({
+      universeId: 'uni-1',
+      seriesId: 'ser-1',
+      canonSelections: { characters: [], places: [], objects: [] },
+      arc: null,
+      seasons: [],
+      issues: [{ title: 'I1', arcPosition: 1 }],
+    });
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe(ERR_PARTIAL_COMMIT_ISSUES);
+    expect(res.body.context).toEqual({
+      universeId: 'uni-1',
+      seriesId: 'ser-1',
+      arcAlreadyPersisted: true,
+      skipArcOnRetry: true,
+    });
   });
 });

@@ -7,6 +7,7 @@ import {
 } from '../../services/apiVoice';
 import { playWav, webSpeechSupported } from '../../services/voiceClient';
 import { readVoiceHidden, writeVoiceHidden } from '../../services/voiceVisibility';
+import { formatVoiceLabel } from '../../lib/voiceLabel';
 
 const SERVICE_LABELS = {
   whisper: 'Whisper (STT)',
@@ -33,26 +34,6 @@ const KOKORO_DTYPES = [
   { value: 'fp32', label: 'fp32 (best quality, slowest)' },
 ];
 
-const ACCENT_LABELS = { 'en-US': 'American', 'en-GB': 'British' };
-
-const formatVoiceLabel = (v, engine) => {
-  if (engine === 'piper') {
-    // Always lead with the voice ID so entries are distinguishable even if the
-    // catalog metadata (accent/gender/note) is stripped or missing.
-    const meta = [v.accent, v.gender].filter(Boolean).join(' — ');
-    const dl = v.downloaded ? '' : ' ⬇';
-    const note = v.note ? ` · ${v.note}` : '';
-    return meta ? `${v.name} — ${meta}${note}${dl}` : `${v.name}${note}${dl}`;
-  }
-  const accent = ACCENT_LABELS[v.language] || v.language || '';
-  const [, ...rest] = v.name.split('_');
-  const raw = rest.join(' ') || v.name;
-  const display = raw.charAt(0).toUpperCase() + raw.slice(1);
-  const who = [accent, v.gender].filter(Boolean).join(' ');
-  const traits = v.traits ? `${v.traits} ` : '';
-  const grade = v.grade ? ` (${v.grade})` : '';
-  return `${traits}${who ? `${who} — ${display}` : display}${grade}`;
-};
 
 const WHISPER_MODELS = [
   { value: 'tiny.en',   file: 'ggml-tiny.en.bin',   label: 'tiny.en — 75 MB, fastest' },

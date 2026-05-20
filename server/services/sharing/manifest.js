@@ -21,6 +21,7 @@ import { PATHS, atomicWrite, readJSONFile, ensureDir } from '../../lib/fileUtils
 import { SHARING_SCHEMA_VERSION, getProducedByVersion } from './version.js';
 import { isStr } from '../../lib/storyBible.js';
 import { universeCollectionNameFor, seriesCollectionNameFor } from '../mediaCollections.js';
+import { UNKNOWN_INSTANCE_ID } from '../instances.js';
 
 export const MANIFEST_KIND = Object.freeze(['series', 'universe', 'media', 'media-annotations']);
 
@@ -28,7 +29,7 @@ export const MANIFEST_KIND = Object.freeze(['series', 'universe', 'media', 'medi
  *  One file per (bucket, instanceId) — re-exports overwrite in place so peers
  *  see updates via chokidar `change` events, same pattern as subscriptions. */
 export function annotationManifestFilename(senderInstanceId) {
-  const safeId = String(senderInstanceId || 'unknown').replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 80);
+  const safeId = String(senderInstanceId || UNKNOWN_INSTANCE_ID).replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 80);
   return `annotations-${safeId}.json`;
 }
 
@@ -156,7 +157,7 @@ export function buildManifest({
     subscription: subscription && subscription.recordKind && subscription.recordId
       ? { recordKind: subscription.recordKind, recordId: subscription.recordId }
       : null,
-    senderInstanceId: senderInstanceId || 'unknown',
+    senderInstanceId: senderInstanceId || UNKNOWN_INSTANCE_ID,
     source: source || 'unknown',        // human display name
     sourceBio: sourceBio || null,
     bucketId,
@@ -194,14 +195,14 @@ export const SUBSCRIPTION_FILE_PREFIX = 'sub-';
 /** Filename for a subscription manifest. Used by both the writer (exporter)
  *  and the reader (subscriptions service, watcher) so the formula stays in
  *  one place. The `senderInstanceId` segment keeps two peers' shares of the
- *  same record from colliding; absent senderInstanceId falls back to
- *  `'unknown'` so the filename is always valid. The sender segment is
- *  sanitized with the same allowlist/length cap used by
+ *  same record from colliding; absent senderInstanceId falls back to the
+ *  UNKNOWN_INSTANCE_ID sentinel so the filename is always valid. The sender
+ *  segment is sanitized with the same allowlist/length cap used by
  *  `annotationManifestFilename` so a malformed persisted instance id
  *  containing path separators can't escape the `manifests` directory. */
 export function subscriptionFilename({ recordKind, recordId, senderInstanceId }) {
-  const raw = (isStr(senderInstanceId) ? senderInstanceId.trim() : '') || 'unknown';
-  const sender = raw.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 80) || 'unknown';
+  const raw = (isStr(senderInstanceId) ? senderInstanceId.trim() : '') || UNKNOWN_INSTANCE_ID;
+  const sender = raw.replace(/[^A-Za-z0-9_-]/g, '_').slice(0, 80) || UNKNOWN_INSTANCE_ID;
   return `${SUBSCRIPTION_FILE_PREFIX}${recordKind}-${recordId}-${sender}.json`;
 }
 
@@ -236,9 +237,9 @@ export function manifestFilename(manifest) {
     });
   }
   const ts = manifest.createdAt.replace(/[:.]/g, '-');
-  const senderSlug = (manifest.source || manifest.senderInstanceId || 'unknown')
+  const senderSlug = (manifest.source || manifest.senderInstanceId || UNKNOWN_INSTANCE_ID)
     .toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40)
-    || 'unknown';
+    || UNKNOWN_INSTANCE_ID;
   return `${ts}-${senderSlug}-${manifest.id}.json`;
 }
 
@@ -323,15 +324,16 @@ const CLASSIFY_CONCURRENCY = 32;
  *     first by ISO-prefixed filename) into `<bucket>/.archive/manifests/`.
  *
  * Returns `{ archived, kept, ownedTotal, skippedForeign, skippedReason }`.
- * When `localInstanceId` is missing or 'unknown', returns a noop result with
- * `skippedReason` set — we never blanket-archive without an author check.
+ * When `localInstanceId` is missing or UNKNOWN_INSTANCE_ID, returns a noop
+ * result with `skippedReason` set — we never blanket-archive without an
+ * author check.
  */
 export async function pruneBucketManifests(bucket, opts = {}) {
   const maxManifests = Number.isFinite(opts.maxManifests)
     ? Math.max(0, opts.maxManifests)
     : DEFAULT_MANIFEST_RETENTION;
   const localInstanceId = opts.localInstanceId;
-  if (!localInstanceId || localInstanceId === 'unknown') {
+  if (!localInstanceId || localInstanceId === UNKNOWN_INSTANCE_ID) {
     return { archived: 0, kept: 0, ownedTotal: 0, skippedForeign: 0, skippedReason: 'no-local-instance-id' };
   }
   const manifestsDir = join(bucket.path, 'manifests');

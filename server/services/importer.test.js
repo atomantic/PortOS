@@ -296,6 +296,32 @@ describe('analyzeImport', () => {
     });
   });
 
+  it('wires existingCanonBlock into the canon-extract prompt for dedup on a second-pass import', async () => {
+    // Regression-pin: a refactor that drops the `existingCanonBlock` arg
+    // (or wires it to `null` / `''`) leaves the canon-extract LLM blind to
+    // already-seeded canon and silently re-extracts duplicates on every
+    // subsequent import.
+    const uni = await universeSvc.createUniverse({ name: 'Seeded U' });
+    await universeSvc.updateUniverse(uni.id, {
+      characters: [{ name: 'Aria Existing' }],
+    });
+
+    wireDefaultLLMResponses();
+    await importerSvc.analyzeImport({
+      universeName: 'Seeded U',
+      seriesName: 'New Series',
+      contentType: 'short-story',
+      source: 'A new story arrives.',
+    });
+
+    // Lookup by stage name rather than calls[0] — analyzeImport fires
+    // canon + arc via Promise.all and any future scheduling change could
+    // swap the order without breaking the contract.
+    const canonCall = mockRunStagedLLM.mock.calls.find((c) => c[0] === 'importer-canon-extract');
+    expect(canonCall).toBeDefined();
+    expect(canonCall[1].existingCanonBlock).toContain('Aria Existing');
+  });
+
   it('rejects a locked-arc series with ERR_LOCKED before calling the LLM', async () => {
     // Pre-seed a series with locked.arc, then re-analyze with its name.
     const uni = await universeSvc.createUniverse({ name: 'Locked U' });

@@ -10,8 +10,7 @@ import GoalDetailPanel, { CATEGORY_CONFIG, HORIZON_OPTIONS, GOAL_TYPE_CONFIG, DE
 import { applyOrganizationSuggestion } from './applyOrganization';
 import useProviderModels from '../../hooks/useProviderModels';
 import ProviderModelSelector from '../ProviderModelSelector';
-
-const API_PROVIDER_FILTER = p => p.enabled && p.type === 'api';
+import { enabledApiProviderFilter } from '../../utils/providers';
 
 const EDGE_COLORS = {
   parent: '#3b82f6',
@@ -257,7 +256,7 @@ export default function GoalsTreeView({ data, onRefresh }) {
   const {
     providers, selectedProviderId, selectedModel, availableModels,
     setSelectedProviderId, setSelectedModel, loading: providersLoading
-  } = useProviderModels({ filter: API_PROVIDER_FILTER });
+  } = useProviderModels({ filter: enabledApiProviderFilter });
 
   const dragStartRef = useRef(null);
 

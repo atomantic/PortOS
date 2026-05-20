@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import toast from '../components/ui/Toast';
 import * as api from '../services/api';
 import socket from '../services/socket';
-import { filterSelectableModels, providerTypeClass, isTuiProvider } from '../utils/providers';
+import { filterSelectableModels, providerTypeClass, isTuiProvider, isApiProvider, isProcessProvider } from '../utils/providers';
 
 export default function AIProviders() {
   const [providers, setProviders] = useState([]);
@@ -259,10 +259,10 @@ export default function AIProviders() {
                       )}
                     </div>
                     <div className="mt-1 text-xs text-gray-400 space-y-0.5">
-                      {(provider.type === 'cli' || provider.type === 'tui') && (
+                      {isProcessProvider(provider) && (
                         <p>Command: <code className="text-gray-300">{provider.command} {provider.args?.join(' ')}</code></p>
                       )}
-                      {provider.type === 'api' && (
+                      {isApiProvider(provider) && (
                         <p>Endpoint: <code className="text-gray-300">{provider.endpoint}</code></p>
                       )}
                       {filterSelectableModels(provider.models).length > 0 && (
@@ -307,7 +307,7 @@ export default function AIProviders() {
             >
               <option value="">Select Provider</option>
               {providers.filter(p => p.enabled).map(p => (
-                <option key={p.id} value={p.id}>{p.name}{p.type === 'tui' ? ' (CoS TUI)' : ''}</option>
+                <option key={p.id} value={p.id}>{p.name}{isTuiProvider(p) ? ' (CoS TUI)' : ''}</option>
               ))}
             </select>
 
@@ -393,10 +393,10 @@ export default function AIProviders() {
                 </div>
 
                 <div className="mt-2 text-sm text-gray-400 space-y-1">
-                  {(provider.type === 'cli' || provider.type === 'tui') && (
+                  {isProcessProvider(provider) && (
                     <p className="break-words">Command: <code className="text-gray-300 break-all">{provider.command} {provider.args?.join(' ')}</code></p>
                   )}
-                  {provider.type === 'api' && (
+                  {isApiProvider(provider) && (
                     <p className="break-words">Endpoint: <code className="text-gray-300 break-all">{provider.endpoint}</code></p>
                   )}
                   {provider.models?.length > 0 && (

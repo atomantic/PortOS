@@ -93,6 +93,13 @@ if [ -t 0 ]; then
     done
 fi
 
+# Print the URL the user should open. Delegates to scripts/print-access-url.js
+# so we share the same cert detection (file presence AND PEM parseability) the
+# server uses — otherwise we'd advertise HTTPS URLs the server isn't serving.
+print_access_url() {
+    node scripts/print-access-url.js
+}
+
 if [ "$start_now" = "1" ]; then
     echo ""
     echo "Starting PortOS..."
@@ -104,7 +111,7 @@ if [ "$start_now" = "1" ]; then
     echo "  PortOS is running"
     echo "==================================="
     echo ""
-    echo "Access at: http://localhost:5555"
+    print_access_url
     echo "Logs:      npm run pm2:logs"
     echo "Stop:      npm run pm2:stop"
     echo ""
@@ -119,6 +126,6 @@ else
     echo "  Stop:         npm run pm2:stop"
     echo "  Logs:         npm run pm2:logs"
     echo ""
-    echo "Access at: http://localhost:5555"
+    print_access_url
     echo ""
 fi

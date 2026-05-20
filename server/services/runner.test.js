@@ -18,7 +18,7 @@ vi.mock('fs/promises', () => ({
 
 const { spawn } = await import('child_process');
 const runner = await import('./runner.js');
-const { setAIToolkit, executeCliRun, buildCliArgs, hasModelFlag, extractBakedModel } = runner;
+const { setAIToolkit, executeCliRun, buildCliArgs, hasModelFlag, extractBakedModel, emitRunStarted } = runner;
 
 // Minimal toolkit stub that satisfies executeCliRun's expectations
 function fakeToolkit() {
@@ -292,5 +292,99 @@ describe('extractBakedModel', () => {
   });
   it('returns the FIRST baked flag when more than one is present', () => {
     expect(extractBakedModel(['--model', 'first', '-m', 'second'])).toBe('first');
+  });
+});
+
+// emitRunStarted's payload-flattening contract is consumed by tuiPromptRunner.js
+// (and any future non-toolkit execution path) — the TUI tests mock emitRunStarted
+// itself, so this is the only place the `name || id` and `model ?? defaultModel`
+// fallbacks are pinned. A regression here would silently break run-tracking
+// attribution without any other suite catching it.
+describe('emitRunStarted — payload-flattening contract', () => {
+  function captureHook() {
+    const onRunStarted = vi.fn();
+    setAIToolkit(fakeToolkit(), { dataDir: '/tmp/test-runner', hooks: { onRunStarted } });
+    return onRunStarted;
+  }
+
+  it('prefers provider.name over provider.id when both are present', () => {
+    const onRunStarted = captureHook();
+    emitRunStarted({
+      runId: 'r1',
+      provider: { name: 'codex', id: 'codex-id', defaultModel: 'gpt-5' },
+      model: 'gpt-4o',
+    });
+    expect(onRunStarted).toHaveBeenCalledWith({ runId: 'r1', provider: 'codex', model: 'gpt-4o' });
+  });
+
+  it('falls back to provider.id when provider.name is missing', () => {
+    const onRunStarted = captureHook();
+    emitRunStarted({
+      runId: 'r2',
+      provider: { id: 'gemini-cli', defaultModel: 'gemini-2.5-pro' },
+      model: 'gemini-2.0-flash',
+    });
+    expect(onRunStarted).toHaveBeenCalledWith({ runId: 'r2', provider: 'gemini-cli', model: 'gemini-2.0-flash' });
+  });
+
+  it('uses the explicit model argument when given (overrides provider.defaultModel)', () => {
+    const onRunStarted = captureHook();
+    emitRunStarted({
+      runId: 'r3',
+      provider: { name: 'claude-code', defaultModel: 'claude-opus-4-7' },
+      model: 'claude-sonnet-4-6',
+    });
+    expect(onRunStarted).toHaveBeenCalledWith({ runId: 'r3', provider: 'claude-code', model: 'claude-sonnet-4-6' });
+  });
+
+  it('falls back to provider.defaultModel when model is undefined', () => {
+    const onRunStarted = captureHook();
+    emitRunStarted({
+      runId: 'r4',
+      provider: { name: 'codex', defaultModel: 'codex-configured-default' },
+      model: undefined,
+    });
+    expect(onRunStarted).toHaveBeenCalledWith({
+      runId: 'r4',
+      provider: 'codex',
+      model: 'codex-configured-default',
+    });
+  });
+
+  it('falls back to provider.defaultModel when model is null (?? semantics)', () => {
+    const onRunStarted = captureHook();
+    emitRunStarted({
+      runId: 'r5',
+      provider: { name: 'codex', defaultModel: 'o4-mini' },
+      model: null,
+    });
+    expect(onRunStarted).toHaveBeenCalledWith({ runId: 'r5', provider: 'codex', model: 'o4-mini' });
+  });
+
+  it('keeps an empty-string model rather than falling back (?? treats "" as defined)', () => {
+    // Guards the ?? semantics — if this ever flips to ||, intentionally-empty
+    // models would be silently rewritten to defaultModel.
+    const onRunStarted = captureHook();
+    emitRunStarted({
+      runId: 'r6',
+      provider: { name: 'codex', defaultModel: 'o4-mini' },
+      model: '',
+    });
+    expect(onRunStarted).toHaveBeenCalledWith({ runId: 'r6', provider: 'codex', model: '' });
+  });
+
+  it('emits undefined provider/model when provider is missing entirely', () => {
+    const onRunStarted = captureHook();
+    emitRunStarted({ runId: 'r7', provider: undefined, model: undefined });
+    expect(onRunStarted).toHaveBeenCalledWith({ runId: 'r7', provider: undefined, model: undefined });
+  });
+
+  it('is a no-op when no onRunStarted hook is registered', () => {
+    setAIToolkit(fakeToolkit(), { dataDir: '/tmp/test-runner' });
+    expect(() => emitRunStarted({
+      runId: 'r8',
+      provider: { name: 'codex', defaultModel: 'o4-mini' },
+      model: 'gpt-4',
+    })).not.toThrow();
   });
 });

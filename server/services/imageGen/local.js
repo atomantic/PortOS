@@ -20,17 +20,21 @@ import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import { assertSafeFilename, ensureDir, listDirectoryByExtension, PATHS, safeJSONParse, resolveGalleryImage, resolveImageInputPath, tryReadFile } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { autoCleanGeneratedImage } from '../../lib/imageClean.js';
 import { imageGenEvents } from '../imageGenEvents.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, PYTHON_NOISE_RE } from '../../lib/sseUtils.js';
 import { resolveFlux2Python, FLUX2_VENV_DEFAULT } from '../../lib/pythonSetup.js';
 import { hfTokenEnv } from '../../lib/hfToken.js';
+import { IMAGE_GEN_MODE } from './modes.js';
 
 const IS_WIN = process.platform === 'win32';
 
 import { getImageModels, isFlux2, isZImage, isErnie } from '../../lib/mediaModels.js';
 
-export const IMAGE_MODELS = Object.fromEntries(getImageModels().map((m) => [m.id, m]));
-
+// Read the registry lazily — callers below hit getImageModels() at request
+// time. A prior `IMAGE_MODELS = Object.fromEntries(getImageModels()...)`
+// snapshot lived here but fired loadMediaModels() at import time, breaking
+// any test that mocks PATHS.data to a non-writable path.
 export const listImageModels = () => getImageModels();
 
 // Per-job clients: jobId -> { clients, status, meta, broadcast }
@@ -212,19 +216,17 @@ export const buildArgs = ({ pythonPath, model, prompt, negativePrompt, width, he
   return { bin, args };
 };
 
-export async function generateImage({ pythonPath, prompt, negativePrompt = '', modelId = 'dev', width = 1024, height = 1024, steps, guidance, seed, quantize = '8', loraFilenames = [], loraPaths = [], loraScales = [], initImagePath = null, initImageStrength = null, referenceImagePaths = [], referenceImageStrengths = [], jobId: providedJobId = null }) {
+export async function generateImage({ pythonPath, prompt, negativePrompt = '', modelId = 'dev', width = 1024, height = 1024, steps, guidance, seed, quantize = '8', loraFilenames = [], loraPaths = [], loraScales = [], initImagePath = null, initImageStrength = null, referenceImagePaths = [], referenceImageStrengths = [], jobId: providedJobId = null, autoClean = false }) {
   if (!prompt?.trim()) throw new ServerError('Prompt is required', { status: 400, code: 'VALIDATION_ERROR' });
   // Single-flight is enforced by the mediaJobQueue worker upstream. Direct
   // callers that bypass the queue must not run two concurrent renders — the
   // activeProcess handle below would be clobbered and cancel() would orphan
   // the first child.
-  // Use the registry cache view (which applies the per-platform `broken`
-  // filter via getImageModels) rather than the module-load IMAGE_MODELS
-  // snapshot. Note: loadMediaModels memoizes on first read — on-disk edits
-  // to data/media-models.json still need a server restart to apply.
-  // Don't re-check model.broken here: getImageModels() already filtered
-  // current-platform entries; an extra truthiness check would also reject
-  // entries broken on the OTHER platform (e.g. 'windows' on a macOS box).
+  // loadMediaModels memoizes — on-disk edits to data/media-models.json still
+  // need a server restart to apply. Don't re-check model.broken here:
+  // getImageModels() already filtered current-platform entries; an extra
+  // check would also reject entries broken on the OTHER platform (e.g.
+  // 'windows' on a macOS box).
   const model = getImageModels().find((m) => m.id === modelId);
   if (!model) throw new ServerError(`Unknown or unsupported model: ${modelId}`, { status: 400, code: 'VALIDATION_ERROR' });
   // Both flux2 and z-image runners resolve their own Python via the FLUX.2
@@ -332,7 +334,7 @@ export async function generateImage({ pythonPath, prompt, negativePrompt = '', m
 
   console.log(`🎨 Generating image [${jobId.slice(0, 8)}] local: ${modelId} ${width}x${height} steps=${actualSteps}`);
   imageGenEvents.emit('started', { generationId: jobId, totalSteps: actualSteps });
-  activeJob = { ...meta, generationId: jobId, totalSteps: actualSteps, step: 0, progress: 0, currentImage: null, mode: 'local' };
+  activeJob = { ...meta, generationId: jobId, totalSteps: actualSteps, step: 0, progress: 0, currentImage: null, mode: IMAGE_GEN_MODE.LOCAL };
 
   const proc = spawn(bin, args, { env: { ...process.env, ...(await hfTokenEnv()) }, stdio: ['ignore', 'pipe', 'pipe'] });
   activeProcess = proc;
@@ -556,6 +558,9 @@ export async function generateImage({ pythonPath, prompt, negativePrompt = '', m
       // --metadata sidecar lives at a slightly different filename shape.
       const sidecar = join(PATHS.images, `${jobId}.metadata.json`);
       await writeFile(sidecar, JSON.stringify(meta, null, 2)).catch(() => {});
+      // Auto-clean (settings.imageGen.local.autoClean) — runs BEFORE the
+      // SSE complete + completed events so subscribers see the cleaned bytes.
+      await autoCleanGeneratedImage({ enabled: autoClean, pngPath: outputPath, sidecarPath: sidecar, mode: IMAGE_GEN_MODE.LOCAL });
       console.log(`✅ Image generated [${jobId.slice(0, 8)}]: ${filename}`);
       const result = { filename, seed: actualSeed, path: `/data/images/${filename}` };
       broadcastSse(job, { type: 'complete', result });
@@ -566,7 +571,7 @@ export async function generateImage({ pythonPath, prompt, negativePrompt = '', m
     closeJobAfterDelay(jobs, jobId);
   });
 
-  return { jobId, filename, path: `/data/images/${filename}`, generationId: jobId, mode: 'local', model: modelId, seed: actualSeed };
+  return { jobId, filename, path: `/data/images/${filename}`, generationId: jobId, mode: IMAGE_GEN_MODE.LOCAL, model: modelId, seed: actualSeed };
 }
 
 // Validate a gallery filename: PNG-only, basename only, no path separators.

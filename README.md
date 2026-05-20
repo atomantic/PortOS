@@ -239,11 +239,14 @@ Access PortOS at `http://localhost:5555` (or via Tailscale at `http://<machine>.
 For HTTPS (recommended — required for the in-browser microphone, and you'll get a trusted cert via Tailscale's Let's Encrypt integration):
 
 ```bash
-npm run setup:cert         # uses `tailscale cert` if available, else self-signed
+npm run setup:cert                   # Tailscale + Let's Encrypt (trusted)
+npm run setup:cert -- --self-signed  # fallback if you don't have Tailscale
 pm2 restart ecosystem.config.cjs
 ```
 
 After that, `https://<machine>.<tailnet>.ts.net:5555` is the user-facing URL on every device. The same `:5555` is used for both HTTP and HTTPS — only the scheme changes. When HTTPS is enabled a loopback-only HTTP mirror also spawns at `http://localhost:5553` so local curl/scripts skip cert warnings (override with `PORTOS_HTTP_PORT`).
+
+> A fresh install with no Tailscale **stays on HTTP**, so `http://localhost:5555` works out of the box. `npm start` will only auto-provision a cert when Tailscale's `tailscale cert` succeeds — it won't silently flip you to a self-signed HTTPS that breaks the URL above. Pass `--self-signed` if you want HTTPS without Tailscale (browser warning included).
 
 PM2 keeps PortOS running in the background and auto-restarts on reboot (with `pm2 save` + `pm2 startup`).
 

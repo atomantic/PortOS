@@ -31,6 +31,8 @@ import { getSettings } from '../services/settings.js';
 import { findOrCreateUniverseCollection } from '../services/mediaCollections.js';
 import { registerUniverseBuilderRun } from '../services/universeBuilderCollectionHook.js';
 import { getImageModels, isFlux2, isZImage, isErnie } from '../lib/mediaModels.js';
+import { IMAGE_GEN_MODE, IMAGE_GEN_MODES } from '../services/imageGen/modes.js';
+import { resolveAutoClean } from '../services/imageGen/index.js';
 import { getStylePresetById } from '../lib/writersRoomStylePresets.js';
 
 const router = Router();
@@ -302,7 +304,7 @@ const renderSchema = z.object({
   collectionName: z.unknown().optional(),
   // Image-gen knobs — these mirror /api/image-gen/generate so the user can
   // pick mode/size/steps without bouncing to the Image page first.
-  mode: z.enum(['external', 'local', 'codex']).optional(),
+  mode: z.enum(IMAGE_GEN_MODES).optional(),
   modelId: z.string().trim().max(64).optional(),
   width: z.number().int().min(64).max(2048).optional(),
   height: z.number().int().min(64).max(2048).optional(),
@@ -440,12 +442,12 @@ router.post('/:id/render', asyncHandler(async (req, res) => {
   }
 
   const settings = await getSettings();
-  const mode = body.mode || settings.imageGen?.mode || 'external';
+  const mode = body.mode || settings.imageGen?.mode || IMAGE_GEN_MODE.EXTERNAL;
 
   // Reject `external` mode upfront — batch rendering against a remote SD-API
   // would block this request for the entire batch, and we don't want to leave
   // an orphaned media collection behind when we discover this mid-loop below.
-  if (mode !== 'local' && mode !== 'codex') {
+  if (mode !== IMAGE_GEN_MODE.LOCAL && mode !== IMAGE_GEN_MODE.CODEX) {
     throw new ServerError(
       'Batch render requires local or codex mode — switch image-gen mode in Settings → Image Gen',
       { status: 400, code: 'WORLD_BUILDER_EXTERNAL_UNSUPPORTED' },
@@ -454,13 +456,13 @@ router.post('/:id/render', asyncHandler(async (req, res) => {
 
   // Mirror the upfront validation /api/image-gen/generate does so a doomed
   // batch fails before any jobs land in the queue.
-  if (mode === 'codex' && !settings.imageGen?.codex?.enabled) {
+  if (mode === IMAGE_GEN_MODE.CODEX && !settings.imageGen?.codex?.enabled) {
     throw new ServerError(
       'Codex Imagegen is disabled — enable it in Settings → Image Gen first',
       { status: 400, code: 'CODEX_IMAGEGEN_DISABLED' },
     );
   }
-  if (mode === 'local') {
+  if (mode === IMAGE_GEN_MODE.LOCAL) {
     const py = settings.imageGen?.local?.pythonPath || null;
     const allModels = getImageModels();
     if (body.modelId && !allModels.some((m) => m.id === body.modelId)) {
@@ -525,6 +527,12 @@ router.post('/:id/render', asyncHandler(async (req, res) => {
   // entryRef in `compiled` (the sanitizer mints ids on every write now, so
   // legacy id-less records are the only gap).
   const entryJobs = [];
+  // Register the run BEFORE enqueueing any jobs — the queue may dispatch and
+  // emit `completed` synchronously for the first job, and without prior
+  // registration the completion hook can't coalesce the run's
+  // emitRecordUpdated calls. `compiled.length` is the authoritative expected
+  // count (each compiled item produces exactly one job below).
+  registerUniverseBuilderRun({ runId, universeId: universe.id, jobCount: compiled.length });
   for (const item of compiled) {
     const params = {
       ...baseParams,
@@ -548,18 +556,24 @@ router.post('/:id/render', asyncHandler(async (req, res) => {
       },
     };
     let queued;
-    if (mode === 'codex') {
+    // The queue dispatches directly to imageGen/{codex,local}.generateImage,
+    // bypassing imageGen/index.js's dispatcher that resolves autoClean for
+    // direct callers. Resolve here so saved settings.imageGen[mode].autoClean
+    // applies to Universe Builder batch renders the same way it does for
+    // /api/image-gen/generate and pipeline renders.
+    const autoClean = resolveAutoClean(undefined, settings, mode);
+    if (mode === IMAGE_GEN_MODE.CODEX) {
       const c = settings.imageGen?.codex || {};
       queued = enqueueJob({
         kind: 'image',
-        params: { mode: 'codex', codexPath: c.codexPath, model: c.model, ...params },
+        params: { mode: IMAGE_GEN_MODE.CODEX, codexPath: c.codexPath, model: c.model, autoClean, ...params },
       });
     } else {
-      // mode === 'local' (validated upfront).
+      // mode === IMAGE_GEN_MODE.LOCAL (validated upfront).
       const py = settings.imageGen?.local?.pythonPath || null;
       queued = enqueueJob({
         kind: 'image',
-        params: { pythonPath: py, modelId: body.modelId, ...params },
+        params: { pythonPath: py, modelId: body.modelId, autoClean, ...params },
       });
     }
     jobIds.push(queued.jobId);
@@ -574,10 +588,6 @@ router.post('/:id/render', asyncHandler(async (req, res) => {
     promptCount: compiled.length,
     createdAt: new Date().toISOString(),
   });
-
-  // Tell the completion hook how many jobs to expect so per-image
-  // emitRecordUpdated calls can be coalesced into one re-export at run end.
-  registerUniverseBuilderRun({ runId, universeId: universe.id, jobCount: jobIds.length });
 
   console.log(`🌍 Universe Builder render — universe=${universe.name} prompts=${compiled.length} mode=${mode} runId=${runId.slice(0, 8)}`);
 

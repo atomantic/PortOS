@@ -19,19 +19,16 @@
  */
 import { execFile } from 'child_process';
 import { existsSync, mkdirSync, statSync } from 'fs';
-import { join } from 'path';
 import { promisify } from 'util';
 import { PATHS, atomicWrite } from '../lib/fileUtils.js';
 import { findTailscale } from '../lib/tailscale.js';
 import { getHttpsEnabledAtBoot } from '../lib/httpsState.js';
 import { PORTS } from '../lib/ports.js';
+import { certPaths } from '../../lib/certPaths.js';
 
 const execFileAsync = promisify(execFile);
 
-const CERT_DIR = join(PATHS.data, 'certs');
-const KEY_PATH = join(CERT_DIR, 'key.pem');
-const CERT_PATH = join(CERT_DIR, 'cert.pem');
-const META_PATH = join(CERT_DIR, 'meta.json');
+const { dir: CERT_DIR, cert: CERT_PATH, key: KEY_PATH, meta: META_PATH } = certPaths(PATHS.data);
 
 async function tailscaleStatus(bin) {
   const { stdout } = await execFileAsync(bin, ['status', '--json'], { timeout: 5000 });

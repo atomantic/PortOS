@@ -9,12 +9,10 @@ import { readFileAsBase64 } from '../utils/fileUpload';
 // Keep aligned with MAX_INPUT_BYTES in server/routes/imageClean.js — both are
 // sized so the base64+JSON envelope fits under the 55mb body parser cap.
 const MAX_BYTES = 40 * 1024 * 1024;
-const CLEAN_LEVELS = ['light', 'aggressive'];
 const ALLOWED_EXT = /\.(png|jpe?g|webp)$/i;
 const ALLOWED_MIME = /^image\/(png|jpe?g|webp)$/i;
 
 export default function ImageClean() {
-  const [level, setLevel] = useState('light');
   const [original, setOriginal] = useState(null); // { previewUrl, base64, size, name }
   const [result, setResult] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -23,11 +21,6 @@ export default function ImageClean() {
   const requestIdRef = useRef(0);
   const previewUrlRef = useRef(null);
   const resultUrlRef = useRef(null);
-  // Mirror `level` so handleFile can read the user's CURRENT choice after the
-  // readFileAsBase64 await — otherwise the closure captures the level at the
-  // moment the upload started and a mid-read level switch would be ignored.
-  const levelRef = useRef(level);
-  useEffect(() => { levelRef.current = level; }, [level]);
 
   // Revoke any outstanding blob URL on unmount so we don't leak.
   useEffect(() => () => {
@@ -45,7 +38,7 @@ export default function ImageClean() {
     return URL.createObjectURL(blob);
   };
 
-  const runClean = useCallback(async (base64, lvl) => {
+  const runClean = useCallback(async (base64) => {
     const myRequestId = ++requestIdRef.current;
     setBusy(true);
     if (resultUrlRef.current) {
@@ -53,7 +46,7 @@ export default function ImageClean() {
       resultUrlRef.current = null;
     }
     setResult(null);
-    const cleaned = await api.cleanImage(base64, lvl).catch((err) => {
+    const cleaned = await api.cleanImage(base64).catch((err) => {
       toast.error(err.message || 'Failed to clean image');
       return null;
     });
@@ -80,7 +73,7 @@ export default function ImageClean() {
     // alongside the blob URL would double the in-memory image footprint.
     const { data: _omit, ...meta } = cleaned;
     setResult({ ...meta, objectUrl });
-    toast.success(cleaned.c2paStripped ? 'C2PA provenance stripped' : 'Image cleaned');
+    toast.success(cleaned.c2paStripped ? 'C2PA chunk removed' : 'Image cleaned (no C2PA chunk found)');
   }, []);
 
   const handleFile = async (file) => {
@@ -120,12 +113,7 @@ export default function ImageClean() {
       size: file.size,
       name: file.name,
     });
-    runClean(base64, levelRef.current);
-  };
-
-  const handleLevelChange = (newLevel) => {
-    setLevel(newLevel);
-    if (original?.base64) runClean(original.base64, newLevel);
+    runClean(base64);
   };
 
   const handleDrag = (e) => {
@@ -183,32 +171,18 @@ export default function ImageClean() {
             Image Cleaner
           </h2>
           <p className="text-gray-500 text-sm">
-            Strip C2PA provenance + median-filter pixel noise from gpt-image / Codex output.
+            Removes the C2PA metadata chunk (when present) and reduces visible AI-generation artifacts via a median pass + sharpen.
+          </p>
+          <p className="text-gray-500 text-xs mt-1">
+            <span className="text-port-warning">Note:</span>{' '}
+            does NOT defeat SynthID. gpt-image / Imagen / Gemini renders stay detectable by their vendor watermark checkers
+            (e.g.{' '}
+            <a href="https://openai.com/synthid" target="_blank" rel="noopener noreferrer" className="text-port-accent hover:underline">
+              openai.com/synthid
+            </a>
+            ) after a clean — SynthID is embedded in pixel values and was designed to survive median + sharpen + re-encode.
           </p>
         </div>
-      </div>
-
-      <div className="bg-port-card border border-port-border rounded-lg p-4 flex flex-col sm:flex-row sm:items-center gap-3">
-        <span className="text-sm text-gray-400">Cleaning level</span>
-        <div className="flex gap-2">
-          {CLEAN_LEVELS.map((opt) => (
-            <button
-              key={opt}
-              type="button"
-              onClick={() => handleLevelChange(opt)}
-              className={`px-3 py-1.5 rounded-lg text-sm transition-colors capitalize ${
-                level === opt
-                  ? 'bg-port-accent text-white'
-                  : 'bg-port-bg border border-port-border text-gray-400 hover:text-white'
-              }`}
-            >
-              {opt}
-            </button>
-          ))}
-        </div>
-        <span className="text-xs text-gray-600 sm:ml-auto">
-          {level === 'light' ? 'median(1)' : 'median(3) + sharpen'}
-        </span>
       </div>
 
       {!original && (

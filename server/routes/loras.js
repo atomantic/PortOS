@@ -10,7 +10,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler } from '../lib/errorHandler.js';
-import { deepMerge } from '../lib/objects.js';
+import { deepMerge, isPlainObject } from '../lib/objects.js';
 import { validateRequest } from '../lib/validation.js';
 import {
   deleteLora,
@@ -69,7 +69,7 @@ router.delete('/auth/civitai', asyncHandler(async (_req, res) => {
   // typeof === 'object' is true for arrays — guard explicitly so a
   // legacy/malformed `civitai: ['x']` value doesn't get spread into
   // `{ '0': 'x', apiKey: undefined }`.
-  if (next.civitai && typeof next.civitai === 'object' && !Array.isArray(next.civitai)) {
+  if (isPlainObject(next.civitai)) {
     const { apiKey: _omit, ...rest } = next.civitai;
     next.civitai = rest;
   }

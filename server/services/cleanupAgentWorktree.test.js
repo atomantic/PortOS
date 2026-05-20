@@ -549,6 +549,37 @@ describe('cleanupAgentWorktree - openPR path', () => {
     expect(addTask).not.toHaveBeenCalled();
   });
 
+  // --- non-Copilot reviewer (--review-with claude/gemini/codex) ---
+
+  it('should NOT call the native GH Copilot reviewer API when reviewer is not "copilot"', async () => {
+    git.push.mockResolvedValue(undefined);
+    git.createPR.mockResolvedValue({ success: true, url: 'https://github.com/test/repo/pull/55' });
+    addTask.mockResolvedValue({ id: 'sys-rl-y' });
+
+    await cleanupAgentWorktree('agent-1', true, {
+      openPR: true, requestCopilotReview: true, reviewer: 'claude', description: 'X',
+      originalTask: { id: 'task-orig', metadata: {}, description: 'X' }
+    });
+
+    expect(git.requestCopilotReview).not.toHaveBeenCalled();
+  });
+
+  it('should still spawn the review-loop follow-up when a non-Copilot reviewer is selected', async () => {
+    git.push.mockResolvedValue(undefined);
+    git.createPR.mockResolvedValue({ success: true, url: 'https://github.com/test/repo/pull/56' });
+    addTask.mockResolvedValue({ id: 'sys-rl-z' });
+
+    await cleanupAgentWorktree('agent-1', true, {
+      openPR: true, requestCopilotReview: true, reviewer: 'codex', description: 'Build with codex review',
+      originalTask: { id: 'task-orig', priority: 'MEDIUM', metadata: { app: 'sparsetree' }, description: 'Build' }
+    });
+
+    expect(addTask).toHaveBeenCalledTimes(1);
+    const [followUp] = addTask.mock.calls[0];
+    expect(followUp.metadata.reviewLoopReviewer).toBe('codex');
+    expect(followUp.metadata.reviewLoopFollowUp).toBe(true);
+  });
+
   // --- skipMerge tests for review-loop follow-up cleanup ---
 
   it('should pass merge: false in the auto-merge fallback when skipMerge is true (review-loop follow-up cleanup)', async () => {

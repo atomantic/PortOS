@@ -9,7 +9,7 @@ import { writeFile } from 'fs/promises';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';
-import { deepMerge } from '../lib/objects.js';
+import { deepMerge, isPlainObject } from '../lib/objects.js';
 import { LLM_DRILL_TYPES, MEMORY_DRILL_TYPES, POST_SUPPORTED_MEMORY_TYPES } from '../lib/postValidation.js';
 
 const MEATSPACE_DIR = PATHS.meatspace;
@@ -72,7 +72,7 @@ export async function updatePostConfig(updates) {
 
 async function loadSessions() {
   const raw = await readJSONFile(SESSIONS_FILE, { sessions: [] }, { allowArray: false });
-  const data = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : { sessions: [] };
+  const data = isPlainObject(raw) ? raw : { sessions: [] };
   if (!Array.isArray(data.sessions)) data.sessions = [];
   return data;
 }

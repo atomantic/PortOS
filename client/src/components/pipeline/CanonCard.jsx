@@ -13,7 +13,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { Loader2, ImagePlus, WandSparkles, Lock, Unlock, Shirt, Plus, Trash2, ChevronDown, ChevronRight, Star, Square, BookOpen } from 'lucide-react';
 import useMediaJobProgress from '../../hooks/useMediaJobProgress';
+import useRowDraft from '../../hooks/useRowDraft';
 import useFieldDraft from '../../hooks/useFieldDraft';
+import usePendingListRows from '../../hooks/usePendingListRows';
 import MediaJobThumb from './MediaJobThumb';
 import EntryCard from '../universe/EntryCard';
 import EntryThumbSlot from '../universe/EntryThumbSlot';
@@ -50,6 +52,39 @@ function ChipPicker({ label, value, options, onChange }) {
         );
       })}
     </div>
+  );
+}
+
+// Inline editable description for the canon card's primary descriptor field.
+// Read-only `<p>` when locked or no PATCH channel; buffered textarea otherwise
+// (commits on blur via `useFieldDraft`, mirroring the WardrobeRow pattern).
+// The bound value falls back to the legacy field (`description` on characters,
+// `significance` on objects) so pre-migration entries pre-fill on first edit
+// and migrate to the canonical field on save.
+function DescriptionField({ entry, descField, fallbackField, max, editable, onCommit, placeholder }) {
+  const stored = entry[descField];
+  const fallback = fallbackField ? entry[fallbackField] : null;
+  const seed = (typeof stored === 'string' && stored)
+    || (typeof fallback === 'string' ? fallback : '')
+    || '';
+  const draft = useFieldDraft(seed, onCommit);
+  if (!editable) {
+    return (
+      <p className="text-xs text-gray-400 mt-1 line-clamp-3 whitespace-pre-wrap">
+        {seed || <em className="text-gray-600">No description yet.</em>}
+      </p>
+    );
+  }
+  return (
+    <textarea
+      value={draft.value}
+      onChange={draft.onChange}
+      onBlur={draft.onBlur}
+      placeholder={placeholder}
+      rows={3}
+      maxLength={max}
+      className="w-full mt-1 px-2 py-1 text-xs bg-port-bg border border-port-border rounded text-gray-200 whitespace-pre-wrap"
+    />
   );
 }
 
@@ -96,14 +131,9 @@ function SourceSeriesChip({ sourceSeriesId, seriesName }) {
   );
 }
 
-// One wardrobe row — per-field drafts live inside `useFieldDraft` so the
-// state belongs to the row instance, not an indexed map in the parent.
-// `onCommit('name'|'description', value)` lets the parent decide between
-// patching an existing row, promoting a pending row once name is non-empty,
-// or skipping a no-op.
+// Parent decides patch-vs-promote on `nextRow.name` non-empty; see `useRowDraft`.
 function WardrobeRow({ wardrobe, editable, onCommit, onRemove }) {
-  const nameDraft = useFieldDraft(wardrobe.name, (v) => onCommit('name', v));
-  const descDraft = useFieldDraft(wardrobe.description, (v) => onCommit('description', v));
+  const { draftFor, setDraft, commit } = useRowDraft(wardrobe, onCommit);
   if (!editable) {
     return (
       <div className="space-y-1">
@@ -119,9 +149,9 @@ function WardrobeRow({ wardrobe, editable, onCommit, onRemove }) {
       <div className="flex items-center gap-1.5">
         <input
           type="text"
-          value={nameDraft.value}
-          onChange={nameDraft.onChange}
-          onBlur={nameDraft.onBlur}
+          value={draftFor('name')}
+          onChange={(e) => setDraft('name', e.target.value)}
+          onBlur={() => commit('name')}
           placeholder="Outfit name (e.g. Wedding)"
           className="flex-1 min-w-0 px-1.5 py-0.5 text-xs bg-port-bg border border-port-border rounded text-white"
           maxLength={BIBLE_LIMITS.WARDROBE_NAME_MAX}
@@ -136,9 +166,9 @@ function WardrobeRow({ wardrobe, editable, onCommit, onRemove }) {
         </button>
       </div>
       <textarea
-        value={descDraft.value}
-        onChange={descDraft.onChange}
-        onBlur={descDraft.onBlur}
+        value={draftFor('description')}
+        onChange={(e) => setDraft('description', e.target.value)}
+        onBlur={() => commit('description')}
         placeholder="What's the character wearing? (image-gen-ready prose)"
         rows={2}
         className="w-full px-1.5 py-0.5 text-xs bg-port-bg border border-port-border rounded text-white"
@@ -149,68 +179,33 @@ function WardrobeRow({ wardrobe, editable, onCommit, onRemove }) {
 }
 
 // Wardrobes (A2) — collapsed summary by default; click to expand into an
-// inline editor when `editable`. Per-field edits are buffered inside each
-// `WardrobeRow` via `useFieldDraft`, so a keystroke doesn't fire a
-// universe-wide round-trip per character.
+// inline editor when `editable`. Per-row edits are buffered inside each
+// `WardrobeRow` via `useRowDraft`, so a keystroke doesn't fire a
+// universe-wide round-trip per character. The ride-along merge means a
+// fast desc-blur after a name keystroke ships both columns together, so the
+// row promotes correctly even if the user never explicitly blurs name first.
+//
+// Pending rows use `wd-<uuid>` ids (server `ensureId` preserves them, so
+// they round-trip verbatim across the pending → persisted promotion) —
+// `stripIdOnPromote` stays false to keep WardrobeRow mounted across the
+// swap and preserve sibling draft buffers.
 function WardrobeSection({ wardrobes, editable, onChange }) {
   const [open, setOpen] = useState(false);
-  // Pending new rows live entirely client-side until the user types a name
-  // — committing immediately would PATCH a nameless entry, the server-side
-  // sanitizer would drop it, and the row would vanish mid-type.
-  const [pendingNew, setPendingNew] = useState([]);
-
-  const merged = pendingNew.length
-    ? [...wardrobes, ...pendingNew]
-    : wardrobes;
+  const { merged, addRow, updateRow, removeRow } = usePendingListRows({
+    persisted: wardrobes,
+    requiredColumn: 'name',
+    idPrefix: 'wd-',
+    blankRow: () => ({ name: '', description: '' }),
+    onChange,
+  });
 
   if (!editable && merged.length === 0) return null;
 
   const summary = merged.map((w) => w.name).filter(Boolean).join(', ');
-  const isPending = (idx) => idx >= wardrobes.length;
-
-  const commit = (idx, field, value) => {
-    if (isPending(idx)) {
-      const pendingIdx = idx - wardrobes.length;
-      const current = pendingNew[pendingIdx] || { name: '', description: '' };
-      if ((current[field] || '') === value) return;
-      const nextPending = pendingNew.map((p, i) => i === pendingIdx ? { ...p, [field]: value } : p);
-      // Promote on name-non-empty. The pending row already carries a
-      // server-shaped `wd-<uuid>` id (minted client-side in `addOne`) so
-      // it persists verbatim — and crucially, the React key stays stable
-      // across promotion so the `WardrobeRow` instance doesn't unmount
-      // and lose any uncommitted description draft buffered inside its
-      // `useFieldDraft` hook.
-      if (field === 'name' && value.trim()) {
-        setPendingNew(nextPending.filter((_, i) => i !== pendingIdx));
-        onChange([...wardrobes, nextPending[pendingIdx]]);
-      } else {
-        setPendingNew(nextPending);
-      }
-      return;
-    }
-    if ((wardrobes[idx]?.[field] || '') === value) return;
-    onChange(wardrobes.map((w, i) => (i === idx ? { ...w, [field]: value } : w)));
-  };
-
-  const removeAt = (idx) => {
-    if (isPending(idx)) {
-      const pendingIdx = idx - wardrobes.length;
-      setPendingNew(pendingNew.filter((_, i) => i !== pendingIdx));
-      return;
-    }
-    onChange(wardrobes.filter((_, i) => i !== idx));
-  };
 
   const addOne = () => {
     setOpen(true);
-    // Mint a server-shaped `wd-<uuid>` client-side so the React key stays
-    // stable across the pending → persisted promotion. Server `ensureId`
-    // preserves any non-empty string, so this id round-trips unchanged.
-    // `globalThis.crypto` — bare `crypto?.…` ReferenceErrors when the
-     // identifier is undeclared (e.g. some non-secure contexts); going
-     // through `globalThis` short-circuits cleanly to the Date+Math fallback.
-    const id = `wd-${(globalThis.crypto?.randomUUID?.() ?? Date.now().toString(36) + Math.random().toString(36).slice(2))}`;
-    setPendingNew((prev) => [...prev, { id, name: '', description: '' }]);
+    addRow();
   };
 
   return (
@@ -231,8 +226,8 @@ function WardrobeSection({ wardrobes, editable, onChange }) {
               key={w.id || i}
               wardrobe={w}
               editable={editable}
-              onCommit={(field, value) => commit(i, field, value)}
-              onRemove={() => removeAt(i)}
+              onCommit={(nextRow) => updateRow(i, nextRow)}
+              onRemove={() => removeRow(i)}
             />
           ))}
           {editable ? (
@@ -331,11 +326,6 @@ export default function CanonCard({
           aka {entry.aliases.join(', ')}
         </span>
       ) : null}
-      {locked ? (
-        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-port-accent/15 text-port-accent text-[9px] uppercase tracking-wider">
-          <Lock size={9} /> Locked
-        </span>
-      ) : null}
       {entry.sourceSeriesId ? (
         <SourceSeriesChip
           sourceSeriesId={entry.sourceSeriesId}
@@ -356,9 +346,15 @@ export default function CanonCard({
           ))}
         </div>
       ) : null}
-      <p className="text-xs text-gray-400 mt-1 line-clamp-3 whitespace-pre-wrap">
-        {description || <em className="text-gray-600">No description yet.</em>}
-      </p>
+      <DescriptionField
+        entry={entry}
+        descField={kind.descField || 'description'}
+        fallbackField={kind.descFieldFallback || null}
+        max={kind.descFieldMax}
+        editable={!!onPatchEntry && !locked && !!kind.descField}
+        onCommit={(v) => onPatchEntry?.(entry.id, { [kind.descField]: v })}
+        placeholder={`Describe ${entry.name} (image-gen-ready prose)`}
+      />
       {kind.key === 'places' && onPatchEntry && !locked ? (
         <div className="flex flex-wrap items-center gap-2 mt-2">
           <ChipPicker

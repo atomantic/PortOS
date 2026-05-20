@@ -14,6 +14,7 @@ import { readFile, writeFile, stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import { randomUUID } from 'crypto';
 import { safeJSONParse, readJSONFile, dataPath, ensureDir } from '../lib/fileUtils.js';
+import { isPlainObject } from '../lib/objects.js';
 import { getSettings } from './settings.js';
 
 const DEFAULT_ICLOUD_PATH = join(
@@ -117,7 +118,7 @@ export async function mlPatchProfileIfEnabled(patch) {
     const current = (store.profile && typeof store.profile === 'object') ? store.profile : {};
     const next = { ...current };
     for (const [k, v] of Object.entries(patch)) {
-      if (v && typeof v === 'object' && !Array.isArray(v) && current[k] && typeof current[k] === 'object') {
+      if (isPlainObject(v) && current[k] && typeof current[k] === 'object') {
         next[k] = { ...current[k], ...v };
       } else {
         next[k] = v;

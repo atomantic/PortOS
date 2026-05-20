@@ -22,6 +22,14 @@ const PROBE_TIMEOUT_MS = 5000;
 const POLL_INTERVAL_MS = 30000;
 const INITIAL_PROBE_DELAY_MS = 2000;
 
+// Sentinel returned by getInstanceId() and stamped onto sender/peer fields when
+// the local identity hasn't been initialized yet. Every consumer that fans
+// instance-keyed state out to peers (sharing/annotationsSync.flushAll,
+// mediaAnnotations.mergePeerAnnotations, manifest builders) must refuse this
+// value — without that guard, every uninitialized peer would collide in the
+// same bucket and clobber each other on merge.
+export const UNKNOWN_INSTANCE_ID = 'unknown';
+
 // Backoff tiers for consecutive probe failures (in ms)
 // 30s → 1m → 5m → 15m → 1h → 24h
 const BACKOFF_TIERS_MS = [
@@ -99,7 +107,7 @@ export async function getInstanceId() {
   if (!cachedInstanceId) {
     const id = (await getSelf())?.instanceId;
     if (id) cachedInstanceId = id;
-    return id ?? 'unknown';
+    return id ?? UNKNOWN_INSTANCE_ID;
   }
   return cachedInstanceId;
 }

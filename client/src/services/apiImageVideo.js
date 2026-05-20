@@ -19,9 +19,9 @@ export const setImageHidden = (filename, hidden) => request(`/image-gen/${encode
   method: 'POST',
   body: JSON.stringify({ hidden }),
 });
-export const cleanGalleryImage = (filename, level = 'light') => request(`/image-gen/${encodeURIComponent(filename)}/clean`, {
+export const cleanGalleryImage = (filename) => request(`/image-gen/${encodeURIComponent(filename)}/clean`, {
   method: 'POST',
-  body: JSON.stringify({ level }),
+  body: JSON.stringify({}),
 });
 
 // HuggingFace token (gated local Flux models). Stored in settings.imageGen.hfToken;

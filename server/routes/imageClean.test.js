@@ -49,12 +49,11 @@ describe('POST /api/image-clean', () => {
   it('cleans a PNG and returns base64 + metadata', async () => {
     const res = await request(buildApp())
       .post('/api/image-clean')
-      .send({ data: pngFixture.toString('base64'), level: 'light' });
+      .send({ data: pngFixture.toString('base64') });
 
     expect(res.status).toBe(200);
     expect(res.body.format).toBe('png');
     expect(res.body.mimeType).toBe('image/png');
-    expect(res.body.level).toBe('light');
     expect(res.body.width).toBe(4);
     expect(res.body.height).toBe(4);
     expect(res.body.c2paStripped).toBe(false);
@@ -70,18 +69,16 @@ describe('POST /api/image-clean', () => {
     expect(res.status).toBe(200);
     expect(res.body.format).toBe('jpeg');
     expect(res.body.mimeType).toBe('image/jpeg');
-    expect(res.body.level).toBe('light'); // default
   });
 
   it('cleans a WebP', async () => {
     const res = await request(buildApp())
       .post('/api/image-clean')
-      .send({ data: webpFixture.toString('base64'), level: 'aggressive' });
+      .send({ data: webpFixture.toString('base64') });
 
     expect(res.status).toBe(200);
     expect(res.body.format).toBe('webp');
     expect(res.body.mimeType).toBe('image/webp');
-    expect(res.body.level).toBe('aggressive');
   });
 
   it('flags c2paStripped=true when PNG contains a caBX chunk', async () => {
@@ -166,15 +163,6 @@ describe('POST /api/image-clean', () => {
 
     expect(res.status).toBe(400);
     expect(res.body.code).toBe('FILE_TOO_LARGE');
-  });
-
-  it('rejects invalid level enum with VALIDATION_ERROR', async () => {
-    const res = await request(buildApp())
-      .post('/api/image-clean')
-      .send({ data: pngFixture.toString('base64'), level: 'nuclear' });
-
-    expect(res.status).toBe(400);
-    expect(res.body.code).toBe('VALIDATION_ERROR');
   });
 
   it('auto-orients images via EXIF Orientation tag', async () => {

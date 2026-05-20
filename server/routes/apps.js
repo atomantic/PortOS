@@ -19,6 +19,7 @@ import { parseEcosystemFromPath, usesPm2 } from '../services/streamingDetect.js'
 import { detectAppIcon, getIconContentType, isUsableSvg } from '../services/appIconDetect.js';
 import { hasDeployScript } from '../services/appDeployer.js';
 import { checkScripts, installScripts, XCODE_SCRIPT_NAMES } from '../services/xcodeScripts.js';
+import { certPaths } from '../../lib/certPaths.js';
 
 const router = Router();
 
@@ -268,7 +269,7 @@ router.post('/:id/upgrade-tls', loadApp, asyncHandler(async (req, res) => {
     overwrote: alreadyExists,
     tlsPort,
     snippet,
-    certDirHint: join(PATHS.data, 'certs'),
+    certDirHint: certPaths(PATHS.data).dir,
     note: 'Point your app at the PortOS cert dir (or symlink it) so apps share the single Tailscale cert.'
   });
 }));
@@ -1026,7 +1027,7 @@ router.post('/:id/refresh-config', loadApp, asyncHandler(async (req, res) => {
 // Document Endpoints
 // ============================================================
 
-const ALLOWED_DOCUMENTS = ['PLAN.md', 'DONE.md', 'CLAUDE.md', 'GOALS.md', 'REVIEW.md', 'REJECTED.md'];
+const ALLOWED_DOCUMENTS = ['PLAN.md', 'CLAUDE.md', 'GOALS.md', 'REVIEW.md', 'REJECTED.md'];
 
 const documentUpdateSchema = z.object({
   content: z.string().max(500000),

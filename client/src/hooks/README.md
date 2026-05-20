@@ -44,6 +44,7 @@ grep -i "what you want to do" client/src/hooks/README.md
 | `useMediaCompletionRefresh` | Refetch on image/video completion socket events. | A list view that needs to refresh when new media lands. |
 | `useOpenClawAttachments` | File attachment handling (base64, size-capped). | OpenClaw attachment UI. |
 | `useImagePreviewActions` | Shared MediaPreview / MediaLightbox action handlers. | New surface that exposes the same 4 preview actions. |
+| `usePreviewRoute` | URL-driven `[preview, setPreview]` via `?preview=<filename>`. | Any page hosting `<MediaPreview>` — gives the preview a deep-link. |
 | `useImageGenQueue` | Work-scoped live queue of in-flight image renders. | Pages that show per-work image-gen queue state. |
 
 ## Sockets & lifecycle
@@ -65,6 +66,7 @@ grep -i "what you want to do" client/src/hooks/README.md
 | `useContainerWidth` | `[ref, width]` via ResizeObserver. | Layout responds to a specific container's width. |
 | `useFieldDraft` | Local input draft that commits on blur. | Bible-editor-style single-field input that must dedupe sibling races. |
 | `useRowDraft` | Multi-column row draft (analogue of `useFieldDraft`). | Multi-column row that commits as a unit. |
+| `usePendingListRows` | List-of-rows where a new row is held client-side until a required column fills, then promoted to `onChange`. | Editable list whose nameless rows would otherwise be dropped by the server sanitizer (WardrobeSection, CharacterDetailEditor list sections). |
 | `useKeyboardControls` | Keyboard binding for CyberCity mode toggle. | CyberCity-specific. |
 | `useKeyboardHelp` | Esc closes, even from inputs/textareas. | Help/cheatsheet modals. |
 | `useLockToggle` | Optimistic-PATCH lock toggle. | New "lock this field/stage/arc" button — use this, do not re-implement. |
@@ -88,9 +90,11 @@ grep -i "what you want to do" client/src/hooks/README.md
 | `useCityData` | CyberCity environment data + physics. | CyberCity only. |
 | `useCitySettings` | CyberCity quality presets + persistence. | CyberCity only. |
 | `useDeathClock` | 1-second countdown for death-clock display. | Mortality / death-clock surfaces. |
+| `useNextEvalCountdown` | 1-second countdown to the next CoS evaluation tick. | Chief of Staff "next eval in Xs" displays. |
 | `usePostSession` | Post-render callback scheduling. | Generic post-action chaining. |
 | `useProviderModels` | AI providers + two-step provider→model selection. | Any UI that picks a provider + model. |
 | `useTheme` | Dark/light theme + paired-theme switching. | Theme picker. |
 | `useUniverseAction` | LLM-driven universe mutation scaffolding. | Universe Builder action UIs. |
+| `useUniverseNav` | `goToWorld(id)` → navigate to `/universe-builder/:id`, preserve `location.search`. | Any Universe Builder caller that needs to switch worlds via URL. |
 | `useVoiceUiSync` | Keeps voice server's UI index in sync with current page. | Wire once at root for voice agent support. |
 | `useMoltworldWs` | Moltworld WebSocket feed. | Moltworld surfaces only. |

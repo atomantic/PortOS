@@ -19,7 +19,7 @@ import {
 } from '../lib/validation.js';
 import { optionalUploadFields } from '../lib/multipart.js';
 import * as imageGen from '../services/imageGen/index.js';
-import { local, IMAGE_GEN_MODES } from '../services/imageGen/index.js';
+import { local, IMAGE_GEN_MODE, IMAGE_GEN_MODES, resolveAutoClean } from '../services/imageGen/index.js';
 import { enqueueJob, attachSseClient as attachQueueSseClient, cancelJob, listJobs } from '../services/mediaJobQueue/index.js';
 import { getSettings, saveSettings } from '../services/settings.js';
 import { getHfToken, getHfTokenInfo, HF_TOKEN_REGEX } from '../lib/hfToken.js';
@@ -33,8 +33,10 @@ import { PATHS, ensureDir, resolveGalleryImage } from '../lib/fileUtils.js';
 import { join } from 'node:path';
 import { readFile, writeFile } from 'fs/promises';
 import { STYLE_PRESETS } from '../lib/writersRoomStylePresets.js';
-import { cleanImageBuffer, CLEAN_LEVELS } from './imageClean.js';
+import { cleanImageBuffer } from '../lib/imageClean.js';
 import { purgeImageRefFromAllUniverses } from '../services/universeCanon.js';
+import { listCollections, addItem, ERR_DUPLICATE } from '../services/mediaCollections.js';
+import { itemKey } from '../lib/mediaItemKey.js';
 
 const router = Router();
 
@@ -73,6 +75,11 @@ const generateSchema = z.object({
   // array — file presence is enforced at the upload layer, and the route
   // pairs filled slots with their strengths positionally.
   referenceStrengths: z.array(z.number().min(0).max(1)).max(4).optional(),
+  // Per-render override of `settings.imageGen.{mode}.autoClean`. When omitted,
+  // the route falls back to the saved settings value. `true` forces in-place
+  // auto-clean for this one render; `false` skips it even when the saved
+  // setting is on.
+  autoClean: z.boolean().optional(),
 }).refine(refineImagePixelCap, { message: PIXEL_CAP_MESSAGE, path: ['width'] });
 
 // JSON callers (SDAPI bridge, avatar route, the Imagine page's old payload
@@ -108,6 +115,9 @@ function coerceFormFields(body) {
     const raw = Array.isArray(body.referenceStrengths) ? body.referenceStrengths : [body.referenceStrengths];
     body.referenceStrengths = raw.map((v) => (typeof v === 'string' && v !== '' ? Number(v) : v));
   }
+  // Multipart sends checkbox values as 'true' / 'false' strings; coerce to
+  // bool so Zod's `z.boolean()` accepts them.
+  if (typeof body.autoClean === 'string') body.autoClean = body.autoClean === 'true';
   return body;
 }
 
@@ -185,7 +195,12 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
   // while the actual generation silently ignored them. (Reading settings here
   // is cheap — it's already read again below for the per-mode dispatch.)
   const settings = await getSettings();
-  const mode = data.mode || settings.imageGen?.mode || 'external';
+  const mode = data.mode || settings.imageGen?.mode || IMAGE_GEN_MODE.EXTERNAL;
+  // Resolve autoClean ONCE at the route layer so all three dispatch paths
+  // (synchronous external, codex queue, local queue) see the same value.
+  // Stamp onto `data` so the value flows through the spread-into-params
+  // calls below verbatim.
+  data.autoClean = resolveAutoClean(data.autoClean, settings, mode);
 
   // Multi-reference is a FLUX.2-only, local-backend-only feature — local.js's
   // buildArgs only emits --reference-images/--reference-strengths inside the
@@ -194,7 +209,7 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
   // silently dropping them downstream (which would orphan files on disk and
   // produce metadata sidecars that lie about how the render was conditioned).
   if (referenceUploads.length) {
-    if (mode !== 'local') {
+    if (mode !== IMAGE_GEN_MODE.LOCAL) {
       cleanupReqFilesTemp();
       throw new ServerError(
         'Reference images are only supported for local FLUX.2 renders',
@@ -272,7 +287,7 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
   // call with no local single-flight constraint to absorb. `settings` and
   // `mode` were already resolved above (so the FLUX.2 + local-backend gate
   // could fire before staging any uploads).
-  if (mode === 'codex') {
+  if (mode === IMAGE_GEN_MODE.CODEX) {
     // Reject up-front rather than enqueueing a doomed job — codex is gated
     // behind an explicit toggle since not every Codex account has access to
     // the image_gen tool.
@@ -285,19 +300,19 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
     }
     const queued = enqueueJob({
       kind: 'image',
-      // `mode: 'codex'` is the queue's discriminator — laneForJob() routes
-      // codex jobs to the codex lane, and runJob's image branch dispatches
-      // to imageGen/codex.js when it sees this flag.
+      // `mode: IMAGE_GEN_MODE.CODEX` is the queue's discriminator —
+      // laneForJob() routes codex jobs to the codex lane, and runJob's image
+      // branch dispatches to imageGen/codex.js when it sees this flag.
       params: {
-        mode: 'codex',
+        mode: IMAGE_GEN_MODE.CODEX,
         codexPath: c.codexPath,
         model: c.model,
         ...data,
       },
     });
-    return res.json(queuedImageResponse({ ...queued, mode: 'codex', model: c.model || null }));
+    return res.json(queuedImageResponse({ ...queued, mode: IMAGE_GEN_MODE.CODEX, model: c.model || null }));
   }
-  if (mode === 'local') {
+  if (mode === IMAGE_GEN_MODE.LOCAL) {
     const py = settings.imageGen?.local?.pythonPath || null;
     // Pre-validate config: mflux models need pythonPath, FLUX.2 doesn't
     // (it uses its own bundled venv). Without this guard, the queue would
@@ -330,7 +345,7 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
     // modelId → 'dev' → allModels[0]) rather than just the requested id.
     return res.json(queuedImageResponse({
       ...queued,
-      mode: 'local',
+      mode: IMAGE_GEN_MODE.LOCAL,
       model: selectedModel?.id || data.modelId || 'dev',
     }));
   }
@@ -437,10 +452,6 @@ router.post('/:filename/visibility', asyncHandler(async (req, res) => {
 }));
 
 router.post('/:filename/clean', asyncHandler(async (req, res) => {
-  const { level } = validateRequest(
-    z.object({ level: z.enum(CLEAN_LEVELS).optional().default('light') }),
-    req.body,
-  );
   const filename = req.params.filename;
   local.assertGalleryFilename(filename);
 
@@ -453,15 +464,19 @@ router.post('/:filename/clean', asyncHandler(async (req, res) => {
     local.readImageSidecar(filename),
   ]);
 
-  const result = await cleanImageBuffer(buffer, level);
+  const result = await cleanImageBuffer(buffer);
   if (result.format !== 'png') {
     throw new ServerError('Gallery images must be PNG', { status: 400, code: 'UNSUPPORTED_FORMAT' });
   }
 
+  // The `_clean-aggressive` filename suffix and `cleanLevel: 'aggressive'`
+  // sidecar field survive the light/aggressive collapse so already-cleaned
+  // images on disk keep round-tripping through the gallery unchanged. A future
+  // rename to `_cleaned.png` would need a backfill migration.
   const base = filename.slice(0, -'.png'.length);
-  const outFilename = `${base}_clean-${level}.png`;
+  const outFilename = `${base}_clean-aggressive.png`;
   const outPath = join(PATHS.images, outFilename);
-  const sidecarPath = join(PATHS.images, `${base}_clean-${level}.metadata.json`);
+  const sidecarPath = join(PATHS.images, `${base}_clean-aggressive.metadata.json`);
 
   const createdAt = new Date().toISOString();
   // Strip `hidden` so a clean of a hidden source still surfaces in the gallery
@@ -473,7 +488,7 @@ router.post('/:filename/clean', asyncHandler(async (req, res) => {
     ...sourceMetaForCleaned,
     createdAt,
     cleanedFrom: filename,
-    cleanLevel: level,
+    cleanLevel: 'aggressive',
     c2paStripped: result.c2paStripped,
   };
 
@@ -482,7 +497,18 @@ router.post('/:filename/clean', asyncHandler(async (req, res) => {
     writeFile(sidecarPath, JSON.stringify(cleanedMeta, null, 2)),
   ]);
 
-  console.log(`🧼 Cleaned ${filename} → ${outFilename} (level=${level}, ${result.sizeBefore}B → ${result.sizeAfter}B, c2pa=${result.c2paStripped})`);
+  // Auto-file the cleaned copy into every collection that contained the
+  // source. Without this, users who built a collection around an original
+  // would have to manually re-add the cleaned variant — the prior behavior
+  // surprised users (cleaned image vanished from "their" view). Best-effort:
+  // a collection-add failure must not fail the clean itself. ERR_DUPLICATE
+  // is silently swallowed so re-cleans of an already-filed pair are no-ops.
+  const filedCollections = await autoFileCleanedToSourceCollections(filename, outFilename).catch((err) => {
+    console.warn(`⚠️ Auto-file cleaned ${outFilename} → source collections failed: ${err?.message || err}`);
+    return [];
+  });
+
+  console.log(`🧼 Cleaned ${filename} → ${outFilename} (${result.sizeBefore}B → ${result.sizeAfter}B, c2pa=${result.c2paStripped}${filedCollections.length ? `, filed to ${filedCollections.length} collection(s)` : ''})`);
 
   // sourceMeta first so explicit fields below win on key collisions (the
   // cleaned copy's createdAt must reflect the cleaning, not the original).
@@ -497,10 +523,33 @@ router.post('/:filename/clean', asyncHandler(async (req, res) => {
     width: result.width,
     height: result.height,
     cleanedFrom: filename,
-    cleanLevel: level,
+    cleanLevel: 'aggressive',
     c2paStripped: result.c2paStripped,
   });
 }));
+
+// Add the cleaned-image filename to every collection that already contains
+// the source filename. Returns the ids of the collections that received the
+// new entry (excluding ones that already contained the cleaned filename).
+// Cross-collection writes run in parallel — addItem serializes per file write
+// internally, so concurrent calls on different collections are safe.
+async function autoFileCleanedToSourceCollections(sourceFilename, cleanedFilename) {
+  const sourceKey = itemKey({ kind: 'image', ref: sourceFilename });
+  const all = await listCollections();
+  const matching = all.filter((c) => c.items.some((it) => itemKey(it) === sourceKey));
+  if (matching.length === 0) return [];
+  const results = await Promise.all(matching.map(async (c) => {
+    try {
+      await addItem(c.id, { kind: 'image', ref: cleanedFilename });
+      return c.id;
+    } catch (err) {
+      if (err?.code === ERR_DUPLICATE) return null;
+      console.warn(`⚠️ Auto-file ${cleanedFilename} → collection ${c.id} failed: ${err?.message || err}`);
+      return null;
+    }
+  }));
+  return results.filter(Boolean);
+}
 
 // --- Local-mode setup automation ---
 

@@ -17,7 +17,7 @@ import { cleanGalleryImage, extractLastFrame } from '../services/apiImageVideo';
  * prepend vs. ignore) — supplied via `onCleanComplete`.
  *
  * @param {object} [options]
- * @param {(cleaned: object, level: string) => any | Promise<any>} [options.onCleanComplete]
+ * @param {(cleaned: object) => any | Promise<any>} [options.onCleanComplete]
  *   Fires AFTER `cleanGalleryImage` resolves. Use it to splice the cleaned
  *   image into the consumer's local state (collection items, gallery list,
  *   variation imageRefs, etc.). Errors thrown from the callback bubble.
@@ -79,20 +79,20 @@ export default function useImagePreviewActions({ onCleanComplete = null } = {}) 
     navigate(`/media/video?${params}`);
   }, [navigate]);
 
-  // Clean: send to the SDAPI background-cleaner endpoint (`light` /
-  // `aggressive`). Returns the resulting gallery item so consumers can
-  // splice it into local state. `onCleanComplete` is the consumer-specific
-  // post-step (add-to-collection / prepend-to-history / etc.) — fired
-  // AFTER the success toast so a failing post-step still shows the user
-  // the clean succeeded server-side.
-  const handleClean = useCallback(async (img, level) => {
+  // Clean: re-encode + denoise via the gallery clean endpoint to strip C2PA
+  // provenance and reduce AI artifacts. Returns the resulting gallery item so
+  // consumers can splice it into local state. `onCleanComplete` is the
+  // consumer-specific post-step (add-to-collection / prepend-to-history /
+  // etc.) — fired AFTER the success toast so a failing post-step still shows
+  // the user the clean succeeded server-side.
+  const handleClean = useCallback(async (img) => {
     if (!img?.filename) throw new Error('Missing filename');
-    const cleaned = await cleanGalleryImage(img.filename, level).catch((err) => {
+    const cleaned = await cleanGalleryImage(img.filename).catch((err) => {
       toast.error(err.message || 'Failed to clean image');
       throw err;
     });
-    toast.success(`Cleaned (${level}) → ${cleaned.filename}`);
-    if (onCleanComplete) await onCleanComplete(cleaned, level);
+    toast.success(`Cleaned → ${cleaned.filename}`);
+    if (onCleanComplete) await onCleanComplete(cleaned);
     return cleaned;
   }, [onCleanComplete]);
 

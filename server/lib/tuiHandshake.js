@@ -36,12 +36,23 @@ export const PASTE_TO_ENTER_FALLBACK_MS = 3500;
 export const DEFAULT_TUI_PROMPT_DELAY_MS = 2500;
 export const DEFAULT_TUI_IDLE_TIMEOUT_MS = 180000;
 
-// ─── Buffer caps (defensive, not load-bearing) ────────────────────────────
-
+// ─── Buffer caps (defensive RAM bounds) ───────────────────────────────────
+//
+// RAW caps stay small — the raw PTY stream is only used for paste-marker
+// detection and a short failure-tail in the exit error message, both of
+// which need only the recent past.
+//
+// OUTPUT caps are larger because the ANSI-stripped buffer is the fallback
+// response text when a TUI fails to write its response file. A 1MB cap was
+// silently truncating the *head* of large model responses mid-token; bumped
+// to 8MB so realistic full-context replies (~600KB UTF-8 from a 200K-token
+// window, plus screen chrome) fit cleanly. Consumers should still treat
+// overflow as a fault — see `outputBufferTruncated` tracking in
+// `tuiPromptRunner.js`.
 export const RAW_BUFFER_CAP = 512 * 1024;
 export const RAW_BUFFER_HEADROOM = 640 * 1024;
-export const OUTPUT_BUFFER_CAP = 1024 * 1024;
-export const OUTPUT_BUFFER_HEADROOM = 1280 * 1024;
+export const OUTPUT_BUFFER_CAP = 8 * 1024 * 1024;
+export const OUTPUT_BUFFER_HEADROOM = 10 * 1024 * 1024;
 
 // ─── Command + args helpers ───────────────────────────────────────────────
 

@@ -15,6 +15,7 @@ import { normalizeImage, normalizeVideo } from '../components/media/normalize';
 import { useMediaCompletionRefresh } from '../hooks/useMediaCompletionRefresh';
 import { useMediaAnnotations } from '../hooks/useMediaAnnotations';
 import useImagePreviewActions from '../hooks/useImagePreviewActions';
+import usePreviewRoute from '../hooks/usePreviewRoute';
 import {
   listVideoHistory, deleteVideoHistoryItem, stitchVideos,
   upscaleVideo,
@@ -36,9 +37,12 @@ export default function MediaHistory() {
   const [stitchMode, setStitchMode] = useState(false);
   const [selected, setSelected] = useState([]); // video ids
   const [stitching, setStitching] = useState(false);
-  const [preview, setPreview] = useState(null);
   const [favoritesOnly, setFavoritesOnly] = useState(false);
   const { annotations, toggleStar, updateAnnotation, getCardProps } = useMediaAnnotations();
+  // URL-driven preview (`?preview=<filename>`) so the lightbox is deep-linkable.
+  // Match against the full `items` list (not the filtered view) so a shared link
+  // still opens even when the recipient's filter doesn't include that image.
+  const [preview, setPreview] = usePreviewRoute(items);
 
   const refresh = useCallback(async ({ silent = false } = {}) => {
     if (!silent) setLoading(true);
@@ -72,6 +76,13 @@ export default function MediaHistory() {
     item.seed != null ? `seed ${item.seed}` : '',
     item.width && item.height ? `${item.width}x${item.height}` : '',
     ...(Array.isArray(item.loraNames) ? item.loraNames : []),
+    // Universe Builder tags — searchable by entity name (e.g. "Ash"), universe
+    // name, kind, or category even when those tokens aren't in the prompt.
+    item.universeName,
+    item.entryName,
+    item.entryLabel,
+    item.entryCategory,
+    item.entryKind,
     item.extractedFromVideoId ? 'extracted frame' : '',
     item.stitchedFrom ? 'stitched' : '',
     item.upscaledFrom ? 'upscaled 2x' : '',
@@ -176,7 +187,7 @@ export default function MediaHistory() {
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search prompt, model, seed, lora…"
+              placeholder="Search prompt, model, character, place…"
               className="w-full pl-7 pr-7 py-1 bg-port-bg border border-port-border rounded text-xs text-white placeholder-gray-500 focus:outline-none focus:border-port-accent"
             />
             {query && (
@@ -288,7 +299,7 @@ export default function MediaHistory() {
         onRemix={handleRemix}
         onSendToVideo={handleSendToVideo}
         onContinue={handleContinue}
-        onClean={(item, level) => handleClean(item?.raw, level)}
+        onClean={(item) => handleClean(item?.raw)}
       />
     </div>
   );

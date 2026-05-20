@@ -265,6 +265,66 @@ describe('taskSchedule', () => {
     })
   })
 
+  describe('managed agent options', () => {
+    it('forces plan-task useWorktree/openPR back to false when stored true (loadSchedule)', async () => {
+      mockSchedule({
+        tasks: {
+          'plan-task': {
+            type: 'cron',
+            enabled: true,
+            providerId: null,
+            model: null,
+            prompt: null,
+            taskMetadata: { useWorktree: true, openPR: true, simplify: true }
+          }
+        }
+      })
+
+      const schedule = await loadSchedule()
+      expect(schedule.tasks['plan-task'].taskMetadata.useWorktree).toBe(false)
+      expect(schedule.tasks['plan-task'].taskMetadata.openPR).toBe(false)
+      // Non-managed flags pass through untouched
+      expect(schedule.tasks['plan-task'].taskMetadata.simplify).toBe(true)
+    })
+
+    it('exposes managedAgentOptions in getScheduleStatus for plan-task', async () => {
+      mockSchedule()
+      const status = await getScheduleStatus()
+      expect(status.tasks['plan-task'].managedAgentOptions).toEqual(['useWorktree', 'openPR'])
+      // Other tasks should not carry the field
+      expect(status.tasks['security'].managedAgentOptions).toBeUndefined()
+    })
+
+    it('rejects PUT attempts to flip a managed flag — response echoes the locked value', async () => {
+      mockSchedule()
+      const result = await updateTaskInterval('plan-task', {
+        taskMetadata: { useWorktree: true, openPR: true, simplify: true }
+      })
+      expect(result.taskMetadata.useWorktree).toBe(false)
+      expect(result.taskMetadata.openPR).toBe(false)
+      expect(result.taskMetadata.simplify).toBe(true)
+    })
+
+    it('repopulates managed flags when stored taskMetadata was cleared to null', async () => {
+      mockSchedule({
+        tasks: {
+          'plan-task': {
+            type: 'cron',
+            enabled: true,
+            providerId: null,
+            model: null,
+            prompt: null,
+            taskMetadata: null
+          }
+        }
+      })
+
+      const schedule = await loadSchedule()
+      expect(schedule.tasks['plan-task'].taskMetadata.useWorktree).toBe(false)
+      expect(schedule.tasks['plan-task'].taskMetadata.openPR).toBe(false)
+    })
+  })
+
   describe('recordExecution', () => {
     it('should record global execution', async () => {
       mockSchedule()

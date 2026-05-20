@@ -1,3 +1,5 @@
+import { IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
+
 // Friendly display name for a LoRA basename. The on-disk filenames look like
 // `lora-realstagram-v7.safetensors` — strip the `lora-` prefix, the version
 // suffix (`-v123`), and the extension, then re-spaceify dashes. Idempotent
@@ -22,7 +24,7 @@ export function normalizeImage(i) {
   //   3. mode    — pre-model-field codex sidecars saved before the default
   //                was added; surface the provider tag so the card still
   //                shows where the image came from.
-  const modelId = i.modelId || i.model || (i.mode && i.mode !== 'local' ? i.mode : null);
+  const modelId = i.modelId || i.model || (i.mode && i.mode !== IMAGE_GEN_MODE.LOCAL ? i.mode : null);
   return {
     kind: 'image',
     key: `image:${i.filename}`,
@@ -44,10 +46,30 @@ export function normalizeImage(i) {
     codexSessionId: i.codexSessionId,
     mode: i.mode,
     loraNames,
+    // Universe Builder tags — stamped onto sidecars by the completion hook
+    // (server/services/universeBuilderCollectionHook.js) for renders driven
+    // by a canon entry, category variation, or composite sheet. Powers
+    // entity-name search in MediaHistory and the lightbox detail panel.
+    universeId: i.universeId || null,
+    universeName: i.universeName || null,
+    universeRunId: i.universeRunId || null,
+    entryKind: i.entryKind || null,        // 'canon' | 'variation' | 'sheet'
+    entryCategory: i.entryCategory || null,
+    entryId: i.entryId || null,
+    entryName: i.entryName || null,
+    entryLabel: i.entryLabel || null,
     createdAt: i.createdAt,
     hidden: !!i.hidden,
     extractedFromVideoId: i.extractedFromVideoId || null,
     extractedFromVideoFilename: i.extractedFromVideoFilename || null,
+    // Cleaning lineage — stamped by /api/image-gen/:filename/clean (manual,
+    // `cleanedFrom` points at the source) or by the auto-clean post-generation
+    // hook (`autoCleaned: true`, in-place replace). Surfaced in the lightbox
+    // so the user can tell at a glance which version they're looking at.
+    cleanedFrom: i.cleanedFrom || null,
+    cleanLevel: i.cleanLevel || null,
+    autoCleaned: i.autoCleaned === true,
+    c2paStripped: typeof i.c2paStripped === 'boolean' ? i.c2paStripped : null,
     raw: i,
   };
 }
@@ -112,7 +134,7 @@ export function getRenderConfigForItem(item) {
   const raw = item.raw || {};
   if (item.kind === 'image') {
     return {
-      mode: item.mode || 'local',
+      mode: item.mode || IMAGE_GEN_MODE.LOCAL,
       modelId: item.modelId,
       width: item.width,
       height: item.height,

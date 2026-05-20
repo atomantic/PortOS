@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, existsSync, mkdirSync, readFileSync } from 'fs';
+import { mkdtempSync, rmSync, writeFileSync, existsSync, mkdirSync, readFileSync, statSync, utimesSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { createHash } from 'crypto';
@@ -42,8 +42,8 @@ vi.mock('../../lib/fileUtils.js', async () => {
 // Stub instances.getInstanceId so the exporter doesn't try to read the
 // real identity.json. Returns a fixed id for assertions.
 vi.mock('../instances.js', () => ({
-tryReadFile: vi.fn().mockResolvedValue(null),
   getInstanceId: () => Promise.resolve('test-instance-id'),
+  UNKNOWN_INSTANCE_ID: 'unknown',
 }));
 
 // Stub mediaJobQueue.getJob — exporter uses it for full-fidelity gen
@@ -1094,9 +1094,10 @@ describe('sharing round-trip', () => {
     await mediaCollections.addItem(collB.id, { kind: 'image', ref: 'beta.png' });
     const expB = await exporter.exportUniverse(uniB.id, bucket.id);
 
-    // Both manifests point at the same blob path; only one on-disk file exists.
+    // Both manifests point at the same blob path; only one on-disk blob file exists
+    // (the dotfile `.index.json` is the per-bucket source→hash cache, not a blob).
     expect(fs.existsSync(join(tempBucket, 'assets', 'blobs', hash))).toBe(true);
-    expect(fs.readdirSync(join(tempBucket, 'assets', 'blobs'))).toEqual([hash]);
+    expect(fs.readdirSync(join(tempBucket, 'assets', 'blobs')).filter((f) => !f.startsWith('.'))).toEqual([hash]);
 
     // Each manifest's assetRef carries the hash + its own original filename.
     const mA = JSON.parse(fs.readFileSync(join(tempBucket, 'manifests', expA.filename), 'utf-8'));
@@ -1259,6 +1260,329 @@ describe('sharing round-trip', () => {
     expect(fs.readFileSync(join(tempData, 'images', 'legacy-v1.png'), 'utf-8')).toBe('V1BYTES');
   });
 
+  it('migrates legacy series canon arrays into the linked universe on import (pre-B.4 peer)', async () => {
+    const bucket = await buckets.createBucket({ name: 'LegacyCanonBucket', path: tempBucket, mode: 'auto-merge' });
+    const fs = await import('fs');
+
+    // Local target universe — the migration writes incoming canon here.
+    const uni = await universeSvc.createUniverse({ name: 'Pre-B.4 Universe' });
+    expect((uni.characters || []).length).toBe(0);
+    expect((uni.places || []).length).toBe(0);
+    expect((uni.objects || []).length).toBe(0);
+
+    // Hand-write a pre-B.4 series record carrying the legacy canon arrays.
+    // `sanitizeSeries` would normally strip these on insert; the importer's
+    // pre-pass must fold them into the universe first.
+    const seriesId = 'ser-pre-b4-test';
+    const legacySeries = {
+      id: seriesId,
+      name: 'Pre-B.4 Series',
+      logline: 'Test',
+      premise: 'Test premise',
+      universeId: uni.id,
+      characters: [{ name: 'Echo', physicalDescription: 'tall' }],
+      // Pre-022 wire name — the helper coalesces this onto `places`.
+      settings: [{ name: 'The Foundry', slugline: 'INT. FOUNDRY - NIGHT' }],
+      objects: [{ name: 'Brass Key', description: 'opens the gate' }],
+      createdAt: '2026-05-01T00:00:00.000Z',
+      updatedAt: '2026-05-01T00:00:00.000Z',
+    };
+    mkdirSync(join(tempBucket, 'records', 'series'), { recursive: true });
+    writeFileSync(
+      join(tempBucket, 'records', 'series', `${seriesId}.json`),
+      JSON.stringify(legacySeries),
+    );
+
+    const manifest = {
+      id: 'mfst-pre-b4',
+      schemaVersion: 1,
+      sharingSchemaVersion: 1,
+      producedByVersion: '1.0.0',
+      createdAt: new Date().toISOString(),
+      kind: 'series',
+      senderInstanceId: 'pre-b4-peer',
+      source: 'Pre B.4 Peer',
+      sourceBio: null,
+      bucketId: bucket.id,
+      bucketName: bucket.name,
+      recordIds: [seriesId],
+      assetRefs: [],
+      note: null,
+    };
+    const filename = `2026-05-01T00-00-00-000Z-pre-b4-peer-${manifest.id}.json`;
+    writeFileSync(join(tempBucket, 'manifests', filename), JSON.stringify(manifest));
+
+    const result = await importer.processManifest(bucket.id, filename);
+    expect(result.processed).toBe(true);
+    expect(result.outcome.applied).toBeGreaterThan(0);
+
+    // Series imported under the preserved id, with legacy canon stripped.
+    const restored = await series.getSeries(seriesId);
+    expect(restored.id).toBe(seriesId);
+    expect(restored.universeId).toBe(uni.id);
+    expect(restored.characters).toBeUndefined();
+    expect(restored.settings).toBeUndefined();
+    expect(restored.places).toBeUndefined();
+    expect(restored.objects).toBeUndefined();
+
+    // Universe gained the canon entries with SERIES_EXTRACT provenance.
+    const merged = await universeSvc.getUniverse(uni.id);
+    expect(merged.characters.map((c) => c.name)).toContain('Echo');
+    expect(merged.places.map((p) => p.name)).toContain('The Foundry');
+    expect(merged.objects.map((o) => o.name)).toContain('Brass Key');
+    // Provenance: live extract path tags series-driven canon as locked + sourceSeriesId.
+    const echo = merged.characters.find((c) => c.name === 'Echo');
+    expect(echo.locked).toBe(true);
+    expect(echo.sourceSeriesId).toBe(seriesId);
+    expect(echo.source).toBe('series-extract');
+  });
+
+  it('creates an orphan universe and links the series when a pre-B.4 record has no universeId', async () => {
+    const bucket = await buckets.createBucket({ name: 'OrphanCanonBucket', path: tempBucket, mode: 'auto-merge' });
+
+    const seriesId = 'ser-orphan-test';
+    const legacySeries = {
+      id: seriesId,
+      name: 'Orphan Series',
+      logline: 'unlinked',
+      premise: 'unlinked premise',
+      // No universeId — pre-B universes-don't-exist era.
+      characters: [{ name: 'Solo', physicalDescription: 'lone' }],
+      createdAt: '2026-05-01T00:00:00.000Z',
+      updatedAt: '2026-05-01T00:00:00.000Z',
+    };
+    mkdirSync(join(tempBucket, 'records', 'series'), { recursive: true });
+    writeFileSync(
+      join(tempBucket, 'records', 'series', `${seriesId}.json`),
+      JSON.stringify(legacySeries),
+    );
+    const manifest = {
+      id: 'mfst-orphan',
+      schemaVersion: 1,
+      sharingSchemaVersion: 1,
+      producedByVersion: '1.0.0',
+      createdAt: new Date().toISOString(),
+      kind: 'series',
+      senderInstanceId: 'orphan-peer',
+      source: 'Orphan Peer',
+      sourceBio: null,
+      bucketId: bucket.id,
+      bucketName: bucket.name,
+      recordIds: [seriesId],
+      assetRefs: [],
+      note: null,
+    };
+    const filename = `2026-05-01T00-00-00-000Z-orphan-peer-${manifest.id}.json`;
+    writeFileSync(join(tempBucket, 'manifests', filename), JSON.stringify(manifest));
+
+    const result = await importer.processManifest(bucket.id, filename);
+    expect(result.processed).toBe(true);
+
+    const restored = await series.getSeries(seriesId);
+    expect(restored.universeId).toBeTruthy(); // freshly minted
+    const orphanUni = await universeSvc.getUniverse(restored.universeId);
+    expect(orphanUni.name).toMatch(/Orphan Series/);
+    expect(orphanUni.characters.map((c) => c.name)).toContain('Solo');
+  });
+
+  it('reuses an existing local series.universeId on retry — no duplicate auto-migrated universes', async () => {
+    // When the same orphan-series manifest is processed twice (e.g. an
+    // unrelated pending condition held the cursor back the first time),
+    // the legacy-canon helper must reuse the persisted local universeId
+    // instead of minting a fresh "<name> (auto-migrated)" universe each pass.
+    const bucket = await buckets.createBucket({ name: 'OrphanIdempBucket', path: tempBucket, mode: 'auto-merge' });
+
+    const seriesId = 'ser-orphan-idemp';
+    const legacySeries = {
+      id: seriesId,
+      name: 'Orphan Idemp Series',
+      logline: 'will be reimported',
+      premise: 'idempotency test',
+      characters: [{ name: 'Echo', physicalDescription: 'on retry' }],
+      createdAt: '2026-05-01T00:00:00.000Z',
+      updatedAt: '2026-05-01T00:00:00.000Z',
+    };
+    mkdirSync(join(tempBucket, 'records', 'series'), { recursive: true });
+    writeFileSync(
+      join(tempBucket, 'records', 'series', `${seriesId}.json`),
+      JSON.stringify(legacySeries),
+    );
+    const manifest = {
+      id: 'mfst-orphan-idemp',
+      schemaVersion: 1,
+      sharingSchemaVersion: 1,
+      producedByVersion: '1.0.0',
+      createdAt: new Date().toISOString(),
+      kind: 'series',
+      senderInstanceId: 'orphan-idemp-peer',
+      source: 'Orphan Idemp Peer',
+      sourceBio: null,
+      bucketId: bucket.id,
+      bucketName: bucket.name,
+      recordIds: [seriesId],
+      assetRefs: [],
+      note: null,
+    };
+    const filename = `2026-05-01T00-00-00-000Z-orphan-idemp-peer-${manifest.id}.json`;
+    writeFileSync(join(tempBucket, 'manifests', filename), JSON.stringify(manifest));
+
+    // First pass — creates the orphan universe + inserts the series.
+    await importer.processManifest(bucket.id, filename);
+    const restoredFirst = await series.getSeries(seriesId);
+    const firstUniverseId = restoredFirst.universeId;
+    expect(firstUniverseId).toBeTruthy();
+
+    // Force a retry — simulate the cursor being un-advanced by forgetting the
+    // manifest, then re-process. Without idempotency the helper would mint a
+    // SECOND auto-migrated universe and `mergeOne` would no-op the series.
+    const { forgetProcessed } = await import('./manifest.js');
+    await forgetProcessed(bucket.id, filename);
+    await importer.processManifest(bucket.id, filename);
+
+    const restoredAfter = await series.getSeries(seriesId);
+    expect(restoredAfter.universeId).toBe(firstUniverseId);
+    const allUnis = await universeSvc.listUniverses();
+    const autoMigrated = allUnis.filter((u) => /Orphan Idemp Series/.test(u.name));
+    expect(autoMigrated).toHaveLength(1);
+  });
+
+  it('promoteInboxItem keeps the inbox row when legacy canon needs a missing universe', async () => {
+    // Without the gate in promoteInboxItem the user's "promote" click would
+    // splice the inbox row even though the series merge skipped — same
+    // silent-data-loss shape as the auto-merge path before this PR.
+    const bucket = await buckets.createBucket({ name: 'InboxLegacyBucket', path: tempBucket, mode: 'inbox' });
+
+    const missingUniverseId = 'uni-inbox-not-bundled';
+    const seriesId = 'ser-inbox-legacy';
+    const legacySeries = {
+      id: seriesId,
+      name: 'Inbox Legacy Series',
+      logline: 'inbox-pending test',
+      premise: 'links to a universe not in the bundle',
+      universeId: missingUniverseId,
+      characters: [{ name: 'Phantom', physicalDescription: 'inbox-pending' }],
+      createdAt: '2026-05-01T00:00:00.000Z',
+      updatedAt: '2026-05-01T00:00:00.000Z',
+    };
+    mkdirSync(join(tempBucket, 'records', 'series'), { recursive: true });
+    writeFileSync(
+      join(tempBucket, 'records', 'series', `${seriesId}.json`),
+      JSON.stringify(legacySeries),
+    );
+    const manifest = {
+      id: 'mfst-inbox-legacy',
+      schemaVersion: 1,
+      sharingSchemaVersion: 1,
+      producedByVersion: '1.0.0',
+      createdAt: new Date().toISOString(),
+      kind: 'series',
+      senderInstanceId: 'inbox-legacy-peer',
+      source: 'Inbox Legacy Peer',
+      sourceBio: null,
+      bucketId: bucket.id,
+      bucketName: bucket.name,
+      recordIds: [seriesId],
+      assetRefs: [],
+      note: null,
+    };
+    const filename = `2026-05-01T00-00-00-000Z-inbox-legacy-peer-${manifest.id}.json`;
+    writeFileSync(join(tempBucket, 'manifests', filename), JSON.stringify(manifest));
+
+    // First: queue as an inbox item (the bucket is inbox mode).
+    const r1 = await importer.processManifest(bucket.id, filename);
+    expect(r1.outcome.mode).toBe('inbox');
+    expect((await importer.listInbox(bucket.id))).toHaveLength(1);
+
+    // Promote — should throw because the linked universe is missing, AND the
+    // inbox row must NOT be removed.
+    let promoteErr = null;
+    await importer.promoteInboxItem(bucket.id, manifest.id).catch((err) => { promoteErr = err; });
+    expect(promoteErr).toBeTruthy();
+    expect(promoteErr.code).toBe('SHARING_LEGACY_CANON_UNIVERSE_PENDING');
+    expect(promoteErr.pendingLegacyCanonUniverses).toEqual([missingUniverseId]);
+    expect((await importer.listInbox(bucket.id))).toHaveLength(1);
+    const stillMissing = await series.getSeries(seriesId).catch(() => null);
+    expect(stillMissing).toBeNull();
+  });
+
+  it('leaves the manifest pending and retries when the missing universe later arrives', async () => {
+    // Without this guard, the importer would fall through to insertSeriesWithId
+    // and `sanitizeSeries` would silently drop the legacy canon arrays — the
+    // exact bug this PR fixes. The bucket record stays untouched and the
+    // cursor stays un-advanced so the watcher retries when the missing
+    // universe later shows up.
+    const { hasBeenProcessed, readCursor } = await import('./manifest.js');
+    const bucket = await buckets.createBucket({ name: 'MissingUniBucket', path: tempBucket, mode: 'auto-merge' });
+
+    const missingUniverseId = 'uni-not-yet-bundled-123';
+    const seriesId = 'ser-missing-uni';
+    const legacySeries = {
+      id: seriesId,
+      name: 'Missing-Uni Series',
+      logline: 'orphaned link',
+      premise: 'links to a universe not in the bundle',
+      universeId: missingUniverseId,
+      characters: [{ name: 'Ghost', physicalDescription: 'unseen' }],
+      createdAt: '2026-05-01T00:00:00.000Z',
+      updatedAt: '2026-05-01T00:00:00.000Z',
+    };
+    mkdirSync(join(tempBucket, 'records', 'series'), { recursive: true });
+    writeFileSync(
+      join(tempBucket, 'records', 'series', `${seriesId}.json`),
+      JSON.stringify(legacySeries),
+    );
+    const manifest = {
+      id: 'mfst-missing-uni',
+      schemaVersion: 1,
+      sharingSchemaVersion: 1,
+      producedByVersion: '1.0.0',
+      createdAt: new Date().toISOString(),
+      kind: 'series',
+      senderInstanceId: 'missing-uni-peer',
+      source: 'Missing Uni Peer',
+      sourceBio: null,
+      bucketId: bucket.id,
+      bucketName: bucket.name,
+      recordIds: [seriesId],
+      assetRefs: [],
+      note: null,
+    };
+    const filename = `2026-05-01T00-00-00-000Z-missing-uni-peer-${manifest.id}.json`;
+    writeFileSync(join(tempBucket, 'manifests', filename), JSON.stringify(manifest));
+
+    // First pass: universe is missing → manifest must stay pending, cursor not advanced, series not written.
+    const first = await importer.processManifest(bucket.id, filename);
+    expect(first.processed).toBe(true);
+    expect(first.pending).toBe(true);
+    expect(first.outcome.pendingLegacyCanonUniverses).toEqual([missingUniverseId]);
+    let cursor = await readCursor(bucket.id);
+    expect(hasBeenProcessed(cursor, filename, manifest.id)).toBe(false);
+    const stillMissing = await series.getSeries(seriesId).catch(() => null);
+    expect(stillMissing).toBeNull();
+
+    // Local universe lands (peer re-shares it via a different channel, or
+    // the user creates one with the matching id).
+    await universeSvc.insertUniverseWithId({
+      id: missingUniverseId,
+      name: 'Late-Arriving Universe',
+      starterPrompt: '',
+      createdAt: '2026-05-01T00:00:00.000Z',
+      updatedAt: '2026-05-01T00:00:00.000Z',
+    });
+
+    // Retry: now the migration lands canon on the universe, the series imports.
+    const second = await importer.processManifest(bucket.id, filename);
+    expect(second.processed).toBe(true);
+    expect(second.pending).toBeFalsy();
+    cursor = await readCursor(bucket.id);
+    expect(hasBeenProcessed(cursor, filename, manifest.id)).toBe(true);
+    const restored = await series.getSeries(seriesId);
+    expect(restored.id).toBe(seriesId);
+    expect(restored.universeId).toBe(missingUniverseId);
+    const restoredUni = await universeSvc.getUniverse(missingUniverseId);
+    expect(restoredUni.characters.map((c) => c.name)).toContain('Ghost');
+  });
+
   it('refuses a manifest with a sharingSchemaVersion newer than local + emits incompatible event', async () => {
     const { SHARING_SCHEMA_VERSION } = await import('./version.js');
     const { sharingEvents } = await import('./importer.js');
@@ -1381,5 +1705,71 @@ describe('sharing round-trip', () => {
     const replay = await importer.processManifest(bucket.id, filename);
     expect(replay.skipped).toBe(true);
     expect(replay.reason).toBe('already-processed');
+  });
+
+  it('writes <bucket>/assets/blobs/.index.json mapping sourcePath:mtime:size → hash and invalidates on mtime change', async () => {
+    const bucket = await buckets.createBucket({ name: 'CacheBucket', path: tempBucket, mode: 'auto-merge' });
+    const sourcePath = join(tempData, 'images', 'fakeasset.png'); // seeded as 'PNGSTUB' in beforeEach
+
+    // Single-asset export — exportMedia falls through to copyAssetIfPresent (getJob is mocked → null).
+    await exporter.exportMedia([{ kind: 'image', ref: 'fakeasset.png' }], bucket.id);
+
+    const indexPath = join(tempBucket, 'assets', 'blobs', '.index.json');
+    expect(existsSync(indexPath)).toBe(true);
+
+    const initialStat = statSync(sourcePath);
+    const initialKey = `${sourcePath}:${initialStat.mtimeMs}:${initialStat.size}`;
+    const initialHash = sha256Hex('PNGSTUB');
+    const idx1 = JSON.parse(readFileSync(indexPath, 'utf-8'));
+    expect(idx1[initialKey]).toBe(initialHash);
+
+    // Re-export unchanged file → cache hit → no new keys → index file not rewritten.
+    // Assert the index file's mtime is unchanged (dirty-flag short-circuits the write).
+    const indexMtimeBefore = statSync(indexPath).mtimeMs;
+    await new Promise((r) => setTimeout(r, 5));
+    await exporter.exportMedia([{ kind: 'image', ref: 'fakeasset.png' }], bucket.id);
+    expect(statSync(indexPath).mtimeMs).toBe(indexMtimeBefore);
+
+    // Bumping mtime alone (same bytes, same size) creates a new cache key — old entry stays,
+    // new entry covers the post-touch stat. The hash is unchanged because the bytes are the same.
+    const future = new Date(initialStat.mtimeMs + 60_000);
+    utimesSync(sourcePath, future, future);
+    await exporter.exportMedia([{ kind: 'image', ref: 'fakeasset.png' }], bucket.id);
+    const touchedStat = statSync(sourcePath);
+    const touchedKey = `${sourcePath}:${touchedStat.mtimeMs}:${touchedStat.size}`;
+    expect(touchedKey).not.toBe(initialKey);
+    const idx2 = JSON.parse(readFileSync(indexPath, 'utf-8'));
+    expect(idx2[touchedKey]).toBe(initialHash);
+
+    // Mutating content invalidates and records a fresh hash.
+    writeFileSync(sourcePath, 'PNGSTUB-v2');
+    await exporter.exportMedia([{ kind: 'image', ref: 'fakeasset.png' }], bucket.id);
+    const mutatedStat = statSync(sourcePath);
+    const mutatedKey = `${sourcePath}:${mutatedStat.mtimeMs}:${mutatedStat.size}`;
+    const idx3 = JSON.parse(readFileSync(indexPath, 'utf-8'));
+    expect(idx3[mutatedKey]).toBe(sha256Hex('PNGSTUB-v2'));
+    // Mutated bytes also land in the bucket under the new hash (content-addressed).
+    expect(existsSync(join(tempBucket, 'assets', 'blobs', sha256Hex('PNGSTUB-v2')))).toBe(true);
+  });
+
+  it('parallel exports against the same bucket merge cache entries instead of clobbering (exportByKind fanout)', async () => {
+    const bucket = await buckets.createBucket({ name: 'MergeBucket', path: tempBucket, mode: 'auto-merge' });
+    // Two distinct assets, both seeded with distinct bytes so they hash differently.
+    writeFileSync(join(tempData, 'images', 'parallelA.png'), 'PARALLEL_A');
+    writeFileSync(join(tempData, 'images', 'parallelB.png'), 'PARALLEL_B');
+    // Two singleton media exports run in parallel — each loads its own cache view,
+    // each saves with merge-on-save. Both new keys must survive in the persisted index.
+    await Promise.all([
+      exporter.exportMedia([{ kind: 'image', ref: 'parallelA.png' }], bucket.id),
+      exporter.exportMedia([{ kind: 'image', ref: 'parallelB.png' }], bucket.id),
+    ]);
+    const indexPath = join(tempBucket, 'assets', 'blobs', '.index.json');
+    const idx = JSON.parse(readFileSync(indexPath, 'utf-8'));
+    const statA = statSync(join(tempData, 'images', 'parallelA.png'));
+    const statB = statSync(join(tempData, 'images', 'parallelB.png'));
+    const keyA = `${join(tempData, 'images', 'parallelA.png')}:${statA.mtimeMs}:${statA.size}`;
+    const keyB = `${join(tempData, 'images', 'parallelB.png')}:${statB.mtimeMs}:${statB.size}`;
+    expect(idx[keyA]).toBe(sha256Hex('PARALLEL_A'));
+    expect(idx[keyB]).toBe(sha256Hex('PARALLEL_B'));
   });
 });

@@ -41,6 +41,7 @@ grep -i "what you want to do" client/src/lib/README.md
 | `wrImageDefaults.js` | Writers Room per-scene image-gen defaults + style discriminators. |
 | `imageGenBackends.js` | `IMAGE_GEN_MODE` enum (local / codex / external) + metadata. |
 | `imageGenResolutions.js` | Shared resolution presets for image generation. |
+| `videoGenResolutions.js` | Shared resolution presets for video generation (companion to image side; LTX-2 latent-friendly sizes). |
 
 ## Graph & sim
 
@@ -55,6 +56,14 @@ grep -i "what you want to do" client/src/lib/README.md
 | `clipboard.js` | `copyToClipboard`, `writeClipboardSilently`, `readClipboard` — safe across insecure-origin contexts. Use these instead of `navigator.clipboard.writeText` inline. |
 | `genUtils.js` | Shared bits between Image Gen and Video Gen pages. |
 | `joinInfluenceList.js` | Mirror of `joinInfluenceList` in server universe builder. |
+| `loopbackHost.js` | `isLoopbackHost(host)` / `isLoopbackOrigin()` / `describeMicAvailability()` — Secure Context / loopback-origin heuristics. Use these in any new mic, clipboard, or `getUserMedia`-gated surface; matches the full `127.0.0.0/8` range, IPv6 `::1`, and the browser-bracketed `[::1]` form. |
 | `mediaNavigation.js` | `getAdjacentMedia(items, item)` — prev/next computation for lightboxes. |
 | `unsorted.js` | Synthetic "Unsorted" collection from media not filed in any real collection. |
 | `upsertByIdPrepend.js` | Newest-first upsert into an id-keyed list. |
+| `voiceLabel.js` | `formatVoiceLabel(v, engine?)` — display label for a TTS voice record. Engine-specific formatters plug into a lookup table; new engines extend that map. |
+
+## Page-scoped pure helpers
+
+| Module | Purpose |
+|---|---|
+| `universeBuilderExpand.js` | `mergeExpandIntoDraft(draft, result)` — pure merge of a Universe Builder draft with the LLM expand-API response (lock honoring, category/sheet merge with `kind` precedence, canon dedupe by name/slugline/alias). Also exports `mergeVariations`, `mergeCanonByName`, and `extractPreservedFromDraft` for callers that need the building blocks (per-category Generate, save-time refetch+merge). |

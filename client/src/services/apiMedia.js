@@ -28,8 +28,8 @@ export const deleteAllUploads = () => request('/uploads?confirm=true', { method:
 // Image Cleaner — strips C2PA provenance + median-filters AI-generated noise.
 // silent: true so the page can render its own error toast without duplicating
 // the one apiCore.request() fires by default.
-export const cleanImage = (base64Data, level = 'light') => request('/image-clean', {
+export const cleanImage = (base64Data) => request('/image-clean', {
   method: 'POST',
   silent: true,
-  body: JSON.stringify({ data: base64Data, level })
+  body: JSON.stringify({ data: base64Data })
 });

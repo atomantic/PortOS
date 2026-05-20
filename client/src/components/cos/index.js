@@ -1,9 +1,6 @@
 // Constants
 export { TABS, AGENT_STATES, STATE_MESSAGES, MEMORY_TYPES, MEMORY_TYPE_COLORS } from './constants';
 
-// Hook
-export { default as useNextEvalCountdown } from './useNextEvalCountdown';
-
 // Avatar/Character Components
 export { default as CoSCharacter } from './CoSCharacter';
 export { default as CyberCoSAvatar } from './CyberCoSAvatar';

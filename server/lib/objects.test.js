@@ -1,5 +1,36 @@
 import { describe, it, expect } from 'vitest';
-import { deepMerge } from './objects.js';
+import { deepMerge, isPlainObject } from './objects.js';
+
+describe('isPlainObject', () => {
+  it('returns true for plain `{}`-shaped values', () => {
+    expect(isPlainObject({})).toBe(true);
+    expect(isPlainObject({ a: 1 })).toBe(true);
+    expect(isPlainObject(Object.create(null))).toBe(true);
+  });
+
+  it('returns false for null, undefined, primitives, and arrays', () => {
+    expect(isPlainObject(null)).toBe(false);
+    expect(isPlainObject(undefined)).toBe(false);
+    expect(isPlainObject(0)).toBe(false);
+    expect(isPlainObject('')).toBe(false);
+    expect(isPlainObject('hello')).toBe(false);
+    expect(isPlainObject(true)).toBe(false);
+    expect(isPlainObject(false)).toBe(false);
+    expect(isPlainObject([])).toBe(false);
+    expect(isPlainObject([1, 2, 3])).toBe(false);
+  });
+
+  it('returns true for class instances and Date — matches inline-call-site semantics', () => {
+    // Documented contract: this is "non-null, non-array `object`", not
+    // "constructor === Object". Existing call sites run against JSON.parse
+    // output that never carries exotic prototypes, so the loose check is
+    // intentional. Lock it in.
+    expect(isPlainObject(new Date())).toBe(true);
+    expect(isPlainObject(new Map())).toBe(true);
+    class Foo { }
+    expect(isPlainObject(new Foo())).toBe(true);
+  });
+});
 
 describe('deepMerge', () => {
   it('merges nested objects recursively', () => {

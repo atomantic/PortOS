@@ -7,9 +7,10 @@
  */
 
 import crypto from 'crypto';
-import { writeFile } from 'fs/promises';
+import { stat } from 'fs/promises';
 import { join } from 'path';
-import { ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
+import { atomicWrite, readJSONFile, PATHS } from '../lib/fileUtils.js';
+import { isPlainObject } from '../lib/objects.js';
 import { mergeUniversesFromSync } from './universeBuilder.js';
 import { mergeSeriesFromSync } from './pipeline/series.js';
 import { mergeIssuesFromSync } from './pipeline/issues.js';
@@ -109,8 +110,7 @@ function mergeDeepUnion(local, remote, timestampField = 'derivedAt') {
     if (key === timestampField) continue;
 
     // Nested objects (markers): union keys, local wins per-key conflicts
-    if (remoteVal && typeof remoteVal === 'object' && !Array.isArray(remoteVal)
-        && localVal && typeof localVal === 'object' && !Array.isArray(localVal)) {
+    if (isPlainObject(remoteVal) && isPlainObject(localVal)) {
       const mergedObj = { ...localVal };
       for (const [k, v] of Object.entries(remoteVal)) {
         if (!(k in mergedObj)) {
@@ -177,8 +177,7 @@ async function applyGoalsRemote(remoteData) {
   };
 
   if (goalsChanged || remoteMaxTs > localMaxTs) {
-    await ensureDir(PATHS.digitalTwin);
-    await writeFile(GOALS_FILE, JSON.stringify(merged, null, 2));
+    await atomicWrite(GOALS_FILE, merged);
     console.log(`🔄 Goals sync: merged ${mergedGoals.length} goals`);
     return { applied: true, count: mergedGoals.length };
   }
@@ -199,8 +198,7 @@ async function applyCharacterRemote(remoteData) {
   const local = await readJSONFile(CHARACTER_FILE, null);
   if (!local) {
     // No local character — accept remote entirely
-    await ensureDir(PATHS.data);
-    await writeFile(CHARACTER_FILE, JSON.stringify(remoteData, null, 2));
+    await atomicWrite(CHARACTER_FILE, remoteData);
     console.log(`🔄 Character sync: accepted remote character`);
     return { applied: true, count: 1 };
   }
@@ -241,8 +239,7 @@ async function applyCharacterRemote(remoteData) {
   };
 
   if (eventsChanged || remoteTs > localTs) {
-    await ensureDir(PATHS.data);
-    await writeFile(CHARACTER_FILE, JSON.stringify(merged, null, 2));
+    await atomicWrite(CHARACTER_FILE, merged);
     console.log(`🔄 Character sync: merged ${mergedEvents.length} events`);
     return { applied: true, count: mergedEvents.length };
   }
@@ -268,7 +265,6 @@ async function getDigitalTwinSnapshot() {
 
 async function applyDigitalTwinRemote(remoteData) {
   if (!remoteData) return { applied: false, count: 0 };
-  await ensureDir(PATHS.digitalTwin);
 
   let totalApplied = 0;
   for (const [key, { path, timestampField, merge }] of Object.entries(DIGITAL_TWIN_FILES)) {
@@ -279,7 +275,7 @@ async function applyDigitalTwinRemote(remoteData) {
     const mergeFn = merge === 'deepUnion' ? mergeDeepUnion : mergeObjectLWW;
     const { merged, changed } = mergeFn(local, remoteFile, timestampField);
     if (changed) {
-      await writeFile(path, JSON.stringify(merged, null, 2));
+      await atomicWrite(path, merged);
       totalApplied++;
     }
   }
@@ -303,7 +299,6 @@ async function getMeatspaceSnapshot() {
 
 async function applyMeatspaceRemote(remoteData) {
   if (!remoteData) return { applied: false, count: 0 };
-  await ensureDir(MEATSPACE_DIR);
 
   let totalApplied = 0;
   for (const [filename, config] of Object.entries(MEATSPACE_FILES)) {
@@ -316,7 +311,7 @@ async function applyMeatspaceRemote(remoteData) {
     if (config.type === 'object-lww') {
       const { merged, changed } = mergeObjectLWW(local, remoteFile, 'updatedAt');
       if (changed) {
-        await writeFile(filePath, JSON.stringify(merged, null, 2));
+        await atomicWrite(filePath, merged);
         totalApplied++;
       }
     } else {
@@ -329,7 +324,7 @@ async function applyMeatspaceRemote(remoteData) {
         // Sort by idField (usually date)
         merged.sort((a, b) => (a[config.idField] || '').localeCompare(b[config.idField] || ''));
         const mergedFile = { ...(local || {}), [config.arrayKey]: merged };
-        await writeFile(filePath, JSON.stringify(mergedFile, null, 2));
+        await atomicWrite(filePath, mergedFile);
         totalApplied++;
       }
     }
@@ -420,6 +415,24 @@ async function applyPipelineRemote(remoteData) {
 
 // --- Public API ---
 
+// Files each category reads, used to keep the in-process checksum cache
+// honest: `getChecksum` skips the full snapshot when none of these files'
+// fingerprints changed since the last computed checksum. The fingerprint is
+// `${mtimeMs}:${size}:${ino}` — every PortOS sync-side write goes through
+// `atomicWrite` (temp + rename), which produces a new inode on every replace
+// regardless of mtime resolution or content size, so a same-tick same-size
+// rewrite still invalidates the cache. (An in-place writer that bypasses
+// atomicWrite and lands within one ms tick with identical byte length is the
+// only residual blind spot — PortOS doesn't ship one today.)
+const CHECKSUM_PATHS = {
+  goals: [GOALS_FILE],
+  character: [CHARACTER_FILE],
+  digitalTwin: Object.values(DIGITAL_TWIN_FILES).map((f) => f.path),
+  meatspace: Object.keys(MEATSPACE_FILES).map((f) => join(MEATSPACE_DIR, f)),
+  universe: [UNIVERSE_BUILDER_FILE],
+  pipeline: [PIPELINE_SERIES_FILE, PIPELINE_ISSUES_FILE],
+};
+
 const CATEGORIES = {
   goals: { getSnapshot: getGoalsSnapshot, applyRemote: applyGoalsRemote },
   character: { getSnapshot: getCharacterSnapshot, applyRemote: applyCharacterRemote },
@@ -429,6 +442,27 @@ const CATEGORIES = {
   pipeline: { getSnapshot: getPipelineSnapshot, applyRemote: applyPipelineRemote }
 };
 
+// Per-category `{ fingerprints, checksum }` cache. The orchestrator hits
+// getChecksum every cycle — by far the hottest sync-side I/O — so caching
+// keyed on underlying-file `(mtime, size)` lets it stat-and-return when
+// nothing has changed, instead of re-materializing the full payload.
+const checksumCache = new Map();
+
+async function readFingerprintMap(paths) {
+  const out = {};
+  await Promise.all(paths.map(async (p) => {
+    const s = await stat(p).catch(() => null);
+    out[p] = s ? `${s.mtimeMs}:${s.size}:${s.ino}` : null;
+  }));
+  return out;
+}
+
+function fingerprintsEqual(a, b) {
+  for (const p in a) if (a[p] !== b[p]) return false;
+  for (const p in b) if (a[p] !== b[p]) return false;
+  return true;
+}
+
 export function getSupportedCategories() {
   return Object.keys(CATEGORIES);
 }
@@ -436,6 +470,17 @@ export function getSupportedCategories() {
 export async function getChecksum(category) {
   const cat = CATEGORIES[category];
   if (!cat) return null;
+  const paths = CHECKSUM_PATHS[category];
+  if (paths) {
+    const fingerprints = await readFingerprintMap(paths);
+    const cached = checksumCache.get(category);
+    if (cached && fingerprintsEqual(cached.fingerprints, fingerprints)) {
+      return { checksum: cached.checksum };
+    }
+    const snapshot = await cat.getSnapshot();
+    checksumCache.set(category, { fingerprints, checksum: snapshot.checksum });
+    return { checksum: snapshot.checksum };
+  }
   const snapshot = await cat.getSnapshot();
   return { checksum: snapshot.checksum };
 }

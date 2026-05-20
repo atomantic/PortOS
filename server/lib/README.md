@@ -81,6 +81,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 |---|---|
 | `fileUtils.js` | `PATHS` constants, `atomicWrite`, `tryReadFile`, `safeJSONParse`, dir scans, hashes, JSON helpers. Most paths/file work goes through here. |
 | `fileWriteQueue.js` | Single-tail promise chain for serializing writes to a file. |
+| `imageClean.js` | `cleanImageBuffer` (sharp-based denoise + C2PA strip) + `autoCleanGeneratedImage` (in-place clean for post-generation hook). HTTP route in `routes/imageClean.js` wraps `cleanImageBuffer`. |
 | `multipart.js` | Streaming multipart/form-data parser. |
 | `pdfImageEmbed.js` | PDF image embed helpers for comic / volume PDFs. |
 | `zipStream.js` | Streaming ZIP parser. |
@@ -106,6 +107,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `sharingOrigin.js` | Origin metadata for records imported from share buckets. |
 | `tailscale.js` | Common paths where the Tailscale CLI binary is found. |
 | `httpsState.js` | Captures whether PortOS booted with HTTPS active. |
+| `networkExposure.js` | Snapshot of scheme + bind + cert mode for the dashboard's Network Exposure widget. |
 
 ## Search & indexing
 
@@ -157,7 +159,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 |---|---|
 | `asyncMutex.js` | Promise-based async mutex. |
 | `errorHandler.js` | `ServerError` + `asyncHandler` middleware. |
-| `objects.js` | Object utilities (deep merge, etc.). |
+| `objects.js` | Object utilities — `deepMerge` (recursive merge w/ array replacement) + `isPlainObject` (non-null, non-array `object` guard for JSON / LLM payloads). |
 | `sseUtils.js` | Per-job SSE stream helpers (imageGen + others). |
 | `uuid.js` | `v4()` thin wrapper over `crypto.randomUUID()`. |
 

@@ -30,6 +30,7 @@ import { createRun, executeApiRun, executeCliRun, extractBakedModel, hasModelFla
 import { getActiveProvider, getProviderById } from '../services/providers.js';
 import { executeTuiRun } from './tuiPromptRunner.js';
 import { ServerError } from './errorHandler.js';
+import { PROVIDER_TYPES } from './aiToolkit/constants.js';
 
 const DEFAULT_TIMEOUT_MS = 300000;
 const APPEND_CHUNK = (acc, chunk) => acc + (typeof chunk === 'string' ? chunk : (chunk?.text || ''));
@@ -46,8 +47,8 @@ const APPEND_CHUNK = (acc, chunk) => acc + (typeof chunk === 'string' ? chunk : 
  * the run-record honest.
  */
 export const providerHonorsModelOverride = (provider) => (
-  provider?.type === 'api'
-  || ((provider?.type === 'cli' || provider?.type === 'tui') && !hasModelFlag(provider?.args))
+  provider?.type === PROVIDER_TYPES.API
+  || ((provider?.type === PROVIDER_TYPES.CLI || provider?.type === PROVIDER_TYPES.TUI) && !hasModelFlag(provider?.args))
 );
 
 /**
@@ -73,7 +74,7 @@ export function resolveEffectiveModel(provider, callerModel) {
     return callerModel || provider?.defaultModel || provider?.models?.[0] || null;
   }
   // Non-honoring CLI/TUI path: args-baked model id wins over defaultModel.
-  const baked = (provider?.type === 'cli' || provider?.type === 'tui') && hasModelFlag(provider?.args)
+  const baked = (provider?.type === PROVIDER_TYPES.CLI || provider?.type === PROVIDER_TYPES.TUI) && hasModelFlag(provider?.args)
     ? extractBakedModel(provider.args)
     : null;
   return baked || provider?.defaultModel || provider?.models?.[0] || null;
@@ -175,7 +176,7 @@ export async function runPromptThroughProvider({ provider, prompt, source, model
   if (typeof provider.id !== 'string' || !provider.id) {
     throw new Error('runPromptThroughProvider: provider.id must be a non-empty string');
   }
-  if (provider.type !== 'cli' && provider.type !== 'api' && provider.type !== 'tui') {
+  if (provider.type !== PROVIDER_TYPES.CLI && provider.type !== PROVIDER_TYPES.API && provider.type !== PROVIDER_TYPES.TUI) {
     throw new Error(`Unsupported provider type: ${provider.type}`);
   }
   if (typeof prompt !== 'string' || !prompt.length) {
@@ -191,7 +192,10 @@ export async function runPromptThroughProvider({ provider, prompt, source, model
   // (extract the args-pinned model id rather than logging defaultModel).
   let effectiveProvider = provider;
   let effectiveModel = resolveEffectiveModel(effectiveProvider, model);
-  const effectiveCwd = cwdOverride ?? process.cwd();
+  // `??` only catches null/undefined; an empty-string override would leak
+  // through to spawn() and resolve to `/`. Match tuiPromptRunner.js's
+  // string-truthy gate so an empty override falls back to process.cwd().
+  const effectiveCwd = (typeof cwdOverride === 'string' && cwdOverride) ? cwdOverride : process.cwd();
 
   // Some call sites (stageRunner, loops) create the run themselves so
   // they can log the runId before the LLM call starts. When provided,
@@ -252,7 +256,7 @@ export async function runPromptThroughProvider({ provider, prompt, source, model
     // TUI runs discard `text` and use `result.text` from executeTuiRun (see
     // onComplete below), so the per-chunk APPEND_CHUNK concat is pure waste —
     // TUI streams can emit hundreds of KB of screen redraws per run.
-    const isTui = effectiveProvider.type === 'tui';
+    const isTui = effectiveProvider.type === PROVIDER_TYPES.TUI;
     const onData = (chunk) => {
       if (!isTui) text = APPEND_CHUNK(text, chunk);
       if (onDataCallback) {
@@ -271,7 +275,7 @@ export async function runPromptThroughProvider({ provider, prompt, source, model
         // the response file the model was directed to write, falling back
         // to cleanTuiResponse on the screen scrape). Trust `result.text`
         // — the accumulated `text` here is the raw chrome-laden stream.
-        const finalText = effectiveProvider.type === 'tui'
+        const finalText = effectiveProvider.type === PROVIDER_TYPES.TUI
           ? (typeof result?.text === 'string' ? result.text : '')
           : text;
         safeResolve({ text: finalText, runId, model: effectiveModel });
@@ -289,9 +293,9 @@ export async function runPromptThroughProvider({ provider, prompt, source, model
       ? { ...effectiveProvider, defaultModel: effectiveModel }
       : effectiveProvider;
 
-    if (effectiveProvider.type === 'cli') {
+    if (effectiveProvider.type === PROVIDER_TYPES.CLI) {
       executeCliRun(runId, providerForRun, prompt, effectiveCwd, onData, onComplete, effectiveTimeout).catch(safeReject);
-    } else if (effectiveProvider.type === 'api') {
+    } else if (effectiveProvider.type === PROVIDER_TYPES.API) {
       // API runs take model as a first-class arg — no clone needed. The
       // toolkit's executeApiRun uses AbortController without a timer, so
       // we enforce the per-call timeout here: if it fires before
@@ -305,7 +309,7 @@ export async function runPromptThroughProvider({ provider, prompt, source, model
         safeReject(new Error(`API execution timed out after ${effectiveTimeout}ms`));
       }, effectiveTimeout);
       executeApiRun(runId, effectiveProvider, effectiveModel, prompt, effectiveCwd, [], onData, onComplete).catch(safeReject);
-    } else if (effectiveProvider.type === 'tui') {
+    } else if (effectiveProvider.type === PROVIDER_TYPES.TUI) {
       executeTuiRun(runId, providerForRun, prompt, effectiveCwd, onData, onComplete, effectiveTimeout).catch(safeReject);
     } else {
       safeReject(new Error(`Unsupported provider type: ${effectiveProvider.type}`));

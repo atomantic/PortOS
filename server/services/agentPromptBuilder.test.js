@@ -284,6 +284,39 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/gh pr view "https:\/\/github\.com\/o\/r\/pull\/9" --json state/);
       expect(prompt).toMatch(/MERGED/);
       expect(prompt).not.toMatch(/## Completion Workflow/);
+      // Default reviewer (copilot) — `--review-with copilot` should still be
+      // surfaced so the agent knows the explicit choice.
+      expect(prompt).toMatch(/--review-with copilot/);
+    });
+
+    it('threads a non-default reviewer (claude) into the follow-up block via --review-with', () => {
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: {
+          reviewLoopFollowUp: true,
+          reviewLoopPRUrl: 'https://github.com/o/r/pull/9',
+          reviewLoopPRBranch: 'b',
+          reviewLoopPRNumber: 9,
+          reviewLoopPROwner: 'o',
+          reviewLoopPRRepo: 'r',
+          reviewLoopReviewer: 'claude',
+          sourceTaskId: 'task-src-2',
+        }}),
+        '/r',
+        { branchName: 'b', worktreePath: '/tmp/wt' },
+        isTruthyMeta);
+      expect(prompt).toMatch(/--review-with claude/);
+      // The Copilot-specific pre-request wording must be replaced for CLI reviewers.
+      expect(prompt).toMatch(/CLI-based reviewer/);
+    });
+
+    it('threads reviewer into the TUI Completion Workflow as `/do:pr --review-with <reviewer>`', () => {
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: { openPR: true, reviewLoop: true, simplify: true, reviewer: 'gemini' } }),
+        '/r',
+        { branchName: 'feat', worktreePath: '/tmp/wt' },
+        isTruthyMeta,
+        { isTui: true });
+      expect(prompt).toMatch(/`\/do:pr --review-with gemini`/);
     });
 
     it('worktreeCommitGuidance: existing-branch wins over slashdo/PR — emits the review-fix push wording', () => {

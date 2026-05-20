@@ -50,6 +50,21 @@ vi.mock('../services/mediaJobQueue/index.js', () => ({
   listJobs: vi.fn(() => []),
 }));
 
+// Mock the collections service so the clean route's auto-file behavior is
+// observable + the tests don't depend on PATHS.data state. Default
+// `listCollections` returns empty, which makes the auto-file step a no-op for
+// every test that doesn't override the mock. Tests that exercise auto-file
+// re-configure `listCollectionsMock` per-case.
+const { listCollectionsMock, addItemMock } = vi.hoisted(() => ({
+  listCollectionsMock: vi.fn(async () => []),
+  addItemMock: vi.fn(async () => ({})),
+}));
+vi.mock('../services/mediaCollections.js', () => ({
+  listCollections: listCollectionsMock,
+  addItem: addItemMock,
+  ERR_DUPLICATE: 'DUPLICATE',
+}));
+
 let imageGenRoutes;
 let pngFixture;
 
@@ -79,82 +94,58 @@ describe('POST /api/image-gen/:filename/clean', () => {
     app.use(express.json());
     app.use('/api/image-gen', imageGenRoutes);
     app.use(errorMiddleware);
+    listCollectionsMock.mockReset();
+    listCollectionsMock.mockResolvedValue([]);
+    addItemMock.mockReset();
+    addItemMock.mockResolvedValue({});
   });
 
-  it('cleans an existing PNG and writes _clean-light.png back to the gallery', async () => {
+  it('cleans an existing PNG and writes _clean-aggressive.png back to the gallery', async () => {
     await writeFile(join(sandbox, 'render-1.png'), pngFixture);
     await writeFile(join(sandbox, 'render-1.metadata.json'), JSON.stringify({
       prompt: 'a red square', seed: 42, modelId: 'flux-v1',
     }));
 
-    const res = await request(app).post('/api/image-gen/render-1.png/clean').send({ level: 'light' });
+    const res = await request(app).post('/api/image-gen/render-1.png/clean').send({});
     expect(res.status).toBe(200);
-    expect(res.body.filename).toBe('render-1_clean-light.png');
+    expect(res.body.filename).toBe('render-1_clean-aggressive.png');
     expect(res.body.cleanedFrom).toBe('render-1.png');
-    expect(res.body.cleanLevel).toBe('light');
+    expect(res.body.cleanLevel).toBe('aggressive');
     // Source sidecar carried forward so the cleaned copy retains lineage.
     expect(res.body.prompt).toBe('a red square');
     expect(res.body.seed).toBe(42);
     expect(res.body.modelId).toBe('flux-v1');
 
-    expect(existsSync(join(sandbox, 'render-1_clean-light.png'))).toBe(true);
-    expect(existsSync(join(sandbox, 'render-1_clean-light.metadata.json'))).toBe(true);
+    expect(existsSync(join(sandbox, 'render-1_clean-aggressive.png'))).toBe(true);
+    expect(existsSync(join(sandbox, 'render-1_clean-aggressive.metadata.json'))).toBe(true);
   });
 
-  it('aggressive level produces a different output than light (different denoise)', async () => {
-    await writeFile(join(sandbox, 'render-2.png'), pngFixture);
-
-    const lightRes = await request(app).post('/api/image-gen/render-2.png/clean').send({ level: 'light' });
-    const aggRes = await request(app).post('/api/image-gen/render-2.png/clean').send({ level: 'aggressive' });
-    expect(lightRes.status).toBe(200);
-    expect(aggRes.status).toBe(200);
-    expect(lightRes.body.filename).toBe('render-2_clean-light.png');
-    expect(aggRes.body.filename).toBe('render-2_clean-aggressive.png');
-
-    const lightBuf = await readFile(join(sandbox, lightRes.body.filename));
-    const aggBuf = await readFile(join(sandbox, aggRes.body.filename));
-    expect(lightBuf.equals(aggBuf)).toBe(false);
-  });
-
-  it('idempotent: running the same level twice overwrites instead of accumulating', async () => {
+  it('idempotent: running clean twice overwrites instead of accumulating', async () => {
     await writeFile(join(sandbox, 'render-3.png'), pngFixture);
-    const first = await request(app).post('/api/image-gen/render-3.png/clean').send({ level: 'light' });
-    const second = await request(app).post('/api/image-gen/render-3.png/clean').send({ level: 'light' });
+    const first = await request(app).post('/api/image-gen/render-3.png/clean').send({});
+    const second = await request(app).post('/api/image-gen/render-3.png/clean').send({});
     expect(first.body.filename).toBe(second.body.filename);
-    expect(first.body.filename).toBe('render-3_clean-light.png');
-  });
-
-  it('defaults to light when level omitted', async () => {
-    await writeFile(join(sandbox, 'render-4.png'), pngFixture);
-    const res = await request(app).post('/api/image-gen/render-4.png/clean').send({});
-    expect(res.status).toBe(200);
-    expect(res.body.cleanLevel).toBe('light');
-  });
-
-  it('rejects unknown level', async () => {
-    await writeFile(join(sandbox, 'render-5.png'), pngFixture);
-    const res = await request(app).post('/api/image-gen/render-5.png/clean').send({ level: 'extreme' });
-    expect(res.status).toBe(400);
+    expect(first.body.filename).toBe('render-3_clean-aggressive.png');
   });
 
   it('rejects non-PNG filenames (gallery is PNG-only)', async () => {
-    const res = await request(app).post('/api/image-gen/render.jpg/clean').send({ level: 'light' });
+    const res = await request(app).post('/api/image-gen/render.jpg/clean').send({});
     expect(res.status).toBe(400);
   });
 
   it('rejects path-traversal in filename', async () => {
-    const res = await request(app).post('/api/image-gen/' + encodeURIComponent('../etc/passwd.png') + '/clean').send({ level: 'light' });
+    const res = await request(app).post('/api/image-gen/' + encodeURIComponent('../etc/passwd.png') + '/clean').send({});
     expect(res.status).toBe(400);
   });
 
   it('returns 404 when the source image does not exist', async () => {
-    const res = await request(app).post('/api/image-gen/does-not-exist.png/clean').send({ level: 'light' });
+    const res = await request(app).post('/api/image-gen/does-not-exist.png/clean').send({});
     expect(res.status).toBe(404);
   });
 
   it('writes a sidecar that records the cleaning lineage', async () => {
     await writeFile(join(sandbox, 'render-6.png'), pngFixture);
-    await request(app).post('/api/image-gen/render-6.png/clean').send({ level: 'aggressive' });
+    await request(app).post('/api/image-gen/render-6.png/clean').send({});
     const sidecar = JSON.parse(await readFile(join(sandbox, 'render-6_clean-aggressive.metadata.json'), 'utf-8'));
     expect(sidecar.cleanedFrom).toBe('render-6.png');
     expect(sidecar.cleanLevel).toBe('aggressive');
@@ -166,27 +157,104 @@ describe('POST /api/image-gen/:filename/clean', () => {
     await writeFile(join(sandbox, 'render-hidden.metadata.json'), JSON.stringify({
       prompt: 'a hidden render', hidden: true,
     }));
-    const res = await request(app).post('/api/image-gen/render-hidden.png/clean').send({ level: 'light' });
+    const res = await request(app).post('/api/image-gen/render-hidden.png/clean').send({});
     expect(res.status).toBe(200);
     expect(res.body.hidden).toBeUndefined();
     expect(res.body.prompt).toBe('a hidden render');
 
-    const sidecar = JSON.parse(await readFile(join(sandbox, 'render-hidden_clean-light.metadata.json'), 'utf-8'));
+    const sidecar = JSON.parse(await readFile(join(sandbox, 'render-hidden_clean-aggressive.metadata.json'), 'utf-8'));
     expect(sidecar.hidden).toBeUndefined();
   });
 
   it('accepts legitimate filenames containing `..` substring (not exact `..`)', async () => {
     await writeFile(join(sandbox, 'my..render.png'), pngFixture);
-    const res = await request(app).post(`/api/image-gen/${encodeURIComponent('my..render.png')}/clean`).send({ level: 'light' });
+    const res = await request(app).post(`/api/image-gen/${encodeURIComponent('my..render.png')}/clean`).send({});
     expect(res.status).toBe(200);
-    expect(res.body.filename).toBe('my..render_clean-light.png');
+    expect(res.body.filename).toBe('my..render_clean-aggressive.png');
   });
 
   it('output file size is reflected in sizeBytes / sizeAfter', async () => {
     await writeFile(join(sandbox, 'render-7.png'), pngFixture);
-    const res = await request(app).post('/api/image-gen/render-7.png/clean').send({ level: 'light' });
+    const res = await request(app).post('/api/image-gen/render-7.png/clean').send({});
     const s = await stat(join(sandbox, res.body.filename));
     expect(res.body.sizeBytes).toBe(s.size);
     expect(res.body.sizeAfter).toBe(s.size);
+  });
+
+  describe('auto-file cleaned image into source collections', () => {
+    it('adds the cleaned filename to every collection that contained the source', async () => {
+      await writeFile(join(sandbox, 'render-coll.png'), pngFixture);
+      listCollectionsMock.mockResolvedValue([
+        { id: 'col-a', items: [{ kind: 'image', ref: 'render-coll.png' }] },
+        { id: 'col-b', items: [{ kind: 'image', ref: 'render-coll.png' }, { kind: 'image', ref: 'other.png' }] },
+        { id: 'col-c-unrelated', items: [{ kind: 'image', ref: 'other.png' }] },
+      ]);
+
+      const res = await request(app).post('/api/image-gen/render-coll.png/clean').send({});
+      expect(res.status).toBe(200);
+
+      // Only the two collections containing the source get the cleaned copy.
+      // Order is non-deterministic (Promise.all), so assert by call set.
+      expect(addItemMock).toHaveBeenCalledTimes(2);
+      const calls = addItemMock.mock.calls.map(([id, item]) => ({ id, item }));
+      expect(calls).toEqual(expect.arrayContaining([
+        { id: 'col-a', item: { kind: 'image', ref: 'render-coll_clean-aggressive.png' } },
+        { id: 'col-b', item: { kind: 'image', ref: 'render-coll_clean-aggressive.png' } },
+      ]));
+      expect(calls.find((c) => c.id === 'col-c-unrelated')).toBeUndefined();
+    });
+
+    it('is a no-op when the source is not in any collection', async () => {
+      await writeFile(join(sandbox, 'render-orphan.png'), pngFixture);
+      listCollectionsMock.mockResolvedValue([
+        { id: 'col-x', items: [{ kind: 'image', ref: 'something-else.png' }] },
+      ]);
+
+      const res = await request(app).post('/api/image-gen/render-orphan.png/clean').send({});
+      expect(res.status).toBe(200);
+      expect(addItemMock).not.toHaveBeenCalled();
+    });
+
+    it('swallows ERR_DUPLICATE so re-cleans of an already-filed pair are idempotent', async () => {
+      await writeFile(join(sandbox, 'render-dup.png'), pngFixture);
+      listCollectionsMock.mockResolvedValue([
+        { id: 'col-dup', items: [{ kind: 'image', ref: 'render-dup.png' }] },
+      ]);
+      addItemMock.mockRejectedValue(Object.assign(new Error('Item already in collection'), { code: 'DUPLICATE' }));
+
+      const res = await request(app).post('/api/image-gen/render-dup.png/clean').send({});
+      // The clean itself succeeds; the duplicate is swallowed.
+      expect(res.status).toBe(200);
+      expect(res.body.filename).toBe('render-dup_clean-aggressive.png');
+    });
+
+    it('clean succeeds even if listCollections throws (best-effort)', async () => {
+      await writeFile(join(sandbox, 'render-listfail.png'), pngFixture);
+      listCollectionsMock.mockRejectedValue(new Error('disk full'));
+
+      const res = await request(app).post('/api/image-gen/render-listfail.png/clean').send({});
+      expect(res.status).toBe(200);
+      expect(res.body.filename).toBe('render-listfail_clean-aggressive.png');
+      // The cleaned file still landed on disk.
+      expect(existsSync(join(sandbox, 'render-listfail_clean-aggressive.png'))).toBe(true);
+    });
+
+    it('clean succeeds even when one addItem throws a non-DUPLICATE error (best-effort, others still fire)', async () => {
+      await writeFile(join(sandbox, 'render-mixed.png'), pngFixture);
+      listCollectionsMock.mockResolvedValue([
+        { id: 'col-ok', items: [{ kind: 'image', ref: 'render-mixed.png' }] },
+        { id: 'col-fail', items: [{ kind: 'image', ref: 'render-mixed.png' }] },
+      ]);
+      addItemMock.mockImplementation(async (id) => {
+        if (id === 'col-fail') throw new Error('collection write blew up');
+        return {};
+      });
+
+      const res = await request(app).post('/api/image-gen/render-mixed.png/clean').send({});
+      expect(res.status).toBe(200);
+      // Both ids were attempted — the success path doesn't short-circuit on
+      // a sibling failure.
+      expect(addItemMock).toHaveBeenCalledTimes(2);
+    });
   });
 });

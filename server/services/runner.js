@@ -7,6 +7,7 @@ import { writeFile, readFile } from 'fs/promises';
 import { join } from 'path';
 import { ensureDir, tryReadFile } from '../lib/fileUtils.js';
 import { resolveCliModel, hasModelFlag, extractBakedModel } from '../lib/providerModels.js';
+import { ServerError } from '../lib/errorHandler.js';
 
 // Re-exported so `server/lib/promptRunner.js` can import via the runner
 // (its existing dependency boundary). The canonical home is now
@@ -23,11 +24,22 @@ export function setAIToolkit(toolkit, config = {}) {
   runnerConfig = { dataDir: config.dataDir || './data', hooks: config.hooks || {} };
 }
 
+// Mirrors the helper in `server/services/providers.js` so callers can gate on
+// `err.code === 'AI_TOOLKIT_NOT_INITIALIZED'` instead of string-matching the
+// message; status 503 (service-unavailable) because the toolkit warms at boot
+// and a not-initialized state means the service hasn't finished starting.
+function requireToolkit() {
+  if (aiToolkitInstance) return aiToolkitInstance;
+  throw new ServerError('AI Toolkit not initialized', {
+    status: 503,
+    code: 'AI_TOOLKIT_NOT_INITIALIZED',
+  });
+}
+
 export async function createRun(options) {
-  if (!aiToolkitInstance) throw new Error('AI Toolkit not initialized');
   // The toolkit's runner emits its own "🤖 AI run [source]: provider/model"
   // line — don't duplicate it here.
-  return aiToolkitInstance.services.runner.createRun(options);
+  return requireToolkit().services.runner.createRun(options);
 }
 
 /**
@@ -141,7 +153,7 @@ export function getRunsPath() {
  * @returns the merged metadata object (also written to disk).
  */
 export async function finalizeRunRecord({ runId, output, exitCode, success, error, startTime, extras }) {
-  if (!aiToolkitInstance) throw new Error('AI Toolkit not initialized');
+  const toolkit = requireToolkit();
   const runDir = join(getRunsPath(), runId);
   const outputPath = join(runDir, 'output.txt');
   const metadataPath = join(runDir, 'metadata.json');
@@ -159,8 +171,8 @@ export async function finalizeRunRecord({ runId, output, exitCode, success, erro
   if (error) metadata.error = error;
   if (extras && typeof extras === 'object') Object.assign(metadata, extras);
 
-  if (!success && aiToolkitInstance.services.errorDetection) {
-    const errorAnalysis = aiToolkitInstance.services.errorDetection.analyzeError(output, exitCode);
+  if (!success && toolkit.services.errorDetection) {
+    const errorAnalysis = toolkit.services.errorDetection.analyzeError(output, exitCode);
     metadata.error = metadata.error || errorAnalysis.message || `Process exited with code ${exitCode}`;
     metadata.errorCategory = errorAnalysis.category;
     metadata.errorAnalysis = errorAnalysis;
@@ -215,7 +227,7 @@ export async function patchRunMetadata(runId, patch) {
  * This removes 'shell: true' which causes DEP0190 warning and potential security issues
  */
 export async function executeCliRun(runId, provider, prompt, workspacePath, onData, onComplete, timeout) {
-  if (!aiToolkitInstance) throw new Error('AI Toolkit not initialized');
+  const toolkit = requireToolkit();
 
   const runsPath = join(runnerConfig.dataDir, 'runs');
   const runDir = join(runsPath, runId);
@@ -241,10 +253,10 @@ export async function executeCliRun(runId, provider, prompt, workspacePath, onDa
   childProcess.stdin.end();
 
   // Track active run (store on the runner service itself for stopRun to access)
-  if (!aiToolkitInstance.services.runner._portosActiveRuns) {
-    aiToolkitInstance.services.runner._portosActiveRuns = new Map();
+  if (!toolkit.services.runner._portosActiveRuns) {
+    toolkit.services.runner._portosActiveRuns = new Map();
   }
-  aiToolkitInstance.services.runner._portosActiveRuns.set(runId, childProcess);
+  toolkit.services.runner._portosActiveRuns.set(runId, childProcess);
 
   // Call hooks
   runnerConfig.hooks?.onRunStarted?.({ runId, provider: provider.name, model: provider.defaultModel });
@@ -272,7 +284,7 @@ export async function executeCliRun(runId, provider, prompt, workspacePath, onDa
 
   childProcess.on('error', async (err) => {
     if (timeoutHandle) clearTimeout(timeoutHandle);
-    aiToolkitInstance.services.runner._portosActiveRuns?.delete(runId);
+    toolkit.services.runner._portosActiveRuns?.delete(runId);
     console.error(`❌ Run ${runId} spawn error: ${err.message}`);
 
     const metadata = {
@@ -293,7 +305,7 @@ export async function executeCliRun(runId, provider, prompt, workspacePath, onDa
 
   childProcess.on('close', async (code) => {
     if (timeoutHandle) clearTimeout(timeoutHandle);
-    aiToolkitInstance.services.runner._portosActiveRuns?.delete(runId);
+    toolkit.services.runner._portosActiveRuns?.delete(runId);
 
     await writeFile(outputPath, output);
 
@@ -307,8 +319,8 @@ export async function executeCliRun(runId, provider, prompt, workspacePath, onDa
     metadata.outputSize = Buffer.byteLength(output);
 
     // Analyze errors if the run failed (delegate to toolkit's error detection)
-    if (!metadata.success && aiToolkitInstance.services.errorDetection) {
-      const errorAnalysis = aiToolkitInstance.services.errorDetection.analyzeError(output, code);
+    if (!metadata.success && toolkit.services.errorDetection) {
+      const errorAnalysis = toolkit.services.errorDetection.analyzeError(output, code);
       metadata.error = errorAnalysis.message || `Process exited with code ${code}`;
       metadata.errorCategory = errorAnalysis.category;
       metadata.errorAnalysis = errorAnalysis;
@@ -329,8 +341,7 @@ export async function executeCliRun(runId, provider, prompt, workspacePath, onDa
 }
 
 export async function executeApiRun(runId, provider, model, prompt, workspacePath, screenshots, onData, onComplete) {
-  if (!aiToolkitInstance) throw new Error('AI Toolkit not initialized');
-  return aiToolkitInstance.services.runner.executeApiRun(runId, provider, model, prompt, workspacePath, screenshots, onData, onComplete);
+  return requireToolkit().services.runner.executeApiRun(runId, provider, model, prompt, workspacePath, screenshots, onData, onComplete);
 }
 
 /**
@@ -340,11 +351,11 @@ export async function executeApiRun(runId, provider, model, prompt, workspacePat
  * CLI runs can. Both ChildProcess and node-pty IPty expose `.kill(signal?)`.
  */
 export function registerActiveRun(runId, killable) {
-  if (!aiToolkitInstance) throw new Error('AI Toolkit not initialized');
-  if (!aiToolkitInstance.services.runner._portosActiveRuns) {
-    aiToolkitInstance.services.runner._portosActiveRuns = new Map();
+  const toolkit = requireToolkit();
+  if (!toolkit.services.runner._portosActiveRuns) {
+    toolkit.services.runner._portosActiveRuns = new Map();
   }
-  aiToolkitInstance.services.runner._portosActiveRuns.set(runId, killable);
+  toolkit.services.runner._portosActiveRuns.set(runId, killable);
 }
 
 export function unregisterActiveRun(runId) {
@@ -352,48 +363,41 @@ export function unregisterActiveRun(runId) {
 }
 
 export async function stopRun(runId) {
-  if (!aiToolkitInstance) throw new Error('AI Toolkit not initialized');
+  const toolkit = requireToolkit();
   // Check local active runs first (CLI runs spawned by this override)
-  const localProcess = aiToolkitInstance.services.runner._portosActiveRuns?.get(runId);
+  const localProcess = toolkit.services.runner._portosActiveRuns?.get(runId);
   if (localProcess && !localProcess.killed) {
     localProcess.kill('SIGTERM');
-    aiToolkitInstance.services.runner._portosActiveRuns.delete(runId);
+    toolkit.services.runner._portosActiveRuns.delete(runId);
     return { stopped: true, runId };
   }
-  return aiToolkitInstance.services.runner.stopRun(runId);
+  return toolkit.services.runner.stopRun(runId);
 }
 
 export async function getRun(runId) {
-  if (!aiToolkitInstance) throw new Error('AI Toolkit not initialized');
-  return aiToolkitInstance.services.runner.getRun(runId);
+  return requireToolkit().services.runner.getRun(runId);
 }
 
 export async function getRunOutput(runId) {
-  if (!aiToolkitInstance) throw new Error('AI Toolkit not initialized');
-  return aiToolkitInstance.services.runner.getRunOutput(runId);
+  return requireToolkit().services.runner.getRunOutput(runId);
 }
 
 export async function getRunPrompt(runId) {
-  if (!aiToolkitInstance) throw new Error('AI Toolkit not initialized');
-  return aiToolkitInstance.services.runner.getRunPrompt(runId);
+  return requireToolkit().services.runner.getRunPrompt(runId);
 }
 
 export async function listRuns(limit, offset, source) {
-  if (!aiToolkitInstance) throw new Error('AI Toolkit not initialized');
-  return aiToolkitInstance.services.runner.listRuns(limit, offset, source);
+  return requireToolkit().services.runner.listRuns(limit, offset, source);
 }
 
 export async function deleteRun(runId) {
-  if (!aiToolkitInstance) throw new Error('AI Toolkit not initialized');
-  return aiToolkitInstance.services.runner.deleteRun(runId);
+  return requireToolkit().services.runner.deleteRun(runId);
 }
 
 export async function deleteFailedRuns() {
-  if (!aiToolkitInstance) throw new Error('AI Toolkit not initialized');
-  return aiToolkitInstance.services.runner.deleteFailedRuns();
+  return requireToolkit().services.runner.deleteFailedRuns();
 }
 
 export async function isRunActive(runId) {
-  if (!aiToolkitInstance) throw new Error('AI Toolkit not initialized');
-  return aiToolkitInstance.services.runner.isRunActive(runId);
+  return requireToolkit().services.runner.isRunActive(runId);
 }

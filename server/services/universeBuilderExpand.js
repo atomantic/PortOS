@@ -32,6 +32,7 @@ import {
 import { sanitizeBibleList, stripCanonControlFields, BIBLE_KIND, BIBLE_SOURCE } from "../lib/storyBible.js";
 import { ServerError } from "../lib/errorHandler.js";
 import { extractJson as extractJsonShared } from "../lib/jsonExtract.js";
+import { isPlainObject } from "../lib/objects.js";
 import {
   assertProvider,
   resolveProviderAndModel,
@@ -235,7 +236,7 @@ const normalizeCategories = (raw) => {
     // sanitizeCategory falls back to default. sanitizeCategory would clamp
     // again, but doing it here also defends the Zod route schema which
     // rejects unknown enum values on a subsequent save round-trip.
-    const llmKind = node && typeof node === 'object' && !Array.isArray(node) ? node.kind : undefined;
+    const llmKind = isPlainObject(node) ? node.kind : undefined;
     const rawKind = CATEGORY_KINDS.includes(llmKind) ? llmKind : undefined;
     out[key] = {
       ...(rawKind !== undefined ? { kind: rawKind } : {}),

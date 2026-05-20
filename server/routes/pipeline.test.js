@@ -86,6 +86,35 @@ vi.mock('../services/pipeline/visualStages.js', () => ({
     variant: body?.target === 'final' ? 'final' : 'proof',
     fromProof: body?.target === 'final' && body?.useProofAsBase === true,
   })),
+  // Back cover render — symmetric with front cover; the route's persist
+  // logic differs only in field names (backCover slot + backCoverScript).
+  enqueueComicBackCover: vi.fn(async (_issueId, body) => ({
+    jobId: `backcover-job-${++uuidCounter}`,
+    mode: 'local',
+    prompt: 'back cover art prompt',
+    backCoverScript: body?.backCoverScript ?? 'default back cover concept',
+    variant: body?.target === 'final' ? 'final' : 'proof',
+    fromProof: body?.target === 'final' && body?.useProofAsBase === true,
+  })),
+  // Volume (season) front + back cover. Route writes to series.seasons[].cover
+  // / .backCover via seriesSvc.updateSeasonOnSeries, so the mock shape mirrors
+  // the comic-cover mocks.
+  enqueueVolumeCover: vi.fn(async (_seriesId, _seasonId, body) => ({
+    jobId: `vol-cover-job-${++uuidCounter}`,
+    mode: 'local',
+    prompt: 'volume cover art prompt',
+    coverScript: body?.coverScript ?? 'default volume cover concept',
+    variant: body?.target === 'final' ? 'final' : 'proof',
+    fromProof: body?.target === 'final' && body?.useProofAsBase === true,
+  })),
+  enqueueVolumeBackCover: vi.fn(async (_seriesId, _seasonId, body) => ({
+    jobId: `vol-backcover-job-${++uuidCounter}`,
+    mode: 'local',
+    prompt: 'volume back cover art prompt',
+    backCoverScript: body?.backCoverScript ?? 'default volume back cover concept',
+    variant: body?.target === 'final' ? 'final' : 'proof',
+    fromProof: body?.target === 'final' && body?.useProofAsBase === true,
+  })),
   // Single-scene video render. Returns the shape the route forwards verbatim
   // to clients: { jobId, prompt, sceneIndex, issue, stage }.
   enqueueStoryboardSceneVideo: vi.fn(async (issueId, sceneIndex) => ({
@@ -1098,6 +1127,111 @@ describe('pipeline routes', () => {
     expect(coverRes.status).toBe(400);
   });
 
+  // ---- cover-script write semantics ----
+  // The four cover render routes only write `script` when the request body
+  // actually carried the script field. Blur-save owns the field; the render
+  // route races against it, so writing the *resolved* value (which falls back
+  // to the persisted record's script when absent) would clobber a concurrent
+  // blur. Distinguish absent (preserve) from empty string (intentional clear).
+
+  it('POST /issues/:id/stages/comicPages/cover/render preserves persisted cover.script when body omits coverScript', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    // Seed the script via a first render carrying it.
+    const first = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/comicPages/cover/render`)
+      .send({ coverScript: 'Hero stands atop the foundry' });
+    expect(first.status).toBe(200);
+    expect(first.body.cover.script).toBe('Hero stands atop the foundry');
+    // Second render omits coverScript — the script must NOT be overwritten
+    // with the service's fallback ('default cover concept' in the mock).
+    const second = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/comicPages/cover/render`)
+      .send({ target: 'final', useProofAsBase: true });
+    expect(second.status).toBe(200);
+    expect(second.body.cover.script).toBe('Hero stands atop the foundry');
+  });
+
+  it('POST /issues/:id/stages/comicPages/cover/render clears cover.script when body carries empty string', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/comicPages/cover/render`)
+      .send({ coverScript: 'Hero stands atop the foundry' });
+    // Explicit empty string is an intentional clear — distinct from absent.
+    const cleared = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/comicPages/cover/render`)
+      .send({ coverScript: '' });
+    expect(cleared.status).toBe(200);
+    expect(cleared.body.cover.script).toBe('');
+  });
+
+  it('POST /issues/:id/stages/comicPages/back-cover/render preserves persisted backCover.script when body omits backCoverScript', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+    const first = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/comicPages/back-cover/render`)
+      .send({ backCoverScript: 'Quiet rain over the empty market' });
+    expect(first.status).toBe(200);
+    expect(first.body.backCover.script).toBe('Quiet rain over the empty market');
+    const second = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/comicPages/back-cover/render`)
+      .send({ target: 'final', useProofAsBase: true });
+    expect(second.status).toBe(200);
+    expect(second.body.backCover.script).toBe('Quiet rain over the empty market');
+    // Explicit empty string clears — distinct from absent.
+    const cleared = await request(app)
+      .post(`/api/pipeline/issues/${iss.body.id}/stages/comicPages/back-cover/render`)
+      .send({ backCoverScript: '' });
+    expect(cleared.status).toBe(200);
+    expect(cleared.body.backCover.script).toBe('');
+  });
+
+  it('POST /series/:id/seasons/:seasonId/cover/render preserves persisted cover.script when body omits coverScript', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const sea = await request(app).post(`/api/pipeline/series/${ser.body.id}/seasons`).send({ title: 'Vol 1' });
+    const first = await request(app)
+      .post(`/api/pipeline/series/${ser.body.id}/seasons/${sea.body.id}/cover/render`)
+      .send({ coverScript: 'Collected arc hero shot' });
+    expect(first.status).toBe(200);
+    expect(first.body.season.cover.script).toBe('Collected arc hero shot');
+    const second = await request(app)
+      .post(`/api/pipeline/series/${ser.body.id}/seasons/${sea.body.id}/cover/render`)
+      .send({ target: 'final', useProofAsBase: true });
+    expect(second.status).toBe(200);
+    expect(second.body.season.cover.script).toBe('Collected arc hero shot');
+    const cleared = await request(app)
+      .post(`/api/pipeline/series/${ser.body.id}/seasons/${sea.body.id}/cover/render`)
+      .send({ coverScript: '' });
+    expect(cleared.status).toBe(200);
+    expect(cleared.body.season.cover.script).toBe('');
+  });
+
+  it('POST /series/:id/seasons/:seasonId/back-cover/render preserves persisted backCover.script when body omits backCoverScript', async () => {
+    const app = makeApp();
+    const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+    const sea = await request(app).post(`/api/pipeline/series/${ser.body.id}/seasons`).send({ title: 'Vol 1' });
+    const first = await request(app)
+      .post(`/api/pipeline/series/${ser.body.id}/seasons/${sea.body.id}/back-cover/render`)
+      .send({ backCoverScript: 'Atmospheric companion image' });
+    expect(first.status).toBe(200);
+    expect(first.body.season.backCover.script).toBe('Atmospheric companion image');
+    const second = await request(app)
+      .post(`/api/pipeline/series/${ser.body.id}/seasons/${sea.body.id}/back-cover/render`)
+      .send({ target: 'final', useProofAsBase: true });
+    expect(second.status).toBe(200);
+    expect(second.body.season.backCover.script).toBe('Atmospheric companion image');
+    const cleared = await request(app)
+      .post(`/api/pipeline/series/${ser.body.id}/seasons/${sea.body.id}/back-cover/render`)
+      .send({ backCoverScript: '' });
+    expect(cleared.status).toBe(200);
+    expect(cleared.body.season.backCover.script).toBe('');
+  });
+
   // -----------------------
   // Season routes (Phase 2 of Story Arc Planning)
   // -----------------------
@@ -1557,6 +1691,19 @@ describe('pipeline routes', () => {
       expect(r.status).toBe(400);
     });
 
+    it('POST /audio/music/attach 404s with PIPELINE_ISSUE_NOT_FOUND when the issue does not exist', async () => {
+      const app = makeApp();
+      musicLibraryStore.set('shared.mp3', { filename: 'shared.mp3', label: 'shared', sizeBytes: 100, updatedAt: '2026-05-15T00:00:00.000Z' });
+      const r = await request(app)
+        .post('/api/pipeline/issues/iss-does-not-exist/stages/audio/music/attach')
+        .send({ trackFilename: 'shared.mp3' });
+      expect(r.status).toBe(404);
+      // Pin both status AND code — the precheck-removal equivalence depends
+      // on `updateStageWithLatest` preserving the same error shape the dropped
+      // `getIssue` precheck would have raised.
+      expect(r.body.code).toBe('PIPELINE_ISSUE_NOT_FOUND');
+    });
+
     it('DELETE /audio/music clears music from the issue without deleting the library entry', async () => {
       const app = makeApp();
       const iss = await seedIssue(app);
@@ -1571,6 +1718,15 @@ describe('pipeline routes', () => {
       expect(r.body.stage.music).toBeNull();
       // Library entry survives the issue detach
       expect(musicLibraryStore.has('shared.mp3')).toBe(true);
+    });
+
+    it('DELETE /audio/music 404s with PIPELINE_ISSUE_NOT_FOUND when the issue does not exist', async () => {
+      const app = makeApp();
+      const r = await request(app)
+        .delete('/api/pipeline/issues/iss-does-not-exist/stages/audio/music')
+        .send();
+      expect(r.status).toBe(404);
+      expect(r.body.code).toBe('PIPELINE_ISSUE_NOT_FOUND');
     });
 
     it('DELETE /audio/music-library/:filename removes the file from the library', async () => {

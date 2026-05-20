@@ -18,9 +18,11 @@ import { completeExecution, errorExecution } from './toolStateMachine.js';
 import { analyzeAgentFailure } from './agentErrorAnalysis.js';
 import { completeAgentRun } from './agentRunTracking.js';
 import { finalizeAgent, releaseAgentLane } from './agentLifecycle.js';
-import { activeAgents, userTerminatedAgents } from './agentState.js';
+import { activeAgents, userTerminatedAgents, metaStringOr } from './agentState.js';
+import { DEFAULT_REVIEWER } from '../lib/validation.js';
 import { safeJSONParse, PATHS } from '../lib/fileUtils.js';
 import { createCodexStderrFormatter } from '../lib/codexCliOutput.js';
+import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 
 const AGENTS_DIR = PATHS.cosAgents;
 
@@ -282,14 +284,14 @@ export function buildCliSpawnConfig(provider, model) {
  * Check if a provider is a Claude CLI provider that needs settings.json env injection.
  */
 export const isClaudeCliProvider = (provider) =>
-  provider?.type === 'cli' && (provider.id === 'claude-code' || provider.id === 'claude-code-bedrock');
+  provider?.type === PROVIDER_TYPES.CLI && (provider.id === 'claude-code' || provider.id === 'claude-code-bedrock');
 
 /**
  * Check if a provider is a TUI-backed agent provider (Claude Code, Codex,
  * Gemini, etc. that run in a PTY). Used by callers that need to branch
  * between headless CLI/API runs and TUI shell sessions.
  */
-export const isTuiProvider = (provider) => provider?.type === 'tui';
+export const isTuiProvider = (provider) => provider?.type === PROVIDER_TYPES.TUI;
 
 /**
  * Read env vars from ~/.claude/settings.json to inject into Claude CLI spawns.
@@ -580,6 +582,7 @@ export async function spawnDirectly({
       await cleanupWorktreeFn(agentId, finalSuccess, {
         openPR: directAgentOwnsPR ? false : directOpenPR,
         requestCopilotReview: !directAgentOwnsPR && directOpenPR && isTruthyMetaFn(task.metadata?.reviewLoop),
+        reviewer: metaStringOr(task.metadata?.reviewer, DEFAULT_REVIEWER),
         skipMerge: directReviewLoopFollowUp || directAgentOwnsPR,
         description: task.description,
         agentOutput: outputBuffer,

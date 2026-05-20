@@ -246,16 +246,25 @@ $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 [System.IO.File]::WriteAllText("$RootDir\data\update-complete.json.tmp", $marker, $utf8NoBom)
 Move-Item -Force "$RootDir\data\update-complete.json.tmp" "$RootDir\data\update-complete.json"
 
-# Restart PM2 apps — remove marker if restart fails so it isn't misread on boot
-Step "restart" "running" "Restarting PortOS..."
-Invoke-Logged npm run pm2:restart
+# Start PM2 apps — `pm2 kill` above tore down the daemon, so use `start` not
+# `restart` (restart against a config doesn't reliably start processes that
+# aren't currently managed, leaving the app stopped after an update that ran
+# while PortOS wasn't running). `delete --silent` first so a partial prior
+# state doesn't make `start` a no-op, then `save` so the apps come back on
+# reboot. Remove the completion marker if start fails so it isn't misread on boot.
+Step "restart" "running" "Starting PortOS..."
+Invoke-Logged node ./node_modules/pm2/bin/pm2 delete ecosystem.config.cjs --silent
+$global:LASTEXITCODE = 0
+Invoke-Logged node ./node_modules/pm2/bin/pm2 start ecosystem.config.cjs
 if ($LASTEXITCODE -ne 0) {
     if (Test-Path "$RootDir\data\update-complete.json") {
         Remove-Item -Force "$RootDir\data\update-complete.json"
     }
     exit $LASTEXITCODE
 }
-Step "restart" "done" "PortOS restarted"
+Invoke-Logged node ./node_modules/pm2/bin/pm2 save
+$global:LASTEXITCODE = 0
+Step "restart" "done" "PortOS started"
 Write-SafeHost ""
 
 # Open the dashboard in the PortOS-managed browser. Fail-soft — explicitly
