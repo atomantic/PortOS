@@ -1138,10 +1138,9 @@ const buildCoverPatchFn = ({ slotField, scriptField, body, slotKey, slotRecord }
 };
 
 const makeCoverRenderHandler = ({
-  schema, slotField, scriptField, prepare, enqueue, applyWrite, buildResponse,
+  schema, slotField, scriptField, enqueue, applyWrite, buildResponse,
 }) => asyncHandler(async (req, res) => {
   const body = validateRequest(schema, req.body ?? {});
-  if (prepare) await prepare(req).catch((err) => { throw mapServiceError(err); });
   const result = await enqueue(req, body).catch((err) => { throw mapServiceError(err); });
 
   const slotKey = slotKeyForVariant(result.variant);
@@ -1530,16 +1529,15 @@ router.post('/issues/:id/cover-concepts/generate', asyncHandler(async (req, res)
 // returned jobId on stages.comicPages.cover.imageJobId. Pass `coverScript`
 // in the body to override or update the persisted cover concept in the
 // same call. Returns { jobId, mode, prompt, cover, issue, stage }.
-// The `prepare` hook (getIssue) is defense in depth + clean 404 before we
-// spend the bible-context load. The seeded slot's `filename: null` lets
-// the UI render an "in-flight" thumb without showing the previous render
-// while the new job is running; the filename hook stamps `filename` on
-// completion.
+// Missing issue surfaces as PIPELINE_ISSUE_NOT_FOUND from enqueueComicCover's
+// loadBibleContext (its first step is getIssue), mapped to 404 by
+// mapServiceError. The seeded slot's `filename: null` lets the UI render an
+// "in-flight" thumb without showing the previous render while the new job is
+// running; the filename hook stamps `filename` on completion.
 router.post('/issues/:id/stages/comicPages/cover/render', makeCoverRenderHandler({
   schema: comicCoverRenderSchema,
   slotField: 'cover',
   scriptField: 'coverScript',
-  prepare: (req) => issuesSvc.getIssue(req.params.id),
   enqueue: (req, body) => enqueueComicCover(req.params.id, body),
   applyWrite: updateComicPagesStage,
   buildResponse: ({ result, writeResult: { issue, stage } }) =>
@@ -1553,7 +1551,6 @@ router.post('/issues/:id/stages/comicPages/back-cover/render', makeCoverRenderHa
   schema: comicBackCoverRenderSchema,
   slotField: 'backCover',
   scriptField: 'backCoverScript',
-  prepare: (req) => issuesSvc.getIssue(req.params.id),
   enqueue: (req, body) => enqueueComicBackCover(req.params.id, body),
   applyWrite: updateComicPagesStage,
   buildResponse: ({ result, writeResult: { issue, stage } }) =>
