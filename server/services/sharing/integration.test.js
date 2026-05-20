@@ -1385,6 +1385,57 @@ describe('sharing round-trip', () => {
     expect(orphanUni.characters.map((c) => c.name)).toContain('Solo');
   });
 
+  it('skips the series merge when legacy canon cannot land (universeId points to a missing universe)', async () => {
+    // Without this guard, the importer would fall through to insertSeriesWithId
+    // and `sanitizeSeries` would silently drop the legacy canon arrays — the
+    // exact bug this PR fixes. The bucket record stays untouched so the user
+    // can reimport after fixing the missing universe.
+    const bucket = await buckets.createBucket({ name: 'MissingUniBucket', path: tempBucket, mode: 'auto-merge' });
+
+    const seriesId = 'ser-missing-uni';
+    const legacySeries = {
+      id: seriesId,
+      name: 'Missing-Uni Series',
+      logline: 'orphaned link',
+      premise: 'links to a universe not in the bundle',
+      universeId: 'uni-does-not-exist-123',
+      characters: [{ name: 'Ghost', physicalDescription: 'unseen' }],
+      createdAt: '2026-05-01T00:00:00.000Z',
+      updatedAt: '2026-05-01T00:00:00.000Z',
+    };
+    mkdirSync(join(tempBucket, 'records', 'series'), { recursive: true });
+    writeFileSync(
+      join(tempBucket, 'records', 'series', `${seriesId}.json`),
+      JSON.stringify(legacySeries),
+    );
+    const manifest = {
+      id: 'mfst-missing-uni',
+      schemaVersion: 1,
+      sharingSchemaVersion: 1,
+      producedByVersion: '1.0.0',
+      createdAt: new Date().toISOString(),
+      kind: 'series',
+      senderInstanceId: 'missing-uni-peer',
+      source: 'Missing Uni Peer',
+      sourceBio: null,
+      bucketId: bucket.id,
+      bucketName: bucket.name,
+      recordIds: [seriesId],
+      assetRefs: [],
+      note: null,
+    };
+    const filename = `2026-05-01T00-00-00-000Z-missing-uni-peer-${manifest.id}.json`;
+    writeFileSync(join(tempBucket, 'manifests', filename), JSON.stringify(manifest));
+
+    const result = await importer.processManifest(bucket.id, filename);
+    expect(result.processed).toBe(true);
+
+    // Series MUST NOT have been written — otherwise sanitizeSeries would have
+    // silently dropped the legacy canon arrays.
+    const restored = await series.getSeries(seriesId).catch(() => null);
+    expect(restored).toBeNull();
+  });
+
   it('refuses a manifest with a sharingSchemaVersion newer than local + emits incompatible event', async () => {
     const { SHARING_SCHEMA_VERSION } = await import('./version.js');
     const { sharingEvents } = await import('./importer.js');

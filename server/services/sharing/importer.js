@@ -439,6 +439,15 @@ async function applyAutoMerge(bucket, manifest, records, { availableAssetKeys = 
   // sanitized series. Both `settings` (pre-022) and `places` (post-022) wire
   // names are recognized; the helper coalesces them. No-op for post-B.4
   // records (the helper returns 'no-legacy' immediately).
+  //
+  // If the migration can't land the canon (helper threw, OR the peer linked
+  // to a universe that isn't in this manifest and isn't local), skip the
+  // sanitized-series insert for that record — otherwise the canon arrays
+  // get silently stripped by `sanitizeSeries` and the bug we just fixed
+  // recurs. The bucket record stays untouched so the user can reimport
+  // after fixing the missing universe (or rerunning when transient I/O
+  // recovers).
+  const skipSeriesMerge = new Set();
   for (const s of records.series) {
     const hasLegacyCanon = ['characters', 'settings', 'places', 'objects']
       .some((field) => Array.isArray(s[field]) && s[field].length > 0);
@@ -447,16 +456,22 @@ async function applyAutoMerge(bucket, manifest, records, { availableAssetKeys = 
       console.log(`⚠️ sharing.importer: legacy series canon migration for ${s.id} failed: ${err.message}`);
       return null;
     });
+    if (!r || r.skipped === 'missing-universe') {
+      console.log(`⚠️ sharing.importer: skipping series ${s.id} merge — legacy canon could not be salvaged (${r?.skipped || 'helper failed'})`);
+      skipSeriesMerge.add(s.id);
+      continue;
+    }
     // Stamp the freshly-created orphan universe id onto the in-memory record
     // so the upcoming insertSeriesWithId call preserves the link. (We can't
     // call updateSeries here like the CLI batch does — the series record
     // hasn't been inserted yet.)
-    if (r?.universeCreated && r.universeId) {
+    if (r.universeCreated && r.universeId) {
       s.universeId = r.universeId;
     }
   }
 
   for (const s of records.series) {
+    if (skipSeriesMerge.has(s.id)) continue;
     await mergeOne({
       kind: 'series', record: s, label: s.name,
       getFn: getSeries, insertFn: insertSeriesWithId, updateFn: updateSeries,
