@@ -1,4 +1,8 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 let uuidCounter = 0;
 vi.mock('crypto', async () => {
