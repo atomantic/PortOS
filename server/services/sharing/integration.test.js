@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, existsSync, mkdirSync, readFileSync } from 'fs';
+import { mkdtempSync, rmSync, writeFileSync, existsSync, mkdirSync, readFileSync, statSync, utimesSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { createHash } from 'crypto';
@@ -1094,9 +1094,10 @@ describe('sharing round-trip', () => {
     await mediaCollections.addItem(collB.id, { kind: 'image', ref: 'beta.png' });
     const expB = await exporter.exportUniverse(uniB.id, bucket.id);
 
-    // Both manifests point at the same blob path; only one on-disk file exists.
+    // Both manifests point at the same blob path; only one on-disk blob file exists
+    // (the dotfile `.index.json` is the per-bucket source→hash cache, not a blob).
     expect(fs.existsSync(join(tempBucket, 'assets', 'blobs', hash))).toBe(true);
-    expect(fs.readdirSync(join(tempBucket, 'assets', 'blobs'))).toEqual([hash]);
+    expect(fs.readdirSync(join(tempBucket, 'assets', 'blobs')).filter((f) => !f.startsWith('.'))).toEqual([hash]);
 
     // Each manifest's assetRef carries the hash + its own original filename.
     const mA = JSON.parse(fs.readFileSync(join(tempBucket, 'manifests', expA.filename), 'utf-8'));
@@ -1381,5 +1382,71 @@ describe('sharing round-trip', () => {
     const replay = await importer.processManifest(bucket.id, filename);
     expect(replay.skipped).toBe(true);
     expect(replay.reason).toBe('already-processed');
+  });
+
+  it('writes <bucket>/assets/blobs/.index.json mapping sourcePath:mtime:size → hash and invalidates on mtime change', async () => {
+    const bucket = await buckets.createBucket({ name: 'CacheBucket', path: tempBucket, mode: 'auto-merge' });
+    const sourcePath = join(tempData, 'images', 'fakeasset.png'); // seeded as 'PNGSTUB' in beforeEach
+
+    // Single-asset export — exportMedia falls through to copyAssetIfPresent (getJob is mocked → null).
+    await exporter.exportMedia([{ kind: 'image', ref: 'fakeasset.png' }], bucket.id);
+
+    const indexPath = join(tempBucket, 'assets', 'blobs', '.index.json');
+    expect(existsSync(indexPath)).toBe(true);
+
+    const initialStat = statSync(sourcePath);
+    const initialKey = `${sourcePath}:${initialStat.mtimeMs}:${initialStat.size}`;
+    const initialHash = sha256Hex('PNGSTUB');
+    const idx1 = JSON.parse(readFileSync(indexPath, 'utf-8'));
+    expect(idx1[initialKey]).toBe(initialHash);
+
+    // Re-export unchanged file → cache hit → no new keys → index file not rewritten.
+    // Assert the index file's mtime is unchanged (dirty-flag short-circuits the write).
+    const indexMtimeBefore = statSync(indexPath).mtimeMs;
+    await new Promise((r) => setTimeout(r, 5));
+    await exporter.exportMedia([{ kind: 'image', ref: 'fakeasset.png' }], bucket.id);
+    expect(statSync(indexPath).mtimeMs).toBe(indexMtimeBefore);
+
+    // Bumping mtime alone (same bytes, same size) creates a new cache key — old entry stays,
+    // new entry covers the post-touch stat. The hash is unchanged because the bytes are the same.
+    const future = new Date(initialStat.mtimeMs + 60_000);
+    utimesSync(sourcePath, future, future);
+    await exporter.exportMedia([{ kind: 'image', ref: 'fakeasset.png' }], bucket.id);
+    const touchedStat = statSync(sourcePath);
+    const touchedKey = `${sourcePath}:${touchedStat.mtimeMs}:${touchedStat.size}`;
+    expect(touchedKey).not.toBe(initialKey);
+    const idx2 = JSON.parse(readFileSync(indexPath, 'utf-8'));
+    expect(idx2[touchedKey]).toBe(initialHash);
+
+    // Mutating content invalidates and records a fresh hash.
+    writeFileSync(sourcePath, 'PNGSTUB-v2');
+    await exporter.exportMedia([{ kind: 'image', ref: 'fakeasset.png' }], bucket.id);
+    const mutatedStat = statSync(sourcePath);
+    const mutatedKey = `${sourcePath}:${mutatedStat.mtimeMs}:${mutatedStat.size}`;
+    const idx3 = JSON.parse(readFileSync(indexPath, 'utf-8'));
+    expect(idx3[mutatedKey]).toBe(sha256Hex('PNGSTUB-v2'));
+    // Mutated bytes also land in the bucket under the new hash (content-addressed).
+    expect(existsSync(join(tempBucket, 'assets', 'blobs', sha256Hex('PNGSTUB-v2')))).toBe(true);
+  });
+
+  it('parallel exports against the same bucket merge cache entries instead of clobbering (exportByKind fanout)', async () => {
+    const bucket = await buckets.createBucket({ name: 'MergeBucket', path: tempBucket, mode: 'auto-merge' });
+    // Two distinct assets, both seeded with distinct bytes so they hash differently.
+    writeFileSync(join(tempData, 'images', 'parallelA.png'), 'PARALLEL_A');
+    writeFileSync(join(tempData, 'images', 'parallelB.png'), 'PARALLEL_B');
+    // Two singleton media exports run in parallel — each loads its own cache view,
+    // each saves with merge-on-save. Both new keys must survive in the persisted index.
+    await Promise.all([
+      exporter.exportMedia([{ kind: 'image', ref: 'parallelA.png' }], bucket.id),
+      exporter.exportMedia([{ kind: 'image', ref: 'parallelB.png' }], bucket.id),
+    ]);
+    const indexPath = join(tempBucket, 'assets', 'blobs', '.index.json');
+    const idx = JSON.parse(readFileSync(indexPath, 'utf-8'));
+    const statA = statSync(join(tempData, 'images', 'parallelA.png'));
+    const statB = statSync(join(tempData, 'images', 'parallelB.png'));
+    const keyA = `${join(tempData, 'images', 'parallelA.png')}:${statA.mtimeMs}:${statA.size}`;
+    const keyB = `${join(tempData, 'images', 'parallelB.png')}:${statB.mtimeMs}:${statB.size}`;
+    expect(idx[keyA]).toBe(sha256Hex('PARALLEL_A'));
+    expect(idx[keyB]).toBe(sha256Hex('PARALLEL_B'));
   });
 });
