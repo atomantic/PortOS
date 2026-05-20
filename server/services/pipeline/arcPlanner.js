@@ -21,6 +21,7 @@
 
 import { runStagedLLM } from '../../lib/stageRunner.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { stripAnsi } from '../../lib/ansiStrip.js';
 import { getSeries, updateSeries, updateSeasonOnSeries, ARC_LOCKABLE_FIELDS } from './series.js';
 import { listIssues, updateIssue, recomputeIssueNumbersForSeries, getIssue, updateStageWithLatest, assertStageUnlocked } from './issues.js';
 import { emitRecordUpdated, withReexportSuppressed } from '../sharing/recordEvents.js';
@@ -1153,7 +1154,10 @@ export function buildSeasonRemap(droppedOldSeasons, newlyMintedSeasons) {
     // the stable id when the title is empty after sanitization.
     const safeLabel = (s) => {
       const raw = typeof s.title === 'string' ? s.title : '';
-      const t = raw
+      // stripAnsi removes full ESC + CSI/OSC sequences (so "[31m" payload
+      // tails don't leak through); the trailing control-char sweep catches
+      // any bare C0/C1 bytes the regex doesn't match.
+      const t = stripAnsi(raw)
         .replace(/[\u0000-\u001F\u007F-\u009F]+/g, ' ')
         .replace(/\s+/g, ' ')
         .trim()

@@ -1058,14 +1058,17 @@ describe('arcPlanner — buildSeasonRemap', () => {
     warnSpy.mockRestore();
   });
 
-  it('strips C0/C1 control chars and ANSI escapes from titles before logging', () => {
+  it('strips C0/C1 control chars and full ANSI CSI sequences from titles before logging', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const dropped = [{ id: 'old1', number: 1, title: 'Pre\x1b[31mEvil\x1b[0mSuffix\x07' }];
     const minted = [{ id: 'new1', number: 2, title: 'Clean\u0085Title' }]; // U+0085 = NEL (C1)
     planner.buildSeasonRemap(dropped, minted);
     const msg = warnSpy.mock.calls[0][0];
     expect(msg).not.toMatch(/[\u0000-\u001F\u007F-\u009F]/);
-    expect(msg).toContain('Pre [31mEvil [0mSuffix');
+    // stripAnsi removes the full CSI sequences (ESC + '[31m' / ESC + '[0m'),
+    // not just the ESC byte — so the '[31m' / '[0m' payload tails do NOT leak.
+    expect(msg).toContain('PreEvilSuffix');
+    expect(msg).not.toMatch(/\[31m|\[0m/);
     expect(msg).toContain('Clean Title');
     warnSpy.mockRestore();
   });
