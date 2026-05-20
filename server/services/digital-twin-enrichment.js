@@ -119,7 +119,7 @@ export async function generateEnrichmentQuestion(category, providerOverride, mod
   const fallbackText = `What else should your digital twin know about your ${config.label.toLowerCase()}?`;
   let question = null;
 
-  const result = await callProviderAI(provider, model, prompt, { temperature: 0.8, max_tokens: 200 });
+  const result = await callProviderAI(provider, model, prompt);
   if (!result.error && result.text) {
     question = result.text.trim() || null;
   }
@@ -269,7 +269,7 @@ export async function processEnrichmentAnswer(data) {
     }).catch(() => null);
 
     if (prompt) {
-      const result = await callProviderAI(provider, modelOverride || provider.defaultModel, prompt, { temperature: 0.3, max_tokens: 500 });
+      const result = await callProviderAI(provider, modelOverride || provider.defaultModel, prompt);
       if (!result.error && result.text) {
         formattedContent = result.text.trim() || formattedContent;
       }
@@ -451,7 +451,7 @@ Respond in JSON format:
 }
 \`\`\``;
 
-  const result = await callProviderAI(provider, model, prompt, { temperature: 0.7, max_tokens: 3000 });
+  const result = await callProviderAI(provider, model, prompt);
   if (result.error) {
     throw new Error(result.error);
   }
