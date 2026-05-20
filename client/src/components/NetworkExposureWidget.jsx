@@ -180,8 +180,12 @@ const NetworkExposureWidget = memo(function NetworkExposureWidget() {
                   would resolve to the viewer's own machine and 404 — show
                   informational text instead of a broken link. */}
               {isLoopbackOrigin() ? (
+                // Explicit 127.0.0.1, not `localhost`, because the mirror
+                // listener binds to 127.0.0.1 specifically — an IPv6-
+                // preferring resolver might map `localhost` to `::1` first
+                // and the link would fail with ECONNREFUSED.
                 <a
-                  href={`http://localhost:${loopbackMirror.port}`}
+                  href={`http://127.0.0.1:${loopbackMirror.port}`}
                   target="_blank"
                   rel="noreferrer"
                   className="font-mono text-xs text-port-accent hover:underline"
