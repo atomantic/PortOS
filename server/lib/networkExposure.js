@@ -11,9 +11,13 @@
  * should show.
  */
 import { PORTS } from './ports.js';
+import { PATHS } from './fileUtils.js';
 import { getHttpsEnabledAtBoot } from './httpsState.js';
 import { getSelfHost } from './peerSelfHost.js';
-import { readCertMeta } from './certMeta.js';
+import { certPaths } from '../../lib/certPaths.js';
+import { readCertMeta } from '../../lib/certMeta.js';
+
+const { meta: META_PATH } = certPaths(PATHS.data);
 
 // docs/PORTS.md is checked into the repo but the server doesn't serve the
 // docs/ directory, so link out to GitHub for the canonical guide rather than
@@ -37,7 +41,7 @@ export function getNetworkExposureStatus() {
   const bindPort = Number(process.env.PORT) || PORTS.API;
   const loopbackPort = Number(process.env.PORTOS_HTTP_PORT) || PORTS.API_LOCAL;
 
-  const meta = readCertMeta();
+  const meta = readCertMeta(META_PATH);
   const certMode = httpsEnabled ? (meta?.mode || 'unknown') : null;
   const tailscaleHost = getSelfHost();
   const tailscaleIps = Array.isArray(meta?.ips) ? meta.ips : [];

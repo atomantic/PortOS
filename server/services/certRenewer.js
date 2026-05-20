@@ -16,16 +16,16 @@ import { existsSync, readFileSync, statSync } from 'fs';
 import { promisify } from 'util';
 import { PATHS } from '../lib/fileUtils.js';
 import { findTailscale } from '../lib/tailscale.js';
-import { readCertMeta } from '../lib/certMeta.js';
 import { certPaths } from '../../lib/certPaths.js';
+import { readCertMeta } from '../../lib/certMeta.js';
 
 const execFileAsync = promisify(execFile);
 
-const { cert: CERT_PATH, key: KEY_PATH } = certPaths(PATHS.data);
+const { cert: CERT_PATH, key: KEY_PATH, meta: META_PATH } = certPaths(PATHS.data);
 const RENEW_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 async function renewOnce(httpsServer) {
-  const meta = readCertMeta();
+  const meta = readCertMeta(META_PATH);
   if (!meta || meta.mode !== 'tailscale' || !meta.hostname) return;
 
   const bin = findTailscale();
@@ -59,7 +59,7 @@ async function renewOnce(httpsServer) {
 
 export function initCertRenewer(httpsServer) {
   if (!httpsServer || typeof httpsServer.setSecureContext !== 'function') return;
-  const meta = readCertMeta();
+  const meta = readCertMeta(META_PATH);
   if (!meta || meta.mode !== 'tailscale') return;
 
   renewOnce(httpsServer).catch(err => console.error(`❌ cert renewer initial run: ${err.message}`));

@@ -9,7 +9,7 @@
  */
 import { hasTailscaleCert } from '../lib/tailscale-https.js';
 import { certPaths } from '../lib/certPaths.js';
-import { readFileSync } from 'fs';
+import { readCertMeta } from '../lib/certMeta.js';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -23,10 +23,7 @@ if (!hasTailscaleCert(CERT_DIR)) {
   process.exit(0);
 }
 
-let mode = '';
-try {
-  mode = JSON.parse(readFileSync(META_PATH, 'utf-8')).mode || '';
-} catch { /* meta unreadable — fall through to generic warning */ }
+const mode = readCertMeta(META_PATH)?.mode || '';
 
 console.log(`Access at: http://localhost:${MIRROR_PORT}  (loopback HTTP mirror — no cert warning)`);
 if (mode === 'tailscale') {

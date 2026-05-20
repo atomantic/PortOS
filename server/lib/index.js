@@ -81,7 +81,6 @@ export * from './ffmpeg.js';
 export * from './pythonSetup.js';
 
 // === Networking ===
-export * from './certMeta.js';
 export * from './fetchWithTimeout.js';
 export * from './httpClient.js';
 export * from './httpsState.js';
