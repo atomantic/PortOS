@@ -10,6 +10,8 @@
 
 ## Fixed
 
+- **Sharing/annotation-merge hardening — 5 v2.1.0 residue items.** Outgoing annotation manifests now honor per-bucket `displayNameOverride` (previously all buckets got the global name); peer payloads with missing/invalid `updatedAt` are dropped on import instead of winning LWW via a `now`-fallback; future-skewed peer timestamps are clamped to local-now to stop one bad clock from ratcheting every subsequent merge; `peerInstanceId === 'unknown'` (or empty) is refused on import to match the existing outgoing-path guard; and `exportAnnotationsToBucket` now skips both the asset-dir scan AND the record write when local has no annotations and no prior record exists, so a fresh-install annotation edit doesn't fan an empty manifest into every auto-merge bucket.
+
 ## Removed
 
 - **`CODEX5.5_REVIEW.md`** at repo root — obsolete now that the concrete bugs are shipped and the strategic items are tracked in PLAN.md.

@@ -6,8 +6,10 @@
  * entries stamp the *global* name (no per-bucket override) so the name is
  * consistent across every bucket the note flows into.
  *
- * exporter.js#resolveSourceName layers a per-bucket `displayNameOverride`
- * short-circuit on top of this for manifest envelopes.
+ * `resolveBucketSourceName(bucket)` layers a per-bucket `displayNameOverride`
+ * short-circuit on top of the global name for manifest envelopes. Used by
+ * both the share-bucket exporter and the annotation-sync flush so every
+ * outgoing manifest honors the same override.
  *
  * Result is memoized for `CACHE_TTL_MS` so hot annotation paths (sync flush,
  * bucket export, every setAnnotation) don't re-read settings.json off disk
@@ -63,3 +65,9 @@ export async function resolveGlobalDisplayName() {
 }
 
 export const resolveLocalAuthorName = resolveGlobalDisplayName;
+
+/** Resolve the bucket-effective display name (per-bucket override → global identity). */
+export async function resolveBucketSourceName(bucket) {
+  if (bucket?.displayNameOverride) return bucket.displayNameOverride;
+  return resolveGlobalDisplayName();
+}

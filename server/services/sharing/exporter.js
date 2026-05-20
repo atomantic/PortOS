@@ -30,13 +30,7 @@ import { getInstanceId } from '../instances.js';
 import { getSettings } from '../settings.js';
 import { getProducedByVersion } from './version.js';
 import { isStr } from '../../lib/storyBible.js';
-import { resolveGlobalDisplayName } from './annotationIdentity.js';
-
-/** Resolve the bucket-effective display name (per-bucket override → global identity). */
-async function resolveSourceName(bucket) {
-  if (bucket.displayNameOverride) return bucket.displayNameOverride;
-  return resolveGlobalDisplayName();
-}
+import { resolveBucketSourceName as resolveSourceName } from './annotationIdentity.js';
 
 /**
  * Best-effort cap on the bucket's manifest directory after each export.
