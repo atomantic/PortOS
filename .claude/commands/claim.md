@@ -103,11 +103,13 @@ Use `feat:` / `fix:` / `refactor:` / `chore:` / etc. per conventional commit pre
 **Remove the item from PLAN.md outright.** The audit trail for shipped work lives in `git log` and `.changelog/` — slashdo v2.18.0 retired the DONE.md archive, and PortOS follows the same convention. Do NOT leave a checked `- [x]` behind in PLAN.md — that's only the convention for items intentionally left as a design log (rejected items, items with rich completion notes the human wants preserved on the active plan, etc.).
 
 1. Remove the picked `- [ ]` line from PLAN.md entirely. If removing it leaves a heading empty, leave the heading alone — section curation is `/do:replan`'s job.
-2. **Add an entry to `.changelog/NEXT.md`** capturing what shipped. Mirror the prose style of other entries in `NEXT.md`. Lead with the slug in brackets so `git log` and `.changelog/` greps line up:
+2. **Add an entry to `.changelog/NEXT.md`** capturing what shipped. **Read `.changelog/README.md`'s "Style Rules" section first and follow it** — these entries become public release notes, not a developer journal. Do NOT mirror the prose style of existing dev-heavy entries in `NEXT.md`; many predate the style rules. Lead with the slug in brackets so `git log` and `.changelog/` greps line up:
 
    ```markdown
-   - **[<slug>] <Title from the PLAN.md line>** — <1–3 sentences on what shipped, key files touched, any caveats>
+   - **[<slug>] <Short, user-facing title>** — <one sentence on the user-visible effect, two if a meaningful "why" needs to land>
    ```
+
+   **Write for a user of the app, not for a coder inside it.** No file paths, no module names, no function/class names, no route paths, no test counts ("85/85 tests pass"), no internal data shapes, no "Touched:" footers, no line numbers. If the change has no user-visible effect (internal refactor, test-only addition, dependency cleanup), keep the entry to one terse sentence under **Changed** describing the maintenance value — don't pad with implementation detail.
 
    The slug is immutable (per [lib/slashdo/lib/plan-id-format.md](../../lib/slashdo/lib/plan-id-format.md)). Bracketing it makes the change findable via `git log --grep='<slug>'` and `grep -rn '<slug>' .changelog/`.
 
