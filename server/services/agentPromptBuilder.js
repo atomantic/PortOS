@@ -17,6 +17,7 @@ import { getActiveProvider } from './providers.js';
 import { runPromptThroughProvider } from '../lib/promptRunner.js';
 import { readJSONFile, loadSlashdoFile, PATHS, tryReadFile } from '../lib/fileUtils.js';
 import { DEFAULT_REVIEWER } from '../lib/validation.js';
+import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { metaStringOr } from './agentState.js';
 import * as jiraService from './jira.js';
 import { emitLog } from './cosEvents.js';
@@ -153,7 +154,7 @@ ${hints.map(h => `- ${h}`).join('\n')}
  * else (`api`: LM Studio, raw OpenAI/Anthropic) needs the full pasted-in
  * context because it has no native filesystem access.
  */
-const LIGHT_CONTEXT_PROVIDER_TYPES = new Set(['tui', 'cli']);
+const LIGHT_CONTEXT_PROVIDER_TYPES = new Set([PROVIDER_TYPES.TUI, PROVIDER_TYPES.CLI]);
 
 /**
  * Build the shared task block — the description plus optional `**Target App**`
@@ -365,9 +366,9 @@ export function buildCompletionGuidelineBullet({
  *   pass `openPR: false` to `cleanupAgentWorktree` to avoid double-firing.
  */
 export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo = null, isTruthyMetaFn = (v) => v === true || v === 'true', options = {}) {
-  const providerType = options.providerType || 'api';
+  const providerType = options.providerType || PROVIDER_TYPES.API;
   const providerId = options.providerId || null;
-  const isTui = providerType === 'tui';
+  const isTui = providerType === PROVIDER_TYPES.TUI;
 
   if (LIGHT_CONTEXT_PROVIDER_TYPES.has(providerType)) {
     return buildLightContextPrompt(task, workspaceDir, worktreeInfo, isTruthyMetaFn, { isTui, providerId });

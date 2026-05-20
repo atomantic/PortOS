@@ -1,12 +1,31 @@
 import { describe, it, expect } from 'vitest';
 import {
   CODEX_CONFIGURED_DEFAULT,
+  PROVIDER_TYPES,
   filterSelectableModels,
   isTuiProvider,
   isCliProvider,
   isProcessProvider,
   providerTypeClass,
 } from './providers.js';
+import { PROVIDER_TYPES as SERVER_PROVIDER_TYPES } from '../../../server/lib/aiToolkit/constants.js';
+
+describe('PROVIDER_TYPES', () => {
+  it('exposes the three provider-type values', () => {
+    expect(PROVIDER_TYPES).toEqual({ CLI: 'cli', TUI: 'tui', API: 'api' });
+  });
+
+  // The client mirror exists because aiToolkit is server-only (the directory is
+  // kept self-contained for upstream sync hygiene). A drift here would let one
+  // side read a provider type the other doesn't recognize.
+  it('matches the server-side enum (mirror must stay in lockstep)', () => {
+    expect({ ...PROVIDER_TYPES }).toEqual({ ...SERVER_PROVIDER_TYPES });
+  });
+
+  it('is frozen so callers cannot mutate the shared enum', () => {
+    expect(Object.isFrozen(PROVIDER_TYPES)).toBe(true);
+  });
+});
 
 describe('filterSelectableModels', () => {
   it('drops the codex-configured-default sentinel', () => {
