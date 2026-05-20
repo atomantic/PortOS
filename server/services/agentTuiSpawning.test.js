@@ -88,12 +88,16 @@ vi.mock('../lib/providerModels.js', () => ({
 // Shrink buffer thresholds so the truncation tests can trip them with tiny
 // inputs. Real values (640 KB raw, 10 MB output) would force tests to push
 // millions of bytes through the spawner; the wiring under test is identical.
+// OUTPUT_BUFFER_HEADROOM is intentionally 1 byte so ANY appendLine call
+// trips it — otherwise the output-buffer overflow test would assert on the
+// byte count of the two spawn-startup string literals (which would silently
+// stop tripping if those strings change).
 vi.mock('../lib/tuiHandshake.js', async (importOriginal) => {
   const actual = await importOriginal();
   return {
     ...actual,
-    OUTPUT_BUFFER_HEADROOM: 50,
-    OUTPUT_BUFFER_CAP: 20,
+    OUTPUT_BUFFER_HEADROOM: 1,
+    OUTPUT_BUFFER_CAP: 1,
     RAW_BUFFER_HEADROOM: 200,
     RAW_BUFFER_CAP: 100,
   };
@@ -478,9 +482,9 @@ describe('spawnTuiAgent runtime', () => {
   // ── 7. Output-buffer truncation warning + metadata flag ─────────────────────
   // outputBuffer is filled via appendLine, which fires on initial spawn
   // (session-started + open-shell-tab) plus the prompt-pasted notice. With
-  // the mocked 50-byte HEADROOM the second spawn line crosses the cap, so
-  // the wiring is exercised on every spawn — but only ONCE per run
-  // regardless of how many subsequent lines arrive.
+  // the mocked 1-byte HEADROOM the first spawn line trips the cap, so the
+  // wiring is exercised on every spawn — but only ONCE per run regardless
+  // of how many subsequent lines arrive.
   it('outputBuffer overflow: warns once and writes outputBufferTruncated:true to agent metadata', async () => {
     runSpawn();
     await flushMicrotasks();
