@@ -383,7 +383,7 @@ const LIST_ID = 'universe-selector-list';
 const OPTION_ID_PREFIX = 'universe-option-';
 const CREATE_OPTION_ID = 'universe-option-create';
 
-function UniverseSelector({ universes, selectedId, value, onChange, onPick, onCreate, busy }) {
+export function UniverseSelector({ universes, selectedId, value, onChange, onPick, onCreate, busy }) {
   const wrapRef = useRef(null);
   const [open, setOpen] = useState(false);
   const [activeIdx, setActiveIdx] = useState(0);
@@ -395,14 +395,24 @@ function UniverseSelector({ universes, selectedId, value, onChange, onPick, onCr
   const trimmed = (value || '').trim();
   const lower = trimmed.toLowerCase();
 
+  // When the input still holds the currently selected universe's name, the
+  // user opened the dropdown to browse — not to search for that exact name
+  // (which, after excluding the selected universe itself, would always be
+  // empty). Treat this as an unfiltered browse so they see the other options.
+  const selectedName = useMemo(() => {
+    if (!selectedId || !Array.isArray(universes)) return '';
+    return (universes.find((u) => u.id === selectedId)?.name || '').trim().toLowerCase();
+  }, [universes, selectedId]);
+  const browsing = !!selectedName && lower === selectedName;
+
   // Exclude current — clicking it would be a navigation no-op.
   const filtered = useMemo(() => {
     if (!Array.isArray(universes) || universes.length === 0) return [];
     return universes
       .filter((u) => u.id !== selectedId)
-      .filter((u) => !lower || (u.name || '').toLowerCase().includes(lower))
+      .filter((u) => browsing || !lower || (u.name || '').toLowerCase().includes(lower))
       .slice(0, 20);
-  }, [universes, selectedId, lower]);
+  }, [universes, selectedId, lower, browsing]);
 
   // exactMatch still considers the current one so renaming-to-same doesn't
   // surface a misleading Create option.

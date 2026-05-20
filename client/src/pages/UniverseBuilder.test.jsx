@@ -3,7 +3,7 @@ import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
 
-import { CategoryEditor, TrunkView, OtherTab } from './UniverseBuilder';
+import { CategoryEditor, TrunkView, OtherTab, UniverseSelector } from './UniverseBuilder';
 
 // MemoryRouter wrapper — UniverseBuilder.jsx imports react-router-dom hooks at
 // module scope, so the test harness needs a router context even when the
@@ -179,5 +179,71 @@ describe('OtherTab — Auto-sort button', () => {
     // The disabled state must visibly block re-entry, not just rely on the
     // page-level autoSortingRef guard (which the user can't see).
     expect(screen.queryByRole('button', { name: /^Auto-sort with AI$/i })).toBeNull();
+  });
+});
+
+describe('UniverseSelector — open-while-selected', () => {
+  const universes = [
+    { id: 'u1', name: 'Cyberpunk 2099', starterPrompt: 'Neon rain' },
+    { id: 'u2', name: 'Salt Run', starterPrompt: 'Foundry city' },
+    { id: 'u3', name: 'Choir Awakens', starterPrompt: 'Empty cathedral' },
+  ];
+
+  it('lists the other universes when the dropdown is opened on a selected one', async () => {
+    const user = userEvent.setup();
+    renderWithRouter(
+      <UniverseSelector
+        universes={universes}
+        selectedId="u1"
+        value="Cyberpunk 2099"
+        onChange={() => {}}
+        onPick={() => {}}
+        onCreate={() => {}}
+      />
+    );
+
+    await user.click(screen.getByRole('button', { name: /Open universe list/i }));
+    const list = screen.getByRole('listbox');
+    expect(within(list).getByText('Salt Run')).toBeInTheDocument();
+    expect(within(list).getByText('Choir Awakens')).toBeInTheDocument();
+    expect(within(list).queryByText(/No matches/i)).toBeNull();
+    // Selected universe stays out of the list (clicking it would no-op).
+    expect(within(list).queryByText('Cyberpunk 2099')).toBeNull();
+    // Input matches an existing name exactly, so no Create row.
+    expect(within(list).queryByText(/Create/i)).toBeNull();
+  });
+
+  it('filters by the typed query as soon as the user starts typing', async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const { rerender } = renderWithRouter(
+      <UniverseSelector
+        universes={universes}
+        selectedId="u1"
+        value="Cyberpunk 2099"
+        onChange={onChange}
+        onPick={() => {}}
+        onCreate={() => {}}
+      />
+    );
+
+    await user.click(screen.getByRole('combobox'));
+    // Parent owns `value` — simulate the controlled-input update from onChange.
+    rerender(
+      <MemoryRouter>
+        <UniverseSelector
+          universes={universes}
+          selectedId="u1"
+          value="Salt"
+          onChange={onChange}
+          onPick={() => {}}
+          onCreate={() => {}}
+        />
+      </MemoryRouter>
+    );
+
+    const list = screen.getByRole('listbox');
+    expect(within(list).getByText('Salt Run')).toBeInTheDocument();
+    expect(within(list).queryByText('Choir Awakens')).toBeNull();
   });
 });
