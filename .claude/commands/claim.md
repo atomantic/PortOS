@@ -146,17 +146,23 @@ git commit -m "docs([<slug>]): remove from PLAN.md and log to changelog"
       | `codex`  | `codex exec -` (prompt + diff via stdin) |
       | `gemini` | `gemini -p "$PROMPT"` (diff via stdin) |
       | `claude` | `claude -p - ` (prompt + diff via stdin) |
-   4. **Review-and-fix loop** — max 5 iterations (same guardrail spirit as the Copilot loop's 10-iteration cap; CLI passes converge faster). Each iteration:
+   4. **Review-and-fix loop — converge to mutual agreement, no iteration cap.** Loop until BOTH the main agent and the review CLI agree the PR is ready to merge. The agent (you) decides when the review is producing real value vs. nit-grade churn; the review CLI decides when nothing actionable remains. Each iteration:
       ```bash
       # 1. Capture the latest diff
       gh pr diff "${PR_NUM}" > /tmp/claim-${SLUG}-pr.diff
 
       # 2. Build the review prompt — point the CLI at the code-review checklist used by
-      #    /do:pr's local gate so findings match the project's convention.
+      #    /do:pr's local gate so findings match the project's convention. Include a
+      #    running summary of prior iterations' findings + fixes so the reviewer
+      #    doesn't relitigate decisions you've already deferred to PLAN.md, and
+      #    ask it to flag PR-blocking severity explicitly.
       cat > /tmp/claim-${SLUG}-prompt.md <<EOF
-Review the following PR diff against PortOS conventions in CLAUDE.md and the checklist at lib/slashdo/lib/code-review-checklist.md. Report findings in this format:
-- [SEVERITY] file:line — issue. Suggested fix: ...
-End with a one-line verdict: either "CLEAN — no actionable findings" or "FINDINGS — N actionable items".
+Review the following PR diff against PortOS conventions in CLAUDE.md and the checklist at lib/slashdo/lib/code-review-checklist.md. Report findings as:
+- [SEVERITY] file:line — issue. Suggested fix: ... PR-blocking? (Y/N)
+End with a one-line verdict: either "CLEAN — no actionable findings" or "FINDINGS — N actionable items (X PR-blocking)".
+
+Context: iteration <N>. Prior iterations flagged + fixed:
+<bulleted summary of prior findings, what got fixed, what got deferred to PLAN.md, what was counter-argued>
 
 --- DIFF ---
 $(cat /tmp/claim-${SLUG}-pr.diff)
@@ -164,15 +170,15 @@ EOF
 
       # 3. Run the chosen CLI against the prompt
       <CLI_CMD for REVIEWER> < /tmp/claim-${SLUG}-prompt.md > /tmp/claim-${SLUG}-review.md
-
-      # 4. Inspect the review:
-      #    - If it ends with "CLEAN — no actionable findings", break the loop.
-      #    - If only nit-level findings remain (style/naming, no correctness/security/contract impact),
-      #      record them as deferred-work in PLAN.md and break.
-      #    - Otherwise: apply the suggested fixes in the worktree, commit
-      #      (`fix([<slug>]): address <reviewer> review`), push, and re-loop.
       ```
-   5. After 5 iterations without convergence, stop and report the remaining findings to the user — do not loop indefinitely. Same guardrail philosophy as the Copilot sub-agent's "ask before continuing past 10".
+
+      **Loop-exit decision tree** (your call as the main agent):
+      - Review says "CLEAN — no actionable findings" → break the loop, you AND the reviewer agree, proceed to merge.
+      - Review has only nit / style / naming findings with no correctness / security / contract / scope impact → record in PLAN.md as follow-ups, break the loop. Note in the merge commit that the reviewer's nits are parked.
+      - Review has any PR-blocking finding (correctness bug, silent data loss, security gap, scope-creep risk) → apply the suggested fix in the worktree, commit (`fix([<slug>]): address <reviewer> review`), push, and re-loop with an updated context summary.
+      - Review is now relitigating decisions you've already counter-argued or deferred (same finding raised in a prior iter and you chose not to act on it) → break the loop AND restate in the merge commit why each open finding was rejected. Don't get trapped in churn the reviewer thinks is novel.
+
+      **When you're past the point where the reviewer is finding useful issues**, but want one last confirmation before merging, run a final pass with a context summary that lists every prior fix and explicitly asks "is the diff correctness-converged for this PR's scope, or is there anything correctness-critical left that should block merge?" — a CLEAN verdict on that prompt is your green light. The convergence handshake is the goal, not a fixed iteration count.
 
 3. **Encode the slug in the PR title** for grep-ability if it's not already there:
    ```bash
