@@ -13,7 +13,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Loader2, ImagePlus, WandSparkles, Lock, Unlock, Shirt, Plus, Trash2, ChevronDown, ChevronRight, Star, Square, BookOpen } from 'lucide-react';
 import useMediaJobProgress from '../../hooks/useMediaJobProgress';
-import useFieldDraft from '../../hooks/useFieldDraft';
+import useRowDraft from '../../hooks/useRowDraft';
 import MediaJobThumb from './MediaJobThumb';
 import EntryCard from '../universe/EntryCard';
 import EntryThumbSlot from '../universe/EntryThumbSlot';
@@ -96,14 +96,9 @@ function SourceSeriesChip({ sourceSeriesId, seriesName }) {
   );
 }
 
-// One wardrobe row — per-field drafts live inside `useFieldDraft` so the
-// state belongs to the row instance, not an indexed map in the parent.
-// `onCommit('name'|'description', value)` lets the parent decide between
-// patching an existing row, promoting a pending row once name is non-empty,
-// or skipping a no-op.
+// Parent decides patch-vs-promote on `nextRow.name` non-empty; see `useRowDraft`.
 function WardrobeRow({ wardrobe, editable, onCommit, onRemove }) {
-  const nameDraft = useFieldDraft(wardrobe.name, (v) => onCommit('name', v));
-  const descDraft = useFieldDraft(wardrobe.description, (v) => onCommit('description', v));
+  const { draftFor, setDraft, commit } = useRowDraft(wardrobe, onCommit);
   if (!editable) {
     return (
       <div className="space-y-1">
@@ -119,9 +114,9 @@ function WardrobeRow({ wardrobe, editable, onCommit, onRemove }) {
       <div className="flex items-center gap-1.5">
         <input
           type="text"
-          value={nameDraft.value}
-          onChange={nameDraft.onChange}
-          onBlur={nameDraft.onBlur}
+          value={draftFor('name')}
+          onChange={(e) => setDraft('name', e.target.value)}
+          onBlur={() => commit('name')}
           placeholder="Outfit name (e.g. Wedding)"
           className="flex-1 min-w-0 px-1.5 py-0.5 text-xs bg-port-bg border border-port-border rounded text-white"
           maxLength={BIBLE_LIMITS.WARDROBE_NAME_MAX}
@@ -136,9 +131,9 @@ function WardrobeRow({ wardrobe, editable, onCommit, onRemove }) {
         </button>
       </div>
       <textarea
-        value={descDraft.value}
-        onChange={descDraft.onChange}
-        onBlur={descDraft.onBlur}
+        value={draftFor('description')}
+        onChange={(e) => setDraft('description', e.target.value)}
+        onBlur={() => commit('description')}
         placeholder="What's the character wearing? (image-gen-ready prose)"
         rows={2}
         className="w-full px-1.5 py-0.5 text-xs bg-port-bg border border-port-border rounded text-white"
@@ -149,9 +144,11 @@ function WardrobeRow({ wardrobe, editable, onCommit, onRemove }) {
 }
 
 // Wardrobes (A2) — collapsed summary by default; click to expand into an
-// inline editor when `editable`. Per-field edits are buffered inside each
-// `WardrobeRow` via `useFieldDraft`, so a keystroke doesn't fire a
-// universe-wide round-trip per character.
+// inline editor when `editable`. Per-row edits are buffered inside each
+// `WardrobeRow` via `useRowDraft`, so a keystroke doesn't fire a
+// universe-wide round-trip per character. The ride-along merge means a
+// fast desc-blur after a name keystroke ships both columns together, so the
+// row promotes correctly even if the user never explicitly blurs name first.
 function WardrobeSection({ wardrobes, editable, onChange }) {
   const [open, setOpen] = useState(false);
   // Pending new rows live entirely client-side until the user types a name
@@ -168,28 +165,22 @@ function WardrobeSection({ wardrobes, editable, onChange }) {
   const summary = merged.map((w) => w.name).filter(Boolean).join(', ');
   const isPending = (idx) => idx >= wardrobes.length;
 
-  const commit = (idx, field, value) => {
+  const commit = (idx, nextRow) => {
     if (isPending(idx)) {
       const pendingIdx = idx - wardrobes.length;
-      const current = pendingNew[pendingIdx] || { name: '', description: '' };
-      if ((current[field] || '') === value) return;
-      const nextPending = pendingNew.map((p, i) => i === pendingIdx ? { ...p, [field]: value } : p);
-      // Promote on name-non-empty. The pending row already carries a
-      // server-shaped `wd-<uuid>` id (minted client-side in `addOne`) so
-      // it persists verbatim — and crucially, the React key stays stable
-      // across promotion so the `WardrobeRow` instance doesn't unmount
-      // and lose any uncommitted description draft buffered inside its
-      // `useFieldDraft` hook.
-      if (field === 'name' && value.trim()) {
-        setPendingNew(nextPending.filter((_, i) => i !== pendingIdx));
-        onChange([...wardrobes, nextPending[pendingIdx]]);
+      // Stable React key across promotion — `w.id` was minted server-shaped
+      // in `addOne` so it round-trips verbatim, which keeps `WardrobeRow`
+      // mounted across the pending → persisted swap and preserves any
+      // in-flight sibling draft in its `useRowDraft` buffer.
+      if (nextRow.name?.trim()) {
+        setPendingNew(pendingNew.filter((_, i) => i !== pendingIdx));
+        onChange([...wardrobes, nextRow]);
       } else {
-        setPendingNew(nextPending);
+        setPendingNew(pendingNew.map((p, i) => i === pendingIdx ? nextRow : p));
       }
       return;
     }
-    if ((wardrobes[idx]?.[field] || '') === value) return;
-    onChange(wardrobes.map((w, i) => (i === idx ? { ...w, [field]: value } : w)));
+    onChange(wardrobes.map((w, i) => (i === idx ? nextRow : w)));
   };
 
   const removeAt = (idx) => {
@@ -231,7 +222,7 @@ function WardrobeSection({ wardrobes, editable, onChange }) {
               key={w.id || i}
               wardrobe={w}
               editable={editable}
-              onCommit={(field, value) => commit(i, field, value)}
+              onCommit={(nextRow) => commit(i, nextRow)}
               onRemove={() => removeAt(i)}
             />
           ))}

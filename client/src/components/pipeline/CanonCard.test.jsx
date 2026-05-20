@@ -124,4 +124,26 @@ describe('CanonCard — wardrobe pending-row promotion', () => {
     fireEvent.blur(nameInput);
     expect(onPatchEntry).not.toHaveBeenCalled();
   });
+
+  it('promotes via ride-along when description blurs first with a pending name draft', () => {
+    // Sibling-draft ride-along: useRowDraft ships BOTH columns on either
+    // commit, so a fast desc-blur after typing a name (without ever blurring
+    // the name input) still promotes the row with name intact. Pre-useRowDraft
+    // this case stayed in pendingNew because description's commit didn't see
+    // the name draft.
+    const onPatchEntry = vi.fn();
+    renderEditable(onPatchEntry);
+    fireEvent.click(screen.getByText(/Outfits/));
+    fireEvent.click(screen.getByText(/Add outfit/));
+    const nameInput = screen.getByPlaceholderText(/Outfit name/);
+    const descInput = screen.getByPlaceholderText(/What's the character wearing/);
+    fireEvent.change(nameInput, { target: { value: 'Wedding' } });
+    fireEvent.change(descInput, { target: { value: 'Cream linen' } });
+    fireEvent.blur(descInput);
+    expect(onPatchEntry).toHaveBeenCalledTimes(1);
+    const [, patch] = onPatchEntry.mock.calls[0];
+    expect(patch.wardrobes).toHaveLength(1);
+    expect(patch.wardrobes[0].name).toBe('Wedding');
+    expect(patch.wardrobes[0].description).toBe('Cream linen');
+  });
 });
