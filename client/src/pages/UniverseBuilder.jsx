@@ -39,13 +39,14 @@ import EntryThumbSlot from '../components/universe/EntryThumbSlot';
 import useMediaJobProgress from '../hooks/useMediaJobProgress';
 import MediaPreview from '../components/media/MediaPreview';
 import useImagePreviewActions from '../hooks/useImagePreviewActions';
+import usePreviewRoute from '../hooks/usePreviewRoute';
 import { useMediaAnnotations } from '../hooks/useMediaAnnotations';
 import { listImageGallery } from '../services/apiImageVideo';
 import TabPills from '../components/ui/TabPills';
 import { deriveAvailableBackends, IMAGE_GEN_MODE } from '../lib/imageGenBackends';
 import { PIPELINE_IMAGE_DEFAULTS, readPipelineImageSettings } from '../lib/pipelineImageDefaults';
 import { normalizeSlugline } from '../lib/scenePrompt';
-import { hasCanonDescriptorContent } from '../lib/canonPrompt';
+import { hasCanonDescriptorContent, descriptorForCanonEntry } from '../lib/canonPrompt';
 import { upsertByIdPrepend } from '../lib/upsertByIdPrepend';
 import { BIBLE_LIMITS } from '../lib/bibleLimits';
 
@@ -693,11 +694,15 @@ export default function UniverseBuilder() {
   );
 
   const [runs, setRuns] = useState([]);
-  // Page-level lightbox state for variation + composite-sheet thumbs. Canon
-  // entries route through `UniverseCanonSection`'s own MediaPreview; this
-  // one covers the category-bucket rows so clicking a variation thumb opens
-  // the same full-detail modal the gallery / history uses.
-  const [preview, setPreview] = useState(null);
+  // Page-level lightbox state. Single MediaPreview at this level covers
+  // EVERY thumb on the page: variations, composite sheets, canon imageRefs,
+  // and character reference sheets — so clicking any image opens the same
+  // full-detail modal History / Collections / ImageGen use, with the same
+  // actions (Refine / Remix / SendToVideo / Clean / AddToCollection /
+  // Download / notes). Canon previews used to live inside UniverseCanonSection
+  // and showed only a refine/add/download subset against the character
+  // description; lifting state up here is what unifies them. URL-driven
+  // (`?preview=<filename>`) via `usePreviewRoute(previewItems)` below.
   // Filename → full image-metadata-sidecar record (prompt, negativePrompt,
   // modelId, width, height, seed, etc.). Hydrates `previewItems` with the
   // ACTUAL prompt that was used to render the image — without this the
@@ -782,8 +787,44 @@ export default function UniverseBuilder() {
       const refs = Array.isArray(s?.imageRefs) ? s.imageRefs : [];
       for (const f of refs) pushFilename(f, `Composite · ${s.label}`);
     }
+    // Canon refs — characters / places / objects. Hydrate from the gallery
+    // sidecar so the modal shows the ACTUAL render prompt (the same one the
+    // History page sees), not just the character description. The descriptor
+    // string is only used as a fallback label when no sidecar exists (legacy
+    // canon renders without metadata). Character reference sheets live in a
+    // different static prefix (`/data/image-refs/`) so they get a dedicated
+    // `canon-sheet:<filename>` key + don't collide with gallery entries.
+    const canonKinds = [
+      { key: 'characters', singular: 'character' },
+      { key: 'places', singular: 'place' },
+      { key: 'objects', singular: 'object' },
+    ];
+    for (const kind of canonKinds) {
+      const list = Array.isArray(draft?.[kind.key]) ? draft[kind.key] : [];
+      for (const entry of list) {
+        const descriptor = descriptorForCanonEntry(kind.key, entry) || '';
+        const fallbackLabel = `${entry.name}${descriptor ? `: ${descriptor}` : ''}`;
+        const refs = Array.isArray(entry?.imageRefs) ? entry.imageRefs : [];
+        for (const f of refs) pushFilename(f, fallbackLabel);
+        if (kind.key === 'characters' && typeof entry.referenceSheetImageRef === 'string' && entry.referenceSheetImageRef) {
+          const filename = entry.referenceSheetImageRef;
+          if (!seen.has(filename)) {
+            seen.add(filename);
+            out.push({
+              key: `canon-sheet:${filename}`,
+              kind: 'image',
+              filename,
+              previewUrl: `/data/image-refs/${filename}`,
+              downloadUrl: `/data/image-refs/${filename}`,
+              prompt: `${entry.name} — character reference sheet`,
+            });
+          }
+        }
+      }
+    }
     return out;
   }, [draft, galleryByFilename]);
+  const [preview, setPreview] = usePreviewRoute(previewItems);
   // Shared preview action handlers (Remix / SendToVideo / Clean) so the
   // universe lightbox opens the same downstream pages with the same params
   // as the History grid + Image Gen page. `onCleanComplete` splices the
@@ -799,11 +840,22 @@ export default function UniverseBuilder() {
       });
     }, []),
   });
-  const openVariationPreview = useCallback((filename) => {
+  // Generic filename → preview opener used by every clickable thumb on the
+  // page (variation grids, composite sheets, canon entries, character
+  // reference sheets). `opts.isSheet` forces a key match against the
+  // `canon-sheet:` prefix so a basename collision with a gallery image
+  // can't route the lightbox to `/data/images/` instead of
+  // `/data/image-refs/`.
+  const openPreviewByFilename = useCallback((filename, opts) => {
     if (!filename) return;
-    const match = previewItems.find((i) => i.filename === filename);
+    const targetKey = opts?.isSheet ? `canon-sheet:${filename}` : null;
+    const match = (targetKey && previewItems.find((i) => i.key === targetKey))
+      || previewItems.find((i) => i.filename === filename);
     if (match) setPreview(match);
-  }, [previewItems]);
+  }, [previewItems, setPreview]);
+  // Legacy name retained for the variation/composite call sites that pass a
+  // single filename — same implementation, different label.
+  const openVariationPreview = openPreviewByFilename;
 
   // Two-click delete: first click flips this to the world id; a second
   // click within the live render confirms. Avoids window.confirm per
@@ -1980,6 +2032,7 @@ export default function UniverseBuilder() {
               onBulkRenderBucket={(bucket) => runRender({ promptMode: 'variations', selection: { [bucket]: 'all' } })}
               onRenderVariation={(bucket, v) => runRender({ promptMode: 'variations', selection: { [bucket]: [v.label] } })}
               onPreviewVariation={openVariationPreview}
+              onCanonPreview={openPreviewByFilename}
               pendingByEntryId={pendingHeadByEntryId}
               externalPendingByEntryId={pendingHeadByEntryId}
               onPendingCleared={clearPendingForEntry}
@@ -2127,18 +2180,17 @@ export default function UniverseBuilder() {
         )}
       </section>
 
-      {/* Page-level lightbox for variation + composite-sheet thumb clicks.
-          UniverseCanonSection owns its own MediaPreview for canon entries
-          (which routes character reference sheets through a different
-          static prefix), so we deliberately don't include canon refs in
-          `previewItems` above — they're handled there. Mounted at the page
-          level (not inside RenderTab) so the lightbox state is in scope; it
-          renders regardless of active tab because variation thumbs in the
-          Cast / Places / Objects / Other tabs all open the same modal.
-          Action handlers (Remix / SendToVideo / Clean / Continue) and the
-          annotations channel come from the shared `useImagePreviewActions`
-          + `useMediaAnnotations` hooks so the surface matches History /
-          MediaCollectionDetail / ImageGen exactly. */}
+      {/* Single page-level lightbox for every thumb on the page: variation
+          grids, composite sheets, canon imageRefs (characters / places /
+          objects), and character reference sheets. UniverseCanonSection used
+          to host its own MediaPreview with a reduced action set + character
+          description in place of the prompt; that fork is gone — canon
+          clicks now bubble up through `openPreviewByFilename` and hit this
+          modal, so the canon surface matches History / Collections / ImageGen
+          exactly (Refine / Remix / SendToVideo / Clean / AddToCollection /
+          Download / notes, all hydrated from the gallery sidecar). URL-driven
+          via `usePreviewRoute` so `?preview=<filename>` deep-links open the
+          same modal on reload. */}
       <MediaPreview
         preview={preview}
         setPreview={setPreview}
@@ -3307,6 +3359,7 @@ export function TrunkView({
   onBulkRenderBucket, onRenderVariation, onBulkRenderTrunk,
   onAddBucket,
   onPreviewVariation = null,
+  onCanonPreview = null,
   pendingByEntryId = {},
   // Same pending head-map, passed through to UniverseCanonSection so canon
   // rows show a spinner when a batch `/render` queues canon prompts.
@@ -3413,6 +3466,7 @@ export function TrunkView({
           kindFilter={trunk.kind}
           externalPendingByEntryId={externalPendingByEntryId}
           onExternalCanonJobSettled={onPendingCleared}
+          onPreview={onCanonPreview}
         />
       ) : null}
 

@@ -44,6 +44,7 @@ grep -i "what you want to do" client/src/hooks/README.md
 | `useMediaCompletionRefresh` | Refetch on image/video completion socket events. | A list view that needs to refresh when new media lands. |
 | `useOpenClawAttachments` | File attachment handling (base64, size-capped). | OpenClaw attachment UI. |
 | `useImagePreviewActions` | Shared MediaPreview / MediaLightbox action handlers. | New surface that exposes the same 4 preview actions. |
+| `usePreviewRoute` | URL-driven `[preview, setPreview]` via `?preview=<filename>`. | Any page hosting `<MediaPreview>` — gives the preview a deep-link. |
 | `useImageGenQueue` | Work-scoped live queue of in-flight image renders. | Pages that show per-work image-gen queue state. |
 
 ## Sockets & lifecycle

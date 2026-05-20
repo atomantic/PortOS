@@ -33,6 +33,7 @@ import { composeStyledPrompt } from '../../../lib/composeStyledPrompt';
 import { composeCleanPlatePrompt } from '../../../lib/cleanPlatePrompt';
 import { universeStylePreset } from '../../../lib/universeStylePreset';
 import useMounted from '../../../hooks/useMounted';
+import usePreviewRoute from '../../../hooks/usePreviewRoute';
 import CanonCard from '../CanonCard';
 import MediaPreview from '../../media/MediaPreview';
 import Drawer from '../../Drawer';
@@ -85,8 +86,9 @@ export default function NounsStage({ issue, series }) {
   const [renderingJobs, setRenderingJobs] = useState({});
   // Shared lightbox state — a flat items list across every kind's imageRefs
   // powers prev/next nav so the user can page through every reference image
-  // without closing/reopening.
-  const [preview, setPreview] = useState(null);
+  // without closing/reopening. URL-driven via `usePreviewRoute(previewItems)`
+  // so the modal is deep-linkable (`?preview=<filename>`); the hook is
+  // declared just after the `previewItems` build below.
 
   // Canon lives on the linked universe. An orphan series (no universeId)
   // renders the link-required gate instead of this body, so by the time
@@ -112,11 +114,12 @@ export default function NounsStage({ issue, series }) {
     }
     return items;
   }, [universe]);
+  const [preview, setPreview] = usePreviewRoute(previewItems);
   const openPreview = useCallback((filename) => {
     if (!filename) return;
     const match = previewItems.find((i) => i.filename === filename);
     if (match) setPreview(match);
-  }, [previewItems]);
+  }, [previewItems, setPreview]);
 
   const availableBackends = useMemo(
     () => deriveAvailableBackends(sysSettings, { excludeExternal: true }),

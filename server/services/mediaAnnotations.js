@@ -34,14 +34,19 @@ function emitLocalChange(key) {
   }
 }
 
+const isValidIsoTimestamp = (v) => typeof v === 'string' && !Number.isNaN(Date.parse(v));
+
 function sanitizeAuthorEntry(raw) {
   if (!raw || typeof raw !== 'object') return null;
   const starred = raw.starred === true;
   const note = typeof raw.note === 'string' ? raw.note.slice(0, NOTE_MAX_LENGTH) : '';
   if (!starred && !note) return null;
-  const updatedAt = typeof raw.updatedAt === 'string' && !Number.isNaN(Date.parse(raw.updatedAt))
-    ? raw.updatedAt
-    : new Date().toISOString();
+  // Read-path callers (legacy migration, on-disk hydration) tolerate a missing
+  // updatedAt and stamp `now` so the entry is still usable. The merge path
+  // pre-validates AND clamps `updatedAt` in `mergePeerAnnotations` before
+  // calling here so the LWW gate sees the clamped value for both content
+  // entries and tombstones.
+  const updatedAt = isValidIsoTimestamp(raw.updatedAt) ? raw.updatedAt : new Date().toISOString();
   const authorName = typeof raw.authorName === 'string' && raw.authorName.trim()
     ? raw.authorName.trim().slice(0, 120)
     : '';
@@ -142,18 +147,43 @@ export async function listLocalAuthorAnnotations() {
 export async function mergePeerAnnotations(payload) {
   if (!payload || typeof payload !== 'object') return { changed: [], projections: new Map() };
   const peerInstanceId = typeof payload.instanceId === 'string' ? payload.instanceId : null;
-  if (!peerInstanceId) return { changed: [], projections: new Map() };
+  // Reject empty or sentinel `'unknown'` peer ids on import. The outgoing path
+  // already guards (`annotationsSync.flushAll` early-returns on `'unknown'`)
+  // but a hand-crafted manifest or a peer in an inconsistent state could ship
+  // one — without this guard, every such peer would alias into the same
+  // `'unknown'` bucket and clobber each other on every merge.
+  if (!peerInstanceId || peerInstanceId === 'unknown') return { changed: [], projections: new Map() };
   const localInstanceId = await getInstanceId().catch(() => null);
   if (peerInstanceId === localInstanceId) return { changed: [], projections: new Map() };
   const incoming = payload.annotations && typeof payload.annotations === 'object'
     ? payload.annotations : {};
   const all = await readAll();
   const changed = [];
+  const clampUpdatedAtTo = Date.now();
   for (const [key, rawEntry] of Object.entries(incoming)) {
     if (!isValidKey(key)) continue;
-    const sane = sanitizeAuthorEntry({ ...rawEntry, authorName: rawEntry?.authorName || payload.authorName });
+    // A malformed payload (missing/invalid updatedAt) must be ignored entirely
+    // rather than falling through to the tombstone branch — `sanitize` returns
+    // null for BOTH "empty tombstone" and "malformed", and the tombstone branch
+    // would otherwise delete the prior peer entry on any garbage payload.
+    if (!isValidIsoTimestamp(rawEntry?.updatedAt)) continue;
+    // Clamp the incoming timestamp here so BOTH content entries AND tombstones
+    // go through the same LWW gate (sanitize returns null for tombstones, so
+    // we lose access to the timestamp downstream). A future-skewed peer can't
+    // dominate forever — its clamped tombstone competes fairly against a
+    // newer-prior peer entry.
+    const incomingMs = Math.min(Date.parse(rawEntry.updatedAt), clampUpdatedAtTo);
+    const incomingUpdatedAt = new Date(incomingMs).toISOString();
     const prior = all[key]?.authors?.[peerInstanceId] ?? null;
+    // LWW gate applies to both content writes and tombstone deletes. Without
+    // the gate, an older tombstone (or a stale replay of an old delete) would
+    // erase a newer prior peer entry.
+    if (prior && (prior.updatedAt || '') >= incomingUpdatedAt) continue;
+    const sane = sanitizeAuthorEntry(
+      { ...rawEntry, authorName: rawEntry?.authorName || payload.authorName, updatedAt: incomingUpdatedAt },
+    );
     if (!sane) {
+      // Tombstone wins LWW — delete the prior peer entry.
       if (prior) {
         delete all[key].authors[peerInstanceId];
         if (Object.keys(all[key].authors).length === 0) delete all[key];
@@ -161,7 +191,6 @@ export async function mergePeerAnnotations(payload) {
       }
       continue;
     }
-    if (prior && (prior.updatedAt || '') >= sane.updatedAt) continue;
     if (!all[key]) all[key] = { authors: {} };
     all[key].authors[peerInstanceId] = sane;
     changed.push(key);

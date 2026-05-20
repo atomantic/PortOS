@@ -28,6 +28,7 @@ import { getSettings, updateSettings } from '../../../services/apiSystem';
 import { listImageModels } from '../../../services/apiImageVideo';
 import MediaJobThumb from '../MediaJobThumb';
 import MediaPreview from '../../media/MediaPreview';
+import usePreviewRoute from '../../../hooks/usePreviewRoute';
 import Drawer from '../../Drawer';
 import ImageGenSettingsForm from '../../imageGen/ImageGenSettingsForm';
 import ExtractCanonButton from './ExtractCanonButton';
@@ -179,8 +180,8 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
   const [sysSettings, setSysSettings] = useState(null);
   // Shared lightbox state. PageRow reports its rendered filename up via
   // `onFilenameKnown` so the parent can build a navigable items list keyed by
-  // page order — preview prev/next walks rendered pages in page order.
-  const [preview, setPreview] = useState(null);
+  // page order — preview prev/next walks rendered pages in page order. URL-
+  // driven via `usePreviewRoute(previewItems)` below so the modal deep-links.
   const [filenameByJobId, setFilenameByJobId] = useState({});
   const onFilenameKnown = useCallback((jobId, filename) => {
     if (!jobId || !filename) return;
@@ -200,34 +201,31 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
   }), []);
   const previewItems = useMemo(() => {
     const pageList = Array.isArray(comicPages.pages) ? comicPages.pages : [];
-    return pageList
-      .map((p, idx) => {
-        // Prefer the hi-res final when present; fall back to proof (or legacy)
-        // so users still see something while the final renders or before they
-        // upgrade a page to a final render.
-        const slot = getPreferredSlot(p);
-        if (!slot?.jobId) return null;
+    const out = [];
+    // Include BOTH proof + final slots when both exist so URL-driven
+    // resolution by filename picks the slot whose prompt produced *this*
+    // image. Filenames are unique per render so the two entries never
+    // collide. Final is listed first so a deep-link to a page that has
+    // both shows the hi-res variant.
+    pageList.forEach((p, idx) => {
+      for (const slot of [getFinalSlot(p), getProofSlot(p)]) {
+        if (!slot?.jobId) continue;
         const filename = slot.filename || filenameByJobId[slot.jobId];
-        if (!filename) return null;
-        return buildPageItem(idx, slot, filename);
-      })
-      .filter(Boolean);
+        if (!filename) continue;
+        // De-dupe in case a legacy record stores the same filename in both
+        // slots (older pre-proof renders).
+        if (out.some((i) => i.filename === filename)) continue;
+        out.push(buildPageItem(idx, slot, filename));
+      }
+    });
+    return out;
   }, [comicPages.pages, filenameByJobId, buildPageItem]);
-  const openPreview = useCallback((pageIndex, filename, page) => {
+  const [preview, setPreview] = usePreviewRoute(previewItems);
+  const openPreview = useCallback((pageIndex, filename) => {
     if (!filename) return;
-    // Proof and final renders carry their own prompts (the user can re-render
-    // one without the other), so match the clicked filename against each slot
-    // to surface the prompt that produced *this* image. A slot's filename can
-    // still be null while the job is in-flight, so also consult the
-    // jobId→filename map the thumbs report up via onFilenameKnown.
-    const finalSlot = getFinalSlot(page);
-    const proofSlot = getProofSlot(page);
-    const matches = (slot) => !!slot && (
-      slot.filename === filename || (slot.jobId && filenameByJobId[slot.jobId] === filename)
-    );
-    const slot = [finalSlot, proofSlot].find(matches) || getPreferredSlot(page);
-    setPreview(buildPageItem(pageIndex, slot, filename));
-  }, [buildPageItem, filenameByJobId]);
+    const match = previewItems.find((i) => i.filename === filename);
+    if (match) setPreview(match);
+  }, [previewItems, setPreview]);
   const availableBackends = useMemo(
     () => deriveAvailableBackends(sysSettings, { excludeExternal: true }),
     [sysSettings],

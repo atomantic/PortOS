@@ -19,7 +19,7 @@ import { join, basename } from 'path';
 import { copyFile, readFile, writeFile, stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import { PATHS, ensureDir, atomicWrite, readJSONFile, sha256File } from '../../lib/fileUtils.js';
-import { getBucket, ensureBucketLayout, bucketBlobsDir, bucketBlobPath, bucketBlobSidecarPath, imageSidecarName } from './buckets.js';
+import { getBucket, ensureBucketLayout, bucketBlobsDir, bucketBlobPath, bucketBlobSidecarPath, bucketBlobIndexPath, imageSidecarName, isHexHash } from './buckets.js';
 import { buildManifest, writeManifest, pruneBucketManifests } from './manifest.js';
 import { listSeries, getSeries } from '../pipeline/series.js';
 import { listIssues } from '../pipeline/issues.js';
@@ -30,13 +30,7 @@ import { getInstanceId } from '../instances.js';
 import { getSettings } from '../settings.js';
 import { getProducedByVersion } from './version.js';
 import { isStr } from '../../lib/storyBible.js';
-import { resolveGlobalDisplayName } from './annotationIdentity.js';
-
-/** Resolve the bucket-effective display name (per-bucket override → global identity). */
-async function resolveSourceName(bucket) {
-  if (bucket.displayNameOverride) return bucket.displayNameOverride;
-  return resolveGlobalDisplayName();
-}
+import { resolveBucketSourceName as resolveSourceName } from './annotationIdentity.js';
 
 /**
  * Best-effort cap on the bucket's manifest directory after each export.
@@ -78,22 +72,67 @@ const ASSET_SOURCE_DIRS = Object.freeze({
   'image-ref': PATHS.imageRefs,
 });
 
-async function copyAssetIfPresent(filename, kind, bucketPath) {
+/**
+ * Per-bucket sidecar mapping `<sourcePath>:<mtimeMs>:<size> → <hash>` so a
+ * re-export of an unchanged asset skips both `sha256File` (multi-GB stream
+ * read) and the redundant `copyFile`. mtime change invalidates because it's
+ * part of the key. The cache lives next to the blobs so it shares lifetime
+ * with the bucket. See `[sharing-exporter-cache-sourcefile-hash-by-mtime]`.
+ *
+ * `withAssetHashCache` owns the load/mutate/save lifetime: it loads once,
+ * runs the body, and only writes when entries were added. Pre-write, it
+ * re-reads from disk and merges so a sibling exporter (e.g. `exportByKind`
+ * fanning out parallel `exportSeries` against the same bucket) doesn't get
+ * its accumulated entries clobbered — same-key collisions converge to the
+ * same hash since the hash derives from bytes and the key embeds mtime+size.
+ */
+async function loadAssetHashCache(bucketPath) {
+  const raw = await readJSONFile(bucketBlobIndexPath(bucketPath), {}, { logError: false });
+  return (raw && typeof raw === 'object' && !Array.isArray(raw)) ? raw : {};
+}
+
+// Per-bucket cache-write tail — serializes the re-load → merge → atomicWrite
+// step so two concurrent exporters (e.g. `exportByKind` fanning out parallel
+// `exportSeries`) accumulate entries instead of clobbering. Mirrors the
+// `issueWriteTail` pattern in `pipeline/issues.js`.
+const cacheWriteTails = new Map();
+
+async function withAssetHashCache(bucketPath, fn) {
+  const cache = await loadAssetHashCache(bucketPath);
+  const initialKeys = Object.keys(cache).length;
+  const result = await fn(cache);
+  if (Object.keys(cache).length !== initialKeys) {
+    const prevTail = cacheWriteTails.get(bucketPath) || Promise.resolve();
+    const tail = prevTail.then(async () => {
+      const onDisk = await loadAssetHashCache(bucketPath);
+      await atomicWrite(bucketBlobIndexPath(bucketPath), { ...onDisk, ...cache });
+    });
+    cacheWriteTails.set(bucketPath, tail);
+    await tail;
+  }
+  return result;
+}
+
+async function copyAssetIfPresent(filename, kind, bucketPath, cache) {
   if (!filename || typeof filename !== 'string') return null;
   const base = basename(filename);
   if (!base || base !== filename) return null; // refuse path traversal
   const sourceDir = ASSET_SOURCE_DIRS[kind] || PATHS.images;
   await ensureDir(bucketBlobsDir(bucketPath));
   const sourcePath = join(sourceDir, base);
-  if (!existsSync(sourcePath)) {
+  const info = await stat(sourcePath).catch(() => null);
+  if (!info) {
     console.log(`⚠️ sharing.exporter: asset not found locally, skipping: ${sourcePath}`);
     return null;
   }
-  const hash = await sha256File(sourcePath);
-  const blobPath = bucketBlobPath(bucketPath, hash);
-  if (!existsSync(blobPath)) {
-    await copyFile(sourcePath, blobPath);
+  const cacheKey = `${sourcePath}:${info.mtimeMs}:${info.size}`;
+  let hash = cache && isHexHash(cache[cacheKey]) ? cache[cacheKey] : null;
+  if (!hash || !existsSync(bucketBlobPath(bucketPath, hash))) {
+    hash = await sha256File(sourcePath);
+    if (cache) cache[cacheKey] = hash;
   }
+  const blobPath = bucketBlobPath(bucketPath, hash);
+  if (!existsSync(blobPath)) await copyFile(sourcePath, blobPath);
   if (kind === 'image') {
     const sidecarSource = join(sourceDir, imageSidecarName(base));
     if (existsSync(sidecarSource)) {
@@ -155,7 +194,7 @@ async function jobFromSidecar(jobId) {
  * per-image `.metadata.json` sidecar for jobs older than the 24h archive TTL.
  * Returns the asset refs (image filenames) discovered.
  */
-async function exportMediaJobAndAsset(jobId, bucketPath, mediaRecordsDir) {
+async function exportMediaJobAndAsset(jobId, bucketPath, mediaRecordsDir, cache) {
   if (!jobId || !isStr(jobId)) return [];
   const job = getJob(jobId) || await jobFromSidecar(jobId);
   if (!job) {
@@ -180,20 +219,20 @@ async function exportMediaJobAndAsset(jobId, bucketPath, mediaRecordsDir) {
   // result.filename is the canonical single-output shape; some video paths use
   // result.videoPath / result.thumbnail; handle both defensively.
   if (job.result?.filename) {
-    const ref = await copyAssetIfPresent(job.result.filename, assetKind, bucketPath);
+    const ref = await copyAssetIfPresent(job.result.filename, assetKind, bucketPath, cache);
     if (ref) refs.push(ref);
   }
   if (job.result?.videoPath) {
     // videoPath is a filesystem path; we only need its basename here since
     // copyAssetIfPresent rebuilds the source dir.
-    const ref = await copyAssetIfPresent(basename(job.result.videoPath), 'video', bucketPath);
+    const ref = await copyAssetIfPresent(basename(job.result.videoPath), 'video', bucketPath, cache);
     if (ref) refs.push(ref);
   }
   if (Array.isArray(job.result?.images)) {
     for (const im of job.result.images) {
       const fname = im?.filename || im?.path;
       if (!fname) continue;
-      const ref = await copyAssetIfPresent(basename(fname), assetKind, bucketPath);
+      const ref = await copyAssetIfPresent(basename(fname), assetKind, bucketPath, cache);
       if (ref) refs.push(ref);
     }
   }
@@ -378,13 +417,15 @@ export async function exportSeries(seriesId, bucketId, opts = {}) {
 
   // Copy media-job records + their assets — run all four groups in parallel.
   const mediaRecordsDir = join(bucket.path, 'records', 'media');
-  const [jobRefGroups, imageRefs, videoRefs, imageRefRefs] = await Promise.all([
-    Promise.all([...allJobIds].map((jobId) => exportMediaJobAndAsset(jobId, bucket.path, mediaRecordsDir))),
-    Promise.all([...allImageFiles].map((f) => copyAssetIfPresent(f, 'image', bucket.path))),
-    Promise.all([...allVideoFiles].map((f) => copyAssetIfPresent(f, 'video', bucket.path))),
-    Promise.all([...allImageRefFiles].map((f) => copyAssetIfPresent(f, 'image-ref', bucket.path))),
-  ]);
-  const assetRefs = [...jobRefGroups.flat(), ...imageRefs.filter(Boolean), ...videoRefs.filter(Boolean), ...imageRefRefs.filter(Boolean)];
+  const assetRefs = await withAssetHashCache(bucket.path, async (cache) => {
+    const [jobRefGroups, imageRefs, videoRefs, imageRefRefs] = await Promise.all([
+      Promise.all([...allJobIds].map((jobId) => exportMediaJobAndAsset(jobId, bucket.path, mediaRecordsDir, cache))),
+      Promise.all([...allImageFiles].map((f) => copyAssetIfPresent(f, 'image', bucket.path, cache))),
+      Promise.all([...allVideoFiles].map((f) => copyAssetIfPresent(f, 'video', bucket.path, cache))),
+      Promise.all([...allImageRefFiles].map((f) => copyAssetIfPresent(f, 'image-ref', bucket.path, cache))),
+    ]);
+    return [...jobRefGroups.flat(), ...imageRefs.filter(Boolean), ...videoRefs.filter(Boolean), ...imageRefRefs.filter(Boolean)];
+  });
 
   const manifest = { ...manifestStub, recordIds, assetRefs };
   const filename = await writeManifest(bucket.path, manifest);
@@ -438,13 +479,15 @@ export async function exportUniverse(universeId, bucketId, opts = {}) {
   const allImageRefFiles = new Set(universeRefs.directImageRefFilenames);
 
   const mediaRecordsDir = join(bucket.path, 'records', 'media');
-  const [jobRefGroups, imageRefs, videoRefs, imageRefRefs] = await Promise.all([
-    Promise.all([...allJobIds].map((jobId) => exportMediaJobAndAsset(jobId, bucket.path, mediaRecordsDir))),
-    Promise.all([...allImageFiles].map((f) => copyAssetIfPresent(f, 'image', bucket.path))),
-    Promise.all([...allVideoFiles].map((f) => copyAssetIfPresent(f, 'video', bucket.path))),
-    Promise.all([...allImageRefFiles].map((f) => copyAssetIfPresent(f, 'image-ref', bucket.path))),
-  ]);
-  const assetRefs = [...jobRefGroups.flat(), ...imageRefs.filter(Boolean), ...videoRefs.filter(Boolean), ...imageRefRefs.filter(Boolean)];
+  const assetRefs = await withAssetHashCache(bucket.path, async (cache) => {
+    const [jobRefGroups, imageRefs, videoRefs, imageRefRefs] = await Promise.all([
+      Promise.all([...allJobIds].map((jobId) => exportMediaJobAndAsset(jobId, bucket.path, mediaRecordsDir, cache))),
+      Promise.all([...allImageFiles].map((f) => copyAssetIfPresent(f, 'image', bucket.path, cache))),
+      Promise.all([...allVideoFiles].map((f) => copyAssetIfPresent(f, 'video', bucket.path, cache))),
+      Promise.all([...allImageRefFiles].map((f) => copyAssetIfPresent(f, 'image-ref', bucket.path, cache))),
+    ]);
+    return [...jobRefGroups.flat(), ...imageRefs.filter(Boolean), ...videoRefs.filter(Boolean), ...imageRefRefs.filter(Boolean)];
+  });
 
   const manifest = { ...manifestStub, recordIds: [universe.id], assetRefs };
   const filename = await writeManifest(bucket.path, manifest);
@@ -492,12 +535,14 @@ export async function exportMedia(items, bucketId) {
     return [{ ref, kind, job: getJob(baseId) }];
   });
   const recordIds = resolved.filter((r) => r.job).map((r) => r.job.id);
-  const results = await Promise.all(resolved.map(async (r) => {
-    if (r.job) return exportMediaJobAndAsset(r.job.id, bucket.path, mediaRecordsDir);
-    const copied = await copyAssetIfPresent(r.ref, r.kind, bucket.path);
-    return copied ? [copied] : [];
-  }));
-  const assetRefs = results.flat();
+  const assetRefs = await withAssetHashCache(bucket.path, async (cache) => {
+    const results = await Promise.all(resolved.map(async (r) => {
+      if (r.job) return exportMediaJobAndAsset(r.job.id, bucket.path, mediaRecordsDir, cache);
+      const copied = await copyAssetIfPresent(r.ref, r.kind, bucket.path, cache);
+      return copied ? [copied] : [];
+    }));
+    return results.flat();
+  });
 
   const manifest = { ...manifestStub, recordIds, assetRefs };
   const filename = await writeManifest(bucket.path, manifest);

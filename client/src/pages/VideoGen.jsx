@@ -45,6 +45,7 @@ import FavoritesFilterChip from '../components/media/FavoritesFilterChip';
 import ModelSelect from '../components/ModelSelect';
 import { useMediaCompletionRefresh } from '../hooks/useMediaCompletionRefresh';
 import { useMediaAnnotations } from '../hooks/useMediaAnnotations';
+import usePreviewRoute from '../hooks/usePreviewRoute';
 import {
   getVideoGenStatus, generateVideo, cancelVideoGen,
   listVideoHistory, deleteVideoHistoryItem, setVideoHidden, extractLastFrame,
@@ -183,7 +184,8 @@ export default function VideoGen() {
   }, [incomingWidth, incomingHeight]);
 
   const [history, setHistory] = useState([]);
-  const [preview, setPreview] = useState(null);
+  // `preview` is URL-driven via `usePreviewRoute(previewItems)` — declared
+  // after `previewItems` below so the resolver can match against it.
   const [showHidden, setShowHidden] = useState(false);
   const navigate = useNavigate();
 
@@ -233,6 +235,7 @@ export default function VideoGen() {
     ...galleryVisible.map(normalizeVideo),
     ...(showHidden ? galleryHidden.map(normalizeVideo) : []),
   ], [galleryVisible, galleryHidden, showHidden]);
+  const [preview, setPreview] = usePreviewRoute(previewItems);
 
   const handleDeleteHistory = async (item) => {
     await deleteVideoHistoryItem(item.id).catch((err) => toast.error(err.message || 'Delete failed'));

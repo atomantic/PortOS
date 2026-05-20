@@ -17,6 +17,7 @@ import {
   deleteImage, deleteVideoHistoryItem,
 } from '../services/api';
 import useImagePreviewActions from '../hooks/useImagePreviewActions';
+import usePreviewRoute from '../hooks/usePreviewRoute';
 
 // Hydrate a collection's "<kind>:<ref>" pointer list into the same
 // normalized records MediaCard expects. We do this on the client so the
@@ -53,7 +54,8 @@ export default function MediaCollectionDetail() {
   const [loading, setLoading] = useState(true);
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState('');
-  const [preview, setPreview] = useState(null);
+  // Preview state is URL-driven (`?preview=<filename>`) — see `usePreviewRoute`
+  // call below, declared after `items` so the resolver can match against it.
   const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
@@ -100,6 +102,7 @@ export default function MediaCollectionDetail() {
     () => collection ? hydrate(collection, imagesByName, videosById) : [],
     [collection, imagesByName, videosById]
   );
+  const [preview, setPreview] = usePreviewRoute(items);
 
   const handleRename = async () => {
     const trimmed = nameDraft.trim();

@@ -33,7 +33,6 @@ import { composeCleanPlatePrompt } from '../../lib/cleanPlatePrompt';
 import { useAsyncAction } from '../../hooks/useAsyncAction';
 import useMounted from '../../hooks/useMounted';
 import CanonCard from '../pipeline/CanonCard';
-import MediaPreview from '../media/MediaPreview';
 import { pipelineImageCfgToRenderOpts } from '../../lib/pipelineImageDefaults';
 import { universeStylePreset } from '../../lib/universeStylePreset';
 import { descriptorForCanonEntry } from '../../lib/canonPrompt';
@@ -72,6 +71,11 @@ export default function UniverseCanonSection({
   // queue accumulates completed jobIds forever and a follow-up batch render
   // would show the previous run's image instead of the new spinner.
   onExternalCanonJobSettled = null,
+  // Thumbnail click handler: `(filename, { isSheet? }) => void`. The parent
+  // (UniverseBuilder) owns the lightbox so every page surface shares one
+  // MediaPreview instance with the full action set + sidecar-hydrated prompt.
+  // When null (defensive — should always be supplied) clicks no-op.
+  onPreview = null,
 }) {
   const mountedRef = useMounted();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -87,7 +91,6 @@ export default function UniverseCanonSection({
   const togglingLockRef = useRef(null);
   const [extractText, setExtractText] = useState('');
   const [extractOpen, setExtractOpen] = useState(false);
-  const [preview, setPreview] = useState(null);
   // Per-canon-entry usage map: `{ characters: { [entryId]: [{seriesId, seriesName, issueCount, ...}] }, ... }`.
   // Loaded lazily — usage is a derived view and shouldn't block the initial
   // paint. Refetched after mutations that change the canon shape (extract /
@@ -180,53 +183,15 @@ export default function UniverseCanonSection({
     return out;
   }, [universe, usage, seriesFilter]);
 
-  const previewItems = useMemo(() => {
-    if (!universe) return [];
-    const out = [];
-    for (const kind of KINDS) {
-      const list = Array.isArray(universe[kind.key]) ? universe[kind.key] : [];
-      for (const entry of list) {
-        const refs = Array.isArray(entry.imageRefs) ? entry.imageRefs : [];
-        for (const filename of refs) {
-          out.push({
-            key: `canon:${filename}`,
-            kind: 'image',
-            filename,
-            previewUrl: `/data/images/${filename}`,
-            downloadUrl: `/data/images/${filename}`,
-            prompt: `${entry.name}: ${kind.descFor(entry) || ''}`.trim().replace(/:\s*$/, ''),
-          });
-        }
-        // Reference sheets live in data/image-refs/ — different static prefix
-        // than the gallery. Built into the same list so the existing
-        // MediaPreview lightbox + arrow navigation work uniformly.
-        if (kind.key === 'characters' && typeof entry.referenceSheetImageRef === 'string' && entry.referenceSheetImageRef) {
-          const filename = entry.referenceSheetImageRef;
-          out.push({
-            key: `canon-sheet:${filename}`,
-            kind: 'image',
-            filename,
-            previewUrl: `/data/image-refs/${filename}`,
-            downloadUrl: `/data/image-refs/${filename}`,
-            prompt: `${entry.name} — character reference sheet`,
-          });
-        }
-      }
-    }
-    return out;
-  }, [universe]);
-
+  // Thumbnail click → bubbles to the parent's `onPreview(filename, opts)` so
+  // the page-level MediaPreview opens the unified lightbox (full action set,
+  // sidecar-hydrated prompt). `isSheet` is forwarded so the parent can route
+  // reference-sheet clicks through the `/data/image-refs/` static prefix
+  // instead of `/data/images/`.
   const openPreview = useCallback((filename, opts) => {
-    if (!filename) return;
-    // Match on the kind-tagged key when the caller indicates a sheet —
-    // gallery `imageRefs[]` and `referenceSheetImageRef` can theoretically
-    // collide on basename, in which case a filename-only find would route
-    // the lightbox to the wrong static prefix (/data/images vs /data/image-refs).
-    const targetKey = opts?.isSheet ? `canon-sheet:${filename}` : `canon:${filename}`;
-    const match = previewItems.find((i) => i.key === targetKey)
-      || previewItems.find((i) => i.filename === filename);
-    if (match) setPreview(match);
-  }, [previewItems]);
+    if (!filename || typeof onPreview !== 'function') return;
+    onPreview(filename, opts);
+  }, [onPreview]);
 
   const [runExtract, extracting] = useAsyncAction(
     () => extractUniverseCanon(universeId, { corpus: extractText.trim() }),
@@ -674,7 +639,6 @@ export default function UniverseCanonSection({
         />
       ))}
 
-      <MediaPreview preview={preview} setPreview={setPreview} items={previewItems} />
     </section>
   );
 }

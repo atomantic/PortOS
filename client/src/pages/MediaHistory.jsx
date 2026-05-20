@@ -15,6 +15,7 @@ import { normalizeImage, normalizeVideo } from '../components/media/normalize';
 import { useMediaCompletionRefresh } from '../hooks/useMediaCompletionRefresh';
 import { useMediaAnnotations } from '../hooks/useMediaAnnotations';
 import useImagePreviewActions from '../hooks/useImagePreviewActions';
+import usePreviewRoute from '../hooks/usePreviewRoute';
 import {
   listVideoHistory, deleteVideoHistoryItem, stitchVideos,
   upscaleVideo,
@@ -36,9 +37,12 @@ export default function MediaHistory() {
   const [stitchMode, setStitchMode] = useState(false);
   const [selected, setSelected] = useState([]); // video ids
   const [stitching, setStitching] = useState(false);
-  const [preview, setPreview] = useState(null);
   const [favoritesOnly, setFavoritesOnly] = useState(false);
   const { annotations, toggleStar, updateAnnotation, getCardProps } = useMediaAnnotations();
+  // URL-driven preview (`?preview=<filename>`) so the lightbox is deep-linkable.
+  // Match against the full `items` list (not the filtered view) so a shared link
+  // still opens even when the recipient's filter doesn't include that image.
+  const [preview, setPreview] = usePreviewRoute(items);
 
   const refresh = useCallback(async ({ silent = false } = {}) => {
     if (!silent) setLoading(true);

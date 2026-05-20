@@ -26,6 +26,7 @@ import LoraPicker from '../components/imageGen/LoraPicker';
 import MediaJobsQueue from '../components/media/MediaJobsQueue';
 import { useMediaCompletionRefresh } from '../hooks/useMediaCompletionRefresh';
 import { useMediaAnnotations } from '../hooks/useMediaAnnotations';
+import usePreviewRoute from '../hooks/usePreviewRoute';
 import {
   Image as ImageIcon, Sparkles, Download, RefreshCw, Settings as SettingsIcon,
   AlertTriangle, X, Film,
@@ -107,7 +108,8 @@ export default function ImageGen() {
   const [models, setModels] = useState([]);
   const [availableLoras, setAvailableLoras] = useState([]);
   const [gallery, setGallery] = useState([]);
-  const [preview, setPreview] = useState(null);
+  // `preview` is URL-driven via `usePreviewRoute(previewItems)` — declared
+  // after `previewItems` below so the resolver can match against it.
   const [showHidden, setShowHidden] = useState(false);
   const [favoritesOnly, setFavoritesOnly] = useState(false);
   const { annotations, updateAnnotation, getCardProps } = useMediaAnnotations();
@@ -537,6 +539,7 @@ export default function ImageGen() {
     ...visibleGallery.map(normalizeImage),
     ...(showHidden ? hiddenGallery.map(normalizeImage) : []),
   ], [visibleGallery, hiddenGallery, showHidden]);
+  const [preview, setPreview] = usePreviewRoute(previewItems);
 
   // Snapshots current form state into a server payload + POSTs it to the
   // mediaJobQueue. Returns the queue's response ({ jobId, position, ... }).
