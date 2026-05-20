@@ -2718,22 +2718,24 @@ export function CategoryEditor({
             <button
               onClick={onRenderCategory}
               disabled={!canRender || variations.length === 0}
-              className="text-xs px-2 py-1 bg-port-accent/15 hover:bg-port-accent/25 disabled:opacity-30 disabled:cursor-not-allowed text-port-accent rounded flex items-center gap-1 min-h-[40px] sm:min-h-0"
+              className="p-1 text-port-accent hover:bg-port-accent/20 disabled:opacity-30 disabled:cursor-not-allowed rounded"
               title={variations.length === 0 ? 'Add variations first' : 'Render this category'}
+              aria-label="Render this category"
             >
-              <Play size={12} /> Render
+              <Play size={14} />
             </button>
           )}
           {onAssignBucketKind && requiresTargetKind && (
             <div className="relative" ref={assignWrapRef}>
               <button
                 onClick={() => setAssignOpen((v) => !v)}
-                className="text-xs px-2 py-1 bg-port-accent/15 hover:bg-port-accent/25 text-port-accent rounded flex items-center gap-1 min-h-[40px] sm:min-h-0"
+                className="p-1 text-port-accent hover:bg-port-accent/20 rounded"
                 title="Move this bucket into a canon trunk (variations stay in place)"
+                aria-label="Assign bucket to a canon trunk"
                 aria-haspopup="menu"
                 aria-expanded={assignOpen}
               >
-                <FolderTree size={12} /> Assign to…
+                <FolderTree size={14} />
               </button>
               {assignOpen && (
                 <div
@@ -2765,13 +2767,13 @@ export function CategoryEditor({
               <button
                 onClick={() => setGenOpen((v) => !v)}
                 disabled={generating}
-                className="text-xs px-2 py-1 bg-port-accent/15 hover:bg-port-accent/25 disabled:opacity-30 disabled:cursor-not-allowed text-port-accent rounded flex items-center gap-1 min-h-[40px] sm:min-h-0"
+                className="p-1 text-port-accent hover:bg-port-accent/20 disabled:opacity-30 disabled:cursor-not-allowed rounded"
                 title="Ask the LLM for more variations in this category"
+                aria-label="Generate more variations"
                 aria-haspopup="menu"
                 aria-expanded={genOpen}
               >
-                {generating ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
-                Generate
+                {generating ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
               </button>
               {genOpen && (
                 <div
