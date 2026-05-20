@@ -89,6 +89,7 @@ grep -i "what you want to do" client/src/hooks/README.md
 | `useCityData` | CyberCity environment data + physics. | CyberCity only. |
 | `useCitySettings` | CyberCity quality presets + persistence. | CyberCity only. |
 | `useDeathClock` | 1-second countdown for death-clock display. | Mortality / death-clock surfaces. |
+| `useNextEvalCountdown` | 1-second countdown to the next CoS evaluation tick. | Chief of Staff "next eval in Xs" displays. |
 | `usePostSession` | Post-render callback scheduling. | Generic post-action chaining. |
 | `useProviderModels` | AI providers + two-step provider→model selection. | Any UI that picks a provider + model. |
 | `useTheme` | Dark/light theme + paired-theme switching. | Theme picker. |

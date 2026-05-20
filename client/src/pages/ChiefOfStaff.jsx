@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useSocket } from '../hooks/useSocket';
 import { useLocalStorageBool } from '../hooks/useLocalStorageBool';
+import useNextEvalCountdown from '../hooks/useNextEvalCountdown';
 import * as api from '../services/api';
 import { Play, Square, Clock, CheckCircle, AlertCircle, Cpu, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Brain, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import toast from '../components/ui/Toast';
@@ -12,7 +13,6 @@ import TabPills from '../components/ui/TabPills';
 import {
   TABS,
   STATE_MESSAGES,
-  useNextEvalCountdown,
   CoSCharacter,
   CyberCoSAvatar,
   SigilCoSAvatar,
