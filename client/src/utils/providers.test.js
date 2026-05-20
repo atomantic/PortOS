@@ -24,6 +24,7 @@ describe('PROVIDER_TYPES', () => {
 
   it('is frozen so callers cannot mutate the shared enum', () => {
     expect(Object.isFrozen(PROVIDER_TYPES)).toBe(true);
+    expect(Object.isFrozen(SERVER_PROVIDER_TYPES)).toBe(true);
   });
 });
 
