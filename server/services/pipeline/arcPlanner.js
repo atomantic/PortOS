@@ -1147,11 +1147,17 @@ export function buildSeasonRemap(droppedOldSeasons, newlyMintedSeasons) {
   const oldRemaining = droppedOldSeasons.filter((s) => !remap.has(s.id));
   const newRemaining = newlyMintedSeasons.filter((n) => !claimed.has(n.id));
   if (oldRemaining.length === 1 && newRemaining.length === 1) {
-    // Sanitize titles before logging — LLM-generated text can carry newlines
-    // or control chars that would break the project's single-line logging
-    // convention; fall back to the stable id when the title is empty.
+    // Sanitize titles before logging — LLM-generated text can carry newlines,
+    // C0/C1 control chars, or ANSI escapes that would break the project's
+    // single-line logging convention or corrupt terminal output; fall back to
+    // the stable id when the title is empty after sanitization.
     const safeLabel = (s) => {
-      const t = typeof s.title === 'string' ? s.title.replace(/\s+/g, ' ').trim().slice(0, 60) : '';
+      const raw = typeof s.title === 'string' ? s.title : '';
+      const t = raw
+        .replace(/[\u0000-\u001F\u007F-\u009F]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 60);
       return t || s.id;
     };
     console.warn(
@@ -1159,7 +1165,14 @@ export function buildSeasonRemap(droppedOldSeasons, newlyMintedSeasons) {
     );
     remap.set(oldRemaining[0].id, newRemaining[0].id);
     claimed.add(newRemaining[0].id);
-  } else if (oldRemaining.length && newRemaining.length) {
+  } else if (
+    oldRemaining.length === newRemaining.length
+    && oldRemaining.length > 1
+  ) {
+    // Suppression warn ONLY for the cases where the previous behavior would
+    // have fired the positional fallback (equal counts ≥ 2). Unequal counts
+    // were never positional-fallback candidates, so they don't deserve a
+    // "skipped" message.
     console.warn(
       `⚠️ buildSeasonRemap skipped positional fallback (${oldRemaining.length} old × ${newRemaining.length} new unmatched) — orphan issues route to ungrouped`,
     );

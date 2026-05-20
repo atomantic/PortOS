@@ -1058,6 +1058,18 @@ describe('arcPlanner — buildSeasonRemap', () => {
     warnSpy.mockRestore();
   });
 
+  it('strips C0/C1 control chars and ANSI escapes from titles before logging', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const dropped = [{ id: 'old1', number: 1, title: 'Pre\x1b[31mEvil\x1b[0mSuffix\x07' }];
+    const minted = [{ id: 'new1', number: 2, title: 'Clean\u0085Title' }]; // U+0085 = NEL (C1)
+    planner.buildSeasonRemap(dropped, minted);
+    const msg = warnSpy.mock.calls[0][0];
+    expect(msg).not.toMatch(/[\u0000-\u001F\u007F-\u009F]/);
+    expect(msg).toContain('Pre [31mEvil [0mSuffix');
+    expect(msg).toContain('Clean Title');
+    warnSpy.mockRestore();
+  });
+
   it('drops orphans to null when 2+ unmatched on each side after pass 1/2', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     // Titles diverge AND numbers diverge → Pass 1 (title) and Pass 2 (unique
