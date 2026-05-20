@@ -27,6 +27,7 @@ export * from './graphSimulation.js';
 export * from './clipboard.js';
 export * from './genUtils.js';
 export * from './joinInfluenceList.js';
+export * from './loopbackHost.js';
 export * from './mediaNavigation.js';
 export * from './unsorted.js';
 export * from './upsertByIdPrepend.js';

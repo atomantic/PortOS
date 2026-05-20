@@ -10,24 +10,15 @@
  * the running process is actually serving, which is exactly what the widget
  * should show.
  */
-import { readFileSync, statSync } from 'node:fs';
-import { PATHS, safeJSONParse } from './fileUtils.js';
 import { PORTS } from './ports.js';
 import { getHttpsEnabledAtBoot } from './httpsState.js';
 import { getSelfHost } from './peerSelfHost.js';
-import { certPaths } from '../../lib/certPaths.js';
+import { readCertMeta } from './certMeta.js';
 
-const { meta: META_PATH } = certPaths(PATHS.data);
 // docs/PORTS.md is checked into the repo but the server doesn't serve the
 // docs/ directory, so link out to GitHub for the canonical guide rather than
 // to a 404. The widget shows this as "Learn more →".
 const PORTS_DOCS_URL = 'https://github.com/atomantic/PortOS/blob/main/docs/PORTS.md';
-
-function readCertMeta() {
-  const stat = statSync(META_PATH, { throwIfNoEntry: false });
-  if (!stat) return null;
-  return safeJSONParse(readFileSync(META_PATH, 'utf-8'), null);
-}
 
 // Loopback-only bind hosts — for these, the browser treats the page as
 // "potentially trustworthy" (Secure Contexts spec), so getUserMedia and other

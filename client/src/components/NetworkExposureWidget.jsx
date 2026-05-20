@@ -13,34 +13,7 @@ import {
   CheckCircle
 } from 'lucide-react';
 import * as api from '../services/api';
-
-// Browser secure-context rule mirrored client-side: getUserMedia (and other
-// powerful APIs) are gated on the page origin being HTTPS, localhost, or
-// 127.0.0.1/::1 — anything else (Tailscale IP, LAN IP, plain hostname over
-// HTTP) silently fails. Server-side we know the scheme + bind, but only the
-// browser knows which of those origins it actually loaded from.
-// Browsers report IPv6 `window.location.hostname` with brackets (`[::1]`)
-// while the bare-form `::1` shows up in env-style configs; accept both so
-// the heuristic doesn't false-negative on `http://[::1]:5555`.
-const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
-
-function isLoopbackOrigin() {
-  if (typeof window === 'undefined' || !window.location) return false;
-  return LOOPBACK_HOSTS.has(window.location.hostname);
-}
-
-function describeMicAvailability() {
-  if (typeof window === 'undefined' || !window.location) {
-    return { available: true, reason: 'unknown' };
-  }
-  if (window.location.protocol === 'https:') {
-    return { available: true, reason: 'https' };
-  }
-  if (isLoopbackOrigin()) {
-    return { available: true, reason: 'loopback' };
-  }
-  return { available: false, reason: 'insecure-context' };
-}
+import { isLoopbackOrigin, describeMicAvailability } from '../lib/loopbackHost.js';
 
 function CertModeBadge({ mode, host }) {
   if (mode === 'tailscale') {

@@ -99,6 +99,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 
 | Module | Purpose |
 |---|---|
+| `certMeta.js` | `readCertMeta()` — read `data/certs/meta.json` (mode/hostname/ips) with safe-JSON + missing-file guards. |
 | `httpClient.js` | Fetch-based HTTP client factory (axios.create replacement). |
 | `fetchWithTimeout.js` | `fetch` wrapper with AbortController timeout. |
 | `peerHttpClient.js` | Federation HTTP/Socket.IO client (TLS validation off — Tailnet is the trust boundary). |
