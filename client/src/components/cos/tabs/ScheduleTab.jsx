@@ -466,26 +466,31 @@ function GlobalConfigControls({ taskType, config, onUpdate, onTrigger, onReset, 
         <div className="space-y-2">
           {AGENT_OPTIONS.map(({ field, label, description }) => {
             const enabled = config.taskMetadata?.[field] ?? false;
-            const handleToggle = () => {
-              if (!updating) onUpdate(taskType, { taskMetadata: toggleMetadataField(config.taskMetadata, field) });
-            };
+            const managed = config.managedAgentOptions?.includes(field);
+            const lockedHint = `${label} is managed internally by this task — the agent's prompt handles it.`;
             return (
               <button
                 key={field}
                 type="button"
-                disabled={updating}
+                disabled={updating || managed}
                 aria-pressed={enabled}
-                aria-label={`${enabled ? 'Disable' : 'Enable'} ${label.toLowerCase()}`}
-                className={`w-full flex items-center justify-between gap-3 min-h-[44px] rounded px-2 -mx-2 text-left ${updating ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer hover:bg-port-card/30 active:bg-port-card/50'}`}
-                onClick={handleToggle}
+                aria-label={managed
+                  ? `${label} (managed by task)`
+                  : `${enabled ? 'Disable' : 'Enable'} ${label.toLowerCase()}`}
+                title={managed ? lockedHint : undefined}
+                className={`w-full flex items-center justify-between gap-3 min-h-[44px] rounded px-2 -mx-2 text-left ${updating || managed ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer hover:bg-port-card/30 active:bg-port-card/50'}`}
+                onClick={() => onUpdate(taskType, { taskMetadata: toggleMetadataField(config.taskMetadata, field) })}
               >
                 <div className="min-w-0 flex-1">
-                  <span className="text-sm text-white">{label}</span>
-                  <p className="text-xs text-gray-500">{description}</p>
+                  <span className="text-sm text-white flex items-center gap-2">
+                    {label}
+                    {managed && <span className="text-[10px] px-1 py-0.5 bg-gray-600/30 text-gray-400 rounded">managed</span>}
+                  </span>
+                  <p className="text-xs text-gray-500">{managed ? lockedHint : description}</p>
                 </div>
                 <ToggleSwitch
                   enabled={enabled}
-                  disabled={updating}
+                  disabled={updating || managed}
                   decorative
                 />
               </button>
@@ -599,7 +604,7 @@ function GlobalConfigControls({ taskType, config, onUpdate, onTrigger, onReset, 
   );
 }
 
-const AppOverrideRow = memo(function AppOverrideRow({ app, taskType, globalIntervalType, globalTaskMetadata, override, onUpdate }) {
+const AppOverrideRow = memo(function AppOverrideRow({ app, taskType, globalIntervalType, globalTaskMetadata, managedAgentOptions, override, onUpdate }) {
   const [updating, setUpdating] = useState(false);
   const [cronEditing, setCronEditing] = useState(false);
   const isEnabled = override?.enabled === true;
@@ -691,15 +696,21 @@ const AppOverrideRow = memo(function AppOverrideRow({ app, taskType, globalInter
           {AGENT_OPTIONS.map(({ field, label, shortLabel }) => {
             const effective = override?.taskMetadata?.[field] ?? globalTaskMetadata?.[field] ?? false;
             const hasOverride = override?.taskMetadata?.[field] !== undefined;
+            const managed = managedAgentOptions?.includes(field);
+            const titleText = managed
+              ? `${label}: managed internally by ${taskType}`
+              : `${label}: ${effective ? 'on' : 'off'}${hasOverride ? ' (app override)' : ' (inherited)'}`;
             return (
               <button
                 key={field}
                 onClick={() => handleMetaToggle(field)}
-                disabled={updating}
+                disabled={updating || managed}
                 aria-pressed={effective}
-                aria-label={`${label}: ${effective ? 'on' : 'off'}${hasOverride ? ' (app override)' : ' (inherited)'}`}
-                className={`text-xs px-2 py-1.5 rounded transition-colors shrink-0 min-h-[40px] min-w-[40px] border ${agentOptionButtonClass(effective, hasOverride)}`}
-                title={`${label}: ${effective ? 'on' : 'off'}${hasOverride ? ' (app override)' : ' (inherited)'}`}
+                aria-label={managed
+                  ? `${label}: managed by task`
+                  : `${label}: ${effective ? 'on' : 'off'}${hasOverride ? ' (app override)' : ' (inherited)'}`}
+                className={`text-xs px-2 py-1.5 rounded transition-colors shrink-0 min-h-[40px] min-w-[40px] border ${agentOptionButtonClass(effective, hasOverride)} ${managed ? 'opacity-50 cursor-not-allowed' : ''}`}
+                title={titleText}
               >
                 {shortLabel}
               </button>
@@ -766,6 +777,7 @@ function PerAppOverrideList({ taskType, config, apps, onUpdateOverride, onBulkTo
             taskType={taskType}
             globalIntervalType={config.type}
             globalTaskMetadata={config.taskMetadata}
+            managedAgentOptions={config.managedAgentOptions}
             override={appOverrides[app.id]}
             onUpdate={onUpdateOverride}
           />

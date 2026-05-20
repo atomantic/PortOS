@@ -1757,6 +1757,36 @@ const DEFAULT_TASK_INTERVALS = {
   'reference-watch':     { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { readOnly: true } }
 };
 
+// Agent-options that a task manages internally — UI locks the toggle, and
+// loadSchedule/updateTaskInterval enforce the default value regardless of
+// what's persisted or POSTed. The reasoning lives next to each task above
+// (e.g., plan-task's prompt creates its own claim/<slug> worktree, so a
+// CoS-managed worktree would clobber it).
+export const MANAGED_AGENT_OPTIONS = {
+  'plan-task': ['useWorktree', 'openPR']
+};
+
+function enforceManagedAgentOptions(taskType, config) {
+  const managed = MANAGED_AGENT_OPTIONS[taskType];
+  if (!managed || !config) return false;
+  const defaults = DEFAULT_TASK_INTERVALS[taskType]?.taskMetadata || {};
+  let changed = false;
+  // If the stored config explicitly cleared taskMetadata (or never had it),
+  // we still need the managed fields present — otherwise upstream resolvers
+  // (e.g., cos.js applyAppWorktreeDefault) can flip them on via app defaults.
+  if (!config.taskMetadata || typeof config.taskMetadata !== 'object') {
+    config.taskMetadata = {};
+    changed = true;
+  }
+  for (const field of managed) {
+    if (config.taskMetadata[field] !== defaults[field]) {
+      config.taskMetadata[field] = defaults[field];
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 /**
  * Default schedule data structure (v2 - unified)
  */
@@ -1920,6 +1950,7 @@ export async function loadSchedule() {
   // Populate prompts from defaults if missing, and auto-upgrade stale defaults
   let needsSave = false;
   for (const [taskType, config] of Object.entries(schedule.tasks)) {
+    if (enforceManagedAgentOptions(taskType, config)) needsSave = true;
     if (!config.prompt && DEFAULT_TASK_PROMPTS[taskType]) {
       // No prompt set — initialize with current default and version
       config.prompt = DEFAULT_TASK_PROMPTS[taskType];
@@ -2004,6 +2035,11 @@ export async function updateTaskInterval(taskType, settings) {
     ...schedule.tasks[taskType],
     ...settings
   };
+
+  // Re-assert agent-managed taskMetadata fields after the merge so a PUT that
+  // tries to flip them (UI bypass, hand-edited TASKS.md, direct API call)
+  // gets the locked value back in its response.
+  enforceManagedAgentOptions(taskType, schedule.tasks[taskType]);
 
   await saveSchedule(schedule);
   emitLog('info', `Updated task interval for ${taskType}`, { taskType, settings }, '📅 TaskSchedule');
@@ -2526,6 +2562,11 @@ export async function getScheduleStatus() {
       taskStatus.stagePrompts = interval.taskMetadata.pipeline.stages.map(stage =>
         DEFAULT_TASK_PROMPTS[stage.promptKey] || null
       );
+    }
+
+    // Surface agent-managed flags so the UI can lock the corresponding toggles
+    if (MANAGED_AGENT_OPTIONS[taskType]) {
+      taskStatus.managedAgentOptions = MANAGED_AGENT_OPTIONS[taskType];
     }
 
     status.tasks[taskType] = taskStatus;
