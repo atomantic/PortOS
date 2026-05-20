@@ -12,6 +12,8 @@ _Nothing currently parked — pick the next item from the Backlog._
 
 ### Code quality / dedup (from `/simplify` passes)
 
+- [ ] [strip-stray-tryreadfile-from-instances-mocks] **[LOW][TESTS]** Three `vi.mock('../instances.js', ...)` factories carry a stray `tryReadFile: vi.fn().mockResolvedValue(null)` property — `server/services/mediaAnnotations.test.js:6`-ish (legacy mock shape), `server/services/sharing/integration.test.js:45`, `server/services/sharing/subscriptions.test.js:26`. `instances.js` does not export `tryReadFile` (it's a `fileUtils.js` export), so the key is a no-op copy-paste artifact. Drop it from the three mock factories. Surfaced by /simplify during `[unknown-instance-id-sentinel-extract]`; deferred because that PR was scoped to the sentinel extraction.
+
 ### v2.1.0 pre-release review residue (deferred from main→release multi-agent review, 2026-05-16)
 
 - [ ] [med-pipeline-server-services-pipeline-arcplanner-2] **[MED][PIPELINE]** `server/services/pipeline/arcPlanner.js:929-942` — `buildSeasonRemap` Pass 3 (positional fallback) silently invents wrong mappings when the LLM structurally reshapes the arc. Log a warning when Pass 3 fires; consider only firing when unmatched count ≤ 1.
@@ -23,6 +25,7 @@ _Nothing currently parked — pick the next item from the Backlog._
 - [ ] [med-importer-server-routes-importer-test-js-no] **[MED][IMPORTER]** `server/routes/importer.test.js` — no test pins `ERR_PARTIAL_COMMIT_ISSUES → 207` status mapping. Future refactor that drops the entry from `SERVICE_ERROR_STATUS` would 500 on partial commits and trigger pager alerts (the in-code comment's stated regression).
 - [ ] [med-importer-server-services-importer-test-js-no] **[MED][IMPORTER]** `server/services/importer.test.js` — no test exercises `existingCanonBlock` dedupe wiring. A regression that wires `null` would silently degrade second-pass imports. Assert `mockRunStagedLLM.mock.calls[0][1].existingCanonBlock` contains a seeded character name.
 - [ ] [med-canon-server-services-canonusage-js-zero-test] **[MED][CANON]** `server/services/canonUsage.js` — zero test coverage for `getUniverseCanonUsage`. The "Appears-in sort: issueCount desc + alpha tiebreaker" invariant lives at line ~101 with no test. Add a `canonUsage.test.js`.
+
 ### Better-audit residue
 
 - [ ] [extract-shared-requiretoolkit-helper] **[LOW][CODE]** Three services now carry an identical private `requireToolkit()` helper that throws `ServerError('AI Toolkit not initialized', { status: 503, code: 'AI_TOOLKIT_NOT_INITIALIZED' })` — `server/services/providers.js`, `server/services/runner.js`, `server/services/promptService.js`. Three module-level `let aiToolkitInstance = null` declarations all receive the same toolkit object from `server/index.js` via per-service `setAIToolkit(toolkit)` setters. Candidate consolidation: extract to `server/lib/aiToolkitState.js` exporting `setAIToolkitInstance(toolkit)` + `requireToolkit()` so all three services import the same module-level state. Includes barrel + README row per `server/lib/` maintenance rule. Deferred from `[extract-requiretoolkit-pattern-to-runner-js]` — three callers crosses the threshold but the 8-line helper × 3 sites is low-maintenance enough that this can wait for a fourth caller or somebody actually wanting to consolidate.
