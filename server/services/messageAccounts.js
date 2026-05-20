@@ -2,6 +2,7 @@ import { writeFile } from 'fs/promises';
 import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { ensureDir, PATHS, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
+import { isPlainObject } from '../lib/objects.js';
 
 const ACCOUNTS_FILE = join(PATHS.messages, 'accounts.json');
 
@@ -10,7 +11,7 @@ async function loadAccounts() {
   const content = await tryReadFile(ACCOUNTS_FILE);
   if (!content) return {};
   const parsed = safeJSONParse(content, {}, { context: 'messageAccounts' });
-  return (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : {};
+  return isPlainObject(parsed) ? parsed : {};
 }
 
 async function saveAccounts(accounts) {

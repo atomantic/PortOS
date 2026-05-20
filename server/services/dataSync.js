@@ -10,6 +10,7 @@ import crypto from 'crypto';
 import { writeFile } from 'fs/promises';
 import { join } from 'path';
 import { ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
+import { isPlainObject } from '../lib/objects.js';
 import { mergeUniversesFromSync } from './universeBuilder.js';
 import { mergeSeriesFromSync } from './pipeline/series.js';
 import { mergeIssuesFromSync } from './pipeline/issues.js';
@@ -109,8 +110,7 @@ function mergeDeepUnion(local, remote, timestampField = 'derivedAt') {
     if (key === timestampField) continue;
 
     // Nested objects (markers): union keys, local wins per-key conflicts
-    if (remoteVal && typeof remoteVal === 'object' && !Array.isArray(remoteVal)
-        && localVal && typeof localVal === 'object' && !Array.isArray(localVal)) {
+    if (isPlainObject(remoteVal) && isPlainObject(localVal)) {
       const mergedObj = { ...localVal };
       for (const [k, v] of Object.entries(remoteVal)) {
         if (!(k in mergedObj)) {

@@ -19,6 +19,7 @@ import { join, basename } from 'path';
 import { copyFile, readFile, writeFile, stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import { PATHS, ensureDir, atomicWrite, readJSONFile, sha256File } from '../../lib/fileUtils.js';
+import { isPlainObject } from '../../lib/objects.js';
 import { getBucket, ensureBucketLayout, bucketBlobsDir, bucketBlobPath, bucketBlobSidecarPath, bucketBlobIndexPath, imageSidecarName, isHexHash } from './buckets.js';
 import { buildManifest, writeManifest, pruneBucketManifests } from './manifest.js';
 import { listSeries, getSeries } from '../pipeline/series.js';
@@ -88,7 +89,7 @@ const ASSET_SOURCE_DIRS = Object.freeze({
  */
 async function loadAssetHashCache(bucketPath) {
   const raw = await readJSONFile(bucketBlobIndexPath(bucketPath), {}, { logError: false });
-  return (raw && typeof raw === 'object' && !Array.isArray(raw)) ? raw : {};
+  return isPlainObject(raw) ? raw : {};
 }
 
 // Per-bucket cache-write tail — serializes the re-load → merge → atomicWrite

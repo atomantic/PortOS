@@ -2,6 +2,7 @@ import { join } from 'path';
 import { EventEmitter } from 'events';
 import { readJSONFile, PATHS, ensureDir, atomicWrite } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
+import { isPlainObject } from '../lib/objects.js';
 import { execGh } from './github.js';
 
 const UPDATE_FILE = join(PATHS.data, 'update.json');
@@ -90,7 +91,7 @@ async function loadState() {
   await ensureDir(PATHS.data);
   const raw = await readJSONFile(UPDATE_FILE, defaultState(), { allowArray: false });
   const defaults = defaultState();
-  const stateFromFile = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+  const stateFromFile = isPlainObject(raw) ? raw : {};
   return {
     ...defaults,
     ...stateFromFile,

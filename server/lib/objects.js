@@ -1,6 +1,13 @@
 /**
  * Object utilities.
  *
+ * `isPlainObject(v)` — `true` when `v` is a non-null, non-array `object`. The
+ * project standard for "is this a `{...}`-shaped value?" — used to gate JSON
+ * sanitizers, deep-merge recursion, and LLM-response shape guards. Note that
+ * `Date`, `Map`, class instances, etc. also return `true` (matches every
+ * inline call-site this helper replaces, which all run against `JSON.parse`
+ * output or LLM payloads that never carry exotic prototypes).
+ *
  * `deepMerge` is the project's shared deep-merge — promoted from
  * `services/voice/config.js` after the same pattern was reinvented in
  * `services/meatspacePost.js` and `routes/loras.js#POST /auth/civitai`.
@@ -24,7 +31,7 @@
  * Does NOT mutate `base`.
  */
 
-const isPlainObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+export const isPlainObject = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
 
 // Prototype-pollution guard: skip keys that would mutate Object.prototype
 // when assigned through normal property access. Every current call site

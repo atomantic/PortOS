@@ -18,6 +18,7 @@ import { existsSync } from 'fs';
 import { join } from 'path';
 import { cosEvents, emitLog } from './cosEvents.js';
 import { DAY, ensureDir, HOUR, loadSlashdoFile, readJSONFile, PATHS, safeDate } from '../lib/fileUtils.js';
+import { isPlainObject } from '../lib/objects.js';
 import { getAdaptiveCooldownMultiplier } from './taskLearning.js';
 import { isTaskTypeEnabledForApp, getAppTaskTypeInterval, getActiveApps, getAppTaskTypeOverrides } from './apps.js';
 import { loadState, isImprovementEnabled } from './cosState.js';
@@ -1927,8 +1928,7 @@ export async function loadSchedule() {
     // Only spread if loadedTask.taskMetadata is a plain object to avoid corrupting config
     if (defaultTask.taskMetadata && loadedTask.taskMetadata !== null) {
       const storedMeta = loadedTask.taskMetadata;
-      const isPlainObject = storedMeta && typeof storedMeta === 'object' && !Array.isArray(storedMeta);
-      merged.taskMetadata = { ...defaultTask.taskMetadata, ...(isPlainObject ? storedMeta : {}) };
+      merged.taskMetadata = { ...defaultTask.taskMetadata, ...(isPlainObject(storedMeta) ? storedMeta : {}) };
     }
     mergedTasks[taskType] = merged;
   }

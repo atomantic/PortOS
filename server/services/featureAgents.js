@@ -13,6 +13,7 @@ import { v4 as uuidv4 } from '../lib/uuid.js';
 import { cosEvents } from './cosEvents.js';
 import { ensureDir, PATHS, readJSONFile, atomicWrite } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
+import { isPlainObject } from '../lib/objects.js';
 import { getAppById } from './apps.js';
 const DATA_DIR = PATHS.cos;
 const FA_FILE = join(DATA_DIR, 'feature-agents.json');
@@ -105,7 +106,7 @@ export async function updateFeatureAgent(id, updates) {
     const merged = { ...existing };
 
     for (const [key, value] of Object.entries(updates)) {
-      if (value && typeof value === 'object' && !Array.isArray(value) && existing[key] && typeof existing[key] === 'object') {
+      if (isPlainObject(value) && existing[key] && typeof existing[key] === 'object') {
         merged[key] = { ...existing[key], ...value };
       } else {
         merged[key] = value;

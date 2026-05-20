@@ -3,6 +3,7 @@ import { join } from 'path';
 import crypto from 'crypto';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { ensureDir, PATHS, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
+import { isPlainObject } from '../lib/objects.js';
 import { findOrOpenPage, listCdpPages, isAuthPage, evaluateOnPage } from './browserService.js';
 
 // Compat re-exports — older consumers and test mocks import these from here
@@ -26,7 +27,7 @@ export async function getSelectors() {
   const content = await tryReadFile(SELECTORS_FILE);
   if (!content) return {};
   const parsed = safeJSONParse(content, {}, { context: 'messageSelectors' });
-  return (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : {};
+  return isPlainObject(parsed) ? parsed : {};
 }
 
 export async function updateSelectors(provider, selectors) {

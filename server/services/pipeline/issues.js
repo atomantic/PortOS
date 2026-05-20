@@ -22,6 +22,7 @@ import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { PATHS, atomicWrite, readJSONFile, ensureDir } from '../../lib/fileUtils.js';
 import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
+import { isPlainObject } from '../../lib/objects.js';
 import {
   LENGTH_PROFILE_NAMES, DEFAULT_LENGTH_PROFILE,
   CUSTOM_PAGE_MIN, CUSTOM_PAGE_MAX, CUSTOM_MINUTE_MIN, CUSTOM_MINUTE_MAX,
@@ -670,7 +671,7 @@ export function updateStageWithLatest(issueId, stageId, computeFn) {
   // to write" signal (e.g. stale media-job completion against a re-rendered
   // page). Skip the disk write + emitRecordUpdated so it doesn't trigger
   // a re-export storm in share subscriptions for late no-op events.
-  if (patch && typeof patch === 'object' && !Array.isArray(patch) && Object.keys(patch).length === 0) {
+  if (isPlainObject(patch) && Object.keys(patch).length === 0) {
     return { issue: cur, stage: currentStage };
   }
   const merged = {

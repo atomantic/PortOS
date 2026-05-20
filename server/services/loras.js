@@ -26,6 +26,7 @@ import { pipeline } from 'stream/promises';
 import { basename, join } from 'path';
 import { ServerError } from '../lib/errorHandler.js';
 import { assertSafeFilename, listDirectoryByExtension, PATHS } from '../lib/fileUtils.js';
+import { isPlainObject } from '../lib/objects.js';
 import {
   applyDownloadToken,
   baseModelToRunner,
@@ -62,7 +63,7 @@ export const readSidecar = async (filename) => {
     console.log(`⚠️ LoRA sidecar malformed JSON [${filename}]: ${err?.message || err}`);
     return null;
   }
-  return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+  return isPlainObject(parsed) ? parsed : null;
 };
 
 // Validate a basename so it can't escape PATHS.loras. Delegates to the
