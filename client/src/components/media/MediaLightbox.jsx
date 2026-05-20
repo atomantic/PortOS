@@ -9,12 +9,22 @@ import { useScrollLock } from '../../hooks/useScrollLock';
 import { useSwipeNav } from '../../hooks/useSwipeNav';
 import { copyToClipboard } from '../../lib/clipboard';
 
-// Intentionally NOT migrated to <ui/Modal>. The prev/next buttons sit as
-// viewport-edge siblings of the card (not children of a constrained panel
-// box), and the Esc cascade refineOpen → fullScreen → close is layered
-// into the window keydown handler below. Modal would wrap children in a
-// panel container and add its own Esc listener — both fight this
-// lightbox's existing UX.
+// Intentionally NOT migrated to <ui/Modal> or <components/Drawer>. The
+// prev/next buttons sit as viewport-edge siblings of the card (not children
+// of a constrained panel box), and the Esc cascade refineOpen → fullScreen
+// → close is layered into the window keydown handler below.
+//   - Modal wraps children in a panel container (which the viewport-edge
+//     chevrons can't live inside) and owns Esc via a stack-aware global
+//     handler that stopImmediatePropagation's the keystroke — the lightbox's
+//     own window keydown listener never sees Esc and the cascade dies. Could
+//     be threaded through Modal's onEsc prop, but at the cost of bypassing
+//     the stack model for this one caller.
+//   - Drawer is a right-side slide-in over a normal page; SettingsPane below
+//     is an inline layout sibling of the image, not a slide-in. Its flat Esc
+//     listener also calls onClose directly, racing the lightbox's own window
+//     keydown listener.
+// (A mobile tap-to-open bottom-sheet drawer existed pre-ed0e4859 and was
+// removed because it covered the image area in fullscreen.)
 
 const NOTE_MAX = 2000;
 const NOTE_DEBOUNCE_MS = 500;

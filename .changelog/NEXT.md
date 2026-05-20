@@ -80,4 +80,6 @@
 
 ## Removed
 
+- **[route-medialightbox-settings-drawer-through] Stale PLAN item removed** — the media lightbox's settings panel is no longer a drawer, so there is no drawer migration left to track.
+
 - **`CODEX5.5_REVIEW.md`** at repo root — obsolete now that the concrete bugs are shipped and the strategic items are tracked in PLAN.md.
