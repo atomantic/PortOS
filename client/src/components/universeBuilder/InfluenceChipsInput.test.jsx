@@ -57,9 +57,15 @@ const fireDragEnd = (activeId, overId) => act(() => {
 describe('InfluenceChipsInput — chip-reorder smoke tests', () => {
   it('renders the token chips in order', () => {
     render(<InfluenceChipsInput tokens={['alpha', 'bravo', 'charlie']} onChange={() => {}} />);
-    expect(screen.getByText('alpha')).toBeInTheDocument();
-    expect(screen.getByText('bravo')).toBeInTheDocument();
-    expect(screen.getByText('charlie')).toBeInTheDocument();
+    // Assert DOM order via the per-chip drag-handle aria-labels — they share
+    // a parent ordering with the visible chip text and are uniquely scoped
+    // to each chip, so we don't pick up the label-via-token side text.
+    const handles = screen.getAllByLabelText(/Drag (alpha|bravo|charlie) to reorder/);
+    expect(handles.map((h) => h.getAttribute('aria-label'))).toEqual([
+      'Drag alpha to reorder',
+      'Drag bravo to reorder',
+      'Drag charlie to reorder',
+    ]);
   });
 
   it('calls onChange with the reordered tokens when a chip moves forward', () => {
@@ -106,6 +112,15 @@ describe('InfluenceChipsInput — chip-reorder smoke tests', () => {
     render(<InfluenceChipsInput tokens={['alpha', 'bravo', 'charlie']} onChange={onChange} />);
 
     fireDragEnd('ghost', 'bravo');
+
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('does not call onChange when over id is not in the list (stale target)', () => {
+    const onChange = vi.fn();
+    render(<InfluenceChipsInput tokens={['alpha', 'bravo', 'charlie']} onChange={onChange} />);
+
+    fireDragEnd('alpha', 'ghost');
 
     expect(onChange).not.toHaveBeenCalled();
   });

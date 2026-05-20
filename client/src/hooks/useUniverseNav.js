@@ -1,3 +1,4 @@
+import { useCallback } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 
 // Strips any trailing `/:universeId` (or deeper path) so the result is always
@@ -17,8 +18,8 @@ export function useUniverseNav() {
   const navigate = useNavigate();
   const location = useLocation();
   const basePath = universeBuilderBasePath(location.pathname);
-  return (id) => navigate({
+  return useCallback((id) => navigate({
     pathname: id ? `${basePath}/${encodeURIComponent(id)}` : basePath,
     search: location.search,
-  });
+  }), [navigate, basePath, location.search]);
 }
