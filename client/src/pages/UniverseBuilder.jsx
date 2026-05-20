@@ -1996,16 +1996,21 @@ export default function UniverseBuilder() {
           Download / notes, all hydrated from the gallery sidecar). URL-driven
           via `usePreviewRoute` so `?preview=<filename>` deep-links open the
           same modal on reload. */}
+      {/* Character reference sheets live under /data/image-refs/, but
+          Remix / Send-to-Video / Clean / Continue all resolve filenames
+          under /data/images/ (the gallery). Suppress those handlers when
+          the current preview is a canon-sheet item so the lightbox doesn't
+          offer actions that would 404 on the bare filename. */}
       <MediaPreview
         preview={preview}
         setPreview={setPreview}
         items={previewItems}
         annotations={annotations}
         updateAnnotation={updateAnnotation}
-        onRemix={previewActions.handleRemix}
-        onSendToVideo={previewActions.handleSendToVideo}
-        onClean={(item) => previewActions.handleClean(item?.raw || item)}
-        onContinue={(item) => previewActions.handleContinue(item?.raw || item)}
+        onRemix={preview?.key?.startsWith('canon-sheet:') ? undefined : previewActions.handleRemix}
+        onSendToVideo={preview?.key?.startsWith('canon-sheet:') ? undefined : previewActions.handleSendToVideo}
+        onClean={preview?.key?.startsWith('canon-sheet:') ? undefined : (item) => previewActions.handleClean(item?.raw || item)}
+        onContinue={preview?.key?.startsWith('canon-sheet:') ? undefined : (item) => previewActions.handleContinue(item?.raw || item)}
       />
     </div>
   );

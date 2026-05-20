@@ -16,6 +16,13 @@ export default defineConfig({
       '../scripts/**/*.test.js',
       '../lib/**/*.test.js',
     ],
+    // The slashdo submodule ships its own node:test suites; vitest can't
+    // parse them and the broad `../lib/**` glob would otherwise pick them up
+    // as "no test suite found" failures that break --bail=1 CI runs.
+    exclude: [
+      '**/node_modules/**',
+      '../lib/slashdo/**',
+    ],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'text-summary', 'html'],
