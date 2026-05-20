@@ -228,6 +228,23 @@ describe('storyArc — sanitizeSeasonList', () => {
     const many = Array.from({ length: ARC_LIMITS.SEASONS_PER_SERIES_MAX + 5 }, (_, i) => ({ title: `s${i}`, number: i + 1 }));
     expect(sanitizeSeasonList(many)).toHaveLength(ARC_LIMITS.SEASONS_PER_SERIES_MAX);
   });
+
+  it('still detects duplicate ids that appear after the retention cap is full', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const filler = Array.from(
+      { length: ARC_LIMITS.SEASONS_PER_SERIES_MAX },
+      (_, i) => ({ id: `sea-fill-${i}`, title: `f${i}`, number: i + 1 }),
+    );
+    const out = sanitizeSeasonList([
+      ...filler,
+      { id: 'sea-fill-0', title: 'overwrite', number: 1 },
+    ]);
+    expect(out).toHaveLength(ARC_LIMITS.SEASONS_PER_SERIES_MAX);
+    const overwritten = out.find((s) => s.id === 'sea-fill-0');
+    expect(overwritten.title).toBe('overwrite');
+    expect(warnSpy).toHaveBeenCalledTimes(1);
+    expect(warnSpy.mock.calls[0][0]).toContain('sea-fill-0');
+  });
 });
 
 describe('storyArc — Vonnegut shape catalog', () => {

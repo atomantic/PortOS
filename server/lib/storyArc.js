@@ -323,9 +323,13 @@ export function sanitizeSeasonList(rawList, opts = {}) {
   for (const raw of rawList) {
     const s = sanitizeSeason(raw, opts);
     if (!s) continue;
-    if (byId.has(s.id)) duplicateIds.push(s.id);
+    if (byId.has(s.id)) {
+      duplicateIds.push(s.id);
+      byId.set(s.id, s);
+      continue;
+    }
+    if (byId.size >= ARC_LIMITS.SEASONS_PER_SERIES_MAX) continue;
     byId.set(s.id, s);
-    if (byId.size >= ARC_LIMITS.SEASONS_PER_SERIES_MAX) break;
   }
   if (duplicateIds.length) {
     const distinct = [...new Set(duplicateIds)];
