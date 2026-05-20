@@ -12,6 +12,8 @@ _Nothing currently parked — pick the next item from the Backlog._
 
 ### Code quality / dedup (from `/simplify` passes)
 
+- [ ] [extract-cover-render-handler-factory] **Collapse the four cover-render route handlers into one factory.** `server/routes/pipeline.js` has four sibling cover-render routes (`/series/:id/seasons/:seasonId/cover/render`, `/back-cover/render`, `/issues/:id/stages/comicPages/cover/render`, `/back-cover/render`) whose bodies are 95% identical — they differ only in { schema, enqueue fn, slot field (`cover` vs `backCover`), service-write helper (`updateSeasonOnSeries` vs `updateStageWithLatest`), script field name (`coverScript` vs `backCoverScript`), and response shape }. `makeCoverRenderSchema` already factored the schema (line ~376); a parallel `makeCoverRenderHandler({ schema, enqueueFn, slotField, writeFn, scriptField, responseShape })` factory would fold ~80 LOC into ~25. Surfaced by /simplify on `[med-pipeline-server-routes-pipeline-js-1416-1452]`; deferred to keep that PR scoped to the script-write bugfix.
+
 ### v2.1.0 pre-release review residue (deferred from main→release multi-agent review, 2026-05-16)
 
 - [ ] [med-sharing-server-services-sharing-version-js] **[MED][SHARING]** `server/services/sharing/version.js` — `SHARING_SCHEMA_VERSION` not bumped despite series-schema canon-field removal. Cross-peer share-bucket import from a pre-B.4 install silently loses series-side canon. Either bump the version (force refusal) or mirror migration logic in the importer for legacy canon fields.

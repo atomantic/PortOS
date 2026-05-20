@@ -1166,6 +1166,7 @@ router.post('/series/:id/seasons/:seasonId/back-cover/render', asyncHandler(asyn
     slotKey, jobId: result.jobId, prompt: result.prompt,
     width: body.width, height: body.height, fromProof: result.fromProof,
   });
+  // Same script-gate rationale as the front-cover route above.
   const series = await seriesSvc.updateSeasonOnSeries(
     req.params.id,
     req.params.seasonId,
@@ -1570,6 +1571,7 @@ router.post('/issues/:id/stages/comicPages/back-cover/render', asyncHandler(asyn
     slotKey, jobId: result.jobId, prompt: result.prompt,
     width: body.width, height: body.height, fromProof: result.fromProof,
   });
+  // Same script-gate rationale as the front-cover route above.
   const { issue: updatedIssue, stage } = await issuesSvc.updateStageWithLatest(
     req.params.id,
     'comicPages',
