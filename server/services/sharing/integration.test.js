@@ -1260,6 +1260,131 @@ describe('sharing round-trip', () => {
     expect(fs.readFileSync(join(tempData, 'images', 'legacy-v1.png'), 'utf-8')).toBe('V1BYTES');
   });
 
+  it('migrates legacy series canon arrays into the linked universe on import (pre-B.4 peer)', async () => {
+    const bucket = await buckets.createBucket({ name: 'LegacyCanonBucket', path: tempBucket, mode: 'auto-merge' });
+    const fs = await import('fs');
+
+    // Local target universe — the migration writes incoming canon here.
+    const uni = await universeSvc.createUniverse({ name: 'Pre-B.4 Universe' });
+    expect((uni.characters || []).length).toBe(0);
+    expect((uni.places || []).length).toBe(0);
+    expect((uni.objects || []).length).toBe(0);
+
+    // Hand-write a pre-B.4 series record carrying the legacy canon arrays.
+    // `sanitizeSeries` would normally strip these on insert; the importer's
+    // pre-pass must fold them into the universe first.
+    const seriesId = 'ser-pre-b4-test';
+    const legacySeries = {
+      id: seriesId,
+      name: 'Pre-B.4 Series',
+      logline: 'Test',
+      premise: 'Test premise',
+      universeId: uni.id,
+      characters: [{ name: 'Echo', physicalDescription: 'tall' }],
+      // Pre-022 wire name — the helper coalesces this onto `places`.
+      settings: [{ name: 'The Foundry', slugline: 'INT. FOUNDRY - NIGHT' }],
+      objects: [{ name: 'Brass Key', description: 'opens the gate' }],
+      createdAt: '2026-05-01T00:00:00.000Z',
+      updatedAt: '2026-05-01T00:00:00.000Z',
+    };
+    mkdirSync(join(tempBucket, 'records', 'series'), { recursive: true });
+    writeFileSync(
+      join(tempBucket, 'records', 'series', `${seriesId}.json`),
+      JSON.stringify(legacySeries),
+    );
+
+    const manifest = {
+      id: 'mfst-pre-b4',
+      schemaVersion: 1,
+      sharingSchemaVersion: 1,
+      producedByVersion: '1.0.0',
+      createdAt: new Date().toISOString(),
+      kind: 'series',
+      senderInstanceId: 'pre-b4-peer',
+      source: 'Pre B.4 Peer',
+      sourceBio: null,
+      bucketId: bucket.id,
+      bucketName: bucket.name,
+      recordIds: [seriesId],
+      assetRefs: [],
+      note: null,
+    };
+    const filename = `2026-05-01T00-00-00-000Z-pre-b4-peer-${manifest.id}.json`;
+    writeFileSync(join(tempBucket, 'manifests', filename), JSON.stringify(manifest));
+
+    const result = await importer.processManifest(bucket.id, filename);
+    expect(result.processed).toBe(true);
+    expect(result.outcome.applied).toBeGreaterThan(0);
+
+    // Series imported under the preserved id, with legacy canon stripped.
+    const restored = await series.getSeries(seriesId);
+    expect(restored.id).toBe(seriesId);
+    expect(restored.universeId).toBe(uni.id);
+    expect(restored.characters).toBeUndefined();
+    expect(restored.settings).toBeUndefined();
+    expect(restored.places).toBeUndefined();
+    expect(restored.objects).toBeUndefined();
+
+    // Universe gained the canon entries with SERIES_EXTRACT provenance.
+    const merged = await universeSvc.getUniverse(uni.id);
+    expect(merged.characters.map((c) => c.name)).toContain('Echo');
+    expect(merged.places.map((p) => p.name)).toContain('The Foundry');
+    expect(merged.objects.map((o) => o.name)).toContain('Brass Key');
+    // Provenance: live extract path tags series-driven canon as locked + sourceSeriesId.
+    const echo = merged.characters.find((c) => c.name === 'Echo');
+    expect(echo.locked).toBe(true);
+    expect(echo.sourceSeriesId).toBe(seriesId);
+    expect(echo.source).toBe('series-extract');
+  });
+
+  it('creates an orphan universe and links the series when a pre-B.4 record has no universeId', async () => {
+    const bucket = await buckets.createBucket({ name: 'OrphanCanonBucket', path: tempBucket, mode: 'auto-merge' });
+
+    const seriesId = 'ser-orphan-test';
+    const legacySeries = {
+      id: seriesId,
+      name: 'Orphan Series',
+      logline: 'unlinked',
+      premise: 'unlinked premise',
+      // No universeId — pre-B universes-don't-exist era.
+      characters: [{ name: 'Solo', physicalDescription: 'lone' }],
+      createdAt: '2026-05-01T00:00:00.000Z',
+      updatedAt: '2026-05-01T00:00:00.000Z',
+    };
+    mkdirSync(join(tempBucket, 'records', 'series'), { recursive: true });
+    writeFileSync(
+      join(tempBucket, 'records', 'series', `${seriesId}.json`),
+      JSON.stringify(legacySeries),
+    );
+    const manifest = {
+      id: 'mfst-orphan',
+      schemaVersion: 1,
+      sharingSchemaVersion: 1,
+      producedByVersion: '1.0.0',
+      createdAt: new Date().toISOString(),
+      kind: 'series',
+      senderInstanceId: 'orphan-peer',
+      source: 'Orphan Peer',
+      sourceBio: null,
+      bucketId: bucket.id,
+      bucketName: bucket.name,
+      recordIds: [seriesId],
+      assetRefs: [],
+      note: null,
+    };
+    const filename = `2026-05-01T00-00-00-000Z-orphan-peer-${manifest.id}.json`;
+    writeFileSync(join(tempBucket, 'manifests', filename), JSON.stringify(manifest));
+
+    const result = await importer.processManifest(bucket.id, filename);
+    expect(result.processed).toBe(true);
+
+    const restored = await series.getSeries(seriesId);
+    expect(restored.universeId).toBeTruthy(); // freshly minted
+    const orphanUni = await universeSvc.getUniverse(restored.universeId);
+    expect(orphanUni.name).toMatch(/Orphan Series/);
+    expect(orphanUni.characters.map((c) => c.name)).toContain('Solo');
+  });
+
   it('refuses a manifest with a sharingSchemaVersion newer than local + emits incompatible event', async () => {
     const { SHARING_SCHEMA_VERSION } = await import('./version.js');
     const { sharingEvents } = await import('./importer.js');

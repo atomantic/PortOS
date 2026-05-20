@@ -32,6 +32,7 @@ import { SHARING_SCHEMA_VERSION, isManifestCompatible } from './version.js';
 import { insertSeriesWithId, updateSeries, getSeries } from '../pipeline/series.js';
 import { insertIssueWithId, updateIssue, getIssue } from '../pipeline/issues.js';
 import { insertUniverseWithId, updateUniverse, getUniverse } from '../universeBuilder.js';
+import { applyLegacySeriesCanonToUniverse } from '../pipeline/migrateSeriesCanon.js';
 import { findOrCreateUniverseCollection, findOrCreateSeriesCollection, addItem as addCollectionItem, ERR_DUPLICATE as COLLECTION_ERR_DUPLICATE } from '../mediaCollections.js';
 import { adoptImportedSubscription, withReexportSuppressed } from './subscriptions.js';
 import { getInstanceId, UNKNOWN_INSTANCE_ID } from '../instances.js';
@@ -430,6 +431,31 @@ async function applyAutoMerge(bucket, manifest, records, { availableAssetKeys = 
       updateFn: (id, record) => updateUniverse(id, () => record),
     });
   }
+  // Pre-B.4 peers ship series records with legacy canon arrays (`characters /
+  // settings|places / objects`) that `sanitizeSeries` strips on insert —
+  // silent data loss for cross-peer imports authored before the B.4 schema
+  // teardown. Mirror the CLI migration here, so the canon lands on the
+  // linked (or freshly-created) universe before mergeOne writes the
+  // sanitized series. Both `settings` (pre-022) and `places` (post-022) wire
+  // names are recognized; the helper coalesces them. No-op for post-B.4
+  // records (the helper returns 'no-legacy' immediately).
+  for (const s of records.series) {
+    const hasLegacyCanon = ['characters', 'settings', 'places', 'objects']
+      .some((field) => Array.isArray(s[field]) && s[field].length > 0);
+    if (!hasLegacyCanon) continue;
+    const r = await applyLegacySeriesCanonToUniverse(s).catch((err) => {
+      console.log(`⚠️ sharing.importer: legacy series canon migration for ${s.id} failed: ${err.message}`);
+      return null;
+    });
+    // Stamp the freshly-created orphan universe id onto the in-memory record
+    // so the upcoming insertSeriesWithId call preserves the link. (We can't
+    // call updateSeries here like the CLI batch does — the series record
+    // hasn't been inserted yet.)
+    if (r?.universeCreated && r.universeId) {
+      s.universeId = r.universeId;
+    }
+  }
+
   for (const s of records.series) {
     await mergeOne({
       kind: 'series', record: s, label: s.name,
