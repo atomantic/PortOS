@@ -26,20 +26,37 @@ import { playWav } from '../../services/voiceClient';
 import { formatVoiceLabel } from '../../lib/voiceLabel';
 import toast from '../ui/Toast';
 
+// TTL on the module cache. The cache de-dupes the mount fan-out when
+// AudioStage opens with N dialogue-line pickers (all mount within ~ms), so
+// a generous TTL is fine for that — but Piper's `downloaded` flag is
+// mutable: a user can navigate to settings → Voice, download a Piper
+// voice, and come back, and the picker must NOT keep showing the voice
+// as disabled. 15 seconds straddles both: way longer than the AudioStage
+// mount burst, way shorter than any plausible navigate-download-return
+// cycle.
+const VOICE_LIST_CACHE_TTL_MS = 15_000;
 let voiceListCache = null;
+let voiceListCacheAt = 0;
 let voiceListPromise = null;
 
+const cacheIsFresh = () =>
+  voiceListCache !== null && (Date.now() - voiceListCacheAt) < VOICE_LIST_CACHE_TTL_MS;
+
 const loadVoiceList = () => {
-  if (voiceListCache) return Promise.resolve(voiceListCache);
+  if (cacheIsFresh()) return Promise.resolve(voiceListCache);
   if (voiceListPromise) return voiceListPromise;
   voiceListPromise = listPipelineTtsVoices()
     .then((res) => {
       voiceListCache = Array.isArray(res?.voices) ? res.voices : [];
+      voiceListCacheAt = Date.now();
       return voiceListCache;
     })
     .catch((err) => {
       voiceListPromise = null;
       throw err;
+    })
+    .finally(() => {
+      voiceListPromise = null;
     });
   return voiceListPromise;
 };
@@ -47,6 +64,7 @@ const loadVoiceList = () => {
 // Exposed for tests so they can reset module-local state between cases.
 export const __resetVoicePickerCache = () => {
   voiceListCache = null;
+  voiceListCacheAt = 0;
   voiceListPromise = null;
 };
 
@@ -71,8 +89,8 @@ export default function VoicePicker({
   hideWhenEmpty = false,
 }) {
   const id = useId();
-  const [voices, setVoices] = useState(voiceListCache || []);
-  const [loading, setLoading] = useState(!voiceListCache);
+  const [voices, setVoices] = useState(() => cacheIsFresh() ? voiceListCache : []);
+  const [loading, setLoading] = useState(() => !cacheIsFresh());
   const [loadError, setLoadError] = useState(null);
   const [previewing, setPreviewing] = useState(false);
   // Synchronous guard against double-click during the async pre-disable
@@ -82,7 +100,6 @@ export default function VoicePicker({
   const previewingRef = useRef(false);
 
   useEffect(() => {
-    if (voiceListCache) return undefined;
     let cancelled = false;
     setLoading(true);
     loadVoiceList()

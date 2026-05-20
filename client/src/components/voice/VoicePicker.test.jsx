@@ -140,4 +140,20 @@ describe('VoicePicker', () => {
     await waitFor(() => document.querySelector('option[value="kokoro:af_bella"]'));
     expect(listPipelineTtsVoices).toHaveBeenCalledTimes(1);
   });
+
+  it('refetches after the cache TTL expires (so newly-downloaded voices show up)', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      listPipelineTtsVoices.mockResolvedValue({ voices: SAMPLE_VOICES });
+      const { unmount } = render(<VoicePicker value={null} onChange={() => {}} />);
+      await waitFor(() => document.querySelector('option[value="kokoro:af_bella"]'));
+      unmount();
+      // Advance past the 15-second TTL.
+      vi.advanceTimersByTime(20_000);
+      render(<VoicePicker value={null} onChange={() => {}} />);
+      await waitFor(() => expect(listPipelineTtsVoices).toHaveBeenCalledTimes(2));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
