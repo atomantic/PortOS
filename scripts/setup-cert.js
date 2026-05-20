@@ -198,6 +198,15 @@ function maybeFallbackSelfSigned() {
   const meta = readMeta();
   const hasCert = hasTailscaleCert(CERT_DIR);
 
+  // Files exist but are unparseable (interrupted provisioning). hasTailscaleCert
+  // already returned false, so the server will boot HTTP — but the user has
+  // cert files on disk wondering why HTTPS isn't active. Tell them explicitly.
+  if (!hasCert && existsSync(CERT_PATH) && existsSync(KEY_PATH)) {
+    console.log(`⚠️  data/certs/{cert,key}.pem present but unreadable — server will boot HTTP-only.`);
+    console.log(`   To recover: \`npm run setup:cert -- --self-signed\` to regenerate, or delete the files to revert.`);
+    return;
+  }
+
   if (hasCert && meta?.mode === 'self-signed') {
     trySelfSigned();
     return;
