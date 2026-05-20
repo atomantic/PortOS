@@ -1996,6 +1996,19 @@ export const MANAGED_AGENT_OPTIONS = {
   'plan-task': ['useWorktree', 'openPR']
 };
 
+// Strip managed-agent fields from a per-app override map before merging on top
+// of the (already-enforced) global config. Without this, an app-level override
+// for a managed field (e.g. `plan-task.useWorktree=false`) carries through into
+// the task spawn even though the UI toggle is locked, defeating the lock's
+// intent. Returns the cleaned metadata (or null if every key was managed).
+export function stripManagedAgentOptionsFromOverride(taskType, taskMetadata) {
+  const managed = MANAGED_AGENT_OPTIONS[taskType];
+  if (!managed || !taskMetadata || typeof taskMetadata !== 'object') return taskMetadata;
+  const cleaned = { ...taskMetadata };
+  for (const field of managed) delete cleaned[field];
+  return Object.keys(cleaned).length ? cleaned : null;
+}
+
 function enforceManagedAgentOptions(taskType, config) {
   const managed = MANAGED_AGENT_OPTIONS[taskType];
   if (!managed || !config) return false;

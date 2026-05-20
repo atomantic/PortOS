@@ -1885,9 +1885,15 @@ async function generateManagedAppImprovementTask(app, state) {
     Object.assign(metadata, sanitizedGlobalMeta);
   }
 
-  // Apply sanitized per-app taskMetadata overrides (merge on top of global)
+  // Apply sanitized per-app taskMetadata overrides (merge on top of global).
+  // Strip managed-agent fields from the override first so an existing
+  // app-level value for a now-managed field can't overwrite the global's
+  // enforced default (the UI locks the toggle, the merge has to honor that).
   const appOverrides = await getAppTaskTypeOverrides(app.id);
-  const sanitizedAppMeta = sanitizeTaskMetadata(appOverrides[nextType]?.taskMetadata);
+  const strippedAppOverride = taskSchedule.stripManagedAgentOptionsFromOverride(
+    nextType, appOverrides[nextType]?.taskMetadata
+  );
+  const sanitizedAppMeta = sanitizeTaskMetadata(strippedAppOverride);
   if (sanitizedAppMeta) {
     Object.assign(metadata, sanitizedAppMeta);
   }
@@ -1974,9 +1980,14 @@ async function generateManagedAppImprovementTaskForType(taskType, app, state, { 
     Object.assign(metadata, sanitizedGlobalMeta);
   }
 
-  // Apply sanitized per-app taskMetadata overrides (merge on top of global)
+  // Apply sanitized per-app taskMetadata overrides (merge on top of global).
+  // Strip managed-agent fields first — see comment in the sibling
+  // generateManagedAppTask path for the full rationale.
   const appOverrides = await getAppTaskTypeOverrides(app.id);
-  const sanitizedAppMeta = sanitizeTaskMetadata(appOverrides[taskType]?.taskMetadata);
+  const strippedAppOverride = taskSchedule.stripManagedAgentOptionsFromOverride(
+    taskType, appOverrides[taskType]?.taskMetadata
+  );
+  const sanitizedAppMeta = sanitizeTaskMetadata(strippedAppOverride);
   if (sanitizedAppMeta) {
     Object.assign(metadata, sanitizedAppMeta);
   }
