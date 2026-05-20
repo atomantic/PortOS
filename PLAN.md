@@ -94,8 +94,6 @@ The 2026-04-25 CODEX 5.5 review's concrete bugs (Brain Feeds nav, Time Capsule n
 
 ### Deferred from better/2026-05-19
 
-- [ ] [move-usenextevalcountdown-to-hooks] **Move `useNextEvalCountdown` from `components/cos/` to `client/src/hooks/`.** `client/src/components/cos/useNextEvalCountdown.js` is a generic `useX` countdown hook living under `components/`, which the new "Module Organization" convention in CLAUDE.md places exclusively under `client/src/hooks/`. The other `useX`-named functions outside `hooks/` (`useThemeContext`, `useCitySettingsContext`, `useTokenEntries`) are context-consumer or pure `useMemo` helpers conventionally co-located with their providers — `useNextEvalCountdown` doesn't fit that exception. Surfaced by /simplify during the module-discovery PR; deferred to keep that PR scoped to infrastructure.
-
 - [ ] **Migrate two remaining local formatters surfaced during the module-discovery PR.** Two additional local format definitions were found that aren't in the original tracker: (1) `client/src/components/calendar/EventDetail.jsx:10` defines `formatDateTime(dateStr, isAllDay)` with an all-day branch the shared `formatDateTime` lacks — extend the shared helper to take `{ allDay: true }` or keep this local and rename to `formatEventDateTime`. (2) `client/src/components/cos/tabs/TaskItem.jsx:78` defines `formatDurationMin(mins)` with a `~` approximation prefix (`~3h 30m`) — extend shared `formatDurationMin` with an `{ approximate: true }` option. Low priority; visual semantics need to be preserved exactly.
 
 ---
