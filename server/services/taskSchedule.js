@@ -502,20 +502,26 @@ Use \`feat:\` / \`fix:\` / \`refactor:\` / \`chore:\` / etc. (The bracketed-scop
 **Remove the item from PLAN.md outright.** The audit trail for shipped work lives in \`git log\` and the project's changelog (e.g. \`.changelog/NEXT.md\`) — do NOT archive to a \`DONE.md\`, that file has been retired. Do NOT leave a checked \`- [x]\` behind in PLAN.md.
 
 1. Remove the picked \`- [ ]\` line from PLAN.md entirely. If removing it leaves a heading empty, leave the heading alone — section curation is \`do-replan\`'s job.
-2. If the repo has a \`.changelog/NEXT.md\` (or similar in-progress changelog file), append an entry. Mirror the prose style of recent entries; lead with the slug in brackets so \`git log --grep='<slug>'\` and changelog greps line up:
+2. Detect the repo's changelog convention (in this order — pick the first match):
+   - \`.changelog/NEXT.md\` (PortOS-style staged-release file)
+   - \`CHANGELOG.md\` at repo root with an \`## Unreleased\` or \`## [Unreleased]\` heading
+   - any other \`changelog\`-shaped file the repo already maintains (look at recent \`git log\` for examples of where prior entries landed)
+
+   If exactly one is found, append an entry there. Mirror the prose style of recent entries; lead with the slug in brackets so \`git log --grep='<slug>'\` and changelog greps line up:
 
    \`\`\`markdown
    - **[<slug>] <Title from the PLAN.md line>** — <1–3 sentences on what shipped, key files touched, any caveats>
    \`\`\`
 
-   If the repo has no changelog convention, skip this step — the commit message + \`git log\` is the audit trail.
+   Remember the exact path you wrote to as \`CHANGELOG_FILE\` — you'll stage it in step 3. If no changelog convention exists, skip the changelog append and leave \`CHANGELOG_FILE\` unset; the commit message + \`git log\` becomes the audit trail.
 
-Stage both files and commit:
+3. Stage PLAN.md plus the changelog file you actually edited (if any) and commit. **Do NOT use a glob or a swallow-on-failure fallback** — staging the exact file you edited is what keeps the audit trail honest:
 
-\`\`\`bash
-git add PLAN.md .changelog/NEXT.md 2>/dev/null || git add PLAN.md
-git commit -m "docs([<slug>]): remove from PLAN.md and log to changelog"
-\`\`\`
+   \`\`\`bash
+   git add PLAN.md
+   [ -n "$CHANGELOG_FILE" ] && git add "$CHANGELOG_FILE"
+   git commit -m "docs([<slug>]): remove from PLAN.md and log to changelog"
+   \`\`\`
 
 ## Phase 6 — Review and ship
 
