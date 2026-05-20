@@ -245,7 +245,7 @@ ${prompt}`;
           outputBuffer = outputBuffer.slice(-OUTPUT_BUFFER_CAP);
           if (!outputBufferTruncated) {
             outputBufferTruncated = true;
-            console.warn(`⚠️ TUI run ${runId} output buffer exceeded ${OUTPUT_BUFFER_HEADROOM} bytes — head dropped (response file is the authoritative path; fallback may be incomplete)`);
+            console.warn(`⚠️ TUI run ${runId} output buffer exceeded ${Math.round(OUTPUT_BUFFER_HEADROOM / 1024 / 1024)}MB — head dropped (response file is the authoritative path; fallback may be incomplete)`);
           }
         }
         onData?.(stripped);
@@ -374,22 +374,6 @@ ${prompt}`;
 }
 
 /**
- * Best-effort response cleanup for an already-ANSI-stripped TUI buffer.
- *
- * The TUI buffer is a screen, not a log — it contains banner art, the
- * pasted prompt echoed back, status lines ("thinking...", token counters),
- * box-drawing characters around the input prompt, and the model's response
- * interleaved with all of it. Reliable carve-out would need per-binary
- * scrapers; this helper just drops the obvious bits (paste marker + echoed
- * prompt) and leaves downstream consumers (`extractJson`,
- * `extractCodexAssistant`) to find structured content in the rest.
- *
- * Input is assumed pre-stripped of ANSI codes (the central handler streams
- * each chunk through `createStreamingAnsiStripper` during accumulation, so
- * `outputBuffer` is already clean). Don't strip again — it's a wasted scan
- * over up to 1MB of text.
- */
-/**
  * Pick the TUI response text — preferring the file the model was directed
  * to write, falling back to the cleaned screen scrape.
  *
@@ -410,6 +394,22 @@ export async function resolveTuiResponseText({ success, responseFilePath, output
   return { text: cleanTuiResponse(outputBuffer, wrappedPrompt), usedResponseFile: false };
 }
 
+/**
+ * Best-effort response cleanup for an already-ANSI-stripped TUI buffer.
+ *
+ * The TUI buffer is a screen, not a log — it contains banner art, the
+ * pasted prompt echoed back, status lines ("thinking...", token counters),
+ * box-drawing characters around the input prompt, and the model's response
+ * interleaved with all of it. Reliable carve-out would need per-binary
+ * scrapers; this helper just drops the obvious bits (paste marker + echoed
+ * prompt) and leaves downstream consumers (`extractJson`,
+ * `extractCodexAssistant`) to find structured content in the rest.
+ *
+ * Input is assumed pre-stripped of ANSI codes (the central handler streams
+ * each chunk through `createStreamingAnsiStripper` during accumulation, so
+ * `outputBuffer` is already clean). Don't strip again — it's a wasted scan
+ * over up to `OUTPUT_BUFFER_CAP` bytes of text.
+ */
 export function cleanTuiResponse(strippedText, prompt) {
   if (typeof strippedText !== 'string' || !strippedText) return '';
   let text = strippedText.replace(/\[Pasted text #\d+[^\]]*\]/g, '');
