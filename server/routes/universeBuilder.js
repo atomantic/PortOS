@@ -31,6 +31,7 @@ import { getSettings } from '../services/settings.js';
 import { findOrCreateUniverseCollection } from '../services/mediaCollections.js';
 import { registerUniverseBuilderRun } from '../services/universeBuilderCollectionHook.js';
 import { getImageModels, isFlux2, isZImage, isErnie } from '../lib/mediaModels.js';
+import { IMAGE_GEN_MODE } from '../services/imageGen/modes.js';
 import { getStylePresetById } from '../lib/writersRoomStylePresets.js';
 
 const router = Router();
@@ -440,12 +441,12 @@ router.post('/:id/render', asyncHandler(async (req, res) => {
   }
 
   const settings = await getSettings();
-  const mode = body.mode || settings.imageGen?.mode || 'external';
+  const mode = body.mode || settings.imageGen?.mode || IMAGE_GEN_MODE.EXTERNAL;
 
   // Reject `external` mode upfront — batch rendering against a remote SD-API
   // would block this request for the entire batch, and we don't want to leave
   // an orphaned media collection behind when we discover this mid-loop below.
-  if (mode !== 'local' && mode !== 'codex') {
+  if (mode !== IMAGE_GEN_MODE.LOCAL && mode !== IMAGE_GEN_MODE.CODEX) {
     throw new ServerError(
       'Batch render requires local or codex mode — switch image-gen mode in Settings → Image Gen',
       { status: 400, code: 'WORLD_BUILDER_EXTERNAL_UNSUPPORTED' },
@@ -454,13 +455,13 @@ router.post('/:id/render', asyncHandler(async (req, res) => {
 
   // Mirror the upfront validation /api/image-gen/generate does so a doomed
   // batch fails before any jobs land in the queue.
-  if (mode === 'codex' && !settings.imageGen?.codex?.enabled) {
+  if (mode === IMAGE_GEN_MODE.CODEX && !settings.imageGen?.codex?.enabled) {
     throw new ServerError(
       'Codex Imagegen is disabled — enable it in Settings → Image Gen first',
       { status: 400, code: 'CODEX_IMAGEGEN_DISABLED' },
     );
   }
-  if (mode === 'local') {
+  if (mode === IMAGE_GEN_MODE.LOCAL) {
     const py = settings.imageGen?.local?.pythonPath || null;
     const allModels = getImageModels();
     if (body.modelId && !allModels.some((m) => m.id === body.modelId)) {
@@ -554,14 +555,14 @@ router.post('/:id/render', asyncHandler(async (req, res) => {
       },
     };
     let queued;
-    if (mode === 'codex') {
+    if (mode === IMAGE_GEN_MODE.CODEX) {
       const c = settings.imageGen?.codex || {};
       queued = enqueueJob({
         kind: 'image',
-        params: { mode: 'codex', codexPath: c.codexPath, model: c.model, ...params },
+        params: { mode: IMAGE_GEN_MODE.CODEX, codexPath: c.codexPath, model: c.model, ...params },
       });
     } else {
-      // mode === 'local' (validated upfront).
+      // mode === IMAGE_GEN_MODE.LOCAL (validated upfront).
       const py = settings.imageGen?.local?.pythonPath || null;
       queued = enqueueJob({
         kind: 'image',

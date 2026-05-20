@@ -14,6 +14,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { fetchWithTimeout } from '../../lib/fetchWithTimeout.js';
 import { autoCleanGeneratedImage } from '../../lib/imageClean.js';
 import { imageGenEvents } from '../imageGenEvents.js';
+import { IMAGE_GEN_MODE } from './modes.js';
 
 const DEFAULT_NEGATIVE_PROMPT = 'blurry, low quality, distorted, deformed, ugly, watermark, text, signature';
 const PROGRESS_POLL_INTERVAL = 500;
@@ -54,7 +55,7 @@ export async function checkConnection(sdapiUrl) {
   const options = await res.json().catch(() => null);
   const model = options?.sd_model_checkpoint || 'unknown';
   cachedModel = { name: model, timestamp: Date.now(), baseUrl };
-  return { connected: true, model, mode: 'external', baseUrl };
+  return { connected: true, model, mode: IMAGE_GEN_MODE.EXTERNAL, baseUrl };
 }
 
 function startProgressPolling(baseUrl, generationId) {
@@ -128,7 +129,7 @@ export async function generateImage({ sdapiUrl, prompt, negativePrompt, width, h
     generationId, prompt, negativePrompt,
     width: payload.width, height: payload.height, steps: payload.steps,
     cfgScale: payload.cfg_scale, seed: payload.seed,
-    modelId: model, mode: 'external',
+    modelId: model, mode: IMAGE_GEN_MODE.EXTERNAL,
     step: 0, progress: 0, totalSteps: payload.steps, currentImage: null,
     createdAt: new Date().toISOString(),
   };
@@ -171,10 +172,10 @@ export async function generateImage({ sdapiUrl, prompt, negativePrompt, width, h
   // Auto-clean BEFORE the SSE complete fires so the URL the client opens
   // serves the cleaned bytes. External mode has no sidecar — pass null so
   // the helper just patches the PNG in place.
-  await autoCleanGeneratedImage({ enabled: autoClean, pngPath, sidecarPath: null, mode: 'external' });
+  await autoCleanGeneratedImage({ enabled: autoClean, pngPath, sidecarPath: null, mode: IMAGE_GEN_MODE.EXTERNAL });
   const path = `/data/images/${filename}`;
   console.log(`🖼️ Image saved: ${filename}`);
   activeJob = null;
   imageGenEvents.emit('completed', { generationId, path, filename });
-  return { generationId, filename, path, mode: 'external', model };
+  return { generationId, filename, path, mode: IMAGE_GEN_MODE.EXTERNAL, model };
 }

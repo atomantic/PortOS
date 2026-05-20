@@ -19,6 +19,7 @@ import {
   registerTool, updateTool, getToolsList,
   getHfTokenStatus, saveHfToken, clearHfToken,
 } from '../../services/api';
+import { IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
 
 const SDAPI_TOOL_ID = 'sdapi';
 const CODEX_TOOL_ID = 'codex-imagegen';
@@ -37,7 +38,7 @@ export function ImageGenTab() {
   const [saving, setSaving] = useState(false);
 
   // Mode + per-mode config
-  const [mode, setMode] = useState('external');
+  const [mode, setMode] = useState(IMAGE_GEN_MODE.EXTERNAL);
   const [sdapiUrl, setSdapiUrl] = useState('');
   const [pythonPath, setPythonPath] = useState('');
   const [exposeA1111, setExposeA1111] = useState(false);
@@ -70,7 +71,7 @@ export function ImageGenTab() {
 
   // Snapshot of saved values so we can show the "dirty" state
   const [saved, setSaved] = useState({
-    mode: 'external', sdapiUrl: '', pythonPath: '', exposeA1111: false,
+    mode: IMAGE_GEN_MODE.EXTERNAL, sdapiUrl: '', pythonPath: '', exposeA1111: false,
     codexEnabled: false, codexPath: '', codexModel: '', codexParallelLimit: 1,
     autoCleanByMode: { external: false, local: false, codex: false },
   });
@@ -132,7 +133,7 @@ export function ImageGenTab() {
     Promise.all([getSettings(), getToolsList()])
       .then(([s, tools]) => {
         const ig = s?.imageGen || {};
-        const m = ig.mode || 'external';
+        const m = ig.mode || IMAGE_GEN_MODE.EXTERNAL;
         const url = normalizeUrl(ig.external?.sdapiUrl || ig.sdapiUrl);
         const py = ig.local?.pythonPath || '';
         const expose = ig.expose?.a1111 === true;
@@ -243,9 +244,9 @@ export function ImageGenTab() {
 
     // Both tool entries are independent — sync them in parallel so a
     // tailnet save doesn't pay two sequential HTTP round-trips.
-    const sdEnabled = mode === 'external' ? !!url : (mode === 'local' ? !!pythonPath : false);
+    const sdEnabled = mode === IMAGE_GEN_MODE.EXTERNAL ? !!url : (mode === IMAGE_GEN_MODE.LOCAL ? !!pythonPath : false);
     const sdToolData = {
-      name: mode === 'external' ? 'Stable Diffusion (External)' : (mode === 'local' ? 'Stable Diffusion (Local mflux)' : 'Stable Diffusion'),
+      name: mode === IMAGE_GEN_MODE.EXTERNAL ? 'Stable Diffusion (External)' : (mode === IMAGE_GEN_MODE.LOCAL ? 'Stable Diffusion (Local mflux)' : 'Stable Diffusion'),
       category: 'image-generation',
       description: 'Generate images via the active PortOS image gen backend',
       enabled: sdEnabled,
@@ -308,7 +309,7 @@ export function ImageGenTab() {
       // mark the render complete on the `complete` event (or fail on
       // `error`). External mode awaits internally and the file is on disk
       // by the time generateImage resolves, so we can short-circuit.
-      const isAsync = (result?.mode === 'local' || result?.mode === 'codex');
+      const isAsync = (result?.mode === IMAGE_GEN_MODE.LOCAL || result?.mode === IMAGE_GEN_MODE.CODEX);
       if (isAsync && result?.generationId) {
         await new Promise((resolve, reject) => {
           const es = new EventSource(`/api/image-gen/${result.generationId}/events`);
@@ -377,8 +378,8 @@ export function ImageGenTab() {
         <div className={`grid grid-cols-1 sm:grid-cols-2 ${codexEnabled ? 'lg:grid-cols-3' : ''} gap-3`}>
           <button
             type="button"
-            onClick={() => setMode('external')}
-            className={`text-left p-4 rounded-lg border transition-colors ${mode === 'external' ? 'border-port-accent bg-port-accent/10 text-white' : 'border-port-border text-gray-400 hover:bg-port-border/30 hover:text-white'}`}
+            onClick={() => setMode(IMAGE_GEN_MODE.EXTERNAL)}
+            className={`text-left p-4 rounded-lg border transition-colors ${mode === IMAGE_GEN_MODE.EXTERNAL ? 'border-port-accent bg-port-accent/10 text-white' : 'border-port-border text-gray-400 hover:bg-port-border/30 hover:text-white'}`}
           >
             <div className="flex items-center gap-2">
               <Cloud className="w-4 h-4" />
@@ -388,8 +389,8 @@ export function ImageGenTab() {
           </button>
           <button
             type="button"
-            onClick={() => setMode('local')}
-            className={`text-left p-4 rounded-lg border transition-colors ${mode === 'local' ? 'border-port-accent bg-port-accent/10 text-white' : 'border-port-border text-gray-400 hover:bg-port-border/30 hover:text-white'}`}
+            onClick={() => setMode(IMAGE_GEN_MODE.LOCAL)}
+            className={`text-left p-4 rounded-lg border transition-colors ${mode === IMAGE_GEN_MODE.LOCAL ? 'border-port-accent bg-port-accent/10 text-white' : 'border-port-border text-gray-400 hover:bg-port-border/30 hover:text-white'}`}
           >
             <div className="flex items-center gap-2">
               <Cpu className="w-4 h-4" />
@@ -400,8 +401,8 @@ export function ImageGenTab() {
           {codexEnabled && (
             <button
               type="button"
-              onClick={() => setMode('codex')}
-              className={`text-left p-4 rounded-lg border transition-colors ${mode === 'codex' ? 'border-port-accent bg-port-accent/10 text-white' : 'border-port-border text-gray-400 hover:bg-port-border/30 hover:text-white'}`}
+              onClick={() => setMode(IMAGE_GEN_MODE.CODEX)}
+              className={`text-left p-4 rounded-lg border transition-colors ${mode === IMAGE_GEN_MODE.CODEX ? 'border-port-accent bg-port-accent/10 text-white' : 'border-port-border text-gray-400 hover:bg-port-border/30 hover:text-white'}`}
             >
               <div className="flex items-center gap-2">
                 <Terminal className="w-4 h-4" />
@@ -414,7 +415,7 @@ export function ImageGenTab() {
       </div>
 
       {/* External-mode config */}
-      {mode === 'external' && (
+      {mode === IMAGE_GEN_MODE.EXTERNAL && (
         <div className="bg-port-card border border-port-border rounded-xl p-6 space-y-4">
           <h3 className="text-sm font-medium text-gray-300">External AUTOMATIC1111 / Forge URL</h3>
           <input
@@ -425,12 +426,12 @@ export function ImageGenTab() {
             placeholder="http://localhost:7860"
           />
           <p className="text-xs text-gray-500">Base URL for the SD WebUI server PortOS should send generation requests to.</p>
-          <AutoCleanToggle checked={autoCleanByMode.external} onChange={setAutoCleanFor('external')} />
+          <AutoCleanToggle checked={autoCleanByMode.external} onChange={setAutoCleanFor(IMAGE_GEN_MODE.EXTERNAL)} />
         </div>
       )}
 
       {/* Local-mode config */}
-      {mode === 'local' && (
+      {mode === IMAGE_GEN_MODE.LOCAL && (
         <div className="bg-port-card border border-port-border rounded-xl p-6 space-y-4">
           <h3 className="text-sm font-medium text-gray-300">Local Python (mflux + mlx_video)</h3>
           <p className="text-xs text-gray-500">
@@ -439,7 +440,7 @@ export function ImageGenTab() {
             and are surfaced in <a href="/media/models" className="text-port-accent hover:underline">Media → Models</a>.
           </p>
           <LocalSetupPanel pythonPath={pythonPath} onPythonPathChange={setPythonPath} />
-          <AutoCleanToggle checked={autoCleanByMode.local} onChange={setAutoCleanFor('local')} />
+          <AutoCleanToggle checked={autoCleanByMode.local} onChange={setAutoCleanFor(IMAGE_GEN_MODE.LOCAL)} />
         </div>
       )}
 
@@ -471,10 +472,9 @@ export function ImageGenTab() {
               // external if a URL is set, else external as a last resort
               // (so the user lands on a non-broken default rather than
               // sticking with codex or hopping to an unconfigured backend).
-              if (!v && mode === 'codex') {
+              if (!v && mode === IMAGE_GEN_MODE.CODEX) {
                 const hasLocal = !!pythonPath?.trim();
-                const hasExternal = !!normalizeUrl(sdapiUrl);
-                setMode(hasLocal ? 'local' : (hasExternal ? 'external' : 'external'));
+                setMode(hasLocal ? IMAGE_GEN_MODE.LOCAL : IMAGE_GEN_MODE.EXTERNAL);
               }
             }}
             className="rounded"
@@ -535,7 +535,7 @@ export function ImageGenTab() {
                 )}
               </p>
             </div>
-            <AutoCleanToggle checked={autoCleanByMode.codex} onChange={setAutoCleanFor('codex')} />
+            <AutoCleanToggle checked={autoCleanByMode.codex} onChange={setAutoCleanFor(IMAGE_GEN_MODE.CODEX)} />
           </div>
         )}
       </div>

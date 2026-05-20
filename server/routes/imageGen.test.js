@@ -9,6 +9,7 @@ vi.mock('../services/imageGen/index.js', () => ({
   generateAvatar: vi.fn(),
   attachSseClient: vi.fn(() => false),
   cancel: vi.fn(() => false),
+  IMAGE_GEN_MODE: { EXTERNAL: 'external', LOCAL: 'local', CODEX: 'codex' },
   IMAGE_GEN_MODES: ['external', 'local', 'codex'],
   // Mirror the real precedence so route-level resolution behaves correctly
   // under test: explicit body bool wins, otherwise fall back to settings.

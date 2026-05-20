@@ -193,9 +193,9 @@ export default function ImageGen() {
 
   // selectedMode is null until settings load — fall back to status.mode
   // so the form doesn't flicker between defaults.
-  const effectiveMode = selectedMode || status?.mode || 'external';
-  const isLocalMode = effectiveMode === 'local';
-  const isCodexMode = effectiveMode === 'codex';
+  const effectiveMode = selectedMode || status?.mode || IMAGE_GEN_MODE.EXTERNAL;
+  const isLocalMode = effectiveMode === IMAGE_GEN_MODE.LOCAL;
+  const isCodexMode = effectiveMode === IMAGE_GEN_MODE.CODEX;
   const isAsyncMode = isLocalMode || isCodexMode;
   // Prefer the socket-driven hook (carries currentImage for both modes since
   // local mflux now writes stepwise frames). Fall back to the local SSE's
@@ -590,7 +590,7 @@ export default function ImageGen() {
       prompt: composed.prompt,
       negativePrompt: composed.negativePrompt || undefined,
       width, height,
-      mode: 'codex',
+      mode: IMAGE_GEN_MODE.CODEX,
       autoClean,
     } : {
       prompt: composed.prompt,
@@ -603,7 +603,7 @@ export default function ImageGen() {
       quantize,
       loraFilenames: selectedLoras.map((l) => l.filename),
       loraScales: selectedLoras.map((l) => l.scale),
-      mode: 'local',
+      mode: IMAGE_GEN_MODE.LOCAL,
       autoClean,
     };
     const hasInitImage = isLocalMode && initImage.source != null;
@@ -747,7 +747,7 @@ export default function ImageGen() {
           width, height,
           steps: steps ? Number(steps) : 25,
           cfgScale,
-          mode: 'external',
+          mode: IMAGE_GEN_MODE.EXTERNAL,
           autoClean,
         };
         if (seed && Number(seed) >= 0) payload.seed = Number(seed);
@@ -865,7 +865,7 @@ export default function ImageGen() {
                 : 'border-port-error/40 bg-port-error/10 text-port-error'
             }`}>
               {status.connected ? (
-                <><span className="w-2 h-2 rounded-full bg-port-success" /> {status.model || (status.mode === 'local' ? 'mflux/local' : status.mode === 'codex' ? 'codex CLI' : 'external SD API')}</>
+                <><span className="w-2 h-2 rounded-full bg-port-success" /> {status.model || (status.mode === IMAGE_GEN_MODE.LOCAL ? 'mflux/local' : status.mode === IMAGE_GEN_MODE.CODEX ? 'codex CLI' : 'external SD API')}</>
               ) : (
                 <>
                   <AlertTriangle className="w-3 h-3" />

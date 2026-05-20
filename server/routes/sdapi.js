@@ -22,7 +22,7 @@ import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { PATHS, tryReadFile } from '../lib/fileUtils.js';
 import { getSettings } from '../services/settings.js';
-import { generateImage, getMode, getActiveJob } from '../services/imageGen/index.js';
+import { generateImage, getMode, getActiveJob, IMAGE_GEN_MODE } from '../services/imageGen/index.js';
 import { local as localImage } from '../services/imageGen/index.js';
 import { createImageGenWaiter } from '../services/imageGenWaiter.js';
 import { listVideoModels, defaultVideoModelId } from '../services/videoGen/local.js';
@@ -55,7 +55,7 @@ router.use(asyncHandler(async (req, res, next) => {
 router.get('/options', asyncHandler(async (_req, res) => {
   const mode = await getMode();
   const models = localImage.listImageModels();
-  const defaultModel = mode === 'local' ? `portos-local-${models[0]?.id || 'dev'}` : 'portos-external';
+  const defaultModel = mode === IMAGE_GEN_MODE.LOCAL ? `portos-local-${models[0]?.id || 'dev'}` : 'portos-external';
   res.json({
     sd_model_checkpoint: defaultModel,
     sampler_name: 'Euler',
@@ -74,7 +74,7 @@ router.post('/options', (_req, res) => {
 // a model picker; the external mode shows a single "remote-passthrough" stub.
 router.get('/sd-models', asyncHandler(async (_req, res) => {
   const mode = await getMode();
-  if (mode === 'local') {
+  if (mode === IMAGE_GEN_MODE.LOCAL) {
     return res.json(localImage.listImageModels().map((m) => ({
       title: `portos-local-${m.id} [flux]`,
       model_name: `portos-local-${m.id}`,
@@ -175,7 +175,7 @@ router.post('/txt2img', asyncHandler(async (req, res) => {
   // file is on disk by the time generateImage resolves, so the wait is a
   // no-op there.
   const mode = await getMode();
-  const isAsyncMode = mode === 'local' || mode === 'codex';
+  const isAsyncMode = mode === IMAGE_GEN_MODE.LOCAL || mode === IMAGE_GEN_MODE.CODEX;
   const localWait = isAsyncMode
     ? createCompletionWaiter()
     : { register: () => {}, promise: Promise.resolve(), cleanup: () => {} };

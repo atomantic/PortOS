@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, useCallback } from 'react';
 import { ListOrdered, Image as ImageIcon, Film, X, RefreshCw, ChevronDown, ChevronRight, Trash2, RotateCw, Zap, Pencil } from 'lucide-react';
 import toast from '../ui/Toast';
 import { listMediaJobs, cancelMediaJob, cancelQueuedMediaJobs, deleteMediaJob, retryMediaJob, runMediaJobNow } from '../../services/apiMediaJobs.js';
+import { IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
 
 const STATUS_BADGE = {
   queued: 'bg-port-border text-port-text-muted',
@@ -18,7 +19,7 @@ const KIND_ICON = { video: Film, image: ImageIcon };
 // jobs carry `params.modelId`. Trims long HF repo paths to the tail segment.
 function modelLabel(params) {
   if (!params) return null;
-  if (params.mode === 'codex') {
+  if (params.mode === IMAGE_GEN_MODE.CODEX) {
     const m = (params.model || '').trim();
     return m ? `codex / ${m}` : 'codex';
   }
@@ -191,7 +192,7 @@ function JobRow({ job, onCancel, onRetry, onRunNow, onDelete }) {
   const canDelete = (job.status === 'failed' || job.status === 'canceled' || job.status === 'completed')
     && typeof onDelete === 'function';
   // Run-now is codex-only — GPU jobs serialize on the single MLX runtime.
-  const isQueuedCodex = job.status === 'queued' && job.kind === 'image' && job.params?.mode === 'codex';
+  const isQueuedCodex = job.status === 'queued' && job.kind === 'image' && job.params?.mode === IMAGE_GEN_MODE.CODEX;
   const canRunNow = isQueuedCodex && typeof onRunNow === 'function';
   // Inline edit form for retry-with-overrides.
   const [editing, setEditing] = useState(false);
@@ -304,7 +305,7 @@ function JobRow({ job, onCancel, onRetry, onRunNow, onDelete }) {
 // fields out of the patch so the original job's values ride through.
 function EditRetryForm({ job, onSubmit, onCancel }) {
   const p = job.params || {};
-  const isCodex = p.mode === 'codex';
+  const isCodex = p.mode === IMAGE_GEN_MODE.CODEX;
   const [prompt, setPrompt] = useState(p.prompt || '');
   const [negativePrompt, setNegativePrompt] = useState(p.negativePrompt || '');
   const [model, setModel] = useState(p.model || '');

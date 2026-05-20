@@ -32,7 +32,7 @@ import usePreviewRoute from '../../../hooks/usePreviewRoute';
 import Drawer from '../../Drawer';
 import ImageGenSettingsForm from '../../imageGen/ImageGenSettingsForm';
 import ExtractCanonButton from './ExtractCanonButton';
-import { deriveAvailableBackends } from '../../../lib/imageGenBackends';
+import { deriveAvailableBackends, IMAGE_GEN_MODE } from '../../../lib/imageGenBackends';
 import {
   PIPELINE_IMAGE_DEFAULTS,
   readPipelineImageSettings,
@@ -800,7 +800,7 @@ function PageRow({
     if (res) {
       onStageUpdate?.('comicPages', res.stage);
       const suffix = useProofAsBase ? ' (from proof)' : '';
-      toast.success(`Page ${pageIndex + 1} ${target}${suffix} render queued (${res.mode || renderOpts.mode || 'local'})`);
+      toast.success(`Page ${pageIndex + 1} ${target}${suffix} render queued (${res.mode || renderOpts.mode || IMAGE_GEN_MODE.LOCAL})`);
     }
   };
 

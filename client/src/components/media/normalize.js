@@ -1,3 +1,5 @@
+import { IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
+
 // Friendly display name for a LoRA basename. The on-disk filenames look like
 // `lora-realstagram-v7.safetensors` — strip the `lora-` prefix, the version
 // suffix (`-v123`), and the extension, then re-spaceify dashes. Idempotent
@@ -22,7 +24,7 @@ export function normalizeImage(i) {
   //   3. mode    — pre-model-field codex sidecars saved before the default
   //                was added; surface the provider tag so the card still
   //                shows where the image came from.
-  const modelId = i.modelId || i.model || (i.mode && i.mode !== 'local' ? i.mode : null);
+  const modelId = i.modelId || i.model || (i.mode && i.mode !== IMAGE_GEN_MODE.LOCAL ? i.mode : null);
   return {
     kind: 'image',
     key: `image:${i.filename}`,
@@ -132,7 +134,7 @@ export function getRenderConfigForItem(item) {
   const raw = item.raw || {};
   if (item.kind === 'image') {
     return {
-      mode: item.mode || 'local',
+      mode: item.mode || IMAGE_GEN_MODE.LOCAL,
       modelId: item.modelId,
       width: item.width,
       height: item.height,

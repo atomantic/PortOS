@@ -19,7 +19,7 @@ import {
   getSettings, listImageModels, getProviders,
 } from '../../../services/api';
 import { filterSelectableModels } from '../../../utils/providers';
-import { deriveAvailableBackends } from '../../../lib/imageGenBackends';
+import { deriveAvailableBackends, IMAGE_GEN_MODE } from '../../../lib/imageGenBackends';
 import BackendChipStrip from '../../media/BackendChipStrip';
 import ProviderModelSelector from '../../ProviderModelSelector';
 
@@ -78,8 +78,8 @@ const loadLookups = () => {
 const resolveAutoLabel = (s) => {
   const codexEnabled = s?.imageGen?.codex?.enabled === true;
   const pinned = s?.imageGen?.mode;
-  if (pinned === 'codex' && codexEnabled) return 'Codex';
-  if (pinned === 'local') return 'Local diffusion';
+  if (pinned === IMAGE_GEN_MODE.CODEX && codexEnabled) return 'Codex';
+  if (pinned === IMAGE_GEN_MODE.LOCAL) return 'Local diffusion';
   if (codexEnabled) return 'Codex';
   if (s?.imageGen?.local?.pythonPath) return 'Local diffusion';
   return 'Local diffusion (not configured)';
@@ -92,7 +92,7 @@ const summarizeMode = (cfg, autoResolution) => {
   const head = cfg.imageMode === 'auto'
     ? `auto → ${autoResolution.toLowerCase()}`
     : cfg.imageMode;
-  const tail = cfg.imageMode === 'local' && cfg.imageModelId ? ` / ${cfg.imageModelId}` : '';
+  const tail = cfg.imageMode === IMAGE_GEN_MODE.LOCAL && cfg.imageModelId ? ` / ${cfg.imageModelId}` : '';
   return `Pinned: ${head}${tail}`;
 };
 
@@ -109,20 +109,20 @@ function VisualGenSettingsBody({ cfg, update, stageLabel, systemSettings, imageM
         <BackendChipStrip
           availableBackends={availableBackends}
           value={cfg.imageMode}
-          onChange={(id) => update({ imageMode: id, ...(id !== 'local' ? { imageModelId: null } : {}) })}
+          onChange={(id) => update({ imageMode: id, ...(id !== IMAGE_GEN_MODE.LOCAL ? { imageModelId: null } : {}) })}
           size="sm"
           ariaLabel={`${stageLabel} image backend`}
           titlePrefix="Render images via"
         />
         <p className="text-[10px] text-gray-500 mt-1">{blurb}</p>
-        {cfg.imageMode === 'codex' && !systemSettings?.imageGen?.codex?.enabled && (
+        {cfg.imageMode === IMAGE_GEN_MODE.CODEX && !systemSettings?.imageGen?.codex?.enabled && (
           <p className="text-[10px] text-port-warning mt-1">
             Codex Imagegen is disabled in Settings — renders will fall back to local diffusion.
           </p>
         )}
       </div>
 
-      {cfg.imageMode === 'local' && (
+      {cfg.imageMode === IMAGE_GEN_MODE.LOCAL && (
         <div>
           <div className="text-[10px] uppercase tracking-wider text-gray-500 mb-1">
             Local image model
@@ -309,7 +309,7 @@ export function genConfigToImageOptions(cfg) {
   if (!cfg) return {};
   const out = {};
   if (cfg.imageMode && cfg.imageMode !== 'auto') out.mode = cfg.imageMode;
-  if (cfg.imageMode === 'local' && cfg.imageModelId) out.modelId = cfg.imageModelId;
+  if (cfg.imageMode === IMAGE_GEN_MODE.LOCAL && cfg.imageModelId) out.modelId = cfg.imageModelId;
   return out;
 }
 

@@ -12,6 +12,7 @@ import { Dice5 } from 'lucide-react';
 import { filterResolutions, resolveResolutionLabel } from '../../lib/imageGenResolutions';
 import { randomSeed } from '../../lib/genUtils';
 import { RUNNER_FAMILIES } from '../../lib/runnerFamilies';
+import { IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
 
 const QUANTIZE_OPTIONS = [
   { value: '3', label: '3-bit' },
@@ -39,8 +40,8 @@ export default function ImageGenControls({
   // Pass e.g. "grid-cols-2 sm:grid-cols-4" to fit a denser layout.
   className = 'grid grid-cols-2 sm:grid-cols-3 gap-3',
 }) {
-  const isLocal = mode === 'local';
-  const isCodex = mode === 'codex';
+  const isLocal = mode === IMAGE_GEN_MODE.LOCAL;
+  const isCodex = mode === IMAGE_GEN_MODE.CODEX;
 
   const currentModel = models.find((m) => m.id === modelId);
   const isFlux2 = currentModel?.runner === RUNNER_FAMILIES.FLUX2;
