@@ -418,10 +418,12 @@ async function applyPipelineRemote(remoteData) {
 // Files each category reads, used to keep the in-process checksum cache
 // honest: `getChecksum` skips the full snapshot when none of these files'
 // fingerprints changed since the last computed checksum. The fingerprint is
-// `{ mtimeMs, size }` — including size catches the (very narrow) case where
-// two writes land in the same millisecond tick on the same path: even a tick
-// collision can't keep the cache stale unless the new content is also exactly
-// the same byte length.
+// `${mtimeMs}:${size}:${ino}` — every PortOS sync-side write goes through
+// `atomicWrite` (temp + rename), which produces a new inode on every replace
+// regardless of mtime resolution or content size, so a same-tick same-size
+// rewrite still invalidates the cache. (An in-place writer that bypasses
+// atomicWrite and lands within one ms tick with identical byte length is the
+// only residual blind spot — PortOS doesn't ship one today.)
 const CHECKSUM_PATHS = {
   goals: [GOALS_FILE],
   character: [CHARACTER_FILE],
@@ -450,7 +452,7 @@ async function readFingerprintMap(paths) {
   const out = {};
   await Promise.all(paths.map(async (p) => {
     const s = await stat(p).catch(() => null);
-    out[p] = s ? `${s.mtimeMs}:${s.size}` : null;
+    out[p] = s ? `${s.mtimeMs}:${s.size}:${s.ino}` : null;
   }));
   return out;
 }
