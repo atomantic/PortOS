@@ -42,9 +42,9 @@ export const isCliProvider = (provider) => provider?.type === PROVIDER_TYPES.CLI
 /**
  * Check if a provider is an HTTP-API provider (e.g. OpenAI, Anthropic, LM Studio),
  * as opposed to a process-backed CLI/TUI agent. Use this anywhere you'd write
- * `provider.type === 'api'` against a saved provider.
+ * `provider.type === PROVIDER_TYPES.API` against a saved provider.
  */
-export const isApiProvider = (provider) => provider?.type === 'api';
+export const isApiProvider = (provider) => provider?.type === PROVIDER_TYPES.API;
 
 /**
  * Stable, module-scoped filter for `useProviderModels({ filter })` and other
