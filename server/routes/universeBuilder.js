@@ -525,6 +525,12 @@ router.post('/:id/render', asyncHandler(async (req, res) => {
   // entryRef in `compiled` (the sanitizer mints ids on every write now, so
   // legacy id-less records are the only gap).
   const entryJobs = [];
+  // Register the run BEFORE enqueueing any jobs — the queue may dispatch and
+  // emit `completed` synchronously for the first job, and without prior
+  // registration the completion hook can't coalesce the run's
+  // emitRecordUpdated calls. `compiled.length` is the authoritative expected
+  // count (each compiled item produces exactly one job below).
+  registerUniverseBuilderRun({ runId, universeId: universe.id, jobCount: compiled.length });
   for (const item of compiled) {
     const params = {
       ...baseParams,
@@ -574,10 +580,6 @@ router.post('/:id/render', asyncHandler(async (req, res) => {
     promptCount: compiled.length,
     createdAt: new Date().toISOString(),
   });
-
-  // Tell the completion hook how many jobs to expect so per-image
-  // emitRecordUpdated calls can be coalesced into one re-export at run end.
-  registerUniverseBuilderRun({ runId, universeId: universe.id, jobCount: jobIds.length });
 
   console.log(`🌍 Universe Builder render — universe=${universe.name} prompts=${compiled.length} mode=${mode} runId=${runId.slice(0, 8)}`);
 

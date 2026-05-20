@@ -191,7 +191,10 @@ export async function runPromptThroughProvider({ provider, prompt, source, model
   // (extract the args-pinned model id rather than logging defaultModel).
   let effectiveProvider = provider;
   let effectiveModel = resolveEffectiveModel(effectiveProvider, model);
-  const effectiveCwd = cwdOverride ?? process.cwd();
+  // `??` only catches null/undefined; an empty-string override would leak
+  // through to spawn() and resolve to `/`. Match tuiPromptRunner.js's
+  // string-truthy gate so an empty override falls back to process.cwd().
+  const effectiveCwd = (typeof cwdOverride === 'string' && cwdOverride) ? cwdOverride : process.cwd();
 
   // Some call sites (stageRunner, loops) create the run themselves so
   // they can log the runId before the LLM call starts. When provided,

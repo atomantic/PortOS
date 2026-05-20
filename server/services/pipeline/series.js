@@ -230,6 +230,14 @@ export async function insertSeriesWithId(input = {}) {
 }
 
 export async function updateSeries(id, patch = {}) {
+  // Pre-B.4 canon (characters/settings/objects) lives on the universe, not the
+  // series — but a stale browser tab can still POST a legacy series shape and
+  // see a silent 200. Warn so a regression that re-introduces the legacy
+  // payload is observable in logs instead of vanishing canon.
+  const legacyFields = ['characters', 'settings', 'objects'].filter((k) => k in patch);
+  if (legacyFields.length > 0) {
+    console.warn(`⚠️ series PATCH ${id.slice(0, 8)} stripped legacy canon fields: ${legacyFields.join(', ')}`);
+  }
   const { merged, nameChanged } = await queueSeriesWrite(async () => {
     const state = await readState();
     const idx = state.series.findIndex((s) => s.id === id);

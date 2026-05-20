@@ -491,6 +491,13 @@ export async function analyzeImport({
   const arcContent = (typeof arcRun.content === 'object' && arcRun.content !== null)
     ? arcRun.content
     : {};
+  // Warn when the LLM returned a structurally-successful arc with empty
+  // summary AND empty logline — a regression silently dropping both fields
+  // would otherwise present as a healthy import with a synthetic placeholder
+  // arc summary downstream.
+  if (!arcContent.summary && !arcContent.logline) {
+    console.warn(`⚠️ importer arc extract returned empty summary+logline for "${promptSeriesName}" — using synthetic fallback`);
+  }
   const arcSummary = arcContent.summary || arcContent.logline || `${promptSeriesName} — ${contentType}`;
 
   const issuesRun = await runStagedLLM('importer-issue-proposal', {

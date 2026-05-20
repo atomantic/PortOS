@@ -173,7 +173,14 @@ async function executeIteration(loop) {
     // the directory the user picked.
     cwd: loop.cwd || PATHS.root,
   }).then(({ model: executedModel }) => {
-    onComplete({ exitCode: 0, success: true, duration: Date.now() - startedAt, model: executedModel });
+    // Wrap `onComplete` so a throw inside the success branch doesn't fall
+    // through to the chained `.catch` below and get misclassified as
+    // `iteration:error`. History/persistence side is best-effort anyway.
+    return Promise.resolve()
+      .then(() => onComplete({ exitCode: 0, success: true, duration: Date.now() - startedAt, model: executedModel }))
+      .catch((err) => {
+        console.error(`❌ Loop ${id} onComplete (success branch) threw: ${err?.message || err}`);
+      });
   }).catch(err => {
     // Pre-migration `executeCliRun` always invoked `onComplete` — even on
     // non-zero exit — so loop history / persistence / `iteration:complete`

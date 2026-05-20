@@ -51,13 +51,19 @@ export async function buildVolumePdf(seriesId, seasonId, opts = {}) {
   }
   const volBackFilename = pickRenderedFilename(season.backCover);
 
-  // All issues in this volume, sorted by arcPosition (with `??` fallback to
-  // `number`). `||` would silently demote `arcPosition === 0` — a legitimate
-  // first-position value — so use nullish coalescing.
+  // All issues in this volume, sorted by arcPosition first, then number, then
+  // id. Items with no arcPosition sink to the end (`?? Infinity`) so they
+  // don't interleave with positioned ones via a `number`-fallback. `||` chain
+  // collapses to zero-comparisons for the secondary keys so `arcPosition === 0`
+  // stays a legitimate first-position value.
   const all = await listIssues({ seriesId });
   const issuesInVolume = all
     .filter((iss) => iss.seasonId === seasonId)
-    .sort((a, b) => (a.arcPosition ?? a.number ?? 0) - (b.arcPosition ?? b.number ?? 0));
+    .sort((a, b) => (
+      (a.arcPosition ?? Infinity) - (b.arcPosition ?? Infinity)
+      || (a.number ?? 0) - (b.number ?? 0)
+      || a.id.localeCompare(b.id)
+    ));
 
   // Build the ordered filename list + a parallel manifest for the colophon.
   // The manifest tracks how many pages each issue contributed so the

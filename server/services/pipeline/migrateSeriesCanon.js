@@ -46,10 +46,14 @@ export async function migrateSeriesCanon({ dryRun = false, log = console.log } =
     };
     if (counts.characters + counts.settings + counts.objects === 0) continue;
 
-    // Auto-create a universe for orphan series so the migration completes
-    // without manual linking. Named after the series so the user can find it
-    // and merge later if desired.
+    // For orphan series, defer the link-to-universe write until AFTER the
+    // canon has landed in the universe. The link write strips the series'
+    // legacy `characters/settings/objects` (sanitizeSeries no longer
+    // round-trips them post-B.4), so a crash between linking and merging
+    // would leave the series stripped + the new universe empty. Holding the
+    // orphan-link variables here lets us flip the order at write time.
     let universeId = s.universeId;
+    let pendingOrphanUniverse = null;
     if (!universeId) {
       if (dryRun) {
         log(`📋 [dry-run] Would create universe for orphan series "${s.name}" (${s.id})`);
@@ -58,8 +62,11 @@ export async function migrateSeriesCanon({ dryRun = false, log = console.log } =
           name: `${s.name} (auto-migrated)`,
           starterPrompt: s.logline || s.premise?.slice(0, 500) || '',
         });
-        await updateSeries(s.id, { universeId: newUniverse.id });
+        pendingOrphanUniverse = newUniverse;
         universeId = newUniverse.id;
+        // Count the universe at create-time so the trailing "created N
+        // universe(s)" log stays accurate — even when a crash later strands
+        // the link write, the universe really was created on disk.
         summary.universesCreated += 1;
         log(`🌌 Created universe "${newUniverse.name}" (${newUniverse.id}) for orphan series "${s.name}"`);
       }
@@ -106,6 +113,14 @@ export async function migrateSeriesCanon({ dryRun = false, log = console.log } =
         summary.seriesMigrated += 1;
         log(`✅ Migrated series "${s.name}" → universe "${universe.name}": ${Object.entries(counts).map(([k, n]) => `${n} ${k}`).join(', ')}`);
       }
+    }
+
+    // Now that the universe carries the canon (or we've at least attempted
+    // the write), link the orphan series. A crash earlier in the loop leaves
+    // the universe in place to retry against; the series still carries its
+    // legacy fields until this write lands.
+    if (pendingOrphanUniverse && !dryRun) {
+      await updateSeries(s.id, { universeId: pendingOrphanUniverse.id });
     }
   }
 

@@ -144,13 +144,15 @@ const arcSchema = z.object({
 // pre-split legacy fields. Render-slot details (`proofImage`, `finalImage`)
 // arrive only from the render route's PATCH path, which builds them
 // server-side; PATCHes of the season metadata only carry the user-editable
-// `script`. Explicit shape (not `.passthrough()`) so the "all inputs
-// validated" CLAUDE.md convention holds for new fields.
+// `script`. `.passthrough()` keeps the door open for a "save full series"
+// round-trip echoing back server-built render fields (proofImage /
+// finalImage) without 400'ing — the parent seasonSchema is already
+// passthrough for the same reason.
 const seasonCoverSchema = z.object({
   script: z.string().max(8000).optional(),
   imageJobId: z.string().trim().max(200).nullable().optional(),
   prompt: z.string().max(16_000).nullable().optional(),
-});
+}).passthrough();
 
 const seasonSchema = z.object({
   id: z.string().trim().min(1).max(64).optional(),
