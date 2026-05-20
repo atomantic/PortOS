@@ -9,12 +9,15 @@ import { useScrollLock } from '../../hooks/useScrollLock';
 import { useSwipeNav } from '../../hooks/useSwipeNav';
 import { copyToClipboard } from '../../lib/clipboard';
 
-// Intentionally NOT migrated to <ui/Modal>. The prev/next buttons sit as
-// viewport-edge siblings of the card (not children of a constrained panel
-// box), and the Esc cascade refineOpen → fullScreen → close is layered
-// into the window keydown handler below. Modal would wrap children in a
-// panel container and add its own Esc listener — both fight this
-// lightbox's existing UX.
+// Intentionally NOT migrated to <ui/Modal> or <components/Drawer>. The
+// prev/next buttons sit as viewport-edge siblings of the card (not children
+// of a constrained panel box), and the Esc cascade refineOpen → fullScreen
+// → close is layered into the window keydown handler below. Both wrappers
+// would add their own flat Esc listener that fights the cascade, and Drawer
+// is a right-side slide-in over a normal page — SettingsPane below is an
+// inline layout sibling of the image, not a slide-in. (A mobile tap-to-open
+// bottom-sheet drawer existed pre-ed0e4859 and was removed because it
+// covered the image area in fullscreen.)
 
 const NOTE_MAX = 2000;
 const NOTE_DEBOUNCE_MS = 500;

@@ -78,4 +78,6 @@
 
 ## Removed
 
+- **[route-medialightbox-settings-drawer-through] Dropped as drift — no migration target exists.** The PLAN item asked to "route MediaLightbox settings drawer through `components/Drawer.jsx`," but commit ed0e4859 (May 12 2026) removed the actual settings drawer from the lightbox; the current `SettingsPane` is an inline layout sibling of the image (side-by-side on desktop, stacked on mobile), not a slide-in drawer. The existing "Intentionally NOT migrated to `<ui/Modal>`" comment in `MediaLightbox.jsx` is extended to call out `<components/Drawer>` for the same reasons (flat Esc listener fights the `refineOpen → fullScreen → close` cascade; Drawer is a right-side slide-in over a normal page, not what SettingsPane is) so future `/simplify` passes don't re-propose. PLAN item removed; no code changes other than the comment.
+
 - **`CODEX5.5_REVIEW.md`** at repo root — obsolete now that the concrete bugs are shipped and the strategic items are tracked in PLAN.md.
