@@ -11,12 +11,13 @@ vi.mock('../../lib/pythonSetup.js', () => ({
   FLUX2_VENV_DEFAULT: '/fake/home/.portos/venv-flux2/bin/python3',
 }));
 
-// Point the registry at a temp dir so importing local.js (which calls
-// getImageModels() at module load and triggers seedIfMissing in
-// mediaModels.js) doesn't write to the repo's data/media-models.json.
-// Save + restore the prior env value and call vi.resetModules() so a
-// previously-cached mediaModels.js inside the same vitest worker doesn't
-// stick to the wrong file. Pattern matches server/lib/mediaModels.test.js.
+// Point the registry at a temp dir. local.js itself no longer calls
+// getImageModels() at module load — but any test that exercises a code path
+// invoking the registry (e.g. generateImage → loadMediaModels → seedIfMissing)
+// would still write to the repo's data/media-models.json without this. Save +
+// restore the prior env value and call vi.resetModules() so a previously
+// cached mediaModels.js inside the same vitest worker doesn't stick to the
+// wrong file. Pattern matches server/lib/mediaModels.test.js.
 let tmpRegistryDir;
 let priorRegistryEnv;
 let buildArgs;

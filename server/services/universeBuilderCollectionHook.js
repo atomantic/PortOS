@@ -21,27 +21,12 @@
  * the run finishes naturally.
  */
 
-import { writeFile } from 'fs/promises';
 import { mediaJobEvents } from './mediaJobQueue/index.js';
 import { addItem, ERR_DUPLICATE } from './mediaCollections.js';
 import { withReexportSuppressed, emitRecordUpdated } from './sharing/recordEvents.js';
 import { appendEntryImageRef, getUniverse, ENTRY_REF_KIND } from './universeBuilder.js';
-
-// `imageGen/local.js` runs `getImageModels()` at module-load time, which
-// requires the on-disk media-models registry directory to be writable. That
-// fires through `routes/universeBuilder.js` → this hook on every importer
-// (e.g. `routes/pipeline.js`), tripping any test that mocks PATHS to a
-// non-writable path. Lazy-loading here keeps the production path identical
-// (one resolve per hook init, then a cached module ref) while letting
-// pipeline/routes tests load without invoking the registry side-effect.
-let _readImageSidecar = null;
-async function getReadImageSidecar() {
-  if (!_readImageSidecar) {
-    const mod = await import('./imageGen/local.js');
-    _readImageSidecar = mod.readImageSidecar;
-  }
-  return _readImageSidecar;
-}
+import { readImageSidecar } from './imageGen/local.js';
+import { atomicWrite } from '../lib/fileUtils.js';
 
 // runId → { universeId, pending, universePromise? }. Pure in-memory; lost on restart.
 // `universePromise` memoizes the universe doc for the lifetime of the batch so
@@ -116,7 +101,6 @@ function buildSidecarPatch({ tag, universe }) {
 // PNG itself is missing too — creating a universe-only sidecar in that case
 // would leave a stub record with no prompt/seed/model on disk.
 async function enrichSidecar(filename, patch) {
-  const readImageSidecar = await getReadImageSidecar();
   const { path, metadata } = await readImageSidecar(filename);
   if (!metadata || Object.keys(metadata).length === 0) return;
   let changed = false;
@@ -129,7 +113,10 @@ async function enrichSidecar(filename, patch) {
     }
   }
   if (!changed) return;
-  await writeFile(path, JSON.stringify(next, null, 2));
+  // Atomic (temp + rename) so concurrent readers — listGallery, the
+  // lightbox metadata fetch, or another batch entry — can't observe a
+  // mid-truncate empty file.
+  await atomicWrite(path, next);
 }
 
 let completedHandler = null;

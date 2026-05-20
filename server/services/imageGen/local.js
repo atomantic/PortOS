@@ -30,8 +30,10 @@ const IS_WIN = process.platform === 'win32';
 
 import { getImageModels, isFlux2, isZImage, isErnie } from '../../lib/mediaModels.js';
 
-export const IMAGE_MODELS = Object.fromEntries(getImageModels().map((m) => [m.id, m]));
-
+// Read the registry lazily — callers below hit getImageModels() at request
+// time. A prior `IMAGE_MODELS = Object.fromEntries(getImageModels()...)`
+// snapshot lived here but fired loadMediaModels() at import time, breaking
+// any test that mocks PATHS.data to a non-writable path.
 export const listImageModels = () => getImageModels();
 
 // Per-job clients: jobId -> { clients, status, meta, broadcast }
@@ -219,13 +221,11 @@ export async function generateImage({ pythonPath, prompt, negativePrompt = '', m
   // callers that bypass the queue must not run two concurrent renders — the
   // activeProcess handle below would be clobbered and cancel() would orphan
   // the first child.
-  // Use the registry cache view (which applies the per-platform `broken`
-  // filter via getImageModels) rather than the module-load IMAGE_MODELS
-  // snapshot. Note: loadMediaModels memoizes on first read — on-disk edits
-  // to data/media-models.json still need a server restart to apply.
-  // Don't re-check model.broken here: getImageModels() already filtered
-  // current-platform entries; an extra truthiness check would also reject
-  // entries broken on the OTHER platform (e.g. 'windows' on a macOS box).
+  // loadMediaModels memoizes — on-disk edits to data/media-models.json still
+  // need a server restart to apply. Don't re-check model.broken here:
+  // getImageModels() already filtered current-platform entries; an extra
+  // check would also reject entries broken on the OTHER platform (e.g.
+  // 'windows' on a macOS box).
   const model = getImageModels().find((m) => m.id === modelId);
   if (!model) throw new ServerError(`Unknown or unsupported model: ${modelId}`, { status: 400, code: 'VALIDATION_ERROR' });
   // Both flux2 and z-image runners resolve their own Python via the FLUX.2
