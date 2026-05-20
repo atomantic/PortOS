@@ -14,6 +14,7 @@ import {
 import toast from '../ui/Toast';
 import BrailleSpinner from '../BrailleSpinner';
 import LocalSetupPanel from './LocalSetupPanel';
+import { isLoopbackHost } from '../../lib/loopbackHost.js';
 import {
   getSettings, updateSettings, getImageGenStatus, generateImage,
   registerTool, updateTool, getToolsList,
@@ -353,7 +354,7 @@ export function ImageGenTab() {
     const h = window.location.hostname;
     // Local dev / loopback mirror — we can't infer the tailnet hostname
     // from the browser; tell the user to look it up.
-    if (h === 'localhost' || h === '127.0.0.1' || h === '::1') return null;
+    if (isLoopbackHost(h)) return null;
     // Real tailnet host — use the canonical user-facing port (:5555) and
     // match the currently-active scheme so the hint works in both HTTPS-on
     // (Tailscale cert provisioned) and HTTP-only PortOS deployments.
