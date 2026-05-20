@@ -315,6 +315,12 @@ describe('executeTuiRun', () => {
     });
 
     it('merges provider.envVars and strips CLAUDECODE from the child env so a nested Claude Code TUI is not detected as nested', async () => {
+      // Save + restore the original value: a PortOS-inside-Claude-Code dev
+      // run starts the worker with CLAUDECODE already set, and an
+      // unconditional `delete` would clobber the test of a sibling test.
+      const originalClaudecode = Object.prototype.hasOwnProperty.call(process.env, 'CLAUDECODE')
+        ? process.env.CLAUDECODE
+        : undefined;
       process.env.CLAUDECODE = '1';
       try {
         const provider = {
@@ -333,7 +339,8 @@ describe('executeTuiRun', () => {
         ptyInstances[0].emitExit({ exitCode: 0 });
         await promise;
       } finally {
-        delete process.env.CLAUDECODE;
+        if (originalClaudecode === undefined) delete process.env.CLAUDECODE;
+        else process.env.CLAUDECODE = originalClaudecode;
       }
     });
   });
