@@ -31,7 +31,7 @@ import { getSettings } from '../services/settings.js';
 import { findOrCreateUniverseCollection } from '../services/mediaCollections.js';
 import { registerUniverseBuilderRun } from '../services/universeBuilderCollectionHook.js';
 import { getImageModels, isFlux2, isZImage, isErnie } from '../lib/mediaModels.js';
-import { IMAGE_GEN_MODE } from '../services/imageGen/modes.js';
+import { IMAGE_GEN_MODE, IMAGE_GEN_MODES } from '../services/imageGen/modes.js';
 import { getStylePresetById } from '../lib/writersRoomStylePresets.js';
 
 const router = Router();
@@ -303,7 +303,7 @@ const renderSchema = z.object({
   collectionName: z.unknown().optional(),
   // Image-gen knobs — these mirror /api/image-gen/generate so the user can
   // pick mode/size/steps without bouncing to the Image page first.
-  mode: z.enum(['external', 'local', 'codex']).optional(),
+  mode: z.enum(IMAGE_GEN_MODES).optional(),
   modelId: z.string().trim().max(64).optional(),
   width: z.number().int().min(64).max(2048).optional(),
   height: z.number().int().min(64).max(2048).optional(),

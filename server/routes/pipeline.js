@@ -60,6 +60,7 @@ import { startEpisodeVideoForIssue, ERR_NO_STORYBOARDS } from '../services/pipel
 import { generateSeriesTitleLogo } from '../services/pipeline/seriesTitleLogo.js';
 import { COMIC_PAGE_VARIANTS, slotKeyForVariant } from '../services/pipeline/owners.js';
 import { ASPECT_RATIOS, QUALITIES } from '../lib/creativeDirectorPresets.js';
+import { IMAGE_GEN_MODE } from '../services/imageGen/modes.js';
 import { extractScenes, SOURCE_KIND } from '../lib/sceneExtractor.js';
 import { buildComicPdf, PAGE_SIZES, DEFAULT_PAGE_SIZE, ERR_NO_RENDERED_PAGES } from '../services/pipeline/comicPdf.js';
 import {
@@ -278,7 +279,7 @@ const visualStageInputSchema = stageInputSchema.extend({
   // refine-LLM override. Sanitizer drops the field entirely when nothing
   // is set, so a `null` here clears it.
   genConfig: z.object({
-    imageMode: z.enum(['auto', 'local', 'codex']).optional(),
+    imageMode: z.enum(['auto', IMAGE_GEN_MODE.LOCAL, IMAGE_GEN_MODE.CODEX]).optional(),
     imageModelId: z.string().trim().max(200).nullable().optional(),
     refineProvider: z.string().trim().max(200).nullable().optional(),
     refineModel: z.string().trim().max(200).nullable().optional(),
@@ -349,7 +350,7 @@ const visualGenerateSchema = z.object({
   slugline: z.string().trim().max(200).optional(),
   negativePrompt: z.string().trim().max(2000).optional(),
   extraStyle: z.string().trim().max(2000).optional(),
-  mode: z.enum(['local', 'codex']).optional(),
+  mode: z.enum([IMAGE_GEN_MODE.LOCAL, IMAGE_GEN_MODE.CODEX]).optional(),
   modelId: z.string().trim().max(64).optional(),
   width: imageEdgeSchema,
   height: imageEdgeSchema,
@@ -376,7 +377,7 @@ const makeCoverRenderSchema = (scriptField) => z.object({
   [scriptField]: z.string().max(8000).optional(),
   negativePrompt: z.string().trim().max(2000).optional(),
   extraStyle: z.string().trim().max(2000).optional(),
-  mode: z.enum(['local', 'codex']).optional(),
+  mode: z.enum([IMAGE_GEN_MODE.LOCAL, IMAGE_GEN_MODE.CODEX]).optional(),
   modelId: z.string().trim().max(64).optional(),
   width: imageEdgeSchema,
   height: imageEdgeSchema,
@@ -412,7 +413,7 @@ const comicCoverConceptsSchema = z.object({
 const comicPageRenderSchema = z.object({
   negativePrompt: z.string().trim().max(2000).optional(),
   extraStyle: z.string().trim().max(2000).optional(),
-  mode: z.enum(['local', 'codex']).optional(),
+  mode: z.enum([IMAGE_GEN_MODE.LOCAL, IMAGE_GEN_MODE.CODEX]).optional(),
   modelId: z.string().trim().max(64).optional(),
   width: imageEdgeSchema,
   height: imageEdgeSchema,
