@@ -93,34 +93,11 @@ if [ -t 0 ]; then
     done
 fi
 
-# Print the URL the user should open. The server flips between HTTP and HTTPS
-# on :5555 based on whether data/certs/{cert,key}.pem exist (see
-# lib/tailscale-https.js). When HTTPS is active, :5555 speaks TLS only — plain
-# http://localhost:5555 hits a TLS mismatch — and a loopback HTTP mirror spawns
-# on :5553 (or $PORTOS_HTTP_PORT) for cert-free local access.
+# Print the URL the user should open. Delegates to scripts/print-access-url.js
+# so we share the same cert detection (file presence AND PEM parseability) the
+# server uses — otherwise we'd advertise HTTPS URLs the server isn't serving.
 print_access_url() {
-    if [ ! -f data/certs/cert.pem ] || [ ! -f data/certs/key.pem ]; then
-        echo "Access at: http://localhost:5555"
-        return
-    fi
-    local mirror_port="${PORTOS_HTTP_PORT:-5553}"
-    # Read cert mode from meta.json — self-signed certs cover localhost + local
-    # IPv4s but not the Tailscale hostname; Tailscale LE certs cover the
-    # tailnet hostname but not localhost. The advertised URLs must match the
-    # cert's SAN coverage or we'll send users to a URL their browser rejects.
-    local cert_mode=""
-    if [ -f data/certs/meta.json ]; then
-        cert_mode=$(node -e "try{process.stdout.write(JSON.parse(require('fs').readFileSync('data/certs/meta.json','utf8')).mode||'')}catch{}" 2>/dev/null)
-    fi
-    echo "Access at: http://localhost:${mirror_port}  (loopback HTTP mirror — no cert warning)"
-    if [ "$cert_mode" = "tailscale" ]; then
-        echo "       or: https://<machine>.<tailnet>.ts.net:5555  (trusted via Tailscale)"
-        echo "       or: https://localhost:5555  (browser warns — cert is for the Tailscale hostname)"
-    elif [ "$cert_mode" = "self-signed" ]; then
-        echo "       or: https://localhost:5555  (browser warns on first visit — self-signed cert)"
-    else
-        echo "       or: https://localhost:5555  (browser may warn on cert)"
-    fi
+    node scripts/print-access-url.js
 }
 
 if [ "$start_now" = "1" ]; then
