@@ -20,10 +20,6 @@ _Nothing currently parked — pick the next item from the Backlog._
 
 - [ ] [flux2-multi-reference-python-runner] **FLUX.2 multi-reference Python runner.** The UI + server contract for multi-reference editing shipped 2026-05-17 (slug `multi-reference-image-editing-for-flux-2-ui`); the Python runner (`scripts/flux2_macos.py`) currently ignores the `--reference-images`/`--reference-strengths` args that `local.js` now passes. Wire diffusers' multi-reference API in the runner and swap `server/lib/mediaModels.js#flux2-klein-9b` `tokenizerRepo` to `FLUX.2-klein-9B-kv` (gated repo — requires the user to accept the license on HF). Validate end-to-end with 2–4 uploaded refs.
 
-### Sharing — performance follow-ups (deferred from content-addressed asset dedup, 2026-05-18)
-
-- [ ] [sharing-annotationssync-cache-bucket-asset-keys] **Cache `listBucketAssetKeys` per (bucket, manifests-dir mtime).** Today `annotationsSync.js#listBucketAssetKeys` re-scans every manifest in every auto-merge bucket on every 2s-debounced annotation flush (post-v2 because content-addressed blob paths don't carry filenames, so manifests are the only source of truth). Memoize `Map<bucketPath, { mtime, keys }>` keyed on the manifests dir mtime; invalidate when mtime advances. The legacy `assets/{images,videos}/` dir scan is still needed as a fall-through for pre-v2 buckets and can run un-cached.
-
 ### Code quality / dedup (from `/simplify` passes)
 
 - [ ] [extract-mergeexpandintodraft-draft-result-from] **Extract `mergeExpandIntoDraft(draft, result)` from `UniverseBuilder.jsx#handleExpand`.** The function is ~150 lines mixing pure-merge logic (categories, sheets, canon, locks) with I/O shell (API call, setDraft, auto-save, toast). Pull the merge into a top-level pure helper so the I/O surface shrinks and the merge is unit-testable. Deferred from Phase B `/simplify` to keep that PR tightly scoped.
