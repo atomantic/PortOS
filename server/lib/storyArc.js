@@ -323,12 +323,16 @@ export function sanitizeSeasonList(rawList, opts = {}) {
   for (const raw of rawList) {
     const s = sanitizeSeason(raw, opts);
     if (!s) continue;
+    const atCap = byId.size >= ARC_LIMITS.SEASONS_PER_SERIES_MAX;
     if (byId.has(s.id)) {
       duplicateIds.push(s.id);
-      byId.set(s.id, s);
+      // Within-cap duplicates still LWW; past-cap duplicates only warn so the
+      // historical first-wins-past-cap outcome is preserved and the warning
+      // is the only new signal.
+      if (!atCap) byId.set(s.id, s);
       continue;
     }
-    if (byId.size >= ARC_LIMITS.SEASONS_PER_SERIES_MAX) continue;
+    if (atCap) continue;
     byId.set(s.id, s);
   }
   if (duplicateIds.length) {

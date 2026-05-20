@@ -229,7 +229,7 @@ describe('storyArc — sanitizeSeasonList', () => {
     expect(sanitizeSeasonList(many)).toHaveLength(ARC_LIMITS.SEASONS_PER_SERIES_MAX);
   });
 
-  it('still detects duplicate ids that appear after the retention cap is full', () => {
+  it('warns about post-cap duplicate ids without overwriting the surviving entry', () => {
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const filler = Array.from(
       { length: ARC_LIMITS.SEASONS_PER_SERIES_MAX },
@@ -237,11 +237,14 @@ describe('storyArc — sanitizeSeasonList', () => {
     );
     const out = sanitizeSeasonList([
       ...filler,
-      { id: 'sea-fill-0', title: 'overwrite', number: 1 },
+      { id: 'sea-fill-0', title: 'should-not-overwrite-past-cap', number: 1 },
     ]);
     expect(out).toHaveLength(ARC_LIMITS.SEASONS_PER_SERIES_MAX);
-    const overwritten = out.find((s) => s.id === 'sea-fill-0');
-    expect(overwritten.title).toBe('overwrite');
+    // Past-cap duplicates surface via the warning but do NOT LWW-overwrite —
+    // preserves the historical first-wins-past-cap behavior so adding the
+    // detector is purely additive.
+    const surviving = out.find((s) => s.id === 'sea-fill-0');
+    expect(surviving.title).toBe('f0');
     expect(warnSpy).toHaveBeenCalledTimes(1);
     expect(warnSpy.mock.calls[0][0]).toContain('sea-fill-0');
   });
