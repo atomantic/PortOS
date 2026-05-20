@@ -183,17 +183,36 @@ function trySelfSigned() {
   }
 }
 
-// Implicit fallback gate. We only auto-generate a self-signed cert when the
-// user has previously opted in (existing self-signed cert on disk — we want
-// to keep it fresh on IP changes). Otherwise we exit without provisioning so
-// `npm start`'s mandatory `setup-cert.js` step doesn't silently flip a vanilla
-// install from HTTP→HTTPS-self-signed and break the documented :5555 URL.
+// Implicit fallback gate. Decides what to do (and what to tell the user) when
+// the Tailscale provisioning path didn't run / failed. Three cases — picked by
+// what's actually on disk, because `server/lib/tailscale-https.js` boots HTTPS
+// purely on cert+key file presence (not on meta.mode):
+//   1. Self-signed cert on disk → renewal path (regenerate on IP changes).
+//   2. Tailscale (or unknown-mode) cert on disk → keep the existing cert in
+//      place; the server will still boot HTTPS. We deliberately don't silently
+//      flip cert types or delete the user's files. Tell the user accurately.
+//   3. No cert files at all → server boots HTTP. Print HTTPS opt-in guidance.
+// Case 2 is what stops the "Tailscale was broken since last run, but cert
+// files are stale on disk and the server still serves TLS" surprise.
 function maybeFallbackSelfSigned() {
   const meta = readMeta();
-  if (meta?.mode === 'self-signed' && hasTailscaleCert(CERT_DIR)) {
+  const hasCert = hasTailscaleCert(CERT_DIR);
+
+  if (hasCert && meta?.mode === 'self-signed') {
     trySelfSigned();
     return;
   }
+
+  if (hasCert) {
+    const modeLabel = meta?.mode ? `existing ${meta.mode} cert` : 'existing cert';
+    console.log(`ℹ️  Keeping ${modeLabel} at data/certs/{cert,key}.pem — server will boot HTTPS on :5555.`);
+    if (meta?.mode === 'tailscale') {
+      console.log(`   To refresh the LE cert, fix Tailscale and re-run \`npm run setup:cert\`.`);
+    }
+    console.log(`   To revert to HTTP-only, delete data/certs/{cert,key}.pem and restart.`);
+    return;
+  }
+
   console.log(`ℹ️  Staying HTTP-only on :5555 (no Tailscale cert provisioned).`);
   console.log(`   To enable HTTPS (required for in-browser mic), choose one:`);
   console.log(`     • Install Tailscale + enable HTTPS in the tailnet admin, then \`npm run setup:cert\``);
