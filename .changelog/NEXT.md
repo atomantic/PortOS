@@ -2,6 +2,8 @@
 
 ## Added
 
+- **[versioning-diff-view-per-stage-persist-last-n] Pipeline text stages now keep a version history.** Each regenerate snapshots the prior draft (up to five back) and a new "History" button on the Idea / Prose / Comic Script / Teleplay editors opens a side-by-side word diff against the current version with one-click restore.
+
 ## Changed
 
 - **[cover-prose-input-idea-input-in-canonusage-corpus] Universe canon cross-reference test suite now pins every stage the per-issue search reads** — a regression that silently drops a stage from the search now fails the test suite immediately.
