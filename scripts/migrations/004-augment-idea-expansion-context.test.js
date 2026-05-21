@@ -3,7 +3,7 @@
  * neighbor-issue context blocks.
  *
  * Picked up via the vitest include glob in server/vitest.config.js
- * (`../scripts/migrations/**\/*.test.js`).
+ * (`../scripts/**\/*.test.js`).
  */
 import { describe } from 'vitest';
 
