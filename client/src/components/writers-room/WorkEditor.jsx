@@ -103,6 +103,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   const [places, setPlaces] = useState([]);
   const [objects, setObjects] = useState([]);
   const [runningKind, setRunningKind] = useState(null);
+  const [runStartedAt, setRunStartedAt] = useState(null);
   const [drawer, setDrawer] = useState(null);
   const [overflowOpen, setOverflowOpen] = useState(false);
   const [mobileTab, setMobileTab] = useState(MOBILE_TAB.WRITING);
@@ -465,15 +466,18 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   const runAnalysis = useCallback(async (kind) => {
     if (runningKind) return false;
     setRunningKind(kind);
+    setRunStartedAt(Date.now());
     const snapshot = await runWritersRoomAnalysis(work.id, { kind }).catch((err) => {
       if (mountedRef.current) toast.error(`${ANALYSIS_LABELS[kind] || kind} failed: ${err.message}`);
       return null;
     });
     if (!mountedRef.current) {
       setRunningKind(null);
+      setRunStartedAt(null);
       return false;
     }
     setRunningKind(null);
+    setRunStartedAt(null);
     if (!snapshot) return false;
     if (snapshot.status === 'failed') {
       toast.error(`${ANALYSIS_LABELS[kind] || kind} failed: ${snapshot.error || 'unknown'}`);
@@ -751,6 +755,14 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
         </div>
       </div>
 
+      {runningKind && (
+        <AnalysisRunBanner
+          kind={runningKind}
+          label={ANALYSIS_LABELS[runningKind] || runningKind}
+          startedAt={runStartedAt}
+        />
+      )}
+
       {/* Mobile-only Writing/Storyboard toggle — desktop renders both side-by-side. */}
       <div className="lg:hidden flex border-b border-port-border bg-port-bg/40 shrink-0">
         <MobileTab active={mobileTab === MOBILE_TAB.WRITING} onClick={() => setMobileTab(MOBILE_TAB.WRITING)} icon={PenLine} label="Writing" />
@@ -921,6 +933,51 @@ function MenuItem({ icon: Icon, label, onClick, running = false, active = false,
       <span className="flex-1">{label}</span>
       {badge != null && <span className="text-[10px] text-gray-500">{badge}</span>}
     </button>
+  );
+}
+
+// In-progress banner for a writers-room analysis run. Renders a persistent
+// status strip with elapsed time and reassurance text that escalates as the
+// run drags on — so long Opus-on-prose runs (which can legitimately take
+// 10+ minutes) don't look like the UI has gone silent.
+function AnalysisRunBanner({ kind, label, startedAt }) {
+  const [elapsed, setElapsed] = useState(() => (startedAt ? Math.floor((Date.now() - startedAt) / 1000) : 0));
+  useEffect(() => {
+    if (!startedAt) return undefined;
+    setElapsed(Math.floor((Date.now() - startedAt) / 1000));
+    const id = setInterval(() => {
+      setElapsed(Math.floor((Date.now() - startedAt) / 1000));
+    }, 1000);
+    return () => clearInterval(id);
+  }, [startedAt]);
+
+  const mm = Math.floor(elapsed / 60);
+  const ss = elapsed % 60;
+  const timeStr = `${mm}:${ss.toString().padStart(2, '0')}`;
+
+  // Reassurance ladder — escalating context so the user can tell the
+  // difference between "normal" and "this is taking unusually long."
+  const tone =
+    elapsed >= 480 ? 'border-port-warning/50 bg-port-warning/5 text-port-warning'
+    : 'border-port-accent/40 bg-port-accent/5 text-gray-200';
+  const reassurance =
+    elapsed < 30  ? 'Working…'
+    : elapsed < 120 ? 'Still working — large prompts can take a few minutes.'
+    : elapsed < 480 ? 'Still going — Opus on long prose runs 5–10+ minutes. Hang tight.'
+    : 'Almost there — keep this tab open while the agent finishes.';
+
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className={`shrink-0 flex items-center gap-3 px-4 py-2 border-b text-[12px] ${tone}`}
+      data-kind={kind}
+    >
+      <Loader2 size={14} className="animate-spin shrink-0" />
+      <span className="font-semibold shrink-0">{label}</span>
+      <span className="tabular-nums text-gray-300 shrink-0" aria-label="elapsed time">{timeStr}</span>
+      <span className="truncate text-gray-400">{reassurance}</span>
+    </div>
   );
 }
 

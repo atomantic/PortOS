@@ -20,7 +20,7 @@ export const RUN_TYPES = {
 };
 
 export const DEFAULT_TIMEOUT = 300000;
-export const MAX_TIMEOUT = 600000;
+export const MAX_TIMEOUT = 1800000;
 export const MIN_TIMEOUT = 1000;
 
 export const DEFAULT_TEMPERATURE = 0.1;

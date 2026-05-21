@@ -22,7 +22,7 @@ export const providerSchema = z.object({
   mediumModel: z.string().nullable().optional(),
   heavyModel: z.string().nullable().optional(),
   fallbackProvider: z.string().nullable().optional(),
-  timeout: z.number().int().min(1000).max(600000).optional(),
+  timeout: z.number().int().min(1000).max(1800000).optional(),
   enabled: z.boolean().optional(),
   envVars: z.record(z.string()).optional(),
   secretEnvVars: z.array(z.string()).optional(),
@@ -42,7 +42,7 @@ export const runSchema = z.object({
   command: z.string().optional(),
   prompt: z.string().optional(),
   screenshots: z.array(z.string()).optional(),
-  timeout: z.number().int().min(1000).max(600000).optional()
+  timeout: z.number().int().min(1000).max(1800000).optional()
 });
 
 export function validate(schema, data) {
