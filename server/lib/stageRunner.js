@@ -206,14 +206,17 @@ export async function runStagedLLM(stageName, variables, options = {}) {
   // unavailable by providerStatusService. Capture the full result and
   // reconcile, mirroring the promptRunner.js#createRun caller-runId path —
   // otherwise execution would proceed against the original provider while
-  // /runs metadata claims the fallback ran. Also pass `timeout` so the run
-  // record's persisted timeout matches what executeXxxRun actually enforces.
+  // /runs metadata claims the fallback ran. Pass `timeout` with a fallback
+  // to `provider.timeout` so the run record's persisted timeout reflects
+  // what executeXxxRun actually enforces (the runner falls back to
+  // `effectiveProvider.timeout` when no override is set — mirror that here
+  // so the recorded value isn't a misleading `undefined`).
   const runResult = await createRun({
     providerId: provider.id,
     model: effectiveModel,
     prompt,
     source: options.source || 'staged-llm',
-    timeout: effectiveTimeout,
+    timeout: effectiveTimeout ?? provider.timeout,
   });
   const { runId } = runResult;
   if (runResult.provider && runResult.provider.id !== provider.id) {
@@ -221,12 +224,14 @@ export async function runStagedLLM(stageName, variables, options = {}) {
     effectiveModel = resolveEffectiveModel(effectiveProvider, resolvedModel);
     // createRun persisted `metadata.providerId/name/model` against the
     // ORIGINAL provider's id and resolved value. Patch so /runs reflects
-    // the fallback that actually ran. Best-effort: this is attribution, not
-    // load-bearing for execution.
+    // the fallback that actually ran AND its timeout (since the runner
+    // will enforce the fallback's per-call timeout, not the original's).
+    // Best-effort: this is attribution, not load-bearing for execution.
     patchRunMetadata(runId, {
       model: effectiveModel,
       providerId: effectiveProvider.id,
       providerName: effectiveProvider.name,
+      timeout: effectiveTimeout ?? effectiveProvider.timeout,
     }).catch(() => { /* best-effort */ });
   }
   console.log(`📝 stage: ${effectiveProvider.id} / ${effectiveModel || '(default)'} / ${stageName} → ${runId.slice(0, 8)}`);

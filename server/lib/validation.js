@@ -961,13 +961,18 @@ export const stageConfigUpdateSchema = z.object({
   model: z.string().nullable().optional(),
   provider: z.string().nullable().optional(),
   timeout: z.preprocess(
-    // Treat empty string as a "clear override" (null). Coerce numeric strings
-    // to numbers so JSON-from-form clients that send "900000" parse correctly.
+    // Treat empty string as a "clear override" (null). Coerce digit-only
+    // strings to numbers so form clients that send "900000" still parse —
+    // but reject "1e3" / "1.5" / "0x10" by leaving them as the original
+    // string so the inner `.number()` check fails. The digit-only rule
+    // mirrors `parseTimeoutMs` in client/src/utils/formatters.js so
+    // client/server validation reject the same shapes.
     (v) => {
       if (v === '' || v === null) return null;
       if (v === undefined) return undefined;
-      const n = Number(v);
-      return Number.isFinite(n) ? n : v; // let invalid values fail the inner check
+      if (typeof v === 'number') return v;
+      if (typeof v === 'string' && /^\d+$/.test(v)) return Number(v);
+      return v;
     },
     z.number().int().min(STAGE_TIMEOUT_MIN_MS).max(STAGE_TIMEOUT_MAX_MS).nullable().optional()
   ),

@@ -199,12 +199,12 @@ export const TIMEOUT_INPUT_STEP_MS = 1000;
  * client from emitting PUTs the server's Zod schema would 400 (e.g. a
  * stray `1` that "looks positive" but is below the 1s floor).
  *
- * Uses `Number(...)` + `Number.isInteger` instead of `parseInt` so the
- * parse rules match the server's `Number(v)` + `z.number().int()` exactly —
- * `"1e3"` parses as 1000 here (rejected: not an integer-shaped string),
- * `"1000.5"` is rejected (not an integer), `"abc"` is NaN. parseInt would
- * silently coerce `"1e3"` to 1 and `"1000.5"` to 1000, diverging from the
- * server.
+ * Accepts only digit-only strings (`^\d+$`), then parses via `Number(...)`
+ * + `Number.isInteger`. The digit-only gate is stricter than `Number(v)`
+ * alone — `Number("1e3")` is 1000 and `Number("1000.5")` is 1000.5 — and
+ * is mirrored in `stageConfigUpdateSchema`'s preprocess in
+ * server/lib/validation.js so client/server reject the same shapes. If
+ * you loosen this rule, loosen the server preprocess in lockstep.
  */
 export function parseTimeoutMs(raw) {
   if (raw == null) return null;

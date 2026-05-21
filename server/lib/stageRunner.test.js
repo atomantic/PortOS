@@ -307,6 +307,20 @@ describe('stageRunner — runStagedLLM dispatch', () => {
     expect(runner.createRun).toHaveBeenCalledWith(expect.objectContaining({ timeout: 900000 }));
   });
 
+  it('falls back to provider.timeout in createRun call when no override is set', async () => {
+    prompts.getStage.mockReturnValue(null);
+    providers.getActiveProvider.mockResolvedValue(cliProvider({ timeout: 5000 }));
+    runner.executeCliRun.mockImplementation(async (_id, _p, _pr, _cwd, _onData, onComplete, _t) => {
+      onComplete({ success: true });
+    });
+    await runStagedLLM('s', {});
+    // /runs metadata must record what executeXxxRun actually enforces,
+    // not `undefined`. The runner's per-call timeout always resolves to
+    // provider.timeout when there's no stage/caller override; the run
+    // record needs to mirror that.
+    expect(runner.createRun).toHaveBeenCalledWith(expect.objectContaining({ timeout: 5000 }));
+  });
+
   it('reconciles to a fallback provider when createRun returns a different provider', async () => {
     prompts.getStage.mockReturnValue(null);
     const original = cliProvider({ id: 'unavailable', timeout: 5000 });
