@@ -3,7 +3,12 @@ import toast from '../components/ui/Toast';
 import * as api from '../services/api';
 import socket from '../services/socket';
 import { filterSelectableModels, providerTypeClass, isTuiProvider, isApiProvider, isProcessProvider } from '../utils/providers';
-import { formatDurationMs } from '../utils/formatters';
+import {
+  formatDurationMs,
+  TIMEOUT_INPUT_MIN_MS,
+  TIMEOUT_INPUT_MAX_MS,
+  TIMEOUT_INPUT_STEP_MS,
+} from '../utils/formatters';
 
 export default function AIProviders() {
   const [providers, setProviders] = useState([]);
@@ -909,9 +914,9 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
             <input
               type="number"
               inputMode="numeric"
-              min={1000}
-              max={1800000}
-              step={1000}
+              min={TIMEOUT_INPUT_MIN_MS}
+              max={TIMEOUT_INPUT_MAX_MS}
+              step={TIMEOUT_INPUT_STEP_MS}
               value={formData.timeout}
               onChange={(e) => setFormData(prev => ({ ...prev, timeout: e.target.value }))}
               className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
@@ -919,7 +924,7 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
             <p className="text-xs text-gray-500 mt-1">
               {formData.timeout > 0
                 ? `≈ ${formatDurationMs(Number(formData.timeout))} per run`
-                : 'Per-call cap. Server max: 1,800,000 ms (30 min).'}
+                : `Per-call cap. Server max: ${TIMEOUT_INPUT_MAX_MS.toLocaleString()} ms (${formatDurationMs(TIMEOUT_INPUT_MAX_MS)}).`}
             </p>
           </div>
 

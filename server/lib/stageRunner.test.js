@@ -15,6 +15,7 @@ vi.mock('../services/runner.js', () => ({
   executeApiRun: vi.fn(),
   executeCliRun: vi.fn(),
   hasModelFlag: vi.fn(() => false),
+  patchRunMetadata: vi.fn(async () => undefined),
 }));
 
 const providers = await import('../services/providers.js');
@@ -294,5 +295,36 @@ describe('stageRunner — runStagedLLM dispatch', () => {
     });
     await runStagedLLM('s', {}, { timeoutOverride: 1234 });
     expect(runner.executeCliRun.mock.calls[0][6]).toBe(1234);
+  });
+
+  it('passes effectiveTimeout into createRun so /runs metadata matches execution', async () => {
+    prompts.getStage.mockReturnValue({ timeout: 900000 });
+    providers.getActiveProvider.mockResolvedValue(cliProvider({ timeout: 5000 }));
+    runner.executeCliRun.mockImplementation(async (_id, _p, _pr, _cwd, _onData, onComplete, _t) => {
+      onComplete({ success: true });
+    });
+    await runStagedLLM('s', {});
+    expect(runner.createRun).toHaveBeenCalledWith(expect.objectContaining({ timeout: 900000 }));
+  });
+
+  it('reconciles to a fallback provider when createRun returns a different provider', async () => {
+    prompts.getStage.mockReturnValue(null);
+    const original = cliProvider({ id: 'unavailable', timeout: 5000 });
+    const fallback = cliProvider({ id: 'fallback-cli', defaultModel: 'fallback-model', timeout: 7000 });
+    providers.getActiveProvider.mockResolvedValue(original);
+    runner.createRun.mockResolvedValueOnce({ runId: 'run-abc12345', provider: fallback });
+    runner.executeCliRun.mockImplementation(async (_id, providerArg, _pr, _cwd, _onData, onComplete, _t) => {
+      // Critical: execution must run against the fallback (the one createRun
+      // returned), NOT the original requested provider.
+      expect(providerArg.id).toBe('fallback-cli');
+      onComplete({ success: true });
+    });
+    const out = await runStagedLLM('s', {});
+    expect(out.providerId).toBe('fallback-cli');
+    // /runs attribution must be patched too so the record matches execution.
+    expect(runner.patchRunMetadata).toHaveBeenCalledWith(
+      'run-abc12345',
+      expect.objectContaining({ providerId: 'fallback-cli' })
+    );
   });
 });

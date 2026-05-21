@@ -3,7 +3,13 @@ import toast from '../ui/Toast';
 import ProviderModelSelector from '../ProviderModelSelector';
 import useFieldDraft from '../../hooks/useFieldDraft';
 import { filterSelectableModels, getProviderTimeout } from '../../utils/providers';
-import { formatDurationMs, parseTimeoutMs } from '../../utils/formatters';
+import {
+  formatDurationMs,
+  parseTimeoutMs,
+  TIMEOUT_INPUT_MIN_MS,
+  TIMEOUT_INPUT_MAX_MS,
+  TIMEOUT_INPUT_STEP_MS,
+} from '../../utils/formatters';
 
 /**
  * Inline picker for a prompt stage's provider+model. Mirrors the Tier/Specific
@@ -189,9 +195,9 @@ function StageTimeoutInput({ value, providerFallback, onCommit }) {
       <input
         type="number"
         inputMode="numeric"
-        min={1000}
-        max={1800000}
-        step={1000}
+        min={TIMEOUT_INPUT_MIN_MS}
+        max={TIMEOUT_INPUT_MAX_MS}
+        step={TIMEOUT_INPUT_STEP_MS}
         value={draft}
         onChange={onChange}
         onBlur={hookBlur}

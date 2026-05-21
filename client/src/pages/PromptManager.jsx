@@ -4,7 +4,13 @@ import toast from '../components/ui/Toast';
 import BrailleSpinner from '../components/BrailleSpinner';
 import ProviderModelSelector from '../components/ProviderModelSelector';
 import { filterSelectableModels, getProviderTimeout } from '../utils/providers';
-import { formatDurationMs, parseTimeoutMs } from '../utils/formatters';
+import {
+  formatDurationMs,
+  parseTimeoutMs,
+  TIMEOUT_INPUT_MIN_MS,
+  TIMEOUT_INPUT_MAX_MS,
+  TIMEOUT_INPUT_STEP_MS,
+} from '../utils/formatters';
 
 export default function PromptManager() {
   const [tab, setTab] = useState('stages');
@@ -420,9 +426,9 @@ export default function PromptManager() {
                       <input
                         type="number"
                         inputMode="numeric"
-                        min={1000}
-                        max={1800000}
-                        step={1000}
+                        min={TIMEOUT_INPUT_MIN_MS}
+                        max={TIMEOUT_INPUT_MAX_MS}
+                        step={TIMEOUT_INPUT_STEP_MS}
                         value={stageConfig.timeout ?? ''}
                         placeholder={String(
                           getProviderTimeout(providers, stageConfig.provider, activeProviderId) ?? ''

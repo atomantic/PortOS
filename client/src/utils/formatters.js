@@ -181,18 +181,31 @@ export function formatDateShort(value) {
   return date.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
 }
 
+// Per-call LLM timeout bounds. Mirror of server STAGE_TIMEOUT_MIN_MS /
+// STAGE_TIMEOUT_MAX_MS in server/lib/validation.js (and the toolkit's
+// provider.timeout Zod range in server/lib/aiToolkit/validation.js).
+// Bumping these here without the server changes — or vice versa — would
+// let a value through one validator that the other rejects.
+export const TIMEOUT_INPUT_MIN_MS = 1000;
+export const TIMEOUT_INPUT_MAX_MS = 1800000;
+export const TIMEOUT_INPUT_STEP_MS = 1000;
+
 /**
  * Parse a raw string from a timeout (ms) input into a stored value.
  * Returns `null` for blank input (caller treats as "clear override") and
- * for any value that isn't a positive finite integer — the caller is then
- * responsible for snapping the input back to the persisted value.
+ * for anything outside the validated [TIMEOUT_INPUT_MIN_MS,
+ * TIMEOUT_INPUT_MAX_MS] integer range — the caller is then responsible for
+ * snapping the input back to the persisted value. Clamping here keeps the
+ * client from emitting PUTs the server's Zod schema would 400 (e.g. a
+ * stray `1` that "looks positive" but is below the 1s floor).
  */
 export function parseTimeoutMs(raw) {
   if (raw == null) return null;
   const trimmed = String(raw).trim();
   if (trimmed === '') return null;
   const ms = Number.parseInt(trimmed, 10);
-  return Number.isFinite(ms) && ms > 0 ? ms : null;
+  if (!Number.isFinite(ms) || ms < TIMEOUT_INPUT_MIN_MS || ms > TIMEOUT_INPUT_MAX_MS) return null;
+  return ms;
 }
 
 /**

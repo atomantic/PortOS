@@ -21,7 +21,7 @@ import { stripCodeFences } from './aiProvider.js';
 import { extractCodexAssistant } from './codexAssistantExtract.js';
 import { getActiveProvider, getProviderById } from '../services/providers.js';
 import { buildPrompt, getStage } from '../services/promptService.js';
-import { createRun } from '../services/runner.js';
+import { createRun, patchRunMetadata } from '../services/runner.js';
 
 // Stage configs name a model by tier (PromptManager UI). Map each tier name
 // to the provider's per-tier model field; an unset tier falls through to
@@ -190,7 +190,8 @@ export async function runStagedLLM(stageName, variables, options = {}) {
   // args-pinned model id so the run record + log line reflect what
   // truly executes (rather than guessing from defaultModel, which can
   // diverge from the args-baked value).
-  const effectiveModel = resolveEffectiveModel(provider, resolvedModel);
+  let effectiveProvider = provider;
+  let effectiveModel = resolveEffectiveModel(effectiveProvider, resolvedModel);
 
   // Per-stage timeout override; timeoutOverride from the caller beats
   // everything. Coerce via `Number(...)` so a legacy on-disk string
@@ -201,18 +202,39 @@ export async function runStagedLLM(stageName, variables, options = {}) {
   const stageTimeout = Number.isFinite(stageTimeoutMs) && stageTimeoutMs > 0 ? stageTimeoutMs : undefined;
   const effectiveTimeout = options.timeoutOverride ?? stageTimeout;
 
-  const { runId } = await createRun({
+  // createRun may pick a fallback provider when the requested one is marked
+  // unavailable by providerStatusService. Capture the full result and
+  // reconcile, mirroring the promptRunner.js#createRun caller-runId path —
+  // otherwise execution would proceed against the original provider while
+  // /runs metadata claims the fallback ran. Also pass `timeout` so the run
+  // record's persisted timeout matches what executeXxxRun actually enforces.
+  const runResult = await createRun({
     providerId: provider.id,
     model: effectiveModel,
     prompt,
     source: options.source || 'staged-llm',
+    timeout: effectiveTimeout,
   });
-  console.log(`📝 stage: ${provider.id} / ${effectiveModel || '(default)'} / ${stageName} → ${runId.slice(0, 8)}`);
+  const { runId } = runResult;
+  if (runResult.provider && runResult.provider.id !== provider.id) {
+    effectiveProvider = runResult.provider;
+    effectiveModel = resolveEffectiveModel(effectiveProvider, resolvedModel);
+    // createRun persisted `metadata.providerId/name/model` against the
+    // ORIGINAL provider's id and resolved value. Patch so /runs reflects
+    // the fallback that actually ran. Best-effort: this is attribution, not
+    // load-bearing for execution.
+    patchRunMetadata(runId, {
+      model: effectiveModel,
+      providerId: effectiveProvider.id,
+      providerName: effectiveProvider.name,
+    }).catch(() => { /* best-effort */ });
+  }
+  console.log(`📝 stage: ${effectiveProvider.id} / ${effectiveModel || '(default)'} / ${stageName} → ${runId.slice(0, 8)}`);
 
   // Stage runs pre-create the run record (so the runId can be logged BEFORE
   // the LLM call starts), then thread that id through the shared runner.
   const { text } = await runPromptThroughProvider({
-    provider, model: effectiveModel, prompt, source: options.source || 'staged-llm', runId,
+    provider: effectiveProvider, model: effectiveModel, prompt, source: options.source || 'staged-llm', runId,
     timeout: effectiveTimeout,
   });
   // Codex CLI dumps the full transcript (banner + metadata + echoed prompt +
@@ -221,5 +243,5 @@ export async function runStagedLLM(stageName, variables, options = {}) {
   // providers — returns input unchanged when the banner isn't present.
   const cleaned = extractCodexAssistant(text);
   const content = options.returnsJson ? extractJson(cleaned, { promptToStrip: prompt }) : cleaned;
-  return { content, model: effectiveModel || null, providerId: provider.id, runId };
+  return { content, model: effectiveModel || null, providerId: effectiveProvider.id, runId };
 }
