@@ -190,7 +190,7 @@ function StageTimeoutInput({ value, providerFallback, onCommit }) {
   return (
     <div className="space-y-0.5">
       <label className="block text-[9px] uppercase tracking-wider text-gray-500">
-        Timeout (ms)
+        Timeout override (ms)
       </label>
       <input
         type="number"

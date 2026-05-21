@@ -9,6 +9,7 @@ import {
   isProcessProvider,
   enabledApiProviderFilter,
   providerTypeClass,
+  getProviderTimeout,
 } from './providers.js';
 import { PROVIDER_TYPES as SERVER_PROVIDER_TYPES } from '../../../server/lib/aiToolkit/constants.js';
 
@@ -113,5 +114,35 @@ describe('providerTypeClass', () => {
   it('falls back to purple chip for api/unknown', () => {
     expect(providerTypeClass('api')).toBe('bg-purple-500/20 text-purple-400');
     expect(providerTypeClass('mystery')).toBe('bg-purple-500/20 text-purple-400');
+  });
+});
+
+describe('getProviderTimeout', () => {
+  const providers = [
+    { id: 'p1', timeout: 300000 },
+    { id: 'p2', timeout: 900000 },
+    { id: 'p3' /* no timeout */ },
+  ];
+
+  it('returns the stage-pinned provider timeout when it wins over active', () => {
+    expect(getProviderTimeout(providers, 'p2', 'p1')).toBe(900000);
+  });
+
+  it('falls back to the active provider timeout when no stage pin', () => {
+    expect(getProviderTimeout(providers, null, 'p1')).toBe(300000);
+    expect(getProviderTimeout(providers, undefined, 'p1')).toBe(300000);
+    expect(getProviderTimeout(providers, '', 'p1')).toBe(300000);
+  });
+
+  it('returns undefined when neither pinned nor active id is given', () => {
+    expect(getProviderTimeout(providers, null, null)).toBeUndefined();
+  });
+
+  it('returns undefined when the matched provider has no timeout', () => {
+    expect(getProviderTimeout(providers, 'p3', null)).toBeUndefined();
+  });
+
+  it('returns undefined when the id matches no provider in the list', () => {
+    expect(getProviderTimeout(providers, 'ghost', 'also-ghost')).toBeUndefined();
   });
 });

@@ -45,6 +45,24 @@ const providerFallbackModel = (provider) =>
   || (Array.isArray(provider.models) && provider.models[0])
   || null;
 
+// Mirror of STAGE_TIMEOUT_MAX_MS in server/lib/validation.js — kept here so
+// the runner can defend against an in-flight override that beats the route
+// validator (callers like extractors / pipeline stages invoke runStagedLLM
+// directly). If you bump validation.js, bump this in lockstep.
+const STAGE_TIMEOUT_MAX_MS = 1800000;
+
+// Normalize a stage- or caller-supplied timeout into a positive integer
+// milliseconds value (or `undefined` to mean "fall through to provider
+// default"). Reject NaN / ≤0 / non-finite; clamp at STAGE_TIMEOUT_MAX_MS so
+// a bogus override can't bypass the 30-minute ceiling enforced by the
+// route validator.
+function normalizeTimeout(raw) {
+  if (raw == null) return undefined;
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return undefined;
+  return Math.min(Math.trunc(n), STAGE_TIMEOUT_MAX_MS);
+}
+
 export function resolveModel(provider, modelHint) {
   if (!modelHint) return providerFallbackModel(provider);
   if (isTierName(modelHint)) {
@@ -194,13 +212,17 @@ export async function runStagedLLM(stageName, variables, options = {}) {
   let effectiveModel = resolveEffectiveModel(effectiveProvider, resolvedModel);
 
   // Per-stage timeout override; timeoutOverride from the caller beats
-  // everything. Coerce via `Number(...)` so a legacy on-disk string
-  // (`"900000"` from a pre-validation install) still resolves. A
-  // non-positive or non-finite value is rejected so a stray "0" saved
-  // into stage-config.json doesn't silently cancel runs instantly.
-  const stageTimeoutMs = Number(stage?.timeout);
-  const stageTimeout = Number.isFinite(stageTimeoutMs) && stageTimeoutMs > 0 ? stageTimeoutMs : undefined;
-  const effectiveTimeout = options.timeoutOverride ?? stageTimeout;
+  // stage.timeout, which beats the provider default. `normalizeTimeout`
+  // coerces via `Number(...)` (so legacy stringified values from
+  // pre-validation installs still resolve), rejects non-finite or ≤0
+  // (so a stray "0" can't silently instant-cancel), and caps at
+  // STAGE_TIMEOUT_MAX_MS — applied to BOTH stage.timeout and the caller
+  // override, since `runPromptThroughProvider`/`executeCliRun` treat `0`
+  // as "no timeout" and would happily run unbounded if we forwarded a
+  // garbage override.
+  const stageTimeout = normalizeTimeout(stage?.timeout);
+  const overrideTimeout = normalizeTimeout(options.timeoutOverride);
+  const effectiveTimeout = overrideTimeout ?? stageTimeout;
 
   // createRun may pick a fallback provider when the requested one is marked
   // unavailable by providerStatusService. Capture the full result and

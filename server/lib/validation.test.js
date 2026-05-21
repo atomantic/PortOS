@@ -8,7 +8,8 @@ import {
   featureAgentSchema,
   featureAgentUpdateSchema,
   validate,
-  sanitizeTaskMetadata
+  sanitizeTaskMetadata,
+  stageConfigUpdateSchema
 } from './validation.js';
 
 describe('validation.js', () => {
@@ -520,6 +521,76 @@ describe('validation.js', () => {
       const proto = { useWorktree: true };
       const obj = Object.create(proto);
       expect(sanitizeTaskMetadata(obj)).toBeNull();
+    });
+  });
+
+  // The stage-config schema is the only validator standing between an
+  // unvalidated client PUT and disk, and its `timeout` preprocess + .strip()
+  // behaviors are explicitly engineered to mirror parseTimeoutMs on the
+  // client and to block prototype-pollution / config-key squatting. These
+  // tests pin the contract; a drift here would let one side accept shapes
+  // the other rejects, or quietly persist garbage to stage-config.json.
+  describe('stageConfigUpdateSchema', () => {
+    it('accepts a complete update', () => {
+      const out = stageConfigUpdateSchema.parse({
+        name: 'Adapt', description: 'd', model: 'heavy', provider: 'codex',
+        timeout: 900000, returnsJson: true, variables: ['schemaSnippet'],
+      });
+      expect(out.timeout).toBe(900000);
+    });
+
+    it('coerces a digit-only numeric string to a number', () => {
+      expect(stageConfigUpdateSchema.parse({ timeout: '900000' }).timeout).toBe(900000);
+    });
+
+    it('accepts a numeric value unchanged', () => {
+      expect(stageConfigUpdateSchema.parse({ timeout: 60000 }).timeout).toBe(60000);
+    });
+
+    it('treats empty string and null as a clear (timeout: null)', () => {
+      expect(stageConfigUpdateSchema.parse({ timeout: '' }).timeout).toBeNull();
+      expect(stageConfigUpdateSchema.parse({ timeout: null }).timeout).toBeNull();
+    });
+
+    it('leaves timeout untouched when absent', () => {
+      const out = stageConfigUpdateSchema.parse({ name: 'x' });
+      expect('timeout' in out).toBe(false);
+    });
+
+    it('rejects non-digit numeric strings (1e3 / 1.5 / 0x10) to mirror client parseTimeoutMs', () => {
+      // The client's digit-only regex rejects these; the server preprocess
+      // also leaves non-digit strings as-is so the inner z.number() fails.
+      expect(stageConfigUpdateSchema.safeParse({ timeout: '1e3' }).success).toBe(false);
+      expect(stageConfigUpdateSchema.safeParse({ timeout: '1000.5' }).success).toBe(false);
+      expect(stageConfigUpdateSchema.safeParse({ timeout: '0x10' }).success).toBe(false);
+      expect(stageConfigUpdateSchema.safeParse({ timeout: 'abc' }).success).toBe(false);
+    });
+
+    it('rejects non-integer numbers', () => {
+      expect(stageConfigUpdateSchema.safeParse({ timeout: 1000.5 }).success).toBe(false);
+    });
+
+    it('enforces the 1s lower bound', () => {
+      expect(stageConfigUpdateSchema.safeParse({ timeout: 999 }).success).toBe(false);
+      expect(stageConfigUpdateSchema.parse({ timeout: 1000 }).timeout).toBe(1000);
+    });
+
+    it('enforces the 30-minute upper bound', () => {
+      expect(stageConfigUpdateSchema.parse({ timeout: 1800000 }).timeout).toBe(1800000);
+      expect(stageConfigUpdateSchema.safeParse({ timeout: 1800001 }).success).toBe(false);
+    });
+
+    it('strips unknown keys (no prototype-pollution leak via spread merge)', () => {
+      const out = stageConfigUpdateSchema.parse({
+        name: 'x',
+        constructor: 'evil',
+        prototype: 'nope',
+        typoField: 'oops',
+      });
+      // `name` is the only schema-known key; constructor / prototype / typoField
+      // must be stripped so updateStageConfig's `{...existing, ...updated}`
+      // spread can never see them.
+      expect(out).toEqual({ name: 'x' });
     });
   });
 });

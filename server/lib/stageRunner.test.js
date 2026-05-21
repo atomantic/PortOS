@@ -297,6 +297,29 @@ describe('stageRunner — runStagedLLM dispatch', () => {
     expect(runner.executeCliRun.mock.calls[0][6]).toBe(1234);
   });
 
+  it('rejects a non-positive timeoutOverride instead of running unbounded', async () => {
+    // The runner treats `0` as "no timeout" — a caller bug must not silently
+    // turn into an unbounded run. Drop to stage.timeout (or provider.timeout
+    // when neither is set).
+    prompts.getStage.mockReturnValue(null);
+    providers.getActiveProvider.mockResolvedValue(cliProvider({ timeout: 5000 }));
+    runner.executeCliRun.mockImplementation(async (_id, _p, _pr, _cwd, _onData, onComplete, _t) => {
+      onComplete({ success: true });
+    });
+    await runStagedLLM('s', {}, { timeoutOverride: 0 });
+    expect(runner.executeCliRun.mock.calls[0][6]).toBe(5000);
+  });
+
+  it('caps a too-large timeoutOverride at the 30-minute ceiling', async () => {
+    prompts.getStage.mockReturnValue(null);
+    providers.getActiveProvider.mockResolvedValue(cliProvider({ timeout: 5000 }));
+    runner.executeCliRun.mockImplementation(async (_id, _p, _pr, _cwd, _onData, onComplete, _t) => {
+      onComplete({ success: true });
+    });
+    await runStagedLLM('s', {}, { timeoutOverride: 9_999_999_999 });
+    expect(runner.executeCliRun.mock.calls[0][6]).toBe(1_800_000);
+  });
+
   it('passes effectiveTimeout into createRun so /runs metadata matches execution', async () => {
     prompts.getStage.mockReturnValue({ timeout: 900000 });
     providers.getActiveProvider.mockResolvedValue(cliProvider({ timeout: 5000 }));
