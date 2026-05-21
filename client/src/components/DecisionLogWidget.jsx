@@ -26,8 +26,11 @@ import { timeAgo } from '../utils/formatters';
  * exactly why the CoS took (or didn't take) action.
  */
 const DecisionLogWidget = memo(function DecisionLogWidget() {
+  // Let errors throw — `useAutoRefetch` preserves the last-good summary on
+  // transient failures instead of dropping the widget back to its loading
+  // state on every blip.
   const { data: summary, loading } = useAutoRefetch(
-    () => api.getCosDecisionSummary({ silent: true }).catch(() => null),
+    () => api.getCosDecisionSummary({ silent: true }),
     60000,
     {
       // Decision stream is append-only; same 24h totals + same per-decision

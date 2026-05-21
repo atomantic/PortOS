@@ -25,12 +25,17 @@ import { timeAgo } from '../utils/formatters';
  */
 const CosDashboardWidget = memo(function CosDashboardWidget() {
   const { data: dashData, loading } = useAutoRefetch(async () => {
+    // Let errors throw — `useAutoRefetch` preserves the last-good batch on
+    // transient failures. Without this, a per-endpoint `.catch(() => null)`
+    // could mix fresh and stale sections (e.g. summary=null but
+    // learningSummary holding its prior value) and the widget would flicker
+    // sections off-screen on every blip.
     const silent = { silent: true };
     const [summary, learningSummary, recentTasks, activityCalendar] = await Promise.all([
-      api.getCosQuickSummary(silent).catch(() => null),
-      api.getCosLearningSummary(silent).catch(() => null),
-      api.getCosRecentTasks(5, silent).catch(() => null),
-      api.getCosActivityCalendar(8, silent).catch(() => null)
+      api.getCosQuickSummary(silent),
+      api.getCosLearningSummary(silent),
+      api.getCosRecentTasks(5, silent),
+      api.getCosActivityCalendar(8, silent)
     ]);
     return { summary, learningSummary, recentTasks, activityCalendar };
   }, 30000, {

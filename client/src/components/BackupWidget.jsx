@@ -201,8 +201,11 @@ function RestorePanel({ snapshot, onClose }) {
 // ---------------------------------------------------------------------------
 
 function SnapshotList() {
+  // Let errors throw — `useAutoRefetch` preserves the last-good data on
+  // transient failures. A `.catch(() => null)` here would wipe the snapshot
+  // list on every blip per the hook's documented gotcha.
   const { data: snapshots, loading } = useAutoRefetch(
-    () => api.getBackupSnapshots({ silent: true }).catch(() => null),
+    () => api.getBackupSnapshots({ silent: true }),
     120000,
     {
       // Snapshots only change when a new backup lands or the rotation prunes
@@ -269,8 +272,10 @@ function SnapshotList() {
 // ---------------------------------------------------------------------------
 
 const BackupWidget = memo(function BackupWidget() {
+  // Let errors throw — `useAutoRefetch` preserves the last-good status on
+  // transient failures so a blip doesn't drop the widget to its loading state.
   const { data: status } = useAutoRefetch(
-    () => api.getBackupStatus({ silent: true }).catch(() => null),
+    () => api.getBackupStatus({ silent: true }),
     60000,
     {
       // Backup state only flips when a new run starts/finishes — comparing the

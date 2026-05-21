@@ -31,8 +31,10 @@ const TYPE_ICONS = {
 };
 
 const ProactiveAlertsWidget = memo(function ProactiveAlertsWidget() {
+  // Let errors throw — `useAutoRefetch` preserves the last-good alert
+  // snapshot on transient failures instead of dropping the widget.
   const { data, loading } = useAutoRefetch(
-    () => api.getAlertsSummary({ silent: true }).catch(() => null),
+    () => api.getAlertsSummary({ silent: true }),
     120000, // Refresh every 2 minutes
     {
       // Skip the re-render when the summary counts and every rendered per-row

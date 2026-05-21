@@ -25,8 +25,10 @@ const getDaysSince = (dateStr) => {
 };
 
 const GoalProgressWidget = memo(function GoalProgressWidget() {
+  // Let errors throw — `useAutoRefetch` preserves the last-good goal set on
+  // transient failures rather than wiping the widget.
   const { data: goalsData, loading } = useAutoRefetch(
-    () => api.getGoals({ silent: true }).catch(() => null),
+    () => api.getGoals({ silent: true }),
     300000,
     {
       // Goals rarely change at 5-minute cadence. Skip the re-render (and the
