@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
+import { useCooldownTick } from '../../../hooks/useCooldownTick';
 
 export default function ToolsTab({ agentId, agent }) {
   const [selectedAccountId, setSelectedAccountId] = useState('');
@@ -44,7 +45,6 @@ export default function ToolsTab({ agentId, agent }) {
 
   // Cooldown timer state
   const [cooldownEnds, setCooldownEnds] = useState({});
-  const [, setTick] = useState(0);
 
   // Auto-resolve the moltbook account for this agent
   useEffect(() => {
@@ -84,23 +84,14 @@ export default function ToolsTab({ agentId, agent }) {
     setCooldownEnds(ends);
   }, [rateLimits]);
 
-  // Tick cooldown timer every second while any cooldown is active
-  useEffect(() => {
-    const hasActive = Object.values(cooldownEnds).some(end => end > Date.now());
-    if (!hasActive) return;
-    let refetched = false;
-    const interval = setInterval(() => {
-      const stillActive = Object.values(cooldownEnds).some(end => end > Date.now());
-      setTick(t => t + 1);
-      if (!stillActive && !refetched) {
-        refetched = true;
-        if (selectedAccountId) {
-          api.getAgentRateLimits(selectedAccountId).then(setRateLimits).catch(() => {});
-        }
+  useCooldownTick({
+    cooldownEnds,
+    onAllExpired: () => {
+      if (selectedAccountId) {
+        api.getAgentRateLimits(selectedAccountId).then(setRateLimits).catch(() => {});
       }
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [cooldownEnds, selectedAccountId]);
+    },
+  });
 
   const loadDrafts = useCallback(async () => {
     if (!agentId) return;

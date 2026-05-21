@@ -6,6 +6,7 @@ import * as api from '../../../services/api';
 import { filterSelectableModels } from '../../../utils/providers';
 import BrailleSpinner from '../../BrailleSpinner';
 import { PERSONALITY_STYLES, DEFAULT_PERSONALITY, DEFAULT_AVATAR, PLATFORM_TYPES, ACCOUNT_STATUSES } from '../constants';
+import { useCooldownTick } from '../../../hooks/useCooldownTick';
 
 export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
   const navigate = useNavigate();
@@ -42,7 +43,6 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
 
   // Cooldown timer state
   const [cooldownEnds, setCooldownEnds] = useState({});
-  const [, setTick] = useState(0);
 
   // Initialize form from agent
   useEffect(() => {
@@ -129,23 +129,14 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
     setCooldownEnds(ends);
   }, [rateLimits]);
 
-  // Tick cooldown timer every second while any cooldown is active
-  useEffect(() => {
-    const hasActive = Object.values(cooldownEnds).some(end => end > Date.now());
-    if (!hasActive) return;
-    let refetched = false;
-    const interval = setInterval(() => {
-      const stillActive = Object.values(cooldownEnds).some(end => end > Date.now());
-      setTick(t => t + 1);
-      if (!stillActive && !refetched) {
-        refetched = true;
-        if (quickAccountId) {
-          api.getAgentRateLimits(quickAccountId).then(setRateLimits).catch(() => {});
-        }
+  useCooldownTick({
+    cooldownEnds,
+    onAllExpired: () => {
+      if (quickAccountId) {
+        api.getAgentRateLimits(quickAccountId).then(setRateLimits).catch(() => {});
       }
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [cooldownEnds, quickAccountId]);
+    },
+  });
 
   const getModelsForProvider = (providerId) => {
     const p = providers.find(pr => pr.id === providerId);
