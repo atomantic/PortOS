@@ -610,8 +610,11 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
     //   1. valid integer within bounds → send the parsed number
     //   2. blank/whitespace → omit so the server keeps the current value
     //      (Number('') is 0, which would 400 against the min-1000 rule)
-    //   3. non-empty but invalid (e.g. '1e3', '500') → send Number(...)
-    //      and let the server's Zod schema return a clear error
+    //   3. non-empty but invalid (e.g. '1e3', '500', 'abc') → send the
+    //      RAW STRING. Number() would accept '1e3' as 1000, silently
+    //      saving an exponent form the client/runner reject as invalid;
+    //      the server's digit-only preprocess will leave the string
+    //      alone and z.number() will produce a clear validation error.
     const parsedTimeout = parseTimeoutMs(formData.timeout);
     const timeoutInput = String(formData.timeout ?? '').trim();
     const data = {
@@ -624,7 +627,7 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
     } else if (timeoutInput === '') {
       delete data.timeout;
     } else {
-      data.timeout = Number(formData.timeout);
+      data.timeout = formData.timeout;
     }
     if (formData.type === 'tui') {
       if (Number.isFinite(tuiPromptDelay)) data.tuiPromptDelayMs = tuiPromptDelay;
