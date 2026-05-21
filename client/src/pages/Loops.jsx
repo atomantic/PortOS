@@ -352,7 +352,7 @@ export default function Loops() {
   }, []);
 
   // Fallback poll for iteration count updates (socket events cover state changes)
-  useAutoRefetch(fetchLoops, 60_000);
+  useAutoRefetch(fetchLoops, 60_000, { pollOnly: true });
 
   useEffect(() => {
     fetchProviders();

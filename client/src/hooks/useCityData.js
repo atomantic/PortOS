@@ -80,8 +80,8 @@ export const useCityData = () => {
   // and from agent socket events) already covers the initial fetch for both
   // running agents and system health; the hook then takes over the polling
   // cadence without double-fetching at mount.
-  useAutoRefetch(fetchRunningAgents, 10_000, { immediate: false });
-  useAutoRefetch(fetchHealth, 15_000, { immediate: false });
+  useAutoRefetch(fetchRunningAgents, 10_000, { immediate: false, pollOnly: true });
+  useAutoRefetch(fetchHealth, 15_000, { immediate: false, pollOnly: true });
 
   const agentMap = useMemo(() => {
     const map = new Map();

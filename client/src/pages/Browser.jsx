@@ -60,7 +60,7 @@ export default function BrowserPage() {
     }
   }, []);
 
-  useAutoRefetch(fetchStatus, POLL_INTERVAL);
+  useAutoRefetch(fetchStatus, POLL_INTERVAL, { pollOnly: true });
 
   // Load config when settings panel opens
   useEffect(() => {

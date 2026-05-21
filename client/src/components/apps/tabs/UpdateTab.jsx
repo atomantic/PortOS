@@ -125,7 +125,7 @@ export default function UpdateTab() {
     return null;
   }, []);
 
-  useAutoRefetch(pollHealth, 2000, { enabled: polling });
+  useAutoRefetch(pollHealth, 2000, { enabled: polling, pollOnly: true });
 
   const handleCheck = async () => {
     setChecking(true);

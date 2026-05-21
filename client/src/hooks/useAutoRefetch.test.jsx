@@ -186,6 +186,43 @@ describe('useAutoRefetch', () => {
     expect(result.current.data).toBe(snapshot);
   });
 
+  it('pollOnly mode returns refetch only and drives the fetchFn on schedule', async () => {
+    const fetchFn = vi.fn().mockResolvedValue({ ok: true });
+    const { result } = renderHook(() => useAutoRefetch(fetchFn, 30, { pollOnly: true }));
+
+    expect(result.current.data).toBeUndefined();
+    expect(result.current.loading).toBeUndefined();
+    expect(typeof result.current.refetch).toBe('function');
+
+    await waitFor(() => expect(fetchFn.mock.calls.length).toBeGreaterThanOrEqual(2));
+  });
+
+  it('pollOnly mode skips the visibility short-circuit and reloads on visible', async () => {
+    const fetchFn = vi.fn().mockResolvedValue(null);
+    renderHook(() => useAutoRefetch(fetchFn, 20, { pollOnly: true }));
+    await waitFor(() => expect(fetchFn).toHaveBeenCalledTimes(1));
+
+    setVisibility('hidden');
+    await new Promise((r) => setTimeout(r, 80));
+    const callsWhileHidden = fetchFn.mock.calls.length;
+    expect(callsWhileHidden).toBe(1);
+
+    setVisibility('visible');
+    act(() => fireVisibilityChange());
+    await waitFor(() => expect(fetchFn.mock.calls.length).toBeGreaterThan(callsWhileHidden));
+  });
+
+  it('pollOnly refetch still invokes the fetchFn on demand', async () => {
+    const fetchFn = vi.fn().mockResolvedValue('side-effect-only');
+    const { result } = renderHook(
+      () => useAutoRefetch(fetchFn, 60_000, { enabled: false, pollOnly: true }),
+    );
+    expect(fetchFn).not.toHaveBeenCalled();
+
+    await act(async () => { await result.current.refetch(); });
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+
   it('compare is bypassed when the new result is null, replacing prior data', async () => {
     const fetchFn = vi.fn()
       .mockResolvedValueOnce({ updatedAt: 1 })

@@ -60,7 +60,7 @@ export default function CreativeDirectorDetail() {
     await Promise.all([fetchProject(), fetchAgents()]);
     return null;
   }, [fetchProject, fetchAgents]);
-  const { refetch: refetchPoll } = useAutoRefetch(poll, 5000, { enabled: pollEnabled });
+  const { refetch: refetchPoll } = useAutoRefetch(poll, 5000, { enabled: pollEnabled, pollOnly: true });
 
   // Reset state ONLY when the route id changes, so navigating between
   // projects (or hitting an error fetch) clears the prior project — but

@@ -7,9 +7,9 @@ import { useVisibilityEvent } from './useVisibilityEvent.js';
  * useEffect + setInterval pattern for data-fetch polling.
  *
  * fetchFn should handle its own errors. Side-effect-only callers that manage
- * their own state via setStates inside fetchFn typically `return null` and
- * ignore the hook's `data` return; that's fine, but be aware the hook will
- * still set `data = null` on each tick.
+ * their own state via setStates inside fetchFn should pass `{ pollOnly: true }`
+ * so the hook skips its own data/loading bookkeeping and returns only
+ * `{ refetch }`.
  *
  * Data-path callers (those reading the returned `data`) should NOT swallow
  * errors with `.catch(() => null)` — the hook will then apply that null and
@@ -28,17 +28,23 @@ import { useVisibilityEvent } from './useVisibilityEvent.js';
  * @param {boolean} [options.immediate=true] - when false, skip the on-mount fetch
  *   and wait `intervalMs` before the first fetch. Use when the caller already
  *   performs a one-shot fetch via another path (e.g. `useCityData.fetchAll`).
+ * @param {boolean} [options.pollOnly=false] - when true, the hook drives the
+ *   fetchFn on schedule but tracks no data/loading itself and returns
+ *   `{ refetch }` only. Use for callers whose fetchFn already updates external
+ *   state via setStates inside its body — they don't read `data` and shouldn't
+ *   trigger an extra render per tick. `compare` is ignored in this mode.
  * @param {(prev:any, next:any)=>boolean} [options.compare] - when provided,
  *   each fetch keeps the previous reference (skipping the re-render) if
  *   `compare(prev, next)` returns true. Only invoked when both `prev` and
  *   `next` are non-null — the first fetch always sets data. Use for polls
  *   that return monotonic snapshots (e.g. `(a, b) => a.updatedAt === b.updatedAt`).
- * @returns {{ data: any, loading: boolean, refetch: Function }}
+ * @returns {{ refetch: Function } | { data: any, loading: boolean, refetch: Function }}
+ *   — `pollOnly: true` returns `{ refetch }` only.
  */
 export function useAutoRefetch(fetchFn, intervalMs, options = {}) {
-  const { enabled = true, immediate = true, compare } = options;
+  const { enabled = true, immediate = true, compare, pollOnly = false } = options;
   const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!pollOnly);
   const fetchRef = useRef(fetchFn);
   const compareRef = useRef(compare);
 
@@ -47,18 +53,24 @@ export function useAutoRefetch(fetchFn, intervalMs, options = {}) {
   }, [fetchFn]);
 
   // Kept in a ref so callers can pass an inline arrow without re-creating
-  // applyResult/refetch on every render.
+  // applyResult/refetch on every render. `pollOnly` is a hook-mode selector
+  // expected to be a boolean literal, so closing over it directly is fine.
   useEffect(() => {
     compareRef.current = compare;
   }, [compare]);
 
   const applyResult = useCallback((result) => {
+    if (pollOnly) return;
     setData((prev) => {
       const cmp = compareRef.current;
       if (cmp && prev != null && result != null && cmp(prev, result)) return prev;
       return result;
     });
-  }, []);
+  }, [pollOnly]);
+
+  const clearLoading = useCallback(() => {
+    if (!pollOnly) setLoading(false);
+  }, [pollOnly]);
 
   // Stable, unconditional refetch for callers (Refresh buttons, post-mutation
   // refresh paths, and key-change effects that need an immediate fetch with
@@ -68,14 +80,14 @@ export function useAutoRefetch(fetchFn, intervalMs, options = {}) {
     try {
       const result = await fetchRef.current();
       applyResult(result);
-      setLoading(false);
+      clearLoading();
       return result;
     } catch (err) {
       console.warn(`⚠️ Auto-refetch failed: ${err.message}`);
-      setLoading(false);
+      clearLoading();
       return undefined;
     }
-  }, [applyResult]);
+  }, [applyResult, clearLoading]);
 
   const loadOnVisibleRef = useRef(null);
 
@@ -93,10 +105,10 @@ export function useAutoRefetch(fetchFn, intervalMs, options = {}) {
         const result = await fetchRef.current();
         if (cancelled) return;
         applyResult(result);
-        setLoading(false);
+        clearLoading();
       } catch (err) {
         console.warn(`⚠️ Auto-refetch failed: ${err.message}`);
-        if (!cancelled) setLoading(false);
+        if (!cancelled) clearLoading();
       }
     };
 
@@ -109,11 +121,12 @@ export function useAutoRefetch(fetchFn, intervalMs, options = {}) {
       clearInterval(interval);
       loadOnVisibleRef.current = null;
     };
-  }, [intervalMs, enabled, immediate, applyResult]);
+  }, [intervalMs, enabled, immediate, applyResult, clearLoading]);
 
   useVisibilityEvent((state) => {
     if (state === 'visible') loadOnVisibleRef.current?.();
   });
 
+  if (pollOnly) return { refetch };
   return { data, loading, refetch };
 }

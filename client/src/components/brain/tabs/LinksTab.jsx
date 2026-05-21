@@ -73,7 +73,7 @@ export default function LinksTab({ onRefresh }) {
 
   // Poll for clone status updates while at least one link is in flight.
   const hasInFlightClone = links.some(l => l.cloneStatus === 'cloning' || l.cloneStatus === 'pending');
-  useAutoRefetch(fetchLinks, 3000, { enabled: hasInFlightClone });
+  useAutoRefetch(fetchLinks, 3000, { enabled: hasInFlightClone, pollOnly: true });
 
   const handleSubmit = async (e) => {
     e.preventDefault();

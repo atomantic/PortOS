@@ -212,7 +212,7 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
     return null;
   }, [agent.id]);
 
-  useAutoRefetch(fetchStats, 5000, { enabled: !completed && !remote });
+  useAutoRefetch(fetchStats, 5000, { enabled: !completed && !remote, pollOnly: true });
 
   const handleKill = async () => {
     if (!onKill) return;

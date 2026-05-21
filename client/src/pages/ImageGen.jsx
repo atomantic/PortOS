@@ -554,7 +554,7 @@ export default function ImageGen() {
     setPendingQueued((prev) => (prev === next ? prev : next));
     return null;
   }, [generating, refreshGallery]);
-  useAutoRefetch(pollQueue, 4000, { enabled: queueActive });
+  useAutoRefetch(pollQueue, 4000, { enabled: queueActive, pollOnly: true });
 
   const flux2Issue = isFlux2Model && flux2Status
     ? (!flux2Status.venvInstalled ? 'venv' : !flux2Status.hfTokenPresent ? 'token' : null)

@@ -46,7 +46,7 @@ export default function MediaJobsQueue({ kind, recentLimit = 10, className = '' 
     return null;
   }, [kind]);
 
-  useAutoRefetch(fetchJobs, 3000);
+  useAutoRefetch(fetchJobs, 3000, { pollOnly: true });
 
   const handleCancel = (id) => cancelMediaJob(id)
     .then(() => {
