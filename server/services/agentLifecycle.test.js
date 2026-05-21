@@ -441,18 +441,24 @@ describe('spawnAgentForTask — cleanupOnError error recovery', () => {
   // the guard is released. They match the inline-replica convention used
   // throughout this file (see the file header).
 
-  async function simulateFixedSpawnPath({ taskId, agentId, throwAt }) {
+  async function simulateFixedSpawnPath({ taskId, agentId, throwAt, jobId = null }) {
     spawningTasks.add(taskId);
     const harness = makeCleanupHarness(taskId, agentId);
+    const jobSpawnFailedEmissions = [];
     try {
       // The injected step is the only thing inside the try. The production
       // try wraps ~400 LOC; what matters here is that ANY throw lands in
       // catch and the guard is cleared in finally.
       await throwAt();
-      return { result: 'spawned', harness };
+      return { result: 'spawned', harness, jobSpawnFailedEmissions };
     } catch (err) {
       harness.cleanupOnError(err.message);
-      return { result: null, harness };
+      // Mirror the production catch arm: when the task was queued by an
+      // autonomous job, re-emit `job:spawn-failed` so cos.js clears its
+      // job-level spawn guard. Pre-widening, this fired indirectly via
+      // subAgentSpawner's outer catch on the propagated throw.
+      if (jobId) jobSpawnFailedEmissions.push({ jobId });
+      return { result: null, harness, jobSpawnFailedEmissions };
     } finally {
       spawningTasks.delete(taskId);
     }
@@ -513,16 +519,47 @@ describe('spawnAgentForTask — cleanupOnError error recovery', () => {
     expectGuardReleased(outcome, msg);
   });
 
-  // Source-level assertion: the production catch arm exists so any future
-  // refactor that removes it (e.g. accidentally collapsing the try back to
-  // just-the-spawn-call) breaks loudly here instead of silently re-opening
-  // the leak. The companion `finally` shape is asserted in the existing
+  it('emits job:spawn-failed when an autonomous-job task throws mid-setup', async () => {
+    // Pre-widening, the throw propagated to subAgentSpawner's `task:ready`
+    // catch (subAgentSpawner.js:158-168) which emitted `job:spawn-failed`
+    // so cos.js could clear `spawningJobIds` and re-register the cron
+    // schedule. The widened catch consumes the throw locally — without
+    // re-emitting that event here, the job-level guard would stick until
+    // its 5-minute safety timeout.
+    const outcome = await simulateFixedSpawnPath({
+      taskId: 'task-job-throw',
+      agentId: 'agent-job',
+      jobId: 'job-cron-42',
+      throwAt: async () => { throw new Error('writeFile failed (EACCES)'); },
+    });
+    expect(outcome.result).toBeNull();
+    expect(outcome.jobSpawnFailedEmissions).toEqual([{ jobId: 'job-cron-42' }]);
+  });
+
+  it('does not emit job:spawn-failed for non-autonomous-job tasks', async () => {
+    const outcome = await simulateFixedSpawnPath({
+      taskId: 'task-user-throw',
+      agentId: 'agent-user',
+      throwAt: async () => { throw new Error('prompt build failed'); },
+    });
+    expect(outcome.result).toBeNull();
+    expect(outcome.jobSpawnFailedEmissions).toEqual([]);
+  });
+
+  // Source-level assertions: the catch arm exists, calls cleanupOnError,
+  // AND emits job:spawn-failed when task.metadata?.jobId is set — so any
+  // future refactor that drops the autonomous-job retry contract breaks
+  // loudly here. The companion `finally` shape is asserted in the
   // "agentLifecycle source — spawningTasks delete placement" block above.
-  it('source: spawnAgentForTask has a catch arm that calls cleanupOnError', () => {
+  it('source: spawnAgentForTask catch arm calls cleanupOnError and re-emits job:spawn-failed', () => {
     const fnStart = AGENT_LIFECYCLE_SRC.indexOf('export async function spawnAgentForTask');
     const fnBody = AGENT_LIFECYCLE_SRC.slice(fnStart, fnStart + 60_000);
-    // Look for catch(err) { ... cleanupOnError(...) ... } anywhere inside.
-    expect(fnBody).toMatch(/catch\s*\(\s*err\s*\)\s*\{[\s\S]{0,800}?cleanupOnError\(/);
+    const catchMatch = fnBody.match(/catch\s*\(\s*err\s*\)\s*\{([\s\S]{0,2000}?)\}\s*finally/);
+    expect(catchMatch, 'spawnAgentForTask must have a catch arm before its finally').not.toBeNull();
+    const catchBody = catchMatch[1];
+    expect(catchBody).toMatch(/cleanupOnError\(/);
+    expect(catchBody).toMatch(/job:spawn-failed/);
+    expect(catchBody).toMatch(/task\.metadata\??\.jobId/);
   });
 });
 

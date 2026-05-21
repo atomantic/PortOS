@@ -594,6 +594,15 @@ export async function spawnAgentForTask(task) {
     emitLog('error', `Agent spawn failed: ${err.message}`, { taskId: task.id, error: err.message });
     cleanupOnError(err.message);
     cosEvents.emit('agent:error', { taskId: task.id, error: err.message });
+    // Preserve the autonomous-job retry contract. Pre-widening, an uncaught
+    // throw here propagated to subAgentSpawner's `task:ready` listener,
+    // which emitted `job:spawn-failed` so cos.js could clear
+    // `spawningJobIds` and re-register the cron schedule. Now that the
+    // throw is consumed locally, emit the same event ourselves — otherwise
+    // the job-level guard sticks until its 5-minute safety timeout.
+    if (task.metadata?.jobId) {
+      cosEvents.emit('job:spawn-failed', { jobId: task.metadata.jobId });
+    }
     return null;
   } finally {
     spawningTasks.delete(task.id);
