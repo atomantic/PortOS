@@ -1,19 +1,24 @@
-import BackupWidget from '../BackupWidget';
-import NetworkExposureWidget from '../NetworkExposureWidget';
-import SystemHealthWidget from '../SystemHealthWidget';
-import CosDashboardWidget from '../CosDashboardWidget';
-import GoalProgressWidget from '../GoalProgressWidget';
-import UpcomingTasksWidget from '../UpcomingTasksWidget';
-import DecisionLogWidget from '../DecisionLogWidget';
-import DeathClockWidget from '../DeathClockWidget';
-import ProactiveAlertsWidget from '../ProactiveAlertsWidget';
-import QuickBrainCapture from '../QuickBrainCapture';
-import QuickTaskWidget from '../QuickTaskWidget';
-import ReviewHubCard from '../ReviewHubCard';
-import AppsGridWidget from './builtins/AppsGridWidget';
-import QuickStatsWidget from './builtins/QuickStatsWidget';
-import ActivityStreakWidget from './builtins/ActivityStreakWidget';
-import HourlyActivityWidget from './builtins/HourlyActivityWidget';
+import { lazyWithReload } from '../../utils/lazyWithReload';
+
+// Widgets are lazy-loaded so a layout only downloads the widgets it actually
+// uses. The Dashboard render path wraps each <Component> in <Suspense> with a
+// per-cell skeleton so a slow widget can't stall sibling cells in the grid.
+const BackupWidget          = lazyWithReload(() => import('../BackupWidget'));
+const NetworkExposureWidget = lazyWithReload(() => import('../NetworkExposureWidget'));
+const SystemHealthWidget    = lazyWithReload(() => import('../SystemHealthWidget'));
+const CosDashboardWidget    = lazyWithReload(() => import('../CosDashboardWidget'));
+const GoalProgressWidget    = lazyWithReload(() => import('../GoalProgressWidget'));
+const UpcomingTasksWidget   = lazyWithReload(() => import('../UpcomingTasksWidget'));
+const DecisionLogWidget     = lazyWithReload(() => import('../DecisionLogWidget'));
+const DeathClockWidget      = lazyWithReload(() => import('../DeathClockWidget'));
+const ProactiveAlertsWidget = lazyWithReload(() => import('../ProactiveAlertsWidget'));
+const QuickBrainCapture     = lazyWithReload(() => import('../QuickBrainCapture'));
+const QuickTaskWidget       = lazyWithReload(() => import('../QuickTaskWidget'));
+const ReviewHubCard         = lazyWithReload(() => import('../ReviewHubCard'));
+const AppsGridWidget        = lazyWithReload(() => import('./builtins/AppsGridWidget'));
+const QuickStatsWidget      = lazyWithReload(() => import('./builtins/QuickStatsWidget'));
+const ActivityStreakWidget  = lazyWithReload(() => import('./builtins/ActivityStreakWidget'));
+const HourlyActivityWidget  = lazyWithReload(() => import('./builtins/HourlyActivityWidget'));
 
 // Each entry: { id, label, Component, width, defaultH?, gate?, module? }.
 // `gate(state) => bool` skips the widget when it has nothing useful to show.

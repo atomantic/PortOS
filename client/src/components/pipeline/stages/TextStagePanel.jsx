@@ -6,7 +6,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { Loader2, Sparkles, Save } from 'lucide-react';
+import { Loader2, Sparkles, Save, History } from 'lucide-react';
 import toast from '../../ui/Toast';
 import {
   generatePipelineStage, updatePipelineIssue,
@@ -15,6 +15,7 @@ import {
   PIPELINE_STAGE_STATUS_COLOR as STATUS_COLOR,
 } from '../../../services/api';
 import { useAsyncAction } from '../../../hooks/useAsyncAction';
+import StageHistoryModal from './StageHistoryModal';
 
 export default function TextStagePanel({
   issue,
@@ -27,13 +28,15 @@ export default function TextStagePanel({
   extraActions = null,
   actionsGated = false,
 }) {
-  const stage = issue.stages?.[stageId] || { status: 'empty', input: '', output: '' };
+  const stage = issue.stages?.[stageId] || { status: 'empty', input: '', output: '', runHistory: [] };
   const [draftOutput, setDraftOutput] = useState(stage.output || '');
   const [draftInput, setDraftInput] = useState(stage.input || '');
   // Server-pushed in-flight state — separate from the hook's local-action
   // running flag so an auto-run kicked off elsewhere still keeps the
   // Generate button locked.
   const [serverGenerating, setServerGenerating] = useState(stage.status === 'generating');
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const runHistory = stage.runHistory || [];
 
   // Reset local edits when the stage record changes from the parent (e.g.
   // auto-run pushed a new output).
@@ -98,6 +101,16 @@ export default function TextStagePanel({
           {extraActions}
           <button
             type="button"
+            onClick={() => setHistoryOpen(true)}
+            disabled={runHistory.length === 0}
+            title={runHistory.length === 0 ? 'No prior versions yet' : `${runHistory.length} prior version${runHistory.length === 1 ? '' : 's'}`}
+            className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-port-card border border-port-border text-white text-sm hover:border-port-accent/50 disabled:opacity-40"
+          >
+            <History size={14} />
+            History{runHistory.length ? ` (${runHistory.length})` : ''}
+          </button>
+          <button
+            type="button"
             onClick={handleSave}
             disabled={!dirty || saving}
             className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-port-card border border-port-border text-white text-sm hover:border-port-accent/50 disabled:opacity-40"
@@ -145,6 +158,20 @@ export default function TextStagePanel({
       {stage.errorMessage ? (
         <div className="text-xs text-port-error">{stage.errorMessage}</div>
       ) : null}
+
+      <StageHistoryModal
+        open={historyOpen}
+        onClose={() => setHistoryOpen(false)}
+        issueId={issue.id}
+        stageId={stageId}
+        currentOutput={stage.output || ''}
+        currentRunId={stage.lastRunId}
+        runHistory={runHistory}
+        restoreBlockedReason={dirty ? 'Save or discard your unsaved edits before restoring.' : null}
+        onRestored={(restoredStage, restoredIssue) => {
+          onStageUpdate?.(stageId, restoredStage, restoredIssue);
+        }}
+      />
     </div>
   );
 }

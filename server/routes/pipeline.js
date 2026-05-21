@@ -1280,6 +1280,27 @@ router.post('/issues/:id/stages/:stageId/generate', asyncHandler(async (req, res
   res.json(result);
 }));
 
+// Restore a prior text-stage version from history. See
+// issuesSvc.restoreStageFromHistory for the reversibility semantics.
+const restoreSchema = z.object({
+  runId: z.string().trim().min(1).max(200),
+});
+router.post('/issues/:id/stages/:stageId/restore', asyncHandler(async (req, res) => {
+  const { id, stageId } = req.params;
+  if (!issuesSvc.TEXT_STAGE_IDS.includes(stageId)) {
+    throw new ServerError(
+      `Stage "${stageId}" does not support history restore`,
+      { status: 400, code: 'PIPELINE_NON_TEXT_STAGE' },
+    );
+  }
+  const body = validateRequest(restoreSchema, req.body ?? {});
+  const issue = await issuesSvc.getIssue(id).catch((err) => { throw mapServiceError(err); });
+  issuesSvc.assertStageUnlocked(issue, stageId);
+  const result = await issuesSvc.restoreStageFromHistory(id, stageId, body.runId)
+    .catch((err) => { throw mapServiceError(err); });
+  res.json(result);
+}));
+
 // Auto-fill stages.storyboards.scenes[] from a text stage. Reads the issue's
 // prose (paragraph-grain) or teleplay (slugline-grain) output, runs the
 // shared scene extractor, and replaces stages.storyboards.scenes with the

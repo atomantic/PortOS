@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0 --port 5554",
     "build": "vite build",
+    "build:analyze": "ANALYZE=true vite build",
     "lint": "eslint src --ext .js,.jsx",
     "preview": "vite preview",
     "test": "vitest run",
@@ -39,6 +40,7 @@
     "eslint-plugin-react": "7.37.5",
     "eslint-plugin-react-hooks": "5.2.0",
     "jsdom": "25.0.1",
+    "rollup-plugin-visualizer": "^6.0.11",
     "tailwindcss": "4.2.1",
     "vite": "7.3.2",
     "vitest": "3.2.4"

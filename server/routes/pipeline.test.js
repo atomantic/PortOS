@@ -351,6 +351,65 @@ describe('pipeline routes', () => {
     expect(r.body.code || r.body.error).toBeTruthy();
   });
 
+  describe('POST /issues/:id/stages/:stageId/restore', () => {
+    it('restores a prior runHistory snapshot and snapshots the displaced current state', async () => {
+      const app = makeApp();
+      const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+      const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+      const issueId = iss.body.id;
+      // First run → no snapshot yet.
+      const r1 = await request(app)
+        .post(`/api/pipeline/issues/${issueId}/stages/idea/generate`)
+        .send({ seedInput: 'mystery v1' });
+      const firstRunId = r1.body.stage.lastRunId;
+      // Second run → snapshots v1.
+      const r2 = await request(app)
+        .post(`/api/pipeline/issues/${issueId}/stages/idea/generate`)
+        .send({ seedInput: 'mystery v2' });
+      expect(r2.body.stage.runHistory).toHaveLength(1);
+      expect(r2.body.stage.runHistory[0].runId).toBe(firstRunId);
+      // Restore v1.
+      const restored = await request(app)
+        .post(`/api/pipeline/issues/${issueId}/stages/idea/restore`)
+        .send({ runId: firstRunId });
+      expect(restored.status).toBe(200);
+      expect(restored.body.stage.lastRunId).toBe(firstRunId);
+      expect(restored.body.stage.status).toBe('edited');
+      // The just-replaced v2 now sits at the top of history.
+      expect(restored.body.stage.runHistory[0].runId).toBe(r2.body.stage.lastRunId);
+    });
+
+    it('rejects when the runId is not in the current snapshot list', async () => {
+      const app = makeApp();
+      const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+      const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+      const r = await request(app)
+        .post(`/api/pipeline/issues/${iss.body.id}/stages/idea/restore`)
+        .send({ runId: 'run-never-generated' });
+      expect(r.status).toBe(400);
+    });
+
+    it('rejects non-text stages', async () => {
+      const app = makeApp();
+      const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+      const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+      const r = await request(app)
+        .post(`/api/pipeline/issues/${iss.body.id}/stages/comicPages/restore`)
+        .send({ runId: 'r1' });
+      expect(r.status).toBe(400);
+    });
+
+    it('rejects empty runId via Zod', async () => {
+      const app = makeApp();
+      const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });
+      const iss = await request(app).post(`/api/pipeline/series/${ser.body.id}/issues`).send({ title: 'I' });
+      const r = await request(app)
+        .post(`/api/pipeline/issues/${iss.body.id}/stages/idea/restore`)
+        .send({ runId: '' });
+      expect(r.status).toBe(400);
+    });
+  });
+
   it('POST /issues/:id/stages/comicPages/visual enqueues an image job', async () => {
     const app = makeApp();
     const ser = await request(app).post('/api/pipeline/series').send({ name: 'S' });

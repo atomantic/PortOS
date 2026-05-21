@@ -66,6 +66,14 @@ export const STAGE_INPUT_MAX = 200_000;   // ~200kB — fits a long prose draft
 export const STAGE_OUTPUT_MAX = 400_000;  // ~400kB — fits a long comic script
 export const STAGE_NOTES_MAX = 4000;
 export const ISSUES_PER_RESPONSE_MAX = 1000;
+// How many prior versions of a text stage to retain for the diff modal.
+// Each entry holds the full prior input+output, so the upper bound is
+// N × (STAGE_INPUT_MAX + STAGE_OUTPUT_MAX) per stage. Five keeps a useful
+// undo trail without ballooning pipeline-issues.json. Only text stages
+// snapshot — visual/audio artifact shapes (pages[]/scenes[]/lines[]) aren't
+// meaningfully diffable as plain text; see snapshot gating in
+// updateStageWithLatest + updateIssue.
+export const STAGE_RUN_HISTORY_MAX = 5;
 
 // Stage IDs are ordered for UI display; the canonical order is also the
 // auto-run text-chain order (idea → prose → scripts in parallel). Comic
@@ -103,6 +111,10 @@ const emptyStage = () => ({
   errorMessage: '',
   updatedAt: null,
   locked: false,
+  // Most-recent-first list of prior `{ runId, createdAt, input, output }`
+  // snapshots, capped at STAGE_RUN_HISTORY_MAX. Populated only for text
+  // stages — visual/audio stages keep the field as [] for shape parity.
+  runHistory: [],
 });
 
 /**
@@ -122,6 +134,26 @@ export function assertStageUnlocked(issue, stageId) {
   }
 }
 
+const sanitizeRunHistoryEntry = (raw) => {
+  if (!raw || typeof raw !== 'object') return null;
+  const runId = isStr(raw.runId) && raw.runId ? raw.runId : null;
+  if (!runId) return null;
+  return {
+    runId,
+    createdAt: isStr(raw.createdAt) && raw.createdAt ? raw.createdAt : null,
+    input: trimTo(raw.input, STAGE_INPUT_MAX),
+    output: trimTo(raw.output, STAGE_OUTPUT_MAX),
+  };
+};
+
+const sanitizeRunHistory = (raw) => {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map(sanitizeRunHistoryEntry)
+    .filter(Boolean)
+    .slice(0, STAGE_RUN_HISTORY_MAX);
+};
+
 const sanitizeStage = (raw) => {
   if (!raw || typeof raw !== 'object') return emptyStage();
   const status = STAGE_STATUSES.includes(raw.status) ? raw.status : 'empty';
@@ -137,8 +169,54 @@ const sanitizeStage = (raw) => {
     // finalized comic script while still iterating storyboards. Independent
     // of `series.locked.arc` and `season.locked`; any of the three rejects.
     locked: raw.locked === true,
+    runHistory: sanitizeRunHistory(raw.runHistory),
   };
 };
+
+/**
+ * Decide whether `patch` represents a generate-replacement on `prevStage` and,
+ * if so, prepend a snapshot of the prior state to `prevStage.runHistory`.
+ * Returns the new runHistory array (capped at STAGE_RUN_HISTORY_MAX).
+ *
+ * Trigger conditions (ALL must hold):
+ *   - `stageId` is in TEXT_STAGE_IDS — visual + audio shapes don't snapshot.
+ *   - patch.lastRunId is a non-empty string that differs from prevStage.lastRunId.
+ *   - prevStage.lastRunId is set AND prevStage.output is non-empty — there's
+ *     prior content worth preserving for diff/restore.
+ *
+ * Skipped triggers (and why):
+ *   - First-time generate (prev.lastRunId === null) — nothing to snapshot.
+ *   - status: 'generating' transition — patch carries no new lastRunId yet.
+ *   - status: 'error' from a failed LLM throw — patch carries no new lastRunId.
+ *   - Save-edit (PATCH with input/output but no lastRunId) — caller explicitly
+ *     editing the existing version, not replacing it. The previous run remains
+ *     the active version; the next generate will snapshot it.
+ */
+export function snapshotRunHistory(prevStage, patch, stageId) {
+  const prevHistory = Array.isArray(prevStage?.runHistory) ? prevStage.runHistory : [];
+  if (!patch || typeof patch !== 'object') return prevHistory;
+  if (!TEXT_STAGE_IDS.includes(stageId)) return prevHistory;
+  const nextRunId = isStr(patch.lastRunId) ? patch.lastRunId : '';
+  if (!nextRunId) return prevHistory;
+  if (nextRunId === prevStage?.lastRunId) return prevHistory;
+  if (!prevStage?.lastRunId) return prevHistory;
+  const prevOutput = prevStage.output || '';
+  if (!prevOutput.trim()) return prevHistory;
+  const snapshot = {
+    runId: prevStage.lastRunId,
+    createdAt: prevStage.updatedAt || new Date().toISOString(),
+    input: prevStage.input || '',
+    output: prevOutput,
+  };
+  // Drop any prior entry whose runId matches the now-active runId. This is
+  // the restore case: snapshot r1 → user restores r1 → r1 becomes the active
+  // runId AND is still sitting in prevHistory. Without the filter the next
+  // regenerate would push the just-displaced state and leave a duplicate
+  // r1 in the list, breaking React keys and making restore-by-runId
+  // ambiguous (which r1 to apply?).
+  const dedupedPrior = prevHistory.filter((entry) => entry.runId !== nextRunId);
+  return [snapshot, ...dedupedPrior].slice(0, STAGE_RUN_HISTORY_MAX);
+}
 
 // Episode-video render settings the user chose at kickoff time. Persisted
 // on the stage so a page reload doesn't reset them to the defaults — the
@@ -552,6 +630,11 @@ export function updateIssue(id, patch = {}, { skipRenumber = false } = {}) {
       const prev = cur.stages?.[stageId];
       if (prev && stagePatch && typeof prev === 'object' && typeof stagePatch === 'object') {
         const merged = { ...prev, ...stagePatch };
+        // Mirror the snapshot trigger from updateStageWithLatest so a
+        // route-level PATCH that swaps lastRunId (e.g. the restore endpoint)
+        // also produces a runHistory entry. No-op when the patch is a plain
+        // save-edit without lastRunId.
+        merged.runHistory = snapshotRunHistory(prev, stagePatch, stageId);
         for (const key of NESTED_DEEP_MERGE_KEYS) {
           if (key in stagePatch
               && stagePatch[key] && typeof stagePatch[key] === 'object'
@@ -625,6 +708,37 @@ export function updateStage(issueId, stageId, patch = {}) {
   return updateStageWithLatest(issueId, stageId, () => patch);
 }
 
+/**
+ * Restore a prior `runHistory` snapshot as the active stage state. Looks up the
+ * snapshot by `runId` against the freshest persisted record (so a concurrent
+ * generate can't make the chosen snapshot disappear out from under the call).
+ * The previous active state is itself snapshotted into runHistory by the normal
+ * lastRunId-changed trigger in `updateStageWithLatest`, so restore is just
+ * another version event — there's no special "rollback" semantics.
+ *
+ * Resolves with `{ issue, stage }`. Rejects with ERR_VALIDATION when the runId
+ * isn't present in the current runHistory.
+ */
+export function restoreStageFromHistory(issueId, stageId, runId) {
+  if (!TEXT_STAGE_IDS.includes(stageId)) {
+    return Promise.reject(makeErr(`Stage "${stageId}" does not support history restore`, ERR_VALIDATION));
+  }
+  if (!isStr(runId) || !runId) {
+    return Promise.reject(makeErr('runId is required', ERR_VALIDATION));
+  }
+  return updateStageWithLatest(issueId, stageId, (cur) => {
+    const snapshot = (cur?.runHistory || []).find((entry) => entry.runId === runId);
+    if (!snapshot) throw makeErr(`Snapshot not found in stage history: ${runId}`, ERR_VALIDATION);
+    return {
+      status: 'edited',
+      input: snapshot.input || '',
+      output: snapshot.output || '',
+      lastRunId: snapshot.runId,
+      errorMessage: '',
+    };
+  });
+}
+
 export function deleteIssue(id) {
   return queueIssueWrite(async () => {
   const state = await readState();
@@ -675,9 +789,14 @@ export function updateStageWithLatest(issueId, stageId, computeFn) {
   if (isPlainObject(patch) && Object.keys(patch).length === 0) {
     return { issue: cur, stage: currentStage };
   }
+  // Snapshot the prior `{ runId, input, output }` into runHistory when this
+  // patch carries a fresh lastRunId (i.e. a generate just replaced prior
+  // content). Computed BEFORE the spread so it reads pre-merge state.
+  const nextRunHistory = snapshotRunHistory(currentStage, patch, stageId);
   const merged = {
     ...currentStage,
     ...patch,
+    runHistory: nextRunHistory,
     updatedAt: new Date().toISOString(),
   };
   let next;

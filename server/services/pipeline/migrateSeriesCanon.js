@@ -13,10 +13,19 @@
 // next series-side write will rewrite the JSON without the legacy fields.
 
 import { join } from 'path';
+import { createHash } from 'node:crypto';
 import { updateSeries } from './series.js';
 import { PATHS, readJSONFile } from '../../lib/fileUtils.js';
-import { getUniverse, createUniverse, updateUniverse } from '../universeBuilder.js';
+import { getUniverse, insertUniverseWithId, updateUniverse, ERR_DUPLICATE } from '../universeBuilder.js';
 import { mergeExtractedBible, BIBLE_FIELD, BIBLE_SOURCE } from '../../lib/storyBible.js';
+
+// Derive a stable universe id from the importing series so a retry after a
+// mid-helper throw (insert succeeded, a later write failed) reuses the orphan
+// from the prior pass instead of minting a second "(auto-migrated)" universe
+// per retry. sha1 of `series.id` truncated to 32 hex chars fits UNIVERSE_ID_RE
+// (`[A-Za-z0-9-]{8,80}`) regardless of the series-id format.
+export const deriveOrphanUniverseId = (seriesId) =>
+  `uni-from-series-${createHash('sha1').update(String(seriesId)).digest('hex').slice(0, 32)}`;
 
 // Raw read of pipeline-series.json (bypasses sanitizeSeries, which post-B.4
 // strips the legacy canon fields the migration needs to see).
@@ -78,21 +87,34 @@ export async function applyLegacySeriesCanonToUniverse(series, { dryRun = false,
 
   let universeId = series.universeId;
   let universeCreated = false;
+  let freshlyInserted = null;
   if (!universeId) {
     if (dryRun) {
       log(`📋 [dry-run] Would create universe for orphan series "${series.name}" (${series.id})`);
       return { perKindSeen, perKindApplied, universeId: null, universeCreated: false, migrated: false, skipped: 'dry-run-orphan' };
     }
-    const newUniverse = await createUniverse({
+    const deterministicId = deriveOrphanUniverseId(series.id);
+    freshlyInserted = await insertUniverseWithId({
+      id: deterministicId,
       name: `${series.name} (auto-migrated)`,
       starterPrompt: series.logline || series.premise?.slice(0, 500) || '',
+    }).catch((err) => {
+      if (err?.code === ERR_DUPLICATE) return null;
+      throw err;
     });
-    universeId = newUniverse.id;
+    universeId = deterministicId;
     universeCreated = true;
-    log(`🌌 Created universe "${newUniverse.name}" (${newUniverse.id}) for orphan series "${series.name}"`);
+    if (freshlyInserted) {
+      log(`🌌 Created universe "${freshlyInserted.name}" (${freshlyInserted.id}) for orphan series "${series.name}"`);
+    } else {
+      // Prior retry minted this universe but threw before updateUniverse
+      // landed — still flag `universeCreated` so the caller stamps
+      // `series.universeId` and the merge below populates the empty canon.
+      log(`♻️ Reusing universe ${deterministicId} for orphan series "${series.name}" (retry after prior failure)`);
+    }
   }
 
-  const universe = await getUniverse(universeId).catch(() => null);
+  const universe = freshlyInserted || await getUniverse(universeId).catch(() => null);
   if (!universe) {
     log(`⚠️ Series "${series.name}" links to missing universe ${universeId} — skipping`);
     return { perKindSeen, perKindApplied, universeId, universeCreated, migrated: false, skipped: 'missing-universe' };

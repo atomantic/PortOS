@@ -1,57 +1,8 @@
-import { useState, useEffect, memo } from 'react';
+import { useState, useEffect } from 'react';
 import { RefreshCw, GitCompare } from 'lucide-react';
 import { getInsightNarrative, refreshInsightNarrative } from '../../services/api';
 import { formatDate, timeAgo } from '../../utils/formatters';
-
-// Inline word-level diff using Myers LCS algorithm
-function lcs(a, b) {
-  const m = a.length, n = b.length;
-  const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
-  for (let i = 1; i <= m; i++)
-    for (let j = 1; j <= n; j++)
-      dp[i][j] = a[i-1] === b[j-1] ? dp[i-1][j-1] + 1 : Math.max(dp[i-1][j], dp[i][j-1]);
-  const seq = [];
-  let i = m, j = n;
-  while (i > 0 && j > 0) {
-    if (a[i-1] === b[j-1]) { seq.unshift(a[i-1]); i--; j--; }
-    else if (dp[i-1][j] >= dp[i][j-1]) i--;
-    else j--;
-  }
-  return seq;
-}
-
-const InlineDiff = memo(function InlineDiff({ oldText, newText }) {
-  const oldWords = (oldText || '').split(/(\s+)/);
-  const newWords = (newText || '').split(/(\s+)/);
-  const commonSeq = lcs(oldWords, newWords);
-
-  const render = (words, added) => {
-    const spans = [];
-    let run = [];
-    let ci = 0;
-    words.forEach((w, i) => {
-      if (ci < commonSeq.length && w === commonSeq[ci]) {
-        ci++;
-        if (run.length) { spans.push(<span key={i + 'r'} className={added ? 'bg-green-900/50 text-green-300' : 'bg-red-900/50 text-red-300'}>{run.join('')}</span>); run = []; }
-        spans.push(w);
-      } else { run.push(w); }
-    });
-    if (run.length) spans.push(<span key="last" className={added ? 'bg-green-900/50 text-green-300' : 'bg-red-900/50 text-red-300'}>{run.join('')}</span>);
-    return spans;
-  };
-
-  return (
-    <div className="font-mono text-xs p-4 space-y-2 bg-port-bg">
-      {oldText !== newText && (
-        <>
-          <div className="text-red-400 leading-relaxed">{render(oldWords, false)}</div>
-          <div className="text-green-400 leading-relaxed">{render(newWords, true)}</div>
-        </>
-      )}
-      {oldText === newText && <div className="text-gray-500">No changes.</div>}
-    </div>
-  );
-});
+import InlineDiff from '../ui/InlineDiff';
 
 export default function CrossDomainTab() {
   const [data, setData] = useState(null);
