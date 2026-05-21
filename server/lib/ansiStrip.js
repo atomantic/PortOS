@@ -11,7 +11,12 @@
  * Returns a stateful stripper function — instantiate one per stream.
  */
 
-export const ANSI_PATTERN = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1B\\))/g;
+// OSC alternative comes first so a complete `\x1B]<body>(BEL|ST)` sequence is
+// consumed whole. The single-byte class `[@-Z\\-_]` covers 0x40-0x5A and
+// 0x5C-0x5F, which includes `]` (0x5D); if it ran first it would strip the
+// `\x1B]` opener only and leak the body+terminator. The bare `\x1B]` (no
+// terminator) case still falls through to the single-byte branch.
+export const ANSI_PATTERN = /\x1B(?:\][^\x07]*(?:\x07|\x1B\\)|[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
 
 const INCOMPLETE_CSI = /^\x1B\[[0-?]*[ -/]*$/;
 const INCOMPLETE_OSC = /^\x1B\][^\x07\x1B]*$/;

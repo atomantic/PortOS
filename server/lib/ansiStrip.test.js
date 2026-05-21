@@ -1,10 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { stripAnsi, createStreamingAnsiStripper, ANSI_PATTERN } from './ansiStrip.js';
 
-// These tests pin the *current* behavior of the streaming stripper. Anything
-// surprising (e.g. OSC bodies leaking because `[@-Z\\-_]` matches `\x1B]`
-// before the OSC alternative can fire) is called out inline so a future
-// regex rewrite has explicit before/after evidence to work against.
+// These tests pin the behavior of the streaming stripper, including OSC
+// handling: terminator-bearing sequences are fully consumed, and a bare
+// `\x1B]` with no terminator falls through to the single-byte branch.
 
 describe('stripAnsi (one-shot)', () => {
   it('returns empty string for non-string input', () => {
@@ -26,19 +25,18 @@ describe('stripAnsi (one-shot)', () => {
     expect(stripAnsi('\x1B[1;31;47mfoo\x1B[0m')).toBe('foo');
   });
 
-  it('strips the `\\x1B]` OSC opener but leaves the body when BEL-terminated', () => {
-    // The OSC alternative in ANSI_PATTERN is unreachable because the
-    // single-byte alternative `[@-Z\\-_]` matches `]` (0x5D) first. So an
-    // OSC sequence loses its `\x1B]` prefix and keeps the body+BEL. This is
-    // a latent bug — callers in tuiPromptRunner/agentTuiSpawning consume
-    // the result as-is. Documented here so a future fix has a baseline.
-    expect(stripAnsi('\x1B]0;title\x07after')).toBe('0;title\x07after');
+  it('strips a complete BEL-terminated OSC sequence (opener + body + BEL)', () => {
+    expect(stripAnsi('\x1B]0;title\x07after')).toBe('after');
   });
 
-  it('strips both `\\x1B]` opener AND `\\x1B\\\\` ST terminator when OSC is ST-terminated', () => {
-    // Same alt-order quirk strips `\x1B\\` (backslash, 0x5C, in 0x5C-0x5F),
-    // so the body remains but both ESC bytes vanish.
-    expect(stripAnsi('\x1B]0;title\x1B\\after')).toBe('0;titleafter');
+  it('strips a complete ST-terminated OSC sequence (opener + body + ESC \\\\)', () => {
+    expect(stripAnsi('\x1B]0;title\x1B\\after')).toBe('after');
+  });
+
+  it('strips an OSC hyperlink (ESC ] 8 ; ; URL BEL TEXT ESC ] 8 ; ; BEL)', () => {
+    // Real-world example: terminal hyperlinks. Both OSC chunks must be
+    // consumed whole, leaving just the visible link text.
+    expect(stripAnsi('\x1B]8;;https://example.com\x07link\x1B]8;;\x07')).toBe('link');
   });
 
   it('strips a bare `\\x1B]` (single-byte path) when nothing follows', () => {
@@ -114,24 +112,20 @@ describe('createStreamingAnsiStripper', () => {
     expect(strip('[2Jxyz')).toBe('xyz');
   });
 
-  it('buffers an OSC opener split across chunks (BEL terminator) — body still leaks on flush', () => {
-    // Streaming correctly *defers* the chunk boundary inside an OSC opener
-    // — the trailing `\x1B]0;ti` is held until the next chunk arrives. But
-    // when the terminator chunk lands and the full sequence is re-strip'd,
-    // the regex's dead OSC alternative means only `\x1B]` is consumed and
-    // the `0;title\x07` body leaks. Future-fix baseline.
+  it('buffers an OSC opener split across chunks and fully strips the sequence on flush (BEL)', () => {
+    // Streaming defers the chunk boundary inside an OSC opener — the
+    // trailing `\x1B]0;ti` is held until the next chunk arrives. When the
+    // BEL terminator lands the full reassembled sequence strips cleanly.
     const strip = createStreamingAnsiStripper();
     expect(strip('pre\x1B]0;ti')).toBe('pre');
-    expect(strip('tle\x07post')).toBe('0;title\x07post');
+    expect(strip('tle\x07post')).toBe('post');
   });
 
-  it('buffers an OSC opener split across three chunks then leaks the body', () => {
+  it('buffers an OSC opener split across three chunks then fully strips it', () => {
     const strip = createStreamingAnsiStripper();
     expect(strip('A\x1B]')).toBe('A');
     expect(strip('8;;https://example.com')).toBe('');
-    // BEL terminator survives because the OSC alternative is dead — only
-    // the `\x1B]` prefix is consumed, body+BEL stay.
-    expect(strip('\x07Z')).toBe('8;;https://example.com\x07Z');
+    expect(strip('\x07Z')).toBe('Z');
   });
 
   it('does NOT buffer an OSC body longer than 4096 bytes — it leaks instead of pinning memory', () => {
