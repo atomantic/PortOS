@@ -53,6 +53,7 @@ export * from './useOpenClawAttachments.js';
 
 // === Sockets & lifecycle ===
 export * from './useSocket.js';
+export * from './useTimeTick.js';
 export * from './useUpdateChecker.jsx';
 export * from './useVisibilityEvent.js';
 

@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import * as api from '../services/api';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
+import { useTimeTick } from '../hooks/useTimeTick';
 
 /**
  * CosDashboardWidget - Compact CoS status widget for the main Dashboard
@@ -34,17 +35,20 @@ const CosDashboardWidget = memo(function CosDashboardWidget() {
   }, 30000, {
     // Re-render only when one of the aggregated counts actually moves —
     // running agents, completed/failed counts, streak, queue depth, learning
-    // success rate, every visible recent-task field, and the heatmap totals.
-    // The poll fires every 30s; without this guard each tick re-renders the
-    // activity heatmap + recent tasks list even when nothing changed.
+    // success rate, every visible recent-task field, every per-day heatmap
+    // cell, and the heatmap summary. The poll fires every 30s; without this
+    // guard each tick re-renders the activity heatmap + recent tasks list
+    // even when nothing changed.
     //
     // Recent-tasks comparison walks every rendered field per row (description,
-    // taskType, app, durationFormatted, success, and the server-computed
-    // completedRelative string). Including completedRelative means the row
-    // re-renders when its relative-time label rolls over (e.g. "2 min" → "3
-    // min") instead of going permanently stale until a new task lands — the
-    // server already rounds to the same minute boundary the user sees, so the
-    // dedup still kicks in for the (frequent) 30s ticks that don't cross one.
+    // taskType, app, durationFormatted, success). The `task.completedRelative`
+    // label is re-driven by the useTimeTick(60000) below so we don't have to
+    // bust dedup whenever a row's relative-time string rolls over.
+    //
+    // Heatmap comparison walks every cell's (date, tasks, successRate) tuple
+    // plus summary totals — per-day tasks/successRate distribution can shift
+    // without changing top-level totals (e.g. a task moving from one day to
+    // another in late-arriving telemetry).
     compare: (prev, next) => {
       const prevTasks = prev.recentTasks?.tasks;
       const nextTasks = next.recentTasks?.tasks;
@@ -61,8 +65,31 @@ const CosDashboardWidget = memo(function CosDashboardWidget() {
           || a?.taskType !== b?.taskType
           || a?.app !== b?.app
           || a?.durationFormatted !== b?.durationFormatted
-          || a?.completedRelative !== b?.completedRelative
         ) return false;
+      }
+      // Heatmap weeks: array of arrays of {date, tasks, successRate, isToday,
+      // isFuture}. Compare every cell — single boundary-cross (isToday rolls
+      // from one date to the next) flips the comparator naturally because
+      // (date, isToday) on the prior+next today differ.
+      const prevWeeks = prev.activityCalendar?.weeks;
+      const nextWeeks = next.activityCalendar?.weeks;
+      const prevWeeksLen = prevWeeks?.length ?? 0;
+      const nextWeeksLen = nextWeeks?.length ?? 0;
+      if (prevWeeksLen !== nextWeeksLen) return false;
+      for (let w = 0; w < prevWeeksLen; w++) {
+        const pw = prevWeeks[w];
+        const nw = nextWeeks[w];
+        if ((pw?.length ?? 0) !== (nw?.length ?? 0)) return false;
+        for (let d = 0; d < pw.length; d++) {
+          const pd = pw[d];
+          const nd = nw[d];
+          if (
+            pd?.date !== nd?.date
+            || pd?.tasks !== nd?.tasks
+            || pd?.successRate !== nd?.successRate
+            || pd?.isToday !== nd?.isToday
+          ) return false;
+        }
       }
       return (
         prev.summary?.status?.running === next.summary?.status?.running
@@ -83,6 +110,7 @@ const CosDashboardWidget = memo(function CosDashboardWidget() {
           && prev.recentTasks?.summary?.succeeded === next.recentTasks?.summary?.succeeded
           && prev.activityCalendar?.summary?.totalTasks === next.activityCalendar?.summary?.totalTasks
           && prev.activityCalendar?.summary?.successRate === next.activityCalendar?.summary?.successRate
+          && prev.activityCalendar?.summary?.activeDays === next.activityCalendar?.summary?.activeDays
           && prev.activityCalendar?.maxTasks === next.activityCalendar?.maxTasks
           && prev.activityCalendar?.currentStreak === next.activityCalendar?.currentStreak
       );
@@ -91,6 +119,11 @@ const CosDashboardWidget = memo(function CosDashboardWidget() {
 
   const { summary, learningSummary, recentTasks, activityCalendar } = dashData ?? {};
   const [tasksExpanded, setTasksExpanded] = useState(false);
+  // Tick every minute so the server-computed `task.completedRelative` labels
+  // stay accurate across deduped polls (the relative-time string is rendered
+  // verbatim, but the component re-renders on each tick so a sequence of
+  // identical poll payloads still shows the correct "X min ago").
+  useTimeTick(60000);
 
   // Don't render while loading
   if (loading) {

@@ -54,6 +54,7 @@ grep -i "what you want to do" client/src/hooks/README.md
 | `useSocket` | Shared socket instance + connection status. | You need to subscribe to a socket event. |
 | `useUpdateChecker` | Detect stale client bundle; show reload toast. | Wire once at app root. |
 | `useMounted` | `mountedRef` whose `.current` is true while mounted. | Async deferred work that must abort on unmount. |
+| `useTimeTick` | Singleton-backed wall-clock tick (`Date.now()`); N subscribers at the same cadence share one `setInterval`. | A widget renders something derived from `Date.now()` (relative timestamps, threshold-based health labels, countdowns) and is also fed by a deduped `useAutoRefetch` — without this the label goes stale until the data changes. |
 | `useVisibilityEvent` | Singleton-backed `document.visibilitychange` subscription (N subscribers share one listener). | Reacting to tab show/hide without spawning a per-component listener. `useAutoRefetch` already builds on this. |
 
 ## UI / interaction

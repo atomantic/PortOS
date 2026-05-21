@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { ChevronRight, AlertTriangle, Target } from 'lucide-react';
 import * as api from '../services/api';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
+import { useTimeTick } from '../hooks/useTimeTick';
 import { CATEGORY_CONFIG, GOAL_TYPE_CONFIG } from './goals/GoalDetailPanel';
 
 const HORIZON_LABELS = {
@@ -54,6 +55,11 @@ const GoalProgressWidget = memo(function GoalProgressWidget() {
     },
   );
 
+  // Tick hourly so `daysSinceUpdate` / `isStalled` derivations cross the
+  // 14-day stall boundary without waiting for an unrelated payload change to
+  // re-render. Day-level precision doesn't need a per-minute tick.
+  const tick = useTimeTick(3600000);
+
   const { goals, stalledCount, avgProgress } = useMemo(() => {
     if (!goalsData?.goals?.length) return { goals: [], stalledCount: 0, avgProgress: 0 };
 
@@ -74,7 +80,11 @@ const GoalProgressWidget = memo(function GoalProgressWidget() {
       stalledCount: topLevel.filter(g => g.isStalled).length,
       avgProgress: topLevel.length ? Math.round(topLevel.reduce((sum, g) => sum + (g.progress || 0), 0) / topLevel.length) : 0
     };
-  }, [goalsData]);
+    // tick is intentionally a dep — when the wall-clock hour rolls over the
+    // derivation re-runs so a goal can cross the stall threshold without
+    // needing a new poll payload.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [goalsData, tick]);
 
   if (loading || !goals.length) return null;
 

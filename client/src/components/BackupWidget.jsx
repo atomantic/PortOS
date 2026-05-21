@@ -14,6 +14,7 @@ import BrailleSpinner from './BrailleSpinner';
 import toast from './ui/Toast';
 import * as api from '../services/api';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
+import { useTimeTick } from '../hooks/useTimeTick';
 
 // ---------------------------------------------------------------------------
 // Pure helpers
@@ -283,6 +284,11 @@ const BackupWidget = memo(function BackupWidget() {
   );
   const [triggering, setTriggering] = useState(false);
   const [snapshotsOpen, setSnapshotsOpen] = useState(false);
+  // Tick every minute so the dedup-skipped widget still recomputes
+  // `relativeTime(lastRun/nextRun)` labels and the `computeHealth` 25h/49h
+  // thresholds when wall-clock time crosses a boundary even though the poll
+  // payload is unchanged.
+  useTimeTick(60000);
 
   const health = computeHealth(status);
   const { dot, text, icon: HealthIcon } = HEALTH_STYLES[health];

@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import * as api from '../services/api';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
+import { useTimeTick } from '../hooks/useTimeTick';
 import { timeAgo } from '../utils/formatters';
 
 /**
@@ -31,14 +32,15 @@ const DecisionLogWidget = memo(function DecisionLogWidget() {
     {
       // Decision stream is append-only; same 24h totals + same per-decision
       // tuple of every rendered field means nothing visible advanced this
-      // minute. Comparator walks: id (key + dedup), type (icon + label), reason
-      // (body + tooltip), count (×N badge), lastTimestamp/timestamp (relative
-      // label rolls over via the timeAgo helper — including these means the
-      // row re-renders when its relative-time string crosses a boundary
-      // instead of staying permanently stale), and the context fields that
-      // renderContextDetails surfaces (running/max/project/limit, appId/
+      // minute. Comparator walks: id (key + dedup), type (icon + label),
+      // reason (body + tooltip), count (×N badge), and the context fields
+      // that renderContextDetails surfaces (running/max/project/limit, appId/
       // cooldownMs, fromTask/toTask, attempts, runningAgents/awaitingApproval,
-      // taskType, successRate). Keep this tuple in sync with the JSX above.
+      // taskType, successRate). The `timeAgo(decision.lastTimestamp ||
+      // decision.timestamp)` label is re-rendered by the useTimeTick(60000)
+      // below — including the timestamp fields in this comparator would
+      // pointlessly break dedup on every backend mtime nudge. Keep this tuple
+      // in sync with the JSX above.
       compare: (prev, next) => {
         if (prev.last24Hours?.total !== next.last24Hours?.total
           || prev.last24Hours?.skipped !== next.last24Hours?.skipped
@@ -60,8 +62,6 @@ const DecisionLogWidget = memo(function DecisionLogWidget() {
             || da.type !== db?.type
             || da.reason !== db?.reason
             || (da.count ?? 1) !== (db?.count ?? 1)
-            || da.lastTimestamp !== db?.lastTimestamp
-            || da.timestamp !== db?.timestamp
           ) return false;
           const ca = da.context;
           const cb = db?.context;
@@ -86,6 +86,10 @@ const DecisionLogWidget = memo(function DecisionLogWidget() {
     },
   );
   const [expanded, setExpanded] = useState(false);
+  // Tick every minute so the `timeAgo(...)` relative-time labels on each
+  // decision row roll over even when the poll payload is unchanged by the
+  // comparator.
+  useTimeTick(60000);
 
   // Don't render while loading or if no data
   if (loading || !summary) {
