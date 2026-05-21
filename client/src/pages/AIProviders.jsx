@@ -606,20 +606,26 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
 
     const tuiPromptDelay = parseInt(formData.tuiPromptDelayMs, 10);
     const tuiIdleTimeout = parseInt(formData.tuiIdleTimeoutMs, 10);
-    // Use parseTimeoutMs so submit and the hint below agree on what shapes
-    // are valid (digit-only string within [MIN, MAX]). parseInt accepted
-    // '1e3' as 1 and '1000.5' as 1000, which mismatched the hint's
-    // Number()-based display and resulted in a confusing "shows 15m, saves
-    // 1ms" UX. Fall back to the raw form value (NaN-coerced) for the rare
-    // case where the user typed something the strict parser rejects — the
-    // server's Zod validator will still gatekeep with a clear error.
+    // Three cases for the timeout field on submit:
+    //   1. valid integer within bounds → send the parsed number
+    //   2. blank/whitespace → omit so the server keeps the current value
+    //      (Number('') is 0, which would 400 against the min-1000 rule)
+    //   3. non-empty but invalid (e.g. '1e3', '500') → send Number(...)
+    //      and let the server's Zod schema return a clear error
     const parsedTimeout = parseTimeoutMs(formData.timeout);
+    const timeoutInput = String(formData.timeout ?? '').trim();
     const data = {
       ...formData,
       args: formData.args ? formData.args.split(' ').filter(Boolean) : [],
       headlessArgs: formData.headlessArgs ? formData.headlessArgs.split(' ').filter(Boolean) : [],
-      timeout: parsedTimeout != null ? parsedTimeout : Number(formData.timeout)
     };
+    if (parsedTimeout != null) {
+      data.timeout = parsedTimeout;
+    } else if (timeoutInput === '') {
+      delete data.timeout;
+    } else {
+      data.timeout = Number(formData.timeout);
+    }
     if (formData.type === 'tui') {
       if (Number.isFinite(tuiPromptDelay)) data.tuiPromptDelayMs = tuiPromptDelay;
       else delete data.tuiPromptDelayMs;
