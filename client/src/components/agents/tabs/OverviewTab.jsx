@@ -103,18 +103,25 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
   const quickAccount = accounts.find(a => a.id === quickAccountId);
   const quickPlatform = quickAccount?.platform || 'moltbook';
 
+  // Platform-aware rate-limit fetch — moltworld accounts have their own endpoint.
+  // Used by the initial load, the post-action refetches, and the cooldown-expiry
+  // refetch below so all three paths stay in sync.
+  const fetchRateLimitsForQuickAccount = useCallback(() => {
+    if (!quickAccountId) return Promise.resolve(null);
+    const account = accounts.find(a => a.id === quickAccountId);
+    return account?.platform === 'moltworld'
+      ? api.moltworldRateLimits(quickAccountId)
+      : api.getAgentRateLimits(quickAccountId);
+  }, [quickAccountId, accounts]);
+
   // Load rate limits when quick account changes
   useEffect(() => {
     if (!quickAccountId) {
       setRateLimits(null);
       return;
     }
-    const account = accounts.find(a => a.id === quickAccountId);
-    const endpoint = account?.platform === 'moltworld'
-      ? api.moltworldRateLimits(quickAccountId)
-      : api.getAgentRateLimits(quickAccountId);
-    endpoint.then(setRateLimits).catch(() => {});
-  }, [quickAccountId, accounts]);
+    fetchRateLimitsForQuickAccount().then(setRateLimits).catch(() => {});
+  }, [quickAccountId, fetchRateLimitsForQuickAccount]);
 
   // Calculate cooldown end timestamps from rate limit data
   useEffect(() => {
@@ -132,9 +139,7 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
   useCooldownTick({
     cooldownEnds,
     onAllExpired: () => {
-      if (quickAccountId) {
-        api.getAgentRateLimits(quickAccountId).then(setRateLimits).catch(() => {});
-      }
+      fetchRateLimitsForQuickAccount().then(setRateLimits).catch(() => {});
     },
   });
 

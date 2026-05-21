@@ -93,4 +93,28 @@ describe('useCooldownTick', () => {
 
     expect(() => act(() => vi.advanceTimersByTime(2_000))).not.toThrow();
   });
+
+  it('clears the interval after the expiry tick even if the caller never updates cooldownEnds', () => {
+    // Regression guard for Copilot review on PR #422: a no-op onAllExpired
+    // (or a network error in the caller) must not leave the 1s interval
+    // re-rendering forever after the deadline passes. Callers in
+    // OverviewTab/ToolsTab/WorldTab hold `cooldownEnds` in useState so the
+    // reference is stable across the internal `setTick` re-renders; the
+    // expected steady state after expiry is "no live timers."
+    const onAllExpired = vi.fn();
+    const cooldownEnds = { a: Date.now() + 1_500 };
+    renderHook(() => useCooldownTick({ cooldownEnds, onAllExpired }));
+
+    expect(vi.getTimerCount()).toBe(1);
+
+    act(() => vi.advanceTimersByTime(2_000));
+    expect(onAllExpired).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+
+    // Advance well past any further 1s tick — no second interval armed,
+    // callback stays at 1.
+    act(() => vi.advanceTimersByTime(30_000));
+    expect(onAllExpired).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
 });

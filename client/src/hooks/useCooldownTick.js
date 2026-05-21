@@ -7,11 +7,14 @@ import { useEffect, useRef, useState } from 'react';
 //
 // `cooldownEnds` is a `{ [actionId]: epochMillis }` map; the interval only runs
 // while at least one entry is still in the future. `onAllExpired` fires once,
-// the first tick after every entry crosses the deadline. Latest-callback is
-// kept in a ref so consumers don't have to memoize it — the interval's
-// lifecycle is driven by `cooldownEnds` alone, matching the originals where
-// the surrounding account/refetch dep only affected the *closure*, not the
-// timer's start/stop.
+// the first tick after every entry crosses the deadline, and the interval is
+// cleared at that same tick so a missing/no-op callback can't leave us spinning
+// forever. When the caller's expiry handler swaps in a fresh `cooldownEnds`
+// (new ref, new deadlines), the effect re-runs and a new interval starts.
+// Latest-callback is kept in a ref so consumers don't have to memoize it — the
+// interval's lifecycle is driven by `cooldownEnds` alone, matching the
+// originals where the surrounding account/refetch dep only affected the
+// *closure*, not the timer's start/stop.
 export function useCooldownTick({ cooldownEnds, onAllExpired }) {
   const [, setTick] = useState(0);
   const callbackRef = useRef(onAllExpired);
@@ -22,15 +25,26 @@ export function useCooldownTick({ cooldownEnds, onAllExpired }) {
   useEffect(() => {
     const hasActive = Object.values(cooldownEnds).some((end) => end > Date.now());
     if (!hasActive) return;
-    let refetched = false;
-    const interval = setInterval(() => {
+    let interval = null;
+    const stop = () => {
+      if (interval !== null) {
+        clearInterval(interval);
+        interval = null;
+      }
+    };
+    interval = setInterval(() => {
       const stillActive = Object.values(cooldownEnds).some((end) => end > Date.now());
       setTick((t) => t + 1);
-      if (!stillActive && !refetched) {
-        refetched = true;
+      if (!stillActive) {
+        // Fire the one-shot expiry signal and stop ticking. If the caller's
+        // handler refetches and produces a fresh `cooldownEnds` (different ref
+        // with new deadlines), the effect re-runs and a new interval starts.
+        // If it doesn't (handler omitted, network error, no new cooldowns),
+        // we don't spin forever re-rendering for no reason.
+        stop();
         callbackRef.current?.();
       }
     }, 1000);
-    return () => clearInterval(interval);
+    return stop;
   }, [cooldownEnds]);
 }
