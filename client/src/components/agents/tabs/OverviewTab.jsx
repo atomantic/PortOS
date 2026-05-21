@@ -103,9 +103,10 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
   const quickAccount = accounts.find(a => a.id === quickAccountId);
   const quickPlatform = quickAccount?.platform || 'moltbook';
 
-  // Platform-aware rate-limit fetch — moltworld accounts have their own endpoint.
-  // Used by the initial load, the post-action refetches, and the cooldown-expiry
-  // refetch below so all three paths stay in sync.
+  // Platform-aware rate-limit fetch — moltworld accounts have their own
+  // endpoint. Used by the initial load, all four post-action refetches, and
+  // the cooldown-expiry refetch so every path stays in sync with the selected
+  // account's platform.
   const fetchRateLimitsForQuickAccount = useCallback(() => {
     if (!quickAccountId) return Promise.resolve(null);
     const account = accounts.find(a => a.id === quickAccountId);
@@ -114,14 +115,18 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
       : api.getAgentRateLimits(quickAccountId);
   }, [quickAccountId, accounts]);
 
+  const refetchRateLimits = useCallback(() => {
+    fetchRateLimitsForQuickAccount().then(setRateLimits).catch(() => {});
+  }, [fetchRateLimitsForQuickAccount]);
+
   // Load rate limits when quick account changes
   useEffect(() => {
     if (!quickAccountId) {
       setRateLimits(null);
       return;
     }
-    fetchRateLimitsForQuickAccount().then(setRateLimits).catch(() => {});
-  }, [quickAccountId, fetchRateLimitsForQuickAccount]);
+    refetchRateLimits();
+  }, [quickAccountId, refetchRateLimits]);
 
   // Calculate cooldown end timestamps from rate limit data
   useEffect(() => {
@@ -136,12 +141,7 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
     setCooldownEnds(ends);
   }, [rateLimits]);
 
-  useCooldownTick({
-    cooldownEnds,
-    onAllExpired: () => {
-      fetchRateLimitsForQuickAccount().then(setRateLimits).catch(() => {});
-    },
-  });
+  useCooldownTick({ cooldownEnds, onAllExpired: refetchRateLimits });
 
   const getModelsForProvider = (providerId) => {
     const p = providers.find(pr => pr.id === providerId);
@@ -194,7 +194,7 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
     const result = await api.engageAgent(agentId, quickAccountId, 1, 3);
     setEngaging(false);
     toast.success(`Engaged: ${result.votes?.length || 0} votes, ${result.comments?.length || 0} comments`);
-    api.getAgentRateLimits(quickAccountId).then(setRateLimits).catch(() => {});
+    refetchRateLimits();
   };
 
   const handleCheckPosts = async () => {
@@ -204,7 +204,7 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
     setChecking(false);
     if (!result) return;
     toast.success(`Checked ${result.postsChecked} posts: ${result.engagement?.upvoted?.length || 0} upvotes, ${result.engagement?.replied?.length || 0} replies`);
-    api.getAgentRateLimits(quickAccountId).then(setRateLimits).catch(() => {});
+    refetchRateLimits();
   };
 
   // Moltworld quick actions
@@ -215,14 +215,14 @@ export default function OverviewTab({ agentId, agent, onAgentUpdate }) {
     setExploring(false);
     if (!result) return;
     toast.success(`Explored (${result.x}, ${result.y}) — ${result.nearby || 0} agents nearby`);
-    api.moltworldRateLimits(quickAccountId).then(setRateLimits).catch(() => {});
+    refetchRateLimits();
   };
 
   const handleBuild = async () => {
     if (!agentId || !quickAccountId) return;
     const result = await api.moltworldBuild(quickAccountId, agentId, 0, 0, 0, 'stone', 'place').catch(() => null);
     if (result) toast.success('Block placed');
-    api.moltworldRateLimits(quickAccountId).then(setRateLimits).catch(() => {});
+    refetchRateLimits();
   };
 
   // Account handlers

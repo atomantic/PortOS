@@ -18,9 +18,11 @@ import { useEffect, useRef, useState } from 'react';
 export function useCooldownTick({ cooldownEnds, onAllExpired }) {
   const [, setTick] = useState(0);
   const callbackRef = useRef(onAllExpired);
+  // Refresh the latest callback only when it actually changes — otherwise the
+  // 1s `setTick` re-renders would run this effect every tick for no reason.
   useEffect(() => {
     callbackRef.current = onAllExpired;
-  });
+  }, [onAllExpired]);
 
   useEffect(() => {
     const hasActive = Object.values(cooldownEnds).some((end) => end > Date.now());
