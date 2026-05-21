@@ -17,9 +17,14 @@ vi.mock('../lib/fetchWithTimeout.js', () => ({
 }));
 
 const dnsResolveMock = vi.fn();
+const dnsResolve6Mock = vi.fn();
 vi.mock('dns/promises', () => ({
-  default: { resolve4: (...args) => dnsResolveMock(...args) },
+  default: {
+    resolve4: (...args) => dnsResolveMock(...args),
+    resolve6: (...args) => dnsResolve6Mock(...args),
+  },
   resolve4: (...args) => dnsResolveMock(...args),
+  resolve6: (...args) => dnsResolve6Mock(...args),
 }));
 
 let feeds;
@@ -38,6 +43,7 @@ beforeEach(async () => {
   vi.resetModules();
   fetchMock.mockReset();
   dnsResolveMock.mockReset().mockResolvedValue(['93.184.216.34']);
+  dnsResolve6Mock.mockReset().mockResolvedValue([]);
   feeds = await import('./feeds.js');
 });
 
@@ -198,9 +204,35 @@ describe('addFeed', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('rejects hostnames with no A records', async () => {
+  it('rejects hostnames with no A or AAAA records', async () => {
     dnsResolveMock.mockResolvedValue([]);
+    dnsResolve6Mock.mockResolvedValue([]);
     const result = await feeds.addFeed('https://no-records.example.com/rss');
+    expect(result).toEqual({ error: FETCH_ERROR });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects when AAAA resolves to a private IPv6 even if A is public (happy-eyeballs SSRF)', async () => {
+    dnsResolveMock.mockResolvedValue(['93.184.216.34']);
+    dnsResolve6Mock.mockResolvedValue(['fc00::1']);
+    const result = await feeds.addFeed('https://dual-stack.example.com/rss');
+    expect(result).toEqual({ error: FETCH_ERROR });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('accepts AAAA-only hostnames (no A record, public IPv6)', async () => {
+    fetchMock.mockResolvedValue(makeResponse({ body: RSS_FIXTURE }));
+    dnsResolveMock.mockResolvedValue([]);
+    dnsResolve6Mock.mockResolvedValue(['2606:4700:4700::1111']);
+    const result = await feeds.addFeed('https://v6only.example.com/rss');
+    expect(result.error).toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects AAAA-only hostnames that point to private IPv6', async () => {
+    dnsResolveMock.mockResolvedValue([]);
+    dnsResolve6Mock.mockResolvedValue(['fe80::1']);
+    const result = await feeds.addFeed('https://v6private.example.com/rss');
     expect(result).toEqual({ error: FETCH_ERROR });
     expect(fetchMock).not.toHaveBeenCalled();
   });

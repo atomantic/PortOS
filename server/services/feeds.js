@@ -428,7 +428,10 @@ function isPrivateIP(ip) {
   return false;
 }
 
-// Resolve hostname and verify it doesn't point to a private IP
+// Resolve hostname and verify it doesn't point to a private IP. Resolves A
+// and AAAA in parallel so a hostname with a public A but a private AAAA
+// (happy-eyeballs would prefer the AAAA in Node's fetch) is rejected; the
+// parallel AAAA lookup also lets AAAA-only feeds resolve.
 async function isHostSafe(hostname) {
   // URL.hostname preserves the [::1] bracketed form for IPv6 literals; strip
   // brackets so net.isIP recognizes the address before falling through to DNS.
@@ -436,8 +439,11 @@ async function isHostSafe(hostname) {
     ? hostname.slice(1, -1)
     : hostname;
   if (net.isIP(stripped)) return !isPrivateIP(stripped);
-  // DNS resolution: check all resolved addresses
-  const addresses = await dns.resolve4(stripped).catch(() => []);
+  const [v4, v6] = await Promise.all([
+    dns.resolve4(stripped).catch(() => []),
+    dns.resolve6(stripped).catch(() => []),
+  ]);
+  const addresses = [...v4, ...v6];
   if (addresses.length === 0) return false;
   return addresses.every(addr => !isPrivateIP(addr));
 }
