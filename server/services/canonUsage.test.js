@@ -204,17 +204,20 @@ describe('canonUsage — getUniverseCanonUsage entry rows', () => {
     ]);
   });
 
-  it('aggregates corpus across idea / comicScript / teleplay stages', async () => {
-    // A character that only appears in dialogue (comicScript / teleplay) or
-    // in the idea blurb must still surface — that's the whole point of the
-    // multi-stage corpus assembly in corpusForIssue(). `prose.output` is
-    // covered by the other tests in this describe block; the two remaining
-    // corpus fields (`prose.input`, `idea.input`) aren't yet seeded — see
-    // PLAN.md `[cover-prose-input-idea-input-in-canonusage-corpus]`.
+  it('aggregates corpus across every stage field corpusForIssue reads', async () => {
+    // A character that only appears in one of the corpus fields must still
+    // surface — that's the whole point of the multi-stage corpus assembly in
+    // corpusForIssue(). Each character below is unique to exactly one of the
+    // six fields the corpus pulls (prose.output, prose.input, idea.output,
+    // idea.input, comicScript.output, teleplay.output); a refactor that drops
+    // any one field from the list would lose that character and fail here.
     mockUniverses.set('uni-1', {
       id: 'uni-1',
       characters: [
-        { id: 'char-idea', name: 'Ideana' },
+        { id: 'char-prose-out', name: 'Proseou' },
+        { id: 'char-prose-in', name: 'Prosein' },
+        { id: 'char-idea-out', name: 'Ideaou' },
+        { id: 'char-idea-in', name: 'Ideain' },
         { id: 'char-script', name: 'Scriptia' },
         { id: 'char-tele', name: 'Telepha' },
       ],
@@ -223,13 +226,18 @@ describe('canonUsage — getUniverseCanonUsage entry rows', () => {
     });
     mockSeriesList.push({ id: 'ser-1', name: 'Series One', universeId: 'uni-1' });
     mockIssuesBySeries.set('ser-1', [
-      { id: 'iss-1', stages: { idea: { output: 'Ideana arrives.' } } },
-      { id: 'iss-2', stages: { comicScript: { output: 'Scriptia speaks.' } } },
-      { id: 'iss-3', stages: { teleplay: { output: 'Telepha exits.' } } },
+      { id: 'iss-1', stages: { prose: { output: 'Proseou writes.' } } },
+      { id: 'iss-2', stages: { prose: { input: 'Prosein outlines.' } } },
+      { id: 'iss-3', stages: { idea: { output: 'Ideaou arrives.' } } },
+      { id: 'iss-4', stages: { idea: { input: 'Ideain brainstorms.' } } },
+      { id: 'iss-5', stages: { comicScript: { output: 'Scriptia speaks.' } } },
+      { id: 'iss-6', stages: { teleplay: { output: 'Telepha exits.' } } },
     ]);
 
     const usage = await getUniverseCanonUsage('uni-1');
-    expect(Object.keys(usage.characters).sort()).toEqual(['char-idea', 'char-script', 'char-tele']);
+    expect(Object.keys(usage.characters).sort()).toEqual([
+      'char-idea-in', 'char-idea-out', 'char-prose-in', 'char-prose-out', 'char-script', 'char-tele',
+    ]);
   });
 
   it('returns empty buckets for kinds the universe defines no entries for', async () => {
