@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import * as api from '../services/api';
 import { Heart } from 'lucide-react';
@@ -7,6 +7,12 @@ import TabPills from '../components/ui/TabPills';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
 
 import { TABS, getHealthColor, getHealthLabel } from '../components/digital-twin/constants';
+
+// Digital Twin status + settings are small stable snapshots (counts, scores,
+// last-test metadata). Identical 30s polls dominate; JSON.stringify on the
+// combined payload skips the setData when nothing changed.
+const sameTwinPayload = (prev, next) =>
+  JSON.stringify(prev) === JSON.stringify(next);
 
 import OverviewTab from '../components/digital-twin/tabs/OverviewTab';
 import DocumentsTab from '../components/digital-twin/tabs/DocumentsTab';
@@ -27,22 +33,19 @@ export default function DigitalTwin() {
   const navigate = useNavigate();
   const activeTab = tab || 'overview';
 
-  const [status, setStatus] = useState(null);
-  const [settings, setSettings] = useState(null);
-  const [loading, setLoading] = useState(true);
-
   const fetchData = useCallback(async () => {
-    const [statusData, settingsData] = await Promise.all([
+    const [status, settings] = await Promise.all([
       api.getDigitalTwinStatus().catch(() => null),
       api.getDigitalTwinSettings().catch(() => null)
     ]);
-    setStatus(statusData);
-    setSettings(settingsData);
-    setLoading(false);
-    return null;
+    return { status, settings };
   }, []);
 
-  useAutoRefetch(fetchData, 30_000);
+  const { data, loading, refetch } = useAutoRefetch(fetchData, 30_000, {
+    compare: sameTwinPayload,
+  });
+  const status = data?.status ?? null;
+  const settings = data?.settings ?? null;
 
   const handleTabChange = (tabId) => {
     navigate(`/digital-twin/${tabId}`);
@@ -51,33 +54,33 @@ export default function DigitalTwin() {
   const renderTabContent = () => {
     switch (activeTab) {
       case 'overview':
-        return <OverviewTab status={status} settings={settings} onRefresh={fetchData} />;
+        return <OverviewTab status={status} settings={settings} onRefresh={refetch} />;
       case 'documents':
-        return <DocumentsTab onRefresh={fetchData} />;
+        return <DocumentsTab onRefresh={refetch} />;
       case 'test':
-        return <TestTab onRefresh={fetchData} />;
+        return <TestTab onRefresh={refetch} />;
       case 'enrich':
-        return <EnrichTab onRefresh={fetchData} />;
+        return <EnrichTab onRefresh={refetch} />;
       case 'taste':
-        return <TasteTab onRefresh={fetchData} />;
+        return <TasteTab onRefresh={refetch} />;
       case 'accounts':
         return <AccountsTab />;
       case 'identity':
-        return <IdentityTab onRefresh={fetchData} />;
+        return <IdentityTab onRefresh={refetch} />;
       case 'goals':
-        return <GoalsTab onRefresh={fetchData} />;
+        return <GoalsTab onRefresh={refetch} />;
       case 'interview':
-        return <InterviewTab onRefresh={fetchData} />;
+        return <InterviewTab onRefresh={refetch} />;
       case 'autobiography':
-        return <AutobiographyTab onRefresh={fetchData} />;
+        return <AutobiographyTab onRefresh={refetch} />;
       case 'import':
-        return <ImportTab onRefresh={fetchData} />;
+        return <ImportTab onRefresh={refetch} />;
       case 'export':
-        return <ExportTab onRefresh={fetchData} />;
+        return <ExportTab onRefresh={refetch} />;
       case 'time-capsule':
-        return <TimeCapsuleTab onRefresh={fetchData} />;
+        return <TimeCapsuleTab onRefresh={refetch} />;
       default:
-        return <OverviewTab status={status} settings={settings} onRefresh={fetchData} />;
+        return <OverviewTab status={status} settings={settings} onRefresh={refetch} />;
     }
   };
 

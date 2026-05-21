@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import * as api from '../services/api';
 import {Brain as BrainIcon} from 'lucide-react';
@@ -21,27 +21,32 @@ import DailyLogTab from '../components/brain/tabs/DailyLogTab';
 import ConfigTab from '../components/brain/tabs/ConfigTab';
 import ImportTab from '../components/brain/tabs/ImportTab';
 
+// Brain summary + settings are stable JSON snapshots: counts, flags, and
+// timestamps. JSON.stringify is fine here because the payload is small and the
+// server returns keys in a deterministic order; skipping setData when the
+// stringified shape is unchanged avoids the 30s re-render churn that ripples
+// into the header + active tab.
+const sameBrainPayload = (prev, next) =>
+  JSON.stringify(prev) === JSON.stringify(next);
+
 export default function Brain() {
   const { tab } = useParams();
   const navigate = useNavigate();
   const activeTab = tab || 'inbox';
 
-  const [summary, setSummary] = useState(null);
-  const [settings, setSettings] = useState(null);
-  const [loading, setLoading] = useState(true);
-
   const fetchData = useCallback(async () => {
-    const [summaryData, settingsData] = await Promise.all([
+    const [summary, settings] = await Promise.all([
       api.getBrainSummary().catch(() => null),
       api.getBrainSettings().catch(() => null)
     ]);
-    setSummary(summaryData);
-    setSettings(settingsData);
-    setLoading(false);
-    return null;
+    return { summary, settings };
   }, []);
 
-  useAutoRefetch(fetchData, 30_000);
+  const { data, loading, refetch } = useAutoRefetch(fetchData, 30_000, {
+    compare: sameBrainPayload,
+  });
+  const summary = data?.summary ?? null;
+  const settings = data?.settings ?? null;
 
   const handleTabChange = (tabId) => {
     navigate(`/brain/${tabId}`);
@@ -50,29 +55,29 @@ export default function Brain() {
   const renderTabContent = () => {
     switch (activeTab) {
       case 'inbox':
-        return <InboxTab onRefresh={fetchData} settings={settings} />;
+        return <InboxTab onRefresh={refetch} settings={settings} />;
       case 'links':
-        return <LinksTab onRefresh={fetchData} />;
+        return <LinksTab onRefresh={refetch} />;
       case 'memory':
-        return <MemoryTab onRefresh={fetchData} />;
+        return <MemoryTab onRefresh={refetch} />;
       case 'notes':
-        return <NotesTab onRefresh={fetchData} />;
+        return <NotesTab onRefresh={refetch} />;
       case 'daily-log':
         return <DailyLogTab />;
       case 'graph':
         return <BrainGraph />;
       case 'digest':
-        return <DigestTab onRefresh={fetchData} />;
+        return <DigestTab onRefresh={refetch} />;
       case 'feeds':
-        return <FeedsTab onRefresh={fetchData} />;
+        return <FeedsTab onRefresh={refetch} />;
       case 'trust':
-        return <TrustTab onRefresh={fetchData} />;
+        return <TrustTab onRefresh={refetch} />;
       case 'import':
         return <ImportTab />;
       case 'config':
-        return <ConfigTab onRefresh={fetchData} />;
+        return <ConfigTab onRefresh={refetch} />;
       default:
-        return <InboxTab onRefresh={fetchData} settings={settings} />;
+        return <InboxTab onRefresh={refetch} settings={settings} />;
     }
   };
 

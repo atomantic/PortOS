@@ -9,6 +9,15 @@ import ScenePreview from '../../creative-director/ScenePreview';
 import { useAsyncAction } from '../../../hooks/useAsyncAction';
 import { useAutoRefetch } from '../../../hooks/useAutoRefetch';
 
+// Monotonic snapshot: a poll is logically equivalent when the project's id,
+// updatedAt, and status all match. Including `id` guards against the restart
+// edge case where prev/next describe different projects with coincidentally
+// matching keys.
+const sameProjectSnapshot = (prev, next) =>
+  prev.id === next.id
+  && prev.updatedAt === next.updatedAt
+  && prev.status === next.status;
+
 const POLL_INTERVAL_MS = 4000;
 
 const isTerminalProjectStatus = (s) => s === 'complete' || s === 'failed';
@@ -29,40 +38,47 @@ export default function EpisodeVideoStage({ issue, series, onStageUpdate }) {
   const storyboardScenes = issue.stages?.storyboards?.scenes || [];
   const usableScenes = storyboardScenes.filter((s) => (s?.description || '').trim().length > 0);
 
-  const [cdProject, setCdProject] = useState(null);
   const [confirmRestart, setConfirmRestart] = useState(false);
   // Initialize from the persisted stage values so a page reload (or a fresh
   // tab) doesn't lose the user's previous picks. Falls through to defaults
   // for an unstarted episodeVideo stage.
   const [aspectRatio, setAspectRatio] = useState(stage.aspectRatio || '16:9');
   const [quality, setQuality] = useState(stage.quality || 'standard');
+  // Tracked separately so the hook's `enabled` prop can reference the latest
+  // status without a TDZ on rawCdProject. Updated via an effect below.
+  const [isTerminal, setIsTerminal] = useState(false);
 
   // Poll while the project could still mutate. Pauses on hidden tab via
   // useAutoRefetch's visibility short-circuit and stops once status is terminal.
-  const { refetch: refetchCdProject } = useAutoRefetch(
-    async () => {
-      const p = await getCreativeDirectorProject(cdProjectId, { slim: true }).catch((err) => {
-        console.log(`pipeline:episode poll error ${err.message}`);
-        return null;
-      });
-      if (!p) return null;
-      // Skip the setState (and downstream re-render + scene re-sort) when the
-      // poll returns the same monotonic snapshot we already hold.
-      setCdProject((prev) => (
-        prev && prev.updatedAt === p.updatedAt && prev.status === p.status ? prev : p
-      ));
+  // The compare option skips re-renders when the monotonic snapshot is unchanged.
+  const { data: rawCdProject, refetch: refetchCdProject } = useAutoRefetch(
+    () => getCreativeDirectorProject(cdProjectId, { slim: true }).catch((err) => {
+      console.log(`pipeline:episode poll error ${err.message}`);
       return null;
-    },
+    }),
     POLL_INTERVAL_MS,
-    { enabled: !!cdProjectId && !isTerminalProjectStatus(cdProject?.status) },
+    {
+      enabled: !!cdProjectId && !isTerminal,
+      compare: sameProjectSnapshot,
+    },
   );
 
-  // Clear the displayed project on stage reset; refetch immediately on id
-  // change so a project swap doesn't strand the previous project on screen
-  // until the next interval tick.
+  // After a restart the hook still holds the previous project's snapshot until
+  // the next fetch lands; filter by id so the stale view doesn't paint into the
+  // new context.
+  const cdProject = rawCdProject?.id === cdProjectId ? rawCdProject : null;
+
+  // Mirror the project's terminal status into local state so the hook's
+  // enabled gate stops polling once the project is complete/failed, and
+  // resumes when a restart lands a fresh non-terminal project.
   useEffect(() => {
-    if (!cdProjectId) setCdProject(null);
-    else refetchCdProject();
+    setIsTerminal(isTerminalProjectStatus(cdProject?.status));
+  }, [cdProject?.status]);
+
+  // Fire an immediate fetch on cdProjectId change so a project swap doesn't
+  // wait a full poll interval before the new project appears.
+  useEffect(() => {
+    if (cdProjectId) refetchCdProject();
   }, [cdProjectId, refetchCdProject]);
 
   const [runSubmit, submitting] = useAsyncAction(
@@ -87,11 +103,10 @@ export default function EpisodeVideoStage({ issue, series, onStageUpdate }) {
     const result = await runSubmit({ force });
     if (!result) return;
     if (force) {
-      // Only clear the prior project view AFTER the restart kickoff succeeds.
-      // Clearing pre-flight (which we used to do) meant a failed restart
-      // tore the in-flight progress UI off the page even though the
-      // previous CD project was still rendering.
-      setCdProject(null);
+      // The prior project view clears automatically because the cdProjectId
+      // filter on `rawCdProject` drops the stale snapshot once onStageUpdate
+      // swaps to the new id. A failed restart leaves the previous project
+      // visible because cdProjectId is unchanged in that path.
       toast.success(`Restarted: ${result.cdProjectId?.slice(0, 8) ?? '?'}`);
     } else if (result.reused) {
       toast.success(`Reusing in-flight CD project ${result.cdProjectId?.slice(0, 8) ?? '?'}`);
