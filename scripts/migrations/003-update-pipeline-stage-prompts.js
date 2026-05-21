@@ -19,19 +19,33 @@
 import { makePromptReplaceMigration } from './_lib.js';
 
 export const ACCEPTED_OLD_MD5 = {
-  'pipeline-idea-expansion.md':  ['aee25112b2c596f643b17c559b772c22'],
-  'pipeline-prose.md':           ['bfea5aeeb471aae9749baee765b473a7'],
-  'pipeline-comic-script.md':    ['40e5fdc1a1e68a7419b7dad936366c1a'],
+  'pipeline-idea-expansion.md': [
+    'aee25112b2c596f643b17c559b772c22', // pre-003 (original)
+    '41facefbc0c0549d456bef9111f95ab9', // post-003 / pre-004 — the hash this migration originally produced
+    '1ee44cf95851ff8debf18729ebcd40b4', // post-004 / pre-025
+  ],
+  'pipeline-prose.md': [
+    'bfea5aeeb471aae9749baee765b473a7', // pre-003 (original)
+    '30ac30ec2b9d3e2a9eb869c181732cc6', // post-003 / pre-027 — the hash this migration originally produced
+  ],
+  'pipeline-comic-script.md': [
+    '40e5fdc1a1e68a7419b7dad936366c1a', // pre-003 (original)
+    'beab031951859ca13579cdb9c4dbe769', // post-003 / pre-013 — the hash this migration originally produced
+    '1e0af305c27d0c80c4b482d2ebcb4a0d', // post-013 / pre-027
+  ],
   'pipeline-tv-script.md':       ['3f6fecc25573ed054b47db392250034a'],
-  'pipeline-season-episodes.md': ['6e349ad26bed8a0ccb042571f03f03eb'],
+  'pipeline-season-episodes.md': [
+    '6e349ad26bed8a0ccb042571f03f03eb', // pre-003 (original)
+    'c4928e2a5f833358116b29d2d669888d', // post-003 / pre-005 — the hash this migration originally produced
+  ],
 };
 
 export const NEW_SHIPPED_MD5 = {
-  'pipeline-idea-expansion.md':  '41facefbc0c0549d456bef9111f95ab9',
-  'pipeline-prose.md':           '30ac30ec2b9d3e2a9eb869c181732cc6',
-  'pipeline-comic-script.md':    'beab031951859ca13579cdb9c4dbe769',
-  'pipeline-tv-script.md':       '376f779f4687b598f1c92ca4e770fd5a',
-  'pipeline-season-episodes.md': 'c4928e2a5f833358116b29d2d669888d',
+  'pipeline-idea-expansion.md':  '1f3c5d077a5ef9a4b610335d5e3edd9c', // post-025
+  'pipeline-prose.md':           'd1f8e3f1d214725b5aa67f309a81cd7d', // post-027
+  'pipeline-comic-script.md':    '133d200d069c2e8173b7c129eea58f53', // post-027
+  'pipeline-tv-script.md':       '376f779f4687b598f1c92ca4e770fd5a', // retired upstream (no data.sample)
+  'pipeline-season-episodes.md': '50c68a29c3ebc275db3095d06bd87100', // post-005
 };
 
 const { applyMigration, up } = makePromptReplaceMigration({

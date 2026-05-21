@@ -17,11 +17,12 @@ export const ACCEPTED_OLD_MD5 = {
   'pipeline-comic-script.md': [
     '40e5fdc1a1e68a7419b7dad936366c1a', // pre-003 (original)
     'beab031951859ca13579cdb9c4dbe769', // post-003 (length-profile feature)
+    '1e0af305c27d0c80c4b482d2ebcb4a0d', // post-013 / pre-027 — the hash this migration originally produced
   ],
 };
 
 export const NEW_SHIPPED_MD5 = {
-  'pipeline-comic-script.md': '1e0af305c27d0c80c4b482d2ebcb4a0d',
+  'pipeline-comic-script.md': '133d200d069c2e8173b7c129eea58f53', // post-027
 };
 
 const { applyMigration, up } = makePromptReplaceMigration({

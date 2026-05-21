@@ -33,6 +33,10 @@ export const customizedBody = (filename) =>
  * (`'migration-025-'`) so a debugger leaves a recognizable sandbox in `/tmp`.
  * `subdir` defaults to `'stages'`; pass `'_partials'` for shared mustache
  * fragments that live under `data/prompts/_partials/` instead.
+ *
+ * `createIfMissing` mirrors the migration's own `createIfMissing` flag (e.g.
+ * migration 005). When true, the "missing on disk" case writes sample → data
+ * instead of being a no-op, so the test asserts the sample body landed.
  */
 export function runPromptMigrationTests({
   migration,
@@ -41,6 +45,7 @@ export function runPromptMigrationTests({
   NEW_SHIPPED_MD5,
   prefix,
   subdir = 'stages',
+  createIfMissing = false,
 }) {
   let rootDir;
   let stagesDir;
@@ -60,12 +65,23 @@ export function runPromptMigrationTests({
     rmSync(rootDir, { recursive: true, force: true });
   });
 
-  it('no-ops when the stage prompt is missing (setup-data.js will create it)', async () => {
-    await expect(migration.up({ rootDir })).resolves.not.toThrow();
-    for (const filename of Object.keys(NEW_SHIPPED_MD5)) {
-      expect(existsSync(join(stagesDir, filename))).toBe(false);
-    }
-  });
+  it(
+    createIfMissing
+      ? 'creates from sample when the stage prompt is missing (createIfMissing)'
+      : 'no-ops when the stage prompt is missing (setup-data.js will create it)',
+    async () => {
+      await expect(migration.up({ rootDir })).resolves.not.toThrow();
+      for (const filename of Object.keys(NEW_SHIPPED_MD5)) {
+        const dataPath = join(stagesDir, filename);
+        if (createIfMissing) {
+          expect(existsSync(dataPath)).toBe(true);
+          expect(readFileSync(dataPath, 'utf-8')).toBe(sampleBody(filename, subdir));
+        } else {
+          expect(existsSync(dataPath)).toBe(false);
+        }
+      }
+    },
+  );
 
   it('skips files already at the new hash (idempotent re-run)', async () => {
     for (const filename of Object.keys(NEW_SHIPPED_MD5)) {

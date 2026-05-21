@@ -21,19 +21,32 @@
 import { makePromptReplaceMigration } from './_lib.js';
 
 export const ACCEPTED_OLD_MD5 = {
-  'pipeline-arc-overview.md':    ['6a3ecab43d1f46b7ef9aab6c69ea0326'],
-  'pipeline-arc-verify.md':      ['52e31abc93e3105176236fcaa5d1575a'],
-  'pipeline-volume-verify.md':   ['c6ea28e972ad6e229bafb2d602b4dda3'],
-  'pipeline-season-episodes.md': ['c4928e2a5f833358116b29d2d669888d'],
-  'pipeline-arc-resolve.md':     ['87bc5c01f1a8a97b681727a38b05edc6'],
+  'pipeline-arc-overview.md': [
+    '6a3ecab43d1f46b7ef9aab6c69ea0326', // pre-005 (original)
+    'd34d72b8e49ba303d38607845dd87f1c', // post-005 / pre-019 — the hash this migration originally produced
+  ],
+  'pipeline-arc-verify.md': [
+    '52e31abc93e3105176236fcaa5d1575a', // pre-005 (original)
+    'ff56d8387162017e08d5d0491060ddd6', // post-005 / pre-019 — the hash this migration originally produced
+  ],
+  'pipeline-volume-verify.md': [
+    'c6ea28e972ad6e229bafb2d602b4dda3', // pre-005 (original)
+    '03f3c874cb80e1c98abcf03168fa7a92', // post-005 / pre-019 — the hash this migration originally produced
+  ],
+  'pipeline-season-episodes.md': ['c4928e2a5f833358116b29d2d669888d'], // pre-005 (original); post-005 hash IS the live sample
+  'pipeline-arc-resolve.md': [
+    '87bc5c01f1a8a97b681727a38b05edc6', // pre-005 (original)
+    'a8677bbe1eb38f871fb152a5b0fec7c6', // post-005 / pre-019 — the hash this migration originally produced
+    '8e348f3d1894382889f9f0ee7d5c6792', // post-019 / pre-023
+  ],
 };
 
 export const NEW_SHIPPED_MD5 = {
-  'pipeline-arc-overview.md':    'd34d72b8e49ba303d38607845dd87f1c',
-  'pipeline-arc-verify.md':      'ff56d8387162017e08d5d0491060ddd6',
-  'pipeline-volume-verify.md':   '03f3c874cb80e1c98abcf03168fa7a92',
-  'pipeline-season-episodes.md': '50c68a29c3ebc275db3095d06bd87100',
-  'pipeline-arc-resolve.md':     'a8677bbe1eb38f871fb152a5b0fec7c6',
+  'pipeline-arc-overview.md':    '0a1f6ffa6908522e3690c5e9e53a6ee0', // post-019
+  'pipeline-arc-verify.md':      '36aa70cdfc25d7549573a4d556e7702c', // post-019
+  'pipeline-volume-verify.md':   '49458d36700cb94e34806d536ffe2940', // post-019
+  'pipeline-season-episodes.md': '50c68a29c3ebc275db3095d06bd87100', // post-005 (live sample)
+  'pipeline-arc-resolve.md':     '5b340885c6e8f8afc63424d6b5bc7eb7', // post-023
 };
 
 const { applyMigration, up } = makePromptReplaceMigration({
