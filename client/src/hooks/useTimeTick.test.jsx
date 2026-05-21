@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { useTimeTick, __resetTimeTickForTests } from './useTimeTick';
+import { __resetVisibilityEventForTests } from './useVisibilityEvent';
 
 const setVisibility = (state) => {
   Object.defineProperty(document, 'visibilityState', { value: state, configurable: true });
@@ -14,11 +15,13 @@ describe('useTimeTick', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     setVisibility('visible');
+    __resetVisibilityEventForTests();
     __resetTimeTickForTests();
   });
 
   afterEach(() => {
     __resetTimeTickForTests();
+    __resetVisibilityEventForTests();
     setVisibility('visible');
     vi.useRealTimers();
   });
@@ -131,5 +134,21 @@ describe('useTimeTick', () => {
     expect(intervalSpy.mock.calls.filter(([, ms]) => ms === 60000)).toHaveLength(0);
 
     intervalSpy.mockRestore();
+  });
+
+  it('shares the document visibilitychange listener with useVisibilityEvent', async () => {
+    const addSpy = vi.spyOn(document, 'addEventListener');
+
+    // Mount useTimeTick first, then a useVisibilityEvent consumer.
+    renderHook(() => useTimeTick(60000));
+    // Lazy import the hook here so the singleton state isn't bridged in
+    // the imports at the top of the test file.
+    const { useVisibilityEvent } = await import('./useVisibilityEvent');
+    renderHook(() => useVisibilityEvent(() => {}));
+
+    const visListeners = addSpy.mock.calls.filter(([type]) => type === 'visibilitychange');
+    expect(visListeners).toHaveLength(1);
+
+    addSpy.mockRestore();
   });
 });

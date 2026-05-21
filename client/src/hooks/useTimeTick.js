@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { subscribeVisibility } from './useVisibilityEvent.js';
 
 // Singleton tickers keyed by intervalMs so N subscribers at the same cadence
 // share one timer instead of spawning a setInterval per widget. A page with
@@ -6,10 +7,12 @@ import { useEffect, useState } from 'react';
 // timer, not six.
 //
 // Tickers also pause while the tab is hidden — there's no UI to refresh, so
-// running the interval just burns CPU/battery in the background. A single
-// document-level visibilitychange listener orchestrates start/stop across
-// every ticker; on tab show we fire once immediately so labels are correct
-// before the next scheduled tick lands.
+// running the interval just burns CPU/battery in the background. Visibility
+// orchestration piggybacks on `useVisibilityEvent`'s singleton emitter
+// (`subscribeVisibility`) so the document-level listener count stays at one
+// across this hook + every `useVisibilityEvent` consumer + `useAutoRefetch`.
+// On tab show we fire once immediately so labels are correct before the
+// next scheduled tick lands.
 const tickers = new Map(); // intervalMs -> { handle, subscribers: Set<fn> }
 
 const isHidden = () =>
@@ -38,12 +41,14 @@ const startTicker = (intervalMs) => {
   return entry;
 };
 
-// Single document-level listener orchestrates pause/resume across all
-// tickers — pause every ticker while hidden, restart + fire-once-on-visible
-// so deduped relative-time labels catch up to the new wall clock.
-let visibilityAttached = false;
-const handleVisibility = () => {
-  if (isHidden()) {
+// Lazy-attached subscription to the shared visibility emitter. We only
+// subscribe while at least one ticker is alive — when the last subscriber
+// unmounts we unsubscribe so the visibility singleton can detach its
+// document-level listener if nothing else is using it.
+let unsubscribeVisibility = null;
+
+const handleVisibility = (state) => {
+  if (state === 'hidden') {
     for (const entry of tickers.values()) stopTimer(entry);
   } else {
     for (const [intervalMs, entry] of tickers) {
@@ -53,16 +58,15 @@ const handleVisibility = () => {
   }
 };
 
-const ensureVisibilityAttached = () => {
-  if (visibilityAttached || typeof document === 'undefined') return;
-  document.addEventListener('visibilitychange', handleVisibility);
-  visibilityAttached = true;
+const ensureVisibilitySubscribed = () => {
+  if (unsubscribeVisibility) return;
+  unsubscribeVisibility = subscribeVisibility(handleVisibility);
 };
 
-const detachVisibilityIfIdle = () => {
-  if (!visibilityAttached || tickers.size > 0 || typeof document === 'undefined') return;
-  document.removeEventListener('visibilitychange', handleVisibility);
-  visibilityAttached = false;
+const releaseVisibilityIfIdle = () => {
+  if (!unsubscribeVisibility || tickers.size > 0) return;
+  unsubscribeVisibility();
+  unsubscribeVisibility = null;
 };
 
 /**
@@ -76,7 +80,8 @@ const detachVisibilityIfIdle = () => {
  * Subscribers grouped by `intervalMs` share one underlying `setInterval` (so
  * a Dashboard with six widgets calling `useTimeTick(60000)` runs one timer,
  * not six). Tickers also pause while the tab is hidden and fire once on
- * tab-visible so deduped labels catch up.
+ * tab-visible so deduped labels catch up — the visibility listener is shared
+ * with `useVisibilityEvent` so we don't grow the document-listener count.
  *
  * @param {number} intervalMs - tick cadence. 60000 (one minute) is the right
  *   default for "X min ago" labels; bump to 3600000 for hourly "X hours ago"
@@ -91,13 +96,13 @@ export function useTimeTick(intervalMs = 60000) {
     let entry = tickers.get(intervalMs);
     if (!entry) entry = startTicker(intervalMs);
     entry.subscribers.add(setNow);
-    ensureVisibilityAttached();
+    ensureVisibilitySubscribed();
     return () => {
       entry.subscribers.delete(setNow);
       if (entry.subscribers.size === 0) {
         stopTimer(entry);
         tickers.delete(intervalMs);
-        detachVisibilityIfIdle();
+        releaseVisibilityIfIdle();
       }
     };
   }, [intervalMs]);
@@ -110,8 +115,8 @@ export function useTimeTick(intervalMs = 60000) {
 export function __resetTimeTickForTests() {
   for (const entry of tickers.values()) stopTimer(entry);
   tickers.clear();
-  if (visibilityAttached && typeof document !== 'undefined') {
-    document.removeEventListener('visibilitychange', handleVisibility);
+  if (unsubscribeVisibility) {
+    unsubscribeVisibility();
+    unsubscribeVisibility = null;
   }
-  visibilityAttached = false;
 }

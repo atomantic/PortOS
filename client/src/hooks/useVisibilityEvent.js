@@ -4,6 +4,10 @@ import { useEffect, useRef } from 'react';
 // `visibilitychange` listener. With 20+ widgets on the Dashboard, a per-hook
 // listener fires 20+ near-simultaneous handlers on every tab show/hide; this
 // keeps the listener count to one regardless of subscriber count.
+//
+// The non-hook `subscribeVisibility(fn)` export lets other singletons
+// (e.g. useTimeTick's ticker registry) reuse this listener without paying
+// for a per-component `useEffect`.
 
 const subscribers = new Set();
 let attached = false;
@@ -26,6 +30,24 @@ const detachIfEmpty = () => {
 };
 
 /**
+ * Subscribe to `document.visibilitychange` from non-hook code (other
+ * singletons, services). Returns an unsubscribe function. Reuses the same
+ * document-level listener as `useVisibilityEvent` so the listener count
+ * stays at one regardless of how many hooks AND singletons subscribe.
+ *
+ * @param {(state: 'visible' | 'hidden') => void} fn
+ * @returns {() => void} unsubscribe
+ */
+export function subscribeVisibility(fn) {
+  subscribers.add(fn);
+  ensureAttached();
+  return () => {
+    subscribers.delete(fn);
+    detachIfEmpty();
+  };
+}
+
+/**
  * Subscribe to `document.visibilitychange` via a shared singleton listener.
  * The handler receives the new `document.visibilityState` string.
  *
@@ -36,13 +58,7 @@ export function useVisibilityEvent(handler) {
   useEffect(() => { handlerRef.current = handler; }, [handler]);
 
   useEffect(() => {
-    const fn = (state) => handlerRef.current?.(state);
-    subscribers.add(fn);
-    ensureAttached();
-    return () => {
-      subscribers.delete(fn);
-      detachIfEmpty();
-    };
+    return subscribeVisibility((state) => handlerRef.current?.(state));
   }, []);
 }
 

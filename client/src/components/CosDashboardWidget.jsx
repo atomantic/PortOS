@@ -68,6 +68,11 @@ const CosDashboardWidget = memo(function CosDashboardWidget() {
           || a?.taskType !== b?.taskType
           || a?.app !== b?.app
           || a?.durationFormatted !== b?.durationFormatted
+          // completedAt is the input to timeAgo(...) below — if the server
+          // corrects a task's completion time without changing other fields
+          // (rare but possible) we want the relative-time label to refresh
+          // immediately, not on the next minute tick.
+          || a?.completedAt !== b?.completedAt
         ) return false;
       }
       // Heatmap weeks: array of arrays of {date, tasks, successRate, isToday,

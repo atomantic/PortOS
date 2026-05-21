@@ -34,7 +34,10 @@ const GoalProgressWidget = memo(function GoalProgressWidget() {
       // the goal set and every rendered/derived per-goal field are unchanged.
       // Covers: title, category, horizon, goalType (rendered as labels/icons),
       // progress (bar + % label), status + parentId + urgency (filter/sort
-      // inputs), progressHistory length (drives `isStalled` even when % flat).
+      // inputs), and the last-progress timestamp + createdAt fallback that
+      // drive `daysSinceUpdate` / `isStalled` (a backfilled or corrected
+      // progressHistory entry mutates the latest timestamp without changing
+      // array length).
       compare: (prev, next) => {
         const a = Array.isArray(prev.goals) ? prev.goals : null;
         const b = Array.isArray(next.goals) ? next.goals : null;
@@ -49,7 +52,8 @@ const GoalProgressWidget = memo(function GoalProgressWidget() {
             && g.status === b[i]?.status
             && g.parentId === b[i]?.parentId
             && g.urgency === b[i]?.urgency
-            && (g.progressHistory?.length ?? 0) === (b[i]?.progressHistory?.length ?? 0)
+            && g.createdAt === b[i]?.createdAt
+            && getLastProgressDate(g) === getLastProgressDate(b[i])
         ));
       },
     },
