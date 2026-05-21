@@ -206,12 +206,17 @@ function SnapshotList() {
     120000,
     {
       // Snapshots only change when a new backup lands or the rotation prunes
-      // the oldest — same length + same newest id means no visible churn.
-      compare: (prev, next) => (
-        prev.length === next.length
-          && prev[prev.length - 1]?.id === next[next.length - 1]?.id
-          && prev[0]?.id === next[0]?.id
-      ),
+      // the oldest — walk every rendered tuple (id + fileCount) so a stale
+      // server-side fileCount recount or a middle-row mutation can't hide
+      // behind the head/tail id check.
+      compare: (prev, next) => {
+        if (prev.length !== next.length) return false;
+        for (let i = 0; i < prev.length; i++) {
+          if (prev[i]?.id !== next[i]?.id) return false;
+          if (prev[i]?.fileCount !== next[i]?.fileCount) return false;
+        }
+        return true;
+      },
     },
   );
   const [selectedId, setSelectedId] = useState(null);

@@ -17,6 +17,7 @@ import {
 import * as api from '../services/api';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
 import { useTimeTick } from '../hooks/useTimeTick';
+import { timeAgo } from '../utils/formatters';
 
 /**
  * CosDashboardWidget - Compact CoS status widget for the main Dashboard
@@ -40,10 +41,12 @@ const CosDashboardWidget = memo(function CosDashboardWidget() {
     // guard each tick re-renders the activity heatmap + recent tasks list
     // even when nothing changed.
     //
-    // Recent-tasks comparison walks every rendered field per row (description,
-    // taskType, app, durationFormatted, success). The `task.completedRelative`
-    // label is re-driven by the useTimeTick(60000) below so we don't have to
-    // bust dedup whenever a row's relative-time string rolls over.
+    // Recent-tasks comparison walks every rendered field per row (id,
+    // description, taskType, app, durationFormatted, success). The relative-
+    // time label is rendered client-side from `task.completedAt` via timeAgo
+    // and refreshed by the useTimeTick(60000) below, so the server's
+    // `task.completedRelative` string is intentionally ignored — it ships in
+    // the payload but would freeze across deduped polls if we used it.
     //
     // Heatmap comparison walks every cell's (date, tasks, successRate) tuple
     // plus summary totals — per-day tasks/successRate distribution can shift
@@ -119,10 +122,8 @@ const CosDashboardWidget = memo(function CosDashboardWidget() {
 
   const { summary, learningSummary, recentTasks, activityCalendar } = dashData ?? {};
   const [tasksExpanded, setTasksExpanded] = useState(false);
-  // Tick every minute so the server-computed `task.completedRelative` labels
-  // stay accurate across deduped polls (the relative-time string is rendered
-  // verbatim, but the component re-renders on each tick so a sequence of
-  // identical poll payloads still shows the correct "X min ago").
+  // Tick every minute so the client-side `timeAgo(task.completedAt)` labels
+  // recompute against the latest wall-clock time across deduped polls.
   useTimeTick(60000);
 
   // Don't render while loading
@@ -317,7 +318,13 @@ const CosDashboardWidget = memo(function CosDashboardWidget() {
                       <span>•</span>
                       <span>{task.durationFormatted}</span>
                       <span>•</span>
-                      <span>{task.completedRelative}</span>
+                      {/* Compute relative time client-side from `completedAt`
+                          so the useTimeTick(60000) above can refresh the
+                          label without help from the server. The server's
+                          `completedRelative` string ships in the payload but
+                          we intentionally ignore it — it goes stale across
+                          deduped polls. */}
+                      <span>{timeAgo(task.completedAt)}</span>
                     </div>
                   </div>
                 </Link>
@@ -331,7 +338,7 @@ const CosDashboardWidget = memo(function CosDashboardWidget() {
                 <div
                   key={task.id}
                   className={`w-2 h-2 rounded-full ${task.success ? 'bg-port-success' : 'bg-port-error'}`}
-                  title={`${task.description.substring(0, 50)}... (${task.completedRelative})`}
+                  title={`${task.description.substring(0, 50)}... (${timeAgo(task.completedAt)})`}
                 />
               ))}
             </div>

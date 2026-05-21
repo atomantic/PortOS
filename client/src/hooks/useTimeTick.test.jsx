@@ -2,14 +2,24 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { useTimeTick, __resetTimeTickForTests } from './useTimeTick';
 
+const setVisibility = (state) => {
+  Object.defineProperty(document, 'visibilityState', { value: state, configurable: true });
+};
+
+const fireVisibilityChange = () => {
+  document.dispatchEvent(new Event('visibilitychange'));
+};
+
 describe('useTimeTick', () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    setVisibility('visible');
     __resetTimeTickForTests();
   });
 
   afterEach(() => {
     __resetTimeTickForTests();
+    setVisibility('visible');
     vi.useRealTimers();
   });
 
@@ -73,5 +83,53 @@ describe('useTimeTick', () => {
     expect(clearSpy).toHaveBeenCalledTimes(1);
 
     clearSpy.mockRestore();
+  });
+
+  it('pauses the timer while the tab is hidden and resumes on visible', () => {
+    const intervalSpy = vi.spyOn(window, 'setInterval');
+    const clearSpy = vi.spyOn(window, 'clearInterval');
+
+    renderHook(() => useTimeTick(60000));
+    expect(intervalSpy.mock.calls.filter(([, ms]) => ms === 60000)).toHaveLength(1);
+
+    setVisibility('hidden');
+    act(() => fireVisibilityChange());
+    expect(clearSpy).toHaveBeenCalledTimes(1);
+
+    setVisibility('visible');
+    act(() => fireVisibilityChange());
+    expect(intervalSpy.mock.calls.filter(([, ms]) => ms === 60000)).toHaveLength(2);
+
+    intervalSpy.mockRestore();
+    clearSpy.mockRestore();
+  });
+
+  it('fires once on tab-visible so deduped labels catch up immediately', () => {
+    vi.setSystemTime(new Date('2026-05-21T12:00:00Z'));
+    const { result } = renderHook(() => useTimeTick(60000));
+    const initial = result.current;
+
+    setVisibility('hidden');
+    act(() => fireVisibilityChange());
+    // Advance wall-clock while hidden — the timer is paused so result.current
+    // should not advance from background ticks.
+    vi.setSystemTime(new Date('2026-05-21T12:05:00Z'));
+
+    setVisibility('visible');
+    act(() => fireVisibilityChange());
+
+    expect(result.current).toBeGreaterThan(initial);
+    expect(result.current).toBe(Date.parse('2026-05-21T12:05:00Z'));
+  });
+
+  it('starts paused if the tab is already hidden at mount', () => {
+    const intervalSpy = vi.spyOn(window, 'setInterval');
+    setVisibility('hidden');
+
+    renderHook(() => useTimeTick(60000));
+
+    expect(intervalSpy.mock.calls.filter(([, ms]) => ms === 60000)).toHaveLength(0);
+
+    intervalSpy.mockRestore();
   });
 });
