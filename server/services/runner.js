@@ -7,7 +7,11 @@ import { writeFile, readFile } from 'fs/promises';
 import { join } from 'path';
 import { ensureDir, tryReadFile } from '../lib/fileUtils.js';
 import { resolveCliModel, hasModelFlag, extractBakedModel } from '../lib/providerModels.js';
-import { ServerError } from '../lib/errorHandler.js';
+import {
+  setAIToolkitInstance,
+  getAIToolkitInstance,
+  requireToolkit,
+} from '../lib/aiToolkitState.js';
 
 // Re-exported so `server/lib/promptRunner.js` can import via the runner
 // (its existing dependency boundary). The canonical home is now
@@ -15,25 +19,15 @@ import { ServerError } from '../lib/errorHandler.js';
 // imports from directly (lib→lib, no service layer violation).
 export { hasModelFlag, extractBakedModel };
 
-// This will be initialized by server/index.js and set via setAIToolkit()
-let aiToolkitInstance = null;
+// Runner-only state. The toolkit singleton itself lives in
+// `lib/aiToolkitState.js` and is shared with providers / promptService;
+// `runnerConfig` (dataDir + hooks) is captured here because only the runner
+// needs it.
 let runnerConfig = { dataDir: './data', hooks: {} };
 
 export function setAIToolkit(toolkit, config = {}) {
-  aiToolkitInstance = toolkit;
+  setAIToolkitInstance(toolkit);
   runnerConfig = { dataDir: config.dataDir || './data', hooks: config.hooks || {} };
-}
-
-// Mirrors the helper in `server/services/providers.js` so callers can gate on
-// `err.code === 'AI_TOOLKIT_NOT_INITIALIZED'` instead of string-matching the
-// message; status 503 (service-unavailable) because the toolkit warms at boot
-// and a not-initialized state means the service hasn't finished starting.
-function requireToolkit() {
-  if (aiToolkitInstance) return aiToolkitInstance;
-  throw new ServerError('AI Toolkit not initialized', {
-    status: 503,
-    code: 'AI_TOOLKIT_NOT_INITIALIZED',
-  });
 }
 
 export async function createRun(options) {
@@ -359,7 +353,9 @@ export function registerActiveRun(runId, killable) {
 }
 
 export function unregisterActiveRun(runId) {
-  aiToolkitInstance?.services?.runner?._portosActiveRuns?.delete(runId);
+  // No-throw read: cleanup paths may run after the toolkit is gone (e.g.
+  // shutdown), so use `getAIToolkitInstance()` rather than `requireToolkit()`.
+  getAIToolkitInstance()?.services?.runner?._portosActiveRuns?.delete(runId);
 }
 
 export async function stopRun(runId) {

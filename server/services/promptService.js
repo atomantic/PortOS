@@ -14,25 +14,12 @@ import { join } from 'path';
 import { applyTemplate } from '../lib/promptTemplate.js';
 import { expandPartials } from '../lib/promptPartials.js';
 import { PATHS } from '../lib/fileUtils.js';
-import { ServerError } from '../lib/errorHandler.js';
+import { setAIToolkitInstance, requireToolkit } from '../lib/aiToolkitState.js';
 
-// This will be initialized by server/index.js and set via setAIToolkit()
-let aiToolkitInstance = null;
-
-export function setAIToolkit(toolkit) {
-  aiToolkitInstance = toolkit;
-}
-
-// Mirrors the helper in `server/services/providers.js` + `runner.js` so callers
-// can gate on `err.code === 'AI_TOOLKIT_NOT_INITIALIZED'` instead of string-
-// matching the message; status 503 because the toolkit warms at boot.
-function requireToolkit() {
-  if (aiToolkitInstance) return aiToolkitInstance;
-  throw new ServerError('AI Toolkit not initialized', {
-    status: 503,
-    code: 'AI_TOOLKIT_NOT_INITIALIZED',
-  });
-}
+// `server/index.js` imports `setAIToolkit` from here — keep the named export
+// stable while the underlying singleton lives in `lib/aiToolkitState.js` so
+// providers / runner / promptService all observe the same instance.
+export const setAIToolkit = setAIToolkitInstance;
 
 export async function loadPrompts() {
   return requireToolkit().services.prompts.init();

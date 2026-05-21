@@ -49,6 +49,7 @@ export * from './writersRoomStylePresets.js';
 
 // === Prompt & AI (toolkit lives in aiToolkit/ — see its own index.js) ===
 export * from './aiProvider.js';
+export * from './aiToolkitState.js';
 export * from './ansiStrip.js';
 export * from './codexAssistantExtract.js';
 export * from './codexCliOutput.js';

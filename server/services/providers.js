@@ -3,26 +3,12 @@
  * Re-exports toolkit provider service functions
  */
 
-import { ServerError } from '../lib/errorHandler.js';
+import { setAIToolkitInstance, requireToolkit } from '../lib/aiToolkitState.js';
 
-// This will be initialized by server/index.js and set via setAIToolkit()
-let aiToolkitInstance = null;
-
-export function setAIToolkit(toolkit) {
-  aiToolkitInstance = toolkit;
-}
-
-// Centralized typed-error so callers can gate on `err.code === 'AI_TOOLKIT_NOT_INITIALIZED'`
-// instead of string-matching the message; status 503 (service-unavailable)
-// because the toolkit warms at boot and a not-initialized state means the
-// service hasn't finished starting.
-function requireToolkit() {
-  if (aiToolkitInstance) return aiToolkitInstance;
-  throw new ServerError('AI Toolkit not initialized', {
-    status: 503,
-    code: 'AI_TOOLKIT_NOT_INITIALIZED',
-  });
-}
+// `server/index.js` imports `setAIToolkit` from here — keep the named export
+// stable while the underlying singleton lives in `lib/aiToolkitState.js` so
+// providers / runner / promptService all observe the same instance.
+export const setAIToolkit = setAIToolkitInstance;
 
 export async function getAllProviders() {
   return requireToolkit().services.providers.getAllProviders();

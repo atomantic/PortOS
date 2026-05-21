@@ -60,6 +60,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | Module | Purpose |
 |---|---|
 | `aiToolkit/` | Vendored toolkit (providers + runner + prompts + status). See `aiToolkit/index.js`. |
+| `aiToolkitState.js` | Module-level singleton for the toolkit instance shared by the `providers`/`runner`/`promptService` shims — `setAIToolkitInstance` / `requireToolkit` (throws `AI_TOOLKIT_NOT_INITIALIZED`) / `getAIToolkitInstance` (no-throw for cleanup paths). |
 | `aiProvider.js` | Shared AI provider utilities for LLM calls. |
 | `promptRunner.js` | Shared LLM runner wrapper. |
 | `tuiPromptRunner.js` | One-shot TUI prompt runner (PTY-driven). |
