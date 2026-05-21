@@ -549,7 +549,14 @@ The configured reviewer for this task is \`{reviewer}\`. \`copilot\` waits for G
      \`\`\`
      - **No review within 10 min**: proceed to merge (Copilot was slow or skipped).
      - **\`APPROVED\` with no inline comments**: proceed to merge.
-     - **\`COMMENTED\` or \`CHANGES_REQUESTED\`**: fetch findings with \`gh api "repos/{owner}/{repo}/pulls/$PR/comments"\` (\`gh\` substitutes \`{owner}\`/\`{repo}\` from the current git checkout — those are gh path-placeholders, not prompt template vars) and \`gh pr view "$PR" --json reviews\`. Address each finding inside the worktree, commit, \`git push\`. Re-poll — Copilot re-reviews the new head SHA. Cap re-iterations at **3 rounds**; if findings keep arriving past that, route to Phase 3b (open the PR with the unresolved findings spelled out in \`.plan-questions.md\` and leave it for the human to merge).
+     - **\`COMMENTED\` or \`CHANGES_REQUESTED\`**: fetch findings with \`gh api "repos/{owner}/{repo}/pulls/$PR/comments"\` (\`gh\` substitutes \`{owner}\`/\`{repo}\` from the current git checkout — those are gh path-placeholders, not prompt template vars) and \`gh pr view "$PR" --json reviews\`. Address each finding inside the worktree, commit, \`git push\`. Re-poll — Copilot re-reviews the new head SHA. Cap re-iterations at **3 rounds**; if findings keep arriving past that, exit to the **review-stuck cleanup** below — do NOT route to Phase 3b. Phase 3b is reserved for items that are blocked on *requirements clarification* and would inappropriately mutate PLAN.md and write \`.plan-questions.md\` for a review-feedback stall.
+
+     **Review-stuck cleanup** (exit after 3 rounds of unresolved review feedback): add one final PR comment via \`gh pr comment $PR\` summarizing what was addressed across the rounds and what's still outstanding so the human picks up cold, then run the worktree-only cleanup (same shape as Phase 3b's, since the PR remains open and unmerged):
+     \`\`\`bash
+     cd {repoPath}
+     git worktree remove "\${WORKTREE}"
+     \`\`\`
+     Leave the local \`claim/<slug>\` branch and the open PR alone. Do NOT run Phase 7 — that phase assumes a merged PR. PLAN.md and \`.changelog/NEXT.md\` were already updated in Phase 5, and that's fine even though the merge didn't happen: the next \`plan-task\` run will see the slug as in-flight via the open PR and pick a different item.
 
    - **\`claude\` / \`codex\` / \`gemini\`** — Invoke slashdo's \`/do:rpr --review-with {reviewer}\` against the PR. \`/do:rpr\` runs the chosen CLI in headless mode to critique the diff, applies fixes, and re-pushes. It owns its own iteration cap and clean-vs-dirty merge gate; on a clean status it returns control here for the merge.
 

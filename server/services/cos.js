@@ -28,7 +28,7 @@ import { generateProactiveTasks as generateMissionTasks, getStats as getMissionS
 import { generateTaskFromJob, recordJobExecution, recordJobGateSkip, isScriptJob, executeScriptJob, isShellJob, executeShellJob } from './autonomousJobs.js';
 import { checkJobGate, hasGate } from './jobGates.js';
 import { ensureDir, formatDuration, safeJSONParse, PATHS } from '../lib/fileUtils.js';
-import { sanitizeTaskMetadata, PIPELINE_BEHAVIOR_FLAGS, MAX_TOTAL_SPAWNS } from '../lib/validation.js';
+import { sanitizeTaskMetadata, PIPELINE_BEHAVIOR_FLAGS, MAX_TOTAL_SPAWNS, DEFAULT_REVIEWER } from '../lib/validation.js';
 import { addNotification, NOTIFICATION_TYPES } from './notifications.js';
 import { recordDecision, DECISION_TYPES } from './decisionLog.js';
 import { isRecoveryTask } from './recoveryTasks.js';
@@ -1941,7 +1941,7 @@ async function generateManagedAppImprovementTask(app, state) {
   const promptTemplate = metadata.pipeline?.stages
     ? await taskSchedule.getStagePrompt(nextType, 0)
     : await taskSchedule.getTaskPrompt(nextType);
-  const reviewer = metadata.reviewer || 'copilot';
+  const reviewer = metadata.reviewer || DEFAULT_REVIEWER;
   const description = promptTemplate
     .replace(/\{appName\}/g, app.name)
     .replace(/\{repoPath\}/g, app.repoPath)
@@ -2079,7 +2079,7 @@ async function generateManagedAppImprovementTaskForType(taskType, app, state, { 
     return null;
   }
   const planConstraintBlock = buildPlanConstraintBlock(metadata.planId);
-  const reviewer = metadata.reviewer || 'copilot';
+  const reviewer = metadata.reviewer || DEFAULT_REVIEWER;
 
   const description = promptTemplate
     .replace(/\{appName\}/g, app.name)
