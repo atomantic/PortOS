@@ -323,14 +323,29 @@ describe('stageRunner — runStagedLLM dispatch', () => {
     expect(runner.executeCliRun.mock.calls[0][6]).toBe(5000);
   });
 
-  it('caps a too-large timeoutOverride at the 30-minute ceiling', async () => {
+  it('rejects a too-large timeoutOverride (above 30-min cap) and falls back', async () => {
+    // Matches the route validator's max: anything > 1_800_000 is invalid,
+    // not silently clamped. Falls through to provider.timeout.
     prompts.getStage.mockReturnValue(null);
     providers.getActiveProvider.mockResolvedValue(cliProvider({ timeout: 5000 }));
     runner.executeCliRun.mockImplementation(async (_id, _p, _pr, _cwd, _onData, onComplete, _t) => {
       onComplete({ success: true });
     });
     await runStagedLLM('s', {}, { timeoutOverride: 9_999_999_999 });
-    expect(runner.executeCliRun.mock.calls[0][6]).toBe(1_800_000);
+    expect(runner.executeCliRun.mock.calls[0][6]).toBe(5000);
+  });
+
+  it('rejects a timeoutOverride below the 1s floor', async () => {
+    // Internal callers (extractors / pipeline stages) bypass the route
+    // validator, so the runner enforces the same min as the schema. A `1`
+    // override would otherwise become a near-instant cancel.
+    prompts.getStage.mockReturnValue(null);
+    providers.getActiveProvider.mockResolvedValue(cliProvider({ timeout: 5000 }));
+    runner.executeCliRun.mockImplementation(async (_id, _p, _pr, _cwd, _onData, onComplete, _t) => {
+      onComplete({ success: true });
+    });
+    await runStagedLLM('s', {}, { timeoutOverride: 999 });
+    expect(runner.executeCliRun.mock.calls[0][6]).toBe(5000);
   });
 
   it('passes effectiveTimeout into createRun so /runs metadata matches execution', async () => {

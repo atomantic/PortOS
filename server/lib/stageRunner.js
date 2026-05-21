@@ -16,7 +16,7 @@
 
 import { ServerError } from './errorHandler.js';
 import { findBalancedBlocks, tryParseWithRepair } from './jsonExtract.js';
-import { resolveEffectiveModel, runPromptThroughProvider } from './promptRunner.js';
+import { resolveEffectiveModel, runPromptThroughProvider, DEFAULT_TIMEOUT_MS } from './promptRunner.js';
 import { stripCodeFences } from './aiProvider.js';
 import { extractCodexAssistant } from './codexAssistantExtract.js';
 import { getActiveProvider, getProviderById } from '../services/providers.js';
@@ -45,25 +45,27 @@ const providerFallbackModel = (provider) =>
   || (Array.isArray(provider.models) && provider.models[0])
   || null;
 
-// Mirror of STAGE_TIMEOUT_MAX_MS in server/lib/validation.js — kept here so
-// the runner can defend against an in-flight override that beats the route
-// validator (callers like extractors / pipeline stages invoke runStagedLLM
-// directly). If you bump validation.js, bump this in lockstep.
+// Mirror of STAGE_TIMEOUT_MIN_MS / STAGE_TIMEOUT_MAX_MS in
+// server/lib/validation.js. The runner enforces the same bounds as the
+// route validator so callers like extractors / pipeline stages that
+// invoke runStagedLLM directly (bypassing the HTTP layer) can't slip a
+// value through that the schema would have rejected. If you bump
+// validation.js, bump these in lockstep.
+const STAGE_TIMEOUT_MIN_MS = 1000;
 const STAGE_TIMEOUT_MAX_MS = 1800000;
 
 // Normalize a stage- or caller-supplied timeout into a positive integer
 // milliseconds value (or `undefined` to mean "fall through to provider
-// default"). Reject NaN / ≤0 / non-integer; clamp at STAGE_TIMEOUT_MAX_MS so
-// a bogus override can't bypass the 30-minute ceiling. Reject non-integers
-// outright (rather than truncating) to match parseTimeoutMs on the client
-// and z.number().int() in stageConfigUpdateSchema — silently rounding here
-// would surprise a caller whose `1000.9` becomes a different effective
-// value than what the validator accepts.
+// default"). Reject NaN, non-integer, and anything outside
+// [STAGE_TIMEOUT_MIN_MS, STAGE_TIMEOUT_MAX_MS] — matches parseTimeoutMs
+// on the client and the route validator's range. A bogus `1ms` from a
+// pre-validation caller would otherwise produce near-instant cancels
+// rather than a meaningful run.
 function normalizeTimeout(raw) {
   if (raw == null) return undefined;
   const n = Number(raw);
-  if (!Number.isInteger(n) || n <= 0) return undefined;
-  return Math.min(n, STAGE_TIMEOUT_MAX_MS);
+  if (!Number.isInteger(n) || n < STAGE_TIMEOUT_MIN_MS || n > STAGE_TIMEOUT_MAX_MS) return undefined;
+  return n;
 }
 
 export function resolveModel(provider, modelHint) {
@@ -241,7 +243,11 @@ export async function runStagedLLM(stageName, variables, options = {}) {
     model: effectiveModel,
     prompt,
     source: options.source || 'staged-llm',
-    timeout: effectiveTimeout ?? provider.timeout,
+    // Record the same timeout the runner will actually enforce —
+    // override > provider default > the runner's hard floor — so /runs
+    // metadata never carries a misleading `undefined` for stages whose
+    // provider also omits a timeout.
+    timeout: effectiveTimeout ?? provider.timeout ?? DEFAULT_TIMEOUT_MS,
   });
   const { runId } = runResult;
   if (runResult.provider && runResult.provider.id !== provider.id) {
@@ -256,7 +262,7 @@ export async function runStagedLLM(stageName, variables, options = {}) {
       model: effectiveModel,
       providerId: effectiveProvider.id,
       providerName: effectiveProvider.name,
-      timeout: effectiveTimeout ?? effectiveProvider.timeout,
+      timeout: effectiveTimeout ?? effectiveProvider.timeout ?? DEFAULT_TIMEOUT_MS,
     }).catch(() => { /* best-effort */ });
   }
   console.log(`📝 stage: ${effectiveProvider.id} / ${effectiveModel || '(default)'} / ${stageName} → ${runId.slice(0, 8)}`);

@@ -32,7 +32,7 @@ import { executeTuiRun } from './tuiPromptRunner.js';
 import { ServerError } from './errorHandler.js';
 import { PROVIDER_TYPES } from './aiToolkit/constants.js';
 
-const DEFAULT_TIMEOUT_MS = 300000;
+export const DEFAULT_TIMEOUT_MS = 300000;
 const APPEND_CHUNK = (acc, chunk) => acc + (typeof chunk === 'string' ? chunk : (chunk?.text || ''));
 
 /**

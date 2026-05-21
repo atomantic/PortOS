@@ -84,14 +84,13 @@ export default function PromptManager() {
     setSelectedStage(name);
     const res = await fetch(`/api/prompts/${name}`).then(r => r.json());
     setStageTemplate(res.template || '');
-    // Normalize a server-returned timeout: only carry a positive integer
-    // through to local state, otherwise treat as "no override set" (null).
-    // Without this, `res.timeout = 0` (legacy garbage) shows as a literal
-    // `0` in the input, and `res.timeout = undefined` becomes `null` here
-    // — both make the input look like the user touched the field when
-    // they didn't.
-    const rawT = res.timeout;
-    const timeout = Number.isInteger(rawT) && rawT > 0 ? rawT : null;
+    // Normalize a server-returned timeout via parseTimeoutMs so the editor
+    // shares the validator's accept set: integers OR digit-only strings
+    // (e.g. legacy `'900000'` from pre-validation installs) round-trip
+    // through the UI, while non-positive / non-integer / garbage values
+    // (0, 'abc', undefined, 1.5) collapse to null so the input doesn't
+    // surface them as touched.
+    const timeout = parseTimeoutMs(res.timeout);
     setStageConfig({ name: res.name, description: res.description, model: res.model, provider: res.provider || null, timeout, variables: res.variables || [] });
     setPreview('');
   };
