@@ -5,6 +5,7 @@ import { WORK_KINDS, WORK_STATUSES, ANALYSIS_KINDS } from './writersRoomPresets.
 import { ALL_STYLE_IDS, STYLE_ID } from './writersRoomStylePresets.js';
 import { BIBLE_LIMITS } from './storyBible.js';
 import { ARC_SHAPE_IDS, ARC_ROLES } from './storyArc.js';
+import { MIN_TIMEOUT as STAGE_TIMEOUT_MIN_MS, MAX_TIMEOUT as STAGE_TIMEOUT_MAX_MS } from './aiToolkit/constants.js';
 
 // gpt-image-2 (codex backend) caps at 3840px per edge and 8,294,400 total
 // pixels. Mirror the ceiling for every image-gen route. Local mflux can
@@ -945,12 +946,13 @@ export function validate(schema, data) {
 // PROMPT STAGE CONFIG (server/routes/prompts.js PUT /:stage body)
 // =============================================================================
 
-// Server-side ceiling matches the toolkit's provider/run timeout cap so a
-// stage override can't exceed the per-call timeout the runner will enforce
-// anyway. The minimum mirrors aiToolkit validation: 1s is the lowest value
-// that's still a meaningful timeout rather than an instant cancel.
-const STAGE_TIMEOUT_MIN_MS = 1000;
-const STAGE_TIMEOUT_MAX_MS = 1800000;
+// Per-call timeout bounds: STAGE_TIMEOUT_MIN_MS / STAGE_TIMEOUT_MAX_MS are
+// imported (aliased) from aiToolkit/constants.js at the top of this file so
+// the route validator, the runner (server/lib/stageRunner.js), and the
+// toolkit's own provider/run validation all share one source of truth. The
+// client mirror in client/src/utils/formatters.js can't import across the
+// server boundary — comments on both sides flag the requirement to keep
+// them in lockstep.
 
 // Accept either a number or a numeric string (UI inputs frequently serialize
 // as strings) and validate the resulting integer. `nullable` lets the client

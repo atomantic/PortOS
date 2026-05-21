@@ -5,6 +5,7 @@ import socket from '../services/socket';
 import { filterSelectableModels, providerTypeClass, isTuiProvider, isApiProvider, isProcessProvider } from '../utils/providers';
 import {
   formatDurationMs,
+  parseTimeoutMs,
   TIMEOUT_INPUT_MIN_MS,
   TIMEOUT_INPUT_MAX_MS,
   TIMEOUT_INPUT_STEP_MS,
@@ -605,11 +606,19 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
 
     const tuiPromptDelay = parseInt(formData.tuiPromptDelayMs, 10);
     const tuiIdleTimeout = parseInt(formData.tuiIdleTimeoutMs, 10);
+    // Use parseTimeoutMs so submit and the hint below agree on what shapes
+    // are valid (digit-only string within [MIN, MAX]). parseInt accepted
+    // '1e3' as 1 and '1000.5' as 1000, which mismatched the hint's
+    // Number()-based display and resulted in a confusing "shows 15m, saves
+    // 1ms" UX. Fall back to the raw form value (NaN-coerced) for the rare
+    // case where the user typed something the strict parser rejects — the
+    // server's Zod validator will still gatekeep with a clear error.
+    const parsedTimeout = parseTimeoutMs(formData.timeout);
     const data = {
       ...formData,
       args: formData.args ? formData.args.split(' ').filter(Boolean) : [],
       headlessArgs: formData.headlessArgs ? formData.headlessArgs.split(' ').filter(Boolean) : [],
-      timeout: parseInt(formData.timeout, 10)
+      timeout: parsedTimeout != null ? parsedTimeout : Number(formData.timeout)
     };
     if (formData.type === 'tui') {
       if (Number.isFinite(tuiPromptDelay)) data.tuiPromptDelayMs = tuiPromptDelay;
@@ -922,9 +931,16 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
               className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
             />
             <p className="text-xs text-gray-500 mt-1">
-              {formData.timeout > 0
-                ? `≈ ${formatDurationMs(Number(formData.timeout))} per run`
-                : `Per-call cap. Server max: ${TIMEOUT_INPUT_MAX_MS.toLocaleString()} ms (${formatDurationMs(TIMEOUT_INPUT_MAX_MS)}).`}
+              {(() => {
+                // Same parser the submit path uses, so the displayed
+                // duration always matches what would be saved. parseTimeoutMs
+                // returns null for out-of-range/invalid → fall back to the
+                // generic cap message.
+                const ms = parseTimeoutMs(formData.timeout);
+                return ms != null
+                  ? `≈ ${formatDurationMs(ms)} per run`
+                  : `Per-call cap. Server max: ${TIMEOUT_INPUT_MAX_MS.toLocaleString()} ms (${formatDurationMs(TIMEOUT_INPUT_MAX_MS)}).`;
+              })()}
             </p>
           </div>
 

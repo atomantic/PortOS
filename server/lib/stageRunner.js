@@ -22,6 +22,7 @@ import { extractCodexAssistant } from './codexAssistantExtract.js';
 import { getActiveProvider, getProviderById } from '../services/providers.js';
 import { buildPrompt, getStage } from '../services/promptService.js';
 import { createRun, patchRunMetadata } from '../services/runner.js';
+import { MIN_TIMEOUT as STAGE_TIMEOUT_MIN_MS, MAX_TIMEOUT as STAGE_TIMEOUT_MAX_MS } from './aiToolkit/constants.js';
 
 // Stage configs name a model by tier (PromptManager UI). Map each tier name
 // to the provider's per-tier model field; an unset tier falls through to
@@ -45,14 +46,12 @@ const providerFallbackModel = (provider) =>
   || (Array.isArray(provider.models) && provider.models[0])
   || null;
 
-// Mirror of STAGE_TIMEOUT_MIN_MS / STAGE_TIMEOUT_MAX_MS in
-// server/lib/validation.js. The runner enforces the same bounds as the
-// route validator so callers like extractors / pipeline stages that
-// invoke runStagedLLM directly (bypassing the HTTP layer) can't slip a
-// value through that the schema would have rejected. If you bump
-// validation.js, bump these in lockstep.
-const STAGE_TIMEOUT_MIN_MS = 1000;
-const STAGE_TIMEOUT_MAX_MS = 1800000;
+// Per-call timeout bounds come from the canonical aiToolkit/constants.js
+// (imported at the top of the file). The runner, the route validator, and
+// the toolkit's own provider/run validation all reject the same shapes.
+// Internal callers (extractors, pipeline stages) hit the runner directly,
+// so it must enforce the same bounds as the HTTP boundary or a caller
+// could slip through a value the schema would reject.
 
 // Normalize a stage- or caller-supplied timeout into a positive integer
 // milliseconds value (or `undefined` to mean "fall through to provider

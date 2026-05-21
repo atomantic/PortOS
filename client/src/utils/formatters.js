@@ -181,11 +181,15 @@ export function formatDateShort(value) {
   return date.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
 }
 
-// Per-call LLM timeout bounds. Mirror of server STAGE_TIMEOUT_MIN_MS /
-// STAGE_TIMEOUT_MAX_MS in server/lib/validation.js (and the toolkit's
-// provider.timeout Zod range in server/lib/aiToolkit/validation.js).
-// Bumping these here without the server changes — or vice versa — would
-// let a value through one validator that the other rejects.
+// Per-call LLM timeout bounds. Client-side mirror of the canonical
+// MIN_TIMEOUT / MAX_TIMEOUT in server/lib/aiToolkit/constants.js — the
+// client can't import across the server boundary (Vite vs Node, plus the
+// aiToolkit directory is kept self-contained per CLAUDE.md). The server
+// validators (validation.js, stageRunner.js) and aiToolkit's own
+// provider/run schemas all import from constants.js; this file is the
+// only known mirror. Bumping these here without the server constants —
+// or vice versa — would let a value through one validator that the
+// other rejects.
 export const TIMEOUT_INPUT_MIN_MS = 1000;
 export const TIMEOUT_INPUT_MAX_MS = 1800000;
 export const TIMEOUT_INPUT_STEP_MS = 1000;
