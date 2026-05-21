@@ -399,12 +399,14 @@ When PLAN.md is missing, empty, or fully completed, brainstorm and implement a n
 
   'plan-task': `[Plan Task: {appName}] Claim and ship next PLAN.md item
 
-Pick the next unclaimed PLAN.md item by its \`[<slug>]\` ID, **create your own worktree at \`claim/<slug>\`**, implement, ship a PR, and clean up. Mirrors the \`/claim\` slash command — same in-flight scan, same branch naming, same no-local-merge cleanup. Do NOT modify files in the source repo directly; ALL editing happens inside the worktree you create.
+Ship the next PLAN.md item — either the one the scheduler pre-reserved (see **Item Constraint** below, if present) or the first available unclaimed item if no constraint is given. **Create your own worktree at \`claim/<slug>\`**, implement, ship a PR, and clean up. Mirrors the \`/claim\` slash command — same in-flight scan, same branch naming, same no-local-merge cleanup. Do NOT modify files in the source repo directly; ALL editing happens inside the worktree you create.
 {planConstraint}
 
-**How claiming works.** Every PLAN.md checkbox carries a \`[<slug>]\` ID. A slug is "in flight" when it appears as the slug-position segment in either a \`claim/<slug>\` ref (the human/TUI pattern) or a \`cos/<task>/<slug>/<agent>\` ref (the CoS sub-agent pattern) — across local branches, remote branches, or open PR head refs. Pick the first \`- [ ]\` whose slug is NOT in flight and create a \`claim/<slug>\` branch — that branch name IS the claim, visible to every other agent and to the human running \`/claim\` in a TUI.
+**How claiming works.** Every PLAN.md checkbox carries a \`[<slug>]\` ID. A slug is "in flight" when it appears as the slug-position segment in either a \`claim/<slug>\` ref (the human/TUI pattern) or a \`cos/<task>/<slug>/<agent>\` ref (the CoS sub-agent pattern) — across local branches, remote branches, or open PR head refs. The \`claim/<slug>\` branch you create IS the claim, visible to every other agent and to the human running \`/claim\` in a TUI.
 
-## Phase 1 — Pick
+## Phase 1 — Pick / accept the target slug
+
+If the **Item Constraint** above named a \`[plan-id]\`, the slug is already chosen — you still need steps 2–3 to verify it isn't in-flight, then jump to step 4. If no Item Constraint is present, run steps 1–5 in order.
 
 1. Read PLAN.md from the repo root.
 2. **If any \`- [ ]\` line lacks an \`[<slug>]\` ID, stop and exit cleanly** — \`do-replan\` populates IDs in one pass; without IDs, this task has nothing to claim.
@@ -525,10 +527,30 @@ Use \`feat:\` / \`fix:\` / \`refactor:\` / \`chore:\` / etc. (The bracketed-scop
 
 ## Phase 6 — Review and ship
 
+The configured reviewer for this task is \`{reviewer}\`. \`copilot\` waits for GitHub's auto-review; \`claude\` / \`codex\` / \`gemini\` invoke a local-CLI critique via \`/do:rpr --review-with <reviewer>\`.
+
 1. Run \`/simplify\` (three-agent reuse/quality/efficiency review) against your own diff and fix findings in the same diff. BEFORE opening the PR, not retroactively.
 2. Push the branch: \`git push -u origin claim/<slug>\`
 3. Open the PR with \`gh pr create\` — title MUST encode the slug: \`<type>([<slug>]): <description>\`. Body should summarize what shipped + test plan.
-4. **Merge via \`gh pr merge\`** — NEVER a local \`git merge\` into main or any other branch. The repo may allow only one of \`--merge\` / \`--squash\` / \`--rebase\`, so don't hardcode a method. Try in this order and use the first one that succeeds:
+4. **Wait for the configured reviewer's findings BEFORE merging.** \`gh pr merge --auto\` only waits for required status checks; it does NOT wait for code-review feedback. Branch on \`{reviewer}\`:
+
+   - **\`copilot\`** — This repo has GitHub Copilot Code Review configured to auto-run on every new PR. Poll until Copilot's review lands or a 10-minute timeout fires:
+     \`\`\`bash
+     PR=<num>
+     for i in $(seq 1 20); do
+       REVIEW=$(gh pr view "$PR" --json reviews \\
+         -q '.reviews[] | select(.author.login=="copilot-pull-request-reviewer") | {state, submittedAt}')
+       [ -n "$REVIEW" ] && break
+       sleep 30
+     done
+     \`\`\`
+     - **No review within 10 min**: proceed to merge (Copilot was slow or skipped).
+     - **\`APPROVED\` with no inline comments**: proceed to merge.
+     - **\`COMMENTED\` or \`CHANGES_REQUESTED\`**: fetch findings with \`gh api repos/{owner}/{repo}/pulls/$PR/comments\` and \`gh pr view "$PR" --json reviews\`. Address each finding inside the worktree, commit, \`git push\`. Re-poll — Copilot re-reviews the new head SHA. Cap re-iterations at **3 rounds**; if findings keep arriving past that, route to Phase 3b (open the PR with the unresolved findings spelled out in \`.plan-questions.md\` and leave it for the human to merge).
+
+   - **\`claude\` / \`codex\` / \`gemini\`** — Invoke slashdo's \`/do:rpr --review-with {reviewer}\` against the PR. \`/do:rpr\` runs the chosen CLI in headless mode to critique the diff, applies fixes, and re-pushes. It owns its own iteration cap and clean-vs-dirty merge gate; on a clean status it returns control here for the merge.
+
+5. **Merge via \`gh pr merge\`** — NEVER a local \`git merge\` into main or any other branch. The repo may allow only one of \`--merge\` / \`--squash\` / \`--rebase\`, so don't hardcode a method. Try in this order and use the first one that succeeds:
    \`\`\`bash
    gh pr merge <num> --auto --delete-branch \\
      || gh pr merge <num> --squash --delete-branch \\

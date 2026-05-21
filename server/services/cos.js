@@ -93,31 +93,61 @@ let initialStartup = false;
 
 // Internal imports for functions used in this module
 import { pruneOldAgentArchives, archiveStaleAgents as _archiveStaleAgents, loadAgentIndex } from './cosAgents.js';
-import { parsePlanItems, extractAllIds, findInProgressIds, pickFirstAvailable } from '../lib/planIds.js';
+import { parsePlanItems, extractAllIds, findInProgressIds, pickFirstAvailable, diagnoseUnpickablePlan } from '../lib/planIds.js';
 
 // Task types where the scheduler pre-picks a PLAN.md item by ID so the agent's
 // worktree branch encodes the claim. `do-replan` is excluded — it assigns IDs
 // rather than picking one off the list.
 const PLAN_PICK_TASK_TYPES = new Set(['feature-ideas', 'plan-task']);
 
+// Subset of PLAN_PICK_TASK_TYPES where the dispatch should be skipped entirely
+// when no PLAN.md item is dispatchable. `feature-ideas` is intentionally
+// excluded: it brainstorms new items when PLAN.md is empty/blocked, so it
+// must run regardless. `plan-task` is a strict executor and would just exit
+// cleanly — burning an LLM round for nothing.
+const PLAN_GATE_TASK_TYPES = new Set(['plan-task']);
+
 /**
  * For feature-ideas / plan-task, read the target repo's PLAN.md, find which
  * item IDs are already in flight via branch/PR scan, and pick the first
  * available item. Mutates `metadata` in place by setting `planId` when a
- * pick succeeds. Falls back silently when PLAN.md is missing or every item
- * is unavailable — the prompt's own brainstorm/exit-clean fallback handles
- * those cases.
+ * pick succeeds.
+ *
+ * Returns `{ skipReason }` so the caller can short-circuit the LLM dispatch
+ * for `plan-task` when there's literally nothing to do (empty plan, all
+ * items blocked on human input via NEEDS_INPUT/DRIFT, or all claimed
+ * elsewhere). `feature-ideas` is never gated — its job is to brainstorm
+ * from scratch when the plan is empty, so it always runs.
+ *
+ * @returns {Promise<{ skipReason: string | null }>}
  */
 async function applyPlanIdMetadata(taskType, repoPath, metadata) {
-  if (!PLAN_PICK_TASK_TYPES.has(taskType)) return;
-  if (!repoPath) return;
+  if (!PLAN_PICK_TASK_TYPES.has(taskType)) return { skipReason: null };
+  if (!repoPath) return { skipReason: null };
   const planMd = await readFile(join(repoPath, 'PLAN.md'), 'utf-8').catch(() => '');
-  if (!planMd) return;
+  const gateDispatch = PLAN_GATE_TASK_TYPES.has(taskType);
+  if (!planMd) {
+    return { skipReason: gateDispatch ? 'PLAN.md missing or empty' : null };
+  }
   const items = parsePlanItems(planMd);
+
+  // Short-circuit on local evidence before the network round-trip to
+  // `git fetch --prune` + `gh pr list`. When every unchecked item is
+  // already blocked on human input, no in-flight scan can change that.
+  if (gateDispatch) {
+    const localOnly = diagnoseUnpickablePlan(null, new Set(), items);
+    if (localOnly) return { skipReason: localOnly };
+  }
+
   const knownIds = new Set(extractAllIds(planMd));
   const inFlight = await findInProgressIds(repoPath, knownIds).catch(() => new Set());
   const pick = pickFirstAvailable(items, inFlight);
-  if (pick?.id) metadata.planId = pick.id;
+  if (pick?.id) {
+    metadata.planId = pick.id;
+    return { skipReason: null };
+  }
+  if (!gateDispatch) return { skipReason: null };
+  return { skipReason: diagnoseUnpickablePlan(null, inFlight, items) };
 }
 
 /**
@@ -1901,16 +1931,22 @@ async function generateManagedAppImprovementTask(app, state) {
   initializePipelineMetadata(metadata);
   if (shouldSkipForPrecondition(metadata, app, nextType)) return null;
 
-  await applyPlanIdMetadata(nextType, app.repoPath, metadata);
+  const planMeta = await applyPlanIdMetadata(nextType, app.repoPath, metadata);
+  if (planMeta.skipReason) {
+    emitLog('info', `Skipping ${nextType} for ${app.name}: ${planMeta.skipReason}`, { appId: app.id });
+    return null;
+  }
   const planConstraintBlock = buildPlanConstraintBlock(metadata.planId);
 
   const promptTemplate = metadata.pipeline?.stages
     ? await taskSchedule.getStagePrompt(nextType, 0)
     : await taskSchedule.getTaskPrompt(nextType);
+  const reviewer = metadata.reviewer || 'copilot';
   const description = promptTemplate
     .replace(/\{appName\}/g, app.name)
     .replace(/\{repoPath\}/g, app.repoPath)
     .replace(/\{appId\}/g, app.id)
+    .replace(/\{reviewer\}/g, reviewer)
     .replace(/\{planConstraint\}/g, () => planConstraintBlock);
 
   applyAppWorktreeDefault(metadata, app);
@@ -2037,13 +2073,19 @@ async function generateManagedAppImprovementTaskForType(taskType, app, state, { 
     referenceDataBlock = blocks.join('\n\n---\n\n');
   }
 
-  await applyPlanIdMetadata(taskType, app.repoPath, metadata);
+  const planMeta = await applyPlanIdMetadata(taskType, app.repoPath, metadata);
+  if (planMeta.skipReason) {
+    emitLog('info', `Skipping ${taskType} for ${app.name}: ${planMeta.skipReason}`, { appId: app.id });
+    return null;
+  }
   const planConstraintBlock = buildPlanConstraintBlock(metadata.planId);
+  const reviewer = metadata.reviewer || 'copilot';
 
   const description = promptTemplate
     .replace(/\{appName\}/g, app.name)
     .replace(/\{repoPath\}/g, app.repoPath)
     .replace(/\{appId\}/g, app.id)
+    .replace(/\{reviewer\}/g, reviewer)
     // Use a replacer function — String.replace with a replacement STRING
     // interprets `$&`, `$1`, etc. as backreferences. Commit subjects/authors
     // legitimately contain `$` (env-var docs, prices, awk snippets) and

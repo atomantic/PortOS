@@ -18,6 +18,7 @@
  * @property {string|null} id      slug if present, else null
  * @property {string} rest         everything after the `[id]` slot (or after `[x]/[ ]` if no id)
  * @property {boolean} needsInput  true if line carries the `<!-- NEEDS_INPUT -->` marker
+ * @property {boolean} drifted     true if the immediately-preceding line starts with `> ⚠️ DRIFT:`
  */
 
 import { execGit } from './execGit.js';
@@ -26,6 +27,7 @@ import { spawn } from 'child_process';
 const SLUG_MAX_LEN = 50;
 const CHECKBOX_RE = /^(?<indent>\s*)-\s+\[(?<box>[ xX])\]\s+(?:\[(?<id>[a-z0-9][a-z0-9-]*)\]\s+)?(?<rest>.*)$/;
 const NEEDS_INPUT_RE = /<!--\s*NEEDS_INPUT\s*-->/;
+const DRIFT_LINE_RE = /^\s*>\s*⚠️\s*DRIFT:/;
 
 /**
  * Strip common markdown wrappers from a title fragment.
@@ -106,7 +108,8 @@ export function parsePlanItems(markdown) {
       checked: box.toLowerCase() === 'x',
       id: id || null,
       rest: rest || '',
-      needsInput: NEEDS_INPUT_RE.test(rest || '')
+      needsInput: NEEDS_INPUT_RE.test(rest || ''),
+      drifted: DRIFT_LINE_RE.test(lines[i - 1] || '')
     });
   }
   return items;
@@ -169,6 +172,43 @@ export function assignMissingIds(markdown, extraIds = []) {
 }
 
 /**
+ * Classify why no PLAN.md item is currently dispatchable, for `plan-task`
+ * gating. Returns null when an agent dispatch should proceed (an item is
+ * pickable, or the state is recoverable — e.g. missing IDs that `do-replan`
+ * will fix on its own pass). Returns a human-readable reason string when
+ * the dispatch should be skipped entirely so the LLM isn't spun up just
+ * to exit cleanly.
+ *
+ * Skip cases:
+ *   - PLAN.md missing or empty.
+ *   - No `- [ ]` items at all.
+ *   - Every unchecked item is blocked on human input (`<!-- NEEDS_INPUT -->`
+ *     annotation, or the preceding line starts with `> ⚠️ DRIFT:`).
+ *   - Every unchecked item is either blocked on human input OR already
+ *     claimed by another agent (in-flight by branch/PR scan).
+ *
+ * @param {string} planMd
+ * @param {Set<string>|string[]} inFlightIds  IDs currently claimed elsewhere
+ * @returns {string | null}
+ */
+export function diagnoseUnpickablePlan(planMd, inFlightIds = new Set(), parsedItems = null) {
+  if (!planMd && !parsedItems) return 'PLAN.md missing or empty';
+  const inFlight = inFlightIds instanceof Set ? inFlightIds : new Set(inFlightIds);
+  const items = parsedItems || parsePlanItems(planMd);
+  const unchecked = items.filter(i => !i.checked);
+  if (unchecked.length === 0) return 'PLAN.md has no unchecked items';
+
+  const isBlockedByHuman = (i) => i.needsInput || i.drifted;
+  if (unchecked.every(isBlockedByHuman)) {
+    return 'all PLAN.md items are blocked on human input (NEEDS_INPUT / DRIFT)';
+  }
+  if (unchecked.every(i => isBlockedByHuman(i) || (i.id && inFlight.has(i.id)))) {
+    return 'all PLAN.md items are claimed by other agents or blocked on human input';
+  }
+  return null;
+}
+
+/**
  * Pick the first `- [ ]` item that is not checked, not annotated NEEDS_INPUT,
  * not already in flight, and (if `requireId`) carries an ID.
  *
@@ -182,6 +222,7 @@ export function pickFirstAvailable(items, takenIds = new Set(), options = {}) {
   for (const item of items) {
     if (item.checked) continue;
     if (item.needsInput) continue;
+    if (item.drifted) continue;
     if (requireId && !item.id) continue;
     if (item.id && taken.has(item.id)) continue;
     return item;
