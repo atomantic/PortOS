@@ -54,6 +54,7 @@ export * from './useOpenClawAttachments.js';
 // === Sockets & lifecycle ===
 export * from './useSocket.js';
 export * from './useUpdateChecker.jsx';
+export * from './useVisibilityEvent.js';
 
 // === UI / interaction ===
 export * from './useArmedAction.js';

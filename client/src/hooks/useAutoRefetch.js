@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { useVisibilityEvent } from './useVisibilityEvent.js';
 
 /**
  * Auto-refetch on an interval, pausing while the tab is hidden and re-firing
@@ -66,8 +67,13 @@ export function useAutoRefetch(fetchFn, intervalMs, options = {}) {
     }
   }, [applyResult]);
 
+  const loadOnVisibleRef = useRef(null);
+
   useEffect(() => {
-    if (!enabled) return undefined;
+    if (!enabled) {
+      loadOnVisibleRef.current = null;
+      return undefined;
+    }
 
     let cancelled = false;
 
@@ -84,24 +90,20 @@ export function useAutoRefetch(fetchFn, intervalMs, options = {}) {
       }
     };
 
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') loadData();
-    };
-
+    loadOnVisibleRef.current = loadData;
     if (immediate) loadData();
     const interval = setInterval(loadData, intervalMs);
-    if (typeof document !== 'undefined') {
-      document.addEventListener('visibilitychange', handleVisibilityChange);
-    }
 
     return () => {
       cancelled = true;
       clearInterval(interval);
-      if (typeof document !== 'undefined') {
-        document.removeEventListener('visibilitychange', handleVisibilityChange);
-      }
+      loadOnVisibleRef.current = null;
     };
   }, [intervalMs, enabled, immediate, applyResult]);
+
+  useVisibilityEvent((state) => {
+    if (state === 'visible') loadOnVisibleRef.current?.();
+  });
 
   return { data, loading, refetch };
 }
