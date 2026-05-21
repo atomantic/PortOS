@@ -315,7 +315,13 @@ describe('universeBuilderCollectionHook', () => {
         },
       });
     }
-    await waitFor(() => existsSync(sidecarPath('batch-4.png')) && readSidecar('batch-4.png').entryName === 'Batchy');
+    // Gate on the run draining (every IIFE reached its `finally` and
+    // decremented pending → 0), not on batch-4 alone — the 5 IIFEs run in
+    // parallel via `Promise.all` and can complete out of order under CPU or
+    // disk-I/O pressure, so the highest-index file landing first leaves the
+    // assertion racing a still-pending mid-index write. Mirrors the
+    // drain-gate used by the earlier tests in this file.
+    await waitFor(() => hook.__testing.getActiveRuns().size === 0);
     for (let i = 0; i < 5; i += 1) {
       const sc = readSidecar(`batch-${i}.png`);
       expect(sc.entryName).toBe('Batchy');
