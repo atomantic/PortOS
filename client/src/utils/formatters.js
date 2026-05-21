@@ -198,13 +198,23 @@ export const TIMEOUT_INPUT_STEP_MS = 1000;
  * snapping the input back to the persisted value. Clamping here keeps the
  * client from emitting PUTs the server's Zod schema would 400 (e.g. a
  * stray `1` that "looks positive" but is below the 1s floor).
+ *
+ * Uses `Number(...)` + `Number.isInteger` instead of `parseInt` so the
+ * parse rules match the server's `Number(v)` + `z.number().int()` exactly —
+ * `"1e3"` parses as 1000 here (rejected: not an integer-shaped string),
+ * `"1000.5"` is rejected (not an integer), `"abc"` is NaN. parseInt would
+ * silently coerce `"1e3"` to 1 and `"1000.5"` to 1000, diverging from the
+ * server.
  */
 export function parseTimeoutMs(raw) {
   if (raw == null) return null;
   const trimmed = String(raw).trim();
   if (trimmed === '') return null;
-  const ms = Number.parseInt(trimmed, 10);
-  if (!Number.isFinite(ms) || ms < TIMEOUT_INPUT_MIN_MS || ms > TIMEOUT_INPUT_MAX_MS) return null;
+  // Require an explicit digit-only string so "1e3" / "1.5" / "0x10" can't
+  // sneak past Number()'s permissive coercion.
+  if (!/^\d+$/.test(trimmed)) return null;
+  const ms = Number(trimmed);
+  if (!Number.isInteger(ms) || ms < TIMEOUT_INPUT_MIN_MS || ms > TIMEOUT_INPUT_MAX_MS) return null;
   return ms;
 }
 

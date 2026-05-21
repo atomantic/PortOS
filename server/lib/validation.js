@@ -973,7 +973,13 @@ export const stageConfigUpdateSchema = z.object({
   ),
   returnsJson: z.boolean().optional(),
   variables: z.array(z.string()).optional(),
-}).passthrough();
+}).strip();
+// `.strip()` (Zod default) silently drops unknown keys instead of letting
+// them flow into `updateStageConfig`'s `{...existing, ...updatedConfig}`
+// spread. Stripping prevents prototype-pollution shapes (`__proto__`,
+// `constructor`, `prototype`) and config-key squatting from a client that
+// sends an unmodelled field. If a future stage field is added, extend the
+// schema rather than reintroducing `.passthrough()`.
 
 /**
  * Validate data against a Zod schema, throwing on failure.
