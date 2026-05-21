@@ -244,4 +244,55 @@ describe('stageRunner — runStagedLLM dispatch', () => {
     await runStagedLLM('s', {}, { source: 'pipeline-text-stage' });
     expect(runner.createRun).toHaveBeenCalledWith(expect.objectContaining({ source: 'pipeline-text-stage' }));
   });
+
+  it('passes stage.timeout to executeCliRun when set', async () => {
+    prompts.getStage.mockReturnValue({ timeout: 900000 });
+    providers.getActiveProvider.mockResolvedValue(cliProvider({ timeout: 5000 }));
+    runner.executeCliRun.mockImplementation(async (_id, _p, _pr, _cwd, _onData, onComplete, _t) => {
+      onComplete({ success: true });
+    });
+    await runStagedLLM('s', {});
+    // executeCliRun(runId, provider, prompt, cwd, onData, onComplete, timeout)
+    expect(runner.executeCliRun.mock.calls[0][6]).toBe(900000);
+  });
+
+  it('falls back to provider.timeout when stage.timeout is missing', async () => {
+    prompts.getStage.mockReturnValue(null);
+    providers.getActiveProvider.mockResolvedValue(cliProvider({ timeout: 5000 }));
+    runner.executeCliRun.mockImplementation(async (_id, _p, _pr, _cwd, _onData, onComplete, _t) => {
+      onComplete({ success: true });
+    });
+    await runStagedLLM('s', {});
+    expect(runner.executeCliRun.mock.calls[0][6]).toBe(5000);
+  });
+
+  it('coerces a legacy stringified stage.timeout to a number', async () => {
+    prompts.getStage.mockReturnValue({ timeout: '900000' });
+    providers.getActiveProvider.mockResolvedValue(cliProvider({ timeout: 5000 }));
+    runner.executeCliRun.mockImplementation(async (_id, _p, _pr, _cwd, _onData, onComplete, _t) => {
+      onComplete({ success: true });
+    });
+    await runStagedLLM('s', {});
+    expect(runner.executeCliRun.mock.calls[0][6]).toBe(900000);
+  });
+
+  it('rejects zero/negative stage.timeout instead of cancelling instantly', async () => {
+    prompts.getStage.mockReturnValue({ timeout: 0 });
+    providers.getActiveProvider.mockResolvedValue(cliProvider({ timeout: 5000 }));
+    runner.executeCliRun.mockImplementation(async (_id, _p, _pr, _cwd, _onData, onComplete, _t) => {
+      onComplete({ success: true });
+    });
+    await runStagedLLM('s', {});
+    expect(runner.executeCliRun.mock.calls[0][6]).toBe(5000);
+  });
+
+  it('honors timeoutOverride beating both stage.timeout and provider.timeout', async () => {
+    prompts.getStage.mockReturnValue({ timeout: 900000 });
+    providers.getActiveProvider.mockResolvedValue(cliProvider({ timeout: 5000 }));
+    runner.executeCliRun.mockImplementation(async (_id, _p, _pr, _cwd, _onData, onComplete, _t) => {
+      onComplete({ success: true });
+    });
+    await runStagedLLM('s', {}, { timeoutOverride: 1234 });
+    expect(runner.executeCliRun.mock.calls[0][6]).toBe(1234);
+  });
 });

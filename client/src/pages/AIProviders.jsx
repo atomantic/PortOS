@@ -3,6 +3,7 @@ import toast from '../components/ui/Toast';
 import * as api from '../services/api';
 import socket from '../services/socket';
 import { filterSelectableModels, providerTypeClass, isTuiProvider, isApiProvider, isProcessProvider } from '../utils/providers';
+import { formatDurationMs } from '../utils/formatters';
 
 export default function AIProviders() {
   const [providers, setProviders] = useState([]);
@@ -907,10 +908,19 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
             <label className="block text-sm text-gray-400 mb-1">Timeout (ms)</label>
             <input
               type="number"
+              inputMode="numeric"
+              min={1000}
+              max={1800000}
+              step={1000}
               value={formData.timeout}
               onChange={(e) => setFormData(prev => ({ ...prev, timeout: e.target.value }))}
               className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
             />
+            <p className="text-xs text-gray-500 mt-1">
+              {formData.timeout > 0
+                ? `≈ ${formatDurationMs(Number(formData.timeout))} per run`
+                : 'Per-call cap. Server max: 1,800,000 ms (30 min).'}
+            </p>
           </div>
 
           {/* Fallback Provider */}

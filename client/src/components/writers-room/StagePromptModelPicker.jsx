@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import toast from '../ui/Toast';
 import ProviderModelSelector from '../ProviderModelSelector';
-import { filterSelectableModels } from '../../utils/providers';
+import useFieldDraft from '../../hooks/useFieldDraft';
+import { filterSelectableModels, getProviderTimeout } from '../../utils/providers';
+import { formatDurationMs, parseTimeoutMs } from '../../utils/formatters';
 
 /**
  * Inline picker for a prompt stage's provider+model. Mirrors the Tier/Specific
@@ -12,6 +14,7 @@ import { filterSelectableModels } from '../../utils/providers';
 export default function StagePromptModelPicker({ stageName, label = 'Stage LLM', icon = null, hint = null }) {
   const [stage, setStage] = useState(null);
   const [providers, setProviders] = useState([]);
+  const [activeProviderId, setActiveProviderId] = useState(null);
   const [saving, setSaving] = useState(false);
   const [loaded, setLoaded] = useState(false);
 
@@ -24,6 +27,7 @@ export default function StagePromptModelPicker({ stageName, label = 'Stage LLM',
       if (cancelled) return;
       setStage(s || null);
       setProviders((p?.providers || []).filter((x) => x.enabled));
+      setActiveProviderId(p?.activeProvider || null);
       setLoaded(true);
     });
     return () => { cancelled = true; };
@@ -38,13 +42,17 @@ export default function StagePromptModelPicker({ stageName, label = 'Stage LLM',
     const prevStage = stage;
     setSaving(true);
     setStage((prev) => ({ ...prev, ...next }));
+    // Only include fields the caller actually wants to change. provider/model
+    // are sent together because the picker drives them as one switch;
+    // timeout is independent.
+    const body = {};
+    if ('provider' in next) body.provider = next.provider ?? null;
+    if ('model' in next) body.model = next.model;
+    if ('timeout' in next) body.timeout = next.timeout;
     const res = await fetch(`/api/prompts/${encodeURIComponent(stageName)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        provider: next.provider ?? null,
-        model: next.model,
-      }),
+      body: JSON.stringify(body),
     });
     setSaving(false);
     if (!res.ok) {
@@ -136,7 +144,62 @@ export default function StagePromptModelPicker({ stageName, label = 'Stage LLM',
         />
       )}
 
+      <StageTimeoutInput
+        value={stage.timeout}
+        providerFallback={getProviderTimeout(providers, stage.provider, activeProviderId)}
+        onCommit={(ms) => persist({ timeout: ms })}
+      />
+
       {hint && <div className="text-[10px] text-gray-500">{hint}</div>}
+    </div>
+  );
+}
+
+// Inline numeric input for stage.timeout (ms). Built on `useFieldDraft` so
+// the parent's optimistic state update doesn't race the user's keystrokes —
+// the hook returns the persisted value until the user actually types.
+function StageTimeoutInput({ value, providerFallback, onCommit }) {
+  const { value: draft, onChange, onBlur: hookBlur } = useFieldDraft(value, (raw) => {
+    const ms = parseTimeoutMs(raw);
+    // parseTimeoutMs returns null both for blank input (intentional clear)
+    // and for any non-positive/garbage value. Honor the clear; refuse the
+    // garbage by leaving `value` unchanged — useFieldDraft will snap the
+    // input back to persisted on the next render.
+    if (raw.trim() !== '' && ms == null) return;
+    if (ms !== value) onCommit(ms);
+  });
+
+  // Hint precedence: explicit override > provider fallback > nothing.
+  const usingDefault = value == null || value <= 0;
+  const effective = usingDefault ? providerFallback : value;
+  let hint;
+  if (effective == null) {
+    hint = 'No provider default set';
+  } else if (usingDefault) {
+    hint = `≈ ${formatDurationMs(effective)} · using provider default`;
+  } else {
+    hint = `≈ ${formatDurationMs(effective)}`;
+  }
+
+  return (
+    <div className="space-y-0.5">
+      <label className="block text-[9px] uppercase tracking-wider text-gray-500">
+        Timeout (ms)
+      </label>
+      <input
+        type="number"
+        inputMode="numeric"
+        min={1000}
+        max={1800000}
+        step={1000}
+        value={draft}
+        onChange={onChange}
+        onBlur={hookBlur}
+        onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+        placeholder={providerFallback != null ? String(providerFallback) : ''}
+        className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-[11px] text-gray-200"
+      />
+      <div className="text-[10px] text-gray-500">{hint}</div>
     </div>
   );
 }

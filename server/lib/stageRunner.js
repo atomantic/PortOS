@@ -175,6 +175,7 @@ export function extractJson(text, { promptToStrip } = {}) {
  * Options:
  *   - providerOverride: explicit provider id, beats stage.provider
  *   - modelOverride: explicit model id, beats stage.model
+ *   - timeoutOverride: explicit ms timeout, beats stage.timeout and the provider default
  *   - returnsJson: parse `content` via `extractJson` before returning
  *   - source: free-form tag persisted on the run record (e.g. 'pipeline-text-stage',
  *     'writers-room-evaluate') so /runs is filterable
@@ -191,6 +192,15 @@ export async function runStagedLLM(stageName, variables, options = {}) {
   // diverge from the args-baked value).
   const effectiveModel = resolveEffectiveModel(provider, resolvedModel);
 
+  // Per-stage timeout override; timeoutOverride from the caller beats
+  // everything. Coerce via `Number(...)` so a legacy on-disk string
+  // (`"900000"` from a pre-validation install) still resolves. A
+  // non-positive or non-finite value is rejected so a stray "0" saved
+  // into stage-config.json doesn't silently cancel runs instantly.
+  const stageTimeoutMs = Number(stage?.timeout);
+  const stageTimeout = Number.isFinite(stageTimeoutMs) && stageTimeoutMs > 0 ? stageTimeoutMs : undefined;
+  const effectiveTimeout = options.timeoutOverride ?? stageTimeout;
+
   const { runId } = await createRun({
     providerId: provider.id,
     model: effectiveModel,
@@ -203,6 +213,7 @@ export async function runStagedLLM(stageName, variables, options = {}) {
   // the LLM call starts), then thread that id through the shared runner.
   const { text } = await runPromptThroughProvider({
     provider, model: effectiveModel, prompt, source: options.source || 'staged-llm', runId,
+    timeout: effectiveTimeout,
   });
   // Codex CLI dumps the full transcript (banner + metadata + echoed prompt +
   // `codex\n<reply>` + token-stats footer). Carve out the assistant reply

@@ -60,6 +60,19 @@ export const enabledApiProviderFilter = (provider) => Boolean(provider?.enabled)
 export const isProcessProvider = (provider) => isCliProvider(provider) || isTuiProvider(provider);
 
 /**
+ * Resolve the provider whose timeout is the "fallback" for a stage — the
+ * stage's pinned provider when set, otherwise the active provider. Used to
+ * power the placeholder + hint on stage-timeout UIs in PromptManager and
+ * the Writers Room. Returns the timeout in ms (or `undefined` if neither
+ * provider is present, or its timeout isn't set).
+ */
+export const getProviderTimeout = (providers, stagePinnedId, activeProviderId) => {
+  const id = stagePinnedId || activeProviderId;
+  if (!id) return undefined;
+  return providers.find((p) => p.id === id)?.timeout;
+};
+
+/**
  * Tailwind chip classes for the provider type badge ('cli' / 'tui' / 'api').
  * Lifted out of AIProviders.jsx so other components can render the same
  * color treatment without redefining it.

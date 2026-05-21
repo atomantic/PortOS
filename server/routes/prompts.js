@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { stageConfigUpdateSchema, validateRequest } from '../lib/validation.js';
 import {
   listJobSkillTemplates,
   loadJobSkillTemplate,
@@ -137,11 +138,14 @@ export function createPortOSPromptsRoutes(aiToolkit) {
     res.json({ success: true, stageName });
   }));
 
-  // PUT /api/prompts/:stage - Update stage config and/or template
+  // PUT /api/prompts/:stage - Update stage config and/or template.
+  // Validate the config slice so a client sending `timeout: "abc"` 400s
+  // rather than persisting garbage that the runner would silently ignore.
   router.put('/:stage', asyncHandler(async (req, res) => {
-    const { template, ...config } = req.body;
+    const { template, ...rawConfig } = req.body;
 
-    if (Object.keys(config).length > 0) {
+    if (Object.keys(rawConfig).length > 0) {
+      const config = validateRequest(stageConfigUpdateSchema, rawConfig);
       await promptsService.updateStageConfig(req.params.stage, config);
     }
     if (template !== undefined) {

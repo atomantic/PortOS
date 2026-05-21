@@ -941,6 +941,40 @@ export function validate(schema, data) {
   };
 }
 
+// =============================================================================
+// PROMPT STAGE CONFIG (server/routes/prompts.js PUT /:stage body)
+// =============================================================================
+
+// Server-side ceiling matches the toolkit's provider/run timeout cap so a
+// stage override can't exceed the per-call timeout the runner will enforce
+// anyway. The minimum mirrors aiToolkit validation: 1s is the lowest value
+// that's still a meaningful timeout rather than an instant cancel.
+const STAGE_TIMEOUT_MIN_MS = 1000;
+const STAGE_TIMEOUT_MAX_MS = 1800000;
+
+// Accept either a number or a numeric string (UI inputs frequently serialize
+// as strings) and validate the resulting integer. `nullable` lets the client
+// clear the override explicitly with `null`; absence leaves it untouched.
+export const stageConfigUpdateSchema = z.object({
+  name: z.string().optional(),
+  description: z.string().optional(),
+  model: z.string().nullable().optional(),
+  provider: z.string().nullable().optional(),
+  timeout: z.preprocess(
+    // Treat empty string as a "clear override" (null). Coerce numeric strings
+    // to numbers so JSON-from-form clients that send "900000" parse correctly.
+    (v) => {
+      if (v === '' || v === null) return null;
+      if (v === undefined) return undefined;
+      const n = Number(v);
+      return Number.isFinite(n) ? n : v; // let invalid values fail the inner check
+    },
+    z.number().int().min(STAGE_TIMEOUT_MIN_MS).max(STAGE_TIMEOUT_MAX_MS).nullable().optional()
+  ),
+  returnsJson: z.boolean().optional(),
+  variables: z.array(z.string()).optional(),
+}).passthrough();
+
 /**
  * Validate data against a Zod schema, throwing on failure.
  * Returns parsed data on success, throws ServerError on failure.

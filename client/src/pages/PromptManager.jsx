@@ -3,7 +3,8 @@ import { FileText, Variable, RefreshCw, Save, Plus, Trash2, Eye, Briefcase } fro
 import toast from '../components/ui/Toast';
 import BrailleSpinner from '../components/BrailleSpinner';
 import ProviderModelSelector from '../components/ProviderModelSelector';
-import { filterSelectableModels } from '../utils/providers';
+import { filterSelectableModels, getProviderTimeout } from '../utils/providers';
+import { formatDurationMs, parseTimeoutMs } from '../utils/formatters';
 
 export default function PromptManager() {
   const [tab, setTab] = useState('stages');
@@ -48,6 +49,7 @@ export default function PromptManager() {
   const [jobSkillPreview, setJobSkillPreview] = useState('');
 
   const [providers, setProviders] = useState([]);
+  const [activeProviderId, setActiveProviderId] = useState(null);
   const [saving, setSaving] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(null);
 
@@ -67,6 +69,7 @@ export default function PromptManager() {
     setVariables(varsRes.variables || {});
     setJobSkills(jobSkillsRes.skills || []);
     setProviders((providersRes.providers || []).filter(p => p.enabled));
+    setActiveProviderId(providersRes.activeProvider || null);
     setLoading(false);
   };
 
@@ -74,7 +77,7 @@ export default function PromptManager() {
     setSelectedStage(name);
     const res = await fetch(`/api/prompts/${name}`).then(r => r.json());
     setStageTemplate(res.template || '');
-    setStageConfig({ name: res.name, description: res.description, model: res.model, provider: res.provider || null, variables: res.variables || [] });
+    setStageConfig({ name: res.name, description: res.description, model: res.model, provider: res.provider || null, timeout: res.timeout ?? null, variables: res.variables || [] });
     setPreview('');
   };
 
@@ -411,6 +414,27 @@ export default function PromptManager() {
                           onModelChange={(model) => setStageConfig({ ...stageConfig, model })}
                         />
                       )}
+                    </div>
+                    <div>
+                      <label className="block text-sm text-gray-400 mb-1">Timeout override (ms)</label>
+                      <input
+                        type="number"
+                        inputMode="numeric"
+                        min={1000}
+                        max={1800000}
+                        step={1000}
+                        value={stageConfig.timeout ?? ''}
+                        placeholder={String(
+                          getProviderTimeout(providers, stageConfig.provider, activeProviderId) ?? ''
+                        )}
+                        onChange={(e) => setStageConfig({ ...stageConfig, timeout: parseTimeoutMs(e.target.value) })}
+                        className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
+                      />
+                      <p className="text-xs text-gray-500 mt-1">
+                        {stageConfig.timeout && stageConfig.timeout > 0
+                          ? `≈ ${formatDurationMs(stageConfig.timeout)} per run`
+                          : 'Leave blank to use the provider default'}
+                      </p>
                     </div>
                     <div>
                       <label className="block text-sm text-gray-400 mb-1">Variables Used</label>

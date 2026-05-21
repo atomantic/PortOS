@@ -182,6 +182,20 @@ export function formatDateShort(value) {
 }
 
 /**
+ * Parse a raw string from a timeout (ms) input into a stored value.
+ * Returns `null` for blank input (caller treats as "clear override") and
+ * for any value that isn't a positive finite integer — the caller is then
+ * responsible for snapping the input back to the persisted value.
+ */
+export function parseTimeoutMs(raw) {
+  if (raw == null) return null;
+  const trimmed = String(raw).trim();
+  if (trimmed === '') return null;
+  const ms = Number.parseInt(trimmed, 10);
+  return Number.isFinite(ms) && ms > 0 ? ms : null;
+}
+
+/**
  * Format a duration in milliseconds as a human-readable string
  * @param {number} ms - Duration in milliseconds
  * @returns {string} Formatted duration (e.g., "45s", "3m 12s", "2h 5m")
