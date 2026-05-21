@@ -35,7 +35,7 @@ const detachIfEmpty = () => {
  * document-level listener as `useVisibilityEvent` so the listener count
  * stays at one regardless of how many hooks AND singletons subscribe.
  *
- * @param {(state: 'visible' | 'hidden') => void} fn
+ * @param {(state: DocumentVisibilityState) => void} fn
  * @returns {() => void} unsubscribe
  */
 export function subscribeVisibility(fn) {
@@ -51,7 +51,7 @@ export function subscribeVisibility(fn) {
  * Subscribe to `document.visibilitychange` via a shared singleton listener.
  * The handler receives the new `document.visibilityState` string.
  *
- * @param {(state: 'visible' | 'hidden') => void} handler
+ * @param {(state: DocumentVisibilityState) => void} handler
  */
 export function useVisibilityEvent(handler) {
   const handlerRef = useRef(handler);

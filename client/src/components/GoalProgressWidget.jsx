@@ -86,10 +86,9 @@ const GoalProgressWidget = memo(function GoalProgressWidget() {
       stalledCount: topLevel.filter(g => g.isStalled).length,
       avgProgress: topLevel.length ? Math.round(topLevel.reduce((sum, g) => sum + (g.progress || 0), 0) / topLevel.length) : 0
     };
-    // tick is intentionally a dep — when the wall-clock hour rolls over the
-    // derivation re-runs so a goal can cross the stall threshold without
-    // needing a new poll payload.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // `tick` is in the dep array on purpose — when the wall-clock hour rolls
+    // over the derivation re-runs so a goal can cross the stall threshold
+    // without needing a new poll payload.
   }, [goalsData, tick]);
 
   if (loading || !goals.length) return null;
