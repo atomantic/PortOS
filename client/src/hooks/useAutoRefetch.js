@@ -101,7 +101,7 @@ export function useAutoRefetch(fetchFn, intervalMs, options = {}) {
         document.removeEventListener('visibilitychange', handleVisibilityChange);
       }
     };
-  }, [intervalMs, enabled, immediate]);
+  }, [intervalMs, enabled, immediate, applyResult]);
 
   return { data, loading, refetch };
 }
