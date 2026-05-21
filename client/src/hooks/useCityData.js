@@ -58,30 +58,28 @@ export const useCityData = () => {
     // In-flight guard: a slow /system/health/details (>15s) would otherwise
     // let the next interval tick fire a concurrent request. Drop the new tick
     // when one is already pending; the next interval picks up fresh state.
-    if (healthInFlightRef.current) return null;
+    if (healthInFlightRef.current) return;
     healthInFlightRef.current = true;
     const health = await api.getSystemHealth({ silent: true }).catch(() => null);
     healthInFlightRef.current = false;
-    if (!health) return null;
+    if (!health) return;
     setSystemHealth(prev => {
       if (prev && healthSignature(prev) === healthSignature(health)) return prev;
       return health;
     });
-    return null;
   }, []);
 
   const fetchRunningAgents = useCallback(async () => {
     const agents = await api.getRunningAgents().catch(() => []);
     setRunningAgents(agents);
-    return null;
   }, []);
 
   // `immediate: false` — `fetchAll()` (run from the socket-setup effect below
   // and from agent socket events) already covers the initial fetch for both
   // running agents and system health; the hook then takes over the polling
   // cadence without double-fetching at mount.
-  useAutoRefetch(fetchRunningAgents, 10_000, { immediate: false });
-  useAutoRefetch(fetchHealth, 15_000, { immediate: false });
+  useAutoRefetch(fetchRunningAgents, 10_000, { immediate: false, pollOnly: true });
+  useAutoRefetch(fetchHealth, 15_000, { immediate: false, pollOnly: true });
 
   const agentMap = useMemo(() => {
     const map = new Map();

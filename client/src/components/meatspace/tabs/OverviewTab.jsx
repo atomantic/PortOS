@@ -161,10 +161,9 @@ export default function OverviewTab() {
     setEyes(eye);
     setCalendar(cal);
     setLoading(false);
-    return null;
   }, []);
 
-  useAutoRefetch(fetchData, 60_000);
+  useAutoRefetch(fetchData, 60_000, { pollOnly: true });
 
   if (loading) {
     return (

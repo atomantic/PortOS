@@ -62,7 +62,7 @@ grep -i "what you want to do" client/src/hooks/README.md
 | Hook | Purpose | Use when |
 |---|---|---|
 | `useArmedAction` | Two-click-arm `[armed, fire]` confirmation. | Destructive button needing a confirm tap. (Project memory: user finds this less discoverable — prefer inline confirm rows for new UI.) |
-| `useAutoRefetch` | Poll-based refetch on an interval. | Data needs periodic refresh (no socket / SSE available). |
+| `useAutoRefetch` | Poll-based refetch on an interval. `{ pollOnly: true }` skips internal data/loading state for side-effect-only callers (returns `{ refetch }` only). | Data needs periodic refresh (no socket / SSE available). |
 | `useClickOutside` | Fire `onOutside` on mousedown outside a ref. | Popovers, menus, drawers. |
 | `useCmdKSearch` | `⌘K` open/close state. | Anywhere that needs to toggle the palette. |
 | `useContainerWidth` | `[ref, width]` via ResizeObserver. | Layout responds to a specific container's width. |

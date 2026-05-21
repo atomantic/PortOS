@@ -209,10 +209,9 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
   const fetchStats = useCallback(async () => {
     const stats = await api.getCosAgentStats(agent.id).catch(() => null);
     setProcessStats(stats);
-    return null;
   }, [agent.id]);
 
-  useAutoRefetch(fetchStats, 5000, { enabled: !completed && !remote });
+  useAutoRefetch(fetchStats, 5000, { enabled: !completed && !remote, pollOnly: true });
 
   const handleKill = async () => {
     if (!onKill) return;

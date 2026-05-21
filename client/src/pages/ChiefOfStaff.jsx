@@ -151,7 +151,7 @@ export default function ChiefOfStaff() {
   }, [tab, validTabIds, navigate]);
 
   // Reduced polling since most updates come via socket events
-  useAutoRefetch(fetchData, 30_000);
+  useAutoRefetch(fetchData, 30_000, { pollOnly: true });
 
   useEffect(() => {
     if (!socket) return;
