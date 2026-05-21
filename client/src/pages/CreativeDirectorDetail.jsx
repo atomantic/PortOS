@@ -14,6 +14,9 @@ import SegmentsTab from '../components/creative-director/SegmentsTab.jsx';
 import RunsTab from '../components/creative-director/RunsTab.jsx';
 import ActiveAgentsBanner from '../components/creative-director/ActiveAgentsBanner.jsx';
 import { getCosAgents } from '../services/apiAgents.js';
+import { useAutoRefetch } from '../hooks/useAutoRefetch';
+
+const TERMINAL_PROJECT_STATUSES = new Set(['complete', 'failed', 'paused', 'draft']);
 
 const TABS = [
   { id: 'overview', label: 'Overview' },
@@ -32,10 +35,11 @@ export default function CreativeDirectorDetail() {
   const [loading, setLoading] = useState(true);
   const [activeAgents, setActiveAgents] = useState([]);
 
-  const fetchProject = useCallback(() => {
-    getCreativeDirectorProject(id)
-      .then((p) => { setProject(p); setLoading(false); })
-      .catch(() => { setProject(null); setLoading(false); });
+  const fetchProject = useCallback(async () => {
+    const p = await getCreativeDirectorProject(id).catch(() => null);
+    setProject(p);
+    setLoading(false);
+    return null;
   }, [id]);
 
   // Reset state ONLY when the route id changes, so navigating between
@@ -51,27 +55,22 @@ export default function CreativeDirectorDetail() {
   // Poll CoS agents in parallel so the Segments tab can flag the scene that's
   // currently being worked on, even before the agent PATCHes its status.
   // Filter by `taskId` prefix `cd-<projectId>-` (agentBridge's id scheme).
-  const fetchAgents = useCallback(() => {
-    getCosAgents()
-      .then((data) => {
-        const prefix = `cd-${id}-`;
-        const mine = (data || []).filter((a) => a.status === 'running' && (a.taskId || '').startsWith(prefix));
-        setActiveAgents(mine);
-      })
-      .catch(() => setActiveAgents([]));
+  const fetchAgents = useCallback(async () => {
+    const data = await getCosAgents().catch(() => []);
+    const prefix = `cd-${id}-`;
+    const mine = (data || []).filter((a) => a.status === 'running' && (a.taskId || '').startsWith(prefix));
+    setActiveAgents(mine);
+    return null;
   }, [id]);
 
-  useEffect(() => {
-    fetchProject();
-    fetchAgents();
-    // Only poll while the agent could still mutate the project. Once the
-    // status reaches a terminal state, skip the interval entirely so we're
-    // not constantly tearing down and rebuilding it on every refetch.
-    const status = project?.status;
-    if (status && ['complete', 'failed', 'paused', 'draft'].includes(status)) return;
-    const interval = setInterval(() => { fetchProject(); fetchAgents(); }, 5000);
-    return () => clearInterval(interval);
-  }, [fetchProject, fetchAgents, project?.status]);
+  // Only poll while the agent could still mutate the project. Once the
+  // status reaches a terminal state, the visibility-paused hook stops firing.
+  const pollEnabled = !project?.status || !TERMINAL_PROJECT_STATUSES.has(project.status);
+  const poll = useCallback(async () => {
+    await Promise.all([fetchProject(), fetchAgents()]);
+    return null;
+  }, [fetchProject, fetchAgents]);
+  useAutoRefetch(poll, 5000, { enabled: pollEnabled });
 
   const handleAction = async (kind) => {
     // Map action → past-tense label and optimistic status up-front.

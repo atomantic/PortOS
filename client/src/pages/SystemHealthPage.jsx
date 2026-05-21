@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { Activity, AlertTriangle, CheckCircle, XCircle, HardDrive, Cpu, Database, ServerCog, Zap } from 'lucide-react';
 import * as api from '../services/api';
 import toast from '../components/ui/Toast';
 import BrailleSpinner from '../components/BrailleSpinner';
+import { useAutoRefetch } from '../hooks/useAutoRefetch';
 
 const HEALTH_STYLE = {
   healthy: { color: 'text-port-success', bg: 'bg-port-success/10', icon: CheckCircle, label: 'Healthy' },
@@ -24,23 +25,24 @@ function barTone(pct, warn, critical) {
 }
 
 export default function SystemHealthPage() {
-  const [health, setHealth] = useState(null);
-  const [loading, setLoading] = useState(true);
   const [draft, setDraft] = useState(null);
   const [saving, setSaving] = useState(false);
+  // Tracks whether the user has acquired an editable draft. Cleared after a
+  // successful save so the next refetch re-seeds with the persisted thresholds.
+  const draftSeededRef = useRef(false);
 
-  const load = async ({ seedDraft = false } = {}) => {
-    const data = await api.getSystemHealth({ silent: true }).catch(() => null);
-    setHealth(data);
-    if (data?.thresholds && seedDraft) setDraft(data.thresholds);
-    setLoading(false);
-  };
+  const { data: health, loading, refetch } = useAutoRefetch(
+    () => api.getSystemHealth({ silent: true }).catch(() => null),
+    15_000,
+  );
 
+  // Seed the editable draft from server state on first load and after each save.
   useEffect(() => {
-    load({ seedDraft: true });
-    const interval = setInterval(() => load(), 15000);
-    return () => clearInterval(interval);
-  }, []);
+    if (health?.thresholds && !draftSeededRef.current) {
+      setDraft(health.thresholds);
+      draftSeededRef.current = true;
+    }
+  }, [health]);
 
   const handleSaveThresholds = async () => {
     if (!draft) return;
@@ -52,7 +54,8 @@ export default function SystemHealthPage() {
     setSaving(false);
     if (result) {
       toast.success('Thresholds saved');
-      load({ seedDraft: true });
+      draftSeededRef.current = false;
+      refetch();
     }
   };
 

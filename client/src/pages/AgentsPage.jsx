@@ -1,32 +1,23 @@
-import { useState, useEffect, Fragment } from 'react';
+import { useState, useCallback, Fragment } from 'react';
 import { RefreshCw, Activity, XCircle, Cpu, MemoryStick, Terminal } from 'lucide-react';
 import * as api from '../services/api';
+import { useAutoRefetch } from '../hooks/useAutoRefetch';
 
 export function AgentsPage() {
-  const [agents, setAgents] = useState([]);
-  const [loading, setLoading] = useState(true);
   const [killing, setKilling] = useState({});
   const [expandedPid, setExpandedPid] = useState(null);
   const REFRESH_INTERVAL = 3;
 
-  useEffect(() => {
-    loadAgents();
-    const interval = setInterval(loadAgents, REFRESH_INTERVAL * 1000);
-    return () => clearInterval(interval);
-  }, []);
-
-  const loadAgents = async () => {
-    const data = await api.getAgents().catch(() => []);
-    setAgents(data);
-    setLoading(false);
-  };
+  const loadAgents = useCallback(() => api.getAgents().catch(() => []), []);
+  const { data, loading, refetch } = useAutoRefetch(loadAgents, REFRESH_INTERVAL * 1000);
+  const agents = data ?? [];
 
   const handleKill = async (pid) => {
     setKilling(prev => ({ ...prev, [pid]: true }));
     await api.killAgent(pid).catch(() => null);
     setTimeout(() => {
       setKilling(prev => ({ ...prev, [pid]: false }));
-      loadAgents();
+      refetch();
     }, 1000);
   };
 
@@ -55,7 +46,7 @@ export function AgentsPage() {
           <span className="hidden sm:inline text-gray-500 text-sm">({REFRESH_INTERVAL}s)</span>
         </div>
         <button
-          onClick={loadAgents}
+          onClick={refetch}
           className="flex items-center justify-center gap-2 px-3 py-1.5 sm:px-4 sm:py-2 bg-port-card border border-port-border hover:border-gray-500 text-white text-sm rounded-lg transition-colors"
         >
           <RefreshCw size={14} className="sm:w-4 sm:h-4" />

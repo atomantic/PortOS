@@ -29,6 +29,7 @@ import Modal from '../../ui/Modal';
 import toast from '../../ui/Toast';
 import { copyToClipboard } from '../../../lib/clipboard';
 import { DEFAULT_REVIEWER } from '../constants';
+import { useAutoRefetch } from '../../../hooks/useAutoRefetch';
 
 // Extract task type from description (matches server-side extractTaskType)
 function extractTaskType(description) {
@@ -205,18 +206,13 @@ export default function AgentCard({ agent, onKill, onDelete, onResume, completed
   }, [completed]);
 
   // Fetch process stats for running agents (skip for remote peers)
-  useEffect(() => {
-    if (completed || remote) return;
+  const fetchStats = useCallback(async () => {
+    const stats = await api.getCosAgentStats(agent.id).catch(() => null);
+    setProcessStats(stats);
+    return null;
+  }, [agent.id]);
 
-    const fetchStats = async () => {
-      const stats = await api.getCosAgentStats(agent.id).catch(() => null);
-      setProcessStats(stats);
-    };
-
-    fetchStats();
-    const interval = setInterval(fetchStats, 5000); // Update every 5 seconds
-    return () => clearInterval(interval);
-  }, [completed, agent.id, remote]);
+  useAutoRefetch(fetchStats, 5000, { enabled: !completed && !remote });
 
   const handleKill = async () => {
     if (!onKill) return;

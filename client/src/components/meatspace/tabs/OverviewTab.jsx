@@ -1,9 +1,10 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Beer, Scale, HeartPulse, Dna, Eye, Dumbbell, Database, Rocket, Calendar } from 'lucide-react';
 import * as api from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
 import DeathClockCountdown from '../../DeathClockCountdown';
+import { useAutoRefetch } from '../../../hooks/useAutoRefetch';
 
 function HealthTile({ icon: Icon, iconColor, label, metrics, onClick }) {
   return (
@@ -160,13 +161,10 @@ export default function OverviewTab() {
     setEyes(eye);
     setCalendar(cal);
     setLoading(false);
+    return null;
   }, []);
 
-  useEffect(() => {
-    fetchData();
-    const interval = setInterval(fetchData, 60000);
-    return () => clearInterval(interval);
-  }, [fetchData]);
+  useAutoRefetch(fetchData, 60_000);
 
   if (loading) {
     return (

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { useAutoRefetch } from '../hooks/useAutoRefetch';
 import {
   Globe, Play, Square, RefreshCw, Settings, Activity,
   Monitor, Wifi, WifiOff, Clock, Cpu, MemoryStick,
@@ -48,6 +49,7 @@ export default function BrowserPage() {
       setStatus(data);
       setLoading(false);
     }
+    return null;
   }, []);
 
   const fetchLogs = useCallback(async () => {
@@ -58,16 +60,7 @@ export default function BrowserPage() {
     }
   }, []);
 
-  // Initial load
-  useEffect(() => {
-    fetchStatus();
-  }, [fetchStatus]);
-
-  // Poll for status updates
-  useEffect(() => {
-    const interval = setInterval(fetchStatus, POLL_INTERVAL);
-    return () => clearInterval(interval);
-  }, [fetchStatus]);
+  useAutoRefetch(fetchStatus, POLL_INTERVAL);
 
   // Load config when settings panel opens
   useEffect(() => {

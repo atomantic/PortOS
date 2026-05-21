@@ -5,6 +5,7 @@ import BrailleSpinner from '../../BrailleSpinner';
 import MarkdownOutput from '../../cos/MarkdownOutput';
 import * as api from '../../../services/api';
 import socket from '../../../services/socket';
+import { useAutoRefetch } from '../../../hooks/useAutoRefetch';
 
 const STEP_LABELS = {
   starting: 'Starting update',
@@ -34,7 +35,7 @@ export default function UpdateTab() {
   const [steps, setSteps] = useState([]);
   const [updateError, setUpdateError] = useState(null);
   const [polling, setPolling] = useState(false);
-  const pollRef = useRef(null);
+  const attemptsRef = useRef(0);
   const targetVersionRef = useRef(null);
   const preUpdateVersionRef = useRef(null);
 
@@ -85,7 +86,6 @@ export default function UpdateTab() {
     const handleError = ({ message }) => {
       setUpdating(false);
       setPolling(false);
-      if (pollRef.current) clearInterval(pollRef.current);
       toast.dismiss('portos-update-restart');
       setUpdateError(message);
     };
@@ -101,41 +101,31 @@ export default function UpdateTab() {
     };
   }, []);
 
-  // Poll health endpoint after restart to detect new version
+  // Poll health endpoint after restart to detect new version. The hook's
+  // `enabled: polling` gate handles teardown automatically when polling flips
+  // off; attemptsRef resets on every fresh polling cycle.
   useEffect(() => {
-    if (!polling) return;
-
-    let attempts = 0;
-    const maxAttempts = 30;
-
-    pollRef.current = setInterval(async () => {
-      attempts++;
-      const ok = await api.checkHealth()
-        .catch(() => null);
-
-      // Accept either an exact target match or any version different from
-      // the pre-update version (git pull may land on a newer version than
-      // the release tag that triggered the update)
-      const preUpdateVersion = preUpdateVersionRef.current;
-      if (ok?.version && (ok.version === targetVersionRef.current || (preUpdateVersion && ok.version !== preUpdateVersion))) {
-        clearInterval(pollRef.current);
-        setPolling(false);
-        toast.success(`Updated to v${ok.version}`, { id: 'portos-update-restart' });
-        setTimeout(() => window.location.reload(), 1000);
-        return;
-      }
-
-      if (attempts >= maxAttempts) {
-        clearInterval(pollRef.current);
-        setPolling(false);
-        toast.error('Restart timed out — try reloading manually', { id: 'portos-update-restart' });
-      }
-    }, 2000);
-
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
-    };
+    if (polling) attemptsRef.current = 0;
   }, [polling]);
+
+  const pollHealth = useCallback(async () => {
+    attemptsRef.current += 1;
+    const ok = await api.checkHealth().catch(() => null);
+    const preUpdateVersion = preUpdateVersionRef.current;
+    if (ok?.version && (ok.version === targetVersionRef.current || (preUpdateVersion && ok.version !== preUpdateVersion))) {
+      setPolling(false);
+      toast.success(`Updated to v${ok.version}`, { id: 'portos-update-restart' });
+      setTimeout(() => window.location.reload(), 1000);
+      return null;
+    }
+    if (attemptsRef.current >= 30) {
+      setPolling(false);
+      toast.error('Restart timed out — try reloading manually', { id: 'portos-update-restart' });
+    }
+    return null;
+  }, []);
+
+  useAutoRefetch(pollHealth, 2000, { enabled: polling });
 
   const handleCheck = async () => {
     setChecking(true);

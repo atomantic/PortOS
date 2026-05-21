@@ -1,9 +1,10 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import * as api from '../services/api';
 import {Brain as BrainIcon} from 'lucide-react';
 import BrailleSpinner from '../components/BrailleSpinner';
 import TabPills from '../components/ui/TabPills';
+import { useAutoRefetch } from '../hooks/useAutoRefetch';
 
 import { TABS } from '../components/brain/constants';
 import { timeAgo } from '../utils/formatters';
@@ -37,13 +38,10 @@ export default function Brain() {
     setSummary(summaryData);
     setSettings(settingsData);
     setLoading(false);
+    return null;
   }, []);
 
-  useEffect(() => {
-    fetchData();
-    const interval = setInterval(fetchData, 30000);
-    return () => clearInterval(interval);
-  }, [fetchData]);
+  useAutoRefetch(fetchData, 30_000);
 
   const handleTabChange = (tabId) => {
     navigate(`/brain/${tabId}`);

@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import * as api from '../services/api';
 import socket from '../services/socket';
+import { useAutoRefetch } from './useAutoRefetch';
 
 const healthSignature = (h) => {
   const warnings = (h?.warnings || []).map(w => `${w.type}:${w.message}`).join(';');
@@ -18,8 +19,6 @@ export const useCityData = () => {
   const [systemHealth, setSystemHealth] = useState(null);
   const [notificationCounts, setNotificationCounts] = useState({ unread: 0 });
   const [loading, setLoading] = useState(true);
-  const pollRef = useRef(null);
-  const healthPollRef = useRef(null);
   const logIdRef = useRef(0);
 
   const fetchApps = useCallback(async () => {
@@ -59,16 +58,26 @@ export const useCityData = () => {
     // In-flight guard: a slow /system/health/details (>15s) would otherwise
     // let the next interval tick fire a concurrent request. Drop the new tick
     // when one is already pending; the next interval picks up fresh state.
-    if (healthInFlightRef.current) return;
+    if (healthInFlightRef.current) return null;
     healthInFlightRef.current = true;
     const health = await api.getSystemHealth({ silent: true }).catch(() => null);
     healthInFlightRef.current = false;
-    if (!health) return;
+    if (!health) return null;
     setSystemHealth(prev => {
       if (prev && healthSignature(prev) === healthSignature(health)) return prev;
       return health;
     });
+    return null;
   }, []);
+
+  const fetchRunningAgents = useCallback(async () => {
+    const agents = await api.getRunningAgents().catch(() => []);
+    setRunningAgents(agents);
+    return null;
+  }, []);
+
+  useAutoRefetch(fetchRunningAgents, 10_000);
+  useAutoRefetch(fetchHealth, 15_000);
 
   const agentMap = useMemo(() => {
     const map = new Map();
@@ -139,13 +148,6 @@ export const useCityData = () => {
     socket.on('notifications:count', handleNotifCount);
     socket.on('notifications:cleared', handleNotifCleared);
 
-    pollRef.current = setInterval(async () => {
-      const agents = await api.getRunningAgents().catch(() => []);
-      setRunningAgents(agents);
-    }, 10000);
-
-    healthPollRef.current = setInterval(fetchHealth, 15000);
-
     // Subscribe but do NOT unsubscribe on cleanup. The cos:* and notifications:*
     // namespaces are shared (useNotifications in Layout, useAgentFeedbackToast).
     // Server uses a per-socket Set, so unsubscribing here would yank the
@@ -161,10 +163,8 @@ export const useCityData = () => {
       socket.off('cos:status', handleCosStatus);
       socket.off('notifications:count', handleNotifCount);
       socket.off('notifications:cleared', handleNotifCleared);
-      clearInterval(pollRef.current);
-      clearInterval(healthPollRef.current);
     };
-  }, [fetchAll, fetchApps, fetchHealth]);
+  }, [fetchAll, fetchApps]);
 
   return {
     apps,

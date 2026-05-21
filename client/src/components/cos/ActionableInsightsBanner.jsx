@@ -1,5 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useAutoRefetch } from '../../hooks/useAutoRefetch';
 import toast from '../ui/Toast';
 import {
   AlertCircle,
@@ -60,23 +61,14 @@ const PRIORITY_STYLES = {
 };
 
 export default function ActionableInsightsBanner({ onTaskUnblocked }) {
-  const [data, setData] = useState(null);
   const [dismissed, setDismissed] = useState([]);
   const [expanded, setExpanded] = useState({});
-  const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
 
-  const loadInsights = async () => {
-    const result = await api.getCosActionableInsights().catch(() => null);
-    setData(result);
-    setLoading(false);
-  };
-
-  useEffect(() => {
-    loadInsights();
-    const interval = setInterval(loadInsights, 60000);
-    return () => clearInterval(interval);
-  }, []);
+  const { data, loading } = useAutoRefetch(
+    () => api.getCosActionableInsights().catch(() => null),
+    60_000,
+  );
 
   const handleDismiss = (type) => {
     setDismissed(prev => [...prev, type]);

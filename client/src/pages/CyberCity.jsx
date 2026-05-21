@@ -3,6 +3,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { useCityData } from '../hooks/useCityData';
 import useCityAudio from '../hooks/useCityAudio';
 import useKeyboardControls from '../hooks/useKeyboardControls';
+import { useAutoRefetch } from '../hooks/useAutoRefetch';
 import * as api from '../services/api';
 import CityScene from '../components/city/CityScene';
 import CityHud from '../components/city/CityHud';
@@ -17,7 +18,6 @@ function CyberCityInner() {
   const { playSfx } = useCityAudio(settings);
   const navigate = useNavigate();
   const location = useLocation();
-  const [productivityData, setProductivityData] = useState(null);
   const [filter, setFilter] = useState(() => {
     // try/catch is necessary because sessionStorage values are external state
     // a corrupted/older-schema entry would throw and crash the page render.
@@ -61,16 +61,11 @@ function CyberCityInner() {
 
   const keysRef = useKeyboardControls(handleToggleExploration);
 
-  // Fetch productivity data for HUD vitals and billboards
-  useEffect(() => {
-    const fetchProductivity = async () => {
-      const data = await api.getCosQuickSummary().catch(() => null);
-      setProductivityData(data);
-    };
-    fetchProductivity();
-    const interval = setInterval(fetchProductivity, 60000);
-    return () => clearInterval(interval);
-  }, []);
+  // Productivity data for HUD vitals and billboards
+  const { data: productivityData } = useAutoRefetch(
+    () => api.getCosQuickSummary().catch(() => null),
+    60_000,
+  );
 
   const handleBuildingClick = useCallback((app) => {
     if (app?.id) {

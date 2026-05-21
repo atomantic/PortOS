@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import {
   CheckCircle,
   Flame,
@@ -17,28 +17,18 @@ import {
   Sunset
 } from 'lucide-react';
 import * as api from '../../services/api';
+import { useAutoRefetch } from '../../hooks/useAutoRefetch';
 
 /**
  * QuickSummary - At-a-glance dashboard widget for CoS status
  * Shows today's progress, streak status, next job, and pending work
  */
 export default function QuickSummary() {
-  const [summary, setSummary] = useState(null);
-  const [loading, setLoading] = useState(true);
   const [showAccomplishments, setShowAccomplishments] = useState(false);
-
-  useEffect(() => {
-    const loadSummary = async () => {
-      const data = await api.getCosQuickSummary().catch(() => null);
-      setSummary(data);
-      setLoading(false);
-    };
-
-    loadSummary();
-    // Refresh every 30 seconds
-    const interval = setInterval(loadSummary, 30000);
-    return () => clearInterval(interval);
-  }, []);
+  const { data: summary, loading } = useAutoRefetch(
+    () => api.getCosQuickSummary().catch(() => null),
+    30_000,
+  );
 
   if (loading || !summary) {
     return null;

@@ -26,6 +26,7 @@ import LoraPicker from '../components/imageGen/LoraPicker';
 import MediaJobsQueue from '../components/media/MediaJobsQueue';
 import { useMediaCompletionRefresh } from '../hooks/useMediaCompletionRefresh';
 import { useMediaAnnotations } from '../hooks/useMediaAnnotations';
+import { useAutoRefetch } from '../hooks/useAutoRefetch';
 import usePreviewRoute from '../hooks/usePreviewRoute';
 import {
   Image as ImageIcon, Sparkles, Download, RefreshCw, Settings as SettingsIcon,
@@ -536,29 +537,24 @@ export default function ImageGen() {
   // 4s clock settle.
   const queueActive = pendingQueued > 0;
   const lastBusyRef = useRef(0);
-  useEffect(() => {
-    if (!queueActive) return;
-    let cancelled = false;
-    const tick = async () => {
-      const jobs = await listMediaJobs({ kind: 'image' }).catch(() => null);
-      if (cancelled || !jobs) return;
-      const stillBusy = jobs.filter((j) => j.status === 'queued' || j.status === 'running').length;
-      // Subtract 1 for the actively-tracked render (when generating). Floor
-      // at 0 so a transient counting glitch doesn't show "−1 queued".
-      const next = Math.max(0, stillBusy - (generating ? 1 : 0));
-      // Only refresh gallery on a busy-count drop — that's the signal a
-      // queued job just completed. Otherwise polling re-fetches the gallery
-      // every 4s for nothing.
-      if (stillBusy < lastBusyRef.current) refreshGallery();
-      lastBusyRef.current = stillBusy;
-      // No-op guard: same value setState would still trigger a render, so
-      // explicitly skip when nothing changed.
-      setPendingQueued((prev) => (prev === next ? prev : next));
-    };
-    tick();
-    const interval = setInterval(tick, 4000);
-    return () => { cancelled = true; clearInterval(interval); };
-  }, [queueActive, generating]);  // eslint-disable-line react-hooks/exhaustive-deps
+  const pollQueue = useCallback(async () => {
+    const jobs = await listMediaJobs({ kind: 'image' }).catch(() => null);
+    if (!jobs) return null;
+    const stillBusy = jobs.filter((j) => j.status === 'queued' || j.status === 'running').length;
+    // Subtract 1 for the actively-tracked render (when generating). Floor
+    // at 0 so a transient counting glitch doesn't show "−1 queued".
+    const next = Math.max(0, stillBusy - (generating ? 1 : 0));
+    // Only refresh gallery on a busy-count drop — that's the signal a
+    // queued job just completed. Otherwise polling re-fetches the gallery
+    // every 4s for nothing.
+    if (stillBusy < lastBusyRef.current) refreshGallery();
+    lastBusyRef.current = stillBusy;
+    // No-op guard: same value setState would still trigger a render, so
+    // explicitly skip when nothing changed.
+    setPendingQueued((prev) => (prev === next ? prev : next));
+    return null;
+  }, [generating, refreshGallery]);
+  useAutoRefetch(pollQueue, 4000, { enabled: queueActive });
 
   const flux2Issue = isFlux2Model && flux2Status
     ? (!flux2Status.venvInstalled ? 'venv' : !flux2Status.hfTokenPresent ? 'token' : null)

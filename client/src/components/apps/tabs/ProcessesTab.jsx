@@ -3,6 +3,7 @@ import { Maximize2, X } from 'lucide-react';
 import * as api from '../../../services/api';
 import socket from '../../../services/socket';
 import BrailleSpinner from '../../BrailleSpinner';
+import { useAutoRefetch } from '../../../hooks/useAutoRefetch';
 
 const formatMemory = (bytes) => {
   if (!bytes) return '0 MB';
@@ -29,8 +30,6 @@ const getStatusClasses = (status) => {
 };
 
 export default function ProcessesTab({ pm2ProcessNames, filterFn }) {
-  const [processes, setProcesses] = useState([]);
-  const [loading, setLoading] = useState(true);
   const [expandedProcess, setExpandedProcess] = useState(null);
   const [logs, setLogs] = useState([]);
   const [restarting, setRestarting] = useState({});
@@ -40,17 +39,11 @@ export default function ProcessesTab({ pm2ProcessNames, filterFn }) {
   const logsRef = useRef(null);
   const fullscreenLogsRef = useRef(null);
 
-  const loadProcesses = async () => {
-    const data = await api.getProcessesList().catch(() => []);
-    setProcesses(data);
-    setLoading(false);
-  };
-
-  useEffect(() => {
-    loadProcesses();
-    const interval = setInterval(loadProcesses, 5000);
-    return () => clearInterval(interval);
-  }, []);
+  const { data, loading } = useAutoRefetch(
+    () => api.getProcessesList().catch(() => []),
+    5000,
+  );
+  const processes = data ?? [];
 
   useEffect(() => {
     if (!expandedProcess) {

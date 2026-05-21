@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useSocket } from '../hooks/useSocket';
 import { useLocalStorageBool } from '../hooks/useLocalStorageBool';
 import useNextEvalCountdown from '../hooks/useNextEvalCountdown';
+import { useAutoRefetch } from '../hooks/useAutoRefetch';
 import * as api from '../services/api';
 import { Play, Square, Clock, CheckCircle, AlertCircle, Cpu, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Brain, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import toast from '../components/ui/Toast';
@@ -149,12 +150,8 @@ export default function ChiefOfStaff() {
     }
   }, [tab, validTabIds, navigate]);
 
-  useEffect(() => {
-    fetchData();
-    // Reduced polling since most updates come via socket events
-    const interval = setInterval(fetchData, 30000);
-    return () => clearInterval(interval);
-  }, [fetchData]);
+  // Reduced polling since most updates come via socket events
+  useAutoRefetch(fetchData, 30_000);
 
   useEffect(() => {
     if (!socket) return;

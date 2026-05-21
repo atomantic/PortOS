@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState, useCallback } from 'react';
+import { useMemo, useState, useCallback } from 'react';
 import { ListOrdered, Image as ImageIcon, Film, X, RefreshCw, ChevronDown, ChevronRight, Trash2, RotateCw, Zap, Pencil } from 'lucide-react';
 import toast from '../ui/Toast';
 import { listMediaJobs, cancelMediaJob, cancelQueuedMediaJobs, deleteMediaJob, retryMediaJob, runMediaJobNow } from '../../services/apiMediaJobs.js';
 import { IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
+import { useAutoRefetch } from '../../hooks/useAutoRefetch';
 
 const STATUS_BADGE = {
   queued: 'bg-port-border text-port-text-muted',
@@ -38,17 +39,14 @@ export default function MediaJobsQueue({ kind, recentLimit = 10, className = '' 
   const [loading, setLoading] = useState(true);
   const [showRecent, setShowRecent] = useState(false);
 
-  const fetchJobs = useCallback(() => {
-    listMediaJobs(kind ? { kind } : {})
-      .then((data) => { setJobs(data || []); setLoading(false); })
-      .catch(() => setLoading(false));
+  const fetchJobs = useCallback(async () => {
+    const data = await listMediaJobs(kind ? { kind } : {}).catch(() => null);
+    if (data) setJobs(data);
+    setLoading(false);
+    return null;
   }, [kind]);
 
-  useEffect(() => {
-    fetchJobs();
-    const t = setInterval(fetchJobs, 3000);
-    return () => clearInterval(t);
-  }, [fetchJobs]);
+  useAutoRefetch(fetchJobs, 3000);
 
   const handleCancel = (id) => cancelMediaJob(id)
     .then(() => {

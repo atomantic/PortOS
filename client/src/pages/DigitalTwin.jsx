@@ -1,9 +1,10 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import * as api from '../services/api';
 import { Heart } from 'lucide-react';
 import BrailleSpinner from '../components/BrailleSpinner';
 import TabPills from '../components/ui/TabPills';
+import { useAutoRefetch } from '../hooks/useAutoRefetch';
 
 import { TABS, getHealthColor, getHealthLabel } from '../components/digital-twin/constants';
 
@@ -38,13 +39,10 @@ export default function DigitalTwin() {
     setStatus(statusData);
     setSettings(settingsData);
     setLoading(false);
+    return null;
   }, []);
 
-  useEffect(() => {
-    fetchData();
-    const interval = setInterval(fetchData, 30000);
-    return () => clearInterval(interval);
-  }, [fetchData]);
+  useAutoRefetch(fetchData, 30_000);
 
   const handleTabChange = (tabId) => {
     navigate(`/digital-twin/${tabId}`);

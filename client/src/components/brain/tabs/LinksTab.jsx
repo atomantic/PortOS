@@ -20,6 +20,7 @@ import {
 import BrailleSpinner from '../../BrailleSpinner';
 import toast from '../../ui/Toast';
 import { timeAgo } from '../../../utils/formatters';
+import { useAutoRefetch } from '../../../hooks/useAutoRefetch';
 
 const LINK_TYPE_COLORS = {
   github: 'bg-purple-500/20 text-purple-400 border-purple-500/30',
@@ -63,20 +64,16 @@ export default function LinksTab({ onRefresh }) {
     setLinks(data.links || []);
     setTotal(data.total || 0);
     setLoading(false);
+    return null;
   }, [filter]);
 
   useEffect(() => {
     fetchLinks();
   }, [fetchLinks]);
 
-  // Poll for clone status updates
-  useEffect(() => {
-    const cloningLinks = links.filter(l => l.cloneStatus === 'cloning' || l.cloneStatus === 'pending');
-    if (cloningLinks.length === 0) return;
-
-    const interval = setInterval(fetchLinks, 3000);
-    return () => clearInterval(interval);
-  }, [links, fetchLinks]);
+  // Poll for clone status updates while at least one link is in flight.
+  const hasInFlightClone = links.some(l => l.cloneStatus === 'cloning' || l.cloneStatus === 'pending');
+  useAutoRefetch(fetchLinks, 3000, { enabled: hasInFlightClone });
 
   const handleSubmit = async (e) => {
     e.preventDefault();

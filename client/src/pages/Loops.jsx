@@ -9,6 +9,7 @@ import toast from '../components/ui/Toast';
 import { timeAgo } from '../components/feature-agents/constants';
 import { formatInterval } from '../components/cos/constants';
 import BrailleSpinner from '../components/BrailleSpinner';
+import { useAutoRefetch } from '../hooks/useAutoRefetch';
 
 const INTERVAL_PRESETS = [
   { label: '30s', value: '30s' },
@@ -342,6 +343,7 @@ export default function Loops() {
     const data = await api.getLoops().catch(() => []);
     setLoops(data);
     setLoading(false);
+    return null;
   }, []);
 
   const fetchProviders = useCallback(async () => {
@@ -349,24 +351,20 @@ export default function Loops() {
     setProviders(data.providers || []);
   }, []);
 
+  // Fallback poll for iteration count updates (socket events cover state changes)
+  useAutoRefetch(fetchLoops, 60_000);
+
   useEffect(() => {
-    fetchLoops();
     fetchProviders();
 
-    // Subscribe to loop events
     socket.emit('loops:subscribe');
-
     const refreshEvents = ['loop:created', 'loop:stopped', 'loop:resumed', 'loop:deleted', 'loop:updated'];
     const handleRefresh = () => fetchLoops();
     refreshEvents.forEach(e => socket.on(e, handleRefresh));
 
-    // Fallback poll for iteration count updates (socket events cover state changes)
-    const poll = setInterval(fetchLoops, 60000);
-
     return () => {
       socket.emit('loops:unsubscribe');
       refreshEvents.forEach(e => socket.off(e, handleRefresh));
-      clearInterval(poll);
     };
   }, [fetchLoops, fetchProviders]);
 

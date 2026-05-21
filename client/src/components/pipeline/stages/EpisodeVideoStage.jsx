@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Film, ExternalLink, Loader2, Sparkles, AlertCircle, CheckCircle2 } from 'lucide-react';
 import toast from '../../ui/Toast';
@@ -7,6 +7,7 @@ import { getCreativeDirectorProject } from '../../../services/apiCreativeDirecto
 import { getSceneStatusBadge, PROJECT_STATUS_LABEL } from '../../creative-director/sceneStatus';
 import ScenePreview from '../../creative-director/ScenePreview';
 import { useAsyncAction } from '../../../hooks/useAsyncAction';
+import { useAutoRefetch } from '../../../hooks/useAutoRefetch';
 
 const POLL_INTERVAL_MS = 4000;
 
@@ -35,45 +36,32 @@ export default function EpisodeVideoStage({ issue, series, onStageUpdate }) {
   // for an unstarted episodeVideo stage.
   const [aspectRatio, setAspectRatio] = useState(stage.aspectRatio || '16:9');
   const [quality, setQuality] = useState(stage.quality || 'standard');
-  const intervalRef = useRef(null);
 
-  // Single polling effect keyed only on cdProjectId so a status flip doesn't
-  // tear down and rebuild the interval (each tear-down fired an immediate
-  // fetch → setState → effect re-run, producing a fetch storm at every
-  // transition). The interval clears itself once status becomes terminal.
+  // Clear the displayed project when the cdProjectId itself goes away
+  // (stage reset). Fresh project ids flow in via the poll below.
   useEffect(() => {
-    if (!cdProjectId) {
-      setCdProject(null);
-      return undefined;
-    }
-    let cancelled = false;
-    const stop = () => {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-        intervalRef.current = null;
-      }
-    };
-    const fetchOnce = async () => {
-      if (document.hidden) return;
+    if (!cdProjectId) setCdProject(null);
+  }, [cdProjectId]);
+
+  // Poll while the project could still mutate. Pauses on hidden tab via
+  // useAutoRefetch's visibility short-circuit and stops once status is terminal.
+  useAutoRefetch(
+    async () => {
       const p = await getCreativeDirectorProject(cdProjectId, { slim: true }).catch((err) => {
-        if (!cancelled) console.log(`pipeline:episode poll error ${err.message}`);
+        console.log(`pipeline:episode poll error ${err.message}`);
         return null;
       });
-      if (cancelled || !p) return;
+      if (!p) return null;
       // Skip the setState (and downstream re-render + scene re-sort) when the
       // poll returns the same monotonic snapshot we already hold.
       setCdProject((prev) => (
         prev && prev.updatedAt === p.updatedAt && prev.status === p.status ? prev : p
       ));
-      if (isTerminalProjectStatus(p.status)) stop();
-    };
-    fetchOnce();
-    intervalRef.current = setInterval(fetchOnce, POLL_INTERVAL_MS);
-    return () => {
-      cancelled = true;
-      stop();
-    };
-  }, [cdProjectId]);
+      return null;
+    },
+    POLL_INTERVAL_MS,
+    { enabled: !!cdProjectId && !isTerminalProjectStatus(cdProject?.status) },
+  );
 
   const [runSubmit, submitting] = useAsyncAction(
     async ({ force }) => {
