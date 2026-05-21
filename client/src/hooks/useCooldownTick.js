@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState, useEffect } from 'react';
 
 // Shared 1-second cooldown ticker for the agents tabs. Three near-identical
 // implementations (`OverviewTab`, `ToolsTab`, `WorldTab`) each ran their own
@@ -15,14 +15,16 @@ import { useEffect, useRef, useState } from 'react';
 // interval's lifecycle is driven by `cooldownEnds` alone, matching the
 // originals where the surrounding account/refetch dep only affected the
 // *closure*, not the timer's start/stop.
-export function useCooldownTick({ cooldownEnds, onAllExpired }) {
+export function useCooldownTick(options = {}) {
+  const { cooldownEnds = {}, onAllExpired } = options;
   const [, setTick] = useState(0);
+  // Update the ref during render (not in a useEffect) so the latest callback
+  // is always visible to the interval tick — a useEffect-driven ref update
+  // can lag one render behind and, if `onAllExpired` changes right before
+  // the expiry tick, the interval would fire the previous closure once.
+  // Pattern mirrored from usePostSession.js / useCityAudio.js.
   const callbackRef = useRef(onAllExpired);
-  // Refresh the latest callback only when it actually changes — otherwise the
-  // 1s `setTick` re-renders would run this effect every tick for no reason.
-  useEffect(() => {
-    callbackRef.current = onAllExpired;
-  }, [onAllExpired]);
+  callbackRef.current = onAllExpired;
 
   useEffect(() => {
     const hasActive = Object.values(cooldownEnds).some((end) => end > Date.now());

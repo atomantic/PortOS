@@ -94,6 +94,16 @@ describe('useCooldownTick', () => {
     expect(() => act(() => vi.advanceTimersByTime(2_000))).not.toThrow();
   });
 
+  it('does not crash when called with no options (defaults to no active cooldowns)', () => {
+    // Regression guard: useCooldownTick() used to destructure required
+    // fields and throw before React could surface the misuse. The hook
+    // now defaults `options` to `{}` and `cooldownEnds` to `{}`, so a
+    // missing-args call is harmless — same steady state as "no active
+    // cooldowns" (no interval armed, callback never fires).
+    expect(() => renderHook(() => useCooldownTick())).not.toThrow();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('clears the interval after the expiry tick even if the caller never updates cooldownEnds', () => {
     // Regression guard for Copilot review on PR #422: a no-op onAllExpired
     // (or a network error in the caller) must not leave the 1s interval
