@@ -56,14 +56,23 @@ const STAGE_TIMEOUT_MAX_MS = 1800000;
 
 // Normalize a stage- or caller-supplied timeout into a positive integer
 // milliseconds value (or `undefined` to mean "fall through to provider
-// default"). Reject NaN, non-integer, and anything outside
-// [STAGE_TIMEOUT_MIN_MS, STAGE_TIMEOUT_MAX_MS] — matches parseTimeoutMs
-// on the client and the route validator's range. A bogus `1ms` from a
-// pre-validation caller would otherwise produce near-instant cancels
-// rather than a meaningful run.
+// default"). Reject NaN, non-integer, exponent/hex string forms, and
+// anything outside [STAGE_TIMEOUT_MIN_MS, STAGE_TIMEOUT_MAX_MS] — matches
+// parseTimeoutMs on the client and the route validator's preprocess. The
+// digit-only string gate is critical: `Number('1e3')` is 1000 and
+// `Number.isInteger(1000)` is true, so without the gate an internal caller
+// passing `'1e3'` would be silently accepted here while the validator
+// rejects the same shape.
 function normalizeTimeout(raw) {
   if (raw == null) return undefined;
-  const n = Number(raw);
+  let n;
+  if (typeof raw === 'number') {
+    n = raw;
+  } else if (typeof raw === 'string' && /^\d+$/.test(raw.trim())) {
+    n = Number(raw.trim());
+  } else {
+    return undefined;
+  }
   if (!Number.isInteger(n) || n < STAGE_TIMEOUT_MIN_MS || n > STAGE_TIMEOUT_MAX_MS) return undefined;
   return n;
 }

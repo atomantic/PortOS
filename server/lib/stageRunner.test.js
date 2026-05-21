@@ -267,7 +267,7 @@ describe('stageRunner — runStagedLLM dispatch', () => {
     expect(runner.executeCliRun.mock.calls[0][6]).toBe(5000);
   });
 
-  it('coerces a legacy stringified stage.timeout to a number', async () => {
+  it('coerces a legacy digit-only stringified stage.timeout to a number', async () => {
     prompts.getStage.mockReturnValue({ timeout: '900000' });
     providers.getActiveProvider.mockResolvedValue(cliProvider({ timeout: 5000 }));
     runner.executeCliRun.mockImplementation(async (_id, _p, _pr, _cwd, _onData, onComplete, _t) => {
@@ -275,6 +275,19 @@ describe('stageRunner — runStagedLLM dispatch', () => {
     });
     await runStagedLLM('s', {});
     expect(runner.executeCliRun.mock.calls[0][6]).toBe(900000);
+  });
+
+  it('rejects exponent/hex/float string forms (matches parseTimeoutMs)', async () => {
+    // Number('1e3') === 1000 would silently sneak past a bare Number()
+    // coercion. The digit-only gate keeps the runner in lockstep with
+    // the route validator and client parser.
+    prompts.getStage.mockReturnValue({ timeout: '1e3' });
+    providers.getActiveProvider.mockResolvedValue(cliProvider({ timeout: 5000 }));
+    runner.executeCliRun.mockImplementation(async (_id, _p, _pr, _cwd, _onData, onComplete, _t) => {
+      onComplete({ success: true });
+    });
+    await runStagedLLM('s', {});
+    expect(runner.executeCliRun.mock.calls[0][6]).toBe(5000);
   });
 
   it('rejects zero/negative stage.timeout instead of cancelling instantly', async () => {
