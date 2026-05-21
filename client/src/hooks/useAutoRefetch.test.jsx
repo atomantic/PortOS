@@ -124,4 +124,83 @@ describe('useAutoRefetch', () => {
     rerender({ fn: second });
     await waitFor(() => expect(second.mock.calls.length).toBeGreaterThanOrEqual(1));
   });
+
+  it('preserves the previous data reference when compare returns true', async () => {
+    const fetchFn = vi.fn()
+      .mockResolvedValueOnce({ updatedAt: 1, status: 'idle' })
+      .mockResolvedValue({ updatedAt: 1, status: 'idle' });
+    const compare = (prev, next) =>
+      prev.updatedAt === next.updatedAt && prev.status === next.status;
+
+    const { result } = renderHook(() => useAutoRefetch(fetchFn, 20, { compare }));
+
+    await waitFor(() => expect(result.current.data).not.toBeNull());
+    const first = result.current.data;
+
+    await waitFor(() => expect(fetchFn.mock.calls.length).toBeGreaterThanOrEqual(3));
+    expect(result.current.data).toBe(first);
+  });
+
+  it('replaces data when compare returns false', async () => {
+    const fetchFn = vi.fn()
+      .mockResolvedValueOnce({ updatedAt: 1 })
+      .mockResolvedValueOnce({ updatedAt: 2 });
+    const compare = (prev, next) => prev.updatedAt === next.updatedAt;
+
+    const { result } = renderHook(
+      () => useAutoRefetch(fetchFn, 60_000, { enabled: false, compare }),
+    );
+
+    await act(async () => { await result.current.refetch(); });
+    expect(result.current.data).toEqual({ updatedAt: 1 });
+
+    await act(async () => { await result.current.refetch(); });
+    expect(result.current.data).toEqual({ updatedAt: 2 });
+  });
+
+  it('always sets data on first fetch even with compare configured', async () => {
+    const fetchFn = vi.fn().mockResolvedValue({ updatedAt: 1 });
+    const compare = vi.fn(() => true);
+
+    const { result } = renderHook(() => useAutoRefetch(fetchFn, 60_000, { compare }));
+
+    await waitFor(() => expect(result.current.data).toEqual({ updatedAt: 1 }));
+    expect(compare).not.toHaveBeenCalled();
+  });
+
+  it('compare also applies to the manual refetch path', async () => {
+    const snapshot = { updatedAt: 1 };
+    const fetchFn = vi.fn()
+      .mockResolvedValueOnce(snapshot)
+      .mockResolvedValueOnce({ updatedAt: 1 });
+    const compare = (prev, next) => prev.updatedAt === next.updatedAt;
+
+    const { result } = renderHook(
+      () => useAutoRefetch(fetchFn, 60_000, { enabled: false, compare }),
+    );
+
+    await act(async () => { await result.current.refetch(); });
+    expect(result.current.data).toBe(snapshot);
+
+    await act(async () => { await result.current.refetch(); });
+    expect(result.current.data).toBe(snapshot);
+  });
+
+  it('compare is bypassed when the new result is null, replacing prior data', async () => {
+    const fetchFn = vi.fn()
+      .mockResolvedValueOnce({ updatedAt: 1 })
+      .mockResolvedValueOnce(null);
+    const compare = vi.fn(() => true);
+
+    const { result } = renderHook(
+      () => useAutoRefetch(fetchFn, 60_000, { enabled: false, compare }),
+    );
+
+    await act(async () => { await result.current.refetch(); });
+    expect(result.current.data).toEqual({ updatedAt: 1 });
+
+    await act(async () => { await result.current.refetch(); });
+    expect(result.current.data).toBeNull();
+    expect(compare).not.toHaveBeenCalled();
+  });
 });
