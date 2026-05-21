@@ -347,7 +347,7 @@ export default function Dashboard() {
               // overflow-hidden); sm:pt-4 reserves a header zone so
               // the tab doesn't overlap widget header content.
               return (
-                <div className="relative sm:pt-4">
+                <div className="relative h-full sm:pt-4">
                   <span className="hidden sm:inline">
                     <SchematicLabel
                       module={meta.module.id}
