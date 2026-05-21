@@ -252,28 +252,30 @@ export async function runStagedLLM(stageName, variables, options = {}) {
     model: effectiveModel,
     prompt,
     source: options.source || 'staged-llm',
-    // Record the same timeout the runner will actually enforce —
-    // override > provider default > the runner's hard floor — so /runs
-    // metadata never carries a misleading `undefined` for stages whose
-    // provider also omits a timeout.
+    // createRun.timeout is returned but not persisted into metadata.json
+    // by the toolkit (only providerId/model/source/etc. are written at
+    // creation time). We always patch below to record the effective
+    // timeout so /runs can show what executeXxxRun actually enforced.
     timeout: effectiveTimeout ?? provider.timeout ?? DEFAULT_TIMEOUT_MS,
   });
   const { runId } = runResult;
-  if (runResult.provider && runResult.provider.id !== provider.id) {
+  const fellBack = runResult.provider && runResult.provider.id !== provider.id;
+  if (fellBack) {
     effectiveProvider = runResult.provider;
     effectiveModel = resolveEffectiveModel(effectiveProvider, resolvedModel);
-    // createRun persisted `metadata.providerId/name/model` against the
-    // ORIGINAL provider's id and resolved value. Patch so /runs reflects
-    // the fallback that actually ran AND its timeout (since the runner
-    // will enforce the fallback's per-call timeout, not the original's).
-    // Best-effort: this is attribution, not load-bearing for execution.
-    patchRunMetadata(runId, {
-      model: effectiveModel,
-      providerId: effectiveProvider.id,
-      providerName: effectiveProvider.name,
-      timeout: effectiveTimeout ?? effectiveProvider.timeout ?? DEFAULT_TIMEOUT_MS,
-    }).catch(() => { /* best-effort */ });
   }
+  // Always patch metadata with the effective timeout (the toolkit doesn't
+  // persist `timeout` in its initial metadata.json write). On fallback we
+  // also patch provider id/name/model so /runs attribution matches the
+  // provider that actually ran. Best-effort: attribution, not load-bearing.
+  const recordedTimeout = effectiveTimeout ?? effectiveProvider.timeout ?? DEFAULT_TIMEOUT_MS;
+  const metadataPatch = { timeout: recordedTimeout };
+  if (fellBack) {
+    metadataPatch.model = effectiveModel;
+    metadataPatch.providerId = effectiveProvider.id;
+    metadataPatch.providerName = effectiveProvider.name;
+  }
+  patchRunMetadata(runId, metadataPatch).catch(() => { /* best-effort */ });
   console.log(`📝 stage: ${effectiveProvider.id} / ${effectiveModel || '(default)'} / ${stageName} → ${runId.slice(0, 8)}`);
 
   // Stage runs pre-create the run record (so the runId can be logged BEFORE

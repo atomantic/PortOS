@@ -965,13 +965,18 @@ export const stageConfigUpdateSchema = z.object({
     // strings to numbers so form clients that send "900000" still parse —
     // but reject "1e3" / "1.5" / "0x10" by leaving them as the original
     // string so the inner `.number()` check fails. The digit-only rule
-    // mirrors `parseTimeoutMs` in client/src/utils/formatters.js so
-    // client/server validation reject the same shapes.
+    // (and the `.trim()` before it) mirror `parseTimeoutMs` in
+    // client/src/utils/formatters.js and `normalizeTimeout` in
+    // server/lib/stageRunner.js so all three reject the same shapes.
     (v) => {
       if (v === '' || v === null) return null;
       if (v === undefined) return undefined;
       if (typeof v === 'number') return v;
-      if (typeof v === 'string' && /^\d+$/.test(v)) return Number(v);
+      if (typeof v === 'string') {
+        const trimmed = v.trim();
+        if (trimmed === '') return null;
+        if (/^\d+$/.test(trimmed)) return Number(trimmed);
+      }
       return v;
     },
     z.number().int().min(STAGE_TIMEOUT_MIN_MS).max(STAGE_TIMEOUT_MAX_MS).nullable().optional()

@@ -43,6 +43,10 @@ vi.mock('../runner.js', () => ({
     onComplete({ success: true });
   }),
   executeCliRun: vi.fn(),
+  // runStagedLLM always patches metadata post-createRun (to persist the
+  // effective timeout). Stub to return a resolved promise so the
+  // .catch(...) chain works.
+  patchRunMetadata: vi.fn(async () => undefined),
 }));
 
 vi.mock('../promptService.js', () => ({

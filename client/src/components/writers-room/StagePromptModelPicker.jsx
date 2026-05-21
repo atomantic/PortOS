@@ -31,7 +31,14 @@ export default function StagePromptModelPicker({ stageName, label = 'Stage LLM',
       fetch('/api/providers').then((r) => (r.ok ? r.json() : null)).catch(() => null),
     ]).then(([s, p]) => {
       if (cancelled) return;
-      setStage(s || null);
+      // Normalize stage.timeout through parseTimeoutMs so a legacy on-disk
+      // garbage value (e.g. `'abc'` from a pre-validation install) doesn't
+      // flow into the number input (where it would render blank / log
+      // controlled-component warnings) and doesn't poison the hint logic.
+      // Accepts integers AND digit-only strings within range; everything
+      // else becomes `null` (no override).
+      const normalizedStage = s ? { ...s, timeout: parseTimeoutMs(s.timeout) } : null;
+      setStage(normalizedStage);
       setProviders((p?.providers || []).filter((x) => x.enabled));
       setActiveProviderId(p?.activeProvider || null);
       setLoaded(true);
