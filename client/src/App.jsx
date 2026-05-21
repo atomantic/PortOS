@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect } from 'react';
+import { Suspense, useEffect } from 'react';
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import Layout from './components/Layout';
 import { getSettings, updateSettings } from './services/api';
@@ -6,18 +6,7 @@ import BrailleSpinner from './components/BrailleSpinner';
 import Dashboard from './pages/Dashboard';
 import Apps from './pages/Apps';
 import Ambient from './pages/Ambient';
-import { isStaleChunkError, reloadOnceForStaleChunk } from './utils/staleChunkReload';
-
-// Auto-reload on stale chunk errors (e.g., after a rebuild changes chunk hashes).
-// Detection covers Chrome / Firefox / Safari variants — see staleChunkReload.js.
-const lazyWithReload = (importFn) => lazy(() =>
-  importFn().catch(err => {
-    if (isStaleChunkError(err) && reloadOnceForStaleChunk()) {
-      return new Promise(() => {}); // hang until reload completes
-    }
-    throw err;
-  })
-);
+import { lazyWithReload } from './utils/lazyWithReload';
 
 // Lazy load heavier pages for code splitting
 // DevTools pages are large (~2300 lines total) so lazy load them
