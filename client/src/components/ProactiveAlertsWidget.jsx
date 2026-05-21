@@ -35,9 +35,10 @@ const ProactiveAlertsWidget = memo(function ProactiveAlertsWidget() {
     () => api.getAlertsSummary({ silent: true }).catch(() => null),
     120000, // Refresh every 2 minutes
     {
-      // Skip the re-render when counts + the per-row title/severity tuple are
-      // unchanged. Titles encode the alert subject so they're a stable signal
-      // for "different alert set" without needing a server-side id.
+      // Skip the re-render when the summary counts and every rendered per-row
+      // field are unchanged. Each alert row renders title, detail, severity
+      // (style class), type (icon), and link (href), so all five participate
+      // in the comparison — keep this list in sync with the JSX below.
       compare: (prev, next) => {
         if (prev.counts?.total !== next.counts?.total
           || prev.counts?.critical !== next.counts?.critical

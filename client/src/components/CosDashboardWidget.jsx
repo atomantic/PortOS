@@ -34,33 +34,59 @@ const CosDashboardWidget = memo(function CosDashboardWidget() {
   }, 30000, {
     // Re-render only when one of the aggregated counts actually moves —
     // running agents, completed/failed counts, streak, queue depth, learning
-    // success rate, the most recent task, and the heatmap totals. The poll
-    // fires every 30s; without this guard each tick re-renders the activity
-    // heatmap + recent tasks list even when nothing changed.
-    compare: (prev, next) => (
-      prev.summary?.status?.running === next.summary?.status?.running
-        && prev.summary?.status?.paused === next.summary?.status?.paused
-        && prev.summary?.today?.succeeded === next.summary?.today?.succeeded
-        && prev.summary?.today?.failed === next.summary?.today?.failed
-        && prev.summary?.today?.running === next.summary?.today?.running
-        && prev.summary?.today?.completed === next.summary?.today?.completed
-        && prev.summary?.today?.timeWorked === next.summary?.today?.timeWorked
-        && prev.summary?.streak?.current === next.summary?.streak?.current
-        && prev.summary?.queue?.total === next.summary?.queue?.total
-        && prev.summary?.queue?.pendingApprovals === next.summary?.queue?.pendingApprovals
-        && prev.learningSummary?.overallSuccessRate === next.learningSummary?.overallSuccessRate
-        && prev.learningSummary?.skipped === next.learningSummary?.skipped
-        && prev.learningSummary?.status === next.learningSummary?.status
-        && prev.learningSummary?.totalCompleted === next.learningSummary?.totalCompleted
-        && prev.recentTasks?.summary?.total === next.recentTasks?.summary?.total
-        && prev.recentTasks?.summary?.succeeded === next.recentTasks?.summary?.succeeded
-        && prev.recentTasks?.tasks?.[0]?.id === next.recentTasks?.tasks?.[0]?.id
-        && prev.recentTasks?.tasks?.[0]?.success === next.recentTasks?.tasks?.[0]?.success
-        && prev.activityCalendar?.summary?.totalTasks === next.activityCalendar?.summary?.totalTasks
-        && prev.activityCalendar?.summary?.successRate === next.activityCalendar?.summary?.successRate
-        && prev.activityCalendar?.maxTasks === next.activityCalendar?.maxTasks
-        && prev.activityCalendar?.currentStreak === next.activityCalendar?.currentStreak
-    ),
+    // success rate, every visible recent-task field, and the heatmap totals.
+    // The poll fires every 30s; without this guard each tick re-renders the
+    // activity heatmap + recent tasks list even when nothing changed.
+    //
+    // Recent-tasks comparison walks every rendered field per row (description,
+    // taskType, app, durationFormatted, success, and the server-computed
+    // completedRelative string). Including completedRelative means the row
+    // re-renders when its relative-time label rolls over (e.g. "2 min" → "3
+    // min") instead of going permanently stale until a new task lands — the
+    // server already rounds to the same minute boundary the user sees, so the
+    // dedup still kicks in for the (frequent) 30s ticks that don't cross one.
+    compare: (prev, next) => {
+      const prevTasks = prev.recentTasks?.tasks;
+      const nextTasks = next.recentTasks?.tasks;
+      const prevLen = prevTasks?.length ?? 0;
+      const nextLen = nextTasks?.length ?? 0;
+      if (prevLen !== nextLen) return false;
+      for (let i = 0; i < prevLen; i++) {
+        const a = prevTasks[i];
+        const b = nextTasks[i];
+        if (
+          a?.id !== b?.id
+          || a?.success !== b?.success
+          || a?.description !== b?.description
+          || a?.taskType !== b?.taskType
+          || a?.app !== b?.app
+          || a?.durationFormatted !== b?.durationFormatted
+          || a?.completedRelative !== b?.completedRelative
+        ) return false;
+      }
+      return (
+        prev.summary?.status?.running === next.summary?.status?.running
+          && prev.summary?.status?.paused === next.summary?.status?.paused
+          && prev.summary?.today?.succeeded === next.summary?.today?.succeeded
+          && prev.summary?.today?.failed === next.summary?.today?.failed
+          && prev.summary?.today?.running === next.summary?.today?.running
+          && prev.summary?.today?.completed === next.summary?.today?.completed
+          && prev.summary?.today?.timeWorked === next.summary?.today?.timeWorked
+          && prev.summary?.streak?.current === next.summary?.streak?.current
+          && prev.summary?.queue?.total === next.summary?.queue?.total
+          && prev.summary?.queue?.pendingApprovals === next.summary?.queue?.pendingApprovals
+          && prev.learningSummary?.overallSuccessRate === next.learningSummary?.overallSuccessRate
+          && prev.learningSummary?.skipped === next.learningSummary?.skipped
+          && prev.learningSummary?.status === next.learningSummary?.status
+          && prev.learningSummary?.totalCompleted === next.learningSummary?.totalCompleted
+          && prev.recentTasks?.summary?.total === next.recentTasks?.summary?.total
+          && prev.recentTasks?.summary?.succeeded === next.recentTasks?.summary?.succeeded
+          && prev.activityCalendar?.summary?.totalTasks === next.activityCalendar?.summary?.totalTasks
+          && prev.activityCalendar?.summary?.successRate === next.activityCalendar?.summary?.successRate
+          && prev.activityCalendar?.maxTasks === next.activityCalendar?.maxTasks
+          && prev.activityCalendar?.currentStreak === next.activityCalendar?.currentStreak
+      );
+    },
   });
 
   const { summary, learningSummary, recentTasks, activityCalendar } = dashData ?? {};

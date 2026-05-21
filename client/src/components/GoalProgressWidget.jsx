@@ -30,16 +30,20 @@ const GoalProgressWidget = memo(function GoalProgressWidget() {
     {
       // Goals rarely change at 5-minute cadence. Skip the re-render (and the
       // useMemo recompute that re-derives stalled goals + avg progress) when
-      // the goal set and per-goal progress/status are unchanged.
+      // the goal set and every rendered/derived per-goal field are unchanged.
+      // Covers: title, category, horizon, goalType (rendered as labels/icons),
+      // progress (bar + % label), status + parentId + urgency (filter/sort
+      // inputs), progressHistory length (drives `isStalled` even when % flat).
       compare: (prev, next) => {
         const a = Array.isArray(prev.goals) ? prev.goals : null;
         const b = Array.isArray(next.goals) ? next.goals : null;
         if (a === null || b === null) return a === b;
-        // progressHistory length is part of the signature — a new entry that
-        // doesn't move the % still advances `daysSinceUpdate` and can flip
-        // `isStalled`, so the row's warning icon must re-render.
         return a.length === b.length && a.every((g, i) => (
           g.id === b[i]?.id
+            && g.title === b[i]?.title
+            && g.category === b[i]?.category
+            && g.horizon === b[i]?.horizon
+            && g.goalType === b[i]?.goalType
             && g.progress === b[i]?.progress
             && g.status === b[i]?.status
             && g.parentId === b[i]?.parentId

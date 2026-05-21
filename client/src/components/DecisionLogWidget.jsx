@@ -30,9 +30,15 @@ const DecisionLogWidget = memo(function DecisionLogWidget() {
     60000,
     {
       // Decision stream is append-only; same 24h totals + same per-decision
-      // id/count tuple means nothing visible advanced this minute. Per-item
-      // count matters because a "Skipped (3x)" badge can grow without the
-      // decision's id changing.
+      // tuple of every rendered field means nothing visible advanced this
+      // minute. Comparator walks: id (key + dedup), type (icon + label), reason
+      // (body + tooltip), count (×N badge), lastTimestamp/timestamp (relative
+      // label rolls over via the timeAgo helper — including these means the
+      // row re-renders when its relative-time string crosses a boundary
+      // instead of staying permanently stale), and the context fields that
+      // renderContextDetails surfaces (running/max/project/limit, appId/
+      // cooldownMs, fromTask/toTask, attempts, runningAgents/awaitingApproval,
+      // taskType, successRate). Keep this tuple in sync with the JSX above.
       compare: (prev, next) => {
         if (prev.last24Hours?.total !== next.last24Hours?.total
           || prev.last24Hours?.skipped !== next.last24Hours?.skipped
@@ -45,9 +51,37 @@ const DecisionLogWidget = memo(function DecisionLogWidget() {
         const a = Array.isArray(prev.impactfulDecisions) ? prev.impactfulDecisions : null;
         const b = Array.isArray(next.impactfulDecisions) ? next.impactfulDecisions : null;
         if (a === null || b === null) return a === b;
-        return a.length === b.length && a.every((d, i) => (
-          d.id === b[i]?.id && (d.count ?? 1) === (b[i]?.count ?? 1)
-        ));
+        if (a.length !== b.length) return false;
+        for (let i = 0; i < a.length; i++) {
+          const da = a[i];
+          const db = b[i];
+          if (
+            da.id !== db?.id
+            || da.type !== db?.type
+            || da.reason !== db?.reason
+            || (da.count ?? 1) !== (db?.count ?? 1)
+            || da.lastTimestamp !== db?.lastTimestamp
+            || da.timestamp !== db?.timestamp
+          ) return false;
+          const ca = da.context;
+          const cb = db?.context;
+          if (
+            ca?.running !== cb?.running
+            || ca?.max !== cb?.max
+            || ca?.project !== cb?.project
+            || ca?.limit !== cb?.limit
+            || ca?.appId !== cb?.appId
+            || ca?.cooldownMs !== cb?.cooldownMs
+            || ca?.fromTask !== cb?.fromTask
+            || ca?.toTask !== cb?.toTask
+            || ca?.attempts !== cb?.attempts
+            || ca?.runningAgents !== cb?.runningAgents
+            || ca?.awaitingApproval !== cb?.awaitingApproval
+            || ca?.taskType !== cb?.taskType
+            || ca?.successRate !== cb?.successRate
+          ) return false;
+        }
+        return true;
       },
     },
   );
