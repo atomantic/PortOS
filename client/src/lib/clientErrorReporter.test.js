@@ -176,4 +176,21 @@ describe('reportClientError', () => {
     expect(result.sent).toBe(false);
     expect(result.reason).toBe('transport-error');
   });
+
+  it('returns transport-error when fetch throws synchronously, never rejects', async () => {
+    // CSP-blocked or stubbed-test fetch can throw before returning a promise.
+    // Without an outer try/catch the `.then().catch()` chain is never attached
+    // and the rejection escapes the global handler.
+    globalThis.fetch = vi.fn(() => { throw new Error('sync fetch throw'); });
+    let result;
+    let rejected = false;
+    try {
+      result = await reportClientError({ type: 'error', message: 'boom' });
+    } catch {
+      rejected = true;
+    }
+    expect(rejected).toBe(false);
+    expect(result.sent).toBe(false);
+    expect(result.reason).toBe('transport-error');
+  });
 });

@@ -182,12 +182,21 @@ export async function reportClientError(input) {
   // `keepalive: true` so the POST survives a tab unload triggered by the
   // crash itself, and we must never throw — an exception inside the
   // `unhandledrejection` handler would itself become an unhandled rejection.
-  const ok = await fetch(ENDPOINT, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: safeBody(payload),
-    keepalive: true,
-  }).then(r => r.ok).catch(() => false);
+  // Outer try/catch covers a *synchronous* throw from fetch itself (stubbed
+  // test globals, CSP-blocked requests that throw before returning a
+  // promise); without it the `.then().catch()` chain is never attached and
+  // the rejection escapes.
+  let ok = false;
+  try {
+    ok = await fetch(ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: safeBody(payload),
+      keepalive: true,
+    }).then(r => r.ok).catch(() => false);
+  } catch {
+    ok = false;
+  }
 
   return ok ? { sent: true } : { sent: false, reason: 'transport-error' };
 }
