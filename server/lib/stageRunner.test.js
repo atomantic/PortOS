@@ -297,6 +297,19 @@ describe('stageRunner — runStagedLLM dispatch', () => {
     expect(runner.executeCliRun.mock.calls[0][6]).toBe(1234);
   });
 
+  it('rejects a non-integer stage.timeout (no silent truncation)', async () => {
+    // 1000.9 must NOT round to 1000 — both parseTimeoutMs on the client
+    // and z.number().int() on the server reject non-integers, so the
+    // runner mirrors that. Falls back to provider default.
+    prompts.getStage.mockReturnValue({ timeout: 1000.9 });
+    providers.getActiveProvider.mockResolvedValue(cliProvider({ timeout: 5000 }));
+    runner.executeCliRun.mockImplementation(async (_id, _p, _pr, _cwd, _onData, onComplete, _t) => {
+      onComplete({ success: true });
+    });
+    await runStagedLLM('s', {});
+    expect(runner.executeCliRun.mock.calls[0][6]).toBe(5000);
+  });
+
   it('rejects a non-positive timeoutOverride instead of running unbounded', async () => {
     // The runner treats `0` as "no timeout" — a caller bug must not silently
     // turn into an unbounded run. Drop to stage.timeout (or provider.timeout

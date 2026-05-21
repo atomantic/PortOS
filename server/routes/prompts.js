@@ -141,12 +141,17 @@ export function createPortOSPromptsRoutes(aiToolkit) {
   // PUT /api/prompts/:stage - Update stage config and/or template.
   // Validate the config slice so a client sending `timeout: "abc"` 400s
   // rather than persisting garbage that the runner would silently ignore.
+  // The schema strips unknown keys, so a body of only-unknown-keys parses
+  // to `{}` — skip the disk write in that case to avoid an atomicWrite
+  // churn on stage-config.json (the toolkit rewrites the entire file).
   router.put('/:stage', asyncHandler(async (req, res) => {
     const { template, ...rawConfig } = req.body;
 
     if (Object.keys(rawConfig).length > 0) {
       const config = validateRequest(stageConfigUpdateSchema, rawConfig);
-      await promptsService.updateStageConfig(req.params.stage, config);
+      if (Object.keys(config).length > 0) {
+        await promptsService.updateStageConfig(req.params.stage, config);
+      }
     }
     if (template !== undefined) {
       await promptsService.updateStageTemplate(req.params.stage, template);

@@ -84,7 +84,15 @@ export default function PromptManager() {
     setSelectedStage(name);
     const res = await fetch(`/api/prompts/${name}`).then(r => r.json());
     setStageTemplate(res.template || '');
-    setStageConfig({ name: res.name, description: res.description, model: res.model, provider: res.provider || null, timeout: res.timeout ?? null, variables: res.variables || [] });
+    // Normalize a server-returned timeout: only carry a positive integer
+    // through to local state, otherwise treat as "no override set" (null).
+    // Without this, `res.timeout = 0` (legacy garbage) shows as a literal
+    // `0` in the input, and `res.timeout = undefined` becomes `null` here
+    // — both make the input look like the user touched the field when
+    // they didn't.
+    const rawT = res.timeout;
+    const timeout = Number.isInteger(rawT) && rawT > 0 ? rawT : null;
+    setStageConfig({ name: res.name, description: res.description, model: res.model, provider: res.provider || null, timeout, variables: res.variables || [] });
     setPreview('');
   };
 

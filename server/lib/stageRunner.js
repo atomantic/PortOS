@@ -53,14 +53,17 @@ const STAGE_TIMEOUT_MAX_MS = 1800000;
 
 // Normalize a stage- or caller-supplied timeout into a positive integer
 // milliseconds value (or `undefined` to mean "fall through to provider
-// default"). Reject NaN / ≤0 / non-finite; clamp at STAGE_TIMEOUT_MAX_MS so
-// a bogus override can't bypass the 30-minute ceiling enforced by the
-// route validator.
+// default"). Reject NaN / ≤0 / non-integer; clamp at STAGE_TIMEOUT_MAX_MS so
+// a bogus override can't bypass the 30-minute ceiling. Reject non-integers
+// outright (rather than truncating) to match parseTimeoutMs on the client
+// and z.number().int() in stageConfigUpdateSchema — silently rounding here
+// would surprise a caller whose `1000.9` becomes a different effective
+// value than what the validator accepts.
 function normalizeTimeout(raw) {
   if (raw == null) return undefined;
   const n = Number(raw);
-  if (!Number.isFinite(n) || n <= 0) return undefined;
-  return Math.min(Math.trunc(n), STAGE_TIMEOUT_MAX_MS);
+  if (!Number.isInteger(n) || n <= 0) return undefined;
+  return Math.min(n, STAGE_TIMEOUT_MAX_MS);
 }
 
 export function resolveModel(provider, modelHint) {

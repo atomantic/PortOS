@@ -176,15 +176,20 @@ function StageTimeoutInput({ value, providerFallback, onCommit }) {
   });
 
   // Hint precedence: explicit override > provider fallback > nothing.
+  // Coerce to a finite number before formatting — a legacy on-disk garbage
+  // value (e.g. `timeout: "abc"` from a pre-validation install) reaches us
+  // as a string, and `formatDurationMs(NaN)` renders "NaNh NaNm".
   const usingDefault = value == null || value <= 0;
-  const effective = usingDefault ? providerFallback : value;
+  const candidate = usingDefault ? providerFallback : value;
+  const effectiveMs = Number(candidate);
+  const haveValidEffective = Number.isFinite(effectiveMs) && effectiveMs > 0;
   let hint;
-  if (effective == null) {
+  if (!haveValidEffective) {
     hint = 'No provider default set';
   } else if (usingDefault) {
-    hint = `≈ ${formatDurationMs(effective)} · using provider default`;
+    hint = `≈ ${formatDurationMs(effectiveMs)} · using provider default`;
   } else {
-    hint = `≈ ${formatDurationMs(effective)}`;
+    hint = `≈ ${formatDurationMs(effectiveMs)}`;
   }
 
   return (
