@@ -11,6 +11,16 @@ import { useVisibilityEvent } from './useVisibilityEvent.js';
  * ignore the hook's `data` return; that's fine, but be aware the hook will
  * still set `data = null` on each tick.
  *
+ * Data-path callers (those reading the returned `data`) should NOT swallow
+ * errors with `.catch(() => null)` — the hook will then apply that null and
+ * wipe the previously-displayed snapshot on every transient blip. Let the
+ * error throw; the hook's catch logs it and preserves the last good data.
+ *
+ * `refetch` is intentionally unconditional — it bypasses the hidden-tab
+ * short-circuit so explicit "Refresh" buttons work regardless of visibility.
+ * Don't call it from effects that fire on mount/route change without a
+ * visibility gate, or the "pauses while hidden" guarantee leaks.
+ *
  * @param {Function} fetchFn - async, returns the new data
  * @param {number} intervalMs - poll cadence; changing restarts the interval
  * @param {Object} [options]
