@@ -1,7 +1,10 @@
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
+import { visualizer } from 'rollup-plugin-visualizer';
 import { readFileSync, existsSync } from 'fs';
 import { resolve } from 'path';
+
+const ANALYZE_BUNDLE = process.env.ANALYZE === 'true';
 
 const rootPkg = JSON.parse(readFileSync(resolve(__dirname, '../package.json'), 'utf-8'));
 
@@ -21,7 +24,15 @@ export default defineConfig(({ mode }) => {
     define: {
       __APP_VERSION__: JSON.stringify(rootPkg.version)
     },
-    plugins: [react()],
+    plugins: [
+      react(),
+      ANALYZE_BUNDLE && visualizer({
+        filename: 'dist/bundle-report.html',
+        gzipSize: true,
+        brotliSize: true,
+        template: 'treemap',
+      }),
+    ].filter(Boolean),
     server: {
       host: '0.0.0.0',
       port: 5554,

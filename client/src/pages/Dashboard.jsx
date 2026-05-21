@@ -1,10 +1,11 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, Suspense } from 'react';
 import { Link } from 'react-router-dom';
 import BrailleSpinner from '../components/BrailleSpinner';
 import LayoutPicker from '../components/dashboard/LayoutPicker';
 import LayoutEditor from '../components/dashboard/LayoutEditor';
 import DashboardGrid, { reconcileGrid, synthesizeGrid } from '../components/dashboard/DashboardGrid.jsx';
 import { WIDGETS_BY_ID, FALLBACK_LAYOUT } from '../components/dashboard/widgetRegistry.jsx';
+import WidgetSkeleton from '../components/dashboard/WidgetSkeleton';
 import { SchematicLabel } from '../components/micrographics';
 import { DASHBOARD_LAYOUT_CHANGED } from '../constants/events.js';
 import { Monitor, Move, Save, X } from 'lucide-react';
@@ -335,7 +336,12 @@ export default function Dashboard() {
             renderItem={(item) => {
               const meta = WIDGETS_BY_ID[item.id];
               if (!meta) return null;
-              const widget = <meta.Component dashboardState={dashboardState} />;
+              // Per-cell Suspense so a slow widget can't block sibling cells.
+              const widget = (
+                <Suspense fallback={<WidgetSkeleton label={meta.label} />}>
+                  <meta.Component dashboardState={dashboardState} />
+                </Suspense>
+              );
               if (!meta.module) return widget;
               // Tab sits inside the wrapper (DashboardGrid clips with
               // overflow-hidden); sm:pt-4 reserves a header zone so
