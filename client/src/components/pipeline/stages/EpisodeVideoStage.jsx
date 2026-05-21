@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Film, ExternalLink, Loader2, Sparkles, AlertCircle, CheckCircle2 } from 'lucide-react';
 import toast from '../../ui/Toast';
@@ -56,14 +56,13 @@ export default function EpisodeVideoStage({ issue, series, onStageUpdate }) {
   // blip doesn't wipe the currently-displayed project. (A `.catch(() => null)`
   // here would make the poll "succeed" with null and clear cdProject.)
   //
-  // `immediate: false` because the useEffect below owns the on-mount /
-  // on-id-swap immediate fetch — running both would double-fetch on every
-  // mount and on every null↔id toggle. The interval still fires at
-  // POLL_INTERVAL_MS once the hook is enabled.
+  // `immediate: true` (default) — the hook owns the visibility-aware initial
+  // fetch on mount and on every enabled-toggle (null↔id). The useEffect below
+  // only covers truthy→truthy id swaps that the hook's enabled gate misses.
   const { data: rawCdProject, refetch: refetchCdProject } = useAutoRefetch(
     () => getCreativeDirectorProject(cdProjectId, { slim: true }),
     POLL_INTERVAL_MS,
-    { enabled: !!cdProjectId, immediate: false, compare: sameProjectSnapshot },
+    { enabled: !!cdProjectId, compare: sameProjectSnapshot },
   );
 
   // After a restart the hook still holds the previous project's snapshot until
@@ -71,12 +70,18 @@ export default function EpisodeVideoStage({ issue, series, onStageUpdate }) {
   // new context.
   const cdProject = rawCdProject?.id === cdProjectId ? rawCdProject : null;
 
-  // Sole immediate-fetch path: fires on mount and on every cdProjectId change
-  // (including truthy→truthy id swaps that the hook's `enabled` toggle doesn't
-  // cover). Paired with `immediate: false` on the hook above so the on-mount
-  // case isn't double-fetched.
+  // Fires only on truthy→truthy cdProjectId swaps (restart). The hook's own
+  // immediate fetch covers mount and null↔id transitions and respects the
+  // hidden-tab short-circuit. `refetch` bypasses visibility, so we gate the
+  // call on visibilityState — on hidden tab the hook's visibility-event
+  // listener will pick up the new closure when the tab is reactivated.
+  const prevCdProjectIdRef = useRef(cdProjectId);
   useEffect(() => {
-    if (cdProjectId) refetchCdProject();
+    const prev = prevCdProjectIdRef.current;
+    prevCdProjectIdRef.current = cdProjectId;
+    if (!cdProjectId || !prev || prev === cdProjectId) return;
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+    refetchCdProject();
   }, [cdProjectId, refetchCdProject]);
 
   const [runSubmit, submitting] = useAsyncAction(
