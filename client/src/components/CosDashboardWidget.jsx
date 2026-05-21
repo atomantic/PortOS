@@ -31,7 +31,37 @@ const CosDashboardWidget = memo(function CosDashboardWidget() {
       api.getCosActivityCalendar(8, silent).catch(() => null)
     ]);
     return { summary, learningSummary, recentTasks, activityCalendar };
-  }, 30000);
+  }, 30000, {
+    // Re-render only when one of the aggregated counts actually moves —
+    // running agents, completed/failed counts, streak, queue depth, learning
+    // success rate, the most recent task, and the heatmap totals. The poll
+    // fires every 30s; without this guard each tick re-renders the activity
+    // heatmap + recent tasks list even when nothing changed.
+    compare: (prev, next) => (
+      prev.summary?.status?.running === next.summary?.status?.running
+        && prev.summary?.status?.paused === next.summary?.status?.paused
+        && prev.summary?.today?.succeeded === next.summary?.today?.succeeded
+        && prev.summary?.today?.failed === next.summary?.today?.failed
+        && prev.summary?.today?.running === next.summary?.today?.running
+        && prev.summary?.today?.completed === next.summary?.today?.completed
+        && prev.summary?.today?.timeWorked === next.summary?.today?.timeWorked
+        && prev.summary?.streak?.current === next.summary?.streak?.current
+        && prev.summary?.queue?.total === next.summary?.queue?.total
+        && prev.summary?.queue?.pendingApprovals === next.summary?.queue?.pendingApprovals
+        && prev.learningSummary?.overallSuccessRate === next.learningSummary?.overallSuccessRate
+        && prev.learningSummary?.skipped === next.learningSummary?.skipped
+        && prev.learningSummary?.status === next.learningSummary?.status
+        && prev.learningSummary?.totalCompleted === next.learningSummary?.totalCompleted
+        && prev.recentTasks?.summary?.total === next.recentTasks?.summary?.total
+        && prev.recentTasks?.summary?.succeeded === next.recentTasks?.summary?.succeeded
+        && prev.recentTasks?.tasks?.[0]?.id === next.recentTasks?.tasks?.[0]?.id
+        && prev.recentTasks?.tasks?.[0]?.success === next.recentTasks?.tasks?.[0]?.success
+        && prev.activityCalendar?.summary?.totalTasks === next.activityCalendar?.summary?.totalTasks
+        && prev.activityCalendar?.summary?.successRate === next.activityCalendar?.summary?.successRate
+        && prev.activityCalendar?.maxTasks === next.activityCalendar?.maxTasks
+        && prev.activityCalendar?.currentStreak === next.activityCalendar?.currentStreak
+    ),
+  });
 
   const { summary, learningSummary, recentTasks, activityCalendar } = dashData ?? {};
   const [tasksExpanded, setTasksExpanded] = useState(false);

@@ -202,7 +202,16 @@ function RestorePanel({ snapshot, onClose }) {
 function SnapshotList() {
   const { data: snapshots, loading } = useAutoRefetch(
     () => api.getBackupSnapshots({ silent: true }).catch(() => null),
-    120000
+    120000,
+    {
+      // Snapshots only change when a new backup lands or the rotation prunes
+      // the oldest — same length + same newest id means no visible churn.
+      compare: (prev, next) => (
+        prev.length === next.length
+          && prev[prev.length - 1]?.id === next[next.length - 1]?.id
+          && prev[0]?.id === next[0]?.id
+      ),
+    },
   );
   const [selectedId, setSelectedId] = useState(null);
 
@@ -256,7 +265,21 @@ function SnapshotList() {
 const BackupWidget = memo(function BackupWidget() {
   const { data: status } = useAutoRefetch(
     () => api.getBackupStatus({ silent: true }).catch(() => null),
-    60000
+    60000,
+    {
+      // Backup state only flips when a new run starts/finishes — comparing the
+      // monotonic timestamps + status + error + destPath captures every
+      // visible change at the widget's resolution. Avoids per-poll re-renders
+      // that would re-compute relative-time labels for no visual benefit.
+      compare: (prev, next) => (
+        prev.status === next.status
+          && prev.lastRun === next.lastRun
+          && prev.nextRun === next.nextRun
+          && prev.error === next.error
+          && prev.filesChanged === next.filesChanged
+          && prev.destPath === next.destPath
+      ),
+    },
   );
   const [triggering, setTriggering] = useState(false);
   const [snapshotsOpen, setSnapshotsOpen] = useState(false);

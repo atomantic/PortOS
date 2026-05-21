@@ -27,7 +27,29 @@ import { timeAgo } from '../utils/formatters';
 const DecisionLogWidget = memo(function DecisionLogWidget() {
   const { data: summary, loading } = useAutoRefetch(
     () => api.getCosDecisionSummary({ silent: true }).catch(() => null),
-    60000
+    60000,
+    {
+      // Decision stream is append-only; same 24h totals + same per-decision
+      // id/count tuple means nothing visible advanced this minute. Per-item
+      // count matters because a "Skipped (3x)" badge can grow without the
+      // decision's id changing.
+      compare: (prev, next) => {
+        if (prev.last24Hours?.total !== next.last24Hours?.total
+          || prev.last24Hours?.skipped !== next.last24Hours?.skipped
+          || prev.last24Hours?.switched !== next.last24Hours?.switched
+          || prev.last24Hours?.capacityFull !== next.last24Hours?.capacityFull
+          || prev.last24Hours?.cooldownActive !== next.last24Hours?.cooldownActive
+          || prev.last24Hours?.selected !== next.last24Hours?.selected
+          || prev.last24Hours?.adjusted !== next.last24Hours?.adjusted
+          || prev.transparencyScore !== next.transparencyScore) return false;
+        const a = Array.isArray(prev.impactfulDecisions) ? prev.impactfulDecisions : null;
+        const b = Array.isArray(next.impactfulDecisions) ? next.impactfulDecisions : null;
+        if (a === null || b === null) return a === b;
+        return a.length === b.length && a.every((d, i) => (
+          d.id === b[i]?.id && (d.count ?? 1) === (b[i]?.count ?? 1)
+        ));
+      },
+    },
   );
   const [expanded, setExpanded] = useState(false);
 

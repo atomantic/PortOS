@@ -33,7 +33,28 @@ const TYPE_ICONS = {
 const ProactiveAlertsWidget = memo(function ProactiveAlertsWidget() {
   const { data, loading } = useAutoRefetch(
     () => api.getAlertsSummary({ silent: true }).catch(() => null),
-    120000 // Refresh every 2 minutes
+    120000, // Refresh every 2 minutes
+    {
+      // Skip the re-render when counts + the per-row title/severity tuple are
+      // unchanged. Titles encode the alert subject so they're a stable signal
+      // for "different alert set" without needing a server-side id.
+      compare: (prev, next) => {
+        if (prev.counts?.total !== next.counts?.total
+          || prev.counts?.critical !== next.counts?.critical
+          || prev.counts?.high !== next.counts?.high
+          || prev.counts?.medium !== next.counts?.medium) return false;
+        const a = Array.isArray(prev.alerts) ? prev.alerts : null;
+        const b = Array.isArray(next.alerts) ? next.alerts : null;
+        if (a === null || b === null) return a === b;
+        return a.length === b.length && a.every((al, i) => (
+          al.title === b[i]?.title
+            && al.severity === b[i]?.severity
+            && al.detail === b[i]?.detail
+            && al.type === b[i]?.type
+            && al.link === b[i]?.link
+        ));
+      },
+    },
   );
 
   if (loading) return null;

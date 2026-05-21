@@ -26,7 +26,28 @@ const getDaysSince = (dateStr) => {
 const GoalProgressWidget = memo(function GoalProgressWidget() {
   const { data: goalsData, loading } = useAutoRefetch(
     () => api.getGoals({ silent: true }).catch(() => null),
-    300000
+    300000,
+    {
+      // Goals rarely change at 5-minute cadence. Skip the re-render (and the
+      // useMemo recompute that re-derives stalled goals + avg progress) when
+      // the goal set and per-goal progress/status are unchanged.
+      compare: (prev, next) => {
+        const a = Array.isArray(prev.goals) ? prev.goals : null;
+        const b = Array.isArray(next.goals) ? next.goals : null;
+        if (a === null || b === null) return a === b;
+        // progressHistory length is part of the signature — a new entry that
+        // doesn't move the % still advances `daysSinceUpdate` and can flip
+        // `isStalled`, so the row's warning icon must re-render.
+        return a.length === b.length && a.every((g, i) => (
+          g.id === b[i]?.id
+            && g.progress === b[i]?.progress
+            && g.status === b[i]?.status
+            && g.parentId === b[i]?.parentId
+            && g.urgency === b[i]?.urgency
+            && (g.progressHistory?.length ?? 0) === (b[i]?.progressHistory?.length ?? 0)
+        ));
+      },
+    },
   );
 
   const { goals, stalledCount, avgProgress } = useMemo(() => {
