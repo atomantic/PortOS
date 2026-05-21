@@ -9,6 +9,7 @@
 - **[cover-prose-input-idea-input-in-canonusage-corpus] Universe canon cross-reference test suite now pins every stage the per-issue search reads** — a regression that silently drops a stage from the search now fails the test suite immediately.
 - **[extract-shared-requiretoolkit-helper] Internal: consolidated three duplicated AI toolkit accessors into one shared module.** No behavior change; cuts ~30 lines and makes future toolkit-state changes one-touch.
 - **[codex5-bundle-lazy-routes] Dashboard widgets load on demand.** A dashboard layout now only downloads the widgets it actually uses — the first paint of a slimmed-down layout no longer drags in every widget in the registry, and slow widgets render their own placeholder while loading instead of blocking sibling cells. Also adds an `npm run build:analyze` script for inspecting bundle composition during development.
+- **[strip-stage-runhistory-from-list-payloads] Pipeline list views stay lean as version history grows.** The sidebar's recent-issues list and the per-series issue list no longer ship each stage's full draft history on every read — the History button on an issue's detail page still shows the full set, but list responses can no longer balloon to many megabytes once a series has many issues with deep histories.
 
 ## Fixed
 

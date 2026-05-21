@@ -218,6 +218,22 @@ export function snapshotRunHistory(prevStage, patch, stageId) {
   return [snapshot, ...dedupedPrior].slice(0, STAGE_RUN_HISTORY_MAX);
 }
 
+// Strip per-stage `runHistory` from a sanitized issue so list endpoints don't
+// ship the full version history on every read. Text stages can hold up to
+// STAGE_RUN_HISTORY_MAX (5) entries × ~600KB each, so a maxed-out issue is
+// ~12MB of payload the sidebar + per-series list never render. Detail reads
+// (`getIssue`, `GET /api/pipeline/issues/:id`) stay on the full shape; no
+// current caller of `listIssues` / `listRecentIssues` reads `stage.runHistory`
+// off a list result. Future callers that need history must use `getIssue`.
+const stripRunHistoryFromIssue = (issue) => {
+  if (!issue || typeof issue !== 'object' || !issue.stages) return issue;
+  const strippedStages = {};
+  for (const [stageId, stage] of Object.entries(issue.stages)) {
+    strippedStages[stageId] = stage?.runHistory?.length ? { ...stage, runHistory: [] } : stage;
+  }
+  return { ...issue, stages: strippedStages };
+};
+
 // Episode-video render settings the user chose at kickoff time. Persisted
 // on the stage so a page reload doesn't reset them to the defaults — the
 // restart flow can render the same pickers populated with the user's
@@ -417,9 +433,14 @@ export async function listIssues({ seriesId = null, offset = 0, limit = ISSUES_P
   const safeLimit = Math.min(Math.max(1, limit), ISSUES_PER_RESPONSE_MAX);
   const safeOffset = Math.max(0, offset);
   if (paginated) {
-    return { items: sorted.slice(safeOffset, safeOffset + safeLimit), total: sorted.length, offset: safeOffset, limit: safeLimit };
+    return {
+      items: sorted.slice(safeOffset, safeOffset + safeLimit).map(stripRunHistoryFromIssue),
+      total: sorted.length,
+      offset: safeOffset,
+      limit: safeLimit,
+    };
   }
-  return sorted.slice(0, ISSUES_PER_RESPONSE_MAX);
+  return sorted.slice(0, ISSUES_PER_RESPONSE_MAX).map(stripRunHistoryFromIssue);
 }
 
 /**
@@ -440,7 +461,8 @@ export async function listRecentIssues({ limit = 10 } = {}) {
   const clamped = Math.max(1, Math.min(50, fallback));
   return [...issues]
     .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))
-    .slice(0, clamped);
+    .slice(0, clamped)
+    .map(stripRunHistoryFromIssue);
 }
 
 export async function getIssue(id) {

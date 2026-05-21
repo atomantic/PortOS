@@ -441,6 +441,50 @@ describe('pipeline issues service', () => {
     });
   });
 
+  describe('list endpoints strip runHistory', () => {
+    // List payloads (sidebar, per-series list) never render runHistory,
+    // and each text stage can hold up to 5 × ~600KB entries. Strip them
+    // so a maxed-out issue doesn't ship ~12MB per read. Detail reads
+    // (`getIssue`) must keep the full shape so the diff modal still works.
+    const seedWithHistory = async () => {
+      const i = await svc.createIssue({ seriesId: 'ser-1', title: 'With history' });
+      await svc.updateStage(i.id, 'idea', { status: 'ready', input: 'seed', output: 'v1', lastRunId: 'r1' });
+      await svc.updateStage(i.id, 'idea', { status: 'ready', input: 'seed', output: 'v2', lastRunId: 'r2' });
+      return i;
+    };
+
+    it('listIssues returns empty runHistory even when history is persisted', async () => {
+      await seedWithHistory();
+      const list = await svc.listIssues({ seriesId: 'ser-1' });
+      expect(list).toHaveLength(1);
+      expect(list[0].stages.idea.runHistory).toEqual([]);
+      // Active stage fields still survive the strip.
+      expect(list[0].stages.idea.output).toBe('v2');
+      expect(list[0].stages.idea.lastRunId).toBe('r2');
+    });
+
+    it('listIssues paginated:true strips runHistory from items', async () => {
+      await seedWithHistory();
+      const result = await svc.listIssues({ seriesId: 'ser-1', offset: 0, limit: 10, paginated: true });
+      expect(result.items).toHaveLength(1);
+      expect(result.items[0].stages.idea.runHistory).toEqual([]);
+    });
+
+    it('listRecentIssues strips runHistory', async () => {
+      await seedWithHistory();
+      const recent = await svc.listRecentIssues({ limit: 10 });
+      expect(recent).toHaveLength(1);
+      expect(recent[0].stages.idea.runHistory).toEqual([]);
+    });
+
+    it('getIssue (detail read) keeps the full runHistory', async () => {
+      const i = await seedWithHistory();
+      const fresh = await svc.getIssue(i.id);
+      expect(fresh.stages.idea.runHistory).toHaveLength(1);
+      expect(fresh.stages.idea.runHistory[0].runId).toBe('r1');
+    });
+  });
+
   it('updateIssue partial patch preserves other fields', async () => {
     const i = await svc.createIssue({ seriesId: 'ser-1', title: 'First' });
     await svc.updateStage(i.id, 'idea', { status: 'ready', output: 'Beats here' });
