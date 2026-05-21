@@ -537,16 +537,19 @@ The configured reviewer for this task is \`{reviewer}\`. \`copilot\` waits for G
    - **\`copilot\`** — This repo has GitHub Copilot Code Review configured to auto-run on every new PR. Poll until Copilot's review lands or a 10-minute timeout fires:
      \`\`\`bash
      PR=<num>
+     # Match both forms: GraphQL/\`gh pr view\` returns the login without \`[bot]\`;
+     # the REST request-a-reviewer endpoint requires the \`[bot]\` suffix. Future
+     # GitHub API changes could flip which form callers see — accept either.
      for i in $(seq 1 20); do
        REVIEW=$(gh pr view "$PR" --json reviews \\
-         -q '.reviews[] | select(.author.login=="copilot-pull-request-reviewer") | {state, submittedAt}')
+         -q '.reviews[] | select(.author.login | test("^copilot-pull-request-reviewer(\\\\[bot\\\\])?$")) | {state, submittedAt}')
        [ -n "$REVIEW" ] && break
        sleep 30
      done
      \`\`\`
      - **No review within 10 min**: proceed to merge (Copilot was slow or skipped).
      - **\`APPROVED\` with no inline comments**: proceed to merge.
-     - **\`COMMENTED\` or \`CHANGES_REQUESTED\`**: fetch findings with \`gh api repos/{owner}/{repo}/pulls/$PR/comments\` and \`gh pr view "$PR" --json reviews\`. Address each finding inside the worktree, commit, \`git push\`. Re-poll — Copilot re-reviews the new head SHA. Cap re-iterations at **3 rounds**; if findings keep arriving past that, route to Phase 3b (open the PR with the unresolved findings spelled out in \`.plan-questions.md\` and leave it for the human to merge).
+     - **\`COMMENTED\` or \`CHANGES_REQUESTED\`**: fetch findings with \`gh api "repos/{owner}/{repo}/pulls/$PR/comments"\` (\`gh\` substitutes \`{owner}\`/\`{repo}\` from the current git checkout — those are gh path-placeholders, not prompt template vars) and \`gh pr view "$PR" --json reviews\`. Address each finding inside the worktree, commit, \`git push\`. Re-poll — Copilot re-reviews the new head SHA. Cap re-iterations at **3 rounds**; if findings keep arriving past that, route to Phase 3b (open the PR with the unresolved findings spelled out in \`.plan-questions.md\` and leave it for the human to merge).
 
    - **\`claude\` / \`codex\` / \`gemini\`** — Invoke slashdo's \`/do:rpr --review-with {reviewer}\` against the PR. \`/do:rpr\` runs the chosen CLI in headless mode to critique the diff, applies fixes, and re-pushes. It owns its own iteration cap and clean-vs-dirty merge gate; on a clean status it returns control here for the merge.
 

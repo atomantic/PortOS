@@ -187,9 +187,15 @@ export function assignMissingIds(markdown, extraIds = []) {
  *   - Every unchecked item is either blocked on human input OR already
  *     claimed by another agent (in-flight by branch/PR scan).
  *
- * @param {string} planMd
- * @param {Set<string>|string[]} inFlightIds  IDs currently claimed elsewhere
- * @returns {string | null}
+ * Either `planMd` or `parsedItems` must be supplied. When the caller has
+ * already run `parsePlanItems(planMd)` (e.g. `applyPlanIdMetadata` does this
+ * for the pick step), passing `parsedItems` here avoids a redundant parse;
+ * `planMd` can then be passed as `null`.
+ *
+ * @param {string|null} planMd                 PLAN.md content, or null if parsedItems is supplied
+ * @param {Set<string>|string[]} inFlightIds   IDs currently claimed elsewhere
+ * @param {PlanItem[]|null} [parsedItems]      pre-parsed items, avoids re-parsing planMd
+ * @returns {string | null}                    skip reason, or null when dispatch should proceed
  */
 export function diagnoseUnpickablePlan(planMd, inFlightIds = new Set(), parsedItems = null) {
   if (!planMd && !parsedItems) return 'PLAN.md missing or empty';
@@ -255,8 +261,34 @@ function listOpenPullRequestHeadRefs(repoPath) {
 }
 
 /**
+ * Extract the PLAN.md slug from a git ref ONLY when the ref matches one of
+ * the two documented claim patterns:
+ *   - `claim/<slug>`                       (human / TUI / scheduler path)
+ *   - `cos/<task>/<slug>/<agent>`          (CoS sub-agent path)
+ * after stripping any single leading remote prefix (e.g. `origin/`).
+ *
+ * Returns null for refs that don't match — e.g. `feature/foo`, `main`,
+ * `release`, or `origin/HEAD`. Without this gate, the segment-walking
+ * approach would falsely flag any slug literally named `main`, `fix`,
+ * `feature`, `release`, `dev`, etc. as in-flight against virtually every
+ * branch in the repo, which would then suppress every plan-task dispatch.
+ */
+export function extractSlugFromRef(ref) {
+  if (typeof ref !== 'string' || !ref) return null;
+  const stripped = /^[^/]+\/(claim|cos)\//.test(ref)
+    ? ref.replace(/^[^/]+\//, '')
+    : ref;
+  const m1 = /^claim\/(.+)$/.exec(stripped);
+  if (m1) return m1[1];
+  const m2 = /^cos\/[^/]+\/([^/]+)\/[^/]+$/.exec(stripped);
+  if (m2) return m2[1];
+  return null;
+}
+
+/**
  * Find which of `knownIds` are currently in flight, as evidenced by an open
- * git branch (local or remote) or open PR with the slug as a path segment.
+ * git branch (local or remote) or open PR with the slug encoded into a
+ * documented claim ref pattern (`claim/<slug>` or `cos/<task>/<slug>/<agent>`).
  *
  * `repoPath` is the repository to query. Best-effort: missing git, missing gh,
  * or fetch failure all degrade silently and return what evidence is available.
@@ -288,10 +320,8 @@ export async function findInProgressIds(repoPath, knownIds) {
 
   const inFlight = new Set();
   for (const ref of refs) {
-    const segments = ref.split('/');
-    for (const seg of segments) {
-      if (known.has(seg)) inFlight.add(seg);
-    }
+    const slug = extractSlugFromRef(ref);
+    if (slug && known.has(slug)) inFlight.add(slug);
   }
   return inFlight;
 }

@@ -5,7 +5,8 @@ import {
   assignMissingIds,
   extractAllIds,
   pickFirstAvailable,
-  diagnoseUnpickablePlan
+  diagnoseUnpickablePlan,
+  extractSlugFromRef
 } from './planIds.js';
 
 describe('planIds.js', () => {
@@ -262,6 +263,61 @@ describe('planIds.js', () => {
       ].join('\n');
       const items = parsePlanItems(md);
       expect(diagnoseUnpickablePlan(null, new Set(), items)).toMatch(/blocked on human input/);
+    });
+  });
+
+  describe('extractSlugFromRef', () => {
+    it('extracts the slug from claim/<slug>', () => {
+      expect(extractSlugFromRef('claim/foo-bar')).toBe('foo-bar');
+      expect(extractSlugFromRef('claim/some-slug-with-dashes-50chars')).toBe('some-slug-with-dashes-50chars');
+    });
+
+    it('strips a single leading remote prefix before matching claim/', () => {
+      expect(extractSlugFromRef('origin/claim/foo')).toBe('foo');
+      expect(extractSlugFromRef('upstream/claim/bar')).toBe('bar');
+      expect(extractSlugFromRef('fork-remote/claim/baz')).toBe('baz');
+    });
+
+    it('extracts the slug-position segment from cos/<task>/<slug>/<agent>', () => {
+      expect(extractSlugFromRef('cos/some-task/my-slug/agent-id')).toBe('my-slug');
+      expect(extractSlugFromRef('origin/cos/task/slug/agent')).toBe('slug');
+    });
+
+    it('returns null for unrelated refs (the false-positive case)', () => {
+      // Without this gate, a slug literally named "main"/"fix"/etc. would be
+      // falsely flagged as in-flight against virtually every branch.
+      expect(extractSlugFromRef('main')).toBeNull();
+      expect(extractSlugFromRef('release')).toBeNull();
+      expect(extractSlugFromRef('feature/foo')).toBeNull();
+      expect(extractSlugFromRef('origin/main')).toBeNull();
+      expect(extractSlugFromRef('origin/HEAD')).toBeNull();
+      expect(extractSlugFromRef('fix-typo')).toBeNull();
+      expect(extractSlugFromRef('refs/tags/v1.0.0')).toBeNull();
+    });
+
+    it('returns null for malformed cos refs', () => {
+      expect(extractSlugFromRef('cos/task/slug')).toBeNull(); // missing agent segment
+      expect(extractSlugFromRef('cos/task/slug/agent/extra')).toBeNull(); // too many segments
+    });
+
+    it('returns null for non-string / empty input', () => {
+      expect(extractSlugFromRef('')).toBeNull();
+      expect(extractSlugFromRef(null)).toBeNull();
+      expect(extractSlugFromRef(undefined)).toBeNull();
+    });
+
+    it('rejects symbolic-ref alias lines that older git versions emit', () => {
+      // `--format=%(refname:short)` strips these, but defense-in-depth covers
+      // any caller that switches branch listings.
+      expect(extractSlugFromRef('origin/HEAD -> origin/main')).toBeNull();
+      expect(extractSlugFromRef('HEAD')).toBeNull();
+    });
+
+    it('greedy-captures everything after claim/ (slugs are kebab-case in practice)', () => {
+      // Pins the current behavior: if a slug ever contained a `/`, the gate
+      // would compare against the full string. Slugs are slash-free today;
+      // this test fails loudly if that ever changes.
+      expect(extractSlugFromRef('claim/foo/bar')).toBe('foo/bar');
     });
   });
 });
