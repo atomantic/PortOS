@@ -494,33 +494,33 @@ export function createIssue(input = {}) {
   const title = trimTo(input.title, TITLE_MAX);
   if (!title) return Promise.reject(makeErr(`title is required (1..${TITLE_MAX} chars)`, ERR_VALIDATION));
   return queueIssueWrite(async () => {
-  const state = await readState();
-  const next = sanitizeIssue({
-    id: `iss-${randomUUID()}`,
-    seriesId,
-    // Placeholder — `renumberInline` below derives the canonical number.
-    number: 0,
-    title,
-    status: 'draft',
-    // Phase 2: optional arc pointers passed by the season-episodes generator
-    // (and any future caller wiring an issue to a season at create time).
-    seasonId: 'seasonId' in input ? input.seasonId : null,
-    arcPosition: 'arcPosition' in input ? input.arcPosition : null,
-    arcRole: 'arcRole' in input ? input.arcRole : null,
-    lengthProfile: 'lengthProfile' in input ? input.lengthProfile : undefined,
-    pageTarget: 'pageTarget' in input ? input.pageTarget : null,
-    minutesTarget: 'minutesTarget' in input ? input.minutesTarget : null,
-    stages: input.stages || {},
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
-  });
-  if (!next) throw makeErr('Invalid issue payload', ERR_VALIDATION);
-  state.issues.push(next);
-  await renumberInline(state, seriesId, next.seasonId || UNSCOPED_ANCHOR);
-  await writeState(state);
-  // New issue = series-level change for any active share subscription.
-  emitRecordUpdated('series', next.seriesId);
-  return next;
+    const state = await readState();
+    const next = sanitizeIssue({
+      id: `iss-${randomUUID()}`,
+      seriesId,
+      // Placeholder — `renumberInline` below derives the canonical number.
+      number: 0,
+      title,
+      status: 'draft',
+      // Phase 2: optional arc pointers passed by the season-episodes generator
+      // (and any future caller wiring an issue to a season at create time).
+      seasonId: 'seasonId' in input ? input.seasonId : null,
+      arcPosition: 'arcPosition' in input ? input.arcPosition : null,
+      arcRole: 'arcRole' in input ? input.arcRole : null,
+      lengthProfile: 'lengthProfile' in input ? input.lengthProfile : undefined,
+      pageTarget: 'pageTarget' in input ? input.pageTarget : null,
+      minutesTarget: 'minutesTarget' in input ? input.minutesTarget : null,
+      stages: input.stages || {},
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+    if (!next) throw makeErr('Invalid issue payload', ERR_VALIDATION);
+    state.issues.push(next);
+    await renumberInline(state, seriesId, next.seasonId || UNSCOPED_ANCHOR);
+    await writeState(state);
+    // New issue = series-level change for any active share subscription.
+    emitRecordUpdated('series', next.seriesId);
+    return next;
   }); // end queueIssueWrite
 }
 
@@ -653,98 +653,98 @@ export function insertIssueWithId(input = {}) {
 
 export function updateIssue(id, patch = {}, { skipRenumber = false } = {}) {
   return queueIssueWrite(async () => {
-  const state = await readState();
-  const idx = state.issues.findIndex((i) => i.id === id);
-  if (idx < 0) throw makeErr(`Issue not found: ${id}`, ERR_NOT_FOUND);
-  const cur = state.issues[idx];
-  if (cur.deleted) throw makeErr(`Issue not found: ${id}`, ERR_NOT_FOUND);
+    const state = await readState();
+    const idx = state.issues.findIndex((i) => i.id === id);
+    if (idx < 0) throw makeErr(`Issue not found: ${id}`, ERR_NOT_FOUND);
+    const cur = state.issues[idx];
+    if (cur.deleted) throw makeErr(`Issue not found: ${id}`, ERR_NOT_FOUND);
 
-  // Per-stage merge: a stage patch carries only the fields the caller is
-  // changing (e.g. `{ genConfig }` or `{ cover }`). Without this, the top-level
-  // spread would replace the entire stage object and silently drop sibling
-  // fields like `scenes` / `pages` / `genConfig`. Sanitization then defaults
-  // those back to empty arrays/null, erasing work the user (or LLM) just did.
-  // Callers that need stage-level changes without touching issue-level fields
-  // should use `updateStage`, which does a shallow merge of the patch over the
-  // existing stage (`{ ...cur.stages[stageId], ...patch }`) before sanitizing.
-  // Note: `updateStage` still merges — omitted sibling stage fields are
-  // preserved. To clear a field explicitly, pass it as `null` or `""` in the
-  // patch.
-  //
-  // `cover` and `genConfig` are treated as deep-merge sub-objects: a partial
-  // `{ cover: { script } }` patch from a textarea-blur save must not wipe the
-  // sibling `imageJobId` / `prompt` that a parallel "Render cover" mutation
-  // just persisted. Passing `null` explicitly still clears the sub-object
-  // (intentional-clear semantics).
-  const NESTED_DEEP_MERGE_KEYS = ['cover', 'genConfig'];
-  let mergedStages = cur.stages;
-  if ('stages' in patch && patch.stages && typeof patch.stages === 'object') {
-    mergedStages = { ...cur.stages };
-    for (const [stageId, stagePatch] of Object.entries(patch.stages)) {
-      const prev = cur.stages?.[stageId];
-      if (prev && stagePatch && typeof prev === 'object' && typeof stagePatch === 'object') {
-        const merged = { ...prev, ...stagePatch };
-        // Mirror the snapshot trigger from updateStageWithLatest so a
-        // route-level PATCH that swaps lastRunId (e.g. the restore endpoint)
-        // also produces a runHistory entry. No-op when the patch is a plain
-        // save-edit without lastRunId.
-        merged.runHistory = snapshotRunHistory(prev, stagePatch, stageId);
-        for (const key of NESTED_DEEP_MERGE_KEYS) {
-          if (key in stagePatch
-              && stagePatch[key] && typeof stagePatch[key] === 'object'
-              && prev[key] && typeof prev[key] === 'object') {
-            merged[key] = { ...prev[key], ...stagePatch[key] };
+    // Per-stage merge: a stage patch carries only the fields the caller is
+    // changing (e.g. `{ genConfig }` or `{ cover }`). Without this, the top-level
+    // spread would replace the entire stage object and silently drop sibling
+    // fields like `scenes` / `pages` / `genConfig`. Sanitization then defaults
+    // those back to empty arrays/null, erasing work the user (or LLM) just did.
+    // Callers that need stage-level changes without touching issue-level fields
+    // should use `updateStage`, which does a shallow merge of the patch over the
+    // existing stage (`{ ...cur.stages[stageId], ...patch }`) before sanitizing.
+    // Note: `updateStage` still merges — omitted sibling stage fields are
+    // preserved. To clear a field explicitly, pass it as `null` or `""` in the
+    // patch.
+    //
+    // `cover` and `genConfig` are treated as deep-merge sub-objects: a partial
+    // `{ cover: { script } }` patch from a textarea-blur save must not wipe the
+    // sibling `imageJobId` / `prompt` that a parallel "Render cover" mutation
+    // just persisted. Passing `null` explicitly still clears the sub-object
+    // (intentional-clear semantics).
+    const NESTED_DEEP_MERGE_KEYS = ['cover', 'genConfig'];
+    let mergedStages = cur.stages;
+    if ('stages' in patch && patch.stages && typeof patch.stages === 'object') {
+      mergedStages = { ...cur.stages };
+      for (const [stageId, stagePatch] of Object.entries(patch.stages)) {
+        const prev = cur.stages?.[stageId];
+        if (prev && stagePatch && typeof prev === 'object' && typeof stagePatch === 'object') {
+          const merged = { ...prev, ...stagePatch };
+          // Mirror the snapshot trigger from updateStageWithLatest so a
+          // route-level PATCH that swaps lastRunId (e.g. the restore endpoint)
+          // also produces a runHistory entry. No-op when the patch is a plain
+          // save-edit without lastRunId.
+          merged.runHistory = snapshotRunHistory(prev, stagePatch, stageId);
+          for (const key of NESTED_DEEP_MERGE_KEYS) {
+            if (key in stagePatch
+                && stagePatch[key] && typeof stagePatch[key] === 'object'
+                && prev[key] && typeof prev[key] === 'object') {
+              merged[key] = { ...prev[key], ...stagePatch[key] };
+            }
           }
+          // Clear transient error fields when a content/status change implies
+          // the previous failure is no longer the active state. Mirrors the
+          // pre-per-stage-merge behavior, where a `{ status, input, output }`
+          // patch replaced the whole stage and implicitly wiped errorMessage.
+          if ('status' in stagePatch && stagePatch.status !== 'error'
+              && stagePatch.status !== 'generating'
+              && !('errorMessage' in stagePatch)) {
+            merged.errorMessage = '';
+          }
+          mergedStages[stageId] = merged;
+        } else {
+          mergedStages[stageId] = stagePatch;
         }
-        // Clear transient error fields when a content/status change implies
-        // the previous failure is no longer the active state. Mirrors the
-        // pre-per-stage-merge behavior, where a `{ status, input, output }`
-        // patch replaced the whole stage and implicitly wiped errorMessage.
-        if ('status' in stagePatch && stagePatch.status !== 'error'
-            && stagePatch.status !== 'generating'
-            && !('errorMessage' in stagePatch)) {
-          merged.errorMessage = '';
-        }
-        mergedStages[stageId] = merged;
-      } else {
-        mergedStages[stageId] = stagePatch;
       }
     }
-  }
 
-  const merged = sanitizeIssue({
-    ...cur,
-    ...('title' in patch ? { title: patch.title } : {}),
-    ...('number' in patch ? { number: patch.number } : {}),
-    ...('status' in patch ? { status: patch.status } : {}),
-    ...('seasonId' in patch ? { seasonId: patch.seasonId } : {}),
-    ...('arcPosition' in patch ? { arcPosition: patch.arcPosition } : {}),
-    ...('arcRole' in patch ? { arcRole: patch.arcRole } : {}),
-    ...('lengthProfile' in patch ? { lengthProfile: patch.lengthProfile } : {}),
-    ...('pageTarget' in patch ? { pageTarget: patch.pageTarget } : {}),
-    ...('minutesTarget' in patch ? { minutesTarget: patch.minutesTarget } : {}),
-    ...('origin' in patch ? { origin: patch.origin } : {}),
-    stages: mergedStages,
-    updatedAt: new Date().toISOString(),
-  });
-  if (!merged) throw makeErr('Invalid issue payload', ERR_VALIDATION);
-  state.issues[idx] = merged;
-  // A seasonId move affects both source and destination volumes, so full
-  // renumber. An arcPosition change only reorders within the current volume.
-  // `skipRenumber` lets bulk callers (e.g. deleteSeason) collapse N per-update
-  // renumbers into one final pass.
-  if (!skipRenumber) {
-    if ('seasonId' in patch && cur.seasonId !== merged.seasonId) {
-      await renumberInline(state, merged.seriesId, null);
-    } else if ('arcPosition' in patch && cur.arcPosition !== merged.arcPosition) {
-      await renumberInline(state, merged.seriesId, merged.seasonId || UNSCOPED_ANCHOR);
+    const merged = sanitizeIssue({
+      ...cur,
+      ...('title' in patch ? { title: patch.title } : {}),
+      ...('number' in patch ? { number: patch.number } : {}),
+      ...('status' in patch ? { status: patch.status } : {}),
+      ...('seasonId' in patch ? { seasonId: patch.seasonId } : {}),
+      ...('arcPosition' in patch ? { arcPosition: patch.arcPosition } : {}),
+      ...('arcRole' in patch ? { arcRole: patch.arcRole } : {}),
+      ...('lengthProfile' in patch ? { lengthProfile: patch.lengthProfile } : {}),
+      ...('pageTarget' in patch ? { pageTarget: patch.pageTarget } : {}),
+      ...('minutesTarget' in patch ? { minutesTarget: patch.minutesTarget } : {}),
+      ...('origin' in patch ? { origin: patch.origin } : {}),
+      stages: mergedStages,
+      updatedAt: new Date().toISOString(),
+    });
+    if (!merged) throw makeErr('Invalid issue payload', ERR_VALIDATION);
+    state.issues[idx] = merged;
+    // A seasonId move affects both source and destination volumes, so full
+    // renumber. An arcPosition change only reorders within the current volume.
+    // `skipRenumber` lets bulk callers (e.g. deleteSeason) collapse N per-update
+    // renumbers into one final pass.
+    if (!skipRenumber) {
+      if ('seasonId' in patch && cur.seasonId !== merged.seasonId) {
+        await renumberInline(state, merged.seriesId, null);
+      } else if ('arcPosition' in patch && cur.arcPosition !== merged.arcPosition) {
+        await renumberInline(state, merged.seriesId, merged.seasonId || UNSCOPED_ANCHOR);
+      }
     }
-  }
-  await writeState(state);
-  // Issues are exported as part of their parent series — re-export the
-  // series so any active subscription picks up the issue change.
-  emitRecordUpdated('series', merged.seriesId);
-  return merged;
+    await writeState(state);
+    // Issues are exported as part of their parent series — re-export the
+    // series so any active subscription picks up the issue change.
+    emitRecordUpdated('series', merged.seriesId);
+    return merged;
   }); // end queueIssueWrite
 }
 
@@ -799,20 +799,20 @@ export function deleteIssue(id) {
   // delete to peers; the orchestrator's GC sweep prunes it once all peers ack.
   // `renumberInline` filters tombstones, so surviving issues stay contiguous.
   return queueIssueWrite(async () => {
-  const state = await readState();
-  const idx = state.issues.findIndex((i) => i.id === id);
-  if (idx < 0) throw makeErr(`Issue not found: ${id}`, ERR_NOT_FOUND);
-  const cur = state.issues[idx];
-  if (cur.deleted) throw makeErr(`Issue not found: ${id}`, ERR_NOT_FOUND);
-  const seriesId = cur.seriesId;
-  const now = new Date().toISOString();
-  state.issues[idx] = { ...cur, deleted: true, deletedAt: now, updatedAt: now };
-  await renumberInline(state, seriesId, cur.seasonId || UNSCOPED_ANCHOR);
-  await writeState(state);
-  // Series export bundles every issue, so a deletion is an update on the
-  // parent series for any active share-bucket subscription.
-  emitRecordUpdated('series', seriesId);
-  return { id };
+    const state = await readState();
+    const idx = state.issues.findIndex((i) => i.id === id);
+    if (idx < 0) throw makeErr(`Issue not found: ${id}`, ERR_NOT_FOUND);
+    const cur = state.issues[idx];
+    if (cur.deleted) throw makeErr(`Issue not found: ${id}`, ERR_NOT_FOUND);
+    const seriesId = cur.seriesId;
+    const now = new Date().toISOString();
+    state.issues[idx] = { ...cur, deleted: true, deletedAt: now, updatedAt: now };
+    await renumberInline(state, seriesId, cur.seasonId || UNSCOPED_ANCHOR);
+    await writeState(state);
+    // Series export bundles every issue, so a deletion is an update on the
+    // parent series for any active share-bucket subscription.
+    emitRecordUpdated('series', seriesId);
+    return { id };
   }); // end queueIssueWrite
 }
 
@@ -834,45 +834,45 @@ export function updateStageWithLatest(issueId, stageId, computeFn) {
     return Promise.reject(makeErr(`Unknown stage: ${stageId}`, ERR_VALIDATION));
   }
   return queueIssueWrite(async () => {
-  const state = await readState();
-  const idx = state.issues.findIndex((i) => i.id === issueId);
-  if (idx < 0) throw makeErr(`Issue not found: ${issueId}`, ERR_NOT_FOUND);
-  const cur = state.issues[idx];
-  if (cur.deleted) throw makeErr(`Issue not found: ${issueId}`, ERR_NOT_FOUND);
-  const isVisual = VISUAL_STAGE_IDS.includes(stageId);
-  const isAudio = AUDIO_STAGE_IDS.includes(stageId);
-  const currentStage = cur.stages[stageId];
-  const patch = computeFn(currentStage);
-  // Empty-patch fast path: a computeFn that returns `{}` is a "decided not
-  // to write" signal (e.g. stale media-job completion against a re-rendered
-  // page). Skip the disk write + emitRecordUpdated so it doesn't trigger
-  // a re-export storm in share subscriptions for late no-op events.
-  if (isPlainObject(patch) && Object.keys(patch).length === 0) {
-    return { issue: cur, stage: currentStage };
-  }
-  // Snapshot the prior `{ runId, input, output }` into runHistory when this
-  // patch carries a fresh lastRunId (i.e. a generate just replaced prior
-  // content). Computed BEFORE the spread so it reads pre-merge state.
-  const nextRunHistory = snapshotRunHistory(currentStage, patch, stageId);
-  const merged = {
-    ...currentStage,
-    ...patch,
-    runHistory: nextRunHistory,
-    updatedAt: new Date().toISOString(),
-  };
-  let next;
-  if (isVisual) next = sanitizeVisualStage(merged, stageId);
-  else if (isAudio) next = sanitizeAudioStage(merged);
-  else next = sanitizeStage(merged);
-  const mergedIssue = sanitizeIssue({
-    ...cur,
-    stages: { ...cur.stages, [stageId]: next },
-    updatedAt: new Date().toISOString(),
-  });
-  state.issues[idx] = mergedIssue;
-  await writeState(state);
-  emitRecordUpdated('series', mergedIssue.seriesId);
-  return { issue: mergedIssue, stage: mergedIssue.stages[stageId] };
+    const state = await readState();
+    const idx = state.issues.findIndex((i) => i.id === issueId);
+    if (idx < 0) throw makeErr(`Issue not found: ${issueId}`, ERR_NOT_FOUND);
+    const cur = state.issues[idx];
+    if (cur.deleted) throw makeErr(`Issue not found: ${issueId}`, ERR_NOT_FOUND);
+    const isVisual = VISUAL_STAGE_IDS.includes(stageId);
+    const isAudio = AUDIO_STAGE_IDS.includes(stageId);
+    const currentStage = cur.stages[stageId];
+    const patch = computeFn(currentStage);
+    // Empty-patch fast path: a computeFn that returns `{}` is a "decided not
+    // to write" signal (e.g. stale media-job completion against a re-rendered
+    // page). Skip the disk write + emitRecordUpdated so it doesn't trigger
+    // a re-export storm in share subscriptions for late no-op events.
+    if (isPlainObject(patch) && Object.keys(patch).length === 0) {
+      return { issue: cur, stage: currentStage };
+    }
+    // Snapshot the prior `{ runId, input, output }` into runHistory when this
+    // patch carries a fresh lastRunId (i.e. a generate just replaced prior
+    // content). Computed BEFORE the spread so it reads pre-merge state.
+    const nextRunHistory = snapshotRunHistory(currentStage, patch, stageId);
+    const merged = {
+      ...currentStage,
+      ...patch,
+      runHistory: nextRunHistory,
+      updatedAt: new Date().toISOString(),
+    };
+    let next;
+    if (isVisual) next = sanitizeVisualStage(merged, stageId);
+    else if (isAudio) next = sanitizeAudioStage(merged);
+    else next = sanitizeStage(merged);
+    const mergedIssue = sanitizeIssue({
+      ...cur,
+      stages: { ...cur.stages, [stageId]: next },
+      updatedAt: new Date().toISOString(),
+    });
+    state.issues[idx] = mergedIssue;
+    await writeState(state);
+    emitRecordUpdated('series', mergedIssue.seriesId);
+    return { issue: mergedIssue, stage: mergedIssue.stages[stageId] };
   }); // end queueIssueWrite
 }
 
