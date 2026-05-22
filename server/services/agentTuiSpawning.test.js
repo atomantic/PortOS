@@ -86,8 +86,8 @@ vi.mock('../lib/providerModels.js', () => ({
 }));
 
 // Shrink buffer thresholds so the truncation tests can trip them with tiny
-// inputs. Real values (640 KB raw, 10 MB output) would force tests to push
-// millions of bytes through the spawner; the wiring under test is identical.
+// inputs. Real values (10 MB output) would force tests to push millions of
+// bytes through the spawner; the wiring under test is identical.
 // OUTPUT_BUFFER_HEADROOM is intentionally 1 byte so ANY appendLine call
 // trips it — otherwise the output-buffer overflow test would assert on the
 // byte count of the two spawn-startup string literals (which would silently
@@ -98,8 +98,6 @@ vi.mock('../lib/tuiHandshake.js', async (importOriginal) => {
     ...actual,
     OUTPUT_BUFFER_HEADROOM: 1,
     OUTPUT_BUFFER_CAP: 1,
-    RAW_BUFFER_HEADROOM: 200,
-    RAW_BUFFER_CAP: 100,
   };
 });
 
@@ -429,43 +427,19 @@ describe('spawnTuiAgent runtime', () => {
     );
   });
 
-  // ── 6. Raw-buffer truncation warning + metadata flag ────────────────────────
-  // Mirrors `outputBufferTruncated` in tuiPromptRunner.js — long-running TUI
-  // agents whose raw PTY stream overflows RAW_BUFFER_HEADROOM silently dropped
-  // the head before this change; analyzeAgentFailure then operated on a slice
-  // missing the failure tail with no signal that anything was clipped.
-  it('rawBuffer overflow: warns once and writes rawBufferTruncated:true to agent metadata', async () => {
+  // ── 6. Raw-buffer growth (no cap) ───────────────────────────────────────────
+  // rawBuffer feeds analyzeAgentFailure at finalize. Capping/slicing it would
+  // silently drop the head of long agent runs and hide earlier failure
+  // symptoms behind chatty progress redraws, so the buffer is allowed to grow
+  // for the duration of the run. No warn, no metadata flag.
+  it('rawBuffer grows without truncation warn or metadata flag', async () => {
     runSpawn();
     await flushMicrotasks();
 
-    // Feed a chunk larger than the mocked 200-byte HEADROOM in one go so the
-    // raw buffer trips on the first handleData call.
-    await capturedOnData(Buffer.from('x'.repeat(300)));
+    // Push well past the previous 640KB cap to prove growth is uncapped.
+    await capturedOnData(Buffer.from('x'.repeat(2 * 1024 * 1024)));
     await flushMicrotasks();
-
-    // Second chunk: should NOT emit a second warn or metadata write — the
-    // flag is a once-per-run signal, not a per-overflow counter.
-    await capturedOnData(Buffer.from('x'.repeat(300)));
-    await flushMicrotasks();
-
-    const truncWarns = warnSpy.mock.calls.filter(args =>
-      typeof args[0] === 'string' && args[0].includes('raw PTY buffer exceeded')
-    );
-    expect(truncWarns).toHaveLength(1);
-
-    const truncMetaCalls = vi.mocked(cosAgents.updateAgent).mock.calls.filter(
-      ([_id, payload]) => payload?.metadata?.rawBufferTruncated === true
-    );
-    expect(truncMetaCalls).toHaveLength(1);
-    expect(truncMetaCalls[0][0]).toBe('agent-1');
-  });
-
-  it('rawBuffer below threshold: no truncation warn or metadata flag', async () => {
-    runSpawn();
-    await flushMicrotasks();
-
-    // 150 bytes is under the mocked 200-byte HEADROOM.
-    await capturedOnData(Buffer.from('x'.repeat(150)));
+    await capturedOnData(Buffer.from('y'.repeat(2 * 1024 * 1024)));
     await flushMicrotasks();
 
     const truncWarns = warnSpy.mock.calls.filter(args =>
