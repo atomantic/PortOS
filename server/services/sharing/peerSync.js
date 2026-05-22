@@ -31,9 +31,9 @@
  * behavior even in the deployed system.
  */
 
-import { join } from 'path';
+import { join, basename } from 'path';
 import { existsSync } from 'fs';
-import { PATHS, atomicWrite, readJSONFile, ensureDir } from '../../lib/fileUtils.js';
+import { PATHS, atomicWrite, readJSONFile, ensureDir, sha256File } from '../../lib/fileUtils.js';
 import { isStr } from '../../lib/storyBible.js';
 import { isPlainObject } from '../../lib/objects.js';
 import { peerBaseUrl } from '../../lib/peerUrl.js';
@@ -296,20 +296,29 @@ export async function diffAssetManifestAgainstLocal(manifest) {
     if (!isPlainObject(entry) || !isStr(entry.filename) || !isStr(entry.kind)) continue;
     const dir = directoryForAssetKind(entry.kind);
     if (!dir) continue;
-    const fullPath = join(dir, entry.filename);
+    // Peer-supplied filenames go straight into a local `join(dir, name)` here
+    // and via the receiver's reverse-pull GET in Stage 3 — a malicious peer
+    // could probe / hash arbitrary local files with a `../etc/passwd` style
+    // entry. Reject anything that isn't a bare basename before any FS op.
+    const safeName = sanitizeAssetFilename(entry.filename);
+    if (!safeName) continue;
+    const fullPath = join(dir, safeName);
     if (!existsSync(fullPath)) {
       missing.push(entry);
       continue;
     }
-    // For images we can cheaply diff via the sidecar cache; if the local
-    // hash matches what the sender claims we already have the right bytes.
-    if (entry.kind === 'image' && isStr(entry.sha256)) {
-      const local = await getOrComputeImageSha256(fullPath);
-      if (local?.hash !== entry.sha256) missing.push(entry);
+    // Compare SHA when the manifest carries one — for ALL kinds, not just
+    // images. The image path uses the sidecar cache (fast for the common
+    // ~200-asset universe case); image-ref/video stream-hash on demand.
+    // Existence-only would let a renamed-in-place asset on the receiver
+    // silently mismatch the sender, and the snapshot-sync fallback is the
+    // ONLY thing that would catch it 60s later — better to detect on push.
+    if (isStr(entry.sha256)) {
+      const localHash = entry.kind === 'image'
+        ? (await getOrComputeImageSha256(fullPath))?.hash ?? null
+        : await sha256File(fullPath).catch(() => null);
+      if (localHash !== entry.sha256) missing.push(entry);
     }
-    // image-ref + video: existence check is sufficient at Stage 2. A
-    // sha-mismatch on those is rare (no in-place re-render) and the next
-    // snapshot-sync cycle catches it as a fallback if it ever happens.
   }
   return missing;
 }
@@ -319,6 +328,20 @@ function directoryForAssetKind(kind) {
   if (kind === 'image-ref') return PATHS.imageRefs;
   if (kind === 'video') return PATHS.videos;
   return null;
+}
+
+/**
+ * Returns the filename if it's safe to use as a path segment under the asset
+ * directory, otherwise null. Rejects path separators, parent-directory
+ * tokens, and any value that doesn't match its own basename — same posture
+ * as `jobFromSidecar` in services/sharing/exporter.js for symmetry with
+ * how the share-bucket importer validates inbound asset filenames.
+ */
+function sanitizeAssetFilename(name) {
+  if (typeof name !== 'string' || !name) return null;
+  if (name.includes('/') || name.includes('\\') || name.includes('..')) return null;
+  if (basename(name) !== name) return null;
+  return name;
 }
 
 // --- Push pipeline (sender side) ----------------------------------------
@@ -358,8 +381,19 @@ export async function pushRecordToPeer(sub) {
   const payload = await buildPushPayload(sub, ourInstanceId);
   if (!payload) return { pushed: false, reason: 'record-not-found' };
 
-  // No-op short-circuit: don't re-push bytes we already pushed.
-  const hash = simplePayloadHash(payload.record);
+  // No-op short-circuit: don't re-push bytes we already pushed. Hash the
+  // FULL logical payload (record + bundled issues + asset manifest) — not
+  // just the record — so an issue-only edit, an asset-only re-render, or a
+  // new image landing under the same series still propagates instead of
+  // collapsing to "unchanged" because the parent series didn't move.
+  // sourceInstanceId is intentionally excluded: it's an envelope field, not
+  // a content field, and hashing it would force a re-push every time we
+  // bumped instance metadata.
+  const hash = simplePayloadHash({
+    record: payload.record,
+    issues: payload.issues ?? null,
+    assetManifest: payload.assetManifest ?? [],
+  });
   if (sub.lastPushedHash && sub.lastPushedHash === hash) {
     return { pushed: false, reason: 'unchanged', hash };
   }
@@ -386,10 +420,12 @@ export async function pushRecordToPeer(sub) {
   }
   const body = await res.json().catch(() => null);
 
-  // Persist push metadata + advance tombstone cursor if the receiver acked
-  // any deletions. Both happen in one state read/write to avoid the gap
-  // where a crash between writes leaves an advanced cursor with no record
-  // of the push that triggered it.
+  // Persist push metadata to peer_subscriptions.json, then advance the
+  // tombstone cursor in peer_tombstone_cursors.json if the receiver acked
+  // any deletions. These are two separate files; a crash between them
+  // leaves the cursor un-advanced for one push cycle, which is safe —
+  // `ackDeletesUpTo` is monotonic + idempotent, so the receiver re-acks
+  // the same deletedAt on the next push and the cursor catches up.
   await persistPushSuccess(sub.id, hash);
   if (Number.isFinite(body?.ackedDeletesUpTo) && body.ackedDeletesUpTo > 0) {
     await ackDeletesUpTo(sub.peerId, body.ackedDeletesUpTo).catch(() => {});
@@ -522,8 +558,12 @@ export async function applyIncomingPush(payload) {
     }
   }
 
-  // Diff incoming asset manifest against local disk. The sender will
-  // background-pull these from us — no immediate action required here.
+  // Diff incoming asset manifest against local disk. We (the receiver) are
+  // the ones that will background-pull `missingAssets` from the sender's
+  // `/data/{images,image-refs,videos}/<filename>` static mount in Stage 3
+  // — the sender just needs to keep those files served, no action required
+  // from it here. We return the list to the sender in the response so it
+  // can surface progress in its UI ("N/M assets still syncing to peer X").
   const missingAssets = await diffAssetManifestAgainstLocal(assetManifest);
 
   // Compute the deletedAt water-mark we can ack. Use the maximum across the

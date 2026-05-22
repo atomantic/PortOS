@@ -56,6 +56,21 @@ async function writeState(state) {
   await atomicWrite(STATE_PATH(), state);
 }
 
+// Serialize every readState→modify→writeState pair through a single tail
+// promise. Push-pipeline ackDeletesUpTo + receiver-side applyIncomingPush +
+// subscribe-driven initCursor all mutate this file and can race: without
+// serialization, two concurrent acks of different `deletedAtMs` both read
+// the pre-existing cursor, each chooses the higher value (correctly) but
+// the LATER writer clobbers the EARLIER writer's update — only one of the
+// two `lastAckedDeleteAt` advances survives, defeating the monotonic
+// guarantee. Single-instance app, so a module-level tail suffices.
+let writeTail = Promise.resolve();
+function withCursorLock(fn) {
+  const next = writeTail.then(() => fn(), () => fn());
+  writeTail = next.catch(() => {});
+  return next;
+}
+
 /** Returns a snapshot of every peer's cursor. */
 export async function listCursors() {
   return readState();
@@ -77,11 +92,13 @@ export async function getCursor(peerId) {
  */
 export async function initCursor(peerId, { now = Date.now() } = {}) {
   if (typeof peerId !== 'string' || !peerId) return null;
-  const state = await readState();
-  if (state[peerId]) return state[peerId];
-  state[peerId] = { lastAckedDeleteAt: 0, subscribedSince: now };
-  await writeState(state);
-  return state[peerId];
+  return withCursorLock(async () => {
+    const state = await readState();
+    if (state[peerId]) return state[peerId];
+    state[peerId] = { lastAckedDeleteAt: 0, subscribedSince: now };
+    await writeState(state);
+    return state[peerId];
+  });
 }
 
 /**
@@ -93,12 +110,14 @@ export async function initCursor(peerId, { now = Date.now() } = {}) {
 export async function ackDeletesUpTo(peerId, deletedAtMs, { now = Date.now() } = {}) {
   if (typeof peerId !== 'string' || !peerId) return null;
   if (!Number.isFinite(deletedAtMs) || deletedAtMs < 0) return null;
-  const state = await readState();
-  const existing = state[peerId] || { lastAckedDeleteAt: 0, subscribedSince: now };
-  if (deletedAtMs <= existing.lastAckedDeleteAt) return existing;
-  state[peerId] = { ...existing, lastAckedDeleteAt: deletedAtMs };
-  await writeState(state);
-  return state[peerId];
+  return withCursorLock(async () => {
+    const state = await readState();
+    const existing = state[peerId] || { lastAckedDeleteAt: 0, subscribedSince: now };
+    if (deletedAtMs <= existing.lastAckedDeleteAt) return existing;
+    state[peerId] = { ...existing, lastAckedDeleteAt: deletedAtMs };
+    await writeState(state);
+    return state[peerId];
+  });
 }
 
 /**
@@ -107,11 +126,22 @@ export async function ackDeletesUpTo(peerId, deletedAtMs, { now = Date.now() } =
  */
 export async function removeCursor(peerId) {
   if (typeof peerId !== 'string' || !peerId) return false;
-  const state = await readState();
-  if (!(peerId in state)) return false;
-  delete state[peerId];
-  await writeState(state);
-  return true;
+  return withCursorLock(async () => {
+    const state = await readState();
+    if (!(peerId in state)) return false;
+    delete state[peerId];
+    await writeState(state);
+    return true;
+  });
+}
+
+/**
+ * Test-only: await any in-flight cursor writes so a test can rm-rf its
+ * tmpdir without an ENOTEMPTY race against a fire-and-forget ackDeletesUpTo
+ * call from the push pipeline.
+ */
+export async function __drainForTests() {
+  await writeTail.catch(() => {});
 }
 
 /**

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdir, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -13,19 +13,24 @@ import {
   ackDeletesUpTo,
   removeCursor,
   getMinAckAcrossPeers,
+  __drainForTests,
 } from './peerTombstoneCursors.js';
 
 let originalDataPath;
+let tmp;
 
 beforeEach(async () => {
   originalDataPath = PATHS.data;
-  const tmp = join(tmpdir(), `portos-peer-cursors-${Date.now()}-${Math.random()}`);
+  tmp = join(tmpdir(), `portos-peer-cursors-${Date.now()}-${Math.random()}`);
   await mkdir(join(tmp, 'sharing'), { recursive: true });
   PATHS.data = tmp;
-  return async () => {
-    await rm(tmp, { recursive: true, force: true });
-    PATHS.data = originalDataPath;
-  };
+});
+
+afterEach(async () => {
+  // Drain any in-flight cursor writes before rm-rf'ing the tmpdir.
+  await __drainForTests();
+  await rm(tmp, { recursive: true, force: true });
+  PATHS.data = originalDataPath;
 });
 
 describe('peerTombstoneCursors', () => {
@@ -113,6 +118,22 @@ describe('peerTombstoneCursors', () => {
       expect(await ackDeletesUpTo('peer-a', NaN)).toBeNull();
       expect(await ackDeletesUpTo('peer-a', -1)).toBeNull();
       expect(await ackDeletesUpTo('peer-a', 'not-a-number')).toBeNull();
+    });
+
+    it('serializes concurrent acks so the highest deletedAtMs always wins (no clobber)', async () => {
+      // Regression: without the cursor write-lock, two concurrent acks both
+      // read the pre-existing lastAckedDeleteAt, each correctly chooses the
+      // higher value, but the LATER writer clobbers the EARLIER writer's
+      // update. The persisted cursor then reflects only one of the two acks.
+      await Promise.all([
+        ackDeletesUpTo('peer-a', 100),
+        ackDeletesUpTo('peer-a', 5000),
+        ackDeletesUpTo('peer-a', 2500),
+        ackDeletesUpTo('peer-a', 9999),
+        ackDeletesUpTo('peer-a', 750),
+      ]);
+      const cursor = await getCursor('peer-a');
+      expect(cursor.lastAckedDeleteAt).toBe(9999);
     });
   });
 

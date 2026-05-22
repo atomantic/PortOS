@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdir, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -64,11 +64,12 @@ import { listCursors } from './peerTombstoneCursors.js';
 
 let originalDataPath;
 let originalImagesPath;
+let tmp;
 
 beforeEach(async () => {
   originalDataPath = PATHS.data;
   originalImagesPath = PATHS.images;
-  const tmp = join(tmpdir(), `portos-peer-sync-${Date.now()}-${Math.random()}`);
+  tmp = join(tmpdir(), `portos-peer-sync-${Date.now()}-${Math.random()}`);
   await mkdir(join(tmp, 'sharing'), { recursive: true });
   await mkdir(join(tmp, 'images'), { recursive: true });
   PATHS.data = tmp;
@@ -89,14 +90,15 @@ beforeEach(async () => {
   vi.mocked(listIssues).mockReset();
 
   await __resetForTests();
-  return async () => {
-    // Drain in-flight fire-and-forget pushes before tearing down the tmpdir —
-    // otherwise persistPushSuccess can race the rm and leave ENOTEMPTY.
-    await __resetForTests();
-    await rm(tmp, { recursive: true, force: true });
-    PATHS.data = originalDataPath;
-    PATHS.images = originalImagesPath;
-  };
+});
+
+afterEach(async () => {
+  // Drain in-flight fire-and-forget pushes before tearing down the tmpdir —
+  // otherwise persistPushSuccess can race the rm and leave ENOTEMPTY.
+  await __resetForTests();
+  await rm(tmp, { recursive: true, force: true });
+  PATHS.data = originalDataPath;
+  PATHS.images = originalImagesPath;
 });
 
 describe('peerSync', () => {
@@ -271,6 +273,44 @@ describe('peerSync', () => {
       ]);
       expect(missing).toEqual([]);
     });
+
+    it('rejects path-traversal filenames silently (cant be used to probe local FS)', async () => {
+      // Regression: a malicious peer sending `../../etc/passwd` (or backslash
+      // variants on Windows checkouts) would otherwise let us join arbitrary
+      // paths and reveal whether they exist via the missing/present split.
+      const missing = await diffAssetManifestAgainstLocal([
+        { filename: '../../etc/passwd', kind: 'image', sha256: 'a'.repeat(64) },
+        { filename: '..\\windows\\system32\\config', kind: 'image' },
+        { filename: 'sub/dir/asset.png', kind: 'image' },
+        { filename: '/etc/hosts', kind: 'image' },
+      ]);
+      expect(missing).toEqual([]);
+    });
+
+    it('reports sha-mismatched videos AND image-refs as missing (not just images)', async () => {
+      // Regression: stage 2 originally only sha-checked the 'image' kind,
+      // letting an image-ref / video drift silently when bytes diverged
+      // under the same filename — the snapshot-sync fallback was the only
+      // thing that would catch it 60s later.
+      await mkdir(join(tmp, 'image-refs'), { recursive: true });
+      await mkdir(join(tmp, 'videos'), { recursive: true });
+      // Re-route PATHS by writing into the locations the resolver uses.
+      const localImageRefBytes = Buffer.from('local image-ref bytes');
+      const localVideoBytes = Buffer.from('local video bytes');
+      const { PATHS: livePaths } = await import('../../lib/fileUtils.js');
+      livePaths.imageRefs = join(tmp, 'image-refs');
+      livePaths.videos = join(tmp, 'videos');
+      const { writeFile: writeFileFs } = await import('fs/promises');
+      await writeFileFs(join(livePaths.imageRefs, 'ref.png'), localImageRefBytes);
+      await writeFileFs(join(livePaths.videos, 'clip.mp4'), localVideoBytes);
+      const remoteFakeSha = 'f'.repeat(64);
+      const missing = await diffAssetManifestAgainstLocal([
+        { filename: 'ref.png', kind: 'image-ref', sha256: remoteFakeSha },
+        { filename: 'clip.mp4', kind: 'video', sha256: remoteFakeSha },
+      ]);
+      expect(missing).toHaveLength(2);
+      expect(missing.map((m) => m.filename).sort()).toEqual(['clip.mp4', 'ref.png']);
+    });
   });
 
   describe('pushRecordToPeer', () => {
@@ -345,6 +385,35 @@ describe('peerSync', () => {
       });
       expect(result.pushed).toBe(false);
       expect(result.reason).toBe('network');
+    });
+
+    it('does NOT short-circuit when the parent series record is identical but a bundled issue changed', async () => {
+      // Regression: simplePayloadHash originally hashed only payload.record,
+      // so a series push where only an issue field changed (a common case —
+      // every panel edit propagates as an issue update under a series sub)
+      // would collapse to reason: 'unchanged' and never propagate.
+      vi.mocked(getSeries).mockResolvedValue({ id: 's1', name: 'Series' });
+      vi.mocked(listIssues).mockResolvedValueOnce([
+        { id: 'i1', seriesId: 's1', number: 1, title: 'First' },
+      ]);
+      vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({}) });
+      const sub = await subscribePeer(
+        { peerId: 'peer-a', recordKind: 'series', recordId: 's1' },
+        { adoptedFromReverse: true },
+      );
+      const first = await pushRecordToPeer(sub);
+      expect(first.pushed).toBe(true);
+
+      // Series record identical, but child issue title changed → MUST re-push.
+      vi.mocked(listIssues).mockResolvedValueOnce([
+        { id: 'i1', seriesId: 's1', number: 1, title: 'Revised' },
+      ]);
+      vi.mocked(peerFetch).mockClear();
+      const refreshed = await findPeerSubscription('peer-a', 'series', 's1');
+      const second = await pushRecordToPeer(refreshed);
+      expect(second.pushed).toBe(true);
+      expect(second.reason).not.toBe('unchanged');
+      expect(peerFetch).toHaveBeenCalledTimes(1);
     });
 
     it('bundles child issues with a series push', async () => {
