@@ -243,7 +243,7 @@ describe('migration 032 — Claude CLI/TUI default to opus-4-7', () => {
     expect(existsSync(providersPath)).toBe(false);
   });
 
-  it('skips silently on invalid JSON', async () => {
+  it('does not modify the file on invalid JSON (logs a warning and skips)', async () => {
     writeFileSync(providersPath, '{ not valid json');
     const before = readFileSync(providersPath, 'utf-8');
 
@@ -252,7 +252,7 @@ describe('migration 032 — Claude CLI/TUI default to opus-4-7', () => {
     expect(readFileSync(providersPath, 'utf-8')).toBe(before);
   });
 
-  it('skips silently when providers map is absent', async () => {
+  it('does not modify the file when providers map is absent (logs a warning and skips)', async () => {
     const before = JSON.stringify({ activeProvider: 'claude-code' });
     writeJson(providersPath, JSON.parse(before));
 
