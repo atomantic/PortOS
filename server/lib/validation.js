@@ -1209,16 +1209,33 @@ const peerWireRecordSchema = z.object({
   id: z.string().trim().min(1).max(120),
 }).passthrough();
 
-// Push payload from a sender. `kind` discriminates universe vs series; only
-// series payloads carry `issues[]`. `sourceInstanceId` is required + must be
-// real (the receiver rejects "unknown" at the service layer).
-export const peerSyncPushSchema = z.object({
-  kind: z.enum(['universe', 'series']),
+// Push payload from a sender. Modeled as a discriminated union on `kind` so
+// only series payloads can carry `issues[]` — without the discrimination, an
+// adversarial peer could send `kind: 'universe'` with a 100k-entry `issues`
+// array and force the receiver to iterate it through `computeAckedDeletesFromPayload`
+// and the sanitizers. The series branch caps issues at 1000 (well above any
+// realistic series — most cap out at a few dozen) so neither branch is
+// unbounded. `sourceInstanceId` is required + must be a real instance id
+// (the receiver rejects "unknown" at the service layer; here we just enforce
+// non-empty + length cap).
+const peerSyncPushBase = {
   record: peerWireRecordSchema,
-  issues: z.array(peerWireRecordSchema).optional(),
   assetManifest: z.array(peerAssetManifestEntrySchema).max(2000),
   sourceInstanceId: z.string().trim().min(1).max(120),
+};
+const universePushSchema = z.object({
+  kind: z.literal('universe'),
+  ...peerSyncPushBase,
 }).strict();
+const seriesPushSchema = z.object({
+  kind: z.literal('series'),
+  ...peerSyncPushBase,
+  issues: z.array(peerWireRecordSchema).max(1000).optional(),
+}).strict();
+export const peerSyncPushSchema = z.discriminatedUnion('kind', [
+  universePushSchema,
+  seriesPushSchema,
+]);
 
 // =============================================================================
 // CREATIVE DIRECTOR SCHEMAS

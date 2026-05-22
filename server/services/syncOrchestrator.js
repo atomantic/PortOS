@@ -19,7 +19,6 @@ import * as memorySync from './memorySync.js';
 import * as dataSync from './dataSync.js';
 import { getBackendName } from './memoryBackend.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
-import { listPeerSubscriptions } from './sharing/peerSync.js';
 
 const CURSORS_FILE = dataPath('instances_sync_cursors.json');
 const SYNC_INTERVAL_MS = 60000;
@@ -288,6 +287,14 @@ async function syncDataCategoryFromPeer(peer, peerId, category, cachedChecksums)
  * how `dataSync.getPipelineSnapshot` produces them as one composite.
  */
 async function categoriesCoveredByPeerSync(peerId) {
+  // Dynamic import keeps `sharing/peerSync.js` (which transitively pulls
+  // every merge*FromSync service + recordEvents) OUT of this orchestrator's
+  // module-load graph. Two reasons: (1) shaves the startup cost of evaluating
+  // those modules until the first sync cycle actually runs, (2) insurance
+  // against a future circular dep — peerSync's graph never needs the
+  // orchestrator today, but a top-level import here would manifest as a
+  // confusing "undefined" crash at boot the day that changes.
+  const { listPeerSubscriptions } = await import('./sharing/peerSync.js');
   const subs = await listPeerSubscriptions({ peerId });
   const skip = new Set();
   for (const sub of subs) {

@@ -127,6 +127,46 @@ describe('peer-sync routes', () => {
       expect(res.status).toBe(400);
     });
 
+    it('rejects a universe push that smuggles an issues[] field (discriminated union)', async () => {
+      // Regression: peerSyncPushSchema is a discriminated union on `kind`.
+      // Only the series branch accepts `issues`; the universe branch is
+      // .strict() so any `issues` field — even a single entry — fails Zod
+      // parsing. Without this guard, a malicious peer could send
+      // kind='universe' with a large issues array and force the receiver to
+      // iterate it via computeAckedDeletesFromPayload before realizing the
+      // kind mismatch. Body-parser limits catch the genuinely huge case;
+      // the schema catches the moderately-sized-but-still-malicious case.
+      const res = await request(buildApp())
+        .post('/api/peer-sync/push')
+        .send({
+          kind: 'universe',
+          record: { id: 'u1' },
+          issues: [{ id: 'i1' }],
+          assetManifest: [],
+          sourceInstanceId: 'peer-a',
+        });
+      expect(res.status).toBe(400);
+      expect(svc.applyIncomingPush).not.toHaveBeenCalled();
+    });
+
+    it('caps the series-push issues[] at 1000 entries (defense in depth alongside body limit)', async () => {
+      // Series can carry issues, but 1001+ is rejected by the schema. Body
+      // parser limits would also catch genuinely huge payloads; this cap
+      // catches the moderately-sized-but-still-too-big case (e.g. ~50k that
+      // fits under the 55mb body cap but is still 50× larger than any
+      // realistic series).
+      const res = await request(buildApp())
+        .post('/api/peer-sync/push')
+        .send({
+          kind: 'series',
+          record: { id: 's1' },
+          issues: Array.from({ length: 1001 }, (_, i) => ({ id: `i${i}` })),
+          assetManifest: [],
+          sourceInstanceId: 'peer-a',
+        });
+      expect(res.status).toBe(400);
+    });
+
     it('caps assetManifest at 2000 entries (memory-amplification guard)', async () => {
       // An adversarial peer could ship a manifest of 1M filenames and force
       // the receiver to stat each one. The schema caps at 2k entries (well
