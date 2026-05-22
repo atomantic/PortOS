@@ -824,6 +824,26 @@ describe('promptRunner — retry-with-fallback', () => {
     expect(status.markUnavailable).toHaveBeenCalledWith('intermediate-cli', expect.any(Object));
   });
 
+  it('rethrows pre-execution failures (e.g. createRun throwing) without retry — there is no investigation task to suppress', async () => {
+    const status = mockToolkitWithFallback();
+    // createRun throws before any execution happens (disk error, disabled
+    // provider, etc.). No onRunFailed event will fire, so no deferred
+    // investigation task exists. The retry path must NOT engage.
+    runner.createRun.mockRejectedValueOnce(new Error('Provider is disabled'));
+
+    await expect(runPromptThroughProvider({
+      provider: primaryCli,
+      prompt: 'p',
+      source: 'test',
+    })).rejects.toThrow(/Provider is disabled/);
+
+    expect(runner.executeCliRun).not.toHaveBeenCalled();
+    expect(runner.executeApiRun).not.toHaveBeenCalled();
+    expect(status.markUnavailable).not.toHaveBeenCalled();
+    expect(status.markUsageLimit).not.toHaveBeenCalled();
+    expect(autoFixer.noteFallbackHandled).not.toHaveBeenCalled();
+  });
+
   it('routes USAGE_LIMIT failures through markUsageLimit (parses wait time)', async () => {
     const status = mockToolkitWithFallback();
     runner.executeCliRun.mockImplementation(async (id, _p, _pr, _cwd, _onData, onComplete, _t) => {

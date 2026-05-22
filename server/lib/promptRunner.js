@@ -215,6 +215,17 @@ export async function runPromptThroughProvider(args) {
   try {
     return await executeProviderRunOnce(args);
   } catch (firstError) {
+    // Only retry when the failure came from the execution layer (annotated
+    // by safeReject with effectiveProvider). Pre-execution throws —
+    // createRun rejecting on a disk error / disabled provider / unsupported
+    // type — never fire the AI_PROVIDER_EXECUTION_FAILED hook, so there's
+    // no deferred investigation task to suppress and marking the provider
+    // unavailable would punish it for a disk/config problem. Rethrow
+    // those as-is so the caller sees the original error.
+    if (!firstError?.effectiveProvider) {
+      throw stripFallbackContext(firstError);
+    }
+
     // The runner already wrote a failed metadata.json and the onRunFailed
     // hook in server/index.js queued a deferred investigation task. If a
     // fallback is configured + available, mark the failed provider
@@ -226,7 +237,7 @@ export async function runPromptThroughProvider(args) {
     // different fallback if the requested primary was already marked
     // unavailable. Always dedupe against what actually ran so
     // `noteFallbackHandled` cancels the right queued task.
-    const failed = firstError.effectiveProvider || args.provider;
+    const failed = firstError.effectiveProvider;
     const failedModel = firstError.effectiveModel || resolveEffectiveModel(failed, args.model);
     const fallback = await pickFallbackProvider(failed);
     if (!fallback) {
