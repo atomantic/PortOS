@@ -108,7 +108,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `peerUrl.js` | Build the base URL for a peer. |
 | `sharingOrigin.js` | Origin metadata for records imported from share buckets. |
 | `syncWire.js` | Single source of truth for what fields cross the federated-peer wire (snapshot loop + per-record push agree). |
-| `tailscale.js` | Common paths where the Tailscale CLI binary is found. |
+| `tailscale.js` | Locate the Tailscale CLI binary and flag the sandboxed macOS App-bundle build (which can't write `tailscale cert` output outside its container). |
 | `httpsState.js` | Captures whether PortOS booted with HTTPS active. |
 | `networkExposure.js` | Snapshot of scheme + bind + cert mode for the dashboard's Network Exposure widget. |
 

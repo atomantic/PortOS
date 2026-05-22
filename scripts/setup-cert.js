@@ -31,7 +31,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, statSync } from 'fs
 import { networkInterfaces } from 'os';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { findTailscale } from '../server/lib/tailscale.js';
+import { findTailscale, hasOnlySandboxedTailscale } from '../server/lib/tailscale.js';
 import { hasTailscaleCert } from '../lib/tailscale-https.js';
 import { certPaths } from '../lib/certPaths.js';
 
@@ -239,6 +239,15 @@ function maybeFallbackSelfSigned() {
 
 if (SELF_SIGNED_ONLY) {
   trySelfSigned();
+  process.exit(0);
+}
+
+if (hasOnlySandboxedTailscale()) {
+  console.log(`⚠️  Only the sandboxed Tailscale.app CLI is installed.`);
+  console.log(`   It can't write the LE cert to data/certs/ ("operation not permitted").`);
+  console.log(`   Install the unsandboxed CLI:  brew install tailscale`);
+  console.log(`   Then re-run:                  npm run setup:cert`);
+  maybeFallbackSelfSigned();
   process.exit(0);
 }
 
