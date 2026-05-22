@@ -181,9 +181,15 @@ export async function subscribePeer({ peerId, recordKind, recordId }, opts = {})
   // acquisitions when subscribing many records to the same peer in sequence.
   if (!opts.skipCursorInit) await initCursor(peerId);
 
-  // Trigger initial push unless this was auto-created by a reverse-subscribe
-  // (the peer just pushed us their latest, so pushing back is a no-op cycle).
-  if (!opts.adoptedFromReverse) {
+  // Trigger initial push ONLY on the first insert (created=true) — and not
+  // when this was auto-created by a reverse-subscribe (the peer just pushed
+  // us their latest, so pushing back is a no-op cycle). Idempotent re-hits
+  // (auto-subscribe paths walking N existing records, manual re-subscribe,
+  // peer:online convergence) MUST NOT re-push: the record's content hasn't
+  // moved, so buildPushPayload would burn an asset-manifest sha-pass for a
+  // result lastPushedHash will short-circuit anyway. Callers that need a
+  // forced re-push can call pushRecordToPeer(sub) directly.
+  if (created && !opts.adoptedFromReverse) {
     pushRecordToPeer(sub).catch((err) => {
       console.log(`⚠️ peerSync: initial push failed for ${sub.id}: ${err.message}`);
     });
@@ -315,6 +321,17 @@ export async function autoSubscribePeerToAllRecords(peerId, recordKind) {
     records = await listSeries({ includeDeleted: false }).catch(() => []);
   }
   if (records.length === 0) return [];
+  // Compute the set difference up front: which local records aren't yet
+  // subscribed to this peer? The peer:online convergence path fires this
+  // helper on every online transition, so the steady-state case (all
+  // records already subscribed) must NOT walk N records and N subscribePeer
+  // readState calls. A single listPeerSubscriptions + Set diff collapses
+  // it to O(K) where K = existing-sub count, with the for-loop body
+  // running only for records that genuinely need a new sub.
+  const existingSubs = await listPeerSubscriptions({ peerId, recordKind });
+  const existingIds = new Set(existingSubs.map(s => s.recordId));
+  const missing = records.filter(r => isNonEmptyStr(r.id) && !existingIds.has(r.id));
+  if (missing.length === 0) return [];
   // Initialize the tombstone cursor for this peer ONCE up front. Each
   // subsequent subscribePeer call passes `skipCursorInit: true` ONLY when
   // this pre-init succeeded — otherwise we'd silently create subscriptions
@@ -327,8 +344,7 @@ export async function autoSubscribePeerToAllRecords(peerId, recordKind) {
   // second toggle on the same category) don't double-report or noise the
   // backfill log line with already-subscribed records.
   const created = [];
-  for (const rec of records) {
-    if (!isNonEmptyStr(rec.id)) continue;
+  for (const rec of missing) {
     const sub = await subscribePeer({ peerId, recordKind, recordId: rec.id }, { skipCursorInit: cursorInited }).catch((err) => {
       console.log(`⚠️ peerSync: backfill-subscribe ${recordKind}/${rec.id} → ${peerId} failed: ${err.message}`);
       return null;

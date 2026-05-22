@@ -181,6 +181,26 @@ describe('peerSync', () => {
       expect(all).toHaveLength(1);
     });
 
+    it('does NOT re-push on idempotent re-subscribe (existing sub keeps its lastPushedAt)', async () => {
+      // Regression: subscribePeer used to fire pushRecordToPeer fire-and-
+      // forget on every call, even when the sub already existed. For the
+      // auto-subscribe paths that walk N records, that meant N
+      // buildAssetManifest sha-passes for already-pushed records — wasted
+      // work, since lastPushedHash short-circuits the wire I/O anyway.
+      vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo' });
+      vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({ missingAssets: [] }) });
+      await subscribePeer({ peerId: 'peer-a', recordKind: 'universe', recordId: 'u1' });
+      await new Promise((r) => setTimeout(r, 10));
+      // First subscribe DID push.
+      expect(vi.mocked(peerFetch).mock.calls.length).toBeGreaterThan(0);
+      vi.mocked(peerFetch).mockClear();
+      // Second subscribe is idempotent — no push should fire.
+      const second = await subscribePeer({ peerId: 'peer-a', recordKind: 'universe', recordId: 'u1' });
+      await new Promise((r) => setTimeout(r, 10));
+      expect(second.created).toBe(false);
+      expect(vi.mocked(peerFetch)).not.toHaveBeenCalled();
+    });
+
     it('rejects invalid kind', async () => {
       await expect(
         subscribePeer({ peerId: 'peer-a', recordKind: 'issue', recordId: 'i1' }),
@@ -423,6 +443,22 @@ describe('peerSync', () => {
     it('returns [] for invalid arguments', async () => {
       expect(await autoSubscribePeerToAllRecords('', 'universe')).toEqual([]);
       expect(await autoSubscribePeerToAllRecords('peer-a', 'bogus')).toEqual([]);
+    });
+
+    it('short-circuits the for-loop when every record is already subscribed', async () => {
+      // Regression: peer:online fires this helper on every online
+      // transition. Without the pre-computed set-diff, a steady-state peer
+      // with all records already subscribed would still iterate N records
+      // and pay N subscribePeer readState calls per online transition.
+      vi.mocked(listUniverses).mockResolvedValue([{ id: 'u1' }, { id: 'u2' }]);
+      await autoSubscribePeerToAllRecords('peer-a', 'universe');
+      await new Promise((r) => setTimeout(r, 10));
+      vi.mocked(peerFetch).mockClear();
+      // Re-run on steady state — no push should fire because the set-diff
+      // is empty and the for-loop body never runs.
+      const second = await autoSubscribePeerToAllRecords('peer-a', 'universe');
+      expect(second).toEqual([]);
+      expect(vi.mocked(peerFetch)).not.toHaveBeenCalled();
     });
 
     it('converges from peer:online when the toggle fired before instanceId was known', async () => {
