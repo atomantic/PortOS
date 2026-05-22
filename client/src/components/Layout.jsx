@@ -169,6 +169,7 @@ const navItems = [
       { to: '/cos/config', label: 'Config', icon: Settings },
       { to: '/cos/digest', label: 'Digest', icon: Calendar },
       { to: '/cos/gsd', label: 'GSD', icon: Compass },
+      { to: '/cos/health', label: 'Health', icon: Activity },
       { to: '/cos/learning', label: 'Learning', icon: GraduationCap },
       { to: '/cos/memory', label: 'Memory', icon: Brain },
       { to: '/cos/schedule', label: 'Schedule', icon: Clock },
@@ -294,10 +295,9 @@ const navItems = [
   {
     label: 'System',
     icon: HardDrive,
-    defaultTo: '/cos/health',
+    defaultTo: '/data',
     children: [
       { to: '/data', label: 'Data', icon: HardDrive },
-      { to: '/cos/health', label: 'Health', icon: Activity },
       { to: '/instances', label: 'Instances', icon: Network },
       { to: '/loops', label: 'Loops', icon: RefreshCw },
       { to: '/devtools/processes', label: 'Processes', icon: Activity },

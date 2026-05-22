@@ -57,6 +57,7 @@ export const NAV_COMMANDS = [
   { id: 'nav.cos.config', path: '/cos/config', label: 'Config', section: 'Chief of Staff', aliases: ['cos-config'] },
   { id: 'nav.cos.digest', path: '/cos/digest', label: 'Digest', section: 'Chief of Staff', aliases: ['cos-digest'] },
   { id: 'nav.cos.gsd', path: '/cos/gsd', label: 'GSD', section: 'Chief of Staff', aliases: ['gsd', 'cos-gsd'] },
+  { id: 'nav.cos.health', path: '/cos/health', label: 'Health', section: 'Chief of Staff', aliases: ['cos-health'] },
   { id: 'nav.cos.learning', path: '/cos/learning', label: 'Learning', section: 'Chief of Staff', aliases: ['cos-learning'] },
   { id: 'nav.cos.memory', path: '/cos/memory', label: 'Memory', section: 'Chief of Staff', aliases: ['cos-memory'] },
   { id: 'nav.cos.schedule', path: '/cos/schedule', label: 'Schedule', section: 'Chief of Staff', aliases: ['schedule', 'cos-schedule'] },
@@ -133,7 +134,6 @@ export const NAV_COMMANDS = [
 
   { id: 'nav.ambient', path: '/ambient', label: 'Ambient', section: 'System', aliases: ['ambient', 'ambient-mode', 'ambient mode'], keywords: ['idle', 'background', 'display', 'screensaver', 'fullscreen'] },
   { id: 'nav.data', path: '/data', label: 'Data', section: 'System', aliases: ['data'] },
-  { id: 'nav.cos.health', path: '/cos/health', label: 'Health', section: 'System', aliases: ['cos-health'] },
   { id: 'nav.instances', path: '/instances', label: 'Instances', section: 'System', aliases: ['instances'] },
   { id: 'nav.loops', path: '/loops', label: 'Loops', section: 'System', aliases: ['loops'] },
   { id: 'nav.devtools.processes', path: '/devtools/processes', label: 'Processes', section: 'System', aliases: ['devtools-processes', 'processes'] },
