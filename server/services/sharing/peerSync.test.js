@@ -24,11 +24,13 @@ vi.mock('../instances.js', async () => {
 vi.mock('../universeBuilder.js', async () => ({
   getUniverse: vi.fn(),
   mergeUniversesFromSync: vi.fn(),
+  listUniverses: vi.fn(),
 }));
 
 vi.mock('../pipeline/series.js', async () => ({
   getSeries: vi.fn(),
   mergeSeriesFromSync: vi.fn(),
+  listSeries: vi.fn(),
 }));
 
 vi.mock('../pipeline/issues.js', async () => ({
@@ -52,15 +54,17 @@ import {
   applyIncomingPush,
   diffAssetManifestAgainstLocal,
   buildAssetManifest,
+  autoSubscribeRecordToAllPeers,
+  autoSubscribePeerToAllRecords,
   __resetForTests,
 } from './peerSync.js';
 
 import { getInstanceId, getPeers } from '../instances.js';
-import { getUniverse, mergeUniversesFromSync } from '../universeBuilder.js';
-import { getSeries, mergeSeriesFromSync } from '../pipeline/series.js';
+import { getUniverse, mergeUniversesFromSync, listUniverses } from '../universeBuilder.js';
+import { getSeries, mergeSeriesFromSync, listSeries } from '../pipeline/series.js';
 import { listIssues, mergeIssuesFromSync } from '../pipeline/issues.js';
 import { peerFetch } from '../../lib/peerHttpClient.js';
-import { listCursors } from './peerTombstoneCursors.js';
+import { listCursors, __drainForTests as __drainCursors } from './peerTombstoneCursors.js';
 
 let originalDataPath;
 let originalImagesPath;
@@ -104,7 +108,16 @@ beforeEach(async () => {
 afterEach(async () => {
   // Drain in-flight fire-and-forget pushes before tearing down the tmpdir —
   // otherwise persistPushSuccess can race the rm and leave ENOTEMPTY.
-  await __resetForTests();
+  // Drain BOTH writeTails (peerSync's subscription state AND the tombstone
+  // cursor module's separate writeTail, since initCursor writes happen
+  // outside peerSync's lock). Two cycles with a microtask flush between
+  // them — pushes scheduled by the FIRST drain (e.g. ackDeletesUpTo from
+  // a settled push) only enqueue on the next tick.
+  for (let i = 0; i < 3; i++) {
+    await __resetForTests();
+    await __drainCursors();
+    await new Promise((r) => setTimeout(r, 5));
+  }
   await rm(tmp, { recursive: true, force: true });
   PATHS.data = originalDataPath;
   PATHS.images = originalImagesPath;
@@ -216,6 +229,81 @@ describe('peerSync', () => {
       const result = await unsubscribeAllForPeer('peer-a');
       expect(result.removed).toHaveLength(2);
       expect(await findPeerSubscription('peer-a', 'universe', 'u1')).toBeNull();
+    });
+  });
+
+  describe('autoSubscribeRecordToAllPeers', () => {
+    beforeEach(() => {
+      // Default these so the push triggered by subscribePeer doesn't 500
+      // when the underlying buildPushPayload runs.
+      vi.mocked(getUniverse).mockResolvedValue({ id: 'u1' });
+      vi.mocked(getSeries).mockResolvedValue({ id: 's1' });
+      vi.mocked(listIssues).mockResolvedValue([]);
+      vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({}) });
+    });
+
+    it('subscribes the record to every peer with the matching category enabled', async () => {
+      vi.mocked(getPeers).mockResolvedValue([
+        { instanceId: 'peer-a', name: 'A', enabled: true, syncCategories: { universe: true } },
+        { instanceId: 'peer-b', name: 'B', enabled: true, syncCategories: { universe: true } },
+        { instanceId: 'peer-c', name: 'C', enabled: true, syncCategories: { universe: false } },
+      ]);
+      const created = await autoSubscribeRecordToAllPeers('universe', 'u1');
+      expect(created.map(c => c.peerId).sort()).toEqual(['peer-a', 'peer-b']);
+      expect(await findPeerSubscription('peer-a', 'universe', 'u1')).not.toBeNull();
+      expect(await findPeerSubscription('peer-c', 'universe', 'u1')).toBeNull();
+    });
+
+    it('skips disabled peers and inbound-only peers', async () => {
+      vi.mocked(getPeers).mockResolvedValue([
+        { instanceId: 'peer-a', name: 'A', enabled: false, syncCategories: { universe: true } },
+        { instanceId: 'peer-b', name: 'B', enabled: true, syncCategories: { universe: true }, directions: ['inbound'] },
+        { instanceId: 'peer-c', name: 'C', enabled: true, syncCategories: { universe: true }, directions: ['outbound'] },
+      ]);
+      const created = await autoSubscribeRecordToAllPeers('universe', 'u1');
+      expect(created.map(c => c.peerId)).toEqual(['peer-c']);
+    });
+
+    it('maps series records to the pipeline category', async () => {
+      vi.mocked(getPeers).mockResolvedValue([
+        { instanceId: 'peer-a', enabled: true, syncCategories: { universe: true, pipeline: false } },
+        { instanceId: 'peer-b', enabled: true, syncCategories: { universe: false, pipeline: true } },
+      ]);
+      const created = await autoSubscribeRecordToAllPeers('series', 's1');
+      expect(created.map(c => c.peerId)).toEqual(['peer-b']);
+    });
+
+    it('returns [] for invalid arguments', async () => {
+      expect(await autoSubscribeRecordToAllPeers('bogus', 'x')).toEqual([]);
+      expect(await autoSubscribeRecordToAllPeers('universe', '')).toEqual([]);
+    });
+  });
+
+  describe('autoSubscribePeerToAllRecords', () => {
+    beforeEach(() => {
+      vi.mocked(getUniverse).mockResolvedValue({ id: 'u1' });
+      vi.mocked(getSeries).mockResolvedValue({ id: 's1' });
+      vi.mocked(listIssues).mockResolvedValue([]);
+      vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({}) });
+    });
+
+    it('subscribes every local non-deleted universe to the peer', async () => {
+      vi.mocked(listUniverses).mockResolvedValue([{ id: 'u1' }, { id: 'u2' }]);
+      const created = await autoSubscribePeerToAllRecords('peer-a', 'universe');
+      expect(created.map(c => c.recordId).sort()).toEqual(['u1', 'u2']);
+      expect(await findPeerSubscription('peer-a', 'universe', 'u1')).not.toBeNull();
+      expect(await findPeerSubscription('peer-a', 'universe', 'u2')).not.toBeNull();
+    });
+
+    it('subscribes every local non-deleted series to the peer', async () => {
+      vi.mocked(listSeries).mockResolvedValue([{ id: 's1' }, { id: 's2' }]);
+      const created = await autoSubscribePeerToAllRecords('peer-a', 'series');
+      expect(created.map(c => c.recordId).sort()).toEqual(['s1', 's2']);
+    });
+
+    it('returns [] for invalid arguments', async () => {
+      expect(await autoSubscribePeerToAllRecords('', 'universe')).toEqual([]);
+      expect(await autoSubscribePeerToAllRecords('peer-a', 'bogus')).toEqual([]);
     });
   });
 
