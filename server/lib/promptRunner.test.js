@@ -635,6 +635,10 @@ describe('promptRunner — retry-with-fallback', () => {
     expect(out.text).toBe('fallback content');
     expect(out.usedFallback).toBe(true);
     expect(out.fallbackFrom).toEqual({ id: 'primary-cli', name: 'Primary CLI' });
+    // fallbackProvider exposes the full provider object that actually ran
+    // so attribution callers (stageRunner persisting runId for history /
+    // restore) can record providerId without re-picking the fallback.
+    expect(out.fallbackProvider).toMatchObject({ id: 'fallback-api', name: 'Fallback API' });
 
     // Primary was marked unavailable before retry; fallback was looked up
     // and used; the deferred autoFixer task was cancelled.

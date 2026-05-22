@@ -279,15 +279,33 @@ export async function runStagedLLM(stageName, variables, options = {}) {
 
   // Stage runs pre-create the run record (so the runId can be logged BEFORE
   // the LLM call starts), then thread that id through the shared runner.
-  const { text } = await runPromptThroughProvider({
+  // On runtime fallback (primary attempted + failed, fallback retried + won)
+  // `runPromptThroughProvider` ignores our pre-created `runId` and creates
+  // a fresh one for the fallback's record — so the successful output lives
+  // at `result.runId`, NOT the `runId` we passed in. The pre-created record
+  // stays as the failed-primary entry. Capture the post-fallback attribution
+  // (runId / model / providerId) here so the persisted stage result points
+  // at the run that actually produced the text — otherwise pipeline history
+  // / restore links land on a failed record.
+  const runResult2 = await runPromptThroughProvider({
     provider: effectiveProvider, model: effectiveModel, prompt, source: options.source || 'staged-llm', runId,
     timeout: effectiveTimeout,
   });
+  const { text } = runResult2;
+  let finalRunId = runId;
+  let finalProvider = effectiveProvider;
+  let finalModel = effectiveModel;
+  if (runResult2.usedFallback && runResult2.fallbackProvider) {
+    finalRunId = runResult2.runId;
+    finalProvider = runResult2.fallbackProvider;
+    finalModel = runResult2.model ?? finalModel;
+    console.log(`⚡ stage fallback succeeded: ${finalProvider.id} / ${finalModel || '(default)'} / ${stageName} → ${finalRunId.slice(0, 8)}`);
+  }
   // Codex CLI dumps the full transcript (banner + metadata + echoed prompt +
   // `codex\n<reply>` + token-stats footer). Carve out the assistant reply
   // before either parsing JSON or returning text. Idempotent for non-Codex
   // providers — returns input unchanged when the banner isn't present.
   const cleaned = extractCodexAssistant(text);
   const content = options.returnsJson ? extractJson(cleaned, { promptToStrip: prompt }) : cleaned;
-  return { content, model: effectiveModel || null, providerId: effectiveProvider.id, runId };
+  return { content, model: finalModel || null, providerId: finalProvider.id, runId: finalRunId };
 }
