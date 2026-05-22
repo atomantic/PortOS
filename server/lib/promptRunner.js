@@ -28,12 +28,21 @@
 
 import { createRun, executeApiRun, executeCliRun, extractBakedModel, hasModelFlag, stopRun, patchRunMetadata } from '../services/runner.js';
 import { getActiveProvider, getProviderById, getAllProviders } from '../services/providers.js';
-import { noteFallbackHandled } from '../services/autoFixer.js';
 import { executeTuiRun } from './tuiPromptRunner.js';
 import { ServerError } from './errorHandler.js';
 import { PROVIDER_TYPES } from './aiToolkit/constants.js';
 import { analyzeError, ERROR_CATEGORIES } from './aiToolkit/errorDetection.js';
 import { getAIToolkitInstance } from './aiToolkitState.js';
+
+// noteFallbackHandled lives in services/autoFixer.js, which transitively
+// pulls in services/cos.js (PM2 + fs + sockets). Importing it lazily on
+// the failure path keeps anything that imports promptRunner.js from
+// dragging the CoS stack along on the happy path. Node caches the module
+// after the first dynamic import, so the cost is one-time.
+async function loadNoteFallbackHandled() {
+  const mod = await import('../services/autoFixer.js');
+  return mod.noteFallbackHandled;
+}
 
 export const DEFAULT_TIMEOUT_MS = 300000;
 const APPEND_CHUNK = (acc, chunk) => acc + (typeof chunk === 'string' ? chunk : (chunk?.text || ''));
@@ -275,6 +284,7 @@ export async function runPromptThroughProvider(args) {
     // noisy "investigate" entry in their plan for a failure that was
     // auto-recovered. Keys must match what server/index.js's onRunFailed
     // hook published (metadata.providerName + metadata.model).
+    const noteFallbackHandled = await loadNoteFallbackHandled();
     noteFallbackHandled({
       provider: failed.name || failed.id,
       model: failedModel,
@@ -411,9 +421,11 @@ async function executeProviderRunOnce({ provider, prompt, source, model, runId: 
       // createRun persisted `metadata.model = effectiveModel || provider.defaultModel`
       // using the ORIGINAL provider's resolved value — so /runs would
       // attribute a model that doesn't belong to the fallback (e.g. an
-      // API model id recorded on a CLI fallback). Patch the record so
-      // attribution matches what actually executes.
-      patchRunMetadata(runId, {
+      // API model id recorded on a CLI fallback). Await the patch so a
+      // fast-failing run can't fire onRunFailed with stale model/provider
+      // info — `noteFallbackHandled` keys on metadata.providerName +
+      // metadata.model and would miss if the patch hadn't landed yet.
+      await patchRunMetadata(runId, {
         model: effectiveModel,
         providerId: effectiveProvider.id,
         providerName: effectiveProvider.name,
