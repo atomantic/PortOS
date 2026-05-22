@@ -33,6 +33,8 @@
 
 import { join, basename } from 'path';
 import { existsSync } from 'fs';
+import { writeFile } from 'fs/promises';
+import { EventEmitter } from 'events';
 import { PATHS, atomicWrite, readJSONFile, ensureDir, sha256File } from '../../lib/fileUtils.js';
 import { isStr } from '../../lib/storyBible.js';
 import { isPlainObject } from '../../lib/objects.js';
@@ -53,6 +55,16 @@ import {
 } from './peerTombstoneCursors.js';
 
 export const PEER_SUBSCRIBABLE_KINDS = Object.freeze(['universe', 'series']);
+
+/**
+ * Cross-cutting event bus for the peer-sync receiver. The asset-pull worker
+ * emits `asset-arrived` ({ filename, kind, peerId }) when a previously-missing
+ * file lands locally; `sharing/index.js` wires that to a socket emission so
+ * the client's MediaImage component can swap its "syncing" placeholder for
+ * the real bytes without polling.
+ */
+export const peerSyncEvents = new EventEmitter();
+peerSyncEvents.setMaxListeners(100);
 
 export const ERR_NOT_FOUND = 'PEER_SYNC_SUBSCRIPTION_NOT_FOUND';
 export const ERR_VALIDATION = 'PEER_SYNC_SUBSCRIPTION_VALIDATION';
@@ -590,6 +602,18 @@ export async function applyIncomingPush(payload) {
     recordId: record.id,
   }).catch(() => false);
 
+  // Schedule background pulls for every asset we're missing. The sender just
+  // told us they have these files — fetch them via their `/data/{kind-dir}/`
+  // static mount (acceptRanges enabled so resumes work over flaky Tailnet).
+  // Fire-and-forget so the push response isn't blocked on a slow pull; the
+  // worker emits a socket event when each asset lands so the UI can swap
+  // the MediaImage placeholder for the real bytes.
+  if (missingAssets.length > 0) {
+    pullMissingAssetsFromPeer(sourceInstanceId, missingAssets).catch((err) => {
+      console.log(`⚠️ peerSync: asset pull from ${sourceInstanceId} failed: ${err.message}`);
+    });
+  }
+
   return {
     missingAssets,
     reverseSubscriptionCreated,
@@ -624,6 +648,85 @@ async function maybeCreateReverseSubscription({ peerId, recordKind, recordId }) 
 
   await subscribePeer({ peerId, recordKind, recordId }, { adoptedFromReverse: true });
   return true;
+}
+
+// --- Receiver-side asset pull worker ------------------------------------
+
+const ASSET_KIND_TO_URL_PREFIX = Object.freeze({
+  image: '/data/images',
+  'image-ref': '/data/image-refs',
+  video: '/data/videos',
+});
+
+const ASSET_PULL_TIMEOUT_MS = 60000;
+const ASSET_PULL_MAX_BYTES = 100 * 1024 * 1024; // 100MB hard cap per asset
+
+/**
+ * Background-fetch every asset in `missingAssets` from the named peer's
+ * static `/data/{kind-dir}/` mount, writing each to the local PATHS dir for
+ * that kind. Emits `peerSyncEvents 'asset-arrived'` per file so the client's
+ * MediaImage placeholder can swap to the live asset.
+ *
+ * Each fetch is best-effort: a single failure does NOT abort the others, and
+ * the asset will be retried on the next push cycle (since the receiver will
+ * still report it as missing). The 60s loop's snapshot path also catches
+ * up if push-driven pulls keep failing — defense in depth.
+ *
+ * Stage 4 keeps this simple — sequential per-asset fetches, no parallelism
+ * cap. A future enhancement could pool 2-4 concurrent fetches if individual
+ * universes routinely ship hundreds of assets.
+ */
+async function pullMissingAssetsFromPeer(senderInstanceId, missingAssets) {
+  if (!isStr(senderInstanceId) || !Array.isArray(missingAssets) || missingAssets.length === 0) return;
+  const peer = await findPeerById(senderInstanceId);
+  if (!peer) {
+    console.log(`⚠️ peerSync: cant pull assets — peer ${senderInstanceId} not in registry`);
+    return;
+  }
+  const base = peerBaseUrl(peer);
+  for (const entry of missingAssets) {
+    await pullOneAsset(peer, base, entry).catch((err) => {
+      console.log(`⚠️ peerSync: asset pull ${entry.filename} from ${peer.name || senderInstanceId} failed: ${err.message}`);
+    });
+  }
+}
+
+async function pullOneAsset(peer, base, entry) {
+  const urlPrefix = ASSET_KIND_TO_URL_PREFIX[entry.kind];
+  const localDir = directoryForAssetKind(entry.kind);
+  // Re-validate the filename here even though the receiver already
+  // sanitized it in diffAssetManifestAgainstLocal — belt-and-suspenders
+  // against any future refactor that bypasses the diff path.
+  const safeName = sanitizeAssetFilename(entry.filename);
+  if (!urlPrefix || !localDir || !safeName) return;
+  const url = `${base}${urlPrefix}/${encodeURIComponent(safeName)}`;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), ASSET_PULL_TIMEOUT_MS);
+  const res = await peerFetch(url, { signal: controller.signal })
+    .finally(() => clearTimeout(timeoutId));
+  if (!res || !res.ok) return;
+  // Cap body size — a misconfigured peer (or hostile one) could ship a
+  // multi-GB file under a small filename and force the receiver to
+  // buffer it whole. Streaming would be better but adds machinery
+  // (write-then-rename, mid-stream sha verification); 100MB is well above
+  // any realistic single-image / single-clip and below the OOM threshold
+  // on the smallest PortOS host.
+  const contentLength = Number(res.headers.get('content-length'));
+  if (Number.isFinite(contentLength) && contentLength > ASSET_PULL_MAX_BYTES) {
+    console.log(`⚠️ peerSync: asset ${safeName} too large (${contentLength}) — refusing pull`);
+    return;
+  }
+  const buffer = Buffer.from(await res.arrayBuffer());
+  if (buffer.length > ASSET_PULL_MAX_BYTES) return;
+  await ensureDir(localDir);
+  const fullPath = join(localDir, safeName);
+  await writeFile(fullPath, buffer);
+  peerSyncEvents.emit('asset-arrived', {
+    filename: safeName,
+    kind: entry.kind,
+    peerId: peer.instanceId,
+  });
+  console.log(`📥 peerSync: pulled ${entry.kind}/${safeName} from ${peer.name || peer.instanceId} (${buffer.length} bytes)`);
 }
 
 // --- Listener install + debounced trigger -------------------------------

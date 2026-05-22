@@ -83,6 +83,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `apiUniverseBuilder.js` | Universe Builder (generate + edit + commit). |
 | `apiWritersRoom.js` | Writers Room (folders + works + drafts). |
 | `apiSharing.js` | Share buckets + federation sync. |
+| `apiPeerSync.js` | Per-record peer sync subscriptions (universe + series → other PortOS instances over Tailnet). |
 
 ## Tools / integrations
 

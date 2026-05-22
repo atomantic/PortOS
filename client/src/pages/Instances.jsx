@@ -13,7 +13,8 @@ import toast from '../components/ui/Toast';
 import socket from '../services/socket';
 import {
   getInstances, updateSelfInstance, addPeer, updatePeer,
-  removePeer, connectPeer, probePeer, getTailnetInfo, provisionTailnetCert
+  removePeer, connectPeer, probePeer, getTailnetInfo, provisionTailnetCert,
+  listPeerSubscriptions, unsubscribeFromPeer,
 } from '../services/api';
 import PeerAppsList from '../components/instances/PeerAppsList';
 import PeerAgentsSection from '../components/instances/PeerAgentsSection';
@@ -533,6 +534,103 @@ function SnapshotSyncBadge({ label, icon: Icon, cursorChecksum, remoteChecksum }
   );
 }
 
+/**
+ * Per-record peer-sync subscriptions to / from this peer.
+ *
+ * Shows what universes and series are being live-pushed to the peer (outgoing
+ * subscriptions we created via SyncToPeerButton) plus what they auto-subscribed
+ * back from us (`adoptedFromReverse`). Each row carries an unsubscribe control
+ * so the user can tear down a sync mistake without leaving the page.
+ *
+ * Inbound-only peers (configured with directions=['inbound'] in the peer
+ * record) never get reverse subscriptions auto-created — see
+ * services/sharing/peerSync.js `maybeCreateReverseSubscription`.
+ */
+function PeerSyncSubscriptionsSection({ peer }) {
+  const [subs, setSubs] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [busyId, setBusyId] = useState(null);
+
+  useEffect(() => {
+    if (!peer.instanceId) {
+      setSubs([]);
+      setLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setLoading(true);
+    listPeerSubscriptions({ peerId: peer.instanceId }, { silent: true })
+      .then((r) => {
+        if (!cancelled) setSubs(r?.subscriptions || []);
+      })
+      .catch(() => {
+        if (!cancelled) setSubs([]);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [peer.instanceId]);
+
+  if (!peer.instanceId) return null;
+  if (loading) return null;
+  if (subs.length === 0) return null;
+
+  const handleUnsubscribe = async (sub) => {
+    setBusyId(sub.id);
+    const ok = await unsubscribeFromPeer(sub.id).catch((err) => {
+      toast.error(err.message || 'Unsubscribe failed');
+      return null;
+    });
+    if (ok) {
+      setSubs((prev) => prev.filter((s) => s.id !== sub.id));
+      toast.success(`Stopped syncing ${sub.recordKind} ${sub.recordId.slice(0, 8)} with ${peer.name}`);
+    }
+    setBusyId(null);
+  };
+
+  const universeSubs = subs.filter((s) => s.recordKind === 'universe');
+  const seriesSubs = subs.filter((s) => s.recordKind === 'series');
+
+  return (
+    <div className="mt-2 pt-2 border-t border-port-border/50">
+      <div className="flex items-center gap-1.5 mb-1.5">
+        <ArrowLeftRight size={12} className="text-gray-500" />
+        <span className="text-[10px] text-gray-500 uppercase tracking-wider font-medium">
+          Live-pushed records ({subs.length})
+        </span>
+      </div>
+      <div className="space-y-1">
+        {[...universeSubs, ...seriesSubs].map((sub) => (
+          <div
+            key={sub.id}
+            className="flex items-center gap-2 text-[11px] text-gray-300 group"
+          >
+            <span className="text-gray-500 font-mono">{sub.recordKind}</span>
+            <span className="text-gray-400 font-mono truncate flex-1" title={sub.recordId}>
+              {sub.recordId.slice(0, 12)}…
+            </span>
+            {sub.adoptedFromReverse ? (
+              <span className="text-[9px] text-port-accent/70" title="Auto-created when this peer pushed us first">
+                ↩ reverse
+              </span>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => handleUnsubscribe(sub)}
+              disabled={busyId === sub.id}
+              className="text-gray-600 hover:text-port-error disabled:opacity-40"
+              title="Stop syncing"
+            >
+              <X size={12} />
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function SyncStatusSection({ peer, syncStatus }) {
   if (!syncStatus || !peer.instanceId) return null;
 
@@ -850,6 +948,8 @@ function PeerCard({ peer, onRefresh, syncStatus, tailnetInfo }) {
       <SyncCategoriesPanel peer={peer} onRefresh={onRefresh} />
 
       <SyncStatusSection peer={peer} syncStatus={syncStatus} />
+
+      <PeerSyncSubscriptionsSection peer={peer} />
 
       <PeerAppsList apps={peer.lastApps} peerAddress={peer.address} peerHost={peer.host} />
       {peer.status === 'online' && (

@@ -33,6 +33,7 @@ import InfluenceChipsInput from '../components/universeBuilder/InfluenceChipsInp
 import ImageGenSettingsForm from '../components/imageGen/ImageGenSettingsForm';
 import { RUNNER_FAMILIES } from '../lib/runnerFamilies';
 import ShareToButton from '../components/sharing/ShareToButton';
+import SyncToPeerButton from '../components/sharing/SyncToPeerButton';
 import OriginBadge from '../components/sharing/OriginBadge';
 import UniverseCanonSection from '../components/universe/UniverseCanonSection';
 import EntryCard from '../components/universe/EntryCard';
@@ -1780,6 +1781,7 @@ export default function UniverseBuilder() {
           {selectedId && (
             <>
               <ShareToButton kind="universe" ids={[selectedId]} label="Share" />
+              <SyncToPeerButton recordKind="universe" recordId={selectedId} label="Sync" />
               {draft.origin ? <OriginBadge origin={draft.origin} /> : null}
               <button
                 onClick={handleDelete}

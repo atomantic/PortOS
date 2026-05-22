@@ -12,7 +12,7 @@ import { join } from 'path';
 import { attachAllWatchers, attachWatcher, detachWatcher, shutdownAllWatchers, listAttachedWatchers } from './watcher.js';
 import { sharingEvents } from './importer.js';
 import { installSubscriptionListener } from './subscriptions.js';
-import { installPeerSyncListener } from './peerSync.js';
+import { installPeerSyncListener, peerSyncEvents } from './peerSync.js';
 import { initAnnotationsSync } from './annotationsSync.js';
 
 export { sharingEvents } from './importer.js';
@@ -58,6 +58,12 @@ export async function initSharing({ io: socketIo } = {}) {
     sharingEvents.on('annotation-updated', (payload) => {
       io.emit('media:annotation:updated', payload);
     });
+    // Peer-sync asset arrivals → broadcast so the UI can swap the
+    // <MediaImage> "syncing" placeholder for the live bytes the moment
+    // the receiver's background pull lands them on disk.
+    peerSyncEvents.on('asset-arrived', (payload) => {
+      io.emit('peerSync:asset-arrived', payload);
+    });
   }
 
   installSubscriptionListener();
@@ -74,6 +80,7 @@ export async function initSharing({ io: socketIo } = {}) {
 export async function shutdownSharing() {
   await shutdownAllWatchers();
   sharingEvents.removeAllListeners();
+  peerSyncEvents.removeAllListeners();
   initialized = false;
   io = null;
 }
