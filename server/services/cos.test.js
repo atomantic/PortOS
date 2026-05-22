@@ -700,6 +700,20 @@ describe('cos.js source — priority + capacity invariants', () => {
       fnBody,
       'queue path must collapse description to a single line via firstLine()'
     ).toMatch(/\.description\s*=\s*firstLine\(/);
+
+    // `getNextTaskType` falls back to ROTATION when nothing is time-due, and
+    // the rotation pointer is derived from the `lastType` argument. The queue
+    // path MUST thread the per-app `lastImprovementType` through, otherwise
+    // every tick restarts the rotation at index 0 and starves every other
+    // rotation type for the app. Mirrors the legacy direct-spawn caller.
+    expect(
+      fnBody,
+      'queue path must load per-app lastImprovementType so getNextTaskType rotates correctly'
+    ).toMatch(/getAppActivityById\(app\.id\)/);
+    expect(
+      fnBody,
+      'queue path must pass the loaded lastType through to getNextTaskType so rotation advances'
+    ).toMatch(/getNextTaskType\(app\.id,\s*\w+\s*\)/);
   });
 
   it('generateManagedAppImprovementTaskForType defers updateAppActivity until after gates', () => {

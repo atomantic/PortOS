@@ -1117,8 +1117,17 @@ async function queueEligibleImprovementTasks(state, cosTaskData) {
     const onCooldown = await isAppOnCooldown(app.id, state.config.appReviewCooldownMs);
     if (onCooldown) continue;
 
-    // Get next eligible improvement type for this app
-    const nextTypeResult = await getNextTaskType(app.id).catch(() => null);
+    // Get next eligible improvement type for this app. `getNextTaskType`
+    // falls back to ROTATION when nothing is time-due, and the rotation
+    // pointer is derived from the `lastType` argument — without it, the
+    // rotation always restarts from index 0 and starves every other
+    // rotation type for the app. Mirror `generateManagedAppTask` (the
+    // legacy direct-spawn caller above) which loads the per-app
+    // `lastImprovementType` and threads it in.
+    const { getAppActivityById } = await import('./appActivity.js');
+    const appActivity = await getAppActivityById(app.id).catch(() => null);
+    const lastType = appActivity?.lastImprovementType || '';
+    const nextTypeResult = await getNextTaskType(app.id, lastType).catch(() => null);
     if (!nextTypeResult) continue;
     const nextType = nextTypeResult.taskType;
 
