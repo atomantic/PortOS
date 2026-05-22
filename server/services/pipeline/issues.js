@@ -589,6 +589,10 @@ export function bulkReassignSeason(seriesId, fromSeasonId, toSeasonId = null, { 
     for (let i = 0; i < state.issues.length; i += 1) {
       const iss = state.issues[i];
       if (iss.seriesId !== seriesId) continue;
+      // Skip tombstones — moving a soft-deleted issue would bump its
+      // `updatedAt`, which then loses LWW races with the originator's
+      // tombstone and can resurrect the record on every peer.
+      if (iss.deleted) continue;
       if ((iss.seasonId || null) !== (fromSeasonId || null)) continue;
       // Re-sanitize through the same pipeline updateIssue uses so the
       // in-memory rewrite gets the same shape guarantees as a route PATCH.
@@ -887,6 +891,11 @@ export function mergeIssuesFromSync(remoteIssues) {
   // Series IDs whose issue set saw at least one delete-transition — drives a
   // post-write renumber so the receiver's issue numbering catches up with the
   // sender's (otherwise a synced tombstone would leave a gap).
+  //
+  // Edit-only merges (no delete-transitions) do NOT emit `recordUpdated` for
+  // the parent series — see `mergeUniversesFromSync` for the rationale (the
+  // Stage 2 per-record peer-sync push owns sync-time edit emits). Delete-
+  // transitions DO emit per series so subscribers know to drop the issue.
   const seriesNeedingRenumber = new Set();
   return queueIssueWrite(async () => {
     const state = await readState();
@@ -898,8 +907,11 @@ export function mergeIssuesFromSync(remoteIssues) {
       if (!sanitized) continue;
       const local = localById.get(sanitized.id);
       if (!local) {
+        // No local counterpart — accept the record but don't trigger a
+        // renumber pass. A tombstone for an issue we never had has nothing
+        // to compact; firing `emitRecordUpdated('series', …)` for a series
+        // we may not even own would spuriously re-export.
         localById.set(sanitized.id, sanitized);
-        if (sanitized.deleted) seriesNeedingRenumber.add(sanitized.seriesId);
         changed++;
       } else {
         const localTs = local.updatedAt || '';

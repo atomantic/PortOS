@@ -437,6 +437,10 @@ export async function mergeSeriesFromSync(remoteSeries) {
   if (!Array.isArray(remoteSeries)) return { applied: false, count: 0 };
   // Series IDs that transitioned to deleted via this merge — cascade fires
   // after the write queue releases (mirrors local-delete contract).
+  //
+  // Edit-merges (no delete-transition) DO NOT call `emitRecordUpdated` here —
+  // see `mergeUniversesFromSync` for the rationale (the Stage 2 per-record
+  // peer-sync push owns sync-time edit emits).
   const transitionedToDeleted = [];
   const result = await queueSeriesWrite(async () => {
     const state = await readState();
@@ -448,8 +452,9 @@ export async function mergeSeriesFromSync(remoteSeries) {
       if (!sanitized) continue;
       const local = localById.get(sanitized.id);
       if (!local) {
+        // See universeBuilder.mergeUniversesFromSync — no local means no
+        // cascade work, regardless of inbound tombstone state.
         localById.set(sanitized.id, sanitized);
-        if (sanitized.deleted) transitionedToDeleted.push(sanitized.id);
         changed++;
       } else {
         const localTs = local.updatedAt || '';

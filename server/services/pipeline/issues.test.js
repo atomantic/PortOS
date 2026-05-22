@@ -951,6 +951,29 @@ describe('pipeline issues service', () => {
       expect(result.reassigned).toBe(0);
     });
 
+    it('skips tombstoned issues — soft-deleted records keep their seasonId + updatedAt', async () => {
+      // Regression test: bulkReassignSeason must NOT bump a tombstone's
+      // `updatedAt`, otherwise the receiver's tombstone wins the LWW race
+      // against the originator's tombstone and the deleted issue can
+      // resurrect on every peer.
+      const { series, a, b } = await setup();
+      const list = await svc.listIssues({ seriesId: series.id });
+      const victim = list.find((i) => i.seasonId === a.id);
+      await svc.deleteIssue(victim.id);
+      const tombBefore = await svc.getIssue(victim.id, { includeDeleted: true });
+      const result = await svc.bulkReassignSeason(series.id, a.id, b.id);
+      // Live issues in season A moved (originally 3, one tombstoned → 2 live moved).
+      expect(result.reassigned).toBe(2);
+      // Tombstone preserved verbatim — seasonId unchanged, updatedAt unchanged,
+      // still tombstoned.
+      const tombAfter = await svc.getIssue(victim.id, { includeDeleted: true });
+      expect(tombAfter).toMatchObject({
+        seasonId: a.id,
+        deleted: true,
+        updatedAt: tombBefore.updatedAt,
+      });
+    });
+
     it('only touches issues in the matching series — other series untouched', async () => {
       const { series, a, b } = await setup();
       const other = await seriesSvc.createSeries({ name: 'Other' });

@@ -1201,6 +1201,13 @@ export async function mergeUniversesFromSync(remoteUniverses) {
   // Records that transitioned to deleted via this merge get their orphan
   // cascade fired after the write queue releases — matches the side-effect
   // contract of locally-initiated `deleteUniverse`.
+  //
+  // Edit-merges (no delete-transition) DO NOT call `emitRecordUpdated` here.
+  // Unlike `updateUniverse`, the snapshot sync is meant to be silent — every
+  // 60s cycle would otherwise trigger a re-export storm in share-bucket
+  // subscriptions even when nothing user-visible changed. The Stage 2
+  // per-record peer-sync push pipeline will own the "edit arrived from
+  // peer" emit so subscribers fire exactly once per actual edit.
   const transitionedToDeleted = [];
   const result = await queueUniverseWrite(async () => {
     const state = await readState();
@@ -1212,8 +1219,12 @@ export async function mergeUniversesFromSync(remoteUniverses) {
       if (!sanitized) continue;
       const local = localById.get(sanitized.id);
       if (!local) {
+        // No local counterpart — accept the record (live OR tombstone) but
+        // do NOT cascade orphan-cleanup. A tombstone for a record we never
+        // had has nothing to clean up; firing `emitRecordDeleted` would spuriously
+        // tear down share-bucket subscriptions looking for a manifest that
+        // never existed.
         localById.set(sanitized.id, sanitized);
-        if (sanitized.deleted) transitionedToDeleted.push(sanitized.id);
         changed++;
       } else {
         const localTs = local.updatedAt || '';

@@ -656,6 +656,27 @@ describe("universeBuilder service", () => {
         expect(await svc.listRuns(w.id)).toEqual([]);
       });
 
+      it("inbound tombstone for a NEVER-SEEN universe is accepted without firing the cascade (no orphan teardown for nothing)", async () => {
+        // Regression: the no-local branch previously included tombstones in
+        // `transitionedToDeleted`, firing `emitRecordDeleted` + the orphan
+        // cascade for a record we never had. Now the no-local branch accepts
+        // the record silently — the cascade only fires on real local
+        // transitions (deleted=false → deleted=true).
+        const ghostId = "550e8400-0000-0000-0000-000000000999";
+        const ts = new Date().toISOString();
+        const r = await svc.mergeUniversesFromSync([{
+          id: ghostId,
+          name: "Ghost",
+          deleted: true,
+          deletedAt: ts,
+          updatedAt: ts,
+        }]);
+        expect(r).toEqual({ applied: true, count: 1 });
+        // Tombstone is on disk via includeDeleted.
+        const all = await svc.listUniverses({ includeDeleted: true });
+        expect(all.find((u) => u.id === ghostId)).toMatchObject({ deleted: true });
+      });
+
       it("delete transition via sync runs cascade — unlinks media collections", async () => {
         const collections = await import("./mediaCollections.js");
         const w = await seedWorld();

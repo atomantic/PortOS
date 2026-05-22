@@ -86,6 +86,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `multipart.js` | Streaming multipart/form-data parser. |
 | `pdfImageEmbed.js` | PDF image embed helpers for comic / volume PDFs. |
 | `zipStream.js` | Streaming ZIP parser. |
+| `assetHash.js` | Cross-transport SHA-256 cache for `data/images/*` — persists hashes in the asset's `.metadata.json` sidecar so the share-bucket exporter and the federated peer-sync push pipeline reuse the same value. |
 
 ## Process execution
 
@@ -102,7 +103,6 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 |---|---|
 | `httpClient.js` | Fetch-based HTTP client factory (axios.create replacement). |
 | `fetchWithTimeout.js` | `fetch` wrapper with AbortController timeout. |
-| `assetHash.js` | Cross-transport SHA-256 cache for `data/images/*` — persists hashes in the asset's `.metadata.json` sidecar so the share-bucket exporter and the federated peer-sync push pipeline reuse the same value. |
 | `peerHttpClient.js` | Federation HTTP/Socket.IO client (TLS validation off — Tailnet is the trust boundary). |
 | `peerSelfHost.js` | Tailscale-issued hostname this PortOS sends in federation. |
 | `peerUrl.js` | Build the base URL for a peer. |
