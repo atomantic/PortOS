@@ -20,7 +20,16 @@ import { promisify } from 'util';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { getActiveProvider } from './providers.js';
 import { parseTasksMarkdown, groupTasksByStatus, getNextTask, getAutoApprovedTasks, getAwaitingApprovalTasks, updateTaskStatus, generateTasksMarkdown, hasKnownPrefix, isInternalTaskId } from '../lib/taskParser.js';
-import { isAppOnCooldown, getNextAppForReview, markAppReviewStarted, markIdleReviewStarted, clearStaleActiveAgents, getAppActivityById, loadAppActivity, isAppActivityOnCooldown } from './appActivity.js';
+// NOTE: `getAppActivityById` + `updateAppActivity` are deliberately NOT
+// listed here even though they're used elsewhere in this file. The two
+// other call sites (in `generateManagedAppImprovementTask` and
+// `generateManagedAppImprovementTaskForType`) load them via a sibling
+// dynamic `import('./appActivity.js')` for unrelated reasons. Hoisting
+// them to the static import would leave them unreferenced at the
+// top-level scope of the queue path (which now reads the snapshot via
+// `loadAppActivity` + the pure predicate) and trip "unused import"
+// warnings. The dynamic-import sites stay self-contained.
+import { isAppOnCooldown, getNextAppForReview, markAppReviewStarted, markIdleReviewStarted, clearStaleActiveAgents, loadAppActivity, isAppActivityOnCooldown } from './appActivity.js';
 import { getActiveApps, getAppTaskTypeOverrides } from './apps.js';
 import { getAdaptiveCooldownMultiplier, getSkippedTaskTypes, getPerformanceSummary, checkAndRehabilitateSkippedTasks, getLearningInsights, getTaskTypeConfidence } from './taskLearning.js';
 import { schedule as scheduleEvent, cancel as cancelEvent, getStats as getSchedulerStats, parseCronToNextRun } from './eventScheduler.js';
@@ -1128,7 +1137,12 @@ async function queueEligibleImprovementTasks(state, cosTaskData) {
     // Derive both gates from the single shared snapshot. The async
     // `isAppOnCooldown` would also work, but it loads the activity file
     // again per app — see comment on `activitySnapshot` above.
-    const appActivity = activitySnapshot.apps[app.id];
+    // Optional chain on `.apps` — `loadAppActivity()` spreads
+    // `DEFAULT_ACTIVITY` over the file contents, but a hand-edited
+    // activity.json that explicitly sets `apps: null` (or any non-object)
+    // would still surface here; both gates treat `undefined` as
+    // "no activity yet."
+    const appActivity = activitySnapshot.apps?.[app.id];
     if (isAppActivityOnCooldown(appActivity, state.config.appReviewCooldownMs)) continue;
 
     // Get next eligible improvement type for this app. `getNextTaskType`

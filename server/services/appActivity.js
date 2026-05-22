@@ -152,9 +152,6 @@ export async function clearStaleActiveAgents(liveAgentIds) {
 }
 
 /**
- * Check if an app is on cooldown
- */
-/**
  * Pure cooldown predicate — takes a per-app activity record (already
  * extracted from an `apps` map) plus the cooldown window and returns
  * true/false without any disk I/O. The async `isAppOnCooldown` below is
@@ -196,9 +193,18 @@ export function isAppActivityOnCooldown(appActivity, cooldownMs) {
   return false;
 }
 
+/**
+ * Check if an app is on cooldown by `appId`. Loads the activity snapshot
+ * from disk and delegates to the pure predicate. For loops over many
+ * apps, prefer hoisting `loadAppActivity()` once and calling
+ * `isAppActivityOnCooldown(activity.apps?.[appId], cooldownMs)` directly.
+ */
 export async function isAppOnCooldown(appId, cooldownMs) {
   const activity = await loadAppActivity();
-  return isAppActivityOnCooldown(activity.apps[appId], cooldownMs);
+  // Optional chain — a hand-edited / corrupted activity.json could lose
+  // the `apps` field, and `null.appId` would throw before the predicate's
+  // own falsy guard ran.
+  return isAppActivityOnCooldown(activity.apps?.[appId], cooldownMs);
 }
 
 /**
