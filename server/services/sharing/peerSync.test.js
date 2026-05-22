@@ -88,10 +88,14 @@ beforeEach(async () => {
   PATHS.data = tmp;
   PATHS.images = join(tmp, 'images');
 
-  // Reset mocks. Default peers mirror what `addPeer` produces in production
-  // (enabled + syncEnabled + every syncCategory on) so pushRecordToPeer's
-  // outbound/category gates don't short-circuit the existing push tests.
-  // Tests that exercise the gating paths explicitly override these mocks.
+  // Reset mocks. The default peer fixture INTENTIONALLY INVERTS production
+  // defaults: `addPeer` in instances.js creates peers with `syncEnabled:
+  // false`, every `syncCategories.*` false, and `directions: ['outbound']`
+  // (the user has to explicitly opt them in via the Instances page).
+  // Tests in this file pre-enable everything so the new outbound/category
+  // gates in pushRecordToPeer don't short-circuit the broader push-pipeline
+  // assertions. Tests that exercise the gating paths explicitly override
+  // these mocks with the relevant flag flipped off.
   vi.mocked(getInstanceId).mockResolvedValue('local-instance');
   vi.mocked(getPeers).mockResolvedValue([
     {
