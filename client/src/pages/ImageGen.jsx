@@ -34,6 +34,7 @@ import {
 } from 'lucide-react';
 import { composeStyledPrompt } from '../lib/composeStyledPrompt';
 import { deriveAvailableBackends, IMAGE_GEN_MODE } from '../lib/imageGenBackends';
+import { resolveCleanersFromConfig } from '../lib/imageCleaners';
 import toast from '../components/ui/Toast';
 import BrailleSpinner from '../components/BrailleSpinner';
 import { useImageGenProgress } from '../hooks/useImageGenProgress';
@@ -241,25 +242,17 @@ export default function ImageGen() {
   const reloadBackends = useCallback(() => {
     return getSettings().then((s) => {
       const backends = deriveAvailableBackends(s);
-      // Per-mode saved defaults. Legacy `autoClean: true` carries forward as
-      // BOTH new flags so users who had it on don't silently lose denoising.
-      const readSavedForMode = (cfg) => {
-        const legacy = cfg?.autoClean === true;
-        return {
-          cleanC2PA: typeof cfg?.cleanC2PA === 'boolean' ? cfg.cleanC2PA : (legacy || true),
-          denoise: typeof cfg?.denoise === 'boolean' ? cfg.denoise : legacy,
-        };
+      // Per-mode saved defaults via the shared helper (mirrored from
+      // server/lib/imageClean.js). Handles the legacy `autoClean: true` →
+      // both-flags migration. One pass per mode, then split into the
+      // parallel cleanC2PA / denoise maps the UI binds to.
+      const perMode = {
+        external: resolveCleanersFromConfig(s?.imageGen?.external),
+        local: resolveCleanersFromConfig(s?.imageGen?.local),
+        codex: resolveCleanersFromConfig(s?.imageGen?.codex),
       };
-      const c2 = {
-        external: readSavedForMode(s?.imageGen?.external).cleanC2PA,
-        local: readSavedForMode(s?.imageGen?.local).cleanC2PA,
-        codex: readSavedForMode(s?.imageGen?.codex).cleanC2PA,
-      };
-      const dn = {
-        external: readSavedForMode(s?.imageGen?.external).denoise,
-        local: readSavedForMode(s?.imageGen?.local).denoise,
-        codex: readSavedForMode(s?.imageGen?.codex).denoise,
-      };
+      const c2 = { external: perMode.external.cleanC2PA, local: perMode.local.cleanC2PA, codex: perMode.codex.cleanC2PA };
+      const dn = { external: perMode.external.denoise, local: perMode.local.denoise, codex: perMode.codex.denoise };
       const saved = s?.imageGen?.mode || IMAGE_GEN_MODE.EXTERNAL;
       // If the user just disabled the currently-selected backend, fall
       // through to the first viable one — a just-toggled provider should

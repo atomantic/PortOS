@@ -11,19 +11,18 @@ vi.mock('../services/imageGen/index.js', () => ({
   cancel: vi.fn(() => false),
   IMAGE_GEN_MODE: { EXTERNAL: 'external', LOCAL: 'local', CODEX: 'codex' },
   IMAGE_GEN_MODES: ['external', 'local', 'codex'],
-  // Mirror the real precedence so route-level resolution behaves correctly
-  // under test: explicit body fields win, otherwise inherit per-mode
-  // settings, otherwise the legacy autoClean fallback for both flags.
+  // Mirror the real precedence by delegating to the same helper the prod
+  // resolver uses — keeps test mock and prod in lock-step automatically.
   resolveImageCleaners: (body, settings, mode) => {
     const cfg = settings?.imageGen?.[mode] || {};
     const legacy = cfg.autoClean === true;
+    const saved = {
+      cleanC2PA: typeof cfg.cleanC2PA === 'boolean' ? cfg.cleanC2PA : true,
+      denoise: typeof cfg.denoise === 'boolean' ? cfg.denoise : legacy,
+    };
     return {
-      cleanC2PA: typeof body?.cleanC2PA === 'boolean'
-        ? body.cleanC2PA
-        : (typeof cfg.cleanC2PA === 'boolean' ? cfg.cleanC2PA : (legacy || true)),
-      denoise: typeof body?.denoise === 'boolean'
-        ? body.denoise
-        : (cfg.denoise === true || legacy),
+      cleanC2PA: typeof body?.cleanC2PA === 'boolean' ? body.cleanC2PA : saved.cleanC2PA,
+      denoise: typeof body?.denoise === 'boolean' ? body.denoise : saved.denoise,
     };
   },
   local: {

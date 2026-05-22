@@ -14,6 +14,7 @@
 
 import { getSettings } from '../settings.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { resolveCleanersFromConfig } from '../../lib/imageClean.js';
 import * as external from './external.js';
 import * as local from './local.js';
 import * as codex from './codex.js';
@@ -34,29 +35,16 @@ const codexCfg = (s) => cfg(s).codex || {};
 
 // Resolve the cleaner flags from body overrides + saved per-mode settings.
 // Body fields win when explicit (per-render checkbox); otherwise inherit
-// the saved defaults. Shared by `/generate` (stamps the resolved values
-// onto the request so all three dispatch paths agree) and `generateImage()`
-// (safety net for direct callers like `generateAvatar`).
-//
-// `cleanC2PA` is lossless and defaults to ON for new installs — strips the
-// gpt-image `caBX` provenance chunk without touching pixels.
-// `denoise` is the legacy "aggressive" median+sharpen pass and defaults to
-// OFF — it blurs annotation text and small details and should only run when
-// the user has explicitly opted in for AI-artifact reduction.
-//
-// Legacy migration: a settings record carrying the old `autoClean: true`
-// flag (single boolean) maps to BOTH new flags so users who opted into the
-// old behavior don't silently lose denoising on upgrade.
+// the saved per-mode defaults (which include the legacy `autoClean: true`
+// → both-flags migration handled by `resolveCleanersFromConfig`). Shared
+// by `/generate` and `generateImage()` (safety net for direct callers
+// like `generateAvatar`).
 export function resolveImageCleaners(body, settings, mode) {
-  const modeCfg = cfg(settings)[mode] || {};
-  const legacy = modeCfg.autoClean === true;
-  const cleanC2PA = typeof body?.cleanC2PA === 'boolean'
-    ? body.cleanC2PA
-    : (modeCfg.cleanC2PA !== false && (modeCfg.cleanC2PA === true || legacy || modeCfg.cleanC2PA === undefined));
-  const denoise = typeof body?.denoise === 'boolean'
-    ? body.denoise
-    : (modeCfg.denoise === true || legacy);
-  return { cleanC2PA: !!cleanC2PA, denoise: !!denoise };
+  const saved = resolveCleanersFromConfig(cfg(settings)[mode]);
+  return {
+    cleanC2PA: typeof body?.cleanC2PA === 'boolean' ? body.cleanC2PA : saved.cleanC2PA,
+    denoise: typeof body?.denoise === 'boolean' ? body.denoise : saved.denoise,
+  };
 }
 
 export async function getMode() {

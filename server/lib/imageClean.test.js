@@ -50,6 +50,34 @@ describe('autoCleanGeneratedImage', () => {
     expect(await readFile(sidecarPath, 'utf-8')).toBe(beforeSidecar);
   });
 
+  it('cleanC2PA=true on local/external mode short-circuits without reading the file (hot-path fast-path)', async () => {
+    // Local FLUX + external SD-API never emit caBX chunks. With cleanC2PA
+    // defaulting to true, every batch render would otherwise pay a wasted
+    // readFile + chunk walk. The mode gate skips both when denoise is off.
+    const beforeBytes = await readFile(pngPath);
+    const result = await autoCleanGeneratedImage({
+      cleanC2PA: true, denoise: false, pngPath, sidecarPath, mode: 'local',
+    });
+    expect(result.cleaned).toBe(false);
+    expect((await readFile(pngPath)).equals(beforeBytes)).toBe(true);
+
+    // External SD-API takes the same short-circuit.
+    const resultExt = await autoCleanGeneratedImage({
+      cleanC2PA: true, denoise: false, pngPath, sidecarPath, mode: 'external',
+    });
+    expect(resultExt.cleaned).toBe(false);
+  });
+
+  it('denoise on local/external still runs (only the cleanC2PA-only path is mode-gated)', async () => {
+    // The gate only skips the cleanC2PA-only case — denoise=true forces the
+    // pixel pass through regardless of mode, because the user explicitly
+    // asked for it.
+    const result = await autoCleanGeneratedImage({
+      cleanC2PA: false, denoise: true, pngPath, sidecarPath, mode: 'local',
+    });
+    expect(result.cleaned).toBe(true);
+  });
+
   it('no-ops with cleanC2PA=true on a PNG that has no caBX chunk (pixels untouched)', async () => {
     // The fixture has no caBX chunk, so the lossless strip path bails out
     // and leaves the file as-is — proves the lossless path doesn't

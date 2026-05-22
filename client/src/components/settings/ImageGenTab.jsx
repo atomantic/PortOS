@@ -21,6 +21,7 @@ import {
   getHfTokenStatus, saveHfToken, clearHfToken,
 } from '../../services/api';
 import { IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
+import { resolveCleanersFromConfig } from '../../lib/imageCleaners';
 
 const SDAPI_TOOL_ID = 'sdapi';
 const CODEX_TOOL_ID = 'codex-imagegen';
@@ -153,19 +154,12 @@ export function ImageGenTab() {
           : PARALLEL_FALLBACK;
         setParallelBounds(bounds);
         const cxParallel = clampParallel(cx.parallelLimit, bounds);
-        // Per-mode cleaner reads. Legacy `autoClean: true` (single boolean)
-        // maps to BOTH new flags so users who turned the old toggle on don't
-        // silently lose denoising on upgrade. Absent → defaults (C2PA on, denoise off).
-        const readCleaners = (modeCfg) => {
-          const legacy = modeCfg?.autoClean === true;
-          return {
-            cleanC2PA: typeof modeCfg?.cleanC2PA === 'boolean' ? modeCfg.cleanC2PA : (legacy || true),
-            denoise: typeof modeCfg?.denoise === 'boolean' ? modeCfg.denoise : legacy,
-          };
-        };
-        const codexClean = readCleaners(cx);
-        const localClean = readCleaners(ig.local);
-        const externalClean = readCleaners(ig.external);
+        // Per-mode cleaner reads via the shared helper (mirrored from
+        // server/lib/imageClean.js). Handles the legacy `autoClean: true` →
+        // both-flags migration for users upgrading from before the split.
+        const codexClean = resolveCleanersFromConfig(cx);
+        const localClean = resolveCleanersFromConfig(ig.local);
+        const externalClean = resolveCleanersFromConfig(ig.external);
         const c2 = { codex: codexClean.cleanC2PA, local: localClean.cleanC2PA, external: externalClean.cleanC2PA };
         const dn = { codex: codexClean.denoise, local: localClean.denoise, external: externalClean.denoise };
         setMode(m);

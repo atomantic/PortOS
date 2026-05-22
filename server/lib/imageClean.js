@@ -17,6 +17,29 @@ import { basename } from 'node:path';
 import { ServerError } from './errorHandler.js';
 import { tryReadFile, safeJSONParse, atomicWrite } from './fileUtils.js';
 
+/**
+ * Read cleaner flags off a per-mode settings record. Pure: no I/O, no
+ * body-override layer (that's the resolver's job — this is the shared
+ * "what did the user save" rule that resolver + Settings UI + ImageGen
+ * page + test mocks all need to agree on).
+ *
+ * Migration: legacy `autoClean: true` (single boolean, pre-split) maps to
+ * BOTH new flags. Users who opted into denoising before the split don't
+ * silently lose it on upgrade. `cleanC2PA` defaults to true (safe, lossless);
+ * `denoise` defaults to false (lossy, blurs text).
+ *
+ * Mirrored verbatim in `client/src/lib/imageCleaners.js` — keep the two
+ * copies in sync; the client tree can't import from server/lib.
+ */
+export function resolveCleanersFromConfig(modeCfg) {
+  const cfg = modeCfg || {};
+  const legacy = cfg.autoClean === true;
+  return {
+    cleanC2PA: typeof cfg.cleanC2PA === 'boolean' ? cfg.cleanC2PA : true,
+    denoise: typeof cfg.denoise === 'boolean' ? cfg.denoise : legacy,
+  };
+}
+
 // All sizes here are MiB (1024*1024). 40 MiB decoded → ~53.3 MiB base64 (4*ceil(n/3))
 // + small JSON envelope, which fits under the 55mb (= 55 MiB) body parser limit
 // in server/index.js. Keep these aligned — raising the decoded cap requires
@@ -235,6 +258,16 @@ export async function cleanImageBuffer(buffer) {
 // generation (the un-cleaned PNG stays on disk).
 export async function autoCleanGeneratedImage({ cleanC2PA = false, denoise = false, pngPath, sidecarPath, mode = 'unknown' }) {
   if (!cleanC2PA && !denoise) return { cleaned: false };
+  // Backends that can't produce a `caBX` chunk (local FLUX, external SD-API)
+  // shouldn't pay readFile + walk on every render when the user enabled
+  // cleanC2PA defensively. Only codex (gpt-image-2) emits the chunk in
+  // current production. Denoise still has to run regardless because it's a
+  // pixel pass, not a metadata pass.
+  if (!denoise && cleanC2PA && mode !== 'codex') return { cleaned: false };
+
+  // Sidecar read has no data dependency on the PNG read/write — kick it off
+  // before the readFile so the two disk ops overlap.
+  const sidecarReadP = sidecarPath ? tryReadFile(sidecarPath) : Promise.resolve(null);
 
   const buffer = await readFile(pngPath).catch(() => null);
   if (!buffer) {
@@ -273,10 +306,6 @@ export async function autoCleanGeneratedImage({ cleanC2PA = false, denoise = fal
     c2paStripped = true;
     sizeAfter = result.sizeAfter;
   }
-
-  // Sidecar read has no data dependency on the PNG write — kick it off in
-  // parallel so the disk-read latency overlaps the encode/write window.
-  const sidecarReadP = sidecarPath ? tryReadFile(sidecarPath) : Promise.resolve(null);
   const replaced = await atomicWrite(pngPath, outputData)
     .then(() => true)
     .catch((err) => {
