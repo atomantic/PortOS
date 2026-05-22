@@ -243,29 +243,27 @@ export function buildCharacterBlueprintSheetPrompt(universe, character) {
 
   const subject = role ? `${name} — ${role}` : name;
 
-  // Order matters: lead with the high-level layout + style so the model
-  // anchors on "fully illustrated character on white background with
-  // annotation panels", THEN enumerate the character details, and only at
-  // the very end pin down the blueprint accent treatment so it modifies
-  // the annotations rather than the character art.
+  // Lead with the user's exact prompt template (load-bearing phrasing the
+  // model anchors on), then layer in canon details + scoping clarifications
+  // that keep "blueprint style" attached to the presentation/annotation
+  // layer rather than producing a literal cyanotype of the character.
   const promptParts = [
-    `Professional CHARACTER CONCEPT SHEET of ${subject} on a clean white background — multiple full-body turnaround views of the same character side by side, surrounded by close-up study panels and annotated callouts.`,
+    `A character concept sheet of ${subject}, featuring detailed front, back, and side views, along with close-up sketches of facial features, costume details, and accessories. Annotated design notes and clearly labeled components are arranged across the layout, rendered in a refined blueprint style with glowing ${accent} accents and a structured ${base} base design, presented on a clean white background with a polished professional character design presentation.`,
     styleBits || 'Style: contemporary illustrated character design with confident line work and saturated, intentional color.',
-    `MAIN TURNAROUND (large central area): four full-body views of ${name} at consistent scale and proportion — FRONT view, 3/4 view, SIDE view, BACK view — all fully illustrated in the same color palette and rendering style. The character is FULLY ILLUSTRATED (not line art, not monochrome) and reads as the same person across every angle.`,
+    `MAIN TURNAROUND (large central area): four full-body views of ${name} at consistent scale and proportion — FRONT view, 3/4 view, SIDE view, BACK view — all fully illustrated in the same color palette and rendering style. The character reads as the same person across every angle.`,
     physical ? `Subject reference: ${physical}` : '',
     visualNotes ? `Visual notes: ${visualNotes}` : '',
     silhouette ? `Silhouette notes: ${silhouette}` : '',
     special ? `Special traits: ${special}` : '',
-    `HEAD STUDIES (left or right margin): three to five close-up portraits of ${name} from different angles — front, 3/4, profile, and one expressive pose — illustrated in the same style as the turnaround.`,
+    `FACIAL FEATURE SKETCHES (margin): close-up sketches of ${name}'s face from three to five angles — front, 3/4, profile, and expressive variants — each labeled.`,
     wardrobeLine
-      ? `COSTUME DETAIL PANELS (margin): labeled close-up cards of distinctive wardrobe pieces — ${wardrobeLine}. Each labeled with material + construction notes.`
-      : 'COSTUME DETAIL PANELS (margin): labeled close-up cards of the character\'s signature garments, fabrics, fastenings, and layering.',
+      ? `COSTUME DETAIL SKETCHES (margin): labeled close-up sketches of distinctive wardrobe pieces — ${wardrobeLine}. Each labeled with material + construction notes.`
+      : 'COSTUME DETAIL SKETCHES (margin): labeled close-up sketches of the character\'s signature garments, fabrics, fastenings, and layering.',
     propsLine
-      ? `ACCESSORY PANELS (margin): labeled studies of the character's signature props — ${propsLine}.`
-      : 'ACCESSORY PANELS (margin): labeled studies of the character\'s signature accessories, gear, or equipment.',
-    `ANNOTATION FRAMEWORK (filling the negative space around every panel): thin guide lines connect each callout to its detail on the figure. Design notes in clean typography sit beside each panel, with measurement marks, material callouts, component labels, and small schematic line drawings of structural details in the outer margins. Numbered or lettered tags index the callouts.`,
-    `ACCENT TREATMENT: the annotation guide lines, callout boxes, dimension marks, technical schematic linework, label highlights, and small index tags use a refined blueprint-style glowing ${accent} accent color — subtle but consistent across every annotation. Label backgrounds, ruled measurement lines, and technical schematic frames use a structured ${base} as their base tone. The CHARACTER and its costume/props stay rendered in the universe's full color palette — the ${accent}/${base} treatment applies ONLY to the annotation layer wrapping the figure.`,
-    `Presented as a polished professional character design sheet — clean white paper, organized panel layout, consistent character proportions across every view. Do NOT render the character itself as a cyanotype, blueprint-paper line drawing, or monochrome wireframe — the character is fully illustrated; the blueprint feel comes from the annotation framework only.`,
+      ? `ACCESSORY SKETCHES (margin): labeled close-up sketches of the character's signature props and accessories — ${propsLine}.`
+      : 'ACCESSORY SKETCHES (margin): labeled close-up sketches of the character\'s signature accessories, gear, or equipment.',
+    `ANNOTATION FRAMEWORK: thin guide lines connect each callout to its detail on the figure. Design notes in clean typography sit beside each panel, with measurement marks, material callouts, component labels, and small schematic line drawings of structural details in the outer margins. Numbered or lettered tags index the callouts.`,
+    `BLUEPRINT ACCENT SCOPE: the "refined blueprint style with glowing ${accent} accents and a structured ${base} base design" applies to the ANNOTATION LAYER — guide lines, callout boxes, dimension marks, technical schematic linework, label highlights, ruled measurement lines, index tags, and schematic frames. The CHARACTER and its costume/props stay rendered in the universe's full color palette in a fully illustrated style. Do NOT render the character as a cyanotype, blueprint-paper line drawing, or monochrome wireframe — the character is fully illustrated; the blueprint feel comes from the annotation framework wrapping the figure.`,
   ].filter(Boolean);
 
   const prompt = promptParts.join('\n\n');
