@@ -452,14 +452,36 @@ export function initSyncOrchestrator() {
   };
   instanceEvents.on('peer:online', peerOnlineHandler);
 
-  // Background safety-net interval
+  // Background safety-net interval. The two side-cycle jobs (tombstone GC,
+  // future asset-orphan GC) ride the same interval rather than getting their
+  // own timer — once-per-minute is plenty given the 24h grace period, and
+  // sharing a tick keeps the wake-up cost flat.
   syncTimer = setInterval(() => {
     syncAllPeers().catch(err => {
       console.error(`❌ Periodic sync failed: ${err.message}`);
     });
+    runTombstoneSweep();
   }, SYNC_INTERVAL_MS);
 
   console.log(`🔄 Sync orchestrator started (${SYNC_INTERVAL_MS / 1000}s interval)`);
+}
+
+/**
+ * Run a single tombstone GC sweep, fire-and-forget. Dynamic import keeps
+ * the GC module's universe / pipeline / sharing dependency graph off the
+ * orchestrator's module-load path (same reason as `categoriesCoveredByPeerSync`
+ * above). Logs a single-line summary only when something was actually
+ * pruned — quiet on no-op cycles.
+ */
+async function runTombstoneSweep() {
+  const { sweepTombstones } = await import('./sharing/tombstoneGc.js');
+  const result = await sweepTombstones().catch((err) => {
+    console.error(`❌ Tombstone sweep failed: ${err.message}`);
+    return null;
+  });
+  if (result && (result.universes > 0 || result.series > 0 || result.issues > 0)) {
+    console.log(`🪦 Tombstone GC: pruned ${result.universes} universe, ${result.series} series, ${result.issues} issue(s)`);
+  }
 }
 
 /**

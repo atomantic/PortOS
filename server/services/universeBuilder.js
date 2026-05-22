@@ -1255,6 +1255,32 @@ export async function mergeUniversesFromSync(remoteUniverses) {
   return result;
 }
 
+/**
+ * Garbage-collect universe tombstones older than `beforeMs`. Pure of GC
+ * policy — the caller (server/services/sharing/tombstoneGc.js) owns the
+ * ack-cursor + grace-period math and just tells us the cutoff timestamp.
+ *
+ * Tombstones whose `deletedAt` is a non-parseable string are conservatively
+ * KEPT — we'd rather leak a few garbled records than silently delete data.
+ * Returns `{ pruned }` with the count actually removed.
+ */
+export async function pruneTombstonedUniverses(beforeMs) {
+  if (!Number.isFinite(beforeMs)) return { pruned: 0 };
+  return queueUniverseWrite(async () => {
+    const state = await readState();
+    const original = state.universes.length;
+    state.universes = state.universes.filter((u) => {
+      if (!u?.deleted) return true;
+      const t = Date.parse(u.deletedAt || '');
+      if (!Number.isFinite(t)) return true;
+      return t >= beforeMs;
+    });
+    const pruned = original - state.universes.length;
+    if (pruned > 0) await writeState(state);
+    return { pruned };
+  });
+}
+
 export async function recordRun(run) {
   const sanitized = sanitizeRun(run);
   if (!sanitized) throw makeErr('Invalid run payload', ERR_VALIDATION);
