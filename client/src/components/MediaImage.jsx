@@ -18,10 +18,15 @@
  *   placeholderClassName?: string — extra classes for the placeholder only
  *   ...rest                       — forwarded to <img>
  *
- * The component is conservative — it only intercepts the 404; any other
- * image load failure (network, CORS, malformed file) still renders the
- * browser's default broken-image experience so the user/dev sees the
- * actual error condition rather than a perpetual "syncing" lie.
+ * The component renders the "Syncing" placeholder on ANY image load failure
+ * — the browser's <img onError> doesn't expose the HTTP status, so we can't
+ * actually distinguish a 404 from a network drop. That's intentional: the
+ * placeholder accurately describes the user-visible state ("this asset is
+ * not loadable right now") whether the cause is "peer hasn't pushed it yet"
+ * or "network is down." The `peerSync:asset-arrived` listener still gates
+ * the swap-back, so a permanent network error doesn't lock the placeholder
+ * on forever — the live image returns whenever the path is reachable again
+ * (e.g. on the next push that triggers a re-fetch via the socket event).
  */
 
 import { useEffect, useRef, useState } from 'react';

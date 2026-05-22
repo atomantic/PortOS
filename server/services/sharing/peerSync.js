@@ -33,7 +33,6 @@
 
 import { join, basename } from 'path';
 import { existsSync } from 'fs';
-import { writeFile } from 'fs/promises';
 import { EventEmitter } from 'events';
 import { PATHS, atomicWrite, readJSONFile, ensureDir, sha256File } from '../../lib/fileUtils.js';
 import { isStr } from '../../lib/storyBible.js';
@@ -680,7 +679,7 @@ async function pullMissingAssetsFromPeer(senderInstanceId, missingAssets) {
   if (!isStr(senderInstanceId) || !Array.isArray(missingAssets) || missingAssets.length === 0) return;
   const peer = await findPeerById(senderInstanceId);
   if (!peer) {
-    console.log(`⚠️ peerSync: cant pull assets — peer ${senderInstanceId} not in registry`);
+    console.log(`⚠️ peerSync: can't pull assets — peer ${senderInstanceId} not in registry`);
     return;
   }
   const base = peerBaseUrl(peer);
@@ -705,22 +704,37 @@ async function pullOneAsset(peer, base, entry) {
   const res = await peerFetch(url, { signal: controller.signal })
     .finally(() => clearTimeout(timeoutId));
   if (!res || !res.ok) return;
-  // Cap body size — a misconfigured peer (or hostile one) could ship a
-  // multi-GB file under a small filename and force the receiver to
-  // buffer it whole. Streaming would be better but adds machinery
-  // (write-then-rename, mid-stream sha verification); 100MB is well above
-  // any realistic single-image / single-clip and below the OOM threshold
-  // on the smallest PortOS host.
+  // Size-cap enforcement: REQUIRE a trustworthy content-length header up
+  // front and refuse the pull if missing or over-cap. Without the header
+  // we'd have to buffer the whole response before checking buffer.length,
+  // which defeats the cap (a hostile peer could ship a 10GB file under a
+  // small filename and OOM the receiver before the check runs). Express's
+  // `serve-static` always sets content-length for static files (verified
+  // by the `acceptRanges: true` mount config in server/index.js), so this
+  // is enforceable in the real deployment path.
   const contentLength = Number(res.headers.get('content-length'));
-  if (Number.isFinite(contentLength) && contentLength > ASSET_PULL_MAX_BYTES) {
+  if (!Number.isFinite(contentLength) || contentLength < 0) {
+    console.log(`⚠️ peerSync: asset ${safeName} has no content-length — refusing pull`);
+    return;
+  }
+  if (contentLength > ASSET_PULL_MAX_BYTES) {
     console.log(`⚠️ peerSync: asset ${safeName} too large (${contentLength}) — refusing pull`);
     return;
   }
   const buffer = Buffer.from(await res.arrayBuffer());
-  if (buffer.length > ASSET_PULL_MAX_BYTES) return;
+  // Defense in depth: the server claimed length X but actually sent more
+  // (shouldn't happen with serve-static, but content-length is just a
+  // header). Refuse to write the partial / over-cap result.
+  if (buffer.length > ASSET_PULL_MAX_BYTES || buffer.length !== contentLength) {
+    console.log(`⚠️ peerSync: asset ${safeName} length mismatch (header=${contentLength}, body=${buffer.length}) — refusing pull`);
+    return;
+  }
   await ensureDir(localDir);
   const fullPath = join(localDir, safeName);
-  await writeFile(fullPath, buffer);
+  // atomicWrite (temp + rename) so a crash mid-write doesn't leave a
+  // half-written file that subsequent `diffAssetManifestAgainstLocal`
+  // calls would see as "present" and stop re-requesting.
+  await atomicWrite(fullPath, buffer);
   peerSyncEvents.emit('asset-arrived', {
     filename: safeName,
     kind: entry.kind,

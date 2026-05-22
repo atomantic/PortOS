@@ -27,13 +27,25 @@ export function insecureFetch(agent) {
         res.on('data', c => chunks.push(c));
         res.on('end', () => {
           cleanup();
-          const text = Buffer.concat(chunks).toString('utf-8');
+          // Concat as a raw Buffer so the response can be projected to text
+          // (UTF-8 decode), JSON (parse), or arrayBuffer (binary). Pre-
+          // decoding to a UTF-8 string up-front would corrupt binary
+          // responses — the peer-sync asset-pull worker uses this shim to
+          // download images / videos over HTTPS, and `Buffer.toString('utf-8')`
+          // silently replaces invalid byte sequences with U+FFFD.
+          const buffer = Buffer.concat(chunks);
           resolve({
             ok: res.statusCode >= 200 && res.statusCode < 300,
             status: res.statusCode,
             headers: { get: n => res.headers[n.toLowerCase()] ?? null },
-            text: () => Promise.resolve(text),
-            json: () => Promise.resolve(JSON.parse(text))
+            text: () => Promise.resolve(buffer.toString('utf-8')),
+            json: () => Promise.resolve(JSON.parse(buffer.toString('utf-8'))),
+            // ArrayBuffer view matching Fetch's Response so call sites can
+            // `Buffer.from(await res.arrayBuffer())` without branching on
+            // transport.
+            arrayBuffer: () => Promise.resolve(
+              buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength),
+            ),
           });
         });
         res.on('error', (err) => { cleanup(); reject(err); });
