@@ -47,6 +47,7 @@ import TabPills from '../components/ui/TabPills';
 import { deriveAvailableBackends, IMAGE_GEN_MODE } from '../lib/imageGenBackends';
 import { PIPELINE_IMAGE_DEFAULTS, readPipelineImageSettings } from '../lib/pipelineImageDefaults';
 import { hasCanonDescriptorContent, descriptorForCanonEntry } from '../lib/canonPrompt';
+import { listSheetPointers } from '../lib/sheetPointers';
 import { upsertByIdPrepend } from '../lib/upsertByIdPrepend';
 import { BIBLE_LIMITS } from '../lib/bibleLimits';
 import {
@@ -726,10 +727,10 @@ export default function UniverseBuilder() {
         const fallbackLabel = `${entry.name}${descriptor ? `: ${descriptor}` : ''}`;
         const refs = Array.isArray(entry?.imageRefs) ? entry.imageRefs : [];
         for (const f of refs) pushFilename(f, fallbackLabel);
-        if (kind.key === 'characters' && typeof entry.referenceSheetImageRef === 'string' && entry.referenceSheetImageRef) {
-          const filename = entry.referenceSheetImageRef;
-          const sheetKey = `canon-sheet:${filename}`;
-          if (!seen.has(sheetKey)) {
+        if (kind.key === 'characters') {
+          for (const { variant, filename } of listSheetPointers(entry)) {
+            const sheetKey = `canon-sheet:${variant}:${filename}`;
+            if (seen.has(sheetKey)) continue;
             seen.add(sheetKey);
             out.push({
               key: sheetKey,
@@ -737,7 +738,7 @@ export default function UniverseBuilder() {
               filename,
               previewUrl: `/data/image-refs/${filename}`,
               downloadUrl: `/data/image-refs/${filename}`,
-              prompt: `${entry.name} — character reference sheet`,
+              prompt: `${entry.name} — character reference sheet (${variant})`,
             });
           }
         }

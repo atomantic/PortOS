@@ -67,11 +67,16 @@ vi.mock('../services/universeCharacterExpand.js', () => ({
   expandUniverseCharacter: (...args) => expandUniverseCharacterMock(...args),
 }));
 
-// Stub the reference-sheet renderer — only the route contract is verified
-// here; the actual prompt builder is exercised in universeCharacterSheet.test.js.
+// Stub the reference-sheet renderer + sibling exports — only the route
+// contract is verified here; the actual prompt builder + delete plumbing are
+// exercised in universeCharacterSheet.test.js / universeCharacterSheetDelete.test.js.
 const renderCharacterReferenceSheetMock = vi.fn();
+const deleteCharacterReferenceSheetMock = vi.fn();
+const listSheetVariantsMock = vi.fn();
 vi.mock('../services/universeCharacterSheet.js', () => ({
   renderCharacterReferenceSheet: (...args) => renderCharacterReferenceSheetMock(...args),
+  deleteCharacterReferenceSheet: (...args) => deleteCharacterReferenceSheetMock(...args),
+  listSheetVariants: (...args) => listSheetVariantsMock(...args),
 }));
 
 // Stub the LLM expander so the route test doesn't shell out to a real provider.
@@ -755,10 +760,10 @@ describe('universe-builder routes', () => {
         .post('/api/universe-builder/u-1/characters/c-1/render-reference-sheet')
         .send({ overridePrompt: 'custom prompt', modelId: 'flux2-klein-9b' });
       expect(res.status).toBe(200);
-      expect(renderCharacterReferenceSheetMock).toHaveBeenCalledWith('u-1', 'c-1', expect.objectContaining({
-        overridePrompt: 'custom prompt',
-        modelId: 'flux2-klein-9b',
-      }));
+      expect(renderCharacterReferenceSheetMock).toHaveBeenCalledWith(
+        'u-1', 'c-1',
+        expect.objectContaining({ overridePrompt: 'custom prompt', modelId: 'flux2-klein-9b' }),
+      );
       expect(res.body.jobId).toBe('job-c-1');
       // generationId is now an alias for jobId (client back-compat).
       expect(res.body.generationId).toBe('job-c-1');
@@ -795,6 +800,70 @@ describe('universe-builder routes', () => {
         .send({});
       expect(res.status).toBe(400);
       expect(res.body.code).toBe('UNIVERSE_CHARACTER_SHEET_UNSUPPORTED_MODE');
+    });
+  });
+
+  describe('POST /:id/characters/:entryId/render-reference-sheet (variant routing)', () => {
+    // The route is single-entry — non-default variants are selected via the
+    // body's `variant` field and forwarded to the service as a 4th arg.
+    it('forwards a body-supplied variant onto the service call', async () => {
+      const res = await request(buildApp())
+        .post('/api/universe-builder/u-1/characters/c-1/render-reference-sheet')
+        .send({ variant: 'blueprint' });
+      expect(res.status).toBe(200);
+      expect(renderCharacterReferenceSheetMock).toHaveBeenCalledWith(
+        'u-1', 'c-1', { variant: 'blueprint' },
+      );
+    });
+
+    it('rejects a variant that exceeds the 48-char Zod cap', async () => {
+      const res = await request(buildApp())
+        .post('/api/universe-builder/u-1/characters/c-1/render-reference-sheet')
+        .send({ variant: 'x'.repeat(49) });
+      expect(res.status).toBe(400);
+    });
+  });
+
+  describe('DELETE /:id/characters/:entryId/reference-sheet (variant query)', () => {
+    beforeEach(() => {
+      deleteCharacterReferenceSheetMock.mockReset();
+      deleteCharacterReferenceSheetMock.mockResolvedValue({
+        filename: 'universe-u-1-c-1-blueprint-job.png',
+        fileDeleted: true,
+        cleared: 1,
+      });
+    });
+
+    it('forwards no variant (default) when query is empty', async () => {
+      const res = await request(buildApp())
+        .delete('/api/universe-builder/u-1/characters/c-1/reference-sheet');
+      expect(res.status).toBe(200);
+      expect(deleteCharacterReferenceSheetMock).toHaveBeenCalledWith('u-1', 'c-1', {});
+    });
+
+    it('forwards `variant` from the query string', async () => {
+      const res = await request(buildApp())
+        .delete('/api/universe-builder/u-1/characters/c-1/reference-sheet?variant=blueprint');
+      expect(res.status).toBe(200);
+      expect(deleteCharacterReferenceSheetMock).toHaveBeenCalledWith('u-1', 'c-1', { variant: 'blueprint' });
+    });
+  });
+
+  describe('GET /reference-sheet-variants', () => {
+    beforeEach(() => {
+      listSheetVariantsMock.mockReset();
+      listSheetVariantsMock.mockReturnValue([
+        { id: 'standard', label: 'Illustrated', description: '...' },
+        { id: 'blueprint', label: 'Blueprint', description: '...' },
+      ]);
+    });
+
+    it('returns the registry catalog as { variants: [...] }', async () => {
+      const res = await request(buildApp()).get('/api/universe-builder/reference-sheet-variants');
+      expect(res.status).toBe(200);
+      expect(res.body.variants).toHaveLength(2);
+      expect(res.body.variants[0].id).toBe('standard');
+      expect(res.body.variants[1].id).toBe('blueprint');
     });
   });
 });

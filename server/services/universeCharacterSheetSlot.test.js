@@ -58,6 +58,38 @@ describe('universeCharacterSheetSlot — clearPendingSheetSlot (per-character)',
   it('is a no-op when the slot is already empty', () => {
     expect(clearPendingSheetSlot('u-a', 'never-claimed')).toBe(false);
   });
+
+  it('clears every variant for the character (deleting a character should drop both sheet renders)', () => {
+    claimPendingSheetSlot('u-a', 'char-1', 'job-std', 'standard');
+    claimPendingSheetSlot('u-a', 'char-1', 'job-bp', 'blueprint');
+    clearPendingSheetSlot('u-a', 'char-1');
+    expect(getPendingSheetSlot('u-a', 'char-1', 'standard')).toBeUndefined();
+    expect(getPendingSheetSlot('u-a', 'char-1', 'blueprint')).toBeUndefined();
+  });
+});
+
+describe('universeCharacterSheetSlot — variant isolation', () => {
+  it('different variants on the same character are independent slots', () => {
+    claimPendingSheetSlot('u-a', 'char-1', 'job-std', 'standard');
+    claimPendingSheetSlot('u-a', 'char-1', 'job-bp', 'blueprint');
+    expect(getPendingSheetSlot('u-a', 'char-1', 'standard')).toBe('job-std');
+    expect(getPendingSheetSlot('u-a', 'char-1', 'blueprint')).toBe('job-bp');
+  });
+
+  it('releasing one variant does not touch the other', () => {
+    claimPendingSheetSlot('u-a', 'char-1', 'job-std', 'standard');
+    claimPendingSheetSlot('u-a', 'char-1', 'job-bp', 'blueprint');
+    releasePendingSheetSlot('u-a', 'char-1', 'job-std', 'standard');
+    expect(getPendingSheetSlot('u-a', 'char-1', 'standard')).toBeUndefined();
+    expect(getPendingSheetSlot('u-a', 'char-1', 'blueprint')).toBe('job-bp');
+  });
+
+  it('variant defaults to standard for back-compat with single-variant callers', () => {
+    claimPendingSheetSlot('u-a', 'char-1', 'job-1');
+    expect(getPendingSheetSlot('u-a', 'char-1')).toBe('job-1');
+    expect(getPendingSheetSlot('u-a', 'char-1', 'standard')).toBe('job-1');
+    expect(getPendingSheetSlot('u-a', 'char-1', 'blueprint')).toBeUndefined();
+  });
 });
 
 describe('universeCharacterSheetSlot — clearPendingSheetSlotsForUniverse', () => {

@@ -19,7 +19,11 @@ import { validateRequest, optionalBooleanMap } from '../lib/validation.js';
 import * as svc from '../services/universeBuilder.js';
 import * as canonSvc from '../services/universeCanon.js';
 import { expandUniverseCharacter } from '../services/universeCharacterExpand.js';
-import { renderCharacterReferenceSheet, deleteCharacterReferenceSheet } from '../services/universeCharacterSheet.js';
+import {
+  renderCharacterReferenceSheet,
+  deleteCharacterReferenceSheet,
+  listSheetVariants,
+} from '../services/universeCharacterSheet.js';
 import { BIBLE_KINDS, BIBLE_LIMITS, pruneStaleReferenceSheets } from '../lib/storyBible.js';
 import { getUniverseCanonUsage, listLinkedSeriesNames } from '../services/canonUsage.js';
 import { expandWorldTemplate, generateCategoryVariations } from '../services/universeBuilderExpand.js';
@@ -372,6 +376,13 @@ router.post('/refine-prompts', asyncHandler(async (req, res) => {
   res.json(await refineWorldPrompts(body));
 }));
 
+// Static-path GETs must register BEFORE `/:id` so they aren't swallowed by
+// the parametric route. The catalog lists every registered reference-sheet
+// variant — the client renders one row per entry in CharacterReferenceSheetPanel.
+router.get('/reference-sheet-variants', asyncHandler(async (_req, res) => {
+  res.json({ variants: listSheetVariants() });
+}));
+
 router.get('/:id', asyncHandler(async (req, res) => {
   const w = await svc.getUniverse(req.params.id).catch((err) => { throw mapServiceError(err); });
   // Lazy stale-reference-sheet collapse: nulls out any character.referenceSheetImageRef
@@ -669,30 +680,36 @@ router.post('/:id/characters/:entryId/expand', asyncHandler(async (req, res) => 
   res.json(result);
 }));
 
-// Generate a single dense artist reference sheet (turnaround + expressions +
-// palette + wardrobe + props + hand gestures) from a structured TEXT prompt
-// — no init image required, so it works across codex / local backends.
-// Returns immediately with `{ jobId, generationId }`; client subscribes to
-// SSE for progress, and the server-side completion handler stamps
-// `character.referenceSheetImageRef` on success.
+// Generate one of the character reference-sheet variants from a structured
+// TEXT prompt — no init image required, so it works across codex / local
+// backends. The `variant` field selects which prompt-builder + storage slot
+// the render targets (defaults to 'standard' = illustrated turnaround).
+// Returns immediately with `{ jobId, generationId, variant }`; client
+// subscribes to SSE for progress, and the server-side completion handler
+// stamps the variant's pointer on success.
 const renderReferenceSheetSchema = z.object({
+  variant: z.string().trim().min(1).max(48).optional(),
   overridePrompt: z.string().trim().max(8000).optional(),
   overrideNegativePrompt: z.string().trim().max(2000).optional(),
   modelId: z.string().trim().max(64).optional(),
 });
 router.post('/:id/characters/:entryId/render-reference-sheet', asyncHandler(async (req, res) => {
-  const body = validateRequest(renderReferenceSheetSchema, req.body ?? {});
-  const result = await renderCharacterReferenceSheet(req.params.id, req.params.entryId, body)
+  const options = validateRequest(renderReferenceSheetSchema, req.body ?? {});
+  const result = await renderCharacterReferenceSheet(req.params.id, req.params.entryId, options)
     .catch((err) => { throw mapServiceError(err); });
   res.json(result);
 }));
 
-// Delete the character's current reference sheet — unlinks the PNG from
-// `data/image-refs/` and nulls `referenceSheetImageRef` on every matching
-// character (via `purgeReferenceSheetFromAllUniverses`) so the UI clears
-// reactively without a refetch.
+// Delete a character's reference sheet — unlinks the PNG from
+// `data/image-refs/` and nulls the variant's pointer on every matching
+// character so the UI clears reactively without a refetch. `variant` is
+// passed via query string (DELETE bodies are awkward across HTTP clients).
+const deleteReferenceSheetQuerySchema = z.object({
+  variant: z.string().trim().min(1).max(48).optional(),
+});
 router.delete('/:id/characters/:entryId/reference-sheet', asyncHandler(async (req, res) => {
-  const result = await deleteCharacterReferenceSheet(req.params.id, req.params.entryId)
+  const opts = validateRequest(deleteReferenceSheetQuerySchema, req.query ?? {});
+  const result = await deleteCharacterReferenceSheet(req.params.id, req.params.entryId, opts)
     .catch((err) => { throw mapServiceError(err); });
   res.json(result);
 }));

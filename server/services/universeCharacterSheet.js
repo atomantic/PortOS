@@ -30,6 +30,9 @@ import {
   flattenStats, flattenPalette, flattenWardrobes, flattenProps, flattenNamedList,
 } from '../lib/canonPrompt.js';
 import {
+  LEGACY_SHEET_VARIANT_ID, readSheetPointer, applySheetPointerToCharacter,
+} from '../lib/storyBible.js';
+import {
   claimPendingSheetSlot, getPendingSheetSlot, releasePendingSheetSlot,
 } from './universeCharacterSheetSlot.js';
 
@@ -64,6 +67,35 @@ const DEFAULT_HAND_GESTURES = Object.freeze([
 
 const trim = (s) => (typeof s === 'string' ? s.trim() : '');
 
+// Shared field bag used by every variant's prompt builder. Centralizes the
+// trim/flatten calls so a new variant only writes the style-specific layout
+// sentences. Pure — caller decides which fields to weave into its prompt.
+function extractCharacterPromptCommon(character) {
+  return {
+    name: trim(character.name) || 'Unnamed',
+    aliases: Array.isArray(character.aliases) ? character.aliases.filter(Boolean).join(', ') : '',
+    role: trim(character.role),
+    pronouns: trim(character.pronouns),
+    age: trim(character.age),
+    personality: trim(character.personality),
+    speechAccent: trim(character.speechAccent),
+    speechPattern: trim(character.speechPattern),
+    coreTheme: trim(character.coreTheme),
+    visualNotes: trim(character.visualNotes),
+    physical: trim(character.physicalDescription),
+    silhouette: trim(character.silhouetteNotes),
+    posture: trim(character.postureNotes),
+    special: trim(character.specialTraits),
+    visualIdentity: trim(character.visualIdentity),
+    statsLine: flattenStats(character.stats),
+    paletteLine: flattenPalette(character.colorPalette),
+    wardrobeLine: flattenWardrobes(character.wardrobes),
+    propsLine: flattenProps(character.props),
+    expressionsLine: flattenNamedList(character.expressions, DEFAULT_EXPRESSIONS),
+    gesturesLine: flattenNamedList(character.handGestures, DEFAULT_HAND_GESTURES),
+  };
+}
+
 /**
  * Build the prompt + render options for one character's reference sheet.
  * Pure function — does no I/O, doesn't enqueue anything. The route handler
@@ -84,16 +116,11 @@ export function buildCharacterReferenceSheetPrompt(universe, character) {
   const styleClause = buildStyleClause(universe);
   const styleBits = styleClause.startsWith('(none provided') ? '' : styleClause;
 
-  const name = trim(character.name) || 'Unnamed';
-  const aliases = Array.isArray(character.aliases) ? character.aliases.filter(Boolean).join(', ') : '';
-  const role = trim(character.role);
-  const pronouns = trim(character.pronouns);
-  const age = trim(character.age);
-  const personality = trim(character.personality);
-  const speechAccent = trim(character.speechAccent);
-  const speechPattern = trim(character.speechPattern);
-  const coreTheme = trim(character.coreTheme);
-  const visualNotes = trim(character.visualNotes);
+  const {
+    name, aliases, role, pronouns, age, personality, speechAccent, speechPattern,
+    coreTheme, visualNotes, physical, silhouette, posture, special, visualIdentity,
+    statsLine, paletteLine, wardrobeLine, propsLine, expressionsLine, gesturesLine,
+  } = extractCharacterPromptCommon(character);
 
   const headerBits = [
     `Name: ${name}.`,
@@ -107,19 +134,6 @@ export function buildCharacterReferenceSheetPrompt(universe, character) {
     coreTheme ? `Core theme: ${coreTheme}.` : '',
     visualNotes ? `Visual notes: ${visualNotes}.` : '',
   ].filter(Boolean).join(' ');
-
-  const physical = trim(character.physicalDescription);
-  const silhouette = trim(character.silhouetteNotes);
-  const posture = trim(character.postureNotes);
-  const special = trim(character.specialTraits);
-  const visualIdentity = trim(character.visualIdentity);
-
-  const statsLine = flattenStats(character.stats);
-  const paletteLine = flattenPalette(character.colorPalette);
-  const wardrobeLine = flattenWardrobes(character.wardrobes);
-  const propsLine = flattenProps(character.props);
-  const expressionsLine = flattenNamedList(character.expressions, DEFAULT_EXPRESSIONS);
-  const gesturesLine = flattenNamedList(character.handGestures, DEFAULT_HAND_GESTURES);
 
   // Order matters: the model honors earliest tokens most reliably, so style +
   // header lead, then the per-zone layout enumeration.
@@ -160,11 +174,126 @@ export function buildCharacterReferenceSheetPrompt(universe, character) {
   };
 }
 
+/**
+ * Pick the two colors that drive the blueprint sheet's "glowing accents" +
+ * "structured base" aesthetic from the character's canonical palette. Prefers
+ * the human-readable name (`teal`, `cobalt`) for prompt legibility, falls
+ * back to hex when name is missing, and finally to a safe cyan/navy pair so
+ * the prompt always has two concrete tokens. Pure — no I/O, no settings.
+ *
+ * Returned as `{ accent, base }`; both are non-empty strings.
+ */
+export function pickBlueprintColors(palette) {
+  const cleaned = Array.isArray(palette)
+    ? palette
+      .map((c) => trim(c?.name) || trim(c?.hex))
+      .filter(Boolean)
+    : [];
+  const accent = cleaned[0] || 'cyan';
+  // Avoid collapsing the two color tokens onto the same string — if the
+  // palette only has one entry, fall back to a contrasting default for the
+  // base so the prompt's "glowing X on structured Y" reads as two colors.
+  const base = (cleaned[1] && cleaned[1] !== accent) ? cleaned[1] : 'navy';
+  return { accent, base };
+}
+
+/**
+ * Blueprint variant — secondary character concept sheet. Annotated turnaround
+ * (front / back / side / 3/4 views), close-ups of facial features, costume
+ * details, and accessories, all on a clean white background with glowing
+ * accent lines over a structured base color. Pure function; same shape as
+ * `buildCharacterReferenceSheetPrompt`.
+ */
+export function buildCharacterBlueprintSheetPrompt(universe, character) {
+  if (!universe || !character) {
+    throw new ServerError('buildCharacterBlueprintSheetPrompt: universe and character are required', {
+      status: 400, code: 'VALIDATION_ERROR',
+    });
+  }
+
+  const {
+    name, role, physical, silhouette, special, visualNotes, wardrobeLine, propsLine,
+  } = extractCharacterPromptCommon(character);
+  const { accent, base } = pickBlueprintColors(character.colorPalette);
+
+  const subject = role
+    ? `${name} — ${role}`
+    : name;
+
+  const promptParts = [
+    `CHARACTER CONCEPT SHEET of ${subject}, featuring detailed FRONT, BACK, SIDE, and 3/4 views at consistent scale, along with close-up sketches of facial features, costume details, and accessories.`,
+    physical ? `Subject reference: ${physical}` : '',
+    visualNotes ? `Visual notes: ${visualNotes}` : '',
+    silhouette ? `Silhouette: ${silhouette}` : '',
+    special ? `Special traits: ${special}` : '',
+    wardrobeLine ? `Costume close-up panels (labeled): ${wardrobeLine}.` : '',
+    propsLine ? `Accessory close-up panels (labeled): ${propsLine}.` : '',
+    `Annotated design notes and clearly labeled components are arranged across the layout in a grid of panels with thin guide lines, callouts, and dimension marks.`,
+    `Rendered in a refined blueprint style with glowing ${accent} accent linework + highlights, over a structured ${base} base design — light interior fills and edge glow in ${accent}, primary geometry and shadow tones in ${base}.`,
+    `Presented on a clean white background with a polished professional character design presentation. Consistent character proportions across every view; do NOT mix art styles between panels.`,
+  ].filter(Boolean);
+
+  const prompt = promptParts.join('\n\n');
+  const negativePrompt = 'multiple characters in the same panel, photograph, painterly texture, watercolor wash, dark background, cluttered background, text artifacts, watermark, signature, blurry, distorted anatomy, low contrast labels';
+
+  return {
+    prompt,
+    negativePrompt,
+    width: DEFAULT_WIDTH,
+    height: DEFAULT_HEIGHT,
+    modelId: null,
+  };
+}
+
 // Per-generation filename so re-renders don't trample prior versions; the
-// "live" sheet pointer on the character (`referenceSheetImageRef`) always
-// names the newest, but older files stay on disk for rollback.
-const sheetFilename = (universeId, characterId, generationId) =>
-  `universe-${shortId(universeId)}-${shortId(characterId)}-sheet-${shortId(generationId)}.png`;
+// "live" sheet pointer on the character always names the newest, but older
+// files stay on disk for rollback. The variant token in the middle keeps
+// different-style renders from colliding for the same character + jobId pair.
+const sheetFilename = (universeId, characterId, generationId, variantToken = 'sheet') =>
+  `universe-${shortId(universeId)}-${shortId(characterId)}-${variantToken}-${shortId(generationId)}.png`;
+
+// Catalog of renderable sheet styles. Adding a new variant = entry here +
+// a prompt-builder function. Storage routing (legacy field vs map slot) is
+// owned by `applySheetPointerToCharacter` / `readSheetPointer` in storyBible.js
+// based on the variant id, so new variants need no schema or routing changes.
+const SHEET_VARIANTS = Object.freeze({
+  [LEGACY_SHEET_VARIANT_ID]: Object.freeze({
+    id: LEGACY_SHEET_VARIANT_ID,
+    build: buildCharacterReferenceSheetPrompt,
+    filenameToken: 'sheet',
+    label: 'Illustrated turnaround',
+    description: 'Dense multi-zone reference sheet — front/back/side views, expression progression, color palette, wardrobe + props, hand gestures. Renders in the universe\'s defined illustrated style.',
+    collectionCategory: 'character-sheet',
+  }),
+  blueprint: Object.freeze({
+    id: 'blueprint',
+    build: buildCharacterBlueprintSheetPrompt,
+    filenameToken: 'blueprint',
+    label: 'Blueprint concept sheet',
+    description: 'Annotated character concept sheet on a clean white background with glowing accent linework over a structured base color. Both colors auto-pick from the character\'s palette.',
+    collectionCategory: 'character-blueprint',
+  }),
+});
+
+function getVariantConfig(variant = LEGACY_SHEET_VARIANT_ID) {
+  const config = SHEET_VARIANTS[variant];
+  if (!config) {
+    throw new ServerError(`Unknown character sheet variant "${variant}"`, {
+      status: 400, code: 'VALIDATION_ERROR',
+    });
+  }
+  return config;
+}
+
+// Catalog for the UI — pure, no I/O. The client renders one panel row per
+// entry. New entries here become available everywhere without further wiring.
+export function listSheetVariants() {
+  return Object.values(SHEET_VARIANTS).map((v) => ({
+    id: v.id,
+    label: v.label,
+    description: v.description,
+  }));
+}
 
 // `(universeId, characterId) → latest generationId requested` is owned by
 // `./universeCharacterSheetSlot.js` (extracted so universeBuilder.js can
@@ -200,8 +329,14 @@ function subscribeToSheetJob(jobId, handlers) {
  * Returns immediately with `{ jobId, generationId, filename, path }`.
  * Deferred copy + character stamp run when imageGenEvents emits 'completed';
  * any failure there is logged (the client tracks the render via SSE).
+ *
+ * `variant` selects the sheet style ('standard' = illustrated turnaround,
+ * 'blueprint' = annotated concept sheet on white). Defaults to 'standard'
+ * so existing callers (and the legacy route) stay unchanged.
  */
 export async function renderCharacterReferenceSheet(universeId, entryId, options = {}) {
+  const variant = options.variant || LEGACY_SHEET_VARIANT_ID;
+  const variantConfig = getVariantConfig(variant);
   const universe = await getUniverse(universeId);
   const list = Array.isArray(universe.characters) ? universe.characters : [];
   const character = list.find((c) => c.id === entryId);
@@ -220,7 +355,7 @@ export async function renderCharacterReferenceSheet(universeId, entryId, options
     );
   }
 
-  const built = buildCharacterReferenceSheetPrompt(universe, character);
+  const built = variantConfig.build(universe, character);
 
   const prompt = typeof options.overridePrompt === 'string' && options.overridePrompt.trim()
     ? options.overridePrompt.trim()
@@ -299,7 +434,7 @@ export async function renderCharacterReferenceSheet(universeId, entryId, options
       runId: randomUUID(),
       universeId: universe.id,
       collectionId: collection.id,
-      category: 'character-sheet',
+      category: variantConfig.collectionCategory,
       label: character.name,
     };
   }
@@ -309,10 +444,12 @@ export async function renderCharacterReferenceSheet(universeId, entryId, options
   // dispatches by `params.mode` (codex → codex lane, local → GPU lane).
   const queued = enqueueJob({ kind: 'image', params });
   const jobId = queued.jobId;
-  // Claim the latest-pending slot for this character. onSheetComplete checks
-  // it before stamping — guards against an older-but-slower render finishing
-  // after a newer one and overwriting the newer pointer.
-  claimPendingSheetSlot(universeId, entryId, jobId);
+  // Claim the latest-pending slot for this character + variant. onSheetComplete
+  // checks it before stamping — guards against an older-but-slower render
+  // finishing after a newer one and overwriting the newer pointer. The variant
+  // key keeps standard and blueprint slots independent so a blueprint render
+  // can't be superseded by an illustrated one or vice versa.
+  claimPendingSheetSlot(universeId, entryId, jobId, variant);
 
   // Subscribe to the queue's completion bus via the shared sheet
   // dispatcher (NOT imageGenEvents directly — the queue mediates the
@@ -341,7 +478,7 @@ export async function renderCharacterReferenceSheet(universeId, entryId, options
   const armTimeout = (ms, reason) => {
     if (timeoutHandle) clearTimeout(timeoutHandle);
     timeoutHandle = setTimeout(() => {
-      console.log(`⏱️ Character sheet render ${reason} [${shortId(jobId)}] — detaching`);
+      console.log(`⏱️ ${variantConfig.label} render ${reason} [${shortId(jobId)}] — detaching`);
       detach();
     }, ms);
     timeoutHandle.unref?.();
@@ -355,15 +492,15 @@ export async function renderCharacterReferenceSheet(universeId, entryId, options
     onCompleted: async (job) => {
       detach();
       const sourceFilename = job.result?.filename;
-      await onSheetComplete({ universeId, entryId, jobId, sourceFilename }).catch((err) => {
-        console.error(`❌ Character sheet post-completion failed [${shortId(jobId)}]: ${err?.message}`);
+      await onSheetComplete({ universeId, entryId, jobId, sourceFilename, variant }).catch((err) => {
+        console.error(`❌ ${variantConfig.label} post-completion failed [${shortId(jobId)}]: ${err?.message}`);
       });
     },
     onFailed: (job) => {
       detach();
       // Release the slot so a retry render doesn't get superseded by this dead one.
-      releasePendingSheetSlot(universeId, entryId, jobId);
-      console.log(`⚠️ Character sheet render ${job.status} [${shortId(jobId)}]: ${job.error || 'unknown'}`);
+      releasePendingSheetSlot(universeId, entryId, jobId, variant);
+      console.log(`⚠️ ${variantConfig.label} render ${job.status} [${shortId(jobId)}]: ${job.error || 'unknown'}`);
     },
   });
   armTimeout(QUEUE_WAIT_MS, 'queue-wait timeout');
@@ -371,13 +508,17 @@ export async function renderCharacterReferenceSheet(universeId, entryId, options
   // Deterministic destination filename — uses the queue's jobId so the client
   // can patch optimistically on SSE completion without a universe refetch.
   // onSheetComplete derives the same filename from the same inputs.
-  const destFilename = sheetFilename(universeId, entryId, jobId);
-  console.log(`🎨 Universe character sheet render — universe=${shortId(universeId)} entry=${shortId(entryId)} job=${shortId(jobId)} mode=${activeMode} model=${modelId} position=${queued.position}`);
+  const destFilename = sheetFilename(universeId, entryId, jobId, variantConfig.filenameToken);
+  console.log(`🎨 ${variantConfig.label} render — universe=${shortId(universeId)} entry=${shortId(entryId)} job=${shortId(jobId)} mode=${activeMode} model=${modelId} position=${queued.position}`);
   return {
     jobId,
     // `generationId` retained for client back-compat (older clients keyed
     // SSE attachment on this name); it's now an alias for `jobId`.
     generationId: jobId,
+    // Echo the resolved variant so the client can route the post-render
+    // callback to the right `referenceSheets[<id>]` slot without parsing the
+    // filename. Always set, even for the legacy 'standard' variant.
+    variant: variantConfig.id,
     queuePosition: queued.position,
     destFilename,
     destPath: `/data/image-refs/${destFilename}`,
@@ -385,42 +526,43 @@ export async function renderCharacterReferenceSheet(universeId, entryId, options
   };
 }
 
-export async function onSheetComplete({ universeId, entryId, jobId, sourceFilename }) {
+export async function onSheetComplete({ universeId, entryId, jobId, sourceFilename, variant = LEGACY_SHEET_VARIANT_ID }) {
   if (!sourceFilename) return null;
+  const variantConfig = getVariantConfig(variant);
   await ensureDir(PATHS.imageRefs);
-  const destFilename = sheetFilename(universeId, entryId, jobId);
+  const destFilename = sheetFilename(universeId, entryId, jobId, variantConfig.filenameToken);
   const srcPath = join(PATHS.images, basename(sourceFilename));
   const destPath = join(PATHS.imageRefs, destFilename);
   // ALWAYS copy the file — even superseded renders are kept on disk for
-  // rollback/comparison (they live at `data/image-refs/<...>-sheet-<job>.png`
+  // rollback/comparison (they live at `data/image-refs/<...>-<token>-<job>.png`
   // with a unique per-job filename).
   await copyFile(srcPath, destPath);
-  console.log(`📸 Character sheet copied to image-refs: ${destFilename}`);
+  console.log(`📸 ${variantConfig.label} copied to image-refs: ${destFilename}`);
 
-  // If a newer render has been started for this character while ours was in
-  // flight (OR the character was deleted, which clears the slot), the slot
-  // no longer holds our jobId. Skip the stamp — the newer render will stamp
-  // its own filename when it finishes, and a deleted character would
-  // re-introduce an orphaned pointer. Without this, an older-but-slower
-  // render could overwrite a newer-but-finished pointer.
-  if (getPendingSheetSlot(universeId, entryId) !== jobId) {
-    console.log(`⏭️ Character sheet [${shortId(jobId)}] superseded by newer render — file saved, pointer not stamped`);
+  // If a newer render has been started for this character+variant while ours
+  // was in flight (OR the character was deleted, which clears all variants'
+  // slots), the slot no longer holds our jobId. Skip the stamp — the newer
+  // render will stamp its own filename when it finishes, and a deleted
+  // character would re-introduce an orphaned pointer. Without this, an
+  // older-but-slower render could overwrite a newer-but-finished pointer.
+  if (getPendingSheetSlot(universeId, entryId, variant) !== jobId) {
+    console.log(`⏭️ ${variantConfig.label} [${shortId(jobId)}] superseded by newer render — file saved, pointer not stamped`);
     return { filename: destFilename, path: destPath, superseded: true };
   }
-  // Stamp ONLY `referenceSheetImageRef` inside the write queue against the
-  // freshest persisted universe so a concurrent user edit (or sibling render
-  // landing close in time) can't clobber unrelated character fields. The
-  // sheet lives in data/image-refs/, distinct from `imageRefs[]` (gallery,
-  // /data/images/) — polluting imageRefs would 404 the CanonCard thumbnail.
+  // Stamp ONLY the variant's pointer (legacy field OR `referenceSheets` map
+  // slot) inside the write queue against the freshest persisted universe so
+  // a concurrent user edit (or sibling render landing close in time) can't
+  // clobber unrelated character fields. The sheet file lives in
+  // data/image-refs/, distinct from `imageRefs[]` (gallery, /data/images/) —
+  // polluting imageRefs would 404 the CanonCard thumbnail.
   let stamped = false;
   await updateUniverse(universeId, (latest) => {
     const latestList = Array.isArray(latest.characters) ? latest.characters : [];
     const latestIdx = latestList.findIndex((c) => c.id === entryId);
     if (latestIdx < 0) return null;
-    const nextList = latestList.map((e, i) => (i === latestIdx ? {
-      ...e,
-      referenceSheetImageRef: destFilename,
-    } : e));
+    const nextList = latestList.map((e, i) => (
+      i === latestIdx ? applySheetPointerToCharacter(e, variant, destFilename) : e
+    ));
     stamped = true;
     return { characters: nextList };
   });
@@ -432,27 +574,31 @@ export async function onSheetComplete({ universeId, entryId, jobId, sourceFilena
   // and skip its own stamp — leaving the older filename persisted. A
   // failed stamp leaves the slot owned by us so the next render-start
   // cleanly overwrites it.
-  releasePendingSheetSlot(universeId, entryId, jobId);
+  releasePendingSheetSlot(universeId, entryId, jobId, variant);
   if (!stamped) {
-    console.log(`⚠️ Character ${entryId} not found post-render — sheet saved but not linked`);
+    console.log(`⚠️ Character ${entryId} not found post-render — ${variantConfig.label.toLowerCase()} saved but not linked`);
     return null;
   }
-  console.log(`📌 Character ${shortId(entryId)}.referenceSheetImageRef = ${destFilename}`);
-  return { filename: destFilename, path: destPath };
+  console.log(`📌 Character ${shortId(entryId)} [${variant}] = ${destFilename}`);
+  return { filename: destFilename, path: destPath, variant };
 }
 
 /**
- * Delete the character's current reference sheet — unlinks the file from
- * `PATHS.imageRefs` and clears `referenceSheetImageRef` on every matching
- * character via `purgeReferenceSheetFromAllUniverses`. Returns
+ * Delete a character's reference sheet of the given variant — unlinks the
+ * file from `PATHS.imageRefs` and clears the variant's pointer (legacy field
+ * OR `referenceSheets` map slot) on every matching character. Returns
  * `{ filename, fileDeleted, cleared }`; a missing file is not an error
  * (the lazy `pruneStaleReferenceSheets` may have already nulled the pointer
  * out-of-band) — `fileDeleted: false` distinguishes that case.
  *
  * Mirrors the renderer's lock check so a locked character's sheet stays
  * delete-protected alongside its other AI-managed fields.
+ *
+ * `variant` defaults to 'standard' so the existing route + client callers
+ * stay unchanged.
  */
-export async function deleteCharacterReferenceSheet(universeId, entryId) {
+export async function deleteCharacterReferenceSheet(universeId, entryId, { variant = LEGACY_SHEET_VARIANT_ID } = {}) {
+  const variantConfig = getVariantConfig(variant);
   const universe = await getUniverse(universeId);
   const list = Array.isArray(universe.characters) ? universe.characters : [];
   const character = list.find((c) => c.id === entryId);
@@ -467,7 +613,7 @@ export async function deleteCharacterReferenceSheet(universeId, entryId) {
       { status: 409, code: 'UNIVERSE_CANON_LOCKED' },
     );
   }
-  const filename = character.referenceSheetImageRef;
+  const filename = readSheetPointer(character, variant);
   if (!filename) {
     return { filename: null, fileDeleted: false, cleared: 0 };
   }
@@ -486,7 +632,7 @@ export async function deleteCharacterReferenceSheet(universeId, entryId) {
     throw err;
   });
   const { cleared } = await purgeReferenceSheetFromAllUniverses(filename);
-  console.log(`🗑️ Deleted character sheet ${filename} (file=${fileDeleted}, pointers cleared=${cleared})`);
+  console.log(`🗑️ Deleted ${variantConfig.label.toLowerCase()} ${filename} (file=${fileDeleted}, pointers cleared=${cleared})`);
   return { filename, fileDeleted, cleared };
 }
 

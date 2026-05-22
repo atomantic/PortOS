@@ -36,6 +36,7 @@ import CanonCard from '../pipeline/CanonCard';
 import { pipelineImageCfgToRenderOpts } from '../../lib/pipelineImageDefaults';
 import { universeStylePreset } from '../../lib/universeStylePreset';
 import { descriptorForCanonEntry } from '../../lib/canonPrompt';
+import { applySheetPointer } from '../../lib/sheetPointers';
 import { BIBLE_LIMITS } from '../../lib/bibleLimits';
 
 const capImageRefs = (refs) => (
@@ -323,26 +324,22 @@ export default function UniverseCanonSection({
   // Read from `latestUniverseRef` (not closed-over `universe`) so an edit
   // that landed during the panel's HEAD-poll wait isn't clobbered by an
   // older snapshot. No deps on `universe` keeps the callback stable.
-  const handleSheetCompleted = useCallback((entryId, destFilename) => {
+  const handleSheetCompleted = useCallback((entryId, destFilename, variant) => {
     const latest = latestUniverseRef.current;
     if (!latest || !destFilename) return;
     const nextCharacters = (latest.characters || []).map((c) =>
-      c.id === entryId ? { ...c, referenceSheetImageRef: destFilename } : c,
+      c.id === entryId ? applySheetPointer(c, variant, destFilename) : c,
     );
     onUniverseChange({ ...latest, characters: nextCharacters });
     const entryName = nextCharacters.find((c) => c.id === entryId)?.name || 'Character';
     toast.success(`${entryName} reference sheet ready`);
   }, [onUniverseChange]);
 
-  // Server already deleted the file + purged the pointer via the DELETE
-  // route. Mirror the change into the local draft so the thumbnail clears
-  // without a refetch. Reads from `latestUniverseRef` for the same staleness
-  // reason as `handleSheetCompleted`.
-  const handleSheetDeleted = useCallback((entryId) => {
+  const handleSheetDeleted = useCallback((entryId, variant) => {
     const latest = latestUniverseRef.current;
     if (!latest) return;
     const nextCharacters = (latest.characters || []).map((c) =>
-      c.id === entryId ? { ...c, referenceSheetImageRef: null } : c,
+      c.id === entryId ? applySheetPointer(c, variant, null) : c,
     );
     onUniverseChange({ ...latest, characters: nextCharacters });
   }, [onUniverseChange]);

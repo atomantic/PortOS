@@ -11,6 +11,7 @@ import { randomUUID } from 'crypto';
 import { join } from 'path';
 import { normalizeSlugline } from './scenePrompt.js';
 import { PATHS, atomicWrite, ensureDir, readJSONFile, resolveImageRef } from './fileUtils.js';
+import { isPlainObject } from './objects.js';
 import { ServerError } from './errorHandler.js';
 
 // Re-export so callers (writers-room domain files) can import a single
@@ -270,11 +271,15 @@ export function findBibleEntryByName(list, name) {
 export const CANON_CONTROL_FIELDS = Object.freeze([
   'id', 'createdAt', 'updatedAt',
   'locked', 'sourceSeriesId',
-  'imageRefs', 'primaryImageRef', 'referenceSheetImageRef',
+  'imageRefs', 'primaryImageRef',
+  // Sheet pointers — see SHEET_VARIANTS in universeCharacterSheet.js for the
+  // catalog of styles; legacy 'standard' stays in `referenceSheetImageRef`,
+  // every other variant lives in `referenceSheets[<id>]`.
+  'referenceSheetImageRef', 'referenceSheets',
 ]);
 
 export const SERVER_OWNED_CHARACTER_FIELDS = Object.freeze([
-  'referenceSheetImageRef',
+  'referenceSheetImageRef', 'referenceSheets',
 ]);
 
 export function stripCanonControlFields(entry) {
@@ -332,29 +337,130 @@ function deriveReferenceSheetImageRef(raw) {
   return trimmed;
 }
 
+// The legacy 'standard' variant lives in `character.referenceSheetImageRef`;
+// every other variant lives in `character.referenceSheets[<id>]`. Exported so
+// every reader/writer of either slot uses the same constant — the alternative
+// is a magic string repeated in ~14 places.
+export const LEGACY_SHEET_VARIANT_ID = 'standard';
+
+// Variant-id rules for `referenceSheets` map keys: short kebab-case identifier,
+// no path separators, no dot-prefix. Cap of 48 chars matches the route schema.
+// The legacy id is rejected because it must stay in the legacy field, not in
+// the map (otherwise sanitize / prune / purge would have to pick which slot wins).
+const VARIANT_ID_RE = /^[a-z0-9][a-z0-9_-]{0,47}$/;
+function isValidVariantId(id) {
+  return typeof id === 'string' && VARIANT_ID_RE.test(id) && id !== LEGACY_SHEET_VARIANT_ID;
+}
+
+/** Read the persisted reference-sheet filename for a variant. Returns the
+ *  string filename or null. The single read-side helper every consumer
+ *  (client + server) should use so storage-shape changes stay local. */
+export function readSheetPointer(character, variant) {
+  if (!character) return null;
+  if (variant === LEGACY_SHEET_VARIANT_ID) return character.referenceSheetImageRef || null;
+  const sheets = character.referenceSheets;
+  if (!isPlainObject(sheets)) return null;
+  return sheets[variant] || null;
+}
+
+/** Enumerate every reference-sheet pointer a character holds — yields one
+ *  `{ variant, filename }` per non-empty slot. The single iteration-side
+ *  helper for prune / purge / exporter / asset-collector. */
+export function listSheetPointers(character) {
+  if (!character) return [];
+  const out = [];
+  if (character.referenceSheetImageRef) {
+    out.push({ variant: LEGACY_SHEET_VARIANT_ID, filename: character.referenceSheetImageRef });
+  }
+  if (isPlainObject(character.referenceSheets)) {
+    for (const [variant, filename] of Object.entries(character.referenceSheets)) {
+      if (filename) out.push({ variant, filename });
+    }
+  }
+  return out;
+}
+
+/** Apply (or clear, when `filename` is null) a variant's pointer on a
+ *  character, returning a NEW character object — OR the same reference when
+ *  the slot already holds the target value, so callers downstream of an
+ *  `updateUniverse` mutator (and React subscribers on the client mirror)
+ *  can short-circuit no-op writes/renders. Writes the legacy variant to
+ *  `referenceSheetImageRef`; every other variant lands in / leaves from
+ *  `referenceSheets[variant]`. */
+export function applySheetPointerToCharacter(character, variant, filename) {
+  if (!character) return character;
+  if (variant === LEGACY_SHEET_VARIANT_ID) {
+    const next = filename || null;
+    if ((character.referenceSheetImageRef || null) === next) return character;
+    return { ...character, referenceSheetImageRef: next };
+  }
+  const existing = isPlainObject(character.referenceSheets) ? character.referenceSheets : {};
+  if (filename) {
+    if (existing[variant] === filename) return character;
+    return { ...character, referenceSheets: { ...existing, [variant]: filename } };
+  }
+  if (!(variant in existing)) return character;
+  const { [variant]: _dropped, ...rest } = existing;
+  return { ...character, referenceSheets: rest };
+}
+
 /**
- * Walk a character list and null out any `referenceSheetImageRef` whose
+ * Sanitize the `referenceSheets` map. Drops invalid variant ids, basename-
+ * validates every filename, returns a fresh frozen object with only valid
+ * entries. An LLM-extracted payload that somehow includes this field (it
+ * shouldn't — it's in CANON_CONTROL_FIELDS — but defense in depth) cannot
+ * smuggle a path traversal or an unknown sentinel into the persisted state.
+ *
+ * Always returns an object (possibly empty). The renderer treats absent
+ * keys as "no sheet rendered yet" and absent vs. empty map identically.
+ */
+function deriveReferenceSheets(raw) {
+  if (!isPlainObject(raw)) return {};
+  const out = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (!isValidVariantId(key)) continue;
+    const filename = deriveReferenceSheetImageRef(value);
+    if (!filename) continue;
+    out[key] = filename;
+  }
+  return out;
+}
+
+/**
+ * Walk a character list and null out any reference-sheet pointer whose
  * underlying file no longer exists in PATHS.imageRefs. Returns a NEW list
  * (cheap shallow copy per character) so callers can persist the cleaned
  * state. Pure with respect to the sanitizer — no FS I/O during sanitize,
  * just here at the "GET universe / verify before render" boundary.
  *
- * `resolveImageRef(mustExist: true)` does the FS stat synchronously; for
- * a typical 5-50 character universe this is sub-millisecond.
- *
  * CONVENTION: call from BOTH the GET universe route AND `updateUniverse`'s
  * write path. GET alone is not sufficient — without the write-time call,
  * stale values stay on disk and a later PATCH that omits `characters`
  * (e.g. rename) resurfaces the stale filename in the response.
+ *
+ * Memoizes `resolveImageRef` per call so a 50-character × 5-variant cast
+ * doesn't fan out into 250 redundant sync `statSync`s — every distinct
+ * filename costs one stat, not one stat per slot it appears in.
  */
 export function pruneStaleReferenceSheets(characters) {
   if (!Array.isArray(characters)) return characters;
+  const resolvedCache = new Map();
+  const fileExists = (name) => {
+    if (resolvedCache.has(name)) return resolvedCache.get(name);
+    const ok = !!resolveImageRef(name, { mustExist: true });
+    resolvedCache.set(name, ok);
+    return ok;
+  };
   let changed = false;
   const out = characters.map((c) => {
-    if (!c || !c.referenceSheetImageRef) return c;
-    if (resolveImageRef(c.referenceSheetImageRef, { mustExist: true })) return c;
-    changed = true;
-    return { ...c, referenceSheetImageRef: null };
+    if (!c) return c;
+    let next = c;
+    for (const { variant, filename } of listSheetPointers(c)) {
+      if (fileExists(filename)) continue;
+      next = applySheetPointerToCharacter(next, variant, null);
+      changed = true;
+    }
+    return next;
   });
   return changed ? out : characters;
 }
@@ -552,6 +658,12 @@ export function sanitizeCharacter(raw, { idPrefix = DEFAULT_ID_PREFIX.character,
     // payload that snuck past stripCanonControlFields can't persist a path
     // the UI would 404 on or that would escape PATHS.imageRefs at render time.
     referenceSheetImageRef: deriveReferenceSheetImageRef(raw.referenceSheetImageRef),
+    // Variant-keyed pointers for non-legacy sheet styles (`blueprint`, etc.).
+    // Per-variant filenames live here; the legacy 'standard' variant keeps
+    // using `referenceSheetImageRef` above so existing data needs no
+    // migration. Sanitizer drops invalid keys and basename-validates every
+    // value with the same rules as the legacy field.
+    referenceSheets: deriveReferenceSheets(raw.referenceSheets),
     // Wardrobes (A2): outfit/styling variants applied on top of
     // physicalDescription. Empty array stays the legacy shape — every
     // existing character keeps rendering through physicalDescription alone.

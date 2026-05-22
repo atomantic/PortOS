@@ -8,6 +8,7 @@ export * from './cleanPlatePrompt.js';
 export * from './composeStyledPrompt.js';
 export * from './scenePrompt.js';
 export * from './seasonStructure.js';
+export * from './sheetPointers.js';
 export * from './universeStylePreset.js';
 
 // === Pipeline / image-gen defaults ===

@@ -318,6 +318,29 @@ describe('universeCanon — purgeReferenceSheetFromAllUniverses', () => {
     expect(await canonSvc.purgeReferenceSheetFromAllUniverses(null)).toEqual({ cleared: 0 });
     expect(await canonSvc.purgeReferenceSheetFromAllUniverses(undefined)).toEqual({ cleared: 0 });
   });
+
+  it('also clears matching variant keys inside referenceSheets map (blueprint, etc.)', async () => {
+    // Mixed-shape fixture: Alex has the filename in the map slot, Beth has
+    // the same filename in the legacy field — purge must clear both in one
+    // call, regardless of which storage shape a given character used.
+    const w1 = await seedUniverseWithCharacters([
+      { name: 'Alex', physicalDescription: 'a', referenceSheets: { blueprint: 'shared.png' } },
+      { name: 'Beth', physicalDescription: 'b', referenceSheetImageRef: 'shared.png' },
+      { name: 'Cara', physicalDescription: 'c', referenceSheets: { blueprint: 'other.png', noir: 'shared.png' } },
+    ]);
+    const result = await canonSvc.purgeReferenceSheetFromAllUniverses('shared.png');
+    expect(result.cleared).toBe(3);
+
+    const reread = await svc.getUniverse(w1.id);
+    const alex = reread.characters.find((c) => c.name === 'Alex');
+    const beth = reread.characters.find((c) => c.name === 'Beth');
+    const cara = reread.characters.find((c) => c.name === 'Cara');
+    expect(alex.referenceSheets).toEqual({});
+    expect(beth.referenceSheetImageRef).toBeNull();
+    // Cara only loses the 'noir' key; 'blueprint' (pointing at a different
+    // file) survives the purge.
+    expect(cara.referenceSheets).toEqual({ blueprint: 'other.png' });
+  });
 });
 
 describe('universeCanon — purgeImageRefFromAllUniverses', () => {

@@ -30,7 +30,7 @@ import { getJob } from '../mediaJobQueue/index.js';
 import { getInstanceId } from '../instances.js';
 import { getSettings } from '../settings.js';
 import { getProducedByVersion } from './version.js';
-import { isStr } from '../../lib/storyBible.js';
+import { isStr, listSheetPointers } from '../../lib/storyBible.js';
 import { resolveBucketSourceName as resolveSourceName } from './annotationIdentity.js';
 
 /**
@@ -264,7 +264,12 @@ function collectAssetReferences(record) {
     if (Array.isArray(node.imageRefs)) {
       for (const r of node.imageRefs) if (isStr(r)) directImageFilenames.add(r);
     }
-    if (isStr(node.referenceSheetImageRef)) directImageRefFilenames.add(node.referenceSheetImageRef);
+    // Every character-sheet variant the renderer produced — legacy + map.
+    // listSheetPointers yields one entry per non-empty pointer regardless of
+    // storage shape, so the export bundle includes every render.
+    for (const { filename } of listSheetPointers(node)) {
+      if (isStr(filename)) directImageRefFilenames.add(filename);
+    }
     if (isStr(node.videoPath)) directVideoFilenames.add(basename(node.videoPath));
     for (const k of Object.keys(node)) {
       const v = node[k];

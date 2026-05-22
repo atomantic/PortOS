@@ -181,27 +181,34 @@ export const expandUniverseCharacter = (universeId, entryId, { providerId, model
     body: JSON.stringify({ providerId, model }),
   });
 
-// Kick off a character reference sheet render. Returns immediately with
-// `{ jobId, generationId, filename, path }`; the caller subscribes to media-job
-// SSE for live progress. Server-side completion handler stamps the resulting
-// filename onto `character.referenceSheetImageRef` automatically.
+// Catalog of every registered reference-sheet variant. The panel iterates
+// this on mount to render one row per variant. New variants light up
+// automatically once they're registered in the server-side SHEET_VARIANTS.
+export const fetchReferenceSheetVariants = (options = {}) =>
+  request('/universe-builder/reference-sheet-variants', options);
+
+// Kick off a character reference sheet render. `variant` selects which
+// registered style to render (defaults server-side to 'standard'); the server
+// stamps the resulting filename into the matching pointer slot
+// (`referenceSheetImageRef` for legacy 'standard', `referenceSheets[<id>]`
+// for everything else). Returns `{ jobId, generationId, variant, ... }`.
 export const renderCharacterReferenceSheet = (universeId, entryId, {
-  overridePrompt, overrideNegativePrompt, modelId,
+  variant, overridePrompt, overrideNegativePrompt, modelId,
 } = {}) =>
   request(`/universe-builder/${encodeURIComponent(universeId)}/characters/${encodeURIComponent(entryId)}/render-reference-sheet`, {
     method: 'POST',
-    body: JSON.stringify({ overridePrompt, overrideNegativePrompt, modelId }),
+    body: JSON.stringify({ variant, overridePrompt, overrideNegativePrompt, modelId }),
   });
 
-// Delete the character's current reference sheet (file + pointer). Server
-// unlinks the PNG from /data/image-refs/ and clears every matching
-// `referenceSheetImageRef` across all universes. Returns
-// `{ filename, fileDeleted, cleared }`.
-export const deleteCharacterReferenceSheet = (universeId, entryId, options = {}) =>
-  request(`/universe-builder/${encodeURIComponent(universeId)}/characters/${encodeURIComponent(entryId)}/reference-sheet`, {
+// Delete the character's reference sheet of the given variant. Variant
+// defaults server-side to 'standard'. Returns `{ filename, fileDeleted, cleared }`.
+export const deleteCharacterReferenceSheet = (universeId, entryId, { variant, ...requestOpts } = {}) => {
+  const qs = variant ? `?variant=${encodeURIComponent(variant)}` : '';
+  return request(`/universe-builder/${encodeURIComponent(universeId)}/characters/${encodeURIComponent(entryId)}/reference-sheet${qs}`, {
     method: 'DELETE',
-    ...options,
+    ...requestOpts,
   });
+};
 
 // Cast-wide differentiate — single LLM call rewrites every character so the
 // whole cast has no visually-colliding pairs.
