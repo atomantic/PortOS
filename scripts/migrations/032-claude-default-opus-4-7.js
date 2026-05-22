@@ -33,6 +33,16 @@
  *     map (haiku→haiku, sonnet→sonnet, opus→opus). Still-current pins
  *     are preserved.
  *
+ * There's a third "seeded" shape — the aiToolkit fallback defaults that
+ * shipped before this PR also had the new-trio `models` list but kept
+ * `defaultModel: claude-sonnet-4-6` (with the canonical aiToolkit tier
+ * fingerprint light=haiku-4-5 / medium=sonnet-4-6 / heavy=opus-4-7). An
+ * install that picked up that shape would look "already current" by
+ * `models` alone but still have the old default. We detect that exact
+ * fingerprint and upgrade just `defaultModel` to `claude-opus-4-7`. A
+ * user who hand-pinned `claude-sonnet-4-6` *without* the canonical
+ * aiToolkit tier fingerprint is preserved.
+ *
  * Because the retired-id map covers every member of every legacy shape, no
  * tier pointer can be left referencing a model that's no longer in
  * `provider.models` after the rewrite (which would otherwise break dropdowns).
@@ -82,7 +92,20 @@ const RETIRED_TO_SUCCESSOR = {
 const SEEDED_DEFAULTS = new Set(['claude-opus-4-6', 'claude-sonnet-4-5-20250929']);
 const POLICY_DEFAULT = 'claude-opus-4-7';
 
+// Canonical aiToolkit fallback shape (models = new trio already; only the
+// defaultModel is stale at `claude-sonnet-4-6`). Matching the full tier-
+// pointer fingerprint avoids false positives on a hand-pinned sonnet-4-6.
+const AITOOLKIT_SEEDED_FINGERPRINT = {
+  defaultModel: 'claude-sonnet-4-6',
+  lightModel: 'claude-haiku-4-5',
+  mediumModel: 'claude-sonnet-4-6',
+  heavyModel: 'claude-opus-4-7',
+};
+
 const TIER_POINTER_KEYS = ['lightModel', 'mediumModel', 'heavyModel'];
+
+const matchesAiToolkitSeededShape = (provider) =>
+  Object.entries(AITOOLKIT_SEEDED_FINGERPRINT).every(([k, v]) => provider[k] === v);
 
 const TARGET_IDS = ['claude-code', 'claude-code-tui'];
 
@@ -129,7 +152,14 @@ export default {
       if (!provider) continue;
 
       if (sameArray(provider.models, NEW_MODELS)) {
-        alreadyCurrent.push(id);
+        // Models already current — check for the aiToolkit-seeded shape that
+        // shipped the new trio but kept defaultModel at claude-sonnet-4-6.
+        if (matchesAiToolkitSeededShape(provider)) {
+          provider.defaultModel = POLICY_DEFAULT;
+          touched.push({ id, defaultModel: provider.defaultModel });
+        } else {
+          alreadyCurrent.push(id);
+        }
         continue;
       }
       if (!PRIOR_MODELS_SHAPES.some((shape) => sameArray(provider.models, shape))) {
