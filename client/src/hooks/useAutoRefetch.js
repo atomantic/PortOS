@@ -6,11 +6,14 @@ import { useVisibilityEvent } from './useVisibilityEvent.js';
  * once when it becomes visible again. Replaces the per-component
  * useEffect + setInterval pattern for data-fetch polling.
  *
- * fetchFn should handle its own errors. Data-path callers (those reading the
- * returned `data`) should NOT swallow errors with `.catch(() => null)` — the
- * hook will then apply that null and wipe the previously-displayed snapshot
- * on every transient blip. Let the error throw; the hook's catch logs it and
- * preserves the last good data.
+ * The hook catches whatever `fetchFn` throws, warns, and keeps the prior
+ * `data` untouched — so data-path callers (those reading the returned `data`)
+ * should NOT swallow errors with `.catch(() => null)`. Returning `null` here
+ * applies that null and wipes the previously-displayed snapshot on every
+ * transient blip; letting the error throw preserves the last good data.
+ * `pollOnly` (side-effect) callers can additionally handle errors inside
+ * `fetchFn` if they want their own logging or recovery — the hook's warn
+ * still fires either way.
  *
  * `refetch` is intentionally unconditional — it bypasses the hidden-tab
  * short-circuit so explicit "Refresh" buttons work regardless of visibility.
@@ -76,7 +79,7 @@ export function useAutoRefetch(fetchFn, intervalMs, options = {}) {
       if (!pollOnly) setLoading(false);
       return result;
     } catch (err) {
-      console.warn(`⚠️ Auto-refetch failed: ${err.message}`);
+      console.warn(`⚠️ Auto-refetch failed: ${err?.message ?? String(err)}`);
       if (!pollOnly) setLoading(false);
       return undefined;
     }
@@ -100,7 +103,7 @@ export function useAutoRefetch(fetchFn, intervalMs, options = {}) {
         applyResult(result);
         if (!pollOnly) setLoading(false);
       } catch (err) {
-        console.warn(`⚠️ Auto-refetch failed: ${err.message}`);
+        console.warn(`⚠️ Auto-refetch failed: ${err?.message ?? String(err)}`);
         if (!cancelled && !pollOnly) setLoading(false);
       }
     };

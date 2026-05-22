@@ -83,6 +83,22 @@ describe('useAutoRefetch', () => {
     warn.mockRestore();
   });
 
+  it('survives non-Error rejections (null, string) without throwing inside the catch', async () => {
+    const fetchFn = vi.fn()
+      .mockResolvedValueOnce('first')
+      .mockRejectedValueOnce(null)
+      .mockRejectedValueOnce('plain string')
+      .mockResolvedValue('recovered');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const { result } = renderHook(() => useAutoRefetch(fetchFn, 20));
+    await waitFor(() => expect(result.current.data).toBe('first'));
+    await waitFor(() => expect(fetchFn.mock.calls.length).toBeGreaterThanOrEqual(4));
+    expect(result.current.data).toBe('recovered');
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
   it('skips the on-mount fetch when immediate is false', async () => {
     const fetchFn = vi.fn().mockResolvedValue('x');
     renderHook(() => useAutoRefetch(fetchFn, 60, { immediate: false }));
