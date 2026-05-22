@@ -35,11 +35,14 @@ function lcs(a, b) {
 }
 
 // LCS allocates an (m+1)×(n+1) Int32Array; the product — not each side — is
-// what matters. Cap at 1M cells (~4MB allocated by the typed array, well
-// inside browser memory for a per-modal computation). A 1000×1000 word diff
-// stays in budget; anything larger bails to the side-by-side fallback below
-// rather than risk a tab freeze on a worst-case ~1000-word draft compare.
-const DIFF_CELL_CAP = 1_000_000;
+// what matters. Cap at 4M cells (~16MB allocated by the typed array, still
+// inside browser memory for a per-modal computation). The DP runs over
+// `split(/(\s+)/)` tokens, which roughly doubles the input word count
+// (each word + its trailing whitespace is its own token), so a ~1000-word
+// draft becomes ~2000 tokens and a 1000-word-vs-1000-word diff lands at
+// 2000×2000 = 4M cells — right at the cap. Anything larger bails to the
+// side-by-side fallback below rather than risk a tab freeze.
+const DIFF_CELL_CAP = 4_000_000;
 
 const InlineDiff = memo(function InlineDiff({ oldText, newText, emptyLabel = 'No changes.' }) {
   const oldStr = oldText || '';
