@@ -315,18 +315,20 @@ export async function autoSubscribePeerToAllRecords(peerId, recordKind) {
   }
   if (records.length === 0) return [];
   // Initialize the tombstone cursor for this peer ONCE up front. Each
-  // subsequent subscribePeer call passes `skipCursorInit: true` so we don't
-  // re-read the cursor state file (and re-take its writeTail lock) for every
-  // record. Cheap when N is small, but a peer with 50+ universes pays for
-  // 50+ redundant cursor reads otherwise.
-  await initCursor(peerId).catch(() => {});
+  // subsequent subscribePeer call passes `skipCursorInit: true` ONLY when
+  // this pre-init succeeded — otherwise we'd silently create subscriptions
+  // without a cursor, which breaks the tombstone horizon contract
+  // (`subscribedSince` would be unset, so historical deletes could replay).
+  // On failure we fall back to per-call initCursor inside subscribePeer,
+  // paying the cost of N file reads but preserving correctness.
+  const cursorInited = await initCursor(peerId).then(() => true).catch(() => false);
   // Only track newly-created subscriptions so re-runs of this helper (e.g. a
   // second toggle on the same category) don't double-report or noise the
   // backfill log line with already-subscribed records.
   const created = [];
   for (const rec of records) {
     if (!isNonEmptyStr(rec.id)) continue;
-    const sub = await subscribePeer({ peerId, recordKind, recordId: rec.id }, { skipCursorInit: true }).catch((err) => {
+    const sub = await subscribePeer({ peerId, recordKind, recordId: rec.id }, { skipCursorInit: cursorInited }).catch((err) => {
       console.log(`⚠️ peerSync: backfill-subscribe ${recordKind}/${rec.id} → ${peerId} failed: ${err.message}`);
       return null;
     });
@@ -514,6 +516,15 @@ export async function pushRecordToPeer(sub) {
   }
   const peer = await findPeerById(sub.peerId);
   if (!peer) return { pushed: false, reason: 'peer-not-found' };
+  // Re-gate on the same peer flags the auto-subscribe path checks. An
+  // existing subscription is NOT a license to keep pushing after the user
+  // has globally disabled sync (`syncEnabled: false`), disabled the peer
+  // (`enabled: false`), switched the peer to inbound-only (`directions:
+  // ['inbound']`), or toggled the matching category off (`syncCategories.*
+  // === false`). Without these guards, stale subs would silently outlive
+  // the user's intent and leak records on the next edit.
+  if (!peerAllowsOutbound(peer)) return { pushed: false, reason: 'peer-disallows-outbound' };
+  if (!peerHasCategory(peer, sub.recordKind)) return { pushed: false, reason: 'category-disabled' };
 
   const ourInstanceId = await getInstanceId().catch(() => null);
   if (!isNonEmptyStr(ourInstanceId) || ourInstanceId === UNKNOWN_INSTANCE_ID) {

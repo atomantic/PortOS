@@ -88,11 +88,24 @@ beforeEach(async () => {
   PATHS.data = tmp;
   PATHS.images = join(tmp, 'images');
 
-  // Reset mocks
+  // Reset mocks. Default peers mirror what `addPeer` produces in production
+  // (enabled + syncEnabled + every syncCategory on) so pushRecordToPeer's
+  // outbound/category gates don't short-circuit the existing push tests.
+  // Tests that exercise the gating paths explicitly override these mocks.
   vi.mocked(getInstanceId).mockResolvedValue('local-instance');
   vi.mocked(getPeers).mockResolvedValue([
-    { instanceId: 'peer-a', name: 'Peer A', host: null, address: '10.0.0.2', port: 5555, directions: ['outbound', 'inbound'] },
-    { instanceId: 'peer-b-inbound-only', name: 'Peer B', host: null, address: '10.0.0.3', port: 5555, directions: ['inbound'] },
+    {
+      instanceId: 'peer-a', name: 'Peer A', host: null, address: '10.0.0.2', port: 5555,
+      enabled: true, syncEnabled: true,
+      directions: ['outbound', 'inbound'],
+      syncCategories: { universe: true, pipeline: true },
+    },
+    {
+      instanceId: 'peer-b-inbound-only', name: 'Peer B', host: null, address: '10.0.0.3', port: 5555,
+      enabled: true, syncEnabled: true,
+      directions: ['inbound'],
+      syncCategories: { universe: true, pipeline: true },
+    },
   ]);
   vi.mocked(peerFetch).mockReset();
   vi.mocked(mergeUniversesFromSync).mockResolvedValue({ applied: true, count: 1 });
@@ -550,6 +563,60 @@ describe('peerSync', () => {
       });
       expect(result.pushed).toBe(false);
       expect(result.reason).toBe('peer-not-found');
+    });
+
+    it('refuses to push to a peer with syncEnabled=false (stale sub doesnt outlive the user toggle)', async () => {
+      // Regression: an existing subscription is not a license to keep pushing
+      // after the user has globally silenced the peer. Without this gate,
+      // every subsequent edit would still leak across the wire.
+      vi.mocked(getPeers).mockResolvedValue([
+        {
+          instanceId: 'peer-a', name: 'Peer A',
+          enabled: true, syncEnabled: false,
+          directions: ['outbound'],
+          syncCategories: { universe: true },
+        },
+      ]);
+      const result = await pushRecordToPeer({
+        id: 's', peerId: 'peer-a', recordKind: 'universe', recordId: 'u1',
+      });
+      expect(result.pushed).toBe(false);
+      expect(result.reason).toBe('peer-disallows-outbound');
+      expect(peerFetch).not.toHaveBeenCalled();
+    });
+
+    it('refuses to push to a peer that has been switched to inbound-only', async () => {
+      vi.mocked(getPeers).mockResolvedValue([
+        {
+          instanceId: 'peer-a', name: 'Peer A',
+          enabled: true, syncEnabled: true,
+          directions: ['inbound'],
+          syncCategories: { universe: true },
+        },
+      ]);
+      const result = await pushRecordToPeer({
+        id: 's', peerId: 'peer-a', recordKind: 'universe', recordId: 'u1',
+      });
+      expect(result.pushed).toBe(false);
+      expect(result.reason).toBe('peer-disallows-outbound');
+    });
+
+    it('refuses to push when the matching category has been toggled off', async () => {
+      // Stale sub on a universe but the user later toggled `syncCategories.universe`
+      // back off — stop pushing universes to this peer.
+      vi.mocked(getPeers).mockResolvedValue([
+        {
+          instanceId: 'peer-a', name: 'Peer A',
+          enabled: true, syncEnabled: true,
+          directions: ['outbound'],
+          syncCategories: { universe: false, pipeline: true },
+        },
+      ]);
+      const result = await pushRecordToPeer({
+        id: 's', peerId: 'peer-a', recordKind: 'universe', recordId: 'u1',
+      });
+      expect(result.pushed).toBe(false);
+      expect(result.reason).toBe('category-disabled');
     });
 
     it('returns record-not-found when the record id no longer exists', async () => {
