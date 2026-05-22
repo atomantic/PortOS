@@ -83,6 +83,22 @@ describe('useAutoRefetch', () => {
     warn.mockRestore();
   });
 
+  it('survives non-Error rejections (null, string) without throwing inside the catch', async () => {
+    const fetchFn = vi.fn()
+      .mockResolvedValueOnce('first')
+      .mockRejectedValueOnce(null)
+      .mockRejectedValueOnce('plain string')
+      .mockResolvedValue('recovered');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const { result } = renderHook(() => useAutoRefetch(fetchFn, 20));
+    await waitFor(() => expect(result.current.data).toBe('first'));
+    await waitFor(() => expect(fetchFn.mock.calls.length).toBeGreaterThanOrEqual(4));
+    expect(result.current.data).toBe('recovered');
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
   it('skips the on-mount fetch when immediate is false', async () => {
     const fetchFn = vi.fn().mockResolvedValue('x');
     renderHook(() => useAutoRefetch(fetchFn, 60, { immediate: false }));
@@ -184,6 +200,93 @@ describe('useAutoRefetch', () => {
 
     await act(async () => { await result.current.refetch(); });
     expect(result.current.data).toBe(snapshot);
+  });
+
+  describe('pollOnly mode', () => {
+    it('returns { refetch } only — no data, no loading', async () => {
+      const fetchFn = vi.fn().mockResolvedValue({ ignored: true });
+      const { result } = renderHook(() => useAutoRefetch(fetchFn, 60_000, { pollOnly: true }));
+
+      await waitFor(() => expect(fetchFn).toHaveBeenCalledTimes(1));
+      expect(result.current).toHaveProperty('refetch');
+      expect(result.current).not.toHaveProperty('data');
+      expect(result.current).not.toHaveProperty('loading');
+    });
+
+    it('still ticks on the interval', async () => {
+      const fetchFn = vi.fn().mockResolvedValue(null);
+      renderHook(() => useAutoRefetch(fetchFn, 30, { pollOnly: true }));
+      await waitFor(() => expect(fetchFn.mock.calls.length).toBeGreaterThanOrEqual(3));
+    });
+
+    it('skips while hidden and refires on visibility', async () => {
+      const fetchFn = vi.fn().mockResolvedValue(null);
+      renderHook(() => useAutoRefetch(fetchFn, 20, { pollOnly: true }));
+      await waitFor(() => expect(fetchFn).toHaveBeenCalledTimes(1));
+
+      setVisibility('hidden');
+      await new Promise((r) => setTimeout(r, 80));
+      const callsWhileHidden = fetchFn.mock.calls.length;
+      expect(callsWhileHidden).toBe(1);
+
+      setVisibility('visible');
+      act(() => fireVisibilityChange());
+      await waitFor(() => expect(fetchFn.mock.calls.length).toBeGreaterThan(callsWhileHidden));
+    });
+
+    it('respects enabled toggling', async () => {
+      const fetchFn = vi.fn().mockResolvedValue(null);
+      const { rerender } = renderHook(
+        ({ enabled }) => useAutoRefetch(fetchFn, 20, { enabled, pollOnly: true }),
+        { initialProps: { enabled: false } },
+      );
+
+      await new Promise((r) => setTimeout(r, 80));
+      expect(fetchFn).not.toHaveBeenCalled();
+
+      rerender({ enabled: true });
+      await waitFor(() => expect(fetchFn).toHaveBeenCalledTimes(1));
+    });
+
+    it('exposes a working refetch that swallows errors via warn', async () => {
+      const fetchFn = vi.fn()
+        .mockResolvedValueOnce('first')
+        .mockRejectedValueOnce(new Error('boom'));
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      const { result } = renderHook(
+        () => useAutoRefetch(fetchFn, 60_000, { pollOnly: true, enabled: false }),
+      );
+
+      expect(fetchFn).not.toHaveBeenCalled();
+
+      let returned;
+      await act(async () => { returned = await result.current.refetch(); });
+      expect(returned).toBe('first');
+
+      await act(async () => { returned = await result.current.refetch(); });
+      expect(returned).toBeUndefined();
+      expect(warn).toHaveBeenCalled();
+      warn.mockRestore();
+    });
+
+    it('does not re-render on each tick (no data/loading state changes)', async () => {
+      const fetchFn = vi.fn().mockResolvedValue(null);
+      let renders = 0;
+      const { rerender } = renderHook(() => {
+        renders += 1;
+        return useAutoRefetch(fetchFn, 20, { pollOnly: true });
+      });
+
+      await waitFor(() => expect(fetchFn.mock.calls.length).toBeGreaterThanOrEqual(3));
+      const rendersAfterTicks = renders;
+      // Pollster runs three+ times; should not re-render per tick.
+      expect(rendersAfterTicks).toBeLessThanOrEqual(2);
+
+      // Rerendering externally still works normally.
+      rerender();
+      expect(renders).toBe(rendersAfterTicks + 1);
+    });
   });
 
   it('compare is bypassed when the new result is null, replacing prior data', async () => {

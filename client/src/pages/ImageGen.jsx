@@ -539,7 +539,7 @@ export default function ImageGen() {
   const lastBusyRef = useRef(0);
   const pollQueue = useCallback(async () => {
     const jobs = await listMediaJobs({ kind: 'image' }).catch(() => null);
-    if (!jobs) return null;
+    if (!jobs) return;
     const stillBusy = jobs.filter((j) => j.status === 'queued' || j.status === 'running').length;
     // Subtract 1 for the actively-tracked render (when generating). Floor
     // at 0 so a transient counting glitch doesn't show "−1 queued".
@@ -552,9 +552,8 @@ export default function ImageGen() {
     // No-op guard: same value setState would still trigger a render, so
     // explicitly skip when nothing changed.
     setPendingQueued((prev) => (prev === next ? prev : next));
-    return null;
   }, [generating, refreshGallery]);
-  useAutoRefetch(pollQueue, 4000, { enabled: queueActive });
+  useAutoRefetch(pollQueue, 4000, { enabled: queueActive, pollOnly: true });
 
   const flux2Issue = isFlux2Model && flux2Status
     ? (!flux2Status.venvInstalled ? 'venv' : !flux2Status.hfTokenPresent ? 'token' : null)

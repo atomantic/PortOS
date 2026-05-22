@@ -43,10 +43,9 @@ export default function MediaJobsQueue({ kind, recentLimit = 10, className = '' 
     const data = await listMediaJobs(kind ? { kind } : {}).catch(() => null);
     if (data) setJobs(data);
     setLoading(false);
-    return null;
   }, [kind]);
 
-  useAutoRefetch(fetchJobs, 3000);
+  useAutoRefetch(fetchJobs, 3000, { pollOnly: true });
 
   const handleCancel = (id) => cancelMediaJob(id)
     .then(() => {

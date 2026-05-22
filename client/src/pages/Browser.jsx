@@ -49,7 +49,6 @@ export default function BrowserPage() {
       setStatus(data);
       setLoading(false);
     }
-    return null;
   }, []);
 
   const fetchLogs = useCallback(async () => {
@@ -60,7 +59,7 @@ export default function BrowserPage() {
     }
   }, []);
 
-  useAutoRefetch(fetchStatus, POLL_INTERVAL);
+  useAutoRefetch(fetchStatus, POLL_INTERVAL, { pollOnly: true });
 
   // Load config when settings panel opens
   useEffect(() => {

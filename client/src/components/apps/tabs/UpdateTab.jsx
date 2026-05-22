@@ -116,16 +116,15 @@ export default function UpdateTab() {
       setPolling(false);
       toast.success(`Updated to v${ok.version}`, { id: 'portos-update-restart' });
       setTimeout(() => window.location.reload(), 1000);
-      return null;
+      return;
     }
     if (attemptsRef.current >= 30) {
       setPolling(false);
       toast.error('Restart timed out — try reloading manually', { id: 'portos-update-restart' });
     }
-    return null;
   }, []);
 
-  useAutoRefetch(pollHealth, 2000, { enabled: polling });
+  useAutoRefetch(pollHealth, 2000, { enabled: polling, pollOnly: true });
 
   const handleCheck = async () => {
     setChecking(true);
