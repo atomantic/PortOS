@@ -203,7 +203,27 @@ describe('sweepTombstones — resurrection safety against snapshot-mode peers', 
     expect(pruneTombstonedUniverses).toHaveBeenCalled();
   });
 
-  it('ignores disabled snapshot-mode peers (cant resurrect from a disabled peer)', async () => {
+  it('refuses to prune in mixed deployment (peer-A per-record subscribed, peer-B snapshot-only)', async () => {
+    // Regression for the round-3 finding: my round-2 fix only checked the
+    // snapshot-mode gate when peerIds.length === 0. But if peer-A has a
+    // per-record sub AND peer-B is snapshot-only for the same kind, peer-B
+    // has no ack horizon — its next snapshot push could still resurrect
+    // a record we pruned based on peer-A's ack alone. The fix now checks
+    // for ANY uncovered snapshot peer.
+    listPeerSubscriptions.mockImplementation(async ({ recordKind }) => {
+      if (recordKind === 'universe') return [{ peerId: 'peer-a' }];
+      return [];
+    });
+    getMinAckAcrossPeers.mockResolvedValue(NOW - 1000);
+    getPeers.mockResolvedValue([
+      { instanceId: 'peer-a', enabled: true, syncCategories: { universe: true } },
+      { instanceId: 'peer-b', enabled: true, syncCategories: { universe: true } }, // snapshot-only
+    ]);
+    await sweepTombstones({ now: NOW });
+    expect(pruneTombstonedUniverses).not.toHaveBeenCalled();
+  });
+
+  it("ignores disabled snapshot-mode peers (can't resurrect from a disabled peer)", async () => {
     listPeerSubscriptions.mockResolvedValue([]);
     getPeers.mockResolvedValue([
       { instanceId: 'peer-a', enabled: false, syncCategories: { universe: true } },
@@ -212,7 +232,7 @@ describe('sweepTombstones — resurrection safety against snapshot-mode peers', 
     expect(pruneTombstonedUniverses).toHaveBeenCalled();
   });
 
-  it('ignores legacy peers with no syncCategories (they cant send universe/pipeline snapshots)', async () => {
+  it("ignores legacy peers with no syncCategories (they can't send universe/pipeline snapshots)", async () => {
     // Legacy peers fall back to brain+memory only in getEffectiveCategories,
     // so they don't participate in the universe/pipeline snapshot loop and
     // can't resurrect those records.

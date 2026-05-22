@@ -63,31 +63,33 @@ function snapshotCategoryForKind(recordKind) {
 }
 
 /**
- * Returns true if any enabled peer can still send us a snapshot of this
- * record kind via the 60s snapshot loop in `dataSync.js`. The snapshot
- * path has NO per-peer ack water-mark — peerTombstoneCursors only tracks
- * acks from the per-record push pipeline — so as long as a snapshot-mode
- * peer exists for this kind, we can't safely prune tombstones: an offline
+ * Returns the set of enabled peer instance-ids that can still send us a
+ * snapshot of this record kind via the 60s snapshot loop in `dataSync.js`.
+ *
+ * The snapshot path has NO per-peer ack water-mark — peerTombstoneCursors
+ * only tracks acks from the per-record push pipeline. So for every peer in
+ * this set that's NOT also covered by a per-record subscription, we have
+ * zero proof they've received any deletion we want to prune. An offline
  * peer with an older LIVE copy could come back, push its snapshot, and
  * `merge*FromSync` would INSERT the resurrected record (the merge path
  * inserts records the local file is missing).
  *
- * This is the critical safety guard between "no per-record subs" and
- * "safe to fall back to time-only grace pruning."
+ * Legacy peers without an explicit `syncCategories` map fall back to
+ * brain+memory only (see syncOrchestrator.getEffectiveCategories), so
+ * they can't send universe/pipeline snapshots — excluded from the set.
  */
-async function snapshotPeersExistForKind(recordKind) {
+async function snapshotPeerIdsForKind(recordKind) {
   const category = snapshotCategoryForKind(recordKind);
-  if (!category) return false;
+  if (!category) return [];
   const peers = await getPeers().catch(() => []);
-  return peers.some((p) => {
-    if (!p?.enabled) return false;
-    const cats = p.syncCategories;
-    if (cats && typeof cats === 'object') return cats[category] === true;
-    // Legacy peers without an explicit syncCategories map fall back to
-    // brain+memory only (see syncOrchestrator.getEffectiveCategories), so
-    // they CAN'T send universe/pipeline snapshots — no resurrection risk.
-    return false;
-  });
+  return peers
+    .filter((p) => {
+      if (!p?.enabled) return false;
+      const cats = p.syncCategories;
+      return !!cats && typeof cats === 'object' && cats[category] === true;
+    })
+    .map((p) => p.instanceId)
+    .filter(Boolean);
 }
 
 /**
@@ -96,27 +98,32 @@ async function snapshotPeersExistForKind(recordKind) {
  * "minAck - grace" — i.e. we subtract the grace buffer from whichever
  * water-mark is lower, so we never prune past the laggiest peer's ack.
  *
- * Returns `null` to mean "refuse to prune" — used when a snapshot-mode
- * peer exists for this kind but no per-record subscription gives us an
- * ack water-mark; pruning then risks resurrection on the offline peer's
- * next snapshot push (see `snapshotPeersExistForKind`).
+ * Returns `null` to mean "refuse to prune" — used when ANY snapshot-mode
+ * peer for this kind is NOT covered by a per-record subscription. The
+ * snapshot path has no ack water-mark, so an uncovered snapshot peer
+ * can resurrect a pruned tombstone on its next snapshot push. This
+ * applies BOTH to "no per-record subs at all" AND to "mixed deployment
+ * where peer-A has per-record subs but peer-B is snapshot-only" — both
+ * cases leave at least one peer un-acked, so both must refuse.
  *
  * Otherwise: subtract grace from `min(now, minAckedAcrossPeers)`. The
  * `Math.min` collapses the two safe branches into one formula:
- *   - no peers at all → minAck=Infinity → cutoff = now - grace
- *   - per-record-subscribed peers (and possibly snapshot peers too) →
- *     minAck < now → cutoff = minAck - grace
+ *   - no peers at all (no subs, no snapshot peers) → minAck=Infinity →
+ *     cutoff = now - grace
+ *   - every snapshot peer also has a per-record sub → minAck < now →
+ *     cutoff = minAck - grace
  *
  * @returns {number|null} the cutoff ms-epoch (or null to refuse).
  */
 async function cutoffForKind(recordKind, { now = Date.now() } = {}) {
   const peerIds = await peerIdsSubscribedToKind(recordKind);
-  // No per-record subs — but if a snapshot-mode peer exists, we have no
-  // ack horizon and pruning risks resurrection. Refuse.
-  if (peerIds.length === 0) {
-    const snapshotPeers = await snapshotPeersExistForKind(recordKind);
-    if (snapshotPeers) return null;
-  }
+  const snapshotPeerIds = await snapshotPeerIdsForKind(recordKind);
+  // Snapshot-mode peers NOT covered by per-record subscriptions have no
+  // ack horizon — refuse to prune until every snapshot peer is covered
+  // OR they're disabled (the filter in snapshotPeerIdsForKind drops them).
+  const subbed = new Set(peerIds);
+  const uncovered = snapshotPeerIds.filter((id) => !subbed.has(id));
+  if (uncovered.length > 0) return null;
   const minAck = await getMinAckAcrossPeers(peerIds);
   const threshold = Math.min(minAck, now);
   return threshold - GRACE_MS;
