@@ -49,7 +49,9 @@
  * As a final safety net, any pointer that still doesn't resolve to a member
  * of the new `provider.models` (e.g. a user pinned `defaultModel` to a
  * hand-typed/future/foreign id while the models list happened to match a
- * legacy shape) is reset to `POLICY_DEFAULT` so the provider stays usable.
+ * legacy shape) is reset to its per-tier fallback (light=haiku-4-5,
+ * medium=sonnet-4-6, heavy/default=opus-4-7) so tier intent is preserved
+ * and the provider stays usable.
  */
 
 import { readFile, writeFile } from 'fs/promises';
@@ -98,9 +100,25 @@ const POLICY_DEFAULT = 'claude-opus-4-7';
 
 // Canonical aiToolkit fallback shape (models = new trio already; only the
 // defaultModel is stale at `claude-sonnet-4-6`). Matching the full tier-
-// pointer fingerprint avoids false positives on a hand-pinned sonnet-4-6.
+// pointer fingerprint avoids false positives on a hand-pinned sonnet-4-6
+// — but a user who explicitly set every field to exactly the aiToolkit
+// pattern *will* get bumped to opus-4-7. There's no further signal we can
+// use to distinguish "I want the aiToolkit defaults" from "I want this
+// exact shape", and the PR's stated goal is opus-4-7 across the board, so
+// the bump is intentional.
 const AITOOLKIT_SEEDED_FINGERPRINT = {
   defaultModel: 'claude-sonnet-4-6',
+  lightModel: 'claude-haiku-4-5',
+  mediumModel: 'claude-sonnet-4-6',
+  heavyModel: 'claude-opus-4-7',
+};
+
+// When a pointer can't be resolved (orphan: not retired, not current, not
+// in new models), reset to the per-tier default from the new trio. Keeps
+// tier intent (a "light" slot stays small/fast even when the original pin
+// was foreign). `defaultModel` falls back to POLICY_DEFAULT (opus-4-7).
+const TIER_FALLBACK = {
+  defaultModel: 'claude-opus-4-7',
   lightModel: 'claude-haiku-4-5',
   mediumModel: 'claude-sonnet-4-6',
   heavyModel: 'claude-opus-4-7',
@@ -190,10 +208,11 @@ export default {
       // match, the pointer could still reference a model not in NEW_MODELS.
       // UI selectors (e.g. ProviderModelSelector) only render options from
       // provider.models, so an orphan pointer becomes an empty selection.
-      // Reset orphans to POLICY_DEFAULT so the provider stays usable.
+      // Reset orphans to the per-tier fallback so tier intent is preserved
+      // (light slot stays haiku, medium stays sonnet, heavy/default → opus).
       for (const key of ['defaultModel', ...TIER_POINTER_KEYS]) {
         if (provider[key] != null && !provider.models.includes(provider[key])) {
-          provider[key] = POLICY_DEFAULT;
+          provider[key] = TIER_FALLBACK[key];
         }
       }
       touched.push({ id, defaultModel: provider.defaultModel });

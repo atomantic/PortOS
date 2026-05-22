@@ -132,13 +132,15 @@ describe('migration 032 — Claude CLI/TUI default to opus-4-7', () => {
       models: ['claude-haiku-4-5-20251001', 'claude-sonnet-4-5-20250929'],
       defaultModel: 'claude-sonnet-4-5-20250929',
     };
-    const before = JSON.stringify({ providers: { 'claude-code': customized } });
-    writeJson(providersPath, JSON.parse(before));
+    writeJson(providersPath, { providers: { 'claude-code': customized } });
+    // Capture the on-disk bytes (after writeJson's pretty-print + trailing \n)
+    // so we can assert no write happened — stronger than a parsed-JSON compare,
+    // which would let an accidental reformat slip through.
+    const beforeBytes = readFileSync(providersPath, 'utf-8');
 
     await migration.up({ rootDir });
 
-    // No write should have happened — file content stays byte-for-byte (modulo whitespace).
-    expect(readJson(providersPath)).toEqual(JSON.parse(before));
+    expect(readFileSync(providersPath, 'utf-8')).toBe(beforeBytes);
   });
 
   it('treats reordered legacy lists as customization (skip)', async () => {
@@ -211,11 +213,12 @@ describe('migration 032 — Claude CLI/TUI default to opus-4-7', () => {
     expect(after.defaultModel).toBe('claude-haiku-4-5');
   });
 
-  it('resets an orphan defaultModel (custom id not in any map) to POLICY_DEFAULT', async () => {
+  it('resets an orphan defaultModel (custom id not in any map) to the per-tier fallback (opus-4-7)', async () => {
     // User pinned a hand-typed / future / foreign id as defaultModel while
     // leaving the legacy models list intact. The pointer isn't a retired id,
     // isn't a seeded default, isn't in the new trio — without the orphan
-    // safety net it would be left dangling. Should land on opus-4-7.
+    // safety net it would be left dangling. defaultModel's tier fallback is
+    // opus-4-7 (POLICY_DEFAULT).
     writeJson(providersPath, {
       providers: {
         'claude-code': dataSampleLegacy({ defaultModel: 'claude-some-future-model' }),
@@ -230,7 +233,10 @@ describe('migration 032 — Claude CLI/TUI default to opus-4-7', () => {
     expect(after.models).toContain(after.defaultModel);
   });
 
-  it('resets an orphan tier pointer (lightModel pinned to a foreign id) to POLICY_DEFAULT', async () => {
+  it('resets an orphan tier pointer (lightModel pinned to a foreign id) to the per-tier fallback (haiku)', async () => {
+    // Orphan tier pointers reset to their per-tier fallback so the slot's
+    // intent is preserved — a "light" slot stays small/fast as haiku-4-5
+    // rather than collapsing to opus-4-7.
     writeJson(providersPath, {
       providers: {
         'claude-code': dataSampleLegacy({ lightModel: 'gpt-4o-mini' }),
@@ -241,7 +247,22 @@ describe('migration 032 — Claude CLI/TUI default to opus-4-7', () => {
 
     const after = readJson(providersPath).providers['claude-code'];
     expect(after.models).toContain(after.lightModel);
-    expect(after.lightModel).toBe('claude-opus-4-7');
+    expect(after.lightModel).toBe('claude-haiku-4-5');
+  });
+
+  it('resets an orphan mediumModel pointer to the per-tier fallback (sonnet-4-6)', async () => {
+    // Symmetric coverage for the medium-tier branch of TIER_FALLBACK.
+    writeJson(providersPath, {
+      providers: {
+        'claude-code': dataSampleLegacy({ mediumModel: 'gpt-4o' }),
+      },
+    });
+
+    await migration.up({ rootDir });
+
+    const after = readJson(providersPath).providers['claude-code'];
+    expect(after.models).toContain(after.mediumModel);
+    expect(after.mediumModel).toBe('claude-sonnet-4-6');
   });
 
   it('upgrades a user-pinned retired opus-4-5 as defaultModel via per-model successor (no orphan)', async () => {
