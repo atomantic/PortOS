@@ -273,6 +273,38 @@ async function syncDataCategoryFromPeer(peer, peerId, category, cachedChecksums)
 }
 
 /**
+ * For a given peerId, return the set of `dataSync` category names whose
+ * underlying record kind has at least one active peer subscription. Used by
+ * the per-peer sync loop to skip categories the per-record push pipeline
+ * already owns.
+ *
+ * Mapping:
+ *   - recordKind 'universe' → category 'universe'
+ *   - recordKind 'series'   → category 'pipeline' (covers series + issues)
+ *
+ * Series subscriptions bundle child issues in the push payload, so the
+ * 'pipeline' category (series + issues) is a single skip unit — same as
+ * how `dataSync.getPipelineSnapshot` produces them as one composite.
+ */
+async function categoriesCoveredByPeerSync(peerId) {
+  // Dynamic import keeps `sharing/peerSync.js` (which transitively pulls
+  // every merge*FromSync service + recordEvents) OUT of this orchestrator's
+  // module-load graph. Two reasons: (1) shaves the startup cost of evaluating
+  // those modules until the first sync cycle actually runs, (2) insurance
+  // against a future circular dep — peerSync's graph never needs the
+  // orchestrator today, but a top-level import here would manifest as a
+  // confusing "undefined" crash at boot the day that changes.
+  const { listPeerSubscriptions } = await import('./sharing/peerSync.js');
+  const subs = await listPeerSubscriptions({ peerId });
+  const skip = new Set();
+  for (const sub of subs) {
+    if (sub.recordKind === 'universe') skip.add('universe');
+    if (sub.recordKind === 'series') skip.add('pipeline');
+  }
+  return skip;
+}
+
+/**
  * Sync all data from a single peer
  */
 export async function syncWithPeer(peer) {
@@ -311,7 +343,20 @@ export async function syncWithPeer(peer) {
 
     // --- Snapshot-based category syncs (parallel) ---
     const dataCategoryResults = {};
-    const enabledDataCats = dataSync.getSupportedCategories().filter(cat => categories[cat]);
+    // Drop any categories this peer is on the per-record peer-sync path for.
+    // When a peer has at least one peer subscription for the underlying
+    // record-kind (universe → 'universe' category; series → 'pipeline'
+    // category, which is series+issues bundled), the push pipeline is
+    // authoritative — keeping the 60s snapshot loop running on the same
+    // kind would re-apply the same records under a stale checksum and
+    // burn bandwidth for no gain. The snapshot path stays in place for
+    // non-subscribed peers and for kinds the peer hasn't subscribed yet
+    // (e.g. a peer subscribed to universes but not to any series still
+    // gets pipeline snapshots).
+    const skipCats = await categoriesCoveredByPeerSync(peerId).catch(() => new Set());
+    const enabledDataCats = dataSync.getSupportedCategories()
+      .filter(cat => categories[cat])
+      .filter(cat => !skipCats.has(cat));
     const cachedChecksums = cursor.checksums || {};
 
     if (enabledDataCats.length > 0) {

@@ -1177,6 +1177,67 @@ export const subscriptionCreateSchema = z.object({
 }).strict();
 
 // =============================================================================
+// PEER SYNC SCHEMAS
+// =============================================================================
+
+// Subscribe a record (universe / series) to a federated peer for live push.
+// Sibling of share-bucket subscriptionCreateSchema; the difference is the
+// destination — share-bucket subscriptions hit a cloud-synced folder, peer
+// subscriptions target another PortOS instance over Tailnet.
+export const peerSubscribeSchema = z.object({
+  peerId: z.string().trim().min(1).max(120),
+  recordKind: z.enum(['universe', 'series']),
+  recordId: z.string().trim().min(1).max(120),
+}).strict();
+
+// Asset manifest entry the receiver gets in a push payload. Filename gets a
+// second-pass scrub against path separators inside the service layer; this
+// schema just constrains shape + caps so a malformed manifest doesn't bypass
+// validation entirely. SHA-256 is hex-64 when present.
+const peerAssetManifestEntrySchema = z.object({
+  filename: z.string().trim().min(1).max(255),
+  kind: z.enum(['image', 'image-ref', 'video']),
+  sha256: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
+}).strict();
+
+// One sanitized record on the wire. Mirrors sanitizeRecordForWire's output:
+// id is required, soft-delete fields are tail-canonical, and the receiver's
+// merge*FromSync paths handle everything else by shape. We don't `.strict()`
+// because record shapes vary across kinds (universe vs series vs issue) and
+// adding new fields shouldn't require a schema bump for every PR.
+const peerWireRecordSchema = z.object({
+  id: z.string().trim().min(1).max(120),
+}).passthrough();
+
+// Push payload from a sender. Modeled as a discriminated union on `kind` so
+// only series payloads can carry `issues[]` — without the discrimination, an
+// adversarial peer could send `kind: 'universe'` with a 100k-entry `issues`
+// array and force the receiver to iterate it through `computeAckedDeletesFromPayload`
+// and the sanitizers. The series branch caps issues at 1000 (well above any
+// realistic series — most cap out at a few dozen) so neither branch is
+// unbounded. `sourceInstanceId` is required + must be a real instance id
+// (the receiver rejects "unknown" at the service layer; here we just enforce
+// non-empty + length cap).
+const peerSyncPushBase = {
+  record: peerWireRecordSchema,
+  assetManifest: z.array(peerAssetManifestEntrySchema).max(2000),
+  sourceInstanceId: z.string().trim().min(1).max(120),
+};
+const universePushSchema = z.object({
+  kind: z.literal('universe'),
+  ...peerSyncPushBase,
+}).strict();
+const seriesPushSchema = z.object({
+  kind: z.literal('series'),
+  ...peerSyncPushBase,
+  issues: z.array(peerWireRecordSchema).max(1000).optional(),
+}).strict();
+export const peerSyncPushSchema = z.discriminatedUnion('kind', [
+  universePushSchema,
+  seriesPushSchema,
+]);
+
+// =============================================================================
 // CREATIVE DIRECTOR SCHEMAS
 // =============================================================================
 
