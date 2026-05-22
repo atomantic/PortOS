@@ -128,7 +128,12 @@ export async function spawnTuiAgent({
   const commandName = tuiConfig.command.split('/').pop();
 
   let outputBuffer = '';
-  let rawBuffer = '';
+  // rawBuffer is stored as an array of chunks (not `let rawBuffer = ''` with
+  // `+=`) because a chatty TUI emits hundreds of chunks/sec and `string += x`
+  // is O(n²) — every append reallocates and copies the full prior string.
+  // Joined only at finalize (single linear pass) and during the brief paste-
+  // marker polling window. See `getRawBuffer()` / `joinPostPaste()` helpers.
+  const rawChunks = [];
   let finalized = false;
   let hasStartedWorking = false;
   let promptSentAt = null;
@@ -139,9 +144,11 @@ export async function spawnTuiAgent({
   // True once outputBuffer crossed its HEADROOM and the head was dropped.
   // Mirrors `outputBufferTruncated` in `tuiPromptRunner.js`: warn once per
   // buffer and surface via agent metadata so the agent record distinguishes
-  // a long-run-with-overflow from a clean short run. rawBuffer is intentionally
-  // uncapped — it feeds analyzeAgentFailure at finalize and silently slicing
-  // the head can hide the actual failure tail behind chatty progress redraws.
+  // a long-run-with-overflow from a clean short run. rawChunks is intentionally
+  // uncapped — it feeds analyzeAgentFailure at finalize, and head-truncation
+  // would lose the earlier failure context once later progress redraws push
+  // it out of the retained window (chatty TUIs emit constant token-count /
+  // status-line repaints that quickly fill any fixed-size tail).
   let outputBufferTruncated = false;
 
   let pendingLines = [];
@@ -232,6 +239,7 @@ export async function spawnTuiAgent({
     // do NOT writeFile() it from outputBuffer at finalize — outputBuffer is
     // capped at OUTPUT_BUFFER_CAP and would silently truncate the on-disk
     // record for long runs. The append-only stream is the authoritative copy.
+    const rawBuffer = rawChunks.length ? rawChunks.join('') : '';
     const analysisBuffer = rawBuffer || outputBuffer;
     const errorAnalysis = finalSuccess ? null : analyzeAgentFailure(analysisBuffer, task, model);
 
@@ -281,7 +289,7 @@ export async function spawnTuiAgent({
 
   const handleData = async (data) => {
     const text = data.toString();
-    rawBuffer += text;
+    rawChunks.push(text);
     lastOutputAt = Date.now();
     if (firstOutputAt === null) firstOutputAt = lastOutputAt;
 
@@ -363,7 +371,11 @@ export async function spawnTuiAgent({
   const sendPrompt = (reason) => {
     if (finalized || promptSentAt) return;
     promptSentAt = Date.now();
-    const rawBufferLenBeforePaste = rawBuffer.length;
+    // rawChunks index AT the moment the paste is written — every chunk
+    // pushed at or after this index is post-paste output the marker poll
+    // needs to scan. Storing the index (not a string length) avoids re-
+    // joining the full buffer on every poll tick.
+    const pasteChunkStart = rawChunks.length;
     shellService.writeToSession(sessionId, `\x1b[200~${prompt}\x1b[201~`);
     appendLine(`📟 Prompt pasted into TUI session ${sessionId.slice(0, 8)} (${reason})`);
 
@@ -380,7 +392,12 @@ export async function spawnTuiAgent({
         return;
       }
       const elapsed = Date.now() - pasteSentAt;
-      const postPasteOutput = rawBuffer.slice(rawBufferLenBeforePaste);
+      // Join only the chunks that arrived since the paste was written —
+      // bounded by the paste-marker window (PASTE_TO_ENTER_FALLBACK_MS),
+      // so the cost stays small even if the run has been going for hours.
+      const postPasteOutput = rawChunks.length > pasteChunkStart
+        ? rawChunks.slice(pasteChunkStart).join('')
+        : '';
       const markerSeen = PASTE_MARKER_PATTERN.test(postPasteOutput);
       // Submit when EITHER the paste-commit marker appears (preferred) or
       // the fallback window elapses (covers small prompts that don't render

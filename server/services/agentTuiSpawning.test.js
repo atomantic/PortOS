@@ -429,17 +429,19 @@ describe('spawnTuiAgent runtime', () => {
 
   // ── 6. Raw-buffer growth (no cap) ───────────────────────────────────────────
   // rawBuffer feeds analyzeAgentFailure at finalize. Capping/slicing it would
-  // silently drop the head of long agent runs and hide earlier failure
-  // symptoms behind chatty progress redraws, so the buffer is allowed to grow
-  // for the duration of the run. No warn, no metadata flag.
+  // lose the earlier failure context once later chatty progress redraws push
+  // it past the retained tail, so the buffer is allowed to grow for the
+  // duration of the run. No warn, no metadata flag.
   it('rawBuffer grows without truncation warn or metadata flag', async () => {
     runSpawn();
     await flushMicrotasks();
 
     // Push well past the previous 640KB cap to prove growth is uncapped.
-    await capturedOnData(Buffer.from('x'.repeat(2 * 1024 * 1024)));
+    // Buffer.alloc(size, fillByte) avoids the multi-megabyte JS string
+    // intermediate that 'x'.repeat(...) would otherwise create.
+    await capturedOnData(Buffer.alloc(2 * 1024 * 1024, 0x78));   // 'x'
     await flushMicrotasks();
-    await capturedOnData(Buffer.from('y'.repeat(2 * 1024 * 1024)));
+    await capturedOnData(Buffer.alloc(2 * 1024 * 1024, 0x79));   // 'y'
     await flushMicrotasks();
 
     const truncWarns = warnSpy.mock.calls.filter(args =>
