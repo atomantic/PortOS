@@ -25,7 +25,6 @@ import { getImageModels } from '../lib/mediaModels.js';
 import { enqueueJob, mediaJobEvents } from './mediaJobQueue/index.js';
 import { findOrCreateUniverseCollection } from './mediaCollections.js';
 import { IMAGE_GEN_MODE } from './imageGen/modes.js';
-import { resolveAutoClean } from './imageGen/index.js';
 import {
   flattenStats, flattenPalette, flattenWardrobes, flattenProps, flattenNamedList,
 } from '../lib/canonPrompt.js';
@@ -417,12 +416,15 @@ export async function renderCharacterReferenceSheet(universeId, entryId, options
   // first-class. External SD-API has no multi-zone layout support, so it
   // gets a clear remediation rather than a silently-degraded render.
   const activeMode = settings.imageGen?.mode || IMAGE_GEN_MODE.LOCAL;
-  // The queue dispatches directly to imageGen/{codex,local}.generateImage,
-  // bypassing imageGen/index.js's dispatcher that resolves autoClean for
-  // direct callers. Resolve here so saved settings.imageGen[mode].autoClean
-  // applies to character reference-sheet renders the same way it does for
-  // /api/image-gen/generate, pipeline, and Universe Builder batch renders.
-  const autoClean = resolveAutoClean(undefined, settings, activeMode);
+  // Force-disable autoClean for reference-sheet renders regardless of the
+  // user's settings.imageGen[mode].autoClean. The autoclean pass re-encodes
+  // the PNG (c2pa strip + canonicalize) which JPEG-style lossy-compresses
+  // the rendered annotation text — readable labels in the raw render come
+  // out blurred / illegible after the round-trip. Sheets ship with their
+  // annotations as the actual product, so the text fidelity loss is not
+  // an acceptable trade-off here. Other render paths (image-gen page,
+  // pipeline, Universe Builder batch) keep honoring the user setting.
+  const autoClean = false;
   // Codex's image_gen tool can render up to 4K — asking for FLUX's 2048×1536
   // under-uses the available headroom and pixelates annotation text when the
   // user zooms. resolveSheetDimensions bumps codex up to 4K landscape while
