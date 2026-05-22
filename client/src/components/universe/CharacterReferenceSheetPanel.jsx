@@ -24,6 +24,7 @@ import useMediaJobProgress from '../../hooks/useMediaJobProgress';
 import useMounted from '../../hooks/useMounted';
 import { readSheetPointer, LEGACY_SHEET_VARIANT_ID } from '../../lib/sheetPointers';
 import toast from '../ui/Toast';
+import MediaImage from '../MediaImage';
 
 // HEAD-poll for the rendered sheet at its destination URL, with backoff. The
 // server-side onSheetComplete listener copies the gallery PNG into
@@ -214,10 +215,14 @@ function VariantRow({
           className="mt-2 block w-full bg-port-bg rounded overflow-hidden border border-port-border hover:border-port-accent/60 cursor-zoom-in p-0"
           title="Open sheet at full size"
         >
-          <img
+          {/* MediaImage handles the "this asset was peer-pushed but hasn't been
+              pulled yet" case — without it, this would show a broken-image icon
+              until the receiver's background pull finishes. */}
+          <MediaImage
             src={`/data/image-refs/${existing}`}
             alt={`${entry.name} ${variant.label}`}
             className="w-full h-auto block"
+            placeholderClassName="w-full h-32"
             loading="lazy"
           />
           <span className="flex items-center justify-center gap-1 px-2 py-1 text-[10px] text-gray-500 border-t border-port-border">

@@ -660,6 +660,21 @@ const ASSET_KIND_TO_URL_PREFIX = Object.freeze({
 const ASSET_PULL_TIMEOUT_MS = 60000;
 const ASSET_PULL_MAX_BYTES = 100 * 1024 * 1024; // 100MB hard cap per asset
 
+// In-flight pull dedup. A peer can push multiple records that reference the
+// same asset in quick succession (universe edit → child collection re-link
+// → series under that universe), and without this guard we'd kick off
+// duplicate downloads of the same UUID-named PNG — wasting bandwidth,
+// doubling the 100MB memory ceiling per asset, and racing on the same
+// destination filename. Key on (peerId, kind, filename) so concurrent
+// pushes from DIFFERENT peers for the same filename are still allowed
+// (e.g. peer-A re-renders and peer-B caches the old bytes — we want the
+// newer-pushing peer to win, and the snapshot-sync safety net catches
+// any divergence).
+const inflightPulls = new Set();
+function inflightKey(peerId, kind, filename) {
+  return `${peerId}:${kind}:${filename}`;
+}
+
 /**
  * Background-fetch every asset in `missingAssets` from the named peer's
  * static `/data/{kind-dir}/` mount, writing each to the local PATHS dir for
@@ -677,6 +692,19 @@ const ASSET_PULL_MAX_BYTES = 100 * 1024 * 1024; // 100MB hard cap per asset
  */
 async function pullMissingAssetsFromPeer(senderInstanceId, missingAssets) {
   if (!isStr(senderInstanceId) || !Array.isArray(missingAssets) || missingAssets.length === 0) return;
+  // Trust posture: `senderInstanceId` arrives in the push payload (the route
+  // is Tailnet-only per the project's documented threat model — see
+  // CLAUDE.md "Security Model"). We DON'T derive it from the TCP origin
+  // because Express behind Tailscale loses that fidelity to the SO_REUSEADDR
+  // socket. The guard below means even a payload that *spoofs* a different
+  // peer's id can only redirect the asset pull at one of our OWN registered
+  // peers — `findPeerById` returns null for any unknown id, aborting the
+  // pull. So the worst case is fetching from peer-B when peer-A actually
+  // pushed; both are trusted Tailnet peers, the fetch either succeeds (we
+  // get the bytes peer-A wanted us to have) or 404s (we re-request next
+  // push cycle). Outside the Tailnet trust boundary, the right answer is
+  // mutual TLS or an HMAC over the payload — explicitly out of scope for
+  // PortOS's stated security model.
   const peer = await findPeerById(senderInstanceId);
   if (!peer) {
     console.log(`⚠️ peerSync: can't pull assets — peer ${senderInstanceId} not in registry`);
@@ -698,6 +726,22 @@ async function pullOneAsset(peer, base, entry) {
   // against any future refactor that bypasses the diff path.
   const safeName = sanitizeAssetFilename(entry.filename);
   if (!urlPrefix || !localDir || !safeName) return;
+  // Dedup in-flight pulls — if the same (peer, kind, filename) is already
+  // being downloaded, skip rather than starting a second concurrent pull.
+  // The first pull's `asset-arrived` event will resolve the UI for both
+  // the original triggering push AND any subsequent push that wanted the
+  // same bytes.
+  const key = inflightKey(peer.instanceId, entry.kind, safeName);
+  if (inflightPulls.has(key)) return;
+  inflightPulls.add(key);
+  try {
+    await doPullOneAsset(peer, base, entry, urlPrefix, localDir, safeName);
+  } finally {
+    inflightPulls.delete(key);
+  }
+}
+
+async function doPullOneAsset(peer, base, entry, urlPrefix, localDir, safeName) {
   const url = `${base}${urlPrefix}/${encodeURIComponent(safeName)}`;
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), ASSET_PULL_TIMEOUT_MS);
