@@ -29,6 +29,7 @@ import {
   getAppById,
   updateApp,
 } from './apps.js';
+import { DEFAULT_REVIEWER } from '../lib/validation.js';
 
 // `path.join(homedir(), '/.foo')` discards the homedir because of the leading
 // slash, so we strip the `~/` prefix (or `~`) before joining. Same shape as
@@ -603,7 +604,7 @@ export async function triggerReferenceAnalysis(app, ref, snapshot) {
     .replace(/\{appName\}/g, () => app.name)
     .replace(/\{repoPath\}/g, () => app.repoPath)
     .replace(/\{appId\}/g, () => app.id)
-    .replace(/\{reviewer\}/g, () => 'copilot')
+    .replace(/\{reviewer\}/g, () => DEFAULT_REVIEWER)
     .replace(/\{referenceData\}/g, () => referenceDataBlock)
     .replace(/\{planConstraint\}/g, () => '');
 

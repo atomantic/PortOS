@@ -61,7 +61,11 @@ router.post('/:refId/check', asyncHandler(async (req, res) => {
   if (snapshot.commitCount > 0) {
     const app = await getAppById(appId);
     const ref = app?.referenceRepos?.find((r) => r.id === refId);
-    if (app && ref) {
+    if (!app) {
+      analysis = { queued: false, reason: 'app-not-found' };
+    } else if (!ref) {
+      analysis = { queued: false, reason: 'ref-not-found' };
+    } else {
       analysis = await triggerReferenceAnalysis(app, ref, snapshot)
         .catch((err) => {
           console.error(`❌ Analysis trigger failed for ${refId}: ${err instanceof Error ? err.message : String(err)}`);

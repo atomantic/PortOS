@@ -25,7 +25,6 @@ vi.mock('../services/apps.js', () => ({
 }));
 
 import * as svc from '../services/referenceRepos.js';
-import { getAppById } from '../services/apps.js';
 import referenceReposRoutes from './referenceRepos.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 
