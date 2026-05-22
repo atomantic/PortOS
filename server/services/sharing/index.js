@@ -12,6 +12,7 @@ import { join } from 'path';
 import { attachAllWatchers, attachWatcher, detachWatcher, shutdownAllWatchers, listAttachedWatchers } from './watcher.js';
 import { sharingEvents } from './importer.js';
 import { installSubscriptionListener } from './subscriptions.js';
+import { installPeerSyncListener } from './peerSync.js';
 import { initAnnotationsSync } from './annotationsSync.js';
 
 export { sharingEvents } from './importer.js';
@@ -60,6 +61,10 @@ export async function initSharing({ io: socketIo } = {}) {
   }
 
   installSubscriptionListener();
+  // Federated peer-sync listener — installs alongside the share-bucket
+  // subscription listener so a single recordEvents `updated` fan-out drives
+  // both transports. No state until at least one peer subscription exists.
+  installPeerSyncListener();
   initAnnotationsSync();
   const result = await attachAllWatchers();
   console.log(`📡 sharing: initialized, watchers attached for ${result.attached} bucket(s)`);

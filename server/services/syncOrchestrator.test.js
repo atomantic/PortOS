@@ -27,6 +27,9 @@ vi.mock('./dataSync.js', () => ({
   applyRemote: vi.fn().mockResolvedValue({ applied: false, count: 0 }),
   getSupportedCategories: vi.fn(() => ['goals', 'character', 'digitalTwin', 'meatspace'])
 }));
+vi.mock('./sharing/peerSync.js', () => ({
+  listPeerSubscriptions: vi.fn().mockResolvedValue([]),
+}));
 vi.mock('./instanceEvents.js', () => ({
   instanceEvents: { on: vi.fn(), removeListener: vi.fn() }
 }));
@@ -238,6 +241,54 @@ describe('syncOrchestrator', () => {
       // fetchPeer catches errors and returns null, so no changes applied
       expect(result.brain.totalApplied).toBe(0);
       expect(result.memory.totalApplied).toBe(0);
+    });
+
+    it('skips snapshot categories the peer is on the per-record peer-sync path for', async () => {
+      // Stage 3 skip-when-subscribed: a peer with an active 'universe' peer
+      // subscription must NOT also hit /api/sync/universe/checksum on the
+      // 60s loop — the push pipeline is authoritative for that category.
+      // Same for 'series' subs → 'pipeline' category.
+      const dataSync = await import('./dataSync.js');
+      const peerSync = await import('./sharing/peerSync.js');
+      dataSync.getSupportedCategories.mockReturnValue(['universe', 'pipeline', 'character']);
+      peerSync.listPeerSubscriptions.mockResolvedValueOnce([
+        { peerId: 'peer-inst-1', recordKind: 'universe', recordId: 'u1' },
+      ]);
+      const peerWithCats = {
+        ...mockPeer,
+        syncCategories: { universe: true, pipeline: true, character: true },
+      };
+      // Brain + memory return empty (we want to see only the snapshot calls).
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: async () => ({ checksum: 'x', data: null }),
+      });
+      await syncWithPeer(peerWithCats);
+      const urls = mockFetch.mock.calls.map((c) => c[0]);
+      // universe snapshot endpoints must NOT have been hit; pipeline + character must.
+      expect(urls.some((u) => u.includes('/api/sync/universe/'))).toBe(false);
+      expect(urls.some((u) => u.includes('/api/sync/pipeline/'))).toBe(true);
+      expect(urls.some((u) => u.includes('/api/sync/character/'))).toBe(true);
+    });
+
+    it('skips BOTH universe and pipeline categories when peer is subscribed to both kinds', async () => {
+      const dataSync = await import('./dataSync.js');
+      const peerSync = await import('./sharing/peerSync.js');
+      dataSync.getSupportedCategories.mockReturnValue(['universe', 'pipeline', 'character']);
+      peerSync.listPeerSubscriptions.mockResolvedValueOnce([
+        { peerId: 'peer-inst-1', recordKind: 'universe', recordId: 'u1' },
+        { peerId: 'peer-inst-1', recordKind: 'series', recordId: 's1' },
+      ]);
+      const peerWithCats = {
+        ...mockPeer,
+        syncCategories: { universe: true, pipeline: true, character: true },
+      };
+      mockFetch.mockResolvedValue({ ok: true, json: async () => ({ checksum: 'x' }) });
+      await syncWithPeer(peerWithCats);
+      const urls = mockFetch.mock.calls.map((c) => c[0]);
+      expect(urls.some((u) => u.includes('/api/sync/universe/'))).toBe(false);
+      expect(urls.some((u) => u.includes('/api/sync/pipeline/'))).toBe(false);
+      expect(urls.some((u) => u.includes('/api/sync/character/'))).toBe(true);
     });
   });
 
