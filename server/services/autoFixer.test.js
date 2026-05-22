@@ -130,6 +130,18 @@ describe('autoFixer — defer + noteFallbackHandled', () => {
     clearPendingAutoFixTasks();
   });
 
+  it('does NOT collide on hyphenated provider/model pairs (uses an unambiguous separator)', async () => {
+    // Regression: a `-`-joined dedupe key would treat
+    // ("gpt-4o", "mini") and ("gpt", "4o-mini") as the same failure,
+    // silently suppressing one with the other's deferred task.
+    emitProviderFailure({ provider: 'gpt-4o', model: 'mini', runId: 'r-1' });
+    emitProviderFailure({ provider: 'gpt', model: '4o-mini', runId: 'r-2' });
+    await vi.advanceTimersByTimeAsync(5500);
+
+    // Both distinct failures must schedule their own investigation task.
+    expect(cos.addTask).toHaveBeenCalledTimes(2);
+  });
+
   it('dedupes within the defer window — a second identical failure does not double-schedule', async () => {
     emitProviderFailure({ provider: 'Primary CLI', model: 'm-1', runId: 'r-1' });
     await vi.advanceTimersByTimeAsync(0);

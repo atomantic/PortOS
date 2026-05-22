@@ -31,7 +31,12 @@ const deferredTasks = new Map(); // errorKey -> { timer }
 const pendingAutoFixTasks = [];
 
 function aiProviderErrorKey(providerName, model) {
-  return `AI_PROVIDER_EXECUTION_FAILED-${providerName}-${model}`;
+  // NUL separator: provider names ("Claude Code CLI") and model ids
+  // ("gpt-4o-mini") both commonly contain `-`, so a `-`-joined key would
+  // collide for pairs like ("gpt-4o", "mini") vs ("gpt", "4o-mini") and
+  // silently dedupe distinct failures together. NUL never appears in
+  // legitimate provider/model identifiers, so the key is unambiguous.
+  return `AI_PROVIDER_EXECUTION_FAILED\x00${providerName}\x00${model}`;
 }
 
 /**

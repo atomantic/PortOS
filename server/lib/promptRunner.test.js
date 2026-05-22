@@ -844,6 +844,55 @@ describe('promptRunner — retry-with-fallback', () => {
     expect(autoFixer.noteFallbackHandled).not.toHaveBeenCalled();
   });
 
+  it('refuses to retry against the same provider id even when fallbackProvider points at self (misconfig guard)', async () => {
+    // Misconfigured: primary-cli.fallbackProvider === primary-cli (self).
+    // The providersMap must EXCLUDE primary-cli so the toolkit's
+    // getFallbackProvider can't return self via the provider-level link
+    // (it only skips primary in the system priority loop, not the
+    // configured-fallback path).
+    const primaryWithSelfFallback = cliProvider({
+      id: 'primary-cli',
+      name: 'Primary CLI',
+      defaultModel: 'primary-model',
+      fallbackProvider: 'primary-cli',
+    });
+    // No other provider configured at all — fallback lookup MUST return null.
+    const status = mockToolkitWithFallback();
+    providers.getAllProviders.mockResolvedValue({
+      activeProvider: null,
+      providers: [primaryWithSelfFallback],
+    });
+    // The mocked getFallbackProvider in mockToolkitWithFallback always
+    // returns the canned fallback — override here to exercise the real
+    // behavior we care about: a getFallbackProvider that respects the
+    // (filtered) providersMap.
+    status.getFallbackProvider.mockImplementation((primaryId, providersArg) => {
+      // Real toolkit logic: provider-level fallback first, then system.
+      const primary = providersArg[primaryId];
+      if (primary?.fallbackProvider && providersArg[primary.fallbackProvider]) {
+        return { provider: providersArg[primary.fallbackProvider], source: 'provider' };
+      }
+      return null;
+    });
+
+    runner.executeCliRun.mockImplementation(async (id, _p, _pr, _cwd, _onData, onComplete, _t) => {
+      onComplete({ success: false, error: 'self-fallback boom' });
+    });
+
+    await expect(runPromptThroughProvider({
+      provider: primaryWithSelfFallback,
+      prompt: 'p',
+      source: 'test',
+    })).rejects.toThrow(/self-fallback boom/);
+
+    // executeCliRun is called exactly once (no retry against self).
+    expect(runner.executeCliRun).toHaveBeenCalledTimes(1);
+    // And getFallbackProvider was called with a map that did NOT contain
+    // primary-cli (so the self-loop is impossible at the data layer).
+    const mapPassed = status.getFallbackProvider.mock.calls[0][1];
+    expect(mapPassed).not.toHaveProperty('primary-cli');
+  });
+
   it('routes USAGE_LIMIT failures through markUsageLimit (parses wait time)', async () => {
     const status = mockToolkitWithFallback();
     runner.executeCliRun.mockImplementation(async (id, _p, _pr, _cwd, _onData, onComplete, _t) => {
