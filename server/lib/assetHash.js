@@ -27,6 +27,11 @@ const isHexHash = (v) => typeof v === 'string' && HEX_64.test(v);
  * the image in PATHS.images.
  */
 export function sidecarPathForImage(imageFilenameOrPath) {
+  // Total over all inputs — callers (`getOrComputeImageSha256`, the share-bucket
+  // exporter, the upcoming peer-sync push) treat a null return as "no sidecar
+  // path resolvable for this asset" and fall through. Without the type guard,
+  // `path.basename(null)` would throw TypeError and crash the calling pipeline.
+  if (typeof imageFilenameOrPath !== 'string' || !imageFilenameOrPath) return null;
   const base = basename(imageFilenameOrPath);
   if (!base) return null;
   // Strip extension and append `.metadata.json` (e.g. `abc.png` → `abc.metadata.json`).

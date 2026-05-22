@@ -43,6 +43,16 @@ describe('assetHash', () => {
     it('null for empty', () => {
       expect(sidecarPathForImage('')).toBeNull();
     });
+
+    it('null for non-string inputs (total over all types — no TypeError crash)', () => {
+      // Regression: without the type guard, basename(null) throws TypeError
+      // and crashes the calling exporter / peer-sync pipeline.
+      expect(sidecarPathForImage(null)).toBeNull();
+      expect(sidecarPathForImage(undefined)).toBeNull();
+      expect(sidecarPathForImage(42)).toBeNull();
+      expect(sidecarPathForImage({})).toBeNull();
+      expect(sidecarPathForImage([])).toBeNull();
+    });
   });
 
   describe('getOrComputeImageSha256', () => {
