@@ -107,7 +107,13 @@ export default function ReferenceReposPanel({ appId, appName, compact = false, i
       return;
     }
     setSnapshots((prev) => ({ ...prev, [ref.id]: snap }));
-    toast.success(`${ref.name}: ${snap.commitCount} new commit${snap.commitCount === 1 ? '' : 's'}`);
+    if (snap.analysis?.queued) {
+      toast.success(`${ref.name}: ${snap.commitCount} new commit${snap.commitCount === 1 ? '' : 's'} — analysis task queued`);
+    } else if (snap.analysis?.reason === 'duplicate') {
+      toast.success(`${ref.name}: ${snap.commitCount} new commit${snap.commitCount === 1 ? '' : 's'} — analysis already queued`);
+    } else {
+      toast.success(`${ref.name}: ${snap.commitCount} new commit${snap.commitCount === 1 ? '' : 's'}`);
+    }
     fetch();
   };
 
