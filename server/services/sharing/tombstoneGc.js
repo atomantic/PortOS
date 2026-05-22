@@ -30,10 +30,11 @@
  */
 
 import { pruneTombstonedUniverses } from '../universeBuilder.js';
-import { pruneTombstonedSeries, listSeries } from '../pipeline/series.js';
-import { pruneTombstonedIssues, listIssues } from '../pipeline/issues.js';
+import { pruneTombstonedSeries } from '../pipeline/series.js';
+import { pruneTombstonedIssues } from '../pipeline/issues.js';
 import { listPeerSubscriptions } from './peerSync.js';
 import { getMinAckAcrossPeers } from './peerTombstoneCursors.js';
+import { getPeers } from '../instances.js';
 
 const GRACE_MS = 24 * 60 * 60 * 1000; // 24h grace
 
@@ -50,20 +51,72 @@ async function peerIdsSubscribedToKind(recordKind) {
 }
 
 /**
+ * Map a record kind to the snapshot-sync category that ships it on the wire.
+ * Universe records ride the 'universe' snapshot category; series + issues
+ * both ride the 'pipeline' snapshot category (which bundles them together
+ * — see `dataSync.getPipelineSnapshot`).
+ */
+function snapshotCategoryForKind(recordKind) {
+  if (recordKind === 'universe') return 'universe';
+  if (recordKind === 'series' || recordKind === 'issue') return 'pipeline';
+  return null;
+}
+
+/**
+ * Returns true if any enabled peer can still send us a snapshot of this
+ * record kind via the 60s snapshot loop in `dataSync.js`. The snapshot
+ * path has NO per-peer ack water-mark — peerTombstoneCursors only tracks
+ * acks from the per-record push pipeline — so as long as a snapshot-mode
+ * peer exists for this kind, we can't safely prune tombstones: an offline
+ * peer with an older LIVE copy could come back, push its snapshot, and
+ * `merge*FromSync` would INSERT the resurrected record (the merge path
+ * inserts records the local file is missing).
+ *
+ * This is the critical safety guard between "no per-record subs" and
+ * "safe to fall back to time-only grace pruning."
+ */
+async function snapshotPeersExistForKind(recordKind) {
+  const category = snapshotCategoryForKind(recordKind);
+  if (!category) return false;
+  const peers = await getPeers().catch(() => []);
+  return peers.some((p) => {
+    if (!p?.enabled) return false;
+    const cats = p.syncCategories;
+    if (cats && typeof cats === 'object') return cats[category] === true;
+    // Legacy peers without an explicit syncCategories map fall back to
+    // brain+memory only (see syncOrchestrator.getEffectiveCategories), so
+    // they CAN'T send universe/pipeline snapshots — no resurrection risk.
+    return false;
+  });
+}
+
+/**
  * Compute the cutoff timestamp: tombstones with `deletedAt < cutoff` are
  * safe to prune. The cutoff is the EARLIER of "now - grace" and
  * "minAck - grace" — i.e. we subtract the grace buffer from whichever
  * water-mark is lower, so we never prune past the laggiest peer's ack.
  *
- * Practically: subtract grace from `min(now, minAckedAcrossPeers)`. The
- * `Math.min` collapses the two policy branches into one formula:
- *   - no peers subscribed → minAck=Infinity → cutoff = now - grace
- *   - peers subscribed but behind → minAck < now → cutoff = minAck - grace
+ * Returns `null` to mean "refuse to prune" — used when a snapshot-mode
+ * peer exists for this kind but no per-record subscription gives us an
+ * ack water-mark; pruning then risks resurrection on the offline peer's
+ * next snapshot push (see `snapshotPeersExistForKind`).
  *
- * @returns {number} the cutoff ms-epoch — pass to `pruneTombstoned*` as `beforeMs`.
+ * Otherwise: subtract grace from `min(now, minAckedAcrossPeers)`. The
+ * `Math.min` collapses the two safe branches into one formula:
+ *   - no peers at all → minAck=Infinity → cutoff = now - grace
+ *   - per-record-subscribed peers (and possibly snapshot peers too) →
+ *     minAck < now → cutoff = minAck - grace
+ *
+ * @returns {number|null} the cutoff ms-epoch (or null to refuse).
  */
 async function cutoffForKind(recordKind, { now = Date.now() } = {}) {
   const peerIds = await peerIdsSubscribedToKind(recordKind);
+  // No per-record subs — but if a snapshot-mode peer exists, we have no
+  // ack horizon and pruning risks resurrection. Refuse.
+  if (peerIds.length === 0) {
+    const snapshotPeers = await snapshotPeersExistForKind(recordKind);
+    if (snapshotPeers) return null;
+  }
   const minAck = await getMinAckAcrossPeers(peerIds);
   const threshold = Math.min(minAck, now);
   return threshold - GRACE_MS;
@@ -83,41 +136,19 @@ export async function sweepTombstones({ now = Date.now() } = {}) {
     cutoffForKind('universe', { now }),
     cutoffForKind('series', { now }),
   ]);
-  // Issue tombstones ride series pushes — same ack cohort.
+  // Issue tombstones ride series pushes — same ack cohort, same cutoff.
   const issueCutoff = seriesCutoff;
+  // Skip the prune entirely when cutoff is null (snapshot-mode peer exists
+  // for the kind, no ack horizon → refuse to prune to avoid resurrection).
   const [u, s, i] = await Promise.all([
-    pruneTombstonedUniverses(universeCutoff),
-    pruneTombstonedSeries(seriesCutoff),
-    pruneTombstonedIssues(issueCutoff),
+    universeCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedUniverses(universeCutoff),
+    seriesCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedSeries(seriesCutoff),
+    issueCutoff === null ? Promise.resolve({ pruned: 0 }) : pruneTombstonedIssues(issueCutoff),
   ]);
   return {
     universes: u.pruned,
     series: s.pruned,
     issues: i.pruned,
-  };
-}
-
-/**
- * Diagnostic helper for the dev tools / UI: count tombstones in each
- * state file WITHOUT pruning anything. Lets us surface "X tombstones
- * pending GC" without having to dump the full state.
- *
- * Cheap enough to run on every status fetch — the three JSON loads are
- * tiny compared to the rest of the dashboard refresh.
- */
-export async function getTombstoneSummary() {
-  const [allSeries, allIssues] = await Promise.all([
-    listSeries({ includeDeleted: true }),
-    listIssues({ includeDeleted: true }),
-  ]);
-  // No `listUniverses(includeDeleted)` import here on purpose: requiring
-  // it would force the GC module to import the heavyweight universe
-  // service surface (its merge graph + sanitizer + write queues). The
-  // sweep itself doesn't need to count, only to prune via the explicit
-  // `pruneTombstoned*` exports.
-  return {
-    seriesTombstones: allSeries.filter((s) => s.deleted).length,
-    issueTombstones: allIssues.filter((i) => i.deleted).length,
   };
 }
 

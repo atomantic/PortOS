@@ -9,11 +9,9 @@ vi.mock('../universeBuilder.js', () => ({
 }));
 vi.mock('../pipeline/series.js', () => ({
   pruneTombstonedSeries: vi.fn().mockResolvedValue({ pruned: 0 }),
-  listSeries: vi.fn().mockResolvedValue([]),
 }));
 vi.mock('../pipeline/issues.js', () => ({
   pruneTombstonedIssues: vi.fn().mockResolvedValue({ pruned: 0 }),
-  listIssues: vi.fn().mockResolvedValue([]),
 }));
 vi.mock('./peerSync.js', () => ({
   listPeerSubscriptions: vi.fn(),
@@ -21,17 +19,20 @@ vi.mock('./peerSync.js', () => ({
 vi.mock('./peerTombstoneCursors.js', () => ({
   getMinAckAcrossPeers: vi.fn(),
 }));
+vi.mock('../instances.js', () => ({
+  getPeers: vi.fn(),
+}));
 
 import {
   sweepTombstones,
-  getTombstoneSummary,
   TOMBSTONE_GRACE_MS,
 } from './tombstoneGc.js';
 import { pruneTombstonedUniverses } from '../universeBuilder.js';
-import { pruneTombstonedSeries, listSeries } from '../pipeline/series.js';
-import { pruneTombstonedIssues, listIssues } from '../pipeline/issues.js';
+import { pruneTombstonedSeries } from '../pipeline/series.js';
+import { pruneTombstonedIssues } from '../pipeline/issues.js';
 import { listPeerSubscriptions } from './peerSync.js';
 import { getMinAckAcrossPeers } from './peerTombstoneCursors.js';
+import { getPeers } from '../instances.js';
 
 const NOW = 1_700_000_000_000; // arbitrary epoch ms anchor
 
@@ -41,6 +42,9 @@ beforeEach(() => {
   // returns Infinity in the real implementation; mirror that here).
   listPeerSubscriptions.mockResolvedValue([]);
   getMinAckAcrossPeers.mockResolvedValue(Infinity);
+  // Default: no snapshot-mode peers either — clears the resurrection-safety
+  // gate so the cutoff defaults to `now - GRACE`.
+  getPeers.mockResolvedValue([]);
 });
 
 describe('TOMBSTONE_GRACE_MS', () => {
@@ -152,22 +156,72 @@ describe('sweepTombstones — return shape', () => {
   });
 });
 
-describe('getTombstoneSummary', () => {
-  it('counts series + issue tombstones from their listX(includeDeleted) responses', async () => {
-    listSeries.mockResolvedValueOnce([
-      { id: 's1', deleted: false },
-      { id: 's2', deleted: true },
-      { id: 's3', deleted: true },
+describe('sweepTombstones — resurrection safety against snapshot-mode peers', () => {
+  it('refuses to prune universe tombstones when a snapshot-mode peer exists for the universe category', async () => {
+    // Regression: with no per-record subs but a snapshot-mode peer enabled
+    // for `universe`, an offline peer could come back with an older LIVE
+    // copy and force-resurrect via mergeUniversesFromSync's "no local
+    // record → insert" branch. We must refuse to prune.
+    listPeerSubscriptions.mockResolvedValue([]);
+    getPeers.mockResolvedValue([
+      { instanceId: 'peer-a', enabled: true, syncCategories: { universe: true, pipeline: false } },
     ]);
-    listIssues.mockResolvedValueOnce([
-      { id: 'i1', deleted: false },
-      { id: 'i2', deleted: true },
+    await sweepTombstones({ now: NOW });
+    // Universe prune is skipped (no call); series + issues still run
+    // because no peer has pipeline=true here.
+    expect(pruneTombstonedUniverses).not.toHaveBeenCalled();
+    expect(pruneTombstonedSeries).toHaveBeenCalledWith(NOW - TOMBSTONE_GRACE_MS);
+    expect(pruneTombstonedIssues).toHaveBeenCalledWith(NOW - TOMBSTONE_GRACE_MS);
+  });
+
+  it('refuses to prune series + issue tombstones when a pipeline snapshot-mode peer exists', async () => {
+    // Same risk on the pipeline side — and the gate must apply to BOTH
+    // series and issues (issues ride pipeline snapshots bundled with
+    // series).
+    listPeerSubscriptions.mockResolvedValue([]);
+    getPeers.mockResolvedValue([
+      { instanceId: 'peer-a', enabled: true, syncCategories: { universe: false, pipeline: true } },
     ]);
-    const summary = await getTombstoneSummary();
-    expect(summary.seriesTombstones).toBe(2);
-    expect(summary.issueTombstones).toBe(1);
-    // includeDeleted MUST be true — otherwise the count is always 0.
-    expect(listSeries).toHaveBeenCalledWith({ includeDeleted: true });
-    expect(listIssues).toHaveBeenCalledWith({ includeDeleted: true });
+    await sweepTombstones({ now: NOW });
+    expect(pruneTombstonedUniverses).toHaveBeenCalled();
+    expect(pruneTombstonedSeries).not.toHaveBeenCalled();
+    expect(pruneTombstonedIssues).not.toHaveBeenCalled();
+  });
+
+  it('still prunes when per-record subscriptions exist (their min-ack water-mark provides the safety we need)', async () => {
+    // Snapshot peers are also subscribed via per-record: the ack cursor
+    // tracks every push they receive, so we have a horizon and CAN prune.
+    listPeerSubscriptions.mockImplementation(async ({ recordKind }) => {
+      if (recordKind === 'universe') return [{ peerId: 'peer-a' }];
+      return [];
+    });
+    getMinAckAcrossPeers.mockResolvedValue(NOW - 1000);
+    getPeers.mockResolvedValue([
+      { instanceId: 'peer-a', enabled: true, syncCategories: { universe: true, pipeline: true } },
+    ]);
+    await sweepTombstones({ now: NOW });
+    expect(pruneTombstonedUniverses).toHaveBeenCalled();
+  });
+
+  it('ignores disabled snapshot-mode peers (cant resurrect from a disabled peer)', async () => {
+    listPeerSubscriptions.mockResolvedValue([]);
+    getPeers.mockResolvedValue([
+      { instanceId: 'peer-a', enabled: false, syncCategories: { universe: true } },
+    ]);
+    await sweepTombstones({ now: NOW });
+    expect(pruneTombstonedUniverses).toHaveBeenCalled();
+  });
+
+  it('ignores legacy peers with no syncCategories (they cant send universe/pipeline snapshots)', async () => {
+    // Legacy peers fall back to brain+memory only in getEffectiveCategories,
+    // so they don't participate in the universe/pipeline snapshot loop and
+    // can't resurrect those records.
+    listPeerSubscriptions.mockResolvedValue([]);
+    getPeers.mockResolvedValue([
+      { instanceId: 'peer-a', enabled: true /* no syncCategories */ },
+    ]);
+    await sweepTombstones({ now: NOW });
+    expect(pruneTombstonedUniverses).toHaveBeenCalled();
+    expect(pruneTombstonedSeries).toHaveBeenCalled();
   });
 });
