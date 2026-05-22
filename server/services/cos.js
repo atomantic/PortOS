@@ -1967,12 +1967,20 @@ async function generateManagedAppImprovementTaskForType(taskType, app, state, { 
   const { updateAppActivity } = await import('./appActivity.js');
   const taskSchedule = await import('./taskSchedule.js');
 
-  // Update app activity with new type
-  await updateAppActivity(app.id, {
-    lastImprovementType: taskType
-  });
-
-  emitLog('info', `Generating improvement task for ${app.name}: ${taskType} (on-demand)`, { appId: app.id, analysisType: taskType });
+  // NOTE: `updateAppActivity` + the "Generating improvement task" log are
+  // intentionally deferred until AFTER every gate returns non-null (see end
+  // of function). The original code stamped both eagerly, which was tolerable
+  // when only the on-demand path called this — the user explicitly asked for
+  // a task, so logging + rotation-pointer advance was correct even when the
+  // generator decided not to produce one. Now `queueEligibleImprovementTasks`
+  // routes through this every scheduler tick, so an eager update would (a)
+  // advance the per-app rotation pointer on every skip (biasing
+  // `getNextTaskType` away from a type with nothing actionable to do, but
+  // also away from types that *could* run on a future tick) and (b) emit a
+  // misleading "Generating improvement task" line for skipped types. The
+  // single-call ordering at the bottom keeps both paths in sync — a returned
+  // task means rotation advanced; a `return null` short-circuit means it
+  // didn't.
 
   // Get interval settings to determine provider/model and pipeline config
   const interval = await taskSchedule.getTaskInterval(taskType);
@@ -2084,6 +2092,12 @@ async function generateManagedAppImprovementTaskForType(taskType, app, state, { 
   }
 
   const approval = await resolveConfidenceApproval(state, `app-improve:${taskType}`, `Task app-improve:${taskType} for ${app.name}`);
+
+  // All gates passed — record the rotation-pointer advance + emit the
+  // generation log. Deferred from the top of the function (see note there);
+  // every `return null` above this point intentionally leaves both untouched.
+  await updateAppActivity(app.id, { lastImprovementType: taskType });
+  emitLog('info', `Generating improvement task for ${app.name}: ${taskType}`, { appId: app.id, analysisType: taskType });
 
   const task = {
     id: `app-improve-${app.id}-${taskType}-${Date.now().toString(36)}`,

@@ -701,6 +701,47 @@ describe('cos.js source — priority + capacity invariants', () => {
       'queue path must collapse description to a single line via firstLine()'
     ).toMatch(/\.description\s*=\s*firstLine\(/);
   });
+
+  it('generateManagedAppImprovementTaskForType defers updateAppActivity until after gates', () => {
+    // Regression guard: the rotation pointer + "Generating improvement task"
+    // log must only advance when a real task is queued. The eager call at
+    // the top of the function was tolerable when only the on-demand path
+    // hit it (user explicitly picked the type), but now the per-tick queue
+    // path routes through it too — so every plan-task skip (no available
+    // slug), every precondition fail, and every reference-watch "no refs"
+    // exit would silently rotate the pick + emit a misleading log. Pin
+    // both the absence of the early call AND the presence of the gated
+    // late call so a future refactor can't accidentally restore the
+    // pre-gate ordering.
+    //
+    // Use sliceFn instead of extractFnBody because the function body
+    // contains a `for (...) { try { ... } catch }` block and the
+    // brace-balanced scanner doesn't always match the right closer when
+    // there are template-literal braces nested inside.
+    const fnStart = COS_SRC.indexOf('async function generateManagedAppImprovementTaskForType');
+    expect(fnStart, 'generateManagedAppImprovementTaskForType must exist').toBeGreaterThan(-1);
+    const fnEnd = COS_SRC.indexOf('\nasync function ', fnStart + 1);
+    const fnBody = COS_SRC.slice(fnStart, fnEnd === -1 ? undefined : fnEnd);
+
+    // The updateAppActivity call must appear AFTER applyPlanIdMetadata —
+    // otherwise a `planMeta.skipReason` early-return still rotates the pointer.
+    const planMetaIdx = fnBody.indexOf('applyPlanIdMetadata(');
+    const updateActivityIdx = fnBody.indexOf('updateAppActivity(app.id,');
+    expect(planMetaIdx, 'applyPlanIdMetadata must appear in the function').toBeGreaterThan(-1);
+    expect(updateActivityIdx, 'updateAppActivity must appear in the function').toBeGreaterThan(-1);
+    expect(
+      updateActivityIdx,
+      'updateAppActivity must run after applyPlanIdMetadata so rotation only advances on a real queue'
+    ).toBeGreaterThan(planMetaIdx);
+
+    // The "(on-demand)" suffix on the generation log was misleading once
+    // the queue path started routing through this function. Pin the suffix
+    // as absent.
+    expect(
+      fnBody,
+      'Generation log must not claim "(on-demand)" — function is shared by queue + on-demand callers'
+    ).not.toMatch(/Generating improvement task[^`'"\n]*\(on-demand\)/);
+  });
 });
 
 describe('addTask — first-line dedup', () => {
