@@ -179,7 +179,7 @@ export async function getSeries(id, { includeDeleted = false } = {}) {
 export async function createSeries(input = {}) {
   const name = trimTo(input.name, NAME_MAX);
   if (!name) throw makeErr(`Series name is required (1..${NAME_MAX} chars)`, ERR_VALIDATION);
-  return queueSeriesWrite(async () => {
+  const created = await queueSeriesWrite(async () => {
     const state = await readState();
     const now = new Date().toISOString();
     const next = sanitizeSeries({
@@ -207,6 +207,15 @@ export async function createSeries(input = {}) {
     await writeState(state);
     return next;
   });
+  // Fire-and-forget auto-subscribe to every peer with pipeline-sync enabled.
+  // Dynamic import to dodge a static cycle (peerSync imports merge entry
+  // points from this module).
+  import('../sharing/peerSync.js').then(({ autoSubscribeRecordToAllPeers }) =>
+    autoSubscribeRecordToAllPeers('series', created.id)
+  ).catch((err) => {
+    console.log(`⚠️ series: auto-subscribe after create failed: ${err.message}`);
+  });
+  return created;
 }
 
 /**

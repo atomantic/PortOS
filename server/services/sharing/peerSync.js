@@ -214,6 +214,87 @@ export async function unsubscribePeer(id) {
   return { id, removed: true };
 }
 
+// Map a subscribable record kind to the per-peer `syncCategories` key that
+// controls whether auto-subscribe is allowed for that kind. Matches the
+// inverse mapping in syncOrchestrator.js `categoriesCoveredByPeerSync`.
+const KIND_TO_CATEGORY = Object.freeze({
+  universe: 'universe',
+  series: 'pipeline',
+});
+
+function peerAllowsOutbound(peer) {
+  if (!peer || peer.enabled === false) return false;
+  const directions = Array.isArray(peer.directions) ? peer.directions : [];
+  if (directions.length > 0 && !directions.includes('outbound')) return false;
+  return true;
+}
+
+function peerHasCategory(peer, recordKind) {
+  const cat = KIND_TO_CATEGORY[recordKind];
+  if (!cat) return false;
+  const cats = peer?.syncCategories;
+  return !!(cats && cats[cat] === true);
+}
+
+/**
+ * When a new local record is created (universe / series), subscribe it to
+ * every peer that has the matching category enabled. Idempotent + best-effort
+ * — `subscribePeer` short-circuits if a sub already exists, and we swallow
+ * per-peer failures so a single offline peer can't block the creation path.
+ */
+export async function autoSubscribeRecordToAllPeers(recordKind, recordId) {
+  if (!PEER_SUBSCRIBABLE_KINDS.includes(recordKind) || !isNonEmptyStr(recordId)) return [];
+  const peers = await getPeers().catch(() => []);
+  const targets = peers.filter(p => isNonEmptyStr(p.instanceId) && peerAllowsOutbound(p) && peerHasCategory(p, recordKind));
+  if (targets.length === 0) return [];
+  const created = [];
+  for (const peer of targets) {
+    const sub = await subscribePeer({ peerId: peer.instanceId, recordKind, recordId }).catch((err) => {
+      console.log(`⚠️ peerSync: auto-subscribe ${recordKind}/${recordId} → ${peer.name || peer.instanceId} failed: ${err.message}`);
+      return null;
+    });
+    if (sub) {
+      created.push({ peerId: peer.instanceId, subscriptionId: sub.id });
+      console.log(`🔗 peerSync: auto-subscribed ${recordKind}/${recordId} → ${peer.name || peer.instanceId}`);
+    }
+  }
+  return created;
+}
+
+/**
+ * When a peer's syncCategories toggle flips false → true for a category,
+ * subscribe every existing local non-deleted record of the matching kind
+ * to that peer. Idempotent — re-running is safe.
+ *
+ * Dynamic imports for the listers avoid a static cycle (peerSync already
+ * imports merge entry points from universeBuilder / pipeline.series).
+ */
+export async function autoSubscribePeerToAllRecords(peerId, recordKind) {
+  if (!isNonEmptyStr(peerId) || !PEER_SUBSCRIBABLE_KINDS.includes(recordKind)) return [];
+  let records = [];
+  if (recordKind === 'universe') {
+    const { listUniverses } = await import('../universeBuilder.js');
+    records = await listUniverses({ includeDeleted: false }).catch(() => []);
+  } else if (recordKind === 'series') {
+    const { listSeries } = await import('../pipeline/series.js');
+    records = await listSeries({ includeDeleted: false }).catch(() => []);
+  }
+  if (records.length === 0) return [];
+  const created = [];
+  for (const rec of records) {
+    if (!isNonEmptyStr(rec.id)) continue;
+    const sub = await subscribePeer({ peerId, recordKind, recordId: rec.id }).catch((err) => {
+      console.log(`⚠️ peerSync: backfill-subscribe ${recordKind}/${rec.id} → ${peerId} failed: ${err.message}`);
+      return null;
+    });
+    if (sub) created.push({ recordId: rec.id, subscriptionId: sub.id });
+  }
+  if (created.length > 0) {
+    console.log(`🔗 peerSync: backfill-subscribed ${created.length} ${recordKind} record(s) → ${peerId}`);
+  }
+  return created;
+}
+
 /**
  * Drop every subscription targeting a given peer. Used when removing a peer
  * from the federation entirely (and by tests).

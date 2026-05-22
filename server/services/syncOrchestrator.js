@@ -317,6 +317,8 @@ export async function syncWithPeer(peer) {
   syncingPeers.add(peerId);
 
   const categories = getEffectiveCategories(peer);
+  const enabledNames = Object.entries(categories).filter(([, on]) => on).map(([k]) => k);
+  console.log(`🔄 Sync starting with ${peer.name || peerId}: categories=${enabledNames.join(',') || 'none'}`);
 
   // Read cursor snapshot outside lock so network I/O doesn't block other peers
   // Also detect and reset stale cursors (e.g. peer DB was rebuilt)
@@ -420,7 +422,27 @@ export async function syncAllPeers() {
   const peers = await getPeers();
   const online = peers.filter(p => p.enabled && hasAnySyncEnabled(p) && p.status === 'online' && p.instanceId);
 
-  await Promise.allSettled(online.map(p => syncWithPeer(p)));
+  if (online.length > 0) {
+    const names = online.map(p => p.name || p.instanceId).join(', ');
+    console.log(`🔄 Sync cycle: ${online.length} peer${online.length === 1 ? '' : 's'} online (${names})`);
+  }
+
+  const settled = await Promise.allSettled(online.map(p => syncWithPeer(p)));
+
+  // Aggregate per-cycle change counts across peers so the heartbeat is loud
+  // about totals even when individual per-peer logs short-circuit on no-op.
+  let cycleChanges = 0;
+  for (const r of settled) {
+    if (r.status !== 'fulfilled' || !r.value) continue;
+    cycleChanges += (r.value.brain?.totalApplied || 0) + (r.value.memory?.totalApplied || 0);
+    for (const [k, v] of Object.entries(r.value)) {
+      if (k === 'brain' || k === 'memory') continue;
+      cycleChanges += v?.totalApplied || 0;
+    }
+  }
+  if (online.length > 0) {
+    console.log(`🔄 Sync cycle complete: ${cycleChanges} change${cycleChanges === 1 ? '' : 's'} applied across ${online.length} peer${online.length === 1 ? '' : 's'}`);
+  }
 
   // Compact sync log below the minimum peer cursor to bound log growth
   // Include all enabled peers with brain sync (not just online) so offline peers don't lose unsynced entries

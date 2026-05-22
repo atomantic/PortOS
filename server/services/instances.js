@@ -219,6 +219,12 @@ export async function removePeer(id) {
 
 export async function updatePeer(id, updates) {
   let hostChanged = false;
+  // Track false→true transitions for the per-record-subscribable categories
+  // so we can backfill-subscribe existing local records after the data write
+  // settles. Set inside withData (where we have the merged before/after
+  // peer object) and consumed after the lock releases.
+  const turnedOnKinds = [];
+  let backfillPeerInstanceId = null;
   const result = await withData(async (data) => {
     const peer = data.peers.find(p => p.id === id);
     if (!peer) return null;
@@ -226,7 +232,17 @@ export async function updatePeer(id, updates) {
     if (updates.enabled !== undefined) peer.enabled = updates.enabled;
     if (updates.syncEnabled !== undefined) peer.syncEnabled = updates.syncEnabled;
     if (updates.syncCategories !== undefined) {
-      peer.syncCategories = { ...(peer.syncCategories || DEFAULT_SYNC_CATEGORIES), ...updates.syncCategories };
+      const prev = peer.syncCategories || DEFAULT_SYNC_CATEGORIES;
+      const incoming = updates.syncCategories;
+      // Detect false→true flips for kinds the per-record push pipeline owns
+      // (universe → 'universe' kind; pipeline → 'series' kind, which bundles
+      // child issues at push time). enabled + outbound-allowed gating is
+      // enforced inside peerSync.autoSubscribePeerToAllRecords.
+      for (const [cat, kind] of [['universe', 'universe'], ['pipeline', 'series']]) {
+        if (prev[cat] !== true && incoming[cat] === true) turnedOnKinds.push(kind);
+      }
+      peer.syncCategories = { ...prev, ...incoming };
+      if (turnedOnKinds.length > 0) backfillPeerInstanceId = peer.instanceId || null;
     }
     if (updates.host !== undefined) {
       const normalized = validHost(updates.host);
@@ -247,6 +263,20 @@ export async function updatePeer(id, updates) {
   // reconnect using the new URL on the next probe cycle. Invalid/no-op host
   // writes no longer disrupt an already-healthy connection.
   if (updates.enabled === false || hostChanged) disconnectFromPeer(id);
+  // Backfill-subscribe every local record of any kind whose category just
+  // flipped on. Fire-and-forget — `autoSubscribePeerToAllRecords` is
+  // idempotent + per-record-error tolerant, and we don't want to block the
+  // PATCH response on a slow peer's initial-push round-trip. Dynamic import
+  // dodges a static cycle (peerSync.js statically imports getPeers from us).
+  if (turnedOnKinds.length > 0 && backfillPeerInstanceId) {
+    import('./sharing/peerSync.js').then(async ({ autoSubscribePeerToAllRecords }) => {
+      for (const kind of turnedOnKinds) {
+        await autoSubscribePeerToAllRecords(backfillPeerInstanceId, kind);
+      }
+    }).catch((err) => {
+      console.log(`⚠️ peer: backfill-subscribe after category toggle failed: ${err.message}`);
+    });
+  }
   return result;
 }
 

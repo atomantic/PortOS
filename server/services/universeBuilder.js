@@ -848,7 +848,7 @@ export async function needsEntryIdPersist(id) {
 export async function createUniverse(input = {}) {
   const name = trimTo(input.name, NAME_MAX_LENGTH);
   if (!name) throw makeErr(`Universe name is required (1..${NAME_MAX_LENGTH} chars)`, ERR_VALIDATION);
-  return queueUniverseWrite(async () => {
+  const created = await queueUniverseWrite(async () => {
     const state = await readState();
     const now = new Date().toISOString();
     const next = sanitizeTemplate({
@@ -886,6 +886,16 @@ export async function createUniverse(input = {}) {
     await writeState(state);
     return next;
   });
+  // Fire-and-forget auto-subscribe to every peer with universe-sync enabled.
+  // Dynamic import keeps peerSync.js OUT of the universeBuilder module-load
+  // graph — peerSync already imports getUniverse / mergeUniversesFromSync
+  // from here, so a static import would close a cycle.
+  import('./sharing/peerSync.js').then(({ autoSubscribeRecordToAllPeers }) =>
+    autoSubscribeRecordToAllPeers('universe', created.id)
+  ).catch((err) => {
+    console.log(`⚠️ universe: auto-subscribe after create failed: ${err.message}`);
+  });
+  return created;
 }
 
 /**
