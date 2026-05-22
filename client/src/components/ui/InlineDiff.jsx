@@ -10,26 +10,36 @@ import { memo } from 'react';
 
 function lcs(a, b) {
   const m = a.length, n = b.length;
-  const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
-  for (let i = 1; i <= m; i++)
-    for (let j = 1; j <= n; j++)
-      dp[i][j] = a[i - 1] === b[j - 1] ? dp[i - 1][j - 1] + 1 : Math.max(dp[i - 1][j], dp[i][j - 1]);
+  // Single Int32Array — exactly 4 bytes/cell, no per-element boxing or array
+  // overhead the way a nested JS Array would carry. Indexed as dp[i*(n+1)+j]
+  // to keep the same (m+1)×(n+1) shape backtracking expects.
+  const dp = new Int32Array((m + 1) * (n + 1));
+  const stride = n + 1;
+  for (let i = 1; i <= m; i++) {
+    const row = i * stride;
+    const prevRow = row - stride;
+    for (let j = 1; j <= n; j++) {
+      dp[row + j] = a[i - 1] === b[j - 1]
+        ? dp[prevRow + j - 1] + 1
+        : Math.max(dp[prevRow + j], dp[row + j - 1]);
+    }
+  }
   const seq = [];
   let i = m, j = n;
   while (i > 0 && j > 0) {
     if (a[i - 1] === b[j - 1]) { seq.unshift(a[i - 1]); i--; j--; }
-    else if (dp[i - 1][j] >= dp[i][j - 1]) i--;
+    else if (dp[(i - 1) * stride + j] >= dp[i * stride + j - 1]) i--;
     else j--;
   }
   return seq;
 }
 
-// LCS allocates an (m+1)×(n+1) DP table; the product — not each side — is
-// what matters. Cap at ~4M cells (~16MB at 4 bytes/cell, well inside browser
-// memory for a per-modal computation). A 2000×2000 diff stays in budget;
-// a 4000×4000 (real-world comic script vs full rewrite) bails to the
-// side-by-side fallback below.
-const DIFF_CELL_CAP = 4_000_000;
+// LCS allocates an (m+1)×(n+1) Int32Array; the product — not each side — is
+// what matters. Cap at 1M cells (~4MB allocated by the typed array, well
+// inside browser memory for a per-modal computation). A 1000×1000 word diff
+// stays in budget; anything larger bails to the side-by-side fallback below
+// rather than risk a tab freeze on a worst-case ~1000-word draft compare.
+const DIFF_CELL_CAP = 1_000_000;
 
 const InlineDiff = memo(function InlineDiff({ oldText, newText, emptyLabel = 'No changes.' }) {
   const oldStr = oldText || '';
