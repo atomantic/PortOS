@@ -536,6 +536,147 @@ describe("universeBuilder service", () => {
     ).resolves.toMatchObject({ name: "User-Renamed" });
   });
 
+  describe("soft-delete (tombstones for peer sync)", () => {
+    it("deleteUniverse soft-deletes (record stays on disk with deleted=true)", async () => {
+      const w = await seedWorld();
+      await svc.deleteUniverse(w.id);
+      // listUniverses hides it.
+      expect(await svc.listUniverses()).toEqual([]);
+      // includeDeleted exposes the tombstone with deletedAt + bumped updatedAt.
+      const all = await svc.listUniverses({ includeDeleted: true });
+      expect(all).toHaveLength(1);
+      expect(all[0]).toMatchObject({ id: w.id, deleted: true });
+      expect(all[0].deletedAt).toBeTruthy();
+      expect(all[0].updatedAt).toBe(all[0].deletedAt);
+    });
+
+    it("getUniverse returns 404 for tombstoned, includeDeleted exposes it", async () => {
+      const w = await seedWorld();
+      await svc.deleteUniverse(w.id);
+      await expect(svc.getUniverse(w.id)).rejects.toMatchObject({ code: "NOT_FOUND" });
+      const tombstone = await svc.getUniverse(w.id, { includeDeleted: true });
+      expect(tombstone).toMatchObject({ id: w.id, deleted: true });
+    });
+
+    it("updateUniverse on a tombstoned record throws 404 (no zombie edits)", async () => {
+      const w = await seedWorld();
+      await svc.deleteUniverse(w.id);
+      await expect(svc.updateUniverse(w.id, { name: "Zombie" })).rejects.toMatchObject({
+        code: "NOT_FOUND",
+      });
+    });
+
+    it("deleteUniverse on an already-tombstoned record throws 404", async () => {
+      const w = await seedWorld();
+      await svc.deleteUniverse(w.id);
+      await expect(svc.deleteUniverse(w.id)).rejects.toMatchObject({ code: "NOT_FOUND" });
+    });
+
+    it("insertUniverseWithId overwrites a tombstoned record (re-import undeletes)", async () => {
+      const id = "550e8400-e29b-41d4-a716-44665544abcd";
+      await svc.insertUniverseWithId({ id, name: "First" });
+      await svc.deleteUniverse(id);
+      const restored = await svc.insertUniverseWithId({ id, name: "Restored" });
+      expect(restored).toMatchObject({ id, name: "Restored", deleted: false });
+      // listUniverses shows it (no longer hidden).
+      expect((await svc.listUniverses()).map((u) => u.id)).toContain(id);
+    });
+
+    it("insertUniverseWithId still rejects DUPLICATE on a LIVE record", async () => {
+      const id = "550e8400-e29b-41d4-a716-44665544abce";
+      await svc.insertUniverseWithId({ id, name: "First" });
+      await expect(
+        svc.insertUniverseWithId({ id, name: "Second" }),
+      ).rejects.toMatchObject({ code: svc.ERR_DUPLICATE });
+    });
+
+    describe("mergeUniversesFromSync", () => {
+      it("applies an inbound soft-delete from a peer", async () => {
+        const w = await seedWorld();
+        const tombstoneTs = new Date(Date.now() + 60_000).toISOString();
+        const r = await svc.mergeUniversesFromSync([{
+          ...w,
+          deleted: true,
+          deletedAt: tombstoneTs,
+          updatedAt: tombstoneTs,
+        }]);
+        expect(r).toEqual({ applied: true, count: 1 });
+        await expect(svc.getUniverse(w.id)).rejects.toMatchObject({ code: "NOT_FOUND" });
+        const tombstone = await svc.getUniverse(w.id, { includeDeleted: true });
+        expect(tombstone.deleted).toBe(true);
+      });
+
+      it("LWW: an inbound edit with later updatedAt wins over a local tombstone", async () => {
+        const w = await seedWorld();
+        await svc.deleteUniverse(w.id);
+        const editTs = new Date(Date.now() + 60_000).toISOString();
+        const r = await svc.mergeUniversesFromSync([{
+          ...w,
+          name: "Edited After Delete",
+          deleted: false,
+          deletedAt: null,
+          updatedAt: editTs,
+        }]);
+        expect(r.applied).toBe(true);
+        // Edit wins — record is live again with the new name.
+        const live = await svc.getUniverse(w.id);
+        expect(live).toMatchObject({ name: "Edited After Delete", deleted: false });
+      });
+
+      it("LWW: an inbound tombstone with later updatedAt wins over a local edit", async () => {
+        const w = await seedWorld();
+        const tombstoneTs = new Date(Date.now() + 60_000).toISOString();
+        const r = await svc.mergeUniversesFromSync([{
+          ...w,
+          deleted: true,
+          deletedAt: tombstoneTs,
+          updatedAt: tombstoneTs,
+        }]);
+        expect(r.applied).toBe(true);
+        await expect(svc.getUniverse(w.id)).rejects.toMatchObject({ code: "NOT_FOUND" });
+      });
+
+      it("delete transition via sync drops orphan runs (mirrors local-delete contract)", async () => {
+        const w = await seedWorld();
+        await svc.recordRun({
+          id: "run-sync-1",
+          universeId: w.id,
+          collectionId: "col-x",
+          jobIds: ["j1"],
+          promptCount: 1,
+        });
+        expect(await svc.listRuns(w.id)).toHaveLength(1);
+        const tombstoneTs = new Date(Date.now() + 60_000).toISOString();
+        await svc.mergeUniversesFromSync([{
+          ...w,
+          deleted: true,
+          deletedAt: tombstoneTs,
+          updatedAt: tombstoneTs,
+        }]);
+        expect(await svc.listRuns(w.id)).toEqual([]);
+      });
+
+      it("delete transition via sync runs cascade — unlinks media collections", async () => {
+        const collections = await import("./mediaCollections.js");
+        const w = await seedWorld();
+        const linked = await collections.findOrCreateCollectionByName({
+          name: collections.universeCollectionNameFor(w.name),
+          universeId: w.id,
+        });
+        expect(linked.universeId).toBe(w.id);
+        const tombstoneTs = new Date(Date.now() + 60_000).toISOString();
+        await svc.mergeUniversesFromSync([{
+          ...w,
+          deleted: true,
+          deletedAt: tombstoneTs,
+          updatedAt: tombstoneTs,
+        }]);
+        const fresh = await collections.getCollection(linked.id);
+        expect(fresh.universeId).toBeNull();
+      });
+    });
+  });
+
   describe("synthesizeCanonPrompt", () => {
     it("hand-authored prompt wins over field synthesis", () => {
       expect(svc.synthesizeCanonPrompt("characters", {

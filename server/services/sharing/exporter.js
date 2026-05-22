@@ -19,6 +19,7 @@ import { join, basename } from 'path';
 import { copyFile, readFile, writeFile, stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import { PATHS, ensureDir, atomicWrite, readJSONFile, sha256File } from '../../lib/fileUtils.js';
+import { getOrComputeImageSha256 } from '../../lib/assetHash.js';
 import { isPlainObject } from '../../lib/objects.js';
 import { getBucket, ensureBucketLayout, bucketBlobsDir, bucketBlobPath, bucketBlobSidecarPath, bucketBlobIndexPath, imageSidecarName, isHexHash } from './buckets.js';
 import { buildManifest, writeManifest, pruneBucketManifests } from './manifest.js';
@@ -129,7 +130,18 @@ async function copyAssetIfPresent(filename, kind, bucketPath, cache) {
   const cacheKey = `${sourcePath}:${info.mtimeMs}:${info.size}`;
   let hash = cache && isHexHash(cache[cacheKey]) ? cache[cacheKey] : null;
   if (!hash || !existsSync(bucketBlobPath(bucketPath, hash))) {
-    hash = await sha256File(sourcePath);
+    // For images, prefer the cross-transport sidecar cache (lib/assetHash) —
+    // it persists the hash next to the asset so the peer-sync push pipeline
+    // (which has no bucket context) can read the same value. The bucket
+    // cache is still populated so future exports inside this bucket take
+    // the fast path. For non-image kinds (videos), no sidecar exists yet so
+    // fall through to direct sha256File.
+    if (kind === 'image') {
+      const sidecarResult = await getOrComputeImageSha256(sourcePath);
+      hash = sidecarResult?.hash || (await sha256File(sourcePath));
+    } else {
+      hash = await sha256File(sourcePath);
+    }
     if (cache) cache[cacheKey] = hash;
   }
   const blobPath = bucketBlobPath(bucketPath, hash);

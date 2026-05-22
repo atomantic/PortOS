@@ -1,6 +1,7 @@
 # Unreleased Changes
 
 ## Added
+- Foundation for federated peer sync of Universes, Series, and Issues (Stage 1 of 5). Soft-delete (`deleted` + `deletedAt` tombstone fields) is now part of the on-disk record for universes, series, and issues — so a delete propagates to other PortOS instances via the existing LWW snapshot merge instead of vanishing locally and resurrecting from a peer. `listUniverses` / `listSeries` / `listIssues` (and their per-id getters) filter tombstones by default; pass `{ includeDeleted: true }` to see them. `mergeUniversesFromSync` / `mergeSeriesFromSync` / `mergeIssuesFromSync` detect delete-transitions and fire the same orphan-cleanup cascades as a local delete (media-collection unlink, slot-map clear, issue renumber). New `server/lib/syncWire.js` is the single source of truth for what fields cross the peer wire (today it strips `runs[]` from universe state — shared by the 60s snapshot loop and the upcoming per-record push). New `server/lib/assetHash.js` persists SHA-256 hashes in each `data/images/{uuid}.metadata.json` sidecar so both the share-bucket exporter and the upcoming peer-sync push pipeline reuse the same value (no per-bucket recomputation, no per-transport cache). `insertUniverseWithId` / `insertSeriesWithId` / `insertIssueWithId` now overwrite a tombstoned record (re-import undeletes) but still reject DUPLICATE on a live record.
 
 ## Changed
 

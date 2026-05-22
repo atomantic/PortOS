@@ -29,6 +29,7 @@ import {
   CUSTOM_PAGE_MIN, CUSTOM_PAGE_MAX, CUSTOM_MINUTE_MIN, CUSTOM_MINUTE_MAX,
 } from '../../lib/issueLength.js';
 import { sanitizeOrigin } from '../../lib/sharingOrigin.js';
+import { sanitizeSoftDeleteFields } from '../../lib/syncWire.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { ARC_ROLES } from '../../lib/storyArc.js';
 import { isStr, trimTo } from '../../lib/storyBible.js';
@@ -410,6 +411,8 @@ const sanitizeIssue = (raw) => {
     origin: sanitizeOrigin(raw.origin),
     createdAt,
     updatedAt,
+    // Soft-delete fields — see universeBuilder.sanitizeTemplate.
+    ...sanitizeSoftDeleteFields(raw),
   };
 };
 
@@ -430,9 +433,11 @@ export async function listIssues({
   limit = ISSUES_PER_RESPONSE_MAX,
   paginated = false,
   withHistory = true,
+  includeDeleted = false,
 } = {}) {
   const { issues } = await readState();
-  const filtered = seriesId ? issues.filter((i) => i.seriesId === seriesId) : issues;
+  const live = includeDeleted ? issues : issues.filter((i) => !i.deleted);
+  const filtered = seriesId ? live.filter((i) => i.seriesId === seriesId) : live;
   const sorted = [...filtered].sort((a, b) => {
     if (a.seriesId !== b.seriesId) return a.seriesId.localeCompare(b.seriesId);
     return (a.number || 0) - (b.number || 0);
@@ -459,8 +464,9 @@ export async function listIssues({
  * beyond 1000, so the sidebar's recent-issues view needs this dedicated
  * helper.
  */
-export async function listRecentIssues({ limit = 10, withHistory = true } = {}) {
+export async function listRecentIssues({ limit = 10, withHistory = true, includeDeleted = false } = {}) {
   const { issues } = await readState();
+  const live = includeDeleted ? issues : issues.filter((i) => !i.deleted);
   // Coerce in two passes so non-finite inputs ('abc', undefined) fall to
   // the default rather than letting JS's `0 || 10` short-circuit return
   // 10 for an explicit limit=0.
@@ -468,16 +474,17 @@ export async function listRecentIssues({ limit = 10, withHistory = true } = {}) 
   const fallback = Number.isFinite(raw) ? Math.floor(raw) : 10;
   const clamped = Math.max(1, Math.min(50, fallback));
   const project = withHistory ? (i) => i : stripRunHistoryFromIssue;
-  return [...issues]
+  return [...live]
     .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))
     .slice(0, clamped)
     .map(project);
 }
 
-export async function getIssue(id) {
+export async function getIssue(id, { includeDeleted = false } = {}) {
   const { issues } = await readState();
   const found = issues.find((i) => i.id === id);
   if (!found) throw makeErr(`Issue not found: ${id}`, ERR_NOT_FOUND);
+  if (found.deleted && !includeDeleted) throw makeErr(`Issue not found: ${id}`, ERR_NOT_FOUND);
   return found;
 }
 
@@ -519,8 +526,12 @@ export function createIssue(input = {}) {
 
 async function renumberInline(state, seriesId, fromSeasonId = null) {
   const series = await seriesSvc.getSeries(seriesId).catch(() => null);
+  // Exclude tombstones from numbering — surviving issues should keep a
+  // contiguous sequence regardless of how many deletes happened.
+  // applyVolumeOrderedNumbers mutates each issue's `number` in place, so the
+  // filtered array still aliases the same objects in state.issues.
   return applyVolumeOrderedNumbers({
-    issues: state.issues,
+    issues: state.issues.filter((i) => !i.deleted),
     seriesId,
     seasons: series?.seasons || [],
     fromSeasonId,
@@ -615,12 +626,19 @@ export function insertIssueWithId(input = {}) {
   if (!title) return Promise.reject(makeErr(`title is required (1..${TITLE_MAX} chars)`, ERR_VALIDATION));
   return queueIssueWrite(async () => {
     const state = await readState();
-    if (state.issues.some((i) => i.id === input.id)) {
+    // Tombstone-overwrite: same contract as universeBuilder.insertUniverseWithId.
+    const existingIdx = state.issues.findIndex((i) => i.id === input.id);
+    if (existingIdx >= 0 && !state.issues[existingIdx].deleted) {
       throw makeErr(`Issue id already exists: ${input.id}`, ERR_DUPLICATE);
     }
     const next = sanitizeIssue({ ...input, seriesId, title });
     if (!next) throw makeErr('Invalid issue payload', ERR_VALIDATION);
-    state.issues.push(next);
+    if (existingIdx >= 0) {
+      console.warn(`♻️  insertIssueWithId: overwriting tombstone for ${input.id}`);
+      state.issues[existingIdx] = next;
+    } else {
+      state.issues.push(next);
+    }
     // Imported `number` is a starting hint — local canonical numbering still
     // comes from (volume order, arcPosition) of the local state.
     await renumberInline(state, seriesId, next.seasonId || UNSCOPED_ANCHOR);
@@ -635,6 +653,7 @@ export function updateIssue(id, patch = {}, { skipRenumber = false } = {}) {
   const idx = state.issues.findIndex((i) => i.id === id);
   if (idx < 0) throw makeErr(`Issue not found: ${id}`, ERR_NOT_FOUND);
   const cur = state.issues[idx];
+  if (cur.deleted) throw makeErr(`Issue not found: ${id}`, ERR_NOT_FOUND);
 
   // Per-stage merge: a stage patch carries only the fields the caller is
   // changing (e.g. `{ genConfig }` or `{ cover }`). Without this, the top-level
@@ -771,14 +790,20 @@ export function restoreStageFromHistory(issueId, stageId, runId) {
 }
 
 export function deleteIssue(id) {
+  // Soft-delete — same tombstone-in-record pattern as universes/series. The
+  // record stays on disk with `deleted: true` so the next sync propagates the
+  // delete to peers; the orchestrator's GC sweep prunes it once all peers ack.
+  // `renumberInline` filters tombstones, so surviving issues stay contiguous.
   return queueIssueWrite(async () => {
   const state = await readState();
   const idx = state.issues.findIndex((i) => i.id === id);
   if (idx < 0) throw makeErr(`Issue not found: ${id}`, ERR_NOT_FOUND);
-  const removed = state.issues[idx];
-  const seriesId = removed.seriesId;
-  state.issues.splice(idx, 1);
-  await renumberInline(state, seriesId, removed.seasonId || UNSCOPED_ANCHOR);
+  const cur = state.issues[idx];
+  if (cur.deleted) throw makeErr(`Issue not found: ${id}`, ERR_NOT_FOUND);
+  const seriesId = cur.seriesId;
+  const now = new Date().toISOString();
+  state.issues[idx] = { ...cur, deleted: true, deletedAt: now, updatedAt: now };
+  await renumberInline(state, seriesId, cur.seasonId || UNSCOPED_ANCHOR);
   await writeState(state);
   // Series export bundles every issue, so a deletion is an update on the
   // parent series for any active share-bucket subscription.
@@ -809,6 +834,7 @@ export function updateStageWithLatest(issueId, stageId, computeFn) {
   const idx = state.issues.findIndex((i) => i.id === issueId);
   if (idx < 0) throw makeErr(`Issue not found: ${issueId}`, ERR_NOT_FOUND);
   const cur = state.issues[idx];
+  if (cur.deleted) throw makeErr(`Issue not found: ${issueId}`, ERR_NOT_FOUND);
   const isVisual = VISUAL_STAGE_IDS.includes(stageId);
   const isAudio = AUDIO_STAGE_IDS.includes(stageId);
   const currentStage = cur.stages[stageId];
@@ -858,6 +884,10 @@ export function updateStageWithLatest(issueId, stageId, computeFn) {
  */
 export function mergeIssuesFromSync(remoteIssues) {
   if (!Array.isArray(remoteIssues)) return Promise.resolve({ applied: false, count: 0 });
+  // Series IDs whose issue set saw at least one delete-transition — drives a
+  // post-write renumber so the receiver's issue numbering catches up with the
+  // sender's (otherwise a synced tombstone would leave a gap).
+  const seriesNeedingRenumber = new Set();
   return queueIssueWrite(async () => {
     const state = await readState();
     const localById = new Map(state.issues.map((i) => [i.id, i]));
@@ -869,19 +899,34 @@ export function mergeIssuesFromSync(remoteIssues) {
       const local = localById.get(sanitized.id);
       if (!local) {
         localById.set(sanitized.id, sanitized);
+        if (sanitized.deleted) seriesNeedingRenumber.add(sanitized.seriesId);
         changed++;
       } else {
         const localTs = local.updatedAt || '';
         const remoteTs = sanitized.updatedAt || '';
         if (remoteTs > localTs) {
           localById.set(sanitized.id, sanitized);
+          if (sanitized.deleted && !local.deleted) {
+            seriesNeedingRenumber.add(sanitized.seriesId);
+          }
           changed++;
         }
       }
     }
     if (changed === 0) return { applied: false, count: 0 };
     state.issues = Array.from(localById.values());
+    // Compact issue numbers for each affected series — the merge may have
+    // tombstoned a middle issue, and renumberInline (which excludes deleted)
+    // closes the gap. Single renumber per series, all inside the queue.
+    for (const seriesId of seriesNeedingRenumber) {
+      await renumberInline(state, seriesId, null);
+    }
     await writeState(state);
+    // Re-emit a series-updated for each touched series so any active share
+    // subscription re-exports the post-merge issue set.
+    for (const seriesId of seriesNeedingRenumber) {
+      emitRecordUpdated('series', seriesId);
+    }
     return { applied: true, count: changed };
   });
 }

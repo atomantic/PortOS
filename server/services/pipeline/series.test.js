@@ -80,6 +80,94 @@ describe('pipeline series service', () => {
     expect(await svc.listSeries()).toEqual([]);
   });
 
+  describe('soft-delete (tombstones for peer sync)', () => {
+    it('deleteSeries soft-deletes (record stays on disk with deleted=true)', async () => {
+      const s = await svc.createSeries({ name: 'Salt Run' });
+      await svc.deleteSeries(s.id);
+      expect(await svc.listSeries()).toEqual([]);
+      const all = await svc.listSeries({ includeDeleted: true });
+      expect(all).toHaveLength(1);
+      expect(all[0]).toMatchObject({ id: s.id, deleted: true });
+      expect(all[0].deletedAt).toBeTruthy();
+      expect(all[0].updatedAt).toBe(all[0].deletedAt);
+    });
+
+    it('getSeries 404s for tombstoned; includeDeleted exposes it', async () => {
+      const s = await svc.createSeries({ name: 'Hidden' });
+      await svc.deleteSeries(s.id);
+      await expect(svc.getSeries(s.id)).rejects.toMatchObject({ code: svc.ERR_NOT_FOUND });
+      const tomb = await svc.getSeries(s.id, { includeDeleted: true });
+      expect(tomb).toMatchObject({ id: s.id, deleted: true });
+    });
+
+    it('updateSeries 404s on a tombstone (no zombie edits)', async () => {
+      const s = await svc.createSeries({ name: 'Locked' });
+      await svc.deleteSeries(s.id);
+      await expect(svc.updateSeries(s.id, { name: 'Zombie' })).rejects.toMatchObject({
+        code: svc.ERR_NOT_FOUND,
+      });
+    });
+
+    it('insertSeriesWithId overwrites a tombstoned record (re-import undeletes)', async () => {
+      const id = 'ser-550e8400-e29b-41d4-a716-44665544abcd';
+      await svc.insertSeriesWithId({ id, name: 'First' });
+      await svc.deleteSeries(id);
+      const restored = await svc.insertSeriesWithId({ id, name: 'Restored' });
+      expect(restored).toMatchObject({ id, name: 'Restored', deleted: false });
+      expect((await svc.listSeries()).map((s) => s.id)).toContain(id);
+    });
+
+    it('insertSeriesWithId still rejects DUPLICATE on a LIVE record', async () => {
+      const id = 'ser-550e8400-e29b-41d4-a716-44665544abce';
+      await svc.insertSeriesWithId({ id, name: 'First' });
+      await expect(svc.insertSeriesWithId({ id, name: 'Second' }))
+        .rejects.toMatchObject({ code: svc.ERR_DUPLICATE });
+    });
+
+    describe('mergeSeriesFromSync', () => {
+      it('applies an inbound soft-delete from a peer', async () => {
+        const s = await svc.createSeries({ name: 'Synced' });
+        const ts = new Date(Date.now() + 60_000).toISOString();
+        const r = await svc.mergeSeriesFromSync([{
+          ...s,
+          deleted: true,
+          deletedAt: ts,
+          updatedAt: ts,
+        }]);
+        expect(r).toEqual({ applied: true, count: 1 });
+        await expect(svc.getSeries(s.id)).rejects.toMatchObject({ code: svc.ERR_NOT_FOUND });
+      });
+
+      it('LWW: an inbound edit with later updatedAt wins over a local tombstone', async () => {
+        const s = await svc.createSeries({ name: 'Original' });
+        await svc.deleteSeries(s.id);
+        const editTs = new Date(Date.now() + 60_000).toISOString();
+        const r = await svc.mergeSeriesFromSync([{
+          ...s,
+          name: 'Edited After Delete',
+          deleted: false,
+          deletedAt: null,
+          updatedAt: editTs,
+        }]);
+        expect(r.applied).toBe(true);
+        const live = await svc.getSeries(s.id);
+        expect(live).toMatchObject({ name: 'Edited After Delete', deleted: false });
+      });
+
+      it('LWW: an inbound tombstone with later updatedAt wins over a local edit', async () => {
+        const s = await svc.createSeries({ name: 'Edited Locally' });
+        const ts = new Date(Date.now() + 60_000).toISOString();
+        await svc.mergeSeriesFromSync([{
+          ...s,
+          deleted: true,
+          deletedAt: ts,
+          updatedAt: ts,
+        }]);
+        await expect(svc.getSeries(s.id)).rejects.toMatchObject({ code: svc.ERR_NOT_FOUND });
+      });
+    });
+  });
+
   it('listSeries sorts newest updated first', async () => {
     const a = await svc.createSeries({ name: 'A' });
     await new Promise((r) => setTimeout(r, 5));

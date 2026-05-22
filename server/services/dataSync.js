@@ -14,6 +14,7 @@ import { isPlainObject } from '../lib/objects.js';
 import { mergeUniversesFromSync } from './universeBuilder.js';
 import { mergeSeriesFromSync } from './pipeline/series.js';
 import { mergeIssuesFromSync } from './pipeline/issues.js';
+import { sanitizeStateForWire } from '../lib/syncWire.js';
 
 // --- Category Definitions ---
 
@@ -346,11 +347,12 @@ async function applyMeatspaceRemote(remoteData) {
 // --- Category: Universe ---
 
 async function getUniverseSnapshot() {
-  const data = await readJSONFile(UNIVERSE_BUILDER_FILE, { universes: [] });
-  // Skip `runs[]` — that's local LLM run history (transcripts, ephemeral),
-  // not user-edited universe state. Each peer keeps its own history.
-  const universesOnly = { universes: data.universes || [] };
-  return { data: universesOnly, checksum: computeChecksum(universesOnly) };
+  const raw = await readJSONFile(UNIVERSE_BUILDER_FILE, { universes: [] });
+  // Wire-projection lives in `server/lib/syncWire.js` so the new per-record
+  // peer-sync push agrees on what to strip (currently: top-level `runs[]`,
+  // which is local LLM run history per peer).
+  const { data } = sanitizeStateForWire('universe', raw);
+  return { data, checksum: computeChecksum(data) };
 }
 
 async function applyUniverseRemote(remoteData) {
@@ -375,10 +377,11 @@ async function getPipelineSnapshot() {
     readJSONFile(PIPELINE_SERIES_FILE, { series: [] }),
     readJSONFile(PIPELINE_ISSUES_FILE, { issues: [] }),
   ]);
-  const data = {
-    series: seriesFile.series || [],
-    issues: issuesFile.issues || [],
-  };
+  // Wire-projection lives in `server/lib/syncWire.js` — see getUniverseSnapshot.
+  const { data } = sanitizeStateForWire('pipeline', {
+    series: seriesFile.series,
+    issues: issuesFile.issues,
+  });
   return { data, checksum: computeChecksum(data) };
 }
 
