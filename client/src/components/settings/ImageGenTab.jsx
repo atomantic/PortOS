@@ -49,14 +49,19 @@ export function ImageGenTab() {
   const [codexPath, setCodexPath] = useState('');
   const [codexModel, setCodexModel] = useState('');
   const [codexParallelLimit, setCodexParallelLimit] = useState(1);
-  // Auto-clean toggles — per-provider so users can opt in selectively. The
-  // clean runs after the PNG lands and before the SSE complete event so
-  // subscribers see the cleaned bytes. Scope: removes the C2PA metadata chunk
-  // (when present) and reduces visible AI-generation artifacts via a median
-  // pass + sharpen. Does NOT defeat SynthID — gpt-image embeds SynthID and our
-  // median+sharpen+re-encode falls inside Google's stated robustness envelope.
-  const [autoCleanByMode, setAutoCleanByMode] = useState({ external: false, local: false, codex: false });
-  const setAutoCleanFor = (m) => (v) => setAutoCleanByMode((p) => ({ ...p, [m]: v }));
+  // Per-provider cleaner toggles. Both run after the PNG lands and before
+  // the SSE complete event so subscribers see the cleaned bytes. SynthID
+  // (the gpt-image / Imagen / Gemini pixel-level watermark) is unaffected
+  // by either of these — a future "Clean SynthID" diffusion option will
+  // address it separately.
+  //   - cleanC2PA (default ON): byte-level strip of the gpt-image `caBX`
+  //     provenance chunk. Lossless — pixels untouched.
+  //   - denoise   (default OFF): median(3) + sharpen pass for AI-artifact
+  //     reduction. LOSSY: blurs annotation text and small details.
+  const [cleanC2PAByMode, setCleanC2PAByMode] = useState({ external: true, local: true, codex: true });
+  const [denoiseByMode, setDenoiseByMode] = useState({ external: false, local: false, codex: false });
+  const setCleanC2PAFor = (m) => (v) => setCleanC2PAByMode((p) => ({ ...p, [m]: v }));
+  const setDenoiseFor = (m) => (v) => setDenoiseByMode((p) => ({ ...p, [m]: v }));
   // Raw string held while the user is typing in the parallel-limit input.
   // Clamping is deferred to onBlur so multi-digit entry isn't blocked.
   const [parallelLimitDraft, setParallelLimitDraft] = useState('1');
@@ -74,7 +79,8 @@ export function ImageGenTab() {
   const [saved, setSaved] = useState({
     mode: IMAGE_GEN_MODE.EXTERNAL, sdapiUrl: '', pythonPath: '', exposeA1111: false,
     codexEnabled: false, codexPath: '', codexModel: '', codexParallelLimit: 1,
-    autoCleanByMode: { external: false, local: false, codex: false },
+    cleanC2PAByMode: { external: true, local: true, codex: true },
+    denoiseByMode: { external: false, local: false, codex: false },
   });
 
   const [status, setStatus] = useState(null);
@@ -147,11 +153,21 @@ export function ImageGenTab() {
           : PARALLEL_FALLBACK;
         setParallelBounds(bounds);
         const cxParallel = clampParallel(cx.parallelLimit, bounds);
-        const ac = {
-          codex: cx.autoClean === true,
-          local: ig.local?.autoClean === true,
-          external: ig.external?.autoClean === true,
+        // Per-mode cleaner reads. Legacy `autoClean: true` (single boolean)
+        // maps to BOTH new flags so users who turned the old toggle on don't
+        // silently lose denoising on upgrade. Absent → defaults (C2PA on, denoise off).
+        const readCleaners = (modeCfg) => {
+          const legacy = modeCfg?.autoClean === true;
+          return {
+            cleanC2PA: typeof modeCfg?.cleanC2PA === 'boolean' ? modeCfg.cleanC2PA : (legacy || true),
+            denoise: typeof modeCfg?.denoise === 'boolean' ? modeCfg.denoise : legacy,
+          };
         };
+        const codexClean = readCleaners(cx);
+        const localClean = readCleaners(ig.local);
+        const externalClean = readCleaners(ig.external);
+        const c2 = { codex: codexClean.cleanC2PA, local: localClean.cleanC2PA, external: externalClean.cleanC2PA };
+        const dn = { codex: codexClean.denoise, local: localClean.denoise, external: externalClean.denoise };
         setMode(m);
         setSdapiUrl(url);
         setPythonPath(py);
@@ -161,12 +177,13 @@ export function ImageGenTab() {
         setCodexModel(cxModel);
         setCodexParallelLimit(cxParallel);
         setParallelLimitDraft(String(cxParallel));
-        setAutoCleanByMode(ac);
+        setCleanC2PAByMode(c2);
+        setDenoiseByMode(dn);
         setSaved({
           mode: m, sdapiUrl: url, pythonPath: py, exposeA1111: expose,
           codexEnabled: cxEnabled, codexPath: cxPath, codexModel: cxModel,
           codexParallelLimit: cxParallel,
-          autoCleanByMode: ac,
+          cleanC2PAByMode: c2, denoiseByMode: dn,
         });
         setToolRegistered(tools.some((t) => t.id === SDAPI_TOOL_ID));
         setCodexToolRegistered(tools.some((t) => t.id === CODEX_TOOL_ID));
@@ -191,9 +208,12 @@ export function ImageGenTab() {
     || codexPath !== saved.codexPath
     || codexModel !== saved.codexModel
     || codexParallelLimit !== saved.codexParallelLimit
-    || autoCleanByMode.codex !== saved.autoCleanByMode.codex
-    || autoCleanByMode.local !== saved.autoCleanByMode.local
-    || autoCleanByMode.external !== saved.autoCleanByMode.external;
+    || cleanC2PAByMode.codex !== saved.cleanC2PAByMode.codex
+    || cleanC2PAByMode.local !== saved.cleanC2PAByMode.local
+    || cleanC2PAByMode.external !== saved.cleanC2PAByMode.external
+    || denoiseByMode.codex !== saved.denoiseByMode.codex
+    || denoiseByMode.local !== saved.denoiseByMode.local
+    || denoiseByMode.external !== saved.denoiseByMode.external;
 
   const handleSave = async () => {
     setSaving(true);
@@ -204,11 +224,11 @@ export function ImageGenTab() {
     const patch = {
       imageGen: {
         mode,
-        external: { sdapiUrl: url, autoClean: autoCleanByMode.external },
-        local: { pythonPath: pythonPath || undefined, autoClean: autoCleanByMode.local },
+        external: { sdapiUrl: url, cleanC2PA: cleanC2PAByMode.external, denoise: denoiseByMode.external },
+        local: { pythonPath: pythonPath || undefined, cleanC2PA: cleanC2PAByMode.local, denoise: denoiseByMode.local },
         codex: {
           enabled: codexEnabled, codexPath: cxPath, model: cxModel, parallelLimit: cxParallel,
-          autoClean: autoCleanByMode.codex,
+          cleanC2PA: cleanC2PAByMode.codex, denoise: denoiseByMode.codex,
         },
         expose: { a1111: exposeA1111 },
         // Keep the legacy field populated so anything still reading
@@ -226,7 +246,7 @@ export function ImageGenTab() {
         mode, sdapiUrl: url || '', pythonPath, exposeA1111,
         codexEnabled, codexPath: cxPath || '', codexModel: cxModel || '',
         codexParallelLimit: cxParallel,
-        autoCleanByMode,
+        cleanC2PAByMode, denoiseByMode,
       });
       if (cxParallel !== codexParallelLimit) {
         setCodexParallelLimit(cxParallel);
@@ -427,7 +447,12 @@ export function ImageGenTab() {
             placeholder="http://localhost:7860"
           />
           <p className="text-xs text-gray-500">Base URL for the SD WebUI server PortOS should send generation requests to.</p>
-          <AutoCleanToggle checked={autoCleanByMode.external} onChange={setAutoCleanFor(IMAGE_GEN_MODE.EXTERNAL)} />
+          <CleanersToggles
+            cleanC2PA={cleanC2PAByMode.external}
+            denoise={denoiseByMode.external}
+            onCleanC2PAChange={setCleanC2PAFor(IMAGE_GEN_MODE.EXTERNAL)}
+            onDenoiseChange={setDenoiseFor(IMAGE_GEN_MODE.EXTERNAL)}
+          />
         </div>
       )}
 
@@ -441,7 +466,12 @@ export function ImageGenTab() {
             and are surfaced in <a href="/media/models" className="text-port-accent hover:underline">Media → Models</a>.
           </p>
           <LocalSetupPanel pythonPath={pythonPath} onPythonPathChange={setPythonPath} />
-          <AutoCleanToggle checked={autoCleanByMode.local} onChange={setAutoCleanFor(IMAGE_GEN_MODE.LOCAL)} />
+          <CleanersToggles
+            cleanC2PA={cleanC2PAByMode.local}
+            denoise={denoiseByMode.local}
+            onCleanC2PAChange={setCleanC2PAFor(IMAGE_GEN_MODE.LOCAL)}
+            onDenoiseChange={setDenoiseFor(IMAGE_GEN_MODE.LOCAL)}
+          />
         </div>
       )}
 
@@ -536,7 +566,12 @@ export function ImageGenTab() {
                 )}
               </p>
             </div>
-            <AutoCleanToggle checked={autoCleanByMode.codex} onChange={setAutoCleanFor(IMAGE_GEN_MODE.CODEX)} />
+            <CleanersToggles
+              cleanC2PA={cleanC2PAByMode.codex}
+              denoise={denoiseByMode.codex}
+              onCleanC2PAChange={setCleanC2PAFor(IMAGE_GEN_MODE.CODEX)}
+              onDenoiseChange={setDenoiseFor(IMAGE_GEN_MODE.CODEX)}
+            />
           </div>
         )}
       </div>
@@ -740,28 +775,45 @@ export function ImageGenTab() {
   );
 }
 
-// Shared per-provider "auto-clean after generation" checkbox. The user-visible
-// helper text below already explains scope (C2PA removed, SynthID not
-// defeated) so the comment doesn't need to repeat it. Ordering invariant:
-// the clean must run before the SSE complete event fires so subscribers see
-// the cleaned bytes on first fetch — enforced by the provider success paths,
-// not here.
-function AutoCleanToggle({ checked, onChange }) {
+// Per-provider post-render cleaner toggles. Both must run before the SSE
+// complete event fires so subscribers see the cleaned bytes on first fetch —
+// enforced by the provider success paths, not here. A future "Clean SynthID"
+// diffusion option will join this group when ready.
+function CleanersToggles({ cleanC2PA, denoise, onCleanC2PAChange, onDenoiseChange }) {
   return (
-    <label className="flex items-start gap-3 cursor-pointer pt-1">
-      <input
-        type="checkbox"
-        checked={checked}
-        onChange={(e) => onChange(e.target.checked)}
-        className="rounded mt-0.5"
-      />
-      <span className="text-sm text-gray-300">
-        Auto-clean after generation
-        <span className="block text-xs text-gray-500 mt-0.5">
-          Remove the C2PA metadata chunk (when present) and reduce visible AI-generation artifacts on every render. Does NOT defeat SynthID — gpt-image / Imagen renders stay detectable by their vendor watermark checkers. The cleaned image replaces the original on disk.
+    <div className="space-y-2 pt-1">
+      <label className="flex items-start gap-3 cursor-pointer">
+        <input
+          type="checkbox"
+          checked={cleanC2PA}
+          onChange={(e) => onCleanC2PAChange(e.target.checked)}
+          className="rounded mt-0.5"
+        />
+        <span className="text-sm text-gray-300">
+          Clean C2PA
+          <span className="block text-xs text-gray-500 mt-0.5">
+            Strip the gpt-image <code>caBX</code> provenance chunk. Lossless — pixels untouched, only metadata removed. Safe to leave on; recommended for renders you'll share publicly.
+          </span>
         </span>
-      </span>
-    </label>
+      </label>
+      <label className="flex items-start gap-3 cursor-pointer">
+        <input
+          type="checkbox"
+          checked={denoise}
+          onChange={(e) => onDenoiseChange(e.target.checked)}
+          className="rounded mt-0.5"
+        />
+        <span className="text-sm text-gray-300">
+          Denoise (median + sharpen)
+          <span className="block text-xs text-gray-500 mt-0.5">
+            Smooths AI-generation artifacts with a median filter + sharpen pass. <span className="text-port-warning">Warning: lossy — blurs annotation text, small labels, and fine detail.</span> Implicitly also strips C2PA. Skip this for renders with text (concept sheets, infographics, comic panels).
+          </span>
+        </span>
+      </label>
+      <p className="text-[11px] text-gray-500 italic mt-1">
+        Neither option defeats SynthID — gpt-image / Imagen renders stay detectable by their vendor watermark checkers. A "Clean SynthID" diffusion option is planned separately.
+      </p>
+    </div>
   );
 }
 

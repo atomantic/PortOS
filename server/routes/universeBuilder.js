@@ -36,7 +36,7 @@ import { findOrCreateUniverseCollection } from '../services/mediaCollections.js'
 import { registerUniverseBuilderRun } from '../services/universeBuilderCollectionHook.js';
 import { getImageModels, isFlux2, isZImage, isErnie } from '../lib/mediaModels.js';
 import { IMAGE_GEN_MODE, IMAGE_GEN_MODES } from '../services/imageGen/modes.js';
-import { resolveAutoClean } from '../services/imageGen/index.js';
+import { resolveImageCleaners } from '../services/imageGen/index.js';
 import { getStylePresetById } from '../lib/writersRoomStylePresets.js';
 
 const router = Router();
@@ -568,23 +568,23 @@ router.post('/:id/render', asyncHandler(async (req, res) => {
     };
     let queued;
     // The queue dispatches directly to imageGen/{codex,local}.generateImage,
-    // bypassing imageGen/index.js's dispatcher that resolves autoClean for
-    // direct callers. Resolve here so saved settings.imageGen[mode].autoClean
-    // applies to Universe Builder batch renders the same way it does for
-    // /api/image-gen/generate and pipeline renders.
-    const autoClean = resolveAutoClean(undefined, settings, mode);
+    // bypassing imageGen/index.js's dispatcher that resolves cleaners for
+    // direct callers. Resolve here so the per-mode cleanC2PA + denoise
+    // settings apply to Universe Builder batch renders the same way they
+    // do for /api/image-gen/generate and pipeline renders.
+    const { cleanC2PA, denoise } = resolveImageCleaners(undefined, settings, mode);
     if (mode === IMAGE_GEN_MODE.CODEX) {
       const c = settings.imageGen?.codex || {};
       queued = enqueueJob({
         kind: 'image',
-        params: { mode: IMAGE_GEN_MODE.CODEX, codexPath: c.codexPath, model: c.model, autoClean, ...params },
+        params: { mode: IMAGE_GEN_MODE.CODEX, codexPath: c.codexPath, model: c.model, cleanC2PA, denoise, ...params },
       });
     } else {
       // mode === IMAGE_GEN_MODE.LOCAL (validated upfront).
       const py = settings.imageGen?.local?.pythonPath || null;
       queued = enqueueJob({
         kind: 'image',
-        params: { pythonPath: py, modelId: body.modelId, autoClean, ...params },
+        params: { pythonPath: py, modelId: body.modelId, cleanC2PA, denoise, ...params },
       });
     }
     jobIds.push(queued.jobId);

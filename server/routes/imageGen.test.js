@@ -12,10 +12,20 @@ vi.mock('../services/imageGen/index.js', () => ({
   IMAGE_GEN_MODE: { EXTERNAL: 'external', LOCAL: 'local', CODEX: 'codex' },
   IMAGE_GEN_MODES: ['external', 'local', 'codex'],
   // Mirror the real precedence so route-level resolution behaves correctly
-  // under test: explicit body bool wins, otherwise fall back to settings.
-  resolveAutoClean: (bodyValue, settings, mode) => (typeof bodyValue === 'boolean'
-    ? bodyValue
-    : settings?.imageGen?.[mode]?.autoClean === true),
+  // under test: explicit body fields win, otherwise inherit per-mode
+  // settings, otherwise the legacy autoClean fallback for both flags.
+  resolveImageCleaners: (body, settings, mode) => {
+    const cfg = settings?.imageGen?.[mode] || {};
+    const legacy = cfg.autoClean === true;
+    return {
+      cleanC2PA: typeof body?.cleanC2PA === 'boolean'
+        ? body.cleanC2PA
+        : (typeof cfg.cleanC2PA === 'boolean' ? cfg.cleanC2PA : (legacy || true)),
+      denoise: typeof body?.denoise === 'boolean'
+        ? body.denoise
+        : (cfg.denoise === true || legacy),
+    };
+  },
   local: {
     listImageModels: vi.fn(() => []),
     listLoraFilenames: vi.fn(async () => []),
@@ -331,19 +341,65 @@ describe('Image Gen Routes', () => {
       expect(imageGen.generateImage).not.toHaveBeenCalled();
     });
 
-    describe('autoClean resolution (body wins over saved setting)', () => {
-      it('external mode: body autoClean=true overrides saved setting=false', async () => {
+    describe('cleaner resolution (body wins over saved setting)', () => {
+      it('external mode: body denoise=true overrides saved setting=false', async () => {
         getSettings.mockResolvedValueOnce({
-          imageGen: { mode: 'external', external: { autoClean: false } },
+          imageGen: { mode: 'external', external: { cleanC2PA: false, denoise: false } },
         });
         imageGen.generateImage.mockResolvedValue({ filename: 'x.png', path: '/data/images/x.png' });
 
-        await request(app).post('/api/image-gen/generate').send({ prompt: 'p', autoClean: true });
+        await request(app).post('/api/image-gen/generate').send({ prompt: 'p', denoise: true });
 
-        expect(imageGen.generateImage).toHaveBeenCalledWith(expect.objectContaining({ autoClean: true }));
+        expect(imageGen.generateImage).toHaveBeenCalledWith(expect.objectContaining({ denoise: true, cleanC2PA: false }));
       });
 
-      it('external mode: omitted body inherits saved setting=true', async () => {
+      it('external mode: omitted body inherits saved cleanC2PA=true + denoise=false', async () => {
+        getSettings.mockResolvedValueOnce({
+          imageGen: { mode: 'external', external: { cleanC2PA: true, denoise: false } },
+        });
+        imageGen.generateImage.mockResolvedValue({ filename: 'x.png', path: '/data/images/x.png' });
+
+        await request(app).post('/api/image-gen/generate').send({ prompt: 'p' });
+
+        expect(imageGen.generateImage).toHaveBeenCalledWith(expect.objectContaining({ cleanC2PA: true, denoise: false }));
+      });
+
+      it('local mode: body flags flow through into enqueued params', async () => {
+        getSettings.mockResolvedValueOnce({
+          imageGen: { mode: 'local', local: { pythonPath: '/p', cleanC2PA: false, denoise: false } },
+        });
+
+        await request(app).post('/api/image-gen/generate').send({ prompt: 'p', cleanC2PA: true, denoise: true });
+
+        const [call] = mediaJobQueue.enqueueJob.mock.calls;
+        expect(call[0].params.cleanC2PA).toBe(true);
+        expect(call[0].params.denoise).toBe(true);
+      });
+
+      it('codex mode: body denoise=false overrides saved setting=true on enqueued params', async () => {
+        getSettings.mockResolvedValueOnce({
+          imageGen: { mode: 'codex', codex: { enabled: true, cleanC2PA: true, denoise: true } },
+        });
+
+        await request(app).post('/api/image-gen/generate').send({ prompt: 'p', denoise: false });
+
+        const [call] = mediaJobQueue.enqueueJob.mock.calls;
+        expect(call[0].params.denoise).toBe(false);
+      });
+
+      it('defaults to cleanC2PA=true + denoise=false when neither body nor settings specify', async () => {
+        getSettings.mockResolvedValueOnce({ imageGen: { mode: 'external' } });
+        imageGen.generateImage.mockResolvedValue({ filename: 'x.png', path: '/data/images/x.png' });
+
+        await request(app).post('/api/image-gen/generate').send({ prompt: 'p' });
+
+        expect(imageGen.generateImage).toHaveBeenCalledWith(expect.objectContaining({ cleanC2PA: true, denoise: false }));
+      });
+
+      it('legacy autoClean=true on settings maps to BOTH new flags on read', async () => {
+        // Pre-split installs persisted `autoClean: true`. resolveImageCleaners
+        // maps that to cleanC2PA=true + denoise=true so the user's opt-in
+        // behavior is preserved through the upgrade.
         getSettings.mockResolvedValueOnce({
           imageGen: { mode: 'external', external: { autoClean: true } },
         });
@@ -351,49 +407,16 @@ describe('Image Gen Routes', () => {
 
         await request(app).post('/api/image-gen/generate').send({ prompt: 'p' });
 
-        expect(imageGen.generateImage).toHaveBeenCalledWith(expect.objectContaining({ autoClean: true }));
+        expect(imageGen.generateImage).toHaveBeenCalledWith(expect.objectContaining({ cleanC2PA: true, denoise: true }));
       });
 
-      it('local mode: body autoClean=true flows through into enqueued params (was previously dropped)', async () => {
-        getSettings.mockResolvedValueOnce({
-          imageGen: { mode: 'local', local: { pythonPath: '/p', autoClean: false } },
-        });
-
-        await request(app).post('/api/image-gen/generate').send({ prompt: 'p', autoClean: true });
-
-        const [call] = mediaJobQueue.enqueueJob.mock.calls;
-        expect(call[0].params.autoClean).toBe(true);
-      });
-
-      it('local mode: omitted body inherits saved setting=true on enqueued params', async () => {
-        getSettings.mockResolvedValueOnce({
-          imageGen: { mode: 'local', local: { pythonPath: '/p', autoClean: true } },
-        });
-
-        await request(app).post('/api/image-gen/generate').send({ prompt: 'p' });
-
-        const [call] = mediaJobQueue.enqueueJob.mock.calls;
-        expect(call[0].params.autoClean).toBe(true);
-      });
-
-      it('codex mode: body autoClean=false overrides saved setting=true on enqueued params', async () => {
-        getSettings.mockResolvedValueOnce({
-          imageGen: { mode: 'codex', codex: { enabled: true, autoClean: true } },
-        });
-
-        await request(app).post('/api/image-gen/generate').send({ prompt: 'p', autoClean: false });
-
-        const [call] = mediaJobQueue.enqueueJob.mock.calls;
-        expect(call[0].params.autoClean).toBe(false);
-      });
-
-      it('defaults to false when neither body nor settings specify', async () => {
+      it('legacy autoClean=true on body maps to BOTH new flags via the coerceFormFields shim', async () => {
         getSettings.mockResolvedValueOnce({ imageGen: { mode: 'external' } });
         imageGen.generateImage.mockResolvedValue({ filename: 'x.png', path: '/data/images/x.png' });
 
-        await request(app).post('/api/image-gen/generate').send({ prompt: 'p' });
+        await request(app).post('/api/image-gen/generate').send({ prompt: 'p', autoClean: true });
 
-        expect(imageGen.generateImage).toHaveBeenCalledWith(expect.objectContaining({ autoClean: false }));
+        expect(imageGen.generateImage).toHaveBeenCalledWith(expect.objectContaining({ cleanC2PA: true, denoise: true }));
       });
     });
 

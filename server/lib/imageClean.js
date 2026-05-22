@@ -90,6 +90,64 @@ function pngHasC2PA(buf) {
   return false;
 }
 
+/**
+ * Lossless C2PA strip — walks PNG chunks and emits a NEW buffer containing
+ * every chunk except `caBX`. Pixels untouched, no decode, no re-encode.
+ * Output is byte-identical to input modulo the removed chunk(s).
+ *
+ * Returns `{ data, stripped, sizeBefore, sizeAfter }`:
+ *  - `data` is the new buffer (or the input buffer when no strip happened).
+ *  - `stripped` is true only when a `caBX` chunk was actually found and removed.
+ *  - sizes reflect input vs output buffer lengths.
+ *
+ * Returns the input untouched (`stripped: false`) on non-PNG / malformed PNG /
+ * chunk-count overrun. Never throws — caller decides whether to write the
+ * result back or skip.
+ */
+export function stripPngC2PAChunk(buffer) {
+  const passThrough = { data: buffer, stripped: false, sizeBefore: buffer?.length || 0, sizeAfter: buffer?.length || 0 };
+  if (!Buffer.isBuffer(buffer) || buffer.length < 8 || detectFormat(buffer) !== 'png') {
+    return passThrough;
+  }
+  // First pass: locate every `caBX` chunk's start/end so we can splice them
+  // out into a single new buffer allocation. Real PNGs only carry one but the
+  // PNG spec doesn't forbid duplicates — handle it anyway so a defective
+  // producer can't leave provenance fragments behind.
+  const ranges = []; // [{ start, end }] of chunk bytes (length+type+data+crc) to drop
+  let offset = 8;
+  let count = 0;
+  let sawIEND = false;
+  while (offset + 8 <= buffer.length) {
+    if (++count > MAX_PNG_CHUNKS) return passThrough;
+    if (!isPngChunkType(buffer, offset + 4)) return passThrough;
+    const length = buffer.readUInt32BE(offset);
+    const chunkEnd = offset + 8 + length + 4;
+    if (chunkEnd > buffer.length) return passThrough;
+    const type = buffer.toString('ascii', offset + 4, offset + 8);
+    if (type === 'caBX') ranges.push({ start: offset, end: chunkEnd });
+    if (type === 'IEND') { sawIEND = true; break; }
+    offset = chunkEnd;
+  }
+  // If we never reached IEND the file is truncated — don't risk emitting a
+  // bad buffer. Pass through untouched and let the caller / downstream
+  // pipeline surface the corruption (e.g. via a separate decode).
+  if (!sawIEND) return passThrough;
+  if (ranges.length === 0) return passThrough;
+
+  const droppedBytes = ranges.reduce((sum, r) => sum + (r.end - r.start), 0);
+  const out = Buffer.allocUnsafe(buffer.length - droppedBytes);
+  let writeOffset = 0;
+  let readOffset = 0;
+  for (const { start, end } of ranges) {
+    buffer.copy(out, writeOffset, readOffset, start);
+    writeOffset += start - readOffset;
+    readOffset = end;
+  }
+  // Copy the tail after the last dropped chunk.
+  buffer.copy(out, writeOffset, readOffset);
+  return { data: out, stripped: true, sizeBefore: buffer.length, sizeAfter: out.length };
+}
+
 const MIME_TYPES = {
   png: 'image/png',
   jpeg: 'image/jpeg',
@@ -159,20 +217,24 @@ export async function cleanImageBuffer(buffer) {
   }
 }
 
-// Post-generation auto-clean. Reads the just-written PNG, runs cleanImageBuffer,
-// atomically replaces the file in place via temp + rename, and patches the
-// sidecar to record the clean (`autoCleaned: true`, `cleanLevel: 'aggressive'`,
-// `c2paStripped: bool`). No-op when `enabled` is false. Logs and swallows
-// errors — a clean failure must never fail the underlying generation (the
-// un-cleaned PNG stays on disk and the user gets what they would have gotten
-// without the feature).
+// Post-generation cleaners. Reads the just-written PNG, applies the requested
+// passes (lossless C2PA chunk strip and/or lossy denoise), atomically
+// replaces the file in place, and patches the sidecar to record what ran.
 //
-// `mode` is one of 'codex' | 'local' | 'external' — only used in log lines so
-// failures are attributable. The caller (the image-gen dispatcher) is
-// responsible for resolving `enabled` from `settings.imageGen[mode].autoClean`
-// — this keeps the helper decoupled from the settings shape.
-export async function autoCleanGeneratedImage({ enabled, pngPath, sidecarPath, mode = 'unknown' }) {
-  if (!enabled) return { cleaned: false };
+// Two independent flags:
+//   - `cleanC2PA: true`  → strip the gpt-image `caBX` provenance chunk via
+//     `stripPngC2PAChunk`. Pure byte-level metadata removal, no decode,
+//     pixels untouched.
+//   - `denoise: true`    → median(3) + sharpen pass via `cleanImageBuffer`.
+//     LOSSY: blurs annotation text, halos small details. Opt-in only.
+//
+// When `denoise` is on, C2PA is stripped implicitly by sharp's re-encode
+// regardless of `cleanC2PA` — both flags off short-circuits to a no-op.
+// `mode` is one of 'codex' | 'local' | 'external'; only used in log lines.
+// Logs and swallows errors — a clean failure must never fail the underlying
+// generation (the un-cleaned PNG stays on disk).
+export async function autoCleanGeneratedImage({ cleanC2PA = false, denoise = false, pngPath, sidecarPath, mode = 'unknown' }) {
+  if (!cleanC2PA && !denoise) return { cleaned: false };
 
   const buffer = await readFile(pngPath).catch(() => null);
   if (!buffer) {
@@ -180,16 +242,42 @@ export async function autoCleanGeneratedImage({ enabled, pngPath, sidecarPath, m
     return { cleaned: false };
   }
 
-  const result = await cleanImageBuffer(buffer).catch((err) => {
-    console.warn(`⚠️ Auto-clean failed for ${basename(pngPath)}: ${err?.message || err}`);
-    return null;
-  });
-  if (!result || result.format !== 'png') return { cleaned: false };
+  let outputData = buffer;
+  let c2paStripped = false;
+  let denoised = false;
+  let sizeBefore = buffer.length;
+  let sizeAfter = buffer.length;
+
+  if (denoise) {
+    // Denoise re-encodes through sharp, which incidentally drops every
+    // ancillary chunk (including caBX). So a denoise pass implicitly
+    // satisfies the cleanC2PA flag too — no separate strip needed.
+    const result = await cleanImageBuffer(buffer).catch((err) => {
+      console.warn(`⚠️ Auto-clean denoise failed for ${basename(pngPath)}: ${err?.message || err}`);
+      return null;
+    });
+    if (!result || result.format !== 'png') return { cleaned: false };
+    outputData = result.data;
+    c2paStripped = result.c2paStripped;
+    denoised = true;
+    sizeAfter = result.sizeAfter;
+  } else if (cleanC2PA) {
+    // Lossless path: walk the PNG chunks and emit a new buffer with caBX
+    // removed. No decode, no re-encode, pixel-identical to input.
+    const result = stripPngC2PAChunk(buffer);
+    if (!result.stripped) {
+      // No-op (chunk absent / non-PNG / malformed) — leave the file as-is.
+      return { cleaned: false };
+    }
+    outputData = result.data;
+    c2paStripped = true;
+    sizeAfter = result.sizeAfter;
+  }
 
   // Sidecar read has no data dependency on the PNG write — kick it off in
   // parallel so the disk-read latency overlaps the encode/write window.
   const sidecarReadP = sidecarPath ? tryReadFile(sidecarPath) : Promise.resolve(null);
-  const replaced = await atomicWrite(pngPath, result.data)
+  const replaced = await atomicWrite(pngPath, outputData)
     .then(() => true)
     .catch((err) => {
       console.warn(`⚠️ Auto-clean write failed for ${basename(pngPath)}: ${err?.message || err}`);
@@ -204,12 +292,17 @@ export async function autoCleanGeneratedImage({ enabled, pngPath, sidecarPath, m
     const patched = {
       ...safeJSONParse(raw, {}),
       autoCleaned: true,
-      cleanLevel: 'aggressive',
-      c2paStripped: result.c2paStripped,
+      c2paStripped,
+      // Granular flags so MediaLightbox / sidecar consumers can show which
+      // passes ran. `cleanLevel` kept for back-compat with existing readers
+      // — 'aggressive' when denoise ran, 'metadata' when only the lossless
+      // strip ran.
+      denoised,
+      cleanLevel: denoised ? 'aggressive' : 'metadata',
     };
     await atomicWrite(sidecarPath, patched).catch(() => {});
   }
 
-  console.log(`🧼 Auto-cleaned ${basename(pngPath)} (mode=${mode}, ${result.sizeBefore}B → ${result.sizeAfter}B, c2pa=${result.c2paStripped})`);
-  return { cleaned: true, c2paStripped: result.c2paStripped };
+  console.log(`🧼 Cleaned ${basename(pngPath)} (mode=${mode}, ${sizeBefore}B → ${sizeAfter}B, c2pa=${c2paStripped}, denoise=${denoised})`);
+  return { cleaned: true, c2paStripped, denoised };
 }

@@ -19,7 +19,7 @@ import {
 } from '../lib/validation.js';
 import { optionalUploadFields } from '../lib/multipart.js';
 import * as imageGen from '../services/imageGen/index.js';
-import { local, IMAGE_GEN_MODE, IMAGE_GEN_MODES, resolveAutoClean } from '../services/imageGen/index.js';
+import { local, IMAGE_GEN_MODE, IMAGE_GEN_MODES, resolveImageCleaners } from '../services/imageGen/index.js';
 import { enqueueJob, attachSseClient as attachQueueSseClient, cancelJob, listJobs } from '../services/mediaJobQueue/index.js';
 import { getSettings, saveSettings } from '../services/settings.js';
 import { getHfToken, getHfTokenInfo, HF_TOKEN_REGEX } from '../lib/hfToken.js';
@@ -75,10 +75,13 @@ const generateSchema = z.object({
   // array — file presence is enforced at the upload layer, and the route
   // pairs filled slots with their strengths positionally.
   referenceStrengths: z.array(z.number().min(0).max(1)).max(4).optional(),
-  // Per-render override of `settings.imageGen.{mode}.autoClean`. When omitted,
-  // the route falls back to the saved settings value. `true` forces in-place
-  // auto-clean for this one render; `false` skips it even when the saved
-  // setting is on.
+  // Per-render override of the cleaners. When omitted, the route inherits
+  // from `settings.imageGen.{mode}.{cleanC2PA,denoise}`. Explicit booleans
+  // here force the value for this one render. Legacy `autoClean` is still
+  // accepted (mapped to both flags) so older clients keep working through
+  // the deprecation window.
+  cleanC2PA: z.boolean().optional(),
+  denoise: z.boolean().optional(),
   autoClean: z.boolean().optional(),
 }).refine(refineImagePixelCap, { message: PIXEL_CAP_MESSAGE, path: ['width'] });
 
@@ -117,7 +120,17 @@ function coerceFormFields(body) {
   }
   // Multipart sends checkbox values as 'true' / 'false' strings; coerce to
   // bool so Zod's `z.boolean()` accepts them.
-  if (typeof body.autoClean === 'string') body.autoClean = body.autoClean === 'true';
+  for (const f of ['cleanC2PA', 'denoise', 'autoClean']) {
+    if (typeof body[f] === 'string') body[f] = body[f] === 'true';
+  }
+  // Legacy single-flag clients: an explicit `autoClean` on the wire maps to
+  // BOTH new flags (preserves the pre-split behavior) only when the caller
+  // didn't also send the new fields. Modern clients that pass cleanC2PA /
+  // denoise explicitly win.
+  if (typeof body.autoClean === 'boolean') {
+    if (typeof body.cleanC2PA !== 'boolean') body.cleanC2PA = body.autoClean;
+    if (typeof body.denoise !== 'boolean') body.denoise = body.autoClean;
+  }
   return body;
 }
 
@@ -196,11 +209,14 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
   // is cheap — it's already read again below for the per-mode dispatch.)
   const settings = await getSettings();
   const mode = data.mode || settings.imageGen?.mode || IMAGE_GEN_MODE.EXTERNAL;
-  // Resolve autoClean ONCE at the route layer so all three dispatch paths
-  // (synchronous external, codex queue, local queue) see the same value.
-  // Stamp onto `data` so the value flows through the spread-into-params
-  // calls below verbatim.
-  data.autoClean = resolveAutoClean(data.autoClean, settings, mode);
+  // Resolve cleaners ONCE at the route layer so all three dispatch paths
+  // (synchronous external, codex queue, local queue) see the same values.
+  // Stamp onto `data` so they flow through the spread-into-params calls
+  // below verbatim.
+  const cleaners = resolveImageCleaners(data, settings, mode);
+  data.cleanC2PA = cleaners.cleanC2PA;
+  data.denoise = cleaners.denoise;
+  delete data.autoClean; // legacy field — already mapped into both flags above
 
   // Multi-reference is a FLUX.2-only, local-backend-only feature — local.js's
   // buildArgs only emits --reference-images/--reference-strengths inside the

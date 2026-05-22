@@ -416,15 +416,13 @@ export async function renderCharacterReferenceSheet(universeId, entryId, options
   // first-class. External SD-API has no multi-zone layout support, so it
   // gets a clear remediation rather than a silently-degraded render.
   const activeMode = settings.imageGen?.mode || IMAGE_GEN_MODE.LOCAL;
-  // Force-disable autoClean for reference-sheet renders regardless of the
-  // user's settings.imageGen[mode].autoClean. The autoclean pass re-encodes
-  // the PNG (c2pa strip + canonicalize) which JPEG-style lossy-compresses
-  // the rendered annotation text — readable labels in the raw render come
-  // out blurred / illegible after the round-trip. Sheets ship with their
-  // annotations as the actual product, so the text fidelity loss is not
-  // an acceptable trade-off here. Other render paths (image-gen page,
-  // pipeline, Universe Builder batch) keep honoring the user setting.
-  const autoClean = false;
+  // Sheet renders hard-code cleanC2PA=true (lossless metadata strip — gpt-image
+  // adds a caBX provenance chunk we don't want to ship) and denoise=false
+  // (the median+sharpen pass blurs annotation text; sheets ship with their
+  // text labels AS the product so that pass is never acceptable here).
+  // Other render paths still honor the user's per-mode settings.
+  const cleanC2PA = true;
+  const denoise = false;
   // Codex's image_gen tool can render up to 4K — asking for FLUX's 2048×1536
   // under-uses the available headroom and pixelates annotation text when the
   // user zooms. resolveSheetDimensions bumps codex up to 4K landscape while
@@ -436,7 +434,8 @@ export async function renderCharacterReferenceSheet(universeId, entryId, options
     negativePrompt,
     width,
     height,
-    autoClean,
+    cleanC2PA,
+    denoise,
   };
 
   let modelId = null;

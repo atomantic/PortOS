@@ -104,7 +104,7 @@ function startProgressPolling(baseUrl, generationId) {
 let activeJob = null;
 export const getActiveJob = () => activeJob;
 
-export async function generateImage({ sdapiUrl, prompt, negativePrompt, width, height, steps, cfgScale, seed, autoClean }) {
+export async function generateImage({ sdapiUrl, prompt, negativePrompt, width, height, steps, cfgScale, seed, cleanC2PA = false, denoise = false }) {
   const baseUrl = validateSdUrl(sdapiUrl);
   const model = await detectModel(baseUrl);
   const isFlux = model?.toLowerCase().includes('flux');
@@ -172,7 +172,7 @@ export async function generateImage({ sdapiUrl, prompt, negativePrompt, width, h
   // Auto-clean BEFORE the SSE complete fires so the URL the client opens
   // serves the cleaned bytes. External mode has no sidecar — pass null so
   // the helper just patches the PNG in place.
-  await autoCleanGeneratedImage({ enabled: autoClean, pngPath, sidecarPath: null, mode: IMAGE_GEN_MODE.EXTERNAL });
+  await autoCleanGeneratedImage({ cleanC2PA, denoise, pngPath, sidecarPath: null, mode: IMAGE_GEN_MODE.EXTERNAL });
   const path = `/data/images/${filename}`;
   console.log(`🖼️ Image saved: ${filename}`);
   activeJob = null;

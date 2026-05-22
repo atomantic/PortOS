@@ -156,18 +156,19 @@ export default function ImageGen() {
   // async modes (local + codex); external is synchronous and runs N=1.
   const [batchCount, setBatchCount] = useState(1);
 
-  // Per-render auto-clean override. Seeded from
-  // `settings.imageGen.{mode}.autoClean` whenever the active mode changes;
-  // the user can flip the checkbox to override the saved default for this
-  // submit. The server's /generate route stamps the resolved value into the
-  // payload so all three dispatch paths (external sync, codex queue, local
-  // queue) see the same boolean.
-  const [autoClean, setAutoClean] = useState(false);
-  // Saved per-mode default — keeps the "(overrides saved default)" hint
+  // Per-render cleaner overrides. Seeded from
+  // `settings.imageGen.{mode}.{cleanC2PA,denoise}` whenever the active mode
+  // changes; the user can flip the checkboxes to override the saved defaults
+  // for this submit. The server's /generate route stamps the resolved values
+  // into the payload so all three dispatch paths see the same booleans.
+  const [cleanC2PA, setCleanC2PA] = useState(true);
+  const [denoise, setDenoise] = useState(false);
+  // Saved per-mode defaults — keeps the "(overrides saved default)" hint
   // reactive to settings reloads. Held as state (not a ref) so when the user
   // edits a saved default in the Settings drawer and closes it, the hint
-  // re-evaluates even if `autoClean` happens to match the new saved value.
-  const [savedAutoCleanByMode, setSavedAutoCleanByMode] = useState({});
+  // re-evaluates even if the local state happens to match the new saved value.
+  const [savedCleanC2PAByMode, setSavedCleanC2PAByMode] = useState({});
+  const [savedDenoiseByMode, setSavedDenoiseByMode] = useState({});
 
   const [generating, setGenerating] = useState(false);
   const [statusMsg, setStatusMsg] = useState('');
@@ -240,10 +241,24 @@ export default function ImageGen() {
   const reloadBackends = useCallback(() => {
     return getSettings().then((s) => {
       const backends = deriveAvailableBackends(s);
-      const savedMap = {
-        external: s?.imageGen?.external?.autoClean === true,
-        local: s?.imageGen?.local?.autoClean === true,
-        codex: s?.imageGen?.codex?.autoClean === true,
+      // Per-mode saved defaults. Legacy `autoClean: true` carries forward as
+      // BOTH new flags so users who had it on don't silently lose denoising.
+      const readSavedForMode = (cfg) => {
+        const legacy = cfg?.autoClean === true;
+        return {
+          cleanC2PA: typeof cfg?.cleanC2PA === 'boolean' ? cfg.cleanC2PA : (legacy || true),
+          denoise: typeof cfg?.denoise === 'boolean' ? cfg.denoise : legacy,
+        };
+      };
+      const c2 = {
+        external: readSavedForMode(s?.imageGen?.external).cleanC2PA,
+        local: readSavedForMode(s?.imageGen?.local).cleanC2PA,
+        codex: readSavedForMode(s?.imageGen?.codex).cleanC2PA,
+      };
+      const dn = {
+        external: readSavedForMode(s?.imageGen?.external).denoise,
+        local: readSavedForMode(s?.imageGen?.local).denoise,
+        codex: readSavedForMode(s?.imageGen?.codex).denoise,
       };
       const saved = s?.imageGen?.mode || IMAGE_GEN_MODE.EXTERNAL;
       // If the user just disabled the currently-selected backend, fall
@@ -257,19 +272,22 @@ export default function ImageGen() {
         : backends.length ? backends[0].id
         : saved;
       setAvailableBackends(backends);
-      setSavedAutoCleanByMode(savedMap);
+      setSavedCleanC2PAByMode(c2);
+      setSavedDenoiseByMode(dn);
       setSelectedMode(next);
-      setAutoClean(savedMap[next] === true);
+      setCleanC2PA(c2[next] === true);
+      setDenoise(dn[next] === true);
     }).catch(() => {});
   }, []);
 
-  // Re-seed the autoClean checkbox when the user manually picks a different
+  // Re-seed the cleaner checkboxes when the user manually picks a different
   // backend chip — without this, switching external→local would leave the
-  // external autoClean value in the form.
+  // external values in the form.
   const handleSelectMode = useCallback((next) => {
     setSelectedMode(next);
-    setAutoClean(savedAutoCleanByMode[next] === true);
-  }, [savedAutoCleanByMode]);
+    setCleanC2PA(savedCleanC2PAByMode[next] === true);
+    setDenoise(savedDenoiseByMode[next] === true);
+  }, [savedCleanC2PAByMode, savedDenoiseByMode]);
 
   useEffect(() => {
     listImageModels().then((m) => {
@@ -586,7 +604,7 @@ export default function ImageGen() {
       negativePrompt: composed.negativePrompt || undefined,
       width, height,
       mode: IMAGE_GEN_MODE.CODEX,
-      autoClean,
+      cleanC2PA, denoise,
     } : {
       prompt: composed.prompt,
       negativePrompt: composed.negativePrompt || undefined,
@@ -599,7 +617,7 @@ export default function ImageGen() {
       loraFilenames: selectedLoras.map((l) => l.filename),
       loraScales: selectedLoras.map((l) => l.scale),
       mode: IMAGE_GEN_MODE.LOCAL,
-      autoClean,
+      cleanC2PA, denoise,
     };
     const hasInitImage = isLocalMode && initImage.source != null;
     // Multi-reference editing is FLUX.2-only; gate the slot read so it can't
@@ -743,7 +761,7 @@ export default function ImageGen() {
           steps: steps ? Number(steps) : 25,
           cfgScale,
           mode: IMAGE_GEN_MODE.EXTERNAL,
-          autoClean,
+          cleanC2PA, denoise,
         };
         if (seed && Number(seed) >= 0) payload.seed = Number(seed);
         const data = await generateImage(payload);
@@ -1168,23 +1186,42 @@ export default function ImageGen() {
             )}
           </div>
 
-          <label
-            className="flex items-center gap-2 text-xs text-gray-400 cursor-pointer select-none"
-            title="Re-encode + denoise this render in place: removes the C2PA metadata chunk (when present) and reduces visible AI artifacts. Does NOT defeat SynthID — gpt-image renders stay detectable by openai.com/synthid after a clean. Overrides the saved Settings → Image Gen default for this generation only."
-          >
-            <input
-              type="checkbox"
-              checked={autoClean}
-              onChange={(e) => setAutoClean(e.target.checked)}
-              className="rounded"
-            />
-            <span>
-              Auto-clean this render
-              {savedAutoCleanByMode[effectiveMode] !== undefined && autoClean !== savedAutoCleanByMode[effectiveMode] && (
-                <span className="ml-1 text-port-warning">(overrides saved default)</span>
-              )}
-            </span>
-          </label>
+          <div className="flex flex-col gap-1 text-xs text-gray-400">
+            <label
+              className="flex items-center gap-2 cursor-pointer select-none"
+              title="Lossless strip of the gpt-image C2PA provenance chunk. Pixels untouched. Overrides the saved Settings → Image Gen default for this render only."
+            >
+              <input
+                type="checkbox"
+                checked={cleanC2PA}
+                onChange={(e) => setCleanC2PA(e.target.checked)}
+                className="rounded"
+              />
+              <span>
+                Clean C2PA
+                {savedCleanC2PAByMode[effectiveMode] !== undefined && cleanC2PA !== savedCleanC2PAByMode[effectiveMode] && (
+                  <span className="ml-1 text-port-warning">(overrides saved default)</span>
+                )}
+              </span>
+            </label>
+            <label
+              className="flex items-center gap-2 cursor-pointer select-none"
+              title="Median + sharpen pass for AI-artifact reduction. WARNING: blurs annotation text and small details. Skip for sheets, infographics, comic panels."
+            >
+              <input
+                type="checkbox"
+                checked={denoise}
+                onChange={(e) => setDenoise(e.target.checked)}
+                className="rounded"
+              />
+              <span>
+                Denoise <span className="text-port-warning">(blurs text)</span>
+                {savedDenoiseByMode[effectiveMode] !== undefined && denoise !== savedDenoiseByMode[effectiveMode] && (
+                  <span className="ml-1 text-port-warning">(overrides saved default)</span>
+                )}
+              </span>
+            </label>
+          </div>
 
           {error && (
             <div className="rounded-lg border border-port-error/40 bg-port-error/10 px-3 py-3 text-xs text-port-error space-y-2">

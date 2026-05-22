@@ -216,7 +216,7 @@ export const buildArgs = ({ pythonPath, model, prompt, negativePrompt, width, he
   return { bin, args };
 };
 
-export async function generateImage({ pythonPath, prompt, negativePrompt = '', modelId = 'dev', width = 1024, height = 1024, steps, guidance, seed, quantize = '8', loraFilenames = [], loraPaths = [], loraScales = [], initImagePath = null, initImageStrength = null, referenceImagePaths = [], referenceImageStrengths = [], jobId: providedJobId = null, autoClean = false }) {
+export async function generateImage({ pythonPath, prompt, negativePrompt = '', modelId = 'dev', width = 1024, height = 1024, steps, guidance, seed, quantize = '8', loraFilenames = [], loraPaths = [], loraScales = [], initImagePath = null, initImageStrength = null, referenceImagePaths = [], referenceImageStrengths = [], jobId: providedJobId = null, cleanC2PA = false, denoise = false }) {
   if (!prompt?.trim()) throw new ServerError('Prompt is required', { status: 400, code: 'VALIDATION_ERROR' });
   // Single-flight is enforced by the mediaJobQueue worker upstream. Direct
   // callers that bypass the queue must not run two concurrent renders — the
@@ -558,9 +558,11 @@ export async function generateImage({ pythonPath, prompt, negativePrompt = '', m
       // --metadata sidecar lives at a slightly different filename shape.
       const sidecar = join(PATHS.images, `${jobId}.metadata.json`);
       await writeFile(sidecar, JSON.stringify(meta, null, 2)).catch(() => {});
-      // Auto-clean (settings.imageGen.local.autoClean) — runs BEFORE the
-      // SSE complete + completed events so subscribers see the cleaned bytes.
-      await autoCleanGeneratedImage({ enabled: autoClean, pngPath: outputPath, sidecarPath: sidecar, mode: IMAGE_GEN_MODE.LOCAL });
+      // Cleaners run BEFORE the SSE complete + completed events so subscribers
+      // see the cleaned bytes. Local FLUX renders never carry C2PA chunks so
+      // cleanC2PA is a no-op on local — denoise is the only mode that does
+      // anything here.
+      await autoCleanGeneratedImage({ cleanC2PA, denoise, pngPath: outputPath, sidecarPath: sidecar, mode: IMAGE_GEN_MODE.LOCAL });
       console.log(`✅ Image generated [${jobId.slice(0, 8)}]: ${filename}`);
       const result = { filename, seed: actualSeed, path: `/data/images/${filename}` };
       broadcastSse(job, { type: 'complete', result });
