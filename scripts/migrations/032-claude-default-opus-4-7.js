@@ -18,12 +18,23 @@
  * Conservative: only rewrites a provider when its `models` array matches one
  * of the known legacy seeded shapes EXACTLY (order-sensitive). A user who
  * curated their own model list (added a private endpoint, dropped sonnet,
- * reordered the list, etc.) is left alone. The tier pointers
- * (`defaultModel`/`lightModel`/`mediumModel`/`heavyModel`) are upgraded *only*
- * when the current pointer is one of the retired ids — so a user who matched
- * the list but pinned a still-current model (e.g. `claude-sonnet-4-6`) keeps
- * their pin. Because the retired-id map covers every member of every legacy
- * shape, no tier pointer can be left referencing a model that's no longer in
+ * reordered the list, etc.) is left alone.
+ *
+ * Tier-pointer policy when a rewrite does happen:
+ *   - `defaultModel`: if it's one of the previously *seeded* defaults
+ *     (`claude-opus-4-6` from data.sample, `claude-sonnet-4-5-20250929`
+ *     from the scaffold route), upgrade to the policy default
+ *     `claude-opus-4-7`. If it's some *other* retired id (a user pinned
+ *     haiku-/opus-4-5-dated as default), fall back to the per-model
+ *     successor — preserving their tier intent (e.g. keep a haiku pin
+ *     small/fast as `claude-haiku-4-5`). A pin to a still-current model
+ *     (e.g. `claude-sonnet-4-6`) is always preserved.
+ *   - `lightModel`/`mediumModel`/`heavyModel`: use the per-model successor
+ *     map (haiku→haiku, sonnet→sonnet, opus→opus). Still-current pins
+ *     are preserved.
+ *
+ * Because the retired-id map covers every member of every legacy shape, no
+ * tier pointer can be left referencing a model that's no longer in
  * `provider.models` after the rewrite (which would otherwise break dropdowns).
  */
 
@@ -46,9 +57,10 @@ const PRIOR_MODELS_SCAFFOLD = [
 const PRIOR_MODELS_SHAPES = [PRIOR_MODELS_DATA_SAMPLE, PRIOR_MODELS_SCAFFOLD];
 const NEW_MODELS = ['claude-haiku-4-5', 'claude-sonnet-4-6', 'claude-opus-4-7'];
 
-// Map of every retired Claude model id → its successor in the new trio. Any
-// tier pointer (`defaultModel`/`lightModel`/`mediumModel`/`heavyModel`) that
-// references a retired id gets upgraded to its successor. Pointers at still-
+// Map of every retired Claude model id → its successor in the new trio.
+// Used by tier pointers (`lightModel`/`mediumModel`/`heavyModel`) — when a
+// pointer references a retired id, it's upgraded to the same-tier successor
+// (keeps a haiku-pinned light slot as haiku-4-5, etc.). Pointers at still-
 // current ids (e.g. `claude-sonnet-4-6`) are NOT in this map, so a hand-pin
 // to a current model is always preserved. Because this covers every retired
 // id, no tier pointer can be left referencing a model that's no longer in
@@ -60,7 +72,17 @@ const RETIRED_TO_SUCCESSOR = {
   'claude-opus-4-6': 'claude-opus-4-7',
 };
 
-const TIER_KEYS = ['defaultModel', 'lightModel', 'mediumModel', 'heavyModel'];
+// `defaultModel` follows a different policy than the tier pointers: when the
+// existing default is one of the previously *seeded* defaults (data.sample's
+// `claude-opus-4-6` or scaffold's `claude-sonnet-4-5-20250929`), upgrade to
+// the policy default `claude-opus-4-7` — this is the migration's stated
+// goal. For any *other* retired-id default (a user who actively pinned
+// haiku-/opus-4-5-dated as their default), fall back to the per-model
+// successor to preserve their tier intent (keep a haiku pin small/fast).
+const SEEDED_DEFAULTS = new Set(['claude-opus-4-6', 'claude-sonnet-4-5-20250929']);
+const POLICY_DEFAULT = 'claude-opus-4-7';
+
+const TIER_POINTER_KEYS = ['lightModel', 'mediumModel', 'heavyModel'];
 
 const TARGET_IDS = ['claude-code', 'claude-code-tui'];
 
@@ -116,13 +138,19 @@ export default {
       }
 
       provider.models = [...NEW_MODELS];
-      for (const key of TIER_KEYS) {
+      // defaultModel: seeded defaults → policy default; other retired ids → per-model successor.
+      if (SEEDED_DEFAULTS.has(provider.defaultModel)) {
+        provider.defaultModel = POLICY_DEFAULT;
+      } else if (RETIRED_TO_SUCCESSOR[provider.defaultModel]) {
+        provider.defaultModel = RETIRED_TO_SUCCESSOR[provider.defaultModel];
+      }
+      for (const key of TIER_POINTER_KEYS) {
         const successor = RETIRED_TO_SUCCESSOR[provider[key]];
         if (successor) {
           provider[key] = successor;
         }
       }
-      touched.push(id);
+      touched.push({ id, defaultModel: provider.defaultModel });
     }
 
     if (touched.length === 0) {
@@ -134,6 +162,7 @@ export default {
     }
 
     await writeFile(providersPath, `${JSON.stringify(config, null, 2)}\n`);
-    console.log(`📝 ${PROVIDERS_REL_PATH}: updated ${touched.join(', ')} to claude-haiku-4-5 / claude-sonnet-4-6 / claude-opus-4-7 (default: claude-opus-4-7)`);
+    const summary = touched.map((t) => `${t.id} (default: ${t.defaultModel})`).join(', ');
+    console.log(`📝 ${PROVIDERS_REL_PATH}: updated ${summary} → models claude-haiku-4-5 / claude-sonnet-4-6 / claude-opus-4-7`);
   },
 };
