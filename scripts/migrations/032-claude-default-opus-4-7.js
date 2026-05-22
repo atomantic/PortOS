@@ -1,23 +1,28 @@
 /**
  * Update Claude CLI/TUI provider defaults to the current model lineup.
  *
- * The previously-seeded model list for `claude-code` and `claude-code-tui`
- * pinned dated identifiers (`claude-haiku-4-5-20251001`,
- * `claude-sonnet-4-5-20250929`, `claude-opus-4-5-20251101`, `claude-opus-4-6`).
+ * Two prior seeded shapes existed for `claude-code` / `claude-code-tui`:
+ *   1. The data.sample 4-item dated list — `claude-haiku-4-5-20251001`,
+ *      `claude-sonnet-4-5-20250929`, `claude-opus-4-5-20251101`,
+ *      `claude-opus-4-6` (defaultModel: `claude-opus-4-6`).
+ *   2. The scaffold-route 3-item dated list — `claude-haiku-4-5-20251001`,
+ *      `claude-sonnet-4-5-20250929`, `claude-opus-4-5-20251101`
+ *      (defaultModel: `claude-sonnet-4-5-20250929`).
+ *
  * The current default is the undated trio (`claude-haiku-4-5`,
  * `claude-sonnet-4-6`, `claude-opus-4-7`) with `claude-opus-4-7` as the
  * defaultModel. Existing installs only pick this up if a migration rewrites
  * their providers.json — `setup-data.js` merges *missing* provider entries
  * but never updates existing ones.
  *
- * Conservative: only rewrites a provider when its `models` array is the
- * exact list this migration knows how to retire. A user who curated their
- * own model list (added a private endpoint, dropped sonnet, etc.) is left
- * alone. The tier pointers (`defaultModel`/`lightModel`/`mediumModel`/
- * `heavyModel`) are upgraded *only* when both the list-shape match holds
- * AND the current pointer is one of the retired ids — so a user who
- * matched the list but hand-pinned a model we no longer ship still keeps
- * their pin.
+ * Conservative: only rewrites a provider when its `models` array matches one
+ * of the known legacy seeded shapes. A user who curated their own model list
+ * (added a private endpoint, dropped sonnet, etc.) is left alone. The tier
+ * pointers (`defaultModel`/`lightModel`/`mediumModel`/`heavyModel`) are
+ * upgraded *only* when both a list-shape match holds AND the current pointer
+ * is one of the truly retired ids — so a user who matched the list but hand-
+ * pinned a model we no longer ship still keeps their pin, and a user who
+ * pinned a still-current model (e.g. `claude-sonnet-4-6`) is not overridden.
  */
 
 import { readFile, writeFile } from 'fs/promises';
@@ -25,16 +30,25 @@ import { join } from 'path';
 
 const PROVIDERS_REL_PATH = 'data/providers.json';
 
-const PRIOR_MODELS = [
+const PRIOR_MODELS_DATA_SAMPLE = [
   'claude-haiku-4-5-20251001',
   'claude-sonnet-4-5-20250929',
   'claude-opus-4-5-20251101',
   'claude-opus-4-6',
 ];
+const PRIOR_MODELS_SCAFFOLD = [
+  'claude-haiku-4-5-20251001',
+  'claude-sonnet-4-5-20250929',
+  'claude-opus-4-5-20251101',
+];
+const PRIOR_MODELS_SHAPES = [PRIOR_MODELS_DATA_SAMPLE, PRIOR_MODELS_SCAFFOLD];
 const NEW_MODELS = ['claude-haiku-4-5', 'claude-sonnet-4-6', 'claude-opus-4-7'];
 
+// `from` lists hold ONLY retired ids — pointers that are still-current models
+// (e.g. `claude-sonnet-4-6`) must not appear here, even if they were never a
+// prior default, so a user hand-pin to a current model is always preserved.
 const TIER_REWRITES = {
-  defaultModel: { from: ['claude-opus-4-6', 'claude-sonnet-4-5-20250929', 'claude-sonnet-4-6'], to: 'claude-opus-4-7' },
+  defaultModel: { from: ['claude-opus-4-6', 'claude-sonnet-4-5-20250929'], to: 'claude-opus-4-7' },
   lightModel:   { from: ['claude-haiku-4-5-20251001'], to: 'claude-haiku-4-5' },
   mediumModel:  { from: ['claude-sonnet-4-5-20250929'], to: 'claude-sonnet-4-6' },
   heavyModel:   { from: ['claude-opus-4-6', 'claude-opus-4-5-20251101'], to: 'claude-opus-4-7' },
@@ -87,7 +101,7 @@ export default {
         alreadyCurrent.push(id);
         continue;
       }
-      if (!sameMembers(provider.models, PRIOR_MODELS)) {
+      if (!PRIOR_MODELS_SHAPES.some((shape) => sameMembers(provider.models, shape))) {
         customized.push(id);
         continue;
       }
