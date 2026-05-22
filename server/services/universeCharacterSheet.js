@@ -36,11 +36,28 @@ import {
   claimPendingSheetSlot, getPendingSheetSlot, releasePendingSheetSlot,
 } from './universeCharacterSheetSlot.js';
 
-// 2048×1536 keeps panel labels legible while still rendering in a single
-// pass on Apple Silicon local backends. Codex / nano-banana ignore the
-// hint past 1536 max edge but still honor the aspect ratio.
+// Local FLUX backend: 2048×1536 keeps panel labels legible while still
+// rendering in a single pass on Apple Silicon.
 const DEFAULT_WIDTH = 2048;
 const DEFAULT_HEIGHT = 1536;
+
+// Codex (gpt-image-2) renders up to 4K. For a character concept sheet with
+// annotation callouts + close-up panels + multi-view turnaround, text is
+// the legibility bottleneck — annotations need enough pixels per glyph to
+// stay readable when the user zooms in. Request 4096×3072 (4:3 landscape,
+// same aspect as the FLUX default so the template layout stays consistent
+// across backends) so the model has room for the panel grid AND the text.
+const CODEX_WIDTH = 4096;
+const CODEX_HEIGHT = 3072;
+
+// Resolve the (width, height) hint per backend mode. The prompt builders
+// return the FLUX-tuned defaults; the renderer overrides for codex so the
+// text annotations land at codex's native hi-res instead of being downsampled
+// from a smaller request.
+function resolveSheetDimensions(mode, builtWidth, builtHeight) {
+  if (mode === IMAGE_GEN_MODE.CODEX) return { width: CODEX_WIDTH, height: CODEX_HEIGHT };
+  return { width: builtWidth || DEFAULT_WIDTH, height: builtHeight || DEFAULT_HEIGHT };
+}
 
 // Resolve the local-mode model id. With pure text-template rendering we no
 // longer depend on FLUX.2-specific init-image / multi-ref flags, so any
@@ -396,12 +413,17 @@ export async function renderCharacterReferenceSheet(universeId, entryId, options
   // applies to character reference-sheet renders the same way it does for
   // /api/image-gen/generate, pipeline, and Universe Builder batch renders.
   const autoClean = resolveAutoClean(undefined, settings, activeMode);
+  // Codex's image_gen tool can render up to 4K — asking for FLUX's 2048×1536
+  // under-uses the available headroom and pixelates annotation text when the
+  // user zooms. resolveSheetDimensions bumps codex up to 4K landscape while
+  // local FLUX keeps its memory-tuned 2048×1536 defaults.
+  const { width, height } = resolveSheetDimensions(activeMode, built.width, built.height);
   const baseParams = {
     mode: activeMode,
     prompt,
     negativePrompt,
-    width: built.width,
-    height: built.height,
+    width,
+    height,
     autoClean,
   };
 

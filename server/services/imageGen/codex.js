@@ -163,8 +163,9 @@ export async function generateImage({
   // Width/height/negative aren't first-class args for Codex's built-in
   // image_gen tool — pass them as natural-language hints inside the prompt.
   // Codex's imagegen skill is prompt-driven; the model decides resolution.
-  // gpt-image-2 honors a quality hint to escape its 1024 default and render
-  // at native hi-res (1024×1536 / 1536×1024 / 1536×1536).
+  // gpt-image-2 supports up to 4K output; the "(high quality)" suffix
+  // pushes it off its 1024 default toward whatever native size best fits
+  // the requested aspect ratio.
   const sizeHint = (width && height) ? ` (${width}x${height})` : '';
   const qualityHint = (width >= 1536 || height >= 1536) ? ' (high quality)' : '';
   const avoidHint = negativePrompt?.trim() ? `\nAvoid: ${negativePrompt.trim()}` : '';
