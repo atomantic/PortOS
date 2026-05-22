@@ -256,8 +256,13 @@ async function exportMediaJobAndAsset(jobId, bucketPath, mediaRecordsDir, cache)
  * Walk a record and collect every (imageJobId, imageRefs, videoPath, sceneVideoJobId)
  * it references. Used by the series exporter to enumerate what to copy. The
  * caller decides whether to fetch + write the media-job records.
+ *
+ * Exported so the peer-sync push pipeline (services/sharing/peerSync.js) can
+ * build its asset manifest from the same field-walk used for share-bucket
+ * exports — both transports MUST agree on what counts as "an asset of this
+ * record" so a missing-assets diff matches what the sender actually owns.
  */
-function collectAssetReferences(record) {
+export function collectAssetReferences(record) {
   const jobIds = new Set();
   const directImageFilenames = new Set();
   const directVideoFilenames = new Set();
