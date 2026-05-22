@@ -1143,6 +1143,29 @@ async function queueEligibleImprovementTasks(state, cosTaskData) {
     task.priorityValue = PRIORITY_VALUES.LOW;
     task.id = `sys-${app.id.slice(0, 8)}-${nextType}-${Date.now().toString(36)}`;
 
+    // Move the generator's multi-line prompt into `metadata.context` so it
+    // survives the COS-TASKS.md round-trip. The on-demand path dispatches the
+    // in-memory task immediately (cosEvents.emit('task:ready', task) with the
+    // unparsed object), so it never round-trips through the markdown — but
+    // the queue path persists first and re-reads from disk on the next
+    // `dequeueNextTask` tick. `generateTasksMarkdown` interpolates the full
+    // `task.description` onto a single line (taskParser.js:268) and
+    // `parseTasksMarkdown` only matches the first line of a `- [ ]` block —
+    // so any newline in `description` corrupts the file (stray `## Phase`
+    // lines become section headers, `- ` lines become new tasks) AND silently
+    // strips the Phase 1–7 instructions on the re-read. `metadata.context` is
+    // newline-escaped via `escapeNewlines`/`unescapeNewlines` (JSON-sentinel
+    // encoding) so it round-trips losslessly. The agent prompt builder
+    // (`cos-agent-briefing.md` + the built-in fallback in
+    // `agentPromptBuilder.js`) renders both `task.description` AND
+    // `task.metadata.context` into the agent's prompt, so the agent still
+    // sees the full Phase 1–7 body.
+    if (typeof task.description === 'string' && task.description.includes('\n')) {
+      task.metadata = task.metadata || {};
+      task.metadata.context = task.description;
+      task.description = firstLine(task.description);
+    }
+
     const newTask = await addTask(task, 'internal', { raw: true });
     if (newTask?.duplicate) continue;
 

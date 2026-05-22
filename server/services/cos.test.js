@@ -667,10 +667,14 @@ describe('cos.js source — priority + capacity invariants', () => {
       'queue path must call generateManagedAppImprovementTaskForType so applyPlanIdMetadata runs + the full prompt is used'
     ).toMatch(/generateManagedAppImprovementTaskForType\s*\(/);
 
+    // Match the call shape, not the specific variable name — `task` could
+    // legitimately be renamed (e.g. `queuedTask`) in a behavior-preserving
+    // refactor. The contract being pinned is "raw:true addTask call to the
+    // internal lane," not the identifier.
     expect(
       fnBody,
       'queue path must persist via addTask with raw:true so the enriched task object survives serialization'
-    ).toMatch(/addTask\s*\(\s*task\s*,\s*['"]internal['"]\s*,\s*\{\s*raw:\s*true\s*\}/);
+    ).toMatch(/addTask\s*\(\s*\w+\s*,\s*['"]internal['"]\s*,\s*\{\s*raw:\s*true\s*\}/);
 
     // The old buggy path called `getTaskDescription` to build a one-line
     // description and then passed app/context/approvalRequired fields to
@@ -679,6 +683,23 @@ describe('cos.js source — priority + capacity invariants', () => {
       fnBody,
       'queue path must NOT use getTaskDescription (one-line stub bypasses prompt enrichment)'
     ).not.toMatch(/getTaskDescription\s*\(/);
+
+    // The generator returns a multi-line `description` (the full Phase 1–7
+    // prompt template). COS-TASKS.md serialization interpolates the whole
+    // description onto a single `- [ ]` line and the parser only matches the
+    // first line, so persisting a multi-line description corrupts the file
+    // AND truncates the prompt on the next `dequeueNextTask` re-read. The
+    // queue path must move the body to `metadata.context` (which IS
+    // newline-escaped) so the agent prompt builder reconstitutes it on
+    // dispatch. Pin both halves of the split.
+    expect(
+      fnBody,
+      'queue path must move multi-line description body to metadata.context (survives markdown round-trip)'
+    ).toMatch(/metadata\.context\s*=\s*\w+\.description/);
+    expect(
+      fnBody,
+      'queue path must collapse description to a single line via firstLine()'
+    ).toMatch(/\.description\s*=\s*firstLine\(/);
   });
 });
 
