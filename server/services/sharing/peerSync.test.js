@@ -110,9 +110,10 @@ afterEach(async () => {
   // otherwise persistPushSuccess can race the rm and leave ENOTEMPTY.
   // Drain BOTH writeTails (peerSync's subscription state AND the tombstone
   // cursor module's separate writeTail, since initCursor writes happen
-  // outside peerSync's lock). Two cycles with a microtask flush between
-  // them — pushes scheduled by the FIRST drain (e.g. ackDeletesUpTo from
-  // a settled push) only enqueue on the next tick.
+  // outside peerSync's lock). Three drain cycles with a 5ms macrotask
+  // delay between them — pushes scheduled by an earlier drain (e.g.
+  // ackDeletesUpTo from a settled push) only enqueue on the next tick, so
+  // we need more than one pass to fully quiesce the writeTail chains.
   for (let i = 0; i < 3; i++) {
     await __resetForTests();
     await __drainCursors();
@@ -154,6 +155,10 @@ describe('peerSync', () => {
       const first = await subscribePeer({ peerId: 'peer-a', recordKind: 'universe', recordId: 'u1' });
       const second = await subscribePeer({ peerId: 'peer-a', recordKind: 'universe', recordId: 'u1' });
       expect(first.id).toBe(second.id);
+      // `created` distinguishes the first insert from the idempotent re-hit so
+      // auto-subscribe helpers can suppress duplicate "🔗 auto-subscribed" logs.
+      expect(first.created).toBe(true);
+      expect(second.created).toBe(false);
       const all = await listPeerSubscriptions();
       expect(all).toHaveLength(1);
     });
@@ -277,6 +282,19 @@ describe('peerSync', () => {
       expect(await autoSubscribeRecordToAllPeers('bogus', 'x')).toEqual([]);
       expect(await autoSubscribeRecordToAllPeers('universe', '')).toEqual([]);
     });
+
+    it('returns [] on re-run — only newly-created subs are reported', async () => {
+      // Idempotent re-subscribe must not re-log "🔗 auto-subscribed" or
+      // re-count existing subs as freshly created. This pins the
+      // `subscribePeer().created` plumbing.
+      vi.mocked(getPeers).mockResolvedValue([
+        { instanceId: 'peer-a', name: 'A', enabled: true, syncCategories: { universe: true } },
+      ]);
+      const first = await autoSubscribeRecordToAllPeers('universe', 'u1');
+      expect(first.map(c => c.peerId)).toEqual(['peer-a']);
+      const second = await autoSubscribeRecordToAllPeers('universe', 'u1');
+      expect(second).toEqual([]);
+    });
   });
 
   describe('autoSubscribePeerToAllRecords', () => {
@@ -285,6 +303,11 @@ describe('peerSync', () => {
       vi.mocked(getSeries).mockResolvedValue({ id: 's1' });
       vi.mocked(listIssues).mockResolvedValue([]);
       vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({}) });
+      // Default: peer is registered + outbound-capable + has both categories
+      // enabled. Individual tests override to verify the gating paths.
+      vi.mocked(getPeers).mockResolvedValue([
+        { instanceId: 'peer-a', name: 'A', enabled: true, syncCategories: { universe: true, pipeline: true } },
+      ]);
     });
 
     it('subscribes every local non-deleted universe to the peer', async () => {
@@ -299,6 +322,58 @@ describe('peerSync', () => {
       vi.mocked(listSeries).mockResolvedValue([{ id: 's1' }, { id: 's2' }]);
       const created = await autoSubscribePeerToAllRecords('peer-a', 'series');
       expect(created.map(c => c.recordId).sort()).toEqual(['s1', 's2']);
+    });
+
+    it('returns [] when the peer is disabled', async () => {
+      // Guard against backfill pushing to a peer the user has explicitly
+      // disabled — the category bit can be stale even after `enabled: false`.
+      vi.mocked(getPeers).mockResolvedValue([
+        { instanceId: 'peer-a', enabled: false, syncCategories: { universe: true } },
+      ]);
+      vi.mocked(listUniverses).mockResolvedValue([{ id: 'u1' }]);
+      const created = await autoSubscribePeerToAllRecords('peer-a', 'universe');
+      expect(created).toEqual([]);
+      expect(await findPeerSubscription('peer-a', 'universe', 'u1')).toBeNull();
+    });
+
+    it('returns [] when the peer is inbound-only', async () => {
+      // Inbound-only peers must not get outbound subscriptions — that would
+      // trigger pushes in violation of the peer's configured directions.
+      vi.mocked(getPeers).mockResolvedValue([
+        { instanceId: 'peer-a', enabled: true, directions: ['inbound'], syncCategories: { universe: true } },
+      ]);
+      vi.mocked(listUniverses).mockResolvedValue([{ id: 'u1' }]);
+      const created = await autoSubscribePeerToAllRecords('peer-a', 'universe');
+      expect(created).toEqual([]);
+      expect(await findPeerSubscription('peer-a', 'universe', 'u1')).toBeNull();
+    });
+
+    it('returns [] when the matching category is no longer enabled', async () => {
+      // Race window: caller saw false→true flip, then the user toggled back
+      // to false before this helper ran. Re-check protects against that.
+      vi.mocked(getPeers).mockResolvedValue([
+        { instanceId: 'peer-a', enabled: true, syncCategories: { universe: false } },
+      ]);
+      vi.mocked(listUniverses).mockResolvedValue([{ id: 'u1' }]);
+      const created = await autoSubscribePeerToAllRecords('peer-a', 'universe');
+      expect(created).toEqual([]);
+    });
+
+    it('returns [] when the peer id is unknown', async () => {
+      vi.mocked(getPeers).mockResolvedValue([]);
+      vi.mocked(listUniverses).mockResolvedValue([{ id: 'u1' }]);
+      const created = await autoSubscribePeerToAllRecords('peer-ghost', 'universe');
+      expect(created).toEqual([]);
+    });
+
+    it('returns [] on re-run — only newly-created subs are reported', async () => {
+      // `subscribePeer` is idempotent; the helper must not double-count
+      // existing subs as freshly created on the second invocation.
+      vi.mocked(listUniverses).mockResolvedValue([{ id: 'u1' }]);
+      const first = await autoSubscribePeerToAllRecords('peer-a', 'universe');
+      expect(first.map(c => c.recordId)).toEqual(['u1']);
+      const second = await autoSubscribePeerToAllRecords('peer-a', 'universe');
+      expect(second).toEqual([]);
     });
 
     it('returns [] for invalid arguments', async () => {

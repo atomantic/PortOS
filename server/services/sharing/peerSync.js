@@ -145,11 +145,12 @@ export async function subscribePeer({ peerId, recordKind, recordId }, opts = {})
     throw makeErr('peerId and recordId are required', ERR_VALIDATION);
   }
 
-  const sub = await withStateLock(async () => {
+  const { sub, created } = await withStateLock(async () => {
     const state = await readState();
     const id = subscriptionId({ peerId, recordKind, recordId });
     const now = new Date().toISOString();
     let existing = state.subscriptions.find((s) => s.id === id);
+    let wasCreated = false;
     if (!existing) {
       existing = {
         id,
@@ -164,8 +165,9 @@ export async function subscribePeer({ peerId, recordKind, recordId }, opts = {})
       };
       state.subscriptions.push(existing);
       await writeState(state);
+      wasCreated = true;
     }
-    return existing;
+    return { sub: existing, created: wasCreated };
   });
   // initCursor manages its own state file; no need to hold the subscription
   // lock across it.
@@ -178,7 +180,12 @@ export async function subscribePeer({ peerId, recordKind, recordId }, opts = {})
       console.log(`⚠️ peerSync: initial push failed for ${sub.id}: ${err.message}`);
     });
   }
-  return sub;
+  // `created` distinguishes a freshly-inserted subscription from an idempotent
+  // hit on an existing one. Auto-subscribe helpers use this to suppress
+  // "🔗 ... auto-subscribed" log spam (and inflated return arrays) on re-runs.
+  // The HTTP route forwards this through `{ subscription }` so REST clients
+  // can also branch on it.
+  return { ...sub, created };
 }
 
 export async function unsubscribePeer(id) {
@@ -247,13 +254,17 @@ export async function autoSubscribeRecordToAllPeers(recordKind, recordId) {
   const peers = await getPeers().catch(() => []);
   const targets = peers.filter(p => isNonEmptyStr(p.instanceId) && peerAllowsOutbound(p) && peerHasCategory(p, recordKind));
   if (targets.length === 0) return [];
+  // Only track + log subscriptions that were *newly created* on this call.
+  // `subscribePeer` is idempotent, so a re-run against already-subscribed
+  // peers would otherwise return the existing subs and emit misleading
+  // "🔗 auto-subscribed" lines on every retry / restart.
   const created = [];
   for (const peer of targets) {
     const sub = await subscribePeer({ peerId: peer.instanceId, recordKind, recordId }).catch((err) => {
       console.log(`⚠️ peerSync: auto-subscribe ${recordKind}/${recordId} → ${peer.name || peer.instanceId} failed: ${err.message}`);
       return null;
     });
-    if (sub) {
+    if (sub && sub.created) {
       created.push({ peerId: peer.instanceId, subscriptionId: sub.id });
       console.log(`🔗 peerSync: auto-subscribed ${recordKind}/${recordId} → ${peer.name || peer.instanceId}`);
     }
@@ -271,6 +282,15 @@ export async function autoSubscribeRecordToAllPeers(recordKind, recordId) {
  */
 export async function autoSubscribePeerToAllRecords(peerId, recordKind) {
   if (!isNonEmptyStr(peerId) || !PEER_SUBSCRIBABLE_KINDS.includes(recordKind)) return [];
+  // Re-check the peer is enabled + outbound-capable + still has the category
+  // turned on. The caller (instances.updatePeer) already saw the false→true
+  // flip inside withData, but this helper is also reachable from other
+  // backfill paths and we don't want to push to an inbound-only peer just
+  // because the category bit was set. Snapshot read is good enough — peer
+  // edits are infrequent compared to subscription pushes.
+  const peers = await getPeers().catch(() => []);
+  const peer = peers.find(p => p.instanceId === peerId);
+  if (!peer || !peerAllowsOutbound(peer) || !peerHasCategory(peer, recordKind)) return [];
   let records = [];
   if (recordKind === 'universe') {
     const { listUniverses } = await import('../universeBuilder.js');
@@ -280,6 +300,9 @@ export async function autoSubscribePeerToAllRecords(peerId, recordKind) {
     records = await listSeries({ includeDeleted: false }).catch(() => []);
   }
   if (records.length === 0) return [];
+  // Only track newly-created subscriptions so re-runs of this helper (e.g. a
+  // second toggle on the same category) don't double-report or noise the
+  // backfill log line with already-subscribed records.
   const created = [];
   for (const rec of records) {
     if (!isNonEmptyStr(rec.id)) continue;
@@ -287,7 +310,7 @@ export async function autoSubscribePeerToAllRecords(peerId, recordKind) {
       console.log(`⚠️ peerSync: backfill-subscribe ${recordKind}/${rec.id} → ${peerId} failed: ${err.message}`);
       return null;
     });
-    if (sub) created.push({ recordId: rec.id, subscriptionId: sub.id });
+    if (sub && sub.created) created.push({ recordId: rec.id, subscriptionId: sub.id });
   }
   if (created.length > 0) {
     console.log(`🔗 peerSync: backfill-subscribed ${created.length} ${recordKind} record(s) → ${peerId}`);
