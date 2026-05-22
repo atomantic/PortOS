@@ -198,11 +198,16 @@ export function pickBlueprintColors(palette) {
 }
 
 /**
- * Blueprint variant — secondary character concept sheet. Annotated turnaround
- * (front / back / side / 3/4 views), close-ups of facial features, costume
- * details, and accessories, all on a clean white background with glowing
- * accent lines over a structured base color. Pure function; same shape as
- * `buildCharacterReferenceSheetPrompt`.
+ * Blueprint variant — professional character concept sheet aesthetic.
+ *
+ * The "blueprint" here is the PRESENTATION (annotation callouts, schematic
+ * line drawings, technical labels arranged around the figure), NOT a literal
+ * blueprint-paper rendering. The character itself is fully illustrated in
+ * the universe's own art style — only the surrounding annotation framework
+ * and callout lines pick up the accent/base palette colors. This matches
+ * the "professional concept art turnaround" look (fully-illustrated
+ * character on a clean white sheet, with technical annotations + close-up
+ * studies framing the multi-view turnaround), not a cyanotype.
  */
 export function buildCharacterBlueprintSheetPrompt(universe, character) {
   if (!universe || !character) {
@@ -211,30 +216,43 @@ export function buildCharacterBlueprintSheetPrompt(universe, character) {
     });
   }
 
+  const styleClause = buildStyleClause(universe);
+  const styleBits = styleClause.startsWith('(none provided') ? '' : styleClause;
+
   const {
     name, role, physical, silhouette, special, visualNotes, wardrobeLine, propsLine,
   } = extractCharacterPromptCommon(character);
   const { accent, base } = pickBlueprintColors(character.colorPalette);
 
-  const subject = role
-    ? `${name} — ${role}`
-    : name;
+  const subject = role ? `${name} — ${role}` : name;
 
+  // Order matters: lead with the high-level layout + style so the model
+  // anchors on "fully illustrated character on white background with
+  // annotation panels", THEN enumerate the character details, and only at
+  // the very end pin down the blueprint accent treatment so it modifies
+  // the annotations rather than the character art.
   const promptParts = [
-    `CHARACTER CONCEPT SHEET of ${subject}, featuring detailed FRONT, BACK, SIDE, and 3/4 views at consistent scale, along with close-up sketches of facial features, costume details, and accessories.`,
+    `Professional CHARACTER CONCEPT SHEET of ${subject} on a clean white background — multiple full-body turnaround views of the same character side by side, surrounded by close-up study panels and annotated callouts.`,
+    styleBits || 'Style: contemporary illustrated character design with confident line work and saturated, intentional color.',
+    `MAIN TURNAROUND (large central area): four full-body views of ${name} at consistent scale and proportion — FRONT view, 3/4 view, SIDE view, BACK view — all fully illustrated in the same color palette and rendering style. The character is FULLY ILLUSTRATED (not line art, not monochrome) and reads as the same person across every angle.`,
     physical ? `Subject reference: ${physical}` : '',
     visualNotes ? `Visual notes: ${visualNotes}` : '',
-    silhouette ? `Silhouette: ${silhouette}` : '',
+    silhouette ? `Silhouette notes: ${silhouette}` : '',
     special ? `Special traits: ${special}` : '',
-    wardrobeLine ? `Costume close-up panels (labeled): ${wardrobeLine}.` : '',
-    propsLine ? `Accessory close-up panels (labeled): ${propsLine}.` : '',
-    `Annotated design notes and clearly labeled components are arranged across the layout in a grid of panels with thin guide lines, callouts, and dimension marks.`,
-    `Rendered in a refined blueprint style with glowing ${accent} accent linework + highlights, over a structured ${base} base design — light interior fills and edge glow in ${accent}, primary geometry and shadow tones in ${base}.`,
-    `Presented on a clean white background with a polished professional character design presentation. Consistent character proportions across every view; do NOT mix art styles between panels.`,
+    `HEAD STUDIES (left or right margin): three to five close-up portraits of ${name} from different angles — front, 3/4, profile, and one expressive pose — illustrated in the same style as the turnaround.`,
+    wardrobeLine
+      ? `COSTUME DETAIL PANELS (margin): labeled close-up cards of distinctive wardrobe pieces — ${wardrobeLine}. Each labeled with material + construction notes.`
+      : 'COSTUME DETAIL PANELS (margin): labeled close-up cards of the character\'s signature garments, fabrics, fastenings, and layering.',
+    propsLine
+      ? `ACCESSORY PANELS (margin): labeled studies of the character's signature props — ${propsLine}.`
+      : 'ACCESSORY PANELS (margin): labeled studies of the character\'s signature accessories, gear, or equipment.',
+    `ANNOTATION FRAMEWORK (filling the negative space around every panel): thin guide lines connect each callout to its detail on the figure. Design notes in clean typography sit beside each panel, with measurement marks, material callouts, component labels, and small schematic line drawings of structural details in the outer margins. Numbered or lettered tags index the callouts.`,
+    `ACCENT TREATMENT: the annotation guide lines, callout boxes, dimension marks, technical schematic linework, label highlights, and small index tags use a refined blueprint-style glowing ${accent} accent color — subtle but consistent across every annotation. Label backgrounds, ruled measurement lines, and technical schematic frames use a structured ${base} as their base tone. The CHARACTER and its costume/props stay rendered in the universe's full color palette — the ${accent}/${base} treatment applies ONLY to the annotation layer wrapping the figure.`,
+    `Presented as a polished professional character design sheet — clean white paper, organized panel layout, consistent character proportions across every view. Do NOT render the character itself as a cyanotype, blueprint-paper line drawing, or monochrome wireframe — the character is fully illustrated; the blueprint feel comes from the annotation framework only.`,
   ].filter(Boolean);
 
   const prompt = promptParts.join('\n\n');
-  const negativePrompt = 'multiple characters in the same panel, photograph, painterly texture, watercolor wash, dark background, cluttered background, text artifacts, watermark, signature, blurry, distorted anatomy, low contrast labels';
+  const negativePrompt = 'cyanotype, blueprint paper background, blue paper background, line-art-only character, monochrome character, wireframe character, multiple different characters in the same panel, photograph, painterly background, watercolor wash, dark background, cluttered background, text artifacts, watermark, signature, blurry, distorted anatomy, low contrast labels';
 
   return {
     prompt,
