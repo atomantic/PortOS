@@ -1,0 +1,499 @@
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { mkdir, rm, writeFile } from 'fs/promises';
+import { join } from 'path';
+import { tmpdir } from 'os';
+
+// We test peerSync.js by stubbing the external dependencies:
+//   - getPeers / getInstanceId from services/instances
+//   - merge*FromSync + getUniverse + getSeries + listIssues
+//   - peerFetch (network)
+// All other logic (subscription store, asset manifest, diff, cursor advance)
+// runs against the real on-disk paths via the tmpdir-redirect pattern below.
+
+import { PATHS } from '../../lib/fileUtils.js';
+
+vi.mock('../instances.js', async () => {
+  return {
+    UNKNOWN_INSTANCE_ID: 'unknown',
+    DEFAULT_SYNC_CATEGORIES: {},
+    getInstanceId: vi.fn(),
+    getPeers: vi.fn(),
+  };
+});
+
+vi.mock('../universeBuilder.js', async () => ({
+  getUniverse: vi.fn(),
+  mergeUniversesFromSync: vi.fn(),
+}));
+
+vi.mock('../pipeline/series.js', async () => ({
+  getSeries: vi.fn(),
+  mergeSeriesFromSync: vi.fn(),
+}));
+
+vi.mock('../pipeline/issues.js', async () => ({
+  listIssues: vi.fn(),
+  mergeIssuesFromSync: vi.fn(),
+}));
+
+vi.mock('../../lib/peerHttpClient.js', async () => ({
+  peerFetch: vi.fn(),
+  peerSocketOptions: {},
+}));
+
+import {
+  PEER_SUBSCRIBABLE_KINDS,
+  listPeerSubscriptions,
+  findPeerSubscription,
+  subscribePeer,
+  unsubscribePeer,
+  unsubscribeAllForPeer,
+  pushRecordToPeer,
+  applyIncomingPush,
+  diffAssetManifestAgainstLocal,
+  buildAssetManifest,
+  __resetForTests,
+} from './peerSync.js';
+
+import { getInstanceId, getPeers } from '../instances.js';
+import { getUniverse, mergeUniversesFromSync } from '../universeBuilder.js';
+import { getSeries, mergeSeriesFromSync } from '../pipeline/series.js';
+import { listIssues, mergeIssuesFromSync } from '../pipeline/issues.js';
+import { peerFetch } from '../../lib/peerHttpClient.js';
+import { listCursors } from './peerTombstoneCursors.js';
+
+let originalDataPath;
+let originalImagesPath;
+
+beforeEach(async () => {
+  originalDataPath = PATHS.data;
+  originalImagesPath = PATHS.images;
+  const tmp = join(tmpdir(), `portos-peer-sync-${Date.now()}-${Math.random()}`);
+  await mkdir(join(tmp, 'sharing'), { recursive: true });
+  await mkdir(join(tmp, 'images'), { recursive: true });
+  PATHS.data = tmp;
+  PATHS.images = join(tmp, 'images');
+
+  // Reset mocks
+  vi.mocked(getInstanceId).mockResolvedValue('local-instance');
+  vi.mocked(getPeers).mockResolvedValue([
+    { instanceId: 'peer-a', name: 'Peer A', host: null, address: '10.0.0.2', port: 5555, directions: ['outbound', 'inbound'] },
+    { instanceId: 'peer-b-inbound-only', name: 'Peer B', host: null, address: '10.0.0.3', port: 5555, directions: ['inbound'] },
+  ]);
+  vi.mocked(peerFetch).mockReset();
+  vi.mocked(mergeUniversesFromSync).mockResolvedValue({ applied: true, count: 1 });
+  vi.mocked(mergeSeriesFromSync).mockResolvedValue({ applied: true, count: 1 });
+  vi.mocked(mergeIssuesFromSync).mockResolvedValue({ applied: true, count: 1 });
+  vi.mocked(getUniverse).mockReset();
+  vi.mocked(getSeries).mockReset();
+  vi.mocked(listIssues).mockReset();
+
+  await __resetForTests();
+  return async () => {
+    // Drain in-flight fire-and-forget pushes before tearing down the tmpdir —
+    // otherwise persistPushSuccess can race the rm and leave ENOTEMPTY.
+    await __resetForTests();
+    await rm(tmp, { recursive: true, force: true });
+    PATHS.data = originalDataPath;
+    PATHS.images = originalImagesPath;
+  };
+});
+
+describe('peerSync', () => {
+  describe('PEER_SUBSCRIBABLE_KINDS', () => {
+    it('exposes the canonical kinds (universe + series only)', () => {
+      // Issues piggyback on series subscriptions — direct issue subs are
+      // intentionally rejected per the Stage 2 design.
+      expect(PEER_SUBSCRIBABLE_KINDS).toEqual(['universe', 'series']);
+    });
+  });
+
+  describe('subscribePeer', () => {
+    it('creates a subscription, initializes the tombstone cursor, and schedules a push', async () => {
+      vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo', updatedAt: '2026-01-01T00:00:00Z' });
+      vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({ missingAssets: [] }) });
+      const sub = await subscribePeer({ peerId: 'peer-a', recordKind: 'universe', recordId: 'u1' });
+      expect(sub.id).toBe('peer-universe-u1-peer-a');
+      expect(sub.peerId).toBe('peer-a');
+      expect(sub.adoptedFromReverse).toBe(false);
+      // Cursor initialized
+      const cursors = await listCursors();
+      expect(cursors['peer-a']).toBeDefined();
+      expect(cursors['peer-a'].subscribedSince).toBeGreaterThan(0);
+    });
+
+    it('is idempotent — re-subscribing returns the existing record without duplicating', async () => {
+      vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo', updatedAt: '2026-01-01T00:00:00Z' });
+      vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({ missingAssets: [] }) });
+      const first = await subscribePeer({ peerId: 'peer-a', recordKind: 'universe', recordId: 'u1' });
+      const second = await subscribePeer({ peerId: 'peer-a', recordKind: 'universe', recordId: 'u1' });
+      expect(first.id).toBe(second.id);
+      const all = await listPeerSubscriptions();
+      expect(all).toHaveLength(1);
+    });
+
+    it('rejects invalid kind', async () => {
+      await expect(
+        subscribePeer({ peerId: 'peer-a', recordKind: 'issue', recordId: 'i1' }),
+      ).rejects.toThrow(/subscribable kinds/);
+    });
+
+    it('rejects missing peerId / recordId', async () => {
+      await expect(
+        subscribePeer({ peerId: '', recordKind: 'universe', recordId: 'u1' }),
+      ).rejects.toThrow(/required/);
+      await expect(
+        subscribePeer({ peerId: 'peer-a', recordKind: 'universe', recordId: '' }),
+      ).rejects.toThrow(/required/);
+    });
+
+    it('does NOT push when adoptedFromReverse=true (avoids ping-pong with the peer that just pushed us)', async () => {
+      // Regression: receiver auto-creates a reverse sub on each incoming push.
+      // If that reverse sub triggered an initial push, we'd ping-pong forever.
+      vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo' });
+      vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({ missingAssets: [] }) });
+      await subscribePeer(
+        { peerId: 'peer-a', recordKind: 'universe', recordId: 'u1' },
+        { adoptedFromReverse: true },
+      );
+      // peerFetch may have been called for some other reason, but NOT
+      // synchronously from this code path. Allow a small wait to be sure.
+      await new Promise((r) => setTimeout(r, 10));
+      expect(peerFetch).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('unsubscribePeer', () => {
+    it('removes the subscription and the peer cursor when no other subs remain for that peer', async () => {
+      vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo' });
+      vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({}) });
+      const sub = await subscribePeer({ peerId: 'peer-a', recordKind: 'universe', recordId: 'u1' });
+      await unsubscribePeer(sub.id);
+      const cursors = await listCursors();
+      expect(cursors['peer-a']).toBeUndefined();
+    });
+
+    it('keeps the peer cursor when other subscriptions to the same peer remain', async () => {
+      vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo' });
+      vi.mocked(getSeries).mockResolvedValue({ id: 's1', name: 'Bar' });
+      vi.mocked(listIssues).mockResolvedValue([]);
+      vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({}) });
+      const sub1 = await subscribePeer({ peerId: 'peer-a', recordKind: 'universe', recordId: 'u1' });
+      await subscribePeer({ peerId: 'peer-a', recordKind: 'series', recordId: 's1' });
+      await unsubscribePeer(sub1.id);
+      const cursors = await listCursors();
+      expect(cursors['peer-a']).toBeDefined();
+    });
+
+    it('throws ERR_NOT_FOUND for unknown id', async () => {
+      await expect(unsubscribePeer('peer-universe-x-peer-a')).rejects.toMatchObject({
+        code: 'PEER_SYNC_SUBSCRIPTION_NOT_FOUND',
+      });
+    });
+  });
+
+  describe('unsubscribeAllForPeer', () => {
+    it('removes every subscription targeting a peer', async () => {
+      vi.mocked(getUniverse).mockResolvedValue({ id: 'u1' });
+      vi.mocked(getSeries).mockResolvedValue({ id: 's1' });
+      vi.mocked(listIssues).mockResolvedValue([]);
+      vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({}) });
+      await subscribePeer({ peerId: 'peer-a', recordKind: 'universe', recordId: 'u1' });
+      await subscribePeer({ peerId: 'peer-a', recordKind: 'series', recordId: 's1' });
+      const result = await unsubscribeAllForPeer('peer-a');
+      expect(result.removed).toHaveLength(2);
+      expect(await findPeerSubscription('peer-a', 'universe', 'u1')).toBeNull();
+    });
+  });
+
+  describe('buildAssetManifest', () => {
+    it('hashes direct image filenames via the sidecar cache', async () => {
+      await writeFile(join(PATHS.images, 'asset-1.png'), Buffer.from('image bytes'));
+      const record = {
+        id: 'u1',
+        characters: [{ imageRefs: ['asset-1.png'] }],
+      };
+      const manifest = await buildAssetManifest(record);
+      expect(manifest).toHaveLength(1);
+      expect(manifest[0].filename).toBe('asset-1.png');
+      expect(manifest[0].kind).toBe('image');
+      expect(manifest[0].sha256).toMatch(/^[a-f0-9]{64}$/);
+    });
+
+    it('skips assets whose file is missing (sender cant ship bytes it doesnt have)', async () => {
+      // Regression: a null-hash entry would make every receiver diff
+      // report this as "missing" even though the sender cant fulfill the
+      // pull, producing a permanent "asset pending" badge in the UI.
+      const record = { id: 'u1', characters: [{ imageRefs: ['ghost.png'] }] };
+      const manifest = await buildAssetManifest(record);
+      expect(manifest).toEqual([]);
+    });
+
+    it('returns an empty manifest for records with no asset refs', async () => {
+      const manifest = await buildAssetManifest({ id: 'u1', name: 'Bare' });
+      expect(manifest).toEqual([]);
+    });
+  });
+
+  describe('diffAssetManifestAgainstLocal', () => {
+    it('returns assets we dont have on disk', async () => {
+      const missing = await diffAssetManifestAgainstLocal([
+        { filename: 'ghost.png', kind: 'image', sha256: 'a'.repeat(64) },
+      ]);
+      expect(missing).toHaveLength(1);
+      expect(missing[0].filename).toBe('ghost.png');
+    });
+
+    it('skips assets we already have with matching sha', async () => {
+      await writeFile(join(PATHS.images, 'have.png'), Buffer.from('hello world'));
+      // "hello world" sha256
+      const local = 'b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9';
+      const missing = await diffAssetManifestAgainstLocal([
+        { filename: 'have.png', kind: 'image', sha256: local },
+      ]);
+      expect(missing).toEqual([]);
+    });
+
+    it('reports assets with mismatched sha as missing (peer has newer bytes)', async () => {
+      await writeFile(join(PATHS.images, 'stale.png'), Buffer.from('old bytes'));
+      const missing = await diffAssetManifestAgainstLocal([
+        { filename: 'stale.png', kind: 'image', sha256: 'b'.repeat(64) },
+      ]);
+      expect(missing).toHaveLength(1);
+    });
+
+    it('ignores malformed manifest entries silently', async () => {
+      const missing = await diffAssetManifestAgainstLocal([
+        null,
+        'not-an-object',
+        { filename: '', kind: 'image' },
+        { filename: 'foo.png', kind: 'mystery' },
+      ]);
+      expect(missing).toEqual([]);
+    });
+  });
+
+  describe('pushRecordToPeer', () => {
+    it('refuses to push when our instance id is unknown', async () => {
+      vi.mocked(getInstanceId).mockResolvedValue('unknown');
+      const result = await pushRecordToPeer({
+        id: 's', peerId: 'peer-a', recordKind: 'universe', recordId: 'u1',
+      });
+      expect(result.pushed).toBe(false);
+      expect(result.reason).toBe('unknown-local-instance');
+      expect(peerFetch).not.toHaveBeenCalled();
+    });
+
+    it('refuses to push when the target peer is missing from the registry', async () => {
+      const result = await pushRecordToPeer({
+        id: 's', peerId: 'peer-ghost', recordKind: 'universe', recordId: 'u1',
+      });
+      expect(result.pushed).toBe(false);
+      expect(result.reason).toBe('peer-not-found');
+    });
+
+    it('returns record-not-found when the record id no longer exists', async () => {
+      vi.mocked(getUniverse).mockResolvedValue(null);
+      const result = await pushRecordToPeer({
+        id: 's', peerId: 'peer-a', recordKind: 'universe', recordId: 'gone',
+      });
+      expect(result.pushed).toBe(false);
+      expect(result.reason).toBe('record-not-found');
+    });
+
+    it('short-circuits when the record hashes match the last push (no-op edits dont round-trip)', async () => {
+      vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo' });
+      vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({}) });
+      const sub = await subscribePeer({ peerId: 'peer-a', recordKind: 'universe', recordId: 'u1' });
+      // wait out the initial push side-effects
+      await new Promise((r) => setTimeout(r, 5));
+      const refreshed = await findPeerSubscription('peer-a', 'universe', 'u1');
+      expect(refreshed.lastPushedHash).toBeTruthy();
+      vi.mocked(peerFetch).mockClear();
+      const result = await pushRecordToPeer(refreshed);
+      expect(result.pushed).toBe(false);
+      expect(result.reason).toBe('unchanged');
+      expect(peerFetch).not.toHaveBeenCalled();
+    });
+
+    it('persists ackedDeletesUpTo from the peer response to the tombstone cursor', async () => {
+      vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo' });
+      vi.mocked(peerFetch).mockResolvedValue({
+        ok: true,
+        json: async () => ({ missingAssets: [], ackedDeletesUpTo: 5000 }),
+      });
+      const sub = await subscribePeer({ peerId: 'peer-a', recordKind: 'universe', recordId: 'u1' });
+      // wait for the initial push to land
+      await new Promise((r) => setTimeout(r, 20));
+      const cursors = await listCursors();
+      expect(cursors['peer-a'].lastAckedDeleteAt).toBe(5000);
+    });
+
+    it('handles a network-level failure without throwing (returns pushed:false)', async () => {
+      vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo' });
+      vi.mocked(peerFetch).mockRejectedValue(new Error('ECONNREFUSED'));
+      const result = await pushRecordToPeer({
+        id: 's', peerId: 'peer-a', recordKind: 'universe', recordId: 'u1',
+      });
+      expect(result.pushed).toBe(false);
+      expect(result.reason).toBe('network');
+    });
+
+    it('bundles child issues with a series push', async () => {
+      vi.mocked(getSeries).mockResolvedValue({ id: 's1', name: 'Series' });
+      vi.mocked(listIssues).mockResolvedValue([
+        { id: 'i1', seriesId: 's1', number: 1 },
+        { id: 'i2', seriesId: 's1', number: 2 },
+      ]);
+      let captured = null;
+      vi.mocked(peerFetch).mockImplementation(async (_url, opts) => {
+        captured = JSON.parse(opts.body);
+        return { ok: true, json: async () => ({}) };
+      });
+      await pushRecordToPeer({
+        id: 's', peerId: 'peer-a', recordKind: 'series', recordId: 's1',
+      });
+      expect(captured.kind).toBe('series');
+      expect(captured.issues).toHaveLength(2);
+      expect(captured.issues.map((i) => i.id)).toEqual(['i1', 'i2']);
+    });
+  });
+
+  describe('applyIncomingPush', () => {
+    it('rejects payloads without a known kind', async () => {
+      await expect(applyIncomingPush({ kind: 'mystery', record: { id: 'x' }, sourceInstanceId: 'peer-a' }))
+        .rejects.toThrow(/unknown kind/);
+    });
+
+    it('rejects pushes from sourceInstanceId="unknown"', async () => {
+      // The sender's instance id is the identity we hang the cursor on.
+      // Accepting an "unknown" sourceInstanceId would poison the cursor
+      // table with a synthetic key that never gets cleaned up.
+      await expect(applyIncomingPush({
+        kind: 'universe',
+        record: { id: 'u1' },
+        sourceInstanceId: 'unknown',
+      })).rejects.toThrow(/sourceInstanceId required/);
+    });
+
+    it('rejects payloads with a missing/malformed record', async () => {
+      await expect(applyIncomingPush({
+        kind: 'universe',
+        record: 'not-an-object',
+        sourceInstanceId: 'peer-a',
+      })).rejects.toThrow(/object with a string id/);
+    });
+
+    it('dispatches universe pushes through mergeUniversesFromSync', async () => {
+      await applyIncomingPush({
+        kind: 'universe',
+        record: { id: 'u1', name: 'Foo', deleted: false, deletedAt: null },
+        assetManifest: [],
+        sourceInstanceId: 'peer-a',
+      });
+      expect(mergeUniversesFromSync).toHaveBeenCalledWith([
+        expect.objectContaining({ id: 'u1' }),
+      ]);
+    });
+
+    it('dispatches series pushes through mergeSeriesFromSync AND mergeIssuesFromSync for bundled issues', async () => {
+      await applyIncomingPush({
+        kind: 'series',
+        record: { id: 's1', deleted: false, deletedAt: null },
+        issues: [{ id: 'i1', seriesId: 's1', deleted: false, deletedAt: null }],
+        assetManifest: [],
+        sourceInstanceId: 'peer-a',
+      });
+      expect(mergeSeriesFromSync).toHaveBeenCalled();
+      expect(mergeIssuesFromSync).toHaveBeenCalledWith([
+        expect.objectContaining({ id: 'i1' }),
+      ]);
+    });
+
+    it('reports missing assets in the response', async () => {
+      const result = await applyIncomingPush({
+        kind: 'universe',
+        record: { id: 'u1' },
+        assetManifest: [{ filename: 'absent.png', kind: 'image', sha256: 'a'.repeat(64) }],
+        sourceInstanceId: 'peer-a',
+      });
+      expect(result.missingAssets).toHaveLength(1);
+    });
+
+    it('advances the sender cursor when the payload carries a tombstone', async () => {
+      await applyIncomingPush({
+        kind: 'universe',
+        record: { id: 'u1', deleted: true, deletedAt: '2026-01-01T00:00:00Z' },
+        assetManifest: [],
+        sourceInstanceId: 'peer-a',
+      });
+      const cursors = await listCursors();
+      expect(cursors['peer-a'].lastAckedDeleteAt).toBe(Date.parse('2026-01-01T00:00:00Z'));
+    });
+
+    it('picks the MAX deletedAt across record + bundled issues for the cursor advance', async () => {
+      // Regression: if only `record.deletedAt` is considered, a series push
+      // bundling multiple tombstoned issues would advance the cursor only
+      // by the series' own deletion time — newer issue tombstones in the
+      // same push would never be acknowledged until a separate push lands.
+      await applyIncomingPush({
+        kind: 'series',
+        record: { id: 's1', deleted: true, deletedAt: '2026-01-01T00:00:00Z' },
+        issues: [
+          { id: 'i1', deleted: true, deletedAt: '2026-03-01T00:00:00Z' },
+          { id: 'i2', deleted: false },
+        ],
+        assetManifest: [],
+        sourceInstanceId: 'peer-a',
+      });
+      const cursors = await listCursors();
+      expect(cursors['peer-a'].lastAckedDeleteAt).toBe(Date.parse('2026-03-01T00:00:00Z'));
+    });
+
+    it('auto-creates a reverse subscription back to the sender', async () => {
+      await applyIncomingPush({
+        kind: 'universe',
+        record: { id: 'u1' },
+        assetManifest: [],
+        sourceInstanceId: 'peer-a',
+      });
+      const sub = await findPeerSubscription('peer-a', 'universe', 'u1');
+      expect(sub).not.toBeNull();
+      expect(sub.adoptedFromReverse).toBe(true);
+    });
+
+    it('does NOT create a reverse subscription when the sender peer is configured as inbound-only', async () => {
+      // peer-b-inbound-only has directions: ['inbound']. The user explicitly
+      // told this instance not to push back to them — auto-creating a
+      // reverse subscription would override that intent.
+      const result = await applyIncomingPush({
+        kind: 'universe',
+        record: { id: 'u1' },
+        assetManifest: [],
+        sourceInstanceId: 'peer-b-inbound-only',
+      });
+      expect(result.reverseSubscriptionCreated).toBe(false);
+      const sub = await findPeerSubscription('peer-b-inbound-only', 'universe', 'u1');
+      expect(sub).toBeNull();
+    });
+
+    it('does NOT duplicate a reverse subscription on subsequent pushes', async () => {
+      vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo' });
+      vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({}) });
+      await applyIncomingPush({
+        kind: 'universe',
+        record: { id: 'u1' },
+        assetManifest: [],
+        sourceInstanceId: 'peer-a',
+      });
+      await applyIncomingPush({
+        kind: 'universe',
+        record: { id: 'u1', updatedAt: '2026-01-02T00:00:00Z' },
+        assetManifest: [],
+        sourceInstanceId: 'peer-a',
+      });
+      const all = await listPeerSubscriptions({ peerId: 'peer-a' });
+      expect(all).toHaveLength(1);
+    });
+  });
+});
