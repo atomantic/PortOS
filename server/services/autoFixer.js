@@ -12,8 +12,52 @@ import { errorEvents } from '../lib/errorHandler.js';
 const recentErrors = new Map();
 const ERROR_DEDUPE_WINDOW = 60000; // 1 minute
 
+// Defer task creation so an in-flight fallback retry (driven by
+// promptRunner.js) has a chance to handle the failure first. If
+// `noteFallbackHandled(provider, model)` fires within the window we cancel
+// the task — the user got a result via fallback and shouldn't see noise in
+// their plan. 5s covers the common case where the fallback is a fast API
+// (claude-code, codex) responding within seconds; a slower fallback whose
+// retry exceeds this window will produce both a result AND an investigation
+// task, which is acceptable (the user sees what failed and what recovered).
+const TASK_DEFER_MS = 5000;
+// Invariant: every path that removes a timer here MUST also delete the
+// matching map entry (the setTimeout callback, noteFallbackHandled, and
+// _resetAutoFixerForTests all uphold this) — otherwise the map grows
+// unbounded across the lifetime of the process.
+const deferredTasks = new Map(); // errorKey -> { timer }
+
 // Store pending tasks when CoS is not running (for later pickup)
 const pendingAutoFixTasks = [];
+
+function aiProviderErrorKey(providerName, model) {
+  return `AI_PROVIDER_EXECUTION_FAILED-${providerName}-${model}`;
+}
+
+/**
+ * Cancel a deferred investigation task for `provider`/`model` because a
+ * fallback retry succeeded. Called from `runPromptThroughProvider` after
+ * a successful fallback — the user got their result, so the queued task
+ * would be noise. Also clears the dedupe entry so a *future* failure of
+ * the same provider can still raise a task (otherwise the dedupe window
+ * would silently suppress real failures for up to 60s).
+ *
+ * `provider` matches `ctx.provider` (the provider's display name, not id)
+ * because that's what the failure event payload uses — see the
+ * `onRunFailed` hook in server/index.js.
+ */
+export function noteFallbackHandled({ provider, model }) {
+  const errorKey = aiProviderErrorKey(provider, model);
+  const pending = deferredTasks.get(errorKey);
+  if (pending) {
+    clearTimeout(pending.timer);
+    deferredTasks.delete(errorKey);
+    recentErrors.delete(errorKey);
+    console.log(`✅ Suppressed investigation task: fallback handled failure for ${provider} (${model})`);
+    return true;
+  }
+  return false;
+}
 
 /**
  * Check if an error is a duplicate within the dedupe window
@@ -80,22 +124,49 @@ export function clearPendingAutoFixTasks() {
 }
 
 /**
- * Handle AI provider execution failures specifically
- * These are always tracked and can create tasks even if CoS is not running
+ * Test-only: drop all deferred timers + dedupe entries so the next call
+ * starts from a clean slate. Production code paths never call this.
+ */
+export function _resetAutoFixerForTests() {
+  for (const { timer } of deferredTasks.values()) clearTimeout(timer);
+  deferredTasks.clear();
+  recentErrors.clear();
+  pendingAutoFixTasks.length = 0;
+}
+
+/**
+ * Defer task creation by TASK_DEFER_MS. If `noteFallbackHandled` is called
+ * for the same provider/model within the window, the timer is cancelled
+ * and no task is created. Otherwise, the deferred handler runs and
+ * creates the investigation task.
  */
 async function handleAIProviderError(error) {
   const ctx = error.context || {};
-  // Use stable key based on provider + model to prevent duplicates from different runIds
-  // This ensures we only create one task per unique provider/model combination
-  const errorKey = `${error.code}-${ctx.provider}-${ctx.model}`;
+  const errorKey = aiProviderErrorKey(ctx.provider, ctx.model);
 
   if (isDuplicateError(errorKey)) {
     console.log(`⏭️ Skipping duplicate AI provider error: ${ctx.provider} (${ctx.model})`);
     return;
   }
+  if (deferredTasks.has(errorKey)) {
+    return;
+  }
 
-  console.log(`🤖 AI provider error detected: ${ctx.provider} - run ${ctx.runId}`);
+  console.log(`🤖 AI provider error detected: ${ctx.provider} - run ${ctx.runId} (deferring ${TASK_DEFER_MS}ms for possible fallback retry)`);
 
+  const timer = setTimeout(() => {
+    deferredTasks.delete(errorKey);
+    createAIProviderInvestigationTask(error).catch(err => {
+      console.error(`❌ Deferred AI provider task creation failed: ${err.message}`);
+    });
+  }, TASK_DEFER_MS);
+  // Keep the timer from preventing process exit (e.g. in tests / shutdown).
+  timer.unref?.();
+  deferredTasks.set(errorKey, { timer });
+}
+
+async function createAIProviderInvestigationTask(error) {
+  const ctx = error.context || {};
   // Build specialized context for AI provider errors
   const context = buildAIProviderErrorContext(error);
 

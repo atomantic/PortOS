@@ -27,13 +27,39 @@
  */
 
 import { createRun, executeApiRun, executeCliRun, extractBakedModel, hasModelFlag, stopRun, patchRunMetadata } from '../services/runner.js';
-import { getActiveProvider, getProviderById } from '../services/providers.js';
+import { getActiveProvider, getProviderById, getAllProviders } from '../services/providers.js';
+import { noteFallbackHandled } from '../services/autoFixer.js';
 import { executeTuiRun } from './tuiPromptRunner.js';
 import { ServerError } from './errorHandler.js';
 import { PROVIDER_TYPES } from './aiToolkit/constants.js';
+import { analyzeError, ERROR_CATEGORIES } from './aiToolkit/errorDetection.js';
+import { getAIToolkitInstance } from './aiToolkitState.js';
 
 export const DEFAULT_TIMEOUT_MS = 300000;
 const APPEND_CHUNK = (acc, chunk) => acc + (typeof chunk === 'string' ? chunk : (chunk?.text || ''));
+
+// Cooldown per error category — how long the failed provider is marked
+// unavailable so subsequent calls skip it and proactively use the fallback.
+// USAGE_LIMIT is absent because `markUsageLimit` parses the wait time
+// from the error body (e.g. "resets 5pm"). Values target the timescale
+// the user can plausibly recover the underlying cause:
+//   RATE_LIMIT      — 5m: provider-side counter typically clears in minutes
+//   AUTH_ERROR      — 15m: usually a config issue that needs human action
+//   MODEL_NOT_FOUND — 30m: also config; longer because retry is unlikely
+//   QUOTA_EXCEEDED  — 60m: billing/credits; retry sooner is futile
+//   NETWORK_ERROR   — 2m: usually a transient hiccup
+//   TIMEOUT/UNKNOWN — 1m: short enough to retry, long enough to skip
+//                     while the immediate workload retries via fallback
+const COOLDOWN_MS_BY_CATEGORY = {
+  [ERROR_CATEGORIES.RATE_LIMIT]: 5 * 60 * 1000,
+  [ERROR_CATEGORIES.AUTH_ERROR]: 15 * 60 * 1000,
+  [ERROR_CATEGORIES.MODEL_NOT_FOUND]: 30 * 60 * 1000,
+  [ERROR_CATEGORIES.QUOTA_EXCEEDED]: 60 * 60 * 1000,
+  [ERROR_CATEGORIES.NETWORK_ERROR]: 2 * 60 * 1000,
+  [ERROR_CATEGORIES.TIMEOUT]: 60 * 1000,
+  [ERROR_CATEGORIES.UNKNOWN]: 60 * 1000,
+};
+const DEFAULT_COOLDOWN_MS = 60 * 1000;
 
 /**
  * Returns true when the runner+provider pair will actually honor a
@@ -165,27 +191,166 @@ export function assertProvider(provider, { message, code, status = 503 } = {}) {
  *   — `model` is the resolved model that actually executed (null when
  *   neither override nor provider.defaultModel applies).
  */
-export async function runPromptThroughProvider({ provider, prompt, source, model, runId: callerRunId, onData: onDataCallback, timeout: timeoutOverride, cwd: cwdOverride }) {
+export async function runPromptThroughProvider(args) {
   // Validate inputs up front so an accidentally-null `provider` (or one
   // missing `id`/`type`) surfaces a clear error here instead of throwing
   // a downstream TypeError on `provider.id` inside createRun or on the
   // provider.type dispatch below.
-  if (!provider || typeof provider !== 'object') {
+  if (!args?.provider || typeof args.provider !== 'object') {
     throw new Error('runPromptThroughProvider: provider is required');
   }
-  if (typeof provider.id !== 'string' || !provider.id) {
+  if (typeof args.provider.id !== 'string' || !args.provider.id) {
     throw new Error('runPromptThroughProvider: provider.id must be a non-empty string');
   }
-  if (provider.type !== PROVIDER_TYPES.CLI && provider.type !== PROVIDER_TYPES.API && provider.type !== PROVIDER_TYPES.TUI) {
-    throw new Error(`Unsupported provider type: ${provider.type}`);
+  if (args.provider.type !== PROVIDER_TYPES.CLI && args.provider.type !== PROVIDER_TYPES.API && args.provider.type !== PROVIDER_TYPES.TUI) {
+    throw new Error(`Unsupported provider type: ${args.provider.type}`);
   }
-  if (typeof prompt !== 'string' || !prompt.length) {
+  if (typeof args.prompt !== 'string' || !args.prompt.length) {
     throw new Error('runPromptThroughProvider: prompt must be a non-empty string');
   }
-  if (typeof source !== 'string' || !source.length) {
+  if (typeof args.source !== 'string' || !args.source.length) {
     throw new Error('runPromptThroughProvider: source must be a non-empty string');
   }
 
+  // Capture the user's intended provider+model BEFORE any swap so we can
+  // suppress the right deferred investigation task on a successful retry.
+  // After a fallback retry succeeds, `noteFallbackHandled` is called with
+  // these — that matches the (provider, model) the autoFixer dedupe key
+  // was built from in `server/index.js`'s onRunFailed hook.
+  const intendedProviderName = args.provider.name || args.provider.id;
+  const intendedModel = resolveEffectiveModel(args.provider, args.model);
+
+  try {
+    return await executeProviderRunOnce(args);
+  } catch (firstError) {
+    // The runner already wrote a failed metadata.json and the onRunFailed
+    // hook in server/index.js queued a deferred investigation task. If a
+    // fallback is configured + available, mark the failed provider
+    // unavailable so subsequent calls skip it, then retry once. No
+    // fallback ⇒ let the queued investigation task fire.
+    const failed = firstError.effectiveProvider || args.provider;
+    const fallback = await pickFallbackProvider(failed);
+    if (!fallback) {
+      throw stripFallbackContext(firstError);
+    }
+
+    await markProviderUnavailableFromError(failed, firstError.message).catch(err => {
+      console.error(`❌ markUnavailable failed for ${failed.id}: ${err.message}`);
+    });
+
+    console.log(`⚡ Retrying ${args.source} with fallback ${fallback.name} (primary ${failed.name} failed: ${firstError.message})`);
+
+    // Run the fallback as a fresh attempt — explicit `model: undefined`
+    // so the fallback picks its own default rather than inheriting the
+    // primary's model id (which usually doesn't exist on the fallback).
+    let fallbackResult;
+    try {
+      fallbackResult = await executeProviderRunOnce({
+        ...args,
+        provider: fallback,
+        model: undefined,
+        runId: undefined, // fresh runId so the failed primary's record stays intact
+      });
+    } catch (fallbackError) {
+      // Both failed — let both deferred tasks fire and rethrow.
+      throw stripFallbackContext(fallbackError);
+    }
+
+    // Fallback succeeded — cancel the queued investigation task for the
+    // user's intended provider so they don't see a noisy "investigate"
+    // entry in their plan for a failure that was auto-recovered.
+    noteFallbackHandled({ provider: intendedProviderName, model: intendedModel });
+
+    return {
+      ...fallbackResult,
+      usedFallback: true,
+      fallbackFrom: { id: failed.id, name: failed.name },
+    };
+  }
+}
+
+/**
+ * Pick a fallback provider for `failed`. Honors the failed provider's
+ * `fallbackProvider` field first, then the toolkit's system priority
+ * list — but EXCLUDES `failed.id` from both so we never retry against
+ * the same provider that just failed. Returns null when no usable
+ * fallback exists.
+ */
+async function pickFallbackProvider(failed) {
+  const toolkit = getAIToolkitInstance();
+  const providerStatus = toolkit?.services?.providerStatus;
+  if (!providerStatus) return null;
+
+  const all = await getAllProviders().catch(() => null);
+  if (!all?.providers) return null;
+  const providersMap = {};
+  for (const p of all.providers) providersMap[p.id] = p;
+
+  // We don't pass a task-level fallback (the caller doesn't surface one
+  // through runPromptThroughProvider today), so getFallbackProvider walks
+  // provider.fallbackProvider → system priority list. It already filters
+  // by enabled + isAvailable, and skips `failed.id` in the system loop.
+  const picked = providerStatus.getFallbackProvider(failed.id, providersMap);
+  return picked?.provider || null;
+}
+
+/**
+ * Translate the runner's failure into an availability marker on the
+ * failed provider. Uses analyzeError to categorize and pick a cooldown;
+ * usage-limit failures route through `markUsageLimit` so the parsed
+ * wait time (e.g. "reset 5pm") is honored.
+ *
+ * Skips the mark when the toolkit's `executeApiRun` has already marked
+ * the provider unavailable inline (it does this for RATE_LIMIT and
+ * USAGE_LIMIT before firing onComplete) — re-marking would double-
+ * increment `failureCount` and re-write the status file for no gain.
+ */
+async function markProviderUnavailableFromError(failed, errorMessage) {
+  const toolkit = getAIToolkitInstance();
+  const providerStatus = toolkit?.services?.providerStatus;
+  if (!providerStatus) return;
+  if (!providerStatus.isAvailable(failed.id)) return;
+
+  const analysis = analyzeError(errorMessage || '');
+  const category = analysis?.category || ERROR_CATEGORIES.UNKNOWN;
+
+  if (category === ERROR_CATEGORIES.USAGE_LIMIT) {
+    await providerStatus.markUsageLimit(failed.id, {
+      message: analysis.message || errorMessage,
+      waitTime: analysis.waitTime,
+    });
+    return;
+  }
+
+  const waitTimeMs = COOLDOWN_MS_BY_CATEGORY[category] ?? DEFAULT_COOLDOWN_MS;
+  await providerStatus.markUnavailable(failed.id, {
+    reason: category,
+    message: analysis?.message || errorMessage || `Provider ${failed.name || failed.id} failed`,
+    waitTimeMs,
+  });
+}
+
+// Strip the fallback-context fields off an error before rethrowing so
+// callers don't see internal metadata they didn't ask for. The
+// `.effectiveProvider`/`.effectiveModel` annotations exist solely for
+// runPromptThroughProvider's retry path.
+function stripFallbackContext(err) {
+  if (err && typeof err === 'object') {
+    delete err.effectiveProvider;
+    delete err.effectiveModel;
+  }
+  return err;
+}
+
+/**
+ * Inner helper: execute one attempt against `args.provider`. Returns
+ * { text, runId, model } on success. On failure, throws an Error with
+ * `effectiveProvider` and `effectiveModel` attached so the retry path
+ * knows which provider actually ran (createRun may have proactively
+ * swapped to a fallback when the requested provider was already marked
+ * unavailable).
+ */
+async function executeProviderRunOnce({ provider, prompt, source, model, runId: callerRunId, onData: onDataCallback, timeout: timeoutOverride, cwd: cwdOverride }) {
   // Resolve the model that'll actually run BEFORE creating the run record
   // so the record reflects reality. resolveEffectiveModel handles both
   // the override-honored fallback chain AND the args-baked-CLI case
@@ -251,7 +416,20 @@ export async function runPromptThroughProvider({ provider, prompt, source, model
     let apiTimeoutHandle = null;
 
     const safeResolve = (value) => { if (!settled) { settled = true; if (apiTimeoutHandle) clearTimeout(apiTimeoutHandle); resolve(value); } };
-    const safeReject = (err) => { if (!settled) { settled = true; if (apiTimeoutHandle) clearTimeout(apiTimeoutHandle); reject(err); } };
+    const safeReject = (err) => {
+      if (settled) return;
+      settled = true;
+      if (apiTimeoutHandle) clearTimeout(apiTimeoutHandle);
+      // Annotate so runPromptThroughProvider's retry path knows which
+      // provider actually ran (createRun may have swapped to a fallback
+      // before this attempt) and which model is the dedupe key for
+      // suppressing the queued investigation task on a successful retry.
+      if (err && typeof err === 'object') {
+        err.effectiveProvider = effectiveProvider;
+        err.effectiveModel = effectiveModel;
+      }
+      reject(err);
+    };
 
     // TUI runs discard `text` and use `result.text` from executeTuiRun (see
     // onComplete below), so the per-chunk APPEND_CHUNK concat is pure waste —

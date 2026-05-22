@@ -24,15 +24,36 @@ vi.mock('./tuiPromptRunner.js', () => ({
 
 // providers.js is a compatibility shim that throws when the toolkit hasn't
 // been initialized via setAIToolkit(). Mock it so the resolveProviderAndModel
-// tests can drive the active/by-id lookups directly.
+// tests can drive the active/by-id lookups directly. `getAllProviders` is
+// mocked too so the retry-with-fallback path (which enumerates providers to
+// look up the configured fallback) can be driven directly from tests.
 vi.mock('../services/providers.js', () => ({
   getActiveProvider: vi.fn(),
   getProviderById: vi.fn(),
+  getAllProviders: vi.fn().mockResolvedValue({ activeProvider: null, providers: [] }),
+}));
+
+// autoFixer.js is called from runPromptThroughProvider on a successful
+// fallback retry to cancel the deferred investigation task. Mock the export
+// to a spy so tests can assert it was/wasn't invoked without wiring up the
+// full task system.
+vi.mock('../services/autoFixer.js', () => ({
+  noteFallbackHandled: vi.fn(),
+}));
+
+// aiToolkitState lookups gate the retry path on a real providerStatus
+// service being present. By default the mock returns null so the retry
+// short-circuits and the original error is rethrown — individual tests
+// override the return value to enable the retry branch.
+vi.mock('./aiToolkitState.js', () => ({
+  getAIToolkitInstance: vi.fn().mockReturnValue(null),
 }));
 
 const runner = await import('../services/runner.js');
 const tuiRunner = await import('./tuiPromptRunner.js');
 const providers = await import('../services/providers.js');
+const autoFixer = await import('../services/autoFixer.js');
+const toolkitState = await import('./aiToolkitState.js');
 const { runPromptThroughProvider, resolveProviderAndModel } = await import('./promptRunner.js');
 
 const apiProvider = (extra = {}) => ({
@@ -55,6 +76,9 @@ beforeEach(() => {
   // the next test's resolveEffectiveModel run.
   runner.hasModelFlag.mockReturnValue(false);
   runner.extractBakedModel.mockReturnValue(null);
+  // Defaults reset for fallback-path mocks too — same staleness concern.
+  providers.getAllProviders.mockResolvedValue({ activeProvider: null, providers: [] });
+  toolkitState.getAIToolkitInstance.mockReturnValue(null);
 });
 
 describe('promptRunner — happy paths', () => {
@@ -546,6 +570,229 @@ describe('promptRunner — API timeout enforcement', () => {
     await vi.advanceTimersByTimeAsync(10000);
     expect(runner.stopRun).not.toHaveBeenCalled();
     vi.useRealTimers();
+  });
+});
+
+// =============================================================================
+// Retry-with-fallback — when a run fails and a fallback provider is
+// available, swap to it transparently instead of letting the failure
+// queue an "Investigate AI provider failure" task. Regression guard for
+// the issue where LM Studio / Claude Code CLI failures used to create
+// noisy plan tasks even with a configured fallback.
+// =============================================================================
+
+describe('promptRunner — retry-with-fallback', () => {
+  // Reuse the top-level factories so the retry tests pick up future
+  // changes to the canonical provider shapes — only overriding fields
+  // these tests assert on (id + name, since noteFallbackHandled keys on
+  // the display name).
+  const fallbackApi = apiProvider({ id: 'fallback-api', name: 'Fallback API', defaultModel: 'fb-model' });
+  const primaryCli = cliProvider({ id: 'primary-cli', name: 'Primary CLI', defaultModel: 'primary-model' });
+  const primaryApi = apiProvider({ id: 'primary-api', name: 'Primary API', defaultModel: 'primary-model' });
+
+  function mockToolkitWithFallback(fallback = fallbackApi) {
+    // isAvailable returns true so promptRunner's "skip if toolkit already
+    // marked it" gate doesn't short-circuit the mark in these tests.
+    const isAvailable = vi.fn().mockReturnValue(true);
+    const markUnavailable = vi.fn().mockResolvedValue(undefined);
+    const markUsageLimit = vi.fn().mockResolvedValue(undefined);
+    const getFallbackProvider = vi.fn().mockReturnValue(
+      fallback ? { provider: fallback, source: 'provider' } : null
+    );
+    toolkitState.getAIToolkitInstance.mockReturnValue({
+      services: { providerStatus: { isAvailable, markUnavailable, markUsageLimit, getFallbackProvider } },
+    });
+    providers.getAllProviders.mockResolvedValue({
+      activeProvider: null,
+      providers: fallback ? [primaryCli, primaryApi, fallback] : [primaryCli, primaryApi],
+    });
+    return { isAvailable, markUnavailable, markUsageLimit, getFallbackProvider };
+  }
+
+  it('retries with the configured fallback and resolves with usedFallback flag when primary CLI fails', async () => {
+    const status = mockToolkitWithFallback();
+
+    // First call: primary CLI fails. Second call: fallback API succeeds.
+    runner.executeCliRun.mockImplementation(async (id, _p, _pr, _cwd, _onData, onComplete, _t) => {
+      onComplete({ success: false, error: 'Process exited with code 1' });
+    });
+    runner.executeApiRun.mockImplementation(async (id, _p, _m, _pr, _cwd, _ctx, onData, onComplete) => {
+      onData('fallback content');
+      onComplete({ success: true });
+    });
+
+    const out = await runPromptThroughProvider({
+      provider: primaryCli,
+      prompt: 'p',
+      source: 'test',
+    });
+
+    expect(out.text).toBe('fallback content');
+    expect(out.usedFallback).toBe(true);
+    expect(out.fallbackFrom).toEqual({ id: 'primary-cli', name: 'Primary CLI' });
+
+    // Primary was marked unavailable before retry; fallback was looked up
+    // and used; the deferred autoFixer task was cancelled.
+    expect(status.markUnavailable).toHaveBeenCalledWith('primary-cli', expect.objectContaining({
+      reason: expect.any(String),
+    }));
+    expect(status.getFallbackProvider).toHaveBeenCalledWith('primary-cli', expect.any(Object));
+    expect(autoFixer.noteFallbackHandled).toHaveBeenCalledWith({
+      provider: 'Primary CLI',
+      model: 'primary-model',
+    });
+  });
+
+  it('retries with fallback when primary API fails', async () => {
+    mockToolkitWithFallback();
+
+    let calls = 0;
+    runner.executeApiRun.mockImplementation(async (id, providerArg, _m, _pr, _cwd, _ctx, onData, onComplete) => {
+      calls += 1;
+      if (providerArg.id === 'primary-api') {
+        onComplete({ success: false, error: 'upstream 500' });
+      } else {
+        onData('recovered');
+        onComplete({ success: true });
+      }
+    });
+
+    const out = await runPromptThroughProvider({
+      provider: primaryApi,
+      prompt: 'p',
+      source: 'test',
+    });
+
+    expect(calls).toBe(2);
+    expect(out.text).toBe('recovered');
+    expect(out.usedFallback).toBe(true);
+    expect(autoFixer.noteFallbackHandled).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT suppress the investigation task when the fallback ALSO fails (both errors must surface)', async () => {
+    mockToolkitWithFallback();
+
+    runner.executeCliRun.mockImplementation(async (id, _p, _pr, _cwd, _onData, onComplete, _t) => {
+      onComplete({ success: false, error: 'primary boom' });
+    });
+    runner.executeApiRun.mockImplementation(async (id, _p, _m, _pr, _cwd, _ctx, _onData, onComplete) => {
+      onComplete({ success: false, error: 'fallback also boom' });
+    });
+
+    await expect(runPromptThroughProvider({
+      provider: primaryCli,
+      prompt: 'p',
+      source: 'test',
+    })).rejects.toThrow(/fallback also boom/);
+
+    // noteFallbackHandled is reserved for SUCCESSFUL fallback — when both
+    // fail the user must see both deferred investigation tasks fire.
+    expect(autoFixer.noteFallbackHandled).not.toHaveBeenCalled();
+  });
+
+  it('rethrows the original error when no fallback is available', async () => {
+    mockToolkitWithFallback(null);
+
+    runner.executeCliRun.mockImplementation(async (id, _p, _pr, _cwd, _onData, onComplete, _t) => {
+      onComplete({ success: false, error: 'no recovery path' });
+    });
+
+    await expect(runPromptThroughProvider({
+      provider: primaryCli,
+      prompt: 'p',
+      source: 'test',
+    })).rejects.toThrow(/no recovery path/);
+
+    expect(runner.executeApiRun).not.toHaveBeenCalled();
+    expect(autoFixer.noteFallbackHandled).not.toHaveBeenCalled();
+  });
+
+  it('rethrows when toolkit/providerStatus is not initialized (no retry path possible)', async () => {
+    // Default mock returns null toolkit — no retry attempted.
+    runner.executeCliRun.mockImplementation(async (id, _p, _pr, _cwd, _onData, onComplete, _t) => {
+      onComplete({ success: false, error: 'init not ready' });
+    });
+
+    await expect(runPromptThroughProvider({
+      provider: primaryCli,
+      prompt: 'p',
+      source: 'test',
+    })).rejects.toThrow(/init not ready/);
+
+    expect(autoFixer.noteFallbackHandled).not.toHaveBeenCalled();
+  });
+
+  it('strips internal effectiveProvider/effectiveModel annotations from rethrown errors', async () => {
+    // No fallback → original error rethrown. The annotation fields are
+    // implementation-detail-only and should never leak to callers.
+    mockToolkitWithFallback(null);
+    runner.executeCliRun.mockImplementation(async (id, _p, _pr, _cwd, _onData, onComplete, _t) => {
+      onComplete({ success: false, error: 'plain failure' });
+    });
+
+    try {
+      await runPromptThroughProvider({
+        provider: primaryCli,
+        prompt: 'p',
+        source: 'test',
+      });
+      throw new Error('should have rejected');
+    } catch (err) {
+      expect(err.message).toMatch(/plain failure/);
+      expect(err.effectiveProvider).toBeUndefined();
+      expect(err.effectiveModel).toBeUndefined();
+    }
+  });
+
+  it('skips re-marking when the toolkit already marked the provider unavailable (prevents double failureCount)', async () => {
+    const status = mockToolkitWithFallback();
+    // Simulate the toolkit's executeApiRun having already called markUsageLimit
+    // before onComplete fired — providerStatus.isAvailable now returns false.
+    status.isAvailable.mockReturnValue(false);
+
+    runner.executeApiRun.mockImplementation(async (id, providerArg, _m, _pr, _cwd, _ctx, onData, onComplete) => {
+      if (providerArg.id === 'primary-api') {
+        onComplete({ success: false, error: 'rate limit hit' });
+      } else {
+        onData('recovered');
+        onComplete({ success: true });
+      }
+    });
+
+    await runPromptThroughProvider({
+      provider: primaryApi,
+      prompt: 'p',
+      source: 'test',
+    });
+
+    // Fallback still ran; investigation task still suppressed; but neither
+    // markUnavailable nor markUsageLimit was called from promptRunner
+    // because the toolkit's runner already marked it.
+    expect(status.markUnavailable).not.toHaveBeenCalled();
+    expect(status.markUsageLimit).not.toHaveBeenCalled();
+    expect(autoFixer.noteFallbackHandled).toHaveBeenCalledTimes(1);
+  });
+
+  it('routes USAGE_LIMIT failures through markUsageLimit (parses wait time)', async () => {
+    const status = mockToolkitWithFallback();
+    runner.executeCliRun.mockImplementation(async (id, _p, _pr, _cwd, _onData, onComplete, _t) => {
+      onComplete({ success: false, error: "You've hit your usage limit. Try again in 5 hours" });
+    });
+    runner.executeApiRun.mockImplementation(async (id, _p, _m, _pr, _cwd, _ctx, onData, onComplete) => {
+      onData('recovered');
+      onComplete({ success: true });
+    });
+
+    await runPromptThroughProvider({
+      provider: primaryCli,
+      prompt: 'p',
+      source: 'test',
+    });
+
+    expect(status.markUsageLimit).toHaveBeenCalledWith('primary-cli', expect.objectContaining({
+      waitTime: expect.any(String),
+    }));
+    expect(status.markUnavailable).not.toHaveBeenCalled();
   });
 });
 

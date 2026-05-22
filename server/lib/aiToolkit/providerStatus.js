@@ -163,9 +163,19 @@ export function createProviderStatusService(config = {}) {
       return status.available;
     },
 
-    async markUsageLimit(providerId, errorInfo = {}) {
+    // Generic unavailability marker. Each specific marker below (usage-limit,
+    // rate-limit) is now a thin wrapper that supplies its own cooldown +
+    // message defaults — keeps the persistence path in one place and lets
+    // ad-hoc callers (e.g. promptRunner.js on a failed run) mark a provider
+    // unavailable with a custom reason like 'network-error' without
+    // proliferating wrapper methods for every error category.
+    async markUnavailable(providerId, options = {}) {
+      const {
+        reason = 'unknown',
+        message = 'Provider unavailable',
+        waitTimeMs = defaultRateLimitWait
+      } = options;
       const now = new Date();
-      const waitTimeMs = parseWaitTime(errorInfo.waitTime) || defaultUsageLimitWait;
       const estimatedRecovery = new Date(now.getTime() + waitTimeMs).toISOString();
 
       const previousStatus = statusCache.providers[providerId];
@@ -173,9 +183,8 @@ export function createProviderStatusService(config = {}) {
 
       statusCache.providers[providerId] = {
         available: false,
-        reason: 'usage-limit',
-        message: errorInfo.message || 'Usage limit exceeded',
-        waitTime: errorInfo.waitTime || null,
+        reason,
+        message,
         unavailableSince: now.toISOString(),
         estimatedRecovery,
         failureCount,
@@ -183,32 +192,34 @@ export function createProviderStatusService(config = {}) {
       };
 
       await saveStatus(statusCache);
-      emitStatusChange(providerId, statusCache.providers[providerId], 'usage-limit');
+      emitStatusChange(providerId, statusCache.providers[providerId], reason);
 
       return statusCache.providers[providerId];
     },
 
+    async markUsageLimit(providerId, errorInfo = {}) {
+      const status = await this.markUnavailable(providerId, {
+        reason: 'usage-limit',
+        message: errorInfo.message || 'Usage limit exceeded',
+        waitTimeMs: parseWaitTime(errorInfo.waitTime) || defaultUsageLimitWait
+      });
+      // `waitTime` is a usage-limit-only display string ("resets 5pm") —
+      // stamp it onto the record here so the generic marker stays free of
+      // category-specific fields.
+      if (errorInfo.waitTime) {
+        status.waitTime = errorInfo.waitTime;
+        statusCache.providers[providerId] = status;
+        await saveStatus(statusCache);
+      }
+      return status;
+    },
+
     async markRateLimited(providerId) {
-      const now = new Date();
-      const estimatedRecovery = new Date(now.getTime() + defaultRateLimitWait).toISOString();
-
-      const previousStatus = statusCache.providers[providerId];
-      const failureCount = (previousStatus?.failureCount || 0) + 1;
-
-      statusCache.providers[providerId] = {
-        available: false,
+      return this.markUnavailable(providerId, {
         reason: 'rate-limit',
         message: 'Rate limit exceeded - temporary',
-        unavailableSince: now.toISOString(),
-        estimatedRecovery,
-        failureCount,
-        lastChecked: now.toISOString()
-      };
-
-      await saveStatus(statusCache);
-      emitStatusChange(providerId, statusCache.providers[providerId], 'rate-limit');
-
-      return statusCache.providers[providerId];
+        waitTimeMs: defaultRateLimitWait
+      });
     },
 
     async markAvailable(providerId) {

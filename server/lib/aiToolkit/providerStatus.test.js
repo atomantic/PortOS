@@ -87,6 +87,51 @@ describe('Provider Status Service', () => {
     });
   });
 
+  describe('markUnavailable (generic)', () => {
+    it('marks a provider unavailable with an arbitrary reason and explicit waitTimeMs', async () => {
+      const status = await statusService.markUnavailable('test-provider', {
+        reason: 'network-error',
+        message: 'ECONNREFUSED to upstream',
+        waitTimeMs: 120000,
+      });
+
+      expect(status.available).toBe(false);
+      expect(status.reason).toBe('network-error');
+      expect(status.message).toBe('ECONNREFUSED to upstream');
+      const recoveryMs = new Date(status.estimatedRecovery).getTime() - Date.now();
+      // Cooldown ~= 120s (allow a small jitter for clock drift in CI).
+      expect(recoveryMs).toBeGreaterThan(110000);
+      expect(recoveryMs).toBeLessThanOrEqual(120000);
+    });
+
+    it('uses defaultRateLimitWait when no cooldown is supplied', async () => {
+      const status = await statusService.markUnavailable('test-provider', {
+        reason: 'unknown',
+        message: 'mystery failure',
+      });
+
+      const recoveryMs = new Date(status.estimatedRecovery).getTime() - Date.now();
+      // Test setup configures defaultRateLimitWait=500ms — within tolerance.
+      expect(recoveryMs).toBeGreaterThan(0);
+      expect(recoveryMs).toBeLessThanOrEqual(500);
+    });
+
+    it('emits status:changed with the reason as the event type', async () => {
+      const handler = vi.fn();
+      statusService.events.on('status:changed', handler);
+      await statusService.markUnavailable('test-provider', {
+        reason: 'network-error',
+        message: 'down',
+        waitTimeMs: 30000,
+      });
+      expect(handler).toHaveBeenCalledWith({
+        providerId: 'test-provider',
+        status: expect.objectContaining({ available: false, reason: 'network-error' }),
+        type: 'network-error',
+      });
+    });
+  });
+
   describe('markRateLimited', () => {
     it('should mark provider as rate limited', async () => {
       const status = await statusService.markRateLimited('test-provider');
