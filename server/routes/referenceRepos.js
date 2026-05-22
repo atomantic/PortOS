@@ -64,7 +64,7 @@ router.post('/:refId/check', asyncHandler(async (req, res) => {
     if (app && ref) {
       analysis = await triggerReferenceAnalysis(app, ref, snapshot)
         .catch((err) => {
-          console.error(`❌ Analysis trigger failed for ${refId}: ${err.message}`);
+          console.error(`❌ Analysis trigger failed for ${refId}: ${err instanceof Error ? err.message : String(err)}`);
           return { queued: false, reason: 'analysis-trigger-failed' };
         });
     }

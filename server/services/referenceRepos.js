@@ -585,7 +585,7 @@ export function formatReferenceForPrompt(ref, snapshot) {
  * data and queues it as an internal task for the next available agent slot.
  *
  * Returns `{ queued: true, taskId }` on success, or `{ queued: false, reason }`
- * when the task can't be created (e.g. no commits, CoS not running).
+ * when the task can't be created (e.g. no commits, app not found).
  */
 export async function triggerReferenceAnalysis(app, ref, snapshot) {
   if (!snapshot || snapshot.commitCount === 0) {
@@ -598,20 +598,21 @@ export async function triggerReferenceAnalysis(app, ref, snapshot) {
 
   const referenceDataBlock = formatReferenceForPrompt(ref, snapshot);
   const promptTemplate = await taskSchedule.getTaskPrompt('reference-watch');
+  // Use arrow replacers to avoid $& / $1 interpretation in replacement strings
   const fullPrompt = promptTemplate
-    .replace(/\{appName\}/g, app.name)
-    .replace(/\{repoPath\}/g, app.repoPath)
-    .replace(/\{appId\}/g, app.id)
-    .replace(/\{reviewer\}/g, 'copilot')
+    .replace(/\{appName\}/g, () => app.name)
+    .replace(/\{repoPath\}/g, () => app.repoPath)
+    .replace(/\{appId\}/g, () => app.id)
+    .replace(/\{reviewer\}/g, () => 'copilot')
     .replace(/\{referenceData\}/g, () => referenceDataBlock)
-    .replace(/\{planConstraint\}/g, '');
+    .replace(/\{planConstraint\}/g, () => '');
 
   const task = await addTask({
-    id: `ref-analysis-${app.id}-${ref.id}-${Date.now().toString(36)}`,
+    id: `sys-ref-analysis-${app.id}-${ref.id}-${Date.now().toString(36)}`,
     status: 'pending',
     priority: 'MEDIUM',
     priorityValue: 2,
-    description: `Reference-watch analysis: ${ref.name} (${ref.repoUrl}) for ${app.name}`,
+    description: `Reference-watch analysis: ${ref.name} (${redactUrlCreds(ref.repoUrl)}) for ${app.name}`,
     metadata: {
       app: app.id,
       appName: app.name,

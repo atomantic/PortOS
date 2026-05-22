@@ -378,11 +378,13 @@ describe('triggerReferenceAnalysis', () => {
     expect(result.taskId).toBeTruthy();
     expect(addTaskMock).toHaveBeenCalledTimes(1);
     const taskArg = addTaskMock.mock.calls[0][0];
+    // Task ID must use a known internal prefix so taskParser doesn't rewrite it
+    expect(taskArg.id).toMatch(/^sys-ref-analysis-/);
     // Description must be single-line and contain ref + app identifiers
     expect(taskArg.description).not.toContain('\n');
     expect(taskArg.description).toContain('phosphene');
     expect(taskArg.description).toContain('TestApp');
-    expect(taskArg.description).toContain('https://github.com/x/y.git');
+    expect(taskArg.description).toContain('github.com/x/y.git');
     // Full prompt stored in metadata.context for COS-TASKS.md round-trip safety
     expect(taskArg.metadata.context).toContain('Analyze TestApp');
     expect(taskArg.metadata.context).toContain('/mock/repo');
