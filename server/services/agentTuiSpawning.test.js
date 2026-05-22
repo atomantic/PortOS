@@ -73,10 +73,11 @@ vi.mock('fs/promises', () => ({
   appendFile: vi.fn().mockResolvedValue(undefined),
   readFile: vi.fn().mockResolvedValue(''),
   rm: vi.fn().mockResolvedValue(undefined),
-  // raw.txt tail-read for failure analysis. Tests don't exercise the failure
-  // path's analyzer (analyzeAgentFailure is mocked to return null), so a
-  // simple stub that reports an empty file is sufficient. stat returns
-  // size:0 so readFileTail short-circuits to '' without touching open/read.
+  // raw.txt tail-read for failure analysis. The default stat → open/read
+  // chain reports a zero-byte file so non-tail-read tests don't accidentally
+  // exercise the read path. The two tail-read tests below override stat
+  // and open via mockResolvedValueOnce to assert the IO contract on the
+  // failure / success finalize branches.
   stat: vi.fn().mockResolvedValue({ size: 0 }),
   open: vi.fn().mockResolvedValue({
     read: vi.fn().mockResolvedValue({ bytesRead: 0 }),

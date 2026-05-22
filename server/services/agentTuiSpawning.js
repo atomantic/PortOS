@@ -234,8 +234,11 @@ export async function spawnTuiAgent({
   // shellService surfaces node-pty output as already-decoded UTF-8 strings
   // (node-pty's internal StringDecoder handles multi-byte boundaries before
   // we see chunks), so queueing strings here is sufficient — no Buffer
-  // bookkeeping needed. Joined once per 250ms batch, never accumulating in
-  // memory beyond a single tick.
+  // bookkeeping needed. pendingRawChunks holds whatever arrives during the
+  // 250ms debounce window AND while an appendFile is in-flight (the next
+  // scheduleRawFlush is gated by rawFlushing); join() runs once per flush
+  // tick, so peak in-memory raw data is bounded by one debounce-plus-IO
+  // window of TUI output (typically hundreds of KB on a chatty agent).
   const flushPendingRawChunks = async () => {
     if (rawFlushTimer) { clearTimeout(rawFlushTimer); rawFlushTimer = null; }
     if (pendingRawChunks.length === 0) return;
@@ -338,9 +341,10 @@ export async function spawnTuiAgent({
       ? null
       : await readFileTail(rawFile, RAW_TAIL_ANALYSIS_BYTES);
     // `??` (not `||`) so an empty raw spool ('') stays distinguishable from
-    // a read failure (null) — readFileTail's contract. An intentionally
-    // empty raw transcript should run failure analysis against ''; only
-    // a failed read falls back to outputBuffer.
+    // a read failure (null) — readFileTail's contract. A zero-byte raw.txt
+    // (file was created but the PTY never emitted) lets failure analysis
+    // run against ''; both a missing file AND a read error return null and
+    // fall back to outputBuffer (which has the spawn-startup notices).
     const errorAnalysis = finalSuccess
       ? null
       : analyzeAgentFailure(rawAnalysisText ?? outputBuffer, task, model);
