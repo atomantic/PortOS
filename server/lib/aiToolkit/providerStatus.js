@@ -248,7 +248,11 @@ export function createProviderStatusService(config = {}) {
       }
 
       const primaryProvider = providers[primaryProviderId];
-      if (primaryProvider?.fallbackProvider) {
+      // Guard against `fallbackProvider === self` — a misconfigured provider
+      // would otherwise loop back to itself and silently retry the same
+      // broken endpoint. The system priority loop already excludes
+      // primaryProviderId; the configured-fallback path needs its own check.
+      if (primaryProvider?.fallbackProvider && primaryProvider.fallbackProvider !== primaryProviderId) {
         const configuredFallback = providers[primaryProvider.fallbackProvider];
         if (configuredFallback?.enabled && this.isAvailable(configuredFallback.id)) {
           return { provider: configuredFallback, source: 'provider' };

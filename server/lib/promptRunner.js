@@ -293,12 +293,11 @@ export async function runPromptThroughProvider(args) {
  * `fallbackProvider` field first, then the toolkit's system priority
  * list. Returns null when no usable fallback exists.
  *
- * `failed` is EXCLUDED from the lookup map entirely so a misconfigured
- * provider whose `fallbackProvider` points at itself (or its own id)
- * can't loop back to the same provider. (`providerStatus.getFallbackProvider`
- * only skips primaryProviderId in its *system* priority loop — it
- * doesn't guard the provider-level `fallbackProvider` field, so the
- * guard has to live here.)
+ * The toolkit's `getFallbackProvider` reads `providers[failed.id]` to
+ * look up the `fallbackProvider` field, so the primary MUST stay in the
+ * map. Self-loop protection (`fallbackProvider === self`) lives in
+ * `getFallbackProvider`; the system priority loop already excludes
+ * `failed.id` by construction.
  */
 async function pickFallbackProvider(failed) {
   const toolkit = getAIToolkitInstance();
@@ -308,10 +307,7 @@ async function pickFallbackProvider(failed) {
   const all = await getAllProviders().catch(() => null);
   if (!all?.providers) return null;
   const providersMap = {};
-  for (const p of all.providers) {
-    if (p.id === failed.id) continue;
-    providersMap[p.id] = p;
-  }
+  for (const p of all.providers) providersMap[p.id] = p;
 
   const picked = providerStatus.getFallbackProvider(failed.id, providersMap);
   return picked?.provider || null;

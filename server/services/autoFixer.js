@@ -163,6 +163,10 @@ async function handleAIProviderError(error) {
     deferredTasks.delete(errorKey);
     createAIProviderInvestigationTask(error).catch(err => {
       console.error(`❌ Deferred AI provider task creation failed: ${err.message}`);
+      // Clear the dedupe entry so the next identical failure isn't
+      // silently suppressed for up to 60s — without this, an addTask
+      // failure here would block legitimate retries that might succeed.
+      recentErrors.delete(errorKey);
     });
   }, TASK_DEFER_MS);
   // Keep the timer from preventing process exit (e.g. in tests / shutdown).

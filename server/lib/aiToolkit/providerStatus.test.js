@@ -273,6 +273,20 @@ describe('Provider Status Service', () => {
       expect(result.source).toBe('system');
     });
 
+    it('should NOT loop back to the same provider when fallbackProvider points at self (misconfig guard)', () => {
+      const selfFallback = {
+        'self-pointer': { id: 'self-pointer', enabled: true, fallbackProvider: 'self-pointer' },
+        'fallback-provider-1': { id: 'fallback-provider-1', enabled: true },
+      };
+
+      const result = statusService.getFallbackProvider('self-pointer', selfFallback);
+
+      // Must fall through to the system priority list (which excludes the
+      // primary by id) rather than returning self.
+      expect(result?.provider.id).toBe('fallback-provider-1');
+      expect(result?.source).toBe('system');
+    });
+
     it('should return null if no fallback available', async () => {
       await statusService.markUsageLimit('configured-fallback', { message: 'Limit hit' });
       await statusService.markUsageLimit('fallback-provider-1', { message: 'Limit hit' });

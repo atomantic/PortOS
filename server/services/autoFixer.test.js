@@ -130,6 +130,28 @@ describe('autoFixer — defer + noteFallbackHandled', () => {
     clearPendingAutoFixTasks();
   });
 
+  it('clears the dedupe entry when deferred task creation fails so future failures can still raise tasks', async () => {
+    // Simulate addTask rejecting (e.g. PLAN.md write error). Without the
+    // dedupe-clear in the catch arm, the next identical failure would be
+    // suppressed for 60s even though no investigation task ever landed.
+    cos.addTask.mockRejectedValueOnce(new Error('plan write failed'));
+
+    emitProviderFailure({ provider: 'Primary CLI', model: 'm-1', runId: 'r-1' });
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(5500);
+    // Drain the rejected addTask's microtask + the .catch's recentErrors.delete.
+    await vi.advanceTimersByTimeAsync(0);
+
+    // First attempt: addTask threw, so no task was created.
+    expect(cos.addTask).toHaveBeenCalledTimes(1);
+
+    // Second identical failure within the 60s dedupe window must NOT be
+    // suppressed — the stale dedupe entry should have been cleared.
+    emitProviderFailure({ provider: 'Primary CLI', model: 'm-1', runId: 'r-2' });
+    await vi.advanceTimersByTimeAsync(5500);
+    expect(cos.addTask).toHaveBeenCalledTimes(2);
+  });
+
   it('does NOT collide on hyphenated provider/model pairs (uses an unambiguous separator)', async () => {
     // Regression: a `-`-joined dedupe key would treat
     // ("gpt-4o", "mini") and ("gpt", "4o-mini") as the same failure,
