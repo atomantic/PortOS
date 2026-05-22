@@ -184,20 +184,33 @@ export const resolveNavCommand = (input) => {
   if (!norm) return null;
 
   const tail = norm.split('-').filter(Boolean).pop();
+  // Each tier is { test, longest? }. `longest:true` picks the longest matching
+  // alias (so "meatspace health" prefers `meatspace-health` over the shorter
+  // `health` that also ends/contains-matches the input). Other tiers keep
+  // first-declared-wins ordering because shorter aliases there are intentional
+  // (e.g. `cos` should match before `cos-tasks` when input is bare "cos").
   const tiers = [
-    (a) => a === norm,
-    (a) => norm.startsWith(a) && a.length >= 3,
-    (a) => a.startsWith(norm),
-    (a) => norm.endsWith(`-${a}`) && a.length >= 3,
-    (a) => norm.includes(a) && a.length >= 4,
-    (a) => a.includes(norm),
-    (a) => tail && tail !== norm && a === tail,
+    { test: (a) => a === norm },
+    { test: (a) => norm.startsWith(a) && a.length >= 3 },
+    { test: (a) => a.startsWith(norm) },
+    { test: (a) => norm.endsWith(`-${a}`) && a.length >= 3, longest: true },
+    { test: (a) => norm.includes(a) && a.length >= 4, longest: true },
+    { test: (a) => a.includes(norm) },
+    { test: (a) => tail && tail !== norm && a === tail },
   ];
 
   let matched = null;
-  for (const test of tiers) {
-    matched = ALIAS_KEYS.find(test);
-    if (matched) break;
+  for (const { test, longest } of tiers) {
+    if (longest) {
+      const candidates = ALIAS_KEYS.filter(test);
+      if (candidates.length) {
+        matched = candidates.reduce((a, b) => (b.length > a.length ? b : a));
+        break;
+      }
+    } else {
+      matched = ALIAS_KEYS.find(test);
+      if (matched) break;
+    }
   }
   if (!matched) return null;
 
