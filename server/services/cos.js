@@ -1070,7 +1070,7 @@ async function generateIdleReviewTask(state) {
  * Tasks are queued to COS-TASKS.md and will be picked up in Priority 2
  */
 async function queueEligibleImprovementTasks(state, cosTaskData) {
-  const { getDueTasks, shouldRunTask, getNextTaskType, recordExecution } = await import('./taskSchedule.js');
+  const { getNextTaskType, recordExecution } = await import('./taskSchedule.js');
 
   if (!isImprovementEnabled(state)) return;
 
@@ -1128,19 +1128,23 @@ async function queueEligibleImprovementTasks(state, cosTaskData) {
       continue;
     }
 
-    // Generate task description
-    const taskDesc = getTaskDescription(nextType, app.name);
-    if (!taskDesc) continue;
+    // Route through the rich generator so `applyPlanIdMetadata` runs — it
+    // scans open `claim/<slug>` branches + PRs and excludes in-flight slugs
+    // from the pick. The old stub path skipped this and let two plan-task
+    // agents claim the same slug (2026-05-21 incident). The generator
+    // returns null on plan-gate / precondition skip; we silently continue.
+    // Regression-pinned in cos.test.js.
+    const task = await generateManagedAppImprovementTaskForType(nextType, app, state);
+    if (!task) continue;
 
-    // Add to COS-TASKS.md
-    const newTask = await addTask({
-      id: `sys-${app.id.slice(0, 8)}-${nextType}-${Date.now().toString(36)}`,
-      description: taskDesc,
-      priority: 'LOW',
-      app: app.id,
-      context: `Auto-generated improvement task for ${app.name}. Type: ${nextType}`,
-      approvalRequired: false
-    }, 'internal');
+    // Queue-path invariants override the generator's direct-spawn defaults
+    // (which use MEDIUM priority + `app-improve-*` id).
+    task.priority = 'LOW';
+    task.priorityValue = PRIORITY_VALUES.LOW;
+    task.id = `sys-${app.id.slice(0, 8)}-${nextType}-${Date.now().toString(36)}`;
+
+    const newTask = await addTask(task, 'internal', { raw: true });
+    if (newTask?.duplicate) continue;
 
     await recordExecution(`task:${nextType}`, app.id);
 
@@ -1155,57 +1159,6 @@ async function queueEligibleImprovementTasks(state, cosTaskData) {
   if (queued > 0) {
     emitLog('info', `Queued ${queued} improvement task(s) to system tasks`);
   }
-}
-
-/**
- * Get task description for a self-improvement or app improvement type.
- * When appName is provided, returns app-scoped descriptions; otherwise returns PortOS self-improvement descriptions.
- */
-function getTaskDescription(taskType, appName) {
-  if (appName) {
-    const descriptions = {
-      'security': `Security audit for ${appName}: check for vulnerabilities`,
-      'code-quality': `Code quality review for ${appName}: DRY violations, dead code`,
-      'test-coverage': `Add missing tests for ${appName}`,
-      'performance': `Performance optimization for ${appName}`,
-      'accessibility': `Accessibility audit for ${appName}`,
-      'console-errors': `Fix console errors in ${appName}`,
-      'dependency-updates': `Update dependencies for ${appName}`,
-      'documentation': `Update documentation for ${appName}`,
-      'error-handling': `Improve error handling in ${appName}`,
-      'typing': `Add/fix TypeScript types in ${appName}`,
-      'ui-bugs': `Review UI for visual bugs in ${appName}`,
-      'mobile-responsive': `Check mobile responsiveness of ${appName}`,
-      'feature-ideas': `Implement a feature idea for ${appName} aligned with GOALS.md and PLAN.md (worktree+PR)`,
-      'plan-task': `Execute next PLAN.md item for ${appName}, remove it from PLAN.md, log to changelog (worktree+PR)`,
-      'release-check': `Verify release readiness for ${appName}`,
-      'jira-sprint-manager': `Triage and implement JIRA sprint tickets for ${appName} (worktree+PR)`,
-      'jira-status-report': `Generate JIRA weekly status report for ${appName}`,
-      'do-replan': `Replan: audit PLAN.md for ${appName}, prune completed and stale work (worktree+PR)`
-    };
-    return descriptions[taskType] ?? null;
-  }
-  const descriptions = {
-    'ui-bugs': 'Review UI for visual bugs, layout issues, and UX improvements',
-    'mobile-responsive': 'Check mobile responsiveness and fix layout issues on smaller screens',
-    'security': 'Audit codebase for security vulnerabilities (XSS, injection, auth issues)',
-    'code-quality': 'Review code for DRY violations, dead code, and refactoring opportunities',
-    'console-errors': 'Check browser console and fix JavaScript errors and warnings',
-    'performance': 'Profile and optimize slow components, queries, and renders',
-    'test-coverage': 'Add missing tests for uncovered code paths',
-    'documentation': 'Update documentation, comments, and README files',
-    'feature-ideas': 'Implement a feature idea aligned with GOALS.md and PLAN.md (worktree+PR)',
-    'plan-task': 'Execute next PLAN.md item, remove it from PLAN.md, log to changelog (worktree+PR)',
-    'accessibility': 'Audit and fix accessibility issues (ARIA, keyboard nav, contrast)',
-    'dependency-updates': 'Check for and safely update outdated dependencies',
-    'error-handling': 'Improve error handling patterns and recovery logic',
-    'typing': 'Add or fix TypeScript/JSDoc type annotations',
-    'release-check': 'Verify release readiness (changelog, version, tests)',
-    'jira-sprint-manager': 'Triage and implement JIRA sprint tickets (worktree+PR)',
-    'jira-status-report': 'Generate JIRA weekly status report',
-    'do-replan': 'Replan: audit PLAN.md, prune completed and stale work (worktree+PR)'
-  };
-  return descriptions[taskType] ?? null;
 }
 
 // Unified improvement task types (rotates through these)

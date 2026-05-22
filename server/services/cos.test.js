@@ -648,6 +648,38 @@ describe('cos.js source — priority + capacity invariants', () => {
     expect(dequeueFn).toMatch(/spawned\s*===\s*0\s*&&\s*state\.config\.idleReviewEnabled/);
     expect(evalFn).toMatch(/tasksToSpawn\.length\s*===\s*0\s*&&\s*state\.config\.idleReviewEnabled/);
   });
+
+  it('queueEligibleImprovementTasks routes through generateManagedAppImprovementTaskForType', () => {
+    // Regression guard: a 2026-05-21 incident saw two `plan-task` agents both
+    // open PRs for the same PLAN.md slug because the queue path was writing
+    // a one-line stub description with no `analysisType` / `planId`. The
+    // agent it dispatched got the Phase 1-7 prompt (with in-flight scan)
+    // stripped, picked the same slug as a sibling that already had an open
+    // `claim/<slug>` PR, and produced a duplicate. The fix routes the queue
+    // path through the shared generator so `applyPlanIdMetadata` runs and
+    // the full prompt + planId metadata land on the queued task.
+    const fnStart = COS_SRC.indexOf('async function queueEligibleImprovementTasks');
+    expect(fnStart, 'queueEligibleImprovementTasks must exist').toBeGreaterThan(-1);
+    const fnBody = extractFnBody(COS_SRC, fnStart);
+
+    expect(
+      fnBody,
+      'queue path must call generateManagedAppImprovementTaskForType so applyPlanIdMetadata runs + the full prompt is used'
+    ).toMatch(/generateManagedAppImprovementTaskForType\s*\(/);
+
+    expect(
+      fnBody,
+      'queue path must persist via addTask with raw:true so the enriched task object survives serialization'
+    ).toMatch(/addTask\s*\(\s*task\s*,\s*['"]internal['"]\s*,\s*\{\s*raw:\s*true\s*\}/);
+
+    // The old buggy path called `getTaskDescription` to build a one-line
+    // description and then passed app/context/approvalRequired fields to
+    // addTask's non-raw constructor. Pin both as absent so we can't regress.
+    expect(
+      fnBody,
+      'queue path must NOT use getTaskDescription (one-line stub bypasses prompt enrichment)'
+    ).not.toMatch(/getTaskDescription\s*\(/);
+  });
 });
 
 describe('addTask — first-line dedup', () => {
