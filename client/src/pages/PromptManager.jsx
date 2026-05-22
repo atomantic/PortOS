@@ -89,9 +89,14 @@ export default function PromptManager() {
     // (e.g. legacy `'900000'` from pre-validation installs) round-trip
     // through the UI, while non-positive / non-integer / garbage values
     // (0, 'abc', undefined, 1.5) collapse to null so the input doesn't
-    // surface them as touched.
+    // surface them as touched. Only set the key when the server actually
+    // shipped a value — otherwise the next save would write `timeout: null`
+    // (the server's explicit-clear sentinel) for stages the user never
+    // touched, conflating "key absent" with "user cleared the override".
+    const cfg = { name: res.name, description: res.description, model: res.model, provider: res.provider || null, variables: res.variables || [] };
     const timeout = parseTimeoutMs(res.timeout);
-    setStageConfig({ name: res.name, description: res.description, model: res.model, provider: res.provider || null, timeout, variables: res.variables || [] });
+    if (timeout !== null) cfg.timeout = timeout;
+    setStageConfig(cfg);
     setPreview('');
   };
 
