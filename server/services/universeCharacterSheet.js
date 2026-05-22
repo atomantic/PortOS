@@ -237,37 +237,49 @@ export function buildCharacterBlueprintSheetPrompt(universe, character) {
   const styleBits = styleClause.startsWith('(none provided') ? '' : styleClause;
 
   const {
-    name, role, physical, silhouette, special, visualNotes, wardrobeLine, propsLine,
+    name, role, physical, silhouette, special, visualNotes,
+    wardrobeLine, propsLine, paletteLine,
   } = extractCharacterPromptCommon(character);
   const { accent, base } = pickBlueprintColors(character.colorPalette);
 
   const subject = role ? `${name} — ${role}` : name;
+  // Concrete label strings (vs abstract "annotations"): gpt-image-2 renders
+  // explicit short tokens much more reliably than invented-on-the-fly text.
+  // Mirrors the standard sheet's per-zone enumeration where the canon
+  // populates each label literally.
+  const turnaroundLabels = '"01 FRONT", "02 THREE-QUARTER", "03 SIDE", "04 BACK"';
+  const headStudyLabels = '"FACE FRONT", "PROFILE", "THREE-QUARTER", "EXPRESSION"';
 
   // Lead with the user's exact prompt template (load-bearing phrasing the
-  // model anchors on), then layer in canon details + scoping clarifications
-  // that keep "blueprint style" attached to the presentation/annotation
-  // layer rather than producing a literal cyanotype of the character.
+  // model anchors on), then layer in canon details with concrete label
+  // strings so the model has explicit text to render verbatim — not vague
+  // "labels" that come out as gibberish glyphs.
   const promptParts = [
     `A character concept sheet of ${subject}, featuring detailed front, back, and side views, along with close-up sketches of facial features, costume details, and accessories. Annotated design notes and clearly labeled components are arranged across the layout, rendered in a refined blueprint style with glowing ${accent} accents and a structured ${base} base design, presented on a clean white background with a polished professional character design presentation.`,
     styleBits || 'Style: contemporary illustrated character design with confident line work and saturated, intentional color.',
-    `MAIN TURNAROUND (large central area): four full-body views of ${name} at consistent scale and proportion — FRONT view, 3/4 view, SIDE view, BACK view — all fully illustrated in the same color palette and rendering style. The character reads as the same person across every angle.`,
-    physical ? `Subject reference: ${physical}` : '',
-    visualNotes ? `Visual notes: ${visualNotes}` : '',
-    silhouette ? `Silhouette notes: ${silhouette}` : '',
-    special ? `Special traits: ${special}` : '',
-    `FACIAL FEATURE SKETCHES (margin): close-up sketches of ${name}'s face from three to five angles — front, 3/4, profile, and expressive variants — each labeled.`,
+    `Header banner across the top of the sheet reads, in bold legible typography: "${name.toUpperCase()}${role ? ` — ${role.toUpperCase()}` : ''}".`,
+    `Main turnaround zone (large, fills the left two-thirds of the sheet): four full-body views of ${name} at consistent scale — FRONT, 3/4, SIDE, BACK — all fully illustrated in the universe's color palette. Each view sits over a small caption strip; the four caption strips read, left to right: ${turnaroundLabels}.`,
+    physical ? `Physical description (annotation paragraph next to the turnaround): ${physical}` : '',
+    visualNotes ? `Visual notes annotation: ${visualNotes}` : '',
+    silhouette ? `Silhouette annotation: ${silhouette}` : '',
+    special ? `Special traits annotation: ${special}` : '',
+    `Facial feature sketches (top-right zone): four close-up sketches of ${name}'s face from different angles, in a 2×2 grid, each below a caption reading one of: ${headStudyLabels}.`,
     wardrobeLine
-      ? `COSTUME DETAIL SKETCHES (margin): labeled close-up sketches of distinctive wardrobe pieces — ${wardrobeLine}. Each labeled with material + construction notes.`
-      : 'COSTUME DETAIL SKETCHES (margin): labeled close-up sketches of the character\'s signature garments, fabrics, fastenings, and layering.',
+      ? `Costume detail sketches (right margin column): labeled close-up sketches of distinctive wardrobe pieces. Caption labels read literally: ${wardrobeLine}.`
+      : 'Costume detail sketches (right margin column): three labeled close-up sketches of signature garments. Caption labels read literally: "FABRIC", "FASTENINGS", "LAYERING".',
     propsLine
-      ? `ACCESSORY SKETCHES (margin): labeled close-up sketches of the character's signature props and accessories — ${propsLine}.`
-      : 'ACCESSORY SKETCHES (margin): labeled close-up sketches of the character\'s signature accessories, gear, or equipment.',
-    `ANNOTATION FRAMEWORK: thin guide lines connect each callout to its detail on the figure. Design notes in clean typography sit beside each panel, with measurement marks, material callouts, component labels, and small schematic line drawings of structural details in the outer margins. Numbered or lettered tags index the callouts.`,
-    `BLUEPRINT ACCENT SCOPE: the "refined blueprint style with glowing ${accent} accents and a structured ${base} base design" applies to the ANNOTATION LAYER — guide lines, callout boxes, dimension marks, technical schematic linework, label highlights, ruled measurement lines, index tags, and schematic frames. The CHARACTER and its costume/props stay rendered in the universe's full color palette in a fully illustrated style. Do NOT render the character as a cyanotype, blueprint-paper line drawing, or monochrome wireframe — the character is fully illustrated; the blueprint feel comes from the annotation framework wrapping the figure.`,
+      ? `Accessory sketches (bottom margin row): labeled close-up sketches of the character's signature props. Caption labels read literally: ${propsLine}.`
+      : 'Accessory sketches (bottom margin row): three labeled close-up sketches of signature accessories. Caption labels read literally: "ACCESSORY", "GEAR", "PROP".',
+    paletteLine
+      ? `Color palette swatch row (under the turnaround captions): horizontal row of color chips, each labeled with its swatch name in legible type — ${paletteLine}.`
+      : '',
+    `Annotation framework: thin guide lines connect each margin sketch to its detail on the figure. Numbered tags ("01", "02", "03", "04") index the four turnaround captions. Margin sketch captions use bold uppercase typography at large size — readable at a glance without zooming.`,
+    `Blueprint accent scope: the "refined blueprint style with glowing ${accent} accents and a structured ${base} base design" applies to the ANNOTATION LAYER — guide lines, caption strips, dimension marks, schematic linework, numbered index tags, and frame borders. The CHARACTER and its costume/props stay rendered in the universe's full color palette in a fully illustrated style. Do NOT render the character as a cyanotype, blueprint-paper line drawing, or monochrome wireframe.`,
+    'Typography requirement: every caption, label, and header above is rendered as legible, bold, properly-letterformed text — not abstract scribbles, not faux-Latin gibberish, not blurred glyphs. Treat the caption strings as real text strings the viewer will read.',
   ].filter(Boolean);
 
   const prompt = promptParts.join('\n\n');
-  const negativePrompt = 'cyanotype, blueprint paper background, blue paper background, line-art-only character, monochrome character, wireframe character, multiple different characters in the same panel, photograph, painterly background, watercolor wash, dark background, cluttered background, text artifacts, watermark, signature, blurry, distorted anatomy, low contrast labels';
+  const negativePrompt = 'cyanotype, blueprint paper background, blue paper background, line-art-only character, monochrome character, wireframe character, multiple different characters in the same panel, photograph, painterly background, watercolor wash, dark background, cluttered background, watermark, signature, blurry, distorted anatomy, illegible text, scribbled labels, faux-latin gibberish, blurred caption text, garbled lettering';
 
   return {
     prompt,
