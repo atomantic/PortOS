@@ -64,11 +64,20 @@ import { listCursors } from './peerTombstoneCursors.js';
 
 let originalDataPath;
 let originalImagesPath;
+let originalImageRefsPath;
+let originalVideosPath;
 let tmp;
 
 beforeEach(async () => {
+  // Capture EVERY PATHS field we (or any test in this file) might mutate so
+  // the afterEach restoration is total. The sha-mismatch-for-all-kinds test
+  // points PATHS.imageRefs / PATHS.videos at the per-test tmpdir; without
+  // restoring them here, later tests in unrelated files inherit the deleted
+  // tmpdir and get ENOENT on real asset reads.
   originalDataPath = PATHS.data;
   originalImagesPath = PATHS.images;
+  originalImageRefsPath = PATHS.imageRefs;
+  originalVideosPath = PATHS.videos;
   tmp = join(tmpdir(), `portos-peer-sync-${Date.now()}-${Math.random()}`);
   await mkdir(join(tmp, 'sharing'), { recursive: true });
   await mkdir(join(tmp, 'images'), { recursive: true });
@@ -99,6 +108,8 @@ afterEach(async () => {
   await rm(tmp, { recursive: true, force: true });
   PATHS.data = originalDataPath;
   PATHS.images = originalImagesPath;
+  PATHS.imageRefs = originalImageRefsPath;
+  PATHS.videos = originalVideosPath;
 });
 
 describe('peerSync', () => {
@@ -272,6 +283,26 @@ describe('peerSync', () => {
         { filename: 'foo.png', kind: 'mystery' },
       ]);
       expect(missing).toEqual([]);
+    });
+
+    it('strips junk fields from echoed missingAssets entries (no untrusted round-trip)', async () => {
+      // Regression: the diff originally pushed the raw peer-supplied entry
+      // into the missing list, so a malicious peer could amplify response
+      // size or smuggle prototype-pollution attempts by attaching extra
+      // fields. The receiver MUST project to {filename, kind, sha256?} only.
+      const evil = {
+        filename: 'absent.png',
+        kind: 'image',
+        sha256: 'a'.repeat(64),
+        __proto__: { polluted: true },
+        gigantic: 'x'.repeat(10000),
+        nested: { evil: true },
+      };
+      const missing = await diffAssetManifestAgainstLocal([evil]);
+      expect(missing).toHaveLength(1);
+      expect(Object.keys(missing[0]).sort()).toEqual(['filename', 'kind', 'sha256']);
+      expect(missing[0].gigantic).toBeUndefined();
+      expect(missing[0].nested).toBeUndefined();
     });
 
     it('rejects path-traversal filenames silently (cant be used to probe local FS)', async () => {

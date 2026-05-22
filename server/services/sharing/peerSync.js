@@ -269,9 +269,6 @@ async function hashImageForManifest(filename) {
 
 async function hashSimpleAsset(filename, kind, sourceDir) {
   if (!isStr(filename) || !isStr(sourceDir)) return null;
-  // Lazy-import to keep the dependency local to the one place that uses it
-  // (the rest of this module reads images via the sidecar-cached path).
-  const { sha256File } = await import('../../lib/fileUtils.js');
   const fullPath = join(sourceDir, filename);
   if (!existsSync(fullPath)) return null;
   const hash = await sha256File(fullPath).catch(() => null);
@@ -302,9 +299,19 @@ export async function diffAssetManifestAgainstLocal(manifest) {
     // entry. Reject anything that isn't a bare basename before any FS op.
     const safeName = sanitizeAssetFilename(entry.filename);
     if (!safeName) continue;
+    // Build a sanitized projection: only the three fields the sender needs
+    // back to pull. Echoing the raw peer-supplied entry would amplify any
+    // junk fields it shipped (large strings, extra kinds, prototype-pollution
+    // attempts) into the response — wire-symmetry should not let untrusted
+    // input round-trip through our process untouched.
+    const sanitizedEntry = {
+      filename: safeName,
+      kind: entry.kind,
+      ...(isStr(entry.sha256) ? { sha256: entry.sha256 } : {}),
+    };
     const fullPath = join(dir, safeName);
     if (!existsSync(fullPath)) {
-      missing.push(entry);
+      missing.push(sanitizedEntry);
       continue;
     }
     // Compare SHA when the manifest carries one — for ALL kinds, not just
@@ -317,7 +324,7 @@ export async function diffAssetManifestAgainstLocal(manifest) {
       const localHash = entry.kind === 'image'
         ? (await getOrComputeImageSha256(fullPath))?.hash ?? null
         : await sha256File(fullPath).catch(() => null);
-      if (localHash !== entry.sha256) missing.push(entry);
+      if (localHash !== entry.sha256) missing.push(sanitizedEntry);
     }
   }
   return missing;
@@ -638,15 +645,30 @@ export async function triggerPushForRecord(recordKind, recordId) {
   for (const sub of subs) {
     const existing = pendingTimers.get(sub.id);
     if (existing) clearTimeout(existing);
+    const subId = sub.id;
     const t = setTimeout(() => {
-      pendingTimers.delete(sub.id);
-      pushRecordToPeer(sub).catch((err) => {
-        console.log(`⚠️ peerSync: scheduled push failed for ${sub.id}: ${err.message}`);
+      pendingTimers.delete(subId);
+      // Re-load the subscription by id rather than reusing the snapshot
+      // captured when this timer was scheduled. Three things can have moved
+      // since: (1) lastPushedHash advanced (the no-op short-circuit would
+      // miss otherwise and re-push redundantly), (2) the sub was unsubscribed
+      // (we'd be pushing for nothing), (3) a subsequent edit landed under a
+      // newer hash. Reading the live record by id makes the debounced fire
+      // safe against all three.
+      pushFromFreshSubscription(subId).catch((err) => {
+        console.log(`⚠️ peerSync: scheduled push failed for ${subId}: ${err.message}`);
       });
     }, DEBOUNCE_MS);
     if (typeof t.unref === 'function') t.unref();
     pendingTimers.set(sub.id, t);
   }
+}
+
+async function pushFromFreshSubscription(subId) {
+  const { subscriptions } = await readState();
+  const fresh = subscriptions.find((s) => s.id === subId);
+  if (!fresh) return; // unsubscribed between schedule and fire
+  return pushRecordToPeer(fresh);
 }
 
 /**
