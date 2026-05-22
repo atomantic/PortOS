@@ -212,14 +212,6 @@ export async function runPromptThroughProvider(args) {
     throw new Error('runPromptThroughProvider: source must be a non-empty string');
   }
 
-  // Capture the user's intended provider+model BEFORE any swap so we can
-  // suppress the right deferred investigation task on a successful retry.
-  // After a fallback retry succeeds, `noteFallbackHandled` is called with
-  // these — that matches the (provider, model) the autoFixer dedupe key
-  // was built from in `server/index.js`'s onRunFailed hook.
-  const intendedProviderName = args.provider.name || args.provider.id;
-  const intendedModel = resolveEffectiveModel(args.provider, args.model);
-
   try {
     return await executeProviderRunOnce(args);
   } catch (firstError) {
@@ -228,7 +220,14 @@ export async function runPromptThroughProvider(args) {
     // fallback is configured + available, mark the failed provider
     // unavailable so subsequent calls skip it, then retry once. No
     // fallback ⇒ let the queued investigation task fire.
+    //
+    // `failed` is the provider that ACTUALLY ran — usually equals
+    // args.provider, but createRun may have proactively swapped to a
+    // different fallback if the requested primary was already marked
+    // unavailable. Always dedupe against what actually ran so
+    // `noteFallbackHandled` cancels the right queued task.
     const failed = firstError.effectiveProvider || args.provider;
+    const failedModel = firstError.effectiveModel || resolveEffectiveModel(failed, args.model);
     const fallback = await pickFallbackProvider(failed);
     if (!fallback) {
       throw stripFallbackContext(firstError);
@@ -256,10 +255,15 @@ export async function runPromptThroughProvider(args) {
       throw stripFallbackContext(fallbackError);
     }
 
-    // Fallback succeeded — cancel the queued investigation task for the
-    // user's intended provider so they don't see a noisy "investigate"
-    // entry in their plan for a failure that was auto-recovered.
-    noteFallbackHandled({ provider: intendedProviderName, model: intendedModel });
+    // Fallback succeeded — cancel the queued investigation task that fired
+    // for the provider that actually failed, so the user doesn't see a
+    // noisy "investigate" entry in their plan for a failure that was
+    // auto-recovered. Keys must match what server/index.js's onRunFailed
+    // hook published (metadata.providerName + metadata.model).
+    noteFallbackHandled({
+      provider: failed.name || failed.id,
+      model: failedModel,
+    });
 
     return {
       ...fallbackResult,

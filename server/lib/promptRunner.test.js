@@ -10,6 +10,11 @@ vi.mock('../services/runner.js', () => ({
   // without this mock, the timer firing would TypeError on `stopRun is
   // not a function` and crash any test that triggers the API timeout.
   stopRun: vi.fn().mockResolvedValue(undefined),
+  // Called best-effort by promptRunner.js when createRun proactively
+  // swapped to a fallback provider — the metadata patch updates the
+  // run record's providerId/model so /runs attribution matches what
+  // actually ran. Mocked as a no-op resolve.
+  patchRunMetadata: vi.fn().mockResolvedValue(undefined),
 }));
 
 // TUI runner is in lib (different module from services/runner.js) — mock it
@@ -771,6 +776,52 @@ describe('promptRunner — retry-with-fallback', () => {
     expect(status.markUnavailable).not.toHaveBeenCalled();
     expect(status.markUsageLimit).not.toHaveBeenCalled();
     expect(autoFixer.noteFallbackHandled).toHaveBeenCalledTimes(1);
+  });
+
+  it('keys noteFallbackHandled to the provider that actually ran (not the caller-intended one) when createRun proactively swapped', async () => {
+    // Setup: caller asks for primary-cli, but createRun has proactively
+    // swapped to a different intermediate fallback (mockedFallback in
+    // runResult.provider) because primary-cli was already marked unavailable.
+    // That intermediate then fails; promptRunner's catch retries with yet
+    // another fallback. The cancelled-task key MUST match the intermediate
+    // (what server's onRunFailed actually published) — not the caller's
+    // original primary-cli.
+    const intermediate = cliProvider({ id: 'intermediate-cli', name: 'Intermediate CLI', defaultModel: 'intermediate-model' });
+    const finalFallback = apiProvider({ id: 'final-api', name: 'Final API', defaultModel: 'final-model' });
+
+    const status = mockToolkitWithFallback(finalFallback);
+    // Simulate createRun's proactive swap: runner.createRun returns the
+    // intermediate provider rather than the caller-passed primary.
+    runner.createRun.mockResolvedValueOnce({
+      runId: 'run-via-intermediate',
+      provider: intermediate,
+    });
+
+    runner.executeCliRun.mockImplementation(async (id, providerArg, _p, _cwd, _onData, onComplete, _t) => {
+      // Intermediate fails on first attempt.
+      onComplete({ success: false, error: `intermediate boom (${providerArg.id})` });
+    });
+    runner.executeApiRun.mockImplementation(async (id, _p, _m, _pr, _cwd, _ctx, onData, onComplete) => {
+      onData('recovered via final');
+      onComplete({ success: true });
+    });
+
+    await runPromptThroughProvider({
+      provider: primaryCli, // caller-intended primary
+      prompt: 'p',
+      source: 'test',
+    });
+
+    // The deferred task in autoFixer is keyed off the provider that
+    // ACTUALLY failed (intermediate), so noteFallbackHandled must use that
+    // — not the caller-intended primary-cli.
+    expect(autoFixer.noteFallbackHandled).toHaveBeenCalledWith({
+      provider: 'Intermediate CLI',
+      model: 'intermediate-model',
+    });
+    // markUnavailable likewise applies to the failed intermediate, not
+    // the primary the caller asked for.
+    expect(status.markUnavailable).toHaveBeenCalledWith('intermediate-cli', expect.any(Object));
   });
 
   it('routes USAGE_LIMIT failures through markUsageLimit (parses wait time)', async () => {
