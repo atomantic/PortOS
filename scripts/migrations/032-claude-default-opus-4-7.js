@@ -116,18 +116,37 @@ const AITOOLKIT_SEEDED_FINGERPRINT = {
 // When a pointer can't be resolved (orphan: not retired, not current, not
 // in new models), reset to the per-tier default from the new trio. Keeps
 // tier intent (a "light" slot stays small/fast even when the original pin
-// was foreign). `defaultModel` falls back to POLICY_DEFAULT (opus-4-7).
+// was foreign). `defaultModel` / `heavyModel` fall back to POLICY_DEFAULT
+// — referenced via the constant so the policy default has one source of
+// truth.
 const TIER_FALLBACK = {
-  defaultModel: 'claude-opus-4-7',
+  defaultModel: POLICY_DEFAULT,
   lightModel: 'claude-haiku-4-5',
   mediumModel: 'claude-sonnet-4-6',
-  heavyModel: 'claude-opus-4-7',
+  heavyModel: POLICY_DEFAULT,
 };
 
 const TIER_POINTER_KEYS = ['lightModel', 'mediumModel', 'heavyModel'];
 
 const matchesAiToolkitSeededShape = (provider) =>
   Object.entries(AITOOLKIT_SEEDED_FINGERPRINT).every(([k, v]) => provider[k] === v);
+
+// Orphan safety net: reset every pointer that doesn't resolve to a member
+// of the new `provider.models` — null, undefined, empty-string, and
+// foreign ids all produce the same broken UI state. Must be called only
+// after `provider.models` has been set to (or already is) NEW_MODELS.
+// Mutates in place; returns true if any pointer was changed.
+const normalizeOrphanPointers = (provider) => {
+  let changed = false;
+  for (const key of ['defaultModel', ...TIER_POINTER_KEYS]) {
+    const v = provider[key];
+    if (v == null || v === '' || !provider.models.includes(v)) {
+      provider[key] = TIER_FALLBACK[key];
+      changed = true;
+    }
+  }
+  return changed;
+};
 
 const TARGET_IDS = ['claude-code', 'claude-code-tui'];
 
@@ -174,10 +193,16 @@ export default {
       if (!provider) continue;
 
       if (sameArray(provider.models, NEW_MODELS)) {
-        // Models already current — check for the aiToolkit-seeded shape that
-        // shipped the new trio but kept defaultModel at claude-sonnet-4-6.
-        if (matchesAiToolkitSeededShape(provider)) {
+        // Models already current — two reasons to still rewrite:
+        //  1. aiToolkit-seeded shape (new trio + stale sonnet-4-6 default).
+        //  2. Orphan pointer despite current models (e.g. defaultModel still
+        //     at claude-opus-4-6, or null/empty after a hand-edit).
+        const isAiToolkitSeeded = matchesAiToolkitSeededShape(provider);
+        if (isAiToolkitSeeded) {
           provider.defaultModel = POLICY_DEFAULT;
+        }
+        const orphanFixed = normalizeOrphanPointers(provider);
+        if (isAiToolkitSeeded || orphanFixed) {
           touched.push({ id, defaultModel: provider.defaultModel });
         } else {
           alreadyCurrent.push(id);
@@ -202,20 +227,10 @@ export default {
           provider[key] = successor;
         }
       }
-      // Orphan safety net: a pointer that doesn't resolve to a member of
-      // the new `provider.models` would render as an empty UI selection
-      // (`ProviderModelSelector` only lists options from `provider.models`)
-      // and break server callers that expect a real id. Reset orphans to
-      // the per-tier fallback so tier intent is preserved (light → haiku,
-      // medium → sonnet, heavy/default → opus). Treats null, undefined,
-      // and empty-string as orphans alongside foreign ids — all three
-      // produce the same broken UI state.
-      for (const key of ['defaultModel', ...TIER_POINTER_KEYS]) {
-        const v = provider[key];
-        if (v == null || v === '' || !provider.models.includes(v)) {
-          provider[key] = TIER_FALLBACK[key];
-        }
-      }
+      // Final safety net — after the legacy-shape rewrite, fix any pointer
+      // that's still orphaned (null/undefined/empty/foreign-id). Same
+      // helper used by the already-current branch above.
+      normalizeOrphanPointers(provider);
       touched.push({ id, defaultModel: provider.defaultModel });
     }
 

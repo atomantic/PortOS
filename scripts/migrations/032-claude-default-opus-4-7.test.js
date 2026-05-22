@@ -298,6 +298,55 @@ describe('migration 032 — Claude CLI/TUI default to opus-4-7', () => {
     expect(after.models).toContain(after.lightModel);
   });
 
+  it('fixes orphan defaultModel even when models are already the new trio', async () => {
+    // models = NEW_MODELS but defaultModel still pinned to a retired id —
+    // not the aiToolkit fingerprint (which requires sonnet-4-6), so the
+    // previous code would have skipped this provider as "already current"
+    // and left the orphan in place. The orphan-safety branch now runs in
+    // both the legacy-rewrite and already-current paths.
+    writeJson(providersPath, {
+      providers: {
+        'claude-code': {
+          id: 'claude-code',
+          models: [...NEW_MODELS],
+          defaultModel: 'claude-opus-4-6', // retired, not in NEW_MODELS
+          lightModel: 'claude-haiku-4-5',
+          mediumModel: 'claude-sonnet-4-6',
+          heavyModel: 'claude-opus-4-7',
+        },
+      },
+    });
+
+    await migration.up({ rootDir });
+
+    const after = readJson(providersPath).providers['claude-code'];
+    expect(after.defaultModel).toBe('claude-opus-4-7');
+    expect(after.models).toContain(after.defaultModel);
+  });
+
+  it('fixes orphan tier pointer on a current-models provider', async () => {
+    // models = NEW_MODELS but heavyModel pinned to a foreign id. The
+    // already-current branch now invokes the same orphan-safety net.
+    writeJson(providersPath, {
+      providers: {
+        'claude-code': {
+          id: 'claude-code',
+          models: [...NEW_MODELS],
+          defaultModel: 'claude-opus-4-7',
+          lightModel: 'claude-haiku-4-5',
+          mediumModel: 'claude-sonnet-4-6',
+          heavyModel: 'gpt-4o',
+        },
+      },
+    });
+
+    await migration.up({ rootDir });
+
+    const after = readJson(providersPath).providers['claude-code'];
+    expect(after.heavyModel).toBe('claude-opus-4-7');
+    expect(after.models).toContain(after.heavyModel);
+  });
+
   it('resets a missing (undefined) heavyModel to the per-tier fallback (opus-4-7)', async () => {
     // Provider had a legacy 4-item models list but the user actively
     // removed the heavyModel pointer — leaving the key undefined after
