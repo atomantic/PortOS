@@ -169,11 +169,17 @@ export function createProviderStatusService(config = {}) {
     // ad-hoc callers (e.g. promptRunner.js on a failed run) mark a provider
     // unavailable with a custom reason like 'network-error' without
     // proliferating wrapper methods for every error category.
+    //
+    // `extras` is an optional object of category-specific fields to splat
+    // onto the persisted record (e.g. `waitTime: '5 hours'` for usage-limit
+    // displays). Splatting in this single write keeps `status:changed`
+    // listeners from observing a half-built record on the first emit.
     async markUnavailable(providerId, options = {}) {
       const {
         reason = 'unknown',
         message = 'Provider unavailable',
-        waitTimeMs = defaultRateLimitWait
+        waitTimeMs = defaultRateLimitWait,
+        extras = null
       } = options;
       const now = new Date();
       const estimatedRecovery = new Date(now.getTime() + waitTimeMs).toISOString();
@@ -188,7 +194,8 @@ export function createProviderStatusService(config = {}) {
         unavailableSince: now.toISOString(),
         estimatedRecovery,
         failureCount,
-        lastChecked: now.toISOString()
+        lastChecked: now.toISOString(),
+        ...(extras && typeof extras === 'object' ? extras : {})
       };
 
       await saveStatus(statusCache);
@@ -198,20 +205,15 @@ export function createProviderStatusService(config = {}) {
     },
 
     async markUsageLimit(providerId, errorInfo = {}) {
-      const status = await this.markUnavailable(providerId, {
+      return this.markUnavailable(providerId, {
         reason: 'usage-limit',
         message: errorInfo.message || 'Usage limit exceeded',
-        waitTimeMs: parseWaitTime(errorInfo.waitTime) || defaultUsageLimitWait
+        waitTimeMs: parseWaitTime(errorInfo.waitTime) || defaultUsageLimitWait,
+        // `waitTime` is a usage-limit-only display string ("resets 5pm") —
+        // pass via extras so it's part of the SAME persisted record and
+        // status:changed event, not a follow-up second write.
+        extras: errorInfo.waitTime ? { waitTime: errorInfo.waitTime } : null
       });
-      // `waitTime` is a usage-limit-only display string ("resets 5pm") —
-      // stamp it onto the record here so the generic marker stays free of
-      // category-specific fields.
-      if (errorInfo.waitTime) {
-        status.waitTime = errorInfo.waitTime;
-        statusCache.providers[providerId] = status;
-        await saveStatus(statusCache);
-      }
-      return status;
     },
 
     async markRateLimited(providerId) {

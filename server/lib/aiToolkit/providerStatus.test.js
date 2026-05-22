@@ -132,6 +132,32 @@ describe('Provider Status Service', () => {
     });
   });
 
+  describe('markUsageLimit — single emit with extras', () => {
+    it('includes waitTime in the status:changed event payload on the first emit', async () => {
+      // Regression: previously markUsageLimit did a second saveStatus after
+      // markUnavailable to stamp waitTime, so status:changed fired without
+      // the waitTime field — leaving Socket.IO clients with an incomplete
+      // usage-limit record until the second write landed.
+      const handler = vi.fn();
+      statusService.events.on('status:changed', handler);
+
+      await statusService.markUsageLimit('test-provider', {
+        message: 'Usage limit exceeded',
+        waitTime: '5 hours'
+      });
+
+      // Exactly one status:changed for the markUsageLimit call, and it
+      // already carries waitTime — no second emit needed.
+      const usageLimitCalls = handler.mock.calls.filter(c => c[0].type === 'usage-limit');
+      expect(usageLimitCalls).toHaveLength(1);
+      expect(usageLimitCalls[0][0].status).toMatchObject({
+        available: false,
+        reason: 'usage-limit',
+        waitTime: '5 hours',
+      });
+    });
+  });
+
   describe('markRateLimited', () => {
     it('should mark provider as rate limited', async () => {
       const status = await statusService.markRateLimited('test-provider');

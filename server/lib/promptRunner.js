@@ -187,9 +187,13 @@ export function assertProvider(provider, { message, code, status = 503 } = {}) {
  *   must pass this — without it, the CLI/TUI spawn lands in PortOS's own
  *   cwd and the analysis runs against the wrong files. No-op for API
  *   providers (no spawn).
- * @returns {Promise<{ text: string, runId: string, model: string|null }>}
+ * @returns {Promise<{ text: string, runId: string, model: string|null, usedFallback?: boolean, fallbackFrom?: { id: string, name: string } }>}
  *   — `model` is the resolved model that actually executed (null when
- *   neither override nor provider.defaultModel applies).
+ *   neither override nor provider.defaultModel applies). `usedFallback`
+ *   and `fallbackFrom` are present only when the primary failed and the
+ *   retry path recovered via a configured fallback; callers that care
+ *   about provider attribution should branch on `usedFallback` to know
+ *   whether `model` belongs to the requested primary or the fallback.
  */
 export async function runPromptThroughProvider(args) {
   // Validate inputs up front so an accidentally-null `provider` (or one
