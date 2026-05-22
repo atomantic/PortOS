@@ -304,12 +304,18 @@ describe('peerSync', () => {
     it('short-circuits when the record hashes match the last push (no-op edits dont round-trip)', async () => {
       vi.mocked(getUniverse).mockResolvedValue({ id: 'u1', name: 'Foo' });
       vi.mocked(peerFetch).mockResolvedValue({ ok: true, json: async () => ({}) });
-      const sub = await subscribePeer({ peerId: 'peer-a', recordKind: 'universe', recordId: 'u1' });
-      // wait out the initial push side-effects
-      await new Promise((r) => setTimeout(r, 5));
-      const refreshed = await findPeerSubscription('peer-a', 'universe', 'u1');
-      expect(refreshed.lastPushedHash).toBeTruthy();
+      // Subscribe with adoptedFromReverse=true to suppress the auto-push so
+      // we control timing explicitly — relying on a sleep to drain the
+      // fire-and-forget push is flaky on slower CI runners.
+      const sub = await subscribePeer(
+        { peerId: 'peer-a', recordKind: 'universe', recordId: 'u1' },
+        { adoptedFromReverse: true },
+      );
+      const first = await pushRecordToPeer(sub);
+      expect(first.pushed).toBe(true);
+      expect(first.hash).toBeTruthy();
       vi.mocked(peerFetch).mockClear();
+      const refreshed = await findPeerSubscription('peer-a', 'universe', 'u1');
       const result = await pushRecordToPeer(refreshed);
       expect(result.pushed).toBe(false);
       expect(result.reason).toBe('unchanged');
@@ -322,9 +328,11 @@ describe('peerSync', () => {
         ok: true,
         json: async () => ({ missingAssets: [], ackedDeletesUpTo: 5000 }),
       });
-      const sub = await subscribePeer({ peerId: 'peer-a', recordKind: 'universe', recordId: 'u1' });
-      // wait for the initial push to land
-      await new Promise((r) => setTimeout(r, 20));
+      const sub = await subscribePeer(
+        { peerId: 'peer-a', recordKind: 'universe', recordId: 'u1' },
+        { adoptedFromReverse: true },
+      );
+      await pushRecordToPeer(sub);
       const cursors = await listCursors();
       expect(cursors['peer-a'].lastAckedDeleteAt).toBe(5000);
     });
