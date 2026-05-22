@@ -72,7 +72,16 @@ vi.mock('fs/promises', () => ({
   writeFile: vi.fn().mockResolvedValue(undefined),
   appendFile: vi.fn().mockResolvedValue(undefined),
   readFile: vi.fn().mockResolvedValue(''),
-  rm: vi.fn().mockResolvedValue(undefined)
+  rm: vi.fn().mockResolvedValue(undefined),
+  // raw.txt tail-read for failure analysis. Tests don't exercise the failure
+  // path's analyzer (analyzeAgentFailure is mocked to return null), so a
+  // simple stub that reports an empty file is sufficient. stat returns
+  // size:0 so readFileTail short-circuits to '' without touching open/read.
+  stat: vi.fn().mockResolvedValue({ size: 0 }),
+  open: vi.fn().mockResolvedValue({
+    read: vi.fn().mockResolvedValue({ bytesRead: 0 }),
+    close: vi.fn().mockResolvedValue(undefined),
+  }),
 }));
 
 vi.mock('../lib/fileUtils.js', () => ({
@@ -433,7 +442,7 @@ describe('spawnTuiAgent runtime', () => {
   // memory stays bounded regardless of run length. analyzeAgentFailure
   // reads the file on failure. No warn, no metadata flag, even when the
   // chunk total dwarfs the previous 640KB in-memory cap.
-  it('rawBuffer grows without truncation warn or metadata flag, spools to raw.txt', async () => {
+  it('raw PTY bytes spool to raw.txt without truncation warn or metadata flag', async () => {
     const { appendFile } = await import('fs/promises');
     runSpawn();
     await flushMicrotasks();
