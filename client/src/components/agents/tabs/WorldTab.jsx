@@ -4,6 +4,7 @@ import * as api from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
 import socket from '../../../services/socket';
 import useMoltworldWs from '../../../hooks/useMoltworldWs';
+import { useCooldownTick } from '../../../hooks/useCooldownTick';
 import { timeAgo } from '../../../utils/formatters';
 
 const EVENT_ICONS = {
@@ -113,7 +114,6 @@ export default function WorldTab({ agentId }) {
 
   // Cooldown timer state
   const [cooldownEnds, setCooldownEnds] = useState({});
-  const [, setTick] = useState(0);
 
   // Activity History state
   const [history, setHistory] = useState([]);
@@ -237,21 +237,7 @@ export default function WorldTab({ agentId }) {
     setCooldownEnds(ends);
   }, [rateLimits]);
 
-  // Tick cooldown timer every second while any cooldown is active
-  useEffect(() => {
-    const hasActive = Object.values(cooldownEnds).some(end => end > Date.now());
-    if (!hasActive) return;
-    let refetched = false;
-    const interval = setInterval(() => {
-      const stillActive = Object.values(cooldownEnds).some(end => end > Date.now());
-      setTick(t => t + 1);
-      if (!stillActive && !refetched) {
-        refetched = true;
-        fetchRateLimits();
-      }
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [cooldownEnds, fetchRateLimits]);
+  useCooldownTick({ cooldownEnds, onAllExpired: fetchRateLimits });
 
   const updateFromJoinResponse = (result) => {
     if (result?.agents) setNearby(result.agents);

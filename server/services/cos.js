@@ -20,7 +20,16 @@ import { promisify } from 'util';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { getActiveProvider } from './providers.js';
 import { parseTasksMarkdown, groupTasksByStatus, getNextTask, getAutoApprovedTasks, getAwaitingApprovalTasks, updateTaskStatus, generateTasksMarkdown, hasKnownPrefix, isInternalTaskId } from '../lib/taskParser.js';
-import { isAppOnCooldown, getNextAppForReview, markAppReviewStarted, markIdleReviewStarted, clearStaleActiveAgents } from './appActivity.js';
+// NOTE: `getAppActivityById` + `updateAppActivity` are deliberately NOT
+// listed here even though they're used elsewhere in this file. The two
+// other call sites (in `generateManagedAppImprovementTask` and
+// `generateManagedAppImprovementTaskForType`) load them via a sibling
+// dynamic `import('./appActivity.js')` for unrelated reasons. Hoisting
+// them to the static import would leave them unreferenced at the
+// top-level scope of the queue path (which now reads the snapshot via
+// `loadAppActivity` + the pure predicate) and trip "unused import"
+// warnings. The dynamic-import sites stay self-contained.
+import { isAppOnCooldown, getNextAppForReview, markAppReviewStarted, markIdleReviewStarted, clearStaleActiveAgents, loadAppActivity, isAppActivityOnCooldown } from './appActivity.js';
 import { getActiveApps, getAppTaskTypeOverrides } from './apps.js';
 import { getAdaptiveCooldownMultiplier, getSkippedTaskTypes, getPerformanceSummary, checkAndRehabilitateSkippedTasks, getLearningInsights, getTaskTypeConfidence } from './taskLearning.js';
 import { schedule as scheduleEvent, cancel as cancelEvent, getStats as getSchedulerStats, parseCronToNextRun } from './eventScheduler.js';
@@ -1070,7 +1079,7 @@ async function generateIdleReviewTask(state) {
  * Tasks are queued to COS-TASKS.md and will be picked up in Priority 2
  */
 async function queueEligibleImprovementTasks(state, cosTaskData) {
-  const { getDueTasks, shouldRunTask, getNextTaskType, recordExecution } = await import('./taskSchedule.js');
+  const { getNextTaskType, recordExecution } = await import('./taskSchedule.js');
 
   if (!isImprovementEnabled(state)) return;
 
@@ -1102,6 +1111,18 @@ async function queueEligibleImprovementTasks(state, cosTaskData) {
 
   let queued = 0;
 
+  // Load the activity snapshot ONCE before the per-app loop. Both the
+  // cooldown gate and the rotation `lastType` lookup are derived from
+  // `data/app-activity.json`; before this hoist, each app paid two
+  // separate disk reads (one via `isAppOnCooldown` + one via
+  // `getAppActivityById`), so a 10-app deployment did 20 reads of the
+  // same file per scheduler tick. With the snapshot pinned, the cost
+  // is O(1) read per `queueEligibleImprovementTasks` invocation. Falls
+  // back to an empty `apps` map on disk error so the loop's per-app
+  // lookups uniformly return `undefined` (both gates treat that as
+  // "no activity yet — not on cooldown, no last type").
+  const activitySnapshot = await loadAppActivity().catch(() => ({ apps: {} }));
+
   // Queue eligible improvement tasks for all managed apps (including PortOS)
   const apps = await getActiveApps().catch(() => []);
   for (const app of apps) {
@@ -1113,12 +1134,26 @@ async function queueEligibleImprovementTasks(state, cosTaskData) {
       continue;
     }
 
-    // Check if app is on cooldown
-    const onCooldown = await isAppOnCooldown(app.id, state.config.appReviewCooldownMs);
-    if (onCooldown) continue;
+    // Derive both gates from the single shared snapshot. The async
+    // `isAppOnCooldown` would also work, but it loads the activity file
+    // again per app — see comment on `activitySnapshot` above.
+    // Optional chain on `.apps` — `loadAppActivity()` spreads
+    // `DEFAULT_ACTIVITY` over the file contents, but a hand-edited
+    // activity.json that explicitly sets `apps: null` (or any non-object)
+    // would still surface here; both gates treat `undefined` as
+    // "no activity yet."
+    const appActivity = activitySnapshot.apps?.[app.id];
+    if (isAppActivityOnCooldown(appActivity, state.config.appReviewCooldownMs)) continue;
 
-    // Get next eligible improvement type for this app
-    const nextTypeResult = await getNextTaskType(app.id).catch(() => null);
+    // Get next eligible improvement type for this app. `getNextTaskType`
+    // falls back to ROTATION when nothing is time-due, and the rotation
+    // pointer is derived from the `lastType` argument — without it, the
+    // rotation always restarts from index 0 and starves every other
+    // rotation type for the app. Mirror `generateManagedAppTask` (the
+    // legacy direct-spawn caller above) which threads the per-app
+    // `lastImprovementType` in.
+    const lastType = appActivity?.lastImprovementType || '';
+    const nextTypeResult = await getNextTaskType(app.id, lastType).catch(() => null);
     if (!nextTypeResult) continue;
     const nextType = nextTypeResult.taskType;
 
@@ -1128,19 +1163,46 @@ async function queueEligibleImprovementTasks(state, cosTaskData) {
       continue;
     }
 
-    // Generate task description
-    const taskDesc = getTaskDescription(nextType, app.name);
-    if (!taskDesc) continue;
+    // Route through the rich generator so `applyPlanIdMetadata` runs — it
+    // scans open `claim/<slug>` branches + PRs and excludes in-flight slugs
+    // from the pick. The old stub path skipped this and let two plan-task
+    // agents claim the same slug (2026-05-21 incident). The generator
+    // returns null on plan-gate / precondition skip; we silently continue.
+    // Regression-pinned in cos.test.js.
+    const task = await generateManagedAppImprovementTaskForType(nextType, app, state);
+    if (!task) continue;
 
-    // Add to COS-TASKS.md
-    const newTask = await addTask({
-      id: `sys-${app.id.slice(0, 8)}-${nextType}-${Date.now().toString(36)}`,
-      description: taskDesc,
-      priority: 'LOW',
-      app: app.id,
-      context: `Auto-generated improvement task for ${app.name}. Type: ${nextType}`,
-      approvalRequired: false
-    }, 'internal');
+    // Queue-path invariants override the generator's direct-spawn defaults
+    // (which use MEDIUM priority + `app-improve-*` id).
+    task.priority = 'LOW';
+    task.priorityValue = PRIORITY_VALUES.LOW;
+    task.id = `sys-${app.id.slice(0, 8)}-${nextType}-${Date.now().toString(36)}`;
+
+    // Move the generator's multi-line prompt into `metadata.context` so it
+    // survives the COS-TASKS.md round-trip. The on-demand path dispatches the
+    // in-memory task immediately (cosEvents.emit('task:ready', task) with the
+    // unparsed object), so it never round-trips through the markdown — but
+    // the queue path persists first and re-reads from disk on the next
+    // `dequeueNextTask` tick. `generateTasksMarkdown` interpolates the full
+    // `task.description` onto a single line (taskParser.js:268) and
+    // `parseTasksMarkdown` only matches the first line of a `- [ ]` block —
+    // so any newline in `description` corrupts the file (stray `## Phase`
+    // lines become section headers, `- ` lines become new tasks) AND silently
+    // strips the Phase 1–7 instructions on the re-read. `metadata.context` is
+    // newline-escaped via `escapeNewlines`/`unescapeNewlines` (JSON-sentinel
+    // encoding) so it round-trips losslessly. The agent prompt builder
+    // (`cos-agent-briefing.md` + the built-in fallback in
+    // `agentPromptBuilder.js`) renders both `task.description` AND
+    // `task.metadata.context` into the agent's prompt, so the agent still
+    // sees the full Phase 1–7 body.
+    if (typeof task.description === 'string' && task.description.includes('\n')) {
+      task.metadata = task.metadata || {};
+      task.metadata.context = task.description;
+      task.description = firstLine(task.description);
+    }
+
+    const newTask = await addTask(task, 'internal', { raw: true });
+    if (newTask?.duplicate) continue;
 
     await recordExecution(`task:${nextType}`, app.id);
 
@@ -1155,57 +1217,6 @@ async function queueEligibleImprovementTasks(state, cosTaskData) {
   if (queued > 0) {
     emitLog('info', `Queued ${queued} improvement task(s) to system tasks`);
   }
-}
-
-/**
- * Get task description for a self-improvement or app improvement type.
- * When appName is provided, returns app-scoped descriptions; otherwise returns PortOS self-improvement descriptions.
- */
-function getTaskDescription(taskType, appName) {
-  if (appName) {
-    const descriptions = {
-      'security': `Security audit for ${appName}: check for vulnerabilities`,
-      'code-quality': `Code quality review for ${appName}: DRY violations, dead code`,
-      'test-coverage': `Add missing tests for ${appName}`,
-      'performance': `Performance optimization for ${appName}`,
-      'accessibility': `Accessibility audit for ${appName}`,
-      'console-errors': `Fix console errors in ${appName}`,
-      'dependency-updates': `Update dependencies for ${appName}`,
-      'documentation': `Update documentation for ${appName}`,
-      'error-handling': `Improve error handling in ${appName}`,
-      'typing': `Add/fix TypeScript types in ${appName}`,
-      'ui-bugs': `Review UI for visual bugs in ${appName}`,
-      'mobile-responsive': `Check mobile responsiveness of ${appName}`,
-      'feature-ideas': `Implement a feature idea for ${appName} aligned with GOALS.md and PLAN.md (worktree+PR)`,
-      'plan-task': `Execute next PLAN.md item for ${appName}, remove it from PLAN.md, log to changelog (worktree+PR)`,
-      'release-check': `Verify release readiness for ${appName}`,
-      'jira-sprint-manager': `Triage and implement JIRA sprint tickets for ${appName} (worktree+PR)`,
-      'jira-status-report': `Generate JIRA weekly status report for ${appName}`,
-      'do-replan': `Replan: audit PLAN.md for ${appName}, prune completed and stale work (worktree+PR)`
-    };
-    return descriptions[taskType] ?? null;
-  }
-  const descriptions = {
-    'ui-bugs': 'Review UI for visual bugs, layout issues, and UX improvements',
-    'mobile-responsive': 'Check mobile responsiveness and fix layout issues on smaller screens',
-    'security': 'Audit codebase for security vulnerabilities (XSS, injection, auth issues)',
-    'code-quality': 'Review code for DRY violations, dead code, and refactoring opportunities',
-    'console-errors': 'Check browser console and fix JavaScript errors and warnings',
-    'performance': 'Profile and optimize slow components, queries, and renders',
-    'test-coverage': 'Add missing tests for uncovered code paths',
-    'documentation': 'Update documentation, comments, and README files',
-    'feature-ideas': 'Implement a feature idea aligned with GOALS.md and PLAN.md (worktree+PR)',
-    'plan-task': 'Execute next PLAN.md item, remove it from PLAN.md, log to changelog (worktree+PR)',
-    'accessibility': 'Audit and fix accessibility issues (ARIA, keyboard nav, contrast)',
-    'dependency-updates': 'Check for and safely update outdated dependencies',
-    'error-handling': 'Improve error handling patterns and recovery logic',
-    'typing': 'Add or fix TypeScript/JSDoc type annotations',
-    'release-check': 'Verify release readiness (changelog, version, tests)',
-    'jira-sprint-manager': 'Triage and implement JIRA sprint tickets (worktree+PR)',
-    'jira-status-report': 'Generate JIRA weekly status report',
-    'do-replan': 'Replan: audit PLAN.md, prune completed and stale work (worktree+PR)'
-  };
-  return descriptions[taskType] ?? null;
 }
 
 // Unified improvement task types (rotates through these)
@@ -1991,12 +2002,20 @@ async function generateManagedAppImprovementTaskForType(taskType, app, state, { 
   const { updateAppActivity } = await import('./appActivity.js');
   const taskSchedule = await import('./taskSchedule.js');
 
-  // Update app activity with new type
-  await updateAppActivity(app.id, {
-    lastImprovementType: taskType
-  });
-
-  emitLog('info', `Generating improvement task for ${app.name}: ${taskType} (on-demand)`, { appId: app.id, analysisType: taskType });
+  // NOTE: `updateAppActivity` + the "Generating improvement task" log are
+  // intentionally deferred until AFTER every gate returns non-null (see end
+  // of function). The original code stamped both eagerly, which was tolerable
+  // when only the on-demand path called this — the user explicitly asked for
+  // a task, so logging + rotation-pointer advance was correct even when the
+  // generator decided not to produce one. Now `queueEligibleImprovementTasks`
+  // routes through this every scheduler tick, so an eager update would (a)
+  // advance the per-app rotation pointer on every skip (biasing
+  // `getNextTaskType` away from a type with nothing actionable to do, but
+  // also away from types that *could* run on a future tick) and (b) emit a
+  // misleading "Generating improvement task" line for skipped types. The
+  // single-call ordering at the bottom keeps both paths in sync — a returned
+  // task means rotation advanced; a `return null` short-circuit means it
+  // didn't.
 
   // Get interval settings to determine provider/model and pipeline config
   const interval = await taskSchedule.getTaskInterval(taskType);
@@ -2108,6 +2127,12 @@ async function generateManagedAppImprovementTaskForType(taskType, app, state, { 
   }
 
   const approval = await resolveConfidenceApproval(state, `app-improve:${taskType}`, `Task app-improve:${taskType} for ${app.name}`);
+
+  // All gates passed — record the rotation-pointer advance + emit the
+  // generation log. Deferred from the top of the function (see note there);
+  // every `return null` above this point intentionally leaves both untouched.
+  await updateAppActivity(app.id, { lastImprovementType: taskType });
+  emitLog('info', `Generating improvement task for ${app.name}: ${taskType}`, { appId: app.id, analysisType: taskType });
 
   const task = {
     id: `app-improve-${app.id}-${taskType}-${Date.now().toString(36)}`,

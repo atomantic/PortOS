@@ -648,6 +648,142 @@ describe('cos.js source — priority + capacity invariants', () => {
     expect(dequeueFn).toMatch(/spawned\s*===\s*0\s*&&\s*state\.config\.idleReviewEnabled/);
     expect(evalFn).toMatch(/tasksToSpawn\.length\s*===\s*0\s*&&\s*state\.config\.idleReviewEnabled/);
   });
+
+  it('queueEligibleImprovementTasks routes through generateManagedAppImprovementTaskForType', () => {
+    // Regression guard: a 2026-05-21 incident saw two `plan-task` agents both
+    // open PRs for the same PLAN.md slug because the queue path was writing
+    // a one-line stub description with no `analysisType` / `planId`. The
+    // agent it dispatched got the Phase 1-7 prompt (with in-flight scan)
+    // stripped, picked the same slug as a sibling that already had an open
+    // `claim/<slug>` PR, and produced a duplicate. The fix routes the queue
+    // path through the shared generator so `applyPlanIdMetadata` runs and
+    // the full prompt + planId metadata land on the queued task.
+    const fnStart = COS_SRC.indexOf('async function queueEligibleImprovementTasks');
+    expect(fnStart, 'queueEligibleImprovementTasks must exist').toBeGreaterThan(-1);
+    const fnBody = extractFnBody(COS_SRC, fnStart);
+
+    expect(
+      fnBody,
+      'queue path must call generateManagedAppImprovementTaskForType so applyPlanIdMetadata runs + the full prompt is used'
+    ).toMatch(/generateManagedAppImprovementTaskForType\s*\(/);
+
+    // Match the call shape, not the specific variable name — `task` could
+    // legitimately be renamed (e.g. `queuedTask`) in a behavior-preserving
+    // refactor. The contract being pinned is "raw:true addTask call to the
+    // internal lane," not the identifier.
+    expect(
+      fnBody,
+      'queue path must persist via addTask with raw:true so the enriched task object survives serialization'
+    ).toMatch(/addTask\s*\(\s*\w+\s*,\s*['"]internal['"]\s*,\s*\{\s*raw:\s*true\s*\}/);
+
+    // The old buggy path called `getTaskDescription` to build a one-line
+    // description and then passed app/context/approvalRequired fields to
+    // addTask's non-raw constructor. Pin both as absent so we can't regress.
+    expect(
+      fnBody,
+      'queue path must NOT use getTaskDescription (one-line stub bypasses prompt enrichment)'
+    ).not.toMatch(/getTaskDescription\s*\(/);
+
+    // The generator returns a multi-line `description` (the full Phase 1–7
+    // prompt template). COS-TASKS.md serialization interpolates the whole
+    // description onto a single `- [ ]` line and the parser only matches the
+    // first line, so persisting a multi-line description corrupts the file
+    // AND truncates the prompt on the next `dequeueNextTask` re-read. The
+    // queue path must move the body to `metadata.context` (which IS
+    // newline-escaped) so the agent prompt builder reconstitutes it on
+    // dispatch. Pin both halves of the split.
+    expect(
+      fnBody,
+      'queue path must move multi-line description body to metadata.context (survives markdown round-trip)'
+    ).toMatch(/metadata\.context\s*=\s*\w+\.description/);
+    expect(
+      fnBody,
+      'queue path must collapse description to a single line via firstLine()'
+    ).toMatch(/\.description\s*=\s*firstLine\(/);
+
+    // `getNextTaskType` falls back to ROTATION when nothing is time-due, and
+    // the rotation pointer is derived from the `lastType` argument. The queue
+    // path MUST thread the per-app `lastImprovementType` through, otherwise
+    // every tick restarts the rotation at index 0 and starves every other
+    // rotation type for the app. Mirrors the legacy direct-spawn caller.
+    expect(
+      fnBody,
+      'queue path must pass the loaded lastType through to getNextTaskType so rotation advances'
+    ).toMatch(/getNextTaskType\(app\.id,\s*\w+\s*\)/);
+
+    // appActivity helpers must come from the file-level static import (line ~23),
+    // NOT a dynamic `await import('./appActivity.js')` *inside* the per-app
+    // loop. Dynamic imports are cached but still add an extra microtask + a
+    // promise allocation per iteration, and they hide the real dependency
+    // graph at file scope.
+    expect(
+      fnBody,
+      'queue path must not dynamically import ./appActivity.js inside the per-app loop'
+    ).not.toMatch(/await\s+import\(['"]\.\/appActivity\.js['"]\)/);
+
+    // The cooldown check + lastImprovementType lookup both come from the
+    // same `data/app-activity.json` file. Before snapshotting, each app
+    // paid two separate disk reads per tick (one via `isAppOnCooldown`, one
+    // via `getAppActivityById`), so a 10-app install did 20 reads per
+    // scheduler tick. The queue path must (a) call `loadAppActivity()`
+    // exactly ONCE before the per-app loop and (b) drive the per-app
+    // cooldown gate via the pure `isAppActivityOnCooldown` predicate
+    // (which takes the per-app activity record from the snapshot), NOT
+    // the async `isAppOnCooldown` (which re-reads the file).
+    expect(
+      fnBody,
+      'queue path must hoist loadAppActivity() before the per-app loop'
+    ).toMatch(/loadAppActivity\(\)/);
+    expect(
+      fnBody,
+      'queue path must gate cooldown via the pure isAppActivityOnCooldown predicate, not the disk-reading isAppOnCooldown'
+    ).toMatch(/isAppActivityOnCooldown\(/);
+    expect(
+      fnBody,
+      'queue path must not call the disk-reading isAppOnCooldown per app'
+    ).not.toMatch(/await\s+isAppOnCooldown\(/);
+  });
+
+  it('generateManagedAppImprovementTaskForType defers updateAppActivity until after gates', () => {
+    // Regression guard: the rotation pointer + "Generating improvement task"
+    // log must only advance when a real task is queued. The eager call at
+    // the top of the function was tolerable when only the on-demand path
+    // hit it (user explicitly picked the type), but now the per-tick queue
+    // path routes through it too — so every plan-task skip (no available
+    // slug), every precondition fail, and every reference-watch "no refs"
+    // exit would silently rotate the pick + emit a misleading log. Pin
+    // both the absence of the early call AND the presence of the gated
+    // late call so a future refactor can't accidentally restore the
+    // pre-gate ordering.
+    //
+    // Use sliceFn instead of extractFnBody because the function body
+    // contains a `for (...) { try { ... } catch }` block and the
+    // brace-balanced scanner doesn't always match the right closer when
+    // there are template-literal braces nested inside.
+    const fnStart = COS_SRC.indexOf('async function generateManagedAppImprovementTaskForType');
+    expect(fnStart, 'generateManagedAppImprovementTaskForType must exist').toBeGreaterThan(-1);
+    const fnEnd = COS_SRC.indexOf('\nasync function ', fnStart + 1);
+    const fnBody = COS_SRC.slice(fnStart, fnEnd === -1 ? undefined : fnEnd);
+
+    // The updateAppActivity call must appear AFTER applyPlanIdMetadata —
+    // otherwise a `planMeta.skipReason` early-return still rotates the pointer.
+    const planMetaIdx = fnBody.indexOf('applyPlanIdMetadata(');
+    const updateActivityIdx = fnBody.indexOf('updateAppActivity(app.id,');
+    expect(planMetaIdx, 'applyPlanIdMetadata must appear in the function').toBeGreaterThan(-1);
+    expect(updateActivityIdx, 'updateAppActivity must appear in the function').toBeGreaterThan(-1);
+    expect(
+      updateActivityIdx,
+      'updateAppActivity must run after applyPlanIdMetadata so rotation only advances on a real queue'
+    ).toBeGreaterThan(planMetaIdx);
+
+    // The "(on-demand)" suffix on the generation log was misleading once
+    // the queue path started routing through this function. Pin the suffix
+    // as absent.
+    expect(
+      fnBody,
+      'Generation log must not claim "(on-demand)" — function is shared by queue + on-demand callers'
+    ).not.toMatch(/Generating improvement task[^`'"\n]*\(on-demand\)/);
+  });
 });
 
 describe('addTask — first-line dedup', () => {

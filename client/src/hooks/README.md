@@ -66,6 +66,7 @@ grep -i "what you want to do" client/src/hooks/README.md
 | `useClickOutside` | Fire `onOutside` on mousedown outside a ref. | Popovers, menus, drawers. |
 | `useCmdKSearch` | `⌘K` open/close state. | Anywhere that needs to toggle the palette. |
 | `useContainerWidth` | `[ref, width]` via ResizeObserver. | Layout responds to a specific container's width. |
+| `useCooldownTick` | 1-second ticker over a `{ id: epochMs }` cooldown map; fires `onAllExpired` once when every deadline passes. | Rate-limit countdown labels that need to refetch when the last cooldown clears (agents tabs pattern). |
 | `useFieldDraft` | Local input draft that commits on blur. | Bible-editor-style single-field input that must dedupe sibling races. |
 | `useRowDraft` | Multi-column row draft (analogue of `useFieldDraft`). | Multi-column row that commits as a unit. |
 | `usePendingListRows` | List-of-rows where a new row is held client-side until a required column fills, then promoted to `onChange`. | Editable list whose nameless rows would otherwise be dropped by the server sanitizer (WardrobeSection, CharacterDetailEditor list sections). |

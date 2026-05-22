@@ -152,12 +152,17 @@ export async function clearStaleActiveAgents(liveAgentIds) {
 }
 
 /**
- * Check if an app is on cooldown
+ * Pure cooldown predicate — takes a per-app activity record (already
+ * extracted from an `apps` map) plus the cooldown window and returns
+ * true/false without any disk I/O. The async `isAppOnCooldown` below is
+ * a thin wrapper that loads the activity snapshot from disk and delegates
+ * here. Loops that iterate over many apps in one tick (e.g.
+ * `queueEligibleImprovementTasks` in cos.js) should load
+ * `loadAppActivity()` *once* before the loop and call this predicate per
+ * app, instead of calling `isAppOnCooldown` per app (which re-reads
+ * the same JSON file N times). See cos.js for the canonical usage.
  */
-export async function isAppOnCooldown(appId, cooldownMs) {
-  const activity = await loadAppActivity();
-  const appActivity = activity.apps[appId];
-
+export function isAppActivityOnCooldown(appActivity, cooldownMs) {
   if (!appActivity) return false;
 
   const now = Date.now();
@@ -186,6 +191,20 @@ export async function isAppOnCooldown(appId, cooldownMs) {
   }
 
   return false;
+}
+
+/**
+ * Check if an app is on cooldown by `appId`. Loads the activity snapshot
+ * from disk and delegates to the pure predicate. For loops over many
+ * apps, prefer hoisting `loadAppActivity()` once and calling
+ * `isAppActivityOnCooldown(activity.apps?.[appId], cooldownMs)` directly.
+ */
+export async function isAppOnCooldown(appId, cooldownMs) {
+  const activity = await loadAppActivity();
+  // Optional chain — a hand-edited / corrupted activity.json could lose
+  // the `apps` field, and `null.appId` would throw before the predicate's
+  // own falsy guard ran.
+  return isAppActivityOnCooldown(activity.apps?.[appId], cooldownMs);
 }
 
 /**
