@@ -16,13 +16,15 @@
  * but never updates existing ones.
  *
  * Conservative: only rewrites a provider when its `models` array matches one
- * of the known legacy seeded shapes. A user who curated their own model list
- * (added a private endpoint, dropped sonnet, etc.) is left alone. The tier
- * pointers (`defaultModel`/`lightModel`/`mediumModel`/`heavyModel`) are
- * upgraded *only* when both a list-shape match holds AND the current pointer
- * is one of the truly retired ids — so a user who matched the list but hand-
- * pinned a model we no longer ship still keeps their pin, and a user who
- * pinned a still-current model (e.g. `claude-sonnet-4-6`) is not overridden.
+ * of the known legacy seeded shapes EXACTLY (order-sensitive). A user who
+ * curated their own model list (added a private endpoint, dropped sonnet,
+ * reordered the list, etc.) is left alone. The tier pointers
+ * (`defaultModel`/`lightModel`/`mediumModel`/`heavyModel`) are upgraded *only*
+ * when the current pointer is one of the retired ids — so a user who matched
+ * the list but pinned a still-current model (e.g. `claude-sonnet-4-6`) keeps
+ * their pin. Because the retired-id map covers every member of every legacy
+ * shape, no tier pointer can be left referencing a model that's no longer in
+ * `provider.models` after the rewrite (which would otherwise break dropdowns).
  */
 
 import { readFile, writeFile } from 'fs/promises';
@@ -44,23 +46,30 @@ const PRIOR_MODELS_SCAFFOLD = [
 const PRIOR_MODELS_SHAPES = [PRIOR_MODELS_DATA_SAMPLE, PRIOR_MODELS_SCAFFOLD];
 const NEW_MODELS = ['claude-haiku-4-5', 'claude-sonnet-4-6', 'claude-opus-4-7'];
 
-// `from` lists hold ONLY retired ids — pointers that are still-current models
-// (e.g. `claude-sonnet-4-6`) must not appear here, even if they were never a
-// prior default, so a user hand-pin to a current model is always preserved.
-const TIER_REWRITES = {
-  defaultModel: { from: ['claude-opus-4-6', 'claude-sonnet-4-5-20250929'], to: 'claude-opus-4-7' },
-  lightModel:   { from: ['claude-haiku-4-5-20251001'], to: 'claude-haiku-4-5' },
-  mediumModel:  { from: ['claude-sonnet-4-5-20250929'], to: 'claude-sonnet-4-6' },
-  heavyModel:   { from: ['claude-opus-4-6', 'claude-opus-4-5-20251101'], to: 'claude-opus-4-7' },
+// Map of every retired Claude model id → its successor in the new trio. Any
+// tier pointer (`defaultModel`/`lightModel`/`mediumModel`/`heavyModel`) that
+// references a retired id gets upgraded to its successor. Pointers at still-
+// current ids (e.g. `claude-sonnet-4-6`) are NOT in this map, so a hand-pin
+// to a current model is always preserved. Because this covers every retired
+// id, no tier pointer can be left referencing a model that's no longer in
+// `provider.models` after the rewrite — keeping dropdowns/pickers consistent.
+const RETIRED_TO_SUCCESSOR = {
+  'claude-haiku-4-5-20251001': 'claude-haiku-4-5',
+  'claude-sonnet-4-5-20250929': 'claude-sonnet-4-6',
+  'claude-opus-4-5-20251101': 'claude-opus-4-7',
+  'claude-opus-4-6': 'claude-opus-4-7',
 };
+
+const TIER_KEYS = ['defaultModel', 'lightModel', 'mediumModel', 'heavyModel'];
 
 const TARGET_IDS = ['claude-code', 'claude-code-tui'];
 
-const sameMembers = (a, b) => {
+// Order-sensitive equality. Reordering the legacy seeded list is treated as
+// customization (skipped) — being maximally conservative matches the header
+// comment's "left alone" promise and avoids overwriting user intent.
+const sameArray = (a, b) => {
   if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
-  const sa = [...a].sort();
-  const sb = [...b].sort();
-  return sa.every((v, i) => v === sb[i]);
+  return a.every((v, i) => v === b[i]);
 };
 
 export default {
@@ -97,19 +106,20 @@ export default {
       const provider = providers[id];
       if (!provider) continue;
 
-      if (sameMembers(provider.models, NEW_MODELS)) {
+      if (sameArray(provider.models, NEW_MODELS)) {
         alreadyCurrent.push(id);
         continue;
       }
-      if (!PRIOR_MODELS_SHAPES.some((shape) => sameMembers(provider.models, shape))) {
+      if (!PRIOR_MODELS_SHAPES.some((shape) => sameArray(provider.models, shape))) {
         customized.push(id);
         continue;
       }
 
       provider.models = [...NEW_MODELS];
-      for (const [key, { from, to }] of Object.entries(TIER_REWRITES)) {
-        if (from.includes(provider[key])) {
-          provider[key] = to;
+      for (const key of TIER_KEYS) {
+        const successor = RETIRED_TO_SUCCESSOR[provider[key]];
+        if (successor) {
+          provider[key] = successor;
         }
       }
       touched.push(id);
