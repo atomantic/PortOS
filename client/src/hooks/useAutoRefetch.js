@@ -11,9 +11,9 @@ import { useVisibilityEvent } from './useVisibilityEvent.js';
  * should NOT swallow errors with `.catch(() => null)`. Returning `null` here
  * applies that null and wipes the previously-displayed snapshot on every
  * transient blip; letting the error throw preserves the last good data.
- * `pollOnly` (side-effect) callers can additionally handle errors inside
- * `fetchFn` if they want their own logging or recovery — the hook's warn
- * still fires either way.
+ * `pollOnly` (side-effect) callers can also handle errors inside `fetchFn`
+ * for their own logging or recovery; doing so swallows the rejection and
+ * suppresses the hook's warn, so re-throw if you still want the hook log.
  *
  * `refetch` is intentionally unconditional — it bypasses the hidden-tab
  * short-circuit so explicit "Refresh" buttons work regardless of visibility.
