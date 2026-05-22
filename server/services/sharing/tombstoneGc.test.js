@@ -60,7 +60,7 @@ describe('sweepTombstones — no peers subscribed', () => {
 });
 
 describe('sweepTombstones — peers behind', () => {
-  it('clamps the universe cutoff to the laggiest universe-subscribed peer (cant prune past min-ack)', async () => {
+  it("clamps the universe cutoff to the laggiest universe-subscribed peer (can't prune past min-ack)", async () => {
     // Regression: if we used `now - GRACE` even when peers are subscribed,
     // we'd prune tombstones the laggiest peer hasn't seen yet — and a
     // subsequent push from that peer would resurrect the record under its

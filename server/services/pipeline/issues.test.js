@@ -817,6 +817,51 @@ describe('pipeline issues service', () => {
         expect(live.map((i) => i.number)).toEqual([1, 2]);
       });
     });
+
+    describe('pruneTombstonedIssues', () => {
+      it('removes tombstones older than the cutoff and leaves newer ones + live records', async () => {
+        const live = await svc.createIssue({ seriesId: 'ser-prune', title: 'Live' });
+        const oldT = await svc.createIssue({ seriesId: 'ser-prune', title: 'Old' });
+        const newT = await svc.createIssue({ seriesId: 'ser-prune', title: 'New' });
+        await svc.deleteIssue(oldT.id);
+        await svc.deleteIssue(newT.id);
+        // Back-date the old tombstone via merge so the GC sees it as 100s ago.
+        const oldDeletedAt = new Date(Date.now() - 100_000).toISOString();
+        const oldIssue = await svc.getIssue(oldT.id, { includeDeleted: true });
+        await svc.mergeIssuesFromSync([{
+          ...oldIssue,
+          deletedAt: oldDeletedAt,
+          updatedAt: new Date(Date.now() + 10_000).toISOString(),
+        }]);
+        const cutoff = Date.now() - 50_000;
+        const result = await svc.pruneTombstonedIssues(cutoff);
+        expect(result.pruned).toBe(1);
+        const remaining = await svc.listIssues({ seriesId: 'ser-prune', includeDeleted: true });
+        const ids = remaining.map((i) => i.id);
+        expect(ids).toContain(live.id);
+        expect(ids).toContain(newT.id);
+        expect(ids).not.toContain(oldT.id);
+      });
+
+      it('keeps tombstones with unparseable deletedAt (conservative — never silently delete)', async () => {
+        const issue = await svc.createIssue({ seriesId: 'ser-corrupt', title: 'C' });
+        await svc.deleteIssue(issue.id);
+        const tomb = await svc.getIssue(issue.id, { includeDeleted: true });
+        await svc.mergeIssuesFromSync([{
+          ...tomb,
+          deletedAt: 'not-a-date',
+          updatedAt: new Date(Date.now() + 10_000).toISOString(),
+        }]);
+        const result = await svc.pruneTombstonedIssues(Date.now() + 60_000_000);
+        expect(result.pruned).toBe(0);
+      });
+
+      it('returns { pruned: 0 } for a non-finite cutoff (defensive)', async () => {
+        expect(await svc.pruneTombstonedIssues(NaN)).toEqual({ pruned: 0 });
+        expect(await svc.pruneTombstonedIssues(Infinity)).toEqual({ pruned: 0 });
+        expect(await svc.pruneTombstonedIssues('nope')).toEqual({ pruned: 0 });
+      });
+    });
   });
 
   describe('isStageReady', () => {

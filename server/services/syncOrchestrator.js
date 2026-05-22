@@ -460,7 +460,13 @@ export function initSyncOrchestrator() {
     syncAllPeers().catch(err => {
       console.error(`❌ Periodic sync failed: ${err.message}`);
     });
-    runTombstoneSweep();
+    // The outer `.catch` is non-optional — runTombstoneSweep is async and
+    // can reject BEFORE its inner .catch fires (e.g. if the dynamic import
+    // of tombstoneGc.js itself fails). An unhandled rejection on the
+    // interval tick would crash the Node process under default settings.
+    runTombstoneSweep().catch(err => {
+      console.error(`❌ Tombstone sweep tick failed: ${err.message}`);
+    });
   }, SYNC_INTERVAL_MS);
 
   console.log(`🔄 Sync orchestrator started (${SYNC_INTERVAL_MS / 1000}s interval)`);
@@ -480,7 +486,10 @@ async function runTombstoneSweep() {
     return null;
   });
   if (result && (result.universes > 0 || result.series > 0 || result.issues > 0)) {
-    console.log(`🪦 Tombstone GC: pruned ${result.universes} universe, ${result.series} series, ${result.issues} issue(s)`);
+    // "series" is already its own plural so no s-suffix toggle needed there.
+    const universes = `${result.universes} universe${result.universes === 1 ? '' : 's'}`;
+    const issues = `${result.issues} issue${result.issues === 1 ? '' : 's'}`;
+    console.log(`🪦 Tombstone GC: pruned ${universes}, ${result.series} series, ${issues}`);
   }
 }
 

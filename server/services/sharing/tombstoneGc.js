@@ -51,11 +51,12 @@ async function peerIdsSubscribedToKind(recordKind) {
 
 /**
  * Compute the cutoff timestamp: tombstones with `deletedAt < cutoff` are
- * safe to prune. The cutoff is the LATER of "grace ago" and "right after
- * the laggiest subscribed peer's ack" — both must be satisfied.
+ * safe to prune. The cutoff is the EARLIER of "now - grace" and
+ * "minAck - grace" — i.e. we subtract the grace buffer from whichever
+ * water-mark is lower, so we never prune past the laggiest peer's ack.
  *
  * Practically: subtract grace from `min(now, minAckedAcrossPeers)`. The
- * `Math.min` collapses the two branches the plan documents:
+ * `Math.min` collapses the two policy branches into one formula:
  *   - no peers subscribed → minAck=Infinity → cutoff = now - grace
  *   - peers subscribed but behind → minAck < now → cutoff = minAck - grace
  *
